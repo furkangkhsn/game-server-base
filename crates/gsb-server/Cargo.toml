@@ -1,0 +1,33 @@
+[package]
+name = "gsb-server"
+description = "gsb composition root: configuration, server bootstrap, and the demo binary."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "gsb-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+gsb-core = { workspace = true }
+gsb-ecs = { workspace = true }
+gsb-net = { workspace = true }
+gsb-protocol = { workspace = true }
+gsb-game = { workspace = true }
+bevy_ecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

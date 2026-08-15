@@ -1,0 +1,22 @@
+[package]
+name = "gsb-net"
+description = "Network layer for gsb: pluggable Transport/Listener/Endpoint traits, pump tasks, and the default TCP transport."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+gsb-core = { workspace = true }
+gsb-protocol = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

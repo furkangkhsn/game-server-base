@@ -1,0 +1,42 @@
+// Base (transport-agnostic) protocol messages shared by every gsb server.
+// Game-specific messages live in gsb-game/proto/game.proto.
+//
+// The Unity counterpart uses Google.Protobuf with these same files.
+
+syntax = "proto3";
+
+package gsb.base;
+
+message Auth {
+  string name = 1;
+}
+
+message AuthResult {
+  bool ok = 1;
+  string reason = 2;
+}
+
+message JoinRoom {
+  uint64 room_id = 1;
+}
+
+message JoinRoomResult {
+  uint64 entity = 1;
+}
+
+message LeaveRoom {}
+
+message LeaveRoomResult {}
+
+message Heartbeat {
+  uint64 tick = 1;
+}
+
+message HeartbeatAck {
+  uint64 tick = 1;
+}
+
+message Error {
+  uint32 code = 1;
+  string message = 2;
+}

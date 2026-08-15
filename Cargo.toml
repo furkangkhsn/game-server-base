@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gsb-lint",
+    "crates/gsb-protocol",
+    "crates/gsb-ecs",
+    "crates/gsb-core",
+    "crates/gsb-net",
+    "crates/gsb-game",
+    "crates/gsb-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://example.local/game-server-base"
+
+[workspace.dependencies]
+# internal crates
+gsb-lint = { path = "crates/gsb-lint" }
+gsb-protocol = { path = "crates/gsb-protocol" }
+gsb-ecs = { path = "crates/gsb-ecs" }
+gsb-core = { path = "crates/gsb-core" }
+gsb-net = { path = "crates/gsb-net" }
+gsb-game = { path = "crates/gsb-game" }
+gsb-server = { path = "crates/gsb-server" }
+
+# async runtime
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "io-std",
+    "sync",
+    "time",
+    "signal",
+] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+
+# ecs
+bevy_ecs = "0.19"
+
+# serialization / protocol
+prost = "0.14"
+prost-build = "0.14"
+protoc-bin-vendored = "3"
+bytes = "1"
+
+# config / errors / logging
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

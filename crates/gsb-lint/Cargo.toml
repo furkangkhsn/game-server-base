@@ -1,0 +1,11 @@
+[package]
+name = "gsb-lint"
+description = "Build-time policy checks for the gsb workspace: bans tokio::select and lock types in gsb crates."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

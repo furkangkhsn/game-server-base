@@ -1,0 +1,33 @@
+// Game-specific protocol messages (demo game).
+// The Unity counterpart uses Google.Protobuf with this same file.
+
+syntax = "proto3";
+
+package gsb.game;
+
+// Client → server: "move my entity toward (x, y)".
+message MoveTo {
+  sfixed32 x = 1;
+  sfixed32 y = 2;
+}
+
+// Server → client: an entity entered the room.
+message EntitySpawned {
+  uint64 entity = 1;
+  sfixed32 x = 2;
+  sfixed32 y = 3;
+}
+
+// Server → client: an entity left the room / was removed.
+message EntityRemoved {
+  uint64 entity = 1;
+}
+
+// Server → client: a full self-contained snapshot of an entity (sent when
+// its version changes since the last snapshot).
+message EntityState {
+  uint64 entity = 1;
+  sfixed32 x = 2;
+  sfixed32 y = 3;
+  uint64 version = 4;
+}

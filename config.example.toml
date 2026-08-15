@@ -1,0 +1,25 @@
+# gsb server configuration.
+# Copy to `config.toml` next to where you run the binary
+# (`gsb-server config.toml`), or point the binary at it: `gsb-server path.toml`.
+# Missing keys fall back to the defaults shown here.
+
+# Socket address to bind.
+bind = "0.0.0.0:7777"
+
+# Simulation rate (ticks per second). Every room paces itself at this rate.
+tick_hz = 30.0
+
+# Rooms pre-created at startup (ids 1..=room_count).
+room_count = 1
+
+# Maximum frame body size in bytes (length-prefix guard; 1 MiB default).
+max_frame_bytes = 1048576
+
+# Room actor mailbox capacity (actions + tick triggers).
+room_mailbox = 4096
+
+# Per-connection inbound channel capacity (frames from the reader pump).
+conn_inbox = 1024
+
+# Per-connection outbound channel capacity (batches from room fan-out).
+conn_out = 256

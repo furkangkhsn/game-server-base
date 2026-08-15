@@ -1,0 +1,19 @@
+[package]
+name = "gsb-protocol"
+description = "Wire protocol for gsb: frame envelope, opcodes, and the message registry (protobuf payloads)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+prost = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

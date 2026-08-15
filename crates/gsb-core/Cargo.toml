@@ -1,0 +1,21 @@
+[package]
+name = "gsb-core"
+description = "Core actor machinery for gsb: ids, channels, registry, room actor (4-phase tick), connection actor. ECS-agnostic."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+tokio = { workspace = true }
+gsb-protocol = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

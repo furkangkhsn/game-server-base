@@ -1,0 +1,32 @@
+//! Core error types.
+
+/// Errors that can be reported across the control plane.
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    #[error("room {0} not found")]
+    RoomNotFound(u64),
+
+    #[error("room {0} is full")]
+    RoomFull(u64),
+
+    #[error("connection is not in a room")]
+    NotInRoom,
+
+    #[error("room already exists: {0}")]
+    RoomExists(u64),
+
+    #[error("room shut down")]
+    RoomGone,
+
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    #[error("io error: {0}")]
+    Io(String),
+}
+
+impl From<gsb_protocol::ProtoError> for CoreError {
+    fn from(e: gsb_protocol::ProtoError) -> Self {
+        Self::Protocol(e.to_string())
+    }
+}
