@@ -12,11 +12,21 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
   kilit (`Mutex`/`RwLock`), ne park eden bekleme — yok. Bu kural **derleme
   zamanında** `gsb-lint` build-helper crate'i tarafından zorlanır.
 - **Her bağlantı 3 görev:** reader pump + connection actor + writer pump.
-- **Her oda 2 görev:** pacer (sabit hızda `Tick` gönderir) + room actor
-  (dünyanın tek sahibi; 4 fazlı tick).
-- **Oda tick'i 4 faz:** READ (aksiyonları boşalt) → CONVERT (aksiyon →
+- **Tek global ticker** (tek görev, `broadcast` kanal) + **her oda 1 görev:**
+  room actor (dünyanın tek sahibi). Oda actor'ünün *tek* await'i global
+  tick `recv()`'i; tick gövdesi tamamen senkron. Oda hizi global hızın
+  tam bölünür olmalı (60 Hz global / oda 15 Hz → her 4. tick'te adım).
+- **Oda tick'i 5 faz:** CONTROL (join/leave/shutdown çek) → READ
+  (bağlantı başına aksiyon kanallarını `try_recv`) → CONVERT (aksiyon →
   component) → SYSTEMS (oyun sistemleri) → BROADCAST (dirty entity →
-  bağlantı başına tek batch).
+  bağlantı başına tek batch + flush).
+- **Girdi izolasyonu:** her bağlantının kendi `Action` kanalı var;
+  connection actor gelen oyun op'larını `try_send` ile odaya iletir —
+  kanal doluysa girdi atılır (o oyuncunun girdisi, o oyuncunun izolasyonu).
+- **Kare hızından bağımsızlık:** simülasyon `dt = gerçek geçen süre` ile
+  ilerler; kaçırılan tick'ler tek catch-up adımıyla telafi edilir
+  (üst sınır: 4 periyot). 15 Hz'de de 100 Hz'de de aynı gerçek sürede
+  aynı mesafe (`gsb-game/tests/frame_independence.rs`).
 - **ECS:** `bevy_ecs` (standalone). Oda actor'ü bir `World`'i münhasıran
   kendisi tutar; core, world tipine `W` jeneriği ile tamamen ECS'sizdir.
 - **Protokol:** protobuf (`prost` / Unity'de `Google.Protobuf`).
@@ -31,7 +41,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 | `gsb-lint` | Build-helper: yasak desenleri (`tokio::select`, `Mutex`, …) taraması |
 | `gsb-protocol` | Kabuk/opcode/`MessageTable` + temel protobuf mesajları |
 | `gsb-ecs` | `System` trait'i, `SystemRunner`, `EntityVersion` dirty tracking |
-| `gsb-core` | ID'ler, kanallar, registry actor, oda actor (4 fazlı tick), bağlantı actor |
+| `gsb-core` | ID'ler, kanallar, global ticker, registry actor, oda actor (5 fazlı tick), bağlantı actor |
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump görevleri + varsayılan TCP |
 | `gsb-game` | **Tüm oyun mantığı** (component'ler, sistemler, `RoomLogic`, oyun protosu) |
 | `gsb-server` | Compozisyon kökü: config, başlatma, `gsb-server` binary'si + client örneği |
@@ -39,8 +49,8 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 14 test: framing, lint, oda tick'i, e2e
-cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz)
+cargo test --workspace          # 24 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, e2e
+cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır
 ```

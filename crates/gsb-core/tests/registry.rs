@@ -4,6 +4,10 @@
 //! The room-side logic ([`SeqLogic`]) is a counting stand-in: it tracks
 //! `conn → entity` and broadcasts the current player count once per tick,
 //! so room-side state changes are observable over the fan-out channel.
+//!
+//! Rooms are driven by a real [`Ticker`] (60 Hz), and each room runs at
+//! 60 Hz (`run_every = 1`), so joins/leaves are processed on real tick
+//! boundaries.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,12 +16,15 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, OutSink, RoomConfig, RoomLogic, RoomMsg, TickCtx};
+use gsb_core::room::{Action, OutSink, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::ticker::Ticker;
 use gsb_protocol::FrameBody;
 use tokio::sync::mpsc;
 
 const WAIT: Duration = Duration::from_secs(5);
 const COUNT_OP: u16 = 0x7E00;
+/// Global (and room) tick rate: room rate divides global, run_every = 1.
+const HZ: f64 = 60.0;
 
 /// Test room logic: one integer "entity" per connection; broadcasts the
 /// current player count to everyone each tick.
@@ -67,7 +74,8 @@ fn factory() -> RoomFactory<()> {
 
 fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
-    let handle = tokio::spawn(Registry::new(rx, tx.clone(), factory()).run());
+    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64);
+    let handle = tokio::spawn(Registry::new(rx, tx.clone(), factory(), ticker).run());
     (tx, handle)
 }
 
@@ -77,7 +85,7 @@ async fn create_room(tx: &Mailbox<RegistryMsg>, id: RoomId) {
     tx.send(RegistryMsg::CreateRoom {
         config: RoomConfig {
             id,
-            tick_hz: 60.0,
+            tick_hz: HZ,
             ..Default::default()
         },
         reply: reply_tx,
@@ -98,7 +106,7 @@ async fn spawn(
     out: mpsc::Sender<FrameBatch>,
 ) -> EntityId {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<RoomMsg>), gsb_core::error::CoreError>,
+        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
     >();
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
@@ -108,7 +116,7 @@ async fn spawn(
     })
     .await
     .expect("registry gone");
-    let (entity, _mailbox) = tokio::time::timeout(WAIT, reply_rx)
+    let (entity, _actions) = tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
         .expect("reply dropped")
@@ -241,7 +249,7 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
     // Joining a destroyed room fails cleanly.
     let (out_tx2, _out_rx2) = mpsc::channel::<FrameBatch>(64);
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<RoomMsg>), gsb_core::error::CoreError>,
+        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
     >();
     tx.send(RegistryMsg::SpawnPlayer {
         conn: c1,
@@ -257,6 +265,39 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
         .expect("reply dropped")
         .expect_err("join of destroyed room must fail");
     assert!(matches!(err, gsb_core::error::CoreError::RoomNotFound(1)));
+
+    tx.send(RegistryMsg::Shutdown).await.unwrap();
+    drop(tx);
+    tokio::time::timeout(WAIT, handle)
+        .await
+        .expect("registry did not shut down")
+        .expect("registry task panicked");
+}
+
+#[tokio::test]
+async fn create_room_rejects_rate_that_does_not_divide_global() {
+    let (tx, handle) = start_registry();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+    tx.send(RegistryMsg::CreateRoom {
+        config: RoomConfig {
+            id: RoomId(7),
+            tick_hz: 22.0, // 22 does not divide 60
+            ..Default::default()
+        },
+        reply: reply_tx,
+    })
+    .await
+    .unwrap();
+    let err = tokio::time::timeout(WAIT, reply_rx)
+        .await
+        .expect("timed out")
+        .expect("reply dropped")
+        .expect_err("non-dividing room rate must be rejected");
+    assert!(matches!(err, gsb_core::error::CoreError::TickRate { .. }));
+
+    // A rate that *does* divide is accepted (60/2 = 30 → run_every 2).
+    create_room(&tx, RoomId(8)).await;
 
     tx.send(RegistryMsg::Shutdown).await.unwrap();
     drop(tx);

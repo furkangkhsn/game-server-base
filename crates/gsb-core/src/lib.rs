@@ -5,6 +5,7 @@
 //!
 //! - [`id`]: identifier newtypes.
 //! - [`channel`]: bounded channel aliases.
+//! - [`ticker`]: the global tick service (one broadcast channel, one task).
 //! - [`registry`]: the singleton control-plane actor (room table + conn
 //!   routing).
 //! - [`room`]: the per-room actor running the four-phase tick, and the
@@ -23,6 +24,7 @@ pub mod error;
 pub mod id;
 pub mod registry;
 pub mod room;
+pub mod ticker;
 
 pub use error::CoreError;
 pub use id::{ConnectionId, EntityId, RoomId};

@@ -1,13 +1,15 @@
 //! The registry actor: the server's control plane.
 //!
 //! A single channel-driven actor that owns:
-//! - the room table: `RoomId → (mailbox, pacer)`;
+//! - the room table: `RoomId → control mailbox`;
 //! - the connection table: `ConnectionId → ConnInfo` (kept for the
 //!   connection's *whole* lifetime, so the notification path — the inbox —
 //!   is never lost mid-session);
 //! - the relationship dispatchers: one small task per connection that has
 //!   a room relationship in flight, serializing that connection's
 //!   join/leave operations (see [`RoomOp`]);
+//! - the [`Ticker`] handle (global tick broadcast + rate), which rooms
+//!   subscribe to at creation;
 //! - the [`RoomFactory`], which is how the (game-specific) room logic gets
 //!   into the core without the core knowing any game types.
 //!
@@ -16,20 +18,24 @@
 //! `SpawnPlayer` hands the room round-trip to the connection's dispatcher
 //! and returns immediately, so one slow room can never block the control
 //! plane (joins elsewhere, room creation, shutdown).
+//!
+//! Room lifecycle is channel-driven: creating a room is a `subscribe` on
+//! the ticker plus a control channel; destroying one sends a control
+//! `Shutdown` (processed on the room's next tick) — there are no per-room
+//! tasks to track or abort.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox, channel};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
-use crate::room::{RoomActor, RoomConfig, RoomLogic, RoomMsg, spawn_pacer};
+use crate::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic};
+use crate::ticker::Ticker;
 
 /// Builds a room's world + logic. Provided by the composition root; the core
 /// never names the concrete game types.
@@ -47,17 +53,19 @@ pub enum RegistryMsg {
     /// Shut down a room (its players' entities are dropped; connections are
     /// notified via [`ConnIn::RoomGone`]).
     DestroyRoom { id: RoomId },
-    /// Spawn a player entity in a room and report the entity + room mailbox.
+    /// Spawn a player entity in a room and report the entity + the
+    /// per-connection action channel the connection actor writes to.
     ///
     /// Non-blocking with respect to the room: the round-trip is dispatched
     /// to the connection's relationship task and the reply may arrive
-    /// later. A slow room can therefore never stall the registry.
+    /// later (at the room's next tick boundary). A slow room can therefore
+    /// never stall the registry.
     SpawnPlayer {
         conn: ConnectionId,
         room: RoomId,
         /// The connection's outbound channel, handed to the room for fan-out.
         out: mpsc::Sender<FrameBatch>,
-        reply: oneshot::Sender<Result<(EntityId, Mailbox<RoomMsg>), CoreError>>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
     /// Remove a player from its room (voluntary leave). The connection
     /// stays registered (it may rejoin).
@@ -91,16 +99,17 @@ pub enum RegistryMsg {
 /// leave→rejoin race-free: a `Leave` can never overtake (or be overtaken
 /// by) the `Join` it follows.
 enum RoomOp {
-    /// Join `room`: round-trip `PlayerJoined`, reply to the connection
-    /// actor, report [`RegistryMsg::SpawnDone`] to the registry.
+    /// Join `room`: round-trip the control `Join`, reply to the connection
+    /// actor (with the per-connection action channel), report
+    /// [`RegistryMsg::SpawnDone`] to the registry.
     Join {
         room: RoomId,
-        room_mailbox: Mailbox<RoomMsg>,
+        room_control: Mailbox<RoomControl>,
         out: mpsc::Sender<FrameBatch>,
-        reply: oneshot::Sender<Result<(EntityId, Mailbox<RoomMsg>), CoreError>>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
-    /// Leave `room`: send `PlayerLeft` (with the entity this dispatcher saw
-    /// the join create), then report [`RegistryMsg::LeaveDone`].
+    /// Leave `room`: send control `Leave` (with the entity this dispatcher
+    /// saw the join create), then report [`RegistryMsg::LeaveDone`].
     Leave { room: RoomId },
     /// Drain the queue (processing whatever is left, including a final
     /// leave), report [`RegistryMsg::OpsClosed`], exit.
@@ -108,8 +117,7 @@ enum RoomOp {
 }
 
 struct RoomEntry {
-    mailbox: Mailbox<RoomMsg>,
-    pacer: JoinHandle<()>,
+    control: Mailbox<RoomControl>,
 }
 
 #[derive(Default)]
@@ -131,6 +139,7 @@ pub struct Registry<W> {
     rooms: HashMap<RoomId, RoomEntry>,
     conns: HashMap<ConnectionId, ConnInfo>,
     conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp>>,
+    ticker: Ticker,
 }
 
 impl<W> Registry<W>
@@ -141,6 +150,7 @@ where
         inbox: Inbox<RegistryMsg>,
         self_mailbox: Mailbox<RegistryMsg>,
         factory: RoomFactory<W>,
+        ticker: Ticker,
     ) -> Self {
         Self {
             factory,
@@ -149,6 +159,7 @@ where
             rooms: HashMap::new(),
             conns: HashMap::new(),
             conn_ops: HashMap::new(),
+            ticker,
         }
     }
 
@@ -163,11 +174,36 @@ where
                         let _ = reply.send(Err(CoreError::RoomExists(id.0)));
                         continue;
                     }
+                    // The room rate must divide the global ticker rate: the
+                    // room steps on every k-th global tick (k = run_every).
+                    let global = self.ticker.hz();
+                    let run_every = (global / config.tick_hz).round() as u64;
+                    if run_every < 1 || (global - config.tick_hz * run_every as f64).abs() > 1e-3 {
+                        let _ = reply.send(Err(CoreError::TickRate {
+                            room: config.tick_hz,
+                            global,
+                        }));
+                        continue;
+                    }
                     let (world, logic) = (self.factory)(id, &config);
-                    let (mailbox, inbox) = channel(config.mailbox_capacity);
-                    let pacer = spawn_pacer(mailbox.clone(), config.period());
-                    tokio::spawn(RoomActor::new(config, world, logic, inbox).run());
-                    self.rooms.insert(id, RoomEntry { mailbox, pacer });
+                    let (control_tx, control_rx) = channel(config.control_capacity);
+                    tokio::spawn(
+                        RoomActor::new(
+                            config,
+                            world,
+                            logic,
+                            self.ticker.subscribe(),
+                            control_rx,
+                            run_every,
+                        )
+                        .run(),
+                    );
+                    self.rooms.insert(
+                        id,
+                        RoomEntry {
+                            control: control_tx,
+                        },
+                    );
                     debug!(room = %id, "room created");
                     let _ = reply.send(Ok(id));
                 }
@@ -193,8 +229,10 @@ where
                                 debug!(%conn, room = %id, "notified: room gone");
                             });
                         }
-                        entry.pacer.abort();
-                        let _ = entry.mailbox.send(RoomMsg::Shutdown).await;
+                        // The room processes it on its next tick (the ticker
+                        // is still running); aborting the ticker later closes
+                        // its broadcast as a backstop.
+                        let _ = entry.control.send(RoomControl::Shutdown).await;
                         debug!(room = %id, "room destroyed");
                     }
                 }
@@ -204,7 +242,7 @@ where
                     out,
                     reply,
                 } => {
-                    let Some(mailbox) = self.rooms.get(&room).map(|e| e.mailbox.clone()) else {
+                    let Some(control) = self.rooms.get(&room).map(|e| e.control.clone()) else {
                         let _ = reply.send(Err(CoreError::RoomNotFound(room.0)));
                         continue;
                     };
@@ -215,7 +253,7 @@ where
                     if op_tx
                         .try_send(RoomOp::Join {
                             room,
-                            room_mailbox: mailbox,
+                            room_control: control,
                             out,
                             reply,
                         })
@@ -270,12 +308,11 @@ where
                         }
                         None => {
                             if let (Some(room), Some(entity)) = (room, entity)
-                                && let Some(mailbox) =
-                                    self.rooms.get(&room).map(|e| e.mailbox.clone())
+                                && let Some(control) =
+                                    self.rooms.get(&room).map(|e| e.control.clone())
                             {
                                 tokio::spawn(async move {
-                                    let _ =
-                                        mailbox.send(RoomMsg::PlayerLeft { conn, entity }).await;
+                                    let _ = control.send(RoomControl::Leave { conn, entity }).await;
                                 });
                             }
                         }
@@ -325,10 +362,12 @@ where
                         });
                     }
                     self.conns.clear();
-                    // 3. Stop every room.
+                    // 3. Stop every room via its control channel (processed
+                    //    on the next tick; the composition root aborts the
+                    //    ticker afterwards, which closes the broadcast as a
+                    //    backstop for any room that misses the window).
                     for (id, entry) in self.rooms.drain() {
-                        entry.pacer.abort();
-                        let _ = entry.mailbox.send(RoomMsg::Shutdown).await;
+                        let _ = entry.control.send(RoomControl::Shutdown).await;
                         debug!(room = %id, "room stopped");
                     }
                     // 4. Stop the actor now. (It cannot wait for the mailbox
@@ -352,9 +391,9 @@ where
             None => (None, None),
         };
         if let (Some(room), Some(entity)) = (room, entity) {
-            if let Some(mailbox) = self.rooms.get(&room).map(|e| e.mailbox.clone()) {
+            if let Some(control) = self.rooms.get(&room).map(|e| e.control.clone()) {
                 tokio::spawn(async move {
-                    let _ = mailbox.send(RoomMsg::PlayerLeft { conn, entity }).await;
+                    let _ = control.send(RoomControl::Leave { conn, entity }).await;
                 });
             }
             if let Some(info) = self.conns.get_mut(&conn) {
@@ -368,56 +407,59 @@ where
     }
 
     /// One dispatcher task per connection with a room relationship in
-    /// flight. It is the *only* sender of room messages for that connection,
-    /// so per-connection ordering (join → leave → rejoin) is guaranteed,
-    /// and the registry never awaits a room from its own task.
+    /// flight. It is the *only* sender of room control messages for that
+    /// connection, so per-connection ordering (join → leave → rejoin) is
+    /// guaranteed, and the registry never awaits a room from its own task.
     fn spawn_conn_ops(conn: ConnectionId, registry: Mailbox<RegistryMsg>) -> mpsc::Sender<RoomOp> {
         let (op_tx, mut op_rx) = mpsc::channel::<RoomOp>(16);
         tokio::spawn(async move {
-            let mut in_room: Option<(RoomId, EntityId, Mailbox<RoomMsg>)> = None;
+            let mut in_room: Option<(RoomId, EntityId, Mailbox<RoomControl>)> = None;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
                         room,
-                        room_mailbox,
+                        room_control,
                         out,
                         reply,
                     } => {
-                        let (entity_tx, entity_rx) = oneshot::channel::<EntityId>();
-                        let joined = room_mailbox
-                            .send(RoomMsg::PlayerJoined {
+                        let (joined_tx, joined_rx) =
+                            oneshot::channel::<(EntityId, Mailbox<Action>)>();
+                        let sent = room_control
+                            .send(RoomControl::Join {
                                 conn,
                                 out,
-                                reply: entity_tx,
+                                reply: joined_tx,
                             })
                             .await
                             .is_ok();
-                        match (joined, entity_rx.await) {
-                            (true, Ok(entity)) => {
-                                in_room = Some((room, entity, room_mailbox.clone()));
-                                let _ = reply.send(Ok((entity, room_mailbox)));
+                        match (sent, joined_rx.await) {
+                            (true, Ok((entity, actions))) => {
+                                in_room = Some((room, entity, room_control));
+                                let _ = reply.send(Ok((entity, actions)));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnDone { conn, room, entity })
                                     .await;
                             }
                             _ => {
+                                // Control channel gone (room destroyed) or the
+                                // room dropped the reply.
                                 let _ = reply.send(Err(CoreError::RoomGone));
                             }
                         }
                     }
                     RoomOp::Leave { room } => {
-                        if let Some((r, entity, mailbox)) = in_room.take()
+                        if let Some((r, entity, control)) = in_room.take()
                             && r == room
                         {
-                            let _ = mailbox.send(RoomMsg::PlayerLeft { conn, entity }).await;
+                            let _ = control.send(RoomControl::Leave { conn, entity }).await;
                             let _ = registry
                                 .send(RegistryMsg::LeaveDone { conn, room: r })
                                 .await;
                         }
                     }
                     RoomOp::Close => {
-                        if let Some((r, entity, mailbox)) = in_room.take() {
-                            let _ = mailbox.send(RoomMsg::PlayerLeft { conn, entity }).await;
+                        if let Some((r, entity, control)) = in_room.take() {
+                            let _ = control.send(RoomControl::Leave { conn, entity }).await;
                             let _ = registry
                                 .send(RegistryMsg::LeaveDone { conn, room: r })
                                 .await;

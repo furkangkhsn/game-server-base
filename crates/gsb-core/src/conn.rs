@@ -11,8 +11,11 @@
 //!
 //! The actor decodes the envelope, runs the auth/join/leave state machine
 //! against the registry, and forwards game-band opcodes to the room's
-//! mailbox. It never multiplexes: every branch is a channel receive.
+//! per-connection action channel (non-blocking `try_send`: a flooding
+//! client drops its own input, never stalls the actor or the room). It
+//! never multiplexes: every branch is a channel receive.
 
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
@@ -23,7 +26,7 @@ use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::RegistryMsg;
-use crate::room::RoomMsg;
+use crate::room::Action;
 
 /// Messages addressed to the connection actor.
 #[derive(Debug)]
@@ -54,7 +57,9 @@ pub struct ConnectionActor {
     inbox: Inbox<ConnIn>,
     /// To the writer pump; also cloned to the room for fan-out.
     out: Mailbox<FrameBatch>,
-    room_mailbox: Option<Mailbox<RoomMsg>>,
+    /// The room's per-connection action channel (set on join, cleared on
+    /// leave / room-gone). Game-band opcodes are `try_send`-ed here.
+    actions: Option<Mailbox<Action>>,
 }
 
 impl ConnectionActor {
@@ -72,7 +77,7 @@ impl ConnectionActor {
             registry,
             inbox,
             out,
-            room_mailbox: None,
+            actions: None,
         }
     }
 
@@ -119,7 +124,7 @@ impl ConnectionActor {
 
     fn detach(&mut self) {
         self.state = ConnState::Authed;
-        self.room_mailbox = None;
+        self.actions = None;
     }
 
     async fn handle_frame(&mut self, frame: FrameBody) {
@@ -162,7 +167,7 @@ impl ConnectionActor {
                 };
                 let room = RoomId(join.room_id);
                 let (reply_tx, reply_rx) =
-                    oneshot::channel::<Result<(EntityId, Mailbox<RoomMsg>), CoreError>>();
+                    oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
                 if self
                     .registry
                     .send(RegistryMsg::SpawnPlayer {
@@ -179,9 +184,9 @@ impl ConnectionActor {
                     return;
                 }
                 match reply_rx.await {
-                    Ok(Ok((entity, mailbox))) => {
+                    Ok(Ok((entity, actions))) => {
                         self.state = ConnState::InRoom { room };
-                        self.room_mailbox = Some(mailbox);
+                        self.actions = Some(actions);
                         let _ = self
                             .send_frame(
                                 op::base::JOIN_ROOM_RESULT,
@@ -249,25 +254,31 @@ impl ConnectionActor {
     }
 
     async fn forward_to_room(&mut self, frame: FrameBody) {
-        let mailbox = match &self.room_mailbox {
+        let mailbox = match &self.actions {
             Some(mb) => mb,
             None => {
+                // Not in a room (or the room went away): report it.
                 self.reply_err(ProtoError::NotInRoom).await;
                 return;
             }
         };
         // The payload is forwarded encoded; the game crate decodes it.
-        if mailbox
-            .send(RoomMsg::Action {
-                conn: self.conn,
-                op: frame.op,
-                payload: frame.payload,
-            })
-            .await
-            .is_err()
-        {
-            warn!(%self.conn, "room mailbox closed while forwarding action");
-            self.detach();
+        // Non-blocking: a flooding connection drops its own input (bounded
+        // per-connection memory) and never stalls its actor or the room. A
+        // closed channel means the room is gone: detach.
+        match mailbox.try_send(Action {
+            conn: self.conn,
+            op: frame.op,
+            payload: frame.payload,
+        }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(%self.conn, op = frame.op, "action channel full; input dropped");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!(%self.conn, "action channel closed while forwarding; detaching");
+                self.detach();
+            }
         }
     }
 

@@ -15,17 +15,17 @@ kompresyon, kalıcılık, cross-server (cluster), yük dengeleyici.
 ## 2. Temel ilke: saf kanal tabanlı aktör model
 
 Tek kural: **multiplex yok — her görevin tek bir beklenecek kaynağı vardır.**
-Aktörler mailbox'ına gelen mesajı bekler; pump görevleri birer stream
-öğesi/kanal mesajı bekler; pacer'lar birer timer bekler. Birkaç görev
-(ör. connection actor'ün join'inde) oneshot yanıtını da bekler — yine de
-tek bekleme, select değil.
+Aktörler mailbox'ına gelen mesajı bekler; oda actor'leri global tick
+broadcast kanalındaki tek bir tick'i bekler; pump görevleri birer stream
+öğesi/kanal mesajı bekler. Birkaç görev (ör. connection actor'ün join'inde)
+oneshot yanıtını da bekler — yine de tek bekleme, select değil.
 
 Bu kural üç somut biçimde uygulanır:
 
 1. **Hiçbir `tokio::select!` yok.** Çoklu bekleme ihtiyacı, beklenecek her
-   kaynak için **ayrı bir görev** açılarak çözülür (pump görevleri, pacer
-   görevi, bağlantı dispatcher'ları). "Birden fazla kaynağı tek görevde
-   multiplex etme" deseni bu mimaride var olmaktan çıkar; bu, büyük
+   kaynak için **ayrı bir görev** açılarak çözülür (pump görevleri, global
+   ticker görevi, bağlantı dispatcher'ları). "Birden fazla kaynağı tek
+   görevde multiplex etme" deseni bu mimaride var olmaktan çıkar; bu, büyük
    sistemlerde bug'ların ana kaynağıdır.
 2. **Hiçbir kilit yok.** Durum, ait olduğu aktörün (veya görevin) yerel
    değişkenlerinde yaşar. Aktörler arası her değer (mailbox, oneshot yanıt,
@@ -69,16 +69,21 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
         │                                                            (fan-out)
         ▼
       socket
+
+  global ticker (tek görev) ── broadcast<TickInfo> ──▶ her room actor'un tek await'i
 ```
 
 - **Bağlantı başına 3 görev:** reader pump (socket → `ConnIn::Frame`),
   connection actor (durum makinesi: auth → join → forward), writer pump
   (`FrameBatch` → socket). Pump görevlerinin her biri de tek kaynaktan
   bekler: stream'in bir öğesi ya da kanal mesajı.
-- **Oda başına 2 görev:** pacer (sabit tempoda `RoomMsg::Tick`; sapma
-  düzeltmeli — saati yakalayamazsa tick atlar) + room actor.
+- **Oda başına 1 görev:** room actor. Tick'ler **tek global ticker görevinden**
+  gelir (`tokio::sync::broadcast`): oda actor'ünün *tek* await'i
+  `tick_rx.recv()`; tick gövdesi tamamen senkron. Oda hizi global hızın tam
+  bölünürü olmalı — 15 Hz oda, 60 Hz saatte her 4. tick'te adım atar
+  (`run_every`).
 - **Registry:** sunucunun kontrol düzlemi. Oda tablosu
-  (`RoomId → mailbox + pacer`), bağlantı tablosu
+  (`RoomId → kontrol mailbox'ı`), bağlantı tablosu
   (`ConnectionId → {room?, entity?, inbox?}` — kayıt, bağlantının **bütün
   ömründe** yaşar; inbox asla bırakılmaz ki `RoomGone`/`Shutdown` her zaman
   ulaşabilsin) ve oyun mantığını core'e sokan `RoomFactory<W>` kapağı.
@@ -93,25 +98,41 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   istemci frame'ine karşı sıralama garantisi). Kalıcı hata durumunda
   (ör. `EMFILE`) 100ms backoff ile dener — CPU spin'i olmaz.
 
-## 4. Oda tick'i: 4 faz
+## 4. Oda tick'i: 5 faz
 
-Room actor'ün tick gövdesi **senkron**'dur (tek `await`'i mailbox recv'i):
+Room actor'ün tek `await`'i global tick broadcast kanalındaki `recv()`; tick
+gövdesi tamamen **senkron**'dur:
 
 ```text
-Pacer ──Tick──▶ 1. READ:     pending aksiyonları boşa dök (mem::take)
-                 2. CONVERT:  aksiyon → component yazıları  (RoomLogic::ingest)
-                 3. SYSTEMS:  sıralı oyun sistemleri        (RoomLogic::update)
-                 4. BROADCAST: dirty entity → frame → bağlantı kanalları
-                                  (RoomLogic::broadcast + OutSink::flush)
+Global ticker ── broadcast<TickInfo{tick, at}> ──▶
+  (tick % run_every != 0 ise atla — yavaş odalar için)
+  0. CONTROL:   join/leave/shutdown (kontrol kanalı, try_recv)
+  1. READ:      bağlantı başına aksiyon kanalları (try_recv, bloksuz)
+  2. CONVERT:   aksiyon → component yazıları  (RoomLogic::ingest)
+  3. SYSTEMS:   sıralı oyun sistemleri        (RoomLogic::update)
+  4. BROADCAST: dirty entity → frame → bağlantı başına tek batch + flush
+                (RoomLogic::broadcast + OutSink::flush)
 ```
 
-- `max_pending_actions` aşıldığında **en eski** aksiyonlar atılır (oda,
-  gerçek zamanın gerisinde kalmışsa bile sınırlı kalır).
-- **Tick birleştirme (coalescing):** tick çalışırken pacer daha çok Tick
-  biriktirdiyse, actor kuyruğu sırayla boşaltır: saf Tick'ler atlanır
-  (çalışan tick, dt'si üzerinden geçen toplam zamanı zaten kapsar), diğer
-  mesajlar sırasına uygun biçimde hemen işlenir. Böylece yavaş bir tick
-  çöp iş birikimi yaratmaz.
+- **Kare hızından bağımsızlık:** `dt = son adımdan bu yana geçen duvar
+  saati` (tick'in `at` zaman damgası). Bir tick kaçırılırsa (yavaş adım,
+  buffer'ı zorlayan yük) geçen süre sonraki adımın `dt`'sine zaten dahil —
+  simülasyon gerçek zamanın gerisine düşmez; 15 Hz'de de 100 Hz'de de aynı
+  gerçek sürede aynı mesafe kat edilir. `dt` üst sınırı `max_catchup`
+  periyottur (varsayılan 4): uzun bir takılmadan sonra simülasyon kısa bir
+  "yavaş çekim"le saate döner, sıçramaz.
+- **`Lagged`:** receiver broadcast buffer'ının gerisinde kalırsa aradaki
+  tick'ler atlanır (uyarı kaydı); bir sonraki adımın duvar saati `dt`'si
+  boşluğu kapsar. **`Closed`:** ticker durduruldu = global stop sinyali →
+  oda temiz çıkar.
+- **Kontrol tick sınırında:** join/leave/shutdown, adımın başındaki CONTROL
+  fazında işlenir; join/leave gecikmesi ≤ 1 tick. Bu bir maliyet değil,
+  **determinizm garantisi**'dir: spawn/leave bilinen bir tick'te etkide
+  bulunur; stale leave'ler ayrıca entity eşleştirilmesiyle korunur.
+- **Girdi izolasyonu:** her bağlantının kendi `Action` kanalı var; READ
+  fazı `try_recv` ile bloksuz çeker. `max_pending_actions` aşıldığında
+  **en eski** aksiyonlar atılır (oda, gerçek zamanın gerisinde kalmışsa bile
+  sınırlı kalır).
 - `OutSink` yayın fazında bağlantı başına bir `Vec<FrameBody>` tamponlar ve
   tick sonunda **bağlantı başına tek `try_send`** yapar. Maliyet, dürüstçe:
   *kanal gönderimi* O(bağlantı)/tick, *frame tamponlaması* ise
@@ -120,6 +141,7 @@ Pacer ──Tick──▶ 1. READ:     pending aksiyonları boşa dök (mem::tak
   çarpımdır ve AOI onu ortadan kaldırır (§8). Kanal doluysa batch atılır ve
   sayılır (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu
   yalnızca o istemciye 1 tick bayatlık olarak yansır.
+
 
 ## 5. Ağ protokolü
 
@@ -217,7 +239,9 @@ ServerHandle::stop
   → RegistryMsg::Shutdown
       → her dispatcher'a RoomOp::Close (yol açma + son leave), sonra senders düşer
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
-      → her odaya RoomMsg::Shutdown + pacer.abort()
+      → her odaya kontrol kanalından RoomControl::Shutdown (bir sonraki tick'te işlenir)
+  → ticker.abort()   (broadcast kapanır = geri sigorta: kontrol Shutdown'ını
+                     görememiş her oda, recv'de Closed görüp temiz çıkar)
   → connection actor'ler çıkar → in_tx/out_tx düşer
       → reader pump: send hatası → çıkar
       → writer pump: kanal kapanır → çıkar + socket close
@@ -236,10 +260,11 @@ birlikte ele alınacak).
 | Kısıt | Neden | Yol |
 |---|---|---|
 | Yayın = tam snapshot (bağlantı başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
-| `tick_hz` oda başına sabit | Pacer basitliği | oda bazlı yapılandırma zaten var; dinamik adaptif tick gelecek |
+| Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
 | Oda kapasitesi yok (sonsuza kadar oyuncu) | Demo oda | `RoomConfig.max_players` + doluluk yanıtı |
-| Tick ve Action aynı bounded mailbox'ta | Sadelik | veri düzlemi (Action) ile kontrol düzlemi (Tick) ayrılmalı |
+| join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
+| Girdi `try_send` (kanal doluyken atılır) | oyuncu bazlı izolasyon, oda bloke olmaz | bağlantı başına girdi hız sınırı (rate-limit) |
 | Tek process | v1 kapsamı | §8.4 |
 | Heartbeat → yalnızca ack (oturum zaman aşımı yok) | v1 kapsamı | registry'de son-görülme zaman damgası |
 | `sfixed32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
@@ -259,16 +284,22 @@ birlikte ele alınacak).
   frame yeniden derleme + EOF, aşırı boyutlu length-prefix reddi.
   (Testler echo-peer kullanır; pasif peer'da TCP yarı kapanışı davranış
   farkı yaratır.)
-- **gsb-core:** oda actor'ü tick + oyuncu join/leave + pacer senkronizasyonu
-  (saf kanal üzerinde, gerçek zamanlama ile). Registry: join→leave→rejoin
-  dizisi (gözlemci bağlantı üzerinden oyuncu sayısı doğrulanır — stale
-  leave sayacı geri düşürmemeli), oda imhası bildirimi + imha sonrası join
-  reddi, temiz shutdown (registry handle'ı çözülür).
+- **gsb-core:** global ticker + oda actor — tick fazları, `dt` üst sınırı
+  (catch-up), `run_every` ile yavaş oda atlama, `Lagged` sonrası catch-up +
+  ticker kapanışında temiz çıkış (sentez zaman damgalarıyla manuel
+  broadcast besleme, kilit yok). Registry: join→leave→rejoin dizisi
+  (gözlemci bağlantı üzerinden oyuncu sayısı doğrulanır — stale leave
+  sayacı geri düşürmemeli), oda imhası bildirimi + imha sonrası join
+  reddi, bölünmeyen oda hızı reddi (`TickRate`), temiz shutdown
+  (registry handle'ı çözülür) — **gerçek 60 Hz ticker** ile.
 - **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
   bir tick sonra **A dahil tüm dünyayı** görür; A hareket edince B
   versiyon artışı görür. Stale leave — rejoin'dan gecikmeyle gelen eski
-  `PlayerLeft`, yeni entity'yi öldüremez (hedefli MOVE_TO + snapshot ile
-  doğrulanır).
+  leave, yeni entity'yi öldüremez (hedefli MOVE_TO + snapshot ile
+  doğrulanır). Kare hızından bağımsızlık — tek 60 Hz saat altında iki oda
+  (60 Hz `run_every=1` ve 15 Hz `run_every=4`), gerçek hareket sistemi:
+  5.0 s simülasyon süresi her iki odada aynı mesafe (f64 gözlem kanalı —
+  i32 wire, karşılaştırmayı kuantum gürültüsü altında boğardı).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → kendi entity'sinin versiyonlu snapshot'ı.
   Tüm yol tek test: pump → bağlantı actor → registry → dispatcher → oda →

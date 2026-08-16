@@ -1,10 +1,30 @@
 # Ne kaldı? — gsb Geliştirme Listesi
 
 Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
-kapatıldı. 19/19 test yeşil. Aşağıdakiler **ölçülmemiş performans**,
-**robustluk** ve **güvenlik** başlıklarındaki kalan işler.
+kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
+`docs/TICK-ARCHITECTURE.md`). 24/24 test yeşil. Aşağıdakiler
+**ölçülmemiş performans**, **robustluk** ve **güvenlik** başlıklarındaki
+kalan işler.
 
 ## Kapatılanlar (bu tur)
+
+- [x] **Broadcast tick mimarisi** — oda-başına pacer kaldırıldı; tek global
+  ticker görevi `tokio::sync::broadcast` ile `TickInfo{tick, at}` yayınlıyor.
+  Oda actor'ünün tek await'i `tick_rx.recv()`; tick gövdesi senkron, 5 fazlı
+  (CONTROL → READ → CONVERT → SYSTEMS → BROADCAST). Oda hizi global hızı tam
+  bölmeli (`run_every`); bölünmeyen hız `CoreError::TickRate` ile reddedilir.
+  `Lagged` → uyarı + duvar saati `dt` ile catch-up; `Closed` → temiz çıkış.
+- [x] **Per-user action channel** — her bağlantının kendi `Action` kanalı;
+  conn actor `try_send` ile iletir (doluyken kendi girdisini atar, izolasyon).
+  Kontrol düzlemi (Join/Leave/Shutdown) ayrı control kanalı; join/leave tick
+  sınırında işlenir (≤1 tick, deterministik).
+- [x] **Kare hızından bağımsızlık + catch-up cap** — `dt` duvar saati
+  tabanlı (kaçırılan tick'ler bir sonraki adımda telafi); üst sınır
+  `max_catchup = 4` periyot. Test: `gsb-game/tests/frame_independence.rs`
+  (60 Hz vs 15 Hz oda, aynı 5.0 s sim süresi → aynı mesafe).
+- [x] Küçükler: `ServerHandle` ticker `JoinHandle` + `stop()` kaskadı
+  (registry → ticker.abort → accept.abort), config anahtarları
+  (`room_control`, `conn_action`; `room_mailbox` kaldırıldı).
 
 - [x] **#1 Join'de tam dünya snapshot'ı** — `last_sent` artık bağlantı
   başına; sonradan giren oyuncu ilk tick'te tüm dünyayı görür.
@@ -23,8 +43,8 @@ kapatıldı. 19/19 test yeşil. Aşağıdakiler **ölçülmemiş performans**,
   bağlantının eski odasını temizleyerek girer. Test:
   `gsb-core/tests/registry.rs`.
 - [x] **#5 `RoomId(0)` sentinel** — `ConnInfo.room: Option<RoomId>`.
-- [x] **Tick coalescing** — biriken Tick'ler tek tick'te işlenir, diğer
-  mesajlar sıra korunarak; yavaş tick çöp iş biriktirmez.
+- [x] **Tick coalescing** (o zaman pacer tabanlı; broadcast geçişinde yerini
+  duvar saati `dt` catch-up'ı aldı — "biriken Tick" kavramı yok oldu).
 - [x] Küçükler: reader pump double-`Closed`, `RoomConfig::conn_out_capacity`
   ölü kod, accept loop backoff, DESIGN.md iddia düzeltmeleri
   (fan-out O(dirty×conn) dürüst hali, "tek await" formülasyonu, lint kapsamı),
@@ -57,9 +77,9 @@ kapatıldı. 19/19 test yeşil. Aşağıdakiler **ölçülmemiş performans**,
   tick'te bir değişim görür, `bump()` her tick aynı tam sayıyı yayınlar
   (bant israfı + merdivenlenme). Float ya da mm cinsinden int kararı
   Unity tarafıyla birlikte (proto değişimi).
-- [ ] **Tick/Action kanal ayrımı** — kötü niyetli istemci odanın mailbox'ını
-  doldurduğunda pacer'ın `send().await`'i sıraya girer (tick jitter).
-  Kontrol düzlemi (Tick) ayrı kanal + ince merge görevi.
+- [x] **Tick/Action kanal ayrımı** — broadcast tick + per-user action +
+  control kanalı olarak çözüldü (bkz. Kapatılanlar). Kalan parça: bağlantı
+  başına girdi rate-limit (güvenlik maddesi).
 - [ ] **Entity bazlı yayın rate limit** — 30Hz snapshot yerine 10–15Hz +
   istemci interpolasyonu (Unity tarafında küçük ama gerçek iş).
 - [ ] **Bağlantı başına Vec churn** — her tick × bağlantı yeni Vec

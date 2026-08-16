@@ -6,17 +6,23 @@
 # Socket address to bind.
 bind = "0.0.0.0:7777"
 
-# Simulation rate (ticks per second). Every room paces itself at this rate.
+# Global tick rate (ticks per second). One ticker task feeds all rooms over
+# a broadcast channel. A room may run slower, at any rate that divides this
+# one (e.g. global 60 → a room at 15 steps every 4th tick).
 tick_hz = 30.0
 
-# Rooms pre-created at startup (ids 1..=room_count).
+# Rooms pre-created at startup (ids 1..=room_count), all at the global rate.
 room_count = 1
 
 # Maximum frame body size in bytes (length-prefix guard; 1 MiB default).
 max_frame_bytes = 1048576
 
-# Room actor mailbox capacity (actions + tick triggers).
-room_mailbox = 4096
+# Room control channel capacity (join/leave/shutdown; low frequency).
+room_control = 128
+
+# Per-connection action channel capacity (inputs buffered until the room's
+# next tick; overflow drops the connection's own oldest inputs).
+conn_action = 256
 
 # Per-connection inbound channel capacity (frames from the reader pump).
 conn_inbox = 1024

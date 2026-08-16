@@ -6,13 +6,15 @@
 //! loop. It must be called from inside a tokio runtime.
 //!
 //! ```text
+//! global ticker (broadcast) ──TickInfo──▶ room actors (4-phase tick)
+//!                                            │ per-conn action channels (in)
 //! accept loop ──ConnOpened──▶ registry actor ◀──RegistryMsg── connection actors
-//!     │                           │CreateRoom/SpawnPlayer/…
-//!     ▼                           ▼
-//! endpoint pumps             room actors (4-phase tick)
-//! (reader/writer per conn)      │RoomMsg::Action / RoomMsg::Tick
-//!                                ▼
-//!                          World (bevy_ecs) + RoomLogic (gsb-game)
+//!     │                           │CreateRoom/SpawnPlayer/…      │ try_send
+//!     ▼                           ▼                               ▼
+//! endpoint pumps             (control plane)              room actor (pulls)
+//! (reader/writer per conn)                               │
+//!                                                        ▼
+//!                                         World (bevy_ecs) + RoomLogic (gsb-game)
 //! ```
 
 use std::net::SocketAddr;
@@ -37,14 +39,18 @@ use gsb_protocol::MessageTable;
 pub struct Config {
     /// Socket address to bind (e.g. `"0.0.0.0:7777"`, `"127.0.0.1:0"`).
     pub bind: String,
-    /// Simulation rate in ticks per second.
+    /// Global tick rate in ticks per second. Every room must run at a rate
+    /// that divides this one (a room at `global / k` steps every k-th tick).
     pub tick_hz: f64,
     /// Number of rooms to pre-create at startup (ids `1..=room_count`).
     pub room_count: u64,
     /// Maximum frame body size in bytes (transport-level guard).
     pub max_frame_bytes: usize,
-    /// Capacity of each room's mailbox.
-    pub room_mailbox: usize,
+    /// Capacity of each room's control channel (join/leave/shutdown).
+    pub room_control: usize,
+    /// Capacity of each connection's action channel (inputs buffered until
+    /// the room's next tick).
+    pub conn_action: usize,
     /// Capacity of each connection's inbound (frames in) mailbox.
     pub conn_inbox: usize,
     /// Capacity of each connection's outbound (batches out) channel.
@@ -58,7 +64,8 @@ impl Default for Config {
             tick_hz: 30.0,
             room_count: 1,
             max_frame_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
-            room_mailbox: 4096,
+            room_control: 128,
+            conn_action: 256,
             conn_inbox: 1024,
             conn_out: 256,
         }
@@ -113,15 +120,20 @@ pub enum ServerError {
 pub struct ServerHandle {
     registry: gsb_core::channel::Mailbox<RegistryMsg>,
     accept: JoinHandle<()>,
+    ticker: JoinHandle<()>,
     /// The actual bound address (useful when binding port 0 in tests).
     pub addr: SocketAddr,
 }
 
 impl ServerHandle {
-    /// Shut the server down: the registry tears down connections and rooms;
-    /// the accept loop is hard-aborted (documented v1 limitation).
+    /// Shut the server down: the registry tears down connections and rooms
+    /// (rooms get a control `Shutdown`, processed on their next tick); the
+    /// ticker is aborted, which closes the broadcast and stops any room that
+    /// missed its window; the accept loop is hard-aborted (documented v1
+    /// limitation).
     pub async fn stop(self) {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
+        self.ticker.abort();
         self.accept.abort();
     }
 }
@@ -146,18 +158,28 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
     })?;
 
     let table = build_table();
-    let (reg_tx, reg_rx) = channel::<RegistryMsg>(cfg.room_mailbox);
+    let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
+
+    // The global ticker: one broadcast channel + one timing task. Rooms
+    // subscribe to it at creation; aborting the task closes the broadcast,
+    // which is the rooms' global stop signal (in addition to the control
+    // Shutdown they receive during registry teardown).
+    let (ticker, ticker_task) = gsb_core::ticker::Ticker::spawn(cfg.tick_hz, 64);
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
-    let _registry = tokio::spawn(Registry::new(reg_rx, reg_tx.clone(), demo_room_factory()).run());
+    let _registry = tokio::spawn(
+        Registry::new(reg_rx, reg_tx.clone(), demo_room_factory(), ticker.clone()).run(),
+    );
 
-    // Pre-create rooms 1..=room_count.
+    // Pre-create rooms 1..=room_count (all at the global rate; a room may
+    // configure a slower rate that divides it).
     for id in 1..=cfg.room_count {
         let config = RoomConfig {
             id: RoomId(id),
             tick_hz: cfg.tick_hz,
-            mailbox_capacity: cfg.room_mailbox,
+            control_capacity: cfg.room_control,
+            action_capacity: cfg.conn_action,
             ..Default::default()
         };
         {
@@ -240,6 +262,7 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
     Ok(ServerHandle {
         registry: reg_tx,
         accept,
+        ticker: ticker_task,
         addr,
     })
 }
