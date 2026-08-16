@@ -1,9 +1,9 @@
-//! Regression tests for the broadcast phase.
+//! Regression tests for the broadcast phase (per-group full snapshots).
 //!
 //! 1. A connection that joins a room where others are already present must
 //!    receive the **entire world** (full snapshot) on the next broadcast —
-//!    not only what changes afterwards. (Previously `last_sent` was global
-//!    per room, so a late joiner saw nothing until each entity moved.)
+//!    not only what changes afterwards. Membership is expressed by
+//!    presence in the snapshot.
 //! 2. A *stale* leave (its connection re-joined before the leave was
 //!    processed) must not despawn the new entity.
 //!
@@ -19,11 +19,12 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
+use gsb_game::game::WorldSnapshot;
 use gsb_protocol::FrameBody;
+use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use gsb_game::op;
-use prost::Message;
 
 const WAIT: Duration = Duration::from_secs(5);
 /// Nominal period for synthetic timestamps (the room default is 30 Hz).
@@ -43,15 +44,14 @@ async fn next_batch(rx: &mut mpsc::Receiver<FrameBatch>) -> Vec<FrameBody> {
         .expect("out channel closed")
 }
 
-fn states(batch: &[FrameBody]) -> Vec<gsb_game::game::EntityState> {
-    batch
+/// The world snapshot carried by a batch (each batch holds at most one —
+/// one snapshot per group per tick, and the demo has a single group).
+fn snapshot(batch: &[FrameBody]) -> WorldSnapshot {
+    let frame = batch
         .iter()
-        .filter(|f| f.op == op::ENTITY_STATE)
-        .map(|f| {
-            gsb_game::game::EntityState::decode(f.payload.as_ref())
-                .expect("bad ENTITY_STATE payload")
-        })
-        .collect()
+        .find(|f| f.op == op::WORLD_SNAPSHOT)
+        .expect("batch must carry a WORLD_SNAPSHOT frame");
+    WorldSnapshot::decode(frame.payload.as_ref()).expect("bad WORLD_SNAPSHOT payload")
 }
 
 /// A room actor driven by a manually fed global ticker: each tick carries
@@ -142,8 +142,9 @@ async fn late_joiner_receives_full_world_snapshot() {
     let c_a = ConnectionId(1);
     let (a_entity, mut a_rx, a_actions) = room.join(c_a).await;
     let batch = next_batch(&mut a_rx).await;
+    let snap = snapshot(&batch);
     assert!(
-        states(&batch).iter().any(|s| s.entity == a_entity),
+        snap.entities.iter().any(|e| e.entity == a_entity),
         "A must see its own entity"
     );
 
@@ -152,9 +153,12 @@ async fn late_joiner_receives_full_world_snapshot() {
     let (b_entity, mut b_rx, _b_actions) = room.join(c_b).await;
     assert_ne!(a_entity, b_entity);
 
-    // The join tick's broadcast: B must see both A (existing, still) and itself.
+    // The join tick's broadcast: B must see both A (existing, still) and
+    // itself — the join is processed in the control phase, before this
+    // tick's snapshot, so one full snapshot covers both.
     let batch = next_batch(&mut b_rx).await;
-    let seen: Vec<u64> = states(&batch).iter().map(|s| s.entity).collect();
+    let join_snap = snapshot(&batch);
+    let seen: Vec<u64> = join_snap.entities.iter().map(|e| e.entity).collect();
     assert!(
         seen.contains(&a_entity),
         "late joiner did not see the existing still entity: {seen:?}"
@@ -163,10 +167,23 @@ async fn late_joiner_receives_full_world_snapshot() {
         seen.contains(&b_entity),
         "late joiner must see its own entity"
     );
+    // Record A's position as B sees it; after the move below, B must
+    // observe a different one.
+    let a_start = join_snap
+        .entities
+        .iter()
+        .find(|e| e.entity == a_entity)
+        .expect("A's entity in the join-tick snapshot");
 
-    // A moves (over its per-connection action channel); B must observe the
-    // version bump.
-    let move_to = gsb_game::game::MoveTo { x: 10, y: 10 };
+    // A moves (over its per-connection action channel); the world changes,
+    // so the group snapshot is re-emitted — B must observe the new
+    // position. The integer position changes within a few ticks at
+    // 10 units/s, 30 Hz, so feed ticks until B sees the movement.
+
+    let move_to = gsb_game::game::MoveTo {
+        x: a_start.x + 100,
+        y: a_start.y + 100,
+    };
     a_actions
         .send(Action {
             conn: c_a,
@@ -175,15 +192,26 @@ async fn late_joiner_receives_full_world_snapshot() {
         })
         .await
         .expect("action channel alive");
-    room.tick();
-    let batch = next_batch(&mut b_rx).await;
-    let a_state = states(&batch)
-        .into_iter()
-        .find(|s| s.entity == a_entity)
-        .expect("B must receive A's updated state");
+
+    let mut a_moved = None;
+    for _ in 0..60 {
+        room.tick();
+        let batch = next_batch(&mut b_rx).await;
+        let snap = snapshot(&batch);
+        let rec = snap
+            .entities
+            .iter()
+            .find(|e| e.entity == a_entity)
+            .expect("A's entity must stay in the snapshot");
+        if (rec.x, rec.y) != (a_start.x, a_start.y) {
+            a_moved = Some((rec.x, rec.y));
+            break;
+        }
+    }
     assert!(
-        a_state.version > 0,
-        "moved entity must carry a bumped version"
+        a_moved.is_some(),
+        "B must observe A's moved position in a snapshot (start {:?})",
+        (a_start.x, a_start.y)
     );
 
     room.shutdown().await;
@@ -210,8 +238,16 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
     // The rejoin gets a fresh out channel (the room's old one is dropped).
     let (e2, mut a_rx, a_actions) = room.join(c_a).await;
     assert_ne!(e1, e2, "rejoin must create a fresh entity");
-    // Consume the rejoin tick's batch (E2 at v0, plus the E1 removed event).
-    let _ = next_batch(&mut a_rx).await;
+    // Consume the rejoin tick's batch: E2 is in the snapshot, E1 is not
+    // (membership = presence in the snapshot).
+    let batch = next_batch(&mut a_rx).await;
+    let seen: Vec<u64> = snapshot(&batch)
+        .entities
+        .iter()
+        .map(|e| e.entity)
+        .collect();
+    assert!(seen.contains(&e2), "rejoined entity E2 must be in the snapshot");
+    assert!(!seen.contains(&e1), "left entity E1 must be out of the snapshot");
 
     // A *stale* leave for E1 arrives late: it must be ignored.
     room.control
@@ -235,11 +271,16 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
         .expect("action channel alive");
     room.tick();
     let batch = next_batch(&mut a_rx).await;
-    let state = states(&batch)
-        .into_iter()
-        .find(|s| s.entity == e2)
-        .expect("rejoined entity E2 must survive the stale leave");
-    assert!(state.version > 0);
+    let seen: Vec<u64> = snapshot(&batch)
+        .entities
+        .iter()
+        .map(|e| e.entity)
+        .collect();
+    assert!(
+        seen.contains(&e2),
+        "rejoined entity E2 must survive the stale leave"
+    );
+    assert!(!seen.contains(&e1), "stale-leave victim E1 must not reappear");
 
     room.shutdown().await;
 }

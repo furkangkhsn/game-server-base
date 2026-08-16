@@ -11,23 +11,25 @@ message MoveTo {
   sfixed32 y = 2;
 }
 
-// Server → client: an entity entered the room.
-message EntitySpawned {
+// Server → client: one entity inside a WorldSnapshot.
+message EntityRecord {
+  // Full bevy entity bits (generation + index): identity stays unique even
+  // when the allocator reuses a slot, so the client can tell "the same
+  // entity moved" from "a new entity took the slot".
   uint64 entity = 1;
   sfixed32 x = 2;
   sfixed32 y = 3;
 }
 
-// Server → client: an entity left the room / was removed.
-message EntityRemoved {
-  uint64 entity = 1;
-}
-
-// Server → client: a full self-contained snapshot of an entity (sent when
-// its version changes since the last snapshot).
-message EntityState {
-  uint64 entity = 1;
-  sfixed32 x = 2;
-  sfixed32 y = 3;
-  uint64 version = 4;
+// Server → client: the complete, self-contained snapshot of the room's
+// snapshot group. There is no delta and no history: every snapshot
+// replaces the client's entire view of the world. Packet loss is healed
+// automatically by the next snapshot. A per-record version field no
+// longer exists — ordering is handled by `sequence` and completeness by
+// the "no change, no send" rule plus a low-rate keep-alive re-send.
+message WorldSnapshot {
+  // Monotonic snapshot sequence (the room's global tick index). Clients
+  // discard any snapshot whose sequence is <= the last one they accepted.
+  uint64 sequence = 1;
+  repeated EntityRecord entities = 2;
 }

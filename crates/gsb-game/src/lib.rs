@@ -27,7 +27,5 @@ use gsb_protocol::MessageTable;
 /// messages) and shares it read-only between all actors.
 pub fn register(table: &mut MessageTable) {
     table.reg::<game::MoveTo>(op::MOVE_TO);
-    table.reg::<game::EntitySpawned>(op::ENTITY_SPAWNED);
-    table.reg::<game::EntityRemoved>(op::ENTITY_REMOVED);
-    table.reg::<game::EntityState>(op::ENTITY_STATE);
+    table.reg::<game::WorldSnapshot>(op::WORLD_SNAPSHOT);
 }

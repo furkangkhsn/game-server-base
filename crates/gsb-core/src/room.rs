@@ -1,16 +1,17 @@
 //! The room actor: one per room/map, owning its world and its tick loop.
 //!
-//! A room runs the four-phase tick driven by the **global ticker** (a
+//! A room runs the five-phase tick driven by the **global ticker** (a
 //! `broadcast` channel, see [`crate::ticker`]):
 //!
 //! ```text
 //! global ticker ──TickInfo (broadcast)──▶ room actor   (the only await)
 //!                                            │
-//!  Phase 0  │  CONTROL: pull join/leave/shutdown from the control channel
-//!  Phase 1  │  READ:     pull actions from each connection's channel
-//!  Phase 2  │  CONVERT:  actions → component writes (RoomLogic)
-//!  Phase 3  │  SYSTEMS:  run the ordered game systems   (RoomLogic)
-//!  Phase 4  │  BROADCAST: dirty entities → frames → conn channels
+//!  Phase 0  │  CONTROL:   pull join/leave/shutdown from the control channel
+//!  Phase 1  │  READ:      pull actions from each connection's channel
+//!  Phase 2  │  CONVERT:   actions → component writes (RoomLogic)
+//!  Phase 3  │  SYSTEMS:   run the ordered game systems   (RoomLogic)
+//!  Phase 4  │  BROADCAST: one snapshot per group (RoomLogic::snapshot)
+//!           │             → freeze → shared Bytes fan-out + private frames
 //!             └─────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -18,6 +19,23 @@
 //! synchronous. Per-connection action channels isolate users: one flooding
 //! connection can only fill its own channel, never delay a tick or another
 //! connection.
+//!
+//! **Broadcast model (per-group full snapshots).** Connections are
+//! partitioned into snapshot groups by the game logic
+//! ([`RoomLogic::group_of`]): `()` means "one group per room" (the demo),
+//! `ConnectionId` means "one snapshot per connection". Each tick the room
+//! encodes each group's **entire** snapshot **once**, `freeze()`s it, and
+//! fans the resulting `Bytes` out to the group's members by reference
+//! (Arc refcount — the payload is never copied). Membership (join/leave)
+//! is expressed by presence in the snapshot: there are no spawn/remove
+//! events. The game logic decides "nothing changed for this group"
+//! (`RoomLogic::snapshot` returning `false`, including membership
+//! changes); when nothing changed anywhere, the room ships nothing except
+//! on a keep-alive tick, when each group re-sends its last cached snapshot
+//! so a client that lost its last packet cannot stay stale forever
+//! (`RoomConfig::keepalive_hz`). A dropped batch (slow client) costs at
+//! most one snapshot of staleness: every snapshot is self-contained
+//! (no delta, no history), so the next one heals the gap.
 //!
 //! Time handling: each room tracks the last tick it stepped at. The step
 //! `dt` is the wall-clock difference, so ticks missed while busy are
@@ -29,9 +47,12 @@
 //! every k-th global tick.
 //!
 //! The room actor owns **no** game types: the world is an opaque `W` and
-//! all game behaviour is delegated to [`RoomLogic`].
+//! the group key an opaque `G`; all game behaviour is delegated to
+//! [`RoomLogic`].
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -67,6 +88,17 @@ pub struct RoomConfig {
     /// Cap for catch-up `dt`, in periods: after a long stall the next step
     /// simulates at most this many periods (temporary slow-motion).
     pub max_catchup: u32,
+    /// Warn (log) when a group's snapshot payload exceeds this many bytes.
+    /// rUDP MTU readiness: an oversized snapshot cannot ride a datagram, so
+    /// a sustained warning is the signal to split the group (AOI) or lower
+    /// its emission rate.
+    pub max_snapshot_bytes: usize,
+    /// Keep-alive rate for unchanged groups, in Hz. When a group is
+    /// unchanged the room ships nothing for it — but every
+    /// `tick_hz / keepalive_hz` steps each group re-sends its last cached
+    /// snapshot, so a client that lost its last packet cannot stay stale
+    /// forever. `<= 0` disables keep-alive.
+    pub keepalive_hz: f64,
 }
 
 impl Default for RoomConfig {
@@ -78,6 +110,8 @@ impl Default for RoomConfig {
             action_capacity: 256,
             max_pending_actions: 65536,
             max_catchup: 4,
+            max_snapshot_bytes: 1_048_576,
+            keepalive_hz: 1.0,
         }
     }
 }
@@ -124,64 +158,52 @@ pub struct TickCtx {
     pub dt: Duration,
 }
 
-/// Fan-out sink used during the broadcast phase.
-///
-/// Frames are buffered per connection and flushed as **one batch per
-/// connection per tick** (`Vec<FrameBody>` over the outbound channel) —
-/// this is what keeps fan-out at O(connections) instead of
-/// O(dirty × connections) at large scale.
-///
-/// Flushing is `try_send`: if a connection's outbound channel is full the
-/// batch for that connection is dropped and counted. Snapshots are
-/// self-contained per tick, so a dropped batch only costs one tick of
-/// staleness for the affected client.
-pub struct OutSink<'a> {
-    conns: &'a HashMap<ConnectionId, RoomConn>,
-    buffer: HashMap<ConnectionId, Vec<gsb_protocol::FrameBody>>,
-    dropped: &'a mut u64,
-}
-
-impl OutSink<'_> {
-    /// Queue a frame for one connection (no-op if it is not in the room).
-    /// Flushed by [`OutSink::flush`] (called by the room after the
-    /// broadcast phase).
-    pub fn send(&mut self, conn: ConnectionId, frame: gsb_protocol::FrameBody) {
-        if self.conns.contains_key(&conn) {
-            self.buffer.entry(conn).or_default().push(frame);
-        }
-    }
-
-    /// Queue a frame for every connection in the room.
-    pub fn broadcast(&mut self, frame: gsb_protocol::FrameBody) {
-        for conn in self.conns.keys() {
-            self.buffer.entry(*conn).or_default().push(frame.clone());
-        }
-    }
-
-    /// All connection ids currently in the room.
-    pub fn connections(&self) -> impl Iterator<Item = ConnectionId> + '_ {
-        self.conns.keys().copied()
-    }
-
-    pub fn count(&self) -> usize {
-        self.conns.len()
-    }
-
-    /// Ship one batch to each queued connection.
-    pub fn flush(&mut self) {
-        for (conn, frames) in self.buffer.drain() {
-            if let Some(c) = self.conns.get(&conn)
-                && c.out.try_send(frames).is_err()
-            {
-                *self.dropped += 1;
-            }
-        }
-    }
-}
-
 /// Game-side behaviour of a room. Implemented by the game crate; the core
-/// never inspects the world `W`.
+/// never inspects the world `W` or the group key `GroupKey`.
 pub trait RoomLogic<W>: Send {
+    /// Opaque key partitioning the room's connections into snapshot groups.
+    /// `()` = one group per room (everyone sees the whole world);
+    /// `ConnectionId` = one snapshot per connection; anything else (e.g. a
+    /// zone id) is a legitimate future grouping.
+    type GroupKey: Eq + Hash + Clone;
+
+    /// Opcode under which the room ships group snapshots.
+    fn snapshot_op(&self) -> u16;
+    /// Opcode under which the room ships the per-connection private frame
+    /// produced by [`Self::private`].
+    fn private_op(&self) -> u16;
+
+    /// Which snapshot group `conn` belongs to. Re-evaluated every tick: a
+    /// group may depend on the world (e.g. the zone an entity is in).
+    fn group_of(&self, world: &W, conn: ConnectionId) -> Self::GroupKey;
+
+    /// Encode the complete, self-contained snapshot of one group into
+    /// `out`.
+    ///
+    /// Return `false` when the group is unchanged since its last emitted
+    /// snapshot — and "no change" **includes** membership (join/leave).
+    /// The room then ships nothing to the group, except on a keep-alive
+    /// tick, when it re-sends the group's last cached snapshot.
+    ///
+    /// Snapshots are self-contained by contract: no delta, no history — a
+    /// snapshot alone defines the group's entire world. A lost packet is
+    /// healed by the next snapshot; clients must treat each snapshot as a
+    /// full replacement of their view (order/duplicate-safe via the
+    /// snapshot's sequence number).
+    fn snapshot(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        group: &Self::GroupKey,
+        out: &mut bytes::BytesMut,
+    ) -> bool;
+
+    /// Encode a per-connection private frame (delivered only to `conn`,
+    /// alongside the group snapshot). Default: none.
+    fn private(&mut self, _world: &mut W, _conn: ConnectionId, _out: &mut bytes::BytesMut) -> bool {
+        false
+    }
+
     /// A player entered the room: create (or restore) its entity and return
     /// its id.
     fn on_join(&mut self, world: &mut W, conn: ConnectionId) -> EntityId;
@@ -195,46 +217,76 @@ pub trait RoomLogic<W>: Send {
     /// Phase 3 — run the game systems for this tick.
     fn update(&mut self, world: &mut W, ctx: &TickCtx);
 
-    /// Phase 4 — encode dirty entities and fan them out via `sink`.
-    fn broadcast(&mut self, world: &mut W, ctx: &TickCtx, sink: &mut OutSink<'_>);
-
     /// Called when the room shuts down (world is dropped right after).
     fn on_shutdown(&mut self) {}
 }
 
-struct RoomConn {
+struct RoomConn<G> {
     out: mpsc::Sender<FrameBatch>,
     /// This connection's input, written by its connection actor as frames
     /// arrive; pulled non-blockingly at each step.
     actions: Inbox<Action>,
     entity: EntityId,
+    /// Snapshot group this connection belongs to (recomputed every tick via
+    /// [`RoomLogic::group_of`]).
+    group: G,
 }
 
-/// The room actor. Owns the world and the connection table; everything
-/// mutable is local, so no synchronization is needed.
-pub struct RoomActor<W> {
+/// Per-group broadcast state, kept across ticks.
+struct GroupState {
+    /// Members of the group this tick (rebuilt every tick).
+    members: Vec<ConnectionId>,
+    /// Last snapshot payload emitted for the group; re-sent on keep-alive
+    /// ticks when the group is unchanged.
+    last: Option<bytes::Bytes>,
+    /// The payload fanned out to the members this tick (the emitted
+    /// snapshot or the keep-alive re-send); `None` = nothing shipped.
+    sent: Option<bytes::Bytes>,
+}
+
+/// The room actor. Owns the world, the connection table, and the group
+/// table; everything mutable is local, so no synchronization is needed.
+///
+/// `G` is the game logic's group key ([`RoomLogic::GroupKey`]); the room
+/// stores per-group state (members, last snapshot) under it.
+pub struct RoomActor<W, G> {
     config: RoomConfig,
     world: W,
-    logic: Box<dyn RoomLogic<W>>,
+    logic: Box<dyn RoomLogic<W, GroupKey = G>>,
     tick_rx: broadcast::Receiver<TickInfo>,
     control_rx: Inbox<RoomControl>,
-    conns: HashMap<ConnectionId, RoomConn>,
+    conns: HashMap<ConnectionId, RoomConn<G>>,
+    groups: HashMap<G, GroupState>,
     /// Number of global ticks between steps (1 = room rate == global rate).
     run_every: u64,
     /// Wall-clock instant of the last step (for dt).
     last_at: Option<Instant>,
+    /// Room's own step counter (keep-alive cadence is in *room* steps, so a
+    /// slower room keeps the same keep-alive rate in real time).
+    steps: u64,
+    /// Every k-th step, unchanged groups re-send their last snapshot
+    /// (`None` = keep-alive disabled).
+    keepalive_every: Option<u64>,
     dropped_frames: u64,
 }
 
-impl<W> RoomActor<W> {
+impl<W, G> RoomActor<W, G>
+where
+    G: Eq + Hash + Clone,
+{
     pub fn new(
         config: RoomConfig,
         world: W,
-        logic: Box<dyn RoomLogic<W>>,
+        logic: Box<dyn RoomLogic<W, GroupKey = G>>,
         tick_rx: broadcast::Receiver<TickInfo>,
         control_rx: Inbox<RoomControl>,
         run_every: u64,
     ) -> Self {
+        let keepalive_every = if config.keepalive_hz > 0.0 {
+            Some(((config.tick_hz / config.keepalive_hz).round() as u64).max(1))
+        } else {
+            None
+        };
         Self {
             config,
             world,
@@ -242,8 +294,11 @@ impl<W> RoomActor<W> {
             tick_rx,
             control_rx,
             conns: HashMap::new(),
+            groups: HashMap::new(),
             run_every: run_every.max(1),
             last_at: None,
+            steps: 0,
+            keepalive_every,
             dropped_frames: 0,
         }
     }
@@ -354,21 +409,114 @@ impl<W> RoomActor<W> {
         // -- Phase 3 — SYSTEMS: run the ordered game systems.
         self.logic.update(&mut self.world, &ctx);
 
-        // -- Phase 4 — BROADCAST: dirty entities → connection channels.
-        // `OutSink` borrows `self.conns` immutably while the logic borrows
-        // `self.world` mutably — disjoint fields, no synchronization.
+        // -- Phase 4 — BROADCAST: one snapshot per group, frozen once and
+        //    shared by reference; per-connection fan-out of
+        //    [group snapshot] + [private?].
+        self.steps += 1;
+        self.broadcast_phase(&ctx);
+        true
+    }
+
+    /// Phase 4, in four passes. Field-level borrows keep the logic, the
+    /// world, the connection table, and the group table independently
+    /// accessible — disjoint fields, no synchronization.
+    fn broadcast_phase(&mut self, ctx: &TickCtx) {
+        let snap_op = self.logic.snapshot_op();
+        let priv_op = self.logic.private_op();
+
+        // 4a. Recompute each connection's group (a group may depend on the
+        //     world, e.g. zones).
+        for (conn, rc) in self.conns.iter_mut() {
+            rc.group = self.logic.group_of(&self.world, *conn);
+        }
+
+        // 4b. Rebuild the group table. Membership churn (join/leave)
+        //     shows up here as a different member set — the game logic's
+        //     "no change" test in `snapshot` must account for it.
+        let mut members: HashMap<G, Vec<ConnectionId>> = HashMap::new();
+        for (conn, rc) in &self.conns {
+            members.entry(rc.group.clone()).or_default().push(*conn);
+        }
+        // Drop groups whose members all left (frees the cached snapshot).
+        let gone: Vec<G> = self
+            .groups
+            .keys()
+            .filter(|g| !members.contains_key(*g))
+            .cloned()
+            .collect();
+        for g in gone {
+            self.groups.remove(&g);
+        }
+        for (g, m) in members {
+            match self.groups.entry(g) {
+                Entry::Vacant(e) => {
+                    e.insert(GroupState {
+                        members: m,
+                        last: None,
+                        sent: None,
+                    });
+                }
+                Entry::Occupied(mut e) => {
+                    let st = e.get_mut();
+                    st.members = m;
+                    st.sent = None;
+                }
+            }
+        }
+
+        // 4c. One snapshot per group: encode ONCE, freeze ONCE, share the
+        //     result by reference. Keep-alive: an unchanged group re-sends
+        //     its cached snapshot on the cadence tick (no re-encode).
+        let keep_due = self
+            .keepalive_every
+            .map(|every| self.steps.is_multiple_of(every))
+            .unwrap_or(false);
+        for (group, st) in self.groups.iter_mut() {
+            let mut buf = bytes::BytesMut::new();
+            if self.logic.snapshot(&mut self.world, ctx, group, &mut buf) {
+                if buf.len() > self.config.max_snapshot_bytes {
+                    warn!(
+                        room = %self.config.id,
+                        bytes = buf.len(),
+                        max = self.config.max_snapshot_bytes,
+                        "snapshot exceeds max_snapshot_bytes (rUDP MTU readiness)"
+                    );
+                }
+                let payload = buf.freeze();
+                st.sent = Some(payload.clone());
+                st.last = Some(payload);
+            } else if keep_due {
+                st.sent = st.last.clone();
+            }
+        }
+
+        // 4d. Per-connection fan-out: one batch per connection — the
+        //     group's shared snapshot (Bytes refcount, never copied) plus
+        //     the connection's private frame, when the logic has one.
         let mut dropped: u64 = 0;
-        {
-            let mut sink = OutSink {
-                conns: &self.conns,
-                buffer: HashMap::new(),
-                dropped: &mut dropped,
-            };
-            self.logic.broadcast(&mut self.world, &ctx, &mut sink);
-            sink.flush();
+        for (conn, rc) in &self.conns {
+            let mut batch: FrameBatch = Vec::with_capacity(2);
+            if let Some(payload) = self
+                .groups
+                .get(&rc.group)
+                .and_then(|st| st.sent.clone())
+            {
+                batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
+            }
+            let mut pbuf = bytes::BytesMut::new();
+            if self.logic.private(&mut self.world, *conn, &mut pbuf) {
+                batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.freeze()));
+            }
+            if !batch.is_empty()
+                && rc.out.try_send(batch).is_err()
+            {
+                // Outbound channel full: the batch is dropped. Snapshots are
+                // self-contained, so this costs the client at most one
+                // snapshot of staleness (keep-alive bounds it).
+                dropped += 1;
+            }
         }
         self.dropped_frames += dropped;
-        true
     }
 
     fn handle_control(&mut self, c: RoomControl) -> bool {
@@ -387,6 +535,10 @@ impl<W> RoomActor<W> {
                         out,
                         actions: act_rx,
                         entity,
+                        // Authoritative value is recomputed every broadcast
+                        // phase (a group may depend on the world); this is
+                        // the join-time value.
+                        group: self.logic.group_of(&self.world, conn),
                     },
                 );
                 let _ = reply.send((entity, act_tx));
@@ -412,6 +564,7 @@ impl<W> RoomActor<W> {
 mod tests {
     use super::*;
     use crate::channel::channel;
+    use gsb_protocol::FrameBody;
     use std::time::Duration;
 
     /// Test logic recording the dt of every step over a channel (no locks:
@@ -422,6 +575,29 @@ mod tests {
     }
 
     impl RoomLogic<()> for RecLogic {
+        type GroupKey = ();
+
+        fn snapshot_op(&self) -> u16 {
+            0x7000
+        }
+        fn private_op(&self) -> u16 {
+            0x7001
+        }
+
+        fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {
+            Default::default()
+        }
+
+        fn snapshot(
+            &mut self,
+            _w: &mut (),
+            _c: &TickCtx,
+            _g: &Self::GroupKey,
+            _o: &mut bytes::BytesMut,
+        ) -> bool {
+            false
+        }
+
         fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
             1
         }
@@ -434,7 +610,6 @@ mod tests {
         fn update(&mut self, _w: &mut (), ctx: &TickCtx) {
             let _ = self.dts.try_send(ctx.dt);
         }
-        fn broadcast(&mut self, _w: &mut (), _c: &TickCtx, _s: &mut OutSink<'_>) {}
     }
 
     struct Harness {
@@ -738,5 +913,348 @@ mod tests {
             ..Default::default()
         };
         assert!((c.period().as_secs_f64() - 1.0 / 30.0).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------
+    // Group machinery: per-connection groups, private frames, silence on
+    // no-change, keep-alive re-send.
+    // -----------------------------------------------------------------
+
+    /// Test logic that exercises the group machinery end to end:
+    /// - `GroupKey = ConnectionId`: every connection is its own group, so a
+    ///   group's snapshot must never reach another connection;
+    /// - emission is gated on a per-group dirty set that membership
+    ///   changes (join/leave) set — per the room contract, a join/leave
+    ///   **is** a change (for its own group); a clean group reports "no
+    ///   change" and nothing is sent (except the room's keep-alive re-send);
+    /// - `private` emits a frame for exactly one designated connection.
+    struct GroupLogic {
+        conn_entity: HashMap<ConnectionId, u64>,
+        next: u64,
+        dirty: std::collections::HashSet<ConnectionId>,
+        step_no: u64,
+        steps: mpsc::Sender<u64>,
+    }
+
+    impl RoomLogic<()> for GroupLogic {
+        type GroupKey = ConnectionId;
+
+        fn snapshot_op(&self) -> u16 {
+            0x7010
+        }
+        fn private_op(&self) -> u16 {
+            0x7011
+        }
+
+        fn group_of(&self, _w: &(), conn: ConnectionId) -> Self::GroupKey {
+            conn
+        }
+
+        fn snapshot(
+            &mut self,
+            _w: &mut (),
+            _c: &TickCtx,
+            group: &Self::GroupKey,
+            out: &mut bytes::BytesMut,
+        ) -> bool {
+            if !self.dirty.remove(group) {
+                return false; // unchanged since the last emission
+            }
+            let entity = self.conn_entity.get(group).copied().unwrap_or(0);
+            out.extend_from_slice(&entity.to_le_bytes());
+            true
+        }
+
+        fn private(&mut self, _w: &mut (), conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+            if conn == ConnectionId(0x70) {
+                out.extend_from_slice(&u32::MAX.to_le_bytes());
+                true
+            } else {
+                false
+            }
+        }
+
+        fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
+            self.next += 1;
+            self.conn_entity.insert(conn, self.next);
+            self.dirty.insert(conn); // membership changed (this group)
+            self.next
+        }
+        fn on_leave(&mut self, _w: &mut (), conn: ConnectionId) {
+            self.conn_entity.remove(&conn);
+            // The leaver's group is gone (and clean); the remaining groups
+            // are unchanged for a per-connection grouping.
+            self.dirty.remove(&conn);
+        }
+        fn ingest(&mut self, _w: &mut (), _c: &TickCtx, actions: &mut Vec<Action>) {
+            actions.clear();
+        }
+        fn update(&mut self, _w: &mut (), _c: &TickCtx) {
+            self.step_no += 1;
+            let _ = self.steps.try_send(self.step_no);
+        }
+    }
+
+    /// Manual-ticker harness for `GroupLogic` rooms.
+    struct GLRoom {
+        tick_tx: broadcast::Sender<TickInfo>,
+        control: Mailbox<RoomControl>,
+        handle: tokio::task::JoinHandle<()>,
+        t0: Instant,
+        next_tick: u64,
+    }
+
+    impl GLRoom {
+        fn new(config: RoomConfig, logic: GroupLogic) -> Self {
+            let (tick_tx, tick_rx) = broadcast::channel(64);
+            let (control, control_rx) = channel(config.control_capacity);
+            let actor = RoomActor::new(
+                config,
+                (),
+                Box::new(logic),
+                tick_rx,
+                control_rx,
+                1,
+            );
+            Self {
+                tick_tx,
+                control,
+                handle: tokio::spawn(actor.run()),
+                t0: Instant::now(),
+                next_tick: 0,
+            }
+        }
+
+        fn tick(&mut self) {
+            self.next_tick += 1;
+            let at = self.t0 + Duration::from_secs_f64(self.next_tick as f64 / 30.0);
+            self.tick_tx
+                .send(TickInfo {
+                    tick: self.next_tick,
+                    at,
+                })
+                .expect("room subscriber alive");
+        }
+
+        async fn join(
+            &mut self,
+            conn: ConnectionId,
+        ) -> (EntityId, mpsc::Receiver<FrameBatch>) {
+            let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
+            let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+            self.control
+                .send(RoomControl::Join {
+                    conn,
+                    out: out_tx,
+                    reply: reply_tx,
+                })
+                .await
+                .expect("control alive");
+            self.tick();
+            let (entity, _actions) = tokio::time::timeout(Duration::from_secs(2), reply_rx)
+                .await
+                .expect("timed out waiting for join reply")
+                .expect("join reply dropped");
+            (entity, out_rx)
+        }
+
+        async fn leave(&mut self, conn: ConnectionId, entity: EntityId) {
+            self.control
+                .send(RoomControl::Leave { conn, entity })
+                .await
+                .expect("control alive");
+            self.tick();
+        }
+
+        /// Feed one tick and wait until the room has stepped it (step
+        /// counter from the logic).
+        async fn step(&mut self) {
+            self.tick();
+        }
+
+        async fn shutdown(mut self) {
+            self.control
+                .send(RoomControl::Shutdown)
+                .await
+                .expect("control alive");
+            self.tick();
+            tokio::time::timeout(Duration::from_secs(2), &mut self.handle)
+                .await
+                .expect("room did not shut down")
+                .expect("room task panicked");
+        }
+    }
+
+    /// Wait until the logic reports `step_no` steps, then give the room a
+    /// moment to finish the in-flight step's fan-out (the step counter is
+    /// emitted in phase 3, fan-out is phase 4; the sleep is generous —
+    /// fan-out is microsecond-scale).
+    async fn wait_steps(steps: &mut mpsc::Receiver<u64>, n: u64) {
+        while let Some(s) = tokio::time::timeout(Duration::from_secs(2), steps.recv())
+            .await
+            .expect("steps closed")
+        {
+            if s == n {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                return;
+            }
+        }
+        panic!("steps channel closed before step {n}");
+    }
+
+    fn batch_frames(batch: &[FrameBody]) -> Vec<(u16, Vec<u8>)> {
+        batch
+            .iter()
+            .map(|f| (f.op, f.payload.to_vec()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn per_connection_groups_isolate_snapshots_and_private() {
+        let (step_tx, mut steps) = mpsc::channel(64);
+        let mut room = GLRoom::new(
+            RoomConfig {
+                id: RoomId(1),
+                ..Default::default()
+            }, // keep-alive 1 Hz at 30 Hz: never due in this test's window
+            GroupLogic {
+                conn_entity: HashMap::new(),
+                next: 0,
+                dirty: std::collections::HashSet::new(),
+                step_no: 0,
+                steps: step_tx,
+            },
+        );
+
+        let (a_ent, mut a_rx) = room.join(ConnectionId(1)).await;
+        let (b_ent, mut b_rx) = room.join(ConnectionId(2)).await;
+        let (c_ent, mut c_rx) = room.join(ConnectionId(0x70)).await; // private target
+
+        // Each join dirties exactly its own group (a per-connection
+        // grouping: B joining changes nothing for A). So by step 3 each
+        // connection's queue holds exactly its own single snapshot — and
+        // never another connection's group content.
+        wait_steps(&mut steps, 3).await;
+        let a_all = drain_all(&mut a_rx).await;
+        let b_all = drain_all(&mut b_rx).await;
+        let c_all = drain_all(&mut c_rx).await;
+        assert_eq!(a_all.len(), 1, "A emitted once (its own join)");
+        assert_eq!(b_all.len(), 1, "B emitted once (its own join)");
+        assert_eq!(c_all.len(), 1, "C emitted once (its own join)");
+        assert_eq!(
+            batch_frames(&a_all[0]),
+            vec![(0x7010, a_ent.to_le_bytes().to_vec())],
+            "A must see exactly its own group's snapshot"
+        );
+        assert_eq!(
+            batch_frames(&b_all[0]),
+            vec![(0x7010, b_ent.to_le_bytes().to_vec())],
+            "B must see exactly its own group's snapshot"
+        );
+        assert_eq!(
+            batch_frames(&c_all[0]),
+            vec![
+                (0x7010, c_ent.to_le_bytes().to_vec()),
+                (0x7011, u32::MAX.to_le_bytes().to_vec())
+            ],
+            "the private frame goes only to the designated connection"
+        );
+
+        // C leaves: for a per-connection grouping the remaining groups are
+        // unchanged, so nothing is re-emitted.
+        room.leave(ConnectionId(0x70), c_ent).await;
+        wait_steps(&mut steps, 4).await;
+        assert!(drain_all(&mut a_rx).await.is_empty(), "A unchanged ⇒ no batch");
+        assert!(drain_all(&mut b_rx).await.is_empty(), "B unchanged ⇒ no batch");
+
+        // Nothing changed anymore: no snapshot is emitted at all.
+        room.step().await;
+        room.step().await;
+        wait_steps(&mut steps, 6).await;
+        assert!(
+            drain_all(&mut a_rx).await.is_empty(),
+            "no change (and no keep-alive due) ⇒ no batch"
+        );
+        assert!(
+            drain_all(&mut b_rx).await.is_empty(),
+            "no change ⇒ no batch"
+        );
+
+        room.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unchanged_group_is_silent_until_keepalive() {
+        // Keep-alive every 3 steps (10 Hz under a 30 Hz room).
+        let (step_tx, mut steps) = mpsc::channel(64);
+        let mut room = GLRoom::new(
+            RoomConfig {
+                id: RoomId(2),
+                keepalive_hz: 10.0,
+                ..Default::default()
+            },
+            GroupLogic {
+                conn_entity: HashMap::new(),
+                next: 0,
+                dirty: std::collections::HashSet::new(),
+                step_no: 0,
+                steps: step_tx,
+            },
+        );
+
+        let (ent, mut a_rx) = room.join(ConnectionId(1)).await;
+        wait_steps(&mut steps, 1).await;
+        // Step 1 (the join tick): the membership change shipped a snapshot.
+        let first = next_batch_full(&mut a_rx).await;
+        assert_eq!(
+            batch_frames(&first),
+            vec![(0x7010, ent.to_le_bytes().to_vec())]
+        );
+
+        // Steps 2..8: no change. The room stays silent — except on the
+        // keep-alive steps (3 and 6), which re-send the cached snapshot.
+        for _ in 0..7 {
+            room.step().await;
+        }
+        wait_steps(&mut steps, 8).await;
+
+        let mut got = vec![first];
+        while let Ok(batch) = a_rx.try_recv() {
+            got.push(batch);
+        }
+        assert_eq!(
+            got.len(),
+            3,
+            "one emission (step 1) + two keep-alive re-sends (steps 3, 6), \
+             nothing else"
+        );
+        for batch in &got {
+            assert_eq!(
+                batch_frames(batch),
+                vec![(0x7010, ent.to_le_bytes().to_vec())],
+                "keep-alive re-sends the cached snapshot bytes"
+            );
+        }
+
+        room.shutdown().await;
+    }
+
+    /// Receive one batch with a timeout (the positive-side barrier: the
+    /// room flushed this connection, so its step's fan-out has reached it).
+    async fn next_batch_full(rx: &mut mpsc::Receiver<FrameBatch>) -> Vec<FrameBody> {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for a batch")
+            .expect("out channel closed")
+    }
+
+    /// Take everything currently queued (after `wait_steps`, the fan-out of
+    /// every reported step has completed).
+    async fn drain_all(rx: &mut mpsc::Receiver<FrameBatch>) -> Vec<Vec<FrameBody>> {
+        let mut out = Vec::new();
+        while let Ok(batch) = rx.try_recv() {
+            out.push(batch);
+        }
+        out
     }
 }

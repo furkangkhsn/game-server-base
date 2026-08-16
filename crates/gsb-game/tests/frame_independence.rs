@@ -9,9 +9,9 @@
 //! steps on the other.
 //!
 //! Positions are observed through a test-local `RoomLogic` that reports the
-//! entity's f32 position as f64 over the wire (the demo `EntityState` opcode
-//! truncates to i32, which would hide the comparison below the quantization
-//! noise).
+//! entity's f32 position as f64 over the wire (the demo `WORLD_SNAPSHOT`
+//! records truncate positions to i32, which would hide the comparison
+//! below the quantization noise).
 
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ use bevy_ecs::prelude::{Entity, World};
 use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::room::{Action, OutSink, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::ticker::TickInfo;
 use gsb_ecs::dirty::EntityVersion;
 use gsb_ecs::{System, SystemCtx};
@@ -70,11 +70,29 @@ impl GlobalClock {
 
 /// Test room logic: one entity at the origin with a fixed speed; the first
 /// MOVE_TO sets a far-away target; every step reports the position (f64).
+///
+/// One snapshot group (`()`): the room ships the group's snapshot once per
+/// tick; this logic reports "changed" on every step (the entity moves
+/// every step once the target is set, and even before that the test wants
+/// exactly one batch per tick).
 struct FrameLogic {
     entity: Option<Entity>,
 }
 
 impl RoomLogic<World> for FrameLogic {
+    type GroupKey = ();
+
+    fn snapshot_op(&self) -> u16 {
+        OBS_OP
+    }
+    fn private_op(&self) -> u16 {
+        OBS_OP
+    }
+
+    fn group_of(&self, _world: &World, _conn: ConnectionId) -> Self::GroupKey {
+        Default::default()
+    }
+
     fn on_join(&mut self, world: &mut World, _conn: ConnectionId) -> EntityId {
         let e = world
             .spawn((Position { x: 0.0, y: 0.0 }, Speed(SPEED), EntityVersion(0)))
@@ -116,23 +134,24 @@ impl RoomLogic<World> for FrameLogic {
         );
     }
 
-    fn broadcast(&mut self, world: &mut World, _ctx: &TickCtx, sink: &mut OutSink<'_>) {
+    fn snapshot(
+        &mut self,
+        world: &mut World,
+        _ctx: &TickCtx,
+        _group: &Self::GroupKey,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
         let Some(e) = self.entity else {
-            return;
+            return false; // nothing to observe (no joiner yet)
         };
         let (x, y) = {
             let ent = world.entity(e);
             let p = ent.get::<Position>().expect("position present");
             (p.x as f64, p.y as f64)
         };
-        let mut payload = Vec::with_capacity(16);
-        payload.extend_from_slice(&x.to_bits().to_le_bytes());
-        payload.extend_from_slice(&y.to_bits().to_le_bytes());
-        let frame = FrameBody::new(OBS_OP, payload);
-        let conns: Vec<ConnectionId> = sink.connections().collect();
-        for conn in conns {
-            sink.send(conn, frame.clone());
-        }
+        out.extend_from_slice(&x.to_bits().to_le_bytes());
+        out.extend_from_slice(&y.to_bits().to_le_bytes());
+        true
     }
 }
 

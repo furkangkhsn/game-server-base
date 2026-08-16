@@ -1,6 +1,6 @@
 //! End-to-end test: an in-process gsb server on an ephemeral port, a real
 //! TCP client that authenticates, joins room 1, issues a move, and asserts
-//! that it receives its entity's state snapshot.
+//! that it observes its entity's position change in the world snapshots.
 
 use std::time::{Duration, Instant};
 
@@ -63,15 +63,19 @@ async fn client_joins_and_receives_snapshots() {
         .unwrap();
     stream.flush().await.unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // The room ships self-contained world snapshots (one per change, plus
+    // a low-rate keep-alive). Success = we first observe our entity, then
+    // observe its position change (the move propagated: action → ingest →
+    // movement system → snapshot → writer pump).
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut my_entity: u64 = 0;
     let mut move_sent = false;
-    let mut saw_spawn = false;
+    let mut first_pos: Option<(i32, i32)> = None;
 
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
-            .unwrap_or_else(|| panic!("timed out (spawn={saw_spawn})"));
+            .unwrap_or_else(|| panic!("timed out (move_sent={move_sent})"));
         let (op, payload) = match tokio::time::timeout(remaining, read_frame(&mut stream)).await {
             Ok(Some(f)) => f,
             Ok(None) => panic!("server closed the connection"),
@@ -87,7 +91,7 @@ async fn client_joins_and_receives_snapshots() {
                 let m: JoinRoomResult = JoinRoomResult::decode(&payload[..]).unwrap();
                 my_entity = m.entity;
                 assert!(my_entity != 0, "entity id must be non-zero");
-                // Force movement so the room broadcasts a fresh snapshot.
+                // Force movement so the room re-emits a snapshot.
                 stream
                     .write_all(&frame(
                         gsb_game::op::MOVE_TO,
@@ -101,20 +105,26 @@ async fn client_joins_and_receives_snapshots() {
                 let m: Error = Error::decode(&payload[..]).unwrap();
                 panic!("server error: code={} message={}", m.code, m.message);
             }
-            gsb_game::op::ENTITY_SPAWNED => {
-                saw_spawn = true;
-            }
-            gsb_game::op::ENTITY_STATE => {
-                let m: gsb_game::game::EntityState =
-                    gsb_game::game::EntityState::decode(&payload[..]).unwrap();
-                // The state for our entity (after the join result) proves the
-                // full path: action → ingest → movement system → broadcast.
-                if my_entity != 0 {
-                    assert_eq!(m.entity, my_entity);
-                    assert!(m.version > 0, "entity must have moved (version > 0)");
-                    break;
+            gsb_game::op::WORLD_SNAPSHOT => {
+                let m: gsb_game::game::WorldSnapshot =
+                    gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                assert!(
+                    m.sequence > 0,
+                    "snapshot sequence must be monotonic (> 0)"
+                );
+                let Some(rec) = m.entities.iter().find(|e| e.entity == my_entity) else {
+                    continue; // snapshot that arrived before the join result
+                };
+                let pos = (rec.x, rec.y);
+                match first_pos {
+                    None => first_pos = Some(pos),
+                    Some(first) => {
+                        if pos != first {
+                            break; // moved: the full path is proven
+                        }
+                        // Still at the spawn position: keep reading.
+                    }
                 }
-                // A state that arrived before the join result: keep waiting.
             }
             other => {
                 panic!("unexpected op {other} in e2e handshake");
@@ -122,7 +132,6 @@ async fn client_joins_and_receives_snapshots() {
         }
     }
 
-    assert!(saw_spawn, "must have seen ENTITY_SPAWNED");
     assert!(move_sent, "must have been able to send MOVE_TO");
     handle.stop().await;
 }

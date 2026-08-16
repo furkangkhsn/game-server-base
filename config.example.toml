@@ -29,3 +29,15 @@ conn_inbox = 1024
 
 # Per-connection outbound channel capacity (batches from room fan-out).
 conn_out = 256
+
+# Warn (log) when a room group's snapshot payload exceeds this many bytes.
+# rUDP MTU readiness: an oversized snapshot cannot ride a datagram, so a
+# sustained warning is the signal to split the group (AOI) or lower its
+# emission rate. Default = max_frame_bytes.
+max_snapshot_bytes = 1048576
+
+# Keep-alive rate for unchanged snapshot groups, in Hz. When nothing
+# changed the room ships nothing — but each group re-sends its last cached
+# snapshot at this rate, so a client that lost its last packet cannot stay
+# stale forever. <= 0 disables. Default 1 Hz.
+keepalive_hz = 1.0

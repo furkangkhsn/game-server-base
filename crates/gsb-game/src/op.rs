@@ -3,12 +3,11 @@
 /// Client → server: "move my entity toward (x, y)".
 pub const MOVE_TO: u16 = 1000;
 
-/// Server → client: an entity entered the room.
-pub const ENTITY_SPAWNED: u16 = 1001;
+/// Server → client: the complete, self-contained snapshot of the room's
+/// snapshot group (membership is expressed by presence in the snapshot;
+/// there are no separate spawn/remove events).
+pub const WORLD_SNAPSHOT: u16 = 1003;
 
-/// Server → client: an entity left the room / was removed.
-pub const ENTITY_REMOVED: u16 = 1002;
-
-/// Server → client: full snapshot of an entity (sent when its version
-/// changed since the last snapshot).
-pub const ENTITY_STATE: u16 = 1003;
+/// Reserved for per-connection private frames
+/// ([`gsb_core::room::RoomLogic::private`]); unused by the demo game.
+pub const PRIVATE: u16 = 1004;

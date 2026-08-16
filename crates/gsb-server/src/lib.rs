@@ -28,7 +28,7 @@ use gsb_core::channel::{FrameBatch, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::RoomConfig;
+use gsb_core::room::{RoomConfig, RoomLogic};
 use gsb_net::tcp::TcpTransport;
 use gsb_net::transport::Transport;
 use gsb_protocol::MessageTable;
@@ -55,6 +55,12 @@ pub struct Config {
     pub conn_inbox: usize,
     /// Capacity of each connection's outbound (batches out) channel.
     pub conn_out: usize,
+    /// Warn when a room group's snapshot payload exceeds this many bytes
+    /// (rUDP MTU readiness; default = `max_frame_bytes`).
+    pub max_snapshot_bytes: usize,
+    /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
+    /// lost its last snapshot must not stay stale forever). `<= 0` disables.
+    pub keepalive_hz: f64,
 }
 
 impl Default for Config {
@@ -68,6 +74,8 @@ impl Default for Config {
             conn_action: 256,
             conn_inbox: 1024,
             conn_out: 256,
+            max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
+            keepalive_hz: 1.0,
         }
     }
 }
@@ -146,9 +154,15 @@ pub fn build_table() -> Arc<MessageTable> {
 }
 
 /// The room factory for the demo game: an empty bevy `World` + a
-/// [`gsb_game::room::DemoRoom`].
-fn demo_room_factory() -> RoomFactory<World> {
-    Arc::new(|_id, _config| (World::new(), Box::new(gsb_game::room::DemoRoom::default())))
+/// [`gsb_game::room::DemoRoom`]. Group key is `()` (one group per room).
+fn demo_room_factory() -> RoomFactory<World, ()> {
+    Arc::new(|_id, _config| {
+        (
+            World::new(),
+            Box::new(gsb_game::room::DemoRoom::default())
+                as Box<dyn RoomLogic<World, GroupKey = ()>>,
+        )
+    })
 }
 
 /// Start the server. Must be called from inside a tokio runtime.
@@ -180,6 +194,8 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
             tick_hz: cfg.tick_hz,
             control_capacity: cfg.room_control,
             action_capacity: cfg.conn_action,
+            max_snapshot_bytes: cfg.max_snapshot_bytes,
+            keepalive_hz: cfg.keepalive_hz,
             ..Default::default()
         };
         {

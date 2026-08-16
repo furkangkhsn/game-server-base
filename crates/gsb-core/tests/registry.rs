@@ -16,9 +16,8 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, OutSink, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
-use gsb_protocol::FrameBody;
 use tokio::sync::mpsc;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -26,11 +25,13 @@ const COUNT_OP: u16 = 0x7E00;
 /// Global (and room) tick rate: room rate divides global, run_every = 1.
 const HZ: f64 = 60.0;
 
-/// Test room logic: one integer "entity" per connection; broadcasts the
-/// current player count to everyone each tick.
+/// Test room logic: one integer "entity" per connection; the single-group
+/// snapshot carries the current player count, re-emitted only when the
+/// count changes (a membership change is a change, per the room contract).
 struct SeqLogic {
     next: u64,
     conn_entity: HashMap<ConnectionId, EntityId>,
+    last_count: usize,
 }
 
 impl SeqLogic {
@@ -38,11 +39,41 @@ impl SeqLogic {
         Self {
             next: 0,
             conn_entity: HashMap::new(),
+            last_count: 0,
         }
     }
 }
 
 impl RoomLogic<()> for SeqLogic {
+    type GroupKey = ();
+
+    fn snapshot_op(&self) -> u16 {
+        COUNT_OP
+    }
+    fn private_op(&self) -> u16 {
+        COUNT_OP + 1
+    }
+
+    fn group_of(&self, _w: &(), _conn: ConnectionId) -> Self::GroupKey {
+        Default::default()
+    }
+
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &Self::GroupKey,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        let count = self.conn_entity.len();
+        if count == self.last_count {
+            return false; // unchanged (membership is the whole state here)
+        }
+        self.last_count = count;
+        out.extend_from_slice(&(count as u32).to_le_bytes());
+        true
+    }
+
     fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
         self.next += 1;
         self.conn_entity.insert(conn, self.next);
@@ -58,18 +89,13 @@ impl RoomLogic<()> for SeqLogic {
     }
 
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
-
-    fn broadcast(&mut self, _w: &mut (), _c: &TickCtx, sink: &mut OutSink<'_>) {
-        let payload = (self.conn_entity.len() as u32).to_le_bytes();
-        let conns: Vec<ConnectionId> = sink.connections().collect();
-        for conn in conns {
-            sink.send(conn, FrameBody::new(COUNT_OP, payload.to_vec()));
-        }
-    }
 }
 
-fn factory() -> RoomFactory<()> {
-    std::sync::Arc::new(|_id, _config| ((), Box::new(SeqLogic::new()) as Box<dyn RoomLogic<()>>))
+fn factory() -> RoomFactory<(), ()> {
+    std::sync::Arc::new(|_id, _config| (
+        (),
+        Box::new(SeqLogic::new()) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+    ))
 }
 
 fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {

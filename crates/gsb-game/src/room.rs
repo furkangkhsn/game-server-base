@@ -4,28 +4,32 @@
 //! borrower) plus a small amount of bookkeeping:
 //!
 //! - `conn_entity`: which entity belongs to which connection;
-//! - `last_sent`: per connection, the last `EntityVersion` sent for each
-//!   entity. A late joiner has an empty map, so the next broadcast sends it
-//!   the **entire world** (full snapshot catch-up);
-//! - `pending_out`: event frames (spawn/remove) queued between ticks and
-//!   flushed at the start of the next broadcast.
+//! - `last`: the `(entity → version)` pairs of the **last emitted**
+//!   snapshot of the room's single group (`GroupKey = ()`).
 //!
-//! Broadcasts are **full, self-contained snapshots**: an entity is re-sent to
-//! a connection whenever its version differs from what that connection last
-//! received. A dropped batch (slow client) therefore costs at most one tick
-//! of staleness — no client ever needs to replay history. Encoding is
-//! O(dirty entities); delivery is O(dirty × conns) `Bytes` (Arc) clones.
-//! Delta compression and area-of-interest filtering are the documented next
-//! steps (see `docs/DESIGN.md`).
+//! Broadcasts are **per-group full, self-contained snapshots**: each tick
+//! the room asks the logic for one snapshot per group; the logic encodes
+//! the group's *entire* world once and reports whether anything changed
+//! (including membership — a join/leave changes the set of entities). The
+//! room then freezes the payload and shares it by reference with the
+//! group's members. No delta, no history: a lost packet is healed by the
+//! next snapshot; "nothing changed" stops the emission entirely, and the
+//! room's low-rate keep-alive re-sends the cached snapshot so a client
+//! that lost its last packet cannot stay stale forever.
+//!
+//! The snapshot wire content is a deterministic function of the
+//! `(entity, version)` pairs: positions are only ever written through
+//! [`bump`], so comparing pairs is exactly "do the bytes change".
+//! Delta compression and area-of-interest grouping (a non-`()` `GroupKey`)
+//! are the documented next steps (see `docs/DESIGN.md`).
 
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, OutSink, RoomLogic, TickCtx};
+use gsb_core::room::{Action, RoomLogic, TickCtx};
 use gsb_ecs::dirty::{EntityVersion, bump};
 use gsb_ecs::{SystemCtx, SystemRunner};
-use gsb_protocol::FrameBody;
 use prost::Message;
 
 use crate::components::{DEFAULT_SPEED, MoveTarget, Owner, Position, Speed};
@@ -36,10 +40,11 @@ use crate::systems::MovementSystem;
 pub struct DemoRoom {
     runner: SystemRunner,
     conn_entity: HashMap<ConnectionId, Entity>,
-    /// Last version sent per entity, per connection. Empty for a fresh
-    /// joiner ⇒ full world snapshot on the next broadcast.
-    last_sent: HashMap<ConnectionId, HashMap<Entity, u64>>,
-    pending_out: Vec<FrameBody>,
+    /// Last emitted snapshot of the room's single group, as
+    /// `(entity bits → version)`. The snapshot is re-emitted when this set
+    /// changes — i.e. on any version bump **or** membership change
+    /// (join/leave), which is the room contract for "no change".
+    last: HashMap<u64, u64>,
 }
 
 impl Default for DemoRoom {
@@ -55,8 +60,7 @@ impl DemoRoom {
         Self {
             runner,
             conn_entity: HashMap::new(),
-            last_sent: HashMap::new(),
-            pending_out: Vec::new(),
+            last: HashMap::new(),
         }
     }
 }
@@ -71,6 +75,74 @@ fn spawn_pos(conn: ConnectionId) -> (f32, f32) {
 }
 
 impl RoomLogic<World> for DemoRoom {
+    // One group per room: everyone sees the whole world. (The interface
+    // supports finer groupings, e.g. `GroupKey = ConnectionId`.)
+    type GroupKey = ();
+
+    fn snapshot_op(&self) -> u16 {
+        op::WORLD_SNAPSHOT
+    }
+    fn private_op(&self) -> u16 {
+        op::PRIVATE
+    }
+
+    fn group_of(&self, _world: &World, _conn: ConnectionId) -> Self::GroupKey {
+        Default::default()
+    }
+
+    fn snapshot(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        _group: &Self::GroupKey,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        // Collect the broadcastable state (entity, position, version)
+        // while the query holds the world borrow.
+        let mut current: Vec<(u64, i32, i32, u64)> = Vec::new();
+        {
+            let mut query = world.query::<(Entity, &Position, &EntityVersion)>();
+            for (entity, pos, version) in query.iter(world) {
+                current.push((entity.to_bits(), pos.x as i32, pos.y as i32, version.0));
+            }
+        }
+
+        // "No change" = the identical (entity, version) set. A membership
+        // change (join/leave) or any version bump flips it. (Wire bytes are
+        // a deterministic function of these pairs — see module docs.)
+        let changed = self.last.len() != current.len()
+            || current
+                .iter()
+                .any(|(entity, _, _, version)| self.last.get(entity) != Some(version));
+        if !changed {
+            return false;
+        }
+
+        let mut snap = crate::game::WorldSnapshot {
+            sequence: ctx.tick,
+            entities: Vec::with_capacity(current.len()),
+        };
+        for (entity, x, y, _version) in &current {
+            snap.entities.push(crate::game::EntityRecord {
+                entity: *entity,
+                x: *x,
+                y: *y,
+            });
+        }
+        // Encoding into an in-memory buffer cannot fail (no I/O, unbounded
+        // capacity); treat a failure as a bug rather than dropping the
+        // snapshot.
+        snap
+            .encode(out)
+            .expect("protobuf encode into an in-memory buffer failed");
+
+        self.last.clear();
+        for (entity, _x, _y, version) in &current {
+            self.last.insert(*entity, *version);
+        }
+        true
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
         let (x, y) = spawn_pos(conn);
         let entity = world
@@ -82,40 +154,21 @@ impl RoomLogic<World> for DemoRoom {
             ))
             .id();
         self.conn_entity.insert(conn, entity);
-        // The joiner starts with an empty view: the next broadcast sends it
-        // the whole world (full snapshot catch-up).
-        self.last_sent.entry(conn).or_default();
-
-        // Everyone in the room (and the joiner, from the next tick on) needs
-        // to know the new entity exists.
-        let msg = crate::game::EntitySpawned {
-            entity: entity.to_bits(),
-            x: x as i32,
-            y: y as i32,
-        };
-        self.pending_out
-            .push(FrameBody::new(op::ENTITY_SPAWNED, msg.encode_to_vec()));
-
+        // No spawn event: membership is expressed by presence in the next
+        // snapshot, which now includes the new entity (the join happened in
+        // the control phase, before this tick's broadcast).
         entity.to_bits()
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        if let Some(entity) = self.conn_entity.remove(&conn) {
-            if world.get_entity(entity).is_ok() {
-                world.despawn(entity);
-            }
-            let msg = crate::game::EntityRemoved {
-                entity: entity.to_bits(),
-            };
-            self.pending_out
-                .push(FrameBody::new(op::ENTITY_REMOVED, msg.encode_to_vec()));
-            // Per-connection records are pruned by the broadcast's alive
-            // sweep; dropping the leaver's whole map below is the fast path.
-            for map in self.last_sent.values_mut() {
-                map.remove(&entity);
-            }
+        // No remove event: the entity simply drops out of the next
+        // snapshot. (The room's stale-leave guard ensures a late leave of
+        // a re-joined connection cannot despawn the new entity.)
+        if let Some(entity) = self.conn_entity.remove(&conn)
+            && world.get_entity(entity).is_ok()
+        {
+            world.despawn(entity);
         }
-        self.last_sent.remove(&conn);
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -147,76 +200,5 @@ impl RoomLogic<World> for DemoRoom {
             dt: ctx.dt.as_secs_f32(),
         };
         self.runner.run_all(world, &sys_ctx);
-    }
-
-    fn broadcast(&mut self, world: &mut World, _ctx: &TickCtx, sink: &mut OutSink<'_>) {
-        // 1. Event frames queued between ticks (spawn/leave) → everyone.
-        for frame in self.pending_out.drain(..) {
-            sink.broadcast(frame);
-        }
-
-        // 2. Per-connection snapshots: an entity is re-sent to a connection
-        //    whose recorded version differs from the current one. A joiner's
-        //    record map is empty, so it receives the entire world on this
-        //    very broadcast (collect state while the query holds the borrow).
-        let mut query = world.query::<(Entity, &Position, &EntityVersion)>();
-        let mut snapshots: Vec<(Entity, f32, f32, u64)> = Vec::new();
-        let mut alive: Vec<Entity> = Vec::new();
-        for (entity, pos, version) in query.iter(world) {
-            alive.push(entity);
-            snapshots.push((entity, pos.x, pos.y, version.0));
-        }
-        let conns: Vec<ConnectionId> = sink.connections().collect();
-        for (entity, x, y, version) in &snapshots {
-            let mut need: Vec<ConnectionId> = Vec::new();
-            for &conn in &conns {
-                let map = self.last_sent.entry(conn).or_default();
-                if map.get(entity) != Some(version) {
-                    need.push(conn);
-                }
-            }
-            if need.is_empty() {
-                continue; // every connection is already up to date
-            }
-            let msg = crate::game::EntityState {
-                entity: entity.to_bits(),
-                x: *x as i32,
-                y: *y as i32,
-                version: *version,
-            };
-            let frame = FrameBody::new(op::ENTITY_STATE, msg.encode_to_vec());
-            for conn in need {
-                sink.send(conn, frame.clone());
-                self.last_sent
-                    .get_mut(&conn)
-                    .expect("connection was just collected")
-                    .insert(*entity, *version);
-            }
-        }
-
-        // 3. Per-connection cleanup of entities that no longer exist
-        //    (defensive: v1 despawns only go through on_leave, which queues
-        //    its own ENTITY_REMOVED).
-        let alive_set: std::collections::HashSet<Entity> = alive.into_iter().collect();
-        for &conn in &conns {
-            let Some(map) = self.last_sent.get_mut(&conn) else {
-                continue;
-            };
-            let gone: Vec<Entity> = map
-                .keys()
-                .filter(|e| !alive_set.contains(*e))
-                .copied()
-                .collect();
-            for entity in gone {
-                let msg = crate::game::EntityRemoved {
-                    entity: entity.to_bits(),
-                };
-                sink.send(
-                    conn,
-                    FrameBody::new(op::ENTITY_REMOVED, msg.encode_to_vec()),
-                );
-                map.remove(&entity);
-            }
-        }
     }
 }

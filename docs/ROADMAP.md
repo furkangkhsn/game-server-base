@@ -2,11 +2,34 @@
 
 Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
 kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
-`docs/TICK-ARCHITECTURE.md`). 24/24 test yeşil. Aşağıdakiler
-**ölçülmemiş performans**, **robustluk** ve **güvenlik** başlıklarındaki
-kalan işler.
+`docs/TICK-ARCHITECTURE.md`); yayın fazı **grup başına tam dünya
+snapshot'ı** modeline geçirildi (bu tur — aşağıda). 26/26 test yeşil.
+Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
+başlıklarındaki kalan işler.
 
 ## Kapatılanlar (bu tur)
+
+- [x] **Yayın: grup başına tam dünya snapshot'ı** — bağlantı başına
+  `last_sent` defteri + `pending_out` + `ENTITY_SPAWNED`/`ENTITY_REMOVED`
+  kaldırıldı. `RoomLogic`'e `GroupKey` (Eq+Hash+Clone) + `group_of()` +
+  `snapshot()` (false = değişiklik yok; üyelik değişimi dahil) +
+  `private()` eklendi (demo `GroupKey = ()`; arayüz `ConnectionId` gibi
+  oyuncu başına grubu da destekliyor — core'de testle doğrulandı). Oda,
+  tick başına grup başına snapshot'ı BİR KEZ kodlar, `freeze()`'ler ve
+  `Bytes` (Arc) klonu olarak dağıtır; `OutSink`/kare tamponlaması kalktı.
+  Proto: tekil `EntityState` → paketlenmiş `WorldSnapshot` (entity
+  kayıtları + monoton `sequence`); kayıt başına versiyon alanı düştü
+  (21→16 B) — sıralamayı `sequence` üstleniyor. Değişiklik yoksa yayın
+  durur; yapılandırılabilir keepalive (varsayılan 1 Hz, `keepalive_hz`)
+  önbellekli snapshot'ı yeniden gönderir (paket kaybeden istemci kalıcı
+  bayat kalmaz). `RoomConfig.max_snapshot_bytes` aşımı uyarı loglanır
+  (rUDP MTU hazırlığı). **Ölçüldü (release, 1 hareketli + N hareketsiz
+  oyuncu, adım p50):** 100: 270→15 µs · 200: 1125→34 µs · 400:
+  5359→73 µs · 800: 66151→140 µs (~472×; 800'de 33 ms bütçesinin 2×
+  üstündeydi, artık %0.4'ü). Regresyonlar: late-join (ilk yayında tüm
+  dünya), stale-leave, kare hızından bağımsızlık — hepsi snapshot
+  semantiğine uyarlandı ve yeşil; 2 yeni core testi (grup yalıtımı +
+  private, sessizlik + keepalive). AOI/hücre bölme kapsam dışı.
 
 - [x] **Broadcast tick mimarisi** — oda-başına pacer kaldırıldı; tek global
   ticker görevi `tokio::sync::broadcast` ile `TickInfo{tick, at}` yayınlıyor.

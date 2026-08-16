@@ -134,22 +134,18 @@ async fn main() {
                 let m: Error = Error::decode(&payload[..]).unwrap();
                 println!("ERROR code={} message={}", m.code, m.message);
             }
-            gsb_game::op::ENTITY_SPAWNED => {
-                let m: gsb_game::game::EntitySpawned =
-                    gsb_game::game::EntitySpawned::decode(&payload[..]).unwrap();
-                println!("ENTITY_SPAWNED entity={} ({}, {})", m.entity, m.x, m.y);
-            }
-            gsb_game::op::ENTITY_REMOVED => {
-                let m: gsb_game::game::EntityRemoved =
-                    gsb_game::game::EntityRemoved::decode(&payload[..]).unwrap();
-                println!("ENTITY_REMOVED entity={}", m.entity);
-            }
-            gsb_game::op::ENTITY_STATE => {
-                let m: gsb_game::game::EntityState =
-                    gsb_game::game::EntityState::decode(&payload[..]).unwrap();
+            gsb_game::op::WORLD_SNAPSHOT => {
+                let m: gsb_game::game::WorldSnapshot =
+                    gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 println!(
-                    "ENTITY_STATE entity={} ({}, {}) version={}",
-                    m.entity, m.x, m.y, m.version
+                    "WORLD_SNAPSHOT seq={} entities={} ({})",
+                    m.sequence,
+                    m.entities.len(),
+                    m.entities
+                        .iter()
+                        .map(|e| format!("{}=({}, {})", e.entity, e.x, e.y))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
             }
             other => println!("frame op={other} ({} bytes)", payload.len()),

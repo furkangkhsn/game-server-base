@@ -25,6 +25,7 @@
 //! tasks to track or abort.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
@@ -38,9 +39,10 @@ use crate::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic};
 use crate::ticker::Ticker;
 
 /// Builds a room's world + logic. Provided by the composition root; the core
-/// never names the concrete game types.
-pub type RoomFactory<W> =
-    Arc<dyn Fn(RoomId, &RoomConfig) -> (W, Box<dyn RoomLogic<W>>) + Send + Sync>;
+/// never names the concrete game types. `G` is the game logic's group key
+/// ([`RoomLogic::GroupKey`]); the room stores per-group state under it.
+pub type RoomFactory<W, G> =
+    Arc<dyn Fn(RoomId, &RoomConfig) -> (W, Box<dyn RoomLogic<W, GroupKey = G>>) + Send + Sync>;
 
 /// Messages addressed to the registry actor.
 #[derive(Debug)]
@@ -130,8 +132,8 @@ struct ConnInfo {
 }
 
 /// The registry actor.
-pub struct Registry<W> {
-    factory: RoomFactory<W>,
+pub struct Registry<W, G> {
+    factory: RoomFactory<W, G>,
     inbox: Inbox<RegistryMsg>,
     /// Sender half of our own mailbox: cloned to dispatcher tasks so they
     /// can report back.
@@ -142,14 +144,15 @@ pub struct Registry<W> {
     ticker: Ticker,
 }
 
-impl<W> Registry<W>
+impl<W, G> Registry<W, G>
 where
     W: Send + 'static,
+    G: Eq + Hash + Clone + Send + 'static,
 {
     pub fn new(
         inbox: Inbox<RegistryMsg>,
         self_mailbox: Mailbox<RegistryMsg>,
-        factory: RoomFactory<W>,
+        factory: RoomFactory<W, G>,
         ticker: Ticker,
     ) -> Self {
         Self {

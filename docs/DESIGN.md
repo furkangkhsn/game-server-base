@@ -86,7 +86,8 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   (`RoomId → kontrol mailbox'ı`), bağlantı tablosu
   (`ConnectionId → {room?, entity?, inbox?}` — kayıt, bağlantının **bütün
   ömründe** yaşar; inbox asla bırakılmaz ki `RoomGone`/`Shutdown` her zaman
-  ulaşabilsin) ve oyun mantığını core'e sokan `RoomFactory<W>` kapağı.
+  ulaşabilsin) ve oyun mantığını core'e sokan `RoomFactory<W, G>` kapağı
+   (`G` = oyun mantığının snapshot grup anahtarı, bkz. §4/§8).
   Registry **asla bir odayı await etmez**: join/leave odasıyla olan
   gidip-gelişler, bağlantı başına küçük **dispatcher görevlerine**
   devredilir. Dispatcher, o bağlantının oda mesajlarının **tek** göndericisi
@@ -110,8 +111,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   1. READ:      bağlantı başına aksiyon kanalları (try_recv, bloksuz)
   2. CONVERT:   aksiyon → component yazıları  (RoomLogic::ingest)
   3. SYSTEMS:   sıralı oyun sistemleri        (RoomLogic::update)
-  4. BROADCAST: dirty entity → frame → bağlantı başına tek batch + flush
-                (RoomLogic::broadcast + OutSink::flush)
+  4. BROADCAST: grup başına tam snapshot — BİR KEZ kodla, freeze(),
+                referansla dağıt + bağlantı başına private frame
+                (RoomLogic::snapshot / ::group_of / ::private)
 ```
 
 - **Kare hızından bağımsızlık:** `dt = son adımdan bu yana geçen duvar
@@ -133,14 +135,35 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   fazı `try_recv` ile bloksuz çeker. `max_pending_actions` aşıldığında
   **en eski** aksiyonlar atılır (oda, gerçek zamanın gerisinde kalmışsa bile
   sınırlı kalır).
-- `OutSink` yayın fazında bağlantı başına bir `Vec<FrameBody>` tamponlar ve
-  tick sonunda **bağlantı başına tek `try_send`** yapar. Maliyet, dürüstçe:
-  *kanal gönderimi* O(bağlantı)/tick, *frame tamponlaması* ise
-  O(dirty × bağlantı) `Bytes` (Arc) kopyasıdır — kopya ucuzdur (payload
-  asla kopyalanmaz) ama sıfır da değildir; 100k hedefinde asıl duvar bu
-  çarpımdır ve AOI onu ortadan kaldırır (§8). Kanal doluysa batch atılır ve
-  sayılır (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu
-  yalnızca o istemciye 1 tick bayatlık olarak yansır.
+- **BROADCAST fazı (grup başına tam snapshot):** Bağlantılar oyun
+  mantığının `RoomLogic::group_of()` ile **snapshot gruplarına** ayrılır
+  (`GroupKey`: `Eq + Hash + Clone`; demo'da `()` = oda başına tek grup,
+  `ConnectionId` = bağlantı başına grup — arayüz ikisini de taşır). Her tick
+  oda her grup için snapshot'ı **bir kez** `RoomLogic::snapshot()` ile
+  kodlar, `freeze()`'ler ve üyeleriyle `Bytes` (Arc refcount) klonu olarak
+  paylaşır — payload **asla** bağlantı başına kopyalanmaz, bağlantı başına
+  kodlama yoktur (eski `OutSink` + `last_sent` yapısı kaldırıldı). Oda
+  grup başına durumu (üyeler + son gönderilen snapshot) bir `HashMap`'de
+  tutar; bu yüzden oda actor'ü `RoomActor<W, G>`'dir ve registry/factory
+  `G` üzerinden geniktir.
+  - **"Değişiklik yok"** kararını oyun mantığı verir (`snapshot` →
+    `false`); tanım **üyelik değişimini (join/leave) da** kapsar. Hiçbir
+    grup değişmediyse oda o tick'te **hiçbir şey göndermez** — tek istisna
+    **keepalive**: her `tick_hz / keepalive_hz` (varsayılan 1 Hz) odasal
+    adımda değişmeyen her grup, son önbellekli snapshot'ını yeniden
+    gönderir (yeniden kodlama yok, önbellek klonu). Aksi hâlde son
+    paketini kaybeden istemci kalıcı olarak bayat kalırdı.
+  - Bağlantı başına teslim: tek batch = [grubun snapshot'u (paylaşımlı
+    `Bytes`)] + [private frame, eğer `RoomLogic::private` ürettiyse];
+    tek `try_send`. Kanal doluysa batch atılır ve sayılır
+    (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu yalnızca
+    o istemciye 1 snapshot bayatlık olarak yansır (keepalive sınırlar).
+  - Snapshot payload'u `RoomConfig::max_snapshot_bytes`'i aşarsa uyarı
+    loglanır (rUDP'de MTU hazırlığı: aşırı snapshot datagram'a sığmaz;
+    sürekli uyarı = grubu bölme/AOI zamanı, §8).
+  - Kodlama maliyeti O(grubun entity sayısı)/grup/tick; fan-out O(üye)
+    Arc klonu + `try_send`. 800 oyunculu oda, tek hareket eden entity:
+    adım maliyeti ~65 ms → ~0.14 ms (release, bkz. §11 altındaki tablo).
 
 
 ## 5. Ağ protokolü
@@ -156,7 +179,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
 - **Opcode bantları:** `1..=64` temel kontrol (AUTH_REQ, AUTH_RESULT,
   JOIN_ROOM_REQ, JOIN_ROOM_RESULT, LEAVE_ROOM_REQ, LEAVE_ROOM_RESULT,
   HEARTBEAT, HEARTBEAT_ACK, ERROR); `1000+` oyun bandı
-  (MOVE_TO=1000, ENTITY_SPAWNED=1001, ENTITY_REMOVED=1002, ENTITY_STATE=1003).
+  (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
+  için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
+  ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
 - **Seriştirme:** protobuf. Rust tarafında `prost`, Unity tarafında
   `Google.Protobuf` — aynı `.proto` dosyaları her iki tarafta kullanılır.
   Mesajlar `MessageTable`'da opcode→(de)koducu olarak kayıt edilir; tablo
@@ -197,30 +222,46 @@ katmanında değişiklik sıfırdır.**
   gereksiz kit olarak dururdu. `SystemRunner` insertion-order çalıştırır.
 - **Dirty tracking:** bevy 0.19'da event/observer API'si yeniden
   tasarlandığı için hot path'te bilinçli olarak *değişim algılama*
-  kullanılmıyor. Bunun yerine açık, deterministik `EntityVersion` component'i:
-  her anlamlı mutasyonda `bump()`; yayın fazı, **bağlantı başına tutulan**
-  `last_sent` haritasıyla karşılaştırır (entity → son gönderilen versiyon).
-  Sonradan giren bağlantının haritası boştur → bir sonraki yayında **tüm
-  dünya** gönderilir (tam snapshot catch-up). AOI'ye geçişte bu yapı
-  doğrudan genişletilir. Sıfır gizli durum, tam denetlenebilir.
+  kullanılmıyor. Bunun yerine açık, deterministik `EntityVersion`
+  component'i: her anlamlı mutasyonda `bump()`. Oyun mantığı, grup
+  snapshot'ını yeniden üretip üretmeyeceğini bu versiyonlarla (ve üyelik
+  kümesiyle) kendisi karar verir: demo'da son yayınlanan snapshot'ın
+  `(entity → versiyon)` kümesi tutulur; küme değiştiyse (bump **veya**
+  join/leave) snapshot yeniden kodlanır. Eski bağlantı başına `last_sent`
+  haritası ve spawn/remove olayları kaldırıldı: üyelik, snapshot'ta var
+  olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i `Entity::to_bits()` /
   `from_bits()` ile çevirir.
 
 ## 8. Yayın stratejisi ve ölçekleme (100k hedefi)
 
-v1 stratejisi **tam, kendi kendine yeten dirty snapshot, bağlantı başına**:
+v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 
-- Bir entity, *o bağlantının kaydettiği* versiyondan farklıysa o bağlantıya
-  `ENTITY_STATE` (tam konum + versiyon) gönderilir. Sonradan giren bağlantı
-  ilk tick'te dünyadaki **tüm** entity'leri alır. Oda üyeliği değişimlerinde
-  `ENTITY_SPAWNED` / `ENTITY_REMOVED`.
-- Kodlama O(dirty entity)/tick; teslim O(dirty × bağlantı) Arc kopyası.
-- Bağlantı başına batch + `try_send`: yavaş istemci server'ı yavaşlatmaz;
-  atılan batch'in maliyeti 1 tick bayatlık.
-- `Bytes` kopyasızlığı + protobuf'un ikili formu: kodlama maliyeti düşüktür.
+- Oda, tick başına her grup için snapshot'ı **bir kez** kodlar ve üyeleriyle
+  referansla paylaşır (§4). Kodlama O(grubun entity sayısı)/grup/tick;
+  teslim O(üye) `Bytes` (Arc) klonu — bağlantı başına kodlama **yok**.
+  (Eski modelin O(dirty × bağlantı) taraması ve bağlantı başına `last_sent`
+  defteri kaldırıldı: 800 oyuncuda, tek hareket entity ile adım maliyeti
+  ~65 ms → ~0.14 ms oldu, bkz. §11.)
+- **Üyelik** = snapshot'ta var olmak. Sonradan giren bağlantı ilk yayında
+  tüm dünyayı görür (join, CONTROL fazında işlendiği için aynı tick'in
+  snapshot'ı yeni üyeyi de içerir). Ayrı spawn/remove event'i yok.
+- **Delta yok, geçmiş yok:** snapshot'lar kendi kendine yeter; paket kaybı
+  bir sonraki snapshot'la kendiliğinden telafi edilir. Sıra/güvence ihtiyacı
+  yok — istemci, `sequence`'i (global tick indeksi) ≤ son kabul edilen olan
+  snapshot'ı atar (sıralama + tekrar güvenli).
+- **Değişiklik yoksa yayın durur** (oyun mantığı `snapshot` → `false`);
+  keepalive (varsayılan 1 Hz, `RoomConfig::keepalive_hz`) değişmeyen
+  grupların son önbellekli snapshot'ını yeniden gönderir — son paketini
+  kaybeden istemci kalıcı bayat kalamaz.
+- Bağlantı başına tek batch + `try_send`: yavaş istemci sunucuyu
+  yavaşlatmaz; atılan batch'in maliyeti 1 snapshot bayatlık.
+- `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı).
 
-Bu, 100k bağlantı hedefi için **doğru v1**'dir çünkü: (a) doğru ve basittir,
-(b) sıralı replay/garanti gerektirmez, (c) ölçülebilir bir taban sağlar.
+Bu, 100k bağlantı hedefi için **doğru v1**'dir çünkü: (a) doğru ve
+basittir, (b) sıralı replay/garanti gerektirmez, (c) kodlama maliyeti
+bağlantı sayısından bağımsızdır (gruptan bağımlıdır) — ölçülebilir bir
+taban sağlar.
 
 **Belgelenmiş sonraki adımlar (öncelik sırası):**
 1. **Delta yayın** (son snapshot'tan fark) — bant genişliği kazancı.
@@ -259,7 +300,9 @@ birlikte ele alınacak).
 
 | Kısıt | Neden | Yol |
 |---|---|---|
-| Yayın = tam snapshot (bağlantı başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
+| Yayın = tam snapshot (grup başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
+| Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz`; 0 ile kapatılabilir |
+| `max_snapshot_bytes` aşımında yalnızca uyarı | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
 | Oda kapasitesi yok (sonsuza kadar oyuncu) | Demo oda | `RoomConfig.max_players` + doluluk yanıtı |
@@ -292,18 +335,43 @@ birlikte ele alınacak).
   sayacı geri düşürmemeli), oda imhası bildirimi + imha sonrası join
   reddi, bölünmeyen oda hızı reddi (`TickRate`), temiz shutdown
   (registry handle'ı çözülür) — **gerçek 60 Hz ticker** ile.
+  Grup mekanizması: `GroupKey = ConnectionId` mantıkla gruplar birbirinden
+  yalıtılır (bir grubun snapshot'ı başka bağlantıya asla sızmaz), private
+  frame yalnızca hedef bağlantıya gider; değişmeyen grup sessiz kalır,
+  keepalive kadansında önbellekli snapshot yeniden gönderilir.
 - **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
-  bir tick sonra **A dahil tüm dünyayı** görür; A hareket edince B
-  versiyon artışı görür. Stale leave — rejoin'dan gecikmeyle gelen eski
-  leave, yeni entity'yi öldüremez (hedefli MOVE_TO + snapshot ile
-  doğrulanır). Kare hızından bağımsızlık — tek 60 Hz saat altında iki oda
+  aynı tick'in `WORLD_SNAPSHOT`'ında **A dahil tüm dünyayı** görür; A
+  hareket edince B, sonraki snapshot'larda yeni konumu görür (üyelik ve
+  durum snapshot'ta varlıkla/val ile ifade edilir). Stale leave —
+  rejoin'dan gecikmeyle gelen eski leave, yeni entity'yi öldüremez
+  (hedefli MOVE_TO + snapshot ile doğrulanır; snapshot'ta yeni entity var,
+  eski entity yok). Kare hızından bağımsızlık — tek 60 Hz saat altında iki oda
   (60 Hz `run_every=1` ve 15 Hz `run_every=4`), gerçek hareket sistemi:
   5.0 s simülasyon süresi her iki odada aynı mesafe (f64 gözlem kanalı —
   i32 wire, karşılaştırmayı kuantum gürültüsü altında boğardı).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
-  istemci: AUTH → JOIN → MOVE_TO → kendi entity'sinin versiyonlu snapshot'ı.
-  Tüm yol tek test: pump → bağlantı actor → registry → dispatcher → oda →
-  bevy world → hareket sistemi → yayın → writer pump.
+  istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
+  entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**
+  görür. Tüm yol tek test: pump → bağlantı actor → registry → dispatcher →
+  oda → bevy world → hareket sistemi → grup snapshot'ı → writer pump.
+
+**Adım maliyeti (release, oda actor'ünün senkron tick gövdesi):**
+N hareketsiz oyuncu + her tick hareket eden 1 oyuncu, 30 Hz oda,
+manuel ticker ile beslenen gerçek oda actor'ü; 100 ısınma adımından
+sonra 300 adımın medyanı/ortalaması (µs):
+
+| Oyuncu | Öncesi (dirty×bağlantı) p50 | Sonrası (grup snapshot) p50 | Kazanç |
+|---|---|---|---|
+| 100 | 270 µs | 15 µs | ~18× |
+| 200 | 1125 µs | 34 µs | ~33× |
+| 400 | 5359 µs | 73 µs | ~73× |
+| 800 | 66151 µs | 140 µs | ~472× |
+
+Öncesi modelin maliyeti O(üye × entity) idi (her tick, her bağlantının
+`last_sent` defteri taranırdı) — 800'de 33 ms bütçesinin iki katı. Sonrası
+modelin maliyeti O(entity + üye) ve bağlantı sayısından bağımsız
+(snapshot bir kez kodlanır, referansla dağıtılır). Ölçüm probe'u commit
+edilmedi; senaryo ve tablo bu commit'in doğrulamasıdır.
 
 ## 12. Derleme zamanı korumaları
 
