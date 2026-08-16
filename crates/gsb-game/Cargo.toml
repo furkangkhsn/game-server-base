@@ -19,5 +19,8 @@ tracing = { workspace = true }
 gsb-lint = { workspace = true }
 prost-build = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+
 [lints.rust]
 unsafe_code = "forbid"

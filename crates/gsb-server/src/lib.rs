@@ -148,8 +148,9 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
     let table = build_table();
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(cfg.room_mailbox);
 
-    // The registry runs until Shutdown; dropping the handle is fine.
-    let _registry = tokio::spawn(Registry::new(reg_rx, demo_room_factory()).run());
+    // The registry runs until Shutdown; dropping the handle is fine. It
+    // keeps a clone of its own mailbox so dispatcher tasks can report back.
+    let _registry = tokio::spawn(Registry::new(reg_rx, reg_tx.clone(), demo_room_factory()).run());
 
     // Pre-create rooms 1..=room_count.
     for id in 1..=cfg.room_count {
@@ -201,7 +202,10 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
             let endpoint = match l.accept().await {
                 Ok(endpoint) => endpoint,
                 Err(e) => {
-                    warn!(%e, "accept error; retrying");
+                    warn!(%e, "accept error; backing off");
+                    // Back off: a persistent error (e.g. EMFILE) must not
+                    // turn this loop into a CPU-burning spin.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
                 }
             };

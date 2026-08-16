@@ -14,22 +14,32 @@ kompresyon, kalıcılık, cross-server (cluster), yük dengeleyici.
 
 ## 2. Temel ilke: saf kanal tabanlı aktör model
 
-Tek kural: **her aktörün tek `await`'i mailbox'ına gelen mesajı okumaktır.**
+Tek kural: **multiplex yok — her görevin tek bir beklenecek kaynağı vardır.**
+Aktörler mailbox'ına gelen mesajı bekler; pump görevleri birer stream
+öğesi/kanal mesajı bekler; pacer'lar birer timer bekler. Birkaç görev
+(ör. connection actor'ün join'inde) oneshot yanıtını da bekler — yine de
+tek bekleme, select değil.
 
 Bu kural üç somut biçimde uygulanır:
 
 1. **Hiçbir `tokio::select!` yok.** Çoklu bekleme ihtiyacı, beklenecek her
    kaynak için **ayrı bir görev** açılarak çözülür (pump görevleri, pacer
-   görevi). "Birden fazla kaynağı tek görevde multiplex etme" deseni bu
-   mimaride var olmaktan çıkar; bu, büyük sistemlerde bug'ların ana kaynağıdır.
+   görevi, bağlantı dispatcher'ları). "Birden fazla kaynağı tek görevde
+   multiplex etme" deseni bu mimaride var olmaktan çıkar; bu, büyük
+   sistemlerde bug'ların ana kaynağıdır.
 2. **Hiçbir kilit yok.** Durum, ait olduğu aktörün (veya görevin) yerel
    değişkenlerinde yaşar. Aktörler arası her değer (mailbox, oneshot yanıt,
    frame batch) kanallarla *taşıma* (move) edilir; paylaşım yoktur.
-3. **Kural derleme zamanında denetlenir.** `gsb-lint` her gsb crate'inin
-   `build.rs`'inde `src/**/*.rs`'i tarar; `tokio::select`, `futures::select`,
-   `std::sync::Mutex`, `std::sync::RwLock`, `parking_lot` kalıplarıyla
-   karşılaşırsa derleme **hata** ile biter. Yorum/doküman metni sayılmaz
-   (önce yorumlar soyulur, satır numaraları korunur).
+3. **Kural derleme zamanında denetlenir.** `gsb-lint` lint kullanımı olan
+   her crate'in `build.rs`'inde `src/`, `tests/` ve `examples/` ağaçlarını
+   tarar; `tokio::select` (veya çıplak `select!`), `futures::select`,
+   `Mutex`/`RwLock` (çıplak alt dize — `use std::sync::Mutex;` formu dahil),
+   `parking_lot` kalıplarıyla karşılaşırsa derleme **hata** ile biter.
+   Yorum/doküman metni sayılmaz (önce yorumlar soyulur, satır numaraları
+   korunur). Lint, tarama kapsamındaki her dosya için
+   `cargo:rerun-if-changed` yayınlar; yoksa build script'teki başka
+   direktifler (ör. prost'un proto dosyası) cargo'nun yeniden çalışma
+   davranışını daraltıp taramayı sessizce devre dışı bırakırdı.
 
 Neden? Performans gerekçesiyle `tokio::select!`'ten kaçınmak istedik:
 select tabanlı aktörler, (a) her mesajda tüm kaynakları yeniden poll etmek,
@@ -69,11 +79,19 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   düzeltmeli — saati yakalayamazsa tick atlar) + room actor.
 - **Registry:** sunucunun kontrol düzlemi. Oda tablosu
   (`RoomId → mailbox + pacer`), bağlantı tablosu
-  (`ConnectionId → {room, inbox}`) ve oyun mantığını core'e sokan
-  `RoomFactory<W>` kapağı.
+  (`ConnectionId → {room?, entity?, inbox?}` — kayıt, bağlantının **bütün
+  ömründe** yaşar; inbox asla bırakılmaz ki `RoomGone`/`Shutdown` her zaman
+  ulaşabilsin) ve oyun mantığını core'e sokan `RoomFactory<W>` kapağı.
+  Registry **asla bir odayı await etmez**: join/leave odasıyla olan
+  gidip-gelişler, bağlantı başına küçük **dispatcher görevlerine**
+  devredilir. Dispatcher, o bağlantının oda mesajlarının **tek** göndericisi
+  olduğundan join→leave→rejoin sırası garanti (stale leave, yeniden
+  giren entity'yi asla öldüremez). Tek yavaş oda kontrol düzlemini asla
+  bloke edemez.
 - **Accept loop:** `ConnectionId` üretir, pump görevlerini başlatır,
   `ConnOpened`'ı **actor'ü başlatmadan önce** registry'e gönderir (ilk
-  istemci frame'ine karşı sıralama garantisi).
+  istemci frame'ine karşı sıralama garantisi). Kalıcı hata durumunda
+  (ör. `EMFILE`) 100ms backoff ile dener — CPU spin'i olmaz.
 
 ## 4. Oda tick'i: 4 faz
 
@@ -89,9 +107,17 @@ Pacer ──Tick──▶ 1. READ:     pending aksiyonları boşa dök (mem::tak
 
 - `max_pending_actions` aşıldığında **en eski** aksiyonlar atılır (oda,
   gerçek zamanın gerisinde kalmışsa bile sınırlı kalır).
+- **Tick birleştirme (coalescing):** tick çalışırken pacer daha çok Tick
+  biriktirdiyse, actor kuyruğu sırayla boşaltır: saf Tick'ler atlanır
+  (çalışan tick, dt'si üzerinden geçen toplam zamanı zaten kapsar), diğer
+  mesajlar sırasına uygun biçimde hemen işlenir. Böylece yavaş bir tick
+  çöp iş birikimi yaratmaz.
 - `OutSink` yayın fazında bağlantı başına bir `Vec<FrameBody>` tamponlar ve
-  tick sonunda **bağlantı başına tek `try_send`** yapar. Fan-out maliyeti
-  O(bağlantı)dir, O(dirty × bağlantı) değildir. Kanal doluysa batch atılır ve
+  tick sonunda **bağlantı başına tek `try_send`** yapar. Maliyet, dürüstçe:
+  *kanal gönderimi* O(bağlantı)/tick, *frame tamponlaması* ise
+  O(dirty × bağlantı) `Bytes` (Arc) kopyasıdır — kopya ucuzdur (payload
+  asla kopyalanmaz) ama sıfır da değildir; 100k hedefinde asıl duvar bu
+  çarpımdır ve AOI onu ortadan kaldırır (§8). Kanal doluysa batch atılır ve
   sayılır (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu
   yalnızca o istemciye 1 tick bayatlık olarak yansır.
 
@@ -150,19 +176,24 @@ katmanında değişiklik sıfırdır.**
 - **Dirty tracking:** bevy 0.19'da event/observer API'si yeniden
   tasarlandığı için hot path'te bilinçli olarak *değişim algılama*
   kullanılmıyor. Bunun yerine açık, deterministik `EntityVersion` component'i:
-  her anlamlı mutasyonda `bump()`; yayın fazı `last_sent` versiyonla
-  karşılaştırır. Sıfır gizli durum, tam denetlenebilir.
+  her anlamlı mutasyonda `bump()`; yayın fazı, **bağlantı başına tutulan**
+  `last_sent` haritasıyla karşılaştırır (entity → son gönderilen versiyon).
+  Sonradan giren bağlantının haritası boştur → bir sonraki yayında **tüm
+  dünya** gönderilir (tam snapshot catch-up). AOI'ye geçişte bu yapı
+  doğrudan genişletilir. Sıfır gizli durum, tam denetlenebilir.
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i `Entity::to_bits()` /
   `from_bits()` ile çevirir.
 
 ## 8. Yayın stratejisi ve ölçekleme (100k hedefi)
 
-v1 stratejisi **tam, kendi kendine yeten dirty snapshot**:
+v1 stratejisi **tam, kendi kendine yeten dirty snapshot, bağlantı başına**:
 
-- Her tick, versiyonu değişen her entity için `ENTITY_STATE` (tam konum +
-  versiyon) yayınlanır; oda üyeliği değişimlerinde `ENTITY_SPAWNED` /
-  `ENTITY_REMOVED`.
-- Bağlantı başına batch + `try_send` (4.2): yavaş istemci server'ı yavaşlatmaz;
+- Bir entity, *o bağlantının kaydettiği* versiyondan farklıysa o bağlantıya
+  `ENTITY_STATE` (tam konum + versiyon) gönderilir. Sonradan giren bağlantı
+  ilk tick'te dünyadaki **tüm** entity'leri alır. Oda üyeliği değişimlerinde
+  `ENTITY_SPAWNED` / `ENTITY_REMOVED`.
+- Kodlama O(dirty entity)/tick; teslim O(dirty × bağlantı) Arc kopyası.
+- Bağlantı başına batch + `try_send`: yavaş istemci server'ı yavaşlatmaz;
   atılan batch'in maliyeti 1 tick bayatlık.
 - `Bytes` kopyasızlığı + protobuf'un ikili formu: kodlama maliyeti düşüktür.
 
@@ -184,13 +215,15 @@ Abort'siz, kanal kapanmalarına dayalı:
 ```text
 ServerHandle::stop
   → RegistryMsg::Shutdown
+      → her dispatcher'a RoomOp::Close (yol açma + son leave), sonra senders düşer
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
       → her odaya RoomMsg::Shutdown + pacer.abort()
   → connection actor'ler çıkar → in_tx/out_tx düşer
       → reader pump: send hatası → çıkar
       → writer pump: kanal kapanır → çıkar + socket close
   → accept loop: JoinHandle.abort()   (belgelenmiş tek sert abort)
-  → registry: mailbox kapanır → run() sona erer
+  → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
+    için EOF'ı bekleyemezdi — artık beklemez)
 ```
 
 Accept loop'un `JoinHandle` ile abort edilmesi v1'in bilinçli bir kısıtıdır:
@@ -202,12 +235,20 @@ birlikte ele alınacak).
 
 | Kısıt | Neden | Yol |
 |---|---|---|
-| Yayın = tam snapshot | Basitlik + düşmeye tolerans | delta → AOI (§8) |
+| Yayın = tam snapshot (bağlantı başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
 | `tick_hz` oda başına sabit | Pacer basitliği | oda bazlı yapılandırma zaten var; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
 | Oda kapasitesi yok (sonsuza kadar oyuncu) | Demo oda | `RoomConfig.max_players` + doluluk yanıtı |
+| Tick ve Action aynı bounded mailbox'ta | Sadelik | veri düzlemi (Action) ile kontrol düzlemi (Tick) ayrılmalı |
 | Tek process | v1 kapsamı | §8.4 |
 | Heartbeat → yalnızca ack (oturum zaman aşımı yok) | v1 kapsamı | registry'de son-görülme zaman damgası |
+| `sfixed32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
+| Güvenlik yüzeyi minimal: AUTH no-op, rate-limit yok, bağlantı limiti yok | v1 kapsamı | `Authenticator` trait'i + rate-limit + cap |
+
+> Not: Önceki sürümlerdeki iki kritik hata — sonradan giren oyuncunun
+> dünyayı görmemesi ve registry'nin oda cevabını beklerken tüm sunucuyu
+> bloke etmesi — kapatıldı (§3, §7). `RoomId(0)` sentinel'ı kaldırıldı,
+> `ConnInfo.room` artık `Option<RoomId>`.
 
 ## 11. Test stratejisi
 
@@ -219,15 +260,24 @@ birlikte ele alınacak).
   (Testler echo-peer kullanır; pasif peer'da TCP yarı kapanışı davranış
   farkı yaratır.)
 - **gsb-core:** oda actor'ü tick + oyuncu join/leave + pacer senkronizasyonu
-  (saf kanal üzerinde, gerçek zamanlama ile).
+  (saf kanal üzerinde, gerçek zamanlama ile). Registry: join→leave→rejoin
+  dizisi (gözlemci bağlantı üzerinden oyuncu sayısı doğrulanır — stale
+  leave sayacı geri düşürmemeli), oda imhası bildirimi + imha sonrası join
+  reddi, temiz shutdown (registry handle'ı çözülür).
+- **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
+  bir tick sonra **A dahil tüm dünyayı** görür; A hareket edince B
+  versiyon artışı görür. Stale leave — rejoin'dan gecikmeyle gelen eski
+  `PlayerLeft`, yeni entity'yi öldüremez (hedefli MOVE_TO + snapshot ile
+  doğrulanır).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → kendi entity'sinin versiyonlu snapshot'ı.
-  Tüm yol tek test: pump → bağlantı actor → registry → oda → bevy world →
-  hareket sistemi → yayın → writer pump.
+  Tüm yol tek test: pump → bağlantı actor → registry → dispatcher → oda →
+  bevy world → hareket sistemi → yayın → writer pump.
 
 ## 12. Derleme zamanı korumaları
 
 - `unsafe_code = "forbid"` — her crate'te.
-- `gsb-lint` — select/kilit desenleri build hatası.
+- `gsb-lint` — 6 crate'in `build.rs`'inde (lint crate'i hariç) select/kilit
+  desenleri build hatası; kapsam `src/` + `tests/` + `examples/`.
 - `cargo clippy --workspace --all-targets` temiz.
 - `edition = "2024"` (Rust 1.95).

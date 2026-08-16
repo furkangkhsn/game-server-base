@@ -12,6 +12,7 @@ bytes = { workspace = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
+gsb-lint = { path = "../gsb-lint" }
 prost-build = { workspace = true }
 protoc-bin-vendored = { workspace = true }
 

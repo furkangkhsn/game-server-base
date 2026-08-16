@@ -1,49 +1,73 @@
 //! Build-time policy checks for the `gsb` workspace.
 //!
 //! This crate is used from other crates' `build.rs` files. It scans the
-//! invoking crate's `src/` tree and fails the build if a banned pattern is
-//! found **in code**. The architecture of this project is lock-free and
-//! free of hot-path multiplexing; this makes those guarantees enforceable
-//! at compile time instead of relying on code review.
+//! invoking crate's `src/`, `tests/` and `examples/` trees and fails the
+//! build if a banned pattern is found **in code**. The architecture of this
+//! project is lock-free and free of hot-path multiplexing; this makes those
+//! guarantees enforceable at compile time instead of relying on code review.
 //!
 //! ```rust,ignore
 //! // build.rs
 //! fn main() {
-//!     gsb_lint::check(env!("CARGO_MANIFEST_DIR"));
+//!     gsb_lint::check(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
 //! }
 //! ```
 //!
 //! Comments are stripped before matching, so documentation may mention the
 //! banned patterns (to explain why they are absent) without tripping the
 //! check.
+//!
+//! `check` also emits `cargo:rerun-if-changed` for every scanned file. This
+//! is load-bearing: emitting *any* rerun directive in a build script (for
+//! example `rerun-if-changed=proto/foo.proto` for prost) disables cargo's
+//! default "re-run when any package file changes" behavior. Without the
+//! per-file directives, the scan would silently stop tracking `src/` in any
+//! crate whose build script has other directives.
 
 use std::path::{Path, PathBuf};
 
 /// Patterns that are banned in gsb crate *code*.
 ///
-/// - `tokio::select` / `futures::select`: multiplexing in the hot path is
-///   the exact thing this architecture avoids; actors are mailbox-driven and
-///   I/O is handled by dedicated pump tasks.
-/// - `Mutex` / `RwLock` / `parking_lot`: all shared state is owned by actors
-///   and exchanged over channels.
+/// - `tokio::select` / `futures::select` / bare `select!`: multiplexing in
+///   the hot path is the exact thing this architecture avoids; actors are
+///   mailbox-driven and I/O is handled by dedicated pump tasks.
+/// - `Mutex` / `RwLock` / `parking_lot` (bare substrings, so the
+///   `use std::sync::Mutex;` + `Mutex<T>` form is caught too): all shared
+///   state is owned by actors and exchanged over channels.
 pub const BANNED_PATTERNS: &[&str] = &[
     "tokio::select",
     "futures::select",
-    "std::sync::Mutex",
-    "std::sync::RwLock",
+    "select!",
+    "Mutex",
+    "RwLock",
     "parking_lot",
 ];
 
-/// Scan `crate_dir/src/**/*.rs` and panic (failing the build) if any banned
-/// pattern appears in code (comments are stripped first).
+/// Top-level source directories scanned by [`check`].
+const SCAN_DIRS: &[&str] = &["src", "tests", "examples"];
+
+/// Scan `crate_dir/{src,tests,examples}/**/*.rs` and panic (failing the
+/// build) if any banned pattern appears in code (comments are stripped
+/// first). Emits `cargo:rerun-if-changed` for the scanned directories and
+/// files so the scan re-runs on any source change (see crate docs).
 pub fn check(crate_dir: &Path) {
-    let src = crate_dir.join("src");
-    if !src.exists() {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir_name in SCAN_DIRS {
+        let dir = crate_dir.join(dir_name);
+        if dir.is_dir() {
+            println!("cargo:rerun-if-changed={}", dir.display());
+            files.extend(walk_rs(&dir));
+        }
+    }
+    if files.is_empty() {
         return;
     }
+    for file in &files {
+        println!("cargo:rerun-if-changed={}", file.display());
+    }
     let mut offenders = 0usize;
-    for file in walk_rs(&src) {
-        let Ok(raw) = std::fs::read_to_string(&file) else {
+    for file in &files {
+        let Ok(raw) = std::fs::read_to_string(file) else {
             continue;
         };
         let code = strip_comments(&raw);
@@ -52,7 +76,7 @@ pub fn check(crate_dir: &Path) {
                 if line.contains(pat) {
                     let rel = file
                         .strip_prefix(crate_dir)
-                        .unwrap_or(&file)
+                        .unwrap_or(file)
                         .to_string_lossy();
                     eprintln!(
                         "gsb-lint: banned pattern `{pat}` found in {rel}:{}:\n  {}",

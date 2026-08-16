@@ -4,16 +4,19 @@
 //! borrower) plus a small amount of bookkeeping:
 //!
 //! - `conn_entity`: which entity belongs to which connection;
-//! - `last_sent`: the last broadcast `EntityVersion` per entity (drives the
-//!   dirty check in the broadcast phase);
+//! - `last_sent`: per connection, the last `EntityVersion` sent for each
+//!   entity. A late joiner has an empty map, so the next broadcast sends it
+//!   the **entire world** (full snapshot catch-up);
 //! - `pending_out`: event frames (spawn/remove) queued between ticks and
 //!   flushed at the start of the next broadcast.
 //!
-//! Broadcasts are **full, self-contained snapshots** of every entity whose
-//! version changed since the last broadcast. A dropped batch (slow client)
-//! therefore costs at most one tick of staleness — no client ever needs to
-//! replay history. Delta compression and area-of-interest filtering are the
-//! documented next steps (see `docs/DESIGN.md`).
+//! Broadcasts are **full, self-contained snapshots**: an entity is re-sent to
+//! a connection whenever its version differs from what that connection last
+//! received. A dropped batch (slow client) therefore costs at most one tick
+//! of staleness — no client ever needs to replay history. Encoding is
+//! O(dirty entities); delivery is O(dirty × conns) `Bytes` (Arc) clones.
+//! Delta compression and area-of-interest filtering are the documented next
+//! steps (see `docs/DESIGN.md`).
 
 use std::collections::HashMap;
 
@@ -33,7 +36,9 @@ use crate::systems::MovementSystem;
 pub struct DemoRoom {
     runner: SystemRunner,
     conn_entity: HashMap<ConnectionId, Entity>,
-    last_sent: HashMap<Entity, u64>,
+    /// Last version sent per entity, per connection. Empty for a fresh
+    /// joiner ⇒ full world snapshot on the next broadcast.
+    last_sent: HashMap<ConnectionId, HashMap<Entity, u64>>,
     pending_out: Vec<FrameBody>,
 }
 
@@ -77,6 +82,9 @@ impl RoomLogic<World> for DemoRoom {
             ))
             .id();
         self.conn_entity.insert(conn, entity);
+        // The joiner starts with an empty view: the next broadcast sends it
+        // the whole world (full snapshot catch-up).
+        self.last_sent.entry(conn).or_default();
 
         // Everyone in the room (and the joiner, from the next tick on) needs
         // to know the new entity exists.
@@ -101,8 +109,13 @@ impl RoomLogic<World> for DemoRoom {
             };
             self.pending_out
                 .push(FrameBody::new(op::ENTITY_REMOVED, msg.encode_to_vec()));
-            self.last_sent.remove(&entity);
+            // Per-connection records are pruned by the broadcast's alive
+            // sweep; dropping the leaver's whole map below is the fast path.
+            for map in self.last_sent.values_mut() {
+                map.remove(&entity);
+            }
         }
+        self.last_sent.remove(&conn);
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -137,48 +150,73 @@ impl RoomLogic<World> for DemoRoom {
     }
 
     fn broadcast(&mut self, world: &mut World, _ctx: &TickCtx, sink: &mut OutSink<'_>) {
-        // 1. Event frames queued between ticks (spawn/leave).
+        // 1. Event frames queued between ticks (spawn/leave) → everyone.
         for frame in self.pending_out.drain(..) {
             sink.broadcast(frame);
         }
 
-        // 2. Full snapshots of every entity whose version changed since the
-        //    last broadcast (collect while the query holds the borrow).
+        // 2. Per-connection snapshots: an entity is re-sent to a connection
+        //    whose recorded version differs from the current one. A joiner's
+        //    record map is empty, so it receives the entire world on this
+        //    very broadcast (collect state while the query holds the borrow).
         let mut query = world.query::<(Entity, &Position, &EntityVersion)>();
-        let mut dirty: Vec<(Entity, f32, f32, u64)> = Vec::new();
+        let mut snapshots: Vec<(Entity, f32, f32, u64)> = Vec::new();
         let mut alive: Vec<Entity> = Vec::new();
         for (entity, pos, version) in query.iter(world) {
             alive.push(entity);
-            if self.last_sent.get(&entity) == Some(&version.0) {
-                continue; // unchanged since last snapshot
-            }
-            dirty.push((entity, pos.x, pos.y, version.0));
+            snapshots.push((entity, pos.x, pos.y, version.0));
         }
-        for (entity, x, y, version) in dirty {
+        let conns: Vec<ConnectionId> = sink.connections().collect();
+        for (entity, x, y, version) in &snapshots {
+            let mut need: Vec<ConnectionId> = Vec::new();
+            for &conn in &conns {
+                let map = self.last_sent.entry(conn).or_default();
+                if map.get(entity) != Some(version) {
+                    need.push(conn);
+                }
+            }
+            if need.is_empty() {
+                continue; // every connection is already up to date
+            }
             let msg = crate::game::EntityState {
                 entity: entity.to_bits(),
-                x: x as i32,
-                y: y as i32,
-                version,
+                x: *x as i32,
+                y: *y as i32,
+                version: *version,
             };
-            sink.broadcast(FrameBody::new(op::ENTITY_STATE, msg.encode_to_vec()));
-            self.last_sent.insert(entity, version);
+            let frame = FrameBody::new(op::ENTITY_STATE, msg.encode_to_vec());
+            for conn in need {
+                sink.send(conn, frame.clone());
+                self.last_sent
+                    .get_mut(&conn)
+                    .expect("connection was just collected")
+                    .insert(*entity, *version);
+            }
         }
 
-        // 3. Entities we have broadcast before but that no longer exist
+        // 3. Per-connection cleanup of entities that no longer exist
         //    (defensive: v1 despawns only go through on_leave, which queues
         //    its own ENTITY_REMOVED).
         let alive_set: std::collections::HashSet<Entity> = alive.into_iter().collect();
-        self.last_sent.retain(|entity, _| {
-            if !alive_set.contains(entity) {
+        for &conn in &conns {
+            let Some(map) = self.last_sent.get_mut(&conn) else {
+                continue;
+            };
+            let gone: Vec<Entity> = map
+                .keys()
+                .filter(|e| !alive_set.contains(*e))
+                .copied()
+                .collect();
+            for entity in gone {
                 let msg = crate::game::EntityRemoved {
                     entity: entity.to_bits(),
                 };
-                sink.broadcast(FrameBody::new(op::ENTITY_REMOVED, msg.encode_to_vec()));
-                false
-            } else {
-                true
+                sink.send(
+                    conn,
+                    FrameBody::new(op::ENTITY_REMOVED, msg.encode_to_vec()),
+                );
+                map.remove(&entity);
             }
-        });
+        }
     }
 }

@@ -5,3 +5,6 @@
 
 # local build/test logs
 *.log
+
+# claude code worktrees (embedded repos)
+.claude/

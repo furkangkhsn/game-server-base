@@ -8,5 +8,8 @@ license.workspace = true
 [dependencies]
 bevy_ecs = { workspace = true }
 
+[build-dependencies]
+gsb-lint = { path = "../gsb-lint" }
+
 [lints.rust]
 unsafe_code = "forbid"

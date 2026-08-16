@@ -552,6 +552,7 @@ name = "gsb-ecs"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "gsb-lint",
 ]
 
 [[package]]
@@ -566,6 +567,7 @@ dependencies = [
  "gsb-protocol",
  "prost",
  "prost-build",
+ "tokio",
  "tracing",
 ]
 
@@ -592,6 +594,7 @@ name = "gsb-protocol"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "gsb-lint",
  "prost",
  "prost-build",
  "protoc-bin-vendored",

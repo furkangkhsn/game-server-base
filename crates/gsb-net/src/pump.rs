@@ -32,6 +32,7 @@ where
 {
     let read = tokio::spawn(async move {
         let mut stream = reader;
+        let mut notified = false;
         while let Some(result) = stream.next().await {
             match result {
                 Ok(frame) => {
@@ -46,16 +47,20 @@ where
                             reason: e.to_string(),
                         })
                         .await;
+                    notified = true;
                     break;
                 }
             }
         }
         // Clean end of stream (peer closed) — or the actor already went.
-        let _ = in_tx
-            .send(ConnIn::Closed {
-                reason: "peer closed".into(),
-            })
-            .await;
+        // Sent at most once: the error path above already notified.
+        if !notified {
+            let _ = in_tx
+                .send(ConnIn::Closed {
+                    reason: "peer closed".into(),
+                })
+                .await;
+        }
         debug!(%conn, "reader pump stopped");
     });
 

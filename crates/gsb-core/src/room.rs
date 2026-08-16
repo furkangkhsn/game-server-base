@@ -49,8 +49,6 @@ pub struct RoomConfig {
     /// High-water mark for buffered actions; beyond this, the *oldest*
     /// actions are dropped (a room behind real time must stay bounded).
     pub max_pending_actions: usize,
-    /// Capacity of each connection's outbound fan-out channel.
-    pub conn_out_capacity: usize,
 }
 
 impl Default for RoomConfig {
@@ -60,7 +58,6 @@ impl Default for RoomConfig {
             tick_hz: 30.0,
             mailbox_capacity: 4096,
             max_pending_actions: 65536,
-            conn_out_capacity: 64,
         }
     }
 }
@@ -89,7 +86,14 @@ pub enum RoomMsg {
         reply: tokio::sync::oneshot::Sender<EntityId>,
     },
     /// A player left: remove its entity and channel.
-    PlayerLeft { conn: ConnectionId },
+    ///
+    /// Carries the entity this leave refers to: a *stale* leave (its
+    /// connection re-joined in the meantime) is ignored, so it can never
+    /// despawn the new entity.
+    PlayerLeft {
+        conn: ConnectionId,
+        entity: EntityId,
+    },
     /// Stop the room (drops the world, stops the pacer).
     Shutdown,
 }
@@ -225,37 +229,8 @@ impl<W> RoomActor<W> {
     pub async fn run(mut self) {
         debug!(room = %self.config.id, "room actor started");
         while let Some(msg) = self.inbox.recv().await {
-            match msg {
-                RoomMsg::Tick => self.tick_once(),
-                RoomMsg::Action { conn, op, payload } => {
-                    self.pending.push(Action { conn, op, payload });
-                    if self.pending.len() > self.config.max_pending_actions {
-                        let over = self.pending.len() - self.config.max_pending_actions;
-                        self.pending.drain(..over);
-                        warn!(
-                            room = %self.config.id,
-                            dropped = over, "pending action overflow; dropped oldest"
-                        );
-                    }
-                }
-                RoomMsg::PlayerJoined { conn, out, reply } => {
-                    let entity = self.logic.on_join(&mut self.world, conn);
-                    self.conns.insert(conn, RoomConn { out, entity });
-                    debug!(room = %self.config.id, %conn, "player joined");
-                    let _ = reply.send(entity);
-                }
-                RoomMsg::PlayerLeft { conn } => {
-                    if let Some(gone) = self.conns.remove(&conn) {
-                        self.logic.on_leave(&mut self.world, conn);
-                        debug!(
-                            room = %self.config.id,
-                            %conn,
-                            entity = gone.entity,
-                            "player left"
-                        );
-                    }
-                }
-                RoomMsg::Shutdown => break,
+            if !self.handle(msg) {
+                break;
             }
         }
         self.logic.on_shutdown();
@@ -265,6 +240,65 @@ impl<W> RoomActor<W> {
             dropped_frames = self.dropped_frames,
             "room actor stopped"
         );
+    }
+
+    /// Handle one mailbox message. Returns `false` when the actor should
+    /// stop ([`RoomMsg::Shutdown`]).
+    fn handle(&mut self, msg: RoomMsg) -> bool {
+        match msg {
+            RoomMsg::Tick => {
+                self.tick_once();
+                // Coalesce: while this tick ran, the pacer may have queued
+                // more ticks. Drain the mailbox in order — pure ticks are
+                // dropped (the tick we just ran covered the elapsed time
+                // via its dt) while any other message is processed
+                // immediately so mailbox ordering is preserved.
+                while let Ok(queued) = self.inbox.try_recv() {
+                    if !matches!(queued, RoomMsg::Tick) && !self.handle(queued) {
+                        return false;
+                    }
+                }
+                true
+            }
+            RoomMsg::Action { conn, op, payload } => {
+                self.pending.push(Action { conn, op, payload });
+                if self.pending.len() > self.config.max_pending_actions {
+                    let over = self.pending.len() - self.config.max_pending_actions;
+                    self.pending.drain(..over);
+                    warn!(
+                        room = %self.config.id,
+                        dropped = over, "pending action overflow; dropped oldest"
+                    );
+                }
+                true
+            }
+            RoomMsg::PlayerJoined { conn, out, reply } => {
+                // A join replaces any stale state this connection had in the
+                // room (e.g. a leave that has not been processed yet).
+                if self.conns.contains_key(&conn) {
+                    self.logic.on_leave(&mut self.world, conn);
+                }
+                let entity = self.logic.on_join(&mut self.world, conn);
+                self.conns.insert(conn, RoomConn { out, entity });
+                debug!(room = %self.config.id, %conn, "player joined");
+                let _ = reply.send(entity);
+                true
+            }
+            RoomMsg::PlayerLeft { conn, entity } => {
+                match self.conns.get(&conn) {
+                    Some(gone) if gone.entity == entity => {
+                        self.conns.remove(&conn);
+                        self.logic.on_leave(&mut self.world, conn);
+                        debug!(room = %self.config.id, %conn, %entity, "player left");
+                    }
+                    // Unknown connection or stale leave (its connection
+                    // re-joined since): ignore — the current entity stays.
+                    _ => {}
+                }
+                true
+            }
+            RoomMsg::Shutdown => false,
+        }
     }
 
     /// One full tick: read → convert → systems → broadcast. Synchronous.
