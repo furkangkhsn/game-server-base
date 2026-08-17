@@ -111,7 +111,7 @@ impl Default for RoomConfig {
             action_capacity: 256,
             max_pending_actions: 65536,
             max_catchup: 4,
-            max_snapshot_bytes: 1_048_576,
+            max_snapshot_bytes: 1400,
             keepalive_hz: 1.0,
         }
     }
@@ -261,6 +261,10 @@ struct GroupState {
     /// violation (a fresh group's first tick is a membership change and
     /// must emit) — warn once for it instead of every tick.
     never_emitted_warned: bool,
+    /// A snapshot over `max_snapshot_bytes` is a standing property of the
+    /// group (its content does not shrink on its own), so warn once for it
+    /// rather than on every tick of every room.
+    size_warned: bool,
 }
 
 /// The room actor. Owns the world, the connection table, and the group
@@ -474,6 +478,7 @@ where
                         last: None,
                         sent: None,
                         never_emitted_warned: false,
+                        size_warned: false,
                     });
                 }
                 Entry::Occupied(mut e) => {
@@ -521,7 +526,8 @@ where
         for (group, st) in self.groups.iter_mut() {
             let mut buf = bytes::BytesMut::new();
             if self.logic.snapshot(&mut self.world, ctx, group, &mut buf) {
-                if buf.len() > self.config.max_snapshot_bytes {
+                if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
+                    st.size_warned = true;
                     warn!(
                         room = %self.config.id,
                         bytes = buf.len(),

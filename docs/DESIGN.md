@@ -300,6 +300,8 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 - Bağlantı başına tek batch + `try_send`: yavaş istemci sunucuyu
   yavaşlatmaz; atılan batch'in maliyeti 1 snapshot bayatlık.
 - `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı).
+  Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
+  başına **bir kez** çıkar, her tick değil.
 
 Bu, 100k bağlantı hedefi için **doğru v1**'dir çünkü: (a) doğru ve
 basittir, (b) sıralı replay/garanti gerektirmez, (c) kodlama maliyeti
@@ -345,7 +347,7 @@ birlikte ele alınacak).
 |---|---|---|
 | Yayın = tam snapshot (grup başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
 | Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz`; 0 ile kapatılabilir |
-| `max_snapshot_bytes` aşımında yalnızca uyarı | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
+| `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
 | Oda kapasitesi yok (sonsuza kadar oyuncu) | Demo oda | `RoomConfig.max_players` + doluluk yanıtı |
