@@ -353,7 +353,7 @@ birlikte ele alınacak).
 | Girdi `try_send` (kanal doluyken atılır) | oyuncu bazlı izolasyon, oda bloke olmaz | bağlantı başına girdi hız sınırı (rate-limit) |
 | Tek process | v1 kapsamı | §8.4 |
 | Heartbeat → yalnızca ack (oturum zaman aşımı yok) | v1 kapsamı | registry'de son-görülme zaman damgası |
-| `sfixed32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
+| `sint32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
 | Güvenlik yüzeyi minimal: AUTH no-op, rate-limit yok, bağlantı limiti yok | v1 kapsamı | `Authenticator` trait'i + rate-limit + cap |
 
 > Not: Önceki sürümlerdeki iki kritik hata — sonradan giren oyuncunun

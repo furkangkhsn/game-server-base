@@ -210,7 +210,7 @@ kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
   yeniden eklenecek; doluysa JOIN'de `ERROR (room full)`.
 - [ ] **Güvenlik yüzeyi** — `Authenticator` trait'i (AUTH bugün no-op),
   bağlantı sayısı limiti, aksiyon rate-limit.
-- [ ] **Koordinat formatı kararı** — `sfixed32` (tam sayı) wire vs `f32`
+- [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
   simülasyon: 30 Hz × 10 u/sn'de tick başına 0.33 birim → istemci 3
   tick'te bir değişim görür, `bump()` her tick aynı tam sayıyı yayınlar
   (bant israfı + merdivenlenme). Float ya da mm cinsinden int kararı
