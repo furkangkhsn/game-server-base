@@ -177,8 +177,11 @@ async fn late_joiner_receives_full_world_snapshot() {
 
     // A moves (over its per-connection action channel); the world changes,
     // so the group snapshot is re-emitted — B must observe the new
-    // position. The integer position changes within a few ticks at
-    // 10 units/s, 30 Hz, so feed ticks until B sees the movement.
+    // position. But emission is gated on the *wire* content: at 10 units/s,
+    // 30 Hz the integer position changes within a few ticks, yet the ticks
+    // in between are legitimately silent (no wire change ⇒ no snapshot).
+    // So feed ticks and take a batch *whenever one arrives* — not on every
+    // tick — until B sees the movement.
 
     let move_to = gsb_game::game::MoveTo {
         x: a_start.x + 100,
@@ -196,15 +199,20 @@ async fn late_joiner_receives_full_world_snapshot() {
     let mut a_moved = None;
     for _ in 0..60 {
         room.tick();
-        let batch = next_batch(&mut b_rx).await;
-        let snap = snapshot(&batch);
-        let rec = snap
-            .entities
-            .iter()
-            .find(|e| e.entity == a_entity)
-            .expect("A's entity must stay in the snapshot");
-        if (rec.x, rec.y) != (a_start.x, a_start.y) {
-            a_moved = Some((rec.x, rec.y));
+        // Yield so the room (same runtime) finishes this step's fan-out.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        while let Ok(batch) = b_rx.try_recv() {
+            let snap = snapshot(&batch);
+            let rec = snap
+                .entities
+                .iter()
+                .find(|e| e.entity == a_entity)
+                .expect("A's entity must stay in the snapshot");
+            if (rec.x, rec.y) != (a_start.x, a_start.y) {
+                a_moved = Some((rec.x, rec.y));
+            }
+        }
+        if a_moved.is_some() {
             break;
         }
     }

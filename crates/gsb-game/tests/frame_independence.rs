@@ -21,7 +21,6 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::ticker::TickInfo;
-use gsb_ecs::dirty::EntityVersion;
 use gsb_ecs::{System, SystemCtx};
 use gsb_protocol::FrameBody;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -95,7 +94,7 @@ impl RoomLogic<World> for FrameLogic {
 
     fn on_join(&mut self, world: &mut World, _conn: ConnectionId) -> EntityId {
         let e = world
-            .spawn((Position { x: 0.0, y: 0.0 }, Speed(SPEED), EntityVersion(0)))
+            .spawn((Position { x: 0.0, y: 0.0 }, Speed(SPEED)))
             .id();
         self.entity = Some(e);
         e.to_bits()

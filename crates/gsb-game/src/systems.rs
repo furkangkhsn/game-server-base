@@ -6,14 +6,13 @@
 
 use bevy_ecs::prelude::Entity;
 use bevy_ecs::world::World;
-use gsb_ecs::dirty::bump;
 use gsb_ecs::{System, SystemCtx};
 
 use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 
-/// Moves entities toward their [`MoveTarget`]; bumps the entity version on
-/// every tick in which an entity actually moved (so the broadcast phase can
-/// pick it up).
+/// Moves entities toward their [`MoveTarget`] on every tick in which they
+/// actually move. The broadcast phase notices the resulting position
+/// change by comparing wire content (see `gsb_game::room`).
 ///
 /// Two passes by design: first collect the writes while the query iterator
 /// holds the world borrow, then apply them. This keeps the hot path free of
@@ -71,14 +70,11 @@ impl System for MovementSystem {
                 y,
                 arrived,
             } = step;
-            {
-                let mut e = world.entity_mut(entity);
-                *e.get_mut::<Position>().expect("queried above") = Position { x, y };
-                if arrived {
-                    e.remove::<MoveTarget>();
-                }
+            let mut e = world.entity_mut(entity);
+            *e.get_mut::<Position>().expect("queried above") = Position { x, y };
+            if arrived {
+                e.remove::<MoveTarget>();
             }
-            bump(world, entity);
         }
     }
 }

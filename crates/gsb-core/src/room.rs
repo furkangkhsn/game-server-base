@@ -488,21 +488,23 @@ where
                     // has emitted at least once).
                     if st.last.is_none() && !st.never_emitted_warned {
                         st.never_emitted_warned = true;
-                        // Cold path (once per such group): the key was
-                        // moved into the entry above, so clone it for the
-                        // log field.
-                        let group_key = e.key().clone();
+                        // Cold path (once per such group). `st`'s last use
+                        // ended above, so the key can be borrowed (not
+                        // cloned): tracing formats the field within the
+                        // statement.
+                        let group_key = e.key();
                         warn!(
                             room = %self.config.id,
                             ?group_key,
                             members = m.len(),
                             "snapshot group has members but has never emitted: \
-                             RoomLogic::snapshot returned `false` on the group's \
-                             first tick (and every tick since) although a \
-                             membership change is a change; its members receive \
-                             nothing except keep-alive re-sends of a cache that \
-                             was never set. Check the logic's per-group \
-                             bookkeeping (see RoomLogic::snapshot)."
+                             RoomLogic::snapshot returned `false` on the \
+                             group's first tick although a fresh group's \
+                             first tick is a membership change and must \
+                             emit; its members receive nothing except \
+                             keep-alive re-sends of a cache that was never \
+                             set. Check the logic's per-group bookkeeping \
+                             (see RoomLogic::snapshot)."
                         );
                     }
                 }
@@ -1469,6 +1471,198 @@ mod tests {
         }
 
         room.shutdown().await;
+    }
+
+    // -----------------------------------------------------------------
+    // F4 diagnostic: a group that has members but has never emitted
+    // (snapshot → false on its first tick, although a fresh group's first
+    // tick is a membership change and must emit) must be warned about —
+    // exactly once, naming the group. The diagnostic previously had no
+    // test; a violating logic (e.g. the shared-ledger misuse the room
+    // cannot distinguish from legitimate silence) stays invisible without
+    // one.
+    // -----------------------------------------------------------------
+
+    /// Contract-violating logic: `snapshot` returns `false` on *every*
+    /// tick, including a fresh group's first tick.
+    struct SilentLogic;
+
+    impl RoomLogic<()> for SilentLogic {
+        type GroupKey = ConnectionId;
+
+        fn snapshot_op(&self) -> u16 {
+            0x7030
+        }
+        fn private_op(&self) -> u16 {
+            0x7031
+        }
+
+        fn group_of(&self, _w: &(), conn: ConnectionId) -> Self::GroupKey {
+            conn
+        }
+
+        fn snapshot(
+            &mut self,
+            _w: &mut (),
+            _c: &TickCtx,
+            _g: &Self::GroupKey,
+            _o: &mut bytes::BytesMut,
+        ) -> bool {
+            false // even the first tick: a contract violation
+        }
+
+        fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
+            1
+        }
+        fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+        fn ingest(&mut self, _w: &mut (), _c: &TickCtx, actions: &mut Vec<Action>) {
+            actions.clear();
+        }
+        fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
+    }
+
+    /// Lock-free WARN-capturing subscriber: events are pushed over an mpsc
+    /// channel (never blocking); no shared state to protect. The `warn!`
+    /// macro carries its text in a `message` field, so the field list is
+    /// the log line.
+    struct WarnCapture {
+        tx: mpsc::Sender<String>,
+    }
+
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+            *meta.level() == tracing::Level::WARN
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            // The room code creates no spans; placeholder never used.
+            tracing::span::Id::from_non_zero_u64(std::num::NonZeroU64::MIN)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut fields: Vec<(String, String)> = Vec::new();
+            event.record(&mut WarnFieldSink {
+                fields: &mut fields,
+            });
+            let line = fields
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = self.tx.try_send(line);
+        }
+    }
+
+    struct WarnFieldSink<'a> {
+        fields: &'a mut Vec<(String, String)>,
+    }
+
+    impl tracing::field::Visit for WarnFieldSink<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+    }
+
+    #[tokio::test]
+    async fn never_emitted_group_warns_once_naming_the_group() {
+        // Only this test sets the process-global default; the other tests
+        // in this binary neither set it nor assert on logging.
+        let (warn_tx, mut warns) = mpsc::channel::<String>(64);
+        tracing::subscriber::set_global_default(WarnCapture { tx: warn_tx })
+            .expect("only this test sets the global default");
+
+        let (tick_tx, tick_rx) = broadcast::channel(64);
+        let (control, control_rx) = channel(16);
+        let actor = RoomActor::new(
+            RoomConfig {
+                id: RoomId(9),
+                ..Default::default()
+            },
+            (),
+            Box::new(SilentLogic),
+            tick_rx,
+            control_rx,
+            1,
+        );
+        let handle = tokio::spawn(actor.run());
+        let t0 = Instant::now();
+
+        // Tick 1: the join is processed, the group is created (Vacant —
+        // no check yet) and its first `snapshot()` returns `false`.
+        let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
+        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        control
+            .send(RoomControl::Join {
+                conn: ConnectionId(42),
+                out: out_tx,
+                reply: reply_tx,
+            })
+            .await
+            .expect("control alive");
+        tick_tx
+            .send(TickInfo {
+                tick: 1,
+                at: t0 + Duration::from_secs_f64(1.0 / 30.0),
+            })
+            .expect("room subscriber alive");
+        let _ = reply_rx.await.expect("join reply dropped");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // No diagnostic for THIS group on its own first tick (the check
+        // only sees a group that existed on the previous tick). Other
+        // tests in this binary share the global default and may emit
+        // their own warns (e.g. RecLogic, which never emits) — only lines
+        // naming our group are ours.
+        while let Ok(line) = warns.try_recv() {
+            assert!(
+                !line.contains("ConnectionId(42)"),
+                "no diagnostic on the group's own first tick: {line}"
+            );
+        }
+
+        // Ticks 2..=4: the group is Occupied with `last = None` — the
+        // diagnostic must fire on tick 2 and (flag) not repeat.
+        for n in 2u64..=4 {
+            tick_tx
+                .send(TickInfo {
+                    tick: n,
+                    at: t0 + Duration::from_secs_f64(n as f64 / 30.0),
+                })
+                .expect("room subscriber alive");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        drop(tick_tx); // ticker closed → the room exits cleanly
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("room did not exit on closed ticker")
+            .expect("room task panicked");
+
+        let mut mine = Vec::new();
+        while let Ok(line) = warns.try_recv() {
+            if line.contains("ConnectionId(42)") {
+                mine.push(line);
+            }
+        }
+        assert_eq!(mine.len(), 1, "warn fires exactly once: {mine:?}");
+        assert!(
+            mine[0].contains("group_key=ConnectionId(42)"),
+            "warn must name the group: {}",
+            mine[0]
+        );
+        assert!(
+            mine[0].contains("members=1"),
+            "warn must report the member count: {}",
+            mine[0]
+        );
     }
 
     /// Receive one batch with a timeout (the positive-side barrier: the

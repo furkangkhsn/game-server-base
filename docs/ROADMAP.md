@@ -4,9 +4,75 @@ Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
 kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
 `docs/TICK-ARCHITECTURE.md`); yayın fazı **grup başına tam dünya
 snapshot'ı** modeline geçirildi (aşağıda); grup adilliği sözleşmesi
-(grup başına defter) + F1/F3/F4 kapatıldı (aşağıda). 29/29 test yeşil.
-Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
-başlıklarındaki kalan işler.
+(grup başına defter) + F1/F3/F4 kapatıldı (aşağıda); `3f25874`'ün
+kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
+30/30 test yeşil. Aşağıdakiler **ölçülmemiş performans**,
+**robustluk** ve **güvenlik** başlıklarındaki kalan işler.
+
+## Kapatılanlar (denetim turu — `3f25874` denetimi)
+
+- [x] **Bulgu 1: `late_joiner_receives_full_world_snapshot`'ın
+  ConnectionId / `spawn_pos` / `DEFAULT_SPEED` / tick periyodu
+  bağımlılığı** — F1 sonrası emisyon wire içeriğiyle (tam sayı
+  konum) kapalıyken commit'teki loop'un "tek tick besle → batch'i
+  bekle" (bloklama) yapısı, yalnızca ilk hareket tick'inde ızgara
+  sınırının geçildiği id'lerde geçiyordu: 199 id taramasında 91'i
+  k=1 (geçer), 108'i k>1 (5 sn bloke → `timed out waiting for a
+  batch` panic). Düzeltme: `stale_leave` testindeki desene çekildi —
+  tick besle, `sleep(10 ms)`, batch **hangi tick'te gelirse**
+  `try_recv` ile al; 60 tick bütçesi ve tüm assertler korundu. Kabul
+  ölçütü: aynı 199 id'lik oda-seviye tarama düzeltme sonrası
+  199/199 geçti (probe commit edilmedi; ham çıktılar raporda).
+- [x] **Bulgu 2: `EntityVersion` okuyucusuz kaldı, dokümanlar onu
+  hâlâ kullanımda anlatıyordu** — F1 kararı wire içeriğine
+  taşıyınca versiyonun tek okuyucusu gitti; yazanlar (spawn'da
+  insert, MOVE_TO ingest + her hareket tick'inde `bump`) ve sistem
+  (`gsb-ecs::dirty`, `systems.rs`, DESIGN §7, ROADMAP bu maddenin
+  atıfı, README crate tablosu) hâlâ aktif mekanizma gibi duruyordu.
+  Düzeltme: mekanizma **kaldırıldı** (alternatif "sakla + dokümanları
+  düzelt" reddedildi: okuyucusuz yazım hot path'te bedava değil,
+  "bump disiplini" artık hiçbir şeyi zorlamaz; gerekirse P2 delta
+  yayınında o özellikte yeniden getirilir). `gsb-ecs::dirty` modülü,
+  prelude re-export'u, 3 çağrı noktası ve `frame_independence`
+  spawn tuple'ı temizlendi; 2 unit test uyarlandı (amaç/assertler
+  korundu), biri yeniden adlandırıldı
+  (`snapshot_emits_on_plain_position_write`).
+- [x] **Bulgu 3: F4 tanısı, motivasyon olan 1/26 aç kalma modunda
+  tetiklenmiyordu ve testsizdi** — Ön koşul ölçümü (probe; ham çıktı
+  raporda): paylaşımlı defterli mantıkla 16 (A,B) çifti, her iki
+  ziyaret sırası da oluştu. Erken girenin aç kaldığı 7 çift =
+  ölçülen 1/26 modu (A=1, B=26): **0 uyarı** → ana iddia
+  **doğrulandı** (kaybeden grup kendi join tick'inde yayın yapmış →
+  `last` dolu → koşul asla tetiklenemez). Geç girenin aç kaldığı 9
+  çiftte tick 3'te tam 1 uyarı, grup adıyla. Düzeltme: (1) yeni
+  `RoomActor` regresyon testi — asla yayın yapmayan `RoomLogic`
+  stub'u + kilsiz (mpsc tabanlı) `tracing` subscriber'ı: uyarı
+  **tam bir kez**, grup adını söyleyerek tetiklenir
+  (`never_emitted_group_warns_once_naming_the_group`); (2) kapsam
+  netleştirildi (DESIGN §4 Tanı maddesi): kaybedeni en az bir kez
+  yayınlamış paylaşımlı-defter aç kalması ve tek tick ihlal eden
+  grup (join+leave aynı tick'te; `gone` budaması) yakalanamaz — oda
+  meşru sessizliği ayırt edemez, koruma sözleşme metnidir. Yan
+  etkiler: uyarı metnindeki "(and every tick since)" kehaneti
+  düzeltildi; log alanı için gereksiz `key().clone()` kaldırıldı.
+- [x] **Bulgu 4: ROADMAP F2 maddesi güncel değildi** — F1 turu
+  eklenen 2 unit test DemoRoom "değişiklik yok" yolunu doğrudan
+  kapsarken madde hâlâ "P1 olarak duruyor" derdi. Düzeltme: madde
+  kapatıldı ve testlere atıf yapıldı (aşağıda, grup adilliği turu
+  bölümü); odaseviye sessizlik zaten
+  `unchanged_group_is_silent_until_keepalive`'da.
+- [x] **Bulgu 5: DESIGN §11'deki "regresyon" iddiası yanlıştı** —
+  yeni core testi paylaşımlı defter yanlış kullanımını yakalayamaz
+  (test mantığı grup başına defterli çalışır; oda meşru sessizliği
+  ihlalden ayırt edemez). Cümle düzeltildi: test, oda tarafının
+  grup-başına davranışına regresyondur; mantık tarafı koruması
+  sözleşme metnidir.
+- [x] **Diğer doküman hataları (denetimde ayrıca bulundu, aynı turda
+  düzeltildi):** README — BROADCAST fazı açıklaması (eski "dirty
+  entity → batch + flush"), opcode listesi (eski
+  `ENTITY_SPAWNED/REMOVED/STATE`), test sayısı; DESIGN — "önbellek
+  hiç dolmadıysa hiç nothing" (karışık dil); gsb-core manifest
+  açıklaması ("4-phase tick" → 5 faz).
 
 ## Kapatılanlar (grup adilliği turu)
 
@@ -46,9 +112,15 @@ başlıklarındaki kalan işler.
   tick/grup boşa `Vec` alloke edip hiçbir okuma yoktu; fan-out zaten
   bağlantı tablosundan çalışıyor. Grup başına durum artık
   {son snapshot, bu tick'in gönderimi, tanı bayrağı}.
-- [x] F2 (DemoRoom no-change yolunun testsizliği), F5 (keepalive ≥ tick
-  hızı), F6 (21→16 B wire iddiası) bu turun kapsamı dışında —
-  sırasıyla P1/P2 ve doküman düzeltmesi olarak duruyor.
+- [x] **F2 (DemoRoom no-change yolunun testsizliği) — denetim turunda
+  kapatıldı:** yol artık doğrudan testli — `snapshot_emits_on_plain_
+  position_write` (düz `Position` yazımı yayınlanır) + `snapshot_
+  silent_when_wire_content_unchanged` (içeriği değiştirmeyen yazım
+  sessiz, leave yayınlatır); odaseviye sessizlik + keepalive yeniden
+  gönderimi ayrıca `unchanged_group_is_silent_until_keepalive`'da.
+- [ ] F5 (keepalive ≥ tick hızı) ve F6 (21→16 B wire iddiası) denetim
+  turunun kapsamı dışında — sırasıyla P1 ve doküman düzeltmesi olarak
+  duruyor.
 
 ## Kapatılanlar (snapshot turu)
 
@@ -178,4 +250,6 @@ başlıklarındaki kalan işler.
 
 - Cross-server / cross-region, kalıcılık, yük dengeleyici — v1 kapsam dışı.
 - bevy `Event`/observer sistemi hot path'te kullanılmıyor — bilerek
-  (`EntityVersion` ile deterministik dirty tracking; `DESIGN.md` §7).
+  (snapshot kararı wire içeriğiyle; ayrı bir versiyon bileşeni yok —
+  eski `EntityVersion`/`bump()` denetim turunda kaldırıldı; gerekirse
+  delta yayınında (P2) yeniden getirilir; `DESIGN.md` §7).

@@ -164,8 +164,8 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     alanı tam olarak budur. Birden çok grupta önce ziyaret edilen grup
     değişikliği tüketip defteri yazar, sonraki gruplar koşunun geri
     kalanında "değişiklik yok" görür: üyeleri **aç kalır** (keepalive bile
-    bayat önbelleği yeniden gönderir; önbellek hiç dolmadıysa hiç
-    nothing) ve oda bunu **teşhis edemez** — sessizlik, gerçekten
+    bayat önbelleği yeniden gönderir; önbellek hiç dolmadıysa hiçbiri
+    gönderilmez) ve oda bunu **teşhis edemez** — sessizlik, gerçekten
     değişmeyen bir grubun meşru hâlidir. Gerçek olay: `GroupKey =
     ConnectionId`'a birebir kopyalanmış demo mantığında 2 bağlantı,
     her tick hareket eden 1 entity, 25 tick'te dağılım 1/26 (kaybeden
@@ -174,8 +174,20 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     tick'te `snapshot` → `false`, oysa yeni bir grubun ilk tick'i
     üyelik değişikliğidir ve zorunlu yayındır; yani sözleşme ihlali —
     oda tarafından **bir kez** `warn!` ile loglanır (grup adı + üye
-    sayısı; `GroupKey`'ye `Debug` bound'u bu içindir). Yalnızca *sessiz*
-    (en az bir kez yayınlamış) gruplar bu uyarıyı tetikleyemez.
+    sayısı; `GroupKey`'ye `Debug` bound'u bu içindir; test:
+    `never_emitted_group_warns_once_naming_the_group`). Kapsam
+    bilinçli olarak sınırlıdır: yalnızca *sessiz* (en az bir kez
+    yayınlamış) gruplar bu uyarıyı tetikleyemez ve iki somut durum
+    yakalanamaz. (i) Paylaşımlı defterle aç kalan bir grup kendi join
+    tick'inde yayın yapmışsa (son snapshot'ı o tick'tendi) `last` dolu
+    görünür ve uyarı **asla tetiklenmez** — gerçek 1/26 aç kalma
+    ölçümü tam bu moddaydı ve ölçümde uyarı çıkmadı (denetim turu
+    probe'u: 16 (A,B) çifti, her iki ziyaret sırası oluştu; bu moddaki
+    tüm çiftlerde uyarı 0 — ham çıktı raporda). O mod
+    oda tarafından yapısal olarak ayırt edilemez (sessizlik meşru —
+    yukarıdaki defter maddesi) ve yalnızca sözleşme metniyle korunur.
+    (ii) tek tick ihlal eden grup (join + leave aynı tick'te) `gone`
+    budamasıyla uyarıdan önce tablodan düşer.
   - Bağlantı başına teslim: tek batch = [grubun snapshot'u (paylaşımlı
     `Bytes`)] + [private frame, eğer `RoomLogic::private` ürettiyse];
     tek `try_send`. Kanal doluysa batch atılır ve sayılır
@@ -243,20 +255,24 @@ katmanında değişiklik sıfırdır.**
 - `gsb-ecs::System` trait'i el yapımıdır (`fn run(&mut self, &mut World,
   &SystemCtx)`): bevy'nin `SystemParam`/scheduler mekanizması hot path'te
   gereksiz kit olarak dururdu. `SystemRunner` insertion-order çalıştırır.
-- **Dirty tracking:** bevy 0.19'da event/observer API'si yeniden
-  tasarlandığı için hot path'te bilinçli olarak *değişim algılama*
-  kullanılmıyor. Bunun yerine açık, deterministik `EntityVersion`
-  component'i: her anlamlı mutasyonda `bump()`. Oyun mantığı, grup
-  snapshot'ını yeniden üretip üretmeyeceğini **kendisi** karar verir ve
-  bu kararın defteri **grup başına** tutulmalıdır (§4): demo'da son
-  yayınlanan snapshot'ın **wire içeriği** (`entity → (x, y)`, wire'ın
-  tam sayı konumlarına kesilmiş) tutulur; içerik değiştiyse (konum
-  **veya** üyelik) snapshot yeniden kodlanır. Karar wire içeriğiyle
-  alındığından `bump()` disiplininden bağımsızdır: `bump()`'sız bir
-  `Position` yazımı da yayınlanır, içeriği değiştirmeyen bir `bump()`
-  yayınlatmaz (bant israfı yok). Eski bağlantı başına `last_sent`
-  haritası ve spawn/remove olayları kaldırıldı: üyelik, snapshot'ta var
-  olmaya indirgendi (§4/§8).
+- **Değişim algılama (dirty tracking):** bevy 0.19'da event/observer
+  API'si yeniden tasarlandığı için hot path'te bilinçli olarak bevy
+  *change-detection*'ı kullanılmıyor; ayrıca ayrı bir versiyon bileşeni
+  de yok — eski `EntityVersion` + `bump()` mekanizması denetim turunda
+  kaldırıldı (F1'den beri okuyucusuz kalmıştı: karar wire içeriğine
+  taşınınca versiyonun tek okuyucusu giderilmiş, ama yazma tarafı ve
+  bu maddenin de içinde olduğu 4 doküman onu hâlâ *kullanımda* olan
+  mekanizma gibi anlatıyordu). Değişim sinyali artık **wire içeriğinin
+  kendisi**: oyun mantığı, grup snapshot'ını yeniden üretip
+  üretmeyeceğini **kendisi** karar verir ve bu kararın defteri
+  **grup başına** tutulmalıdır (§4): demo'da son yayınlanan
+  snapshot'ın **wire içeriği** (`entity → (x, y)`, wire'ın tam sayı
+  konumlarına kesilmiş) tutulur; içerik değiştiyse (konum **veya**
+  üyelik) snapshot yeniden kodlanır — içeriği değiştirmeyen hiçbir
+  yazım yayınlatmaz (bant israfı yok). Gerekirse (örn. delta yayını,
+  P2) bir versiyon mekanizması o özellikte yeniden getirilebilir. Eski
+  bağlantı başına `last_sent` haritası ve spawn/remove olayları
+  kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i `Entity::to_bits()` /
   `from_bits()` ile çevirir.
 
@@ -367,8 +383,10 @@ birlikte ele alınacak).
   frame yalnızca hedef bağlantıya gider; değişmeyen grup sessiz kalır,
   keepalive kadansında önbellekli snapshot yeniden gönderilir; **her tick
   değişen dünyada aynı tick'te değişen her grup yayınlanır** (grup başına
-  defterle — paylaşımlı defter yanlış kullanımına karşı aç kalma
-  regresyonu).
+  defterle — oda tarafının grup-başına davranışına regresyon; mantık
+  tarafındaki paylaşımlı defter yanlış kullanımı bu testle yakalanamaz:
+  oda, meşru sessizlik ile ihlali ayırt edemez, o kullanım sözleşme
+  metniyle korunur — §4 Tanı maddesi).
 - **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
   aynı tick'in `WORLD_SNAPSHOT`'ında **A dahil tüm dünyayı** görür; A
   hareket edince B, sonraki snapshot'larda yeni konumu görür (üyelik ve
@@ -379,10 +397,11 @@ birlikte ele alınacak).
   (60 Hz `run_every=1` ve 15 Hz `run_every=4`), gerçek hareket sistemi:
   5.0 s simülasyon süresi her iki odada aynı mesafe (f64 gözlem kanalı —
   i32 wire, karşılaştırmayı kuantum gürültüsü altında boğardı). Snapshot
-  "değişiklik yok" kararlayıcısı (unit test'ler) — demo kararı wire
-  içeriğiyle (entity kümesi + kesilmiş konumlar) alır: `bump()`'sız
-  `Position` yazımı da yayınlanır, içeriği değiştirmeyen `bump()`
-  yayınlatmaz, üyelik değişimi yayınlatır.
+  "değişiklik yok" kararlayıcısı (2 unit test) — demo kararı yalnız wire
+  içeriğiyle (entity kümesi + kesilmiş konumlar) alır: düz bir
+  `Position` yazımı yayınlanır, içeriği değiştirmeyen bir yazım
+  yayınlatmaz, üyelik değişimi yayınlatır (karar, denetim turunda
+  kaldırılan `EntityVersion`/`bump()` mekanizmasından bağımsızdır — §7).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**

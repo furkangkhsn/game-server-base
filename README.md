@@ -18,7 +18,8 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
   tam bölünür olmalı (60 Hz global / oda 15 Hz → her 4. tick'te adım).
 - **Oda tick'i 5 faz:** CONTROL (join/leave/shutdown çek) → READ
   (bağlantı başına aksiyon kanallarını `try_recv`) → CONVERT (aksiyon →
-  component) → SYSTEMS (oyun sistemleri) → BROADCAST (dirty entity →
+  component) → SYSTEMS (oyun sistemleri) → BROADCAST (grup başına tam
+  dünya snapshot'ı, bir kez kodlanır, üyelerle referansla paylaşılır;
   bağlantı başına tek batch + flush).
 - **Girdi izolasyonu:** her bağlantının kendi `Action` kanalı var;
   connection actor gelen oyun op'larını `try_send` ile odaya iletir —
@@ -40,7 +41,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 |---|---|
 | `gsb-lint` | Build-helper: yasak desenleri (`tokio::select`, `Mutex`, …) taraması |
 | `gsb-protocol` | Kabuk/opcode/`MessageTable` + temel protobuf mesajları |
-| `gsb-ecs` | `System` trait'i, `SystemRunner`, `EntityVersion` dirty tracking |
+| `gsb-ecs` | `System` trait'i, `SystemRunner` |
 | `gsb-core` | ID'ler, kanallar, global ticker, registry actor, oda actor (5 fazlı tick), bağlantı actor |
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump görevleri + varsayılan TCP |
 | `gsb-game` | **Tüm oyun mantığı** (component'ler, sistemler, `RoomLogic`, oyun protosu) |
@@ -49,7 +50,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 24 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, e2e
+cargo test --workspace          # 30 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, e2e
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır
@@ -66,8 +67,8 @@ için gömülü varsayılanlar kullanılır.
 
 Uzunluk öneki **sadece taşıma katmanında** yaşar (çerçevelemeyi transport
 sahiplenir). Opcode bantları: `1..=64` temel kontrol (auth/join/leave/heartbeat/
-error), `1000+` oyun bandı (`MOVE_TO=1000`, `ENTITY_SPAWNED=1001`,
-`ENTITY_REMOVED=1002`, `ENTITY_STATE=1003`).
+error), `1000+` oyun bandı (`MOVE_TO=1000`, `WORLD_SNAPSHOT=1003`,
+`PRIVATE=1004`).
 
 Bant genişliği: yayın, entity başına **tam, kendi kendine yeten snapshot**
 gönderir; yavaş istemciye düşen batch en fazla 1 tick bayatlık yaratır.

@@ -7,13 +7,13 @@
 //!   threaded — the room actor is the only owner of the world, so no
 //!   synchronization is ever needed.
 //! - [`SystemRunner`]: an ordered list of systems, run once per tick.
-//! - [`dirty`]: explicit version-based dirty tracking used by the broadcast
-//!   phase (deterministic; does not rely on change-detection internals).
 //!
 //! Everything game-specific (components, systems, rooms) lives in the game
-//! crate; this crate stays game-agnostic.
+//! crate; this crate stays game-agnostic. Change detection for the
+//! broadcast phase is deliberately *not* here: the room asks the game
+//! logic whether the wire content changed (`RoomLogic::snapshot`), and the
+//! logic compares what the snapshot actually carries.
 
-pub mod dirty;
 pub mod prelude;
 
 use bevy_ecs::world::World;

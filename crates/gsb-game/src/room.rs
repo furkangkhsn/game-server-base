@@ -20,9 +20,11 @@
 //!
 //! "No change" compares **exactly what the snapshot carries** — the set
 //! of entities and their truncated positions — so the emission decision
-//! is independent of [`bump`] discipline: a `Position` write without a
-//! `bump()` is still broadcast, and a `bump()` with no content change
-//! emits nothing (no band waste).
+//! depends only on wire content: a write that changes a truncated
+//! coordinate (or the entity set) is broadcast, and a write that leaves
+//! the wire content untouched emits nothing (no band waste). There is no
+//! version component and no bump discipline: the content *is* the change
+//! signal.
 //!
 //! `last` is a **single-group** ledger, correct because this room has
 //! exactly one group. If you change `GroupKey` to a multi-group key
@@ -39,7 +41,6 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
-use gsb_ecs::dirty::{EntityVersion, bump};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
@@ -128,8 +129,7 @@ impl RoomLogic<World> for DemoRoom {
         // "No change" = identical wire content: the same set of entities
         // at the same (truncated) positions. A membership change
         // (join/leave) or any position change flips it. The comparison is
-        // on exactly what the snapshot carries, so the decision is
-        // independent of `bump()` discipline (see module docs).
+        // on exactly what the snapshot carries (see module docs).
         let changed = self.last.len() != current.len()
             || current.iter().any(|(entity, x, y)| {
                 self.last
@@ -169,12 +169,7 @@ impl RoomLogic<World> for DemoRoom {
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
         let (x, y) = spawn_pos(conn);
         let entity = world
-            .spawn((
-                Position { x, y },
-                Owner(conn),
-                Speed(DEFAULT_SPEED),
-                EntityVersion(0),
-            ))
+            .spawn((Position { x, y }, Owner(conn), Speed(DEFAULT_SPEED)))
             .id();
         self.conn_entity.insert(conn, entity);
         // No spawn event: membership is expressed by presence in the next
@@ -213,7 +208,6 @@ impl RoomLogic<World> for DemoRoom {
                 x: msg.x as f32,
                 y: msg.y as f32,
             });
-            bump(world, entity);
         }
     }
 
@@ -241,12 +235,11 @@ mod tests {
         }
     }
 
-    /// The "no change" decision compares the wire content, not the
-    /// `EntityVersion` ledger: a `Position` write **without** `bump()`
-    /// must still be broadcast (the old `(entity → version)` detector
-    /// would have stayed silent here — a comment-only discipline).
+    /// The "no change" decision compares the wire content: a plain
+    /// `Position` write — no version component, no bump discipline — must
+    /// still be broadcast whenever it changes a truncated coordinate.
     #[test]
-    fn snapshot_emits_on_unbumped_position_write() {
+    fn snapshot_emits_on_plain_position_write() {
         let mut world = World::new();
         let mut room = DemoRoom::new();
         let entity = room.on_join(&mut world, ConnectionId(1));
@@ -260,7 +253,7 @@ mod tests {
         let mut out2 = bytes::BytesMut::new();
         assert!(
             room.snapshot(&mut world, &ctx, &(), &mut out2),
-            "an unbumped position write must still emit"
+            "a plain position write must still emit"
         );
         let snap = crate::game::WorldSnapshot::decode(out2.as_ref()).expect("decode");
         assert_eq!(snap.entities.len(), 1);
@@ -268,9 +261,9 @@ mod tests {
         assert_eq!(snap.entities[0].y, -7);
     }
 
-    /// Identical wire content stays silent (a `bump()` with no content
-    /// change emits nothing); a membership change is a wire-content
-    /// change and must emit.
+    /// Identical wire content stays silent (a write that leaves the
+    /// wire content untouched emits nothing); a membership change is a
+    /// wire-content change and must emit.
     #[test]
     fn snapshot_silent_when_wire_content_unchanged() {
         let mut world = World::new();
@@ -280,13 +273,18 @@ mod tests {
         let mut out = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
 
-        // A version bump with no content change...
+        // A position write with no content change...
         let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
-        bump(&mut world, entity);
+        let pos = world
+            .entity(entity)
+            .get::<Position>()
+            .copied()
+            .expect("spawned above");
+        world.entity_mut(entity).insert(pos);
         let mut out2 = bytes::BytesMut::new();
         assert!(
             !room.snapshot(&mut world, &ctx, &(), &mut out2),
-            "bump without content change ⇒ no change ⇒ silent"
+            "write without content change ⇒ no change ⇒ silent"
         );
 
         // ...and a leave is a wire-content change.
