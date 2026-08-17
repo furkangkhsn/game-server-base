@@ -3,11 +3,54 @@
 Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
 kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
 `docs/TICK-ARCHITECTURE.md`); yayın fazı **grup başına tam dünya
-snapshot'ı** modeline geçirildi (bu tur — aşağıda). 26/26 test yeşil.
+snapshot'ı** modeline geçirildi (aşağıda); grup adilliği sözleşmesi
+(grup başına defter) + F1/F3/F4 kapatıldı (aşağıda). 29/29 test yeşil.
 Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
 
-## Kapatılanlar (bu tur)
+## Kapatılanlar (grup adilliği turu)
+
+- [x] **Grup başına defter sözleşmesi (per-group state contract)** — dış
+  ölçüm: DemoRoom defteri 1:1 kopyalanıp `type GroupKey = ConnectionId`
+  yapıldığında (arayüzün reklam ettiği kullanım) 2 bağlantı + her tick
+  hareket eden 1 entity + 25 tick'te dağılım **1/26**'ydı (kaybeden
+  bağlantı kendi join tick'inden beri yeni snapshot alamıyordu; dağılım
+  çalıştırma içi 100/0 — group tablosu `HashMap`'inin ziyaret sırası
+  koşu boyunca sabit; kazananın kimliği process bazında
+  `RandomState`'ten). Mekanizma: oda her tick'te her grup için
+  `snapshot()`'ı birer kez çağırıyor (4c, `groups.iter_mut()`); paylaşımlı
+  `last` defteri tek adettediğinden ÖNCE ziyaret edilen grup değişikliği
+  tüketip defteri yazıyor, SONRAKİ grup aynı tick'te "değişiklik yok"
+  görüyor. Düzeltme katmanı: oda tarafında mekanik koruma imkânsız
+  (mantık durumu opak; sessizlik meşru bir hâl) → (1) `RoomLogic::snapshot`
+  sözleşmesine açık şart eklendi: karar + defter `group` anahtarıyla
+  tutulmalı, çağrı sırası belirsizdir, tek defter yalnız `GroupKey = ()`
+  odalarda doğrudur; (2) demo modül/alan dokümanına aynı uyarı; (3) core
+  regresyon testi: her tick değişen dünyada aynı tick'te değişen **her**
+  grup yayınlanır (grup başına defterli mantıkla, 27/26 payload
+  dizileriyle doğrulandı); (4) `GroupKey`'ye `Debug` bound'u.
+- [x] **F4: asla yayın yapmamış grup için tanı** — üyesi varken hâlâ hiç
+  snapshot üretmemiş grup (ilk tick'te `snapshot` → `false`; üyelik
+  değişikliği bir değişiklik olduğundan sözleşme ihlali) oda tarafından
+  **bir kez** `warn!` ile loglanır (grup adı + üye sayısı). Sessiz
+  (en az bir kez yayınlamış) gruplar tetikleyemez → meşru AOI sessizliğinde
+  yanlış alarm yok.
+- [x] **F1: demo "değişiklik yok" kararlayıcısı wire içeriğiyle** —
+  `last` defteri `(entity → (x, y))` (wire'ın kesilmiş konumları) oldu.
+  `bump()` disiplini (önce yalnız yorumdaydı) artık yayın kararını
+  etkilemez: `bump()`'sız `Position` yazımı yayınlanır, içeriği
+  değiştirmeyen `bump()` yayınlatmaz (ROADMAP'teki "bump() her tick aynı
+  tam sayıyı yayınlar — bant israfı" noktası bu tur kısmen kapatıldı;
+  kalan parça koordinat formatı kararı). 2 unit test eklendi.
+- [x] **F3: `GroupState::members` ölü alanı kaldırıldı** — her
+  tick/grup boşa `Vec` alloke edip hiçbir okuma yoktu; fan-out zaten
+  bağlantı tablosundan çalışıyor. Grup başına durum artık
+  {son snapshot, bu tick'in gönderimi, tanı bayrağı}.
+- [x] F2 (DemoRoom no-change yolunun testsizliği), F5 (keepalive ≥ tick
+  hızı), F6 (21→16 B wire iddiası) bu turun kapsamı dışında —
+  sırasıyla P1/P2 ve doküman düzeltmesi olarak duruyor.
+
+## Kapatılanlar (snapshot turu)
 
 - [x] **Yayın: grup başına tam dünya snapshot'ı** — bağlantı başına
   `last_sent` defteri + `pending_out` + `ENTITY_SPAWNED`/`ENTITY_REMOVED`

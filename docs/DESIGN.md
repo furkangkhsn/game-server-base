@@ -137,15 +137,16 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   sınırlı kalır).
 - **BROADCAST fazı (grup başına tam snapshot):** Bağlantılar oyun
   mantığının `RoomLogic::group_of()` ile **snapshot gruplarına** ayrılır
-  (`GroupKey`: `Eq + Hash + Clone`; demo'da `()` = oda başına tek grup,
-  `ConnectionId` = bağlantı başına grup — arayüz ikisini de taşır). Her tick
+  (`GroupKey`: `Eq + Hash + Clone + Debug`; demo'da `()` = oda başına tek
+  grup, `ConnectionId` = bağlantı başına grup — arayüz ikisini de taşır).
+  Her tick
   oda her grup için snapshot'ı **bir kez** `RoomLogic::snapshot()` ile
   kodlar, `freeze()`'ler ve üyeleriyle `Bytes` (Arc refcount) klonu olarak
   paylaşır — payload **asla** bağlantı başına kopyalanmaz, bağlantı başına
   kodlama yoktur (eski `OutSink` + `last_sent` yapısı kaldırıldı). Oda
-  grup başına durumu (üyeler + son gönderilen snapshot) bir `HashMap`'de
-  tutar; bu yüzden oda actor'ü `RoomActor<W, G>`'dir ve registry/factory
-  `G` üzerinden geniktir.
+  grup başına durumu (son gönderilen snapshot + bu tick'in gönderimi +
+  tanı bayrağı) bir `HashMap`'de tutar; bu yüzden oda actor'ü
+  `RoomActor<W, G>`'dir ve registry/factory `G` üzerinden geniktir.
   - **"Değişiklik yok"** kararını oyun mantığı verir (`snapshot` →
     `false`); tanım **üyelik değişimini (join/leave) da** kapsar. Hiçbir
     grup değişmediyse oda o tick'te **hiçbir şey göndermez** — tek istisna
@@ -153,6 +154,28 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     adımda değişmeyen her grup, son önbellekli snapshot'ını yeniden
     gönderir (yeniden kodlama yok, önbellek klonu). Aksi hâlde son
     paketini kaybeden istemci kalıcı olarak bayat kalırdı.
+  - **"Değişiklik yok" defteri grup başına tutulmalıdır.** Oda tick
+    başına her mevcut grup için `snapshot()`'ı **belirsiz sırada** birer
+    kez çağırır (group tablosu bir `HashMap`'dir; sıra çalıştırma içi
+    sabittir ama güvenilmemelidir). Mantığın "son gönderim" defteri
+    `group` anahtarıyla tutulmalı ve bir çağrı aynı tick'te başka bir
+    grubun cevabını değiştirmemelidir. Tek paylaşımlı defter yalnız
+    `GroupKey = ()` (tek grup) odalarda doğrudur — demo'nun `last`
+    alanı tam olarak budur. Birden çok grupta önce ziyaret edilen grup
+    değişikliği tüketip defteri yazar, sonraki gruplar koşunun geri
+    kalanında "değişiklik yok" görür: üyeleri **aç kalır** (keepalive bile
+    bayat önbelleği yeniden gönderir; önbellek hiç dolmadıysa hiç
+    nothing) ve oda bunu **teşhis edemez** — sessizlik, gerçekten
+    değişmeyen bir grubun meşru hâlidir. Gerçek olay: `GroupKey =
+    ConnectionId`'a birebir kopyalanmış demo mantığında 2 bağlantı,
+    her tick hareket eden 1 entity, 25 tick'te dağılım 1/26 (kaybeden
+    grup, kendi join tick'inden beri yeni snapshot alamadı).
+  - **Tanı:** üyesi varken hâlâ hiç snapshot üretmemiş grup — ilk
+    tick'te `snapshot` → `false`, oysa yeni bir grubun ilk tick'i
+    üyelik değişikliğidir ve zorunlu yayındır; yani sözleşme ihlali —
+    oda tarafından **bir kez** `warn!` ile loglanır (grup adı + üye
+    sayısı; `GroupKey`'ye `Debug` bound'u bu içindir). Yalnızca *sessiz*
+    (en az bir kez yayınlamış) gruplar bu uyarıyı tetikleyemez.
   - Bağlantı başına teslim: tek batch = [grubun snapshot'u (paylaşımlı
     `Bytes`)] + [private frame, eğer `RoomLogic::private` ürettiyse];
     tek `try_send`. Kanal doluysa batch atılır ve sayılır
@@ -224,10 +247,14 @@ katmanında değişiklik sıfırdır.**
   tasarlandığı için hot path'te bilinçli olarak *değişim algılama*
   kullanılmıyor. Bunun yerine açık, deterministik `EntityVersion`
   component'i: her anlamlı mutasyonda `bump()`. Oyun mantığı, grup
-  snapshot'ını yeniden üretip üretmeyeceğini bu versiyonlarla (ve üyelik
-  kümesiyle) kendisi karar verir: demo'da son yayınlanan snapshot'ın
-  `(entity → versiyon)` kümesi tutulur; küme değiştiyse (bump **veya**
-  join/leave) snapshot yeniden kodlanır. Eski bağlantı başına `last_sent`
+  snapshot'ını yeniden üretip üretmeyeceğini **kendisi** karar verir ve
+  bu kararın defteri **grup başına** tutulmalıdır (§4): demo'da son
+  yayınlanan snapshot'ın **wire içeriği** (`entity → (x, y)`, wire'ın
+  tam sayı konumlarına kesilmiş) tutulur; içerik değiştiyse (konum
+  **veya** üyelik) snapshot yeniden kodlanır. Karar wire içeriğiyle
+  alındığından `bump()` disiplininden bağımsızdır: `bump()`'sız bir
+  `Position` yazımı da yayınlanır, içeriği değiştirmeyen bir `bump()`
+  yayınlatmaz (bant israfı yok). Eski bağlantı başına `last_sent`
   haritası ve spawn/remove olayları kaldırıldı: üyelik, snapshot'ta var
   olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i `Entity::to_bits()` /
@@ -338,7 +365,10 @@ birlikte ele alınacak).
   Grup mekanizması: `GroupKey = ConnectionId` mantıkla gruplar birbirinden
   yalıtılır (bir grubun snapshot'ı başka bağlantıya asla sızmaz), private
   frame yalnızca hedef bağlantıya gider; değişmeyen grup sessiz kalır,
-  keepalive kadansında önbellekli snapshot yeniden gönderilir.
+  keepalive kadansında önbellekli snapshot yeniden gönderilir; **her tick
+  değişen dünyada aynı tick'te değişen her grup yayınlanır** (grup başına
+  defterle — paylaşımlı defter yanlış kullanımına karşı aç kalma
+  regresyonu).
 - **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
   aynı tick'in `WORLD_SNAPSHOT`'ında **A dahil tüm dünyayı** görür; A
   hareket edince B, sonraki snapshot'larda yeni konumu görür (üyelik ve
@@ -348,7 +378,11 @@ birlikte ele alınacak).
   eski entity yok). Kare hızından bağımsızlık — tek 60 Hz saat altında iki oda
   (60 Hz `run_every=1` ve 15 Hz `run_every=4`), gerçek hareket sistemi:
   5.0 s simülasyon süresi her iki odada aynı mesafe (f64 gözlem kanalı —
-  i32 wire, karşılaştırmayı kuantum gürültüsü altında boğardı).
+  i32 wire, karşılaştırmayı kuantum gürültüsü altında boğardı). Snapshot
+  "değişiklik yok" kararlayıcısı (unit test'ler) — demo kararı wire
+  içeriğiyle (entity kümesi + kesilmiş konumlar) alır: `bump()`'sız
+  `Position` yazımı da yayınlanır, içeriği değiştirmeyen `bump()`
+  yayınlatmaz, üyelik değişimi yayınlatır.
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**

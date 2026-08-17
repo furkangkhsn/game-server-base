@@ -25,6 +25,7 @@
 //! tasks to track or abort.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -147,7 +148,7 @@ pub struct Registry<W, G> {
 impl<W, G> Registry<W, G>
 where
     W: Send + 'static,
-    G: Eq + Hash + Clone + Send + 'static,
+    G: Eq + Hash + Clone + Debug + Send + 'static,
 {
     pub fn new(
         inbox: Inbox<RegistryMsg>,

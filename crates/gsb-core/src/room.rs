@@ -52,6 +52,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
@@ -164,8 +165,9 @@ pub trait RoomLogic<W>: Send {
     /// Opaque key partitioning the room's connections into snapshot groups.
     /// `()` = one group per room (everyone sees the whole world);
     /// `ConnectionId` = one snapshot per connection; anything else (e.g. a
-    /// zone id) is a legitimate future grouping.
-    type GroupKey: Eq + Hash + Clone;
+    /// zone id) is a legitimate future grouping. `Debug` so the room's
+    /// group diagnostics can name a misbehaving group.
+    type GroupKey: Eq + Hash + Clone + Debug;
 
     /// Opcode under which the room ships group snapshots.
     fn snapshot_op(&self) -> u16;
@@ -180,16 +182,31 @@ pub trait RoomLogic<W>: Send {
     /// Encode the complete, self-contained snapshot of one group into
     /// `out`.
     ///
-    /// Return `false` when the group is unchanged since its last emitted
-    /// snapshot — and "no change" **includes** membership (join/leave).
-    /// The room then ships nothing to the group, except on a keep-alive
-    /// tick, when it re-sends the group's last cached snapshot.
+    /// Return `false` when the group is unchanged since **this group's**
+    /// last emitted snapshot — and "no change" **includes** membership
+    /// (join/leave). The room then ships nothing to the group, except on a
+    /// keep-alive tick, when it re-sends the group's last cached snapshot.
     ///
     /// Snapshots are self-contained by contract: no delta, no history — a
     /// snapshot alone defines the group's entire world. A lost packet is
     /// healed by the next snapshot; clients must treat each snapshot as a
     /// full replacement of their view (order/duplicate-safe via the
     /// snapshot's sequence number).
+    ///
+    /// **Bookkeeping must be per-group.** The room calls this once per
+    /// existing group, per tick, in *unspecified* order (a `HashMap`
+    /// iteration, stable within a run but not to be depended on). Your
+    /// "unchanged?" decision and your last-emitted bookkeeping must
+    /// therefore be keyed by `group`: one call must not change another
+    /// group's answer in the same tick. A single shared ledger is only
+    /// correct for one-group rooms (`GroupKey = ()`) — the demo's `last`
+    /// field is exactly that. With several groups, the group visited first
+    /// consumes the change and rewrites the shared ledger, and every group
+    /// visited afterwards sees "no change" for the rest of the run: their
+    /// members starve (they receive only keep-alive re-sends of a cache
+    /// that is stale from the start, or of nothing at all), and the room
+    /// cannot detect it — silence is also the legitimate state of a
+    /// genuinely unchanged group.
     fn snapshot(
         &mut self,
         world: &mut W,
@@ -234,21 +251,24 @@ struct RoomConn<G> {
 
 /// Per-group broadcast state, kept across ticks.
 struct GroupState {
-    /// Members of the group this tick (rebuilt every tick).
-    members: Vec<ConnectionId>,
     /// Last snapshot payload emitted for the group; re-sent on keep-alive
     /// ticks when the group is unchanged.
     last: Option<bytes::Bytes>,
     /// The payload fanned out to the members this tick (the emitted
     /// snapshot or the keep-alive re-send); `None` = nothing shipped.
     sent: Option<bytes::Bytes>,
+    /// A group that has members but has never emitted is in contract
+    /// violation (a fresh group's first tick is a membership change and
+    /// must emit) — warn once for it instead of every tick.
+    never_emitted_warned: bool,
 }
 
 /// The room actor. Owns the world, the connection table, and the group
 /// table; everything mutable is local, so no synchronization is needed.
 ///
 /// `G` is the game logic's group key ([`RoomLogic::GroupKey`]); the room
-/// stores per-group state (members, last snapshot) under it.
+/// stores per-group state (last snapshot, this tick's ship, diagnostics)
+/// under it.
 pub struct RoomActor<W, G> {
     config: RoomConfig,
     world: W,
@@ -272,7 +292,7 @@ pub struct RoomActor<W, G> {
 
 impl<W, G> RoomActor<W, G>
 where
-    G: Eq + Hash + Clone,
+    G: Eq + Hash + Clone + Debug,
 {
     pub fn new(
         config: RoomConfig,
@@ -451,15 +471,40 @@ where
             match self.groups.entry(g) {
                 Entry::Vacant(e) => {
                     e.insert(GroupState {
-                        members: m,
                         last: None,
                         sent: None,
+                        never_emitted_warned: false,
                     });
                 }
                 Entry::Occupied(mut e) => {
                     let st = e.get_mut();
-                    st.members = m;
                     st.sent = None;
+                    // The group existed on the previous tick too. If it
+                    // has members but has still never emitted, its first
+                    // tick's snapshot returned `false` although a fresh
+                    // group's first tick is a membership change — a
+                    // contract violation the room can detect precisely
+                    // (a merely *quiet* group will not trigger this: it
+                    // has emitted at least once).
+                    if st.last.is_none() && !st.never_emitted_warned {
+                        st.never_emitted_warned = true;
+                        // Cold path (once per such group): the key was
+                        // moved into the entry above, so clone it for the
+                        // log field.
+                        let group_key = e.key().clone();
+                        warn!(
+                            room = %self.config.id,
+                            ?group_key,
+                            members = m.len(),
+                            "snapshot group has members but has never emitted: \
+                             RoomLogic::snapshot returned `false` on the group's \
+                             first tick (and every tick since) although a \
+                             membership change is a change; its members receive \
+                             nothing except keep-alive re-sends of a cache that \
+                             was never set. Check the logic's per-group \
+                             bookkeeping (see RoomLogic::snapshot)."
+                        );
+                    }
                 }
             }
         }
@@ -1181,6 +1226,193 @@ mod tests {
         );
 
         room.shutdown().await;
+    }
+
+    /// Test logic for the "the world changes on every tick" scenario,
+    /// with contract-conforming bookkeeping: each group remembers the
+    /// world step *it* last emitted at, keyed by the group (the
+    /// `RoomLogic::snapshot` contract's per-group requirement). A group
+    /// whose content is the whole world must emit on every tick.
+    struct FairLogic {
+        last_world: u64,
+        last_emitted: HashMap<ConnectionId, u64>,
+        step_no: u64,
+        steps: mpsc::Sender<u64>,
+    }
+
+    impl RoomLogic<()> for FairLogic {
+        type GroupKey = ConnectionId;
+
+        fn snapshot_op(&self) -> u16 {
+            0x7020
+        }
+        fn private_op(&self) -> u16 {
+            0x7021
+        }
+
+        fn group_of(&self, _w: &(), conn: ConnectionId) -> Self::GroupKey {
+            conn
+        }
+
+        fn snapshot(
+            &mut self,
+            _w: &mut (),
+            _c: &TickCtx,
+            group: &Self::GroupKey,
+            out: &mut bytes::BytesMut,
+        ) -> bool {
+            // "Unchanged" = the world step this group emitted at is the
+            // current one. The map is keyed by `group` — per-group
+            // bookkeeping, so one group's emission cannot make another
+            // group's answer change in the same tick.
+            if self.last_emitted.get(group).copied() == Some(self.last_world) {
+                return false;
+            }
+            self.last_emitted.insert(*group, self.last_world);
+            out.extend_from_slice(&self.last_world.to_le_bytes());
+            true
+        }
+
+        fn on_join(&mut self, _w: &mut (), _conn: ConnectionId) -> EntityId {
+            1
+        }
+        fn on_leave(&mut self, _w: &mut (), _conn: ConnectionId) {}
+        fn ingest(&mut self, _w: &mut (), _c: &TickCtx, actions: &mut Vec<Action>) {
+            actions.clear();
+        }
+        fn update(&mut self, _w: &mut (), _c: &TickCtx) {
+            // The world changes on every tick (e.g. one entity moving).
+            self.last_world += 1;
+            self.step_no += 1;
+            let _ = self.steps.try_send(self.step_no);
+        }
+    }
+
+    #[tokio::test]
+    async fn all_dirty_groups_emit_on_the_same_tick() {
+        // The external-measurement scenario with contract-conforming
+        // (per-group) bookkeeping: two per-connection groups whose
+        // content is the whole world, and the world changes on every
+        // tick. Every group must emit on every tick — the group visited
+        // first by the room must not make the later groups see "no
+        // change" (that is exactly what a ledger shared across groups
+        // does; the `RoomLogic::snapshot` contract forbids it).
+        let (step_tx, mut steps) = mpsc::channel(64);
+        let (tick_tx, tick_rx) = broadcast::channel(64);
+        let (control, control_rx) = channel(128);
+        let actor = RoomActor::new(
+            RoomConfig {
+                id: RoomId(3),
+                ..Default::default()
+            }, // keep-alive 1 Hz at 30 Hz: never due in this test's window
+            (),
+            Box::new(FairLogic {
+                last_world: 0,
+                last_emitted: HashMap::new(),
+                step_no: 0,
+                steps: step_tx,
+            }),
+            tick_rx,
+            control_rx,
+            1,
+        );
+        let handle = tokio::spawn(actor.run());
+        let t0 = Instant::now();
+        let mut next_tick = 0;
+        let mut tick = || {
+            next_tick += 1;
+            let at = t0 + Duration::from_secs_f64(next_tick as f64 / 30.0);
+            tick_tx
+                .send(TickInfo {
+                    tick: next_tick,
+                    at,
+                })
+                .expect("room subscriber alive");
+        };
+
+        // conn 1 joins (tick 1); the control is processed on the room's
+        // next step, so the tick goes out before the reply is awaited.
+        let (out1_tx, mut a_rx) = mpsc::channel::<FrameBatch>(64);
+        let (reply1_tx, reply1_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        control
+            .send(RoomControl::Join {
+                conn: ConnectionId(1),
+                out: out1_tx,
+                reply: reply1_tx,
+            })
+            .await
+            .expect("control alive");
+        tick();
+        tokio::time::timeout(Duration::from_secs(2), reply1_rx)
+            .await
+            .expect("join reply timeout")
+            .expect("join reply dropped");
+
+        // conn 2 joins (tick 2).
+        let (out2_tx, mut b_rx) = mpsc::channel::<FrameBatch>(64);
+        let (reply2_tx, reply2_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        control
+            .send(RoomControl::Join {
+                conn: ConnectionId(2),
+                out: out2_tx,
+                reply: reply2_tx,
+            })
+            .await
+            .expect("control alive");
+        tick();
+        tokio::time::timeout(Duration::from_secs(2), reply2_rx)
+            .await
+            .expect("join reply timeout")
+            .expect("join reply dropped");
+
+        // 25-tick window: the world changes on every tick, so BOTH
+        // groups are dirty on every tick.
+        for _ in 0..25 {
+            tick();
+        }
+        wait_steps(&mut steps, 27).await;
+
+        let a_all = drain_all(&mut a_rx).await;
+        let b_all = drain_all(&mut b_rx).await;
+        // A: its join tick (world 1) + B's join tick (world 2) + all 25
+        // window ticks. B: its join tick + all 25 window ticks.
+        let seq = |batches: &Vec<Vec<FrameBody>>| {
+            batches
+                .iter()
+                .map(|b| {
+                    u64::from_le_bytes(
+                        b[0]
+                            .payload
+                            .get(0..8)
+                            .expect("8-byte payload")
+                            .try_into()
+                            .expect("8-byte payload"),
+                    )
+                })
+                .collect::<Vec<u64>>()
+        };
+        let a_seq = seq(&a_all);
+        let b_seq = seq(&b_all);
+        assert_eq!(
+            a_seq,
+            (1..=27).collect::<Vec<_>>(),
+            "A must emit on every tick the world changed"
+        );
+        assert_eq!(
+            b_seq,
+            (2..=27).collect::<Vec<_>>(),
+            "B must emit on every tick the world changed (no starvation)"
+        );
+
+        control
+            .send(RoomControl::Shutdown)
+            .await
+            .expect("control alive");
+        tick();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("room did not shut down")
+            .expect("room task panicked");
     }
 
     #[tokio::test]

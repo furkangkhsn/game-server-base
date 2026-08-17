@@ -259,7 +259,11 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
         .expect("control channel alive");
 
     // If E2 had been killed by the stale leave, A's MOVE_TO below would be
-    // dropped (no live entity) and this batch would never arrive.
+    // dropped (no live entity) and no snapshot carrying E2 would ever
+    // arrive. The "no change" detector compares wire content, so the first
+    // sub-integer movement ticks emit nothing — feed ticks until the next
+    // snapshot arrives (the integer position changes within a few ticks at
+    // 10 units/s, 30 Hz).
     let move_to = gsb_game::game::MoveTo { x: -20, y: 20 };
     a_actions
         .send(Action {
@@ -269,8 +273,17 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
         })
         .await
         .expect("action channel alive");
-    room.tick();
-    let batch = next_batch(&mut a_rx).await;
+    let mut batch = None;
+    for _ in 0..60 {
+        room.tick();
+        // Yield so the room (same runtime) finishes this step's fan-out.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if let Ok(b) = a_rx.try_recv() {
+            batch = Some(b);
+            break;
+        }
+    }
+    let batch = batch.expect("E2 must produce a snapshot after MOVE_TO");
     let seen: Vec<u64> = snapshot(&batch)
         .entities
         .iter()
