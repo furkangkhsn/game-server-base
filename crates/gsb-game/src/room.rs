@@ -4,9 +4,28 @@
 //! borrower) plus a small amount of bookkeeping:
 //!
 //! - `conn_entity`: which entity belongs to which connection;
-//! - `last`: the wire content (entity bits → truncated `(x, y)`) of the
+//! - `next_wire_id`: the next wire identity to hand out (see below);
+//! - `last`: the wire content (wire id → truncated `(x, y)`) of the
 //!   **last emitted** snapshot of the room's single group
 //!   (`GroupKey = ()`).
+//!
+//! **Wire identity.** The `entity` field on the wire is *not* the bevy
+//! entity bits — it is a room-assigned serial: the `n`-th entity this
+//! room ever spawned (starting at 1), stored in the entity's
+//! [`WireId`] component. The counter is monotonic and a value is **never
+//! re-used within the room's lifetime**, even when the bevy allocator
+//! recycles the old entity's slot. That is what preserves the identity
+//! invariant (see `game.proto`): the client's world view is its last
+//! accepted snapshot, and an identity present in both the old and the
+//! new snapshot is guaranteed to be the *same* entity, so "moved" and
+//! "a new entity took the slot" stay distinguishable from the
+//! self-contained snapshots alone — including across lost snapshots.
+//! The same value goes to the joiner in `JOIN_ROOM_RESULT`
+//! (`on_join`'s return). Bevy's own `(index, generation)` stays
+//! internal: its `to_bits()` low half is `0xFFFFFFFF - index`, so the
+//! varint was 5 bytes in any realistic room; the serial is 1 byte
+//! while the room's total spawn count stays below 128 and 2 bytes
+//! below 16384.
 //!
 //! Broadcasts are **per-group full, self-contained snapshots**: each tick
 //! the room asks the logic for one snapshot per group; the logic encodes
@@ -44,7 +63,7 @@ use gsb_core::room::{Action, RoomLogic, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Owner, Position, Speed};
+use crate::components::{DEFAULT_SPEED, MoveTarget, Owner, Position, Speed, WireId};
 use crate::op;
 use crate::systems::MovementSystem;
 
@@ -52,8 +71,11 @@ use crate::systems::MovementSystem;
 pub struct DemoRoom {
     runner: SystemRunner,
     conn_entity: HashMap<ConnectionId, Entity>,
+    /// Next wire identity to hand out (see module docs, "Wire identity").
+    /// Monotonic; a value is never re-used within the room's lifetime.
+    next_wire_id: u64,
     /// Wire content of the last emitted snapshot of the room's single
-    /// group, as `(entity bits → (x, y))` (truncated to the wire's
+    /// group, as `(wire id → (x, y))` (truncated to the wire's
     /// integer positions). The snapshot is re-emitted when this content
     /// changes — i.e. on any position change **or** membership change
     /// (join/leave), which is the room contract for "no change".
@@ -77,6 +99,7 @@ impl DemoRoom {
         Self {
             runner,
             conn_entity: HashMap::new(),
+            next_wire_id: 0,
             last: HashMap::new(),
         }
     }
@@ -116,13 +139,13 @@ impl RoomLogic<World> for DemoRoom {
         _group: &Self::GroupKey,
         out: &mut bytes::BytesMut,
     ) -> bool {
-        // Collect the broadcastable state (entity, truncated wire
+        // Collect the broadcastable state (wire id, truncated wire
         // position) while the query holds the world borrow.
         let mut current: Vec<(u64, i32, i32)> = Vec::new();
         {
-            let mut query = world.query::<(Entity, &Position)>();
-            for (entity, pos) in query.iter(world) {
-                current.push((entity.to_bits(), pos.x as i32, pos.y as i32));
+            let mut query = world.query::<(&WireId, &Position)>();
+            for (wire_id, pos) in query.iter(world) {
+                current.push((wire_id.0, pos.x as i32, pos.y as i32));
             }
         }
 
@@ -168,14 +191,24 @@ impl RoomLogic<World> for DemoRoom {
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
         let (x, y) = spawn_pos(conn);
+        // Hand out the next wire identity (monotonic; never re-used within
+        // the room's lifetime — see module docs, "Wire identity") and
+        // stamp it onto the entity. The same value is returned to the
+        // joiner in `JOIN_ROOM_RESULT`, so both paths share one space.
+        self.next_wire_id += 1;
         let entity = world
-            .spawn((Position { x, y }, Owner(conn), Speed(DEFAULT_SPEED)))
+            .spawn((
+                Position { x, y },
+                Owner(conn),
+                Speed(DEFAULT_SPEED),
+                WireId(self.next_wire_id),
+            ))
             .id();
         self.conn_entity.insert(conn, entity);
         // No spawn event: membership is expressed by presence in the next
         // snapshot, which now includes the new entity (the join happened in
         // the control phase, before this tick's broadcast).
-        entity.to_bits()
+        self.next_wire_id
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
@@ -242,12 +275,15 @@ mod tests {
     fn snapshot_emits_on_plain_position_write() {
         let mut world = World::new();
         let mut room = DemoRoom::new();
-        let entity = room.on_join(&mut world, ConnectionId(1));
+        let wire_id = room.on_join(&mut world, ConnectionId(1));
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
+        assert_eq!(wire_id, 1, "first entity gets wire id 1");
 
-        let e = Entity::from_bits(entity);
+        // The bevy handle is the room's business (conn_entity); the join
+        // reply carried the wire id, not the bevy bits.
+        let e = *room.conn_entity.get(&ConnectionId(1)).unwrap();
         world.entity_mut(e).insert(Position { x: 42.0, y: -7.0 });
 
         let mut out2 = bytes::BytesMut::new();
@@ -259,6 +295,99 @@ mod tests {
         assert_eq!(snap.entities.len(), 1);
         assert_eq!(snap.entities[0].x, 42);
         assert_eq!(snap.entities[0].y, -7);
+    }
+
+    /// The identity invariant (see `game.proto`, `EntityRecord.entity`):
+    /// the client's world view is its **last accepted** snapshot, and an
+    /// identity present in both the old and the new snapshot must be the
+    /// *same* entity — that is what separates "the same entity moved"
+    /// from "a new entity took the slot" when there is no delta, no
+    /// history, and no out-of-band remapping message.
+    ///
+    /// The threat this test pins: the bevy allocator **recycles slots**
+    /// (a despawned entity's index is handed back out with a bumped
+    /// generation). In bevy 0.19 the allocator keeps freed indices in a
+    /// local buffer of 128 before they become reusable, so this test
+    /// runs 129 join/leave cycles to force a reuse, then asserts:
+    ///
+    /// 1. the reuse actually happened (the next join lands on an index a
+    ///    previous entity owned) — the test is not vacuous; an
+    ///    index-based wire identity would be *indistinguishable* here;
+    /// 2. the recycled slot carries a **fresh** wire id never seen
+    ///    before — so a client whose accepted view still contains the
+    ///    old entity (it lost the leave snapshots) reads the new
+    ///    snapshot as "new entity", not "old entity moved".
+    #[test]
+    fn wire_identity_survives_ecs_slot_reuse() {
+        let mut world = World::new();
+        let mut room = DemoRoom::new();
+        let ctx = ctx1();
+
+        // 129 join/leave cycles: every join gets a fresh wire id, every
+        // leave despawns the entity (freeing its bevy slot).
+        let mut wire_ids: Vec<u64> = Vec::new();
+        let (mut index_128, mut gen_128) = (None, 0u32);
+        for i in 1..=129u64 {
+            let conn = ConnectionId(i);
+            let wire_id = room.on_join(&mut world, conn);
+            assert!(
+                !wire_ids.contains(&wire_id),
+                "wire id {wire_id} handed out twice"
+            );
+            wire_ids.push(wire_id);
+            let e = *room.conn_entity.get(&conn).unwrap();
+            if i == 128 {
+                index_128 = Some(e.index_u32());
+                gen_128 = e.generation().to_bits();
+            }
+            room.on_leave(&mut world, conn);
+        }
+
+        // The next join must recycle a bevy slot (129 frees overflow the
+        // 128-slot local free buffer): exactly the condition under which
+        // a non-unique wire identity would break the invariant.
+        let rejoiner = ConnectionId(1000);
+        let wire_id = room.on_join(&mut world, rejoiner);
+        let e = *room.conn_entity.get(&rejoiner).unwrap();
+        assert_eq!(
+            e.index_u32(),
+            index_128.expect("recorded above"),
+            "bevy slot reuse must have happened for this test to be \
+             non-vacuous (an index-based identity would alias here)"
+        );
+        assert_ne!(
+            e.generation().to_bits(),
+            gen_128,
+            "recycled slot carries a bumped generation"
+        );
+        assert!(
+            !wire_ids.contains(&wire_id),
+            "recycled slot must carry a fresh wire id, never a previous one"
+        );
+
+        // Client model from `game.proto`: the client's accepted view still
+        // holds entity #128 (it lost the leave snapshots). From the new
+        // snapshot alone it must classify the record.
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
+        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
+        assert_eq!(snap.entities.len(), 1);
+        let rec = &snap.entities[0];
+        assert_eq!(rec.entity, wire_id, "snapshot carries the fresh wire id");
+        let old_view: std::collections::HashSet<u64> = [wire_ids[127]]
+            .into_iter()
+            .collect();
+        assert!(
+            !old_view.contains(&rec.entity),
+            "the client must see a NEW entity, not entity #128 moving \
+             (its old wire id is gone; the recycled slot's new id was \
+             never in the client's view)"
+        );
+        // Note what an index-based identity would have produced here: the
+        // record's bevy index equals entity #128's index (asserted above),
+        // so a client keyed by index would hit its map and misread the new
+        // entity as entity #128 teleporting to a spawn point. The wire id
+        // is the field that carries the distinction.
     }
 
     /// Identical wire content stays silent (a write that leaves the

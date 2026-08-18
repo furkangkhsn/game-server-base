@@ -297,8 +297,13 @@ katmanında değişiklik sıfırdır.**
   P2) bir versiyon mekanizması o özellikte yeniden getirilebilir. Eski
   bağlantı başına `last_sent` haritası ve spawn/remove olayları
   kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
-- `EntityId = u64` core'da ECS'sizdir; oyun crate'i `Entity::to_bits()` /
-  `from_bits()` ile çevirir.
+- `EntityId = u64` core'da ECS'sizdir; oyun crate'i tel kimliğini kendisi
+  seçer. Demo, spawn'da **oda-yerel, monoton, oda ömrü boyunca yeniden
+  kullanılmayan** bir wire kimliği (serial) atar (`DemoRoom.next_wire_id` →
+  entity'nin `WireId` componenti → tel); aynı değer `JOIN_ROOM_RESULT`'a
+  gider, yani iki yol tek uzaydadır. Bevy'nin `(index, generation)` çifti
+  oda içine kalır; neden tam bevy bits telde taşınmaz ve kimlik değişmezi
+  (invariant) nasıl korunur: §8.
 
 ## 8. Yayın stratejisi ve ölçekleme (100k hedefi)
 
@@ -326,21 +331,47 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 - `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı).
   Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
   başına **bir kez** çıkar, her tick değil.
-- **Ölçülen wire boyutu** (2aad7ea üstü denetim turu probe'u; gerçek
-  `RoomActor` + `DemoRoom` + kanallar, ham çıktı commit raporunda):
-  `EntityRecord` tipik **10 bayt** — 3 tag + 5 baytlık entity varint +
-  2 × 1 baytlık zigzag koordinat (±50 arenada `|v| ≤ 50` → 1 bayt;
-  koordinat 0 ise proto3 default'ı o alanı hiç kodlamaz → 8 baytlık
-  kayıt); snapshot içinde kayıt başına +2 bayt tag/uzunluk çerçevesi,
-  `WorldSnapshot` header'ı `sequence` alanıdır (tick < 128 iken 2
-  bayt). Ölçülen toplamlar: 1 entity = 14 B, 100 = 1196 B, 800 = 9544 B
-  (marjinal ~11,93 B/kayıt). Eski `sfixed32` + `version` kaydı aynı
-  prost ile 18 B idi — eski doküman iddiası "21→16 B" sayıların ikisinde
-  de yanlıştı (aslı ~18 → ~12). Bevy 0.19'da `Entity::to_bits()`'in alt
-  32 biti index'in bit tersidir: yeni dünyada 0xFFFFFFFE'den başlar ve
-  azalır → entity varint'i pratikte her zaman 5 bayt; 6 bayt ancak bir
-  slot'un generation'ı 8+ olduğunda (uzun ömürlü oda, çoklu re-join).
-  1400 baytlık eşik ~117 entity'de aşılır.
+- **Wire kimliği (identity) ve ölçülen wire boyutu** (wire kimliği turu
+  probe'u; gerçek `RoomActor` + `DemoRoom` + kanallar, ham çıktı commit
+  raporunda): `EntityRecord.entity` **oda-yerel wire kimliğidir** — oda,
+  spawn başına sıradaki değeri (1'den başlayıp monoton artan) o
+  entity'ye stamp'lar ve **oda ömrü boyunca bir değeri asla yeniden
+  vermez** (bevy slotu geri dönse bile). Neden: kimlik değişmezi —
+  istemcinin dünya görüşü son kabul ettiği snapshot'tır; delta, geçmiş ve
+  out-of-band "kimlik yeniden eşleme" mesajı yoktur. Değişmezin
+  gerektirdiği ayrım — "aynı entity hareket etti" vs "aynı kimliği artık
+  başka bir entity taşıyor" — ancak ve ancak **iki farklı entity oda
+  ömrü boyunca aynı tel kimliğini paylaşamazsa** snapshot'lardan
+  ayırt edilebilir: kimlik hem eski hem yeni snapshot'taysa aynı entity
+  (hareket etti), sadece yeni snapshot'taysa yeni entity. Bevy'nin
+  `(index, generation)` bu garantiyi veriyordu ama bevy 0.19'da
+  `to_bits()`'in alt 32 biti `0xFFFFFFFF - index` olduğundan (ölçüldü;
+  eski nottaki "bit tersi" ifadesi yanlış, aslında bit komplementi) varint
+  her zaman 5 bayt idi — kaydın yarısından fazlası. Alternatifler:
+  (a) yalnız bevy *index* (1-2 bayt) — slot yeniden kullanıldığında (bevy
+  0.19'da her 129 free'den sonra ölçüldü) kimlik ÇARPIŞIR ve kayıp
+  snapshot'larda istemci yeni entity'yi "eski entity teleport oldu" diye
+  okur → değişmez KIRILIR; (b) tam bits başka varint biçiminde — alt
+  32 bit ≈ 2^32 olduğundan 5 baytun altına inemez. Serial bu yüzden:
+  değişmezi birebir korur, 1 bayt (oda spawn sayacı < 128), 2 bayt
+  (< 16384), 3 bayt (< 2M). `EntityRecord` tipik **6 bayt** — 3 tag +
+  1 baytlık entity varint + 2 × 1 baytlık zigzag koordinat (±50 arenada
+  `|v| ≤ 50` → 1 bayt; koordinat 0 ise proto3 default'ı o alanı hiç
+  kodlamaz → 4 baytlık kayıt); snapshot içinde kayıt başına +2 bayt
+  tag/uzunluk çerçevesi (tipik 8 B/kayıt), `WorldSnapshot` header'ı
+  `sequence` alanıdır (tick < 128 iken 2 bayt). Ölçülen toplamlar (öncesi → sonra):
+  1 entity = 14 → **10 B**, 100 = 1196 → **796 B**, 800 = 9544 →
+  **7017 B** (marjinal ~11,93 → ~8,77 B/kayıt; 800'de 127 kayıt 1
+  baytlık, 673 kayıt 2 baytlık varint — serial'lar 128'den sonra 2
+  bayta geçer). 1400 baytlık eşik N=118 → **N=171**'de aşılır (1403 B).
+  Eski `sfixed32` + `version` kaydı aynı prost ile 18 B idi — eski
+  doküman iddiası "21→16 B" sayıların ikisinde de yanlıştı (aslı
+  ~18 → ~12). Regresyon: `wire_identity_survives_ecs_slot_reuse` —
+  129 join/leave döngüsüyle bevy slot yeniden kullanmasını ZORLAR
+  (test boş olmadığını index eşitliğiyle doğrular) ve geri dönen
+  slotun taze wire kimliği taşıdığını, dolayısıyla kayıp snapshot'ları
+  olan istemcinin yeni entity'yi "yeni entity" olarak okuduğunu
+  kilitlemektedir.
 
 Bu, 100k bağlantı hedefi için **doğru v1**'dir çünkü: (a) doğru ve
 basittir, (b) sıralı replay/garanti gerektirmez, (c) kodlama maliyeti
@@ -443,6 +474,11 @@ birlikte ele alınacak).
   `Position` yazımı yayınlanır, içeriği değiştirmeyen bir yazım
   yayınlatmaz, üyelik değişimi yayınlatır (karar, denetim turunda
   kaldırılan `EntityVersion`/`bump()` mekanizmasından bağımsızdır — §7).
+   Kimlik değişmezi — bevy slotu geri dönse bile (129 join/leave
+   döngüsüyle zorlanır) tel kimliği yeniden kullanılmaz, dolayısıyla
+   kayıp snapshot'ı olan istemci "aynı entity hareket etti" ile "yeni
+   entity slotu devraldı"yı snapshot'lardan ayırt eder
+   (`wire_identity_survives_ecs_slot_reuse`; §8).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**

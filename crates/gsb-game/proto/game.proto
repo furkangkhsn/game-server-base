@@ -16,13 +16,22 @@ message MoveTo {
 
 // Server → client: one entity inside a WorldSnapshot.
 message EntityRecord {
-  // Full bevy entity bits (generation + index): identity stays unique even
-  // when the allocator reuses a slot, so the client can tell "the same
-  // entity moved" from "a new entity took the slot".
+  // Room-assigned wire identity: the n-th entity this room ever spawned
+  // (starts at 1). The value is monotonic and is NEVER re-used within the
+  // room's lifetime — even when the ECS allocator recycles the old
+  // entity's slot — so identity stays unique even under slot reuse, and
+  // the client can tell "the same entity moved" from "a new entity took
+  // the slot" from the self-contained snapshots alone (its world view is
+  // its last accepted snapshot: an identity in both is the same entity).
+  // JOIN_ROOM_RESULT carries the same value for the joiner. (The old
+  // encoding — full bevy entity bits — was unique too, but its low 32
+  // bits are 0xFFFFFFFF - index, so the varint cost 5 bytes per record;
+  // the serial is 1 byte while the room's spawn count stays below 128
+  // and 2 bytes below 16384.)
   uint64 entity = 1;
-  // Zig-zag varint (see MoveTo): measured 11.96 B/record over a +/-50
-  // arena versus 17.90 B/record with sfixed32 — a 33% smaller snapshot
-  // for the same content.
+  // Zig-zag varint (see MoveTo): 1 byte per coordinate over the +/-50
+  // arena (|v| <= 50) versus sfixed32's 4 fixed bytes each — measured
+  // ~6 B/record smaller for the same content.
   sint32 x = 2;
   sint32 y = 3;
 }

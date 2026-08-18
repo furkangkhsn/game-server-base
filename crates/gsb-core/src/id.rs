@@ -12,8 +12,10 @@ pub struct RoomId(pub u64);
 
 /// Opaque handle to a player entity inside a room.
 ///
-/// Deliberately a plain `u64` so this crate stays ECS-agnostic; the game
-/// crate maps it to/from its ECS entity handle (e.g. `Entity::to_bits`).
+/// Deliberately a plain `u64` so this crate stays ECS-agnostic: the game
+/// crate chooses the identity space behind it. The demo assigns a
+/// room-local, never-reused serial at spawn (see gsb-game's `DemoRoom`
+/// and `game.proto`, `EntityRecord.entity`).
 pub type EntityId = u64;
 
 impl fmt::Display for ConnectionId {

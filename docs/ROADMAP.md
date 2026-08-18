@@ -8,9 +8,58 @@ snapshot'ı** modeline geçirildi (aşağıda); grup adilliği sözleşmesi
 kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda);
 2aad7ea üstü denetim turunda F5 kapatıldı, F6 (wire byte iddiası)
 ölçülerek düzeltildi, F4'ün "yapısal olarak tespit edilemez" hükmü
-yeniden incelemeyle doğrulandı (aşağıda). 32/32 test yeşil.
+yeniden incelemeyle doğrulandı (aşağıda); wire kimliği kompaktlaştırıldı:
+`EntityRecord.entity` tam bevy bits yerine oda-yerel monoton serial —
+tipik kayıt 10 → 6 B (snapshot çerçevesi dahil 12 → 8 B), 1400 B eşiği
+~117 → 171 entity'ye kaydı, kimlik değişmezi korundu (aşağıda).
+33/33 test yeşil.
 Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
+
+## Kapatılanlar (wire kimliği turu)
+
+- [x] **`EntityRecord.entity` kompakt kimlik: tam bevy bits → oda-yerel
+  monoton serial** — F6 turunda ölçülen gerçek durum: kayıt tipik 10 B
+  ve bunun 5 B'si yalnızca entity kimliği (bevy 0.19'da `to_bits()`'in
+  alt 32 biti `0xFFFFFFFF - index` olduğundan varint pratikte her zaman
+  5 bayt; eski nottaki "bit tersi" ifadesi ölçümde yanlış çıktı, aslı
+  bit komplementi). 1400 B eşiği ~117 entity'de aşıyordu. Çözüm: oda,
+  spawn başına sıradaki wire kimliğini (1'den monoton artan) entity'ye
+  `WireId` componenti olarak stamp'lar ve **oda ömrü boyunca bir değeri
+  asla yeniden vermez**; aynı değer `JOIN_ROOM_RESULT`'a gider (iki yol
+  tek uzayda; `gsb-core`'daki opak `EntityId`'a dokunulmadı — yalnız
+  doküman düzeltildi). Kimlik değişmezi nasıl korunuyor: istemcinin
+  dünya görüşü son kabul ettiği snapshot'tır (delta/geçmiş/out-of-band
+  remap yok); iki farklı entity oda ömrü boyunca aynı tel kimliğini
+  paylaşılamayacağından, kimlik hem eski hem yeni snapshot'taysa aynı
+  entity (hareket), yalnız yeni snapshot'taysa yeni entity — kayıp
+  snapshot olsa bile. Değerlendirilen ve elenen alternatifler:
+  (a) yalnız bevy *index* (1-2 bayt) — slot yeniden kullanıldığında
+  kimlik çarpışır; bevy 0.19'da yeniden kullanım her 129 free'den sonra
+  gerçekleşiyor (ölçüldü: yerel free buffer 128) ve kayıp snapshot
+  durumunda istemci yeni entity'yi "eski entity teleport oldu" diye
+  okur → değişmez kırılır; ayrıca protokol, bevy allocator'ının iç
+  davranışına sessiz bağımlılık kazanırdı. (b) tam bits + başka varint
+  kodlaması — alt 32 bit ≈ 2^32 olduğundan 5 baytun altına inemez.
+  Ölçüm (gerçek `RoomActor` + `DemoRoom` + kanallar; önceki turun
+  yönteminin birebir tekrarı, ham çıktı commit raporunda):
+  1 entity = 14 → 10 B; 100 = 1196 → 796 B; 800 = 9544 → 7017 B
+  (marjinal ~11,93 → ~8,77 B/kayıt); entity varint histogramı N=1/100:
+  5B×N → 1B×N; N=800: 5B×800 → 1B×127 + 2B×673 (serial 128'den sonra
+  2 bayta geçer); 1400 B eşiği N=118 (1410 B) → **N=171 (1403 B)**.
+  Serial'ın büyüme karakteri: oda spawn sayacı < 128 → 1 B, < 16384 →
+  2 B, < 2M → 3 B (uzun ömürlü, çoklu churn'li odalarda tipik kayıt
+  9 B). Regresyon: `wire_identity_survives_ecs_slot_reuse` — 129
+  join/leave döngüsüyle bevy slot yeniden kullanımını zorlar (geri
+  dönen index'in eski entity'nin index'i olduğunu ve generation'ın
+  yükseldiğini assert ederek testi boş olmaktan korur) ve geri dönen
+  slotun taze wire kimliği taşıdığını doğrular: kayıp snapshot'ları
+  olan istemci yeni entity'yi "yeni entity" olarak okur. Mevcut
+  e2e/late_join testleri semantiğiyle aynen korundu (join result
+  kimliği snapshot'ta aynı uzayda bulunuyor); `snapshot_emits_on_
+  plain_position_write` uyarlandı: `on_join` artık serial döndürdüğü
+  için bevy handle `conn_entity` üzerinden okunuyor (amaç/assertler
+  aynı).
 
 ## Kapatılanlar (2aad7ea denetim turu)
 

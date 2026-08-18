@@ -10,6 +10,16 @@ pub struct Position {
     pub y: f32,
 }
 
+/// The entity's wire identity (see `game.proto`, `EntityRecord.entity`).
+///
+/// Room-assigned and monotonic: the room hands out the next value at
+/// spawn and **never reuses a value within the room's lifetime**, even
+/// when the ECS allocator recycles the old entity's slot. That is what
+/// lets the client tell "the same entity moved" from "a new entity took
+/// the slot" using only self-contained snapshots (see `game.proto`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Component)]
+pub struct WireId(pub u64);
+
 /// The connection that owns (controls) this entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct Owner(pub ConnectionId);
