@@ -8,8 +8,9 @@
 //! - [`ticker`]: the global tick service (one broadcast channel, one task).
 //! - [`registry`]: the singleton control-plane actor (room table + conn
 //!   routing).
-//! - [`room`]: the per-room actor running the four-phase tick, and the
-//!   generic [`room::RoomLogic`] trait the game crate implements.
+//! - [`room`]: the per-room actor running the five-phase tick (CONTROL →
+//!   READ → CONVERT → SYSTEMS → BROADCAST), and the generic
+//!   [`room::RoomLogic`] trait the game crate implements.
 //! - [`conn`]: the per-connection actor (auth/join/leave state machine).
 //!
 //! Design invariants (enforced by `gsb-lint` in every crate):

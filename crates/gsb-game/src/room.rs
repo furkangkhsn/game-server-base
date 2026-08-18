@@ -11,21 +11,37 @@
 //!
 //! **Wire identity.** The `entity` field on the wire is *not* the bevy
 //! entity bits — it is a room-assigned serial: the `n`-th entity this
-//! room ever spawned (starting at 1), stored in the entity's
-//! [`WireId`] component. The counter is monotonic and a value is **never
-//! re-used within the room's lifetime**, even when the bevy allocator
-//! recycles the old entity's slot. That is what preserves the identity
-//! invariant (see `game.proto`): the client's world view is its last
-//! accepted snapshot, and an identity present in both the old and the
-//! new snapshot is guaranteed to be the *same* entity, so "moved" and
+//! room ever assigned an identity to (starting at 1), stored in the
+//! entity's [`WireId`] component. The counter is monotonic and a value is
+//! **never re-used within the room's lifetime**, even when the bevy
+//! allocator recycles the old entity's slot. That is what preserves the
+//! identity invariant (see `game.proto`): the client's world view is its
+//! last accepted snapshot, and an identity present in both the old and
+//! the new snapshot is guaranteed to be the *same* entity, so "moved" and
 //! "a new entity took the slot" stay distinguishable from the
 //! self-contained snapshots alone — including across lost snapshots.
-//! The same value goes to the joiner in `JOIN_ROOM_RESULT`
-//! (`on_join`'s return). Bevy's own `(index, generation)` stays
-//! internal: its `to_bits()` low half is `0xFFFFFFFF - index`, so the
-//! varint was 5 bytes in any realistic room; the serial is 1 byte
-//! while the room's total spawn count stays below 128 and 2 bytes
-//! below 16384.
+//!
+//! The serial is handed out from this room's **single counter** at two
+//! sites: `on_join` (player entities — the same value also goes to the
+//! joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and the
+//! broadcast pass (everything else that is broadcastable, see below).
+//! Bevy's own `(index, generation)` stays internal: its `to_bits()` low
+//! half is `0xFFFFFFFF - index`, so the varint was 5 bytes in any
+//! realistic room; the serial is 1 byte while the room's total identity
+//! count stays below 128 and 2 bytes below 16384.
+//!
+//! **Broadcastable set: having a [`Position`] is enough.** An entity is
+//! broadcast iff it carries a [`Position`], and that precondition is
+//! *structural, not a discipline*: entities that have a [`Position`] but
+//! no [`WireId`] yet — anything spawned outside `on_join` (bullets,
+//! NPCs, traps, …) — are stamped with the next serial **by the broadcast
+//! pass itself** and appear in the very snapshot that notices them.
+//! Nothing can be silently invisible: before the compact-identity change
+//! the broadcast set was exactly "has a `Position`", and this rule
+//! restores that contract with the new identity space. The stamp is
+//! idempotent (a stamped entity carries a [`WireId`], so it is never
+//! stamped again) and costs nothing in steady state (the orphan query
+//! matches nothing once every entity is stamped).
 //!
 //! Broadcasts are **per-group full, self-contained snapshots**: each tick
 //! the room asks the logic for one snapshot per group; the logic encodes
@@ -57,13 +73,13 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::{Entity, World, Without};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Owner, Position, Speed, WireId};
+use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
 use crate::op;
 use crate::systems::MovementSystem;
 
@@ -143,6 +159,26 @@ impl RoomLogic<World> for DemoRoom {
         // position) while the query holds the world borrow.
         let mut current: Vec<(u64, i32, i32)> = Vec::new();
         {
+            // Identity assignment (module docs, "Wire identity"): entities
+            // with a `Position` but no `WireId` — spawned outside
+            // `on_join` (bullets, NPCs, traps, …) — are stamped with the
+            // next serial here, so the broadcast set is exactly "has a
+            // `Position`" and no entity can be silently invisible. Two
+            // passes: the orphan query holds the world borrow, so collect
+            // the entities first, then write (the same pattern as
+            // `MovementSystem`); the stamp is idempotent, and the orphan
+            // query matches nothing in steady state. The full query below
+            // runs *after* the stamps, so it sees every broadcastable
+            // entity exactly once (stamped and pre-stamped alike).
+            let orphans: Vec<Entity> = world
+                .query_filtered::<(Entity, &Position), Without<WireId>>()
+                .iter(world)
+                .map(|(entity, _)| entity)
+                .collect();
+            for entity in orphans {
+                self.next_wire_id += 1;
+                world.entity_mut(entity).insert(WireId(self.next_wire_id));
+            }
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
                 current.push((wire_id.0, pos.x as i32, pos.y as i32));
@@ -199,7 +235,6 @@ impl RoomLogic<World> for DemoRoom {
         let entity = world
             .spawn((
                 Position { x, y },
-                Owner(conn),
                 Speed(DEFAULT_SPEED),
                 WireId(self.next_wire_id),
             ))
@@ -388,6 +423,87 @@ mod tests {
         // so a client keyed by index would hit its map and misread the new
         // entity as entity #128 teleporting to a spawn point. The wire id
         // is the field that carries the distinction.
+    }
+
+    /// The publishable precondition is structural, not a discipline: an
+    /// entity that carries a [`Position`] but never passed through
+    /// [`DemoRoom::on_join`] (bullets, NPCs, traps — anything not
+    /// player-spawned) must not be *silently invisible*. The broadcast
+    /// pass stamps it with a fresh serial and includes it in the very
+    /// next snapshot — restoring the pre-compact-identity contract
+    /// (broadcast set = "has a `Position`").
+    #[test]
+    fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
+        let mut world = World::new();
+        let mut room = DemoRoom::new();
+        let ctx = ctx1();
+
+        // Two players through the normal path (wire ids 1 and 2).
+        room.on_join(&mut world, ConnectionId(1));
+        room.on_join(&mut world, ConnectionId(2));
+
+        // A "bullet" spawned directly into the world — no `on_join`.
+        let bullet = world.spawn(Position { x: 7.0, y: -3.0 }).id();
+        assert!(
+            world.get::<WireId>(bullet).is_none(),
+            "precondition: the entity has no wire identity"
+        );
+
+        // The next snapshot must include it, with a fresh wire id.
+        let mut out = bytes::BytesMut::new();
+        assert!(
+            room.snapshot(&mut world, &ctx, &(), &mut out),
+            "a new entity is a wire-content change ⇒ emit"
+        );
+        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
+        assert_eq!(
+            snap.entities.len(),
+            3,
+            "the orphan must not be silently invisible"
+        );
+        let rec = snap
+            .entities
+            .iter()
+            .find(|e| e.x == 7 && e.y == -3)
+            .expect("the orphan's record");
+        assert_eq!(
+            rec.entity, 3,
+            "it gets the next free serial from the room's single counter \
+             (fresh: never handed out before, never re-used)"
+        );
+        assert!(
+            world.get::<WireId>(bullet).is_some(),
+            "the entity is stamped (one assignment)"
+        );
+
+        // Idempotent: the same wire content emits nothing, and the
+        // identity is stable across snapshots.
+        let mut out2 = bytes::BytesMut::new();
+        assert!(
+            !room.snapshot(&mut world, &ctx, &(), &mut out2),
+            "unchanged content ⇒ silent (no re-stamp, no re-emit)"
+        );
+        assert_eq!(
+            world.get::<WireId>(bullet).copied().map(|w| w.0),
+            Some(3),
+            "the identity is stable across snapshots"
+        );
+
+        // The stamped entity moves: the *same* identity at a new position
+        // (a client reads "the same entity moved", not "a new entity").
+        world.entity_mut(bullet).insert(Position { x: 9.0, y: -3.0 });
+        let mut out3 = bytes::BytesMut::new();
+        assert!(
+            room.snapshot(&mut world, &ctx, &(), &mut out3),
+            "movement ⇒ wire content changed ⇒ emit"
+        );
+        let snap3 = crate::game::WorldSnapshot::decode(out3.as_ref()).expect("decode");
+        let rec3 = snap3
+            .entities
+            .iter()
+            .find(|e| e.entity == 3)
+            .expect("same identity in the new snapshot");
+        assert_eq!((rec3.x, rec3.y), (9, -3));
     }
 
     /// Identical wire content stays silent (a write that leaves the

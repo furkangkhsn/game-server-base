@@ -6,7 +6,7 @@
 //! loop. It must be called from inside a tokio runtime.
 //!
 //! ```text
-//! global ticker (broadcast) ──TickInfo──▶ room actors (4-phase tick)
+//! global ticker (broadcast) ──TickInfo──▶ room actors (5-phase tick)
 //!                                            │ per-conn action channels (in)
 //! accept loop ──ConnOpened──▶ registry actor ◀──RegistryMsg── connection actors
 //!     │                           │CreateRoom/SpawnPlayer/…      │ try_send

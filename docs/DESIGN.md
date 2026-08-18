@@ -298,12 +298,28 @@ katmanında değişiklik sıfırdır.**
   bağlantı başına `last_sent` haritası ve spawn/remove olayları
   kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i tel kimliğini kendisi
-  seçer. Demo, spawn'da **oda-yerel, monoton, oda ömrü boyunca yeniden
+  seçer. Demo, **oda-yerel, monoton, oda ömrü boyunca yeniden
   kullanılmayan** bir wire kimliği (serial) atar (`DemoRoom.next_wire_id` →
-  entity'nin `WireId` componenti → tel); aynı değer `JOIN_ROOM_RESULT`'a
-  gider, yani iki yol tek uzaydadır. Bevy'nin `(index, generation)` çifti
-  oda içine kalır; neden tam bevy bits telde taşınmaz ve kimlik değişmezi
-  (invariant) nasıl korunur: §8.
+  entity'nin `WireId` componenti → tel); atama iki noktada, tek sayaçta:
+  `on_join` (oyuncu entity'si — aynı değer `JOIN_ROOM_RESULT`'a da gider,
+  yani iki yol tek uzaydadır) ve broadcast geçişi (`on_join` dışından
+  gelen, `Position` taşıyan her entity; aşağıda). Bevy'nin `(index,
+  generation)` çifti oda içine kalır; neden tam bevy bits telde taşınmaz
+  ve kimlik değişmezi (invariant) nasıl korunur: §8.
+- **Yayınlanabilir küme (= `Position` taşımak) — yapısal ön koşul:** bir
+  entity yayınlanabilmesi için `Position` taşıması yeterli ve bu ön
+  koşul **yorumda yaşayan bir disiplin değil, kodda yapısal**dır:
+  `on_join` dışından spawn edilen her entity (mermi, NPC, tuzak —
+  oyuncuya bağlı olmayan ilk entity eklendiğinde kırılacak olan senaryo)
+  broadcast geçişinde aynı monoton sayaçtan **taze bir wire kimliği
+  damgalanır** ve onu fark eden snapshot'ta görünür; sessizce görünmez
+  olamaz. Bu, kompakt kimlik değişikliğinin (`0bf5b79`) öncesi
+  sözleşmeyi korur: yayın kümesi hep "Position taşıyanlar" idi, yeni
+  kimlik uzayında da aynı küme kalır. Damga idempotent'tir (damgalanmış
+  entity bir daha damgalanmaz) ve kararlı durumda maliyeti sıfırdır
+  (yetim sorgusu — `Position` var / `WireId` yok — hiçbir entity
+  eşlemez). Regresyon:
+  `entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id`.
 
 ## 8. Yayın stratejisi ve ölçekleme (100k hedefi)
 
@@ -334,9 +350,12 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 - **Wire kimliği (identity) ve ölçülen wire boyutu** (wire kimliği turu
   probe'u; gerçek `RoomActor` + `DemoRoom` + kanallar, ham çıktı commit
   raporunda): `EntityRecord.entity` **oda-yerel wire kimliğidir** — oda,
-  spawn başına sıradaki değeri (1'den başlayıp monoton artan) o
-  entity'ye stamp'lar ve **oda ömrü boyunca bir değeri asla yeniden
-  vermez** (bevy slotu geri dönse bile). Neden: kimlik değişmezi —
+  kimlik başına sıradaki değeri (1'den başlayıp monoton artan) o
+  entity'ye stamp'lar — **iki atama noktası, tek sayaç**: `on_join`
+  (oyuncu entity'si; aynı değer `JOIN_ROOM_RESULT`'a da gider) ve
+  broadcast geçişi (`on_join` dışından gelen her `Position` taşıyan
+  entity — §7, "Yayınlanabilir küme") — ve **oda ömrü boyunca bir
+  değeri asla yeniden vermez** (bevy slotu geri dönse bile). Neden: kimlik değişmezi —
   istemcinin dünya görüşü son kabul ettiği snapshot'tır; delta, geçmiş ve
   out-of-band "kimlik yeniden eşleme" mesajı yoktur. Değişmezin
   gerektirdiği ayrım — "aynı entity hareket etti" vs "aynı kimliği artık
@@ -478,7 +497,13 @@ birlikte ele alınacak).
    döngüsüyle zorlanır) tel kimliği yeniden kullanılmaz, dolayısıyla
    kayıp snapshot'ı olan istemci "aynı entity hareket etti" ile "yeni
    entity slotu devraldı"yı snapshot'lardan ayırt eder
-   (`wire_identity_survives_ecs_slot_reuse`; §8).
+   (`wire_identity_survives_ecs_slot_reuse`; §8). Yayınlanabilirlik —
+   `on_join`'den geçmemiş, `Position` taşıyan bir entity (mermi/NPC/
+   tuzak gibi oyuncuya bağlı olmayan entity) sessizce görünmez kalmaz:
+   broadcast geçişi ona aynı sayaçtan taze wire kimliği damgalar ve bir
+   sonraki snapshot'ta görünür (ön koşul yapısal — §7, "Yayınlanabilir
+   küme"; `entity_spawned_outside_on_join_is_broadcast_with_fresh_
+   wire_id`).
 - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**

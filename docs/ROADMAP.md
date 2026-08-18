@@ -11,10 +11,139 @@ kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda);
 yeniden incelemeyle doğrulandı (aşağıda); wire kimliği kompaktlaştırıldı:
 `EntityRecord.entity` tam bevy bits yerine oda-yerel monoton serial —
 tipik kayıt 10 → 6 B (snapshot çerçevesi dahil 12 → 8 B), 1400 B eşiği
-~117 → 171 entity'ye kaydı, kimlik değişmezi korundu (aşağıda).
-33/33 test yeşil.
+~117 → 171 entity'ye kaydı, kimlik değişmezi korundu (aşağıda);
+yayınlanabilirlik ön koşulu (Position ⇒ broadcast) **yapısal** hale
+getirildi — `on_join` dışından spawn edilen entity artık sessizce
+görünemez, `Owner` ölü componenti kaldırıldı, aynı sınıftan kalanlar
+tarandı (aşağıda).
+34/34 test yeşil.
 Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
+
+## Kapatılanlar (yayınlanabilirlik turu)
+
+- [x] **Yayınlanabilirlik ön koşulu yorumdaydı — yapısal hale getirildi**
+  — `0bf5b79`, snapshot sorgusunu `(Entity, &Position)`'tan
+  `(&WireId, &Position)`'a çevirdi ve `WireId` yalnız `on_join` içinde
+  atanıyordu: `Position` taşıyan ama `on_join`'den geçmemiş bir entity
+  (mermi/NPC/tuzak gibi oyuncuya bağlı olmayan ilk entity) hiçbir
+  istemciye **hiç** görünmez olacaktı — hata yok, uyarı yok, sadece
+  yok. Bu, aynı dosyada bu sınıfın üçüncü örneğiydi (`bump()`
+  disiplini — F1; `GroupState::members` — F3) ve ikisinde de kural
+  yalnız yorumda yaşıyordu; bu yüzden "belgele" bu turun çıtası
+  değil. **Seçilen çözüm: (a) entity bir sonraki snapshot'ta görünür** —
+  broadcast geçişi, `Position` taşıyıp `WireId` taşımayan entity'lere
+  odanın **tek monoton sayacından** taze serial damgalar (iki aşamalı:
+  yetim sorgusu `query_filtered::<(Entity, &Position), Without<WireId>>`
+  ile toplar, damga yazılır, tam sorgu damgalardan SONRA çalışır — her
+  entity tam olarak bir kez toplanır; ilk denemede yetim hem damga
+  hem tam sorguda toplanınca double-count yakalandı ve düzeltildi).
+  **Neden (a), neden (b) "odanın tespit edip bildirmesi" değil:**
+  (i) `0bf5b79` öncesi sözleşme "Position ⇒ yayın" idi; (a) bu
+  sözleşmeyi yeni kimlik uzayıyla geri koyar, (b) daraltılmış kümeyi
+  koruyup yalnız bir log satırı eklerdi — spec'in "sessizce kaybolmak
+  kabul değil" çıtasını (b) de karşılar ama motifi (mermi eklendiğinde
+  görünmez entity) yaşatırdı. (ii) (b) "spawn'da WireId damgala"
+  **disiplinini** yaşatır — bu turun "kural yalnız yorumda yaşamasın"
+  çıtasının tam karşısı; gelecekteki mermi geliştiricisi (b)'de
+  görünmez entity + uyarı logu alır, (a)'da çalışır entity.
+  (iii) Oda-seviye tanı (F4 deseni) yalnız oda **yetkiyi
+  kullanamadığında** doğrudur (opak payload, ayırt edilemez gözlem
+  serisi); oyun mantığı kendi dünyası üzerinde tam yetkilidir — rapor
+  etmek değil, düzeltmek gerekir. **Değerlendirilip elenen
+  alternatifler:** (b) tespit + `warn!`, görünmezlik kalsın —
+  yukarıdaki üç gerekçeyle; (c) yetim entity'de `expect`/panic — normal
+  bir gelecek oyun deseni (mermi) sunucu çöküşüne çevrilirdi ve
+  "hata yok, uyarı yok"u "server crash"e çevirmek spek'in işaret
+  ettiği yönün tersidir; (d) sorguyu `(Entity, &Position)`'a geri
+  alıp bevy bits'i telde taşımak — kimlik turunda **ölçülerek**
+  elenmişti (5 B varint + slot yeniden kullanımında kimlik
+  çarpışması → kimlik değişmezi kırılır); (e) damgayı `update()`
+  (SYSTEMS) fazına koymak — çalışır (tick-içi spawn hep snapshot
+  öncesi damgalanır) ama tek boğaz noktası `snapshot()`'ta değil
+  fazda kalır: ingest/system/test hangi fazda spawn ederse etsin
+  snapshot yakalar, (e) yalnız "bu tick'te update() çalıştı" yolunu
+  garanti eder — boğaz noktasını asıl tüketiciye (snapshot) koyduk.
+  **Sınıfı kapatır mı: KAPATIR** — "yayınlanabilirlik ön koşulu
+  yalnız yorumda yaşıyor" sınıfının demo tarafındaki tüm örnekleri
+  bu değişiklikle kod tarafına taşındı: yayın kümesi artık sorgu +
+  damga ile tanımlı, yorum değil. Kalan tek "yorumda yaşayan" üye
+  grup başına defter şartı (F4; yapısal olarak kapatılamaz —
+  aşağıda MADDE 3). Kimlik değişmezi korunur: tek sayaç, monoton,
+  asla yeniden verilmez — `wire_identity_survives_ecs_slot_reuse`
+  hâlen geçerli ve yeni atama noktası aynı sayaçtan beslenir.
+  **Regresyon (seçimi kilitleyen test):**
+  `entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id` —
+  entity `on_join` **olmadan** doğrudan world'e spawn edilir;
+  snapshot'ta görünür (taze serial 3), damga idempotent (içerik
+  değişmezse sessiz + kimlik sabit), hareket sonrası **aynı** kimlik
+  yeni konumda. **Tel boyutu etkisi: ölçüldü, SIFIR** (probe; gerçek
+  `RoomActor` + `DemoRoom` + kanallar; probe commit edilmedi):
+  N=1: **10 B** (8,00 B/kayıt) · N=100: **796 B** (7,94) · N=800:
+  **7017 B** (8,77) · 1400 B eşiği **N=171**'de aşıldı (1402 B; N=170
+  = 1400 B → eşik aşılmaz). Öncesi (`0bf5b79` worktree, aynı probe)
+  ile sonrası **bire bir aynı** — kararlı durumda yetim sorgusu boş
+  (O(0)) ve payload kayıt-kayıt aynı. Önceki turun kayıtlı "1403 B"
+  değeri bu probe'un "1402 B" değerinden 1 bayt farklı: bu probe tüm
+  join'leri tek tick'te işler (`sequence=1` → 1 B varint); eski probe
+  snapshot'ı `sequence ≥ 128`'de aldığında 2 B varint olur — eşik
+  N'si (171) değişmez. Sayılar bağımsız modelle de (spawn formülü +
+  proto3 kodlaması) bire bir doğrulandı.
+- [x] **`Owner` ölü durumu kaldırıldı** — `Owner(ConnectionId)` her
+  `on_join`'de yazılıyor ama hiçbir yerde okunmuyordu — birebir
+  `GroupState::members` (F3) kategorisi: yazılıp okunmayan durum.
+  "Gelecekteki mermi/NPC sistemleri shooter'a ihtiyaç duyarsa kalsın"
+  alternatifi **reddedildi**: (i) spekülatif — kod tabanının kendi
+  emelesi (F1/F3/Bulgu 2): okuyucusuz yazım hot path'te bedava değil,
+  ölü durum silinir ve **ilk gerçek okuyucuyla birlikte** geri gelir;
+  (ii) `conn_entity` haritasının (conn → entity) aynısını ters
+  yönde ikinci bir kaynakta tutuyordu — iki sahiplik kaydı, biri
+  ölü; (iii) 8 B/entity + spawn'da yazım bedeli. Bir okuyucusu
+  YOK; gerekirse gerekçesiyle geri getirilir.
+- [x] **MADDE 3 taraması — aynı sınıftan başka kalıntı** — son iki
+  turun değişikliklerinin (wire kimliği, wire içeriği detector'ı)
+  ardında tüm workspace "yalnızca yorumda yaşayan ön koşul" / "yazılıp
+  okunmayan durum" diye tarandı (alan-bazında read/write sayımı +
+  doküman taraması):
+  1. **`TickCtx.room` yazılıp okunmuyor** — oda actor'ü doldurur;
+     hiçbir mantık okumaz. **Korundu**, gerekçe: `RoomLogic`'in
+     halka API'si (pub alan) — Owner'dan farkı: oyun-özel component
+     değil; oyun mantığının kendi oda kimliğini öğrenmesinin **tek**
+     yolu (ikinci kaynak yok, duplikasyon yok) ve gerçek
+     çok-odalı mantıkta doğal okuyucusu var. Bugün okunmaması
+     demo sadeliği; ölü durum değil.
+  2. **`CoreError::RoomFull` hiç kurulmuyor** — pub varyant, P1
+     `max_players` maddesinin taşıyıcısı (rezerve API yüzeyi —
+     `PRIVATE` op'undaki "reserved, demo kullanmaz" deseniyle aynı
+     sınıf). Kod değişiklığı yok; ROADMAP P1 maddesindeki "yeniden
+     eklenecek" ifadesi güncellendi (zaten mevcut — maddenin ifadesi
+     eskiydi).
+  3. **Stale "4-phase tick" doküman kalıntıları (2 dosya) düzeltildi**
+     — denetim turu `gsb-core` manifest tanımını 5 faza çevirmiş ama
+     `gsb-core/src/lib.rs` ve `gsb-server/src/lib.rs` modül
+     yorumlarındaki "four-phase/4-phase" kalmıştı; "mevcut olmayan
+     mekanizmayı anlatan doküman" sınıfından iki kalıntı, aynı turda
+     kapatıldı.
+  4. **Grup başına defter şartı — sınıfın bilinen ve yapısal olarak
+     kapatılamaz tek üyesi** (F4; 2aad7ea turunda odanın tick-başına
+     gözlemi tek tek sayılarak yeniden doğrulandı): oda, aç kalan
+     grup ile içeriği gerçekten donan meşru grubu ayırt edemez →
+     koruma sözleşme metnidir (DESIGN §4 Tanı). Yeni değil; kaydı
+     burada tutulur, bu turda değişmedi.
+  5. **"Wire kimliği yalnız oda sayacından atanır" bir konvansiyon** —
+     modül dokümanı + proto yorumunda yaşar. Bugünkü **tüm** atama
+     noktaları (`on_join` + yeni broadcast damgası) tek sayaçtan
+     geçer (grep ile doğrulandı); slot yeniden kullanımı tehdidi
+     `wire_identity_survives_ecs_slot_reuse` ile kilitli. Yapısal
+     olarak kapatılamaz: component tipi allokatörü sahiplenemez,
+     crate-içi manuel `WireId(42)` ataması (test/bozuk mantık)
+     alan görünürlüğüyle de önlenemez — bu, tesadüfi "eksik ön
+     koşul" değil, **bilinçli kötü kullanım** sınıfı (sınıfın
+     kapsamı dışında). Not: bu turun damgası ikinci atama noktasını
+     ekledi — her ikisi de aynı sayaç, değişmez bozulmadı.
+  6. `TICK-ARCHITECTURE.md`'deki "4 faz" tablosu: dosya başlığı
+     gereği **tasarım tartışmasının arşivi** — tarihsel anın doğru
+     betimi, dokunulmadı.
 
 ## Kapatılanlar (wire kimliği turu)
 
@@ -316,7 +445,8 @@ başlıklarındaki kalan işler.
   görev + kayıt işgal etmeye devam ediyor. Heartbeat son-görülme damgası
   + aralıklı süpürme (kanal mesajıyla, kilit yok).
 - [ ] **`RoomConfig.max_players` + doluluk yanıtı** — `CoreError::RoomFull`
-  yeniden eklenecek; doluysa JOIN'de `ERROR (room full)`.
+  zaten mevcut (bugün kurulmuyor — yayınlabilirlik turu MADDE 3
+  taraması); doluysa JOIN'de `ERROR (room full)`.
 - [ ] **Güvenlik yüzeyi** — `Authenticator` trait'i (AUTH bugün no-op),
   bağlantı sayısı limiti, aksiyon rate-limit.
 - [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
