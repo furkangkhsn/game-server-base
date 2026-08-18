@@ -5,9 +5,64 @@ kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
 `docs/TICK-ARCHITECTURE.md`); yayın fazı **grup başına tam dünya
 snapshot'ı** modeline geçirildi (aşağıda); grup adilliği sözleşmesi
 (grup başına defter) + F1/F3/F4 kapatıldı (aşağıda); `3f25874`'ün
-kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
-30/30 test yeşil. Aşağıdakiler **ölçülmemiş performans**,
-**robustluk** ve **güvenlik** başlıklarındaki kalan işler.
+kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda);
+2aad7ea üstü denetim turunda F5 kapatıldı, F6 (wire byte iddiası)
+ölçülerek düzeltildi, F4'ün "yapısal olarak tespit edilemez" hükmü
+yeniden incelemeyle doğrulandı (aşağıda). 32/32 test yeşil.
+Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
+başlıklarındaki kalan işler.
+
+## Kapatılanlar (2aad7ea denetim turu)
+
+- [x] **F5: `keepalive_hz > tick_hz` sessizce devre dışı kalıyordu** —
+  `((tick_hz / keepalive_hz).round() as u64).max(1)` oranı < 1 olunca
+  keepalive adımına clamp'leniyor, "değişiklik yoksa sessizlik"
+  kazancı tamamen kapanıyordu (tick 30 + keepalive 60 → her adım
+  yeniden gönderim); yapılandırmada ilişki kontrol edilmiyordu,
+  çalışma anında log/metrik yoktu. Düzeltme: (1) registry `CreateRoom`
+  içinde `keepalive_hz > tick_hz` (ve `> 0`) yeni
+  `CoreError::KeepaliveRate` ile reddediyor — mevcut `TickRate`
+  reddinin aynısı (hız ilişkisi
+  yapılandırma invariant'i; sessiz degrade edilmiş oda başlamasın);
+  (2) doğrudan inşayı (lib kullanımı) koruyan ikinci katman:
+  `RoomActor::new` aynı ilişkide **bir kez** `warn!` veriyor (iki
+  hızı da adlandırarak) ve clamp davranışını belgeliyor;
+  (3) `config.example.toml` + `RoomConfig` dokümanına `≤ tick_hz`
+  şartı. Testler: `create_room_rejects_keepalive_above_tick_rate`
+  (120>60 reddedilir; == tick, < tick ve 0 kabul) +
+  `keepalive_above_tick_warns_at_construction_and_clamps_to_every_step`
+  (doğrudan inşa: uyarı tam bir kez; clamp'li davranış — join
+  yayınından sonra HER adım yeniden gönderim, 6/6 batch; meşru
+  oranlar == tick ve 1 Hz uyarı vermez). Not: metrik altyapısı yok
+  (P0 "Temel metrik" hâlâ açık) — mevcut sinyal log.
+- [x] **F6: "21→16 B wire iddiası" ölçülerek düzeltildi** — iddia
+  ROADMAP snapshot maddesinde duruyordu (`3f25874` denetim turunun F6
+  bulgusu sayıların hatalı olduğunu saptamıştı; `0888441`'in
+  sfixed32→sint32 geçişinden sonra iddia tamamen geçersizdi). Gerçek ölçüm (probe; gerçek `RoomActor` +
+  `DemoRoom` + kanallar, ham çıktı commit raporunda): yeni `EntityRecord`
+  tipik 10 B (3 tag + 5 B entity varint + 2 × 1 B zigzag koordinat;
+  koordinat 0 → proto3 default → 8 B kayıt) + snapshot'ta kayıt başına
+  2 B çerçeve; toplam: 1 entity = 14 B, 100 = 1196 B, 800 = 9544 B
+  (marjinal ~11,93 B/kayıt). Eski `sfixed32` + `version` kaydı aynı
+  prost ile 18 B — yani asıl geçiş ~18 → ~12 B, iddia edilen 21→16
+  değildi. DESIGN §8'e ölçülmüş sayılar + bevy 0.19 entity-bit notu
+  (index bit tersi → varint pratikte her zaman 5 B) eklendi; 1400 B
+  eşik ~117 entity'de aşılır. ROADMAP snapshot maddesi düzeltildi.
+- [x] **F4 hükmü yeniden incelendi: "oda bu modu tespit edemez"
+  doğrulandı** — önceki turda F4 tanısının yalnızca "ömrü boyunca hiç
+  yayınlamamış" grubu yakaladığı, paylaşımlı defterli kaybeden
+  grubun kendi join tick'inde bir kez yayın yaptığı için tanının hiç
+  tetiklenmediği ölçülmüş (1/26 modu, 0 uyarı) ve mod "yapısal olarak
+  tespit edilemez" denilmişti. Bu turda hükmün gerekçesi somutlaştırıldı
+  ve DESIGN §4 Tanı maddesine taşındı: odanın tick başına gözlemi
+  (grup tablosu/`GroupState`, üyelik, önceki tick durumu, `snapshot()`
+  dönüşü) tek tek sayıldı; aç kalan grup ile son yayınından sonra
+  içeriği gerçekten donan meşru grup (AOI'de tek hareketli entity
+  alanı terk eder; demo'da oyuncu hedefine ulaşır) bu gözlem serisine
+  bire bir aynı düşüyor → ayırt edici sinyal yok; payload core'a opak
+  (core/oyun sınırı), `sequence` bu modda ilerlemiyor, ack yok,
+  keepalive `last`'i klonluyor. Hüküm doğru → kod değişikliği
+  yapılmadı; doküman notu bu gerekçeyle netleştirildi.
 
 ## Kapatılanlar (denetim turu — `3f25874` denetimi)
 
@@ -52,7 +107,11 @@ kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
   netleştirildi (DESIGN §4 Tanı maddesi): kaybedeni en az bir kez
   yayınlamış paylaşımlı-defter aç kalması ve tek tick ihlal eden
   grup (join+leave aynı tick'te; `gone` budaması) yakalanamaz — oda
-  meşru sessizliği ayırt edemez, koruma sözleşme metnidir. Yan
+  meşru sessizliği ayırt edemez, koruma sözleşme metnidir. (Hüküm,
+  2aad7ea denetim turunda odanın tick başına gözlemi tek tek sayılarak
+  yeniden sınandı ve doğrulandı: aç kalan grup ile içeriği gerçekten
+  donan meşru grup aynı gözlem serisini üretir — bkz. "Kapatılanlar
+  (2aad7ea denetim turu)" F4 maddesi ve DESIGN §4 Tanı.) Yan
   etkiler: uyarı metnindeki "(and every tick since)" kehaneti
   düzeltildi; log alanı için gereksiz `key().clone()` kaldırıldı.
 - [x] **Bulgu 4: ROADMAP F2 maddesi güncel değildi** — F1 turu
@@ -118,9 +177,8 @@ kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
   silent_when_wire_content_unchanged` (içeriği değiştirmeyen yazım
   sessiz, leave yayınlatır); odaseviye sessizlik + keepalive yeniden
   gönderimi ayrıca `unchanged_group_is_silent_until_keepalive`'da.
-- [ ] F5 (keepalive ≥ tick hızı) ve F6 (21→16 B wire iddiası) denetim
-  turunun kapsamı dışında — sırasıyla P1 ve doküman düzeltmesi olarak
-  duruyor.
+- F5 ve F6 (bu turun bulgusu) 2aad7ea denetim turunda kapatıldı
+  (yukarıda, "Kapatılanlar (2aad7ea denetim turu)").
 
 ## Kapatılanlar (snapshot turu)
 
@@ -133,8 +191,10 @@ kendi denetim raporundaki 5 bulgu (Bulgu 1–5) kapatıldı (aşağıda).
   tick başına grup başına snapshot'ı BİR KEZ kodlar, `freeze()`'ler ve
   `Bytes` (Arc) klonu olarak dağıtır; `OutSink`/kare tamponlaması kalktı.
   Proto: tekil `EntityState` → paketlenmiş `WorldSnapshot` (entity
-  kayıtları + monoton `sequence`); kayıt başına versiyon alanı düştü
-  (21→16 B) — sıralamayı `sequence` üstleniyor. Değişiklik yoksa yayın
+  kayıtları + monoton `sequence`); kayıt başına versiyon alanı düştü —
+  sıralamayı `sequence` üstleniyor. (Wire boyutu için ölçülmüş sayılar:
+  yukarıda "2aad7ea denetim turu" F6 maddesi + DESIGN §8; eski "21→16 B"
+  iddiası ölçümden geçmedi: aslı ~18 B → ~12 B.) Değişiklik yoksa yayın
   durur; yapılandırılabilir keepalive (varsayılan 1 Hz, `keepalive_hz`)
   önbellekli snapshot'ı yeniden gönderir (paket kaybeden istemci kalıcı
   bayat kalmaz). `RoomConfig.max_snapshot_bytes` aşımı uyarı loglanır

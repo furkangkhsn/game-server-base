@@ -183,11 +183,35 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     görünür ve uyarı **asla tetiklenmez** — gerçek 1/26 aç kalma
     ölçümü tam bu moddaydı ve ölçümde uyarı çıkmadı (denetim turu
     probe'u: 16 (A,B) çifti, her iki ziyaret sırası oluştu; bu moddaki
-    tüm çiftlerde uyarı 0 — ham çıktı raporda). O mod
-    oda tarafından yapısal olarak ayırt edilemez (sessizlik meşru —
-    yukarıdaki defter maddesi) ve yalnızca sözleşme metniyle korunur.
-    (ii) tek tick ihlal eden grup (join + leave aynı tick'te) `gone`
-    budamasıyla uyarıdan önce tablodan düşer.
+    tüm çiftlerde uyarı 0 — ham çıktı raporda). Bu "oda tarafından
+    yapısal olarak tespit edilemez" hükmü, 2aad7ea üstü denetim
+    turunda odanın her tick'te elindeki bilgi tek tek sayılarak yeniden
+    sınandı ve **doğrulandı**. Oda bir grup için yalnızca şunları
+    görür: (a) grup tablosundaki `GroupState` (son yayınlanan
+    snapshot baytları, bu tick'in gönderimi, tanı bayrakları — tümü
+    geçmiş gözlemlerin türevi), (b) üyelik kümesi (bağlantı
+    tablosundan her tick yeniden kurulan), (c) önceki tick'in durumu
+    (`GroupState` tick'ler arası yaşar), (d) `snapshot()`'ın dönüş
+    değeri (`bool`; `true` ise payload baytları). Aç kalan grup ile
+    **son yayınlanan snapshot'ından sonra içeriği gerçekten donan**
+    meşru grup — AOI'de grubun alanındaki tek hareketli entity o
+    andan sonra alanı terk etmiş ya da hareket durmuş; demo'da bu,
+    tek oyuncunun hedefine ulaşmasıyla gerçekleşen sıradan bir
+    senaryodur — odanın (a)–(d) gözlem serisine **bire bir aynı**
+    düşer: aynı üyelik, aynı join-tick payload'ı, ardından sonsuza
+    kadar `false`. Bu gözlem serisini alan her deterministik oda içi
+    test, ihlalde uyarı veriyorsa meşru senaryoda da yanlış alarm
+    verir; meşru senaryoda susuyorsa ihlali de göremez. Oda daha
+    derine bakamaz: payload gsb-core için opak bayttır (core oyun
+    mesajlarını decode etmez — core/oyun sınırı; örneğin `sequence`'ı
+    core'da okumak hem bu sınırı bozar hem de yetmez: bu modda yeni
+    payload hiç yayınlanmadığı için `sequence` de ilerlemez), dünya
+    `W` opak'tır, teslim onayı (ack) mekanizması yoktur, keepalive
+    yeniden gönderimi `last`'i klonlar (yeni bilgi taşımaz), üyelik de
+    join tick'inden beri sabittir. Dolayısıyla bu mod yalnızca
+    sözleşme metniyle (grup başına defter şartı, yukarıdaki defter
+    maddesi) korunur. (ii) tek tick ihlal eden grup (join + leave
+    aynı tick'te) `gone` budamasıyla uyarıdan önce tablodan düşer.
   - Bağlantı başına teslim: tek batch = [grubun snapshot'u (paylaşımlı
     `Bytes`)] + [private frame, eğer `RoomLogic::private` ürettiyse];
     tek `try_send`. Kanal doluysa batch atılır ve sayılır
@@ -302,6 +326,21 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 - `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı).
   Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
   başına **bir kez** çıkar, her tick değil.
+- **Ölçülen wire boyutu** (2aad7ea üstü denetim turu probe'u; gerçek
+  `RoomActor` + `DemoRoom` + kanallar, ham çıktı commit raporunda):
+  `EntityRecord` tipik **10 bayt** — 3 tag + 5 baytlık entity varint +
+  2 × 1 baytlık zigzag koordinat (±50 arenada `|v| ≤ 50` → 1 bayt;
+  koordinat 0 ise proto3 default'ı o alanı hiç kodlamaz → 8 baytlık
+  kayıt); snapshot içinde kayıt başına +2 bayt tag/uzunluk çerçevesi,
+  `WorldSnapshot` header'ı `sequence` alanıdır (tick < 128 iken 2
+  bayt). Ölçülen toplamlar: 1 entity = 14 B, 100 = 1196 B, 800 = 9544 B
+  (marjinal ~11,93 B/kayıt). Eski `sfixed32` + `version` kaydı aynı
+  prost ile 18 B idi — eski doküman iddiası "21→16 B" sayıların ikisinde
+  de yanlıştı (aslı ~18 → ~12). Bevy 0.19'da `Entity::to_bits()`'in alt
+  32 biti index'in bit tersidir: yeni dünyada 0xFFFFFFFE'den başlar ve
+  azalır → entity varint'i pratikte her zaman 5 bayt; 6 bayt ancak bir
+  slot'un generation'ı 8+ olduğunda (uzun ömürlü oda, çoklu re-join).
+  1400 baytlık eşik ~117 entity'de aşılır.
 
 Bu, 100k bağlantı hedefi için **doğru v1**'dir çünkü: (a) doğru ve
 basittir, (b) sıralı replay/garanti gerektirmez, (c) kodlama maliyeti
@@ -346,7 +385,7 @@ birlikte ele alınacak).
 | Kısıt | Neden | Yol |
 |---|---|---|
 | Yayın = tam snapshot (grup başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
-| Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz`; 0 ile kapatılabilir |
+| Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz` (tick hızını aşamaz: oda kendi tick hızından hızlı keepalive yapamaz; yüksek değer `KeepaliveRate` ile reddedilir); 0 ile kapatılabilir |
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |

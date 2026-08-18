@@ -189,6 +189,18 @@ where
                         }));
                         continue;
                     }
+                    // Keep-alive cannot run faster than the room's own tick:
+                    // the cadence would clamp to every step, the "silence
+                    // when unchanged" gain would be lost, and clients would
+                    // receive fewer keep-alives than configured. Reject the
+                    // config rather than start a silently degraded room.
+                    if config.keepalive_hz > 0.0 && config.keepalive_hz > config.tick_hz {
+                        let _ = reply.send(Err(CoreError::KeepaliveRate {
+                            keepalive: config.keepalive_hz,
+                            tick: config.tick_hz,
+                        }));
+                        continue;
+                    }
                     let (world, logic) = (self.factory)(id, &config);
                     let (control_tx, control_rx) = channel(config.control_capacity);
                     tokio::spawn(

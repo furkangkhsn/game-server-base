@@ -50,7 +50,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 30 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, e2e
+cargo test --workspace          # 32 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, e2e
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır

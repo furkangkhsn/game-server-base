@@ -99,6 +99,12 @@ pub struct RoomConfig {
     /// `tick_hz / keepalive_hz` steps each group re-sends its last cached
     /// snapshot, so a client that lost its last packet cannot stay stale
     /// forever. `<= 0` disables keep-alive.
+    ///
+    /// Must be `<= tick_hz`: the room cannot keep alive faster than it
+    /// ticks. The registry rejects a room with `keepalive_hz > tick_hz` at
+    /// creation ([`crate::error::CoreError::KeepaliveRate`]); direct
+    /// construction (library use) warns once and clamps the cadence to
+    /// every step, which defeats the silence gain.
     pub keepalive_hz: f64,
 }
 
@@ -307,6 +313,21 @@ where
         run_every: u64,
     ) -> Self {
         let keepalive_every = if config.keepalive_hz > 0.0 {
+            if config.keepalive_hz > config.tick_hz {
+                // The registry rejects this relationship at room creation;
+                // this warn covers direct construction (library use) that
+                // bypasses it, so the misconfiguration can never be silent:
+                // the cadence clamps to every step, and the "silence when
+                // unchanged" gain for this room is gone.
+                warn!(
+                    room = %config.id,
+                    keepalive_hz = config.keepalive_hz,
+                    tick_hz = config.tick_hz,
+                    "keepalive_hz exceeds tick_hz: keep-alive clamps to every \
+                     step (unchanged groups re-send on every step and the \
+                     silence gain is lost); set keepalive_hz <= tick_hz"
+                );
+            }
             Some(((config.tick_hz / config.keepalive_hz).round() as u64).max(1))
         } else {
             None
@@ -1477,6 +1498,139 @@ mod tests {
         }
 
         room.shutdown().await;
+    }
+
+    // -----------------------------------------------------------------
+    // F5: keep-alive rate above the room rate. The registry rejects such
+    // a config at room creation; direct construction (library use) must
+    // still never be silent: the constructor warns once naming both
+    // rates, and the cadence clamps to every step (the observable
+    // behavior: an unchanged group re-sends on *every* step).
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn keepalive_above_tick_warns_at_construction_and_clamps_to_every_step() {
+        // Thread-local subscriber (NOT the process-global default: other
+        // tests in this binary may run concurrently on other threads, and
+        // the never-emitted test owns the global slot).
+        let (warn_tx, mut warns) = mpsc::channel::<String>(64);
+        let (tick_tx, tick_rx) = broadcast::channel(64);
+        let (control, control_rx) = channel(64);
+        let (step_tx, mut steps) = mpsc::channel(64);
+
+        // Direct construction with keepalive_hz = 60 under a 30 Hz room —
+        // the misconfiguration the registry would have rejected.
+        let actor = tracing::subscriber::with_default(WarnCapture { tx: warn_tx.clone() }, || {
+            RoomActor::new(
+                RoomConfig {
+                    id: RoomId(25),
+                    keepalive_hz: 60.0,
+                    ..Default::default()
+                },
+                (),
+                Box::new(GroupLogic {
+                    conn_entity: HashMap::new(),
+                    next: 0,
+                    dirty: std::collections::HashSet::new(),
+                    step_no: 0,
+                    steps: step_tx,
+                }),
+                tick_rx,
+                control_rx,
+                1,
+            )
+        });
+        let handle = tokio::spawn(actor.run());
+        let t0 = Instant::now();
+
+        // The construction-time warn fired exactly once and names both
+        // rates (synchronous: the warn! runs inside the constructor).
+        let w = warns.try_recv().expect("misconfigured construction must warn");
+        assert!(
+            w.contains("keepalive_hz=60") && w.contains("tick_hz=30"),
+            "warn must name both rates: {w}"
+        );
+        assert!(
+            warns.try_recv().is_err(),
+            "the construction warn must fire exactly once: {w}"
+        );
+
+        // Clamped behavior: the join's own emission, then EVERY step is a
+        // keep-alive step (interval 1) re-sending the cached snapshot.
+        let (out_tx, mut a_rx) = mpsc::channel::<FrameBatch>(64);
+        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        control
+            .send(RoomControl::Join {
+                conn: ConnectionId(26),
+                out: out_tx,
+                reply: reply_tx,
+            })
+            .await
+            .expect("control alive");
+        for n in 1..=6u64 {
+            tick_tx
+                .send(TickInfo {
+                    tick: n,
+                    at: t0 + Duration::from_secs_f64(n as f64 / 30.0),
+                })
+                .expect("room subscriber alive");
+        }
+        let _ = reply_rx.await.expect("join reply dropped");
+        wait_steps(&mut steps, 6).await;
+
+        let got = drain_all(&mut a_rx).await;
+        assert_eq!(
+            got.len(),
+            6,
+            "join emission + 5 keep-alive re-sends (one per step, no \
+             silence at all): {got:?}"
+        );
+        for (i, batch) in got.iter().enumerate() {
+            assert_eq!(
+                batch_frames(batch),
+                vec![(0x7010, 1u64.to_le_bytes().to_vec())],
+                "step {i} must carry the cached snapshot (entity 1)"
+            );
+        }
+
+        drop(tick_tx); // ticker closed → the room exits cleanly
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("room did not exit on closed ticker")
+            .expect("room task panicked");
+
+        // No false positives: legitimate ratios must not warn. keep-alive
+        // == tick is exactly "one per step" (as configured); 1 Hz is the
+        // default setup.
+        for keepalive in [30.0, 1.0] {
+            let (_tick2, tick_rx2) = broadcast::channel(8);
+            let (_control2, control_rx2) = channel(8);
+            let (step2_tx, _step2_rx) = mpsc::channel::<u64>(8);
+            tracing::subscriber::with_default(WarnCapture { tx: warn_tx.clone() }, || {
+                let _actor2 = RoomActor::new(
+                    RoomConfig {
+                        id: RoomId(27),
+                        keepalive_hz: keepalive,
+                        ..Default::default()
+                    },
+                    (),
+                    Box::new(GroupLogic {
+                        conn_entity: HashMap::new(),
+                        next: 0,
+                        dirty: std::collections::HashSet::new(),
+                        step_no: 0,
+                        steps: step2_tx,
+                    }),
+                    tick_rx2,
+                    control_rx2,
+                    1,
+                );
+            });
+        }
+        assert!(
+            warns.try_recv().is_err(),
+            "keepalive_hz <= tick_hz must not warn"
+        );
     }
 
     // -----------------------------------------------------------------

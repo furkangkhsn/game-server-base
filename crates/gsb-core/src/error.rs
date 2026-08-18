@@ -18,6 +18,9 @@ pub enum CoreError {
     #[error("room tick rate {room} Hz does not divide the global tick rate {global} Hz")]
     TickRate { room: f64, global: f64 },
 
+    #[error("keep-alive rate {keepalive} Hz exceeds the room tick rate {tick} Hz: keepalive_hz must be <= tick_hz (a keep-alive faster than the tick would clamp to every step, and clients would receive fewer keep-alives than configured)")]
+    KeepaliveRate { keepalive: f64, tick: f64 },
+
     #[error("room shut down")]
     RoomGone,
 

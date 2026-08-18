@@ -332,3 +332,68 @@ async fn create_room_rejects_rate_that_does_not_divide_global() {
         .expect("registry did not shut down")
         .expect("registry task panicked");
 }
+
+#[tokio::test]
+async fn create_room_rejects_keepalive_above_tick_rate() {
+    let (tx, handle) = start_registry();
+
+    // keep-alive 120 Hz on a 60 Hz room (HZ): the room cannot keep alive
+    // faster than it ticks, and the old behavior (silent clamp to every
+    // step, killing the silence gain) must not happen — reject instead.
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+    tx.send(RegistryMsg::CreateRoom {
+        config: RoomConfig {
+            id: RoomId(21),
+            tick_hz: HZ,
+            keepalive_hz: 120.0,
+            ..Default::default()
+        },
+        reply: reply_tx,
+    })
+    .await
+    .unwrap();
+    let err = tokio::time::timeout(WAIT, reply_rx)
+        .await
+        .expect("timed out")
+        .expect("reply dropped")
+        .expect_err("keep-alive above the tick rate must be rejected");
+    assert!(matches!(
+        err,
+        gsb_core::error::CoreError::KeepaliveRate {
+            keepalive: 120.0,
+            tick: 60.0
+        }
+    ));
+
+    // The boundary and the usual case are accepted: keep-alive == tick is
+    // exactly "one keep-alive per step" (what was configured), keep-alive
+    // < tick is the default setup, and 0 disables.
+    for (id, keepalive) in [(RoomId(22), HZ), (RoomId(23), 1.0), (RoomId(24), 0.0)] {
+        let (reply_tx, reply_rx) =
+            tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+        tx.send(RegistryMsg::CreateRoom {
+            config: RoomConfig {
+                id,
+                tick_hz: HZ,
+                keepalive_hz: keepalive,
+                ..Default::default()
+            },
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(WAIT, reply_rx)
+            .await
+            .expect("timed out")
+            .expect("reply dropped")
+            .expect("keepalive_hz <= tick_hz must be accepted");
+    }
+
+    tx.send(RegistryMsg::Shutdown).await.unwrap();
+    drop(tx);
+    tokio::time::timeout(WAIT, handle)
+        .await
+        .expect("registry did not shut down")
+        .expect("registry task panicked");
+}

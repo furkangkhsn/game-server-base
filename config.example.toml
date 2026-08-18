@@ -41,4 +41,8 @@ max_snapshot_bytes = 1400
 # changed the room ships nothing — but each group re-sends its last cached
 # snapshot at this rate, so a client that lost its last packet cannot stay
 # stale forever. <= 0 disables. Default 1 Hz.
+#
+# Must be <= tick_hz: the room cannot keep alive faster than it ticks. A
+# higher value is rejected at room creation (KeepaliveRate); a keep-alive
+# clamped to every step would defeat the silence-when-unchanged gain.
 keepalive_hz = 1.0
