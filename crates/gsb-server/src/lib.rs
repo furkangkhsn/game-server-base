@@ -31,6 +31,60 @@ use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{RoomConfig, RoomLogic};
+
+/// The visibility strategy of the demo rooms (config-selectable; all run
+/// the SAME game — same components, movement, wire format — and differ
+/// only in how the world is partitioned into snapshot groups, see
+/// `docs/DESIGN.md` §8).
+///
+/// Each variant is a different `RoomLogic` group key, so each needs its
+/// own registry instantiation (a `RoomFactory` is generic over the group
+/// key — the pick happens at this config boundary, entirely on the
+/// server side; `gsb-core` stays generic and untouched).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visibility {
+    /// `GroupKey = ()`: everyone sees the whole world. The baseline
+    /// (per-connection bandwidth O(entities)); the comparison point all
+    /// other strategies are measured against.
+    All,
+    /// `GroupKey = Cell`: spatial AOI (3×3 cell block, see
+    /// [`gsb_game::aoi`]).
+    Spatial,
+    /// `GroupKey = Team`: team fog of war (2 groups, team vision; see
+    /// [`gsb_game::team`]).
+    Team,
+    /// `GroupKey = Sector`: per-map-segment PVS (static visibility table
+    /// over hand-authored convex sectors; see [`gsb_game::pvs`]).
+    Pvs,
+}
+
+impl Default for Visibility {
+    /// Default: `All` — the whole-world baseline. Rationale (see
+    /// `docs/ROADMAP.md`, visibility turn): (1) it is the backward-
+    /// compatible behavior of every existing config (previously
+    /// `aoi = false`); (2) it is the measurement baseline all restricted
+    /// strategies are compared against — a restricted default would make
+    /// the baseline opt-in; (3) for a new server author, "everyone sees
+    /// everything" is the least-surprising starting point: restricting
+    /// what clients can see is a *gameplay* decision and should be an
+    /// explicit choice, not a default.
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl std::fmt::Display for Visibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::All => "all",
+            Self::Spatial => "spatial",
+            Self::Team => "team",
+            Self::Pvs => "pvs",
+        };
+        f.write_str(s)
+    }
+}
 use gsb_net::tcp::TcpTransport;
 use gsb_net::transport::Transport;
 use gsb_protocol::MessageTable;
@@ -63,15 +117,16 @@ pub struct Config {
     /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
     /// lost its last snapshot must not stay stale forever). `<= 0` disables.
     pub keepalive_hz: f64,
-    /// Enable AOI (spatial group key) in the demo rooms. `false` = the
-    /// whole-world baseline (`DemoRoom`, `GroupKey = ()`); `true` = the
-    /// spatial path (`AoiRoom`, `GroupKey = Cell`) sized by
-    /// [`Self::aoi_cell_size`].
-    pub aoi: bool,
-    /// World units per AOI cell edge (used only when [`Self::aoi`] is set).
-    /// See `gsb_game::aoi` for the `max_snapshot_bytes` / density relation
-    /// and the measured break-even.
+    /// The visibility strategy of the demo rooms (see [`Visibility`]).
+    pub visibility: Visibility,
+    /// World units per AOI cell edge (used only when
+    /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
+    /// `max_snapshot_bytes` / density relation and the measured break-even.
     pub aoi_cell_size: f32,
+    /// World units an enemy must be within to be visible to a team (used
+    /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
+    /// the vision source model.
+    pub team_vision_radius: f32,
 }
 
 impl Default for Config {
@@ -87,8 +142,9 @@ impl Default for Config {
             conn_out: 256,
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
-            aoi: false,
+            visibility: Visibility::default(),
             aoi_cell_size: 20.0,
+            team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
         }
     }
 }
@@ -187,18 +243,44 @@ fn demo_room_factory() -> RoomFactory<World, ()> {
 /// The AOI room factory: an empty bevy `World` + an
 /// [`gsb_game::aoi::AoiRoom`] with the given `cell_size` (world units per
 /// cell edge). Group key is a spatial [`gsb_game::aoi::Cell`] — the
-/// AOI-**on** path: one snapshot per cell, shared by reference with the
+/// spatial path: one snapshot per cell, shared by reference with the
 /// cell's occupants. Note the `RoomFactory`'s group-key associated type
-/// differs from `demo_room_factory`'s (`Cell` vs `()`), so the two cannot be
-/// stored in one value — `start_inner` picks the factory at the config
-/// boundary. This is entirely on the game/server side; `gsb-core` stays
-/// generic over the group key and is untouched.
+/// differs from `demo_room_factory`'s (`Cell` vs `()`), so the strategies
+/// cannot be stored in one value — `start_inner` picks the factory at the
+/// config boundary. This is entirely on the game/server side; `gsb-core`
+/// stays generic over the group key and is untouched.
 fn aoi_room_factory(cell_size: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
     Arc::new(move |_id, _config| {
         (
             World::new(),
             Box::new(gsb_game::aoi::AoiRoom::new(cell_size))
                 as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
+        )
+    })
+}
+
+/// The team-fog room factory: an empty bevy `World` + a
+/// [`gsb_game::team::TeamRoom`] with the given `vision_radius`. Group key
+/// is [`gsb_game::team::Team`] (2 groups).
+fn team_room_factory(vision_radius: f32) -> RoomFactory<World, gsb_game::team::Team> {
+    Arc::new(move |_id, _config| {
+        (
+            World::new(),
+            Box::new(gsb_game::team::TeamRoom::new(vision_radius))
+                as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
+        )
+    })
+}
+
+/// The PVS room factory: an empty bevy `World` + a
+/// [`gsb_game::pvs::SectorRoom`] (the demo map is built into the room).
+/// Group key is [`gsb_game::pvs::Sector`].
+fn pvs_room_factory() -> RoomFactory<World, gsb_game::pvs::Sector> {
+    Arc::new(|_id, _config| {
+        (
+            World::new(),
+            Box::new(gsb_game::pvs::SectorRoom::new())
+                as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
         )
     })
 }
@@ -257,31 +339,60 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
-    // The factory (and hence the registry's group-key type) is chosen at this
-    // config boundary: AOI on → spatial `Cell` groups, off → `()`. The two
-    // arms are otherwise identical and both yield a `JoinHandle<()>`.
-    let _registry = if cfg.aoi {
-        tokio::spawn(
-            Registry::new(
-                reg_rx,
-                reg_tx.clone(),
-                aoi_room_factory(cfg.aoi_cell_size),
-                ticker.clone(),
-                metrics_tx.clone(),
+    // The factory (and hence the registry's group-key type) is chosen at
+    // this config boundary from the visibility strategy: each strategy is
+    // a different `RoomLogic` group key (`()`, `Cell`, `Team`, `Sector`),
+    // so the four arms are otherwise identical and each yields a
+    // `JoinHandle<()>`.
+    let _registry = match cfg.visibility {
+        Visibility::All => {
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    demo_room_factory(),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                )
+                .run(),
             )
-            .run(),
-        )
-    } else {
-        tokio::spawn(
-            Registry::new(
-                reg_rx,
-                reg_tx.clone(),
-                demo_room_factory(),
-                ticker.clone(),
-                metrics_tx.clone(),
+        }
+        Visibility::Spatial => {
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    aoi_room_factory(cfg.aoi_cell_size),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                )
+                .run(),
             )
-            .run(),
-        )
+        }
+        Visibility::Team => {
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    team_room_factory(cfg.team_vision_radius),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                )
+                .run(),
+            )
+        }
+        Visibility::Pvs => {
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    pvs_room_factory(),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                )
+                .run(),
+            )
+        }
     };
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may

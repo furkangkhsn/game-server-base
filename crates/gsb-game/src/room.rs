@@ -26,7 +26,7 @@
 //! the joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and
 //! the broadcast pass (everything else that is broadcastable, see
 //! below). Both sites go through **one minting point**,
-//! [`DemoRoom::next_serial`], which is the only caller of the
+//! [`crate::common::next_serial`], which is the only caller of the
 //! crate-private [`WireId::new`]: the counter's space is closed to
 //! everything else in the crate, and `WireId`'s private field plus the
 //! removed `Default` derive close it to every other crate as well.
@@ -78,15 +78,14 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, World, Without};
+use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
-use gsb_ecs::{SystemCtx, SystemRunner};
+use gsb_ecs::SystemRunner;
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
+use crate::components::{Position, WireId};
 use crate::op;
-use crate::systems::MovementSystem;
 
 /// The demo room: one moving entity per player, free 2D movement.
 pub struct DemoRoom {
@@ -94,8 +93,8 @@ pub struct DemoRoom {
     conn_entity: HashMap<ConnectionId, Entity>,
     /// The room's wire-identity counter (see module docs, "Wire identity").
     /// Monotonic; a value is never re-used within the room's lifetime. The
-    /// **only** writer is [`DemoRoom::next_serial`] — the single minting
-    /// point for every [`WireId`] this room ever stamps.
+    /// **only** writer is [`crate::common::next_serial`] — the single
+    /// minting point for every [`WireId`] this room ever stamps.
     next_wire_id: u64,
     /// Wire content of the last emitted snapshot of the room's single
     /// group, as `(wire id → (x, y))` (truncated to the wire's
@@ -107,6 +106,9 @@ pub struct DemoRoom {
     /// requires the ledger to be keyed by group (see module docs and
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
+    /// Entity records encoded during the most recent broadcast phase
+    /// (polled by the room via `RoomLogic::encoded_records`).
+    encoded: u64,
 }
 
 impl Default for DemoRoom {
@@ -117,27 +119,13 @@ impl Default for DemoRoom {
 
 impl DemoRoom {
     pub fn new() -> Self {
-        let mut runner = SystemRunner::new();
-        runner.add(MovementSystem);
         Self {
-            runner,
+            runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
             last: HashMap::new(),
+            encoded: 0,
         }
-    }
-
-    /// The single minting point for wire identities (module docs, "Wire
-    /// identity"): advances the room's one monotonic counter and wraps the
-    /// value in a [`WireId`]. Both assignment sites — `on_join` (player
-    /// entities) and the broadcast pass's orphan stamping — go through
-    /// this function; no other code may construct a [`WireId`] (the field
-    /// is private, `WireId::new` is crate-private, and `WireId` has no
-    /// `Default`), so the counter stays the identity invariant's only
-    /// source.
-    fn next_serial(&mut self) -> WireId {
-        self.next_wire_id += 1;
-        WireId::new(self.next_wire_id)
     }
 }
 
@@ -185,21 +173,12 @@ impl RoomLogic<World> for DemoRoom {
             // with a `Position` but no `WireId` — spawned outside
             // `on_join` (bullets, NPCs, traps, …) — are stamped with the
             // next serial here, so the broadcast set is exactly "has a
-            // `Position`" and no entity can be silently invisible. Two
-            // passes: the orphan query holds the world borrow, so collect
-            // the entities first, then write (the same pattern as
-            // `MovementSystem`); the stamp is idempotent, and the orphan
-            // query matches nothing in steady state. The full query below
-            // runs *after* the stamps, so it sees every broadcastable
-            // entity exactly once (stamped and pre-stamped alike).
-            let orphans: Vec<Entity> = world
-                .query_filtered::<(Entity, &Position), Without<WireId>>()
-                .iter(world)
-                .map(|(entity, _)| entity)
-                .collect();
-            for entity in orphans {
-                world.entity_mut(entity).insert(self.next_serial());
-            }
+            // `Position`" and no entity can be silently invisible (see
+            // `common::stamp_orphans` for the two-pass pattern and
+            // idempotence). The full query below runs *after* the
+            // stamps, so it sees every broadcastable entity exactly once
+            // (stamped and pre-stamped alike).
+            crate::common::stamp_orphans(&mut self.next_wire_id, world);
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
                 current.push((wire_id.get(), pos.x as i32, pos.y as i32));
@@ -243,66 +222,37 @@ impl RoomLogic<World> for DemoRoom {
         for (entity, x, y) in &current {
             self.last.insert(*entity, (*x, *y));
         }
+        self.encoded += current.len() as u64;
         true
     }
 
+    fn encoded_records(&mut self) -> u64 {
+        let n = self.encoded;
+        self.encoded = 0;
+        n
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        let (x, y) = spawn_pos(conn);
-        // Hand out the next wire identity through the room's single minting
-        // point (monotonic; never re-used within the room's lifetime — see
-        // module docs, "Wire identity") and stamp it onto the entity. The
-        // same value is returned to the joiner in `JOIN_ROOM_RESULT`, so
-        // both paths share one space.
-        let wire = self.next_serial();
-        let entity = world
-            .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
-            .id();
-        self.conn_entity.insert(conn, entity);
+        // Shared spawn path (`common::on_join`): deterministic spawn point,
+        // fresh wire identity through the room's single minting point,
+        // connection→entity table update. The same value is returned to
+        // the joiner in `JOIN_ROOM_RESULT`, so both paths share one space.
         // No spawn event: membership is expressed by presence in the next
         // snapshot, which now includes the new entity (the join happened in
         // the control phase, before this tick's broadcast).
-        wire.get()
+        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        // No remove event: the entity simply drops out of the next
-        // snapshot. (The room's stale-leave guard ensures a late leave of
-        // a re-joined connection cannot despawn the new entity.)
-        if let Some(entity) = self.conn_entity.remove(&conn)
-            && world.get_entity(entity).is_ok()
-        {
-            world.despawn(entity);
-        }
+        crate::common::on_leave(&mut self.conn_entity, world, conn)
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        for action in actions.drain(..) {
-            if action.op != op::MOVE_TO {
-                continue;
-            }
-            let Ok(msg) = <crate::game::MoveTo as Message>::decode(&action.payload[..]) else {
-                tracing::warn!(?action.op, "undecodable MOVE_TO payload ignored");
-                continue;
-            };
-            let Some(entity) = self.conn_entity.get(&action.conn).copied() else {
-                continue; // not in a room (stale action)
-            };
-            if world.get_entity(entity).is_err() {
-                continue; // entity already gone
-            }
-            world.entity_mut(entity).insert(MoveTarget {
-                x: msg.x as f32,
-                y: msg.y as f32,
-            });
-        }
+        crate::common::ingest(&self.conn_entity, world, actions)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        let sys_ctx = SystemCtx {
-            tick: ctx.tick,
-            dt: ctx.dt.as_secs_f32(),
-        };
-        self.runner.run_all(world, &sys_ctx);
+        crate::common::run_systems(&mut self.runner, world, ctx);
     }
 }
 

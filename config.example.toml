@@ -46,3 +46,21 @@ max_snapshot_bytes = 1400
 # higher value is rejected at room creation (KeepaliveRate); a keep-alive
 # clamped to every step would defeat the silence-when-unchanged gain.
 keepalive_hz = 1.0
+
+# Visibility strategy of the demo rooms: "all" | "spatial" | "team" | "pvs".
+# All four run the SAME game (same components, movement, wire format); only
+# the snapshot grouping (visibility) differs:
+#   all     - GroupKey = (): everyone sees the whole world (baseline)
+#   spatial - GroupKey = Cell: spatial AOI, 3x3 cell block (see aoi_cell_size)
+#   team    - GroupKey = Team: team fog of war, 2 groups (see team_vision_radius)
+#   pvs     - GroupKey = Sector: per-map-segment PVS, static visibility table
+# Default "all" (backward compatible; restricted visibility is an explicit
+# gameplay choice). See docs/DESIGN.md §8 and docs/ROADMAP.md.
+visibility = "all"
+
+# World units per AOI cell edge (used only when visibility = "spatial").
+aoi_cell_size = 20.0
+
+# World units an enemy must be within to be visible to a team
+# (used only when visibility = "team").
+team_vision_radius = 25.0

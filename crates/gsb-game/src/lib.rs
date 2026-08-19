@@ -8,12 +8,33 @@
 //! Everything here is intentionally small and replaceable: swap the
 //! components, systems, and `RoomLogic` implementation for a real MOBA or
 //! MMORPG without touching the core, net, protocol, or ecs crates.
+//!
+//! The demo game has four interchangeable `RoomLogic` rooms — the same
+//! components, the same movement system, the same wire format, and only
+//! the *visibility strategy* differs (selected in `gsb-server`'s config,
+//! see `docs/DESIGN.md` §8):
+//!
+//! - [`room::DemoRoom`] — `GroupKey = ()`: everyone sees the whole world
+//!   (the baseline, no grouping).
+//! - [`aoi::AoiRoom`] — `GroupKey = Cell`: spatial AOI (3×3 cell block).
+//! - [`team::TeamRoom`] — `GroupKey = Team`: team fog of war (2 groups;
+//!   `group_of` looks at game state, not position).
+//! - [`pvs::SectorRoom`] — `GroupKey = Sector`: per-map-segment PVS
+//!   (static visibility table over hand-authored convex sectors).
+//!
+//! Everything the rooms share that is *not* a visibility-strategy
+//! decision (identity minting, the connection table, input ingestion, the
+//! system run, orphan stamping) lives in [`common`], once.
 
 pub mod aoi;
 pub mod components;
 pub mod op;
+pub mod pvs;
 pub mod room;
 pub mod systems;
+pub mod team;
+
+mod common;
 
 /// Generated game protocol messages (package `gsb.game`, file `game.proto`).
 pub mod game {

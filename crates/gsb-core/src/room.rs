@@ -262,6 +262,23 @@ pub trait RoomLogic<W>: Send {
 
     /// Called when the room shuts down (world is dropped right after).
     fn on_shutdown(&mut self) {}
+
+    /// The number of entity records the logic encoded during the most
+    /// recent broadcast phase (summed over all groups). The room polls
+    /// this exactly **once per step, immediately after the broadcast
+    /// phase** (it is the broadcast phase's own metric: the payload is
+    /// opaque to the core, so the record count can only come from the
+    /// logic that encoded it).
+    ///
+    /// This is the *overlap* measurement the load test reports: divided by
+    /// the broadcastable entity count it says how many times the same
+    /// entity was encoded into how many groups' snapshots in one tick
+    /// (1.0 for one-group rooms; up to the block overlap for cell AOI; the
+    /// visibility-table out-degree for PVS). Default: `0` (untracked) —
+    /// the core's own test logics need not implement it.
+    fn encoded_records(&mut self) -> u64 {
+        0
+    }
 }
 
 struct RoomConn<G> {
@@ -323,6 +340,13 @@ struct RoomCounters {
     snap_bytes_max: u32,
     /// Snapshots whose payload exceeded `max_snapshot_bytes`, cumulative.
     snap_overflows: u64,
+    /// Entity records encoded (summed over all groups, via
+    /// [`RoomLogic::encoded_records`]), cumulative. Together with the
+    /// broadcastable entity count this is the *overlap multiplier*: how
+    /// many times the same entity was encoded into group snapshots per
+    /// tick (1.0 for one-group rooms, up to the block overlap for cell
+    /// AOI, the visibility-table out-degree for PVS).
+    snap_records: u64,
     /// Metric samples dropped on a full (bounded) metrics channel,
     /// cumulative.
     metrics_dropped: u64,
@@ -633,6 +657,7 @@ where
             snap_bytes: self.m.snap_bytes,
             snap_bytes_max: self.m.snap_bytes_max,
             snap_overflows: self.m.snap_overflows,
+            snap_records: self.m.snap_records,
             shipped_bytes: self.m.shipped_bytes,
             shipped_frames: self.m.shipped_frames,
             private_frames: self.m.private_frames,
@@ -765,6 +790,13 @@ where
                 st.sent = st.last.clone();
             }
         }
+
+        // 4c'. Overlap metric (see `RoomCounters::snap_records`): the
+        //      payload is opaque to the core, so the number of encoded
+        //      records can only come from the logic — polled exactly once
+        //      per step, right after the phase that produced them.
+        self.m.snap_records =
+            self.m.snap_records.saturating_add(self.logic.encoded_records());
 
         // 4d. Per-connection fan-out: one batch per connection — the
         //     group's shared snapshot (Bytes refcount, never copied) plus

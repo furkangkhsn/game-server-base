@@ -27,7 +27,16 @@ aşımı okunur; örnek gönderim temposu rapor temposuna bağlandı + oran
 örnek aralığı üzerinden; metrik kanalı bounded + `try_send`) ve **AOI**
 kuruldu — tek odada bant genişliği O(entity) → O(görünürlük kümesi);
 ana sorunun cevabı: `gsb-game` içinde, `gsb-core`'e **dokunmadan**
-(500/1000/2000 + hücre boyutu taramasıyla ölçüldü, aşağıda).
+(500/1000/2000 + hücre boyutu taramasıyla ölçüldü, aşağıda); **görünürlük
+artık sunucu seçimi** — aynı oyun üzerinde `all` / `spatial` (AOI) /
+`team` (takım sisli) / `pvs` (sektör PVS) stratejileri, `Config.visibility`
+ile seçilir, `Visibility` trait'i gerekmedi (seam = `RoomLogic`), ortak
+oda muhasebesi `gsb_game::common`'de tek kopya; D1: p50 adım bütçesi
+10 000'e kadar korunuyor (kuyruk 6k+ aşıyor, 10k'da in-proc istemci doyuğu),
+D2: c5 %82 / PVS %49 bant tasarrufu, team bu yük geometrisinde sıfır
+kazanc–2× kodlama, D3: overlap 1,0–8,28 ölçülüp "birim başına tek
+kodlama" tasarımı eşik altında bırakıldı (aşağıda, "Kapatılanlar
+(görünürlük stratejileri turu)"). Test 44 → 58.
 44/44 test yeşil (+1 var olan `#[ignore]`'li gsb-lint doctest).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek henüz ölçülmedi;
 100/500/1000/2000 turu aşağıda), **robustluk** ve **güvenlik**
@@ -734,6 +743,258 @@ mi?**" → **evet** (aşağıda).
      sıkışsa (yüksek tick hızı / dolu oda) 9× kodlama küçük G'de bütçeyi
      aşabilir.
 
+## Kapatılanlar (görünürlük stratejileri turu)
+
+Bu tur "görünürlük"ü sunucu seçimi yapar: aynı oyun (aynı component'ler,
+aynı hareket sistemi, aynı wire format) üzerinde **üç değiştirilebilir
+görünürlük stratejisi** + taban (`all`), hepsi aynı `RoomLogic` seam'i
+üzerinde; strateji `Config.visibility` ile seçilir (sunucu + `gsb-loadgen`).
+Ayrıca: soyutlama kararı (C) ve D1–D3 yük ölçümleri. Test: 44 → **58**
+(+14: 6 team + 6 pvs mantık testi + 2 actor-level; hiçbiri `#[ignore]` değil,
+eski 44'ün hiçbiri değiştirilmedi).
+
+- [x] **A1 — Mekansal/MMO (`AoiRoom`, `GroupKey=Cell`)** — bu turda
+  davranışsal değişim yok; karşılaştırma tabanı olarak korundu (kod
+  yalnızca C maddesiyle ortaklaştırıldı, bkz. aşağı).
+
+- [x] **A2 — Takım sisli / MOBA (`TeamRoom`, `GroupKey=Team`, 2 grup)** —
+  Bir takımın paketinde düşman entity, o takımın **görevli kaynaklarından
+  en az birinin menzilindeyse** yer alır. Seçilen çözüm: takımlar `conn.id`
+  paritesinden gelir (`team_of`); **grup anahtarı world okumaz** (konum
+  bazlı gruplama `group_of`'u world'a bağlardı — group-snapshot'ın
+  "grup = bağlantı sınıfı" sözleşmesiyle çelişir); menzil
+  `team_vision_radius` konfigüredir (vars. 25.0). Görevli kaynak modeli:
+  **her oyuncu entity'si eşit yarıçaplı görevli kaynağıdır**; sahibi olmayan
+  (orphan/stamp'lı) entity **her iki takıma da** yayılır (yayınlanabilir
+  küme = "Position taşıyor" değişmezini bozmaz). Aynı tick'te **tek kodlama
+  / takım**: 2 snapshot, `Arc` ref'le paylaşım — 2 takımın paketi
+  aynı-tick üretimi olduğundan istemci taraflı asimetri testi anlamlıdır.
+  Kapanan hata sınıfı: "görünürlük client'a emanet" — hile testi
+  (`tests/team.rs`): B takımı üyesi (10,0)'deyken A takımı üyesinin (40,0)
+  snapshot'ı **hiç** düşman wire-id'ini taşımazken, B'nin snapshot'ı
+  taşır (aynı tick, aynı dünya); entity görevliye girince **aynı wire id**
+  ile var olur, çıkınca snapshot'tan düşer (istemci "kayboldu" okur —
+  self-contained sözleşme; delta/öncül-olay yok). Elenen: (a) **ward/sahipli
+  görevli componenti** — spec'teki "unit ve/veya ward" bu turun "aynı
+  component seti" çerçevesinde yeni component gerektirir; `VisionSource {
+  radius, owner_team? }` gibi bir component stratejiyi ifade edebilirdi ama
+  tur çerçevesi (yeni oyun mantığı eklememek) bunu dışarıda tuttu — eşit
+  yarıçaplı oyuncu-kaynak modeli aynı testleri geçirir, ward desteği
+  component eklemekle geri getirilebilir (sözleşme değişmez: "kaynak
+  menzilinde"); (b) **bağlantı başına grup** (`GroupKey=ConnectionId`) —
+  her istemcinin menzili farklı olsa bile takım sisli menzil
+  **takım-bazlı** olduğundan bağlantı başına grup hem 2 grubu bozar hem
+  grup başına paylaşılan baytı (asıl kazanç) sıfırlar; (c) **konum bazlı
+  takım** — takım bir oyun durumudur, konumdan türetilmez (harita yarısı
+  takımla takım sisli olmaz).
+
+- [x] **A3 — PVS/FPS (`SectorRoom`, `GroupKey=Sector`)** — Harita elle
+  yazılmış **4 kavisel (convex) sektör** + **statik görünürlük tablosu**
+  (`VISIBLE_FROM[S]`: bit mask'ı; A↔B arası duvar, kuzey bandı C/D ile
+  açık); `sector_of` = kavisel test (cross product işaretleri, CCW
+  çokgen); harita dışı konum `OUT` catch-all sektörü (yayınlanabilir küme
+  değişmezini harita sınırı bozamaz). Grup başına snapshot = görünürlük
+  tablosundaki sektörlerin bucket birleşimi; hücre geçişi `group_of`
+  yeniden değerlendirmesiyle otomatik, **wire id değişmez** (test kilitli:
+  `tests/pvs.rs`). Kapanan hata sınıfı: "mesafe testi görünürlüğü
+  kanıtlamaz" — 3 birim aradaki iki entity **bağlantısız** sektörlerde
+  birbirini GÖRMEZ (A(-1,0) ile B(2,0): 3 birim, duvar → ayrık snapshot'lar);
+  bağlantılı sektörler (A↔C) görür; sektör geçişinde aynı id taşınır.
+  Elenen: (a) **BSP/oklüzyon derleyicisi** — spec açık: "BSP derleyicisi
+  yok"; elle convex sektör + tablo bu arenada (100×100, 4 bölge) derleyici
+  maliyetini gerektirmez, tablo statik olduğu için tick'te sıfır maliyet;
+  (b) **tick başına ray-cast / mesafe testi** — O(entity²) ışın atımı ve
+  "3 birim mesafe = görünür" yanılgısını (hata sınıfının kendisi) üretir;
+  duvar/koşu koridoru ayrımı mesafede kodlanamaz; (c) **sektör = AABB
+  kesişimi** — kavisel olmayan bölgede "görünürlük ⊆ mesafe" garantisi
+  bozulur (AABB köşeleri birbirini görmeyen bölgeyi görünürlük alanına
+  sokar); convex + tablo, "tablodaki sektör kümesi = kesin görünürlük
+  alanı"ı elle doğrulanabilir yapar.
+
+- [x] **B — Strateji seçimi (sunucu config + loadgen) + varsayılan** —
+  `Config.visibility: all | spatial | team | pvs` (serde lowercase;
+  `config.example.toml` belgeli); `gsb-loadgen --visibility …` aynı seçimi
+  yapıyor (`--cell-size`, `--vision-radius` strateji parametreleri).
+  **Varsayılan: `all`.** Gerekçe (üçlü): (1) **geri uyumluluk** — önceki
+  tüm yük ölçümleri `all` (eski `aoi=false` taban) üzerinden alındı;
+  varsayılan değiştirse eski sayılarla karşılaştırma kırılır; (2) **ölçüm
+  tabanı** — `all` en kötü durum (en çok kodlama + bant) olduğundan her
+  stratejinin kazancı/bedeli onun karşısında net okunur; (3) **en az
+  sürpriz** — görünürlük kısıtlama bir **oyun kararıdır** (takım sisli
+  istemeyen bir MMO, PVS istemeyen bir MOBA); sessizce kısıtlanmış
+  görünürlük bug olarak algılanır, açık seçim ise özellik. Elenen:
+  `spatial` varsayılanı (en yaygın MMO profili argümanı — ama 9× kodlama
+  maliyetini varsayılan yapar ve önceki taban verisiyle kesintisiz
+  karşılaştırmayı bozar; hücre boyutu yanlış seçilirse net kayıp — ölçülen,
+  bkz. D2).
+
+- [x] **C — Soyutlama kararı: `Visibility` trait'i GEREK YOK; `RoomLogic`
+  yeterli seam. Ortak mekanik `gsb_game::common`'e taşındı.** Karar,
+  üç strateji yazıldıktan sonra koddan:
+  - **Trait gerekmez** çünkü stratejiler arasındaki gerçek fark,
+    `RoomLogic`'in zaten ayırdığı iki şeydir — `GroupKey` tipi +
+    `group_of`/`snapshot` içeriği. Bir `Visibility` trait'i aynı farkı
+    yeniden soyutlar; üstelik stratejilerin içerik hesapları
+    (küme birleşimi / mesafe önelemi / statik tablo) ortak bir imzaya
+    sığacak kadar da benzer değildir — trait'in arkasında duracak ortak
+    bir uygulama yoktur. Kanıt: bu turda 2 yeni strateji + 1 yeni metrik
+    metodu eklendi, `gsb-core`'ün trait **şekli değişmedi** (tek core
+    değişimi ekleyici: `RoomLogic::encoded_records()` default metodu +
+    `snap_records` sayacı — D3 ölçümü için; core'un test logic'leri
+    default 0 ile davranışsal değişim yok).
+  - **Ortak olan gerçek şey** strateji değil, oda **muhasebesi**: runner
+    kurulumu, `conn_entity` tablosu, wire sayaç + minting, `on_join` /
+    `on_leave` / `ingest` (MOVE_TO decode + guard'lar), sistem yürütme,
+    orphan stamp'leme — 4 odada **birebir aynı ~45 satır** (4 kopya).
+    Bunlar `gsb_game::common` modülüne tek kopya olarak taşındı (traitsiz
+    düz fonksiyonlar; odalar kendi alanlarını korur — inline testler
+    `room.conn_entity` vb.'ye erişiyor, 44 eski test satırı bile
+    değişmedi). `common::next_serial` artık `WireId::new`'ün **tek
+    çağrıcısı** (mint noktası tek yerde; `components.rs` + `room.rs`
+    doküman referansları güncellendi). Bir 5. stratejinin maliyeti ~250 →
+    ~80 satıra düştü (sadece `GroupKey`, `group_of`, `snapshot` + içerik
+    hesabı).
+  - Elenen: (a) `Visibility` trait'i (yukarıda); (b) `RoomBook` struct'ı
+    (alanları sahiplenen ortak struct) — odaların alan adlarını değiştirir,
+    44 eski testin içindeki `room.conn_entity` erişimini kırardı; test
+    silme/değiştirme yasak olduğundan fonksiyon-over-alan deseni seçildi;
+    (c) "hiçbir şey yapma" — 4 birebir kopya gerçek kod; "spekülatif değil"
+    kriteri bu duruma tam uyar (dört kopya mevcut, beşincisi gelebilir).
+
+- [x] **D1 — Mekansal AOI break-even (ölçüm, tahmin değil)** — 30 Hz,
+  release, in-proc (istemciler sunucuyla CPU paylaşır → muhafazakâr
+  alt sınır), hücre 5, stagger 1 ms, 15 s; makine: AMD Ryzen 9 7950X
+  16C/32T, 124 GB RAM, rustc 1.95.0; masaüstü paylaşımlı (arka plan
+  ~2-3 çekirdek: argos/thunderbird vb. — 1 dk loadavg ~9-11/32).
+
+  | N | adım p50 (µs) | adım max (µs) | bütçe aşımı | drop | late tick max | tepe payload (B) | aşım (1400 B) | grup | out/conn (bps) |
+  |---|--------------|---------------|-------------|------|---------------|------------------|---------------|------|----------------|
+  | 2 000 | 6 250 | 21 737 | %0 | 0 | 42 µs | 11 372 | 12 895 | 26 | 80 991 |
+  | 4 000 | 12 500 | 27 040 | %0 | 0 | 2 010 µs | 19 645 | 25 127 | 35 | 127 464 |
+  | 6 000 | 25 000 | 55 565 | %3,8 | 0 | 42 290 µs | 25 136 | 32 033 | 48 | 146 978 |
+  | 8 000 | 25 000 | 60 305 | %12,2 | 3 869 | 271 745 µs | 26 892 | 37 090 | 76 | 148 088 |
+  | 10 000 | 12 500 (bimodal) | 86 862 | %18,9 | 54 263 | 1 343 687 µs | 23 570 | 39 370 | –* | 108 267 |
+
+  *n=10 000 son raporu istemcilerin ayrılma (drain) sırasında örneklenmiş
+  (groups=1, members=1); tüm istemciler join etmiş (connected=joined=10 000).
+
+  **Cevap (ölçülen, tahmin yok):** p50 adım süresi **N≤10 000'de 33,3 ms
+  bütçeye ulaşmıyor** (10 000'de p50 12,5 ms — bimodal: çoğu adım hızlı,
+  kuyruk yavaş). Önceki turun ~10-15k **tahmini** böylece "bütçe p50'de
+  10k'ın üzerinde" olarak daralıyor; ama p50 tek doğru gösterge değil:
+  **bütçe aşan adım oranı 6k'da %3,8 → 10k'da %18,9**, max 86,9 ms (bütçenin
+  2,6×), ve 10 000'de **54 263 batch drop + 1,34 s late tick** — oda
+  actor'ünün ticker'dan geride kalması (catch-up adım patması; ticker'ın
+  kendisi burst yapmaz — `ticker.rs` resync eder, ölçülen hz=42,5
+  room-yana catch-up'un izi). 2k-8k arası 1 dk loadavg ~9-11/32 olduğuna
+  göre makine bütünü doymuş değil; doyan parça **in-proc istemci decode
+  yolu** (10 000 istemci × ~20 KB/snapshot × 30 Hz ≈ 6 GB/s decode, 32
+  çekirdeğe yayılmış) — fan-out kanalları dolar, oda drop sayar. Yani
+  ölçülen duvar "oda adımları bütçeyi aşıyor" değil: **p50 bütçesi 10k'ya
+  kadar korunan, kuyruk (p99/max) 6k+ da aşan, ve 10k'da in-proc istemci
+  katmanının doyuğuyla karışan** bir rejim. Temiz oda-CPU duvarını
+  ayırmak için ayrı prosesli istemci gerekir (P2 — bu turda yapılmadı;
+  in-proc sayısı muhafazakâr alt sınırdır: istemci CPU'su sunucu adımıyla
+  yarışıyor). (loadavg monitörünün 40×3 s penceresi 10 000 koşusunun
+  başında bitti — 10 000 için 1 dk loadavg örneği yok; yukarıdaki 9-11
+  değeri 2k-8k penceresine aittir.)
+
+- [x] **D2 — Üç strateji, aynı yük (N=1 000, 15 s, stagger 1 ms,
+  move 150 ms, MTU 1400 B)** — aynı `gsb-loadgen`, aynı hareket profili,
+  aynı makine (profil: yarıçap-40 **hedef** halkası, 4 rad/sn → hedef 160
+  u/sn; entity 10 u/sn → entity'ler hedefin **peşinde merkez bandında**
+  kümelenir; ölçülen ayak izi: PVS'te sadece A+B sektörleri dolu, c5'te
+  ~16 hücre, max hücre 118 üye). Bu geometri yorum için kritik:
+
+  | strateji | out/conn (bps) | sunucu out | adım p50 (µs) | max (µs) | bütçe aşımı | tepe payload (B) | aşım | rec/tick | overlap_x |
+  |----------|----------------|-----------|---------------|----------|-------------|------------------|------|----------|-----------|
+  | `all` | 247 813 | 247,8 Mbit/s | 3 126 | 8 165 | %0 | 8 809 | 445 | 1 000,0 | 1,00 |
+  | `spatial` c20 | 180 493 | 180,5 Mbit/s | 3 126 | 7 962 | %0 | 8 678 | 4 521 | 5 496,0 | 5,50 |
+  | `spatial` c5 | 44 845 | 44,8 Mbit/s | 3 126 | 9 392 | %0 | 5 993 | 5 118 | 8 282,3 | 8,28 |
+  | `team` | 247 825 | 247,8 Mbit/s | 1 563 | 4 368 | %0 | 8 819 | 890 | 2 000,0 | 2,00 |
+  | `pvs` | 126 002 | 126,0 Mbit/s | 1 563 | 4 481 | %0 | 5 694 | 1 333 | 1 367,5 | 1,37 |
+
+  **Yorum (ölçüm, varsayım değil):**
+  1. **Bant (stratejinin asli amacı):** c5 `all`'e göre **%82** az
+     (247,8→44,8 kbps/conn) — önceki turun c5 @1000 sayısıyla (39,7 M)
+     tutarlı; PVS **%49** az (126,0 kbps/conn); c20 %27 az.
+  2. **Team, bu geometride sıfır bant kazancı:** 25 birimlik menzil +
+     merkez bandı kümelenmesi → her iki takım da haritanın tümünü görüyor
+     (rec/tick=2 000 = tam dünya × 2; out/conn `all` ile birebir aynı
+     247,8 kbps). Bu bir strateji zayıflığı değil, **yük profili özelliği**:
+     gerçek MOBA arenasında (geniş harita, seyrek görevli) aynı kod
+     düşmanların çoğunu gizler; burada 1 000 entity'nin ~%50'si her
+     takımdan her görevli menzilinde. Ölçüm dürüstçe bunu gösterir: team
+     sisli, yoğun merkezî kümelenmede bedelini (2× kodlama) öder,
+     kazancı sıfırdır.
+  3. **PVS, bu geometride %49 bant + 1,37× kodlama:** kümelenme güney
+     bandında (A/B) olduğundan her oyuncu dünyanın ~yarısını görüyor
+     (A→A∪C, B→B∪D); kuzey sektörleri (C/D) boş. Kuzeyi dolduran bir yük
+     PVS kazancını değiştirir (tablo statik; davranış kodda değil ölçümde
+     değişir).
+  4. **Adım süresi:** 1 000'de beş strateji de bütçenin %5'inde (p50
+     1,5-3 ms; histogram kuantumlu — 1 563/3 126 µs iki komşu kutu);
+     strateji seçimi bu ölçekte CPU'da görünmez, bantta görünür. CPU
+     farkı D1'de (N ölçeğinde) beliriyor.
+
+- [x] **D3 — Overlap ölçümü + "birim başına tek kodlama" kararı:
+  UYGULANMADI (ölçüm + eşik ile gerekçeli)** — `overlap_x` =
+  tick başına kodlanan kayıt / üye sayısı (`RoomLogic::encoded_records`
+  ile ölçüldü, bkz. C maddesi): `all` 1,00 · PVS 1,37 · team 2,00 ·
+  c20 5,50 · c5 8,28. Önerilen tasarım: atomik parça (hücre/sektör) başına
+  **bir kez** kodla, istemci gerekli parçaların frame'lerine
+  "abone" olsun (batch içi k küçük frame; boş parça da paketsiz kalamaz —
+  self-contained union'un eksiksizliği için). Takas: kodlama
+  overlap_x → 1,0'a iner; karşılığında istemci tick başına **k frame**
+  taşır (spatial c5: k=9 hücre; PVS: k=2-3; team: k≈N/2 — pratik
+  sonsuz). **Eşik:** tasarımı uygulamak, kodlama tasarrufunun istemci
+  başına k ek frame'in maliyetini aştığı durumda anlamlı:
+  `overlap_x − 1 ≥ k · (c_frame/c_enc)`. Ölçülenler: (a) N=1 000'de
+  kodlama hacminin 1 000→8 282 kayıt/tick (8,3×) aralığındaki tüm farkın
+  adım ortalamasına etkisi **~%11** (1 891→2 104 µs) → bu ölçekte
+  marjinal kodlanan kayda düşen pay ≪ 1 frame fan-out payı (fan-out,
+  D1'de 8-10k'ta drop üretici olan yol); (b) D1: doyan eksen **istemci
+  başına iş** (drop + late tick), kodlama µs'leri değil. Eşik sayılarla:
+  c5 için `overlap_x ≥ 1 + 9·(c_frame/c_enc)`; ölçüm
+  `c_frame ≥ c_enc`'e uyumlu (fan-out yolu doyan yol) → eşik ≈ 10;
+  ölçülen 8,28 **eşiğin altında**. PVS (k=2-3): eşik ≈ 3-4, ölçülen 1,37 —
+  çok altında. Team (k≈N/2): eşik ≈ 500, ölçülen 2,0 — asla. **Karar:
+  uygulanmadı.** Mevcut mimari zaten "grup başına bir kez kodla, `Arc`
+  ref ile paylaş" — kalan overlap, görünürlük öneliminin doğrudan
+  sonucudur (bir entity birden çok gruba görünür); onu sıfırlamak parça
+  tanımıni atomiğe (hücre) indirir ve bedelini istemci başına frame sayısına
+  yazar. Ölçek büyüdükçe (D1: 10k) bu takas daha da kötüleşir: kodlama
+  tasarrufu ∝N iken ek frame maliyeti ∝k·N. Tekrar değerlendirme koşulu
+  (eşik): `overlap_x` ölçümü 10'u (spatial k=9, c_frame≈c_enc) aşarsa —
+  örn. 3×3 yerine 5×5 blok, ya da 9×'ten çok komşuluk taşıyan bir görünürlük
+  kuralı seçilirse.
+
+- **Bu turda bilinçli olarak yapılmayanlar:** (1) Ayrı prosesli
+  istemcilerle D1 (oda-CPU duvarını in-proc decode'dan ayırmak — P2'ye
+  kalır; in-proc sayılar muhafazakâr alt sınırdır ve bu turda yeterli
+  soruyu — "p50 bütçe 10k'a kadar dayanır mı, kuyruk nerede aşılır" —
+  yanıtladı); (2) loadgen hareket profilinin "entity'ler hedef halkasında"
+  olması (hedef 160 u/sn, entity 10 u/sn → merkez bandı kümelenmesi;
+  önceki turun sayılarıyla süreklilik için profil değiştirilmedi —
+  yorumlaması her tabloda belirtildi); (3) PVS haritasının
+  parametrize edilmesi (elle 4 sektör bu turun arenası; gerçek harita
+  yazarlığı oyunun malı); (4) team stratejisinde ward/`VisionSource`
+  componenti (A2 maddesi, spec gerginliği — "aynı component seti"
+  çerçevesi eşit-yarıçaplı oyuncu kaynaklarıyla sınırlandı); (5)
+  `encoded_records`'ün delta yayınına (P2) genişletilmesi.
+
+- **Spec gerginliği (rapor):** A2'de "görevli kaynak = unit **ve/veya
+  ward**" ifadesi, turun "aynı component seti" çerçevesiyle çelişir —
+  ward, `VisionSource` gibi **yeni** bir component ister. Tur çerçevesine
+  sadık kalındı: her oyuncu entity'si eşit yarıçaplı kaynak; orphan
+  entity'ler her takıma yayılır. Ward desteği, sözleşmeyi (kaynak
+  menzilinde görünür) bozmaksızın tek component eklemeyle geri
+  getirilebilir.
+
+Ham çıktı: `target/loadout/*.txt` (gitignore; commit mesajında RESULT
+satırları). Makine: AMD Ryzen 9 7950X 16C/32T, 124 GB RAM, rustc 1.95.0,
+paylaşımlı masaüstü (arka plan ~2-3 çekirdek).
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
@@ -780,11 +1041,15 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
 
 - [~] **AOI / oda içi görünürlük** (`DESIGN.md` §8) — tek odada 100k
   bağlantı: 1.5 milyar frame teslimi/sn **CPU** duvarı. **Tek-oda mekansal
-  AOI bu turda kapatıldı** (`gsb_game::aoi`, `GroupKey=Cell`, 3×3 blok; bant
-  O(entity)→O(görünürlük); ölçüm + break-even "Kapatılanlar (metrik
-  düzeltme + AOI turu)"). Kalan: oda segmentasyonu + `Visibility` trait'i
-  (10k+ ölçekteki CPU duvarı — AOI'nin ~9× kodlama maliyeti ölçekte bütçeyi
-  aşabilir, bkz. tur bölümü).
+  AOI önceki turda kapatıldı**; bu turda görünürlük **strategi seçimi**
+  oldu (`all`/`spatial`/`team`/`pvs`, `Config.visibility`) ve break-even
+  **ölçüldü**: p50 adım bütçesi 10 000'e kadar korunuyor, bütçe aşan adım
+  oranı 6k %3,8 → 10k %18,9, 10k'da drop+late (in-proc istemci doyuğu;
+  "Kapatılanlar (görünürlük stratejileri turu)" D1). `Visibility` trait'i
+  gerekmedi (C maddesi). Kalan: **oda segmentasyonu** (10k+ duvarı için —
+  tek odanın CPU duvarı, in-proc'tan ayrıştırılmayı bekliyor) ve
+  "birim başına tek kodlama" (D3'te eşik altı bulundu; overlap_x ölçümü
+  eşiği aşarsa yeniden açılır).
 - [ ] **Delta yayın** — son snapshot farkı; bant kazancı.
 - [ ] **Registry şeritleme** — dispatcher tasarımı registry'yi bloke
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test

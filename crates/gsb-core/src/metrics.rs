@@ -197,6 +197,12 @@ pub struct RoomSample {
     /// — the AOI/MTU-signal the load test reports: a whole-world snapshot
     /// overflows every tick at scale, a per-cell snapshot does not.)
     pub snap_overflows: u64,
+    /// Entity records encoded (summed over all groups, via
+    /// `RoomLogic::encoded_records`), cumulative. Over the broadcastable
+    /// entity count this is the *overlap multiplier* (how many group
+    /// snapshots each entity landed in per tick — the "encode-per-unit"
+    /// decision input, see `docs/ROADMAP.md`).
+    pub snap_records: u64,
     /// Snapshot + private payload bytes shipped to the room's
     /// connections (per-connection fan-out copies), cumulative.
     pub shipped_bytes: u64,
@@ -347,6 +353,9 @@ pub struct RoomReport {
     pub snap_bytes_s: f64,
     pub snap_bytes_max: u32,
     pub snap_overflows: u64,
+    /// Entity records encoded (cumulative; overlap-metric numerator — see
+    /// [`RoomSample::snap_records`]).
+    pub snap_records: u64,
     /// Bytes shipped to clients (cumulative) and shipped-byte rate (Δ/s)
     /// — the server-side bytes-out for this room.
     pub shipped_bytes: u64,
@@ -473,6 +482,7 @@ impl MetricAccumulator {
                 snap_bytes_s,
                 snap_bytes_max: latest.snap_bytes_max,
                 snap_overflows: latest.snap_overflows,
+                snap_records: latest.snap_records,
                 shipped_bytes: latest.shipped_bytes,
                 shipped_s,
                 groups: latest.groups,
@@ -543,6 +553,7 @@ impl MetricReport {
                  lagged_events={} lagged_ticks={} dropped={} dropped_s={:.1} \
                  dropped_actions={} keepalive_resends={} snapshots={} \
                  snap_bytes_s={:.0} snap_bytes_max={} snap_overflows={} \
+                 snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
                  groups={} members={} max_group={} joins={} leaves={} \
                  metrics_dropped={}",
@@ -557,6 +568,7 @@ impl MetricReport {
                 r.lagged_events, r.lagged_ticks, r.dropped, r.dropped_s,
                 r.dropped_actions, r.keepalive_resends, r.snapshots,
                 r.snap_bytes_s, r.snap_bytes_max, r.snap_overflows,
+                r.snap_records,
                 r.shipped_bytes, r.shipped_s,
                 r.groups, r.members, r.max_group, r.joins, r.leaves,
                 r.metrics_dropped
@@ -728,6 +740,7 @@ mod tests {
             snapshots: 29,
             snap_bytes_max: 796,
             snap_overflows: 0,
+            snap_records: 29,
             shipped_frames: 30,
             private_frames: 0,
             joins: 2,

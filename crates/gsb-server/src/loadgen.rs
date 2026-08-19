@@ -17,11 +17,14 @@
 //!
 //! Usage:
 //! ```text
-//! gsb-loadgen [N] [--duration SECS] [--move-ms MS] [--room ID] [--stagger-ms MS] [--addr HOST:PORT]
+//! gsb-loadgen [N] [--duration SECS] [--move-ms MS] [--room ID] [--stagger-ms MS]
+//!              [--visibility all|spatial|team|pvs] [--cell-size N] [--vision-radius N]
+//!              [--max-snapshot-bytes N] [--addr HOST:PORT]
 //! ```
 //! Defaults: N=100, duration=10 s, move interval 150 ms, room 1,
 //! stagger 0 (all clients connect at once — the worst case for the accept
-//! path over loopback; see `Args::stagger_ms`).
+//! path over loopback; see `Args::stagger_ms`), visibility `all`
+//! (same default as the server config; see `gsb_server::Visibility`).
 //!
 //! Every client: connects, authenticates, joins the room, then until the
 //! deadline sends a `MOVE_TO` around a circle (phase-shifted by client id
@@ -64,10 +67,16 @@ struct Args {
     /// trickle of players joining over time.
     stagger_ms: u64,
     addr: Option<String>,
-    /// Enable AOI in the in-process server (spatial group key, `--aoi`).
-    aoi: bool,
-    /// AOI cell size in world units (`--cell-size N`, default 20).
+    /// The visibility strategy of the in-process server
+    /// (`--visibility all|spatial|team|pvs`, default `all` — same as the
+    /// server config default).
+    visibility: gsb_server::Visibility,
+    /// AOI cell size in world units (`--cell-size N`, default 20; used
+    /// only for `spatial`).
     cell_size: f32,
+    /// Team-fog vision radius in world units (`--vision-radius N`,
+    /// default 25; used only for `team`).
+    vision_radius: f32,
     /// Per-snapshot payload ceiling the room enforces
     /// (`--max-snapshot-bytes N`, default 1400 = the rUDP MTU the spec
     /// assumes). The TCP transport default is 1 MiB, so the in-process
@@ -84,8 +93,9 @@ fn parse_args() -> Args {
         room: 1,
         stagger_ms: 0,
         addr: None,
-        aoi: false,
+        visibility: gsb_server::Visibility::default(),
         cell_size: 20.0,
+        vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
         max_snapshot_bytes: 1400,
     };
     let mut it = std::env::args().skip(1);
@@ -109,11 +119,22 @@ fn parse_args() -> Args {
             "--addr" => {
                 args.addr = Some(it.next().expect("--addr HOST:PORT"));
             }
-            "--aoi" => {
-                args.aoi = true;
+            "--visibility" => {
+                let v = it.next().expect("--visibility all|spatial|team|pvs");
+                args.visibility = match v.as_str() {
+                    "all" => gsb_server::Visibility::All,
+                    "spatial" => gsb_server::Visibility::Spatial,
+                    "team" => gsb_server::Visibility::Team,
+                    "pvs" => gsb_server::Visibility::Pvs,
+                    other => panic!("--visibility: expected all|spatial|team|pvs, got {other}"),
+                };
             }
             "--cell-size" => {
                 args.cell_size = it.next().expect("--cell-size N").parse().expect("number");
+            }
+            "--vision-radius" => {
+                args.vision_radius =
+                    it.next().expect("--vision-radius N").parse().expect("number");
             }
             "--max-snapshot-bytes" => {
                 args.max_snapshot_bytes =
@@ -388,18 +409,20 @@ struct InProcessServer {
 
 /// Start the server in-process with a channel metrics sink. The receiver
 /// moves into the report-drain task; nothing is shared across tasks
-/// beyond that mailbox. `aoi`/`cell_size` select the room group key (the
-/// AOI-off baseline vs the spatial AOI path).
+/// beyond that mailbox. `visibility` selects the room group key (the
+/// four strategies: `()` / `Cell` / `Team` / `Sector`).
 async fn start_inprocess(
-    aoi: bool,
+    visibility: gsb_server::Visibility,
     cell_size: f32,
+    vision_radius: f32,
     max_snapshot_bytes: usize,
 ) -> Result<InProcessServer, gsb_server::ServerError> {
     let cfg = gsb_server::Config {
         bind: "127.0.0.1:0".into(),
         room_count: 1,
-        aoi,
+        visibility,
         aoi_cell_size: cell_size,
+        team_vision_radius: vision_radius,
         max_snapshot_bytes,
         ..Default::default()
     };
@@ -438,8 +461,9 @@ async fn run(args: Args) {
         }
         None => {
             let s = start_inprocess(
-                args.aoi,
+                args.visibility,
                 args.cell_size,
+                args.vision_radius,
                 args.max_snapshot_bytes,
             )
             .await
@@ -451,15 +475,20 @@ async fn run(args: Args) {
     };
 
     eprintln!(
-        "clients={} room={} duration={}s move_ms={} stagger_ms={} aoi={} cell_size={} max_snap_bytes={}",
+        "clients={} room={} duration={}s move_ms={} stagger_ms={} visibility={} cell_size={} vision_radius={} max_snap_bytes={}",
         args.clients,
         args.room,
         args.duration.as_secs(),
         args.move_ms.as_millis(),
         args.stagger_ms,
-        if args.aoi { "on" } else { "off" },
-        if args.aoi {
+        args.visibility,
+        if args.visibility == gsb_server::Visibility::Spatial {
             args.cell_size.to_string()
+        } else {
+            "-".to_string()
+        },
+        if args.visibility == gsb_server::Visibility::Team {
+            args.vision_radius.to_string()
         } else {
             "-".to_string()
         },
@@ -524,6 +553,35 @@ fn print_report(
         .filter_map(|r| r.registry.map(|g| g.conns))
         .max()
         .unwrap_or(0);
+    // Peak room membership (same rationale): the stable entity count for
+    // the overlap ratio.
+    let peak_members = server_reports
+        .iter()
+        .filter_map(|r| r.rooms.first().map(|r| r.members))
+        .max()
+        .unwrap_or(0);
+    // The overlap measurement (D3): encoded entity records per tick in the
+    // steady state, and per broadcastable entity (the multiplier). Both
+    // endpoints are taken AFTER the join phase (base = first report with
+    // >= 100 steps; the cumulative counters make the delta exact), so the
+    // stagger's ramp-up is not in the window.
+    let base = server_reports
+        .iter()
+        .find(|r| !r.rooms.is_empty() && r.rooms[0].steps >= 100)
+        .and_then(|r| r.rooms.first());
+    let rec_per_tick = match (base, last_room) {
+        (Some(b), Some(l)) if l.rooms[0].steps > b.steps => {
+            let d_steps = l.rooms[0].steps - b.steps;
+            let d_rec = l.rooms[0].snap_records.saturating_sub(b.snap_records);
+            d_rec as f64 / d_steps as f64
+        }
+        _ => 0.0,
+    };
+    let overlap = if peak_members > 0 {
+        rec_per_tick / peak_members as f64
+    } else {
+        0.0
+    };
     // Stable measured server tick rate: the median over all reports'
     // per-window rates (excluding the first report's empty window and
     // any narrow shutdown window).
@@ -645,6 +703,10 @@ fn print_report(
             r.leaves,
             r.metrics_dropped
         );
+        println!(
+            "overlap (steady state): records_per_tick={:.1} overlap_x={:.2} (peak members {})",
+            rec_per_tick, overlap, peak_members
+        );
         if let Some(g) = &last_room.and_then(|l| l.registry) {
             println!(
                 "server registry (final): rooms={} conns={} opens={} closes={} joins={} leaves={} peak_conns={}",
@@ -668,14 +730,14 @@ fn print_report(
 
     // Machine-parseable summary (consumed by tests/loadgen_smoke.rs).
     println!(
-        "RESULT mode={} aoi={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
+        "RESULT mode={} visibility={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
          out_bps_per_conn={:.0} moves={} errors={} steps={} server_hz={:.2} \
          step_p50_us={:.0} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
-         peak_payload_b={} snap_overflows={} server_in_bps={} server_out_bps={} peak_conns={} \
-         metrics_dropped={}",
+         peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
+         server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={}",
         if inproc { "in-proc" } else { "ext" },
-        if args.aoi { "on" } else { "off" },
+        args.visibility,
         args.max_snapshot_bytes,
         args.clients,
         connected,
@@ -700,6 +762,8 @@ fn print_report(
         room.map(|r| r.late_max_us).unwrap_or(0),
         room.map(|r| r.snap_bytes_max as u64).unwrap_or(0),
         room.map(|r| r.snap_overflows).unwrap_or(0),
+        rec_per_tick,
+        overlap,
         net
             .map(|n| (n.bytes_in as f64 / dur) as u64)
             .unwrap_or(0),

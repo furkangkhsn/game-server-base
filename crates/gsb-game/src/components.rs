@@ -16,8 +16,8 @@ pub struct Position {
 /// wire identity over the room's lifetime") has exactly one legitimate
 /// source — the room's monotonic counter — and the type now says so. The
 /// only construction path is [`WireId::new`], which is crate-private and
-/// is called from the room's single minting point
-/// ([`crate::room::DemoRoom::next_serial`]); the two call sites (`on_join`
+/// is called from the rooms' single shared minting point
+/// ([`crate::common::next_serial`]); the two call sites (`on_join`
 /// for player entities, whose value also goes to the joiner in
 /// `JOIN_ROOM_RESULT`, and the broadcast pass for any other entity that
 /// carries a [`Position`]) both go through it. No other code — in this

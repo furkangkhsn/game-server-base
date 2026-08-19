@@ -424,8 +424,9 @@ taban sağlar.
 
 **Belgelenmiş sonraki adımlar (öncelik sırası):**
 1. **Delta yayın** (son snapshot'tan fark) — bant genişliği kazancı.
-2. **AOI + oda içi Visibility trait'i** — MMORPG'ler için büyük oda
-   segmentasyonu; fan-out'u O(görünürlük kümesi) yapar.
+2. **Oda segmentasyonu** (10k+ tek-oda CPU duvarı; görünürlük stratejileri
+   turunun D1'i duvarı in-proc istemci doyuğundan ayırmayı bekliyor) —
+   AOI + stratejiler zaten kapandı (§8.1); `Visibility` trait'i gerekmedi.
 3. **Kompresyon (zstd)** — frame batch'leri üzerine ek bir transport
    seçeneği (uzunluk öneki zaten transport'un malı).
 4. **Oda bölme/birleştirme (sharding)** ve cross-region.
@@ -456,8 +457,54 @@ sızması yok.
   bloğa girer) ama bant genişliğini O(entity) → O(görünürlük) yapar; hücre
   boyutu küçükçe bant kazancı %80+ (1000/2000). Break-even + yeni darboğaz
   (adım süresi/CPU) ROADMAP "Kapatılanlar (metrik düzeltme + AOI turu)"
-  bölümünde ölçülmüş. 10k+ ölçekli oda segmentasyonu + `Visibility` trait'i
-  hâlâ P2 (adım 2'nin kalanı).
+  bölümünde ölçülmüş. Break-even bu turun D1'inde ölçüldü (aşağıda);
+  10k+ ölçekli oda segmentasyonu hâlâ P2.
+
+### 8.1 Görünürlük stratejileri (tak-çıkar; görünürlük stratejileri turu)
+
+Yayın stratejisi artık **strategi seçimi**: aynı oyun (aynı component'ler,
+aynı hareket sistemi, aynı wire format) üzerinde dört değiştirilebilir
+strateji, hepsi §4'ün `RoomLogic` seam'i üzerinde, `Config.visibility`
+ile seçilir (sunucu + `gsb-loadgen`):
+
+| strateji | `GroupKey` | görünürlük kuralı | örnek |
+|----------|-----------|-------------------|-------|
+| `all` (varsayılan) | `()` (1 grup) | her entity her yerde | taban; eski davranış |
+| `spatial` | `Cell` (mekansal hücre) | 3×3 hücre bloğu | MMO/AOI (§8, önceki tur) |
+| `team` | `Team` (2 grup) | takım üyesi + menzildeki düşman | MOBA/takım sisli |
+| `pvs` | `Sector` (harita bölgesi) | statik görünürlük tablosu (elle convex sektörler) | FPS/PVS |
+
+**Varsayılan `all`** — üç gerekçeyle: geri uyumluluk (tüm önceki ölçüm
+tabanı `all`), ölçüm tabanı (en kötü durum; her stratejinin kazancı
+karşısında net okunur), en az sürpriz (görünürlük kısıtlama oyun kararıdır;
+sessiz kısıtlama bug olarak algılanır).
+
+**Neden `Visibility` trait'i yok:** stratejiler arasındaki gerçek fark,
+`RoomLogic`'in zaten ayırdığı iki şey — `GroupKey` tipi + `group_of`/
+`snapshot` içeriği. Trait bu farkı yeniden soyutlar, arkasında duracak
+ortak uygulama yoktur (içerik hesapları: küme birleşimi / mesafe önelemi /
+statik tablo). Kanıt: 2 yeni strateji + 1 metrik metodu eklendi, core'un
+trait şekli değişmedi; tek core değişimi ekleyici bir sayacıdır
+(`RoomLogic::encoded_records()` default + `snap_records`, D3 ölçümü için).
+Ortak **oda muhasebesi** (identity minting, connection tablosu, input
+ingestion, sistem yürütme, orphan stamp) ise 4 odada birebir aynıydı —
+`gsb_game::common` modülüne tek kopya olarak taşındı; `common::next_serial`
+artık `WireId::new`'ün tek çağrıcısı. Detay + elenen alternatifler: ROADMAP
+"Kapatılanlar (görünürlük stratejileri turu)" C maddesi.
+
+**Ölçülenler (N=1 000, 30 Hz, 15 s; in-proc; detay ROADMAP D2):**
+`spatial c5` bant **%82** az (247,8→44,8 kbps/conn), `pvs` **%49** az
+(126,0 kbps/conn), `team` bu yük geometrisinde **sıfır** kazanç + 2× kodlama
+(25 birim menzil + merkezî kümelenme → her iki takım haritanın tümünü
+görüyor; yük profili özelliği, strateji zayıflığı değil). Kodlama overlap'i
+ölçüldü (`overlap_x` = kodlanan kayıt/üye/tick): all 1,00 · PVS 1,37 · team
+2,00 · c20 5,50 · c5 8,28. "Birim başına tek kodlama, istemci abone"
+tasarımı **eşik altında bırakıldı** (spatial için eşik ≈10, ölçülen 8,28;
+bedel istemci başına 9 frame — D1'de doyan eksenin tahtası). **D1
+break-even (spatial, hücre 5):** p50 adım süresi N=10 000'e kadar 33,3 ms
+bütçenin altında (10k'da 12,5 ms, bimodal); bütçe aşan adım oranı 6k %3,8 →
+10k %18,9; 10k'da 54 263 drop + 1,34 s late tick — doyan parça in-proc
+istemci decode yolu (makine 1 dk loadavg ~9-11/32 ile doygun değil).
 
 ## 9. Kapanma (shutdown) kaskadı
 

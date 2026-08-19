@@ -95,16 +95,14 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use bevy_ecs::prelude::{Entity, World, Without};
+use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
-use gsb_ecs::{SystemCtx, SystemRunner};
+use gsb_ecs::SystemRunner;
 use prost::Message;
 
-use crate::components::{MoveTarget, Position, Speed, WireId, DEFAULT_SPEED};
+use crate::components::{Position, WireId};
 use crate::op;
-use crate::room::spawn_pos;
-use crate::systems::MovementSystem;
 
 /// A spatial cell of the world grid — the AOI group key. Cell indices are
 /// the floor of (position / `cell_size`), so cells tile the plane and are
@@ -149,6 +147,9 @@ pub struct AoiRoom {
     /// visibility block is the union of the 9 buckets in its neighborhood,
     /// so the block is assembled by reference without re-querying the world.
     buckets: HashMap<Cell, Vec<(u64, i32, i32)>>,
+    /// Entity records encoded during the most recent broadcast phase
+    /// (polled by the room via `RoomLogic::encoded_records`).
+    encoded: u64,
 }
 
 impl AoiRoom {
@@ -157,23 +158,15 @@ impl AoiRoom {
     /// a single infinite cell.
     #[must_use]
     pub fn new(cell_size: f32) -> Self {
-        let mut runner = SystemRunner::new();
-        runner.add(MovementSystem);
         Self {
-            runner,
+            runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
             cell_size: cell_size.max(0.5),
             last: HashMap::new(),
             buckets: HashMap::new(),
+            encoded: 0,
         }
-    }
-
-    /// The single minting point for wire identities (mirrors
-    /// `DemoRoom::next_serial`): advances the room's one monotonic counter.
-    fn next_serial(&mut self) -> WireId {
-        self.next_wire_id += 1;
-        WireId::new(self.next_wire_id)
     }
 }
 
@@ -243,70 +236,38 @@ impl RoomLogic<World> for AoiRoom {
             .encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
 
+        self.encoded += content.len() as u64;
         self.last.insert(*cell, content);
         true
     }
 
+    fn encoded_records(&mut self) -> u64 {
+        let n = self.encoded;
+        self.encoded = 0;
+        n
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        let (x, y) = spawn_pos(conn);
-        let wire = self.next_serial();
-        let entity = world
-            .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
-            .id();
-        self.conn_entity.insert(conn, entity);
-        wire.get()
+        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        if let Some(entity) = self.conn_entity.remove(&conn)
-            && world.get_entity(entity).is_ok()
-        {
-            world.despawn(entity);
-        }
+        crate::common::on_leave(&mut self.conn_entity, world, conn)
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        for action in actions.drain(..) {
-            if action.op != op::MOVE_TO {
-                continue;
-            }
-            let Ok(msg) = <crate::game::MoveTo as Message>::decode(&action.payload[..]) else {
-                tracing::warn!(?action.op, "undecodable MOVE_TO payload ignored");
-                continue;
-            };
-            let Some(entity) = self.conn_entity.get(&action.conn).copied() else {
-                continue;
-            };
-            if world.get_entity(entity).is_err() {
-                continue;
-            }
-            world.entity_mut(entity).insert(MoveTarget {
-                x: msg.x as f32,
-                y: msg.y as f32,
-            });
-        }
+        crate::common::ingest(&self.conn_entity, world, actions)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        let sys_ctx = SystemCtx {
-            tick: ctx.tick,
-            dt: ctx.dt.as_secs_f32(),
-        };
-        self.runner.run_all(world, &sys_ctx);
+        crate::common::run_systems(&mut self.runner, world, ctx);
 
         // Orphan stamping (idempotent, mirrors `DemoRoom`): entities with a
         // `Position` but no `WireId` get the next serial, so the broadcast
         // set is exactly "has a `Position`" — structural, never silently
         // invisible. Done here (before the bucket build) so freshly-stamped
         // entities are in the buckets the broadcast phase reads.
-        let orphans: Vec<Entity> = world
-            .query_filtered::<(Entity, &Position), Without<WireId>>()
-            .iter(world)
-            .map(|(entity, _)| entity)
-            .collect();
-        for entity in orphans {
-            world.entity_mut(entity).insert(self.next_serial());
-        }
+        crate::common::stamp_orphans(&mut self.next_wire_id, world);
 
         // Bucket the world by cell, once per tick (each entity exactly
         // once); a cell's block is the union of its 3×3 neighborhood.
