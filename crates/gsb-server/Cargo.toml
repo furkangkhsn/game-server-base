@@ -10,6 +10,10 @@ build = "build.rs"
 name = "gsb-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "gsb-loadgen"
+path = "src/loadgen.rs"
+
 [dependencies]
 tokio = { workspace = true }
 bytes = { workspace = true }

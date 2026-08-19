@@ -21,12 +21,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bevy_ecs::world::World;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use gsb_core::channel::{FrameBatch, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::{ConnectionId, RoomId};
+use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{RoomConfig, RoomLogic};
 use gsb_net::tcp::TcpTransport;
@@ -129,6 +131,9 @@ pub struct ServerHandle {
     registry: gsb_core::channel::Mailbox<RegistryMsg>,
     accept: JoinHandle<()>,
     ticker: JoinHandle<()>,
+    /// The metrics collector (emits one final report when the ticker's
+    /// broadcast closes).
+    metrics: JoinHandle<()>,
     /// The actual bound address (useful when binding port 0 in tests).
     pub addr: SocketAddr,
 }
@@ -138,11 +143,13 @@ impl ServerHandle {
     /// (rooms get a control `Shutdown`, processed on their next tick); the
     /// ticker is aborted, which closes the broadcast and stops any room that
     /// missed its window; the accept loop is hard-aborted (documented v1
-    /// limitation).
+    /// limitation). The metrics collector is awaited last: it emits one
+    /// final report when the broadcast closes.
     pub async fn stop(self) {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
         self.ticker.abort();
         self.accept.abort();
+        let _ = self.metrics.await;
     }
 }
 
@@ -165,8 +172,24 @@ fn demo_room_factory() -> RoomFactory<World, ()> {
     })
 }
 
-/// Start the server. Must be called from inside a tokio runtime.
+/// Start the server. Must be called from inside a tokio runtime. Metric
+/// reports go to the tracing logger (one `gsb-metric` line per scope per
+/// second; visible under `RUST_LOG=info`, silent without a subscriber).
 pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
+    start_inner(cfg, MetricSink::Log).await
+}
+
+/// Start the server with a programmatic metrics consumer: each report is
+/// sent to `report_tx` (see [`gsb_core::metrics`]). Used by the load
+/// generator and by tests that assert on server-side counters.
+pub async fn start_server_metrics(
+    cfg: Config,
+    report_tx: mpsc::UnboundedSender<MetricReport>,
+) -> Result<ServerHandle, ServerError> {
+    start_inner(cfg, MetricSink::Channel(report_tx)).await
+}
+
+async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandle, ServerError> {
     let bind: SocketAddr = cfg.bind.parse().map_err(|e: std::net::AddrParseError| {
         ServerError::BadBind(cfg.bind.clone(), e.to_string())
     })?;
@@ -177,13 +200,32 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
     // The global ticker: one broadcast channel + one timing task. Rooms
     // subscribe to it at creation; aborting the task closes the broadcast,
     // which is the rooms' global stop signal (in addition to the control
-    // Shutdown they receive during registry teardown).
+    // Shutdown they receive during registry teardown). The metrics
+    // collector subscribes to the same broadcast as its clock (see
+    // `gsb_core::metrics` for the design).
     let (ticker, ticker_task) = gsb_core::ticker::Ticker::spawn(cfg.tick_hz, 64);
+    let (metrics_tx, metrics_rx) = mpsc::unbounded_channel::<MetricsEvent>();
+    let metrics = tokio::spawn(
+        MetricsCollector::new(
+            ticker.subscribe(),
+            metrics_rx,
+            metric_sink,
+            std::time::Duration::from_secs(1),
+        )
+        .run(),
+    );
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
     let _registry = tokio::spawn(
-        Registry::new(reg_rx, reg_tx.clone(), demo_room_factory(), ticker.clone()).run(),
+        Registry::new(
+            reg_rx,
+            reg_tx.clone(),
+            demo_room_factory(),
+            ticker.clone(),
+            metrics_tx.clone(),
+        )
+        .run(),
     );
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
@@ -231,6 +273,7 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
     })?;
 
     let accept_tx = reg_tx.clone();
+    let conn_metrics_tx = metrics_tx.clone();
     let accept = tokio::spawn(async move {
         info!(%addr, "accepting connections");
         let mut next_conn: u64 = 1;
@@ -268,9 +311,18 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
                 })
                 .await;
 
+            // One cheap sender clone per connection (unbounded sender is
+            // an Arc).
             tokio::spawn(
-                ConnectionActor::new(conn, Arc::clone(&table), accept_tx.clone(), in_rx, out_tx)
-                    .run(),
+                ConnectionActor::new(
+                    conn,
+                    Arc::clone(&table),
+                    accept_tx.clone(),
+                    in_rx,
+                    out_tx,
+                    conn_metrics_tx.clone(),
+                )
+                .run(),
             );
         }
     });
@@ -279,6 +331,7 @@ pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
         registry: reg_tx,
         accept,
         ticker: ticker_task,
+        metrics,
         addr,
     })
 }

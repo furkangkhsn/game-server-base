@@ -36,6 +36,7 @@ use crate::channel::{FrameBatch, Inbox, Mailbox, channel};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::metrics::{MetricsEvent, RegistrySample};
 use crate::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic};
 use crate::ticker::Ticker;
 
@@ -143,6 +144,17 @@ pub struct Registry<W, G> {
     conns: HashMap<ConnectionId, ConnInfo>,
     conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp>>,
     ticker: Ticker,
+    /// Local control-plane counters (flushed as a sample whenever a table
+    /// changes — event-driven; no timer, no new await; see
+    /// [`crate::metrics`]).
+    reg_created: u64,
+    reg_destroyed: u64,
+    reg_joins: u64,
+    reg_leaves: u64,
+    reg_opens: u64,
+    reg_closes: u64,
+    /// Outbound metrics path (synchronous unbounded send).
+    metrics: mpsc::UnboundedSender<MetricsEvent>,
 }
 
 impl<W, G> Registry<W, G>
@@ -155,6 +167,8 @@ where
         self_mailbox: Mailbox<RegistryMsg>,
         factory: RoomFactory<W, G>,
         ticker: Ticker,
+        // Outbound metrics path (see `crate::metrics`).
+        metrics: mpsc::UnboundedSender<MetricsEvent>,
     ) -> Self {
         Self {
             factory,
@@ -164,7 +178,30 @@ where
             conns: HashMap::new(),
             conn_ops: HashMap::new(),
             ticker,
+            reg_created: 0,
+            reg_destroyed: 0,
+            reg_joins: 0,
+            reg_leaves: 0,
+            reg_opens: 0,
+            reg_closes: 0,
+            metrics,
         }
+    }
+
+    /// Flush the registry's local counters as a sample. Synchronous
+    /// unbounded send: the registry's await set is unchanged (its only
+    /// await stays the mailbox `recv`).
+    fn emit_metrics(&self) {
+        let _ = self.metrics.send(MetricsEvent::Registry(RegistrySample {
+            rooms: self.rooms.len() as u32,
+            conns: self.conns.len() as u32,
+            rooms_created: self.reg_created,
+            rooms_destroyed: self.reg_destroyed,
+            joins: self.reg_joins,
+            leaves: self.reg_leaves,
+            opens: self.reg_opens,
+            closes: self.reg_closes,
+        }));
     }
 
     /// Run until the mailbox is closed.
@@ -211,6 +248,7 @@ where
                             self.ticker.subscribe(),
                             control_rx,
                             run_every,
+                            self.metrics.clone(),
                         )
                         .run(),
                     );
@@ -220,6 +258,8 @@ where
                             control: control_tx,
                         },
                     );
+                    self.reg_created += 1;
+                    self.emit_metrics();
                     debug!(room = %id, "room created");
                     let _ = reply.send(Ok(id));
                 }
@@ -249,6 +289,8 @@ where
                         // is still running); aborting the ticker later closes
                         // its broadcast as a backstop.
                         let _ = entry.control.send(RoomControl::Shutdown).await;
+                        self.reg_destroyed += 1;
+                        self.emit_metrics();
                         debug!(room = %id, "room destroyed");
                     }
                 }
@@ -307,6 +349,8 @@ where
                 RegistryMsg::ConnOpened { conn, inbox } => {
                     let info = self.conns.entry(conn).or_default();
                     info.inbox = Some(inbox);
+                    self.reg_opens += 1;
+                    self.emit_metrics();
                 }
                 RegistryMsg::ConnClosed { conn } => {
                     // The connection actor is gone for good: remove the entry
@@ -333,6 +377,8 @@ where
                             }
                         }
                     }
+                    self.reg_closes += 1;
+                    self.emit_metrics();
                     debug!(%conn, "connection closed");
                 }
                 RegistryMsg::SpawnDone { conn, room, entity } => {
@@ -342,6 +388,8 @@ where
                     if let Some(info) = self.conns.get_mut(&conn) {
                         info.room = Some(room);
                         info.entity = Some(entity);
+                        self.reg_joins += 1;
+                        self.emit_metrics();
                         debug!(%conn, room = %room, %entity, "player spawned");
                     }
                 }
@@ -351,6 +399,8 @@ where
                     {
                         info.room = None;
                         info.entity = None;
+                        self.reg_leaves += 1;
+                        self.emit_metrics();
                         debug!(%conn, room = %room, "player despawned");
                     }
                 }
@@ -411,6 +461,10 @@ where
                 tokio::spawn(async move {
                     let _ = control.send(RoomControl::Leave { conn, entity }).await;
                 });
+                // Counted here (not via LeaveDone): this path has no
+                // dispatcher, so the room's leave would otherwise be
+                // invisible to the registry counter.
+                self.reg_leaves += 1;
             }
             if let Some(info) = self.conns.get_mut(&conn) {
                 info.room = None;

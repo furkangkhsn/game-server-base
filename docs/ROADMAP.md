@@ -15,9 +15,16 @@ tipik kayıt 10 → 6 B (snapshot çerçevesi dahil 12 → 8 B), 1400 B eşiği
 yayınlanabilirlik ön koşulu (Position ⇒ broadcast) **yapısal** hale
 getirildi — `on_join` dışından spawn edilen entity artık sessizce
 görünemez, `Owner` ölü componenti kaldırıldı, aynı sınıftan kalanlar
-tarandı (aşağıda).
-34/34 test yeşil.
-Aşağıdakiler **ölçülmemiş performans**, **robustluk** ve **güvenlik**
+tarandı (aşağıda); `WireId`'ün mint tarafı **tip düzeyinde
+kapandı** (field private + `Default` kaldırıldı; tek inşaat yolu
+crate-içi constructor, tek minting noktası odanın sayacı); **metrik
+altyapısı** kuruldu — sayaçlar aktörlerin yerel durumunda, kanalla
+toplayıcıya (oda tick'ine await eklemeden); **ilk uçtan uca yük testi**
+alındı: 100/500/1000 gerçek TCP istemci, 30 Hz üç ölçekte de korundu,
+drop 0, N ile büyüyen tek metrik adım süresi (aşağıda).
+38/38 test yeşil.
+Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek henüz ölçülmedi;
+100/500/1000 turu aşağıda), **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
 
 ## Kapatılanlar (yayınlanabilirlik turu)
@@ -426,16 +433,170 @@ başlıklarındaki kalan işler.
   (fan-out O(dirty×conn) dürüst hali, "tek await" formülasyonu, lint kapsamı),
   registry shutdown'da break (kendi mailbox klonu EOF'u engelliyordu).
 
+## Kapatılanlar (metrik + yük turu)
+
+- [x] **`WireId` mint tarafı kapandı (tip düzeyinde)** — yayınlanabilirlik
+  turunda "yapısal olarak kapatılamaz" denilen son parça: field private
+  (`WireId(u64)` artık hiçbir crate'ten, crate içinde de `components`
+  modülü dışından `WireId(42)` diye inşa edilemez) + `Default` derive'ı
+  kaldırıldı (`WireId::default()` = 0 = "atanmamış" kimliği üretilemez).
+  Tek inşaat yolu `WireId::new(u64)` (`pub(crate)`, `const`); okuma tarafı
+  açık kalmalıydı (`pub const fn get(self)`) — kimlik okumak meşru,
+  üretmek değil. Tek minting noktası `DemoRoom::next_serial()`
+  (sayaç `next_wire_id`): iki çağrı noktası (`on_join` + broadcast
+  yetim-damgası) bu tek noktanın üzerinden geçer. Kapanan hata sınıfı:
+  "kimlik üretimi sözleşmede yaşıyordu" → artık üretimin tek yolu tipin
+  kendi kapısı ve pratikte tek sayaç. Elenen alternatifler:
+  (a) `pub fn new`'i herkese açık tutmak — her crate mint edebilir,
+  çakışma alanı kapanmıyor (spec: tek nokta isteniyordu).
+  (b) `Arc<AtomicU64>` paylaşımlı sayaç — paylaşımlı durum = DESIGN §2
+  ihlali; zaten sayacın sahibi oda actor'ünün yerel durumuydu (tek sahip
+  mevcut). (c) Sealed trait/free function seremonisi — aynı kapanımı
+  daha fazla yüzeyle verirdi.
+
+- [x] **Metrik altyapısı (P0 "Temel metrik")** — Sayaçlar **ait olduğu
+  aktörün yerel durumunda** ve dışarı **kanalla** taşınır
+  (`gsb_core::metrics`): oda actor'ü her adım sonunda (tick gövdesinin
+  son satırı, senkron) `MetricsEvent::Room(RoomSample)` gönderir;
+  registry olay başına (open/close/join/leave/room); bağlantı actor'ü
+  ≤1/sn + kapanışta son gönderim (in/out byte/frame delta). Kanal
+  `mpsc::unbounded` — **`send` senkron** (`Result` döner, `Future`
+  değil): oda actor'ünün tick döngüsüne **await eklenmedi**; tek await
+  hâlâ `tick_rx.recv()`'tir (spec'in sert şartı — bounded kanal
+  `send`'i Future olduğundan elendi). Tüketiciler:
+  `MetricsCollector` görevi — tek await'i ticker'ın **aynı**
+  broadcast aboneliği (odalarla aynı saat kaynağı; tek-await
+  disiplininin aynası); her tick'te `try_recv` ile boşaltır, rapor
+  süresi (varsayılan 1 s) dolunca `MetricReport` üretir, ticker
+  kapalıysa son raporu basıp temiz çıkar (shutdown kaskadının doğal
+  parçası — DESIGN §9). Sink'ler: `Log` (`RUST_LOG=info` →
+  `gsb-metric scope=.. key=value` satırları) ve `Channel`
+  (→ `MetricReport` — `start_server_metrics` ve testler bu yoldan).
+  Ölçülenler (spec'in istediği sorular): konfigure **vs gerçek** tick
+  hızı (oda `hz` Δadım/rapor + registry oda sayısı), **adım süresi
+  dağılımı** (min/mean/max + 7 kutulu histogram µs), **gecikme**
+  (`late_*` — tick'e ulaşma gecikmesi) ve `lagged_*` (broadcast
+  tamponu aşımı), **atılan batch** (`dropped`), **keepalive yeniden
+  gönderimi** (`keepalive_resends`), **grup sayısı/üye**
+  (`groups`/`members`/`max_group`), **snapshot yükü**
+  (`snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_*` —
+  kodlanan vs dağıtılan), **bağlantı sayısı/akışı**
+  (registry `conns`/`opens`/`closes`/`joins`/`leaves`), **byte
+  in/out** (conn actor delta + net toplam). Kapanan hata sınıfı:
+  "log satırı dışında ölçüm yoktu" — her sunucu süreci artık
+  kendisinden (log ya da kanal) okunabilir. Kanıt testi
+  (`metrics::tests::room_counters_flow_to_collector`): gerçek
+  `RoomActor` + gerçek collector — oda actor'ünün **yerel** sayacı
+  (özellikle `dropped > 0`: tüketilmeyen çıkış kanalı) actor'ün
+  *dışından*, kanal üzerinden üretilen raporda doğrulanır; birikim +
+  hız penceresi ayrı unit testte. Elenen alternatifler:
+  (a) `AtomicU64` küresel kayıt — paylaşımlı mutasyon = §2 ihlali
+  ("her değer kanallarla taşınır, paylaşım yoktur"); toplayıcının
+  çıktısı mesaj akışının saf fonksiyonu olmaktan çıkar ve hangi
+  aktörün hangi sayacı tuttuğu görünmez olurdu.
+  (b) Bounded kanal + geri-baskı — bounded `send` Future → tick
+  gövdesinde await → "oda tek await'i `tick_rx.recv()`'tir" şartı
+  kırılır (spec bunu açıkça yasaklıyor). Örnekler sabit boyutlu ve
+  oda başına adım başına en fazla bir tane olduğundan unbounded'da
+  geri-baskı fiilen sorun değil; en kötü hal = örnek kaybı, tick asla
+  durmaz. (c) Collector'da `tokio::select!` (tick + kanal) —
+  gsb-lint `select!`'i yasaklar; ticker aboneliği saat olarak yeterli
+  (rapor ≥1 s, tick 30/s). (d) Prometheus tarzı gauge kütüphanesi —
+  v1 kapsamı dışında; `MetricReport` zaten dış tüketim için yapısal
+  (exporter P2 adayı).
+
+- [x] **Load test harness'i (P0) + ilk uçtan uca sayılar** —
+  `gsb-loadgen` binary'si (`crates/gsb-server`, **kalıcı araç olarak
+  commit edildi** — spec'in "örnek binary" niyetini `[[bin]]` olarak
+  yerine getirir; gerekçe: duman testi `CARGO_BIN_EXE_gsb-loadgen` ile
+  spawn'layabilsin ve gerçek `RESULT` satırı üretilsin). Modlar:
+  **in-process** (gerçek sunucu `start_server_metrics` ile ephemeral
+  portta + N gerçek TCP istemcisi aynı runtime'ta — sunucu tarafı
+  metrikler kanaldan, stdout parse'ı **yok**) ve **external**
+  (`--addr` ile yalnız istemci tarafı). Yapılandırma: N, `--duration`,
+  `--move-ms`, `--room`, `--stagger-ms` (istek i, i×ms gecikmeyle
+  bağlanır — 0 = hepsi birden), `--addr`. Duman testi
+  (`tests/loadgen_smoke.rs`): binary spawn edilir (3 istemci × 3 s),
+  `RESULT` satırı parse edilir — 3/3 connect+join+leave, istemci VE
+  **sunucu tarafı** tick hızı 20–40 Hz bandında, snapshot akışı ve
+  sunucu byte sayaçları > 0 (suite 3.2 sn; ağırlıklı koşular bilinçli
+  olarak suite dışında: spec "normal suite'ü yavaşlatmasın, flaky
+  yapmasın" — 10 sn × ölçek başına in-suite koşul bu şartı bozardı).
+  Elenen alternatifler: (a) suite içinde N=1000 test — yavaş + flaky
+  (CI yükünde); (b) sunucu stdout'unu parse eden dış araç — sunucu
+  tarafı metrikleri yapısal olarak yakalayamazdı (hız/histogram),
+  log formatına sessiz bağımlılık doğar; kanal sink'i zaten üretim
+  sunucunun kullandığı yol. (c) Hazır yük kütüphanesi (k6/locust) —
+  gsb frame protokolünü (AUTH/JOIN/MOVE/SNAPSHOT) konuşan istemci
+  yine elle yazılacaktı; tek binary in-tree duman testini bir satır
+  uzakta tutuyor.
+  **Yöntem (dürüstlük cümlesi):** istemciler ve sunucu **aynı
+  makinede** (in-process modda aynı runtime'ta; 32 çekirdek,
+  release profile, load avg ≈2.5–3.3, somaxconn 4096) çalıştığından
+  ölçülen sunucu kapasitesi **alt sınırdır** — istemci işi (decode,
+  read loop, tekte 227 MB/s alma) sunucunun CPU'suyla yarışır; ayrı
+  yük makinesinde sayılar yukarı çıkar.
+  **Ham sayılar (10 s pencere, 30 Hz oda, tek oda, 150 ms MOVE_TO;
+  release, 32 çekirdek):**
+
+  | Metrik | N=100 (burst) | N=500 (burst) | N=1000 (burst) | N=1000 (stagger 2ms) |
+  |---|---|---|---|---|
+  | connected / joined / left | 100/100/100 | 500/500/500 | 1000/**748**/748 | 1000/1000/1000 |
+  | hatalı istemci | 0 | 0 | 0 | 0 |
+  | connect p50 / p99 | 14ms / 14ms | 1012ms / 1076ms | 1006ms / 1068ms | 0ms / 5ms |
+  | snapshot/istemci (p50) | 292 | 268 | 261 | 270 |
+  | istemci tick hızı (snapshot `sequence`, median) | 30.00 Hz | 30.00 Hz | 30.00 Hz | 30.00 Hz |
+  | **sunucu** tick hızı (raporlar median) | 30.00 Hz | 30.00 Hz | 30.00 Hz | 29.99 Hz |
+  | oda adımı (10 s) | 304 | 304 | 304 | 304 |
+  | adım süresi p50 / max | 75µs / 240µs | 375µs / 931µs | 3000µs / 4305µs | 3000µs / 2822µs |
+  | adım histogramı (µs; [0,50) [50,100) [100,250) [250,500) [500,1k) [1k,5k) [5k,∞)) | [115,147,42,0,0,0,0] | [9,6,42,130,117,0,0] | [8,3,21,9,108,155,0] | [3,3,12,11,18,257,0] |
+  | tick gecikmesi max (`late`) | 27µs | 23µs | 37µs | 20µs |
+  | **atılan batch** | 0 | 0 | 0 | 0 |
+  | lagged event/tick | 0/0 | 0/0 | 0/0 | 0/0 |
+  | sunucu çıkış (fan-out, net) | 2.30 MB/s | 58.06 MB/s | 128.84 MB/s | 227.11 MB/s |
+  | tepe snapshot payload | 798 B | 4334 B | 6543 B | 8807 B |
+  | tepe bağlantı | 100 | 500 | 748 | 1000 |
+
+  **İlk doyma metriği (ölçüm, tahmin değil):** 100 ve 500'de hiçbir
+  metrik doyuyor değil — tick hızı iki tarafta da 30.00, drop 0,
+  `late` ≈20-27µs, adım p50 bütçenin (33.3ms @30Hz) %0.2-1.1'i.
+  N ile **büyüyen tek metrik adım süresi**: 75µs (100) → 375µs (500)
+  → 3000µs (1000) p50 — 1000 üyede bütçenin ~%9'u (p99≈3ms, max
+  2.8–4.3ms); histogramın ağırlığı [1k,5k) kutusunda. Bu metrik
+  fan-out'un maliyeti (snapshot kodlama O(entity) + bağlantı başına
+  Arc klonu + `try_send`): N büyüdükçe ilk doyaan şey adım bütçesi
+  olacak — doğrusal dışa vurumla (3ms@1000 → 33ms) tek odada
+  ~10k üye bütçeyi doldurur; bu tam olarak P2'nin (AOI, oda
+  bölme) hedeflediği duvar. Drop 0'ın nedeni: 256 derinlikli
+  `conn_out` kanalı + hızlı istemci fan-out'u emer; 227 MB/s
+  loopback çıkışı da sorun yaratmıyor.
+  **Burst bağlantı bulgusu (spec dışı, dürüst raporlama):**
+  N≥~150 **eşzamanlı** connect (loopback) 10 s pencerede joined<N
+  yapıyor (koşu bazında 748–956/1000; her koşuda ~1 s'lik dalgalar).
+  Kök neden minimal probe ile izole edildi (gsb kodu **yok**, sıfır
+  işli ham tokio accept loop): tokio/mio'nun edge-triggered
+  (EPOLLET) readiness'i burst'te accept görevini durum-değişimi
+  kenarı başına uyandırıyor — kuyruk dolu kalırken yeni kenar
+  gelmiyor, istemci ~1 s sonra SYN yinelerek uyanıyor. Aynı
+  makinede native (std) accept loop 1000 bağlantıyı **122ms**'de
+  kabul ediyor; kernel kuyruğu suçlu değil (backlog 1024, kimse
+  accept etmese bile 500 el sıkışma <200ms'de tamamlanıyor); ve
+  **stagger'lı** istemcilerle (1ms aralık → 1000/s) hem probe hem
+  gsb accept loop sıfır dalga ile yetişiyor. Sonuç: gerçekçi
+  kademeli join'de bağlantı kurma sorunsuz (stagger koşusu:
+  connect p50=0ms, 1000/1000 join); burst sayıları loopback
+  burst'ının tokio accept yolundaki bir artefaktıdır — v1 bulgusu
+  olarak raporlanır, actor modeli kapsamında düzeltme yok.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
-- [ ] **Load test harness'i** — en kritik kalan iş; 100k iddiasının tek
-  kanıtı bu olacak. Scripted client: N bağlantı aç → join → sürekli
-  MOVE_TO; sunucu tarafında tick süresi (p50/p99), `dropped_frames/s`,
-  bağlantı/oda sayıları. Mevcut e2e altyapısı üzerine (`tests/load.rs`
-  veya `examples/loadgen.rs`).
-- [ ] **Temel metrik** — periyodik (1 Hz) rapor: bağlantı sayısı, oda
-  başına entity, tick ms, drop hızı. Basit sayaç + tracing; metrik
-  kütüphanesi yok.
+- [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
+  duman testi; 100/500/1000 ham sayılar, ilk doyma analizi ve burst
+  bağlantı bulgusu "Kapatılanlar (metrik + yük turu)" bölümünde. 100k
+  ölçeği hâlâ ölçülmedi (P2 — AOI/oda bölme sonrasına göre planlanır).
+- [x] **Temel metrik** — kapatıldı: `gsb_core::metrics` +
+  `MetricsCollector` (1 s rapor; log/kanal sink); kapsam ve tasarım
+  "Kapatılanlar (metrik + yük turu)" + DESIGN §12'de.
 - [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
   kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.
 
@@ -465,13 +626,21 @@ başlıklarındaki kalan işler.
 
 ## P2 — Ölçek (load test sonrasına göre sıralanır)
 
+İlk yük turu (100/500/1000 — "Kapatılanlar (metrik + yük turu)")
+sıralamayı destekledi: N ile büyüyen tek metrik **adım süresi**
+(fan-out maliyeti) ve registry'ye tek bir baskı sinyali gelmedi
+(drop 0, late ≈0, bağlantı/oda olayları sönük). Sıra: AOI önce,
+delta sonra; şeritleme veri gelmedikçe dokunulmaz.
+
 - [ ] **AOI / oda içi görünürlük** (`DESIGN.md` §8) — tek odada 100k
   bağlantı: 1.5 milyar frame teslimi/sn **CPU** duvarı. Oda segmentasyonu
-  + `Visibility` trait'i.
+  + `Visibility` trait'i. (Yük turu: tek odada ~10k üye adım bütçesini
+  dolduracak kadar yakın — bu duvarın ilk parçası.)
 - [ ] **Delta yayın** — son snapshot farkı; bant kazancı.
 - [ ] **Registry şeritleme** — dispatcher tasarımı registry'yi bloke
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test
-  gösterirse room bazlı parçalar.
+  gösterirse room bazlı parçalar. (İlk turda göstermedi: 1000
+  bağlantıda opens/closes/joins akışı adıma hiç gölge düşürmedi.)
 - [ ] **`QueryState` yeniden kullanımı** — oda başına bir kez kur, tick'te
   sadece `iter`.
 - [ ] **Kompresyon (zstd)** — batch'ler üzerine transport seçeneği.

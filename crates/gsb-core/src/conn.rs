@@ -15,6 +15,8 @@
 //! client drops its own input, never stalls the actor or the room). It
 //! never multiplexes: every branch is a channel receive.
 
+use std::time::{Duration, Instant};
+
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
@@ -25,8 +27,14 @@ use gsb_protocol::{FrameBody, MessageTable, ProtoError, base};
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::metrics::{ConnSample, MetricsEvent};
 use crate::registry::RegistryMsg;
 use crate::room::Action;
+
+/// How often an active connection flushes its wire-byte counters as a
+/// sample (a connection with no inbound frames does not flush until its
+/// final flush at close — it has nothing new to report in the meantime).
+const METRICS_FLUSH_EVERY: Duration = Duration::from_millis(500);
 
 /// Messages addressed to the connection actor.
 #[derive(Debug)]
@@ -60,6 +68,22 @@ pub struct ConnectionActor {
     /// The room's per-connection action channel (set on join, cleared on
     /// leave / room-gone). Game-band opcodes are `try_send`-ed here.
     actions: Option<Mailbox<Action>>,
+    /// Local wire-byte counters (see [`crate::metrics`]); flushed as
+    /// deltas — on inbound frames at most once per `METRICS_FLUSH_EVERY`
+    /// and a final time at close. The dominant outbound traffic (room
+    /// fan-out) is counted by the room, not here.
+    m_in_bytes: u64,
+    m_in_frames: u64,
+    m_out_bytes: u64,
+    m_out_frames: u64,
+    m_flushed_in_bytes: u64,
+    m_flushed_in_frames: u64,
+    m_flushed_out_bytes: u64,
+    m_flushed_out_frames: u64,
+    m_last_flush: Instant,
+    /// Outbound metrics path (synchronous unbounded send — the actor's
+    /// only await stays the inbox `recv`).
+    metrics: mpsc::UnboundedSender<MetricsEvent>,
 }
 
 impl ConnectionActor {
@@ -69,6 +93,8 @@ impl ConnectionActor {
         registry: Mailbox<RegistryMsg>,
         inbox: Inbox<ConnIn>,
         out: Mailbox<FrameBatch>,
+        // Outbound metrics path (see `crate::metrics`).
+        metrics: mpsc::UnboundedSender<MetricsEvent>,
     ) -> Self {
         Self {
             conn,
@@ -78,6 +104,16 @@ impl ConnectionActor {
             inbox,
             out,
             actions: None,
+            m_in_bytes: 0,
+            m_in_frames: 0,
+            m_out_bytes: 0,
+            m_out_frames: 0,
+            m_flushed_in_bytes: 0,
+            m_flushed_in_frames: 0,
+            m_flushed_out_bytes: 0,
+            m_flushed_out_frames: 0,
+            m_last_flush: Instant::now(),
+            metrics,
         }
     }
 
@@ -89,7 +125,15 @@ impl ConnectionActor {
     pub async fn run(mut self) {
         while let Some(msg) = self.inbox.recv().await {
             match msg {
-                ConnIn::Frame(frame) => self.handle_frame(frame).await,
+                ConnIn::Frame(frame) => {
+                    // Metrics: count this frame's wire bytes (frame body:
+                    // 2-byte op + payload) before handling it.
+                    self.m_in_bytes =
+                        self.m_in_bytes.saturating_add(2 + frame.payload.len() as u64);
+                    self.m_in_frames += 1;
+                    self.maybe_flush_metrics(false);
+                    self.handle_frame(frame).await
+                }
                 ConnIn::Closed { reason } => {
                     debug!(%self.conn, %reason, "connection closed by peer/io");
                     break;
@@ -115,11 +159,46 @@ impl ConnectionActor {
             }
         }
 
+        // Metrics: final flush of whatever is unflushed (marks the
+        // connection's end).
+        self.maybe_flush_metrics(true);
+
         // Cleanup: tell the registry so the player entity is despawned.
         let _ = self
             .registry
             .send(RegistryMsg::ConnClosed { conn: self.conn })
             .await;
+    }
+
+    /// Flush this connection's wire-byte counters as a delta sample when
+    /// there is new data and the flush interval has passed (or unconditionally for the
+    /// final flush). Synchronous: the only check is an `Instant`
+    /// comparison on each inbound frame, so the actor's only await stays
+    /// the inbox `recv`.
+    fn maybe_flush_metrics(&mut self, last: bool) {
+        let in_b = self.m_in_bytes - self.m_flushed_in_bytes;
+        let in_f = self.m_in_frames - self.m_flushed_in_frames;
+        let out_b = self.m_out_bytes - self.m_flushed_out_bytes;
+        let out_f = self.m_out_frames - self.m_flushed_out_frames;
+        if in_b == 0 && in_f == 0 && out_b == 0 && out_f == 0 {
+            return;
+        }
+        if !last && Instant::now().duration_since(self.m_last_flush) < METRICS_FLUSH_EVERY {
+            return;
+        }
+        self.m_flushed_in_bytes = self.m_in_bytes;
+        self.m_flushed_in_frames = self.m_in_frames;
+        self.m_flushed_out_bytes = self.m_out_bytes;
+        self.m_flushed_out_frames = self.m_out_frames;
+        self.m_last_flush = Instant::now();
+        let _ = self.metrics.send(MetricsEvent::Conn(ConnSample {
+            conn: self.conn,
+            bytes_in: in_b,
+            bytes_out: out_b,
+            frames_in: in_f,
+            frames_out: out_f,
+            last,
+        }));
     }
 
     fn detach(&mut self) {
@@ -297,6 +376,12 @@ impl ConnectionActor {
 
     async fn send_frame<M: prost::Message + std::any::Any>(&mut self, op: u16, msg: &M) {
         if let Some(fb) = self.table.frame(op, msg) {
+            // Metrics: count this control frame's wire bytes (frame body:
+            // 2-byte op + payload). Room fan-out bytes are counted by the
+            // room, not here.
+            self.m_out_bytes =
+                self.m_out_bytes.saturating_add(2 + fb.payload.len() as u64);
+            self.m_out_frames += 1;
             let _ = self.out.send(vec![fb]).await;
         }
     }

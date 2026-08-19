@@ -45,19 +45,42 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 | `gsb-core` | ID'ler, kanallar, global ticker, registry actor, oda actor (5 fazlı tick), bağlantı actor |
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump görevleri + varsayılan TCP |
 | `gsb-game` | **Tüm oyun mantığı** (component'ler, sistemler, `RoomLogic`, oyun protosu) |
-| `gsb-server` | Compozisyon kökü: config, başlatma, `gsb-server` binary'si + client örneği |
+| `gsb-server` | Compozisyon kökü: config, başlatma, `gsb-server` binary'si + client örneği + `gsb-loadgen` yük üreticisi |
 
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 34 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e
+cargo test --workspace          # 38 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır
+RUST_LOG=info cargo run -p gsb-server   # ayrıca saniyelik gsb-metric metrik satırları (DESIGN §12)
 ```
 
 `config.example.toml` dosyasındaki tüm anahtarlar isteğe bağlıdır; eksik olanlar
 için gömülü varsayılanlar kullanılır.
+
+## Yük testi (gsb-loadgen)
+
+Kalıcı yük üreticisi binary'si (ilk uçtan uca sayılar ve doyma analizi:
+`docs/ROADMAP.md` "metrik + yük turu"):
+
+```sh
+cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
+# N istemci (vars. 100), 10 s pencere, 150 ms MOVE_TO, tek oda.
+# In-process: gerçek sunucu (ephemeral port) + N gerçek TCP istemcisi;
+# sunucu tarafı metrikler kanaldan yakalanır (stdout parse yok).
+# --stagger-ms MS: istemci i, i×MS gecikmeyle bağlanır (vars. 0 = hepsi birden;
+#  loopback burst'i accept yolunun en kötü halidir — bkz. ROADMAP bulgusu).
+# --addr HOST:PORT: harici sunucuya yalnız istemci modu.
+```
+
+Çıktı: insan-okunur rapor + tek satır `RESULT mode=.. clients=.. joined=..
+snap_per_client_p50=.. tick_hz_med=.. server_hz=.. step_p50_us=.. dropped=..
+server_in_bps=.. server_out_bps=.. peak_conns=..` (scriptlenebilir).
+Duman testi (`gsb-server/tests/loadgen_smoke.rs`) suite'in içinde binary'yi
+gerçekten spawn eder ve `RESULT`'ı doğrular; ağırlıklı koşular bilinçli olarak
+suite dışında (yavaşlatmasın, flaky yapmasın).
 
 ## Çevrimiçi protokol
 
@@ -88,4 +111,8 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
 
 ## Belgeler
 
-- `docs/DESIGN.md` — mimari kararlar, ölçekleme, kısıtlar ve yol haritası.
+- `docs/DESIGN.md` — mimari kararlar, ölçekleme, metrik altyapısı (§12),
+  kısıtlar ve yol haritası.
+- `docs/ROADMAP.md` — ne kaldı; kapatılan turlar (ham yük testi sayıları
+  dahil).
+- `docs/TICK-ARCHITECTURE.md` — broadcast tabanlı tick mimarisi.

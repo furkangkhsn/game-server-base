@@ -49,6 +49,12 @@
 //! The room actor owns **no** game types: the world is an opaque `W` and
 //! the group key an opaque `G`; all game behaviour is delegated to
 //! [`RoomLogic`].
+//!
+//! **Metrics:** the room's counters live in the room's own local state
+//! ([`RoomCounters`]) and are flushed once per step over the metrics
+//! channel with a *synchronous* unbounded send — the room's only `await`
+//! stays `tick_rx.recv()` and the tick body stays fully synchronous
+//! (see [`crate::metrics`] for the design and the constraint rationale).
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -61,6 +67,7 @@ use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::metrics::{MetricsEvent, RoomSample, HIST_BINS};
 use crate::ticker::TickInfo;
 
 /// A client action forwarded by the connection actor. The payload is still
@@ -273,6 +280,47 @@ struct GroupState {
     size_warned: bool,
 }
 
+/// The room's local metric counters (all cumulative; see [`crate::metrics`]).
+/// Owned by the room and never shared: each step the room builds a
+/// [`RoomSample`] from them and hands it to the collector over the
+/// metrics channel (synchronous unbounded send — no await).
+#[derive(Debug, Default)]
+struct RoomCounters {
+    /// Broadcast `Lagged` occurrences / missed tick indices.
+    lagged_events: u64,
+    lagged_ticks: u64,
+    /// Step body duration µs: min / max / sum + histogram (binning).
+    step_min_us: u64,
+    step_max_us: u64,
+    step_sum_us: u64,
+    step_hist: [u64; HIST_BINS],
+    /// Tick processing latency µs (step start − ticker `at`): min/max/sum.
+    late_min_us: u64,
+    late_max_us: u64,
+    late_sum_us: u64,
+    /// Outbound batches dropped at the fan-out (slow client), cumulative.
+    dropped_frames: u64,
+    /// Input actions dropped on READ overflow, cumulative.
+    dropped_actions: u64,
+    /// Keep-alive re-sends, cumulative.
+    keepalive_resends: u64,
+    /// Group snapshots encoded, cumulative (+ encoded bytes, max payload).
+    snapshots: u64,
+    snap_bytes: u64,
+    snap_bytes_max: u32,
+    /// Snapshot + private bytes/frames shipped to the room's connections,
+    /// cumulative.
+    shipped_bytes: u64,
+    shipped_frames: u64,
+    private_frames: u64,
+    /// Joins / leaves processed on the control channel, cumulative.
+    joins: u64,
+    leaves: u64,
+    /// Largest snapshot group this tick (recomputed in the broadcast
+    /// phase; carried in the per-step sample as a gauge).
+    step_max_group: u32,
+}
+
 /// The room actor. Owns the world, the connection table, and the group
 /// table; everything mutable is local, so no synchronization is needed.
 ///
@@ -297,7 +345,11 @@ pub struct RoomActor<W, G> {
     /// Every k-th step, unchanged groups re-send their last snapshot
     /// (`None` = keep-alive disabled).
     keepalive_every: Option<u64>,
-    dropped_frames: u64,
+    /// Local metric counters (flushed per step; see [`RoomCounters`]).
+    m: RoomCounters,
+    /// Outbound metrics path: an unbounded channel mailbox (see
+    /// [`crate::metrics`]); the send is synchronous, so it adds no await.
+    metrics: mpsc::UnboundedSender<MetricsEvent>,
 }
 
 impl<W, G> RoomActor<W, G>
@@ -311,6 +363,10 @@ where
         tick_rx: broadcast::Receiver<TickInfo>,
         control_rx: Inbox<RoomControl>,
         run_every: u64,
+        // Outbound metrics path (see `crate::metrics`). A dropped receiver
+        // simply makes the per-step send fail (ignored) — the room does not
+        // observe it.
+        metrics: mpsc::UnboundedSender<MetricsEvent>,
     ) -> Self {
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
@@ -344,7 +400,8 @@ where
             last_at: None,
             steps: 0,
             keepalive_every,
-            dropped_frames: 0,
+            m: RoomCounters::default(),
+            metrics,
         }
     }
 
@@ -362,8 +419,11 @@ where
                 Ok(t) => t,
                 // We fell behind by more than the broadcast buffer: skip
                 // these; the wall-clock dt of the next step covers the gap
-                // (bounded by the catch-up cap).
+                // (bounded by the catch-up cap). Counted for metrics:
+                // `lagged_*` is the room's "missed ticks" signal.
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    self.m.lagged_events += 1;
+                    self.m.lagged_ticks += missed;
                     warn!(
                         room = %self.config.id,
                         missed,
@@ -384,14 +444,53 @@ where
         self.logic.on_shutdown();
         debug!(
             room = %self.config.id,
-            dropped_frames = self.dropped_frames,
+            dropped_frames = self.m.dropped_frames,
             "room actor stopped"
         );
     }
 
-    /// One full step: control → read → convert → systems → broadcast.
-    /// Synchronous. Returns `false` when the actor should stop.
+    /// One full step: control → read → convert → systems → broadcast,
+    /// measured (tick latency + step body duration) and flushed to the
+    /// metrics channel once at the end. Synchronous: the send is an
+    /// unbounded (non-parking) mailbox send, so the room's only await
+    /// stays `tick_rx.recv()`. Returns `false` when the actor should stop.
     fn step(&mut self, t: &TickInfo) -> bool {
+        self.steps += 1;
+
+        // -- tick latency: how late this room processes the tick (step
+        //    start minus the ticker's timestamp; covers broadcast delivery
+        //    + the room's queue behind the ticker).
+        let late_us = Instant::now().saturating_duration_since(t.at).as_micros() as u64;
+        if self.steps == 1 {
+            self.m.late_min_us = late_us;
+            self.m.late_max_us = late_us;
+        } else if late_us > self.m.late_max_us {
+            self.m.late_max_us = late_us;
+        }
+        self.m.late_sum_us = self.m.late_sum_us.saturating_add(late_us);
+
+        let t0 = Instant::now();
+        let keep = self.step_phases(t);
+        let step_us = t0.elapsed().as_micros() as u64;
+        if self.steps == 1 {
+            self.m.step_min_us = step_us;
+            self.m.step_max_us = step_us;
+        } else if step_us > self.m.step_max_us {
+            self.m.step_max_us = step_us;
+        }
+        self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
+        self.m.step_hist[crate::metrics::hist_index(step_us)] += 1;
+
+        // Flush this room's counters (synchronous; a closed channel just
+        // fails the send and is ignored).
+        let _ = self.metrics.send(MetricsEvent::Room(self.sample()));
+        keep
+    }
+
+    /// The five phases (moved out of [`Self::step`] so the whole body is
+    /// measurable). Synchronous. Returns `false` when the actor should
+    /// stop.
+    fn step_phases(&mut self, t: &TickInfo) -> bool {
         // -- time: wall-clock since the last step; covers missed ticks
         //    (frame-rate independent), capped for pathological stalls.
         let dt = {
@@ -441,6 +540,7 @@ where
         if actions.len() > self.config.max_pending_actions {
             let over = actions.len() - self.config.max_pending_actions;
             actions.drain(..over);
+            self.m.dropped_actions += over as u64;
             warn!(
                 room = %self.config.id,
                 dropped = over,
@@ -457,9 +557,41 @@ where
         // -- Phase 4 — BROADCAST: one snapshot per group, frozen once and
         //    shared by reference; per-connection fan-out of
         //    [group snapshot] + [private?].
-        self.steps += 1;
+        //    (the step counter was bumped at the top of `step`)
         self.broadcast_phase(&ctx);
         true
+    }
+
+    /// Build this room's metrics sample (cumulative counters + current
+    /// gauges) for the per-step flush (see [`crate::metrics`]).
+    fn sample(&self) -> RoomSample {
+        RoomSample {
+            room: self.config.id,
+            steps: self.steps,
+            lagged_events: self.m.lagged_events,
+            lagged_ticks: self.m.lagged_ticks,
+            step_min_us: self.m.step_min_us,
+            step_max_us: self.m.step_max_us,
+            step_sum_us: self.m.step_sum_us,
+            step_hist: self.m.step_hist,
+            late_min_us: self.m.late_min_us,
+            late_max_us: self.m.late_max_us,
+            late_sum_us: self.m.late_sum_us,
+            dropped_frames: self.m.dropped_frames,
+            dropped_actions: self.m.dropped_actions,
+            keepalive_resends: self.m.keepalive_resends,
+            snapshots: self.m.snapshots,
+            snap_bytes: self.m.snap_bytes,
+            snap_bytes_max: self.m.snap_bytes_max,
+            shipped_bytes: self.m.shipped_bytes,
+            shipped_frames: self.m.shipped_frames,
+            private_frames: self.m.private_frames,
+            joins: self.m.joins,
+            leaves: self.m.leaves,
+            groups: self.groups.len() as u32,
+            members: self.conns.len() as u32,
+            max_group: self.m.step_max_group,
+        }
     }
 
     /// Phase 4, in four passes. Field-level borrows keep the logic, the
@@ -482,6 +614,9 @@ where
         for (conn, rc) in &self.conns {
             members.entry(rc.group.clone()).or_default().push(*conn);
         }
+        // Gauge for the per-step sample: the largest group this tick.
+        self.m.step_max_group =
+            members.values().map(Vec::len).max().unwrap_or(0) as u32;
         // Drop groups whose members all left (frees the cached snapshot).
         let gone: Vec<G> = self
             .groups
@@ -556,10 +691,21 @@ where
                         "snapshot exceeds max_snapshot_bytes (rUDP MTU readiness)"
                     );
                 }
+                // Metrics: one encoded snapshot and its payload size.
+                self.m.snapshots += 1;
+                let n = buf.len() as u64;
+                self.m.snap_bytes = self.m.snap_bytes.saturating_add(n);
+                if n > self.m.snap_bytes_max as u64 {
+                    self.m.snap_bytes_max = n as u32;
+                }
                 let payload = buf.freeze();
                 st.sent = Some(payload.clone());
                 st.last = Some(payload);
             } else if keep_due {
+                // A re-send only happens when there is a cached snapshot.
+                if st.last.is_some() {
+                    self.m.keepalive_resends += 1;
+                }
                 st.sent = st.last.clone();
             }
         }
@@ -575,10 +721,17 @@ where
                 .get(&rc.group)
                 .and_then(|st| st.sent.clone())
             {
+                // Metrics: one shipped frame and its wire payload size.
+                self.m.shipped_frames += 1;
+                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
                 batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
             let mut pbuf = bytes::BytesMut::new();
             if self.logic.private(&mut self.world, *conn, &mut pbuf) {
+                // Metrics: one shipped private frame and its payload size.
+                self.m.private_frames += 1;
+                self.m.shipped_frames += 1;
+                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
                 batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.freeze()));
             }
             if !batch.is_empty()
@@ -590,7 +743,7 @@ where
                 dropped += 1;
             }
         }
-        self.dropped_frames += dropped;
+        self.m.dropped_frames += dropped;
     }
 
     fn handle_control(&mut self, c: RoomControl) -> bool {
@@ -602,6 +755,7 @@ where
                     self.logic.on_leave(&mut self.world, conn);
                 }
                 let entity = self.logic.on_join(&mut self.world, conn);
+                self.m.joins += 1;
                 let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
                 self.conns.insert(
                     conn,
@@ -625,6 +779,7 @@ where
                 if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
                     self.conns.remove(&conn);
                     self.logic.on_leave(&mut self.world, conn);
+                    self.m.leaves += 1;
                     debug!(room = %self.config.id, %conn, entity, "player left");
                 }
                 true
@@ -640,6 +795,14 @@ mod tests {
     use crate::channel::channel;
     use gsb_protocol::FrameBody;
     use std::time::Duration;
+
+    /// A metrics sender whose receiver is dropped immediately: the room's
+    /// per-step send fails and is ignored (the metric path is covered by
+    /// the dedicated metrics-flow test and by gsb-server's tests).
+    fn null_metrics_tx() -> mpsc::UnboundedSender<MetricsEvent> {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        tx
+    }
 
     /// Test logic recording the dt of every step over a channel (no locks:
     /// this crate's lint forbids them even in tests).
@@ -700,7 +863,15 @@ mod tests {
             let (tick_tx, _first) = broadcast::channel(64);
             let tick_rx = tick_tx.subscribe();
             let (control, control_rx) = channel(config.control_capacity);
-            let actor = RoomActor::new(config, (), Box::new(logic), tick_rx, control_rx, run_every);
+            let actor = RoomActor::new(
+                config,
+                (),
+                Box::new(logic),
+                tick_rx,
+                control_rx,
+                run_every,
+                null_metrics_tx(),
+            );
             Self {
                 tick_tx,
                 control,
@@ -933,6 +1104,7 @@ mod tests {
             lagged_rx,
             control_rx,
             1,
+            null_metrics_tx(),
         );
         let handle = tokio::spawn(actor.run());
 
@@ -971,6 +1143,7 @@ mod tests {
             tick_rx,
             control_rx,
             1,
+            null_metrics_tx(),
         );
         let handle = tokio::spawn(actor.run());
         drop(tick_tx); // ticker aborted → broadcast closes
@@ -1089,6 +1262,7 @@ mod tests {
                 tick_rx,
                 control_rx,
                 1,
+                null_metrics_tx(),
             );
             Self {
                 tick_tx,
@@ -1344,6 +1518,7 @@ mod tests {
             tick_rx,
             control_rx,
             1,
+            null_metrics_tx(),
         );
         let handle = tokio::spawn(actor.run());
         let t0 = Instant::now();
@@ -1538,6 +1713,7 @@ mod tests {
                 tick_rx,
                 control_rx,
                 1,
+                null_metrics_tx(),
             )
         });
         let handle = tokio::spawn(actor.run());
@@ -1624,6 +1800,7 @@ mod tests {
                     tick_rx2,
                     control_rx2,
                     1,
+                    null_metrics_tx(),
                 );
             });
         }
@@ -1752,6 +1929,7 @@ mod tests {
             tick_rx,
             control_rx,
             1,
+            null_metrics_tx(),
         );
         let handle = tokio::spawn(actor.run());
         let t0 = Instant::now();

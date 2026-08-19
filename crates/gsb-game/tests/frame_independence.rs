@@ -197,6 +197,7 @@ impl SimRoom {
             ..Default::default()
         };
         let (control, control_rx) = channel(config.control_capacity);
+        let (metrics_tx, _metrics_rx) = mpsc::unbounded_channel::<gsb_core::metrics::MetricsEvent>();
         let actor = RoomActor::new(
             config,
             World::new(),
@@ -204,6 +205,7 @@ impl SimRoom {
             tick_rx,
             control_rx,
             run_every,
+            metrics_tx,
         );
         let handle = tokio::spawn(actor.run());
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);

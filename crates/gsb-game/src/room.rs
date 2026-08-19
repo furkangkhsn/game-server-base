@@ -22,9 +22,14 @@
 //! self-contained snapshots alone — including across lost snapshots.
 //!
 //! The serial is handed out from this room's **single counter** at two
-//! sites: `on_join` (player entities — the same value also goes to the
-//! joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and the
-//! broadcast pass (everything else that is broadcastable, see below).
+//! call sites: `on_join` (player entities — the same value also goes to
+//! the joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and
+//! the broadcast pass (everything else that is broadcastable, see
+//! below). Both sites go through **one minting point**,
+//! [`DemoRoom::next_serial`], which is the only caller of the
+//! crate-private [`WireId::new`]: the counter's space is closed to
+//! everything else in the crate, and `WireId`'s private field plus the
+//! removed `Default` derive close it to every other crate as well.
 //! Bevy's own `(index, generation)` stays internal: its `to_bits()` low
 //! half is `0xFFFFFFFF - index`, so the varint was 5 bytes in any
 //! realistic room; the serial is 1 byte while the room's total identity
@@ -87,8 +92,10 @@ use crate::systems::MovementSystem;
 pub struct DemoRoom {
     runner: SystemRunner,
     conn_entity: HashMap<ConnectionId, Entity>,
-    /// Next wire identity to hand out (see module docs, "Wire identity").
-    /// Monotonic; a value is never re-used within the room's lifetime.
+    /// The room's wire-identity counter (see module docs, "Wire identity").
+    /// Monotonic; a value is never re-used within the room's lifetime. The
+    /// **only** writer is [`DemoRoom::next_serial`] — the single minting
+    /// point for every [`WireId`] this room ever stamps.
     next_wire_id: u64,
     /// Wire content of the last emitted snapshot of the room's single
     /// group, as `(wire id → (x, y))` (truncated to the wire's
@@ -118,6 +125,19 @@ impl DemoRoom {
             next_wire_id: 0,
             last: HashMap::new(),
         }
+    }
+
+    /// The single minting point for wire identities (module docs, "Wire
+    /// identity"): advances the room's one monotonic counter and wraps the
+    /// value in a [`WireId`]. Both assignment sites — `on_join` (player
+    /// entities) and the broadcast pass's orphan stamping — go through
+    /// this function; no other code may construct a [`WireId`] (the field
+    /// is private, `WireId::new` is crate-private, and `WireId` has no
+    /// `Default`), so the counter stays the identity invariant's only
+    /// source.
+    fn next_serial(&mut self) -> WireId {
+        self.next_wire_id += 1;
+        WireId::new(self.next_wire_id)
     }
 }
 
@@ -176,12 +196,11 @@ impl RoomLogic<World> for DemoRoom {
                 .map(|(entity, _)| entity)
                 .collect();
             for entity in orphans {
-                self.next_wire_id += 1;
-                world.entity_mut(entity).insert(WireId(self.next_wire_id));
+                world.entity_mut(entity).insert(self.next_serial());
             }
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
-                current.push((wire_id.0, pos.x as i32, pos.y as i32));
+                current.push((wire_id.get(), pos.x as i32, pos.y as i32));
             }
         }
 
@@ -227,23 +246,20 @@ impl RoomLogic<World> for DemoRoom {
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
         let (x, y) = spawn_pos(conn);
-        // Hand out the next wire identity (monotonic; never re-used within
-        // the room's lifetime — see module docs, "Wire identity") and
-        // stamp it onto the entity. The same value is returned to the
-        // joiner in `JOIN_ROOM_RESULT`, so both paths share one space.
-        self.next_wire_id += 1;
+        // Hand out the next wire identity through the room's single minting
+        // point (monotonic; never re-used within the room's lifetime — see
+        // module docs, "Wire identity") and stamp it onto the entity. The
+        // same value is returned to the joiner in `JOIN_ROOM_RESULT`, so
+        // both paths share one space.
+        let wire = self.next_serial();
         let entity = world
-            .spawn((
-                Position { x, y },
-                Speed(DEFAULT_SPEED),
-                WireId(self.next_wire_id),
-            ))
+            .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
             .id();
         self.conn_entity.insert(conn, entity);
         // No spawn event: membership is expressed by presence in the next
         // snapshot, which now includes the new entity (the join happened in
         // the control phase, before this tick's broadcast).
-        self.next_wire_id
+        wire.get()
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
@@ -484,7 +500,7 @@ mod tests {
             "unchanged content ⇒ silent (no re-stamp, no re-emit)"
         );
         assert_eq!(
-            world.get::<WireId>(bullet).copied().map(|w| w.0),
+            world.get::<WireId>(bullet).copied().map(WireId::get),
             Some(3),
             "the identity is stable across snapshots"
         );

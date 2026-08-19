@@ -72,6 +72,7 @@ impl TestRoom {
         };
         let (tick_tx, tick_rx) = broadcast::channel(64);
         let (control, control_rx) = channel(config.control_capacity);
+        let (metrics_tx, _metrics_rx) = mpsc::unbounded_channel::<gsb_core::metrics::MetricsEvent>();
         let actor = RoomActor::new(
             config,
             World::new(),
@@ -79,6 +80,7 @@ impl TestRoom {
             tick_rx,
             control_rx,
             1, // room rate == global rate in these tests
+            metrics_tx,
         );
         Self {
             tick_tx,

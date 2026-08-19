@@ -101,7 +101,13 @@ fn factory() -> RoomFactory<(), ()> {
 fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64);
-    let handle = tokio::spawn(Registry::new(rx, tx.clone(), factory(), ticker).run());
+    // Metrics path: sender only; the dropped receiver makes the registry's
+    // sample sends fail (ignored) — these tests cover control-plane
+    // behaviour, the metric path has its own tests.
+    let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = tokio::spawn(
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx).run(),
+    );
     (tx, handle)
 }
 

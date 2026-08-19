@@ -71,6 +71,14 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
       socket
 
   global ticker (tek görev) ── broadcast<TickInfo> ──▶ her room actor'un tek await'i
+                                          │
+                                          └────────────▶ metrik toplayıcı görevi (tek await'i
+                                                         aynı broadcast; rapor süresi ≥ 1 s;
+                                                         bkz. §12)
+
+  registry / room / connection actor'ler ── MetricsEvent örnekleri ──▶ metrik toplayıcı
+                                          (mpsc::unbounded, senkron gönderim —
+                                           oda tick'ine await EKLEMEZ; bkz. §12)
 ```
 
 - **Bağlantı başına 3 görev:** reader pump (socket → `ConnIn::Frame`),
@@ -98,6 +106,10 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   `ConnOpened`'ı **actor'ü başlatmadan önce** registry'e gönderir (ilk
   istemci frame'ine karşı sıralama garantisi). Kalıcı hata durumunda
   (ör. `EMFILE`) 100ms backoff ile dener — CPU spin'i olmaz.
+- **Metrik toplayıcı:** odaların/registry'nin/bağlantıların sayacalarını
+  **kanaldan** toplayan tek görev (bkz. §12). Saat kaynağı ticker'ın
+  broadcast'i — odalarla aynı tek-await disipline sahiptir; ticker kapanınca
+  son raporu basıp çıkar.
 
 ## 4. Oda tick'i: 5 faz
 
@@ -306,6 +318,19 @@ katmanında değişiklik sıfırdır.**
   gelen, `Position` taşıyan her entity; aşağıda). Bevy'nin `(index,
   generation)` çifti oda içine kalır; neden tam bevy bits telde taşınmaz
   ve kimlik değişmezi (invariant) nasıl korunur: §8.
+- **Minting kapısı kapalı (tip düzeyinde):** `WireId(u64)`'ün **field'ı
+  private** ve `Default` derive'ı kaldırıldı — yani `WireId(42)` yazılamaz
+  (crate dışında zaten, crate içinde de farklı modüllerden) ve
+  `WireId::default()` (0 = "atanmamış") üretilemez. Tek inşaat yolu
+  `WireId::new(u64)` (`pub(crate)`, `const`) ve o da pratikte yalnız
+  **odanın tek minting noktasından** çağrılır: `DemoRoom::next_serial()`
+  (sayaç `next_wire_id`; iki çağrı noktası — `on_join` ve broadcast
+  yetim-damgası — bu tek noktanın üzerinden geçer). Okuma tarafı açık
+  kalmalıydı (`pub const fn get(self)`): kimlik *okumak* meşrudur,
+  *üretmek* değil. Bu, yayınlanabilirlik turundaki "yapısal olarak
+  kapatılamaz" hükmünün geri kalanını kapatır: sayacın sahibi zaten oda
+  actor'ünün yerel durumuydu; eksik olan yalnızca tipin mint tarafının
+  tek noktaya indirgenmesiydi (bkz. ROADMAP "metrik + yük turu").
 - **Yayınlanabilir küme (= `Position` taşımak) — yapısal ön koşul:** bir
   entity yayınlanabilmesi için `Position` taşıması yeterli ve bu ön
   koşul **yorumda yaşayan bir disiplin değil, kodda yapısal**dır:
@@ -423,6 +448,8 @@ ServerHandle::stop
   → accept loop: JoinHandle.abort()   (belgelenmiş tek sert abort)
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
     için EOF'ı bekleyemezdi — artık beklemez)
+  → metrik toplayıcı: ticker'ın broadcast'i kapanınca Closed görür,
+    son raporu basıp temiz çıkar (bkz. §12)
 ```
 
 Accept loop'un `JoinHandle` ile abort edilmesi v1'in bilinçli bir kısıtıdır:
@@ -509,6 +536,20 @@ birlikte ele alınacak).
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**
   görür. Tüm yol tek test: pump → bağlantı actor → registry → dispatcher →
   oda → bevy world → hareket sistemi → grup snapshot'ı → writer pump.
+- **gsb-core (metrik yolu):** `room_counters_flow_to_collector` — gerçek
+  `RoomActor` (canlı metrik göndericisi) + gerçek `MetricsCollector`
+  (kanal sink): oda actor'ünün **yerel** sayacı (drop, steps, joins,
+  members, step süreleri) actor'ün *dışından*, toplayıcının raporlarıyla
+  doğrulanır — yani sayacın aktörden kanalla çıktığı kanıtı
+  (sentez ticker: besleme görevi, gerçek zamanlı 100 Hz). Birikim + hız
+  penceresi (Δ/rapor) ve histogram sınıflandırması ayrı unit testlerde.
+- **gsb-server (yük üreticisi dumanı):** `loadgen_smoke` — gerçek
+  `gsb-loadgen` binary'si spawn edilir (3 istemci × 3 s, in-process
+  sunucu), `RESULT` satırı ayrıştırılır: 3/3 connect+join+leave, istemci
+  ve **sunucu tarafı** tick hızı 20–40 Hz bandında (konfigure 30 Hz),
+  snapshot akışı + sunucu taraflı byte sayaçları > 0. Ağırlıklı koşular
+  (100/500/1000) bilinçli olarak suite dışında: suite'ü yavaşlatmaz,
+  flaky yapmaz (bkz. ROADMAP "metrik + yük turu").
 
 **Adım maliyeti (release, oda actor'ünün senkron tick gövdesi):**
 N hareketsiz oyuncu + her tick hareket eden 1 oyuncu, 30 Hz oda,
@@ -528,7 +569,65 @@ modelin maliyeti O(entity + üye) ve bağlantı sayısından bağımsız
 (snapshot bir kez kodlanır, referansla dağıtılır). Ölçüm probe'u commit
 edilmedi; senaryo ve tablo bu commit'in doğrulamasıdır.
 
-## 12. Derleme zamanı korumaları
+## 12. Metrik altyapısı (kanalla taşıma)
+
+Sunucu içi ölçüm, §2 disiplininin uzantısıdır: **sayaçlar ait olduğu
+aktörün yerel durumundadır** ve dışarı **kanalla taşınır** — paylaşımlı
+durum yok, kilit yok.
+
+```text
+room actor (her adım sonunda, senkron)   ─┐
+registry (olay başına: open/close/      ─┼─▶ mpsc::unbounded<MetricsEvent>
+          join/leave/room)               │        (send = senkron, await YOK)
+conn actor (≤1/sn + kapanışta son)      ─┘                  │
+                                                            ▼
+                    metrik toplayıcı görevi (MetricsCollector)
+                    tek await'i: ticker broadcast aboneliği (odalarla aynı
+                    saat kaynağı); her tick'te rx.try_recv() ile boşaltır;
+                    rapor süresi (vars. 1 s) dolunca MetricReport üretir;
+                    ticker kapalıysa → son rapor + temiz çıkış
+                                                            │
+                                     ┌──────────────────────┴──────────────────┐
+                                     ▼                                         ▼
+                          MetricSink::Log                            MetricSink::Channel
+                          (tracing info: gsb-metric scope=.. k=v)    (→ uygulama/
+                          RUST_LOG=info ile görünür; yoksa sessiz)   yük üreticisi/test)
+```
+
+**Neden unbounded kanal:** `UnboundedSender::send` **senkron**dur
+(`Result` döner, `Future` değil) — room actor'ünün tick gövdesine **hiç
+await eklenmez**; tek await hâlâ `tick_rx.recv()`'tir (spec'in sert
+şartı). Bounded kanal `send`'i Future olduğundan tick içinde
+beklemeyi gerektirirdi — elendi (bkz. ROADMAP). Örnekler sabit boyutlu
+(kırk küsur bayt) ve oda başına adım başına en fazla bir tane olduğundan
+geri-baskı fiilen sorun değildir; toplayıcı geride kalırsa en kötü
+hal örnek kaybıdır, tick durdurulamaz.
+
+**Ne ölçülür (neden):**
+
+| Kapsam | Metrik | Sorulan soru |
+|---|---|---|
+| oda | `steps`, `hz` (Δadım/rapor), `late_*` (tick gecikmesi), `step_*` + `step_hist` (adım süresi dağılımı: [0,50) [50,100) [100,250) [250,500) [500,1k) [1k,5k) [5k,∞) µs) | konfigure hıza ulaşılıyor mu? adım bütçesinin (33 ms @30 Hz) neresindeyiz? |
+| oda | `lagged_events/ticks` | broadcast tamponu aşıldı mı (oda tick kaçırıyor mu)? |
+| oda | `dropped`, `keepalive_resends` | fan-out backpressure'ı (yavaş istemci) var mı? |
+| oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_*` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali) |
+| oda | `groups`, `members`, `max_group`, `joins`, `leaves` | oda doluluğu ve churn |
+| registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
+| conn | `bytes_in/out`, `frames_in/out` (delta) | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
+
+Rapor satırları kararlı `key=value` biçimindedir (`gsb-metric
+scope=room id=r1 steps=.. hz=.. step_hist=[..] ..`) — grep/parse'e uygun.
+Ortak bilinen sınırlılık: **shutdown sırasında registry'nin kümülatif
+sayaçları oda sayılarının gerisinde kalabilir** (registry `Shutdown`
+işlenince break eder; oda, kontrol drenajını — kalan leave'leri — tamamlayıp
+çıkar). Kapanış anındaki kesin değerler için oda kapsamı otoritedir.
+
+**Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
+logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan
+programatik (yük üreticisi ve testler bu yoldan kullanır). Yük testi
+sayıları ve ilk doyma analizi: ROADMAP "Kapatılanlar (metrik + yük turu)".
+
+## 13. Derleme zamanı korumaları
 
 - `unsafe_code = "forbid"` — her crate'te.
 - `gsb-lint` — 6 crate'in `build.rs`'inde (lint crate'i hariç) select/kilit

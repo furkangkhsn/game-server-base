@@ -23,9 +23,13 @@ pub mod channel;
 pub mod conn;
 pub mod error;
 pub mod id;
+pub mod metrics;
 pub mod registry;
 pub mod room;
 pub mod ticker;
 
 pub use error::CoreError;
 pub use id::{ConnectionId, EntityId, RoomId};
+pub use metrics::{
+    MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent,
+};
