@@ -9,6 +9,7 @@
 //! components, systems, and `RoomLogic` implementation for a real MOBA or
 //! MMORPG without touching the core, net, protocol, or ecs crates.
 
+pub mod aoi;
 pub mod components;
 pub mod op;
 pub mod room;

@@ -153,8 +153,12 @@ pub struct Registry<W, G> {
     reg_leaves: u64,
     reg_opens: u64,
     reg_closes: u64,
-    /// Outbound metrics path (synchronous unbounded send).
-    metrics: mpsc::UnboundedSender<MetricsEvent>,
+    /// Metric samples dropped on a full (bounded) metrics channel,
+    /// cumulative.
+    reg_metrics_dropped: u64,
+    /// Outbound metrics path (bounded channel; the registry sends with the
+    /// synchronous `try_send` — no await).
+    metrics: mpsc::Sender<MetricsEvent>,
 }
 
 impl<W, G> Registry<W, G>
@@ -167,8 +171,9 @@ where
         self_mailbox: Mailbox<RegistryMsg>,
         factory: RoomFactory<W, G>,
         ticker: Ticker,
-        // Outbound metrics path (see `crate::metrics`).
-        metrics: mpsc::UnboundedSender<MetricsEvent>,
+        // Outbound metrics path (see `crate::metrics`): a bounded channel;
+        // the registry sends with the synchronous `try_send` (no await).
+        metrics: mpsc::Sender<MetricsEvent>,
     ) -> Self {
         Self {
             factory,
@@ -184,15 +189,18 @@ where
             reg_leaves: 0,
             reg_opens: 0,
             reg_closes: 0,
+            reg_metrics_dropped: 0,
             metrics,
         }
     }
 
     /// Flush the registry's local counters as a sample. Synchronous
-    /// unbounded send: the registry's await set is unchanged (its only
-    /// await stays the mailbox `recv`).
-    fn emit_metrics(&self) {
-        let _ = self.metrics.send(MetricsEvent::Registry(RegistrySample {
+    /// `try_send` on the bounded metrics channel (A3): the registry's await
+    /// set is unchanged (its only await stays the mailbox `recv`), and a
+    /// full channel drops + counts the sample (harmless — the counters are
+    /// cumulative, so the next flush carries everything).
+    fn emit_metrics(&mut self) {
+        let sample = RegistrySample {
             rooms: self.rooms.len() as u32,
             conns: self.conns.len() as u32,
             rooms_created: self.reg_created,
@@ -201,7 +209,13 @@ where
             leaves: self.reg_leaves,
             opens: self.reg_opens,
             closes: self.reg_closes,
-        }));
+            metrics_dropped: self.reg_metrics_dropped,
+        };
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.metrics.try_send(MetricsEvent::Registry(sample))
+        {
+            self.reg_metrics_dropped += 1;
+        }
     }
 
     /// Run until the mailbox is closed.
@@ -385,20 +399,39 @@ where
                     // Ordered per-connection (from the dispatcher). If the
                     // connection is unknown it died mid-join; the
                     // dispatcher's Close already cleaned up the room side.
-                    if let Some(info) = self.conns.get_mut(&conn) {
-                        info.room = Some(room);
-                        info.entity = Some(entity);
+                    // (The `info` borrow is scoped to the block so the
+                    // `&mut self` `emit_metrics` call below does not conflict
+                    // with it.)
+                    // (The `info` borrow is scoped inside the `match` so the
+                    // `&mut self` `emit_metrics` call below does not conflict
+                    // with it.)
+                    let spawned = match self.conns.get_mut(&conn) {
+                        Some(info) => {
+                            info.room = Some(room);
+                            info.entity = Some(entity);
+                            true
+                        }
+                        None => false,
+                    };
+                    if spawned {
                         self.reg_joins += 1;
                         self.emit_metrics();
                         debug!(%conn, room = %room, %entity, "player spawned");
                     }
                 }
                 RegistryMsg::LeaveDone { conn, room } => {
-                    if let Some(info) = self.conns.get_mut(&conn)
-                        && info.room == Some(room)
-                    {
-                        info.room = None;
-                        info.entity = None;
+                    let left = match self.conns.get_mut(&conn) {
+                        Some(info) => {
+                            let matched = info.room == Some(room);
+                            if matched {
+                                info.room = None;
+                                info.entity = None;
+                            }
+                            matched
+                        }
+                        None => false,
+                    };
+                    if left {
                         self.reg_leaves += 1;
                         self.emit_metrics();
                         debug!(%conn, room = %room, "player despawned");

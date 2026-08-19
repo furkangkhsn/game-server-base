@@ -430,6 +430,35 @@ taban sağlar.
    seçeneği (uzunluk öneki zaten transport'un malı).
 4. **Oda bölme/birleştirme (sharding)** ve cross-region.
 
+**AOI (mekansal görünürlük) — v1'de tek oda içinde (bu turda):** Yukarıdaki
+adım 2'nin *tek oda* kısmı `gsb_game::aoi`'de kapatıldı; **`gsb-core`'e
+dokunulmadı** — §4'ün grup mekanizması AOI'nin gerektirdiğinin tamamını
+zaten sağlıyor (`group_of` her tick yeniden değerlendirilir → hücre geçişi
+otomatik; grup başına snapshot bir kez kodlanır, üyeyle `Arc` ref'iyle
+paylaşılır; "değişiklik yoksa yayın durur" defter eşitliği üyelik+konumu
+içerir). AOI yalnızca mekansal bir `GroupKey` (`Cell`) sunuyor; soyutlama
+sızması yok.
+
+- **Görünürlük kümesi:** oyuncunun hücresinin merkezli **3×3 blok**
+  (`RADIUS=1`). Oyuncu başına yarımçap bilerek **yapılmadı**: grup başına
+  paylaşılan baytı kırardı (her oyuncunun farklı kümesi → `GroupKey`'i
+  `ConnectionId` yapmak, grup başına kodlama gerektirir → bant kazancı sıfır).
+- **Hücre:** `floor(pos / cell_size)`; `cell_size` **konfigüredir**
+  (`Config.aoi_cell_size`, vars. 20.0) — sabit değil, çünkü doğru boyut
+  yoğunluk/arena/MTU'ya göre değişir. `max_snapshot_bytes` (vars. 1400) ile
+  ilişkisi: ~12 B/kayıt → 1400 B ≈ 116 kayıt/blok; blok 9 hücre → **~13
+  kayıt/hücre** hedef; N büyüdükçe (yoğunluk) hücre küçülmeli.
+- **Kimlik değişmezi korunur:** wire id `on_join`/yeni `Position` damgasında
+  **bir kez** basılır, hücre değişiminde değişmez; sonradan giren kendi
+  hücresinin ilk bloğunda **tam kümesini** görür (test:
+  `gsb_game::aoi::tests` + `tests/aoi.rs`).
+- **Ölçülen ticaret:** AOI ~9× kodlama maliyeti taşır (her kayıt 9 komşu
+  bloğa girer) ama bant genişliğini O(entity) → O(görünürlük) yapar; hücre
+  boyutu küçükçe bant kazancı %80+ (1000/2000). Break-even + yeni darboğaz
+  (adım süresi/CPU) ROADMAP "Kapatılanlar (metrik düzeltme + AOI turu)"
+  bölümünde ölçülmüş. 10k+ ölçekli oda segmentasyonu + `Visibility` trait'i
+  hâlâ P2 (adım 2'nin kalanı).
+
 ## 9. Kapanma (shutdown) kaskadı
 
 Abort'siz, kanal kapanmalarına dayalı:
@@ -577,8 +606,8 @@ durum yok, kilit yok.
 
 ```text
 room actor (her adım sonunda, senkron)   ─┐
-registry (olay başına: open/close/      ─┼─▶ mpsc::unbounded<MetricsEvent>
-          join/leave/room)               │        (send = senkron, await YOK)
+registry (olay başına: open/close/      ─┼─▶ mpsc::bounded(4096)<MetricsEvent>
+          join/leave/room)               │        (try_send = senkron, await YOK)
 conn actor (≤1/sn + kapanışta son)      ─┘                  │
                                                             ▼
                     metrik toplayıcı görevi (MetricsCollector)
@@ -594,26 +623,35 @@ conn actor (≤1/sn + kapanışta son)      ─┘                  │
                           RUST_LOG=info ile görünür; yoksa sessiz)   yük üreticisi/test)
 ```
 
-**Neden unbounded kanal:** `UnboundedSender::send` **senkron**dur
-(`Result` döner, `Future` değil) — room actor'ünün tick gövdesine **hiç
-await eklenmez**; tek await hâlâ `tick_rx.recv()`'tir (spec'in sert
-şartı). Bounded kanal `send`'i Future olduğundan tick içinde
-beklemeyi gerektirirdi — elendi (bkz. ROADMAP). Örnekler sabit boyutlu
-(kırk küsur bayt) ve oda başına adım başına en fazla bir tane olduğundan
-geri-baskı fiilen sorun değildir; toplayıcı geride kalırsa en kötü
-hal örnek kaybıdır, tick durdurulamaz.
+**Neden bounded + `try_send`:** room actor'ünün tick gövdesine **hiç await
+eklenmez** (spec'in sert şartı; tek await hâlâ `tick_rx.recv()`'tir).
+`UnboundedSender::send` senkrondur ama sınırsız bellek tutar (toplayıcı
+sarkarsa sızma); `bounded send` ise `Future` → tick içinde bekler. Çözüm
+`bounded(4096)` + **senkron `try_send`** (Future değil): kanal doluyken
+örnek atılır ve üreticinin `metrics_dropped` sayacı artar — kümülatif
+sayaçlar için zararsız (bkz. ROADMAP "metrik düzeltme + AOI turu").
+Örnekler sabit boyutlu ve oda başına adımda en fazla bir tane olduğundan
+4096 derinlik geniş bir marj bırakır; en kötü hâl örnek kaybıdır, tick
+durdurulamaz.
 
 **Ne ölçülür (neden):**
 
 | Kapsam | Metrik | Sorulan soru |
 |---|---|---|
-| oda | `steps`, `hz` (Δadım/rapor), `late_*` (tick gecikmesi), `step_*` + `step_hist` (adım süresi dağılımı: [0,50) [50,100) [100,250) [250,500) [500,1k) [1k,5k) [5k,∞) µs) | konfigure hıza ulaşılıyor mu? adım bütçesinin (33 ms @30 Hz) neresindeyiz? |
+| oda | `steps`, `hz` (Δadım/örnek-aralığı), `late_*` (tick gecikmesi), `step_*` + `step_hist` (adım süresi dağılımı: tick bütçesinin **oranları**, log-2 merdiven 1/128×…32×; `(1,1)` kenarı = bütçe = aşım sınırı) | konfigure hıza ulaşılıyor mu? adım bütçesinin (33 ms @30 Hz) neresindeyiz? bütçe aşılıyor mu? |
 | oda | `lagged_events/ticks` | broadcast tamponu aşıldı mı (oda tick kaçırıyor mu)? |
 | oda | `dropped`, `keepalive_resends` | fan-out backpressure'ı (yavaş istemci) var mı? |
 | oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_*` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali) |
 | oda | `groups`, `members`, `max_group`, `joins`, `leaves` | oda doluluğu ve churn |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
 | conn | `bytes_in/out`, `frames_in/out` (delta) | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
+
+Hızlar (`hz`, `*_s`) **örnek aralığı** üzerinden hesaplanır: her oda örneği
+kendi `emit_at`'ını taşır (oda `Instant::now()`); oran `latest.emit_at −
+prev.emit_at` üzerinedir, rapor penceresi üzerinden değil — örnek gönderim
+temposu (vars. 1 Hz = rapor süresi) ile rapor temposu faz-kilitli olmadığı
+için rapor penceresi oranı 0–2 örneklik pencerelerde sahte hız verir
+(ROADMAP A2).
 
 Rapor satırları kararlı `key=value` biçimindedir (`gsb-metric
 scope=room id=r1 steps=.. hz=.. step_hist=[..] ..`) — grep/parse'e uygun.

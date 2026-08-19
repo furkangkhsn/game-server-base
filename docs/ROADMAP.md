@@ -21,10 +21,16 @@ crate-içi constructor, tek minting noktası odanın sayacı); **metrik
 altyapısı** kuruldu — sayaçlar aktörlerin yerel durumunda, kanalla
 toplayıcıya (oda tick'ine await eklemeden); **ilk uçtan uca yük testi**
 alındı: 100/500/1000 gerçek TCP istemci, 30 Hz üç ölçekte de korundu,
-drop 0, N ile büyüyen tek metrik adım süresi (aşağıda).
-38/38 test yeşil.
+drop 0, N ile büyüyen tek metrik adım süresi (aşağıda); **üç metrik
+ölçüm hatası düzeltildi** (adım histogramı tick bütçesine göre → bütçe
+aşımı okunur; örnek gönderim temposu rapor temposuna bağlandı + oran
+örnek aralığı üzerinden; metrik kanalı bounded + `try_send`) ve **AOI**
+kuruldu — tek odada bant genişliği O(entity) → O(görünürlük kümesi);
+ana sorunun cevabı: `gsb-game` içinde, `gsb-core`'e **dokunmadan**
+(500/1000/2000 + hücre boyutu taramasıyla ölçüldü, aşağıda).
+44/44 test yeşil (+1 var olan `#[ignore]`'li gsb-lint doctest).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek henüz ölçülmedi;
-100/500/1000 turu aşağıda), **robustluk** ve **güvenlik**
+100/500/1000/2000 turu aşağıda), **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
 
 ## Kapatılanlar (yayınlanabilirlik turu)
@@ -588,6 +594,146 @@ başlıklarındaki kalan işler.
   burst'ının tokio accept yolundaki bir artefaktıdır — v1 bulgusu
   olarak raporlanır, actor modeli kapsamında düzeltme yok.
 
+## Kapatılanlar (metrik düzeltme + AOI turu)
+
+Bu tur iki işi kapatır: (A) metrik altyapısının üç ölçüm hatası (spec),
+(B) AOI — tek odada bağlantı başına bant genişliğini O(entity) → O(görünürlük
+kümesi) yapar; ana soru "**`gsb-game` içinde `gsb-core`'e dokunmadan yapılabilir
+mi?**" → **evet** (aşağıda).
+
+- [x] **A1 — Adım histogramı tick bütçesine göre (oran)** — Eski
+  `HIST_EDGES_US=[50,100,250,500,1000,5000]` (mutlak µs) üst kutusu
+  `[5000,∞)`'dü; 30 Hz bütçesi 33.3 ms olduğundan 5.1 ms'lik ve 40 ms'lik
+  adım **aynı** kutuya düşüyordu ve "bütçe aşıldı mı?" histogramdan
+  okunamıyordu. Yeni: kenarlar tick bütçesinin (bir periyot, µs) **oranları**
+  — log-2 merdiveni `1/128× … 1× … 32×` (`HIST_EDGES`). `(1,1)` kenarı **tam
+  tick bütçesidir**; bin `HIST_OVERFLOW_BIN` (=8) ve üzeri **bütçe aşımı**
+  (oda hızını tutamıyorsa). Aşağıya 1/128×'e inen basamaklar sağlıklı oda
+  (adım ≪ bütçe) için: 30 Hz'de (bütçe 33 333 µs) alt kutular
+  ~261/521/1042 µs'e oturur — gerçek adım sürelerinin (≈500 µs) yeri; p50
+  artık anlamlı (eski hâl her şeyi tek devasa `[0, 0.5×bütçe)` kutusuna
+  yığıp p50≈8.3 ms sahte değeri veriyordu — ölçüldü, düzeltme sonrası
+  500'de p50≈391 µs). Neden oran (mutlak µs değil): mimari 15/30/60 Hz oda
+  destekliyor (DESIGN §10); oran bütçeyi **her hızda** bir kutu sınırı yapar —
+  spec'in kriteri tam "bütçe aşımı histogramdan okunabilir mi". Kanıt:
+  `hist_index_binning` (30 Hz bütçede 5.1 ms ≠ 40 ms; 40 ms'ı
+  `HIST_OVERFLOW_BIN`). Kapanan hata sınıfı: "üst kutu bütçeyi göremiyor".
+  Elenen: (a) mutlak µs + bütçeyi ayrı tutmak — kriteri karşılar ama iki
+  kaynak (kenar+bütçe) her hızda ayrı ayar ister; (b) 1/2×'ten başlayan kısa
+  merdiven — kriteri karşılar ama sağlıklı odanın dağılımı tek kutuya yığılır
+  (p50 bozulur, ölçülen).
+
+- [x] **A2 — Örnek gönderim temposu rapor temposuna bağlandı + oran örnek
+  aralığı üzerinden** — Oda actor'ü eskiden **her tick'te** (30/sn) tam
+  `RoomSample` gönderiyor; toplayıcı yalnız `acc.latest`'i tutup 1/s rapor
+  üretiyordu → 29/30 örnek atılıyordu. `RoomConfig.metrics_cadence_hz`
+  (vars. 1.0) ile oda her `round(tick_hz/cadence)` adımda (vars. 30) bir kez
+  gönderiyor; sayaçlar kümülatif olduğu için bu birleştirilebilir. **İkinci,
+  ölçümle bulunan ince hata:** 1 Hz örnek + 1 Hz rapor **faz-kilitli değil**
+  → bir rapor penceresi 0–2 örnek kapsayabilir; oranı rapor penceresi
+  üzerinden (Δadım/rapor-Δt) almak sahte hız verir (loadgen `server_hz`
+  58/198 Hz — tutarlı yeniden üretildi). Düzeltme: her örnek kendi
+  `emit_at`'ını taşıyor (oda `Instant::now()`); oran **örnek aralığı**
+  üzerinden (`latest.emit_at − prev.emit_at`), rapor penceresi üzerinden
+  değil. Kanıt: `accumulator_applies_events_and_computes_rates` (emit_at 1 sn
+  aralık → hz=30) + `loadgen_smoke` (server_hz 30.00, 3/3 stabil). Kapanan hata
+  sınıfı: "gönderim temposu ≠ rapor temposu → atılan örnek" + "oran penceresi
+  ≠ örnek aralığı → sahte hız". Elenen: (a) rapor penceresi oranı — faz
+  kaymasında yanlış (ölçülen); (b) toplayıcının varış anı — varış≈emit ama test
+  edilemez (test `Instant`'i kontrol edemez) ve iletme gecikmesi oranı kirletir;
+  (c) örnekleri kanalda biriktirmek — örnek başına daha çok bellek; `emit_at`
+  tek alanla yeterli.
+
+- [x] **A3 — Metrik kanalı bounded + `try_send` (DESIGN §2 uyumu)** — Eskiden
+  `mpsc::unbounded` ("geri-baskı fiilen sorun değil" diye, DESIGN §12); ama §2
+  disiplini (paylaşımsız, sınırlı kaynak) ve gerçek bir toplayıcı sarkarsa
+  unbounded kanalın bellek sızması riski. Yeni: `mpsc::bounded(4096)` +
+  **senkron `try_send`** (Full → üretici `metrics_dropped` sayacını artırır,
+  örnek atılır). `try_send` `send` gibi **senkron** (Future değil) → oda
+  tick'ine await **eklenmez** (spec'in sert şartı korunur; bounded `send`
+  Future olduğu için `send` değil `try_send` — `OutSink::flush` +
+  `dropped_frames` ile aynı desen). Atılma zararsız (sayaçlar kümülatif; bir
+  örnek kaybı oranı bir pencere bozar, birikimi değil). `metrics_dropped`
+  rapor satırına eklendi (oda/registry/conn başına delta). Kapasite 4096
+  (üç üretici × oda başına 1 örnek/sn × marj) — `start_inner`'de sabit.
+  Kapanan hata sınıfı: "unbounded kanal sınırlı-kaynak disiplinini ihlal
+  edebilir". Elenen: (a) unbounded (eski) — toplayıcı sarkarsa bellek sızması;
+  (b) bounded + `send` (await'li) — oda tick'ine await ekler, spec ihlali;
+  (c) `tokio::select!` (kanal+tick) — gsb-lint yasak; (d) toplayıcıda
+  paylaşımlı ring-buffer — §2'yi bozar.
+
+- [x] **A-ek — `snap_overflows` sayacı** — `max_snapshot_bytes` (vars. 1400)
+  aşan snapshot sayısı, broadcast fazında sayılıyor (grup başına kodlanan
+  paketin boyutu; grup bazlı, bağlantı bazlı değil). AOI'nin MTU sinyali:
+  tüm-dünya snapshot'ı ölçekte her tick aşar, hücre başına snapshot aşmaz
+  (aşağıdaki ölçüm doğruluyor). Rapor + loadgen RESULT satırına eklendi.
+
+- [x] **B — AOI (görünürlük): `gsb-game` içinde, `gsb-core`'e dokunmadan** —
+  **Ana sorunun cevabı: EVET.** Neden soyutlama sızması yok: çekirdeğin grup
+  mekanizması AOI'nin gerektirdiğinin **tamamını** zaten sağlıyor —
+  `RoomLogic::group_of(world, conn)` her tick yeniden değerlendiriliyor (hücre
+  geçişi otomatik, yeni hücrenin bloğu), grup başına snapshot **bir kez**
+  kodlanıp üyeyle `Arc` ref'iyle paylaşılıyor (§4), "değişiklik yoksa yayın
+  durur" defter eşitliği **üyelik+konumu** içeriyor. AOI yalnızca mekansal bir
+  `GroupKey` (`Cell(i32,i32)`, `gsb_game::aoi`) + hücre başına 3×3 komşuluk
+  defteri sunuyor; `gsb-core` değişimi gerekmedi (bu turdaki gsb-core farkı
+  %100 A maddeleridir — `git diff` ile doğrulandı). Alternatif (çekirdeğe
+  `Visibility` trait'i / hücre kavramı eklemek) gereksiz soyutlama olurdu.
+  **Görünürlük kümesi** = oyuncunun hücresinin merkezli **3×3 blok**
+  (`RADIUS=1`; hücreler `floor(pos/cell_size)`). Oyuncu başına yarımçap
+  REDDEDİLDİ: farklı küme başına → `GroupKey`'i `ConnectionId` yapmak gerekir →
+  grup başına kodlama → bant kazancı sıfır + çekirdek değişikliği. **Hücre
+  boyutu konfigüredir** (`Config.aoi_cell_size`, vars. 20.0) — sabit değil,
+  çünkü doğru boyut yoğunluk/arena/MTU'ya göre değişir (aşağıda). Kimlik
+  değişmezi korunur: wire id `on_join`/yeni `Position` damgasında `next_serial`
+  ile **bir kez** basılır, hücre değişiminde DEĞİŞMEZ; sonradan giren kontrol
+  fazında dünyaya girdiği için kendi hücresinin ilk bloğunda **tam kümesini**
+  görür. Test kilitli: `gsb_game::aoi::tests` (5 mantık) + `tests/aoi.rs`
+  (actor: fan-out, hücre geçişi, kimlik).
+
+  **Ölçülen ticaret** (30 Hz, MTU 1400, in-proc, 15 s; Ryzen 9 7950X 16C/32T,
+  rustc 1.95.0; 2000'de 1 ms stagger):
+
+  | N | AOI | hücre | out/conn (bps) | toplam out | adım ort. (µs) | adım max (µs) | tepe payload (B) | aşım | grup |
+  |---|-----|-------|----------------|-----------|----------------|---------------|------------------|------|------|
+  | 500 | off | – | 118 869 | 59.4 M | 533 | 1 183 | 4 347 | 423 | 1 |
+  | 500 | on | 20 | 94 788 | 47.4 M | 802 | 1 941 | 4 281 | 3 209 | 4 |
+  | 1000 | off | – | 208 643 | 208.6 M | 1 535 | 5 071 | 8 210 | 443 | 1 |
+  | 1000 | on | 20 | 185 787 | 185.8 M | 1 967 | 4 389 | 8 668 | 4 626 | 4 |
+  | 1000 | on | 12 | 86 251 | 86.3 M | 1 479 | 4 817 | 6 811 | 5 167 | – |
+  | 1000 | on | 8 | 64 064 | 64.1 M | 1 794 | 5 327 | 7 001 | 5 534 | – |
+  | 1000 | on | 5 | 39 675 | 39.7 M | 2 077 | 3 468 | 5 717 | 4 824 | – |
+  | 1000 | on | 3 | 7 001 | 7.0 M | 1 377 | 7 595 | 1 689 | 188 | – |
+  | 2000 | off | – | 476 335 | 952.7 M | 6 192 | 11 453 | 17 699 | 445 | 1 |
+  | 2000 | on | 5 | 80 972 | 161.9 M | 4 256 | 8 895 | 11 308 | 12 918 | 28 |
+
+  **Yorum (ölçüm, varsayım değil):**
+  1. **Kazanç hücre boyutuyla, ölçekte değil (bu iş yükünde).** Yarıçap-40
+     halka 100×100 arenayı ~80×80'a sığar; c20 bloğu (60×60) halikanın
+     ~%80'ini kavrar → bant kazancı küçük (c20'de %11-20). Küçük hücre
+     (c5) bloğu küçük bir yayı kaplar → **%81-83** kazanç (1000/2000'de).
+     Yani "büyük G'de kazanç" burada **mutlak** kazanç olarak geçer: toplam
+     bant ~N² büyür (476 kbps/conn @2000) ve AOI'nin mutlak tasarrufu o
+     ölçekte 952→162 MB/s'e çıkar; oran (hücre başına) ölçekte ~sabit.
+  2. **MTU (1400) hücre boyutunu belirler.** ~12 B/kayıt → 1400 B ≈ 116
+     kayıt/blok; blok 3×3=9 hücre → **~13 kayıt/hücre** hedef. c3 @1000
+     tepe 1 689 B (hâlâ %13 aşım, 188/450 tick); c2 ~1400'ün altına iner.
+     c20+ ölçekte **her tick** aşar (8 668 B). Yani MTU uyumu için hücre,
+     N büyüdükçe **küçülmeli** (yoğunluk ∝ N).
+  3. **AOI CPU maliyeti ~9× kodlama** (her kayıt 9 komşu bloğa girer) ama bu
+     ölçekte bütçeye değmiyor: adım ort. 500'de 533 µs, 2000'de 6 192 µs (off) / 4 256 µs (c5) — bütçenin (33 333 µs) %6-18'i, `over_budget=0%`. **Break-even
+     (adım → bütçe) N=2000'in ÜSTÜNDE**; doğrusal dışa vurumla (6 ms@2000 →
+     33 ms) ~10-15k üye. 2000'in altında AOI (iyi hücreyle) **net pozitif**:
+     büyük bant kazancı + bütçe altı CPU.
+  4. **Yeni darboğaz: adım süresi (CPU = kodlama + fan-out), bant değil.**
+     N büyüdükçe adım süresi ~N büyür (in-proc'ta istemci decode'üyle
+     süper-lineer); bant AOI ile düşürüldüğü için ilk doyaan adım bütçesi
+     olacak (~10-15k). Kötü hücre (c20) ölçekte **net kayıp** olur: 9× kodlama
+     karşılığında yalnız %11 bant — CPU maliyeti büyürken kazanç sabit kalır.
+     "Küçük G'de net kayıp" bu ölçekte (bütçe gevşek) görülmüyor; bütçe
+     sıkışsa (yüksek tick hızı / dolu oda) 9× kodlama küçük G'de bütçeyi
+     aşabilir.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
@@ -632,10 +778,13 @@ sıralamayı destekledi: N ile büyüyen tek metrik **adım süresi**
 (drop 0, late ≈0, bağlantı/oda olayları sönük). Sıra: AOI önce,
 delta sonra; şeritleme veri gelmedikçe dokunulmaz.
 
-- [ ] **AOI / oda içi görünürlük** (`DESIGN.md` §8) — tek odada 100k
-  bağlantı: 1.5 milyar frame teslimi/sn **CPU** duvarı. Oda segmentasyonu
-  + `Visibility` trait'i. (Yük turu: tek odada ~10k üye adım bütçesini
-  dolduracak kadar yakın — bu duvarın ilk parçası.)
+- [~] **AOI / oda içi görünürlük** (`DESIGN.md` §8) — tek odada 100k
+  bağlantı: 1.5 milyar frame teslimi/sn **CPU** duvarı. **Tek-oda mekansal
+  AOI bu turda kapatıldı** (`gsb_game::aoi`, `GroupKey=Cell`, 3×3 blok; bant
+  O(entity)→O(görünürlük); ölçüm + break-even "Kapatılanlar (metrik
+  düzeltme + AOI turu)"). Kalan: oda segmentasyonu + `Visibility` trait'i
+  (10k+ ölçekteki CPU duvarı — AOI'nin ~9× kodlama maliyeti ölçekte bütçeyi
+  aşabilir, bkz. tur bölümü).
 - [ ] **Delta yayın** — son snapshot farkı; bant kazancı.
 - [ ] **Registry şeritleme** — dispatcher tasarımı registry'yi bloke
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test

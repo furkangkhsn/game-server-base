@@ -63,6 +63,15 @@ pub struct Config {
     /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
     /// lost its last snapshot must not stay stale forever). `<= 0` disables.
     pub keepalive_hz: f64,
+    /// Enable AOI (spatial group key) in the demo rooms. `false` = the
+    /// whole-world baseline (`DemoRoom`, `GroupKey = ()`); `true` = the
+    /// spatial path (`AoiRoom`, `GroupKey = Cell`) sized by
+    /// [`Self::aoi_cell_size`].
+    pub aoi: bool,
+    /// World units per AOI cell edge (used only when [`Self::aoi`] is set).
+    /// See `gsb_game::aoi` for the `max_snapshot_bytes` / density relation
+    /// and the measured break-even.
+    pub aoi_cell_size: f32,
 }
 
 impl Default for Config {
@@ -78,6 +87,8 @@ impl Default for Config {
             conn_out: 256,
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
+            aoi: false,
+            aoi_cell_size: 20.0,
         }
     }
 }
@@ -161,13 +172,33 @@ pub fn build_table() -> Arc<MessageTable> {
 }
 
 /// The room factory for the demo game: an empty bevy `World` + a
-/// [`gsb_game::room::DemoRoom`]. Group key is `()` (one group per room).
+/// [`gsb_game::room::DemoRoom`]. Group key is `()` (one group per room) —
+/// the AOI-**off** baseline: every connection receives the whole world.
 fn demo_room_factory() -> RoomFactory<World, ()> {
     Arc::new(|_id, _config| {
         (
             World::new(),
             Box::new(gsb_game::room::DemoRoom::default())
                 as Box<dyn RoomLogic<World, GroupKey = ()>>,
+        )
+    })
+}
+
+/// The AOI room factory: an empty bevy `World` + an
+/// [`gsb_game::aoi::AoiRoom`] with the given `cell_size` (world units per
+/// cell edge). Group key is a spatial [`gsb_game::aoi::Cell`] — the
+/// AOI-**on** path: one snapshot per cell, shared by reference with the
+/// cell's occupants. Note the `RoomFactory`'s group-key associated type
+/// differs from `demo_room_factory`'s (`Cell` vs `()`), so the two cannot be
+/// stored in one value — `start_inner` picks the factory at the config
+/// boundary. This is entirely on the game/server side; `gsb-core` stays
+/// generic over the group key and is untouched.
+fn aoi_room_factory(cell_size: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
+    Arc::new(move |_id, _config| {
+        (
+            World::new(),
+            Box::new(gsb_game::aoi::AoiRoom::new(cell_size))
+                as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
         )
     })
 }
@@ -204,7 +235,16 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
     // collector subscribes to the same broadcast as its clock (see
     // `gsb_core::metrics` for the design).
     let (ticker, ticker_task) = gsb_core::ticker::Ticker::spawn(cfg.tick_hz, 64);
-    let (metrics_tx, metrics_rx) = mpsc::unbounded_channel::<MetricsEvent>();
+    // A3: the metrics event channel is *bounded* (DESIGN §2: bounded capacity
+    // is the backpressure mechanism) and producers send with the synchronous
+    // `try_send` (a drop is counted, harmless — the counters are cumulative).
+    // Capacity 4096 ≈ the worst burst: N startup `ConnOpened` registry samples
+    // + N shutdown final-flush connection samples (2N ≈ 2000 at 1000 conns),
+    // with ~60× headroom over the collector's steady-state occupancy (it drains
+    // the whole channel every tick; a tick holds only ~tens of samples). A drop
+    // could still happen under a pathological stall — it is counted and
+    // reported, never a stall.
+    let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
     let metrics = tokio::spawn(
         MetricsCollector::new(
             ticker.subscribe(),
@@ -217,16 +257,32 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
-    let _registry = tokio::spawn(
-        Registry::new(
-            reg_rx,
-            reg_tx.clone(),
-            demo_room_factory(),
-            ticker.clone(),
-            metrics_tx.clone(),
+    // The factory (and hence the registry's group-key type) is chosen at this
+    // config boundary: AOI on → spatial `Cell` groups, off → `()`. The two
+    // arms are otherwise identical and both yield a `JoinHandle<()>`.
+    let _registry = if cfg.aoi {
+        tokio::spawn(
+            Registry::new(
+                reg_rx,
+                reg_tx.clone(),
+                aoi_room_factory(cfg.aoi_cell_size),
+                ticker.clone(),
+                metrics_tx.clone(),
+            )
+            .run(),
         )
-        .run(),
-    );
+    } else {
+        tokio::spawn(
+            Registry::new(
+                reg_rx,
+                reg_tx.clone(),
+                demo_room_factory(),
+                ticker.clone(),
+                metrics_tx.clone(),
+            )
+            .run(),
+        )
+    };
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
     // configure a slower rate that divides it).

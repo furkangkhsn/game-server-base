@@ -50,7 +50,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, tcp::OwnedReadHalf};
 use tokio::sync::mpsc;
 
-use gsb_core::metrics::{MetricReport, HIST_EDGES_US};
+use gsb_core::metrics::{hist_edge_us, MetricReport, HIST_OVERFLOW_BIN};
 
 struct Args {
     clients: u64,
@@ -64,6 +64,16 @@ struct Args {
     /// trickle of players joining over time.
     stagger_ms: u64,
     addr: Option<String>,
+    /// Enable AOI in the in-process server (spatial group key, `--aoi`).
+    aoi: bool,
+    /// AOI cell size in world units (`--cell-size N`, default 20).
+    cell_size: f32,
+    /// Per-snapshot payload ceiling the room enforces
+    /// (`--max-snapshot-bytes N`, default 1400 = the rUDP MTU the spec
+    /// assumes). The TCP transport default is 1 MiB, so the in-process
+    /// server models the MTU-constrained scenario out of the box; `snap_*`
+    /// overflow counters are only meaningful against this ceiling.
+    max_snapshot_bytes: usize,
 }
 
 fn parse_args() -> Args {
@@ -74,6 +84,9 @@ fn parse_args() -> Args {
         room: 1,
         stagger_ms: 0,
         addr: None,
+        aoi: false,
+        cell_size: 20.0,
+        max_snapshot_bytes: 1400,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -95,6 +108,16 @@ fn parse_args() -> Args {
             }
             "--addr" => {
                 args.addr = Some(it.next().expect("--addr HOST:PORT"));
+            }
+            "--aoi" => {
+                args.aoi = true;
+            }
+            "--cell-size" => {
+                args.cell_size = it.next().expect("--cell-size N").parse().expect("number");
+            }
+            "--max-snapshot-bytes" => {
+                args.max_snapshot_bytes =
+                    it.next().expect("--max-snapshot-bytes N").parse().expect("number");
             }
             s if s.starts_with("--") => panic!("unknown flag {s}"),
             s => args.clients = s.parse().expect("N must be a number"),
@@ -322,8 +345,10 @@ fn pctl(v: &mut [u128], p: f64) -> u128 {
 }
 
 /// Approximate percentile of a step-duration histogram (bin midpoints;
-/// the top bin uses the observed max).
-fn hist_percentile(hist: &[u64], max_us: u64, p: f64) -> f64 {
+/// the top bin uses the observed max). The bins are fractions of the room's
+/// tick budget (`budget_us`), so the result is in µs and the overflow
+/// boundary (the budget) is meaningful.
+fn hist_percentile(hist: &[u64], budget_us: u64, max_us: u64, p: f64) -> f64 {
     let total: u64 = hist.iter().sum();
     if total == 0 {
         return 0.0;
@@ -333,9 +358,9 @@ fn hist_percentile(hist: &[u64], max_us: u64, p: f64) -> f64 {
     for (i, &n) in hist.iter().enumerate() {
         acc += n;
         if acc as f64 >= target {
-            let lo = if i == 0 { 0 } else { HIST_EDGES_US[i - 1] };
-            let hi = if i < HIST_EDGES_US.len() {
-                HIST_EDGES_US[i]
+            let lo = if i == 0 { 0 } else { hist_edge_us(budget_us, i - 1) };
+            let hi = if i < hist.len() - 1 {
+                hist_edge_us(budget_us, i)
             } else {
                 max_us.max(lo + 1)
             };
@@ -345,6 +370,17 @@ fn hist_percentile(hist: &[u64], max_us: u64, p: f64) -> f64 {
     max_us as f64
 }
 
+/// Fraction of steps that exceed the tick budget (bins >= HIST_OVERFLOW_BIN),
+/// i.e. the "room cannot keep its rate" mass — now readable from the
+/// budget-relative histogram (A1).
+fn over_budget_frac(hist: &[u64]) -> f64 {
+    let total: u64 = hist.iter().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    hist.iter().skip(HIST_OVERFLOW_BIN).sum::<u64>() as f64 / total as f64
+}
+
 struct InProcessServer {
     handle: gsb_server::ServerHandle,
     rep_rx: mpsc::UnboundedReceiver<MetricReport>,
@@ -352,11 +388,19 @@ struct InProcessServer {
 
 /// Start the server in-process with a channel metrics sink. The receiver
 /// moves into the report-drain task; nothing is shared across tasks
-/// beyond that mailbox.
-async fn start_inprocess() -> Result<InProcessServer, gsb_server::ServerError> {
+/// beyond that mailbox. `aoi`/`cell_size` select the room group key (the
+/// AOI-off baseline vs the spatial AOI path).
+async fn start_inprocess(
+    aoi: bool,
+    cell_size: f32,
+    max_snapshot_bytes: usize,
+) -> Result<InProcessServer, gsb_server::ServerError> {
     let cfg = gsb_server::Config {
         bind: "127.0.0.1:0".into(),
         room_count: 1,
+        aoi,
+        aoi_cell_size: cell_size,
+        max_snapshot_bytes,
         ..Default::default()
     };
     let (rep_tx, rep_rx) = mpsc::unbounded_channel::<MetricReport>();
@@ -393,7 +437,13 @@ async fn run(args: Args) {
             (a, false, None, None)
         }
         None => {
-            let s = start_inprocess().await.expect("server starts");
+            let s = start_inprocess(
+                args.aoi,
+                args.cell_size,
+                args.max_snapshot_bytes,
+            )
+            .await
+            .expect("server starts");
             let addr = s.handle.addr;
             eprintln!("mode: in-process server at {addr} (clients share CPU with server)");
             (addr, true, Some(s.rep_rx), Some(s.handle))
@@ -401,12 +451,19 @@ async fn run(args: Args) {
     };
 
     eprintln!(
-        "clients={} room={} duration={}s move_ms={} stagger_ms={}",
+        "clients={} room={} duration={}s move_ms={} stagger_ms={} aoi={} cell_size={} max_snap_bytes={}",
         args.clients,
         args.room,
         args.duration.as_secs(),
         args.move_ms.as_millis(),
-        args.stagger_ms
+        args.stagger_ms,
+        if args.aoi { "on" } else { "off" },
+        if args.aoi {
+            args.cell_size.to_string()
+        } else {
+            "-".to_string()
+        },
+        args.max_snapshot_bytes
     );
 
     // Spawn the report drain (one task, one awaited source), then the N
@@ -548,16 +605,22 @@ fn print_report(
 
     let room = last_room.and_then(|l| l.rooms.first());
     let net = last_room.map(|l| &l.net);
+    // Server-side bytes-out per connection (the AOI signal: AOI lowers this).
+    let out_bps_per_conn = net
+        .map(|n| (n.bytes_out_total as f64 / dur) / connected.max(1) as f64)
+        .unwrap_or(0.0);
     if let Some(r) = room {
         println!(
-            "server room (final): steps={} hz={:.2} step_min_us={} step_mean_us={:.1} step_max_us={} step_p50_us~{:.0} step_p99_us~{:.0} hist=[{}]",
+            "server room (final): steps={} hz={:.2} budget_us={} step_min_us={} step_mean_us={:.1} step_max_us={} step_p50_us~{:.0} step_p99_us~{:.0} over_budget={:.1}% hist=[{}]",
             r.steps,
             r.hz,
+            r.budget_us,
             r.step_min_us,
             r.step_mean_us,
             r.step_max_us,
-            hist_percentile(&r.step_hist, r.step_max_us, 0.50),
-            hist_percentile(&r.step_hist, r.step_max_us, 0.99),
+            hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50),
+            hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.99),
+            over_budget_frac(&r.step_hist) * 100.0,
             r.step_hist
                 .iter()
                 .map(ToString::to_string)
@@ -565,7 +628,7 @@ fn print_report(
                 .join(",")
         );
         println!(
-            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} keepalive_resends={} snapshots={} max_payload_b={} groups={} members={} max_group={} joins={} leaves={}",
+            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} keepalive_resends={} snapshots={} max_payload_b={} snap_overflows={} out_bps_per_conn={:.0} groups={} members={} max_group={} joins={} leaves={} metrics_dropped={}",
             r.late_max_us,
             r.lagged_events,
             r.lagged_ticks,
@@ -573,11 +636,14 @@ fn print_report(
             r.keepalive_resends,
             r.snapshots,
             r.snap_bytes_max,
+            r.snap_overflows,
+            out_bps_per_conn,
             r.groups,
             r.members,
             r.max_group,
             r.joins,
-            r.leaves
+            r.leaves,
+            r.metrics_dropped
         );
         if let Some(g) = &last_room.and_then(|l| l.registry) {
             println!(
@@ -602,11 +668,15 @@ fn print_report(
 
     // Machine-parseable summary (consumed by tests/loadgen_smoke.rs).
     println!(
-        "RESULT mode={} clients={} connected={} joined={} left={} snap_total={} \
+        "RESULT mode={} aoi={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
-         moves={} errors={} steps={} server_hz={:.2} step_p50_us={:.0} step_max_us={} \
-         dropped={} late_max_us={} server_in_bps={} server_out_bps={} peak_conns={}",
+         out_bps_per_conn={:.0} moves={} errors={} steps={} server_hz={:.2} \
+         step_p50_us={:.0} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
+         peak_payload_b={} snap_overflows={} server_in_bps={} server_out_bps={} peak_conns={} \
+         metrics_dropped={}",
         if inproc { "in-proc" } else { "ext" },
+        if args.aoi { "on" } else { "off" },
+        args.max_snapshot_bytes,
         args.clients,
         connected,
         joined,
@@ -616,16 +686,20 @@ fn print_report(
         hz_med,
         (in_bytes as f64 / dur) as u64,
         (out_bytes as f64 / dur) as u64,
+        out_bps_per_conn,
         moves,
         errors,
         room.map(|r| r.steps).unwrap_or(0),
         server_hz,
         room
-            .map(|r| hist_percentile(&r.step_hist, r.step_max_us, 0.50))
+            .map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
             .unwrap_or(0.0),
         room.map(|r| r.step_max_us).unwrap_or(0),
+        room.map(|r| over_budget_frac(&r.step_hist) * 100.0).unwrap_or(0.0),
         room.map(|r| r.dropped).unwrap_or(0),
         room.map(|r| r.late_max_us).unwrap_or(0),
+        room.map(|r| r.snap_bytes_max as u64).unwrap_or(0),
+        room.map(|r| r.snap_overflows).unwrap_or(0),
         net
             .map(|n| (n.bytes_in as f64 / dur) as u64)
             .unwrap_or(0),
@@ -633,6 +707,7 @@ fn print_report(
             .map(|n| (n.bytes_out_total as f64 / dur) as u64)
             .unwrap_or(0),
         peak_conns,
+        last_room.map(|l| l.metrics_dropped).unwrap_or(0),
     );
 }
 

@@ -8,3 +8,6 @@
 
 # claude code worktrees (embedded repos)
 .claude/
+
+# local measurement scratch (loadgen raw outputs, probes)
+.scratch/

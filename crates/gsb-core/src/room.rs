@@ -113,6 +113,18 @@ pub struct RoomConfig {
     /// construction (library use) warns once and clamps the cadence to
     /// every step, which defeats the silence gain.
     pub keepalive_hz: f64,
+    /// Rate, in Hz, at which the room emits a metrics sample over the
+    /// (bounded) metrics channel. The room samples at most every
+    /// `tick_hz / metrics_cadence_hz` steps; the collector only ever uses
+    /// the *latest* sample per report period, so sampling faster than the
+    /// report cadence discards samples (A2). Tying this to the collector's
+    /// report cadence (default 1 Hz) means each room sends ~1 sample per
+    /// report instead of one per step — 30× less traffic on the channel, and
+    /// since the counters are cumulative nothing is lost.
+    ///
+    /// `> tick_hz` clamps to every step (you cannot sample faster than you
+    /// step); `<= 0` means "every step" as well.
+    pub metrics_cadence_hz: f64,
 }
 
 impl Default for RoomConfig {
@@ -126,6 +138,7 @@ impl Default for RoomConfig {
             max_catchup: 4,
             max_snapshot_bytes: 1400,
             keepalive_hz: 1.0,
+            metrics_cadence_hz: 1.0,
         }
     }
 }
@@ -308,6 +321,11 @@ struct RoomCounters {
     snapshots: u64,
     snap_bytes: u64,
     snap_bytes_max: u32,
+    /// Snapshots whose payload exceeded `max_snapshot_bytes`, cumulative.
+    snap_overflows: u64,
+    /// Metric samples dropped on a full (bounded) metrics channel,
+    /// cumulative.
+    metrics_dropped: u64,
     /// Snapshot + private bytes/frames shipped to the room's connections,
     /// cumulative.
     shipped_bytes: u64,
@@ -345,11 +363,18 @@ pub struct RoomActor<W, G> {
     /// Every k-th step, unchanged groups re-send their last snapshot
     /// (`None` = keep-alive disabled).
     keepalive_every: Option<u64>,
-    /// Local metric counters (flushed per step; see [`RoomCounters`]).
+    /// Every k-th step, the room emits a metrics sample (ties the send
+    /// cadence to the collector's report cadence — A2; 1 = every step).
+    metrics_every: u64,
+    /// The room's tick budget in µs (one period): the histogram's overflow
+    /// boundary (A1). Precomputed once (it is constant over the room's life).
+    budget_us: u64,
+    /// Local metric counters (see [`RoomCounters`]).
     m: RoomCounters,
-    /// Outbound metrics path: an unbounded channel mailbox (see
-    /// [`crate::metrics`]); the send is synchronous, so it adds no await.
-    metrics: mpsc::UnboundedSender<MetricsEvent>,
+    /// Outbound metrics path: a *bounded* channel mailbox (see
+    /// [`crate::metrics`]); the room sends with the synchronous `try_send`,
+    /// so it adds no await (drops are counted and harmless).
+    metrics: mpsc::Sender<MetricsEvent>,
 }
 
 impl<W, G> RoomActor<W, G>
@@ -363,10 +388,11 @@ where
         tick_rx: broadcast::Receiver<TickInfo>,
         control_rx: Inbox<RoomControl>,
         run_every: u64,
-        // Outbound metrics path (see `crate::metrics`). A dropped receiver
-        // simply makes the per-step send fail (ignored) — the room does not
+        // Outbound metrics path (see `crate::metrics`): a bounded channel;
+        // the room sends with the synchronous `try_send` (no await). A
+        // dropped receiver makes the send fail (ignored) — the room does not
         // observe it.
-        metrics: mpsc::UnboundedSender<MetricsEvent>,
+        metrics: mpsc::Sender<MetricsEvent>,
     ) -> Self {
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
@@ -388,6 +414,15 @@ where
         } else {
             None
         };
+        // A2: sample at most every `metrics_every` steps, so the send cadence
+        // tracks the collector's report cadence. `> tick_hz` (or `<= 0`)
+        // clamps to every step.
+        let metrics_every = if config.metrics_cadence_hz > 0.0 {
+            ((config.tick_hz / config.metrics_cadence_hz).round() as u64).max(1)
+        } else {
+            1
+        };
+        let budget_us = config.period().as_micros() as u64;
         Self {
             config,
             world,
@@ -400,6 +435,8 @@ where
             last_at: None,
             steps: 0,
             keepalive_every,
+            metrics_every,
+            budget_us,
             m: RoomCounters::default(),
             metrics,
         }
@@ -479,11 +516,21 @@ where
             self.m.step_max_us = step_us;
         }
         self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
-        self.m.step_hist[crate::metrics::hist_index(step_us)] += 1;
+        self.m.step_hist[crate::metrics::hist_index(self.budget_us, step_us)] += 1;
 
-        // Flush this room's counters (synchronous; a closed channel just
-        // fails the send and is ignored).
-        let _ = self.metrics.send(MetricsEvent::Room(self.sample()));
+        // A2: emit a sample at most every `metrics_every` steps (the send
+        // cadence tracks the collector's report cadence; the counters are
+        // cumulative, so skipping in between loses nothing). A3: bounded
+        // channel + synchronous `try_send` — a full channel drops this
+        // sample (harmless: the next sample carries everything) and counts
+        // it; a closed channel just fails silently. No await either way, so
+        // the tick body stays synchronous.
+        if self.steps.is_multiple_of(self.metrics_every)
+            && let Err(mpsc::error::TrySendError::Full(_)) =
+                self.metrics.try_send(MetricsEvent::Room(self.sample()))
+        {
+            self.m.metrics_dropped += 1;
+        }
         keep
     }
 
@@ -567,7 +614,9 @@ where
     fn sample(&self) -> RoomSample {
         RoomSample {
             room: self.config.id,
+            emit_at: Instant::now(),
             steps: self.steps,
+            budget_us: self.budget_us,
             lagged_events: self.m.lagged_events,
             lagged_ticks: self.m.lagged_ticks,
             step_min_us: self.m.step_min_us,
@@ -583,6 +632,7 @@ where
             snapshots: self.m.snapshots,
             snap_bytes: self.m.snap_bytes,
             snap_bytes_max: self.m.snap_bytes_max,
+            snap_overflows: self.m.snap_overflows,
             shipped_bytes: self.m.shipped_bytes,
             shipped_frames: self.m.shipped_frames,
             private_frames: self.m.private_frames,
@@ -591,6 +641,7 @@ where
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
+            metrics_dropped: self.m.metrics_dropped,
         }
     }
 
@@ -698,6 +749,11 @@ where
                 if n > self.m.snap_bytes_max as u64 {
                     self.m.snap_bytes_max = n as u32;
                 }
+                // Count every oversized emit (the warn above fires once per
+                // group; this counts all of them — the MTU/AOI signal).
+                if n > self.config.max_snapshot_bytes as u64 {
+                    self.m.snap_overflows += 1;
+                }
                 let payload = buf.freeze();
                 st.sent = Some(payload.clone());
                 st.last = Some(payload);
@@ -799,8 +855,8 @@ mod tests {
     /// A metrics sender whose receiver is dropped immediately: the room's
     /// per-step send fails and is ignored (the metric path is covered by
     /// the dedicated metrics-flow test and by gsb-server's tests).
-    fn null_metrics_tx() -> mpsc::UnboundedSender<MetricsEvent> {
-        let (tx, _rx) = mpsc::unbounded_channel();
+    fn null_metrics_tx() -> mpsc::Sender<MetricsEvent> {
+        let (tx, _rx) = mpsc::channel(1);
         tx
     }
 

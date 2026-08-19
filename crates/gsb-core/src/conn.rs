@@ -80,10 +80,14 @@ pub struct ConnectionActor {
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,
     m_flushed_out_frames: u64,
+    /// Metric samples dropped on a full (bounded) metrics channel since the
+    /// last flush (delta, like the other conn counters).
+    m_metrics_dropped: u64,
     m_last_flush: Instant,
-    /// Outbound metrics path (synchronous unbounded send — the actor's
-    /// only await stays the inbox `recv`).
-    metrics: mpsc::UnboundedSender<MetricsEvent>,
+    /// Outbound metrics path (bounded channel; the actor sends with the
+    /// synchronous `try_send` — the actor's only await stays the inbox
+    /// `recv`).
+    metrics: mpsc::Sender<MetricsEvent>,
 }
 
 impl ConnectionActor {
@@ -93,8 +97,9 @@ impl ConnectionActor {
         registry: Mailbox<RegistryMsg>,
         inbox: Inbox<ConnIn>,
         out: Mailbox<FrameBatch>,
-        // Outbound metrics path (see `crate::metrics`).
-        metrics: mpsc::UnboundedSender<MetricsEvent>,
+        // Outbound metrics path (see `crate::metrics`): a bounded channel;
+        // the actor sends with the synchronous `try_send` (no await).
+        metrics: mpsc::Sender<MetricsEvent>,
     ) -> Self {
         Self {
             conn,
@@ -112,6 +117,7 @@ impl ConnectionActor {
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
             m_flushed_out_frames: 0,
+            m_metrics_dropped: 0,
             m_last_flush: Instant::now(),
             metrics,
         }
@@ -180,7 +186,8 @@ impl ConnectionActor {
         let in_f = self.m_in_frames - self.m_flushed_in_frames;
         let out_b = self.m_out_bytes - self.m_flushed_out_bytes;
         let out_f = self.m_out_frames - self.m_flushed_out_frames;
-        if in_b == 0 && in_f == 0 && out_b == 0 && out_f == 0 {
+        let drops = self.m_metrics_dropped;
+        if in_b == 0 && in_f == 0 && out_b == 0 && out_f == 0 && drops == 0 {
             return;
         }
         if !last && Instant::now().duration_since(self.m_last_flush) < METRICS_FLUSH_EVERY {
@@ -190,15 +197,25 @@ impl ConnectionActor {
         self.m_flushed_in_frames = self.m_in_frames;
         self.m_flushed_out_bytes = self.m_out_bytes;
         self.m_flushed_out_frames = self.m_out_frames;
+        self.m_metrics_dropped = 0;
         self.m_last_flush = Instant::now();
-        let _ = self.metrics.send(MetricsEvent::Conn(ConnSample {
-            conn: self.conn,
-            bytes_in: in_b,
-            bytes_out: out_b,
-            frames_in: in_f,
-            frames_out: out_f,
-            last,
-        }));
+        // A3: bounded channel + synchronous `try_send`. On a full channel the
+        // sample is dropped (harmless — the counters are cumulative deltas and
+        // the next flush or the final flush carries the rest) and counted in
+        // the *next* sample.
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.metrics.try_send(MetricsEvent::Conn(ConnSample {
+                conn: self.conn,
+                bytes_in: in_b,
+                bytes_out: out_b,
+                frames_in: in_f,
+                frames_out: out_f,
+                metrics_dropped: drops,
+                last,
+            }))
+        {
+            self.m_metrics_dropped += 1;
+        }
     }
 
     fn detach(&mut self) {

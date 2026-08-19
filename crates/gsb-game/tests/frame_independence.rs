@@ -197,7 +197,7 @@ impl SimRoom {
             ..Default::default()
         };
         let (control, control_rx) = channel(config.control_capacity);
-        let (metrics_tx, _metrics_rx) = mpsc::unbounded_channel::<gsb_core::metrics::MetricsEvent>();
+        let (metrics_tx, _metrics_rx) = mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
         let actor = RoomActor::new(
             config,
             World::new(),

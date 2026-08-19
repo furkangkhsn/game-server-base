@@ -143,7 +143,9 @@ impl DemoRoom {
 
 /// Deterministic pseudo-random spawn point in a 100×100 arena, derived from
 /// the connection id (stable across room re-joins in the same session).
-fn spawn_pos(conn: ConnectionId) -> (f32, f32) {
+/// `pub(crate)` so the AOI room shares the exact same spawn distribution
+/// (a fair AOI-off vs AOI-on comparison in the load generator).
+pub(crate) fn spawn_pos(conn: ConnectionId) -> (f32, f32) {
     let h = conn.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let x = ((h % 1000) as f32) / 10.0 - 50.0;
     let y = (((h >> 32) % 1000) as f32) / 10.0 - 50.0;
