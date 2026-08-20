@@ -21,7 +21,12 @@ max_frame_bytes = 1048576
 room_control = 128
 
 # Per-connection action channel capacity (inputs buffered until the room's
-# next tick; overflow drops the connection's own oldest inputs).
+# next tick). If a connection's channel is full, its NEWEST input is
+# dropped on the sender side (the connection actor's try_send fails) and
+# the drop is counted in that connection's metrics sample
+# (actions_dropped / actions_dropped_top). The room itself never drops an
+# action it pulled: its READ phase is a bounded pull (per-connection
+# per-tick budget + room pull budget; DESIGN §4).
 conn_action = 256
 
 # Per-connection inbound channel capacity (frames from the reader pump).
@@ -29,6 +34,27 @@ conn_inbox = 1024
 
 # Per-connection outbound channel capacity (batches from room fan-out).
 conn_out = 256
+
+# Session idle window, in seconds. A connection that sends no client frame
+# (any frame counts, heartbeat included) for this long is closed by the
+# server with an ERROR code 9 frame right before the socket closes. This is
+# the half-open TCP guardrail (cable pulled / power lost: no FIN/RST ever
+# arrives). The clock lives in the reader pump's read deadline — no extra
+# task or message per connection (DESIGN §3). 0 disables the timeout.
+idle_timeout_secs = 30.0
+
+# Per-room membership cap. A join into a full room is answered with a
+# gentle ERROR code 8 (the connection stays alive; it can join another
+# room). Default 10 000 = the measured single-room wall (p50 step time
+# crosses the 33.3 ms budget between 9k and 10k players; DESIGN §14.3).
+# 0 removes the cap; omitting the key keeps the default.
+max_players = 10000
+
+# Server-wide connection (session) cap, enforced in the registry. A
+# connection accepted at/over the cap is answered with ERROR code 9 and
+# closed immediately. Default 100 000 = the design target kept as a
+# guardrail. 0 removes the cap.
+max_connections = 100000
 
 # Warn (log) when a room group's snapshot payload exceeds this many bytes.
 # rUDP MTU readiness: an oversized snapshot cannot ride a datagram, so the

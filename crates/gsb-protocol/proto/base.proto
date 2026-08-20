@@ -36,6 +36,19 @@ message HeartbeatAck {
   uint64 tick = 1;
 }
 
+// Server error, sent as a response to the message that caused it (or
+// unsolicited when the server closes the session). Code reference:
+//   1 = unknown opcode
+//   2 = decode error
+//   3 = auth (not authenticated / already authenticated)
+//   4 = room operation failed (room not found / tick rate mismatch)
+//   5 = room destroyed
+//   6 = not in a room
+//   7 = other
+//   8 = room full (gentle reject — the connection STAYS ALIVE; join
+//       another room or retry later)
+//   9 = server closed (idle timeout or server at connection capacity —
+//       the connection is closed right after this frame)
 message Error {
   uint32 code = 1;
   string message = 2;

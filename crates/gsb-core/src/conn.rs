@@ -43,6 +43,11 @@ pub enum ConnIn {
     Frame(FrameBody),
     /// The peer closed or the socket errored; the actor should clean up.
     Closed { reason: String },
+    /// The server is closing this connection on its own initiative (idle
+    /// timeout, connection capacity). The actor replies with an `ERROR`
+    /// frame (code 9, the reason as the message) so the client can tell a
+    /// server decision apart from a network failure, then cleans up.
+    ServerClosed { reason: String },
     /// The room the connection was in got destroyed.
     RoomGone(RoomId),
     /// Server-wide shutdown.
@@ -76,6 +81,17 @@ pub struct ConnectionActor {
     m_in_frames: u64,
     m_out_bytes: u64,
     m_out_frames: u64,
+    /// Input actions this actor dropped on a full (bounded) per-connection
+    /// action channel, delta since the last flush. This is the *only*
+    /// input-loss point in the architecture (the room's READ phase is a
+    /// bounded pull and never drops — see `room::RoomCounters`), and the
+    /// drop is attributed to the sender: a flooding connection drops its
+    /// own input, never another connection's.
+    m_actions_dropped: u64,
+    /// Warned once about action drops (the drop *count* is in the metrics
+    /// samples; per-drop warnings would flood the log exactly when a
+    /// flooder is doing what it does).
+    m_actions_dropped_warned: bool,
     m_flushed_in_bytes: u64,
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,
@@ -113,6 +129,8 @@ impl ConnectionActor {
             m_in_frames: 0,
             m_out_bytes: 0,
             m_out_frames: 0,
+            m_actions_dropped: 0,
+            m_actions_dropped_warned: false,
             m_flushed_in_bytes: 0,
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
@@ -142,6 +160,22 @@ impl ConnectionActor {
                 }
                 ConnIn::Closed { reason } => {
                     debug!(%self.conn, %reason, "connection closed by peer/io");
+                    break;
+                }
+                ConnIn::ServerClosed { reason } => {
+                    // The server made this decision (idle timeout, server at
+                    // connection capacity). Unlike a peer EOF the client may
+                    // still be listening: tell it why, then clean up.
+                    warn!(%self.conn, %reason, "server closing connection");
+                    let _ = self
+                        .send_frame(
+                            op::base::ERROR,
+                            &base::Error {
+                                code: 9,
+                                message: reason,
+                            },
+                        )
+                        .await;
                     break;
                 }
                 ConnIn::RoomGone(room) => {
@@ -186,8 +220,15 @@ impl ConnectionActor {
         let in_f = self.m_in_frames - self.m_flushed_in_frames;
         let out_b = self.m_out_bytes - self.m_flushed_out_bytes;
         let out_f = self.m_out_frames - self.m_flushed_out_frames;
+        let adrops = self.m_actions_dropped;
         let drops = self.m_metrics_dropped;
-        if in_b == 0 && in_f == 0 && out_b == 0 && out_f == 0 && drops == 0 {
+        if in_b == 0
+            && in_f == 0
+            && out_b == 0
+            && out_f == 0
+            && adrops == 0
+            && drops == 0
+        {
             return;
         }
         if !last && Instant::now().duration_since(self.m_last_flush) < METRICS_FLUSH_EVERY {
@@ -197,6 +238,7 @@ impl ConnectionActor {
         self.m_flushed_in_frames = self.m_in_frames;
         self.m_flushed_out_bytes = self.m_out_bytes;
         self.m_flushed_out_frames = self.m_out_frames;
+        self.m_actions_dropped = 0;
         self.m_metrics_dropped = 0;
         self.m_last_flush = Instant::now();
         // A3: bounded channel + synchronous `try_send`. On a full channel the
@@ -210,6 +252,7 @@ impl ConnectionActor {
                 bytes_out: out_b,
                 frames_in: in_f,
                 frames_out: out_f,
+                actions_dropped: adrops,
                 metrics_dropped: drops,
                 last,
             }))
@@ -292,11 +335,24 @@ impl ConnectionActor {
                         debug!(%self.conn, room = %room, entity, "joined room");
                     }
                     Ok(Err(e)) => {
+                        // `RoomFull` gets its own code (8) so the client can
+                        // tell "this room is full — pick another one or
+                        // retry later" (8) from a permanent failure like a
+                        // missing room (4). Either way the connection stays
+                        // alive: a gentle reject costs one small frame and
+                        // keeps the session reusable, while a silent close
+                        // looks like a network failure and sends the
+                        // client into a reconnect/backoff loop against a
+                        // server that is (by definition) already busy.
+                        let code = match &e {
+                            CoreError::RoomFull(_) => 8,
+                            _ => 4,
+                        };
                         let _ = self
                             .send_frame(
                                 op::base::ERROR,
                                 &base::Error {
-                                    code: 4,
+                                    code,
                                     message: e.to_string(),
                                 },
                             )
@@ -360,8 +416,12 @@ impl ConnectionActor {
         };
         // The payload is forwarded encoded; the game crate decodes it.
         // Non-blocking: a flooding connection drops its own input (bounded
-        // per-connection memory) and never stalls its actor or the room. A
-        // closed channel means the room is gone: detach.
+        // per-connection memory) and never stalls its actor or the room —
+        // this `try_send` Full case is the architecture's only input-loss
+        // point (the room's READ phase is a bounded pull that defers, not
+        // drops), so the drop is counted here, attributed to this
+        // connection's metrics sample. A closed channel means the room is
+        // gone: detach.
         match mailbox.try_send(Action {
             conn: self.conn,
             op: frame.op,
@@ -369,7 +429,19 @@ impl ConnectionActor {
         }) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!(%self.conn, op = frame.op, "action channel full; input dropped");
+                self.m_actions_dropped += 1;
+                if !self.m_actions_dropped_warned {
+                    self.m_actions_dropped_warned = true;
+                    warn!(
+                        %self.conn,
+                        op = frame.op,
+                        "action channel full; this connection's input is being \
+                         dropped (counted in its metrics sample; the room's \
+                         per-connection per-tick pull budget bounds the \
+                         damage — another connection's input is never \
+                         affected)"
+                    );
+                }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 warn!(%self.conn, "action channel closed while forwarding; detaching");

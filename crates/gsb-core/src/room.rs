@@ -66,6 +66,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
+use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::metrics::{MetricsEvent, RoomSample, HIST_BINS};
 use crate::ticker::TickInfo;
@@ -90,9 +91,43 @@ pub struct RoomConfig {
     pub control_capacity: usize,
     /// Capacity of each connection's action channel.
     pub action_capacity: usize,
-    /// High-water mark for buffered actions; beyond this, the *oldest*
-    /// actions are dropped (a room behind real time must stay bounded).
+    /// Per-connection per-tick pull budget (fairness cut, READ phase): a
+    /// single connection's input can contribute at most this many actions
+    /// to one tick, no matter how much its bounded channel is holding.
+    /// The excess *stays in the channel* — it is pulled on later ticks
+    /// (deferred, not dropped by the room); if a connection outpaces the
+    /// budget sustainedly, its own `try_send` hits the full channel and
+    /// drops *its own* newest input (counted by the connection actor,
+    /// attributed to it). This is what stops one flooding connection from
+    /// pushing *other* connections' earlier input out of a tick.
+    ///
+    /// Default 16: 480 actions/s at the default 30 Hz — ~70× the measured
+    /// demo input rate (one MOVE_TO per 150 ms ≈ 6.7/s, the load test's
+    /// steady state at the 10k-connection wall) — while cutting a
+    /// flooder's per-tick contribution from the channel cap (256) to 16.
+    pub max_actions_per_conn_per_tick: usize,
+    /// Room-level pull budget (READ phase): the total number of actions the
+    /// room pulls in one tick. This is a *pull* bound, not a drop bound —
+    /// when it is exhausted the room simply pulls no more this tick and the
+    /// remainder waits in the senders' bounded channels (the room never
+    /// drops an action; see [`RoomCounters::dropped_actions`]). It bounds
+    /// the tick's ingest cost, which is what the 10k-connection load wall
+    /// measured (the room's serial step path, not its memory).
     pub max_pending_actions: usize,
+    /// Per-room membership cap (capacity, JOIN phase): when the room
+    /// already holds this many members, a *new* join is rejected with
+    /// [`crate::error::CoreError::RoomFull`] — the room never creates the
+    /// entity, and the connection actor replies with a gentle `ERROR`
+    /// frame (code 8) instead of a silent close (the connection stays
+    /// alive and may join another room). A re-join of a connection that is
+    /// already a member is never rejected (it supersedes its own state).
+    ///
+    /// Default `Some(10_000)`: the measured single-room load wall (load
+    /// test C1: the 33.3 ms step budget is breached between 9k and 10k
+    /// members; at 10k the room runs at 23.2 Hz with 52 771 dropped
+    /// fan-out frames and 2.17 s of late ticks). The cap makes that
+    /// degraded regime structurally unreachable; `None` = unlimited.
+    pub max_players: Option<usize>,
     /// Cap for catch-up `dt`, in periods: after a long stall the next step
     /// simulates at most this many periods (temporary slow-motion).
     pub max_catchup: u32,
@@ -134,7 +169,9 @@ impl Default for RoomConfig {
             tick_hz: 30.0,
             control_capacity: 128,
             action_capacity: 256,
+            max_actions_per_conn_per_tick: 16,
             max_pending_actions: 65536,
+            max_players: Some(10_000),
             max_catchup: 4,
             max_snapshot_bytes: 1400,
             keepalive_hz: 1.0,
@@ -157,10 +194,16 @@ pub enum RoomControl {
     /// A player joined: register its outbound channel, create its entity,
     /// and hand the connection actor the sender of the new per-connection
     /// action channel.
+    ///
+    /// The reply is a `Result`: the join protocol can *structurally* fail
+    /// (a full room — [`crate::error::CoreError::RoomFull`] — rejects
+    /// without creating the entity). The room's member count is the
+    /// authority on capacity; the registry (which counts connections, not
+    /// room members) never decides it.
     Join {
         conn: ConnectionId,
         out: mpsc::Sender<FrameBatch>,
-        reply: oneshot::Sender<(EntityId, Mailbox<Action>)>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
     /// A player left: remove its entity and channel.
     ///
@@ -330,7 +373,13 @@ struct RoomCounters {
     late_sum_us: u64,
     /// Outbound batches dropped at the fan-out (slow client), cumulative.
     dropped_frames: u64,
-    /// Input actions dropped on READ overflow, cumulative.
+    /// Input actions dropped by the room, cumulative. **Always 0 since the
+    /// READ phase became a bounded pull** (per-connection per-tick budget +
+    /// room-level pull budget — see the phase's comment): overflow stays in
+    /// the senders' bounded channels and the only input-loss point is a
+    /// connection's own full action channel, counted *there*, attributed to
+    /// its sender (see `ConnSample::actions_dropped`). The counter is kept
+    /// for the report's format compatibility.
     dropped_actions: u64,
     /// Keep-alive re-sends, cumulative.
     keepalive_resends: u64,
@@ -601,22 +650,51 @@ where
 
         // -- Phase 1 — READ: pull each connection's actions (non-blocking;
         //    per-connection isolation — one flooder only fills its own
-        //    channel).
+        //    channel), bounded twice:
+        //
+        //    (a) per-connection per-tick budget
+        //    (`max_actions_per_conn_per_tick`): a single connection cannot
+        //    consume more than this of the tick's pull budget. This is the
+        //    *fairness* cut — before it, the merged list's overflow dropped
+        //    the oldest entries regardless of owner, so one flooding
+        //    connection could push other connections' earlier input out of
+        //    a tick. Now a flooder's excess stays in its own bounded
+        //    channel: it is pulled on later ticks (deferred), and if the
+        //    flooder outpaces the budget sustainedly its own `try_send`
+        //    hits the full channel and drops *its own* newest input,
+        //    counted by the connection actor and attributed to it.
+        //
+        //    (b) room-level pull budget (`max_pending_actions`): the total
+        //    number of actions pulled this tick. It bounds the tick's
+        //    ingest cost — the measured 10k-connection wall is the room's
+        //    serial step path, and a mass flood must not be able to
+        //    exceed it. It is a *pull* bound, not a drop bound: when it is
+        //    exhausted the room simply pulls no more this tick; the
+        //    remainder waits in the senders' bounded channels.
+        //
+        //    Consequence: the room never drops an action (`dropped_actions`
+        //    stays 0). The architecture's only input-loss point is a
+        //    connection's own full action channel — self-inflicted and
+        //    attributed (see `conn::ConnectionActor`).
+        let per_conn = self.config.max_actions_per_conn_per_tick;
+        let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();
         for r in self.conns.values_mut() {
-            while let Ok(a) = r.actions.try_recv() {
-                actions.push(a);
+            for _ in 0..per_conn {
+                if budget == 0 {
+                    break;
+                }
+                match r.actions.try_recv() {
+                    Ok(a) => {
+                        budget -= 1;
+                        actions.push(a);
+                    }
+                    Err(_) => break, // channel drained
+                }
             }
-        }
-        if actions.len() > self.config.max_pending_actions {
-            let over = actions.len() - self.config.max_pending_actions;
-            actions.drain(..over);
-            self.m.dropped_actions += over as u64;
-            warn!(
-                room = %self.config.id,
-                dropped = over,
-                "action overflow; dropped oldest"
-            );
+            if budget == 0 {
+                break;
+            }
         }
 
         // -- Phase 2 — CONVERT: actions → component writes (game logic).
@@ -842,6 +920,23 @@ where
                 if self.conns.remove(&conn).is_some() {
                     self.logic.on_leave(&mut self.world, conn);
                 }
+                // Capacity: the room knows its own membership — this is the
+                // only place a join can structurally fail. A fresh join to a
+                // full room is rejected (no entity, no channel, no state);
+                // a re-join of an existing member (removed above) never
+                // hits the cap because it supersedes itself.
+                if let Some(cap) = self.config.max_players
+                    && self.conns.len() >= cap
+                {
+                    warn!(
+                        room = %self.config.id,
+                        %conn,
+                        capacity = cap,
+                        "room full; join rejected (CoreError::RoomFull)"
+                    );
+                    let _ = reply.send(Err(CoreError::RoomFull(self.config.id.0)));
+                    return true;
+                }
                 let entity = self.logic.on_join(&mut self.world, conn);
                 self.m.joins += 1;
                 let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
@@ -857,7 +952,7 @@ where
                         group: self.logic.group_of(&self.world, conn),
                     },
                 );
-                let _ = reply.send((entity, act_tx));
+                let _ = reply.send(Ok((entity, act_tx)));
                 debug!(room = %self.config.id, %conn, entity, "player joined");
                 true
             }
@@ -990,7 +1085,8 @@ mod tests {
             ticks_needed: u64,
         ) -> (EntityId, Mailbox<Action>) {
             let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
-            let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+            let (reply_tx, reply_rx) =
+                oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
             self.control
                 .send(RoomControl::Join {
                     conn,
@@ -1004,10 +1100,12 @@ mod tests {
             for _ in 0..ticks_needed {
                 self.tick(Duration::from_secs_f64(1.0 / 30.0));
             }
-            tokio::time::timeout(Duration::from_secs(2), reply_rx)
+            let (entity, actions) = tokio::time::timeout(Duration::from_secs(2), reply_rx)
                 .await
                 .expect("timed out waiting for join reply")
                 .expect("join reply dropped")
+                .expect("join accepted (room not full)");
+            (entity, actions)
         }
 
         async fn shutdown(mut self) {
@@ -1377,7 +1475,8 @@ mod tests {
             conn: ConnectionId,
         ) -> (EntityId, mpsc::Receiver<FrameBatch>) {
             let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
-            let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+            let (reply_tx, reply_rx) =
+                oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
             self.control
                 .send(RoomControl::Join {
                     conn,
@@ -1390,7 +1489,8 @@ mod tests {
             let (entity, _actions) = tokio::time::timeout(Duration::from_secs(2), reply_rx)
                 .await
                 .expect("timed out waiting for join reply")
-                .expect("join reply dropped");
+                .expect("join reply dropped")
+                .expect("join accepted (room not full)");
             (entity, out_rx)
         }
 
@@ -1625,7 +1725,8 @@ mod tests {
         // conn 1 joins (tick 1); the control is processed on the room's
         // next step, so the tick goes out before the reply is awaited.
         let (out1_tx, mut a_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply1_tx, reply1_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply1_tx, reply1_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
         control
             .send(RoomControl::Join {
                 conn: ConnectionId(1),
@@ -1638,11 +1739,13 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), reply1_rx)
             .await
             .expect("join reply timeout")
-            .expect("join reply dropped");
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
 
         // conn 2 joins (tick 2).
         let (out2_tx, mut b_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply2_tx, reply2_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply2_tx, reply2_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
         control
             .send(RoomControl::Join {
                 conn: ConnectionId(2),
@@ -1655,7 +1758,8 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), reply2_rx)
             .await
             .expect("join reply timeout")
-            .expect("join reply dropped");
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
 
         // 25-tick window: the world changes on every tick, so BOTH
         // groups are dirty on every tick.
@@ -1822,7 +1926,8 @@ mod tests {
         // Clamped behavior: the join's own emission, then EVERY step is a
         // keep-alive step (interval 1) re-sending the cached snapshot.
         let (out_tx, mut a_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply_tx, reply_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
         control
             .send(RoomControl::Join {
                 conn: ConnectionId(26),
@@ -1839,7 +1944,10 @@ mod tests {
                 })
                 .expect("room subscriber alive");
         }
-        let _ = reply_rx.await.expect("join reply dropped");
+        let _ = reply_rx
+            .await
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
         wait_steps(&mut steps, 6).await;
 
         let got = drain_all(&mut a_rx).await;
@@ -2025,7 +2133,8 @@ mod tests {
         // Tick 1: the join is processed, the group is created (Vacant —
         // no check yet) and its first `snapshot()` returns `false`.
         let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
-        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply_tx, reply_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
         control
             .send(RoomControl::Join {
                 conn: ConnectionId(42),
@@ -2040,7 +2149,10 @@ mod tests {
                 at: t0 + Duration::from_secs_f64(1.0 / 30.0),
             })
             .expect("room subscriber alive");
-        let _ = reply_rx.await.expect("join reply dropped");
+        let _ = reply_rx
+            .await
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
         tokio::time::sleep(Duration::from_millis(20)).await;
         // No diagnostic for THIS group on its own first tick (the check
         // only sees a group that existed on the previous tick). Other
@@ -2108,5 +2220,214 @@ mod tests {
             out.push(batch);
         }
         out
+    }
+
+    // ── capacity + fairness guardrails (behaviour lock) ──────────────
+
+    /// Capacity guardrail: at `max_players` the next join is rejected with
+    /// `CoreError::RoomFull` — no entity, no action channel, no room
+    /// state — while the room (and its members) keeps working.
+    #[tokio::test]
+    async fn join_rejected_when_room_is_full() {
+        let (dt_tx, _dts) = mpsc::channel(16);
+        let (op_tx, mut ops) = mpsc::channel(16);
+        let mut h = Harness::new(
+            1,
+            RoomConfig {
+                id: RoomId(1),
+                max_players: Some(2),
+                ..Default::default()
+            },
+            RecLogic {
+                dts: dt_tx,
+                ops: op_tx,
+            },
+        );
+        let period = Duration::from_secs_f64(1.0 / 30.0);
+
+        // Two joins fill the room.
+        let (_e1, _a1) = h.join(ConnectionId(1), 1).await;
+        let (_e2, _a2) = h.join(ConnectionId(2), 1).await;
+
+        // The third join is structurally rejected (the reply carries the
+        // error; nothing is recorded in the room).
+        let (out3_tx, _out3_rx) = mpsc::channel::<FrameBatch>(8);
+        let (reply3_tx, reply3_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+        h.control
+            .send(RoomControl::Join {
+                conn: ConnectionId(3),
+                out: out3_tx,
+                reply: reply3_tx,
+            })
+            .await
+            .expect("control alive");
+        for _ in 0..2 {
+            h.tick(period);
+        }
+        match tokio::time::timeout(Duration::from_secs(2), reply3_rx)
+            .await
+            .expect("timed out waiting for the rejection")
+            .expect("reply dropped")
+        {
+            Err(CoreError::RoomFull(id)) => {
+                assert_eq!(id, 1, "the error names the rejecting room")
+            }
+            other => panic!("expected RoomFull, got {other:?}"),
+        }
+
+        // Existing members are unaffected: the surviving member's action
+        // still reaches the ingest on the next step.
+        _a1
+            .send(Action {
+                conn: ConnectionId(1),
+                op: 0x1500,
+                payload: bytes::Bytes::new(),
+            })
+            .await
+            .expect("member's action channel alive");
+        h.tick(period);
+        let op = tokio::time::timeout(Duration::from_secs(2), ops.recv())
+            .await
+            .expect("timed out waiting for the member op")
+            .expect("ops closed");
+        assert_eq!(op, 0x1500, "the surviving member's action is still ingested");
+        h.shutdown().await;
+    }
+
+    /// Fairness guardrail: a connection that floods its own action
+    /// channel can no longer evict ANYONE ELSE's actions. The READ phase
+    /// is a bounded pull (per-connection budget + room pull budget), not
+    /// a merged list with an oldest-drop: the victim's one action per tick
+    /// is ingested on every tick, and the flooder's excess stays in its
+    /// OWN channel (deferred; the room drops nothing).
+    ///
+    /// Under the old semantics (merged list, `drain(..over)` = oldest) the
+    /// merged list is built in `conns` iteration order and the overflow
+    /// drops its HEAD: with one flooded connection and one quiet one, the
+    /// quiet connection's actions sit in a small contiguous block of the
+    /// list, and the flooder's backlog determines which block overflows —
+    /// i.e. a single flooder could evict the other connection's actions
+    /// (which block was dropped depended on the hash order, so even the
+    /// victim was arbitrary). The per-connection pull budget removes the
+    /// interaction entirely: every connection's ingest is bounded by its
+    /// own budget, whoever it is.
+    #[tokio::test]
+    async fn flooder_cannot_evict_other_connections_actions() {
+        let (dt_tx, _dts) = mpsc::channel(64);
+        // Wide: the room ingests 188 ops (20 victim + 168 flood) and the
+        // logic forwards each via try_send — the observation channel must
+        // not be the thing that overflows in this test.
+        let (op_tx, mut ops) = mpsc::channel(512);
+        let mut h = Harness::new(
+            1,
+            RoomConfig {
+                id: RoomId(1),
+                // The fairness probe: a tight pull budget and a tight
+                // per-connection budget (the old code had neither; the
+                // merged list grew with the flooder's backlog).
+                max_pending_actions: 16,
+                max_actions_per_conn_per_tick: 8,
+                ..Default::default()
+            },
+            RecLogic {
+                dts: dt_tx,
+                ops: op_tx,
+            },
+        );
+        let period = Duration::from_secs_f64(1.0 / 30.0);
+
+        // The quiet connection ("victim") and the flooded connection
+        // ("flooder"); which block of the old merged list overflowed
+        // depended on the HashMap iteration order, so neither role is
+        // special — the new per-connection budgets make it a non-issue.
+        let (_ev, victim) = h.join(ConnectionId(1), 1).await;
+        let (_ef, flood) = h.join(ConnectionId(2), 1).await;
+
+        // The flooder fills its own action channel to capacity (256):
+        // the flood backlog the room would have merged (and overflowed)
+        // under the old READ.
+        let mut stuffed = 0usize;
+        while let Ok(()) = flood.try_send(Action {
+            conn: ConnectionId(2),
+            op: 0x3000,
+            payload: bytes::Bytes::new(),
+        }) {
+            stuffed += 1;
+        }
+        assert_eq!(stuffed, 256, "the flood backlog is the channel capacity");
+
+        // 20 ticks: the victim sends exactly one action per tick.
+        for t in 0..20u16 {
+            victim
+                .try_send(Action {
+                    conn: ConnectionId(1),
+                    op: 0x2000 + t,
+                    payload: bytes::Bytes::new(),
+                })
+                .expect("victim channel never full (one op per tick)");
+            h.tick(period);
+        }
+        // One more tick so the last queued op is pulled and ingested.
+        h.tick(period);
+
+        // Collect everything ingested (the ticks are fire-and-forget, so
+        // wait until the full expected volume has landed: 20 victim ops +
+        // 8 floods/tick × 21 ticks = 168). Ingest ORDER between the two
+        // connections is HashMap-driven and not asserted; OWNERSHIP is
+        // what the guardrail guarantees.
+        let mut victim_ops = 0u32;
+        let mut flood_ops = 0u32;
+        let mut total = 0u32;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while total < 188 && std::time::Instant::now() < deadline {
+            match ops.try_recv() {
+                Ok(op) => {
+                    total += 1;
+                    if (0x2000..0x2014).contains(&op) {
+                        victim_ops += 1;
+                    } else if op == 0x3000 {
+                        flood_ops += 1;
+                    }
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        }
+        assert_eq!(
+            total,
+            188,
+            "the room ingested the full expected volume (20 + 168)"
+        );
+        assert_eq!(
+            victim_ops,
+            20,
+            "EVERY victim op was ingested — the flood evicted none of them"
+        );
+        assert_eq!(
+            flood_ops,
+            168,
+            "the room pulled exactly 8 flood ops per tick (its per-conn budget)"
+        );
+        // The flooder's excess was DEFERRED in its own channel: the room
+        // pulled 8/tick × 21 ticks = 168 (the ingested volume above), so
+        // 88 of the original 256 are still queued — the room dropped
+        // nothing. Observe it by filling the free slots: exactly 168
+        // sends fit (= the amount pulled), the 169th hits Full.
+        let mut free = 0usize;
+        // (Full ends the loop: the backlog is exactly 256 − free.)
+        while let Ok(()) = flood.try_send(Action {
+            conn: ConnectionId(2),
+            op: 0x3001,
+            payload: bytes::Bytes::new(),
+        }) {
+            free += 1;
+        }
+        assert_eq!(
+            free,
+            8 * 21,
+            "exactly the per-tick pull (8/tick × 21 ticks) freed slots; \
+             the rest is still deferred in the flooder's own channel"
+        );
+        h.shutdown().await;
     }
 }

@@ -55,7 +55,7 @@ use tokio::net::{TcpListener, TcpStream, tcp::OwnedReadHalf};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::mpsc;
 
-use gsb_core::id::RoomId;
+use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
     hist_edge_us, MetricReport, NetReport, RegistryReport, RoomReport, HIST_BINS,
     HIST_OVERFLOW_BIN,
@@ -153,6 +153,25 @@ struct Args {
     /// process (and, with `--pin`, on disjoint cores), so its CPU is
     /// isolated from the clients' decode work.
     orchestrate: bool,
+    /// Per-room membership cap of the in-process / served server
+    /// (`--max-players N`, 0 = unlimited). A join into a full room is
+    /// rejected with `ERROR` code 8 (the client stays connected; its
+    /// `joined` stays false and it counts a `join_rejected`).
+    max_players: Option<u32>,
+    /// Server-wide connection cap of the in-process / served server
+    /// (`--max-connections N`, 0 = unlimited). New connections beyond it
+    /// are rejected at birth with `ERROR` code 9 + EOF (the client counts
+    /// a `cap_rejected`).
+    max_connections: Option<u64>,
+    /// Session-lifecycle idle window of the in-process / served server, in
+    /// seconds (`--idle-timeout-secs F`; 0 = disabled; unspecified = the
+    /// server config default, 30 s).
+    idle_timeout_secs: Option<f64>,
+    /// The GLOBAL id of the client that floods (`--flood-id K`): after
+    /// joining it writes MOVE_TO frames in a tight loop (as fast as the
+    /// socket accepts) until the deadline — the input-flood behaviour
+    /// probe for the fairness / drop-attribution guards.
+    flood_id: Option<u64>,
     /// Number of client processes in orchestrator mode (default 1).
     procs: u32,
     /// Pin the spawned processes to disjoint core sets with `taskset`
@@ -199,6 +218,18 @@ Server options (in-process server, --serve, or the orchestrator's server):
   --cell-size F                       (spatial; default 20)
   --vision-radius F                   (team; default 25)
   --max-snapshot-bytes N              (default 1400)
+  --max-players N                     per-room membership cap (0 = unlimited;
+                                       default: the server config default,
+                                       10 000 — the measured single-room wall)
+  --max-connections N                 server-wide connection cap (0 =
+                                       unlimited; default: the server config
+                                       default, 100 000)
+  --idle-timeout-secs F               idle session window (0 = disabled;
+                                       default: the server config default, 30)
+
+Client behaviour:
+  --flood-id K                        client K floods MOVE_TO in a tight loop
+                                      after joining (the input-flood probe)
 
 Orchestrator options (--orchestrate):
   --procs P             client process count (default 1)
@@ -238,6 +269,10 @@ fn parse_args() -> Args {
         pin: false,
         pin_server_cores: 8,
         workers: 0,
+        max_players: None,
+        max_connections: None,
+        idle_timeout_secs: None,
+        flood_id: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -294,6 +329,18 @@ fn parse_args() -> Args {
             "--pin" => args.pin = true,
             "--pin-server-cores" => args.pin_server_cores = v().parse().expect("number"),
             "--workers" => args.workers = v().parse().expect("number"),
+            "--max-players" => {
+                let n: u32 = v().parse().expect("number");
+                args.max_players = Some(n);
+            }
+            "--max-connections" => {
+                let n: u64 = v().parse().expect("number");
+                args.max_connections = Some(n);
+            }
+            "--idle-timeout-secs" => {
+                args.idle_timeout_secs = Some(v().parse().expect("number"));
+            }
+            "--flood-id" => args.flood_id = Some(v().parse().expect("number")),
             s if s.starts_with("--") => panic!("unknown flag {s} (try --help)"),
             s => args.clients = s.parse().expect("N must be a number"),
         }
@@ -357,6 +404,12 @@ struct ClientReport {
     bytes_out: u64,
     moves: u64,
     errors: u64,
+    /// Join rejections observed (`ERROR` code 8, room full): the room
+    /// capacity guardrail working — the connection stays alive.
+    join_rejected: u64,
+    /// Connection-capacity rejections observed (`ERROR` code 9): the
+    /// server-wide cap rejected this connection at birth.
+    cap_rejected: u64,
     /// First/last snapshot sequence with its arrival instant: the server's
     /// measured tick rate is (last_seq − first_seq) / Δt, since the
     /// snapshot sequence is the global tick index.
@@ -388,6 +441,10 @@ struct ClientParams {
     profile: Profile,
     spawn_half: f32,
     deadline: Instant,
+    /// Flood mode (the `--flood-id` client): after joining, write MOVE_TO
+    /// in a tight loop until the deadline — the input-flood behaviour
+    /// probe for the per-connection pull budget and the drop attribution.
+    flood: bool,
 }
 
 async fn run_client(id: u64, p: ClientParams) -> ClientReport {
@@ -403,6 +460,8 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         bytes_out: 0,
         moves: 0,
         errors: 0,
+        join_rejected: 0,
+        cap_rejected: 0,
         seq_first: None,
         seq_last: None,
     };
@@ -434,6 +493,7 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
 
     let t_start = Instant::now();
     let mut last_move = t_start;
+    let mut flooded = false;
     loop {
         let now = Instant::now();
         if now >= p.deadline {
@@ -501,6 +561,12 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 };
                 rep.joined = true;
                 rep.entity = m.entity;
+                if p.flood {
+                    // Flood mode: leave the paced loop; the tight write
+                    // loop below runs until the deadline.
+                    flooded = true;
+                    break;
+                }
             }
             gsb_game::op::WORLD_SNAPSHOT => match gsb_game::game::WorldSnapshot::decode(&payload[..]) {
                 Ok(m) => {
@@ -514,10 +580,34 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 Err(_) => rep.errors += 1,
             },
             op::base::ERROR => {
-                let _e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
-                rep.errors += 1;
+                let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
+                match e.code {
+                    // The capacity guardrails, observed from the client
+                    // side: 8 = room full (gentle reject, connection
+                    // stays), 9 = server at connection capacity.
+                    8 => rep.join_rejected += 1,
+                    9 => rep.cap_rejected += 1,
+                    _ => rep.errors += 1,
+                }
             }
             _ => {}
+        }
+    }
+
+    if flooded {
+        // The input flood: write MOVE_TO as fast as the socket accepts,
+        // until the deadline. The server-side chain (reader pump → conn
+        // inbox → conn actor → action channel → room pull budget) bounds
+        // what actually reaches the tick; the excess is dropped on the
+        // flooder's OWN full action channel (attributed to it).
+        let msg = gsb_game::game::MoveTo { x: 0, y: 0 };
+        let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
+        while Instant::now() < p.deadline {
+            if w.write_all(&f).await.is_err() {
+                break; // peer gone
+            }
+            rep.moves += 1;
+            rep.bytes_out += f.len() as u64;
         }
     }
 
@@ -622,6 +712,27 @@ struct InProcessServer {
     rep_rx: mpsc::UnboundedReceiver<MetricReport>,
 }
 
+/// Capacity / lifecycle probe overrides for the in-process / served
+/// server. Each `None` = unspecified (keep the server config default);
+/// an explicit `0` = unlimited (rooms) / disabled (idle window).
+struct ServerOverrides {
+    max_players: Option<u32>,
+    max_connections: Option<u64>,
+    idle_timeout_secs: Option<f64>,
+}
+
+fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
+    if let Some(n) = o.max_players {
+        cfg.max_players = (n != 0).then_some(n);
+    }
+    if let Some(n) = o.max_connections {
+        cfg.max_connections = (n != 0).then_some(n);
+    }
+    if let Some(s) = o.idle_timeout_secs {
+        cfg.idle_timeout_secs = s;
+    }
+}
+
 /// Start the server in-process with a channel metrics sink. The receiver
 /// moves into the report-drain task; nothing is shared across tasks
 /// beyond that mailbox. `visibility` selects the room group key (the
@@ -632,8 +743,9 @@ async fn start_inprocess(
     vision_radius: f32,
     max_snapshot_bytes: usize,
     spawn_half: f32,
+    overrides: ServerOverrides,
 ) -> Result<InProcessServer, gsb_server::ServerError> {
-    let cfg = gsb_server::Config {
+    let mut cfg = gsb_server::Config {
         bind: "127.0.0.1:0".into(),
         room_count: 1,
         visibility,
@@ -643,6 +755,7 @@ async fn start_inprocess(
         spawn_half_size: spawn_half,
         ..Default::default()
     };
+    apply_overrides(&mut cfg, &overrides);
     let (rep_tx, rep_rx) = mpsc::unbounded_channel::<MetricReport>();
     let handle = gsb_server::start_server_metrics(cfg, rep_tx).await?;
     Ok(InProcessServer { handle, rep_rx })
@@ -687,6 +800,11 @@ async fn run(args: Args) {
                 args.vision_radius,
                 args.max_snapshot_bytes,
                 args.server_spawn_half,
+                ServerOverrides {
+                    max_players: args.max_players,
+                    max_connections: args.max_connections,
+                    idle_timeout_secs: args.idle_timeout_secs,
+                },
             )
             .await
             .expect("server starts");
@@ -731,7 +849,7 @@ async fn run(args: Args) {
     let drain = rep_rx.map(|rx| tokio::spawn(drain_reports(rx)));
     let deadline = Instant::now() + args.duration;
     let n = args.clients;
-    let p = ClientParams {
+    let mut p = ClientParams {
         addr,
         room: args.room,
         move_ms: args.move_ms,
@@ -739,10 +857,14 @@ async fn run(args: Args) {
         profile: args.profile,
         spawn_half: args.spawn_half,
         deadline,
+        flood: false,
     };
     let mut clients = Vec::with_capacity(n as usize);
     for i in 0..n {
         let id = args.offset + i;
+        // The `--flood-id` client (by GLOBAL id) runs the tight-write flood
+        // after joining; every other client is paced normally.
+        p.flood = args.flood_id == Some(id);
         clients.push(tokio::spawn(run_client(id, p.clone())));
     }
     let mut reports = Vec::with_capacity(clients.len());
@@ -761,7 +883,7 @@ async fn run(args: Args) {
         for r in &reports {
             println!(
                 "CLIENT id={} connected={} connect_ms={} joined={} left={} snapshots={} \
-                 bytes_in={} bytes_out={} moves={} errors={} hz={}",
+                 bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} hz={}",
                 r.id,
                 r.connected,
                 r.connect_ms,
@@ -772,6 +894,8 @@ async fn run(args: Args) {
                 r.bytes_out,
                 r.moves,
                 r.errors,
+                r.join_rejected,
+                r.cap_rejected,
                 match measured_hz(r) {
                     Some(h) => format!("{h:.3}"),
                     None => "-".to_string(),
@@ -928,6 +1052,8 @@ fn print_report(
     let out_bytes: u64 = reports.iter().map(|r| r.bytes_out).sum();
     let moves: u64 = reports.iter().map(|r| r.moves).sum();
     let errors: u64 = reports.iter().map(|r| r.errors).sum();
+    let join_rejected: u64 = reports.iter().map(|r| r.join_rejected).sum();
+    let cap_rejected: u64 = reports.iter().map(|r| r.cap_rejected).sum();
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
 
@@ -939,7 +1065,7 @@ fn print_report(
         args.offset + args.clients.saturating_sub(1)
     );
     println!(
-        "clients: connected={connected}/{} joined={joined} left={left} errors={errors}",
+        "clients: connected={connected}/{} joined={joined} left={left} errors={errors} join_rejected={join_rejected} cap_rejected={cap_rejected}",
         args.clients
     );
     let slowest = reports
@@ -1029,14 +1155,29 @@ fn print_report(
         }
         if let Some(n) = net {
             println!(
-                "server net (final): bytes_in={} KB ({} KB/s) bytes_out={} KB ({} KB/s) frames_in={} frames_out={}",
+                "server net (final): bytes_in={} KB ({} KB/s) bytes_out={} KB ({} KB/s) frames_in={} frames_out={} actions_dropped={}",
                 n.bytes_in / 1024,
                 n.bytes_in as f64 / 1024.0 / dur,
                 n.bytes_out_total / 1024,
                 n.bytes_out_total as f64 / 1024.0 / dur,
                 n.frames_in,
-                n.frames_out
+                n.frames_out,
+                n.actions_dropped
             );
+            if !last_room.as_ref().unwrap().actions_dropped_top.is_empty() {
+                // Per-connection attribution (the fairness guardrail's
+                // receipt: drops live on the flooder's own channel, not on
+                // anyone else's input). Bounded (≤ 5 entries), so the
+                // clone is free.
+                let top = last_room.as_ref().unwrap().actions_dropped_top.clone();
+                println!(
+                    "server net (final): actions_dropped_top={}",
+                    top.iter()
+                        .map(|(c, n)| format!("c{}:{}", c.0, n))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
         }
     } else {
         println!("server metrics: unavailable (external mode)");
@@ -1051,7 +1192,8 @@ fn print_report(
          peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
-         server_cpu_s={:.1} clients_cpu_s={:.1}",
+         server_cpu_s={:.1} clients_cpu_s={:.1} \
+          join_rejected={} cap_rejected={} actions_dropped={} actions_dropped_top={}",
         mode,
         args.visibility,
         args.max_snapshot_bytes,
@@ -1101,6 +1243,18 @@ fn print_report(
         sep.map(|s| s.affinity.clone()).unwrap_or_else(|| "none".to_string()),
         sep.map(|s| s.server_cpu_s).unwrap_or(0.0),
         sep.map(|s| s.clients_cpu_s).unwrap_or(0.0),
+        join_rejected,
+        cap_rejected,
+        net.map(|n| n.actions_dropped).unwrap_or(0),
+        last_room
+            .map(|l| {
+                l.actions_dropped_top
+                    .iter()
+                    .map(|(c, n)| format!("c{}:{}", c.0, n))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default(),
     );
 }
 
@@ -1160,13 +1314,17 @@ fn main() {
 ///                u64 opens  u64 closes
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
+///   u64 actions_dropped
+///   u32 n_top  [per entry] u64 conn_id  u64 count
 /// ```
 ///
 /// Both directions live in this binary (the server's `--serve` mode and
 /// the orchestrator are the same executable), so the format cannot
 /// drift between sides; the magic guards against a stale/reordered
-/// connection.
-const METRICS_MAGIC: u32 = 0x47_53_4D_31;
+/// connection. GSM2 = the GSM1 layout plus the net-scope
+/// `actions_dropped` total and its per-connection attribution tail
+/// (worst offenders first, ≤ 5 — see `MetricReport::actions_dropped_top`).
+const METRICS_MAGIC: u32 = 0x4753_4D32;
 
 /// Little-endian writer (the encode side of the format above).
 struct W(Vec<u8>);
@@ -1244,6 +1402,12 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.bytes_out_total);
     w.u64(r.net.frames_in);
     w.u64(r.net.frames_out);
+    w.u64(r.net.actions_dropped);
+    w.u32(r.actions_dropped_top.len() as u32);
+    for (conn, n) in &r.actions_dropped_top {
+        w.u64(conn.0);
+        w.u64(*n);
+    }
     let mut frame = Vec::with_capacity(8 + w.0.len());
     frame.extend_from_slice(&METRICS_MAGIC.to_le_bytes());
     frame.extend_from_slice(&(w.0.len() as u32).to_le_bytes());
@@ -1362,7 +1526,13 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
         bytes_out_total: r.u64()?,
         frames_in: r.u64()?,
         frames_out: r.u64()?,
+        actions_dropped: r.u64()?,
     };
+    let n_top = r.u32()?;
+    let mut actions_dropped_top = Vec::with_capacity(n_top as usize);
+    for _ in 0..n_top {
+        actions_dropped_top.push((ConnectionId(r.u64()?), r.u64()?));
+    }
     if !r.done() {
         return None;
     }
@@ -1371,6 +1541,7 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
         rooms,
         registry,
         net,
+        actions_dropped_top,
     })
 }
 
@@ -1382,7 +1553,7 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
 /// preserved end-to-end; nothing is parsed from stdout).
 async fn serve(args: Args) {
     init_tracing();
-    let cfg = gsb_server::Config {
+    let mut cfg = gsb_server::Config {
         bind: args.bind.clone(),
         room_count: 1,
         visibility: args.visibility,
@@ -1392,6 +1563,16 @@ async fn serve(args: Args) {
         spawn_half_size: args.server_spawn_half,
         ..Default::default()
     };
+    // Capacity / lifecycle overrides (same semantics as in-process: an
+    // explicit 0 means unlimited / disabled).
+    apply_overrides(
+        &mut cfg,
+        &ServerOverrides {
+            max_players: args.max_players,
+            max_connections: args.max_connections,
+            idle_timeout_secs: args.idle_timeout_secs,
+        },
+    );
     match args.metrics_listen {
         Some(listen) => {
             let listen: SocketAddr =
@@ -1633,6 +1814,8 @@ struct ClientRec {
     bytes_out: u64,
     moves: u64,
     errors: u64,
+    join_rejected: u64,
+    cap_rejected: u64,
     hz: Option<f64>,
 }
 
@@ -1653,6 +1836,8 @@ fn parse_client_line(line: &str) -> Option<ClientRec> {
         bytes_out: get("bytes_out")?.parse().ok()?,
         moves: get("moves")?.parse().ok()?,
         errors: get("errors")?.parse().ok()?,
+        join_rejected: get("join_rejected")?.parse().ok()?,
+        cap_rejected: get("cap_rejected")?.parse().ok()?,
         hz: match get("hz")?.as_str() {
             "-" => None,
             v => v.parse().ok(),
@@ -1752,7 +1937,7 @@ async fn orchestrate(args: Args) {
         .as_ref()
         .map(|m| m.0.len().max(1))
         .unwrap_or(args.workers.max(1));
-    let sargs = vec![
+    let mut sargs = vec![
         "--serve".into(),
         "--bind".into(),
         format!("127.0.0.1:{server_port}"),
@@ -1773,6 +1958,20 @@ async fn orchestrate(args: Args) {
         "--workers".into(),
         server_workers.to_string(),
     ];
+    // Capacity / lifecycle guards (forwarded only when the operator
+    // chose them; the served server keeps its config defaults otherwise).
+    if let Some(n) = args.max_players {
+        sargs.push("--max-players".into());
+        sargs.push(n.to_string());
+    }
+    if let Some(n) = args.max_connections {
+        sargs.push("--max-connections".into());
+        sargs.push(n.to_string());
+    }
+    if let Some(s) = args.idle_timeout_secs {
+        sargs.push("--idle-timeout-secs".into());
+        sargs.push(s.to_string());
+    }
     let mut server = spawn_pinned(
         &exe,
         &sargs,
@@ -1827,7 +2026,7 @@ async fn orchestrate(args: Args) {
             .and_then(|m| m.1.get(p as usize))
             .map(|m| m.len().max(1))
             .unwrap_or(args.workers.max(1));
-        let cargs = vec![
+        let mut cargs = vec![
             count.to_string(),
             "--addr".into(),
             format!("127.0.0.1:{server_port}"),
@@ -1851,6 +2050,15 @@ async fn orchestrate(args: Args) {
             "--workers".into(),
             workers.to_string(),
         ];
+        // The flood client (by global id) belongs to exactly one child:
+        // forward the flag only to the child whose id range contains it.
+        if let Some(k) = args.flood_id
+            && offset <= k
+            && k < offset + count
+        {
+            cargs.push("--flood-id".into());
+            cargs.push(k.to_string());
+        }
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
         let mut child = spawn_pinned(
@@ -2046,6 +2254,8 @@ async fn orchestrate(args: Args) {
             bytes_out: c.bytes_out,
             moves: c.moves,
             errors: c.errors,
+            join_rejected: c.join_rejected,
+            cap_rejected: c.cap_rejected,
             seq_first: None,
             seq_last: None,
         })

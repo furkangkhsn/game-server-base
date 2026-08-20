@@ -267,6 +267,13 @@ pub struct ConnSample {
     /// Frames received / control frames sent, delta.
     pub frames_in: u64,
     pub frames_out: u64,
+    /// Input actions this actor dropped on a full (bounded) action
+    /// channel, delta since its last flush. The only input-loss point in
+    /// the architecture (the room's READ phase is a bounded *pull* — see
+    /// [`RoomSample::dropped_actions`]) and always self-inflicted: a
+    /// flooding connection drops its own input. The collector sums these
+    /// per connection so a report can attribute the loss to its sender.
+    pub actions_dropped: u64,
     /// Metric samples this actor dropped on a full (bounded) metrics
     /// channel, delta since its last flush.
     pub metrics_dropped: u64,
@@ -317,6 +324,11 @@ pub struct MetricAccumulator {
     /// Summed delta of connection-actor metric-channel drops (their sample
     /// is delta-based, like the other conn counters).
     conn_metrics_dropped: u64,
+    /// Cumulative input-action drops per connection (the sender's
+    /// attribution: which connection's own input was lost to its full
+    /// action channel). The collector owns this state — the connection
+    /// actors only ever *report* their own deltas.
+    conn_actions_dropped: BTreeMap<ConnectionId, u64>,
 }
 
 /// Per-room slice of a report: current gauges + rates over the last
@@ -401,6 +413,11 @@ pub struct NetReport {
     pub frames_in: u64,
     /// Control frames sent by connection actors.
     pub frames_out: u64,
+    /// Input actions dropped on full (bounded) per-connection action
+    /// channels (cumulative, all connections). The per-connection
+    /// attribution (who dropped what) is in
+    /// [`MetricReport::actions_dropped_top`].
+    pub actions_dropped: u64,
 }
 
 /// One periodic report: the server's current numeric state.
@@ -414,6 +431,11 @@ pub struct MetricReport {
     pub rooms: Vec<RoomReport>,
     pub registry: Option<RegistryReport>,
     pub net: NetReport,
+    /// Cumulative input-action drops per connection, worst offenders first
+    /// (up to 5; ties broken by connection id). Empty when nothing was
+    /// dropped — the only loss point for input is a connection's own full
+    /// action channel, so this list names the flooders.
+    pub actions_dropped_top: Vec<(ConnectionId, u64)>,
 }
 
 impl MetricAccumulator {
@@ -433,6 +455,10 @@ impl MetricAccumulator {
                 self.conn_bytes_out = self.conn_bytes_out.saturating_add(c.bytes_out);
                 self.conn_frames_in = self.conn_frames_in.saturating_add(c.frames_in);
                 self.conn_frames_out = self.conn_frames_out.saturating_add(c.frames_out);
+                if c.actions_dropped > 0 {
+                    let entry = self.conn_actions_dropped.entry(c.conn).or_default();
+                    *entry = entry.saturating_add(c.actions_dropped);
+                }
                 self.conn_metrics_dropped =
                     self.conn_metrics_dropped.saturating_add(c.metrics_dropped);
             }
@@ -510,6 +536,16 @@ impl MetricAccumulator {
             .sum::<u64>()
             .saturating_add(self.registry.map(|r| r.metrics_dropped).unwrap_or(0))
             .saturating_add(self.conn_metrics_dropped);
+        // Per-connection input-drop attribution: worst offenders first
+        // (count desc, connection id asc as the deterministic tie-break).
+        let actions_dropped_total: u64 = self.conn_actions_dropped.values().sum();
+        let mut actions_dropped_top: Vec<(ConnectionId, u64)> = self
+            .conn_actions_dropped
+            .iter()
+            .map(|(c, n)| (*c, *n))
+            .collect();
+        actions_dropped_top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        actions_dropped_top.truncate(5);
         MetricReport {
             metrics_dropped,
             registry: self.registry.map(|r| RegistryReport {
@@ -532,7 +568,9 @@ impl MetricAccumulator {
                 bytes_out_total: bytes_out_room.saturating_add(self.conn_bytes_out),
                 frames_in: self.conn_frames_in,
                 frames_out: self.conn_frames_out,
+                actions_dropped: actions_dropped_total,
             },
+            actions_dropped_top,
             rooms,
         }
     }
@@ -585,10 +623,24 @@ impl MetricReport {
         lines.push(format!(
             "gsb-metric scope=net bytes_in={} bytes_out_room={} \
              bytes_out_control={} bytes_out_total={} frames_in={} frames_out={} \
-             metrics_dropped={}",
+             actions_dropped={} metrics_dropped={}",
             n.bytes_in, n.bytes_out_room, n.bytes_out_control,
-            n.bytes_out_total, n.frames_in, n.frames_out, self.metrics_dropped
+            n.bytes_out_total, n.frames_in, n.frames_out, n.actions_dropped,
+            self.metrics_dropped
         ));
+        if !self.actions_dropped_top.is_empty() {
+            // Attribution of the net-scope `actions_dropped`: which
+            // connection's own input was lost to its full action channel
+            // (worst first; "c<id>:<count>", comma-joined).
+            lines.push(format!(
+                "gsb-metric scope=net actions_dropped_top={}",
+                self.actions_dropped_top
+                    .iter()
+                    .map(|(c, n)| format!("{c}:{n}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
         lines
     }
 }
@@ -775,6 +827,7 @@ mod tests {
             bytes_out: 20,
             frames_in: 5,
             frames_out: 2,
+            actions_dropped: 0,
             metrics_dropped: 2,
             last: false,
         }));
@@ -802,6 +855,7 @@ mod tests {
             bytes_out: 10,
             frames_in: 2,
             frames_out: 1,
+            actions_dropped: 7,
             metrics_dropped: 0,
             last: true,
         }));
@@ -824,12 +878,28 @@ mod tests {
         assert_eq!(second.net.bytes_out_room, 60_000);
         assert_eq!(second.net.bytes_out_total, 60_030);
 
-        // The render is one line per scope and parseable key=value.
+        // Per-connection input-drop attribution: the only dropping sender
+        // is c1 (7 actions, from the last:true sample's delta).
+        assert_eq!(second.net.actions_dropped, 7);
+        assert_eq!(
+            second.actions_dropped_top,
+            vec![(ConnectionId(1), 7)]
+        );
+
+        // The render is one line per scope and parseable key=value. The
+        // net scope gets a second (attribution) line because input drops
+        // are non-zero.
         let lines = second.render();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 4);
         assert!(lines[0].starts_with("gsb-metric scope=registry "));
         assert!(lines[1].starts_with("gsb-metric scope=room id=r1 "));
         assert!(lines[2].starts_with("gsb-metric scope=net "));
+        assert!(lines[2].contains("actions_dropped=7"));
+        assert!(
+            lines[3] == "gsb-metric scope=net actions_dropped_top=c1:7",
+            "attribution line: {}",
+            lines[3]
+        );
         for line in &lines {
             for kv in line.split_whitespace().skip(2) {
                 assert!(kv.contains('='), "key=value field: {kv}");
@@ -939,7 +1009,9 @@ mod tests {
 
         // Join one connection (its out channel is the room's fan-out target).
         let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(2);
-        let (reply_tx, reply_rx) = oneshot::channel::<(crate::id::EntityId, Mailbox<Action>)>();
+        let (reply_tx, reply_rx) = oneshot::channel::<
+            Result<(crate::id::EntityId, Mailbox<Action>), crate::error::CoreError>,
+        >();
         control
             .send(RoomControl::Join {
                 conn: ConnectionId(7),
@@ -978,7 +1050,8 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(3), reply_rx)
             .await
             .expect("join reply")
-            .expect("join reply dropped");
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
 
         // One more report period: the next report's rates are over the
         // 100 ms window since the previous report.

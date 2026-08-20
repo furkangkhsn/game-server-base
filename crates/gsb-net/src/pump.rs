@@ -3,6 +3,20 @@
 //! This is the concrete "1 reader + 1 writer" pattern: two dedicated tokio
 //! tasks per connection, each with exactly one thing to wait on (a stream
 //! item or a channel message). No multiplexing anywhere.
+//!
+//! The reader may be wrapped in an **idle timeout**: when no client frame
+//! arrives within the window, the pump notifies the connection actor via
+//! [`ConnIn::ServerClosed`] and stops.
+//!
+//! That timeout is the session-lifecycle guardrail. A half-open TCP
+//! connection (cable pulled, power lost, no FIN/RST) otherwise sits in the
+//! reader forever, pinning its three tasks, two channels, and registry
+//! entry. The timeout is also the *only* clock in the whole connection
+//! path: the connection actor's only await stays its inbox `recv`, and no
+//! per-connection timer task, registry message, or ticker subscription is
+//! needed (see `docs/DESIGN.md`, session lifecycle).
+
+use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::task::JoinHandle;
@@ -15,9 +29,16 @@ use gsb_protocol::FrameBody;
 
 /// Spawn both pump tasks for a connection.
 ///
-/// - `reader` yields decoded frames; when it errors or ends, the
-///   connection actor is notified via `in_tx`.
+/// - `reader` yields decoded frames; when it errors, ends, or stays silent
+///   for `idle_timeout`, the connection actor is notified via `in_tx`.
 /// - `writer` consumes outbound batches and writes them to the socket.
+///
+/// `idle_timeout`: how long the reader may wait for the next *client*
+/// frame before the server closes the connection on its own initiative.
+/// Any inbound frame (a heartbeat, a move, anything) resets the window —
+/// the pump re-wraps every read, so the deadline always starts at the
+/// previous frame's arrival. `None` (or the composition root's
+/// `Duration::ZERO` mapping) disables the check.
 #[allow(clippy::type_complexity)]
 pub fn spawn_pumps<Reader, Writer>(
     conn: ConnectionId,
@@ -25,6 +46,7 @@ pub fn spawn_pumps<Reader, Writer>(
     writer: Writer,
     in_tx: Mailbox<ConnIn>,
     mut out_rx: Inbox<FrameBatch>,
+    idle_timeout: Option<Duration>,
 ) -> (JoinHandle<()>, JoinHandle<()>)
 where
     Reader: futures::Stream<Item = std::io::Result<FrameBody>> + Unpin + Send + 'static,
@@ -32,34 +54,56 @@ where
 {
     let read = tokio::spawn(async move {
         let mut stream = reader;
-        let mut notified = false;
-        while let Some(result) = stream.next().await {
+        // The notification to send when the loop exits (if any).
+        let mut exit_msg: Option<ConnIn> = None;
+        loop {
+            // One awaited source, optionally with a deadline. `timeout`
+            // wraps a single future — it does not multiplex two live
+            // sources: the deadline fires only while the read stays
+            // pending, and a ready frame always wins (this is the same
+            // idiom the load generator's client reads use).
+            let item = match idle_timeout {
+                Some(t) => match tokio::time::timeout(t, stream.next()).await {
+                    Ok(item) => item,
+                    Err(_) => {
+                        warn!(
+                            %conn,
+                            timeout = ?t,
+                            "reader pump: no client traffic for the idle window; \
+                             server closing the connection"
+                        );
+                        exit_msg = Some(ConnIn::ServerClosed {
+                            reason: format!("idle timeout: no client traffic for {t:?}"),
+                        });
+                        break;
+                    }
+                },
+                None => stream.next().await,
+            };
+            let Some(result) = item else {
+                // Clean end of stream (peer closed).
+                exit_msg = Some(ConnIn::Closed {
+                    reason: "peer closed".into(),
+                });
+                break;
+            };
             match result {
                 Ok(frame) => {
                     if in_tx.send(ConnIn::Frame(frame)).await.is_err() {
-                        break; // connection actor is gone
+                        break; // connection actor is gone: nothing to tell
                     }
                 }
                 Err(e) => {
                     warn!(%conn, error = %e, "reader pump: io error");
-                    let _ = in_tx
-                        .send(ConnIn::Closed {
-                            reason: e.to_string(),
-                        })
-                        .await;
-                    notified = true;
+                    exit_msg = Some(ConnIn::Closed {
+                        reason: e.to_string(),
+                    });
                     break;
                 }
             }
         }
-        // Clean end of stream (peer closed) — or the actor already went.
-        // Sent at most once: the error path above already notified.
-        if !notified {
-            let _ = in_tx
-                .send(ConnIn::Closed {
-                    reason: "peer closed".into(),
-                })
-                .await;
+        if let Some(msg) = exit_msg {
+            let _ = in_tx.send(msg).await;
         }
         debug!(%conn, "reader pump stopped");
     });

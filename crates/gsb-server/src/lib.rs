@@ -111,6 +111,36 @@ pub struct Config {
     pub conn_inbox: usize,
     /// Capacity of each connection's outbound (batches out) channel.
     pub conn_out: usize,
+    /// Session-lifecycle idle window, in seconds: a connection that sends
+    /// *no* inbound frame (heartbeat, input, anything) for this long is
+    /// closed by the server on its own initiative (a gentle `ERROR` frame,
+    /// code 9, then EOF). This is the half-open-TCP guardrail — a client
+    /// whose cable was pulled or power lost sends no FIN/RST, and its
+    /// 3 tasks + 2 channels + registry entry would otherwise sit until
+    /// process death. `0` disables the check.
+    ///
+    /// Default 30 s: comfortably above the ~10 s heartbeat cadence a
+    /// well-behaved client should keep (any inbound frame resets the
+    /// window, so a live client can never trip it), and short enough that
+    /// a dead-but-open connection is detected within a minute. Clients
+    /// that never send *anything* (not even heartbeats) must stay below
+    /// this with whatever traffic they do send.
+    pub idle_timeout_secs: f64,
+    /// Per-room membership cap (see `RoomConfig::max_players`); a join
+    /// into a full room is rejected with `ERROR` code 8 (the connection
+    /// stays alive). `None` = unlimited.
+    pub max_players: Option<u32>,
+    /// Server-wide connection cap, enforced at connection birth by the
+    /// registry (the count lives in its table, so the guardrail does —
+    /// the accept loop cannot see disconnects without a second awaited
+    /// source). A rejected connection gets `ERROR` code 9 + EOF and no
+    /// registry entry. `None` = unlimited.
+    ///
+    /// Default 100_000: the design goal itself (DESIGN §1, "100k+ concurrent
+    /// connections") as a hard guardrail — beyond the goal is an unmeasured
+    /// region, and the cap keeps the server's behavior there defined (gentle
+    /// rejection) instead of unbounded resource growth.
+    pub max_connections: Option<u64>,
     /// Warn when a room group's snapshot payload exceeds this many bytes
     /// (rUDP MTU readiness; default = `max_frame_bytes`).
     pub max_snapshot_bytes: usize,
@@ -149,6 +179,9 @@ impl Default for Config {
             conn_action: 256,
             conn_inbox: 1024,
             conn_out: 256,
+            idle_timeout_secs: 30.0,
+            max_players: Some(10_000),
+            max_connections: Some(100_000),
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
             visibility: Visibility::default(),
@@ -167,10 +200,21 @@ impl Config {
             path: path.display().to_string(),
             source: e,
         })?;
-        let cfg: Self = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+        let mut cfg: Self = toml::from_str(&text).map_err(|e| ConfigError::Parse {
             path: path.display().to_string(),
             source: e,
         })?;
+        // Config-file convenience: an explicit 0 means "unlimited" for the
+        // caps (a cap of 0 would be a room/server nobody can enter). This
+        // mirrors the loadgen CLI semantics (`--max-players 0` etc.).
+        // Omitting the key keeps the built-in default (see `Default`);
+        // `idle_timeout_secs = 0` is already handled at use time.
+        if cfg.max_players == Some(0) {
+            cfg.max_players = None;
+        }
+        if cfg.max_connections == Some(0) {
+            cfg.max_connections = None;
+        }
         Ok(cfg)
     }
 }
@@ -364,6 +408,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     demo_room_factory(cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
+                    cfg.max_connections,
                 )
                 .run(),
             )
@@ -376,6 +421,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     aoi_room_factory(cfg.aoi_cell_size, cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
+                    cfg.max_connections,
                 )
                 .run(),
             )
@@ -388,6 +434,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     team_room_factory(cfg.team_vision_radius, cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
+                    cfg.max_connections,
                 )
                 .run(),
             )
@@ -400,6 +447,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     pvs_room_factory(cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
+                    cfg.max_connections,
                 )
                 .run(),
             )
@@ -416,6 +464,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
             action_capacity: cfg.conn_action,
             max_snapshot_bytes: cfg.max_snapshot_bytes,
             keepalive_hz: cfg.keepalive_hz,
+            max_players: cfg.max_players.map(|n| n as usize),
             ..Default::default()
         };
         {
@@ -452,6 +501,10 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
 
     let accept_tx = reg_tx.clone();
     let conn_metrics_tx = metrics_tx.clone();
+    // Session-lifecycle idle window (reader pump): `0` disables.
+    let idle_timeout = (cfg.idle_timeout_secs > 0.0).then(|| {
+        std::time::Duration::from_secs_f64(cfg.idle_timeout_secs)
+    });
     let accept = tokio::spawn(async move {
         info!(%addr, "accepting connections");
         let mut next_conn: u64 = 1;
@@ -476,8 +529,9 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
             let (out_tx, out_rx) = channel::<FrameBatch>(cfg.conn_out);
 
             // Reader + writer pumps (they finish on their own when the
-            // peer or the actor goes away).
-            let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx);
+            // peer or the actor goes away; the idle window, if enabled,
+            // is what detects a half-open peer that sends nothing).
+            let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx, idle_timeout);
 
             // Register before spawning the actor: the registry owns the
             // notification path, and it must know the inbox before any

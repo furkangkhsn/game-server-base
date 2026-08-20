@@ -106,7 +106,7 @@ fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     // behaviour, the metric path has its own tests.
     let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx).run(),
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, None).run(),
     );
     (tx, handle)
 }
@@ -298,6 +298,131 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
         .expect_err("join of destroyed room must fail");
     assert!(matches!(err, gsb_core::error::CoreError::RoomNotFound(1)));
 
+    tx.send(RegistryMsg::Shutdown).await.unwrap();
+    drop(tx);
+    tokio::time::timeout(WAIT, handle)
+        .await
+        .expect("registry did not shut down")
+        .expect("registry task panicked");
+}
+
+#[tokio::test]
+async fn spawn_rejected_when_room_is_full() {
+    let (tx, handle) = start_registry();
+    // A room whose membership cap is one (the capacity authority is the
+    // room; the registry only forwards the join and the result).
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+    tx.send(RegistryMsg::CreateRoom {
+        config: RoomConfig {
+            id: RoomId(1),
+            tick_hz: HZ,
+            max_players: Some(1),
+            ..Default::default()
+        },
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
+    tokio::time::timeout(WAIT, reply_rx)
+        .await
+        .expect("timed out")
+        .expect("reply dropped")
+        .expect("room creation failed");
+
+    let c1 = ConnectionId(300);
+    open_conn(&tx, c1).await;
+    let c2 = ConnectionId(301);
+    open_conn(&tx, c2).await;
+
+    // The first spawn takes the only seat.
+    let (out_tx1, _out_rx1) = mpsc::channel::<FrameBatch>(64);
+    let e1 = spawn(&tx, c1, RoomId(1), out_tx1).await;
+    assert_eq!(e1, 1, "the first member gets entity 1");
+
+    // The second spawn is rejected with `RoomFull`: the reply carries the
+    // error, the connection stays registered, and no room state is made.
+    let (out_tx2, _out_rx2) = mpsc::channel::<FrameBatch>(64);
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
+        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
+    >();
+    tx.send(RegistryMsg::SpawnPlayer {
+        conn: c2,
+        room: RoomId(1),
+        out: out_tx2,
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
+    let err = tokio::time::timeout(WAIT, reply_rx)
+        .await
+        .expect("timed out")
+        .expect("reply dropped")
+        .expect_err("the second spawn must be rejected");
+    assert!(
+        matches!(err, gsb_core::error::CoreError::RoomFull(1)),
+        "the rejection must name the full room"
+    );
+
+    tx.send(RegistryMsg::Shutdown).await.unwrap();
+    drop(tx);
+    tokio::time::timeout(WAIT, handle)
+        .await
+        .expect("registry did not shut down")
+        .expect("registry task panicked");
+}
+
+#[tokio::test]
+async fn conn_opened_rejected_at_connection_capacity() {
+    // A registry whose server-wide connection cap is one (the cap is
+    // enforced where the count lives: the registry's own table — the
+    // accept loop cannot observe disconnects without a second awaited
+    // source).
+    let (tx, rx) = channel::<RegistryMsg>(4096);
+    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64);
+    let (metrics_tx, _metrics_rx) =
+        tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
+    let handle = tokio::spawn(
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, Some(1)).run(),
+    );
+
+    // The first connection takes the one seat.
+    let (inbox1_tx, _inbox1_rx) = mpsc::channel::<ConnIn>(16);
+    tx.send(RegistryMsg::ConnOpened {
+        conn: ConnectionId(1),
+        inbox: inbox1_tx,
+    })
+    .await
+    .expect("registry gone");
+
+    // The second is rejected at birth: it is never recorded, and its
+    // inbox receives `ServerClosed` (the connection actor will answer
+    // ERROR code 9 and run the normal cleanup cascade).
+    let (inbox2_tx, mut inbox2_rx) = mpsc::channel::<ConnIn>(16);
+    tx.send(RegistryMsg::ConnOpened {
+        conn: ConnectionId(2),
+        inbox: inbox2_tx,
+    })
+    .await
+    .expect("registry gone");
+    let msg = tokio::time::timeout(WAIT, inbox2_rx.recv())
+        .await
+        .expect("timed out")
+        .expect("inbox closed");
+    match msg {
+        ConnIn::ServerClosed { reason } => {
+            assert!(reason.contains("capacity"), "reason: {reason}")
+        }
+        other => panic!("expected ServerClosed, got {other:?}"),
+    }
+
+    // The rejection left no state behind: a ConnClosed for the never
+    // recorded connection is a clean no-op, and shutdown proceeds.
+    tx.send(RegistryMsg::ConnClosed {
+        conn: ConnectionId(2),
+    })
+    .await
+    .unwrap();
     tx.send(RegistryMsg::Shutdown).await.unwrap();
     drop(tx);
     tokio::time::timeout(WAIT, handle)

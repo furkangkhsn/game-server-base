@@ -13,6 +13,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
@@ -43,10 +44,16 @@ pub trait Listener: Send + Sync + 'static {
     }
 }
 
-/// The pump spawner closure: hands a connection's channel ends to the
-/// transport and returns the reader/writer task handles.
+/// The pump spawner closure: hands a connection's channel ends (and the
+/// idle-timeout policy) to the transport and returns the reader/writer
+/// task handles.
 type PumpSpawner = Box<
-    dyn FnOnce(ConnectionId, Mailbox<ConnIn>, Inbox<FrameBatch>) -> (JoinHandle<()>, JoinHandle<()>)
+    dyn FnOnce(
+            ConnectionId,
+            Mailbox<ConnIn>,
+            Inbox<FrameBatch>,
+            Option<Duration>,
+        ) -> (JoinHandle<()>, JoinHandle<()>)
         + Send,
 >;
 
@@ -67,6 +74,7 @@ impl Endpoint {
             ConnectionId,
             Mailbox<ConnIn>,
             Inbox<FrameBatch>,
+            Option<Duration>,
         ) -> (JoinHandle<()>, JoinHandle<()>)
         + Send
         + 'static,
@@ -82,15 +90,18 @@ impl Endpoint {
     /// - `in_tx`: where decoded frames go (the connection actor's inbox).
     /// - `out_rx`: where outbound batches come from (the room fan-out +
     ///   the connection actor's own control frames).
+    /// - `idle_timeout`: the session-lifecycle idle window for the reader
+    ///   (`None` disables; see `pump::spawn_pumps`).
     ///
     /// Returns the reader and writer task handles. When the peer goes away
-    /// both tasks finish on their own.
+    /// (or the idle window elapses) both tasks finish on their own.
     pub fn start_pump(
         self,
         conn: ConnectionId,
         in_tx: Mailbox<ConnIn>,
         out_rx: Inbox<FrameBatch>,
+        idle_timeout: Option<Duration>,
     ) -> (JoinHandle<()>, JoinHandle<()>) {
-        (self.pump)(conn, in_tx, out_rx)
+        (self.pump)(conn, in_tx, out_rx, idle_timeout)
     }
 }

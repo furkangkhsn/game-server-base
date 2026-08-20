@@ -1185,6 +1185,179 @@ Makine: AMD Ryzen 9 7950X 16C/32T, 124 GB RAM, rustc 1.95.0, taskset
 2.42.2, paylaşımlı masaüstü (koşu sırasında loadavg ~10/32 — C1 koşuları
 pin ile, C2 koşuları 8 fiziksel çekirdek sunucu havuzunda).
 
+## Kapatılanlar (koruma katmanı turu)
+
+Bu tur, spec'in garantisini kurar: **sunucu, istemcilerinin yaptığı
+hiçbir şeyden dolayı çökmemeli veya kaynak sızdırmamalı.**
+Üç hat + doküman (DESIGN §14): (1) oturuş yaşam döngüsü
+(yarım açık TCP), (2) kapasite (oda + sunucu geneli), (3) girdi
+adaleti (flooding atfesi), (4) kapsam dokümanı. Test: 60 →
+**72** (+12: 3 gsb-net + 4 gsb-core + 5 gsb-server e2e; hiçbir eski
+test silinmedi/ihmal edilmedi — yeni `Result` join yanıtı
+tipine uyan join yardımcılarının imzası güncellendi,
+mantiğ/sağlama korunmuş). Makine: 32 core / 124 GB /
+rustc 1.95.0 (koşular release).
+
+- [x] **MADDE 1 — Oturuş yaşam döngüsü: yarım açık TCP
+  tespit edilip kapatılır (konfigure edilebilir timeout)**
+  — Sorun: kablo çekilen/gücü kesilen istemci (FIN/RST gelmez)
+  reader pump'ta sonsuza kadar beklerdi; her böyle oturum 3 görev +
+  2 kanal + 1 registry kaydı pinlerdi (100k hedefinde sızma).
+  **Saati kim tutacak?** Saat, **reader pump'un read deadline'
+  ındadır**: her `stream.next()` `tokio::time::timeout(t, …)`
+  ile sarılır; **her** istemci frame'i (HEARTBEAT dahil) pencereyi
+  sıfırlar; zaman aşımında pump `ConnIn::ServerClosed {
+  reason }` yollar, connection actor ERROR 9 gönderip cleanup
+  kaskadından çıkar. Bu, bağlantı yolundaki **tek** saattir:
+  connection actor'ün tek await'i inbox `recv`'de kalır
+  (spec'in sert şartı — `select!` yok), yeni görev / registry
+  mesajı / ticker aboneliği eklenmez. Yarım açık TCP "socket
+  durumu" ile değil, "T süre boyunca frame yok" ile yakalanır.
+  Konfig: `idle_timeout_secs` (vars. 30; 0 = kapalı).
+  - **100k maliyeti (seçilen):** 0 ekstra görev; ~15 MB
+    (100k bekleyen `Sleep` ≈ 150 B); ~1–2 core (yalnızca
+    gerçekten boşta olan bağlantılar uyanır; uyanan çıkar).
+  - **Elenen alternatifler (100k matematiği):**
+    - **(A) Bağlantı başına timer görevi** (watchdog/interval):
+      +100k görev ≈ 100–200 MB (tokio görevi ≈ 1–2 KB);
+      her istemci frame'inde yeniden arm → 100k bağlantı ×
+      30–100 frame/sn ≈ 3–10M timer işlemi/sn ≈ 5–10% core +
+      100k+ allokasyon/sn.
+    - **(B) Registry'de son-görülme damgası:** her heartbeat →
+      registry mesajı = 100k msg/sn server geneli; registry'nin saat
+      tutması gerekir (ticker aboneliği) = kontrol düzleminde
+      ikinci beklenen kaynak; 100k msg/sn registry, join yolunu aç bırakır.
+    - **(C) Bağlantı başına ticker alıcısı:** 100k
+      broadcast receiver; her tick 30/sn × 100k slot yazımı = 3M
+      slot yazımı/sn ≈ 3–6% core + 100k receiver durumu;
+      **ve** connection actor iki kaynaktan beklerdi (inbox + ticker)
+      = `select!` — spec ihlali (karar verici neden).
+  - Test: `idle_peer_gets_server_closed`,
+    `active_peer_resets_the_idle_window` (tempolu poke — kontrol
+    edilebilir `mpsc`-arkalılı `Stream` adaptörü; TCP buffer'ı
+    tempoyu yuttuğu için), `eof_reports_peer_closed_not_idle`;
+    e2e: `idle_connection_is_closed_by_the_server` (ERROR 9, EOF'tan
+    önce), `active_heartbeat_survives_the_idle_window` (250 ms
+    heartbeat, 1 s pencere, 3+ ACK).
+
+- [x] **MADDE 2 — Kapasite: oda `max_players` + sunucu geneli
+  `max_connections` (ölçüme dayalı varsayılanlar)**
+  — Sorun: `CoreError::RoomFull` vardı ama öçülmeyen bir
+  dallıydı; oda sınırsız büyürdü, sunucu geneli cap
+  yoktu. **Varsayılanlar ölçülen sayıya dayandı** (C1:
+  ayrı proses, spatial AOI, 30 Hz, tek oda):
+
+  | Oyuncu | p50 (ms) | server_hz | fan-out drop | late (s) |
+  |---|---|---|---|---|
+  | 5k | 12.5 | ~30 | 9 086 | ~0 |
+  | 8k | 25 | ~30 | 45 596 | ~0 |
+  | 9k | 25 | ~30 | 30 869 | ~0 |
+  | 10k | **50** | **23.2** | 52 771 | **2.17** |
+
+  p50, 33.3 ms bütçesini **9k–10k arasında** aşıyor
+  (not: "drop" sütunu fan-out `dropped_frames`'tir — aksiyon
+  düşmü değil). → `max_players` = `Some(10_000)` (ölçülen
+  duvar), `max_connections` = `Some(100_000)` (DESIGN §1 hedefinin
+  guardrail'i).
+  - **Reddi semantiği (karar: nazik Error, sessiz kapatma değil):**
+    maliyetler farklı. Oda dolu → **ERROR 8, bağlantı yaşar**:
+    reddedilen istemci başka odaya join edebilir/bekleyebilir; sessiz
+    kapatma = reddedilen istemcilerin reconnect/backoff fırtınası
+    (tam istenmeyen DoS amplifikatörü); maliyet = 1 ekstra frame.
+    Bağlantı cap'i → **ERROR 9 + hemen kapatma**: reddedilen
+    bağlantının yapabileceği hiçbir şey yok — açık tutmak
+    sadece oturum pinler; kapatma EOF'tan önce bildirilir (istemci
+    ağ hatası olmadığını bilir).
+  - **Spec notu (yer çevikliği):** cap, accept loop'ta değil
+    **registry'de** uygulanır — sayım, guardrail'in olduğu yerde
+    yaşamalıdır; accept loop, ikinci bir beklenen kaynak eklemeden
+    kopmalara gözlemleyemez. Reddedilen bağlantı tabloya kaydedilmez;
+    JOIN’in `ServerClosed` ile yaraşı `ConnClosed`'da
+    işlenir (dispatcher slot'u drenaj edilir).
+  - **Kanıt (ham):** 150 istemci, `--max-players 100`, 10 s:
+    `RESULT mode=in-proc visibility=all max_snap_bytes=1400
+    clients=150 connected=150 joined=100 left=100 … steps=300
+    server_hz=30.00 step_p50_us=130 … dropped=0 … peak_conns=150
+    … join_rejected=50 cap_rejected=0 actions_dropped=0
+    actions_dropped_top=` (— tam 50 reddi, tam 100 join; reddedilen
+    istemcilerin sonraki MOVE_TO'larına sunucu ERROR 6
+    (NotInRoom) ile karşılık verir — bağlantı sağlıklı kalır).
+    100 istemci, `--max-connections 50`, 10 s: `RESULT mode=in-proc
+    … clients=100 connected=100 joined=50 left=50 errors=0 …
+    server_hz=29.99 … dropped=0 … peak_conns=50 …
+    join_rejected=0 cap_rejected=50 actions_dropped=0 actions_dropped_top=`
+    (— registry tablosu asla 50'yi aşmaz; TCP katmanı tümünü kabul eder;
+    cap oturum seviyesindedir).
+  - Test: `join_rejected_when_room_is_full` (reply `CoreError::RoomFull`,
+    kalan üyenin girdisi etkilenmez), `spawn_rejected_when_room_is_full`,
+    `conn_opened_rejected_at_connection_capacity` (`ServerClosed` içerik
+    "capacity"; `ConnClosed` temiz no-op), e2e
+    `room_full_returns_gentle_error_code_8` (B hata alır, yaşar,
+    heartbeat ACK'lanır), `connection_capacity_rejects_with_code_9`
+    (B: ERROR 9 + EOF; A etkilenmez).
+
+- [x] **MADDE 3 — Adalet: flooding bağlantı başkasının
+  aksiyonunu evicted edemez; düşen aksiyon atfeli** — Sorun: eski
+  READ, tüm bağlantıların aksiyonlarını tek `Vec`'te merge
+  ederdi; `max_pending_actions` aşımında `drain(..over)` = **en
+  eski** atılırdı: tek bir flooder'ın backlog'u başkasının
+  aksiyonlarını atıyordu (hangi bloğun atılacağı
+  `HashMap` sırasına bağlıydı — kurban bile keyfiydi) ve
+  söz konusu sayaç oda geneliydi (`dropped_actions`), atfe yoktu.
+  - **Çözüm: READ, merge değil sınırlı çekmedir**
+    (bounded pull): bağlantı başına tick bütçesi
+    `max_actions_per_conn_per_tick` (vars. 16 = 30 Hz'de 480 aksiyon/sn
+    ≈ ölçülen 6.7/sn/istemcinin 70×'i) + oda çekme
+    bütçesi `max_pending_actions` (vars. 65536). Oda **çektiği
+    aksiyonu asla atmaz** (`dropped_actions` yapısal 0; alan format
+    uyumu için korunur). Tek kayıp noktası = göndericinin **kendi**
+    `Action` kanalı doluyken `try_send` Full (cap 256) — connection
+    actor bunu **kendi** metrik örneğinde sayar
+    (`m_actions_dropped`), raporda `actions_dropped` (net, kümülatif)
+    + `actions_dropped_top` (en çok düşürmüş 5 bağlantı,
+    `c{id}:sayı`). Hata frame'i yok, koparma yok (koparmak
+    reconnect amplifikatörü olurdu). Hasar sınırı: tek
+    saldırgan → odaya en çok 16/tick × 30 = 480 aksiyon/sn +
+    256'lik kendi buffer'ı.
+  - **Kanıt (ham):** 20 istemci, `--flood-id 7`, 15 s (istemci 7 =
+    `c8`): `server net (final): bytes_in=6324 KB …
+    frames_in=3234645 … actions_dropped=3225454` /
+    `server net (final): actions_dropped_top=c8:3225454` /
+    `RESULT mode=in-proc … clients=20 connected=20 joined=20 …
+    steps=450 server_hz=30.00 step_p50_us=130 step_max_us=114
+    step_over_budget_pct=0.0 dropped=0 late_max_us=668 …
+    peak_conns=20 … join_rejected=0 cap_rejected=0
+    actions_dropped=3225454 actions_dropped_top=c8:3225454`
+    (— 3.2M düşen aksiyonun **%100'ü saldırgana atfeli**;
+    diğer 19 istemci temiz 30 Hz: bütçe aşımı %0, fan-out
+    drop 0, en geç tick gecikmesi 668 µs).
+  - Test: `flooder_cannot_evict_other_connections_actions` (kurbanın
+    20/20 aksiyonu içerildi — sıra HashMap'in, atfe garantilenir;
+    backlog probe'u: tam olarak 8/tick × 21 tick kadar slot açılır
+    = kalan backlog flood'un kendi kanalında), e2e
+    `flooder_drops_are_attributed_to_the_flooder` (raporda top[0] =
+    flooder ve net toplamla eşitleşir).
+
+- [x] **MADDE 4 — Doküman: DESIGN §14 "Bu base neyi
+  hedefliyor, neyi hedeflemiyor"** — Grup değişim birimidir
+  (fan-out grup başına, bağlantı başına değil; oda
+  tarafında bağlantı başına durum yok; connection actor
+  kasıtlı ince durum makinesi). seq/ack yok (teslim garantisi
+  TCP'nin; snapshot tam durum; kayıp → bir kademe bayatlık, keepalive
+  sınırlar; seq/ack = bağlantı başına durum = başka bir
+  mimari — kapı rUDP yolunda, §6). Ölçülen tavan **tek
+  odadadır** (C1 duvarı 9–10k; oda actor'ün tek iş parçacıklı
+  olmasının doğal sonucudur) → ölçekleme
+  kaldıracı **oda segmentasyonu** (`max_players` = ölçülen
+  duvar). Sığan aileler: battle royale, arena/MOBA, zoneli MMO/AOI,
+  instanced dungeon; sığmayanlar: oda sınırı olmayan tek dünya,
+  bağlantı başına oturum durumu, lockstep/sıra garantileri.
+  Ayrıca: §3'e oturum saati maddesi, §4'e sınırlı çekme
+  (bounded pull) tanımı, §5'e ERROR kod tablosu (Unity referansı
+  + `base.proto` yorumu), §10 v1 kısıtları tablosu güncellendi,
+  §12 metrik tablosuna `actions_dropped`/`actions_dropped_top`,
+  `config.example.toml`'a üç yeni anahtar.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +

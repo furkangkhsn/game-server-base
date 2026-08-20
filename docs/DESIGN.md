@@ -85,6 +85,21 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   connection actor (durum makinesi: auth → join → forward), writer pump
   (`FrameBatch` → socket). Pump görevlerinin her biri de tek kaynaktan
   bekler: stream'in bir öğesi ya da kanal mesajı.
+- **Oturum saati = reader pump'un read deadline'ı.** Reader pump her
+  `stream.next()`'i `tokio::time::timeout(idle_timeout)` ile sarmalar
+  (konfig: `idle_timeout_secs`, varsayılan 30 sn; `0` = kapalı). Pencere
+  içinde istemci frame'i gelmezse pump `ConnIn::ServerClosed { reason }`
+  yollar; connection actor ERROR kod 9 gönderip cleanup kaskadından çıkar
+  (bkz. §5, §9). **Her** frame (HEARTBEAT dahil) pencereyi sıfırlar. Bu,
+  bağlantı yolundaki *tek* saattir: connection actor'ün tek await'i inbox
+  `recv`'de kalır (spec'in sert şartı; `select!` yok), bağlantı başına
+  timer görevi / registry mesajı / ticker aboneliği eklenmez. Yarım açık
+  TCP (kablo çekildi, güç kesildi — FIN/RST gelmez) "socket durumu" ile
+  değil, "T süre boyunca frame yok" ile yakalanır. 100k bağlantıda maliyet:
+  0 ekstra görev, ~15 MB bekleyen `Sleep` (~150 B × 100k), ~1–2 core
+  (yalnızca gerçekten boşta olan bağlantılar uyanır). Elenen
+  alternatiflerin 100k matematiği: ROADMAP "Kapatılanlar (koruma katmanı
+  turu)".
 - **Oda başına 1 görev:** room actor. Tick'ler **tek global ticker görevinden**
   gelir (`tokio::sync::broadcast`): oda actor'ünün *tek* await'i
   `tick_rx.recv()`; tick gövdesi tamamen senkron. Oda hizi global hızın tam
@@ -143,10 +158,25 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   fazında işlenir; join/leave gecikmesi ≤ 1 tick. Bu bir maliyet değil,
   **determinizm garantisi**'dir: spawn/leave bilinen bir tick'te etkide
   bulunur; stale leave'ler ayrıca entity eşleştirilmesiyle korunur.
-- **Girdi izolasyonu:** her bağlantının kendi `Action` kanalı var; READ
-  fazı `try_recv` ile bloksuz çeker. `max_pending_actions` aşıldığında
-  **en eski** aksiyonlar atılır (oda, gerçek zamanın gerisinde kalmışsa bile
-  sınırlı kalır).
+- **Girdi izolasyonu (sınırlı çekme / bounded pull):** her bağlantının
+  kendi `Action` kanalı var; READ fazı `try_recv` ile bloksuz çeker — ama
+  **bütçeyle**, eski sürümdeki gibi merge edilmiş tek listeye değil:
+  bağlantı başına tick başına `max_actions_per_conn_per_tick` (varsayılan
+  16 = 30 Hz'de ~480 aksiyon/sn) ve oda başına tick başına
+  `max_pending_actions` (varsayılan 65536). Oda **çekişini yaptığı
+  aksiyonu asla atmaz** — `RoomCounters.dropped_actions` yapısal olarak 0
+  kalır (sözleşme uyumu için alanda korunur); bağlantı o tick'te odaya
+  ne gömebileceği **kendi** bütçesiyle sınırlıdır, dolayısıyla bir
+  flooding bağlantı başka bir bağlantının aksiyonunu **artık evicted
+  edemez** (eski merged-list'in "aşım → en eskiyi at" davranışı,
+  saldırganın backlog'u başkalarının aksiyonlarını atıyordu; kimin
+  atılacağı hash sırasına bağlıydı). Tek kayıp noktası gönderici tarafında:
+  bağlantının kendi `Action` kanalı doluyken `try_send` Full — connection
+  actor bu düşmeyi **kendi** metrik örneğinde sayar
+  (`actions_dropped`, raporda `actions_dropped_top` ile bağlantıya
+  atfeli; §12). Oda belleği sınırlı kalır, hasar saldırganın kendi
+  girdisiyle sınırlıdır; bağlantı ne hata alır ne kopar (koparmak
+  reconnect/backoff fırtınasıyla saldırganı *amplify* ederdi).
 - **BROADCAST fazı (grup başına tam snapshot):** Bağlantılar oyun
   mantığının `RoomLogic::group_of()` ile **snapshot gruplarına** ayrılır
   (`GroupKey`: `Eq + Hash + Clone + Debug`; demo'da `()` = oda başına tek
@@ -253,6 +283,15 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
+- **ERROR kodları** (`base.Error.code`; Unity tarafının el referansı —
+  `gsb-protocol/proto/base.proto`'daki yorumla birebir aynı): `1`
+  bilinmeyen opcode, `2` decode hatası, `3` auth (authsuz / tekrar
+  auth), `4` oda işlemi başarısız (oda yok / tick hızı uyuşmazlığı),
+  `5` oda imha edildi, `6` odada değil, `7` diğer, **`8` oda dolu**
+  (nazik reddi — bağlantı **yaşar**, başka odaya join edebilir; sessiz
+  kapatma reconnect fırtınası üretirdi), **`9` sunucu kapattı** (idle
+  timeout ya da sunucu bağlantı cap'i — hemen ardından bağlantı
+  kapatılır).
 - **Seriştirme:** protobuf. Rust tarafında `prost`, Unity tarafında
   `Google.Protobuf` — aynı `.proto` dosyaları her iki tarafta kullanılır.
   Mesajlar `MessageTable`'da opcode→(de)koducu olarak kayıt edilir; tablo
@@ -568,18 +607,21 @@ birlikte ele alınacak).
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
-| Oda kapasitesi yok (sonsuza kadar oyuncu) | Demo oda | `RoomConfig.max_players` + doluluk yanıtı |
+| Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
-| Girdi `try_send` (kanal doluyken atılır) | oyuncu bazlı izolasyon, oda bloke olmaz | bağlantı başına girdi hız sınırı (rate-limit) |
+| Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | sürekli (sn başına) rate-limit (tur başına bütçe zaten sınırlayıcıdır) |
 | Tek process | v1 kapsamı | §8.4 |
-| Heartbeat → yalnızca ack (oturum zaman aşımı yok) | v1 kapsamı | registry'de son-görülme zaman damgası |
+| Oturum zaman aşımı **reader pump'ta** (read deadline), registry'de değil | çünkü saati tutan yer, stream'i bekleyen yeridir — registry'ye son-görülme damgası ikinci bir beklenen kaynak/timer çıkarırdı (§3); 30 sn varsayılan, 0 = kapalı | oyun seviyesi oturum politikası (reconnect'de yeniden auth vb.) registry katmanı |
 | `sint32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
-| Güvenlik yüzeyi minimal: AUTH no-op, rate-limit yok, bağlantı limiti yok | v1 kapsamı | `Authenticator` trait'i + rate-limit + cap |
+| Güvenlik yüzeyi minimal: AUTH no-op, sn-başına rate-limit yok (cap'ler var: bağlantı cap + oda cap + tur-başına girdi bütçesi) | v1 kapsamı | `Authenticator` trait'i + rate-limit |
 
 > Not: Önceki sürümlerdeki iki kritik hata — sonradan giren oyuncunun
 > dünyayı görmemesi ve registry'nin oda cevabını beklerken tüm sunucuyu
 > bloke etmesi — kapatıldı (§3, §7). `RoomId(0)` sentinel'ı kaldırıldı,
-> `ConnInfo.room` artık `Option<RoomId>`.
+> `ConnInfo.room` artık `Option<RoomId>`. Koruma katmanı turunda kapatılanlar:
+> oturum yaşam döngüsü (yarım açık TCP, reader-pump read deadline — §3),
+> oda kapasitesi + sunucu bağlantı cap'i (nazik reddi, ERROR 8/9 — §5),
+> girdi adaleti (sınırlı çekme + saldırgana atfeli drop — §4).
 
 ## 11. Test stratejisi
 
@@ -589,7 +631,12 @@ birlikte ele alınacak).
 - **gsb-net:** gerçek loopback TCP üzerinde framing round-trip, çoklu
   frame yeniden derleme + EOF, aşırı boyutlu length-prefix reddi.
   (Testler echo-peer kullanır; pasif peer'da TCP yarı kapanışı davranış
-  farkı yaratır.)
+  farkı yaratır.) Koruma katmanı: **reader-pump idle timeout** — sessiz
+  peer pencere döneminde `ServerClosed` alır (reason'de "idle timeout"),
+  aktif peer (tempolu poke'lar — kontrol edilebilir `mpsc`-arkalılı `Stream`
+  adaptörü, TCP'nin buffer'ı tempoyu yutmasın diye) pencereyi sıfırlar ve
+  hayatta kalır, peer tarafı EOF ise `peer closed` olarak raporlanır — idle
+  olarak değil.
 - **gsb-core:** global ticker + oda actor — tick fazları, `dt` üst sınırı
   (catch-up), `run_every` ile yavaş oda atlama, `Lagged` sonrası catch-up +
   ticker kapanışında temiz çıkış (sentez zaman damgalarıyla manuel
@@ -598,6 +645,14 @@ birlikte ele alınacak).
   sayacı geri düşürmemeli), oda imhası bildirimi + imha sonrası join
   reddi, bölünmeyen oda hızı reddi (`TickRate`), temiz shutdown
   (registry handle'ı çözülür) — **gerçek 60 Hz ticker** ile.
+  Koruma katmanı: oda doluyken join reddi — reply `CoreError::RoomFull`
+  taşır, kalan üyenin girdisi etkilenmez; **flooding bir bağlantı başkasının
+  aksiyonunu evicted edemez** — sınırlı çekme: kurbanın 20/20 aksiyonu
+  içerilir, flood backlog'u flood'un **kendi** kanalında birikir (salın
+  slot sayısı ile kanıt: tam olarak 8/tick çekme miktardaki kadar slot
+  açılır); registry: dolu odada spawn reddi + bağlantı cap'inde
+  `ConnOpened` → `ServerClosed` (bağlantı tabloya kaydedilmez, `ConnClosed`
+  temiz no-op — JOIN’in `ServerClosed` ile yarışmasının köşesi).
   Grup mekanizması: `GroupKey = ConnectionId` mantıkla gruplar birbirinden
   yalıtılır (bir grubun snapshot'ı başka bağlantıya asla sızmaz), private
   frame yalnızca hedef bağlantıya gider; değişmeyen grup sessiz kalır,
@@ -638,6 +693,13 @@ birlikte ele alınacak).
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**
   görür. Tüm yol tek test: pump → bağlantı actor → registry → dispatcher →
   oda → bevy world → hareket sistemi → grup snapshot'ı → writer pump.
+  Koruma katmanı (gerçek TCP): idle bağlantı sunucu tarafından kapatılır —
+  ERROR 9, EOF'tan **önce**; 250 ms'lik heartbeat'li aktif istemci 1 s
+  pencereyi çok rahat geçer (3+ ACK, ne EOF ne ERROR); oda dolu → ERROR 8
+  ve bağlantı **yaşar** (heartbeat hälü ACK'lanır); bağlantı cap'i → ERROR 9
+  + EOF, ilk istemci etkilenmez; flooding istemcinin düşmeleri raporda
+  **kendi ConnectionId'iyle** atfeli (`actions_dropped_top` — üst bağlantı
+  çakışır, toplam `net.actions_dropped` ile eşitleşir).
 - **gsb-core (metrik yolu):** `room_counters_flow_to_collector` — gerçek
   `RoomActor` (canlı metrik göndericisi) + gerçek `MetricsCollector`
   (kanal sink): oda actor'ünün **yerel** sayacı (drop, steps, joins,
@@ -717,7 +779,10 @@ durdurulamaz.
 | oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_*` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali) |
 | oda | `groups`, `members`, `max_group`, `joins`, `leaves` | oda doluluğu ve churn |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
-| conn | `bytes_in/out`, `frames_in/out` (delta) | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
+| conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif)
+| istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
+| conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
+| düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
 
 Hızlar (`hz`, `*_s`) **örnek aralığı** üzerinden hesaplanır: her oda örneği
 kendi `emit_at`'ını taşır (oda `Instant::now()`); oran `latest.emit_at −
@@ -745,3 +810,99 @@ sayıları ve ilk doyma analizi: ROADMAP "Kapatılanlar (metrik + yük turu)".
   desenleri build hatası; kapsam `src/` + `tests/` + `examples/`.
 - `cargo clippy --workspace --all-targets` temiz.
 - `edition = "2024"` (Rust 1.95).
+## 14. Bu base neyi hedefliyor, neyi hedeflemiyor
+
+Bu bölüm, üstündeki maddelerin *neden* böyle olduğu sorusunun tek yeridir.
+İlkeleri koyuyor, ölçülen duvarla birlikte sınırları çiziyor.
+
+### 14.1 Değişim birimi snapshot grubudur — bağlantı değil
+
+Oda, başına **durum** tuttuğu tek şey üyelik tablosudur; fan-out maliyeti
+bağlantı başına değil **grup başına** kodlanır (snapshot bir kez kodlanır,
+`freeze()` ile referansla dağıtılır — §4 BROADCAST). Sonuç:
+
+- 100k bağlantı tek grupta: tick başına 100k Arc klonu + `try_send`, 1
+  kodlama. 100k bağlantı 100 gruba yayılmışsa: kodlama aynı, bağlantı
+  başına fan-out 1/100.
+- Ölçekleme kaldıracı **"bağlantıyı ucuzlatmak" değil, gruplama kalitesidir**
+  (AOI / takım / sektör — §8.1). Demo'nun dört görünürlük stratejisi bu
+  kaldıracın dört ilacıdır.
+- **Bağlantı başına durum yok** (oda tarafında): connection actor kasıtlı
+  olarak ince bir durum makinesidir (auth → join → forward); odaya giren
+  bağlantının kimliği `Action.conn`'de taşınır, oda onu geri bildirimde
+  kullanır. Bu, "oda N bağlantı"yı bellek ve kod karmaşıklığı açısından
+  "oda N grup"la sınırlı tutar.
+
+### 14.2 seq/ack yok — teslim garantisi TCP'nin
+
+- Snapshot akışı **tam durum** taşır (delta yok); bir snapshot kaybolursa
+  bayatlık, bir sonraki snapshot + 1 Hz keepalive ile **sınırlı** kalır
+  (düzeltilmez, örtülür). Bu, "kayıp paket = bir kademe bayatlık" kabulüdür.
+- seq/ack eklemek = bağlantı başına sıra durumu + yeniden gönderim tamponu
+  + zamanlayıcı = **bağlantı başına durum** — §14.1'in ilkesini ihlal eder
+  ve ayrı bir mimaridir. Kapı açık: taşıma soyutlaması (§6) rUDP/UDP yoluna
+  izin verir; gerekirse seq/ack *oraya* eklenir, aktör katmanına değil.
+- Deterministik lockstep, paket sıralama garantisi, hata düzeltme (FEC):
+  hedeflenmez.
+
+### 14.3 Ölçülen tavan tek odadadır — kaldıraç oda segmentasyonu
+
+C1 ölçümü (ayrı proses, spatial AOI, 30 Hz oda, tek oda; bkz. ROADMAP
+"Kapatılanlar (koruma katmanı turu)"):
+
+| Oyuncu | p50 (ms) | server_hz | fan-out drop | late (s) |
+|---|---|---|---|---|
+| 5k | 12.5 | ~30 | 9 086 | ~0 |
+| 8k | 25 | ~30 | 45 596 | ~0 |
+| 9k | 25 | ~30 | 30 869 | ~0 |
+| 10k | **50** | **23.2** | 52 771 | **2.17** |
+
+p50, 33.3 ms bütçesini **9k ile 10k arasında** aşıyor. Duvarın kaynağı
+mimari bir bug değil, *tasarımın doğal sonucudur*: oda actor'ü tek
+iş parçacıklıdır (tek `World`, tek senkron tick gövdesi, tek await),
+dolayısıyla bir oda tek thread'in bütçesiyle sınırlıdır. Sunucunun bütünü
+(100k bağlantı, §1 hedefi) bu duvarın **çoklu oda** ile aşılır: oda
+segmentasyonu — her oda bütçe içine sığar, bağlantılar odalara dağılır.
+Varsayılan `max_players = Some(10_000)` tam olarak bu ölçülen duvardır
+(§10); bir oyun bunu kendi bütçesine göre (çok) daha düşüğe çekmelidir.
+
+### 14.4 Hangi oyun aileleri sığıyor
+
+**Sığıyor** — dünyanın doğal olarak odalara segment edildiği ve oda
+bütçesine sığındığı aileler:
+
+- **Battle royale** (≤100 oyuncu/oda): bolca marj; tek oda, tek grup bile
+  rahat.
+- **Arena / MOBA / partiler** (10–30 oyuncu): marj 2–3 haneli.
+- **Zoneli MMO / MMOFPS bölgeleri** (AOI ile binlerce oyuncu): spatial
+  stratejiyle grup başına üye sayısı yüzlerce; ölçülen adım maliyeti
+  (O(entity + üye), §11 tablosu) ile sınırlı.
+- **Instanced dungeon / raid**, **lobili oyun**, sohbet-yanlı MMO alanları.
+
+**Sığmıyor (katman eklenmeden)** — bu base'in kapsamı dışı:
+
+- **Oda sınırı olmayan tek dünya** (sürekli açık dünya, 100k+ oyuncu
+  aynı dünya): oda segmentasyonu + oyuncu migrasyon protokolü gerekir.
+- **Bağlantı başına oturum durumu gerektirenler**: sohbet oturumları,
+  istemci başına prediction/buffer, bağlantı başına rate muhasebesi —
+  connection actor ince tutulmuştur; bu durumlar *üzerindeki* uygulama
+  katmanına aittir (veya §14.2'deki rUDP yoluna).
+- **Sıra/ack veya paket sıralama garantisi gerektirenler** (14.2).
+- **Mikro-saniye determinizmi / lockstep** (tick determinizmi vardır —
+  aynı tick'te aynı adım — ama istemci-sunucu clock senkronu yoktur).
+
+### 14.5 Koruma katmanının kapsam notu (bu tur)
+
+Sunucunun, istemcilerinin yaptığı **hiçbir şeyden** çökmeme / kaynak
+sızdırmama garantisi üç hatla kuruldu (detay + 100k matematiği: ROADMAP
+"Kapatılanlar (koruma katmanı turu)"):
+
+1. **Yaşam döngüsü:** yarım açık TCP, reader pump'un read deadline'ı ile
+   yakalanır (varsayılan 30 sn, 0 = kapalı) — bağlantı yolundaki tek saat.
+2. **Kapasite:** oda `max_players` (vars. 10k = ölçülen duvar) + sunucu
+   geneli `max_connections` (vars. 100k = §1 hedefinin guardrail'i);
+   semantiği nazik reddi (ERROR 8 = oda dolu, bağlantı yaşar; ERROR 9 =
+   sunucu kapattı, hemen kapatılır).
+3. **Adalet:** girdi kaybı yalnızca göndericinin kendi kanalında ve
+   atfeli (`actions_dropped_top`); oda çektiği aksiyonu asla atmaz —
+   flooding başkasının aksiyonunu evicted edemez.

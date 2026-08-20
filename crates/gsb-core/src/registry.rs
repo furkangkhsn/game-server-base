@@ -159,6 +159,14 @@ pub struct Registry<W, G> {
     /// Outbound metrics path (bounded channel; the registry sends with the
     /// synchronous `try_send` — no await).
     metrics: mpsc::Sender<MetricsEvent>,
+    /// Server-wide connection cap (the accept loop's guardrail, enforced
+    /// where the connection *count* lives — the registry's table, not the
+    /// accept loop's local state, because the accept loop cannot observe
+    /// disconnects without a second awaited source). `None` = unlimited.
+    /// A rejected connection is never recorded (no table entry, no
+    /// `reg_opens`) and is told to close itself via
+    /// [`ConnIn::ServerClosed`] (an `ERROR` frame, code 9, then EOF).
+    max_connections: Option<u64>,
 }
 
 impl<W, G> Registry<W, G>
@@ -174,6 +182,8 @@ where
         // Outbound metrics path (see `crate::metrics`): a bounded channel;
         // the registry sends with the synchronous `try_send` (no await).
         metrics: mpsc::Sender<MetricsEvent>,
+        // Server-wide connection cap (`None` = unlimited; see the field).
+        max_connections: Option<u64>,
     ) -> Self {
         Self {
             factory,
@@ -191,6 +201,7 @@ where
             reg_closes: 0,
             reg_metrics_dropped: 0,
             metrics,
+            max_connections,
         }
     }
 
@@ -361,6 +372,30 @@ where
                     }
                 }
                 RegistryMsg::ConnOpened { conn, inbox } => {
+                    // Connection cap, enforced at birth: the count lives
+                    // here (the connection table is the only place that
+                    // sees both opens and closes), so the guardrail is
+                    // enforced here, not in the accept loop. A rejected
+                    // connection is never recorded — no table entry, no
+                    // `reg_opens`, no room involvement — and its actor is
+                    // told to close itself gently (`ERROR` frame, code 9).
+                    if let Some(cap) = self.max_connections
+                        && self.conns.len() as u64 >= cap
+                    {
+                        warn!(
+                            %conn,
+                            capacity = cap,
+                            "server at connection capacity; new connection rejected"
+                        );
+                        tokio::spawn(async move {
+                            let _ = inbox
+                                .send(ConnIn::ServerClosed {
+                                    reason: "server at connection capacity".into(),
+                                })
+                                .await;
+                        });
+                        continue;
+                    }
                     let info = self.conns.entry(conn).or_default();
                     info.inbox = Some(inbox);
                     self.reg_opens += 1;
@@ -371,11 +406,22 @@ where
                     // entirely. If a dispatcher exists it performs the final
                     // leave itself (Close drains the queue); otherwise we
                     // send the leave directly.
-                    let (room, entity) = self
-                        .conns
-                        .remove(&conn)
-                        .map(|i| (i.room, i.entity))
-                        .unwrap_or((None, None));
+                    let Some(info) = self.conns.remove(&conn) else {
+                        // The registry never recorded this connection — it
+                        // was rejected at connection capacity. Its actor
+                        // still reports the close; there is no entry to
+                        // remove and nothing to count. A dispatcher slot
+                        // can still exist if the client raced a JOIN in
+                        // before its `ServerClosed` was processed (the room
+                        // may have accepted it for a tick): drain it so the
+                        // slot cannot outlive the connection.
+                        if let Some(op_tx) = self.conn_ops.remove(&conn) {
+                            let _ = op_tx.try_send(RoomOp::Close);
+                        }
+                        debug!(%conn, "close of unregistered connection");
+                        continue;
+                    };
+                    let (room, entity) = (info.room, info.entity);
                     match self.conn_ops.remove(&conn) {
                         Some(op_tx) => {
                             let _ = op_tx.try_send(RoomOp::Close);
@@ -525,8 +571,9 @@ where
                         out,
                         reply,
                     } => {
-                        let (joined_tx, joined_rx) =
-                            oneshot::channel::<(EntityId, Mailbox<Action>)>();
+                        let (joined_tx, joined_rx) = oneshot::channel::<
+                            Result<(EntityId, Mailbox<Action>), CoreError>,
+                        >();
                         let sent = room_control
                             .send(RoomControl::Join {
                                 conn,
@@ -536,12 +583,20 @@ where
                             .await
                             .is_ok();
                         match (sent, joined_rx.await) {
-                            (true, Ok((entity, actions))) => {
+                            (true, Ok(Ok((entity, actions)))) => {
                                 in_room = Some((room, entity, room_control));
                                 let _ = reply.send(Ok((entity, actions)));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnDone { conn, room, entity })
                                     .await;
+                            }
+                            // The room rejected the join structurally (a full
+                            // room): propagate the room's error to the
+                            // connection actor (it maps `RoomFull` to the
+                            // `ERROR` frame's own code) and do not record
+                            // any room state.
+                            (true, Ok(Err(e))) => {
+                                let _ = reply.send(Err(e));
                             }
                             _ => {
                                 // Control channel gone (room destroyed) or the

@@ -107,7 +107,8 @@ impl TestRoom {
         conn: ConnectionId,
     ) -> (EntityId, mpsc::Receiver<FrameBatch>, Mailbox<Action>) {
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply_tx, reply_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>>();
         self.control
             .send(RoomControl::Join {
                 conn,
@@ -117,7 +118,7 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await;
+        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 }

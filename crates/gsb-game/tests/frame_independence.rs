@@ -172,13 +172,18 @@ fn observe(batch: &[FrameBody]) -> (f64, f64) {
 }
 
 /// A room under test: joined (control buffered), join reply + action mailbox
+/// The join reply channel (the room may now structurally refuse a join —
+/// e.g. at capacity — so the reply carries the outcome).
+type JoinReplyRx =
+    tokio::sync::oneshot::Receiver<Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>>;
+
 /// pending until the room's first step tick.
 struct SimRoom {
     /// Kept alive so the room's control channel stays open (never read).
     #[allow(dead_code)]
     control: Mailbox<RoomControl>,
     out_rx: mpsc::Receiver<FrameBatch>,
-    join_reply: Option<oneshot::Receiver<(EntityId, Mailbox<Action>)>>,
+    join_reply: Option<JoinReplyRx>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -209,7 +214,8 @@ impl SimRoom {
         );
         let handle = tokio::spawn(actor.run());
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply_tx, reply_rx) = oneshot::channel::<(EntityId, Mailbox<Action>)>();
+        let (reply_tx, reply_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>>();
         // Bounded empty channel: the send cannot block; the room has not
         // stepped yet, so the join stays queued.
         control
@@ -233,7 +239,7 @@ impl SimRoom {
         let Some(mut rx) = self.join_reply.take() else {
             return false;
         };
-        let Ok((_entity, actions)) = rx.try_recv() else {
+        let Ok(Ok((_entity, actions))) = rx.try_recv() else {
             // Not ready yet: the room has not stepped since the join was
             // buffered. Keep the receiver for the next tick.
             self.join_reply = Some(rx);
