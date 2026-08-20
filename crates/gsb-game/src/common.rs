@@ -64,10 +64,11 @@ pub(crate) fn next_serial(next_wire_id: &mut u64) -> WireId {
 pub(crate) fn on_join(
     conn_entity: &mut HashMap<ConnectionId, Entity>,
     next_wire_id: &mut u64,
+    spawn_half: f32,
     world: &mut World,
     conn: ConnectionId,
 ) -> EntityId {
-    let (x, y) = spawn_pos(conn);
+    let (x, y) = spawn_pos(conn, spawn_half);
     let wire = next_serial(next_wire_id);
     let entity = world
         .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))

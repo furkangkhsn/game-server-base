@@ -471,8 +471,17 @@ ile seçilir (sunucu + `gsb-loadgen`):
 |----------|-----------|-------------------|-------|
 | `all` (varsayılan) | `()` (1 grup) | her entity her yerde | taban; eski davranış |
 | `spatial` | `Cell` (mekansal hücre) | 3×3 hücre bloğu | MMO/AOI (§8, önceki tur) |
-| `team` | `Team` (2 grup) | takım üyesi + menzildeki düşman | MOBA/takım sisli |
+| `team` | `Team` (2 grup) | takım üyesi + menzildeki düşman (takım üyelik world state: `TeamMember` componenti; `group_of` world okur) | MOBA/takım sisli |
 | `pvs` | `Sector` (harita bölgesi) | statik görünürlük tablosu (elle convex sektörler) | FPS/PVS |
+
+Takım üyeliği **dünya içi bir oyun durumudur** (`TeamMember(Team)` componenti;
+join'de atanır — kural `conn.id` paritesi, `team_of` sadece join anı kuralıdır):
+`group_of`, AOI'nin `Position`'u okuması gibi world state okur. Runtime takım
+değişimi (component yazımı) bir sonraki tick'te group yeniden değerlendirmesiyle
+takip edilir, **wire id değişmez** (test kilitli: `runtime_team_change_moves_the_
+group_and_keeps_the_wire_identity`). Dört stratejinin tümü artık aynı şekildedir:
+"grup = f(world, conn)" — konumdan mı oyun durumundan mı geldiği core mekanik
+için fark etmez (ROADMAP "ayrı proses + yayılma profili turu" D maddesi).
 
 **Varsayılan `all`** — üç gerekçeyle: geri uyumluluk (tüm önceki ölçüm
 tabanı `all`), ölçüm tabanı (en kötü durum; her stratejinin kazancı
@@ -492,19 +501,36 @@ ingestion, sistem yürütme, orphan stamp) ise 4 odada birebir aynıydı —
 artık `WireId::new`'ün tek çağrıcısı. Detay + elenen alternatifler: ROADMAP
 "Kapatılanlar (görünürlük stratejileri turu)" C maddesi.
 
-**Ölçülenler (N=1 000, 30 Hz, 15 s; in-proc; detay ROADMAP D2):**
+**Ölçülenler (N=1 000, 30 Hz; detay ROADMAP D2 ve ayrı-proces turu):**
 `spatial c5` bant **%82** az (247,8→44,8 kbps/conn), `pvs` **%49** az
-(126,0 kbps/conn), `team` bu yük geometrisinde **sıfır** kazanç + 2× kodlama
-(25 birim menzil + merkezî kümelenme → her iki takım haritanın tümünü
-görüyor; yük profili özelliği, strateji zayıflığı değil). Kodlama overlap'i
-ölçüldü (`overlap_x` = kodlanan kayıt/üye/tick): all 1,00 · PVS 1,37 · team
-2,00 · c20 5,50 · c5 8,28. "Birim başına tek kodlama, istemci abone"
-tasarımı **eşik altında bırakıldı** (spatial için eşik ≈10, ölçülen 8,28;
-bedel istemci başına 9 frame — D1'de doyan eksenin tahtası). **D1
-break-even (spatial, hücre 5):** p50 adım süresi N=10 000'e kadar 33,3 ms
-bütçenin altında (10k'da 12,5 ms, bimodal); bütçe aşan adım oranı 6k %3,8 →
-10k %18,9; 10k'da 54 263 drop + 1,34 s late tick — doyan parça in-proc
-istemci decode yolu (makine 1 dk loadavg ~9-11/32 ile doygun değil).
+(126,0 kbps/conn), `team` kümeli yük geometrisinde **sıfır** kazanç + 2×
+kodlama (25 birim menzil + merkezî kümelenme → her iki takım haritanın
+tümünü görüyor; yük profili özelliği, strateji zayıflığı değil). Kodlama
+overlap'i ölçüldü (`overlap_x` = kodlanan kayıt/üye/tick): all 1,00 · PVS
+1,37 · team 2,00 · c20 5,50 · c5 8,28. "Birim başına tek kodlama, istemci
+abone" tasarımı **eşik altında bırakıldı** (spatial için eşik ≈10, ölçülen
+8,28; bedel istemci başına 9 frame — D1'de doyan eksenin tahtası).
+**Break-even (spatial, hücre 5) ayrı prosesle ölçüldü** (istemciler P
+process'te, sunucu pin'li ayrı çekirdek kümesinde; in-proc sayılar
+istemci decode'ı sunucuyla paylaştığından duvarı maskelemişti): p50 adım
+süresi 33,3 ms bütçeyi **9k-10k arasında** aşıyor (5k 12,5 ms · 8k 25 ms ·
+9k 25 ms · 10k ≥50 ms, %54,8 adım bütçeli üstte, `server_hz` 23,2); 10k'da
+sunucu çekirdek havuzu **%25** dolu — doyan parça tek room actor'ünün
+serisel adım yolu (bir sonraki kaldıraç oda segmentasyonu, P2). **Takım
+sisli, geniş harita (spread profili, ±1000):** aynı kod düşman takımın
+**~%85'ini** her an paketten dışarıda tutuyor (500 kendi + ~77 düşman;
+rec/tick 2 000→1 153); kümeli geometride kazanç sıfır kalıyor — strateji,
+geometriye koşullu.
+
+**Yük yöntemi (ayrı-proces turu):** `gsb-loadgen` üç modda: in-proc
+(varsayılan, tüm önceki ölçüm tabanı), `--serve` (sunucu process'i;
+`--metrics-listen` metrik raporlarını kanal verisinin ikili TCP akışıyla
+taşır — stdout parsing'i yok) ve `--orchestrate` (sunucu + P istemci
+process'i, tek RESULT). `--pin` (taskset) SMT-farkında ayrık çekirdek
+kümeleri verir; RESULT'ta `server_cpu_s`/`clients_cpu_s`/`affinity`
+izolasyonu kanıt olarak taşır. `--profile spread` (uniform, geniş harita;
+varsayılan `ring` = eski kümeli profil, aynen) stratejileri ayrıştırmak
+için eklenmiş ikinci yük geometrisidir.
 
 ## 9. Kapanma (shutdown) kaskadı
 

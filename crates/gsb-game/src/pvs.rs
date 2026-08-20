@@ -187,6 +187,13 @@ pub struct SectorRoom {
     conn_entity: HashMap<ConnectionId, Entity>,
     /// The room's single wire-identity counter (mirrors the other rooms).
     next_wire_id: u64,
+    /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`).
+    /// The demo *PVS map* stays the hand-authored 100×100 sectors; this
+    /// only affects where `on_join` places entities (a `spread`-profile
+    /// run places them outside every sector — they land in
+    /// [`SECTOR_OUT`] and see only themselves, which is exactly what the
+    /// PVS strategy promises for off-map positions).
+    spawn_half: f32,
     /// Per-sector "no change" ledger: `sector → (wire id → (x, y))`, the
     /// exact wire content of that sector's last emitted snapshot. Keyed by
     /// group (sector) per the [`RoomLogic::snapshot`] contract.
@@ -209,13 +216,22 @@ impl Default for SectorRoom {
 }
 
 impl SectorRoom {
-    /// Build a PVS room over the demo map (module docs, "The map").
+    /// Build a PVS room over the demo map (module docs, "The map") and the
+    /// default 100×100 spawn arena.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_spawn_half(crate::room::DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build a PVS room whose spawn map has half-size `half` (see the
+    /// `spawn_half` field docs for what that means on the fixed PVS map).
+    #[must_use]
+    pub fn with_spawn_half(half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
+            spawn_half: half.max(1.0),
             last: HashMap::new(),
             buckets: HashMap::new(),
             encoded: 0,
@@ -296,7 +312,13 @@ impl RoomLogic<World> for SectorRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
+        crate::common::on_join(
+            &mut self.conn_entity,
+            &mut self.next_wire_id,
+            self.spawn_half,
+            world,
+            conn,
+        )
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {

@@ -64,3 +64,13 @@ aoi_cell_size = 20.0
 # World units an enemy must be within to be visible to a team
 # (used only when visibility = "team").
 team_vision_radius = 25.0
+
+# Half-size of the square map entities spawn on (all demo rooms; the demo
+# map has no walls, so the map is as big as the game wants it). Default 50
+# = the historical 100x100 arena. The load generator's "spread" profile
+# pairs a large value here (e.g. 1000 = a 2000x2000 "wide map") with the
+# same value in its clients so spawn points and targets live on the same
+# map. Note: for visibility = "pvs" the VISIBILITY map stays the
+# hand-authored 100x100 sectors regardless (off-map spawns land in the
+# SECTOR_OUT catch-all and see only themselves).
+spawn_half_size = 50.0

@@ -87,6 +87,11 @@ use prost::Message;
 use crate::components::{Position, WireId};
 use crate::op;
 
+/// The default spawn map half-size (world units): the historical 100×100
+/// arena. A room built with it spawns bit-identically to the pre-config
+/// `spawn_pos`.
+pub const DEFAULT_SPAWN_HALF: f32 = 50.0;
+
 /// The demo room: one moving entity per player, free 2D movement.
 pub struct DemoRoom {
     runner: SystemRunner,
@@ -96,6 +101,12 @@ pub struct DemoRoom {
     /// **only** writer is [`crate::common::next_serial`] — the single
     /// minting point for every [`WireId`] this room ever stamps.
     next_wire_id: u64,
+    /// Half-size of the square spawn map (see [`spawn_pos`]): entities
+    /// spawn uniformly in `[-half, half]²`. Configuration, not a
+    /// strategy decision — the demo map has no walls, so the map is as
+    /// big as the game wants it (a load profile's "wide map" is just a
+    /// large value here; the default keeps the historical 100×100 arena).
+    spawn_half: f32,
     /// Wire content of the last emitted snapshot of the room's single
     /// group, as `(wire id → (x, y))` (truncated to the wire's
     /// integer positions). The snapshot is re-emitted when this content
@@ -118,25 +129,44 @@ impl Default for DemoRoom {
 }
 
 impl DemoRoom {
+    /// Build the demo room over the default 100×100 arena (bit-identical
+    /// spawn distribution to the pre-config rooms).
     pub fn new() -> Self {
+        Self::with_spawn_half(DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build the demo room over a square spawn map of half-size `half`
+    /// (entities spawn uniformly in `[-half, half]²`). The load
+    /// generator's `spread` profile pairs this with its home distribution
+    /// so spawn points and targets live on the same (possibly "wide")
+    /// map.
+    pub fn with_spawn_half(half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
+            spawn_half: half.max(1.0),
             last: HashMap::new(),
             encoded: 0,
         }
     }
 }
 
-/// Deterministic pseudo-random spawn point in a 100×100 arena, derived from
-/// the connection id (stable across room re-joins in the same session).
-/// `pub(crate)` so the AOI room shares the exact same spawn distribution
-/// (a fair AOI-off vs AOI-on comparison in the load generator).
-pub(crate) fn spawn_pos(conn: ConnectionId) -> (f32, f32) {
+/// Deterministic pseudo-random spawn point in a square arena of half-size
+/// `half`, derived from the connection id (stable across room re-joins in
+/// the same session). `half = 50` reproduces the historical 100×100 arena
+/// exactly: the same 1000×1000 lattice, just scaled. `pub(crate)` so the
+/// other rooms share the exact same spawn distribution (a fair
+/// comparison in the load generator).
+pub(crate) fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
+    // The historical 100×100 lattice, scaled: `half = 50` multiplies by
+    // exactly 1.0, so the default is bit-identical to the pre-config
+    // formula (a re-derivation like `(h % 1000) * 2 * half / 1000` would
+    // double-round and drift by ulps for some ids).
     let h = conn.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let x = ((h % 1000) as f32) / 10.0 - 50.0;
-    let y = (((h >> 32) % 1000) as f32) / 10.0 - 50.0;
+    let scale = half / 50.0;
+    let x = ((h % 1000) as f32 / 10.0 - 50.0) * scale;
+    let y = (((h >> 32) % 1000) as f32 / 10.0 - 50.0) * scale;
     (x, y)
 }
 
@@ -233,14 +263,21 @@ impl RoomLogic<World> for DemoRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        // Shared spawn path (`common::on_join`): deterministic spawn point,
-        // fresh wire identity through the room's single minting point,
+        // Shared spawn path (`common::on_join`): deterministic spawn point
+        // (this room's spawn map, see the `spawn_half` field), fresh wire
+        // identity through the room's single minting point,
         // connection→entity table update. The same value is returned to
         // the joiner in `JOIN_ROOM_RESULT`, so both paths share one space.
         // No spawn event: membership is expressed by presence in the next
         // snapshot, which now includes the new entity (the join happened in
         // the control phase, before this tick's broadcast).
-        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
+        crate::common::on_join(
+            &mut self.conn_entity,
+            &mut self.next_wire_id,
+            self.spawn_half,
+            world,
+            conn,
+        )
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {

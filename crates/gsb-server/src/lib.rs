@@ -127,6 +127,15 @@ pub struct Config {
     /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
     /// the vision source model.
     pub team_vision_radius: f32,
+    /// Half-size of the square map entities spawn on (all four demo rooms;
+    /// default 50 = the historical 100×100 arena, bit-identical). A load
+    /// profile that places entities on a "wide map" (the generator's
+    /// `spread` profile) pairs a large value here with the same value in
+    /// the clients' `--spawn-half-size`, so spawn points and targets live
+    /// on the same map and the run is statistically steady from tick 1.
+    /// The PVS strategy's *visibility map* stays its hand-authored 100×100
+    /// sectors regardless (see `gsb_game::pvs::SectorRoom::spawn_half`).
+    pub spawn_half_size: f32,
 }
 
 impl Default for Config {
@@ -145,6 +154,7 @@ impl Default for Config {
             visibility: Visibility::default(),
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
+            spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
         }
     }
 }
@@ -228,13 +238,14 @@ pub fn build_table() -> Arc<MessageTable> {
 }
 
 /// The room factory for the demo game: an empty bevy `World` + a
-/// [`gsb_game::room::DemoRoom`]. Group key is `()` (one group per room) —
-/// the AOI-**off** baseline: every connection receives the whole world.
-fn demo_room_factory() -> RoomFactory<World, ()> {
-    Arc::new(|_id, _config| {
+/// [`gsb_game::room::DemoRoom`] over a spawn map of half-size
+/// `spawn_half`. Group key is `()` (one group per room) — the AOI-**off**
+/// baseline: every connection receives the whole world.
+fn demo_room_factory(spawn_half: f32) -> RoomFactory<World, ()> {
+    Arc::new(move |_id, _config| {
         (
             World::new(),
-            Box::new(gsb_game::room::DemoRoom::default())
+            Box::new(gsb_game::room::DemoRoom::with_spawn_half(spawn_half))
                 as Box<dyn RoomLogic<World, GroupKey = ()>>,
         )
     })
@@ -249,11 +260,11 @@ fn demo_room_factory() -> RoomFactory<World, ()> {
 /// cannot be stored in one value — `start_inner` picks the factory at the
 /// config boundary. This is entirely on the game/server side; `gsb-core`
 /// stays generic over the group key and is untouched.
-fn aoi_room_factory(cell_size: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
+fn aoi_room_factory(cell_size: f32, spawn_half: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
     Arc::new(move |_id, _config| {
         (
             World::new(),
-            Box::new(gsb_game::aoi::AoiRoom::new(cell_size))
+            Box::new(gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half))
                 as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
         )
     })
@@ -262,11 +273,11 @@ fn aoi_room_factory(cell_size: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
 /// The team-fog room factory: an empty bevy `World` + a
 /// [`gsb_game::team::TeamRoom`] with the given `vision_radius`. Group key
 /// is [`gsb_game::team::Team`] (2 groups).
-fn team_room_factory(vision_radius: f32) -> RoomFactory<World, gsb_game::team::Team> {
+fn team_room_factory(vision_radius: f32, spawn_half: f32) -> RoomFactory<World, gsb_game::team::Team> {
     Arc::new(move |_id, _config| {
         (
             World::new(),
-            Box::new(gsb_game::team::TeamRoom::new(vision_radius))
+            Box::new(gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half))
                 as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
         )
     })
@@ -275,11 +286,11 @@ fn team_room_factory(vision_radius: f32) -> RoomFactory<World, gsb_game::team::T
 /// The PVS room factory: an empty bevy `World` + a
 /// [`gsb_game::pvs::SectorRoom`] (the demo map is built into the room).
 /// Group key is [`gsb_game::pvs::Sector`].
-fn pvs_room_factory() -> RoomFactory<World, gsb_game::pvs::Sector> {
-    Arc::new(|_id, _config| {
+fn pvs_room_factory(spawn_half: f32) -> RoomFactory<World, gsb_game::pvs::Sector> {
+    Arc::new(move |_id, _config| {
         (
             World::new(),
-            Box::new(gsb_game::pvs::SectorRoom::new())
+            Box::new(gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half))
                 as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
         )
     })
@@ -350,7 +361,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    demo_room_factory(),
+                    demo_room_factory(cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
                 )
@@ -362,7 +373,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    aoi_room_factory(cfg.aoi_cell_size),
+                    aoi_room_factory(cfg.aoi_cell_size, cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
                 )
@@ -374,7 +385,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    team_room_factory(cfg.team_vision_radius),
+                    team_room_factory(cfg.team_vision_radius, cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
                 )
@@ -386,7 +397,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    pvs_room_factory(),
+                    pvs_room_factory(cfg.spawn_half_size),
                     ticker.clone(),
                     metrics_tx.clone(),
                 )

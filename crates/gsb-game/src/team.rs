@@ -7,11 +7,18 @@
 //! [`AoiRoom`](crate::aoi::AoiRoom) uses `GroupKey = Cell` (spatial).
 //! `TeamRoom` makes the group key the **team identity**: exactly two groups,
 //! one per team. This is the proof that grouping is *not* a spatial concept:
-//! [`RoomLogic::group_of`] here never looks at the world — a connection's
-//! group is a function of *who the player is* (game state), not *where the
-//! player is*. The core's group machinery (per-group snapshot, per-group
-//! ledger, membership re-evaluation) is untouched; only the key and the
-//! content of each group's snapshot change. **No `gsb-core` change.**
+//! a connection's group is a function of *who the player is* (game state —
+//! the team its entity belongs to, kept in the world as the
+//! [`TeamMember`] component), not *where the player is*. Note what this
+//! means for the seam: [`RoomLogic::group_of`] here **reads the world** —
+//! exactly like `AoiRoom`'s does — but it reads a *game-state* component
+//! instead of a position, and the core's group machinery (per-group
+//! snapshot, per-group ledger, per-tick re-evaluation) treats the two
+//! identically. Team membership is game state that *happens to live in the
+//! world*; grouping is not spatial, and no hidden "group = position"
+//! assumption remains in the design (see `docs/ROADMAP.md`, item D).
+//! The rest of the core is untouched; only the key and the content of each
+//! group's snapshot change. **No `gsb-core` change.**
 //!
 //! ## Visibility set: own team + enemy units in team vision
 //!
@@ -91,7 +98,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::{Component, Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
@@ -102,8 +109,8 @@ use crate::components::{Position, WireId};
 use crate::op;
 
 /// A player's team — the team-fog group key. Exactly [`TEAM_COUNT`] teams
-/// exist; membership is *game state* (the connection's identity), never a
-/// position.
+/// exist; membership is *game state*, kept in the world as the entity's
+/// [`TeamMember`] component (see its docs), never a position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Team(pub u8);
 
@@ -112,6 +119,42 @@ pub const TEAM_COUNT: u8 = 2;
 
 /// Default vision radius in world units (see module docs).
 pub const DEFAULT_VISION_RADIUS: f32 = 25.0;
+
+/// Team membership — **the entity's team, kept in the world as a
+/// component**. This is the round's item D: the previous design derived a
+/// connection's team from `conn` parity in `group_of`, which meant
+/// `group_of` never read the world (the easiest possible proof that
+/// grouping is non-spatial). That made the team *unrepresentable as game
+/// state* and unchangeable at runtime. Now the team *is* world state:
+///
+/// - Written exactly once at join, by `on_join` (from the join-time
+///   assignment rule, [`team_of`] — conn parity, i.e. "signup order"), on
+///   the player's entity.
+/// - Read by `group_of` (the connection's snapshot group) and by `rebuild`
+///   (own-team visibility + who grants vision for the team), both of which
+///   now look the entity up and read this component off the **world**.
+/// - Changed at runtime by a plain component write; on the next tick's
+///   group re-evaluation the connection's group follows, and the wire
+///   identity is untouched (a group transition is not an identity
+///   transition — pinned by
+///   `runtime_team_change_moves_the_group_and_keeps_the_wire_identity`).
+///
+/// A neutral (ownerless) entity simply has no `TeamMember`; it is
+/// broadcast to *both* teams and grants no vision — exactly as before, but
+/// now expressed structurally by the component's absence instead of a
+/// "not in `conn_entity`" check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct TeamMember(pub Team);
+
+/// The join-time team *assignment rule* (the demo: conn parity, i.e.
+/// "signup order" — team 0, 1, 0, 1, …). This decides what `on_join`
+/// *writes* into the entity's [`TeamMember`]; it is not consulted again
+/// afterwards (runtime team changes are component writes, and `group_of`
+/// reads the world, not this function).
+#[inline]
+fn team_of(conn: ConnectionId) -> Team {
+    Team((conn.0 % u64::from(TEAM_COUNT)) as u8)
+}
 
 /// The (dx, dy) offsets of the 3×3 cell neighborhood. A grid of
 /// `vision_radius`-sized cells makes the neighborhood a *superset* of the
@@ -123,12 +166,6 @@ const VISION_OFFSETS: [(i32, i32); 9] = [
     (-1, 0), (0, 0), (1, 0),
     (-1, 1), (0, 1), (1, 1),
 ];
-
-/// The team of a connection: game state, not position.
-#[inline]
-fn team_of(conn: ConnectionId) -> Team {
-    Team((conn.0 % u64::from(TEAM_COUNT)) as u8)
-}
 
 /// The grid cell containing `pos`, for a grid of `cell_size` (world units).
 #[inline]
@@ -152,6 +189,9 @@ pub struct TeamRoom {
     /// World units an enemy must be within to be visible to a team (see
     /// module docs, "Vision source model").
     vision_radius: f32,
+    /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`);
+    /// configuration, not a strategy decision.
+    spawn_half: f32,
     /// Per-team "no change" ledger: `team → (wire id → (x, y))`, the exact
     /// wire content of that team's last emitted snapshot. Keyed by group
     /// (team) per the [`RoomLogic::snapshot`] contract: one call must not
@@ -178,16 +218,24 @@ pub struct TeamRoom {
 }
 
 impl TeamRoom {
-    /// Build a team-fog room with the given `vision_radius` (world units).
-    /// Clamped to a sane minimum so a degenerate `0` cannot make vision
-    /// "only the exact same point".
+    /// Build a team-fog room with the given `vision_radius` (world units)
+    /// over the default 100×100 spawn arena. Clamped to a sane minimum so a
+    /// degenerate `0` cannot make vision "only the exact same point".
     #[must_use]
     pub fn new(vision_radius: f32) -> Self {
+        Self::with_spawn_half(vision_radius, crate::room::DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build a team-fog room over a square spawn map of half-size `half`
+    /// (see `gsb_game::room::DemoRoom::with_spawn_half`).
+    #[must_use]
+    pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
             vision_radius: vision_radius.max(1.0),
+            spawn_half: half.max(1.0),
             last: [HashMap::new(), HashMap::new()],
             team_units: [Vec::new(), Vec::new()],
             neutral: Vec::new(),
@@ -206,28 +254,26 @@ impl TeamRoom {
         self.neutral.clear();
         self.cells.clear();
 
-        // Reverse the connection table: entity → team (game state).
-        let ent_team: HashMap<Entity, u8> = self
-            .conn_entity
-            .iter()
-            .map(|(conn, entity)| (*entity, team_of(*conn).0))
-            .collect();
-
+        // Membership is read from the WORLD (each entity's `TeamMember`
+        // component, written at join): no reverse connection map — the
+        // component *is* the table, and a runtime team change needs no
+        // bookkeeping here at all. An entity without the component is
+        // neutral (ownerless): broadcast to ALL teams — the broadcast set
+        // stays exactly "has a `Position`".
         let r = self.vision_radius;
-        let mut query = world.query::<(Entity, &WireId, &Position)>();
-        for (entity, wire_id, pos) in query.iter(world) {
+        let mut query = world.query::<(&WireId, &Position, Option<&TeamMember>)>();
+        for (wire_id, pos, member) in query.iter(world) {
             let (x, y) = (pos.x as i32, pos.y as i32);
             let c = grid_cell(*pos, r);
             let cell = self.cells.entry(c).or_insert([Vec::new(), Vec::new()]);
-            match ent_team.get(&entity) {
-                Some(team) => {
-                    cell[*team as usize].push((pos.x, pos.y));
-                    self.team_units[*team as usize]
+            match member {
+                Some(m) => {
+                    let team = m.0 .0 as usize;
+                    cell[team].push((pos.x, pos.y));
+                    self.team_units[team]
                         .push((wire_id.get(), x, y, pos.x, pos.y));
                 }
                 None => {
-                    // Neutral (ownerless) entity: broadcast to ALL teams —
-                    // the broadcast set stays exactly "has a `Position`".
                     self.neutral.push((wire_id.get(), x, y));
                 }
             }
@@ -283,10 +329,24 @@ impl RoomLogic<World> for TeamRoom {
         op::PRIVATE
     }
 
-    /// The connection's group is its team — game state, never the world
-    /// (position is irrelevant to *grouping*; it only decides *content*).
-    fn group_of(&self, _world: &World, conn: ConnectionId) -> Team {
-        team_of(conn)
+    /// The connection's group is its team — game state kept in the world
+    /// (the entity's [`TeamMember`] component). This room's `group_of`
+    /// reads the world, just like `AoiRoom`'s reads `Position`; the
+    /// difference is *what* it reads (a membership component, not a
+    /// position), which is what keeps the group key non-spatial. A
+    /// connection in the room always has an entity with a `TeamMember`
+    /// (written in `on_join`, removed with the entity on leave); the
+    /// `unwrap_or` fallback only keeps the function total for bookkeeping
+    /// edges (e.g. a conn evicted between `members` and the call).
+    fn group_of(&self, world: &World, conn: ConnectionId) -> Team {
+        let Some(&entity) = self.conn_entity.get(&conn) else {
+            return Team(0);
+        };
+        world
+            .entity(entity)
+            .get::<TeamMember>()
+            .map(|m| m.0)
+            .unwrap_or(Team(0))
     }
 
     /// Encode `team`'s snapshot from this tick's content cache (module
@@ -328,7 +388,21 @@ impl RoomLogic<World> for TeamRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
+        let wire = crate::common::on_join(
+            &mut self.conn_entity,
+            &mut self.next_wire_id,
+            self.spawn_half,
+            world,
+            conn,
+        );
+        // Team membership goes into the WORLD (the component), not just
+        // this room's bookkeeping: `group_of` and `rebuild` read it from
+        // world state, so a runtime team change is a plain component
+        // write — no room hook, no protocol op, no bookkeeping to keep in
+        // sync.
+        let entity = self.conn_entity.get(&conn).copied().expect("inserted above");
+        world.entity_mut(entity).insert(TeamMember(team_of(conn)));
+        wire
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
@@ -602,5 +676,89 @@ mod tests {
         assert!(room.snapshot(&mut world, &ctx(3), &Team(0), &mut o3), "mover's team re-emits");
         let mut o4 = bytes::BytesMut::new();
         assert!(!room.snapshot(&mut world, &ctx(3), &Team(1), &mut o4), "other team still silent");
+    }
+
+    /// Item D, pinned: team membership is WORLD STATE (the
+    /// [`TeamMember`] component), so a connection that changes team at
+    /// runtime moves its snapshot group on the next re-evaluation — and
+    /// the wire identity survives the transition (a group transition is
+    /// not an identity transition, the same invariant the cell-crossing
+    /// and vision-transition tests pin for the other strategies).
+    ///
+    /// Layout (vision radius 25): A(0,0) and A2(30,0) are team 0 (conn
+    /// parity); B(100,0) and B2(200,0) are team 1. The teams start out of
+    /// each other's vision entirely (A↔B is 100, A2↔B is 70, both > 25),
+    /// so before the switch each package is exactly its own team — which
+    /// also makes both transitions below visible in the bytes (if A were
+    /// already in team 1's vision as an enemy, team 1's package would be
+    /// byte-identical before and after: snapshots carry records, not
+    /// "role" — the group move still happens, only less visibly).
+    /// - Before: team 0 = {A, A2}; team 1 = {B, B2}.
+    /// - A switches to team 1 (a plain component write — the game rule
+    ///   that causes the switch is outside the seam; a future trade op
+    ///   would do exactly this write).
+    /// - After: team 1 = own {A, B, B2}; the enemy A2 is 30 from A (> 25)
+    ///   and 70 from B ⇒ A *appears* in team 1's package (own-team
+    ///   visibility has no range limit) with the SAME wire id minted at
+    ///   its join. Team 0 = own {A2}; A is now an enemy 30 from A2
+    ///   (> 25) ⇒ A *leaves* team 0's package.
+    #[test]
+    fn runtime_team_change_moves_the_group_and_keeps_the_wire_identity() {
+        let mut world = World::new();
+        let mut room = TeamRoom::new(25.0);
+
+        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
+        let a2 = place(&mut world, &mut room, ConnectionId(4), 30.0, 0.0); // team 0
+        let b = place(&mut world, &mut room, ConnectionId(1), 100.0, 0.0); // team 1
+        let b2 = place(&mut world, &mut room, ConnectionId(3), 200.0, 0.0); // team 1
+        room.update(&mut world, &ctx(1));
+
+        // Baseline: group_of reads the world's TeamMember (parity at join
+        // time), and each package is exactly its own team.
+        assert_eq!(room.group_of(&world, ConnectionId(2)), Team(0));
+        assert_eq!(room.group_of(&world, ConnectionId(1)), Team(1));
+        let mut out0 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        let t0 = snap_ids(&out0);
+        let mut out1 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        let t1 = snap_ids(&out1);
+        assert_eq!(t0, [a, a2].into_iter().collect(), "team 0: {t0:?}");
+        assert_eq!(t1, [b, b2].into_iter().collect(), "team 1: {t1:?}");
+
+        // RUNTIME TEAM CHANGE: A (conn 2) switches to team 1. This is a
+        // component write on world state — no room hook, no protocol op.
+        let entity_a = *room.conn_entity.get(&ConnectionId(2)).unwrap();
+        world.entity_mut(entity_a).insert(TeamMember(Team(1)));
+
+        // The connection's group follows on the re-evaluation — the seam
+        // question, pinned: group_of reads the world, and the world says
+        // team 1 now.
+        assert_eq!(
+            room.group_of(&world, ConnectionId(2)),
+            Team(1),
+            "A's group moved with its TeamMember"
+        );
+
+        room.update(&mut world, &ctx(2));
+        let mut out0b = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &mut out0b), "team 0 re-emits");
+        let mut out1b = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &mut out1b), "team 1 re-emits");
+        let t0b = snap_ids(&out0b);
+        let t1b = snap_ids(&out1b);
+
+        // A LEFT team 0's package (it is now an enemy 30 from A2, outside
+        // team 0's vision): the group transition is visible in the bytes.
+        assert_eq!(t0b, [a2].into_iter().collect(), "team 0: A is gone: {t0b:?}");
+
+        // A APPEARED in team 1's package as OWN TEAM — with the SAME wire
+        // id it had before the transition (identity did not change on the
+        // group transition).
+        assert!(
+            t1b.contains(&a),
+            "A is in team 1's package with the pre-transition wire id: {t1b:?}"
+        );
+        assert_eq!(t1b, [a, b, b2].into_iter().collect(), "team 1: {t1b:?}");
     }
 }

@@ -995,6 +995,196 @@ Ham çıktı: `target/loadout/*.txt` (gitignore; commit mesajında RESULT
 satırları). Makine: AMD Ryzen 9 7950X 16C/32T, 124 GB RAM, rustc 1.95.0,
 paylaşımlı masaüstü (arka plan ~2-3 çekirdek).
 
+## Kapatılanlar (ayrı proses + yayılma profili + takım-state turu)
+
+Bu tur, önceki turun açık bıraktığı üç soruyu kapatır: (1) in-proc yük
+sayılarının duvarı sunucu CPU'su muydu, (2) takım sisli kümeli geometride
+sıfır kazanç veriyordu — seyrek/gerçek MOBA geometrisinde ne verir,
+(3) tasarımın gizli "grup = konum" varsayımı var mı (takım, conn paritesinden
+türetildiği için `group_of` world okumuyordu — kanıtı kolaylaştırmıştık,
+bu tur kolaylık kaldırıldı). E1/E2 iki küçük hata düzeltmesi. Test: 58 →
+**60** (+1 runtime takım-değişim + 1 ayrı-proces duman testi; hiçbir eski
+test değiştirilmedi/silinecek/`#[ignore]` yapılmadı).
+
+- [x] **E1 — `gsb-loadgen --help` panik atıyordu** — `-h/--help` artık
+  kullanım metni basıp `exit(0)`; bilinmeyen flag hâlâ panic (sessiz
+  yok sayma bug'ını maskelerdi) ama mesajda `(try --help)` işareti var.
+  Elenen: (a) **clap** — ~150 satırlık tek amaçlı tool için bağımlılık ağırlığı;
+  elle parser zaten 15+ flag'i taşıyor, üç modu da aynı; (b) **bilinmeyeni
+  sessizce yok say** — E1'in kendisi o sınıfın habercisiydi.
+
+- [x] **E2 — "server room (final)" `hz=0.00` vs RESULT `server_hz=30.00`** —
+  kök neden spec'in tahminine yakın ama farklı: son raporun "önceki aralık
+  yok" değil, **0 örnekli pencere** olması — oda örnekleme temposu (1/sn,
+  A2: tick başına değil, rapor periyodu başına tek örnek) rapor temposuyla
+  faz-kilitli değil; kapanışta son rapor 0-örnekli bir pencere kapatabilir
+  (Δsteps=0 → hz=0.0). Düzeltme: final satırı tüm koşu ortancasını (RESULT'un
+  `server_hz`'iyle aynı sayı) basıyor; `RoomReport::hz` dokümanına not:
+  0 örnekli pencerede hz=0.0 "bu pencerede örnek yok" demektir, tüketici
+  pozitif pencerelerin ortancasını almalı. Elenen: (a) son raporu önceki
+  pencereden doldur — gerçekliği çarpıtırdı (pencere var, örneği yok);
+  (b) örnek+rapor temposunu faz-kitle — metrik semantiği (örnek-aralığı
+  hızı, A2) bilerek böyle; görüntü sorunu için core değişikliği.
+
+- [x] **A — Ayrı prosesli istemci modu** — in-proc modun duvarı istemci
+  decode'ıydı (10k'da ~6 GB/s protobuf decode, sunucuyla çekirdek
+  paylaşımı); sunucu adımlarının gerçek duvarını ölçmek için sunucu artık
+  **ayrı proses**te koşabiliyor. Çözüm (tek binary, üç mod):
+  - `--serve`: sunucu process'i (in-proc'un aynısı, `Config`'ten).
+    `--metrics-listen HOST:PORT` verilirse collector'ın **kanal sink'i**
+    (in-proc'un aldığı `MetricReport` struct'larının ta kendisi) ikili bir
+    TCP akışına basılır: `[u32 magic][u32 len][LE body]`, 1 Hz. Sunucu
+    metrik toplama yolu **aynen korunur** — stdout parsing'i yok, log
+    formatı API değil. Flag verilmezse `gsb-metric` log'a yazar
+    (`gsb-server` davranışı).
+  - `--orchestrate N --procs P`: orkestratör sunucuyu (`--serve`) + P
+    istemci process'ini (N istemci, `--offset` ile ardışık küresel id;
+    stagger ve profilin id-determinizmi tüm koşu boyunca tutarlı)
+    doğurur; istemci çocuklarının `CLIENT` satırları + metrik soketini
+    tek RESULT'a birleştirir.
+  - **Pinning (`--pin`)**: `unsafe` yasak (pre_exec/sistem çağrısı yok)
+    → affinity `taskset -c` sarmalayışıyla; /sys topology'den **SMT-farkında**:
+    sunucu ilk 8 fiziksel çekirdeği (16 mantıksal), istemciler kalanı
+    round-robin. `taskset` yoksa uyarı + pinsiz koşu (izolasyon o zaman
+    sadece proses ayrımına dayanır).
+  - **CPU muhasebesi**: `/proc/<pid>/stat` (utime+stime, USER_HZ=100),
+    250 ms'lik bekleme turlarında örnekleme — `/proc` reap'te yok olduğundan
+    t1 = çıkıştan önceki **son canlı** okuma. RESULT'a: `server_cpu_s` /
+    `clients_cpu_s` + `affinity` (çekirdek kümeleri) + `server_pid` /
+    `client_pids`.
+  - **Neyi feda etti:** (1) istemci varış anları bu process'te yok →
+    çocuklar ham değerleri (`connect_ms`, önceden hesaplanmış `hz`)
+    `CLIENT` satırında basıyor, orkestratör **ham değerleri** birleştiriyor
+    (toplamlar + ham değerler üzerinde percentile → tam, "özetlerin
+    özeti" değil); (2) orkestratör iki tarafın da ebe'si (sunucuyu da
+    o doğuruyor) → "dış sunucu + bu istemciler" senaryosu `--addr` modunda
+    kalıyor; (3) pin için `taskset` binary'si şart (yoksa pinsiz koşu);
+    (4) metrik raporları için bir loopback ek istasyonu (1 Hz, önemsiz).
+  - Elenen: (a) **thread'ler (ayrı tokio runtime'ları)** — CPU izolasyonu
+    yok (amaca aykırı); (b) **ayrı istemci binary/crate'i** — aynı
+    binary = metrik codec'inin iki ucu aynı derlemede (format sürüklenemez)
+    + istemci kodu zaten `run_client`'ta; (c) **`gsb-metric` log satırlarını
+    parse et** — spec yasakladı, ayrıca log formatı API değil (tracing
+    filtresi değişse parser kırılır).
+
+- [x] **B — İkinci yük profili: `--profile spread`** — eski profil
+  (yarıçap-40 hedef halkası, 4 rad/sn) entity'leri merkez bandında
+  kümelendiriyordu → görünürlük stratejileri ayrıştırılamıyordu. Yeni
+  profil: her istemcinin deterministik bir **evin** var (±`spawn-half`
+  haritada uniform ızgara; sunucu spawn'ı aynı dağılımla — `spawn_half_size`
+  config'i, vars. 50 → eski arena bit-bit aynı; spread koşuları 1000 =
+  2000×2000 geniş harita), evinin çevresinde yarıçap-20, 0.4 rad/sn
+  (hedef 8 u/sn < entity 10 u/sn → entity hedefi takip eder, ayak izi ≈ ev).
+  Spawn da aynı dağılımla olduğu koşul **tick 1'den istatistiksel durağan**
+  (göç transiyantı yok). Profil RESULT'ta (`profile=ring|spread`) ve
+  machine satırında. Eski profil **aynen** varsayılan (tüm önceki ölçüm
+  tabanı `ring`; süreklilik bozulmadı).
+  - **Dağılım gerekçesi:** uniform, tek değişkenli ve tek doğru seçenek:
+    C2 iddiası "geniş harita, seyrek görevli" ve uniform'da görüş kapsamı
+    yalnız (kaynak, yarıçap, alan) fonksiyonu (`c = 1−exp(−kπr²/A)`) —
+    yorumlanabilir. Herhangi bir kümelenme (merkezli gauss, ikinci halka)
+    eski profilin gizlediği kümelenme artefaktını geri getirirdi.
+  - Elenen: (a) **merkezli gauss** — yine merkez yoğunluğu; "seyrek" rejimi
+    sadece kuyruklarda; kapsam hesabı 2B integral; (b) **evsiz rastgele
+    uniform hareket** — 10 u/sn × 30 sn = 300 birim difüzyon → geometri
+    bulanıklaşır, koşul durağan değildir; (c) **jittersız ızgara** — tüm
+    entity'ler 20×20 noktasında: komşuların payload'u byte-identik olur,
+    `overlap_x` artefaktı.
+
+- [x] **C1 — D1 break-even, ayrı prosesle ölçüldü** — spatial c5, ring
+  profili (D1 sürekliliği), 30 sn, stagger 0,5 ms, pin (sunucu 8 fiziksel
+  çekirdek). `server_cpu_s`/`clients_cpu_s` = 30 sn'de tüketilen çekirdek
+  saniyesi (sunucu havuzu 16 mantıksal × 30 = 480 çekirdek-sn):
+
+  | N | adım p50 | adım max | bütçe aşımı | server_hz | drop | late max | server_cpu_s (%havuz) | clients_cpu_s | out/conn |
+  |---|----------|----------|-------------|-----------|------|----------|----------------------|---------------|----------|
+  | 5 000 | 12,5 ms | 42,9 ms | %1,0 | 30,00 | 9 086 | 16 ms | 89,7 (%19) | 279,0 | 490,8 kbps |
+  | 8 000 | 25 ms | 92,3 ms | %36,6 | 29,88 | 45 596 | 1,80 s | 120,8 (%25) | 319,7 | 359,3 kbps |
+  | 9 000 | 25 ms | 103,6 ms | %44,6 | 28,19 | 30 869 | 2,34 s | 120,3 (%25) | 323,5 | 322,0 kbps |
+  | 10 000 | 50 ms | 100,4 ms | %54,8 | 23,21 | 52 771 | 2,17 s | 119,4 (%25) | 298,8 | 269,6 kbps |
+
+  **Cevap:** p50, 33,3 ms bütçeyi **9k ile 10k arasında** aşıyor (9k'da
+  25 ms = bütçenin %75'i, hâlâ altında; 10k'da ≥50 ms = %150+, adımların
+  %54,8'i bütçeli üstte, `server_hz` 23,2 < 30 → oda actor'ü ticker'dan
+  geride, 252 late tick). **Sunucu CPU'su izole edildi ve doymadı:**
+  ayrık çekirdek kümleri (`affinity=`), istemci decode'ı ayrı havuzda
+  (`clients_cpu_s` ~280-320), sunucu havuzu 10k'da bile **%25** dolu
+  (119/480 çekirdek-sn) — doyan parça **tek room actor'ünün serisel adım
+  yolu** (read→convert→systems→encode→fan-out tek task'ta; 12 boş çekirdek
+  varken adım 33,3 ms'e sığmıyor). Mimari çıkarım: bir sonraki kaldıraç
+  oda paralelliği/segmentasyonu (P2), ek çekirdek değil. D1'in in-proc
+  10k sayısı (p50 12,5 ms, %18,9) ile karşılaştırma: in-proc, p50 duvarını
+  *maskeleyip* kuyruğu istemci decode gürültüsüyle bozuyordu (bimodal +
+  1,34 s late) — duvar aynı odadaydı, ölçüm istemci CPU'su ile karışıktı.
+  (Makine koşu sırasında paylaşımlı: loadavg ~10/32; pin, sunucu kümesini
+  istemcilerden, ama arka plan kullanıcılarından korumaz — iki koşul grubu
+  aynı makine hâlinde ölçüldü, karşılaştırma koşullar arası değil koşu
+  içi.)
+
+- [x] **C2 — Takım sisli uçtan uca (N=1 000, 20 sn, pin)** — aynı kod,
+  üç geometri:
+
+  | koşu | profil | out/conn (bps) | rec/tick | overlap_x | adım p50 | paket içeriği |
+  |------|--------|----------------|----------|-----------|----------|----------------|
+  | `all` | ring | 246 991 | 1 000,0 | 1,00 | 782 µs | 1 000/1 000 |
+  | `team` | ring | 246 885 | 2 000,0 | 2,00 | 1 563 µs | 500 kendi + 500 düşman (kümüli: hiçbiri gizlenmez) |
+  | `team` | **spread** | **177 526** | 1 153,2 | 1,15 | 1 563 µs | 500 kendi + ~77 düşman |
+
+  `all` sayısı D2 sürekliliğini doğruluyor (D2: 247 813; Δ%0,3). Kümüli
+  geometride `team` yine **sıfır kazanç** (D2 yeniden üretimi: 246 885 ≈
+  246 991) — beklendiği gibi, strateji zayıflığı değil geometri
+  özelliği. **Geniş haritada iddia doğrulandı:** "gerçek MOBA arenasında
+  (geniş harita, seyrek görevli) aynı kod düşmanların çoğunu gizler" →
+  ölçülen: takım paketinde 500 kendi + **~77 düşman** (1 153,2/2 − 500) →
+  **düşman takımın ~%84,6'sı her an pakette yok**. Kazanç, kayıt sayısı
+  (gerçek gizlilik etkisi) olarak **%42,3** (2 000→1 153 rec/tick;
+  `all`'in %57,7'si görünüyor); bayt olarak **%28,1** (177,5 vs 247,0
+  kbps) — fark, geniş haritanın kendisinden: |koordinat|≤1 000 → sint32
+  zigzag 2 bayt (ring'de 1) → kayıt başına ~%25 daha büyük frame; gizlilik
+  oranı kayıt sayısında, bant oranı koordinat kodlamasıyla seyreltiliyor.
+  Not: 1 000 oyuncuda paket (≈7 KB) 1 400 B MTU'yu yine aşıyor
+  (`snap_overflows` 1 186) — gerçek MOBA oyuncu sayısı (10-30) için
+  aşılmaz; MTU sorunu ölçek sorunu, strateji sorunu değil.
+
+- [x] **D — Takım, world state olarak (ve "grup = konum?" sorusunun
+  yazılı cevabı)** — spec'in doğruluğu: önceki tasarımda takım `conn.id`
+  paritesinden türetiliyordu, `group_of` **world okumuyordu** — gruplamanın
+  mekansal olmadığına en kolay kanıttı (ve kolaylaştırdığımız buydu). Bu
+  tur: takım üyeliği **dünya içi oyun durumu** oldu.
+  - `TeamMember(Team)` componenti (join'de `on_join` yazar; kural — conn
+    paritesi — `team_of`'da, artık "join anı kuralı" olarak dokümante);
+    `group_of` conn → entity → **world'deki `TeamMember`** okur; AOI'nin
+    `Position` okumasıyla birebir aynı şekil. `rebuild` sorgusu
+    `(&WireId, &Position, Option<&TeamMember>)` (eski `ent_team` HashMap'i
+    kaldırıldı).
+  - **Runtime takım değişimi** testte kilitli: entity'nin `TeamMember`'i
+    yazıldığında bir sonraki tick'te group takibe alır — entity 0. takımın
+    paketinden düşer, 1. takımın paketinde **aynı wire id** ile belirir
+    (pozisyonlar öyle seçildi ki iki takımın paketi de gözle görülür
+    değişir; snapshots kayıt taşır, rol taşımaz → byte-identik paket
+    ince ayrıntısı test dokümanında). **Kimlik değişmezliği korundu**:
+    group geçişi ≠ wire kimlik geçişi.
+  - **Aradık, yok:** Tasarımda gizli "grup = konum" varsayımı **kalmadı**.
+    Dört stratejinin tümü aynı biçimde: "grup = f(world, conn)". Konumdan
+    gelen anahtar (AOI/PVS) ile oyun durumundan gelen anahtar (takım)
+    core'un grup mekaniklerinde (tick başına yeniden değerlendirme,
+    grup başına snapshot/ledger, grup geçişinde kimlik sürekliliği)
+    **birebir aynı yoldan** geçer; core'un ikisini ayırt eden tek bir
+    dalı/özel durumu yoktur. Takım, "dünyada yaşayan oyun durumu"dur —
+    mekansal değil, ama world dışında da değil.
+  - **`VisionSource` eklenmedi (gerekçe):** Bugün onu `TeamMember`'den
+    ayırt eden *okuyucu yok* — tüm görüş kaynakları, eşit config
+    yarıçapıyla, tam da `TeamMember` taşıyan entity'ler. Eklemek,
+    okuyucusuz ölü state olurdu (denetim turunda `Owner`'u kaldıran
+    disiplinin aynısı). Seam hazır: ward/trap özelliği geldiğinde
+    `rebuild`'in kaynak iterasyonu tek değişim noktası; sözleşme
+    ("kaynak menzilinde görünür") değişmez.
+
+Ham çıktı: `.scratch/*.txt` (gitignore; commit mesajında RESULT satırları).
+Makine: AMD Ryzen 9 7950X 16C/32T, 124 GB RAM, rustc 1.95.0, taskset
+2.42.2, paylaşımlı masaüstü (koşu sırasında loadavg ~10/32 — C1 koşuları
+pin ile, C2 koşuları 8 fiziksel çekirdek sunucu havuzunda).
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
@@ -1041,15 +1231,17 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
 
 - [~] **AOI / oda içi görünürlük** (`DESIGN.md` §8) — tek odada 100k
   bağlantı: 1.5 milyar frame teslimi/sn **CPU** duvarı. **Tek-oda mekansal
-  AOI önceki turda kapatıldı**; bu turda görünürlük **strategi seçimi**
-  oldu (`all`/`spatial`/`team`/`pvs`, `Config.visibility`) ve break-even
-  **ölçüldü**: p50 adım bütçesi 10 000'e kadar korunuyor, bütçe aşan adım
-  oranı 6k %3,8 → 10k %18,9, 10k'da drop+late (in-proc istemci doyuğu;
-  "Kapatılanlar (görünürlük stratejileri turu)" D1). `Visibility` trait'i
-  gerekmedi (C maddesi). Kalan: **oda segmentasyonu** (10k+ duvarı için —
-  tek odanın CPU duvarı, in-proc'tan ayrıştırılmayı bekliyor) ve
-  "birim başına tek kodlama" (D3'te eşik altı bulundu; overlap_x ölçümü
-  eşiği aşarsa yeniden açılır).
+  AOI önceki turda kapatıldı**; sonraki turda görünürlük **strategi
+  seçimi** oldu (`all`/`spatial`/`team`/`pvs`, `Config.visibility`),
+  break-even önce in-proc (p50 10k'ya kadar bütçe altında, kuyruk 6k+
+  aşıyordu — istemci doyuğu karışıktı) ve bu turda **ayrı prosesle net
+  ölçüldü**: p50 bütçeyi **9k-10k arasında** aşıyor (10k: ≥50 ms, %54,8
+  adım bütçeli üstte, `server_hz` 23,2); 10k'da sunucu çekirdek havuzu
+  **%25** dolu → duvar **tek room actor'ünün serisel adım yolu**.
+  `Visibility` trait'i gerekmedi (C maddesi). Kalan: **oda segmentasyonu**
+  (10k+ duvarı için — artık net ölçülmüş: ek çekirdek değil, oda
+  paralelliği) ve "birim başına tek kodlama" (D3'te eşik altı bulundu;
+  overlap_x ölçümü eşiği aşarsa yeniden açılır).
 - [ ] **Delta yayın** — son snapshot farkı; bant kazancı.
 - [ ] **Registry şeritleme** — dispatcher tasarımı registry'yi bloke
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test

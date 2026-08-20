@@ -327,6 +327,13 @@ pub struct RoomReport {
     /// Steps (cumulative) and measured rate (Δsteps/s since the previous
     /// report). Compare against the room's configured `tick_hz`: the room
     /// is on rate when these agree.
+    ///
+    /// Note: a report window in which the room emitted **no new sample**
+    /// (the 1 Hz sample cadence and the 1 Hz report cadence are not
+    /// phase-locked, and shutdown's final report often is such a window)
+    /// reports `hz = 0.0` — read it as "no sample in this window", not
+    /// "the room stopped". Consumers wanting a stable rate should median
+    /// the positive windows (the load generator does).
     pub steps: u64,
     pub hz: f64,
     /// The room's tick budget in µs (the overflow boundary of the histogram).

@@ -137,6 +137,9 @@ pub struct AoiRoom {
     next_wire_id: u64,
     /// World units per cell edge (see module docs, "Cell size").
     cell_size: f32,
+    /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`);
+    /// configuration, not a strategy decision.
+    spawn_half: f32,
     /// Per-cell "no change" ledger: `cell → (wire id → (x, y))`, the exact
     /// wire content of the cell's last emitted block. Keyed by group (cell)
     /// per the [`RoomLogic::snapshot`] contract: one call must not change
@@ -154,15 +157,23 @@ pub struct AoiRoom {
 
 impl AoiRoom {
     /// Build an AOI room with the given `cell_size` (world units per cell
-    /// edge). Clamped to a sane minimum so a degenerate `0` cannot produce
-    /// a single infinite cell.
+    /// edge) over the default 100×100 spawn arena. Clamped to a sane
+    /// minimum so a degenerate `0` cannot produce a single infinite cell.
     #[must_use]
     pub fn new(cell_size: f32) -> Self {
+        Self::with_spawn_half(cell_size, crate::room::DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build an AOI room over a square spawn map of half-size `half` (see
+    /// `gsb_game::room::DemoRoom::with_spawn_half`).
+    #[must_use]
+    pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
             next_wire_id: 0,
             cell_size: cell_size.max(0.5),
+            spawn_half: half.max(1.0),
             last: HashMap::new(),
             buckets: HashMap::new(),
             encoded: 0,
@@ -248,7 +259,13 @@ impl RoomLogic<World> for AoiRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        crate::common::on_join(&mut self.conn_entity, &mut self.next_wire_id, world, conn)
+        crate::common::on_join(
+            &mut self.conn_entity,
+            &mut self.next_wire_id,
+            self.spawn_half,
+            world,
+            conn,
+        )
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
