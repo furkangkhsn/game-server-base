@@ -277,6 +277,12 @@ pub struct ConnSample {
     /// Metric samples this actor dropped on a full (bounded) metrics
     /// channel, delta since its last flush.
     pub metrics_dropped: u64,
+    /// Protocol-violation events counted by this actor's budget (module
+    /// docs in `gsb_core::conn`), delta since its last flush. The net
+    /// scope sums these: a rising total is the budget working (clients
+    /// violating); the per-event detail (peer address, close reason) is in
+    /// the tracing close signal, not here.
+    pub violations: u64,
     /// True on the actor's final flush (connection closing).
     pub last: bool,
 }
@@ -324,6 +330,9 @@ pub struct MetricAccumulator {
     /// Summed delta of connection-actor metric-channel drops (their sample
     /// is delta-based, like the other conn counters).
     conn_metrics_dropped: u64,
+    /// Summed delta of protocol-violation events across all connection
+    /// actors (the violation budget's activity, cumulative).
+    conn_violations: u64,
     /// Cumulative input-action drops per connection (the sender's
     /// attribution: which connection's own input was lost to its full
     /// action channel). The collector owns this state — the connection
@@ -418,6 +427,11 @@ pub struct NetReport {
     /// attribution (who dropped what) is in
     /// [`MetricReport::actions_dropped_top`].
     pub actions_dropped: u64,
+    /// Protocol-violation events counted by the connection actors'
+    /// violation budgets (cumulative, all connections). 0 on a healthy
+    /// server; the per-event signal (peer address, close reason) is the
+    /// structured tracing event emitted at budget exhaustion.
+    pub violations: u64,
 }
 
 /// One periodic report: the server's current numeric state.
@@ -461,6 +475,7 @@ impl MetricAccumulator {
                 }
                 self.conn_metrics_dropped =
                     self.conn_metrics_dropped.saturating_add(c.metrics_dropped);
+                self.conn_violations = self.conn_violations.saturating_add(c.violations);
             }
         }
     }
@@ -569,6 +584,7 @@ impl MetricAccumulator {
                 frames_in: self.conn_frames_in,
                 frames_out: self.conn_frames_out,
                 actions_dropped: actions_dropped_total,
+                violations: self.conn_violations,
             },
             actions_dropped_top,
             rooms,
@@ -623,10 +639,10 @@ impl MetricReport {
         lines.push(format!(
             "gsb-metric scope=net bytes_in={} bytes_out_room={} \
              bytes_out_control={} bytes_out_total={} frames_in={} frames_out={} \
-             actions_dropped={} metrics_dropped={}",
+             actions_dropped={} violations={} metrics_dropped={}",
             n.bytes_in, n.bytes_out_room, n.bytes_out_control,
             n.bytes_out_total, n.frames_in, n.frames_out, n.actions_dropped,
-            self.metrics_dropped
+            n.violations, self.metrics_dropped
         ));
         if !self.actions_dropped_top.is_empty() {
             // Attribution of the net-scope `actions_dropped`: which
@@ -829,6 +845,7 @@ mod tests {
             frames_out: 2,
             actions_dropped: 0,
             metrics_dropped: 2,
+            violations: 0,
             last: false,
         }));
 
@@ -857,6 +874,7 @@ mod tests {
             frames_out: 1,
             actions_dropped: 7,
             metrics_dropped: 0,
+            violations: 3,
             last: true,
         }));
 
@@ -881,6 +899,8 @@ mod tests {
         // Per-connection input-drop attribution: the only dropping sender
         // is c1 (7 actions, from the last:true sample's delta).
         assert_eq!(second.net.actions_dropped, 7);
+        // Violation events sum across the conn samples (0 + 3).
+        assert_eq!(second.net.violations, 3);
         assert_eq!(
             second.actions_dropped_top,
             vec![(ConnectionId(1), 7)]

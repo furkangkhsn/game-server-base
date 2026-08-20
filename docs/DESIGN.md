@@ -279,7 +279,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   farklı anlam kazanabilir, üst katman bilmez.
 - **Opcode bantları:** `1..=64` temel kontrol (AUTH_REQ, AUTH_RESULT,
   JOIN_ROOM_REQ, JOIN_ROOM_RESULT, LEAVE_ROOM_REQ, LEAVE_ROOM_RESULT,
-  HEARTBEAT, HEARTBEAT_ACK, ERROR); `1000+` oyun bandı
+  HEARTBEAT, HEARTBEAT_ACK, ERROR; `10`/`11` = UDP_HELLO/UDP_ACK —
+  rUDP **taşıma işaretleri**, aktör katmanının altında işlenir, mesaj
+  tablosunda değiller); `1000+` oyun bandı
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
@@ -289,9 +291,10 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   auth), `4` oda işlemi başarısız (oda yok / tick hızı uyuşmazlığı),
   `5` oda imha edildi, `6` odada değil, `7` diğer, **`8` oda dolu**
   (nazik reddi — bağlantı **yaşar**, başka odaya join edebilir; sessiz
-  kapatma reconnect fırtınası üretirdi), **`9` sunucu kapattı** (idle
-  timeout ya da sunucu bağlantı cap'i — hemen ardından bağlantı
-  kapatılır).
+  kapatma reconnect fırtınası üretirdi), **`9` sunucu
+  kapattı** (idle timeout, sunucu bağlantı cap'i ya da bağlantının
+  protokol-ihlal bütçesinin tükenmesi — mesaj hangisi olduğunu söyler;
+  hemen ardından bağlantı kapatılır).
 - **Seriştirme:** protobuf. Rust tarafında `prost`, Unity tarafında
   `Google.Protobuf` — aynı `.proto` dosyaları her iki tarafta kullanılır.
   Mesajlar `MessageTable`'da opcode→(de)koducu olarak kayıt edilir; tablo
@@ -300,7 +303,7 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
 - `FrameBody { op, payload: Bytes }` — `Bytes` sayesinde payload kopyasız
   akar (socket → actor → oda → yayın, tek kopya).
 
-## 6. Taşıma soyutlaması (rUDP yolu)
+## 6. Taşıma soyutlaması (TCP + rUDP)
 
 ```rust
 trait Transport: Send + 'static {
@@ -309,17 +312,93 @@ trait Transport: Send + 'static {
 trait Listener: Send + Sync + 'static {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>>;
     fn local_addr(&self) -> Option<SocketAddr> { None }
+    fn close(&self) {}   // §9: rUDP demux'ı sonlandırır (TCP: no-op)
 }
-struct Endpoint { /* pump görevlerini başlatan tek FnOnce */ }
+struct Endpoint { /* pump görevlerini başlatan tek FnOnce; mailbox'ları taşır */ }
 ```
 
-`Endpoint`, bağlantı için reader/writer pump görevlerini başlatır ve
-kaynaklarını (socket yarısı, datagram soketi, …) tamamen kendi içinde
-sahiplenir. Aktör katmanı pump'ları iki `JoinHandle` dışında hiç bilmez.
-rUDP eklendiğinde: `UdpTransport::bind` bir `UdpListener` döndürür;
-`UdpListener::accept` bir datagram başına "endpoint" (aslında bir mantıksal
-oturum) üretir; pump, `ConnIn::Frame`'i aynı mailbox'a yollar. **Aktör
-katmanında değişiklik sıfırdır.**
+`Endpoint`, bağlantı için pump görevlerini başlatır ve kaynaklarını
+(socket yarısı, datagram soketi, …) tamamen kendi içinde sahiplenir.
+Aktör katmanı pump'ları handle'ler dışında hiç bilmez.
+
+**TCP** (`gsb_net::tcp`): klasik yol — bir socket, bir reader pump
+(idle deadline'lı, §3), bir writer pump.
+
+**rUDP** (`gsb_net::udp`, bu tur): bir UDP soketi **tüm** oturumlar için
+ortaktır, yani "bağlantı" bir socket değil, datagram akımlarından
+**sentezlenen** bir mantıksal oturumdur. Topoloji:
+
+```text
+tek demux görevi (listener'ın, bind'de başlatılır)
+  ├─ soket READ'i (tek beklenen kaynak: recv_from; deadline heap varsa
+  │  timeout(min_deadline, recv_from) — deadline yalnız read beklerken
+  │  tetiklenir; hazır datagram her zaman kazanır)
+  ├─ her datagramı peer adresiyle oturum tablolarına route eder
+  │  (HashMap<SocketAddr, UdpSession>; oturum = inbox mailbox + ACK/
+  │  sıralama durumu + last_seen + idle deadline)
+  └─ decode edilen frame'i oturumun inbox mailbox'ına try_send eder
+her oturum: tek WRITER görevi (reader yok — demux ortak reader)
+```
+
+`accept()` bir datagram değil, **oturum** döndürür: oturum, cookie
+el sıkışması tamamlandığı anda demux tarafından ön-oluşturulur (endpoint
+kanalına; crossbeam `Receiver`'in `&self`'den çalışması — kilit yasağı
+altında `Arc<dyn Listener>`'den akışın tek yolu; bkz. ROADMAP tur
+notu) ve accept loop, sunucunun geri kalanı için hiç değişmeden
+işlenir. **Aktör katmanında değişiklik sıfır** kaldı; `gsb-core`'e
+dokunulmadı. Sızan şey `gsb-net` trait şekli (nedeni ROADMAP'te):
+(1) `Endpoint::take_inbox`/`take_outbox` — demux, oturum mailbox'larını
+el sıkışmada, accept loop çalışmadan **önce** kurmak zorunda;
+(2) `start_pump`/`PumpSpawner` artık `(Option<JoinHandle>, JoinHandle)`
+döndürür — UDP'de per-connection reader yoktur; (3) `Listener::close`
+(§9'ların ertelenmiş kapısı) — demux görevi tüm bağlantılardan uzun
+yaşar; (4) peer adresi endpoint'ten aktöre taşınır (ihlal kapatma
+sinyali; §14.5).
+
+**El sıkışma (stateless cookie):** `istemci→HELLO{nonce,0}` /
+`sunucu→HELLO{nonce,F(nonce,peer,key)}` / `istemci→HELLO{nonce,cookie}`
+→ oturum kurulur. `F` = splitmix64 katlanması; `key` proses başına duvar
+saatinden (v1'de kriptografik katman yok — §10). Çift yönlü mesajlar
+aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
+üretilemez. NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
+yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
+kadar yaşar — sınır: `idle_timeout`).
+
+**Datagram çerçevesi:** `[u8 kind]` — `0` RAW `[u16 op][payload]`
+(oyun bandı: kayıp toleranslı, sırasız — snapshot'lar ve MOVE_TO);
+`1` REL `[u32 seq][u16 op][payload]` (kontrol bandı: cumulative ACK +
+RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
+`2` ACK `[u32 next_expected]`; `3` HELLO `[u64 nonce][u64 cookie]`.
+Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
+= oyun (kayıp toleranslı). Yeniden gönderim: RTO 50 ms, vazgeçme
+250 ms (sayılır), out-of-order penceresi 16; çift frame ACK'lenir ama
+yeniden iletmez. ACK'ler demux tarafından oturumun writer'ına **out
+kanalı üzerinden** (UDP_ACK frame olarak) verilir — komut kanalı yok,
+tek-beklenen-kaynak özdeşliği korunur.
+
+**MTU (v1):** `max_datagram_bytes` varsayılan 1472 (1500−20−8). Bütçe
+üstü **çıkan** datagram: parçalanmaz, reddedilmez — **atılır +
+sayılır + oturum başına tek uyarı** (parçalama ayrı bir protokol;
+reddetmek canlı oturumu kırardı). Oda tarafındaki
+`max_snapshot_bytes` (vars. 1400) uyarısı asıl sinyaldir.
+
+**Boşta kapatma (FIN yok):** demux'un `BTreeSet<(Instant, SocketAddr)>`
+deadline heap'i (gömlekli geçersiz kılma — girdi yalnız
+`son_görülme + idle`'e eşkenken geçerli) + `timeout(min_deadline,
+recv_from)`. Sweep, oturuma `ConnIn::ServerClosed` yollar ve oturumu
+kaldırır — TCP'nin reader-pump clock'unun (maddeler turu) UDP karşılığı.
+
+**100k ölçeği:** datagram başına maliyet = 1 `recv_from` syscall + 1
+hash lookup + 1 `BTreeSet` insert (O(log N) ≈ 17 adım) + 1 `try_send`
+≈ 0,5 µs. 100k oturum × 2 datagram/sn ≈ **0,1 core**; oturum başına
+10 datagram/sn (`all` görünürlüğünün tavanı, 3M datagram/sn) ≈ **1,5
+core** — TCP'nin per-connection writer syscall'leriyle aynı mertebeye.
+Asıl 100k duvarı çekirdeğin tek-socket pps'si ve fan-out hacmi
+(görünürlük) — TCP ile aynı sınıf. Elenen alternatifler (matematik
+ROADMAP'te): SO_REUSEPORT shard'leme (%5'ten az kazanır, tek `accept()`
+akışını + ortak ConnectionId alanını kırar), per-due O(N) sweep (join
+churn altında heap'in 80×'i), `accept` içine gömülü demux (self-
+referential future = unsafe/mio olmadan çıkmaz).
 
 ## 7. ECS katmanı
 
@@ -593,10 +672,12 @@ ServerHandle::stop
     son raporu basıp temiz çıkar (bkz. §12)
 ```
 
-Accept loop'un `JoinHandle` ile abort edilmesi v1'in bilinçli bir kısıtıdır:
-listener'ı "kibarca kapatmak" için transport trait'ine kapatma yöntemi
-eklemek gerekir; bu, rUDP'ye kadar ertelendi (yeni bir transport eklerken
-birlikte ele alınacak).
+`Listener::close` kapısı rUDP turunda kullanıldı: `stop()`, registry
+Shutdown'ından sonra listener'ı kapatır — TCP'de no-op, rUDP'de demux
+görevini sonlandırır (socket klonu + endpoint göndericisi düşer;
+writer'lar aktör kaskadıyla çıkar). Accept loop'un `JoinHandle` ile
+abort edilmesi hâlâ v1'in bilinçli kısıtı (demux kapanınca accept de
+doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
 
 ## 10. v1 kısıtları
 
@@ -606,7 +687,12 @@ birlikte ele alınacak).
 | Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz` (tick hızını aşamaz: oda kendi tick hızından hızlı keepalive yapamaz; yüksek değer `KeepaliveRate` ile reddedilir); 0 ile kapatılabilir |
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
-| Accept loop abort | Trait'e close eklemek rUDP ile birlikte | §9 |
+| Accept loop abort | `Listener::close` rUDP turunda eklendi (demux kapatma); accept abort hâlâ kaskadın son halkası | §9 |
+| rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
+| rUDP: **şifreleme yok** | v1 kapsamı (kookie key'i duvar saatinden — yerel saldırgana öngörülebilir, ağ şifrelemesi ayrı katman) | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
+| rUDP: **parçalama yok** — bütçe üstü datagram atılır + sayılır | parçalama ayrı bir protokol (assembly penceresi, timeout, çift teslim); 1400 B oda bütçesi + 1472 B MTU marjı yeterli (snapshot aşımı zaten oda tarafında sayılır) | `snap_overflows` sinyaliyle grup bölme (AOI) + gerekirse frag katmanı — §8 |
+| rUDP: SO_RCVBUF ayarı yok | tokio 1.53.1 `UdpSocket`'inde buffer boyutu setter'ı yok (raw fd gerekir) | tokio setter'ı geldiğinde / raw fd wrapper |
+| rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
 | Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | sürekli (sn başına) rate-limit (tur başına bütçe zaten sınırlayıcıdır) |
@@ -840,8 +926,12 @@ bağlantı başına değil **grup başına** kodlanır (snapshot bir kez kodlan�
   (düzeltilmez, örtülür). Bu, "kayıp paket = bir kademe bayatlık" kabulüdür.
 - seq/ack eklemek = bağlantı başına sıra durumu + yeniden gönderim tamponu
   + zamanlayıcı = **bağlantı başına durum** — §14.1'in ilkesini ihlal eder
-  ve ayrı bir mimaridir. Kapı açık: taşıma soyutlaması (§6) rUDP/UDP yoluna
-  izin verir; gerekirse seq/ack *oraya* eklenir, aktör katmanına değil.
+  ve ayrı bir mimaridir. Kapı açıktı ve rUDP turunda **taşıma katmanında**
+  kullanıldı: rUDP'nin kontrol bandı (AUTH/JOIN/LEAVE/HEARTBEAT) seq/ack +
+  RTO yeniden gönderimi taşır; durum demux/writer'ın yerelinde (aktör
+  katmanı bilmez), oyun bandı (snapshot/MOVE_TO) kasıtlı olarak hâlâ
+  kayıp-toleranslıdır — "kayıp paket = bir kademe bayatlık" kabulü
+  oyun bandında aynen geçerlidir.
 - Deterministik lockstep, paket sıralama garantisi, hata düzeltme (FEC):
   hedeflenmez.
 
@@ -906,3 +996,10 @@ sızdırmama garantisi üç hatla kuruldu (detay + 100k matematiği: ROADMAP
 3. **Adalet:** girdi kaybı yalnızca göndericinin kendi kanalında ve
    atfeli (`actions_dropped_top`); oda çektiği aksiyonu asla atmaz —
    flooding başkasının aksiyonunu evicted edemez.
+4. **Anti-amplifikasyon (protokol-ihlal bütçesi):** bağlantı başına
+   yerel, ağırlıklı **ömür boyu** bütçe (16 puan: Hard ihlal 4, Race 1,
+   sunucu tarafı koşul 0); ilk 3 ihlal cevaplanır (istemci geliştirici
+   tanısı), sonra huni susar (cevap amplifikasyonu sınırlı), bütçe
+   tükenince ERROR 9 + kapatma; peer adresi sinyalle taşınır (WARN
+   satırı firewall/fail2ban'a doğrudan girebilir). Detay: ROADMAP
+   "Kapatılanlar (ihlal bütçesi + rUDP turu)".

@@ -10,6 +10,7 @@ build = "build.rs"
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
+crossbeam-channel = { workspace = true }
 gsb-core = { workspace = true }
 gsb-protocol = { workspace = true }
 bytes = { workspace = true }

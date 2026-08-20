@@ -51,7 +51,12 @@ use gsb_protocol::base::{
 use gsb_protocol::op;
 use prost::Message;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, tcp::OwnedReadHalf};
+use tokio::net::{
+    TcpListener, TcpStream, UdpSocket,
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+};
+
+use gsb_net::udp::UdpClient;
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::mpsc;
 
@@ -172,6 +177,11 @@ struct Args {
     /// socket accepts) until the deadline — the input-flood behaviour
     /// probe for the fairness / drop-attribution guards.
     flood_id: Option<u64>,
+    /// The transport the clients speak (and the in-process / served
+    /// server listens on): `--transport tcp|udp` (default `tcp`). On
+    /// `udp` the client's `connect_ms` is the rUDP cookie-HANDSHAKE
+    /// latency (challenge + proof), not a TCP handshake.
+    transport: gsb_server::TransportKind,
     /// Number of client processes in orchestrator mode (default 1).
     procs: u32,
     /// Pin the spawned processes to disjoint core sets with `taskset`
@@ -188,7 +198,7 @@ struct Args {
 
 /// The usage text (`--help` / `-h`).
 const USAGE: &str = "\
-gsb-loadgen — load generator for gsb servers (N real-TCP clients)
+gsb-loadgen — load generator for gsb servers (N real-socket clients)
 
 Usage:
   gsb-loadgen [N] [client options]            run N clients (in-process or
@@ -205,6 +215,10 @@ Client options:
   --room ID                 room id to join (default 1)
   --stagger-ms MS           client i connects i×ms later (default 0)
   --offset K                first client id (default 0; client i = K+i)
+  --transport tcp|udp       client transport (default tcp). udp = rUDP:
+                            stateless cookie handshake, reliable control
+                            band, loss-tolerant snapshot band; connect_ms
+                            then measures the handshake
   --profile ring|spread     movement profile (default ring — the historical
                             clustered layout; spread = uniform over the
                             ±spawn-half map, the sparse MOBA-like layout)
@@ -265,6 +279,7 @@ fn parse_args() -> Args {
         bind: "127.0.0.1:7777".into(),
         metrics_listen: None,
         orchestrate: false,
+        transport: gsb_server::TransportKind::Tcp,
         procs: 1,
         pin: false,
         pin_server_cores: 8,
@@ -341,6 +356,14 @@ fn parse_args() -> Args {
                 args.idle_timeout_secs = Some(v().parse().expect("number"));
             }
             "--flood-id" => args.flood_id = Some(v().parse().expect("number")),
+            "--transport" => {
+                let s = v();
+                args.transport = match s.as_str() {
+                    "tcp" => gsb_server::TransportKind::Tcp,
+                    "udp" => gsb_server::TransportKind::Udp,
+                    other => panic!("--transport: expected tcp|udp, got {other}"),
+                };
+            }
             s if s.starts_with("--") => panic!("unknown flag {s} (try --help)"),
             s => args.clients = s.parse().expect("N must be a number"),
         }
@@ -410,6 +433,20 @@ struct ClientReport {
     /// Connection-capacity rejections observed (`ERROR` code 9): the
     /// server-wide cap rejected this connection at birth.
     cap_rejected: u64,
+    /// Protocol-violation-budget closes observed (`ERROR` code 9 whose
+    /// message names the violation budget): the anti-amplification
+    /// guardrail closing a connection that exceeded its budget. Same
+    /// *code* as the capacity close (both are "server closed the
+    /// connection"); the message string is what separates them.
+    budget_rejected: u64,
+    /// rUDP transport statistics (all zero on TCP): the client's own
+    /// reliable retransmissions, duplicated inbound REL frames (the
+    /// server's retransmissions), inbound drops on a full out-of-order
+    /// window, and outbound control frames given up (no ACK in time).
+    retrans_out: u64,
+    dup_in: u64,
+    oob_dropped: u64,
+    gave_up: u64,
     /// First/last snapshot sequence with its arrival instant: the server's
     /// measured tick rate is (last_seq − first_seq) / Δt, since the
     /// snapshot sequence is the global tick index.
@@ -445,6 +482,37 @@ struct ClientParams {
     /// in a tight loop until the deadline — the input-flood behaviour
     /// probe for the per-connection pull budget and the drop attribution.
     flood: bool,
+    /// The client's transport (TCP or rUDP; see the `Wire` below).
+    kind: gsb_server::TransportKind,
+}
+
+/// The wire to the server (the only place TCP and rUDP diverge inside
+/// the client loop — see `run_client`).
+enum Wire {
+    /// Length-prefixed frames over a per-connection socket, split: the
+    /// main loop owns the read half, the (dedicated) flood task the
+    /// write half.
+    Tcp {
+        r: OwnedReadHalf,
+        w: OwnedWriteHalf,
+    },
+    /// One shared socket in one task: read and write interleave (UDP has
+    /// no connection to split). Boxed: `UdpClient` carries a 2 KB read
+    /// buffer + queues (keeps the enum small — clippy's
+    /// `large_enum_variant`).
+    Udp(Box<UdpClient>),
+}
+
+/// The rUDP datagram size of one frame (client-side byte accounting
+/// mirrors the bytes actually sent: RAW = kind + op + payload; REL =
+/// kind + seq + op + payload).
+fn wire_in_bytes(op: u16, payload_len: usize) -> u64 {
+    let header = if (1..=64).contains(&op) && op != op::base::UDP_ACK {
+        5
+    } else {
+        1
+    };
+    (header + 2 + payload_len) as u64
 }
 
 async fn run_client(id: u64, p: ClientParams) -> ClientReport {
@@ -462,6 +530,11 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         errors: 0,
         join_rejected: 0,
         cap_rejected: 0,
+        budget_rejected: 0,
+        retrans_out: 0,
+        dup_in: 0,
+        oob_dropped: 0,
+        gave_up: 0,
         seq_first: None,
         seq_last: None,
     };
@@ -470,25 +543,58 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     if p.stagger_ms > 0.0 {
         tokio::time::sleep(Duration::from_secs_f64(id as f64 * p.stagger_ms / 1000.0)).await;
     }
+    // The wire to the server: the ONLY place the two transports diverge
+    // inside the client loop (everything above and below it is
+    // transport-agnostic). On rUDP `connect` is the cookie handshake, so
+    // `connect_ms` measures the handshake latency.
     let t0 = Instant::now();
-    let stream = match TcpStream::connect(p.addr).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("client {id}: connect failed: {e}");
-            return rep;
+    let mut wire = if p.kind == gsb_server::TransportKind::Udp {
+        match UdpClient::connect(p.addr).await {
+            Ok(c) => Wire::Udp(Box::new(c)),
+            Err(e) => {
+                eprintln!("client {id}: handshake failed: {e}");
+                return rep;
+            }
         }
+    } else {
+        let stream = match TcpStream::connect(p.addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("client {id}: connect failed: {e}");
+                return rep;
+            }
+        };
+        stream.set_nodelay(true).ok();
+        let (r, w) = stream.into_split();
+        Wire::Tcp { r, w }
     };
     rep.connect_ms = t0.elapsed().as_millis();
     rep.connected = true;
-    stream.set_nodelay(true).ok();
-    let (mut r, mut w) = stream.into_split();
 
-    // AUTH + JOIN in one write (the connection actor drains in order).
-    let mut out = frame(op::base::AUTH_REQ, &Auth { name: format!("lg-{id}") }.encode_to_vec());
-    out.extend(frame(op::base::JOIN_ROOM_REQ, &JoinRoom { room_id: p.room }.encode_to_vec()));
-    rep.bytes_out += out.len() as u64;
-    if w.write_all(&out).await.is_err() || w.flush().await.is_err() {
-        return rep;
+    // AUTH + JOIN (one coalesced write on TCP — the connection actor
+    // drains in order; two frames on rUDP — its reliable control band
+    // orders them).
+    let auth_payload = Auth { name: format!("lg-{id}") }.encode_to_vec();
+    let join_payload = JoinRoom { room_id: p.room }.encode_to_vec();
+    match &mut wire {
+        Wire::Tcp { w, .. } => {
+            let mut out = frame(op::base::AUTH_REQ, &auth_payload);
+            out.extend(frame(op::base::JOIN_ROOM_REQ, &join_payload));
+            rep.bytes_out += out.len() as u64;
+            if w.write_all(&out).await.is_err() || w.flush().await.is_err() {
+                return rep;
+            }
+        }
+        Wire::Udp(c) => {
+            rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, auth_payload.len());
+            if c.send_frame(op::base::AUTH_REQ, auth_payload).await.is_err() {
+                return rep;
+            }
+            rep.bytes_out += wire_in_bytes(op::base::JOIN_ROOM_REQ, join_payload.len());
+            if c.send_frame(op::base::JOIN_ROOM_REQ, join_payload).await.is_err() {
+                return rep;
+            }
+        }
     }
 
     let t_start = Instant::now();
@@ -535,24 +641,49 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 x: tx as i32,
                 y: ty as i32,
             };
-            let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
+            let move_payload = msg.encode_to_vec();
             rep.moves += 1;
-            rep.bytes_out += f.len() as u64;
-            if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
-                break; // peer gone
+            match &mut wire {
+                Wire::Tcp { w, .. } => {
+                    let f = frame(gsb_game::op::MOVE_TO, &move_payload);
+                    rep.bytes_out += f.len() as u64;
+                    if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
+                        break; // peer gone
+                    }
+                }
+                Wire::Udp(c) => {
+                    rep.bytes_out +=
+                        wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
+                    if c.send_frame(gsb_game::op::MOVE_TO, move_payload).await.is_err() {
+                        break; // session gone (the writer gave up)
+                    }
+                }
             }
         }
         let timeout = p.deadline
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(250));
-        let got = tokio::time::timeout(timeout, read_frame(&mut r))
-            .await
-            .ok()
-            .flatten();
+        // TCP: None from read_frame = EOF (the loop breaks below); rUDP:
+        // None = "quiet window" (no EOF exists — the deadline ends the
+        // run instead).
+        let got = match &mut wire {
+            Wire::Tcp { r, .. } => {
+                tokio::time::timeout(timeout, read_frame(r)).await.ok().flatten()
+            }
+            Wire::Udp(c) => c
+                .recv_frame(timeout)
+                .await
+                .ok()
+                .flatten()
+                .map(|f| (f.op, f.payload.to_vec())),
+        };
         let Some((op, payload)) = got else {
             continue; // timeout: loop
         };
-        rep.bytes_in += (4 + 2 + payload.len()) as u64;
+        rep.bytes_in += match &wire {
+            Wire::Tcp { .. } => (4 + 2 + payload.len()) as u64,
+            Wire::Udp(_) => wire_in_bytes(op, payload.len()),
+        };
         match op {
             op::base::JOIN_ROOM_RESULT => {
                 let m: JoinRoomResult = match JoinRoomResult::decode(&payload[..]) {
@@ -582,10 +713,13 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             op::base::ERROR => {
                 let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
                 match e.code {
-                    // The capacity guardrails, observed from the client
-                    // side: 8 = room full (gentle reject, connection
-                    // stays), 9 = server at connection capacity.
+                    // The guardrails, observed from the client side:
+                    // 8 = room full (gentle reject, connection stays);
+                    // 9 = server closed the connection — either the
+                    // connection-capacity cap or the protocol-violation
+                    // budget (same code; the message separates them).
                     8 => rep.join_rejected += 1,
+                    9 if e.message.contains("violation") => rep.budget_rejected += 1,
                     9 => rep.cap_rejected += 1,
                     _ => rep.errors += 1,
                 }
@@ -601,40 +735,91 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // what actually reaches the tick; the excess is dropped on the
         // flooder's OWN full action channel (attributed to it).
         let msg = gsb_game::game::MoveTo { x: 0, y: 0 };
-        let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
-        while Instant::now() < p.deadline {
-            if w.write_all(&f).await.is_err() {
-                break; // peer gone
+        match &mut wire {
+            Wire::Tcp { w, .. } => {
+                let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
+                while Instant::now() < p.deadline {
+                    if w.write_all(&f).await.is_err() {
+                        break; // peer gone
+                    }
+                    rep.moves += 1;
+                    rep.bytes_out += f.len() as u64;
+                }
             }
-            rep.moves += 1;
-            rep.bytes_out += f.len() as u64;
+            Wire::Udp(c) => {
+                // rUDP: the client is ONE task (read and write share the
+                // socket), so the flood interleaves NON-BLOCKING
+                // read-drains; the flood frames travel the lossy game
+                // band, so retransmit state never gets in the way.
+                let payload = msg.encode_to_vec();
+                while Instant::now() < p.deadline {
+                    if c.send_frame(gsb_game::op::MOVE_TO, payload.clone())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    rep.moves += 1;
+                    rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
+                    while c.recv_frame(Duration::ZERO).await.ok().flatten().is_some() {}
+                }
+            }
         }
     }
 
     // Graceful leave (counted by the server's join/leave metrics) and
     // wait for the ack: without it, the socket close — and any server
     // shutdown that follows — can race ahead of the leave, and the
-    // server never counts it.
-    let f = frame(op::base::LEAVE_ROOM_REQ, &LeaveRoom {}.encode_to_vec());
-    rep.bytes_out += f.len() as u64;
-    if w.write_all(&f).await.is_ok() && w.flush().await.is_ok() {
+    // server never counts it. (rUDP: the leave is a control-band frame,
+    // so it is retransmitted until the server ACKs it; there is no EOF
+    // to race — the 500 ms window ends the wait.)
+    let leave_payload = LeaveRoom {}.encode_to_vec();
+    let leave_sent = match &mut wire {
+        Wire::Tcp { w, .. } => {
+            let f = frame(op::base::LEAVE_ROOM_REQ, &leave_payload);
+            rep.bytes_out += f.len() as u64;
+            w.write_all(&f).await.is_ok() && w.flush().await.is_ok()
+        }
+        Wire::Udp(c) => {
+            rep.bytes_out += wire_in_bytes(op::base::LEAVE_ROOM_REQ, leave_payload.len());
+            c.send_frame(op::base::LEAVE_ROOM_REQ, leave_payload).await.is_ok()
+        }
+    };
+    if leave_sent {
         let leave_deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < leave_deadline {
             let timeout = leave_deadline.saturating_duration_since(Instant::now());
-            let got = tokio::time::timeout(timeout, read_frame(&mut r))
-                .await
-                .ok()
-                .flatten();
+            let got = match &mut wire {
+                Wire::Tcp { r, .. } => {
+                    tokio::time::timeout(timeout, read_frame(r)).await.ok().flatten()
+                }
+                Wire::Udp(c) => c
+                    .recv_frame(timeout)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|f| (f.op, f.payload.to_vec())),
+            };
             let Some((op, payload)) = got else {
                 break;
             };
-            rep.bytes_in += (4 + 2 + payload.len()) as u64;
+            rep.bytes_in += match &wire {
+                Wire::Tcp { .. } => (4 + 2 + payload.len()) as u64,
+                Wire::Udp(_) => wire_in_bytes(op, payload.len()),
+            };
             if op == op::base::LEAVE_ROOM_RESULT {
                 let _ = LeaveRoomResult::decode(&payload[..]);
                 rep.left = true;
                 break;
             }
         }
+    }
+    // The client's rUDP transport statistics (all zero on TCP).
+    if let Wire::Udp(c) = &wire {
+        rep.retrans_out = c.stats.retrans_out;
+        rep.dup_in = c.stats.dup_in;
+        rep.oob_dropped = c.stats.oob_dropped;
+        rep.gave_up = c.stats.gave_up;
     }
     rep
 }
@@ -743,6 +928,7 @@ async fn start_inprocess(
     vision_radius: f32,
     max_snapshot_bytes: usize,
     spawn_half: f32,
+    transport: gsb_server::TransportKind,
     overrides: ServerOverrides,
 ) -> Result<InProcessServer, gsb_server::ServerError> {
     let mut cfg = gsb_server::Config {
@@ -753,6 +939,7 @@ async fn start_inprocess(
         team_vision_radius: vision_radius,
         max_snapshot_bytes,
         spawn_half_size: spawn_half,
+        transport,
         ..Default::default()
     };
     apply_overrides(&mut cfg, &overrides);
@@ -790,7 +977,10 @@ async fn run(args: Args) {
     let (addr, inproc, rep_rx, server) = match &args.addr {
         Some(addr) => {
             let a: SocketAddr = addr.parse().expect("valid --addr HOST:PORT");
-            eprintln!("mode: external server at {a} (client-side numbers only)");
+            eprintln!(
+                "mode: external server at {a} (transport={}; client-side numbers only)",
+                args.transport
+            );
             (a, false, None, None)
         }
         None => {
@@ -800,6 +990,7 @@ async fn run(args: Args) {
                 args.vision_radius,
                 args.max_snapshot_bytes,
                 args.server_spawn_half,
+                args.transport,
                 ServerOverrides {
                     max_players: args.max_players,
                     max_connections: args.max_connections,
@@ -809,7 +1000,10 @@ async fn run(args: Args) {
             .await
             .expect("server starts");
             let addr = s.handle.addr;
-            eprintln!("mode: in-process server at {addr} (clients share CPU with server)");
+            eprintln!(
+                "mode: in-process server at {addr} (transport={}; clients share CPU with server)",
+                args.transport
+            );
             (addr, true, Some(s.rep_rx), Some(s.handle))
         }
     };
@@ -858,6 +1052,7 @@ async fn run(args: Args) {
         spawn_half: args.spawn_half,
         deadline,
         flood: false,
+        kind: args.transport,
     };
     let mut clients = Vec::with_capacity(n as usize);
     for i in 0..n {
@@ -883,7 +1078,8 @@ async fn run(args: Args) {
         for r in &reports {
             println!(
                 "CLIENT id={} connected={} connect_ms={} joined={} left={} snapshots={} \
-                 bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} hz={}",
+                 bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
+                 budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} hz={}",
                 r.id,
                 r.connected,
                 r.connect_ms,
@@ -896,6 +1092,11 @@ async fn run(args: Args) {
                 r.errors,
                 r.join_rejected,
                 r.cap_rejected,
+                r.budget_rejected,
+                r.retrans_out,
+                r.dup_in,
+                r.oob_dropped,
+                r.gave_up,
                 match measured_hz(r) {
                     Some(h) => format!("{h:.3}"),
                     None => "-".to_string(),
@@ -1054,6 +1255,11 @@ fn print_report(
     let errors: u64 = reports.iter().map(|r| r.errors).sum();
     let join_rejected: u64 = reports.iter().map(|r| r.join_rejected).sum();
     let cap_rejected: u64 = reports.iter().map(|r| r.cap_rejected).sum();
+    let budget_rejected: u64 = reports.iter().map(|r| r.budget_rejected).sum();
+    let retrans_out: u64 = reports.iter().map(|r| r.retrans_out).sum();
+    let dup_in: u64 = reports.iter().map(|r| r.dup_in).sum();
+    let oob_dropped: u64 = reports.iter().map(|r| r.oob_dropped).sum();
+    let gave_up: u64 = reports.iter().map(|r| r.gave_up).sum();
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
 
@@ -1065,15 +1271,30 @@ fn print_report(
         args.offset + args.clients.saturating_sub(1)
     );
     println!(
-        "clients: connected={connected}/{} joined={joined} left={left} errors={errors} join_rejected={join_rejected} cap_rejected={cap_rejected}",
+        "clients: transport={} connected={connected}/{} joined={joined} left={left} errors={errors} join_rejected={join_rejected} cap_rejected={cap_rejected} budget_rejected={budget_rejected}",
+        args.transport,
         args.clients
     );
+    // The rUDP client-side reliability picture (all zero on TCP): what
+    // the clients' own reliable band had to do to keep the control path
+    // loss-free (retrans_out = their retransmits; dup_in = the SERVER's
+    // retransmits observed; gave_up = a control frame that never landed).
+    if args.transport == gsb_server::TransportKind::Udp {
+        println!(
+            "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up}",
+        );
+    }
     let slowest = reports
         .iter()
         .filter(|r| r.connected)
         .max_by_key(|r| r.connect_ms);
     println!(
-        "connect: p50={}ms p99={}ms slowest={}ms (client #{})",
+        "connect{}: p50={}ms p99={}ms slowest={}ms (client #{})",
+        if args.transport == gsb_server::TransportKind::Udp {
+            " (handshake)"
+        } else {
+            ""
+        },
         pctl(&mut conns_ms, 0.50),
         pctl(&mut conns_ms, 0.99),
         slowest.map(|r| r.connect_ms).unwrap_or(0),
@@ -1193,7 +1414,9 @@ fn print_report(
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
          server_cpu_s={:.1} clients_cpu_s={:.1} \
-          join_rejected={} cap_rejected={} actions_dropped={} actions_dropped_top={}",
+          join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
+           actions_dropped_top={} transport={} retrans_out={} dup_in={} oob_dropped={} \
+           gave_up={}",
         mode,
         args.visibility,
         args.max_snapshot_bytes,
@@ -1245,6 +1468,7 @@ fn print_report(
         sep.map(|s| s.clients_cpu_s).unwrap_or(0.0),
         join_rejected,
         cap_rejected,
+        budget_rejected,
         net.map(|n| n.actions_dropped).unwrap_or(0),
         last_room
             .map(|l| {
@@ -1255,6 +1479,11 @@ fn print_report(
                     .join(",")
             })
             .unwrap_or_default(),
+        args.transport,
+        retrans_out,
+        dup_in,
+        oob_dropped,
+        gave_up,
     );
 }
 
@@ -1403,6 +1632,7 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.frames_in);
     w.u64(r.net.frames_out);
     w.u64(r.net.actions_dropped);
+    w.u64(r.net.violations);
     w.u32(r.actions_dropped_top.len() as u32);
     for (conn, n) in &r.actions_dropped_top {
         w.u64(conn.0);
@@ -1527,6 +1757,7 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
         frames_in: r.u64()?,
         frames_out: r.u64()?,
         actions_dropped: r.u64()?,
+        violations: r.u64()?,
     };
     let n_top = r.u32()?;
     let mut actions_dropped_top = Vec::with_capacity(n_top as usize);
@@ -1561,6 +1792,7 @@ async fn serve(args: Args) {
         team_vision_radius: args.vision_radius,
         max_snapshot_bytes: args.max_snapshot_bytes,
         spawn_half_size: args.server_spawn_half,
+        transport: args.transport,
         ..Default::default()
     };
     // Capacity / lifecycle overrides (same semantics as in-process: an
@@ -1816,6 +2048,11 @@ struct ClientRec {
     errors: u64,
     join_rejected: u64,
     cap_rejected: u64,
+    budget_rejected: u64,
+    retrans_out: u64,
+    dup_in: u64,
+    oob_dropped: u64,
+    gave_up: u64,
     hz: Option<f64>,
 }
 
@@ -1838,6 +2075,11 @@ fn parse_client_line(line: &str) -> Option<ClientRec> {
         errors: get("errors")?.parse().ok()?,
         join_rejected: get("join_rejected")?.parse().ok()?,
         cap_rejected: get("cap_rejected")?.parse().ok()?,
+        budget_rejected: get("budget_rejected")?.parse().ok()?,
+        retrans_out: get("retrans_out")?.parse().ok()?,
+        dup_in: get("dup_in")?.parse().ok()?,
+        oob_dropped: get("oob_dropped")?.parse().ok()?,
+        gave_up: get("gave_up")?.parse().ok()?,
         hz: match get("hz")?.as_str() {
             "-" => None,
             v => v.parse().ok(),
@@ -1953,6 +2195,8 @@ async fn orchestrate(args: Args) {
         args.max_snapshot_bytes.to_string(),
         "--spawn-half-size".into(),
         args.server_spawn_half.to_string(),
+        "--transport".into(),
+        args.transport.to_string(),
         "--duration".into(),
         (args.duration + Duration::from_secs(3)).as_secs().to_string(),
         "--workers".into(),
@@ -1995,18 +2239,33 @@ async fn orchestrate(args: Args) {
     let server_addr: SocketAddr =
         format!("127.0.0.1:{server_port}").parse().expect("addr");
     let probe_deadline = Instant::now() + Duration::from_secs(10);
+    // Readiness: a TCP connect probe on tcp; on udp there is no SYN to
+    // probe with — one cookie-handshake CHALLENGE (a bare challenge
+    // request establishes nothing on the server).
+    let probe_sock = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
+        .await
+        .expect("probe socket binds");
     loop {
-        match TcpStream::connect(server_addr).await {
-            Ok(mut s) => {
-                let _ = s.shutdown().await;
-                break;
+        let ready = if args.transport == gsb_server::TransportKind::Udp {
+            UdpClient::challenge_probe(&probe_sock, server_addr, Duration::from_millis(200))
+                .await
+        } else {
+            match TcpStream::connect(server_addr).await {
+                Ok(mut s) => {
+                    let _ = s.shutdown().await;
+                    true
+                }
+                Err(_) => false,
             }
-            Err(_) if Instant::now() >= probe_deadline => {
-                eprintln!("orchestrate: server socket not accepting after 10 s; clients will report their own connect failures");
-                break;
-            }
-            Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+        };
+        if ready {
+            break;
         }
+        if Instant::now() >= probe_deadline {
+            eprintln!("orchestrate: server socket not ready after 10 s; clients will report their own connect failures");
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     // ── client children ───────────────────────────────────────────────
@@ -2047,6 +2306,8 @@ async fn orchestrate(args: Args) {
             },
             "--spawn-half-size".into(),
             args.spawn_half.to_string(),
+            "--transport".into(),
+            args.transport.to_string(),
             "--workers".into(),
             workers.to_string(),
         ];
@@ -2256,6 +2517,11 @@ async fn orchestrate(args: Args) {
             errors: c.errors,
             join_rejected: c.join_rejected,
             cap_rejected: c.cap_rejected,
+            budget_rejected: c.budget_rejected,
+            retrans_out: c.retrans_out,
+            dup_in: c.dup_in,
+            oob_dropped: c.oob_dropped,
+            gave_up: c.gave_up,
             seq_first: None,
             seq_last: None,
         })

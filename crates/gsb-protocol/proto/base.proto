@@ -47,8 +47,10 @@ message HeartbeatAck {
 //   7 = other
 //   8 = room full (gentle reject — the connection STAYS ALIVE; join
 //       another room or retry later)
-//   9 = server closed (idle timeout or server at connection capacity —
-//       the connection is closed right after this frame)
+//   9 = server closed (idle timeout, server at connection capacity, or
+//       the connection's protocol-violation budget exhausted — see the
+//       message for which; the connection is closed right after this
+//       frame)
 message Error {
   uint32 code = 1;
   string message = 2;

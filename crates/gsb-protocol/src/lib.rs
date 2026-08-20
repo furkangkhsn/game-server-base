@@ -29,6 +29,16 @@ pub mod op {
         pub const HEARTBEAT: u16 = 7;
         pub const HEARTBEAT_ACK: u16 = 8;
         pub const ERROR: u16 = 9;
+        /// rUDP transport-level marker (NOT a message-table message): the
+        /// stateless handshake challenge/proof that travels in its own
+        /// datagram kind (see `gsb_net::udp`), handled entirely below the
+        /// actor layer. Payload: `[u64 LE nonce][u64 LE cookie]`.
+        pub const UDP_HELLO: u16 = 10;
+        /// rUDP transport-level marker (NOT a message-table message): a
+        /// cumulative reliable-band acknowledgment, handled below the
+        /// actor layer (the connection actor never sees it). Payload:
+        /// `[u32 LE next expected sequence]`.
+        pub const UDP_ACK: u16 = 11;
     }
 
     /// First opcode reserved for game crates.

@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use gsb_core::channel::{FrameBatch, channel};
-use gsb_core::conn::{ConnIn, ConnectionActor};
+use gsb_core::channel::channel;
+use gsb_core::conn::ConnectionActor;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
@@ -87,7 +87,40 @@ impl std::fmt::Display for Visibility {
 }
 use gsb_net::tcp::TcpTransport;
 use gsb_net::transport::Transport;
+use gsb_net::udp::{UdpTransport, UdpTransportConfig};
 use gsb_protocol::MessageTable;
+
+/// The wire transport (see `config.example.toml` and `docs/DESIGN.md` §6).
+///
+/// Both transports sit behind the same `gsb_net::transport` traits, so
+/// the actor layer is identical for either; they differ in the wire
+/// protocol and the session lifecycle:
+///
+/// - `Tcp`: one socket per connection, length-prefixed frames, stream
+///   semantics (the reader pump's idle timeout is the teardown guard).
+/// - `Udp`: rUDP — one socket for every session, a stateless cookie
+///   handshake (anti-amplification), a reliable control band over a
+///   loss-tolerant snapshot band, a datagram budget, and idle teardown
+///   via the demux's deadline heap (no FIN in UDP). See `gsb_net::udp`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportKind {
+    /// Length-prefixed TCP (the default).
+    #[default]
+    Tcp,
+    /// rUDP (one shared socket, one shared demux).
+    Udp,
+}
+
+impl std::fmt::Display for TransportKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        };
+        f.write_str(s)
+    }
+}
 
 /// Server configuration (see `config.example.toml`).
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -152,6 +185,16 @@ pub struct Config {
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured break-even.
+    /// The transport (see [`TransportKind`]).
+    pub transport: TransportKind,
+    /// The rUDP datagram budget in bytes (transport-level guard; default
+    /// 1472 = MTU 1500 − IP 20 − UDP 8). Used only when
+    /// [`Self::transport`] = `Udp`. See `gsb_net::udp` (feature 3:
+    /// oversized frames are dropped and counted, never fragmented).
+    pub udp_max_datagram_bytes: usize,
+    /// World units per AOI cell edge (used only when
+    /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
+    /// `max_snapshot_bytes` / density relation and the measured break-even.
     pub aoi_cell_size: f32,
     /// World units an enemy must be within to be visible to a team (used
     /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
@@ -185,6 +228,8 @@ impl Default for Config {
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
             visibility: Visibility::default(),
+            transport: TransportKind::default(),
+            udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
@@ -255,6 +300,10 @@ pub struct ServerHandle {
     /// The metrics collector (emits one final report when the ticker's
     /// broadcast closes).
     metrics: JoinHandle<()>,
+    /// The bound listener. `stop` closes it *before* aborting the accept
+    /// loop: for the rUDP transport this is what stops the shared demux
+    /// task (a plain drop would not reach it — see `Listener::close`).
+    listener: Arc<dyn gsb_net::transport::Listener>,
     /// The actual bound address (useful when binding port 0 in tests).
     pub addr: SocketAddr,
 }
@@ -263,12 +312,14 @@ impl ServerHandle {
     /// Shut the server down: the registry tears down connections and rooms
     /// (rooms get a control `Shutdown`, processed on their next tick); the
     /// ticker is aborted, which closes the broadcast and stops any room that
-    /// missed its window; the accept loop is hard-aborted (documented v1
-    /// limitation). The metrics collector is awaited last: it emits one
-    /// final report when the broadcast closes.
+    /// missed its window; the listener is closed (stopping any transport
+    /// shared state, e.g. the rUDP demux); the accept loop is hard-aborted
+    /// (documented v1 limitation). The metrics collector is awaited last:
+    /// it emits one final report when the broadcast closes.
     pub async fn stop(self) {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
         self.ticker.abort();
+        self.listener.close();
         self.accept.abort();
         let _ = self.metrics.await;
     }
@@ -490,10 +541,30 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
         }
     }
 
-    // Bind the transport, then run the accept loop.
-    let transport: Arc<dyn Transport> = Arc::new(TcpTransport {
-        max_frame_bytes: cfg.max_frame_bytes,
+    // Session-lifecycle idle window (`0` disables): the reader pump's
+    // clock on TCP, the demux deadline heap's window on rUDP.
+    let idle_timeout = (cfg.idle_timeout_secs > 0.0).then(|| {
+        std::time::Duration::from_secs_f64(cfg.idle_timeout_secs)
     });
+
+    // Bind the transport (config-selectable: TCP or rUDP — same actor
+    // layer, see `TransportKind`), then run the accept loop.
+    let transport: Arc<dyn Transport> = match cfg.transport {
+        TransportKind::Tcp => Arc::new(TcpTransport {
+            max_frame_bytes: cfg.max_frame_bytes,
+        }),
+        TransportKind::Udp => Arc::new(UdpTransport {
+            config: UdpTransportConfig {
+                // The demux pre-creates the mailboxes at handshake: same
+                // capacities as the TCP path (cfg.conn_inbox/conn_out are
+                // the fallbacks `Endpoint::take_*` would use).
+                inbox_capacity: cfg.conn_inbox,
+                outbox_capacity: cfg.conn_out,
+                max_datagram_bytes: cfg.udp_max_datagram_bytes,
+                idle_timeout,
+            },
+        }),
+    };
     let listener = transport.bind(bind).await?;
     let addr = listener.local_addr().ok_or_else(|| {
         ServerError::BadBind(cfg.bind.clone(), "listener reports no address".into())
@@ -501,17 +572,14 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
 
     let accept_tx = reg_tx.clone();
     let conn_metrics_tx = metrics_tx.clone();
-    // Session-lifecycle idle window (reader pump): `0` disables.
-    let idle_timeout = (cfg.idle_timeout_secs > 0.0).then(|| {
-        std::time::Duration::from_secs_f64(cfg.idle_timeout_secs)
-    });
+    let accept_listener = Arc::clone(&listener);
     let accept = tokio::spawn(async move {
         info!(%addr, "accepting connections");
         let mut next_conn: u64 = 1;
         loop {
             // `accept` consumes the Arc; clone it per iteration.
-            let l = Arc::clone(&listener);
-            let endpoint = match l.accept().await {
+            let l = Arc::clone(&accept_listener);
+            let mut endpoint = match l.accept().await {
                 Ok(endpoint) => endpoint,
                 Err(e) => {
                     warn!(%e, "accept error; backing off");
@@ -525,8 +593,20 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
             let conn = ConnectionId(next_conn);
             next_conn += 1;
 
-            let (in_tx, in_rx) = channel::<ConnIn>(cfg.conn_inbox);
-            let (out_tx, out_rx) = channel::<FrameBatch>(cfg.conn_out);
+            // The peer address (for the connection actor's violation-close
+            // signal — see `gsb_core::conn`); a transport that does not
+            // expose one reports an unspecified address.
+            let peer = endpoint
+                .peer()
+                .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
+
+            // The connection's mailboxes, from the endpoint: pre-created
+            // by a transport that establishes the session itself (rUDP:
+            // at handshake, before this loop runs), created here for a
+            // transport that does not (TCP — the exact channels this loop
+            // used to create directly).
+            let (in_tx, in_rx) = endpoint.take_inbox(cfg.conn_inbox);
+            let (out_tx, out_rx) = endpoint.take_outbox(cfg.conn_out);
 
             // Reader + writer pumps (they finish on their own when the
             // peer or the actor goes away; the idle window, if enabled,
@@ -548,6 +628,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
             tokio::spawn(
                 ConnectionActor::new(
                     conn,
+                    peer,
                     Arc::clone(&table),
                     accept_tx.clone(),
                     in_rx,
@@ -564,6 +645,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
         accept,
         ticker: ticker_task,
         metrics,
+        listener,
         addr,
     })
 }

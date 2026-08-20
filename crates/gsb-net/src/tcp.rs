@@ -77,7 +77,7 @@ impl Listener for TcpListenerHandle {
             let (stream, peer) = self.listener.accept().await?;
             stream.set_nodelay(true)?;
             debug!(%peer, "connection accepted");
-            Ok(self.make_endpoint(stream))
+            Ok(self.make_endpoint(stream, peer))
         })
     }
 
@@ -87,7 +87,7 @@ impl Listener for TcpListenerHandle {
 }
 
 impl TcpListenerHandle {
-    fn make_endpoint(&self, stream: TcpStream) -> Endpoint {
+    fn make_endpoint(&self, stream: TcpStream, peer: std::net::SocketAddr) -> Endpoint {
         let (read_half, write_half) = stream.into_split();
         let reader = TcpReader {
             inner: LengthDelimitedCodec::builder()
@@ -99,14 +99,19 @@ impl TcpListenerHandle {
             inner: write_half,
             buf: BytesMut::with_capacity(1024),
         };
+        // The reader handle is `Some` here: TCP has a per-connection read
+        // half, so the reader pump is genuinely this endpoint's task.
         Endpoint::new(
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
                   idle_timeout: Option<std::time::Duration>| {
-                spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout)
+                let (read, write) =
+                    spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                (Some(read), write)
             },
         )
+        .with_peer(peer)
     }
 }
 

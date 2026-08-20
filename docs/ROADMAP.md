@@ -36,11 +36,227 @@ oda muhasebesi `gsb_game::common`'de tek kopya; D1: p50 adım bütçesi
 D2: c5 %82 / PVS %49 bant tasarrufu, team bu yük geometrisinde sıfır
 kazanc–2× kodlama, D3: overlap 1,0–8,28 ölçülüp "birim başına tek
 kodlama" tasarımı eşik altında bırakıldı (aşağıda, "Kapatılanlar
-(görünürlük stratejileri turu)"). Test 44 → 58.
-44/44 test yeşil (+1 var olan `#[ignore]`'li gsb-lint doctest).
+(görünürlük stratejileri turu)"); **protokol-ihlal bütçesi** kuruldu —
+bağlantı başına ağırlıklı ömür-boyu bütçe (16 puan), ilk 3 ihlal
+cevaplanır sonra huni susar (cevap amplifikasyonu sınırlı), tükenince
+ERROR 9 + kapatma, peer adresi sinyalle taşınır; ve **rUDP taşıması**
+eklendi — tek soket, tek demux, cookie el sıkışması, kontrol/oyun band
+ayrımı, MTU drop+count, BTreeSet idle sweep; e2e akışlarının 7/7'si
+**her iki taşımada** aynı niyetle çalışıyor, loadgen `--transport
+udp` ile TCP'ye karşı yan yana ölçüldü (150 istemci: 30 Hz korundu,
+snapshot bant genişliği eşdeğer, handshake TCP'nin altındaydı).
+Test 58 → **83** (83/83 yeşil +1 var olan `#[ignore]`'li gsb-lint
+doctest; hiçbir eski test silinmedi/ihmal edilmedi).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek henüz ölçülmedi;
 100/500/1000/2000 turu aşağıda), **robustluk** ve **güvenlik**
 başlıklarındaki kalan işler.
+
+## Kapatılanlar (ihlal bütçesi + rUDP turu)
+
+Bu tur iki bölüm: **A — protokol-ihlal bütçesi** (cevap amplifikasyonu
+sınırı; istemci geliştirici tanısı) ve **B — rUDP taşıması**
+(DESIGN §6'daki "aktör katmanında değişiklik sıfır" iddiasının
+yapısal sınavı: UDP'de "bağlantı" bir socket değil, datagram
+akımlarından sentezlenen oturumdur). Makine: 32 core / 124 GB /
+rustc 1.95.0 (koşular release; in-proc yük ölçümleri istemcilerle
+server'ı aynı CPU'da paylaşıyor).
+
+### A — Protokol-ihlal bütçesi
+
+Spec'in iki sorusu: (1) amplifikasyon sınırı nasıl konur, (2) istemci
+geliştirici neden reddedildiğini anlasın. Cevap: **bağlantı
+actor'ünün YEREL durumunda** bir sayaç (kanal yok, görev yok,
+registry bilmez; bağlantı ölür sayaç ölür):
+
+- **Bütçe: ömür boyu toplam 16 ağırlıklı puan** (sınıf ağırlıkları:
+  Hard = 4, Race = 1, sunucu tarafı koşullar = 0). *Neden kayan
+  pencere değil:* ilgili pencere bağlantı ömrüdür — istemci ya
+  düzelir ya ölür; churn yapan istemcinin penceresi zaten sıfırdır
+  (yeni bağlantı = yeni bütçe, bu zaten yeniden-auth'un doğal
+  sonucu). Kayan pencere = bağlantı başına zamanlama durumu +
+  per-tick iş — sıfır kazanç.
+- **Ağırlık sınıfları:** Hard (bilinmeyen opcode, decode hatası,
+  auth ihlali = 4) → 4 ihlahta kapanır; Race (NotInRoom = 1) →
+  meşru yarışlar (oda tick sınırında ölüm, leave→rejoin) bütçeyi
+  neredeyse çizmez (16 race gerekli); sunucu tarafı koşullar
+  (cap/dolu oda = 0) → istemcinin suçu değil, hiç sayılmaz.
+- **İlk 3 cevaplanır, sonra susulur:** istemci geliştiriciye 3
+  hata mesajı gider (tanı yeterli), sonra ERROR hunisi susar —
+  amplifikasyon sınırlı kalır (50 reddedilen istemci = 150 ERROR
+  toplamı; sınırsızda 1550+ olurdu; ölçüm: 150 istemci load'da
+  `errors=150`, tur öncesi sınırsız davranış ~4×'i).
+- **Kapanma:** bütçe tükenince ERROR 9 + mesajda "violation" +
+  temiz cleanup kaskadı (mevcut huni — yeni kapatma yolu yok).
+- **Peer adresi TAŞINIR:** `Endpoint::peer()` → connection
+  actor'ü → kapanma WARN satırı (`self.conn=… self.peer=…`) —
+  operatör satırı firewall/fail2ban'a doğrudan verebilir; v1'de
+  ban listesi yok (spec bunu kapsam dışı ilan etti — burada yalnız
+  SİNYAL kuruldu, KULLANIMI kurulmadı).
+
+**Elenen alternatifler:** (a) kayan pencere (yukarıda); (b) eşit
+ağırlık (race'ler Hard ile aynı ağırlıkta → meşru churn'li
+istemciler bütçeyi eritir, saldırganla ayrımı zayıflar); (c) her
+ihlale cevap (amplifikasyon = spec'in başlıca sorusu, sınırı
+yok); (d) adresten yoksun sinyal (operatör elini kolunu bağlar —
+peer zaten actor'de, taşıma bedelsiz).
+
+**Ölçüm (150 istemci, room-full, in-proc, release):**
+`joined=100 … errors=150 join_rejected=50 cap_rejected=0
+budget_rejected=50 actions_dropped=0`; kapanma kaydı
+kendine yeter: `closing connection: protocol violation budget
+exhausted self.conn=c64 self.peer=127.0.0.1:52116 violations=16
+answered=3 score=16`.
+
+**Spec düzeltmesi (not):** spec, bilinmeyen opcode'ların zaten
+sınırsız ERROR ürettiğini varsaydı; gerçek actor'de kayıtsız
+**temel bant** op'leri (10..999) odaya FORWARD ediliyordu —
+buda turda `UnknownOpcode` dalı eklendi (10/11 = UDP taşıma
+işaretleri belgeli; TCP'de bunlar bilinmeyen op = bütçeli).
+
+### B — rUDP taşıması
+
+**Yapısal fark:** TCP'de `accept()` kernel'in bitirdiği bir
+bağlantıyı teslim eder; UDP'de bir soket **tüm** oturumları
+taşıyor, dolayısıyla "accept" datagram akımından oturum
+sentezlemektir. Seçilen topoloji (DESIGN §6'da detaylı): **tek
+ortak demux görevi** (listener'ın, `bind()`'de başlatılır) tüm
+datagramları okur ve peer adresiyle per-oturum mailbox'lara
+route eder; her oturum yalnız **writer** görevi taşır (reader
+yok). `accept()` = el sıkışma tamamlanınca demux'un ön-oluşturduğu
+oturum endpoint'lerinin (crossbeam bounded(1024)) akışı.
+
+**100k matematiği (seçilen demux):** datagram başına = 1
+`recv_from` syscall + 1 hash lookup + 1 `BTreeSet` insert
+(O(log 100k) ≈ 17 adım) + 1 `try_send` ≈ 0,5 µs → 100k oturum
+× 2 datagram/sn ≈ **0,1 core**; oturum başına 10 datagram/sn
+(`all` görünürlüğünün tavanı; 3M datagram/sn) ≈ **1,5 core** —
+TCP'nin per-connection writer syscall yüküyle aynı mertebeye.
+Asıl 100k duvarı çekirdeğin tek-socket pps'si + fan-out hacmi
+(görünürlük) — TCP ile aynı sınıf, başka değil.
+
+**Elenen alternatifler (matematik):**
+- **SO_REUSEPORT shard'leme** (N soket, N demux, kernel hash):
+  tek demux CPU'sunu ~1,5 → 1,5/N core'a indirir — ama toplam
+  pps tavanı aynı kaldığı için kazanım **%5'ten az**; ve üç yapı
+  kırılır: tek `accept()` akışı (shard başına accept = registry'nin
+  tek-accept akış modeli), ortak monoton `ConnectionId` alanı
+  (shard başına sayacı = kimlik değişmezinin kırılması), ortak
+  idle heap (shard başına saat).
+- **Per-due O(N) sweep** (deadline'a kadar bekle, tabloyu tara):
+  heap'in O(log N) insert/remove'u yerine O(N) tarayış — join/
+  leave churn'ında (100k'da her join/leave bir girdi) 80× maliyet;
+  ayrıca "sıradaki due"yu bulmak için de tarama gerekir.
+- **`Listener::accept` içine gömülü demux:** `accept`'in döndürdüğü
+  future, demux'un kendisini (soketi) borçlanması gerekir →
+  self-referential future → 'static stream için unsafe/mio
+  seviyesinde iş — kanal yasağı + `unsafe_code="forbind"` ile
+  çıkmaz.
+
+**Zorunlu özellikler (hepsi yapıldı):**
+1. **El sıkışma cookie/token:** stateless 3-message cookie
+   (`HELLO{nonce,0}` → `HELLO{nonce,F(nonce,peer,key)}` →
+   `HELLO{nonce,cookie}`); `F` = splitmix64 katlaması, key proses
+   başına duvar saatinden. Oturum durumu **yalnızca** son mesaj
+   doğrulanınca kurulur (asıl hedef: handshake amplifikasyonu —
+   sahte proof key bilmeden üretilemez; oran ≤ 1 çünkü iki
+   yöndeki mesaj aynı boyutta).
+2. **Band ayrımı:** kontrol bandı (AUTH/JOIN/LEAVE/HEARTBEAT =
+   `op 1..=64`, 11 hariç) REL: `[u32 seq][u16 op][payload]` +
+   cumulative ACK + RTO 50 ms yeniden gönderim (vazgeçme 250 ms,
+   sayılır) + 16'lık out-of-order penceresi, **sıralı teslim**.
+   Oyun bandı (`op ≥ 1000`) RAW: `[u16 op][payload]` — kayıp
+   toleranslı, sırasız (snapshot'lar tam durum; MOVE_TO'nun kaybı
+   bir sonrakiyle örtülür).
+3. **MTU:** `max_datagram_bytes` varsayılan 1472 (1500−20 IP−8
+   UDP). Bütçe üstü **çıkan** datagram: **atılır + sayılır +
+   oturum başına tek uyarı**. *Neden parçalama değil:* parçalama
+   bir protokol (assembly penceresi, frag timeout, parça kaybında
+   tüm fragment'ı bekleme) — v1 kapsamı (aşağıda); *neden ret
+   değil:* ret, gönderen aktöre geri sinyal gerektirir (yeni
+   kanal/yön) ve canlı oturumu kırar; drop+count, drop'un nerede
+   olduğunu sayılarla gösterir (loadgen'de `oob_dropped`, oda
+   tarafında zaten `snap_overflows`).
+4. **Oturum kapatma (FIN yok):** demux'un
+   `BTreeSet<(Instant, SocketAddr)>` deadline heap'i (gömlekli
+   geçersiz kılma: girdi yalnız `son_görülme + idle`'e eşkenken
+   geçerli — last_seen güncellenince eski girdi self-expire olur)
+   + `timeout(min_deadline, recv_from)`; sweep oturuma
+   `ConnIn::ServerClosed` yollar + oturumu kaldırır. Her frame
+   last_seen'i sıfırlar (TCP'nin reader-pump saatine birebir
+   karşılık). `idle_timeout` config'den (vars. 30 sn).
+
+**Trait sızması (DURUMU VE NEDENİ — dürüst cevap):** `gsb-core`
+**dokunulmadı** (odanın tek await'i `tick_rx.recv()`, connection
+actor'ün tek await'i `inbox.recv()`, registry oda asla await etmez —
+hepsi korundu). Sıza `gsb-net` trait şeklinin **4** yerinde
+oldu, her biri yapısal (alternatifi yoktu):
+1. `Endpoint::take_inbox`/`take_outbox` (+`with_inbox/with_outbox`):
+   demux, oturum mailbox'larını el sıkışmada — accept loop
+   çalışmadan **önce** — kurmak zorunda (datagramlar o anda
+   gelebilir); TCP'de reader, accept'in içinde kurar.
+2. `start_pump`/`PumpSpawner` artık `(Option<JoinHandle>,
+   JoinHandle)` döndürür: UDP'de per-connection reader yoktur
+   (ortak demux); reader handle'ı `Option`.
+3. `Listener::close(&self)` (§9'un ertelenmiş kapısı kullanıldı):
+   demux tüm bağlantılardan uzun yaşar — `Arc`'lerin düşmesi onu
+   durdurmaz; `stop()` onu abort eder.
+4. Peer adresi endpoint'ten aktöre taşınır (`Endpoint::peer()` →
+   `ConnectionActor.peer`) — ihlal sinyali için (Bölüm A).
+   gsb-server tarafı: `Config.transport` + `udp_max_datagram_bytes`
+   + **`crossbeam-channel` bağımlılığı** — `Endpoint`
+   göndericisi/`Receiver`'ı `Arc<dyn Listener>`'den
+   `recv`/`try_recv` **`&self`**'den çalışmalı (tokio mpsc'nin
+   `recv`'i `&mut` ister; kilit eklemek yasak, `unsafe` yasak →
+   crossbeam'in atomik iç yapısı tek yol; tek kullanış noktası bu
+   akış).
+
+**Kabul kriteri — e2e aynı niyetle her iki taşımada:** `e2e.rs`
+`Client`/`Recv` soyutlaması üzerine yeniden yazıldı; 7 akışın
+hepsi `for kind in [Tcp, Udp]` ile koşuyor (7 test × 2 = 14 akış,
+test sayısı 7). UDP tarafının niyet farkları belgeli: "kapandı"
+EOF ile değil **probe başarısızlığı** ile kanıtlanır (HEARTBEAT →
+1,5 sn içinde HEARTBEAT_ACK yok = kapandı); `recv` penceresi
+"sessiz pencere" = `Ok(None)` (hata değil — UDP'de EOF yoktur).
+
+**Ölçüm (loadgen `--transport udp`, 150 istemci, 10 sn, in-proc,
+release, `all` görünürlük, max_players 100) — TCP karşısına:**
+
+| metrik | TCP | UDP |
+|---|---|---|
+| connected / joined | 150 / 100 | 150 / 100 |
+| connect p50 / p99 | 27 / 55 ms | **19 / 35 ms** (handshake) |
+| snapshot toplamı | 29 159 | 29 100 |
+| measured hz (medyan) | 30.06 | 30.01 |
+| adım mean / p50 / max | 81.3 / 130 / 257 µs | 100.5 / 130 / 402 µs |
+| adım bütçesi aşımı | 0 % | 0 % |
+| client in (ort) | 2 217 KB/s | 2 248 KB/s |
+| server out (ort) | 2 243 KB/s | 2 239 KB/s |
+| out_bps_per_conn | 15 314 | 15 286 |
+| late_max / dropped / actions_dropped | 3 091 µs / 0 / 0 | **1 148 µs** / 0 / 0 |
+| istemci yeniden gönderimi (retrans_out) | — | 769 / 10 sn |
+| dup_in / oob_dropped / gave_up | — | 0 / 0 / 0 |
+
+Okuma: snapshot bant genişliği ve tick hızı eşdeğer (aynı oda);
+handshake TCP connect'inin **altında**; adım mean/max UDP'de
+biraz yatakta (demux + per-session writer, in-proc CPU paylaşımı
+altında — 4 adım p99 binine; bütçeyi aşan yok); late_max UDP'de
+**3× daha iyi** (1 148 vs 3 091 µs — demux'un tek okuyucusu, TCP
+reader'larının per-connection wake-up'ı yok); loopback'te sıfır
+kayıp; 769 yeniden gönderim = in-proc baskı altında RTO'nun
+görevini yapması (kontrol bandı sıralı teslimi bozmadan
+kurtardı).
+
+**v1 kısıtları (kapsam dışı — burada ilan, inşa yok):**
+congestion control (UDP'de pps sınırını yalnız oda bütçesi
+tutuyor; P1: token bucket), şifreleme (cookie key'i duvar
+saatinden — yerel saldırgana öngörülebilir; P1: DTLS/TLS katmanı),
+parçalama (bütçe üstü = drop+count; `snap_overflows` sinyaliyle
+grup bölme asıl kaldıraç — §8), SO_RCVBUF ayarı (tokio 1.53.1
+setter'ı yok), NAT yeniden bağlanması = yeni el sıkışma + yeni
+`ConnectionId` (eski oturum ≤ `idle_timeout` yaşar), oturum
+actor ölümünden sonra ≤ `idle_timeout` kadar demux'te yaşar
+(demux'un `in_tx` + registry klonu kanalı canlı tutar; idle sweep
+temizler).
 
 ## Kapatılanlar (yayınlanabilirlik turu)
 

@@ -14,7 +14,44 @@
 //! per-connection action channel (non-blocking `try_send`: a flooding
 //! client drops its own input, never stalls the actor or the room). It
 //! never multiplexes: every branch is a channel receive.
+//!
+//! **Protocol violation budget** (the anti-amplification guardrail): the
+//! `reply_err` funnel — the single exit for every protocol error this
+//! actor answers — keeps a small budget in actor-local state. Each
+//! violation has a *class*:
+//!
+//! - **hard** (weight [`HARD_VIOLATION_WEIGHT`]): no legitimate client
+//!   path reaches it — an unknown opcode, a malformed payload, an auth
+//!   state violation (out-of-order or double AUTH);
+//! - **race** (weight [`RACE_VIOLATION_WEIGHT`]): a legitimate
+//!   ~1-RTT-wide transition can produce it — the room was destroyed and
+//!   an in-flight action arrives room-less, an action races a LEAVE, or
+//!   the leave→rejoin window strays;
+//! - **not a violation** (weight 0): server-side conditions (registry
+//!   gone during shutdown, message-table type mismatch) — answered as
+//!   before, never counted; the budget is for *client* violations.
+//!
+//! The first [`VIOLATION_ANSWER_LIMIT`] violations are answered with an
+//! `ERROR` frame (diagnosis for the client developer); after that the
+//! funnel goes **silent** — every further violation is counted but
+//! unanswered, which bounds the amplification (a fire-and-forget ~10-byte
+//! client packet can no longer buy unlimited server allocation + encode +
+//! queue cost). When the weighted lifetime score reaches
+//! [`VIOLATION_BUDGET`] the connection is **closed** (an `ERROR` code 9
+//! with the reason, then the normal teardown cascade) and the close is
+//! reported with the peer address (the actor carries it — see `peer`) so
+//! a layer outside the server (firewall, fail2ban, future auth) can act.
+//!
+//! Lifetime total (not a sliding window): a legitimate connection
+//! accumulates only a handful of race-class stray packets across its whole
+//! life, so a budget sized well above that churn can never be exhausted by
+//! honest traffic — while sustained violation traffic (the measured
+//! incident: 50 rejected clients, 1550 answered errors in 8 s) exhausts it
+//! within seconds. A sliding window would need per-violation timestamps
+//! for no gain: the failure mode it addresses (many early violations,
+//! then honesty) does not occur per-connection.
 
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -35,6 +72,68 @@ use crate::room::Action;
 /// sample (a connection with no inbound frames does not flush until its
 /// final flush at close — it has nothing new to report in the meantime).
 const METRICS_FLUSH_EVERY: Duration = Duration::from_millis(500);
+
+/// How many violations (of any class) are *answered* with an `ERROR`
+/// frame before the funnel goes silent for the rest of the connection.
+/// The first few answers are the diagnosis the client developer needs;
+/// every answer after that is pure amplification surface.
+const VIOLATION_ANSWER_LIMIT: u32 = 3;
+
+/// Weighted lifetime score at which the connection is closed. Sized
+/// against *legitimate* churn: race-class transitions (room destroyed
+/// under in-flight input, leave/rejoin windows) produce 1-3 stray packets
+/// each, so even a connection that churns through several of them stays
+/// far below 16 — while a sustained violator (the measured incident ran
+/// ~4 stray game-band packets/s per rejected client) reaches it in a
+/// handful of seconds. See the module docs for the lifetime-total
+/// rationale.
+const VIOLATION_BUDGET: u32 = 16;
+
+/// Score a hard violation adds (no legitimate path reaches it, so each
+/// occurrence is strong evidence of a broken or hostile client).
+const HARD_VIOLATION_WEIGHT: u32 = 4;
+
+/// Score a race-class violation adds (legitimate transitions reach it, so
+/// each occurrence is weak evidence).
+const RACE_VIOLATION_WEIGHT: u32 = 1;
+
+/// The violation class of a protocol error, as counted by the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViolationClass {
+    /// No legitimate client path reaches this error.
+    Hard,
+    /// A legitimate ~1-RTT transition can produce this error (room gone
+    /// under in-flight input, action racing a LEAVE, leave→rejoin window).
+    Race,
+    /// Server-side condition, not a client violation (registry gone,
+    /// message-table type mismatch): answered, never counted.
+    None,
+}
+
+impl ViolationClass {
+    fn weight(self) -> u32 {
+        match self {
+            Self::Hard => HARD_VIOLATION_WEIGHT,
+            Self::Race => RACE_VIOLATION_WEIGHT,
+            Self::None => 0,
+        }
+    }
+}
+
+/// Classify a protocol error for the violation budget. The split follows
+/// the state machine, not the error text: `NotInRoom` is the *only* error
+/// a legitimate client can hit in flight (its state and the server's
+/// briefly disagree across join/leave/destroy transitions); every other
+/// error means the client sent something no correct client sends.
+fn violation_class(e: &ProtoError) -> ViolationClass {
+    match e {
+        ProtoError::NotInRoom => ViolationClass::Race,
+        ProtoError::Other(_) => ViolationClass::None,
+        // UnknownOpcode / Decode / MalformedFrame / NotAuthenticated /
+        // AlreadyAuthenticated / RoomNotFound: hard.
+        _ => ViolationClass::Hard,
+    }
+}
 
 /// Messages addressed to the connection actor.
 #[derive(Debug)]
@@ -64,6 +163,15 @@ enum ConnState {
 /// The connection actor.
 pub struct ConnectionActor {
     conn: ConnectionId,
+    /// The peer's socket address. The transport knows it at accept time
+    /// and passes it in here — the only way the *close signal* can carry
+    /// an address without a shared conn→addr table (the mapping lives in
+    /// the accept loop's head today and is never exported; a lookup API
+    /// would need either shared state or an awaited round trip, both
+    /// banned by the architecture). Carrying it is 16-24 bytes of
+    /// actor-local state and keeps the signal self-contained for an
+    /// external layer (firewall/fail2ban/future auth).
+    peer: SocketAddr,
     state: ConnState,
     table: std::sync::Arc<MessageTable>,
     registry: Mailbox<RegistryMsg>,
@@ -92,6 +200,18 @@ pub struct ConnectionActor {
     /// samples; per-drop warnings would flood the log exactly when a
     /// flooder is doing what it does).
     m_actions_dropped_warned: bool,
+    /// Violation budget state (all actor-local — the counter *is* the
+    /// budget; see the module docs): weighted lifetime score, raw event
+    /// count (for the close signal and metrics), how many violations have
+    /// been answered so far (capped at [`VIOLATION_ANSWER_LIMIT`]), and
+    /// the closing flag the run loop checks after each frame.
+    v_score: u32,
+    v_events: u32,
+    v_answered: u32,
+    v_closing: bool,
+    /// Violation events since the last metrics flush (delta, like the
+    /// other conn counters) → `NetReport.violations`.
+    m_violations: u64,
     m_flushed_in_bytes: u64,
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,
@@ -109,6 +229,9 @@ pub struct ConnectionActor {
 impl ConnectionActor {
     pub fn new(
         conn: ConnectionId,
+        // The peer's address (for the violation-close signal; see the
+        // `peer` field). The accept loop learns it from the transport.
+        peer: SocketAddr,
         table: std::sync::Arc<MessageTable>,
         registry: Mailbox<RegistryMsg>,
         inbox: Inbox<ConnIn>,
@@ -119,6 +242,7 @@ impl ConnectionActor {
     ) -> Self {
         Self {
             conn,
+            peer,
             state: ConnState::WaitingAuth,
             table,
             registry,
@@ -131,6 +255,11 @@ impl ConnectionActor {
             m_out_frames: 0,
             m_actions_dropped: 0,
             m_actions_dropped_warned: false,
+            v_score: 0,
+            v_events: 0,
+            v_answered: 0,
+            v_closing: false,
+            m_violations: 0,
             m_flushed_in_bytes: 0,
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
@@ -156,7 +285,14 @@ impl ConnectionActor {
                         self.m_in_bytes.saturating_add(2 + frame.payload.len() as u64);
                     self.m_in_frames += 1;
                     self.maybe_flush_metrics(false);
-                    self.handle_frame(frame).await
+                    self.handle_frame(frame).await;
+                    // The violation budget may have been exhausted while
+                    // handling the frame (the `ERROR` code 9 close notice
+                    // was already sent by `reply_err`); tear down now,
+                    // exactly like a `ServerClosed`.
+                    if self.v_closing {
+                        break;
+                    }
                 }
                 ConnIn::Closed { reason } => {
                     debug!(%self.conn, %reason, "connection closed by peer/io");
@@ -222,12 +358,14 @@ impl ConnectionActor {
         let out_f = self.m_out_frames - self.m_flushed_out_frames;
         let adrops = self.m_actions_dropped;
         let drops = self.m_metrics_dropped;
+        let viols = self.m_violations;
         if in_b == 0
             && in_f == 0
             && out_b == 0
             && out_f == 0
             && adrops == 0
             && drops == 0
+            && viols == 0
         {
             return;
         }
@@ -240,6 +378,7 @@ impl ConnectionActor {
         self.m_flushed_out_frames = self.m_out_frames;
         self.m_actions_dropped = 0;
         self.m_metrics_dropped = 0;
+        self.m_violations = 0;
         self.m_last_flush = Instant::now();
         // A3: bounded channel + synchronous `try_send`. On a full channel the
         // sample is dropped (harmless — the counters are cumulative deltas and
@@ -254,6 +393,7 @@ impl ConnectionActor {
                 frames_out: out_f,
                 actions_dropped: adrops,
                 metrics_dropped: drops,
+                violations: viols,
                 last,
             }))
         {
@@ -401,6 +541,17 @@ impl ConnectionActor {
                     )
                     .await;
             }
+            // Unknown *base-band* opcode: no legitimate client sends one,
+            // so it is a hard protocol violation (answered + budgeted).
+            // Note this is what *makes* `UnknownOpcode` reachable in the
+            // funnel: the actor only decodes its four registered control
+            // ops, so before this check an unknown base-band opcode would
+            // have been forwarded as an (ignored) room action.
+            unknown if unknown < gsb_protocol::op::GAME_BAND_START => {
+                self.reply_err(ProtoError::UnknownOpcode(unknown)).await;
+            }
+            // Game band: the game crate owns these opcodes (the message
+            // table is built per game); the room's ingest decides.
             _ => self.forward_to_room(frame).await,
         }
     }
@@ -475,6 +626,23 @@ impl ConnectionActor {
         }
     }
 
+    /// The single funnel for protocol errors: every `ERROR` frame this
+    /// actor produces as a *response to a violation* passes through here,
+    /// which is where the violation budget lives (module docs).
+    ///
+    /// Behaviour per violation:
+    /// 1. classify (hard / race / not-a-violation);
+    /// 2. counted violations add their weight to the lifetime score and
+    ///    increment the event count (this also feeds the metrics delta);
+    /// 3. if fewer than [`VIOLATION_ANSWER_LIMIT`] violations have been
+    ///    answered so far, send the `ERROR` frame (the diagnosis);
+    ///    otherwise stay silent (amplification is bounded here);
+    /// 4. if the score just reached [`VIOLATION_BUDGET`], send the close
+    ///    notice (`ERROR` code 9, the reason in the message — same code
+    ///    family as idle timeout / connection capacity: a *server*
+    ///    decision, the message carries the specificity), emit the
+    ///    structured close signal with the peer address, and flag the run
+    ///    loop to tear the connection down.
     async fn reply_err(&mut self, e: ProtoError) {
         let (code, message) = match &e {
             ProtoError::UnknownOpcode(_) => (1, e.to_string()),
@@ -485,8 +653,57 @@ impl ConnectionActor {
             ProtoError::NotInRoom => (6, e.to_string()),
             _ => (7, e.to_string()),
         };
-        let _ = self
-            .send_frame(op::base::ERROR, &base::Error { code, message })
-            .await;
+        let class = violation_class(&e);
+        let weight = class.weight();
+        if weight == 0 {
+            // Server-side condition: answered exactly as before the
+            // budget existed, never counted (a client cannot fix the
+            // registry being gone, and shutdown is transient).
+            let _ = self
+                .send_frame(op::base::ERROR, &base::Error { code, message })
+                .await;
+            return;
+        }
+        self.v_events += 1;
+        self.v_score = self.v_score.saturating_add(weight);
+        self.m_violations += 1;
+        if self.v_answered < VIOLATION_ANSWER_LIMIT {
+            self.v_answered += 1;
+            debug!(
+                %self.conn,
+                %self.peer,
+                code,
+                ?class,
+                score = self.v_score,
+                "protocol violation answered (one of the first \
+                 {VIOLATION_ANSWER_LIMIT}; later ones are silent)"
+            );
+            let _ = self
+                .send_frame(op::base::ERROR, &base::Error { code, message })
+                .await;
+        }
+        if self.v_score >= VIOLATION_BUDGET && !self.v_closing {
+            self.v_closing = true;
+            let reason = format!(
+                "protocol violation budget exhausted: {} violations ({} \
+                 answered) in this connection's lifetime",
+                self.v_events, self.v_answered
+            );
+            // The close signal for a layer outside the server (firewall,
+            // fail2ban, future auth): conn id, PEER ADDRESS, the violation
+            // counts, and the reason — self-contained, structured, on the
+            // tracing path every operator already collects.
+            warn!(
+                %self.conn,
+                %self.peer,
+                violations = self.v_events,
+                answered = self.v_answered,
+                score = self.v_score,
+                "closing connection: protocol violation budget exhausted"
+            );
+            let _ = self
+                .send_frame(op::base::ERROR, &base::Error { code: 9, message: reason })
+                .await;
+        }
     }
 }

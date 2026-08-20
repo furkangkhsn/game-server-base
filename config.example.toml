@@ -6,6 +6,20 @@
 # Socket address to bind.
 bind = "0.0.0.0:7777"
 
+# Transport: "tcp" (length-prefixed frames over per-connection sockets,
+# the default) or "udp" (rUDP: one shared socket, cookie-handshake
+# sessions, a reliable control band + a loss-tolerant game band,
+# datagram-level idle sweep; DESIGN §6). The whole actor layer is
+# transport-agnostic — this only changes who runs the pumps.
+transport = "tcp"
+
+# rUDP only: maximum outbound datagram size in bytes. 1472 = typical
+# Ethernet MTU minus IP/UDP headers (no fragmentation in v1: an
+# oversized datagram is dropped, counted, and warned once per
+# session — the room-side max_snapshot_bytes warning is the signal
+# to act on). Ignored when transport = "tcp".
+udp_max_datagram_bytes = 1472
+
 # Global tick rate (ticks per second). One ticker task feeds all rooms over
 # a broadcast channel. A room may run slower, at any rate that divides this
 # one (e.g. global 60 → a room at 15 steps every 4th tick).
