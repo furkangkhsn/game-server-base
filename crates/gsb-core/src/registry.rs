@@ -10,6 +10,16 @@
 //!   join/leave operations (see [`RoomOp`]);
 //! - the [`Ticker`] handle (global tick broadcast + rate), which rooms
 //!   subscribe to at creation;
+//! - **sharded rooms** (see [`crate::shard`]): one logical room can be
+//!   backed by N shard actors (disjoint spatial regions, each its own
+//!   task). The registry spawns the shards for one [`RoomId`], routes
+//!   each join to the home shard (the factory's pure `home_shard`
+//!   router), enforces the room's membership cap for sharded rooms
+//!   (it is the only actor that sees every join — `ShardGroup`), and
+//!   broadcasts leaves to all shards (the entity-id guard in exactly one
+//!   of them matches). The registry never awaits a shard: its only
+//!   interaction with the room side is channel sends, exactly as with a
+//!   single room.
 //! - the [`RoomFactory`], which is how the (game-specific) room logic gets
 //!   into the core without the core knowing any game types.
 //!
@@ -38,13 +48,45 @@ use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::metrics::{MetricsEvent, RegistrySample};
 use crate::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic};
+use crate::shard::{ShardActor, ShardLogic, ShardMsg};
 use crate::ticker::Ticker;
+
+/// One shard of a sharded room: its `World` + its [`ShardLogic`].
+pub type Shard<W, G, St> = (W, Box<dyn ShardLogic<W, GroupKey = G, State = St>>);
+
+/// The outcome of a room factory: one room actor (the pre-sharding shape)
+/// or a **sharded room** — N shard actors forming one logical room (see
+/// [`crate::shard`]).
+///
+/// `St` is the sharded room's migration state type
+/// ([`crate::shard::ShardLogic::State`]); it is unused by the
+/// [`BuiltRoom::Single`] arm (a single-room-only factory can pick any
+/// `St`, e.g. `()`).
+pub enum BuiltRoom<W, G, St> {
+    /// One room actor (today's shape).
+    Single {
+        world: W,
+        logic: Box<dyn RoomLogic<W, GroupKey = G>>,
+    },
+    /// N shard actors (indices `0..N`, the vec order) forming one logical
+    /// room. `home_shard` maps a joining connection to the shard that owns
+    /// its spawn point — pure and synchronous (the registry calls it at
+    /// join dispatch and never awaits it). A misrouted join self-heals:
+    /// the entity's first boundary crossing migrates it to the right
+    /// shard (at most one tick of cross-boundary staleness).
+    Sharded {
+        shards: Vec<Shard<W, G, St>>,
+        home_shard: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
+    },
+}
 
 /// Builds a room's world + logic. Provided by the composition root; the core
 /// never names the concrete game types. `G` is the game logic's group key
-/// ([`RoomLogic::GroupKey`]); the room stores per-group state under it.
-pub type RoomFactory<W, G> =
-    Arc<dyn Fn(RoomId, &RoomConfig) -> (W, Box<dyn RoomLogic<W, GroupKey = G>>) + Send + Sync>;
+/// (`RoomLogic::GroupKey` / `ShardLogic::GroupKey`); the room stores
+/// per-group state under it. `St` is the sharded room's migration state
+/// (see [`BuiltRoom`]).
+pub type RoomFactory<W, G, St> =
+    Arc<dyn Fn(RoomId, &RoomConfig) -> BuiltRoom<W, G, St> + Send + Sync>;
 
 /// Messages addressed to the registry actor.
 #[derive(Debug)]
@@ -92,23 +134,45 @@ pub enum RegistryMsg {
         room: RoomId,
         entity: EntityId,
     },
+    /// A dispatched join was rejected by the room (e.g. the shard's
+    /// wire-id range is exhausted): release the capacity reservation.
+    SpawnFailed { conn: ConnectionId, room: RoomId },
     /// A dispatched leave completed: clear the affiliation.
     LeaveDone { conn: ConnectionId, room: RoomId },
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
 }
 
+/// How a connection's room-relationship ops reach the room side: the
+/// single room's control channel, or a sharded room's shard mailboxes.
+/// `Clone` because the registry hands a copy to each dispatcher op.
+/// `St` is the sharded room's migration state (see [`BuiltRoom`]).
+#[derive(Clone)]
+enum RoomHandle<St> {
+    /// A single room: one control mailbox.
+    Single(Mailbox<RoomControl>),
+    /// A sharded room: one mailbox per shard (indices = shard indices).
+    /// `Join` goes to the home shard (the registry picked it via
+    /// `home_shard`); `Leave`/`Shutdown` go to ALL of them (exactly one
+    /// shard owns the connection — the entity-id guard makes the others
+    /// no-ops; see `crate::shard`, "Connection ownership").
+    Sharded(Vec<Mailbox<ShardMsg<St>>>),
+}
+
 /// Operations on a connection's room relationship, processed by that
 /// connection's dispatcher task — **in order**, which is what makes
 /// leave→rejoin race-free: a `Leave` can never overtake (or be overtaken
 /// by) the `Join` it follows.
-enum RoomOp {
-    /// Join `room`: round-trip the control `Join`, reply to the connection
-    /// actor (with the per-connection action channel), report
-    /// [`RegistryMsg::SpawnDone`] to the registry.
+enum RoomOp<St> {
+    /// Join `room`: round-trip the control `Join` (the home shard, when the
+    /// room is sharded — `shard` carries the registry's pick), reply to
+    /// the connection actor (with the per-connection action channel),
+    /// report [`RegistryMsg::SpawnDone`] to the registry.
     Join {
         room: RoomId,
-        room_control: Mailbox<RoomControl>,
+        handle: RoomHandle<St>,
+        /// The home shard index (sharded rooms only).
+        shard: Option<usize>,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
@@ -120,8 +184,35 @@ enum RoomOp {
     Close,
 }
 
-struct RoomEntry {
-    control: Mailbox<RoomControl>,
+/// A sharded room's registry-side state (see `crate::shard`): the shard
+/// mailboxes, the home-shard router, and the room-level capacity
+/// accounting (the registry is the only actor that sees every join, so
+/// it enforces the room cap for sharded rooms — a shard cannot count the
+/// room without shared state).
+#[derive(Clone)]
+struct ShardGroup<St> {
+    /// One mailbox per shard index (the registry's own senders; the
+    /// shards' neighbors hold clones of the same channels).
+    mailboxes: Vec<Mailbox<ShardMsg<St>>>,
+    /// Maps a joining connection to its home shard (pure; see
+    /// [`BuiltRoom::Sharded`]).
+    home: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
+    /// The room's membership cap (`RoomConfig::max_players`, `None` =
+    /// unlimited).
+    cap: Option<u64>,
+    /// Connections accepted (SpawnDone, deduplicated per connection).
+    members: u64,
+    /// Joins dispatched but not yet settled (SpawnDone/SpawnFailed):
+    /// reserved against the cap so a concurrent join burst cannot race
+    /// past it.
+    pending: u64,
+}
+
+struct RoomEntry<St> {
+    /// The single room's control mailbox (single rooms only).
+    control: Option<Mailbox<RoomControl>>,
+    /// The sharded room's state (sharded rooms only).
+    shards: Option<ShardGroup<St>>,
 }
 
 #[derive(Default)]
@@ -133,16 +224,18 @@ struct ConnInfo {
     inbox: Option<Mailbox<ConnIn>>,
 }
 
-/// The registry actor.
-pub struct Registry<W, G> {
-    factory: RoomFactory<W, G>,
+/// The registry actor. `W`/`G` are the room's world / group-key types;
+/// `St` is the sharded room's migration state (unused by single rooms —
+/// see [`BuiltRoom`]).
+pub struct Registry<W, G, St> {
+    factory: RoomFactory<W, G, St>,
     inbox: Inbox<RegistryMsg>,
     /// Sender half of our own mailbox: cloned to dispatcher tasks so they
     /// can report back.
     self_mailbox: Mailbox<RegistryMsg>,
-    rooms: HashMap<RoomId, RoomEntry>,
+    rooms: HashMap<RoomId, RoomEntry<St>>,
     conns: HashMap<ConnectionId, ConnInfo>,
-    conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp>>,
+    conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp<St>>>,
     ticker: Ticker,
     /// Local control-plane counters (flushed as a sample whenever a table
     /// changes — event-driven; no timer, no new await; see
@@ -169,15 +262,16 @@ pub struct Registry<W, G> {
     max_connections: Option<u64>,
 }
 
-impl<W, G> Registry<W, G>
+impl<W, G, St> Registry<W, G, St>
 where
     W: Send + 'static,
     G: Eq + Hash + Clone + Debug + Send + 'static,
+    St: Debug + Send + 'static,
 {
     pub fn new(
         inbox: Inbox<RegistryMsg>,
         self_mailbox: Mailbox<RegistryMsg>,
-        factory: RoomFactory<W, G>,
+        factory: RoomFactory<W, G, St>,
         ticker: Ticker,
         // Outbound metrics path (see `crate::metrics`): a bounded channel;
         // the registry sends with the synchronous `try_send` (no await).
@@ -263,26 +357,120 @@ where
                         }));
                         continue;
                     }
-                    let (world, logic) = (self.factory)(id, &config);
-                    let (control_tx, control_rx) = channel(config.control_capacity);
-                    tokio::spawn(
-                        RoomActor::new(
-                            config,
-                            world,
-                            logic,
-                            self.ticker.subscribe(),
-                            control_rx,
-                            run_every,
-                            self.metrics.clone(),
-                        )
-                        .run(),
-                    );
-                    self.rooms.insert(
-                        id,
-                        RoomEntry {
-                            control: control_tx,
-                        },
-                    );
+                    let built = (self.factory)(id, &config);
+                    match built {
+                        BuiltRoom::Single { world, logic } => {
+                            let (control_tx, control_rx) = channel(config.control_capacity);
+                            tokio::spawn(
+                                RoomActor::new(
+                                    config.clone(),
+                                    world,
+                                    logic,
+                                    self.ticker.subscribe(),
+                                    control_rx,
+                                    run_every,
+                                    self.metrics.clone(),
+                                )
+                                .run(),
+                            );
+                            self.rooms.insert(
+                                id,
+                                RoomEntry {
+                                    control: Some(control_tx),
+                                    shards: None,
+                                },
+                            );
+                        }
+                        BuiltRoom::Sharded { shards, home_shard } => {
+                            let n = shards.len();
+                            debug_assert!(n >= 1, "a sharded room needs >= 1 shard");
+                            // One channel per shard: the registry keeps the
+                            // original sender, and every neighbor of the
+                            // shard holds a CLONE of it (tokio mpsc: many
+                            // senders, one receiver). So each shard's
+                            // mailbox carries both the registry's control
+                            // messages and its neighbors' protocol messages
+                            // (Migrate/Border) — the shard actor's single
+                            // `try_recv` drain handles all of them.
+                            //
+                            // Pass 1 — one channel per shard (the registry
+                            // keeps the original sender; every neighbor
+                            // holds a clone — tokio mpsc: many senders, one
+                            // receiver), and each actor's `neighbors` vec
+                            // (`txs[a][b]` = the sender shard a uses to
+                            // reach shard b, indexed by the receiver's
+                            // index — the actor indexes it that way;
+                            // non-neighbor slots are dummies, closed
+                            // senders that are never sent to).
+                            let mut rxs: Vec<Inbox<ShardMsg<St>>> = Vec::with_capacity(n);
+                            let mut reg_txs = Vec::with_capacity(n);
+                            let (dummy_tx, _dummy_rx) = channel::<ShardMsg<St>>(1);
+                            for _ in 0..n {
+                                let (tx, rx) = channel(config.control_capacity);
+                                reg_txs.push(tx.clone());
+                                rxs.push(rx);
+                            }
+                            let mut txs: Vec<Vec<Mailbox<ShardMsg<St>>>> =
+                                Vec::with_capacity(n);
+                            for a in 0..n {
+                                let mut row = Vec::with_capacity(n);
+                                for (b, tx_b) in reg_txs.iter().enumerate() {
+                                    // neighbors() is game knowledge (the
+                                    // grid topology); it is read after the
+                                    // factory built the logics.
+                                    let is_neighbor = shards
+                                        .get(a)
+                                        .map(|(_, l)| l.neighbors().contains(&b))
+                                        .unwrap_or(false);
+                                    row.push(if is_neighbor {
+                                        tx_b.clone()
+                                    } else {
+                                        dummy_tx.clone()
+                                    });
+                                }
+                                txs.push(row);
+                            }
+                            // Pass 2 — spawn the shard actors (indices = the
+                            // vec order; the sample id / neighbor slots rely
+                            // on it).
+                            for (i, (world, logic)) in shards.into_iter().enumerate() {
+                                // `rxs` was built in shard order (pass 1), so
+                                // popping the front pairs each shard with its
+                                // own receiver.
+                                let rx = rxs.remove(0);
+                                tokio::spawn(
+                                    ShardActor::new(
+                                        config.clone(),
+                                        i,
+                                        world,
+                                        logic,
+                                        self.ticker.subscribe(),
+                                        rx,
+                                        txs[i].clone(),
+                                        run_every,
+                                        self.metrics.clone(),
+                                    )
+                                    .run(),
+                                );
+                            }
+                            self.rooms.insert(
+                                id,
+                                RoomEntry {
+                                    control: None,
+                                    shards: Some(ShardGroup {
+                                        mailboxes: reg_txs,
+                                        home: home_shard,
+                                        cap: config
+                                            .max_players
+                                            .map(|c| c as u64),
+                                        members: 0,
+                                        pending: 0,
+                                    }),
+                                },
+                            );
+                            debug!(room = %id, shards = n, "sharded room created");
+                        }
+                    }
                     self.reg_created += 1;
                     self.emit_metrics();
                     debug!(room = %id, "room created");
@@ -313,7 +501,21 @@ where
                         // The room processes it on its next tick (the ticker
                         // is still running); aborting the ticker later closes
                         // its broadcast as a backstop.
-                        let _ = entry.control.send(RoomControl::Shutdown).await;
+                        match (entry.control, entry.shards) {
+                            (Some(control), _) => {
+                                let _ = control.send(RoomControl::Shutdown).await;
+                            }
+                            (None, Some(group)) => {
+                                // Sharded: one Shutdown per shard. Bounded
+                                // sends (the same idiom as the single room);
+                                // a stalled shard parks the send briefly and
+                                // the ticker abort remains the backstop.
+                                for tx in &group.mailboxes {
+                                    let _ = tx.send(ShardMsg::Shutdown).await;
+                                }
+                            }
+                            (None, None) => {}
+                        }
                         self.reg_destroyed += 1;
                         self.emit_metrics();
                         debug!(room = %id, "room destroyed");
@@ -325,9 +527,64 @@ where
                     out,
                     reply,
                 } => {
-                    let Some(control) = self.rooms.get(&room).map(|e| e.control.clone()) else {
+                    let Some(entry) = self.rooms.get(&room) else {
                         let _ = reply.send(Err(CoreError::RoomNotFound(room.0)));
                         continue;
+                    };
+                    let sharded_room = entry.shards.is_some();
+                    // Sharded room: the registry is the only actor that
+                    // sees every join, so it enforces the room cap here
+                    // (a shard cannot count the room without shared state)
+                    // and routes the join to the home shard (the factory's
+                    // pure `home_shard` router — never awaited).
+                    //
+                    // All the reads from `entry` happen BEFORE the borrow
+                    // ends (the `pending += 1` below re-borrows mutably).
+                    let sharded_pick = match &entry.shards {
+                        Some(group) => {
+                            let rejoin =
+                                self.conns.get(&conn).and_then(|i| i.room) == Some(room);
+                            let at_cap = match group.cap {
+                                Some(cap) => !rejoin && group.members + group.pending >= cap,
+                                None => false,
+                            };
+                            Some((at_cap, (group.home)(conn), group.mailboxes.clone()))
+                        }
+                        None => None,
+                    };
+                    let (handle, shard_idx) = match sharded_pick {
+                        Some((at_cap, home_idx, mailboxes)) => {
+                            if at_cap {
+                                // The cap makes the sharded room's degraded
+                                // regime structurally unreachable (the same
+                                // guardrail as a single room's max_players:
+                                // gentle ERROR 8, the connection stays alive).
+                                let _ = reply.send(Err(CoreError::RoomFull(room.0)));
+                                continue;
+                            }
+                            // Reserve against the cap until the join settles
+                            // (SpawnDone / SpawnFailed release it).
+                            if let Some(e) =
+                                self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
+                            {
+                                e.pending += 1;
+                            }
+                            // Clamp a router bug (an out-of-range pick)
+                            // instead of panicking at join dispatch; the
+                            // entity's first boundary crossing self-heals
+                            // the mis-routing (see BuiltRoom::Sharded).
+                            let idx = home_idx % mailboxes.len();
+                            (RoomHandle::Sharded(mailboxes), Some(idx))
+                        }
+                        None => (
+                            RoomHandle::Single(
+                                self.rooms
+                                    .get(&room)
+                                    .and_then(|e| e.control.clone())
+                                    .expect("single room always has control"),
+                            ),
+                            None,
+                        ),
                     };
                     let op_tx = self
                         .conn_ops
@@ -336,15 +593,24 @@ where
                     if op_tx
                         .try_send(RoomOp::Join {
                             room,
-                            room_control: control,
+                            handle,
+                            shard: shard_idx,
                             out,
                             reply,
                         })
                         .is_err()
                     {
-                        // Op queue full (pathological): the op (and its reply)
-                        // is dropped; the connection actor observes the
-                        // dropped reply and sends an ERROR frame.
+                        // Op queue full (pathological): the op (and its
+                        // reply) is dropped; the connection actor observes
+                        // the dropped reply and sends an ERROR frame. The
+                        // cap reservation never settles (the dispatcher
+                        // never saw the op), so release it here.
+                        if sharded_room
+                            && let Some(e) =
+                                self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
+                        {
+                            e.pending = e.pending.saturating_sub(1);
+                        }
                         warn!(%conn, room = %room, "join op queue full; join failed");
                     } else {
                         debug!(%conn, room = %room, "join dispatched");
@@ -427,13 +693,16 @@ where
                             let _ = op_tx.try_send(RoomOp::Close);
                         }
                         None => {
-                            if let (Some(room), Some(entity)) = (room, entity)
-                                && let Some(control) =
-                                    self.rooms.get(&room).map(|e| e.control.clone())
-                            {
-                                tokio::spawn(async move {
-                                    let _ = control.send(RoomControl::Leave { conn, entity }).await;
-                                });
+                            if let (Some(room), Some(entity)) = (room, entity) {
+                                self.send_leave_direct(conn, room, entity);
+                                // Sharded room: the registry's counter loses
+                                // a member (a shard cannot count the room —
+                                // see `ShardGroup`).
+                                if let Some(e) =
+                                    self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
+                                {
+                                    e.members = e.members.saturating_sub(1);
+                                }
                             }
                         }
                     }
@@ -445,25 +714,46 @@ where
                     // Ordered per-connection (from the dispatcher). If the
                     // connection is unknown it died mid-join; the
                     // dispatcher's Close already cleaned up the room side.
-                    // (The `info` borrow is scoped to the block so the
-                    // `&mut self` `emit_metrics` call below does not conflict
-                    // with it.)
                     // (The `info` borrow is scoped inside the `match` so the
                     // `&mut self` `emit_metrics` call below does not conflict
                     // with it.)
-                    let spawned = match self.conns.get_mut(&conn) {
+                    let new_affiliation = match self.conns.get_mut(&conn) {
                         Some(info) => {
+                            let fresh = info.room != Some(room);
                             info.room = Some(room);
                             info.entity = Some(entity);
-                            true
+                            fresh
                         }
                         None => false,
                     };
-                    if spawned {
+                    // Sharded room: settle the capacity reservation (the
+                    // join was dispatched against the cap) and, when the
+                    // affiliation is new, count the member (a re-join of an
+                    // already-affiliated connection is not a new member —
+                    // the same semantics as a single room's cap).
+                    if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
+                        e.pending = e.pending.saturating_sub(1);
+                        if new_affiliation {
+                            e.members += 1;
+                        }
+                    }
+                    if self.conns.contains_key(&conn) {
+                        // (Counted per SpawnDone for a live connection —
+                        // the pre-sharding semantics; a re-join re-counts,
+                        // as before.)
                         self.reg_joins += 1;
                         self.emit_metrics();
                         debug!(%conn, room = %room, %entity, "player spawned");
                     }
+                }
+                RegistryMsg::SpawnFailed { conn, room } => {
+                    // The room rejected the dispatched join (e.g. the
+                    // shard's wire-id range is exhausted): release the
+                    // capacity reservation (the join never counted).
+                    if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
+                        e.pending = e.pending.saturating_sub(1);
+                    }
+                    debug!(%conn, room = %room, "spawn failed; reservation released");
                 }
                 RegistryMsg::LeaveDone { conn, room } => {
                     let left = match self.conns.get_mut(&conn) {
@@ -478,6 +768,13 @@ where
                         None => false,
                     };
                     if left {
+                        // Sharded room: the registry's counter loses the
+                        // member (see `ShardGroup`).
+                        if let Some(e) =
+                            self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
+                        {
+                            e.members = e.members.saturating_sub(1);
+                        }
                         self.reg_leaves += 1;
                         self.emit_metrics();
                         debug!(%conn, room = %room, "player despawned");
@@ -507,12 +804,24 @@ where
                         });
                     }
                     self.conns.clear();
-                    // 3. Stop every room via its control channel (processed
-                    //    on the next tick; the composition root aborts the
-                    //    ticker afterwards, which closes the broadcast as a
-                    //    backstop for any room that misses the window).
+                    // 3. Stop every room (a single room via its control
+                    //    channel; a sharded room via one Shutdown per
+                    //    shard) — processed on the next tick; the
+                    //    composition root aborts the ticker afterwards,
+                    //    which closes the broadcast as a backstop for any
+                    //    room that misses the window.
                     for (id, entry) in self.rooms.drain() {
-                        let _ = entry.control.send(RoomControl::Shutdown).await;
+                        match (entry.control, entry.shards) {
+                            (Some(control), _) => {
+                                let _ = control.send(RoomControl::Shutdown).await;
+                            }
+                            (None, Some(group)) => {
+                                for tx in &group.mailboxes {
+                                    let _ = tx.send(ShardMsg::Shutdown).await;
+                                }
+                            }
+                            (None, None) => {}
+                        }
                         debug!(room = %id, "room stopped");
                     }
                     // 4. Stop the actor now. (It cannot wait for the mailbox
@@ -536,10 +845,18 @@ where
             None => (None, None),
         };
         if let (Some(room), Some(entity)) = (room, entity) {
-            if let Some(control) = self.rooms.get(&room).map(|e| e.control.clone()) {
-                tokio::spawn(async move {
-                    let _ = control.send(RoomControl::Leave { conn, entity }).await;
-                });
+            let had_room = self
+                .rooms
+                .get(&room)
+                .map(|e| e.control.is_some() || e.shards.is_some())
+                .unwrap_or(false);
+            if had_room {
+                self.send_leave_direct(conn, room, entity);
+                // Sharded room: the registry's counter loses the member
+                // (see `ShardGroup`).
+                if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
+                    e.members = e.members.saturating_sub(1);
+                }
                 // Counted here (not via LeaveDone): this path has no
                 // dispatcher, so the room's leave would otherwise be
                 // invisible to the registry counter.
@@ -555,36 +872,99 @@ where
         }
     }
 
+    /// Send a leave with no dispatcher (the `ConnClosed` /
+    /// [`Self::direct_leave`] paths): to the room's control channel, or —
+    /// for a sharded room — to ALL of its shards (exactly one of them owns
+    /// the connection; the entity-id guard makes the others no-ops, and
+    /// the leave's epoch is 0, which can only lower the tombstones the
+    /// join itself already recorded — see `crate::shard`, "Migration
+    /// protocol").
+    fn send_leave_direct(&mut self, conn: ConnectionId, room: RoomId, entity: EntityId) {
+        let handle = match self.rooms.get(&room) {
+            Some(e) => match (&e.control, &e.shards) {
+                (Some(control), _) => RoomHandle::Single(control.clone()),
+                (None, Some(group)) => RoomHandle::Sharded(group.mailboxes.clone()),
+                (None, None) => return,
+            },
+            None => return,
+        };
+        tokio::spawn(async move {
+            match handle {
+                RoomHandle::Single(control) => {
+                    let _ = control.send(RoomControl::Leave { conn, entity }).await;
+                }
+                RoomHandle::Sharded(mailboxes) => {
+                    for tx in &mailboxes {
+                        let _ = tx
+                            .send(ShardMsg::Leave {
+                                conn,
+                                entity,
+                                epoch: 0,
+                            })
+                            .await;
+                    }
+                }
+            }
+        });
+    }
+
     /// One dispatcher task per connection with a room relationship in
     /// flight. It is the *only* sender of room control messages for that
     /// connection, so per-connection ordering (join → leave → rejoin) is
     /// guaranteed, and the registry never awaits a room from its own task.
-    fn spawn_conn_ops(conn: ConnectionId, registry: Mailbox<RegistryMsg>) -> mpsc::Sender<RoomOp> {
-        let (op_tx, mut op_rx) = mpsc::channel::<RoomOp>(16);
+    ///
+    /// The dispatcher also mints the connection's **join epochs** (one per
+    /// `Join` op, a local monotonic counter — see `crate::shard`,
+    /// "Migration protocol"): the epoch travels with every `Join`/`Leave`
+    /// of that join, and a sharded room's shards gate late migrations on
+    /// it.
+    fn spawn_conn_ops(
+        conn: ConnectionId,
+        registry: Mailbox<RegistryMsg>,
+    ) -> mpsc::Sender<RoomOp<St>> {
+        let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St>>(16);
         tokio::spawn(async move {
-            let mut in_room: Option<(RoomId, EntityId, Mailbox<RoomControl>)> = None;
+            let mut epoch: u64 = 0;
+            // (room, entity, handle, the join's epoch)
+            let mut in_room: Option<(RoomId, EntityId, RoomHandle<St>, u64)> = None;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
                         room,
-                        room_control,
+                        handle,
+                        shard,
                         out,
                         reply,
                     } => {
+                        epoch = epoch.wrapping_add(1);
                         let (joined_tx, joined_rx) = oneshot::channel::<
                             Result<(EntityId, Mailbox<Action>), CoreError>,
                         >();
-                        let sent = room_control
-                            .send(RoomControl::Join {
-                                conn,
-                                out,
-                                reply: joined_tx,
-                            })
-                            .await
-                            .is_ok();
+                        let sent = match &handle {
+                            RoomHandle::Single(control) => control
+                                .send(RoomControl::Join {
+                                    conn,
+                                    out,
+                                    reply: joined_tx,
+                                })
+                                .await
+                                .is_ok(),
+                            RoomHandle::Sharded(mailboxes) => {
+                                let i = shard.expect("sharded join carries its shard");
+                                mailboxes[i]
+                                    .send(ShardMsg::Join {
+                                        conn,
+                                        epoch,
+                                        out,
+                                        reply: joined_tx,
+                                    })
+                                    .await
+                                    .is_ok()
+                            }
+                        };
                         match (sent, joined_rx.await) {
                             (true, Ok(Ok((entity, actions)))) => {
-                                in_room = Some((room, entity, room_control));
+                                in_room = Some((room, entity, handle, epoch));
                                 let _ = reply.send(Ok((entity, actions)));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnDone { conn, room, entity })
@@ -593,31 +973,38 @@ where
                             // The room rejected the join structurally (a full
                             // room): propagate the room's error to the
                             // connection actor (it maps `RoomFull` to the
-                            // `ERROR` frame's own code) and do not record
-                            // any room state.
+                            // `ERROR` frame's own code), record no room
+                            // state, and — for a sharded room — release
+                            // the registry's capacity reservation.
                             (true, Ok(Err(e))) => {
                                 let _ = reply.send(Err(e));
+                                let _ = registry
+                                    .send(RegistryMsg::SpawnFailed { conn, room })
+                                    .await;
                             }
                             _ => {
                                 // Control channel gone (room destroyed) or the
                                 // room dropped the reply.
                                 let _ = reply.send(Err(CoreError::RoomGone));
+                                let _ = registry
+                                    .send(RegistryMsg::SpawnFailed { conn, room })
+                                    .await;
                             }
                         }
                     }
                     RoomOp::Leave { room } => {
-                        if let Some((r, entity, control)) = in_room.take()
+                        if let Some((r, entity, handle, ep)) = in_room.take()
                             && r == room
                         {
-                            let _ = control.send(RoomControl::Leave { conn, entity }).await;
+                            Self::send_room_leave(conn, entity, ep, handle).await;
                             let _ = registry
                                 .send(RegistryMsg::LeaveDone { conn, room: r })
                                 .await;
                         }
                     }
                     RoomOp::Close => {
-                        if let Some((r, entity, control)) = in_room.take() {
-                            let _ = control.send(RoomControl::Leave { conn, entity }).await;
+                        if let Some((r, entity, handle, ep)) = in_room.take() {
+                            Self::send_room_leave(conn, entity, ep, handle).await;
                             let _ = registry
                                 .send(RegistryMsg::LeaveDone { conn, room: r })
                                 .await;
@@ -633,5 +1020,34 @@ where
             // being torn down (its world is dropped) — nothing to clean.
         });
         op_tx
+    }
+
+    /// Send a leave for a dispatcher-held room affiliation: to the single
+    /// room's control channel, or — for a sharded room — to ALL of its
+    /// shards (exactly one owns the connection; the entity-id guard makes
+    /// the others no-ops, and the epoch travels so a late migration of the
+    /// same join is rejected — see `crate::shard`).
+    async fn send_room_leave(
+        conn: ConnectionId,
+        entity: EntityId,
+        epoch: u64,
+        handle: RoomHandle<St>,
+    ) {
+        match handle {
+            RoomHandle::Single(control) => {
+                let _ = control.send(RoomControl::Leave { conn, entity }).await;
+            }
+            RoomHandle::Sharded(mailboxes) => {
+                for tx in &mailboxes {
+                    let _ = tx
+                        .send(ShardMsg::Leave {
+                            conn,
+                            entity,
+                            epoch,
+                        })
+                        .await;
+                }
+            }
+        }
     }
 }

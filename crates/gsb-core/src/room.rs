@@ -324,55 +324,61 @@ pub trait RoomLogic<W>: Send {
     }
 }
 
-struct RoomConn<G> {
-    out: mpsc::Sender<FrameBatch>,
+/// Per-connection state in a room (or shard) connection table. `pub(crate)`
+/// because the shard actor reuses the same table shape (a shard's `conns`
+/// is the shard's share of the room's connections — see `crate::shard`).
+pub(crate) struct RoomConn<G> {
+    pub(crate) out: mpsc::Sender<FrameBatch>,
     /// This connection's input, written by its connection actor as frames
     /// arrive; pulled non-blockingly at each step.
-    actions: Inbox<Action>,
-    entity: EntityId,
+    pub(crate) actions: Inbox<Action>,
+    pub(crate) entity: EntityId,
     /// Snapshot group this connection belongs to (recomputed every tick via
     /// [`RoomLogic::group_of`]).
-    group: G,
+    pub(crate) group: G,
 }
 
-/// Per-group broadcast state, kept across ticks.
-struct GroupState {
+/// Per-group broadcast state, kept across ticks. `pub(crate)` because the
+/// shard actor reuses the same group table shape (see `crate::shard`).
+pub(crate) struct GroupState {
     /// Last snapshot payload emitted for the group; re-sent on keep-alive
     /// ticks when the group is unchanged.
-    last: Option<bytes::Bytes>,
+    pub(crate) last: Option<bytes::Bytes>,
     /// The payload fanned out to the members this tick (the emitted
     /// snapshot or the keep-alive re-send); `None` = nothing shipped.
-    sent: Option<bytes::Bytes>,
+    pub(crate) sent: Option<bytes::Bytes>,
     /// A group that has members but has never emitted is in contract
     /// violation (a fresh group's first tick is a membership change and
     /// must emit) — warn once for it instead of every tick.
-    never_emitted_warned: bool,
+    pub(crate) never_emitted_warned: bool,
     /// A snapshot over `max_snapshot_bytes` is a standing property of the
     /// group (its content does not shrink on its own), so warn once for it
     /// rather than on every tick of every room.
-    size_warned: bool,
+    pub(crate) size_warned: bool,
 }
 
 /// The room's local metric counters (all cumulative; see [`crate::metrics`]).
 /// Owned by the room and never shared: each step the room builds a
 /// [`RoomSample`] from them and hands it to the collector over the
-/// metrics channel (synchronous unbounded send — no await).
+/// metrics channel (synchronous unbounded send — no await). `pub(crate)`
+/// because the shard actor reuses the same counter shape (a shard's sample
+/// is a [`RoomSample`] under its derived sample id — see `crate::shard`).
 #[derive(Debug, Default)]
-struct RoomCounters {
+pub(crate) struct RoomCounters {
     /// Broadcast `Lagged` occurrences / missed tick indices.
-    lagged_events: u64,
-    lagged_ticks: u64,
+    pub(crate) lagged_events: u64,
+    pub(crate) lagged_ticks: u64,
     /// Step body duration µs: min / max / sum + histogram (binning).
-    step_min_us: u64,
-    step_max_us: u64,
-    step_sum_us: u64,
-    step_hist: [u64; HIST_BINS],
+    pub(crate) step_min_us: u64,
+    pub(crate) step_max_us: u64,
+    pub(crate) step_sum_us: u64,
+    pub(crate) step_hist: [u64; HIST_BINS],
     /// Tick processing latency µs (step start − ticker `at`): min/max/sum.
-    late_min_us: u64,
-    late_max_us: u64,
-    late_sum_us: u64,
+    pub(crate) late_min_us: u64,
+    pub(crate) late_max_us: u64,
+    pub(crate) late_sum_us: u64,
     /// Outbound batches dropped at the fan-out (slow client), cumulative.
-    dropped_frames: u64,
+    pub(crate) dropped_frames: u64,
     /// Input actions dropped by the room, cumulative. **Always 0 since the
     /// READ phase became a bounded pull** (per-connection per-tick budget +
     /// room-level pull budget — see the phase's comment): overflow stays in
@@ -380,36 +386,36 @@ struct RoomCounters {
     /// connection's own full action channel, counted *there*, attributed to
     /// its sender (see `ConnSample::actions_dropped`). The counter is kept
     /// for the report's format compatibility.
-    dropped_actions: u64,
+    pub(crate) dropped_actions: u64,
     /// Keep-alive re-sends, cumulative.
-    keepalive_resends: u64,
+    pub(crate) keepalive_resends: u64,
     /// Group snapshots encoded, cumulative (+ encoded bytes, max payload).
-    snapshots: u64,
-    snap_bytes: u64,
-    snap_bytes_max: u32,
+    pub(crate) snapshots: u64,
+    pub(crate) snap_bytes: u64,
+    pub(crate) snap_bytes_max: u32,
     /// Snapshots whose payload exceeded `max_snapshot_bytes`, cumulative.
-    snap_overflows: u64,
+    pub(crate) snap_overflows: u64,
     /// Entity records encoded (summed over all groups, via
     /// [`RoomLogic::encoded_records`]), cumulative. Together with the
     /// broadcastable entity count this is the *overlap multiplier*: how
     /// many times the same entity was encoded into group snapshots per
     /// tick (1.0 for one-group rooms, up to the block overlap for cell
     /// AOI, the visibility-table out-degree for PVS).
-    snap_records: u64,
+    pub(crate) snap_records: u64,
     /// Metric samples dropped on a full (bounded) metrics channel,
     /// cumulative.
-    metrics_dropped: u64,
+    pub(crate) metrics_dropped: u64,
     /// Snapshot + private bytes/frames shipped to the room's connections,
     /// cumulative.
-    shipped_bytes: u64,
-    shipped_frames: u64,
-    private_frames: u64,
+    pub(crate) shipped_bytes: u64,
+    pub(crate) shipped_frames: u64,
+    pub(crate) private_frames: u64,
     /// Joins / leaves processed on the control channel, cumulative.
-    joins: u64,
-    leaves: u64,
+    pub(crate) joins: u64,
+    pub(crate) leaves: u64,
     /// Largest snapshot group this tick (recomputed in the broadcast
     /// phase; carried in the per-step sample as a gauge).
-    step_max_group: u32,
+    pub(crate) step_max_group: u32,
 }
 
 /// The room actor. Owns the world, the connection table, and the group

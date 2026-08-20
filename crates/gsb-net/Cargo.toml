@@ -13,6 +13,7 @@ futures = { workspace = true }
 crossbeam-channel = { workspace = true }
 gsb-core = { workspace = true }
 gsb-protocol = { workspace = true }
+getrandom = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 

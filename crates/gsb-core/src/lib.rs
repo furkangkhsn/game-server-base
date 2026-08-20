@@ -26,6 +26,7 @@ pub mod id;
 pub mod metrics;
 pub mod registry;
 pub mod room;
+pub mod shard;
 pub mod ticker;
 
 pub use error::CoreError;

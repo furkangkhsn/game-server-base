@@ -591,6 +591,7 @@ dependencies = [
  "bytes",
  "crossbeam-channel",
  "futures",
+ "getrandom",
  "gsb-core",
  "gsb-lint",
  "gsb-protocol",

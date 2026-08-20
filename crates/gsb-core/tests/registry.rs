@@ -15,7 +15,7 @@ use std::time::Duration;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
@@ -91,11 +91,11 @@ impl RoomLogic<()> for SeqLogic {
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
 }
 
-fn factory() -> RoomFactory<(), ()> {
-    std::sync::Arc::new(|_id, _config| (
-        (),
-        Box::new(SeqLogic::new()) as Box<dyn RoomLogic<(), GroupKey = ()>>,
-    ))
+fn factory() -> RoomFactory<(), (), ()> {
+    std::sync::Arc::new(|_id, _config| BuiltRoom::Single {
+        world: (),
+        logic: Box::new(SeqLogic::new()) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+    })
 }
 
 fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {

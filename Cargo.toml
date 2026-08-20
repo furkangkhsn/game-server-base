@@ -56,6 +56,10 @@ prost-build = "0.14"
 protoc-bin-vendored = "3"
 bytes = "1"
 
+# OS entropy (rUDP cookie key): the getrandom(2)/BCryptGenRandom reader.
+# Not a crypto layer — 16 bytes of uniform material is all the key needs.
+getrandom = "0.4"
+
 # config / errors / logging
 serde = { version = "1", features = ["derive"] }
 toml = "1"

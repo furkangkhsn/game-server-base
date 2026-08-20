@@ -20,6 +20,19 @@ transport = "tcp"
 # to act on). Ignored when transport = "tcp".
 udp_max_datagram_bytes = 1472
 
+# rUDP only: the cookie key of the handshake's anti-amplification
+# check, as 32 hex characters (16 bytes). Omitted (the default) = the
+# server draws 16 bytes from the OS entropy source at bind time
+# (getrandom(2) on Linux, BCryptGenRandom on Windows). Supplying a key
+# makes the handshake reproducible/auditable and is the escape hatch
+# for a platform where the entropy source cannot be read. If the
+# entropy draw fails and no key is configured, the server REFUSES TO
+# START (a predictable key would let an off-path attacker who narrows
+# the server's start time forge proofs and allocate sessions for
+# spoofed addresses — inverting the property; a warning is not a
+# security posture). Ignored when transport = "tcp".
+#udp_cookie_key = "0123456789abcdef0123456789abcdef"
+
 # Global tick rate (ticks per second). One ticker task feeds all rooms over
 # a broadcast channel. A room may run slower, at any rate that divides this
 # one (e.g. global 60 → a room at 15 steps every 4th tick).
@@ -87,16 +100,28 @@ max_snapshot_bytes = 1400
 # clamped to every step would defeat the silence-when-unchanged gain.
 keepalive_hz = 1.0
 
-# Visibility strategy of the demo rooms: "all" | "spatial" | "team" | "pvs".
-# All four run the SAME game (same components, movement, wire format); only
-# the snapshot grouping (visibility) differs:
+# Visibility strategy of the demo rooms:
+# "all" | "spatial" | "team" | "pvs" | "sharded".
+# The first four run the SAME game (same components, movement, wire format);
+# only the snapshot grouping (visibility) differs:
 #   all     - GroupKey = (): everyone sees the whole world (baseline)
 #   spatial - GroupKey = Cell: spatial AOI, 3x3 cell block (see aoi_cell_size)
 #   team    - GroupKey = Team: team fog of war, 2 groups (see team_vision_radius)
 #   pvs     - GroupKey = Sector: per-map-segment PVS, static visibility table
-# Default "all" (backward compatible; restricted visibility is an explicit
-# gameplay choice). See docs/DESIGN.md §8 and docs/ROADMAP.md.
+# "sharded" is a TOPOLOGY change (not a group key): the ONE room is split into
+# N shard actors (a grid over the map) that migrate entities across the seams;
+# it runs the same game but scales the single-continuous-world class. See
+# docs/DESIGN.md §8.2 and docs/ROADMAP.md.
+# Default "all" (backward compatible; restricted visibility / sharding is an
+# explicit gameplay choice). See docs/DESIGN.md §8 and docs/ROADMAP.md.
 visibility = "all"
+
+# Number of shards (used only when visibility = "sharded"). The room's map is
+# cut into a grid of this many cells (1..=16; the grid picks the shape closest
+# to square). Each shard is one actor that owns its world slice; entities
+# migrate between neighboring shards when they cross a seam. See
+# docs/DESIGN.md §8.2.
+#shard_count = 4
 
 # World units per AOI cell edge (used only when visibility = "spatial").
 aoi_cell_size = 20.0

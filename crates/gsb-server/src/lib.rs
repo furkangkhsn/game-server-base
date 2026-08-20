@@ -29,7 +29,7 @@ use gsb_core::channel::channel;
 use gsb_core::conn::ConnectionActor;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
-use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{RoomConfig, RoomLogic};
 
 /// The visibility strategy of the demo rooms (config-selectable; all run
@@ -57,6 +57,13 @@ pub enum Visibility {
     /// `GroupKey = Sector`: per-map-segment PVS (static visibility table
     /// over hand-authored convex sectors; see [`gsb_game::pvs`]).
     Pvs,
+    /// Grid of shards (see [`gsb_game::sharded`]): the room is `shard_count`
+    /// actors, each owning a rectangular region of the map, with entity
+    /// migration across region boundaries and boundary visibility. This is
+    /// a different *topology* (N actors + N worlds), not just a group key,
+    /// so it plugs in via `ShardLogic`/`BuiltRoom::Sharded` rather than
+    /// `RoomLogic`. Selecting it uses [`Config::shard_count`] (1..=16).
+    Sharded,
 }
 
 impl Default for Visibility {
@@ -81,6 +88,7 @@ impl std::fmt::Display for Visibility {
             Self::Spatial => "spatial",
             Self::Team => "team",
             Self::Pvs => "pvs",
+            Self::Sharded => "sharded",
         };
         f.write_str(s)
     }
@@ -182,6 +190,12 @@ pub struct Config {
     pub keepalive_hz: f64,
     /// The visibility strategy of the demo rooms (see [`Visibility`]).
     pub visibility: Visibility,
+    /// Number of shards per room (used only when
+    /// [`Self::visibility`] = [`Visibility::Sharded`]). The map is divided
+    /// into a near-square grid of `rows × cols` shards (`rows * cols =
+    /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
+    /// 1..=16 (the grid topology); validated at startup. Default 4 (2×2).
+    pub shard_count: u32,
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured break-even.
@@ -192,6 +206,12 @@ pub struct Config {
     /// [`Self::transport`] = `Udp`. See `gsb_net::udp` (feature 3:
     /// oversized frames are dropped and counted, never fragmented).
     pub udp_max_datagram_bytes: usize,
+    /// The rUDP cookie key as 32 hex characters (16 bytes). Used only
+    /// when [`Self::transport`] = `Udp`. `None` (the default) = draw the
+    /// key from the OS entropy source at bind time; if that draw fails
+    /// the server refuses to start — a predictable key would invert the
+    /// handshake's anti-amplification property (see `gsb_net::udp`).
+    pub udp_cookie_key: Option<String>,
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured break-even.
@@ -228,8 +248,10 @@ impl Default for Config {
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
             visibility: Visibility::default(),
+            shard_count: 4,
             transport: TransportKind::default(),
             udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
+            udp_cookie_key: None,
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
@@ -290,6 +312,33 @@ pub enum ServerError {
 
     #[error("transport bind failed: {0}")]
     Bind(#[from] std::io::Error),
+
+    #[error("invalid `udp_cookie_key` in config: {0}")]
+    BadCookieKey(String),
+
+    #[error("invalid `shard_count` {0}: must be 1..=16 (grid topology)")]
+    BadShardCount(u32),
+}
+
+/// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
+/// cookie key is an operator-supplied alternative to the OS-entropy
+/// draw — see `gsb_net::udp::CookieKey`).
+fn parse_cookie_key(s: &str) -> Result<[u8; 16], String> {
+    if s.len() != 32 {
+        return Err(format!("expected 32 hex characters, got {}", s.len()));
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| {
+            format!(
+                "invalid hex pair `{}:{}` at position {}",
+                &s[i * 2..i * 2 + 1],
+                &s[i * 2 + 1..i * 2 + 2],
+                i * 2
+            )
+        })?;
+    }
+    Ok(out)
 }
 
 /// Handle to a running server.
@@ -336,13 +385,11 @@ pub fn build_table() -> Arc<MessageTable> {
 /// [`gsb_game::room::DemoRoom`] over a spawn map of half-size
 /// `spawn_half`. Group key is `()` (one group per room) — the AOI-**off**
 /// baseline: every connection receives the whole world.
-fn demo_room_factory(spawn_half: f32) -> RoomFactory<World, ()> {
-    Arc::new(move |_id, _config| {
-        (
-            World::new(),
-            Box::new(gsb_game::room::DemoRoom::with_spawn_half(spawn_half))
-                as Box<dyn RoomLogic<World, GroupKey = ()>>,
-        )
+fn demo_room_factory(spawn_half: f32) -> RoomFactory<World, (), ()> {
+    Arc::new(move |_id, _config| BuiltRoom::Single {
+        world: World::new(),
+        logic: Box::new(gsb_game::room::DemoRoom::with_spawn_half(spawn_half))
+            as Box<dyn RoomLogic<World, GroupKey = ()>>,
     })
 }
 
@@ -355,39 +402,85 @@ fn demo_room_factory(spawn_half: f32) -> RoomFactory<World, ()> {
 /// cannot be stored in one value — `start_inner` picks the factory at the
 /// config boundary. This is entirely on the game/server side; `gsb-core`
 /// stays generic over the group key and is untouched.
-fn aoi_room_factory(cell_size: f32, spawn_half: f32) -> RoomFactory<World, gsb_game::aoi::Cell> {
-    Arc::new(move |_id, _config| {
-        (
-            World::new(),
-            Box::new(gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half))
-                as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
-        )
+fn aoi_room_factory(
+    cell_size: f32,
+    spawn_half: f32,
+) -> RoomFactory<World, gsb_game::aoi::Cell, ()> {
+    Arc::new(move |_id, _config| BuiltRoom::Single {
+        world: World::new(),
+        logic: Box::new(gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half))
+            as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
     })
 }
 
 /// The team-fog room factory: an empty bevy `World` + a
 /// [`gsb_game::team::TeamRoom`] with the given `vision_radius`. Group key
 /// is [`gsb_game::team::Team`] (2 groups).
-fn team_room_factory(vision_radius: f32, spawn_half: f32) -> RoomFactory<World, gsb_game::team::Team> {
-    Arc::new(move |_id, _config| {
-        (
-            World::new(),
-            Box::new(gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half))
-                as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
-        )
+fn team_room_factory(
+    vision_radius: f32,
+    spawn_half: f32,
+) -> RoomFactory<World, gsb_game::team::Team, ()> {
+    Arc::new(move |_id, _config| BuiltRoom::Single {
+        world: World::new(),
+        logic: Box::new(gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half))
+            as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
     })
 }
 
 /// The PVS room factory: an empty bevy `World` + a
 /// [`gsb_game::pvs::SectorRoom`] (the demo map is built into the room).
 /// Group key is [`gsb_game::pvs::Sector`].
-fn pvs_room_factory(spawn_half: f32) -> RoomFactory<World, gsb_game::pvs::Sector> {
+fn pvs_room_factory(spawn_half: f32) -> RoomFactory<World, gsb_game::pvs::Sector, ()> {
+    Arc::new(move |_id, _config| BuiltRoom::Single {
+        world: World::new(),
+        logic: Box::new(gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half))
+            as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
+    })
+}
+
+/// The sharded room factory: `shard_count` shards, each an empty bevy
+/// [`World`] + a [`gsb_game::sharded::ShardedRoom`] over the same map
+/// (half-size `spawn_half`). Unlike the other factories (which build one
+/// `RoomLogic` room), this returns [`BuiltRoom::Sharded`]: N shard worlds
+/// and N `ShardLogic` instances (the grid topology is the room's business,
+/// the registry just wires the channels).
+///
+/// `home_shard` routes a join to the shard owning the joiner's *spawn*
+/// position (the deterministic `spawn_pos` → the grid region of that
+/// point). The router is pure and synchronous (no await) — the registry
+/// never blocks on it.
+fn sharded_room_factory(
+    spawn_half: f32,
+    shard_count: usize,
+) -> RoomFactory<World, (), gsb_game::sharded::ShardedRoomState> {
     Arc::new(move |_id, _config| {
-        (
-            World::new(),
-            Box::new(gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half))
-                as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
-        )
+        let shards: Vec<gsb_core::registry::Shard<World, (), gsb_game::sharded::ShardedRoomState>> =
+            (0..shard_count)
+                .map(|i| {
+                    (
+                        World::new(),
+                        Box::new(gsb_game::sharded::ShardedRoom::new(
+                            i,
+                            shard_count,
+                            spawn_half,
+                        ))
+                            as Box<
+                                dyn gsb_core::shard::ShardLogic<
+                                    World,
+                                    GroupKey = (),
+                                    State = gsb_game::sharded::ShardedRoomState,
+                                >,
+                            >,
+                    )
+                })
+                .collect();
+        BuiltRoom::Sharded {
+            shards,
+            home_shard: Arc::new(move |conn| {
+                let (x, y) = gsb_game::room::spawn_pos(conn, spawn_half);
+                gsb_game::sharded::shard_at(x, y, spawn_half, shard_count)
+            }),
+        }
     })
 }
 
@@ -412,6 +505,15 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
     let bind: SocketAddr = cfg.bind.parse().map_err(|e: std::net::AddrParseError| {
         ServerError::BadBind(cfg.bind.clone(), e.to_string())
     })?;
+
+    // The sharded topology is a grid of 1..=16 shards (see
+    // `gsb_game::sharded::grid_shape`); a count outside that range would
+    // build a degenerate (or impossible) grid, so refuse to start.
+    if cfg.visibility == Visibility::Sharded
+        && !(1..=16).contains(&cfg.shard_count)
+    {
+        return Err(ServerError::BadShardCount(cfg.shard_count));
+    }
 
     let table = build_table();
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
@@ -503,6 +605,19 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 .run(),
             )
         }
+        Visibility::Sharded => {
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    sharded_room_factory(cfg.spawn_half_size, cfg.shard_count as usize),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                    cfg.max_connections,
+                )
+                .run(),
+            )
+        }
     };
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
@@ -547,6 +662,22 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
         std::time::Duration::from_secs_f64(cfg.idle_timeout_secs)
     });
 
+    // The rUDP cookie key: the operator's 32-hex-char config string, or
+    // `None` = the transport draws 16 bytes from the OS entropy source
+    // at bind time. A parse failure is a config error (the operator sees
+    // it at startup, before anything binds); an entropy failure is a
+    // bind error (the server refuses to start with a predictable key —
+    // see `gsb_net::udp::CookieKey`).
+    let cookie_key = if cfg.transport == TransportKind::Udp {
+        cfg.udp_cookie_key
+            .as_deref()
+            .map(parse_cookie_key)
+            .transpose()
+            .map_err(ServerError::BadCookieKey)?
+    } else {
+        None
+    };
+
     // Bind the transport (config-selectable: TCP or rUDP — same actor
     // layer, see `TransportKind`), then run the accept loop.
     let transport: Arc<dyn Transport> = match cfg.transport {
@@ -562,6 +693,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                 outbox_capacity: cfg.conn_out,
                 max_datagram_bytes: cfg.udp_max_datagram_bytes,
                 idle_timeout,
+                cookie_key,
             },
         }),
     };

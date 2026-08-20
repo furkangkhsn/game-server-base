@@ -357,8 +357,16 @@ sinyali; §14.5).
 
 **El sıkışma (stateless cookie):** `istemci→HELLO{nonce,0}` /
 `sunucu→HELLO{nonce,F(nonce,peer,key)}` / `istemci→HELLO{nonce,cookie}`
-→ oturum kurulur. `F` = splitmix64 katlanması; `key` proses başına duvar
-saatinden (v1'de kriptografik katman yok — §10). Çift yönlü mesajlar
+→ oturum kurulur. `F` = splitmix64 katlanması. **Cookie key** proses başına 16 bayttır;
+iki kaynaktan biriyle kurulur: (1) konfigürasyonda `cookie_key`
+verilmişse o (operatör denetimi — deploy'da sabit anahtar isteyenler
+için), (2) verilmediyse **OS entropisinden** (`getrandom`) 16 bayt.
+Sessiz zayıf geri düşüş **yoktur**: entropi kaynağı başarısız olursa
+süreç başlatmayı reddeder (yapı `Result` döndürür; duvar saati gibi
+tahmin edilebilir bir değer asla kullanılmaz). v1'de kriptografik katman
+(HMAC/imza) hâlâ yok — §10 satırı geçerli; ama key artık tahmin
+edilemez, dolayısıyla sahte-proof koruması key'in *gibi görünen*
+(tahmin edilemez) olmasına dayanır. Çift yönlü mesajlar
 aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
 üretilemez. NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
 yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
@@ -650,6 +658,100 @@ izolasyonu kanıt olarak taşır. `--profile spread` (uniform, geniş harita;
 varsayılan `ring` = eski kümeli profil, aynen) stratejileri ayrıştırmak
 için eklenmiş ikinci yük geometrisidir.
 
+### 8.2 Oda segmentasyonu (`sharded`) — topoloji düzeyi strateji
+
+Görünürlük stratejileri (§8.1) *tek odanın içinde* snapshot'ları gruba
+bölerek ölçekler; dünya hâlâ tek actor'da, tek `World`'de, tek tick
+gövesindedir. `sharded` bunun **üstüne**, *topoloji* düzeyinde bir
+katmandır: **tek oda N shard actor'üne** bölünür. N shard'ın her biri
+haritanın bir kesitini (grid hücresini) **tek başına** sahip olan bağımsız
+bir `World` + `ShardLogic`'tir (gsb-game tarafında `ShardedRoom`); paralellik
+hedefe ulaşıp var olan oda actor modelinin kendisinden gelir (N görev),
+thread havuzu değil. Bu, §14.4'te "katman eklenmeden sığmıyor" olarak
+notlanan *sınır olmayan tek dünya* sınıfının ilk uygulamasıdır.
+
+**Topoloji.** `shard_count` (1..=16; `grid_shape` en kareye yakın
+rows×cols'u seçer) shard haritayı grid'e böler. Shard'lar yalnız
+**4-komşu** (batı/doğu/kuzey/güney) ile konuşur; komşu olmayan çiftler
+arasında kanal **yoktur**. Her shard, komşularına giden birer `mpsc`
+kanalı tutar (matris; boş yuvalar dummy). Shard actor'ü kendi
+`World`'ünün **tek sahibi**dir — başka hiçbir görev o `World`'e dokunmaz.
+
+**Shard tick'i (6 faz, tek senkron gövde; §4'ün oda tick'ine benzer):**
+`CONTROL` (önce `deferred` kuyruğu, sonra kanal `try_recv`) → `READ` →
+`CONVERT` → `SYSTEMS` → `MIGRATE` → `BORDER` → `BROADCAST`. Fazlar §4'teki
+oda fazlarıyla aynı disiplindedir: gövde senkrondur, await yok; shard
+arası veri yalnız kanaldan akar.
+
+**Migrasyon (sınır geçişi).** Bir entity, hareketle komşu shard'ın
+hücresi içine girdiğinde (AOI ile aynı bölge testi) shard onu
+**migre eder**. Protokol iki değişmezi korur:
+1. **Hiçbir tick dizininde entity iki shard'da da yoktur, hiçbirisinde de
+   yoktur** (tek sahip). Gönderen, `Migrate` mesajı *başarıyla*
+   `try_send`'edildiyse entity'yi `t+1`'de despawn eder (MIGRATE 4a);
+   başarısızsa (`Full|Closed`) mesaj geri alınır, bağlantı `conns`'a
+   geri sarılır, entity **orada kalır** (bir sonraki tick yeniden dener).
+2. **Kurulum kapısı (install gate):** alıcı, `Migrate{at_tick}`'i
+   `ctx.tick <= at_tick` iken *erken* ulaşırsa `deferred`'e erteler —
+   entity tam olarak `at_tick+1`'in `CONTROL`'unda spawn olur. Böylece
+   "gönderen despawn etmeden alıcı spawn eder" yarışı kapanır.
+   `Leave`/`Migrate` yarışı iki tablo epoch şemasıyla çözülür
+   (`conn_epoch` = kurulu join'ın epoch'u; `conn_tombstone` = işlenen en
+   yüksek LEAVE epoch'u; kapı **tombstone**'a bakar, *kurulu* epoch'a
+   değil — ping-pong migrasyonu aynı join'ın epoch'unu taşır, kurulu
+   tabloya baksaydı canlı join'ı reddederdi). Detay + testler: ROADMAP
+   "Kapatılanlar (oda segmentasyonu turu)".
+
+**Wire kimliği (range partitioning).** Her shard kendi `WireId`
+aralığını basar: shard `i` → `i * 2^20 + serial` (`SHARD_SERIAL_RANGE =
+1 << 20`). Bu, (a) id'lerin shard'lar arası **çakışmasız** olmasını
+sağlar (ayrı aralıklar), (b) id'in **migrasyonda değişmemesini** sağlar
+(entity taşınırken `WireId`'siyle gider — istemci dünyasında kimlik
+stabil), (c) join'da aralık dolarsa `RoomFull` (sessiz taşma yok).
+Paylaşımlı (global) sayacı reddetme nedeni: join senkron tick gövdesinde
+koştuğu için global bir "sonraki id" kaynağı shard'lar arası senkronizasyon
+gerektirirdi; range partitioning bunu sıfır senkronizasyonla çözer.
+
+**Sınır görünürlüğü (1-tick hizalama).** Komşu shard'lar her tick
+`BORDER` fazında sınıra yakın entity'lerinin **tam durumunu**
+(`BorderExchange`) değiştirir. Shard, komşunun sınır entity'lerini
+*kendi* snapshot'una **borrow** olarak ekler (özellikle: kendi entity'si
+bir tick geriden borçlu kopyayla çakışırsa **kendi kaydı kazanır** — core
+`own_wires` filtresiyle). Border marjı **çeyrek hücre**
+(`min(cell_w, cell_h)/4`): sınırın iki tarafını da kapatır ama borçlu
+kümesini/hizlamayı sınırlı tutar (tam hücre marjı dejeneredir — s×s
+hücredeki her nokta bir kenardan ≤s uzakta olur, bütün shard export
+olurdu). Tüketici tarafındaki **frame filtresi** (`in_border_frame`)
+komşunun *tüm* sınır export'ından yalnızca kendi görünüm çerçevesine
+düşen kayıtları alır. Sonuç: sınırda iki oyuncu birbirini **görür**
+(test: `boundary_entities_are_visible_to_both_sides`); bedel = sınır
+entity'si en fazla 1 tick geriden görünür (lag-blink: entity ≤1 tick
+yok, asla kopyalanmaz).
+
+**Bağlantı sahipliği.** Entity migrasyonla shard'lar arası taşınırken
+**bağlantı kanalları da entity'yle gider** (`Migrate` mesajı `out`/`in`
+mailbox'larını taşır) — yeni shard, entity'nin snapshot'larını doğrudan
+o bağlantının writer'ına yollar. Registry shard'ları takip etmez
+(bağlantının *şu anki* shard'ını bilmez); bu, shard'lar arası
+kayb-ekleme (lost-update) durumunu önler. `Leave` ise **tüm** shard'lara
+yayılır (epoch 0 ile; `max` birleşmesinde zararsız) — düşük frekanslı bir
+olayda N−1 no-op kabul edilebilir, kayıp güncelleme değil.
+
+**Kapasite.** Cap oda düzeyinde **tama** tutulur (registry
+`members + pending >= cap`); shard başına `ceil(cap/N)` değil —
+range-partitioned join, cap'in shard'lar arası dağılımını bilmez.
+
+**Ölçümle sonuç (ayrı proses, `all`, 10k, 30 Hz; detay ROADMAP'te):**
+tek oda (`all`) 10k'da adım bütçesini aşıyor (p50 üstü adımlar,
+`server_hz` ~30 ama `step_max` ~73 ms); `sharded N=4` aynı 10k'da adım
+bütçesine **içe** giriyor (`over_budget` ~0), `sharded N=8` p50 adımı
+~8× düşürüyor. Fiyat: shard protokolü (kanal trafik + border değişimi +
+migrasyon + N× actor) sunucu CPU'yu ~1,4-1,5× artırıyor. Yani
+**segmentasyon adım-duvarını (tick bütçesini) kaydırır; fan-out/decode
+duvarını kaydırmaz** — onu kaydıran mesafe-yanlı görünürlüktür (§8.1).
+Segmentasyon, *tek sürekli dünya* sınıfına aittir; bölünebilir oyunlar
+için çoklu oda yeterlidir (her oda bütçe içine sığar).
+
 ## 9. Kapanma (shutdown) kaskadı
 
 Abort'siz, kanal kapanmalarına dayalı:
@@ -689,7 +791,7 @@ doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | `Listener::close` rUDP turunda eklendi (demux kapatma); accept abort hâlâ kaskadın son halkası | §9 |
 | rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
-| rUDP: **şifreleme yok** | v1 kapsamı (kookie key'i duvar saatinden — yerel saldırgana öngörülebilir, ağ şifrelemesi ayrı katman) | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
+| rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
 | rUDP: **parçalama yok** — bütçe üstü datagram atılır + sayılır | parçalama ayrı bir protokol (assembly penceresi, timeout, çift teslim); 1400 B oda bütçesi + 1472 B MTU marjı yeterli (snapshot aşımı zaten oda tarafında sayılır) | `snap_overflows` sinyaliyle grup bölme (AOI) + gerekirse frag katmanı — §8 |
 | rUDP: SO_RCVBUF ayarı yok | tokio 1.53.1 `UdpSocket`'inde buffer boyutu setter'ı yok (raw fd gerekir) | tokio setter'ı geldiğinde / raw fd wrapper |
 | rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
@@ -956,6 +1058,16 @@ segmentasyonu — her oda bütçe içine sığar, bağlantılar odalara dağıl�
 Varsayılan `max_players = Some(10_000)` tam olarak bu ölçülen duvardır
 (§10); bir oyun bunu kendi bütçesine göre (çok) daha düşüğe çekmelidir.
 
+**Ölçülerek doğrulandı (oda segmentasyonu turu, `sharded`):** aynı 10k
+bağlantıda tek oda (`all`) adım bütçesini aşıyorken (`step_max` ~73 ms,
+`over_budget` %3), `sharded N=4` bütçeye içe girer (`over_budget` ~0),
+`sharded N=8` p50 adımı ~8× düşürür; bedel ~1,4-1,5× sunucu CPU (protokol
+trafiki). Yani **segmentasyon adım-duvarını kaydırır**; duvarın *kaynağı*
+(tek actor = tek thread bütçesi) aynen kalır, shard'lar arası dağılır.
+Bölünebilir oyunlarda çoklu oda aynı işi (daha) ucuz yapar; segmentasyon
+özel olarak *tek sürekli dünya* sınıfına aittir. Detay + elenmiş
+alternatifler: ROADMAP "Kapatılanlar (oda segmentasyonu turu)".
+
 ### 14.4 Hangi oyun aileleri sığıyor
 
 **Sığıyor** — dünyanın doğal olarak odalara segment edildiği ve oda
@@ -968,11 +1080,17 @@ bütçesine sığındığı aileler:
   stratejiyle grup başına üye sayısı yüzlerce; ölçülen adım maliyeti
   (O(entity + üye), §11 tablosu) ile sınırlı.
 - **Instanced dungeon / raid**, **lobili oyun**, sohbet-yanlı MMO alanları.
+- **Oda sınırı olmadan büyük ama sınırlı tek dünya** (`sharded`, §8.2):
+  tek dünya N shard'a segment edilir, entity'ler sınırda migrasyonla
+  taşınır. Ölçülen: 10k bağlantıda adım-duvarı aşılmaz (N=4/8). Sınır:
+  shard'lar tek makine içindeki actor'lardır (çok makineye dağıtım
+  katmanı eklenmeden); shard sayısı 1..=16.
 
 **Sığmıyor (katman eklenmeden)** — bu base'in kapsamı dışı:
 
-- **Oda sınırı olmayan tek dünya** (sürekli açık dünya, 100k+ oyuncu
-  aynı dünya): oda segmentasyonu + oyuncu migrasyon protokolü gerekir.
+- **100k+ oyunculu sınırız tek dünya** (çok makine): `sharded` tek
+  makinede N shard'a kadar gider; çok makine dağıtımı (shard'ların
+  network'e yayılması) ayrı bir katmandır ve henüz yapılmadı.
 - **Bağlantı başına oturum durumu gerektirenler**: sohbet oturumları,
   istemci başına prediction/buffer, bağlantı başına rate muhasebesi —
   connection actor ince tutulmuştur; bu durumlar *üzerindeki* uygulama

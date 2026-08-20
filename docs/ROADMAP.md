@@ -44,12 +44,217 @@ eklendi — tek soket, tek demux, cookie el sıkışması, kontrol/oyun band
 ayrımı, MTU drop+count, BTreeSet idle sweep; e2e akışlarının 7/7'si
 **her iki taşımada** aynı niyetle çalışıyor, loadgen `--transport
 udp` ile TCP'ye karşı yan yana ölçüldü (150 istemci: 30 Hz korundu,
-snapshot bant genişliği eşdeğer, handshake TCP'nin altındaydı).
-Test 58 → **83** (83/83 yeşil +1 var olan `#[ignore]`'li gsb-lint
+snapshot bant genişliği eşdeğer, handshake TCP'nin altındaydı);
+**rUDP cookie key** artık OS entropisinden (`getrandom`) ya da
+konfigürasyondan (`cookie_key`) — sessiz zayıf geri düşüş yok,
+entropi yoksa süreç başlatmayı reddeder (aşağıda, A turu §cookie);
+ve **oda segmentasyonu (`sharded`)** kuruldu — tek oda N shard
+actor'üne bölünür, entity'ler sınırda migrasyonla taşınır (tek
+sahip değişmezi, 1-tick hizalama, range-partitioned wire kimliği,
+iki-tablo epoch şeması); ölçümle: 10k bağlantıda tek odanın
+aştığı adım-duvarı `sharded N=4/8` aşılmaz, bedel ~1,4× sunucu CPU
+(aşağıda, "Kapatılanlar (oda segmentasyonu turu)").
+Test 58 → 83 → **97** (97/97 yeşil +1 var olan `#[ignore]`'li gsb-lint
 doctest; hiçbir eski test silinmedi/ihmal edilmedi).
-Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek henüz ölçülmedi;
-100/500/1000/2000 turu aşağıda), **robustluk** ve **güvenlik**
-başlıklarındaki kalan işler.
+Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
+kalanı çok makine dağıtımı, congestion control), **robustluk** ve
+**güvenlik** başlıklarındaki kalan işler.
+
+## Kapatılanlar (oda segmentasyonu turu)
+
+Bu tur iki bölüm: **A — rUDP cookie key** (el sıkışma anahtarının
+kaynağı; sessiz zayıf geri düşüşün kaldırılması — rUDP turunun
+güvenlik devamı) ve **B — oda segmentasyonu (`sharded`)** (tek odanın
+N shard actor'üne bölünmesi +
+sınır migrasyon protokolü; §14.3/14.4'te "kaldıraç / katman
+eklenmeden sığmıyor" olarak notlanan sınıfın ilk uygulaması).
+Makine: AMD Ryzen 9 7950X 16C/32T (SMT), 124 GB, rustc 1.95.0, tokio
+1.53.1. Yük koşuları **ayrı proses** (`--orchestrate --pin`), sunucu
+8 fiziksel core'a pin'li (16 HW thread), istemciler ayrı process'ler;
+koşular release.
+
+### A — rUDP cookie key (OS entropisi)
+
+**Problem.** rUDP el sıkışmasının cookie key'i proses başına **duvar
+saatinden** türetiliyordu → yerel saldırgana (saat + pid bilen)
+öngörülebilir → sahte proof üretilebilir. v1'de kriptografik katman
+(HMAC) yoktu, ama key'in kendisinin tahmin edilemez olması, sahte-
+proof/amplifikasyon korumasının *gerçek* dayanağı olmalıydı.
+
+**Çözüm (seçilen).** Key, 16 bayt, iki kaynaktan biriyle kurulur:
+(1) `Config.cookie_key: Option<[u8;16]>` verilmişse o (operatör
+denetimi — deploy'da sabit anahtar isteyenler), (2) verilmediyse
+`getrandom` ile **OS entropisinden** (`getrandom(2)`/`/dev/urandom`)
+16 bayt. **Sessiz zayıf geri düşüş yok**: entropi kaynağı başarısız
+olursa yapı `Result::Err` döndürür, süreç başlatmayı reddeder; duvar
+saati gibi tahmin edilebilir bir değer asla kullanılmaz. `forged_
+proof_is_rejected` testi: rastgele / sıfır / sabit key'li sahte
+cookie reddedilir, oturum kurulmaz (+ 2 cookie akış testi).
+
+**Elenen alternatifler.**
+1. *Key'i duvar saati + pid'den türet, HMAC ekle*: HMAC katmanı ayrı
+   bir protokol yüzeyi (imza doğrulama, key senkronu) demek; v1
+   kapsamı dışında. Key'i entropiden almak aynı korumayı (tahmin
+   edilemezlik) sıfır ek protokol yüzeyiyle verir.
+2. *Key'i her oturumda istemciye sormak (pre-shared)*: stateless cookie
+   modelini bozar (istemsiz oturum ön-oluşturulamaz), NAT reconnect
+   akışını kırar; operasyonel yük (anahtar dağıtımı) gereksiz.
+
+### B — Oda segmentasyonu (`sharded`)
+
+**Ölçülen soruna (B0 karar koşusu).** C1 duvarı (tek oda, `all`,
+ayrı proses): p50 adım 33,3 ms bütçeyi **9k-10k arasında** aşıyor,
+10k'da `server_hz` 23,2'ye düşüyor. Soru: bu duvar çoklu oda ile mi,
+yoksa tek odanın *içinde* segmentasyonla mı aşılır? Cevap (ölçümle):
+**oyun sınıfına göre.**
+
+- **Bölünebilir oyunlar** (MOBA takımları, ayrı lobiler, bölgeler):
+  dünya zaten doğal odalara ayrışır → **çoklu oda yeter** (her oda
+  bütçe içine sığar, bağlantılar odalara dağılır). Segmentasyon
+  gerekmez, daha ucuzdur.
+- **Sınırız tek dünya** (sürekli açık dünya, oyuncular bir dünyada
+  dolaşır): oda sınırına takılamaz → **segmentasyon gerekir**
+  (`sharded`). Bu tur bunu kurar.
+
+Yani segmentasyon *tek sürekli dünya* sınıfına aittir; ölçüm, çoklu
+odanın bölünebilir sınıfta yeterli olduğunu (2500 entity'li oda
+adımının ~1 ms altı, bütçenin çok içi) ve tek dünyanın segment
+gerekttiğini gösterir.
+
+**Mimari seçim (neden `RoomLogic`'in altı değil, topoloji düzeyi).**
+`sharded`, tek oda → N actor değişimidir; bu, `RoomLogic` trait'i ile
+ifade edilemez (trait tek `World` + tek tick gövdesi varsayar).
+Çözüm: `gsb_core::shard` (topoloji-agnostik shard actor + migrasyon
+protokolü) + `gsb_game::sharded` (oyun-level `ShardLogic`: grid,
+bölge, border, wire range) + registry `BuiltRoom::{Single, Sharded}`
+(1→N actor topolojisi). Registry shard'ları **takip etmez**
+(bağlantının şu anki shard'ını bilmez) — bu, shard'lar arası
+kayb-ekleme (lost-update) durumunu önler.
+
+**Tasarım kararları + elenen alternatifler.**
+
+1. **Partition / AOI hizalama.** Shard'lar haritayı grid'e böler
+   (`grid_shape`, en kareye yakın rows×cols, N≤16); bölge testi AOI ile
+   aynı (`shard_at`). Elenmiş: (a) *dairesel/radial partition* — sınır
+   uzunluğu ve komşuluk düzensiz, migrasyon yolu karmaşık; grid 4-komşu
+   ile düzgün. (b) *hiyerarşik (quadtree)* — dinamik yeniden
+   dengeleme gerekir, shard'lar arası migrasyon ağacı boyunca; grid
+   statik ve basit (v1).
+2. **Migrasyon — tek sahip değişmezi** (hiçbir tick dizininde entity
+   iki shard'da da yok, hiçbirisinde de yok). Gönderen `Migrate`'i
+   *başarıyla* `try_send`'ederse `t+1`'de despawn; başarısızsa mesaj
+   geri alınır, bağlantı geri sarılır, entity kalır. Alıcı *install
+   gate* ile `at_tick+1`'de spawn (erken gelen ertelenir). Elenmiş:
+   (a) *write-through (her iki shard'da bir tick çift sahip)* —
+   çift snapshot / çift migrasyon, kimlik çakışması; "tek sahip"
+   değişmezi kırılır. (b) *2PC (prepare/commit)* — shard'lar arası
+   await/round-trip, tick gövdesini senkron olmaktan çıkarır;
+   `try_send` başarısı tek fazda aynı garantiyi verir.
+3. **Sınır görünürlüğü (1-tick hizalama).** Komşular `BORDER` fazında
+   tam durum değişir; shard komşunun sınır entity'lerini *borrow* olarak
+   ekler (kendi kaydı 1-tick-geri borçlu kopyayı yener). Marj
+   **çeyrek hücre** (`min(cell_w,cell_h)/4`). Elenmiş: (a) *tam hücre
+   marjı* — dejener: s×s hücredeki her nokta bir kenardan ≤s uzakta
+   olur, **bütün shard** export olur (borrow kümesi sınırsızlaşır).
+   (b) *sıfır marj (sadece sınır hücresi)* — sınırın iki tarafını
+   kapatmaz, entity sınırda görünmez olur (lag-blink yerine kayıp).
+4. **Bağlantı sahipliği.** Migrasyonda **kanallar entity'yle gider**
+   (`Migrate` mesajı `out`/`in` mailbox'larını taşır); yeni shard
+   snapshot'ı doğrudan o bağlantının writer'ına yollar. Elenmiş:
+   (a) *registry'nin shard'ı takip etmesi (bağlantı → shard yönlendirmesi
+   migrasyonda güncellenir)* — shard'lar arası güncelleme = kayb-ekleme
+   (bounded kanal + eşzamanlı migrasyon/leave); registry'nin shard'ı
+   bilmemesi bu sınıfı tamamen ortadan kaldırır. (b) *bağlantının
+   shard'lar arası "forward" etmesi* — her snapshot shard → registry →
+   shard round-trip, ek gecikme + kanal.
+5. **Wire kimliği (range partitioning).** Shard `i` → `i * 2^20 +
+   serial` (`SHARD_SERIAL_RANGE = 1<<20`); id migrasyonda değişmez
+   (entity `WireId`'siyle gider). Elenmiş: (a) *global (paylaşımlı)
+   id sayacı* — join senkron tick gövdesinde koştuğu için global "sonraki
+   id" shard'lar arası senkronizasyon ister; range partitioning sıfır
+   senkronizasyonla çakışmasızlık verir. (b) *her shard kendi 0'dan
+   sayar (id + shard ön eki)* — istemci kimliği shard'la bileşke
+   olur, migrasyonda id değişir (istemci dünyasında kimlik bozulur).
+6. **Leave / migrasyon yarışı — iki-tablo epoch şeması.**
+   `conn_epoch` = shard'ın şu an tuttuğu join'in epoch'u (Migrate-out
+   epoch taşımak için); `conn_tombstone` = işlenen en yüksek LEAVE
+   epoch'u. Kapı **tombstone**'a bakar (`tombstone >= p.epoch` →
+   reject), *kurulu* epoch'a değil. Elenmiş: (a) *kurulu (`conn_epoch`)
+   tablosuna kapı* — ping-pong migrasyonu aynı join'in epoch'unu taşır;
+   kurulu tablo onu "bilinen" sayıp **canlı join'i reddederdi** (test 1,
+   tick 14'te "wire 1 owned by []" ile yakalandı). (b) *registry'nin
+   leave'i shard'a iletmesi (yönlendirmeli)* — registry'nin shard'ı
+   bilmesi gerekir (karar 4'e aykırı); leave'in **tüm** shard'lara
+   `max` birleşmesiyle yayılması (epoch 0 ile, zararsız) daha basit ve
+   kayıpsız.
+7. **`&World` metotları → cache.** `collect_border`/`own_wires` `&self`
+   + `&World` aldığı için (borrowed context) canlı sorgu yapamaz
+   (`&mut World` isterlerdi) → `border_cache` (update sonunda yeniden
+   kurulur; migrate-out'a karşı 1-tick-geri **zararsız**, alıcının
+   `own_wires` filtresi bayat kopyayı düşürür) + `own_wires: HashSet`
+   (her mutasyonda senkron — bayat kayıt, komşunun artık-düzgün
+   kaydını gizleyip entity'yi 1 tick düşürür).
+8. **Kapasite.** Cap oda düzeyinde **tama** (`members + pending >=
+   cap`); shard başına `ceil(cap/N)` değil (range-partitioned join,
+   cap'in dağılımını bilmez).
+
+**Doğrulama (unit + entegrasyon; hepsi yeşil).**
+- `gsb_core::shard` (5 test): `migration_never_drops_or_duplicates`
+  (ping-pong, her tick dizininde tam-tek sahip + süreklilik),
+  `wire_identity_stable_and_disjoint` (id stabil + shard'lar arası
+  çakışmasız), `in_flight_action_survives_migration` (uçuştaki aksiyon
+  migrasyonda kaybolmaz), `ghost_migrate_after_leave_is_rejected`
+  (iki-tablo epoch: leave sonrası hayalet migrasyon reddedilir),
+  `boundary_entities_are_visible_to_both_sides` (sınırda iki oyuncu
+  birbirini görür).
+- `gsb_game::sharded` (6 test): `region_partition_tiles_the_map`,
+  `wire_ranges_are_disjoint_and_stable`,
+  `migration_reports_crossing_with_full_state`,
+  `border_visibility_across_the_seam`,
+  `frame_filter_discards_far_neighbor_edges` (N=16: sınır entity'si
+  görünür, uzak-kenar entity'si frame filtresinde elenir),
+  `snapshot_union_and_no_change`.
+- Loadgen: `--visibility sharded --shard-count N` (in-proc + `--serve`
+  + `--orchestrate` üç modda da shard_count akıtıldı); rapor
+  **shard-aware** (`fold_rooms`: tek oda = özdeş, sharded = shard'lar
+  üstü toplam/en-kötü-shard) + RESULT'a `shards=N` alanı.
+
+**Ölçüm (ayrı proses, `all`, 30 Hz, sunucu 8 core pin'li, 10000
+bağlantı, stagger'lı join — temiz steady-state):**
+
+| Konfig | peak_conns | server_hz | adım p50 | adım max | over-budget | server_cpu_s |
+|---|---|---|---|---|---|---|
+| C1 (1 oda, `all`) | 10 000 | 30.02 | 6 250 µs | 73 279 µs | **%3,4** | 80,8 |
+| `sharded N=4` | 10 000 | 29.93 | 6 250 µs | 72 956 µs | **%0,2** | 111,4 |
+| `sharded N=8` | 10 000 | 29.93 | **782 µs** | 35 818 µs | **%0,0** | 117,8 |
+
+8k'da fark daha belirgin: C1 `over_budget %7,7` / `step_max 146 831 µs`
+(4,4× bütçe) vs `sharded N=4` `%0` / `31 305 µs`.
+
+**Yorum.** (1) **Adım-duvarı (tick bütçesi) segmentasyonla kayıyor:**
+tek oda 10k'da bütçeyi aşarken `sharded` aşılmıyor; N arttıkça p50
+adım düşüyor (N=8 ~8×). (2) **Fiyat:** shard protokolü (kanal trafik +
+border değişimi + migrasyon + N× actor) sunucu CPU'yu ~1,4-1,5×
+artırıyor (80,8 → 117,8 core-s; pin'li havuzun ~%22 → %32'si) — sunucu
+hâlâ doygun değil, dolayısıyla CPU henüz yeni duvar değil. (3)
+**Fan-out/decode duvarı segmentasyonla kaymaz:** `dropped`
+(snapshot'ların istemci kanalında atılması) üç konfigde de yüksek
+(2,3-4,0M) ve istemci decode'u ile sınırlı (`clients_cpu_s≈400`) — bu,
+loadgen istemcisinin 10k×30Hz×~60KB snapshot'ı decode edememesidir,
+sunucu duvarı değil. Fan-out duvarını kaydıran **mesafe-yanlı
+görünürlük**tür (§8.1), segmentasyonla *birleşir*. (4) **Yeni duvar
+konumu:** 10k (oda cap) sınırında adım-duvarı aşılmıyor; bir sonraki
+duvar oda cap'i / bağlantı-altyapısı, adım değil. Segmentasyon tek
+sürekli dünya sınıfına aittir; bölünebilir oyunlarda çoklu oda daha
+ucuz aynı işi yapar.
+
+**Kapsam notu / yapılmayanlar.** Shard'lar **tek makine** içindeki
+actor'lardır (çok makine dağıtımı — shard'ların network'e yayılması —
+yapılmadı, §14.4). Shard sayısı 1..=16 (grid sınırlı). Sınır
+entity'si en fazla 1 tick geri görünür (lag-blink: ≤1 tick yok, asla
+kopyalanmaz) — kabul edilen dejenerasyon. Migrasyon sayaçları
+`RoomSample`/`RoomReport`'a **eklenmedi** (kapsam kontrolü; yalnız
+`tracing` logları).
 
 ## Kapatılanlar (ihlal bütçesi + rUDP turu)
 

@@ -155,10 +155,11 @@ impl DemoRoom {
 /// Deterministic pseudo-random spawn point in a square arena of half-size
 /// `half`, derived from the connection id (stable across room re-joins in
 /// the same session). `half = 50` reproduces the historical 100×100 arena
-/// exactly: the same 1000×1000 lattice, just scaled. `pub(crate)` so the
-/// other rooms share the exact same spawn distribution (a fair
-/// comparison in the load generator).
-pub(crate) fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
+/// exactly: the same 1000×1000 lattice, just scaled. `pub` so the other
+/// rooms share the exact same spawn distribution (a fair comparison in
+/// the load generator) and the sharded room factory can route a join to
+/// the home shard by computing the spawn position's region.
+pub fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
     // The historical 100×100 lattice, scaled: `half = 50` multiplies by
     // exactly 1.0, so the default is bit-identical to the pre-config
     // formula (a re-derivation like `(h % 1000) * 2 * half / 1000` would

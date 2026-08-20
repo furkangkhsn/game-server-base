@@ -122,9 +122,12 @@ struct Args {
     /// homes live on the same map).
     spawn_half: f32,
     /// The visibility strategy of the in-process / served server
-    /// (`--visibility all|spatial|team|pvs`, default `all` — same as the
-    /// server config default).
+    /// (`--visibility all|spatial|team|pvs|sharded`, default `all` — same
+    /// as the server config default).
     visibility: gsb_server::Visibility,
+    /// Shards per room (`--shard-count N`, default 4; used only for
+    /// `sharded`). The map is a near-square grid of N shards; 1..=16.
+    shard_count: u32,
     /// AOI cell size in world units (`--cell-size N`, default 20; used
     /// only for `spatial`).
     cell_size: f32,
@@ -228,7 +231,9 @@ Client options:
   --workers N               tokio worker threads for this process
 
 Server options (in-process server, --serve, or the orchestrator's server):
-  --visibility all|spatial|team|pvs   (default all)
+  --visibility all|spatial|team|pvs|sharded   (default all)
+  --shard-count N                     (sharded; near-square grid of N
+                                       shards, 1..=16; default 4 = 2×2)
   --cell-size F                       (spatial; default 20)
   --vision-radius F                   (team; default 25)
   --max-snapshot-bytes N              (default 1400)
@@ -271,6 +276,7 @@ fn parse_args() -> Args {
         profile: Profile::Ring,
         spawn_half: 50.0,
         visibility: gsb_server::Visibility::default(),
+        shard_count: 4,
         cell_size: 20.0,
         vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
         max_snapshot_bytes: 1400,
@@ -330,8 +336,14 @@ fn parse_args() -> Args {
                     "spatial" => gsb_server::Visibility::Spatial,
                     "team" => gsb_server::Visibility::Team,
                     "pvs" => gsb_server::Visibility::Pvs,
-                    other => panic!("--visibility: expected all|spatial|team|pvs, got {other}"),
+                    "sharded" => gsb_server::Visibility::Sharded,
+                    other => panic!(
+                        "--visibility: expected all|spatial|team|pvs|sharded, got {other}"
+                    ),
                 };
+            }
+            "--shard-count" => {
+                args.shard_count = v().parse().expect("number");
             }
             "--cell-size" => args.cell_size = v().parse().expect("number"),
             "--vision-radius" => args.vision_radius = v().parse().expect("number"),
@@ -920,10 +932,12 @@ fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
 
 /// Start the server in-process with a channel metrics sink. The receiver
 /// moves into the report-drain task; nothing is shared across tasks
-/// beyond that mailbox. `visibility` selects the room group key (the
-/// four strategies: `()` / `Cell` / `Team` / `Sector`).
+/// beyond that mailbox. `visibility` selects the room strategy (the five:
+/// `()` / `Cell` / `Team` / `Sector` / sharded-grid).
+#[allow(clippy::too_many_arguments)] // loadgen helper; params are natural
 async fn start_inprocess(
     visibility: gsb_server::Visibility,
+    shard_count: u32,
     cell_size: f32,
     vision_radius: f32,
     max_snapshot_bytes: usize,
@@ -935,6 +949,7 @@ async fn start_inprocess(
         bind: "127.0.0.1:0".into(),
         room_count: 1,
         visibility,
+        shard_count,
         aoi_cell_size: cell_size,
         team_vision_radius: vision_radius,
         max_snapshot_bytes,
@@ -986,6 +1001,7 @@ async fn run(args: Args) {
         None => {
             let s = start_inprocess(
                 args.visibility,
+                args.shard_count,
                 args.cell_size,
                 args.vision_radius,
                 args.max_snapshot_bytes,
@@ -1142,6 +1158,79 @@ struct SepInfo {
     clients_cpu_s: f64,
 }
 
+/// Total room membership in a report: the SUM over all rooms. For a
+/// single room (every non-sharded strategy) this is that room's member
+/// count; for a sharded room it is the room's total population (the
+/// shards partition the room's connections).
+fn report_members(report: &MetricReport) -> u32 {
+    report.rooms.iter().map(|r| r.members).sum()
+}
+
+/// The report's cumulative step count as a "latest report" proxy: the MAX
+/// over all rooms. For a single room that room's steps; for a sharded room
+/// the shards step in lockstep (one global ticker) so any shard's count
+/// marks the report's recency.
+fn report_steps(report: &MetricReport) -> u64 {
+    report.rooms.iter().map(|r| r.steps).max().unwrap_or(0)
+}
+
+/// Fold a report's rooms into ONE [`RoomReport`] so the (single-room-shaped)
+/// print code works for both: a single room (identity fold) and a sharded
+/// room (N shard reports). The fold is exact for the single-room case
+/// (max/sum/min of one element = that element):
+/// - cumulative counters (steps, dropped, snapshots, records, joins, …): SUM
+///   (the room's total);
+/// - worst-case gauges (step_max, late_max, snap_bytes_max, max_group): MAX
+///   (the bottleneck shard);
+/// - rates: MIN hz (the slowest shard is the room's rate — the shards step
+///   together, so a lagging shard drags the room);
+/// - `step_hist`: element-wise SUM (the union of all shards' step
+///   distributions, so over-budget % and percentiles are room-wide);
+/// - `step_mean_us`: weighted by steps (exact for one shard).
+fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
+    let first = report.rooms.first()?;
+    if report.rooms.len() == 1 {
+        return Some(*first);
+    }
+    let mut acc = *first;
+    let mut total_steps: u128 = 0;
+    let mut weighted_mean: f64 = 0.0;
+    for r in &report.rooms {
+        let s = r.steps as f64;
+        total_steps += r.steps as u128;
+        weighted_mean += r.step_mean_us * s;
+        acc.steps = acc.steps.max(r.steps);
+        acc.hz = acc.hz.min(r.hz);
+        acc.step_min_us = acc.step_min_us.min(r.step_min_us);
+        acc.step_max_us = acc.step_max_us.max(r.step_max_us);
+        for i in 0..HIST_BINS {
+            acc.step_hist[i] += r.step_hist[i];
+        }
+        acc.late_max_us = acc.late_max_us.max(r.late_max_us);
+        acc.lagged_events += r.lagged_events;
+        acc.lagged_ticks += r.lagged_ticks;
+        acc.dropped += r.dropped;
+        acc.dropped_actions += r.dropped_actions;
+        acc.keepalive_resends += r.keepalive_resends;
+        acc.snapshots += r.snapshots;
+        acc.snap_bytes_max = acc.snap_bytes_max.max(r.snap_bytes_max);
+        acc.snap_overflows += r.snap_overflows;
+        acc.snap_records += r.snap_records;
+        acc.shipped_bytes += r.shipped_bytes;
+        acc.groups += r.groups;
+        acc.members += r.members;
+        acc.max_group = acc.max_group.max(r.max_group);
+        acc.joins += r.joins;
+        acc.leaves += r.leaves;
+    }
+    acc.step_mean_us = if total_steps > 0 {
+        weighted_mean / total_steps as f64
+    } else {
+        0.0
+    };
+    Some(acc)
+}
+
 fn print_report(
     args: &Args,
     inproc: bool,
@@ -1165,11 +1254,17 @@ fn print_report(
     };
     // The report with the highest cumulative step count (cumulative
     // counters are monotonic, so this is the latest room state; the
-    // shutdown emit carries the same cumulative values).
+    // shutdown emit carries the same cumulative values). For a sharded
+    // room the shards step in lockstep, so the max over shards marks the
+    // report's recency (see `report_steps`).
     let last_room = server_reports
         .iter()
         .filter(|r| !r.rooms.is_empty())
-        .max_by_key(|r| r.rooms[0].steps);
+        .max_by_key(|r| report_steps(r));
+    // The report's room(s) folded to one `RoomReport` (identity for a
+    // single room; the cross-shard aggregate for a sharded room — see
+    // `fold_rooms`).
+    let last_room_agg = last_room.and_then(fold_rooms);
     // Peak registered connections across the whole run (the final report
     // is post-teardown, so its gauges are ~0).
     let peak_conns = server_reports
@@ -1178,10 +1273,12 @@ fn print_report(
         .max()
         .unwrap_or(0);
     // Peak room membership (same rationale): the stable entity count for
-    // the overlap ratio.
+    // the overlap ratio. For a sharded room this is the SUM over shards
+    // (the room's total population — the shards partition its connections).
     let peak_members = server_reports
         .iter()
-        .filter_map(|r| r.rooms.first().map(|r| r.members))
+        .filter(|r| !r.rooms.is_empty())
+        .map(report_members)
         .max()
         .unwrap_or(0);
     // The overlap measurement (D3): encoded entity records per tick in the
@@ -1194,16 +1291,17 @@ fn print_report(
     // after the leave flushes), so the final report's window contains the
     // drain and would bias the delta low. `members` is a gauge (current
     // membership), so "members == peak_members" marks the steady reports.
+    // (Sharded: the folded reports — summed members, summed records.)
     let base = server_reports
         .iter()
-        .find(|r| !r.rooms.is_empty() && r.rooms[0].steps >= 100)
-        .and_then(|r| r.rooms.first());
+        .find(|r| !r.rooms.is_empty() && report_steps(r) >= 100)
+        .and_then(fold_rooms);
     let last_steady = server_reports
         .iter()
-        .filter(|r| !r.rooms.is_empty() && r.rooms[0].members == peak_members)
-        .max_by_key(|r| r.rooms[0].steps)
+        .filter(|r| !r.rooms.is_empty() && report_members(r) == peak_members)
+        .max_by_key(|r| report_steps(r))
         .or(last_room)
-        .and_then(|r| r.rooms.first());
+        .and_then(fold_rooms);
     let rec_per_tick = match (base, last_steady) {
         (Some(b), Some(l)) if l.steps > b.steps => {
             let d_steps = l.steps - b.steps;
@@ -1219,12 +1317,21 @@ fn print_report(
     };
     // Stable measured server tick rate: the median over all reports'
     // per-window rates (excluding the first report's empty window and
-    // any narrow shutdown window).
+    // any narrow shutdown window). For a sharded room the room's rate is
+    // the SLOWEST shard's (the shards step together, so a lagging shard
+    // drags the room).
     let server_hz = median(
         &server_reports
             .iter()
             .filter(|r| !r.rooms.is_empty())
-            .map(|r| r.rooms[0].hz)
+            .map(|r| {
+                r.rooms
+                    .iter()
+                    .map(|rm| rm.hz)
+                    .filter(|h| *h > 0.0)
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap_or(0.0)
+            })
             .filter(|h| *h > 0.0)
             .collect::<Vec<_>>(),
     );
@@ -1315,7 +1422,7 @@ fn print_report(
         out_bytes / 1024
     );
 
-    let room = last_room.and_then(|l| l.rooms.first());
+    let room = last_room_agg;
     let net = last_room.map(|l| &l.net);
     // Server-side bytes-out per connection (the AOI signal: AOI lowers this).
     let out_bps_per_conn = net
@@ -1406,7 +1513,7 @@ fn print_report(
 
     // Machine-parseable summary (consumed by tests/loadgen_smoke.rs).
     println!(
-        "RESULT mode={} visibility={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
+        "RESULT mode={} visibility={} shards={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
          out_bps_per_conn={:.0} moves={} errors={} steps={} server_hz={:.2} \
          step_p50_us={:.0} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
@@ -1419,6 +1526,11 @@ fn print_report(
            gave_up={}",
         mode,
         args.visibility,
+        if args.visibility == gsb_server::Visibility::Sharded {
+            args.shard_count
+        } else {
+            1
+        },
         args.max_snapshot_bytes,
         args.clients,
         connected,
@@ -1788,6 +1900,7 @@ async fn serve(args: Args) {
         bind: args.bind.clone(),
         room_count: 1,
         visibility: args.visibility,
+        shard_count: args.shard_count,
         aoi_cell_size: args.cell_size,
         team_vision_radius: args.vision_radius,
         max_snapshot_bytes: args.max_snapshot_bytes,
@@ -2187,6 +2300,8 @@ async fn orchestrate(args: Args) {
         format!("127.0.0.1:{metrics_port}"),
         "--visibility".into(),
         args.visibility.to_string(),
+        "--shard-count".into(),
+        args.shard_count.to_string(),
         "--cell-size".into(),
         args.cell_size.to_string(),
         "--vision-radius".into(),

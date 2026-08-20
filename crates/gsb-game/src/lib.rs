@@ -22,6 +22,13 @@
 //! - [`pvs::SectorRoom`] — `GroupKey = Sector`: per-map-segment PVS
 //!   (static visibility table over hand-authored convex sectors).
 //!
+//! The fifth strategy is a different *topology*, not just a group key:
+//! [`sharded::ShardedRoom`] partitions the world into a grid of shards
+//! (each shard its own actor with its own `World`), plugged in via
+//! [`gsb_core::shard::ShardLogic`] rather than `RoomLogic` — see
+//! `docs/DESIGN.md` for the sharding design and the wire-id range
+//! partitioning.
+//!
 //! Everything the rooms share that is *not* a visibility-strategy
 //! decision (identity minting, the connection table, input ingestion, the
 //! system run, orphan stamping) lives in [`common`], once.
@@ -31,6 +38,7 @@ pub mod components;
 pub mod op;
 pub mod pvs;
 pub mod room;
+pub mod sharded;
 pub mod systems;
 pub mod team;
 

@@ -31,12 +31,26 @@
 //! ```
 //!
 //! `F` is a per-process-keyed mix (splitmix64 folds of `nonce`, the peer
-//! address, and the process key) — not a KDF: v1 has no crypto layer
-//! (out of scope), and the property needed is "unforgeable over the
-//! network without the process key". The challenge response is
-//! well-formed only for a well-formed challenge (same 18-byte size), so
-//! forged-traffic amplification stays at ratio ≤ 1, and a forged proof
-//! needs the cookie, which needs the key.
+//! address, and the key) — not a KDF: v1 has no crypto layer (out of
+//! scope), and the property needed is "unforgeable over the network
+//! without the key". The challenge response is well-formed only for a
+//! well-formed challenge (same 18-byte size), so forged-traffic
+//! amplification stays at ratio ≤ 1, and a forged proof needs the
+//! cookie, which needs the key.
+//!
+//! **The key** (16 bytes) is drawn from the **OS entropy source** at
+//! bind time (the `getrandom(2)`/`BCryptGenRandom` reader — 128 bits of
+//! uniform material; a 64-bit secret would already be enough) or
+//! supplied by the operator through the config (`cookie_key`). It is
+//! deliberately **not** a function of the wall clock: a clock-derived
+//! key is computable by an off-path attacker who narrows the server's
+//! *start time* to a small window, and a forged proof then never needs
+//! the challenge — the handshake's reason to exist evaporates. If the
+//! entropy source cannot be read and no config key is present, `bind`
+//! **fails** (the server refuses to start): the key is the entire basis
+//! of the property, so running with a predictable key would invert it
+//! rather than weaken it, and a startup warning is not a security
+//! posture (see [`CookieKey`]).
 //!
 //! `UDP_HELLO`/`UDP_ACK` opcodes live in the base band but are
 //! **transport markers**: they travel in their own datagram kinds and are
@@ -177,24 +191,52 @@ fn sm64(x: &mut u64) {
     *x = z ^ (z >> 31);
 }
 
-/// The per-process cookie key: nanosecond-entropy at bind time (two
-/// words). Predictable to a local attacker, unguessable over the network
-/// — enough for v1 (see module docs: no crypto layer, by scope).
-#[derive(Debug, Clone, Copy)]
+/// The per-process cookie key: 16 bytes (two u64 words), either the
+/// operator's config (`cookie_key`) or a draw from the **OS entropy
+/// source** at bind time (see the module docs, "The key").
+///
+/// **Why OS entropy and not the wall clock:** an off-path attacker who
+/// can narrow the server's *start time* to a small window enumerates a
+/// clock-derived key offline and forges proofs without ever receiving
+/// the challenge. OS entropy is uniform and independent of anything an
+/// attacker can observe; 64 bits of it would already be enough, and 128
+/// bits is the same draw.
+///
+/// **No silent degradation:** if the entropy source cannot be read and
+/// the operator did not supply a key, the bind fails (the server
+/// refuses to start). The key is the entire basis of the
+/// anti-amplification property: a predictable key does not weaken it, it
+/// *inverts* it (an attacker who knows the key forges proofs for
+/// spoofed addresses and allocates full sessions — channels, actor,
+/// registry entry — per fake peer), and "the server started with a
+/// warning" is not a posture an operator can be trusted to notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CookieKey(u64, u64);
 
 impl CookieKey {
-    fn new() -> Self {
-        // Per-process entropy: the wall clock in nanoseconds, decorrelated
-        // (best-effort — v1 has no crypto layer, see module docs).
-        let d = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_else(|_| Duration::from_secs(1));
-        let mut a = d.as_nanos() as u64;
-        let mut b = a.rotate_left(13) ^ (a >> 21);
-        sm64(&mut a);
-        sm64(&mut b);
-        Self(a | 1, b | 2)
+    /// Build the key from operator-supplied bytes (the composition root
+    /// parses the config's 32-hex-char string into these). Pure and
+    /// deterministic: the config path is a function of the operator's
+    /// input alone.
+    fn from_bytes(b: [u8; 16]) -> Self {
+        Self(
+            u64::from_le_bytes(b[0..8].try_into().unwrap()),
+            u64::from_le_bytes(b[8..16].try_into().unwrap()),
+        )
+    }
+
+    /// Draw the key from the OS entropy source. The `Err` arm is a
+    /// deliberate, loud choice (see the struct docs): [`Self::generate`]
+    /// is called from `bind`, which maps the failure to an `io::Error`
+    /// and the server refuses to start.
+    fn generate() -> Result<Self, std::io::Error> {
+        let mut b = [0u8; 16];
+        getrandom::fill(&mut b).map_err(|e| {
+            std::io::Error::other(format!(
+                "cannot read OS entropy for the rUDP cookie key: {e}"
+            ))
+        })?;
+        Ok(Self::from_bytes(b))
     }
 
     /// F(nonce, peer, key) — the stateless cookie.
@@ -281,6 +323,10 @@ pub struct UdpTransportConfig {
     pub max_datagram_bytes: usize,
     /// The session idle window (feature 4; `None` disables the sweep).
     pub idle_timeout: Option<Duration>,
+    /// Operator-supplied cookie key (16 bytes; the composition root
+    /// parses the config's 32-hex-char string into these). `None` = draw
+    /// from the OS entropy source at bind time. See [`CookieKey`].
+    pub cookie_key: Option<[u8; 16]>,
 }
 
 impl Default for UdpTransportConfig {
@@ -290,6 +336,7 @@ impl Default for UdpTransportConfig {
             outbox_capacity: 256,
             max_datagram_bytes: DEFAULT_MAX_DATAGRAM_BYTES,
             idle_timeout: Some(Duration::from_secs(30)),
+            cookie_key: None,
         }
     }
 }
@@ -326,7 +373,25 @@ impl Transport for UdpTransport {
             // Tuning it (SO_RCVBUF) would need the raw fd; left at the
             // system default in v1 — see ROADMAP "v1 constraints".)
             let (end_tx, end_rx) = crossbeam_channel::bounded(ENDPOINT_CHANNEL);
-            let key = CookieKey::new();
+            // The cookie key: the operator's config, or the OS entropy
+            // source. A failure here is deliberate (see `CookieKey`): a
+            // predictable key inverts the anti-amplification property,
+            // so the bind errors out and the server refuses to start
+            // rather than run weak.
+            let key_source = if self.config.cookie_key.is_some() {
+                "config"
+            } else {
+                "os-entropy"
+            };
+            let key = match self.config.cookie_key {
+                Some(bytes) => CookieKey::from_bytes(bytes),
+                None => CookieKey::generate().map_err(|e| {
+                    std::io::Error::other(format!(
+                        "{e} (supply one explicitly via the config's \
+                         udp_cookie_key: 32 hex characters)"
+                    ))
+                })?,
+            };
             let cfg = self.config.clone();
             let demux = tokio::spawn(demux(
                 sock.clone(),
@@ -337,7 +402,7 @@ impl Transport for UdpTransport {
                 cfg.max_datagram_bytes,
                 cfg.idle_timeout,
             ));
-            info!(%addr, "rUDP transport bound (shared demux started)");
+            info!(%addr, %key_source, "rUDP transport bound (shared demux started)");
             Ok(Arc::new(UdpListenerHandle {
                 sock,
                 end_rx,
@@ -1381,7 +1446,7 @@ mod tests {
         let mut d = Demux {
             sock,
             end_tx,
-            cookie: CookieKey::new(),
+            cookie: CookieKey::generate().expect("OS entropy in test"),
             inbox_cap: 16,
             outbox_cap: 16,
             max_datagram: DEFAULT_MAX_DATAGRAM_BYTES,
@@ -1722,5 +1787,70 @@ mod tests {
             .expect("recv");
         let second = buf[..n2].to_vec();
         assert_eq!(first, second, "the retransmit is byte-identical (same seq, same payload)");
+    }
+
+    // ── cookie key: entropy source (this turn) ───────────────────────
+
+    /// Reference of the REMOVED v1 derivation (wall-clock nanoseconds),
+    /// kept only as a regression oracle: a key equal to `legacy(t)` for
+    /// some instant `t` is computable from the server start time — the
+    /// property this turn removes.
+    fn legacy_time_key(nanos_since_epoch: u64) -> CookieKey {
+        let mut a = nanos_since_epoch;
+        let mut b = a.rotate_left(13) ^ (a >> 21);
+        sm64(&mut a);
+        sm64(&mut b);
+        CookieKey(a | 1, b | 2)
+    }
+
+    /// The key is no longer a function of the wall clock: capture the
+    /// clock, generate, capture again, and enumerate the legacy
+    /// derivation over the EXACT [t0, t1] window at every plausible time
+    /// granularity (ns, µs, ms). A time-derived key must land on an
+    /// enumerated value; an OS-entropy draw cannot (a collision with any
+    /// one candidate is 2^-128, the window holds ≤ ~10^5 of them).
+    #[test]
+    fn cookie_key_is_not_derived_from_the_wall_clock() {
+        let now_ns =
+            || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let t0 = now_ns();
+        let key = CookieKey::generate().expect("OS entropy in test");
+        let t1 = now_ns();
+        assert!(t1 >= t0, "the window must not be empty");
+        for unit in [1u128, 1_000, 1_000_000] {
+            for t in (t0 / unit)..=(t1 / unit) {
+                assert_ne!(
+                    key,
+                    legacy_time_key(t as u64),
+                    "key equals the legacy wall-clock derivation at t={t}"
+                );
+            }
+        }
+    }
+
+    /// The config path is pure: the same bytes give the same key, and F
+    /// is deterministic for a fixed (nonce, peer) — an operator-supplied
+    /// key makes the handshake reproducible (and auditable) by
+    /// construction.
+    #[test]
+    fn cookie_key_from_bytes_is_deterministic() {
+        let peer: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let other: SocketAddr = "127.0.0.1:1235".parse().unwrap();
+        let a = CookieKey::from_bytes([1u8; 16]);
+        let b = CookieKey::from_bytes([1u8; 16]);
+        assert_eq!(a, b, "the config path must be a pure function of the bytes");
+        assert_eq!(a.compute(42, peer), b.compute(42, peer));
+        assert_ne!(a.compute(42, peer), a.compute(43, peer));
+        assert_ne!(a.compute(42, peer), a.compute(42, other));
+    }
+
+    /// The OS-entropy source is non-degenerate: two consecutive draws
+    /// differ (a collision is 2^-128 — a match means the source is
+    /// constant or broken, not bad luck).
+    #[test]
+    fn cookie_key_generate_draws_distinct_keys() {
+        let a = CookieKey::generate().expect("OS entropy in test");
+        let b = CookieKey::generate().expect("OS entropy in test");
+        assert_ne!(a, b, "two consecutive OS-entropy draws collided");
     }
 }
