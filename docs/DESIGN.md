@@ -420,26 +420,39 @@ referential future = unsafe/mio olmadan çıkmaz).
   &SystemCtx)`): bevy'nin `SystemParam`/scheduler mekanizması hot path'te
   gereksiz kit olarak dururdu. `SystemRunner` insertion-order çalıştırır.
 - **Değişim algılama (dirty tracking):** bevy 0.19'da event/observer
-  API'si yeniden tasarlandığı için hot path'te bilinçli olarak bevy
-  *change-detection*'ı kullanılmıyor; ayrıca ayrı bir versiyon bileşeni
-  de yok — eski `EntityVersion` + `bump()` mekanizması denetim turunda
-  kaldırıldı (F1'den beri okuyucusuz kalmıştı: karar wire içeriğine
-  taşınınca versiyonun tek okuyucusu giderilmiş, ama yazma tarafı ve
-  bu maddenin de içinde olduğu 4 doküman onu hâlâ *kullanımda* olan
-  mekanizma gibi anlatıyordu). Değişim sinyali artık **wire içeriğinin
-  kendisi**: oyun mantığı, grup snapshot'ını yeniden üretip
-  üretmeyeceğini **kendisi** karar verir ve bu kararın defteri
-  **grup başına** tutulmalıdır (§4): demo'da son yayınlanan
-  snapshot'ın **wire içeriği** (`entity → (x, y)`, wire'ın tam sayı
-  konumlarına kesilmiş) tutulur; içerik değiştiyse (konum **veya**
-  üyelik) snapshot yeniden kodlanır — içeriği değiştirmeyen hiçbir
-  yazım yayınlatmaz (bant israfı yok). Gerekirse (örn. delta yayını,
-  P2) bir versiyon mekanizması o özellikte yeniden getirilebilir —
-  delta yayını bu turda `spatial` stratejisinde versiyon mekanizması
-  olmaksızın gerçekleştirildi: delta birimi snapshot versiyonu değil,
-  hücre başına içerik farkıdır (§8.1 "Delta yayın"). Eski
-  bağlantı başına `last_sent` haritası ve spawn/remove olayları
-  kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
+  API'si yeniden tasarlandığı için hot path'te bevy'nin **event/observer**
+  mekanizması bilinçli olarak kullanılmıyor; ayrıca ayrı bir versiyon
+  bileşeni de yok — eski `EntityVersion` + `bump()` mekanizması denetim
+  turunda kaldırıldı (F1'den beri okuyucusuz kalmıştı: karar wire
+  içeriğine taşınınca versiyonun tek okuyucusu giderilmiş, ama yazma
+  tarafı ve bu maddenin de içinde olduğu 4 doküman onu hâlâ *kullanımda*
+  olan mekanizma gibi anlatıyordu). Değişim sinyali **strateji bazında**:
+  - **demo (non-spatial) stratejisi:** sinyal **wire içeriğinin
+    kendisi** — oyun mantığı, grup snapshot'ını yeniden üretip
+    üretmeyeceğini **kendisi** karar verir ve bu kararın defteri
+    **grup başına** tutulmalıdır (§4): demo'da son yayınlanan
+    snapshot'ın **wire içeriği** (`entity → (x, y)`, wire'ın tam sayı
+    konumlarına kesilmiş) tutulur; içerik değiştiyse (konum **veya**
+    üyelik) snapshot yeniden kodlanır — içeriği değiştirmeyen hiçbir
+    yazım yayınlatmaz (bant israfı yok).
+  - **spatial stratejisi (delta yayını):** sinyal bevy'nin
+    **bileşen-bazlı change tick'i** — `Changed<Position>` query
+    filtresi. Bu, yukarıda elenen event/observer API'sinden **farklı
+    bir bevy arayüzüdür** (query filtresi; hot path'te event/observer
+    mekanizması yoktur — orijinal elenme gerekçesi aynen geçerlidir) ve
+    delta birimi snapshot versiyonu değil, hücre başına **değişim
+    listesi**dir (§8.1 "Delta yayın"). Standalone modda baseline'ı
+    **oda elle ilerletir**: her `update()` sonunda `world
+    .clear_trackers()` (= `increment_change_tick()`) çağrılır; değişim
+    penceresi "önceki güncelleme → bu güncelleme arası yazımlar"dır ve
+    `Position`'a yazan **her** yazar (sistem, ingest, doğrudan
+    `entity_mut`) otomatik işaretlenir — oda tarafında unutulabilecek
+    bir `bump()` disiplini yoktur (yapısal garanti; ROADMAP "AOI
+    per-cell memo + dirty cell turu", madde B). Despawn bir bileşen
+    yazımı değildir: çıkışlar odanın üyelik defteri + değişim listesi
+    üzerinden `on_leave`/`update`'te uygulanır.
+  - Eski bağlantı başına `last_sent` haritası ve spawn/remove olayları
+    kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i tel kimliğini kendisi
   seçer. Demo, **oda-yerel, monoton, oda ömrü boyunca yeniden
   kullanılmayan** bir wire kimliği (serial) atar (`DemoRoom.next_wire_id` →
@@ -660,10 +673,17 @@ geometriye koşullu.
 
 **Delta yayın (spatial strateji; bu tur):** `spatial` stratejisi artık
  snapshot'larını **delta kodlar** — kodlama birimi grup değil **hücredir**:
- her hücre, kendi içeriğini tick başına **bir kez** kodlar (güncel ve bir
- önceki tick'in bucket'larının farkı), dondurulmuş `Bytes` olarak
- önbelleğe alınır; grup bir **kitle**dir ve grubun paketi, gördüğü hücrelerin
- parçalarının birleşimidir (referansla paylaşım — §14.1'in omurgası aynen).
+ her hücrenin parçası tick başına **bir kez** hesaplanıp dondurulmuş
+ `Bytes` olarak önbelleğe alınır ve hücre sınıflandırması (negatif —
+ `Silent` — sonuçlar dahil) tick başına hücre başına bir kez memo'lanır;
+ grup bir **kitle**dir ve grubun paketi, gördüğü hücrelerin parçalarının
+ birleşimidir (referansla paylaşım — §14.1'in omurgası aynen). Delta'nın
+ kendisi tick başına içerik farkı **değildir**: bir hücrenin deltası, o
+ tick'teki **değişim listesi**dir — `Position` yazan her yazar bevy'nin
+ change tick'i ile otomatik işaretlenir (§7 "Değişim algılama"), üye
+ çıkışları odanın üyelik defterinden gelir; `update` bu listeleri hücre
+ başına biriktirir (işaret *yapısal*dır — unutma disiplini yoktur; ROADMAP
+ "AOI per-cell memo + dirty cell turu", madde B).
  full/delta kararı **(grup, hücre) başınadır**: yeni doğan grup bir kez full
  alır; devam eden grup delta taşır. Delta değişmezi: bir hücrenin deltası
  `içerik(şimdi) vs içerik(önceki tick)` — gruptan bağımsız, saf hücre
@@ -726,14 +746,17 @@ geometriye koşullu.
  | 0.90 | 2 884 → **43** (67×) | 44 131 → **7 218** B/sn (6.1×) | 3 126 → 6 250 µs |
  | 0.95 | 2 791 → **36** (77×) | 42 794 → **6 046** B/sn (7.1×) | 3 126 → 6 250 µs |
 
- Her iki versiyonda `over_budget` %0 (bütçe 33 333 µs). Dürüst takas: yeni
- yolun tick gövdesi hücre başına fark taraması yapıyor (bucket rotasyonu +
- (önceki, güncel) sınıflandırması), adım p50 ~2× — kodlamanın ~1/67'si
- karşılığında; ring/spread gibi **her entity her tick hareket eden**
- profillerde kazanç yok (orijinal ölçüm tabanı aynen — `ring`/`spread`
- profilleri değişmedi). Ham RESULT satırları + makine bilgisi: ROADMAP
- "Kapatılanlar (delta yayın + input sıralama turu)" C maddesi. Detay +
- elenen alternatifler: aynı ROADMAP bölümü.
+ Her iki versiyonda `over_budget` %0 (bütçe 33 333 µs). O turun dürüst
+ takası (bucket rotasyonu + tick başına hücre fark taraması, adım p50 ~2×)
+ bu turda kapatıldı: sınıflandırma memo'landı (negatif sonuçlar dahil) ve
+ delta, tick başına içerik farkı yerine **değişim listesi**ne indirgendi
+ (madde A + B; ROADMAP "AOI per-cell memo + dirty cell turu" — orada ham
+ sayılar + faz dökümü + spek sapmaları). Ring/spread gibi **her entity her
+ tick hareket eden** profillerde delta'nın bant kazancı yine yok (orijinal
+ ölçüm tabanı aynen — `ring`/`spread` profilleri değişmedi). Ham RESULT
+ satırları + makine bilgisi: ROADMAP "Kapatılanlar (delta yayın + input
+ sıralama turu)" C maddesi. Detay + elenen alternatifler: aynı ROADMAP
+ bölümü + yeni turun ilgili maddeleri.
 
  **Yük yöntemi (ayrı-proces turu):** `gsb-loadgen` üç modda: in-proc
 (varsayılan, tüm önceki ölçüm tabanı), `--serve` (sunucu process'i;

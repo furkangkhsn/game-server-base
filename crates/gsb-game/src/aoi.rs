@@ -53,9 +53,9 @@
 //! Hence, at any tick, an established group's client state for a visible
 //! cell equals the previous tick's content of that cell — and the next
 //! delta is computed against exactly that. No per-group ledgers are
-//! needed at all: the room keeps only the current and the previous
-//! tick's buckets (rotated, not copied) plus, per group, the fact that it
-//! was born.
+//! needed at all: the room keeps the current buckets (incrementally
+//! maintained — "Dirty cells" below), the per-tick change lists, and,
+//! per group, the fact that it was born.
 //!
 //! The invariant is a server-side one (the per-cell delta is group-
 //! independent no matter what the clients hold). A client that is loss-
@@ -74,6 +74,78 @@
 //! only when its content changes; wire positions are integer-quantized
 //! while motion is fractional, so even a moving entity is silent for a
 //! run of ticks) — the full is the guarantee, not the gap.
+//!
+//! ## Dirty cells (per-tick work ∝ movers, not entities)
+//!
+//! The delta is **not** computed by diffing this tick's buckets against
+//! last tick's: the room keeps only the current buckets (maintained
+//! **incrementally**) plus, per tick, each *touched* cell's **change
+//! list** — the exits and updates that happened to it. The change list
+//! *is* the diff, so a cell's delta piece is assembled from it directly
+//! and no per-cell content comparison is ever run (diffing was
+//! O(occupied cells × cell size) per tick; assembling is O(changed
+//! records)).
+//!
+//! **The dirty marking is structural, not a discipline.** A cell is
+//! dirty exactly when some entity's `Position` was written this tick —
+//! and that fact is recorded by **bevy's own change detection**
+//! (`Changed<Position>`), not by the room calling a `bump()` method:
+//! the mark is set inside bevy's write path, so *any* writer — the
+//! movement system, `ingest`, a direct `world.entity_mut` in a test,
+//! future game code — marks the cell dirty by construction. This is the
+//! same shape as the `WireId` fix (private field, single mint point):
+//! the previous design's comment-only "writers must remember to
+//! invalidate" discipline was bitten three times in this project
+//! (see `docs/ROADMAP.md`), so the mark now lives where it cannot be
+//! forgotten. `DESIGN.md` §7 avoided bevy's *observer/event* change API
+//! for the room's input path; standalone `Changed<T>` with a manual
+//! `World::clear_trackers()` at the end of `update` is the same
+//! mechanism used through its query interface — the baseline is the end
+//! of the previous `update`, so the query window covers the systems'
+//! writes, between-update spawns (joins), and direct writes alike
+//! (verified by `tests/zzz_probe_bevey.rs` during design; probe deleted,
+//! behaviour locked by the change-detection tests in this module).
+//!
+//! What the query window *does not* cover — and how each case is
+//! handled:
+//!
+//! - **Despawns are not writes.** `on_leave` despawns the entity in the
+//!   CONTROL phase, so the query (which iterates live entities) cannot
+//!   see it: the leave parks `(entity, wire id, cell)` in
+//!   `pending_removals`, which `update` applies against the buckets
+//!   (the cell the entity was in is read from `last_cell`, written in
+//!   `update` and nowhere else). A join+leave within one tick parks
+//!   nothing — the entity never made it into `last_cell`, hence never
+//!   into the buckets.
+//! - **Quantization.** Wire positions are i32 truncations of f32 motion:
+//!   a sub-cell move can leave the wire position untouched. The dirty
+//!   query still flags the write, and the same-cell branch compares the
+//!   OLD wire record against the new one — an unchanged wire position
+//!   records nothing (the cell can still classify `Silent`), so the
+//!   stream is content-identical to the diff-based design.
+//! - **Same-value rewrites** are tracked by bevy (every write dirties,
+//!   even an identical one) and degrade to the no-op above.
+//!
+//! **Occupancy and birth, order-independently.** A cell's appeared/exited
+//! flag is a pure function of (occupied at the end of the last `update`,
+//! occupied now): `update` keeps `prev_occupied` **frozen** while the
+//! dirty loop runs (it is rolled only afterwards, per touched cell, from
+//! the final bucket state), so same-tick exit+entry into the same cell
+//! cannot flip either flag. Group birth (a member count going 0 → >0)
+//! is reconstructed from the net member events —
+//! `before = now − in + out`, evaluated per touched cell after all
+//! events — so a same-tick member exit and a different member's entry
+//! into the same cell cannot fake a birth. The per-tick passes (dirty
+//! loop, flag/birth roll) iterate the touched cells / change lists,
+//! i.e. O(movers) — never the occupied cells or the entity count.
+//! (An earlier literal reading of the birth rule as "cells with members
+//! now minus cells with members last tick" would miss a member joining a
+//! cell that already held non-member content — the cell was in both
+//! sets; the member-count formulation is the correct generalization, and
+//! in the member-only case it coincides with the literal reading. The
+//! missed-birth consequence is observational only: the new member is
+//! baselined by its one-shot private full in the same batch, see
+//! "Late joiners".)
 //!
 //! ## Ordering inside a delta packet
 //!
@@ -179,7 +251,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::{Changed, Entity, World};
 use bytes::{BufMut, Bytes, BytesMut};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
@@ -189,6 +261,8 @@ use prost::Message;
 
 use crate::components::{Position, WireId};
 use crate::op;
+
+
 
 /// A spatial cell of the world grid — the AOI group key. Cell indices
 /// are the floor of (wire position / `cell_size`) — see the module
@@ -221,11 +295,13 @@ fn cell_of(x: i32, y: i32, cell_size: f32) -> Cell {
 }
 
 /// The per-tick classification of one cell (a pure function of the
-/// current and previous tick's content — identical for every group that
-/// sees the cell; see the module docs, "The delta invariant").
+/// cell's change list and its occupancy baseline — identical for every
+/// group that sees the cell; see the module docs, "The delta invariant"
+/// and "Dirty cells").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CellFrag {
-    /// Empty now, empty before: nothing for any group.
+    /// Empty now, empty before, and no change recorded this tick:
+    /// nothing for any group.
     Silent,
     /// Non-empty before, empty now: the group's packet carries one
     /// `CellExit` record for it (the client forgets the whole cell in
@@ -236,8 +312,45 @@ enum CellFrag {
     /// packet; full content in a fresh group's packet).
     Appeared,
     /// Non-empty before and now, content changed: the cell's delta
-    /// piece (exits + updates against the previous tick).
+    /// piece (its change list: exits + updates).
     Delta,
+}
+
+/// One cell's changes this tick — the delta's source of truth (module
+/// docs, "Dirty cells"): the change list *is* the diff, so no per-cell
+/// content comparison is ever run. Built incrementally in `update` from
+/// the dirty set; persistent map, cleared in place each tick.
+#[derive(Default)]
+struct CellChanges {
+    /// Records whose wire content changed, or that newly occupy the cell
+    /// (wire id, wire x, wire y). Encoded as `entities` upserts (field
+    /// 2) — except for an appeared cell, whose group gets the cell's
+    /// FULL piece instead (the upserts would be redundant: the client
+    /// has no baseline for a cell that was empty).
+    updates: Vec<(u64, i32, i32)>,
+    /// Wire ids that left the cell (a cell-to-cell move or a despawn).
+    /// Encoded as `removed` (field 3) — except when the whole cell
+    /// exited, in which case one `CellExit` record supersedes them.
+    exits: Vec<u64>,
+    /// The cell was empty at the end of the last tick (set at the end
+    /// of `update`, order-independently — see there).
+    appeared: bool,
+    /// The cell is empty now (and was not empty then) — same evaluation.
+    exited: bool,
+}
+
+/// The per-tick member-event counters of one touched cell (module docs,
+/// "Dirty cells"): the order-independent group-birth arithmetic
+/// reconstructs the before-tick member count from
+/// `now − in + out`, so a same-tick exit+entry into the same cell
+/// cannot fake a birth.
+#[derive(Default)]
+struct TouchInfo {
+    /// Member entities that entered this cell this tick (joins into it,
+    /// cell crossings into it).
+    member_in: u32,
+    /// Member entities that left it (crossings out, leavers).
+    member_out: u32,
 }
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
@@ -265,19 +378,51 @@ pub struct AoiRoom {
     /// missing or names another cell has no baseline for its current
     /// group's view and gets a one-shot private full (see `private`).
     conn_view: HashMap<ConnectionId, Cell>,
-    /// The current tick's buckets: `cell → (wire id → (x, y))` — the
-    /// content of every cell (rebuilt in `update`; each entity bucketed
-    /// exactly once).
+    /// The current buckets: `cell → (wire id → (x, y))` — the content of
+    /// every cell, maintained **incrementally** in `update` from the
+    /// dirty set (module docs, "Dirty cells"): an entity enters/leaves a
+    /// bucket when its wire position/cell changes. Invariant: after
+    /// `update`, the buckets equal the world's current content (they are
+    /// temporarily stale during the CONTROL phase — joins not yet
+    /// bucketed, leavers not yet removed — and nothing reads them
+    /// between `update` and the next `update`'s dirty query).
     buckets: HashMap<Cell, HashMap<u64, (i32, i32)>>,
-    /// The PREVIOUS tick's buckets (rotated from `buckets` in `update` —
-    /// the two maps alternate, so no per-tick allocation): the delta
-    /// baseline. The per-cell delta is `content(now) vs content(previous
-    /// tick)` — group-independent by the delta invariant (module docs).
-    prev_buckets: HashMap<Cell, HashMap<u64, (i32, i32)>>,
-    /// The cells that have members (the logic-side twin of the core's
-    /// group table; both are derived from the same world state), previous
-    /// tick's set — for the birth detection.
-    group_cells: HashSet<Cell>,
+    /// The cells that were occupied (any content, members or not) at the
+    /// end of the last `update`: the appearance/exit baseline. Rolled
+    /// once per touched cell at the end of `update` (the per-tick cost
+    /// is proportional to the movers, not to the occupied cells).
+    prev_occupied: HashSet<Cell>,
+    /// Each bucketed entity's cell at the end of the last `update`
+    /// (written in `update`, read by the dirty query, `on_leave`'s
+    /// removal parking, and `group_of`/`conn_cell` — the per-connection
+    /// group lookups of the broadcast phase are O(1) table reads, not
+    /// per-connection world queries).
+    last_cell: HashMap<Entity, Cell>,
+    /// The member count of each cell (maintained incrementally in
+    /// `update`; empty entries removed): the group-birth arithmetic's
+    /// "now" input (module docs, "The full/delta decision" + "Dirty
+    /// cells").
+    member_counts: HashMap<Cell, u32>,
+    /// The cells touched this tick (a cell is touched when one of its
+    /// records is added to or removed from its bucket) with their
+    /// member-event counters (persistent map, cleared in place each
+    /// tick): the per-cell flag/birth pass at the end of `update`
+    /// iterates exactly this map — O(movers), never O(cells).
+    touched: HashMap<Cell, TouchInfo>,
+    /// Each touched cell's change list for this tick (persistent map,
+    /// cleared in place each tick): the delta's source of truth — the
+    /// change list *is* the diff (no per-cell content comparison is
+    /// ever run; module docs, "Dirty cells").
+    cell_changes: HashMap<Cell, CellChanges>,
+    /// Leavers parked in `on_leave` — `(entity, wire id, cell)` — and
+    /// applied in `update`: a despawn is not a component write, so it is
+    /// invisible to the `Changed<Position>` query (module docs, "Dirty
+    /// cells").
+    pending_removals: Vec<(Entity, u64, Cell)>,
+    /// The member entities (maintained in `on_join`/`on_leave`): the
+    /// dirty loop's O(1) membership test (member counts, birth
+    /// arithmetic).
+    members: HashSet<Entity>,
     /// Cells with members now but none last tick: their groups are fresh
     /// this tick and must emit a FULL packet on their first tick (module
     /// docs, "The full/delta decision").
@@ -296,9 +441,10 @@ pub struct AoiRoom {
     /// fresh group's full, a keep-alive full, a one-shot private full,
     /// an *appeared* cell's upserts).
     full_pieces: HashMap<Cell, Bytes>,
-    /// Each continuing cell's encoded delta: the `removed` entries
+    /// Each changed cell's encoded delta: the `removed` entries
     /// (field 3; `None` when the cell lost no entity) + the `entities`
-    /// entries (field 2) of its changed/new records.
+    /// entries (field 2) of its changed/new records (assembled from the
+    /// cell's change list — see [`Self::cell_changes`]).
     delta_pieces: HashMap<Cell, (Option<Bytes>, Bytes)>,
     /// Each exited cell's encoded `cell_exits` entry (field 4).
     exit_markers: HashMap<Cell, Bytes>,
@@ -309,6 +455,14 @@ pub struct AoiRoom {
     /// The scratch behind [`Self::full_view`] (reused across assemblies;
     /// `split_to` hands out zero-copy views — no per-assembly allocation).
     full_scratch: BytesMut,
+    /// The per-tick, per-cell classification cache: `classify` is a pure
+    /// function of the per-tick change list, which does not change during
+    /// the tick, so the first group that asks a cell computes its
+    /// fragment **once** and every later group (every later *pass* of the
+    /// same group — the 3×3 block is walked four times per group) reuses
+    /// it — including the negative answer (`Silent`), which is a hash
+    /// miss on the change list, not a scan.
+    frag_cache: HashMap<Cell, CellFrag>,
     /// The groups that emitted a FULL this tick (a fresh group in
     /// `snapshot`, a silent group in `keepalive`): a member of such a
     /// group is baselined by that frame (it precedes the private frame in
@@ -343,8 +497,13 @@ impl AoiRoom {
             input: HashMap::new(),
             conn_view: HashMap::new(),
             buckets: HashMap::new(),
-            prev_buckets: HashMap::new(),
-            group_cells: HashSet::new(),
+            prev_occupied: HashSet::new(),
+            last_cell: HashMap::new(),
+            member_counts: HashMap::new(),
+            touched: HashMap::new(),
+            cell_changes: HashMap::new(),
+            pending_removals: Vec::new(),
+            members: HashSet::new(),
             born_groups: HashSet::new(),
             tick: 0,
             full_pieces: HashMap::new(),
@@ -352,17 +511,22 @@ impl AoiRoom {
             exit_markers: HashMap::new(),
             full_view: HashMap::new(),
             full_scratch: BytesMut::new(),
+            frag_cache: HashMap::new(),
             group_full_emitted: HashSet::new(),
             encoded: 0,
         }
     }
 
-    /// The cell of `conn`'s entity (from its WIRE position), or `None`
-    /// when the connection has no entity/position in the room.
-    fn conn_cell(&self, world: &World, conn: ConnectionId) -> Option<Cell> {
+    /// The cell of `conn`'s entity (the cell its records land in), or
+    /// `None` when the connection has no entity in the room. Read from
+    /// the room's own `last_cell` table (written in `update`, after the
+    /// systems — `update` always precedes the broadcast phase's
+    /// per-connection calls) instead of a per-connection world query:
+    /// the fan-out calls this once per connection per tick, and the
+    /// table lookup is O(1) with no ECS traversal.
+    fn conn_cell(&self, conn: ConnectionId) -> Option<Cell> {
         let &entity = self.conn_entity.get(&conn)?;
-        let pos = world.entity(entity).get::<Position>().copied()?;
-        Some(cell_of(pos.x as i32, pos.y as i32, self.cell_size))
+        self.last_cell.get(&entity).copied()
     }
 
     /// The snapshot header: `sequence` (field 1, varint) + the `delta`
@@ -437,40 +601,25 @@ impl AoiRoom {
         self.full_pieces.get(c).cloned()
     }
 
-    /// A continuing cell's delta piece: `(exits, updates)` of
-    /// `content(now) vs content(previous tick)` (encoded once per tick).
-    /// `None` when the cell is silent (content identical) or not
-    /// continuing (the caller classifies first).
+    /// A changed cell's delta piece: `(exits, updates)` assembled from
+    /// the cell's change list — the change list *is* the diff (module
+    /// docs, "Dirty cells"), so no per-cell content comparison is run
+    /// (encoded once per tick). `None` when the cell has no change list
+    /// (the caller classifies first; such a cell is silent for the
+    /// tick).
     fn delta_piece(&mut self, c: &Cell) -> Option<&(Option<Bytes>, Bytes)> {
-        if !self.delta_pieces.contains_key(c) {
-            let (Some(now), Some(prev)) = (self.buckets.get(c), self.prev_buckets.get(c)) else {
-                return None;
-            };
-            let mut exits: Vec<u64> = Vec::new();
-            let mut updates: Vec<(u64, i32, i32)> = Vec::new();
-            for (&w, &(x, y)) in now {
-                match prev.get(&w) {
-                    // New to the cell, or moved within it: an update.
-                    None => updates.push((w, x, y)),
-                    Some(&(px, py)) if px != x || py != y => updates.push((w, x, y)),
-                    Some(_) => {}
-                }
-            }
-            for &w in prev.keys() {
-                if !now.contains_key(&w) {
-                    exits.push(w);
-                }
-            }
-            if !exits.is_empty() || !updates.is_empty() {
-                self.encoded += updates.len() as u64;
-                self.delta_pieces.insert(
-                    *c,
-                    (
-                        (!exits.is_empty()).then(|| Self::encode_exits(&exits)),
-                        Self::encode_records(&updates),
-                    ),
-                );
-            }
+        if !self.delta_pieces.contains_key(c)
+            && let Some(ch) = self.cell_changes.get(c)
+            && (!ch.exits.is_empty() || !ch.updates.is_empty())
+        {
+            self.encoded += ch.updates.len() as u64;
+            self.delta_pieces.insert(
+                *c,
+                (
+                    (!ch.exits.is_empty()).then(|| Self::encode_exits(&ch.exits)),
+                    Self::encode_records(&ch.updates),
+                ),
+            );
         }
         self.delta_pieces.get(c)
     }
@@ -484,16 +633,38 @@ impl AoiRoom {
     }
 
     /// The per-tick classification of `c` (see [`CellFrag`]).
+    ///
+    /// Computed **once per cell per tick, including the negative answer**
+    /// (the memoization of this round's item (a)): the per-tick change
+    /// list does not change during the tick, so the first caller's
+    /// result is valid for every later caller (every other group, and
+    /// every other *pass* of the same group's `snapshot` — the 3×3 block
+    /// is walked four times per group). The `Silent` answer is cached
+    /// too, and with the dirty set (item (b)) it costs one hash miss on
+    /// the change list — a cell that had no change this tick is never
+    /// scanned, and a cell that did is classified by its flags, not by a
+    /// comparison. Within a tick the classification is a pure function
+    /// of the (change list, occupancy baseline) pair, both frozen until
+    /// the next `update` — memoization is exact, not an approximation.
     fn classify(&mut self, c: &Cell) -> CellFrag {
-        match (self.buckets.contains_key(c), self.prev_buckets.contains_key(c)) {
-            (false, false) => CellFrag::Silent,
-            (false, true) => CellFrag::Exited,
-            (true, false) => CellFrag::Appeared,
-            (true, true) => match self.delta_piece(c) {
-                Some(_) => CellFrag::Delta,
-                None => CellFrag::Silent,
-            },
+        if let Some(&frag) = self.frag_cache.get(c) {
+            return frag;
         }
+        let frag = match self.cell_changes.get(c) {
+            // No change recorded this tick: nothing for any group
+            // (covers both "empty all along" and "occupied, untouched" —
+            // the latter is impossible to have *content* in without a
+            // change record, so both read the same way).
+            None => CellFrag::Silent,
+            // The flags are set at the end of `update`, order-
+            // independently (see there); `appeared` outranks `exited`
+            // (they are mutually exclusive by construction).
+            Some(ch) if ch.appeared => CellFrag::Appeared,
+            Some(ch) if ch.exited => CellFrag::Exited,
+            Some(_) => CellFrag::Delta,
+        };
+        self.frag_cache.insert(*c, frag);
+        frag
     }
 
     /// The assembled FULL snapshot of `cell`'s 3×3 view (header with
@@ -517,6 +688,27 @@ impl AoiRoom {
         self.full_view.insert(*cell, bytes.clone());
         bytes
     }
+
+    /// Mark `c` as touched this tick (the end-of-`update` flag/birth
+    /// pass iterates exactly the touched cells — proportional to the
+    /// movers, not to the world).
+    #[inline]
+    fn touch_cell(&mut self, c: Cell) {
+        self.touched.entry(c).or_default();
+    }
+
+    /// Count a member entering (`in = true`) or leaving (`in = false`)
+    /// cell `c` — the order-independent birth arithmetic's input (the
+    /// call also marks the cell touched).
+    #[inline]
+    fn member_event(&mut self, c: Cell, in_: bool) {
+        let t = self.touched.entry(c).or_default();
+        if in_ {
+            t.member_in += 1;
+        } else {
+            t.member_out += 1;
+        }
+    }
 }
 
 impl RoomLogic<World> for AoiRoom {
@@ -529,15 +721,25 @@ impl RoomLogic<World> for AoiRoom {
         op::PRIVATE
     }
 
-    /// The connection's group is the cell its entity's WIRE position is
-    /// in (re-evaluated every tick by the room — a crossing player
-    /// changes cell and thus group, and starts receiving the new cell's
-    /// packets; it receives a one-shot private full of the new view, see
-    /// `private`).
+    /// The connection's group is the cell its entity's records land in
+    /// (re-evaluated every tick by the room — a crossing player changes
+    /// cell and thus group, and starts receiving the new cell's packets;
+    /// it receives a one-shot private full of the new view, see
+    /// `private`). Read from the `last_cell` table (item (b): 4a calls
+    /// this once per connection per tick — a world query per connection
+    /// is O(N) ECS work per tick with no structural way to shrink it;
+    /// the table makes it O(1) and it stays current because `update`
+    /// always precedes the broadcast phase). The world fallback covers
+    /// the one window where the table has no entry (an entity spawned
+    /// without a `Position`, which the dirty query cannot see until it
+    /// is stamped — defensive; `on_join` always spawns with one).
     fn group_of(&self, world: &World, conn: ConnectionId) -> Cell {
         let Some(&entity) = self.conn_entity.get(&conn) else {
             return Cell(0, 0);
         };
+        if let Some(&c) = self.last_cell.get(&entity) {
+            return c;
+        }
         let pos = world.entity(entity).get::<Position>().copied().unwrap_or_default();
         cell_of(pos.x as i32, pos.y as i32, self.cell_size)
     }
@@ -658,8 +860,8 @@ impl RoomLogic<World> for AoiRoom {
     /// frame in the same batch and baselines the connection). Otherwise:
     /// the pending input acknowledgment (Section A; a few bytes per
     /// advanced tick, zero otherwise).
-    fn private(&mut self, world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
-        if let Some(c) = self.conn_cell(world, conn) {
+    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        if let Some(c) = self.conn_cell(conn) {
             let baselined = self.conn_view.get(&conn).copied() == Some(c);
             if !baselined {
                 if self.group_full_emitted.contains(&c) {
@@ -691,14 +893,21 @@ impl RoomLogic<World> for AoiRoom {
         // delivers the one-shot full and records the baseline — via the
         // group's own fresh full when the group is born, or via the
         // private frame otherwise.
-        crate::common::on_join(
+        let wire = crate::common::on_join(
             &mut self.conn_entity,
             &mut self.next_wire_id,
             self.spawn_half,
             world,
             conn,
             &mut self.input,
-        )
+        );
+        // Maintain the member-entity set (the dirty loop's O(1)
+        // membership test — it selects which of the changed entities
+        // count toward the per-cell member arithmetic).
+        if let Some(&entity) = self.conn_entity.get(&conn) {
+            self.members.insert(entity);
+        }
+        wire
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
@@ -706,6 +915,27 @@ impl RoomLogic<World> for AoiRoom {
         // leave drops the entity, the input session, and the view
         // baseline (a re-join is a new session: fresh input state, fresh
         // one-shot full).
+        if let Some(&entity) = self.conn_entity.get(&conn) {
+            self.members.remove(&entity);
+            // Despawns are NOT component writes: the `Changed<Position>`
+            // query in `update` cannot see the entity once it is gone,
+            // so the removal must be parked here (module docs, "Dirty
+            // cells") — the wire id and the cell the entity occupied at
+            // the end of the last `update` (`last_cell`, written in
+            // `update` and nowhere else). A join+leave inside one tick
+            // parks nothing: the entity never made it into `last_cell`
+            // (no `update` ran between the join and the leave), so it
+            // never entered the buckets — nothing to remove, no member
+            // count to undo.
+            let wire = world
+                .entity(entity)
+                .get::<WireId>()
+                .map(|w| w.get());
+            let cell = self.last_cell.get(&entity).copied();
+            if let (Some(wire), Some(cell)) = (wire, cell) {
+                self.pending_removals.push((entity, wire, cell));
+            }
+        }
         crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input);
         self.conn_view.remove(&conn);
     }
@@ -719,39 +949,21 @@ impl RoomLogic<World> for AoiRoom {
 
         // Orphan stamping (idempotent, mirrors `DemoRoom`): entities with
         // a `Position` but no `WireId` get the next serial, so the
-        // broadcast set is exactly "has a `Position`".
+        // broadcast set is exactly "has a `Position`". It runs BEFORE the
+        // dirty query below: the query requires a `WireId`, and a
+        // stamped orphan's `Position` write (by the spawner, outside
+        // `on_join`) is already inside this tick's change window — the
+        // stamp adds only a `WireId`, so the query then sees the entity
+        // exactly once (as new-to-buckets).
         crate::common::stamp_orphans(&mut self.next_wire_id, world);
 
-        // Rotate the buckets (module docs, "The delta invariant"):
-        // `prev_buckets` := the previous tick's content (the delta
-        // baseline); `buckets` := a fresh rebuild. The two maps alternate
-        // roles — no per-tick allocation (each entity is bucketed exactly
-        // once, by its WIRE position).
-        std::mem::swap(&mut self.buckets, &mut self.prev_buckets);
-        self.buckets.clear();
-        let mut query = world.query::<(&WireId, &Position)>();
-        for (wire_id, pos) in query.iter(world) {
-            let (x, y) = (pos.x as i32, pos.y as i32);
-            let c = cell_of(x, y, self.cell_size);
-            self.buckets.entry(c).or_default().insert(wire_id.get(), (x, y));
-        }
-
-        // Group birth: the cells with members now, minus the cells with
-        // members last tick (the logic-side twin of the core's group
-        // table — both derive from the same world state, and the world
-        // is stable between this phase and the core's 4a/4b).
-        let mut current: HashSet<Cell> = HashSet::with_capacity(self.conn_entity.len());
-        for &entity in self.conn_entity.values() {
-            if let Some(pos) = world.entity(entity).get::<Position>() {
-                current.insert(cell_of(pos.x as i32, pos.y as i32, self.cell_size));
-            }
-        }
-        self.born_groups = current.difference(&self.group_cells).copied().collect();
-        self.group_cells = current;
-
-        // Clear the per-tick caches (the pieces are computed lazily in
-        // the broadcast phase; the `tick` the private seam stamps is
-        // current from here on).
+        // Clear the per-tick state (persistent containers, in place —
+        // the pieces and the classification are computed lazily in the
+        // broadcast phase; `tick` is current from here on).
+        self.cell_changes.clear();
+        self.touched.clear();
+        self.born_groups.clear();
+        self.frag_cache.clear();
         self.full_pieces.clear();
         self.delta_pieces.clear();
         self.exit_markers.clear();
@@ -759,6 +971,170 @@ impl RoomLogic<World> for AoiRoom {
         self.group_full_emitted.clear();
         self.encoded = 0;
         self.tick = ctx.tick;
+
+        // The dirty set (module docs, "Dirty cells"): bevy's change
+        // detection flags every `Position` write — by any writer, through
+        // any API (a system, `ingest`, a direct `world.entity_mut` in a
+        // test or future code) — so no writer can forget to mark a cell
+        // dirty: the mark lives in bevy's write path itself. The query
+        // window is "writes since the end of the previous `update`"
+        // (`clear_trackers` at the bottom of this method closes THIS
+        // tick's window), so CONTROL-phase joins (spawn writes) are
+        // inside it; CONVERT-phase writes touch `MoveTarget`, not
+        // `Position`, and reach the query through the systems' resulting
+        // `Position` writes; a same-value rewrite is tracked (bevy marks
+        // every write, even an identical one) and degrades to a no-op
+        // below through the wire comparison. Only the changed entities
+        // are visited — per-tick work is proportional to the movers, not
+        // to the entity count.
+        let mut query =
+            world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();
+        for (entity, wire_id, pos) in query.iter(world) {
+            let wire = wire_id.get();
+            let (x, y) = (pos.x as i32, pos.y as i32);
+            let new_cell = cell_of(x, y, self.cell_size);
+            let is_member = self.members.contains(&entity);
+            match self.last_cell.get(&entity).copied() {
+                None => {
+                    // New this tick (a join, or a spawn between
+                    // updates): an upsert in its cell.
+                    self.cell_changes
+                        .entry(new_cell)
+                        .or_default()
+                        .updates
+                        .push((wire, x, y));
+                    self.buckets.entry(new_cell).or_default().insert(wire, (x, y));
+                    self.last_cell.insert(entity, new_cell);
+                    self.touch_cell(new_cell);
+                    if is_member {
+                        *self.member_counts.entry(new_cell).or_default() += 1;
+                        self.member_event(new_cell, /*in:*/ true);
+                    }
+                }
+                Some(old) if old == new_cell => {
+                    // Moved inside its cell (or a move too small to
+                    // change the WIRE position — quantization, module
+                    // docs): a record only when the wire content
+                    // actually changed.
+                    let changed = self
+                        .buckets
+                        .get(&old)
+                        .and_then(|b| b.get(&wire))
+                        .is_none_or(|&(px, py)| px != x || py != y);
+                    if changed {
+                        self.cell_changes
+                            .entry(new_cell)
+                            .or_default()
+                            .updates
+                            .push((wire, x, y));
+                        self.buckets
+                            .get_mut(&old)
+                            .expect("bucket invariant: tracked in last_cell")
+                            .insert(wire, (x, y));
+                        self.touch_cell(new_cell);
+                    }
+                }
+                Some(old) => {
+                    // A cell change: an exit in the source cell, an
+                    // upsert in the target (the packet passes fix the
+                    // wire order: `removed` before `entities`).
+                    self.cell_changes.entry(old).or_default().exits.push(wire);
+                    if let Some(b) = self.buckets.get_mut(&old) {
+                        b.remove(&wire);
+                        if b.is_empty() {
+                            self.buckets.remove(&old);
+                        }
+                    }
+                    self.touch_cell(old);
+                    self.cell_changes
+                        .entry(new_cell)
+                        .or_default()
+                        .updates
+                        .push((wire, x, y));
+                    self.buckets.entry(new_cell).or_default().insert(wire, (x, y));
+                    self.last_cell.insert(entity, new_cell);
+                    self.touch_cell(new_cell);
+                    if is_member {
+                        if let Some(n) = self.member_counts.get_mut(&old) {
+                            *n -= 1;
+                            if *n == 0 {
+                                self.member_counts.remove(&old);
+                            }
+                        }
+                        *self.member_counts.entry(new_cell).or_default() += 1;
+                        self.member_event(old, /*in:*/ false);
+                        self.member_event(new_cell, /*in:*/ true);
+                    }
+                }
+            }
+        }
+
+        // Leavers: despawns are invisible to the change query — applied
+        // from the removals parked in `on_leave` (wire id + the cell the
+        // entity occupied at the end of the last `update`).
+        for (entity, wire, cell) in std::mem::take(&mut self.pending_removals) {
+            self.last_cell.remove(&entity);
+            self.cell_changes.entry(cell).or_default().exits.push(wire);
+            if let Some(b) = self.buckets.get_mut(&cell) {
+                b.remove(&wire);
+                if b.is_empty() {
+                    self.buckets.remove(&cell);
+                }
+            }
+            self.touch_cell(cell);
+            // A parked removal is always a member's (connections own the
+            // despawned entities); the join+leave-within-one-tick case
+            // never parked a removal (the `last_cell` guard in
+            // `on_leave`), so there is no count to undo for it.
+            if let Some(n) = self.member_counts.get_mut(&cell) {
+                *n -= 1;
+                if *n == 0 {
+                    self.member_counts.remove(&cell);
+                }
+            }
+            self.member_event(cell, /*in:*/ false);
+        }
+
+        // The per-cell flags, the group birth, and the occupancy roll
+        // (module docs, "Dirty cells") — all order-independent:
+        // `prev_occupied` was frozen for the whole dirty loop (it is
+        // rolled only here, against the final bucket state), and the
+        // member arithmetic reconstructs the before-tick count from the
+        // net events (`now − in + out`), so a same-tick exit+entry into
+        // the same cell cannot fake a birth. The pass iterates exactly
+        // the touched cells — O(movers), never O(occupied cells).
+        for (c, t) in self.touched.iter() {
+            let occupied_now = self.buckets.contains_key(c);
+            let occupied_prev = self.prev_occupied.contains(c);
+            let ch = self
+                .cell_changes
+                .get_mut(c)
+                .expect("a touched cell has a change entry");
+            ch.appeared = occupied_now && !occupied_prev;
+            ch.exited = occupied_prev && !occupied_now;
+            let now = self.member_counts.get(c).copied().unwrap_or(0);
+            let before = now.wrapping_sub(t.member_in).wrapping_add(t.member_out);
+            debug_assert!(
+                before.saturating_add(t.member_in) >= t.member_out,
+                "member count went negative for {c:?}"
+            );
+            if before == 0 && now > 0 {
+                self.born_groups.insert(*c);
+            }
+            if occupied_now {
+                self.prev_occupied.insert(*c);
+            } else {
+                self.prev_occupied.remove(c);
+            }
+        }
+
+        // Close this tick's change window: bevy's change tick advances
+        // here, so the NEXT `update`'s query sees exactly the writes
+        // made since now — the next CONTROL phase's join spawns
+        // included. Standalone bevy does not call this on its own
+        // (it is the system-scheduler's job, and there is none here —
+        // see `docs/DESIGN.md` §7).
+        world.clear_trackers();
     }
 }
 
@@ -1164,5 +1540,401 @@ mod tests {
         assert_eq!(snap.entities.len(), 3, "exactly the union, no duplicates: {snap:?}");
     }
 
+    // ── Cache-invalidation tests (round item (a)): the per-tick
+    //    classification/piece caches must never serve a stale answer —
+    //    across ticks (different content → different blocks) or within
+    //    the silent/delta alternation (a stale delta must not be
+    //    re-served, and two groups asking the same cell get the same
+    //    block).
 
+    /// (a) two consecutive ticks with different content produce
+    /// different blocks: tick N+1's piece is never tick N's cached
+    /// piece (the per-tick caches are cleared in `update`).
+    #[test]
+    fn aoi_tick_cache_no_stale_block() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let _a = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
+        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+
+        // Tick 2: the entity moves within its cell → a delta with (15,0).
+        world.entity_mut(ent).insert(Position { x: 15.0, y: 0.0 });
+        room.update(&mut world, &ctx(2));
+        let mut out2 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        let s2 = decode(&out2);
+        assert!(s2.delta);
+        assert_eq!(s2.entities.len(), 1, "exactly the moved record: {s2:?}");
+        assert_eq!((s2.entities[0].x, s2.entities[0].y), (15, 0));
+        assert_eq!(room.encoded_records(), 1);
+
+        // Tick 3: it moves again → a DIFFERENT block ((10,0)) — tick 2's
+        // cached piece/classification must not be replayed.
+        world.entity_mut(ent).insert(Position { x: 10.0, y: 0.0 });
+        room.update(&mut world, &ctx(3));
+        let mut out3 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        let s3 = decode(&out3);
+        assert!(s3.delta);
+        assert_eq!(s3.entities.len(), 1, "exactly the moved record: {s3:?}");
+        assert_eq!(
+            (s3.entities[0].x, s3.entities[0].y),
+            (10, 0),
+            "tick 3 must not serve tick 2's cached block"
+        );
+        assert_eq!(room.encoded_records(), 1);
+    }
+
+    /// (a) a cell that goes silent after a delta tick ships nothing —
+    /// the stale delta is not re-served; the keep-alive full carries the
+    /// CURRENT content (never a stale piece).
+    #[test]
+    fn aoi_silent_delta_silent_no_stale() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let _a = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
+        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+
+        // Tick 2: silence — an established group ships NOTHING.
+        room.update(&mut world, &ctx(2));
+        let mut out2 = bytes::BytesMut::new();
+        assert!(
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            "silence ships nothing (no stale full, no delta)"
+        );
+        assert!(out2.is_empty());
+        assert_eq!(room.encoded_records(), 0);
+
+        // Tick 3: a delta tick — the silence of tick 2 must not
+        // suppress the cell's (fresh) piece.
+        world.entity_mut(ent).insert(Position { x: 19.0, y: 0.0 });
+        room.update(&mut world, &ctx(3));
+        let mut out3 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        let s3 = decode(&out3);
+        assert!(s3.delta);
+        assert_eq!(s3.entities.len(), 1);
+        assert_eq!((s3.entities[0].x, s3.entities[0].y), (19, 0));
+        assert_eq!(room.encoded_records(), 1);
+
+        // Tick 4: silence again — the stale tick-3 delta is not
+        // replayed, and the keep-alive full carries the current content.
+        room.update(&mut world, &ctx(4));
+        let mut out4 = bytes::BytesMut::new();
+        assert!(
+            !room.snapshot(&mut world, &ctx(4), &Cell(0, 0), &mut out4),
+            "the stale delta must not be re-served"
+        );
+        assert_eq!(room.encoded_records(), 0);
+        let mut ka = bytes::BytesMut::new();
+        assert!(room.keepalive(&mut world, &ctx(4), &Cell(0, 0), None, &mut ka));
+        let s4 = decode(&ka);
+        assert!(!s4.delta, "the keep-alive ships a full");
+        assert_eq!(s4.entities.len(), 1);
+        assert_eq!(
+            (s4.entities[0].x, s4.entities[0].y),
+            (19, 0),
+            "the full carries the current content, not a stale piece"
+        );
+    }
+
+    /// (a) two different groups that both see the same cell in the same
+    /// tick get the SAME block for it: content-identical records, and
+    /// the piece is encoded exactly once (shared by reference).
+    #[test]
+    fn aoi_two_groups_same_cell_same_block() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+
+        // Two member groups (Cell(1,0) and Cell(3,0)) whose 3×3s overlap
+        // in Cell(2,0); an NPC lives in Cell(2,0).
+        let _m1 = place(&mut world, &mut room, ConnectionId(1), 20.0, 0.0); // Cell(1,0)
+        let _m2 = place(&mut world, &mut room, ConnectionId(2), 60.0, 0.0); // Cell(3,0)
+        let npc = world
+            .spawn((Position { x: 40.0, y: 0.0 }, Speed(DEFAULT_SPEED)))
+            .id(); // Cell(2,0)
+        room.update(&mut world, &ctx(1));
+
+        // Tick 2: the NPC moves within Cell(2,0) — both groups' deltas
+        // must carry the identical block for that cell.
+        world.entity_mut(npc).insert(Position { x: 45.0, y: 0.0 });
+        room.update(&mut world, &ctx(2));
+
+        let mut out_a = bytes::BytesMut::new();
+        let mut out_b = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(1, 0), &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &mut out_b));
+        let s_a = decode(&out_a);
+        let s_b = decode(&out_b);
+        assert_eq!(s_a.entities.len(), 1, "group A's delta carries only the shared cell's mover: {s_a:?}");
+        assert_eq!(s_b.entities.len(), 1, "group B's delta carries only the shared cell's mover: {s_b:?}");
+        assert_eq!(
+            (s_a.entities[0].entity, s_a.entities[0].x, s_a.entities[0].y),
+            (s_b.entities[0].entity, s_b.entities[0].x, s_b.entities[0].y),
+            "same cell, same tick → identical block"
+        );
+        assert_eq!(room.encoded_records(), 1, "one encoding, not one per group");
+    }
+
+    // ── Change-detection tests (round item (b)): the dirty marking is
+    //    structural (bevy's write path — no `bump()` discipline), the
+    //    change list is the diff (partial deltas, quantization no-ops),
+    //    and the bookkeeping it maintains (leaves, births, same-tick
+    //    churn) is order-independent and leak-free.
+
+    /// (b) structural dirty marking: a `Position` written by a writer
+    /// the room has no hook into (a direct `world.entity_mut` — no
+    /// system, no `MOVE_TO`, no invalidation call) still produces the
+    /// correct delta: the mark is set inside bevy's write path, so it
+    /// cannot be forgotten by any present or future writer.
+    #[test]
+    fn aoi_structural_dirty_direct_write() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let _m = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
+        // Two third-party entities the room never sees through
+        // on_join/ingest (a co-resident keeps the source cell
+        // non-empty, so the exit takes the per-entity `removed` path —
+        // the whole-cell `CellExit` path is covered by
+        // `aoi_leave_removal_in_delta_and_cell_exit`).
+        let ghost = world
+            .spawn((Position { x: 100.0, y: 0.0 }, Speed(DEFAULT_SPEED)))
+            .id(); // Cell(5,0)
+        world.spawn((Position { x: 110.0, y: 0.0 }, Speed(DEFAULT_SPEED))); // Cell(5,0)
+        room.update(&mut world, &ctx(1));
+        let ghost_wire = world.entity(ghost).get::<WireId>().expect("stamped").get();
+
+        // The third-party writer moves the ghost across cells — the room
+        // has no hook for this write; the delta must still carry the
+        // exit (source cell) and the arrival (target cell).
+        world.entity_mut(ghost).insert(Position { x: 125.0, y: 0.0 }); // Cell(6,0)
+        room.update(&mut world, &ctx(2));
+
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(5, 0), &mut out));
+        let s = decode(&out);
+        assert!(s.delta);
+        assert!(
+            s.removed.contains(&ghost_wire),
+            "the exit is recorded without any room hook: {s:?}"
+        );
+
+        let mut out2 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(6, 0), &mut out2));
+        let s2 = decode(&out2);
+        assert!(
+            s2
+                .entities
+                .iter()
+                .any(|e| e.entity == ghost_wire && (e.x, e.y) == (125, 0)),
+            "the arrival is recorded: {s2:?}"
+        );
+    }
+
+    /// (b) partial delta: a cell with five records of which ONE changed
+    /// ships exactly that one record — the other four are neither
+    /// re-carried nor re-encoded (the change list is the diff; no
+    /// per-cell content comparison runs).
+    #[test]
+    fn aoi_partial_delta_only_mover_recorded() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        // Five members, one cell (Cell(0,0): x = 3, 6, 9, 12, 15).
+        let ws: Vec<u64> = (1..=5)
+            .map(|i| place(&mut world, &mut room, ConnectionId(i), (i as f32) * 3.0, 0.0))
+            .collect();
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert_eq!(ids(&decode(&out)).len(), 5, "the fresh full carries all five");
+        assert_eq!(room.encoded_records(), 5);
+
+        // Only member 3 (x=9) moves — a direct write (no MOVE_TO, no
+        // system).
+        let ent = *room.conn_entity.get(&ConnectionId(3)).unwrap();
+        world.entity_mut(ent).insert(Position { x: 18.0, y: 0.0 }); // still Cell(0,0)
+        room.update(&mut world, &ctx(2));
+        let mut out2 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        let s2 = decode(&out2);
+        assert!(s2.delta);
+        assert_eq!(s2.entities.len(), 1, "exactly the mover's record: {s2:?}");
+        assert_eq!(s2.entities[0].entity, ws[2]);
+        assert_eq!((s2.entities[0].x, s2.entities[0].y), (18, 0));
+        assert!(s2.removed.is_empty(), "no exits: {s2:?}");
+        assert_eq!(
+            room.encoded_records(),
+            1,
+            "one encoding — the other four records are not re-encoded"
+        );
+    }
+
+    /// (b) quantization: a move that leaves the WIRE position (i32
+    /// truncation) untouched produces no record — the cell stays silent
+    /// (no stale delta leaks) while the f32 world keeps moving; the
+    /// first wire-unit change does produce the record.
+    #[test]
+    fn aoi_quantized_move_no_wire_change_no_record() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let _m = place(&mut world, &mut room, ConnectionId(1), 0.5, 0.5); // wire (0,0), Cell(0,0)
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+
+        // The f32 position changes; the wire position (0,0) does not.
+        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        world.entity_mut(ent).insert(Position { x: 0.9, y: 0.5 });
+        room.update(&mut world, &ctx(2));
+        let mut out2 = bytes::BytesMut::new();
+        assert!(
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            "an unchanged wire position is a no-op: the cell is silent, no stale delta"
+        );
+        assert_eq!(room.encoded_records(), 0);
+
+        // Crossing the wire boundary (x: 0.9 → 1.0) flips the record.
+        world.entity_mut(ent).insert(Position { x: 1.0, y: 0.5 });
+        room.update(&mut world, &ctx(3));
+        let mut out3 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        let s3 = decode(&out3);
+        assert!(s3.delta);
+        assert_eq!(s3.entities.len(), 1);
+        assert_eq!((s3.entities[0].x, s3.entities[0].y), (1, 0));
+        assert_eq!(room.encoded_records(), 1);
+    }
+
+    /// (b) the despawn path: a leave is not a component write — the
+    /// removal is parked in `on_leave` and applied by `update`. The
+    /// cell's delta carries the leaver's wire id in `removed`; when the
+    /// cell empties, one `CellExit` supersedes the per-entity records.
+    #[test]
+    fn aoi_leave_removal_in_delta_and_cell_exit() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let w1 = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
+        let w2 = place(&mut world, &mut room, ConnectionId(2), 10.0, 0.0); // Cell(0,0)
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert_eq!(ids(&decode(&out)).len(), 2);
+        assert_eq!(room.encoded_records(), 2);
+
+        // One leaves: the delta carries exactly its wire id in `removed`
+        // (the remaining entity is not re-carried).
+        room.on_leave(&mut world, ConnectionId(1));
+        room.update(&mut world, &ctx(2));
+        let mut out2 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        let s2 = decode(&out2);
+        assert!(s2.delta);
+        assert_eq!(s2.removed.len(), 1, "the leaver's wire id is removed: {s2:?}");
+        assert_eq!(s2.removed[0], w1);
+        assert!(!s2.removed.contains(&w2), "the remaining entity is NOT removed: {s2:?}");
+        assert!(s2.entities.is_empty(), "the remaining entity is not re-carried: {s2:?}");
+        assert_eq!(room.encoded_records(), 0, "exits are not 'encoded records'");
+
+        // The last one leaves: a `CellExit` supersedes the per-entity
+        // record (the client forgets the whole cell in one record).
+        room.on_leave(&mut world, ConnectionId(2));
+        room.update(&mut world, &ctx(3));
+        let mut out3 = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        let s3 = decode(&out3);
+        assert_eq!(s3.cell_exits.len(), 1, "one cell-exit record: {s3:?}");
+        assert_eq!((s3.cell_exits[0].x, s3.cell_exits[0].y), (0, 0));
+        assert!(s3.removed.is_empty(), "the cell-exit supersedes the entity records: {s3:?}");
+        assert!(s3.entities.is_empty());
+    }
+
+    /// (b) the birth rule's generalization (module docs, "Dirty cells"):
+    /// a cell that already holds non-member content (an NPC) and gains
+    /// its first MEMBER this tick is a fresh group — the member is
+    /// baselined by the group's own full (batch-ordered ahead of the
+    /// private frame), so the one-shot private full is skipped. (The
+    /// spec's literal bucket-diff formulation would miss this birth —
+    /// the cell was already in the previous buckets — leaving the member
+    /// to the private full; both paths baseline correctly, and the
+    /// member-count rule is the one that also covers the general case.)
+    #[test]
+    fn aoi_member_join_npc_cell_born_full() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+
+        // Tick 1: an NPC-only cell (no members anywhere yet).
+        let npc = world
+            .spawn((Position { x: 40.0, y: 0.0 }, Speed(DEFAULT_SPEED)))
+            .id(); // Cell(2,0)
+        room.update(&mut world, &ctx(1));
+
+        // Tick 2: a member joins and lands in the NPC's cell.
+        let m = place(&mut world, &mut room, ConnectionId(7), 44.0, 0.0); // Cell(2,0)
+        room.update(&mut world, &ctx(2));
+        assert!(
+            room.born_groups.contains(&Cell(2, 0)),
+            "a member joining an NPC-held cell is a fresh group (member count 0 → 1)"
+        );
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(2, 0), &mut out));
+        let s = decode(&out);
+        assert!(!s.delta, "the fresh group's first packet is a full");
+        let seen = ids(&s);
+        let npc_wire = world.entity(npc).get::<WireId>().expect("stamped").get();
+        assert!(
+            seen.contains(&m) && seen.contains(&npc_wire),
+            "the full carries member + NPC: {seen:?}"
+        );
+        // The member is baselined by that full: no private frame.
+        let mut pbuf = bytes::BytesMut::new();
+        assert!(
+            !room.private(&mut world, ConnectionId(7), &mut pbuf),
+            "the group's full already baselined the member — no private frame"
+        );
+        assert!(room.conn_view.contains_key(&ConnectionId(7)));
+    }
+
+    /// (b) a join+leave within one tick: the entity never enters
+    /// `last_cell` (no `update` ran between the two), so `on_leave`
+    /// parks no removal, the dirty query never sees the despawned
+    /// entity, and no bookkeeping is left behind — counts, buckets, and
+    /// the established group's stream are exactly as before.
+    #[test]
+    fn aoi_join_leave_same_tick_inert() {
+        let mut world = World::new();
+        let mut room = AoiRoom::new(20.0);
+        let _m = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
+        room.update(&mut world, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+
+        // A connection that joins AND leaves before the next update.
+        room.on_join(&mut world, ConnectionId(9));
+        room.on_leave(&mut world, ConnectionId(9));
+        assert!(
+            room.pending_removals.is_empty(),
+            "no removal to park (the entity was never bucketed)"
+        );
+
+        room.update(&mut world, &ctx(2));
+        assert_eq!(
+            *room.member_counts.get(&Cell(0, 0)).expect("member count"),
+            1,
+            "the member counts are intact"
+        );
+        let mut out2 = bytes::BytesMut::new();
+        assert!(
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            "the phantom join produced no delta"
+        );
+        assert_eq!(room.encoded_records(), 0);
+    }
 }

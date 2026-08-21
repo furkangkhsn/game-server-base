@@ -1993,6 +1993,344 @@ durumda değil — profiller değişmedi).
 
 ---
 
+## Kapatılanlar (AOI per-cell memo + dirty cell turu)
+
+**Tur kapsamı.** Spec'ten iki madde: (A) per-cell sınıflandırma
+memo'laması — sınıflandırma tick başına hücre başına **bir kez** hesaplanır
+(NEGATİF `Silent` sonuçlar dahil), inner bucket map'leri yerinde temizlenir;
+(B) dirty hücre seti — tick başına iş **hareket eden** entity ile orantılı
+olacak; dirty işaretini **yapısal** olarak garanti eden tasarım (en az iki
+gerçek alternatif değerlendirmeli; proje "yorumda disiplin"den üç kez
+yaralanmıştır: `bump()`/F1, `WireId` ön koşulu, `last_sent` haritası).
+Kilitli kabuller aynen korundu: 6 delta testi (`tests/delta_aoi.rs`)
+değişmeden yeşil (delta akışı ≡ full akışı istemci görünümü; 3 gözlemci
+pozisyonunda hayalet/kopya yok; hücre çıkışında entity istemcide silinir;
+geç giriş `private()` full'ı; kayıp keepalive sınırında iyileşir). Wire
+protokolü **değişmedi** — saf iç optimizasyon (proto dosyasında bu turda
+değişiklik yok).
+
+### A — Per-cell sınıflandırma memo'laması (+ inner temizlik)
+
+**Ne.** `AoiRoom::classify` artık tick başına hücre başına bir kez hesaplayıp
+sonucu `frag_cache: HashMap<Cell, CellFrag>`'e koyuyor — **negatif
+sonuçlar dahil** (içerik aynı olan `(true, true)` hücresi = `Silent` da
+önbellekleniyor). Gerekçe (kod dokümanında da): bir tick içinde
+sınıflandırma, (önceki, güncel) bucket çiftinin **saf fonksiyonu**dur ve bu
+çift `update`'e kadar donuktur — dolayısıyla ilk çağıranın sonucu her
+sonraki çağrıcı için (diğer tüm gruplar + 3×3 bloğunun **4 kez**
+yürütülmesinin her geçişi) kesindir; memo yaklaşıksa değil, **doğrudur**.
+`Silent` memo'sunun hedefi ölçülen kusurdu: eski `delta_piece`, sessiz
+hücrede `None` dönerken sonucu `delta_pieces`'e **yazmıyordu** → her
+sonraki `classify` çağrısı hücrenin TAM içeriğini yeniden diff'liyordu
+(grup×geçiş sayısı kadar, tick başına). Ayrıca spec (a)-c: bucket
+rotasyonunda taze map'in **iç** map'leri yerinde `clear()` ile temizleniyor
+(dış anahtarlar + iç tahsisler rotasyonda yaşıyor — tick başına tahsis
+git-alaşı yok). `born_groups` türetimi değişmedi (üye hücre kümesi farkı).
+
+**Kapanan kusur sınıfı.** "Tick içinde değişmeyen cevabı birden fazla kez
+hesapla" — burada maliyeti taşıyan varyant NEGATİF cevaptı: sessiz hücre
+(basınçlı durumda hücrelerin büyük çoğunluğu) her ziyarette yeniden diff
+ediliyordu. Ölçülen etki (faz dökümü, aşağı): snap fazı 254 µs/tick →
+53 µs/tick (0.90, karşılaştırılabilir koşu).
+
+**Elenen alternatifler.** (1) *Eager: tüm hücrelerin parçasını tick başında
+üret* — 3×3 görüş yerel: grup yalnızca kendi bloğundaki hücreleri ziyaret
+eder; eager, hiç ziyaret edilmeyecek dolu hücrelerin parçasını da üretir
+(O(dolu hücre) × diff, grup sayısından bağımsız) — lazy + memo
+O(ziyaret edilen × 1 diff). (2) *Entity-bazlı versiyon damgası (bump() geri
+getir)* — B maddesinde elenen disiplin sınıfının ta kendisi (F1 tarihi);
+ayrıca sınıflandırma zaten bucket çiftinin saf fonksiyonu — ek versiyon
+bilgisi taşımaz. (3) *Statüko (yeniden diff)* — ölçülen 254 µs/tick.
+
+**Spec sapması (b) — "born_groups bucket diff'inden":** spec'in harfiyle
+"bucket diff'i" (hücre önceki ve güncel bucket'larda VAR) doğum kuralı
+olarak yetmez: yalnızca **üye olmayan** içerik taşıyan (NPC) bir hücre
+her iki tick'te de doluysa ve bu tick'te ilk üyesini alıyorsa, harfi kural
+doğumu **kaçırır** (hücre diff'de yeni değil). Uygulanan kural üye
+sayımıdır: `before = now − in + out` (sıra-bağımsız; aynı tick'te
+çıkış+giriş sahte doğum üretmez) — üye-only durumlarda harfi okumayla
+aynı sonucu verir, genel durumda doğrudur. Kaçırılan doğumun gözlemsel
+sonucu zararsız olurdu (üye bir seferlik private full ile baseline'lanır),
+ama uygulanan seçim grubun full'unu yayınlar (superset; aynı baytlar;
+private atlanır, `group_full_emitted` üzerinden). Test:
+`aoi_member_join_npc_cell_born_full` (modül dokümanına sapma notu yazıldı).
+
+**Spec hatası (A beklentisi) — ÖNEMLİ:** spec, A sonrası süpürmeyi "değerler
+düşer ama **hâlâ düz**" olarak öngörüyordu. Öyle DEĞİL, ve mekanizması
+belirgin: A'nın el ettiği maliyet (sessiz hücrelerin yeniden diff'i)
+**tam olarak hareketsizlikle ölçeklenendir** — hareketsiz hücreler ancak
+entity'ler oturduğunda var olur (wire kuantizasyonu: hareket eden entity
+bile i32 wire konumunu her ~3 tick'te değiştirir → aktif hücre
+"hareketsiz" sınıflandırması almaz). Ölçülen: BASE 0.90/0.99 adım ortalaması
+720/548 µs → A 515/449 µs; p50 log2-kanıtı 782-bin'den 391-bin'e iniyor
+(0.90/0.99; 0.00/0.50'da sessiz hücre yok → memo işe yaramaz, aynı kalır).
+Yani "düz kalması beklenen" süpürme, A'da zaten eğimli; B maddesinin
+acceptance ölçütü bu gerçeğe karşı yorumlandı (aşağı).
+
+### B — Dirty hücre seti (yapısal işaret)
+
+**Ne.** Tick başına iş, dünya içeriğinin yeniden türetimi olmaktan çıktı:
+- İşaret **yapısal**: `Position` bileşenine yazan HER yazan (sistem,
+  ingest, test yardımcıları, gelecekteki yeni sistemler) bevy'nin
+  bileşen-bazlı change tick'iyle otomatik işaretleniyor; oda
+  `query_filtered::<(Entity, &WireId, &Position), Changed<Position>>`
+  ile tick penceresini okuyor ve yalnızca işaretli entity'ler için
+  bucket/defter işi yapıyor. Standalone bevy'de pencereyi **oda elle
+  ilerletir**: her `update()` sonunda `world.clear_trackers()` (=
+  `increment_change_tick()`) — pencere "önceki güncelleme → bu
+  güncelleme arası yazımlar". Despawn bir bileşen yazımı olmadığı için
+  çıkışlar odanın üyelik defterinden geliyor: `on_leave` çıkışı
+  `pending_removals`'a park eder (entity hem `WireId` hem `last_cell`
+  taşıyorsa — yani gerçekten bucket'lanmışsa), `update` park edilen
+  çıkışları değiştirim listelerine uygular.
+- Defter: `prev_occupied: HashSet<Cell>` (dirty döngüsü boyunca DONDURULUŞ,
+  tick sonunda dokunulan hücreler için rulo), `last_cell: HashMap<Entity,
+  Cell>` (ayn zamanda `group_of`/`conn_cell`'in O(1) kaynağı),
+  `member_counts: HashMap<Cell, u32>`, `touched: HashMap<Cell, TouchInfo>`
+  (üye giriş/çıkış sayıları — sıra-bağımsız doğum aritmetiği),
+  `cell_changes: HashMap<Cell, CellChanges>` (updates/exits listeleri +
+  appeared/exited bayrakları), `pending_removals: Vec<(Entity, u64, Cell)>`.
+- `classify` artık değişim listesini okuyor (A'nın memo'su aynen):
+  listede yok → `Silent`, `appeared` → `Appeared`, `exited` → `Exited`,
+  var → `Delta`. `delta_piece` artık **diff yapmıyor** — hücrenin değişim
+  listesini doğrudan kodluyor. Quantization no-op (f32 konum değişti ama
+  i32 wire konumu aynı) → kayıt yok, hücre `Silent` (kayıt
+  gözlemsel olarak değişmedi — full/delta akışları hâlâ aynı istemci
+  görünümünde).
+- Doğum kuralı: üye sayımı (yukarıdaki spec-(b) sapması). Hücre
+  `before = now − in + out` hesabıyla 0'dan üyeye geçiyorsa doğar; bu,
+  NPC-only hücreye üye katılması durumunu da kapsar.
+
+**§7 ile ilişki (spec sorusu):** DESIGN §7, bevy'nin **event/observer**
+mekanizmasını hot path'ten çıkarmıştı (bevy 0.19'da yeniden tasarım —
+churn riski; ayrıca hot path'te event tamponu = yazım başına tahsis +
+drain döngüsü). B maddesi bu elenmeyle **çelişmiyor**: kullanılan bevy
+arayüzü event/observer değil, **query filtresi** (`Changed<T>` change
+tick'i) — ve standalone modda scheduler olmadığı için baseline'ı oda elle
+ilerletiyor (`clear_trackers`). §7, "strateji bazında değişim sinyali"
+şeklinde güncellendi (demo stratejisi: wire içeriği; spatial: change tick'i).
+
+**Kapanan kusur sınıfı.** (1) "Tick başına iş, dünya toplamı ile orantılı"
+— üç O(N) world taraması (rebuild sorgusu, doğum taraması, `group_of`
+world fetch'i) ve sessiz hücre yeniden-diff'i, hareket edenlerle orantılı
+işe + O(N) ucuz taramaya indirgendi (aşağıdaki dürüst not). (2) "Yazar
+işareti unuttu" disiplin sınıfı — yapısal olarak kapatıldı: işaret bevy'nin
+yazma yolunun kendisinde; unutulacak bir `bump()` yok. Bu, `WireId`
+minting kapısı (tip düzeyinde tek inşaat yolu) ile aynı yapısal garantı
+sınıfıdır — projenin üç kez yaralandığı "yorumda disiplin"in kodda
+karşılığı.
+
+**Dürüst not — "∝ movers"un sınırı (spec'e açık beyan):** (a) bevy'nin
+`Changed<T>` filtresi `IS_ARCHETYPAL = false` (bevy_ecs 0.19.1 kaynağı
+doğrulandı): tarama, eşleşen tablodaki **her** entity için change tick
+karşılaştırması yapar — yani `update`'in taraması O(N)'dir (ucuz:
+entity başına bir u32 karşılaştırma; eski rebuild'in hücre hesabı + hash
+yazımlarından ~5× ucuz, ama O(movers) DEĞİL). O(movers) olan kısım
+gerçek iş: bucket/defter güncellemeleri, doğum aritmetiği, kodlama.
+(b) Tick başına **hareketsizlikten bağımsız bir taban** kalıyor ve B bunu
+kaldıramaz: bağlantı-bazlı `private` frame'leri (ack — §14.1,
+bağlantı-bazlı fan-out tasarımı gereği) ~92–106 µs/tick + core fazlar
+(CONTROL drain, READ pull, CONVERT ingest, 4b grup tablosu, 4d fan-out
+`try_send`, metrik) ~177–208 µs/tick ≈ **270–310 µs/tick taban**.
+In-proc modda bu tabana 500 eş-konumlu istemci task'ının işi de eklenir
+(aşağıdaki bimodal bulguyla bağlantılı).
+
+**Elenen alternatifler.** (1) *El yapımı dirty hunisi* (`Position`'a dirty
+bayrağı bileşeni / ayrı dirty kümesi; `With<Dirty>` archetype filtresiyle
+O(movers) tarama) — tarama O(movers) olurdu AMA işareti **yazarların
+kurmaya zorunlu** olması gerekir: bu, kapanan kusur sınıfının ta kendisi
+(üç kez yaralanılan "unutma" disiplini) ve yapısal olarak kapatılamaz —
+her yeni yazan (yeni sistem, yeni ingest yolu, test helper) denetim
+istiyor. O(movers) tarama kazancı (~20–40 µs/tick, ölçülen) yapısal
+garanti karşılığında verilmedi. (2) *Saf disiplin* (yazara oda metodunu
+çağırma zorunluluğu + yorum + lint) — lint geleceğin yazanını göremez;
+tarih tekerrürü. (3) *bevy event/observer API* — §7'nin orijinal elenme
+gerekçesi (0.19 yeniden tasarımı) + hot path event tamponu; standalone'da
+event scheduler'ı zaten yok. (4) *Statüko* — üç O(N) tarama + yeniden-diff.
+
+### Ölçüm (before/after nasıl kuruldu, ham veri, acceptance)
+
+**Kurulum (öncesi/sonrasi karşılaştırmasının yapısı).** Aynı makine
+(AMD Ryzen 9 7950X 16C/32T, 124 GiB; masaüstü yükü — run başına loadavg
+meta dosyalarında), aynı komut (`gsb-loadgen 500 --duration 30
+--profile still --still-frac F --visibility spatial --cell-size 20`,
+in-proc: 500 istemci + 1 oda tek process, tokio worker=1), **release**
+profil (lto=thin, codegen-units=1), rustc 1.95.0. Üç kod durumu (BASE =
+`c7366b1`, A = BASE + madde A, B = BASE + A + B — teslim edilen durum)
+üzer üste **sıralı** derlendi; her run başka bir cargo çalışmasıyla
+eşleşmedi (kontaminasyon kuralı). Yerel BASE yeniden ölçümü spec'in
+dışarıdan verdiği 782 sayısını birebir yeniden üretti (782-bin ×4,
+pinned ve unpinned). **Pinned set:** `taskset -c 8-15` (ölçüm sırasında
+~%90+ boş çekirdekler; unpinned koşular ayrı raporlandı ve kontamine
+olanlar "kanıt değil" olarak işaretlendi).
+
+**Adım-zamanı histogramı ve "391/782" etiketleri (okuma uyarısı).**
+RESULT satırındaki `step_p50_us=391/782` **kesin quantil DEĞİLDİR**:
+metrik histogramı log2 binlidir (bütçe 33 333 µs: bin0 [0,260), bin1
+[260,521), bin2 [521,1042), bin3 [1042,2083) µs); "391" = p50'nin bin1'de
+olduğunun, "782" = bin2'de olduğunun temsilcisidir (ortalar
+≈(260+521)/2, ≈(521+1042)/2). Kesin karşılaştırma `step_mean_us`'dir
+("server room (final)" satırı, ham dosyalarda).
+
+**Bimodal bulgu (önemli, koşu koşu tekrarlanabilir):** adım zamanları her
+kod durumunda **iki keskin küme** oluşturuyor — komşu log2 binleri,
+tam 2.0 oran (bimodalite frekans artifact'ı DEĞİL: pinned koşu sırasında
+/proc/cpuinfo örneklemesi çekirdeklerin ~5.4 GHz'de sabit kaldığını
+gösterdi). Kanıtlar: (i) her koşunun histogramı iki binde keskin
+yığılma (aşağıdaki tablo); (ii) **aynı binary, aynı pinned çekirdekler,
+aynı frac, farklı koşu** → farklı küme karışımı (B 0.00: sweep koşusu
+p50~391 bin, %70 hızlı adım; probe koşusu p50~782 bin, %3 hızlı adım);
+(iii) hızlı küme payı **her durumda stillness ile artıyor** (BASE
+%10/3/8/38 → A %37/27/64/75 → B %70/66/80/90; 0.00→0.99). En güçlü
+gipotez (gipotez olarak raporlanır, izole edilmedi): in-proc tek-worker
+topolojisinde oda'nın working set'inin L2'de oturması/oturmayışı;
+bozma basıncı 500 eş-konumlu istemci task'ından (tik başına işleri
+taşıdıkları frame sayısıyla ∝ aktivite). Mekanizmanın tam izolasyonu bu
+turun kapsamı dışında bırakıldı (aşağı "yapılmayanlar").
+
+**Karşılaştırılabilir (pinned) adım ortalamaları, µs/tick**
+(`step_mean_us`; p50-bin = adım p50'nin düştüğü log2 bininin temsilcisi;
+hızlı% = bin0+bin1 adım payı):
+
+| durum | still_frac 0.00 | 0.50 | 0.90 | 0.99 |
+|---|---|---|---|---|
+| BASE mean | 712.2 (bin782) | 753.3 (bin782) | 720.1 (bin782) | 548.2 (bin782) |
+| BASE hızlı% | 10 | 3 | 8 | 38 |
+| A mean | 578.3 (bin782) | 620.8 (bin782) | 514.6 (**bin391**) | 448.6 (**bin391**) |
+| A hızlı% | 37 | 27 | 64 | 75 |
+| B mean | 492.6 (**bin391**) | 499.2 (**bin391**) | 433.5 (**bin391**) | 362.3 (**bin391**) |
+| B hızlı% | 70 | 66 | 80 | 90 |
+
+Tam histogramlar (bin0,bin1,bin2,bin3…; BASE: [0,91,741,68] /
+[0,24,797,79] / [0,75,803,20,1] / [2,339,557,2]; A: [0,337,556,7] /
+[0,244,637,19] / [1,570,327,2] / [28,666,205,1]; B: [6,627,264,3] /
+[7,588,303,2] / [33,701,161,5] / [161,648,90,1]).
+
+**Faz dökümü (probe ile, µs/tick; 90 tick'lik kararlı pencere; koşu modu
+parantezde):**
+
+| faz | BASE 0.90 (yavaş ağırlıklı) | A 0.90 (karışık) | B 0.90 (hızlı ağırlıklı) | B 0.00 (yavaş koşu) |
+|---|---|---|---|---|
+| sys (sistemler) | 14 | 13 | 14 | 26 |
+| stamp (yetim damga) | 2 | 1.5 | 1.7 | 2 |
+| rebuild / dirty (update) | **97** | **76** | **32** | **115** |
+| group_of | 28.5 | 28 | 47 | 30 |
+| snap (parça+bileşim) | **254** | **53** | **26** | 23 |
+| ka | 1.7 | 1.6 | 2 | 1 |
+| priv (private frame'ler) | 106 | 105 | 92 | 120 |
+| (core — ölçülmeyen fazlar) | ~208 | ~278* | ~177 | ~350* |
+
+*modal karışım oranlarıyla çarpılmış tahmini. Satır toplamı ≈ koşunun
+`step_mean_us`'i. Dikkat: sys/stamp/rebuild scope'ları iç içe (gölgeli
+bağlayıcı) — tablodaki değerler türetilmiş gerçek faz değerleridir
+(sys_total − stamp_total vs. stamp_total − rebuild_total).
+
+Okunuş: A'nın el ettiği faz **snap** (254→53: yeniden-diff'in memo'su).
+B'nin el ettiği faz **rebuild** (97→32: O(N) rebuild+doğum taraması →
+değişim listesi + O(N) ucuz tarama). Dürüst not: `last_cell` tablosu
+`group_of`'u **ucuzlaştırmadı** (B 47 µs vs BASE ~15–28 µs eşdeğer —
+iki hash tablosu lookup'u ≈ bevy'nin sıkışık tablo fetch'i; beklenen
+kazancın gerçekleşmediği faz, raporda saklanmıyor). B'nin net kazancı
+update fazında + A'nın snap kazancının üstüne birikmede (snap 26: diff
+yok, liste kodlanır).
+
+**Acceptance (spec: "süpürme artık düz olmamalı; DÜZ KALIYORSA B İŞE
+YARAMAMIDIR — BUNU AÇIKÇA SÖYLE"):**
+- **B süpürmesi düz DEĞİL** — ama nerede eğimli olduğu açıkça söylenir:
+  p50 **bin** düzeyinde B'nin dört noktası aynı binde (391-bin;
+  BASE'in dört noktası 782-bin'deydi — B'nin ortanca adımı HER frac'te
+  2× daha düşük binned). Eğim `step_mean`'de: 492.6 → 499.2 → 433.5 →
+  362.3 (0.00→0.99: **−130.3 µs, −%26.4**; 0.99, 0.50'nin de %26.5 altı)
+  ve mod karışımında: hızlı adım payı %70→%90.
+- Eğimin sınırlı olmasının (derin bir eğri olmamasının) nedeni yukarıda:
+  **270–310 µs/tick'lik hareketsizlikten bağımsız taban** (priv + core
+  fan-out + in-proc istemci task'ları) B tarafından yapısal olarak
+  kaldırılamaz (§14.1 bağlantı-bazlı fan-out). Bu taban olmasa B'nin
+  0.99 adımı ~100 µs bandına inerdi; taban varken ~362 µs.
+- **Spec'in istediği rapor: adım zamanı farkı 0.99 vs 0.00:** B: 362.3 vs
+  492.6 µs (−130.3 µs / −%26.4); BASE: 548.2 vs 712.2 µs (−164.0 µs /
+  −%23.0 — BASE'in kendi eğimi kısmen mod karışımı şansına bağlı, not
+  edildi).
+- Unpinned koşular (BASE/A/B; loadavg 4–11, B 0.90/0.99 koşusu load
+  spike'ı yedi: 11.7) **kanıt değil** olarak işaretlenir; kontrol
+  karşılaştırması pinned settir. Unpinned BASE yine 782-bin×4 (spec'in
+  dış veriyle tutarlı), unpinned A 782/782/391/391-bin (A'nın
+  eğiliminin ilk kanıtı), unpinned B 782/782/782/391-bin (0.90/0.99
+  kontamine).
+
+**Ham RESULT satırları (pinned set, kırpılmamış, 12 koşu; loadavg:
+meta dosyaları — BASE 8.5–9.4, A 6.5–10.1, B 4.3–5.7; binary sha256'lar
+aynı dosyalarda):**
+
+```
+--- BASE (c7366b1), still_frac=0.00 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=447745 snap_per_client_p50=897.0 tick_hz_med=30.00 client_in_bps=23695677 client_out_bps=36892 out_bps_per_conn=47239 moves=89380 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=1864 step_over_budget_pct=0.0 dropped=0 late_max_us=663 peak_payload_b=4280 snap_overflows=2162 records_per_tick=192.5 overlap_x=0.39 server_in_bps=24774 server_out_bps=23619660 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=89306 ack_processed_max=180 ack_lag_max_ms=115 fulls=33092 private_fulls=18474 deltas=432762 gap_drops=365 view_size=250000 still_frac=0
+--- BASE (c7366b1), still_frac=0.50 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444774 snap_per_client_p50=891.0 tick_hz_med=30.00 client_in_bps=10248223 client_out_bps=18693 out_bps_per_conn=20297 moves=44750 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=1842 step_over_budget_pct=0.0 dropped=0 late_max_us=2044 peak_payload_b=3262 snap_overflows=342 records_per_tick=112.1 overlap_x=0.22 server_in_bps=12526 server_out_bps=10148312 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=44750 ack_processed_max=178 ack_lag_max_ms=108 fulls=24785 private_fulls=10103 deltas=429731 gap_drops=361 view_size=136165 still_frac=0.5
+--- BASE (c7366b1), still_frac=0.90 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444356 snap_per_client_p50=890.0 tick_hz_med=30.00 client_in_bps=3650051 client_out_bps=4267 out_bps_per_conn=7117 moves=9350 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=34685 step_over_budget_pct=0.1 dropped=0 late_max_us=2080 peak_payload_b=2721 snap_overflows=354 records_per_tick=46.9 overlap_x=0.09 server_in_bps=2821 server_out_bps=3558531 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=9350 ack_processed_max=178 ack_lag_max_ms=103 fulls=18189 private_fulls=3578 deltas=429379 gap_drops=366 view_size=84122 still_frac=0.9
+--- BASE (c7366b1), still_frac=0.99 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=314522 snap_per_client_p50=588.0 tick_hz_med=30.00 client_in_bps=2709956 client_out_bps=1016 out_bps_per_conn=5295 moves=1370 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=1126 step_over_budget_pct=0.0 dropped=0 late_max_us=1562 peak_payload_b=2769 snap_overflows=381 records_per_tick=49.0 overlap_x=0.10 server_in_bps=633 server_out_bps=2647321 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=1370 ack_processed_max=175 ack_lag_max_ms=70 fulls=16661 private_fulls=1970 deltas=299464 gap_drops=367 view_size=77262 still_frac=0.99
+--- A (BASE + madde A), still_frac=0.00 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444115 snap_per_client_p50=890.0 tick_hz_med=30.00 client_in_bps=23504358 client_out_bps=36611 out_bps_per_conn=46789 moves=88738 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=1425 step_over_budget_pct=0.0 dropped=0 late_max_us=2233 peak_payload_b=4280 snap_overflows=2151 records_per_tick=192.7 overlap_x=0.39 server_in_bps=24580 server_out_bps=23394361 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=88715 ack_processed_max=178 ack_lag_max_ms=113 fulls=32760 private_fulls=18196 deltas=429154 gap_drops=397 view_size=250000 still_frac=0
+--- A (BASE + madde A), still_frac=0.50 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=447918 snap_per_client_p50=897.0 tick_hz_med=30.00 client_in_bps=10261605 client_out_bps=18801 out_bps_per_conn=20322 moves=45000 errors=0 steps=900 server_hz=30.00 step_p50_us=782 step_max_us=1373 step_over_budget_pct=0.0 dropped=0 late_max_us=2072 peak_payload_b=3272 snap_overflows=341 records_per_tick=111.3 overlap_x=0.22 server_in_bps=12601 server_out_bps=10161010 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=45000 ack_processed_max=179 ack_lag_max_ms=107 fulls=24898 private_fulls=10263 deltas=432875 gap_drops=408 view_size=134922 still_frac=0.5
+--- A (BASE + madde A), still_frac=0.90 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=447335 snap_per_client_p50=896.0 tick_hz_med=30.00 client_in_bps=3631399 client_out_bps=4289 out_bps_per_conn=7078 moves=9400 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1590 step_over_budget_pct=0.0 dropped=0 late_max_us=1804 peak_payload_b=2711 snap_overflows=351 records_per_tick=46.1 overlap_x=0.09 server_in_bps=2835 server_out_bps=3539233 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=9400 ack_processed_max=179 ack_lag_max_ms=102 fulls=18241 private_fulls=3570 deltas=432299 gap_drops=365 view_size=84055 still_frac=0.9
+--- A (BASE + madde A), still_frac=0.99 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=318802 snap_per_client_p50=664.0 tick_hz_med=30.00 client_in_bps=2623139 client_out_bps=1011 out_bps_per_conn=5117 moves=1360 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1079 step_over_budget_pct=0.0 dropped=0 late_max_us=1859 peak_payload_b=2691 snap_overflows=364 records_per_tick=43.6 overlap_x=0.09 server_in_bps=630 server_out_bps=2558594 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=1360 ack_processed_max=174 ack_lag_max_ms=68 fulls=16648 private_fulls=1938 deltas=303725 gap_drops=367 view_size=77452 still_frac=0.99
+--- B (teslim durumu, BASE + A + B), still_frac=0.00 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444282 snap_per_client_p50=891.0 tick_hz_med=30.00 client_in_bps=23525987 client_out_bps=36625 out_bps_per_conn=46832 moves=88775 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1185 step_over_budget_pct=0.0 dropped=0 late_max_us=1603 peak_payload_b=4274 snap_overflows=2162 records_per_tick=193.8 overlap_x=0.39 server_in_bps=24589 server_out_bps=23416100 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=88772 ack_processed_max=178 ack_lag_max_ms=110 fulls=32838 private_fulls=18167 deltas=429218 gap_drops=393 view_size=250000 still_frac=0
+--- B (teslim durumu, BASE + A + B), still_frac=0.50 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=445050 snap_per_client_p50=891.0 tick_hz_med=30.00 client_in_bps=10225700 client_out_bps=18684 out_bps_per_conn=20252 moves=44725 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1235 step_over_budget_pct=0.0 dropped=0 late_max_us=1701 peak_payload_b=3188 snap_overflows=344 records_per_tick=111.5 overlap_x=0.22 server_in_bps=12520 server_out_bps=10125771 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=44724 ack_processed_max=178 ack_lag_max_ms=104 fulls=24592 private_fulls=9953 deltas=430044 gap_drops=367 view_size=133974 still_frac=0.5
+--- B (teslim durumu, BASE + A + B), still_frac=0.90 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=447297 snap_per_client_p50=897.0 tick_hz_med=30.00 client_in_bps=3735284 client_out_bps=4289 out_bps_per_conn=7286 moves=9400 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1254 step_over_budget_pct=0.0 dropped=0 late_max_us=1870 peak_payload_b=2796 snap_overflows=359 records_per_tick=46.7 overlap_x=0.09 server_in_bps=2836 server_out_bps=3643148 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=9400 ack_processed_max=179 ack_lag_max_ms=104 fulls=18144 private_fulls=3503 deltas=432250 gap_drops=406 view_size=84327 still_frac=0.9
+--- B (teslim durumu, BASE + A + B), still_frac=0.99 (30 sn, 900 adım, taskset -c 8-15)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=330070 snap_per_client_p50=689.0 tick_hz_med=30.00 client_in_bps=2688098 client_out_bps=1018 out_bps_per_conn=5252 moves=1375 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_max_us=1288 step_over_budget_pct=0.0 dropped=0 late_max_us=1538 peak_payload_b=2691 snap_overflows=382 records_per_tick=43.7 overlap_x=0.09 server_in_bps=635 server_out_bps=2625834 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=1375 ack_processed_max=176 ack_lag_max_ms=68 fulls=16731 private_fulls=2055 deltas=314962 gap_drops=432 view_size=77635 still_frac=0.99
+```
+
+### Tur özeti (yeni testler, hiçbir eski test silinmedi/ihmal edilmedi)
+
+- `gsb-game` lib (aoi) — **9 yeni** test:
+  - Spec'in gerekli 3 A (cache-invalidation) testi:
+    `aoi_tick_cache_no_stale_block` (art arda iki tick, farklı içerik →
+    farklı blok; bayat parça yeniden sunulmaz),
+    `aoi_silent_delta_silent_no_stale` (Silent→Delta→Silent: bayat
+    Delta yeniden sunulmaz; sessizlik bayt taşımaz; keepalive full
+    GÜNCEL içeriği taşır),
+    `aoi_two_groups_same_cell_same_block` (iki grup, aynı hücre, aynı
+    tick → içerik-benzeri blok + `encoded_records()==1` — bir kez
+    kodlandı, referansla paylaşıldı).
+  - B testleri: `aoi_structural_dirty_direct_write` (odanın HİÇ hook'u
+    olmayan bir yazan — doğrudan `world.entity_mut` — doğru delta
+    üretir: işaret yapısal), `aoi_partial_delta_only_mover_recorded`
+    (5 kayıt içeren hücrede yalnızca 1 kaydın deltası; diğer 4
+    yeniden kodlanmaz), `aoi_quantized_move_no_wire_change_no_record`
+    (wire pozisyonu değişmeyen hareket → kayıt yok, hücre Silent),
+    `aoi_leave_removal_in_delta_and_cell_exit` (despawn yolu: `removed`
+    + boşalan hücrede tek `CellExit`), `aoi_member_join_npc_cell_born_full`
+    (spec-(b) sapma durumu: NPC-only hücreye üye katılır → doğum; üye
+    grubun full'uyla baselined, private atlanır),
+    `aoi_join_leave_same_tick_inert` (aynı tick'te join+leave: park yok,
+    sayım/bucket sağlam).
+- Eski testlerin hepsi koştu: **111 → 120** (120/120 yeşil + 1 var olan
+  `#[ignore]`'li gsb-lint doctest; 0 silinen, 0 ihmal edilen). 6 kilitli
+  delta testi (`tests/delta_aoi.rs`) **değişmeden** yeşil. `cargo
+  clippy --workspace --all-targets` temiz (0 uyarı).
+- **Yapılmayanlar (açık beyan):** (1) 270–310 µs/tick'lik
+  bağlantı-bazlı taban (priv + core fan-out) indirilmedi — B yapısal
+  olarak kaldıramaz; bu bir sonraki turun konusu (kanal batch'i /
+  worker topolojisi). (2) 2× bimodalitenin mikromimari mekanizması
+  izole edilmedi (frekans elendi; L2 oturumu gipotezi olarak
+  raporlandı). (3) 491 hücreli spread probe'u yeniden koşulmadı. (4)
+  Probe altyapısı (`GSB_PHASE`) tur sonunda **kaldırıldı** (geçiciydi;
+  commit'te yok); geçici probe dosyası `tests/zzz_probe_bevey.rs`
+  silindi (change penceresinin 6 senaryosu bu turda doğrulandı:
+  baseline-öncesi spawn, sistem yazımı + değişmeyen yazım, sessizlik,
+  update-arası insert, update-arası spawn, aynı-değer yeniden yazım).
+
+---
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
