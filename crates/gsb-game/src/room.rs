@@ -304,7 +304,13 @@ impl RoomLogic<World> for DemoRoom {
     /// shared; the ack is not — `RoomLogic::private` is the per-connection
     /// seam of the batch, so the ack rides the same delivery as the
     /// snapshot, a few bytes per advanced tick, zero otherwise).
-    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+    fn private(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        _group: &(),
+        out: &mut bytes::BytesMut,
+    ) -> bool {
         crate::common::emit_ack(&mut self.input, conn, out)
     }
 

@@ -2331,6 +2331,263 @@ RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 
 
 ---
 
+## Kapatılanlar (ölçüm çözünürlüğü + taban turu)
+
+**Tur kapsamı.** Spec'ten iki madde: (A) **ölçüm çözünürlüğü** — adım
+zamanı metrikteki log2 histogram'ın binleri 2× ayrık (30 Hz bütçede
+391/782/1563 etiketleri); ortaçağın %26'lık eğrisi "tek kovanın içine
+sığınıyor", dışarıdan p50=391 her 4 frac'ta aynı görülüyor — bütçenin
+çok altındaki bölgede **%10-20'lik değişimleri ayırt eden** bir ölçüm
+gerekli (metod serbest); BÜTÇE-ASHIM sinyali dokunulmaz kalmalı: "(1,1)
+kenarı = tick bütçesi ve üstü = aşım semantiği duruyor; yeni
+çözünürlük onun yerine değil, **yanına** gelmeli"; hot path'te float
+yok. (B) **durgunluktan bağımsız taban** — önceki turun 270-310
+µs/tick tabanı bağlantı sayısıyla (hücre sayısı ile değil) ölçekleniyor;
+ÖNCE ATFET, SONRA OPTİMİZE ET: "tahminle değil ölçümle"; en büyük
+dilime hedef, ≥2 gerçek alternatif değerlendirmeli. Wire protokolü
+**değişmedi** (iç optimizasyon + ölçüm); Mutex/RwLock/parking_lot/
+select! yok; `unsafe_code = "forbid"`; 120 mevcut testin hiçbiri
+silinmedi/`#[ignore]`'lenmedi.
+
+### A — İnce adım-histogramı (sabit 8 µs binler, log2'ye YANINA)
+
+**Ne.** `metrics.rs`'e log2 histogram'ın yanına ikinci, **sabit 8 µs
+binli** histogram eklendi: `FINE_HIST_US_PER_BIN=8`,
+`FINE_HIST_BINS=512`, tavan 4096 µs (`[0,4096)`). Log2 histogram **birebir
+aynı** kalıyor: `(1,1)` kenarı = tick bütçesi, `HIST_OVERFLOW_BIN`,
+`over_budget_frac` ve RESULT'taki `step_p50_us~`/`step_p99_us~`
+etiketlerinin tümü aynen duruyor; ≥4096 µs olan adımlar yalnız log2
+histogram'da görünüyor (aşım semantiği bozulmadı — spec: "yanına
+gelmeli"). Hot path maliyeti: tick başına **bir saturating u32
+artış** (tam sayı; float yok — spec kısıtı). Percentil raporlama
+anında, bütünüyle tamsayı aritmetik: `fine_hist_percentile_us(hist,
+total, p)` = "en az p% adımın ≤ L+7 olduğu en küçük bin alt kenarı L"
+(`total` = oda ADIM SAYISI — tavan üstü adımlar da dahil; percentil
+sırası tavana dayanırsa `None` → kabaca log2 tahmini hâlâ
+mevcut). `RoomSample`'a `[u32;512]` (2 KB — örnek her 30 adımda, hot
+path DIŞINDA kopyalanıyor), `RoomReport`'a `[u64;512]` (shard katlama
+toplamı) eklendi. Loadgen: `fold_rooms` eleman-eleman toplar;
+`server room (final)` + RESULT satırlarına `step_p50_fine_us` /
+`step_p90_fine_us` (sıra tavan üstündeyse işareti = 4096;
+belirsizlik yok: ince bin alt kenarları asla 4096 olmaz, en çoğu
+4088). Served/orchestrated moda: stream formatı **GSM2→GSM3**
+(oda başına +512×u32; format dokümanı güncellendi).
+
+**Neden SABİT bin (bütçe fraksiyonu değil).** Çözünürlük hedefi,
+adım zamanlarının GERÇEKTE yaşadığı bölgede (yüz µs mertebesi) mutlak
+µs farklarını ayırt etmek — tick hızından bağımsız. Bütçe-fraksiyonlu
+ince bin, 2× mesafeli bin problemini yalnız yeniden ölçekler
+(fraksiyonlar arası oran yine 2×'e yaklaşır); mutlak 8 µs bin, %10-20
+farkı her bütçede 1-3 bin adımla ayırır. Test kilitliyor (aşağı).
+
+**Kilitli testler (spec gereği: sentetik dağılım → percentil
+doğruluğu).** (i) `fine_hist_percentiles_known_distributions`: düzgün
+[0,4096) (1000 adım, 2/bin) → p50 = 249×8 = **1992**, p99 = 494×8 =
+3952; bimodal 500@390 µs + 500@780 µs (ölçülen kümeler) → p50 = 384,
+p99 = 776; yamutlu (77 adım tek bin) → p1 = p100 = bin kenarı. (ii)
+`fine_hist_cap_and_overflow`: tavan sınırı `index(4095)=Some(511)`,
+`index(4096)=None`, `index(u64::MAX)=None`; 100 adım tavan altı + 50
+tavan üstü (total 150) → p50 tavan altı binde, **p99 = None** (sıra
+tavana dayanıyor); boş histogram / p∉[1,100] → None. (iii)
+`fine_hist_resolves_ten_percent_difference`: 1000 adım @390 vs @430 µs
+(+%10.3) → ince p50'ler **384 vs 424, ayrı**; aynı iki değer 30 Hz
+bütçede log2'de **aynı binde** (sanity assertion — kusur sınıfının
+tanımı). Mevcut `hist_index_binning` testi **değişmeden** duruyor
+(aşım semantiğinin bekçisi).
+
+**Elenen alternatifler.** (1) *Ham örneklerden gerçek percentil*
+(reservoir / sıralama istatistiği) — hot path'e adım başına µs
+değeri depolamak (ring buffer + actor sınırı) ve raporda O(n log n)
+gerektirir; histogram adım başına bir artıştır ve sub-µs hedef için
+8 µs bin yeterince kesindir (hata < 8 µs, percentil bin alt kenarı
+semantiğinde belgelenir). (2) *Daha ince log2 binleri* (örn. 4. kök)
+— 2× boşluk kalır, sadece daha çok bür; çözünürlük sorunu yapısal.
+(3) *Log2 histogramı GENİŞLETMEK (yerine koymak)* — spec'e açık
+ters: aşım semantiği "yanında" kalmalı.
+
+### B — Taban: önce atfet, sonra optimize et
+
+**Ölçüm kurulumu (before/after nasıl kuruldu).** Geçici 14-kapsamlı
+faz probe'u (`GSB_PHASE` env-var kapılı; commit'te **yok**, tur sonunda
+kaldırıldı — `grep -r phase_probe crates/` → 0):
+`control / read / convert / sys / stamp / dirty / group_of / c4b / c4c
+/ snap / ka / recs / fanout / priv`, 90-tick (3 s) pencerelerde
+µs/tick. İç içe kapsamlar (rapor SATIRLARI ham toplamdır, gerçek
+faz = fark): `sys ⊇ stamp ⊇ dirty`, `c4c ⊇ snap + ka`,
+`fanout ⊇ priv`. İki kod durumu sıralı ölçüldü: **BEFORE** = aa705ea +
+A (madde B YOK) ve **AFTER** = aa705ea + A + B (teslim edilen), aynı
+makine (Ryzen 9 7950X, 16C/32T), **pinned** `taskset -c 8-15`, release,
+in-proc (500 istemci + 1 oda, tek worker), `--duration 30 --profile
+still --cell-size 20 --visibility spatial`; her koşunun loadavg'ı
+meta dosyada (BEFORE 3.90-4.23, AFTER 3.43-4.97). Bir AFTER koşusu
+**kontamine** bulundu ve **atıldı** (load 7.8, `dropped=2`,
+`leaves=169`, makinede 99% CPU'lu yabancı python) — "kanıt değil".
+Probe'nın kendisinin step zamanına ek maliyeti her iki durumda aynı
+(≈20-30 µs; mod karışımı nedeniyle koşu koşu değişir — tablo
+karşılaştırmada iki yanına eşit dağılır).
+
+**Atfetme (BEFORE, µs/tick, istikrarlı pencereler w2-10, "real" = fark):**
+
+| faz | 0.90 (real) | 0.00 (real) | not |
+|---|---:|---:|---|
+| control | 0.7 | 0.8 | |
+| read | 36.8 | 48.6 | 500× try_recv (bağlantı kutusu) |
+| convert | 6.2 | 35.0 | ingest (hareketle ölçekli) |
+| sys (total) | 52.1 | 122.0 | |
+| └ sys_real (−stamp) | 13.4 | 21.1 | |
+| └ stamp_real (−dirty) | 9.1 | 8.9 | |
+| dirty | 29.6 | 92.0 | bevy change-detection + mover churn |
+| group_of (4a) | 38.8 | 31.0 | 500× (2 tablo get + ara sıra ECS) |
+| c4b (members tablosu) | 22.9 | 13.4 | tick başına taze HashMap + Vec'ler |
+| c4c (total) | 32.5 | 24.0 | |
+| └ c4c_real (−snap−ka) | 3.8 | 1.8 | döngü yapıştırması |
+| snap | 27.0 | 21.4 | grup başına (16/4 grup) |
+| ka | 1.7 | 0.8 | |
+| **fanout_real (4d−priv)** | **153.2** | **163.7** | **EN BÜYÜK dilim (her frac'ta)** |
+| **priv** | **85.9** | **96.7** | **ikinci dilim (her frac'ta)** |
+| **Σ (real)** | **429.1** | **535.2** | step_mean (probe'lu) 459.1 / 549.4 |
+
+Bulgu: (i) spec'in ipucu ("ack her tick private kare üretmeli mi")
+**ölçümle cevaplandı: hayır** — `emit_ack` zaten on-change (önceki
+tur); 0.90'da priv maliyeti kare ÜRETİMİ değil, `private()`'ın
+arama zinciri (conn_entity + last_cell + conn_view + input). (ii)
+Taban hücre değil **bağlantı** ile ölçekleniyor: en büyük iki dilim
+(4d fan-out yapıştırması + priv) ikisi de bağlantı-bazlı. (iii)
+Önceki turun "270-310 µs" (priv 92-106 + core 177-208) tahmini bu
+dökümle doğrulandı: fanout_real+priv ≈ 239-260 µs.
+
+**Karar (en büyük dilime hedef; ≥2 gerçek alternatif değerlendirildi).**
+1. **Bağlantı-bazlı batch Vec yeniden kullanımı (4d).** Eski: tick
+   başına bağlantı başına `Vec::with_capacity(2)` = **500 heap
+   tahsisi/tick** (0.90'da ~310 bağlantının batch'i boşken bile). Yeni:
+   `RoomConn.batch` kalıcı alan; tick başına `clear()` (kapasite
+   korunur), `std::mem::take` ile kanala teslim (sıfır tahsis),
+   `try_send` başarısızsa `TrySendError::into_inner` ile **buffer geri
+   konur** (bir sonraki tick de yeniden kullanır). Davranış kilidi:
+   `full_outbound_channel_drops_then_recovers` testi (70 emission / 64
+   slot → kanal TAM olarak 64 sağlam, sıralı batch tutar; boşluk
+   açılınca SONRAKİ emission aynen gelir — wedged bağlantı/buffer yok).
+2. **`private()`'e group'un verilmesi (trait değişikliği).** Oda, 4a'da
+   zaten hesapladığı `rc.group`'u `RoomLogic::private(&mut world,
+   conn, &group, out)` olarak geçirir; `AoiRoom::private` artık
+   `conn_cell` ile grubu yeniden TURETMEZ (2 tablo get × 500
+   bağlantı/tick gider; `conn_cell` methodu öldü — silindi). Trait
+   dokümanı gerekçeyi taşır ("re-türetemezsin: her re-türeteme =
+   bağlantı başına ek aramalar, ölçüldü"). Shard odası (aynı
+   `RoomConn`/`try_send` deseni) birebir aynı düzeltmeyi aldı.
+
+**Elenen alternatifler (gerçek, ölçülen gerekçeli).** (1) *4b members
+tablosunun yerinde yeniden kullanımı / artımlı yama* — gerçek alternatif
+(önceki turun in-place kalıbı), ama dilim küçük (13-23 µs) ve rebuild
+kalıbı savaşmış; group-staleness hata sınıfı (gone-removal, max_group
+yeniden hesaplama) ~20 µs için değmez. (2) *READ kapı zili / boş çekim
+atla (37-49 µs)* — en karmaşık değişiklik (bağlantı-bazlı
+bildirim kanalı), drop semantiğine dokunur; en büyük iki dilimin
+altında. (3) *group_of'un tick-ler arası önbelleği (31-39 µs)* —
+trait'e "grup değişti" bildirim kanalı gerekir; ~35 µs için protokol
+karmaşıklığı. (4) *fan-out topolojisi: grup→üye iterasyonu (4d'deki
+500× `groups.get`'i kaldirır)* — gerçek alternatif; REDDEDİLDİ: 500
+`groups.get` yerine 500 `conns.get_mut` koyar (aynı mertebe) ve (1) ile
+etkileşir; (1)+(2) sonrası fanout_real'in kalanı `try_send` (kanal
+teslimi) — wire değişikliği olmadan indirilemez. (5) *dirty yeniden
+yazımı (94 µs @0.00)* — bevy change-detection + mover HashMap churn;
+yerine göre bağımlı (taban değil) dilim için SoA-yapısal yeniden
+yazım. (6) *ack'in her tick private kare üretmesi* — ölçümle elendi
+(yukarı (i); on-change zaten).
+
+**Öncesi/sonrası, bileşen bileşen (probe, istikrarlı pencereler, real, µs/tick):**
+
+| faz | BEFORE 0.90 | AFTER 0.90 | Δ | BEFORE 0.00 | AFTER 0.00 | Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| control | 0.7 | 0.4 | −0.3 | 0.8 | 0.5 | −0.3 |
+| read | 36.8 | 23.6 | −13.2 | 48.6 | 42.7 | −5.9 |
+| convert | 6.2 | 3.9 | −2.3 | 35.0 | 27.9 | −7.1 |
+| sys_real | 13.4 | 9.0 | −4.4 | 21.1 | 17.4 | −3.7 |
+| stamp_real | 9.1 | 6.1 | −3.0 | 8.9 | 6.6 | −2.3 |
+| dirty | 29.6 | 21.1 | −8.5 | 92.0 | 81.5 | −10.5 |
+| group_of | 38.8 | 31.7 | −7.1 | 31.0 | 29.9 | −1.1 |
+| c4b | 22.9 | 16.9 | −6.0 | 13.4 | 11.2 | −2.2 |
+| c4c_real | 3.8 | 2.5 | −1.3 | 1.8 | 1.2 | −0.6 |
+| snap | 27.0 | 22.9 | −4.1 | 21.4 | 18.4 | −3.0 |
+| ka | 1.7 | 1.4 | −0.3 | 0.8 | 0.7 | −0.1 |
+| **fanout_real** | **153.2** | **110.3** | **−42.9** | **163.7** | **135.7** | **−28.0** |
+| **priv** | **85.9** | **58.3** | **−27.6** | **96.7** | **74.8** | **−21.9** |
+| **Σ real** | **429.1** | **308.1** | **−121.0** | **535.2** | **448.5** | **−86.7** |
+
+Okuma uyarısı (bimodalite): AFTER pencereleri hızlı modda, BEFORE
+pencereleri yavaş modda oturdu (önceki turun belgelenen koşu-kuşu mod
+karışımı; mekanizma izole edilmedi). **Dokunulmamış** dilimler de (read,
+dirty, group_of, c4b, snap...) mod kaymasıyla düştü; optimize edilen
+dilimler (fanout_real −42.9/−28.0, priv −27.6/−21.9) toplam **−70.5/−49.9
+µs** = Σ düşüşünün ~%58'i ölçümlenen optimizasyondan, kalanı mod
+kayması.
+
+**Taban (probe'sİZ, temiz koşular, pinned, N=500) — acceptance:**
+
+| still_frac | BASE2 step_mean (aa705ea, önceki tur) | FINAL step_mean (bu tur) | Δ | FINAL fine p50 / p90 | FINAL log2 hist |
+|---|---:|---:|---:|---|---|
+| 0.00 | 492.6 | 490.4 | −2.2 | 464 / 648 | [16,594,288,2] |
+| 0.50 | 499.2 | 387.4 | **−111.8** | 376 / 512 | [79,736,85] |
+| 0.90 | 433.5 | **290.7** | **−142.8** | **264 / 440** | [428,443,28,1] |
+| 0.99 | 362.3 | 241.8 | **−120.5** | 224 / 384 | [557,323,19,1] |
+
+Aynı N=500'de taban **ölçülmüş olarak düştü** (0.90: 433.5 → 290.7
+µs; −%33). A'nın ince histogramı bunu ilk kez GÖRÜYOR: 0.90'da adımların
+%47'si 260 µs altı (BASE2 koşularında bin0 kitlesi ~%10-30 idi), fine
+p50 = 264 µs — log2'de iki koşu da "p50~391" görünürdü (çözünürlük
+kusurunun kendisi). `over_budget_pct=0.0` tüm 4 frac'ta (aşım sinyali
+dokunulmadı), `dropped=0`. 0.00'deki küçük Δ (−2.2) beklendiği
+gibi: tam-hareket durumunda adım zamanını dirty (92→81) + convert
+(35→28) + mod karışımı belirliyor — optimize edilen dilimler (fanout/
+priv) orada da düştü (probe tablosu) ama step_mean'i başka dilimler
+taşıyor.
+
+**Ham RESULT satırları (kesintisiz, FINAL koşusu, pinned, load 3.4-4.9):**
+
+```
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444867 snap_per_client_p50=891.0 tick_hz_med=30.00 client_in_bps=23566588 client_out_bps=36677 out_bps_per_conn=46913 moves=88895 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_p50_fine_us=464 step_p90_fine_us=648 step_max_us=1559 step_over_budget_pct=0.0 dropped=0 late_max_us=1672 peak_payload_b=4288 snap_overflows=2122 records_per_tick=192.7 overlap_x=0.39 server_in_bps=24625 server_out_bps=23456415 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=88892 ack_processed_max=178 ack_lag_max_ms=108 fulls=32854 private_fulls=18178 deltas=429827 gap_drops=364 view_size=250000 still_frac=0
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=447904 snap_per_client_p50=897.0 tick_hz_med=30.00 client_in_bps=10185714 client_out_bps=18802 out_bps_per_conn=20170 moves=45000 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_p50_fine_us=376 step_p90_fine_us=512 step_max_us=765 step_over_budget_pct=0.0 dropped=0 late_max_us=1733 peak_payload_b=3255 snap_overflows=337 records_per_tick=110.9 overlap_x=0.22 server_in_bps=12602 server_out_bps=10085171 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=45000 ack_processed_max=179 ack_lag_max_ms=106 fulls=24924 private_fulls=10248 deltas=432865 gap_drops=363 view_size=135088 still_frac=0.5
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=446987 snap_per_client_p50=896.0 tick_hz_med=30.00 client_in_bps=3642304 client_out_bps=4289 out_bps_per_conn=7101 moves=9401 errors=0 steps=900 server_hz=30.00 step_p50_us=391 step_p50_fine_us=264 step_p90_fine_us=440 step_max_us=1479 step_over_budget_pct=0.0 dropped=0 late_max_us=1550 peak_payload_b=2768 snap_overflows=356 records_per_tick=46.1 overlap_x=0.09 server_in_bps=2836 server_out_bps=3550289 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=9400 ack_processed_max=179 ack_lag_max_ms=102 fulls=18149 private_fulls=3493 deltas=431917 gap_drops=414 view_size=84346 still_frac=0.9
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=321220 snap_per_client_p50=664.0 tick_hz_med=30.00 client_in_bps=2644365 client_out_bps=1015 out_bps_per_conn=5168 moves=1370 errors=0 steps=900 server_hz=30.00 step_p50_us=130 step_p50_fine_us=224 step_p90_fine_us=384 step_max_us=1346 step_over_budget_pct=0.0 dropped=0 late_max_us=749 peak_payload_b=2682 snap_overflows=366 records_per_tick=45.0 overlap_x=0.09 server_in_bps=633 server_out_bps=2583946 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=1370 ack_processed_max=175 ack_lag_max_ms=68 fulls=16700 private_fulls=2019 deltas=306124 gap_drops=415 view_size=77665 still_frac=0.99
+```
+
+(tam satırlar `.scratch/FINAL_*.txt`; BASE2 satırları
+`.scratch/BASE2_*.txt` — önceki tur.)
+
+### Tur özeti (yeni testler, hiçbir eski test silinmedi/ihmal edilmedi)
+
+- **4 yeni test**: A için 3 sentetik-distribusyon testi
+  (`fine_hist_percentiles_known_distributions`,
+  `fine_hist_cap_and_overflow`,
+  `fine_hist_resolves_ten_percent_difference` — spec'in
+  "bilinen dağılımı doğru rapor ettiğini kilitle" maddesi) + B için 1
+  davranış kilidi (`full_outbound_channel_drops_then_recovers`:
+  mem::take/into_inner geri-kazanım yolu). Mevcut 6 delta testi
+  (`tests/delta_aoi.rs`) ve 4 ack testi (`tests/input_ack.rs`)
+  **değişmeden** yeşil (private()'nin group argümanı davranış
+  koruduğunu kanıtlıyor: geç giriş full, one-shot, NPC-hücre doğumu,
+  ack monotonluğu).
+- **120 → 124** (124/124 yeşil + 1 var olan `#[ignore]`'li gsb-lint
+  doctest; 0 silinen, 0 ihmal edilen). `cargo test --workspace` +
+  `cargo clippy --workspace --all-targets` temiz (0 uyarı), her
+  kaynak dokunuşundan sonra derleme satırlarıyla.
+- **Yapılmayanlar (açık beyan):** (1) 2× bimodalitenin
+  mikromimari mekanizması hâlâ izole edilmedi (önceki turda olduğu
+  gibi gipotez olarak kalır; bu turda mod karışımı B/A tablolarını
+  kirletmedi — her iki koşu da istikrarlı pencerede alındı ve fark
+  tabloda okuma uyarısıyla açıklandı). (2) READ fazı (500× try_recv)
+  optimize edilmedi — dilim en büyük ikisinin altında, değişiklik
+  kanal semantiğine dokunur (gelecek tur adayı). (3) group_of'un
+  tick-ler arası önbelleği yapılmadı (trait bildirimi gerektirir).
+  (4) 4b members tablosu artımlı yapılmadı. (5) Served/orchestrated
+  moda GSM3 stream'i uçtan uca koşulanmadı — encode/decode simetrik
+  derlendi, in-proc (stdout) modu smoke testleriyle doğrulandı;
+  binary stream testi bu turda yok. (6) Probe altyapısı tur sonunda
+  **kaldırıldı** (commit'te iz yok).
+
+---
+
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +

@@ -63,8 +63,8 @@ use tokio::sync::mpsc;
 
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    hist_edge_us, MetricReport, NetReport, RegistryReport, RoomReport, HIST_BINS,
-    HIST_OVERFLOW_BIN,
+    fine_hist_percentile_us, hist_edge_us, MetricReport, NetReport, RegistryReport,
+    RoomReport, FINE_HIST_BINS, FINE_HIST_CAP_US, HIST_BINS, HIST_OVERFLOW_BIN,
 };
 
 /// The client movement profile (the load's *shape*, not the server's
@@ -1464,6 +1464,9 @@ fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         for i in 0..HIST_BINS {
             acc.step_hist[i] += r.step_hist[i];
         }
+        for i in 0..FINE_HIST_BINS {
+            acc.step_fine_hist[i] += r.step_fine_hist[i];
+        }
         acc.late_max_us = acc.late_max_us.max(r.late_max_us);
         acc.lagged_events += r.lagged_events;
         acc.lagged_ticks += r.lagged_ticks;
@@ -1712,8 +1715,17 @@ fn print_report(
         // Δsteps is 0 and its window rate reads 0.00) — printing that
         // would contradict the RESULT line in exactly the shutdown case
         // where a reader needs the two to agree.
+        // Fine-histogram percentiles (sub-budget resolution; the log2
+        // `step_p50_us~` above stays as the overflow-semantics view).
+        // `FINE_HIST_CAP_US` marks "the rank is at/above the cap" —
+        // unambiguous, since no fine-bin lower edge equals the cap
+        // (they top out at 4088).
+        let p50_fine =
+            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50).unwrap_or(FINE_HIST_CAP_US);
+        let p90_fine =
+            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90).unwrap_or(FINE_HIST_CAP_US);
         println!(
-            "server room (final): steps={} hz={:.2} budget_us={} step_min_us={} step_mean_us={:.1} step_max_us={} step_p50_us~{:.0} step_p99_us~{:.0} over_budget={:.1}% hist=[{}]",
+            "server room (final): steps={} hz={:.2} budget_us={} step_min_us={} step_mean_us={:.1} step_max_us={} step_p50_us~{:.0} step_p99_us~{:.0} step_p50_fine_us={} step_p90_fine_us={} over_budget={:.1}% hist=[{}]",
             r.steps,
             server_hz,
             r.budget_us,
@@ -1722,6 +1734,8 @@ fn print_report(
             r.step_max_us,
             hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50),
             hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.99),
+            p50_fine,
+            p90_fine,
             over_budget_frac(&r.step_hist) * 100.0,
             r.step_hist
                 .iter()
@@ -1792,7 +1806,7 @@ fn print_report(
         "RESULT mode={} visibility={} shards={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
          out_bps_per_conn={:.0} moves={} errors={} steps={} server_hz={:.2} \
-         step_p50_us={:.0} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
+         step_p50_us={:.0} step_p50_fine_us={} step_p90_fine_us={} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
          peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
@@ -1826,6 +1840,18 @@ fn print_report(
         room
             .map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
             .unwrap_or(0.0),
+        room
+            .map(|r| {
+                fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50)
+                    .unwrap_or(FINE_HIST_CAP_US)
+            })
+            .unwrap_or(FINE_HIST_CAP_US),
+        room
+            .map(|r| {
+                fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90)
+                    .unwrap_or(FINE_HIST_CAP_US)
+            })
+            .unwrap_or(FINE_HIST_CAP_US),
         room.map(|r| r.step_max_us).unwrap_or(0),
         room.map(|r| over_budget_frac(&r.step_hist) * 100.0).unwrap_or(0.0),
         room.map(|r| r.dropped).unwrap_or(0),
@@ -1929,6 +1955,7 @@ fn main() {
 ///   per room (order as in `MetricReport::rooms`):
 ///     u64 room_id  u64 steps  f64 hz  u64 budget_us  u64 step_min_us
 ///     f64 step_mean_us  u64 step_max_us  [u64; HIST_BINS] step_hist
+///     [u32; FINE_HIST_BINS] step_fine_hist
 ///     u64 late_min_us  f64 late_mean_us  u64 late_max_us
 ///     u64 lagged_events  u64 lagged_ticks  u64 dropped  f64 dropped_s
 ///     u64 dropped_actions  u64 keepalive_resends  u64 snapshots
@@ -1952,7 +1979,11 @@ fn main() {
 /// connection. GSM2 = the GSM1 layout plus the net-scope
 /// `actions_dropped` total and its per-connection attribution tail
 /// (worst offenders first, ≤ 5 — see `MetricReport::actions_dropped_top`).
-const METRICS_MAGIC: u32 = 0x4753_4D32;
+/// GSM3 = the GSM2 layout plus each room's fine step-duration histogram
+/// (`[u32; FINE_HIST_BINS]`, fixed 8 µs bins — sub-budget resolution
+/// alongside the budget-relative log2 histogram, whose overflow
+/// semantics are untouched).
+const METRICS_MAGIC: u32 = 0x4753_4D33;
 
 /// Little-endian writer (the encode side of the format above).
 struct W(Vec<u8>);
@@ -1986,6 +2017,9 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.step_max_us);
         for bin in &room.step_hist {
             w.u64(*bin);
+        }
+        for bin in &room.step_fine_hist {
+            w.u32(*bin as u32);
         }
         w.u64(room.late_min_us);
         w.f64(room.late_mean_us);
@@ -2101,6 +2135,13 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             }
             h
         };
+        let step_fine_hist = {
+            let mut h = [0u64; FINE_HIST_BINS];
+            for bin in &mut h {
+                *bin = u64::from(r.u32()?);
+            }
+            h
+        };
         rooms.push(RoomReport {
             room: RoomId(room_id),
             steps,
@@ -2110,6 +2151,7 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             step_mean_us,
             step_max_us,
             step_hist,
+            step_fine_hist,
             late_min_us: r.u64()?,
             late_mean_us: r.f64()?,
             late_max_us: r.u64()?,

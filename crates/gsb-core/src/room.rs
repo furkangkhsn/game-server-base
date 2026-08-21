@@ -68,7 +68,7 @@ use tracing::{debug, warn};
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
-use crate::metrics::{MetricsEvent, RoomSample, HIST_BINS};
+use crate::metrics::{MetricsEvent, RoomSample, FINE_HIST_BINS, HIST_BINS};
 use crate::ticker::TickInfo;
 
 /// A client action forwarded by the connection actor. The payload is still
@@ -293,8 +293,22 @@ pub trait RoomLogic<W>: Send {
     ) -> bool;
 
     /// Encode a per-connection private frame (delivered only to `conn`,
-    /// alongside the group snapshot). Default: none.
-    fn private(&mut self, _world: &mut W, _conn: ConnectionId, _out: &mut bytes::BytesMut) -> bool {
+    /// alongside the group snapshot).
+    ///
+    /// The connection's group is passed in: the room re-evaluates it every
+    /// tick (see [`Self::group_of`]) and hands the current value over, so a
+    /// logic that needs "which group is this connection in" must not
+    /// re-derive it — each re-derivation is extra table lookups per
+    /// connection per tick (measured: part of the idle floor).
+    ///
+    /// Default: none.
+    fn private(
+        &mut self,
+        _world: &mut W,
+        _conn: ConnectionId,
+        _group: &Self::GroupKey,
+        _out: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
 
@@ -375,6 +389,11 @@ pub(crate) struct RoomConn<G> {
     /// Snapshot group this connection belongs to (recomputed every tick via
     /// [`RoomLogic::group_of`]).
     pub(crate) group: G,
+    /// The fan-out batch buffer, reused across ticks (the measured floor
+    /// carried one `Vec::with_capacity(2)` per connection per tick; the
+    /// capacity is retained so the 0-2-frame batch never allocates again
+    /// after warm-up — see `docs/ROADMAP.md`, the floor breakdown).
+    pub(crate) batch: FrameBatch,
 }
 
 /// Per-group broadcast state, kept across ticks. `pub(crate)` because the
@@ -402,7 +421,10 @@ pub(crate) struct GroupState {
 /// metrics channel (synchronous unbounded send — no await). `pub(crate)`
 /// because the shard actor reuses the same counter shape (a shard's sample
 /// is a [`RoomSample`] under its derived sample id — see `crate::shard`).
-#[derive(Debug, Default)]
+///
+/// Manual `Default` (not derived): `[u32; FINE_HIST_BINS]` exceeds the
+/// derived-`Default` array bound (32); every field is a zero.
+#[derive(Debug)]
 pub(crate) struct RoomCounters {
     /// Broadcast `Lagged` occurrences / missed tick indices.
     pub(crate) lagged_events: u64,
@@ -412,6 +434,10 @@ pub(crate) struct RoomCounters {
     pub(crate) step_max_us: u64,
     pub(crate) step_sum_us: u64,
     pub(crate) step_hist: [u64; HIST_BINS],
+    /// Fine step-duration histogram (fixed 8 µs bins, `[0, 4096 µs)` —
+    /// sub-budget resolution; steps at/above the cap stay in `step_hist`
+    /// only. See `metrics::FINE_HIST_*`.
+    pub(crate) step_fine_hist: [u32; FINE_HIST_BINS],
     /// Tick processing latency µs (step start − ticker `at`): min/max/sum.
     pub(crate) late_min_us: u64,
     pub(crate) late_max_us: u64,
@@ -455,6 +481,38 @@ pub(crate) struct RoomCounters {
     /// Largest snapshot group this tick (recomputed in the broadcast
     /// phase; carried in the per-step sample as a gauge).
     pub(crate) step_max_group: u32,
+}
+
+impl Default for RoomCounters {
+    fn default() -> Self {
+        Self {
+            lagged_events: 0,
+            lagged_ticks: 0,
+            step_min_us: 0,
+            step_max_us: 0,
+            step_sum_us: 0,
+            step_hist: [0; HIST_BINS],
+            step_fine_hist: [0; FINE_HIST_BINS],
+            late_min_us: 0,
+            late_max_us: 0,
+            late_sum_us: 0,
+            dropped_frames: 0,
+            dropped_actions: 0,
+            keepalive_resends: 0,
+            snapshots: 0,
+            snap_bytes: 0,
+            snap_bytes_max: 0,
+            snap_overflows: 0,
+            snap_records: 0,
+            metrics_dropped: 0,
+            shipped_bytes: 0,
+            shipped_frames: 0,
+            private_frames: 0,
+            joins: 0,
+            leaves: 0,
+            step_max_group: 0,
+        }
+    }
 }
 
 /// The room actor. Owns the world, the connection table, and the group
@@ -635,6 +693,13 @@ where
         }
         self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
         self.m.step_hist[crate::metrics::hist_index(self.budget_us, step_us)] += 1;
+        // The fine histogram runs ALONGSIDE the log2 one (sub-budget
+        // resolution; the overflow semantics of `step_hist` are untouched).
+        // One saturating increment, integer only (no float on the hot
+        // path); steps at/above the cap are simply absent from it.
+        if let Some(fi) = crate::metrics::fine_hist_index(step_us) {
+            self.m.step_fine_hist[fi] = self.m.step_fine_hist[fi].saturating_add(1);
+        }
 
         // A2: emit a sample at most every `metrics_every` steps (the send
         // cadence tracks the collector's report cadence; the counters are
@@ -770,6 +835,7 @@ where
             step_max_us: self.m.step_max_us,
             step_sum_us: self.m.step_sum_us,
             step_hist: self.m.step_hist,
+            step_fine_hist: self.m.step_fine_hist,
             late_min_us: self.m.late_min_us,
             late_max_us: self.m.late_max_us,
             late_sum_us: self.m.late_sum_us,
@@ -812,8 +878,7 @@ where
         let mut members: HashMap<G, Vec<ConnectionId>> = HashMap::new();
         for (conn, rc) in &self.conns {
             members.entry(rc.group.clone()).or_default().push(*conn);
-        }
-        // Gauge for the per-step sample: the largest group this tick.
+        }        // Gauge for the per-step sample: the largest group this tick.
         self.m.step_max_group =
             members.values().map(Vec::len).max().unwrap_or(0) as u32;
         // Drop groups whose members all left (frees the cached snapshot).
@@ -981,8 +1046,13 @@ where
         // payload is split off, the capacity retained — no per-connection
         // per-tick allocation).
         let mut pbuf = bytes::BytesMut::new();
-        for (conn, rc) in &self.conns {
-            let mut batch: FrameBatch = Vec::with_capacity(2);
+        for (conn, rc) in self.conns.iter_mut() {
+            // The batch buffer is reused across ticks (floor breakdown: the
+            // per-tick `Vec::with_capacity(2)` was a measured slice). It is
+            // handed to the channel with `mem::take` — zero allocation,
+            // the retained capacity is what makes the reuse free — and, if
+            // the outbound channel is full, put back for the next tick.
+            rc.batch.clear();
             if let Some(payload) = self
                 .groups
                 .get(&rc.group)
@@ -991,23 +1061,26 @@ where
                 // Metrics: one shipped frame and its wire payload size.
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
-                batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
+                rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
             pbuf.clear();
-            if self.logic.private(&mut self.world, *conn, &mut pbuf) {
+            if self.logic.private(&mut self.world, *conn, &rc.group, &mut pbuf) {
                 // Metrics: one shipped private frame and its payload size.
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
-                batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.split_to(pbuf.len()).freeze()));
+                rc.batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.split_to(pbuf.len()).freeze()));
             }
-            if !batch.is_empty()
-                && rc.out.try_send(batch).is_err()
-            {
-                // Outbound channel full: the batch is dropped. Snapshots are
-                // self-contained, so this costs the client at most one
-                // snapshot of staleness (keep-alive bounds it).
-                dropped += 1;
+            if !rc.batch.is_empty() {
+                let batch = std::mem::take(&mut rc.batch);
+                if let Err(e) = rc.out.try_send(batch) {
+                    // Outbound channel full: the batch is dropped. Snapshots are
+                    // self-contained, so this costs the client at most one
+                    // snapshot of staleness (keep-alive bounds it). The buffer
+                    // goes back for the next tick.
+                    dropped += 1;
+                    rc.batch = e.into_inner();
+                }
             }
         }
         self.m.dropped_frames += dropped;
@@ -1051,6 +1124,7 @@ where
                         // phase (a group may depend on the world); this is
                         // the join-time value.
                         group: self.logic.group_of(&self.world, conn),
+                        batch: Vec::new(),
                     },
                 );
                 let _ = reply.send(Ok((entity, act_tx)));
@@ -1499,7 +1573,13 @@ mod tests {
             true
         }
 
-        fn private(&mut self, _w: &mut (), conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        fn private(
+            &mut self,
+            _w: &mut (),
+            conn: ConnectionId,
+            _group: &ConnectionId,
+            out: &mut bytes::BytesMut,
+        ) -> bool {
             if conn == ConnectionId(0x70) {
                 out.extend_from_slice(&u32::MAX.to_le_bytes());
                 true
@@ -1899,6 +1979,126 @@ mod tests {
             b_seq,
             (2..=27).collect::<Vec<_>>(),
             "B must emit on every tick the world changed (no starvation)"
+        );
+
+        control
+            .send(RoomControl::Shutdown)
+            .await
+            .expect("control alive");
+        tick();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("room did not shut down")
+            .expect("room task panicked");
+    }
+
+    /// Batch-buffer reuse (the floor turn): the fan-out hands each tick's
+    /// batch to the outbound channel with `mem::take` and, on a full
+    /// channel, restores it through `TrySendError::into_inner`. This
+    /// locks the recovery path: after a stretch in which the outbound
+    /// channel stayed full (emissions dropped), the channel must hold
+    /// exactly its capacity of intact batches — and, once space appears,
+    /// the NEXT emission must arrive (no wedged connection, no lost
+    /// buffer, nothing past capacity).
+    #[tokio::test]
+    async fn full_outbound_channel_drops_then_recovers() {
+        // Wider steps pipe than the test's tick count: the room's
+        // `try_send` on it is best-effort (a full pipe would silently
+        // lose the late step numbers and starve `wait_steps`).
+        let (step_tx, mut steps) = mpsc::channel(256);
+        let (tick_tx, tick_rx) = broadcast::channel(64);
+        let (control, control_rx) = channel(128);
+        let actor = RoomActor::new(
+            RoomConfig {
+                id: RoomId(4),
+                ..Default::default()
+            },
+            (),
+            Box::new(FairLogic {
+                last_world: 0,
+                last_emitted: HashMap::new(),
+                step_no: 0,
+                steps: step_tx,
+            }),
+            tick_rx,
+            control_rx,
+            1,
+            null_metrics_tx(),
+        );
+        let handle = tokio::spawn(actor.run());
+        let t0 = Instant::now();
+        let mut next_tick = 0;
+        let mut tick = || {
+            next_tick += 1;
+            let at = t0 + Duration::from_secs_f64(next_tick as f64 / 30.0);
+            tick_tx
+                .send(TickInfo {
+                    tick: next_tick,
+                    at,
+                })
+                .expect("room subscriber alive");
+        };
+
+        // One connection, an outbound channel of capacity 64.
+        let (out_tx, mut rx) = mpsc::channel::<FrameBatch>(64);
+        let (reply_tx, reply_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+        control
+            .send(RoomControl::Join {
+                conn: ConnectionId(1),
+                out: out_tx,
+                reply: reply_tx,
+            })
+            .await
+            .expect("control alive");
+        tick();
+        tokio::time::timeout(Duration::from_secs(2), reply_rx)
+            .await
+            .expect("join reply timeout")
+            .expect("join reply dropped")
+            .expect("join accepted (room not full)");
+
+        // The world changes on every tick ⇒ one emission per tick:
+        // 69 more ticks ⇒ 70 emissions total against 64 slots. The
+        // channel keeps the OLDEST 64 (new ones fail `try_send` and are
+        // dropped — the documented one-snapshot-of-staleness cost).
+        // Yield between sends: on a current-thread runtime the room task
+        // cannot consume the broadcast while the test runs, and a full
+        // broadcast buffer would overwrite the oldest ticks.
+        for _ in 0..69 {
+            tick();
+            tokio::task::yield_now().await;
+        }
+        wait_steps(&mut steps, 70).await;
+
+        let all = drain_all(&mut rx).await;
+        assert_eq!(all.len(), 64, "the channel holds exactly its capacity");
+        let seq: Vec<u64> = all
+            .iter()
+            .map(|b| {
+                assert_eq!(b[0].op, 0x7020, "snapshot opcode");
+                u64::from_le_bytes(
+                    b[0]
+                        .payload
+                        .get(0..8)
+                        .expect("8-byte payload")
+                        .try_into()
+                        .expect("8-byte payload"),
+                )
+            })
+            .collect();
+        assert_eq!(seq, (1..=64).collect::<Vec<_>>(), "intact, in order");
+
+        // Space reappears: the next emission must arrive (the batch
+        // buffer survived the full-channel stretch).
+        tick();
+        wait_steps(&mut steps, 71).await;
+        let recovered = drain_all(&mut rx).await;
+        assert_eq!(recovered.len(), 1, "the post-full emission arrives");
+        assert_eq!(
+            recovered[0][0].payload.as_ref(),
+            71u64.to_le_bytes(),
+            "and it is tick 71's snapshot"
         );
 
         control

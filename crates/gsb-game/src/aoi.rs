@@ -394,8 +394,8 @@ pub struct AoiRoom {
     prev_occupied: HashSet<Cell>,
     /// Each bucketed entity's cell at the end of the last `update`
     /// (written in `update`, read by the dirty query, `on_leave`'s
-    /// removal parking, and `group_of`/`conn_cell` — the per-connection
-    /// group lookups of the broadcast phase are O(1) table reads, not
+    /// removal parking, and `group_of` — the per-connection group
+    /// lookups of the broadcast phase are O(1) table reads, not
     /// per-connection world queries).
     last_cell: HashMap<Entity, Cell>,
     /// The member count of each cell (maintained incrementally in
@@ -515,18 +515,6 @@ impl AoiRoom {
             group_full_emitted: HashSet::new(),
             encoded: 0,
         }
-    }
-
-    /// The cell of `conn`'s entity (the cell its records land in), or
-    /// `None` when the connection has no entity in the room. Read from
-    /// the room's own `last_cell` table (written in `update`, after the
-    /// systems — `update` always precedes the broadcast phase's
-    /// per-connection calls) instead of a per-connection world query:
-    /// the fan-out calls this once per connection per tick, and the
-    /// table lookup is O(1) with no ECS traversal.
-    fn conn_cell(&self, conn: ConnectionId) -> Option<Cell> {
-        let &entity = self.conn_entity.get(&conn)?;
-        self.last_cell.get(&entity).copied()
     }
 
     /// The snapshot header: `sequence` (field 1, varint) + the `delta`
@@ -860,26 +848,35 @@ impl RoomLogic<World> for AoiRoom {
     /// frame in the same batch and baselines the connection). Otherwise:
     /// the pending input acknowledgment (Section A; a few bytes per
     /// advanced tick, zero otherwise).
-    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
-        if let Some(c) = self.conn_cell(conn) {
-            let baselined = self.conn_view.get(&conn).copied() == Some(c);
-            if !baselined {
-                if self.group_full_emitted.contains(&c) {
-                    // The group's own full is in this batch (ahead of
-                    // this frame): the baseline is established there.
-                    self.conn_view.insert(conn, c);
-                } else {
-                    // The one-shot private full (one per join/crossing):
-                    // the frame is the `Private` message (opcode 1004) —
-                    // the pre-encoded WorldSnapshot bytes ride in the
-                    // `snapshot` oneof (field 2, length-delimited).
-                    let full = self.full_of(&c);
-                    out.put_u8(0x12); // Private field 2 (snapshot), LEN
-                    encode_varint(full.len() as u64, out);
-                    out.extend_from_slice(&full);
-                    self.conn_view.insert(conn, c);
-                    return true;
-                }
+    fn private(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        group: &Cell,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        // The room passes the connection's current group (re-evaluated
+        // every tick in phase 4a) — the previous re-derivation
+        // (`conn_cell`: two table lookups per connection per tick) was a
+        // measured slice of the idle floor.
+        let c = *group;
+        let baselined = self.conn_view.get(&conn).copied() == Some(c);
+        if !baselined {
+            if self.group_full_emitted.contains(&c) {
+                // The group's own full is in this batch (ahead of
+                // this frame): the baseline is established there.
+                self.conn_view.insert(conn, c);
+            } else {
+                // The one-shot private full (one per join/crossing):
+                // the frame is the `Private` message (opcode 1004) —
+                // the pre-encoded WorldSnapshot bytes ride in the
+                // `snapshot` oneof (field 2, length-delimited).
+                let full = self.full_of(&c);
+                out.put_u8(0x12); // Private field 2 (snapshot), LEN
+                encode_varint(full.len() as u64, out);
+                out.extend_from_slice(&full);
+                self.conn_view.insert(conn, c);
+                return true;
             }
         }
         crate::common::emit_ack(&mut self.input, conn, out)
@@ -946,7 +943,6 @@ impl RoomLogic<World> for AoiRoom {
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::run_systems(&mut self.runner, world, ctx);
-
         // Orphan stamping (idempotent, mirrors `DemoRoom`): entities with
         // a `Position` but no `WireId` get the next serial, so the
         // broadcast set is exactly "has a `Position`". It runs BEFORE the
@@ -956,7 +952,6 @@ impl RoomLogic<World> for AoiRoom {
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
         crate::common::stamp_orphans(&mut self.next_wire_id, world);
-
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
@@ -988,8 +983,7 @@ impl RoomLogic<World> for AoiRoom {
         // are visited — per-tick work is proportional to the movers, not
         // to the entity count.
         let mut query =
-            world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();
-        for (entity, wire_id, pos) in query.iter(world) {
+            world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();        for (entity, wire_id, pos) in query.iter(world) {
             let wire = wire_id.get();
             let (x, y) = (pos.x as i32, pos.y as i32);
             let new_cell = cell_of(x, y, self.cell_size);
@@ -1315,7 +1309,7 @@ mod tests {
         // (co-residents + itself, full mode).
         let mut priv_out = bytes::BytesMut::new();
         assert!(
-            room.private(&mut world, ConnectionId(3), &mut priv_out),
+            room.private(&mut world, ConnectionId(3), &Cell(0, 0), &mut priv_out),
             "a late joiner receives the one-shot full"
         );
         let full = crate::game::Private::decode(priv_out.as_ref()).expect("private frame");
@@ -1332,7 +1326,7 @@ mod tests {
         // group change): no full again (only an ack, if any).
         let mut priv_out2 = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(3), &mut priv_out2),
+            !room.private(&mut world, ConnectionId(3), &Cell(0, 0), &mut priv_out2),
             "the one-shot full is one-shot"
         );
     }
@@ -1896,7 +1890,7 @@ mod tests {
         // The member is baselined by that full: no private frame.
         let mut pbuf = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(7), &mut pbuf),
+            !room.private(&mut world, ConnectionId(7), &Cell(2, 0), &mut pbuf),
             "the group's full already baselined the member — no private frame"
         );
         assert!(room.conn_view.contains_key(&ConnectionId(7)));

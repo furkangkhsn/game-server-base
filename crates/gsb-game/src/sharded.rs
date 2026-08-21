@@ -380,7 +380,13 @@ impl ShardLogic<World> for ShardedRoom {
     /// acknowledgment (Section A) — the shard's snapshots are full,
     /// self-contained (one group per shard), so there is nothing
     /// per-connection to deliver besides the ack.
-    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+    fn private(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        _group: &(),
+        out: &mut bytes::BytesMut,
+    ) -> bool {
         crate::common::emit_ack(&mut self.input, conn, out)
     }
 

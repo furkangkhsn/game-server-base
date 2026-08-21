@@ -338,7 +338,13 @@ impl RoomLogic<World> for SectorRoom {
     }
 
     /// The per-connection input acknowledgment (see `DemoRoom::private`).
-    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+    fn private(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        _group: &Sector,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
         crate::common::emit_ack(&mut self.input, conn, out)
     }
 

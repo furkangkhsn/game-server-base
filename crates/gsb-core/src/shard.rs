@@ -322,8 +322,16 @@ pub trait ShardLogic<W>: Send {
         out: &mut bytes::BytesMut,
     ) -> bool;
 
-    /// Encode a per-connection private frame. Default: none.
-    fn private(&mut self, _world: &mut W, _conn: ConnectionId, _out: &mut bytes::BytesMut) -> bool {
+    /// Encode a per-connection private frame. The connection's group is
+    /// passed in (see [`RoomLogic::private`] for the rationale).
+    /// Default: none.
+    fn private(
+        &mut self,
+        _world: &mut W,
+        _conn: ConnectionId,
+        _group: &Self::GroupKey,
+        _out: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
 
@@ -754,6 +762,7 @@ where
                                         actions: p.actions,
                                         entity: p.entity,
                                         group: self.logic.group_of(&self.world, p.conn),
+                                        batch: Vec::new(),
                                     },
                                 );
                             }
@@ -845,6 +854,7 @@ where
                         actions: act_rx,
                         entity,
                         group: self.logic.group_of(&self.world, conn),
+                        batch: Vec::new(),
                     },
                 );
                 let _ = reply.send(Ok((entity, act_tx)));
@@ -959,6 +969,7 @@ where
                             actions: p.actions,
                             entity: p.entity,
                             group: self.logic.group_of(&self.world, p.conn),
+                            batch: Vec::new(),
                         },
                     );
                 }
@@ -1103,8 +1114,11 @@ where
 
         // 6d. Per-connection fan-out (same as the room's 4d).
         let mut dropped: u64 = 0;
-        for (conn, rc) in &self.conns {
-            let mut batch: FrameBatch = Vec::with_capacity(2);
+        // Same batch-buffer reuse as the room's 4d (one floor slice was the
+        // per-connection per-tick `Vec::with_capacity(2)`).
+        let mut pbuf = bytes::BytesMut::new();
+        for (conn, rc) in self.conns.iter_mut() {
+            rc.batch.clear();
             if let Some(payload) = self
                 .groups
                 .get(&rc.group)
@@ -1112,17 +1126,24 @@ where
             {
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
-                batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
+                rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
-            let mut pbuf = bytes::BytesMut::new();
-            if self.logic.private(&mut self.world, *conn, &mut pbuf) {
+            pbuf.clear();
+            if self.logic.private(&mut self.world, *conn, &rc.group, &mut pbuf) {
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
-                batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.freeze()));
+                rc.batch.push(gsb_protocol::FrameBody::new(
+                    priv_op,
+                    pbuf.split_to(pbuf.len()).freeze(),
+                ));
             }
-            if !batch.is_empty() && rc.out.try_send(batch).is_err() {
-                dropped += 1;
+            if !rc.batch.is_empty() {
+                let batch = std::mem::take(&mut rc.batch);
+                if let Err(e) = rc.out.try_send(batch) {
+                    dropped += 1;
+                    rc.batch = e.into_inner();
+                }
             }
         }
         self.m.dropped_frames += dropped;
@@ -1144,6 +1165,7 @@ where
             step_max_us: self.m.step_max_us,
             step_sum_us: self.m.step_sum_us,
             step_hist: self.m.step_hist,
+            step_fine_hist: self.m.step_fine_hist,
             late_min_us: self.m.late_min_us,
             late_max_us: self.m.late_max_us,
             late_sum_us: self.m.late_sum_us,

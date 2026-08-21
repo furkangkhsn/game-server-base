@@ -261,6 +261,12 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     tek `try_send`. Kanal doluysa batch atılır ve sayılır
     (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu yalnızca
     o istemciye 1 snapshot bayatlık olarak yansır (keepalive sınırlar).
+    Batch buffer'u bağlantı başına kalıcıdır (`RoomConn.batch`): tick
+    başına `clear()` + `mem::take` ile kanala teslim — ısınma sonrası
+    tick başına bağlantı başına sıfır heap tahsisi (ölçülen taban
+    dilimlerinden biriydi: eski `Vec::with_capacity(2)` × N bağlantı;
+    kanal doluysa buffer `into_inner` ile geri konur — ROADMAP "ölçüm
+    çözünürlüğü + taban turu").
   - Snapshot payload'u `RoomConfig::max_snapshot_bytes`'i aşarsa uyarı
     loglanır (rUDP'de MTU hazırlığı: aşırı snapshot datagram'a sığmaz;
     sürekli uyarı = grubu bölme/AOI zamanı, §8).
@@ -1099,6 +1105,26 @@ durdurulamaz.
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
 | düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
+
+**Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`
+(log-2, bütçe oranları) **bütçe sorusunu** yanıtlar: bütçeye göre
+nerede, aşılıyor muyuz (`(1,1)` kenarı = bütçe = aşım sınırı; üst
+binler = overflow). Binlerinin 2× ayrık olması bu soru için
+tasarımındadır; ama bütçenin çok altındaki bölgede küçük farkları
+ayırt edemez (30 Hz bütçede hem 390 µs hem 430 µs aynı binde →
+raporda p50 hep "~391" görünür, %10'luk iyileşmeler görünmez). Yanına
+`step_fine_hist` eklendi: **sabit 8 µs binler**, `[0, 4096) µs` aralığı
+(512 bin) — mutlak µs, bütçe fraksiyonu değil (çözünürlük hedefi adım
+sürelerinin gerçekten yaşadığı bölgedeki mutlak fark; tick hızından
+bağımsız). Hot path maliyeti: adım başına **bir saturating u32
+artış** (tam sayı). Percentiller (`fine_hist_percentile_us`) raporlama
+anında saf tamsayı aritmetik: bin alt-kenarı semantiği (hata < 8 µs);
+≥ 4096 µs olan adımlar **yalnız** log2 histogram'da → aşım sinyali ve
+`over_budget_pct` dokunulmaz. Loadgen satırları: `step_p50_fine_us` /
+`step_p90_fine_us` (4096 değeri = "sıra tavan üstünde"; ince bin alt
+kenarları 4088'de tavanlanır, bu yüzden belirsizlik yok). Served
+stream: **GSM3** (GSM2 + oda başına 512×u32). Gerekçe + ölçülen taban
+çalışması: ROADMAP "Kapatılanlar (ölçüm çözünürlüğü + taban turu)".
 
 Hızlar (`hz`, `*_s`) **örnek aralığı** üzerinden hesaplanır: her oda örneği
 kendi `emit_at`'ını taşır (oda `Instant::now()`); oran `latest.emit_at −

@@ -140,6 +140,67 @@ pub fn hist_index(budget_us: u64, step_us: u64) -> usize {
     i
 }
 
+// ── Fine step-duration histogram (A: sub-budget resolution) ──────────
+//
+// The budget-relative log2 histogram above answers "are we inside the
+// budget, and by how much do we overshoot" (the `(1,1)` overflow edge).
+// Its bins double, so a 10-20% change far below the budget is invisible
+// (a 390 µs step and a 460 µs step are the SAME bin). This companion
+// histogram answers the other question — "which micro-optimization
+// worked" — with FIXED absolute bins: 8 µs wide, covering
+// `[0, 4096 µs)`. Steps at or above the cap are NOT double-counted
+// here: they remain visible in the log2 histogram only (the two
+// histograms are complementary, and the overflow semantics of the log2
+// one are untouched). Absolute bins (not budget fractions) on purpose:
+// the resolution target is absolute µs in the region where real step
+// times live, at any tick rate; a budget-fraction fine histogram would
+// just re-scale the same 2×-apart problem.
+pub const FINE_HIST_US_PER_BIN: u64 = 8;
+/// Number of fine bins: covers `[0, FINE_HIST_BINS * FINE_HIST_US_PER_BIN)` µs.
+pub const FINE_HIST_BINS: usize = 512;
+/// The fine histogram's cap in µs: steps at or above it land only in the
+/// log2 histogram.
+pub const FINE_HIST_CAP_US: u64 = FINE_HIST_BINS as u64 * FINE_HIST_US_PER_BIN;
+
+/// Fine-bin index for a step duration; `None` at/above the cap (the step
+/// is then readable in the log2 histogram only).
+#[inline]
+pub fn fine_hist_index(step_us: u64) -> Option<usize> {
+    let i = (step_us / FINE_HIST_US_PER_BIN) as usize;
+    (i < FINE_HIST_BINS).then_some(i)
+}
+
+/// Exact percentile of a fine histogram, INTEGER arithmetic (the hot path
+/// only counts bins; this runs at report time and deliberately uses no
+/// float). `total` is the room's TOTAL step count (including steps at or
+/// above the cap, which do not appear in `hist`); the percentile is taken
+/// over all steps, and the answer is the bin's lower edge `L` — the
+/// smallest `L` such that at least `p` percent of the steps are ≤
+/// `L + FINE_HIST_US_PER_BIN - 1`. `None` when the histogram is empty,
+/// `p` is out of `[1, 100]`, or the percentile's rank falls beyond the
+/// cap (then the log2 histogram's coarse estimate applies).
+pub fn fine_hist_percentile_us(hist: &[u64], total: u64, p: u32) -> Option<u64> {
+    if total == 0 || p == 0 || p > 100 {
+        return None;
+    }
+    let fine_total: u64 = hist.iter().copied().sum();
+    if fine_total == 0 {
+        return None;
+    }
+    let target = (u128::from(total) * u128::from(p)).div_ceil(100);
+    if target > u128::from(fine_total) {
+        return None; // the p-th step sits at/above the cap
+    }
+    let mut acc = 0u64;
+    for (i, &n) in hist.iter().enumerate() {
+        acc += n;
+        if u128::from(acc) >= target {
+            return Some(i as u64 * FINE_HIST_US_PER_BIN);
+        }
+    }
+    None
+}
+
 /// A room's counter sample: cumulative counters + current gauges,
 /// produced once per step (synchronous — see the module docs for why the
 /// unbounded send adds no await to the tick loop).
@@ -171,6 +232,11 @@ pub struct RoomSample {
     /// of [`Self::budget_us`]). Bins `>= HIST_OVERFLOW_BIN` are budget
     /// overflow.
     pub step_hist: [u64; HIST_BINS],
+    /// Fine step-duration histogram (cumulative; fixed 8 µs bins covering
+    /// `[0, FINE_HIST_CAP_US)` µs — sub-budget resolution; steps at/above
+    /// the cap are only in [`Self::step_hist`], whose overflow semantics
+    /// this does not touch).
+    pub step_fine_hist: [u32; FINE_HIST_BINS],
     /// Tick processing latency (step start − the ticker's `at`
     /// timestamp), µs: min / max / sum.
     pub late_min_us: u64,
@@ -365,6 +431,10 @@ pub struct RoomReport {
     /// Cumulative step duration histogram ([`HIST_EDGES`] as fractions of
     /// [`Self::budget_us`]); bins `>= HIST_OVERFLOW_BIN` are budget overflow.
     pub step_hist: [u64; HIST_BINS],
+    /// Fine step-duration histogram (cumulative; fixed 8 µs bins covering
+    /// `[0, FINE_HIST_CAP_US)` µs — sub-budget resolution alongside
+    /// [`Self::step_hist`]; `u64` so the shard fold can sum per element).
+    pub step_fine_hist: [u64; FINE_HIST_BINS],
     pub late_min_us: u64,
     pub late_mean_us: f64,
     pub late_max_us: u64,
@@ -517,6 +587,7 @@ impl MetricAccumulator {
                 step_mean_us: latest.step_sum_us as f64 / steps as f64,
                 step_max_us: latest.step_max_us,
                 step_hist: latest.step_hist,
+                step_fine_hist: latest.step_fine_hist.map(u64::from),
                 late_min_us: latest.late_min_us,
                 late_mean_us: latest.late_sum_us as f64 / steps as f64,
                 late_max_us: latest.late_max_us,
@@ -786,6 +857,87 @@ mod tests {
         assert!(hist_index(33_333, 5_100) < HIST_OVERFLOW_BIN);
     }
 
+    /// The fine histogram resolves sub-budget changes the log2 one cannot:
+    /// a 10% step-time difference at ~390 µs is TWO different fine p50
+    /// values, while both are the SAME log2 bin (both report the same
+    /// coarse "~391" midpoint).
+    #[test]
+    fn fine_hist_resolves_ten_percent_difference() {
+        let mut a = [0u64; FINE_HIST_BINS];
+        let mut b = [0u64; FINE_HIST_BINS];
+        a[fine_hist_index(390).unwrap()] = 1000;
+        b[fine_hist_index(430).unwrap()] = 1000; // +10.3% step time
+        let pa = fine_hist_percentile_us(&a, 1000, 50).unwrap();
+        let pb = fine_hist_percentile_us(&b, 1000, 50).unwrap();
+        assert_eq!(pa, 390 / 8 * 8); // bin lower edge
+        assert_eq!(pb, 430 / 8 * 8);
+        assert_ne!(pa, pb, "the fine histogram must separate a 10% change");
+        // ...and the log2 histogram does NOT (same bin at a 30 Hz budget).
+        let lo_a = hist_index(33_333, 390);
+        let lo_b = hist_index(33_333, 430);
+        assert_eq!(lo_a, lo_b, "sanity: the log2 bins are 2× apart here");
+    }
+
+    /// Known distributions → exact percentiles (integer arithmetic; the
+    /// answer is the bin lower edge, so the error is < FINE_HIST_US_PER_BIN).
+    #[test]
+    fn fine_hist_percentiles_known_distributions() {
+        // Uniform over [0, 4096): 2 steps per bin, 1000 total.
+        let mut u = [0u64; FINE_HIST_BINS];
+        for bin in u.iter_mut() {
+            *bin = 2;
+        }
+        // The 500th of 1000 steps: bin 249 (500 steps in bins 0..=249).
+        assert_eq!(fine_hist_percentile_us(&u, 1000, 50), Some(249 * 8));
+        assert_eq!(fine_hist_percentile_us(&u, 1000, 99), Some(989 / 2 * 8));
+        // Bimodal: 50% at 390 µs, 50% at 780 µs (the measured clusters).
+        let mut m = [0u64; FINE_HIST_BINS];
+        m[fine_hist_index(390).unwrap()] = 500;
+        m[fine_hist_index(780).unwrap()] = 500;
+        assert_eq!(
+            fine_hist_percentile_us(&m, 1000, 50),
+            Some(390 / 8 * 8),
+            "p50: the 500th step is the last one in the 390 cluster"
+        );
+        assert_eq!(
+            fine_hist_percentile_us(&m, 1000, 99),
+            Some(780 / 8 * 8),
+            "p99: inside the 780 cluster"
+        );
+        // Degenerate: all one value.
+        let mut d = [0u64; FINE_HIST_BINS];
+        d[fine_hist_index(1234).unwrap()] = 77;
+        assert_eq!(fine_hist_percentile_us(&d, 77, 1), Some(1234 / 8 * 8));
+        assert_eq!(fine_hist_percentile_us(&d, 77, 100), Some(1234 / 8 * 8));
+    }
+
+    /// Cap semantics: steps at/above FINE_HIST_CAP_US are absent from the
+    /// fine histogram (the log2 histogram keeps the overflow signal), and a
+    /// percentile whose rank falls beyond the cap reports `None`.
+    #[test]
+    fn fine_hist_cap_and_overflow() {
+        assert_eq!(fine_hist_index(0), Some(0));
+        assert_eq!(fine_hist_index(FINE_HIST_CAP_US - 1), Some(FINE_HIST_BINS - 1));
+        assert_eq!(fine_hist_index(FINE_HIST_CAP_US), None);
+        assert_eq!(fine_hist_index(u64::MAX), None);
+
+        // 100 steps below the cap (last fine bin), 50 at/above it: the p50
+        // is in the fine range, the p99 is not.
+        let mut h = [0u64; FINE_HIST_BINS];
+        h[FINE_HIST_BINS - 1] = 100;
+        assert_eq!(
+            fine_hist_percentile_us(&h, 150, 50),
+            Some((FINE_HIST_BINS - 1) as u64 * FINE_HIST_US_PER_BIN)
+        );
+        assert_eq!(fine_hist_percentile_us(&h, 150, 99), None);
+
+        // Empty / out-of-range p.
+        let z = [0u64; FINE_HIST_BINS];
+        assert_eq!(fine_hist_percentile_us(&z, 0, 50), None);
+        assert_eq!(fine_hist_percentile_us(&h, 150, 0), None);
+        assert_eq!(fine_hist_percentile_us(&h, 150, 101), None);
+    }
+
     /// The accumulator applies all three event kinds and rates are
     /// delta-over-period between two reports.
     #[test]
@@ -807,6 +959,7 @@ mod tests {
             step_max_us: 900,
             step_sum_us: 420,
             step_hist: [20, 5, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            step_fine_hist: [0; FINE_HIST_BINS],
             late_min_us: 1,
             late_max_us: 2_000,
             late_sum_us: 300,
