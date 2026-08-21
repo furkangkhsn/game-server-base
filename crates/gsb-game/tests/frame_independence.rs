@@ -245,7 +245,7 @@ impl SimRoom {
             self.join_reply = Some(rx);
             return false;
         };
-        let move_to = gsb_game::game::MoveTo { x: 1000, y: 1000 };
+        let move_to = gsb_game::game::MoveTo { x: 1000, y: 1000, seq: 0 };
         // The join reply became ready *before* this tick's batch was flushed
         // (control phase precedes the broadcast phase), so the action
         // channel is open and empty: try_send cannot fail.

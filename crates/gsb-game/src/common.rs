@@ -55,19 +55,39 @@ pub(crate) fn next_serial(next_wire_id: &mut u64) -> WireId {
     WireId::new(*next_wire_id)
 }
 
+/// Per-connection input sequence state (shared by all rooms; see
+/// [`ingest`] and [`emit_ack`]).
+///
+/// `hwm` is the highest input sequence this connection has *processed*
+/// (the high-water mark); `acked` is the highest sequence already
+/// *reported* to the connection. Both are reset on every (re)join — a
+/// rejoin is a new session, and the client is expected to restart its
+/// counter at 1 (the server-side reset makes the first input of the new
+/// session processable even if the client forgets).
+#[derive(Debug, Default)]
+pub(crate) struct InputState {
+    /// Highest processed seq (0 = nothing numbered processed yet).
+    pub hwm: u64,
+    /// Highest seq already acked (the last `InputAck` sent).
+    pub acked: u64,
+}
+
 /// The player-spawn path, shared by all rooms: the deterministic spawn
 /// point (same distribution in every strategy — a fair comparison in the
 /// load generator), a fresh wire identity through the room's single
-/// minting point, and the connection→entity table update. Returns the
-/// wire id (it also goes to the joiner in `JOIN_ROOM_RESULT`, so both
-/// paths share one space).
+/// minting point, the connection→entity table update, and the input
+/// session reset (a (re)join is a new input session — see
+/// [`InputState`]). Returns the wire id (it also goes to the joiner in
+/// `JOIN_ROOM_RESULT`, so both paths share one space).
 pub(crate) fn on_join(
     conn_entity: &mut HashMap<ConnectionId, Entity>,
     next_wire_id: &mut u64,
     spawn_half: f32,
     world: &mut World,
     conn: ConnectionId,
+    input: &mut HashMap<ConnectionId, InputState>,
 ) -> EntityId {
+    input.insert(conn, InputState::default());
     let (x, y) = spawn_pos(conn, spawn_half);
     let wire = next_serial(next_wire_id);
     let entity = world
@@ -80,28 +100,55 @@ pub(crate) fn on_join(
 /// The leave path, shared by all rooms: no remove event — the entity
 /// simply drops out of the next snapshot (membership is expressed by
 /// presence). The room's stale-leave guard ensures a late leave of a
-/// re-joined connection cannot despawn the new entity.
+/// re-joined connection cannot despawn the new entity (nor drop the
+/// re-joined session's input state: the removal is guarded by the same
+/// condition).
 pub(crate) fn on_leave(
     conn_entity: &mut HashMap<ConnectionId, Entity>,
     world: &mut World,
     conn: ConnectionId,
+    input: &mut HashMap<ConnectionId, InputState>,
 ) {
     if let Some(entity) = conn_entity.remove(&conn)
         && world.get_entity(entity).is_ok()
     {
         world.despawn(entity);
+        input.remove(&conn);
     }
 }
 
 /// `MOVE_TO` ingestion, shared by all rooms: decode the game message,
 /// guard against stale actions (connection not in the room) and vanished
-/// entities, and write the [`MoveTarget`]. Anything else is ignored with
-/// a warning (the op code is the router; undecodable payloads are a
-/// client bug, not a reason to drop the connection).
+/// entities, enforce the per-connection input sequence rule (see below),
+/// and write the [`MoveTarget`]. Anything else is ignored with a warning
+/// (the op code is the router; undecodable payloads are a client bug,
+/// not a reason to drop the connection).
+///
+/// **Input sequence rule** (the client prediction-reconciliation signal):
+/// the client numbers its inputs (monotonic from 1 per session, `seq = 0`
+/// = unnumbered legacy). The server processes a numbered action only
+/// when it is *strictly newer* than this connection's high-water mark:
+///
+/// - `seq > hwm` — process, and advance `hwm = seq`;
+/// - `seq <= hwm` — a duplicate or a reordered/late action: **dropped,
+///   silently**. This is a *normal race* of the lossy game band (a
+///   retransmission or an out-of-order arrival), not a protocol
+///   violation: no error is answered and nothing is counted against the
+///   connection's violation budget (which is spent on structural
+///   protocol errors, and a client re-sending its own input is always
+///   legitimate). Applying a stale target would regress the entity to an
+///   old command, so dropping is the only correct behaviour;
+/// - `seq = 0` (legacy/unnumbered) — process, never advance `hwm`. This
+///   keeps unnumbered clients (and all pre-seq tests) working unchanged.
+///
+/// Gaps (a lost input) do not block the mark: the ack is a
+/// high-water mark, not a contiguity claim (see `InputAck` in
+/// `game.proto`).
 pub(crate) fn ingest(
     conn_entity: &HashMap<ConnectionId, Entity>,
     world: &mut World,
     actions: &mut Vec<Action>,
+    input: &mut HashMap<ConnectionId, InputState>,
 ) {
     for action in actions.drain(..) {
         if action.op != op::MOVE_TO {
@@ -117,11 +164,58 @@ pub(crate) fn ingest(
         if world.get_entity(entity).is_err() {
             continue; // entity already gone
         }
+        // The sequence rule (see the docs above). `or_default` is a
+        // defensive fallback only: `on_join` inserts the session state.
+        let st = input.entry(action.conn).or_default();
+        if msg.seq == 0 {
+            // Legacy/unnumbered: process, never advance the mark.
+        } else if msg.seq > st.hwm {
+            st.hwm = msg.seq;
+        } else {
+            continue; // duplicate / reordered late: dropped (normal race)
+        }
         world.entity_mut(entity).insert(MoveTarget {
             x: msg.x as f32,
             y: msg.y as f32,
         });
     }
+}
+
+/// Emit this connection's pending input acknowledgment as the `Private`
+/// frame payload into `out` (returning `true` when a frame was
+/// produced), advancing `acked`. Called from each room's `private`
+/// seam — the per-tick, per-connection slot of the batch — so the ack
+/// rides the SAME delivery as that tick's group snapshot (no extra send,
+/// no extra await: the tick body stays synchronous).
+///
+/// The ack is emitted only on the ticks in which `hwm` advanced past the
+/// last ack (not every tick): a few bytes per advanced tick, zero
+/// otherwise. The mark is monotonic and can never exceed the highest
+/// processed seq (it IS that seq), so the client's reconciliation
+/// ("everything up to N is applied; re-apply N+1, N+2, …") is sound.
+pub(crate) fn emit_ack(
+    input: &mut HashMap<ConnectionId, InputState>,
+    conn: ConnectionId,
+    out: &mut bytes::BytesMut,
+) -> bool {
+    let Some(st) = input.get_mut(&conn) else {
+        return false;
+    };
+    if st.hwm <= st.acked {
+        return false;
+    }
+    let frame = crate::game::Private {
+        payload: Some(crate::game::private::Payload::Ack(
+            crate::game::InputAck {
+                processed_up_to: st.hwm,
+            },
+        )),
+    };
+    frame
+        .encode(out)
+        .expect("protobuf encode into an in-memory buffer failed");
+    st.acked = st.hwm;
+    true
 }
 
 /// Run the room's systems for this tick (single-threaded, ordered — the

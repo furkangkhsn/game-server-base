@@ -1,20 +1,19 @@
-//! AOI behaviour through the real room actor (public API only).
+//! The AOI room through the real room actor (public API only), observed
+//! with a faithful CLIENT view (the protocol's client half, per
+//! `game.proto`): fulls replace the view, deltas apply on top. The old
+//! "latest snapshot's wire-id set" observation no longer suffices — the
+//! spatial stream is delta-coded (a group's packet is the union of its
+//! cells' per-tick pieces, and silence writes no bytes) — so what a
+//! client HOLDS is the observable, not what a frame happened to carry.
 //!
-//! The logic-level invariants (visibility set, cell transition at the content
-//! level, late-join block, broadcast set, "no change") are tested inline in
-//! `gsb_game::aoi` (they need the room's private bookkeeping). This file locks
-//! in what the *room* does with the spatial group key: `group_of` is
-//! re-evaluated every tick (a player crossing a cell boundary changes group),
-//! each connection receives exactly its own cell's block (near co-residents
-//! present, far entities absent), and a player who moves cells starts
-//! receiving the new cell's block.
-//!
-//! Positions are driven over the per-connection `MOVE_TO` channel and the test
-//! advances the manual ticker until entities settle at their targets
-//! (`DEFAULT_SPEED = 10 u/s` ⇒ ≤166 units over 500 ticks, which covers every
-//! spawn-to-target distance in the 100×100 arena).
+//! Locked in here: same-cell co-residents are visible, the far cell is
+//! not (the 3×3 neighborhood), and a cell transition moves the entity
+//! between views WITHOUT changing its wire identity (the identity
+//! invariant). The deeper delta-stream properties (no ghosts across all
+//! client positions, cell-exit vanishing, late-join one-shot full,
+//! loss-recovery bound) live in `delta_aoi.rs`.
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
@@ -24,7 +23,7 @@ use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_game::aoi::AoiRoom;
-use gsb_game::game::WorldSnapshot;
+use gsb_game::game::{Private, WorldSnapshot};
 use gsb_game::op;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -39,22 +38,94 @@ async fn reply<T>(rx: oneshot::Receiver<T>) -> T {
         .expect("reply dropped")
 }
 
-/// The wire-id set carried by a batch's most recent WORLD_SNAPSHOT frame
-/// (at most one per group per tick).
-fn snap_ids(batch: &FrameBatch) -> Option<BTreeSet<u64>> {
-    for f in batch.iter() {
-        if f.op == op::WORLD_SNAPSHOT {
-            return WorldSnapshot::decode(f.payload.as_ref())
-                .ok()
-                .map(|s| s.entities.iter().map(|e| e.entity).collect());
-        }
-    }
-    None
+/// The client-side world view (the protocol's client half — the same
+/// rules as `View` in `delta_aoi.rs`; the spatial stream is
+/// delta-coded, so the held view is the observable).
+struct View {
+    entities: HashMap<u64, (i32, i32)>,
+    last_seq: Option<u64>,
 }
 
-/// A room actor driven by a manually fed global ticker (mirrors
-/// `late_join.rs`), parameterized over the AOI group key (`AoiRoom` ⇒
-/// `RoomActor<World, Cell>`).
+impl View {
+    fn new() -> Self {
+        Self {
+            entities: HashMap::new(),
+            last_seq: None,
+        }
+    }
+
+    fn apply_group(&mut self, s: &WorldSnapshot) {
+        if s.sequence <= self.last_seq.unwrap_or(0) {
+            return; // duplicate/stale
+        }
+        if s.delta {
+            if self.last_seq.is_none() {
+                return; // no baseline: drop until the next full
+            }
+            for &w in &s.removed {
+                self.entities.remove(&w);
+            }
+            for e in &s.entities {
+                self.entities.insert(e.entity, (e.x, e.y));
+            }
+        } else {
+            self.entities.clear();
+            for e in &s.entities {
+                self.entities.insert(e.entity, (e.x, e.y));
+            }
+        }
+        self.last_seq = Some(s.sequence);
+    }
+
+    fn apply_private_full(&mut self, s: &WorldSnapshot) {
+        self.entities.clear();
+        for e in &s.entities {
+            self.entities.insert(e.entity, (e.x, e.y));
+        }
+        self.last_seq = Some(s.sequence);
+    }
+
+    fn ids(&self) -> Vec<u64> {
+        self.entities.keys().copied().collect()
+    }
+}
+
+struct Conn {
+    rx: mpsc::Receiver<FrameBatch>,
+    actions: Mailbox<Action>,
+    view: View,
+}
+
+impl Conn {
+    fn new(rx: mpsc::Receiver<FrameBatch>, actions: Mailbox<Action>) -> Self {
+        Self {
+            rx,
+            actions,
+            view: View::new(),
+        }
+    }
+
+    fn apply_batch(&mut self, batch: &FrameBatch) {
+        for f in batch.iter() {
+            match f.op {
+                op::WORLD_SNAPSHOT => {
+                    let s = WorldSnapshot::decode(f.payload.as_ref()).expect("decodable");
+                    self.view.apply_group(&s);
+                }
+                op::PRIVATE => {
+                    let p = Private::decode(f.payload.as_ref()).expect("decodable private");
+                    if let Some(gsb_game::game::private::Payload::Snapshot(s)) = p.payload {
+                        self.view.apply_private_full(&s);
+                    }
+                }
+                other => panic!("unexpected frame op {other}"),
+            }
+        }
+    }
+}
+
+/// A room actor driven by a manually fed global ticker (mirrors the
+/// historical AOI harness), with the AOI logic.
 struct TestRoom {
     tick_tx: broadcast::Sender<TickInfo>,
     control: Mailbox<RoomControl>,
@@ -124,7 +195,7 @@ impl TestRoom {
 }
 
 async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) {
-    let msg = gsb_game::game::MoveTo { x, y };
+    let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
             conn,
@@ -135,42 +206,20 @@ async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) 
         .expect("action channel alive");
 }
 
-/// Advance `ticks` steps, draining each connection's out channel after every
-/// tick (so the bounded channel never backs up) and remembering the latest
-/// WORLD_SNAPSHOT wire-id set seen per connection.
-async fn advance(
-    room: &mut TestRoom,
-    a: &mut mpsc::Receiver<FrameBatch>,
-    b: &mut mpsc::Receiver<FrameBatch>,
-    c: &mut mpsc::Receiver<FrameBatch>,
-    ticks: u32,
-) -> (BTreeSet<u64>, BTreeSet<u64>, BTreeSet<u64>) {
-    let mut la = BTreeSet::new();
-    let mut lb = BTreeSet::new();
-    let mut lc = BTreeSet::new();
+/// Advance `ticks` steps, draining each connection's out channel after
+/// every tick (so the bounded channel never backs up); every batch is
+/// applied to that connection's client view.
+async fn advance(room: &mut TestRoom, conns: &mut [Conn], ticks: u32) {
     for _ in 0..ticks {
         room.tick();
         // Yield so the room (same runtime) finishes this step's fan-out.
         tokio::time::sleep(Duration::from_millis(1)).await;
-        // Drain each connection's out channel (so the bounded channel never
-        // backs up), remembering the latest WORLD_SNAPSHOT per connection.
-        while let Ok(batch) = a.try_recv() {
-            if let Some(ids) = snap_ids(&batch) {
-                la = ids;
-            }
-        }
-        while let Ok(batch) = b.try_recv() {
-            if let Some(ids) = snap_ids(&batch) {
-                lb = ids;
-            }
-        }
-        while let Ok(batch) = c.try_recv() {
-            if let Some(ids) = snap_ids(&batch) {
-                lc = ids;
+        for c in conns.iter_mut() {
+            while let Ok(batch) = c.rx.try_recv() {
+                c.apply_batch(&batch);
             }
         }
     }
-    (la, lb, lc)
 }
 
 #[tokio::test]
@@ -180,21 +229,30 @@ async fn aoi_room_fanout_and_cell_transition() {
     let c_a = ConnectionId(1);
     let c_b = ConnectionId(2);
     let c_c = ConnectionId(3);
-    let (a_id, mut a_rx, a_act) = room.join(c_a).await;
-    let (b_id, mut b_rx, b_act) = room.join(c_b).await;
-    let (c_id, mut c_rx, c_act) = room.join(c_c).await;
+    let (a_id, a_rx, a_act) = room.join(c_a).await;
+    let (b_id, b_rx, b_act) = room.join(c_b).await;
+    let (c_id, c_rx, c_act) = room.join(c_c).await;
     assert_ne!(a_id, b_id);
     assert_ne!(b_id, c_id);
     assert_ne!(a_id, c_id);
 
-    // Place A (0,0) and B (15,0) in the same cell Cell(0,0); C (45,0) in the
-    // far cell Cell(2,0) — outside each other's 3×3 blocks (cell_size 20).
-    move_to(&a_act, c_a, 0, 0).await;
-    move_to(&b_act, c_b, 15, 0).await;
-    move_to(&c_act, c_c, 45, 0).await;
-    let (a_ids, b_ids, c_ids) = advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 500).await;
+    // A (0,0) and B (15,0) share Cell(0,0); C (45,0) is in the far cell
+    // Cell(2,0) — outside each other's 3×3 blocks (cell_size 20).
+    let mut conns = vec![
+        Conn::new(a_rx, a_act),
+        Conn::new(b_rx, b_act),
+        Conn::new(c_rx, c_act),
+    ];
+    move_to(&conns[0].actions, c_a, 0, 0).await;
+    move_to(&conns[1].actions, c_b, 15, 0).await;
+    move_to(&conns[2].actions, c_c, 45, 0).await;
+    advance(&mut room, &mut conns, 500).await;
 
-    // Same-cell co-residents are visible; the far cell is not.
+    // Same-cell co-residents are visible; the far cell is not (the
+    // clients' HELD views — the delta stream's observable).
+    let a_ids = conns[0].view.ids();
+    let b_ids = conns[1].view.ids();
+    let c_ids = conns[2].view.ids();
     assert!(a_ids.contains(&a_id) && a_ids.contains(&b_id), "A sees B: {a_ids:?}");
     assert!(!a_ids.contains(&c_id), "A does not see far C: {a_ids:?}");
     assert!(b_ids.contains(&b_id) && b_ids.contains(&a_id), "B sees A: {b_ids:?}");
@@ -206,14 +264,24 @@ async fn aoi_room_fanout_and_cell_transition() {
     );
 
     // Cell transition: A moves into C's cell (45,0).
-    move_to(&a_act, c_a, 45, 0).await;
-    let (a_ids2, b_ids2, c_ids2) = advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 300).await;
+    move_to(&conns[0].actions, c_a, 45, 0).await;
+    advance(&mut room, &mut conns, 300).await;
 
     // A is now co-resident with C (each sees the other), and B — still in
-    // Cell(0,0) — no longer sees A. A's wire identity is unchanged across the
-    // cell move (the identity invariant).
-    assert!(a_ids2.contains(&a_id) && a_ids2.contains(&c_id), "A now sees C: {a_ids2:?}");
-    assert!(c_ids2.contains(&c_id) && c_ids2.contains(&a_id), "C now sees A: {c_ids2:?}");
+    // Cell(0,0) — no longer sees A (the entity exit was applied). A's
+    // wire identity is unchanged across the cell move (the identity
+    // invariant).
+    let a_ids2 = conns[0].view.ids();
+    let b_ids2 = conns[1].view.ids();
+    let c_ids2 = conns[2].view.ids();
+    assert!(
+        a_ids2.contains(&a_id) && a_ids2.contains(&c_id),
+        "A now sees C: {a_ids2:?}"
+    );
+    assert!(
+        c_ids2.contains(&c_id) && c_ids2.contains(&a_id),
+        "C now sees A: {c_ids2:?}"
+    );
     assert!(!b_ids2.contains(&a_id), "B no longer sees A after it left: {b_ids2:?}");
     assert!(
         a_ids2.contains(&a_id),

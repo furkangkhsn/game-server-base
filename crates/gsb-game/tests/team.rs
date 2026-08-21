@@ -127,7 +127,7 @@ impl TestRoom {
 }
 
 async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) {
-    let msg = gsb_game::game::MoveTo { x, y };
+    let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
             conn,

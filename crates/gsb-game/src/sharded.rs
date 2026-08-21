@@ -156,6 +156,11 @@ pub struct ShardedRoom {
     last: HashMap<u64, (i32, i32)>,
     /// Entity records encoded during the most recent broadcast phase.
     encoded: u64,
+    /// Per-connection input sequence state (strategy-independent; see
+    /// `crate::common::ingest` / `emit_ack`). The connection stays bound
+    /// to this shard even if its entity migrates (its input is routed
+    /// through this shard's room), so the session lives here.
+    input: HashMap<ConnectionId, crate::common::InputState>,
 }
 
 impl ShardedRoom {
@@ -199,6 +204,7 @@ impl ShardedRoom {
             border_cache: Vec::new(),
             last: HashMap::new(),
             encoded: 0,
+            input: HashMap::new(),
         }
     }
 
@@ -302,6 +308,9 @@ impl ShardLogic<World> for ShardedRoom {
         let mut snap = crate::game::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
         };
         // Deterministic payload order (sort by wire — the own records are
         // in query order and the borrowed are already sorted; a single
@@ -345,6 +354,7 @@ impl ShardLogic<World> for ShardedRoom {
         self.entity_conn.insert(entity, conn);
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
+        self.input.insert(conn, crate::common::InputState::default());
         wire
     }
 
@@ -357,12 +367,21 @@ impl ShardLogic<World> for ShardedRoom {
                 self.own_wires.remove(&wire.get());
             }
             self.entity_conn.remove(&entity);
+            self.input.remove(&conn);
             world.despawn(entity);
         }
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::ingest(&self.conn_entity, world, actions)
+        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+    }
+
+    /// The per-connection private frame: the pending input
+    /// acknowledgment (Section A) — the shard's snapshots are full,
+    /// self-contained (one group per shard), so there is nothing
+    /// per-connection to deliver besides the ack.
+    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        crate::common::emit_ack(&mut self.input, conn, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

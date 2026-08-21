@@ -53,9 +53,22 @@ actor'üne bölünür, entity'ler sınırda migrasyonla taşınır (tek
 sahip değişmezi, 1-tick hizalama, range-partitioned wire kimliği,
 iki-tablo epoch şeması); ölçümle: 10k bağlantıda tek odanın
 aştığı adım-duvarı `sharded N=4/8` aşılmaz, bedel ~1,4× sunucu CPU
-(aşağıda, "Kapatılanlar (oda segmentasyonu turu)").
-Test 58 → 83 → **97** (97/97 yeşil +1 var olan `#[ignore]`'li gsb-lint
-doctest; hiçbir eski test silinmedi/ihmal edilmedi).
+(aşağıda, "Kapatılanlar (oda segmentasyonu turu)"); **input sıralama +
+onay** kuruldu — istemci girdileri oturum başına numaralandırıldı
+(yüksek-su kuralı), sunucu işlediği son sırayı bağlantı başına private
+frame'le onayladı (işleme işareti — teslim garantisi taşıma
+katmanında kaldı); ve **`spatial` stratejisi delta kodlamaya**
+geçti — kodlama birimi grup değil hücre (hücre başına tick başına bir
+kodlama, grup = kitle), full/delta (grup, hücre) başına, keepalive'da
+taze full (yakınsama garantisi), geç girişte tek seferlik private full;
+istemci gap kuralı wire kuantizasyonu bulgusuyla birlikte belirlendi
+(akış olay-odaktır: gap normaldir, delta üzerine uygulanır,
+baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77×
+az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
+~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
+(delta yayın + input sıralama turu)").
+Test 58 → 83 → 97 → **111** (111/111 yeşil +1 var olan `#[ignore]`'li
+gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
@@ -1779,6 +1792,207 @@ rustc 1.95.0 (koşular release).
   §12 metrik tablosuna `actions_dropped`/`actions_dropped_top`,
   `config.example.toml`'a üç yeni anahtar.
 
+## Kapatılanlar (delta yayın + input sıralama turu)
+
+### A — Input sıralama + onay (oyun bandında seq/ack)
+
+**Ne.** İstemci girdileri artık **oturum başına numaralıdır**
+(`MoveTo.seq`, `uint64`, 1'den başlar); oda, bağlantı başına iki u64'lik
+`InputState{hwm, acked}` tutar (yüksek su); sunucu, işlediği son sırayı
+bağlantının **private** frame'inde onaylar (`Private{ack: InputAck |
+snapshot: WorldSnapshot}` oneof'u, op 1004). Kural: `seq > hwm` → işle +
+`hwm = seq`; `seq ≤ hwm` → **sessizce at** (normal yarış — geç/dupl girdi —
+protokol ihlali değil, bütçe harcamaz); boşluk işareti engellemez
+(yüksek-su, ardışıklık değil); `seq = 0` = numaralandırma öncesi girdi
+(işlenir, hwm'yi ilerletmez, asla ack'lenmez — eski istemci geri
+uyumluluğu). Rejoin'de **iki taraf sıfırdan** (sunucu `on_join`'da
+sıfırlar; yoksa yeni istemci'nin seq 1'i eski hwm'nin altında kalır ve
+kalıcı olarak atılırdı). Tick başına bağlantı başına **en fazla bir
+private frame**: full gelirse ack bir tick ertelenir (full kazanır).
+Test: `tests/input_ack.rs` (4): **ack monoton ilerler ve sunucunun
+işlediğinden fazlasını asla ack'lemez** (spec'in gerekli testi,
+gittikçe büyüyerek 5 numaralı girdiyle doğrulanır), dupl girdi entity'yi
+geri döndürmez + boşluk işareti engellemez, rejoin oturumu sıfırlar,
+numaralandırmasız girdi işlenir ama asla ack'lenmez.
+
+**Kapanan kusur sınıfı.** Dupl/geç girdi entity'yi sessizce **geriye**
+taşıyabiliyordu (istemci retry'ı, yeniden bağlanma sırasında kuyruktaki
+eski girdi); rejoin'de istemcinin prediction'ı sunucunun neredeyse
+uzlaştığını bilecek **mutabakat noktası** yoktu. Onay bir **işleme
+işareti**dir (prediction mutabakatı), teslim garantisi değil — teslim
+garantisi taşıma katmanındadır (DESIGN §14.2).
+
+**Elenen alternatifler.** (1) *Ardışıklık tabanlı onay* (istemci, boşluk
+dolana kadar bekler) — kayıp-toleranslı oyun bandında işareti **kayıba
+bloke** eder; "kayıp paket = bir kademe bayatlık" kabulüyle çelişir ve
+rUDP oyun bandında girdi kaybı zaten meşrudur. (2) *Taşıma katmanında
+(rUDP kontrol bandı) seq/ack* — kontrol bandının işi zaten öyle (AUTH/
+JOIN/LEAVE/HEARTBEAT); girdi işareti **oyun** anlamındadır (hangi girdi
+dünyada uygulandı?) ve oyun bandının rejoin/loss toleransı içinde
+yaşamalıdır; kontrol bandına taşımak istemciye oyun durumunu taşıma
+zamanlamasını taşımadan işe yaramaz. (3) *Seq'siz statüko* — kapanan
+kusur sınıfı; ayrıca "işlediğinden fazlasını asla ack'lemez" testinin
+konusu olan sınıf hiç ifade edilemezdi. (4) *Bağlantı başına input
+tamponu + yeniden işleme* — §14.1 ilkesine (bağlantı başına durum yok)
+açık ihlal; tampon + zamanlayıcı = ayrı mimari.
+
+### B — Hücre = kodlama birimi + delta (`spatial` stratejisi)
+
+**Ne.** `spatial` stratejisinin snapshot'ları delta kodlandı: kodlama
+birimi **grup değil hücredir**. Oda, tick başına tüm hücrelerin
+(önceki, güncel) bucket çiftine bakar (iki bucket haritası **rotasyonla**
+döner — kopya yok) ve hücre başına bir parça üretir
+(`Silent | Exited | Appeared | Delta`), dondurulmuş `Bytes` olarak
+önbelleğe alır (tick başına hücre başına **bir kez** kodlama). Grup bir
+**kitle**dir: grubun paketi, gördüğü (3×3) hücrelerin parçalarının
+birleşimidir — referansla paylaşım (encode-once/share-bytes omurgası
+aynen, §14.1). full/delta kararı **(grup, hücre) başınadır**:
+yeni doğan grup bir kez full (delta=false); devam eden grup delta
+(delta=true). **Delta değişmezi:** bir hücrenin deltası
+`içerik(şimdi) vs içerik(önceki tick)` — gruptan bağımsız, saf hücre
+fonksiyonu; yerleşik grubun istemcileri her zaman önceki tick'in içerik
+ile senkron olduğundan (indüksiyon — DESIGN §8.1) grup-başına defter
+gerekmez. Paket içi sıra sabit: `removed` (entity çıkışları) →
+`cell_exits` (hücre çıkışları) → `entities` (upsert'ler) — entity iki
+görünen hücre arasında geçerken **kaynağındaki hücre** çıkışı raporlar
+(hücre-yerel, ucuz); boşalan hücre **tek** `CellExit` kaydıdır
+(50 entity'li hücre = 1 kayıt). `delta` bayrağı modu wire'da ayırt
+edilir kılar (yanlış-mod istemci sessizce yanlış uygulamaz).
+
+**Geç giriş / grup geçişi:** baseline'ı olmayan yeni grup üyesi bir kez
+**private full** alır (aynı batch'te, grubun gap'de bıraktığı delta'dan
+hemen sonra); istemci bunu **koşulsuz** uygular (grup akışının ayrı bir
+akımı — grup stream'inde seq mantığı dışında); grup o tick'ten sonra
+delta'da kalır. Testler: `late_join_sees_full_world_one_shot` +
+`late_joiner_receives_full_world_snapshot` (eski, hâlâ canlı) +
+`tests/delta_aoi.rs` (6, spec'in gerekli B testleri): **delta akışı ile
+full akışı aynı istemci görünümünde yakınsar**; hücre değiştiren entity
+**her** istemci pozisyonunda (iki hücreyi de gören / kaynak-tek /
+hedef-tek) hayaletsiz + kopyasız (tick-tick değişmezi); hücre grubun
+görüşünden çıkınca entity'ler istemci tarafında **gerçekten silinir**
+(tek `CellExit`, yeniden taşınmaz); yarıda giren istemci **tek seferlik
+full** ile tüm dünyayı görür (grup delta'da kalır — küçük bir hareketin
+delta ile taşındığı ispatlanır); delta kaybı **keepalive periyodu
+içinde** iyileşir (ölçülen sınır: kayıp bitimi + 31 tick; iyileşen
+paketin TAZE full olduğu doğrulanır); paket modu wire'da kendi kendini
+tanıtır (aktif + sessiz grupta iki mod da görülür). `tests/aoi.rs`
+(eski "son snapshot'ın id seti" gözlemi) delta stream'inde geçerli
+olmadığından **istemci-VIEW gözlemine** yazıldı (aynı amaçlar: fanout /
+hücre geçişi / kimlik değişmezi).
+
+**Keepalive kararı (spatial):** her keep tick'inde (vars. 30 tick) her
+grup — aktif olsun ya da sessiz — **taze full** gönderir; aktif grupta
+o tick'in delta'sının yerine geçer. *Elenen:* (a) *son paketi yeniden
+gönder* (eski full-snapshot davranışı) — delta modda anlamsız: delta
+uygulanmadıysa bayattır, uygulandıysa bilgi taşımaz; kayıp iyileşmez.
+(b) *keepalive'sız* — delta kaybı sınırsız bayatlık; resync istemi ayrı
+bir protokol (istemci-sunucu istek/yani await — oda tick gövdesine
+await eklenemez). (c) *sadece sessiz gruplara full* — aktif gruptaki
+istemciler de kayıp yaşar (kayıp grubun aktifliğine bağlı değildir).
+
+**Sis güvenlik parametresi:** mahalle **içerikten bağımsız** 3×3'tür —
+içerik bazlı mahalle ("komşu hücrede entity yoksa görünmez") gizlilik
+kararını dünya durumuna bağlar ve "kim görünüyor"u içerikle karıştırır.
+Tek güvenlik düğmesi `cell_size`: hücre büyüdükçe mahalledeki
+potansiyel entity sayısı artar (küçük = sıkı sis). **Oyuncu-bazlı
+aydınlatılmış hücre saklaması** (aynı hücrede bile ışık konisi) bu turun
+kapsamı dışında — bu maddenin devamı olarak P2'ye alındı (aşağı).
+
+### C — Wire kuantizasyonu bulgusu + `still` profili + ölçüm
+
+**Bulgu (ölçüm tuzağı + gerçek kusur).** Ring/spread profillerinde her
+entity her tick hareket eder — delta'nın kazancı bu profillerde
+görünmez (spec uyarısı; ölçüm için **üçüncü profil** eklendi). Daha
+kötüsü: hareket 10 u/sn, 30 Hz → tick başına 1/3 wire birimi; wire
+konumlar i32 (kesik) → hareket eden entity bile wire konumunu her ~3
+tick'te bir değiştirir → grup stream'i **sıra-düzgün değildir** (seq =
+oda tick'i; frame yalnızca değişimde). İlk istemci kuralı ("gap'te atla,
+tam gelene kadar") bu yüzünden **dejeneratif**ti: kayıp testi, sıfır
+paket kaybıyla delta'ların ~2/3'ünü "gap" düşürüyordu — istemci her
+sessizlikten sonra 1 Hz full'ı bekliyordu, delta yolu işlevsizdi.
+
+**Çözüm (istemci kuralı):** seq boşluğu **kayıp kanıtı değil, normal
+durum** — akış olay-odaktır. İstemci baseline'ı olan delta'yı boşluğa
+rağmen **üzerine uygular** (kayıtlar mutlak + idempotent: konum
+upsert'i, mutlak id ile unutma, mutlak hücre ile unutma; bayat view
+üzerinde güvenli — en kötü hal 1 keepalive periyoduna kadar bayatlık,
+kaçırılan çıkış geçici hayalet olabilir); yalnızca baseline'ı **olmayan**
+delta atılır (one-shot private full aynı batch'te iyileştirir).
+**Yakınsama garantisi keepalive full'ıdır** (bir periyotta tam durum),
+gap kuralı değil. *Elenen:* (a) *gap'te atla* (ilk uygulama — yukarıdaki
+dejenerasyon); (b) *seq = grup yayın sayacı* (boşlukları kaldırır gibi
+görünür ama loadgen `tick_hz_med`'ın (son_seq−ilk_seq)/Δt tanımını —
+seq = global tick indeksi kuralını — bozardı; saat ölçümü
+snapshot akışından gelir).
+
+**Üçüncü yük profili (`still`).** Kayıtların çoğunun **hareketsiz**
+olduğu dünya: `--profile still --still-frac F` (vars. 0.9) — id'nin
+**sınıflık basamağı** deterministik split (1% granüler, stagger'la aynı
+id-bazlı determinizm, her N'de oran tutar): still istemciler tam **bir**
+`MOVE_TO` gönderir (ring hedefine oturur, sonra sessiz), azınlık ring
+hedefini kovalar (eski `Ring` şekli). `ring`/`spread` **değişmedi** —
+orijinal ölçüm tabanı aynen geçerli.
+
+**Ölçülen (N=500, 30 sn, `--visibility spatial`, in-proc; eski =
+`f467aff` + minimal still profili yaması [yalnız istemci hareket
+şekli — eski wire'da seq yok], yeni = bu commit):** makine 32 thread,
+AMD Ryzen 9 7950X 16C, 124 GiB, cargo/rustc 1.95.0, **debug** profil,
+in-proc (istemciler sunucuyla CPU paylaşır). Ham RESULT satırları:
+
+```
+# ESKİ, still --still-frac 0.90 (f467aff + still yaması)
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=446300 snap_per_client_p50=895.0 tick_hz_med=29.98 client_in_bps=22138489 client_out_bps=3533 out_bps_per_conn=44131 moves=9274 errors=0 steps=900 server_hz=30.00 step_p50_us=3126 step_max_us=7842 step_over_budget_pct=0.0 dropped=45 late_max_us=15633 peak_payload_b=2690 snap_overflows=10513 records_per_tick=2884.5 overlap_x=5.77 server_in_bps=2097 server_out_bps=22065275 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0
+# YENİ, still --still-frac 0.90
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=444737 snap_per_client_p50=894.0 tick_hz_med=30.00 client_in_bps=3696869 client_out_bps=4269 out_bps_per_conn=7218 moves=9355 errors=0 steps=900 server_hz=30.01 step_p50_us=6250 step_max_us=8527 step_over_budget_pct=0.0 dropped=120 late_max_us=6164 peak_payload_b=2761 snap_overflows=337 records_per_tick=43.1 overlap_x=0.09 server_in_bps=2822 server_out_bps=3609102 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=9335 ack_processed_max=179 ack_lag_max_ms=118 fulls=18121 private_fulls=3603 deltas=429809 gap_drops=410 view_size=83657 still_frac=0.9
+# ESKİ, still --still-frac 0.95
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=442315 snap_per_client_p50=893.0 tick_hz_med=29.99 client_in_bps=21459174 client_out_bps=2088 out_bps_per_conn=42794 moves=4908 errors=0 steps=900 server_hz=30.00 step_p50_us=3126 step_max_us=5992 step_over_budget_pct=0.0 dropped=82 late_max_us=16200 peak_payload_b=2692 snap_overflows=10503 records_per_tick=2791.5 overlap_x=5.58 server_in_bps=1233 server_out_bps=21397061 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0
+# YENİ, still --still-frac 0.95
+RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 connected=500 joined=500 left=500 snap_total=438368 snap_per_client_p50=889.0 tick_hz_med=30.00 client_in_bps=3108948 client_out_bps=2473 out_bps_per_conn=6046 moves=4944 errors=0 steps=900 server_hz=30.00 step_p50_us=6250 step_max_us=8411 step_over_budget_pct=0.0 dropped=88 late_max_us=11482 peak_payload_b=2678 snap_overflows=354 records_per_tick=36.2 overlap_x=0.07 server_in_bps=1613 server_out_bps=3023094 peak_conns=500 metrics_dropped=0 profile=still offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=4939 ack_processed_max=179 ack_lag_max_ms=105 fulls=17324 private_fulls=2695 deltas=423373 gap_drops=366 view_size=80103 still_frac=0.95
+```
+
+Özet (profili adı: `still`; oran = `still-frac`):
+
+| still_frac | kayıt/tick (eski→yeni) | bant/conn (eski→yeni) | adım p50 (eski→yeni) | adım max | bütçe aşımı |
+|---|---|---|---|---|---|
+| 0.90 | 2 884 → **43** (**67×**) | 44 131 → **7 218** B/sn (**6.1×**) | 3 126 → 6 250 µs | 7 842 / 8 527 µs | %0 / %0 |
+| 0.95 | 2 791 → **36** (**77×**) | 42 794 → **6 046** B/sn (**7.1×**) | 3 126 → 6 250 µs | 5 992 / 8 411 µs | %0 / %0 |
+
+**Kazancın hareketsizlik oranına göre fonksiyonu:** eski yol oranla
+yaklaşık sabit (tam 3×3 her tick yeniden kodlanır: 2 884 → 2 791
+kayıt/tick, %3) — delta yolu oranın kendisiyle ölçeklenir
+(43.1 → 36.2, %16): **hareketsizlik arttıkça kazanç büyür** (oran 1.0'da
+teorik sınır = keepalive full'ları + doğum full'ları; kayıt/tick → ~0).
+Dürüst takas: yeni yolun tick gövdesi hücre başına fark taraması yapıyor
+(bucket rotasyonu + (önceki, güncel) sınıflandırması + parça
+önbelleği) — adım p50 ~2× (3 126 → 6 250 µs), her iki versiyonda da
+bütçenin %19'undan az; kodlama ~1/67–1/77 + bant ~6–7×. İstemci tarafı
+yeni sayaçları: `fulls`/`private_fulls` (private-full sıklığı: 0.90'da
+500 istemci × 30 sn'de 3 603 = istemci başına ~7 — warmup'taki grup
+geçişleri; still steady-state'te sıfıra gider), `deltas`, `gap_drops`
+(baseline'sız atımlar — geç giriş/crossing'lerdeki grup delta'ları;
+paket kaybı göstergesi **değildir**, bkz. C kuralı), `acks` /
+`ack_processed_max` / `ack_lag_max_ms` (input onayı), `view_size`
+(istemci VIEW'larının toplam entity adedi — yakınsama gözlemi).
+`ring`/`spread` (her entity her tick hareket): kazanç **yok** —
+orijinal taban aynen (önceki ölçümler bu commit'te yeniden alınamaz
+durumda değil — profiller değişmedi).
+
+### Tur özeti (yeni testler, hiçbir eski test silinmedi/ihmal edilmedi)
+
+- `tests/input_ack.rs` — 4 yeni (A maddesi).
+- `tests/delta_aoi.rs` — 6 yeni (B maddesi; spec'in gerekli B testleri).
+- `tests/aoi.rs` — delta stream'inde geçersiz kalan "son snapshot id
+  seti" gözlemi **istemci-VIEW gözlemine** yazıldı (aynı amaçlar,
+  aynı aslar: fanout/hücre geçişi/kimlik değişmezi).
+- `gsb-game` lib içi AOI testleri delta davranışıyla uyumlu hale
+  getirildi (private full'ın wire format düzeltmesi dahil — eski ham
+  snapshot baytları yerine `Private{snapshot}` oneof sarmalayıcısı).
+- Eski testlerin hepsi koştu: 97 → **111** (111/111 yeşil + 1 var
+  olan `#[ignore]`'li gsb-lint doctest). `cargo clippy --workspace
+  --all-targets` temiz.
+
+---
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
@@ -1803,9 +2017,13 @@ rustc 1.95.0 (koşular release).
   bağlantı sayısı limiti, aksiyon rate-limit.
 - [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
   simülasyon: 30 Hz × 10 u/sn'de tick başına 0.33 birim → istemci 3
-  tick'te bir değişim görür, `bump()` her tick aynı tam sayıyı yayınlar
-  (bant israfı + merdivenlenme). Float ya da mm cinsinden int kararı
-  Unity tarafıyla birlikte (proto değişimi).
+  tick'te bir değişim görür (delta turunda bu kuantizasyon **gap
+  kuralına dâhil edildi**: wire konumu değişmeyen tick'ler grup
+  stream'inde normal boşluktur — istemci delta'yı üzerine uygular,
+  yakınsama garantisi keepalive full'ıdır; "Kapatılanlar (delta yayın
+  + input sıralama turu)" C maddesi). `bump()` her tick aynı tam sayıyı
+  yayınlar (bant israfı + merdivenlenme). Float ya da mm cinsinden int
+  kararı Unity tarafıyla birlikte (proto değişimi).
 - [x] **Tick/Action kanal ayrımı** — broadcast tick + per-user action +
   control kanalı olarak çözüldü (bkz. Kapatılanlar). Kalan parça: bağlantı
   başına girdi rate-limit (güvenlik maddesi).
@@ -1832,11 +2050,21 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   ölçüldü**: p50 bütçeyi **9k-10k arasında** aşıyor (10k: ≥50 ms, %54,8
   adım bütçeli üstte, `server_hz` 23,2); 10k'da sunucu çekirdek havuzu
   **%25** dolu → duvar **tek room actor'ünün serisel adım yolu**.
-  `Visibility` trait'i gerekmedi (C maddesi). Kalan: **oda segmentasyonu**
-  (10k+ duvarı için — artık net ölçülmüş: ek çekirdek değil, oda
-  paralelliği) ve "birim başına tek kodlama" (D3'te eşik altı bulundu;
-  overlap_x ölçümü eşiği aşarsa yeniden açılır).
-- [ ] **Delta yayın** — son snapshot farkı; bant kazancı.
+  `Visibility` trait'i gerekmedi (C maddesi). **Kalan maddeler
+  kapatıldı:** oda segmentasyonu → `sharded` (oda segmentasyonu turu,
+  §8.2); "birim başına tek kodlama" → delta turunda hücre = kodlama
+  birimi olarak gerçekleşti (overlap_x: still 0.90'da 5.77 → 0.09;
+  "Kapatılanlar (delta yayın + input sıralama turu)").
+- [x] **Delta yayın** — kapatıldı (delta turu): `spatial` stratejisi,
+  son snapshot farkı değil **hücre başına içerik farkı** (kodlama birimi
+  hücre, grup = kitle); `still` profiliyle ölçülen kazanç: kayıt/tick
+  67-77×, bant/conn 6-7× (hareketsizlik oranıyla artan), adım p50 ~2×,
+  bütçe aşımı %0. Detay + elenen alternatifler: "Kapatılanlar (delta
+  yayın + input sıralama turu)" B/C maddeleri. Kalan (genelleme notu):
+  birim = tam-görünürlük birimlerinin birleşimiyle ifade edilebilen
+  **en kaba** parçalama — `spatial`'da hücre; takım sisli/oyuncu-bazlı
+  aydınlatılmış hücre saklaması bu ilkenin bir sonraki adımı (P2,
+  aşağı).
 - [ ] **Registry şeritleme** — dispatcher tasarımı registry'yi bloke
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test
   gösterirse room bazlı parçalar. (İlk turda göstermedi: 1000

@@ -41,6 +41,7 @@
 //! state is task-local and returned through the JoinHandle — nothing
 //! shared.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -81,10 +82,22 @@ use gsb_core::metrics::{
 ///   "wide map"). The layout stays ~uniform over the whole run (the server
 ///   spawns entities with the same distribution, so there is no migration
 ///   artifact), which is the *sparse* layout a real MOBA arena resembles.
+/// - [`Profile::Still`]: the *stillness* profile (the delta measurement):
+///   the clients are split deterministically by id (the same id-based
+///   determinism as the stagger) — the first `--still-frac` fraction is
+///   "still": it issues ONE `MOVE_TO` (a ring target, the historical
+///   profile's shape) and then stops sending entirely (its entity settles
+///   at the target and the world stands still); the moving minority chases
+///   the ring target as in `Ring`. The split is the id's hundredths digit
+///   (1% granularity, deterministic per id like the stagger), so the ratio
+///   holds for any client count. Both historical profiles move every
+///   entity every tick, so a delta strategy shows no gain on them — the
+///   stillness ratio is the axis on which the cell-encoded delta pays off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Profile {
     Ring,
     Spread,
+    Still,
 }
 
 impl Profile {
@@ -92,6 +105,7 @@ impl Profile {
         match s {
             "ring" => Some(Self::Ring),
             "spread" => Some(Self::Spread),
+            "still" => Some(Self::Still),
             _ => None,
         }
     }
@@ -117,6 +131,10 @@ struct Args {
     addr: Option<String>,
     /// The movement profile of this process's clients (see [`Profile`]).
     profile: Profile,
+    /// The stillness ratio of the `still` profile (0..=1): the fraction of
+    /// clients (deterministic per-id split) that settle once and stop
+    /// moving; the rest chase the ring target (`--still-frac`, default 0.9).
+    still_frac: f64,
     /// The map half-size for the `spread` profile's home distribution
     /// (must match the server's `spawn_half_size` so the spawn and the
     /// homes live on the same map).
@@ -222,9 +240,13 @@ Client options:
                             stateless cookie handshake, reliable control
                             band, loss-tolerant snapshot band; connect_ms
                             then measures the handshake
-  --profile ring|spread     movement profile (default ring — the historical
+  --profile ring|spread|still movement profile (default ring — the historical
                             clustered layout; spread = uniform over the
-                            ±spawn-half map, the sparse MOBA-like layout)
+                            ±spawn-half map, the sparse MOBA-like layout;
+                            still = a configurable stillness ratio: the still
+                            clients settle once, the minority moves)
+  --still-frac F            fraction of still clients for the still profile
+                            (default 0.9; deterministic per-id split)
   --spawn-half-size F       map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)
@@ -274,6 +296,7 @@ fn parse_args() -> Args {
         stagger_ms: 0.0,
         addr: None,
         profile: Profile::Ring,
+        still_frac: 0.9,
         spawn_half: 50.0,
         visibility: gsb_server::Visibility::default(),
         shard_count: 4,
@@ -322,7 +345,12 @@ fn parse_args() -> Args {
             "--addr" => args.addr = Some(v()),
             "--profile" => {
                 args.profile = Profile::parse(&v())
-                    .unwrap_or_else(|| panic!("--profile: expected ring|spread (try --help)"))
+                    .unwrap_or_else(|| panic!("--profile: expected ring|spread|still (try --help)"))
+            }
+            "--still-frac" => {
+                let f: f64 = v().parse().expect("number");
+                assert!((0.0..=1.0).contains(&f), "--still-frac must be in 0..=1");
+                args.still_frac = f;
             }
             "--spawn-half-size" => {
                 let s = v().parse().expect("number");
@@ -464,6 +492,28 @@ struct ClientReport {
     /// snapshot sequence is the global tick index.
     seq_first: Option<(u64, Instant)>,
     seq_last: Option<(u64, Instant)>,
+    /// Input acknowledgments received (Section A; the server's per-
+    /// connection high-water marks).
+    acks: u64,
+    /// The highest `processed_up_to` observed over all acks.
+    ack_processed_max: u64,
+    /// The worst ack lag in ms (send instant of the acked seq → ack
+    /// arrival; 0 when no numbered input was acked).
+    ack_lag_max_ms: u128,
+    /// Full snapshots applied to the client view (group frames with
+    /// `delta = false`, whatever their source: a fresh group's first
+    /// packet, a keep-alive full, or a one-shot private full).
+    fulls: u64,
+    /// One-shot private fulls received (`Private{snapshot}` — the late-
+    /// join / group-crossing baseline; a trigger-frequency measurement).
+    private_fulls: u64,
+    /// Delta snapshots applied (`delta = true`).
+    deltas: u64,
+    /// Deltas dropped (no baseline, or a sequence gap — a lost snapshot
+    /// before them; the loss-recovery counter, healed by the next full).
+    gap_drops: u64,
+    /// Entities in the client view at the end of the run.
+    view_size: u64,
 }
 
 /// The `spread` profile's deterministic home for client `id`: the SAME
@@ -488,7 +538,11 @@ struct ClientParams {
     move_ms: Duration,
     stagger_ms: f64,
     profile: Profile,
+    still_frac: f64,
     spawn_half: f32,
+    /// The AOI cell size (for the client view's `CellExit` handling;
+    /// ignored by the non-spatial strategies, whose snapshots are full).
+    cell_size: f32,
     deadline: Instant,
     /// Flood mode (the `--flood-id` client): after joining, write MOVE_TO
     /// in a tight loop until the deadline — the input-flood behaviour
@@ -527,6 +581,91 @@ fn wire_in_bytes(op: u16, payload_len: usize) -> u64 {
     (header + 2 + payload_len) as u64
 }
 
+/// The client-side world view the protocol prescribes (see the
+/// `WorldSnapshot` docs in `gsb_game/proto/game.proto`): a full REPLACES
+/// the view; a delta applies ON TOP in the fixed order `removed` →
+/// `cell_exits` → `entities` — even across a sequence gap (the stream is
+/// event-driven: a gap is normal, and the records are absolute, so a
+/// stale view is the worst case; the keep-alive full is the convergence
+/// guarantee); a delta with NO baseline at all (a fresh client) is
+/// DROPPED until the next full; a duplicate/stale sequence (<= the last
+/// accepted) is discarded. The cell of a stored position uses the server's own formula
+/// (floor of the WIRE coordinates / cell_size), so a `CellExit` record
+/// forgets exactly the entities the server considers to be in that cell.
+struct ClientView {
+    entities: HashMap<u64, (i32, i32)>,
+    last_seq: Option<u64>,
+    cell_size: f32,
+}
+
+/// The outcome of applying one snapshot (the report's counters).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Apply {
+    /// A full was applied (the view was replaced).
+    Full,
+    /// A delta was applied on top (consecutive or across a gap — the
+    /// stream is event-driven, so a gap is normal, not loss; the
+    /// keep-alive full is the convergence guarantee).
+    Delta,
+    /// A delta dropped with no baseline at all (a fresh client before
+    /// its first full — healed by the one-shot private full / the next
+    /// keep-alive full).
+    NoBaseline,
+    /// A duplicate/stale sequence: discarded (not an error).
+    Stale,
+}
+
+impl ClientView {
+    #[inline]
+    fn cell_of(x: i32, y: i32, cell_size: f32) -> (i32, i32) {
+        ((x as f32 / cell_size).floor() as i32, (y as f32 / cell_size).floor() as i32)
+    }
+
+    fn apply(&mut self, s: &gsb_game::game::WorldSnapshot) -> Apply {
+        if s.sequence <= self.last_seq.unwrap_or(0) {
+            return Apply::Stale;
+        }
+        if s.delta {
+            // A delta needs a baseline (a full applied before it); a
+            // sequence gap does NOT disqualify it (event-driven stream —
+            // see the message docs in `game.proto`).
+            if self.last_seq.is_none() {
+                return Apply::NoBaseline;
+            }
+            for &w in &s.removed {
+                self.entities.remove(&w);
+            }
+            for c in &s.cell_exits {
+                let cell = Self::cell_of(c.x, c.y, self.cell_size);
+                self.entities
+                    .retain(|_, (x, y)| Self::cell_of(*x, *y, self.cell_size) != cell);
+            }
+            for e in &s.entities {
+                self.entities.insert(e.entity, (e.x, e.y));
+            }
+            self.last_seq = Some(s.sequence);
+            return Apply::Delta;
+        }
+        self.entities.clear();
+        for e in &s.entities {
+            self.entities.insert(e.entity, (e.x, e.y));
+        }
+        self.last_seq = Some(s.sequence);
+        Apply::Full
+    }
+
+    /// The one-shot private full (a per-connection baseline reset — see
+    /// the `Private{snapshot}` docs in `game.proto`): applied
+    /// UNCONDITIONALLY, outside the group stream's sequence logic.
+    fn apply_private_full(&mut self, s: &gsb_game::game::WorldSnapshot) {
+        self.entities.clear();
+        for e in &s.entities {
+            self.entities.insert(e.entity, (e.x, e.y));
+        }
+        self.last_seq = Some(s.sequence);
+    }
+}
+
 async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     let mut rep = ClientReport {
         id,
@@ -549,6 +688,23 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         gave_up: 0,
         seq_first: None,
         seq_last: None,
+        acks: 0,
+        ack_processed_max: 0,
+        ack_lag_max_ms: 0,
+        fulls: 0,
+        private_fulls: 0,
+        deltas: 0,
+        gap_drops: 0,
+        view_size: 0,
+    };
+
+    // The client-side world view (the delta protocol's client half — see
+    // `ClientView`; fulls replace, deltas apply on top, gaps drop until
+    // the next full).
+    let mut view = ClientView {
+        entities: HashMap::new(),
+        last_seq: None,
+        cell_size: p.cell_size,
     };
 
     // Optional connect stagger (see `Args::stagger_ms`).
@@ -612,6 +768,22 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     let t_start = Instant::now();
     let mut last_move = t_start;
     let mut flooded = false;
+    // Section A: inputs are NUMBERED (monotonic from 1 per session); the
+    // server acks its per-connection high-water mark in the Private frame.
+    // `sent_at` keeps the send instant of seq N at index N-1 (for the
+    // ack-lag measurement) — one entry per numbered input, a few dozen
+    // per client per run.
+    let mut next_seq: u64 = 1;
+    let mut sent_at: Vec<Instant> = Vec::new();
+    // The still profile's deterministic per-id split (the same id-based
+    // determinism as the stagger, 1% granularity — the id's hundredths
+    // digit decides, so any client count gets the ratio): the first
+    // `still_frac` fraction of the ids is "still" — it issues ONE MOVE_TO
+    // (settling at a ring target) and then sends nothing more; the moving
+    // minority chases the ring target as in the historical profile.
+    let is_still =
+        p.profile == Profile::Still && (id % 100) as f64 / 100.0 < p.still_frac;
+    let mut settled = false;
     loop {
         let now = Instant::now();
         if now >= p.deadline {
@@ -619,55 +791,73 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
         if now.duration_since(last_move) >= p.move_ms {
             last_move = now;
-            let (tx, ty) = match p.profile {
-                // The historical profile (UNCHANGED — all previous
-                // measurements stay comparable): a circle of radius 40
-                // around the map center at 4 rad/s, phase-shifted per
-                // client (id-based offset so N entities do not move in
-                // lockstep). The targets outrun the entities, so the
-                // entities crowd the central band — the *clustered*
-                // layout.
-                Profile::Ring => {
-                    let angle =
-                        (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 4.0;
-                    (angle.cos() * 40.0, angle.sin() * 40.0)
-                }
-                // The *spread* profile: each client wanders a small
-                // circle (radius 20, 0.4 rad/s — the target stays
-                // reachable at 10 u/s, so the entity tracks it closely)
-                // around its deterministic home, uniform over the
-                // ±spawn_half map. The layout stays ~uniform over the
-                // whole run (the server spawns with the same
-                // distribution), so there is no migration artifact and
-                // the run is statistically steady from tick 1. This is
-                // the sparse, wide-map layout a real MOBA arena
-                // resembles — where team fog actually hides most
-                // enemies (the clustered profile hides none).
-                Profile::Spread => {
-                    let (hx, hy) = spawn_home(id, p.spawn_half);
-                    let w = (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 0.4;
-                    (hx + w.cos() * 20.0, hy + w.sin() * 20.0)
-                }
-            };
-            let msg = gsb_game::game::MoveTo {
-                x: tx as i32,
-                y: ty as i32,
-            };
-            let move_payload = msg.encode_to_vec();
-            rep.moves += 1;
-            match &mut wire {
-                Wire::Tcp { w, .. } => {
-                    let f = frame(gsb_game::op::MOVE_TO, &move_payload);
-                    rep.bytes_out += f.len() as u64;
-                    if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
-                        break; // peer gone
+            // A still client settles once: the first interval sends its
+            // only command, the rest of the run it is silent (that IS the
+            // profile — the majority of the world stands still).
+            if !(is_still && settled) {
+                settled = true;
+                let (tx, ty) = match p.profile {
+                    // The historical profile (UNCHANGED — all previous
+                    // measurements stay comparable): a circle of radius 40
+                    // around the map center at 4 rad/s, phase-shifted per
+                    // client (id-based offset so N entities do not move in
+                    // lockstep). The targets outrun the entities, so the
+                    // entities crowd the central band — the *clustered*
+                    // layout.
+                    Profile::Ring => {
+                        let angle = (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618)
+                            * 4.0;
+                        (angle.cos() * 40.0, angle.sin() * 40.0)
                     }
-                }
-                Wire::Udp(c) => {
-                    rep.bytes_out +=
-                        wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
-                    if c.send_frame(gsb_game::op::MOVE_TO, move_payload).await.is_err() {
-                        break; // session gone (the writer gave up)
+                    // The *spread* profile: each client wanders a small
+                    // circle (radius 20, 0.4 rad/s — the target stays
+                    // reachable at 10 u/s, so the entity tracks it closely)
+                    // around its deterministic home, uniform over the
+                    // ±spawn_half map. The layout stays ~uniform over the
+                    // whole run (the server spawns with the same
+                    // distribution), so there is no migration artifact and
+                    // the run is statistically steady from tick 1. This is
+                    // the sparse, wide-map layout a real MOBA arena
+                    // resembles — where team fog actually hides most
+                    // enemies (the clustered profile hides none).
+                    Profile::Spread => {
+                        let (hx, hy) = spawn_home(id, p.spawn_half);
+                        let w =
+                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 0.4;
+                        (hx + w.cos() * 20.0, hy + w.sin() * 20.0)
+                    }
+                    // The still profile's moving minority chases the ring
+                    // target (the historical profile's shape).
+                    Profile::Still => {
+                        let angle =
+                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 4.0;
+                        (angle.cos() * 40.0, angle.sin() * 40.0)
+                    }
+                };
+                let seq = next_seq;
+                next_seq += 1;
+                sent_at.push(now);
+                let msg = gsb_game::game::MoveTo {
+                    x: tx as i32,
+                    y: ty as i32,
+                    seq,
+                };
+                let move_payload = msg.encode_to_vec();
+                rep.moves += 1;
+                match &mut wire {
+                    Wire::Tcp { w, .. } => {
+                        let f = frame(gsb_game::op::MOVE_TO, &move_payload);
+                        rep.bytes_out += f.len() as u64;
+                        if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
+                            break; // peer gone
+                        }
+                    }
+                    Wire::Udp(c) => {
+                        rep.bytes_out +=
+                            wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
+                        if c.send_frame(gsb_game::op::MOVE_TO, move_payload).await.is_err() {
+                            break; // session gone (the writer gave up)
+                        }
                     }
                 }
             }
@@ -719,9 +909,58 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                         rep.seq_first = Some((m.sequence, at));
                     }
                     rep.seq_last = Some((m.sequence, at));
+                    // The client half of the delta protocol (see
+                    // `ClientView`): apply it, whatever the strategy's
+                    // mode (a full-snapshot room's frames are all fulls).
+                    match view.apply(&m) {
+                        Apply::Full => rep.fulls += 1,
+                        Apply::Delta => rep.deltas += 1,
+                        Apply::NoBaseline => rep.gap_drops += 1,
+                        Apply::Stale => {}
+                    }
                 }
                 Err(_) => rep.errors += 1,
             },
+            gsb_game::op::PRIVATE => {
+                let pr = match gsb_game::game::Private::decode(&payload[..]) {
+                    Ok(pr) => pr,
+                    Err(_) => {
+                        rep.errors += 1;
+                        continue;
+                    }
+                };
+                match pr.payload {
+                    Some(gsb_game::game::private::Payload::Ack(ack)) => {
+                        // Section A: the server's per-connection input
+                        // high-water mark. `now` is this loop iteration's
+                        // instant — the ack's lag is measured against the
+                        // send instant of the acked seq (index seq-1).
+                        rep.acks += 1;
+                        rep.ack_processed_max = rep.ack_processed_max.max(ack.processed_up_to);
+                        if ack.processed_up_to > 0 {
+                            let i = ack.processed_up_to as usize - 1;
+                            if i < sent_at.len() {
+                                let lag = Instant::now().duration_since(sent_at[i]);
+                                rep.ack_lag_max_ms = rep.ack_lag_max_ms.max(lag.as_millis());
+                            }
+                        }
+                    }
+                    Some(gsb_game::game::private::Payload::Snapshot(sn)) => {
+                        // A one-shot FULL view (a fresh group member — late
+                        // join or a group crossing). It MUST be a full: a
+                        // delta here would be a protocol error, and a
+                        // wrong-mode client must not silently misapply it.
+                        if sn.delta {
+                            rep.errors += 1;
+                        } else {
+                            rep.private_fulls += 1;
+                            rep.fulls += 1;
+                            view.apply_private_full(&sn);
+                        }
+                    }
+                    None => rep.errors += 1,
+                }
+            }
             op::base::ERROR => {
                 let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
                 match e.code {
@@ -740,13 +979,19 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
     }
 
+    // The final client view size (the delta protocol's end state).
+    rep.view_size = view.entities.len() as u64;
+
     if flooded {
         // The input flood: write MOVE_TO as fast as the socket accepts,
         // until the deadline. The server-side chain (reader pump → conn
         // inbox → conn actor → action channel → room pull budget) bounds
         // what actually reaches the tick; the excess is dropped on the
-        // flooder's OWN full action channel (attributed to it).
-        let msg = gsb_game::game::MoveTo { x: 0, y: 0 };
+        // flooder's OWN full action channel (attributed to it). The flood
+        // stays UNNUMBERED (seq 0, legacy): it probes the drop-attribution
+        // guardrails, not the sequence rule (a numbered flood would only
+        // spin the high-water mark).
+        let msg = gsb_game::game::MoveTo { x: 0, y: 0, seq: 0 };
         match &mut wire {
             Wire::Tcp { w, .. } => {
                 let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
@@ -1045,8 +1290,9 @@ async fn run(args: Args) {
         },
         args.max_snapshot_bytes,
         match args.profile {
-            Profile::Ring => "ring",
-            Profile::Spread => "spread",
+            Profile::Ring => "ring".to_string(),
+            Profile::Spread => "spread".to_string(),
+            Profile::Still => format!("still(={:.2})", args.still_frac),
         }
     );
 
@@ -1065,7 +1311,9 @@ async fn run(args: Args) {
         move_ms: args.move_ms,
         stagger_ms: args.stagger_ms,
         profile: args.profile,
+        still_frac: args.still_frac,
         spawn_half: args.spawn_half,
+        cell_size: args.cell_size,
         deadline,
         flood: false,
         kind: args.transport,
@@ -1094,8 +1342,10 @@ async fn run(args: Args) {
         for r in &reports {
             println!(
                 "CLIENT id={} connected={} connect_ms={} joined={} left={} snapshots={} \
-                 bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
-                 budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} hz={}",
+                  bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
+                  budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} \
+                  acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} private_fulls={} \
+                  deltas={} gap_drops={} view_size={} hz={}",
                 r.id,
                 r.connected,
                 r.connect_ms,
@@ -1113,6 +1363,14 @@ async fn run(args: Args) {
                 r.dup_in,
                 r.oob_dropped,
                 r.gave_up,
+                r.acks,
+                r.ack_processed_max,
+                r.ack_lag_max_ms,
+                r.fulls,
+                r.private_fulls,
+                r.deltas,
+                r.gap_drops,
+                r.view_size,
                 match measured_hz(r) {
                     Some(h) => format!("{h:.3}"),
                     None => "-".to_string(),
@@ -1367,6 +1625,14 @@ fn print_report(
     let dup_in: u64 = reports.iter().map(|r| r.dup_in).sum();
     let oob_dropped: u64 = reports.iter().map(|r| r.oob_dropped).sum();
     let gave_up: u64 = reports.iter().map(|r| r.gave_up).sum();
+    let acks: u64 = reports.iter().map(|r| r.acks).sum();
+    let ack_processed_max: u64 = reports.iter().map(|r| r.ack_processed_max).max().unwrap_or(0);
+    let ack_lag_max_ms: u128 = reports.iter().map(|r| r.ack_lag_max_ms).max().unwrap_or(0);
+    let fulls: u64 = reports.iter().map(|r| r.fulls).sum();
+    let private_fulls: u64 = reports.iter().map(|r| r.private_fulls).sum();
+    let deltas: u64 = reports.iter().map(|r| r.deltas).sum();
+    let gap_drops: u64 = reports.iter().map(|r| r.gap_drops).sum();
+    let view_size_total: u64 = reports.iter().map(|r| r.view_size).sum();
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
 
@@ -1420,6 +1686,16 @@ fn print_report(
         in_bytes / 1024,
         in_bytes as f64 / 1024.0 / dur,
         out_bytes / 1024
+    );
+    // The delta protocol + input-ack picture (client side): how the
+    // snapshot stream split into fulls (fresh-group packets, keep-alive
+    // fulls, one-shot private fulls) and deltas, how many deltas were
+    // dropped as loss (healed by the next full), the final views, and the
+    // ack stream (count, highest processed mark, worst lag).
+    println!(
+        "client view: fulls={} private_fulls={} deltas={} gap_drops={} final_view_total={} | acks={} ack_processed_max={} ack_lag_max_ms={}",
+        fulls, private_fulls, deltas, gap_drops, view_size_total,
+        acks, ack_processed_max, ack_lag_max_ms
     );
 
     let room = last_room_agg;
@@ -1523,7 +1799,8 @@ fn print_report(
          server_cpu_s={:.1} clients_cpu_s={:.1} \
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
            actions_dropped_top={} transport={} retrans_out={} dup_in={} oob_dropped={} \
-           gave_up={}",
+            gave_up={} acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} \
+            private_fulls={} deltas={} gap_drops={} view_size={} still_frac={}",
         mode,
         args.visibility,
         if args.visibility == gsb_server::Visibility::Sharded {
@@ -1568,6 +1845,7 @@ fn print_report(
         match args.profile {
             Profile::Ring => "ring",
             Profile::Spread => "spread",
+            Profile::Still => "still",
         },
         args.offset,
         sep.map(|s| s.procs).unwrap_or(1),
@@ -1596,6 +1874,15 @@ fn print_report(
         dup_in,
         oob_dropped,
         gave_up,
+        acks,
+        ack_processed_max,
+        ack_lag_max_ms,
+        fulls,
+        private_fulls,
+        deltas,
+        gap_drops,
+        view_size_total,
+        args.still_frac,
     );
 }
 
@@ -2166,6 +2453,14 @@ struct ClientRec {
     dup_in: u64,
     oob_dropped: u64,
     gave_up: u64,
+    acks: u64,
+    ack_processed_max: u64,
+    ack_lag_max_ms: u128,
+    fulls: u64,
+    private_fulls: u64,
+    deltas: u64,
+    gap_drops: u64,
+    view_size: u64,
     hz: Option<f64>,
 }
 
@@ -2193,6 +2488,14 @@ fn parse_client_line(line: &str) -> Option<ClientRec> {
         dup_in: get("dup_in")?.parse().ok()?,
         oob_dropped: get("oob_dropped")?.parse().ok()?,
         gave_up: get("gave_up")?.parse().ok()?,
+        acks: get("acks")?.parse().ok()?,
+        ack_processed_max: get("ack_processed_max")?.parse().ok()?,
+        ack_lag_max_ms: get("ack_lag_max_ms")?.parse().ok()?,
+        fulls: get("fulls")?.parse().ok()?,
+        private_fulls: get("private_fulls")?.parse().ok()?,
+        deltas: get("deltas")?.parse().ok()?,
+        gap_drops: get("gap_drops")?.parse().ok()?,
+        view_size: get("view_size")?.parse().ok()?,
         hz: match get("hz")?.as_str() {
             "-" => None,
             v => v.parse().ok(),
@@ -2262,6 +2565,7 @@ async fn orchestrate(args: Args) {
         match args.profile {
             Profile::Ring => "ring",
             Profile::Spread => "spread",
+            Profile::Still => "still",
         },
         if args.visibility == gsb_server::Visibility::Spatial {
             args.cell_size.to_string()
@@ -2418,7 +2722,10 @@ async fn orchestrate(args: Args) {
             match args.profile {
                 Profile::Ring => "ring".into(),
                 Profile::Spread => "spread".into(),
+                Profile::Still => "still".into(),
             },
+            "--still-frac".into(),
+            args.still_frac.to_string(),
             "--spawn-half-size".into(),
             args.spawn_half.to_string(),
             "--transport".into(),
@@ -2637,6 +2944,14 @@ async fn orchestrate(args: Args) {
             dup_in: c.dup_in,
             oob_dropped: c.oob_dropped,
             gave_up: c.gave_up,
+            acks: c.acks,
+            ack_processed_max: c.ack_processed_max,
+            ack_lag_max_ms: c.ack_lag_max_ms,
+            fulls: c.fulls,
+            private_fulls: c.private_fulls,
+            deltas: c.deltas,
+            gap_drops: c.gap_drops,
+            view_size: c.view_size,
             seq_first: None,
             seq_last: None,
         })

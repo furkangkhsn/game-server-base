@@ -248,7 +248,7 @@ async fn join_and_observe_movement(kind: Kind) {
                 assert!(my_entity != 0, "entity id must be non-zero");
                 // Force movement so the room re-emits a snapshot.
                 if !move_sent {
-                    let move_to = gsb_game::game::MoveTo { x: 10, y: 10 }.encode_to_vec();
+                    let move_to = gsb_game::game::MoveTo { x: 10, y: 10, seq: 0 }.encode_to_vec();
                     client
                         .write_frame(gsb_game::op::MOVE_TO, &move_to)
                         .await
@@ -612,7 +612,7 @@ async fn flooder_drops_attributed(kind: Kind) {
     // socket), so the flood interleaves NON-BLOCKING read-drains; the
     // flood frames travel the lossy game band, so retransmit state never
     // gets in the way.
-    let move_payload = gsb_game::game::MoveTo { x: 1, y: 1 }.encode_to_vec();
+    let move_payload = gsb_game::game::MoveTo { x: 1, y: 1, seq: 0 }.encode_to_vec();
     match client {
         Client::Tcp(stream) => {
             let (mut r, mut w) = stream.into_split();

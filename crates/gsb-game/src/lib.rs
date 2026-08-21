@@ -58,4 +58,5 @@ use gsb_protocol::MessageTable;
 pub fn register(table: &mut MessageTable) {
     table.reg::<game::MoveTo>(op::MOVE_TO);
     table.reg::<game::WorldSnapshot>(op::WORLD_SNAPSHOT);
+    table.reg::<game::Private>(op::PRIVATE);
 }

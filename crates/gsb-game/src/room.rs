@@ -117,6 +117,12 @@ pub struct DemoRoom {
     /// requires the ledger to be keyed by group (see module docs and
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
+    /// Per-connection input sequence state (high-water mark + last ack;
+    /// see `crate::common::ingest` / `emit_ack`). Strategy-independent:
+    /// every room numbers and acknowledges its clients' input the same
+    /// way (the client's prediction reconciliation does not care which
+    /// visibility strategy the server picked).
+    input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `RoomLogic::encoded_records`).
     encoded: u64,
@@ -147,6 +153,7 @@ impl DemoRoom {
             next_wire_id: 0,
             spawn_half: half.max(1.0),
             last: HashMap::new(),
+            input: HashMap::new(),
             encoded: 0,
         }
     }
@@ -234,6 +241,9 @@ impl RoomLogic<World> for DemoRoom {
         let mut snap = crate::game::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(current.len()),
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
         };
         for (entity, x, y) in &current {
             snap.entities.push(crate::game::EntityRecord {
@@ -278,15 +288,24 @@ impl RoomLogic<World> for DemoRoom {
             self.spawn_half,
             world,
             conn,
+            &mut self.input,
         )
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn)
+        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::ingest(&self.conn_entity, world, actions)
+        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+    }
+
+    /// The per-connection input acknowledgment (the group snapshot is
+    /// shared; the ack is not — `RoomLogic::private` is the per-connection
+    /// seam of the batch, so the ack rides the same delivery as the
+    /// snapshot, a few bytes per advanced tick, zero otherwise).
+    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        crate::common::emit_ack(&mut self.input, conn, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

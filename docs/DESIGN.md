@@ -9,8 +9,10 @@ ve sohbet Türkçe'dir.
 **Amaç:** MOBA/MMORPG sınıfı, çok oyunculu, gerçek zamanlı oyunlar için
 100k+ eşzamanlı bağlantıyı hedefleyen bir sunucu temeli.
 
-**Kapsam dışı (v1):** oyun mantığı (demo hariç), delta/AOI tabanlı yayın,
-kompresyon, kalıcılık, cross-server (cluster), yük dengeleyici.
+**Kapsam dışı (v1):** oyun mantığı (demo hariç), kompresyon, kalıcılık,
+cross-server (cluster), yük dengeleyici. (AOI/görünürlük stratejileri
+önceki turlarda, `spatial` stratejisinin delta yayını bu turda kapsam
+içine alındı — §8.1.)
 
 ## 2. Temel ilke: saf kanal tabanlı aktör model
 
@@ -432,7 +434,10 @@ referential future = unsafe/mio olmadan çıkmaz).
   konumlarına kesilmiş) tutulur; içerik değiştiyse (konum **veya**
   üyelik) snapshot yeniden kodlanır — içeriği değiştirmeyen hiçbir
   yazım yayınlatmaz (bant israfı yok). Gerekirse (örn. delta yayını,
-  P2) bir versiyon mekanizması o özellikte yeniden getirilebilir. Eski
+  P2) bir versiyon mekanizması o özellikte yeniden getirilebilir —
+  delta yayını bu turda `spatial` stratejisinde versiyon mekanizması
+  olmaksızın gerçekleştirildi: delta birimi snapshot versiyonu değil,
+  hücre başına içerik farkıdır (§8.1 "Delta yayın"). Eski
   bağlantı başına `last_sent` haritası ve spawn/remove olayları
   kaldırıldı: üyelik, snapshot'ta var olmaya indirgendi (§4/§8).
 - `EntityId = u64` core'da ECS'sizdir; oyun crate'i tel kimliğini kendisi
@@ -485,10 +490,11 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
 - **Üyelik** = snapshot'ta var olmak. Sonradan giren bağlantı ilk yayında
   tüm dünyayı görür (join, CONTROL fazında işlendiği için aynı tick'in
   snapshot'ı yeni üyeyi de içerir). Ayrı spawn/remove event'i yok.
-- **Delta yok, geçmiş yok:** snapshot'lar kendi kendine yeter; paket kaybı
-  bir sonraki snapshot'la kendiliğinden telafi edilir. Sıra/güvence ihtiyacı
-  yok — istemci, `sequence`'i (global tick indeksi) ≤ son kabul edilen olan
-  snapshot'ı atar (sıralama + tekrar güvenli).
+- **Full snapshot kendi kendine yeter:** paket kaybı bir sonraki full'la
+  kendiliğinden telafi edilir (spatial'de delta paketi üzerine uygulanır;
+  yakınsama garantisi keepalive full'ıdır — §8.1 "Delta yayın"). Sıra/
+  güvence ihtiyacı yok — istemci, `sequence`'i (global tick indeksi) ≤ son
+  kabul edilen olan snapshot'ı atar (sıralama + tekrar güvenli).
 - **Değişiklik yoksa yayın durur** (oyun mantığı `snapshot` → `false`);
   keepalive (varsayılan 1 Hz, `RoomConfig::keepalive_hz`) değişmeyen
   grupların son önbellekli snapshot'ını yeniden gönderir — son paketini
@@ -507,8 +513,9 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
   broadcast geçişi (`on_join` dışından gelen her `Position` taşıyan
   entity — §7, "Yayınlanabilir küme") — ve **oda ömrü boyunca bir
   değeri asla yeniden vermez** (bevy slotu geri dönse bile). Neden: kimlik değişmezi —
-  istemcinin dünya görüşü son kabul ettiği snapshot'tır; delta, geçmiş ve
-  out-of-band "kimlik yeniden eşleme" mesajı yoktur. Değişmezin
+  istemcinin dünya görüşü son kabul ettiği **full**'dır (spatial'de delta
+  paketi üzerine uygulanır — §8.1); geçmiş ve out-of-band "kimlik yeniden
+  eşleme" mesajı yoktur. Değişmezin
   gerektirdiği ayrım — "aynı entity hareket etti" vs "aynı kimliği artık
   başka bir entity taşıyor" — ancak ve ancak **iki farklı entity oda
   ömrü boyunca aynı tel kimliğini paylaşamazsa** snapshot'lardan
@@ -550,9 +557,12 @@ taban sağlar.
 
 **Belgelenmiş sonraki adımlar (öncelik sırası):**
 1. **Delta yayın** (son snapshot'tan fark) — bant genişliği kazancı.
+   *Kapatıldı (bu tur): `spatial` stratejisi, hücre = kodlama birimi —
+   §8.1 "Delta yayın".*
 2. **Oda segmentasyonu** (10k+ tek-oda CPU duvarı; görünürlük stratejileri
    turunun D1'i duvarı in-proc istemci doyuğundan ayırmayı bekliyor) —
    AOI + stratejiler zaten kapandı (§8.1); `Visibility` trait'i gerekmedi.
+   *Kapatıldı: `sharded` — §8.2.*
 3. **Kompresyon (zstd)** — frame batch'leri üzerine ek bir transport
    seçeneği (uzunluk öneki zaten transport'un malı).
 4. **Oda bölme/birleştirme (sharding)** ve cross-region.
@@ -596,7 +606,7 @@ ile seçilir (sunucu + `gsb-loadgen`):
 | strateji | `GroupKey` | görünürlük kuralı | örnek |
 |----------|-----------|-------------------|-------|
 | `all` (varsayılan) | `()` (1 grup) | her entity her yerde | taban; eski davranış |
-| `spatial` | `Cell` (mekansal hücre) | 3×3 hücre bloğu | MMO/AOI (§8, önceki tur) |
+| `spatial` | `Cell` (mekansal hücre) | 3×3 hücre bloğu (bu turdan itibaren delta kodlu — §8.1 "Delta yayın") | MMO/AOI (§8, önceki tur) |
 | `team` | `Team` (2 grup) | takım üyesi + menzildeki düşman (takım üyelik world state: `TeamMember` componenti; `group_of` world okur) | MOBA/takım sisli |
 | `pvs` | `Sector` (harita bölgesi) | statik görünürlük tablosu (elle convex sektörler) | FPS/PVS |
 
@@ -648,7 +658,84 @@ sisli, geniş harita (spread profili, ±1000):** aynı kod düşman takımın
 rec/tick 2 000→1 153); kümeli geometride kazanç sıfır kalıyor — strateji,
 geometriye koşullu.
 
-**Yük yöntemi (ayrı-proces turu):** `gsb-loadgen` üç modda: in-proc
+**Delta yayın (spatial strateji; bu tur):** `spatial` stratejisi artık
+ snapshot'larını **delta kodlar** — kodlama birimi grup değil **hücredir**:
+ her hücre, kendi içeriğini tick başına **bir kez** kodlar (güncel ve bir
+ önceki tick'in bucket'larının farkı), dondurulmuş `Bytes` olarak
+ önbelleğe alınır; grup bir **kitle**dir ve grubun paketi, gördüğü hücrelerin
+ parçalarının birleşimidir (referansla paylaşım — §14.1'in omurgası aynen).
+ full/delta kararı **(grup, hücre) başınadır**: yeni doğan grup bir kez full
+ alır; devam eden grup delta taşır. Delta değişmezi: bir hücrenin deltası
+ `içerik(şimdi) vs içerik(önceki tick)` — gruptan bağımsız, saf hücre
+ fonksiyonu; bu ancak her yerleşik grubun istemcilerinin her zaman *önceki
+ tick'in* hücre içeriğiyle senkron olması durumunda doğrudur (indüksiyon:
+ yayınlayan tick gruptaki her hücreyi güncel içeriğe taşır, sessiz tick'te
+ grup sessizdir *çünkü* içerikler eşit). Paket içi sıra sabittir ve wire'da
+ görülebilir: `[sequence, delta][removed: entity çıkışları][cell_exits:
+ hücre çıkışları][entities: upsert'ler]` — entity iki görünen hücre arasında
+ geçerken kaynağından önceki **hücre** çıkışı raporlar (hücre-yerel ve ucuz);
+ boşalan hücre **tek** `CellExit` kaydıdır (50 entity'li hücre = 1 kayıt).
+ `delta` bayrağı paketin modunu wire'da ayırt edilir kılar: yanlış modu
+ bekleyen istemci sessizce yanlış uygulamak yerine davranır. **Geç giriş ve
+ grup geçişi:** baseline'ı olmayan yeni grup üyesi (join/crossing) bir kez
+ **private full** alır (`Private{ack|snapshot}` oneof'u, op 1004) — grup
+ akışının ayrı bir akımıdır, istemci tarafından **koşulsuz** uygulanır
+ (grubun gap'de bırakıp gittiği delta ile aynı batch'te, ondan hemen sonra
+ gelir); grup o tick'ten sonra delta'da kalır (test kilitli:
+ `late_join_sees_full_world_one_shot`, `late_joiner_receives_full_world_
+ snapshot` hâlâ canlı). **Keepalive kararı:** her keep tick'inde (vars. 30
+ tick / 1 s) her grup — aktif olsun ya da sessiz — **taze** full gönderir
+ (aktif grupta o tick'in delta'sının *yerini* alır). Gerekçe: delta modunda
+ son paketi yeniden göndermek anlamsızdır (delta, uygulanmadıysa bayat;
+ uygulandıysa bilgi yok); taze full, istemci ne kadar delta kaçırmış olursa
+ olsun bir keepalive periyodu içinde doğru duruma **yakınsama garantisi**dır
+ — ayrı bir resync istemi yok. **İstemci gap kuralı (wire kuantizasyonu
+ bulgusu):** akış **olay-odaktır** — grup yalnızca içeriği değişince frame
+ gönderir ve wire konumları i32 (kesik) iken hareket 30 Hz × 10 u/sn = tick
+ başına 1/3 wire birimi, yani hareket eden entity bile her ~3 tick'te bir
+ değişir; grup stream'i dolayısıyla **sıra-düzgün değildir** (seq = oda
+ tick'i, frame yalnızca değişimde). O yüzden: seq boşluğu **kayıp kanıtı
+ değil, normal durumdur**; istemci baseline'ı olan delta'yı boşluğa rağmen
+ **üzerine uygular** (kayıtlar mutlak: konum upsert'i, mutlak wire id ile
+ unutma, mutlak hücre ile unutma — idempotent, bayat view üzerinde güvenli;
+ en kötü hal = 1 keepalive periyoduna kadar bayatlık; bir kaçırılan çıkış
+ geçici hayalet olabilir, taze full tam duruma döndürür); yalnızca
+ baseline'ı **olmayan** delta atılır (birinci full'a kadar; one-shot
+ private full aynı batch'te iyileştirir). Elenmiş alternatifler: (a)
+ "boşlukta atla, tam gelene kadar" (ilk uygulama — kuantizasyon yüzünden
+ delta yolunu dejeneratif kılıyordu: aktif grupta delta'ların ~2/3'ü gap
+ düşüyordu, istemci her sessizlikten sonra 1 Hz full'ı bekliyordu);
+ (b) seq = grup yayın sayacı (ortak saat ölçümünü — loadgen `tick_hz_med`'ın
+ (son_seq−ilk_seq)/Δt tanımını — bozuyordu: seq = global tick indeksi kuralı
+ korundu). **Sis güvenlik parametresi:** mahalle **içerikten bağımsız** 3×3'tür
+ (mahalleye giren hücre, *içerik taşımıyor olsa bile* görünür — içerik
+ bazlı mahalle "kim görünüyor"u içerikle karıştırır ve gizlilik kararını
+ dünya durumuna bağlardı); tek güvenlik düğmesi `cell_size`'tır: hücre
+ büyüdükçe mahalledeki potansiyel entity sayısı artar — `cell_size` küçük =
+ sıkı sis. **Oyuncu-bazlı aydınlatılmış hücre saklaması** (aynı hücrede
+ bile yalnızca ışık konisi içindekileri gösterme) bu turun kapsamı dışında —
+ ROADMAP'e alındı.
+ **Ölçülen (N=500, 30 sn, spatial, in-proc debug; `still` profili — bkz.
+ yük yöntemi):** kayıtların çoğunun hareketsiz olduğu dünyada delta,
+ tam-snapshot'ın ~1/67'si kadar kodlama üretir ve kazanç **hareketsizlik
+ oranıyla artar** (0.90 → 67×, 0.95 → 77×; oran 1.0'da teorik sınır =
+ keepalive full'ları):
+
+ | still_frac | kodlama kayıt/tick (eski→yeni) | bant/conn (eski→yeni) | adım p50 (eski→yeni) |
+ |---|---|---|---|
+ | 0.90 | 2 884 → **43** (67×) | 44 131 → **7 218** B/sn (6.1×) | 3 126 → 6 250 µs |
+ | 0.95 | 2 791 → **36** (77×) | 42 794 → **6 046** B/sn (7.1×) | 3 126 → 6 250 µs |
+
+ Her iki versiyonda `over_budget` %0 (bütçe 33 333 µs). Dürüst takas: yeni
+ yolun tick gövdesi hücre başına fark taraması yapıyor (bucket rotasyonu +
+ (önceki, güncel) sınıflandırması), adım p50 ~2× — kodlamanın ~1/67'si
+ karşılığında; ring/spread gibi **her entity her tick hareket eden**
+ profillerde kazanç yok (orijinal ölçüm tabanı aynen — `ring`/`spread`
+ profilleri değişmedi). Ham RESULT satırları + makine bilgisi: ROADMAP
+ "Kapatılanlar (delta yayın + input sıralama turu)" C maddesi. Detay +
+ elenen alternatifler: aynı ROADMAP bölümü.
+
+ **Yük yöntemi (ayrı-proces turu):** `gsb-loadgen` üç modda: in-proc
 (varsayılan, tüm önceki ölçüm tabanı), `--serve` (sunucu process'i;
 `--metrics-listen` metrik raporlarını kanal verisinin ikili TCP akışıyla
 taşır — stdout parsing'i yok) ve `--orchestrate` (sunucu + P istemci
@@ -876,7 +963,25 @@ doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
    sonraki snapshot'ta görünür (ön koşul yapısal — §7, "Yayınlanabilir
    küme"; `entity_spawned_outside_on_join_is_broadcast_with_fresh_
    wire_id`).
-- **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
+Delta yayın (spatial) — istemci VIEW'ı ile gözlemlenen altı özellik
+ (`tests/delta_aoi.rs`): delta akışı ile full akışı aynı istemci
+ görünümünde **yakınsar** (60-tick pencere, keepalive full dahil);
+ hücre değiştiren entity, **her** istemci pozisyonunda (iki hücreyi de
+ gören / kaynak-tek / hedef-tek) hayaletsiz ve kopyasız — tick tick
+ değişmezi; hücre grubun görüşünden çıkınca entity'ler istemci
+ tarafında **gerçekten silinir** (tek `CellExit` kaydı, yeniden
+ taşınmaz); yarıda giren istemci **tek seferlik full** ile tüm dünyayı
+ görür, grup o tick'ten sonra delta'da kalır (one-shot private full);
+ delta kaybı **keepalive periyodu içinde** (ölçülen sınır: kayıp bitimi
+ + 31 tick) taze full ile iyileşir; paket modu wire'da **kendi kendini
+ tanıtır** (aktif + sessiz grupta `delta` bayrağının iki modu da
+ görülür). Input sıralama/onay (op 1004 `Private` oneof'u,
+ `tests/input_ack.rs`): ack **monotondur ve sunucunun işlediğinden
+ fazlasını asla ack'lemez** (spec'in gerekli testi); dupl girdi
+ sessizce atılır (entity geri dönmez), boşluk işareti engellemez
+ (yüksek-su), rejoin input oturumunu iki tarafta sıfırlar,
+ numaralandırmasız (seq 0) girdi işlenir ama asla ack'lenmez.
+ - **gsb-server (e2e):** process-içi sunucu (ephemeral port) + gerçek TCP
   istemci: AUTH → JOIN → MOVE_TO → `WORLD_SNAPSHOT` akışı: önce kendi
   entity'sini görür, hareketten sonra snapshot'ta konumunu **değişmiş**
   görür. Tüm yol tek test: pump → bağlantı actor → registry → dispatcher →
@@ -1021,19 +1126,41 @@ bağlantı başına değil **grup başına** kodlanır (snapshot bir kez kodlan�
   kullanır. Bu, "oda N bağlantı"yı bellek ve kod karmaşıklığı açısından
   "oda N grup"la sınırlı tutar.
 
-### 14.2 seq/ack yok — teslim garantisi TCP'nin
+### 14.2 Sıralama ve onay: taşıma ne taşır, oyun katmanı ne taşır
 
-- Snapshot akışı **tam durum** taşır (delta yok); bir snapshot kaybolursa
-  bayatlık, bir sonraki snapshot + 1 Hz keepalive ile **sınırlı** kalır
-  (düzeltilmez, örtülür). Bu, "kayıp paket = bir kademe bayatlık" kabulüdür.
-- seq/ack eklemek = bağlantı başına sıra durumu + yeniden gönderim tamponu
-  + zamanlayıcı = **bağlantı başına durum** — §14.1'in ilkesini ihlal eder
-  ve ayrı bir mimaridir. Kapı açıktı ve rUDP turunda **taşıma katmanında**
-  kullanıldı: rUDP'nin kontrol bandı (AUTH/JOIN/LEAVE/HEARTBEAT) seq/ack +
-  RTO yeniden gönderimi taşır; durum demux/writer'ın yerelinde (aktör
-  katmanı bilmez), oyun bandı (snapshot/MOVE_TO) kasıtlı olarak hâlâ
-  kayıp-toleranslıdır — "kayıp paket = bir kademe bayatlık" kabulü
-  oyun bandında aynen geçerlidir.
+- **Teslim garantisi taşıma katmanının** (TCP; rUDP'de kontrol bandının).
+  Oyun katmanı teslim için yeniden gönderim yapmaz; taşıyanı bilmez.
+- **Snapshot seq** = oda tick'inin global indeksi (kural: seq = tick).
+  Delta modunda akış olay-odaktır (grup yalnızca değişimde yayınlar; wire
+  kuantizasyonu — §8.1 "Delta yayın" — boşlukları normal duruma çevirir);
+  boşluk kaybın kanıtı değildir, **yakınsama garantisi keepalive full'ıdır**
+  (bir periyotta tam durum). "Kayıp paket = bir keepalive periyoduna kadar
+  bayatlık" kabulü delta modda da geçerlidir; tam-snapshot stratejilerinde
+  (all/team/pvs) davranış değişmedi (kayıp = bir kademe bayatlık, örtülür).
+- **Girdi seq/ack (bu tur; yeni):** istemci girdileri oturum başına 1'den
+  başlayarak numaralandırır; oda, bağlantı başına **en yüksek su** tutar
+  (`InputState{hwm, acked}` — iki u64; §14.1'in "bağlantı başına durum yok"
+  ilkesine **bilinçli ve belgelenmiş istisna**: durum bir sıra sayısı +
+  bir onay damgasıdır, tampon/zamanlayıcı yok). Kural: `seq > hwm` → işle +
+  `hwm = seq`; `seq ≤ hwm` → sessizce at (normal yarış, ihlal değil); boşluk
+  işareti engellemez (yüksek-su, ardışıklık değil); `seq = 0` = numaralandırma
+  öncesi (işlenir, hwm'yi ilerletmez, asla ack'lenmez — eski istemciler).
+  Onay, `processed_up_to` olarak bağlantının **private** frame'inde döner
+  (`Private{ack|snapshot}` oneof'u) — sunucu *işlediğinden* fazlasını asla
+  ack'lemez (test kilitli: `ack_is_monotonic_and_never_exceeds_processed`).
+  Tick başına bağlantı başına en fazla bir private frame: full gelirse ack
+  bir tick ertelenir (full kazanır). Rejoin'de iki taraf sıfırdan başlar
+  (sunucu `on_join`'da sıfırlar; yeni istemci'nin seq 1'i eski hwm'nin
+  altında kalsın diye). Bu bir **işleme işareti**dir — prediction
+  mutabakatı için ("girdime kadar ne uygulandı?") — teslim garantisi
+  değil; rUDP yolundaki gibi RTO yeniden gönderimi yoktur. Elenmiş
+  alternatifler: (1) ardışıklık tabanlı onay (kayıp boşluk beklenir) —
+  kayıp-toleranslı bandda işareti kayıba bloke eder, "1 kademe bayatlık"
+  kabulüyle çelişir; (2) taşıma katmanında (rUDP kontrol bandı) — kontrol
+  bandının işi (AUTH/JOIN/LEAVE) zaten öyle; girdi işareti *oyun*
+  anlamındadır ve oyun bandının rejoin/loss toleransı içinde yaşamalıdır;
+  (3) seq'siz statüko — dupl girdi entity'yi sessizce geri taşıyabilir,
+  rejoin'de mutabakat noktası yok.
 - Deterministik lockstep, paket sıralama garantisi, hata düzeltme (FEC):
   hedeflenmez.
 
@@ -1095,7 +1222,10 @@ bütçesine sığındığı aileler:
   istemci başına prediction/buffer, bağlantı başına rate muhasebesi —
   connection actor ince tutulmuştur; bu durumlar *üzerindeki* uygulama
   katmanına aittir (veya §14.2'deki rUDP yoluna).
-- **Sıra/ack veya paket sıralama garantisi gerektirenler** (14.2).
+- **Taşıma düzeyi teslim garantisi / yeniden gönderim veya paket
+  sıralama garantisi gerektirenler** (14.2) — girdi düzeyi sıra/ack
+  (işleme işareti) bu tur eklendi; oyun bandının teslimi hâlâ
+  taşıma katmanındadır.
 - **Mikro-saniye determinizmi / lockstep** (tick determinizmi vardır —
   aynı tick'te aynı adım — ama istemci-sunucu clock senkronu yoktur).
 

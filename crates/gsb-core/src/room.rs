@@ -248,19 +248,27 @@ pub trait RoomLogic<W>: Send {
     /// group may depend on the world (e.g. the zone an entity is in).
     fn group_of(&self, world: &W, conn: ConnectionId) -> Self::GroupKey;
 
-    /// Encode the complete, self-contained snapshot of one group into
-    /// `out`.
+    /// Encode the group's snapshot payload into `out`.
     ///
     /// Return `false` when the group is unchanged since **this group's**
     /// last emitted snapshot — and "no change" **includes** membership
     /// (join/leave). The room then ships nothing to the group, except on a
-    /// keep-alive tick, when it re-sends the group's last cached snapshot.
+    /// keep-alive tick (see [`Self::keepalive`]).
     ///
-    /// Snapshots are self-contained by contract: no delta, no history — a
-    /// snapshot alone defines the group's entire world. A lost packet is
-    /// healed by the next snapshot; clients must treat each snapshot as a
-    /// full replacement of their view (order/duplicate-safe via the
-    /// snapshot's sequence number).
+    /// The payload format is the logic's protocol decision:
+    /// - a **full, self-contained** snapshot (the default, what
+    ///   `all`/`team`/`pvs` and the shard rooms ship): no delta, no
+    ///   history — the payload alone defines the group's entire world, and
+    ///   a lost packet is healed by the next one;
+    /// - a **full/delta stream** (the spatial AOI ships this): the payload
+    ///   is marked full or delta on the wire, deltas apply on top of the
+    ///   client's last accepted payload, and the logic must guarantee the
+    ///   client can always get a full again: every fresh group member
+    ///   receives a one-shot full via [`Self::private`], and every
+    ///   keep-alive tick ships a fresh full via [`Self::keepalive`] (so a
+    ///   client that lost one or more deltas heals within one keep-alive
+    ///   period). The sequence number (global tick index) in the payload
+    ///   is the client's loss detector.
     ///
     /// **Bookkeeping must be per-group.** The room calls this once per
     /// existing group, per tick, in *unspecified* order (a `HashMap`
@@ -287,6 +295,37 @@ pub trait RoomLogic<W>: Send {
     /// Encode a per-connection private frame (delivered only to `conn`,
     /// alongside the group snapshot). Default: none.
     fn private(&mut self, _world: &mut W, _conn: ConnectionId, _out: &mut bytes::BytesMut) -> bool {
+        false
+    }
+
+    /// Produce the payload to ship to a group on a **keep-alive tick**
+    /// (the cadence is due). Called after `snapshot` for the same tick,
+    /// whether it emitted a payload or the group was unchanged; on a
+    /// keep-alive tick this method decides what actually goes out.
+    ///
+    /// The default re-sends the group's last cached snapshot (`last`) —
+    /// correct for full, self-contained logics: for an unchanged group it
+    /// is the very snapshot that healed a lost packet, and for an active
+    /// group `last` *is* this tick's fresh full (the method was just
+    /// called after `snapshot` set it), so re-sending is bit-identical to
+    /// keeping the tick's payload. Return `false` to keep that behaviour.
+    ///
+    /// A delta-mode logic must return `true` with a freshly encoded
+    /// **full** snapshot in `out` instead: re-sending the last *delta* is
+    /// meaningless (a client that missed it has no baseline to apply it
+    /// against; a current client would double-apply it), while a fresh
+    /// full — shipped on the cadence tick whether the group is active or
+    /// silent, replacing an active group's tick delta (a superset of it)
+    /// — heals any client that lost one or more deltas, bounding the
+    /// recovery time to the keep-alive period.
+    fn keepalive(
+        &mut self,
+        _world: &mut W,
+        _ctx: &TickCtx,
+        _group: &Self::GroupKey,
+        _last: Option<&bytes::Bytes>,
+        _out: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
 
@@ -832,20 +871,36 @@ where
             }
         }
 
-        // 4c. One snapshot per group: encode ONCE, freeze ONCE, share the
-        //     result by reference. Keep-alive: an unchanged group re-sends
-        //     its cached snapshot on the cadence tick (no re-encode).
+        // 4c. One snapshot per group: encode ONCE, share the result by
+        //     reference (the scratch buffer is reused across groups and
+        //     ticks; `split_to` hands the room a zero-copy `Bytes` view of
+        //     its growing heap allocation — no per-group allocation churn).
+        //
+        //     Keep-alive (on the cadence tick, whether the group emitted
+        //     this tick or not): full-snapshot logics keep the default
+        //     behaviour (an unchanged group re-sends its cached snapshot —
+        //     the unchanged group's cache is the very snapshot that was
+        //     just encoded, and an active group's tick payload already is
+        //     a fresh full, so re-sending `last` is bit-identical);
+        //     delta-mode logics return `true` with a freshly encoded FULL
+        //     that REPLACES this tick's payload — a client that lost the
+        //     delta (or several) is healed within one keep-alive period
+        //     whether its group is active or silent (see
+        //     `RoomLogic::keepalive`).
         let keep_due = self
             .keepalive_every
             .map(|every| self.steps.is_multiple_of(every))
             .unwrap_or(false);
+        let mut buf = bytes::BytesMut::new();
         for (group, st) in self.groups.iter_mut() {
-            let mut buf = bytes::BytesMut::new();
-            if self.logic.snapshot(&mut self.world, ctx, group, &mut buf) {
+            buf.clear();
+            let emitted = self.logic.snapshot(&mut self.world, ctx, group, &mut buf);
+            if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;
                     warn!(
                         room = %self.config.id,
+                        ?group,
                         bytes = buf.len(),
                         max = self.config.max_snapshot_bytes,
                         "snapshot exceeds max_snapshot_bytes (rUDP MTU readiness)"
@@ -863,15 +918,51 @@ where
                 if n > self.config.max_snapshot_bytes as u64 {
                     self.m.snap_overflows += 1;
                 }
-                let payload = buf.freeze();
+                let payload = buf.split_to(buf.len()).freeze();
                 st.sent = Some(payload.clone());
                 st.last = Some(payload);
-            } else if keep_due {
-                // A re-send only happens when there is a cached snapshot.
-                if st.last.is_some() {
+            }
+            // The keep-alive decision (only when there is a cached
+            // snapshot): the logic may replace this tick's payload with a
+            // freshly encoded one (a delta-mode full) or keep the default
+            // (re-send `last` — bit-identical for unchanged groups).
+            if keep_due && st.last.is_some() {
+                if !emitted {
+                    // An unchanged group: a keep-alive re-send happened.
                     self.m.keepalive_resends += 1;
                 }
-                st.sent = st.last.clone();
+                buf.clear();
+                if self
+                    .logic
+                    .keepalive(&mut self.world, ctx, group, st.last.as_ref(), &mut buf)
+                {
+                    // A freshly encoded payload (a delta-mode full): count
+                    // it like any other encoded snapshot.
+                    if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
+                        st.size_warned = true;
+                        warn!(
+                            room = %self.config.id,
+                            ?group,
+                            bytes = buf.len(),
+                            max = self.config.max_snapshot_bytes,
+                            "snapshot exceeds max_snapshot_bytes (rUDP MTU readiness)"
+                        );
+                    }
+                    self.m.snapshots += 1;
+                    let n = buf.len() as u64;
+                    self.m.snap_bytes = self.m.snap_bytes.saturating_add(n);
+                    if n > self.m.snap_bytes_max as u64 {
+                        self.m.snap_bytes_max = n as u32;
+                    }
+                    if n > self.config.max_snapshot_bytes as u64 {
+                        self.m.snap_overflows += 1;
+                    }
+                    let payload = buf.split_to(buf.len()).freeze();
+                    st.sent = Some(payload.clone());
+                    st.last = Some(payload);
+                } else {
+                    st.sent = st.last.clone();
+                }
             }
         }
 
@@ -886,6 +977,10 @@ where
         //     group's shared snapshot (Bytes refcount, never copied) plus
         //     the connection's private frame, when the logic has one.
         let mut dropped: u64 = 0;
+        // The private-frame scratch is reused across connections (the
+        // payload is split off, the capacity retained — no per-connection
+        // per-tick allocation).
+        let mut pbuf = bytes::BytesMut::new();
         for (conn, rc) in &self.conns {
             let mut batch: FrameBatch = Vec::with_capacity(2);
             if let Some(payload) = self
@@ -898,13 +993,13 @@ where
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
                 batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
-            let mut pbuf = bytes::BytesMut::new();
+            pbuf.clear();
             if self.logic.private(&mut self.world, *conn, &mut pbuf) {
                 // Metrics: one shipped private frame and its payload size.
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
-                batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.freeze()));
+                batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.split_to(pbuf.len()).freeze()));
             }
             if !batch.is_empty()
                 && rc.out.try_send(batch).is_err()

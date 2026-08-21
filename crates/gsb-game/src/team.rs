@@ -212,6 +212,9 @@ pub struct TeamRoom {
     /// (own team ∪ neutral ∪ in-vision enemies). `snapshot` answers from
     /// this so both teams' snapshots are the *same tick's* state.
     contents: [HashMap<u64, (i32, i32)>; TEAM_COUNT as usize],
+    /// Per-connection input sequence state (strategy-independent; see
+    /// `crate::common::ingest` / `emit_ack`).
+    input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `RoomLogic::encoded_records`).
     encoded: u64,
@@ -241,6 +244,7 @@ impl TeamRoom {
             neutral: Vec::new(),
             cells: HashMap::new(),
             contents: [HashMap::new(), HashMap::new()],
+            input: HashMap::new(),
             encoded: 0,
         }
     }
@@ -369,6 +373,9 @@ impl RoomLogic<World> for TeamRoom {
         let mut snap = crate::game::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
         };
         for (&wire_id, &(x, y)) in content {
             snap.entities.push(crate::game::EntityRecord {
@@ -394,6 +401,7 @@ impl RoomLogic<World> for TeamRoom {
             self.spawn_half,
             world,
             conn,
+            &mut self.input,
         );
         // Team membership goes into the WORLD (the component), not just
         // this room's bookkeeping: `group_of` and `rebuild` read it from
@@ -406,11 +414,16 @@ impl RoomLogic<World> for TeamRoom {
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn)
+        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::ingest(&self.conn_entity, world, actions)
+        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+    }
+
+    /// The per-connection input acknowledgment (see `DemoRoom::private`).
+    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        crate::common::emit_ack(&mut self.input, conn, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

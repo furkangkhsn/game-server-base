@@ -12,6 +12,73 @@ message MoveTo {
   // compact as sfixed32 across every realistic world size.
   sint32 x = 1;
   sint32 y = 2;
+  // Client-assigned input sequence number: monotonic from 1 within one
+  // session (reset to 1 on every (re)join); 0 = unnumbered (legacy
+  // clients — always processed, never advances the server's high-water
+  // mark). The server processes an action only when its seq is strictly
+  // greater than the last seq it processed for this connection; a
+  // duplicate or a reordered/late action is dropped as a normal race of
+  // the lossy game band (NOT a protocol violation). The server reports
+  // its per-connection high-water mark back in `InputAck` (carried in
+  // the per-connection `Private` frame) — the signal a client's
+  // prediction reconciliation needs to know which of its inputs are
+  // already applied.
+  uint64 seq = 3;
+}
+
+// Server → client: input acknowledgment. Per connection — carried in the
+// `Private` frame, never in the group snapshot (the snapshot is shared
+// by the group's members; the ack is not).
+message InputAck {
+  // The highest input sequence this connection has processed so far
+  // (high-water mark; monotonic; reset with the connection's session on
+  // (re)join). "Up to N" is a high-water mark, not a contiguity claim:
+  // gaps from loss on the loss-tolerant game band do not stop the mark
+  // from advancing — a client that needs lossless input rides the
+  // transport's reliable band. The mark never exceeds the highest seq
+  // actually processed, and it never regresses.
+  uint64 processed_up_to = 1;
+}
+
+// A cell that left a group's view (delta mode only): the client must
+// forget every entity it holds for this cell. One record PER CELL, not
+// per entity — a 50-entity cell leaving the view costs one record.
+message CellExit {
+  // Cell index (floor of position / cell_size — the same grid the server
+  // buckets entities into; the client knows cell_size from the server
+  // configuration and derives each entity's cell from its position).
+  sint32 x = 1;
+  sint32 y = 2;
+}
+
+// Server → client: per-connection frame (opcode PRIVATE = 1004). The
+// group snapshot (opcode WORLD_SNAPSHOT) is shared by the group's
+// members; this frame is addressed to ONE connection. At most one frame
+// per tick per connection (the room's private seam), so the payload is
+// a oneof of the per-connection message kinds.
+message Private {
+  oneof payload {
+    // The connection's input high-water mark (see `InputAck`), sent on
+    // the ticks in which it advanced.
+    InputAck ack = 1;
+    // A one-shot FULL view snapshot for a connection that just (re)joined
+    // a group (or crossed into a new snapshot group): the connection has
+    // no baseline for that group's view, and a delta has nothing to apply
+    // against. Sent once per join / group crossing; afterwards the group
+    // stays in delta mode for everyone (no per-connection groups).
+    //
+    // CLIENT RULE: this snapshot is a per-connection baseline reset — it
+    // is applied UNCONDITIONALLY (it replaces the client's entire view
+    // and adopts its `sequence`), regardless of the group stream's last
+    // accepted sequence: it is a different stream from the group frames
+    // (which share the group's sequence logic), and on a crossing tick it
+    // arrives in the same batch right after the new group's delta (which
+    // a client without a baseline for the new group drops as a gap — the
+    // one-shot full is what establishes the baseline, within the same
+    // batch, before the next delta can arrive). It is always `delta
+    // = false`; a `true` flag here is a protocol error.
+    WorldSnapshot snapshot = 2;
+  }
 }
 
 // Server → client: one entity inside a WorldSnapshot.
@@ -40,15 +107,68 @@ message EntityRecord {
   sint32 y = 3;
 }
 
-// Server → client: the complete, self-contained snapshot of the room's
-// snapshot group. There is no delta and no history: every snapshot
-// replaces the client's entire view of the world. Packet loss is healed
-// automatically by the next snapshot. A per-record version field no
-// longer exists — ordering is handled by `sequence` and completeness by
-// the "no change, no send" rule plus a low-rate keep-alive re-send.
+// Server → client: the snapshot of the room's snapshot group.
+//
+// FULL mode (`delta` false/absent): the complete, self-contained state of
+// the group's view; the snapshot replaces the client's entire view of
+// the world. Packet loss is healed automatically by the next full
+// snapshot.
+//
+// DELTA mode (`delta` true): the change of the group's view since the
+// PREVIOUS tick (server-side: per (group, cell) pair — see
+// `docs/DESIGN.md` §8), applied ON TOP of the client's current view.
+// The application order is fixed by the packet layout: `removed` (entity
+// exits) first, then `cell_exits`, then `entities` (updates) — so an
+// entity that moved between two cells the client sees is exited from
+// its source before it is updated in its target, and a client that sees
+// only one of the two cells sees exactly the exit or exactly the update
+// (both correct for it).
+//
+// CLIENT RULES (delta mode):
+// - a delta WITHOUT a baseline (a fresh connection that has not applied
+//  a full yet) is DROPPED until the next full — the server ships one
+//  one-shot via `Private` to every fresh group member (same batch) and
+//  on the keep-alive cadence;
+// - a delta WITH a baseline is applied on top, even across a sequence
+//  gap: the records are absolute (upserts of current positions, forgets
+//  by absolute wire id, forgets by absolute cell) and idempotent, so
+//  applying them over a stale view is safe. A sequence gap in the
+//  group's stream is NORMAL, not proof of loss — the stream is
+//  event-driven (a group ships a frame only when its content changes,
+//  and even a moving entity is silent for a run of ticks: wire
+//  positions are integer-quantized while motion is fractional), and it
+//  is the client's only signal that some intermediate frames (possibly
+//  carrying exits) may be missing. The worst case is a stale view — at
+//  most one keep-alive period (a missed exit may ghost briefly) — and
+//  the next keep-alive full restores exact state.
+// - a duplicate (sequence <= the last accepted) is discarded.
+//
+// CONVERGENCE GUARANTEE: every group ships a FRESH full snapshot on the
+// keep-alive cadence (active or silent), so any client — however many
+// deltas it missed — holds the exact group view within one keep-alive
+// period, with no out-of-band resync request.
 message WorldSnapshot {
-  // Monotonic snapshot sequence (the room's global tick index). Clients
-  // discard any snapshot whose sequence is <= the last one they accepted.
+  // Monotonic snapshot sequence (the room's global tick index). A gap is
+  // normal (event-driven stream — see the message docs); a duplicate
+  // (<= the last accepted) is discarded. The keep-alive full is the
+  // convergence guarantee, not the gap rule.
   uint64 sequence = 1;
+  // Entity state: in full mode the complete view; in delta mode the
+  // upserts (a wire id here that the client does not hold is a spawn in
+  // the client's view).
   repeated EntityRecord entities = 2;
+  // DELTA mode only: wire ids that left the group's view this tick
+  // (entity exits, reported by the cell that lost the membership — cell
+  // local and cheap). Applied before `entities` (see the message docs).
+  repeated uint64 removed = 3;
+  // DELTA mode only: cells that left the group's view this tick (the
+  // client forgets every entity it holds for each of them — one record
+  // per cell, whatever the cell's population). Applied after `removed`,
+  // before `entities`.
+  repeated CellExit cell_exits = 4;
+  // true = delta (apply on top, with the client rules above);
+  // false/absent = full (replace the entire view). The modes are
+  // distinguishable on the wire so a client expecting one mode can
+  // detect the other and act instead of silently misapplying it.
+  bool delta = 5;
 }

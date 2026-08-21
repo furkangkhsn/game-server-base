@@ -204,6 +204,9 @@ pub struct SectorRoom {
     /// [`VISIBLE_FROM`] says are visible from it, assembled by reference
     /// without re-querying the world.
     buckets: HashMap<Sector, Vec<(u64, i32, i32)>>,
+    /// Per-connection input sequence state (strategy-independent; see
+    /// `crate::common::ingest` / `emit_ack`).
+    input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `RoomLogic::encoded_records`).
     encoded: u64,
@@ -234,6 +237,7 @@ impl SectorRoom {
             spawn_half: half.max(1.0),
             last: HashMap::new(),
             buckets: HashMap::new(),
+            input: HashMap::new(),
             encoded: 0,
         }
     }
@@ -293,6 +297,9 @@ impl RoomLogic<World> for SectorRoom {
         let mut snap = crate::game::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
         };
         for (&wire_id, &(x, y)) in &content {
             snap.entities.push(crate::game::EntityRecord {
@@ -318,15 +325,21 @@ impl RoomLogic<World> for SectorRoom {
             self.spawn_half,
             world,
             conn,
+            &mut self.input,
         )
     }
 
     fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn)
+        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
     }
 
     fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::ingest(&self.conn_entity, world, actions)
+        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+    }
+
+    /// The per-connection input acknowledgment (see `DemoRoom::private`).
+    fn private(&mut self, _world: &mut World, conn: ConnectionId, out: &mut bytes::BytesMut) -> bool {
+        crate::common::emit_ack(&mut self.input, conn, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
