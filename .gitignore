@@ -11,3 +11,4 @@
 
 # local measurement scratch (loadgen raw outputs, probes)
 .scratch/
+.measure/

@@ -2588,6 +2588,141 @@ RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 
 ---
 
 
+## Kapatılanlar (reject-bucket wiring + sayaç envanteri turu)
+
+**Tur kapsamı.** Küçük temizlik turu; yeni mekanizma yok. (A)
+**Reject-bucket wiring** — `requests_rejected_*` altı kovası koddaki altı
+terminal ret kararının her birine karşılık geliyor, ama hangi retin hangi
+kovaya yazıldığını doğrulayan test YOKTU: smoke testleri altısının da
+sıfır olduğunu kontrol ediyor — bu, rapor kuyruğunun kaymasını yakalar,
+kablolamanın yanlış olmasını yakalamaz (kova karışımı bugünde tüm testleri
+geçirirdi). Bu önemli, çünkü ayırmanın tek amacı operasyonel sinyaldi:
+"oda cap'i gerçekten bağlıyor mu?" Yanlış kovaya düşen ret o soruya
+kendinden emin ama yanlış cevap verir. (B) **Sayaç envanteri** — A'daki
+boşluk bir örnek değil, bir sınıf: doğruluğunu hiçbir testin kontrol
+etmediği metrik. Mevcut sayaçlar tarandı; envanter aşağıdaki tabloda.
+Bu turda yalnız ret/RPC ailesi (A'nın kapsamı) kapatıldı; kalan maddeler
+P0'da adlandırılmış madde. (C) **`.measure/` hijyeni** — bir önceki turun
+ölçüm ham çıktıları untracked duruyordu ve rapor "ağaç temiz" diyordu
+(iki tur önce `.scratch/`'le aynı durum); `.gitignore`'a eklendi
+(`.scratch/` emsalı) ve `git status --porcelain` gerçekten boş
+doğrulandı. Wire protokolü değişmedi; Mutex/RwLock/parking_lot/select!
+yok; `unsafe_code = "forbid"`; mevcut 154 testin hiçbiri silinmedi/
+`#[ignore]`'lenmedi. Test 154 → **161**.
+
+### A — Reject-bucket wiring testleri (gsb-core, 7 yeni test)
+
+`gsb_core::room`'daki altı terminal ret kararının her biri kendi kovasına
+sayıyor; `crates/gsb-core/tests/rpc.rs` artık her yol için bir wiring
+testi taşıyor. Test altyapısı: harness odanın metrik kanalını TUTUYOR
+(cap 64; diğer testler drain etmiyor — dolan kanal yalnız odanın kendi
+`metrics_dropped`'ünü sayar, davranış değişmez) ve `latest_room_sample`
+bounded kanalı boşaltıp en yeni `RoomSample`'ı döndürüyor; `bucket_cfg`
+örnekleme temposunu adım başına kuruyor (varsayılan 1 Hz/30 Hz'de kısa
+test hiç örnek görmeyecekti). Senkronizasyon: reply okuması
+(`private_replies`), o reply'yi üreten adımın (ve adımın SON işi olan
+metrik `try_send`'inin) tamamlandığının garantisi — tek-thread test
+runtime'ında oda görevi `tick_rx.recv()`'de yield etmeden adımın tamamını
+çalıştırır. Her test taze odada tam olarak BİR ret yolunu tetikler ve
+doğru kovanın arttığını **VE diğer beşinin artmadığını** assert eder
+(ikinci yarısı — her şeyi artıran, ya da yanlış kovayı artıran sayaç
+burada düşer):
+
+- `reject_bucket_malformed` — çöp envelope (decode başarısızlığı) +
+  `id = 0` (kovanın iki kaynağı, ikisi de buraya sayılır);
+- `reject_bucket_dup` — in-flight external istek + aynı tick'te AYNI id'li
+  ikinci istek (dup kararı decision'ün ÜSTÜNDE: room-local op bile
+  burada reddedilir, in-flight olan işlemeye devam eder);
+- `reject_bucket_no_handler` — `handle_request`'in `None` döndürdüğü op
+  (`OP_UNKNOWN`; kurulumu zor değil: `RpcLogic` dört bilinen op dışında
+  her şeye `None` döndürüyor);
+- `reject_bucket_logic` — mantığın kendi `RequestDecision::Reject`'i
+  (`OP_REJECT`);
+- `reject_bucket_conn_cap` — per-connection cap = 1, aynı tick'te aynı
+  conn'dan 2 external istek (birinci kaydolur: 0 < 1; ikinci 1 ≥ 1'de
+  cap'e çarpar; room cap 2000'de uzak);
+- `reject_bucket_room_cap` — room cap = 1: conn 1 odanın tek slotunu
+  doldurur, conn 2'nin isteği (KENDİ count'u 0 iken) ROOM kovasına
+  düşmeli — `conn_cap == 0` yarısı yanlış kablolamayı yakalar;
+- `reject_bucket_both_caps_prefers_conn_cap` — iki cap de aşıldığında
+  per-connection kovası kazanır (kod `over_conn_cap`'e önce bakar —
+  istemcinin kendi kotası actionable olan sınırdır).
+
+### B — Sayaç envanteri (kapsama kriteri: doğru yolda artışı doğrulayan test)
+
+Kapsama yüzeyi: `RoomSample` (oda actor'ü), `RegistrySample` (registry),
+`ConnSample` (connection actor'ü), `UdpClientStats` (rUDP istemci;
+RESULT satırında). **evet** = test yolu tetikliyor ve artışı/gauge
+değerini assert ediyor; **smoke** = test sayaç okuyor ama yalnız
+sıfır/salimlik (doğru yol doğrulanmıyor); **hayır** = sayaça dokunan
+test yok.
+
+**RoomSample:**
+
+| Sayaç | Kapsam |
+|---|---|
+| `steps` | evet — `room_counters_flow_to_collector` (≥4 + monoton), loadgen smoke (≥60) |
+| `joins` | evet — flow test (join → ==1) |
+| `members`, `groups`, `max_group` (gauge) | evet — flow test (join → 1/1/1) |
+| `snapshots` | evet — flow test (emit eden mantıkla >0) |
+| `dropped_frames` | evet — flow test (tüketilmeyen out kanalı → >0) |
+| `step_max_us`, `step_hist` | evet (flow) — `step_max_us > 0`; `sum(step_hist) == steps`; bin kenarları ayrı unit testli (`hist_index_binning`) |
+| `step_min_us`, `step_sum_us` | hayır |
+| `step_fine_hist` | hayır (saf `fine_hist_index` fonksiyonu testli; oda tarafı birikim değil) |
+| `late_min_us`, `late_max_us`, `late_sum_us` | hayır |
+| `lagged_events`, `lagged_ticks` | hayır (broadcast buffer'ı doldurup okuyan test yok) |
+| `dropped_actions` | hayır — yapısal N/A: oda bounded *pull*, aksiyon asla atmaz; sayaç 0'da kalır |
+| `keepalive_resends` | hayır (davranış testli: `unchanged_group_is_silent_until_keepalive`; sayaç okunmuyor) |
+| `snap_bytes`, `snap_bytes_max` | hayır |
+| `snap_overflows` | hayır (MTU uyarısı yalnız ölçümde gözleniyor) |
+| `snap_records` | hayır |
+| `shipped_bytes`, `shipped_frames`, `private_frames` | hayır (rapor-düzeyi smoke: `server_out_bps > 0`) |
+| `leaves` | hayır (rpc testleri leave davranışını test ediyor; sayaç okunmuyor) |
+| `requests_local`, `requests_external` | hayır (reply davranışı rpc.rs'te testli; sayaç okunmuyor) |
+| `requests_rejected_{malformed,dup,no_handler,logic,conn_cap,room_cap}` | **evet — bu tur (A)** |
+| `requests_timed_out`, `requests_late` | hayır (timeout/stale-report davranışı testli; sayaç okunmuyor) |
+| `pending_requests` (gauge) | hayır |
+| `metrics_dropped` | smoke (smoke rapor toplamını ==0 assert ediyor) |
+
+**RegistrySample:** `rooms`/`conns` (gauge) — smoke (loadgen
+`peak_conns >= 3`); `rooms_created`, `rooms_destroyed`, `joins`,
+`leaves`, `opens`, `closes` — hayır (`tests/registry.rs` join/leave/
+create davranışını frame üzerinden test ediyor; örnek sayaçları
+okunmuyor); `metrics_dropped` — hayır.
+
+**ConnSample:** `actions_dropped` — **evet** (`e2e::flooder_drops_
+attributed`: flood → `>0` + flooder'a atıf); `bytes_in`/`bytes_out` —
+smoke (`server_in/out_bps > 0`); `frames_in`, `frames_out`,
+`violations` (bütçe davranışı `violation.rs`'te testli; sayaç
+okunmuyor), `last`, `metrics_dropped` — hayır.
+
+**UdpClientStats** (rUDP istemci): `retrans_out`, `dup_in`,
+`oob_dropped`, `gave_up` — hayır (transport davranışları `gsb-net`'te
+testli: reorder/dedup/retransmit/oversized-drop; sayaçlar okunmuyor).
+
+**Komşu alanlar (sunucu metrik yüzeyi DIŞINDA — envanter görünür olsun
+diye listelenir, adlandırılmış maddenin kapsamı değildir):** loadgen'in
+kendi gözlem sayaçları (`ClientReport`: `moves`, `errors`,
+`join_rejected`, `cap_rejected`, `budget_rejected`, `acks`,
+`ack_processed_max`, `ack_lag_max_ms`, `fulls`, `private_fulls`,
+`deltas`, `gap_drops`, `view_size`, `still_frac`) — araç bunlarla
+ölçer; e2e tetik semantiğini (hata kodları) kısmen doğruluyor ama
+sayaç düzeyinde test yok. Demux/writer teşhis sayaçları (yalnız log,
+örnek yok: `established`, `bad_cookie`, `oversized_in`, `gave_up`,
+`retransmits`, per-session `oob_dropped`/`dup_in`/`inbox_full`, …)
+rapor yolu taşımıyor.
+
+### C — `.measure/` hijyeni
+
+Bir önceki turun loadgen ham çıktıları (A/B koşuları, binary'ler)
+`.measure/` altında untracked'di; rapor `git status --porcelain`
+çıktısına bakmadan "ağaç temiz" demişti (iki tur önce `.scratch/`'le
+birebir aynı hata). Seçim: **`.gitignore`'a ekleme** — `.scratch/`
+emsali (ölçüm ham çıktıları yerel çalışma verisi); silmek ayrıca
+yanlış, çünkü bu dosyalar önceki turun karşılaştırma tabanları.
+Doğrulama: `git status --porcelain` bu turun sonunda gerçekten boş
+(değişiklikler commit'lenmeden önce yalnız bu turun iki dosyası).
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
@@ -2597,6 +2732,23 @@ RESULT mode=in-proc visibility=spatial shards=1 max_snap_bytes=1400 clients=500 
 - [x] **Temel metrik** — kapatıldı: `gsb_core::metrics` +
   `MetricsCollector` (1 s rapor; log/kanal sink); kapsam ve tasarım
   "Kapatılanlar (metrik + yük turu)" + DESIGN §12'de.
+- [ ] **Kalan metrik sayaçları için doğru-yol testleri** — reject
+  bucket'larının (bu turda kapatıldı) aynı sınıfındaki kalan boşluk:
+  "doğru yolda arttığını" doğrulayan testi OLMAYAN sayaçların tam listesi
+  "Kapatılanlar (reject-bucket wiring + sayaç envanteri turu)"
+  bölümündeki tabloda. Kısaca: RoomSample `step_min/sum_us`,
+  `step_fine_hist` (oda tarafı), `late_*`, `lagged_*`,
+  `keepalive_resends`, `snap_bytes*`, `snap_overflows`, `snap_records`,
+  `shipped_*`, `private_frames`, `leaves`,
+  `requests_local/external/timed_out/late`, `pending_requests`;
+  RegistrySample `rooms_created/destroyed`, `joins/leaves`,
+  `opens/closes`; ConnSample `frames_in/out`, `violations`, `last`;
+  UdpClientStats `retrans_out`, `dup_in`, `oob_dropped`, `gave_up`.
+  Yöntem: sayaç başına yolu tetikleyip artışı assert eden test (altyapı
+  deseni: `tests/rpc.rs`'te `latest_room_sample` + adım başına
+  `metrics_cadence_hz`). Öncelik önerisi: operasyonel sinyaller
+  (cap/overflow ailesi + `requests_*` kardeşleri), sonra süre/
+  histogram ailesi, en son log-düzeyi değerler.
 - [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
   kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.
 
