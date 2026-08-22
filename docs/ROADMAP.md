@@ -67,7 +67,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → **111** (111/111 yeşil +1 var olan `#[ignore]`'li
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → **161** (161/161 yeşil +1 var olan `#[ignore]`'li
 gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
