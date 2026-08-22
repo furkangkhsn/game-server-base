@@ -1187,7 +1187,12 @@ where
             // request counters stay zero by construction.
             requests_local: 0,
             requests_external: 0,
-            requests_rejected: 0,
+            requests_rejected_malformed: 0,
+            requests_rejected_dup: 0,
+            requests_rejected_no_handler: 0,
+            requests_rejected_logic: 0,
+            requests_rejected_conn_cap: 0,
+            requests_rejected_room_cap: 0,
             requests_timed_out: 0,
             requests_late: 0,
             pending_requests: 0,

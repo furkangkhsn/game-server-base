@@ -43,10 +43,26 @@ bekleyemez. Çözüm üç parça:
    oda-local yanıtla **birebir aynıdır** (korelasyon id'si, `ok`,
    iç op, `reason`, `payload`).
 
-Temsil edilemez gecikmeler (worker'ın gelecekten daha yavaş çözmesi)
-yapısal olarak imkânsızdır: koruma, sürenin sonunda future'ı **öldürür**
-(bkz. §3). Bu yüzden "geç gelen yanıt" penceresi diye bir şey yoktur;
-her id için **tam olarak bir** yanıt vardır.
+İki farklı "geç" kavramı karıştırılmamalı:
+
+- **İstemciye görünür gecikmiş yanıt** (sürenin sonundan sonra
+  istemciye ulaşan yanıt): imkânsız — koruma, sürenin sonunda
+  future'ı **öldürür** (bkz. §3) ve süresi gelen id'yi süpürge
+  yanıtlamıştır.
+- **Geç gelen olay** (pending'den çıkmış bir id için worker raporu —
+  ör. bağlantı istek uçuştaiken odadan ayrıldı): **olabilir**, normal
+  bir durumdur ve müzakere onu **soğurur** — `requests_late` sayacı
+  tam olarak bu soğurulan olayları sayar (bkz. §3/§4).
+
+İstemciye görünür garanti: her id için **tam olarak bir** yanıt. Bu
+garanti "geç olay olamaz"dan değil, **"geç olay ikinci yanıt üretemez"**
+olguğundan gelir (koruma + süpürge süreyi kararlaştırır; müzakere
+geci kalan her raporu atar). `requests_late` sayacının normal
+işleyişte 0 **olmaması** beklenir (her uçuşta-istekli bağlantı
+ayrılışı bir tane üretir); 0 okumak, müzakere yolunun çalışmadığı
+anlamına gelir. Bu garantiye dayanıp müzakereyi "sadeleştirme"
+yapmayın: soğurucu kaldırılırsa ilk ayrılan bağlantının uçuşta
+istekleri istemciye ikinci yanıt olarak ulaşır.
 
 ## 2. Soru 1 (ana soru): Bekleyen (pending) durum NEREDEN?
 
@@ -138,12 +154,18 @@ kesindir:
 - Yanıt **şekil olarak diğer her reddiyle aynıdır** (id, `ok=false`,
   iç op, `reason`, boş payload). İstemci için "timeout" ile "reddedildi"
   aynı sınıf; neden metninde ayrılır.
-- Koruma **aynı süre sonunda** ateşlendiğinden, geç çözüm (late resolve)
-  **yapısal olarak imkânsızdır**: worker, süpürmenin yanıtladığı id ile
-  ikinci bir yanıt üretemez. "Tam olarak bir yanıt" garantisi,
-  senkronizasyonla değil yapıyla gelir. (Geç gelen **rapor** — bağlantı
-  arada kapatıldı ya da id arada yanıtlandı — ayrı bir yol: müzakere
-  onu `requests_late` olarak sayıp atar; bkz. §4.)
+- Koruma **aynı süre sonunda** ateşlendiğinden, sürenin sonundan sonra
+  bir çözüm istemciye **ikinci yanıt olarak** ulaşamaz: worker, süpürmenin
+  yanıtladığı id ile ikinci bir **istemciye görünür yanıt** üretemez.
+  Dikkat — doğru garanti bu cümlenin *yanıt* kelimesindedir, "geç olay
+  olamaz" ifadesinde değil: worker **raporu** gecikmiş olarak
+  üretebilir (bağlantı arada ayrıldıysa pending kaydı silinmiştir;
+  worker hâlâ koşar, süresi içinde çözer ve rapor eder). Müzakere bu
+  raporu atar ve `requests_late` olarak sayar (bkz. §4) — sayaç, bu
+  gecikmiş olayların **beklenen** bir sonucu olduğunu kanıtlar;
+  "gecikme imkânsız" diye okumayın, müzakereyi de o varsayım üzerine
+  sadeleştirmeyin. "Tam olarak bir yanıt" garantisi, koruma + süpürge +
+  müzakere üçlüsünden gelir.
 
 Süre sonu saati: kayıt anındaki `Instant` + `RoomConfig.request_timeout`
 (demo/varsayılan 5 sn). Oda saati = istemciye görünür otorite.
@@ -158,7 +180,7 @@ Süre sonu saati: kayıt anındaki `Instant` + `RoomConfig.request_timeout`
   (sınırsız geçmiş tutulmaz; bellek, cap'lerle sınırlıdır — §6).
 - **Dup (çalışan id tekrarı):** aynı id hâlâ pending'ken ikinci bir
   istek — hangi karar türü olursa olsun (Reply, Reject, External) —
-  **işlenmeden** reddedilir (aynı tick, normal ret, `requests_rejected`).
+  **işlenmeden** reddedilir (aynı tick, normal ret, `requests_rejected_dup`).
   Karar türüne göre değil karardan ÖNCE kontrol edilir: bu turda yakalanan
   gerçek bir oda hatası tam olarak buydu (oda-local bir istek, çalışan
   bir id'yi yeniden kullanarak **ikinci** yanıt alıyordu; test
@@ -168,10 +190,17 @@ Süre sonu saati: kayıt anındaki `Instant` + `RoomConfig.request_timeout`
   yanıtlanmış veya bağlantı gitmişken gelirse, 0b müzakeresi onu
   `requests_late` sayacıyla **atar**. İkisi de normal durumdur —
   istemciye "geç yanıt" asla gitmez.
-- **Bütçe (en kötü durum):** bağlantı başına 16 açık istek
-  (env + yanıt kuyruğu), oda başına 256 `PendingRequest` + 256 worker
-  görevi + 256 slot'lu `completions` kanalı. Cap aşımı = aynı tick'te
-  normal ret (§6).
+- **Bütçe (en kötü durum):** bağlantı başına 4 açık istek
+  (env + yanıt kuyruğu), oda başına 2000 `PendingRequest` + 2000 worker
+  görevi + 2000 slot'lu `completions` kanalı (varsayılanlar; §6'daki
+  türetim). Cap aşımı = aynı tick'te normal ret (§6).
+- **Ret sayaçları nedene göredir** (bu turda tek `requests_rejected`
+  yerini altı kovaya bıraktı — `req_rej_malformed / _dup / _no_handler
+  / _logic / _conn / _room`): her kova farklı bir operasyonel soruya
+  cevap verir (istemci protokol hatası mı, dup fırtınası mı, tek
+  bağlantı mı, oda bütçesi mi, oyun mantığının normal iş ret'i mi).
+  Oda cap'inin pratikte bağlayıp bağlamadığı — yani 2000'in doğru
+  sayı olup olmadığı — yalnız bu kovalardan ölçülür.
 
 ## 5. Soru 4: Aynı tick'te action + request SIRASI
 
@@ -197,20 +226,56 @@ action'lar) → 2c (tüm istekler) → SYSTEMS → BROADCAST
 
 ## 6. Soru 5: Bağlantı başına pending cap'i (ve neden oda bakar)
 
-- `max_pending_requests_per_conn` (varsayılan 16) ve
-  `max_pending_requests` (varsayılan 256) `RoomConfig` alanlarıdır ve
-  **2c'de, odada** denenir — çünkü pending durumun sahibi odadır (§2).
-  Conn actor'ü pending'i hiç saymaz (bilmez bile).
-- **Amaç:** tek bir istemcinin oda cap'ini (256) doldurabilmesini
-  sınırlamak. Bağlantı başına cap olmasaydı, tek bir bağlantı 256 slot
-  (256 worker görevi, her biri 5 sn'lik) tutabilirdi; iki bağlantı
-  odayı tükenmiş görürdü. Cap ile en kötü durum bağlantı başına 16'dır.
-- Cap aşımı, normal reddir (aynı tick, `requests_rejected`) —
+- `max_pending_requests_per_conn` (varsayılan **4**) ve
+  `max_pending_requests` (varsayılan **2000**) `RoomConfig` alanlarıdır
+  ve **2c'de, odada** denenir — çünkü pending durumun sahibi odadır
+  (§2). Conn actor'ü pending'i hiç saymaz (bilmez bile).
+- **Amaç:** tek bir istemcinin oda bütçesini doldurabilmesini
+  sınırlamak. Cap ile en kötü durum bağlantı başına 4'tür.
+- Cap aşımı, normal reddir (aynı tick; nedene göre sayaç — §4) —
   istemci "dolu" olduğunu öğrenir ve kendi zamanlayıcısıyla tekrar
   deneyebilir.
 - Ticket doğrulaması için eşdeğer sınırlama **yapısal**dır: bağlantı
   başı en fazla **bir** doğrulama çalışır (actor, oneshot'ta park
   ederken ikinci AUTH_REQ inbox'ta bekler — sayaç gerekmez; bkz. §7).
+
+### 6.1 Boyutlandırma kuralı (bu turda düzeltildi)
+
+**Cap = beklenen istek hızı × backend gecikmesi + pay. Nüfusa göre
+değil.** Uçuştaki (in-flight) istek sayısı Little yasasıyla belirlenir:
+`L = λ × T`. Örnek türetim: 10 000 oyuncu × oyuncu başına dakikada 1
+istek (λ ≈ 167/s) × 1 sn backend gecikmesi → **~167 uçuşta**; ~12×
+pay → **2000** (varsayılan). Popülasyonla ölçeklemeyin: "10 000
+oyuncu var → 40 000 cap" yanlıştır — 10 000 üyeli ama sakin bir oda
+küçük cap ister, 100 üyeli ama yavaş backend'e bağlı bir oda büyük cap
+ister; nüfus doğrudan girdi değildir.
+
+- **Bağlantı başına 4'ün türetimi:** meşru bir istemcinin aynı anda
+  1–2 isteği uçuştadır (mantıksal aksiyon başına bir; aynı karede
+  iki-aksiyon patlaması gerçekçi üst sınırdır); + 1–2 **retry payı**
+  (yanıt gelmeyen istek için istemci yeni id ile tekrar sorar; eski
+  slot cevabını alana dek doludur). 4 = 2 + 2. 2, patlama + retry'ı
+  reddeder; daha büyük değer tek sorunlu bağlantının oda bütçesinden
+  alabileceğini büyütür — adalet düğmesi zaten alttaki eşiğindedir.
+- **Tükenme eşiği (türetilmiş sayı):** oda cap / bağlantı başına cap =
+  2000 / 4 = **500 bağlantı**. Oda cap'i ancak 500+ bağlantı aynı anda
+  tam kota doluyken bağlar — 10 000 üyeli odada nüfusun **%5'i**.
+  Adalet özelliği bu sayıdadır: eşiğin altında hiçbir bağlantı alt
+  kümesi odanın pending bütçesini tek başına tüketemez. (Eski değerler
+  256/16 = **16 bağlantı** = 10 000 üyeli odanın %0.16'sı, kalan 9 984
+  kişiyi aç bırakabilirdi.)
+- **Sınır (bu turda dokümana girdi):** bu cap'ler istek **sayısını**
+  sınırlar (odanın kendi durum bütçesi), **backend eşzamanlılığını
+  değil**. 2000 uçuşta istek, backend'e en fazla 2000 **eşzamanlı**
+  çağrı demektir. Kapasitesi sınırlı bir servise gidiyorsanız
+  (örn. 32 eşzamanlılık) çağıran tarafında kendiniz throttle edin
+  (kendi kuyruk/havuzunuz): base, servisinizin kapasitesini ne biler ne
+  de bilmelidir.
+- **Doluluk-türetilmiş cap:** bilinçli olarak **yapılmadı** (statik
+  varsayılan + config korundu): 500'lük eşik, 10 000 üyeli odada bile
+  nüfusun %5'i altında kaldığı sürece adaleti sağlıyor; türetme, B'deki
+  ret kovalarının verisi (oda cap'i gerçekten bağlıyor mu) gelene kadar
+  kör bir değişiklik olurdu.
 
 ## 7. Bilet doğrulaması: bağlantı durumu ve bütçe etkileşimi
 
@@ -305,6 +370,31 @@ gürültüsünün altında kaldı.
 
 Kayıtlar: `.measure/ab_*.log` (tam RESULT satırları + loadavg).
 
+### 8.1 Cap turu: değer değişikliği sessiz yola dokunmuyor (bu tur)
+
+Cap'ler 16/256 → 4/2000 yapıldı (gerekçe §6.1). Cap değerleri yalnız
+istek yolunda (2c) okunduğundan, RPC trafiği **olmayan** 500-istemci
+koşusunda sessiz tick yolu değişmemeli. Doğrulama: aynı komut
+(`gsb-loadgen 500 --duration 30 --still-frac 0.9`, release,
+`taskset -c 8-15`), eski ve yeni binary, dönüşümlü, koşu başına loadavg
+kayıtlı; kontamine koşu atılmadı (loadavg 4.9–6.4 aralığında, masaüstü
+taban yüküyle uyumlu — argos + tarayıcı, user testi görünmedi).
+
+| binary | koşu | loadavg (başlangıç) | p50 fine | p90 fine | max | over-budget |
+|---|---|---|---|---|---|---|
+| eski (16/256) | 1 | 5.86 | 336 µs | 424 µs | 1541 µs | %0.0 |
+| eski (16/256) | 2 | 4.91 | 352 µs | 504 µs | 815 µs | %0.0 |
+| yeni (4/2000) | 1 | 6.36 | 368 µs | 456 µs | 1223 µs | %0.0 |
+| yeni (4/2000) | 2 | 6.10 | 328 µs | 464 µs | 1060 µs | %0.0 |
+
+p50 ortalaması 344 → 348 µs (+4 µs, %1.2 — koşular-arası gürültü;
+eşleştirme farkları +32/−24, yük ile korelasyonlu); over-budget tüm
+koşularda %0.0, `metrics_dropped=0`, `steps=900` (30.00 Hz). Sessiz
+yol değişmedi — beklendiği gibi. Kayıtlar: `.measure/cap_before{1,2}.log`,
+`.measure/cap_after{1,2}.log` (tam RESULT satırları; yeni satır
+`req_*` kuyruğunu da içeriyor — bu turun D maddesinin smoke
+assert'leri o alanlara dokunur).
+
 ## 9. Kontrol düzlemi: oda yaşam döngüsü ve maç-sonucu dikişi
 
 **API (composition root):** `ServerHandle::open_room(RoomConfig)`,
@@ -371,6 +461,19 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   kullanılabilir (sınırsız seen-set yok).
 - **Sabitleme sonrası oda taşınması:** biletin odası, bağlantının
   ömrü boyunca sabittir (yeniden auth gerekir).
+- **Worker havuzu (hazır task kümesine devir):** oda başına sabit K
+  worker + job kuyruğu tasarımı tartışıldı ve ertelendi — task sayısını
+  O(uçuşta) yerine O(K)'ya, backend eşzamanlılığını K'da sabitlerdi;
+  2000'lik mevcut cap'te per-request spawn güvenli (1–4 MB, ~2–4 ms
+  uyanma yayılımı). Havuz, 10 000 üyeli oda ölçeğinde ve/veya ret
+  kovaları oda cap'inin fiilen bağlıyor olduğunu gösterdiğinde bir sonraki
+  adım (kuyruk gecikmesi = overload'da dürüst timeout).
+- **Conn-side gate:** per-connection in-flight kümesinin conn actor'üde
+  tutulması (cap + dup kaynakta enforce) — bağımsız takip adımı; oda
+  tarafı cap bu turda yerinde kaldı.
+- **Loadgen'de RPC trafiği:** smoke assert'leri sıfır-trafik invariant'larını
+  doğruluyor; yük altında ret kovalarını gözlemleyecek RPC üreten bir
+  loadgen modu yok.
 
 ## 12. Testler: sözleşmenin kilidi
 

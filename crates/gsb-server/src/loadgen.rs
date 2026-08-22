@@ -1818,7 +1818,10 @@ fn print_report(
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
            actions_dropped_top={} transport={} retrans_out={} dup_in={} oob_dropped={} \
             gave_up={} acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} \
-            private_fulls={} deltas={} gap_drops={} view_size={} still_frac={}",
+            private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
+            req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
+            req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
+            req_to={} req_late={} req_pending={}",
         mode,
         args.visibility,
         if args.visibility == gsb_server::Visibility::Sharded {
@@ -1913,6 +1916,21 @@ fn print_report(
         gap_drops,
         view_size_total,
         args.still_frac,
+        // The room's RPC counters (zero on the smoke scenarios: they
+        // carry no RPC traffic — their presence in the line and their
+        // zero values are what the smoke asserts on; a shifted metric
+        // queue would surface here as missing keys or garbage values).
+        room.map(|r| r.requests_local).unwrap_or(0),
+        room.map(|r| r.requests_external).unwrap_or(0),
+        room.map(|r| r.requests_rejected_malformed).unwrap_or(0),
+        room.map(|r| r.requests_rejected_dup).unwrap_or(0),
+        room.map(|r| r.requests_rejected_no_handler).unwrap_or(0),
+        room.map(|r| r.requests_rejected_logic).unwrap_or(0),
+        room.map(|r| r.requests_rejected_conn_cap).unwrap_or(0),
+        room.map(|r| r.requests_rejected_room_cap).unwrap_or(0),
+        room.map(|r| r.requests_timed_out).unwrap_or(0),
+        room.map(|r| r.requests_late).unwrap_or(0),
+        room.map(|r| r.pending_requests).unwrap_or(0),
     );
 }
 
@@ -1966,7 +1984,10 @@ fn main() {
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u32 groups  u32 members  u32 max_group  u64 joins  u64 leaves
-///     u64 req_local  u64 req_ext  u64 req_rej  u64 req_to  u64 req_late
+///     u64 req_local  u64 req_ext
+///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
+///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
+///     u64 req_to  u64 req_late
 ///     u32 req_pending
 ///     u64 metrics_dropped
 ///   u8 registry_present
@@ -1992,7 +2013,12 @@ fn main() {
 /// GSM4 = the GSM3 layout plus each room's RPC counters
 /// (`req_local / req_ext / req_rej / req_to / req_late` cumulative +
 /// `req_pending` gauge, see `gsb_core::rpc` and `MetricReport::rooms`).
-const METRICS_MAGIC: u32 = 0x4753_4D34;
+/// GSM5 = the GSM4 layout with the single `req_rej` counter replaced by
+/// the six per-cause reject buckets (`req_rej_malformed / _dup /
+/// _no_handler / _logic / _conn / _room` — one per terminal reject
+/// decision in the room's tick body; the buckets answer distinct
+/// operational questions, which the cap-sizing measurement needs).
+const METRICS_MAGIC: u32 = 0x4753_4D35;
 
 /// Little-endian writer (the encode side of the format above).
 struct W(Vec<u8>);
@@ -2053,7 +2079,12 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.leaves);
         w.u64(room.requests_local);
         w.u64(room.requests_external);
-        w.u64(room.requests_rejected);
+        w.u64(room.requests_rejected_malformed);
+        w.u64(room.requests_rejected_dup);
+        w.u64(room.requests_rejected_no_handler);
+        w.u64(room.requests_rejected_logic);
+        w.u64(room.requests_rejected_conn_cap);
+        w.u64(room.requests_rejected_room_cap);
         w.u64(room.requests_timed_out);
         w.u64(room.requests_late);
         w.u32(room.pending_requests);
@@ -2190,7 +2221,12 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             leaves: r.u64()?,
             requests_local: r.u64()?,
             requests_external: r.u64()?,
-            requests_rejected: r.u64()?,
+            requests_rejected_malformed: r.u64()?,
+            requests_rejected_dup: r.u64()?,
+            requests_rejected_no_handler: r.u64()?,
+            requests_rejected_logic: r.u64()?,
+            requests_rejected_conn_cap: r.u64()?,
+            requests_rejected_room_cap: r.u64()?,
             requests_timed_out: r.u64()?,
             requests_late: r.u64()?,
             pending_requests: r.u32()?,

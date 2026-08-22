@@ -175,10 +175,16 @@ pub struct RoomConfig {
     /// budget (a request is an action), so the cap bounds state, not
     /// rate.
     ///
-    /// Default 16: a client with a deep request queue (every request
-    /// waiting on one slow service) cannot buy unbounded room state; 16
-    /// in flight already exceeds any realistic per-player request burst
-    /// at 30 Hz (one request per 6 ticks, sustained).
+    /// Default 4: a well-behaved client has at most 1–2 requests in
+    /// flight (one per logical action; a two-action burst in one frame
+    /// is the realistic maximum) plus 1–2 of retry headroom (a client
+    /// that suspects a lost answer re-requests under a FRESH id, which
+    /// occupies a new slot while the first is still pending). 4 = 2 + 2:
+    /// 2 would reject a burst+retry; larger values only let one
+    /// misbehaving connection hoard more of the room's budget — the
+    /// fairness knob is the exhaustion threshold (room cap / this cap),
+    /// see `max_pending_requests` and §6.1 of
+    /// `docs/RPC-CONTROL-PLANE.md`.
     pub max_pending_requests_per_conn: usize,
     /// Room-wide cap on pending external requests (all connections). The
     /// per-connection cap alone would still let N connections × the cap
@@ -186,11 +192,27 @@ pub struct RoomConfig {
     /// worker tasks; the room cap makes the room's delegation budget
     /// explicit and bounded independently of its population.
     ///
-    /// Default 256: the per-step cost of the pending set is a
-    /// `HashMap::is_empty` probe plus an `Instant` comparison per pending
-    /// *connection* on expiry checks — the cap keeps that cold path small
-    /// even in a large room (500 connections × 16 would be 8 000 pending
-    /// slots; 256 makes the room's external work a first-class budget).
+    /// Sizing rule: the in-flight count is driven by **request rate ×
+    /// backend latency** (Little's law: L = λ·T) — NOT by the room's
+    /// population. Example: 10 000 players × 1 request/min × 1 s of
+    /// backend latency ≈ 167 in flight; ×~12 headroom → the default
+    /// 2000. Full-cost at saturation: 2000 worker tasks ≈ 1–4 MB,
+    /// 2000 timers, worst-case wake spread ≈ 2–4 ms against the 33 ms
+    /// step budget.
+    ///
+    /// Exhaustion threshold (derived): room cap / per-connection cap =
+    /// 2000 / 4 = **500 connections** — the room cap can bind only if
+    /// ≥500 connections are simultaneously at their full per-connection
+    /// quota (5 % of a 10 000-member room); below it, no subset of
+    /// connections can starve the rest of the room of pending budget.
+    /// The fairness property lives in that number (see §6.1 of
+    /// `docs/RPC-CONTROL-PLANE.md`).
+    ///
+    /// Boundary: this caps the request COUNT (the room's own state
+    /// budget), NOT backend concurrency — 2000 in flight means up to
+    /// 2000 concurrent backend calls. Capacity-limited services need
+    /// call-site throttling (your own queue/pool): the base cannot know
+    /// the service's capacity.
     pub max_pending_requests: usize,
     /// The request timeout (see `crate::rpc`): a pending external request
     /// whose deadline passes is swept on the next tick and answered with
@@ -219,8 +241,8 @@ impl Default for RoomConfig {
             max_snapshot_bytes: 1400,
             keepalive_hz: 1.0,
             metrics_cadence_hz: 1.0,
-            max_pending_requests_per_conn: 16,
-            max_pending_requests: 256,
+            max_pending_requests_per_conn: 4,
+            max_pending_requests: 2000,
             request_timeout: Duration::from_secs(5),
         }
     }
@@ -593,10 +615,27 @@ pub(crate) struct RoomCounters {
     pub(crate) requests_local: u64,
     /// RPC requests delegated to a worker (registered pending), cumulative.
     pub(crate) requests_external: u64,
-    /// RPC requests rejected without processing (malformed envelope,
-    /// id = 0, no handler, in-flight duplicate, cap, decode failure in
-    /// the logic's decision path), cumulative.
-    pub(crate) requests_rejected: u64,
+    /// RPC rejections, split by cause (one bucket per terminal reject
+    /// decision in the tick body — see the `2a`/`2c` phases): the
+    /// buckets answer distinct operational questions (client protocol
+    /// bug vs. duplicate storm vs. one hoarding connection vs. room
+    /// budget vs. the game logic's own business rejections), which is
+    /// what the cap-sizing measurement needs (§6.1 of
+    /// `docs/RPC-CONTROL-PLANE.md`). Cumulative.
+    /// Malformed envelope or correlation id = 0 (cannot correlate).
+    pub(crate) requests_rejected_malformed: u64,
+    /// In-flight duplicate id (every decision kind; rejected without
+    /// re-processing).
+    pub(crate) requests_rejected_dup: u64,
+    /// The room's logic handles no request for the op.
+    pub(crate) requests_rejected_no_handler: u64,
+    /// The logic's own `Reject` decision (a business answer — normal
+    /// flow, not an anomaly).
+    pub(crate) requests_rejected_logic: u64,
+    /// The per-connection pending cap bound the request.
+    pub(crate) requests_rejected_conn_cap: u64,
+    /// The room-wide pending cap bound the request.
+    pub(crate) requests_rejected_room_cap: u64,
     /// Pending external requests swept as timed out (the client-visible
     /// timeout; see `crate::rpc`), cumulative.
     pub(crate) requests_timed_out: u64,
@@ -638,7 +677,12 @@ impl Default for RoomCounters {
             leaves: 0,
             requests_local: 0,
             requests_external: 0,
-            requests_rejected: 0,
+            requests_rejected_malformed: 0,
+            requests_rejected_dup: 0,
+            requests_rejected_no_handler: 0,
+            requests_rejected_logic: 0,
+            requests_rejected_conn_cap: 0,
+            requests_rejected_room_cap: 0,
             requests_timed_out: 0,
             requests_late: 0,
             step_max_group: 0,
@@ -1124,7 +1168,7 @@ where
                     false
                 }
                 _ => {
-                    self.m.requests_rejected += 1;
+                    self.m.requests_rejected_malformed += 1;
                     self.queue_reply(
                         a.conn,
                         0,
@@ -1165,7 +1209,7 @@ where
                 .get(&req.conn)
                 .is_some_and(|d| d.iter().any(|p| p.id == req.id))
             {
-                self.m.requests_rejected += 1;
+                self.m.requests_rejected_dup += 1;
                 self.queue_reply(
                     req.conn,
                     req.id,
@@ -1182,7 +1226,7 @@ where
                     // Not a request this logic handles: answer with a
                     // normal rejection (the client learns "no handler"
                     // instead of waiting for its own timeout).
-                    self.m.requests_rejected += 1;
+                    self.m.requests_rejected_no_handler += 1;
                     self.queue_reply(
                         req.conn,
                         req.id,
@@ -1197,7 +1241,7 @@ where
                     self.queue_reply(req.conn, req.id, req.op, true, String::new(), payload);
                 }
                 Some(crate::rpc::RequestDecision::Reject(reason)) => {
-                    self.m.requests_rejected += 1;
+                    self.m.requests_rejected_logic += 1;
                     self.queue_reply(req.conn, req.id, req.op, false, reason, bytes::Bytes::new());
                 }
                 Some(crate::rpc::RequestDecision::External(fut)) => {
@@ -1215,7 +1259,14 @@ where
                     let over_conn_cap = per_conn >= self.config.max_pending_requests_per_conn;
                     let over_room_cap = self.pending_total >= self.config.max_pending_requests;
                     if over_conn_cap || over_room_cap {
-                        self.m.requests_rejected += 1;
+                        // A request past both caps counts against the
+                        // per-connection one (the reply names it first —
+                        // the client's own quota is the actionable one).
+                        if over_conn_cap {
+                            self.m.requests_rejected_conn_cap += 1;
+                        } else {
+                            self.m.requests_rejected_room_cap += 1;
+                        }
                         let reason = if over_conn_cap {
                             "pending request limit reached (per connection)".to_string()
                         } else {
@@ -1320,7 +1371,12 @@ where
             leaves: self.m.leaves,
             requests_local: self.m.requests_local,
             requests_external: self.m.requests_external,
-            requests_rejected: self.m.requests_rejected,
+            requests_rejected_malformed: self.m.requests_rejected_malformed,
+            requests_rejected_dup: self.m.requests_rejected_dup,
+            requests_rejected_no_handler: self.m.requests_rejected_no_handler,
+            requests_rejected_logic: self.m.requests_rejected_logic,
+            requests_rejected_conn_cap: self.m.requests_rejected_conn_cap,
+            requests_rejected_room_cap: self.m.requests_rejected_room_cap,
             requests_timed_out: self.m.requests_timed_out,
             requests_late: self.m.requests_late,
             pending_requests: self.pending_total as u32,

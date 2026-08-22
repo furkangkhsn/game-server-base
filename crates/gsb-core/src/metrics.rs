@@ -286,9 +286,18 @@ pub struct RoomSample {
     /// RPC: requests delegated to a worker (registered pending),
     /// cumulative.
     pub requests_external: u64,
-    /// RPC: requests rejected without processing (malformed envelope,
-    /// id = 0, no handler, in-flight duplicate, cap), cumulative.
-    pub requests_rejected: u64,
+    /// RPC rejections, split by cause (the room's six terminal reject
+    /// decisions — see `gsb_core::room`; each bucket answers a distinct
+    /// operational question, which the cap-sizing measurement needs),
+    /// cumulative: malformed envelope / id = 0, in-flight duplicate id,
+    /// no handler for the op, the logic's own `Reject` decision,
+    /// per-connection pending cap, room-wide pending cap.
+    pub requests_rejected_malformed: u64,
+    pub requests_rejected_dup: u64,
+    pub requests_rejected_no_handler: u64,
+    pub requests_rejected_logic: u64,
+    pub requests_rejected_conn_cap: u64,
+    pub requests_rejected_room_cap: u64,
     /// RPC: pending external requests swept as timed out (the
     /// client-visible timeout), cumulative.
     pub requests_timed_out: u64,
@@ -482,11 +491,17 @@ pub struct RoomReport {
     pub joins: u64,
     pub leaves: u64,
     /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
-    /// (pending) requests, rejections without processing, timeout sweeps,
-    /// and late reports dropped by the reconciliation.
+    /// (pending) requests, rejections split by cause (see
+    /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and
+    /// late reports dropped by the reconciliation.
     pub requests_local: u64,
     pub requests_external: u64,
-    pub requests_rejected: u64,
+    pub requests_rejected_malformed: u64,
+    pub requests_rejected_dup: u64,
+    pub requests_rejected_no_handler: u64,
+    pub requests_rejected_logic: u64,
+    pub requests_rejected_conn_cap: u64,
+    pub requests_rejected_room_cap: u64,
     pub requests_timed_out: u64,
     pub requests_late: u64,
     /// RPC: external requests currently in flight (gauge).
@@ -639,7 +654,12 @@ impl MetricAccumulator {
                 leaves: latest.leaves,
                 requests_local: latest.requests_local,
                 requests_external: latest.requests_external,
-                requests_rejected: latest.requests_rejected,
+                requests_rejected_malformed: latest.requests_rejected_malformed,
+                requests_rejected_dup: latest.requests_rejected_dup,
+                requests_rejected_no_handler: latest.requests_rejected_no_handler,
+                requests_rejected_logic: latest.requests_rejected_logic,
+                requests_rejected_conn_cap: latest.requests_rejected_conn_cap,
+                requests_rejected_room_cap: latest.requests_rejected_room_cap,
                 requests_timed_out: latest.requests_timed_out,
                 requests_late: latest.requests_late,
                 pending_requests: latest.pending_requests,
@@ -722,7 +742,10 @@ impl MetricReport {
                  snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
                  groups={} members={} max_group={} joins={} leaves={} \
-                 req_local={} req_ext={} req_rej={} req_to={} req_late={} \
+                 req_local={} req_ext={} \
+                 req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
+                 req_rej_logic={} req_rej_conn={} req_rej_room={} \
+                 req_to={} req_late={} \
                  req_pending={} metrics_dropped={}",
                 r.room, r.steps, r.hz, r.budget_us,
                 r.step_min_us, r.step_mean_us, r.step_max_us,
@@ -738,7 +761,10 @@ impl MetricReport {
                 r.snap_records,
                 r.shipped_bytes, r.shipped_s,
                 r.groups, r.members, r.max_group, r.joins, r.leaves,
-                r.requests_local, r.requests_external, r.requests_rejected,
+                r.requests_local, r.requests_external,
+                r.requests_rejected_malformed, r.requests_rejected_dup,
+                r.requests_rejected_no_handler, r.requests_rejected_logic,
+                r.requests_rejected_conn_cap, r.requests_rejected_room_cap,
                 r.requests_timed_out, r.requests_late, r.pending_requests,
                 r.metrics_dropped
             ));
@@ -1012,7 +1038,12 @@ mod tests {
             leaves: 0,
             requests_local: 0,
             requests_external: 0,
-            requests_rejected: 0,
+            requests_rejected_malformed: 0,
+            requests_rejected_dup: 0,
+            requests_rejected_no_handler: 0,
+            requests_rejected_logic: 0,
+            requests_rejected_conn_cap: 0,
+            requests_rejected_room_cap: 0,
             requests_timed_out: 0,
             requests_late: 0,
             pending_requests: 0,

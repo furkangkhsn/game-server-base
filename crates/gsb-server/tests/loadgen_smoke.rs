@@ -78,6 +78,68 @@ fn loadgen_smoke() {
     assert!(out_bps > 0, "no server-side outbound bytes counted");
     let in_bps: u64 = get("server_in_bps").parse().expect("number");
     assert!(in_bps > 0, "no server-side inbound bytes counted");
+
+    // The metric queue (the room report fields that ride the metrics
+    // wire / binary socket): presence + sanity, so a shifted queue
+    // (fields reordered or dropped in the report codec) is caught here
+    // even though a fully broken codec would already fail `server_hz`.
+    assert_metric_queue(&kv, result_line);
+}
+
+/// Assert the room-report "queue" fields on a RESULT line: the fine
+/// step-duration percentiles (the measurement spec's metric) and the
+/// RPC counters (cumulative + the in-flight gauge). The smoke scenarios
+/// carry NO RPC traffic by construction (connect/auth/join/move/leave
+/// only), so every RPC counter must be present and exactly 0 — garbage
+/// values (a shifted queue) fail the zero check, missing keys fail the
+/// `get`.
+fn assert_metric_queue(
+    kv: &std::collections::HashMap<String, String>,
+    result_line: &str,
+) {
+    let get = |k: &str| -> String {
+        kv.get(k)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {k} in: {result_line}"))
+    };
+
+    // Fine step percentiles: present, positive, ordered, and far below
+    // a broken-tick regime (a 3–4 client room ticks in hundreds of
+    // microseconds even on a loaded machine; >20 ms means the
+    // histogram or the room itself is broken, not just slow).
+    let p50: u64 = get("step_p50_fine_us").parse().expect("number");
+    let p90: u64 = get("step_p90_fine_us").parse().expect("number");
+    assert!(p50 > 0, "step_p50_fine_us must be positive for a ticking room");
+    assert!(
+        p90 >= p50,
+        "fine histogram invariant violated: p90 {p90} < p50 {p50}"
+    );
+    assert!(
+        (p50..=20_000).contains(&p90) && p50 <= 20_000,
+        "fine percentiles p50={p50} p90={p90} outside (0, 20 000] µs"
+    );
+
+    // RPC queue: all present and exactly 0 (no RPC traffic in smoke).
+    for k in [
+        "req_local",
+        "req_ext",
+        "req_rej_malformed",
+        "req_rej_dup",
+        "req_rej_no_handler",
+        "req_rej_logic",
+        "req_rej_conn",
+        "req_rej_room",
+        "req_to",
+        "req_late",
+        "req_pending",
+    ] {
+        let v: u64 = get(k).parse().expect("number");
+        assert_eq!(v, 0, "smoke runs no RPC traffic; {k} must be 0");
+    }
+
+    // The collector kept up (0 samples dropped on the metrics channel).
+    let dropped: u64 = get("metrics_dropped").parse().expect("number");
+    assert_eq!(dropped, 0, "metrics channel dropped samples: {dropped}");
 }
 
 /// Smoke test for the separate-process mode (item A): the orchestrator
@@ -154,4 +216,8 @@ fn loadgen_smoke_separate_processes() {
         (20.0..=40.0).contains(&client_hz),
         "client-measured tick rate {client_hz} Hz far from the configured 30 Hz"
     );
+
+    // The metric queue crossed the BINARY socket (the report data, not
+    // stdout): presence + zero-RPC-traffic invariants.
+    assert_metric_queue(&kv, result_line);
 }
