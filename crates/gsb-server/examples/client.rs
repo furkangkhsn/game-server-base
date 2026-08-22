@@ -65,6 +65,7 @@ async fn main() {
     // order, so the join is processed after the auth.
     let auth = Auth {
         name: "client-1".into(),
+        ticket: vec![],
     };
     let join = JoinRoom { room_id: 1 };
     w.write_all(&frame(

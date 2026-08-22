@@ -62,6 +62,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
+use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -81,7 +82,12 @@ pub struct Action {
 }
 
 /// Static configuration for a room.
-#[derive(Debug, Clone)]
+///
+/// `PartialEq` (not just `Debug + Clone`): the control plane's
+/// idempotent create compares the requested config with the existing
+/// room's config (identical request = no-op success, different request
+/// = conflict — see `RegistryMsg::CreateRoom`).
+#[derive(Debug, Clone, PartialEq)]
 pub struct RoomConfig {
     pub id: RoomId,
     /// Simulation rate in ticks per second. Must divide the global ticker
@@ -160,6 +166,43 @@ pub struct RoomConfig {
     /// `> tick_hz` clamps to every step (you cannot sample faster than you
     /// step); `<= 0` means "every step" as well.
     pub metrics_cadence_hz: f64,
+    /// Per-connection cap on PENDING external (delegated) requests — the
+    /// request/RPC pattern (see `crate::rpc`). A request arriving when
+    /// the connection already has this many in flight is answered with a
+    /// normal rejection in the same tick. Room-local requests (answered
+    /// in the same tick) never occupy a pending slot. The arrival *rate*
+    /// is separately bounded by the READ phase's per-connection pull
+    /// budget (a request is an action), so the cap bounds state, not
+    /// rate.
+    ///
+    /// Default 16: a client with a deep request queue (every request
+    /// waiting on one slow service) cannot buy unbounded room state; 16
+    /// in flight already exceeds any realistic per-player request burst
+    /// at 30 Hz (one request per 6 ticks, sustained).
+    pub max_pending_requests_per_conn: usize,
+    /// Room-wide cap on pending external requests (all connections). The
+    /// per-connection cap alone would still let N connections × the cap
+    /// of pending work accumulate in the room's pending set and its
+    /// worker tasks; the room cap makes the room's delegation budget
+    /// explicit and bounded independently of its population.
+    ///
+    /// Default 256: the per-step cost of the pending set is a
+    /// `HashMap::is_empty` probe plus an `Instant` comparison per pending
+    /// *connection* on expiry checks — the cap keeps that cold path small
+    /// even in a large room (500 connections × 16 would be 8 000 pending
+    /// slots; 256 makes the room's external work a first-class budget).
+    pub max_pending_requests: usize,
+    /// The request timeout (see `crate::rpc`): a pending external request
+    /// whose deadline passes is swept on the next tick and answered with
+    /// a timeout reply (the client never hangs on an accepted request).
+    /// The worker task carries the same deadline internally as a resource
+    /// guard (a never-resolving future cannot outlive it).
+    ///
+    /// Default 5 s: comfortably above the latency of a healthy in-process
+    /// or networked service (the hook's job is a service round trip, not
+    /// game logic), short enough that a stuck dependency degrades a
+    /// client's request within one heartbeat cycle.
+    pub request_timeout: Duration,
 }
 
 impl Default for RoomConfig {
@@ -176,6 +219,9 @@ impl Default for RoomConfig {
             max_snapshot_bytes: 1400,
             keepalive_hz: 1.0,
             metrics_cadence_hz: 1.0,
+            max_pending_requests_per_conn: 16,
+            max_pending_requests: 256,
+            request_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -301,15 +347,80 @@ pub trait RoomLogic<W>: Send {
     /// re-derive it — each re-derivation is extra table lookups per
     /// connection per tick (measured: part of the idle floor).
     ///
+    /// `responses` is this tick's list of RPC answers owed to `conn`
+    /// (empty = none; see [`Self::handle_request`] and `crate::rpc`):
+    /// same-tick local answers and, on later ticks, the deferred answers
+    /// of external requests that completed (or timed out) since the
+    /// request was processed. The logic encodes them into the private
+    /// frame (`Private.responses` in the demo protocol) — the frame is
+    /// emitted whenever there is ANY content (ack, one-shot full, or
+    /// responses).
+    ///
     /// Default: none.
     fn private(
         &mut self,
         _world: &mut W,
         _conn: ConnectionId,
         _group: &Self::GroupKey,
+        _responses: &[crate::rpc::RpcReply],
         _out: &mut bytes::BytesMut,
     ) -> bool {
         false
+    }
+
+    /// Handle one correlated request (the RPC pattern; see `crate::rpc`
+    /// for the contract: id space, ordering, caps, timeouts).
+    ///
+    /// The request is guaranteed to belong to a connection that is in
+    /// the room (the room only pulls actions of registered connections)
+    /// and to carry a decodable base envelope with `id != 0` (the core
+    /// rejects the malformed/uncorrelable cases before this call). The
+    /// logic decides the request's fate:
+    ///
+    /// - [`RequestDecision::Reply`] — answered in this tick;
+    /// - [`RequestDecision::Reject`] — a normal rejection, this tick;
+    /// - [`RequestDecision::External`] — delegated; the core registers
+    ///   the request as pending (subject to the pending caps — an
+    ///   over-cap request is answered with a normal rejection even if
+    ///   the logic said `External`) and hands the future to a worker;
+    /// - `None` — the opcode is not a request this logic handles: the
+    ///   core answers with a normal rejection (the client learns "no
+    ///   handler" instead of waiting for its own timeout).
+    ///
+    /// Called once per request, in arrival order, AFTER this tick's
+    /// `ingest` (a request sees the world after the tick's fire-and-
+    /// forget actions were applied). Synchronous: an `External` decision
+    /// must be an OWNING future (`'static`) — the tick body ends long
+    /// before the work resolves.
+    ///
+    /// Default: `None` (a logic without request support gets a
+    /// "no handler" answer for every request — no behaviour change for
+    /// existing games, whose requests were previously ignored).
+    fn handle_request(
+        &mut self,
+        _world: &mut W,
+        _ctx: &TickCtx,
+        _req: &crate::rpc::RpcRequest,
+    ) -> Option<crate::rpc::RequestDecision> {
+        None
+    }
+
+    /// The match result to report through the room's result sink when the
+    /// room shuts down (any shutdown: a control-plane destroy, a server
+    /// stop). The room calls this after [`Self::on_shutdown`], right
+    /// before the world is dropped, passing the world (mutably — a
+    /// final-state query, e.g. bevy's `Query`, needs it) so the logic can
+    /// compute the result from final state without having cached it
+    /// (no per-tick cost). `None` = no result (the sink receives
+    /// nothing). The payload is game-encoded and opaque to the core.
+    ///
+    /// Delivery is best-effort (a bounded sink, a synchronous
+    /// `try_send`): a full or gone sink drops the result and warns —
+    /// a slow result consumer must not stall the room's teardown.
+    ///
+    /// Default: no result.
+    fn match_result(&mut self, _world: &mut W) -> Option<bytes::Bytes> {
+        None
     }
 
     /// Produce the payload to ship to a group on a **keep-alive tick**
@@ -478,6 +589,21 @@ pub(crate) struct RoomCounters {
     /// Joins / leaves processed on the control channel, cumulative.
     pub(crate) joins: u64,
     pub(crate) leaves: u64,
+    /// RPC requests answered room-local in the same tick, cumulative.
+    pub(crate) requests_local: u64,
+    /// RPC requests delegated to a worker (registered pending), cumulative.
+    pub(crate) requests_external: u64,
+    /// RPC requests rejected without processing (malformed envelope,
+    /// id = 0, no handler, in-flight duplicate, cap, decode failure in
+    /// the logic's decision path), cumulative.
+    pub(crate) requests_rejected: u64,
+    /// Pending external requests swept as timed out (the client-visible
+    /// timeout; see `crate::rpc`), cumulative.
+    pub(crate) requests_timed_out: u64,
+    /// Worker reports that arrived for an id no longer pending (already
+    /// answered, timed out, or the connection left) and were dropped,
+    /// cumulative (the exactly-one-answer reconciliation in action).
+    pub(crate) requests_late: u64,
     /// Largest snapshot group this tick (recomputed in the broadcast
     /// phase; carried in the per-step sample as a gauge).
     pub(crate) step_max_group: u32,
@@ -510,6 +636,11 @@ impl Default for RoomCounters {
             private_frames: 0,
             joins: 0,
             leaves: 0,
+            requests_local: 0,
+            requests_external: 0,
+            requests_rejected: 0,
+            requests_timed_out: 0,
+            requests_late: 0,
             step_max_group: 0,
         }
     }
@@ -551,12 +682,44 @@ pub struct RoomActor<W, G> {
     /// [`crate::metrics`]); the room sends with the synchronous `try_send`,
     /// so it adds no await (drops are counted and harmless).
     metrics: mpsc::Sender<MetricsEvent>,
+    // -- RPC (deferred completion; see `crate::rpc`) ----------------------
+    /// In-flight external requests, per connection (FIFO: deadlines are
+    /// non-decreasing per connection, so only the head can expire).
+    /// Owner of the pending state: the room is the single authority on
+    /// "is this request still pending" (module docs of `crate::rpc`).
+    pending: HashMap<ConnectionId, std::collections::VecDeque<crate::rpc::PendingRequest>>,
+    /// Total in-flight external requests (the room-wide cap).
+    pending_total: usize,
+    /// This tick's queued RPC answers per connection; drained in the
+    /// broadcast phase (handed to the logic's `private`) and emptied.
+    /// Cleared with the connection on leave/rejoin (a stale answer to a
+    /// gone session must not be delivered).
+    queued: HashMap<ConnectionId, Vec<crate::rpc::RpcReply>>,
+    /// Per-tick scratch for the rare path of the broadcast's RPC-answer
+    /// hand-off (a connection's removed `queued` entry, borrowed for the
+    /// logic's `private` call). A field so its capacity survives across
+    /// ticks; the quiet room never writes it.
+    replies_buf: Vec<crate::rpc::RpcReply>,
+    /// Worker reports: the room's inbox for delegated-request outcomes
+    /// (drained non-blockingly in the CONTROL phase — no new await).
+    completions: Inbox<crate::rpc::Completion>,
+    /// The room's sender half of the completion channel, cloned to each
+    /// spawned worker (bounded: a burst of completions cannot exceed the
+    /// room-wide pending cap, which is the channel's capacity).
+    completions_tx: Mailbox<crate::rpc::Completion>,
+    /// The room's match-result sink (the control plane's result seam; see
+    /// [`RoomLogic::match_result`]): a bounded mailbox, sent to with the
+    /// synchronous `try_send` on shutdown (no await, best effort).
+    result_sink: Option<Mailbox<crate::registry::MatchResult>>,
 }
 
 impl<W, G> RoomActor<W, G>
 where
     G: Eq + Hash + Clone + Debug,
 {
+    // The actor's wiring (the base's actor constructors take every
+    // mailbox the actor owns — the `new` is the composition point).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RoomConfig,
         world: W,
@@ -569,7 +732,18 @@ where
         // dropped receiver makes the send fail (ignored) — the room does not
         // observe it.
         metrics: mpsc::Sender<MetricsEvent>,
+        // The room's match-result sink (the control plane's result seam —
+        // see `RoomLogic::match_result`): a bounded mailbox; `None` = the
+        // room reports no result.
+        result_sink: Option<Mailbox<crate::registry::MatchResult>>,
     ) -> Self {
+        // The completion channel: bounded at the room-wide pending cap (a
+        // completion burst cannot exceed the number of in-flight workers,
+        // which is the cap) — the usual backpressure rule; the room drains
+        // it every tick's CONTROL phase, so a full channel only parks a
+        // worker until the next tick, never the room.
+        let (completions_tx, completions) =
+            mpsc::channel(config.max_pending_requests.max(1));
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
                 // The registry rejects this relationship at room creation;
@@ -615,6 +789,13 @@ where
             budget_us,
             m: RoomCounters::default(),
             metrics,
+            pending: HashMap::new(),
+            pending_total: 0,
+            queued: HashMap::new(),
+            replies_buf: Vec::new(),
+            completions,
+            completions_tx,
+            result_sink,
         }
     }
 
@@ -655,6 +836,29 @@ where
             }
         }
         self.logic.on_shutdown();
+        // The match-result seam (control plane): the logic computes the
+        // final result from the world (still alive — it is dropped only
+        // when `self` drops, below) and the room reports it to the sink
+        // with the synchronous `try_send` (no await: the room's only
+        // await stayed `tick_rx.recv()`). Best effort — a full or gone
+        // sink drops the result and warns (a slow result consumer must
+        // not stall the room's teardown).
+        if let Some(result) = self.logic.match_result(&mut self.world)
+            && let Some(sink) = &self.result_sink
+        {
+            match sink.try_send(crate::registry::MatchResult {
+                room: self.config.id,
+                payload: result,
+            }) {
+                Ok(()) => debug!(room = %self.config.id, "match result reported"),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!(room = %self.config.id, "match result dropped: sink full");
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    debug!(room = %self.config.id, "match result dropped: sink gone");
+                }
+            }
+        }
         debug!(
             room = %self.config.id,
             dropped_frames = self.m.dropped_frames,
@@ -758,6 +962,81 @@ where
             }
         }
 
+        // -- Phase 0b — deferred completions (the RPC pattern, see
+        //    `crate::rpc`): drain the worker reports (non-blocking — the
+        //    room never awaits a worker; this is the same try_recv
+        //    discipline as the control channel above) and reconcile each
+        //    report against the pending set. Exactly one answer per
+        //    request is structural: a report for an id that is no longer
+        //    pending (already answered, timed out below, or its
+        //    connection left) is dropped and counted.
+        while let Ok(rep) = self.completions.try_recv() {
+            let Some(deq) = self.pending.get_mut(&rep.conn) else {
+                // The connection left (its pending set was cleared on
+                // leave/rejoin): the report is stale by construction.
+                self.m.requests_late += 1;
+                continue;
+            };
+            match deq.iter().position(|p| p.id == rep.id) {
+                Some(idx) => {
+                    // The inner op comes from the pending entry (the
+                    // worker's report is outcome-only — the room is the
+                    // authority on the request's shape).
+                    let op = deq[idx].op;
+                    deq.remove(idx);
+                    self.pending_total -= 1;
+                    if deq.is_empty() {
+                        self.pending.remove(&rep.conn);
+                    }
+                    self.queued
+                        .entry(rep.conn)
+                        .or_default()
+                        .push(crate::rpc::RpcReply {
+                            id: rep.id,
+                            ok: rep.ok,
+                            op,
+                            reason: rep.reason,
+                            payload: rep.payload,
+                        });
+                }
+                None => self.m.requests_late += 1,
+            }
+        }
+        // Sweep expired pending requests (the client-visible timeout —
+        // see `crate::rpc`): per connection the deadlines are
+        // non-decreasing (same timeout, FIFO arrivals), so only the head
+        // of each deque can be due. The room's tick body stays
+        // synchronous: this is a wall-clock comparison, no await.
+        // Cost when quiet: one `is_empty` probe (the common case — a
+        // room with no pending requests pays nothing below it).
+        if !self.pending.is_empty() {
+            let now = Instant::now();
+            // Pop the due heads (conn + request together — the reply is
+            // owed to the request's owner), then queue the timeout
+            // replies outside the borrow of `self.pending`.
+            let mut due: Vec<(ConnectionId, crate::rpc::PendingRequest)> = Vec::new();
+            for (conn, deq) in self.pending.iter_mut() {
+                if let Some(front) = deq.front()
+                    && front.due <= now
+                    && let Some(p) = deq.pop_front()
+                {
+                    self.pending_total -= 1;
+                    due.push((*conn, p));
+                }
+            }
+            self.pending.retain(|_, deq| !deq.is_empty());
+            for (conn, p) in due {
+                self.m.requests_timed_out += 1;
+                self.queued.entry(conn).or_default().push(crate::rpc::RpcReply {
+                    id: p.id,
+                    ok: false,
+                    op: p.op,
+                    reason: crate::rpc::TIMEOUT_REASON.to_string(),
+                    payload: bytes::Bytes::new(),
+                });
+            }
+        }
+
         // -- Phase 1 — READ: pull each connection's actions (non-blocking;
         //    per-connection isolation — one flooder only fills its own
         //    channel), bounded twice:
@@ -807,8 +1086,195 @@ where
             }
         }
 
-        // -- Phase 2 — CONVERT: actions → component writes (game logic).
+        // -- Phase 2a — split the requests out of the pulled actions (the
+        //    RPC pattern, see `crate::rpc`). A request is an action
+        //    carrying the base-band envelope opcode; the core decodes the
+        //    envelope (a base message) and hands the rest to the logic.
+        //    The split is in-order: both the actions and the requests
+        //    keep their arrival order (the processing order contract:
+        //    all actions, then all requests — module docs of `rpc`).
+        //
+        //    Cost when quiet: one `u16` compare per pulled action — the
+        //    common case (no requests in the tick) touches nothing else.
+        //
+        //    A malformed envelope is a *normal rejection* (a client bug —
+        //    the same class as an undecodable game payload, which the
+        //    logic ignores today), not a protocol violation: the room
+        //    answers with a reject reply and counts it. `id = 0` is
+        //    rejected the same way (it cannot correlate).
+        let mut requests: Vec<crate::rpc::RpcRequest> = Vec::new();
+        actions.retain_mut(|a| {
+            if a.op != crate::rpc::RPC_REQ_OP {
+                return true;
+            }
+            match gsb_protocol::base::RpcRequest::decode(&a.payload[..]) {
+                Ok(env) if env.id != 0 => {
+                    requests.push(crate::rpc::RpcRequest {
+                        conn: a.conn,
+                        id: env.id,
+                        // The wire type is `u32` (proto3 has no 16-bit
+                        // integers); the op space is `u16` by protocol
+                        // contract — the same range the op registry
+                        // applies to every opcode (a value above the
+                        // space decodes to the `u16` truncation, and the
+                        // logic simply sees an op it does not handle).
+                        op: env.op as u16,
+                        payload: env.payload.into(),
+                    });
+                    false
+                }
+                _ => {
+                    self.m.requests_rejected += 1;
+                    self.queue_reply(
+                        a.conn,
+                        0,
+                        a.op,
+                        false,
+                        "malformed request envelope (or correlation id = 0)".to_string(),
+                        bytes::Bytes::new(),
+                    );
+                    false
+                }
+            }
+        });
+
+        // -- Phase 2b — CONVERT: actions → component writes (game logic).
+        //    All fire-and-forget actions are processed before the
+        //    requests (the ordering contract; a request sees the world
+        //    after this tick's actions were applied).
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
+
+        // -- Phase 2c — REQUESTS: the correlated requests (see `rpc`).
+        //    Synchronous: an `External` decision returns an owning
+        //    future that a spawned worker resolves off the tick; the
+        //    tick body only registers the request and (for the deferred
+        //    ones) spawns the worker.
+        for req in &requests {
+            // Duplicate id that is still in flight: reject WITHOUT
+            // re-processing — for every decision kind, not just external.
+            // An in-flight id is already correlated with a pending
+            // request: a second request under the same id (even a
+            // room-local one, which would be answered in this very tick)
+            // would produce a second reply for one id, and a retrying
+            // client must not be able to buy a double-applied side
+            // effect (see the `rpc` module docs). Normal rejection, same
+            // tick; the id becomes reusable once the first request is
+            // answered (no unbounded history).
+            if self
+                .pending
+                .get(&req.conn)
+                .is_some_and(|d| d.iter().any(|p| p.id == req.id))
+            {
+                self.m.requests_rejected += 1;
+                self.queue_reply(
+                    req.conn,
+                    req.id,
+                    req.op,
+                    false,
+                    "duplicate request id (the request is still in flight)".to_string(),
+                    bytes::Bytes::new(),
+                );
+                continue;
+            }
+            let decision = self.logic.handle_request(&mut self.world, &ctx, req);
+            match decision {
+                None => {
+                    // Not a request this logic handles: answer with a
+                    // normal rejection (the client learns "no handler"
+                    // instead of waiting for its own timeout).
+                    self.m.requests_rejected += 1;
+                    self.queue_reply(
+                        req.conn,
+                        req.id,
+                        req.op,
+                        false,
+                        format!("no request handler for op {:#04x}", req.op),
+                        bytes::Bytes::new(),
+                    );
+                }
+                Some(crate::rpc::RequestDecision::Reply(payload)) => {
+                    self.m.requests_local += 1;
+                    self.queue_reply(req.conn, req.id, req.op, true, String::new(), payload);
+                }
+                Some(crate::rpc::RequestDecision::Reject(reason)) => {
+                    self.m.requests_rejected += 1;
+                    self.queue_reply(req.conn, req.id, req.op, false, reason, bytes::Bytes::new());
+                }
+                Some(crate::rpc::RequestDecision::External(fut)) => {
+                    // Caps (the room's authority on pending state): a
+                    // request past a cap is a normal rejection, same
+                    // tick — the logic's `External` decision does not
+                    // commit the room to registering it. (The duplicate
+                    // check is above the decision: it applies to every
+                    // kind.)
+                    let per_conn = self
+                        .pending
+                        .get(&req.conn)
+                        .map(std::collections::VecDeque::len)
+                        .unwrap_or(0);
+                    let over_conn_cap = per_conn >= self.config.max_pending_requests_per_conn;
+                    let over_room_cap = self.pending_total >= self.config.max_pending_requests;
+                    if over_conn_cap || over_room_cap {
+                        self.m.requests_rejected += 1;
+                        let reason = if over_conn_cap {
+                            "pending request limit reached (per connection)".to_string()
+                        } else {
+                            "pending request limit reached (room)".to_string()
+                        };
+                        self.queue_reply(req.conn, req.id, req.op, false, reason, bytes::Bytes::new());
+                        continue;
+                    }
+                    // Register it pending, then delegate.
+                    let due = Instant::now() + self.config.request_timeout;
+                    self.pending
+                        .entry(req.conn)
+                        .or_default()
+                        .push_back(crate::rpc::PendingRequest {
+                            id: req.id,
+                            op: req.op,
+                            due,
+                        });
+                    self.pending_total += 1;
+                    self.m.requests_external += 1;
+                    // The worker: resolves the future (or gives up at the
+                    // same deadline the room's sweep enforces — the
+                    // worker's timeout is a resource guard, the room's
+                    // sweep is the client-visible authority; on expiry
+                    // the worker reports nothing). The report rides the
+                    // completion channel; the room reconciles it on a
+                    // later tick's CONTROL phase.
+                    let conn = req.conn;
+                    let id = req.id;
+                    let timeout = self.config.request_timeout;
+                    let report_tx = self.completions_tx.clone();
+                    tokio::spawn(async move {
+                        match tokio::time::timeout(timeout, fut).await {
+                            Ok(Ok(payload)) => {
+                                let _ = report_tx
+                                    .send(crate::rpc::Completion::reply(conn, id, payload))
+                                    .await;
+                            }
+                            Ok(Err(reason)) => {
+                                let _ = report_tx
+                                    .send(crate::rpc::Completion::error(conn, id, reason))
+                                    .await;
+                            }
+                            Err(_elapsed) => {
+                                // Timed out: no report — the room's sweep
+                                // owns the client-visible timeout (it may
+                                // have answered it already, on this or a
+                                // previous tick). The worker exits.
+                            }
+                        }
+                        // The report send fails (the channel is closed)
+                        // when the room shut down: the worker exits
+                        // either way — its lifetime is bounded by the
+                        // timeout in every case (no task outlives a
+                        // request by more than the timeout).
+                    });
+                }
+            }
+        }
 
         // -- Phase 3 — SYSTEMS: run the ordered game systems.
         self.logic.update(&mut self.world, &ctx);
@@ -852,6 +1318,12 @@ where
             private_frames: self.m.private_frames,
             joins: self.m.joins,
             leaves: self.m.leaves,
+            requests_local: self.m.requests_local,
+            requests_external: self.m.requests_external,
+            requests_rejected: self.m.requests_rejected,
+            requests_timed_out: self.m.requests_timed_out,
+            requests_late: self.m.requests_late,
+            pending_requests: self.pending_total as u32,
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
@@ -1046,6 +1518,13 @@ where
         // payload is split off, the capacity retained — no per-connection
         // per-tick allocation).
         let mut pbuf = bytes::BytesMut::new();
+        // RPC answers are the rare case: in a quiet room (no in-flight
+        // requests — the loadgen steady state) this is ONE `is_empty`
+        // probe for the whole fan-out. The per-connection map probe runs
+        // only on the ticks that actually owe an answer (measured: the
+        // 500-probe-per-tick form added tens of microseconds to the tick
+        // floor; the quiet path must stay O(1), like the 0b sweep above).
+        let has_replies = !self.queued.is_empty();
         for (conn, rc) in self.conns.iter_mut() {
             // The batch buffer is reused across ticks (floor breakdown: the
             // per-tick `Vec::with_capacity(2)` was a measured slice). It is
@@ -1063,8 +1542,19 @@ where
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
                 rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
+            // This connection's queued RPC answers for the tick (empty for
+            // the common case — the `has_replies` guard above keeps the
+            // quiet fan-out free of per-connection map probes). The logic
+            // encodes them into the private frame alongside any ack /
+            // one-shot full.
+            let replies: &[crate::rpc::RpcReply] = if has_replies {
+                self.replies_buf = self.queued.remove(conn).unwrap_or_default();
+                &self.replies_buf
+            } else {
+                &[]
+            };
             pbuf.clear();
-            if self.logic.private(&mut self.world, *conn, &rc.group, &mut pbuf) {
+            if self.logic.private(&mut self.world, *conn, &rc.group, replies, &mut pbuf) {
                 // Metrics: one shipped private frame and its payload size.
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
@@ -1083,15 +1573,64 @@ where
                 }
             }
         }
+        // Every connection was visited above (each owns at most one
+        // queued entry this tick), so anything left here belongs to a
+        // connection that was removed from the table this same tick and
+        // never got its frame: drop it (the request is answered exactly
+        // once — it was never delivered).
+        if !self.queued.is_empty() {
+            self.queued.clear();
+        }
         self.m.dropped_frames += dropped;
+    }
+
+    /// Queue one RPC answer for a connection's next (or this tick's, if
+    /// broadcast has not run yet) private frame. All request paths —
+    /// same-tick reply/reject, cap/duplicate rejects, the worker-report
+    /// reconciliation, the timeout sweep — funnel through here, so the
+    /// per-tick delivery point is exactly one.
+    fn queue_reply(
+        &mut self,
+        conn: ConnectionId,
+        id: u64,
+        op: u16,
+        ok: bool,
+        reason: String,
+        payload: bytes::Bytes,
+    ) {
+        self.queued.entry(conn).or_default().push(crate::rpc::RpcReply {
+            id,
+            ok,
+            op,
+            reason,
+            payload,
+        });
+    }
+
+    /// Drop a connection's request state (pending set + queued answers).
+    /// Called on leave and on join (a join supersedes the connection's
+    /// prior state, including a queued leave). Late worker reports for
+    /// the dropped requests find no pending entry and are dropped (the
+    /// exactly-one-answer reconciliation); the workers themselves exit
+    /// on their own (report send against a dropped entry, or their
+    /// timeout).
+    fn drop_conn_request_state(&mut self, conn: ConnectionId) {
+        if let Some(deq) = self.pending.remove(&conn) {
+            self.pending_total = self.pending_total.saturating_sub(deq.len());
+        }
+        self.queued.remove(&conn);
     }
 
     fn handle_control(&mut self, c: RoomControl) -> bool {
         match c {
             RoomControl::Join { conn, out, reply } => {
                 // A join supersedes any stale state this connection had
-                // (e.g. a leave queued behind it in the control channel).
+                // (e.g. a leave queued behind it in the control channel) —
+                // including its request state (a rejoin is a new session:
+                // in-flight requests and queued answers of the old one
+                // are dropped, and their late reports are discarded).
                 if self.conns.remove(&conn).is_some() {
+                    self.drop_conn_request_state(conn);
                     self.logic.on_leave(&mut self.world, conn);
                 }
                 // Capacity: the room knows its own membership — this is the
@@ -1136,6 +1675,11 @@ where
                 // currently owns.
                 if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
                     self.conns.remove(&conn);
+                    // The request state goes with the session: in-flight
+                    // requests are released (their slots free up for other
+                    // connections) and any queued answer is dropped (a
+                    // reply to a gone session is not delivered).
+                    self.drop_conn_request_state(conn);
                     self.logic.on_leave(&mut self.world, conn);
                     self.m.leaves += 1;
                     debug!(room = %self.config.id, %conn, entity, "player left");
@@ -1229,6 +1773,7 @@ mod tests {
                 control_rx,
                 run_every,
                 null_metrics_tx(),
+                None,
             );
             Self {
                 tick_tx,
@@ -1466,6 +2011,7 @@ mod tests {
             control_rx,
             1,
             null_metrics_tx(),
+                None,
         );
         let handle = tokio::spawn(actor.run());
 
@@ -1505,6 +2051,7 @@ mod tests {
             control_rx,
             1,
             null_metrics_tx(),
+                None,
         );
         let handle = tokio::spawn(actor.run());
         drop(tick_tx); // ticker aborted → broadcast closes
@@ -1578,6 +2125,7 @@ mod tests {
             _w: &mut (),
             conn: ConnectionId,
             _group: &ConnectionId,
+            _responses: &[crate::rpc::RpcReply],
             out: &mut bytes::BytesMut,
         ) -> bool {
             if conn == ConnectionId(0x70) {
@@ -1630,6 +2178,7 @@ mod tests {
                 control_rx,
                 1,
                 null_metrics_tx(),
+                None,
             );
             Self {
                 tick_tx,
@@ -1888,6 +2437,7 @@ mod tests {
             control_rx,
             1,
             null_metrics_tx(),
+                None,
         );
         let handle = tokio::spawn(actor.run());
         let t0 = Instant::now();
@@ -2024,6 +2574,7 @@ mod tests {
             control_rx,
             1,
             null_metrics_tx(),
+                None,
         );
         let handle = tokio::spawn(actor.run());
         let t0 = Instant::now();
@@ -2207,6 +2758,7 @@ mod tests {
                 control_rx,
                 1,
                 null_metrics_tx(),
+                None,
             )
         });
         let handle = tokio::spawn(actor.run());
@@ -2298,6 +2850,7 @@ mod tests {
                     control_rx2,
                     1,
                     null_metrics_tx(),
+                None,
                 );
             });
         }
@@ -2427,6 +2980,7 @@ mod tests {
             control_rx,
             1,
             null_metrics_tx(),
+                None,
         );
         let handle = tokio::spawn(actor.run());
         let t0 = Instant::now();

@@ -8,12 +8,29 @@ syntax = "proto3";
 package gsb.base;
 
 message Auth {
+  // The local (legacy) identity: used when the server runs WITHOUT a
+  // ticket validator (the name is accepted as-is). With a validator
+  // configured, `ticket` must be non-empty and the ticket's identity
+  // supersedes `name` (the hook is the authority).
   string name = 1;
+  // Platform-issued ticket (opaque bytes; the server's ticket-validation
+  // hook decides its format). Empty + a configured validator =
+  // rejected (ERROR code 10).
+  bytes ticket = 2;
 }
 
 message AuthResult {
   bool ok = 1;
   string reason = 2;
+  // Ticket-auth only (empty on the local-auth path): the player identity
+  // the validator extracted from the ticket (the hook is the authority,
+  // it supersedes `Auth.name`).
+  string player = 3;
+  // Ticket-auth only (0 on the local-auth path): the room id the ticket
+  // pins; a later JOIN_ROOM_REQ naming a different room is rejected with
+  // ERROR code 11 (the connection stays alive and may join the pinned
+  // room).
+  uint64 room = 4;
 }
 
 message JoinRoom {
@@ -51,7 +68,44 @@ message HeartbeatAck {
 //       the connection's protocol-violation budget exhausted — see the
 //       message for which; the connection is closed right after this
 //       frame)
+//   10 = ticket validation failed (the server's ticket validator
+//        rejected the presented ticket, or the validation timed out;
+//        a NORMAL rejection — the connection STAYS ALIVE and may
+//        re-present a fresh ticket; never counted against the
+//        protocol-violation budget)
+//   11 = join room does not match the ticket's room (a ticket-auth
+//        connection tried to join a room other than the one its ticket
+//        pins; a normal rejection — join the pinned room)
 message Error {
   uint32 code = 1;
   string message = 2;
+}
+
+// Client → server: correlated request envelope (opcode RPC_REQ = 12,
+// see the op module). The client wraps a game-band request (its opcode
+// and encoded payload) in this envelope together with a correlation id.
+// The room answers on the per-connection private frame path
+// (`Private.responses`, a game-protocol frame) — never with a frame of
+// its own, so the response rides the same per-tick, per-connection
+// delivery as input acks (bounded, attributed, no extra channel).
+//
+// `id` is client-assigned and per-connection: monotonic from 1 is the
+// well-behaved pattern (the server only needs it to match reply to
+// request WITHIN this connection's stream — the correlation space does
+// not cross connections). `id = 0` is rejected (it cannot correlate).
+// A duplicate `id` that is still PENDING (in flight) is rejected without
+// re-processing (a client retrying an in-flight request must not buy a
+// double-applied side effect); a duplicate of an already-ANSWERED id
+// is indistinguishable from a fresh request that recycled the number
+// and is processed (the server keeps no per-connection history beyond
+// the pending set — an unbounded "seen ids" table would be a leak).
+message RpcRequest {
+  uint64 id = 1;
+  // The inner (game-band) opcode. `uint32` on the wire (proto3 has no
+  // 16-bit integers); the op space is `u16` by protocol contract (the
+  // Rust side decodes into a `u32` field and the room hands it to the
+  // logic as `u16` after the same range discipline the op registry
+  // applies to every opcode).
+  uint32 op = 2;
+  bytes payload = 3;
 }

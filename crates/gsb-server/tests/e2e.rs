@@ -202,7 +202,11 @@ async fn join_and_observe_movement(kind: Kind) {
         .await
         .expect("client connects");
 
-    let auth = Auth { name: "e2e".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "e2e".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -305,7 +309,11 @@ async fn idle_connection_is_closed(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth { name: "idle".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "idle".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -359,7 +367,11 @@ async fn active_heartbeat_survives(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth { name: "active".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "active".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -409,7 +421,11 @@ async fn room_full_gentle_rejection(kind: Kind) {
 
     // Player A takes the only seat.
     let mut a = Client::connect(kind, addr).await.expect("A connects");
-    let auth_a = Auth { name: "a".into() }.encode_to_vec();
+    let auth_a = Auth {
+        name: "a".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
         .await
         .unwrap();
@@ -435,7 +451,11 @@ async fn room_full_gentle_rejection(kind: Kind) {
 
     // Player B is rejected (code 8)…
     let mut b = Client::connect(kind, addr).await.expect("B connects");
-    let auth_b = Auth { name: "b".into() }.encode_to_vec();
+    let auth_b = Auth {
+        name: "b".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     b.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_b)
         .await
         .unwrap();
@@ -502,7 +522,11 @@ async fn connection_capacity_rejects(kind: Kind) {
 
     // A takes the only seat (and auths, so it is fully live).
     let mut a = Client::connect(kind, addr).await.expect("A connects");
-    let auth_a = Auth { name: "a".into() }.encode_to_vec();
+    let auth_a = Auth {
+        name: "a".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
         .await
         .unwrap();
@@ -576,7 +600,11 @@ async fn flooder_drops_attributed(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth { name: "flood".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "flood".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -793,4 +821,592 @@ async fn violation_budget_answers_three_then_closes_the_connection() {
     for kind in kinds() {
         violation_budget_close(kind).await;
     }
+}
+
+// ── the control-plane entry (feature A) + the RPC pattern (feature B),
+//    over the wire ───────────────────────────────────────────────────────
+//
+// These flows are wire-level and TCP-only by intent: rUDP's lossy snapshot
+// band has no place in byte-exact control-frame assertions, and the
+// transport-agnostic contracts are locked by the gsb-core suites
+// (control_plane.rs, rpc.rs, ticket.rs) and by the per-transport tests
+// above. The `Client` helper is reused as-is.
+
+fn room_cfg(id: u64) -> gsb_core::room::RoomConfig {
+    gsb_core::room::RoomConfig {
+        id: gsb_core::id::RoomId(id),
+        tick_hz: 30.0, // the server's global rate (the room must divide it)
+        ..Default::default()
+    }
+}
+
+fn auth_wire(name: &str, ticket: &[u8]) -> (u16, Vec<u8>) {
+    (
+        gsb_protocol::op::base::AUTH_REQ,
+        Auth {
+            name: name.into(),
+            ticket: ticket.to_vec(),
+        }
+        .encode_to_vec(),
+    )
+}
+
+fn join_wire(room: u64) -> (u16, Vec<u8>) {
+    (
+        gsb_protocol::op::base::JOIN_ROOM_REQ,
+        JoinRoom { room_id: room }.encode_to_vec(),
+    )
+}
+
+/// One correlated request on the wire: the base-band envelope opcode
+/// carrying `{id, op, payload}` (the room decodes the envelope).
+fn rpc_wire(id: u64, inner_op: u16, payload: &[u8]) -> (u16, Vec<u8>) {
+    (
+        gsb_protocol::op::base::RPC_REQ,
+        gsb_protocol::base::RpcRequest {
+            id,
+            op: inner_op as u32,
+            payload: payload.to_vec(),
+        }
+        .encode_to_vec(),
+    )
+}
+
+/// Auth + join `room` over a client; returns the entity id.
+async fn auth_and_join(client: &mut Client, room: u64) -> u64 {
+    let (op, payload) = auth_wire("e2e", &[]);
+    client.write_frame(op, &payload).await.unwrap();
+    let (op, payload) = join_wire(room);
+    client.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out in auth_and_join"));
+        match client.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) => match op {
+                gsb_protocol::op::base::AUTH_RESULT => {
+                    let m = AuthResult::decode(&payload[..]).unwrap();
+                    assert!(m.ok, "auth must succeed");
+                }
+                gsb_protocol::op::base::JOIN_ROOM_RESULT => {
+                    let m = JoinRoomResult::decode(&payload[..]).unwrap();
+                    assert!(m.entity != 0);
+                    return m.entity;
+                }
+                gsb_protocol::op::base::ERROR => {
+                    let m = Error::decode(&payload[..]).unwrap();
+                    panic!("join failed: code={} message={}", m.code, m.message);
+                }
+                _ => {} // snapshots may race the join result
+            },
+            Recv::Closed => panic!("server closed the connection"),
+            Recv::TimedOut => {}
+        }
+    }
+}
+
+/// The control plane's lifecycle API: create is idempotent (the same
+/// config twice → one room; a different config → conflict), close is a
+/// no-op on an absent room, and status reports the registry's view.
+#[tokio::test]
+async fn control_plane_room_lifecycle_is_idempotent_over_the_wire() {
+    let handle = gsb_server::start_server(cfg_on(Kind::Tcp, None, None, None))
+        .await
+        .expect("server starts");
+
+    // "Open the room" twice with the same config: two Ok replies, ONE
+    // room (the second reply is the existing room's status).
+    let cfg7 = room_cfg(7);
+    let s1 = handle.open_room(cfg7.clone()).await.expect("first open");
+    assert_eq!(s1, gsb_core::registry::RoomStatus::Running { members: 0 });
+    let s2 = handle.open_room(cfg7.clone()).await.expect("second open (retry)");
+    assert_eq!(
+        s2,
+        gsb_core::registry::RoomStatus::Running { members: 0 },
+        "the idempotent retry must report the same room"
+    );
+
+    // A different config for a live room conflicts (the typo guard).
+    let conflict = gsb_core::room::RoomConfig {
+        max_players: Some(1),
+        ..cfg7.clone()
+    };
+    assert!(
+        matches!(
+            handle.open_room(conflict).await,
+            Err(gsb_core::error::CoreError::RoomConflict(7))
+        ),
+        "a different config must conflict, not replace"
+    );
+
+    // Status: running, then the close lifecycle (destroyed → absent →
+    // an idempotent close no-op).
+    assert_eq!(
+        handle.room_status(gsb_core::id::RoomId(7)).await.expect("status"),
+        gsb_core::registry::RoomStatus::Running { members: 0 }
+    );
+    assert_eq!(
+        handle.close_room(gsb_core::id::RoomId(7)).await.expect("close"),
+        gsb_core::registry::RoomStatus::Destroyed
+    );
+    assert_eq!(
+        handle.room_status(gsb_core::id::RoomId(7)).await.expect("status"),
+        gsb_core::registry::RoomStatus::Absent
+    );
+    assert_eq!(
+        handle.close_room(gsb_core::id::RoomId(7)).await.expect("close no-op"),
+        gsb_core::registry::RoomStatus::Absent
+    );
+
+    handle.stop().await;
+}
+
+/// A runtime-opened room enforces its own capacity: a second player into
+/// a max-players-1 room gets the gentle ERROR 8 (the connection stays
+/// alive).
+#[tokio::test]
+async fn control_plane_runtime_room_capacity_is_enforced() {
+    let handle = gsb_server::start_server(cfg_on(Kind::Tcp, None, None, None))
+        .await
+        .expect("server starts");
+    let cfg5 = gsb_core::room::RoomConfig {
+        max_players: Some(1),
+        ..room_cfg(5)
+    };
+    handle.open_room(cfg5).await.expect("open room 5");
+
+    let mut a = Client::connect(Kind::Tcp, handle.addr).await.expect("A");
+    auth_and_join(&mut a, 5).await;
+
+    let mut b = Client::connect(Kind::Tcp, handle.addr).await.expect("B");
+    let (op, payload) = auth_wire("e2e", &[]);
+    b.write_frame(op, &payload).await.unwrap();
+    let (op, payload) = join_wire(5);
+    b.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for B's rejection"));
+        match b.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) => {
+                if op != gsb_protocol::op::base::ERROR {
+                    continue;
+                }
+                let m = Error::decode(&payload[..]).unwrap();
+                assert_eq!(m.code, 8, "a full room is a gentle code 8");
+                // B's connection stays alive (the gentle-reject contract):
+                assert!(b.probe().await.unwrap(), "B must survive the code 8");
+                return;
+            }
+            Recv::Closed => panic!("B was closed instead of gently rejected"),
+            Recv::TimedOut => {}
+        }
+    }
+}
+
+/// The match-result exit seam over the wire: a room with a player in it
+/// reports its final state through `handle.match_results` on close.
+#[tokio::test]
+async fn control_plane_match_result_reports_on_close() {
+    let handle = gsb_server::start_server(cfg_on(Kind::Tcp, None, None, None))
+        .await
+        .expect("server starts");
+    let mut a = Client::connect(Kind::Tcp, handle.addr).await.expect("client");
+    auth_and_join(&mut a, 1).await;
+
+    assert_eq!(
+        handle.close_room(gsb_core::id::RoomId(1)).await.expect("close"),
+        gsb_core::registry::RoomStatus::Destroyed
+    );
+    let mut handle = handle;
+    let result = tokio::time::timeout(Duration::from_secs(10), handle.match_results.recv())
+        .await
+        .expect("timed out waiting for the match result")
+        .expect("result sink closed");
+    assert_eq!(result.room, gsb_core::id::RoomId(1));
+    // The demo's result is its final world snapshot (self-contained,
+    // delta=false) and it carries the player that was in the room.
+    let snap = gsb_game::game::WorldSnapshot::decode(&result.payload[..])
+        .expect("the result is a WorldSnapshot");
+    assert!(!snap.delta, "the shutdown snapshot is a full");
+    assert!(
+        !snap.entities.is_empty(),
+        "the result must carry the room's final players"
+    );
+    handle.stop().await;
+}
+
+/// The RPC pattern over the wire: a room-local request is answered
+/// (the `Private.responses` shape, to the requester only — no leak to
+/// the other player in the room), and an external-I/O request is
+/// answered on a LATER tick (its answer cannot ride the request's own
+/// tick's frames).
+#[tokio::test]
+async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
+    let handle = gsb_server::start_server(cfg_on(Kind::Tcp, None, None, None))
+        .await
+        .expect("server starts");
+    let mut a = Client::connect(Kind::Tcp, handle.addr).await.expect("A");
+    let mut b = Client::connect(Kind::Tcp, handle.addr).await.expect("B");
+    let a_entity = auth_and_join(&mut a, 1).await;
+    auth_and_join(&mut b, 1).await;
+
+    // A's current position (from its own snapshot) — the ability will
+    // target IT, so the demo's range check (10 units) trivially passes.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // Uninitialized on purpose: the loop's only exits are the
+    // assignment below (break) or a panic — a single write before
+    // use, so no `mut` is needed.
+    let a_pos: (i32, i32);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for A's snapshot"));
+        match a.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                let m = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                if let Some(rec) = m.entities.iter().find(|e| e.entity == a_entity) {
+                    a_pos = (rec.x, rec.y);
+                    break;
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("A closed"),
+            Recv::TimedOut => {}
+        }
+    }
+
+    // --- Room-local (ABILITY): request → answer, and B never sees it.
+    let use_msg = gsb_game::game::AbilityUse {
+        x: a_pos.0,
+        y: a_pos.1,
+    }
+    .encode_to_vec();
+    let (op, payload) = rpc_wire(1, gsb_game::op::ABILITY, &use_msg);
+    a.write_frame(op, &payload).await.unwrap();
+
+    // A: read until the reply for id 1 arrives; remember the snapshot
+    // sequence stream (the reply rides the request's ingest tick).
+    let mut a_reply: Option<(bool, u16)> = None;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while a_reply.is_none() && Instant::now() < deadline {
+        match a.recv(Duration::from_millis(200)).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
+                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+                for r in &m.responses {
+                    if r.id == 1 {
+                        a_reply = Some((r.ok, r.op as u16));
+                    }
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("A closed"),
+            Recv::TimedOut => {}
+        }
+    }
+    let (ok, op) = a_reply.expect("A's local request must be answered");
+    assert!(ok, "an in-range ability must succeed");
+    assert_eq!(op, gsb_game::op::ABILITY, "the answer carries the inner op");
+
+    // B: drain its stream for a window; it must NOT carry a reply for
+    // A's id (the answer is per-connection private).
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        match b.recv(Duration::from_millis(50)).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
+                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+                assert!(
+                    !m.responses.iter().any(|r| r.id == 1),
+                    "A's reply leaked to B"
+                );
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("B closed"),
+            Recv::TimedOut => break,
+        }
+    }
+
+    // --- External-I/O (ECONOMY): the round trip over the wire.
+    let buy = gsb_game::game::BuyItem { kind: "potion".into() }.encode_to_vec();
+    let (op, payload) = rpc_wire(2, gsb_game::op::ECONOMY, &buy);
+    a.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut answered: Option<Vec<u8>> = None;
+    while answered.is_none() && Instant::now() < deadline {
+        match a.recv(Duration::from_millis(200)).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
+                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+                for r in &m.responses {
+                    if r.id == 2 {
+                        assert!(r.ok, "buying a potion must succeed");
+                        assert_eq!(r.op as u16, gsb_game::op::ECONOMY);
+                        answered = Some(r.payload.clone());
+                    }
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("A closed"),
+            Recv::TimedOut => {}
+        }
+    }
+    let result = gsb_game::game::BuyResult::decode(
+        &answered.expect("the external request must be answered")[..],
+    )
+    .expect("the answer decodes as BuyResult");
+    assert!(result.ok, "the economy service must sell the potion");
+    assert_eq!(result.price, 100, "the price comes from the service");
+
+    // --- Later-tick proof over the wire: send the EXTERNAL request
+    //     first and the LOCAL one in the same burst. If both are
+    //     ingested in one tick (the normal case), the local answer
+    //     rides THAT tick's broadcast while the external answer can
+    //     only ride a later one — so the local reply precedes the
+    //     external reply in A's stream. An inverted order means the
+    //     two writes straddled a tick boundary (a scheduling race, not
+    //     a protocol fact) — the pair is replayed with fresh ids.
+    let buy2 = gsb_game::game::BuyItem { kind: "potion".into() }.encode_to_vec();
+    let use2 = gsb_game::game::AbilityUse {
+        x: a_pos.0,
+        y: a_pos.1,
+    }
+    .encode_to_vec();
+    let mut settled = false;
+    for attempt in 0..8 {
+        let ext_id = 100 + attempt;
+        let loc_id = 101 + attempt;
+        let (op, payload) = rpc_wire(ext_id, gsb_game::op::ECONOMY, &buy2);
+        a.write_frame(op, &payload).await.unwrap();
+        let (op, payload) = rpc_wire(loc_id, gsb_game::op::ABILITY, &use2);
+        a.write_frame(op, &payload).await.unwrap();
+
+        let mut local_first: Option<bool> = None;
+        let mut ext_seen = false;
+        let mut loc_seen = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(ext_seen && loc_seen) && Instant::now() < deadline {
+            match a.recv(Duration::from_millis(200)).await.unwrap() {
+                Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
+                    let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+                    for r in &m.responses {
+                        if r.id == loc_id {
+                            if !ext_seen {
+                                local_first = Some(true);
+                            }
+                            loc_seen = true;
+                        } else if r.id == ext_id {
+                            if !loc_seen {
+                                local_first = Some(false);
+                            }
+                            ext_seen = true;
+                        }
+                    }
+                }
+                Recv::Frame(_) => {}
+                Recv::Closed => panic!("A closed"),
+                Recv::TimedOut => {}
+            }
+        }
+        assert!(
+            ext_seen && loc_seen,
+            "attempt {attempt}: both probe answers must arrive (ext_seen={ext_seen}, loc_seen={loc_seen})"
+        );
+        if local_first.expect("both seen") {
+            settled = true;
+            break; // the local answer rode the ingest tick; the
+                   // external one necessarily rode a later one.
+        }
+        // Straddled tick boundary: this pair proves nothing about
+        // ordering — replay with fresh ids.
+    }
+    assert!(
+        settled,
+        "the local answer must precede the external one (8 straddled
+         attempts is not a scheduling race)"
+    );
+
+    handle.stop().await;
+}
+
+/// The ticket-validation hook over the wire (feature A, item 2): an
+/// invalid ticket is a normal rejection (code 10, the connection
+/// survives); a valid ticket authenticates with the hook's identity and
+/// pins the join (wrong room → code 11, right room → in); and while a
+/// slow validation is in flight, the room keeps ticking at rate (the
+/// tick body never awaits the validator — the in-room player's snapshot
+/// stream stays continuous).
+#[tokio::test]
+async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
+    // The platform's validator (the base defines the hook, the platform
+    // ships this behaviour): `slow` sleeps 250 ms (simulating a
+    // signature-service round trip), `good` resolves fast.
+    let validator: gsb_core::auth::TicketValidator = std::sync::Arc::new(move |t: bytes::Bytes| {
+        Box::pin(async move {
+            match t.as_ref() {
+                b"slow" => {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    Ok(gsb_core::auth::ValidatedTicket {
+                        player: "slow".into(),
+                        room: gsb_core::id::RoomId(1),
+                    })
+                }
+                b"good" => Ok(gsb_core::auth::ValidatedTicket {
+                    player: "neo".into(),
+                    room: gsb_core::id::RoomId(1),
+                }),
+                _ => Err(gsb_core::auth::TicketError::Rejected("bad ticket".into())),
+            }
+        })
+    });
+    let hooks = gsb_server::ServerHooks {
+        ticket: Some(gsb_core::auth::TicketAuth {
+            validator,
+            timeout: Duration::from_secs(2),
+        }),
+    };
+    let handle = gsb_server::start_server_with(cfg_on(Kind::Tcp, None, None, None), hooks)
+        .await
+        .expect("server starts with the ticket hook");
+
+    let mut a = Client::connect(Kind::Tcp, handle.addr).await.expect("A");
+    // An invalid ticket: code 10 (normal rejection), and A SURVIVES.
+    let (op, payload) = auth_wire("a", b"bogus");
+    a.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for the rejection"));
+        match a.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::ERROR => {
+                let m = Error::decode(&payload[..]).unwrap();
+                assert_eq!(m.code, 10, "an invalid ticket is a normal rejection");
+                break;
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("an invalid ticket must not close the connection"),
+            Recv::TimedOut => {}
+        }
+    }
+    assert!(a.probe().await.unwrap(), "A must survive the ticket rejection");
+
+    // A valid ticket: the hook's identity (player + pinned room).
+    let (op, payload) = auth_wire("a", b"good");
+    a.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for the auth result"));
+        match a.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::AUTH_RESULT => {
+                let m = AuthResult::decode(&payload[..]).unwrap();
+                assert!(m.ok);
+                assert_eq!(m.player, "neo", "the hook's identity wins");
+                assert_eq!(m.room, 1, "the ticket pins the room");
+                break;
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("closed during auth"),
+            Recv::TimedOut => {}
+        }
+    }
+    // The pin: the wrong room is a normal rejection (code 11)…
+    let (op, payload) = join_wire(2);
+    a.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for the pin rejection"));
+        match a.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::ERROR => {
+                let m = Error::decode(&payload[..]).unwrap();
+                assert_eq!(m.code, 11, "a non-pinned join is a normal rejection");
+                break;
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("a pin rejection must not close the connection"),
+            Recv::TimedOut => {}
+        }
+    }
+    // …the pinned room is accepted (a raw join — A is already authed).
+    let (op, payload) = join_wire(1);
+    a.write_frame(op, &payload).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for the join result"));
+        match a.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::JOIN_ROOM_RESULT => {
+                let m = JoinRoomResult::decode(&payload[..]).unwrap();
+                assert!(m.entity != 0);
+                break;
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("closed during the pinned join"),
+            Recv::TimedOut => {}
+        }
+    }
+
+    // Continuous movement: every tick ships a snapshot for A.
+    let move_to = gsb_game::game::MoveTo { x: 50, y: 50, seq: 0 }.encode_to_vec();
+    a.write_frame(gsb_game::op::MOVE_TO, &move_to).await.unwrap();
+
+    // Now B authenticates with the SLOW ticket (250 ms of validation).
+    // While B's actor is parked on the validator, A's snapshot stream
+    // must keep running at tick rate — the room's tick body never awaits
+    // a connection's validation (the ticket is off the tick path).
+    let mut b = Client::connect(Kind::Tcp, handle.addr).await.expect("B");
+    let (op, payload) = auth_wire("b", b"slow");
+    b.write_frame(op, &payload).await.unwrap();
+    let window_start = Instant::now();
+    let mut snapshots_in_window: Vec<u64> = Vec::new();
+    let deadline = Instant::now() + Duration::from_millis(900);
+    while Instant::now() - window_start < Duration::from_millis(350)
+        && Instant::now() < deadline
+    {
+        match a.recv(Duration::from_millis(50)).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                let m = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                snapshots_in_window.push(m.sequence);
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("A closed during the slow-auth window"),
+            Recv::TimedOut => {}
+        }
+    }
+    assert!(
+        snapshots_in_window.len() >= 3,
+        "A must keep receiving snapshots during B's 250 ms validation \
+         (the tick body stays synchronous; saw {})",
+        snapshots_in_window.len()
+    );
+    // Strictly increasing: the ticker kept its rate (no stall).
+    let increasing = snapshots_in_window
+        .windows(2)
+        .all(|w| w[1] > w[0]);
+    assert!(increasing, "snapshot sequences must be strictly increasing: {snapshots_in_window:?}");
+
+    // B's slow validation completes (well inside the 2 s hook timeout).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for B's auth result"));
+        match b.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::AUTH_RESULT => {
+                let m = AuthResult::decode(&payload[..]).unwrap();
+                assert!(m.ok, "the slow ticket must succeed (it finished in time)");
+                assert_eq!(m.player, "slow");
+                break;
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("B closed"),
+            Recv::TimedOut => {}
+        }
+    }
+    handle.stop().await;
 }

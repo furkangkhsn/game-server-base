@@ -81,10 +81,12 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, RoomLogic, TickCtx};
+use gsb_core::rpc::RequestDecision;
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
-use crate::components::{Position, WireId};
+use crate::components::{MoveTarget, Position, WireId};
+use crate::economy::EconomyService;
 use crate::op;
 
 /// The default spawn map half-size (world units): the historical 100×100
@@ -126,6 +128,12 @@ pub struct DemoRoom {
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `RoomLogic::encoded_records`).
     encoded: u64,
+    /// The economy service handle (the RPC pattern's external-I/O half,
+    /// see `crate::economy`); `None` = the room answers `ECONOMY`
+    /// requests with a normal rejection ("not configured"). A real
+    /// deployment always has one (the platform's economy is the thing
+    /// the request is delegated to).
+    economy: Option<EconomyService>,
 }
 
 impl Default for DemoRoom {
@@ -155,7 +163,17 @@ impl DemoRoom {
             last: HashMap::new(),
             input: HashMap::new(),
             encoded: 0,
+            economy: None,
         }
+    }
+
+    /// Attach the economy service handle (the RPC pattern's external-I/O
+    /// half; see `crate::economy`). The room delegates `ECONOMY`
+    /// requests to it; the answer arrives on a later tick through the
+    /// room's completion channel.
+    pub fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.economy = Some(economy);
+        self
     }
 }
 
@@ -309,13 +327,146 @@ impl RoomLogic<World> for DemoRoom {
         _world: &mut World,
         conn: ConnectionId,
         _group: &(),
+        responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_ack(&mut self.input, conn, out)
+        crate::common::emit_private(&mut self.input, conn, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::run_systems(&mut self.runner, world, ctx);
+    }
+
+    /// The demo's two request kinds (the RPC pattern's two halves, see
+    /// `game.proto`):
+    ///
+    /// - `ABILITY` (room-local): the answer is computed in this tick —
+    ///   a range check against the requester's current position and a
+    ///   real world mutation (the entity gets a `MoveTarget` toward the
+    ///   requested point) — and returned in the same tick's private
+    ///   frame. The same-tick snapshot the requester already receives
+    ///   reflects the mutation: the request and its effect share a tick.
+    /// - `ECONOMY` (external I/O): the answer needs a round trip to the
+    ///   economy service (see `crate::economy`), which the room cannot
+    ///   await. The decision is `External` with an owning future; the
+    ///   core registers the request as pending, runs the future in a
+    ///   worker task, and delivers the answer on a later tick through
+    ///   the same private path (the client sees one shape for both).
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        _ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<RequestDecision> {
+        match req.op {
+            op::ABILITY => {
+                let Ok(use_msg) = <crate::game::AbilityUse as Message>::decode(&req.payload[..])
+                else {
+                    return Some(RequestDecision::Reject(
+                        "undecodable AbilityUse payload".into(),
+                    ));
+                };
+                let Some(entity) = self.conn_entity.get(&req.conn).copied() else {
+                    return Some(RequestDecision::Reject(
+                        "no entity for this connection".into(),
+                    ));
+                };
+                let Ok(he) = world.get_entity(entity) else {
+                    return Some(RequestDecision::Reject("entity already gone".into()));
+                };
+                let Some(pos) = he.get::<Position>().copied() else {
+                    return Some(RequestDecision::Reject("entity has no position".into()));
+                };
+                // Room-local validation (a demo rule: the ability reaches
+                // 10 world units). Runs synchronously in this tick.
+                let dx = use_msg.x as f32 - pos.x;
+                let dy = use_msg.y as f32 - pos.y;
+                const RANGE: f32 = 10.0;
+                if dx * dx + dy * dy > RANGE * RANGE {
+                    return Some(RequestDecision::Reject(format!(
+                        "target out of range ({} > {RANGE})",
+                        (dx * dx + dy * dy).sqrt()
+                    )));
+                }
+                // The effect: a real mutation, applied in this tick (it
+                // rides the same tick's snapshot out to the group).
+                world
+                    .entity_mut(entity)
+                    .insert(MoveTarget { x: use_msg.x as f32, y: use_msg.y as f32 });
+                let res = crate::game::AbilityResult {
+                    ok: true,
+                    reason: String::new(),
+                };
+                Some(RequestDecision::Reply(res.encode_to_vec().into()))
+            }
+            op::ECONOMY => {
+                let Ok(buy) = <crate::game::BuyItem as Message>::decode(&req.payload[..]) else {
+                    return Some(RequestDecision::Reject(
+                        "undecodable BuyItem payload".into(),
+                    ));
+                };
+                let Some(economy) = self.economy.clone() else {
+                    return Some(RequestDecision::Reject(
+                        "economy service not configured".into(),
+                    ));
+                };
+                // The room captures a CLONE of the service handle (a
+                // cheap sender clone) — the future owns everything it
+                // needs and borrows nothing from the room (see the
+                // `RequestDecision::External` contract).
+                let fut = async move {
+                    match economy.buy(buy.kind).await {
+                        Ok(price) => {
+                            let res = crate::game::BuyResult {
+                                ok: true,
+                                reason: String::new(),
+                                price,
+                            };
+                            Ok(res.encode_to_vec().into())
+                        }
+                        Err(reason) => Err(reason),
+                    }
+                };
+                Some(RequestDecision::External(Box::pin(fut)))
+            }
+            // Not a request op this logic handles: the core answers with
+            // a normal "no handler" rejection (no waiting on a timeout).
+            _ => None,
+        }
+    }
+
+    /// The demo's match result (the control plane's result seam, feature
+    /// A): the room's FINAL snapshot at shutdown — the complete,
+    /// self-contained state the game considers "the result" (who was in
+    /// the room, where they ended up). Encoded as the ordinary
+    /// `WorldSnapshot` message (the platform's adapter decodes it
+    /// against the same schema it uses for live snapshots).
+    fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
+        let mut entities: Vec<crate::game::EntityRecord> = Vec::new();
+        {
+            let mut query = world.query::<(&WireId, &Position)>();
+            for (wire_id, pos) in query.iter(world) {
+                entities.push(crate::game::EntityRecord {
+                    entity: wire_id.get(),
+                    x: pos.x as i32,
+                    y: pos.y as i32,
+                });
+            }
+        }
+        entities.sort_by_key(|e| e.entity);
+        let snap = crate::game::WorldSnapshot {
+            // The shutdown snapshot has no live ticker: sequence 0 marks
+            // "terminal" (live snapshots are strictly positive ticks).
+            sequence: 0,
+            entities,
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
+        };
+        let mut out = bytes::BytesMut::new();
+        snap.encode(&mut out)
+            .expect("protobuf encode into an in-memory buffer failed");
+        Some(out.freeze())
     }
 }
 

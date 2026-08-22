@@ -81,6 +81,7 @@ impl TestRoom {
             control_rx,
             1, // room rate == global rate in these tests
             metrics_tx,
+            None,
         );
         Self {
             tick_tx,

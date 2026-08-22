@@ -244,6 +244,7 @@ impl TestRoom {
             control_rx,
             1, // room rate == global rate
             metrics_tx,
+            None,
         );
         Self {
             tick_tx,

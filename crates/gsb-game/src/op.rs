@@ -9,5 +9,15 @@ pub const MOVE_TO: u16 = 1000;
 pub const WORLD_SNAPSHOT: u16 = 1003;
 
 /// Reserved for per-connection private frames
-/// ([`gsb_core::room::RoomLogic::private`]); unused by the demo game.
+/// ([`gsb_core::room::RoomLogic::private`]); the demo game uses it for
+/// input acks, one-shot full views, and RPC responses
+/// (`Private.responses`).
 pub const PRIVATE: u16 = 1004;
+
+/// RPC inner op (carried inside `gsb_protocol::op::base::RPC_REQ`):
+/// room-local request — answered in the same tick (see `game.proto`).
+pub const ABILITY: u16 = 1005;
+
+/// RPC inner op: external-I/O request — delegated to the in-process
+/// economy service (the reference adapter), answered on a later tick.
+pub const ECONOMY: u16 = 1006;

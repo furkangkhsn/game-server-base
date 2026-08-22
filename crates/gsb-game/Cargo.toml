@@ -14,6 +14,9 @@ bevy_ecs = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+# The economy service (the RPC pattern's external-I/O reference adapter,
+# see `src/economy.rs`) runs a tokio task + a bounded channel.
+tokio = { workspace = true }
 
 [build-dependencies]
 gsb-lint = { workspace = true }

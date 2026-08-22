@@ -55,7 +55,9 @@ message CellExit {
 // group snapshot (opcode WORLD_SNAPSHOT) is shared by the group's
 // members; this frame is addressed to ONE connection. At most one frame
 // per tick per connection (the room's private seam), so the payload is
-// a oneof of the per-connection message kinds.
+// a oneof of the per-connection message kinds PLUS a repeated RPC
+// response list (outside the oneof: a tick that advances the input ack
+// AND answers a request ships both, in one frame).
 message Private {
   oneof payload {
     // The connection's input high-water mark (see `InputAck`), sent on
@@ -79,6 +81,71 @@ message Private {
     // = false`; a `true` flag here is a protocol error.
     WorldSnapshot snapshot = 2;
   }
+  // The connection's RPC responses for this tick (empty = none; the
+  // frame is then absent or carries only ack/snapshot). Each entry is
+  // matched by `RpcResponse.id` to the client's `RpcRequest.id` (see
+  // `gsb.base.RpcRequest` for the correlation-space rules). A client
+  // that receives an `id` it does not recognize (its request was lost
+  // and the server answered a retransmission, or it recycled the number)
+  // should treat the entry as an answer to the oldest matching pending
+  // request or discard it — the id is per-connection, so a foreign
+  // entry is impossible by construction.
+  repeated RpcResponse responses = 3;
+}
+
+// Server → client: the answer to one correlated request (see
+// `gsb.base.RpcRequest`). `id` echoes the request's correlation id; `op`
+// echoes the request's inner opcode (the client may dispatch on it
+// without its own request table). `ok` true: `payload` is the response
+// body (the encoded message of the response kind paired with `op`).
+// `ok` false: `reason` is a human-readable, client-actionable string
+// (normal rejection — "no handler", "pending limit", "timed out", the
+// logic's own reason; NOT a protocol-violation signal).
+message RpcResponse {
+  uint64 id = 1;
+  bool ok = 2;
+  // The request's inner opcode (echoed; `uint32` on the wire — see
+  // `gsb.base.RpcRequest.op`).
+  uint32 op = 3;
+  string reason = 4;
+  bytes payload = 5;
+}
+
+// Client → server (RPC inner op ABILITY = 1005): "use my ability toward
+// (x, y)". The demo's ROOM-LOCAL request kind: the answer is computed in
+// the tick that processes the request (no external I/O) and returned in
+// the same tick's private frame — the same-tick half of the RPC pattern.
+message AbilityUse {
+  sint32 x = 1;
+  sint32 y = 2;
+}
+
+// Server → client: the answer to an AbilityUse request.
+message AbilityResult {
+  bool ok = 1;
+  // Human-readable reason when ok = false (e.g. "out of range").
+  string reason = 2;
+}
+
+// Client → server (RPC inner op ECONOMY = 1006): "buy item `kind`". The
+// demo's EXTERNAL-I/O request kind: the answer requires a round trip to
+// the in-process economy service (the reference adapter for delegated
+// work — see `gsb_game::economy`), so the room cannot answer in the
+// current tick: it registers the request as pending and the answer
+// arrives on a later tick (the server-side request timeout bounds the
+// wait).
+message BuyItem {
+  string kind = 1;
+}
+
+// Server → client: the answer to a BuyItem request.
+message BuyResult {
+  bool ok = 1;
+  // Human-readable reason when ok = false (e.g. "unknown item").
+  string reason = 2;
+  // The price actually charged when ok = true (demo: a fixed price
+  // table — there is no wallet in the base).
+  uint32 price = 3;
 }
 
 // Server → client: one entity inside a WorldSnapshot.

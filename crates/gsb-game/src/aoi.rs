@@ -853,6 +853,7 @@ impl RoomLogic<World> for AoiRoom {
         _world: &mut World,
         conn: ConnectionId,
         group: &Cell,
+        responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
         // The room passes the connection's current group (re-evaluated
@@ -864,22 +865,30 @@ impl RoomLogic<World> for AoiRoom {
         if !baselined {
             if self.group_full_emitted.contains(&c) {
                 // The group's own full is in this batch (ahead of
-                // this frame): the baseline is established there.
+                // this frame): the baseline is established there. The
+                // ack (and any queued RPC answers — rare: a request
+                // answered on the very tick of a join/crossing) still
+                // get their normal frame below.
                 self.conn_view.insert(conn, c);
             } else {
                 // The one-shot private full (one per join/crossing):
                 // the frame is the `Private` message (opcode 1004) —
                 // the pre-encoded WorldSnapshot bytes ride in the
-                // `snapshot` oneof (field 2, length-delimited).
+                // `snapshot` oneof (field 2, length-delimited). A
+                // queued RPC answer is appended to the SAME frame
+                // (field 3, one length-delimited `RpcResponse` each)
+                // instead of a second frame — the per-connection
+                // per-tick slot is one frame.
                 let full = self.full_of(&c);
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
+                crate::common::append_responses(responses, out);
                 self.conn_view.insert(conn, c);
                 return true;
             }
         }
-        crate::common::emit_ack(&mut self.input, conn, out)
+        crate::common::emit_private(&mut self.input, conn, responses, out)
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
@@ -1309,7 +1318,7 @@ mod tests {
         // (co-residents + itself, full mode).
         let mut priv_out = bytes::BytesMut::new();
         assert!(
-            room.private(&mut world, ConnectionId(3), &Cell(0, 0), &mut priv_out),
+            room.private(&mut world, ConnectionId(3), &Cell(0, 0), &[], &mut priv_out),
             "a late joiner receives the one-shot full"
         );
         let full = crate::game::Private::decode(priv_out.as_ref()).expect("private frame");
@@ -1326,7 +1335,7 @@ mod tests {
         // group change): no full again (only an ack, if any).
         let mut priv_out2 = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(3), &Cell(0, 0), &mut priv_out2),
+            !room.private(&mut world, ConnectionId(3), &Cell(0, 0), &[], &mut priv_out2),
             "the one-shot full is one-shot"
         );
     }
@@ -1890,7 +1899,7 @@ mod tests {
         // The member is baselined by that full: no private frame.
         let mut pbuf = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(7), &Cell(2, 0), &mut pbuf),
+            !room.private(&mut world, ConnectionId(7), &Cell(2, 0), &[], &mut pbuf),
             "the group's full already baselined the member — no private frame"
         );
         assert!(room.conn_view.contains_key(&ConnectionId(7)));

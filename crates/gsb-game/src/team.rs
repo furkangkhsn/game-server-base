@@ -427,9 +427,10 @@ impl RoomLogic<World> for TeamRoom {
         _world: &mut World,
         conn: ConnectionId,
         _group: &Team,
+        responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_ack(&mut self.input, conn, out)
+        crate::common::emit_private(&mut self.input, conn, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

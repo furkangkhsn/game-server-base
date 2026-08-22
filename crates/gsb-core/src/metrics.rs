@@ -280,6 +280,24 @@ pub struct RoomSample {
     /// Joins / leaves processed on the control channel, cumulative.
     pub joins: u64,
     pub leaves: u64,
+    /// RPC (see `crate::rpc`): requests answered room-local in the same
+    /// tick, cumulative.
+    pub requests_local: u64,
+    /// RPC: requests delegated to a worker (registered pending),
+    /// cumulative.
+    pub requests_external: u64,
+    /// RPC: requests rejected without processing (malformed envelope,
+    /// id = 0, no handler, in-flight duplicate, cap), cumulative.
+    pub requests_rejected: u64,
+    /// RPC: pending external requests swept as timed out (the
+    /// client-visible timeout), cumulative.
+    pub requests_timed_out: u64,
+    /// RPC: worker reports for ids no longer pending (answered, timed
+    /// out, or the connection left), dropped by the reconciliation,
+    /// cumulative.
+    pub requests_late: u64,
+    /// RPC: external requests currently in flight (gauge).
+    pub pending_requests: u32,
     /// Current gauges: snapshot groups, members (connections in the
     /// room), largest group.
     pub groups: u32,
@@ -463,6 +481,16 @@ pub struct RoomReport {
     pub max_group: u32,
     pub joins: u64,
     pub leaves: u64,
+    /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
+    /// (pending) requests, rejections without processing, timeout sweeps,
+    /// and late reports dropped by the reconciliation.
+    pub requests_local: u64,
+    pub requests_external: u64,
+    pub requests_rejected: u64,
+    pub requests_timed_out: u64,
+    pub requests_late: u64,
+    /// RPC: external requests currently in flight (gauge).
+    pub pending_requests: u32,
     /// Metric samples dropped on a full metrics channel (cumulative).
     pub metrics_dropped: u64,
 }
@@ -609,6 +637,12 @@ impl MetricAccumulator {
                 max_group: latest.max_group,
                 joins: latest.joins,
                 leaves: latest.leaves,
+                requests_local: latest.requests_local,
+                requests_external: latest.requests_external,
+                requests_rejected: latest.requests_rejected,
+                requests_timed_out: latest.requests_timed_out,
+                requests_late: latest.requests_late,
+                pending_requests: latest.pending_requests,
                 metrics_dropped: latest.metrics_dropped,
             });
             acc.prev = Some(latest);
@@ -688,7 +722,8 @@ impl MetricReport {
                  snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
                  groups={} members={} max_group={} joins={} leaves={} \
-                 metrics_dropped={}",
+                 req_local={} req_ext={} req_rej={} req_to={} req_late={} \
+                 req_pending={} metrics_dropped={}",
                 r.room, r.steps, r.hz, r.budget_us,
                 r.step_min_us, r.step_mean_us, r.step_max_us,
                 r.step_hist
@@ -703,6 +738,8 @@ impl MetricReport {
                 r.snap_records,
                 r.shipped_bytes, r.shipped_s,
                 r.groups, r.members, r.max_group, r.joins, r.leaves,
+                r.requests_local, r.requests_external, r.requests_rejected,
+                r.requests_timed_out, r.requests_late, r.pending_requests,
                 r.metrics_dropped
             ));
         }
@@ -973,6 +1010,12 @@ mod tests {
             private_frames: 0,
             joins: 2,
             leaves: 0,
+            requests_local: 0,
+            requests_external: 0,
+            requests_rejected: 0,
+            requests_timed_out: 0,
+            requests_late: 0,
+            pending_requests: 0,
             groups: 1,
             members: 3,
             max_group: 3,
@@ -1177,6 +1220,7 @@ mod tests {
             control_rx,
             1,
             m_tx,
+            None,
         );
         let room = tokio::spawn(actor.run());
 

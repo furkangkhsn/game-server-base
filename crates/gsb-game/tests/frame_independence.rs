@@ -211,6 +211,7 @@ impl SimRoom {
             control_rx,
             run_every,
             metrics_tx,
+            None,
         );
         let handle = tokio::spawn(actor.run());
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);

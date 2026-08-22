@@ -35,6 +35,7 @@
 
 pub mod aoi;
 pub mod components;
+pub mod economy;
 pub mod op;
 pub mod pvs;
 pub mod room;

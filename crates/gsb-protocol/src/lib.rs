@@ -29,6 +29,14 @@ pub mod op {
         pub const HEARTBEAT: u16 = 7;
         pub const HEARTBEAT_ACK: u16 = 8;
         pub const ERROR: u16 = 9;
+        /// Correlated request envelope (client → server, room-scoped).
+        /// Carries the client's correlation id + an inner (game-band)
+        /// opcode and payload; the room answers on the per-connection
+        /// private frame path (see `gsb_core::rpc`). The connection actor
+        /// forwards it to the room as an opaque action (the room's core
+        /// decodes the envelope); the response is a `Private.responses`
+        /// entry, not a frame of its own.
+        pub const RPC_REQ: u16 = 12;
         /// rUDP transport-level marker (NOT a message-table message): the
         /// stateless handshake challenge/proof that travels in its own
         /// datagram kind (see `gsb_net::udp`), handled entirely below the
@@ -193,6 +201,7 @@ pub fn base_table() -> MessageTable {
     t.reg::<base::Heartbeat>(op::base::HEARTBEAT);
     t.reg::<base::HeartbeatAck>(op::base::HEARTBEAT_ACK);
     t.reg::<base::Error>(op::base::ERROR);
+    t.reg::<base::RpcRequest>(op::base::RPC_REQ);
     t
 }
 
@@ -221,7 +230,10 @@ mod tests {
     #[test]
     fn table_roundtrip() {
         let table = base_table();
-        let msg = base::Auth { name: "neo".into() };
+        let msg = base::Auth {
+            name: "neo".into(),
+            ticket: vec![],
+        };
         let fb = table.frame(op::base::AUTH_REQ, &msg).expect("encode");
         let decoded = table.decode(fb.op, &fb.payload).expect("decode");
         let auth = decoded.downcast_ref::<base::Auth>().expect("type");

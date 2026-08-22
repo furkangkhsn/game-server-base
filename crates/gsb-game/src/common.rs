@@ -29,6 +29,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, World, Without};
+use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
@@ -198,24 +199,82 @@ pub(crate) fn emit_ack(
     conn: ConnectionId,
     out: &mut bytes::BytesMut,
 ) -> bool {
-    let Some(st) = input.get_mut(&conn) else {
-        return false;
-    };
-    if st.hwm <= st.acked {
+    emit_private(input, conn, &[], out)
+}
+
+/// Emit this connection's private frame for the tick: the pending input
+/// acknowledgment (the `ack` oneof) and/or the connection's queued RPC
+/// answers (the `responses` repeated field, see `gsb_core::rpc`), as ONE
+/// `Private` frame — the per-tick, per-connection slot of the batch, so
+/// everything rides the SAME delivery as that tick's group snapshot (no
+/// extra send, no extra await: the tick body stays synchronous).
+///
+/// Returns `true` when a frame was produced. The ack part advances
+/// `acked` only when emitted (the mark is the highest processed seq, so
+/// the client's reconciliation stays sound); the responses are delivered
+/// exactly once (the room's queue is drained per tick — see the core's
+/// fan-out) and the logic decides their order (arrival order within the
+/// tick, per the `gsb_core::rpc` contract).
+pub(crate) fn emit_private(
+    input: &mut HashMap<ConnectionId, InputState>,
+    conn: ConnectionId,
+    responses: &[gsb_core::rpc::RpcReply],
+    out: &mut bytes::BytesMut,
+) -> bool {
+    let mut ack_up_to: Option<u64> = None;
+    if let Some(st) = input.get_mut(&conn)
+        && st.hwm > st.acked
+    {
+        ack_up_to = Some(st.hwm);
+        st.acked = st.hwm;
+    }
+    if ack_up_to.is_none() && responses.is_empty() {
         return false;
     }
     let frame = crate::game::Private {
-        payload: Some(crate::game::private::Payload::Ack(
-            crate::game::InputAck {
-                processed_up_to: st.hwm,
-            },
-        )),
+        payload: ack_up_to.map(|upto| {
+            crate::game::private::Payload::Ack(crate::game::InputAck {
+                processed_up_to: upto,
+            })
+        }),
+        responses: responses
+            .iter()
+            .map(|r| crate::game::RpcResponse {
+                id: r.id,
+                ok: r.ok,
+                op: r.op as u32,
+                reason: r.reason.clone(),
+                payload: r.payload.to_vec(),
+            })
+            .collect(),
     };
     frame
         .encode(out)
         .expect("protobuf encode into an in-memory buffer failed");
-    st.acked = st.hwm;
     true
+}
+
+/// Append this connection's queued RPC answers to a HAND-ENCODED
+/// `Private` frame body (the AOI one-shot full path, which cannot go
+/// through the generated type without re-encoding the snapshot): field
+/// 3 (`responses`, tag 0x1A), one length-delimited `RpcResponse` per
+/// entry. No allocation beyond the per-message length probe (responses
+/// are rare — the steady-state tick has none).
+pub(crate) fn append_responses(responses: &[gsb_core::rpc::RpcReply], out: &mut bytes::BytesMut) {
+    for r in responses {
+        let msg = crate::game::RpcResponse {
+            id: r.id,
+            ok: r.ok,
+            op: r.op as u32,
+            reason: r.reason.clone(),
+            payload: r.payload.to_vec(),
+        };
+        out.put_u8(0x1A); // Private field 3 (responses), LEN
+        prost::encoding::varint::encode_varint(msg.encoded_len() as u64, out);
+        msg
+            .encode(out)
+            .expect("protobuf encode into an in-memory buffer failed");
+    }
 }
 
 /// Run the room's systems for this tick (single-threaded, ordered — the

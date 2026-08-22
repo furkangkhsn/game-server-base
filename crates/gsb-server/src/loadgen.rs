@@ -742,7 +742,11 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // AUTH + JOIN (one coalesced write on TCP — the connection actor
     // drains in order; two frames on rUDP — its reliable control band
     // orders them).
-    let auth_payload = Auth { name: format!("lg-{id}") }.encode_to_vec();
+    let auth_payload = Auth {
+        name: format!("lg-{id}"),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     let join_payload = JoinRoom { room_id: p.room }.encode_to_vec();
     match &mut wire {
         Wire::Tcp { w, .. } => {
@@ -1962,6 +1966,8 @@ fn main() {
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u32 groups  u32 members  u32 max_group  u64 joins  u64 leaves
+///     u64 req_local  u64 req_ext  u64 req_rej  u64 req_to  u64 req_late
+///     u32 req_pending
 ///     u64 metrics_dropped
 ///   u8 registry_present
 ///   [if present] u32 rooms  u32 conns  u64 rooms_created
@@ -1983,7 +1989,10 @@ fn main() {
 /// (`[u32; FINE_HIST_BINS]`, fixed 8 µs bins — sub-budget resolution
 /// alongside the budget-relative log2 histogram, whose overflow
 /// semantics are untouched).
-const METRICS_MAGIC: u32 = 0x4753_4D33;
+/// GSM4 = the GSM3 layout plus each room's RPC counters
+/// (`req_local / req_ext / req_rej / req_to / req_late` cumulative +
+/// `req_pending` gauge, see `gsb_core::rpc` and `MetricReport::rooms`).
+const METRICS_MAGIC: u32 = 0x4753_4D34;
 
 /// Little-endian writer (the encode side of the format above).
 struct W(Vec<u8>);
@@ -2042,6 +2051,12 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u32(room.max_group);
         w.u64(room.joins);
         w.u64(room.leaves);
+        w.u64(room.requests_local);
+        w.u64(room.requests_external);
+        w.u64(room.requests_rejected);
+        w.u64(room.requests_timed_out);
+        w.u64(room.requests_late);
+        w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
     }
     w.u8(match &r.registry {
@@ -2173,6 +2188,12 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             max_group: r.u32()?,
             joins: r.u64()?,
             leaves: r.u64()?,
+            requests_local: r.u64()?,
+            requests_external: r.u64()?,
+            requests_rejected: r.u64()?,
+            requests_timed_out: r.u64()?,
+            requests_late: r.u64()?,
+            pending_requests: r.u32()?,
             metrics_dropped: r.u64()?,
         });
     }

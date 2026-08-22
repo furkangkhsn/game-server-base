@@ -25,12 +25,14 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use gsb_core::channel::channel;
+use gsb_core::channel::{channel, Inbox, Mailbox};
 use gsb_core::conn::ConnectionActor;
+use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
-use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{RoomConfig, RoomLogic};
+use gsb_core::auth::TicketAuth;
 
 /// The visibility strategy of the demo rooms (config-selectable; all run
 /// the SAME game — same components, movement, wire format — and differ
@@ -341,9 +343,24 @@ fn parse_cookie_key(s: &str) -> Result<[u8; 16], String> {
     Ok(out)
 }
 
+/// The composition-root's platform hooks (the base ships the wiring, the
+/// platform ships the behaviour):
+///
+/// - [`Self::ticket`]: the ticket-validation hook (`gsb_core::auth`) —
+///   `None` (the default) = the legacy local-auth path, byte-for-byte
+///   unchanged. The base defines the hook and deliberately implements
+///   NO validator (a signature-service call, a cache, … is platform
+///   specific — the same adapter split as the transport).
+#[derive(Clone, Default)]
+pub struct ServerHooks {
+    /// The ticket-validation hook for the connection actors; `None` =
+    /// local auth (`Auth.name` accepted as-is).
+    pub ticket: Option<TicketAuth>,
+}
+
 /// Handle to a running server.
 pub struct ServerHandle {
-    registry: gsb_core::channel::Mailbox<RegistryMsg>,
+    registry: Mailbox<RegistryMsg>,
     accept: JoinHandle<()>,
     ticker: JoinHandle<()>,
     /// The metrics collector (emits one final report when the ticker's
@@ -355,11 +372,18 @@ pub struct ServerHandle {
     listener: Arc<dyn gsb_net::transport::Listener>,
     /// The actual bound address (useful when binding port 0 in tests).
     pub addr: SocketAddr,
+    /// The match-result sink (the control plane's result seam, see
+    /// `gsb_core::room::RoomLogic::match_result`): the room's result
+    /// arrives here on shutdown. The reference adapter is the
+    /// composition root reading this receiver (one hop, in-process,
+    /// bounded — no NATS/Kafka/gRPC in the base).
+    pub match_results: Inbox<MatchResult>,
 }
 
 impl ServerHandle {
     /// Shut the server down: the registry tears down connections and rooms
-    /// (rooms get a control `Shutdown`, processed on their next tick); the
+    /// (rooms get a control `Shutdown`, processed on their next tick; a
+    /// room with a configured result seam reports it on that shutdown); the
     /// ticker is aborted, which closes the broadcast and stops any room that
     /// missed its window; the listener is closed (stopping any transport
     /// shared state, e.g. the rUDP demux); the accept loop is hard-aborted
@@ -371,6 +395,48 @@ impl ServerHandle {
         self.listener.close();
         self.accept.abort();
         let _ = self.metrics.await;
+    }
+
+    /// Open a room at runtime (the control plane's lifecycle API, feature
+    /// A). **Idempotent**: creating a room that already exists with the
+    /// IDENTICAL `config` is a no-op that reports the existing room's
+    /// status (one room, not two — a resent request must not double the
+    /// room); a different config for a live room is a
+    /// [`CoreError::RoomConflict`]. The round trip doubles as a status
+    /// query (the reply carries the [`RoomStatus`]).
+    pub async fn open_room(&self, config: RoomConfig) -> Result<RoomStatus, CoreError> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
+        self.registry
+            .send(RegistryMsg::CreateRoom { config, reply: tx })
+            .await
+            .map_err(|_| CoreError::Io("registry gone".into()))?;
+        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))?
+    }
+
+    /// Close a room at runtime (feature A). **Idempotent**: closing a room
+    /// that is not running is a no-op reported as [`RoomStatus::Absent`]
+    /// (a control plane that retries a close never sees an error for the
+    /// second attempt). The room stops on its next tick; connections
+    /// affiliated with it are notified (`RoomGone`).
+    pub async fn close_room(&self, id: RoomId) -> Result<RoomStatus, CoreError> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
+        self.registry
+            .send(RegistryMsg::DestroyRoom { id, reply: tx })
+            .await
+            .map_err(|_| CoreError::Io("registry gone".into()))?;
+        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+    }
+
+    /// Query a room's status (feature A): [`RoomStatus::Running`] (with
+    /// the member count), or [`RoomStatus::Absent`]. The registry answers
+    /// from its own table (it never awaits a room).
+    pub async fn room_status(&self, id: RoomId) -> Result<RoomStatus, CoreError> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
+        self.registry
+            .send(RegistryMsg::RoomStatus { id, reply: tx })
+            .await
+            .map_err(|_| CoreError::Io("registry gone".into()))?;
+        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
     }
 }
 
@@ -385,10 +451,17 @@ pub fn build_table() -> Arc<MessageTable> {
 /// [`gsb_game::room::DemoRoom`] over a spawn map of half-size
 /// `spawn_half`. Group key is `()` (one group per room) — the AOI-**off**
 /// baseline: every connection receives the whole world.
-fn demo_room_factory(spawn_half: f32) -> RoomFactory<World, (), ()> {
+///
+/// `economy` is the in-process economy service (the RPC pattern's
+/// external-I/O reference adapter, see `gsb_game::economy`): ONE service
+/// per server (a platform service, not a per-room one), shared by clone
+/// with every room the factory builds.
+fn demo_room_factory(spawn_half: f32, economy: gsb_game::economy::EconomyService) -> RoomFactory<World, (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
-        logic: Box::new(gsb_game::room::DemoRoom::with_spawn_half(spawn_half))
+        logic: Box::new(
+            gsb_game::room::DemoRoom::with_spawn_half(spawn_half).with_economy(economy.clone()),
+        )
             as Box<dyn RoomLogic<World, GroupKey = ()>>,
     })
 }
@@ -484,24 +557,51 @@ fn sharded_room_factory(
     })
 }
 
-/// Start the server. Must be called from inside a tokio runtime. Metric
-/// reports go to the tracing logger (one `gsb-metric` line per scope per
-/// second; visible under `RUST_LOG=info`, silent without a subscriber).
+/// Start the server (local auth; no ticket hook). Must be called from
+/// inside a tokio runtime. Metric reports go to the tracing logger (one
+/// `gsb-metric` line per scope per second; visible under `RUST_LOG=info`,
+/// silent without a subscriber).
 pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
-    start_inner(cfg, MetricSink::Log).await
+    start_server_with(cfg, ServerHooks::default()).await
 }
 
-/// Start the server with a programmatic metrics consumer: each report is
-/// sent to `report_tx` (see [`gsb_core::metrics`]). Used by the load
-/// generator and by tests that assert on server-side counters.
+/// Start the server (local auth; no ticket hook) with a programmatic
+/// metrics consumer: each report is sent to `report_tx` (see
+/// [`gsb_core::metrics`]). Used by the load generator and by tests that
+/// assert on server-side counters.
 pub async fn start_server_metrics(
     cfg: Config,
     report_tx: mpsc::UnboundedSender<MetricReport>,
 ) -> Result<ServerHandle, ServerError> {
-    start_inner(cfg, MetricSink::Channel(report_tx)).await
+    start_server_metrics_with(cfg, ServerHooks::default(), report_tx).await
 }
 
-async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandle, ServerError> {
+/// Start the server with the platform's hooks (feature A, control-plane
+/// entry): see [`ServerHooks`] for the ticket-validation hook. Everything
+/// else is identical to [`start_server`].
+pub async fn start_server_with(
+    cfg: Config,
+    hooks: ServerHooks,
+) -> Result<ServerHandle, ServerError> {
+    start_inner(cfg, MetricSink::Log, hooks).await
+}
+
+/// Start the server with the platform's hooks and a programmatic metrics
+/// consumer (the [`start_server_with`] + [`start_server_metrics`]
+/// composition; see both).
+pub async fn start_server_metrics_with(
+    cfg: Config,
+    hooks: ServerHooks,
+    report_tx: mpsc::UnboundedSender<MetricReport>,
+) -> Result<ServerHandle, ServerError> {
+    start_inner(cfg, MetricSink::Channel(report_tx), hooks).await
+}
+
+async fn start_inner(
+    cfg: Config,
+    metric_sink: MetricSink,
+    hooks: ServerHooks,
+) -> Result<ServerHandle, ServerError> {
     let bind: SocketAddr = cfg.bind.parse().map_err(|e: std::net::AddrParseError| {
         ServerError::BadBind(cfg.bind.clone(), e.to_string())
     })?;
@@ -545,23 +645,37 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
         .run(),
     );
 
+    // The match-result sink (the control plane's result seam, feature A):
+    // a bounded mailbox the composition root reads from via
+    // `ServerHandle::match_results` (the reference adapter — in-process,
+    // one hop; the base ships no NATS/Kafka/gRPC). Cloned to each room at
+    // creation; a room without a configured result reports nothing.
+    let (result_tx, result_rx) = channel::<MatchResult>(64);
+
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
     // The factory (and hence the registry's group-key type) is chosen at
     // this config boundary from the visibility strategy: each strategy is
     // a different `RoomLogic` group key (`()`, `Cell`, `Team`, `Sector`),
-    // so the four arms are otherwise identical and each yields a
+    // so the arms are otherwise identical and each yields a
     // `JoinHandle<()>`.
     let _registry = match cfg.visibility {
         Visibility::All => {
+            // One economy service per server (the RPC pattern's
+            // external-I/O reference adapter; shared by clone with every
+            // demo room the factory builds).
+            let economy = gsb_game::economy::EconomyService::spawn(
+                gsb_game::economy::EconomyService::default_latency(),
+            );
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    demo_room_factory(cfg.spawn_half_size),
+                    demo_room_factory(cfg.spawn_half_size, economy),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    Some(result_tx.clone()),
                 )
                 .run(),
             )
@@ -575,6 +689,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    Some(result_tx.clone()),
                 )
                 .run(),
             )
@@ -588,6 +703,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    Some(result_tx.clone()),
                 )
                 .run(),
             )
@@ -601,6 +717,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    Some(result_tx.clone()),
                 )
                 .run(),
             )
@@ -614,6 +731,10 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    // Sharded rooms do not run the RPC/result machinery yet
+                    // (the pending state lives in the single-room actor):
+                    // their shards report no match result this turn.
+                    None,
                 )
                 .run(),
             )
@@ -648,7 +769,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     return;
                 }
                 match reply_rx.await {
-                    Ok(Ok(room)) => info!(room = %room, "room created"),
+                    Ok(Ok(status)) => info!(?status, "room created"),
                     Ok(Err(e)) => warn!(error = %e, "room creation failed"),
                     Err(_) => warn!("registry gone before room reply"),
                 }
@@ -705,6 +826,11 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
     let accept_tx = reg_tx.clone();
     let conn_metrics_tx = metrics_tx.clone();
     let accept_listener = Arc::clone(&listener);
+    // The ticket hook (cloned per connection; `None` = local auth). The
+    // hook is `Send + Sync` (the validator is an `Arc<dyn Fn + Send +
+    // Sync>`), so it moves into the accept task and is shared, never
+    // mutated.
+    let ticket_auth = hooks.ticket;
     let accept = tokio::spawn(async move {
         info!(%addr, "accepting connections");
         let mut next_conn: u64 = 1;
@@ -766,6 +892,7 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
                     in_rx,
                     out_tx,
                     conn_metrics_tx.clone(),
+                    ticket_auth.clone(),
                 )
                 .run(),
             );
@@ -779,5 +906,6 @@ async fn start_inner(cfg: Config, metric_sink: MetricSink) -> Result<ServerHandl
         metrics,
         listener,
         addr,
+        match_results: result_rx,
     })
 }

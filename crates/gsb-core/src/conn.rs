@@ -224,9 +224,21 @@ pub struct ConnectionActor {
     /// synchronous `try_send` — the actor's only await stays the inbox
     /// `recv`).
     metrics: mpsc::Sender<MetricsEvent>,
+    /// The server's ticket-validation hook (see `crate::auth`); `None` =
+    /// the legacy local-auth path (the `Auth.name` is accepted as-is and
+    /// every pre-hook flow is byte-for-byte unchanged).
+    auth: Option<crate::auth::TicketAuth>,
+    /// The identity the last successful ticket validation resolved to
+    /// (set on ticket-auth success; `None` on the local-auth path). Pins
+    /// the room for the next `JOIN_ROOM_REQ` (a different room is a
+    /// normal rejection — ERROR code 11).
+    ticket: Option<crate::auth::ValidatedTicket>,
 }
 
 impl ConnectionActor {
+    // The actor's wiring (the base's actor constructors take every
+    // mailbox the actor owns — the `new` is the composition point).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conn: ConnectionId,
         // The peer's address (for the violation-close signal; see the
@@ -239,6 +251,8 @@ impl ConnectionActor {
         // Outbound metrics path (see `crate::metrics`): a bounded channel;
         // the actor sends with the synchronous `try_send` (no await).
         metrics: mpsc::Sender<MetricsEvent>,
+        // The server's ticket hook (see the field): `None` = local auth.
+        auth: Option<crate::auth::TicketAuth>,
     ) -> Self {
         Self {
             conn,
@@ -249,6 +263,8 @@ impl ConnectionActor {
             inbox,
             out,
             actions: None,
+            auth,
+            ticket: None,
             m_in_bytes: 0,
             m_in_frames: 0,
             m_out_bytes: 0,
@@ -420,6 +436,108 @@ impl ConnectionActor {
                         return;
                     }
                 };
+                // Ticket-auth (the control-plane hook, see `crate::auth`):
+                // the hook is the identity authority. Two shapes, decided
+                // by the server's configuration (not per frame):
+                //
+                // - NO hook (or an empty ticket on a local-auth server):
+                //   the legacy path — `Auth.name` is accepted as-is.
+                // - HOOK configured: the ticket must be non-empty and is
+                //   validated ASYNCHRONOUSLY through the common deferred-
+                //   completion mechanism: a spawned worker runs the
+                //   validator (bounded by the hook's timeout) and reports
+                //   to this handler over a single oneshot — the same
+                //   round-trip idiom as the join above. The handler's
+                //   park is bounded by the timeout, so a hung validator
+                //   cannot park the actor forever (it resolves to a
+                //   timeout rejection). While parked, at most ONE
+                //   validation is in flight (structural: there is no
+                //   concurrent frame handler) — the per-connection
+                //   amplification bound (see `crate::auth`).
+                if let Some(hook) = self.auth.clone() {
+                    if auth.ticket.is_empty() {
+                        // A ticket-auth server with no ticket: a normal
+                        // rejection (the client presents one — it does not
+                        // hold a valid ticket, and the connection stays
+                        // alive to retry).
+                        self.reply_ticket_error(
+                            crate::auth::TicketError::Rejected("no ticket presented".into()),
+                        )
+                        .await;
+                        return;
+                    }
+                    let (reply_tx, reply_rx) =
+                        oneshot::channel::<
+                            Result<crate::auth::ValidatedTicket, crate::auth::TicketError>,
+                        >();
+                    let ticket = auth.ticket.clone();
+                    tokio::spawn(async move {
+                        // The validator's own future (the platform's
+                        // adapter — a signature-service call, a cache, …)
+                        // wrapped in the hook's timeout: the worker cannot
+                        // outlive `timeout` (a resource guard), and the
+                        // actor's park above cannot outlive it either.
+                        let outcome =
+                            tokio::time::timeout(hook.timeout, (hook.validator)(ticket.into()))
+                                .await;
+                        let result = match outcome {
+                            Ok(r) => r,
+                            Err(_elapsed) => Err(crate::auth::TicketError::TimedOut),
+                        };
+                        // The send fails (the receiver is dropped) when the
+                        // connection went away while validating: the actor
+                        // processed its `Closed` on its next message after
+                        // the park, and this worker simply exits.
+                        let _ = reply_tx.send(result);
+                    });
+                    match reply_rx.await {
+                        Ok(Ok(v)) => {
+                            // Success: the hook's identity is installed (it
+                            // supersedes `Auth.name`) and the ticket pins
+                            // the room for the next join.
+                            self.ticket = Some(v.clone());
+                            self.state = ConnState::Authed;
+                            debug!(%self.conn, player = %v.player, room = %v.room, "ticket authenticated");
+                            let _ = self
+                                .send_frame(
+                                    op::base::AUTH_RESULT,
+                                    &base::AuthResult {
+                                        ok: true,
+                                        reason: String::new(),
+                                        player: v.player,
+                                        room: v.room.0,
+                                    },
+                                )
+                                .await;
+                        }
+                        Ok(Err(e)) => {
+                            // Rejected or timed out: a NORMAL rejection —
+                            // the connection stays alive (ERROR code 10)
+                            // and the state stays WaitingAuth (a fresh
+                            // ticket may be re-presented). Never counted
+                            // against the violation budget (see
+                            // `crate::auth` and the ERROR code docs).
+                            self.reply_ticket_error(e).await;
+                        }
+                        Err(_dropped) => {
+                            // The worker died without reporting (a panic
+                            // inside the platform's validator): a
+                            // server-side condition (weight 0, like the
+                            // "registry gone" arm below) — answered as a
+                            // generic failure, not a violation.
+                            let _ = self
+                                .send_frame(
+                                    op::base::ERROR,
+                                    &base::Error {
+                                        code: 7,
+                                        message: "ticket validator unavailable".into(),
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                    return;
+                }
                 self.state = ConnState::Authed;
                 debug!(%self.conn, name = %auth.name, "authenticated");
                 let _ = self
@@ -428,6 +546,8 @@ impl ConnectionActor {
                         &base::AuthResult {
                             ok: true,
                             reason: String::new(),
+                            player: String::new(),
+                            room: 0,
                         },
                     )
                     .await;
@@ -445,6 +565,32 @@ impl ConnectionActor {
                     }
                 };
                 let room = RoomId(join.room_id);
+                // Ticket pin: a ticket-auth connection may only join the
+                // room its ticket names (the platform set up THE match,
+                // not "any room on this server"). A mismatch is a NORMAL
+                // rejection (ERROR code 11 — the connection stays alive
+                // and may join the pinned room); it is not a violation
+                // (the frame is well-formed; the client simply aimed at
+                // the wrong room).
+                if let Some(v) = &self.ticket
+                    && room != v.room
+                {
+                    warn!(%self.conn, room = %room, pinned = %v.room, "join rejected: ticket pins a different room");
+                    let _ = self
+                        .send_frame(
+                            op::base::ERROR,
+                            &base::Error {
+                                code: 11,
+                                message: format!(
+                                    "ticket pins room {} (the platform-set room); \
+                                     joining room {} is rejected",
+                                    v.room, room
+                                ),
+                            },
+                        )
+                        .await;
+                    return;
+                }
                 let (reply_tx, reply_rx) =
                     oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
                 if self
@@ -541,12 +687,26 @@ impl ConnectionActor {
                     )
                     .await;
             }
+            // Correlated request (the RPC pattern, see `crate::rpc`): a
+            // room-scoped operation, so it is forwarded to the room like
+            // a game-band op (the room's core decodes the base envelope
+            // and owns the correlation: pending caps, timeouts, the
+            // exactly-one-answer reconciliation). The actor stays thin —
+            // it does not decode the envelope, so a malformed envelope is
+            // a normal rejection answered by the room (the same class as
+            // an undecodable game payload), never a base-band violation
+            // here. Not in a room → the same `NotInRoom` race-class
+            // answer as any other game op (a request racing a leave or a
+            // destroyed room is a legitimate ~1-RTT stray).
+            op::base::RPC_REQ => {
+                self.forward_to_room(frame).await;
+            }
             // Unknown *base-band* opcode: no legitimate client sends one,
             // so it is a hard protocol violation (answered + budgeted).
             // Note this is what *makes* `UnknownOpcode` reachable in the
-            // funnel: the actor only decodes its four registered control
-            // ops, so before this check an unknown base-band opcode would
-            // have been forwarded as an (ignored) room action.
+            // funnel: the actor only decodes its control ops, so before
+            // this check an unknown base-band opcode would have been
+            // forwarded as an (ignored) room action.
             unknown if unknown < gsb_protocol::op::GAME_BAND_START => {
                 self.reply_err(ProtoError::UnknownOpcode(unknown)).await;
             }
@@ -705,5 +865,26 @@ impl ConnectionActor {
                 .send_frame(op::base::ERROR, &base::Error { code: 9, message: reason })
                 .await;
         }
+    }
+
+    /// The single exit for ticket-validation failures (see `crate::auth`
+    /// for the classification decision): an `ERROR` frame with code 10
+    /// (ticket validation failed — rejected or timed out), the
+    /// connection STAYS ALIVE, and the violation budget is NOT touched
+    /// (a bad ticket is a normal rejection: the frame was well-formed
+    /// and the client can fix its state; the budget is for structural
+    /// protocol errors). The state machine is unchanged (still
+    /// `WaitingAuth`): a fresh ticket may be re-presented.
+    async fn reply_ticket_error(&mut self, e: crate::auth::TicketError) {
+        warn!(%self.conn, %self.peer, reason = %e, "ticket validation failed (normal rejection; the connection stays alive)");
+        let _ = self
+            .send_frame(
+                op::base::ERROR,
+                &base::Error {
+                    code: 10,
+                    message: e.to_string(),
+                },
+            )
+            .await;
     }
 }

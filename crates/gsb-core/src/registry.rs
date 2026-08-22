@@ -88,17 +88,80 @@ pub enum BuiltRoom<W, G, St> {
 pub type RoomFactory<W, G, St> =
     Arc<dyn Fn(RoomId, &RoomConfig) -> BuiltRoom<W, G, St> + Send + Sync>;
 
+/// A room's status, as known to the registry's table (the control plane's
+/// vocabulary — see [`RegistryMsg::RoomStatus`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomStatus {
+    /// The room is running (a `Shutdown` has not been accepted for it).
+    /// `members` is the registry-side count of connections affiliated
+    /// with the room (the same source the room-cap enforcement reads).
+    Running { members: u32 },
+    /// The room existed and its shutdown was just accepted by this
+    /// message (the room actor stops on its next tick).
+    Destroyed,
+    /// The room is not known to the registry (never created, or already
+    /// destroyed).
+    Absent,
+}
+
+/// The match result the room reports when it shuts down (the control
+/// plane's result seam — see [`crate::room::RoomLogic::match_result`]):
+/// the room id plus the game-encoded payload (opaque to the core; the
+/// platform's adapter decodes it).
+#[derive(Debug)]
+pub struct MatchResult {
+    pub room: RoomId,
+    pub payload: bytes::Bytes,
+}
+
 /// Messages addressed to the registry actor.
 #[derive(Debug)]
 pub enum RegistryMsg {
     /// Create and start a room.
+    ///
+    /// **Idempotent** (the control plane may resend the same request —
+    /// retry-after-timeout is the normal pattern for a control plane):
+    ///
+    /// - room absent → created (the usual validation: tick rate,
+    ///   keep-alive rate) and the reply is `Ok(Running { members: 0 })`;
+    /// - room present with the IDENTICAL config → no-op, the reply is
+    ///   `Ok(Running { members })` (one room, not two);
+    /// - room present with a DIFFERENT config → `Err(RoomConflict)` —
+    ///   a different spec is not a retry, it is a contradiction, and
+    ///   silently accepting it would start a room the control plane did
+    ///   not ask for.
+    ///
+    /// The comparison is over the WHOLE `RoomConfig` (it is `PartialEq`
+    /// for this): a retry carries the same config by construction. The
+    /// reply carries the room's status (see [`RoomStatus`]) so a create
+    /// round trip is also a status query (one hop, not two).
     CreateRoom {
         config: RoomConfig,
-        reply: oneshot::Sender<Result<RoomId, CoreError>>,
+        reply: oneshot::Sender<Result<RoomStatus, CoreError>>,
     },
     /// Shut down a room (its players' entities are dropped; connections are
     /// notified via [`ConnIn::RoomGone`]).
-    DestroyRoom { id: RoomId },
+    ///
+    /// Idempotent: destroying an absent room is a no-op and the reply is
+    /// `Ok(Absent)` (a control plane that retries a destroy never sees an
+    /// error for the second attempt). The reply is `Ok(Destroyed)` when
+    /// the shutdown was issued — note the room actor processes the
+    /// `Shutdown` on its next tick, so between the reply and the actual
+    /// stop a status query may already report `Absent` (the table entry
+    /// is removed when the destroy is ACCEPTED, which is the
+    /// control-plane-relevant moment: no new joins can start).
+    DestroyRoom {
+        id: RoomId,
+        reply: oneshot::Sender<RoomStatus>,
+    },
+    /// Query a room's status from the registry's table (no room round
+    /// trip — the registry never awaits a room; the member count comes
+    /// from the connection table, which the registry maintains from the
+    /// join/leave reports of every room, sharded or single).
+    RoomStatus {
+        id: RoomId,
+        reply: oneshot::Sender<RoomStatus>,
+    },
     /// Spawn a player entity in a room and report the entity + the
     /// per-connection action channel the connection actor writes to.
     ///
@@ -213,6 +276,10 @@ struct RoomEntry<St> {
     control: Option<Mailbox<RoomControl>>,
     /// The sharded room's state (sharded rooms only).
     shards: Option<ShardGroup<St>>,
+    /// The config the room was created with (the idempotent-create
+    /// comparison: a resent create must match it EXACTLY to be a no-op —
+    /// see `RegistryMsg::CreateRoom`).
+    config: RoomConfig,
 }
 
 #[derive(Default)]
@@ -260,6 +327,12 @@ pub struct Registry<W, G, St> {
     /// `reg_opens`) and is told to close itself via
     /// [`ConnIn::ServerClosed`] (an `ERROR` frame, code 9, then EOF).
     max_connections: Option<u64>,
+    /// The match-result sink (the control plane's result seam, see
+    /// [`crate::room::RoomLogic::match_result`]): a bounded mailbox the
+    /// composition root reads from (its reference adapter). Cloned to
+    /// each room at creation; `None` = rooms report no result. The
+    /// registry never awaits the sink (it only holds a sender clone).
+    result_sink: Option<Mailbox<MatchResult>>,
 }
 
 impl<W, G, St> Registry<W, G, St>
@@ -278,6 +351,8 @@ where
         metrics: mpsc::Sender<MetricsEvent>,
         // Server-wide connection cap (`None` = unlimited; see the field).
         max_connections: Option<u64>,
+        // The match-result sink (see the field): `None` = no result seam.
+        result_sink: Option<Mailbox<MatchResult>>,
     ) -> Self {
         Self {
             factory,
@@ -296,6 +371,7 @@ where
             reg_metrics_dropped: 0,
             metrics,
             max_connections,
+            result_sink,
         }
     }
 
@@ -323,6 +399,18 @@ where
         }
     }
 
+    /// Count the connections affiliated with `room` (the registry-side
+    /// membership view — maintained from the join/leave reports of every
+    /// room, sharded or single; the same source the sharded room-cap
+    /// enforcement reads). O(connections): this is a control-plane query
+    /// (rare, human-paced), not a tick-path operation.
+    fn room_members(&self, room: RoomId) -> u32 {
+        self.conns
+            .values()
+            .filter(|info| info.room == Some(room))
+            .count() as u32
+    }
+
     /// Run until the mailbox is closed.
     pub async fn run(mut self) {
         debug!("registry actor started");
@@ -330,8 +418,20 @@ where
             match msg {
                 RegistryMsg::CreateRoom { config, reply } => {
                     let id = config.id;
-                    if self.rooms.contains_key(&id) {
-                        let _ = reply.send(Err(CoreError::RoomExists(id.0)));
+                    // Idempotency: a room that already exists is a no-op
+                    // for an IDENTICAL request (the control plane's retry
+                    // pattern) and a conflict for a different one. The
+                    // whole-config comparison is the "same request"
+                    // definition (see the message docs).
+                    if let Some(existing) = self.rooms.get(&id) {
+                        if existing.config == config {
+                            let members = self.room_members(id);
+                            debug!(room = %id, "room create idempotent (already exists)");
+                            let _ = reply.send(Ok(RoomStatus::Running { members }));
+                        } else {
+                            warn!(room = %id, "room create conflict: different config");
+                            let _ = reply.send(Err(CoreError::RoomConflict(id.0)));
+                        }
                         continue;
                     }
                     // The room rate must divide the global ticker rate: the
@@ -370,6 +470,7 @@ where
                                     control_rx,
                                     run_every,
                                     self.metrics.clone(),
+                                    self.result_sink.clone(),
                                 )
                                 .run(),
                             );
@@ -378,6 +479,7 @@ where
                                 RoomEntry {
                                     control: Some(control_tx),
                                     shards: None,
+                                    config: config.clone(),
                                 },
                             );
                         }
@@ -466,6 +568,7 @@ where
                                         members: 0,
                                         pending: 0,
                                     }),
+                                    config,
                                 },
                             );
                             debug!(room = %id, shards = n, "sharded room created");
@@ -474,9 +577,12 @@ where
                     self.reg_created += 1;
                     self.emit_metrics();
                     debug!(room = %id, "room created");
-                    let _ = reply.send(Ok(id));
+                    // The reply is the status (a create round trip doubles
+                    // as a status query — one hop, not two); a fresh room
+                    // starts with zero members.
+                    let _ = reply.send(Ok(RoomStatus::Running { members: 0 }));
                 }
-                RegistryMsg::DestroyRoom { id } => {
+                RegistryMsg::DestroyRoom { id, reply } => {
                     if let Some(entry) = self.rooms.remove(&id) {
                         // Clear the affiliation of this room's connections;
                         // keep their inbox (clone, don't take) so they can
@@ -519,7 +625,30 @@ where
                         self.reg_destroyed += 1;
                         self.emit_metrics();
                         debug!(room = %id, "room destroyed");
+                        let _ = reply.send(RoomStatus::Destroyed);
+                    } else {
+                        // Idempotent destroy: a missing room is a no-op
+                        // success (a control plane retry never errors on
+                        // the second attempt).
+                        debug!(room = %id, "room destroy: absent (idempotent no-op)");
+                        let _ = reply.send(RoomStatus::Absent);
                     }
+                }
+                RegistryMsg::RoomStatus { id, reply } => {
+                    // Table-only answer (the registry never awaits a room):
+                    // a present entry means running (the member count comes
+                    // from the connection table — see the message docs);
+                    // an accepted destroy already removed the entry, so
+                    // `Absent` is the control-plane-correct answer for the
+                    // shutdown window.
+                    let status = if self.rooms.contains_key(&id) {
+                        RoomStatus::Running {
+                            members: self.room_members(id),
+                        }
+                    } else {
+                        RoomStatus::Absent
+                    };
+                    let _ = reply.send(status);
                 }
                 RegistryMsg::SpawnPlayer {
                     conn,

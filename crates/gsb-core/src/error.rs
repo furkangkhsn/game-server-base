@@ -15,6 +15,9 @@ pub enum CoreError {
     #[error("room already exists: {0}")]
     RoomExists(u64),
 
+    #[error("room {0} already exists with a different configuration (an idempotent create must resend the identical request)")]
+    RoomConflict(u64),
+
     #[error("room tick rate {room} Hz does not divide the global tick rate {global} Hz")]
     TickRate { room: f64, global: f64 },
 

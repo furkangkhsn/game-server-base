@@ -1182,6 +1182,15 @@ where
             private_frames: self.m.private_frames,
             joins: self.m.joins,
             leaves: self.m.leaves,
+            // Shards do not run the RPC machinery yet (the pending set
+            // lives in the single-room actor; see `crate::rpc`): the
+            // request counters stay zero by construction.
+            requests_local: 0,
+            requests_external: 0,
+            requests_rejected: 0,
+            requests_timed_out: 0,
+            requests_late: 0,
+            pending_requests: 0,
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,

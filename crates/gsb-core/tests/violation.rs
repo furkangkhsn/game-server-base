@@ -52,6 +52,8 @@ fn spawn_actor(conn: u64) -> (
         inbox,
         out_tx,
         metrics_tx,
+        None, // local auth (no ticket hook): these tests cover the
+        // pre-hook protocol-violation budget, unchanged by the hook.
     );
     let h = tokio::spawn(actor.run());
     (inbox_tx, out_rx, h)
@@ -182,7 +184,11 @@ async fn server_side_conditions_are_never_counted() {
     // ("registry gone", class None): always answered, never budgeted.
     // Ten of them must not come close to the budget (10 answered
     // ERROR 7s, no 9).
-    let auth = Auth { name: "neo".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "neo".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     in_tx
         .send(ConnIn::Frame(frame(op::base::AUTH_REQ, &auth)))
         .await
@@ -225,7 +231,11 @@ async fn server_side_conditions_are_never_counted() {
 #[tokio::test]
 async fn double_auth_is_a_hard_violation() {
     let (in_tx, mut out, handle) = spawn_actor(4);
-    let auth = Auth { name: "neo".into() }.encode_to_vec();
+    let auth = Auth {
+        name: "neo".into(),
+        ticket: vec![],
+    }
+    .encode_to_vec();
     in_tx
         .send(ConnIn::Frame(frame(op::base::AUTH_REQ, &auth)))
         .await

@@ -106,14 +106,14 @@ fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     // behaviour, the metric path has its own tests.
     let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, None).run(),
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, None, None).run(),
     );
     (tx, handle)
 }
 
 async fn create_room(tx: &Mailbox<RegistryMsg>, id: RoomId) {
     let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+        tokio::sync::oneshot::channel::<Result<gsb_core::RoomStatus, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: RoomConfig {
             id,
@@ -266,9 +266,14 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
 
     // Destroy the room: the player is notified, and the *inbox must survive*
     // (kept on the entry, not dropped) so later Shutdown still reaches it.
-    tx.send(RegistryMsg::DestroyRoom { id: RoomId(1) })
-        .await
-        .unwrap();
+    let (destroy_tx, _destroy_rx) =
+        tokio::sync::oneshot::channel::<gsb_core::RoomStatus>();
+    tx.send(RegistryMsg::DestroyRoom {
+        id: RoomId(1),
+        reply: destroy_tx,
+    })
+    .await
+    .unwrap();
     let msg = tokio::time::timeout(WAIT, inbox_rx.recv())
         .await
         .expect("timed out")
@@ -312,7 +317,7 @@ async fn spawn_rejected_when_room_is_full() {
     // A room whose membership cap is one (the capacity authority is the
     // room; the registry only forwards the join and the result).
     let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+        tokio::sync::oneshot::channel::<Result<gsb_core::RoomStatus, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: RoomConfig {
             id: RoomId(1),
@@ -383,7 +388,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
     let (metrics_tx, _metrics_rx) =
         tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, Some(1)).run(),
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, Some(1), None).run(),
     );
 
     // The first connection takes the one seat.
@@ -435,7 +440,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
 async fn create_room_rejects_rate_that_does_not_divide_global() {
     let (tx, handle) = start_registry();
     let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+        tokio::sync::oneshot::channel::<Result<gsb_core::RoomStatus, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: RoomConfig {
             id: RoomId(7),
@@ -472,7 +477,7 @@ async fn create_room_rejects_keepalive_above_tick_rate() {
     // faster than it ticks, and the old behavior (silent clamp to every
     // step, killing the silence gain) must not happen — reject instead.
     let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+        tokio::sync::oneshot::channel::<Result<gsb_core::RoomStatus, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: RoomConfig {
             id: RoomId(21),
@@ -502,7 +507,7 @@ async fn create_room_rejects_keepalive_above_tick_rate() {
     // < tick is the default setup, and 0 disables.
     for (id, keepalive) in [(RoomId(22), HZ), (RoomId(23), 1.0), (RoomId(24), 0.0)] {
         let (reply_tx, reply_rx) =
-            tokio::sync::oneshot::channel::<Result<RoomId, gsb_core::error::CoreError>>();
+            tokio::sync::oneshot::channel::<Result<gsb_core::RoomStatus, gsb_core::error::CoreError>>();
         tx.send(RegistryMsg::CreateRoom {
             config: RoomConfig {
                 id,
