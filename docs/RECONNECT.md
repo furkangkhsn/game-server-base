@@ -267,3 +267,93 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | 2 | Resume'da seq/ack SIFIRLANIR; istemci taze full ile kurulur |
 | 3 | Resume TÜM shard'lara broadcast; epoch guard tek-kabul sağlar |
 | 4 | Oda sınıfı `RoomConfig::persistent`; ephemeral Absent = ERROR 12, persistent kaza = zorunlu rebuild, `DestroyRoom` = emeklilik |
+
+## 14. Açık sorunlar ve çözümleri (dış eleştiri turunda kapatıldı)
+
+İlk taslağın uygulama öncesi kapatılması gereken dört mimari deliği ve
+beşinci olarak ölçüm planı. Bu bölüm §5–§8'i taahhüde bağlar.
+
+### 14.1 ConnectionId sürekliliği (en büyük delik)
+
+Oda içi her tablo (`conns`, `roster`, `pending`, `queued`, grup üyelik
+listeleri) **ConnectionId anahtarlıdır**; yeni oturum YENİ ConnectionId
+alır. Resume'daki kanal-swap yalnız yarısıydı: anahtarın kendisi
+değişmektedir ve eski anahtar kalırsa registry'nin yeni-conn bağlılık
+eşlemesiyle Leave/Despawn rotası kırılır.
+
+**Karar (v1):** resume kabulünde tek geçişlik **`RebindKey(old → new)`**
+adımı — oda, conn-anahtarlı tüm tablolarını tek noktadan yeniden
+anahtarlar (bağlantı başına girişler küçüktür; maliyet önemsizdir).
+Tek nokta olmasının sebebi projenin yapısal-işaret ilkesidir: re-key'i
+dağınık bırakmak "yeni tablo ekleyen unutur" sınıfı hatadır (dirty-cell
+dersi).
+
+**Yol haritasına not:** uzun vadeli doğru şekil, oda içi anahtarı
+oturum-bağımsız bir `PlayerId`'ye taşımaktır (re-bind ihtiyacını kökten
+kaldırır); v1 için ağır refactor olduğundan ertelendi ve P-listeye
+işlendi. Resume mekaniği bu geçişi zorlamaz: RebindKey tek noktada
+yaşadığından anahtar tipinin değişimi yerel bir değişikliktir.
+
+### 14.2 Park defterinin migrasyonla taşınması
+
+Defter "logic'te yaşar" ifadesi yetersizdi: logic'in ayrı bir HashMap
+alanındaysa shard migrasyonu onu TAŞIMAZ ve oyuncu B shard'ına geçince
+park kaydı A'da mahsur kalır (broadcast-resume bile bulamaz — defter
+yanlış yerdedir).
+
+**Karar:** park meta'sı (kimlik, hold başlangıcı, ExpireTo) **göçen
+oyuncu state'inin parçasıdır** — `ShardLogic`'in oyuncu taşıma yükünün
+içinde göçer, tıpkı wire id gibi. Yan-tablo değil; migration protokolü
+zaten "full state, exactly-once" sözleşmesiyle gelir ve bu meta'yı da
+kapsar. Defter-in-logic ifadesi "sorgulama ve politika logic'tedir"
+anlamına gelir, depolama world/player state'inindir.
+
+### 14.3 Wire protokolünde resume'un tetik noktası
+
+İlk taslak "AUTH → ResumePlayer" diye akış çizmişti ama istemcinin JOIN
+gönderdiği mevcut akışla ilişkisi tanımsızdı.
+
+**Karar:** **yeni opcode YOK.** Ticket-pinli bağlantının
+`JOIN_ROOM_REQ`'u örtük resume denemesidir: oda park defterinde kimliği
+bulursa kanalları takar ve `JOIN_ROOM_RESULT { entity }`'yi AYNI wire id
+ile döndürür; bulamazsa sıradan fresh join işler (saydam düşüş, §5).
+Local-auth yolunda resume demo amaçlıdır (`Auth.name` anahtar).
+
+### 14.4 Deadline durumunun sahipliği
+
+Grace'i logic bildirir, süpürgeyi core sürer — durum nerede?
+
+**Karar:** süre sahibi CORE'dur: `RoomConn.detached: bool` +
+`detach_deadline: Option<Instant>` detach anında `Detach.grace`
+değerinden yazılır. CONTROL fazındaki mevcut sweep mantığı iki dal:
+
+- `grace = Some(d)`: core kendi deadline'ını görüp süresi dolanı
+  `on_detach_expired`'e teslim eder;
+- `grace = None` (combat-held): core HER tick `may_release` sorar
+  (detached küçük olduğu için ucuz; park nadiren doludur), "evet"
+  alanı bitirir. Mantık-vetosu süreyi uzatabilir ama `Hold.grace =
+  Some(üst sınır)` seçen politikalar için tavan core'dadır.
+
+### 14.5 Ölçüm planı (önce veri)
+
+Davranış testleri yetmez; iki ölçüm maddesi:
+
+- **Mass-reconnect fırtınası:** sunucu restartı sonrası N yüzlerce
+  istemcinin aynı anda AUTH+JOIN/resume denemesi (thundering herd) —
+  loadgen'e churn profili eklenir (connect→join→kop→yeniden bağlan
+  döngüsü); broadcast-resume'un shard sayısıyla doğrusal maliyeti ve
+  registry baskısı ölçülür.
+- **ERROR 12 ekleminin notu:** additive proto değişikliğidir (yeni kod,
+  alan kayması yok) — ama projenin kendi bulgusu olan versiyonlama/
+  reserved disiplini turuna girdi olarak not edilir.
+
+## 15. Uygulama sırası (iki alt tur)
+
+- **Tur A — core mekaniği:** Detach/ExpireTo tipleri, `RoomLogic` üç
+  ekleme, `RoomControl/ShardMsg::Resume` + kanal swap + RebindKey,
+  epoch-guard, deadline sweep (14.4), `RoomConfig::persistent` +
+  emeklilik + ERROR 12, metrik sayaçları; §12'nin core-level testleri
+  (1–8).
+- **Tur B — demo politika:** MOBA-tipi park (grace + base'e alma),
+  bot stub (`ingest` sentezi, reclaim), §12 madde 9 ve uçtan uca senaryo;
+  mass-reconnect churn profili (14.5).
