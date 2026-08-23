@@ -467,6 +467,23 @@ where
         }
     }
 
+    /// Tell the collector a room's accumulator can go: sent at every
+    /// point this actor removes a live table entry — an accepted
+    /// [`RegistryMsg::DestroyRoom`], an unexpected-death reap, and the
+    /// shutdown-all drain. Without it the collector kept a per-room
+    /// accumulator for every room id ever created. A notice lost to a
+    /// full channel leaves that one accumulator until process end — the
+    /// same bounded-imprecision trade as `emit_metrics` above (the
+    /// counters there are cumulative; here the cost is one stale entry,
+    /// never a wrong number).
+    fn emit_room_gone(&mut self, id: RoomId) {
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.metrics.try_send(MetricsEvent::RoomGone(id))
+        {
+            self.reg_metrics_dropped += 1;
+        }
+    }
+
     /// Count the connections affiliated with `room` (the registry-side
     /// membership view — maintained from the join/leave reports of every
     /// room, sharded or single; the same source the sharded room-cap
@@ -774,6 +791,7 @@ where
                             (None, None) => {}
                         }
                         self.reg_destroyed += 1;
+                        self.emit_room_gone(id);
                         self.emit_metrics();
                         debug!(room = %id, "room destroyed");
                         let _ = reply.send(RoomStatus::Destroyed);
@@ -1162,6 +1180,7 @@ where
                     // `Absent`.
                     self.notify_room_gone(id);
                     self.reg_died += 1;
+                    self.emit_room_gone(id);
                     self.emit_metrics();
                     // Restart policy (the v1 contract): the rebuilt room
                     // comes back EMPTY — the members were notified above and
@@ -1221,7 +1240,20 @@ where
                     //    composition root aborts the ticker afterwards,
                     //    which closes the broadcast as a backstop for any
                     //    room that misses the window.
-                    for (id, entry) in self.rooms.drain() {
+                    // `std::mem::take` rather than `drain()`: the loop
+                    // body awaits, and a live drain borrow would fight
+                    // the awaited sends' executor hops in future edits.
+                    //
+                    // No `RoomGone` notice here, DELIBERATELY: this is
+                    // the whole-server shutdown — the collector dies with
+                    // the ticker right after its final report, so there
+                    // is no leak to prune; dropping the accumulators
+                    // first would instead erase every room's LAST report
+                    // window (consumers read the room line off that final
+                    // report). The destroy and unexpected-death paths DO
+                    // notify: they happen mid-flight, where an accumulator
+                    // would otherwise outlive its room forever.
+                    for (id, entry) in std::mem::take(&mut self.rooms) {
                         match (entry.control, entry.shards) {
                             (Some(control), _) => {
                                 let _ = control.send(RoomControl::Shutdown).await;

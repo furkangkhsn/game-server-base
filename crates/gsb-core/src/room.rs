@@ -269,9 +269,42 @@ impl Default for RoomConfig {
     }
 }
 
+/// The fallback tick period [`RoomConfig::period`] reports for a config
+/// whose `tick_hz` has no usable period (`<= 0`, NaN/±inf, or so high the
+/// reciprocal truncates to zero). One second: slow enough that every
+/// derived quantity stays finite and panic-free (the µs budget for the
+/// step histogram, `period * max_catchup` as the dt cap — even ×u32::MAX
+/// fits `Duration`), fast enough that a misconfigured room still steps
+/// (and its metrics show a 1 Hz rate instead of a frozen counter).
+const FALLBACK_TICK_PERIOD: Duration = Duration::from_secs(1);
+
 impl RoomConfig {
+    /// The tick period (`1 / tick_hz`).
+    ///
+    /// Total by construction: it never panics, mirroring the totality
+    /// guard of [`crate::ticker::Ticker::spawn`] (finite, `> 0`,
+    /// representable non-zero duration — otherwise the fallback above).
+    ///
+    /// Why the guard exists even though the registry path rejects bad
+    /// rates before any actor exists (the CreateRoom handler refuses a
+    /// `tick_hz` whose step divisor rounds below 1 or misses the global
+    /// rate): `RoomConfig` is public API and direct hand-built configs
+    /// bypass that validation entirely — tests, embedders, factories.
+    /// This method previously reached `Duration::from_secs_f64`, which
+    /// panics on exactly those inputs, killing an actor task at
+    /// construction (and, under `restart_on_panic`, respawning straight
+    /// into the same panic forever). A degraded-but-alive room beats a
+    /// panic loop: the fallback keeps every derived quantity well-defined.
     pub fn period(&self) -> Duration {
-        Duration::from_secs_f64(1.0 / self.tick_hz)
+        let hz = self.tick_hz;
+        if hz.is_finite() && hz > 0.0 {
+            Duration::try_from_secs_f64(1.0 / hz)
+                .ok()
+                .filter(|period| !period.is_zero())
+                .unwrap_or(FALLBACK_TICK_PERIOD)
+        } else {
+            FALLBACK_TICK_PERIOD
+        }
     }
 }
 
@@ -1768,14 +1801,22 @@ where
     /// index fix for the element moved into the freed slot (O(1)
     /// amortized; no scan). Called exactly where `conns` loses an entry
     /// (a leave, or a join superseding a stale session), so the roster
-    /// cannot drift from the table. When the removed connection was the
-    /// last slot, `swap_remove` hands back its own id and the position
-    /// entry is already gone — the fix is then a no-op.
+    /// cannot drift from the table.
+    ///
+    /// The fix targets the element that RELOCATED — `swap_remove`
+    /// returns the REMOVED element (`conn` itself), and the former last
+    /// element lands at `idx`. Missing that distinction silently left
+    /// the relocated element's position stale (the mass-leave panic the
+    /// supervision round surfaced).
     fn roster_remove(&mut self, conn: &ConnectionId) {
         if let Some(idx) = self.roster_pos.remove(conn) {
-            let moved = self.roster.swap_remove(idx);
-            if let Some(p) = self.roster_pos.get_mut(&moved) {
-                *p = idx;
+            let relocated = *self.roster.last().expect("pos entry implies non-empty roster");
+            self.roster.swap_remove(idx);
+            if relocated != *conn {
+                // `insert`, not `get_mut`: the relocated element's entry
+                // exists while the invariant holds, and rewriting it
+                // keeps this function correct even under partial drift.
+                self.roster_pos.insert(relocated, idx);
             }
         }
     }
@@ -1859,6 +1900,85 @@ mod tests {
     use crate::channel::channel;
     use gsb_protocol::FrameBody;
     use std::time::Duration;
+
+    /// Regression lock for the roster-drift panic: `swap_remove` returns
+    /// the REMOVED element, and the fix must retarget the RELOCATED one.
+    /// The old code fixed the removed element's (just-deleted) entry, so
+    /// the first non-tail leave left the relocated connection's position
+    /// stale and a mass-leave run panicked inside `roster_remove` —
+    /// observed on every loadgen end-of-run (surfaced by the supervision
+    /// round's death-reaping, which turned the silent task death into a
+    /// visible warn + reaped room).
+    #[test]
+    fn roster_stays_synchronized_through_mass_leaves() {
+        let cfg = RoomConfig {
+            id: RoomId(1),
+            tick_hz: 30.0,
+            metrics_cadence_hz: 30.0,
+            ..Default::default()
+        };
+        let (tick_tx, _first) = broadcast::channel(64);
+        let (_control, control_rx) = channel(1024);
+        let (dts_tx, _d) = mpsc::channel(1);
+        let (ops_tx, _o) = mpsc::channel(1);
+        let mut actor = RoomActor::new(
+            cfg,
+            (),
+            Box::new(RecLogic {
+                dts: dts_tx,
+                ops: ops_tx,
+            }),
+            tick_tx.subscribe(),
+            control_rx,
+            1,
+            null_metrics_tx(),
+            None,
+        );
+        const N: u64 = 50;
+        for c in 1..=N {
+            let (out_tx, _o) = mpsc::channel(8);
+            let (rtx, _rrx) = oneshot::channel();
+            actor.handle_control(RoomControl::Join {
+                conn: ConnectionId(c),
+                out: out_tx,
+                reply: rtx,
+            });
+        }
+        assert_eq!(actor.roster.len(), N as usize);
+        // Every connection leaves, in join order — the worst pattern for
+        // the old code (every removal relocates someone whose position
+        // entry then had to be fixed).
+        for c in 1..=N {
+            actor.handle_control(RoomControl::Leave {
+                conn: ConnectionId(c),
+                entity: 1,
+            });
+        }
+        assert!(actor.roster.is_empty(), "roster drained");
+        assert!(actor.roster_pos.is_empty(), "positions drained");
+        assert!(actor.conns.is_empty(), "table drained");
+        // And the room still accepts joins afterwards (the structures
+        // are consistent, not merely empty).
+        let (out_tx, _o) = mpsc::channel(8);
+        let (rtx, rrx) = oneshot::channel();
+        actor.handle_control(RoomControl::Join {
+            conn: ConnectionId(N + 1),
+            out: out_tx,
+            reply: rtx,
+        });
+        assert!(
+            tokio_sync_oneshot_peek(rrx).is_some(),
+            "post-mass-leave join accepted"
+        );
+    }
+
+    /// Synchronous peek helper for the test above (the reply was already
+    /// sent by `handle_control`; a blocking recv would need a runtime).
+    fn tokio_sync_oneshot_peek(
+        mut rx: oneshot::Receiver<Result<(EntityId, Mailbox<Action>), CoreError>>,
+    ) -> Option<Result<(EntityId, Mailbox<Action>), CoreError>> {
+        rx.try_recv().ok()
+    }
 
     /// A metrics sender whose receiver is dropped immediately: the room's
     /// per-step send fails and is ignored (the metric path is covered by
@@ -2230,6 +2350,35 @@ mod tests {
             ..Default::default()
         };
         assert!((c.period().as_secs_f64() - 1.0 / 30.0).abs() < 1e-9);
+    }
+
+    /// `period` is total for hand-built configs: every rate without a
+    /// usable period yields the typed-in-spirit fallback instead of the
+    /// `Duration::from_secs_f64` panic (mirrors ticker.rs's
+    /// `spawn_rejects_rates_without_a_period`; the registry rejects these
+    /// configs, but direct construction bypasses it — see `period`'s
+    /// docs). An absurdly HIGH rate truncates its sub-nanosecond period
+    /// to zero and falls back too (a zero period would divide-by-zero
+    /// every cadence derivation downstream).
+    #[test]
+    fn period_is_total_for_hand_built_configs() {
+        for bad in [0.0, -30.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e15] {
+            let c = RoomConfig {
+                tick_hz: bad,
+                ..Default::default()
+            };
+            assert_eq!(
+                c.period(),
+                FALLBACK_TICK_PERIOD,
+                "tick_hz = {bad} must fall back, not panic"
+            );
+        }
+        // A normal rate is untouched by the guard.
+        let c = RoomConfig {
+            tick_hz: 60.0,
+            ..Default::default()
+        };
+        assert!((c.period().as_secs_f64() - 1.0 / 60.0).abs() < 1e-9);
     }
 
     // -----------------------------------------------------------------

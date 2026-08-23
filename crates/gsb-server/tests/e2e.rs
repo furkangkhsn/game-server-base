@@ -689,12 +689,28 @@ async fn flooder_drops_attributed(kind: Kind) {
         last.net.actions_dropped > 0,
         "the flood must have overflowed the flooder's action channel"
     );
+    // Attribution: the last report taken while the flooder was still on
+    // the wire names it as the sole dropper, with every drop so far
+    // accounted to it alone. (Since the table-pruning round, a CLOSED
+    // connection's per-connection entry retires into the cumulative net
+    // total — and `handle.stop` closes the flooder before the final
+    // report — so the final report may list no one; the retirement
+    // itself is locked by gsb-core's accumulator unit tests.)
+    let live = reports
+        .iter()
+        .rev()
+        .find(|r| !r.actions_dropped_top.is_empty())
+        .expect("at least one report caught the flooder live");
     assert_eq!(
-        last.actions_dropped_top.first(),
-        Some(&(gsb_core::id::ConnectionId(1), last.net.actions_dropped)),
+        live.actions_dropped_top.first(),
+        Some(&(gsb_core::id::ConnectionId(1), live.net.actions_dropped)),
         "the sole connection (id 1) is the sole dropper: every drop is \
          attributed to it (top: {:?})",
-        last.actions_dropped_top
+        live.actions_dropped_top
+    );
+    assert!(
+        last.net.actions_dropped >= live.net.actions_dropped,
+        "the cumulative drop total is monotonic across the close"
     );
 }
 

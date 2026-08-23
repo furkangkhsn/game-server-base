@@ -402,7 +402,32 @@ pub enum MetricsEvent {
     Room(RoomSample),
     Registry(RegistrySample),
     Conn(ConnSample),
+    /// A room was destroyed (or died unexpectedly and was reaped): its
+    /// accumulator lingers for the grace windows below — reported, frozen,
+    /// closed to straggler samples — and is then dropped. Emitted by the
+    /// REGISTRY (the single authority on room existence) at the moment
+    /// its table entry is removed.
+    ///
+    /// Why linger instead of dropping on the spot: the destroy often
+    /// lands BETWEEN the room's last sample and the next report, and
+    /// erasing immediately would discard that final MEASURED window —
+    /// whose rate line is exactly what consumers diff when a room goes
+    /// away. Why not linger forever: that is the unbounded per-room ghost
+    /// this prune removes. See `ROOM_GONE_GRACE_REPORTS` for the window
+    /// arithmetic and the straggler-ordering caveat (a late `Room`
+    /// sample behind the notice is normal, not a resurrection attempt).
+    RoomGone(RoomId),
 }
+
+/// How many report windows a destroyed room lingers after its
+/// [`MetricsEvent::RoomGone`] notice before its accumulator is dropped:
+/// reported once more with frozen counters, closed to new samples
+/// (stragglers must not resurrect it). Two windows: stragglers arrive
+/// within a tick or two of the destroy — orders of magnitude inside one
+/// ~1 Hz report window — and a brand-new incarnation reusing the same
+/// `RoomId` starts reporting normally once the windows burn down (its
+/// counters restart from zero anyway, so the accepted cost is cosmetic).
+const ROOM_GONE_GRACE_REPORTS: u32 = 2;
 
 /// Per-room state in the accumulator: the latest sample plus the previous
 /// sample (for rate computation). Rates are computed over the **sample
@@ -422,7 +447,17 @@ struct RoomAcc {
 /// stream — no shared state, no locks (owned by exactly one task).
 #[derive(Debug, Default)]
 pub struct MetricAccumulator {
+    /// Live rooms plus destroyed rooms still inside their short
+    /// report-window linger (see `ROOM_GONE_GRACE_REPORTS`): a destroyed
+    /// room's entry is dropped when its windows run down, so this map is
+    /// bounded by live rooms + recent destroys instead of every room id
+    /// ever created.
     rooms: BTreeMap<RoomId, RoomAcc>,
+    /// Destroyed-room ids still lingering: reported with frozen counters,
+    /// closed to straggler samples, each report burning one window until
+    /// the accumulator is dropped (see `ROOM_GONE_GRACE_REPORTS`).
+    /// Bounded by the destroy rate × the constant window.
+    rooms_gone_grace: BTreeMap<RoomId, u32>,
     registry: Option<RegistrySample>,
     conn_bytes_in: u64,
     conn_bytes_out: u64,
@@ -437,8 +472,17 @@ pub struct MetricAccumulator {
     /// Cumulative input-action drops per connection (the sender's
     /// attribution: which connection's own input was lost to its full
     /// action channel). The collector owns this state — the connection
-    /// actors only ever *report* their own deltas.
+    /// actors only ever *report* their own deltas. Per-LIVE connection:
+    /// the entry is retired into
+    /// [`Self::conn_actions_dropped_retired`] when the connection's final
+    /// flush arrives, so this map cannot grow by every connection that
+    /// ever dropped a single action.
     conn_actions_dropped: BTreeMap<ConnectionId, u64>,
+    /// Input-action drops RETIRED with their closed connections. The net
+    /// scope's cumulative total folds this back in, so
+    /// [`NetReport::actions_dropped`] stays monotonic even though the
+    /// per-connection entries above are pruned at close.
+    conn_actions_dropped_retired: u64,
 }
 
 /// Per-room slice of a report: current gauges + rates over the last
@@ -569,9 +613,12 @@ pub struct MetricReport {
     pub registry: Option<RegistryReport>,
     pub net: NetReport,
     /// Cumulative input-action drops per connection, worst offenders first
-    /// (up to 5; ties broken by connection id). Empty when nothing was
-    /// dropped — the only loss point for input is a connection's own full
-    /// action channel, so this list names the flooders.
+    /// (up to 5; ties broken by connection id). LIVE connections only — a
+    /// closed connection's entry retires into the cumulative net total at
+    /// its final flush. Empty when nothing was dropped by any currently
+    /// connected peer — the only loss point for input is a connection's
+    /// own full action channel, so this list names the flooders still on
+    /// the wire.
     pub actions_dropped_top: Vec<(ConnectionId, u64)>,
 }
 
@@ -579,13 +626,29 @@ impl MetricAccumulator {
     /// Apply one event. Pure state transition (owned by one task).
     pub fn apply(&mut self, ev: MetricsEvent) {
         match ev {
-            MetricsEvent::Room(s) => match self.rooms.get_mut(&s.room) {
-                Some(acc) => acc.latest = s,
-                None => {
-                    self.rooms
-                        .insert(s.room, RoomAcc { latest: s, prev: None });
+            MetricsEvent::Room(s) => {
+                // Destroyed-room stragglers: while the room's id is inside
+                // its grace window, samples for it are ignored — they are
+                // the dying producers' final shutdown-step flushes racing
+                // the destroy notice, and applying one would resurrect
+                // the dead accumulator. When the window runs out the id
+                // is forgotten: a NEW incarnation of the same RoomId
+                // reports normally again (see ROOM_GONE_GRACE_REPORTS for
+                // the accepted cost).
+                if let Some(&left) = self.rooms_gone_grace.get(&s.room) {
+                    if left > 0 {
+                        return;
+                    }
+                    self.rooms_gone_grace.remove(&s.room);
                 }
-            },
+                match self.rooms.get_mut(&s.room) {
+                    Some(acc) => acc.latest = s,
+                    None => {
+                        self.rooms
+                            .insert(s.room, RoomAcc { latest: s, prev: None });
+                    }
+                }
+            }
             MetricsEvent::Registry(s) => self.registry = Some(s),
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);
@@ -599,6 +662,31 @@ impl MetricAccumulator {
                 self.conn_metrics_dropped =
                     self.conn_metrics_dropped.saturating_add(c.metrics_dropped);
                 self.conn_violations = self.conn_violations.saturating_add(c.violations);
+                if c.last {
+                    // The final flush is the connection actor's LAST
+                    // emission (its deltas fold above first — a closing
+                    // flooder's last drops are still counted), so retiring
+                    // here cannot be undone by a late delta. The
+                    // attribution merges into the cumulative total (the
+                    // net scope stays monotonic); the per-connection
+                    // entry is freed — a closed connection cannot flood
+                    // again, so naming it in `actions_dropped_top` has no
+                    // operator value.
+                    if let Some(n) = self.conn_actions_dropped.remove(&c.conn) {
+                        self.conn_actions_dropped_retired =
+                            self.conn_actions_dropped_retired.saturating_add(n);
+                    }
+                }
+            }
+            MetricsEvent::RoomGone(id) => {
+                // Linger, then go: the accumulator stays (so the room's
+                // final measured window still reaches the next report —
+                // see the variant docs), samples are suppressed meanwhile
+                // (the dying producers' shutdown-tick flushes must not
+                // resurrect or refresh it), and report() drops the entry
+                // when the windows run down. Idempotent: a repeated
+                // notice just restarts the window.
+                self.rooms_gone_grace.insert(id, ROOM_GONE_GRACE_REPORTS);
             }
         }
     }
@@ -688,7 +776,14 @@ impl MetricAccumulator {
             .saturating_add(self.conn_metrics_dropped);
         // Per-connection input-drop attribution: worst offenders first
         // (count desc, connection id asc as the deterministic tie-break).
-        let actions_dropped_total: u64 = self.conn_actions_dropped.values().sum();
+        // The cumulative total folds in the drops RETIRED with closed
+        // connections, so `net.actions_dropped` stays monotonic even
+        // though the map only names live connections.
+        let actions_dropped_total: u64 = self
+            .conn_actions_dropped
+            .values()
+            .sum::<u64>()
+            .saturating_add(self.conn_actions_dropped_retired);
         let mut actions_dropped_top: Vec<(ConnectionId, u64)> = self
             .conn_actions_dropped
             .iter()
@@ -696,6 +791,22 @@ impl MetricAccumulator {
             .collect();
         actions_dropped_top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         actions_dropped_top.truncate(5);
+        // Age the destroyed-room linger windows: each emitted report burns
+        // one (see ROOM_GONE_GRACE_REPORTS); when a room's windows run
+        // out, its accumulator finally goes.
+        let expired: Vec<RoomId> = self
+            .rooms_gone_grace
+            .iter()
+            .filter(|(_, left)| **left == 1)
+            .map(|(id, _)| *id)
+            .collect();
+        for left in self.rooms_gone_grace.values_mut() {
+            *left -= 1;
+        }
+        self.rooms_gone_grace.retain(|_, left| *left > 0);
+        for id in expired {
+            self.rooms.remove(&id);
+        }
         MetricReport {
             metrics_dropped,
             registry: self.registry.map(|r| RegistryReport {
@@ -1136,34 +1247,202 @@ mod tests {
         assert_eq!(second.net.bytes_out_total, 60_030);
 
         // Per-connection input-drop attribution: the only dropping sender
-        // is c1 (7 actions, from the last:true sample's delta).
+        // is c1 (7 actions total). Its sample carried `last: true`, so
+        // the drops fold into the cumulative net total (monotonic) and
+        // the per-connection entry retires with the connection — a
+        // closed peer cannot flood again, so it leaves the top list.
         assert_eq!(second.net.actions_dropped, 7);
+        assert!(
+            second.actions_dropped_top.is_empty(),
+            "a closed connection's attribution is retired, not listed"
+        );
         // Violation events sum across the conn samples (0 + 3).
         assert_eq!(second.net.violations, 3);
-        assert_eq!(
-            second.actions_dropped_top,
-            vec![(ConnectionId(1), 7)]
-        );
 
-        // The render is one line per scope and parseable key=value. The
-        // net scope gets a second (attribution) line because input drops
-        // are non-zero.
+        // The render is one line per scope and parseable key=value. No
+        // attribution line: nothing was dropped by a LIVE connection.
         let lines = second.render();
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("gsb-metric scope=registry "));
         assert!(lines[1].starts_with("gsb-metric scope=room id=r1 "));
         assert!(lines[2].starts_with("gsb-metric scope=net "));
         assert!(lines[2].contains("actions_dropped=7"));
-        assert!(
-            lines[3] == "gsb-metric scope=net actions_dropped_top=c1:7",
-            "attribution line: {}",
-            lines[3]
-        );
         for line in &lines {
             for kv in line.split_whitespace().skip(2) {
                 assert!(kv.contains('='), "key=value field: {kv}");
             }
         }
+    }
+
+    /// A minimal `RoomSample` for the pruning tests below (all counters
+    /// zero except `steps`).
+    fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
+        RoomSample {
+            room,
+            emit_at,
+            steps,
+            budget_us: 33_333,
+            dropped_frames: 0,
+            snap_bytes: 0,
+            shipped_bytes: 0,
+            lagged_events: 0,
+            lagged_ticks: 0,
+            step_min_us: 0,
+            step_max_us: 0,
+            step_sum_us: 0,
+            step_hist: [0; HIST_BINS],
+            step_fine_hist: [0; FINE_HIST_BINS],
+            late_min_us: 0,
+            late_max_us: 0,
+            late_sum_us: 0,
+            dropped_actions: 0,
+            keepalive_resends: 0,
+            snapshots: 0,
+            snap_bytes_max: 0,
+            snap_overflows: 0,
+            snap_records: 0,
+            shipped_frames: 0,
+            private_frames: 0,
+            joins: 0,
+            leaves: 0,
+            requests_local: 0,
+            requests_external: 0,
+            requests_rejected_malformed: 0,
+            requests_rejected_dup: 0,
+            requests_rejected_no_handler: 0,
+            requests_rejected_logic: 0,
+            requests_rejected_conn_cap: 0,
+            requests_rejected_room_cap: 0,
+            requests_timed_out: 0,
+            requests_late: 0,
+            pending_requests: 0,
+            groups: 0,
+            members: 0,
+            max_group: 0,
+            metrics_dropped: 0,
+        }
+    }
+
+    /// Table-prune lock 3a — a destroyed room's accumulator is dropped
+    /// when its grace windows run down instead of living forever; its
+    /// final measured window still reaches the reports (the destroy can
+    /// land between the room's last sample and the next report), the
+    /// dying producers' stragglers do NOT refresh it, and once the
+    /// windows burn down a re-created id reports normally again.
+    #[test]
+    fn destroyed_room_accumulator_is_pruned_and_stragglers_suppressed() {
+        let mut acc = MetricAccumulator::default();
+        let t = Instant::now();
+
+        // Live room → reported.
+        acc.apply(MetricsEvent::Room(room_sample(RoomId(3), t, 30)));
+        assert_eq!(acc.report(t).rooms.len(), 1);
+
+        // Destroyed → lingers: the notice lands after the room's last
+        // sample, so this report must still carry its final window.
+        acc.apply(MetricsEvent::RoomGone(RoomId(3)));
+        let r = acc.report(t); // burns linger window 2 → 1
+        assert_eq!(r.rooms.len(), 1, "the final measured window survives");
+        assert_eq!(r.rooms[0].steps, 30);
+
+        // The dead incarnation's shutdown-tick straggler (it lost the
+        // race against the notice on the shared FIFO) neither refreshes
+        // nor resurrects the entry.
+        acc.apply(MetricsEvent::Room(room_sample(RoomId(3), t, 31)));
+        let r = acc.report(t); // burns the last window 1 → 0: dropped
+        assert_eq!(r.rooms.len(), 1, "still inside the linger window");
+        assert_eq!(r.rooms[0].steps, 30, "frozen: straggler not applied");
+
+        // Windows ran down: the accumulator is gone, and a further
+        // sample is treated as a fresh incarnation's first (destroy →
+        // re-create works; counters restart from zero by contract).
+        acc.apply(MetricsEvent::Room(room_sample(RoomId(3), t, 32)));
+        let r = acc.report(t);
+        assert_eq!(r.rooms.len(), 1);
+        assert_eq!(r.rooms[0].steps, 32, "the id is reusable after the linger");
+    }
+
+    /// Table-prune lock 3b — a closed connection's `conn_actions_dropped`
+    /// entry retires at its final flush (`last: true`), keeping the map
+    /// live-connections-only, while the cumulative net total stays
+    /// monotonic (retired drops fold into it).
+    #[test]
+    fn closing_connection_retires_its_actions_dropped_entry() {
+        let mut acc = MetricAccumulator::default();
+        let c1 = ConnectionId(1);
+        let c2 = ConnectionId(2);
+
+        // Two live-flush deltas accumulate under c1 and show in top.
+        for delta in [3u64, 2] {
+            acc.apply(MetricsEvent::Conn(ConnSample {
+                conn: c1,
+                bytes_in: 0,
+                bytes_out: 0,
+                frames_in: 0,
+                frames_out: 0,
+                actions_dropped: delta,
+                metrics_dropped: 0,
+                violations: 0,
+                last: false,
+            }));
+        }
+        let r = acc.report(Instant::now());
+        assert_eq!(r.net.actions_dropped, 5);
+        assert_eq!(r.actions_dropped_top, vec![(c1, 5)]);
+
+        // The final flush may itself carry a last delta; everything folds
+        // into the cumulative total and the entry retires.
+        acc.apply(MetricsEvent::Conn(ConnSample {
+            conn: c1,
+            bytes_in: 0,
+            bytes_out: 0,
+            frames_in: 0,
+            frames_out: 0,
+            actions_dropped: 1,
+            metrics_dropped: 0,
+            violations: 0,
+            last: true,
+        }));
+        // A different connection keeps dropping afterwards.
+        acc.apply(MetricsEvent::Conn(ConnSample {
+            conn: c2,
+            bytes_in: 0,
+            bytes_out: 0,
+            frames_in: 0,
+            frames_out: 0,
+            actions_dropped: 4,
+            metrics_dropped: 0,
+            violations: 0,
+            last: false,
+        }));
+        let r = acc.report(Instant::now());
+        assert_eq!(
+            r.net.actions_dropped,
+            10,
+            "cumulative total includes retired drops (5 + 1 + 4)"
+        );
+        assert_eq!(
+            r.actions_dropped_top,
+            vec![(c2, 4)],
+            "only the live dropper is attributed"
+        );
+
+        // Idempotent close (no double-retire): a stray second `last`
+        // sample changes nothing.
+        acc.apply(MetricsEvent::Conn(ConnSample {
+            conn: c1,
+            bytes_in: 0,
+            bytes_out: 0,
+            frames_in: 0,
+            frames_out: 0,
+            actions_dropped: 0,
+            metrics_dropped: 0,
+            violations: 0,
+            last: true,
+        }));
+        let r = acc.report(Instant::now());
+        assert_eq!(r.net.actions_dropped, 10);
+        assert_eq!(r.actions_dropped_top, vec![(c2, 4)]);
     }
 
     /// Test room logic for the flow test below: one byte per tick per

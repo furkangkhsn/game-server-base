@@ -84,6 +84,20 @@
 //! cannot despawn a re-joined entity) composes with this: the two guards
 //! together make the leave/migration race deterministic in both orderings.
 //!
+//! **Tombstone lifetime.** A leave's tombstone is not kept forever — that
+//! would grow with connection churn. It outlives its leave by
+//! `TOMBSTONE_TTL_TICKS` ticks and is swept lazily on the
+//! `TOMBSTONE_SWEEP_EVERY_TICKS` cadence in CONTROL. Expiry cannot reopen
+//! the race: a `Migrate` is generated only while its entity is alive
+//! (leave-processing despawns the entity) and travels in a bounded
+//! per-shard FIFO inbox that every CONTROL phase drains, so a `Migrate`
+//! processed after its tombstone expired must have sat queued for more
+//! than TTL ticks after its leave — meaning the shard itself stalled far
+//! beyond any healthy operating point, outside the degradation envelope
+//! this protocol already assumes (the one-tick alignment, the bounded
+//! blink above). Within the envelope, no genuinely racing `Migrate` can
+//! still be in flight when its tombstone expires.
+//!
 //! ## Boundary visibility (borrowed entities)
 //!
 //! A player on a shard boundary must see entities in the neighboring
@@ -185,6 +199,22 @@ use crate::ticker::TickInfo;
 /// docs, "Wire identity"): 2^20 ≈ 100× the measured 10k single-room wall
 /// in per-shard lifetime spawn churn.
 pub const SHARD_SERIAL_RANGE: u64 = 1 << 20;
+
+/// A leave tombstone outlives the leave that wrote it by this many
+/// ticks, then becomes sweepable (see `conn_tombstone`). Hardcoded on
+/// purpose: this is a CORRECTNESS parameter of the leave/migration race
+/// gate, not an operator tuning knob — its safe value derives from the
+/// protocol's own degradation envelope (bounded FIFO residence), not
+/// from a deployment's taste.
+const TOMBSTONE_TTL_TICKS: u64 = 256;
+
+/// The CONTROL phase sweeps expired tombstones every this many ticks
+/// (lazily: no timer, no extra await — the sweep rides the tick the
+/// shard is already running). With the TTL above, the table then holds
+/// at most "the leaves of the last TTL window", so the O(n) `retain`
+/// runs over a small set and amortizes to noise. Also hardcoded: it is
+/// the other half of the same correctness contract.
+const TOMBSTONE_SWEEP_EVERY_TICKS: u64 = 512;
 
 /// A neighbor shard's boundary entity, as included in this shard's
 /// snapshots (mirrors the wire `EntityRecord`: identity + truncated
@@ -437,7 +467,21 @@ pub struct ShardActor<W, G, St> {
     /// join itself (or a migration install) — the join is alive, not
     /// dead — and gating on it would reject legitimate re-migrations of
     /// the same join (see module docs, "Migration protocol").
-    conn_tombstone: HashMap<ConnectionId, u64>,
+    ///
+    /// The value is `(highest dead epoch, tick the winning leave was
+    /// processed at)`: the tick half drives the TTL sweep. It is written
+    /// by the leave that owns the surviving (highest) epoch, so expiry
+    /// always measures the age of the guard that is actually
+    /// load-bearing; an equal-or-stale leave keeps the older entry whole,
+    /// which is the conservative direction (its guard lives longer).
+    /// Entries expire after `TOMBSTONE_TTL_TICKS` — see module docs,
+    /// "Tombstone lifetime".
+    conn_tombstone: HashMap<ConnectionId, (u64, u64)>,
+    /// The tick index of the last tombstone sweep (`None` = never run).
+    /// The sweep runs lazily in CONTROL when `ctx.tick` has advanced
+    /// `TOMBSTONE_SWEEP_EVERY_TICKS` past it — no timer task, no extra
+    /// awaited source.
+    last_tombstone_sweep: Option<u64>,
     groups: HashMap<G, GroupState>,
     /// One mailbox per shard index (used for the neighbors' indices).
     neighbors: Vec<Mailbox<ShardMsg<St>>>,
@@ -512,6 +556,7 @@ where
             conns: HashMap::new(),
             conn_epoch: HashMap::new(),
             conn_tombstone: HashMap::new(),
+            last_tombstone_sweep: None,
             groups: HashMap::new(),
             neighbors,
             border: HashMap::new(),
@@ -642,6 +687,33 @@ where
             tick: t.tick,
             dt,
         };
+
+        // -- Tombstone TTL sweep (lazy, CONTROL). Bounded cost: the
+        //    tombstone table only ever holds leaves of the last TTL
+        //    window (the epoch table is pruned on leave), so this O(n)
+        //    `retain` runs over a small set and amortizes to noise.
+        //
+        //    Why expiry preserves the race gate (the load-bearing
+        //    argument): a Migrate processed AFTER its tombstone expired
+        //    must have been enqueued more than TOMBSTONE_TTL_TICKS ticks
+        //    after the corresponding leave — Migrates are generated only
+        //    while the entity is alive (leave-processing despawns it) and
+        //    travel into a BOUNDED per-shard FIFO inbox drained by every
+        //    CONTROL phase, so queue residence beyond TTL ticks means
+        //    this shard itself is stalled far beyond any healthy
+        //    operating point. The pre-existing degradation notes (the
+        //    one-tick alignment, the bounded blink — module docs) already
+        //    assume non-stalled shards; inside that envelope no genuinely
+        //    racing Migrate is still in flight when its tombstone expires.
+        if self
+            .last_tombstone_sweep
+            .is_none_or(|at| ctx.tick.saturating_sub(at) >= TOMBSTONE_SWEEP_EVERY_TICKS)
+        {
+            let now = ctx.tick;
+            self.conn_tombstone
+                .retain(|_, (_, wrote)| now.saturating_sub(*wrote) < TOMBSTONE_TTL_TICKS);
+            self.last_tombstone_sweep = Some(now);
+        }
 
         // -- Phase 0 — CONTROL (drain the shard channel; the same messages
         //    the room handles on its control channel, plus the shard
@@ -883,6 +955,22 @@ where
                         "player left shard"
                     );
                 }
+                // Prune the epoch entry — in BOTH arms (the entity-matched
+                // despawn above and the broadcast leave this shard had no
+                // entity for). Safety: `conn_epoch` is read at exactly one
+                // place — stamping an outgoing Migrate for a connection
+                // LIVE in `self.conns` — and once a leave of the live
+                // join's epoch is processed here, that connection cannot
+                // be live on this shard any more (either the arm above
+                // just despawned it, or it never lived here). Any future
+                // migrate-in re-inserts the entry (see the Migrate arm),
+                // and a re-JOIN is safe because the per-connection
+                // dispatcher serializes ops: the rejoin carries a strictly
+                // newer epoch and is processed (on this FIFO shard
+                // channel) before any newer migrate-out could stamp from
+                // here. Without this removal the table grew by every
+                // connection that ever joined.
+                self.conn_epoch.remove(&conn);
                 // Leave tombstone (see module docs): a late `Migrate` of
                 // the join this leave ends must be rejected here — and in
                 // every other shard that also saw the leave (it is
@@ -892,12 +980,19 @@ where
                 // epoch legitimately and must not be mistaken for dead.
                 match self.conn_tombstone.entry(conn) {
                     Entry::Occupied(mut e) => {
-                        if *e.get() < epoch {
-                            *e.get_mut() = epoch;
+                        if e.get().0 < epoch {
+                            // Max-update BOTH halves together: the write
+                            // tick belongs to the leave that owns the
+                            // surviving (highest) epoch — see the field
+                            // docs. An equal-or-stale leave keeps the
+                            // older entry whole (conservative: its guard,
+                            // being for an equal-or-newer death, lives
+                            // longer).
+                            e.insert((epoch, ctx.tick));
                         }
                     }
                     Entry::Vacant(e) => {
-                        e.insert(epoch);
+                        e.insert((epoch, ctx.tick));
                     }
                 }
                 true
@@ -932,10 +1027,12 @@ where
                 // newer one — was processed first; the leave/migration
                 // race, in EITHER order). The gate reads the TOMBSTONE
                 // table, not `conn_epoch`: a migration of an alive join
-                // carries the installed epoch legitimately.
+                // carries the installed epoch legitimately. Only the
+                // epoch half of the tuple gates; the tick half is the
+                // sweep's bookkeeping.
                 if let Some(p) = &player
-                    && let Some(tomb) = self.conn_tombstone.get(&p.conn)
-                    && *tomb >= p.epoch
+                    && let Some((tomb_epoch, _wrote_at)) = self.conn_tombstone.get(&p.conn)
+                    && *tomb_epoch >= p.epoch
                 {
                     debug!(
                         room = %self.config.id,
@@ -1662,6 +1759,256 @@ mod tests {
             }
             out
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Table-pruning locks: the connection tables must not grow forever
+    // with connection churn (`conn_epoch` pruned on Leave; tombstones
+    // TTL'd + swept). These drive a BARE actor (not spawned): the
+    // harness above can only see observable wire behavior — the right
+    // level for the protocol invariants, but too coarse for "is this
+    // exact map entry gone". A child module may touch the private
+    // tables directly; the assertions below are the behavior locks.
+    // -----------------------------------------------------------------
+
+    /// An unspawned shard actor for the table tests above/below.
+    fn bare_shard(index: usize) -> ShardActor<TWorld, (), TState> {
+        let (_tick_tx, tick_rx) = broadcast::channel(64);
+        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
+        // Two dummy neighbor slots (TLogic::neighbors targets 0 and 1).
+        let (n0, _n0_rx) = channel::<ShardMsg<TState>>(8);
+        let (n1, _n1_rx) = channel::<ShardMsg<TState>>(8);
+        let (obs, _obs_rx) = mpsc::channel(16);
+        let (ops, _ops_rx) = mpsc::channel(16);
+        ShardActor::new(
+            RoomConfig {
+                id: RoomId(9),
+                keepalive_hz: 0.0,
+                metrics_cadence_hz: 0.0,
+                ..Default::default()
+            },
+            index,
+            TWorld::default(),
+            Box::new(TLogic {
+                index,
+                next_serial: 0,
+                conn_ent: HashMap::new(),
+                ent_conn: HashMap::new(),
+                last_tick: 0,
+                obs,
+                ops,
+            }),
+            tick_rx,
+            rx,
+            vec![n0, n1],
+            1,
+            metrics_null(),
+        )
+    }
+
+    fn tctx(tick: u64) -> TickCtx {
+        TickCtx {
+            room: RoomId(9),
+            tick,
+            dt: Duration::from_secs_f64(1.0 / 30.0),
+        }
+    }
+
+    fn tinfo(tick: u64) -> TickInfo {
+        TickInfo {
+            tick,
+            at: Instant::now(),
+        }
+    }
+
+    /// Drive one Join through `handle_msg`; returns the minted entity.
+    async fn join_direct(
+        a: &mut ShardActor<TWorld, (), TState>,
+        conn: ConnectionId,
+        epoch: u64,
+        tick: u64,
+    ) -> EntityId {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
+        assert!(
+            a.handle_msg(
+                ShardMsg::Join {
+                    conn,
+                    epoch,
+                    out: out_tx,
+                    reply: reply_tx
+                },
+                &tctx(tick)
+            ),
+            "a join must never stop the actor"
+        );
+        reply_rx
+            .await
+            .expect("join reply delivered")
+            .expect("join ok")
+            .0
+    }
+
+    fn ghost_migrate(
+        conn: ConnectionId,
+        epoch: u64,
+        entity: EntityId,
+        at_tick: u64,
+    ) -> ShardMsg<TState> {
+        let (out, _out_rx) = mpsc::channel::<FrameBatch>(8);
+        let (_act_tx, act_rx) = mpsc::channel::<Action>(8);
+        ShardMsg::Migrate {
+            from: 0,
+            at_tick,
+            wire: entity,
+            state: TState {
+                x: -7.0,
+                y: 0.0,
+                mode: 0,
+            },
+            player: Some(PlayerMigration {
+                conn,
+                epoch,
+                entity,
+                out,
+                actions: act_rx,
+            }),
+        }
+    }
+
+    /// Table-prune lock 1 — a Leave removes the connection's `conn_epoch`
+    /// entry in BOTH arms: the entity-matched despawn AND the broadcast
+    /// leave this shard held no matching entity for. The re-join path is
+    /// asserted too (the prune is only safe because re-joins and
+    /// migrate-ins re-insert).
+    #[tokio::test]
+    async fn leave_prunes_the_epoch_entry() {
+        let mut a = bare_shard(0);
+
+        // Arm 1: the entity-matched despawn.
+        let conn = ConnectionId(4);
+        let entity = join_direct(&mut a, conn, 7, 10).await;
+        assert_eq!(a.conn_epoch.get(&conn), Some(&7));
+        assert!(a.handle_msg(
+            ShardMsg::Leave {
+                conn,
+                entity,
+                epoch: 7
+            },
+            &tctx(11)
+        ));
+        assert!(
+            !a.conn_epoch.contains_key(&conn),
+            "the matched leave must prune the epoch entry"
+        );
+        assert_eq!(
+            a.conn_tombstone.get(&conn),
+            Some(&(7, 11)),
+            "and write its tombstone (epoch, write tick)"
+        );
+
+        // Arm 2: the registry broadcasts every leave to all shards; here
+        // the leave carries an entity this shard does NOT hold for that
+        // connection (the stale-leave guard keeps the connection row —
+        // it belongs to a live join), yet its epoch entry is still
+        // pruned: the leave proves that join is dead HERE.
+        let other = ConnectionId(5);
+        let other_entity = join_direct(&mut a, other, 3, 12).await;
+        assert_eq!(a.conn_epoch.get(&other), Some(&3));
+        assert!(a.handle_msg(
+            ShardMsg::Leave {
+                conn: other,
+                entity: other_entity.wrapping_add(1),
+                epoch: 3
+            },
+            &tctx(13)
+        ));
+        assert!(
+            a.conns.contains_key(&other),
+            "the stale-leave guard keeps the live join's row"
+        );
+        assert!(
+            !a.conn_epoch.contains_key(&other),
+            "the unmatched arm still prunes the epoch entry"
+        );
+
+        // Re-join safety (the prune's documented counterpart): a fresh
+        // join carries a strictly newer epoch and re-inserts.
+        join_direct(&mut a, other, 4, 14).await;
+        assert_eq!(
+            a.conn_epoch.get(&other),
+            Some(&4),
+            "re-join re-inserts the epoch entry"
+        );
+    }
+
+    /// Table-prune lock 2 — the tombstone gate keeps rejecting a stale
+    /// Migrate within the TTL window, then the tombstone expires at the
+    /// first sweep past TTL + cadence, after which the same migration is
+    /// accepted again (the observable accept-path of expiry; the
+    /// migrate-in re-insertion of `conn_epoch` is asserted as well).
+    #[tokio::test]
+    async fn stale_migrate_rejected_then_tombstone_expires() {
+        let mut a = bare_shard(1);
+        let conn = ConnectionId(6);
+        let wire = join_direct(&mut a, conn, 2, 100).await;
+        assert!(a.handle_msg(
+            ShardMsg::Leave {
+                conn,
+                entity: wire,
+                epoch: 2
+            },
+            &tctx(101)
+        ));
+        assert_eq!(
+            a.conn_tombstone.get(&conn),
+            Some(&(2, 101)),
+            "the leave wrote the tombstone (epoch, write tick)"
+        );
+
+        // The ghost arrives WITHIN the TTL window. `at_tick < ctx.tick`
+        // so the install gate is open — only the epoch gate can stop it.
+        // Existing behavior preserved: rejected.
+        assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 99), &tctx(102)));
+        assert!(
+            !a.conns.contains_key(&conn),
+            "the ghost migrate must not install the dead join"
+        );
+        assert_eq!(
+            a.conn_tombstone.get(&conn),
+            Some(&(2, 101)),
+            "rejection leaves the tombstone untouched"
+        );
+
+        // Advance the clock through CONTROL phases (which run the lazy
+        // sweep). First sweep ever → runs immediately at tick 200:
+        // tombstone age 99 < TTL, kept. At tick 712 (512 past the last
+        // sweep) the next sweep fires: age 611 >= TTL → expired.
+        assert!(a.step_phases(&tinfo(200)));
+        assert_eq!(
+            a.conn_tombstone.get(&conn),
+            Some(&(2, 101)),
+            "inside the TTL window the sweep keeps the guard"
+        );
+        assert!(a.step_phases(&tinfo(712)));
+        assert!(
+            !a.conn_tombstone.contains_key(&conn),
+            "past TTL + a sweep boundary the tombstone expires"
+        );
+
+        // Observable accept-path: the same (stale) migration now passes
+        // the gate — proving expiry opened it — and migrate-in
+        // re-inserts the pruned epoch entry (see CHANGE 1's comment).
+        assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 700), &tctx(713)));
+        assert!(
+            a.conns.contains_key(&conn),
+            "with the tombstone expired the gate no longer rejects"
+        );
+        assert_eq!(
+            a.conn_epoch.get(&conn),
+            Some(&2),
+            "migrate-in re-inserts the epoch entry"
+        );
     }
 
     /// Whether shard `s` reported `wire` as migrating out at tick `t-1`
