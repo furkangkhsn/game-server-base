@@ -67,7 +67,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → **166** (166/166 yeşil +1 var olan `#[ignore]`'lu
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → **172** (172/172 yeşil +1 var olan `#[ignore]`'lu
 gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Son ekleme:
 **dış inceleme hızlı düzeltme turu** — doğrulanmış dış inceleme raporundan beş
 madde kapatıldı: doküman çürüğü (metrik kanalı "unbounded" iddiası — kod
@@ -84,7 +84,11 @@ politikası odayı fabrikadan boş olarak yeniden kuruyor (aşağıda,
 "Kapatılanlar (supervision turu)"). rUDP REL bandının sessiz give-up'ı ise
 **bilinçli olarak ertelendi**: rUDP deneysel statüsüne alındı, üretimde aynı
 `Transport` seam'i arkasından kanıtlanmış taşıma koşacak (`udp.rs` modül
-dokümanındaki "Status: experimental" beyanıyla).
+dokümanındaki "Status: experimental" beyanıyla). En son **tablo budama
+turunda** shard'ların bağlantı-churn'üyle sonsuz büyüyen iki tablosu
+budandı, metrik biriktiricileri kapanan varlıkları bırakacak şekilde
+düzenlendi ve supervision turunun ortaya çıkardığı roster-drift panigi
+düzeltildi (aşağıda, "Kapatılanlar (tablo budama turu)").
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
@@ -2926,6 +2930,87 @@ korudukları için TTL ya da güvenli pencere kararı gerekli),
 panik yolu (hızlı düzeltme turu B notu); (3) çerez rotasyonu + pre-auth
 tahsis sınırı (güvenlik turu); (4) rUDP REL give-up — ERTELENDİ (rUDP
 deneysel statüsünde; kanıtlanmış taşıma seam'i bekliyor).
+
+## Kapatılanlar (tablo budama turu)
+
+Kaynak: dış inceleme raporunun 3 numaralı bulgusu — shard actor'lerinin
+`conn_epoch` ve `conn_tombstone` tabloları bağlantı churn'üyle **sonsuz
+büyüyordu** (leave/close'ta hiç silinmiyorlardı). Uzun ömürlü süreç hedefi
+için tam da hedef senaryoyu vuran sızıntı: giriş başına ~80 B × iki tablo ×
+milyonlarca tarihsel bağlantı = haftalarla ölçeklenen ölü durum. Aynı
+inceleme ailesinden `MetricAccumulator.rooms` (yıkılan her odanın
+biriktiricisi sonsuza kadar tutuluyordu) ve `conn_actions_dropped`
+(ConnectionId bazlı, hiç budanmayan) aynı kapsamda çözüldü.
+
+### Tasarım kararları (dış danışma ile birlikte verildi)
+
+- **`conn_epoch`: Leave'te anında silme.** Tek okuma noktası (:730)
+  yalnızca bu shard'ın tablosunda CANLI olan bağlantının giden Migrate
+  damgası; leave sonrası canlı olamaz ve gelecekteki migrate-in yeniden
+  ekler. Yarış penceresi yok — saf kazanım.
+- **`conn_tombstone`: tick-damgalı tembel süre (seçenek B).** Anında silme
+  reddedildi: tombstone'un VARLIK SEEBEBİ leave'ten sonra gelebilecek
+  gecikmiş Migrate'i reddetmek (hayalet-dirilme yarışı). Dispatcher-driven
+  Forget de reddedildi: Migrate komşudan, Forget registry'den gelir —
+  farklı göndericilerin tek FIFO kuyruğundaki işlenme sırası global
+  gönderim sırasını garanti etmez; doğruluk argümanı lokal olmaktan çıkar.
+  Seçilen şekil: değerler `(epoch, write_tick)`; CONTROL fazı her 512
+  tick'te bir (`TOMBSTONE_SWEEP_EVERY_TICKS`) yaşları 256 tick'i
+  (`TOMBSTONE_TTL_TICKS`) aşan girişleri tek `retain()` ile atar.
+  Doğruluk argümanı (kod içi belge): TTL'den eski bir Migrate'in kuyrukta
+  yaşamış olması için shard'in sağlıklı çalışma noktasının çok ötesinde
+  takılmış olması gerekir — bounded kanallar her tick drene edilir;
+  mevcut bozulma notları (1-tick hizalama, sınırlı blink) zaten aynı
+  varsayıma dayanır. Sabitler config'e ÇIKARILMADI: doğruluk
+  parametresidir, operatör ayarı değildir (dış kararla sabitlendi).
+- **Metrik budaması:** yıkılan odaya `MetricsEvent::RoomGone` bildirimi →
+  biriktirici İKİ rapor penceresi "donuk ama süpürgeye kapalı" bekletilir,
+  sonra düşer (ölüm, son örnek ile sonraki rapor arasına denk gelirse son
+  ölçülen pencere kaybolmasın diye — anında silmek tam da bunu yiyordu).
+  Shutdown-all bilerek bildirim üretmez (her odanın final rapor penceresi
+  korunur). Kapanan bağlantının `actions_dropped` girişi son flush'ında
+  emekli edilir; toplam skalar biriktirilir, `net.actions_dropped`
+  monoton kalır, `actions_dropped_top` yalnız canlı bağlantıları sayar.
+- **`RoomConfig::period` totalliği:** imza korundu (6 çağrı noktasına
+  dalgasız); `Ticker::spawn`'daki guard'ın aynısı ile geçersiz hızda
+  belgelenmiş 1 sn yedek periyot. Registry yolu böyle configleri zaten
+  reddeder (doğrulanıp comment'e yazıldı); panik yolu yalnız el-yapımı
+  config'teydi.
+
+### Turun asıl bulgusu: roster-drift panigi (supervision turunun yakaladığı)
+
+Budama, hayalet-biriktirici davranışını kaldırınca görünür oldu: loadgen'in
+son-of-run toplu çıkışında **oda task'i HER koşuda panikliyordu** — eski
+maskede ölü odalar raporlamaya devam ettiği için smoke yeşil kalıyordu.
+Kök neden klasik bir `swap_remove` dönüş-değeri yanılgısıydı:
+`roster_remove`, pozisyon düzeltmesini **silinen** elemanın (return
+değeri!) girişine yapıyordu; idx'e taşınan elemanın girişi bayat kalıyor,
+ilk kuyruk-dışı leave'te sürüklenme başlıyordu. Supervision turunun ölüm-
+hasatı tam da bu sessiz task ölümünü görünür warn + reaped room'a
+çevirdi — katmanın kendisi kendi sonraki böceğini yakaladı. Düzeltme:
+düzeltme RELOKATE edilen elemana (`roster.last()`), insert ile; regresyon
+kilidi `room.rs :: roster_stays_synchronized_through_mass_leaves`
+(50 join → hepsinin leave'i → üç yapı da boş + sonrası join çalışır).
+
+### Testler
+
+- `shard.rs :: leave_prunes_the_epoch_entry`,
+  `stale_migrate_rejected_then_tombstone_expires` (mevcut reddetme
+  davranışı korunumu dahil)
+- `metrics.rs :: destroyed_room_accumulator_is_pruned_and_stragglers_suppressed`,
+  `closing_connection_retires_its_actions_dropped_entry`
+- `room.rs :: period_is_total_for_hand_built_configs`,
+  `roster_stays_synchronized_through_mass_leaves`
+
+Test 166 → **172** (172/172 yeşil, iki ardışık tam koşu);
+`cargo clippy --workspace --all-targets` temiz; `gsb-loadgen 50 --duration 3`
+artık paniksiz (`left=50`, önceki her koşuda panic).
+
+### Kalan (bu inceleme ailesinden)
+
+(1) çerez rotasyonu + pre-auth tahsis sınırı (güvenlik turu); (2) rUDP REL
+give-up — ERTELENDİ (deneysel statü); (3) reconnect/reattach seam'i
+(ROADMAP P1'deki oturum politikası maddesiyle birleşir).
 
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
