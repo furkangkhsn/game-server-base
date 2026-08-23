@@ -3043,6 +3043,12 @@ give-up — ERTELENDİ (deneysel statü); (3) reconnect/reattach seam'i
 
 ## P1 — Robustluk ve güvenlik
 
+- [ ] **Reconnect/reattach** — kopan oyuncunun entity'sini oyun
+  politikasıyla (Park / AI devri / combat-held) yaşatan detach-resume
+  mekanizması; oda sınıfı (persistent/ephemeral) ve ERROR 12 dahil.
+  Tasarım tamamlandı ve dış danışma ile sabitlendi:
+  `docs/RECONNECT.md` — uygulama turu onu sözleşme olarak alır.
+
 - [ ] **Oturum zaman aşımı** — ölü TCP bağlantısı (RST'siz kopma) slot +
   görev + kayıt işgal etmeye devam ediyor. Heartbeat son-görülme damgası
   + aralıklı süpürme (kanal mesajıyla, kilit yok).

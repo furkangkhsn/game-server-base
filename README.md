@@ -122,3 +122,6 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
 - `docs/ROADMAP.md` — ne kaldı; kapatılan turlar (ham yük testi sayıları
   dahil).
 - `docs/TICK-ARCHITECTURE.md` — broadcast tabanlı tick mimarisi.
+- `docs/RPC-CONTROL-PLANE.md` — RPC deseni ve kontrol düzlemi tasarımı.
+- `docs/RECONNECT.md` — kopan oyuncu politikası (detach/resume/bot devri)
+  tasarımı — **uygulanmadı**, uygulamanın sözleşmesi.
