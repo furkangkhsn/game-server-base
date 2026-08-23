@@ -70,18 +70,32 @@
 //! The band split is by opcode: `op <= 64` (base control band) is
 //! REL, `op >= 1000` (game band) is RAW.
 //!
+//! **Status: experimental (v1).** Validated on loopback and by the e2e
+//! suite; NOT hardened for lossy real-world networks. The known gap:
+//! the REL give-up (`RETRANSIT_MAX`) is silent — a frame abandoned
+//! after 250 ms wedges its direction's cumulative stream (the receiver
+//! never advances past the hole) while the session stays alive and the
+//! RAW game band keeps flowing, so the wedge is invisible. Production
+//! deployments should run a hardened transport behind the same
+//! [`crate::Transport`] seam, or close this gap first (give-up ⇒
+//! session-fatal, or memory-bounded retransmit with a no-ACK death
+//! threshold — see ROADMAP "dış inceleme hızlı düzeltme turu", Kalan).
+//!
 //! ## Band semantics (feature 2)
 //!
-//! - **Control band (AUTH/JOIN/LEAVE/HEARTBEAT/ERROR): reliable.** Loss
-//!   would break correctness (a lost JOIN result hangs the client; a
-//!   lost HEARTBEAT is tolerable only because HEARTBEAT_ACK is not
-//!   state — but the *request* may be). Each direction keeps its own
-//!   sequence: the sender retransmits the oldest un-ACKed REL frame
-//!   every `RETRANSIT_RTO` until it is ACKed or `RETRANSIT_MAX` elapses
-//!   (give-up, counted). The receiver deduplicates (cumulative), buffers
-//!   a small out-of-order window, and only advances when the gap
-//!   fills — control frames are never delivered out of order (AUTH
-//!   before JOIN is a property of `seq`, not of luck).
+//! - **Control band (AUTH/JOIN/LEAVE/HEARTBEAT/ERROR): reliable within
+//!   the give-up bound.** Loss would break correctness (a lost JOIN
+//!   result hangs the client; a lost HEARTBEAT is tolerable only
+//!   because HEARTBEAT_ACK is not state — but the *request* may be).
+//!   Each direction keeps its own sequence: the sender retransmits the
+//!   oldest un-ACKed REL frame every `RETRANSIT_RTO` until it is ACKed
+//!   or `RETRANSIT_MAX` elapses (give-up, counted — and see the status
+//!   note above: the count has NO consequence today, which is exactly
+//!   why this transport is experimental). The receiver deduplicates
+//!   (cumulative), buffers a small out-of-order window, and only
+//!   advances when the gap fills — control frames are never delivered
+//!   out of order (AUTH before JOIN is a property of `seq`, not of
+//!   luck).
 //! - **Snapshot band (WORLD_SNAPSHOT & co.): RAW.** The room's snapshots
 //!   are self-contained (a client that loses one heals on the next
 //!   snapshot or the keep-alive resend — `RoomConfig::keepalive_hz`), so
