@@ -32,8 +32,11 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
   kendisi tutar; core, world tipine `W` jeneriği ile tamamen ECS'sizdir.
 - **Protokol:** protobuf (`prost` / Unity'de `Google.Protobuf`).
   `[u32 LE uzunluk][u16 LE opcode][protobuf payload]`.
-- **Taşıma:** varsayılan TCP; `Transport`/`Listener`/`Endpoint` soyutlaması
-  sayesinde yarın rUDP eklenir, aktör koduna tek satır dokunulmaz.
+- **Taşıma:** varsayılan TCP; rUDP de bugün beraberinde gelir —
+  `config.example.toml` içinde `transport = "udp"` yeterli (stateless
+  cookie el sıkışması; kontrol bandı güvenilir `REL`, oyun bandı
+  kayıp-toleranslı `RAW`). `Transport`/`Listener`/`Endpoint` soyutlaması
+  sayesinde aktör koduna tek satır dokunulmaz.
 
 ## Crate haritası
 
@@ -50,7 +53,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 38 test: framing, lint, ticker/oda tick'i, kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
+cargo test --workspace          # 166 test: framing, lint, ticker/oda tick'i, RPC, bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır
@@ -95,7 +98,10 @@ error), `1000+` oyun bandı (`MOVE_TO=1000`, `WORLD_SNAPSHOT=1003`,
 
 Bant genişliği: yayın, entity başına **tam, kendi kendine yeten snapshot**
 gönderir; yavaş istemciye düşen batch en fazla 1 tick bayatlık yaratır.
-Delta + AOI, belgelenmiş sonraki adımdır (`docs/DESIGN.md`).
+Delta kodlanmış AOI snapshot'ları (spatial strateji), takım sisi (fog of
+war), PVS ve sharded odalar bugün implemente edilmiş durumda; hepsi config
+üzerinden `visibility` anahtarıyla seçilir (`all` / `spatial` / `team` /
+`pvs` / `sharded`).
 
 ## Bir sonraki oyun
 

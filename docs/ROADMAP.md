@@ -67,8 +67,24 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → **161** (161/161 yeşil +1 var olan `#[ignore]`'li
-gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi).
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → **166** (166/166 yeşil +1 var olan `#[ignore]`'lu
+gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Son ekleme:
+**dış inceleme hızlı düzeltme turu** — doğrulanmış dış inceleme raporundan beş
+madde kapatıldı: doküman çürüğü (metrik kanalı "unbounded" iddiası — kod
+bounded + `try_send` iken üç dosyada kendisiyle çeliyordu), `Ticker::spawn`
+panik yolu (`hz ≤ 0`/NaN artık tipli hata), SIGTERM graceful shutdown,
+README'nin kodla senkronu ve **READ fazı açlığı** (döner imleç — hash-sırası
+öneki bütçeyi her tick tüketirken kuyruk bağlantıları sonsuza kadar
+ulaşılmaz kalıyordu; mutation-verified testle kilitlendi). Aşağıda,
+"Kapatılanlar (dış inceleme hızlı düzeltme turu)"; onu izleyen turda
+**aktör supervision'ı** kuruldu — panik eden bir oda/shard task'i artık
+registry tablosunda zombi `Running` kaydı bırakmıyor: ölüm izleniyor,
+üyeler `RoomGone` ile haberdar ediliyor, opsiyonel `restart_on_panic`
+politikası odayı fabrikadan boş olarak yeniden kuruyor (aşağıda,
+"Kapatılanlar (supervision turu)"). rUDP REL bandının sessiz give-up'ı ise
+**bilinçli olarak ertelendi**: rUDP deneysel statüsüne alındı, üretimde aynı
+`Transport` seam'i arkasından kanıtlanmış taşıma koşacak (`udp.rs` modül
+dokümanındaki "Status: experimental" beyanıyla).
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
@@ -2722,6 +2738,194 @@ emsali (ölçüm ham çıktıları yerel çalışma verisi); silmek ayrıca
 yanlış, çünkü bu dosyalar önceki turun karşılaştırma tabanları.
 Doğrulama: `git status --porcelain` bu turun sonunda gerçekten boş
 (değişiklikler commit'lenmeden önce yalnız bu turun iki dosyası).
+
+## Kapatılanlar (dış inceleme hızlı düzeltme turu)
+
+Kaynak: bağımsız bir dış inceleme raporu (gsb-core/net/server/protocol +
+dokümanlar) ve rapor iddialarının tek tek doğrulanması. Beş madde, hepsi
+"bir sonraki turda canını yakar" kategorisinden; mimariye dokunmadan.
+
+### A — Doküman çürüğü: metrik kanalı "unbounded" iddiası
+
+Metrik altyapısı bounded kanal + senkron `try_send` + sayılan drop olarak
+kurulmuştu (metrik turu), ama üç yerdeki doküman hâlâ "*unbounded* send"
+diyordu: `metrics.rs` modül dokümanı (satır 6) kendi tasarım paragrafıyla
+(14-23) **15 satır arayla çeliyordu**, `RoomSample` doc'u ve `room.rs`'teki
+iki kardeş iddia aynı bayatlığı taşıyordu. Dokümanın spesifikasyon rolü
+oynadığı bu projede çürüme kod hatasından ağır: okur ya yanlış inanır ya da
+dokümana güvenmeyi bırakır. Dört nokta da gerçek tasarıma (bounded +
+`try_send` + drop sayacı + kümülatif örnek) çevrildi.
+
+### B — `Ticker::spawn` panik yolu → tipli hata
+
+`Ticker::spawn(hz, _)` genel API; `Duration::from_secs_f64(1.0/hz)` hz ≤ 0
+ve NaN'da panikliyor, aşırı küçük hızda overflow, aşırı büyük hızda sıfır
+periyoda sessiz yuvarlanıyordu (sıfır periyot = tick değil busy-loop).
+Registry yolu config'i zaten doğruluyordu; ama spawn'ı doğrudan çağıran
+test/platform gömücüsü panikle ölüyordu. Yeni sözleşme: guard totol
+(`finite && > 0 && try_from_secs_f64 → non-zero`) ve hata tipli —
+`CoreError::InvalidTickRate { rate }`; kompozisyon kökü yeni
+`ServerError::BadTickRate` ile net bir başlangıç hatası veriyor.
+`Ticker::period()` "by construction paniksiz" olarak belgelendi (bir
+`Ticker` değeri yalnızca geçerli periyot üretmiş hızla var olabilir).
+Yeni test: `spawn_rejects_rates_without_a_period` (0, negatif, NaN, ±inf,
+1e15). **Kalan (bilinçli):** `RoomConfig::period` el-yapımı config'te hâlâ
+panikleyebilir; registry yolu böyle config'i reddettiği için düşük öncelik
+— kapatılış biçimi oda-config doğrulamasının tek merkezde toplanmasıdır,
+ayrı maddedir.
+
+### C — SIGTERM graceful shutdown'a bağlandı
+
+`main.rs` yalnız `ctrl_c()` bekliyordu; `docker stop` (SIGTERM) altında
+kapanma kaskadı hiç çalışmıyordu. Projenin çoklu-kaynak idiom'uyla çözüldü
+(select! yasak): sinyal başına bir watcher task, her biri bounded kanala
+raporluyor; main tek `recv` bekliyor. Windows davranışı değişmedi (unix
+gövdesi cfg'li).
+
+### D — README senkronu
+
+README kodun gerisinde kalmıştı: "38 test" (gerçek: 163), rUDP "yarın
+eklenir" (kodda iki transportla ship edilmiş durumda: cookie handshake,
+REL kontrol bandı / RAW oyun bandı, `transport = "udp"`), delta+AOI
+"belgelenmiş sonraki adım" (`spatial` stratejisiyle ship edilmiş; team/PVS/
+sharded dahil `visibility` seçimiyle). Üçü de kaynağına karşı doğrulanarak
+düzenlendi; test sayısı bundan sonra ölçülerek yazılır.
+
+### E — READ fazı açlığı (döner imleç) + adalet testi
+
+READ, bağlantıları `conns` HashMap'inin tekrar sırasında geziyordu; sıra
+koşu içinde sabit olduğundan sürekli flood altında aynı hash-sırası öneki
+oda çekme bütçesini (65 536) her tick tüketiyor, kuyruk bağlantıları
+**hiç** ulaşılmaz kalıyordu ("ertelendi ≠ hiç teslim edildi"). Bu, girdi
+adaleti turunun kapatdığı atma-adaletinin ulaşma tarafındaki kardeşidir:
+(a) bir bağlantının tick'ten alabileceği sınırlandı; artık (c) kalanın
+kimden alınacağı da döner. Tasarım: `roster: Vec<ConnectionId>` (join
+sırası) + `roster_pos` indeks haritası (swap-remove + tek indeks düzeltmesi,
+O(1) amortize) + mutlak `read_cursor` (incelenen her bağlantının üzerinden
+ilerler; üyelik değişimi imleci bozmaz, yalnız başlangıç ofsetini kaydırır).
+Tick başına ek tahsis yok, sıralama yok, kilit yok; per-conn bütçe, oda
+çekme bütçesi, isteklerin varış-sırasında ayrılması ve `dropped_actions ==
+0` semantiği aynen korundu. Roster, `conns` tablosunun değiştiği üç kontrol-
+yolunda senkronlanır (join / leave / eskitilmiş rejoin).
+
+Test: `read_fairness.rs :: sustained_overload_reaches_every_connection_within_n_ticks`
+— ilk katılan flooder'ın 64 bekleyen aksiyonu karşısında çekme bütçesi
+2 × per-conn 1 iken altı bağlantının her birinin ilk ingest'i N=6 adım
+içinde gelir; ≥3 ayrı tick gerekmesi bütçenin gerçekten bağlı olduğunu
+kanıtlar (yarış argümanı); drop 0. **Mutation-verified:** taramayı eski
+hash-sırasına döndürmek testi düşürür ("connection 2 was NEVER reached").
+
+### Tur özeti (yeni testler, hiçbir eski test silinmedi/ihmal edilmedi)
+
+- `ticker.rs :: spawn_rejects_rates_without_a_period` (unit)
+- `tests/read_fairness.rs :: sustained_overload_reaches_every_connection_
+  within_n_ticks` (entegrasyon)
+- Test 161 → **163** (163/163 yeşil + 1 var olan ignored doctest);
+  `cargo clippy --workspace --all-targets` temiz.
+
+### Kalan (bu incelemeden doğan, henüz açık)
+
+Önceliğe göre: (1) **REL bandı give-up'ı oturum ölümcül yapmak** — teslim
+edilmiş özellikte doğruluk hatası: N yeniden gönderimden sonra sessizce
+vazgeçiliyor, kaybolan `JOIN_ROOM_RESULT` istemciyi sonsuza kadar
+bekletiyor. **Karar (bu tur): ERTELENDİ** — rUDP deneysel kabul edildi;
+üretimde aynı `Transport` seam'i arkasından kanıtlanmış bir taşıma
+(QUIC tabanlı) koşacak ya da bu boşluk o zaman kapatılacak. Bedeli:
+`udp.rs` modül dokümanı artık "experimental" statüsünü ve sessiz give-up →
+yön-kilidi mekanizmasını açıkça beyan ediyor ("reliable within the give-up
+bound"); config'deki `transport = "udp"` seçeneği bu statüde. (2)
+**aktör supervision'ı** — `logic.update()` panigi oda task'ini öldürür,
+registry kaydı `Running` görünmeye devam eder (zombi oda); (3) **shard
+tablo budaması** — `conn_epoch`/`conn_tombstone` (Migrate yarışını
+korudukları için dikkatli: TTL ya da güvenli pencere kararı gerekli),
+`MetricAccumulator.rooms`, `conn_actions_dropped`; (4) `RoomConfig::period`
+panik yolu (B'deki not); (5) çerez rotasyonu ve pre-auth tahsis sınırı
+(güvenlik turu — rUDP deneysel statüsüne bağlandı).
+
+## Kapatılanlar (supervision turu)
+
+Kaynak: dış inceleme raporunun 2 numaralı bulgusu — `logic.update()`
+içindeki bir panik oda task'ini sessizce öldürür ama registry tablosundaki
+kayıt yaşamaya devam eder: durum ebediyen `Running{members}` görünür,
+join'ler ölü kontrol kanalına dispatch edilir. 161 testin hiçbiri bu yolu
+kapsamıyordu (panik eden oyun mantığı hiç simüle edilmemişti). Sharded
+odada tek shard'ın ölümü de mantıksal odayı kırar: komşular ölü shard'ın
+kapalı mailbox'ına sender tutar, migrasyon asla tamamlanamaz.
+
+### Tasarım: izleyen watcher + kusursuz-giriş hilesi
+
+- **Tespit:** her spawn edilen oda/shard task'i için TEK watcher task —
+  yalnız kendi `JoinHandle`'ını bekler, ölünce yeni
+  `RegistryMsg::RoomDied { id, shard, generation }`'i registry'nin
+  kendi self-mailbox'ına raporlar. Aktör disiplini korunur: registry'nin
+  tek await'i yine inbox `recv`; watcher'ın tek await'i handle; select yok.
+  Neden polling değil: `JoinHandle::is_finished()` ile mesaj-başı tarama
+  mümkündü ama tespit gecikmesi sınırsız olurdu (sessiz sunucuda zombi
+  penceresi sonsuz) ve "nerede poll edileceğini hatırlama" disiplini
+  gerektirirdi — projenin "yapısal işaret > yazar disiplini" ilkesinin
+  tersine.
+- **Normal/istisnai ayrımı iptal altyapısı olmadan:** her çıkış raporlanır;
+  `DestroyRoom`/`Shutdown` tablo girişini senkron siler, dolayısıyla geç
+  gelen rapor ya giri bulamaz ya da **farklı kuşağın** girişi bulur — ikisi
+  de sessiz no-op. Yalnız CANLI giriş + AYNI kuşak = beklenmedik ölüm.
+  Kuşak sayacı (`room_gen`, id başına) install'da artar, hem gire hem
+  watcher'a damgalanır; bayat rapor tek integer karşılaştırmasıyla reddedilir.
+- **Beklenmedik ölüm:** warn (oda + shard indeksi), tablodan düşme,
+  üyelere `ConnIn::RoomGone` (destroy semantiğiyle birebir — ortak
+  `notify_room_gone()` helper'ı), bağlılık temizliği, `rooms_died`
+  metriği. Durum sorguları artık doğru cevabı verir: `Absent`.
+- **Sharded odada bir shard ölürse:** kısmi toparlama YOK — komşu kanalları
+  kopuk olduğu için bütün mantıksal oda hasat edilir (tek oda ölümüyle aynı
+  yol), warn ölen indeksi isimlendirir.
+- **Restart politikası:** `RoomConfig::restart_on_panic` (varsayılan false;
+  sıradan bir `PartialEq` katılımcısı — alanı çevirmek idempotent-create'te
+  doğal olarak `RoomConflict` üretir). Açıkken ölüm sonrası oda AYNI
+  factory+config'den `install_room()` üzerinden yeniden kurulur ve
+  **BOŞ döner** (üyeler zaten haberdar edildi, rejoin edebilir; dünya
+  durumu ölü task'in içindeydi). Sürekli panikleyen logic = ölüm başına
+  bir warn'lık restart döngüsü — operatöre anında görünür, v1 için kabul
+  (backoff makinesi yok). Factory'nin kendisi registry döngüsünde çağrılır
+  (CreateRoom'taki mevcut maruziyetin aynısı); panikleyen factory kapsam
+  dışı, kod içinde beyanlı.
+
+### Turun bonusu: iki yarış deliği kapandı
+
+Testleri kurarken görüldü: bir join dispatch edildikten sonra oda ölürse,
+geciken `SpawnDone`/`SpawnFailed` raporu yanlış enkarnasyona düşebilir
+(yeni ShardGroup'un sayaçlarını bozar ya da ölü üyeliği canlı tabloya
+sabitler). Çözüm: dispatch anındaki kuşak `RoomOp::Join`'e damgalanır,
+dispatcher `SpawnDone`/`SpawnFailed`'da geri yankılar; bayat settle ya
+sessizce atılır ya bağlantıya `RoomGone` bildirilir — hangi sıralıda
+olursa olsun yakınsama garanti (sharded cap muhasebesi saturating).
+
+### Testler (davranış kilidi; 5× tekrarda sıfır flake)
+
+- `supervision.rs :: panicking_room_is_removed_and_members_notified` —
+  ilk tick'te panic eden logic: durum `Absent`, üye `RoomGone` aldı,
+  sonraki SpawnPlayer `RoomNotFound`. Determinizm kilit'siz: panik
+  logic'in KENDİ join bayrağıyla kurulur (paylaşımlı atomik yok).
+- `supervision.rs :: restarted_room_comes_back_when_policy_enabled` —
+  yalnız ilk update'te panikleyen logic + `restart_on_panic`: oda yeniden
+  `Running`, eski üye haberdar edilmiş, fabrika tam 2 kez kurulmuş
+  (crash-loop yok), taze join çalışıyor.
+- `supervision.rs :: shard_death_takes_down_the_whole_logical_room` —
+  2 shard'lık odada shard 1 ölür → bütün oda `Absent` + üyelere `RoomGone`.
+
+Metrik dalgası küçük tutuldu: `rooms_died` registry sayaçları +
+`RegistrySample` + `RegistryReport` + render satırı + loadgen binary
+wire encode/decode (~15 satır).
+
+Test 163 → **166** (166/166 yeşil); `cargo clippy --workspace
+--all-targets` temiz.
+
+### Kalan (bu inceleme ailesinden)
+
+(1) shard tablo budaması — `conn_epoch`/`conn_tombstone` (Migrate yarışını
+korudukları için TTL ya da güvenli pencere kararı gerekli),
+`MetricAccumulator.rooms`, `conn_actions_dropped`; (2) `RoomConfig::period`
+panik yolu (hızlı düzeltme turu B notu); (3) çerez rotasyonu + pre-auth
+tahsis sınırı (güvenlik turu); (4) rUDP REL give-up — ERTELENDİ (rUDP
+deneysel statüsünde; kanıtlanmış taşıma seam'i bekliyor).
 
 ## P0 — Ölçüm (önce veri, sonra optimize)
 

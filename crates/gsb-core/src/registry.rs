@@ -22,6 +22,15 @@
 //!   single room.
 //! - the [`RoomFactory`], which is how the (game-specific) room logic gets
 //!   into the core without the core knowing any game types.
+//! - **supervision** (the death watch): every spawned room/shard task gets
+//!   ONE watcher task that awaits only that task's `JoinHandle` and reports
+//!   [`RegistryMsg::RoomDied`] through the registry's own mailbox. A panic
+//!   in game logic (inside `logic.update()`) kills a room's task silently;
+//!   without the watcher the table kept answering `Running { members }`
+//!   forever while joins vanished into a dead control channel. The watcher
+//!   adds no multiplexing: it is the same "one task per source, awaiting a
+//!   single receive" idiom as the signal handler and the relationship
+//!   dispatchers below.
 //!
 //! No locks: every cross-actor value (mailboxes, one-shot replies) is moved
 //! through channels. In particular the registry **never awaits a room**:
@@ -30,9 +39,11 @@
 //! plane (joins elsewhere, room creation, shutdown).
 //!
 //! Room lifecycle is channel-driven: creating a room is a `subscribe` on
-//! the ticker plus a control channel; destroying one sends a control
-//! `Shutdown` (processed on the room's next tick) — there are no per-room
-//! tasks to track or abort.
+//! the ticker plus a control channel; destroying one removes the table
+//! entry and sends a control `Shutdown` (processed on the room's next
+//! tick) — there is no cancellation plumbing anywhere, not even in
+//! supervision: the death watch only *observes* task exits, it never causes
+//! them.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -192,18 +203,49 @@ pub enum RegistryMsg {
 
     // -- internal: reported by relationship dispatcher tasks ----------------
     /// A dispatched join completed: record the affiliation.
+    ///
+    /// `generation` is the room incarnation the join was dispatched
+    /// against (stamped by the registry, echoed by the dispatcher): a
+    /// mismatch with the current entry means the room died (or was
+    /// replaced) between dispatch and settlement — the affiliation must
+    /// NOT be recorded (see the handler; supervision).
     SpawnDone {
         conn: ConnectionId,
         room: RoomId,
         entity: EntityId,
+        generation: u64,
     },
     /// A dispatched join was rejected by the room (e.g. the shard's
     /// wire-id range is exhausted): release the capacity reservation.
-    SpawnFailed { conn: ConnectionId, room: RoomId },
+    /// The reservation is released only when `generation` still matches
+    /// (a stale failure must not touch a rebuilt room's counters).
+    SpawnFailed {
+        conn: ConnectionId,
+        room: RoomId,
+        generation: u64,
+    },
     /// A dispatched leave completed: clear the affiliation.
     LeaveDone { conn: ConnectionId, room: RoomId },
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
+    /// Internal: reported by a room/shard death watcher (see
+    /// [`Self::spawn_room_watcher`]) when the watched actor task has ended
+    /// — by panic or by any normal exit (`DestroyRoom`, server
+    /// `Shutdown`). The registry answers it with one table lookup, and the
+    /// `generation` is what makes that lookup decisive: an entry of a
+    /// DIFFERENT generation (destroyed and even re-created in the
+    /// meantime) or no entry at all means the report is stale → silent
+    /// no-op. Only a LIVE entry of the SAME incarnation is an *unexpected*
+    /// death: reap it like a destroy (members notified, affiliations
+    /// cleared) and, per [`RoomConfig::restart_on_panic`], rebuild.
+    RoomDied {
+        id: RoomId,
+        /// The dead task's shard index (sharded rooms only).
+        shard: Option<usize>,
+        /// The incarnation this watcher was spawned for (the stale-watch
+        /// guard; see [`Registry::install_room`]).
+        generation: u64,
+    },
 }
 
 /// How a connection's room-relationship ops reach the room side: the
@@ -236,6 +278,11 @@ enum RoomOp<St> {
         handle: RoomHandle<St>,
         /// The home shard index (sharded rooms only).
         shard: Option<usize>,
+        /// The room incarnation this handle was taken from (stamped by the
+        /// registry; echoed back on SpawnDone/SpawnFailed so a settled join
+        /// of a dead incarnation can be recognized — supervision, see
+        /// `RegistryMsg::RoomDied`).
+        generation: u64,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
@@ -280,6 +327,12 @@ struct RoomEntry<St> {
     /// comparison: a resent create must match it EXACTLY to be a no-op —
     /// see `RegistryMsg::CreateRoom`).
     config: RoomConfig,
+    /// Which incarnation of this room id this entry is (0 = first create,
+    /// +1 per rebuild — see [`Registry::room_gen`]). Copied into each
+    /// death watcher so a late death report can be attributed to its own
+    /// incarnation and a stale one rejected (see
+    /// `RegistryMsg::RoomDied`).
+    generation: u64,
 }
 
 #[derive(Default)]
@@ -301,6 +354,13 @@ pub struct Registry<W, G, St> {
     /// can report back.
     self_mailbox: Mailbox<RegistryMsg>,
     rooms: HashMap<RoomId, RoomEntry<St>>,
+    /// Per-room-id incarnation counter: bumped on every install (first
+    /// create AND each panic rebuild). A room id can outlive several
+    /// incarnations (destroy → re-create, death → restart); each death
+    /// watcher carries its own incarnation's number, so a late report from
+    /// a dead-and-replaced room can never reap the wrong entry — no
+    /// cancellation plumbing, just one integer comparison at report time.
+    room_gen: HashMap<RoomId, u64>,
     conns: HashMap<ConnectionId, ConnInfo>,
     conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp<St>>>,
     ticker: Ticker,
@@ -309,6 +369,11 @@ pub struct Registry<W, G, St> {
     /// [`crate::metrics`]).
     reg_created: u64,
     reg_destroyed: u64,
+    /// Rooms that died UNEXPECTEDLY (a panicked room or shard task; one
+    /// dead shard counts once), cumulative — see `RegistryMsg::RoomDied`.
+    /// A destroy never increments this; a rebuild after a death does not
+    /// increment `reg_created` (the rebirth is not a control-plane create).
+    reg_died: u64,
     reg_joins: u64,
     reg_leaves: u64,
     reg_opens: u64,
@@ -359,11 +424,13 @@ where
             inbox,
             self_mailbox,
             rooms: HashMap::new(),
+            room_gen: HashMap::new(),
             conns: HashMap::new(),
             conn_ops: HashMap::new(),
             ticker,
             reg_created: 0,
             reg_destroyed: 0,
+            reg_died: 0,
             reg_joins: 0,
             reg_leaves: 0,
             reg_opens: 0,
@@ -386,6 +453,7 @@ where
             conns: self.conns.len() as u32,
             rooms_created: self.reg_created,
             rooms_destroyed: self.reg_destroyed,
+            rooms_died: self.reg_died,
             joins: self.reg_joins,
             leaves: self.reg_leaves,
             opens: self.reg_opens,
@@ -409,6 +477,203 @@ where
             .values()
             .filter(|info| info.room == Some(room))
             .count() as u32
+    }
+
+    /// Install a freshly built room: spawn its actor task(s) plus ONE death
+    /// watcher per task, and put this incarnation's table entry. This is
+    /// THE single creation path — `CreateRoom` and a panic rebuild (see
+    /// [`RegistryMsg::RoomDied`]) both wire their actors through here, so
+    /// the two can never drift apart.
+    ///
+    /// The factory has already run by the time this is called, inside the
+    /// registry loop (as on every create): room construction is synchronous
+    /// game code, and a panicking FACTORY is out of scope for supervision —
+    /// it would kill the registry itself, exactly as it does today. The
+    /// watch covers the spawned tick-loop tasks, whose panics are contained
+    /// by tokio's task boundary.
+    fn install_room(&mut self, config: RoomConfig, built: BuiltRoom<W, G, St>, run_every: u64) {
+        let id = config.id;
+        // This incarnation's generation (0 = first create for this id,
+        // +1 per rebuild/re-create): copied into every death watcher of
+        // this install so a late report from an earlier incarnation can be
+        // rejected at report time with one integer comparison (see
+        // `RegistryMsg::RoomDied`) — no cancellation plumbing anywhere.
+        let generation = {
+            let slot = self.room_gen.entry(id).or_insert(0);
+            let current = *slot;
+            *slot = current + 1;
+            current
+        };
+        match built {
+            BuiltRoom::Single { world, logic } => {
+                let (control_tx, control_rx) = channel(config.control_capacity);
+                let handle = tokio::spawn(
+                    RoomActor::new(
+                        config.clone(),
+                        world,
+                        logic,
+                        self.ticker.subscribe(),
+                        control_rx,
+                        run_every,
+                        self.metrics.clone(),
+                        self.result_sink.clone(),
+                    )
+                    .run(),
+                );
+                Self::spawn_room_watcher(
+                    id,
+                    None,
+                    generation,
+                    handle,
+                    self.self_mailbox.clone(),
+                );
+                self.rooms.insert(
+                    id,
+                    RoomEntry {
+                        control: Some(control_tx),
+                        shards: None,
+                        config,
+                        generation,
+                    },
+                );
+            }
+            BuiltRoom::Sharded { shards, home_shard } => {
+                let n = shards.len();
+                debug_assert!(n >= 1, "a sharded room needs >= 1 shard");
+                // One channel per shard: the registry keeps the original
+                // sender, and every neighbor of the shard holds a CLONE of
+                // it (tokio mpsc: many senders, one receiver). So each
+                // shard's mailbox carries both the registry's control
+                // messages and its neighbors' protocol messages
+                // (Migrate/Border) — the shard actor's single `try_recv`
+                // drain handles all of them.
+                //
+                // Pass 1 — one channel per shard (the registry keeps the
+                // original sender; every neighbor holds a clone — tokio
+                // mpsc: many senders, one receiver), and each actor's
+                // `neighbors` vec (`txs[a][b]` = the sender shard a uses to
+                // reach shard b, indexed by the receiver's index — the
+                // actor indexes it that way; non-neighbor slots are
+                // dummies, closed senders that are never sent to).
+                let mut rxs: Vec<Inbox<ShardMsg<St>>> = Vec::with_capacity(n);
+                let mut reg_txs = Vec::with_capacity(n);
+                let (dummy_tx, _dummy_rx) = channel::<ShardMsg<St>>(1);
+                for _ in 0..n {
+                    let (tx, rx) = channel(config.control_capacity);
+                    reg_txs.push(tx.clone());
+                    rxs.push(rx);
+                }
+                let mut txs: Vec<Vec<Mailbox<ShardMsg<St>>>> = Vec::with_capacity(n);
+                for a in 0..n {
+                    let mut row = Vec::with_capacity(n);
+                    for (b, tx_b) in reg_txs.iter().enumerate() {
+                        // neighbors() is game knowledge (the grid
+                        // topology); it is read after the factory built
+                        // the logics.
+                        let is_neighbor = shards
+                            .get(a)
+                            .map(|(_, l)| l.neighbors().contains(&b))
+                            .unwrap_or(false);
+                        row.push(if is_neighbor {
+                            tx_b.clone()
+                        } else {
+                            dummy_tx.clone()
+                        });
+                    }
+                    txs.push(row);
+                }
+                // Pass 2 — spawn the shard actors (indices = the vec order;
+                // the sample id / neighbor slots rely on it) and one death
+                // watcher per shard: ANY dead shard breaks the whole
+                // logical room (its neighbors hold senders into its closed
+                // mailbox, so cross-shard migration can never complete
+                // again), which is exactly what the watcher will report.
+                for (i, (world, logic)) in shards.into_iter().enumerate() {
+                    // `rxs` was built in shard order (pass 1), so popping
+                    // the front pairs each shard with its own receiver.
+                    let rx = rxs.remove(0);
+                    let handle = tokio::spawn(
+                        ShardActor::new(
+                            config.clone(),
+                            i,
+                            world,
+                            logic,
+                            self.ticker.subscribe(),
+                            rx,
+                            txs[i].clone(),
+                            run_every,
+                            self.metrics.clone(),
+                        )
+                        .run(),
+                    );
+                    Self::spawn_room_watcher(
+                        id,
+                        Some(i),
+                        generation,
+                        handle,
+                        self.self_mailbox.clone(),
+                    );
+                }
+                self.rooms.insert(
+                    id,
+                    RoomEntry {
+                        control: None,
+                        shards: Some(ShardGroup {
+                            mailboxes: reg_txs,
+                            home: home_shard,
+                            cap: config.max_players.map(|c| c as u64),
+                            members: 0,
+                            pending: 0,
+                        }),
+                        config,
+                        generation,
+                    },
+                );
+                debug!(room = %id, shards = n, "sharded room created");
+            }
+        }
+    }
+
+    /// One watcher task per spawned room/shard task. It awaits ONLY that
+    /// task's `JoinHandle` — the project's "one watcher per source, the
+    /// owner awaits a single receive" idiom (see the signal handling in
+    /// `main.rs`, the conn_ops dispatchers) — and reports the exit through
+    /// the registry's own mailbox, exactly like the dispatchers report
+    /// their completions.
+    ///
+    /// No cancellation plumbing, deliberately: EVERY exit reports, because
+    /// `DestroyRoom` and server `Shutdown` also end room tasks normally.
+    /// The discrimination happens on the receiving side instead (the design
+    /// trick): a destroy removes the table entry FIRST and synchronously,
+    /// so its late report finds no entry — or, if the id was re-created in
+    /// between, an entry of a different `generation`. Either way the report
+    /// is a silent no-op. Only a live entry with a matching generation is
+    /// an *unexpected* death.
+    ///
+    /// The panic payload itself is not carried here: it is printed by the
+    /// default panic hook when the task unwinds; what the base adds is the
+    /// operator-facing attribution (which room, which shard, what happened
+    /// to the members).
+    fn spawn_room_watcher(
+        id: RoomId,
+        shard: Option<usize>,
+        generation: u64,
+        handle: tokio::task::JoinHandle<()>,
+        registry: Mailbox<RegistryMsg>,
+    ) {
+        tokio::spawn(async move {
+            // The outcome (panic vs clean return) is deliberately not
+            // inspected: the registry decides whether this exit means
+            // anything, based on its table state at report time.
+            let _ = handle.await;
+            let _ = registry
+                .send(RegistryMsg::RoomDied {
+                    id,
+                    shard,
+                    generation,
+                })
+                .await;
+        });
     }
 
     /// Run until the mailbox is closed.
@@ -458,122 +723,18 @@ where
                         continue;
                     }
                     let built = (self.factory)(id, &config);
-                    match built {
-                        BuiltRoom::Single { world, logic } => {
-                            let (control_tx, control_rx) = channel(config.control_capacity);
-                            tokio::spawn(
-                                RoomActor::new(
-                                    config.clone(),
-                                    world,
-                                    logic,
-                                    self.ticker.subscribe(),
-                                    control_rx,
-                                    run_every,
-                                    self.metrics.clone(),
-                                    self.result_sink.clone(),
-                                )
-                                .run(),
-                            );
-                            self.rooms.insert(
-                                id,
-                                RoomEntry {
-                                    control: Some(control_tx),
-                                    shards: None,
-                                    config: config.clone(),
-                                },
-                            );
-                        }
-                        BuiltRoom::Sharded { shards, home_shard } => {
-                            let n = shards.len();
-                            debug_assert!(n >= 1, "a sharded room needs >= 1 shard");
-                            // One channel per shard: the registry keeps the
-                            // original sender, and every neighbor of the
-                            // shard holds a CLONE of it (tokio mpsc: many
-                            // senders, one receiver). So each shard's
-                            // mailbox carries both the registry's control
-                            // messages and its neighbors' protocol messages
-                            // (Migrate/Border) — the shard actor's single
-                            // `try_recv` drain handles all of them.
-                            //
-                            // Pass 1 — one channel per shard (the registry
-                            // keeps the original sender; every neighbor
-                            // holds a clone — tokio mpsc: many senders, one
-                            // receiver), and each actor's `neighbors` vec
-                            // (`txs[a][b]` = the sender shard a uses to
-                            // reach shard b, indexed by the receiver's
-                            // index — the actor indexes it that way;
-                            // non-neighbor slots are dummies, closed
-                            // senders that are never sent to).
-                            let mut rxs: Vec<Inbox<ShardMsg<St>>> = Vec::with_capacity(n);
-                            let mut reg_txs = Vec::with_capacity(n);
-                            let (dummy_tx, _dummy_rx) = channel::<ShardMsg<St>>(1);
-                            for _ in 0..n {
-                                let (tx, rx) = channel(config.control_capacity);
-                                reg_txs.push(tx.clone());
-                                rxs.push(rx);
-                            }
-                            let mut txs: Vec<Vec<Mailbox<ShardMsg<St>>>> =
-                                Vec::with_capacity(n);
-                            for a in 0..n {
-                                let mut row = Vec::with_capacity(n);
-                                for (b, tx_b) in reg_txs.iter().enumerate() {
-                                    // neighbors() is game knowledge (the
-                                    // grid topology); it is read after the
-                                    // factory built the logics.
-                                    let is_neighbor = shards
-                                        .get(a)
-                                        .map(|(_, l)| l.neighbors().contains(&b))
-                                        .unwrap_or(false);
-                                    row.push(if is_neighbor {
-                                        tx_b.clone()
-                                    } else {
-                                        dummy_tx.clone()
-                                    });
-                                }
-                                txs.push(row);
-                            }
-                            // Pass 2 — spawn the shard actors (indices = the
-                            // vec order; the sample id / neighbor slots rely
-                            // on it).
-                            for (i, (world, logic)) in shards.into_iter().enumerate() {
-                                // `rxs` was built in shard order (pass 1), so
-                                // popping the front pairs each shard with its
-                                // own receiver.
-                                let rx = rxs.remove(0);
-                                tokio::spawn(
-                                    ShardActor::new(
-                                        config.clone(),
-                                        i,
-                                        world,
-                                        logic,
-                                        self.ticker.subscribe(),
-                                        rx,
-                                        txs[i].clone(),
-                                        run_every,
-                                        self.metrics.clone(),
-                                    )
-                                    .run(),
-                                );
-                            }
-                            self.rooms.insert(
-                                id,
-                                RoomEntry {
-                                    control: None,
-                                    shards: Some(ShardGroup {
-                                        mailboxes: reg_txs,
-                                        home: home_shard,
-                                        cap: config
-                                            .max_players
-                                            .map(|c| c as u64),
-                                        members: 0,
-                                        pending: 0,
-                                    }),
-                                    config,
-                                },
-                            );
-                            debug!(room = %id, shards = n, "sharded room created");
-                        }
-                    }
+                    // The factory runs inside the registry loop on purpose
+                    // (unchanged): room construction is synchronous game
+                    // code, and a panicking FACTORY is out of scope for the
+                    // death watch — it kills the registry itself, exactly
+                    // as it does today. Supervision covers the spawned
+                    // actor tasks (the tick loops), not this call.
+                    //
+                    // `install_room` is THE single creation path: both the
+                    // create here and a panic rebuild (see
+                    // `RegistryMsg::RoomDied`) wire the actors identically
+                    // through it — one implementation, no drift.
+                    self.install_room(config.clone(), built, run_every);
                     self.reg_created += 1;
                     self.emit_metrics();
                     debug!(room = %id, "room created");
@@ -584,26 +745,16 @@ where
                 }
                 RegistryMsg::DestroyRoom { id, reply } => {
                     if let Some(entry) = self.rooms.remove(&id) {
-                        // Clear the affiliation of this room's connections;
-                        // keep their inbox (clone, don't take) so they can
-                        // still receive Shutdown or later RoomGone frames.
-                        let mut doomed = Vec::new();
-                        for (conn, info) in self.conns.iter_mut() {
-                            if info.room == Some(id) {
-                                info.room = None;
-                                info.entity = None;
-                                if let Some(inbox) = info.inbox.clone() {
-                                    doomed.push((*conn, inbox));
-                                }
-                            }
-                        }
-                        for (conn, inbox) in doomed {
-                            // Fire-and-forget notification (no reply needed).
-                            tokio::spawn(async move {
-                                let _ = inbox.send(ConnIn::RoomGone(id)).await;
-                                debug!(%conn, room = %id, "notified: room gone");
-                            });
-                        }
+                        // The entry is gone FIRST (synchronously) — this is
+                        // also what makes the death watcher's late report
+                        // for this room a silent no-op (see
+                        // `RegistryMsg::RoomDied`).
+                        //
+                        // Members learn `RoomGone`, affiliations clear —
+                        // exactly the semantics an unexpected death gets
+                        // below (same helper on purpose: a member must not
+                        // be able to tell how the room ended).
+                        self.notify_room_gone(id);
                         // The room processes it on its next tick (the ticker
                         // is still running); aborting the ticker later closes
                         // its broadcast as a backstop.
@@ -661,6 +812,11 @@ where
                         continue;
                     };
                     let sharded_room = entry.shards.is_some();
+                    // The incarnation this join is dispatched against: the
+                    // settlement reports (SpawnDone/SpawnFailed) echo it so
+                    // a late settle of a since-died room cannot touch the
+                    // table (supervision).
+                    let generation = entry.generation;
                     // Sharded room: the registry is the only actor that
                     // sees every join, so it enforces the room cap here
                     // (a shard cannot count the room without shared state)
@@ -724,6 +880,7 @@ where
                             room,
                             handle,
                             shard: shard_idx,
+                            generation,
                             out,
                             reply,
                         })
@@ -839,7 +996,48 @@ where
                     self.emit_metrics();
                     debug!(%conn, "connection closed");
                 }
-                RegistryMsg::SpawnDone { conn, room, entity } => {
+                RegistryMsg::SpawnDone {
+                    conn,
+                    room,
+                    entity,
+                    generation,
+                } => {
+                    // Ordering note (supervision): a settled join races the
+                    // death report of the room incarnation it was dispatched
+                    // against — both travel to us over our own mailbox, in
+                    // no guaranteed order. The dispatcher echoes the
+                    // generation its handle was stamped with, so one
+                    // comparison decides: an ABSENT room, or a room of a
+                    // DIFFERENT incarnation (destroyed and even rebuilt in
+                    // the meantime), must not receive this affiliation.
+                    // Recording it would resurrect the exact zombie the
+                    // death watch exists to kill (status `Running` forever,
+                    // a member that never learns the room is gone) or pin a
+                    // dead join onto the rebuilt room. Either order of the
+                    // two messages now converges to the same end state: the
+                    // connection is told `RoomGone` (it holds senders into
+                    // a dead task) and stays unaffiliated (it may rejoin).
+                    if self.rooms.get(&room).map(|e| e.generation) != Some(generation) {
+                        let notify = match self.conns.get_mut(&conn) {
+                            Some(info) => {
+                                info.room = None;
+                                info.entity = None;
+                                info.inbox.clone()
+                            }
+                            None => None,
+                        };
+                        if let Some(inbox) = notify {
+                            tokio::spawn(async move {
+                                let _ = inbox.send(ConnIn::RoomGone(room)).await;
+                            });
+                        }
+                        debug!(
+                            %conn,
+                            room = %room,
+                            "join settled after its room died; affiliation dropped"
+                        );
+                        continue;
+                    }
                     // Ordered per-connection (from the dispatcher). If the
                     // connection is unknown it died mid-join; the
                     // dispatcher's Close already cleaned up the room side.
@@ -875,12 +1073,21 @@ where
                         debug!(%conn, room = %room, %entity, "player spawned");
                     }
                 }
-                RegistryMsg::SpawnFailed { conn, room } => {
+                RegistryMsg::SpawnFailed {
+                    conn,
+                    room,
+                    generation,
+                } => {
                     // The room rejected the dispatched join (e.g. the
                     // shard's wire-id range is exhausted): release the
-                    // capacity reservation (the join never counted).
-                    if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
-                        e.pending = e.pending.saturating_sub(1);
+                    // capacity reservation (the join never counted). Only
+                    // for the SAME incarnation: a stale failure from a dead
+                    // room must not touch a rebuilt room's counters.
+                    if let Some(e) = self.rooms.get_mut(&room)
+                        && e.generation == generation
+                        && let Some(shards) = e.shards.as_mut()
+                    {
+                        shards.pending = shards.pending.saturating_sub(1);
                     }
                     debug!(%conn, room = %room, "spawn failed; reservation released");
                 }
@@ -911,6 +1118,81 @@ where
                 }
                 RegistryMsg::OpsClosed { conn } => {
                     self.conn_ops.remove(&conn);
+                }
+                RegistryMsg::RoomDied {
+                    id,
+                    shard,
+                    generation,
+                } => {
+                    // The design trick (no cancellation plumbing): a NORMAL
+                    // end — `DestroyRoom`, server `Shutdown` — removes the
+                    // table entry first, so this report finds either no
+                    // entry, or an entry of a DIFFERENT incarnation (the id
+                    // was re-created in the meantime), and must stay
+                    // silent. Only a live entry of the SAME generation is an
+                    // unexpected death.
+                    let is_current = self
+                        .rooms
+                        .get(&id)
+                        .map(|e| e.generation == generation)
+                        .unwrap_or(false);
+                    if !is_current {
+                        debug!(
+                            room = %id,
+                            shard = ?shard,
+                            "late death report for a destroyed/replaced room; ignored"
+                        );
+                        continue;
+                    }
+                    // Unexpected death. For a sharded room, ANY dead shard
+                    // means the whole LOGICAL room is broken — its neighbors
+                    // hold senders into the dead shard's closed mailbox, so
+                    // cross-shard migration can never complete again. There
+                    // is no partial-shard recovery: the whole room goes,
+                    // exactly like a single-room death.
+                    warn!(
+                        room = %id,
+                        shard = ?shard,
+                        "room task died unexpectedly (panic in game logic?); \
+                         reaping the room"
+                    );
+                    let entry = self.rooms.remove(&id).expect("generation checked above");
+                    // Exactly the destroy semantics: members learn
+                    // `ConnIn::RoomGone`, affiliations clear, status turns
+                    // `Absent`.
+                    self.notify_room_gone(id);
+                    self.reg_died += 1;
+                    self.emit_metrics();
+                    // Restart policy (the v1 contract): the rebuilt room
+                    // comes back EMPTY — the members were notified above and
+                    // may rejoin; no world state survives (it lived inside
+                    // the dead task). A logic that panics persistently
+                    // yields a restart-per-death cycle, one warn per round:
+                    // immediately visible to the operator, deemed acceptable
+                    // for v1 (no backoff machinery).
+                    //
+                    // In-flight joins dispatched against the dead
+                    // incarnation settle later (SpawnDone/SpawnFailed);
+                    // their sharded-counter effects land on the NEW
+                    // ShardGroup with saturating arithmetic — bounded
+                    // imprecision (at most the number of in-flight joins),
+                    // never a panic or a permanently stuck cap.
+                    if entry.config.restart_on_panic {
+                        warn!(
+                            room = %id,
+                            "restart_on_panic: rebuilding the room from its \
+                             factory + config (it comes back EMPTY)"
+                        );
+                        let global = self.ticker.hz();
+                        // The config was validated when this room was first
+                        // created (tick rate divides the global rate), so
+                        // the recomputed step divisor is >= 1 by
+                        // construction.
+                        let run_every = (global / entry.config.tick_hz).round() as u64;
+                        let built = (self.factory)(id, &entry.config);
+                        self.install_room(entry.config.clone(), built, run_every);
+                        debug!(room = %id, "room rebuilt after unexpected death");
+                    }
                 }
                 RegistryMsg::Shutdown => {
                     warn!("registry shutting down");
@@ -958,12 +1240,44 @@ where
                     //    for dispatcher reporting, so EOF would never come.)
                     //    Dispatchers already received Close and will exit on
                     //    their own; their stray reports fail against the
-                    //    dropped inbox, harmlessly.
+                    //    dropped inbox, harmlessly. The death watchers exit
+                    //    the same way: when the ticker abort closes each
+                    //    room's tick channel, every watcher's report fails
+                    //    against our dropped mailbox and the watcher stops
+                    //    (no task leaks beyond the server's lifetime).
                     break;
                 }
             }
         }
         debug!("registry actor stopped");
+    }
+
+    /// Notify every connection affiliated with `room` that the room is
+    /// gone ([`ConnIn::RoomGone`], fire-and-forget spawned sends) and clear
+    /// their affiliations; their inbox is kept (clone, don't take) so they
+    /// can still receive `Shutdown` or later notifications.
+    ///
+    /// Shared by the destroy path and the unexpected-death path (see
+    /// `RegistryMsg::RoomDied`) on purpose: members must not be able to
+    /// tell how the room ended.
+    fn notify_room_gone(&mut self, room: RoomId) {
+        let mut doomed = Vec::new();
+        for (conn, info) in self.conns.iter_mut() {
+            if info.room == Some(room) {
+                info.room = None;
+                info.entity = None;
+                if let Some(inbox) = info.inbox.clone() {
+                    doomed.push((*conn, inbox));
+                }
+            }
+        }
+        for (conn, inbox) in doomed {
+            // Fire-and-forget notification (no reply needed).
+            tokio::spawn(async move {
+                let _ = inbox.send(ConnIn::RoomGone(room)).await;
+                debug!(%conn, room = %room, "notified: room gone");
+            });
+        }
     }
 
     /// Leave without a dispatcher (no join/leave is in flight for this
@@ -1062,6 +1376,7 @@ where
                         room,
                         handle,
                         shard,
+                        generation,
                         out,
                         reply,
                     } => {
@@ -1096,7 +1411,12 @@ where
                                 in_room = Some((room, entity, handle, epoch));
                                 let _ = reply.send(Ok((entity, actions)));
                                 let _ = registry
-                                    .send(RegistryMsg::SpawnDone { conn, room, entity })
+                                    .send(RegistryMsg::SpawnDone {
+                                        conn,
+                                        room,
+                                        entity,
+                                        generation,
+                                    })
                                     .await;
                             }
                             // The room rejected the join structurally (a full
@@ -1108,7 +1428,11 @@ where
                             (true, Ok(Err(e))) => {
                                 let _ = reply.send(Err(e));
                                 let _ = registry
-                                    .send(RegistryMsg::SpawnFailed { conn, room })
+                                    .send(RegistryMsg::SpawnFailed {
+                                        conn,
+                                        room,
+                                        generation,
+                                    })
                                     .await;
                             }
                             _ => {
@@ -1116,7 +1440,11 @@ where
                                 // room dropped the reply.
                                 let _ = reply.send(Err(CoreError::RoomGone));
                                 let _ = registry
-                                    .send(RegistryMsg::SpawnFailed { conn, room })
+                                    .send(RegistryMsg::SpawnFailed {
+                                        conn,
+                                        room,
+                                        generation,
+                                    })
                                     .await;
                             }
                         }

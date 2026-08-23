@@ -1992,7 +1992,8 @@ fn main() {
 ///     u64 metrics_dropped
 ///   u8 registry_present
 ///   [if present] u32 rooms  u32 conns  u64 rooms_created
-///                u64 rooms_destroyed  u64 joins  u64 leaves
+///                u64 rooms_destroyed  u64 rooms_died
+///                u64 joins  u64 leaves
 ///                u64 opens  u64 closes
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
@@ -2099,6 +2100,7 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u32(g.conns);
         w.u64(g.rooms_created);
         w.u64(g.rooms_destroyed);
+        w.u64(g.rooms_died);
         w.u64(g.joins);
         w.u64(g.leaves);
         w.u64(g.opens);
@@ -2239,6 +2241,7 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             conns: r.u32()?,
             rooms_created: r.u64()?,
             rooms_destroyed: r.u64()?,
+            rooms_died: r.u64()?,
             joins: r.u64()?,
             leaves: r.u64()?,
             opens: r.u64()?,

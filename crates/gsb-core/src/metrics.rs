@@ -3,10 +3,12 @@
 //! Nothing in this module — or anywhere in the architecture — is shared
 //! mutable state. Counters live in the producing actor's own local state
 //! (the room, the registry, each connection actor); an actor hands a
-//! compact **sample** of them to the collector through an *unbounded*
-//! `mpsc` channel, which is a mailbox exactly like every other actor
-//! channel in this codebase (a transport, not shared state). The
-//! collector accumulates the samples into its own task-local
+//! compact **sample** of them to the collector over a *bounded* `mpsc`
+//! channel with a synchronous `try_send` — a mailbox exactly like every
+//! other actor channel in this codebase (a transport, not shared state),
+//! with bounded capacity as the backpressure mechanism and a counted drop
+//! instead of a park when it saturates (the next paragraph has the full
+//! why). The collector accumulates the samples into its own task-local
 //! [`MetricAccumulator`] and emits a [`MetricReport`] at a fixed cadence
 //! through a [`MetricSink`] (tracing log lines, or a channel to a
 //! programmatic consumer such as the load generator).
@@ -203,7 +205,7 @@ pub fn fine_hist_percentile_us(hist: &[u64], total: u64, p: u32) -> Option<u64> 
 
 /// A room's counter sample: cumulative counters + current gauges,
 /// produced once per step (synchronous — see the module docs for why the
-/// unbounded send adds no await to the tick loop).
+/// bounded `try_send` adds no await to the tick loop).
 #[derive(Debug, Clone, Copy)]
 pub struct RoomSample {
     pub room: RoomId,
@@ -332,6 +334,12 @@ pub struct RegistrySample {
     /// Rooms created / destroyed, cumulative.
     pub rooms_created: u64,
     pub rooms_destroyed: u64,
+    /// Rooms that died UNEXPECTEDLY — a panicked room or shard task (one
+    /// dead shard of a sharded room counts once; the whole logical room is
+    /// reaped) — cumulative. Never incremented by a destroy. Non-zero means
+    /// game logic panicked somewhere; the per-room detail is in the
+    /// registry's `warn` at death time.
+    pub rooms_died: u64,
     /// Joins (spawn done) / leaves (leave done), cumulative.
     pub joins: u64,
     pub leaves: u64,
@@ -517,6 +525,8 @@ pub struct RegistryReport {
     pub conns: u32,
     pub rooms_created: u64,
     pub rooms_destroyed: u64,
+    /// Unexpected room/shard deaths (see [`RegistrySample::rooms_died`]).
+    pub rooms_died: u64,
     pub joins: u64,
     pub leaves: u64,
     pub opens: u64,
@@ -693,6 +703,7 @@ impl MetricAccumulator {
                 conns: r.conns,
                 rooms_created: r.rooms_created,
                 rooms_destroyed: r.rooms_destroyed,
+                rooms_died: r.rooms_died,
                 joins: r.joins,
                 leaves: r.leaves,
                 opens: r.opens,
@@ -725,9 +736,9 @@ impl MetricReport {
         if let Some(r) = &self.registry {
             lines.push(format!(
                 "gsb-metric scope=registry rooms={} conns={} opens={} closes={} \
-                 joins={} leaves={} rooms_created={} rooms_destroyed={}",
+                 joins={} leaves={} rooms_created={} rooms_destroyed={} rooms_died={}",
                 r.rooms, r.conns, r.opens, r.closes, r.joins, r.leaves,
-                r.rooms_created, r.rooms_destroyed
+                r.rooms_created, r.rooms_destroyed, r.rooms_died
             ));
         }
         for r in &self.rooms {
@@ -1058,6 +1069,7 @@ mod tests {
             conns: 3,
             rooms_created: 1,
             rooms_destroyed: 0,
+            rooms_died: 0,
             joins: 3,
             leaves: 0,
             opens: 3,
