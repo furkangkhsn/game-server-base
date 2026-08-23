@@ -51,10 +51,12 @@
 //! [`RoomLogic`].
 //!
 //! **Metrics:** the room's counters live in the room's own local state
-//! ([`RoomCounters`]) and are flushed once per step over the metrics
-//! channel with a *synchronous* unbounded send — the room's only `await`
-//! stays `tick_rx.recv()` and the tick body stays fully synchronous
-//! (see [`crate::metrics`] for the design and the constraint rationale).
+//! ([`RoomCounters`]) and are flushed once per step over the *bounded*
+//! metrics channel with a synchronous `try_send` (a full channel drops
+//! the sample and counts it — harmless, the counters are cumulative);
+//! the room's only `await` stays `tick_rx.recv()` and the tick body
+//! stays fully synchronous (see [`crate::metrics`] for the design and
+//! the constraint rationale).
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -225,6 +227,24 @@ pub struct RoomConfig {
     /// game logic), short enough that a stuck dependency degrades a
     /// client's request within one heartbeat cycle.
     pub request_timeout: Duration,
+    /// Whether the registry should REBUILD the room from the same factory +
+    /// config when its actor task dies unexpectedly (a panic in the game
+    /// logic kills the room's task; without the death watch the registry's
+    /// table kept answering `Running` forever and joins disappeared into a
+    /// dead mailbox — see `RegistryMsg::RoomDied`).
+    ///
+    /// Contract of a rebirth: the room comes back **EMPTY**. The old
+    /// members were notified (`ConnIn::RoomGone`) and may rejoin; no world
+    /// state survives — the world lived inside the dead task, and no
+    /// cross-task state is shared by design. Default `false`: a death is
+    /// final and the operator decides what to do.
+    ///
+    /// `PartialEq` participation (the idempotent-create comparison): the
+    /// flag is an ordinary field, so it compares like every other field —
+    /// a retry carries it identically by construction (a retry IS the same
+    /// request), and flipping it between retries is a different spec =
+    /// `RoomConflict`, exactly as for any other field change.
+    pub restart_on_panic: bool,
 }
 
 impl Default for RoomConfig {
@@ -244,6 +264,7 @@ impl Default for RoomConfig {
             max_pending_requests_per_conn: 4,
             max_pending_requests: 2000,
             request_timeout: Duration::from_secs(5),
+            restart_on_panic: false,
         }
     }
 }
@@ -551,7 +572,8 @@ pub(crate) struct GroupState {
 /// The room's local metric counters (all cumulative; see [`crate::metrics`]).
 /// Owned by the room and never shared: each step the room builds a
 /// [`RoomSample`] from them and hands it to the collector over the
-/// metrics channel (synchronous unbounded send — no await). `pub(crate)`
+/// (bounded) metrics channel with a synchronous `try_send` — no await.
+/// `pub(crate)`
 /// because the shard actor reuses the same counter shape (a shard's sample
 /// is a [`RoomSample`] under its derived sample id — see `crate::shard`).
 ///
@@ -703,6 +725,26 @@ pub struct RoomActor<W, G> {
     tick_rx: broadcast::Receiver<TickInfo>,
     control_rx: Inbox<RoomControl>,
     conns: HashMap<ConnectionId, RoomConn<G>>,
+    /// READ-phase scan order: the member connections in join order, kept
+    /// exactly in sync with `conns` by the control path only
+    /// ([`Self::roster_add`] on join, [`Self::roster_remove`] on leave /
+    /// superseded rejoin). A `Vec` because the READ phase needs a
+    /// deterministic order it can rotate: a `HashMap` iteration is
+    /// arbitrary but fixed within a run, and under a sustained overload
+    /// that fixed prefix consumes the whole room pull budget on every
+    /// tick while the tail connections are never reached (their actions
+    /// deferred forever — see the READ phase's rotation note).
+    roster: Vec<ConnectionId>,
+    /// Each connection's index in `roster` — the bookkeeping that makes a
+    /// membership removal a swap-remove plus one index fix instead of an
+    /// O(n) scan. Control-path state only: never touched between ticks.
+    roster_pos: HashMap<ConnectionId, usize>,
+    /// Round-robin cursor over `roster`: each READ starts at
+    /// `read_cursor % roster.len()` and advances past every connection
+    /// examined. Kept as an absolute count (not a raw index) so
+    /// membership changes between reads degrade to a shifted start
+    /// offset, never an out-of-range index.
+    read_cursor: usize,
     groups: HashMap<G, GroupState>,
     /// Number of global ticks between steps (1 = room rate == global rate).
     run_every: u64,
@@ -824,6 +866,9 @@ where
             tick_rx,
             control_rx,
             conns: HashMap::new(),
+            roster: Vec::new(),
+            roster_pos: HashMap::new(),
+            read_cursor: 0,
             groups: HashMap::new(),
             run_every: run_every.max(1),
             last_at: None,
@@ -912,9 +957,10 @@ where
 
     /// One full step: control → read → convert → systems → broadcast,
     /// measured (tick latency + step body duration) and flushed to the
-    /// metrics channel once at the end. Synchronous: the send is an
-    /// unbounded (non-parking) mailbox send, so the room's only await
-    /// stays `tick_rx.recv()`. Returns `false` when the actor should stop.
+    /// metrics channel once at the end. Synchronous: the send is a
+    /// bounded-channel `try_send` (drops counted, never parks), so the
+    /// room's only await stays `tick_rx.recv()`. Returns `false` when the
+    /// actor should stop.
     fn step(&mut self, t: &TickInfo) -> bool {
         self.steps += 1;
 
@@ -1105,6 +1151,21 @@ where
         //    exhausted the room simply pulls no more this tick; the
         //    remainder waits in the senders' bounded channels.
         //
+        //    (c) deterministic rotation: the scan does NOT walk the
+        //    `conns` HashMap — its iteration order is arbitrary but fixed
+        //    within a run, so under a sustained overload that fixed
+        //    hash-order prefix would consume the entire pull budget on
+        //    every tick while the tail connections were never REACHED
+        //    (deferred ≠ ever delivered). Instead the scan follows
+        //    `roster` (join order) from a rotating cursor advanced past
+        //    every connection examined, so every connection is reached
+        //    within one full rotation (`roster.len()` READ phases) no
+        //    matter how much input the connections ahead of it hold.
+        //    This is the reach-side sibling of (a): (a) bounds how much
+        //    ONE connection can take from a tick; (c) guarantees what is
+        //    left is shared around, not taken by the same fixed prefix
+        //    every tick.
+        //
         //    Consequence: the room never drops an action (`dropped_actions`
         //    stays 0). The architecture's only input-loss point is a
         //    connection's own full action channel — self-inflicted and
@@ -1112,23 +1173,41 @@ where
         let per_conn = self.config.max_actions_per_conn_per_tick;
         let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();
-        for r in self.conns.values_mut() {
-            for _ in 0..per_conn {
-                if budget == 0 {
-                    break;
-                }
-                match r.actions.try_recv() {
-                    Ok(a) => {
-                        budget -= 1;
-                        actions.push(a);
+        // The rotating scan (see (c) above): start at the cursor over the
+        // join-order roster, visit connections until either a full
+        // rotation is done or the pull budget ran out, then advance the
+        // cursor past every connection EXAMINED — so the next READ
+        // resumes exactly where this one stopped. Same shape as the
+        // hash-order walk it replaces (O(visited), no allocation, no
+        // sort); only the start position moves.
+        let n = self.roster.len();
+        let mut visited = 0usize;
+        let mut idx = if n == 0 { 0 } else { self.read_cursor % n };
+        while visited < n && budget > 0 {
+            // Roster and table are kept in sync by the control path, so
+            // the entry is always present; a plain lookup (no unwrap)
+            // keeps hypothetical drift a skip, not a panic.
+            if let Some(rc) = self.conns.get_mut(&self.roster[idx]) {
+                for _ in 0..per_conn {
+                    if budget == 0 {
+                        break;
                     }
-                    Err(_) => break, // channel drained
+                    match rc.actions.try_recv() {
+                        Ok(a) => {
+                            budget -= 1;
+                            actions.push(a);
+                        }
+                        Err(_) => break, // channel drained
+                    }
                 }
             }
-            if budget == 0 {
-                break;
+            visited += 1;
+            idx += 1;
+            if idx == n {
+                idx = 0;
             }
         }
+        self.read_cursor = self.read_cursor.wrapping_add(visited);
 
         // -- Phase 2a — split the requests out of the pulled actions (the
         //    RPC pattern, see `crate::rpc`). A request is an action
@@ -1677,6 +1756,30 @@ where
         self.queued.remove(&conn);
     }
 
+    /// Register a freshly joined connection at the tail of the READ
+    /// roster (why the roster exists: see the field docs and the READ
+    /// phase's rotation note).
+    fn roster_add(&mut self, conn: ConnectionId) {
+        self.roster_pos.insert(conn, self.roster.len());
+        self.roster.push(conn);
+    }
+
+    /// Remove a connection from the READ roster: swap-remove plus one
+    /// index fix for the element moved into the freed slot (O(1)
+    /// amortized; no scan). Called exactly where `conns` loses an entry
+    /// (a leave, or a join superseding a stale session), so the roster
+    /// cannot drift from the table. When the removed connection was the
+    /// last slot, `swap_remove` hands back its own id and the position
+    /// entry is already gone — the fix is then a no-op.
+    fn roster_remove(&mut self, conn: &ConnectionId) {
+        if let Some(idx) = self.roster_pos.remove(conn) {
+            let moved = self.roster.swap_remove(idx);
+            if let Some(p) = self.roster_pos.get_mut(&moved) {
+                *p = idx;
+            }
+        }
+    }
+
     fn handle_control(&mut self, c: RoomControl) -> bool {
         match c {
             RoomControl::Join { conn, out, reply } => {
@@ -1686,6 +1789,7 @@ where
                 // in-flight requests and queued answers of the old one
                 // are dropped, and their late reports are discarded).
                 if self.conns.remove(&conn).is_some() {
+                    self.roster_remove(&conn);
                     self.drop_conn_request_state(conn);
                     self.logic.on_leave(&mut self.world, conn);
                 }
@@ -1723,6 +1827,7 @@ where
                     },
                 );
                 let _ = reply.send(Ok((entity, act_tx)));
+                self.roster_add(conn);
                 debug!(room = %self.config.id, %conn, entity, "player joined");
                 true
             }
@@ -1731,6 +1836,7 @@ where
                 // currently owns.
                 if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
                     self.conns.remove(&conn);
+                    self.roster_remove(&conn);
                     // The request state goes with the session: in-flight
                     // requests are released (their slots free up for other
                     // connections) and any queued answer is dropped (a

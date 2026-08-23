@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+use crate::error::CoreError;
+
 /// One tick of the global clock.
 #[derive(Debug, Clone, Copy)]
 pub struct TickInfo {
@@ -40,10 +42,33 @@ impl Ticker {
     ///
     /// Returns the handle and the task handle. Aborting the task closes the
     /// channel for all subscribers.
-    pub fn spawn(hz: f64, buffer: usize) -> (Self, JoinHandle<()>) {
+    ///
+    /// Returns [`CoreError::InvalidTickRate`] instead of panicking when
+    /// `hz` has no usable period (`<= 0`, NaN/±inf, or so high that the
+    /// derived period rounds below one nanosecond). The registry validates
+    /// room rates before a room exists, but `spawn` itself is public API —
+    /// tests and platform embedders call it directly, and the global rate
+    /// crosses exactly this boundary from config — so the invariant is
+    /// enforced here as a typed error rather than trusted or panicked on.
+    pub fn spawn(hz: f64, buffer: usize) -> Result<(Self, JoinHandle<()>), CoreError> {
+        // Validate BEFORE deriving anything: `from_secs_f64(1.0 / hz)`
+        // panics for hz <= 0 (a negative period) and NaN, overflows for a
+        // denormal-tiny rate whose reciprocal exceeds the Duration range,
+        // and silently truncates to zero for an absurdly high rate (which
+        // would busy-loop the runtime instead of ticking). The float
+        // division itself never panics, so this guard is total.
+        let period = if hz.is_finite() && hz > 0.0 {
+            Duration::try_from_secs_f64(1.0 / hz)
+                .ok()
+                .filter(|period| !period.is_zero())
+        } else {
+            None
+        };
+        let Some(period) = period else {
+            return Err(CoreError::InvalidTickRate { rate: hz });
+        };
         let (tx, _first_rx) = broadcast::channel(buffer);
         let ticker = Self { tx: tx.clone(), hz };
-        let period = Duration::from_secs_f64(1.0 / hz);
         let handle = tokio::spawn(async move {
             let mut next = Instant::now() + period;
             let mut tick = 0u64;
@@ -67,7 +92,7 @@ impl Ticker {
                 });
             }
         });
-        (ticker, handle)
+        Ok((ticker, handle))
     }
 
     /// The global rate in ticks per second. A room's `tick_hz` must divide
@@ -77,6 +102,9 @@ impl Ticker {
     }
 
     /// The global tick period.
+    ///
+    /// Cannot panic: a `Ticker` value only exists for a rate that already
+    /// produced a valid, non-zero period in [`Ticker::spawn`].
     pub fn period(&self) -> Duration {
         Duration::from_secs_f64(1.0 / self.hz)
     }
@@ -84,5 +112,35 @@ impl Ticker {
     /// Subscribe a room (or test) to the global tick stream.
     pub fn subscribe(&self) -> broadcast::Receiver<TickInfo> {
         self.tx.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The spawn boundary rejects every rate without a usable period with
+    /// a typed error instead of panicking (`1.0 / hz` used to reach
+    /// `Duration::from_secs_f64`, which panics on exactly these inputs).
+    /// No tokio runtime needed: the error path returns before any task is
+    /// spawned; the success path is exercised by every registry/ticket
+    /// integration test through their live ticker.
+    #[test]
+    fn spawn_rejects_rates_without_a_period() {
+        for bad in [0.0, -30.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                matches!(
+                    Ticker::spawn(bad, 64),
+                    Err(CoreError::InvalidTickRate { .. })
+                ),
+                "hz = {bad} must be rejected"
+            );
+        }
+        // Absurdly high: 1/hz truncates below one nanosecond — a zero
+        // period would busy-loop the runtime instead of ticking.
+        assert!(matches!(
+            Ticker::spawn(1e15, 64),
+            Err(CoreError::InvalidTickRate { .. })
+        ));
     }
 }

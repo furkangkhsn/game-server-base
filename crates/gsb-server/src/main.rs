@@ -30,8 +30,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = gsb_server::start_server(cfg.clone()).await?;
     info!(addr = %handle.addr, tick_hz = cfg.tick_hz, rooms = cfg.room_count, "gsb server is up");
 
-    tokio::signal::ctrl_c().await?;
-    info!("ctrl-c received; shutting down");
+    // Wait for a shutdown signal without multiplexing: one watcher task per
+    // signal, each reporting through the bounded channel, and `main` awaits a
+    // single receive (the project idiom for waiting on several sources).
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<&'static str>(1);
+    tokio::spawn({
+        let signal_tx = signal_tx.clone();
+        async move {
+            let _ = tokio::signal::ctrl_c().await;
+            let _ = signal_tx.send("ctrl-c").await;
+        }
+    });
+    #[cfg(unix)]
+    tokio::spawn({
+        let signal_tx = signal_tx.clone();
+        async move {
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
+            term.recv().await;
+            let _ = signal_tx.send("SIGTERM").await;
+        }
+    });
+    drop(signal_tx);
+
+    let sig = signal_rx
+        .recv()
+        .await
+        .expect("shutdown signal watcher exited without reporting");
+    info!(signal = %sig, "shutting down");
     handle.stop().await;
     Ok(())
 }

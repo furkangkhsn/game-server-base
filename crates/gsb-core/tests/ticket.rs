@@ -286,7 +286,7 @@ async fn ticket_pins_room() {
         logic: Box::new(NoopLogic) as Box<dyn RoomLogic<(), GroupKey = ()>>,
     });
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
-    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64);
+    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<MetricsEvent>(1);
     let reg_handle = tokio::spawn(
         Registry::new(reg_rx, reg_tx.clone(), factory, ticker, metrics_tx, None, None).run(),

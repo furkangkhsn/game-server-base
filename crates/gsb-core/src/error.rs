@@ -24,6 +24,9 @@ pub enum CoreError {
     #[error("keep-alive rate {keepalive} Hz exceeds the room tick rate {tick} Hz: keepalive_hz must be <= tick_hz (a keep-alive faster than the tick would clamp to every step, and clients would receive fewer keep-alives than configured)")]
     KeepaliveRate { keepalive: f64, tick: f64 },
 
+    #[error("invalid global tick rate {rate} Hz: must be finite and > 0 (the ticker derives its period as 1/rate, so a non-positive or non-finite rate has no period to run at)")]
+    InvalidTickRate { rate: f64 },
+
     #[error("room shut down")]
     RoomGone,
 

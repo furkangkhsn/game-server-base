@@ -76,7 +76,7 @@ fn start(
     result_sink: Option<Mailbox<MatchResult>>,
 ) -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
-    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64);
+    let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
         Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, result_sink).run(),

@@ -320,6 +320,9 @@ pub enum ServerError {
 
     #[error("invalid `shard_count` {0}: must be 1..=16 (grid topology)")]
     BadShardCount(u32),
+
+    #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
+    BadTickRate(f64),
 }
 
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
@@ -623,8 +626,11 @@ async fn start_inner(
     // which is the rooms' global stop signal (in addition to the control
     // Shutdown they receive during registry teardown). The metrics
     // collector subscribes to the same broadcast as its clock (see
-    // `gsb_core::metrics` for the design).
-    let (ticker, ticker_task) = gsb_core::ticker::Ticker::spawn(cfg.tick_hz, 64);
+    // `gsb_core::metrics` for the design). A config rate without a period
+    // is a startup error, not a runtime condition: fail here with a typed
+    // error instead of letting the ticker panic mid-startup.
+    let (ticker, ticker_task) = gsb_core::ticker::Ticker::spawn(cfg.tick_hz, 64)
+        .map_err(|_| ServerError::BadTickRate(cfg.tick_hz))?;
     // A3: the metrics event channel is *bounded* (DESIGN §2: bounded capacity
     // is the backpressure mechanism) and producers send with the synchronous
     // `try_send` (a drop is counted, harmless — the counters are cumulative).
