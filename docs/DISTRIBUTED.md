@@ -142,6 +142,13 @@ actor'ü fark etmez). Process sınırı bunu imkânsız kılar:
   reconnect edene kadar yaşar (opsiyonel optimizasyon; v1'de kalıcı relay
   yeterli).
 - Migrate mesajı artık kanal uçlarını değil, relay-rota bilgisi taşır.
+- **RPC de relay'den geçer:** bağlantısı A process'inde, entity'si B'de
+  olan oyuncunun `RPC_REQ` zarfı relay hattından B'deki shard actor'üne
+  ulaşır; pending set/timeout sweep/yanıt (private-frame) B'de işler,
+  yanıt aynı relay'den döner. Bedel: request başına bir ek hop (UDS'te
+  µs, kabloya sub-ms — kabul). Sonuç: RPC yoğun oyuncular için
+  crystallization/co-location gerekçesi güçlenir (sürekli hop'lu
+  trafiği önlemek için).
 
 ## 7. Paylaşılan servisler ve tick senkronu
 
