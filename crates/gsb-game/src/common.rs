@@ -14,7 +14,7 @@
 //!
 //! This is deliberately a set of plain functions over the rooms' fields
 //! (not a trait, not a struct that owns the fields): each room keeps its
-//! own `runner` / `conn_entity` / `next_wire_id` fields (the group-key
+//! own `runner` / `player_entity` / `next_wire_id` fields (the group-key
 //! type is per-room, and the inline tests reach into these fields), and
 //! the shared behaviour is the only copy. A *Visibility* trait over the
 //! strategies was considered and rejected — see `docs/ROADMAP.md`,
@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World, Without};
 use bytes::BufMut;
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ExpireTo, ResumeFound, TickCtx};
+use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, ExpireTo, ResumeFound, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
@@ -76,27 +76,38 @@ pub(crate) struct InputState {
 
 /// The player-spawn path, shared by all rooms: the deterministic spawn
 /// point (same distribution in every strategy — a fair comparison in the
-/// load generator), a fresh wire identity through the room's single
-/// minting point, the connection→entity table update, and the input
-/// session reset (a (re)join is a new input session — see
-/// [`InputState`]). Returns the wire id (it also goes to the joiner in
-/// `JOIN_ROOM_RESULT`, so both paths share one space).
+/// load generator), a fresh wire identity AND a fresh stable player
+/// identity through their minting counters, the player→entity table
+/// update, and the input session reset (a (re)join is a new input
+/// session — see [`InputState`]). Returns the [`Admission`] (the stable
+/// `PlayerId` keys every table from here on; the entity/wire id also
+/// goes to the joiner in `JOIN_ROOM_RESULT`, so both paths share one
+/// space). Identity policy note: the demo mints a fresh PlayerId per
+/// first join; resume stability comes from the park ledger carrying it.
 pub(crate) fn on_join(
-    conn_entity: &mut HashMap<ConnectionId, Entity>,
+    player_entity: &mut HashMap<PlayerId, Entity>,
+    next_player_id: &mut u64,
     next_wire_id: &mut u64,
     spawn_half: f32,
     world: &mut World,
     conn: ConnectionId,
-    input: &mut HashMap<ConnectionId, InputState>,
-) -> EntityId {
-    input.insert(conn, InputState::default());
+    input: &mut HashMap<PlayerId, InputState>,
+) -> Admission {
+    *next_player_id += 1;
+    let player = PlayerId(*next_player_id);
+    input.insert(player, InputState::default());
+    // The spawn point is derived from the TRANSPORT session id (as it
+    // always was): the load generator's home distribution pairs with it.
     let (x, y) = spawn_pos(conn, spawn_half);
     let wire = next_serial(next_wire_id);
     let entity = world
         .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
         .id();
-    conn_entity.insert(conn, entity);
-    wire.get()
+    player_entity.insert(player, entity);
+    Admission {
+        player,
+        entity: wire.get(),
+    }
 }
 
 /// The leave path, shared by all rooms: no remove event — the entity
@@ -106,16 +117,16 @@ pub(crate) fn on_join(
 /// re-joined session's input state: the removal is guarded by the same
 /// condition).
 pub(crate) fn on_leave(
-    conn_entity: &mut HashMap<ConnectionId, Entity>,
+    player_entity: &mut HashMap<PlayerId, Entity>,
     world: &mut World,
-    conn: ConnectionId,
-    input: &mut HashMap<ConnectionId, InputState>,
+    player: PlayerId,
+    input: &mut HashMap<PlayerId, InputState>,
 ) {
-    if let Some(entity) = conn_entity.remove(&conn)
+    if let Some(entity) = player_entity.remove(&player)
         && world.get_entity(entity).is_ok()
     {
         world.despawn(entity);
-        input.remove(&conn);
+        input.remove(&player);
     }
 }
 
@@ -147,10 +158,10 @@ pub(crate) fn on_leave(
 /// high-water mark, not a contiguity claim (see `InputAck` in
 /// `game.proto`).
 pub(crate) fn ingest(
-    conn_entity: &HashMap<ConnectionId, Entity>,
+    player_entity: &HashMap<PlayerId, Entity>,
     world: &mut World,
     actions: &mut Vec<Action>,
-    input: &mut HashMap<ConnectionId, InputState>,
+    input: &mut HashMap<PlayerId, InputState>,
 ) {
     for action in actions.drain(..) {
         if action.op != op::MOVE_TO {
@@ -160,7 +171,11 @@ pub(crate) fn ingest(
             tracing::warn!(?action.op, "undecodable MOVE_TO payload ignored");
             continue;
         };
-        let Some(entity) = conn_entity.get(&action.conn).copied() else {
+        // Faz 2: actions are keyed by the STABLE player id the core's
+        // binding stamped at ingest (bot-synthesized frames carry it
+        // directly). A stale/unbound action drops right here — the same
+        // silent-skip posture this path always had.
+        let Some(entity) = player_entity.get(&action.player).copied() else {
             continue; // not in a room (stale action)
         };
         if world.get_entity(entity).is_err() {
@@ -168,7 +183,7 @@ pub(crate) fn ingest(
         }
         // The sequence rule (see the docs above). `or_default` is a
         // defensive fallback only: `on_join` inserts the session state.
-        let st = input.entry(action.conn).or_default();
+        let st = input.entry(action.player).or_default();
         if msg.seq == 0 {
             // Legacy/unnumbered: process, never advance the mark.
         } else if msg.seq > st.hwm {
@@ -196,11 +211,11 @@ pub(crate) fn ingest(
 /// processed seq (it IS that seq), so the client's reconciliation
 /// ("everything up to N is applied; re-apply N+1, N+2, …") is sound.
 pub(crate) fn emit_ack(
-    input: &mut HashMap<ConnectionId, InputState>,
-    conn: ConnectionId,
+    input: &mut HashMap<PlayerId, InputState>,
+    player: PlayerId,
     out: &mut bytes::BytesMut,
 ) -> bool {
-    emit_private(input, conn, &[], out)
+    emit_private(input, player, &[], out)
 }
 
 /// Emit this connection's private frame for the tick: the pending input
@@ -217,13 +232,13 @@ pub(crate) fn emit_ack(
 /// fan-out) and the logic decides their order (arrival order within the
 /// tick, per the `gsb_core::rpc` contract).
 pub(crate) fn emit_private(
-    input: &mut HashMap<ConnectionId, InputState>,
-    conn: ConnectionId,
+    input: &mut HashMap<PlayerId, InputState>,
+    player: PlayerId,
     responses: &[gsb_core::rpc::RpcReply],
     out: &mut bytes::BytesMut,
 ) -> bool {
     let mut ack_up_to: Option<u64> = None;
-    if let Some(st) = input.get_mut(&conn)
+    if let Some(st) = input.get_mut(&player)
         && st.hwm > st.acked
     {
         ack_up_to = Some(st.hwm);
@@ -353,15 +368,15 @@ impl Default for ParkPolicy {
 /// [`crate::room::RoomLogic::resume_lookup`]).
 ///
 /// Keyed by identity (the resume key: ticket player or local-auth name),
-/// because THAT is what survives the transport death; `conn` is the dead
-/// session's id and stays the ledger→world link only until resume rekeys
-/// it.
+/// because THAT is what survives the transport death. The entry carries
+/// the parked session's STABLE [`PlayerId`] (Faz 2): it is what
+/// `resume_lookup` answers (the core finds its row by ONE lookup) and
+/// what the bot synthesizes input under — stability across resume comes
+/// exactly from riding this record (§14.2).
 #[derive(Debug)]
 pub(crate) struct ParkEntry {
-    /// The parked session's connection id (dead). The bot synthesizes
-    /// input under THIS key so the ordinary ingest path resolves it to
-    /// the parked entity exactly like a wire frame would.
-    pub conn: ConnectionId,
+    /// The parked player's stable identity.
+    pub player: PlayerId,
     /// The parked bevy entity (kept alive by the hold).
     pub entity: Entity,
     /// The hold expired toward [`ExpireTo::AiHandover`]: the bot owns the
@@ -383,8 +398,8 @@ pub(crate) struct ParkEntry {
 /// in its snapshot encoder), which is game-band content, not core
 /// machinery — deliberately not implemented in the base.
 pub(crate) fn park_on_disconnect(
-    conn_entity: &HashMap<ConnectionId, Entity>,
-    conn: ConnectionId,
+    player_entity: &HashMap<PlayerId, Entity>,
+    player: PlayerId,
     identity: &str,
     policy: &ParkPolicy,
     ledger: &mut HashMap<String, ParkEntry>,
@@ -393,12 +408,12 @@ pub(crate) fn park_on_disconnect(
         // Disabled (or nothing to resume with): the old semantics.
         return Detach::Despawn;
     }
-    match conn_entity.get(&conn) {
+    match player_entity.get(&player) {
         Some(&entity) => {
             ledger.insert(
                 identity.to_string(),
                 ParkEntry {
-                    conn,
+                    player,
                     entity,
                     bot: false,
                 },
@@ -421,13 +436,13 @@ pub(crate) fn park_on_disconnect(
 /// [`synthesize_bot_moves`]).
 pub(crate) fn park_on_expire(
     ledger: &mut HashMap<String, ParkEntry>,
-    conn: ConnectionId,
+    player: PlayerId,
     to: ExpireTo,
 ) {
     match to {
-        ExpireTo::Despawn => ledger.retain(|_, e| e.conn != conn),
+        ExpireTo::Despawn => ledger.retain(|_, e| e.player != player),
         ExpireTo::AiHandover => {
-            for e in ledger.values_mut().filter(|e| e.conn == conn) {
+            for e in ledger.values_mut().filter(|e| e.player == player) {
                 e.bot = true;
             }
         }
@@ -435,47 +450,40 @@ pub(crate) fn park_on_expire(
 }
 
 /// The `resume_lookup` hook body: the ledger answers whether the identity
-/// is parked. The returned `EntityId` must be the value `on_join` handed
-/// out for that entity (the wire serial) — the core matches it against
-/// its own connection table to find the parked row.
+/// is parked. The answer is the parked session's STABLE [`PlayerId`] —
+/// the key the core's own tables are keyed by, so the core finds its row
+/// with one lookup and a resumed session keeps the same identity (Faz 2;
+/// pre-Faz-2 this resolved the entity's wire serial for the core's scan
+/// over the detached rows).
 pub(crate) fn park_lookup(
-    world: &World,
+    _world: &World,
     ledger: &HashMap<String, ParkEntry>,
     identity: &str,
 ) -> ResumeFound {
     match ledger.get(identity) {
-        Some(entry) => world
-            .get_entity(entry.entity)
-            .ok()
-            .and_then(|he| he.get::<WireId>())
-            .map(|w| ResumeFound::Held(w.get()))
-            .unwrap_or(ResumeFound::Ended),
+        Some(entry) => ResumeFound::Held(entry.player),
         None => ResumeFound::Never,
     }
 }
 
-/// The `on_resume` hook body: consume the ledger entry (the bot loses the
-/// entity; the human's numbered inputs take over against a fresh session)
-/// and rekey every connection-keyed table the rooms own — the game-side
-/// half of the core's RebindKey pass (§14.1: each side enumerates what IT
-/// owns: `conn_entity`, the input sessions; strategy-specific conn-keyed
-/// tables are dropped by each room before calling into here via `drop`).
+/// The `on_resume` hook body (Faz 2 shrink): consume the ledger entry
+/// (the bot loses the entity; the human's numbered inputs take over).
+/// With every table keyed by the stable [`PlayerId`] there is nothing
+/// left to RE-KEY here — the pre-Faz-2 `conn_entity` rename is gone (the
+/// player→entity mapping kept its key across the whole disconnect).
+/// What remains is exactly what is session-scoped: the seq/ack reset of
+/// DESIGN §14.2 (the resumed session numbers from 1; dropping the entry
+/// makes `ingest`'s `or_default` mint a fresh one). Strategy-specific
+/// per-session tables, where a room keeps any, are dropped by the room
+/// itself before calling into here.
 pub(crate) fn park_resume(
     ledger: &mut HashMap<String, ParkEntry>,
-    conn_entity: &mut HashMap<ConnectionId, Entity>,
-    input: &mut HashMap<ConnectionId, InputState>,
+    input: &mut HashMap<PlayerId, InputState>,
     identity: &str,
-    old: ConnectionId,
-    new: ConnectionId,
+    player: PlayerId,
 ) {
     ledger.remove(identity);
-    if let Some(entity) = conn_entity.remove(&old) {
-        conn_entity.insert(new, entity);
-    }
-    // Seq/ack reset (DESIGN §14.2): the resumed session numbers from 1;
-    // dropping the old session's state makes `ingest`'s `or_default`
-    // mint a fresh one for the new connection.
-    input.remove(&old);
+    input.remove(&player);
 }
 
 /// How often the demo bot picks a new wander target, in ticks (~1 s at
@@ -516,7 +524,7 @@ fn bot_jitter(x_bits: u32, y_bits: u32, round: u64) -> (f32, f32) {
 /// the bot is an input source without a connection, exercising the REAL
 /// movement system, not a parallel teleport path.
 pub(crate) fn synthesize_bot_moves(
-    bots: impl Iterator<Item = (ConnectionId, Entity)>,
+    bots: impl Iterator<Item = (PlayerId, Entity)>,
     world: &World,
     ctx: &TickCtx,
     actions: &mut Vec<Action>,
@@ -527,7 +535,7 @@ pub(crate) fn synthesize_bot_moves(
         return;
     }
     let round = ctx.tick / BOT_WANDER_EVERY_TICKS;
-    for (conn, entity) in bots {
+    for (player, entity) in bots {
         let Ok(he) = world.get_entity(entity) else {
             continue;
         };
@@ -541,7 +549,10 @@ pub(crate) fn synthesize_bot_moves(
             seq: 0,
         };
         actions.push(Action {
-            conn,
+            // Synthesized input has no transport session behind it; the
+            // stable player id is what routes it.
+            conn: ConnectionId(0),
+            player,
             op: op::MOVE_TO,
             payload: msg.encode_to_vec().into(),
         });

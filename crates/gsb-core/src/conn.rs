@@ -755,6 +755,11 @@ impl ConnectionActor {
         // gone: detach.
         match mailbox.try_send(Action {
             conn: self.conn,
+            // The connection actor cannot know the stable player identity
+            // (it is minted inside the game logic): placeholder — the room
+            // stamps the authoritative value from its binding table before
+            // ingest (Faz 2).
+            player: crate::id::PlayerId(0),
             op: frame.op,
             payload: frame.payload,
         }) {

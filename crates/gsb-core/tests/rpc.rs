@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 
 use bytes::BufMut;
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
-use gsb_core::id::{ConnectionId, RoomId};
-use gsb_core::room::{Action, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, PlayerId, RoomId};
+use gsb_core::room::{Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::ticker::TickInfo;
@@ -83,7 +83,7 @@ impl GameLogic<()> for RpcLogic {
         OP_PRIV
     }
 
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
     fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _borrowed: &[gsb_core::shard::BorrowedRecord], _o: &mut bytes::BytesMut) -> bool {
         false // no group snapshots: batches carry only private frames
@@ -92,7 +92,7 @@ impl GameLogic<()> for RpcLogic {
     fn private(
         &mut self,
         _w: &mut (),
-        _conn: ConnectionId,
+        _player: PlayerId,
         _g: &(),
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
@@ -107,10 +107,13 @@ impl GameLogic<()> for RpcLogic {
         true
     }
 
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> gsb_core::EntityId {
-        1
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, _a: &mut Vec<Action>) {}
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
 }
@@ -270,6 +273,7 @@ impl Harness {
         };
         let a = Action {
             conn,
+            player: PlayerId(conn.0),
             op: gsb_core::rpc::RPC_REQ_OP,
             payload: env.encode_to_vec().into(),
         };
@@ -286,6 +290,7 @@ impl Harness {
     async fn raw_envelope(&mut self, conn: ConnectionId, payload: &[u8]) {
         let a = Action {
             conn,
+            player: PlayerId(conn.0),
             op: gsb_core::rpc::RPC_REQ_OP,
             payload: payload.to_vec().into(),
         };
@@ -819,6 +824,7 @@ async fn actions_before_requests_same_tick() {
     // reply is delivered in the same tick's broadcast.
     let plain = Action {
         conn: ConnectionId(1),
+        player: PlayerId(1),
         op: 0x77,
         payload: bytes::Bytes::new(),
     };

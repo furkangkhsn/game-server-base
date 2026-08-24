@@ -254,8 +254,8 @@ use std::hash::Hash;
 
 use bevy_ecs::prelude::{Changed, Entity, World};
 use bytes::{BufMut, Bytes, BytesMut};
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::encoding::varint::encode_varint;
 use prost::Message;
@@ -359,8 +359,12 @@ struct TouchInfo {
 /// fresh group members, keep-alive fulls as the loss-recovery path.
 pub struct AoiRoom {
     runner: SystemRunner,
-    /// Which entity belongs to which connection.
-    conn_entity: HashMap<ConnectionId, Entity>,
+    /// Which entity belongs to which player (Faz 2: keyed by the STABLE
+    /// player identity — the mapping survives resume unchanged).
+    player_entity: HashMap<PlayerId, Entity>,
+    /// The player-identity counter (the demo's [`PlayerId`] minting
+    /// policy); monotonic, never reused within the room's lifetime.
+    next_player_id: u64,
     /// The disconnect-park policy + ledger (see `crate::common` and
     /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
     park: crate::common::ParkPolicy,
@@ -374,15 +378,17 @@ pub struct AoiRoom {
     /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`);
     /// configuration, not a strategy decision.
     spawn_half: f32,
-    /// Per-connection input sequence state (strategy-independent; see
+    /// Per-player input sequence state (strategy-independent; see
     /// `crate::common::ingest` / `emit_ack`).
-    input: HashMap<ConnectionId, crate::common::InputState>,
-    /// Per-connection view baseline: `conn → the cell whose FULL view was
+    input: HashMap<PlayerId, crate::common::InputState>,
+    /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the
-    /// group's own full in the same batch). A connection whose entry is
+    /// group's own full in the same batch). A player whose entry is
     /// missing or names another cell has no baseline for its current
     /// group's view and gets a one-shot private full (see `private`).
-    conn_view: HashMap<ConnectionId, Cell>,
+    /// SESSION-scoped content under a stable key: a resume clears it
+    /// (`on_resume`) so the fresh session re-baselines with a full.
+    conn_view: HashMap<PlayerId, Cell>,
     /// The current buckets: `cell → (wire id → (x, y))` — the content of
     /// every cell, maintained **incrementally** in `update` from the
     /// dirty set (module docs, "Dirty cells"): an entity enters/leaves a
@@ -495,7 +501,8 @@ impl AoiRoom {
     pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
+            next_player_id: 0,
             park: crate::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             next_wire_id: 0,
@@ -739,8 +746,8 @@ impl GameLogic<World> for AoiRoom {
     /// the one window where the table has no entry (an entity spawned
     /// without a `Position`, which the dirty query cannot see until it
     /// is stamped — defensive; `on_join` always spawns with one).
-    fn group_of(&self, world: &World, conn: ConnectionId) -> Cell {
-        let Some(&entity) = self.conn_entity.get(&conn) else {
+    fn group_of(&self, world: &World, player: PlayerId) -> Cell {
+        let Some(&entity) = self.player_entity.get(&player) else {
             return Cell(0, 0);
         };
         if let Some(&c) = self.last_cell.get(&entity) {
@@ -871,17 +878,17 @@ impl GameLogic<World> for AoiRoom {
     fn private(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         group: &Cell,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        // The room passes the connection's current group (re-evaluated
-        // every tick in phase 4a) — the previous re-derivation
-        // (`conn_cell`: two table lookups per connection per tick) was a
-        // measured slice of the idle floor.
+        // The room passes the player's current group (re-evaluated every
+        // tick in phase 4a) — the previous re-derivation (`conn_cell`:
+        // two table lookups per connection per tick) was a measured
+        // slice of the idle floor.
         let c = *group;
-        let baselined = self.conn_view.get(&conn).copied() == Some(c);
+        let baselined = self.conn_view.get(&player).copied() == Some(c);
         if !baselined {
             if self.group_full_emitted.contains(&c) {
                 // The group's own full is in this batch (ahead of
@@ -889,7 +896,7 @@ impl GameLogic<World> for AoiRoom {
                 // ack (and any queued RPC answers — rare: a request
                 // answered on the very tick of a join/crossing) still
                 // get their normal frame below.
-                self.conn_view.insert(conn, c);
+                self.conn_view.insert(player, c);
             } else {
                 // The one-shot private full (one per join/crossing):
                 // the frame is the `Private` message (opcode 1004) —
@@ -904,23 +911,24 @@ impl GameLogic<World> for AoiRoom {
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
                 crate::common::append_responses(responses, out);
-                self.conn_view.insert(conn, c);
+                self.conn_view.insert(player, c);
                 return true;
             }
         }
-        crate::common::emit_private(&mut self.input, conn, responses, out)
+        crate::common::emit_private(&mut self.input, player, responses, out)
     }
 
-    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         // Shared spawn path (input session reset included): deterministic
-        // spawn point, fresh wire identity, connection→entity table.
-        // `conn_view` deliberately gets NO entry here: the first
+        // spawn point, fresh stable player + wire identity, player→entity
+        // table. `conn_view` deliberately gets NO entry here: the first
         // `private` call (this tick's fan-out, or the next tick's)
         // delivers the one-shot full and records the baseline — via the
         // group's own fresh full when the group is born, or via the
         // private frame otherwise.
-        let wire = crate::common::on_join(
-            &mut self.conn_entity,
+        let admission = crate::common::on_join(
+            &mut self.player_entity,
+            &mut self.next_player_id,
             &mut self.next_wire_id,
             self.spawn_half,
             world,
@@ -930,18 +938,18 @@ impl GameLogic<World> for AoiRoom {
         // Maintain the member-entity set (the dirty loop's O(1)
         // membership test — it selects which of the changed entities
         // count toward the per-cell member arithmetic).
-        if let Some(&entity) = self.conn_entity.get(&conn) {
+        if let Some(&entity) = self.player_entity.get(&admission.player) {
             self.members.insert(entity);
         }
-        wire
+        admission
     }
 
-    fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
         // The core guards stale leaves before calling this; a genuine
         // leave drops the entity, the input session, and the view
         // baseline (a re-join is a new session: fresh input state, fresh
         // one-shot full).
-        if let Some(&entity) = self.conn_entity.get(&conn) {
+        if let Some(&entity) = self.player_entity.get(&player) {
             self.members.remove(&entity);
             // Despawns are NOT component writes: the `Changed<Position>`
             // query in `update` cannot see the entity once it is gone,
@@ -962,8 +970,8 @@ impl GameLogic<World> for AoiRoom {
                 self.pending_removals.push((entity, wire, cell));
             }
         }
-        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input);
-        self.conn_view.remove(&conn);
+        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
+        self.conn_view.remove(&player);
     }
 
     // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
@@ -972,12 +980,12 @@ impl GameLogic<World> for AoiRoom {
     fn on_disconnect(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         identity: &str,
     ) -> Detach {
         crate::common::park_on_disconnect(
-            &self.conn_entity,
-            conn,
+            &self.player_entity,
+            player,
             identity,
             &self.park,
             &mut self.park_ledger,
@@ -987,10 +995,10 @@ impl GameLogic<World> for AoiRoom {
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+        crate::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
@@ -1001,22 +1009,16 @@ impl GameLogic<World> for AoiRoom {
         &mut self,
         _world: &mut World,
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        player: PlayerId,
         _entity: EntityId,
     ) {
-        crate::common::park_resume(
-            &mut self.park_ledger,
-            &mut self.conn_entity,
-            &mut self.input,
-            identity,
-            old,
-            new,
-        );
-        // The resumed session has no view baseline under its new key:
-        // dropping the old entry makes `private` deliver a fresh one-shot
+        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
+        // The resumed SESSION has no view baseline: clearing the entry
+        // under the STABLE key makes `private` deliver a fresh one-shot
         // full (a resume is a new session — same contract as a re-join).
-        self.conn_view.remove(&old);
+        // This is this strategy's one genuinely session-scoped table.
+        self.conn_view.remove(&player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -1024,12 +1026,12 @@ impl GameLogic<World> for AoiRoom {
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
-                .map(|e| (e.conn, e.entity)),
+                .map(|e| (e.player, e.entity)),
             world,
             ctx,
             actions,
         );
-        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -1259,10 +1261,10 @@ mod tests {
     /// Join a player (wire id assigned) and move its entity to an exact
     /// position for a deterministic cell placement. Returns the wire id.
     fn place(world: &mut World, room: &mut AoiRoom, conn: ConnectionId, x: f32, y: f32) -> u64 {
-        let wire = room.on_join(world, conn);
-        let entity = *room.conn_entity.get(&conn).expect("conn registered");
+        let admission = room.on_join(world, conn);
+        let entity = *room.player_entity.get(&admission.player).expect("registered");
         world.entity_mut(entity).insert(Position { x, y });
-        wire
+        admission.entity
     }
 
     fn decode(out: &bytes::BytesMut) -> WorldSnapshot {
@@ -1319,7 +1321,7 @@ mod tests {
         assert!(ids(&decode(&out)).contains(&a));
 
         // A moves into B's cell (Cell(3,0)); identity must be preserved.
-        let entity_a = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity_a = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(entity_a).insert(Position { x: 60.0, y: 0.0 });
         room.update(&mut world, &ctx(2));
 
@@ -1402,7 +1404,7 @@ mod tests {
         // (co-residents + itself, full mode).
         let mut priv_out = bytes::BytesMut::new();
         assert!(
-            room.private(&mut world, ConnectionId(3), &Cell(0, 0), &[], &mut priv_out),
+            room.private(&mut world, PlayerId(3), &Cell(0, 0), &[], &mut priv_out),
             "a late joiner receives the one-shot full"
         );
         let full = crate::game::Private::decode(priv_out.as_ref()).expect("private frame");
@@ -1419,7 +1421,7 @@ mod tests {
         // group change): no full again (only an ack, if any).
         let mut priv_out2 = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(3), &Cell(0, 0), &[], &mut priv_out2),
+            !room.private(&mut world, PlayerId(3), &Cell(0, 0), &[], &mut priv_out2),
             "the one-shot full is one-shot"
         );
     }
@@ -1471,7 +1473,7 @@ mod tests {
         );
         assert!(out2.is_empty(), "no bytes written on silence");
 
-        let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(entity).insert(Position { x: 7.0, y: 19.0 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
@@ -1642,7 +1644,7 @@ mod tests {
         let mut world = World::new();
         let mut room = AoiRoom::new(20.0);
         let _a = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
-        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let ent = *room.player_entity.get(&PlayerId(1)).unwrap();
 
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
@@ -1684,7 +1686,7 @@ mod tests {
         let mut world = World::new();
         let mut room = AoiRoom::new(20.0);
         let _a = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
-        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let ent = *room.player_entity.get(&PlayerId(1)).unwrap();
 
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
@@ -1846,7 +1848,7 @@ mod tests {
 
         // Only member 3 (x=9) moves — a direct write (no MOVE_TO, no
         // system).
-        let ent = *room.conn_entity.get(&ConnectionId(3)).unwrap();
+        let ent = *room.player_entity.get(&PlayerId(3)).unwrap();
         world.entity_mut(ent).insert(Position { x: 18.0, y: 0.0 }); // still Cell(0,0)
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
@@ -1878,7 +1880,7 @@ mod tests {
         assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
 
         // The f32 position changes; the wire position (0,0) does not.
-        let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let ent = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(ent).insert(Position { x: 0.9, y: 0.5 });
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
@@ -1918,7 +1920,7 @@ mod tests {
 
         // One leaves: the delta carries exactly its wire id in `removed`
         // (the remaining entity is not re-carried).
-        room.on_leave(&mut world, ConnectionId(1));
+        room.on_leave(&mut world, PlayerId(1));
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
@@ -1932,7 +1934,7 @@ mod tests {
 
         // The last one leaves: a `CellExit` supersedes the per-entity
         // record (the client forgets the whole cell in one record).
-        room.on_leave(&mut world, ConnectionId(2));
+        room.on_leave(&mut world, PlayerId(2));
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
@@ -1983,10 +1985,10 @@ mod tests {
         // The member is baselined by that full: no private frame.
         let mut pbuf = bytes::BytesMut::new();
         assert!(
-            !room.private(&mut world, ConnectionId(7), &Cell(2, 0), &[], &mut pbuf),
+            !room.private(&mut world, PlayerId(7), &Cell(2, 0), &[], &mut pbuf),
             "the group's full already baselined the member — no private frame"
         );
-        assert!(room.conn_view.contains_key(&ConnectionId(7)));
+        assert!(room.conn_view.contains_key(&PlayerId(7)));
     }
 
     /// (b) a join+leave within one tick: the entity never enters
@@ -2005,7 +2007,7 @@ mod tests {
 
         // A connection that joins AND leaves before the next update.
         room.on_join(&mut world, ConnectionId(9));
-        room.on_leave(&mut world, ConnectionId(9));
+        room.on_leave(&mut world, PlayerId(9));
         assert!(
             room.pending_removals.is_empty(),
             "no removal to park (the entity was never bucketed)"

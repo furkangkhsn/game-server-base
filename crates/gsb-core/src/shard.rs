@@ -190,7 +190,7 @@ use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
-use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use crate::metrics::{MetricsEvent, RoomSample, hist_index};
 use crate::room::{
     Action, Detach, ExpireTo, GameLogic, GroupState, ResumeFound, RoomConn, RoomConfig,
@@ -244,6 +244,14 @@ pub struct BorderExchange {
 /// (ownership transfer — see module docs, "Migration protocol").
 #[derive(Debug)]
 pub struct PlayerMigration {
+    /// The stable player identity (Faz 2): the receiving shard keys the
+    /// row under it — unchanged by the move, exactly like `entity`.
+    pub player: PlayerId,
+    /// The transport session bound to this player at send time: the
+    /// receiving shard installs ITS binding row (`conn → player`), so
+    /// control broadcasts (Leave/Detach) still find the owner after the
+    /// move. Session-keyed on purpose — it changes on resume, the
+    /// player key does not.
     pub conn: ConnectionId,
     /// The join's epoch (the leave/migration race gate).
     pub epoch: u64,
@@ -272,14 +280,14 @@ pub struct PlayerMigration {
     pub session_epoch: u64,
 }
 
-/// A migrating entity: the full game state plus the owning connection,
-/// when the entity is a player (NPCs have no connection).
+/// A migrating entity: the full game state plus the owning player, when
+/// the entity is a player (NPCs have no player).
 pub struct Migrating<S> {
     /// The entity's wire identity (kept across the migration).
     pub wire: u64,
     /// The full component state (game-shaped).
     pub state: S,
-    pub conn: Option<ConnectionId>,
+    pub player: Option<PlayerId>,
 }
 
 /// The per-shard answer to a broadcast resume (`ShardMsg::Resume`):
@@ -403,16 +411,17 @@ pub trait ShardLogic<W>: GameLogic<W> {
     ) -> Vec<Migrating<Self::State>>;
 
     /// Install a migrating entity: spawn it with its full state, keeping
-    /// its wire id. `conn` is present for player entities (the shard
-    /// handles the connection table itself); the logic must record the
-    /// conn→entity / entity→conn bookkeeping so that `on_leave` and the
-    /// next `collect_migrations` see it.
+    /// its wire id. `player` is present for player entities (the shard
+    /// handles the binding table itself); the logic must record the
+    /// player→entity bookkeeping so that `on_leave` and the next
+    /// `collect_migrations` see it. The player id is UNCHANGED by the
+    /// move (stable identity — Faz 2).
     fn on_migrate_in(
         &mut self,
         world: &mut W,
         wire: u64,
         state: Self::State,
-        conn: Option<ConnectionId>,
+        player: Option<PlayerId>,
     );
 
     /// Remove an entity that migrated out (phase 4, the mark fired):
@@ -432,12 +441,12 @@ pub trait ShardLogic<W>: GameLogic<W> {
     fn own_wires(&self, world: &W) -> Vec<u64>;
 }
 
-/// The shard actor. Owns one shard's world, its connection table (the
-/// shard's share of the room's connections), and its group table — the
+/// The shard actor. Owns one shard's world, its player table (the
+/// shard's share of the room's members), and its group table — the
 /// same ownership discipline as the room actor (`RoomActor<W, G>`), plus
 /// the shard protocol state (neighbor mailboxes, the latest border
 /// exchange per neighbor, the pending migrate-out marks, the deferred
-/// migrations, the conn-epoch table). `G` is the snapshot group key, `St`
+/// migrations, the conn-epoch tables). `G` is the snapshot group key, `St`
 /// the migration state (see [`ShardLogic`]).
 pub struct ShardActor<W, G, St> {
     config: RoomConfig,
@@ -446,10 +455,26 @@ pub struct ShardActor<W, G, St> {
     logic: Box<dyn ShardLogic<W, GroupKey = G, State = St>>,
     tick_rx: broadcast::Receiver<TickInfo>,
     shard_rx: Inbox<ShardMsg<St>>,
-    conns: HashMap<ConnectionId, RoomConn<G>>,
-    /// The epoch of the join this shard currently holds per connection
-    /// (set on Join and on Migrate-in; carried in outgoing Migrate
-    /// messages — see module docs, "Migration protocol").
+    /// This shard's members, keyed by STABLE player identity (Faz 2 —
+    /// same shape as the room actor; a resume or migration never re-keys
+    /// this table).
+    conns: HashMap<PlayerId, RoomConn<G>>,
+    /// THE session binding table (Faz 2 — the shard-side twin of the
+    /// room's): transport session → player. Established at join /
+    /// migrate-in / resume; torn down at leave / detach-expire-despawn /
+    /// migrate-out. Also the ingest-side authority translating every
+    /// pulled action's `conn`.
+    binding: HashMap<ConnectionId, PlayerId>,
+    /// The epoch of the join this shard currently holds per TRANSPORT
+    /// SESSION (set on Join/Migrate-in/resume; carried in outgoing
+    /// Migrate messages). Conn-keyed BY DESIGN (Faz 2, documented where
+    /// the contract left latitude): epochs are minted per session at the
+    /// dispatcher, and the leave/migration race gate pairs a session's
+    /// LEAVE against a session's in-flight MIGRATE — re-keying to stable
+    /// players would make an old session's tombstone kill a resumed
+    /// session's legitimate migration. A resume moves the entry as part
+    /// of the binding move (the live SESSION changed); enumerated in
+    /// `rebind_session`'s signpost.
     conn_epoch: HashMap<ConnectionId, u64>,
     /// The highest LEAVE epoch this shard has processed per connection —
     /// the leave/migration race gate: a Migrate of a join whose leave
@@ -458,6 +483,11 @@ pub struct ShardActor<W, G, St> {
     /// join itself (or a migration install) — the join is alive, not
     /// dead — and gating on it would reject legitimate re-migrations of
     /// the same join (see module docs, "Migration protocol").
+    ///
+    /// Conn-keyed BY DESIGN (Faz 2): a tombstone guards the id of the
+    /// join that DIED — a detached session never died (no leave was
+    /// processed for it), so it wrote none; dead old sessions keep their
+    /// guards under their own ids where they belong.
     ///
     /// The value is `(highest dead epoch, tick the winning leave was
     /// processed at)`: the tick half drives the TTL sweep. It is written
@@ -545,6 +575,7 @@ where
             tick_rx,
             shard_rx,
             conns: HashMap::new(),
+            binding: HashMap::new(),
             conn_epoch: HashMap::new(),
             conn_tombstone: HashMap::new(),
             last_tombstone_sweep: None,
@@ -731,51 +762,51 @@ where
         //    this tick's pulls.
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
             let now = Instant::now();
-            let mut due: Vec<(ConnectionId, ExpireTo)> = Vec::new();
-            let mut ask: Vec<ConnectionId> = Vec::new();
-            for (&conn, rc) in &self.conns {
+            let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
+            let mut ask: Vec<PlayerId> = Vec::new();
+            for (&player, rc) in &self.conns {
                 if !rc.detached || rc.bot_fed {
                     continue;
                 }
                 match rc.detach_deadline {
-                    Some(dl) if now >= dl => due.push((conn, rc.expire_to)),
+                    Some(dl) if now >= dl => due.push((player, rc.expire_to)),
                     Some(_) => {}
-                    None => ask.push(conn),
+                    None => ask.push(player),
                 }
             }
-            for conn in ask {
-                if self.logic.may_release(&mut self.world, conn) {
+            for player in ask {
+                if self.logic.may_release(&mut self.world, player) {
                     let to = self
                         .conns
-                        .get(&conn)
+                        .get(&player)
                         .map(|rc| rc.expire_to)
                         .unwrap_or(ExpireTo::Despawn);
-                    due.push((conn, to));
+                    due.push((player, to));
                 }
             }
-            for (conn, to) in due {
-                self.logic.on_detach_expired(&mut self.world, conn, to);
+            for (player, to) in due {
+                self.logic.on_detach_expired(&mut self.world, player, to);
                 match to {
                     ExpireTo::Despawn => {
                         self.m.detach_expired_despawn += 1;
-                        self.despawn_conn(conn, false);
+                        self.despawn_conn(player, false);
                         debug!(
                             room = %self.config.id,
                             shard = self.index,
-                            %conn,
+                            %player,
                             "detach hold expired: despawn"
                         );
                     }
                     ExpireTo::AiHandover => {
                         self.m.detach_expired_ai += 1;
-                        if let Some(rc) = self.conns.get_mut(&conn) {
+                        if let Some(rc) = self.conns.get_mut(&player) {
                             rc.bot_fed = true;
                             rc.detach_deadline = None;
                         }
                         debug!(
                             room = %self.config.id,
                             shard = self.index,
-                            %conn,
+                            %player,
                             "detach hold expired: AI handover (bot_fed; Tur B seam)"
                         );
                     }
@@ -810,6 +841,31 @@ where
                 break;
             }
         }
+
+        // -- Phase 1.5 — BINDING TRANSLATION: byte-for-byte the room
+        //    actor's step (Faz 2 — ONE mechanism on both actors; see the
+        //    room's phase comment for the full rationale): every pulled
+        //    action still names its transport session, and THIS table is
+        //    the one authority for the conn ↔ PlayerId context. An
+        //    unbound conn drops here — after a resume the old session has
+        //    no binding row left, so its stray frames can never reach the
+        //    world.
+        actions.retain_mut(|a| match self.binding.get(&a.conn) {
+            Some(&player) => {
+                a.player = player;
+                true
+            }
+            None => {
+                debug!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    conn = %a.conn,
+                    op = a.op,
+                    "action dropped: connection not bound (stale/old session)"
+                );
+                false
+            }
+        });
 
         // -- Phase 2 — CONVERT.
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
@@ -849,13 +905,19 @@ where
         for b in nb {
             let migrations = self.logic.collect_migrations(&mut self.world, b);
             for mig in migrations {
-                let player = mig.conn.and_then(|c| {
-                    let entry = self.conns.remove(&c)?;
+                let player = mig.player.and_then(|p| {
+                    let entry = self.conns.remove(&p)?;
+                    // The binding row travels too (the receiving shard
+                    // installs its own): the session stays bound to this
+                    // player across the move, so control broadcasts still
+                    // find the owner.
+                    self.binding.remove(&entry.conn);
                     Some(PlayerMigration {
-                        conn: c,
+                        player: p,
+                        conn: entry.conn,
                         // The epoch of the join this entity belongs to: the
                         // shard that last installed it recorded it.
-                        epoch: self.conn_epoch.get(&c).copied().unwrap_or(0),
+                        epoch: self.conn_epoch.get(&entry.conn).copied().unwrap_or(0),
                         out: entry.out,
                         actions: entry.actions,
                         entity: entry.entity,
@@ -881,32 +943,33 @@ where
                     }
                     Err(mpsc::error::TrySendError::Full(msg)
                     | mpsc::error::TrySendError::Closed(msg)) => {
-                        // Roll back the connection's move (the entity stays;
-                        // the connection must remain registered and pull
-                        // its input here until the retry lands).
+                        // Roll back the player's move (the entity stays;
+                        // the row must remain registered and pull
+                        // its input here until the retry lands) — including
+                        // the binding row the send removed.
                         if let ShardMsg::Migrate {
-                            player,
+                            player: Some(p),
                             wire,
                             ..
                         } = msg
                         {
-                            if let Some(p) = player {
-                                self.conns.insert(
-                                    p.conn,
-                                    RoomConn {
-                                        out: p.out,
-                                        actions: p.actions,
-                                        entity: p.entity,
-                                        group: self.logic.group_of(&self.world, p.conn),
-                                        batch: Vec::new(),
-                                        detached: p.detached,
-                                        detach_deadline: p.detach_deadline,
-                                        expire_to: p.expire_to,
-                                        bot_fed: p.bot_fed,
-                                        session_epoch: p.session_epoch,
-                                    },
-                                );
-                            }
+                            self.conns.insert(
+                                p.player,
+                                RoomConn {
+                                    conn: p.conn,
+                                    out: p.out,
+                                    actions: p.actions,
+                                    entity: p.entity,
+                                    group: self.logic.group_of(&self.world, p.player),
+                                    batch: Vec::new(),
+                                    detached: p.detached,
+                                    detach_deadline: p.detach_deadline,
+                                    expire_to: p.expire_to,
+                                    bot_fed: p.bot_fed,
+                                    session_epoch: p.session_epoch,
+                                },
+                            );
+                            self.binding.insert(p.conn, p.player);
                             warn!(
                                 room = %self.config.id,
                                 shard = self.index,
@@ -966,9 +1029,9 @@ where
             } => {
                 // A join supersedes any stale state this connection had
                 // (same as the room actor).
-                if let Some(old) = self.conns.remove(&conn) {
-                    self.logic.on_leave(&mut self.world, conn);
-                    let _ = old; // the old channel halves drop with the entry
+                if let Some(&stale) = self.binding.get(&conn) {
+                    let _ = self.conns.remove(&stale); // old halves drop
+                    self.logic.on_leave(&mut self.world, stale);
                 }
                 // Identity-space exhaustion guard (structurally unreachable
                 // at the default range — see module docs): the shard
@@ -984,17 +1047,20 @@ where
                     let _ = reply.send(Err(CoreError::RoomFull(self.config.id.0)));
                     return true;
                 }
-                let entity = self.logic.on_join(&mut self.world, conn);
+                // The LOGIC mints the stable player identity (Faz 2).
+                let admission = self.logic.on_join(&mut self.world, conn);
                 self.m.joins += 1;
                 let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
                 self.conn_epoch.insert(conn, epoch);
+                self.binding.insert(conn, admission.player);
                 self.conns.insert(
-                    conn,
+                    admission.player,
                     RoomConn {
+                        conn,
                         out,
                         actions: act_rx,
-                        entity,
-                        group: self.logic.group_of(&self.world, conn),
+                        entity: admission.entity,
+                        group: self.logic.group_of(&self.world, admission.player),
                         batch: Vec::new(),
                         detached: false,
                         detach_deadline: None,
@@ -1003,12 +1069,13 @@ where
                         session_epoch: 0,
                     },
                 );
-                let _ = reply.send(Ok((entity, act_tx)));
+                let _ = reply.send(Ok((admission.entity, act_tx)));
                 debug!(
                     room = %self.config.id,
                     shard = self.index,
                     %conn,
-                    entity,
+                    player = %admission.player,
+                    entity = admission.entity,
                     epoch,
                     "player joined shard"
                 );
@@ -1020,23 +1087,26 @@ where
                 identity,
             } => {
                 // The registry's close broadcast: exactly the owning shard
-                // runs the policy; the entity-id guard makes the others
-                // no-ops (the same shape as a broadcast `Leave`).
-                if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
+                // runs the policy; the binding + entity guards make the
+                // others no-ops (the same shape as a broadcast `Leave`).
+                if let Some(&player) = self.binding.get(&conn)
+                    && self.conns.get(&player).map(|c| c.entity) == Some(entity)
+                {
                     let decision =
-                        self.logic.on_disconnect(&mut self.world, conn, &identity);
+                        self.logic.on_disconnect(&mut self.world, player, &identity);
                     match decision {
                         Detach::Despawn => {
                             // Today's close semantics, unchanged.
-                            self.despawn_conn(conn, false);
+                            self.despawn_conn(player, false);
                         }
                         Detach::Hold { grace, to } => {
-                            // Park: keep row/entity/slot; core owns the
-                            // clock (§14.4). In-flight requests of the dead
-                            // session drop with it (§11) — shards run no
+                            // Park: keep row (stable key)/entity/slot and
+                            // the binding row; core owns the clock (§14.4).
+                            // In-flight requests of the dead session die
+                            // with it structurally (§11) — shards run no
                             // RPC machinery yet, so there is nothing to
                             // clear beyond the row's own channel halves.
-                            let rc = self.conns.get_mut(&conn).expect("guarded above");
+                            let rc = self.conns.get_mut(&player).expect("guarded above");
                             rc.detached = true;
                             rc.expire_to = to;
                             rc.detach_deadline = grace.map(|g| Instant::now() + g);
@@ -1044,6 +1114,7 @@ where
                                 room = %self.config.id,
                                 shard = self.index,
                                 %conn,
+                                %player,
                                 entity,
                                 ?grace,
                                 ?to,
@@ -1065,26 +1136,24 @@ where
                 // ledger holds the identity — every other shard answers
                 // "not here" without touching anything.
                 let outcome = match self.logic.resume_lookup(&self.world, &identity) {
-                    ResumeFound::Held(entity) => {
-                        // The parked row owning the ledger's entity (the
-                        // detached subset is tiny — see the room actor).
-                        match self
-                            .conns
-                            .iter()
-                            .find(|(_, rc)| rc.detached && rc.entity == entity)
-                            .map(|(c, _)| *c)
-                        {
-                            Some(old) => {
+                    ResumeFound::Held(player) => {
+                        // The parked row, by its STABLE key (Faz 2): one
+                        // lookup instead of the pre-Faz-2 scan.
+                        match self.conns.get(&player) {
+                            Some(rc) if rc.detached => {
+                                // Copy the guard/reply values out so the
+                                // table borrow ends before the rebind.
+                                let rc_epoch = rc.session_epoch;
+                                let entity = rc.entity;
                                 // Epoch guard (§7), one comparison — see
                                 // the room actor's Resume arm for the full
                                 // rationale.
-                                let rc_epoch = self.conns[&old].session_epoch;
                                 if epoch != 0 && rc_epoch != 0 && epoch <= rc_epoch {
                                     self.m.resume_rejected_stale += 1;
                                     warn!(
                                         room = %self.config.id,
                                         shard = self.index,
-                                        parked = %old,
+                                        %player,
                                         %identity,
                                         resume_epoch = epoch,
                                         "resume rejected: stale epoch"
@@ -1092,15 +1161,16 @@ where
                                     Err(CoreError::ResumeStale)
                                 } else {
                                     let act_tx =
-                                        self.rebind_session(old, conn, epoch, &identity, out);
+                                        self.rebind_session(player, conn, epoch, &identity, out);
                                     Ok(Some((entity, act_tx)))
                                 }
                             }
-                            None => {
+                            _ => {
                                 // Ledger/table divergence (the hold expired
-                                // in this very tick's sweep): counted stale;
-                                // the dispatcher's all-miss fallback turns
-                                // it into a transparent fresh join.
+                                // in this very tick's sweep, or the row is
+                                // already live): counted stale; the
+                                // dispatcher's all-miss fallback turns it
+                                // into a transparent fresh join.
                                 self.m.resume_rejected_stale += 1;
                                 Ok(None)
                             }
@@ -1120,16 +1190,18 @@ where
                 true
             }
             ShardMsg::Leave { conn, entity, epoch } => {
-                // Stale-leave guard (the entity id): only the entity this
-                // connection currently owns.
-                if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
-                    self.conns.remove(&conn);
-                    self.logic.on_leave(&mut self.world, conn);
+                // Stale-leave guard (binding + entity id): only the entity
+                // this player currently owns.
+                if let Some(&player) = self.binding.get(&conn)
+                    && self.conns.get(&player).map(|c| c.entity) == Some(entity)
+                {
+                    self.despawn_conn(player, false);
                     self.m.leaves += 1;
                     debug!(
                         room = %self.config.id,
                         shard = self.index,
                         %conn,
+                        %player,
                         entity,
                         "player left shard"
                     );
@@ -1228,23 +1300,27 @@ where
                     &mut self.world,
                     wire,
                     state,
-                    player.as_ref().map(|p| p.conn),
+                    player.as_ref().map(|p| p.player),
                 );
                 if let Some(p) = player {
-                    // The connection moves here: the out channel and the
+                    // The player moves here: the out channel and the
                     // action inbox were MOVED with the message (ownership
-                    // transfer — the connection actor never notices).
-                    // Invariant (see module docs): after passing the epoch
-                    // gate this shard cannot already hold the connection.
-                    debug_assert!(!self.conns.contains_key(&p.conn));
+                    // transfer — the connection actor never notices), and
+                    // the binding row is installed so control broadcasts
+                    // find this shard. Invariant (see module docs): after
+                    // passing the epoch gate this shard cannot already
+                    // hold the player.
+                    debug_assert!(!self.conns.contains_key(&p.player));
                     self.conn_epoch.insert(p.conn, p.epoch);
+                    self.binding.insert(p.conn, p.player);
                     self.conns.insert(
-                        p.conn,
+                        p.player,
                         RoomConn {
+                            conn: p.conn,
                             out: p.out,
                             actions: p.actions,
                             entity: p.entity,
-                            group: self.logic.group_of(&self.world, p.conn),
+                            group: self.logic.group_of(&self.world, p.player),
                             batch: Vec::new(),
                             detached: p.detached,
                             detach_deadline: p.detach_deadline,
@@ -1273,17 +1349,24 @@ where
         }
     }
 
-    /// Bind a resumed session onto its parked entity (the shard-side
+    /// Bind a resumed session onto its parked row (the shard-side
     /// mirror of the room actor's `rebind_session`): swap the channel
-    /// halves, stamp the guard epoch, run the single-pass RebindKey over
-    /// every conn-keyed table THIS actor owns, and hand the logic its
-    /// `on_resume` hook. Returns the fresh action sender for the reply.
+    /// halves, stamp the guard epoch, move THE binding row, and hand
+    /// the logic its `on_resume` hook. Returns the fresh action sender
+    /// for the reply.
     ///
-    /// RebindKey enumeration for the SHARD actor:
-    /// - `conns` — moved below when the id changed;
-    /// - `conn_epoch` — the live join's epoch stamp moves to the new id
-    ///   (it stamps outgoing Migrates);
-    /// - `conn_tombstone` — NOT re-keyed, deliberately: a tombstone is
+    /// **The RebindKey shrink (Faz 2)** — the signpost enumeration, now a
+    /// list of what must NOT be touched (see the room actor for the full
+    /// rationale):
+    /// - `binding` — MOVED below (`old conn → new conn`, same player):
+    ///   the entire re-key surface;
+    /// - `conns` — NOT re-keyed: the row's key IS the stable player id;
+    ///   only `RoomConn.conn` and the channel halves are rewritten;
+    /// - `conn_epoch` — MOVED as part of the binding move (remove the
+    ///   dead session's entry, stamp the resume epoch under the new one:
+    ///   outgoing Migrates of the LIVE session must carry ITS epoch so
+    ///   the leave/migration gate pairs correctly);
+    /// - `conn_tombstone` — NOT touched, deliberately: a tombstone is
     ///   keyed by the id of the join that DIED. A detached session never
     ///   died (its leave was never processed), so it wrote no tombstone;
     ///   tombstoned old sessions stay under their own (dead) ids where
@@ -1292,65 +1375,66 @@ where
     ///   gated by epoch/tombstones exactly as before (a post-resume ghost
     ///   of the parked session loses to the new session's newer epoch on
     ///   any later leave);
-    /// - `groups` — NOT re-keyed (opaque `G`); rebuilt wholesale from
-    ///   `conns` every broadcast phase, so a per-connection group key
+    /// - `groups` — NOT touched (opaque `G`); rebuilt wholesale from
+    ///   `conns` every broadcast phase, so a per-player group key
     ///   self-heals in one tick (same argument as the room actor).
     ///
-    /// The ledger and any logic-owned tables go through
-    /// [`GameLogic::on_resume`] (the park metadata itself traveled INSIDE
-    /// the migrated player state — §14.2 — so whichever shard now owns the
-    /// entity also owns the record).
+    /// The ledger goes through [`GameLogic::on_resume`] (the park
+    /// metadata itself traveled INSIDE the migrated player state — §14.2
+    /// — so whichever shard now owns the entity also owns the record).
     fn rebind_session(
         &mut self,
-        old: ConnectionId,
+        player: PlayerId,
         conn: ConnectionId,
         epoch: u64,
         identity: &str,
         out: mpsc::Sender<FrameBatch>,
     ) -> Mailbox<Action> {
         let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let mut old_conn = conn;
         let mut entity = 0;
-        if let Some(rc) = self.conns.get_mut(&old) {
+        if let Some(rc) = self.conns.get_mut(&player) {
             rc.out = out;
             rc.actions = act_rx;
             rc.detached = false;
             rc.bot_fed = false;
             rc.detach_deadline = None;
             rc.session_epoch = epoch;
+            old_conn = rc.conn;
+            rc.conn = conn;
             entity = rc.entity;
         }
         self.m.resumes += 1;
-        if old != conn {
-            if let Some(rc) = self.conns.remove(&old) {
-                self.conns.insert(conn, rc);
-            }
-            if let Some(ep) = self.conn_epoch.remove(&old) {
-                self.conn_epoch.insert(conn, ep);
-            }
-        } else {
-            self.conn_epoch.insert(conn, epoch.max(self.conn_epoch.get(&conn).copied().unwrap_or(0)));
-        }
-        self.logic.on_resume(&mut self.world, identity, old, conn, entity);
+        // THE binding move + its session-epoch companion (see the
+        // enumeration above): the old session loses both rows; the new
+        // session owns the player from here on.
+        let moved_epoch = self.conn_epoch.remove(&old_conn);
+        self.binding.remove(&old_conn);
+        self.binding.insert(conn, player);
+        self.conn_epoch.insert(conn, epoch.max(moved_epoch.unwrap_or(0)));
+        self.logic.on_resume(&mut self.world, identity, conn, player, entity);
         debug!(
             room = %self.config.id,
             shard = self.index,
-            %old,
+            %old_conn,
             %conn,
-            entity,
+            %player,
             epoch,
-            "player resumed onto parked entity on this shard"
+            "player resumed onto parked row on this shard (binding moved)"
         );
         act_tx
     }
 
-    /// The shard's despawn funnel: remove the row, run `on_leave`,
-    /// count. (`on_leave` stays THE single despawn seam for snapshots
-    /// and bookkeeping, exactly like the room actor.)
-    fn despawn_conn(&mut self, conn: ConnectionId, count_as_leave: bool) {
-        if self.conns.remove(&conn).is_none() {
+    /// The shard's despawn funnel: remove the row, tear down its binding,
+    /// run `on_leave`, count. (`on_leave` stays THE single despawn seam
+    /// for snapshots and bookkeeping, exactly like the room actor.)
+    fn despawn_conn(&mut self, player: PlayerId, count_as_leave: bool) {
+        let Some(rc) = self.conns.remove(&player) else {
             return;
-        }
-        self.logic.on_leave(&mut self.world, conn);
+        };
+        self.binding.remove(&rc.conn);
+        self.conn_epoch.remove(&rc.conn);
+        self.logic.on_leave(&mut self.world, player);
         if count_as_leave {
             self.m.leaves += 1;
         }
@@ -1364,15 +1448,15 @@ where
         let snap_op = self.logic.snapshot_op();
         let priv_op = self.logic.private_op();
 
-        // 6a. Recompute each connection's group.
-        for (conn, rc) in self.conns.iter_mut() {
-            rc.group = self.logic.group_of(&self.world, *conn);
+        // 6a. Recompute each player's group.
+        for (player, rc) in self.conns.iter_mut() {
+            rc.group = self.logic.group_of(&self.world, *player);
         }
 
         // 6b. Rebuild the group table (same as the room's 4b).
-        let mut members: HashMap<G, Vec<ConnectionId>> = HashMap::new();
-        for (conn, rc) in &self.conns {
-            members.entry(rc.group.clone()).or_default().push(*conn);
+        let mut members: HashMap<G, Vec<PlayerId>> = HashMap::new();
+        for (&player, rc) in &self.conns {
+            members.entry(rc.group.clone()).or_default().push(player);
         }
         self.m.step_max_group =
             members.values().map(Vec::len).max().unwrap_or(0) as u32;
@@ -1539,7 +1623,7 @@ where
         // Same batch-buffer reuse as the room's 4d (one floor slice was the
         // per-connection per-tick `Vec::with_capacity(2)`).
         let mut pbuf = bytes::BytesMut::new();
-        for (conn, rc) in self.conns.iter_mut() {
+        for (&player, rc) in self.conns.iter_mut() {
             // Detached/bot-fed rows ship nothing (dead or non-human
             // outbound half; §7 — the drop counter stays "slow client"
             // only). The group snapshot still carries the parked entity.
@@ -1561,7 +1645,7 @@ where
             // the completion sweep are room-actor machinery (Faz 3), so
             // the shared `GameLogic::private` seam receives an empty
             // response list here — same call shape as the room's fan-out.
-            if self.logic.private(&mut self.world, *conn, &rc.group, &[], &mut pbuf) {
+            if self.logic.private(&mut self.world, player, &rc.group, &[], &mut pbuf) {
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
@@ -1664,6 +1748,7 @@ mod tests {
     //! invariant can be checked per tick index.
 
     use super::*;
+    use crate::room::Admission;
     use std::time::Duration;
 
     use crate::channel::channel;
@@ -1703,11 +1788,11 @@ mod tests {
     struct TLogic {
         index: usize,
         next_serial: u64,
-        conn_ent: HashMap<ConnectionId, u64>,
-        ent_conn: HashMap<u64, ConnectionId>,
+        player_ent: HashMap<PlayerId, u64>,
+        ent_player: HashMap<u64, PlayerId>,
         last_tick: u64,
         obs: mpsc::Sender<Obs>,
-        ops: mpsc::Sender<(ConnectionId, u16)>,
+        ops: mpsc::Sender<(PlayerId, u16)>,
     }
 
     impl TLogic {
@@ -1732,7 +1817,7 @@ mod tests {
         fn private_op(&self) -> u16 {
             0x7101
         }
-        fn group_of(&self, _w: &TWorld, _c: ConnectionId) -> Self::GroupKey {}
+        fn group_of(&self, _w: &TWorld, _p: PlayerId) -> Self::GroupKey {}
         fn snapshot(
             &mut self,
             w: &mut TWorld,
@@ -1761,7 +1846,7 @@ mod tests {
             }
             true
         }
-        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> EntityId {
+        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> Admission {
             // Deterministic spawn: x = (conn.0 % 20) - 10 (conn 1 → -9 in
             // shard 0; conn 10 → 0 in shard 1; conn 11 → +1 in shard 1),
             // y = 0, no motion.
@@ -1769,19 +1854,24 @@ mod tests {
             self.next_serial += 1;
             let wire = self.serial_base() + self.next_serial;
             w.ents.insert(wire, (x, 0.0, 0));
-            self.conn_ent.insert(conn, wire);
-            self.ent_conn.insert(wire, conn);
-            wire
+            // Test identity policy: the conn id doubles as the player id.
+            let player = PlayerId(conn.0);
+            self.player_ent.insert(player, wire);
+            self.ent_player.insert(wire, player);
+            Admission {
+                player,
+                entity: wire,
+            }
         }
-        fn on_leave(&mut self, w: &mut TWorld, conn: ConnectionId) {
-            if let Some(wire) = self.conn_ent.remove(&conn) {
-                self.ent_conn.remove(&wire);
+        fn on_leave(&mut self, w: &mut TWorld, player: PlayerId) {
+            if let Some(wire) = self.player_ent.remove(&player) {
+                self.ent_player.remove(&wire);
                 w.ents.remove(&wire);
             }
         }
         fn ingest(&mut self, w: &mut TWorld, _ctx: &TickCtx, actions: &mut Vec<Action>) {
             for a in actions.drain(..) {
-                let _ = self.ops.try_send((a.conn, a.op));
+                let _ = self.ops.try_send((a.player, a.op));
                 // The test's ops: 1000 = step +1/tick, 1001 = step -1/tick,
                 // 1002 = stop.
                 let mode = match a.op {
@@ -1789,7 +1879,7 @@ mod tests {
                     1001 => -1,
                     _ => 0,
                 };
-                if let Some(wire) = self.conn_ent.get(&a.conn).copied()
+                if let Some(wire) = self.player_ent.get(&a.player).copied()
                     && let Some(e) = w.ents.get_mut(&wire)
                 {
                     e.2 = mode;
@@ -1857,7 +1947,7 @@ mod tests {
                             y: *y,
                             mode: *mode,
                         },
-                        conn: self.ent_conn.get(&wire).copied(),
+                        player: self.ent_player.get(&wire).copied(),
                     });
                 }
             }
@@ -1868,17 +1958,17 @@ mod tests {
             w: &mut TWorld,
             wire: u64,
             state: TState,
-            conn: Option<ConnectionId>,
+            player: Option<PlayerId>,
         ) {
             w.ents.insert(wire, (state.x, state.y, state.mode));
-            if let Some(c) = conn {
-                self.conn_ent.insert(c, wire);
-                self.ent_conn.insert(wire, c);
+            if let Some(p) = player {
+                self.player_ent.insert(p, wire);
+                self.ent_player.insert(wire, p);
             }
         }
         fn on_migrate_out(&mut self, w: &mut TWorld, wire: u64) {
-            if let Some(c) = self.ent_conn.remove(&wire) {
-                self.conn_ent.remove(&c);
+            if let Some(p) = self.ent_player.remove(&wire) {
+                self.player_ent.remove(&p);
             }
             w.ents.remove(&wire);
         }
@@ -1906,7 +1996,7 @@ mod tests {
         tick_tx: broadcast::Sender<TickInfo>,
         shard_txs: [Mailbox<ShardMsg<TState>>; 2],
         obs: mpsc::Receiver<Obs>,
-        ops: mpsc::Receiver<(ConnectionId, u16)>,
+        ops: mpsc::Receiver<(PlayerId, u16)>,
         #[allow(dead_code)]
         handles: Vec<tokio::task::JoinHandle<()>>,
         t: u64,
@@ -1943,8 +2033,8 @@ mod tests {
                     Box::new(TLogic {
                         index: 0,
                         next_serial: 0,
-                        conn_ent: HashMap::new(),
-                        ent_conn: HashMap::new(),
+                        player_ent: HashMap::new(),
+                        ent_player: HashMap::new(),
                         last_tick: 0,
                         obs: obs_tx.clone(),
                         ops: ops_tx.clone(),
@@ -1967,8 +2057,8 @@ mod tests {
                     Box::new(TLogic {
                         index: 1,
                         next_serial: 0,
-                        conn_ent: HashMap::new(),
-                        ent_conn: HashMap::new(),
+                        player_ent: HashMap::new(),
+                        ent_player: HashMap::new(),
                         last_tick: 0,
                         obs: obs_tx.clone(),
                         ops: ops_tx,
@@ -2076,6 +2166,9 @@ mod tests {
             actions
                 .send(Action {
                     conn,
+                    // Test identity policy (matches TLogic::on_join): the
+                    // conn id doubles as the player id.
+                    player: PlayerId(conn.0),
                     op,
                     payload: bytes::Bytes::new(),
                 })
@@ -2099,7 +2192,7 @@ mod tests {
         }
 
         /// The ops the shards ingested, in order (drain).
-        async fn ops_drained(&mut self) -> Vec<(ConnectionId, u16)> {
+        async fn ops_drained(&mut self) -> Vec<(PlayerId, u16)> {
             let mut out = Vec::new();
             while let Ok(op) = self.ops.try_recv() {
                 out.push(op);
@@ -2139,8 +2232,8 @@ mod tests {
             Box::new(TLogic {
                 index,
                 next_serial: 0,
-                conn_ent: HashMap::new(),
-                ent_conn: HashMap::new(),
+                player_ent: HashMap::new(),
+                ent_player: HashMap::new(),
                 last_tick: 0,
                 obs,
                 ops,
@@ -2214,6 +2307,8 @@ mod tests {
                 mode: 0,
             },
             player: Some(PlayerMigration {
+                // Test identity policy: the conn id doubles as the player.
+                player: PlayerId(conn.0),
                 conn,
                 epoch,
                 entity,
@@ -2276,7 +2371,7 @@ mod tests {
             &tctx(13)
         ));
         assert!(
-            a.conns.contains_key(&other),
+            a.conns.contains_key(&PlayerId(other.0)),
             "the stale-leave guard keeps the live join's row"
         );
         assert!(
@@ -2323,7 +2418,7 @@ mod tests {
         // Existing behavior preserved: rejected.
         assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 99), &tctx(102)));
         assert!(
-            !a.conns.contains_key(&conn),
+            !a.conns.contains_key(&PlayerId(conn.0)),
             "the ghost migrate must not install the dead join"
         );
         assert_eq!(
@@ -2353,7 +2448,7 @@ mod tests {
         // re-inserts the pruned epoch entry (see CHANGE 1's comment).
         assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 700), &tctx(713)));
         assert!(
-            a.conns.contains_key(&conn),
+            a.conns.contains_key(&PlayerId(conn.0)),
             "with the tombstone expired the gate no longer rejects"
         );
         assert_eq!(
@@ -2556,8 +2651,53 @@ mod tests {
         // crossing tick already ran before the send; only shard 1 can
         // pull it now).
         let ops = h.ops_drained().await;
-        let n = ops.iter().filter(|(c, op)| *c == conn && *op == 1001).count();
+        let n = ops.iter().filter(|(p, op)| *p == PlayerId(conn.0) && *op == 1001).count();
         assert_eq!(n, 1, "ops: {ops:?}");
+    }
+
+    /// Faz 2 lock — player identity is stable ACROSS SHARD MIGRATION: the
+    /// same human keeps ONE [`PlayerId`] from before the crossing to
+    /// after it, and the receiving shard ingests its input under that id
+    /// (the identity rides the `PlayerMigration`, exactly like the wire
+    /// id rides the entity state). Combined with the room-side resume
+    /// locks this pins the contract "resume/migration move the SESSION,
+    /// never the player".
+    #[tokio::test]
+    async fn player_identity_is_stable_across_migration() {
+        let mut h = Harness::new();
+        let conn = ConnectionId(1);
+        let pid = PlayerId(conn.0); // the test logic's minting policy
+        let (wire, actions, _out) = h.join(0, conn, 1).await;
+        // One action BEFORE the migration: ingested by shard 0 under pid.
+        h.act(&actions, conn, 1001).await;
+        h.tick().await;
+        // Walk right; cross into shard 1.
+        h.act(&actions, conn, 1000).await;
+        let mut crossed_at = None;
+        for _ in 0..30 {
+            h.tick().await;
+            if reported_out(&h.migrated, h.t, 0, wire) {
+                crossed_at = Some(h.t);
+                break;
+            }
+        }
+        assert!(crossed_at.is_some(), "no crossing");
+        // Let the receiving shard install the row and pull one more input.
+        h.tick().await;
+        h.act(&actions, conn, 1002).await;
+        h.tick().await;
+
+        // Every observed op — on EITHER side of the seam — belongs to the
+        // SAME stable player.
+        let ops = h.ops_drained().await;
+        assert!(
+            ops.contains(&(pid, 1001)) && ops.contains(&(pid, 1002)),
+            "input observed before AND after the migration: {ops:?}"
+        );
+        assert!(
+            ops.iter().all(|(p, _)| *p == pid),
+            "every action carries the SAME player id across migration: {ops:?}"
+        );
     }
 
     /// Required test 4 — the leave/migration race: a `Migrate` whose join
@@ -2593,6 +2733,7 @@ mod tests {
                     mode: 0,
                 },
                 player: Some(PlayerMigration {
+                    player: PlayerId(conn.0),
                     conn,
                     epoch: 1,
                     entity: wire,
@@ -2729,7 +2870,7 @@ mod tests {
         fn private_op(&self) -> u16 {
             0x7181
         }
-        fn group_of(&self, _w: &TWorld, _c: ConnectionId) -> Self::GroupKey {}
+        fn group_of(&self, _w: &TWorld, _p: PlayerId) -> Self::GroupKey {}
 
         fn snapshot(
             &mut self,
@@ -2757,15 +2898,18 @@ mod tests {
             true
         }
 
-        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> EntityId {
+        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> Admission {
             self.next_wire += 1;
             let x = (conn.0 % 20) as f32 - 10.0;
             w.ents.insert(self.next_wire, (x, 0.0, 0));
             self.dirty = true; // membership changed ⇒ must emit
-            self.next_wire
+            Admission {
+                player: PlayerId(conn.0),
+                entity: self.next_wire,
+            }
         }
 
-        fn on_leave(&mut self, _w: &mut TWorld, _conn: ConnectionId) {}
+        fn on_leave(&mut self, _w: &mut TWorld, _player: PlayerId) {}
         fn ingest(&mut self, _w: &mut TWorld, _c: &TickCtx, actions: &mut Vec<Action>) {
             actions.clear();
         }
@@ -2805,7 +2949,7 @@ mod tests {
             _w: &mut TWorld,
             _wire: u64,
             _state: TState,
-            _conn: Option<ConnectionId>,
+            _player: Option<PlayerId>,
         ) {
         }
         fn on_migrate_out(&mut self, _w: &mut TWorld, _wire: u64) {}

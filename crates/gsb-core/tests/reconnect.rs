@@ -38,12 +38,12 @@ use std::time::{Duration, Instant};
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{
-    Action, Detach, ExpireTo, GameLogic, ResumeFound, RoomActor, RoomConfig, RoomControl,
-    RoomLogic, TickCtx,
+    Action, Admission, Detach, ExpireTo, GameLogic, ResumeFound, RoomActor, RoomConfig,
+    RoomControl, RoomLogic, TickCtx,
 };
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardActor, ShardLogic};
 use gsb_core::ticker::{Ticker, TickInfo};
@@ -62,16 +62,17 @@ const SNAPSHOT_OP: u16 = 0x7500;
 
 #[derive(Debug, Clone, Copy)]
 enum Ledg {
-    Held(EntityId),
+    Held(PlayerId),
     /// A tombstone for an ended hold (the retention is game policy).
     Ended,
 }
 
 struct ParkLogic {
     next_id: u64,
-    conn_entity: HashMap<ConnectionId, EntityId>,
-    /// Per-connection detach policy (set by the test before the detach).
-    policy: HashMap<ConnectionId, Detach>,
+    player_entity: HashMap<PlayerId, EntityId>,
+    /// Per-player detach policy (set by the test before the detach; the
+    /// test identity policy is "the conn id doubles as the player id").
+    policy: HashMap<PlayerId, Detach>,
     /// Wildcard policy for connections without an explicit entry (used by
     /// the registry-driven tests, whose factory cannot know conn ids).
     hold_default: bool,
@@ -79,9 +80,9 @@ struct ParkLogic {
     ledger: HashMap<String, Ledg>,
     /// The `may_release` answer for combat-helds (flipped by the test).
     release_ok: bool,
-    /// Observed ingested ops: (conn, op) — proves input does or does not
-    /// flow.
-    ops: mpsc::Sender<(ConnectionId, u16)>,
+    /// Observed ingested ops: (player, op) — proves input does or does
+    /// not flow (and WHO it was attributed to).
+    ops: mpsc::Sender<(PlayerId, u16)>,
     /// External-request slots: each delegated request hands the TEST a
     /// oneshot the test fires whenever it wants (deterministic late
     /// completions).
@@ -89,11 +90,11 @@ struct ParkLogic {
 }
 
 impl ParkLogic {
-    fn new(ops: mpsc::Sender<(ConnectionId, u16)>) -> Self {
+    fn new(ops: mpsc::Sender<(PlayerId, u16)>) -> Self {
         let (slot_tx, _) = mpsc::channel(4);
         Self {
             next_id: 0,
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
             policy: HashMap::new(),
             hold_default: false,
             ledger: HashMap::new(),
@@ -114,7 +115,7 @@ impl GameLogic<()> for ParkLogic {
     fn private_op(&self) -> u16 {
         0x7501
     }
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
     fn snapshot(
         &mut self,
@@ -124,7 +125,7 @@ impl GameLogic<()> for ParkLogic {
         _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        let mut ids: Vec<EntityId> = self.conn_entity.values().copied().collect();
+        let mut ids: Vec<EntityId> = self.player_entity.values().copied().collect();
         ids.sort_unstable();
         for id in ids {
             out.extend_from_slice(&id.to_le_bytes());
@@ -132,22 +133,28 @@ impl GameLogic<()> for ParkLogic {
         true
     }
 
-    fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
         self.next_id += 1;
-        self.conn_entity.insert(conn, self.next_id);
-        self.next_id
+        // Test identity policy: the conn id doubles as the player id, so
+        // tests can address players by the conn they joined with.
+        let player = PlayerId(c.0);
+        self.player_entity.insert(player, self.next_id);
+        Admission {
+            player,
+            entity: self.next_id,
+        }
     }
 
-    fn on_leave(&mut self, _w: &mut (), conn: ConnectionId) {
-        self.conn_entity.remove(&conn);
+    fn on_leave(&mut self, _w: &mut (), player: PlayerId) {
+        self.player_entity.remove(&player);
     }
 
     // -- the reconnect surface -----------------------------------------
 
-    fn on_disconnect(&mut self, _w: &mut (), conn: ConnectionId, identity: &str) -> Detach {
+    fn on_disconnect(&mut self, _w: &mut (), player: PlayerId, identity: &str) -> Detach {
         let decision = self
             .policy
-            .get(&conn)
+            .get(&player)
             .copied()
             .or_else(|| {
                 self.hold_default.then(|| Detach::Hold {
@@ -157,18 +164,18 @@ impl GameLogic<()> for ParkLogic {
             })
             .unwrap_or(Detach::Despawn);
         if let Detach::Hold { .. } = decision
-            && let Some(e) = self.conn_entity.get(&conn)
+            && self.player_entity.contains_key(&player)
         {
-            self.ledger.insert(identity.to_string(), Ledg::Held(*e));
+            self.ledger.insert(identity.to_string(), Ledg::Held(player));
         }
         decision
     }
 
-    fn may_release(&mut self, _w: &mut (), _c: ConnectionId) -> bool {
+    fn may_release(&mut self, _w: &mut (), _p: PlayerId) -> bool {
         self.release_ok
     }
 
-    fn on_detach_expired(&mut self, _w: &mut (), _c: ConnectionId, _to: ExpireTo) {
+    fn on_detach_expired(&mut self, _w: &mut (), _p: PlayerId, _to: ExpireTo) {
         // An ended hold leaves its record ENDED (not deleted): this is what
         // makes a later resume provably STALE instead of merely unknown.
         // Retention is game policy; this demo policy keeps the tombstone.
@@ -181,7 +188,7 @@ impl GameLogic<()> for ParkLogic {
 
     fn resume_lookup(&self, _w: &(), identity: &str) -> ResumeFound {
         match self.ledger.get(identity) {
-            Some(Ledg::Held(e)) => ResumeFound::Held(*e),
+            Some(Ledg::Held(p)) => ResumeFound::Held(*p),
             Some(Ledg::Ended) => ResumeFound::Ended,
             None => ResumeFound::Never,
         }
@@ -191,22 +198,19 @@ impl GameLogic<()> for ParkLogic {
         &mut self,
         _w: &mut (),
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        _player: PlayerId,
         _entity: EntityId,
     ) {
-        // Consume the ledger entry; move the session bookkeeping to the
-        // new key (the seq/ack reset of DESIGN §14.2 rides along: the new
-        // session starts unnumbered).
+        // Consume the ledger entry. Nothing else to move: every table is
+        // keyed by the STABLE player id (Faz 2), which the resume did not
+        // change.
         self.ledger.remove(identity);
-        if let Some(e) = self.conn_entity.remove(&old) {
-            self.conn_entity.insert(new, e);
-        }
     }
 
     fn ingest(&mut self, _w: &mut (), _ctx: &TickCtx, actions: &mut Vec<Action>) {
         for a in actions.drain(..) {
-            let _ = self.ops.try_send((a.conn, a.op));
+            let _ = self.ops.try_send((a.player, a.op));
             // Test-only control op: clears the combat veto (delivered by a
             // LIVE session — a detached row's input is skipped by design).
             if a.op == 0xFFFF {
@@ -426,7 +430,7 @@ fn park_config(id: RoomId, cap: Option<usize>) -> RoomConfig {
     }
 }
 
-async fn drain_ops(ops: &mut mpsc::Receiver<(ConnectionId, u16)>) -> Vec<(ConnectionId, u16)> {
+async fn drain_ops(ops: &mut mpsc::Receiver<(PlayerId, u16)>) -> Vec<(PlayerId, u16)> {
     let mut v = Vec::new();
     while let Ok(x) = ops.try_recv() {
         v.push(x);
@@ -449,7 +453,7 @@ fn hold_forever() -> Detach {
 async fn disconnect_with_hold_keeps_entity_and_slot() {
     let (ops_tx, mut ops_rx) = mpsc::channel(64);
     let mut logic = ParkLogic::new(ops_tx.clone());
-    logic.policy.insert(ConnectionId(1), hold_forever());
+    logic.policy.insert(PlayerId(1), hold_forever());
     // Cap 2 = player + observer: the THIRD join attempt doubles as the
     // crisp slot proof while the park holds one of the two slots.
     let mut h = RoomH::new(park_config(RoomId(1), Some(2)), logic);
@@ -501,6 +505,7 @@ async fn disconnect_with_hold_keeps_entity_and_slot() {
     actions
         .send(Action {
             conn: ConnectionId(1),
+            player: PlayerId(1),
             op: 0x1111,
             payload: bytes::Bytes::new(),
         })
@@ -526,7 +531,7 @@ async fn disconnect_with_hold_keeps_entity_and_slot() {
 async fn resume_binds_new_channels_to_live_entity() {
     let (ops_tx, mut ops_rx) = mpsc::channel(64);
     let mut logic = ParkLogic::new(ops_tx.clone());
-    logic.policy.insert(ConnectionId(1), hold_forever());
+    logic.policy.insert(PlayerId(1), hold_forever());
     let mut h = RoomH::new(park_config(RoomId(2), None), logic);
 
     let (entity, _old_actions, mut out_rx) = h.join(ConnectionId(1)).await;
@@ -543,6 +548,7 @@ async fn resume_binds_new_channels_to_live_entity() {
     new_actions
         .send(Action {
             conn: ConnectionId(9),
+            player: PlayerId(9),
             op: 0x2222,
             payload: bytes::Bytes::new(),
         })
@@ -550,9 +556,18 @@ async fn resume_binds_new_channels_to_live_entity() {
         .unwrap();
     h.steps(2).await;
     let seen = drain_ops(&mut ops_rx).await;
+    // Faz 2: the input is pulled AND attributed to the SAME STABLE player
+    // the first session minted (PlayerId(1), from conn 1's join) — not to
+    // a new identity per connection. The wire id equality above and this
+    // attribution together are the resume contract.
     assert!(
-        seen.contains(&(ConnectionId(9), 0x2222)),
-        "post-swap input is pulled: {seen:?}"
+        seen.contains(&(PlayerId(1), 0x2222)),
+        "post-swap input is pulled, attributed to the SAME player the \
+         first session minted: {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|(p, _)| *p != PlayerId(1)),
+        "no other player exists in this room: {seen:?}"
     );
 
     // Broadcasts flow again; the world view (entity set) did not jump.
@@ -571,6 +586,120 @@ async fn resume_binds_new_channels_to_live_entity() {
 }
 
 // =====================================================================
+// Faz 2 locks — the binding table is the ingest authority, and the
+// player identity is stable across disconnect/resume cycles.
+// =====================================================================
+
+/// An action arriving under the OLD session's ConnectionId AFTER a
+/// resume is not ingested: the rebind removed the old binding row, and
+/// the binding is what translates `Action { conn }` at ingest. The new
+/// session's actions (same room, same tick) ARE ingested — under the
+/// SAME stable player id the first join minted.
+#[tokio::test]
+async fn actions_from_the_old_session_are_dropped_after_resume() {
+    let (ops_tx, mut ops_rx) = mpsc::channel(64);
+    let mut logic = ParkLogic::new(ops_tx.clone());
+    logic.policy.insert(PlayerId(1), hold_forever());
+    let mut h = RoomH::new(park_config(RoomId(43), None), logic);
+
+    // Session A: conn 1 joins (mints PlayerId(1)), then dies; conn 9
+    // resumes onto its row.
+    let (_entity, _old_actions, _out) = h.join(ConnectionId(1)).await;
+    h.detach(ConnectionId(1), _entity, "ana").await;
+    let (entity2, new_actions) = h
+        .resume(ConnectionId(9), 7, "ana")
+        .await
+        .expect("resume accepted");
+    assert_eq!(entity2, _entity, "wire id unchanged");
+
+    // One frame claiming the OLD conn and one claiming the NEW conn, in
+    // the same tick's pull (the new channel is the only live path — this
+    // is exactly how a stale/late frame would arrive).
+    new_actions
+        .send(Action {
+            conn: ConnectionId(1),
+            player: gsb_core::PlayerId(0), // placeholder: room stamps it
+            op: 0x1111,
+            payload: bytes::Bytes::new(),
+        })
+        .await
+        .unwrap();
+    new_actions
+        .send(Action {
+            conn: ConnectionId(9),
+            player: gsb_core::PlayerId(0),
+            op: 0x2222,
+            payload: bytes::Bytes::new(),
+        })
+        .await
+        .unwrap();
+    h.steps(2).await;
+
+    let seen = drain_ops(&mut ops_rx).await;
+    assert!(
+        !seen.iter().any(|(_, op)| *op == 0x1111),
+        "the old session's action must not reach the world: {seen:?}"
+    );
+    assert!(
+        seen.contains(&(PlayerId(1), 0x2222)),
+        "the new session's action flows, attributed to the stable \
+         player: {seen:?}"
+    );
+
+    h.shutdown().await;
+}
+
+/// PlayerId stability across REPEATED disconnect/resume cycles: every
+/// resumed session keeps minting actions under the identity minted at
+/// the FIRST join (and the wire id stays constant too). This is the
+/// room-side half of the stability contract; the migration half lives
+/// in the shard tests (`player_identity_is_stable_across_migration`).
+#[tokio::test]
+async fn player_identity_stable_across_disconnect_resume_cycles() {
+    let (ops_tx, mut ops_rx) = mpsc::channel(64);
+    let mut logic = ParkLogic::new(ops_tx.clone());
+    logic.policy.insert(PlayerId(1), hold_forever());
+    let mut h = RoomH::new(park_config(RoomId(44), None), logic);
+
+    let (entity0, _a, _o) = h.join(ConnectionId(1)).await;
+    for cycle in [2u64, 3, 4] {
+        h.detach(ConnectionId(cycle - 1), entity0, "ana").await;
+        let (entity, actions) = h
+            .resume(ConnectionId(cycle), cycle, "ana")
+            .await
+            .expect("resume accepted");
+        assert_eq!(entity, entity0, "wire id stable across cycle {cycle}");
+
+        actions
+            .send(Action {
+                conn: ConnectionId(cycle),
+                player: gsb_core::PlayerId(0),
+                op: 0x3300 + cycle as u16,
+                payload: bytes::Bytes::new(),
+            })
+            .await
+            .unwrap();
+        h.steps(2).await;
+    }
+
+    // Every cycle's input landed under ONE AND THE SAME player id — the
+    // one minted at the first join — across three sessions.
+    let seen = drain_ops(&mut ops_rx).await;
+    for op in [0x3302u16, 0x3303, 0x3304] {
+        assert!(
+            seen.contains(&(PlayerId(1), op)),
+            "cycle op {op:#x} ingested under the stable player: {seen:?}"
+        );
+    }
+    assert!(
+        seen.iter().all(|(p, _)| *p == PlayerId(1)),
+        "no identity churn across resumes: {seen:?}"
+    );
+
+    h.shutdown().await;
+}
+
+// =====================================================================
 // 4 — §12.4 stale_resume_rejected_after_expire
 // =====================================================================
 
@@ -579,7 +708,7 @@ async fn stale_resume_rejected_after_expire() {
     let (ops_tx, _ops) = mpsc::channel(64);
     let mut logic = ParkLogic::new(ops_tx);
     logic.policy.insert(
-        ConnectionId(1),
+        PlayerId(1),
         Detach::Hold {
             grace: Some(Duration::from_millis(80)),
             to: ExpireTo::Despawn,
@@ -624,7 +753,7 @@ async fn grace_expiry_falls_back_to_despawn() {
     let (ops_tx, _ops) = mpsc::channel(64);
     let mut logic = ParkLogic::new(ops_tx);
     logic.policy.insert(
-        ConnectionId(1),
+        PlayerId(1),
         Detach::Hold {
             grace: Some(Duration::from_millis(80)),
             to: ExpireTo::Despawn,
@@ -694,7 +823,7 @@ async fn grace_expiry_ai_handover_keeps_entity_bot_fed_stub() {
     let (ops_tx, _ops) = mpsc::channel(64);
     let mut logic = ParkLogic::new(ops_tx);
     logic.policy.insert(
-        ConnectionId(1),
+        PlayerId(1),
         Detach::Hold {
             grace: Some(Duration::from_millis(80)),
             to: ExpireTo::AiHandover,
@@ -735,7 +864,7 @@ async fn may_release_veto_extends_hold_until_cleared() {
     let mut logic = ParkLogic::new(ops_tx.clone());
     // Combat-held: NO deadline — only `may_release` ends it (§14.4).
     logic.policy.insert(
-        ConnectionId(1),
+        PlayerId(1),
         Detach::Hold {
             grace: None,
             to: ExpireTo::Despawn,
@@ -759,6 +888,7 @@ async fn may_release_veto_extends_hold_until_cleared() {
     let (_e2, a2, _o2) = h.join(ConnectionId(2)).await;
     a2.send(Action {
         conn: ConnectionId(2),
+        player: PlayerId(2),
         op: 0xFFFF,
         payload: bytes::Bytes::new(),
     })
@@ -1062,7 +1192,7 @@ impl GameLogic<()> for PanicAfterJoin {
     fn private_op(&self) -> u16 {
         0x7601
     }
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
     fn snapshot(
         &mut self,
         _w: &mut (),
@@ -1073,11 +1203,14 @@ impl GameLogic<()> for PanicAfterJoin {
     ) -> bool {
         false
     }
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
         self.joined = true;
-        1
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {
         a.clear();
     }
@@ -1154,17 +1287,17 @@ mod shard_test {
 
     #[derive(Default)]
     pub struct SWorld {
-        pub ents: HashMap<u64, ConnectionId>,
+        pub ents: HashMap<u64, PlayerId>,
     }
 
     enum SLedg {
-        Held(u64),
+        Held(PlayerId),
     }
 
     pub struct SLogic {
         index: usize,
         serial: u64,
-        conn_ent: HashMap<ConnectionId, u64>,
+        player_ent: HashMap<PlayerId, u64>,
         hold_on_disconnect: bool,
         ledger: HashMap<String, SLedg>,
     }
@@ -1177,7 +1310,7 @@ mod shard_test {
         fn private_op(&self) -> u16 {
             0x7701
         }
-        fn group_of(&self, _w: &SWorld, _c: ConnectionId) -> Self::GroupKey {}
+        fn group_of(&self, _w: &SWorld, _p: PlayerId) -> Self::GroupKey {}
         fn snapshot(
             &mut self,
             _w: &mut SWorld,
@@ -1188,15 +1321,19 @@ mod shard_test {
         ) -> bool {
             false
         }
-        fn on_join(&mut self, w: &mut SWorld, conn: ConnectionId) -> EntityId {
+        fn on_join(&mut self, w: &mut SWorld, conn: ConnectionId) -> Admission {
             self.serial += 1;
             let wire = self.index as u64 * 1000 + self.serial;
-            w.ents.insert(wire, conn);
-            self.conn_ent.insert(conn, wire);
-            wire
+            // Test identity policy: the conn id doubles as the player id —
+            // which makes "same player after resume/migration" directly
+            // observable as a stable key.
+            let player = PlayerId(conn.0);
+            w.ents.insert(wire, player);
+            self.player_ent.insert(player, wire);
+            Admission { player, entity: wire }
         }
-        fn on_leave(&mut self, w: &mut SWorld, conn: ConnectionId) {
-            if let Some(wire) = self.conn_ent.remove(&conn) {
+        fn on_leave(&mut self, w: &mut SWorld, player: PlayerId) {
+            if let Some(wire) = self.player_ent.remove(&player) {
                 w.ents.remove(&wire);
             }
         }
@@ -1205,12 +1342,9 @@ mod shard_test {
         }
         fn update(&mut self, _w: &mut SWorld, _c: &TickCtx) {}
 
-        fn on_disconnect(&mut self, _w: &mut SWorld, conn: ConnectionId, identity: &str) -> Detach {
-            if self.hold_on_disconnect
-                && let Some(wire) = self.conn_ent.get(&conn)
-            {
-                self.ledger
-                    .insert(identity.to_string(), SLedg::Held(*wire));
+        fn on_disconnect(&mut self, _w: &mut SWorld, player: PlayerId, identity: &str) -> Detach {
+            if self.hold_on_disconnect && self.player_ent.contains_key(&player) {
+                self.ledger.insert(identity.to_string(), SLedg::Held(player));
                 return Detach::Hold {
                     grace: Some(Duration::from_secs(3600)),
                     to: ExpireTo::Despawn,
@@ -1220,7 +1354,7 @@ mod shard_test {
         }
         fn resume_lookup(&self, _w: &SWorld, identity: &str) -> ResumeFound {
             match self.ledger.get(identity) {
-                Some(SLedg::Held(wire)) => ResumeFound::Held(*wire),
+                Some(SLedg::Held(p)) => ResumeFound::Held(*p),
                 None => ResumeFound::Never,
             }
         }
@@ -1228,14 +1362,13 @@ mod shard_test {
             &mut self,
             _w: &mut SWorld,
             identity: &str,
-            old: ConnectionId,
-            new: ConnectionId,
+            _conn: ConnectionId,
+            _player: PlayerId,
             _entity: EntityId,
         ) {
+            // Only the ledger entry is consumed; the player-keyed tables
+            // keep their keys across the resume (Faz 2).
             self.ledger.remove(identity);
-            if let Some(wire) = self.conn_ent.remove(&old) {
-                self.conn_ent.insert(new, wire);
-            }
         }
     }
 
@@ -1269,7 +1402,7 @@ mod shard_test {
             _w: &mut SWorld,
             _wire: u64,
             _state: (),
-            _conn: Option<ConnectionId>,
+            _player: Option<PlayerId>,
         ) {
         }
         fn on_migrate_out(&mut self, _w: &mut SWorld, _wire: u64) {}
@@ -1308,7 +1441,7 @@ mod shard_test {
             let mk_logic = |index: usize| SLogic {
                 index,
                 serial: 0,
-                conn_ent: HashMap::new(),
+                player_ent: HashMap::new(),
                 hold_on_disconnect: hold,
                 ledger: HashMap::new(),
             };
@@ -1480,7 +1613,7 @@ async fn resume_with_pending_rpc_late_report_is_harmless() {
     let (slots_tx, mut slots_rx) =
         mpsc::channel::<oneshot::Sender<Result<bytes::Bytes, String>>>(4);
     let mut logic = ParkLogic::new(ops_tx);
-    logic.policy.insert(ConnectionId(1), hold_forever());
+    logic.policy.insert(PlayerId(1), hold_forever());
     logic.req_slots = slots_tx;
     let mut h = RoomH::new(
         RoomConfig {
@@ -1501,6 +1634,7 @@ async fn resume_with_pending_rpc_late_report_is_harmless() {
     actions
         .send(Action {
             conn: ConnectionId(1),
+            player: PlayerId(1),
             op: gsb_protocol::op::base::RPC_REQ,
             payload: env.encode_to_vec().into(),
         })

@@ -5,8 +5,11 @@
 //! A room owns one bevy [`World`] (exclusively — the room actor is the only
 //! borrower) plus a small amount of bookkeeping:
 //!
-//! - `conn_entity`: which entity belongs to which connection;
-//! - `next_wire_id`: the next wire identity to hand out (see below);
+//! - `player_entity`: which entity belongs to which player (keyed by the
+//!   STABLE [`gsb_core::PlayerId`] — Faz 2 — so the mapping survives a
+//!   resume unchanged);
+//! - `next_player_id` / `next_wire_id`: the next stable player identity
+//!   and the next wire identity to hand out (see below);
 //! - `last`: the wire content (wire id → truncated `(x, y)`) of the
 //!   **last emitted** snapshot of the room's single group
 //!   (`GroupKey = ()`).
@@ -82,8 +85,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World};
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_ecs::SystemRunner;
 use prost::Message;
@@ -101,7 +104,14 @@ pub const DEFAULT_SPAWN_HALF: f32 = 50.0;
 /// The demo room: one moving entity per player, free 2D movement.
 pub struct DemoRoom {
     runner: SystemRunner,
-    conn_entity: HashMap<ConnectionId, Entity>,
+    /// Player → entity (Faz 2: keyed by the STABLE player identity — the
+    /// mapping survives resume unchanged; only a join/leave touches it).
+    player_entity: HashMap<PlayerId, Entity>,
+    /// The player-identity counter (the demo's minting policy for
+    /// [`PlayerId`]): monotonic, never reused within the room's
+    /// lifetime. Stability across resume comes from the park ledger
+    /// carrying the id, not from re-minting.
+    next_player_id: u64,
     /// The room's wire-identity counter (see module docs, "Wire identity").
     /// Monotonic; a value is never re-used within the room's lifetime. The
     /// **only** writer is [`crate::common::next_serial`] — the single
@@ -123,12 +133,12 @@ pub struct DemoRoom {
     /// requires the ledger to be keyed by group (see module docs and
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
-    /// Per-connection input sequence state (high-water mark + last ack;
+    /// Per-player input sequence state (high-water mark + last ack;
     /// see `crate::common::ingest` / `emit_ack`). Strategy-independent:
     /// every room numbers and acknowledges its clients' input the same
     /// way (the client's prediction reconciliation does not care which
     /// visibility strategy the server picked).
-    input: HashMap<ConnectionId, crate::common::InputState>,
+    input: HashMap<PlayerId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -169,7 +179,8 @@ impl DemoRoom {
     pub fn with_spawn_half(half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
+            next_player_id: 0,
             next_wire_id: 0,
             spawn_half: half.max(1.0),
             last: HashMap::new(),
@@ -238,7 +249,7 @@ impl GameLogic<World> for DemoRoom {
         op::PRIVATE
     }
 
-    fn group_of(&self, _world: &World, _conn: ConnectionId) -> Self::GroupKey {
+    fn group_of(&self, _world: &World, _player: PlayerId) -> Self::GroupKey {
         Default::default()
     }
 
@@ -322,17 +333,19 @@ impl GameLogic<World> for DemoRoom {
         n
     }
 
-    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         // Shared spawn path (`common::on_join`): deterministic spawn point
-        // (this room's spawn map, see the `spawn_half` field), fresh wire
-        // identity through the room's single minting point,
-        // connection→entity table update. The same value is returned to
-        // the joiner in `JOIN_ROOM_RESULT`, so both paths share one space.
-        // No spawn event: membership is expressed by presence in the next
-        // snapshot, which now includes the new entity (the join happened in
-        // the control phase, before this tick's broadcast).
+        // (this room's spawn map, see the `spawn_half` field), a fresh
+        // stable player identity + wire identity through their minting
+        // counters, and the player→entity table update. The entity value
+        // is also returned to the joiner in `JOIN_ROOM_RESULT`, so both
+        // paths share one space. No spawn event: membership is expressed
+        // by presence in the next snapshot, which now includes the new
+        // entity (the join happened in the control phase, before this
+        // tick's broadcast).
         crate::common::on_join(
-            &mut self.conn_entity,
+            &mut self.player_entity,
+            &mut self.next_player_id,
             &mut self.next_wire_id,
             self.spawn_half,
             world,
@@ -341,8 +354,8 @@ impl GameLogic<World> for DemoRoom {
         )
     }
 
-    fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
     // -- the disconnect policy (docs/RECONNECT.md §3/§5/§9; the hook
@@ -351,12 +364,12 @@ impl GameLogic<World> for DemoRoom {
     fn on_disconnect(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         identity: &str,
     ) -> Detach {
         crate::common::park_on_disconnect(
-            &self.conn_entity,
-            conn,
+            &self.player_entity,
+            player,
             identity,
             &self.park,
             &mut self.park_ledger,
@@ -366,10 +379,10 @@ impl GameLogic<World> for DemoRoom {
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+        crate::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
@@ -380,17 +393,17 @@ impl GameLogic<World> for DemoRoom {
         &mut self,
         _world: &mut World,
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        player: PlayerId,
         _entity: EntityId,
     ) {
+        // Faz 2 shrink: ledger consume + seq/ack reset only — the
+        // player-keyed tables kept their keys across the disconnect.
         crate::common::park_resume(
             &mut self.park_ledger,
-            &mut self.conn_entity,
             &mut self.input,
             identity,
-            old,
-            new,
+            player,
         );
     }
 
@@ -403,12 +416,12 @@ impl GameLogic<World> for DemoRoom {
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
-                .map(|e| (e.conn, e.entity)),
+                .map(|e| (e.player, e.entity)),
             world,
             ctx,
             actions,
         );
-        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (the group snapshot is
@@ -418,12 +431,12 @@ impl GameLogic<World> for DemoRoom {
     fn private(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         _group: &(),
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, conn, responses, out)
+        crate::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -462,7 +475,7 @@ impl RoomLogic<World> for DemoRoom {
                         "undecodable AbilityUse payload".into(),
                     ));
                 };
-                let Some(entity) = self.conn_entity.get(&req.conn).copied() else {
+                let Some(entity) = self.player_entity.get(&req.player).copied() else {
                     return Some(RequestDecision::Reject(
                         "no entity for this connection".into(),
                     ));
@@ -588,15 +601,15 @@ mod tests {
     fn snapshot_emits_on_plain_position_write() {
         let mut world = World::new();
         let mut room = DemoRoom::new();
-        let wire_id = room.on_join(&mut world, ConnectionId(1));
+        let wire_id = room.on_join(&mut world, ConnectionId(1)).entity;
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
         assert_eq!(wire_id, 1, "first entity gets wire id 1");
 
-        // The bevy handle is the room's business (conn_entity); the join
-        // reply carried the wire id, not the bevy bits.
-        let e = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        // The bevy handle is the room's business (player_entity); the
+        // join reply carried the wire id, not the bevy bits.
+        let e = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(e).insert(Position { x: 42.0, y: -7.0 });
 
         let mut out2 = bytes::BytesMut::new();
@@ -642,26 +655,28 @@ mod tests {
         let (mut index_128, mut gen_128) = (None, 0u32);
         for i in 1..=129u64 {
             let conn = ConnectionId(i);
-            let wire_id = room.on_join(&mut world, conn);
+            let wire_id = room.on_join(&mut world, conn).entity;
             assert!(
                 !wire_ids.contains(&wire_id),
                 "wire id {wire_id} handed out twice"
             );
             wire_ids.push(wire_id);
-            let e = *room.conn_entity.get(&conn).unwrap();
+            // The n-th sequential join owns PlayerId(n) (the counter).
+            let e = *room.player_entity.get(&PlayerId(i)).unwrap();
             if i == 128 {
                 index_128 = Some(e.index_u32());
                 gen_128 = e.generation().to_bits();
             }
-            room.on_leave(&mut world, conn);
+            room.on_leave(&mut world, PlayerId(i));
         }
 
         // The next join must recycle a bevy slot (129 frees overflow the
         // 128-slot local free buffer): exactly the condition under which
         // a non-unique wire identity would break the invariant.
         let rejoiner = ConnectionId(1000);
-        let wire_id = room.on_join(&mut world, rejoiner);
-        let e = *room.conn_entity.get(&rejoiner).unwrap();
+        let wire_id = room.on_join(&mut world, rejoiner).entity;
+        // The 130th sequential join owns PlayerId(130).
+        let e = *room.player_entity.get(&PlayerId(130)).unwrap();
         assert_eq!(
             e.index_u32(),
             index_128.expect("recorded above"),
@@ -797,7 +812,7 @@ mod tests {
         assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
 
         // A position write with no content change...
-        let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity = *room.player_entity.get(&PlayerId(1)).unwrap();
         let pos = world
             .entity(entity)
             .get::<Position>()
@@ -811,7 +826,7 @@ mod tests {
         );
 
         // ...and a leave is a wire-content change.
-        room.on_leave(&mut world, ConnectionId(1));
+        room.on_leave(&mut world, PlayerId(1));
         let mut out3 = bytes::BytesMut::new();
         assert!(
             room.snapshot(&mut world, &ctx, &(), &[], &mut out3),

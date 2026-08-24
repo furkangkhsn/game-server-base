@@ -295,6 +295,7 @@ async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) 
     let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
+            player: gsb_core::PlayerId(conn.0),
             conn,
             op: op::MOVE_TO,
             payload: Bytes::from(msg.encode_to_vec()),

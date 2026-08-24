@@ -191,6 +191,7 @@ async fn late_joiner_receives_full_world_snapshot() {
     a_actions
         .send(Action {
             conn: c_a,
+            player: gsb_core::PlayerId(c_a.0),
             op: op::MOVE_TO,
             payload: Bytes::from(move_to.encode_to_vec()),
         })
@@ -277,6 +278,7 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
     a_actions
         .send(Action {
             conn: c_a,
+            player: gsb_core::PlayerId(c_a.0),
             op: op::MOVE_TO,
             payload: Bytes::from(move_to.encode_to_vec()),
         })

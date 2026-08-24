@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
@@ -30,7 +30,7 @@ const HZ: f64 = 60.0;
 /// count changes (a membership change is a change, per the room contract).
 struct SeqLogic {
     next: u64,
-    conn_entity: HashMap<ConnectionId, EntityId>,
+    conn_entity: HashMap<PlayerId, EntityId>,
     last_count: usize,
 }
 
@@ -57,7 +57,7 @@ impl GameLogic<()> for SeqLogic {
         COUNT_OP + 1
     }
 
-    fn group_of(&self, _w: &(), _conn: ConnectionId) -> Self::GroupKey {
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {
         Default::default()
     }
 
@@ -78,14 +78,19 @@ impl GameLogic<()> for SeqLogic {
         true
     }
 
-    fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> Admission {
         self.next += 1;
-        self.conn_entity.insert(conn, self.next);
-        self.next
+        // Test identity policy: the conn id doubles as the player id.
+        let player = PlayerId(conn.0);
+        self.conn_entity.insert(player, self.next);
+        Admission {
+            player,
+            entity: self.next,
+        }
     }
 
-    fn on_leave(&mut self, _w: &mut (), conn: ConnectionId) {
-        self.conn_entity.remove(&conn);
+    fn on_leave(&mut self, _w: &mut (), player: PlayerId) {
+        self.conn_entity.remove(&player);
     }
 
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, actions: &mut Vec<Action>) {

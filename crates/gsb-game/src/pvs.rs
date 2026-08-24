@@ -87,8 +87,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use bevy_ecs::prelude::{Entity, World};
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -183,8 +183,12 @@ fn sector_of(pos: Position) -> Sector {
 /// "no change" ledger.
 pub struct SectorRoom {
     runner: SystemRunner,
-    /// Which entity belongs to which connection.
-    conn_entity: HashMap<ConnectionId, Entity>,
+    /// Which entity belongs to which player (Faz 2: keyed by the STABLE
+    /// player identity — the mapping survives resume unchanged).
+    player_entity: HashMap<PlayerId, Entity>,
+    /// The player-identity counter (the demo's [`PlayerId`] minting
+    /// policy); monotonic, never reused within the room's lifetime.
+    next_player_id: u64,
     /// The disconnect-park policy + ledger (see `crate::common` and
     /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
     park: crate::common::ParkPolicy,
@@ -208,9 +212,9 @@ pub struct SectorRoom {
     /// [`VISIBLE_FROM`] says are visible from it, assembled by reference
     /// without re-querying the world.
     buckets: HashMap<Sector, Vec<(u64, i32, i32)>>,
-    /// Per-connection input sequence state (strategy-independent; see
+    /// Per-player input sequence state (strategy-independent; see
     /// `crate::common::ingest` / `emit_ack`).
-    input: HashMap<ConnectionId, crate::common::InputState>,
+    input: HashMap<PlayerId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -236,7 +240,8 @@ impl SectorRoom {
     pub fn with_spawn_half(half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
+            next_player_id: 0,
             park: crate::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             next_wire_id: 0,
@@ -272,8 +277,8 @@ impl GameLogic<World> for SectorRoom {
     /// The connection's group is the sector its entity is in (re-evaluated
     /// every tick by the room — a crossing player changes sector and thus
     /// group, and starts receiving the new sector's snapshot).
-    fn group_of(&self, world: &World, conn: ConnectionId) -> Sector {
-        let Some(&entity) = self.conn_entity.get(&conn) else {
+    fn group_of(&self, world: &World, player: PlayerId) -> Sector {
+        let Some(&entity) = self.player_entity.get(&player) else {
             return Sector(SECTOR_OUT);
         };
         let pos = world.entity(entity).get::<Position>().copied().unwrap_or_default();
@@ -336,9 +341,10 @@ impl GameLogic<World> for SectorRoom {
         true
     }
 
-    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         crate::common::on_join(
-            &mut self.conn_entity,
+            &mut self.player_entity,
+            &mut self.next_player_id,
             &mut self.next_wire_id,
             self.spawn_half,
             world,
@@ -347,8 +353,8 @@ impl GameLogic<World> for SectorRoom {
         )
     }
 
-    fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
     // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
@@ -357,12 +363,12 @@ impl GameLogic<World> for SectorRoom {
     fn on_disconnect(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         identity: &str,
     ) -> Detach {
         crate::common::park_on_disconnect(
-            &self.conn_entity,
-            conn,
+            &self.player_entity,
+            player,
             identity,
             &self.park,
             &mut self.park_ledger,
@@ -372,10 +378,10 @@ impl GameLogic<World> for SectorRoom {
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+        crate::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
@@ -386,18 +392,12 @@ impl GameLogic<World> for SectorRoom {
         &mut self,
         _world: &mut World,
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        player: PlayerId,
         _entity: EntityId,
     ) {
-        crate::common::park_resume(
-            &mut self.park_ledger,
-            &mut self.conn_entity,
-            &mut self.input,
-            identity,
-            old,
-            new,
-        );
+        // Faz 2 shrink: ledger consume + seq/ack reset only.
+        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -405,24 +405,24 @@ impl GameLogic<World> for SectorRoom {
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
-                .map(|e| (e.conn, e.entity)),
+                .map(|e| (e.player, e.entity)),
             world,
             ctx,
             actions,
         );
-        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (see `DemoRoom::private`).
     fn private(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         _group: &Sector,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, conn, responses, out)
+        crate::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -486,10 +486,10 @@ mod tests {
     /// Join a player (wire id assigned) and move its entity to an exact
     /// position for a deterministic sector placement. Returns the wire id.
     fn place(world: &mut World, room: &mut SectorRoom, conn: ConnectionId, x: f32, y: f32) -> u64 {
-        let wire = room.on_join(world, conn);
-        let entity = *room.conn_entity.get(&conn).expect("conn registered");
+        let admission = room.on_join(world, conn);
+        let entity = *room.player_entity.get(&admission.player).expect("registered");
         world.entity_mut(entity).insert(Position { x, y });
-        wire
+        admission.entity
     }
 
     fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
@@ -604,7 +604,7 @@ mod tests {
         assert!(snap_ids(&out_a).contains(&p1));
 
         // P1 moves into sector C (x <= -10, linked with A, NOT with B).
-        let entity_p1 = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity_p1 = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(entity_p1).insert(Position { x: -20.0, y: 25.0 });
         room.update(&mut world, &ctx(2));
 
@@ -667,7 +667,7 @@ mod tests {
         assert!(!room.snapshot(&mut world, &ctx(2), &sector, &[], &mut out2), "static snapshot silent");
         assert!(out2.is_empty(), "no bytes written on silence");
 
-        let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity = *room.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(entity).insert(Position { x: 7.0, y: 19.0 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();

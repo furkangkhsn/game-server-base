@@ -1501,7 +1501,7 @@ mod tests {
         fn private_op(&self) -> u16 {
             0x7201
         }
-        fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+        fn group_of(&self, _w: &(), _p: crate::id::PlayerId) -> Self::GroupKey {}
         fn snapshot(
             &mut self,
             _w: &mut (),
@@ -1513,10 +1513,13 @@ mod tests {
             out.extend_from_slice(b"x");
             true
         }
-        fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> crate::id::EntityId {
-            1
+        fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> crate::room::Admission {
+            crate::room::Admission {
+                player: crate::id::PlayerId(c.0),
+                entity: 1,
+            }
         }
-        fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+        fn on_leave(&mut self, _w: &mut (), _p: crate::id::PlayerId) {}
         fn ingest(&mut self, _w: &mut (), _c: &crate::room::TickCtx, a: &mut Vec<crate::room::Action>) {
             a.clear();
         }

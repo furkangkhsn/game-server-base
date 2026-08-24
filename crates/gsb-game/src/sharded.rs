@@ -51,8 +51,8 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Entity, World};
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
 use prost::Message;
@@ -82,17 +82,19 @@ pub struct ShardedRoomState {
 }
 
 /// One shard-side park-ledger entry / migration-carried record. Keyed by
-/// identity in the ledger; carried by wire inside [`ShardedRoomState`]
-/// because the wire id is what survives migrations.
+/// identity in the ledger; carried inside [`ShardedRoomState`] because
+/// that is what survives migrations.
 #[derive(Debug, Clone)]
 pub struct ShardParkRecord {
     /// The resume key of the parked session.
     pub identity: String,
-    /// The dead session's connection id (the bot synthesizes under it).
-    pub conn: ConnectionId,
+    /// The parked session's STABLE player identity (Faz 2): what
+    /// `resume_lookup` answers (the core finds its row by one lookup)
+    /// and what the bot synthesizes input under. Travels with the record
+    /// across migrations, so the identity is stable end to end.
+    pub player: PlayerId,
     /// The parked entity's wire id — stable across migrations, so it is
-    /// what `resume_lookup` answers and what the bot resolves through
-    /// this shard's wire table.
+    /// what the bot resolves through this shard's wire table.
     pub wire: u64,
     /// Latched at AI-handover expiry: the bot owns the entity.
     pub bot: bool,
@@ -153,8 +155,9 @@ pub struct ShardedRoom {
     /// order (west, east, north, south — the core sends border/migrate to
     /// exactly these).
     neighbors: Vec<usize>,
-    /// Player connection → entity (this shard's players).
-    conn_entity: HashMap<ConnectionId, Entity>,
+    /// Player → entity (this shard's players; Faz 2: keyed by the STABLE
+    /// player identity, which survives resume AND migration unchanged).
+    player_entity: HashMap<PlayerId, Entity>,
     /// The disconnect-park policy (see `crate::common`; RECONNECT §3).
     park: crate::common::ParkPolicy,
     /// The park ledger of THIS shard's parked players (§4: it lives in
@@ -162,12 +165,15 @@ pub struct ShardedRoom {
     /// [`ShardedRoomState`], so a detached entity crossing a seam is
     /// parked on the receiving shard, never stranded on the old one).
     park_ledger: HashMap<String, ShardParkRecord>,
-    /// Entity → player connection (only entities owned by a player).
-    entity_conn: HashMap<Entity, ConnectionId>,
+    /// Entity → owning player (only entities owned by a player).
+    entity_player: HashMap<Entity, PlayerId>,
     /// Wire id → entity (every entity, for migrate-out despawn).
     wire_entity: HashMap<u64, Entity>,
     /// How many identities this shard has minted (the range is
-    /// `index * SHARD_SERIAL_RANGE + serial_used`).
+    /// `index * SHARD_SERIAL_RANGE + serial_used`). BOTH identity spaces
+    /// draw from this one counter — wire ids AND stable player ids — so
+    /// the core's range-exhaustion guard stays exact over everything the
+    /// range backs.
     serial_used: u64,
     /// The wire ids this shard currently owns, kept in sync on every
     /// mutation (join/leave/migrate-in/out). `own_wires` takes `&World`
@@ -189,11 +195,11 @@ pub struct ShardedRoom {
     last: HashMap<u64, (i32, i32)>,
     /// Entity records encoded during the most recent broadcast phase.
     encoded: u64,
-    /// Per-connection input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_ack`). The connection stays bound
-    /// to this shard even if its entity migrates (its input is routed
+    /// Per-player input sequence state (strategy-independent; see
+    /// `crate::common::ingest` / `emit_ack`). The session stays bound to
+    /// this shard even if its entity migrates (its input is routed
     /// through this shard's room), so the session lives here.
-    input: HashMap<ConnectionId, crate::common::InputState>,
+    input: HashMap<PlayerId, crate::common::InputState>,
 }
 
 impl ShardedRoom {
@@ -229,10 +235,10 @@ impl ShardedRoom {
             cell_h,
             border: (cell_w.min(cell_h)) / 4.0,
             neighbors,
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
             park: crate::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            entity_conn: HashMap::new(),
+            entity_player: HashMap::new(),
             wire_entity: HashMap::new(),
             serial_used: 0,
             own_wires: HashSet::new(),
@@ -262,10 +268,18 @@ impl ShardedRoom {
         (x0, x0 + self.cell_w, y0, y0 + self.cell_h)
     }
 
-    /// Mint the next wire id from this shard's disjoint range.
+    /// Mint the next identity from this shard's disjoint range (both
+    /// wire ids and stable player ids draw from the ONE counter — see
+    /// the `serial_used` field docs).
     fn mint(&mut self) -> u64 {
         self.serial_used += 1;
         self.index as u64 * SHARD_SERIAL_RANGE + self.serial_used
+    }
+
+    /// Mint the next STABLE player identity (Faz 2): range-partitioned
+    /// like the wire ids, so two shards never mint the same player.
+    fn mint_player(&mut self) -> PlayerId {
+        PlayerId(self.mint())
     }
 
     /// Whether the (truncated) position `(x, y)` lies in the border frame
@@ -298,7 +312,7 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     /// One group per shard (see module docs, "Group key").
-    fn group_of(&self, _world: &World, _conn: ConnectionId) -> Self::GroupKey {
+    fn group_of(&self, _world: &World, _player: PlayerId) -> Self::GroupKey {
         Default::default()
     }
 
@@ -379,8 +393,13 @@ impl GameLogic<World> for ShardedRoom {
         n
     }
 
-    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        // The spawn point derives from the TRANSPORT session id (as it
+        // always has — the load generator's home distribution pairs with
+        // it); the stable player identity comes from this shard's
+        // range-partitioned counter.
         let (x, y) = spawn_pos(conn, self.half);
+        let player = self.mint_player();
         let wire = self.mint();
         let entity = world
             .spawn((
@@ -389,24 +408,24 @@ impl GameLogic<World> for ShardedRoom {
                 WireId::new(wire),
             ))
             .id();
-        self.conn_entity.insert(conn, entity);
-        self.entity_conn.insert(entity, conn);
+        self.player_entity.insert(player, entity);
+        self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
-        self.input.insert(conn, crate::common::InputState::default());
-        wire
+        self.input.insert(player, crate::common::InputState::default());
+        Admission { player, entity: wire }
     }
 
-    fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        if let Some(entity) = self.conn_entity.remove(&conn)
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        if let Some(entity) = self.player_entity.remove(&player)
             && world.get_entity(entity).is_ok()
         {
             if let Some(wire) = world.get::<WireId>(entity).copied() {
                 self.wire_entity.remove(&wire.get());
                 self.own_wires.remove(&wire.get());
             }
-            self.entity_conn.remove(&entity);
-            self.input.remove(&conn);
+            self.entity_player.remove(&entity);
+            self.input.remove(&player);
             world.despawn(entity);
         }
     }
@@ -419,9 +438,9 @@ impl GameLogic<World> for ShardedRoom {
             .park_ledger
             .values()
             .filter(|e| e.bot)
-            .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.conn, en)));
+            .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.player, en)));
         crate::common::synthesize_bot_moves(bots, world, ctx, actions);
-        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
@@ -432,13 +451,13 @@ impl GameLogic<World> for ShardedRoom {
     fn on_disconnect(
         &mut self,
         world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         identity: &str,
     ) -> Detach {
         if self.park.grace.is_zero() || identity.is_empty() {
             return Detach::Despawn;
         }
-        match self.conn_entity.get(&conn) {
+        match self.player_entity.get(&player) {
             Some(&entity) => {
                 let wire = world
                     .entity(entity)
@@ -450,7 +469,7 @@ impl GameLogic<World> for ShardedRoom {
                         identity.to_string(),
                         ShardParkRecord {
                             identity: identity.to_string(),
-                            conn,
+                            player,
                             wire,
                             bot: false,
                         },
@@ -468,15 +487,15 @@ impl GameLogic<World> for ShardedRoom {
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
         match to {
             gsb_core::room::ExpireTo::Despawn => {
-                self.park_ledger.retain(|_, e| e.conn != conn);
+                self.park_ledger.retain(|_, e| e.player != player);
             }
             gsb_core::room::ExpireTo::AiHandover => {
-                for e in self.park_ledger.values_mut().filter(|e| e.conn == conn) {
+                for e in self.park_ledger.values_mut().filter(|e| e.player == player) {
                     e.bot = true;
                 }
             }
@@ -485,7 +504,7 @@ impl GameLogic<World> for ShardedRoom {
 
     fn resume_lookup(&self, _world: &World, identity: &str) -> ResumeFound {
         match self.park_ledger.get(identity) {
-            Some(e) => ResumeFound::Held(e.wire),
+            Some(e) => ResumeFound::Held(e.player),
             None => ResumeFound::Never,
         }
     }
@@ -494,17 +513,14 @@ impl GameLogic<World> for ShardedRoom {
         &mut self,
         _world: &mut World,
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        player: PlayerId,
         _entity: EntityId,
     ) {
+        // Faz 2 shrink: consume the ledger entry + seq/ack reset. Nothing
+        // to re-key — every table is keyed by the STABLE player id.
         self.park_ledger.remove(identity);
-        if let Some(entity) = self.conn_entity.remove(&old) {
-            self.conn_entity.insert(new, entity);
-            self.entity_conn.insert(entity, new);
-        }
-        // Seq/ack reset (DESIGN §14.2): fresh input session for the new key.
-        self.input.remove(&old);
+        self.input.remove(&player);
     }
 
     /// The per-connection private frame: the pending input
@@ -514,14 +530,14 @@ impl GameLogic<World> for ShardedRoom {
     fn private(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         _group: &(),
         // The shard actor passes none today: the pending set and the
         // completion sweep are room-actor machinery (Faz 3 promotion).
         _responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_ack(&mut self.input, conn, out)
+        crate::common::emit_ack(&mut self.input, player, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -625,7 +641,9 @@ impl ShardLogic<World> for ShardedRoom {
                         target: target.copied(),
                         park,
                     },
-                    conn: self.entity_conn.get(&entity).copied(),
+                    // The stable player identity travels with the entity:
+                    // the receiving shard keys its row under the SAME id.
+                    player: self.entity_player.get(&entity).copied(),
                 });
             }
         }
@@ -637,7 +655,7 @@ impl ShardLogic<World> for ShardedRoom {
         world: &mut World,
         wire: u64,
         state: Self::State,
-        conn: Option<ConnectionId>,
+        player: Option<PlayerId>,
     ) {
         // Reconstruct the entity from its full state, keeping its wire
         // identity (the id travels with the state — range partitioning).
@@ -649,13 +667,14 @@ impl ShardLogic<World> for ShardedRoom {
         }
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
-        if let Some(conn) = conn {
-            // The connection's channel halves were moved with the message
-            // (the core re-registers the connection table entry); here the
-            // logic only records the conn↔entity bookkeeping so
-            // `on_leave` and the next `collect_migrations` see it.
-            self.conn_entity.insert(conn, entity);
-            self.entity_conn.insert(entity, conn);
+        if let Some(player) = player {
+            // The session's channel halves were moved with the message
+            // (the core re-registers its row and binding); here the logic
+            // only records the player↔entity bookkeeping so `on_leave`
+            // and the next `collect_migrations` see it — under the SAME
+            // stable key the sending shard used.
+            self.player_entity.insert(player, entity);
+            self.entity_player.insert(entity, player);
         }
         if let Some(park) = state.park {
             // §14.2: a detached/bot-fed player's ledger record arrives
@@ -669,8 +688,8 @@ impl ShardLogic<World> for ShardedRoom {
         if let Some(entity) = self.wire_entity.remove(&wire)
             && world.get_entity(entity).is_ok()
         {
-            if let Some(conn) = self.entity_conn.remove(&entity) {
-                self.conn_entity.remove(&conn);
+            if let Some(player) = self.entity_player.remove(&entity) {
+                self.player_entity.remove(&player);
             }
             self.own_wires.remove(&wire);
             // §14.2 symmetry: the park record left with the entity (it
@@ -733,10 +752,10 @@ mod tests {
         x: f32,
         y: f32,
     ) -> u64 {
-        let wire = room.on_join(world, conn);
-        let entity = *room.conn_entity.get(&conn).expect("conn registered");
+        let admission = room.on_join(world, conn);
+        let entity = *room.player_entity.get(&admission.player).expect("registered");
         world.entity_mut(entity).insert(Position { x, y });
-        wire
+        admission.entity
     }
 
     fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
@@ -800,7 +819,7 @@ mod tests {
         assert_ne!(w0, w1, "disjoint ranges ⇒ no collision");
 
         // Migrate w0 from shard 0 into shard 1: the id is preserved.
-        let entity0 = *s0.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity0 = *s0.player_entity.get(&PlayerId(1)).unwrap();
         let state = ShardedRoomState {
             pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
             speed: world0
@@ -811,8 +830,8 @@ mod tests {
             target: world0.entity(entity0).get::<MoveTarget>().copied(),
             park: None,
         };
-        s1.on_migrate_in(&mut world1, w0, state, Some(ConnectionId(1)));
-        let entity1 = *s1.conn_entity.get(&ConnectionId(1)).unwrap();
+        s1.on_migrate_in(&mut world1, w0, state, Some(PlayerId(1)));
+        let entity1 = *s1.player_entity.get(&PlayerId(1)).unwrap();
         assert_eq!(
             world1.entity(entity1).get::<WireId>().unwrap().get(),
             w0,
@@ -828,7 +847,7 @@ mod tests {
         let mut world = World::new();
         let mut s0 = ShardedRoom::new(0, 4, 50.0); // x in [-50, 0)
         let w = place(&mut world, &mut s0, ConnectionId(1), -1.0, -10.0);
-        let entity = *s0.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity = *s0.player_entity.get(&PlayerId(1)).unwrap();
         world.entity_mut(entity).insert(MoveTarget { x: 1.0, y: -10.0 });
 
         // Still in shard 0: no migration to shard 1 (or anyone).
@@ -845,7 +864,7 @@ mod tests {
         assert_eq!(m.wire, w, "wire id carried");
         assert_eq!(m.state.pos.x, 1.0, "position carried");
         assert_eq!(m.state.target, Some(MoveTarget { x: 1.0, y: -10.0 }));
-        assert_eq!(m.conn, Some(ConnectionId(1)), "player conn carried");
+        assert_eq!(m.player, Some(PlayerId(1)), "stable player carried");
         // Not reported to the other neighbors.
         assert!(s0.collect_migrations(&mut world, 2).is_empty());
         assert!(s0.collect_migrations(&mut world, 3).is_empty());
@@ -853,7 +872,7 @@ mod tests {
         // On the sender side, migrate-out despawns and cleans the tables.
         s0.on_migrate_out(&mut world, w);
         assert!(world.get_entity(entity).is_err(), "despawned on sender");
-        assert!(!s0.conn_entity.contains_key(&ConnectionId(1)));
+        assert!(!s0.player_entity.contains_key(&PlayerId(1)));
         assert!(!s0.wire_entity.contains_key(&w));
     }
 

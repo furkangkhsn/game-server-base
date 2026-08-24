@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use bevy_ecs::prelude::{Entity, World};
 use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::room::{Action, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
+use gsb_core::room::{Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::ticker::TickInfo;
 use gsb_ecs::{System, SystemCtx};
 use gsb_protocol::FrameBody;
@@ -90,19 +90,22 @@ impl GameLogic<World> for FrameLogic {
         OBS_OP
     }
 
-    fn group_of(&self, _world: &World, _conn: ConnectionId) -> Self::GroupKey {
+    fn group_of(&self, _world: &World, _player: PlayerId) -> Self::GroupKey {
         Default::default()
     }
 
-    fn on_join(&mut self, world: &mut World, _conn: ConnectionId) -> EntityId {
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         let e = world
             .spawn((Position { x: 0.0, y: 0.0 }, Speed(SPEED)))
             .id();
         self.entity = Some(e);
-        e.to_bits()
+        Admission {
+            player: PlayerId(conn.0),
+            entity: e.to_bits(),
+        }
     }
 
-    fn on_leave(&mut self, world: &mut World, _conn: ConnectionId) {
+    fn on_leave(&mut self, world: &mut World, _player: PlayerId) {
         if let Some(e) = self.entity.take() {
             world.despawn(e);
         }
@@ -257,6 +260,7 @@ impl SimRoom {
         // channel is open and empty: try_send cannot fail.
         actions
             .try_send(Action {
+                player: gsb_core::PlayerId(conn.0),
                 conn,
                 op: op::MOVE_TO,
                 payload: Bytes::from(move_to.encode_to_vec()),

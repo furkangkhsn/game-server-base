@@ -99,8 +99,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use bevy_ecs::prelude::{Component, Entity, World};
-use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -142,7 +142,7 @@ pub const DEFAULT_VISION_RADIUS: f32 = 25.0;
 /// A neutral (ownerless) entity simply has no `TeamMember`; it is
 /// broadcast to *both* teams and grants no vision — exactly as before, but
 /// now expressed structurally by the component's absence instead of a
-/// "not in `conn_entity`" check.
+/// "not in `player_entity`" check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct TeamMember(pub Team);
 
@@ -182,8 +182,12 @@ type UnitRec = (u64, i32, i32, f32, f32);
 /// "no change" ledger.
 pub struct TeamRoom {
     runner: SystemRunner,
-    /// Which entity belongs to which connection.
-    conn_entity: HashMap<ConnectionId, Entity>,
+    /// Which entity belongs to which player (Faz 2: keyed by the STABLE
+    /// player identity — the mapping survives resume unchanged).
+    player_entity: HashMap<PlayerId, Entity>,
+    /// The player-identity counter (the demo's [`PlayerId`] minting
+    /// policy); monotonic, never reused within the room's lifetime.
+    next_player_id: u64,
     /// The disconnect-park policy + ledger (see `crate::common` and
     /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
     park: crate::common::ParkPolicy,
@@ -216,9 +220,9 @@ pub struct TeamRoom {
     /// (own team ∪ neutral ∪ in-vision enemies). `snapshot` answers from
     /// this so both teams' snapshots are the *same tick's* state.
     contents: [HashMap<u64, (i32, i32)>; TEAM_COUNT as usize],
-    /// Per-connection input sequence state (strategy-independent; see
+    /// Per-player input sequence state (strategy-independent; see
     /// `crate::common::ingest` / `emit_ack`).
-    input: HashMap<ConnectionId, crate::common::InputState>,
+    input: HashMap<PlayerId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -239,7 +243,8 @@ impl TeamRoom {
     pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self {
             runner: crate::common::movement_runner(),
-            conn_entity: HashMap::new(),
+            player_entity: HashMap::new(),
+            next_player_id: 0,
             park: crate::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             next_wire_id: 0,
@@ -358,8 +363,8 @@ impl GameLogic<World> for TeamRoom {
     /// (written in `on_join`, removed with the entity on leave); the
     /// `unwrap_or` fallback only keeps the function total for bookkeeping
     /// edges (e.g. a conn evicted between `members` and the call).
-    fn group_of(&self, world: &World, conn: ConnectionId) -> Team {
-        let Some(&entity) = self.conn_entity.get(&conn) else {
+    fn group_of(&self, world: &World, player: PlayerId) -> Team {
+        let Some(&entity) = self.player_entity.get(&player) else {
             return Team(0);
         };
         world
@@ -412,9 +417,10 @@ impl GameLogic<World> for TeamRoom {
         true
     }
 
-    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> EntityId {
-        let wire = crate::common::on_join(
-            &mut self.conn_entity,
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        let admission = crate::common::on_join(
+            &mut self.player_entity,
+            &mut self.next_player_id,
             &mut self.next_wire_id,
             self.spawn_half,
             world,
@@ -426,13 +432,19 @@ impl GameLogic<World> for TeamRoom {
         // world state, so a runtime team change is a plain component
         // write — no room hook, no protocol op, no bookkeeping to keep in
         // sync.
-        let entity = self.conn_entity.get(&conn).copied().expect("inserted above");
+        let entity = self
+            .player_entity
+            .get(&admission.player)
+            .copied()
+            .expect("inserted above");
+        // Team assignment hashes the TRANSPORT session id (as it always
+        // has): the load generator's team distribution pairs with it.
         world.entity_mut(entity).insert(TeamMember(team_of(conn)));
-        wire
+        admission
     }
 
-    fn on_leave(&mut self, world: &mut World, conn: ConnectionId) {
-        crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
     // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
@@ -449,12 +461,12 @@ impl GameLogic<World> for TeamRoom {
     fn on_disconnect(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         identity: &str,
     ) -> Detach {
         crate::common::park_on_disconnect(
-            &self.conn_entity,
-            conn,
+            &self.player_entity,
+            player,
             identity,
             &self.park,
             &mut self.park_ledger,
@@ -464,10 +476,10 @@ impl GameLogic<World> for TeamRoom {
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+        crate::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
@@ -478,18 +490,12 @@ impl GameLogic<World> for TeamRoom {
         &mut self,
         _world: &mut World,
         identity: &str,
-        old: ConnectionId,
-        new: ConnectionId,
+        _conn: ConnectionId,
+        player: PlayerId,
         _entity: EntityId,
     ) {
-        crate::common::park_resume(
-            &mut self.park_ledger,
-            &mut self.conn_entity,
-            &mut self.input,
-            identity,
-            old,
-            new,
-        );
+        // Faz 2 shrink: ledger consume + seq/ack reset only.
+        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -497,24 +503,24 @@ impl GameLogic<World> for TeamRoom {
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
-                .map(|e| (e.conn, e.entity)),
+                .map(|e| (e.player, e.entity)),
             world,
             ctx,
             actions,
         );
-        crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (see `DemoRoom::private`).
     fn private(
         &mut self,
         _world: &mut World,
-        conn: ConnectionId,
+        player: PlayerId,
         _group: &Team,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, conn, responses, out)
+        crate::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -565,11 +571,21 @@ mod tests {
 
     /// Join a player (wire id assigned; team = conn % 2) and move its
     /// entity to an exact position. Returns the wire id.
-    fn place(world: &mut World, room: &mut TeamRoom, conn: ConnectionId, x: f32, y: f32) -> u64 {
-        let wire = room.on_join(world, conn);
-        let entity = *room.conn_entity.get(&conn).expect("conn registered");
+    /// Place a player; returns `(wire id, stable player id)` — the tests
+    /// address entities through the pid their join actually minted (the
+    /// minting counter, NOT the conn number: joins below are deliberately
+    /// in non-conn order for team parity).
+    fn place(
+        world: &mut World,
+        room: &mut TeamRoom,
+        conn: ConnectionId,
+        x: f32,
+        y: f32,
+    ) -> (u64, PlayerId) {
+        let admission = room.on_join(world, conn);
+        let entity = *room.player_entity.get(&admission.player).expect("registered");
         world.entity_mut(entity).insert(Position { x, y });
-        wire
+        (admission.entity, admission.player)
     }
 
     fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
@@ -594,9 +610,9 @@ mod tests {
         // B: conn 1 → team 1, at (10,0)  (10 < 25: in A's team's vision).
         // C: conn 3 → team 1, at (40,0)  (40 > 25: outside A's team's vision;
         //                                 team 1's own package always has C).
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);
-        let b = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0);
-        let c = place(&mut world, &mut room, ConnectionId(3), 40.0, 0.0);
+        let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);
+        let (b, _) = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0);
+        let (c, _) = place(&mut world, &mut room, ConnectionId(3), 40.0, 0.0);
         room.update(&mut world, &ctx(1));
 
         // Team 0: own team {A} + in-vision enemies {B} → {A, B}; NOT C.
@@ -622,9 +638,9 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);       // team 0
-        let d = place(&mut world, &mut room, ConnectionId(4), 400.0, 400.0);  // team 0, far
-        let b = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0);     // team 1
+        let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);       // team 0
+        let (d, _) = place(&mut world, &mut room, ConnectionId(4), 400.0, 400.0);  // team 0, far
+        let (b, _) = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0);     // team 1
 
         room.update(&mut world, &ctx(1));
 
@@ -651,8 +667,8 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);      // team 0
-        let b = place(&mut world, &mut room, ConnectionId(1), 100.0, 100.0);  // team 1, far
+        let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);      // team 0
+        let (b, pb) = place(&mut world, &mut room, ConnectionId(1), 100.0, 100.0); // team 1, far
         room.update(&mut world, &ctx(1));
 
         // Tick 1: B is in team 1's own package (id known to B's team's
@@ -666,7 +682,7 @@ mod tests {
         assert!(!snap_ids(&out0).contains(&b), "B out of vision: {out0:?}");
 
         // B moves into A's vision: (5,0), distance 5 < 25.
-        let entity_b = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity_b = *room.player_entity.get(&pb).unwrap();
         world.entity_mut(entity_b).insert(Position { x: 5.0, y: 0.0 });
         room.update(&mut world, &ctx(2));
 
@@ -689,8 +705,8 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);
-        let b = place(&mut world, &mut room, ConnectionId(1), 5.0, 0.0); // in vision
+        let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);
+        let (b, pb) = place(&mut world, &mut room, ConnectionId(1), 5.0, 0.0); // in vision
         room.update(&mut world, &ctx(1));
 
         let mut out0 = bytes::BytesMut::new();
@@ -699,7 +715,7 @@ mod tests {
         assert!(t0.contains(&a) && t0.contains(&b), "B in vision: {t0:?}");
 
         // B leaves vision.
-        let entity_b = *room.conn_entity.get(&ConnectionId(1)).unwrap();
+        let entity_b = *room.player_entity.get(&pb).unwrap();
         world.entity_mut(entity_b).insert(Position { x: 300.0, y: 300.0 });
         room.update(&mut world, &ctx(2));
 
@@ -726,8 +742,8 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
-        let b = place(&mut world, &mut room, ConnectionId(1), 5.0, 0.0); // team 1, 5 from A
+        let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
+        let (b, _) = place(&mut world, &mut room, ConnectionId(1), 5.0, 0.0); // team 1, 5 from A
         let _orphan = world
             .spawn((Position { x: 2.0, y: 2.0 }, Speed(DEFAULT_SPEED)))
             .id();
@@ -756,7 +772,7 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        place(&mut world, &mut room, ConnectionId(2), 7.0, 9.0); // team 0, no MoveTarget
+        let (_, pmover) = place(&mut world, &mut room, ConnectionId(2), 7.0, 9.0); // team 0, no MoveTarget
         // Team 1 far away: the teams do NOT see each other's units
         // (193 > 25), so only the mover's team re-emits below.
         place(&mut world, &mut room, ConnectionId(1), 200.0, 0.0); // team 1
@@ -775,7 +791,7 @@ mod tests {
         assert!(o2.is_empty(), "no bytes written on silence");
 
         // A movement in ONE team re-emits that team only.
-        let entity = *room.conn_entity.get(&ConnectionId(2)).unwrap();
+        let entity = *room.player_entity.get(&pmover).unwrap();
         world.entity_mut(entity).insert(Position { x: 8.0, y: 19.0 });
         room.update(&mut world, &ctx(3));
         let mut o3 = bytes::BytesMut::new();
@@ -813,16 +829,16 @@ mod tests {
         let mut world = World::new();
         let mut room = TeamRoom::new(25.0);
 
-        let a = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
-        let a2 = place(&mut world, &mut room, ConnectionId(4), 30.0, 0.0); // team 0
-        let b = place(&mut world, &mut room, ConnectionId(1), 100.0, 0.0); // team 1
-        let b2 = place(&mut world, &mut room, ConnectionId(3), 200.0, 0.0); // team 1
+        let (a, pa) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
+        let (a2, _) = place(&mut world, &mut room, ConnectionId(4), 30.0, 0.0); // team 0
+        let (b, pb) = place(&mut world, &mut room, ConnectionId(1), 100.0, 0.0); // team 1
+        let (b2, _) = place(&mut world, &mut room, ConnectionId(3), 200.0, 0.0); // team 1
         room.update(&mut world, &ctx(1));
 
         // Baseline: group_of reads the world's TeamMember (parity at join
         // time), and each package is exactly its own team.
-        assert_eq!(room.group_of(&world, ConnectionId(2)), Team(0));
-        assert_eq!(room.group_of(&world, ConnectionId(1)), Team(1));
+        assert_eq!(room.group_of(&world, pa), Team(0));
+        assert_eq!(room.group_of(&world, pb), Team(1));
         let mut out0 = bytes::BytesMut::new();
         assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
@@ -834,14 +850,14 @@ mod tests {
 
         // RUNTIME TEAM CHANGE: A (conn 2) switches to team 1. This is a
         // component write on world state — no room hook, no protocol op.
-        let entity_a = *room.conn_entity.get(&ConnectionId(2)).unwrap();
+        let entity_a = *room.player_entity.get(&pa).unwrap();
         world.entity_mut(entity_a).insert(TeamMember(Team(1)));
 
-        // The connection's group follows on the re-evaluation — the seam
+        // The player's group follows on the re-evaluation — the seam
         // question, pinned: group_of reads the world, and the world says
         // team 1 now.
         assert_eq!(
-            room.group_of(&world, ConnectionId(2)),
+            room.group_of(&world, pa),
             Team(1),
             "A's group moved with its TeamMember"
         );

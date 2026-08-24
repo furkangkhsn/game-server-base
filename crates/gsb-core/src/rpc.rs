@@ -91,7 +91,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 
-use crate::id::ConnectionId;
+use crate::id::{ConnectionId, PlayerId};
 
 /// The opcode of the request envelope (the base band — the room's core
 /// can decode it; the game crate owns the INNER opcodes).
@@ -102,9 +102,14 @@ pub const RPC_REQ_OP: u16 = gsb_protocol::op::base::RPC_REQ;
 /// to the core (the logic decodes them against its own message types).
 #[derive(Debug)]
 pub struct RpcRequest {
-    /// The connection that sent the request (the answer goes back to it,
-    /// and only to it).
+    /// The transport session that sent the request (the answer goes back
+    /// to it, and only to it; pending/reply state is keyed by it —
+    /// session-scoped by design).
     pub conn: ConnectionId,
+    /// The stable player identity the room resolved for this session at
+    /// ingest (Faz 2): what the LOGIC keys its lookups with. A resumed
+    /// player's requests resolve to the same player across sessions.
+    pub player: PlayerId,
     /// The client's correlation id (see the module docs for the id-space
     /// rules; `0` is rejected by the room).
     pub id: u64,

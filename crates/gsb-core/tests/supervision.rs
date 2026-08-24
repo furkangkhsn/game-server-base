@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
@@ -58,7 +58,7 @@ impl GameLogic<()> for PanicAfterJoinLogic {
         0x7E01
     }
 
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
     fn snapshot(
         &mut self,
@@ -71,11 +71,14 @@ impl GameLogic<()> for PanicAfterJoinLogic {
         false
     }
 
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
         self.joined = true;
-        1
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {
         a.clear();
     }
@@ -105,7 +108,7 @@ impl GameLogic<()> for TimeBombShardLogic {
     fn private_op(&self) -> u16 {
         0x7D01
     }
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
     fn snapshot(
         &mut self,
         _w: &mut (),
@@ -116,10 +119,13 @@ impl GameLogic<()> for TimeBombShardLogic {
     ) -> bool {
         false
     }
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
-        1
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _ctx: &TickCtx, actions: &mut Vec<Action>) {
         actions.clear();
     }
@@ -160,7 +166,7 @@ impl ShardLogic<()> for TimeBombShardLogic {
     fn collect_migrations(&mut self, _w: &mut (), _neighbor: usize) -> Vec<Migrating<()>> {
         Vec::new()
     }
-    fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _conn: Option<ConnectionId>) {}
+    fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _player: Option<PlayerId>) {}
     fn on_migrate_out(&mut self, _w: &mut (), _wire: u64) {}
     fn collect_border(&self, _w: &()) -> Vec<BorrowedRecord> {
         Vec::new()

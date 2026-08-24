@@ -27,10 +27,10 @@ use std::time::Duration;
 use gsb_core::auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
 use gsb_core::channel::{channel, FrameBatch};
 use gsb_core::conn::{ConnIn, ConnectionActor};
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
+use gsb_core::id::{ConnectionId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use gsb_protocol::base;
 use gsb_protocol::{base_table, op};
@@ -397,7 +397,7 @@ impl GameLogic<()> for NoopLogic {
     fn private_op(&self) -> u16 {
         0x7F11
     }
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
     fn snapshot(
         &mut self,
         _w: &mut (),
@@ -408,10 +408,13 @@ impl GameLogic<()> for NoopLogic {
     ) -> bool {
         false
     }
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
-        1
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {
         a.clear();
     }

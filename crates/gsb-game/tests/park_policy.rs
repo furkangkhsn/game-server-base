@@ -355,6 +355,7 @@ async fn resume_reclaims_the_parked_hero_and_human_input_works() {
     new_actions
         .send(Action {
             conn: ConnectionId(9),
+            player: gsb_core::PlayerId(9),
             op: op::MOVE_TO,
             payload: MoveTo {
                 x: -40,
@@ -450,10 +451,13 @@ mod sharded_park {
         let mut s0 = ShardedRoom::new(0, 4, 50.0).with_disconnect_grace(grace);
         let mut s1 = ShardedRoom::new(1, 4, 50.0).with_disconnect_grace(grace);
 
-        // Join on shard 0, then the transport dies: shard 0 parks.
-        let wire = s0.on_join(&mut w0, ConnectionId(1));
+        // Join on shard 0, then the transport dies: shard 0 parks. The
+        // stable player id comes back in the Admission (the test's
+        // observable for "same player across everything below").
+        let admission = s0.on_join(&mut w0, ConnectionId(1));
+        let wire = admission.entity;
         assert!(matches!(
-            s0.on_disconnect(&mut w0, ConnectionId(1), "ana"),
+            s0.on_disconnect(&mut w0, admission.player, "ana"),
             Detach::Hold {
                 to: ExpireTo::AiHandover,
                 ..
@@ -480,12 +484,13 @@ mod sharded_park {
             panic!("park record must travel with the migrating state (§14.2)");
         };
         assert_eq!(park.identity, "ana");
-        assert_eq!(park.conn, ConnectionId(1));
+        // Faz 2: the record carries the STABLE player identity.
+        assert_eq!(park.player, admission.player);
         assert!(!park.bot, "not yet handed to the bot");
 
         // The receiving shard installs the record: ITS ledger answers the
         // resume now; the sender's must forget the player entirely.
-        s1.on_migrate_in(&mut w1, m.wire, m.state.clone(), m.conn);
+        s1.on_migrate_in(&mut w1, m.wire, m.state.clone(), m.player);
         assert!(matches!(
             s1.resume_lookup(&w1, "ana"),
             gsb_core::room::ResumeFound::Held(_)
@@ -501,7 +506,7 @@ mod sharded_park {
 
         // Reclaim lands on the receiving shard: same wire id, ledger
         // consumed (these hooks are exactly what the core swap calls).
-        s1.on_resume(&mut w1, "ana", ConnectionId(1), ConnectionId(9), wire);
+        s1.on_resume(&mut w1, "ana", ConnectionId(9), admission.player, wire);
         assert!(matches!(
             s1.resume_lookup(&w1, "ana"),
             gsb_core::room::ResumeFound::Never
@@ -519,12 +524,12 @@ mod sharded_park {
         let mut s =
             ShardedRoom::new(0, 1, 50.0).with_disconnect_grace(Duration::from_millis(1));
 
-        let _wire = s.on_join(&mut w, ConnectionId(1));
+        let pid = s.on_join(&mut w, ConnectionId(1)).player;
         assert!(matches!(
-            s.on_disconnect(&mut w, ConnectionId(1), "ana"),
+            s.on_disconnect(&mut w, pid, "ana"),
             Detach::Hold { .. }
         ));
-        s.on_detach_expired(&mut w, ConnectionId(1), ExpireTo::AiHandover);
+        s.on_detach_expired(&mut w, pid, ExpireTo::AiHandover);
         assert!(matches!(
             s.resume_lookup(&w, "ana"),
             gsb_core::room::ResumeFound::Held(_)

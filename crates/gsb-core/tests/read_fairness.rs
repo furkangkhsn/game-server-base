@@ -54,7 +54,7 @@ impl GameLogic<FirstSeen> for RecorderLogic {
         OP_PRIV
     }
 
-    fn group_of(&self, _w: &FirstSeen, _c: gsb_core::ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &FirstSeen, _p: gsb_core::PlayerId) -> Self::GroupKey {}
 
     fn snapshot(
         &mut self,
@@ -67,15 +67,19 @@ impl GameLogic<FirstSeen> for RecorderLogic {
         false // no snapshots: the observation seam is the match result
     }
 
-    fn on_join(&mut self, _w: &mut FirstSeen, _c: gsb_core::ConnectionId) -> gsb_core::EntityId {
-        1
+    fn on_join(&mut self, _w: &mut FirstSeen, c: gsb_core::ConnectionId) -> gsb_core::room::Admission {
+        // Test identity policy: the conn id doubles as the player id.
+        gsb_core::room::Admission {
+            player: gsb_core::PlayerId(c.0),
+            entity: 1,
+        }
     }
 
-    fn on_leave(&mut self, _w: &mut FirstSeen, _c: gsb_core::ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut FirstSeen, _p: gsb_core::PlayerId) {}
 
     fn ingest(&mut self, w: &mut FirstSeen, ctx: &TickCtx, actions: &mut Vec<Action>) {
         for a in actions.iter() {
-            w.entry(a.conn.0).or_insert(ctx.tick);
+            w.entry(a.player.0).or_insert(ctx.tick);
         }
     }
 
@@ -217,8 +221,10 @@ impl Harness {
 }
 
 fn action(conn: gsb_core::ConnectionId, op: u16) -> Action {
+    // Test identity policy: the conn id doubles as the player id.
     Action {
         conn,
+        player: gsb_core::PlayerId(conn.0),
         op,
         payload: bytes::Bytes::new(),
     }

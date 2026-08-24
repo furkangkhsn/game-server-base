@@ -18,9 +18,9 @@ use std::time::Duration;
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
+use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
@@ -43,7 +43,7 @@ impl GameLogic<()> for ResultLogic {
         0x7F01
     }
 
-    fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+    fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
     fn snapshot(
         &mut self,
@@ -56,10 +56,13 @@ impl GameLogic<()> for ResultLogic {
         false
     }
 
-    fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
-        1
+    fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
+        Admission {
+            player: PlayerId(c.0),
+            entity: 1,
+        }
     }
-    fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
+    fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {
         a.clear();
     }
