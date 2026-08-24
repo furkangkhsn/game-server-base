@@ -171,13 +171,39 @@ SUMMARY-C2.md, c1/c2.out/.err).
    gerçek ağa çıkar. Delta'nın güçlü gerekçesi bu iki senaryodur;
    in-process demo ölçeklerinde full-exchange kabul edilebilir kalır.
 
-### Karar
+### Karar (A/B ölçümü sonrası güncellendi): delta KABUL EDİLDİ ✅
 
-Delta implementasyonu **şartlı onaylı**: tetikleyici senaryolar
-(büyük grid × yoğun şerit; dağıtım) gerçekleşene kadar branch
-açılmasın; §6.4'teki dört pin uygulama sözleşmesi olarak kalsın.
-Ölçüm altyapısı (`BorderStats`) main'de kalıcıdır — tetikleyici
-gerçekleştiğinde karşılaştırma aynı enstrümanla yapılır.
+`border-delta` branch'inde dört-pinli tasarım implement edildi ve aynı
+enstrümantasyonla A/B ölçüldü (B1'/B2alt'/C2' — baseline B1/B2alt/C2 ile
+birebir senaryolar):
+
+| Koşu | delta byte/tick/shard | eşdeğer full | oran | faz-5 µs (base→delta) |
+|---|---|---|---|---|
+| B1' | 4.0 KB | 10.1 KB | 0.40× | 1.1 → 48 |
+| B2alt' | 8.4 KB | 21.3 KB | 0.39× | 2.4 → 138 |
+| C2' | 7.5 KB | 19.1 KB | 0.39× | 5.1 → 227 |
+
+- Byte kazancı üç şekilde de tutarlı: **~%60 azalma** — dağıtım
+  senaryosunun para birimi.
+- CPU bedeli gerçek ama bütçenin <%1'i (en kötü şekil +417 µs step mean);
+  diff+map-apply, byte tasarrufuyla takas edilmiş.
+- Sıfır steady-state drop/resync; düşen deltalar gönderici-taraflı
+  forced-Full ile bir tick içinde iyileşti (resync_requests_sent=0).
+- Doğruluk kilidi: 6 yeni test (upsert/exit-hayalet yokluğu,
+  seq-gap→resync, rebuild-leads-with-Full, kadans, send-failure flag,
+  own-wins). Test 231 → 237.
+
+**Pluggable sorusu (dış danışma) — değerlendirildi, şimdilik hayır:**
+Mesaj tipi zaten `Full | Delta` birleşimi olduğundan alıcı tarafı çok
+biçimli; mod seçimi gönderici-yerel olabilir. Ancak A/B, delta'nın
+her ölçekte makul çalıştığını gösterdiği için ikinci modun yaşatılmasına
+gerek kalmadı — "always-full" kaçış kapısı gerekirse sonradan config
+anahtarı olarak eklenebilir (yarım gün), şimdilik elenen alternatif.
+
+**Dağıtım notu:** UDS/kablo ortamlarında güvenilir-sıralı link
+(`ShardLink`, DISTRIBUTED.md adayı) delta'nın resync yollarını
+fiilen devre dışı bırakır — bu İYİDİR: karmaşıklık ağın olduğu yerde
+yaşar, loopback'te yaşmaz.
 
 1. **Faz 0 (main):** mevcut BORDER fazını enstrümante et — byte/tick,
    kayıt/tick, encode µs, send-drop sayacı; sharded senaryolarda ölç
