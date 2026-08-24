@@ -67,12 +67,12 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → 172 → 184 → 197 → 205 → **215** (215/215 yeşil +1 var olan
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → 172 → 184 → 197 → 205 → 215 → 225 → **231** (231/231 yeşil +1 var olan
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
 `tests/rpc_shard.rs`) ve **ops yüzeyi** (`docs/OPS.md`: Prometheus `/metrics`, `/healthz`, admin API — elle yazılmış HTTP,
-`MetricSink::Watch`, sıfır yeni bağımlılık; aşağıda "Kapatılanlar (ops yüzeyi turu)"). Son ekleme:
+`MetricSink::Watch`, sıfır yeni bağımlılık; aşağıda "Kapatılanlar (ops yüzeyi turu)"). Son olarak **güvenlik turu**: rustls ile TLS taşıması (`docs/SECURITY.md` Tur A; tüm guardrail e2e'leri artık tcp+udp+TLS üçlüsünde), auth rate-limit, pre-auth frame bütçesi ve unauthed oturum cap'i (Tur B; aşağıda "Kapatılanlar (güvenlik turu)"). Son ekleme:
 **dış inceleme hızlı düzeltme turu** — doğrulanmış dış inceleme raporundan beş
 madde kapatıldı: doküman çürüğü (metrik kanalı "unbounded" iddiası — kod
 bounded + `try_send` iken üç dosyada kendisiyle çeliyordu), `Ticker::spawn`
@@ -3054,6 +3054,37 @@ olması. Tasarım: `docs/OPS.md`.
   `*_total` sözleşmesi, histogram tutarlılığı, boş-rapor davranışı)
 
 Test 205 → **215** (215/215 yeşil); clippy temiz; loadgen regresyonu yeşil.
+
+## Kapatılanlar (güvenlik turu)
+
+Kaynak: dış inceleme ailesinin kalan teknik maddeleri — şifreleme,
+auth rate-limit, pre-auth tahsis sınırı. Tasarım: `docs/SECURITY.md`.
+
+- **TLS (Tur A):** `TlsTransport` (rustls, ring provider) — PEM yükleme
+  bind'ta (hatalı dosya adıyla hata), handshake 10 sn tavanı; pump
+  katmanı generic FrameReader/FrameWriter'a çıkarıldı (tcp byte-identical
+  alias, tls aynı adaptörleri besler). Config: `tls_cert/tls_key`;
+  tek-taraf ve udp+tls başlatma hatası — sessiz zayıf geri düşüş reddi.
+  Tüm guardrail e2e'leri tcp+udp+TLS üçlüsünde koşar; test sertifikaları
+  rcgen ile koşu-anında üretilir (dev-dep; repoya sertifika kommitlemez).
+- **Rate-limit + cap'ler (Tur B):** AUTH penceresi (3/10 sn; aşım HARD
+  ihlal), pre-auth heartbeat yanıtı 1/sn (fazlası sessiz sayaç — bütçe
+  DEĞİL: gerekçesi kod içi), pre-auth 64 frame bütçesi (ERROR 9),
+  registry'de unauthed oturum cap'i (`max_connections/4`, taban 64,
+  `0` kapatır; resume authed sayılır).
+- **Ortam notu:** yeni bağımlılıklar HOME cargo önbelleğinin salt-okunur
+  olduğu ortamlarda CARGO_HOME=$PWD/.cargo ile workspace-vendor'dan
+  çözülür.
+
+### Testler
+
+- `tls_e2e.rs` (6): tam akış, yanlış-CA reddi (iki uç), tek-taraf config
+  hataları, udp+tls reddi, plaintext-default koruması; gsb-net 4 unit
+- `security.rs` (6): auth flood→bütçe→kapanma, pencere davranışı,
+  heartbeat fırtınası sessiz sayımı, 64-frame kapanması, unauthed cap,
+  resume-authed sayımı
+
+Test 215 → **231** (231/231 yeşil); clippy temiz; loadgen regresyonu yeşil.
 
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
