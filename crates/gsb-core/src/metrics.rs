@@ -84,7 +84,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::id::{ConnectionId, RoomId};
 use crate::ticker::TickInfo;
@@ -631,6 +631,16 @@ pub struct MetricReport {
     /// room send at most one sample per report period); non-zero signals the
     /// collector falling behind (or a startup/shutdown flush burst).
     pub metrics_dropped: u64,
+    /// Wall-clock instant at which the collector emitted this report (the
+    /// `at` argument of [`MetricAccumulator::report`]).
+    ///
+    /// WHY on the value itself: the HTTP ops surface's `/healthz` answers
+    /// "is the metrics ticker alive" from the *age* of the latest watch
+    /// snapshot. Stamping the emission time into the value means ONE
+    /// `watch::Sender<MetricReport>` carries content and freshness
+    /// together — no second channel, no shared timestamp cell, no extra
+    /// task whose only job would be copying a clock.
+    pub emitted_at: Instant,
     pub rooms: Vec<RoomReport>,
     pub registry: Option<RegistryReport>,
     pub net: NetReport,
@@ -642,6 +652,42 @@ pub struct MetricReport {
     /// own full action channel, so this list names the flooders still on
     /// the wire.
     pub actions_dropped_top: Vec<(ConnectionId, u64)>,
+}
+
+impl MetricReport {
+    /// The watch channel's initial value (before the collector's first real
+    /// emission): an empty report stamped *five periods in the past*, i.e.
+    /// already past every staleness threshold a consumer applies (the HTTP
+    /// `/healthz` threshold is three — see `gsb_server::http`). WHY back-
+    /// dated instead of "now": an unstaled placeholder would let a health
+    /// check answer "ok" during startup from a report nobody produced; the
+    /// honest initial state is "no fresh report yet". The subtraction can
+    /// fail on a platform whose monotonic clock started less than five
+    /// periods ago (fresh boot); then "now" is the best available stamp and
+    /// the window of wrong-side-of-threshold answers is bounded by one
+    /// collector period anyway.
+    pub fn initial_stale(period: Duration) -> Self {
+        let emitted_at = Instant::now()
+            .checked_sub(period.saturating_mul(5))
+            .unwrap_or_else(Instant::now);
+        Self {
+            metrics_dropped: 0,
+            emitted_at,
+            rooms: Vec::new(),
+            registry: None,
+            net: NetReport {
+                bytes_in: 0,
+                bytes_out_room: 0,
+                bytes_out_control: 0,
+                bytes_out_total: 0,
+                frames_in: 0,
+                frames_out: 0,
+                actions_dropped: 0,
+                violations: 0,
+            },
+            actions_dropped_top: Vec::new(),
+        }
+    }
 }
 
 impl MetricAccumulator {
@@ -717,7 +763,7 @@ impl MetricAccumulator {
     /// window. Per-room rates are Δ since the previous sample, over the
     /// sample interval (see [`RoomAcc::latest_at`]); `at` (the report time)
     /// is kept for the caller's bookkeeping but no longer drives the rates.
-    pub fn report(&mut self, _at: Instant) -> MetricReport {
+    pub fn report(&mut self, at: Instant) -> MetricReport {
         let mut rooms = Vec::with_capacity(self.rooms.len());
         for (id, acc) in &mut self.rooms {
             let latest = acc.latest;
@@ -836,6 +882,7 @@ impl MetricAccumulator {
         }
         MetricReport {
             metrics_dropped,
+            emitted_at: at,
             registry: self.registry.map(|r| RegistryReport {
                 rooms: r.rooms,
                 conns: r.conns,
@@ -946,9 +993,246 @@ impl MetricReport {
         }
         lines
     }
+
+    /// Render as Prometheus text exposition format, version 0.0.4 (the
+    /// scrape format of `/metrics`; see `docs/OPS.md` §3/§5): a
+    /// `# HELP` / `# TYPE` header pair per metric family followed by its
+    /// sample lines.
+    ///
+    /// Naming follows OPS §3's `<scope>_<counter>` vocabulary with the
+    /// `gsb_` prefix and `*_total` on every counter; per-room samples
+    /// carry the room as a LABEL (`gsb_room_steps_total{room="r1"}`) rather
+    /// than embedding the id in the metric NAME (`gsb_room_r1_steps_total`):
+    /// label is the canonical exposition practice — an id inside the name
+    /// would mint one unbounded metric-name series per room per scrape,
+    /// while the label keeps one family per counter and lets consumers
+    /// aggregate or filter identically.
+    ///
+    /// Distributions: the budget-relative log2 step histogram exports as a
+    /// classic histogram (`*_bucket` with cumulative counts, `le` in real µs
+    /// derived from each room's `budget_us`, plus `_sum`/`_count`); the fine
+    /// fixed-bin histogram — whose whole design purpose is sub-budget
+    /// percentile resolution (see [`FINE_HIST_BINS`]) — exports as a summary
+    /// (p50/p99 via [`fine_hist_percentile_us`]). A quantile whose rank
+    /// falls beyond the fine histogram's cap has no fine value; the line is
+    /// omitted rather than guessed (the log2 histogram still carries the
+    /// overflow signal).
+    pub fn render_prometheus(&self) -> String {
+        use std::fmt::Write as _;
+
+        /// Format a float as a Prometheus sample value (finite values print
+        /// plainly; non-finite ones use the format's literals).
+        fn val(v: f64) -> String {
+            if v.is_nan() {
+                "NaN".to_owned()
+            } else if v.is_infinite() {
+                if v > 0.0 { "+Inf".to_owned() } else { "-Inf".to_owned() }
+            } else {
+                format!("{v}")
+            }
+        }
+
+        let mut out = String::with_capacity(4096);
+
+        // Top-level: metric-channel health.
+        out.push_str("# HELP gsb_metrics_dropped_total Metric samples dropped on the bounded metrics channel across all producers.\n");
+        out.push_str("# TYPE gsb_metrics_dropped_total counter\n");
+        let _ = writeln!(out, "gsb_metrics_dropped_total {}", self.metrics_dropped);
+
+        // Registry scope (control-plane gauges + cumulative counters).
+        if let Some(reg) = &self.registry {
+            for (name, kind, help, v) in [
+                ("gsb_registry_rooms", "gauge", "Current room count.", u64::from(reg.rooms)),
+                ("gsb_registry_conns", "gauge", "Current registered connection count.", u64::from(reg.conns)),
+                ("gsb_registry_rooms_created_total", "counter", "Rooms created, cumulative.", reg.rooms_created),
+                ("gsb_registry_rooms_destroyed_total", "counter", "Rooms destroyed, cumulative.", reg.rooms_destroyed),
+                ("gsb_registry_rooms_died_total", "counter", "Rooms/shards died unexpectedly (panicked), cumulative.", reg.rooms_died),
+                ("gsb_registry_joins_total", "counter", "Joins completed, cumulative.", reg.joins),
+                ("gsb_registry_leaves_total", "counter", "Leaves completed, cumulative.", reg.leaves),
+                ("gsb_registry_opens_total", "counter", "Connections opened, cumulative.", reg.opens),
+                ("gsb_registry_closes_total", "counter", "Connections closed, cumulative.", reg.closes),
+            ] {
+                out.push_str("# HELP ");
+                out.push_str(name);
+                out.push(' ');
+                out.push_str(help);
+                out.push('\n');
+                let _ = write!(out, "# TYPE {name} {kind}\n{name} {v}\n");
+            }
+        }
+
+        // Net scope: wire traffic aggregated over all connections (the
+        // per-connection attribution lives in actions_dropped_top /
+        // per-actor log lines, not in this aggregate).
+        let n = &self.net;
+        for (name, help, v) in [
+            ("gsb_net_bytes_in_total", "Wire bytes received over all connections (frame bodies), cumulative.", n.bytes_in),
+            ("gsb_net_bytes_out_room_total", "Snapshot+private payload bytes shipped by rooms, cumulative.", n.bytes_out_room),
+            ("gsb_net_bytes_out_control_total", "Control-frame bytes sent by connection actors, cumulative.", n.bytes_out_control),
+            ("gsb_net_bytes_out_total", "Total wire bytes sent, cumulative.", n.bytes_out_total),
+            ("gsb_net_frames_in_total", "Frames received over all connections, cumulative.", n.frames_in),
+            ("gsb_net_frames_out_total", "Control frames sent by connection actors, cumulative.", n.frames_out),
+            ("gsb_net_actions_dropped_total", "Input actions dropped on full per-connection action channels, cumulative.", n.actions_dropped),
+            ("gsb_net_violations_total", "Protocol-violation events counted by violation budgets, cumulative.", n.violations),
+        ] {
+            out.push_str("# HELP ");
+            out.push_str(name);
+            out.push(' ');
+            out.push_str(help);
+            out.push('\n');
+            let _ = write!(out, "# TYPE {name} counter\n{name} {v}\n");
+        }
+
+        let rooms = &self.rooms;
+        if rooms.is_empty() {
+            return out;
+        }
+
+        // Helper: one labeled-per-room family. Header once, then a sample
+        // line per room (`room="r<id>"` label).
+        fn family(
+            out: &mut String,
+            name: &str,
+            kind: &str,
+            help: &str,
+            rooms: &[RoomReport],
+            f: impl Fn(&RoomReport) -> f64,
+        ) {
+            out.push_str("# HELP ");
+            out.push_str(name);
+            out.push(' ');
+            out.push_str(help);
+            out.push('\n');
+            let _ = writeln!(out, "# TYPE {name} {kind}");
+            for r in rooms {
+                let _ = writeln!(
+                    out,
+                    "{name}{{room=\"r{}\"}} {}",
+                    r.room.0,
+                    val(f(r))
+                );
+            }
+        }
+        fn counters(out: &mut String, name: &str, help: &str, rooms: &[RoomReport], f: impl Fn(&RoomReport) -> u64) {
+            family(out, name, "counter", help, rooms, |r| f(r) as f64);
+        }
+        fn gauges(out: &mut String, name: &str, help: &str, rooms: &[RoomReport], f: impl Fn(&RoomReport) -> f64) {
+            family(out, name, "gauge", help, rooms, f);
+        }
+
+        // Tick health.
+        gauges(&mut out, "gsb_room_hz", "Measured room step rate (Δsteps/s over the last sample interval).", rooms, |r| r.hz);
+        gauges(&mut out, "gsb_room_budget_us", "The room's tick budget in microseconds (one period).", rooms, |r| r.budget_us as f64);
+        gauges(&mut out, "gsb_room_step_min_us", "Minimum step body duration, µs.", rooms, |r| r.step_min_us as f64);
+        gauges(&mut out, "gsb_room_step_mean_us", "Mean step body duration, µs.", rooms, |r| r.step_mean_us);
+        gauges(&mut out, "gsb_room_step_max_us", "Maximum step body duration, µs.", rooms, |r| r.step_max_us as f64);
+        gauges(&mut out, "gsb_room_late_min_us", "Minimum tick processing latency (step start − ticker timestamp), µs.", rooms, |r| r.late_min_us as f64);
+        gauges(&mut out, "gsb_room_late_mean_us", "Mean tick processing latency, µs.", rooms, |r| r.late_mean_us);
+        gauges(&mut out, "gsb_room_late_max_us", "Maximum tick processing latency, µs.", rooms, |r| r.late_max_us as f64);
+
+        // Step-duration distribution #1: budget-relative log2 histogram,
+        // exported with REAL microsecond bucket edges (derived per room from
+        // budget_us so the scrape reads in absolute units) and cumulative
+        // counts, as the histogram format requires.
+        out.push_str("# HELP gsb_room_step_hist Step body duration histogram; buckets are fractions of the room's tick budget (le in µs); bins at/above the budget edge are budget overflow.\n");
+        out.push_str("# TYPE gsb_room_step_hist histogram\n");
+        for r in rooms {
+            let mut cum = 0u64;
+            for (i, &cnt) in r.step_hist.iter().enumerate() {
+                cum += cnt;
+                let le = if i < HIST_EDGES.len() {
+                    hist_edge_us(r.budget_us, i).to_string()
+                } else {
+                    "+Inf".to_owned()
+                };
+                let _ = writeln!(
+                    out,
+                    "gsb_room_step_hist_bucket{{room=\"r{}\",le=\"{}\"}} {cum}",
+                    r.room.0, le
+                );
+            }
+            // `_sum` in µs: RoomReport carries mean (sum/steps by
+            // construction) and steps, so mean × steps reconstructs the
+            // exact total duration without widening the report.
+            let _ = writeln!(
+                out,
+                "gsb_room_step_hist_sum{{room=\"r{}\"}} {}",
+                r.room.0,
+                val(r.step_mean_us * r.steps as f64)
+            );
+            let _ = writeln!(
+                out,
+                "gsb_room_step_hist_count{{room=\"r{}\"}} {}",
+                r.room.0,
+                r.step_hist.iter().sum::<u64>()
+            );
+        }
+
+        // Step-duration distribution #2: the fine fixed-bin histogram as a
+        // p50/p99 summary (its design purpose — sub-budget resolution).
+        out.push_str("# HELP gsb_room_step_duration_us Step body duration, µs (summary quantiles from the fine fixed-bin histogram; steps at/above its cap are not quantiled here).\n");
+        out.push_str("# TYPE gsb_room_step_duration_us summary\n");
+        for r in rooms {
+            for (q, p) in [("0.5", 50u32), ("0.99", 99)] {
+                if let Some(us) = fine_hist_percentile_us(&r.step_fine_hist, r.steps, p) {
+                    let _ = writeln!(
+                        out,
+                        "gsb_room_step_duration_us{{room=\"r{}\",quantile=\"{q}\"}} {us}",
+                        r.room.0
+                    );
+                }
+            }
+        }
+
+        // Drops and broadcast fan-out.
+        counters(&mut out, "gsb_room_steps_total", "Steps run, cumulative.", rooms, |r| r.steps);
+        counters(&mut out, "gsb_room_lagged_events_total", "Broadcast Lagged occurrences, cumulative.", rooms, |r| r.lagged_events);
+        counters(&mut out, "gsb_room_lagged_ticks_total", "Missed tick indices caught up, cumulative.", rooms, |r| r.lagged_ticks);
+        counters(&mut out, "gsb_room_dropped_total", "Outbound batches dropped at the fan-out (slow client), cumulative.", rooms, |r| r.dropped);
+        gauges(&mut out, "gsb_room_dropped_s", "Batch drop rate (Δ/s over the last sample interval).", rooms, |r| r.dropped_s);
+        counters(&mut out, "gsb_room_dropped_actions_total", "Input actions dropped on READ-channel overflow, cumulative.", rooms, |r| r.dropped_actions);
+        counters(&mut out, "gsb_room_keepalive_resends_total", "Keep-alive re-sends of unchanged groups, cumulative.", rooms, |r| r.keepalive_resends);
+        counters(&mut out, "gsb_room_snapshots_total", "Group snapshots encoded, cumulative.", rooms, |r| r.snapshots);
+        gauges(&mut out, "gsb_room_snap_bytes_s", "Encoded snapshot byte rate (Δ/s).", rooms, |r| r.snap_bytes_s);
+        gauges(&mut out, "gsb_room_snap_bytes_max", "Largest single group payload seen, bytes.", rooms, |r| f64::from(r.snap_bytes_max));
+        counters(&mut out, "gsb_room_snap_overflows_total", "Snapshots exceeding max_snapshot_bytes, cumulative.", rooms, |r| r.snap_overflows);
+        counters(&mut out, "gsb_room_snap_records_total", "Entity records encoded (overlap-metric numerator), cumulative.", rooms, |r| r.snap_records);
+        counters(&mut out, "gsb_room_shipped_bytes_total", "Bytes shipped to connections (fan-out copies), cumulative.", rooms, |r| r.shipped_bytes);
+        gauges(&mut out, "gsb_room_shipped_s", "Shipped-byte rate (Δ/s).", rooms, |r| r.shipped_s);
+
+        // Group/membership state.
+        gauges(&mut out, "gsb_room_groups", "Current snapshot group count.", rooms, |r| f64::from(r.groups));
+        gauges(&mut out, "gsb_room_members", "Current member count.", rooms, |r| f64::from(r.members));
+        gauges(&mut out, "gsb_room_max_group", "Largest snapshot group right now.", rooms, |r| f64::from(r.max_group));
+        gauges(&mut out, "gsb_room_detached", "Detached-but-parked connections right now (their cap slots are held).", rooms, |r| f64::from(r.detached));
+
+        // Session lifecycle.
+        counters(&mut out, "gsb_room_joins_total", "Joins processed, cumulative.", rooms, |r| r.joins);
+        counters(&mut out, "gsb_room_leaves_total", "Leaves processed, cumulative.", rooms, |r| r.leaves);
+        counters(&mut out, "gsb_room_resumes_total", "Resumes accepted onto parked sessions, cumulative.", rooms, |r| r.resumes);
+        counters(&mut out, "gsb_room_resume_rejected_stale_total", "Resume attempts rejected as stale, cumulative.", rooms, |r| r.resume_rejected_stale);
+        counters(&mut out, "gsb_room_detach_expired_despawn_total", "Detach holds expired toward despawn, cumulative.", rooms, |r| r.detach_expired_despawn);
+        counters(&mut out, "gsb_room_detach_expired_ai_total", "Detach holds expired toward AI handover, cumulative.", rooms, |r| r.detach_expired_ai);
+
+        // RPC.
+        counters(&mut out, "gsb_room_requests_local_total", "RPC requests answered room-local, cumulative.", rooms, |r| r.requests_local);
+        counters(&mut out, "gsb_room_requests_external_total", "RPC requests delegated to workers, cumulative.", rooms, |r| r.requests_external);
+        counters(&mut out, "gsb_room_requests_rejected_malformed_total", "RPC rejections: malformed envelope/id=0, cumulative.", rooms, |r| r.requests_rejected_malformed);
+        counters(&mut out, "gsb_room_requests_rejected_dup_total", "RPC rejections: duplicate in-flight id, cumulative.", rooms, |r| r.requests_rejected_dup);
+        counters(&mut out, "gsb_room_requests_rejected_no_handler_total", "RPC rejections: no handler for the op, cumulative.", rooms, |r| r.requests_rejected_no_handler);
+        counters(&mut out, "gsb_room_requests_rejected_logic_total", "RPC rejections: the logic's own reject decision, cumulative.", rooms, |r| r.requests_rejected_logic);
+        counters(&mut out, "gsb_room_requests_rejected_conn_cap_total", "RPC rejections: per-connection pending cap, cumulative.", rooms, |r| r.requests_rejected_conn_cap);
+        counters(&mut out, "gsb_room_requests_rejected_room_cap_total", "RPC rejections: room-wide pending cap, cumulative.", rooms, |r| r.requests_rejected_room_cap);
+        counters(&mut out, "gsb_room_requests_timed_out_total", "RPC pending requests swept as timed out, cumulative.", rooms, |r| r.requests_timed_out);
+        counters(&mut out, "gsb_room_requests_late_total", "RPC worker reports dropped as late, cumulative.", rooms, |r| r.requests_late);
+        gauges(&mut out, "gsb_room_pending_requests", "External RPC requests currently in flight.", rooms, |r| f64::from(r.pending_requests));
+        counters(&mut out, "gsb_room_metrics_dropped_total", "Metric samples this room dropped on a full metrics channel, cumulative.", rooms, |r| r.metrics_dropped);
+
+        out
+    }
 }
 
-/// Where reports go. Both sinks are message-passing: the collector never
+/// Where reports go. All sinks are message-passing: the collector never
 /// shares its accumulator.
 pub enum MetricSink {
     /// One `tracing::info!` line per rendered report line (visible under
@@ -958,6 +1242,16 @@ pub enum MetricSink {
     /// Send each [`MetricReport`] to a channel (programmatic consumers:
     /// the load generator, tests).
     Channel(mpsc::UnboundedSender<MetricReport>),
+    /// Publish the latest report through a `tokio::sync::watch` channel
+    /// (the HTTP ops surface's scrape snapshot). WHY watch and not another
+    /// mpsc: the consumer wants *latest*, never a queue — overwrite
+    /// semantics mean a scraper that reads between periods always sees the
+    /// newest report and a slow reader can never back up the collector.
+    /// The send is synchronous (no await in the collector's tick body) and
+    /// a closed receiver (HTTP surface shut down or never attached) fails
+    /// harmlessly — the same "consumer gone" tolerance as [`MetricSink::Log`]
+    /// without a subscriber.
+    Watch(watch::Sender<MetricReport>),
 }
 
 /// The metrics collector task.
@@ -1032,6 +1326,11 @@ impl MetricsCollector {
                 // Synchronous send: the collector is a plain task, not an
                 // actor under the single-`await` discipline; a closed
                 // receiver (consumer gone) is ignored.
+                let _ = tx.send(report);
+            }
+            MetricSink::Watch(tx) => {
+                // Synchronous overwrite ("latest wins" — see the variant
+                // docs); a closed receiver is ignored like a dropped log.
                 let _ = tx.send(report);
             }
         }
@@ -1676,5 +1975,181 @@ mod tests {
             .await
             .expect("room exited on closed ticker")
             .expect("room task panicked");
+    }
+
+    /// The Prometheus renderer: one HELP/TYPE pair per family, known values
+    /// on the sample lines, per-room metrics labeled (`room="r<id>"`), the
+    /// log2 histogram exported with real µs bucket edges, and the fine
+    /// histogram summarized as p50/p99.
+    #[test]
+    fn prometheus_render_exposes_families_and_values() {
+        let mut acc = MetricAccumulator::default();
+        let t = Instant::now();
+        acc.apply(MetricsEvent::Registry(RegistrySample {
+            rooms: 2,
+            conns: 5,
+            rooms_created: 2,
+            rooms_destroyed: 1,
+            rooms_died: 0,
+            joins: 7,
+            leaves: 2,
+            opens: 5,
+            closes: 0,
+            metrics_dropped: 0,
+        }));
+        // Deterministic fine-histogram shape: 100 steps, p50 in bin 10
+        // (lower edge 80 µs), p99 in bin 40 (lower edge 320 µs). The COARSE
+        // log2 histogram must tell the same story with the same total:
+        // production increments exactly one coarse bin per step
+        // (`hist_index` caps at the overflow bin), so `sum(step_hist)` ==
+        // `steps` is a production invariant — an all-zero coarse table
+        // under non-zero steps is an unreachable state.
+        let mut s = room_sample(RoomId(1), t, 100);
+        s.step_fine_hist[10] = 60;
+        s.step_fine_hist[40] = 40;
+        s.step_hist[hist_index(33_333, 80)] = 60;
+        s.step_hist[hist_index(33_333, 320)] = 40;
+        acc.apply(MetricsEvent::Room(s));
+
+        let out = acc.report(t).render_prometheus();
+
+        // Family headers exist exactly once per metric.
+        assert_eq!(
+            out.matches("# TYPE gsb_registry_rooms gauge").count(),
+            1,
+            "one TYPE header per family: {out}"
+        );
+        assert!(out.contains("gsb_registry_rooms 2\n"));
+        assert!(out.contains("gsb_registry_conns 5\n"));
+        assert!(out.contains("gsb_registry_opens_total 5\n"));
+        assert!(out.contains("# TYPE gsb_room_steps_total counter\n"));
+        assert!(out.contains("gsb_room_steps_total{room=\"r1\"} 100\n"));
+        assert!(out.contains("gsb_room_hz{room=\"r1\"} 0\n"), "no previous sample ⇒ hz gauge 0");
+        assert!(out.contains("gsb_net_bytes_in_total 0\n"));
+
+        // Histogram: budget 33 333 µs ⇒ first edge ceil(33333/128) = 261.
+        // The crafted steps sit in the coarse bins matching the fine story
+        // (80 µs / 320 µs), so every bin below the first edge is empty and
+        // +Inf carries the full count — production's "one bin per step"
+        // invariant keeps bucket cumulatives and _count consistent.
+        assert_eq!(
+            hist_edge_us(33_333, 0),
+            261,
+            "sanity: the first budget-fraction edge at this budget"
+        );
+        // The two crafted coarse bins render their cumulative counts at
+        // their own budget-fraction edges (60 through the 80 µs bin, 100
+        // through the 320 µs bin — bins are cumulative in le order):
+        let b80 = hist_index(33_333, 80);
+        let b320 = hist_index(33_333, 320);
+        assert!(
+            out.contains(&format!(
+                "gsb_room_step_hist_bucket{{room=\"r1\",le=\"{}\"}} 60\n",
+                hist_edge_us(33_333, b80)
+            )),
+            "the 60-step coarse bin renders cumulatively at its own edge"
+        );
+        assert!(
+            out.contains(&format!(
+                "gsb_room_step_hist_bucket{{room=\"r1\",le=\"{}\"}} 100\n",
+                hist_edge_us(33_333, b320)
+            )),
+            "the second bin's cumulative includes the first group"
+        );
+        assert!(out.contains("gsb_room_step_hist_bucket{room=\"r1\",le=\"+Inf\"} 100\n"));
+        assert!(out.contains("gsb_room_step_hist_count{room=\"r1\"} 100\n"));
+        assert!(out.starts_with("# HELP gsb_metrics_dropped_total"));
+
+        // Summary: exact percentiles of the crafted distribution (bin lower
+        // edges, integer arithmetic).
+        assert!(out.contains("gsb_room_step_duration_us{room=\"r1\",quantile=\"0.5\"} 80\n"));
+        assert!(out.contains("gsb_room_step_duration_us{room=\"r1\",quantile=\"0.99\"} 320\n"));
+    }
+
+    /// Naming convention lock: EVERY counter-family sample line carries the
+    /// `*_total` suffix (OPS §3); gauges never need it.
+    #[test]
+    fn prometheus_counter_families_all_end_in_total() {
+        let mut acc = MetricAccumulator::default();
+        let t = Instant::now();
+        acc.apply(MetricsEvent::Registry(RegistrySample {
+            rooms: 1,
+            conns: 0,
+            rooms_created: 1,
+            rooms_destroyed: 0,
+            rooms_died: 0,
+            joins: 0,
+            leaves: 0,
+            opens: 0,
+            closes: 0,
+            metrics_dropped: 0,
+        }));
+        acc.apply(MetricsEvent::Room(room_sample(RoomId(4), t, 12)));
+        let out = acc.report(t).render_prometheus();
+
+        // Parse the exposition minimally: family kind per name, then every
+        // sample line must obey its family's convention.
+        let mut kinds = std::collections::HashMap::new();
+        let mut counters = 0usize;
+        for line in out.lines() {
+            if let Some(rest) = line.strip_prefix("# TYPE ") {
+                let mut it = rest.split_whitespace();
+                if let (Some(name), Some(kind)) = (it.next(), it.next()) {
+                    kinds.insert(name.to_owned(), kind.to_owned());
+                }
+            } else if !line.is_empty() && !line.starts_with('#') {
+                let name = line.split(['{', ' ']).next().expect("sample has a name");
+                // Histogram/summary exposition derives suffixed sample
+                // names (_bucket/_sum/_count) from one declared family.
+                let base = name
+                    .strip_suffix("_bucket")
+                    .or_else(|| name.strip_suffix("_sum"))
+                    .or_else(|| name.strip_suffix("_count"))
+                    .unwrap_or(name);
+                let kind = kinds
+                    .get(base)
+                    .unwrap_or_else(|| panic!("sample `{name}` lacks a TYPE header"));
+                if kind == "counter" {
+                    counters += 1;
+                    assert!(
+                        name.ends_with("_total"),
+                        "counter sample `{name}` violates the *_total suffix"
+                    );
+                    assert_eq!(
+                        base, name,
+                        "a counter never uses histogram-style suffixes: {name}"
+                    );
+                }
+            }
+        }
+        assert!(counters > 20, "the suite covers the counter families: {counters}");
+    }
+
+    /// An empty report (the watch placeholder / a server with no registry
+    /// sample yet) renders the top-level and net families only — no absent
+    /// scope leaks an empty family, no room label appears.
+    #[test]
+    fn prometheus_empty_report_omits_absent_scopes() {
+        let report = MetricReport::initial_stale(Duration::from_secs(1));
+        let out = report.render_prometheus();
+        assert!(!out.contains("gsb_registry_"), "no registry scope: {out}");
+        assert!(!out.contains("{room="), "no room families: {out}");
+        assert!(out.contains("# TYPE gsb_net_bytes_in_total counter\n"));
+        assert!(out.contains("gsb_metrics_dropped_total 0\n"));
+    }
+
+    /// The watch placeholder is born stale: any freshness threshold of N
+    /// periods must already see it as expired, so `/healthz` answers
+    /// honestly ("warming up") until the collector's first REAL emission.
+    #[test]
+    fn initial_stale_placeholder_is_past_any_threshold() {
+        let period = Duration::from_millis(200);
+        let report = MetricReport::initial_stale(period);
+        assert!(report.rooms.is_empty());
+        assert!(
+            report.emitted_at.elapsed() >= period * 3,
+            "placeholder age {:?} must exceed three periods",
+            report.emitted_at.elapsed()
+        );
     }
 }

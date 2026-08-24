@@ -67,8 +67,12 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → **172** (172/172 yeşil +1 var olan `#[ignore]`'lu
-gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Son ekleme:
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → 172 → 184 → 197 → 205 → **215** (215/215 yeşil +1 var olan
+`#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
+`docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
+(`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
+`tests/rpc_shard.rs`) ve **ops yüzeyi** (`docs/OPS.md`: Prometheus `/metrics`, `/healthz`, admin API — elle yazılmış HTTP,
+`MetricSink::Watch`, sıfır yeni bağımlılık; aşağıda "Kapatılanlar (ops yüzeyi turu)"). Son ekleme:
 **dış inceleme hızlı düzeltme turu** — doğrulanmış dış inceleme raporundan beş
 madde kapatıldı: doküman çürüğü (metrik kanalı "unbounded" iddiası — kod
 bounded + `try_send` iken üç dosyada kendisiyle çeliyordu), `Ticker::spawn`
@@ -3011,6 +3015,45 @@ artık paniksiz (`left=50`, önceki her koşuda panic).
 (1) çerez rotasyonu + pre-auth tahsis sınırı (güvenlik turu); (2) rUDP REL
 give-up — ERTELENDİ (deneysel statü); (3) reconnect/reattach seam'i
 (ROADMAP P1'deki oturum politikası maddesiyle birleşir).
+
+## Kapatılanlar (ops yüzeyi turu)
+
+Kaynak: dış inceleme sonrası yol haritasının 2 numaralı maddesi — sunucu
+uzun ömürlü durum tutarken (park edilmiş oyuncu, pending RPC) gözlemlenemez
+olması. Tasarım: `docs/OPS.md`.
+
+- **Sıfır yeni bağımlılık:** HTTP/1.1 elle yazıldı (tokio TcpListener;
+  yalnız GET + `Connection: close`). Elenenler: axum/hyper (bağımlılık
+  bütçesi), JSON parser (admin query-string ile yeterli).
+- **Metrik akışı:** `MetricSink::Watch(watch::Sender<MetricReport>)` —
+  collector her periyotta en son raporu watch'a iter, HTTP task `borrow()`
+  ile okur (tek-yazar/kilitsiz). `render_prometheus()` ayrı fonksiyon:
+  `gsb_*` adlandırma, `*_total` sayaç sözleşmesi, histogram bucket'ları
+  gerçek µs kenarlarla.
+- **Endpoint'ler:** `/healthz` (liveness: rapor yaşı ≤ 3 periyot),
+  `/metrics` (text 0.0.4), `/rooms` listeleme + `/rooms/open|close`
+  (mevcut ServerHandle komutları — yeni kontrol yolu yok).
+- **Güvenlik duruşu:** varsayılan kapalı (`http_listen = ""`);
+  localhost-only sözleşme; auth NOT-DONE olarak beyazlı.
+- **Bulgular:** (1) ilk ajanın prometheus render'ında `+Inf` kovası
+  toplam gözlem sayısını taşımıyor ve assertion'larda düz-string içinde
+  `{{}}` hatası vardı — fixture üretim değişmeziyle (`sum(step_hist)==steps`)
+  tutarlı hale getirildi, assertion'lar hesaplanan kova indekslerinden
+  türetildi; (2) `emitted_at` alanı loadgen codec'ini kırmıştı (GSM1
+  formatı korundu).
+
+### Testler
+
+- `http_ops.rs :: healthz_answers_503_before_the_first_report`,
+  `healthz_reports_ok_while_ticker_runs`,
+  `metrics_endpoint_exposes_known_counters`,
+  `admin_open_status_close_round_trip`,
+  `unknown_path_wrong_verb_and_bad_params_are_rejected`,
+  `disabled_by_default_and_no_listener_without_config`
+- `metrics.rs :: render_prometheus` unit süiti (aile başlıkları,
+  `*_total` sözleşmesi, histogram tutarlılığı, boş-rapor davranışı)
+
+Test 205 → **215** (215/215 yeşil); clippy temiz; loadgen regresyonu yeşil.
 
 ## P0 — Ölçüm (önce veri, sonra optimize)
 

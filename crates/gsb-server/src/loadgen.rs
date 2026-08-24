@@ -2647,6 +2647,13 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
     }
     Some(MetricReport {
         metrics_dropped,
+        // The emission stamp (`emitted_at`) is a monotonic-clock `Instant`
+        // from the SERVER process — meaningless across a process boundary
+        // (the orchestrator's timeline differs), so it does not ride the
+        // wire format (unchanged "GSM1"). The decoder stamps ARRIVAL time:
+        // good enough for the orchestrator's age-style uses and honest
+        // about when this side first held the value.
+        emitted_at: Instant::now(),
         rooms,
         registry,
         net,

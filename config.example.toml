@@ -155,3 +155,17 @@ spawn_half_size = 50.0
 # Default 30. 0 restores the pre-reconnect semantics exactly: disconnect
 # = instant despawn.
 disconnect_grace_secs = 30.0
+
+# HTTP ops surface (docs/OPS.md): GET /healthz (liveness from the age of
+# the latest metrics report), GET /metrics (Prometheus text exposition,
+# version 0.0.4), GET /rooms, and the room-admin writes
+# POST /rooms/open?id=&tick_hz= and POST /rooms/close?id=. Empty string
+# (the default) disables the listener entirely — the default deployment
+# gains no extra socket.
+#
+# SECURITY POSTURE: keep this on loopback. v1 ships no auth and no TLS
+# (OPS §5), so anything that can reach the port can scrape metrics AND
+# open/close rooms. Bind "127.0.0.1:9090" for local operation; exposing it
+# beyond localhost is an explicit decision that needs a network-level
+# guard (firewall/ACL), not just good intentions.
+#http_listen = "127.0.0.1:9090"

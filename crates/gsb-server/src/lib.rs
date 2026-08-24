@@ -21,9 +21,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bevy_ecs::world::World;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+
+mod http;
 
 use gsb_core::channel::{channel, Inbox, Mailbox};
 use gsb_core::conn::ConnectionActor;
@@ -246,6 +250,17 @@ pub struct Config {
     /// `spawn_half_size`, not [`RoomConfig`] — it is policy, not core
     /// mechanics).
     pub disconnect_grace_secs: f64,
+    /// Bind address of the HTTP ops surface (`docs/OPS.md`): `/healthz`,
+    /// `/metrics`, `/rooms`, and the room-admin writes. The empty string
+    /// (the default) DISABLES the listener entirely — the default
+    /// deployment gains no extra socket and no new attack surface. When
+    /// set, it also redirects the metrics reports into the surface's
+    /// `watch` snapshot (see `start_inner`). WHY localhost by convention:
+    /// v1 ships no auth/TLS (OPS §5), so anything that can reach this port
+    /// can scrape metrics AND open/close rooms — bind beyond loopback only
+    /// as an explicit, network-guarded decision (e.g. `"127.0.0.1:9090"`,
+    /// never `"0.0.0.0"`).
+    pub http_listen: String,
 }
 
 impl Default for Config {
@@ -273,6 +288,7 @@ impl Default for Config {
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
             disconnect_grace_secs: gsb_game::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
+            http_listen: String::new(),
         }
     }
 }
@@ -339,6 +355,9 @@ pub enum ServerError {
 
     #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
     BadTickRate(f64),
+
+    #[error("invalid `http_listen` address `{0}`: {1}")]
+    BadHttpListen(String, String),
 }
 
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
@@ -377,6 +396,54 @@ pub struct ServerHooks {
     pub ticket: Option<TicketAuth>,
 }
 
+// ── the control-plane round trips (shared) ─────────────────────────────
+//
+// The three room-lifecycle round trips below are the WHOLE of what both
+// consumers need — `ServerHandle`'s programmatic API and the HTTP ops
+// surface (`http.rs`) — so they live once, over a bare registry mailbox.
+// WHY not on `ServerHandle`: the HTTP tasks hold only the mailbox (a cheap
+// clone), not the join handles/listener a full handle carries.
+
+/// Idempotent create (see [`RegistryMsg::CreateRoom`]); the reply doubles
+/// as a status query.
+pub(crate) async fn registry_open_room(
+    registry: &Mailbox<RegistryMsg>,
+    config: RoomConfig,
+) -> Result<RoomStatus, CoreError> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
+    registry
+        .send(RegistryMsg::CreateRoom { config, reply: tx })
+        .await
+        .map_err(|_| CoreError::Io("registry gone".into()))?;
+    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))?
+}
+
+/// Idempotent destroy (see [`RegistryMsg::DestroyRoom`]).
+pub(crate) async fn registry_close_room(
+    registry: &Mailbox<RegistryMsg>,
+    id: RoomId,
+) -> Result<RoomStatus, CoreError> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
+    registry
+        .send(RegistryMsg::DestroyRoom { id, reply: tx })
+        .await
+        .map_err(|_| CoreError::Io("registry gone".into()))?;
+    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+}
+
+/// Table-only status query (see [`RegistryMsg::RoomStatus`]).
+pub(crate) async fn registry_room_status(
+    registry: &Mailbox<RegistryMsg>,
+    id: RoomId,
+) -> Result<RoomStatus, CoreError> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
+    registry
+        .send(RegistryMsg::RoomStatus { id, reply: tx })
+        .await
+        .map_err(|_| CoreError::Io("registry gone".into()))?;
+    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+}
+
 /// Handle to a running server.
 pub struct ServerHandle {
     registry: Mailbox<RegistryMsg>,
@@ -385,12 +452,18 @@ pub struct ServerHandle {
     /// The metrics collector (emits one final report when the ticker's
     /// broadcast closes).
     metrics: JoinHandle<()>,
+    /// The HTTP ops-surface task, when `http_listen` was configured.
+    /// Aborted on stop (its listener drops with the aborted future).
+    http: Option<JoinHandle<()>>,
     /// The bound listener. `stop` closes it *before* aborting the accept
     /// loop: for the rUDP transport this is what stops the shared demux
     /// task (a plain drop would not reach it — see `Listener::close`).
     listener: Arc<dyn gsb_net::transport::Listener>,
     /// The actual bound address (useful when binding port 0 in tests).
     pub addr: SocketAddr,
+    /// The actual bound address of the HTTP ops surface; `None` when the
+    /// surface is disabled (`http_listen` empty — the default).
+    pub http_addr: Option<SocketAddr>,
     /// The match-result sink (the control plane's result seam, see
     /// `gsb_core::room::RoomLogic::match_result`): the room's result
     /// arrives here on shutdown. The reference adapter is the
@@ -406,10 +479,14 @@ impl ServerHandle {
     /// ticker is aborted, which closes the broadcast and stops any room that
     /// missed its window; the listener is closed (stopping any transport
     /// shared state, e.g. the rUDP demux); the accept loop is hard-aborted
-    /// (documented v1 limitation). The metrics collector is awaited last:
-    /// it emits one final report when the broadcast closes.
+    /// (documented v1 limitation). The HTTP ops surface is aborted with it.
+    /// The metrics collector is awaited last: it emits one final report when
+    /// the broadcast closes.
     pub async fn stop(self) {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
+        if let Some(http) = self.http {
+            http.abort();
+        }
         self.ticker.abort();
         self.listener.close();
         self.accept.abort();
@@ -424,12 +501,7 @@ impl ServerHandle {
     /// [`CoreError::RoomConflict`]. The round trip doubles as a status
     /// query (the reply carries the [`RoomStatus`]).
     pub async fn open_room(&self, config: RoomConfig) -> Result<RoomStatus, CoreError> {
-        let (tx, rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
-        self.registry
-            .send(RegistryMsg::CreateRoom { config, reply: tx })
-            .await
-            .map_err(|_| CoreError::Io("registry gone".into()))?;
-        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))?
+        registry_open_room(&self.registry, config).await
     }
 
     /// Close a room at runtime (feature A). **Idempotent**: closing a room
@@ -438,24 +510,14 @@ impl ServerHandle {
     /// second attempt). The room stops on its next tick; connections
     /// affiliated with it are notified (`RoomGone`).
     pub async fn close_room(&self, id: RoomId) -> Result<RoomStatus, CoreError> {
-        let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
-        self.registry
-            .send(RegistryMsg::DestroyRoom { id, reply: tx })
-            .await
-            .map_err(|_| CoreError::Io("registry gone".into()))?;
-        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+        registry_close_room(&self.registry, id).await
     }
 
     /// Query a room's status (feature A): [`RoomStatus::Running`] (with
     /// the member count), or [`RoomStatus::Absent`]. The registry answers
     /// from its own table (it never awaits a room).
     pub async fn room_status(&self, id: RoomId) -> Result<RoomStatus, CoreError> {
-        let (tx, rx) = tokio::sync::oneshot::channel::<RoomStatus>();
-        self.registry
-            .send(RegistryMsg::RoomStatus { id, reply: tx })
-            .await
-            .map_err(|_| CoreError::Io("registry gone".into()))?;
-        rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+        registry_room_status(&self.registry, id).await
     }
 }
 
@@ -647,6 +709,13 @@ fn grace_of(cfg: &Config) -> std::time::Duration {
     std::time::Duration::from_secs_f64(cfg.disconnect_grace_secs.max(0.0))
 }
 
+/// The metrics report cadence. ONE constant for both sides of the
+/// freshness contract: the collector emits every period, and the HTTP
+/// `/healthz` threshold is "three periods since the last emission"
+/// (`http.rs`) — deriving both from one value keeps the two honest if the
+/// cadence ever changes.
+const REPORT_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+
 async fn start_inner(
     cfg: Config,
     metric_sink: MetricSink,
@@ -667,6 +736,44 @@ async fn start_inner(
 
     let table = build_table();
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
+
+    // The HTTP ops surface (`docs/OPS.md`), enabled by a non-empty
+    // `http_listen`. When enabled it BECOMES the metrics consumer: the
+    // collector publishes each report into a `watch` channel (latest-wins
+    // overwrite — a scraper between periods always sees the newest report,
+    // and a slow reader can never back the collector up) instead of the
+    // caller-provided sink, because `MetricSink` carries exactly one
+    // destination. Documented consequence: combining
+    // `start_server_metrics*` with `http_listen` redirects the reports to
+    // the HTTP surface — a programmatic channel consumer requires leaving
+    // `http_listen` empty. The watch's initial value is born five periods
+    // stale, so `/healthz` answers 503 ("warming up") until the first real
+    // report instead of ok from a placeholder nobody produced.
+    let (metric_sink, http_task, http_addr) = if cfg.http_listen.is_empty() {
+        (metric_sink, None, None)
+    } else {
+        let listen: SocketAddr = cfg.http_listen.parse().map_err(|e: std::net::AddrParseError| {
+            ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
+        })?;
+        let listener = TcpListener::bind(listen)
+            .await
+            .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
+        let bound = listener.local_addr().map_err(|e| {
+            ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
+        })?;
+        let (report_tx, report_rx) =
+            watch::channel(MetricReport::initial_stale(REPORT_PERIOD));
+        let task = http::spawn(
+            listener,
+            reg_tx.clone(),
+            report_rx,
+            REPORT_PERIOD,
+            cfg.tick_hz,
+            1..=cfg.room_count,
+        );
+        info!(addr = %bound, "http ops surface listening");
+        (MetricSink::Watch(report_tx), Some(task), Some(bound))
+    };
 
     // The global ticker: one broadcast channel + one timing task. Rooms
     // subscribe to it at creation; aborting the task closes the broadcast,
@@ -693,7 +800,7 @@ async fn start_inner(
             ticker.subscribe(),
             metrics_rx,
             metric_sink,
-            std::time::Duration::from_secs(1),
+            REPORT_PERIOD,
         )
         .run(),
     );
@@ -975,8 +1082,10 @@ async fn start_inner(
         accept,
         ticker: ticker_task,
         metrics,
+        http: http_task,
         listener,
         addr,
+        http_addr,
         match_results: result_rx,
     })
 }

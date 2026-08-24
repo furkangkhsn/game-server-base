@@ -28,7 +28,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let handle = gsb_server::start_server(cfg.clone()).await?;
-    info!(addr = %handle.addr, tick_hz = cfg.tick_hz, rooms = cfg.room_count, "gsb server is up");
+    info!(
+        addr = %handle.addr,
+        http = ?handle.http_addr,
+        tick_hz = cfg.tick_hz,
+        rooms = cfg.room_count,
+        "gsb server is up"
+    );
 
     // Wait for a shutdown signal without multiplexing: one watcher task per
     // signal, each reporting through the bounded channel, and `main` awaits a

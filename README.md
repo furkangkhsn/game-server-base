@@ -53,7 +53,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 205 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
+cargo test --workspace          # 205 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), ops yüzeyi (/metrics, /healthz, admin API), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır
@@ -123,5 +123,7 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
   dahil).
 - `docs/TICK-ARCHITECTURE.md` — broadcast tabanlı tick mimarisi.
 - `docs/RPC-CONTROL-PLANE.md` — RPC deseni ve kontrol düzlemi tasarımı.
+- `docs/OPS.md` — ops yüzeyi tasarımı (/metrics, /healthz, admin API).
+- `docs/TRAIT-ARCHITECTURE.md` — GameLogic birleşimi, PlayerId yolu.
 - `docs/RECONNECT.md` — kopan oyuncu politikası (detach/resume/bot devri)
   tasarımı — **uygulanmadı**, uygulamanın sözleşmesi.
