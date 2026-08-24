@@ -97,6 +97,31 @@ tasarlandı — §4).
     sahip yeni sahibe yönlendirir (zincir derinliği migrasyon başına
     sınırlı) ya da registry ownership dizisine sorar (Faz kararı).
 
+## 4b. Serileştirme sahipliği: tipler logic'te, codec de logic'te
+
+Ipc/Net linklerde kapı 2 (Migrate.State) ve kapı 3 (BorderRecord)
+tipleri byte'a dönüşmek zorundadır (process bellekleri ayrıdır, move
+yok). İlke: **tipi kim tanımlıyorsa codec'i de o tanımlar** — yani
+logic; core hiçbir oyun alanını serileştirmez.
+
+Mekanizma: `ShardLink` implementasyonları payload tipleri üzerinde
+generic'tir (`Encode/Decode` bound'ları logic'in tiplerinden gelir);
+`InProcLink` bu bound'ları görmezden gelir (move yeterli), `Ipc/NetLink`
+uygular. Aktör kodu hiçbir şekilde değişmez; yalnız takılı link
+değişir. Doğrulama: her logic tipi için codec round-trip testi
+(DISTRIBUTED §9 fault-injection planının yanına ekli).
+
+Ayrım — kapı 2 tam State taşır (oyuncunun tümü), kapı 3 yalnız
+görünürlük dilimi alt-setini taşır: tipler bilinçli olarak FARKLIDIR,
+birleşen şey sahiplik desenidir ("tipi logic tanımlar"). Kapı 1
+(client snapshot) ise ara-tip olmadan doğrudan wire'a yazım ile
+aynı ilkeyi paylaşır (performans gereği fuse edilmiş — DESIGN/TRAIT
+belgeleri).
+
+Kapı 2'nin kanal-move kırılımı ayrı konudur: state serileştirilerek
+geçer AMA oyuncu frame'leri eski process'ten relay edilir (§6
+session-relay).
+
 ## 5. Sıralama ilkesi (özet)
 
 Global mesaj sırası HİÇBİR şarta garanti edilmez (bedeli ödenmez).
