@@ -872,6 +872,46 @@ async fn spawn_as(
     }
 }
 
+/// Regression lock for global join-epoch minting: join epochs used to be
+/// minted PER CONNECTION (each dispatcher restarted at 1), so a parked
+/// row carrying the previous session's epoch rejected the next session's
+/// FIRST resume as stale — every reconnect after an identity's first
+/// cost one wasted round trip (measured: 20 stale rejects in a 20-client
+/// churn run). Epochs are now minted globally by the registry at
+/// dispatch, so EVERY session's first resume attempt is accepted.
+#[tokio::test]
+async fn repeated_reconnects_are_accepted_on_first_attempt() {
+    let (tx, handle) = start_registry(parking_factory());
+    let room = RoomId(72);
+    create_room(&tx, reg_config(room)).await.expect("create");
+
+    let e0 = {
+        let _c = open_conn(&tx, ConnectionId(1)).await;
+        spawn_as(&tx, ConnectionId(1), room, "ana")
+            .await
+            .expect("first session joins")
+    };
+    close_conn(&tx, ConnectionId(1)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Three further sessions; under per-connection minting every resume
+    // here needed one stale-reject + retry round trip. Each MUST be
+    // accepted on its FIRST attempt and carry the SAME wire id.
+    let mut expected = e0;
+    for conn in [2u64, 3, 4] {
+        let _c = open_conn(&tx, ConnectionId(conn)).await;
+        let e = spawn_as(&tx, ConnectionId(conn), room, "ana")
+            .await
+            .expect("resume accepted ON THE FIRST ATTEMPT (global epochs)");
+        assert_eq!(e, expected, "wire id continuity across session {conn}");
+        close_conn(&tx, ConnectionId(conn)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        expected = e;
+    }
+
+    stop_registry(tx, handle).await;
+}
+
 /// A factory whose rooms hold EVERY disconnect (the parked-slot shape the
 /// supersedence test needs; the room-side policy lives here, where §3 put
 /// it).

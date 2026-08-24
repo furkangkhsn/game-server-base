@@ -313,6 +313,17 @@ enum RoomOp<St> {
         /// of a dead incarnation can be recognized — supervision, see
         /// `RegistryMsg::RoomDied`).
         generation: u64,
+        /// The join's guard epoch, minted GLOBALLY by the registry (one
+        /// monotonically increasing counter across ALL connections). A
+        /// per-connection counter resets to 1 on every new session, so a
+        /// parked row from the previous session (`session_epoch = k`)
+        /// rejected the k-th reconnect's first resume as stale and cost a
+        /// wasted round trip per reconnect (measured: one rejection for
+        /// EVERY resume beyond an identity's first). Global minting keeps
+        /// each connection's epochs a strictly increasing subsequence AND
+        /// makes every new session strictly newer than every parked row —
+        /// the §7 single-comparison guarantee holds on first attempt.
+        epoch: u64,
         out: mpsc::Sender<FrameBatch>,
         /// The resume key; empty = anonymous plain join.
         identity: String,
@@ -440,6 +451,10 @@ pub struct Registry<W, G, St> {
     /// Metric samples dropped on a full (bounded) metrics channel,
     /// cumulative.
     reg_metrics_dropped: u64,
+    /// Global monotonic join-epoch counter, minted here at dispatch (see
+    /// the `RoomOp::Join::epoch` doc: per-connection counters made every
+    /// resume after an identity's first trip the staleness guard once).
+    next_join_epoch: u64,
     /// Outbound metrics path (bounded channel; the registry sends with the
     /// synchronous `try_send` — no await).
     metrics: mpsc::Sender<MetricsEvent>,
@@ -512,6 +527,7 @@ where
             reg_opens: 0,
             reg_closes: 0,
             reg_metrics_dropped: 0,
+            next_join_epoch: 0,
             metrics,
             max_connections,
             result_sink,
@@ -1063,12 +1079,19 @@ where
                         .conn_ops
                         .entry(conn)
                         .or_insert_with(|| Self::spawn_conn_ops(conn, self.self_mailbox.clone()));
+                    // The guard epoch is minted HERE, in the single-threaded
+                    // registry, globally across all connections (see the
+                    // `RoomOp::Join::epoch` doc for why per-connection
+                    // minting broke first-attempt resumes).
+                    self.next_join_epoch = self.next_join_epoch.wrapping_add(1);
+                    let join_epoch = self.next_join_epoch;
                     if op_tx
                         .try_send(RoomOp::Join {
                             room,
                             handle,
                             shard: shard_idx,
                             generation,
+                            epoch: join_epoch,
                             out,
                             identity,
                             reply,
@@ -1711,18 +1734,19 @@ where
     /// connection, so per-connection ordering (join → leave → rejoin) is
     /// guaranteed, and the registry never awaits a room from its own task.
     ///
-    /// The dispatcher also mints the connection's **join epochs** (one per
-    /// `Join` op, a local monotonic counter — see `crate::shard`,
-    /// "Migration protocol"): the epoch travels with every `Join`/`Leave`
-    /// of that join, and a sharded room's shards gate late migrations on
-    /// it.
+    /// The dispatcher serializes this connection's room-relationship ops
+    /// (join → leave → rejoin in dispatch order). Join epochs are minted
+    /// GLOBALLY by the registry at dispatch time and arrive stamped on
+    /// the op (see `RoomOp::Join::epoch`): the old per-connection counter
+    /// reset to 1 on every new session, so a reconnect of a parked
+    /// identity tripped the resume staleness guard once before a retry
+    /// succeeded.
     fn spawn_conn_ops(
         conn: ConnectionId,
         registry: Mailbox<RegistryMsg>,
     ) -> mpsc::Sender<RoomOp<St>> {
         let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St>>(16);
         tokio::spawn(async move {
-            let mut epoch: u64 = 0;
             // (room, entity, handle, the join's epoch, the resume key)
             let mut in_room: Option<(RoomId, EntityId, RoomHandle<St>, u64, String)> =
                 None;
@@ -1733,11 +1757,11 @@ where
                         handle,
                         shard,
                         generation,
+                        epoch,
                         out,
                         identity,
                         reply,
                     } => {
-                        epoch = epoch.wrapping_add(1);
                         // An identified join IS a resume attempt (§14.3):
                         // route it at the park ledger first; fall back to
                         // the plain join when nothing holds the identity.

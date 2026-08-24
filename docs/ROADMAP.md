@@ -3043,11 +3043,22 @@ give-up — ERTELENDİ (deneysel statü); (3) reconnect/reattach seam'i
 
 ## P1 — Robustluk ve güvenlik
 
-- [ ] **Reconnect/reattach** — kopan oyuncunun entity'sini oyun
+- [x] **Reconnect/reattach** — kopan oyuncunun entity'sini oyun
   politikasıyla (Park / AI devri / combat-held) yaşatan detach-resume
   mekanizması; oda sınıfı (persistent/ephemeral) ve ERROR 12 dahil.
-  Tasarım tamamlandı ve dış danışma ile sabitlendi:
-  `docs/RECONNECT.md` — uygulama turu onu sözleşme olarak alır.
+  Tasarım dış danışma ile sabitlendi (`docs/RECONNECT.md`) ve iki alt
+  turda uygulandı: Tur A (core mekaniği: Detach/Resume mesajları,
+  epoch-guard'lı broadcast-resume, tek noktadan RebindKey, kanal swap,
+  deadline sweep, persistent/emeklilik) + Tur B (demo park politikası,
+  bot stub gerçek ingest yolunda, e2e same-wire-id kanıtı, churn profili:
+  100 istemci × 3 döngü → 300 resume ~37/sn, sıfır hata, 30 Hz korundu).
+  Tur B'nin bulgusu: join epoch'ları bağlantı başına mintleniyordu ve
+  kimliğin sonraki HER resume'u bir kez haksız stale-reject yiyordu
+  (ölçüm: 20 istemcide 20 red) — epoch minting registry'ye global
+  taşındı, regresyon kilidi `repeated_reconnects_are_accepted_on_first_
+  attempt`. Kalan not: oda içi anahtarların uzun vadede PlayerId'ye
+  taşınması (RECONNECT §14.1); rUDP üstünde e2e varyantı (deneysel
+  statüye bağlı).
 
 - [ ] **Oturum zaman aşımı** — ölü TCP bağlantısı (RST'siz kopma) slot +
   görev + kayıt işgal etmeye devam ediyor. Heartbeat son-görülme damgası
