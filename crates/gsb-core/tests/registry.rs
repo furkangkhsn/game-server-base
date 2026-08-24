@@ -117,7 +117,7 @@ fn start_registry() -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     // behaviour, the metric path has its own tests.
     let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, None, None).run(),
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, None, None, None).run(),
     );
     (tx, handle)
 }
@@ -405,7 +405,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
     let (metrics_tx, _metrics_rx) =
         tokio::sync::mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, Some(1), None).run(),
+        Registry::new(rx, tx.clone(), factory(), ticker, metrics_tx, Some(1), None, None).run(),
     );
 
     // The first connection takes the one seat.

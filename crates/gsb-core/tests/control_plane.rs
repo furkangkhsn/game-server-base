@@ -94,7 +94,7 @@ fn start(
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, result_sink).run(),
+        Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, result_sink).run(),
     );
     (tx, handle)
 }

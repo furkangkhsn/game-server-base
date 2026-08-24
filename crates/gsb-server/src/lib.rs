@@ -189,6 +189,35 @@ pub struct Config {
     /// region, and the cap keeps the server's behavior there defined (gentle
     /// rejection) instead of unbounded resource growth.
     pub max_connections: Option<u64>,
+    /// Cap on simultaneously UNAUTHENTICATED connections
+    /// (docs/SECURITY.md §4): a scripted handshake storm must not grow
+    /// server memory without bound while the total cap is still far away.
+    /// A connection over this cap is rejected at birth (`ERROR` code 9,
+    /// "server at unauthenticated capacity", no registry entry) — exactly
+    /// the [`Self::max_connections`] rejection path, checked in addition
+    /// to it. Authenticated connections (and detached/resumed sessions —
+    /// they carry tickets, so they are authenticated by construction)
+    /// never count against it.
+    ///
+    /// Value semantics (resolved ONCE at startup, see `unauth_cap_of`):
+    ///
+    /// - omitted (`None`, the default): derived as
+    ///   `max(max_connections / 4, 64)` — 25 % of the total cap, floored
+    ///   at 64 so even a tiny deployment keeps real headroom for a lobby
+    ///   full of slow-but-honest handshakes;
+    /// - when `max_connections` is unlimited: the same formula runs
+    ///   against the built-in default base ([`DEFAULT_MAX_CONNECTIONS`],
+    ///   so the derived default is 25_000). Decision (the contract left
+    ///   this open, "simplest sound choice wins"): an unlimited-total
+    ///   server still needs a bounded half-open-handshake pool, and taking
+    ///   the formula's base from the documented design-goal constant keeps
+    ///   ONE derivation instead of two behaviors — while 25 k simultaneous
+    ///   pre-auth handshakes is far beyond any legitimate slow-auth flow
+    ///   yet still a hard bound on storm memory;
+    /// - `n > 0`: used exactly;
+    /// - `0`: the cap is DISABLED (the config-file convention here: 0 =
+    ///   unlimited) for deployments behind an external gate.
+    pub max_unauth_conns: Option<u64>,
     /// Warn when a room group's snapshot payload exceeds this many bytes
     /// (rUDP MTU readiness; default = `max_frame_bytes`).
     pub max_snapshot_bytes: usize,
@@ -274,6 +303,16 @@ pub struct Config {
     pub http_listen: String,
 }
 
+/// The built-in default server-wide connection cap (DESIGN §1's design
+/// goal as a guardrail). Single source of truth for the `Config` default
+/// AND the unauth-cap derivation when `max_connections` is unlimited.
+const DEFAULT_MAX_CONNECTIONS: u64 = 100_000;
+
+/// The floor of the derived unauthenticated-connection cap
+/// (`unauth_cap_of`): even the smallest deployment gets real headroom for
+/// slow-but-honest handshakes instead of a cap that rounds to near-zero.
+const MIN_UNAUTH_CONNS: u64 = 64;
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -287,7 +326,8 @@ impl Default for Config {
             conn_out: 256,
             idle_timeout_secs: 30.0,
             max_players: Some(10_000),
-            max_connections: Some(100_000),
+            max_connections: Some(DEFAULT_MAX_CONNECTIONS),
+            max_unauth_conns: None,
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
             visibility: Visibility::default(),
@@ -737,6 +777,23 @@ fn grace_of(cfg: &Config) -> std::time::Duration {
     std::time::Duration::from_secs_f64(cfg.disconnect_grace_secs.max(0.0))
 }
 
+/// Resolve the effective unauthenticated-connection cap ONCE, at startup
+/// (see [`Config::max_unauth_conns`] for the semantics): an explicit
+/// positive value wins; `Some(0)` disables the cap entirely; omission
+/// derives `max(max_connections / 4, 64)` from the total cap — falling
+/// back to [`DEFAULT_MAX_CONNECTIONS`] as the formula's base when the
+/// total cap itself is unlimited (one derivation, one documented base).
+fn unauth_cap_of(cfg: &Config) -> Option<u64> {
+    match cfg.max_unauth_conns {
+        Some(0) => None,
+        Some(n) => Some(n),
+        None => {
+            let base = cfg.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
+            Some((base / 4).max(MIN_UNAUTH_CONNS))
+        }
+    }
+}
+
 /// The metrics report cadence. ONE constant for both sides of the
 /// freshness contract: the collector emits every period, and the HTTP
 /// `/healthz` threshold is "three periods since the last emission"
@@ -880,6 +937,7 @@ async fn start_inner(
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    unauth_cap_of(&cfg),
                     Some(result_tx.clone()),
                 )
                 .run(),
@@ -895,6 +953,7 @@ async fn start_inner(
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    unauth_cap_of(&cfg),
                     Some(result_tx.clone()),
                 )
                 .run(),
@@ -910,6 +969,7 @@ async fn start_inner(
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    unauth_cap_of(&cfg),
                     Some(result_tx.clone()),
                 )
                 .run(),
@@ -925,6 +985,7 @@ async fn start_inner(
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    unauth_cap_of(&cfg),
                     Some(result_tx.clone()),
                 )
                 .run(),
@@ -952,6 +1013,7 @@ async fn start_inner(
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
+                    unauth_cap_of(&cfg),
                     // Faz 3: every shard reports ITS final state through
                     // the shared sink at its own teardown — one payload
                     // per shard under the logical room id (the adapter

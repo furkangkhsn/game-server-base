@@ -932,7 +932,7 @@ fn start_registry(
     let (ticker, _ticker_task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<MetricsEvent>(64);
     let handle =
-        tokio::spawn(Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None).run());
+        tokio::spawn(Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, None).run());
     (tx, handle)
 }
 

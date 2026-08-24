@@ -211,6 +211,15 @@ pub enum RegistryMsg {
     /// A connection went away for good; the registry removes its entry and
     /// makes sure its room-side entity is cleaned up.
     ConnClosed { conn: ConnectionId },
+    /// A connection authenticated successfully (either auth path): it
+    /// leaves the unauthenticated pool its [`Self::ConnOpened`] entered
+    /// (docs/SECURITY.md §4). Sent by the connection actor itself, right
+    /// where its state flips to authenticated. A notice for a connection
+    /// the registry never recorded (rejected at a cap) or already removed
+    /// is ignored: informational only. Detached/resumed sessions never
+    /// re-enter the pool — an affiliation requires authentication, so a
+    /// parked entry keeps its authenticated mark for its whole lifetime.
+    Authed { conn: ConnectionId },
     /// Shut everything down: notify connections, destroy all rooms.
     Shutdown,
 
@@ -401,6 +410,14 @@ struct ConnInfo {
     /// Recorded at dispatch so the resume re-affiliation can find and
     /// release the detached entry it supersedes.
     identity: String,
+    /// Whether this connection completed AUTH (docs/SECURITY.md §4):
+    /// `ConnOpened` opens as unauthenticated; the connection actor reports
+    /// success via [`RegistryMsg::Authed`]. Only unauthenticated entries
+    /// count against `max_unauth_conns`. Detached entries are always
+    /// authenticated by construction (an affiliation requires auth), so a
+    /// parked/resumed session never consumes unauthenticated capacity —
+    /// the flag just stays as the session carried it.
+    authed: bool,
     /// The transport died but the entity is parked room-side: the
     /// affiliation is kept (slot held, §4) with this mark. A resumed or
     /// fresh session for the same identity releases the entry; a room
@@ -466,6 +483,17 @@ pub struct Registry<W, G, St> {
     /// `reg_opens`) and is told to close itself via
     /// [`ConnIn::ServerClosed`] (an `ERROR` frame, code 9, then EOF).
     max_connections: Option<u64>,
+    /// Cap on simultaneously UNAUTHENTICATED connections
+    /// (docs/SECURITY.md §4), enforced exactly where `max_connections` is:
+    /// the connection table is the only place that sees both opens,
+    /// closes, and (now) auth transitions. A rejected connection gets the
+    /// same gentle birth rejection (`ERROR` frame, code 9, "server at
+    /// unauthenticated capacity") and no table entry. Detached/resumed
+    /// sessions are authenticated entries by construction and never count.
+    /// The default derivation (25 % of `max_connections`, floored at 64)
+    /// lives at the composition root — this actor takes the resolved cap.
+    /// `None` = no unauth cap (explicitly disabled, or derived-off).
+    max_unauth_conns: Option<u64>,
     /// The match-result sink (the control plane's result seam, see
     /// [`crate::room::RoomLogic::match_result`]): a bounded mailbox the
     /// composition root reads from (its reference adapter). Cloned to
@@ -497,6 +525,10 @@ where
     G: Eq + Hash + Clone + Debug + Send + 'static,
     St: Debug + Send + 'static,
 {
+    // The actor's wiring: every mailbox/value the control plane owns
+    // arrives here (the composition point; same shape as
+    // `ConnectionActor::new`).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         inbox: Inbox<RegistryMsg>,
         self_mailbox: Mailbox<RegistryMsg>,
@@ -507,6 +539,10 @@ where
         metrics: mpsc::Sender<MetricsEvent>,
         // Server-wide connection cap (`None` = unlimited; see the field).
         max_connections: Option<u64>,
+        // Unauthenticated-connection cap (docs/SECURITY.md §4; `None` =
+        // no cap — the derivation from `max_connections` happened at the
+        // composition root; see the field).
+        max_unauth_conns: Option<u64>,
         // The match-result sink (see the field): `None` = no result seam.
         result_sink: Option<Mailbox<MatchResult>>,
     ) -> Self {
@@ -530,6 +566,7 @@ where
             next_join_epoch: 0,
             metrics,
             max_connections,
+            max_unauth_conns,
             result_sink,
             retired: HashMap::new(),
             retired_order: VecDeque::new(),
@@ -1165,10 +1202,58 @@ where
                         });
                         continue;
                     }
+                    // Unauthenticated-session cap (docs/SECURITY.md §4),
+                    // enforced exactly like the total cap above — same
+                    // table, same gentle birth rejection, no room
+                    // involvement, no entry recorded. Only entries still in
+                    // `WaitingAuth` count: an authenticated entry left the
+                    // pool via `Authed`, and a detached entry is always
+                    // authenticated by construction (an affiliation
+                    // requires auth), so parked/resumed sessions never
+                    // consume unauthenticated capacity. The scan is
+                    // O(connections) on the open path only — a
+                    // control-plane-rate event, like the member-count
+                    // queries above.
+                    if let Some(cap) = self.max_unauth_conns
+                        && self.conns.values().filter(|i| !i.authed).count() as u64 >= cap
+                    {
+                        warn!(
+                            %conn,
+                            capacity = cap,
+                            "server at unauthenticated capacity; new connection rejected"
+                        );
+                        tokio::spawn(async move {
+                            let _ = inbox
+                                .send(ConnIn::ServerClosed {
+                                    reason: "server at unauthenticated capacity".into(),
+                                })
+                                .await;
+                        });
+                        continue;
+                    }
                     let info = self.conns.entry(conn).or_default();
                     info.inbox = Some(inbox);
                     self.reg_opens += 1;
                     self.emit_metrics();
+                }
+                RegistryMsg::Authed { conn } => {
+                    // The connection finished AUTH: it leaves the
+                    // unauthenticated pool (§4), freeing cap space for a
+                    // new open. An absent entry means the connection was
+                    // rejected at a cap or closed before authenticating —
+                    // nothing to mark.
+                    match self.conns.get_mut(&conn) {
+                        Some(info) => {
+                            info.authed = true;
+                            debug!(
+                                %conn,
+                                "connection authenticated; leaves the unauthenticated pool"
+                            );
+                        }
+                        None => {
+                            debug!(%conn, "auth notice for an unregistered connection");
+                        }
+                    }
                 }
                 RegistryMsg::ConnClosed { conn } => {
                     // The connection actor is gone for good. The entity's

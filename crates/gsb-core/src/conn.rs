@@ -50,7 +50,31 @@
 //! within seconds. A sliding window would need per-violation timestamps
 //! for no gain: the failure mode it addresses (many early violations,
 //! then honesty) does not occur per-connection.
+//!
+//! **Pre-auth rate limits** (docs/SECURITY.md §3, the second guardrail
+//! family in this file): three more mechanisms live in the same actor-local
+//! state, reusing the budget machinery above instead of adding any new
+//! enforcement path:
+//!
+//! - **AUTH attempt window** (§3.1): at most three `AUTH` attempts per ten
+//!   seconds per connection; an attempt past the window's allowance is a
+//!   *hard* violation and rides the budget above (four of them close).
+//!   Attempts one-to-three keep the ordinary ticket-rejection path (ERROR
+//!   code 10, connection alive) — a legitimate client retrying a rejected
+//!   ticket is never budgeted for trying.
+//! - **Pre-auth heartbeat throttle** (§3.2): before auth success a
+//!   heartbeat ACK is answered at most once per second; surplus heartbeats
+//!   are counted in a dedicated counter and NOT answered — deliberately
+//!   *not* violations (see the field's doc: a buggy-but-honest client must
+//!   not burn its budget on liveness probes). After auth success
+//!   heartbeats keep their exact pre-existing behavior.
+//! - **Pre-auth frame budget** (§3.3): at most 64 inbound frames of any
+//!   kind before auth success; crossing the budget closes the connection
+//!   immediately (`ERROR` code 9 naming the policy). Auth success retires
+//!   the counter's relevance naturally: it only gates the WaitingAuth
+//!   phase.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -96,6 +120,47 @@ const HARD_VIOLATION_WEIGHT: u32 = 4;
 /// Score a race-class violation adds (legitimate transitions reach it, so
 /// each occurrence is weak evidence).
 const RACE_VIOLATION_WEIGHT: u32 = 1;
+
+/// The AUTH-attempt sliding window (docs/SECURITY.md §3.1): attempts
+/// older than this fall out of the allowance.
+///
+/// Why ten seconds cannot touch honest traffic: a legitimate retry of a
+/// rejected ticket is paced by fetching a FRESH ticket from the platform
+/// (a round trip through the matchmaker/auth service), and a client that
+/// keeps failing surfaces the error to its user instead of spinning —
+/// three attempts in ten seconds is already generous headroom above any
+/// real retry loop, while a scripted credential-stuffing loop hits the
+/// wall on its fourth attempt.
+const AUTH_WINDOW: Duration = Duration::from_secs(10);
+
+/// AUTH attempts admitted per [`AUTH_WINDOW`] per connection (§3.1).
+/// Attempts one-to-three are processed normally (ticket rejection or
+/// success); attempt four-plus in-window is a HARD violation riding the
+/// existing budget (weight 4 → four of them close the connection), so no
+/// second enforcement mechanism exists for the flood case.
+const AUTH_ATTEMPTS_PER_WINDOW: usize = 3;
+
+/// Minimum spacing between ANSWERED pre-auth heartbeat ACKs
+/// (docs/SECURITY.md §3.2). One answer per second still proves liveness
+/// to an honest waiting-in-lobby client; anything faster pre-auth is the
+/// 1:1 amplification shape the cap exists to close. Post-auth heartbeats
+/// are throttled by nothing (the liveness signal must stay intact).
+const PREAUTH_HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Pre-auth total inbound frame budget (docs/SECURITY.md §3.3): at most
+/// this many frames of ANY kind before auth success; crossing it closes
+/// the connection immediately (`ERROR` code 9 naming the policy).
+///
+/// Sized against the legitimate handshake: AUTH (plus a few ticket
+/// retries), then JOIN, then heartbeats at their ~10 s cadence sums to
+/// single digits even for a slow client stuck in `WaitingAuth` — while an
+/// unauthenticated sender that keeps producing frames after the server's
+/// answers has no honest reason to exist, and the budget stops its
+/// control-frame generation from being free. Auth success retires the
+/// counter's relevance (it only gates the WaitingAuth phase); post-auth
+/// traffic is bounded by the action-channel and violation machinery
+/// instead.
+const PREAUTH_FRAME_BUDGET: u32 = 64;
 
 /// The violation class of a protocol error, as counted by the budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +277,37 @@ pub struct ConnectionActor {
     /// Violation events since the last metrics flush (delta, like the
     /// other conn counters) → `NetReport.violations`.
     m_violations: u64,
+    /// AUTH attempt timestamps inside the current [`AUTH_WINDOW`] (§3.1).
+    /// Actor-local, bounded by construction: only ADMITTED attempts are
+    /// recorded (at most [`AUTH_ATTEMPTS_PER_WINDOW`] entries, ever), so
+    /// the flood itself cannot grow this — a violator's extra attempts are
+    /// answered through the budget above and never touch the window.
+    /// Admitted-only recording also means an honest client's ten quiet
+    /// seconds always fully restore its allowance.
+    auth_attempts: VecDeque<Instant>,
+    /// When the last pre-auth heartbeat ACK went out (§3.2). Consulted
+    /// only while `WaitingAuth`; post-auth heartbeats answer unconditionally.
+    last_preauth_hb_ack: Option<Instant>,
+    /// Surplus PRE-AUTH heartbeats counted silently (§3.2): over-rate
+    /// liveness probes that got no ACK. A dedicated counter, deliberately
+    /// NOT a violation despite the contract's "counted" wording: the
+    /// throttle itself already caps the amplification (one small ACK per
+    /// second per connection), so budgeting adds nothing on the hostile
+    /// side — it would only convert a buggy-but-honest client (a
+    /// misconfigured heartbeat timer in a lobby screen) into a forced
+    /// disconnect. Liveness probing is not evidence of hostility; a real
+    /// frame flood pre-auth is closed by the §3.3 budget anyway.
+    m_preauth_hb_extra: u64,
+    /// Inbound frames since the connection opened, while still
+    /// `WaitingAuth` (§3.3). Auth success retires its relevance: every
+    /// check is gated on the WaitingAuth state, so nothing to reset.
+    preauth_frames: u32,
+    /// Set when the §3.3 pre-auth frame budget closes the connection (the
+    /// close notice was sent); checked by the run loop next to
+    /// `v_closing`. Separate from the violation flag because this close is
+    /// a capacity policy, not a scored violation — but the teardown is the
+    /// ordinary cascade either way.
+    p_closing: bool,
     m_flushed_in_bytes: u64,
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,
@@ -283,6 +379,11 @@ impl ConnectionActor {
             v_answered: 0,
             v_closing: false,
             m_violations: 0,
+            auth_attempts: VecDeque::new(),
+            last_preauth_hb_ack: None,
+            m_preauth_hb_extra: 0,
+            preauth_frames: 0,
+            p_closing: false,
             m_flushed_in_bytes: 0,
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
@@ -308,12 +409,28 @@ impl ConnectionActor {
                         self.m_in_bytes.saturating_add(2 + frame.payload.len() as u64);
                     self.m_in_frames += 1;
                     self.maybe_flush_metrics(false);
+                    // Pre-auth total frame budget (§3.3): counted BEFORE
+                    // dispatch, so the crossing frame is not processed at
+                    // all — an unauthenticated peer that keeps producing
+                    // frames past the budget gets the close notice instead
+                    // of one more round of server work. Every check is
+                    // gated on WaitingAuth, so auth success naturally ends
+                    // the counting (nothing to reset).
+                    if self.state == ConnState::WaitingAuth {
+                        self.preauth_frames += 1;
+                        if self.preauth_frames > PREAUTH_FRAME_BUDGET {
+                            self.close_preauth_budget().await;
+                            break;
+                        }
+                    }
                     self.handle_frame(frame).await;
                     // The violation budget may have been exhausted while
                     // handling the frame (the `ERROR` code 9 close notice
                     // was already sent by `reply_err`); tear down now,
-                    // exactly like a `ServerClosed`.
-                    if self.v_closing {
+                    // exactly like a `ServerClosed`. Same teardown for the
+                    // §3.3 pre-auth budget (its own code-9 notice was sent
+                    // by `close_preauth_budget`).
+                    if self.v_closing || self.p_closing {
                         break;
                     }
                 }
@@ -436,6 +553,41 @@ impl ConnectionActor {
                     self.reply_err(ProtoError::AlreadyAuthenticated).await;
                     return;
                 }
+                // AUTH attempt window (§3.1): admitted before ANY
+                // processing. Attempts one-to-three keep the ordinary path
+                // (ticket rejection = ERROR code 10, connection alive — a
+                // legitimate retry is never budgeted for trying); attempt
+                // four-plus in-window is a HARD violation through the same
+                // funnel as every other hard error (weight 4 → four of
+                // them exhaust the budget and close), so the flood case
+                // adds no new enforcement machinery.
+                //
+                // Only ADMITTED attempts enter the window (bounded at
+                // [`AUTH_ATTEMPTS_PER_WINDOW`] entries forever): a
+                // violator cannot extend its own occupancy, and the budget
+                // — not the window — decides when flooding stops mattering
+                // (four violations close). Ten quiet seconds always fully
+                // restore an honest client's allowance.
+                let now = Instant::now();
+                self.auth_attempts
+                    .retain(|t| now.duration_since(*t) < AUTH_WINDOW);
+                if self.auth_attempts.len() >= AUTH_ATTEMPTS_PER_WINDOW {
+                    // Auth-family ERROR code 3 (the documented "auth"
+                    // class: unauthenticated / re-auth) — no new wire
+                    // vocabulary; the message carries the specificity.
+                    self.count_violation(
+                        ViolationClass::Hard,
+                        3,
+                        format!(
+                            "auth attempt rate limit exceeded: max \
+                             {AUTH_ATTEMPTS_PER_WINDOW} attempts per \
+                             {AUTH_WINDOW:?}; wait for the window to pass"
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+                self.auth_attempts.push_back(now);
                 let auth: base::Auth = match self.decode::<base::Auth>(frame.op, frame) {
                     Ok(m) => m,
                     Err(e) => {
@@ -505,6 +657,15 @@ impl ConnectionActor {
                             self.ticket = Some(v.clone());
                             self.identity = v.player.clone();
                             self.state = ConnState::Authed;
+                            // §4: the connection leaves the registry's
+                            // unauthenticated pool (the cap lives where the
+                            // connection table lives). A failed send means
+                            // the registry is gone (shutdown) — ignored,
+                            // like every other fire-and-forget notice.
+                            let _ = self
+                                .registry
+                                .send(RegistryMsg::Authed { conn: self.conn })
+                                .await;
                             debug!(%self.conn, player = %v.player, room = %v.room, "ticket authenticated");
                             let _ = self
                                 .send_frame(
@@ -547,6 +708,11 @@ impl ConnectionActor {
                     return;
                 }
                 self.state = ConnState::Authed;
+                // §4: same unauthenticated-pool notice as the ticket path.
+                let _ = self
+                    .registry
+                    .send(RegistryMsg::Authed { conn: self.conn })
+                    .await;
                 // Local-auth path: the name IS the resume key (demo and
                 // testing only — RECONNECT §4: on this path nothing
                 // authoritative stands behind the name).
@@ -700,6 +866,32 @@ impl ConnectionActor {
                         return;
                     }
                 };
+                // Pre-auth heartbeat throttle (§3.2): at most one ACK per
+                // second before auth success — the 1:1 request/response
+                // amplification of unauthenticated liveness probing ends
+                // here. Surplus heartbeats are counted in a dedicated
+                // counter and get NO answer, deliberately NOT budgeted
+                // (see the field doc: the throttle already caps the cost,
+                // so scoring them would only punish honest-buggy clients).
+                // Post-auth the branch below is byte-identical to the
+                // pre-Tur-B behavior: every heartbeat answered (the
+                // session's liveness signal).
+                if self.state == ConnState::WaitingAuth {
+                    let now = Instant::now();
+                    let due = self.last_preauth_hb_ack.is_none_or(|t| {
+                        now.duration_since(t) >= PREAUTH_HEARTBEAT_MIN_INTERVAL
+                    });
+                    if !due {
+                        self.m_preauth_hb_extra += 1;
+                        debug!(
+                            %self.conn,
+                            extra = self.m_preauth_hb_extra,
+                            "pre-auth heartbeat over the 1/s answer rate; counted, not answered"
+                        );
+                        return;
+                    }
+                    self.last_preauth_hb_ack = Some(now);
+                }
                 let _ = self
                     .send_frame(
                         op::base::HEARTBEAT_ACK,
@@ -813,21 +1005,8 @@ impl ConnectionActor {
 
     /// The single funnel for protocol errors: every `ERROR` frame this
     /// actor produces as a *response to a violation* passes through here,
-    /// which is where the violation budget lives (module docs).
-    ///
-    /// Behaviour per violation:
-    /// 1. classify (hard / race / not-a-violation);
-    /// 2. counted violations add their weight to the lifetime score and
-    ///    increment the event count (this also feeds the metrics delta);
-    /// 3. if fewer than [`VIOLATION_ANSWER_LIMIT`] violations have been
-    ///    answered so far, send the `ERROR` frame (the diagnosis);
-    ///    otherwise stay silent (amplification is bounded here);
-    /// 4. if the score just reached [`VIOLATION_BUDGET`], send the close
-    ///    notice (`ERROR` code 9, the reason in the message — same code
-    ///    family as idle timeout / connection capacity: a *server*
-    ///    decision, the message carries the specificity), emit the
-    ///    structured close signal with the peer address, and flag the run
-    ///    loop to tear the connection down.
+    /// which classifies the error and hands it to [`Self::count_violation`]
+    /// — where the violation budget lives (module docs).
     async fn reply_err(&mut self, e: ProtoError) {
         let (code, message) = match &e {
             ProtoError::UnknownOpcode(_) => (1, e.to_string()),
@@ -839,6 +1018,26 @@ impl ConnectionActor {
             _ => (7, e.to_string()),
         };
         let class = violation_class(&e);
+        self.count_violation(class, code, message).await;
+    }
+
+    /// The weighted-budget machinery shared by every counted violation:
+    /// `reply_err` after classifying a decoded protocol error, and the
+    /// §3.1 AUTH-attempt window directly (which raises a hard violation
+    /// without a `ProtoError` to classify). Behaviour per violation:
+    ///
+    /// 1. counted violations add their weight to the lifetime score and
+    ///    increment the event count (this also feeds the metrics delta);
+    /// 2. if fewer than [`VIOLATION_ANSWER_LIMIT`] violations have been
+    ///    answered so far, send the `ERROR` frame (the diagnosis);
+    ///    otherwise stay silent (amplification is bounded here);
+    /// 3. if the score just reached [`VIOLATION_BUDGET`], send the close
+    ///    notice (`ERROR` code 9, the reason in the message — same code
+    ///    family as idle timeout / connection capacity: a *server*
+    ///    decision, the message carries the specificity), emit the
+    ///    structured close signal with the peer address, and flag the run
+    ///    loop to tear the connection down.
+    async fn count_violation(&mut self, class: ViolationClass, code: u32, message: String) {
         let weight = class.weight();
         if weight == 0 {
             // Server-side condition: answered exactly as before the
@@ -890,6 +1089,33 @@ impl ConnectionActor {
                 .send_frame(op::base::ERROR, &base::Error { code: 9, message: reason })
                 .await;
         }
+    }
+
+    /// The §3.3 pre-auth frame-budget close: an immediate `ERROR` code 9
+    /// naming the policy (same server-decision family as the capacity and
+    /// budget closes), then the ordinary teardown cascade via `p_closing`.
+    async fn close_preauth_budget(&mut self) {
+        self.p_closing = true;
+        warn!(
+            %self.conn,
+            %self.peer,
+            frames = self.preauth_frames,
+            budget = PREAUTH_FRAME_BUDGET,
+            "closing connection: pre-auth frame budget exhausted"
+        );
+        let _ = self
+            .send_frame(
+                op::base::ERROR,
+                &base::Error {
+                    code: 9,
+                    message: format!(
+                        "pre-auth frame budget exhausted: more than \
+                         {PREAUTH_FRAME_BUDGET} frames received before \
+                         authentication"
+                    ),
+                },
+            )
+            .await;
     }
 
     /// The single exit for ticket-validation failures (see `crate::auth`
