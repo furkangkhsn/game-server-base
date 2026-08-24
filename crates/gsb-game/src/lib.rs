@@ -33,6 +33,13 @@
 //! decision (identity minting, the connection table, input ingestion, the
 //! system run, orphan stamping) lives in [`common`], once.
 
+/// The demo rooms' default disconnect-park grace (RECONNECT §3): how
+/// long a dropped transport's hero stays parked before its hold ends
+/// toward the bot handover. The single source of the default — referenced
+/// by `config.example.toml`'s `disconnect_grace_secs` documentation and
+/// by the server config's `Default` impl, so they cannot drift.
+pub const DEFAULT_DISCONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub mod aoi;
 pub mod components;
 pub mod economy;

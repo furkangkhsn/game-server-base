@@ -27,11 +27,12 @@
 //! space stays closed to everything else.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World, Without};
 use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, TickCtx};
+use gsb_core::room::{Action, Detach, ExpireTo, ResumeFound, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
@@ -311,5 +312,238 @@ pub(crate) fn stamp_orphans(next_wire_id: &mut u64, world: &mut World) {
         .collect();
     for entity in orphans {
         world.entity_mut(entity).insert(next_serial(next_wire_id));
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// The demo disconnect policy (docs/RECONNECT.md §3/§9 — Tur B): a MOBA-
+// style park. A dropped transport does NOT despawn the hero; the entity
+// stays in the world (visible in every snapshot, holding its room-cap
+// slot, §4) for a configurable grace. If the human returns first, the
+// core's resume swaps the channels back onto the live entity; if the
+// grace runs out, the entity is handed to a stub bot that keeps playing
+// it through the ordinary input path (`ExpireTo::AiHandover`).
+//
+// The whole policy lives here as plain functions over the rooms' fields
+// (the same shape as `ingest` / `on_join` above): every `RoomLogic` demo
+// room calls the same five hooks with its own tables, and the sharded
+// variant carries the park record inside the migrating state (§14.2).
+// ════════════════════════════════════════════════════════════════════════
+
+/// The demo rooms' disconnect-park knob. `grace = 0` disables parking
+/// entirely ([`Detach::Despawn`] — the byte-for-byte pre-reconnect
+/// behavior), so an operator can turn the feature off without losing the
+/// code path. The default lives at [`crate::DEFAULT_DISCONNECT_GRACE`]
+/// (the one public constant the server config defaults from).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParkPolicy {
+    pub grace: Duration,
+}
+
+impl Default for ParkPolicy {
+    fn default() -> Self {
+        Self {
+            grace: crate::DEFAULT_DISCONNECT_GRACE,
+        }
+    }
+}
+
+/// One entry of the demo park ledger (§4: "park defteri logic'te yaşar" —
+/// the ledger lives in the game logic; the core only queries it through
+/// [`crate::room::RoomLogic::resume_lookup`]).
+///
+/// Keyed by identity (the resume key: ticket player or local-auth name),
+/// because THAT is what survives the transport death; `conn` is the dead
+/// session's id and stays the ledger→world link only until resume rekeys
+/// it.
+#[derive(Debug)]
+pub(crate) struct ParkEntry {
+    /// The parked session's connection id (dead). The bot synthesizes
+    /// input under THIS key so the ordinary ingest path resolves it to
+    /// the parked entity exactly like a wire frame would.
+    pub conn: ConnectionId,
+    /// The parked bevy entity (kept alive by the hold).
+    pub entity: Entity,
+    /// The hold expired toward [`ExpireTo::AiHandover`]: the bot owns the
+    /// entity now (`bot_fed` on the core row is this flag's core-side
+    /// twin). Cleared when a resume consumes the entry.
+    pub bot: bool,
+}
+
+/// The policy answer to a transport death (the `on_disconnect` hook
+/// body shared by every single-world demo room): park the entity for
+/// the configured grace toward AI handover, recording the ledger entry.
+/// A connection we do not know (stale detach) cannot park anything.
+///
+/// Visibility note (§3.2): nothing else changes — the entity keeps its
+/// components, group membership and slot, and the snapshot pass keeps
+/// encoding it. Under the `all` strategy teammates simply keep seeing
+/// the parked hero standing where its last command left it; a team-fog
+/// strategy WOULD hide or mark that record here (a per-strategy filter
+/// in its snapshot encoder), which is game-band content, not core
+/// machinery — deliberately not implemented in the base.
+pub(crate) fn park_on_disconnect(
+    conn_entity: &HashMap<ConnectionId, Entity>,
+    conn: ConnectionId,
+    identity: &str,
+    policy: &ParkPolicy,
+    ledger: &mut HashMap<String, ParkEntry>,
+) -> Detach {
+    if policy.grace.is_zero() || identity.is_empty() {
+        // Disabled (or nothing to resume with): the old semantics.
+        return Detach::Despawn;
+    }
+    match conn_entity.get(&conn) {
+        Some(&entity) => {
+            ledger.insert(
+                identity.to_string(),
+                ParkEntry {
+                    conn,
+                    entity,
+                    bot: false,
+                },
+            );
+            Detach::Hold {
+                grace: Some(policy.grace),
+                to: ExpireTo::AiHandover,
+            }
+        }
+        // Stale detach (no entity of ours): fall through to despawn,
+        // which the core turns into the ordinary no-op funnel.
+        None => Detach::Despawn,
+    }
+}
+
+/// The `on_detach_expired` hook body: an expired hold either releases the
+/// identity (despawn arm — the core runs `on_leave`, we just forget the
+/// entry so a later join is a transparent fresh join) or latches the bot
+/// marker (AI arm — the entity keeps playing, driven by
+/// [`synthesize_bot_moves`]).
+pub(crate) fn park_on_expire(
+    ledger: &mut HashMap<String, ParkEntry>,
+    conn: ConnectionId,
+    to: ExpireTo,
+) {
+    match to {
+        ExpireTo::Despawn => ledger.retain(|_, e| e.conn != conn),
+        ExpireTo::AiHandover => {
+            for e in ledger.values_mut().filter(|e| e.conn == conn) {
+                e.bot = true;
+            }
+        }
+    }
+}
+
+/// The `resume_lookup` hook body: the ledger answers whether the identity
+/// is parked. The returned `EntityId` must be the value `on_join` handed
+/// out for that entity (the wire serial) — the core matches it against
+/// its own connection table to find the parked row.
+pub(crate) fn park_lookup(
+    world: &World,
+    ledger: &HashMap<String, ParkEntry>,
+    identity: &str,
+) -> ResumeFound {
+    match ledger.get(identity) {
+        Some(entry) => world
+            .get_entity(entry.entity)
+            .ok()
+            .and_then(|he| he.get::<WireId>())
+            .map(|w| ResumeFound::Held(w.get()))
+            .unwrap_or(ResumeFound::Ended),
+        None => ResumeFound::Never,
+    }
+}
+
+/// The `on_resume` hook body: consume the ledger entry (the bot loses the
+/// entity; the human's numbered inputs take over against a fresh session)
+/// and rekey every connection-keyed table the rooms own — the game-side
+/// half of the core's RebindKey pass (§14.1: each side enumerates what IT
+/// owns: `conn_entity`, the input sessions; strategy-specific conn-keyed
+/// tables are dropped by each room before calling into here via `drop`).
+pub(crate) fn park_resume(
+    ledger: &mut HashMap<String, ParkEntry>,
+    conn_entity: &mut HashMap<ConnectionId, Entity>,
+    input: &mut HashMap<ConnectionId, InputState>,
+    identity: &str,
+    old: ConnectionId,
+    new: ConnectionId,
+) {
+    ledger.remove(identity);
+    if let Some(entity) = conn_entity.remove(&old) {
+        conn_entity.insert(new, entity);
+    }
+    // Seq/ack reset (DESIGN §14.2): the resumed session numbers from 1;
+    // dropping the old session's state makes `ingest`'s `or_default`
+    // mint a fresh one for the new connection.
+    input.remove(&old);
+}
+
+/// How often the demo bot picks a new wander target, in ticks (~1 s at
+/// the default 30 Hz).
+const BOT_WANDER_EVERY_TICKS: u64 = 30;
+
+/// How far from its current position the bot may wander (world units) —
+/// small enough that a reclaimed hero is roughly where its team left it.
+const BOT_WANDER_RADIUS: f32 = 12.0;
+
+/// Deterministic wander jitter for one bot round: an integer hash over
+/// (position bits, round index) mapped into
+/// `[-BOT_WANDER_RADIUS, +BOT_WANDER_RADIUS]²`. No RNG dependency, stable
+/// for a given (where it stands, when asked) pair — the spec's "derive
+/// from entity position + tick counter".
+fn bot_jitter(x_bits: u32, y_bits: u32, round: u64) -> (f32, f32) {
+    let mut z = (x_bits as u64)
+        ^ (y_bits as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ round.wrapping_mul(0xD1B5_4A32_D192_ED03);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let half = BOT_WANDER_RADIUS;
+    let x = ((z & 0xFFFF) as f32 / 65535.0 - 0.5) * 2.0 * half;
+    let y = ((z >> 16 & 0xFFFF) as f32 / 65535.0 - 0.5) * 2.0 * half;
+    (x, y)
+}
+
+/// The demo bot (RECONNECT §9): synthesize MOVE_TO frames for every
+/// bot-fed entity — handed in as `(its dead connection id, the entity)`
+/// pairs by each room's `ingest` (the single-world rooms read them off
+/// their ledger entries; the sharded room resolves its wire-keyed ledger
+/// through its own tables first) — and push them INTO the tick's action
+/// list, ahead of any wire actions. They are indistinguishable from
+/// client frames: the ordinary [`ingest`] decodes them, applies the
+/// sequence rule (seq = 0: unnumbered, never fights a human high-water
+/// mark) and writes the real [`MoveTarget`] — which is the whole point:
+/// the bot is an input source without a connection, exercising the REAL
+/// movement system, not a parallel teleport path.
+pub(crate) fn synthesize_bot_moves(
+    bots: impl Iterator<Item = (ConnectionId, Entity)>,
+    world: &World,
+    ctx: &TickCtx,
+    actions: &mut Vec<Action>,
+) {
+    // One cadence gate for the whole tick: the bot acts on every Nth tick
+    // only (the cheap common case short-circuits here).
+    if !ctx.tick.is_multiple_of(BOT_WANDER_EVERY_TICKS) {
+        return;
+    }
+    let round = ctx.tick / BOT_WANDER_EVERY_TICKS;
+    for (conn, entity) in bots {
+        let Ok(he) = world.get_entity(entity) else {
+            continue;
+        };
+        let Some(pos) = he.get::<Position>().copied() else {
+            continue;
+        };
+        let (jx, jy) = bot_jitter(pos.x.to_bits(), pos.y.to_bits(), round);
+        let msg = crate::game::MoveTo {
+            x: (pos.x + jx) as i32,
+            y: (pos.y + jy) as i32,
+            seq: 0,
+        };
+        actions.push(Action {
+            conn,
+            op: op::MOVE_TO,
+            payload: msg.encode_to_vec().into(),
+        });
     }
 }

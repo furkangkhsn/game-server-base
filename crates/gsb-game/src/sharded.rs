@@ -52,7 +52,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, TickCtx};
+use gsb_core::room::{Action, Detach, ResumeFound, TickCtx};
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
 use prost::Message;
@@ -65,11 +65,37 @@ use crate::room::spawn_pos;
 /// its components — position, speed, and the pending move target, if any).
 /// Opaque to the core; reconstructed into components on
 /// [`ShardedRoom::on_migrate_in`].
-#[derive(Debug, Clone, Copy)]
+///
+/// The `park` field is the RECONNECT §14.2 rule in action: a parked (or
+/// bot-fed) player's ledger record is part of the migrating PLAYER state,
+/// not a side table — an entity that crosses a seam while detached
+/// carries its park record along, so the receiving shard's ledger answers
+/// the resume and keeps feeding the bot.
+#[derive(Debug, Clone)]
 pub struct ShardedRoomState {
     pub pos: Position,
     pub speed: f32,
     pub target: Option<MoveTarget>,
+    /// The entity's park record, if it is parked or bot-fed (`None` for
+    /// every live session and every NPC).
+    pub park: Option<ShardParkRecord>,
+}
+
+/// One shard-side park-ledger entry / migration-carried record. Keyed by
+/// identity in the ledger; carried by wire inside [`ShardedRoomState`]
+/// because the wire id is what survives migrations.
+#[derive(Debug, Clone)]
+pub struct ShardParkRecord {
+    /// The resume key of the parked session.
+    pub identity: String,
+    /// The dead session's connection id (the bot synthesizes under it).
+    pub conn: ConnectionId,
+    /// The parked entity's wire id — stable across migrations, so it is
+    /// what `resume_lookup` answers and what the bot resolves through
+    /// this shard's wire table.
+    pub wire: u64,
+    /// Latched at AI-handover expiry: the bot owns the entity.
+    pub bot: bool,
 }
 
 /// The grid shape for `shard_count` shards: `rows` = the largest divisor
@@ -129,6 +155,13 @@ pub struct ShardedRoom {
     neighbors: Vec<usize>,
     /// Player connection → entity (this shard's players).
     conn_entity: HashMap<ConnectionId, Entity>,
+    /// The disconnect-park policy (see `crate::common`; RECONNECT §3).
+    park: crate::common::ParkPolicy,
+    /// The park ledger of THIS shard's parked players (§4: it lives in
+    /// the logic; §14.2: records travel with migrations inside
+    /// [`ShardedRoomState`], so a detached entity crossing a seam is
+    /// parked on the receiving shard, never stranded on the old one).
+    park_ledger: HashMap<String, ShardParkRecord>,
     /// Entity → player connection (only entities owned by a player).
     entity_conn: HashMap<Entity, ConnectionId>,
     /// Wire id → entity (every entity, for migrate-out despawn).
@@ -197,6 +230,8 @@ impl ShardedRoom {
             border: (cell_w.min(cell_h)) / 4.0,
             neighbors,
             conn_entity: HashMap::new(),
+            park: crate::common::ParkPolicy::default(),
+            park_ledger: HashMap::new(),
             entity_conn: HashMap::new(),
             wire_entity: HashMap::new(),
             serial_used: 0,
@@ -206,6 +241,16 @@ impl ShardedRoom {
             encoded: 0,
             input: HashMap::new(),
         }
+    }
+
+    /// Set the disconnect-park grace (see
+    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// Every shard of a room should carry the same policy (the factory
+    /// builds them uniformly).
+    #[must_use]
+    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
+        self.park.grace = grace;
+        self
     }
 
     /// This shard's region rectangle `[x0, x1] × [y0, y1]`.
@@ -372,8 +417,100 @@ impl ShardLogic<World> for ShardedRoom {
         }
     }
 
-    fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
+    fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
+        // The bot's synthesized frames (RECONNECT §9), resolved through
+        // this shard's own wire table — the same shared helper the
+        // single-world rooms use.
+        let bots = self
+            .park_ledger
+            .values()
+            .filter(|e| e.bot)
+            .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.conn, en)));
+        crate::common::synthesize_bot_moves(bots, world, ctx, actions);
         crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
+    }
+
+    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    //    hook bodies live in `crate::common`; this shard-side mirror keys
+    //    its ledger by identity like the others but tracks the WIRE id,
+    //    because that is what survives migrations) ----------------------
+
+    fn on_disconnect(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> Detach {
+        if self.park.grace.is_zero() || identity.is_empty() {
+            return Detach::Despawn;
+        }
+        match self.conn_entity.get(&conn) {
+            Some(&entity) => {
+                let wire = world
+                    .entity(entity)
+                    .get::<WireId>()
+                    .map(|w| w.get())
+                    .unwrap_or_default();
+                if wire != 0 {
+                    self.park_ledger.insert(
+                        identity.to_string(),
+                        ShardParkRecord {
+                            identity: identity.to_string(),
+                            conn,
+                            wire,
+                            bot: false,
+                        },
+                    );
+                }
+                Detach::Hold {
+                    grace: Some(self.park.grace),
+                    to: gsb_core::room::ExpireTo::AiHandover,
+                }
+            }
+            None => Detach::Despawn,
+        }
+    }
+
+    fn on_detach_expired(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        to: gsb_core::room::ExpireTo,
+    ) {
+        match to {
+            gsb_core::room::ExpireTo::Despawn => {
+                self.park_ledger.retain(|_, e| e.conn != conn);
+            }
+            gsb_core::room::ExpireTo::AiHandover => {
+                for e in self.park_ledger.values_mut().filter(|e| e.conn == conn) {
+                    e.bot = true;
+                }
+            }
+        }
+    }
+
+    fn resume_lookup(&self, _world: &World, identity: &str) -> ResumeFound {
+        match self.park_ledger.get(identity) {
+            Some(e) => ResumeFound::Held(e.wire),
+            None => ResumeFound::Never,
+        }
+    }
+
+    fn on_resume(
+        &mut self,
+        _world: &mut World,
+        identity: &str,
+        old: ConnectionId,
+        new: ConnectionId,
+        _entity: EntityId,
+    ) {
+        self.park_ledger.remove(identity);
+        if let Some(entity) = self.conn_entity.remove(&old) {
+            self.conn_entity.insert(new, entity);
+            self.entity_conn.insert(entity, new);
+        }
+        // Seq/ack reset (DESIGN §14.2): fresh input session for the new key.
+        self.input.remove(&old);
     }
 
     /// The per-connection private frame: the pending input
@@ -463,12 +600,21 @@ impl ShardLogic<World> for ShardedRoom {
             .query::<(Entity, &WireId, &Position, &Speed, Option<&MoveTarget>)>();
         for (entity, wire, pos, speed, target) in query.iter(world) {
             if self.region_of(*pos) == neighbor {
+                // §14.2: the park record travels WITH the player state.
+                // The ledger is tiny (parks are rare), so the reverse
+                // lookup is a scan over it.
+                let park = self
+                    .park_ledger
+                    .values()
+                    .find(|p| p.wire == wire.get())
+                    .cloned();
                 out.push(Migrating {
                     wire: wire.get(),
                     state: ShardedRoomState {
                         pos: *pos,
                         speed: speed.0,
                         target: target.copied(),
+                        park,
                     },
                     conn: self.entity_conn.get(&entity).copied(),
                 });
@@ -502,6 +648,12 @@ impl ShardLogic<World> for ShardedRoom {
             self.conn_entity.insert(conn, entity);
             self.entity_conn.insert(entity, conn);
         }
+        if let Some(park) = state.park {
+            // §14.2: a detached/bot-fed player's ledger record arrives
+            // WITH the entity — the receiving shard now owns the park
+            // (its `resume_lookup` answers, its ingest feeds the bot).
+            self.park_ledger.insert(park.identity.clone(), park);
+        }
     }
 
     fn on_migrate_out(&mut self, world: &mut World, wire: u64) {
@@ -512,6 +664,11 @@ impl ShardLogic<World> for ShardedRoom {
                 self.conn_entity.remove(&conn);
             }
             self.own_wires.remove(&wire);
+            // §14.2 symmetry: the park record left with the entity (it
+            // was attached to the migration state); drop it here so the
+            // old shard's ledger never answers for a player it no longer
+            // hosts.
+            self.park_ledger.retain(|_, p| p.wire != wire);
             world.despawn(entity);
         }
     }
@@ -643,6 +800,7 @@ mod tests {
                 .map(|s| s.0)
                 .unwrap_or(DEFAULT_SPEED),
             target: world0.entity(entity0).get::<MoveTarget>().copied(),
+            park: None,
         };
         s1.on_migrate_in(&mut world1, w0, state, Some(ConnectionId(1)));
         let entity1 = *s1.conn_entity.get(&ConnectionId(1)).unwrap();

@@ -77,14 +77,16 @@
 //! are the documented next steps (see `docs/DESIGN.md`).
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
+use crate::common::ParkEntry;
 use crate::components::{MoveTarget, Position, WireId};
 use crate::economy::EconomyService;
 use crate::op;
@@ -134,6 +136,14 @@ pub struct DemoRoom {
     /// deployment always has one (the platform's economy is the thing
     /// the request is delegated to).
     economy: Option<EconomyService>,
+    /// The disconnect-park policy knob (see `crate::common::ParkPolicy`
+    /// and RECONNECT §3): how long a dropped transport's hero stays in
+    /// the world. Zero = the pre-reconnect despawn-on-disconnect.
+    park: crate::common::ParkPolicy,
+    /// The demo park ledger (§4: it lives in the LOGIC — the core only
+    /// queries it through `resume_lookup`). Identity → parked entity +
+    /// bot marker; consumed by a resume, tombstoned by an expiry.
+    park_ledger: HashMap<String, ParkEntry>,
 }
 
 impl Default for DemoRoom {
@@ -164,7 +174,19 @@ impl DemoRoom {
             input: HashMap::new(),
             encoded: 0,
             economy: None,
+            park: crate::common::ParkPolicy::default(),
+            park_ledger: HashMap::new(),
         }
+    }
+
+    /// Set the disconnect-park grace (RECONNECT §3): a dropped transport
+    /// parks its hero for this long before the hold ends (toward the bot
+    /// handover). `Duration::ZERO` restores the pre-reconnect despawn
+    /// semantics exactly. Builder-style, like [`Self::with_economy`].
+    #[must_use]
+    pub fn with_disconnect_grace(mut self, grace: Duration) -> Self {
+        self.park.grace = grace;
+        self
     }
 
     /// Attach the economy service handle (the RPC pattern's external-I/O
@@ -314,7 +336,69 @@ impl RoomLogic<World> for DemoRoom {
         crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
     }
 
-    fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
+    // -- the disconnect policy (docs/RECONNECT.md §3/§5/§9; the hook
+    //    bodies are shared with every demo room — see `crate::common`) --
+
+    fn on_disconnect(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> Detach {
+        crate::common::park_on_disconnect(
+            &self.conn_entity,
+            conn,
+            identity,
+            &self.park,
+            &mut self.park_ledger,
+        )
+    }
+
+    fn on_detach_expired(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        to: gsb_core::room::ExpireTo,
+    ) {
+        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+    }
+
+    fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
+        crate::common::park_lookup(world, &self.park_ledger, identity)
+    }
+
+    fn on_resume(
+        &mut self,
+        _world: &mut World,
+        identity: &str,
+        old: ConnectionId,
+        new: ConnectionId,
+        _entity: EntityId,
+    ) {
+        crate::common::park_resume(
+            &mut self.park_ledger,
+            &mut self.conn_entity,
+            &mut self.input,
+            identity,
+            old,
+            new,
+        );
+    }
+
+    fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
+        // The bot's synthesized frames ride the SAME list as wire input
+        // (RECONNECT §9: "bot = bağlantısız girdi kaynağı" — an input
+        // source without a connection): one decode/sequence/move path for
+        // both.
+        crate::common::synthesize_bot_moves(
+            self.park_ledger
+                .values()
+                .filter(|e| e.bot)
+                .map(|e| (e.conn, e.entity)),
+            world,
+            ctx,
+            actions,
+        );
         crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
     }
 

@@ -231,6 +231,21 @@ pub struct Config {
     /// The PVS strategy's *visibility map* stays its hand-authored 100×100
     /// sectors regardless (see `gsb_game::pvs::SectorRoom::spawn_half`).
     pub spawn_half_size: f32,
+    /// The demo rooms' disconnect-park grace, in seconds (`config.example.toml`:
+    /// `disconnect_grace_secs`; RECONNECT §3): how long a dropped
+    /// transport's entity STAYS in the world — visible in snapshots,
+    /// holding its room-cap slot — before the hold ends toward the bot
+    /// handover ([`ExpireTo::AiHandover`]; the demo stub bot then keeps
+    /// playing the hero through the ordinary input path). A human who
+    /// rejoins inside the window resumes onto the live entity with the
+    /// same wire id (the implicit resume, §14.3).
+    ///
+    /// Default 30 s; `0` restores the pre-reconnect semantics exactly
+    /// (disconnect = despawn). Flows into every room the factories build
+    /// (the game-level knob rides the factory closure like
+    /// `spawn_half_size`, not [`RoomConfig`] — it is policy, not core
+    /// mechanics).
+    pub disconnect_grace_secs: f64,
 }
 
 impl Default for Config {
@@ -257,6 +272,7 @@ impl Default for Config {
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
+            disconnect_grace_secs: gsb_game::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
         }
     }
 }
@@ -459,11 +475,17 @@ pub fn build_table() -> Arc<MessageTable> {
 /// external-I/O reference adapter, see `gsb_game::economy`): ONE service
 /// per server (a platform service, not a per-room one), shared by clone
 /// with every room the factory builds.
-fn demo_room_factory(spawn_half: f32, economy: gsb_game::economy::EconomyService) -> RoomFactory<World, (), ()> {
+fn demo_room_factory(
+    spawn_half: f32,
+    disconnect_grace: std::time::Duration,
+    economy: gsb_game::economy::EconomyService,
+) -> RoomFactory<World, (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
-            gsb_game::room::DemoRoom::with_spawn_half(spawn_half).with_economy(economy.clone()),
+            gsb_game::room::DemoRoom::with_spawn_half(spawn_half)
+                .with_disconnect_grace(disconnect_grace)
+                .with_economy(economy.clone()),
         )
             as Box<dyn RoomLogic<World, GroupKey = ()>>,
     })
@@ -481,11 +503,14 @@ fn demo_room_factory(spawn_half: f32, economy: gsb_game::economy::EconomyService
 fn aoi_room_factory(
     cell_size: f32,
     spawn_half: f32,
+    disconnect_grace: std::time::Duration,
 ) -> RoomFactory<World, gsb_game::aoi::Cell, ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
-        logic: Box::new(gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half))
-            as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
+        logic: Box::new(
+            gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half)
+                .with_disconnect_grace(disconnect_grace),
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
     })
 }
 
@@ -495,22 +520,30 @@ fn aoi_room_factory(
 fn team_room_factory(
     vision_radius: f32,
     spawn_half: f32,
+    disconnect_grace: std::time::Duration,
 ) -> RoomFactory<World, gsb_game::team::Team, ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
-        logic: Box::new(gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half))
-            as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
+        logic: Box::new(
+            gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half)
+                .with_disconnect_grace(disconnect_grace),
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
     })
 }
 
 /// The PVS room factory: an empty bevy `World` + a
 /// [`gsb_game::pvs::SectorRoom`] (the demo map is built into the room).
 /// Group key is [`gsb_game::pvs::Sector`].
-fn pvs_room_factory(spawn_half: f32) -> RoomFactory<World, gsb_game::pvs::Sector, ()> {
+fn pvs_room_factory(
+    spawn_half: f32,
+    disconnect_grace: std::time::Duration,
+) -> RoomFactory<World, gsb_game::pvs::Sector, ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
-        logic: Box::new(gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half))
-            as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
+        logic: Box::new(
+            gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half)
+                .with_disconnect_grace(disconnect_grace),
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
     })
 }
 
@@ -528,6 +561,7 @@ fn pvs_room_factory(spawn_half: f32) -> RoomFactory<World, gsb_game::pvs::Sector
 fn sharded_room_factory(
     spawn_half: f32,
     shard_count: usize,
+    disconnect_grace: std::time::Duration,
 ) -> RoomFactory<World, (), gsb_game::sharded::ShardedRoomState> {
     Arc::new(move |_id, _config| {
         let shards: Vec<gsb_core::registry::Shard<World, (), gsb_game::sharded::ShardedRoomState>> =
@@ -535,11 +569,10 @@ fn sharded_room_factory(
                 .map(|i| {
                     (
                         World::new(),
-                        Box::new(gsb_game::sharded::ShardedRoom::new(
-                            i,
-                            shard_count,
-                            spawn_half,
-                        ))
+                        Box::new(
+                            gsb_game::sharded::ShardedRoom::new(i, shard_count, spawn_half)
+                                .with_disconnect_grace(disconnect_grace),
+                        )
                             as Box<
                                 dyn gsb_core::shard::ShardLogic<
                                     World,
@@ -598,6 +631,13 @@ pub async fn start_server_metrics_with(
     report_tx: mpsc::UnboundedSender<MetricReport>,
 ) -> Result<ServerHandle, ServerError> {
     start_inner(cfg, MetricSink::Channel(report_tx), hooks).await
+}
+
+/// The config's grace as a `Duration`, clamped at zero: a negative value
+/// would panic `from_secs_f64`, and "negative grace" can only mean
+/// "disabled" anyway.
+fn grace_of(cfg: &Config) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(cfg.disconnect_grace_secs.max(0.0))
 }
 
 async fn start_inner(
@@ -673,11 +713,12 @@ async fn start_inner(
             let economy = gsb_game::economy::EconomyService::spawn(
                 gsb_game::economy::EconomyService::default_latency(),
             );
+            let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    demo_room_factory(cfg.spawn_half_size, economy),
+                    demo_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -687,11 +728,12 @@ async fn start_inner(
             )
         }
         Visibility::Spatial => {
+            let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    aoi_room_factory(cfg.aoi_cell_size, cfg.spawn_half_size),
+                    aoi_room_factory(cfg.aoi_cell_size, cfg.spawn_half_size, disconnect_grace),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -701,11 +743,12 @@ async fn start_inner(
             )
         }
         Visibility::Team => {
+            let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    team_room_factory(cfg.team_vision_radius, cfg.spawn_half_size),
+                    team_room_factory(cfg.team_vision_radius, cfg.spawn_half_size, disconnect_grace),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -715,11 +758,12 @@ async fn start_inner(
             )
         }
         Visibility::Pvs => {
+            let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    pvs_room_factory(cfg.spawn_half_size),
+                    pvs_room_factory(cfg.spawn_half_size, disconnect_grace),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -729,11 +773,12 @@ async fn start_inner(
             )
         }
         Visibility::Sharded => {
+            let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    sharded_room_factory(cfg.spawn_half_size, cfg.shard_count as usize),
+                    sharded_room_factory(cfg.spawn_half_size, cfg.shard_count as usize, disconnect_grace),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,

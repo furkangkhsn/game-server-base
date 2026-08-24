@@ -221,3 +221,93 @@ fn loadgen_smoke_separate_processes() {
     // stdout): presence + zero-RPC-traffic invariants.
     assert_metric_queue(&kv, result_line);
 }
+
+/// Smoke test for the churn profile (`--churn-secs`, RECONNECT §14.5):
+/// N real clients cycle connect→join→DROP-without-leave→reconnect against
+/// an in-process server whose disconnect-park grace comfortably exceeds
+/// the cycle, so every reconnect after the first lands INSIDE the hold —
+/// a server-accepted resume with the SAME wire id. Small N, short
+/// window, same shape as `loadgen_smoke`.
+#[test]
+fn loadgen_churn_smoke() {
+    let bin = env!("CARGO_BIN_EXE_gsb-loadgen");
+    let out = std::process::Command::new(bin)
+        .args([
+            "4",
+            "--duration",
+            "7",
+            "--move-ms",
+            "100",
+            "--churn-secs",
+            "1.5",
+            // One DROP→resume transition per identity: the exact §14.5
+            // thundering-herd shape (N simultaneous resumes, nothing else
+            // in flight); after it each client keeps playing until the
+            // deadline (a resumed hero under sustained load).
+            "--churn-cycles",
+            "1",
+            // grace 30 s >> run 7 s ⇒ the drop always parks and the next
+            // join resumes (no expiry races in the window).
+            "--disconnect-grace-secs",
+            "30",
+        ])
+        .output()
+        .expect("spawning gsb-loadgen");
+    assert!(
+        out.status.success(),
+        "gsb-loadgen exited with {:?}\nstdout:\n{}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let result_line = stdout
+        .lines()
+        .find(|l| l.starts_with("RESULT "))
+        .expect("RESULT line in output");
+    let kv: std::collections::HashMap<String, String> = result_line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect();
+    let get = |k: &str| -> String {
+        kv.get(k)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {k} in: {result_line}"))
+    };
+
+    // Every client connected and joined at least one session.
+    assert_eq!(get("connected"), "4", "all clients connect over real TCP");
+    let joined: u64 = get("joined").parse().expect("number");
+    assert!(joined >= 4, "every client completed at least one join");
+
+    // The churn machinery actually ran: every client completed its drop
+    // session plus the lingering resumed one.
+    let cycles: u64 = get("churn_cycles").parse().expect("number");
+    assert!(
+        cycles >= 8,
+        "4 clients × (drop session + linger session) expected, got {cycles}"
+    );
+    // EVERY reconnect was a SERVER-ACCEPTED RESUME: the same wire id on
+    // the wire, mirrored exactly by the server's own counter.
+    let resumed: u64 = get("resumed").parse().expect("number");
+    assert_eq!(
+        resumed, 4,
+        "one resume per client (the herd), no more, no less"
+    );
+    let room_resumes: u64 = get("room_resumes").parse().expect("number");
+    assert_eq!(
+        room_resumes, resumed,
+        "the server's accepted-resume counter must mirror the clients' \
+         same-wire-id joins exactly"
+    );
+    let stale: u64 = get("resume_rejected_stale").parse().expect("number");
+    assert_eq!(stale, 0, "no stale rejects in the one-drop-per-identity herd");
+    // No expiry ran (grace ≫ run) and nothing fell back to a fresh join.
+    let fresh: u64 = get("fresh_joins").parse().expect("number");
+    assert_eq!(fresh, 0, "no identity lost its park inside the grace");
+    let ai: u64 = get("detach_expired_ai").parse().expect("number");
+    let despawn: u64 = get("detach_expired_despawn").parse().expect("number");
+    assert_eq!(ai + despawn, 0, "no park expired during the smoke window");
+    assert_eq!(get("errors"), "0", "churn must be clean at this scale");
+}

@@ -1433,3 +1433,240 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     }
     handle.stop().await;
 }
+
+// ── the reconnect feature end-to-end (RECONNECT §15 Tur B) ─────────────
+//
+// THE user-visible proof of the whole feature, over a REAL socket: a
+// client whose transport dies WITHOUT a leave parks its entity (the
+// demo rooms' MOBA-style hold), keeps being visible to the other
+// member, and its NEXT session under the SAME identity resumes onto the
+// LIVE entity with the SAME wire id, inputs working.
+//
+// TCP-only by intent (the control-plane flows above set the precedent):
+// the scenario needs prompt transport-death detection — TCP delivers
+// EOF the moment the client drops, while rUDP has no FIN (its detach
+// would ride the idle sweep, seconds of wall clock). The
+// transport-generic mechanics underneath (Detach/Resume/RebindKey) are
+// locked by gsb-core's reconnect suite, and the loadgen churn profile
+// exercises the wire path at profile scale.
+
+/// Drain `client`'s inbound frames for up to `window`, applying every
+/// world snapshot to `view` (full snapshots replace it). Returns when
+/// the window elapses or the connection dies (`Recv::Closed`).
+async fn drain_snapshots(
+    client: &mut Client,
+    window: Duration,
+    view: &mut std::collections::HashMap<u64, (i32, i32)>,
+) {
+    let deadline = Instant::now() + window;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match client.recv(remaining.min(Duration::from_millis(100))).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                if let Ok(snap) = gsb_game::game::WorldSnapshot::decode(&payload[..]) {
+                    *view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => return,
+            Recv::TimedOut => {}
+        }
+    }
+}
+
+/// Wait until `view` shows `entity` at TWO different positions (the move
+/// propagated through ingest → movement → snapshot → wire), sending
+/// nothing else in the meantime.
+async fn await_movement(
+    client: &mut Client,
+    entity: u64,
+    view: &mut std::collections::HashMap<u64, (i32, i32)>,
+    first: (i32, i32),
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for entity {entity} to move"));
+        match client.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                *view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                if let Some(pos) = view.get(&entity)
+                    && *pos != first
+                {
+                    return;
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("connection closed while waiting for movement"),
+            Recv::TimedOut => {}
+        }
+    }
+}
+
+async fn resume_over_real_socket() {
+    let mut cfg = cfg_on(Kind::Tcp, None, None, None);
+    // The park grace must comfortably outlive the drop→reconnect gap so
+    // the second session RESUMES instead of racing an expiry.
+    cfg.disconnect_grace_secs = 8.0;
+    let handle = gsb_server::start_server(cfg).await.expect("server starts");
+    let addr = handle.addr;
+
+    // -- observer takes a seat first ------------------------------------
+    let mut obs = Client::connect(Kind::Tcp, addr).await.expect("observer connects");
+    let (op, payload) = auth_wire("obs", &[]);
+    obs.write_frame(op, &payload).await.unwrap();
+    let (op, payload) = join_wire(1);
+    obs.write_frame(op, &payload).await.unwrap();
+    // (auth result / join result consumed inline below via the shared
+    //  helper shape: read until the join answer)
+    let _deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (op, payload) = match obs.recv(Duration::from_secs(5)).await.unwrap() {
+            Recv::Frame(f) => f,
+            _ => panic!("observer handshake stalled"),
+        };
+        if op == gsb_protocol::op::base::JOIN_ROOM_RESULT {
+            let m = JoinRoomResult::decode(&payload[..]).unwrap();
+            assert!(m.entity != 0);
+            break;
+        }
+    }
+
+    // -- hero joins ------------------------------------------------------
+    let mut hero = Client::connect(Kind::Tcp, addr).await.expect("hero connects");
+    let (op, payload) = auth_wire("hero-rider", &[]);
+    hero.write_frame(op, &payload).await.unwrap();
+    let (op, payload) = join_wire(1);
+    hero.write_frame(op, &payload).await.unwrap();
+    // Uninitialized on purpose: the loop's only exits are the break
+    // below (assignment happened) or a panic — a single write before use.
+    let hero_entity: u64;
+    loop {
+        let (op, payload) = match hero.recv(Duration::from_secs(5)).await.unwrap() {
+            Recv::Frame(f) => f,
+            _ => panic!("hero handshake stalled"),
+        };
+        match op {
+            gsb_protocol::op::base::AUTH_RESULT => {}
+            gsb_protocol::op::base::JOIN_ROOM_RESULT => {
+                let m = JoinRoomResult::decode(&payload[..]).unwrap();
+                hero_entity = m.entity;
+                break;
+            }
+            gsb_protocol::op::base::ERROR => {
+                let m = Error::decode(&payload[..]).unwrap();
+                panic!("hero join failed: code={} {}", m.code, m.message);
+            }
+            _ => {}
+        }
+    }
+
+    // -- the hero moves once (input works pre-drop) ----------------------
+    let move_wire = |x: i32, y: i32, seq: u64| {
+        gsb_game::game::MoveTo { x, y, seq }.encode_to_vec()
+    };
+    let payload = move_wire(-20, -20, 0);
+    hero.write_frame(gsb_game::op::MOVE_TO, &payload).await.unwrap();
+
+    let mut obs_view: std::collections::HashMap<u64, (i32, i32)> =
+        std::collections::HashMap::new();
+    // First: learn the hero's CURRENT (pre-command) position…
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut first_pos = None;
+    while first_pos.is_none() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("no snapshot naming the hero");
+        match obs.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                obs_view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                first_pos = obs_view.get(&hero_entity).copied();
+            }
+            Recv::Frame(_) => {}
+            _ => panic!("observer stalled"),
+        }
+    }
+    // …then: the MOVE_TO must show up as a position change.
+    await_movement(&mut obs, hero_entity, &mut obs_view, first_pos.unwrap()).await;
+
+    // -- DROP without any LEAVE_ROOM_REQ ---------------------------------
+    drop(hero);
+
+    // The close cascade (reader-pump EOF → ConnClosed → Detach) settles.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    // Park proof: the OBSERVER still sees the hero in fresh snapshots —
+    // the entity lives on while its socket is gone.
+    obs_view.clear();
+    drain_snapshots(&mut obs, Duration::from_millis(2500), &mut obs_view).await;
+    assert!(
+        obs_view.contains_key(&hero_entity),
+        "parked hero vanished from the world while its socket was gone"
+    );
+
+    // -- RECONNECT with the SAME identity --------------------------------
+    let mut hero2 = Client::connect(Kind::Tcp, addr).await.expect("reconnect");
+    let (op, payload) = auth_wire("hero-rider", &[]);
+    hero2.write_frame(op, &payload).await.unwrap();
+    let (op, payload) = join_wire(1);
+    hero2.write_frame(op, &payload).await.unwrap();
+    loop {
+        let (op, payload) = match hero2.recv(Duration::from_secs(5)).await.unwrap() {
+            Recv::Frame(f) => f,
+            _ => panic!("resume handshake stalled"),
+        };
+        match op {
+            gsb_protocol::op::base::JOIN_ROOM_RESULT => {
+                let m = JoinRoomResult::decode(&payload[..]).unwrap();
+                assert_eq!(
+                    m.entity, hero_entity,
+                    "THE continuity contract: same wire id across sessions"
+                );
+                break;
+            }
+            gsb_protocol::op::base::ERROR => {
+                let m = Error::decode(&payload[..]).unwrap();
+                panic!("resume failed: code={} {}", m.code, m.message);
+            }
+            _ => {}
+        }
+    }
+
+    // -- …and the new session's inputs WORK -------------------------------
+    let payload = move_wire(30, 30, 1);
+    hero2.write_frame(gsb_game::op::MOVE_TO, &payload).await.unwrap();
+    // From wherever the park left it, the hero now converges toward
+    // (30, 30): watch the OBSERVER's view for the approach.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut best = f32::MAX;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("resumed hero never moved toward (30,30): best {best}"));
+        match obs.recv(remaining).await.unwrap() {
+            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
+                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+                obs_view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                if let Some(&(x, y)) = obs_view.get(&hero_entity) {
+                    let (dx, dy) = ((x - 30) as f32, (y - 30) as f32);
+                    best = best.min((dx * dx + dy * dy).sqrt());
+                    if best < 8.0 {
+                        break;
+                    }
+                }
+            }
+            Recv::Frame(_) => {}
+            Recv::Closed => panic!("observer closed"),
+            Recv::TimedOut => {}
+        }
+    }
+
+    handle.stop().await;
+}
+
+#[tokio::test]
+async fn dropped_socket_parks_and_same_identity_resumes_with_the_same_entity() {
+    resume_over_real_socket().await;
+}

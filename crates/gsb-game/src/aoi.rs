@@ -254,7 +254,7 @@ use std::hash::Hash;
 use bevy_ecs::prelude::{Changed, Entity, World};
 use bytes::{BufMut, Bytes, BytesMut};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::encoding::varint::encode_varint;
 use prost::Message;
@@ -360,6 +360,10 @@ pub struct AoiRoom {
     runner: SystemRunner,
     /// Which entity belongs to which connection.
     conn_entity: HashMap<ConnectionId, Entity>,
+    /// The disconnect-park policy + ledger (see `crate::common` and
+    /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
+    park: crate::common::ParkPolicy,
+    park_ledger: HashMap<String, crate::common::ParkEntry>,
     /// The room's single wire-identity counter (see module docs,
     /// "Invariants preserved" / `game.proto`).
     next_wire_id: u64,
@@ -491,6 +495,8 @@ impl AoiRoom {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
+            park: crate::common::ParkPolicy::default(),
+            park_ledger: HashMap::new(),
             next_wire_id: 0,
             cell_size: cell_size.max(0.5),
             spawn_half: half.max(1.0),
@@ -515,6 +521,14 @@ impl AoiRoom {
             group_full_emitted: HashSet::new(),
             encoded: 0,
         }
+    }
+
+    /// Set the disconnect-park grace (see
+    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    #[must_use]
+    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
+        self.park.grace = grace;
+        self
     }
 
     /// The snapshot header: `sequence` (field 1, varint) + the `delta`
@@ -946,7 +960,69 @@ impl RoomLogic<World> for AoiRoom {
         self.conn_view.remove(&conn);
     }
 
-    fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
+    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    //    hook bodies live in `crate::common`) ---------------------------
+
+    fn on_disconnect(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> Detach {
+        crate::common::park_on_disconnect(
+            &self.conn_entity,
+            conn,
+            identity,
+            &self.park,
+            &mut self.park_ledger,
+        )
+    }
+
+    fn on_detach_expired(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        to: gsb_core::room::ExpireTo,
+    ) {
+        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+    }
+
+    fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
+        crate::common::park_lookup(world, &self.park_ledger, identity)
+    }
+
+    fn on_resume(
+        &mut self,
+        _world: &mut World,
+        identity: &str,
+        old: ConnectionId,
+        new: ConnectionId,
+        _entity: EntityId,
+    ) {
+        crate::common::park_resume(
+            &mut self.park_ledger,
+            &mut self.conn_entity,
+            &mut self.input,
+            identity,
+            old,
+            new,
+        );
+        // The resumed session has no view baseline under its new key:
+        // dropping the old entry makes `private` deliver a fresh one-shot
+        // full (a resume is a new session — same contract as a re-join).
+        self.conn_view.remove(&old);
+    }
+
+    fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
+        crate::common::synthesize_bot_moves(
+            self.park_ledger
+                .values()
+                .filter(|e| e.bot)
+                .map(|e| (e.conn, e.entity)),
+            world,
+            ctx,
+            actions,
+        );
         crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
     }
 

@@ -215,6 +215,27 @@ struct Args {
     /// Tokio worker threads of *this* process (0 = runtime default).
     /// The orchestrator sizes each child to its pinned core set.
     workers: usize,
+    /// Churn-cycle length in seconds (`--churn-secs S`, RECONNECT §14.5):
+    /// when set, every client cycles connect → auth+join → MOVE briefly →
+    /// DROP the socket WITHOUT a leave → reconnect with the SAME identity
+    /// every S seconds instead of one plain session. The reconnect hits
+    /// the parked entity (its transport died inside the park grace, so
+    /// the room held it) and comes back with the SAME wire id — the
+    /// mass-resume storm measured against the real server.
+    churn_secs: Option<f64>,
+    /// How many DROP→resume transitions each churn client performs
+    /// before it stops dropping and simply keeps playing
+    /// (`--churn-cycles K`; 0 = until the deadline). One transition per
+    /// identity is the exact shape of the §14.5 thundering herd: N
+    /// simultaneous resumes against the server, nothing else in flight.
+    churn_cycles: u64,
+    /// The served/in-process server's disconnect-park grace
+    /// (`--disconnect-grace-secs F`; RECONNECT §3). Unspecified = the
+    /// server config default (30 s). A plain run never needs this; a
+    /// churn run wants it comfortably LONGER than the churn cycle so
+    /// every reconnect lands INSIDE the hold (pure resume, no expiry),
+    /// which is exactly the thundering-herd shape §14.5 measures.
+    disconnect_grace_secs: Option<f64>,
 }
 
 /// The usage text (`--help` / `-h`).
@@ -317,6 +338,9 @@ fn parse_args() -> Args {
         max_connections: None,
         idle_timeout_secs: None,
         flood_id: None,
+        churn_secs: None,
+        churn_cycles: 0,
+        disconnect_grace_secs: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -396,6 +420,17 @@ fn parse_args() -> Args {
                 args.idle_timeout_secs = Some(v().parse().expect("number"));
             }
             "--flood-id" => args.flood_id = Some(v().parse().expect("number")),
+            "--churn-secs" => {
+                let f: f64 = v().parse().expect("number");
+                assert!(f > 0.0, "--churn-secs must be > 0");
+                args.churn_secs = Some(f);
+            }
+            "--disconnect-grace-secs" => {
+                args.disconnect_grace_secs = Some(v().parse().expect("number"));
+            }
+            "--churn-cycles" => {
+                args.churn_cycles = v().parse().expect("number");
+            }
             "--transport" => {
                 let s = v();
                 args.transport = match s.as_str() {
@@ -514,6 +549,15 @@ struct ClientReport {
     gap_drops: u64,
     /// Entities in the client view at the end of the run.
     view_size: u64,
+    /// Churn mode only (RECONNECT §14.5): completed connect→drop cycles.
+    churn_cycles: u64,
+    /// Churn mode only: joins that came back onto the SAME wire id (a
+    /// server-accepted resume — the counter the profile exists to move).
+    resumed: u64,
+    /// Churn mode only: joins that got a DIFFERENT wire id than the
+    /// previous session (the park was already gone — expiry/supersede —
+    /// and the client transparently fresh-joined, §5).
+    fresh_joins: u64,
 }
 
 /// The `spread` profile's deterministic home for client `id`: the SAME
@@ -550,6 +594,58 @@ struct ClientParams {
     flood: bool,
     /// The client's transport (TCP or rUDP; see the `Wire` below).
     kind: gsb_server::TransportKind,
+}
+
+/// Connect one wire of the given kind (the transport-specific half of a
+/// client session's birth; shared by the plain and the churn client —
+/// TCP gets `nodelay` + a split into owned halves, rUDP runs its cookie
+/// handshake).
+async fn connect_wire(kind: gsb_server::TransportKind, addr: SocketAddr) -> std::io::Result<Wire> {
+    Ok(match kind {
+        gsb_server::TransportKind::Udp => Wire::Udp(Box::new(UdpClient::connect(addr).await?)),
+        gsb_server::TransportKind::Tcp => {
+            let stream = TcpStream::connect(addr).await?;
+            stream.set_nodelay(true).ok();
+            let (r, w) = stream.into_split();
+            Wire::Tcp { r, w }
+        }
+    })
+}
+
+/// What one bounded receive on the wire found. TCP distinguishes death
+/// (EOF) from quiet; rUDP has no EOF, so "quiet" is all it can report —
+/// the deadline ends those runs.
+enum Got {
+    Frame(u16, Vec<u8>),
+    Quiet,
+    Dead,
+}
+
+async fn recv_wire(wire: &mut Wire, timeout: Duration) -> Got {
+    match wire {
+        Wire::Tcp { r, .. } => {
+            match tokio::time::timeout(timeout, read_frame(r)).await {
+                Ok(Some((op, payload))) => Got::Frame(op, payload),
+                Ok(None) => Got::Dead, // EOF / bad frame
+                Err(_) => Got::Quiet,
+            }
+        }
+        Wire::Udp(c) => match c.recv_frame(timeout).await {
+            Ok(Some(f)) => Got::Frame(f.op, f.payload.to_vec()),
+            _ => Got::Quiet,
+        },
+    }
+}
+
+async fn send_wire(wire: &mut Wire, op: u16, payload: Vec<u8>) -> std::io::Result<()> {
+    match wire {
+        Wire::Tcp { w, .. } => {
+            let f = frame(op, &payload);
+            w.write_all(&f).await?;
+            w.flush().await
+        }
+        Wire::Udp(c) => c.send_frame(op, payload).await,
+    }
 }
 
 /// The wire to the server (the only place TCP and rUDP diverge inside
@@ -696,6 +792,9 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         deltas: 0,
         gap_drops: 0,
         view_size: 0,
+        churn_cycles: 0,
+        resumed: 0,
+        fresh_joins: 0,
     };
 
     // The client-side world view (the delta protocol's client half — see
@@ -716,25 +815,12 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // transport-agnostic). On rUDP `connect` is the cookie handshake, so
     // `connect_ms` measures the handshake latency.
     let t0 = Instant::now();
-    let mut wire = if p.kind == gsb_server::TransportKind::Udp {
-        match UdpClient::connect(p.addr).await {
-            Ok(c) => Wire::Udp(Box::new(c)),
-            Err(e) => {
-                eprintln!("client {id}: handshake failed: {e}");
-                return rep;
-            }
+    let mut wire = match connect_wire(p.kind, p.addr).await {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("client {id}: connect failed: {e}");
+            return rep;
         }
-    } else {
-        let stream = match TcpStream::connect(p.addr).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("client {id}: connect failed: {e}");
-                return rep;
-            }
-        };
-        stream.set_nodelay(true).ok();
-        let (r, w) = stream.into_split();
-        Wire::Tcp { r, w }
     };
     rep.connect_ms = t0.elapsed().as_millis();
     rep.connected = true;
@@ -1085,6 +1171,235 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     rep
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// Churn profile (RECONNECT §14.5 — the mass-reconnect storm): N clients
+// each cycle connect → auth+join → a few MOVE_TOs → DROP THE SOCKET
+// WITHOUT A LEAVE → sleep out the rest of the cycle → reconnect with the
+// SAME identity. Every reconnect after the first lands on a PARKED
+// entity (the drop happened inside the disconnect grace), so the join
+// comes back with the SAME wire id: a server-accepted resume. This is
+// the user-visible reconnect feature exercised at load scale against
+// the real transport.
+// ════════════════════════════════════════════════════════════════════════
+
+/// One auth+join round trip of a churn session, RETRYING the join on a
+/// gentle rejection (ERROR code 4 — the stale-resume answer a fresh
+/// connection can elicit after an earlier session already rebound the
+/// park; the core's per-connection join-epoch counter grows only within
+/// ONE connection, so the retry's higher epoch is accepted and the SAME
+/// entity comes back). A real game client retries a transient join
+/// failure; so do we, with a bounded budget.
+async fn churn_join(
+    id: u64,
+    wire: &mut Wire,
+    room: u64,
+    rep: &mut ClientReport,
+) -> Option<u64> {
+    for _attempt in 0..5u32 {
+        let join_payload = JoinRoom { room_id: room }.encode_to_vec();
+        if send_wire(wire, op::base::JOIN_ROOM_REQ, join_payload)
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        let mut retriable = false;
+        let join_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < join_deadline {
+            match recv_wire(wire, Duration::from_millis(250)).await {
+                Got::Frame(op::base::JOIN_ROOM_RESULT, payload) => {
+                    return JoinRoomResult::decode(&payload[..])
+                        .ok()
+                        .map(|m| m.entity);
+                }
+                Got::Frame(op::base::ERROR, payload) => {
+                    let e = Error::decode(&payload[..]).unwrap_or_default();
+                    match e.code {
+                        // The gentle stale-resume reject: retry with the
+                        // same connection's next epoch.
+                        4 => {
+                            if !retriable {
+                                eprintln!(
+                                    "churn client {id}: join answered 'stale                                      resume' (code 4); retrying on the same                                      connection (core join-epoch quirk)"
+                                );
+                            }
+                            retriable = true;
+                            break;
+                        }
+                        8 => rep.join_rejected += 1,
+                        9 => rep.cap_rejected += 1,
+                        _ => rep.errors += 1,
+                    }
+                }
+                Got::Frame(_, payload) => rep.bytes_in += payload.len() as u64,
+                Got::Quiet => {}
+                Got::Dead => return None,
+            }
+        }
+        if !retriable {
+            return None;
+        }
+    }
+    None
+}
+
+async fn run_churn_client(id: u64, p: ClientParams, cycle: Duration, max_drops: u64) -> ClientReport {
+    let mut rep = ClientReport {
+        id,
+        connected: false,
+        connect_ms: 0,
+        joined: false,
+        entity: 0,
+        left: false,
+        snapshots: 0,
+        bytes_in: 0,
+        bytes_out: 0,
+        moves: 0,
+        errors: 0,
+        join_rejected: 0,
+        cap_rejected: 0,
+        budget_rejected: 0,
+        retrans_out: 0,
+        dup_in: 0,
+        oob_dropped: 0,
+        gave_up: 0,
+        seq_first: None,
+        seq_last: None,
+        acks: 0,
+        ack_processed_max: 0,
+        ack_lag_max_ms: 0,
+        fulls: 0,
+        private_fulls: 0,
+        deltas: 0,
+        gap_drops: 0,
+        view_size: 0,
+        churn_cycles: 0,
+        resumed: 0,
+        fresh_joins: 0,
+    };
+    // ONE identity for every session of this client (the resume key):
+    // this is what makes the reconnects RESUMES instead of fresh joins.
+    let name = format!("lg-{id}");
+    // The wire id of the previous session (0 before the first join): the
+    // continuity check that classifies each join as resume / fresh.
+    let mut prev_entity: u64 = 0;
+    // Completed DROP transitions so far (`max_drops` reached ⇒ the last
+    // session lingers instead of dropping).
+    let mut drops: u64 = 0;
+    while Instant::now() < p.deadline {
+        let cycle_end = (Instant::now() + cycle).min(p.deadline);
+        let final_session = max_drops != 0 && drops >= max_drops;
+        rep.churn_cycles += 1;
+
+        // -- connect ───────────────────────────────────────────────────
+        let t0 = Instant::now();
+        let mut wire = match connect_wire(p.kind, p.addr).await {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("churn client {id}: connect failed: {e}");
+                rep.errors += 1;
+                tokio::time::sleep(cycle_end.saturating_duration_since(Instant::now())).await;
+                continue;
+            }
+        };
+        rep.connected = true;
+        rep.connect_ms = t0.elapsed().as_millis();
+
+        // -- auth + join (coalesced write on TCP; two frames on rUDP) ──
+        let auth_payload = Auth {
+            name: name.clone(),
+            ticket: vec![],
+        }
+        .encode_to_vec();
+        if send_wire(&mut wire, op::base::AUTH_REQ, auth_payload)
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, 8);
+
+        // -- wait for JOIN_ROOM_RESULT (bounded, with bounded retry) ───
+        let Some(entity) = churn_join(id, &mut wire, p.room, &mut rep).await else {
+            // Never joined this cycle: nothing to park; just end it.
+            drop(wire);
+            tokio::time::sleep(cycle_end.saturating_duration_since(Instant::now())).await;
+            continue;
+        };
+        rep.joined = true;
+        if prev_entity == 0 {
+            // First session: a plain join by definition.
+        } else if entity == prev_entity {
+            rep.resumed += 1; // SAME wire id: the park was consumed by a resume
+        } else {
+            rep.fresh_joins += 1; // different id: the hold had already ended (§5 fallback)
+        }
+        prev_entity = entity;
+
+        // -- move until shortly before the cycle boundary, draining the
+        //    inbound stream (the same interleaved shape as run_client) ─
+        const DROP_MARGIN: Duration = Duration::from_millis(100);
+        let phase_end = if final_session { p.deadline } else { cycle_end };
+        let mut next_move = Instant::now();
+        let mut seq: u64 = 1; // every session numbers inputs from 1 (§14.2 reset)
+        loop {
+            let now = Instant::now();
+            if now + DROP_MARGIN >= phase_end {
+                break;
+            }
+            if now >= next_move {
+                next_move = now + p.move_ms;
+                let msg = gsb_game::game::MoveTo {
+                    x: ((id as i64 % 80) - 40) as i32,
+                    y: ((id as i64 % 37) - 18) as i32,
+                    seq,
+                };
+                seq += 1;
+                let payload = msg.encode_to_vec();
+                rep.bytes_out +=
+                    wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
+                if send_wire(&mut wire, gsb_game::op::MOVE_TO, payload)
+                    .await
+                    .is_err()
+                {
+                    break; // peer/session gone early
+                }
+                rep.moves += 1;
+            }
+            let timeout = next_move
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(250));
+            match recv_wire(&mut wire, timeout).await {
+                Got::Frame(_, payload) => {
+                    rep.bytes_in += (2 + payload.len()) as u64;
+                    if payload.is_empty() {
+                        rep.errors += 1;
+                    }
+                    rep.snapshots += 1;
+                }
+                Got::Quiet => {}
+                Got::Dead => break,
+            }
+        }
+
+        // -- THE POINT: drop WITHOUT any LEAVE_ROOM_REQ. The reader pump
+        //    sees EOF, the connection actor reports ConnClosed, the
+        //    registry routes Detach, and the room PARKS the entity
+        //    (inside the grace) — the next cycle's join resumes it. The
+        //    FINAL session never drops: it keeps playing until the
+        //    deadline (a resumed hero under sustained load).
+        if final_session {
+            break;
+        }
+        drop(wire);
+        drops += 1;
+
+        // Sleep out the rest of the cycle (the "player is away" window).
+        tokio::time::sleep(cycle_end.saturating_duration_since(Instant::now())).await;
+    }
+    rep
+}
+
 /// The client's measured server tick rate (the snapshot sequence is the
 /// global tick index).
 fn measured_hz(r: &ClientReport) -> Option<f64> {
@@ -1165,6 +1480,8 @@ struct ServerOverrides {
     max_players: Option<u32>,
     max_connections: Option<u64>,
     idle_timeout_secs: Option<f64>,
+    /// The demo rooms' disconnect-park grace (`None` = config default).
+    disconnect_grace_secs: Option<f64>,
 }
 
 fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -1176,6 +1493,9 @@ fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
     }
     if let Some(s) = o.idle_timeout_secs {
         cfg.idle_timeout_secs = s;
+    }
+    if let Some(s) = o.disconnect_grace_secs {
+        cfg.disconnect_grace_secs = s.max(0.0);
     }
 }
 
@@ -1260,6 +1580,7 @@ async fn run(args: Args) {
                     max_players: args.max_players,
                     max_connections: args.max_connections,
                     idle_timeout_secs: args.idle_timeout_secs,
+                    disconnect_grace_secs: args.disconnect_grace_secs,
                 },
             )
             .await
@@ -1322,13 +1643,31 @@ async fn run(args: Args) {
         flood: false,
         kind: args.transport,
     };
+    // Churn mode swaps the client BODY per task (RECONNECT §14.5); the
+    // plain path below stays byte-identical to every previous measurement.
+    let churn_cycle = args.churn_secs.map(Duration::from_secs_f64);
+    eprintln!(
+        "profile_note: {}",
+        match (&churn_cycle, args.disconnect_grace_secs) {
+            (Some(c), g) => format!("CHURN cycle={c:?} grace={g:?} (keep grace > cycle ⇒ resumes)"),
+            (None, _) => "plain".to_string(),
+        }
+    );
     let mut clients = Vec::with_capacity(n as usize);
     for i in 0..n {
         let id = args.offset + i;
         // The `--flood-id` client (by GLOBAL id) runs the tight-write flood
         // after joining; every other client is paced normally.
         p.flood = args.flood_id == Some(id);
-        clients.push(tokio::spawn(run_client(id, p.clone())));
+        match churn_cycle {
+            Some(cycle) => clients.push(tokio::spawn(run_churn_client(
+                id,
+                p.clone(),
+                cycle,
+                args.churn_cycles,
+            ))),
+            None => clients.push(tokio::spawn(run_client(id, p.clone()))),
+        }
     }
     let mut reports = Vec::with_capacity(clients.len());
     for h in clients {
@@ -1349,7 +1688,8 @@ async fn run(args: Args) {
                   bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
                   budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} \
                   acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} private_fulls={} \
-                  deltas={} gap_drops={} view_size={} hz={}",
+                  deltas={} gap_drops={} view_size={} hz={} \
+                  churn_cycles={} resumed={} fresh_joins={}",
                 r.id,
                 r.connected,
                 r.connect_ms,
@@ -1378,7 +1718,10 @@ async fn run(args: Args) {
                 match measured_hz(r) {
                     Some(h) => format!("{h:.3}"),
                     None => "-".to_string(),
-                }
+                },
+                r.churn_cycles,
+                r.resumed,
+                r.fresh_joins,
             );
         }
     }
@@ -1487,6 +1830,14 @@ fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.max_group = acc.max_group.max(r.max_group);
         acc.joins += r.joins;
         acc.leaves += r.leaves;
+        // Reconnect counters (§10): cumulative like joins/leaves → SUM.
+        // `detached` is an instant gauge → MAX (the worst shard's park
+        // population), mirroring the other gauges above.
+        acc.detached = acc.detached.max(r.detached);
+        acc.resumes += r.resumes;
+        acc.resume_rejected_stale += r.resume_rejected_stale;
+        acc.detach_expired_despawn += r.detach_expired_despawn;
+        acc.detach_expired_ai += r.detach_expired_ai;
     }
     acc.step_mean_us = if total_steps > 0 {
         weighted_mean / total_steps as f64
@@ -1640,6 +1991,9 @@ fn print_report(
     let deltas: u64 = reports.iter().map(|r| r.deltas).sum();
     let gap_drops: u64 = reports.iter().map(|r| r.gap_drops).sum();
     let view_size_total: u64 = reports.iter().map(|r| r.view_size).sum();
+    let churn_cycles_total: u64 = reports.iter().map(|r| r.churn_cycles).sum();
+    let resumed_total: u64 = reports.iter().map(|r| r.resumed).sum();
+    let fresh_joins_total: u64 = reports.iter().map(|r| r.fresh_joins).sum();
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
 
@@ -1821,7 +2175,9 @@ fn print_report(
             private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
             req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
-            req_to={} req_late={} req_pending={}",
+            req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
+             fresh_joins={} room_resumes={} resume_rejected_stale={} \
+             detach_expired_ai={} detach_expired_despawn={}",
         mode,
         args.visibility,
         if args.visibility == gsb_server::Visibility::Sharded {
@@ -1931,6 +2287,17 @@ fn print_report(
         room.map(|r| r.requests_timed_out).unwrap_or(0),
         room.map(|r| r.requests_late).unwrap_or(0),
         room.map(|r| r.pending_requests).unwrap_or(0),
+        // The churn profile's numbers (RECONNECT §14.5): client-side cycle
+        // counts, and the server-side cumulative resume counters from the
+        // room report (zero on a plain run — their presence is the queue
+        // check).
+        churn_cycles_total,
+        resumed_total,
+        fresh_joins_total,
+        room.map(|r| r.resumes).unwrap_or(0),
+        room.map(|r| r.resume_rejected_stale).unwrap_or(0),
+        room.map(|r| r.detach_expired_ai).unwrap_or(0),
+        room.map(|r| r.detach_expired_despawn).unwrap_or(0),
     );
 }
 
@@ -2315,6 +2682,7 @@ async fn serve(args: Args) {
             max_players: args.max_players,
             max_connections: args.max_connections,
             idle_timeout_secs: args.idle_timeout_secs,
+            disconnect_grace_secs: args.disconnect_grace_secs,
         },
     );
     match args.metrics_listen {
@@ -2573,6 +2941,9 @@ struct ClientRec {
     deltas: u64,
     gap_drops: u64,
     view_size: u64,
+    churn_cycles: u64,
+    resumed: u64,
+    fresh_joins: u64,
     hz: Option<f64>,
 }
 
@@ -2608,6 +2979,9 @@ fn parse_client_line(line: &str) -> Option<ClientRec> {
         deltas: get("deltas")?.parse().ok()?,
         gap_drops: get("gap_drops")?.parse().ok()?,
         view_size: get("view_size")?.parse().ok()?,
+        churn_cycles: get("churn_cycles").unwrap_or_default().parse().ok()?,
+        resumed: get("resumed").unwrap_or_default().parse().ok()?,
+        fresh_joins: get("fresh_joins").unwrap_or_default().parse().ok()?,
         hz: match get("hz")?.as_str() {
             "-" => None,
             v => v.parse().ok(),
@@ -2747,6 +3121,10 @@ async fn orchestrate(args: Args) {
         sargs.push("--idle-timeout-secs".into());
         sargs.push(s.to_string());
     }
+    if let Some(f) = args.disconnect_grace_secs {
+        sargs.push("--disconnect-grace-secs".into());
+        sargs.push(f.to_string());
+    }
     let mut server = spawn_pinned(
         &exe,
         &sargs,
@@ -2853,6 +3231,18 @@ async fn orchestrate(args: Args) {
         {
             cargs.push("--flood-id".into());
             cargs.push(k.to_string());
+        }
+        if let Some(c) = args.churn_secs {
+            cargs.push("--churn-secs".into());
+            cargs.push(c.to_string());
+        }
+        if args.churn_cycles != 0 {
+            cargs.push("--churn-cycles".into());
+            cargs.push(args.churn_cycles.to_string());
+        }
+        if let Some(f) = args.disconnect_grace_secs {
+            cargs.push("--disconnect-grace-secs".into());
+            cargs.push(f.to_string());
         }
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
@@ -3064,6 +3454,9 @@ async fn orchestrate(args: Args) {
             deltas: c.deltas,
             gap_drops: c.gap_drops,
             view_size: c.view_size,
+            churn_cycles: c.churn_cycles,
+            resumed: c.resumed,
+            fresh_joins: c.fresh_joins,
             seq_first: None,
             seq_last: None,
         })

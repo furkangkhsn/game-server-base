@@ -139,3 +139,19 @@ team_vision_radius = 25.0
 # hand-authored 100x100 sectors regardless (off-map spawns land in the
 # SECTOR_OUT catch-all and see only themselves).
 spawn_half_size = 50.0
+
+# Disconnect-park grace of the demo rooms, in seconds (docs/RECONNECT.md
+# §3): when a client's transport dies WITHOUT a leave, the player's
+# entity STAYS in the world for this long — visible to everyone in the
+# next snapshot, holding its room-cap slot, its last move target still
+# running. A human who reconnects with the SAME identity inside the
+# window (auth name, or ticket player) resumes onto the LIVE entity and
+# gets back the same wire id — no despawn/respawn happened at all.
+# When the grace runs out, the entity is handed to the demo stub bot
+# (ExpireTo::AiHandover): it keeps playing through the ordinary input
+# path (a synthesized wander MOVE_TO about once a second), so teammates
+# see a hero that wanders instead of one that vanished.
+#
+# Default 30. 0 restores the pre-reconnect semantics exactly: disconnect
+# = instant despawn.
+disconnect_grace_secs = 30.0

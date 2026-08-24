@@ -100,7 +100,7 @@ use std::hash::Hash;
 
 use bevy_ecs::prelude::{Component, Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -184,6 +184,10 @@ pub struct TeamRoom {
     runner: SystemRunner,
     /// Which entity belongs to which connection.
     conn_entity: HashMap<ConnectionId, Entity>,
+    /// The disconnect-park policy + ledger (see `crate::common` and
+    /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
+    park: crate::common::ParkPolicy,
+    park_ledger: HashMap<String, crate::common::ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
     next_wire_id: u64,
     /// World units an enemy must be within to be visible to a team (see
@@ -236,6 +240,8 @@ impl TeamRoom {
         Self {
             runner: crate::common::movement_runner(),
             conn_entity: HashMap::new(),
+            park: crate::common::ParkPolicy::default(),
+            park_ledger: HashMap::new(),
             next_wire_id: 0,
             vision_radius: vision_radius.max(1.0),
             spawn_half: half.max(1.0),
@@ -247,6 +253,14 @@ impl TeamRoom {
             input: HashMap::new(),
             encoded: 0,
         }
+    }
+
+    /// Set the disconnect-park grace (see
+    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    #[must_use]
+    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
+        self.park.grace = grace;
+        self
     }
 
     /// Rebuild the per-tick caches (module docs): team units, neutrals, the
@@ -417,7 +431,73 @@ impl RoomLogic<World> for TeamRoom {
         crate::common::on_leave(&mut self.conn_entity, world, conn, &mut self.input)
     }
 
-    fn ingest(&mut self, world: &mut World, _ctx: &TickCtx, actions: &mut Vec<Action>) {
+    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    //    hook bodies live in `crate::common`) ---------------------------
+    //
+    // Visibility of a parked hero (RECONNECT §3.2): under team fog a
+    // disconnected player's entity keeps its TeamMember component, so it
+    // keeps appearing to its OWN team and stays subject to the ordinary
+    // vision rule for enemies. A strategy that wanted to HIDE or mark
+    // the parked hero instead would filter/annotate its record HERE —
+    // in the content rebuild / snapshot encoder below — which is
+    // game-band policy, deliberately not implemented in the base.
+
+    fn on_disconnect(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> Detach {
+        crate::common::park_on_disconnect(
+            &self.conn_entity,
+            conn,
+            identity,
+            &self.park,
+            &mut self.park_ledger,
+        )
+    }
+
+    fn on_detach_expired(
+        &mut self,
+        _world: &mut World,
+        conn: ConnectionId,
+        to: gsb_core::room::ExpireTo,
+    ) {
+        crate::common::park_on_expire(&mut self.park_ledger, conn, to);
+    }
+
+    fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
+        crate::common::park_lookup(world, &self.park_ledger, identity)
+    }
+
+    fn on_resume(
+        &mut self,
+        _world: &mut World,
+        identity: &str,
+        old: ConnectionId,
+        new: ConnectionId,
+        _entity: EntityId,
+    ) {
+        crate::common::park_resume(
+            &mut self.park_ledger,
+            &mut self.conn_entity,
+            &mut self.input,
+            identity,
+            old,
+            new,
+        );
+    }
+
+    fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
+        crate::common::synthesize_bot_moves(
+            self.park_ledger
+                .values()
+                .filter(|e| e.bot)
+                .map(|e| (e.conn, e.entity)),
+            world,
+            ctx,
+            actions,
+        );
         crate::common::ingest(&self.conn_entity, world, actions, &mut self.input)
     }
 
