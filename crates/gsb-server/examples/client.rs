@@ -4,9 +4,15 @@
 //! Run the server first: `cargo run -p gsb-server` (default port 7777),
 //! then `cargo run -p gsb-server --example client [addr]`.
 //!
-//! The client stays in the spirit of the architecture: no
-//! `tokio::select!` — the mover task owns the write half and the reader
-//! loop owns the read half, each with exactly one thing to wait on.
+//! TLS (docs/SECURITY.md §2): pass `--tls-ca <PEM>` to verify the server
+//! against a custom root (a self-signed test CA works), and
+//! `--tls-server-name <NAME>` for the name the certificate must carry
+//! (default `localhost`). Without `--tls-ca` the client is plaintext,
+//! exactly as before this turn.
+//!
+//! The client stays in the spirit of the architecture: no multiplexing —
+//! the mover task owns the write half and the reader loop owns the read
+//! half, each with exactly one thing to wait on.
 
 use std::time::Duration;
 
@@ -14,8 +20,8 @@ use gsb_protocol::base::{
     Auth, AuthResult, Error, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
 };
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, tcp::OwnedReadHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
     let body = 2 + payload.len();
@@ -26,7 +32,9 @@ fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-async fn read_frame(r: &mut OwnedReadHalf) -> Option<(u16, Vec<u8>)> {
+/// Length-prefixed frame read over ANY byte source (TCP half or rustls
+/// half — both are plain `AsyncRead` to this function).
+async fn read_frame(r: &mut (dyn AsyncRead + Unpin + Send)) -> Option<(u16, Vec<u8>)> {
     let mut len_buf = [0u8; 4];
     r.read_exact(&mut len_buf).await.ok()?;
     let len = u32::from_le_bytes(len_buf) as usize;
@@ -51,15 +59,67 @@ async fn main() {
         )
         .init();
 
-    let addr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:7777".into());
-    let stream = TcpStream::connect(&addr).await.unwrap_or_else(|e| {
-        panic!("cannot connect to {addr}: {e} (is the server running?)");
-    });
-    stream.set_nodelay(true).ok();
-    let (mut r, mut w) = stream.into_split();
-    println!("connected to {addr}");
+    // Flag scan: one positional addr + the two TLS flags (both default off
+    // = plaintext).
+    let mut addr = "127.0.0.1:7777".to_string();
+    let mut tls_ca: Option<String> = None;
+    let mut tls_server_name = "localhost".to_string();
+    let mut argv = std::env::args().skip(1);
+    while let Some(a) = argv.next() {
+        match a.as_str() {
+            "--tls-ca" => tls_ca = Some(argv.next().expect("--tls-ca needs a PEM path")),
+            "--tls-server-name" => {
+                tls_server_name = argv.next().expect("--tls-server-name needs a value")
+            }
+            other => addr = other.to_string(),
+        }
+    }
+
+    // The connection's two halves behind type-erased trait objects: the
+    // framing and everything below cannot tell TCP from TLS (the same seam
+    // the server's Endpoint provides on its side).
+    let (r, w): (
+        Box<dyn AsyncRead + Unpin + Send>,
+        Box<dyn AsyncWrite + Unpin + Send>,
+    ) = if let Some(ca_path) = &tls_ca {
+        let ca_certs = load_certs(ca_path).unwrap_or_else(|e| panic!("{e}"));
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in ca_certs {
+            roots.add(cert).expect("--tls-ca PEM is not a certificate");
+        }
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("TLS protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
+        let tcp = TcpStream::connect(&addr)
+            .await
+            .unwrap_or_else(|e| panic!("cannot connect to {addr}: {e} (is the server running?)"));
+        tcp.set_nodelay(true).ok();
+        let dns_name: rustls::pki_types::ServerName<'static> = tls_server_name
+            .clone()
+            .try_into()
+            .unwrap_or_else(|_| panic!("--tls-server-name `{tls_server_name}` is not a DNS name"));
+        let tls = connector
+            .connect(dns_name, tcp)
+            .await
+            .unwrap_or_else(|e| panic!("TLS handshake with {addr} failed: {e}"));
+        println!("connected to {addr} over TLS (ca={ca_path}, server-name={tls_server_name})");
+        let (tr, tw) = tokio::io::split(tls);
+        (Box::new(tr), Box::new(tw))
+    } else {
+        let stream = TcpStream::connect(&addr).await.unwrap_or_else(|e| {
+            panic!("cannot connect to {addr}: {e} (is the server running?)");
+        });
+        stream.set_nodelay(true).ok();
+        println!("connected to {addr}");
+        let (tr, tw) = stream.into_split();
+        (Box::new(tr) as Box<dyn AsyncRead + Unpin + Send>, Box::new(tw))
+    };
+    let mut r = r;
+    let mut w = w;
 
     // AUTH + JOIN in one write: the connection actor drains its mailbox in
     // order, so the join is processed after the auth.
@@ -93,7 +153,8 @@ async fn main() {
     let mut acked_max: u64 = 0;
 
     // Mover task: every 150 ms, a MOVE_TO around a circle of radius 40,
-    // numbered from 1 (the per-session input sequence).
+    // numbered from 1 (the per-session input sequence). It owns the write
+    // half; nothing else touches it.
     let mover = tokio::spawn(async move {
         let mut i: u32 = 0;
         loop {
@@ -118,7 +179,8 @@ async fn main() {
             break;
         }
         // One wait, no multiplexing: a bounded read attempt.
-        let result = tokio::time::timeout(Duration::from_millis(200), read_frame(&mut r)).await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(200), read_frame(r.as_mut())).await;
         let Some((op, payload)) = result.ok().flatten() else {
             continue;
         };
@@ -219,4 +281,14 @@ async fn main() {
     println!("client done");
     drop(r);
     mover.abort();
+}
+
+/// Load PEM certificate(s) from `path`. Multi-cert bundles work: every
+/// PEM CERTIFICATE block in the file becomes a trust anchor (rustls'
+/// RootCertStore takes them one by one).
+fn load_certs(path: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    let pem = std::fs::read_to_string(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
+    rustls_pemfile::certs(&mut pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("malformed certificate PEM in `{path}`: {e}"))
 }

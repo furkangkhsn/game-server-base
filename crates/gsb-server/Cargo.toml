@@ -29,6 +29,16 @@ gsb-net = { workspace = true }
 gsb-protocol = { workspace = true }
 gsb-game = { workspace = true }
 bevy_ecs = { workspace = true }
+# TLS client side (example client + loadgen --tls-ca) and server config.
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+# PEM loading for the client-side --tls-ca root file.
+rustls-pemfile = { workspace = true }
+
+[dev-dependencies]
+# Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):
+# no certificate is ever committed to the repository.
+rcgen = "0.13"
 
 [build-dependencies]
 gsb-lint = { workspace = true }

@@ -47,6 +47,23 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 # fit the Listener trait shape).
 crossbeam-channel = "0.5"
 
+# TLS (docs/SECURITY.md §2, Tur A): rustls over TCP. The `ring` provider is
+# pinned (not the aws-lc-rs default) so the build stays a pure `cc` compile
+# with no cmake/NASM requirement — the workspace's dependency discipline.
+rustls = { version = "0.23", default-features = false, features = [
+    "logging",
+    "std",
+    "tls12",
+    "ring",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "tls12",
+    "ring",
+] }
+# PEM (cert chain / private key) loading for the server's tls_cert/tls_key
+# config paths.
+rustls-pemfile = "2"
+
 # ecs
 bevy_ecs = "0.19"
 

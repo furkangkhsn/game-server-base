@@ -2,10 +2,13 @@
 //! real client that authenticates, joins room 1, issues a move, and asserts
 //! that it observes its entity's position change in the world snapshots.
 //!
-//! Every flow runs on BOTH transports (TCP and rUDP — `TransportKind`),
-//! because the rUDP turn's acceptance criterion is "the existing e2e tests
-//! pass on the new transport with the same intent". The `Client` enum is
-//! the only place the transports differ:
+//! Every flow runs on ALL THREE transports — plaintext TCP, rUDP, and
+//! TCP-over-TLS (`TransportKind` + `Config::tls_cert/tls_key`) — because
+//! each transport turn's acceptance criterion is "the existing e2e tests
+//! pass on the new transport with the same intent" (docs/SECURITY.md §2:
+//! `TlsTransport` must pass the SAME suite as plaintext tcp; the
+//! parametrized idiom is the rUDP round's, extended by one arm). The
+//! `Client` enum is the only place the transports differ:
 //!
 //! - TCP: length-prefixed frames over a per-connection socket; a server
 //!   close is observable as EOF (read returns `Closed`).
@@ -15,7 +18,10 @@
 //!   `UdpClientStats`), and a lossy snapshot band. UDP has no EOF: a
 //!   closed session is observed as a failed `probe` (a heartbeat that
 //!   never gets answered).
+//! - TLS: the TCP framing over a rustls stream verified against a
+//!   runtime-minted CA (`common::mint_tls_pki`); EOF semantics are TCP's.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gsb_protocol::base::{Auth, AuthResult, Error, Heartbeat, HeartbeatAck, JoinRoom, JoinRoomResult};
@@ -23,7 +29,18 @@ use prost::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-type Kind = gsb_server::TransportKind;
+mod common;
+
+/// The three transports a guardrail flow runs on. `Tcp`/`Udp` map onto
+/// `gsb_server::TransportKind`; `Tls` is TCP plus the runtime-minted test
+/// PKI (the server config gets the cert/key PEM paths, the client trusts
+/// the CA DER). Clone is cheap (an `Arc` clone at most).
+#[derive(Clone)]
+enum Kind {
+    Tcp,
+    Udp,
+    Tls(Arc<common::TlsPki>),
+}
 
 /// The one place the transports differ (see the module docs).
 enum Client {
@@ -32,6 +49,9 @@ enum Client {
     /// keeps the enum's size at the small variant's (clippy's
     /// `large_enum_variant`).
     Udp(Box<gsb_net::udp::UdpClient>),
+    /// The TCP framing over a rustls client stream. Boxed for the same
+    /// reason as the UDP variant.
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
 
 /// What a bounded wait for the next frame found.
@@ -44,11 +64,10 @@ enum Recv {
 }
 
 impl Client {
-    fn kind(&self) -> Kind {
-        match self {
-            Client::Tcp(_) => Kind::Tcp,
-            Client::Udp(_) => Kind::Udp,
-        }
+    /// Whether this wire is rUDP (the only transport without EOF — the
+    /// close-detection branches below key off exactly this).
+    fn is_udp(&self) -> bool {
+        matches!(self, Client::Udp(_))
     }
 
     async fn connect(kind: Kind, addr: std::net::SocketAddr) -> std::io::Result<Self> {
@@ -59,6 +78,18 @@ impl Client {
             Kind::Udp => gsb_net::udp::UdpClient::connect(addr)
                 .await
                 .map(|c| Client::Udp(Box::new(c))),
+            Kind::Tls(pki) => {
+                let tcp = TcpStream::connect(addr).await?;
+                tcp.set_nodelay(true).ok();
+                let connector = common::tls_client_connector(&pki);
+                let dns: rustls::pki_types::ServerName<'static> = common::TLS_SERVER_NAME
+                    .try_into()
+                    .expect("dns name");
+                connector
+                    .connect(dns, tcp)
+                    .await
+                    .map(|t| Client::Tls(Box::new(t)))
+            }
         }
     }
 
@@ -69,17 +100,28 @@ impl Client {
         op: u16,
         payload: &[u8],
     ) -> std::io::Result<()> {
+        // The stream transports share the exact same byte shape: TCP and
+        // TLS differ ONLY in what carries it.
+        fn framed(op: u16, payload: &[u8]) -> Vec<u8> {
+            let body = 2 + payload.len();
+            let mut out = Vec::with_capacity(4 + body);
+            out.extend_from_slice(&(body as u32).to_le_bytes());
+            out.extend_from_slice(&op.to_le_bytes());
+            out.extend_from_slice(payload);
+            out
+        }
         match self {
             Client::Tcp(stream) => {
-                let body = 2 + payload.len();
-                let mut out = Vec::with_capacity(4 + body);
-                out.extend_from_slice(&(body as u32).to_le_bytes());
-                out.extend_from_slice(&op.to_le_bytes());
-                out.extend_from_slice(payload);
+                let out = framed(op, payload);
                 stream.write_all(&out).await?;
                 stream.flush().await
             }
             Client::Udp(c) => c.send_frame(op, payload.to_vec()).await,
+            Client::Tls(t) => {
+                let out = framed(op, payload);
+                t.write_all(&out).await?;
+                t.flush().await
+            }
         }
     }
 
@@ -97,6 +139,15 @@ impl Client {
                 Some(f) => Ok(Recv::Frame((f.op, f.payload.to_vec()))),
                 None => Ok(Recv::TimedOut),
             },
+            Client::Tls(t) => {
+                // Same framing over the rustls stream; EOF semantics are
+                // TCP's (a server close propagates as end-of-stream).
+                match tokio::time::timeout(window, read_tcp_frame(t.as_mut())).await {
+                    Ok(Some(f)) => Ok(Recv::Frame(f)),
+                    Ok(None) => Ok(Recv::Closed),
+                    Err(_) => Ok(Recv::TimedOut),
+                }
+            }
         }
     }
 
@@ -123,9 +174,9 @@ impl Client {
     }
 
     /// Assert (within `deadline`) that the connection is gone: EOF on
-    /// TCP, a failed probe on rUDP.
+    /// TCP and TLS, a failed probe on rUDP.
     async fn assert_closed(&mut self, deadline: Instant) -> std::io::Result<()> {
-        if matches!(self.kind(), Kind::Udp) {
+        if self.is_udp() {
             // Allow a beat for the close cascade to settle, then probe.
             tokio::time::sleep(Duration::from_millis(100)).await;
             if self.probe().await? {
@@ -164,7 +215,8 @@ async fn read_tcp_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Option<(u16, Ve
 }
 
 /// A server config with the guardrail overrides a test needs, on a given
-/// transport.
+/// transport. TLS is the TCP transport + the minted PKI's PEM paths (the
+/// same config keys an operator would set).
 fn cfg_on(
     kind: Kind,
     idle_timeout_secs: Option<f64>,
@@ -176,7 +228,14 @@ fn cfg_on(
         room_count: 1,
         ..Default::default()
     };
-    cfg.transport = kind;
+    match &kind {
+        Kind::Udp => cfg.transport = gsb_server::TransportKind::Udp,
+        Kind::Tcp | Kind::Tls(_) => cfg.transport = gsb_server::TransportKind::Tcp,
+    }
+    if let Kind::Tls(pki) = &kind {
+        cfg.tls_cert = pki.cert_pem_path.clone();
+        cfg.tls_key = pki.key_pem_path.clone();
+    }
     if let Some(s) = idle_timeout_secs {
         cfg.idle_timeout_secs = s;
     }
@@ -189,13 +248,19 @@ fn cfg_on(
     cfg
 }
 
-fn kinds() -> [Kind; 2] {
-    [Kind::Tcp, Kind::Udp]
+/// All transports the parametrized flows must pass on. One PKI mint per
+/// test entry point (rcgen is milliseconds; the flows share it by `Arc`).
+fn kinds() -> Vec<Kind> {
+    vec![
+        Kind::Tcp,
+        Kind::Udp,
+        Kind::Tls(Arc::new(common::mint_tls_pki("e2e"))),
+    ]
 }
 
 /// The full control path (auth → join → action → snapshot) on a transport.
 async fn join_and_observe_movement(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, None, None, None))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), None, None, None))
         .await
         .expect("server starts");
     let mut client = Client::connect(kind, handle.addr)
@@ -303,7 +368,7 @@ async fn join_and_observe_movement(kind: Kind) {
 /// connection (and its tasks/channels/registry entry) would sit until
 /// process death: the half-open case.
 async fn idle_connection_is_closed(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, Some(1.0), None, None))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), Some(1.0), None, None))
         .await
         .expect("server starts");
     let mut client = Client::connect(kind, handle.addr)
@@ -361,7 +426,7 @@ async fn idle_connection_is_closed(kind: Kind) {
 /// frame (the TCP reader pump's clock; the rUDP demux deadline heap), and
 /// it keeps getting its heartbeat acks for the whole run.
 async fn active_heartbeat_survives(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, Some(1.0), None, None))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), Some(1.0), None, None))
         .await
         .expect("server starts");
     let mut client = Client::connect(kind, handle.addr)
@@ -414,13 +479,13 @@ async fn active_heartbeat_survives(kind: Kind) {
 /// (it can pick another room or retry; a silent close would masquerade as
 /// a network failure and trigger reconnect storms against a busy server).
 async fn room_full_gentle_rejection(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, None, Some(1), None))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), None, Some(1), None))
         .await
         .expect("server starts");
     let addr = handle.addr;
 
     // Player A takes the only seat.
-    let mut a = Client::connect(kind, addr).await.expect("A connects");
+    let mut a = Client::connect(kind.clone(), addr).await.expect("A connects");
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
@@ -515,13 +580,13 @@ async fn room_full_gentle_rejection(kind: Kind) {
 /// has no seat for it, so the connection cannot exist). The first
 /// connection is unaffected.
 async fn connection_capacity_rejects(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, None, None, Some(1)))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), None, None, Some(1)))
         .await
         .expect("server starts");
     let addr = handle.addr;
 
     // A takes the only seat (and auths, so it is fully live).
-    let mut a = Client::connect(kind, addr).await.expect("A connects");
+    let mut a = Client::connect(kind.clone(), addr).await.expect("A connects");
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
@@ -586,12 +651,9 @@ async fn connection_capacity_rejects(kind: Kind) {
 /// pull) never drops, and the drops are counted per connection and surface
 /// in the net scope attributed to the flooder (`actions_dropped_top`).
 async fn flooder_drops_attributed(kind: Kind) {
-    let mut cfg = gsb_server::Config {
-        bind: "127.0.0.1:0".into(),
-        room_count: 1,
-        ..Default::default()
-    };
-    cfg.transport = kind;
+    // Same config shape as every other flow (cfg_on picks TCP+PEM paths
+    // for the TLS arm — identical to what an operator would write).
+    let cfg = cfg_on(kind.clone(), None, None, None);
     let (rep_tx, rep_rx) = tokio::sync::mpsc::unbounded_channel::<gsb_core::metrics::MetricReport>();
     let handle = gsb_server::start_server_metrics(cfg, rep_tx)
         .await
@@ -634,8 +696,9 @@ async fn flooder_drops_attributed(kind: Kind) {
 
     let flood_start = Instant::now();
     let fdeadline = flood_start + Duration::from_secs(3);
-    // TCP: a DEDICATED tight-write task (no read pacing — interleaving
-    // reads would slow the flood below the room's 480/s pull budget).
+    // TCP/TLS: a DEDICATED tight-write task (no read pacing — interleaving
+    // reads would slow the flood below the room's 480/s pull budget); the
+    // rustls stream splits exactly like the TCP socket does.
     // rUDP: the client is one task (the read and the send share the
     // socket), so the flood interleaves NON-BLOCKING read-drains; the
     // flood frames travel the lossy game band, so retransmit state never
@@ -661,6 +724,29 @@ async fn flooder_drops_attributed(kind: Kind) {
             });
             while flood_start.elapsed() < Duration::from_secs(3) {
                 let _ = tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
+            }
+            flood.await.expect("flood task exits");
+        }
+        Client::Tls(t) => {
+            let (mut r, mut w) = tokio::io::split(*t);
+            let mf = {
+                let body = 2 + move_payload.len();
+                let mut out = Vec::with_capacity(4 + body);
+                out.extend_from_slice(&(body as u32).to_le_bytes());
+                out.extend_from_slice(&gsb_game::op::MOVE_TO.to_le_bytes());
+                out.extend_from_slice(&move_payload);
+                out
+            };
+            let flood = tokio::spawn(async move {
+                while Instant::now() < fdeadline {
+                    if w.write_all(&mf).await.is_err() {
+                        break; // peer gone
+                    }
+                }
+            });
+            while flood_start.elapsed() < Duration::from_secs(3) {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
             }
             flood.await.expect("flood task exits");
         }
@@ -723,10 +809,10 @@ async fn flooder_drops_attributed(kind: Kind) {
 /// violation budget, then teardown. On TCP that is EOF; on rUDP a failed
 /// probe.
 async fn violation_budget_close(kind: Kind) {
-    let handle = gsb_server::start_server(cfg_on(kind, None, None, None))
+    let handle = gsb_server::start_server(cfg_on(kind.clone(), None, None, None))
         .await
         .expect("server starts");
-    let mut client = Client::connect(kind, handle.addr)
+    let mut client = Client::connect(kind.clone(), handle.addr)
         .await
         .expect("client connects");
     // Twenty unknown base-band opcodes with an empty payload, back to
@@ -782,7 +868,8 @@ async fn violation_budget_close(kind: Kind) {
         reason.contains("violation"),
         "the close must name the violation budget: {reason}"
     );
-    if kind == Kind::Tcp {
+    // TCP and TLS both deliver the close as EOF; rUDP is probe-based.
+    if !matches!(kind, Kind::Udp) {
         client.assert_closed(deadline).await.unwrap();
     }
     handle.stop().await;

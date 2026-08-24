@@ -51,11 +51,8 @@ use gsb_protocol::base::{
 };
 use gsb_protocol::op;
 use prost::Message;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{
-    TcpListener, TcpStream, UdpSocket,
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 use gsb_net::udp::UdpClient;
 use tokio::process::{Child, ChildStdout, Command};
@@ -203,6 +200,16 @@ struct Args {
     /// `udp` the client's `connect_ms` is the rUDP cookie-HANDSHAKE
     /// latency (challenge + proof), not a TCP handshake.
     transport: gsb_server::TransportKind,
+    /// TLS client material (`--tls-ca`, docs/SECURITY.md §2 decision 4):
+    /// when set, TCP clients wrap their socket in a rustls handshake that
+    /// verifies the server against THIS root. External mode only — the
+    /// in-process server stays plaintext this round (there is no flag to
+    /// mint or load server keys here). `connect_ms` then measures the TLS
+    /// handshake too.
+    tls_ca: Option<String>,
+    /// The name the server certificate must carry (`--tls-server-name`,
+    /// default "localhost" — what the test PKI mints).
+    tls_server_name: String,
     /// Number of client processes in orchestrator mode (default 1).
     procs: u32,
     /// Pin the spawned processes to disjoint core sets with `taskset`
@@ -330,6 +337,8 @@ fn parse_args() -> Args {
         metrics_listen: None,
         orchestrate: false,
         transport: gsb_server::TransportKind::Tcp,
+        tls_ca: None,
+        tls_server_name: "localhost".into(),
         procs: 1,
         pin: false,
         pin_server_cores: 8,
@@ -439,6 +448,8 @@ fn parse_args() -> Args {
                     other => panic!("--transport: expected tcp|udp, got {other}"),
                 };
             }
+            "--tls-ca" => args.tls_ca = Some(v()),
+            "--tls-server-name" => args.tls_server_name = v(),
             s if s.starts_with("--") => panic!("unknown flag {s} (try --help)"),
             s => args.clients = s.parse().expect("N must be a number"),
         }
@@ -452,6 +463,20 @@ fn parse_args() -> Args {
     }
     if args.orchestrate && args.serve {
         panic!("--orchestrate and --serve are mutually exclusive (try --help)");
+    }
+    // TLS is an external-client feature this round: there is no way to hand
+    // the in-process/served server its cert/key here, so a CA without an
+    // external target would silently test plaintext against a plaintext
+    // server — refuse instead of lying. And rUDP takes no TLS anywhere
+    // (docs/SECURITY.md §2 decision 7).
+    if args.tls_ca.is_some() && args.addr.is_none() {
+        panic!(
+            "--tls-ca requires --addr HOST:PORT: the in-process server has no \
+             TLS config this round (it stays plaintext)"
+        );
+    }
+    if args.tls_ca.is_some() && args.transport == gsb_server::TransportKind::Udp {
+        panic!("--tls-ca with --transport udp is contradictory: rUDP takes no TLS");
     }
     if args.serve && args.clients != 100 && args.addr.is_none() {
         // `gsb-loadgen --serve` takes no client count; a bare number
@@ -473,7 +498,7 @@ fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-async fn read_frame(r: &mut OwnedReadHalf) -> Option<(u16, Vec<u8>)> {
+async fn read_frame(r: &mut (dyn AsyncRead + Unpin + Send)) -> Option<(u16, Vec<u8>)> {
     let mut len_buf = [0u8; 4];
     r.read_exact(&mut len_buf).await.ok()?;
     let len = u32::from_le_bytes(len_buf) as usize;
@@ -573,10 +598,21 @@ fn spawn_home(id: u64, half: f32) -> (f64, f64) {
     (x, y)
 }
 
+/// The client-side TLS material (a cloned slice of `Args`): the CA root to
+/// trust and the name to expect in the server certificate. `None` =
+/// plaintext TCP.
+#[derive(Clone)]
+struct TlsOpts {
+    ca_path: String,
+    server_name: String,
+}
+
 /// Everything one client task needs besides its own id. (One struct
 /// rather than eight scalars — the profile work kept adding fields.)
 #[derive(Clone)]
 struct ClientParams {
+    /// TLS material for TCP clients (`None` = plaintext, the default).
+    tls: Option<TlsOpts>,
     addr: SocketAddr,
     room: u64,
     move_ms: Duration,
@@ -596,19 +632,73 @@ struct ClientParams {
     kind: gsb_server::TransportKind,
 }
 
+/// Build a rustls connector trusting ONLY the CA PEM at `ca_path` (the
+/// `--tls-ca` root; a self-signed test CA works — docs/SECURITY.md §2).
+fn tls_connector(ca_path: &str) -> tokio_rustls::TlsConnector {
+    let pem = std::fs::read_to_string(ca_path)
+        .unwrap_or_else(|e| panic!("cannot read --tls-ca `{ca_path}`: {e}"));
+    let certs = rustls_pemfile::certs(&mut pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|e| panic!("malformed certificate PEM in `{ca_path}`: {e}"));
+    let mut roots = rustls::RootCertStore::empty();
+    for c in certs {
+        roots.add(c).expect("--tls-ca PEM is not a certificate");
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("TLS protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tokio_rustls::TlsConnector::from(std::sync::Arc::new(config))
+}
+
 /// Connect one wire of the given kind (the transport-specific half of a
 /// client session's birth; shared by the plain and the churn client —
-/// TCP gets `nodelay` + a split into owned halves, rUDP runs its cookie
-/// handshake).
-async fn connect_wire(kind: gsb_server::TransportKind, addr: SocketAddr) -> std::io::Result<Wire> {
+/// TCP gets `nodelay` + a split into boxed halves so plaintext and TLS
+/// share one wire shape, rUDP runs its cookie handshake). With TLS
+/// material, `connect_ms` includes the rustls handshake.
+async fn connect_wire(
+    kind: gsb_server::TransportKind,
+    addr: SocketAddr,
+    tls: &Option<TlsOpts>,
+) -> std::io::Result<Wire> {
     Ok(match kind {
         gsb_server::TransportKind::Udp => Wire::Udp(Box::new(UdpClient::connect(addr).await?)),
-        gsb_server::TransportKind::Tcp => {
-            let stream = TcpStream::connect(addr).await?;
-            stream.set_nodelay(true).ok();
-            let (r, w) = stream.into_split();
-            Wire::Tcp { r, w }
-        }
+        gsb_server::TransportKind::Tcp => match tls {
+            None => {
+                let stream = TcpStream::connect(addr).await?;
+                stream.set_nodelay(true).ok();
+                let (r, w) = tokio::io::split(stream);
+                Wire::Tcp {
+                    r: Box::new(r),
+                    w: Box::new(w),
+                }
+            }
+            Some(opts) => {
+                let stream = TcpStream::connect(addr).await?;
+                stream.set_nodelay(true).ok();
+                let connector = tls_connector(&opts.ca_path);
+                let dns: rustls::pki_types::ServerName<'static> = opts
+                    .server_name
+                    .clone()
+                    .try_into()
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("--tls-server-name `{}` is not a DNS name", opts.server_name),
+                        )
+                    })?;
+                // The handshake happens HERE: connect_ms covers it (the
+                // same convention as the rUDP cookie handshake above).
+                let tls_stream = connector.connect(dns, stream).await?;
+                let (r, w) = tokio::io::split(tls_stream);
+                Wire::Tcp {
+                    r: Box::new(r),
+                    w: Box::new(w),
+                }
+            }
+        },
     })
 }
 
@@ -624,7 +714,7 @@ enum Got {
 async fn recv_wire(wire: &mut Wire, timeout: Duration) -> Got {
     match wire {
         Wire::Tcp { r, .. } => {
-            match tokio::time::timeout(timeout, read_frame(r)).await {
+            match tokio::time::timeout(timeout, read_frame(r.as_mut())).await {
                 Ok(Some((op, payload))) => Got::Frame(op, payload),
                 Ok(None) => Got::Dead, // EOF / bad frame
                 Err(_) => Got::Quiet,
@@ -652,11 +742,12 @@ async fn send_wire(wire: &mut Wire, op: u16, payload: Vec<u8>) -> std::io::Resul
 /// the client loop — see `run_client`).
 enum Wire {
     /// Length-prefixed frames over a per-connection socket, split: the
-    /// main loop owns the read half, the (dedicated) flood task the
-    /// write half.
+    /// main loop owns the read half, the flood path the write half.
+    /// Type-erased halves so plaintext TCP and TLS-over-TCP share this
+    /// one variant (the framing below cannot tell them apart).
     Tcp {
-        r: OwnedReadHalf,
-        w: OwnedWriteHalf,
+        r: Box<dyn AsyncRead + Unpin + Send>,
+        w: Box<dyn AsyncWrite + Unpin + Send>,
     },
     /// One shared socket in one task: read and write interleave (UDP has
     /// no connection to split). Boxed: `UdpClient` carries a 2 KB read
@@ -815,7 +906,7 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // transport-agnostic). On rUDP `connect` is the cookie handshake, so
     // `connect_ms` measures the handshake latency.
     let t0 = Instant::now();
-    let mut wire = match connect_wire(p.kind, p.addr).await {
+    let mut wire = match connect_wire(p.kind, p.addr, &p.tls).await {
         Ok(w) => w,
         Err(e) => {
             eprintln!("client {id}: connect failed: {e}");
@@ -960,7 +1051,7 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // run instead).
         let got = match &mut wire {
             Wire::Tcp { r, .. } => {
-                tokio::time::timeout(timeout, read_frame(r)).await.ok().flatten()
+                tokio::time::timeout(timeout, read_frame(r.as_mut())).await.ok().flatten()
             }
             Wire::Udp(c) => c
                 .recv_frame(timeout)
@@ -1138,7 +1229,7 @@ async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             let timeout = leave_deadline.saturating_duration_since(Instant::now());
             let got = match &mut wire {
                 Wire::Tcp { r, .. } => {
-                    tokio::time::timeout(timeout, read_frame(r)).await.ok().flatten()
+                    tokio::time::timeout(timeout, read_frame(r.as_mut())).await.ok().flatten()
                 }
                 Wire::Udp(c) => c
                     .recv_frame(timeout)
@@ -1293,7 +1384,7 @@ async fn run_churn_client(id: u64, p: ClientParams, cycle: Duration, max_drops: 
 
         // -- connect ───────────────────────────────────────────────────
         let t0 = Instant::now();
-        let mut wire = match connect_wire(p.kind, p.addr).await {
+        let mut wire = match connect_wire(p.kind, p.addr, &p.tls).await {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("churn client {id}: connect failed: {e}");
@@ -1632,6 +1723,13 @@ async fn run(args: Args) {
     let n = args.clients;
     let mut p = ClientParams {
         addr,
+        tls: args
+            .tls_ca
+            .clone()
+            .map(|ca_path| TlsOpts {
+                ca_path,
+                server_name: args.tls_server_name.clone(),
+            }),
         room: args.room,
         move_ms: args.move_ms,
         stagger_ms: args.stagger_ms,

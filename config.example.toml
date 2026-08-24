@@ -11,7 +11,21 @@ bind = "0.0.0.0:7777"
 # sessions, a reliable control band + a loss-tolerant game band,
 # datagram-level idle sweep; DESIGN §6). The whole actor layer is
 # transport-agnostic — this only changes who runs the pumps.
+# With both TLS keys set below, "tcp" serves TCP-over-TLS (rustls).
 transport = "tcp"
+
+# TLS (docs/SECURITY.md §2): paths to the server certificate chain (PEM,
+# leaf first) and its private key (PEM). BOTH empty (the default) =
+# plaintext TCP, exactly as always. BOTH set = every "tcp" connection is
+# upgraded with a rustls handshake (capped at 10 s; a slow or hostile
+# handshake is dropped). Setting ONE without the other REFUSES STARTUP —
+# no silent half-configured fallback. Either key together with
+# transport = "udp" also refuses startup: rUDP is experimental and takes
+# no TLS. The framing above the socket is identical either way — clients
+# pick plaintext or TLS at connect time.
+#tls_cert = "/etc/gsb/cert.pem"
+#tls_key = "/etc/gsb/key.pem"
+
 
 # rUDP only: maximum outbound datagram size in bytes. 1472 = typical
 # Ethernet MTU minus IP/UDP headers (no fragmentation in v1: an

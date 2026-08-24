@@ -100,6 +100,7 @@ impl std::fmt::Display for Visibility {
     }
 }
 use gsb_net::tcp::TcpTransport;
+use gsb_net::tls::{TlsTransport, TlsTransportConfig};
 use gsb_net::transport::Transport;
 use gsb_net::udp::{UdpTransport, UdpTransportConfig};
 use gsb_protocol::MessageTable;
@@ -218,6 +219,16 @@ pub struct Config {
     /// the server refuses to start — a predictable key would invert the
     /// handshake's anti-amplification property (see `gsb_net::udp`).
     pub udp_cookie_key: Option<String>,
+    /// Path to the server certificate chain, PEM (leaf first). Empty (the
+    /// default) = plaintext TCP, byte-identical behavior to before the TLS
+    /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
+    /// (docs/SECURITY.md §2). Setting one WITHOUT the other is a startup
+    /// error — no silent half-configured fallback; setting either with
+    /// `transport = "udp"` is also a startup error (rUDP is experimental
+    /// and takes no TLS).
+    pub tls_cert: String,
+    /// Path to the PEM private key matching [`Self::tls_cert`]. See there.
+    pub tls_key: String,
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured break-even.
@@ -284,6 +295,8 @@ impl Default for Config {
             transport: TransportKind::default(),
             udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
             udp_cookie_key: None,
+            tls_cert: String::new(),
+            tls_key: String::new(),
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
@@ -358,6 +371,21 @@ pub enum ServerError {
 
     #[error("invalid `http_listen` address `{0}`: {1}")]
     BadHttpListen(String, String),
+
+    #[error("`tls_cert` is set but `tls_key` is empty: TLS needs BOTH files; \
+             refusing to start half-configured (a silent plaintext fallback \
+             would hide the mistake) — docs/SECURITY.md §2 decision 3")]
+    TlsCertNeedsKey,
+
+    #[error("`tls_key` is set but `tls_cert` is empty: TLS needs BOTH files; \
+             refusing to start half-configured — docs/SECURITY.md §2 decision 3")]
+    TlsKeyNeedsCert,
+
+    #[error("transport = \"udp\" cannot be combined with tls_cert/tls_key: \
+             rUDP is experimental and takes no TLS (its cookie handshake is \
+             its own anti-amplification boundary) — docs/SECURITY.md §2 \
+             decision 7")]
+    UdpWithTls,
 }
 
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
@@ -734,6 +762,22 @@ async fn start_inner(
         return Err(ServerError::BadShardCount(cfg.shard_count));
     }
 
+    // TLS config sanity (docs/SECURITY.md §2 decisions 3 and 7): both keys
+    // empty = plaintext exactly as before this turn; both set = TLS over
+    // TCP; one without the other = startup error (never a silent weak
+    // fallback — the same principle as the rUDP cookie-key check); any TLS
+    // key together with `transport = "udp"` = startup error (rUDP is
+    // experimental and takes no TLS). Checked BEFORE anything binds so a
+    // misconfigured server never half-starts.
+    match (cfg.tls_cert.is_empty(), cfg.tls_key.is_empty()) {
+        (true, true) | (false, false) => {}
+        (false, true) => return Err(ServerError::TlsCertNeedsKey),
+        (true, false) => return Err(ServerError::TlsKeyNeedsCert),
+    }
+    if cfg.transport == TransportKind::Udp && !cfg.tls_cert.is_empty() {
+        return Err(ServerError::UdpWithTls);
+    }
+
     let table = build_table();
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
 
@@ -977,12 +1021,29 @@ async fn start_inner(
         None
     };
 
-    // Bind the transport (config-selectable: TCP or rUDP — same actor
-    // layer, see `TransportKind`), then run the accept loop.
+    // Bind the transport (config-selectable: TCP, TLS-over-TCP, or rUDP —
+    // same actor layer, see `TransportKind`). The TLS pick rides the Tcp
+    // branch: TLS is a socket-level upgrade of the SAME framing, so the
+    // accept loop, the pumps and every actor below are identical for
+    // plaintext and encrypted connections (see `gsb_net::tls`). The PEM
+    // files are loaded inside `bind`; a missing/malformed file surfaces
+    // here as a bind error with the path named.
     let transport: Arc<dyn Transport> = match cfg.transport {
-        TransportKind::Tcp => Arc::new(TcpTransport {
-            max_frame_bytes: cfg.max_frame_bytes,
-        }),
+        TransportKind::Tcp => {
+            if cfg.tls_cert.is_empty() {
+                Arc::new(TcpTransport {
+                    max_frame_bytes: cfg.max_frame_bytes,
+                })
+            } else {
+                Arc::new(TlsTransport {
+                    config: TlsTransportConfig {
+                        cert_chain_pem: cfg.tls_cert.clone(),
+                        key_pem: cfg.tls_key.clone(),
+                        max_frame_bytes: cfg.max_frame_bytes,
+                    },
+                })
+            }
+        },
         TransportKind::Udp => Arc::new(UdpTransport {
             config: UdpTransportConfig {
                 // The demux pre-creates the mailboxes at handshake: same

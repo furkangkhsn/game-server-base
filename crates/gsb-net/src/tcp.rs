@@ -2,36 +2,34 @@
 //!
 //! This is the de-facto industry-standard framing for a tokio game server
 //! stack. Frame bodies are handed to the actor layer via
-//! [`gsb_protocol::FrameBody`]; the 4-byte length prefix lives here, inside
-//! the transport, and never leaks out.
+//! [`gsb_protocol::FrameBody`]; the 4-byte length prefix lives in
+//! [`crate::framed`], inside this crate, and never leaks out.
 
-use std::io;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Context;
-use std::task::Poll;
-use std::task::ready;
 
-use bytes::Buf;
-use bytes::BytesMut;
-use futures::Sink;
-use futures::Stream;
-use futures::StreamExt;
-use tokio::io::AsyncWrite;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::FramedRead;
-use tokio_util::codec::LengthDelimitedCodec;
-use tracing::debug;
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::ConnectionId;
-use gsb_protocol::FrameBody;
+use tracing::debug;
 
+use crate::framed::FrameReader;
+use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
 use crate::transport::{BoxFuture, Endpoint, Listener, Transport};
+
+#[cfg(test)]
+use futures::Sink;
+#[cfg(test)]
+use futures::Stream;
+#[cfg(test)]
+use futures::StreamExt;
+#[cfg(test)]
+use gsb_protocol::FrameBody;
 
 /// Maximum frame body size (opcode + payload). Defaults to 1 MiB.
 pub const DEFAULT_MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -71,6 +69,11 @@ impl Transport for TcpTransport {
     }
 }
 
+/// The TCP reader: length-delimited frames over the socket's read half.
+type TcpReader = FrameReader<OwnedReadHalf>;
+/// The TCP writer: length-prefixed frames into the socket's write half.
+type TcpWriter = FrameWriter<OwnedWriteHalf>;
+
 impl Listener for TcpListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, std::io::Result<Endpoint>> {
         Box::pin(async move {
@@ -89,16 +92,7 @@ impl Listener for TcpListenerHandle {
 impl TcpListenerHandle {
     fn make_endpoint(&self, stream: TcpStream, peer: std::net::SocketAddr) -> Endpoint {
         let (read_half, write_half) = stream.into_split();
-        let reader = TcpReader {
-            inner: LengthDelimitedCodec::builder()
-                .little_endian()
-                .max_frame_length(self.max_frame_bytes)
-                .new_read(read_half),
-        };
-        let writer = TcpWriter {
-            inner: write_half,
-            buf: BytesMut::with_capacity(1024),
-        };
+        let max_frame_bytes = self.max_frame_bytes;
         // The reader handle is `Some` here: TCP has a per-connection read
         // half, so the reader pump is genuinely this endpoint's task.
         Endpoint::new(
@@ -106,6 +100,8 @@ impl TcpListenerHandle {
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
                   idle_timeout: Option<std::time::Duration>| {
+                let reader = TcpReader::new(read_half, max_frame_bytes);
+                let writer = TcpWriter::new(write_half);
                 let (read, write) =
                     spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
                 (Some(read), write)
@@ -115,104 +111,20 @@ impl TcpListenerHandle {
     }
 }
 
-/// Streaming view over a length-delimited read half; yields parsed frames.
-struct TcpReader {
-    inner: FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
-}
-
-impl Stream for TcpReader {
-    type Item = io::Result<FrameBody>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        match ready!(this.inner.poll_next_unpin(cx)) {
-            None => Poll::Ready(None),
-            Some(Err(e)) => Poll::Ready(Some(Err(e))),
-            Some(Ok(chunk)) => Poll::Ready(Some(
-                FrameBody::decode(chunk.freeze())
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
-            )),
-        }
-    }
-}
-
-/// Sink view over a write half; appends `[u32 LE len][frame body]` per frame
-/// and flushes through the socket buffer.
-struct TcpWriter {
-    inner: OwnedWriteHalf,
-    buf: BytesMut,
-}
-
-impl Sink<FrameBody> for TcpWriter {
-    type Error = io::Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        // Ready to accept more frames as soon as the queued bytes can be
-        // written out (keeps the socket buffer from growing unbounded).
-        let this = self.get_mut();
-        Self::drain(this, cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: FrameBody) -> Result<(), io::Error> {
-        let this = self.get_mut();
-        let body = item.encode();
-        // The 4-byte LE length prefix covers the frame body (opcode +
-        // payload). Size limits are enforced by the reader's codec
-        // (`max_frame_bytes`), so there is nothing to guard here.
-        this.buf
-            .extend_from_slice(&(body.len() as u32).to_le_bytes());
-        this.buf.extend_from_slice(&body);
-        Ok(())
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        let this = self.get_mut();
-        Self::drain(this, cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        let this = self.get_mut();
-        ready!(TcpWriter::drain(this, cx))?;
-        Pin::new(&mut this.inner).poll_shutdown(cx)
-    }
-}
-
-impl TcpWriter {
-    /// Write all queued bytes to the socket; Pending when the socket would
-    /// block.
-    fn drain(this: &mut TcpWriter, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        loop {
-            if this.buf.is_empty() {
-                return Pin::new(&mut this.inner).poll_flush(cx);
-            }
-            let n = ready!(Pin::new(&mut this.inner).poll_write(cx, &this.buf))?;
-            this.buf.advance(n);
-        }
-    }
-}
-
-impl TcpReader {
+#[cfg(test)]
+impl FrameReader<OwnedReadHalf> {
     /// Test helper: build a reader/writer pair over a live TCP stream.
-    #[cfg(test)]
     pub fn for_stream(
         stream: TcpStream,
         max_frame_bytes: usize,
     ) -> (
-        impl Stream<Item = io::Result<FrameBody>> + 'static,
-        impl Sink<FrameBody, Error = io::Error> + 'static,
+        impl Stream<Item = std::io::Result<FrameBody>> + 'static,
+        impl Sink<FrameBody, Error = std::io::Error> + 'static,
     ) {
         let (r, w) = stream.into_split();
         (
-            TcpReader {
-                inner: LengthDelimitedCodec::builder()
-                    .little_endian()
-                    .max_frame_length(max_frame_bytes)
-                    .new_read(r),
-            },
-            TcpWriter {
-                inner: w,
-                buf: BytesMut::with_capacity(1024),
-            },
+            FrameReader::new(r, max_frame_bytes),
+            FrameWriter::new(w),
         )
     }
 }
