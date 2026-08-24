@@ -3086,6 +3086,48 @@ auth rate-limit, pre-auth tahsis sınırı. Tasarım: `docs/SECURITY.md`.
 
 Test 215 → **231** (231/231 yeşil); clippy temiz; loadgen regresyonu yeşil.
 
+## Kapatılanlar (regresyon ölçüm turu)
+
+Kaynak: reconnect → trait birleşimi → shard-RPC → ops → güvenlik
+turlarının ardından hiçbir büyük yük ölçümü tekrar alınmamıştı;
+proje ilkesi "önce veri" gereği C1 tablosunun bugünkü kodla tekrarı.
+Hiçbir kod değişmedi — bu tur salt ölçüm (+ bir harness düzeltmesi).
+
+### Ana tablo: C1 aynası (orchestrator, --pin --procs 4, spatial c5,
+ring, 30 sn; baseline = koruma katmanı turu kayıtları)
+
+| Ölçek | Metrik | Eski | Bugün | |
+|---|---|---|---|---|
+| 5k | step p50 / hz | 12.5 ms / 30.00 | **12.5 ms / 29.99** | = |
+| 9k | hz / over_budget | 28.19 / %44.6 | **30.00 / %13.7** | daha iyi |
+| 10k | step p50 / hz | ≥50 ms / 23.21 | **25 ms / 29.37** | **daha iyi** |
+| 10k | drops / late_max | 52 771 / 2.17 sn | 24 646 / 2.14 sn | daha iyi |
+| 10k sharded N=4 | server CPU | 111.4 çekirdek-sn | **61.5 (−%45)** | daha iyi |
+
+**Sonuç: regresyon yok — duvar geriledi.** 9k-10k arasındaki bütçe
+aşımı kayboldu (p50 yarıya indi, hz 23.2→29.37); delta yayın ve sonraki
+turların kazancı tüm eklenen makinenin (resume bağlaması, RPC muhasebesi,
+detach süpürgesi, PlayerId) bedelini fazlasıyla ödüyor. Sharded N=4'te
+CPU maliyeti ~%45 düştü. Milyonluk `dropped` sayısı aynı bilinen
+istemci-decode artefaktıdır (sunucu duvarı değil).
+
+### Yan bulgular
+
+- **In-proc worker düzeltmesi:** varsayılan `--workers 0` TEK tokio
+  worker anlamına geliyordu; 1000 istemcide oda actor'ü tick'ler
+  arasında açlıktaydı (19-22 Hz, sub-ms adımlar, ~200 ms late_max).
+  Düzeltme: workers=0 artık available_parallelism demek (açık
+  --workers kazanmaya devam). Doğrulama: 1000 istemcide 30.00 Hz,
+  drop 0; --workers 8 ile p50 782 µs (eski ölçümde 3 000 µs — 4×).
+- **TLS fiyat noktası (ilk ölçüm):** 500 dış istemci, rustls:
+  istemci tarafında ~%8-11 verim bedeli, sunucu CPU'sunda fark yok.
+- **Churn yük altında:** 200 istemci × 2 döngü → 400/400 resume,
+  0 stale-reject, 0 fresh-join, 30.01 Hz, drop 0 (RECONNECT §14.5
+  ölçüm planının ölçekli koşusu).
+
+Ham RESULT satırları `.loadrun-logs/` altında tur etiketleriyle
+saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
