@@ -143,7 +143,8 @@ async fn spawn(
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
         room,
-        out,
+        out,        // Anonymous: an ordinary fresh join, no ledger lookup.
+        identity: String::new(),
         reply: reply_tx,
     })
     .await
@@ -291,7 +292,8 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
     tx.send(RegistryMsg::SpawnPlayer {
         conn: c1,
         room: RoomId(1),
-        out: out_tx2,
+        out: out_tx2,        // Anonymous: an ordinary fresh join, no ledger lookup.
+        identity: String::new(),
         reply: reply_tx,
     })
     .await
@@ -301,7 +303,10 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
         .expect("timed out")
         .expect("reply dropped")
         .expect_err("join of destroyed room must fail");
-    assert!(matches!(err, gsb_core::error::CoreError::RoomNotFound(1)));
+    // RECONNECT §8: a destroyed (ended) id is RETIRED — the join answers
+    // ERROR 12 ("definitively over, do not retry"), not the unknown-room
+    // code. The never-known contrast lives in the reconnect suite.
+    assert!(matches!(err, gsb_core::error::CoreError::RoomRetired(1)));
 
     tx.send(RegistryMsg::Shutdown).await.unwrap();
     drop(tx);
@@ -354,7 +359,8 @@ async fn spawn_rejected_when_room_is_full() {
     tx.send(RegistryMsg::SpawnPlayer {
         conn: c2,
         room: RoomId(1),
-        out: out_tx2,
+        out: out_tx2,        // Anonymous: an ordinary fresh join, no ledger lookup.
+        identity: String::new(),
         reply: reply_tx,
     })
     .await

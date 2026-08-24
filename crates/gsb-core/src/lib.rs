@@ -43,3 +43,4 @@ pub use metrics::{
     MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent,
 };
 pub use registry::{MatchResult, RoomStatus};
+pub use room::{Detach, ExpireTo, ResumeFound};

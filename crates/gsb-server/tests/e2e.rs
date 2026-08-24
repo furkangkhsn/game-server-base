@@ -889,8 +889,15 @@ fn rpc_wire(id: u64, inner_op: u16, payload: &[u8]) -> (u16, Vec<u8>) {
 }
 
 /// Auth + join `room` over a client; returns the entity id.
+///
+/// The per-call unique name is load-bearing since reconnect landed: the
+/// name IS the resume key, and a second LIVE session with one identity
+/// supersedes (ERROR 9-closes) the first by design.
 async fn auth_and_join(client: &mut Client, room: u64) -> u64 {
-    let (op, payload) = auth_wire("e2e", &[]);
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let name = format!("e2e-{}", SEQ.fetch_add(1, Ordering::SeqCst));
+    let (op, payload) = auth_wire(&name, &[]);
     client.write_frame(op, &payload).await.unwrap();
     let (op, payload) = join_wire(room);
     client.write_frame(op, &payload).await.unwrap();
@@ -996,7 +1003,7 @@ async fn control_plane_runtime_room_capacity_is_enforced() {
     auth_and_join(&mut a, 5).await;
 
     let mut b = Client::connect(Kind::Tcp, handle.addr).await.expect("B");
-    let (op, payload) = auth_wire("e2e", &[]);
+    let (op, payload) = auth_wire("e2e-cap-b", &[]);
     b.write_frame(op, &payload).await.unwrap();
     let (op, payload) = join_wire(5);
     b.write_frame(op, &payload).await.unwrap();

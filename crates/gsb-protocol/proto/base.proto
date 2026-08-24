@@ -76,6 +76,11 @@ message HeartbeatAck {
 //   11 = join room does not match the ticket's room (a ticket-auth
 //        connection tried to join a room other than the one its ticket
 //        pins; a normal rejection — join the pinned room)
+//   12 = room retired (the match ended or the persistent room was
+//        decommissioned; do not retry — return to the lobby). Additive:
+//        a new code, no field change. Deliberately distinct from code 4,
+//        whose client decision is "temporary/unknown, may retry": 12
+//        means "definitively over" (docs/RECONNECT.md §8).
 message Error {
   uint32 code = 1;
   string message = 2;

@@ -192,7 +192,10 @@ use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::metrics::{MetricsEvent, RoomSample, hist_index};
-use crate::room::{Action, GroupState, RoomConn, RoomConfig, RoomCounters, TickCtx};
+use crate::room::{
+    Action, Detach, ExpireTo, GroupState, ResumeFound, RoomConn, RoomConfig, RoomCounters,
+    TickCtx,
+};
 use crate::ticker::TickInfo;
 
 /// Identities per shard in the wire-id range partitioning (see module
@@ -251,6 +254,22 @@ pub struct PlayerMigration {
     pub out: mpsc::Sender<FrameBatch>,
     /// The connection's action inbox (input).
     pub actions: Inbox<Action>,
+    // -- Detach state that travels with the row (a PARKED player's
+    //    entity migrates exactly like a live one — passive systems keep
+    //    running on it, §3.2 — and the receiving shard must re-attach the
+    //    same flags or it would start broadcasting into the dead outbound
+    //    half and polluting its drop counter). --------------------------
+    /// See [`crate::room::RoomConn::detached`].
+    pub detached: bool,
+    /// See [`crate::room::RoomConn::detach_deadline`].
+    pub detach_deadline: Option<std::time::Instant>,
+    /// See [`crate::room::RoomConn::expire_to`].
+    pub expire_to: ExpireTo,
+    /// See [`crate::room::RoomConn::bot_fed`].
+    pub bot_fed: bool,
+    /// See [`crate::room::RoomConn::session_epoch`] (the resume guard's
+    /// stamp survives migrations).
+    pub session_epoch: u64,
 }
 
 /// A migrating entity: the full game state plus the owning connection,
@@ -262,6 +281,11 @@ pub struct Migrating<S> {
     pub state: S,
     pub conn: Option<ConnectionId>,
 }
+
+/// The per-shard answer to a broadcast resume (`ShardMsg::Resume`):
+/// `Ok(Some(..))` = this shard held the identity and rebound it;
+/// `Ok(None)` = not here; `Err` = the epoch guard tripped.
+pub type ResumeReply = Result<Option<(EntityId, Mailbox<Action>)>, CoreError>;
 
 /// Messages between shards and from the registry to a shard. One bounded
 /// channel per shard: control (join/leave/shutdown) and the shard
@@ -285,6 +309,32 @@ pub enum ShardMsg<S> {
         conn: ConnectionId,
         entity: EntityId,
         epoch: u64,
+    },
+    /// The connection's transport died (the registry's `ConnClosed`
+    /// broadcast, mirroring `RoomControl::Detach`): exactly the owning
+    /// shard runs the policy ([`ShardLogic::on_disconnect`]); the others
+    /// no-op on the same entity-id guard a `Leave` uses.
+    Detach {
+        conn: ConnectionId,
+        entity: EntityId,
+        identity: String,
+    },
+    /// An identified join whose park ledger may hold this identity — the
+    /// implicit resume attempt of §14.3, BROADCAST to every shard (§6):
+    /// only the shard whose ledger holds it accepts (`Ok(Some(..))`);
+    /// all others answer `Ok(None)` ("not here"); a tripped epoch guard
+    /// answers `Err(CoreError::ResumeStale)`. The single-winner property
+    /// is structural (the record exists on exactly one shard — the
+    /// migration protocol's exactly-once invariant), locked by test in
+    /// the reconnect suite.
+    Resume {
+        conn: ConnectionId,
+        /// The new session's dispatcher-minted join epoch (the §7 guard:
+        /// a stale duplicate is rejected by one integer comparison).
+        epoch: u64,
+        identity: String,
+        out: mpsc::Sender<FrameBatch>,
+        reply: oneshot::Sender<ResumeReply>,
     },
     /// An entity (with, for player entities, its connection) moves into
     /// this shard's region: installed in phase 0, before this tick's step.
@@ -371,6 +421,50 @@ pub trait ShardLogic<W>: Send {
 
     /// A player left the shard: remove its entity.
     fn on_leave(&mut self, world: &mut W, conn: ConnectionId);
+
+    // -- Detach/resume (the shard-side mirrors of `RoomLogic`'s five
+    //    reconnect methods; same contracts, sharded execution — the park
+    //    ledger travels inside the migrated player state per §14.2, so a
+    //    resumed identity is found on WHICHEVER shard the entity ended
+    //    up on). ------------------------------------------------------
+
+    /// Transport death: decide the parked entity's fate. Default:
+    /// [`Detach::Despawn`] (the pre-reconnect behavior, unchanged).
+    fn on_disconnect(
+        &mut self,
+        _world: &mut W,
+        _conn: ConnectionId,
+        _identity: &str,
+    ) -> Detach {
+        Detach::Despawn
+    }
+
+    /// May a combat-held (no-grace) detach end now? Default: `true`.
+    fn may_release(&mut self, _world: &mut W, _conn: ConnectionId) -> bool {
+        true
+    }
+
+    /// A hold ended without a resume. Default: empty.
+    fn on_detach_expired(&mut self, _world: &mut W, _conn: ConnectionId, _to: ExpireTo) {}
+
+    /// Park-ledger query behind a resume attempt. Default: never held.
+    fn resume_lookup(&self, _world: &W, _identity: &str) -> ResumeFound {
+        ResumeFound::Never
+    }
+
+    /// A resume was accepted onto this shard: re-key the logic's own
+    /// connection-keyed tables, consume/update its ledger entry, and mark
+    /// the fresh member for a one-shot full if it ships deltas. Default:
+    /// no-op.
+    fn on_resume(
+        &mut self,
+        _world: &mut W,
+        _identity: &str,
+        _old: ConnectionId,
+        _new: ConnectionId,
+        _entity: EntityId,
+    ) {
+    }
 
     /// Phase 2 — convert buffered actions into component writes.
     fn ingest(&mut self, world: &mut W, ctx: &TickCtx, actions: &mut Vec<Action>);
@@ -732,12 +826,77 @@ where
             }
         }
 
+        // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
+        //    room actor's (§14.4 — core owns the clock; timed holds fire
+        //    on their deadline, combat-helds on `may_release`; the ended
+        //    hold goes to `on_detach_expired` and then despawns or turns
+        //    bot-fed). Runs BEFORE READ so an expired row is gone before
+        //    this tick's pulls.
+        if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
+            let now = Instant::now();
+            let mut due: Vec<(ConnectionId, ExpireTo)> = Vec::new();
+            let mut ask: Vec<ConnectionId> = Vec::new();
+            for (&conn, rc) in &self.conns {
+                if !rc.detached || rc.bot_fed {
+                    continue;
+                }
+                match rc.detach_deadline {
+                    Some(dl) if now >= dl => due.push((conn, rc.expire_to)),
+                    Some(_) => {}
+                    None => ask.push(conn),
+                }
+            }
+            for conn in ask {
+                if self.logic.may_release(&mut self.world, conn) {
+                    let to = self
+                        .conns
+                        .get(&conn)
+                        .map(|rc| rc.expire_to)
+                        .unwrap_or(ExpireTo::Despawn);
+                    due.push((conn, to));
+                }
+            }
+            for (conn, to) in due {
+                self.logic.on_detach_expired(&mut self.world, conn, to);
+                match to {
+                    ExpireTo::Despawn => {
+                        self.m.detach_expired_despawn += 1;
+                        self.despawn_conn(conn, false);
+                        debug!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            %conn,
+                            "detach hold expired: despawn"
+                        );
+                    }
+                    ExpireTo::AiHandover => {
+                        self.m.detach_expired_ai += 1;
+                        if let Some(rc) = self.conns.get_mut(&conn) {
+                            rc.bot_fed = true;
+                            rc.detach_deadline = None;
+                        }
+                        debug!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            %conn,
+                            "detach hold expired: AI handover (bot_fed; Tur B seam)"
+                        );
+                    }
+                }
+            }
+        }
+
         // -- Phase 1 — READ (the room's bounded pull: per-connection
         //    fairness budget + shard-level pull budget).
         let per_conn = self.config.max_actions_per_conn_per_tick;
         let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();
         for r in self.conns.values_mut() {
+            // A detached (or bot-fed) row has no live input source; skip
+            // it exactly like the room's rotation does.
+            if r.detached {
+                continue;
+            }
             for _ in 0..per_conn {
                 if budget == 0 {
                     break;
@@ -803,6 +962,14 @@ where
                         out: entry.out,
                         actions: entry.actions,
                         entity: entry.entity,
+                        // A PARKED player's entity migrates like any other;
+                        // its detach flags ride along so the receiving shard
+                        // keeps skipping its dead halves (§3.2 + §7).
+                        detached: entry.detached,
+                        detach_deadline: entry.detach_deadline,
+                        expire_to: entry.expire_to,
+                        bot_fed: entry.bot_fed,
+                        session_epoch: entry.session_epoch,
                     })
                 });
                 match self.neighbors[b].try_send(ShardMsg::Migrate {
@@ -835,6 +1002,11 @@ where
                                         entity: p.entity,
                                         group: self.logic.group_of(&self.world, p.conn),
                                         batch: Vec::new(),
+                                        detached: p.detached,
+                                        detach_deadline: p.detach_deadline,
+                                        expire_to: p.expire_to,
+                                        bot_fed: p.bot_fed,
+                                        session_epoch: p.session_epoch,
                                     },
                                 );
                             }
@@ -927,6 +1099,11 @@ where
                         entity,
                         group: self.logic.group_of(&self.world, conn),
                         batch: Vec::new(),
+                        detached: false,
+                        detach_deadline: None,
+                        expire_to: ExpireTo::Despawn,
+                        bot_fed: false,
+                        session_epoch: 0,
                     },
                 );
                 let _ = reply.send(Ok((entity, act_tx)));
@@ -938,6 +1115,111 @@ where
                     epoch,
                     "player joined shard"
                 );
+                true
+            }
+            ShardMsg::Detach {
+                conn,
+                entity,
+                identity,
+            } => {
+                // The registry's close broadcast: exactly the owning shard
+                // runs the policy; the entity-id guard makes the others
+                // no-ops (the same shape as a broadcast `Leave`).
+                if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
+                    let decision =
+                        self.logic.on_disconnect(&mut self.world, conn, &identity);
+                    match decision {
+                        Detach::Despawn => {
+                            // Today's close semantics, unchanged.
+                            self.despawn_conn(conn, false);
+                        }
+                        Detach::Hold { grace, to } => {
+                            // Park: keep row/entity/slot; core owns the
+                            // clock (§14.4). In-flight requests of the dead
+                            // session drop with it (§11) — shards run no
+                            // RPC machinery yet, so there is nothing to
+                            // clear beyond the row's own channel halves.
+                            let rc = self.conns.get_mut(&conn).expect("guarded above");
+                            rc.detached = true;
+                            rc.expire_to = to;
+                            rc.detach_deadline = grace.map(|g| Instant::now() + g);
+                            debug!(
+                                room = %self.config.id,
+                                shard = self.index,
+                                %conn,
+                                entity,
+                                ?grace,
+                                ?to,
+                                "player detached on shard (entity parked)"
+                            );
+                        }
+                    }
+                }
+                true
+            }
+            ShardMsg::Resume {
+                conn,
+                epoch,
+                identity,
+                out,
+                reply,
+            } => {
+                // §6 broadcast-resume: this shard accepts ONLY if its
+                // ledger holds the identity — every other shard answers
+                // "not here" without touching anything.
+                let outcome = match self.logic.resume_lookup(&self.world, &identity) {
+                    ResumeFound::Held(entity) => {
+                        // The parked row owning the ledger's entity (the
+                        // detached subset is tiny — see the room actor).
+                        match self
+                            .conns
+                            .iter()
+                            .find(|(_, rc)| rc.detached && rc.entity == entity)
+                            .map(|(c, _)| *c)
+                        {
+                            Some(old) => {
+                                // Epoch guard (§7), one comparison — see
+                                // the room actor's Resume arm for the full
+                                // rationale.
+                                let rc_epoch = self.conns[&old].session_epoch;
+                                if epoch != 0 && rc_epoch != 0 && epoch <= rc_epoch {
+                                    self.m.resume_rejected_stale += 1;
+                                    warn!(
+                                        room = %self.config.id,
+                                        shard = self.index,
+                                        parked = %old,
+                                        %identity,
+                                        resume_epoch = epoch,
+                                        "resume rejected: stale epoch"
+                                    );
+                                    Err(CoreError::ResumeStale)
+                                } else {
+                                    let act_tx =
+                                        self.rebind_session(old, conn, epoch, &identity, out);
+                                    Ok(Some((entity, act_tx)))
+                                }
+                            }
+                            None => {
+                                // Ledger/table divergence (the hold expired
+                                // in this very tick's sweep): counted stale;
+                                // the dispatcher's all-miss fallback turns
+                                // it into a transparent fresh join.
+                                self.m.resume_rejected_stale += 1;
+                                Ok(None)
+                            }
+                        }
+                    }
+                    ResumeFound::Ended => {
+                        // Mechanism-level rejection; the dispatcher turns an
+                        // all-shards-miss outcome into the transparent fresh
+                        // join (§5). Counted so operators see how many
+                        // attempts raced (or followed) a hold's end.
+                        self.m.resume_rejected_stale += 1;
+                        Ok(None)
+                    }
+                    ResumeFound::Never => Ok(None),
+                };
+                let _ = reply.send(outcome);
                 true
             }
             ShardMsg::Leave { conn, entity, epoch } => {
@@ -1067,6 +1349,11 @@ where
                             entity: p.entity,
                             group: self.logic.group_of(&self.world, p.conn),
                             batch: Vec::new(),
+                            detached: p.detached,
+                            detach_deadline: p.detach_deadline,
+                            expire_to: p.expire_to,
+                            bot_fed: p.bot_fed,
+                            session_epoch: p.session_epoch,
                         },
                     );
                 }
@@ -1088,6 +1375,90 @@ where
             ShardMsg::Shutdown => false,
         }
     }
+
+    /// Bind a resumed session onto its parked entity (the shard-side
+    /// mirror of the room actor's `rebind_session`): swap the channel
+    /// halves, stamp the guard epoch, run the single-pass RebindKey over
+    /// every conn-keyed table THIS actor owns, and hand the logic its
+    /// `on_resume` hook. Returns the fresh action sender for the reply.
+    ///
+    /// RebindKey enumeration for the SHARD actor:
+    /// - `conns` — moved below when the id changed;
+    /// - `conn_epoch` — the live join's epoch stamp moves to the new id
+    ///   (it stamps outgoing Migrates);
+    /// - `conn_tombstone` — NOT re-keyed, deliberately: a tombstone is
+    ///   keyed by the id of the join that DIED. A detached session never
+    ///   died (its leave was never processed), so it wrote no tombstone;
+    ///   tombstoned old sessions stay under their own (dead) ids where
+    ///   their guards belong;
+    /// - `deferred` — in-flight `Migrate`s carry the OLD id; they are
+    ///   gated by epoch/tombstones exactly as before (a post-resume ghost
+    ///   of the parked session loses to the new session's newer epoch on
+    ///   any later leave);
+    /// - `groups` — NOT re-keyed (opaque `G`); rebuilt wholesale from
+    ///   `conns` every broadcast phase, so a per-connection group key
+    ///   self-heals in one tick (same argument as the room actor).
+    ///
+    /// The ledger and any logic-owned tables go through
+    /// [`ShardLogic::on_resume`] (the park metadata itself traveled INSIDE
+    /// the migrated player state — §14.2 — so whichever shard now owns the
+    /// entity also owns the record).
+    fn rebind_session(
+        &mut self,
+        old: ConnectionId,
+        conn: ConnectionId,
+        epoch: u64,
+        identity: &str,
+        out: mpsc::Sender<FrameBatch>,
+    ) -> Mailbox<Action> {
+        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let mut entity = 0;
+        if let Some(rc) = self.conns.get_mut(&old) {
+            rc.out = out;
+            rc.actions = act_rx;
+            rc.detached = false;
+            rc.bot_fed = false;
+            rc.detach_deadline = None;
+            rc.session_epoch = epoch;
+            entity = rc.entity;
+        }
+        self.m.resumes += 1;
+        if old != conn {
+            if let Some(rc) = self.conns.remove(&old) {
+                self.conns.insert(conn, rc);
+            }
+            if let Some(ep) = self.conn_epoch.remove(&old) {
+                self.conn_epoch.insert(conn, ep);
+            }
+        } else {
+            self.conn_epoch.insert(conn, epoch.max(self.conn_epoch.get(&conn).copied().unwrap_or(0)));
+        }
+        self.logic.on_resume(&mut self.world, identity, old, conn, entity);
+        debug!(
+            room = %self.config.id,
+            shard = self.index,
+            %old,
+            %conn,
+            entity,
+            epoch,
+            "player resumed onto parked entity on this shard"
+        );
+        act_tx
+    }
+
+    /// The shard's despawn funnel: remove the row, run `on_leave`,
+    /// count. (`on_leave` stays THE single despawn seam for snapshots
+    /// and bookkeeping, exactly like the room actor.)
+    fn despawn_conn(&mut self, conn: ConnectionId, count_as_leave: bool) {
+        if self.conns.remove(&conn).is_none() {
+            return;
+        }
+        self.logic.on_leave(&mut self.world, conn);
+        if count_as_leave {
+            self.m.leaves += 1;
+        }
+    }
+
 
     /// Phase 6: the room's broadcast phase, with the borrowed boundary set
     /// (the latest exchange per neighbor, flattened and sorted by wire for
@@ -1215,6 +1586,12 @@ where
         // per-connection per-tick `Vec::with_capacity(2)`).
         let mut pbuf = bytes::BytesMut::new();
         for (conn, rc) in self.conns.iter_mut() {
+            // Detached/bot-fed rows ship nothing (dead or non-human
+            // outbound half; §7 — the drop counter stays "slow client"
+            // only). The group snapshot still carries the parked entity.
+            if rc.detached {
+                continue;
+            }
             rc.batch.clear();
             if let Some(payload) = self
                 .groups
@@ -1279,6 +1656,11 @@ where
             private_frames: self.m.private_frames,
             joins: self.m.joins,
             leaves: self.m.leaves,
+            detached: self.conns.values().filter(|rc| rc.detached).count() as u32,
+            resumes: self.m.resumes,
+            resume_rejected_stale: self.m.resume_rejected_stale,
+            detach_expired_despawn: self.m.detach_expired_despawn,
+            detach_expired_ai: self.m.detach_expired_ai,
             // Shards do not run the RPC machinery yet (the pending set
             // lives in the single-room actor; see `crate::rpc`): the
             // request counters stay zero by construction.
@@ -1872,6 +2254,11 @@ mod tests {
                 entity,
                 out,
                 actions: act_rx,
+                detached: false,
+                detach_deadline: None,
+                expire_to: crate::room::ExpireTo::Despawn,
+                bot_fed: false,
+                session_epoch: 0,
             }),
         }
     }
@@ -2246,6 +2633,11 @@ mod tests {
                     entity: wire,
                     out: ghost_out,
                     actions: ghost_act_rx,
+                    detached: false,
+                    detach_deadline: None,
+                    expire_to: crate::room::ExpireTo::Despawn,
+                    bot_fed: false,
+                    session_epoch: 0,
                 }),
             })
             .await

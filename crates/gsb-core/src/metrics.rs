@@ -282,6 +282,21 @@ pub struct RoomSample {
     /// Joins / leaves processed on the control channel, cumulative.
     pub joins: u64,
     pub leaves: u64,
+    /// Detached-but-parked connections right now (the instant park count
+    /// — a gauge, §10). Their cap slots are held (§4), so `members`
+    /// includes them.
+    pub detached: u32,
+    /// Resumes accepted (a parked session rebound onto a fresh socket;
+    /// same wire id), cumulative (§10).
+    pub resumes: u64,
+    /// Resume attempts rejected as stale (`ResumeFound::Ended` lookup or
+    /// a tripped epoch guard; §7/§10), cumulative.
+    pub resume_rejected_stale: u64,
+    /// Holds that expired toward despawn (slot released), cumulative.
+    pub detach_expired_despawn: u64,
+    /// Holds that expired toward AI handover (`bot_fed` marker set; Tur B
+    /// consumes it), cumulative.
+    pub detach_expired_ai: u64,
     /// RPC (see `crate::rpc`): requests answered room-local in the same
     /// tick, cumulative.
     pub requests_local: u64,
@@ -542,6 +557,13 @@ pub struct RoomReport {
     pub max_group: u32,
     pub joins: u64,
     pub leaves: u64,
+    /// Detached-but-parked connections right now (gauge; their slots are
+    /// held — see [`RoomSample::detached`]).
+    pub detached: u32,
+    pub resumes: u64,
+    pub resume_rejected_stale: u64,
+    pub detach_expired_despawn: u64,
+    pub detach_expired_ai: u64,
     /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
     /// (pending) requests, rejections split by cause (see
     /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and
@@ -750,6 +772,11 @@ impl MetricAccumulator {
                 max_group: latest.max_group,
                 joins: latest.joins,
                 leaves: latest.leaves,
+                detached: latest.detached,
+                resumes: latest.resumes,
+                resume_rejected_stale: latest.resume_rejected_stale,
+                detach_expired_despawn: latest.detach_expired_despawn,
+                detach_expired_ai: latest.detach_expired_ai,
                 requests_local: latest.requests_local,
                 requests_external: latest.requests_external,
                 requests_rejected_malformed: latest.requests_rejected_malformed,
@@ -864,6 +891,8 @@ impl MetricReport {
                  snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
                  groups={} members={} max_group={} joins={} leaves={} \
+                 detached={} resumes={} resume_rejected_stale={} \
+                 detach_expired_despawn={} detach_expired_ai={} \
                  req_local={} req_ext={} \
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
@@ -883,6 +912,8 @@ impl MetricReport {
                 r.snap_records,
                 r.shipped_bytes, r.shipped_s,
                 r.groups, r.members, r.max_group, r.joins, r.leaves,
+                r.detached, r.resumes, r.resume_rejected_stale,
+                r.detach_expired_despawn, r.detach_expired_ai,
                 r.requests_local, r.requests_external,
                 r.requests_rejected_malformed, r.requests_rejected_dup,
                 r.requests_rejected_no_handler, r.requests_rejected_logic,
@@ -1158,6 +1189,11 @@ mod tests {
             private_frames: 0,
             joins: 2,
             leaves: 0,
+            detached: 0,
+            resumes: 0,
+            resume_rejected_stale: 0,
+            detach_expired_despawn: 0,
+            detach_expired_ai: 0,
             requests_local: 0,
             requests_external: 0,
             requests_rejected_malformed: 0,
@@ -1305,6 +1341,11 @@ mod tests {
             private_frames: 0,
             joins: 0,
             leaves: 0,
+            detached: 0,
+            resumes: 0,
+            resume_rejected_stale: 0,
+            detach_expired_despawn: 0,
+            detach_expired_ai: 0,
             requests_local: 0,
             requests_external: 0,
             requests_rejected_malformed: 0,

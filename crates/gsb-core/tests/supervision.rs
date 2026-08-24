@@ -251,6 +251,9 @@ async fn spawn(
         conn,
         room,
         out: out_tx,
+        // Anonymous: an ordinary fresh join, no ledger lookup.
+        // Anonymous: an ordinary fresh join, no ledger lookup.
+        identity: String::new(),
         reply: reply_tx,
     })
     .await
@@ -319,8 +322,10 @@ async fn panicking_room_is_removed_and_members_notified() {
     // dispatch (nothing hangs on a dead control channel).
     open_conn(&tx, ConnectionId(2)).await;
     match spawn(&tx, ConnectionId(2), id).await {
-        Err(CoreError::RoomNotFound(room)) => assert_eq!(room, id.0),
-        other => panic!("expected RoomNotFound after the death, got {other:?}"),
+        // RECONNECT §8: the unrebuilt death RETIRES the id — the join
+        // answers ERROR 12 ("definitively over"), not the unknown code.
+        Err(CoreError::RoomRetired(room)) => assert_eq!(room, id.0),
+        other => panic!("expected RoomRetired after the death, got {other:?}"),
     }
 
     stop(tx, handle).await;
@@ -441,8 +446,9 @@ async fn shard_death_takes_down_the_whole_logical_room() {
     expect_room_gone(&mut member_inbox, id).await;
     // ...and the room cannot be rejoined.
     match spawn(&tx, ConnectionId(1), id).await {
-        Err(CoreError::RoomNotFound(room)) => assert_eq!(room, id.0),
-        other => panic!("expected RoomNotFound after the shard death, got {other:?}"),
+        // RECONNECT §8: an unrebuilt logical death retires the id (ERROR 12).
+        Err(CoreError::RoomRetired(room)) => assert_eq!(room, id.0),
+        other => panic!("expected RoomRetired after the shard death, got {other:?}"),
     }
 
     stop(tx, handle).await;

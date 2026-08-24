@@ -233,6 +233,12 @@ pub struct ConnectionActor {
     /// the room for the next `JOIN_ROOM_REQ` (a different room is a
     /// normal rejection — ERROR code 11).
     ticket: Option<crate::auth::ValidatedTicket>,
+    /// This connection's resume key: `ValidatedTicket.player` on the
+    /// ticket path, `Auth.name` on the local-auth path (which makes
+    /// resume demo/testing-only there — no authority behind the name;
+    /// noted at the ledger site too). Empty until a successful AUTH.
+    /// Rides every `SpawnPlayer` as the implicit-resume key of §14.3.
+    identity: String,
 }
 
 impl ConnectionActor {
@@ -265,6 +271,7 @@ impl ConnectionActor {
             actions: None,
             auth,
             ticket: None,
+            identity: String::new(),
             m_in_bytes: 0,
             m_in_frames: 0,
             m_out_bytes: 0,
@@ -496,6 +503,7 @@ impl ConnectionActor {
                             // supersedes `Auth.name`) and the ticket pins
                             // the room for the next join.
                             self.ticket = Some(v.clone());
+                            self.identity = v.player.clone();
                             self.state = ConnState::Authed;
                             debug!(%self.conn, player = %v.player, room = %v.room, "ticket authenticated");
                             let _ = self
@@ -539,6 +547,10 @@ impl ConnectionActor {
                     return;
                 }
                 self.state = ConnState::Authed;
+                // Local-auth path: the name IS the resume key (demo and
+                // testing only — RECONNECT §4: on this path nothing
+                // authoritative stands behind the name).
+                self.identity = auth.name.clone();
                 debug!(%self.conn, name = %auth.name, "authenticated");
                 let _ = self
                     .send_frame(
@@ -599,6 +611,7 @@ impl ConnectionActor {
                         conn: self.conn,
                         room,
                         out: self.out.clone(),
+                        identity: self.identity.clone(),
                         reply: reply_tx,
                     })
                     .await
@@ -630,8 +643,15 @@ impl ConnectionActor {
                         // looks like a network failure and sends the
                         // client into a reconnect/backoff loop against a
                         // server that is (by definition) already busy.
+                        // `RoomRetired` gets code 12 (§8): "definitively
+                        // over — return to the lobby, never retry", the
+                        // client decision ERROR 4 cannot express. A stale
+                        // resume (`ResumeStale`) is an ordinary rejection:
+                        // code 4 with its reason; the client re-auths and
+                        // its next join falls through to a fresh join.
                         let code = match &e {
                             CoreError::RoomFull(_) => 8,
+                            CoreError::RoomRetired(_) => 12,
                             _ => 4,
                         };
                         let _ = self

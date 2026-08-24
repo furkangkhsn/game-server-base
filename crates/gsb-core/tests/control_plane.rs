@@ -162,6 +162,9 @@ async fn spawn(
         conn,
         room,
         out,
+        // Anonymous: an ordinary fresh join, no ledger lookup.
+        // Anonymous: an ordinary fresh join, no ledger lookup.
+        identity: String::new(),
         reply: reply_tx,
     })
     .await

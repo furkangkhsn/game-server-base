@@ -245,6 +245,27 @@ pub struct RoomConfig {
     /// request), and flipping it between retries is a different spec =
     /// `RoomConflict`, exactly as for any other field change.
     pub restart_on_panic: bool,
+    /// The room's CLASS (§8 of `docs/RECONNECT.md`), not another restart
+    /// knob: `true` = a persistent world piece (an MMO map) that must not
+    /// die with a panic; `false` = an ephemeral match room whose end is
+    /// final.
+    ///
+    /// What the class buys, enforced by the REGISTRY:
+    /// - supervision rebuilds a dead persistent room EVEN WHEN
+    ///   [`RoomConfig::restart_on_panic`] is `false` ("a continuous room
+    ///   does not stay dead from a panic" is a class guarantee, not a
+    ///   tunable preference). The rebuild comes back EMPTY — without a
+    ///   persistence layer an MMO map opens fresh, which is the documented
+    ///   §8 limit of this seam, not its goal;
+    /// - `DestroyRoom` RETIRES the id in either class (later joins/resumes
+    ///   answer ERROR 12 and no create may resurrect the id in-process);
+    ///   for an ephemeral room the same retirement means "the match ended,
+    ///   never retry" — the flag changes supervision, not the destroy
+    ///   path.
+    ///
+    /// Default `false`; ordinary `PartialEq` participant like every other
+    /// field (a retry carries its class identically).
+    pub persistent: bool,
 }
 
 impl Default for RoomConfig {
@@ -265,6 +286,7 @@ impl Default for RoomConfig {
             max_pending_requests: 2000,
             request_timeout: Duration::from_secs(5),
             restart_on_panic: false,
+            persistent: false,
         }
     }
 }
@@ -308,6 +330,57 @@ impl RoomConfig {
     }
 }
 
+/// What a room's logic wants to happen to a disconnected player's entity
+/// (the detach policy — `docs/RECONNECT.md` §3: *transport death is a
+/// fact; what happens to the entity is a game rule*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detach {
+    /// The old behavior: despawn the entity right away (lobby, chat).
+    /// This is the trait method's default, so every pre-reconnect logic
+    /// keeps byte-for-byte its old semantics without recompiling anything.
+    Despawn,
+    /// The entity lives on, parked. `grace = None` → only
+    /// [`RoomLogic::may_release`] ends the hold (combat-held);
+    /// `Some(d)` → the hold ends at the latest `d` after the disconnect
+    /// (the ceiling that makes a harassed lock impossible to extend
+    /// forever). What happens at the end: the player returns first
+    /// (resume) or `to` runs.
+    Hold { grace: Option<Duration>, to: ExpireTo },
+}
+
+/// Where a parked entity goes when its hold ends without a resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpireTo {
+    /// Despawn (the slot is released; the identity may fresh-join later).
+    Despawn,
+    /// The same entity keeps playing, driven by the game's own input
+    /// synthesis (`ExpireTo::AiHandover` — §9). The wire id is unchanged:
+    /// handover is a behavior change, not an identity change. Tur A marks
+    /// the connection `bot_fed` and keeps everything alive; the demo bot
+    /// that synthesizes the input is Tur B's seam.
+    AiHandover,
+}
+
+/// Outcome of the park-ledger lookup behind a resume attempt
+/// (`docs/RECONNECT.md` §5/§7). The ledger lives in the logic (§4); this
+/// is the one question the core asks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeFound {
+    /// The identity is parked: `EntityId` is the live entity to rebind.
+    Held(EntityId),
+    /// The identity WAS parked but the hold has ended (expired, consumed
+    /// by an earlier resume, superseded). The resume mechanism rejects
+    /// (counted as `resume_rejected_stale`) and — per the transparent
+    /// fallback of §5, which produces no client-visible error — the join
+    /// proceeds as an ordinary fresh join.
+    Ended,
+    /// Never parked (the default): transparent fresh-join fallback,
+    /// indistinguishable from an ordinary join. This is what makes the
+    /// grace TOCTOU self-resolving (§11): whichever of expire/resume
+    /// lands first, both branches are valid.
+    Never,
+}
+
 /// Control messages to a room. Low frequency; processed at the next tick
 /// boundary (deterministic: joins and leaves take effect *on* a tick, never
 /// mid-simulation; join/leave latency is at most one tick).
@@ -335,6 +408,44 @@ pub enum RoomControl {
     Leave {
         conn: ConnectionId,
         entity: EntityId,
+    },
+    /// The connection's transport died: hand the entity's fate to the
+    /// room policy (`RoomLogic::on_disconnect` — `docs/RECONNECT.md` §3).
+    /// This is what `ConnClosed` routes instead of the despawn-causing
+    /// `Leave` it used to send: the registry never decides the policy,
+    /// it only reports the fact.
+    ///
+    /// `identity` is the resume key (`ValidatedTicket.player`, or
+    /// `Auth.name` on the local-auth path — demo-only there): the logic
+    /// records it in its park ledger when it answers
+    /// [`Detach::Hold`](crate::room::Detach::Hold).
+    Detach {
+        conn: ConnectionId,
+        entity: EntityId,
+        identity: String,
+    },
+    /// An identified join whose ledger may hold this identity: the
+    /// implicit resume attempt (§14.3 — there is NO new wire opcode; a
+    /// ticket-pinned connection's ordinary `JOIN_ROOM_REQ` IS the resume
+    /// attempt). If the ledger holds the identity, the room swaps the
+    /// channel halves onto the parked entity and replies with the SAME
+    /// entity id; otherwise it processes an ordinary fresh join and
+    /// replies identically (transparent fallback, §5) — the client
+    /// cannot tell the two apart from the reply alone.
+    Resume {
+        conn: ConnectionId,
+        /// The dispatcher-minted join epoch of the NEW session. Guard
+        /// (§7): a resume whose epoch is not newer than the parked
+        /// session's stamp is a delayed duplicate/replay — rejected with
+        /// [`CoreError::ResumeStale`] so it can never double-bind or
+        /// fresh-join a second entity for one identity. `0` (= "no
+        /// epoch", hand-built calls) disables the guard; the ledger
+        /// consumption stays exactly-once regardless, because the actor
+        /// is single-threaded.
+        epoch: u64,
+        identity: String,
+        out: mpsc::Sender<FrameBatch>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
     /// Stop the room (drops the world).
     Shutdown,
@@ -537,6 +648,99 @@ pub trait RoomLogic<W>: Send {
     /// A player left the room: remove its entity.
     fn on_leave(&mut self, world: &mut W, conn: ConnectionId);
 
+    /// The connection's transport died: decide the parked entity's fate
+    /// (`docs/RECONNECT.md` §3.1). Called once per disconnect, from the
+    /// tick's CONTROL phase, INSTEAD of the `on_leave` a transport death
+    /// used to trigger — a [`Detach::Hold`] answer keeps the entity, its
+    /// world state, its group membership, AND the room-cap slot it
+    /// occupies (§4: a parked player holds their slot).
+    ///
+    /// The logic records the park entry here (identity → entity + hold
+    /// metadata) in WHATEVER storage it owns; per §14.2 that storage must
+    /// be part of the migrating player state for sharded rooms, so a
+    /// migration carries the park record along. Storage lives in the
+    /// game state; policy and lookup live in this trait.
+    ///
+    /// `identity` is the resume key. On the ticket-auth path it is
+    /// `ValidatedTicket.player`; on the local-auth path it is
+    /// `Auth.name`, which makes resume demo/testing-only there (no
+    /// cryptographic identity behind the name — noted at the ledger
+    /// site by design).
+    ///
+    /// Default: [`Detach::Despawn`] — every pre-reconnect logic keeps
+    /// today's behavior exactly, unchanged.
+    fn on_disconnect(
+        &mut self,
+        _world: &mut W,
+        _conn: ConnectionId,
+        _identity: &str,
+    ) -> Detach {
+        Detach::Despawn
+    }
+
+    /// May the hold end NOW? Asked every CONTROL phase while a detached
+    /// connection is held WITHOUT a grace deadline (combat-held): the
+    /// logic answers "no" while the hold must persist (an enemy nearby),
+    /// "yes" to release. A veto extends the hold; the ceiling against an
+    /// endless veto is the policy choosing `Hold { grace: Some(_) }`
+    /// (§14.4: with a grace, the core's own timer ends the hold and this
+    /// method is not consulted for timed holds). Cost note: only the
+    /// (rarely populated) detached set is asked, per §14.4.
+    ///
+    /// Default: `true` (no logic veto — the hold ends at once, which for
+    /// a `grace = None` hold means "expire immediately": logics that
+    /// never want a hold simply return `Detach::Despawn` instead).
+    fn may_release(&mut self, _world: &mut W, _conn: ConnectionId) -> bool {
+        true
+    }
+
+    /// The hold ended without a resume (grace expired, or `may_release`
+    /// cleared a combat-held player): the entity's end, as chosen by the
+    /// policy's [`ExpireTo`]. After this call the core runs the ordinary
+    /// despawn path for [`ExpireTo::Despawn`] (`on_leave` remains THE
+    /// single despawn funnel — snapshot/membership contracts hang off
+    /// it), or keeps everything alive with a `bot_fed` marker for
+    /// [`ExpireTo::AiHandover`] (Tur B consumes the marker).
+    ///
+    /// Default: empty.
+    fn on_detach_expired(&mut self, _world: &mut W, _conn: ConnectionId, _to: ExpireTo) {}
+
+    /// Park-ledger query behind a resume attempt (§5/§7): does the ledger
+    /// hold `identity`? See [`ResumeFound`] for the three answers and
+    /// their exact client-visible consequences.
+    ///
+    /// Default: [`ResumeFound::Never`] — a logic without parks turns
+    /// every identified join into an ordinary fresh join.
+    fn resume_lookup(&self, _world: &W, _identity: &str) -> ResumeFound {
+        ResumeFound::Never
+    }
+
+    /// A resume was accepted: the session moved from `old` (dead
+    /// transport) to `new` (fresh socket) onto `entity`. The hook where
+    /// the logic re-keys ITS OWN connection-keyed tables (the core
+    /// re-keys its tables in one pass — see `RoomActor`'s RebindKey
+    /// comment; the structural-signpost rule applies twice over: each
+    /// side enumerates what IT owns). This is also where the ledger
+    /// entry is consumed/updated and where a delta-mode logic marks the
+    /// fresh member so the one-shot full flows to the NEW connection;
+    /// full-snapshot logics need nothing here (every snapshot is full).
+    ///
+    /// Input seq/ack: per DESIGN §14.2 the rejoin reset covers resume —
+    /// the new session numbers inputs from 1. A logic keeping per-conn
+    /// sequence state resets/re-keys it here (the demo's ingest creates
+    /// fresh state for unknown connections, which achieves the same).
+    ///
+    /// Default: no-op.
+    fn on_resume(
+        &mut self,
+        _world: &mut W,
+        _identity: &str,
+        _old: ConnectionId,
+        _new: ConnectionId,
+        _entity: EntityId,
+    ) {
+    }
+
     /// Phase 2 — convert buffered actions into component writes.
     fn ingest(&mut self, world: &mut W, ctx: &TickCtx, actions: &mut Vec<Action>);
 
@@ -581,6 +785,33 @@ pub(crate) struct RoomConn<G> {
     /// capacity is retained so the 0-2-frame batch never allocates again
     /// after warm-up — see `docs/ROADMAP.md`, the floor breakdown).
     pub(crate) batch: FrameBatch,
+    // -- Detach/resume state (§14.4: the CLOCK is core-owned; §7: the
+    //    broadcast/READ skip flags are flag-guarded so a dead outbound
+    //    half never pollutes the drop counter). --------------------------
+    /// The transport died but the entity is parked (a [`Detach::Hold`]
+    /// policy answer): READ pulls nothing for this row and BROADCAST ships
+    /// it nothing (the outbound half is dead; a `try_send` against it
+    /// would count a drop nobody caused). Everything else is unchanged:
+    /// the entity stays in `ingest`, `update`, snapshots, group
+    /// membership, and the member/slot accounting (§4).
+    pub(crate) detached: bool,
+    /// When the hold ends at the latest (`Detach::Hold.grace` mapped to an
+    /// absolute instant by the CORE — §14.4 deadline ownership);
+    /// `None` = combat-held, only [`RoomLogic::may_release`] ends it.
+    pub(crate) detach_deadline: Option<Instant>,
+    /// The policy's chosen end ([`ExpireTo`]) when the hold expires.
+    pub(crate) expire_to: ExpireTo,
+    /// The hold expired toward [`ExpireTo::AiHandover`]: the entity keeps
+    /// playing on synthesized input (the game logic synthesizes; Tur B's
+    /// demo bot consumes this marker). Channels stay alive; the row stays
+    /// skipped for READ/broadcast exactly like a detached one (there is no
+    /// human socket behind it), and the sweep never re-fires (deadline
+    /// cleared).
+    pub(crate) bot_fed: bool,
+    /// The resume-accept epoch stamp (§7's guard): the newest session that
+    /// (re)bound this row. A later resume with an older-or-equal epoch is
+    /// a delayed duplicate and is rejected. `0` = unset (guard off).
+    pub(crate) session_epoch: u64,
 }
 
 /// Per-group broadcast state, kept across ticks. `pub(crate)` because the
@@ -666,6 +897,20 @@ pub(crate) struct RoomCounters {
     /// Joins / leaves processed on the control channel, cumulative.
     pub(crate) joins: u64,
     pub(crate) leaves: u64,
+    /// Resumes accepted (a parked session rebound onto a fresh socket),
+    /// cumulative (§10).
+    pub(crate) resumes: u64,
+    /// Resume attempts rejected as stale — the ledger answered
+    /// [`ResumeFound::Ended`] or the epoch guard tripped (§7/§10). The
+    /// client-visible outcome of an `Ended` rejection is still the
+    /// transparent fresh join; this counter is the mechanism-level signal.
+    pub(crate) resume_rejected_stale: u64,
+    /// Holds that expired toward [`ExpireTo::Despawn`] (slot released),
+    /// cumulative.
+    pub(crate) detach_expired_despawn: u64,
+    /// Holds that expired toward [`ExpireTo::AiHandover`] (entity kept,
+    /// bot-fed marker set — Tur B's seam), cumulative.
+    pub(crate) detach_expired_ai: u64,
     /// RPC requests answered room-local in the same tick, cumulative.
     pub(crate) requests_local: u64,
     /// RPC requests delegated to a worker (registered pending), cumulative.
@@ -730,6 +975,10 @@ impl Default for RoomCounters {
             private_frames: 0,
             joins: 0,
             leaves: 0,
+            resumes: 0,
+            resume_rejected_stale: 0,
+            detach_expired_despawn: 0,
+            detach_expired_ai: 0,
             requests_local: 0,
             requests_external: 0,
             requests_rejected_malformed: 0,
@@ -1160,6 +1409,79 @@ where
             }
         }
 
+        // -- Phase 0c — detach-hold sweep (§14.4: the deadline clock is
+        //    CORE-owned; the logic owns the policy). Two arms, exactly as
+        //    resolved in §14.4:
+        //
+        //    - `grace = Some(d)`: the core fires its OWN deadline —
+        //      `may_release` is not consulted for timed holds (the grace
+        //      IS the ceiling that makes an endless veto impossible);
+        //    - `grace = None` (combat-held): the core asks `may_release`
+        //      every tick — the detached set is tiny (parks are rare),
+        //      so the per-tick cost is a filter pass over the table that
+        //      short-circuits on the `detached` flag.
+        //
+        //    The ended hold is handed to `on_detach_expired(to)` and then:
+        //    Despawn → the ordinary despawn path (`on_leave` stays THE one
+        //    despawn funnel; slot released); AiHandover → everything stays
+        //    alive under a `bot_fed` marker (Tur B synthesizes the input;
+        //    this is the documented seam).
+        if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
+            let now = Instant::now();
+            // Timed holds past their deadline + combat-helds the logic is
+            // ready to release. Collected first so each logic callback runs
+            // against an unborrowed `self`.
+            let mut due: Vec<(ConnectionId, ExpireTo)> = Vec::new();
+            let mut ask: Vec<ConnectionId> = Vec::new();
+            for (&conn, rc) in &self.conns {
+                if !rc.detached || rc.bot_fed {
+                    continue;
+                }
+                match rc.detach_deadline {
+                    Some(dl) if now >= dl => due.push((conn, rc.expire_to)),
+                    Some(_) => {}
+                    None => ask.push(conn),
+                }
+            }
+            for conn in ask {
+                if self.logic.may_release(&mut self.world, conn) {
+                    // The veto cleared: the hold ends NOW, toward the same
+                    // `ExpireTo` the policy chose at detach time.
+                    let to = self
+                        .conns
+                        .get(&conn)
+                        .map(|rc| rc.expire_to)
+                        .unwrap_or(ExpireTo::Despawn);
+                    due.push((conn, to));
+                }
+            }
+            for (conn, to) in due {
+                self.logic.on_detach_expired(&mut self.world, conn, to);
+                match to {
+                    ExpireTo::Despawn => {
+                        self.m.detach_expired_despawn += 1;
+                        self.despawn_conn(conn, false);
+                        debug!(room = %self.config.id, %conn, "detach hold expired: despawn");
+                    }
+                    ExpireTo::AiHandover => {
+                        self.m.detach_expired_ai += 1;
+                        if let Some(rc) = self.conns.get_mut(&conn) {
+                            rc.bot_fed = true;
+                            // The deadline must never re-fire (the row stays
+                            // held by the bot); clearing it also takes the
+                            // row out of the `may_release` polling set.
+                            rc.detach_deadline = None;
+                        }
+                        debug!(
+                            room = %self.config.id,
+                            %conn,
+                            "detach hold expired: AI handover (bot_fed; Tur B seam)"
+                        );
+                    }
+                }
+            }
+        }
+
         // -- Phase 1 — READ: pull each connection's actions (non-blocking;
         //    per-connection isolation — one flooder only fills its own
         //    channel), bounded twice:
@@ -1219,8 +1541,13 @@ where
         while visited < n && budget > 0 {
             // Roster and table are kept in sync by the control path, so
             // the entry is always present; a plain lookup (no unwrap)
-            // keeps hypothetical drift a skip, not a panic.
-            if let Some(rc) = self.conns.get_mut(&self.roster[idx]) {
+            // keeps hypothetical drift a skip, not a panic. A DETACHED
+            // row is skipped (§3.2): its input source is dead — nothing
+            // pulls from it — but the visit still counts toward the
+            // rotation so the cursor's fairness contract is untouched.
+            if let Some(rc) = self.conns.get_mut(&self.roster[idx])
+                && !rc.detached
+            {
                 for _ in 0..per_conn {
                     if budget == 0 {
                         break;
@@ -1481,6 +1808,13 @@ where
             private_frames: self.m.private_frames,
             joins: self.m.joins,
             leaves: self.m.leaves,
+            // Gauge, computed at sample time from the table it describes
+            // (§10: "anlık park sayısı" — the instant park count).
+            detached: self.conns.values().filter(|rc| rc.detached).count() as u32,
+            resumes: self.m.resumes,
+            resume_rejected_stale: self.m.resume_rejected_stale,
+            detach_expired_despawn: self.m.detach_expired_despawn,
+            detach_expired_ai: self.m.detach_expired_ai,
             requests_local: self.m.requests_local,
             requests_external: self.m.requests_external,
             requests_rejected_malformed: self.m.requests_rejected_malformed,
@@ -1694,6 +2028,16 @@ where
         // floor; the quiet path must stay O(1), like the 0b sweep above).
         let has_replies = !self.queued.is_empty();
         for (conn, rc) in self.conns.iter_mut() {
+            // A detached (or bot-fed) row ships nothing: its outbound half
+            // is dead (or has no human behind it). Skipping here — instead
+            // of letting the `try_send` fail — is what keeps the room's
+            // drop counter meaning "slow CLIENT" and nothing else (§7).
+            // Its group snapshot is still encoded (the parked entity is in
+            // the world and the other members must see it); only THIS
+            // row's fan-out is skipped.
+            if rc.detached {
+                continue;
+            }
             // The batch buffer is reused across ticks (floor breakdown: the
             // per-tick `Vec::with_capacity(2)` was a measured slice). It is
             // handed to the channel with `mem::take` — zero allocation,
@@ -1821,75 +2165,328 @@ where
         }
     }
 
+    /// Rename a connection's entry in the READ roster (the RebindKey
+    /// pass's roster half): same slot, new id — order, position map and
+    /// rotation cursor all keep their meaning. A no-op when the ids match
+    /// or the old entry is absent (partial drift degrades to a skip,
+    /// never a panic — the same posture as `roster_remove`).
+    fn roster_rekey(&mut self, old: ConnectionId, new: ConnectionId) {
+        if old == new {
+            return;
+        }
+        if let Some(pos) = self.roster_pos.remove(&old) {
+            self.roster[pos] = new;
+            self.roster_pos.insert(new, pos);
+        }
+    }
+
     fn handle_control(&mut self, c: RoomControl) -> bool {
         match c {
             RoomControl::Join { conn, out, reply } => {
-                // A join supersedes any stale state this connection had
-                // (e.g. a leave queued behind it in the control channel) —
-                // including its request state (a rejoin is a new session:
-                // in-flight requests and queued answers of the old one
-                // are dropped, and their late reports are discarded).
-                if self.conns.remove(&conn).is_some() {
-                    self.roster_remove(&conn);
-                    self.drop_conn_request_state(conn);
-                    self.logic.on_leave(&mut self.world, conn);
-                }
-                // Capacity: the room knows its own membership — this is the
-                // only place a join can structurally fail. A fresh join to a
-                // full room is rejected (no entity, no channel, no state);
-                // a re-join of an existing member (removed above) never
-                // hits the cap because it supersedes itself.
-                if let Some(cap) = self.config.max_players
-                    && self.conns.len() >= cap
-                {
-                    warn!(
-                        room = %self.config.id,
-                        %conn,
-                        capacity = cap,
-                        "room full; join rejected (CoreError::RoomFull)"
-                    );
-                    let _ = reply.send(Err(CoreError::RoomFull(self.config.id.0)));
-                    return true;
-                }
-                let entity = self.logic.on_join(&mut self.world, conn);
-                self.m.joins += 1;
-                let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
-                self.conns.insert(
-                    conn,
-                    RoomConn {
-                        out,
-                        actions: act_rx,
-                        entity,
-                        // Authoritative value is recomputed every broadcast
-                        // phase (a group may depend on the world); this is
-                        // the join-time value.
-                        group: self.logic.group_of(&self.world, conn),
-                        batch: Vec::new(),
-                    },
-                );
-                let _ = reply.send(Ok((entity, act_tx)));
-                self.roster_add(conn);
-                debug!(room = %self.config.id, %conn, entity, "player joined");
-                true
+                self.admit_fresh(conn, out, reply)
             }
             RoomControl::Leave { conn, entity } => {
                 // Stale-leave guard: only the entity this connection
                 // currently owns.
                 if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
-                    self.conns.remove(&conn);
-                    self.roster_remove(&conn);
-                    // The request state goes with the session: in-flight
-                    // requests are released (their slots free up for other
-                    // connections) and any queued answer is dropped (a
-                    // reply to a gone session is not delivered).
-                    self.drop_conn_request_state(conn);
-                    self.logic.on_leave(&mut self.world, conn);
-                    self.m.leaves += 1;
+                    self.despawn_conn(conn, true);
                     debug!(room = %self.config.id, %conn, entity, "player left");
                 }
                 true
             }
+            RoomControl::Detach { conn, entity, identity } => {
+                // Transport death (registry `ConnClosed` route): the POLICY
+                // is the logic's (§3 — the registry only reports the fact).
+                // Same stale guard as `Leave`: only the entity this
+                // connection currently owns can be detached.
+                if self.conns.get(&conn).map(|c| c.entity) == Some(entity) {
+                    let decision =
+                        self.logic.on_disconnect(&mut self.world, conn, &identity);
+                    match decision {
+                        Detach::Despawn => {
+                            // Byte-for-byte the old close semantics.
+                            self.despawn_conn(conn, false);
+                        }
+                        Detach::Hold { grace, to } => {
+                            // Park it: keep the row, the entity, the world
+                            // state, the group membership AND the cap slot
+                            // (§4 — members accounting does not drop).
+                            // The clock is CORE-owned (§14.4): the grace is
+                            // written here as an absolute deadline and the
+                            // CONTROL sweep below fires it.
+                            let rc = self.conns.get_mut(&conn).expect("guarded above");
+                            rc.detached = true;
+                            rc.expire_to = to;
+                            rc.detach_deadline = grace.map(|g| Instant::now() + g);
+                            // Today's leave semantics for in-flight work
+                            // (§11 "RPC pending detach anında"): pending
+                            // requests drop, late reports are silently
+                            // discarded (structural already), queued answers
+                            // for the dead session go.
+                            self.drop_conn_request_state(conn);
+                            debug!(
+                                room = %self.config.id,
+                                %conn,
+                                entity,
+                                ?grace,
+                                ?to,
+                                "player detached (entity parked)"
+                            );
+                        }
+                    }
+                }
+                true
+            }
+            RoomControl::Resume {
+                conn,
+                epoch,
+                identity,
+                out,
+                reply,
+            } => {
+                // The implicit resume attempt (§14.3): ledger first, fresh
+                // join as the transparent fallback (§5). An empty identity
+                // never resumes (nothing to look up; the local-auth demo
+                // may still send names, an anonymous client cannot).
+                if identity.is_empty() {
+                    return self.admit_fresh(conn, out, reply);
+                }
+                match self.logic.resume_lookup(&self.world, &identity) {
+                    ResumeFound::Held(entity) => {
+                        // The parked row owning the ledger's entity: a
+                        // linear scan of the table, whose detached subset
+                        // is tiny and transiently populated (parks are rare;
+                        // §14.4 cost note).
+                        let old = self
+                            .conns
+                            .iter()
+                            .find(|(_, rc)| rc.detached && rc.entity == entity)
+                            .map(|(c, _)| *c);
+                        let Some(old) = old else {
+                            // Ledger says held but no parked row owns the
+                            // entity (a logic bug, or the hold expired in
+                            // this very tick's sweep above): treat as ended.
+                            self.m.resume_rejected_stale += 1;
+                            debug!(
+                                room = %self.config.id,
+                                %identity,
+                                "resume rejected: ledger holds a row the table lost"
+                            );
+                            return self.admit_fresh(conn, out, reply);
+                        };
+                        // Epoch guard (§7): one integer comparison rejects a
+                        // delayed duplicate/replay AFTER a newer session
+                        // already took the park over. Without it the loser of
+                        // two racing resumes could fresh-join a SECOND entity
+                        // for one identity. `0` disables the guard (hand-built
+                        // calls); the ledger consumption itself stays
+                        // exactly-once regardless — this actor is
+                        // single-threaded.
+                        if epoch != 0
+                            && self.conns[&old].session_epoch != 0
+                            && epoch <= self.conns[&old].session_epoch
+                        {
+                            self.m.resume_rejected_stale += 1;
+                            warn!(
+                                room = %self.config.id,
+                                %conn,
+                                parked = %old,
+                                %identity,
+                                resume_epoch = epoch,
+                                "resume rejected: stale epoch (a newer session \
+                                 already rebound this park)"
+                            );
+                            let _ = reply.send(Err(CoreError::ResumeStale));
+                            return true;
+                        }
+                        self.rebind_session(old, conn, epoch, identity, out, reply);
+                        true
+                    }
+                    ResumeFound::Ended => {
+                        // The hold already ended (expired/consumed/
+                        // superseded): the RESUME mechanism rejects (counted),
+                        // while the client-visible outcome stays the
+                        // transparent fresh join of §5 — no waiting endpoint,
+                        // no error frame; the TOCTOU rule ("whichever branch
+                        // lands first wins, both are valid") covers exactly
+                        // this race.
+                        self.m.resume_rejected_stale += 1;
+                        debug!(
+                            room = %self.config.id,
+                            %identity,
+                            "resume rejected stale (hold ended); falling back \
+                             to a fresh join"
+                        );
+                        self.admit_fresh(conn, out, reply)
+                    }
+                    ResumeFound::Never => self.admit_fresh(conn, out, reply),
+                }
+            }
             RoomControl::Shutdown => false,
+        }
+    }
+
+    /// Admit a connection as a FRESH member: the exact body of the
+    /// pre-reconnect `Join` arm (supersede own stale state, cap check,
+    /// `on_join`, register, roster, reply) — now shared by the plain
+    /// `Join` arm and the resume fallback paths, so the fallback can
+    /// never drift from an ordinary join.
+    fn admit_fresh(
+        &mut self,
+        conn: ConnectionId,
+        out: mpsc::Sender<FrameBatch>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
+    ) -> bool {
+        // A join supersedes any stale state this connection had
+        // (e.g. a leave queued behind it in the control channel) —
+        // including its request state (a rejoin is a new session:
+        // in-flight requests and queued answers of the old one
+        // are dropped, and their late reports are discarded).
+        if self.conns.remove(&conn).is_some() {
+            self.roster_remove(&conn);
+            self.drop_conn_request_state(conn);
+            self.logic.on_leave(&mut self.world, conn);
+        }
+        // Capacity: the room knows its own membership — this is the
+        // only place a join can structurally fail. A fresh join to a
+        // full room is rejected (no entity, no channel, no state);
+        // a re-join of an existing member (removed above) never
+        // hits the cap because it supersedes itself.
+        if let Some(cap) = self.config.max_players
+            && self.conns.len() >= cap
+        {
+            warn!(
+                room = %self.config.id,
+                %conn,
+                capacity = cap,
+                "room full; join rejected (CoreError::RoomFull)"
+            );
+            let _ = reply.send(Err(CoreError::RoomFull(self.config.id.0)));
+            return true;
+        }
+        let entity = self.logic.on_join(&mut self.world, conn);
+        self.m.joins += 1;
+        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        self.conns.insert(
+            conn,
+            RoomConn {
+                out,
+                actions: act_rx,
+                entity,
+                // Authoritative value is recomputed every broadcast
+                // phase (a group may depend on the world); this is
+                // the join-time value.
+                group: self.logic.group_of(&self.world, conn),
+                batch: Vec::new(),
+                detached: false,
+                detach_deadline: None,
+                expire_to: ExpireTo::Despawn,
+                bot_fed: false,
+                session_epoch: 0,
+            },
+        );
+        let _ = reply.send(Ok((entity, act_tx)));
+        self.roster_add(conn);
+        debug!(room = %self.config.id, %conn, entity, "player joined");
+        true
+    }
+
+    /// Bind a resumed session onto its parked entity: swap the channel
+    /// halves (§7), stamp the guard epoch, run the single-pass RebindKey
+    /// over every core-owned conn-keyed table, hand the logic its
+    /// `on_resume` hook (its tables + ledger + fresh-member mark), and
+    /// mint the new action channel through the same machinery a fresh
+    /// join uses. The wire id does not move: the reply carries the SAME
+    /// entity id the original join returned (§5).
+    ///
+    /// What deliberately does NOT happen here: no `on_join`, no new
+    /// entity, no slot change (the parked row never released its slot,
+    /// §4), no roster change beyond the key rename below (the parked row
+    /// stayed in the READ rotation the whole time — it simply had nothing
+    /// to pull).
+    fn rebind_session(
+        &mut self,
+        old: ConnectionId,
+        conn: ConnectionId,
+        epoch: u64,
+        identity: String,
+        out: mpsc::Sender<FrameBatch>,
+        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
+    ) {
+        // Fresh input channel for the fresh session (the old channel's
+        // senders died with the old connection actor); the seq/ack
+        // contract (DESIGN §14.2) makes the NEW session start from a
+        // clean numbering, so the old channel object is dropped, not
+        // reused.
+        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let entity = {
+            let rc = self.conns.get_mut(&old).expect("parked row checked by caller");
+            rc.out = out;
+            rc.actions = act_rx;
+            rc.detached = false;
+            rc.bot_fed = false;
+            rc.detach_deadline = None;
+            rc.session_epoch = epoch;
+            rc.entity
+        };
+        self.m.resumes += 1;
+        // Single-pass RebindKey over EVERY conn-keyed table this actor
+        // owns (the structural-signpost reason for one function: a table
+        // added later and forgotten here is the dirty-cell class of bug —
+        // §14.1). The complete enumeration for the ROOM actor:
+        //   1. `conns`          — moved below (the key IS the row),
+        //   2. `roster`         — the READ scan order holds the old id,
+        //   3. `roster_pos`     — the index bookkeeping ditto,
+        //   4. `pending`        — dropped at DETACH time (today's leave
+        //      semantics, §11), so nothing to re-key; listed here as the
+        //      signpost that this was CHECKED, not missed,
+        //   5. `queued`         — cleared at DETACH with the pending set;
+        //      same signpost listing,
+        //   6. `groups`         — NOT re-keyed: `G` is opaque (it MAY be a
+        //      `ConnectionId` for per-connection groupings) and cannot be
+        //      derived from a conn generically. Safe because the broadcast
+        //      phase rebuilds the whole group table from `conns` every tick
+        //      (phase 4b): the renamed per-connection group key self-heals
+        //      within one tick at the cost of one extra emission for that
+        //      group (its cached snapshot ledger is unreachable under the
+        //      old key and is dropped with it).
+        //   7. `read_cursor`    — an absolute rotation COUNT, not an index:
+        //      membership changes degrade to a shifted start offset by
+        //      construction; nothing keyed to rebind.
+        // Anything the LOGIC keys by connection is the logic's half of the
+        // same bargain, discharged through `RoomLogic::on_resume`.
+        if old != conn {
+            if let Some(rc) = self.conns.remove(&old) {
+                self.conns.insert(conn, rc);
+            }
+            self.roster_rekey(old, conn);
+        }
+        self.logic
+            .on_resume(&mut self.world, &identity, old, conn, entity);
+        let _ = reply.send(Ok((entity, act_tx)));
+        debug!(
+            room = %self.config.id,
+            %old,
+            %conn,
+            entity,
+            epoch,
+            "player resumed onto parked entity (channels swapped)"
+        );
+    }
+
+    fn despawn_conn(&mut self, conn: ConnectionId, count_as_leave: bool) {
+        if self.conns.remove(&conn).is_none() {
+            return;
+        }
+        self.roster_remove(&conn);
+        // The request state goes with the session: in-flight
+        // requests are released (their slots free up for other
+        // connections) and any queued answer is dropped (a
+        // reply to a gone session is not delivered).
+        self.drop_conn_request_state(conn);
+        self.logic.on_leave(&mut self.world, conn);
+        if count_as_leave {
+            self.m.leaves += 1;
         }
     }
 }
@@ -1900,6 +2497,157 @@ mod tests {
     use crate::channel::channel;
     use gsb_protocol::FrameBody;
     use std::time::Duration;
+
+    /// RebindKey pass lock (§14.1): a resume renames the session's key in
+    /// EVERY conn-keyed table this actor owns — `conns`, `roster`,
+    /// `roster_pos` — in ONE pass, and the tables stay consistent enough
+    /// to drain cleanly afterwards (the mass-leave invariant). A logic
+    /// with a one-entry park ledger drives the Held path.
+    struct RebindLogic {
+        held: std::collections::HashMap<String, EntityId>,
+        ents: std::collections::HashMap<ConnectionId, EntityId>,
+        next: u64,
+    }
+
+    impl RoomLogic<()> for RebindLogic {
+        type GroupKey = ();
+        fn snapshot_op(&self) -> u16 {
+            0x7400
+        }
+        fn private_op(&self) -> u16 {
+            0x7401
+        }
+        fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
+        fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+            false
+        }
+        fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
+            self.next += 1;
+            self.ents.insert(conn, self.next);
+            self.next
+        }
+        fn on_leave(&mut self, _w: &mut (), conn: ConnectionId) {
+            self.ents.remove(&conn);
+        }
+        fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {
+            a.clear();
+        }
+        fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
+        fn on_disconnect(
+            &mut self,
+            _w: &mut (),
+            conn: ConnectionId,
+            identity: &str,
+        ) -> Detach {
+            if let Some(e) = self.ents.get(&conn) {
+                self.held.insert(identity.to_string(), *e);
+            }
+            Detach::Hold {
+                grace: None,
+                to: ExpireTo::Despawn,
+            }
+        }
+        fn resume_lookup(&self, _w: &(), identity: &str) -> ResumeFound {
+            match self.held.get(identity) {
+                Some(e) => ResumeFound::Held(*e),
+                None => ResumeFound::Never,
+            }
+        }
+        fn on_resume(
+            &mut self,
+            _w: &mut (),
+            identity: &str,
+            old: ConnectionId,
+            new: ConnectionId,
+            _entity: EntityId,
+        ) {
+            self.held.remove(identity);
+            if let Some(e) = self.ents.remove(&old) {
+                self.ents.insert(new, e);
+            }
+        }
+    }
+
+    #[test]
+    fn rebind_rekeys_every_conn_keyed_table() {
+        let cfg = RoomConfig {
+            id: RoomId(31),
+            ..Default::default()
+        };
+        let (_tick_tx, tick_rx) = broadcast::channel(4);
+        let (_control, control_rx) = channel(16);
+        let mut actor = RoomActor::new(
+            cfg,
+            (),
+            Box::new(RebindLogic {
+                held: std::collections::HashMap::new(),
+                ents: std::collections::HashMap::new(),
+                next: 0,
+            }),
+            tick_rx,
+            control_rx,
+            1,
+            null_metrics_tx(),
+            None,
+        );
+        // Three members join.
+        let mut ents = std::collections::HashMap::new();
+        for c in 1..=3u64 {
+            let (out_tx, _o) = mpsc::channel::<FrameBatch>(2);
+            let (rtx, mut rrx) = oneshot::channel();
+            actor.handle_control(RoomControl::Join {
+                conn: ConnectionId(c),
+                out: out_tx,
+                reply: rtx,
+            });
+            let (e, _a) = rrx.try_recv().ok().unwrap().unwrap();
+            ents.insert(ConnectionId(c), e);
+        }
+        // c2's transport dies; policy holds.
+        actor.handle_control(RoomControl::Detach {
+            conn: ConnectionId(2),
+            entity: ents[&ConnectionId(2)],
+            identity: "ana".into(),
+        });
+        assert!(actor.conns[&ConnectionId(2)].detached, "parked");
+        // The resume binds a fresh socket (c9) onto the parked row.
+        let (out_tx, _o) = mpsc::channel::<FrameBatch>(2);
+        let (rtx, mut rrx) = oneshot::channel();
+        actor.handle_control(RoomControl::Resume {
+            conn: ConnectionId(9),
+            epoch: 1,
+            identity: "ana".into(),
+            out: out_tx,
+            reply: rtx,
+        });
+        let reply = rrx.try_recv().expect("reply sent synchronously");
+        let (entity, _actions) = reply.expect("resume accepted");
+        assert_eq!(entity, ents[&ConnectionId(2)], "the SAME wire id comes back");
+        // Table renamed...
+        assert!(!actor.conns.contains_key(&ConnectionId(2)));
+        assert!(actor.conns.contains_key(&ConnectionId(9)));
+        assert!(!actor.conns[&ConnectionId(9)].detached, "rebound row live");
+        // ...roster renamed IN PLACE (order preserved)...
+        assert!(actor.roster.contains(&ConnectionId(9)));
+        assert!(!actor.roster.contains(&ConnectionId(2)));
+        assert_eq!(actor.roster.len(), 3, "rename, not remove+append");
+        // ...and the position map follows.
+        let pos = actor.roster_pos[&ConnectionId(9)];
+        assert_eq!(actor.roster[pos], ConnectionId(9));
+        assert_eq!(actor.roster_pos.len(), actor.roster.len(), "pos in sync");
+        // The rebound tables still drain cleanly (mass-leave invariant).
+        for c in [1u64, 3, 9] {
+            let e = ents
+                .get(&ConnectionId(c))
+                .copied()
+                .unwrap_or_else(|| actor.conns[&ConnectionId(c)].entity);
+            actor.handle_control(RoomControl::Leave {
+                conn: ConnectionId(c),
+                entity: e,
+            });
+        }
+        assert!(actor.roster.is_empty() && actor.roster_pos.is_empty() && actor.conns.is_empty());
+    }
 
     /// Regression lock for the roster-drift panic: `swap_remove` returns
     /// the REMOVED element, and the fix must retarget the RELOCATED one.

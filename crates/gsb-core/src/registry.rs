@@ -45,7 +45,7 @@
 //! supervision: the death watch only *observes* task exits, it never causes
 //! them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -61,6 +61,12 @@ use crate::metrics::{MetricsEvent, RegistrySample};
 use crate::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic};
 use crate::shard::{ShardActor, ShardLogic, ShardMsg};
 use crate::ticker::Ticker;
+
+/// The retirement set's eviction cap (see the `retired` field): 65 536
+/// ended-room ids — far beyond any realistic matchmaker churn for one
+/// process lifetime, small enough to be a fixed bound rather than a
+/// growing table.
+const RETIRED_SET_CAP: usize = 65_536;
 
 /// One shard of a sharded room: its `World` + its [`ShardLogic`].
 pub type Shard<W, G, St> = (W, Box<dyn ShardLogic<W, GroupKey = G, State = St>>);
@@ -185,6 +191,13 @@ pub enum RegistryMsg {
         room: RoomId,
         /// The connection's outbound channel, handed to the room for fan-out.
         out: mpsc::Sender<FrameBatch>,
+        /// The resume key (`ValidatedTicket.player`, or `Auth.name` on the
+        /// local-auth path — demo-only there). Empty = anonymous: an
+        /// ordinary fresh join, no ledger lookup, no supersedence. A
+        /// NON-empty identity makes this join the implicit resume attempt
+        /// of §14.3 (the room falls back to a fresh join transparently
+        /// when its ledger does not hold the identity).
+        identity: String,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
     /// Remove a player from its room (voluntary leave). The connection
@@ -226,6 +239,16 @@ pub enum RegistryMsg {
     },
     /// A dispatched leave completed: clear the affiliation.
     LeaveDone { conn: ConnectionId, room: RoomId },
+    /// A connection's transport died and its DETACH was delivered to the
+    /// room (the dispatcher's `Close` now reports this instead of
+    /// `LeaveDone`): the affiliation is KEPT but marked detached — the
+    /// parked entity still holds its cap slot (§4), so the registry's
+    /// member view must not drop either. The slot is released later: by a
+    /// resume that re-affiliates the identity (SpawnDone cleanup), by the
+    /// room-side expiry reflected through a fresh SpawnDone for another
+    /// member of the room... never automatically — see the accepted v1
+    /// imprecision documented on the `ConnClosed` handler.
+    DetachDone { conn: ConnectionId, room: RoomId },
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see
@@ -273,6 +296,13 @@ enum RoomOp<St> {
     /// room is sharded — `shard` carries the registry's pick), reply to
     /// the connection actor (with the per-connection action channel),
     /// report [`RegistryMsg::SpawnDone`] to the registry.
+    ///
+    /// A NON-empty `identity` turns this op into the implicit resume
+    /// attempt of §14.3: the dispatcher sends `Resume` instead of `Join`
+    /// (broadcast to every shard — §6 — for sharded rooms). When nothing
+    /// accepts (no ledger holds the identity anywhere), the dispatcher
+    /// falls back to the ordinary join below — transparently to the
+    /// client (§5).
     Join {
         room: RoomId,
         handle: RoomHandle<St>,
@@ -284,6 +314,8 @@ enum RoomOp<St> {
         /// `RegistryMsg::RoomDied`).
         generation: u64,
         out: mpsc::Sender<FrameBatch>,
+        /// The resume key; empty = anonymous plain join.
+        identity: String,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
     /// Leave `room`: send control `Leave` (with the entity this dispatcher
@@ -292,6 +324,17 @@ enum RoomOp<St> {
     /// Drain the queue (processing whatever is left, including a final
     /// leave), report [`RegistryMsg::OpsClosed`], exit.
     Close,
+}
+
+/// The folded outcome of one dispatched join/resume round trip (see
+/// [`Self::dispatch_plain_join`] / [`Self::dispatch_resume`]).
+enum OpOutcome {
+    Joined(EntityId, Mailbox<Action>),
+    /// A structural rejection from the room side (full room, stale-resume
+    /// epoch guard): propagated to the connection actor as-is.
+    Rejected(CoreError),
+    /// The room side is unreachable or dropped the reply.
+    Gone,
 }
 
 /// A sharded room's registry-side state (see `crate::shard`): the shard
@@ -342,6 +385,22 @@ struct ConnInfo {
     /// Set via [`RegistryMsg::ConnOpened`]; kept for the connection's whole
     /// lifetime so `RoomGone`/`Shutdown` can always reach it.
     inbox: Option<Mailbox<ConnIn>>,
+    /// The resume key this connection joined with (see
+    /// [`RegistryMsg::SpawnPlayer::identity`]); empty = anonymous.
+    /// Recorded at dispatch so the resume re-affiliation can find and
+    /// release the detached entry it supersedes.
+    identity: String,
+    /// The transport died but the entity is parked room-side: the
+    /// affiliation is kept (slot held, §4) with this mark. A resumed or
+    /// fresh session for the same identity releases the entry; a room
+    /// destroy/death clears it like any affiliation. Accepted v1
+    /// imprecision: a hold that expires WITHOUT the identity ever
+    /// returning leaves this entry until one of those events — the
+    /// registry-side count errs CONSERVATIVELY (it overcounts members, so
+    /// caps close slightly early instead of ever letting a room
+    /// overfill), and the room side — which enforces its own cap against
+    /// its own table — is exact.
+    detached: bool,
 }
 
 /// The registry actor. `W`/`G` are the room's world / group-key types;
@@ -398,6 +457,23 @@ pub struct Registry<W, G, St> {
     /// each room at creation; `None` = rooms report no result. The
     /// registry never awaits the sink (it only holds a sender clone).
     result_sink: Option<Mailbox<MatchResult>>,
+    /// RETIRED room ids (§8): ids whose room ENDED in this process — an
+    /// accepted `DestroyRoom` (an ended match, or a persistent room's
+    /// decommissioning), or an unexpected death left unrebuilt. Joins and
+    /// resumes answer ERROR 12 ([`CoreError::RoomRetired`], "do not retry
+    /// — return to the lobby") instead of 4, because the client decision
+    /// differs: an ended match must never silently reopen, and an
+    /// operator's decommissioning intent must never be crushed by
+    /// automatic re-creation.
+    ///
+    /// Bounded by [`RETIRED_SET_CAP`] with FIFO eviction of the oldest
+    /// retirement: the set is operator-scale by nature (rooms end at
+    /// human/matchmaker pace), and the cap keeps the discipline that no
+    /// table grows without bound; an id evicted after extreme churn
+    /// degrades safely to the pre-reconnect answer (4).
+    retired: HashMap<RoomId, ()>,
+    /// FIFO order for the eviction cap above.
+    retired_order: VecDeque<RoomId>,
 }
 
 impl<W, G, St> Registry<W, G, St>
@@ -439,6 +515,8 @@ where
             metrics,
             max_connections,
             result_sink,
+            retired: HashMap::new(),
+            retired_order: VecDeque::new(),
         }
     }
 
@@ -482,6 +560,24 @@ where
         {
             self.reg_metrics_dropped += 1;
         }
+    }
+
+    /// Mark a room id retired (§8), FIFO-capped (see the `retired` field).
+    fn retire_room(&mut self, id: RoomId) {
+        if self.retired.insert(id, ()).is_none() {
+            self.retired_order.push_back(id);
+            while self.retired_order.len() > RETIRED_SET_CAP {
+                let evicted = self.retired_order.pop_front().expect("len checked above");
+                self.retired.remove(&evicted);
+            }
+        }
+    }
+
+    /// Lift a retirement (the explicit-create override; see the
+    /// `CreateRoom` handler). Order-vec pruning keeps the FIFO honest.
+    fn unretire_room(&mut self, id: &RoomId) {
+        self.retired.remove(id);
+        self.retired_order.retain(|x| x != id);
     }
 
     /// Count the connections affiliated with `room` (the registry-side
@@ -700,6 +796,20 @@ where
             match msg {
                 RegistryMsg::CreateRoom { config, reply } => {
                     let id = config.id;
+                    // A retired id stays closed to ACCIDENTAL traffic
+                    // (joins/resumes answer ERROR 12 while absent), but an
+                    // EXPLICIT create is the operator revisiting its ending
+                    // decision — un-retire it and proceed (§8 protects
+                    // against AUTOMATIC resurrection, e.g. the panic
+                    // rebuild, never against a deliberate new create).
+                    if self.retired.contains_key(&id) {
+                        self.unretire_room(&id);
+                        warn!(
+                            room = %id,
+                            "re-creating a RETIRED room id (explicit override; \
+                             joins answer normally from here on)"
+                        );
+                    }
                     // Idempotency: a room that already exists is a no-op
                     // for an IDENTICAL request (the control plane's retry
                     // pattern) and a conflict for a different one. The
@@ -793,7 +903,12 @@ where
                         self.reg_destroyed += 1;
                         self.emit_room_gone(id);
                         self.emit_metrics();
-                        debug!(room = %id, "room destroyed");
+                        // The id is retired (§8): an ephemeral match ended,
+                        // or a persistent room was decommissioned — either
+                        // way later joins/resumes answer ERROR 12, and a
+                        // create cannot silently reopen it.
+                        self.retire_room(id);
+                        debug!(room = %id, "room destroyed (id retired)");
                         let _ = reply.send(RoomStatus::Destroyed);
                     } else {
                         // Idempotent destroy: a missing room is a no-op
@@ -823,12 +938,67 @@ where
                     conn,
                     room,
                     out,
+                    identity,
                     reply,
                 } => {
+                    // Double-session supersedence (§5: "en son kazanan" —
+                    // latest wins): a LIVE (still-connected) session with
+                    // the same identity in the same room is evicted here,
+                    // BEFORE the new join dispatches. The old socket —
+                    // still open by definition — is closed with ERROR 9
+                    // (`ConnIn::ServerClosed`), its affiliation released
+                    // through the ordinary leave path. A DETACHED session
+                    // with the identity needs no eviction: its park IS the
+                    // resume target (the re-affiliation cleanup in
+                    // `SpawnDone` releases it).
+                    if !identity.is_empty() {
+                        let mut evicted: Vec<(ConnectionId, Option<Mailbox<ConnIn>>)> =
+                            Vec::new();
+                        for (&other, info) in &self.conns {
+                            if other != conn
+                                && !info.detached
+                                && info.room == Some(room)
+                                && info.identity == identity
+                            {
+                                evicted.push((other, info.inbox.clone()));
+                            }
+                        }
+                        for (old_conn, inbox) in evicted {
+                            warn!(
+                                %old_conn,
+                                %conn,
+                                room = %room,
+                                %identity,
+                                "double session: a newer session supersedes the \
+                                 live one (ERROR 9 to the old socket)"
+                            );
+                            if let Some(inbox) = inbox {
+                                let reason =
+                                    "a newer session for this player superseded this \
+                                     connection"
+                                        .to_string();
+                                tokio::spawn(async move {
+                                    let _ = inbox.send(ConnIn::ServerClosed { reason }).await;
+                                });
+                            }
+                            self.direct_leave(old_conn);
+                        }
+                    }
                     let Some(entry) = self.rooms.get(&room) else {
-                        let _ = reply.send(Err(CoreError::RoomNotFound(room.0)));
+                        let code = if self.retired.contains_key(&room) {
+                            CoreError::RoomRetired(room.0)
+                        } else {
+                            CoreError::RoomNotFound(room.0)
+                        };
+                        let _ = reply.send(Err(code));
                         continue;
                     };
+                    // Record the resume key on THIS connection's entry (the
+                    // resume re-affiliation matches on it). The entry may
+                    // not exist yet (ConnOpened races nothing: the accept
+                    // loop sends ConnOpened before any client frame), so
+                    // create-on-demand like the cap check does.
+                    self.conns.entry(conn).or_default().identity = identity.clone();
                     let sharded_room = entry.shards.is_some();
                     // The incarnation this join is dispatched against: the
                     // settlement reports (SpawnDone/SpawnFailed) echo it so
@@ -900,6 +1070,7 @@ where
                             shard: shard_idx,
                             generation,
                             out,
+                            identity,
                             reply,
                         })
                         .is_err()
@@ -972,11 +1143,20 @@ where
                     self.emit_metrics();
                 }
                 RegistryMsg::ConnClosed { conn } => {
-                    // The connection actor is gone for good: remove the entry
-                    // entirely. If a dispatcher exists it performs the final
-                    // leave itself (Close drains the queue); otherwise we
-                    // send the leave directly.
-                    let Some(info) = self.conns.remove(&conn) else {
+                    // The connection actor is gone for good. The entity's
+                    // fate is no longer decided HERE (the old code removed
+                    // the affiliation and sent a despawn-causing leave):
+                    // the registry only reports the fact and routes a
+                    // DETACH — the ROOM's policy (`on_disconnect`)
+                    // decides despawn-vs-hold (§3/§4). Until the policy
+                    // answers, this entry stays with `detached` set and
+                    // its inbox dropped (nothing can notify a dead
+                    // socket): a parked player keeps holding its cap slot
+                    // in this table exactly as it does in the room's.
+                    //
+                    // An UNAFFILIATED close still removes the entry
+                    // outright (nothing to park, nothing to hold).
+                    let Some(info) = self.conns.get_mut(&conn) else {
                         // The registry never recorded this connection — it
                         // was rejected at connection capacity. Its actor
                         // still reports the close; there is no entry to
@@ -991,28 +1171,38 @@ where
                         debug!(%conn, "close of unregistered connection");
                         continue;
                     };
+                    let affiliated = info.room.is_some();
+                    info.detached = affiliated;
+                    info.inbox = None;
                     let (room, entity) = (info.room, info.entity);
                     match self.conn_ops.remove(&conn) {
                         Some(op_tx) => {
+                            // The dispatcher serializes the detach behind
+                            // any in-flight join and reports `DetachDone`.
                             let _ = op_tx.try_send(RoomOp::Close);
                         }
                         None => {
                             if let (Some(room), Some(entity)) = (room, entity) {
-                                self.send_leave_direct(conn, room, entity);
-                                // Sharded room: the registry's counter loses
-                                // a member (a shard cannot count the room —
-                                // see `ShardGroup`).
-                                if let Some(e) =
-                                    self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
-                                {
-                                    e.members = e.members.saturating_sub(1);
-                                }
+                                self.send_detach_direct(conn, room, entity);
+                                // Sharded room: NO member decrement — the
+                                // parked entity still holds its slot (§4).
                             }
                         }
                     }
+                    if !affiliated {
+                        // Nothing to park: the entry has no future reader
+                        // (no resume can target it), so it goes, exactly
+                        // like the old code's unconditional removal.
+                        self.conns.remove(&conn);
+                    }
                     self.reg_closes += 1;
                     self.emit_metrics();
-                    debug!(%conn, "connection closed");
+                    debug!(
+                        %conn,
+                        ?room,
+                        "connection closed (detach routed; affiliation held for \
+                         the park)"
+                    );
                 }
                 RegistryMsg::SpawnDone {
                     conn,
@@ -1071,6 +1261,60 @@ where
                         }
                         None => false,
                     };
+                    // Resume re-affiliation cleanup: the NEW session's
+                    // ConnectionId replaced the parked one — release the OLD
+                    // detached entry for this identity (the room-side park is
+                    // consumed by the rebind; holding the registry entry any
+                    // longer would leak a slot). Exactly one such entry can
+                    // exist (one identity, one park); a scan keeps this
+                    // correct without a second index.
+                    if new_affiliation {
+                        let identity = self
+                            .conns
+                            .get(&conn)
+                            .map(|i| i.identity.clone())
+                            .unwrap_or_default();
+                        if !identity.is_empty() {
+                            let mut released = 0u64;
+                            let stale_keys: Vec<ConnectionId> = self
+                                .conns
+                                .iter()
+                                .filter(|(c, i)| {
+                                    **c != conn
+                                        && i.detached
+                                        && i.identity == identity
+                                        && i.room == Some(room)
+                                })
+                                .map(|(c, _)| *c)
+                                .collect();
+                            for old in stale_keys {
+                                self.conns.remove(&old);
+                                released += 1;
+                                debug!(
+                                    %old,
+                                    %conn,
+                                    room = %room,
+                                    %identity,
+                                    "resume re-affiliation released the detached \
+                                     entry"
+                                );
+                            }
+                            // The sharded member counter nets out here: each
+                            // released entry held a count; the resumed session's
+                            // `fresh` increment below replaces exactly one of
+                            // them. (A fallback FRESH join after an expiry also
+                            // lands here with zero releases — its +1 is the
+                            // genuine new member.)
+                            if released > 0
+                                && let Some(e) = self
+                                    .rooms
+                                    .get_mut(&room)
+                                    .and_then(|e| e.shards.as_mut())
+                            {
+                                e.members = e.members.saturating_sub(released);
+                            }
+                        }
+                    }
                     // Sharded room: settle the capacity reservation (the
                     // join was dispatched against the cap) and, when the
                     // affiliation is new, count the member (a re-join of an
@@ -1134,6 +1378,19 @@ where
                         debug!(%conn, room = %room, "player despawned");
                     }
                 }
+                RegistryMsg::DetachDone { conn, room } => {
+                    // The detach was delivered: the affiliation is KEPT
+                    // under the detached mark (the parked entity holds its
+                    // slot, §4) — no member decrement, no `reg_leaves`.
+                    // Released later by a resume's SpawnDone cleanup or by
+                    // the room ending (destroy/death/notify_room_gone).
+                    if let Some(info) = self.conns.get_mut(&conn)
+                        && info.room == Some(room)
+                    {
+                        info.detached = true;
+                        debug!(%conn, room = %room, "player detached (slot held)");
+                    }
+                }
                 RegistryMsg::OpsClosed { conn } => {
                     self.conn_ops.remove(&conn);
                 }
@@ -1182,13 +1439,17 @@ where
                     self.reg_died += 1;
                     self.emit_room_gone(id);
                     self.emit_metrics();
-                    // Restart policy (the v1 contract): the rebuilt room
-                    // comes back EMPTY — the members were notified above and
-                    // may rejoin; no world state survives (it lived inside
-                    // the dead task). A logic that panics persistently
-                    // yields a restart-per-death cycle, one warn per round:
-                    // immediately visible to the operator, deemed acceptable
-                    // for v1 (no backoff machinery).
+                    // Restart policy: `restart_on_panic` is the operator's
+                    // preference, but a PERSISTENT room's class guarantee
+                    // overrides it (§8 — "sürekli oda panikle ölü kalmaz"
+                    // is a class property, not a tunable): the rebuild is
+                    // forced ON. The rebuilt room comes back EMPTY either
+                    // way — the members were notified above and may
+                    // rejoin; no world state survives (it lived inside the
+                    // dead task). A logic that panics persistently yields
+                    // a restart-per-death cycle, one warn per round:
+                    // immediately visible to the operator, deemed
+                    // acceptable for v1 (no backoff machinery).
                     //
                     // In-flight joins dispatched against the dead
                     // incarnation settle later (SpawnDone/SpawnFailed);
@@ -1196,11 +1457,12 @@ where
                     // ShardGroup with saturating arithmetic — bounded
                     // imprecision (at most the number of in-flight joins),
                     // never a panic or a permanently stuck cap.
-                    if entry.config.restart_on_panic {
+                    if entry.config.restart_on_panic || entry.config.persistent {
                         warn!(
                             room = %id,
-                            "restart_on_panic: rebuilding the room from its \
-                             factory + config (it comes back EMPTY)"
+                            persistent = entry.config.persistent,
+                            "rebuilding the room from its factory + config \
+                             (it comes back EMPTY)"
                         );
                         let global = self.ticker.hz();
                         // The config was validated when this room was first
@@ -1211,6 +1473,11 @@ where
                         let built = (self.factory)(id, &entry.config);
                         self.install_room(entry.config.clone(), built, run_every);
                         debug!(room = %id, "room rebuilt after unexpected death");
+                    } else {
+                        // A death left unrebuilt ends the match: retire the
+                        // id so later joins answer ERROR 12 ("definitively
+                        // over") instead of 4 ("unknown/temporary").
+                        self.retire_room(id);
                     }
                 }
                 RegistryMsg::Shutdown => {
@@ -1294,14 +1561,25 @@ where
     /// tell how the room ended.
     fn notify_room_gone(&mut self, room: RoomId) {
         let mut doomed = Vec::new();
+        let mut dead_detached: Vec<ConnectionId> = Vec::new();
         for (conn, info) in self.conns.iter_mut() {
             if info.room == Some(room) {
                 info.room = None;
                 info.entity = None;
-                if let Some(inbox) = info.inbox.clone() {
+                if info.detached {
+                    // A parked player's socket is already gone: no
+                    // notification can reach anyone and the affiliation is
+                    // over — the entry goes (the room ending released its
+                    // slot room-side too).
+                    info.detached = false;
+                    dead_detached.push(*conn);
+                } else if let Some(inbox) = info.inbox.clone() {
                     doomed.push((*conn, inbox));
                 }
             }
+        }
+        for conn in dead_detached {
+            self.conns.remove(&conn);
         }
         for (conn, inbox) in doomed {
             // Fire-and-forget notification (no reply needed).
@@ -1383,6 +1661,51 @@ where
         });
     }
 
+    /// Send a DETACH with no dispatcher (the dispatcher-less
+    /// [`RegistryMsg::ConnClosed`] path): to the room's control channel,
+    /// or — for a sharded room — to ALL of its shards (exactly one of them
+    /// owns the connection; the entity-id guard makes the others no-ops).
+    /// The ROOM decides despawn-vs-hold via its `on_disconnect` policy;
+    /// this path only reports the transport death.
+    fn send_detach_direct(&mut self, conn: ConnectionId, room: RoomId, entity: EntityId) {
+        let Some(identity) = self.conns.get(&conn).map(|i| i.identity.clone())
+        else {
+            return;
+        };
+        let handle = match self.rooms.get(&room) {
+            Some(e) => match (&e.control, &e.shards) {
+                (Some(control), _) => RoomHandle::Single(control.clone()),
+                (None, Some(group)) => RoomHandle::Sharded(group.mailboxes.clone()),
+                (None, None) => return,
+            },
+            None => return,
+        };
+        tokio::spawn(async move {
+            match handle {
+                RoomHandle::Single(control) => {
+                    let _ = control
+                        .send(RoomControl::Detach {
+                            conn,
+                            entity,
+                            identity,
+                        })
+                        .await;
+                }
+                RoomHandle::Sharded(mailboxes) => {
+                    for tx in &mailboxes {
+                        let _ = tx
+                            .send(ShardMsg::Detach {
+                                conn,
+                                entity,
+                                identity: identity.clone(),
+                            })
+                            .await;
+                    }
+                }
+            }
+        });
+    }
+
     /// One dispatcher task per connection with a room relationship in
     /// flight. It is the *only* sender of room control messages for that
     /// connection, so per-connection ordering (join → leave → rejoin) is
@@ -1400,8 +1723,9 @@ where
         let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St>>(16);
         tokio::spawn(async move {
             let mut epoch: u64 = 0;
-            // (room, entity, handle, the join's epoch)
-            let mut in_room: Option<(RoomId, EntityId, RoomHandle<St>, u64)> = None;
+            // (room, entity, handle, the join's epoch, the resume key)
+            let mut in_room: Option<(RoomId, EntityId, RoomHandle<St>, u64, String)> =
+                None;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
@@ -1410,37 +1734,38 @@ where
                         shard,
                         generation,
                         out,
+                        identity,
                         reply,
                     } => {
                         epoch = epoch.wrapping_add(1);
-                        let (joined_tx, joined_rx) = oneshot::channel::<
-                            Result<(EntityId, Mailbox<Action>), CoreError>,
-                        >();
-                        let sent = match &handle {
-                            RoomHandle::Single(control) => control
-                                .send(RoomControl::Join {
-                                    conn,
-                                    out,
-                                    reply: joined_tx,
-                                })
-                                .await
-                                .is_ok(),
-                            RoomHandle::Sharded(mailboxes) => {
-                                let i = shard.expect("sharded join carries its shard");
-                                mailboxes[i]
-                                    .send(ShardMsg::Join {
-                                        conn,
-                                        epoch,
-                                        out,
-                                        reply: joined_tx,
-                                    })
-                                    .await
-                                    .is_ok()
-                            }
+                        // An identified join IS a resume attempt (§14.3):
+                        // route it at the park ledger first; fall back to
+                        // the plain join when nothing holds the identity.
+                        let outcome = if identity.is_empty() {
+                            Self::dispatch_plain_join(
+                                conn,
+                                room,
+                                &handle,
+                                shard,
+                                epoch,
+                                out,
+                            )
+                            .await
+                        } else {
+                            Self::dispatch_resume(
+                                conn,
+                                room,
+                                &handle,
+                                shard,
+                                epoch,
+                                identity.clone(),
+                                out,
+                            )
+                            .await
                         };
-                        match (sent, joined_rx.await) {
-                            (true, Ok(Ok((entity, actions)))) => {
-                                in_room = Some((room, entity, handle, epoch));
+                        match outcome {
+                            OpOutcome::Joined(entity, actions) => {
+                                in_room = Some((room, entity, handle, epoch, identity));
                                 let _ = reply.send(Ok((entity, actions)));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnDone {
@@ -1457,7 +1782,7 @@ where
                             // `ERROR` frame's own code), record no room
                             // state, and — for a sharded room — release
                             // the registry's capacity reservation.
-                            (true, Ok(Err(e))) => {
+                            OpOutcome::Rejected(e) => {
                                 let _ = reply.send(Err(e));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnFailed {
@@ -1467,7 +1792,7 @@ where
                                     })
                                     .await;
                             }
-                            _ => {
+                            OpOutcome::Gone => {
                                 // Control channel gone (room destroyed) or the
                                 // room dropped the reply.
                                 let _ = reply.send(Err(CoreError::RoomGone));
@@ -1482,7 +1807,7 @@ where
                         }
                     }
                     RoomOp::Leave { room } => {
-                        if let Some((r, entity, handle, ep)) = in_room.take()
+                        if let Some((r, entity, handle, ep, _id)) = in_room.take()
                             && r == room
                         {
                             Self::send_room_leave(conn, entity, ep, handle).await;
@@ -1492,10 +1817,15 @@ where
                         }
                     }
                     RoomOp::Close => {
-                        if let Some((r, entity, handle, ep)) = in_room.take() {
-                            Self::send_room_leave(conn, entity, ep, handle).await;
+                        if let Some((r, entity, handle, _ep, identity)) = in_room.take() {
+                            // Transport death: DETACH, not leave — the
+                            // ROOM's policy decides despawn-vs-hold (§3).
+                            Self::send_room_detach(conn, entity, identity, handle).await;
+                            // The affiliation is KEPT (parked slot held,
+                            // §4): DetachDone marks the entry instead of
+                            // clearing it.
                             let _ = registry
-                                .send(RegistryMsg::LeaveDone { conn, room: r })
+                                .send(RegistryMsg::DetachDone { conn, room: r })
                                 .await;
                         }
                         let _ = registry.send(RegistryMsg::OpsClosed { conn }).await;
@@ -1536,6 +1866,179 @@ where
                         })
                         .await;
                 }
+            }
+        }
+    }
+
+    /// The detach counterpart of [`Self::send_room_leave`]: transport
+    /// death routes `RoomControl::Detach` / a broadcast
+    /// `ShardMsg::Detach` — the room's policy (`on_disconnect`) decides
+    /// despawn-vs-hold; the registry never does (§3).
+    async fn send_room_detach(
+        conn: ConnectionId,
+        entity: EntityId,
+        identity: String,
+        handle: RoomHandle<St>,
+    ) {
+        match handle {
+            RoomHandle::Single(control) => {
+                let _ = control
+                    .send(RoomControl::Detach {
+                        conn,
+                        entity,
+                        identity,
+                    })
+                    .await;
+            }
+            RoomHandle::Sharded(mailboxes) => {
+                for tx in &mailboxes {
+                    let _ = tx
+                        .send(ShardMsg::Detach {
+                            conn,
+                            entity,
+                            identity: identity.clone(),
+                        })
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// The ordinary fresh join round trip (the pre-reconnect shape):
+    /// single rooms get a control `Join`; sharded rooms a `ShardMsg::Join`
+    /// on the home shard. Returns the outcome class the dispatcher acts on.
+    async fn dispatch_plain_join(
+        conn: ConnectionId,
+        _room: RoomId,
+        handle: &RoomHandle<St>,
+        shard: Option<usize>,
+        epoch: u64,
+        out: mpsc::Sender<FrameBatch>,
+    ) -> OpOutcome {
+        let (joined_tx, joined_rx) =
+            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+        let sent = match handle {
+            RoomHandle::Single(control) => control
+                .send(RoomControl::Join {
+                    conn,
+                    out,
+                    reply: joined_tx,
+                })
+                .await
+                .is_ok(),
+            RoomHandle::Sharded(mailboxes) => {
+                let i = shard.expect("sharded join carries its shard");
+                mailboxes[i]
+                    .send(ShardMsg::Join {
+                        conn,
+                        epoch,
+                        out,
+                        reply: joined_tx,
+                    })
+                    .await
+                    .is_ok()
+            }
+        };
+        match (sent, joined_rx.await) {
+            (true, Ok(Ok((entity, actions)))) => OpOutcome::Joined(entity, actions),
+            (true, Ok(Err(e))) => OpOutcome::Rejected(e),
+            _ => OpOutcome::Gone,
+        }
+    }
+
+    /// The implicit resume round trip (§14.3 + §6): single rooms get one
+    /// `RoomControl::Resume` (the room falls back to a fresh join itself);
+    /// sharded rooms broadcast `ShardMsg::Resume` to EVERY shard and the
+    /// outcomes are folded here — at most one accept is structurally
+    /// possible (the ledger record lives on exactly one shard), an
+    /// all-miss folds into a fallback plain join on the home shard, and a
+    /// tripped epoch guard propagates as a rejection (a newer session
+    /// already owns the identity).
+    async fn dispatch_resume(
+        conn: ConnectionId,
+        room: RoomId,
+        handle: &RoomHandle<St>,
+        shard: Option<usize>,
+        epoch: u64,
+        identity: String,
+        out: mpsc::Sender<FrameBatch>,
+    ) -> OpOutcome {
+        match handle {
+            RoomHandle::Single(control) => {
+                let (joined_tx, joined_rx) =
+                    oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+                let sent = control
+                    .send(RoomControl::Resume {
+                        conn,
+                        epoch,
+                        identity,
+                        out,
+                        reply: joined_tx,
+                    })
+                    .await
+                    .is_ok();
+                match (sent, joined_rx.await) {
+                    (true, Ok(Ok((entity, actions)))) => OpOutcome::Joined(entity, actions),
+                    (true, Ok(Err(e))) => OpOutcome::Rejected(e),
+                    _ => OpOutcome::Gone,
+                }
+            }
+            RoomHandle::Sharded(mailboxes) => {
+                // One oneshot per shard; each shard answers exactly once
+                // (its CONTROL phase drains its FIFO inbox). Awaiting them
+                // all is bounded by the shard count (≤ 16 by the grid
+                // topology).
+                let n = mailboxes.len();
+                let (agg_tx, mut agg_rx) = mpsc::channel::<
+                    Result<Option<(EntityId, Mailbox<Action>)>, CoreError>,
+                >(n.max(1));
+                for tx in mailboxes {
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    if tx
+                        .send(ShardMsg::Resume {
+                            conn,
+                            epoch,
+                            identity: identity.clone(),
+                            out: out.clone(),
+                            reply: reply_tx,
+                        })
+                        .await
+                        .is_ok()
+                    {
+                        // Forward this shard's eventual answer into the
+                        // aggregate; a dropped shard dies with its oneshot
+                        // and simply contributes nothing.
+                        let value = agg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(answer) = reply_rx.await {
+                                let _ = value.send(answer).await;
+                            }
+                        });
+                    }
+                }
+                let mut accepted: Option<(EntityId, Mailbox<Action>)> = None;
+                let mut stale: Option<CoreError> = None;
+                for _ in 0..n {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        agg_rx.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(Ok(Some(pair)))) => accepted = Some(pair),
+                        Ok(Some(Err(e))) => stale = Some(e),
+                        _ => {}
+                    }
+                }
+                if let Some((entity, actions)) = accepted {
+                    return OpOutcome::Joined(entity, actions);
+                }
+                if let Some(e) = stale {
+                    return OpOutcome::Rejected(e);
+                }
+                // All shards answered "not here": transparent fresh join
+                // (§5) through the ordinary path.
+                Self::dispatch_plain_join(conn, room, handle, shard, epoch, out).await
             }
         }
     }

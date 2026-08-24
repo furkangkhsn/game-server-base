@@ -2078,6 +2078,11 @@ fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u32(room.max_group);
         w.u64(room.joins);
         w.u64(room.leaves);
+        w.u32(room.detached);
+        w.u64(room.resumes);
+        w.u64(room.resume_rejected_stale);
+        w.u64(room.detach_expired_despawn);
+        w.u64(room.detach_expired_ai);
         w.u64(room.requests_local);
         w.u64(room.requests_external);
         w.u64(room.requests_rejected_malformed);
@@ -2221,6 +2226,11 @@ fn decode_report(body: &[u8]) -> Option<MetricReport> {
             max_group: r.u32()?,
             joins: r.u64()?,
             leaves: r.u64()?,
+            detached: r.u32()?,
+            resumes: r.u64()?,
+            resume_rejected_stale: r.u64()?,
+            detach_expired_despawn: r.u64()?,
+            detach_expired_ai: r.u64()?,
             requests_local: r.u64()?,
             requests_external: r.u64()?,
             requests_rejected_malformed: r.u64()?,
