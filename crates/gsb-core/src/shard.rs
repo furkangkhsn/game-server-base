@@ -158,6 +158,25 @@
 //! [`GameLogic::own_wires`] so the own (fresh) record wins and the
 //! snapshot never lists one entity twice.
 //!
+//! ## The ShardLink seam (`docs/DISTRIBUTED.md` §3)
+//!
+//! Everything this actor exchanges with a NEIGHBOR crosses the
+//! crate-private [`ShardLink`] trait: `send` (best-effort — a full or
+//! dead link refuses and hands the message back) and `drain` (FIFO,
+//! non-blocking). Today every link is an [`InProcLink`] around exactly
+//! the bounded mpsc halves the registry already wired, which is why
+//! capacities, ordering and drop timing are bit-for-bit the pre-seam
+//! channel behavior. The seam exists so the future UDS/TCP links (§10
+//! triggers) become NEW TYPES behind the same two methods — the tick
+//! body never learns what a link rides on. Send is best-effort BY
+//! DESIGN: delivery classes and healing rules live in the message
+//! semantics (§4), not in the link. Registry-originated control shares
+//! the shards' inboxes (one bounded FIFO per shard — see
+//! `registry.rs`), so the inbound side is modeled as ONE link over that
+//! shared inbox rather than per-neighbor receive ends; splitting a
+//! dedicated neighbor queue out would be a topology change (a second
+//! interleaving for the protocol to reason about), not a refactor.
+//!
 //! ## Wire identity (range partitioning)
 //!
 //! Today a room mints wire ids from one monotonic counter; the invariant
@@ -730,6 +749,140 @@ pub trait ShardLogic<W>: GameLogic<W> {
     fn own_wires(&self, world: &W) -> Vec<u64>;
 }
 
+// ---------------------------------------------------------------------
+// The ShardLink seam (`docs/DISTRIBUTED.md` §3): everything shard↔
+// neighbor crosses this interface. Today's only implementation is
+// in-process; the Ipc/Net links arrive as new types behind the same two
+// methods when their §10 triggers fire.
+// ---------------------------------------------------------------------
+
+/// The message class that crosses a [`ShardLink`]. The neighbor protocol
+/// arms of [`ShardMsg`] (`Migrate`, `Border`,
+/// [`ShardMsg::ResyncRequest`]) are all that ever flows across a link —
+/// but the type is deliberately the WHOLE enum, not a narrower wire
+/// enum: registry-originated arms share the SAME bounded per-shard inbox
+/// by design (one FIFO per shard), and carving out a dedicated neighbor
+/// channel would be a queue-topology change with a new interleaving for
+/// the protocol to reason about, not a refactor. The seam does not
+/// demultiplex — the CONTROL drain plus `handle_msg` stay the single
+/// inbound authority.
+pub(crate) type NeighborMsg<S> = ShardMsg<S>;
+
+/// Why a best-effort [`ShardLink::send`] refused a message. The refused
+/// value travels back INSIDE the error so a failed send loses nothing:
+/// the migration path rolls the moved connection halves back out of the
+/// exact message it tried to ship (a failed migration orphans nothing),
+/// which is precisely what the raw `TrySendError` used to carry.
+/// `Full` and `Closed` stay distinct because they answer to different
+/// healing rules — full is transient backpressure (the §4 classes heal:
+/// forced Full next tick, crossing re-collected next tick), closed means
+/// this peer incarnation is gone (the room death watcher owns that
+/// story), and some paths log only the transient case.
+#[derive(Debug)]
+pub(crate) enum LinkFull<M> {
+    /// The link's bounded queue was full — the transient drop case.
+    Full { msg: M },
+    /// Nothing will ever dequeue from this link again (the peer's receive
+    /// end is gone).
+    Closed { msg: M },
+}
+
+impl<M> LinkFull<M> {
+    /// Take the refused message back out: the rollback path reads its
+    /// payload to restore exactly what the failed send would have
+    /// consumed.
+    fn into_msg(self) -> M {
+        match self {
+            LinkFull::Full { msg } | LinkFull::Closed { msg } => msg,
+        }
+    }
+}
+
+/// The shard↔neighbor communication contract (`docs/DISTRIBUTED.md`
+/// §3): unifies in-process channels with future UDS/TCP links behind one
+/// object-safe seam, so a distributed link can drop exactly where the
+/// in-process one drops and every existing recovery path keeps working
+/// unchanged. Send is BEST-EFFORT by design — delivery classes and
+/// healing rules live in the message semantics (§4), not in the link.
+/// Object-safe on purpose: the future Ipc/Net links will be separate
+/// types held as trait objects beside today's.
+pub(crate) trait ShardLink<S>: Send {
+    /// En-queue one message for the peer, best-effort: a full or dead
+    /// link refuses and hands the message BACK ([`LinkFull`]) — the
+    /// caller's healing rules decide what that loss means. Never blocks,
+    /// never awaits.
+    fn send(&mut self, msg: NeighborMsg<S>) -> Result<(), LinkFull<NeighborMsg<S>>>;
+
+    /// Take every queued inbound message, in send order (FIFO). The
+    /// CONTROL phase drains through here; an empty queue yields an empty
+    /// vec. Never blocks.
+    fn drain(&mut self) -> Vec<NeighborMsg<S>>;
+}
+
+/// The in-process [`ShardLink`] (`docs/DISTRIBUTED.md` §3, "today"
+/// column): wraps the existing bounded mpsc halves with ZERO transport
+/// behavior of its own — `send` is `try_send` mapped onto [`LinkFull`],
+/// `drain` is the plain `try_recv` loop — so capacity, FIFO order and
+/// drop timing are the channel's, unchanged from the pre-seam wiring.
+/// Either half may be absent: without a transmit end the link refuses
+/// sends (`Closed` — it accepts nothing by construction); without a
+/// receive end it delivers nothing. Both are total functions instead of
+/// panics so the same type serves every wiring (per-neighbor outbound
+/// slots, the actor's own inbound inbox, and the paired form tests use).
+pub(crate) struct InProcLink<S> {
+    /// The peer's mailbox (a clone of its shared per-shard inbox sender).
+    tx: Option<Mailbox<ShardMsg<S>>>,
+    /// This side's receive half. `None` on today's per-neighbor outbound
+    /// slots: their inbound traffic lands in the shard's OWN shared
+    /// inbox, whose link lives separately on the actor.
+    rx: Option<Inbox<ShardMsg<S>>>,
+}
+
+impl<S> InProcLink<S> {
+    /// Wrap one outbound per-neighbor mailbox: the actor sends into the
+    /// neighbor's shared inbox and never receives here.
+    fn outbound(tx: Mailbox<ShardMsg<S>>) -> Self {
+        Self {
+            tx: Some(tx),
+            rx: None,
+        }
+    }
+
+    /// Wrap the shard's own inbound inbox — the CONTROL drain's source,
+    /// carrying registry control AND neighbor protocol messages on one
+    /// bounded FIFO (registry.rs pass 1).
+    fn inbound(rx: Inbox<ShardMsg<S>>) -> Self {
+        Self {
+            tx: None,
+            rx: Some(rx),
+        }
+    }
+}
+
+impl<S: Send> ShardLink<S> for InProcLink<S> {
+    fn send(&mut self, msg: NeighborMsg<S>) -> Result<(), LinkFull<NeighborMsg<S>>> {
+        match &self.tx {
+            Some(tx) => tx.try_send(msg).map_err(|e| match e {
+                mpsc::error::TrySendError::Full(msg) => LinkFull::Full { msg },
+                mpsc::error::TrySendError::Closed(msg) => LinkFull::Closed { msg },
+            }),
+            // No transmit half: nothing was queued and nothing ever will
+            // be — the permanent refusal, not backpressure.
+            None => Err(LinkFull::Closed { msg }),
+        }
+    }
+
+    fn drain(&mut self) -> Vec<NeighborMsg<S>> {
+        let mut out = Vec::new();
+        if let Some(rx) = &mut self.rx {
+            while let Ok(m) = rx.try_recv() {
+                out.push(m);
+            }
+        }
+        out
+    }
+}
+
 /// The shard actor. Owns one shard's world, its player table (the
 /// shard's share of the room's members), and its group table — the
 /// same ownership discipline as the room actor (`RoomActor<W, G>`), plus
@@ -744,7 +897,12 @@ pub struct ShardActor<W, G, St> {
     world: W,
     logic: Box<dyn ShardLogic<W, GroupKey = G, State = St>>,
     tick_rx: broadcast::Receiver<TickInfo>,
-    shard_rx: Inbox<ShardMsg<St>>,
+    /// The shard's own inbound link over the shared per-shard inbox
+    /// (registry control AND neighbor protocol messages ride ONE bounded
+    /// FIFO — registry.rs pass 1). Held as a [`ShardLink`] so the CONTROL
+    /// drain crosses the seam: a future process-boundary deployment swaps
+    /// the transport without touching the tick body.
+    inbox: Box<dyn ShardLink<St>>,
     /// This shard's members, keyed by STABLE player identity (Faz 2 —
     /// same shape as the room actor; a resume or migration never re-keys
     /// this table).
@@ -794,8 +952,12 @@ pub struct ShardActor<W, G, St> {
     /// awaited source.
     last_tombstone_sweep: Option<u64>,
     groups: HashMap<G, GroupState>,
-    /// One mailbox per shard index (used for the neighbors' indices).
-    neighbors: Vec<Mailbox<ShardMsg<St>>>,
+    /// One outbound link per shard index (used for the neighbors'
+    /// indices) — [`InProcLink`] wrappers around exactly the mailboxes
+    /// passed in, moved not cloned, so queue capacity, FIFO order and
+    /// drop timing are the channel's, unchanged. Non-neighbor slots keep
+    /// their dummy senders (wrapped, never sent to).
+    links: Vec<Box<dyn ShardLink<St>>>,
     /// The borrowed boundary view per neighbor (the RECEIVER side of the
     /// delta protocol): persistent records built incrementally from
     /// Fulls/Deltas, with the expected-sequence guard per neighbor.
@@ -868,9 +1030,11 @@ where
 {
     /// Build a shard actor. `neighbors` is indexed by shard index (the
     /// unused slots may be any closed/unused mailbox — only the
-    /// `ShardLogic::neighbors()` slots are sent to). `result_sink` is the
-    /// logical room's match-result sink shared by all its shards (`None`
-    /// = this shard reports no result).
+    /// `ShardLogic::neighbors()` slots are sent to); each entry is
+    /// wrapped into an in-process [`ShardLink`] here, so the registry's
+    /// wiring shape is unchanged. `result_sink` is the logical room's
+    /// match-result sink shared by all its shards (`None` = this shard
+    /// reports no result).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RoomConfig,
@@ -919,14 +1083,18 @@ where
             world,
             logic,
             tick_rx,
-            shard_rx,
+            inbox: Box::new(InProcLink::inbound(shard_rx)),
             conns: HashMap::new(),
             binding: HashMap::new(),
             conn_epoch: HashMap::new(),
             conn_tombstone: HashMap::new(),
             last_tombstone_sweep: None,
             groups: HashMap::new(),
-            neighbors,
+            links: neighbors
+                .into_iter()
+                .map(InProcLink::outbound)
+                .map(|l| Box::new(l) as Box<dyn ShardLink<St>>)
+                .collect(),
             border: HashMap::new(),
             export: HashMap::new(),
             pending_out: Vec::new(),
@@ -1175,7 +1343,13 @@ where
                 return false;
             }
         }
-        while let Ok(m) = self.shard_rx.try_recv() {
+        // The drain itself crosses the ShardLink seam (`docs/DISTRIBUTED.md`
+        // §3). Pulling everything queued NOW into a vec and then handling is
+        // observably identical to the old interleaved `try_recv` loop:
+        // nothing in `handle_msg` enqueues into THIS shard's own inbox
+        // synchronously (sends go to neighbors' inboxes), and on Shutdown
+        // any leftovers die with the actor's inbox either way.
+        for m in self.inbox.drain() {
             if !self.handle_msg(m, &ctx) {
                 return false;
             }
@@ -1602,7 +1776,7 @@ where
                 // move (the Ok arm below); read before the send consumes
                 // the message.
                 let moving_conn = player.as_ref().map(|pm| pm.conn);
-                match self.neighbors[b].try_send(ShardMsg::Migrate {
+                match self.links[b].send(ShardMsg::Migrate {
                     from: self.index,
                     at_tick: t.tick,
                     wire: mig.wire,
@@ -1629,8 +1803,10 @@ where
                         }
                         self.pending_out.push((mig.wire, t.tick + 1));
                     }
-                    Err(mpsc::error::TrySendError::Full(msg)
-                    | mpsc::error::TrySendError::Closed(msg)) => {
+                    // The link refused and handed the message back — the
+                    // same value the raw TrySendError used to carry.
+                    Err(full) => {
+                        let msg = full.into_msg();
                         // Roll back the player's move (the entity stays;
                         // the row must remain registered and pull
                         // its input here until the retry lands) — including
@@ -1788,7 +1964,7 @@ where
                     )
                 };
                 attempts += 1;
-                match self.neighbors[*b].try_send(ShardMsg::Border {
+                match self.links[*b].send(ShardMsg::Border {
                     from: self.index,
                     exchange,
                 }) {
@@ -2246,9 +2422,14 @@ where
                             // slower.
                             view.stale_until_full = true;
                             s.resync_requests_sent += 1;
-                            if let Some(mail) = self.neighbors.get(from)
-                                && let Err(mpsc::error::TrySendError::Full(_)) =
-                                    mail.try_send(ShardMsg::ResyncRequest { from: self.index })
+                            // Only a FULL link logs: the transient case is
+                            // worth a line, a closed one means the peer
+                            // incarnation is gone and the death watcher
+                            // already owns that story.
+                            if let Some(link) = self.links.get_mut(from)
+                                && let Err(e) =
+                                    link.send(ShardMsg::ResyncRequest { from: self.index })
+                                && matches!(e, LinkFull::Full { .. })
                             {
                                 debug!(
                                     room = %self.config.id,
@@ -4080,6 +4261,78 @@ mod tests {
     // exactly (drop one message) and the resync traffic observed without
     // any network or timing dependence.
     // -----------------------------------------------------------------
+
+    // -----------------------------------------------------------------
+    // ShardLink seam structural locks (`docs/DISTRIBUTED.md` §3): the
+    // in-process link must be a TRANSPARENT wrapper — FIFO order
+    // preserved on drain, and a refused send hands the EXACT message back
+    // with no partial state (the migration rollback reads its payload out
+    // of the error alone).
+    // -----------------------------------------------------------------
+
+    /// Drive an [`InProcLink`] directly: FIFO order on drain; a send onto
+    /// a full link returns `LinkFull::Full` carrying the rejected message
+    /// without disturbing what is already queued; a drained link accepts
+    /// again; a link whose receive end is gone reports `Closed`.
+    #[test]
+    fn inproc_link_preserves_fifo_and_drop_semantics() {
+        let (tx, rx) = channel::<ShardMsg<TState>>(2);
+        let mut link = InProcLink {
+            tx: Some(tx),
+            rx: Some(rx),
+        };
+        // Fill to capacity, then one more: the third send must be refused
+        // whole — nothing of it queued.
+        for from in 0..2usize {
+            assert!(
+                link.send(ShardMsg::ResyncRequest { from }).is_ok(),
+                "send {from} onto an empty/capacity-2 link"
+            );
+        }
+        match link.send(ShardMsg::ResyncRequest { from: 2 }).unwrap_err() {
+            LinkFull::Full {
+                msg: ShardMsg::ResyncRequest { from },
+            } => assert_eq!(from, 2, "the EXACT refused message comes back"),
+            other => panic!("expected Full carrying the message, got {other:?}"),
+        }
+        // FIFO preserved and no partial state: exactly the two accepted
+        // sends, in order; the rejected third did not squeeze in.
+        let drained = link.drain();
+        assert_eq!(drained.len(), 2, "only the accepted sends deliver");
+        for (i, m) in drained.iter().enumerate() {
+            match m {
+                ShardMsg::ResyncRequest { from } => assert_eq!(*from, i),
+                other => panic!("unexpected message in drain: {other:?}"),
+            }
+        }
+        // An emptied link accepts again (the channel semantics, not a
+        // poisoned wrapper).
+        assert!(link.send(ShardMsg::ResyncRequest { from: 7 }).is_ok());
+        assert!(link.send(ShardMsg::ResyncRequest { from: 8 }).is_ok());
+        assert!(link.send(ShardMsg::ResyncRequest { from: 9 }).is_err());
+        let drained = link.drain();
+        assert_eq!(drained.len(), 2);
+        assert!(matches!(drained[0], ShardMsg::ResyncRequest { from: 7 }));
+        assert!(matches!(drained[1], ShardMsg::ResyncRequest { from: 8 }));
+        assert!(link.drain().is_empty(), "drain empties fully");
+
+        // Closed: a link whose receive end is gone refuses with `Closed`
+        // (not Full), still handing the message back; a send-only link's
+        // drain is simply empty.
+        let (tx, rx) = channel::<ShardMsg<TState>>(1);
+        drop(rx);
+        let mut dead = InProcLink {
+            tx: Some(tx),
+            rx: None,
+        };
+        match dead.send(ShardMsg::ResyncRequest { from: 5 }).unwrap_err() {
+            LinkFull::Closed {
+                msg: ShardMsg::ResyncRequest { from },
+            } => assert_eq!(from, 5),
+            other => panic!("expected Closed carrying the message, got {other:?}"),
+        }
+        assert!(dead.drain().is_empty());
+    }
 
     /// A TLogic for the border rig; its observation channels are dead
     /// (every send is `let _ =` ignored) — the tests read protocol state,
