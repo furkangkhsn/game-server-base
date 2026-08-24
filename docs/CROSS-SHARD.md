@@ -132,7 +132,52 @@ sürekli kirli kalacağından sessiz-tick tasarrufu da gider. Sonuç:
 tek odadan pahalı bir sharding. Border genişliği oyun-parametresidir
 (görüş menzili alt sınırı); dünya-genişliği paylaşıma dönüşmez.
 
-## 7. Ölçüm planı (önce veri)
+## 7. Ölçüm planı ve sonuçları (Faz 0 + C1 + C2 TAMAMLANDI)
+
+Enstrümantasyon: `ShardActor` üzerinde `BorderStats` (faz-5 duvar süresi,
+dışa aktarılan kayıt/byte, try_send drop; alıcı tarafında apply süresi) —
+~1 sn'de bir `border_exchange_summary` info! satırı. Ham loglar
+`target/border-baseline/` altında (SUMMARY.md, SUMMARY-C1.md,
+SUMMARY-C2.md, c1/c2.out/.err).
+
+### Ölçümler (release, orchestrator --procs 4 --pin, spread, 30 sn)
+
+| Koşu | Grid | İstemci | Hücre | Derinlik | rec/tick/shard | KB/tick/shard | faz-5 µs/tick |
+|---|---|---|---|---|---|---|---|
+| B1 | 2×2 | 2000 (500/sh) | 1000² | 250 | 568–680 | 9–11 | 1.0–1.2 |
+| B2alt | 2×2 | 4000 (1000/sh) | 1000² | 250 | 1212–1399 | 19–22 | 2.2–2.5 |
+| B2 | 2×2 | 8000 | 1000² | 250 | 2569–2790 | 41–45 | 5.5–5.8 |
+| C1 | 5×5 | 5000 (200/sh, sabit harita!) | 400² | 100 | ~495 (mean) | 7.9 | 3.0 |
+| C2 | 5×5 | 12500 (500/sh, **büyüyen dünya**) | 1000² | 250 | ~1193 (mean) | 19.1 | 5.1 (mean; iç shard 7.0) |
+
+### Bulgular
+
+1. **C1 (sabit harita, hücreler küçülür):** demo derinliği hücreyle
+   orantılı olduğundan (`min(cell)/4`) per-shard maliyet DÜŞER — model
+   `rec ≈ 0.75·(M/N)·komşu` iki baseline'ı gürültü payında tahmin eder.
+   Demo parametizasyonunda büyüme baskısı YOK.
+2. **C2 (dünya büyür, hücre sabit):** dış danışmanın öngörüleri
+   DOĞRULANDI — (A) exchange başına set boyu flat (~300–411 vs B1'in
+   ~322); (B) toplamlar komşu sayısıyla ölçeklenir (köşe/kenar/iç =
+   9.5/16.9/26.4 KB, yani ~2:3:4). Grid ortalaması 19.1 KB/tick/shard ≈
+   B1'in 1.8×'i (ort. komşu 3.2 vs 2).
+3. **Sistem tavanı:** 25 shard + 12.5k bağlantı 30 Hz'de stabil
+   (ticker fan-out 25 abone, lag yok; registry temiz). 25k istemci
+   loadgen'in client-decode duvarına çarptı (harness sınırı).
+4. **Gerçek-oyun ekstrapolasyonu:** sabit dünya-birimli görüş menzili
+   olan gerçek oyunlarda hücre küçüldükçe şerit hücrenin büyüyen
+   kesimini kapsar → C2'nin gördüğü komşu-sayısı büyümesine EK olarak
+   şerit-yoğunluğu büyümesi gelir; süreçler arası dağıtımda bu byte'lar
+   gerçek ağa çıkar. Delta'nın güçlü gerekçesi bu iki senaryodur;
+   in-process demo ölçeklerinde full-exchange kabul edilebilir kalır.
+
+### Karar
+
+Delta implementasyonu **şartlı onaylı**: tetikleyici senaryolar
+(büyük grid × yoğun şerit; dağıtım) gerçekleşene kadar branch
+açılmasın; §6.4'teki dört pin uygulama sözleşmesi olarak kalsın.
+Ölçüm altyapısı (`BorderStats`) main'de kalıcıdır — tetikleyici
+gerçekleştiğinde karşılaştırma aynı enstrümanla yapılır.
 
 1. **Faz 0 (main):** mevcut BORDER fazını enstrümante et — byte/tick,
    kayıt/tick, encode µs, send-drop sayacı; sharded senaryolarda ölç
