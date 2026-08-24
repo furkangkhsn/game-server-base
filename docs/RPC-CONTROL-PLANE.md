@@ -445,14 +445,19 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   `player` ve `room` (kancanın kimliği + sabitlediği oda).
 - **Hata kodları:** **10** (bilet hatası/timeout/eksik — normal ret),
   **11** (join ≠ biletin odası — normal ret).
-- **Sharded odalar:** bu turda **RPC'siz** (shard tick yolu değişmedi;
-  bkz. §11).
+- **Sharded odalar:** bu turda RPC'sizdiler; sonrasında **kapatıldı** —
+  shard actor'ü odanın makinesinin tam karşılığını taşıyor (pending set +
+  cap'ler + timeout sweep + completion uzlaşması; `TRAIT-ARCHITECTURE.md`
+  Faz 3). Bağlantı-anahtarlı pending, resume semantiğini (§11) korur;
+  match_result shard başına bir payload üretir (adaptör birleştirir).
 
 ## 11. Bu turda YAPILMAYANLAR (NOT-DONE)
 
-- **Sharded oda RPC'si:** shard tick gövdesinde istek fazı yok
+- **Sharded oda RPC'si:** shard tick gövdesinde istek fazı yoktu
   (shard'lar `ShardLogic` üzerinden; RPC deseni tek-oda actor
-  topolojisi için tasarlandı).
+  topolojisi için tasarlanmıştı) — **sonradan kapatıldı**: yukarıdaki
+  §10 notu ve `TRAIT-ARCHITECTURE.md` Faz 3; shard süit kilidi
+  `crates/gsb-core/tests/rpc_shard.rs`.
 - **Gerçek bilet doğrulayıcıları:** base yalnız kancayı ve e2e demo
   doğrulayıcılarını taşır (platform davranışı platformdadır).
 - **NATS/Kafka/gRPC adapter'ları:** yalnız in-proc referans

@@ -554,6 +554,11 @@ fn pvs_room_factory(
 /// and N `ShardLogic` instances (the grid topology is the room's business,
 /// the registry just wires the channels).
 ///
+/// `economy` is the same ONE service-per-server the demo rooms share
+/// (cloned into every shard — the Faz 3 promotion gives the sharded path
+/// the RPC machinery, so its `ECONOMY` requests delegate like any other
+/// room's).
+///
 /// `home_shard` routes a join to the shard owning the joiner's *spawn*
 /// position (the deterministic `spawn_pos` → the grid region of that
 /// point). The router is pure and synchronous (no await) — the registry
@@ -562,6 +567,7 @@ fn sharded_room_factory(
     spawn_half: f32,
     shard_count: usize,
     disconnect_grace: std::time::Duration,
+    economy: gsb_game::economy::EconomyService,
 ) -> RoomFactory<World, (), gsb_game::sharded::ShardedRoomState> {
     Arc::new(move |_id, _config| {
         let shards: Vec<gsb_core::registry::Shard<World, (), gsb_game::sharded::ShardedRoomState>> =
@@ -571,7 +577,8 @@ fn sharded_room_factory(
                         World::new(),
                         Box::new(
                             gsb_game::sharded::ShardedRoom::new(i, shard_count, spawn_half)
-                                .with_disconnect_grace(disconnect_grace),
+                                .with_disconnect_grace(disconnect_grace)
+                                .with_economy(economy.clone()),
                         )
                             as Box<
                                 dyn gsb_core::shard::ShardLogic<
@@ -774,18 +781,31 @@ async fn start_inner(
         }
         Visibility::Sharded => {
             let disconnect_grace = grace_of(&cfg);
+            // One economy service per server, shared with the shards (the
+            // Faz 3 promotion: the sharded path runs the full RPC
+            // machinery, so `ECONOMY` requests delegate exactly like the
+            // single-room demo's).
+            let economy = gsb_game::economy::EconomyService::spawn(
+                gsb_game::economy::EconomyService::default_latency(),
+            );
             tokio::spawn(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    sharded_room_factory(cfg.spawn_half_size, cfg.shard_count as usize, disconnect_grace),
+                    sharded_room_factory(
+                        cfg.spawn_half_size,
+                        cfg.shard_count as usize,
+                        disconnect_grace,
+                        economy,
+                    ),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
-                    // Sharded rooms do not run the RPC/result machinery yet
-                    // (the pending state lives in the single-room actor):
-                    // their shards report no match result this turn.
-                    None,
+                    // Faz 3: every shard reports ITS final state through
+                    // the shared sink at its own teardown — one payload
+                    // per shard under the logical room id (the adapter
+                    // concatenates/filters; see `gsb_core::shard`).
+                    Some(result_tx.clone()),
                 )
                 .run(),
             )

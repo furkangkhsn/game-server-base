@@ -116,10 +116,9 @@ impl GameLogic<()> for RpcLogic {
     fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, _a: &mut Vec<Action>) {}
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
-}
 
-// Faz 1 trait split: the room-exclusive request seam stays on `RoomLogic`.
-impl RoomLogic<()> for RpcLogic {
+    // Faz 3 trait split: the request seam lives on the shared
+    // `GameLogic` supertrait (the shard actor runs it too).
     fn handle_request(
         &mut self,
         _w: &mut (),
@@ -161,6 +160,10 @@ impl RoomLogic<()> for RpcLogic {
         }
     }
 }
+
+// Faz 3 promotion: `handle_request` moved to `GameLogic`; this impl stays
+// as the single-room marker.
+impl RoomLogic<()> for RpcLogic {}
 
 struct Harness {
     tick_tx: broadcast::Sender<TickInfo>,

@@ -85,10 +85,7 @@ impl GameLogic<FirstSeen> for RecorderLogic {
 
     fn update(&mut self, _w: &mut FirstSeen, _c: &TickCtx) {}
 
-}
-
-// Faz 1 trait split: the room-exclusive result seam stays on `RoomLogic`.
-impl RoomLogic<FirstSeen> for RecorderLogic {
+    // Faz 3: the result seam lives on the shared `GameLogic` supertrait.
     /// `[n: u32 LE]` then n × `[conn: u64 LE][first_tick: u64 LE]`.
     fn match_result(&mut self, w: &mut FirstSeen) -> Option<bytes::Bytes> {
         let mut buf = bytes::BytesMut::new();
@@ -100,6 +97,10 @@ impl RoomLogic<FirstSeen> for RecorderLogic {
         Some(buf.freeze())
     }
 }
+
+// Faz 3 promotion: `match_result` moved to `GameLogic`; this impl stays
+// as the single-room marker.
+impl RoomLogic<FirstSeen> for RecorderLogic {}
 
 struct Harness {
     tick_tx: broadcast::Sender<TickInfo>,

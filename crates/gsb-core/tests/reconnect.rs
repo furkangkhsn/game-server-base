@@ -220,10 +220,8 @@ impl GameLogic<()> for ParkLogic {
     }
 
     fn update(&mut self, _w: &mut (), _ctx: &TickCtx) {}
-}
 
-// Faz 1 trait split: the room-exclusive request seam stays on `RoomLogic`.
-impl RoomLogic<()> for ParkLogic {
+    // Faz 3: the request seam lives on the shared `GameLogic` supertrait.
     fn handle_request(
         &mut self,
         _w: &mut (),
@@ -242,6 +240,10 @@ impl RoomLogic<()> for ParkLogic {
         )))
     }
 }
+
+// Faz 3 promotion: `handle_request` moved to `GameLogic`; this impl stays
+// as the single-room marker.
+impl RoomLogic<()> for ParkLogic {}
 
 // =====================================================================
 // Manual-ticker room harness (read_fairness.rs idiom): the metrics
@@ -1456,6 +1458,7 @@ mod shard_test {
                     vec![dummy.clone(), tx1.clone()],
                     1,
                     m0,
+                    None, // no result sink in the reconnect harness
                 )
                 .run(),
             );
@@ -1470,6 +1473,7 @@ mod shard_test {
                     vec![tx0.clone(), dummy],
                     1,
                     m1,
+                    None, // no result sink in the reconnect harness
                 )
                 .run(),
             );

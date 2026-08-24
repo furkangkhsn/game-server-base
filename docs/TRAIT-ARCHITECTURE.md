@@ -91,7 +91,7 @@ result-sink makinesi de gerekir. Bu iki ayrı iştir:
 |---|---|---|
 | 1 | `GameLogic` supertrait + Room/Shard uzantıları; keepalive terfisi (shard actor kadansı dahil); gsb-game impl'lerinin bölünmesi | BU TUR |
 | 2 | PlayerId + bağlama tablosu; RebindKey küçültmesi | ✅ Kapatıldı — tablolar PlayerId'e geçti, resume tek bağlama satırı güncelliyor (§5 tamamlandı); `pending`/`queued` ve shard epoch/tombstone tabloları BY DESIGN conn-anahtarlı kaldı (oturum-kapsamlı; kod içi signpost'larda CHECKED) |
-| 3 | Shard-RPC + match-result makinesi | Planlı |
+| 3 | Shard-RPC + match-result makinesi | ✅ Kapatıldı — shard actor'ü odanın RPC makinesinin tam karşılığını taşıyor (pending/cap/sweep/uzlaşma + private yanıtları); `handle_request`/`match_result` GameLogic'e terfi etti; match_result shard başına bir payload üretir. Kilitler: `tests/rpc_shard.rs` (8 test) |
 
 ## 7. Test stratejisi
 

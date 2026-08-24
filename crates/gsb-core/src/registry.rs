@@ -732,6 +732,11 @@ where
                             txs[i].clone(),
                             run_every,
                             self.metrics.clone(),
+                            // Faz 3: every shard of a logical room shares
+                            // this room's match-result sink; each reports
+                            // its own final state at ITS teardown (one
+                            // payload per shard — see `crate::shard`).
+                            self.result_sink.clone(),
                         )
                         .run(),
                     );

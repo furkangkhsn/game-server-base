@@ -753,35 +753,11 @@ pub trait GameLogic<W>: Send {
     /// Called when the room shuts down (world is dropped right after).
     fn on_shutdown(&mut self) {}
 
-    /// The number of entity records the logic encoded during the most
-    /// recent broadcast phase (summed over all groups). The room polls
-    /// this exactly **once per step, immediately after the broadcast
-    /// phase** (it is the broadcast phase's own metric: the payload is
-    /// opaque to the core, so the record count can only come from the
-    /// logic that encoded it).
-    ///
-    /// This is the *overlap* measurement the load test reports: divided by
-    /// the broadcastable entity count it says how many times the same
-    /// entity was encoded into how many groups' snapshots in one tick
-    /// (1.0 for one-group rooms; up to the block overlap for cell AOI; the
-    /// visibility-table out-degree for PVS). Default: `0` (untracked) —
-    /// the core's own test logics need not implement it.
-    fn encoded_records(&mut self) -> u64 {
-        0
-    }
-}
-
-/// Game-side behaviour of a SINGLE-ROOM actor: everything [`GameLogic`]
-/// shares, plus the room-exclusive request/result seams. The shard-side
-/// counterparts — the shard-RPC pending set + sweep and the match-result
-/// sink — need actor machinery the shard does not run yet; they are the
-/// Faz 3 promotion (`docs/TRAIT-ARCHITECTURE.md` §4), not trait surface.
-pub trait RoomLogic<W>: GameLogic<W> {
     /// Handle one correlated request (the RPC pattern; see `crate::rpc`
     /// for the contract: id space, ordering, caps, timeouts).
     ///
     /// The request is guaranteed to belong to a connection that is in
-    /// the room (the room only pulls actions of registered connections)
+    /// the room (the actor only pulls actions of registered connections)
     /// and to carry a decodable base envelope with `id != 0` (the core
     /// rejects the malformed/uncorrelable cases before this call). The
     /// logic decides the request's fate:
@@ -805,6 +781,14 @@ pub trait RoomLogic<W>: GameLogic<W> {
     /// Default: `None` (a logic without request support gets a
     /// "no handler" answer for every request — no behaviour change for
     /// existing games, whose requests were previously ignored).
+    ///
+    /// Why this lives on the SHARED supertrait (Faz 3,
+    /// `docs/TRAIT-ARCHITECTURE.md` §4): the method only gives a shard
+    /// logic the *possibility* of answering requests; making it *work*
+    /// needed the actor machinery (pending set, sweep, completion
+    /// channel) on [`crate::shard::ShardActor`] — which now runs it with
+    /// the same contract as [`RoomActor`]. One method, one decision
+    /// vocabulary, two actors.
     fn handle_request(
         &mut self,
         _world: &mut W,
@@ -814,9 +798,9 @@ pub trait RoomLogic<W>: GameLogic<W> {
         None
     }
 
-    /// The match result to report through the room's result sink when the
-    /// room shuts down (any shutdown: a control-plane destroy, a server
-    /// stop). The room calls this after [`GameLogic::on_shutdown`], right
+    /// The match result to report through the actor's result sink when it
+    /// shuts down (any shutdown: a control-plane destroy, a server stop).
+    /// The actor calls this after [`GameLogic::on_shutdown`], right
     /// before the world is dropped, passing the world (mutably — a
     /// final-state query, e.g. bevy's `Query`, needs it) so the logic can
     /// compute the result from final state without having cached it
@@ -825,13 +809,46 @@ pub trait RoomLogic<W>: GameLogic<W> {
     ///
     /// Delivery is best-effort (a bounded sink, a synchronous
     /// `try_send`): a full or gone sink drops the result and warns —
-    /// a slow result consumer must not stall the room's teardown.
+    /// a slow result consumer must not stall the teardown.
     ///
-    /// Default: no result.
+    /// Sharded rooms: EVERY shard calls this on its own teardown and
+    /// reports through the SAME sink under the same logical room id, so
+    /// one logical room yields one payload PER SHARD (the platform's
+    /// adapter concatenates/filters; nothing was added to the wire — see
+    /// `crate::shard`). Default: no result.
     fn match_result(&mut self, _world: &mut W) -> Option<bytes::Bytes> {
         None
     }
+
+    /// The number of entity records the logic encoded during the most
+    /// recent broadcast phase (summed over all groups). The room polls
+    /// this exactly **once per step, immediately after the broadcast
+    /// phase** (it is the broadcast phase's own metric: the payload is
+    /// opaque to the core, so the record count can only come from the
+    /// logic that encoded it).
+    ///
+    /// This is the *overlap* measurement the load test reports: divided by
+    /// the broadcastable entity count it says how many times the same
+    /// entity was encoded into how many groups' snapshots in one tick
+    /// (1.0 for one-group rooms; up to the block overlap for cell AOI; the
+    /// visibility-table out-degree for PVS). Default: `0` (untracked) —
+    /// the core's own test logics need not implement it.
+    fn encoded_records(&mut self) -> u64 {
+        0
+    }
 }
+
+/// Game-side behaviour of a SINGLE-ROOM actor. Faz 3 promoted the two
+/// request/result seams ([`GameLogic::handle_request`] /
+/// [`GameLogic::match_result`]) onto the SHARED supertrait, so this
+/// subtrait no longer adds methods — it remains the compile-time marker
+/// that a logic is built for the single-room actor (the same
+/// deliberate-subtrait discipline the shard side keeps with its topology
+/// hooks; `docs/TRAIT-ARCHITECTURE.md` §3). The RPC/result MACHINERY
+/// (pending set, sweep, completion channel, sink) is actor-side state,
+/// not trait surface: [`RoomActor`] and [`crate::shard::ShardActor`]
+/// each run their own copy of it.
+pub trait RoomLogic<W>: GameLogic<W> {}
 
 /// Per-player row of the room (or shard) member table. `pub(crate)`
 /// because the shard actor reuses the same table shape (a shard's `conns`

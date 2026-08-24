@@ -213,7 +213,7 @@ pub struct SectorRoom {
     /// without re-querying the world.
     buckets: HashMap<Sector, Vec<(u64, i32, i32)>>,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_ack`).
+    /// `crate::common::ingest` / `emit_private`).
     input: HashMap<PlayerId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).

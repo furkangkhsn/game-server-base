@@ -134,7 +134,7 @@ pub struct DemoRoom {
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
     /// Per-player input sequence state (high-water mark + last ack;
-    /// see `crate::common::ingest` / `emit_ack`). Strategy-independent:
+    /// see `crate::common::ingest` / `emit_private`). Strategy-independent:
     /// every room numbers and acknowledges its clients' input the same
     /// way (the client's prediction reconciliation does not care which
     /// visibility strategy the server picked).
@@ -442,10 +442,7 @@ impl GameLogic<World> for DemoRoom {
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::run_systems(&mut self.runner, world, ctx);
     }
-}
 
-// Faz 1 trait split: the room-exclusive seams (RPC + match result).
-impl RoomLogic<World> for DemoRoom {
     /// The demo's two request kinds (the RPC pattern's two halves, see
     /// `game.proto`):
     ///
@@ -578,6 +575,11 @@ impl RoomLogic<World> for DemoRoom {
         Some(out.freeze())
     }
 }
+
+// Faz 3 trait promotion: `handle_request` / `match_result` moved onto the
+// shared `GameLogic` supertrait above; this impl remains the compile-time
+// marker that DemoRoom targets the single-room actor.
+impl RoomLogic<World> for DemoRoom {}
 
 #[cfg(test)]
 mod tests {

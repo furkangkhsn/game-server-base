@@ -53,11 +53,13 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
+use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
 use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
+use crate::economy::EconomyService;
 use crate::op;
 use crate::room::spawn_pos;
 
@@ -196,10 +198,16 @@ pub struct ShardedRoom {
     /// Entity records encoded during the most recent broadcast phase.
     encoded: u64,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_ack`). The session stays bound to
+    /// `crate::common::ingest` / `emit_private`). The session stays bound to
     /// this shard even if its entity migrates (its input is routed
     /// through this shard's room), so the session lives here.
     input: HashMap<PlayerId, crate::common::InputState>,
+    /// The economy service handle (the RPC pattern's external-I/O half on
+    /// the SHARDED path — Faz 3; see `crate::economy`); `None` = this
+    /// shard answers `ECONOMY` requests with a normal "not configured"
+    /// rejection. One service per server, shared by clone with every
+    /// shard (the platform's economy is not a per-shard thing).
+    economy: Option<EconomyService>,
 }
 
 impl ShardedRoom {
@@ -246,6 +254,7 @@ impl ShardedRoom {
             last: HashMap::new(),
             encoded: 0,
             input: HashMap::new(),
+            economy: None,
         }
     }
 
@@ -256,6 +265,16 @@ impl ShardedRoom {
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
+        self
+    }
+
+    /// Attach the economy service handle (the RPC pattern's external-I/O
+    /// half on the sharded path — Faz 3; see [`Self::economy`]). Builder-
+    /// style, like [`crate::room::DemoRoom::with_economy`]; every shard of
+    /// a room gets a clone of the ONE server-wide service.
+    #[must_use]
+    pub fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.economy = Some(economy);
         self
     }
 
@@ -524,20 +543,20 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     /// The per-connection private frame: the pending input
-    /// acknowledgment (Section A) — the shard's snapshots are full,
-    /// self-contained (one group per shard), so there is nothing
-    /// per-connection to deliver besides the ack.
+    /// acknowledgment (Section A) and this tick's queued RPC answers
+    /// (Faz 3 — same-tick local replies plus later-tick worker reports /
+    /// timeout sweeps; the shard actor queues them per session). The
+    /// shard's snapshots are full, self-contained (one group per shard),
+    /// so there is nothing else per-connection to deliver.
     fn private(
         &mut self,
         _world: &mut World,
         player: PlayerId,
         _group: &(),
-        // The shard actor passes none today: the pending set and the
-        // completion sweep are room-actor machinery (Faz 3 promotion).
-        _responses: &[gsb_core::rpc::RpcReply],
+        responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_ack(&mut self.input, player, out)
+        crate::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -579,6 +598,128 @@ impl GameLogic<World> for ShardedRoom {
                 });
             }
         }
+    }
+
+    /// The demo's two request kinds on the SHARDED path (Faz 3 — the same
+    /// contract as [`crate::room::DemoRoom::handle_request`], resolved
+    /// against THIS shard's world):
+    ///
+    /// - `ABILITY` (room-local): range check + a real world mutation (the
+    ///   entity gets a `MoveTarget`), answered in the same tick's private
+    ///   frame. The requester is looked up by its STABLE player id, so a
+    ///   session that resumed onto this shard resolves identically.
+    /// - `ECONOMY` (external I/O): delegated to the economy service via
+    ///   an owning future; the shard actor registers it pending and the
+    ///   answer rides a later tick's private path. A migration of the
+    ///   requesting session mid-flight drops its pending state at
+    ///   migrate-out (`gsb_core::shard` module docs) — the answer is
+    ///   forfeited by design, exactly like a detach.
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        _ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<RequestDecision> {
+        match req.op {
+            op::ABILITY => {
+                let Ok(use_msg) = <crate::game::AbilityUse as Message>::decode(&req.payload[..])
+                else {
+                    return Some(RequestDecision::Reject(
+                        "undecodable AbilityUse payload".into(),
+                    ));
+                };
+                let Some(entity) = self.player_entity.get(&req.player).copied() else {
+                    return Some(RequestDecision::Reject("no entity for this connection".into()));
+                };
+                let Ok(he) = world.get_entity(entity) else {
+                    return Some(RequestDecision::Reject("entity already gone".into()));
+                };
+                let Some(pos) = he.get::<Position>().copied() else {
+                    return Some(RequestDecision::Reject("entity has no position".into()));
+                };
+                let dx = use_msg.x as f32 - pos.x;
+                let dy = use_msg.y as f32 - pos.y;
+                const RANGE: f32 = 10.0;
+                if dx * dx + dy * dy > RANGE * RANGE {
+                    return Some(RequestDecision::Reject(format!(
+                        "target out of range ({} > {RANGE})",
+                        (dx * dx + dy * dy).sqrt()
+                    )));
+                }
+                world
+                    .entity_mut(entity)
+                    .insert(MoveTarget { x: use_msg.x as f32, y: use_msg.y as f32 });
+                let res = crate::game::AbilityResult {
+                    ok: true,
+                    reason: String::new(),
+                };
+                Some(RequestDecision::Reply(res.encode_to_vec().into()))
+            }
+            op::ECONOMY => {
+                let Ok(buy) = <crate::game::BuyItem as Message>::decode(&req.payload[..]) else {
+                    return Some(RequestDecision::Reject("undecodable BuyItem payload".into()));
+                };
+                let Some(economy) = self.economy.clone() else {
+                    return Some(RequestDecision::Reject(
+                        "economy service not configured".into(),
+                    ));
+                };
+                // An OWNING future (a cheap sender clone inside): borrows
+                // nothing from the shard (the `External` contract).
+                let fut = async move {
+                    match economy.buy(buy.kind).await {
+                        Ok(price) => {
+                            let res = crate::game::BuyResult {
+                                ok: true,
+                                reason: String::new(),
+                                price,
+                            };
+                            Ok(res.encode_to_vec().into())
+                        }
+                        Err(reason) => Err(reason),
+                    }
+                };
+                Some(RequestDecision::External(Box::pin(fut)))
+            }
+            // Not a request op this logic handles: the core answers with
+            // a normal "no handler" rejection.
+            _ => None,
+        }
+    }
+
+    /// This shard's match result (the Faz 3 promotion; the per-shard
+    /// sibling of [`crate::room::DemoRoom::match_result`]): the FINAL
+    /// snapshot of this shard's own region at teardown. One logical room
+    /// therefore yields one such payload PER SHARD through the shared
+    /// sink (all under the logical room id — the platform adapter
+    /// concatenates/filters); the shards' ranges are disjoint, so the
+    /// concatenated entity set is collision-free by construction.
+    fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
+        let mut entities: Vec<crate::game::EntityRecord> = Vec::new();
+        {
+            let mut query = world.query::<(&WireId, &Position)>();
+            for (wire_id, pos) in query.iter(world) {
+                entities.push(crate::game::EntityRecord {
+                    entity: wire_id.get(),
+                    x: pos.x as i32,
+                    y: pos.y as i32,
+                });
+            }
+        }
+        entities.sort_by_key(|e| e.entity);
+        let snap = crate::game::WorldSnapshot {
+            // The shutdown snapshot has no live ticker: sequence 0 marks
+            // "terminal" (live snapshots are strictly positive ticks).
+            sequence: 0,
+            entities,
+            removed: Vec::new(),
+            cell_exits: Vec::new(),
+            delta: false,
+        };
+        let mut out = bytes::BytesMut::new();
+        snap.encode(&mut out)
+            .expect("protobuf encode into an in-memory buffer failed");
+        Some(out.freeze())
     }
 }
 

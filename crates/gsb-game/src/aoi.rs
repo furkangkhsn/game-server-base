@@ -379,7 +379,7 @@ pub struct AoiRoom {
     /// configuration, not a strategy decision.
     spawn_half: f32,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_ack`).
+    /// `crate::common::ingest` / `emit_private`).
     input: HashMap<PlayerId, crate::common::InputState>,
     /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the

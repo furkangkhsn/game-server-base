@@ -58,7 +58,7 @@ pub(crate) fn next_serial(next_wire_id: &mut u64) -> WireId {
 }
 
 /// Per-connection input sequence state (shared by all rooms; see
-/// [`ingest`] and [`emit_ack`]).
+/// [`ingest`] and [`emit_private`]).
 ///
 /// `hwm` is the highest input sequence this connection has *processed*
 /// (the high-water mark); `acked` is the highest sequence already
@@ -198,26 +198,6 @@ pub(crate) fn ingest(
     }
 }
 
-/// Emit this connection's pending input acknowledgment as the `Private`
-/// frame payload into `out` (returning `true` when a frame was
-/// produced), advancing `acked`. Called from each room's `private`
-/// seam — the per-tick, per-connection slot of the batch — so the ack
-/// rides the SAME delivery as that tick's group snapshot (no extra send,
-/// no extra await: the tick body stays synchronous).
-///
-/// The ack is emitted only on the ticks in which `hwm` advanced past the
-/// last ack (not every tick): a few bytes per advanced tick, zero
-/// otherwise. The mark is monotonic and can never exceed the highest
-/// processed seq (it IS that seq), so the client's reconciliation
-/// ("everything up to N is applied; re-apply N+1, N+2, …") is sound.
-pub(crate) fn emit_ack(
-    input: &mut HashMap<PlayerId, InputState>,
-    player: PlayerId,
-    out: &mut bytes::BytesMut,
-) -> bool {
-    emit_private(input, player, &[], out)
-}
-
 /// Emit this connection's private frame for the tick: the pending input
 /// acknowledgment (the `ack` oneof) and/or the connection's queued RPC
 /// answers (the `responses` repeated field, see `gsb_core::rpc`), as ONE
@@ -228,9 +208,11 @@ pub(crate) fn emit_ack(
 /// Returns `true` when a frame was produced. The ack part advances
 /// `acked` only when emitted (the mark is the highest processed seq, so
 /// the client's reconciliation stays sound); the responses are delivered
-/// exactly once (the room's queue is drained per tick — see the core's
+/// exactly once (the actor's queue is drained per tick — see the core's
 /// fan-out) and the logic decides their order (arrival order within the
-/// tick, per the `gsb_core::rpc` contract).
+/// tick, per the `gsb_core::rpc` contract). Passing an empty `responses`
+/// slice is the ack-only form (the pre-Faz-3 shape every room had before
+/// the shard actor gained its RPC machinery).
 pub(crate) fn emit_private(
     input: &mut HashMap<PlayerId, InputState>,
     player: PlayerId,

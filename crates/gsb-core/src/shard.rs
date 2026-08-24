@@ -18,23 +18,37 @@
 //! `home_shard` function the factory supplies), and never awaits a shard
 //! (its only interaction is channel sends — the same discipline as rooms).
 //!
-//! ## The tick body (six phases, synchronous)
+//! ## The tick body (synchronous, with the Faz 3 RPC phases)
 //!
 //! ```text
-//! Phase 0  │  CONTROL:  drain the shard channel: Join / Leave / Migrate /
-//!           │           Border / Shutdown (try_recv — non-blocking)
-//! Phase 1  │  READ:     pull actions from each connection's channel
-//!           │           (same bounded pull as the room)
-//! Phase 2  │  CONVERT:  actions → component writes (ShardLogic)
-//! Phase 3  │  SYSTEMS:  run the ordered game systems (ShardLogic)
-//! Phase 4  │  MIGRATE:  despawn the entities marked out last tick; then,
-//!           │           for each neighbor, collect the entities that moved
-//!           │           into the neighbor's region and send them over
-//!           │           (full state + the player's moved channels)
-//! Phase 5  │  BORDER:   export this shard's boundary entities (full
-//!           │           state, idempotent) to every neighbor
-//! Phase 6  │  BROADCAST: one snapshot per group, including the borrowed
-//!           │           boundary entities (see below)
+//! Phase 0   │  CONTROL:  drain the shard channel: Join / Leave / Migrate /
+//!           │            Border / Shutdown (try_recv — non-blocking)
+//! Phase 0b  │  RPC:      drain worker completions (try_recv), reconcile
+//!           │            against the pending set; sweep expired pending
+//!           │            requests (timeout answers) — see `crate::rpc`
+//! Phase 0c  │  DETACH:   detach-hold sweep (the room's mirror)
+//! Phase 1   │  READ:     pull actions from each connection's channel
+//!           │            (same bounded pull as the room)
+//! Phase 1.5 │  BINDING:  translate each action's conn → PlayerId
+//! Phase 2a  │  SPLIT:    carve the base-band RPC_REQ envelopes out of the
+//!           │            pulled actions (in order — all fire-and-forget
+//!           │            actions of the tick ingest BEFORE any request is
+//!           │            handed to `handle_request`)
+//! Phase 2b  │  CONVERT:  actions → component writes (ShardLogic::ingest)
+//! Phase 2c  │  REQUESTS: correlated requests → Reply/Reject/External;
+//!           │            an External registers pending (caps checked) and
+//!           │            spawns a worker task reporting to the completion
+//!           │            channel of 0b
+//! Phase 3   │  SYSTEMS:  run the ordered game systems (ShardLogic)
+//! Phase 4   │  MIGRATE:  despawn the entities marked out last tick; then,
+//!           │            for each neighbor, collect the entities that moved
+//!           │            into the neighbor's region and send them over
+//!           │            (full state + the player's moved channels)
+//! Phase 5   │  BORDER:   export this shard's boundary entities (full
+//!           │            state, idempotent) to every neighbor
+//! Phase 6   │  BROADCAST: one snapshot per group, including the borrowed
+//!           │            boundary entities, plus each connection's private
+//!           │            frame carrying this tick's queued RPC answers
 //! ```
 //!
 //! ## Migration protocol (exactly-once ownership per tick index)
@@ -178,6 +192,42 @@
 //! reports under a derived id `room << 16 | index` (the sub-space above
 //! real room ids; the load generator aggregates the shards of one logical
 //! room).
+//!
+//! ## Shard-RPC and match-result (the Faz 3 promotion)
+//!
+//! Each shard runs the full `crate::rpc` machinery with the SAME contract
+//! as the room actor — pending set + timeout sweep in CONTROL (0b),
+//! completion channel drained non-blockingly, answers queued into the
+//! per-connection private frame, caps from the shared `RoomConfig` fields.
+//! Three shapes differ from the single-room actor, resolved here:
+//!
+//! - **Pending state is CONN-keyed** (`pending` / `queued` keyed by the
+//!   transport session), exactly like the room's. The alternative —
+//!   keying by the stable [`PlayerId`] — was rejected: it would CHANGE
+//!   the RECONNECT §11 semantics ("a resumed session never inherits its
+//!   dead session's in-flight work"). A session that dies (detach, leave,
+//!   rejoin) drops its pending budget with the binding row; a resumed
+//!   player starts with a fresh budget on a fresh conn key, which is the
+//!   documented room behavior shards must mirror. Correlation ids are
+//!   client-assigned PER CONNECTION anyway, so a player-keyed table would
+//!   mix two sessions' id spaces under one key.
+//! - **Migration drops the migrating session's request state** at
+//!   migrate-out (the same §11 posture as detach): the worker future was
+//!   spawned by the SENDING shard and reports to ITS completion channel;
+//!   carrying pending entries across would need worker-report forwarding
+//!   between actors (new machinery for zero client-visible gain — the
+//!   request was already answered-with-silence by the move). The stale
+//!   report lands late on the sending shard and is counted
+//!   `requests_late`; the player re-requests on the receiving shard.
+//! - **match_result fires per shard at that shard's teardown**: each
+//!   shard reports through the shared sink under the same logical room id,
+//!   so ONE logical room yields one payload PER SHARD (the platform
+//!   adapter concatenates/filters). Nothing was added to the wire or to
+//!   [`crate::registry::MatchResult`]. Rejected alternative: suppressing
+//!   match_result for sharded rooms entirely (an explicit NOT-DONE) —
+//!   rejected because the seam already exists end to end and per-shard
+//!   final state is strictly more information than none; the adapter-side
+//!   aggregation is trivial (filter by room, concatenate payloads).
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -186,6 +236,7 @@ use std::hash::Hash;
 use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
+use prost::Message;
 use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
@@ -196,6 +247,7 @@ use crate::room::{
     Action, Detach, ExpireTo, GameLogic, GroupState, ResumeFound, RoomConn, RoomConfig,
     RoomCounters, TickCtx,
 };
+use crate::rpc::{Completion, PendingRequest, RpcReply, RpcRequest, RPC_REQ_OP, TIMEOUT_REASON};
 use crate::ticker::TickInfo;
 
 /// Identities per shard in the wire-id range partitioning (see module
@@ -524,6 +576,38 @@ pub struct ShardActor<W, G, St> {
     budget_us: u64,
     m: RoomCounters,
     metrics: mpsc::Sender<MetricsEvent>,
+    // -- Shard-RPC (the Faz 3 promotion; see `crate::rpc` and the module
+    //    docs, "Shard-RPC and match-result"): byte-for-byte the room
+    //    actor's state shape. -------------------------------------------
+    /// In-flight external requests, per TRANSPORT SESSION (conn-keyed BY
+    /// DESIGN — see the module docs: a resumed session must not inherit
+    /// its dead session's in-flight work). FIFO per conn: deadlines are
+    /// non-decreasing, so only the head can expire. This shard is the
+    /// single authority on "is this request still pending" for the
+    /// sessions it owns.
+    pending: HashMap<ConnectionId, VecDeque<PendingRequest>>,
+    /// Total in-flight external requests on this shard (the shard-wide
+    /// cap; the config fields are shared with the room actor).
+    pending_total: usize,
+    /// This tick's queued RPC answers per transport session; drained in
+    /// the broadcast phase (handed to the logic's `private`) and emptied.
+    /// Cleared with the SESSION on leave/rejoin/detach/migrate-out.
+    queued: HashMap<ConnectionId, Vec<RpcReply>>,
+    /// Per-tick scratch for the rare path of the broadcast's RPC-answer
+    /// hand-off; a field so its capacity survives across ticks.
+    replies_buf: Vec<RpcReply>,
+    /// Worker reports: this shard's inbox for delegated-request outcomes
+    /// (drained non-blockingly in the 0b phase — no new await).
+    completions: Inbox<Completion>,
+    /// The sender half of the completion channel, cloned to each spawned
+    /// worker (bounded at the shard-wide pending cap — a completion burst
+    /// cannot exceed the number of in-flight workers).
+    completions_tx: Mailbox<Completion>,
+    /// This shard's match-result sink (the control plane's result seam;
+    /// see [`GameLogic::match_result`]): a bounded mailbox, sent with the
+    /// synchronous `try_send` on teardown (no await, best effort). Every
+    /// shard of a logical room shares the registry's sink.
+    result_sink: Option<Mailbox<crate::registry::MatchResult>>,
 }
 
 impl<W, G, St> ShardActor<W, G, St>
@@ -534,7 +618,9 @@ where
 {
     /// Build a shard actor. `neighbors` is indexed by shard index (the
     /// unused slots may be any closed/unused mailbox — only the
-    /// `ShardLogic::neighbors()` slots are sent to).
+    /// `ShardLogic::neighbors()` slots are sent to). `result_sink` is the
+    /// logical room's match-result sink shared by all its shards (`None`
+    /// = this shard reports no result).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RoomConfig,
@@ -546,6 +632,7 @@ where
         neighbors: Vec<Mailbox<ShardMsg<St>>>,
         run_every: u64,
         metrics: mpsc::Sender<MetricsEvent>,
+        result_sink: Option<Mailbox<crate::registry::MatchResult>>,
     ) -> Self {
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
@@ -567,6 +654,12 @@ where
             1
         };
         let budget_us = config.period().as_micros() as u64;
+        // The completion channel: bounded at the shard-wide pending cap
+        // (the room actor's rule — a completion burst cannot exceed the
+        // number of in-flight workers, which the cap bounds); drained
+        // every tick's 0b phase, so a full channel only parks a worker
+        // until the next tick, never the shard.
+        let (completions_tx, completions) = mpsc::channel(config.max_pending_requests.max(1));
         Self {
             config,
             index,
@@ -592,6 +685,13 @@ where
             budget_us,
             m: RoomCounters::default(),
             metrics,
+            pending: HashMap::new(),
+            pending_total: 0,
+            queued: HashMap::new(),
+            replies_buf: Vec::new(),
+            completions,
+            completions_tx,
+            result_sink,
         }
     }
 
@@ -631,6 +731,39 @@ where
             }
         }
         self.logic.on_shutdown();
+        // The match-result seam (the Faz 3 promotion; see the module docs,
+        // "Shard-RPC and match-result"): THIS shard reports ITS final state
+        // through the shared sink under the LOGICAL room id. One logical
+        // room therefore yields one payload PER SHARD (the platform's
+        // adapter concatenates/filters; nothing was added to
+        // `MatchResult`). Same best-effort discipline as the room actor:
+        // a full or gone sink drops the result and warns/debugs — a slow
+        // consumer must not stall the shard's teardown, and the shard's
+        // only await stays `tick_rx.recv()`.
+        if let Some(result) = self.logic.match_result(&mut self.world)
+            && let Some(sink) = &self.result_sink
+        {
+            match sink.try_send(crate::registry::MatchResult {
+                room: self.config.id,
+                payload: result,
+            }) {
+                Ok(()) => debug!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    "shard match result reported"
+                ),
+                Err(mpsc::error::TrySendError::Full(_)) => warn!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    "match result dropped: sink full"
+                ),
+                Err(mpsc::error::TrySendError::Closed(_)) => debug!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    "match result dropped: sink gone"
+                ),
+            }
+        }
         debug!(
             room = %self.config.id,
             shard = self.index,
@@ -754,6 +887,73 @@ where
             }
         }
 
+        // -- Phase 0b — shard-RPC deferred completions (the Faz 3
+        //    promotion; see `crate::rpc`): drain the worker reports
+        //    (non-blocking — this shard never awaits a worker; the same
+        //    try_recv discipline as the control drain above) and reconcile
+        //    each report against the pending set. Exactly one answer per
+        //    request is structural: a report for an id that is no longer
+        //    pending (already answered, timed out below, its session left,
+        //    OR its session migrated to another shard) is dropped and
+        //    counted (`requests_late`).
+        while let Ok(rep) = self.completions.try_recv() {
+            let Some(deq) = self.pending.get_mut(&rep.conn) else {
+                self.m.requests_late += 1;
+                continue;
+            };
+            match deq.iter().position(|p| p.id == rep.id) {
+                Some(idx) => {
+                    // The inner op comes from the pending entry (the
+                    // worker's report is outcome-only — this actor is the
+                    // authority on the request's shape).
+                    let op = deq[idx].op;
+                    deq.remove(idx);
+                    self.pending_total -= 1;
+                    if deq.is_empty() {
+                        self.pending.remove(&rep.conn);
+                    }
+                    self.queued.entry(rep.conn).or_default().push(RpcReply {
+                        id: rep.id,
+                        ok: rep.ok,
+                        op,
+                        reason: rep.reason,
+                        payload: rep.payload,
+                    });
+                }
+                None => self.m.requests_late += 1,
+            }
+        }
+        // Sweep expired pending requests (the client-visible timeout):
+        // per connection the deadlines are non-decreasing (same timeout,
+        // FIFO arrivals), so only the head of each deque can be due. The
+        // tick body stays synchronous: a wall-clock comparison, no await.
+        // Cost when quiet: one `is_empty` probe (a shard with no pending
+        // requests pays nothing below it).
+        if !self.pending.is_empty() {
+            let now = Instant::now();
+            let mut due: Vec<(ConnectionId, PendingRequest)> = Vec::new();
+            for (conn, deq) in self.pending.iter_mut() {
+                if let Some(front) = deq.front()
+                    && front.due <= now
+                    && let Some(p) = deq.pop_front()
+                {
+                    self.pending_total -= 1;
+                    due.push((*conn, p));
+                }
+            }
+            self.pending.retain(|_, deq| !deq.is_empty());
+            for (conn, p) in due {
+                self.m.requests_timed_out += 1;
+                self.queued.entry(conn).or_default().push(RpcReply {
+                    id: p.id,
+                    ok: false,
+                    op: p.op,
+                    reason: TIMEOUT_REASON.to_string(),
+                    payload: bytes::Bytes::new(),
+                });
+            }
+        }
+
         // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
         //    room actor's (§14.4 — core owns the clock; timed holds fire
         //    on their deadline, combat-helds on `may_release`; the ended
@@ -867,8 +1067,181 @@ where
             }
         });
 
-        // -- Phase 2 — CONVERT.
+        // -- Phase 2a — SPLIT the requests out of the pulled actions (the
+        //    Faz 3 RPC promotion; byte-for-byte the room actor's split).
+        //    A request is an action carrying the base-band envelope
+        //    opcode; this actor decodes the envelope (a base message) and
+        //    hands the rest to the logic at 2c. The split is in-order:
+        //    both lists keep arrival order, and ALL fire-and-forget
+        //    actions of the tick ingest BEFORE any request is handed to
+        //    `handle_request` (the ordering contract of `crate::rpc`: a
+        //    request sees the world after this tick's actions were
+        //    applied). Cost when quiet: one u16 compare per pulled action.
+        //
+        //    A malformed envelope (or id = 0, which cannot correlate) is a
+        //    NORMAL rejection: answered this tick, counted in the
+        //    malformed bucket — a client bug, not a protocol violation.
+        let mut requests: Vec<RpcRequest> = Vec::new();
+        actions.retain_mut(|a| {
+            if a.op != RPC_REQ_OP {
+                return true;
+            }
+            match gsb_protocol::base::RpcRequest::decode(&a.payload[..]) {
+                Ok(env) if env.id != 0 => {
+                    requests.push(RpcRequest {
+                        conn: a.conn,
+                        // Already translated (phase 1.5): the logic sees
+                        // the stable player key, while pending/replies
+                        // stay session-scoped under `conn`.
+                        player: a.player,
+                        id: env.id,
+                        // The wire type is `u32`; the op space is `u16`
+                        // by protocol contract (same cast as the room).
+                        op: env.op as u16,
+                        payload: env.payload.into(),
+                    });
+                    false
+                }
+                _ => {
+                    self.m.requests_rejected_malformed += 1;
+                    self.queue_reply(
+                        a.conn,
+                        0,
+                        a.op,
+                        false,
+                        "malformed request envelope (or correlation id = 0)".to_string(),
+                        bytes::Bytes::new(),
+                    );
+                    false
+                }
+            }
+        });
+
+        // -- Phase 2b — CONVERT.
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
+
+        // -- Phase 2c — REQUESTS (the shard-side mirror of the room's
+        //    request loop): duplicate-in-flight guard ABOVE the decision
+        //    (every decision kind), then `handle_request`, then per-decision
+        //    handling with caps enforced where the pending state lives.
+        for req in &requests {
+            // Duplicate id still in flight: reject WITHOUT re-processing —
+            // a second reply for one id would breach exactly-one-answer,
+            // and a retrying client must not buy a double-applied side
+            // effect. The id becomes reusable once answered (no history).
+            if self
+                .pending
+                .get(&req.conn)
+                .is_some_and(|d| d.iter().any(|p| p.id == req.id))
+            {
+                self.m.requests_rejected_dup += 1;
+                self.queue_reply(
+                    req.conn,
+                    req.id,
+                    req.op,
+                    false,
+                    "duplicate request id (the request is still in flight)".to_string(),
+                    bytes::Bytes::new(),
+                );
+                continue;
+            }
+            let decision = self.logic.handle_request(&mut self.world, &ctx, req);
+            match decision {
+                None => {
+                    // Not a request this logic handles: a normal "no
+                    // handler" rejection (the client learns immediately
+                    // instead of waiting out its own timeout).
+                    self.m.requests_rejected_no_handler += 1;
+                    self.queue_reply(
+                        req.conn,
+                        req.id,
+                        req.op,
+                        false,
+                        format!("no request handler for op {:#04x}", req.op),
+                        bytes::Bytes::new(),
+                    );
+                }
+                Some(crate::rpc::RequestDecision::Reply(payload)) => {
+                    self.m.requests_local += 1;
+                    self.queue_reply(req.conn, req.id, req.op, true, String::new(), payload);
+                }
+                Some(crate::rpc::RequestDecision::Reject(reason)) => {
+                    self.m.requests_rejected_logic += 1;
+                    self.queue_reply(req.conn, req.id, req.op, false, reason, bytes::Bytes::new());
+                }
+                Some(crate::rpc::RequestDecision::External(fut)) => {
+                    // Caps (this actor's authority on pending state): a
+                    // request past a cap is a normal rejection, same tick —
+                    // the logic's `External` decision does not commit the
+                    // registration. Same fields as the room's (the shared
+                    // RoomConfig), so one sizing derivation covers both
+                    // actors. Priority mirrors the room: over BOTH caps
+                    // counts against the per-connection bucket (the
+                    // client's own quota is the actionable one).
+                    let per_conn = self
+                        .pending
+                        .get(&req.conn)
+                        .map(VecDeque::len)
+                        .unwrap_or(0);
+                    let over_conn_cap =
+                        per_conn >= self.config.max_pending_requests_per_conn;
+                    let over_room_cap = self.pending_total >= self.config.max_pending_requests;
+                    if over_conn_cap || over_room_cap {
+                        if over_conn_cap {
+                            self.m.requests_rejected_conn_cap += 1;
+                        } else {
+                            self.m.requests_rejected_room_cap += 1;
+                        }
+                        let reason = if over_conn_cap {
+                            "pending request limit reached (per connection)".to_string()
+                        } else {
+                            "pending request limit reached (room)".to_string()
+                        };
+                        self.queue_reply(req.conn, req.id, req.op, false, reason, bytes::Bytes::new());
+                        continue;
+                    }
+                    // Register it pending on THIS shard, then delegate.
+                    let due = Instant::now() + self.config.request_timeout;
+                    self.pending
+                        .entry(req.conn)
+                        .or_default()
+                        .push_back(PendingRequest {
+                            id: req.id,
+                            op: req.op,
+                            due,
+                        });
+                    self.pending_total += 1;
+                    self.m.requests_external += 1;
+                    // The worker task: resolves the future under a timeout
+                    // RESOURCE guard (the same deadline this actor's sweep
+                    // enforces as the client-visible authority; on expiry
+                    // the worker reports nothing). The report rides the
+                    // completion channel; the 0b phase of a later tick
+                    // reconciles it.
+                    let conn = req.conn;
+                    let id = req.id;
+                    let timeout = self.config.request_timeout;
+                    let report_tx = self.completions_tx.clone();
+                    tokio::spawn(async move {
+                        match tokio::time::timeout(timeout, fut).await {
+                            Ok(Ok(payload)) => {
+                                let _ = report_tx.send(Completion::reply(conn, id, payload)).await;
+                            }
+                            Ok(Err(reason)) => {
+                                let _ = report_tx.send(Completion::error(conn, id, reason)).await;
+                            }
+                            Err(_elapsed) => {
+                                // Timed out: no report — the sweep owns the
+                                // client-visible timeout. The worker exits.
+                            }
+                        }
+                        // A failed report send means the shard shut down:
+                        // the worker exits either way — its lifetime is
+                        // bounded by the timeout in every case.
+                    });
+                }
+            }
+        }
 
         // -- Phase 3 — SYSTEMS.
         self.logic.update(&mut self.world, &ctx);
@@ -931,6 +1304,10 @@ where
                         session_epoch: entry.session_epoch,
                     })
                 });
+                // The session whose request state dies with a COMMITTED
+                // move (the Ok arm below); read before the send consumes
+                // the message.
+                let moving_conn = player.as_ref().map(|pm| pm.conn);
                 match self.neighbors[b].try_send(ShardMsg::Migrate {
                     from: self.index,
                     at_tick: t.tick,
@@ -939,6 +1316,23 @@ where
                     player,
                 }) {
                     Ok(()) => {
+                        // The move committed: the session's RPC state does
+                        // NOT travel (module docs, "Shard-RPC and
+                        // match-result") — the worker futures of its
+                        // in-flight requests were spawned HERE and report to
+                        // THIS shard's completion channel, so carrying
+                        // pending entries across would need cross-actor
+                        // report forwarding. Same §11 posture as detach:
+                        // session-scoped request state dies with the
+                        // session's ownership move; stale reports land late
+                        // here and are counted `requests_late`; the player
+                        // re-requests on the receiving shard under a fresh
+                        // id. (Dropped AFTER a successful send — on a failed
+                        // one below, the connection is rolled back whole and
+                        // keeps its in-flight work.)
+                        if let Some(mc) = moving_conn {
+                            self.drop_conn_request_state(mc);
+                        }
                         self.pending_out.push((mig.wire, t.tick + 1));
                     }
                     Err(mpsc::error::TrySendError::Full(msg)
@@ -1028,9 +1422,13 @@ where
                 reply,
             } => {
                 // A join supersedes any stale state this connection had
-                // (same as the room actor).
+                // (same as the room actor) — including its request state
+                // (a rejoin is a NEW session: in-flight requests and
+                // queued answers of the old one are dropped; their late
+                // worker reports are discarded by the 0b reconciliation).
                 if let Some(&stale) = self.binding.get(&conn) {
                     let _ = self.conns.remove(&stale); // old halves drop
+                    self.drop_conn_request_state(conn);
                     self.logic.on_leave(&mut self.world, stale);
                 }
                 // Identity-space exhaustion guard (structurally unreachable
@@ -1102,14 +1500,16 @@ where
                         Detach::Hold { grace, to } => {
                             // Park: keep row (stable key)/entity/slot and
                             // the binding row; core owns the clock (§14.4).
-                            // In-flight requests of the dead session die
-                            // with it structurally (§11) — shards run no
-                            // RPC machinery yet, so there is nothing to
-                            // clear beyond the row's own channel halves.
+                            // The dead session's in-flight requests die with
+                            // it (RECONNECT §11 — the room actor's detach
+                            // semantics, now mirrored): pending entries are
+                            // dropped and late worker reports are silently
+                            // discarded by the 0b reconciliation.
                             let rc = self.conns.get_mut(&player).expect("guarded above");
                             rc.detached = true;
                             rc.expire_to = to;
                             rc.detach_deadline = grace.map(|g| Instant::now() + g);
+                            self.drop_conn_request_state(conn);
                             debug!(
                                 room = %self.config.id,
                                 shard = self.index,
@@ -1434,10 +1834,53 @@ where
         };
         self.binding.remove(&rc.conn);
         self.conn_epoch.remove(&rc.conn);
+        // The request state goes with the SESSION (the room actor's rule):
+        // in-flight requests release their slots and any queued answer is
+        // dropped (a reply to a gone session is not delivered); late
+        // worker reports find no pending entry and are counted late.
+        self.drop_conn_request_state(rc.conn);
         self.logic.on_leave(&mut self.world, player);
         if count_as_leave {
             self.m.leaves += 1;
         }
+    }
+
+    /// Queue one RPC answer for a connection's next (or this tick's, if
+    /// broadcast has not run yet) private frame. All request paths —
+    /// same-tick reply/reject, cap/duplicate rejects, the worker-report
+    /// reconciliation, the timeout sweep — funnel through here, so the
+    /// per-tick delivery point is exactly one. (The room actor's helper,
+    /// byte-for-byte.)
+    fn queue_reply(
+        &mut self,
+        conn: ConnectionId,
+        id: u64,
+        op: u16,
+        ok: bool,
+        reason: String,
+        payload: bytes::Bytes,
+    ) {
+        self.queued.entry(conn).or_default().push(RpcReply {
+            id,
+            ok,
+            op,
+            reason,
+            payload,
+        });
+    }
+
+    /// Drop a connection's request state (pending set + queued answers).
+    /// Called on leave, on join (a join supersedes the connection's prior
+    /// state), on detach-park, and at migrate-out. Late worker reports for
+    /// the dropped requests find no pending entry and are dropped by the
+    /// 0b reconciliation; the workers themselves exit on their own (their
+    /// report send fails against the dropped entry, or their timeout
+    /// fires first). (The room actor's helper, byte-for-byte.)
+    fn drop_conn_request_state(&mut self, conn: ConnectionId) {
+        if let Some(deq) = self.pending.remove(&conn) {
+            self.pending_total = self.pending_total.saturating_sub(deq.len());
+        }
+        self.queued.remove(&conn);
     }
 
 
@@ -1623,6 +2066,11 @@ where
         // Same batch-buffer reuse as the room's 4d (one floor slice was the
         // per-connection per-tick `Vec::with_capacity(2)`).
         let mut pbuf = bytes::BytesMut::new();
+        // RPC answers are the rare case (the room's measured rule): in a
+        // quiet shard this is ONE `is_empty` probe for the whole fan-out;
+        // the per-connection map probe runs only on ticks that actually
+        // owe an answer.
+        let has_replies = !self.queued.is_empty();
         for (&player, rc) in self.conns.iter_mut() {
             // Detached/bot-fed rows ship nothing (dead or non-human
             // outbound half; §7 — the drop counter stays "slow client"
@@ -1640,12 +2088,21 @@ where
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
                 rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
+            // This connection's queued RPC answers for the tick (Faz 3:
+            // same-tick local replies and, on later ticks, the reconciled
+            // worker reports / timeout sweeps). The logic encodes them
+            // into the private frame alongside any ack / one-shot full.
+            let replies: &[RpcReply] = if has_replies {
+                self.replies_buf = self.queued.remove(&rc.conn).unwrap_or_default();
+                &self.replies_buf
+            } else {
+                &[]
+            };
             pbuf.clear();
-            // No RPC answers on the sharded path yet: the pending set and
-            // the completion sweep are room-actor machinery (Faz 3), so
-            // the shared `GameLogic::private` seam receives an empty
-            // response list here — same call shape as the room's fan-out.
-            if self.logic.private(&mut self.world, player, &rc.group, &[], &mut pbuf) {
+            if self
+                .logic
+                .private(&mut self.world, player, &rc.group, replies, &mut pbuf)
+            {
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
@@ -1661,6 +2118,13 @@ where
                     rc.batch = e.into_inner();
                 }
             }
+        }
+        // Every connection was visited above, so anything left here
+        // belongs to a connection removed from the table this same tick
+        // (leave/migrate) that never got its frame: drop it — a request is
+        // answered exactly once, and it was never delivered.
+        if !self.queued.is_empty() {
+            self.queued.clear();
         }
         self.m.dropped_frames += dropped;
     }
@@ -1703,20 +2167,19 @@ where
             resume_rejected_stale: self.m.resume_rejected_stale,
             detach_expired_despawn: self.m.detach_expired_despawn,
             detach_expired_ai: self.m.detach_expired_ai,
-            // Shards do not run the RPC machinery yet (the pending set
-            // lives in the single-room actor; see `crate::rpc`): the
-            // request counters stay zero by construction.
-            requests_local: 0,
-            requests_external: 0,
-            requests_rejected_malformed: 0,
-            requests_rejected_dup: 0,
-            requests_rejected_no_handler: 0,
-            requests_rejected_logic: 0,
-            requests_rejected_conn_cap: 0,
-            requests_rejected_room_cap: 0,
-            requests_timed_out: 0,
-            requests_late: 0,
-            pending_requests: 0,
+            // Faz 3: this shard runs the RPC machinery (the room actor's
+            // counters, mirrored one-to-one) — no longer pinned to zero.
+            requests_local: self.m.requests_local,
+            requests_external: self.m.requests_external,
+            requests_rejected_malformed: self.m.requests_rejected_malformed,
+            requests_rejected_dup: self.m.requests_rejected_dup,
+            requests_rejected_no_handler: self.m.requests_rejected_no_handler,
+            requests_rejected_logic: self.m.requests_rejected_logic,
+            requests_rejected_conn_cap: self.m.requests_rejected_conn_cap,
+            requests_rejected_room_cap: self.m.requests_rejected_room_cap,
+            requests_timed_out: self.m.requests_timed_out,
+            requests_late: self.m.requests_late,
+            pending_requests: self.pending_total as u32,
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
@@ -2046,6 +2509,7 @@ mod tests {
                     vec![dummy_tx.clone(), tx1.clone()],
                     1,
                     metrics_null(),
+                    None, // no result sink in the protocol harness
                 )
                 .run(),
             );
@@ -2068,6 +2532,7 @@ mod tests {
                     vec![tx0.clone(), dummy_tx],
                     1,
                     metrics_null(),
+                    None, // no result sink in the protocol harness
                 )
                 .run(),
             );
@@ -2243,6 +2708,7 @@ mod tests {
             vec![n0, n1],
             1,
             metrics_null(),
+            None, // no result sink
         )
     }
 
@@ -2992,6 +3458,7 @@ mod tests {
             vec![n0, n1],
             1,
             metrics_null(),
+            None, // no result sink
         );
 
         // The join (its own CONTROL message; the group is dirty).

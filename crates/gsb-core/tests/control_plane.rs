@@ -67,14 +67,16 @@ impl GameLogic<()> for ResultLogic {
         a.clear();
     }
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
-}
 
-// Faz 1 trait split: the room-exclusive result seam stays on `RoomLogic`.
-impl RoomLogic<()> for ResultLogic {
+    // Faz 3: the result seam lives on the shared `GameLogic` supertrait.
     fn match_result(&mut self, _w: &mut ()) -> Option<bytes::Bytes> {
         self.result.take().map(Into::into)
     }
 }
+
+// Faz 3 promotion: `match_result` moved to `GameLogic`; this impl stays
+// as the single-room marker.
+impl RoomLogic<()> for ResultLogic {}
 
 fn config(id: RoomId) -> RoomConfig {
     RoomConfig {
