@@ -52,3 +52,22 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
 
 - Auth/TLS (localhost sözleşmesi ile yaşar), keep-alive/chunked,
   JSON/protobuf çıktı, /debug/pprof tarzı profillendirme, çoklu-listener
+
+## 6. Kenara not: `metrics` crate fasadı (dış öneri, uygulanmadı)
+
+Dış danışmada gelen alternatif: metrik dışa açımını elle render yerine
+**`metrics` crate fasadı + `metrics-exporter-prometheus`** üzerinden
+yapmak (Rust'ın fiili metrik standardı; tokio ekosistemi kullanır).
+
+- **Lehine:** battle-tested exporter, ekosistem uyumu, kendi render
+  kodunun bakım yükü kalkar.
+- **Aleyhine:** yeni bağımlılık zinciri (HTTP feature'ında hyper);
+  makrolar global recorder'a yazarak aktör-kanal mimarisinin
+  "durum aktörlerde" ilkesinin dışından dolaşır; bütçe-göreli µs
+  histogram kenarları gibi özel semantikler yapılandırmaya döner;
+  çalışan 215-testlik yüzeyin göçü ~1 gün.
+
+**Karar:** şimdilik uygulanmıyor; gerekirse temiz entegrasyon noktası
+**dördüncü lavabo olarak** (`MetricSink::MetricsFacade`) — mevcut
+collector hattını atmadan yan yana yaşar. Bu dokümanın konusu
+değil, ayrı turda değerlendirilir.
