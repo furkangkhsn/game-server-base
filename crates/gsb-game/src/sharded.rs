@@ -104,13 +104,14 @@ pub struct ShardParkRecord {
 
 /// The grid shape for `shard_count` shards: `rows` = the largest divisor
 /// of `shard_count` that is ≤ √N, `cols` = N / rows — the shape closest
-/// to a square (balanced region sizes). `shard_count` must be 1..=16.
+/// to a square (balanced region sizes). `shard_count` must be 1..=256.
 ///
-/// Examples: 1→1×1, 2→1×2, 4→2×2, 6→2×3, 8→2×4, 12→3×4, 16→4×4.
+/// Examples: 1→1×1, 2→1×2, 4→2×2, 6→2×3, 8→2×4, 12→3×4, 16→4×4,
+/// 25→5×5.
 pub fn grid_shape(shard_count: usize) -> (usize, usize) {
     assert!(
-        (1..=16).contains(&shard_count),
-        "shard_count must be 1..=16 (grid topology), got {shard_count}"
+        (1..=256).contains(&shard_count),
+        "shard_count must be 1..=256 (grid topology), got {shard_count}"
     );
     let sqrt = (shard_count as f64).sqrt().floor() as usize;
     for d in (1..=sqrt).rev() {

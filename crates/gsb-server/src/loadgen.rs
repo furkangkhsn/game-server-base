@@ -141,7 +141,7 @@ struct Args {
     /// as the server config default).
     visibility: gsb_server::Visibility,
     /// Shards per room (`--shard-count N`, default 4; used only for
-    /// `sharded`). The map is a near-square grid of N shards; 1..=16.
+    /// `sharded`). The map is a near-square grid of N shards; 1..=256.
     shard_count: u32,
     /// AOI cell size in world units (`--cell-size N`, default 20; used
     /// only for `spatial`).
@@ -283,7 +283,7 @@ Client options:
 Server options (in-process server, --serve, or the orchestrator's server):
   --visibility all|spatial|team|pvs|sharded   (default all)
   --shard-count N                     (sharded; near-square grid of N
-                                       shards, 1..=16; default 4 = 2×2)
+                                       shards, 1..=256; default 4 = 2×2)
   --cell-size F                       (spatial; default 20)
   --vision-radius F                   (team; default 25)
   --max-snapshot-bytes N              (default 1400)

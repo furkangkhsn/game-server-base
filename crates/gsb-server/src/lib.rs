@@ -68,7 +68,7 @@ pub enum Visibility {
     /// migration across region boundaries and boundary visibility. This is
     /// a different *topology* (N actors + N worlds), not just a group key,
     /// so it plugs in via `ShardLogic`/`BuiltRoom::Sharded` rather than
-    /// `RoomLogic`. Selecting it uses [`Config::shard_count`] (1..=16).
+    /// `RoomLogic`. Selecting it uses [`Config::shard_count`] (1..=256).
     Sharded,
 }
 
@@ -230,7 +230,7 @@ pub struct Config {
     /// [`Self::visibility`] = [`Visibility::Sharded`]). The map is divided
     /// into a near-square grid of `rows × cols` shards (`rows * cols =
     /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
-    /// 1..=16 (the grid topology); validated at startup. Default 4 (2×2).
+    /// 1..=256 (the grid topology); validated at startup. Default 4 (2×2).
     pub shard_count: u32,
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
@@ -403,7 +403,7 @@ pub enum ServerError {
     #[error("invalid `udp_cookie_key` in config: {0}")]
     BadCookieKey(String),
 
-    #[error("invalid `shard_count` {0}: must be 1..=16 (grid topology)")]
+    #[error("invalid `shard_count` {0}: must be 1..=256 (grid topology)")]
     BadShardCount(u32),
 
     #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
@@ -810,11 +810,11 @@ async fn start_inner(
         ServerError::BadBind(cfg.bind.clone(), e.to_string())
     })?;
 
-    // The sharded topology is a grid of 1..=16 shards (see
+    // The sharded topology is a grid of 1..=256 shards (see
     // `gsb_game::sharded::grid_shape`); a count outside that range would
     // build a degenerate (or impossible) grid, so refuse to start.
     if cfg.visibility == Visibility::Sharded
-        && !(1..=16).contains(&cfg.shard_count)
+        && !(1..=256).contains(&cfg.shard_count)
     {
         return Err(ServerError::BadShardCount(cfg.shard_count));
     }

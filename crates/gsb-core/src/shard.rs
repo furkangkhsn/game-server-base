@@ -237,7 +237,7 @@ use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use prost::Message;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
@@ -290,6 +290,63 @@ pub struct BorderExchange {
     /// consumer uses the latest exchange it has, whatever its age).
     pub tick: u64,
     pub entities: Vec<BorrowedRecord>,
+}
+
+// measurement scaffolding for CROSS-SHARD §7 — remove or promote after
+// the delta decision. These counters quantify the CURRENT full-state
+// border exchange (bytes/records/CPU per tick, send drops) so a delta
+// implementation can be judged against real numbers; the delta branch
+// reuses this exact accounting for an apples-to-apples comparison.
+
+/// The accounted payload size of one [`BorderExchange`]: a u64 tick
+/// header plus one record per entity (a `BorrowedRecord` is u64 wire
+/// then two i32 coordinates — exactly 16 bytes, its in-memory layout).
+/// The in-process channel moves the vec without serializing, so this is
+/// the wire-format LOWER bound a process-boundary deployment would pay
+/// for the same full-state exchange; both the baseline and any delta
+/// implementation account through this one helper so the numbers stay
+/// comparable.
+fn border_payload_len(records: usize) -> u64 {
+    (std::mem::size_of::<u64>() + records * std::mem::size_of::<BorrowedRecord>()) as u64
+}
+
+/// Per-window border-exchange counters of ONE shard actor: send side =
+/// phase 5 (collect_border + encode + try_send to every neighbor),
+/// receive side = the CONTROL-phase `ShardMsg::Border` arm (apply =
+/// replace the stored exchange wholesale; there is no separate decode
+/// step in process). Windowed on purpose: `step` resets the struct every
+/// ~1 s of ticks and logs the deltas as one summary line — cumulative
+/// counters would only give run-averages, while the decision needs
+/// steady-state rates.
+#[derive(Debug, Default)]
+struct BorderStats {
+    /// Exchanges sent (one per neighbor per tick), cumulative-in-window.
+    exports: u64,
+    /// Records exported, summed over all sends in-window (the SAME set
+    /// is cloned to every neighbor — counted per send, not per unique
+    /// record, because that is what the channel carries).
+    export_records: u64,
+    /// Accounted payload bytes ([`border_payload_len`]) summed over all
+    /// sends in-window.
+    export_bytes: u64,
+    /// Largest single export's record count in-window (context for the
+    /// mean: one dense seam vs uniformly thin borders).
+    export_records_max: usize,
+    /// Wall time spent in phase 5 (collect + clone-per-neighbor +
+    /// try_send), summed over ticks in-window (µs).
+    export_us: u64,
+    /// `try_send` failures against full/closed neighbor mailboxes,
+    /// in-window (each one is a whole exchange lost until next tick).
+    export_drops: u64,
+    /// Exchanges received and applied, in-window.
+    imports: u64,
+    /// Records applied, in-window.
+    import_records: u64,
+    /// Accounted payload bytes applied, in-window.
+    import_bytes: u64,
+    /// Wall time spent applying received exchanges (insert/replace),
+    /// summed over messages in-window (µs).
+    import_us: u64,
 }
 
 /// A player's channel halves, moved with a migrating player entity
@@ -575,6 +632,12 @@ pub struct ShardActor<W, G, St> {
     metrics_every: u64,
     budget_us: u64,
     m: RoomCounters,
+    // measurement scaffolding for CROSS-SHARD §7 — remove or promote
+    // after the delta decision (see `BorderStats`).
+    /// Border-exchange counters accumulated since the last summary.
+    bstats: BorderStats,
+    /// Summary cadence in steps: `tick_hz` rounded — one window ≈ 1 s.
+    border_every: u64,
     metrics: mpsc::Sender<MetricsEvent>,
     // -- Shard-RPC (the Faz 3 promotion; see `crate::rpc` and the module
     //    docs, "Shard-RPC and match-result"): byte-for-byte the room
@@ -654,6 +717,9 @@ where
             1
         };
         let budget_us = config.period().as_micros() as u64;
+        // measurement scaffolding for CROSS-SHARD §7: the border summary
+        // window ≈ one second of ticks.
+        let border_every = (config.tick_hz.round() as u64).max(1);
         // The completion channel: bounded at the shard-wide pending cap
         // (the room actor's rule — a completion burst cannot exceed the
         // number of in-flight workers, which the cap bounds); drained
@@ -684,6 +750,8 @@ where
             metrics_every,
             budget_us,
             m: RoomCounters::default(),
+            bstats: BorderStats::default(),
+            border_every,
             metrics,
             pending: HashMap::new(),
             pending_total: 0,
@@ -806,6 +874,36 @@ where
                 self.metrics.try_send(MetricsEvent::Room(self.sample()))
         {
             self.m.metrics_dropped += 1;
+        }
+
+        // measurement scaffolding for CROSS-SHARD §7 — remove or promote
+        // after the delta decision: one summary line per ~1 s of steps
+        // (WINDOW deltas — the counters reset here), emitted only when
+        // this shard actually exchanged something in the window, so a
+        // quiet shard logs nothing and the steady state reads as clean
+        // per-second rates.
+        if self.steps.is_multiple_of(self.border_every)
+            && !self.logic.neighbors().is_empty()
+        {
+            let s = std::mem::take(&mut self.bstats);
+            if s.exports > 0 || s.imports > 0 {
+                info!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    window_ticks = self.border_every,
+                    exports = s.exports,
+                    export_records = s.export_records,
+                    export_bytes = s.export_bytes,
+                    export_records_max = s.export_records_max,
+                    export_us = s.export_us,
+                    export_drops = s.export_drops,
+                    imports = s.imports,
+                    import_records = s.import_records,
+                    import_bytes = s.import_bytes,
+                    import_us = s.import_us,
+                    "border_exchange_summary"
+                );
+            }
         }
         keep
     }
@@ -1383,26 +1481,48 @@ where
         // -- Phase 5 — BORDER (export this shard's boundary entities,
         //    WHOLE, to every neighbor: the exchange is idempotent, so a
         //    dropped one self-heals next tick).
-        let records = self.logic.collect_border(&self.world);
-        for b in self.logic.neighbors() {
-            if self.neighbors[*b]
-                .try_send(ShardMsg::Border {
-                    from: self.index,
-                    exchange: BorderExchange {
-                        tick: t.tick,
-                        entities: records.clone(),
-                    },
-                })
-                .is_err()
-            {
-                warn!(
-                    room = %self.config.id,
-                    shard = self.index,
-                    neighbor = b,
-                    "border send failed (neighbor channel full); the \
-                     exchange re-sends in full next tick"
-                );
+        //
+        //    measurement scaffolding for CROSS-SHARD §7 — remove or
+        //    promote after the delta decision: the whole phase
+        //    (collect + per-neighbor clone + send) is timed and counted
+        //    into `bstats`. With no neighbors nothing is exchanged, so
+        //    nothing is counted — an edge/unsharded topology pays no
+        //    instrumentation cost beyond the emptiness check.
+        let nb = self.logic.neighbors().to_vec();
+        if !nb.is_empty() {
+            let t5 = Instant::now();
+            let records = self.logic.collect_border(&self.world);
+            let recs = records.len();
+            let payload = border_payload_len(recs);
+            let mut drops = 0u64;
+            for b in &nb {
+                if self.neighbors[*b]
+                    .try_send(ShardMsg::Border {
+                        from: self.index,
+                        exchange: BorderExchange {
+                            tick: t.tick,
+                            entities: records.clone(),
+                        },
+                    })
+                    .is_err()
+                {
+                    drops += 1;
+                    warn!(
+                        room = %self.config.id,
+                        shard = self.index,
+                        neighbor = b,
+                        "border send failed (neighbor channel full); the \
+                         exchange re-sends in full next tick"
+                    );
+                }
             }
+            let s = &mut self.bstats;
+            s.exports += nb.len() as u64;
+            s.export_records += recs as u64 * nb.len() as u64;
+            s.export_bytes += payload * nb.len() as u64;
+            s.export_records_max = s.export_records_max.max(recs);
+            s.export_us += t5.elapsed().as_micros() as u64;
+            s.export_drops += drops;
         }
 
         // -- Phase 6 — BROADCAST (the room's broadcast phase with the
@@ -1742,7 +1862,22 @@ where
             }
             ShardMsg::Border { from, exchange } => {
                 // Full state, idempotent: replace whatever we have.
+                //
+                // measurement scaffolding for CROSS-SHARD §7 — remove or
+                // promote after the delta decision: apply-side
+                // accounting. In process there is no decode step (the
+                // message arrives as structs); the wholesale insert IS
+                // the "decode + apply" cost a wire deployment would pay
+                // on top of its deserialization.
+                let tr = Instant::now();
+                let recs = exchange.entities.len();
+                let bytes = border_payload_len(recs);
                 self.border.insert(from, exchange.entities);
+                let s = &mut self.bstats;
+                s.imports += 1;
+                s.import_records += recs as u64;
+                s.import_bytes += bytes;
+                s.import_us += tr.elapsed().as_micros() as u64;
                 true
             }
             ShardMsg::Shutdown => false,
