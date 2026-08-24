@@ -118,12 +118,34 @@
 //! shard — otherwise enemies vanish at the line. Every tick (phase 5) each
 //! shard exports its **boundary entities** (game-defined: the demo exports
 //! the entities within one border width of its region edges) to all
-//! neighbors as a `Border` exchange; each shard keeps the latest exchange
-//! per neighbor and includes the borrowed records in **every** group's
-//! snapshot (phase 6 passes them to `GameLogic::snapshot`). The exchange
-//! is *full state, not a delta*: a dropped or delayed exchange self-heals
-//! on the next tick (the borrowed set is re-sent whole), so a lagging
-//! shard costs at most one tick of stale boundary data — never a gap.
+//! neighbors as a `Border` exchange; each shard keeps a persistent
+//! per-neighbor view of the borrowed records and includes them in
+//! **every** group's snapshot (phase 6 passes them to
+//! `GameLogic::snapshot`). The exchange is a **seq-stamped delta**
+//! (`docs/CROSS-SHARD.md` §6.4, the four-pin contract): the sender diffs
+//! the strip against what each neighbor last accepted and ships only
+//! upserts + explicit exits; a Full (whole strip) is sent on first
+//! contact, on any continuity break, and on a low-frequency periodic
+//! cadence.
+//!
+//! **Why the four pins** (each one exists because its absence has a named
+//! failure mode): (1) *sequence stamps* turn a lost exchange into a
+//! DETECTED event instead of silent divergence — the receiver demands an
+//! exact match with its expected value and otherwise rejects wholesale,
+//! never half-applies; (2) *explicit exit records* keep departed entities
+//! from ghosting forever — a delta carries no implicit "everything not
+//! mentioned still exists" contract the way a wholesale replacement does;
+//! (3) *three resync triggers* (receiver-detected seq gap → request;
+//! neighbor rebuild → the fresh incarnation leads with a Full because its
+//! sender state starts empty; periodic Full every 256 ticks → the sigorta
+//! that bounds any residual divergence's lifetime); (4) *migration
+//! interaction* stays natural: a crossing shows up as an exit in the old
+//! side's delta and an upsert in the new side's, and the own-wins filter
+//! (below) swallows the crossing tick's double view unchanged. A send
+//! failure (bounded `try_send`) is answered sender-side by flagging that
+//! neighbor for a Full next tick — self-healing within ONE tick rather
+//! than waiting out the cadence, because a dropped DELTA diverges until
+//! healed where a dropped full self-healed by luck of idempotence.
 //!
 //! **Wire-identity interaction:** borrowed records carry the *neighbor's*
 //! wire ids. The ranges are disjoint (below), so a client's view — own
@@ -282,14 +304,45 @@ pub struct BorrowedRecord {
     pub y: i32,
 }
 
-/// One neighbor's boundary view (full state, idempotent — see module
-/// docs, "Boundary visibility").
+/// One neighbor's boundary update (CROSS-SHARD §6.4 pin 1–2): either the
+/// COMPLETE strip (`Full` — bootstrap, resync, the periodic sigorta) or the
+/// difference against what that neighbor last accepted from us (`Delta`:
+/// upserts for new/changed records plus EXPLICIT exits for wire ids that
+/// left the strip — without exits a ghost would persist forever, because a
+/// delta carries no implicit "everything else is unchanged AND STILL THERE"
+/// contract the way a full replacement does).
+///
+/// `seq` is the SENDER-side per-neighbor monotonic sequence (advanced once
+/// per exchange actually queued): the receiver tracks the expected value
+/// and treats any mismatch as a lost exchange, triggering a resync (pin 3a)
+/// instead of silently diverging.
 #[derive(Debug)]
-pub struct BorderExchange {
-    /// The tick index the neighbor sampled the set at (diagnostics; the
-    /// consumer uses the latest exchange it has, whatever its age).
-    pub tick: u64,
-    pub entities: Vec<BorrowedRecord>,
+pub enum BorderExchange {
+    /// The complete boundary strip: the receiver replaces its whole view
+    /// for this neighbor and re-baselines its expected sequence. Accepted
+    /// at ANY time — this is what makes a rebuilt shard's recovery
+    /// automatic (its fresh incarnation restarts the sequence and always
+    /// leads with a Full) without extra rebuild-notification wiring
+    /// (§6.4 pin 3b).
+    Full {
+        seq: u64,
+        /// The tick index the set was sampled at (diagnostics).
+        tick: u64,
+        entities: Vec<BorrowedRecord>,
+    },
+    /// The difference against the receiver's last-known state. Applied
+    /// atomically ONLY when `seq` matches the expected value exactly; any
+    /// other value rejects the whole delta (never half-applied state) and
+    /// requests a resync.
+    Delta {
+        seq: u64,
+        /// See [`BorderExchange::Full::tick`].
+        tick: u64,
+        /// New or changed boundary records.
+        upserts: Vec<BorrowedRecord>,
+        /// Wire ids that LEFT the strip since the last accepted exchange.
+        exits: Vec<u64>,
+    },
 }
 
 // measurement scaffolding for CROSS-SHARD §7 — remove or promote after
@@ -298,55 +351,171 @@ pub struct BorderExchange {
 // implementation can be judged against real numbers; the delta branch
 // reuses this exact accounting for an apples-to-apples comparison.
 
-/// The accounted payload size of one [`BorderExchange`]: a u64 tick
+/// The accounted payload size of one FULL [`BorderExchange`]: a u64 seq
 /// header plus one record per entity (a `BorrowedRecord` is u64 wire
 /// then two i32 coordinates — exactly 16 bytes, its in-memory layout).
 /// The in-process channel moves the vec without serializing, so this is
 /// the wire-format LOWER bound a process-boundary deployment would pay
 /// for the same full-state exchange; both the baseline and any delta
-/// implementation account through this one helper so the numbers stay
-/// comparable.
+/// implementation account through this one helper (and
+/// [`delta_payload_len`] for deltas) so the numbers stay comparable.
 fn border_payload_len(records: usize) -> u64 {
     (std::mem::size_of::<u64>() + records * std::mem::size_of::<BorrowedRecord>()) as u64
 }
 
+/// The accounted payload size of one DELTA [`BorderExchange`]: the same
+/// u64 seq header, 16 bytes per upserted record and 8 bytes per exit
+/// (a bare wire id). Same lower-bound accounting discipline as
+/// [`border_payload_len`] — this is what a delta costs on a wire.
+fn delta_payload_len(upserts: usize, exits: usize) -> u64 {
+    (std::mem::size_of::<u64>()
+        + upserts * std::mem::size_of::<BorrowedRecord>()
+        + exits * std::mem::size_of::<u64>()) as u64
+}
+
+/// How often each neighbor is force-served a FULL exchange even when
+/// deltas would do (§6.4 pin 3c): the low-frequency sigorta against
+/// silent divergence — any bug that loses an untracked update heals at
+/// the next cadence tick instead of never. 256 ticks ≈ 8.5 s at 30 Hz:
+/// rare enough to be invisible in the byte budget, frequent enough to
+/// bound the divergence lifetime far below any operational timescale.
+const BORDER_FULL_EVERY_TICKS: u64 = 256;
+
 /// Per-window border-exchange counters of ONE shard actor: send side =
-/// phase 5 (collect_border + encode + try_send to every neighbor),
-/// receive side = the CONTROL-phase `ShardMsg::Border` arm (apply =
-/// replace the stored exchange wholesale; there is no separate decode
+/// phase 5 (collect_border + delta-vs-ledger + try_send to every
+/// neighbor), receive side = the CONTROL-phase `ShardMsg::Border` arm
+/// (apply upserts/exits or replace wholesale; there is no separate decode
 /// step in process). Windowed on purpose: `step` resets the struct every
 /// ~1 s of ticks and logs the deltas as one summary line — cumulative
 /// counters would only give run-averages, while the decision needs
-/// steady-state rates.
+/// steady-state rates. The baseline fields keep their full-era semantics
+/// (`exports`/`export_records`/`export_bytes` now account whatever is
+/// ACTUALLY shipped — a delta's accounted size, not the strip's) so the
+/// §7 baselines stay directly comparable; the fields below them are the
+/// delta-era additions.
 #[derive(Debug, Default)]
 struct BorderStats {
-    /// Exchanges sent (one per neighbor per tick), cumulative-in-window.
+    /// Exchanges sent (one per neighbor per tick that ships anything),
+    /// cumulative-in-window: Fulls AND deltas AND failed attempts —
+    /// attempts, because the drop counters need the same denominator as
+    /// the full-era baseline.
     exports: u64,
-    /// Records exported, summed over all sends in-window (the SAME set
-    /// is cloned to every neighbor — counted per send, not per unique
-    /// record, because that is what the channel carries).
+    /// Records shipped, summed over all sends in-window (a Full counts
+    /// its whole strip, a Delta its upserts+exits; counted per send,
+    /// not per unique record, because that is what the channel carries).
     export_records: u64,
-    /// Accounted payload bytes ([`border_payload_len`]) summed over all
-    /// sends in-window.
+    /// Accounted payload bytes actually shipped ([`border_payload_len`]
+    /// for Fulls, [`delta_payload_len`] for deltas) summed over all sends
+    /// in-window.
     export_bytes: u64,
     /// Largest single export's record count in-window (context for the
     /// mean: one dense seam vs uniformly thin borders).
     export_records_max: usize,
-    /// Wall time spent in phase 5 (collect + clone-per-neighbor +
-    /// try_send), summed over ticks in-window (µs).
+    /// Wall time spent in phase 5 (collect + per-neighbor delta diff +
+    /// clone + try_send), summed over ticks in-window (µs).
     export_us: u64,
     /// `try_send` failures against full/closed neighbor mailboxes,
-    /// in-window (each one is a whole exchange lost until next tick).
+    /// in-window (each one is a lost exchange; the delta path answers it
+    /// with a forced Full on the next tick instead of waiting out the
+    /// divergence until the periodic cadence).
     export_drops: u64,
-    /// Exchanges received and applied, in-window.
+    /// Exchanges received and applied, in-window (rejected deltas are NOT
+    /// imports — they show up as `resync_requests_sent`).
     imports: u64,
     /// Records applied, in-window.
     import_records: u64,
     /// Accounted payload bytes applied, in-window.
     import_bytes: u64,
-    /// Wall time spent applying received exchanges (insert/replace),
-    /// summed over messages in-window (µs).
+    /// Wall time spent applying received exchanges (map insert/remove /
+    /// wholesale replace), summed over messages in-window (µs).
     import_us: u64,
+
+    // -- Delta-era additions (CROSS-SHARD §6.4 / Faz 1). Additive by
+    //    design: the baseline comparison needs the fields above intact. --
+    /// Deltas queued successfully, in-window.
+    delta_exchanges: u64,
+    /// Fulls queued successfully, in-window (bootstrap + resync + the
+    /// periodic cadence + send-failure recovery).
+    full_exchanges: u64,
+    /// Fulls served BECAUSE the neighbor asked for a resync, in-window.
+    full_resyncs_served: u64,
+    /// Resync requests SENT upstream after rejecting a delta (seq gap /
+    /// stale view), in-window.
+    resync_requests_sent: u64,
+    /// Deltas LOST to `try_send` failures, in-window (the subset of
+    /// `export_drops` that was a delta — each one is divergence until the
+    /// forced Full lands).
+    delta_drops: u64,
+    /// What the equivalent FULL exchanges would have accounted, in-window
+    /// (ledger-sized [`border_payload_len`] per successful send): the
+    /// context number that makes "delta vs full" readable from one log
+    /// line without re-running the baseline.
+    equiv_full_bytes: u64,
+}
+
+/// The SENDER-side per-neighbor state of the delta protocol: what this
+/// neighbor last accepted from us, under which sequence number, plus the
+/// two flags that force the next exchange to be a Full. Keyed by shard
+/// index like the mailbox table; created lazily on first export.
+#[derive(Debug)]
+struct NeighborExport {
+    /// The strip as THIS neighbor last accepted it (wire → record): the
+    /// baseline every delta is diffed against. Advanced only on a
+    /// successfully queued exchange — a Full overwrites it with the whole
+    /// current strip, a Delta applies its own upserts/exits.
+    ledger: HashMap<u64, BorrowedRecord>,
+    /// The sequence number stamped on the last exchange QUEUED for this
+    /// neighbor (monotonic per sender incarnation; a fresh actor restarts
+    /// at 0 and leads with a Full, which is exactly why a rebuilt shard
+    /// resyncs its receivers with no extra wiring).
+    seq: u64,
+    /// Force the NEXT export to this neighbor to be a Full. Set by a send
+    /// failure (a lost delta is divergence until healed — self-healing
+    /// within ONE tick instead of waiting for the 256-tick cadence), by an
+    /// explicit resync request, and by FIRST CONTACT; cleared by the Full
+    /// that answers it.
+    needs_full: bool,
+    /// The neighbor explicitly asked for a resync
+    /// ([`ShardMsg::ResyncRequest`]): the serving Full is counted as
+    /// `full_resyncs_served`. Implies `needs_full`.
+    resync_requested: bool,
+}
+
+impl Default for NeighborExport {
+    /// A brand-new entry means UNKNOWN receiver state — first contact,
+    /// or a freshly rebuilt incarnation meeting a receiver that still
+    /// holds the dead incarnation's view. The protocol's answer to
+    /// unknown is always the same: lead with a Full (`needs_full` starts
+    /// TRUE, unlike a derived default).
+    fn default() -> Self {
+        Self {
+            ledger: HashMap::new(),
+            seq: 0,
+            needs_full: true,
+            resync_requested: false,
+        }
+    }
+}
+
+/// The RECEIVER-side per-neighbor state of the delta protocol: the
+/// persistent borrowed view built incrementally from the neighbor's
+/// exchanges, plus the continuity guard. Replaces the full-era
+/// latest-whole-exchange slot.
+#[derive(Debug, Default)]
+struct NeighborView {
+    /// The borrowed boundary records, keyed by wire id (upserts insert,
+    /// exits remove — no ghosts survive an exit).
+    recs: HashMap<u64, BorrowedRecord>,
+    /// The sequence number the NEXT delta from this neighbor must carry.
+    /// A mismatch means an exchange went missing: reject, request a
+    /// resync, stop trusting the view until a Full re-baselines it.
+    expected_seq: u64,
+    /// Set when a gap/stale-seq delta was rejected: the view MAY be wrong
+    /// by an unknown amount (we know only THAT we lost something), so it
+    /// is excluded from snapshots until the healing Full arrives —
+    /// rendering possibly-diverged borrowed entities (ghost positions,
+    /// despawned ids) would be worse than their brief absence.
+    stale_until_full: bool,
 }
 
 /// A player's channel halves, moved with a migrating player entity
@@ -463,9 +632,18 @@ pub enum ShardMsg<S> {
         state: S,
         player: Option<PlayerMigration>,
     },
-    /// The neighbor's boundary entities (full state; replaces whatever the
-    /// shard has for that neighbor).
+    /// A neighbor's boundary update (§6.4): a Full replaces this shard's
+    /// view of that neighbor wholesale; a Delta applies its upserts/exits
+    /// when its sequence number matches the expected one exactly.
     Border { from: usize, exchange: BorderExchange },
+    /// A neighbor rejected our delta stream (sequence gap or a view it
+    /// had marked stale): serve that neighbor a FULL on the next phase 5.
+    /// Deliberately a tiny standalone message on the same bounded mailbox
+    /// instead of a shared resync flag: it rides the existing FIFO, so no
+    /// new channel, no await, and the ordering against in-flight deltas
+    /// is the natural one (the Full is generated after everything already
+    /// queued was sent).
+    ResyncRequest { from: usize },
     /// Stop the shard (drops the world).
     Shutdown,
 }
@@ -538,8 +716,10 @@ pub trait ShardLogic<W>: GameLogic<W> {
     fn on_migrate_out(&mut self, world: &mut W, wire: u64);
 
     /// This shard's boundary entities (full wire records) for the phase-5
-    /// export to the neighbors. The set is re-sent WHOLE every tick
-    /// (idempotent): a dropped exchange self-heals on the next tick.
+    /// export to the neighbors. The actor diffs this set against its
+    /// per-neighbor ledgers and ships only deltas (upserts + exits) —
+    /// except where a Full is due (first contact, resync, periodic
+    /// cadence, post-drop healing), when the same set ships whole.
     fn collect_border(&self, world: &W) -> Vec<BorrowedRecord>;
 
     /// The wire ids of this shard's OWN entities (the snapshot's own
@@ -553,9 +733,10 @@ pub trait ShardLogic<W>: GameLogic<W> {
 /// The shard actor. Owns one shard's world, its player table (the
 /// shard's share of the room's members), and its group table — the
 /// same ownership discipline as the room actor (`RoomActor<W, G>`), plus
-/// the shard protocol state (neighbor mailboxes, the latest border
-/// exchange per neighbor, the pending migrate-out marks, the deferred
-/// migrations, the conn-epoch tables). `G` is the snapshot group key, `St`
+/// the shard protocol state (neighbor mailboxes, the delta protocol's
+/// per-neighbor sender ledgers and receiver views, the pending
+/// migrate-out marks, the deferred migrations, the conn-epoch tables).
+/// `G` is the snapshot group key, `St`
 /// the migration state (see [`ShardLogic`]).
 pub struct ShardActor<W, G, St> {
     config: RoomConfig,
@@ -615,9 +796,15 @@ pub struct ShardActor<W, G, St> {
     groups: HashMap<G, GroupState>,
     /// One mailbox per shard index (used for the neighbors' indices).
     neighbors: Vec<Mailbox<ShardMsg<St>>>,
-    /// The latest border exchange per neighbor (replaced wholesale — the
-    /// exchange is full state).
-    border: HashMap<usize, Vec<BorrowedRecord>>,
+    /// The borrowed boundary view per neighbor (the RECEIVER side of the
+    /// delta protocol): persistent records built incrementally from
+    /// Fulls/Deltas, with the expected-sequence guard per neighbor.
+    border: HashMap<usize, NeighborView>,
+    /// The SENDER side of the delta protocol: what each neighbor last
+    /// accepted from us (ledger + seq + the force-Full flags). Created
+    /// lazily on first export; a fresh actor starts empty, so a rebuilt
+    /// shard's first exchange is always a Full.
+    export: HashMap<usize, NeighborExport>,
     /// Entities marked out by a successful `Migrate` send: (wire, the tick
     /// index at which the shard despawns them).
     pending_out: Vec<(u64, u64)>,
@@ -741,6 +928,7 @@ where
             groups: HashMap::new(),
             neighbors,
             border: HashMap::new(),
+            export: HashMap::new(),
             pending_out: Vec::new(),
             deferred: VecDeque::new(),
             run_every: run_every.max(1),
@@ -901,6 +1089,14 @@ where
                     import_records = s.import_records,
                     import_bytes = s.import_bytes,
                     import_us = s.import_us,
+                    // Delta-era additions (§6.4): the exchange mix, the
+                    // resync traffic and the full-equivalent byte context.
+                    delta_exchanges = s.delta_exchanges,
+                    full_exchanges = s.full_exchanges,
+                    full_resyncs_served = s.full_resyncs_served,
+                    resync_requests_sent = s.resync_requests_sent,
+                    delta_drops = s.delta_drops,
+                    equiv_full_bytes = s.equiv_full_bytes,
                     "border_exchange_summary"
                 );
             }
@@ -1478,51 +1674,194 @@ where
             }
         }
 
-        // -- Phase 5 — BORDER (export this shard's boundary entities,
-        //    WHOLE, to every neighbor: the exchange is idempotent, so a
-        //    dropped one self-heals next tick).
+        // -- Phase 5 — BORDER (export this shard's boundary entities to
+        //    every neighbor as a §6.4 delta exchange: a Full against the
+        //    per-neighbor ledger when continuity is broken or the periodic
+        //    cadence fires, otherwise just upserts+exits; a quiet strip
+        //    ships NOTHING, which is the entire point of the delta).
         //
         //    measurement scaffolding for CROSS-SHARD §7 — remove or
-        //    promote after the delta decision: the whole phase
-        //    (collect + per-neighbor clone + send) is timed and counted
-        //    into `bstats`. With no neighbors nothing is exchanged, so
-        //    nothing is counted — an edge/unsharded topology pays no
-        //    instrumentation cost beyond the emptiness check.
+        //    promote after the delta decision: the whole phase (collect +
+        //    diff-vs-ledger + send) is timed and counted into `bstats`
+        //    with the SAME helpers as the full-era baseline, so bytes/
+        //    records/µs stay directly comparable. With no neighbors
+        //    nothing is exchanged, so nothing is counted — an edge/
+        //    unsharded topology pays no instrumentation cost beyond the
+        //    emptiness check.
         let nb = self.logic.neighbors().to_vec();
         if !nb.is_empty() {
             let t5 = Instant::now();
             let records = self.logic.collect_border(&self.world);
-            let recs = records.len();
-            let payload = border_payload_len(recs);
+            // The current strip as a wire-keyed map: the delta diff and
+            // the ledger update both want membership tests, and duplicate
+            // wires (a game bug if any) collapse deterministically to the
+            // last record instead of corrupting the ledger bookkeeping.
+            let current: HashMap<u64, BorrowedRecord> =
+                records.iter().copied().map(|r| (r.wire, r)).collect();
+            // Pin 3c: the low-frequency periodic Full — one comparison per
+            // neighbor, taken once per tick.
+            let periodic_full = t.tick.is_multiple_of(BORDER_FULL_EVERY_TICKS);
             let mut drops = 0u64;
+            let mut delta_drops = 0u64;
+            let mut shipped_records = 0u64;
+            let mut shipped_bytes = 0u64;
+            let mut records_max = 0usize;
+            let mut delta_exchanges = 0u64;
+            let mut full_exchanges = 0u64;
+            let mut resyncs_served = 0u64;
+            let mut equiv_full_bytes = 0u64;
+            let mut attempts = 0u64;
             for b in &nb {
-                if self.neighbors[*b]
-                    .try_send(ShardMsg::Border {
-                        from: self.index,
-                        exchange: BorderExchange {
-                            tick: t.tick,
+                let st = self.export.entry(*b).or_default();
+                // A Full is forced by: the periodic cadence (3c), a send
+                // failure on the last exchange (self-heal in ONE tick), an
+                // explicit resync request from the neighbor, or first
+                // contact (`needs_full` defaults true on a fresh actor —
+                // which is also the rebuilt-incarnation path).
+                let force_full = periodic_full || st.needs_full;
+                let was_resync = st.resync_requested;
+                st.seq += 1;
+                let seq = st.seq;
+                let tick = t.tick;
+                // The delta payload is computed OWNED first so the ledger
+                // commit on send success does not need to read the message
+                // back: the exchange carries a clone of exactly these
+                // upserts/exits (one small-allocation copy per send — the
+                // honest price counted in phase 5).
+                enum Commit {
+                    Full,
+                    Delta {
+                        upserts: Vec<BorrowedRecord>,
+                        exits: Vec<u64>,
+                    },
+                }
+                let (exchange, payload, recs_shipped, commit) = if force_full {
+                    (
+                        BorderExchange::Full {
+                            seq,
+                            tick,
                             entities: records.clone(),
                         },
-                    })
-                    .is_err()
-                {
-                    drops += 1;
-                    warn!(
-                        room = %self.config.id,
-                        shard = self.index,
-                        neighbor = b,
-                        "border send failed (neighbor channel full); the \
-                         exchange re-sends in full next tick"
-                    );
+                        border_payload_len(current.len()),
+                        current.len(),
+                        Commit::Full,
+                    )
+                } else {
+                    // The delta: upserts = records missing from or changed
+                    // against the ledger; exits = ledger ids gone from the
+                    // strip. Both directions are explicit so neither new
+                    // nor departed entities can be misread as "unchanged".
+                    let mut upserts = Vec::new();
+                    for r in current.values() {
+                        match st.ledger.get(&r.wire) {
+                            Some(prev) if prev.x == r.x && prev.y == r.y => {}
+                            _ => upserts.push(*r),
+                        }
+                    }
+                    let mut exits: Vec<u64> = st
+                        .ledger
+                        .keys()
+                        .filter(|w| !current.contains_key(w))
+                        .copied()
+                        .collect();
+                    exits.sort_unstable();
+                    if upserts.is_empty() && exits.is_empty() {
+                        // Nothing changed since this neighbor last
+                        // accepted: ship nothing — this silent-tick skip
+                        // IS the byte win being measured. The sequence
+                        // number is NOT consumed (rolled back here):
+                        // skipping a tick must not manufacture a gap the
+                        // receiver would treat as loss.
+                        st.seq -= 1;
+                        continue;
+                    }
+                    (
+                        BorderExchange::Delta {
+                            seq,
+                            tick,
+                            upserts: upserts.clone(),
+                            exits: exits.clone(),
+                        },
+                        delta_payload_len(upserts.len(), exits.len()),
+                        upserts.len() + exits.len(),
+                        Commit::Delta { upserts, exits },
+                    )
+                };
+                attempts += 1;
+                match self.neighbors[*b].try_send(ShardMsg::Border {
+                    from: self.index,
+                    exchange,
+                }) {
+                    Ok(()) => {
+                        // Commit: the neighbor WILL see this exchange (the
+                        // bounded FIFO holds it until its CONTROL drain),
+                        // so the ledger may advance to it.
+                        match commit {
+                            Commit::Full => {
+                                let st = self.export.get_mut(b).expect("just inserted");
+                                st.ledger = current.clone();
+                                st.needs_full = false;
+                                st.resync_requested = false;
+                                full_exchanges += 1;
+                                if was_resync {
+                                    resyncs_served += 1;
+                                }
+                            }
+                            Commit::Delta { upserts, exits } => {
+                                let st = self.export.get_mut(b).expect("just inserted");
+                                for r in upserts {
+                                    st.ledger.insert(r.wire, r);
+                                }
+                                for w in exits {
+                                    st.ledger.remove(&w);
+                                }
+                                delta_exchanges += 1;
+                            }
+                        }
+                        shipped_records += recs_shipped as u64;
+                        shipped_bytes += payload;
+                        equiv_full_bytes += border_payload_len(current.len());
+                        records_max = records_max.max(recs_shipped);
+                    }
+                    Err(_) => {
+                        // The exchange did NOT reach the neighbor's queue:
+                        // its ledger and view stay where they were, but the
+                        // seq already moved — a plain delta next tick would
+                        // look like a gap to the receiver. Force a Full
+                        // instead (the one-tick self-heal): it re-baselines
+                        // ledger AND receiver in one message.
+                        drops += 1;
+                        if matches!(commit, Commit::Delta { .. }) {
+                            delta_drops += 1;
+                        }
+                        let st = self.export.get_mut(b).expect("just inserted");
+                        st.needs_full = true;
+                        warn!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            neighbor = b,
+                            "border send failed (neighbor channel full); \
+                             that neighbor is flagged for a Full re-sync \
+                             on the next tick"
+                        );
+                    }
                 }
             }
             let s = &mut self.bstats;
-            s.exports += nb.len() as u64;
-            s.export_records += recs as u64 * nb.len() as u64;
-            s.export_bytes += payload * nb.len() as u64;
-            s.export_records_max = s.export_records_max.max(recs);
+            // Exports counts EXCHANGES (queued or failed), not tick×neighbor
+            // slots: a silently-skipped neighbor shipped nothing and must not
+            // inflate the denominators the byte/record rates divide by.
+            s.exports += attempts;
+            s.export_records += shipped_records;
+            s.export_bytes += shipped_bytes;
+            s.export_records_max = s.export_records_max.max(records_max);
             s.export_us += t5.elapsed().as_micros() as u64;
             s.export_drops += drops;
+            s.delta_exchanges += delta_exchanges;
+            s.full_exchanges += full_exchanges;
+            s.full_resyncs_served += resyncs_served;
+            s.delta_drops += delta_drops;
+            s.equiv_full_bytes += equiv_full_bytes;
         }
 
         // -- Phase 6 — BROADCAST (the room's broadcast phase with the
@@ -1861,23 +2200,93 @@ where
                 true
             }
             ShardMsg::Border { from, exchange } => {
-                // Full state, idempotent: replace whatever we have.
+                // The receiver half of the §6.4 protocol: a Full replaces
+                // the view and re-baselines the expected sequence (accepted
+                // at ANY time — the rebuilt-incarnation path); a Delta is
+                // applied atomically ONLY on an exact sequence match, and a
+                // mismatch rejects it wholesale, requests a resync and
+                // quarantines the view until the healing Full arrives.
                 //
                 // measurement scaffolding for CROSS-SHARD §7 — remove or
-                // promote after the delta decision: apply-side
-                // accounting. In process there is no decode step (the
-                // message arrives as structs); the wholesale insert IS
-                // the "decode + apply" cost a wire deployment would pay
-                // on top of its deserialization.
+                // promote after the delta decision: apply-side accounting.
+                // In process there is no decode step (the message arrives
+                // as structs); the map insert/remove IS the "decode +
+                // apply" cost a wire deployment would pay on top of its
+                // deserialization. Accounted through the same helpers as
+                // the sender for comparability.
                 let tr = Instant::now();
-                let recs = exchange.entities.len();
-                let bytes = border_payload_len(recs);
-                self.border.insert(from, exchange.entities);
                 let s = &mut self.bstats;
-                s.imports += 1;
-                s.import_records += recs as u64;
-                s.import_bytes += bytes;
+                match exchange {
+                    BorderExchange::Full { seq, entities, .. } => {
+                        let recs = entities.len();
+                        let view = self.border.entry(from).or_default();
+                        view.recs = entities.into_iter().map(|r| (r.wire, r)).collect();
+                        view.expected_seq = seq.wrapping_add(1);
+                        view.stale_until_full = false;
+                        s.imports += 1;
+                        s.import_records += recs as u64;
+                        s.import_bytes += border_payload_len(recs);
+                    }
+                    BorderExchange::Delta {
+                        seq,
+                        upserts,
+                        exits,
+                        ..
+                    } => {
+                        let view = self.border.entry(from).or_default();
+                        if view.stale_until_full || seq != view.expected_seq {
+                            // Continuity broken (a lost exchange, or this is
+                            // a stale incarnation's message after a rebuild):
+                            // never apply — an unknown-sized hole can leave
+                            // ghosts and stale positions that no later delta
+                            // can name. Quarantine + ask upstream for a Full
+                            // (pin 3a). The request itself rides the same
+                            // bounded mailbox with try_send: if THAT drops,
+                            // the periodic cadence (3c) still heals us, just
+                            // slower.
+                            view.stale_until_full = true;
+                            s.resync_requests_sent += 1;
+                            if let Some(mail) = self.neighbors.get(from)
+                                && let Err(mpsc::error::TrySendError::Full(_)) =
+                                    mail.try_send(ShardMsg::ResyncRequest { from: self.index })
+                            {
+                                debug!(
+                                    room = %self.config.id,
+                                    shard = self.index,
+                                    %from,
+                                    "resync request dropped (neighbor channel \
+                                     full); the periodic Full remains the \
+                                     backstop"
+                                );
+                            }
+                        } else {
+                            let ups = upserts.len();
+                            let exs = exits.len();
+                            for r in upserts {
+                                view.recs.insert(r.wire, r);
+                            }
+                            for w in exits {
+                                view.recs.remove(&w);
+                            }
+                            view.expected_seq = seq.wrapping_add(1);
+                            view.stale_until_full = false;
+                            s.imports += 1;
+                            s.import_records += (ups + exs) as u64;
+                            s.import_bytes += delta_payload_len(ups, exs);
+                        }
+                    }
+                }
                 s.import_us += tr.elapsed().as_micros() as u64;
+                true
+            }
+            ShardMsg::ResyncRequest { from } => {
+                // A neighbor rejected our delta stream: serve it a Full on
+                // the next phase 5 (the flag makes the answer deterministic
+                // — no timing race, and the Full is generated after every
+                // already-queued message, so ordering stays natural).
+                let st = self.export.entry(from).or_default();
+                st.needs_full = true;
+                st.resync_requested = true;
                 true
             }
             ShardMsg::Shutdown => false,
@@ -2080,12 +2489,17 @@ where
         }
 
         // The borrowed boundary set (module docs, "Boundary visibility"):
-        // the latest exchange per neighbor, flattened. Sorted by wire so
-        // the payload order is deterministic (the ledger comparison is
-        // map-based and order-independent anyway).
+        // the persistent per-neighbor views flattened. Sorted by wire so
+        // the payload order is deterministic. A quarantined view
+        // (`stale_until_full` — a rejected delta means an unknown-sized
+        // hole) is EXCLUDED: rendering possibly-diverged borrowed entities
+        // would be worse than their brief absence; the healing Full
+        // restores them within a tick or two.
         let mut borrowed: Vec<BorrowedRecord> = Vec::new();
         for recs in self.border.values() {
-            borrowed.extend_from_slice(recs);
+            if !recs.stale_until_full {
+                borrowed.extend(recs.recs.values().copied());
+            }
         }
         borrowed.sort_unstable_by_key(|r| r.wire);
         // Own records win over the neighbor's one-tick-stale borrowed copy
@@ -3655,6 +4069,539 @@ mod tests {
         assert_eq!(
             a.m.keepalive_resends, 2,
             "two unchanged-group re-sends (steps 3 and 6)"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Delta border exchange (CROSS-SHARD §6.4, the four-pin contract).
+    // The rig below wires two BARE (unspawned) actors with real bounded
+    // channels whose RECEIVING ends the test holds: every inter-shard
+    // message crosses the test's hands, so a loss can be simulated
+    // exactly (drop one message) and the resync traffic observed without
+    // any network or timing dependence.
+    // -----------------------------------------------------------------
+
+    /// A TLogic for the border rig; its observation channels are dead
+    /// (every send is `let _ =` ignored) — the tests read protocol state,
+    /// not world observations.
+    fn rig_logic(index: usize) -> TLogic {
+        let (obs, _obs_rx) = mpsc::channel(16);
+        let (ops, _ops_rx) = mpsc::channel(16);
+        TLogic {
+            index,
+            next_serial: 0,
+            player_ent: HashMap::new(),
+            ent_player: HashMap::new(),
+            last_tick: 0,
+            obs,
+            ops,
+        }
+    }
+
+    fn rig_actor(index: usize, neighbors: Vec<Mailbox<ShardMsg<TState>>>) -> ShardActor<TWorld, (), TState> {
+        let (_tick_tx, tick_rx) = broadcast::channel(64);
+        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
+        ShardActor::new(
+            RoomConfig {
+                id: RoomId(13),
+                keepalive_hz: 0.0,
+                metrics_cadence_hz: 0.0,
+                ..Default::default()
+            },
+            index,
+            TWorld::default(),
+            Box::new(rig_logic(index)),
+            tick_rx,
+            rx,
+            neighbors,
+            1,
+            metrics_null(),
+            None, // no result sink
+        )
+    }
+
+    /// Two bare shard actors (0 and 1, mutual neighbors) wired through
+    /// channels the TEST controls. `put` seeds strip entities directly —
+    /// the strip is `|x| <= 1`, and x stays strictly inside the owner's
+    /// region so no migration path ever fires under these tests.
+    struct BorderRig {
+        s0: ShardActor<TWorld, (), TState>,
+        s1: ShardActor<TWorld, (), TState>,
+        /// What s0 exports to s1 lands here (test-held receiving end).
+        tx01: Mailbox<ShardMsg<TState>>,
+        rx01: Inbox<ShardMsg<TState>>,
+        /// What s1 sends back (resync requests) lands here.
+        _tx10: Mailbox<ShardMsg<TState>>,
+        rx10: Inbox<ShardMsg<TState>>,
+    }
+
+    impl BorderRig {
+        fn new() -> Self {
+            let (tx01, rx01) = mpsc::channel(16);
+            let (tx10, rx10) = mpsc::channel(16);
+            // Slot fillers for the unused self-slots (never targeted:
+            // TLogic::neighbors is [1] for index 0 and [0] for index 1).
+            let (d0, _d0rx) = channel::<ShardMsg<TState>>(1);
+            let (d1, _d1rx) = channel::<ShardMsg<TState>>(1);
+            let s0 = rig_actor(0, vec![d0, tx01.clone()]);
+            let s1 = rig_actor(1, vec![tx10.clone(), d1]);
+            BorderRig {
+                s0,
+                s1,
+                tx01,
+                rx01,
+                _tx10: tx10,
+                rx10,
+            }
+        }
+
+        /// Run shard 0's phases at this tick index (its exports land in
+        /// `rx01`).
+        fn step0(&mut self, tick: u64) {
+            assert!(self.s0.step_phases(&tinfo(tick)), "shard 0 keeps running");
+        }
+
+        /// Take everything shard 0 exported (WITHOUT delivering): the
+        /// test inspects each message and decides deliver vs drop — the
+        /// exact seam a lost exchange needs.
+        fn drain01(&mut self) -> Vec<ShardMsg<TState>> {
+            let mut out = Vec::new();
+            while let Ok(m) = self.rx01.try_recv() {
+                out.push(m);
+            }
+            out
+        }
+
+        /// Feed messages into shard 1's CONTROL handler.
+        fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState>>) {
+            for m in msgs {
+                assert!(self.s1.handle_msg(m, &tctx(999)), "s1 keeps running");
+            }
+        }
+
+        /// Feed messages into shard 0's CONTROL handler.
+        fn deliver_to_s0(&mut self, msgs: Vec<ShardMsg<TState>>) {
+            for m in msgs {
+                assert!(self.s0.handle_msg(m, &tctx(999)), "s0 keeps running");
+            }
+        }
+    }
+
+    /// Seed a boundary entity straight into a shard's world.
+    fn put(a: &mut ShardActor<TWorld, (), TState>, wire: u64, x: f32, y: f32) {
+        a.world.ents.insert(wire, (x, y, 0));
+    }
+
+    /// Assert the batch is exactly one Border carrying a Full; return its
+    /// (seq, entities).
+    fn expect_full(msgs: &[ShardMsg<TState>]) -> (u64, &[BorrowedRecord]) {
+        assert_eq!(msgs.len(), 1, "exactly one export message: {msgs:?}");
+        match &msgs[0] {
+            ShardMsg::Border {
+                exchange: BorderExchange::Full { seq, entities, .. },
+                ..
+            } => (*seq, entities.as_slice()),
+            other => panic!("expected a Full exchange, got {other:?}"),
+        }
+    }
+
+    /// Assert the batch is exactly one Border carrying a Delta; return
+    /// its (seq, upserts, exits).
+    fn expect_delta(
+        msgs: &[ShardMsg<TState>],
+    ) -> (u64, &[BorrowedRecord], &[u64]) {
+        assert_eq!(msgs.len(), 1, "exactly one export message: {msgs:?}");
+        match &msgs[0] {
+            ShardMsg::Border {
+                exchange:
+                    BorderExchange::Delta {
+                        seq,
+                        upserts,
+                        exits,
+                        ..
+                    },
+                ..
+            } => (*seq, upserts.as_slice(), exits.as_slice()),
+            other => panic!("expected a Delta exchange, got {other:?}"),
+        }
+    }
+
+    /// Delta lock 1 — an entity entering the strip appears in the
+    /// neighbor's view; moving updates it in place; leaving removes it
+    /// (no ghost). The bootstrap is an explicit Full; every later step is
+    /// a minimal delta.
+    #[tokio::test]
+    async fn delta_exchange_applies_upserts_and_exits_correctly() {
+        let mut r = BorderRig::new();
+
+        // Enter: first contact ships the whole strip as a Full...
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        let msgs = r.drain01();
+        let (seq, entities) = expect_full(&msgs);
+        assert_eq!(
+            entities,
+            [BorrowedRecord { wire: 100, x: -1, y: 0 }],
+            "bootstrap Full carries the strip"
+        );
+        r.deliver_to_s1(msgs);
+        assert_eq!(r.s1.border[&0].recs.len(), 1, "view established");
+        assert_eq!(
+            r.s1.border[&0].expected_seq,
+            seq + 1,
+            "the receiver expects the next sequence"
+        );
+
+        // Move: only the changed record ships, as an upsert delta.
+        put(&mut r.s0, 100, -1.0, 1.0);
+        r.step0(2);
+        let msgs = r.drain01();
+        let (_seq2, upserts, exits) = expect_delta(&msgs);
+        assert_eq!(upserts, [BorrowedRecord { wire: 100, x: -1, y: 1 }]);
+        assert!(exits.is_empty(), "a move is not an exit");
+        r.deliver_to_s1(msgs);
+        assert_eq!(r.s1.border[&0].recs[&100].y, 1, "position updated");
+
+        // A second entity enters: only IT is new.
+        put(&mut r.s0, 101, -1.0, 5.0);
+        r.step0(3);
+        let msgs = r.drain01();
+        let (_seq3, upserts, _exits3) = expect_delta(&msgs);
+        assert_eq!(upserts, [BorrowedRecord { wire: 101, x: -1, y: 5 }]);
+        r.deliver_to_s1(msgs);
+        assert_eq!(r.s1.border[&0].recs.len(), 2);
+
+        // Leave: an explicit exit record — the borrowed view must drop
+        // the entity (a full-era wholesale replace never had this failure
+        // mode; a delta without exits would ghost forever).
+        let _ = r.s0.world.ents.remove(&101);
+        r.step0(4);
+        let msgs = r.drain01();
+        let (_seq4, upserts, exits) = expect_delta(&msgs);
+        assert!(upserts.is_empty(), "a leave is not an upsert");
+        assert_eq!(exits, [101]);
+        r.deliver_to_s1(msgs);
+        assert_eq!(
+            r.s1.border[&0].recs.len(),
+            1,
+            "no ghost after the exit"
+        );
+        assert!(!r.s1.border[&0].recs.contains_key(&101));
+    }
+
+    /// Delta lock 2 (§6.4 pin 3a) — a lost delta is DETECTED, not silently
+    /// diverged: the receiver rejects the next delta on its sequence
+    /// mismatch, quarantines the view, sends a ResyncRequest upstream, and
+    /// the serving Full restores a correct complete view.
+    #[tokio::test]
+    async fn seq_gap_triggers_resync_full() {
+        let mut r = BorderRig::new();
+
+        // Bootstrap: Full(seq=1) delivered → expected becomes 2.
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        let msgs = r.drain01();
+        r.deliver_to_s1(msgs);
+
+        // THE LOSS: the next delta (seq=2, y→1) never arrives.
+        put(&mut r.s0, 100, -1.0, 1.0);
+        r.step0(2);
+        let lost = r.drain01();
+        assert_eq!(lost.len(), 1, "the delta was sent — then dropped by us");
+        // ...and discarded. Nothing delivered.
+
+        // The NEXT delta (seq=3) carries the wrong sequence number.
+        put(&mut r.s0, 100, -1.0, 2.0);
+        r.step0(3);
+        let msgs = r.drain01();
+        let (seq, _, _) = expect_delta(&msgs);
+        assert_eq!(seq, 3, "the sender stamped consecutively");
+        r.deliver_to_s1(msgs); // rejected INSIDE handle_msg
+
+        assert!(
+            r.s1.border[&0].stale_until_full,
+            "the mismatch quarantines the view"
+        );
+        assert_eq!(
+            r.s1.border[&0].recs[&100].y, 0,
+            "nothing after the last GOOD exchange was applied (no \
+             half-applied state)"
+        );
+        assert_eq!(
+            r.s1.bstats.resync_requests_sent, 1,
+            "exactly one resync request went upstream"
+        );
+        // The request crossed back over the controlled channel:
+        let requests: Vec<_> = {
+            let mut out = Vec::new();
+            while let Ok(m) = r.rx10.try_recv() {
+                out.push(m);
+            }
+            out
+        };
+        assert!(
+            requests
+                .iter()
+                .any(|m| matches!(m, ShardMsg::ResyncRequest { from: 1 })),
+            "ResyncRequest flowed to the neighbor: {requests:?}"
+        );
+        r.deliver_to_s0(requests);
+
+        // The healing Full: even with NO further changes the flagged
+        // neighbor gets a Full next tick, and it restores the COMPLETE
+        // current truth (including what the lost delta carried).
+        r.step0(4);
+        let msgs = r.drain01();
+        let (_, entities) = expect_full(&msgs);
+        assert_eq!(
+            entities,
+            [BorrowedRecord { wire: 100, x: -1, y: 2 }],
+            "the healing Full re-baselines everything"
+        );
+        r.deliver_to_s1(msgs);
+        assert!(!r.s1.border[&0].stale_until_full, "quarantine lifted");
+        assert_eq!(r.s1.border[&0].recs[&100].y, 2, "view correct again");
+        assert!(
+            !r.s1.border[&0].stale_until_full
+                && r.s1.border[&0].expected_seq == 5,
+            "sequence re-baselined past the healing Full"
+        );
+    }
+
+    /// Delta lock 3 (pin 3b) — a rebuilt shard's fresh incarnation leads
+    /// with a FULL (its sender state starts empty), and the receiver
+    /// resets cleanly: the dead incarnation's records cannot ghost.
+    #[tokio::test]
+    async fn rebuilt_shard_first_exchange_is_full_and_resets_receiver() {
+        let mut r = BorderRig::new();
+
+        // Incarnation A establishes a populated view on shard 1.
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        let msgs = r.drain01();
+        r.deliver_to_s1(msgs);
+        assert_eq!(r.s1.border[&0].recs.len(), 1);
+
+        // REBUILD: a brand-new actor for shard 0 — fresh world (the new
+        // incarnation respawned different entities), fresh export state,
+        // its own channel to the SAME receiver.
+        let (tx01p, mut rx01p) = mpsc::channel(16);
+        let (d, _drx) = channel::<ShardMsg<TState>>(1);
+        std::mem::forget(_drx);
+        let mut s0p = rig_actor(0, vec![d, tx01p]);
+        put(&mut s0p, 200, -1.0, 7.0);
+        assert!(s0p.step_phases(&tinfo(50)), "rebuilt shard runs");
+
+        let mut first = Vec::new();
+        while let Ok(m) = rx01p.try_recv() {
+            first.push(m);
+        }
+        let (seq, entities) = expect_full(&first);
+        assert_eq!(
+            entities,
+            [BorrowedRecord { wire: 200, x: -1, y: 7 }],
+            "the FRESH incarnation's first exchange is a Full of ITS strip"
+        );
+        r.deliver_to_s1(first);
+
+        // The receiver reset cleanly: exactly the new incarnation's
+        // records, old-incarnation ghost gone, sequence re-baselined.
+        let view = &r.s1.border[&0];
+        assert_eq!(view.recs.len(), 1, "whole-view replacement: {view:?}");
+        assert!(view.recs.contains_key(&200), "new entity present");
+        assert!(
+            !view.recs.contains_key(&100),
+            "the dead incarnation's record must not survive as a ghost"
+        );
+        assert_eq!(
+            view.expected_seq,
+            seq + 1,
+            "expected sequence re-baselined from the new stream"
+        );
+        assert!(!view.stale_until_full);
+    }
+
+    /// Delta lock 4 (pin 3c) — the periodic sigorta: a quiet neighbor is
+    /// shipped NOTHING on ordinary ticks (the byte win), but the 256-tick
+    /// cadence forces a Full even with zero changes.
+    #[tokio::test]
+    async fn periodic_full_fires_on_cadence() {
+        let mut r = BorderRig::new();
+
+        // Bootstrap + one change establish a non-empty ledger.
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        {
+            let msgs = r.drain01();
+            r.deliver_to_s1(msgs);
+        }
+        put(&mut r.s0, 100, -1.0, 1.0);
+        r.step0(2);
+        {
+            let msgs = r.drain01();
+            r.deliver_to_s1(msgs);
+        }
+
+        // Quiet tick: no changes ⇒ NOTHING ships (this skip is the point
+        // of the whole exercise).
+        r.step0(3);
+        assert!(r.drain01().is_empty(), "an unchanged strip ships nothing");
+
+        // ...but the cadence tick forces a Full regardless of quietness.
+        assert!(r.s0.world.ents.len() == 1, "still just the one entity");
+        r.step0(BORDER_FULL_EVERY_TICKS);
+        let msgs = r.drain01();
+        let (_, entities) = expect_full(&msgs);
+        assert_eq!(entities.len(), 1, "the Full carries the whole strip");
+
+        // And quietness resumes right after.
+        r.step0(BORDER_FULL_EVERY_TICKS + 1);
+        assert!(r.drain01().is_empty(), "no change after the cadence ⇒ silent");
+
+        // Counter cross-check within this run: two Fulls (bootstrap +
+        // periodic), one delta, zero drops.
+        assert_eq!(r.s0.bstats.full_exchanges, 2);
+        assert_eq!(r.s0.bstats.delta_exchanges, 1);
+        assert_eq!(r.s0.bstats.export_drops, 0);
+    }
+
+    /// Delta lock 5 (backpressure correctness) — a try_send failure on a
+    /// DELTA marks that neighbor for a Full, which arrives on the very
+    /// next tick carrying the data the dropped delta would have brought:
+    /// divergence heals within ONE tick instead of the 256-tick cadence.
+    #[tokio::test]
+    async fn send_failure_marks_neighbor_for_full_resync() {
+        let mut r = BorderRig::new();
+
+        // Bootstrap normally.
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        {
+            let msgs = r.drain01();
+            r.deliver_to_s1(msgs);
+        }
+
+        // Saturate the neighbor mailbox: nothing else fits.
+        while r
+            .tx01
+            .try_send(ShardMsg::ResyncRequest { from: 999 })
+            .is_ok()
+        {}
+
+        // A strip change now ships a delta — which MUST fail.
+        put(&mut r.s0, 100, -1.0, 1.0);
+        r.step0(2);
+        assert_eq!(
+            r.s0.bstats.delta_drops, 1,
+            "the failed delta is counted"
+        );
+        assert!(
+            r.s0.export[&1].needs_full,
+            "the failure flags the neighbor for a Full"
+        );
+
+        // Unblock the channel (drain the dummies AND anything else).
+        while r.rx01.try_recv().is_ok() {}
+
+        // Next tick, NO further changes: the flag alone forces a Full —
+        // and it carries the position update the dropped delta had.
+        r.step0(3);
+        let msgs = r.drain01();
+        let (_, entities) = expect_full(&msgs);
+        assert_eq!(
+            entities,
+            [BorrowedRecord { wire: 100, x: -1, y: 1 }],
+            "the healing Full contains what the dropped delta carried"
+        );
+        r.deliver_to_s1(msgs);
+        assert_eq!(
+            r.s1.border[&0].recs[&100].y, 1,
+            "the receiver converged despite the loss"
+        );
+        assert!(!r.s0.export[&1].needs_full, "flag consumed");
+    }
+
+    /// Delta lock 6 (pin 4) — the own-wins filter applies IDENTICALLY to
+    /// records that entered the view via a delta: an entity that just
+    /// migrated INTO this shard wins over the neighbor's stale borrowed
+    /// copy, so the snapshot lists it once, at the OWN position.
+    #[tokio::test]
+    async fn own_wins_filter_applies_to_delta_applied_records() {
+        let mut r = BorderRig::new();
+
+        // Shard 1 gains its own member at x = 0 (conn 10 ⇒ x = 0 per the
+        // test logic's spawn rule; region 1, so nothing migrates).
+        let (out_tx, mut out_rx) = mpsc::channel::<FrameBatch>(16);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        assert!(r.s1.handle_msg(
+            ShardMsg::Join {
+                conn: ConnectionId(10),
+                epoch: 1,
+                out: out_tx,
+                reply: reply_tx,
+            },
+            &tctx(1),
+        ));
+        let w_own = reply_rx
+            .await
+            .expect("join reply")
+            .expect("join ok")
+            .0;
+
+        // Bootstrap an EMPTY strip from shard 0 (Full, first contact),
+        // then apply a DELTA that inserts the stale borrowed copy of the
+        // just-crossed own entity — the exact crossing-tick shape of pin
+        // 4. The copy enters the view THROUGH the delta path.
+        r.step0(1); // empty strip, first contact ⇒ Full{entities: []}
+        {
+            let msgs = r.drain01();
+            r.deliver_to_s1(msgs);
+        }
+        r.s1.handle_msg(
+            ShardMsg::Border {
+                from: 0,
+                exchange: BorderExchange::Delta {
+                    seq: 2, // matches the expected sequence after the Full
+                    tick: 2,
+                    upserts: vec![BorrowedRecord {
+                        wire: w_own,
+                        x: -9, // the STALE pre-crossing position
+                        y: 0,
+                    }],
+                    exits: vec![],
+                },
+            },
+            &tctx(2),
+        );
+        assert_eq!(
+            r.s1.border[&0].recs.get(&w_own).map(|b| b.x),
+            Some(-9),
+            "the stale copy IS in the borrowed view (delta applied)"
+        );
+
+        // Broadcast: the snapshot must contain the entity EXACTLY ONCE,
+        // at the OWN (fresh) position — the borrowed copy filtered.
+        assert!(r.s1.step_phases(&tinfo(3)));
+        let mut seen = Vec::new();
+        while let Ok(batch) = out_rx.try_recv() {
+            for f in batch {
+                if f.op == 0x7100 {
+                    seen.extend_from_slice(&f.payload);
+                }
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            16,
+            "one 16-byte record total (own + filtered borrowed)"
+        );
+        let wire = u64::from_le_bytes(seen[0..8].try_into().unwrap());
+        let x = i32::from_le_bytes(seen[8..12].try_into().unwrap());
+        let y = i32::from_le_bytes(seen[12..16].try_into().unwrap());
+        assert_eq!(
+            (wire, x, y),
+            (w_own, 0, 0),
+            "the OWN record won over the delta-applied stale copy"
         );
     }
 }
