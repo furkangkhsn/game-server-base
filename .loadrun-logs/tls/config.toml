@@ -1,0 +1,4 @@
+bind = "127.0.0.1:7801"
+transport = "tcp"
+tls_cert = ".loadrun-logs/tls/leaf.pem"
+tls_key = ".loadrun-logs/tls/leaf.key"

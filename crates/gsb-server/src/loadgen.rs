@@ -2401,9 +2401,19 @@ fn print_report(
 
 fn main() {
     let args = parse_args();
+    // Default worker count = available_parallelism: `workers = 0` used to
+    // mean a SINGLE worker, which at ≥1000 in-process clients starved the
+    // room actor between ticks (measured: 19-22 Hz with sub-ms steps and
+    // ~200 ms late_max; 8 workers restore 30.00 Hz / drop 0 / p50 782 µs —
+    // see ROADMAP "regresyon ölçüm turu"). An explicit --workers still wins.
+    let workers = if args.workers > 0 {
+        args.workers
+    } else {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(args.workers.max(1))
+        .worker_threads(workers)
         .build()
         .expect("runtime");
     // The three modes (module docs):
