@@ -1,4 +1,4 @@
-//! [`TeamRoom`]: team fog of war (MOBA-style) [`RoomLogic`] for the demo game.
+//! [`TeamRoom`]: team fog of war (MOBA-style) game logic for the demo game.
 //!
 //! ## What it changes (and what it deliberately does not touch)
 //!
@@ -10,7 +10,7 @@
 //! a connection's group is a function of *who the player is* (game state —
 //! the team its entity belongs to, kept in the world as the
 //! [`TeamMember`] component), not *where the player is*. Note what this
-//! means for the seam: [`RoomLogic::group_of`] here **reads the world** —
+//! means for the seam: [`GameLogic::group_of`] here **reads the world** —
 //! exactly like `AoiRoom`'s does — but it reads a *game-state* component
 //! instead of a position, and the core's group machinery (per-group
 //! snapshot, per-group ledger, per-tick re-evaluation) treats the two
@@ -91,7 +91,7 @@
 //!   enemy dropping out of vision *removes its record* from the next
 //!   snapshot and the client reads "gone" from the full replacement alone.
 //! - **Per-group ledger**: the two teams' ledgers are independent (the
-//!   `RoomLogic::snapshot` per-group bookkeeping contract); one team's
+//!   `GameLogic::snapshot` per-group bookkeeping contract); one team's
 //!   emission never changes the other team's "unchanged?" answer in the
 //!   same tick.
 
@@ -100,7 +100,7 @@ use std::hash::Hash;
 
 use bevy_ecs::prelude::{Component, Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -198,7 +198,7 @@ pub struct TeamRoom {
     spawn_half: f32,
     /// Per-team "no change" ledger: `team → (wire id → (x, y))`, the exact
     /// wire content of that team's last emitted snapshot. Keyed by group
-    /// (team) per the [`RoomLogic::snapshot`] contract: one call must not
+    /// (team) per the [`GameLogic::snapshot`] contract: one call must not
     /// change the other team's answer in the same tick.
     last: [HashMap<u64, (i32, i32)>; TEAM_COUNT as usize],
     /// Per-tick cache, rebuilt in [`Self::update`] (each entity exactly
@@ -220,7 +220,7 @@ pub struct TeamRoom {
     /// `crate::common::ingest` / `emit_ack`).
     input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
-    /// (polled by the room via `RoomLogic::encoded_records`).
+    /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
 }
 
@@ -337,7 +337,9 @@ impl TeamRoom {
     }
 }
 
-impl RoomLogic<World> for TeamRoom {
+// Faz 1 trait split: shared hooks on the `GameLogic` supertrait; no
+// room-exclusive hook used (empty `RoomLogic` impl at the bottom).
+impl GameLogic<World> for TeamRoom {
     type GroupKey = Team;
 
     fn snapshot_op(&self) -> u16 {
@@ -376,6 +378,8 @@ impl RoomLogic<World> for TeamRoom {
         _world: &mut World,
         ctx: &TickCtx,
         team: &Team,
+        // Single-room execution: no boundary records exist here.
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let t = team.0 as usize;
@@ -533,6 +537,8 @@ impl RoomLogic<World> for TeamRoom {
     }
 }
 
+impl RoomLogic<World> for TeamRoom {}
+
 #[cfg(test)]
 mod tests {
     //! Logic-level team-fog tests (precise, direct `TeamRoom` calls; they
@@ -595,7 +601,7 @@ mod tests {
 
         // Team 0: own team {A} + in-vision enemies {B} → {A, B}; NOT C.
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
         assert!(t0.contains(&a) && t0.contains(&b), "team 0 sees A,B: {t0:?}");
         assert!(!t0.contains(&c), "C is out of team 0's vision: {t0:?}");
@@ -604,7 +610,7 @@ mod tests {
         // (10 < 25) → {A, B, C}. C is in team 1's snapshot on the SAME
         // tick it is absent from team 0's.
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
         let t1 = snap_ids(&out1);
         assert!(t1.contains(&a) && t1.contains(&b) && t1.contains(&c), "team 1: {t1:?}");
     }
@@ -624,14 +630,14 @@ mod tests {
 
         // Team 0's snapshot has both own-team members (D is ~566 from A).
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
         assert!(t0.contains(&a) && t0.contains(&d), "own team is always in the package: {t0:?}");
         assert!(t0.contains(&b), "B is within 25 of A: {t0:?}");
 
         // Team 1's snapshot has B but NOT D (D is far from every team-1 unit).
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
         let t1 = snap_ids(&out1);
         assert!(t1.contains(&b), "team 1 sees itself: {t1:?}");
         assert!(!t1.contains(&d), "D is out of team 1's vision: {t1:?}");
@@ -652,11 +658,11 @@ mod tests {
         // Tick 1: B is in team 1's own package (id known to B's team's
         // clients) and out of team 0's vision.
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
         let t1 = snap_ids(&out1);
         assert!(t1.contains(&b), "B in own package: {t1:?}");
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         assert!(!snap_ids(&out0).contains(&b), "B out of vision: {out0:?}");
 
         // B moves into A's vision: (5,0), distance 5 < 25.
@@ -665,7 +671,7 @@ mod tests {
         room.update(&mut world, &ctx(2));
 
         let mut out0b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &mut out0b), "vision change re-emits");
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "vision change re-emits");
         let t0 = snap_ids(&out0b);
         assert!(
             t0.contains(&b),
@@ -688,7 +694,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
         assert!(t0.contains(&a) && t0.contains(&b), "B in vision: {t0:?}");
 
@@ -698,7 +704,7 @@ mod tests {
         room.update(&mut world, &ctx(2));
 
         let mut out0b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &mut out0b), "vision change re-emits");
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "vision change re-emits");
         let snap = crate::game::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
         let t0b: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
         assert!(!t0b.contains(&b), "B dropped out: {t0b:?}");
@@ -707,7 +713,7 @@ mod tests {
 
         // B's own team still has B (own-team visibility is unconditional).
         let mut out1b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &mut out1b));
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut out1b));
         assert!(snap_ids(&out1b).contains(&b), "B still in own package");
     }
 
@@ -728,10 +734,10 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
         let t1 = snap_ids(&out1);
 
         // B is within 25 of A, so BOTH teams see both players; the neutral
@@ -758,14 +764,14 @@ mod tests {
 
         // First emission: both changed (membership).
         let mut o = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut o));
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut o));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut o));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut o));
 
         // Second: both silent, regardless of order.
         room.update(&mut world, &ctx(2));
         let mut o2 = bytes::BytesMut::new();
-        assert!(!room.snapshot(&mut world, &ctx(2), &Team(1), &mut o2), "team 1 silent");
-        assert!(!room.snapshot(&mut world, &ctx(2), &Team(0), &mut o2), "team 0 silent");
+        assert!(!room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut o2), "team 1 silent");
+        assert!(!room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut o2), "team 0 silent");
         assert!(o2.is_empty(), "no bytes written on silence");
 
         // A movement in ONE team re-emits that team only.
@@ -773,9 +779,9 @@ mod tests {
         world.entity_mut(entity).insert(Position { x: 8.0, y: 19.0 });
         room.update(&mut world, &ctx(3));
         let mut o3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &Team(0), &mut o3), "mover's team re-emits");
+        assert!(room.snapshot(&mut world, &ctx(3), &Team(0), &[], &mut o3), "mover's team re-emits");
         let mut o4 = bytes::BytesMut::new();
-        assert!(!room.snapshot(&mut world, &ctx(3), &Team(1), &mut o4), "other team still silent");
+        assert!(!room.snapshot(&mut world, &ctx(3), &Team(1), &[], &mut o4), "other team still silent");
     }
 
     /// Item D, pinned: team membership is WORLD STATE (the
@@ -818,10 +824,10 @@ mod tests {
         assert_eq!(room.group_of(&world, ConnectionId(2)), Team(0));
         assert_eq!(room.group_of(&world, ConnectionId(1)), Team(1));
         let mut out0 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &mut out0));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
         let t0 = snap_ids(&out0);
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
         let t1 = snap_ids(&out1);
         assert_eq!(t0, [a, a2].into_iter().collect(), "team 0: {t0:?}");
         assert_eq!(t1, [b, b2].into_iter().collect(), "team 1: {t1:?}");
@@ -842,9 +848,9 @@ mod tests {
 
         room.update(&mut world, &ctx(2));
         let mut out0b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &mut out0b), "team 0 re-emits");
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "team 0 re-emits");
         let mut out1b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &mut out1b), "team 1 re-emits");
+        assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut out1b), "team 1 re-emits");
         let t0b = snap_ids(&out0b);
         let t1b = snap_ids(&out1b);
 

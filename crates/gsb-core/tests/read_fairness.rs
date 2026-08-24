@@ -28,7 +28,7 @@ use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::registry::MatchResult;
-use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::ticker::TickInfo;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -43,7 +43,7 @@ type FirstSeen = BTreeMap<u64, u64>;
 /// A logic that records first-ingest ticks and reports them on shutdown.
 struct RecorderLogic;
 
-impl RoomLogic<FirstSeen> for RecorderLogic {
+impl GameLogic<FirstSeen> for RecorderLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -61,6 +61,7 @@ impl RoomLogic<FirstSeen> for RecorderLogic {
         _w: &mut FirstSeen,
         _c: &TickCtx,
         _g: &(),
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false // no snapshots: the observation seam is the match result
@@ -80,6 +81,10 @@ impl RoomLogic<FirstSeen> for RecorderLogic {
 
     fn update(&mut self, _w: &mut FirstSeen, _c: &TickCtx) {}
 
+}
+
+// Faz 1 trait split: the room-exclusive result seam stays on `RoomLogic`.
+impl RoomLogic<FirstSeen> for RecorderLogic {
     /// `[n: u32 LE]` then n × `[conn: u64 LE][first_tick: u64 LE]`.
     fn match_result(&mut self, w: &mut FirstSeen) -> Option<bytes::Bytes> {
         let mut buf = bytes::BytesMut::new();

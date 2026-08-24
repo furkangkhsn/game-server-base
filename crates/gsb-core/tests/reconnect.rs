@@ -42,7 +42,8 @@ use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{
-    Action, Detach, ExpireTo, ResumeFound, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx,
+    Action, Detach, ExpireTo, GameLogic, ResumeFound, RoomActor, RoomConfig, RoomControl,
+    RoomLogic, TickCtx,
 };
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardActor, ShardLogic};
 use gsb_core::ticker::{Ticker, TickInfo};
@@ -104,7 +105,7 @@ impl ParkLogic {
 
 }
 
-impl RoomLogic<()> for ParkLogic {
+impl GameLogic<()> for ParkLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -120,6 +121,7 @@ impl RoomLogic<()> for ParkLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &Self::GroupKey,
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let mut ids: Vec<EntityId> = self.conn_entity.values().copied().collect();
@@ -214,7 +216,10 @@ impl RoomLogic<()> for ParkLogic {
     }
 
     fn update(&mut self, _w: &mut (), _ctx: &TickCtx) {}
+}
 
+// Faz 1 trait split: the room-exclusive request seam stays on `RoomLogic`.
+impl RoomLogic<()> for ParkLogic {
     fn handle_request(
         &mut self,
         _w: &mut (),
@@ -1049,7 +1054,7 @@ struct PanicAfterJoin {
     armed: bool,
 }
 
-impl RoomLogic<()> for PanicAfterJoin {
+impl GameLogic<()> for PanicAfterJoin {
     type GroupKey = ();
     fn snapshot_op(&self) -> u16 {
         0x7600
@@ -1058,7 +1063,14 @@ impl RoomLogic<()> for PanicAfterJoin {
         0x7601
     }
     fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &(),
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _o: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
     fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
@@ -1075,6 +1087,8 @@ impl RoomLogic<()> for PanicAfterJoin {
         }
     }
 }
+
+impl RoomLogic<()> for PanicAfterJoin {}
 
 #[tokio::test]
 async fn persistent_room_rebuilds_after_panic_even_without_flag() {
@@ -1155,16 +1169,8 @@ mod shard_test {
         ledger: HashMap<String, SLedg>,
     }
 
-    impl ShardLogic<SWorld> for SLogic {
+    impl GameLogic<SWorld> for SLogic {
         type GroupKey = ();
-        type State = ();
-
-        fn index(&self) -> usize {
-            self.index
-        }
-        fn shard_count(&self) -> usize {
-            2
-        }
         fn snapshot_op(&self) -> u16 {
             0x7700
         }
@@ -1177,7 +1183,7 @@ mod shard_test {
             _w: &mut SWorld,
             _c: &TickCtx,
             _g: &(),
-            _b: &[BorrowedRecord],
+            _borrowed: &[BorrowedRecord],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false
@@ -1198,36 +1204,6 @@ mod shard_test {
             a.clear();
         }
         fn update(&mut self, _w: &mut SWorld, _c: &TickCtx) {}
-        fn serial_base(&self) -> u64 {
-            self.index as u64 * 1000
-        }
-        fn serial_range(&self) -> u64 {
-            1000
-        }
-        fn serial_used(&self) -> u64 {
-            self.serial
-        }
-        fn neighbors(&self) -> &[usize] {
-            &[]
-        }
-        fn collect_migrations(&mut self, _w: &mut SWorld, _nb: usize) -> Vec<Migrating<()>> {
-            Vec::new()
-        }
-        fn on_migrate_in(
-            &mut self,
-            _w: &mut SWorld,
-            _wire: u64,
-            _state: (),
-            _conn: Option<ConnectionId>,
-        ) {
-        }
-        fn on_migrate_out(&mut self, _w: &mut SWorld, _wire: u64) {}
-        fn collect_border(&self, _w: &SWorld) -> Vec<BorrowedRecord> {
-            Vec::new()
-        }
-        fn own_wires(&self, w: &SWorld) -> Vec<u64> {
-            w.ents.keys().copied().collect()
-        }
 
         fn on_disconnect(&mut self, _w: &mut SWorld, conn: ConnectionId, identity: &str) -> Detach {
             if self.hold_on_disconnect
@@ -1261,6 +1237,49 @@ mod shard_test {
                 self.conn_ent.insert(new, wire);
             }
         }
+    }
+
+    // Faz 1 trait split: the sharding seam stays on `ShardLogic`.
+    impl ShardLogic<SWorld> for SLogic {
+        type State = ();
+
+        fn index(&self) -> usize {
+            self.index
+        }
+        fn shard_count(&self) -> usize {
+            2
+        }
+        fn serial_base(&self) -> u64 {
+            self.index as u64 * 1000
+        }
+        fn serial_range(&self) -> u64 {
+            1000
+        }
+        fn serial_used(&self) -> u64 {
+            self.serial
+        }
+        fn neighbors(&self) -> &[usize] {
+            &[]
+        }
+        fn collect_migrations(&mut self, _w: &mut SWorld, _nb: usize) -> Vec<Migrating<()>> {
+            Vec::new()
+        }
+        fn on_migrate_in(
+            &mut self,
+            _w: &mut SWorld,
+            _wire: u64,
+            _state: (),
+            _conn: Option<ConnectionId>,
+        ) {
+        }
+        fn on_migrate_out(&mut self, _w: &mut SWorld, _wire: u64) {}
+        fn collect_border(&self, _w: &SWorld) -> Vec<BorrowedRecord> {
+            Vec::new()
+        }
+        fn own_wires(&self, w: &SWorld) -> Vec<u64> {
+            w.ents.keys().copied().collect()
+        }
+
     }
 
     pub struct ShardPair {

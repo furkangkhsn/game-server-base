@@ -19,7 +19,7 @@ use bevy_ecs::prelude::{Entity, World};
 use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::ticker::TickInfo;
 use gsb_ecs::{System, SystemCtx};
 use gsb_protocol::FrameBody;
@@ -78,7 +78,9 @@ struct FrameLogic {
     entity: Option<Entity>,
 }
 
-impl RoomLogic<World> for FrameLogic {
+// Faz 1 trait split: shared hooks on the `GameLogic` supertrait; no
+// room-exclusive hook used (empty `RoomLogic` impl at the bottom).
+impl GameLogic<World> for FrameLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -138,6 +140,7 @@ impl RoomLogic<World> for FrameLogic {
         world: &mut World,
         _ctx: &TickCtx,
         _group: &Self::GroupKey,
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let Some(e) = self.entity else {
@@ -153,6 +156,8 @@ impl RoomLogic<World> for FrameLogic {
         true
     }
 }
+
+impl RoomLogic<World> for FrameLogic {}
 
 async fn next_batch(rx: &mut mpsc::Receiver<FrameBatch>) -> Vec<FrameBody> {
     tokio::time::timeout(WAIT, rx.recv())

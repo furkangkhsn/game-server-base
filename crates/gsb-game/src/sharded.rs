@@ -52,7 +52,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ResumeFound, TickCtx};
+use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
 use prost::Message;
@@ -283,17 +283,11 @@ impl ShardedRoom {
     }
 }
 
-impl ShardLogic<World> for ShardedRoom {
+// Faz 1 trait split: the shared contract — snapshot groups, the tick
+// seam, membership, the reconnect surface — implements the `GameLogic`
+// supertrait; the sharding seam stays on `ShardLogic` below.
+impl GameLogic<World> for ShardedRoom {
     type GroupKey = ();
-    type State = ShardedRoomState;
-
-    fn index(&self) -> usize {
-        self.index
-    }
-
-    fn shard_count(&self) -> usize {
-        self.shard_count
-    }
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -522,6 +516,9 @@ impl ShardLogic<World> for ShardedRoom {
         _world: &mut World,
         conn: ConnectionId,
         _group: &(),
+        // The shard actor passes none today: the pending set and the
+        // completion sweep are room-actor machinery (Faz 3 promotion).
+        _responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
         crate::common::emit_ack(&mut self.input, conn, out)
@@ -566,6 +563,18 @@ impl ShardLogic<World> for ShardedRoom {
                 });
             }
         }
+    }
+}
+
+impl ShardLogic<World> for ShardedRoom {
+    type State = ShardedRoomState;
+
+    fn index(&self) -> usize {
+        self.index
+    }
+
+    fn shard_count(&self) -> usize {
+        self.shard_count
     }
 
     fn serial_base(&self) -> u64 {

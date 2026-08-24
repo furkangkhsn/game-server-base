@@ -28,7 +28,7 @@ use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
@@ -48,7 +48,7 @@ struct PanicAfterJoinLogic {
     armed: bool,
 }
 
-impl RoomLogic<()> for PanicAfterJoinLogic {
+impl GameLogic<()> for PanicAfterJoinLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -60,7 +60,14 @@ impl RoomLogic<()> for PanicAfterJoinLogic {
 
     fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
 
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &(),
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _o: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
 
@@ -79,6 +86,8 @@ impl RoomLogic<()> for PanicAfterJoinLogic {
     }
 }
 
+impl RoomLogic<()> for PanicAfterJoinLogic {}
+
 /// A shard logic that detonates at a wall-clock deadline it OWNS (moved in
 /// at construction — no shared state): ticks before the deadline are
 /// harmless, so the test can join its neighbor's members deterministically
@@ -88,16 +97,8 @@ struct TimeBombShardLogic {
     detonate_at: Option<Instant>,
 }
 
-impl ShardLogic<()> for TimeBombShardLogic {
+impl GameLogic<()> for TimeBombShardLogic {
     type GroupKey = ();
-    type State = ();
-
-    fn index(&self) -> usize {
-        self.index
-    }
-    fn shard_count(&self) -> usize {
-        2
-    }
     fn snapshot_op(&self) -> u16 {
         0x7D00
     }
@@ -128,6 +129,18 @@ impl ShardLogic<()> for TimeBombShardLogic {
         {
             panic!("shard {} detonated", self.index);
         }
+    }
+}
+
+// Faz 1 trait split: the sharding seam stays on `ShardLogic`.
+impl ShardLogic<()> for TimeBombShardLogic {
+    type State = ();
+
+    fn index(&self) -> usize {
+        self.index
+    }
+    fn shard_count(&self) -> usize {
+        2
     }
     fn serial_base(&self) -> u64 {
         self.index as u64 * 1000

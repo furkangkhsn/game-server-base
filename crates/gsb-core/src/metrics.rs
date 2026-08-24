@@ -1491,7 +1491,9 @@ mod tests {
     /// logic) so the fan-out runs and a full out channel produces drops.
     struct AlwaysLogic;
 
-    impl crate::room::RoomLogic<()> for AlwaysLogic {
+    // Faz 1 trait split: shared contract on `GameLogic`; no room-exclusive
+    // hook used (empty `RoomLogic` impl).
+    impl crate::room::GameLogic<()> for AlwaysLogic {
         type GroupKey = ();
         fn snapshot_op(&self) -> u16 {
             0x7200
@@ -1505,6 +1507,7 @@ mod tests {
             _w: &mut (),
             _c: &crate::room::TickCtx,
             _g: &Self::GroupKey,
+            _borrowed: &[crate::shard::BorrowedRecord],
             out: &mut bytes::BytesMut,
         ) -> bool {
             out.extend_from_slice(b"x");
@@ -1519,6 +1522,8 @@ mod tests {
         }
         fn update(&mut self, _w: &mut (), _c: &crate::room::TickCtx) {}
     }
+
+    impl crate::room::RoomLogic<()> for AlwaysLogic {}
 
     /// The full path the spec asks for: counters live in the room actor's
     /// local state, leave it over the (bounded) metrics channel via

@@ -20,7 +20,7 @@ use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
@@ -33,7 +33,7 @@ struct ResultLogic {
     result: Option<Vec<u8>>,
 }
 
-impl RoomLogic<()> for ResultLogic {
+impl GameLogic<()> for ResultLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -45,7 +45,14 @@ impl RoomLogic<()> for ResultLogic {
 
     fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
 
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &(),
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _o: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
 
@@ -57,7 +64,10 @@ impl RoomLogic<()> for ResultLogic {
         a.clear();
     }
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
+}
 
+// Faz 1 trait split: the room-exclusive result seam stays on `RoomLogic`.
+impl RoomLogic<()> for ResultLogic {
     fn match_result(&mut self, _w: &mut ()) -> Option<bytes::Bytes> {
         self.result.take().map(Into::into)
     }

@@ -106,7 +106,7 @@
 //! the entities within one border width of its region edges) to all
 //! neighbors as a `Border` exchange; each shard keeps the latest exchange
 //! per neighbor and includes the borrowed records in **every** group's
-//! snapshot (phase 6 passes them to `ShardLogic::snapshot`). The exchange
+//! snapshot (phase 6 passes them to `GameLogic::snapshot`). The exchange
 //! is *full state, not a delta*: a dropped or delayed exchange self-heals
 //! on the next tick (the borrowed set is re-sent whole), so a lagging
 //! shard costs at most one tick of stale boundary data — never a gap.
@@ -119,7 +119,7 @@
 //! core enforces: an entity that just crossed INTO this shard appears as
 //! its own record AND (for one tick) as the neighbor's stale borrowed
 //! copy of itself — the actor filters the borrowed set against
-//! [`ShardLogic::own_wires`] so the own (fresh) record wins and the
+//! [`GameLogic::own_wires`] so the own (fresh) record wins and the
 //! snapshot never lists one entity twice.
 //!
 //! ## Wire identity (range partitioning)
@@ -193,8 +193,8 @@ use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::metrics::{MetricsEvent, RoomSample, hist_index};
 use crate::room::{
-    Action, Detach, ExpireTo, GroupState, ResumeFound, RoomConn, RoomConfig, RoomCounters,
-    TickCtx,
+    Action, Detach, ExpireTo, GameLogic, GroupState, ResumeFound, RoomConn, RoomConfig,
+    RoomCounters, TickCtx,
 };
 use crate::ticker::TickInfo;
 
@@ -312,7 +312,7 @@ pub enum ShardMsg<S> {
     },
     /// The connection's transport died (the registry's `ConnClosed`
     /// broadcast, mirroring `RoomControl::Detach`): exactly the owning
-    /// shard runs the policy ([`ShardLogic::on_disconnect`]); the others
+    /// shard runs the policy ([`GameLogic::on_disconnect`]); the others
     /// no-op on the same entity-id guard a `Leave` uses.
     Detach {
         conn: ConnectionId,
@@ -353,18 +353,18 @@ pub enum ShardMsg<S> {
     Shutdown,
 }
 
-/// Game-side behaviour of a shard. Implemented by the game crate; the core
-/// never inspects the world `W` or the state `S::State`.
+/// Game-side behaviour of a SHARD actor: everything [`GameLogic`] (this
+/// crate's `room` supertrait) already shares — the tick seam, snapshot
+/// groups, membership, and the reconnect surface — plus this actor's
+/// exclusive sharding seam below. The compile-time separation survives
+/// the unification DELIBERATELY (design candidate A of
+/// `docs/TRAIT-ARCHITECTURE.md` §3, not the single-trait B): forgetting
+/// `neighbors()` or the serial range still does not compile, so a silent
+/// migration break stays structurally impossible.
 ///
-/// Everything a [`crate::room::RoomLogic`] has (the tick seam), plus the
-/// sharding seam: the region topology (`neighbors`), the migration
-/// protocol (`collect_migrations` / `on_migrate_in` / `on_migrate_out`),
-/// the boundary export (`collect_border`), and the wire-id range
-/// (`serial_base` / `serial_range` / `serial_used`).
-pub trait ShardLogic<W>: Send {
-    /// Opaque key partitioning the shard's connections into snapshot
-    /// groups (same contract as `RoomLogic::GroupKey`).
-    type GroupKey: Eq + Hash + Clone + Debug;
+/// Implemented by the game crate; the core never inspects the world `W`
+/// or the state `S::State`.
+pub trait ShardLogic<W>: GameLogic<W> {
     /// The full state of a migrating entity (game-shaped; opaque to the
     /// core). `Debug` so a `ShardMsg` can derive it.
     type State: Debug + Send + 'static;
@@ -377,109 +377,6 @@ pub trait ShardLogic<W>: Send {
     /// The total number of shards in this room (the topology; the factory
     /// supplies it at construction).
     fn shard_count(&self) -> usize;
-
-    /// Opcode under which the shard ships group snapshots.
-    fn snapshot_op(&self) -> u16;
-    /// Opcode under which the shard ships the per-connection private frame.
-    fn private_op(&self) -> u16;
-
-    /// Which snapshot group `conn` belongs to (re-evaluated every tick).
-    fn group_of(&self, world: &W, conn: ConnectionId) -> Self::GroupKey;
-
-    /// Encode the complete, self-contained snapshot of one group: the
-    /// shard's own world **plus** the `borrowed` boundary records of the
-    /// neighboring shards (a player at the boundary must see across the
-    /// line — see module docs, "Boundary visibility"). Same "no change"
-    /// contract as `RoomLogic::snapshot` (and "no change" *includes* the
-    /// borrowed content: a neighbor's boundary entity moving is a content
-    /// change for every group here).
-    fn snapshot(
-        &mut self,
-        world: &mut W,
-        ctx: &TickCtx,
-        group: &Self::GroupKey,
-        borrowed: &[BorrowedRecord],
-        out: &mut bytes::BytesMut,
-    ) -> bool;
-
-    /// Encode a per-connection private frame. The connection's group is
-    /// passed in (see [`RoomLogic::private`] for the rationale).
-    /// Default: none.
-    fn private(
-        &mut self,
-        _world: &mut W,
-        _conn: ConnectionId,
-        _group: &Self::GroupKey,
-        _out: &mut bytes::BytesMut,
-    ) -> bool {
-        false
-    }
-
-    /// A player entered the shard: create its entity and return its wire
-    /// id (minted from this shard's range — see module docs).
-    fn on_join(&mut self, world: &mut W, conn: ConnectionId) -> EntityId;
-
-    /// A player left the shard: remove its entity.
-    fn on_leave(&mut self, world: &mut W, conn: ConnectionId);
-
-    // -- Detach/resume (the shard-side mirrors of `RoomLogic`'s five
-    //    reconnect methods; same contracts, sharded execution — the park
-    //    ledger travels inside the migrated player state per §14.2, so a
-    //    resumed identity is found on WHICHEVER shard the entity ended
-    //    up on). ------------------------------------------------------
-
-    /// Transport death: decide the parked entity's fate. Default:
-    /// [`Detach::Despawn`] (the pre-reconnect behavior, unchanged).
-    fn on_disconnect(
-        &mut self,
-        _world: &mut W,
-        _conn: ConnectionId,
-        _identity: &str,
-    ) -> Detach {
-        Detach::Despawn
-    }
-
-    /// May a combat-held (no-grace) detach end now? Default: `true`.
-    fn may_release(&mut self, _world: &mut W, _conn: ConnectionId) -> bool {
-        true
-    }
-
-    /// A hold ended without a resume. Default: empty.
-    fn on_detach_expired(&mut self, _world: &mut W, _conn: ConnectionId, _to: ExpireTo) {}
-
-    /// Park-ledger query behind a resume attempt. Default: never held.
-    fn resume_lookup(&self, _world: &W, _identity: &str) -> ResumeFound {
-        ResumeFound::Never
-    }
-
-    /// A resume was accepted onto this shard: re-key the logic's own
-    /// connection-keyed tables, consume/update its ledger entry, and mark
-    /// the fresh member for a one-shot full if it ships deltas. Default:
-    /// no-op.
-    fn on_resume(
-        &mut self,
-        _world: &mut W,
-        _identity: &str,
-        _old: ConnectionId,
-        _new: ConnectionId,
-        _entity: EntityId,
-    ) {
-    }
-
-    /// Phase 2 — convert buffered actions into component writes.
-    fn ingest(&mut self, world: &mut W, ctx: &TickCtx, actions: &mut Vec<Action>);
-
-    /// Phase 3 — run the game systems for this tick.
-    fn update(&mut self, world: &mut W, ctx: &TickCtx);
-
-    /// Called when the shard shuts down (world is dropped right after).
-    fn on_shutdown(&mut self) {}
-
-    /// Entity records encoded during the most recent broadcast phase
-    /// (same contract as `RoomLogic::encoded_records`).
-    fn encoded_records(&mut self) -> u64 {
-        0
-    }
 
     /// This shard's wire-id range base: ids are minted as
     /// `serial_base + serial_used + 1`. Ranges of all shards of a room
@@ -1400,7 +1297,7 @@ where
     ///   self-heals in one tick (same argument as the room actor).
     ///
     /// The ledger and any logic-owned tables go through
-    /// [`ShardLogic::on_resume`] (the park metadata itself traveled INSIDE
+    /// [`GameLogic::on_resume`] (the park metadata itself traveled INSIDE
     /// the migrated player state — §14.2 — so whichever shard now owns the
     /// entity also owns the record).
     fn rebind_session(
@@ -1538,14 +1435,31 @@ where
         own.sort_unstable();
         borrowed.retain(|r| own.binary_search(&r.wire).is_err());
 
-        // 6c. One snapshot per group (encode once, freeze once, share).
+        // 6c. One snapshot per group: encode ONCE, freeze once, share —
+        //     the room's 4c with the borrowed boundary set folded in and
+        //     the scratch buffer reused across groups. The keep-alive
+        //     machinery mirrors the room's semantics EXACTLY (the Faz 1
+        //     `GameLogic::keepalive` promotion — the shard actor's first
+        //     promoted capability, `docs/TRAIT-ARCHITECTURE.md` §4): on
+        //     the cadence tick, whether the group emitted this tick or
+        //     not, the logic decides what ships. Full-snapshot logics
+        //     keep the default (an unchanged group re-sends its cached
+        //     snapshot — bit-identical: an active group's `last` IS this
+        //     tick's fresh full); a delta-mode logic returns `true` with
+        //     a freshly encoded FULL that REPLACES this tick's payload,
+        //     healing a client that lost one or more deltas within one
+        //     keep-alive period whether its group is active or silent.
         let keep_due = self
             .keepalive_every
             .map(|every| self.steps.is_multiple_of(every))
             .unwrap_or(false);
+        let mut buf = bytes::BytesMut::new();
         for (group, st) in self.groups.iter_mut() {
-            let mut buf = bytes::BytesMut::new();
-            if self.logic.snapshot(&mut self.world, ctx, group, &borrowed, &mut buf) {
+            buf.clear();
+            let emitted =
+                self.logic
+                    .snapshot(&mut self.world, ctx, group, &borrowed, &mut buf);
+            if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;
                     warn!(
@@ -1566,14 +1480,54 @@ where
                 if n > self.config.max_snapshot_bytes as u64 {
                     self.m.snap_overflows += 1;
                 }
-                let payload = buf.freeze();
+                let payload = buf.split_to(buf.len()).freeze();
                 st.sent = Some(payload.clone());
                 st.last = Some(payload);
-            } else if keep_due {
-                if st.last.is_some() {
+            }
+            // The keep-alive decision (only when there is a cached
+            // snapshot): the logic may replace this tick's payload with a
+            // freshly encoded one (a delta-mode full) or keep the default
+            // (re-send `last`). Same shape, same counters, same cadence
+            // derivation (`keepalive_every`, clamped/warned at
+            // construction exactly like the room actor's).
+            if keep_due && st.last.is_some() {
+                if !emitted {
+                    // An unchanged group: a keep-alive re-send happened.
                     self.m.keepalive_resends += 1;
                 }
-                st.sent = st.last.clone();
+                buf.clear();
+                if self
+                    .logic
+                    .keepalive(&mut self.world, ctx, group, st.last.as_ref(), &mut buf)
+                {
+                    // A freshly encoded payload (a delta-mode full):
+                    // counted like any other encoded snapshot.
+                    if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
+                        st.size_warned = true;
+                        warn!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            bytes = buf.len(),
+                            max = self.config.max_snapshot_bytes,
+                            "snapshot exceeds max_snapshot_bytes (rUDP MTU \
+                             readiness)"
+                        );
+                    }
+                    self.m.snapshots += 1;
+                    let n = buf.len() as u64;
+                    self.m.snap_bytes = self.m.snap_bytes.saturating_add(n);
+                    if n > self.m.snap_bytes_max as u64 {
+                        self.m.snap_bytes_max = n as u32;
+                    }
+                    if n > self.config.max_snapshot_bytes as u64 {
+                        self.m.snap_overflows += 1;
+                    }
+                    let payload = buf.split_to(buf.len()).freeze();
+                    st.sent = Some(payload.clone());
+                    st.last = Some(payload);
+                } else {
+                    st.sent = st.last.clone();
+                }
             }
         }
 
@@ -1603,7 +1557,11 @@ where
                 rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
             pbuf.clear();
-            if self.logic.private(&mut self.world, *conn, &rc.group, &mut pbuf) {
+            // No RPC answers on the sharded path yet: the pending set and
+            // the completion sweep are room-actor machinery (Faz 3), so
+            // the shared `GameLogic::private` seam receives an empty
+            // response list here — same call shape as the room's fan-out.
+            if self.logic.private(&mut self.world, *conn, &rc.group, &[], &mut pbuf) {
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
@@ -1762,16 +1720,12 @@ mod tests {
         }
     }
 
-    impl ShardLogic<TWorld> for TLogic {
+    // Faz 1 trait split: the shared contract (snapshot groups, tick seam,
+    // membership) implements the `GameLogic` supertrait; the sharding seam
+    // stays on `ShardLogic`.
+    impl GameLogic<TWorld> for TLogic {
         type GroupKey = ();
-        type State = TState;
 
-        fn index(&self) -> usize {
-            self.index
-        }
-        fn shard_count(&self) -> usize {
-            2
-        }
         fn snapshot_op(&self) -> u16 {
             0x7100
         }
@@ -1863,6 +1817,17 @@ mod tests {
                 w.ents.iter().map(|(wire, e)| (*wire, e.0, e.1, e.2)).collect();
             c.sort_unstable_by_key(|e| e.0);
             let _ = self.obs.try_send(Obs::Content(self.index, ctx.tick, c));
+        }
+    }
+
+    impl ShardLogic<TWorld> for TLogic {
+        type State = TState;
+
+        fn index(&self) -> usize {
+            self.index
+        }
+        fn shard_count(&self) -> usize {
+            2
         }
         fn serial_base(&self) -> u64 {
             self.index as u64 * SHARD_SERIAL_RANGE
@@ -2734,5 +2699,216 @@ mod tests {
         let wires1: Vec<u64> = r1.iter().map(|r| r.0).collect();
         assert!(wires0.contains(&w0) && wires0.contains(&w1));
         assert!(wires1.contains(&w0) && wires1.contains(&w1));
+    }
+
+    // -----------------------------------------------------------------
+    // Faz 1 keep-alive promotion (behavior lock): a SILENT group on a
+    // SHARDED room receives its cached full snapshot on the keep-alive
+    // cadence — the shard-side mirror of the room actor's
+    // `unchanged_group_is_silent_until_keepalive`. Drives a bare
+    // (unspawned) [`ShardActor`] synchronously, like the table-prune
+    // locks above: the assertions read only the connection's wire bytes
+    // and the actor's own counters.
+    // -----------------------------------------------------------------
+
+    /// A single-group logic that goes silent once its content is out:
+    /// `on_join` dirties the group, an emission cleans it — so after the
+    /// join tick EVERY step is unchanged, which is exactly the state the
+    /// keep-alive cadence exists to interrupt.
+    struct KaLogic {
+        dirty: bool,
+        next_wire: u64,
+    }
+
+    impl GameLogic<TWorld> for KaLogic {
+        type GroupKey = ();
+
+        fn snapshot_op(&self) -> u16 {
+            0x7180
+        }
+        fn private_op(&self) -> u16 {
+            0x7181
+        }
+        fn group_of(&self, _w: &TWorld, _c: ConnectionId) -> Self::GroupKey {}
+
+        fn snapshot(
+            &mut self,
+            w: &mut TWorld,
+            _ctx: &TickCtx,
+            _g: &Self::GroupKey,
+            _borrowed: &[BorrowedRecord],
+            out: &mut bytes::BytesMut,
+        ) -> bool {
+            if !self.dirty {
+                return false; // unchanged since the last emission
+            }
+            self.dirty = false;
+            let mut recs: Vec<(u64, i32, i32)> = w
+                .ents
+                .iter()
+                .map(|(wire, (x, y, _))| (*wire, *x as i32, *y as i32))
+                .collect();
+            recs.sort_unstable_by_key(|r| r.0);
+            for (wire, x, y) in &recs {
+                out.extend_from_slice(&wire.to_le_bytes());
+                out.extend_from_slice(&x.to_le_bytes());
+                out.extend_from_slice(&y.to_le_bytes());
+            }
+            true
+        }
+
+        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> EntityId {
+            self.next_wire += 1;
+            let x = (conn.0 % 20) as f32 - 10.0;
+            w.ents.insert(self.next_wire, (x, 0.0, 0));
+            self.dirty = true; // membership changed ⇒ must emit
+            self.next_wire
+        }
+
+        fn on_leave(&mut self, _w: &mut TWorld, _conn: ConnectionId) {}
+        fn ingest(&mut self, _w: &mut TWorld, _c: &TickCtx, actions: &mut Vec<Action>) {
+            actions.clear();
+        }
+        fn update(&mut self, _w: &mut TWorld, _c: &TickCtx) {}
+    }
+
+    impl ShardLogic<TWorld> for KaLogic {
+        type State = TState;
+
+        fn index(&self) -> usize {
+            0
+        }
+        fn shard_count(&self) -> usize {
+            1
+        }
+        fn serial_base(&self) -> u64 {
+            0
+        }
+        fn serial_range(&self) -> u64 {
+            SHARD_SERIAL_RANGE
+        }
+        fn serial_used(&self) -> u64 {
+            self.next_wire
+        }
+        fn neighbors(&self) -> &[usize] {
+            &[]
+        }
+        fn collect_migrations(
+            &mut self,
+            _w: &mut TWorld,
+            _nb: usize,
+        ) -> Vec<Migrating<TState>> {
+            Vec::new()
+        }
+        fn on_migrate_in(
+            &mut self,
+            _w: &mut TWorld,
+            _wire: u64,
+            _state: TState,
+            _conn: Option<ConnectionId>,
+        ) {
+        }
+        fn on_migrate_out(&mut self, _w: &mut TWorld, _wire: u64) {}
+        fn collect_border(&self, _w: &TWorld) -> Vec<BorrowedRecord> {
+            Vec::new()
+        }
+        fn own_wires(&self, w: &TWorld) -> Vec<u64> {
+            w.ents.keys().copied().collect()
+        }
+    }
+
+    /// The lock: `keepalive_hz = 10` under a 30 Hz shard → a re-send
+    /// every 3rd step. The group emits on the join step; steps 2..=8 are
+    /// silent EXCEPT steps 3 and 6, which ship the CACHED full snapshot
+    /// (byte-identical to the join emission) — and nothing else ever
+    /// reaches the wire. Mirrors the room-side semantics: same cadence
+    /// derivation, same cache, same resend counter.
+    #[tokio::test]
+    async fn sharded_keepalive_resends_cached_snapshot_to_silent_group() {
+        let (_tick_tx, tick_rx) = broadcast::channel(64);
+        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
+        let (n0, _n0_rx) = channel::<ShardMsg<TState>>(8);
+        let (n1, _n1_rx) = channel::<ShardMsg<TState>>(8);
+        let mut a = ShardActor::new(
+            RoomConfig {
+                id: RoomId(11),
+                tick_hz: 30.0,
+                keepalive_hz: 10.0,
+                metrics_cadence_hz: 0.0,
+                ..Default::default()
+            },
+            0,
+            TWorld::default(),
+            Box::new(KaLogic {
+                dirty: false,
+                next_wire: 0,
+            }),
+            tick_rx,
+            rx,
+            vec![n0, n1],
+            1,
+            metrics_null(),
+        );
+
+        // The join (its own CONTROL message; the group is dirty).
+        let (out_tx, mut out_rx) = mpsc::channel::<FrameBatch>(16);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        assert!(a.handle_msg(
+            ShardMsg::Join {
+                conn: ConnectionId(1),
+                epoch: 1,
+                out: out_tx,
+                reply: reply_tx,
+            },
+            &tctx(1),
+        ));
+        let _wire = reply_rx.await.expect("join reply").expect("join ok");
+
+        // Steps 2..=8 change nothing. Only the cadence steps (3 and 6)
+        // may ship anything besides the join emission of step 1. Driven
+        // through `step` (not `step_phases`) so the actor's own step
+        // counter advances — the cadence is measured in ACTOR steps.
+        assert!(a.step(&tinfo(1)), "step 1 runs");
+        for t in 2..=8u64 {
+            assert!(a.step(&tinfo(t)), "step {t} runs");
+        }
+
+        // Exactly three batches reached the member: the join emission plus
+        // two keep-alive re-sends, all byte-identical (the CACHE, not a
+        // fresh encode — the default hook re-sends `last`).
+        let mut got = Vec::new();
+        while let Ok(batch) = out_rx.try_recv() {
+            got.push(batch);
+        }
+        assert_eq!(
+            got.len(),
+            3,
+            "one emission (step 1) + two keep-alive re-sends (steps 3 and \
+             6), nothing else: {got:?}"
+        );
+        let payloads: Vec<Vec<u8>> = got
+            .iter()
+            .map(|b| {
+                assert_eq!(b.len(), 1, "one frame per batch");
+                b[0].payload.to_vec()
+            })
+            .collect();
+        for (i, p) in payloads.iter().enumerate() {
+            assert_eq!(
+                p, &payloads[0],
+                "keep-alive re-send {i} must be the cached snapshot bytes"
+            );
+        }
+        assert_eq!(
+            payloads[0].len(),
+            16,
+            "the payload is one entity record (u64 wire LE + i32 x LE + \
+             i32 y LE)"
+        );
+        // The mechanism counter agrees with the wire.
+        assert_eq!(
+            a.m.keepalive_resends, 2,
+            "two unchanged-group re-sends (steps 3 and 6)"
+        );
     }
 }

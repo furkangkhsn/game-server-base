@@ -30,7 +30,7 @@ use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use gsb_protocol::base;
 use gsb_protocol::{base_table, op};
@@ -389,7 +389,7 @@ async fn no_hook_local_auth_unchanged() {
 
 /// A stand-in room logic (joinable; the registry is the test target).
 struct NoopLogic;
-impl RoomLogic<()> for NoopLogic {
+impl GameLogic<()> for NoopLogic {
     type GroupKey = ();
     fn snapshot_op(&self) -> u16 {
         0x7F10
@@ -398,7 +398,14 @@ impl RoomLogic<()> for NoopLogic {
         0x7F11
     }
     fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &(),
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _o: &mut bytes::BytesMut,
+    ) -> bool {
         false
     }
     fn on_join(&mut self, _w: &mut (), _c: ConnectionId) -> EntityId {
@@ -410,3 +417,5 @@ impl RoomLogic<()> for NoopLogic {
     }
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
 }
+
+impl RoomLogic<()> for NoopLogic {}

@@ -16,7 +16,7 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
-use gsb_core::room::{Action, RoomConfig, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
@@ -44,7 +44,10 @@ impl SeqLogic {
     }
 }
 
-impl RoomLogic<()> for SeqLogic {
+// Faz 1 trait split: the shared contract implements the `GameLogic`
+// supertrait; this logic uses no room-exclusive hook (empty `RoomLogic`
+// impl below).
+impl GameLogic<()> for SeqLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -63,6 +66,7 @@ impl RoomLogic<()> for SeqLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &Self::GroupKey,
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let count = self.conn_entity.len();
@@ -90,6 +94,8 @@ impl RoomLogic<()> for SeqLogic {
 
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
 }
+
+impl RoomLogic<()> for SeqLogic {}
 
 fn factory() -> RoomFactory<(), (), ()> {
     std::sync::Arc::new(|_id, _config| BuiltRoom::Single {

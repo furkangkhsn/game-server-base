@@ -1,4 +1,4 @@
-//! [`AoiRoom`]: an Area-of-Interest (AOI) [`RoomLogic`] for the demo game,
+//! [`AoiRoom`]: an Area-of-Interest (AOI) game logic for the demo game —
 //! in its **cell-encoded delta** form.
 //!
 //! ## Encoding unit vs audience (the design, decided — see the module
@@ -67,7 +67,8 @@
 //! misapplication is impossible — the worst case is a stale view (a
 //! missed exit may ghost briefly). Exact resync comes from the **full**
 //! the server ships on the keep-alive cadence (see
-//! [`RoomLogic::keepalive`]) and one-shot via [`RoomLogic::private`] to
+//! the shared contract on `GameLogic` ([`GameLogic::keepalive`] is the
+//! recovery path) and one-shot via [`GameLogic::private`] to
 //! every fresh group member (see below); recovery is bounded by the
 //! keep-alive period. Note a sequence gap is therefore NOT proof of
 //! loss — the group's stream is event-driven (a group ships a frame
@@ -254,7 +255,7 @@ use std::hash::Hash;
 use bevy_ecs::prelude::{Changed, Entity, World};
 use bytes::{BufMut, Bytes, BytesMut};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::encoding::varint::encode_varint;
 use prost::Message;
@@ -473,7 +474,7 @@ pub struct AoiRoom {
     /// the batch), so `private` skips its one-shot full.
     group_full_emitted: HashSet<Cell>,
     /// Entity records encoded into pieces so far this tick (polled once
-    /// per step by the room via `RoomLogic::encoded_records`) — the
+    /// per step by the room via `GameLogic::encoded_records`) — the
     /// overlap measurement: ~E per tick in steady state (one encoding per
     /// entity, in its own cell's piece).
     encoded: u64,
@@ -713,7 +714,10 @@ impl AoiRoom {
     }
 }
 
-impl RoomLogic<World> for AoiRoom {
+// Faz 1 trait split: this room implements only shared hooks, so its
+// whole surface lives on the `GameLogic` supertrait; the `RoomLogic`
+// impl below stays empty (both exclusive methods have defaults).
+impl GameLogic<World> for AoiRoom {
     type GroupKey = Cell;
 
     fn snapshot_op(&self) -> u16 {
@@ -755,6 +759,8 @@ impl RoomLogic<World> for AoiRoom {
         _world: &mut World,
         ctx: &TickCtx,
         cell: &Cell,
+        // Single-room execution: no boundary records exist here.
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         debug_assert_eq!(ctx.tick, self.tick, "update must precede snapshot");
@@ -1217,6 +1223,8 @@ impl RoomLogic<World> for AoiRoom {
     }
 }
 
+impl RoomLogic<World> for AoiRoom {}
+
 #[cfg(test)]
 mod tests {
     //! Logic-level AOI tests (precise, direct `AoiRoom` calls; they need
@@ -1278,7 +1286,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
         let snap = decode(&out);
         assert!(!snap.delta, "a fresh group's first packet is a full");
         let near = ids(&snap);
@@ -1286,7 +1294,7 @@ mod tests {
         assert!(!near.contains(&c), "far cell must not be visible: {near:?}");
 
         let mut out2 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(5, 0), &mut out2));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(5, 0), &[], &mut out2));
         let far = ids(&decode(&out2));
         assert!(far.contains(&c), "C sees itself: {far:?}");
         assert!(!far.contains(&a) && !far.contains(&b), "far C does not see A/B: {far:?}");
@@ -1307,7 +1315,7 @@ mod tests {
 
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
         assert!(ids(&decode(&out)).contains(&a));
 
         // A moves into B's cell (Cell(3,0)); identity must be preserved.
@@ -1320,7 +1328,7 @@ mod tests {
         // client's baseline — the delta does not re-carry it).
         let mut out_b = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &mut out_b),
+            room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &[], &mut out_b),
             "A's arrival re-emits (delta)"
         );
         let snap_b = decode(&out_b);
@@ -1334,7 +1342,7 @@ mod tests {
         // entities re-carried.
         let mut out_a = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out_a),
+            room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out_a),
             "A's departure re-emits (cell exit)"
         );
         let snap_a = decode(&out_a);
@@ -1367,7 +1375,7 @@ mod tests {
         let d = place(&mut world, &mut room, ConnectionId(2), 15.0, 0.0);
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
 
         // B joins the same cell late (the group is established: its
         // packet is a delta that does NOT re-carry the co-residents).
@@ -1379,7 +1387,7 @@ mod tests {
         // (B is a new entity → its cell's content changed → it is an
         // update; A and D are in the baseline, not re-carried).
         assert!(
-            room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2),
             "B's spawn re-emits (delta update)"
         );
         let group_delta = decode(&out2);
@@ -1432,7 +1440,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
         let snap = decode(&out);
         let ids = ids(&snap);
         assert!(ids.contains(&a), "resident present: {ids:?}");
@@ -1453,12 +1461,12 @@ mod tests {
 
         room.update(&mut world, &ctx(1));
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &cell, &mut out1), "first emit (full)");
+        assert!(room.snapshot(&mut world, &ctx(1), &cell, &[], &mut out1), "first emit (full)");
 
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx(2), &cell, &mut out2),
+            !room.snapshot(&mut world, &ctx(2), &cell, &[], &mut out2),
             "static 3×3 silent"
         );
         assert!(out2.is_empty(), "no bytes written on silence");
@@ -1468,7 +1476,7 @@ mod tests {
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx(3), &cell, &mut out3),
+            room.snapshot(&mut world, &ctx(3), &cell, &[], &mut out3),
             "movement re-emits (delta)"
         );
         let snap3 = decode(&out3);
@@ -1489,7 +1497,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
         let cell = Cell(0, 0);
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &cell, &mut out1));
+        assert!(room.snapshot(&mut world, &ctx(1), &cell, &[], &mut out1));
 
         // Static: the group is silent, so the keep-alive fires.
         room.update(&mut world, &ctx(2));
@@ -1537,7 +1545,7 @@ mod tests {
         for group in [Cell(0, 0), Cell(1, 0)] {
             let mut out = bytes::BytesMut::new();
             assert!(
-                room.snapshot(&mut world, &ctx(3), &group, &mut out),
+                room.snapshot(&mut world, &ctx(3), &group, &[], &mut out),
                 "the departure re-emits for group {group:?}"
             );
             let snap = decode(&out);
@@ -1575,22 +1583,22 @@ mod tests {
         // Tick 1: both groups are fresh → both fulls encode Cell(0,0)'s
         // two records ONCE (the full piece is shared).
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(1, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(1, 0), &[], &mut out));
         assert_eq!(room.encoded_records(), 3, "2 shared + 1 exclusive, each once");
 
         // Tick 2: static → silence, nothing encoded.
         room.update(&mut world, &ctx(2));
-        assert!(!room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out));
-        assert!(!room.snapshot(&mut world, &ctx(2), &Cell(1, 0), &mut out));
+        assert!(!room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out));
+        assert!(!room.snapshot(&mut world, &ctx(2), &Cell(1, 0), &[], &mut out));
         assert_eq!(room.encoded_records(), 0, "silence encodes nothing");
 
         // Tick 3: the NPC moves within its cell → one delta piece for
         // Cell(0,0) (shared by both groups): 1 record encoded.
         world.entity_mut(npc).insert(Position { x: 8.0, y: 5.0 });
         room.update(&mut world, &ctx(3));
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out));
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(1, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(1, 0), &[], &mut out));
         assert_eq!(room.encoded_records(), 1, "the shared cell's delta is encoded once");
     }
 
@@ -1609,7 +1617,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(1, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(1, 0), &[], &mut out));
         let snap = decode(&out);
         let seen = ids(&snap);
         assert!(
@@ -1638,13 +1646,13 @@ mod tests {
 
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out)); // fresh full
 
         // Tick 2: the entity moves within its cell → a delta with (15,0).
         world.entity_mut(ent).insert(Position { x: 15.0, y: 0.0 });
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
         let s2 = decode(&out2);
         assert!(s2.delta);
         assert_eq!(s2.entities.len(), 1, "exactly the moved record: {s2:?}");
@@ -1656,7 +1664,7 @@ mod tests {
         world.entity_mut(ent).insert(Position { x: 10.0, y: 0.0 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
         let s3 = decode(&out3);
         assert!(s3.delta);
         assert_eq!(s3.entities.len(), 1, "exactly the moved record: {s3:?}");
@@ -1680,13 +1688,13 @@ mod tests {
 
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out)); // fresh full
 
         // Tick 2: silence — an established group ships NOTHING.
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2),
             "silence ships nothing (no stale full, no delta)"
         );
         assert!(out2.is_empty());
@@ -1697,7 +1705,7 @@ mod tests {
         world.entity_mut(ent).insert(Position { x: 19.0, y: 0.0 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
         let s3 = decode(&out3);
         assert!(s3.delta);
         assert_eq!(s3.entities.len(), 1);
@@ -1709,7 +1717,7 @@ mod tests {
         room.update(&mut world, &ctx(4));
         let mut out4 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx(4), &Cell(0, 0), &mut out4),
+            !room.snapshot(&mut world, &ctx(4), &Cell(0, 0), &[], &mut out4),
             "the stale delta must not be re-served"
         );
         assert_eq!(room.encoded_records(), 0);
@@ -1749,8 +1757,8 @@ mod tests {
 
         let mut out_a = bytes::BytesMut::new();
         let mut out_b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(1, 0), &mut out_a));
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &mut out_b));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(1, 0), &[], &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &[], &mut out_b));
         let s_a = decode(&out_a);
         let s_b = decode(&out_b);
         assert_eq!(s_a.entities.len(), 1, "group A's delta carries only the shared cell's mover: {s_a:?}");
@@ -1798,7 +1806,7 @@ mod tests {
         room.update(&mut world, &ctx(2));
 
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(5, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(5, 0), &[], &mut out));
         let s = decode(&out);
         assert!(s.delta);
         assert!(
@@ -1807,7 +1815,7 @@ mod tests {
         );
 
         let mut out2 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(6, 0), &mut out2));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(6, 0), &[], &mut out2));
         let s2 = decode(&out2);
         assert!(
             s2
@@ -1832,7 +1840,7 @@ mod tests {
             .collect();
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
         assert_eq!(ids(&decode(&out)).len(), 5, "the fresh full carries all five");
         assert_eq!(room.encoded_records(), 5);
 
@@ -1842,7 +1850,7 @@ mod tests {
         world.entity_mut(ent).insert(Position { x: 18.0, y: 0.0 }); // still Cell(0,0)
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
         let s2 = decode(&out2);
         assert!(s2.delta);
         assert_eq!(s2.entities.len(), 1, "exactly the mover's record: {s2:?}");
@@ -1867,7 +1875,7 @@ mod tests {
         let _m = place(&mut world, &mut room, ConnectionId(1), 0.5, 0.5); // wire (0,0), Cell(0,0)
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
 
         // The f32 position changes; the wire position (0,0) does not.
         let ent = *room.conn_entity.get(&ConnectionId(1)).unwrap();
@@ -1875,7 +1883,7 @@ mod tests {
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2),
             "an unchanged wire position is a no-op: the cell is silent, no stale delta"
         );
         assert_eq!(room.encoded_records(), 0);
@@ -1884,7 +1892,7 @@ mod tests {
         world.entity_mut(ent).insert(Position { x: 1.0, y: 0.5 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
         let s3 = decode(&out3);
         assert!(s3.delta);
         assert_eq!(s3.entities.len(), 1);
@@ -1904,7 +1912,7 @@ mod tests {
         let w2 = place(&mut world, &mut room, ConnectionId(2), 10.0, 0.0); // Cell(0,0)
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
         assert_eq!(ids(&decode(&out)).len(), 2);
         assert_eq!(room.encoded_records(), 2);
 
@@ -1913,7 +1921,7 @@ mod tests {
         room.on_leave(&mut world, ConnectionId(1));
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
         let s2 = decode(&out2);
         assert!(s2.delta);
         assert_eq!(s2.removed.len(), 1, "the leaver's wire id is removed: {s2:?}");
@@ -1927,7 +1935,7 @@ mod tests {
         room.on_leave(&mut world, ConnectionId(2));
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &mut out3));
+        assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
         let s3 = decode(&out3);
         assert_eq!(s3.cell_exits.len(), 1, "one cell-exit record: {s3:?}");
         assert_eq!((s3.cell_exits[0].x, s3.cell_exits[0].y), (0, 0));
@@ -1963,7 +1971,7 @@ mod tests {
             "a member joining an NPC-held cell is a fresh group (member count 0 → 1)"
         );
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Cell(2, 0), &mut out));
+        assert!(room.snapshot(&mut world, &ctx(2), &Cell(2, 0), &[], &mut out));
         let s = decode(&out);
         assert!(!s.delta, "the fresh group's first packet is a full");
         let seen = ids(&s);
@@ -1993,7 +2001,7 @@ mod tests {
         let _m = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
         room.update(&mut world, &ctx(1));
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &mut out)); // fresh full
+        assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out)); // fresh full
 
         // A connection that joins AND leaves before the next update.
         room.on_join(&mut world, ConnectionId(9));
@@ -2011,7 +2019,7 @@ mod tests {
         );
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &mut out2),
+            !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2),
             "the phantom join produced no delta"
         );
         assert_eq!(room.encoded_records(), 0);

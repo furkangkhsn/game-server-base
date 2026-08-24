@@ -8,9 +8,9 @@
 //!                                            │
 //!  Phase 0  │  CONTROL:   pull join/leave/shutdown from the control channel
 //!  Phase 1  │  READ:      pull actions from each connection's channel
-//!  Phase 2  │  CONVERT:   actions → component writes (RoomLogic)
-//!  Phase 3  │  SYSTEMS:   run the ordered game systems   (RoomLogic)
-//!  Phase 4  │  BROADCAST: one snapshot per group (RoomLogic::snapshot)
+//!  Phase 2  │  CONVERT:   actions → component writes (GameLogic)
+//!  Phase 3  │  SYSTEMS:   run the ordered game systems   (GameLogic)
+//!  Phase 4  │  BROADCAST: one snapshot per group (GameLogic::snapshot)
 //!           │             → freeze → shared Bytes fan-out + private frames
 //!             └─────────────────────────────────────────────────────────┘
 //! ```
@@ -22,14 +22,14 @@
 //!
 //! **Broadcast model (per-group full snapshots).** Connections are
 //! partitioned into snapshot groups by the game logic
-//! ([`RoomLogic::group_of`]): `()` means "one group per room" (the demo),
+//! ([`GameLogic::group_of`]): `()` means "one group per room" (the demo),
 //! `ConnectionId` means "one snapshot per connection". Each tick the room
 //! encodes each group's **entire** snapshot **once**, `freeze()`s it, and
 //! fans the resulting `Bytes` out to the group's members by reference
 //! (Arc refcount — the payload is never copied). Membership (join/leave)
 //! is expressed by presence in the snapshot: there are no spawn/remove
 //! events. The game logic decides "nothing changed for this group"
-//! (`RoomLogic::snapshot` returning `false`, including membership
+//! (`GameLogic::snapshot` returning `false`, including membership
 //! changes); when nothing changed anywhere, the room ships nothing except
 //! on a keep-alive tick, when each group re-sends its last cached snapshot
 //! so a client that lost its last packet cannot stay stale forever
@@ -47,8 +47,12 @@
 //! every k-th global tick.
 //!
 //! The room actor owns **no** game types: the world is an opaque `W` and
-//! the group key an opaque `G`; all game behaviour is delegated to
-//! [`RoomLogic`].
+//! the group key an opaque `G`; all game behaviour is delegated to the
+//! logic traits — [`GameLogic`] (the shared supertrait, one source for
+//! what used to be a ~17-method duplicate on both actors) narrowed here
+//! by [`RoomLogic`] with the room-exclusive request/result seams; the
+//! sharded sibling is [`ShardLogic`](crate::shard::ShardLogic) — see
+//! `docs/TRAIT-ARCHITECTURE.md`.
 //!
 //! **Metrics:** the room's counters live in the room's own local state
 //! ([`RoomCounters`]) and are flushed once per step over the *bounded*
@@ -340,7 +344,7 @@ pub enum Detach {
     /// keeps byte-for-byte its old semantics without recompiling anything.
     Despawn,
     /// The entity lives on, parked. `grace = None` → only
-    /// [`RoomLogic::may_release`] ends the hold (combat-held);
+    /// [`GameLogic::may_release`] ends the hold (combat-held);
     /// `Some(d)` → the hold ends at the latest `d` after the disconnect
     /// (the ceiling that makes a harassed lock impossible to extend
     /// forever). What happens at the end: the player returns first
@@ -410,7 +414,7 @@ pub enum RoomControl {
         entity: EntityId,
     },
     /// The connection's transport died: hand the entity's fate to the
-    /// room policy (`RoomLogic::on_disconnect` — `docs/RECONNECT.md` §3).
+    /// room policy (`GameLogic::on_disconnect` — `docs/RECONNECT.md` §3).
     /// This is what `ConnClosed` routes instead of the despawn-causing
     /// `Leave` it used to send: the registry never decides the policy,
     /// it only reports the fact.
@@ -461,9 +465,18 @@ pub struct TickCtx {
     pub dt: Duration,
 }
 
-/// Game-side behaviour of a room. Implemented by the game crate; the core
-/// never inspects the world `W` or the group key `GroupKey`.
-pub trait RoomLogic<W>: Send {
+/// Game-side behaviour shared by every actor shape — the single source of
+/// the contract that used to be duplicated between the room and the shard
+/// (~17 near-identical methods; see `docs/TRAIT-ARCHITECTURE.md` §3): the
+/// tick seam ([`Self::ingest`] / [`Self::update`] / [`Self::snapshot`]),
+/// the snapshot-group partitioning, the membership hooks, and the
+/// reconnect surface (detach/resume). Two thin subtraits add only their
+/// actor's exclusive hooks: [`RoomLogic`] the room's request/result seams,
+/// [`ShardLogic`](crate::shard::ShardLogic) the migration/topology hooks.
+///
+/// Implemented by the game crate; the core never inspects the world `W`
+/// or the group key `GroupKey`.
+pub trait GameLogic<W>: Send {
     /// Opaque key partitioning the room's connections into snapshot groups.
     /// `()` = one group per room (everyone sees the whole world);
     /// `ConnectionId` = one snapshot per connection; anything else (e.g. a
@@ -517,11 +530,20 @@ pub trait RoomLogic<W>: Send {
     /// that is stale from the start, or of nothing at all), and the room
     /// cannot detect it — silence is also the legitimate state of a
     /// genuinely unchanged group.
+    ///
+    /// `borrowed` carries the neighboring shards' boundary records on the
+    /// SHARDED execution path (the shard actor folds its latest border
+    /// exchange in — see `crate::shard`); a single-room actor passes an
+    /// empty slice. The parameter lives here — on the shared supertrait,
+    /// not on the shard subtrait — so ONE method serves both actors and
+    /// the fan-out machinery stays textually identical: a plain room's
+    /// "no change" test simply never sees borrowed content.
     fn snapshot(
         &mut self,
         world: &mut W,
         ctx: &TickCtx,
         group: &Self::GroupKey,
+        borrowed: &[crate::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool;
 
@@ -535,7 +557,8 @@ pub trait RoomLogic<W>: Send {
     /// connection per tick (measured: part of the idle floor).
     ///
     /// `responses` is this tick's list of RPC answers owed to `conn`
-    /// (empty = none; see [`Self::handle_request`] and `crate::rpc`):
+    /// (empty = none; see [`RoomLogic::handle_request`] and
+    /// `crate::rpc`):
     /// same-tick local answers and, on later ticks, the deferred answers
     /// of external requests that completed (or timed out) since the
     /// request was processed. The logic encodes them into the private
@@ -553,61 +576,6 @@ pub trait RoomLogic<W>: Send {
         _out: &mut bytes::BytesMut,
     ) -> bool {
         false
-    }
-
-    /// Handle one correlated request (the RPC pattern; see `crate::rpc`
-    /// for the contract: id space, ordering, caps, timeouts).
-    ///
-    /// The request is guaranteed to belong to a connection that is in
-    /// the room (the room only pulls actions of registered connections)
-    /// and to carry a decodable base envelope with `id != 0` (the core
-    /// rejects the malformed/uncorrelable cases before this call). The
-    /// logic decides the request's fate:
-    ///
-    /// - [`RequestDecision::Reply`] — answered in this tick;
-    /// - [`RequestDecision::Reject`] — a normal rejection, this tick;
-    /// - [`RequestDecision::External`] — delegated; the core registers
-    ///   the request as pending (subject to the pending caps — an
-    ///   over-cap request is answered with a normal rejection even if
-    ///   the logic said `External`) and hands the future to a worker;
-    /// - `None` — the opcode is not a request this logic handles: the
-    ///   core answers with a normal rejection (the client learns "no
-    ///   handler" instead of waiting for its own timeout).
-    ///
-    /// Called once per request, in arrival order, AFTER this tick's
-    /// `ingest` (a request sees the world after the tick's fire-and-
-    /// forget actions were applied). Synchronous: an `External` decision
-    /// must be an OWNING future (`'static`) — the tick body ends long
-    /// before the work resolves.
-    ///
-    /// Default: `None` (a logic without request support gets a
-    /// "no handler" answer for every request — no behaviour change for
-    /// existing games, whose requests were previously ignored).
-    fn handle_request(
-        &mut self,
-        _world: &mut W,
-        _ctx: &TickCtx,
-        _req: &crate::rpc::RpcRequest,
-    ) -> Option<crate::rpc::RequestDecision> {
-        None
-    }
-
-    /// The match result to report through the room's result sink when the
-    /// room shuts down (any shutdown: a control-plane destroy, a server
-    /// stop). The room calls this after [`Self::on_shutdown`], right
-    /// before the world is dropped, passing the world (mutably — a
-    /// final-state query, e.g. bevy's `Query`, needs it) so the logic can
-    /// compute the result from final state without having cached it
-    /// (no per-tick cost). `None` = no result (the sink receives
-    /// nothing). The payload is game-encoded and opaque to the core.
-    ///
-    /// Delivery is best-effort (a bounded sink, a synchronous
-    /// `try_send`): a full or gone sink drops the result and warns —
-    /// a slow result consumer must not stall the room's teardown.
-    ///
-    /// Default: no result.
-    fn match_result(&mut self, _world: &mut W) -> Option<bytes::Bytes> {
-        None
     }
 
     /// Produce the payload to ship to a group on a **keep-alive tick**
@@ -768,6 +736,68 @@ pub trait RoomLogic<W>: Send {
     }
 }
 
+/// Game-side behaviour of a SINGLE-ROOM actor: everything [`GameLogic`]
+/// shares, plus the room-exclusive request/result seams. The shard-side
+/// counterparts — the shard-RPC pending set + sweep and the match-result
+/// sink — need actor machinery the shard does not run yet; they are the
+/// Faz 3 promotion (`docs/TRAIT-ARCHITECTURE.md` §4), not trait surface.
+pub trait RoomLogic<W>: GameLogic<W> {
+    /// Handle one correlated request (the RPC pattern; see `crate::rpc`
+    /// for the contract: id space, ordering, caps, timeouts).
+    ///
+    /// The request is guaranteed to belong to a connection that is in
+    /// the room (the room only pulls actions of registered connections)
+    /// and to carry a decodable base envelope with `id != 0` (the core
+    /// rejects the malformed/uncorrelable cases before this call). The
+    /// logic decides the request's fate:
+    ///
+    /// - [`RequestDecision::Reply`] — answered in this tick;
+    /// - [`RequestDecision::Reject`] — a normal rejection, this tick;
+    /// - [`RequestDecision::External`] — delegated; the core registers
+    ///   the request as pending (subject to the pending caps — an
+    ///   over-cap request is answered with a normal rejection even if
+    ///   the logic said `External`) and hands the future to a worker;
+    /// - `None` — the opcode is not a request this logic handles: the
+    ///   core answers with a normal rejection (the client learns "no
+    ///   handler" instead of waiting for its own timeout).
+    ///
+    /// Called once per request, in arrival order, AFTER this tick's
+    /// `ingest` (a request sees the world after the tick's fire-and-
+    /// forget actions were applied). Synchronous: an `External` decision
+    /// must be an OWNING future (`'static`) — the tick body ends long
+    /// before the work resolves.
+    ///
+    /// Default: `None` (a logic without request support gets a
+    /// "no handler" answer for every request — no behaviour change for
+    /// existing games, whose requests were previously ignored).
+    fn handle_request(
+        &mut self,
+        _world: &mut W,
+        _ctx: &TickCtx,
+        _req: &crate::rpc::RpcRequest,
+    ) -> Option<crate::rpc::RequestDecision> {
+        None
+    }
+
+    /// The match result to report through the room's result sink when the
+    /// room shuts down (any shutdown: a control-plane destroy, a server
+    /// stop). The room calls this after [`GameLogic::on_shutdown`], right
+    /// before the world is dropped, passing the world (mutably — a
+    /// final-state query, e.g. bevy's `Query`, needs it) so the logic can
+    /// compute the result from final state without having cached it
+    /// (no per-tick cost). `None` = no result (the sink receives
+    /// nothing). The payload is game-encoded and opaque to the core.
+    ///
+    /// Delivery is best-effort (a bounded sink, a synchronous
+    /// `try_send`): a full or gone sink drops the result and warns —
+    /// a slow result consumer must not stall the room's teardown.
+    ///
+    /// Default: no result.
+    fn match_result(&mut self, _world: &mut W) -> Option<bytes::Bytes> {
+        None
+    }
+}
+
 /// Per-connection state in a room (or shard) connection table. `pub(crate)`
 /// because the shard actor reuses the same table shape (a shard's `conns`
 /// is the shard's share of the room's connections — see `crate::shard`).
@@ -778,7 +808,7 @@ pub(crate) struct RoomConn<G> {
     pub(crate) actions: Inbox<Action>,
     pub(crate) entity: EntityId,
     /// Snapshot group this connection belongs to (recomputed every tick via
-    /// [`RoomLogic::group_of`]).
+    /// [`GameLogic::group_of`]).
     pub(crate) group: G,
     /// The fan-out batch buffer, reused across ticks (the measured floor
     /// carried one `Vec::with_capacity(2)` per connection per tick; the
@@ -797,7 +827,7 @@ pub(crate) struct RoomConn<G> {
     pub(crate) detached: bool,
     /// When the hold ends at the latest (`Detach::Hold.grace` mapped to an
     /// absolute instant by the CORE — §14.4 deadline ownership);
-    /// `None` = combat-held, only [`RoomLogic::may_release`] ends it.
+    /// `None` = combat-held, only [`GameLogic::may_release`] ends it.
     pub(crate) detach_deadline: Option<Instant>,
     /// The policy's chosen end ([`ExpireTo`]) when the hold expires.
     pub(crate) expire_to: ExpireTo,
@@ -880,7 +910,7 @@ pub(crate) struct RoomCounters {
     /// Snapshots whose payload exceeded `max_snapshot_bytes`, cumulative.
     pub(crate) snap_overflows: u64,
     /// Entity records encoded (summed over all groups, via
-    /// [`RoomLogic::encoded_records`]), cumulative. Together with the
+    /// [`GameLogic::encoded_records`]), cumulative. Together with the
     /// broadcastable entity count this is the *overlap multiplier*: how
     /// many times the same entity was encoded into group snapshots per
     /// tick (1.0 for one-group rooms, up to the block overlap for cell
@@ -997,7 +1027,7 @@ impl Default for RoomCounters {
 /// The room actor. Owns the world, the connection table, and the group
 /// table; everything mutable is local, so no synchronization is needed.
 ///
-/// `G` is the game logic's group key ([`RoomLogic::GroupKey`]); the room
+/// `G` is the game logic's group key ([`GameLogic::GroupKey`]); the room
 /// stores per-group state (last snapshot, this tick's ship, diagnostics)
 /// under it.
 pub struct RoomActor<W, G> {
@@ -1925,7 +1955,7 @@ where
         //     that REPLACES this tick's payload — a client that lost the
         //     delta (or several) is healed within one keep-alive period
         //     whether its group is active or silent (see
-        //     `RoomLogic::keepalive`).
+        //     `GameLogic::keepalive`).
         let keep_due = self
             .keepalive_every
             .map(|every| self.steps.is_multiple_of(every))
@@ -1933,7 +1963,10 @@ where
         let mut buf = bytes::BytesMut::new();
         for (group, st) in self.groups.iter_mut() {
             buf.clear();
-            let emitted = self.logic.snapshot(&mut self.world, ctx, group, &mut buf);
+            // No boundary records on the single-room path: the borrowed
+            // slice is a sharded-execution-only input (see
+            // `GameLogic::snapshot`).
+            let emitted = self.logic.snapshot(&mut self.world, ctx, group, &[], &mut buf);
             if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;
@@ -2454,7 +2487,7 @@ where
         //      membership changes degrade to a shifted start offset by
         //      construction; nothing keyed to rebind.
         // Anything the LOGIC keys by connection is the logic's half of the
-        // same bargain, discharged through `RoomLogic::on_resume`.
+        // same bargain, discharged through `GameLogic::on_resume`.
         if old != conn {
             if let Some(rc) = self.conns.remove(&old) {
                 self.conns.insert(conn, rc);
@@ -2509,7 +2542,10 @@ mod tests {
         next: u64,
     }
 
-    impl RoomLogic<()> for RebindLogic {
+    // Faz 1 trait split: the shared contract lives on `GameLogic`; this
+    // logic uses no room-exclusive hook, so its `RoomLogic` impl is empty
+    // (both exclusive methods have defaults).
+    impl GameLogic<()> for RebindLogic {
         type GroupKey = ();
         fn snapshot_op(&self) -> u16 {
             0x7400
@@ -2518,7 +2554,14 @@ mod tests {
             0x7401
         }
         fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
-        fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+        fn snapshot(
+            &mut self,
+            _w: &mut (),
+            _c: &TickCtx,
+            _g: &(),
+            _borrowed: &[crate::shard::BorrowedRecord],
+            _o: &mut bytes::BytesMut,
+        ) -> bool {
             false
         }
         fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> EntityId {
@@ -2567,6 +2610,8 @@ mod tests {
             }
         }
     }
+
+    impl RoomLogic<()> for RebindLogic {}
 
     #[test]
     fn rebind_rekeys_every_conn_keyed_table() {
@@ -2743,7 +2788,7 @@ mod tests {
         ops: mpsc::Sender<u16>,
     }
 
-    impl RoomLogic<()> for RecLogic {
+    impl GameLogic<()> for RecLogic {
         type GroupKey = ();
 
         fn snapshot_op(&self) -> u16 {
@@ -2762,6 +2807,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             _g: &Self::GroupKey,
+            _borrowed: &[crate::shard::BorrowedRecord],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false
@@ -2780,6 +2826,10 @@ mod tests {
             let _ = self.dts.try_send(ctx.dt);
         }
     }
+
+    // Faz 1 trait split: shared contract on `GameLogic`; no room-exclusive
+    // hook used (empty `RoomLogic` impl).
+    impl RoomLogic<()> for RecLogic {}
 
     struct Harness {
         tick_tx: broadcast::Sender<TickInfo>,
@@ -3150,7 +3200,7 @@ mod tests {
         steps: mpsc::Sender<u64>,
     }
 
-    impl RoomLogic<()> for GroupLogic {
+    impl GameLogic<()> for GroupLogic {
         type GroupKey = ConnectionId;
 
         fn snapshot_op(&self) -> u16 {
@@ -3169,6 +3219,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             group: &Self::GroupKey,
+            _borrowed: &[crate::shard::BorrowedRecord],
             out: &mut bytes::BytesMut,
         ) -> bool {
             if !self.dirty.remove(group) {
@@ -3215,6 +3266,10 @@ mod tests {
             let _ = self.steps.try_send(self.step_no);
         }
     }
+
+    // Faz 1 trait split: shared contract on `GameLogic`; no room-exclusive
+    // hook used (empty `RoomLogic` impl).
+    impl RoomLogic<()> for GroupLogic {}
 
     /// Manual-ticker harness for `GroupLogic` rooms.
     struct GLRoom {
@@ -3411,7 +3466,7 @@ mod tests {
     /// Test logic for the "the world changes on every tick" scenario,
     /// with contract-conforming bookkeeping: each group remembers the
     /// world step *it* last emitted at, keyed by the group (the
-    /// `RoomLogic::snapshot` contract's per-group requirement). A group
+    /// `GameLogic::snapshot` contract's per-group requirement). A group
     /// whose content is the whole world must emit on every tick.
     struct FairLogic {
         last_world: u64,
@@ -3420,7 +3475,7 @@ mod tests {
         steps: mpsc::Sender<u64>,
     }
 
-    impl RoomLogic<()> for FairLogic {
+    impl GameLogic<()> for FairLogic {
         type GroupKey = ConnectionId;
 
         fn snapshot_op(&self) -> u16 {
@@ -3439,6 +3494,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             group: &Self::GroupKey,
+            _borrowed: &[crate::shard::BorrowedRecord],
             out: &mut bytes::BytesMut,
         ) -> bool {
             // "Unchanged" = the world step this group emitted at is the
@@ -3468,6 +3524,10 @@ mod tests {
         }
     }
 
+    // Faz 1 trait split: shared contract on `GameLogic`; no room-exclusive
+    // hook used (empty `RoomLogic` impl).
+    impl RoomLogic<()> for FairLogic {}
+
     #[tokio::test]
     async fn all_dirty_groups_emit_on_the_same_tick() {
         // The external-measurement scenario with contract-conforming
@@ -3476,7 +3536,7 @@ mod tests {
         // tick. Every group must emit on every tick — the group visited
         // first by the room must not make the later groups see "no
         // change" (that is exactly what a ledger shared across groups
-        // does; the `RoomLogic::snapshot` contract forbids it).
+        // does; the `GameLogic::snapshot` contract forbids it).
         let (step_tx, mut steps) = mpsc::channel(64);
         let (tick_tx, tick_rx) = broadcast::channel(64);
         let (control, control_rx) = channel(128);
@@ -3933,7 +3993,7 @@ mod tests {
     /// tick, including a fresh group's first tick.
     struct SilentLogic;
 
-    impl RoomLogic<()> for SilentLogic {
+    impl GameLogic<()> for SilentLogic {
         type GroupKey = ConnectionId;
 
         fn snapshot_op(&self) -> u16 {
@@ -3952,6 +4012,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             _g: &Self::GroupKey,
+            _borrowed: &[crate::shard::BorrowedRecord],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false // even the first tick: a contract violation
@@ -3966,6 +4027,10 @@ mod tests {
         }
         fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
     }
+
+    // Faz 1 trait split: shared contract on `GameLogic`; no room-exclusive
+    // hook used (empty `RoomLogic` impl).
+    impl RoomLogic<()> for SilentLogic {}
 
     /// Lock-free WARN-capturing subscriber: events are pushed over an mpsc
     /// channel (never blocking); no shared state to protect. The `warn!`

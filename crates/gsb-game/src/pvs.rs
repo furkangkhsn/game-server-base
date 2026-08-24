@@ -1,4 +1,4 @@
-//! [`SectorRoom`]: per-map-segment (PVS) [`RoomLogic`] for the demo game.
+//! [`SectorRoom`]: per-map-segment (PVS) game logic for the demo game.
 //!
 //! ## What it changes (and what it deliberately does not touch)
 //!
@@ -88,7 +88,7 @@ use std::hash::Hash;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -200,7 +200,7 @@ pub struct SectorRoom {
     spawn_half: f32,
     /// Per-sector "no change" ledger: `sector → (wire id → (x, y))`, the
     /// exact wire content of that sector's last emitted snapshot. Keyed by
-    /// group (sector) per the [`RoomLogic::snapshot`] contract.
+    /// group (sector) per the [`GameLogic::snapshot`] contract.
     last: HashMap<Sector, HashMap<u64, (i32, i32)>>,
     /// Per-tick bucket cache, rebuilt in [`Self::update`]: `sector →
     /// [(wire id, x, y)]`. Each entity is bucketed **once** per tick; a
@@ -212,7 +212,7 @@ pub struct SectorRoom {
     /// `crate::common::ingest` / `emit_ack`).
     input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
-    /// (polled by the room via `RoomLogic::encoded_records`).
+    /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
 }
 
@@ -257,7 +257,9 @@ impl SectorRoom {
     }
 }
 
-impl RoomLogic<World> for SectorRoom {
+// Faz 1 trait split: shared hooks on the `GameLogic` supertrait; no
+// room-exclusive hook used (empty `RoomLogic` impl at the bottom).
+impl GameLogic<World> for SectorRoom {
     type GroupKey = Sector;
 
     fn snapshot_op(&self) -> u16 {
@@ -288,6 +290,8 @@ impl RoomLogic<World> for SectorRoom {
         _world: &mut World,
         ctx: &TickCtx,
         sector: &Sector,
+        // Single-room execution: no boundary records exist here.
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let mut content: HashMap<u64, (i32, i32)> = HashMap::new();
@@ -453,6 +457,8 @@ impl RoomLogic<World> for SectorRoom {
     }
 }
 
+impl RoomLogic<World> for SectorRoom {}
+
 #[cfg(test)]
 mod tests {
     //! Logic-level PVS tests (precise, direct `SectorRoom` calls; they
@@ -517,13 +523,13 @@ mod tests {
         );
 
         let mut out_a = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &[], &mut out_a));
         let a = snap_ids(&out_a);
         assert!(a.contains(&p1), "P1 in A's snapshot: {a:?}");
         assert!(!a.contains(&p2), "P2 (3 units away, unlinked sector) NOT visible: {a:?}");
 
         let mut out_b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_EAST), &mut out_b));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_EAST), &[], &mut out_b));
         let b = snap_ids(&out_b);
         assert!(b.contains(&p2), "P2 in B's snapshot: {b:?}");
         assert!(!b.contains(&p1), "P1 (3 units away, unlinked sector) NOT visible: {b:?}");
@@ -545,7 +551,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out_a = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &[], &mut out_a));
         let a = snap_ids(&out_a);
         // A sees A and C (both linked): p1, p2, q1 — but NOT q2 (in D,
         // unlinked with A).
@@ -553,7 +559,7 @@ mod tests {
         assert!(!a.contains(&q2), "A does not see D (unlinked): {a:?}");
 
         let mut out_c = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_NW), &mut out_c));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_NW), &[], &mut out_c));
         let c = snap_ids(&out_c);
         assert!(c.contains(&p1) && c.contains(&p2) && c.contains(&q1) && c.contains(&q2),
             "C sees A and D (both linked): {c:?}");
@@ -573,7 +579,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out_a = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &[], &mut out_a));
         let a = snap_ids(&out_a);
         assert!(a.contains(&p1) && a.contains(&p2), "co-sector residents visible: {a:?}");
     }
@@ -594,7 +600,7 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out_a = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &mut out_a));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_WEST), &[], &mut out_a));
         assert!(snap_ids(&out_a).contains(&p1));
 
         // P1 moves into sector C (x <= -10, linked with A, NOT with B).
@@ -603,7 +609,7 @@ mod tests {
         room.update(&mut world, &ctx(2));
 
         let mut out_c = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_NW), &mut out_c),
+        assert!(room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_NW), &[], &mut out_c),
             "new sector re-emits");
         let snap_c = crate::game::WorldSnapshot::decode(out_c.as_ref()).expect("snapshot");
         let now_c: BTreeSet<u64> = snap_c.entities.iter().map(|e| e.entity).collect();
@@ -615,7 +621,7 @@ mod tests {
         // to the new position under the same wire id (C is linked with A,
         // so the crossing did not end A's visibility of P1).
         let mut out_a2 = bytes::BytesMut::new();
-        room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_WEST), &mut out_a2);
+        room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_WEST), &[], &mut out_a2);
         let snap_a = crate::game::WorldSnapshot::decode(out_a2.as_ref()).expect("snapshot");
         let rec_a = snap_a
             .entities
@@ -625,7 +631,7 @@ mod tests {
         assert_eq!((rec_a.x, rec_a.y), (-20, 25), "P1's record moved, id unchanged: {rec_a:?}");
 
         let mut out_b2 = bytes::BytesMut::new();
-        room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_EAST), &mut out_b2);
+        room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_EAST), &[], &mut out_b2);
         let now_b = snap_ids(&out_b2);
         assert!(
             !now_b.contains(&p1),
@@ -654,18 +660,18 @@ mod tests {
 
         room.update(&mut world, &ctx(1));
         let mut out1 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &sector, &mut out1), "first emit");
+        assert!(room.snapshot(&mut world, &ctx(1), &sector, &[], &mut out1), "first emit");
 
         room.update(&mut world, &ctx(2));
         let mut out2 = bytes::BytesMut::new();
-        assert!(!room.snapshot(&mut world, &ctx(2), &sector, &mut out2), "static snapshot silent");
+        assert!(!room.snapshot(&mut world, &ctx(2), &sector, &[], &mut out2), "static snapshot silent");
         assert!(out2.is_empty(), "no bytes written on silence");
 
         let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
         world.entity_mut(entity).insert(Position { x: 7.0, y: 19.0 });
         room.update(&mut world, &ctx(3));
         let mut out3 = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(3), &sector, &mut out3), "movement re-emits");
+        assert!(room.snapshot(&mut world, &ctx(3), &sector, &[], &mut out3), "movement re-emits");
     }
 
     /// Broadcast set + OUT: an entity with a `Position` but no `WireId`
@@ -689,13 +695,13 @@ mod tests {
         room.update(&mut world, &ctx(1));
 
         let mut out_b = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_EAST), &mut out_b));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_EAST), &[], &mut out_b));
         let b = snap_ids(&out_b);
         assert_eq!(b.len(), 2, "B: resident + stamped orphan (the runaway is not here): {b:?}");
         assert!(b.contains(&a));
 
         let mut out_out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_OUT), &mut out_out));
+        assert!(room.snapshot(&mut world, &ctx(1), &Sector(SECTOR_OUT), &[], &mut out_out));
         let out_ids = snap_ids(&out_out);
         let runaway_id = room
             .last
@@ -706,7 +712,7 @@ mod tests {
         // The runaway must not appear in ANY map sector's snapshot.
         for s in 0..4u8 {
             let mut o = bytes::BytesMut::new();
-            room.snapshot(&mut world, &ctx(1), &Sector(s), &mut o);
+            room.snapshot(&mut world, &ctx(1), &Sector(s), &[], &mut o);
             let ids = snap_ids(&o);
             assert!(!ids.contains(&runaway_id), "sector {s} must not leak the runaway: {ids:?}");
         }

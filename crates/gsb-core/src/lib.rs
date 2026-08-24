@@ -10,8 +10,11 @@
 //!   routing), including the control-plane room lifecycle (the idempotent
 //!   create/destroy/status) and the match-result seam.
 //! - [`room`]: the per-room actor running the five-phase tick (CONTROL →
-//!   READ → CONVERT → SYSTEMS → BROADCAST), and the generic
-//!   [`room::RoomLogic`] trait the game crate implements.
+//!   READ → CONVERT → SYSTEMS → BROADCAST), the shared [`room::GameLogic`]
+//!   supertrait (the single-source game contract both actor shapes
+//!   implement — see `docs/TRAIT-ARCHITECTURE.md`), and its
+//!   [`room::RoomLogic`] extension (the room-exclusive request/result
+//!   seams; [`shard::ShardLogic`] is the sharded sibling).
 //! - [`conn`]: the per-connection actor (auth/join/leave state machine).
 //! - [`auth`]: the ticket-validation hook (control-plane auth; the base
 //!   defines the hook, the platform implements the validator).
@@ -43,4 +46,4 @@ pub use metrics::{
     MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent,
 };
 pub use registry::{MatchResult, RoomStatus};
-pub use room::{Detach, ExpireTo, ResumeFound};
+pub use room::{Detach, ExpireTo, GameLogic, ResumeFound};

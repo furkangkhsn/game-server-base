@@ -1,4 +1,6 @@
-//! [`DemoRoom`]: the demo game's [`RoomLogic`] implementation.
+//! [`DemoRoom`]: the demo game's game-logic implementation — the shared
+//! contract on [`GameLogic`](gsb_core::room::GameLogic), the room-exclusive
+//! request/result seams on [`RoomLogic`].
 //!
 //! A room owns one bevy [`World`] (exclusively — the room actor is the only
 //! borrower) plus a small amount of bookkeeping:
@@ -71,7 +73,7 @@
 //! (e.g. `ConnectionId`), you MUST key the ledger by group: the room
 //! calls `snapshot()` once per group per tick in unspecified order, and a
 //! ledger shared across groups makes the groups visited after the first
-//! see "no change" and their members starve (see `RoomLogic::snapshot`).
+//! see "no change" and their members starve (see `GameLogic::snapshot`).
 //!
 //! Delta compression and area-of-interest grouping (a non-`()` `GroupKey`)
 //! are the documented next steps (see `docs/DESIGN.md`).
@@ -81,7 +83,7 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId};
-use gsb_core::room::{Action, Detach, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{Action, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_ecs::SystemRunner;
 use prost::Message;
@@ -128,7 +130,7 @@ pub struct DemoRoom {
     /// visibility strategy the server picked).
     input: HashMap<ConnectionId, crate::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
-    /// (polled by the room via `RoomLogic::encoded_records`).
+    /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
     /// The economy service handle (the RPC pattern's external-I/O half,
     /// see `crate::economy`); `None` = the room answers `ECONOMY`
@@ -218,7 +220,11 @@ pub fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
     (x, y)
 }
 
-impl RoomLogic<World> for DemoRoom {
+// Faz 1 trait split (docs/TRAIT-ARCHITECTURE.md): the shared contract —
+// snapshot groups, the tick seam, membership, the reconnect surface —
+// implements the `GameLogic` supertrait; the request/result seams stay in
+// the `RoomLogic` impl below.
+impl GameLogic<World> for DemoRoom {
     // One group per room: everyone sees the whole world. (The interface
     // supports finer groupings, e.g. `GroupKey = ConnectionId` — but then
     // the `last` ledger above must be keyed by group; see the module
@@ -241,6 +247,9 @@ impl RoomLogic<World> for DemoRoom {
         world: &mut World,
         ctx: &TickCtx,
         _group: &Self::GroupKey,
+        // Single-room execution: no boundary records exist here (the
+        // sharded actor folds its border exchange into this same seam).
+        _borrowed: &[gsb_core::shard::BorrowedRecord],
         out: &mut bytes::BytesMut,
     ) -> bool {
         // Collect the broadcastable state (wire id, truncated wire
@@ -403,7 +412,7 @@ impl RoomLogic<World> for DemoRoom {
     }
 
     /// The per-connection input acknowledgment (the group snapshot is
-    /// shared; the ack is not — `RoomLogic::private` is the per-connection
+    /// shared; the ack is not — `GameLogic::private` is the per-connection
     /// seam of the batch, so the ack rides the same delivery as the
     /// snapshot, a few bytes per advanced tick, zero otherwise).
     fn private(
@@ -420,7 +429,10 @@ impl RoomLogic<World> for DemoRoom {
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::run_systems(&mut self.runner, world, ctx);
     }
+}
 
+// Faz 1 trait split: the room-exclusive seams (RPC + match result).
+impl RoomLogic<World> for DemoRoom {
     /// The demo's two request kinds (the RPC pattern's two halves, see
     /// `game.proto`):
     ///
@@ -579,7 +591,7 @@ mod tests {
         let wire_id = room.on_join(&mut world, ConnectionId(1));
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
+        assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
         assert_eq!(wire_id, 1, "first entity gets wire id 1");
 
         // The bevy handle is the room's business (conn_entity); the join
@@ -589,7 +601,7 @@ mod tests {
 
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx, &(), &mut out2),
+            room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
             "a plain position write must still emit"
         );
         let snap = crate::game::WorldSnapshot::decode(out2.as_ref()).expect("decode");
@@ -670,7 +682,7 @@ mod tests {
         // holds entity #128 (it lost the leave snapshots). From the new
         // snapshot alone it must classify the record.
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
+        assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
         let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
         assert_eq!(snap.entities.len(), 1);
         let rec = &snap.entities[0];
@@ -718,7 +730,7 @@ mod tests {
         // The next snapshot must include it, with a fresh wire id.
         let mut out = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx, &(), &mut out),
+            room.snapshot(&mut world, &ctx, &(), &[], &mut out),
             "a new entity is a wire-content change ⇒ emit"
         );
         let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
@@ -746,7 +758,7 @@ mod tests {
         // identity is stable across snapshots.
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx, &(), &mut out2),
+            !room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
             "unchanged content ⇒ silent (no re-stamp, no re-emit)"
         );
         assert_eq!(
@@ -760,7 +772,7 @@ mod tests {
         world.entity_mut(bullet).insert(Position { x: 9.0, y: -3.0 });
         let mut out3 = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx, &(), &mut out3),
+            room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
             "movement ⇒ wire content changed ⇒ emit"
         );
         let snap3 = crate::game::WorldSnapshot::decode(out3.as_ref()).expect("decode");
@@ -782,7 +794,7 @@ mod tests {
         room.on_join(&mut world, ConnectionId(1));
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
-        assert!(room.snapshot(&mut world, &ctx, &(), &mut out), "join emits");
+        assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
 
         // A position write with no content change...
         let entity = *room.conn_entity.get(&ConnectionId(1)).unwrap();
@@ -794,7 +806,7 @@ mod tests {
         world.entity_mut(entity).insert(pos);
         let mut out2 = bytes::BytesMut::new();
         assert!(
-            !room.snapshot(&mut world, &ctx, &(), &mut out2),
+            !room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
             "write without content change ⇒ no change ⇒ silent"
         );
 
@@ -802,7 +814,7 @@ mod tests {
         room.on_leave(&mut world, ConnectionId(1));
         let mut out3 = bytes::BytesMut::new();
         assert!(
-            room.snapshot(&mut world, &ctx, &(), &mut out3),
+            room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
             "leave ⇒ wire content changed ⇒ emit"
         );
         let snap = crate::game::WorldSnapshot::decode(out3.as_ref()).expect("decode");

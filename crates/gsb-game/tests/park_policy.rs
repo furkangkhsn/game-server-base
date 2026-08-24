@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::{MetricsEvent, RoomSample};
-use gsb_core::room::{Action, Detach, ExpireTo, RoomActor, RoomConfig, RoomControl};
+use gsb_core::room::{Action, Detach, ExpireTo, GameLogic, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_game::game::{MoveTo, WorldSnapshot};
 use gsb_game::op;

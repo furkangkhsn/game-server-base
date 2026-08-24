@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use bytes::BufMut;
 use gsb_core::channel::{channel, FrameBatch, Mailbox};
 use gsb_core::id::{ConnectionId, RoomId};
-use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::room::{Action, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::ticker::TickInfo;
@@ -73,7 +73,7 @@ struct RpcLogic {
     ext_tx: mpsc::UnboundedSender<Resolver>,
 }
 
-impl RoomLogic<()> for RpcLogic {
+impl GameLogic<()> for RpcLogic {
     type GroupKey = ();
 
     fn snapshot_op(&self) -> u16 {
@@ -85,7 +85,7 @@ impl RoomLogic<()> for RpcLogic {
 
     fn group_of(&self, _w: &(), _c: ConnectionId) -> Self::GroupKey {}
 
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _borrowed: &[gsb_core::shard::BorrowedRecord], _o: &mut bytes::BytesMut) -> bool {
         false // no group snapshots: batches carry only private frames
     }
 
@@ -113,7 +113,10 @@ impl RoomLogic<()> for RpcLogic {
     fn on_leave(&mut self, _w: &mut (), _c: ConnectionId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, _a: &mut Vec<Action>) {}
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
+}
 
+// Faz 1 trait split: the room-exclusive request seam stays on `RoomLogic`.
+impl RoomLogic<()> for RpcLogic {
     fn handle_request(
         &mut self,
         _w: &mut (),

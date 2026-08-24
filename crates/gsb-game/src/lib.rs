@@ -1,15 +1,18 @@
 //! Demo game logic for gsb.
 //!
 //! This crate is the *only* place that knows anything about a particular
-//! game. It plugs into the core via [`gsb_core::room::RoomLogic`] (see
-//! [`room::DemoRoom`]) and registers its wire messages with the
+//! game. It plugs into the core via the [`gsb_core::room::GameLogic`]
+//! supertrait — the single-source shared contract (see
+//! `docs/TRAIT-ARCHITECTURE.md`) — narrowed by [`gsb_core::room::RoomLogic`]
+//! with the room-exclusive request/result seams (see [`room::DemoRoom`]),
+//! and it registers its wire messages with the
 //! [`gsb_protocol::MessageTable`] (see [`register`]).
 //!
 //! Everything here is intentionally small and replaceable: swap the
-//! components, systems, and `RoomLogic` implementation for a real MOBA or
+//! components, systems, and `GameLogic` implementation for a real MOBA or
 //! MMORPG without touching the core, net, protocol, or ecs crates.
 //!
-//! The demo game has four interchangeable `RoomLogic` rooms — the same
+//! The demo game has four interchangeable rooms — the same
 //! components, the same movement system, the same wire format, and only
 //! the *visibility strategy* differs (selected in `gsb-server`'s config,
 //! see `docs/DESIGN.md` §8):
@@ -24,10 +27,10 @@
 //!
 //! The fifth strategy is a different *topology*, not just a group key:
 //! [`sharded::ShardedRoom`] partitions the world into a grid of shards
-//! (each shard its own actor with its own `World`), plugged in via
-//! [`gsb_core::shard::ShardLogic`] rather than `RoomLogic` — see
-//! `docs/DESIGN.md` for the sharding design and the wire-id range
-//! partitioning.
+//! (each shard its own actor with its own `World`), implementing
+//! [`GameLogic`](gsb_core::room::GameLogic) plus the sharding seam of
+//! [`gsb_core::shard::ShardLogic`] — see `docs/DESIGN.md` for the
+//! sharding design and the wire-id range partitioning.
 //!
 //! Everything the rooms share that is *not* a visibility-strategy
 //! decision (identity minting, the connection table, input ingestion, the
