@@ -6,11 +6,11 @@
 
 ## 1. Kapsam ve statü
 
-| Madde | Tur |
-|---|---|
-| TCP üstüne TLS (rustls) | **Tur A** |
-| Auth rate-limit + pre-auth amplifikasyon sınırı | **Tur B** |
-| Pre-auth oturum tahsis sınırı | **Tur B** |
+| Madde | Tur | Durum |
+|---|---|---|
+| TCP üstüne TLS (rustls) | Tur A | ✅ Uygulandı |
+| Auth rate-limit + pre-auth amplifikasyon sınırı | Tur B | ✅ Uygulandı |
+| Pre-auth oturum tahsis sınırı | Tur B | ✅ Uygulandı |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 
