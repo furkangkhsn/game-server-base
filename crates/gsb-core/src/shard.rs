@@ -5073,14 +5073,17 @@ mod tests {
         s1: ShardActor<TWorld, (), TState, TRich>,
         /// What s0 exports to s1 lands here (test-held receiving end).
         rx01: Inbox<ShardMsg<TState, TRich>>,
-        /// What s1 sends back lands here.
-        rx10: Inbox<ShardMsg<TState, TRich>>,
+        /// What s1 sends back lands here (never drained yet: no rich
+        /// lock exercises the resync round trip; held so the channel
+        /// stays open).
+        #[allow(dead_code)]
+        _rx10: Inbox<ShardMsg<TState, TRich>>,
     }
 
     impl RichRig {
         fn new() -> Self {
             let (tx01, rx01) = mpsc::channel(16);
-            let (tx10, rx10) = mpsc::channel(16);
+            let (tx10, _rx10) = mpsc::channel(16);
             let build = |index: usize, tx: Mailbox<ShardMsg<TState, TRich>>, other: Mailbox<ShardMsg<TState, TRich>>| {
                 let (_tick_tx, tick_rx) = broadcast::channel(64);
                 let (_self_tx, rx) = channel::<ShardMsg<TState, TRich>>(16);
@@ -5108,7 +5111,7 @@ mod tests {
                 s0: build(0, d0, tx01),
                 s1: build(1, tx10, d1),
                 rx01,
-                rx10,
+                _rx10,
             }
         }
 
