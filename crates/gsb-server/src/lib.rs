@@ -18,6 +18,7 @@
 //! ```
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use bevy_ecs::world::World;
@@ -135,6 +136,71 @@ impl std::fmt::Display for TransportKind {
         };
         f.write_str(s)
     }
+}
+
+/// The per-listener transport spelling inside a `[[listeners]]` entry.
+///
+/// WHY a separate enum from [`TransportKind`] instead of a `Tls` variant
+/// there: TLS is NOT a distinct wire framing — it is TCP with a rustls
+/// upgrade (the accept loop, pumps and actors cannot tell them apart), so
+/// the legacy scalar key keeps encoding it as `transport = "tcp"` plus the
+/// cert/key pair. A listener ARRAY needs to name the three *deployments*
+/// unambiguously in one key ("tls" carries its own cert/key paths per
+/// entry), and reusing `TransportKind` would silently widen the legacy
+/// scalar grammar (`transport = "tls"` would start parsing where it used
+/// to be a config error). Two small enums keep each grammar exactly as
+/// wide as it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListenerTransport {
+    /// Length-prefixed plaintext TCP.
+    Tcp,
+    /// The same framing over rustls; the entry MUST set both
+    /// `tls_cert` and `tls_key`.
+    Tls,
+    /// rUDP (one socket + one demux PER udp listener; see `gsb_net::udp`).
+    Udp,
+}
+
+impl std::fmt::Display for ListenerTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Tcp => "tcp",
+            Self::Tls => "tls",
+            Self::Udp => "udp",
+        };
+        f.write_str(s)
+    }
+}
+
+/// One `[[listeners]]` entry: an independent socket that accepts clients
+/// into the SAME rooms as every other listener (rooms/actors are
+/// transport-agnostic by design; only the composition root ever picks a
+/// transport).
+///
+/// Per-entry keys are deliberately minimal: `transport` + `bind` are the
+/// identity of a listener; `tls_cert`/`tls_key` exist because each TLS
+/// listener legitimately owns its own certificate (e.g. an internal-CA
+/// listener next to a public-CA one on different addresses). Everything
+/// else stays a GLOBAL knob on purpose (simplest sound choice): frame
+/// limits, channel capacities, idle windows and the rUDP budget/key are
+/// deployment-wide policies of ONE actor stack, not properties of a
+/// socket — per-listener overrides would fork the pipeline's semantics
+/// per door for no demonstrated need.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ListenerEntry {
+    /// Which transport this listener serves (`"tcp"`, `"tls"`, `"udp"`).
+    pub transport: ListenerTransport,
+    /// Socket address to bind (e.g. `"0.0.0.0:7777"`, `"127.0.0.1:0"`).
+    /// Required: an unnamed door is a config mistake, not a default.
+    pub bind: String,
+    /// Path to the PEM certificate chain (leaf first) — REQUIRED (with
+    /// `tls_key`) when `transport = "tls"`; forbidden otherwise (a "tcp"
+    /// or "udp" entry carrying TLS files is a startup error, never a
+    /// silent reinterpretation of the entry).
+    pub tls_cert: Option<String>,
+    /// Path to the PEM private key matching [`Self::tls_cert`] — see there.
+    pub tls_key: Option<String>,
 }
 
 /// Server configuration (see `config.example.toml`).
@@ -258,6 +324,30 @@ pub struct Config {
     pub tls_cert: String,
     /// Path to the PEM private key matching [`Self::tls_cert`]. See there.
     pub tls_key: String,
+    /// The listener table (`[[listeners]]`): MULTIPLE independent sockets
+    /// serving the ONE room/map simultaneously — e.g. a TLS-TCP door for
+    /// paying clients next to a plain-TCP door for a LAN build, or an rUDP
+    /// door beside both. Every accepted endpoint flows into the SAME
+    /// pipeline (same registry, same rooms, one shared connection-id
+    /// sequence), so which door a client walked in through is invisible
+    /// above the accept loop.
+    ///
+    /// Semantics:
+    ///
+    /// - ABSENT (the default): exactly ONE listener is DERIVED from the
+    ///   legacy scalar keys (`transport` + `bind` + `tls_cert`/`tls_key`),
+    ///   byte-identical to pre-multi-listener behavior. Existing configs,
+    ///   tests and deployments are untouched.
+    /// - PRESENT and non-empty: the array WINS; the legacy scalar keys are
+    ///   ignored. A startup warn fires when any legacy scalar differs from
+    ///   its built-in default, so an operator who set both sees which one
+    ///   took effect (the config parser cannot distinguish "explicitly set
+    ///   to the default value" from "omitted", so identical-to-default
+    ///   legacy keys stay silent).
+    /// - PRESENT but empty: a startup error — a server with zero doors is
+    ///   never a valid deployment, and silently falling back to the scalar
+    ///   keys would hide the mistake.
+    pub listeners: Option<Vec<ListenerEntry>>,
     /// World units per AOI cell edge (used only when
     /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured break-even.
@@ -337,6 +427,7 @@ impl Default for Config {
             udp_cookie_key: None,
             tls_cert: String::new(),
             tls_key: String::new(),
+            listeners: None,
             aoi_cell_size: 20.0,
             team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
             spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
@@ -426,6 +517,227 @@ pub enum ServerError {
              its own anti-amplification boundary) — docs/SECURITY.md §2 \
              decision 7")]
     UdpWithTls,
+
+    #[error("`[[listeners]]` is present but empty: a server with no listener \
+             cannot accept clients; remove the empty table to fall back to \
+             the legacy scalar keys, or add entries — never an implicit \
+             fallback that hides a half-edited config")]
+    EmptyListeners,
+
+    #[error("duplicate bind address `{0}` in `[[listeners]]`: two listeners \
+             cannot own one address (the second bind would fail anyway; \
+             reporting it at config time names the culprit instead of \
+             failing inside a bind syscall)")]
+    DuplicateBind(String),
+
+    #[error("`[[listeners]]` entry `{bind}` sets transport = \"tls\" with \
+             tls_cert but no tls_key: TLS needs BOTH files; refusing to \
+             start half-configured — docs/SECURITY.md §2 decision 3")]
+    ListenerTlsCertNeedsKey {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+
+    #[error("`[[listeners]]` entry `{bind}` sets transport = \"tls\" with \
+             tls_key but no tls_cert: TLS needs BOTH files; refusing to \
+             start half-configured — docs/SECURITY.md §2 decision 3")]
+    ListenerTlsKeyNeedsCert {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+
+    #[error("`[[listeners]]` entry `{bind}`: transport = \"tcp\" cannot carry \
+             tls_cert/tls_key — write transport = \"tls\" for an encrypted \
+             door (a plaintext door with TLS files attached is a config \
+             mistake, not something to silently reinterpret)")]
+    ListenerTcpWithTls {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+
+    #[error("`[[listeners]]` entry `{bind}`: transport = \"udp\" cannot be \
+             combined with tls_cert/tls_key: rUDP is experimental and takes \
+             no TLS — docs/SECURITY.md §2 decision 7")]
+    ListenerUdpWithTls {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+}
+
+/// One fully-validated listener, ready to bind: the config grammar
+/// (`ListenerEntry`, legacy scalars) has been reduced to a transport
+/// instance recipe plus its parsed socket address. Built once by
+/// [`resolve_listeners`] BEFORE anything binds, so a bad config fails at
+/// startup without half-starting (the same principle as the legacy
+/// pre-bind TLS checks).
+pub(crate) enum ListenerSpec {
+    /// Plaintext length-prefixed TCP.
+    Tcp { addr: SocketAddr },
+    /// TCP + rustls with these PEM files (loaded at bind time).
+    Tls {
+        addr: SocketAddr,
+        cert_pem: String,
+        key_pem: String,
+    },
+    /// rUDP; global udp knobs apply (`udp_max_datagram_bytes`,
+    /// `udp_cookie_key`) — see `ListenerEntry` for why they stay global.
+    Udp { addr: SocketAddr },
+}
+
+impl ListenerSpec {
+    /// The parsed address this listener will claim.
+    fn addr(&self) -> SocketAddr {
+        match self {
+            Self::Tcp { addr }
+            | Self::Tls { addr, .. }
+            | Self::Udp { addr } => *addr,
+        }
+    }
+}
+
+/// Reduce the config's listener surface to validated [`ListenerSpec`]s:
+///
+/// - `listeners` absent → ONE spec derived from the legacy scalar keys,
+///   preserving their exact behavior INCLUDING their error variants
+///   (half-set `tls_*` → `TlsCertNeedsKey`/`TlsKeyNeedsCert`; `udp` +
+///   `tls_*` → `UdpWithTls`), so existing configs keep failing in exactly
+///   the ways they always did;
+/// - `listeners` non-empty → one spec per entry, each validated on its own
+///   ("tls" needs both files; "tcp"/"udp" take none), with a warn when any
+///   legacy scalar was also touched (see [`Config::listeners`]);
+/// - `listeners` empty → `EmptyListeners`.
+///
+/// Duplicates are detected over PARSED addresses (not raw strings).
+/// Concrete addresses must be unique across entries; port 0 is exempt (see
+/// Stage 3 below) because each `:0` entry asks the OS for its OWN free
+/// port.
+fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, ServerError> {
+    // Stage 1 — reduce BOTH config grammars to one internal shape: the
+    // entry's transport kind, its (still unparsed) bind string, and its
+    // optional TLS files. The tls-file COMBINATION checks are grammar-level
+    // policy, so they run here, per entry.
+    let mut entries: Vec<(ListenerTransport, String, Option<String>, Option<String>)> =
+        match &cfg.listeners {
+            Some(entries) if entries.is_empty() => return Err(ServerError::EmptyListeners),
+            Some(entries) => {
+                // Prefer-the-array warning: fire only when a legacy scalar
+                // actually differs from its built-in default. The deserializer
+                // cannot tell "explicitly set to the default value" from
+                // "omitted", so an operator who left every scalar alone gets
+                // no noise; one who set both sees which side won.
+                let def = Config::default();
+                let legacy_touched = cfg.bind != def.bind
+                    || cfg.transport != def.transport
+                    || cfg.tls_cert != def.tls_cert
+                    || cfg.tls_key != def.tls_key;
+                if legacy_touched {
+                    warn!(
+                        entries = entries.len(),
+                        "`[[listeners]]` takes precedence: ignoring the legacy                          scalar transport keys (transport/bind/tls_cert/tls_key)"
+                    );
+                }
+                entries
+                    .iter()
+                    .map(|e| {
+                        match e.transport {
+                            ListenerTransport::Tcp => {
+                                if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                    return Err(ServerError::ListenerTcpWithTls {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                            }
+                            ListenerTransport::Tls => {
+                                if e.tls_cert.is_none() {
+                                    return Err(ServerError::ListenerTlsCertNeedsKey {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                                if e.tls_key.is_none() {
+                                    return Err(ServerError::ListenerTlsKeyNeedsCert {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                            }
+                            ListenerTransport::Udp => {
+                                if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                    return Err(ServerError::ListenerUdpWithTls {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        Ok((
+                            e.transport,
+                            e.bind.clone(),
+                            e.tls_cert.clone(),
+                            e.tls_key.clone(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ServerError>>()?
+            }
+            None => {
+                // Legacy derivation: the single-scalar era's exact
+                // semantics, INCLUDING its error variants, so existing
+                // configs keep failing in exactly the ways they always did.
+                match (cfg.tls_cert.is_empty(), cfg.tls_key.is_empty()) {
+                    (true, true) | (false, false) => {}
+                    (false, true) => return Err(ServerError::TlsCertNeedsKey),
+                    (true, false) => return Err(ServerError::TlsKeyNeedsCert),
+                }
+                if cfg.transport == TransportKind::Udp && !cfg.tls_cert.is_empty() {
+                    return Err(ServerError::UdpWithTls);
+                }
+                let (kind, cert, key) = match cfg.transport {
+                    TransportKind::Udp => (ListenerTransport::Udp, None, None),
+                    TransportKind::Tcp if !cfg.tls_cert.is_empty() => (
+                        ListenerTransport::Tls,
+                        Some(cfg.tls_cert.clone()),
+                        Some(cfg.tls_key.clone()),
+                    ),
+                    TransportKind::Tcp => (ListenerTransport::Tcp, None, None),
+                };
+                vec![(kind, cfg.bind.clone(), cert, key)]
+            }
+        };
+
+    // Stage 2 — parse every bind up front: a malformed address is a config
+    // error that must fail BEFORE any socket exists (never half-start).
+    let mut specs: Vec<ListenerSpec> = Vec::with_capacity(entries.len());
+    for (kind, raw_bind, cert, key) in entries.drain(..) {
+        let addr: SocketAddr = raw_bind.parse().map_err(
+            |e: std::net::AddrParseError| ServerError::BadBind(raw_bind.clone(), e.to_string()),
+        )?;
+        let spec = match kind {
+            ListenerTransport::Tcp => ListenerSpec::Tcp { addr },
+            ListenerTransport::Tls => ListenerSpec::Tls {
+                addr,
+                cert_pem: cert.expect("tls entry validated to carry a cert path"),
+                key_pem: key.expect("tls entry validated to carry a key path"),
+            },
+            ListenerTransport::Udp => ListenerSpec::Udp { addr },
+        };
+        specs.push(spec);
+    }
+
+    // Stage 3 — duplicate detection over PARSED addresses (not raw
+    // strings): two doors claiming ONE concrete address is always a
+    // mistake (the second bind could not succeed anyway), and reporting it
+    // at config time names the offending entry instead of failing inside a
+    // bind syscall. PORT 0 IS EXEMPT, on purpose: a configured `:0` is a
+    // request for a different, OS-chosen free port EVERY time — two such
+    // entries never end up on the same address, so treating their equal
+    // spelling as a collision would make ephemeral-port deployments (and
+    // every test suite) impossible while catching nothing real.
+    let mut seen: std::collections::HashSet<SocketAddr> =
+        std::collections::HashSet::with_capacity(specs.len());
+    for spec in &specs {
+        let addr = spec.addr();
+        if addr.port() != 0 && !seen.insert(addr) {
+            return Err(ServerError::DuplicateBind(addr.to_string()));
+        }
+    }
+    Ok(specs)
 }
 
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
@@ -515,7 +827,9 @@ pub(crate) async fn registry_room_status(
 /// Handle to a running server.
 pub struct ServerHandle {
     registry: Mailbox<RegistryMsg>,
-    accept: JoinHandle<()>,
+    /// One accept task PER listener (all sharing the pipeline below and
+    /// one connection-id sequence). All are aborted on stop.
+    accepts: Vec<JoinHandle<()>>,
     ticker: JoinHandle<()>,
     /// The metrics collector (emits one final report when the ticker's
     /// broadcast closes).
@@ -523,12 +837,17 @@ pub struct ServerHandle {
     /// The HTTP ops-surface task, when `http_listen` was configured.
     /// Aborted on stop (its listener drops with the aborted future).
     http: Option<JoinHandle<()>>,
-    /// The bound listener. `stop` closes it *before* aborting the accept
-    /// loop: for the rUDP transport this is what stops the shared demux
-    /// task (a plain drop would not reach it — see `Listener::close`).
-    listener: Arc<dyn gsb_net::transport::Listener>,
-    /// The actual bound address (useful when binding port 0 in tests).
+    /// The bound listeners, in config order. `stop` closes each *before*
+    /// aborting its accept task: for the rUDP transport this is what stops
+    /// the shared demux task (a plain drop would not reach it — see
+    /// `Listener::close`).
+    listeners: Vec<Arc<dyn gsb_net::transport::Listener>>,
+    /// The actual bound address of the FIRST listener (useful when binding
+    /// port 0 in tests; kept for the legacy single-listener callers).
     pub addr: SocketAddr,
+    /// The actual bound address of EVERY listener, in config order (the
+    /// multi-listener shape; `addr` is `addrs[0]`).
+    pub addrs: Vec<SocketAddr>,
     /// The actual bound address of the HTTP ops surface; `None` when the
     /// surface is disabled (`http_listen` empty — the default).
     pub http_addr: Option<SocketAddr>,
@@ -545,19 +864,26 @@ impl ServerHandle {
     /// (rooms get a control `Shutdown`, processed on their next tick; a
     /// room with a configured result seam reports it on that shutdown); the
     /// ticker is aborted, which closes the broadcast and stops any room that
-    /// missed its window; the listener is closed (stopping any transport
-    /// shared state, e.g. the rUDP demux); the accept loop is hard-aborted
-    /// (documented v1 limitation). The HTTP ops surface is aborted with it.
-    /// The metrics collector is awaited last: it emits one final report when
-    /// the broadcast closes.
+    /// missed its window; EVERY listener is closed (stopping any per-
+    /// listener transport shared state, e.g. each rUDP demux); every accept
+    /// loop is hard-aborted (documented v1 limitation). The HTTP ops surface
+    /// is aborted with it. The metrics collector is awaited last: it emits
+    /// one final report when the broadcast closes. The teardown ORDER is the
+    /// single-listener order applied across all listeners: doors close
+    /// first, so no new client can connect while the registry is tearing
+    /// the existing ones down.
     pub async fn stop(self) {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
         if let Some(http) = self.http {
             http.abort();
         }
         self.ticker.abort();
-        self.listener.close();
-        self.accept.abort();
+        for l in &self.listeners {
+            l.close();
+        }
+        for accept in &self.accepts {
+            accept.abort();
+        }
         let _ = self.metrics.await;
     }
 
@@ -814,9 +1140,13 @@ async fn start_inner(
     metric_sink: MetricSink,
     hooks: ServerHooks,
 ) -> Result<ServerHandle, ServerError> {
-    let bind: SocketAddr = cfg.bind.parse().map_err(|e: std::net::AddrParseError| {
-        ServerError::BadBind(cfg.bind.clone(), e.to_string())
-    })?;
+    // The listener table: reduce BOTH config grammars (the `[[listeners]]`
+    // array or the derived-from-scalars single door) to validated specs —
+    // parsed addresses, per-entry tls-file sanity, duplicate detection.
+    // Checked BEFORE anything binds so a misconfigured server never
+    // half-starts (the same principle the scalar era applied to its TLS
+    // keys; see `resolve_listeners`).
+    let specs = resolve_listeners(&cfg)?;
 
     // The sharded topology is a grid of 1..=256 shards (see
     // `gsb_game::sharded::grid_shape`); a count outside that range would
@@ -825,22 +1155,6 @@ async fn start_inner(
         && !(1..=256).contains(&cfg.shard_count)
     {
         return Err(ServerError::BadShardCount(cfg.shard_count));
-    }
-
-    // TLS config sanity (docs/SECURITY.md §2 decisions 3 and 7): both keys
-    // empty = plaintext exactly as before this turn; both set = TLS over
-    // TCP; one without the other = startup error (never a silent weak
-    // fallback — the same principle as the rUDP cookie-key check); any TLS
-    // key together with `transport = "udp"` = startup error (rUDP is
-    // experimental and takes no TLS). Checked BEFORE anything binds so a
-    // misconfigured server never half-starts.
-    match (cfg.tls_cert.is_empty(), cfg.tls_key.is_empty()) {
-        (true, true) | (false, false) => {}
-        (false, true) => return Err(ServerError::TlsCertNeedsKey),
-        (true, false) => return Err(ServerError::TlsKeyNeedsCert),
-    }
-    if cfg.transport == TransportKind::Udp && !cfg.tls_cert.is_empty() {
-        return Err(ServerError::UdpWithTls);
     }
 
     let table = build_table();
@@ -1080,8 +1394,14 @@ async fn start_inner(
     // at bind time. A parse failure is a config error (the operator sees
     // it at startup, before anything binds); an entropy failure is a
     // bind error (the server refuses to start with a predictable key —
-    // see `gsb_net::udp::CookieKey`).
-    let cookie_key = if cfg.transport == TransportKind::Udp {
+    // see `gsb_net::udp::CookieKey`). It stays a GLOBAL knob: every rUDP
+    // listener draws its own socket (and its own demux), but they all run
+    // the same handshake policy — per-listener keys would let an operator
+    // quietly weaken one door of an otherwise identical deployment.
+    let has_udp = specs
+        .iter()
+        .any(|s| matches!(s, ListenerSpec::Udp { .. }));
+    let cookie_key = if has_udp {
         cfg.udp_cookie_key
             .as_deref()
             .map(parse_cookie_key)
@@ -1091,30 +1411,235 @@ async fn start_inner(
         None
     };
 
-    // Bind the transport (config-selectable: TCP, TLS-over-TCP, or rUDP —
-    // same actor layer, see `TransportKind`). The TLS pick rides the Tcp
-    // branch: TLS is a socket-level upgrade of the SAME framing, so the
-    // accept loop, the pumps and every actor below are identical for
-    // plaintext and encrypted connections (see `gsb_net::tls`). The PEM
-    // files are loaded inside `bind`; a missing/malformed file surfaces
-    // here as a bind error with the path named.
-    let transport: Arc<dyn Transport> = match cfg.transport {
-        TransportKind::Tcp => {
-            if cfg.tls_cert.is_empty() {
-                Arc::new(TcpTransport {
-                    max_frame_bytes: cfg.max_frame_bytes,
-                })
-            } else {
-                Arc::new(TlsTransport {
-                    config: TlsTransportConfig {
-                        cert_chain_pem: cfg.tls_cert.clone(),
-                        key_pem: cfg.tls_key.clone(),
-                        max_frame_bytes: cfg.max_frame_bytes,
-                    },
-                })
+    // Bind EVERY listener before spawning any accept task. The TLS pick
+    // rides the Tcp-shaped spec: TLS is a socket-level upgrade of the SAME
+    // framing, so the accept loops, pumps and every actor below are
+    // identical for plaintext and encrypted doors (see `gsb_net::tls`). The
+    // PEM files are loaded inside `bind`; a missing/malformed file surfaces
+    // here as a bind error with the path named. On a partial failure the
+    // already-bound listeners are closed explicitly (not just dropped): a
+    // dropped `UdpListener` would leave its demux task reading the socket —
+    // `Listener::close` is the only door that stops it.
+    let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> =
+        Vec::with_capacity(specs.len());
+    let mut addrs: Vec<SocketAddr> = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        match bind_listener(spec, &cfg, idle_timeout, cookie_key).await {
+            Ok((listener, addr)) => {
+                listeners.push(listener);
+                addrs.push(addr);
             }
-        },
-        TransportKind::Udp => Arc::new(UdpTransport {
+            Err(e) => {
+                for l in &listeners {
+                    l.close();
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    // ONE shared connection-id sequence for ALL accept tasks (see
+    // `ConnIdSeq`), cloned into each loop with the rest of the pipeline.
+    let pipeline = AcceptPipeline {
+        registry: reg_tx.clone(),
+        metrics: metrics_tx,
+        table,
+        ticket_auth: hooks.ticket,
+        conn_inbox: cfg.conn_inbox,
+        conn_out: cfg.conn_out,
+        idle_timeout,
+        conn_ids: Arc::new(ConnIdSeq::new()),
+    };
+
+    // One accept task PER listener; every accepted endpoint flows through
+    // the SAME pipeline (same registry, same rooms, same id sequence), so
+    // rooms never learn which door a client came in through.
+    let mut accepts = Vec::with_capacity(listeners.len());
+    for (i, listener) in listeners.iter().enumerate() {
+        let addr = addrs[i];
+        accepts.push(tokio::spawn(run_accept(
+            pipeline.clone(),
+            Arc::clone(listener),
+            addr,
+        )));
+    }
+
+    Ok(ServerHandle {
+        registry: reg_tx,
+        accepts,
+        ticker: ticker_task,
+        metrics,
+        http: http_task,
+        listeners,
+        addr: addrs[0],
+        addrs,
+        http_addr,
+        match_results: result_rx,
+    })
+}
+
+/// The server-wide connection-id sequence: ONE monotonic counter shared by
+/// every accept task.
+///
+/// WHY a central counter instead of per-listener ranges or registry-assigned
+/// ids: the registry (and every room) keys connections by [`ConnectionId`],
+/// so a collision across two doors would silently re-route one client's
+/// frames into another's inbox — uniqueness is a correctness invariant, not
+/// a naming nicety. A single atomic fetch_add gives it with zero contention
+/// concerns (one relaxed RMW per connection birth; accepts are human-scale
+/// events even at load) and keeps ids dense from 1 like the single-loop era
+/// did (`c1`, `c2`, … in logs/metrics stay interpretable). Registry-minted
+/// ids were rejected because they would put a control-plane round trip on
+/// the accept hot path and couple transport intake to registry liveness;
+/// per-listener ranges were rejected because they leak listener identity
+/// into the id space and complicate the cap accounting for no benefit.
+struct ConnIdSeq {
+    /// The LAST minted raw value (0 = nothing minted yet, so the first
+    /// connection gets `ConnectionId(1)` exactly as the old per-loop
+    /// counter did).
+    last: AtomicU64,
+}
+
+impl ConnIdSeq {
+    /// A fresh sequence starting below the first connection id.
+    fn new() -> Self {
+        Self {
+            last: AtomicU64::new(0),
+        }
+    }
+
+    /// Mint the next unique id. `Relaxed`: the counter synchronizes nothing
+    /// but its own monotonicity — no other memory is published through it —
+    /// and atomics never go backwards, so distinct mints are distinct ids.
+    fn mint(&self) -> ConnectionId {
+        ConnectionId(self.last.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+}
+
+/// Everything ONE accept loop needs to push an accepted endpoint through
+/// the shared pipeline: the control plane, the metrics producer, the wire
+/// table, the auth hook and the channel-capacity policy. Cloned per
+/// listener (senders and `Arc`s — cheap); immutable after construction, so
+/// sharing needs no synchronization beyond the clone itself.
+#[derive(Clone)]
+struct AcceptPipeline {
+    /// Where `ConnOpened` goes (cloned again per spawned actor).
+    registry: Mailbox<RegistryMsg>,
+    /// Metrics producer handle for connection actors.
+    metrics: mpsc::Sender<MetricsEvent>,
+    /// The decoded-frame dispatch table (base + demo game ops).
+    table: Arc<MessageTable>,
+    /// Ticket-validation hook (`None` = local auth), cloned per connection.
+    ticket_auth: Option<TicketAuth>,
+    /// Inbound mailbox capacity (endpoint fallback + actor construction).
+    conn_inbox: usize,
+    /// Outbound channel capacity (same contract as `conn_inbox`).
+    conn_out: usize,
+    /// The session idle window (`None` disables) handed to the pumps.
+    idle_timeout: Option<std::time::Duration>,
+    /// THE shared id sequence across every listener's loop.
+    conn_ids: Arc<ConnIdSeq>,
+}
+
+/// One listener's accept loop: take the next endpoint, mint a globally
+/// unique connection id, then hand the endpoint to the ordinary pipeline
+/// (pumps → `ConnOpened` → connection actor) — byte-for-byte the flow the
+/// single-listener era ran, just entered from N doors. Runs until the task
+/// is aborted by `ServerHandle::stop` (after `Listener::close` made
+/// `accept` fail fast on transports with shared state).
+async fn run_accept(
+    pipeline: AcceptPipeline,
+    listener: Arc<dyn gsb_net::transport::Listener>,
+    addr: SocketAddr,
+) {
+    info!(%addr, "accepting connections");
+    loop {
+        // `accept` consumes the Arc; clone it per iteration.
+        let l = Arc::clone(&listener);
+        let mut endpoint = match l.accept().await {
+            Ok(endpoint) => endpoint,
+            Err(e) => {
+                warn!(%e, "accept error; backing off");
+                // Back off: a persistent error (e.g. EMFILE) must not
+                // turn this loop into a CPU-burning spin.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+
+        let conn = pipeline.conn_ids.mint();
+
+        // The peer address (for the connection actor's violation-close
+        // signal — see `gsb_core::conn`); a transport that does not
+        // expose one reports an unspecified address.
+        let peer = endpoint
+            .peer()
+            .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
+
+        // The connection's mailboxes, from the endpoint: pre-created
+        // by a transport that establishes the session itself (rUDP:
+        // at handshake, before this loop runs), created here for a
+        // transport that does not (TCP — the exact channels this loop
+        // used to create directly).
+        let (in_tx, in_rx) = endpoint.take_inbox(pipeline.conn_inbox);
+        let (out_tx, out_rx) = endpoint.take_outbox(pipeline.conn_out);
+
+        // Reader + writer pumps (they finish on their own when the
+        // peer or the actor goes away; the idle window, if enabled,
+        // is what detects a half-open peer that sends nothing).
+        let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx, pipeline.idle_timeout);
+
+        // Register before spawning the actor: the registry owns the
+        // notification path, and it must know the inbox before any
+        // frame can reach the actor.
+        let _ = pipeline
+            .registry
+            .send(RegistryMsg::ConnOpened {
+                conn,
+                inbox: in_tx.clone(),
+            })
+            .await;
+
+        // One cheap sender clone per connection (unbounded sender is
+        // an Arc).
+        tokio::spawn(
+            ConnectionActor::new(
+                conn,
+                peer,
+                Arc::clone(&pipeline.table),
+                pipeline.registry.clone(),
+                in_rx,
+                out_tx,
+                pipeline.metrics.clone(),
+                pipeline.ticket_auth.clone(),
+            )
+            .run(),
+        );
+    }
+}
+
+/// Build and bind ONE listener from a validated spec. The transport
+/// instance is per-listener ON PURPOSE even for two entries of the same
+/// kind: each door owns its socket (and, for rUDP, its own demux state),
+/// so closing one listener can never disturb another's sessions.
+async fn bind_listener(
+    spec: &ListenerSpec,
+    cfg: &Config,
+    idle_timeout: Option<std::time::Duration>,
+    cookie_key: Option<[u8; 16]>,
+) -> Result<(Arc<dyn gsb_net::transport::Listener>, SocketAddr), ServerError> {
+    let transport: Arc<dyn Transport> = match spec {
+        ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
+            max_frame_bytes: cfg.max_frame_bytes,
+        }),
+        ListenerSpec::Tls { cert_pem, key_pem, .. } => Arc::new(TlsTransport {
+            config: TlsTransportConfig {
+                cert_chain_pem: cert_pem.clone(),
+                key_pem: key_pem.clone(),
+                max_frame_bytes: cfg.max_frame_bytes,
+            },
+        }),
+        ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
             config: UdpTransportConfig {
                 // The demux pre-creates the mailboxes at handshake: same
                 // capacities as the TCP path (cfg.conn_inbox/conn_out are
@@ -1127,96 +1652,12 @@ async fn start_inner(
             },
         }),
     };
-    let listener = transport.bind(bind).await?;
+    let listener = transport.bind(spec.addr()).await?;
     let addr = listener.local_addr().ok_or_else(|| {
-        ServerError::BadBind(cfg.bind.clone(), "listener reports no address".into())
+        ServerError::BadBind(
+            spec.addr().to_string(),
+            "listener reports no address".into(),
+        )
     })?;
-
-    let accept_tx = reg_tx.clone();
-    let conn_metrics_tx = metrics_tx.clone();
-    let accept_listener = Arc::clone(&listener);
-    // The ticket hook (cloned per connection; `None` = local auth). The
-    // hook is `Send + Sync` (the validator is an `Arc<dyn Fn + Send +
-    // Sync>`), so it moves into the accept task and is shared, never
-    // mutated.
-    let ticket_auth = hooks.ticket;
-    let accept = tokio::spawn(async move {
-        info!(%addr, "accepting connections");
-        let mut next_conn: u64 = 1;
-        loop {
-            // `accept` consumes the Arc; clone it per iteration.
-            let l = Arc::clone(&accept_listener);
-            let mut endpoint = match l.accept().await {
-                Ok(endpoint) => endpoint,
-                Err(e) => {
-                    warn!(%e, "accept error; backing off");
-                    // Back off: a persistent error (e.g. EMFILE) must not
-                    // turn this loop into a CPU-burning spin.
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    continue;
-                }
-            };
-
-            let conn = ConnectionId(next_conn);
-            next_conn += 1;
-
-            // The peer address (for the connection actor's violation-close
-            // signal — see `gsb_core::conn`); a transport that does not
-            // expose one reports an unspecified address.
-            let peer = endpoint
-                .peer()
-                .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
-
-            // The connection's mailboxes, from the endpoint: pre-created
-            // by a transport that establishes the session itself (rUDP:
-            // at handshake, before this loop runs), created here for a
-            // transport that does not (TCP — the exact channels this loop
-            // used to create directly).
-            let (in_tx, in_rx) = endpoint.take_inbox(cfg.conn_inbox);
-            let (out_tx, out_rx) = endpoint.take_outbox(cfg.conn_out);
-
-            // Reader + writer pumps (they finish on their own when the
-            // peer or the actor goes away; the idle window, if enabled,
-            // is what detects a half-open peer that sends nothing).
-            let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx, idle_timeout);
-
-            // Register before spawning the actor: the registry owns the
-            // notification path, and it must know the inbox before any
-            // frame can reach the actor.
-            let _ = accept_tx
-                .send(RegistryMsg::ConnOpened {
-                    conn,
-                    inbox: in_tx.clone(),
-                })
-                .await;
-
-            // One cheap sender clone per connection (unbounded sender is
-            // an Arc).
-            tokio::spawn(
-                ConnectionActor::new(
-                    conn,
-                    peer,
-                    Arc::clone(&table),
-                    accept_tx.clone(),
-                    in_rx,
-                    out_tx,
-                    conn_metrics_tx.clone(),
-                    ticket_auth.clone(),
-                )
-                .run(),
-            );
-        }
-    });
-
-    Ok(ServerHandle {
-        registry: reg_tx,
-        accept,
-        ticker: ticker_task,
-        metrics,
-        http: http_task,
-        listener,
-        addr,
-        http_addr,
-        match_results: result_rx,
-    })
+    Ok((listener, addr))
 }
