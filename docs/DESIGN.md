@@ -311,6 +311,25 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
 - `FrameBody { op, payload: Bytes }` — `Bytes` sayesinde payload kopyasız
   akar (socket → actor → oda → yayın, tek kopya).
 
+### 5.1 Band seçimi: kaybın bedeli, boyut değil
+
+Yeni bir opcode eklerken güvenilir (≤64) mi kayıp-toleranslı (≥1000)
+banta gideceğine karar kriteri **boyut değil, kaybın bedelidir**:
+
+| "Bu mesaj kaybolursa..." | Bant | Örnek |
+|---|---|---|
+| ...istemci sonsuza kadar bekler / durum kalıcı bozulur | Güvenilir (≤64) | JOIN_RESULT, AUTH |
+| ...sonraki mesaj onu geçersiz kılar / kendini onarır | Kayıp-toleranslı (≥1000) | WORLD_SNAPSHOT, MOVE_TO |
+| ...onay gerektiren ayrık bir işlemdir | RPC deseni (`RPC_REQ`, güvenilir yolda) | satın alma, takas |
+
+Boyut kriter değil, **kısıttır**: datagram/RAW yolu ~1350 B güvenli
+yükle sınırlıdır (sığmayan atılır+sayılır; telafi sonraki tam
+snapshot'tır); stream yolu kendisi parçalar. Kural transport-bağımsızdır:
+opcode bandı taşımayı belirler (rUDP REL/RAW ve QUIC stream/datagram
+aynı tabloyu uygular). Oyun geliştiricinin pratik kuralı: garanti
+gerektiren oyun işlemi için yeni taşıma icat etme — RPC desenini kullan
+(bkz. `docs/RPC-CONTROL-PLANE.md`).
+
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
 ```rust
