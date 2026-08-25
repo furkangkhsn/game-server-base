@@ -3237,8 +3237,10 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
   Her kombinasyonun anlamı olmayabilir — kullanım anında belli olur;
   desteklenmeyenler başlangıçta reddedilir/belgelenir.
 
-  - **Faz A:** config ayrıştırması; eski beşli anahtarın matrisin geçerli
-    kombinasyonlarına derlenmesi (geriye-dönük uyum zorunlu).
+  - **Faz A:** ✅ Kapatıldı — üç eksenli config yüzeyi (`Topology`/
+    `Communication`/legacy `visibility` girdi-kodlaması),
+    `resolve_selection()` tek geçiş kapısı, desteklenmeyen kombolarda
+    faz-bilgili tipli hatalar; 14 test (`config_axes.rs`). Test 265 → 279.
   - **Faz B:** `sharded × spatial` kompoziti — her shard kendi içinde
     hücre-gruplu yayın yapar (AoiRoom mantığının shard-içi örneklanması);
     ödünç border şeridi delta defterine entegre edilir (borrowed set
