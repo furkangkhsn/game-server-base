@@ -3128,6 +3128,20 @@ istemci-decode artefaktıdır (sunucu duvarı değil).
 Ham RESULT satırları `.loadrun-logs/` altında tur etiketleriyle
 saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
 
+- [ ] **Çoklu-listener: aynı haritada karışık transport istemcileri** —
+  config tek transport yerine listener LISTESİ alsın (`[[listener]]`
+  transport+bind çiftleri); her listener kendi accept görevini koşturur,
+  her kabul standart bağlantı aktörünü doğurur (ConnectionId merkezi
+  sayaçtan). Aktör/oda katmanına dokunmaz — odalar transport-bağımsızdır,
+  karışık istemci (örn. aynı odada QUIC + TLS-TCP + rUDP) mimaride zaten
+  serbesttir. Küçük-orta iş.
+- [ ] **QUIC taşıması** (quinn) — connection-migration + 0-RTT:
+  rehome protokolünün (DISTRIBUTED §6b) tercih edilen taşıyıcısı.
+  Tetikleyici: dağıtım/makine-devri kararı. Orta-büyük iş.
+- [ ] **WebSocket taşıması** — WebGL/tarayıcı derlemeleri için; WS frame
+  codec adaptörü gerekir (uzunluk-prefix'ten farklı). Tetikleyici:
+  tarayıcı hedeflemesi.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
