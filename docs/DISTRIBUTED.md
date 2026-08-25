@@ -150,6 +150,63 @@ actor'ü fark etmez). Process sınırı bunu imkânsız kılar:
   crystallization/co-location gerekçesi güçlenir (sürekli hop'lu
   trafiği önlemek için).
 
+## 6b. Bağlantı devri (rehome): relay geçici köprüdür, kalıcı çözüm değil
+
+İlke (dış karar): relay sonsuz yaşamaz — entity başka makineye geçtiyse
+**bağlantı da o makineye gitmelidir**; aksi halde eski makine, artık
+kendi simülasyonunda olmayan oyuncuların trafiğini taşıyan gereksiz yük
+merkezine dönüşür.
+
+### Rehome protokolü (tasarım)
+
+```
+1. Karar: registry/orchestrator "oyuncu X'in evi artık Makine B"
+   (migrasyon sonrası yoğunluk, decommission, dengeleme)
+2. A: entity PARK edilir (mevcut resume mekanizması)
+3. A: B'ye relay köprüsü ANINDA açılır  ← bildirimden ÖNCE
+   (köprü hazır olmadan istemciye haber verilirse paket kaybı olur;
+    sıralama bilinçli: önce köprü, sonra duyuru)
+4. A → client: REHOME frame { yeni adres, resumption-token }
+5. Client: B'ye yeni bağlantı (QUIC ise 0-RTT resumption; TCP+TLS ise
+   session ticket), AUTH(ticket) + RESUME → park defterinden geri bağlanır,
+   AYNI wire id ile devam eder
+6. Köprü boşalır (istekteki frame'ler aktarıldı) → A tarafı kapanır
+```
+
+Kritik özellik: **park/resume mekanizması bu protokolün primitifidir**
+— reconnect turunda kurulan altyapı (ticket kimliği → park defteri →
+RESUME → aynı wire id) makine-devrinin ta kendisini sağlar. Yeni
+gerekli parça yalnızca `REHOME` mesajı ve orchestration kararıdır.
+
+### İstemci taşıma matrisi: QUIC her yerde çalışmaz → çoklu protokol ŞART
+
+QUIC = UDP/443 üstünde. Gerçekçi destek tablosu:
+
+| Ortam | QUIC | Not |
+|---|---|---|
+| Modern OS/bulut/çoğu ev ağı | ✅ | Tercih edilen |
+| Kurumsal ağlar (bir kısmı) | ❌ UDP bloklu/kısıtlı | ~%3-10'lık gerçek dilim |
+| Mobil operatörler | ✅ çoğunlukla | Nadiren throttle |
+| Unity (MsQuic) | Koşullu | Win11+/Server2022 gömülü; Linux'ta libmsquic kurulumu |
+| Konsol/WebGL | ❌ / WebGL'de UDP zaten yasak | Fallback zorunlu |
+
+**Sonuç:** sistem birden fazla protokol DESTEKLEMELİDİR — ve mimari
+zaten buna göre kurgulu: `Transport` trait'i (tcp / tls / udp-rudp /
+quinn-QUIC hepsi aynı üç trait'i implement eder). Önerilen fallback
+zinciri:
+
+```
+QUIC (tercih edilen: connection-migration + 0-RTT avantajları)
+  └─ düşerse → TLS-TCP (evrensel; rehome protokolü transport-
+                bağımsız olduğu için devri burada da çalışır,
+                yalnız 0-RTT hızını kaybedersin)
+     └─ (ileride) WebSocket — tarayıcı/WebGL derlemeleri için ayrı karar
+```
+
+Rehome protokolünün kendisi transport-bağımsız tasarlanmalıdır:
+`REHOME` frame'i oyun-bandında taşınır, resumption detayı taşımanın
+kendisine bağlıdır (QUIC token ya da TLS ticket fark etmez).
+
 ## 7. Paylaşılan servisler ve tick senkronu
 
 - **Registry/ticker/result-sink/economy:** tek process SAHİPTİR; diğer
