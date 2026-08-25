@@ -100,6 +100,27 @@ kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 
 
 Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
+- [ ] **Cross-seam etkileşim paketi** — in-process sharding'i "neredeyse
+  invasif olmayan" seviyeye taşıyan üç parça (dış danışma diyaloğundan;
+  tasarım notu CROSS-SHARD §2–§4 + bu madde):
+
+  1. **Ödünç kayıtların gameplay'e açılması** — borrowed view zaten
+     snapshot'a akıyor; aynı veriye hedefleme/sorgu amaçlı ergonomik
+     erişim (`local ∪ borrowed` birleştirici yardımcısı). Sistemler
+     sınır dibindeki yabancıları GÖRÜR hale gelir (~1 tick bayatlık
+     kabulüyle).
+  2. **`RemoteEffect` primitifi** — yabancı hedefe etki = otoriteye
+     idempotent mesaj (`ShardMsg::RemoteEffect { target_identity,
+     epoch, seq, payload }`). Vuruş/hasar/büyü hepsi buna biner;
+     anti-cheat atıcı shard'ında.
+  3. **Crystallization tetikleyicisi (histeresizli)** — hedef komşu
+     shard'da ve K tick'tir etkileşim sürüyor → proaktif migrate;
+     dövüş tek shard'a kristalleşir. Ping-pong'u önleme bandı dahil.
+
+  Kapsam notları: AoE sorgularında `local ∪ borrowed` birleşimi logic
+  tarafında manuel yapılır (bayatlık semantiği korunur); gerçek çoklu-
+  link karma mod testi ≥3-shard rig gerektirir.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
