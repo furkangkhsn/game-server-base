@@ -3258,9 +3258,13 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
     yarısı gerçekleşti; kalan: team/pvs/all stratejilerinin bu motora
     adoptasyonu (tetikleyicili — demo ölçeğinde kazanç yok).
     `BorderRecord<Strip>` jenerikliği ve `ShardLink` seam'i Faz C'nin
-    primitifleri olarak duruyor. Kısıt: `team × sharded` gibi lokalite-
-    karşıtı kombolar cross-shard abonelik katmanı ister (DISTRIBUTED.md
-    ufuk maddesi).
+    primitifleri olarak duruyor.
+  - [ ] **`team × sharded` kompoziti** — tasarım HAZIR:
+    `docs/CROSS-SHARD.md §8` (registry-hub byte-encoded takım-export;
+    RegistryMsg monomorfik kalır, codec sahipliği logic'te — DISTRIBUTED
+    §4b ilkesi; TTL sweep + fan-out + izolasyon kuralları dahil).
+    Tetikleyici: gerçek takım-tabanlı oyun ihtiyacı. Uygulama taze
+    oturumda sözleşmeyle yapılır.
 
 ## P2 — Ölçek (load test sonrasına göre sıralanır)
 
