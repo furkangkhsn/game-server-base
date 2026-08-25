@@ -866,6 +866,25 @@ impl<M> LinkFull<M> {
 /// healing rules live in the message semantics (§4), not in the link.
 /// Object-safe on purpose: the future Ipc/Net links will be separate
 /// types held as trait objects beside today's.
+/// Which border-exchange packaging a link's pair runs (ROADMAP Faz C):
+/// derived from the LINK CLASS, never from operator config.
+///
+/// - `AlwaysFull` — same-process neighbors: bytes cross by move (free),
+///   CPU is the scarce local resource, and full replacement skips the
+///   per-tick diff entirely (measured: full 1–5 µs vs delta 48–227 µs
+///   phase-5 — CROSS-SHARD §7 A/B).
+/// - `Delta` — future Ipc/Net links: bytes are transport currency there,
+///   so the 60% reduction pays for its diffing CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExchangeMode {
+    AlwaysFull,
+    /// Constructed only by tests TODAY (production InProc links are
+    /// AlwaysFull); Ipc/Net links will construct it when they land
+    /// (DISTRIBUTED §4b) — hence the allow instead of deletion.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Delta,
+}
+
 pub(crate) trait ShardLink<S, B>: Send {
     /// En-queue one message for the peer, best-effort: a full or dead
     /// link refuses and hands the message BACK ([`LinkFull`]) — the
@@ -878,6 +897,15 @@ pub(crate) trait ShardLink<S, B>: Send {
     /// CONTROL phase drains through here; an empty queue yields an empty
     /// vec. Never blocks.
     fn drain(&mut self) -> Vec<NeighborMsg<S, B>>;
+
+    /// The border-exchange packaging this link runs (ROADMAP Faz C):
+    /// derived from the link CLASS, not operator config — same-process
+    /// links declare AlwaysFull (bytes free over a move, local CPU
+    /// scarce), future Ipc/Net links will declare Delta (bytes are the
+    /// transport currency there). The actor consults this per neighbor
+    /// when building phase-5 exchanges; mixed-mode neighborhoods are
+    /// supported because receivers accept both variants at any time.
+    fn exchange_mode(&self) -> ExchangeMode;
 }
 
 /// The in-process [`ShardLink`] (`docs/DISTRIBUTED.md` §3, "today"
@@ -897,6 +925,10 @@ pub(crate) struct InProcLink<S, B> {
     /// slots: their inbound traffic lands in the shard's OWN shared
     /// inbox, whose link lives separately on the actor.
     rx: Option<Inbox<ShardMsg<S, B>>>,
+    /// Same-process ⇒ AlwaysFull (see [`ExchangeMode`]). A field rather
+    /// than a type-level fact only so tests can construct Delta-mode
+    /// links against the identical struct.
+    mode: ExchangeMode,
 }
 
 impl<S, B> InProcLink<S, B> {
@@ -906,6 +938,7 @@ impl<S, B> InProcLink<S, B> {
         Self {
             tx: Some(tx),
             rx: None,
+            mode: ExchangeMode::AlwaysFull,
         }
     }
 
@@ -916,11 +949,16 @@ impl<S, B> InProcLink<S, B> {
         Self {
             tx: None,
             rx: Some(rx),
+            mode: ExchangeMode::AlwaysFull,
         }
     }
 }
 
 impl<S: Send, B: Send> ShardLink<S, B> for InProcLink<S, B> {
+    fn exchange_mode(&self) -> ExchangeMode {
+        self.mode
+    }
+
     fn send(
         &mut self,
         msg: NeighborMsg<S, B>,
@@ -1023,6 +1061,13 @@ pub struct ShardActor<W, G, St, Sp> {
     /// drop timing are the channel's, unchanged. Non-neighbor slots keep
     /// their dummy senders (wrapped, never sent to).
     links: Vec<Box<dyn ShardLink<St, Sp>>>,
+    /// Test/override lever for Faz C's per-link derivation: when set,
+    /// phase 5 uses these modes per neighbor index INSTEAD of the link's
+    /// own class (production leaves this None — InProcLink declares
+    /// AlwaysFull; future Ipc/Net links declare Delta). Crate-visible so
+    /// delta-path unit tests can force Delta against the identical
+    /// struct.
+    exchange_override: Option<Vec<ExchangeMode>>,
     /// The borrowed boundary view per neighbor (the RECEIVER side of the
     /// delta protocol): persistent records built incrementally from
     /// Fulls/Deltas, with the expected-sequence guard per neighbor.
@@ -1164,6 +1209,7 @@ where
                 .map(InProcLink::outbound)
                 .map(|l| Box::new(l) as Box<dyn ShardLink<St, Sp>>)
                 .collect(),
+            exchange_override: None,
             border: HashMap::new(),
             export: HashMap::new(),
             pending_out: Vec::new(),
@@ -1957,13 +2003,25 @@ where
             let mut equiv_full_bytes = 0u64;
             let mut attempts = 0u64;
             for b in &nb {
+                // Faz C per-link derivation: the LINK's class decides the
+                // packaging. InProc ⇒ AlwaysFull (bytes free over a move,
+                // local CPU scarce — CROSS-SHARD §7 A/B); future Ipc/Net
+                // links will declare Delta. The override vec is the test
+                // lever.
+                let link_mode = match &self.exchange_override {
+                    Some(modes) => modes[*b],
+                    None => self.links[*b].exchange_mode(),
+                };
                 let st = self.export.entry(*b).or_default();
-                // A Full is forced by: the periodic cadence (3c), a send
-                // failure on the last exchange (self-heal in ONE tick), an
-                // explicit resync request from the neighbor, or first
-                // contact (`needs_full` defaults true on a fresh actor —
-                // which is also the rebuilt-incarnation path).
-                let force_full = periodic_full || st.needs_full;
+                // A Full is forced by: the link class running AlwaysFull,
+                // the periodic cadence (3c), a send failure on the last
+                // exchange (self-heal in ONE tick), an explicit resync
+                // request from the neighbor, or first contact
+                // (`needs_full` defaults true on a fresh actor — which is
+                // also the rebuilt-incarnation path).
+                let force_full = link_mode == ExchangeMode::AlwaysFull
+                    || periodic_full
+                    || st.needs_full;
                 let was_resync = st.resync_requested;
                 st.seq += 1;
                 let seq = st.seq;
@@ -2115,6 +2173,14 @@ where
 
     /// Handle one shard-channel message (phase 0). Returns `false` when
     /// the actor should stop.
+    /// Faz C test lever: force per-neighbor exchange modes (index-aligned
+    /// with `links`). Production never calls this — modes derive from the
+    /// link class (`InProcLink` ⇒ AlwaysFull).
+    #[cfg(test)]
+    fn force_exchange_modes(&mut self, modes: Vec<ExchangeMode>) {
+        self.exchange_override = Some(modes);
+    }
+
     fn handle_msg(&mut self, m: ShardMsg<St, Sp>, ctx: &TickCtx) -> bool {
         match m {
             ShardMsg::Join {
@@ -4366,6 +4432,7 @@ mod tests {
         let mut link = InProcLink {
             tx: Some(tx),
             rx: Some(rx),
+            mode: ExchangeMode::Delta,
         };
         // Fill to capacity, then one more: the third send must be refused
         // whole — nothing of it queued.
@@ -4410,6 +4477,7 @@ mod tests {
         let mut dead = InProcLink {
             tx: Some(tx),
             rx: None,
+            mode: ExchangeMode::AlwaysFull,
         };
         match dead.send(ShardMsg::ResyncRequest { from: 5 }).unwrap_err() {
             LinkFull::Closed {
@@ -4475,15 +4543,31 @@ mod tests {
     }
 
     impl BorderRig {
+        /// DELTA-mode rig: the default for the §6.4 protocol locks, whose
+        /// assertions are about upsert/exit/resync packaging.
         fn new() -> Self {
+            Self::with_mode(ExchangeMode::Delta)
+        }
+
+        /// ALWAYS-FULL rig: Faz C's local-link derivation under test.
+        fn new_always_full() -> Self {
+            Self::with_mode(ExchangeMode::AlwaysFull)
+        }
+
+        fn with_mode(mode: ExchangeMode) -> Self {
             let (tx01, rx01) = mpsc::channel(16);
             let (tx10, rx10) = mpsc::channel(16);
             // Slot fillers for the unused self-slots (never targeted:
             // TLogic::neighbors is [1] for index 0 and [0] for index 1).
             let (d0, _d0rx) = channel::<ShardMsg<TState, TStrip>>(1);
             let (d1, _d1rx) = channel::<ShardMsg<TState, TStrip>>(1);
-            let s0 = rig_actor(0, vec![d0, tx01.clone()]);
-            let s1 = rig_actor(1, vec![tx10.clone(), d1]);
+            let mut s0 = rig_actor(0, vec![d0, tx01.clone()]);
+            let mut s1 = rig_actor(1, vec![tx10.clone(), d1]);
+            // Both directions run the requested packaging (the self-slot
+            // entries are never targeted; sizing the override to the
+            // links vec keeps indexing trivially safe).
+            s0.force_exchange_modes(vec![mode, mode]);
+            s1.force_exchange_modes(vec![mode, mode]);
             BorderRig {
                 s0,
                 s1,
@@ -5068,6 +5152,132 @@ mod tests {
 
     /// Two bare [`RichLogic`] actors wired through channels the TEST
     /// controls (the [`BorderRig`] pattern, typed over [`TRich`]).
+    /// Faz C lock 1 — same-process links run ALWAYS-FULL packaging: a
+    /// changed strip ships a complete Full every tick (no deltas on the
+    /// wire, no dirty suppression), because bytes over an mpsc move are
+    /// free while the diffing CPU was measured at 40-55x the full cost.
+    #[tokio::test]
+    async fn local_link_exchanges_are_always_full() {
+        let mut r = BorderRig::new_always_full();
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        let msgs = r.drain01();
+        let (_seq, entities) = expect_full(&msgs);
+        assert_eq!(entities.len(), 1, "bootstrap ships the strip as Full");
+
+        // A move next tick ships ANOTHER Full — wholesale replacement,
+        // never a Delta upsert.
+        put(&mut r.s0, 100, -1.0, 1.0);
+        r.step0(2);
+        let msgs = r.drain01();
+        let (_seq, entities) = expect_full(&msgs);
+        assert_eq!(entities.len(), 1);
+
+        r.deliver_to_s1(msgs);
+        assert_eq!(r.s1.border[&0].recs.len(), 1, "view established");
+        assert_eq!(
+            r.s1.border[&0].recs[&100].state.y, 1,
+            "the relocated position arrived"
+        );
+    }
+
+    /// Faz C lock 2 — ALWAYS-FULL mode keeps the borrowed view exact
+    /// across UNCHANGED ticks too: wholesale replacement cannot ghost,
+    /// duplicate, or drift, locking the evaporation-guard under this
+    /// mode against future regressions.
+    #[tokio::test]
+    async fn always_full_keeps_view_exact_across_unchanged_ticks() {
+        let mut r = BorderRig::new_always_full();
+        put(&mut r.s0, 100, -1.0, 0.0);
+        r.step0(1);
+        let msgs = r.drain01();
+        r.deliver_to_s1(msgs);
+
+        // Three ticks with NOTHING changed: each still ships a Full of
+        // the identical single record, and the receiving view never
+        // grows beyond it.
+        for tick in 2..=4 {
+            r.step0(tick);
+            let msgs = r.drain01();
+            let (_seq, entities) = expect_full(&msgs);
+            assert_eq!(entities.len(), 1, "tick {tick} ships the strip");
+            r.deliver_to_s1(msgs);
+            assert_eq!(
+                r.s1.border[&0].recs.len(), 1,
+                "view stays exactly one record at tick {tick}"
+            );
+        }
+    }
+
+    /// Faz C lock 3 — OPPOSITE DIRECTIONS may run different packagings
+    /// (s0->s1 forced ALWAYS-FULL while s1->s0 runs DELTA): each receiver
+    /// applies its own inbound variant correctly and both views stay
+    /// exact. This per-link independence is what the mode derivation
+    /// relies on when future Ipc/Net links mix with local ones.
+    #[tokio::test]
+    async fn opposite_directions_run_different_packagings() {
+        let mut r = BorderRig::with_mode(ExchangeMode::Delta);
+        // Asymmetric forcing: s0's outbound slot runs ALWAYS-FULL while
+        // s1's outbound slot runs DELTA.
+        r.s0.force_exchange_modes(vec![ExchangeMode::AlwaysFull, ExchangeMode::AlwaysFull]);
+        r.s1.force_exchange_modes(vec![ExchangeMode::Delta, ExchangeMode::Delta]);
+
+        // Entities on BOTH sides, so both directions have content.
+        put(&mut r.s0, 100, -1.0, 0.0);
+        put(&mut r.s1, 200, 1.0, 0.0);
+
+        let tinfo = |tick: u64| TickInfo { tick, at: Instant::now() };
+
+        // Tick 5: both shards step and bootstrap (needs_full ⇒ Full lead).
+        r.step0(5);
+        let _ = r.s1.step_phases(&tinfo(5));
+        // Deliver each direction's exchanges so views establish BEFORE
+        // the assertions: delivery feeds inboxes, processing happens on
+        // the NEXT step.
+        for m in r.drain01() { r.deliver_to_s1(vec![m]); }
+        for m in { let mut v=Vec::new(); while let Ok(m)=r.rx10.try_recv(){v.push(m);} v } {
+            r.deliver_to_s0(vec![m]);
+        }
+        r.step0(6);
+        let _ = r.s1.step_phases(&tinfo(6));
+        assert_eq!(r.s1.border[&0].recs.len(), 1, "s1 sees s0's entity");
+        assert_eq!(r.s0.border[&1].recs.len(), 1, "s0 sees s1's entity");
+
+        // Move each entity; next ticks ship per-mode packaging.
+        put(&mut r.s0, 100, -1.0, 2.0);
+        put(&mut r.s1, 200, 1.0, 2.0);
+        r.step0(7);
+        let _ = r.s1.step_phases(&tinfo(7));
+        let m01 = r.drain01();
+        let mut m10: Vec<_> = Vec::new();
+        while let Ok(m) = r.rx10.try_recv() { m10.push(m); }
+
+        assert!(
+            m01.iter().any(|m| matches!(m,
+                ShardMsg::Border { exchange: BorderExchange::Full { .. }, .. })),
+            "AlwaysFull direction keeps shipping fulls"
+        );
+        assert!(
+            m10.iter().any(|m| matches!(m,
+                ShardMsg::Border { exchange: BorderExchange::Delta { .. }, .. })),
+            "Delta direction ships an upsert"
+        );
+        for m in m01 { r.deliver_to_s1(vec![m]); }
+        for m in m10 { r.deliver_to_s0(vec![m]); }
+
+        // Views converge to the moved positions.
+        r.step0(8);
+        let _ = r.s1.step_phases(&tinfo(8));
+        assert_eq!(
+            r.s0.border[&1].recs[&200].state.y, 2,
+            "s0's borrowed view took s1's update"
+        );
+        assert_eq!(
+            r.s1.border[&0].recs[&100].state.y, 2,
+            "s1's borrowed view took s0's update"
+        );
+    }
+
     struct RichRig {
         s0: ShardActor<TWorld, (), TState, TRich>,
         s1: ShardActor<TWorld, (), TState, TRich>,
@@ -5107,9 +5317,15 @@ mod tests {
             };
             let (d0, _d0rx) = mpsc::channel(1);
             let (d1, _d1rx) = mpsc::channel(1);
-            RichRig {
-                s0: build(0, d0, tx01),
-                s1: build(1, tx10, d1),
+            let mut s0 = build(0, d0, tx01.clone());
+            let mut s1 = build(1, tx10, d1);
+            // The rich locks exercise DELTA packaging (upsert/exit
+            // bookkeeping over the custom Strip fields) — force Delta on
+            // the live directions (Faz C made local links default to
+            // AlwaysFull).
+            s0.force_exchange_modes(vec![ExchangeMode::AlwaysFull, ExchangeMode::Delta]);
+            s1.force_exchange_modes(vec![ExchangeMode::Delta, ExchangeMode::AlwaysFull]);
+            RichRig { s0, s1,
                 rx01,
                 _rx10,
             }
