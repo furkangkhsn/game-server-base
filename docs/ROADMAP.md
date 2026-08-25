@@ -3135,12 +3135,16 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
   sayaçtan). Aktör/oda katmanına dokunmaz — odalar transport-bağımsızdır,
   karışık istemci (örn. aynı odada QUIC + TLS-TCP + rUDP) mimaride zaten
   serbesttir. Küçük-orta iş.
-- [ ] **QUIC taşıması** (quinn) — connection-migration + 0-RTT:
-  rehome protokolünün (DISTRIBUTED §6b) tercih edilen taşıyıcısı.
-  Tetikleyici: dağıtım/makine-devri kararı. Orta-büyük iş.
-- [ ] **WebSocket taşıması** — WebGL/tarayıcı derlemeleri için; WS frame
-  codec adaptörü gerekir (uzunluk-prefix'ten farklı). Tetikleyici:
-  tarayıcı hedeflemesi.
+- [x] **QUIC taşıması** (quinn) — connection-migration + 0-RTT:
+  rehome protokolünün tercih edilen taşıyıcısı. Uygulandı: tek bi-stream
+  + length-prefix = TCP semantiği; ALPN gsb-net/1; 10 sn handshake
+  tavanı; rustls/ring provider tls.rs ile aynı. ✅
+- [x] **WebSocket taşıması** — elle RFC 6455: upgrade handshake
+  (sha1+base64, RFC vektörü testli), maskeli-client zorlaması,
+  ping/pong/close, fragmentasyon; her WS binary mesajı bir length-
+  prefixed game frame taşır (tcp.rs ile validation simetrisi). ✅
+  *(İki implementasyon da Transport trait'inde — aktör katmanı dokunulmadı;
+  kalan parça: server-config çoklu-listener bağlaması — aşağıdaki madde.)*
 
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
