@@ -215,6 +215,66 @@ yaşar, loopback'te yaşmaz.
    branch main'e alınır; değilse ölçüm kaydıyla branch arşivlenir.
    (Proje ilkesi: önce veri.)
 
+## 8. team × sharded kompoziti: registry-hub takım-export (tasarım hazır)
+
+Problem: takım üyeleri shard'lar arasına SAÇILMIŞ durumda — border
+ödünç vermesi yalnız sınır şeridini kapsar; sağ shard'daki takım
+arkadaşını sol shard'daki oyuncu göremez. Lokalite-karşıtı ilgi:
+cross-shard abonelik/yayın katmanı ister.
+
+### 8.1 Karar: byte-encoded registry-hub anti-entropy
+
+Shard'lar takım üyesi kayıtlarını REGISTRY hub'ına export eder; registry
+o takıma üye barındıran tüm shard'lara AGREGATE diğer-shard kayıtlarını
+fan-out eder.
+
+**Kritik tasarım kararı — kayıtlar registry'ye VERİLMEDEN ÖNCE encode
+edilir:** `TeamExport { room, from_shard, records: Vec<(u64 takım, u64
+wire, Bytes)> }` — RegistryMsg monomorfiktir ve generic'e çevirmek 50+
+kullanım noktasında dalgalanma demektir (ELENDİ). Byte-encoded olması,
+DISTRIBUTED §4b ilkesinin ("tipi kim tanımlıyorsa codec'i de o tanımlar")
+buradaki uygulamasıdır: alıcı logic kendi codec'iyle çözer, registry
+içeriği hiç bilmez.
+
+### 8.2 Hub tabloları ve kurallar
+
+- Tablo: `HashMap<(RoomId, takım), HashMap<from_shard, (kayıtlar,
+  son_refresh_tick)>>` — export'ta wholesale-replace (en-son kazanır).
+- **Expiry sweep:** refresh olmayan kayıt `TEAM_EXPORT_TTL_TICKS`
+  (örn. 256, tombstone deseni) aşılınca amortize retain ile düşer —
+  üye ayrıldığında hayalet kalıcılaşmaz; drop sonrası da sonraki
+  export kendini onarır.
+- **Fan-out:** takım T için export gönderen shard KÜMESİNİN her üyesine,
+  DIĞER shard'lardan gelen agregate kayıtlar `try_send` ile iletilir
+  (best-effort; drop = sonraki tick'in export'u onarır).
+- **İzolasyon:** takım A'nın kayıtları yalnız A'yı görüntüleyenlere
+  gider; B görüntüleyicisine sızmaz (test kilidi zorunlu).
+
+### 8.3 Alıcı taraf
+
+Gelen agregate kayıtlar shard'da takım-başına saklanır ve snapshot
+seam'ine ek girdi olarak akar (borrowed şeritle paralel imported-set;
+GameLogic imzasına minimal ek — ikinci slice parametresi). Görüntüleyici
+takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
+
+### 8.4 Bedel ve sınırlar
+
+- Tablo büyüklüğü: takım-sayısı × takım-büyüklüğü × shard-sayısı ile
+  sınırlıdır (MOBA takımları ~5; guild ölçeğinde config'li üst sınır).
+- Export maliyeti: O(kendi takım üyeleri) — dünya-geneli değil.
+- v1 dışı: cross-seam ETKİLEŞİM (sadece görünürlük); otomatik balancer;
+  kalıcılık entegrasyonu.
+
+## 9. Uygulama durumları
+
+| Kalem | Durum |
+|---|---|
+| Delta border exchange (§6.4) | ✅ Faz B/C — main'de |
+| sharded × spatial kompoziti | ✅ Faz B — main'de |
+| Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
+| team × sharded (bu bölüm) | 🔜 Tasarım hazır — taze oturumda uygulanır |
+| Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
+
 ## 8. NOT-DONE
 
 - Cross-seam combat/interaction mesaj tiplerinin implementasyonu (§2–§4
