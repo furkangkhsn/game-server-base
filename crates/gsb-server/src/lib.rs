@@ -163,10 +163,11 @@ pub enum Communication {
     #[default]
     AlwaysFull,
     /// Client-facing delta frames with periodic/full keepalive
-    /// convergence. Served today ONLY by `single × spatial` (AoiRoom's
-    /// internal per-cell diff): every other combination — all/team/pvs on
-    /// `single`, anything on `sharded` — refuses startup with an error
-    /// naming the roadmap phase that will deliver it.
+    /// convergence. Served today by `spatial` on EITHER topology — the
+    /// single-world AoiRoom's internal per-cell diff, and the Faz B
+    /// composite's per-shard cell-delta broadcast (`sharded × spatial`,
+    /// same wire format). Every other combination refuses startup with an
+    /// error naming the roadmap phase that will deliver it.
     Delta,
 }
 
@@ -208,8 +209,9 @@ impl From<Visibility> for VisibilityAxis {
     /// Decode the legacy five-value spelling into the axis. `"sharded"`
     /// folds into [`VisibilityAxis::All`]: by the time this conversion
     /// runs, the topology half of the spelling has already been extracted
-    /// (see [`Config::resolve_selection`]), and a shard grid's groups are
-    /// whole-world-per-shard today.
+    /// (see [`Config::resolve_selection`]). The legacy key cannot name
+    /// "cells within a shard" — an operator who wants that writes the
+    /// explicit `topology = "sharded"` next to `visibility = "spatial"`.
     fn from(legacy: Visibility) -> Self {
         match legacy {
             Visibility::All | Visibility::Sharded => Self::All,
@@ -250,6 +252,11 @@ pub enum RoomKind {
     /// `gsb_game::sharded::ShardedRoom` grid — N shard actors, whole-world
     /// groups per shard (`BuiltRoom::Sharded`).
     Sharded,
+    /// `gsb_game::sharded::ShardedSpatialRoom` grid — the SAME N-actor
+    /// topology, but each shard broadcasts with cell-grouped spatial AOI
+    /// deltas over its own region (the Faz B composite;
+    /// `BuiltRoom::Sharded`, different shard logic).
+    ShardedSpatial,
 }
 
 /// The fully-resolved three-axis selection: the raw config surface
@@ -508,10 +515,12 @@ pub struct Config {
     /// | `"pvs"`     | single  × pvs     × always-full |
     /// | `"sharded"` | sharded × all     × always-full |
     ///
-    /// ¹ names the packaging the spatial room ALREADY serves (its
-    /// internal per-cell diff): the explicit [`Self::communication`] key
-    /// resolves to the same room there; outside `single × spatial` an
-    /// explicit `"delta"` is rejected until the common codec ships.
+    /// ¹ names the packaging the spatial rooms ALREADY serve (the
+    /// single-world per-cell diff; on the grid, the Faz B composite via
+    /// an explicit `topology = "sharded"`): the explicit
+    /// [`Self::communication`] key resolves to the same room there;
+    /// elsewhere an explicit `"delta"` is rejected until its codec
+    /// ships.
     ///
     /// Precedence: an explicit [`Self::topology`] /
     /// [`Self::communication`] key always overrides its derived cell.
@@ -528,9 +537,6 @@ pub struct Config {
     /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
     /// 1..=256 (the grid topology); validated at startup. Default 4 (2×2).
     pub shard_count: u32,
-    /// World units per AOI cell edge (used only when
-    /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
-    /// `max_snapshot_bytes` / density relation and the measured break-even.
     /// The transport (see [`TransportKind`]).
     pub transport: TransportKind,
     /// The rUDP datagram budget in bytes (transport-level guard; default
@@ -578,9 +584,11 @@ pub struct Config {
     ///   never a valid deployment, and silently falling back to the scalar
     ///   keys would hide the mistake.
     pub listeners: Option<Vec<ListenerEntry>>,
-    /// World units per AOI cell edge (used only when
-    /// [`Self::visibility`] = `Spatial`). See `gsb_game::aoi` for the
-    /// `max_snapshot_bytes` / density relation and the measured break-even.
+    /// World units per AOI cell edge (used when the resolved visibility
+    /// axis is `Spatial` — the single-world AoiRoom AND the sharded ×
+    /// spatial composite's per-shard cells). See `gsb_game::aoi` for the
+    /// `max_snapshot_bytes` / density relation and the measured
+    /// break-even.
     pub aoi_cell_size: f32,
     /// World units an enemy must be within to be visible to a team (used
     /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
@@ -715,23 +723,25 @@ impl Config {
     ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
     ///    rooms actually do).
     ///
-    /// Combination validation runs on the RESOLVED triple. Only six
+    /// Combination validation runs on the RESOLVED triple. Only seven
     /// combinations have an implementation today (single × {all, team,
-    /// pvs} × always-full, single × spatial × {always-full, delta}, and
-    /// sharded × all × always-full); everything else is rejected HERE
+    /// pvs} × always-full, single × spatial × {always-full, delta},
+    /// sharded × all × always-full, and sharded × spatial × {always-full,
+    /// delta} — the Faz B composite); everything else is rejected HERE
     /// with an error naming the roadmap phase/document that will deliver
     /// it — a supported-combination check must refuse at startup, never
     /// misconfigure a running server.
     ///
-    /// One exemption on the communication axis: under
-    /// `single × spatial`, `delta` names the packaging AoiRoom ALREADY
-    /// serves (its internal per-cell diff), so BOTH spellings resolve to
-    /// that same room — the derived one (legacy `visibility = "spatial"`,
-    /// key omitted) and an explicit `communication = "delta"` request
-    /// alike. Same room, one behavior; two spellings must not disagree.
-    /// Everywhere else an explicit `communication = "delta"` requests
-    /// client-facing delta frames nothing serves yet (all/team/pvs on
-    /// single; anything on sharded) and is rejected.
+    /// One exemption on the communication axis: under `spatial` visibility
+    /// on EITHER topology, `delta` names packaging that already exists —
+    /// AoiRoom's internal per-cell diff (single) and the Faz B composite's
+    /// per-shard cell-delta broadcast (sharded) — so BOTH spellings
+    /// resolve to the same room as the derived one (legacy
+    /// `visibility = "spatial"`, key omitted) and an explicit
+    /// `communication = "delta"` request alike. Same room, one behavior;
+    /// two spellings must not disagree. Everywhere else an explicit
+    /// `communication = "delta"` requests client-facing delta frames
+    /// nothing serves yet (all/team/pvs) and is rejected.
     pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
         // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
         // a contradiction warns (behavior still follows the explicit key).
@@ -766,18 +776,18 @@ impl Config {
 
         // Stage 4 — combination validation, structural axes first (they
         // decide what the world IS), then the packaging axis. Each
-        // rejection names the roadmap phase/document that delivers it.
+        // supported mapping names its factory; each REJECTION names the
+        // roadmap phase/document that delivers it.
         let kind = match (topology, visibility) {
             (Topology::Single, VisibilityAxis::All) => RoomKind::Open,
             (Topology::Single, VisibilityAxis::Spatial) => RoomKind::Aoi,
             (Topology::Single, VisibilityAxis::Team) => RoomKind::Team,
             (Topology::Single, VisibilityAxis::Pvs) => RoomKind::Sector,
             (Topology::Sharded, VisibilityAxis::All) => RoomKind::Sharded,
-            // No implementation yet: every shard diffusing its own cell
-            // groups is the Faz B composite. Fail cleanly instead of
-            // silently running whole-shard snapshots under a config that
-            // asked for per-cell AOI across the grid.
-            (Topology::Sharded, VisibilityAxis::Spatial) => return Err(ServerError::ShardedSpatial),
+            // The Faz B composite: every shard of the grid broadcasts with
+            // cell-grouped spatial visibility over its OWN region, the
+            // borrowed border strip folded into the per-cell delta ledger.
+            (Topology::Sharded, VisibilityAxis::Spatial) => RoomKind::ShardedSpatial,
             // Locality-contrary combos: team/pvs interest reaches across
             // shard seams, which needs a cross-shard subscription layer
             // nobody has built (see docs/CROSS-SHARD.md §4 — interaction
@@ -788,19 +798,15 @@ impl Config {
         };
 
         // An EXPLICIT delta request resolves only where a client-facing
-        // delta implementation exists TODAY: single × spatial is served by
-        // AoiRoom (its internal per-cell diff IS the delta packaging), so
-        // the explicit spelling must land on the same room as the derived
-        // one — rejecting it there while accepting the derived spelling of
-        // the identical triple would make two names for one room disagree.
-        // Everywhere else (all/team/pvs on single, anything on sharded)
-        // delta frames wait for the common codec (single) and for the
-        // per-shard delta book / per-link derivation (sharded): fail
+        // delta implementation exists TODAY: `spatial` — on either
+        // topology. Under `single` that is AoiRoom's internal per-cell
+        // diff; under `sharded` it is the Faz B composite's per-shard
+        // cell-delta broadcast (the same wire format). Everywhere else
+        // (all/team/pvs) delta frames wait for their packaging: fail
         // cleanly instead of silently serving full frames under a config
-        // that asked for deltas. Sharded × spatial never reaches this arm
-        // (rejected above), so a sharded rejection here implies all.
+        // that asked for deltas.
         if self.communication == Some(Communication::Delta)
-            && !(topology == Topology::Single && visibility == VisibilityAxis::Spatial)
+            && visibility != VisibilityAxis::Spatial
         {
             return Err(match topology {
                 Topology::Single => ServerError::SingleDelta,
@@ -850,12 +856,6 @@ pub enum ServerError {
     #[error("invalid `shard_count` {0}: must be 1..=256 (grid topology)")]
     BadShardCount(u32),
 
-    #[error("topology = \"sharded\" with visibility = \"spatial\" has no \
-             implementation yet: per-shard cell-grouped broadcast is \
-             ROADMAP Faz B (the sharded × spatial composite); use \
-             visibility = \"all\" today")]
-    ShardedSpatial,
-
     #[error("topology = \"sharded\" with visibility = \"{0}\" breaks shard \
              locality: cross-shard interest needs a subscription layer \
              that does not exist yet (docs/CROSS-SHARD.md §4 keeps every \
@@ -870,10 +870,12 @@ pub enum ServerError {
              communication = \"always-full\"")]
     SingleDelta,
 
-    #[error("communication = \"delta\" with topology = \"sharded\" has no \
-             implementation yet — the per-shard delta book lands with \
-             ROADMAP Faz B and per-link communication derivation with \
-             ROADMAP Faz C; use communication = \"always-full\"")]
+    #[error("communication = \"delta\" with topology = \"sharded\" needs a \
+             visibility that serves delta today: only spatial does (the \
+             sharded × spatial composite of ROADMAP Faz B); all/team/pvs \
+             have no delta packaging on the grid, and per-link \
+             communication derivation arrives with ROADMAP Faz C — use \
+             visibility = \"spatial\" or communication = \"always-full\"")]
     ShardedDelta,
 
     #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
@@ -1445,6 +1447,69 @@ fn sharded_room_factory(
     })
 }
 
+/// The sharded SPATIAL composite factory (ROADMAP Faz B): the same
+/// N-shard grid as [`sharded_room_factory`], but every shard is a
+/// [`gsb_game::sharded::ShardedSpatialRoom`] — cell-grouped spatial AOI
+/// broadcast per shard (cells of `cell_size` world units, the config's
+/// `aoi_cell_size`), with the borrowed border strip integrated into the
+/// per-cell delta ledger. Same `BuiltRoom::Sharded` wiring and
+/// `home_shard` routing; only the shard logic differs.
+fn sharded_spatial_room_factory(
+    spawn_half: f32,
+    shard_count: usize,
+    cell_size: f32,
+    disconnect_grace: std::time::Duration,
+    economy: gsb_game::economy::EconomyService,
+) -> RoomFactory<
+    World,
+    gsb_game::aoi::Cell,
+    gsb_game::sharded::ShardedRoomState,
+    gsb_game::sharded::StripPos,
+> {
+    Arc::new(move |_id, _config| {
+        let shards: Vec<
+            gsb_core::registry::Shard<
+                World,
+                gsb_game::aoi::Cell,
+                gsb_game::sharded::ShardedRoomState,
+                gsb_game::sharded::StripPos,
+            >,
+        > =
+            (0..shard_count)
+                .map(|i| {
+                    (
+                        World::new(),
+                        Box::new(
+                            gsb_game::sharded::ShardedSpatialRoom::new(
+                                i,
+                                shard_count,
+                                spawn_half,
+                                cell_size,
+                            )
+                            .with_disconnect_grace(disconnect_grace)
+                            .with_economy(economy.clone()),
+                        )
+                            as Box<
+                                dyn gsb_core::shard::ShardLogic<
+                                    World,
+                                    GroupKey = gsb_game::aoi::Cell,
+                                    State = gsb_game::sharded::ShardedRoomState,
+                                    Strip = gsb_game::sharded::StripPos,
+                                >,
+                            >,
+                    )
+                })
+                .collect();
+        BuiltRoom::Sharded {
+            shards,
+            home_shard: Arc::new(move |conn| {
+                let (x, y) = gsb_game::room::spawn_pos(conn, spawn_half);
+                gsb_game::sharded::shard_at(x, y, spawn_half, shard_count)
+            }),
+        }
+    })
+}
+
 /// Start the server (local auth; no ticket hook). Must be called from
 /// inside a tokio runtime. Metric reports go to the tracing logger (one
 /// `gsb-metric` line per scope per second; visible under `RUST_LOG=info`,
@@ -1729,6 +1794,34 @@ async fn start_inner(
                     // the shared sink at its own teardown — one payload
                     // per shard under the logical room id (the adapter
                     // concatenates/filters; see `gsb_core::shard`).
+                    Some(result_tx.clone()),
+                )
+                .run(),
+            )
+        }
+        RoomKind::ShardedSpatial => {
+            let disconnect_grace = grace_of(&cfg);
+            // One economy service per server, shared with the shards —
+            // identical wiring to the whole-shard grid above.
+            let economy = gsb_game::economy::EconomyService::spawn(
+                gsb_game::economy::EconomyService::default_latency(),
+            );
+            tokio::spawn(
+                Registry::new(
+                    reg_rx,
+                    reg_tx.clone(),
+                    sharded_spatial_room_factory(
+                        cfg.spawn_half_size,
+                        cfg.shard_count as usize,
+                        cfg.aoi_cell_size,
+                        disconnect_grace,
+                        economy,
+                    ),
+                    ticker.clone(),
+                    metrics_tx.clone(),
+                    cfg.max_connections,
+                    unauth_cap_of(&cfg),
+                    // Same per-shard result reporting as the plain grid.
                     Some(result_tx.clone()),
                 )
                 .run(),

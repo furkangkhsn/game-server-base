@@ -140,6 +140,14 @@ struct Args {
     /// (`--visibility all|spatial|team|pvs|sharded`, default `all` — same
     /// as the server config default).
     visibility: gsb_server::Visibility,
+    /// The EXPLICIT topology axis of the served / in-process server
+    /// (`--topology single|sharded`; the Faz A explicit-key surface).
+    /// `None` (default) = derive from the legacy visibility spelling, so
+    /// every pre-flag invocation behaves identically. The composite
+    /// selection is expressed as `--visibility spatial --topology
+    /// sharded` — per-shard cell-grouped AOI broadcast (ROADMAP Faz B) —
+    /// which the legacy spelling alone cannot name.
+    topology: Option<gsb_server::Topology>,
     /// Shards per room (`--shard-count N`, default 4; used only for
     /// `sharded`). The map is a near-square grid of N shards; 1..=256.
     shard_count: u32,
@@ -282,6 +290,9 @@ Client options:
 
 Server options (in-process server, --serve, or the orchestrator's server):
   --visibility all|spatial|team|pvs|sharded   (default all)
+  --topology single|sharded           explicit topology axis; with
+                                       --visibility spatial selects the
+                                       sharded × spatial composite
   --shard-count N                     (sharded; near-square grid of N
                                        shards, 1..=256; default 4 = 2×2)
   --cell-size F                       (spatial; default 20)
@@ -327,6 +338,7 @@ fn parse_args() -> Args {
         still_frac: 0.9,
         spawn_half: 50.0,
         visibility: gsb_server::Visibility::default(),
+        topology: None,
         shard_count: 4,
         cell_size: 20.0,
         vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
@@ -403,6 +415,14 @@ fn parse_args() -> Args {
                     ),
                 };
             }
+            "--topology" => {
+                let s = v();
+                args.topology = match s.as_str() {
+                    "single" => Some(gsb_server::Topology::Single),
+                    "sharded" => Some(gsb_server::Topology::Sharded),
+                    other => panic!("--topology: expected single|sharded, got {other}"),
+                };
+            }
             "--shard-count" => {
                 args.shard_count = v().parse().expect("number");
             }
@@ -463,6 +483,30 @@ fn parse_args() -> Args {
     }
     if args.orchestrate && args.serve {
         panic!("--orchestrate and --serve are mutually exclusive (try --help)");
+    }
+    // The connect stagger sleeps `GLOBAL id × stagger_ms` (partition
+    // invariance: a `--procs P` split connects each id at the same
+    // instant as a single-process run), so the LAST client's delay is
+    // `N × stagger_ms` against ONE shared window of `--duration`. A
+    // schedule where that overruns the window silently starves the late
+    // partitions — they sleep past their own deadline and report
+    // joined=0 — which reads as a server problem. Refuse to start
+    // instead: shrink `--stagger-ms`, grow `--duration`, or drop the
+    // stagger (the herd then lands on admission, not on connect).
+    let window = args.duration;
+    let last_connect = Duration::from_secs_f64(args.clients as f64 * args.stagger_ms / 1000.0);
+    if last_connect > window {
+        panic!(
+            "--stagger-ms {} × {} clients = {:.1}s of connect spread exceeds the \
+             {}s run window: the late partitions would sleep past the deadline \
+             and join nothing. Use --stagger-ms <= {:.1} (window/clients), or a \
+             longer --duration",
+            args.stagger_ms,
+            args.clients,
+            last_connect.as_secs_f64(),
+            window.as_secs(),
+            window.as_secs_f64() / args.clients as f64 * 1000.0,
+        );
     }
     // TLS is an external-client feature this round: there is no way to hand
     // the in-process/served server its cert/key here, so a CA without an
@@ -1597,6 +1641,7 @@ fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
 #[allow(clippy::too_many_arguments)] // loadgen helper; params are natural
 async fn start_inprocess(
     visibility: gsb_server::Visibility,
+    topology: Option<gsb_server::Topology>,
     shard_count: u32,
     cell_size: f32,
     vision_radius: f32,
@@ -1609,6 +1654,7 @@ async fn start_inprocess(
         bind: "127.0.0.1:0".into(),
         room_count: 1,
         visibility,
+        topology,
         shard_count,
         aoi_cell_size: cell_size,
         team_vision_radius: vision_radius,
@@ -1661,6 +1707,7 @@ async fn run(args: Args) {
         None => {
             let s = start_inprocess(
                 args.visibility,
+                args.topology,
                 args.shard_count,
                 args.cell_size,
                 args.vision_radius,
@@ -2278,10 +2325,16 @@ fn print_report(
              detach_expired_ai={} detach_expired_despawn={}",
         mode,
         args.visibility,
-        if args.visibility == gsb_server::Visibility::Sharded {
-            args.shard_count
-        } else {
-            1
+        // Shard-aware like the legacy spelling: the EXPLICIT topology key
+        // decides when present (an operator running
+        // `--topology sharded --visibility spatial` IS on the grid even
+        // though the legacy spelling says spatial); without it the legacy
+        // derivation applies.
+        match args.topology {
+            Some(gsb_server::Topology::Sharded) => args.shard_count,
+            Some(gsb_server::Topology::Single) => 1,
+            None if args.visibility == gsb_server::Visibility::Sharded => args.shard_count,
+            None => 1,
         },
         args.max_snapshot_bytes,
         args.clients,
@@ -2781,6 +2834,7 @@ async fn serve(args: Args) {
         bind: args.bind.clone(),
         room_count: 1,
         visibility: args.visibility,
+        topology: args.topology,
         shard_count: args.shard_count,
         aoi_cell_size: args.cell_size,
         team_vision_radius: args.vision_radius,
@@ -3222,6 +3276,14 @@ async fn orchestrate(args: Args) {
         "--workers".into(),
         server_workers.to_string(),
     ];
+    // The explicit topology axis is forwarded ONLY when the operator set
+    // it: an explicit key wins over the legacy derivation at resolve time,
+    // so unconditionally forwarding "single" would silently flatten a
+    // legacy `--visibility sharded` run into one whole-world room.
+    if let Some(t) = args.topology {
+        sargs.push("--topology".into());
+        sargs.push(t.to_string());
+    }
     // Capacity / lifecycle guards (forwarded only when the operator
     // chose them; the served server keeps its config defaults otherwise).
     if let Some(n) = args.max_players {

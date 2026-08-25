@@ -250,113 +250,31 @@
 //!   are delivered on the group's packet.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 
-use bevy_ecs::prelude::{Changed, Entity, World};
-use bytes::{BufMut, Bytes, BytesMut};
+use bevy_ecs::prelude::{Entity, World};
+use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
-use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{
+    Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx,
+};
 use gsb_ecs::SystemRunner;
 use prost::encoding::varint::encode_varint;
-use prost::Message;
 
+// The public cell type lives with the shared machinery (both spatial
+// rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
+// historical public path every caller uses.
+pub use crate::common::Cell;
+use crate::common::{assemble_group_packet, cell_of, CellBook, CellPieces};
 use crate::components::{Position, WireId};
 use crate::op;
-
-
-
-/// A spatial cell of the world grid — the AOI group key. Cell indices
-/// are the floor of (wire position / `cell_size`) — see the module
-/// docs, "Cells are computed from the WIRE position".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Cell(pub i32, pub i32);
-
-/// How many cells the visibility block extends in each direction from
-/// the player's cell. `1` ⇒ a 3×3 block (the cell + its 8 ring-1
-/// neighbors).
-const RADIUS: i32 = 1;
-
-/// The (dx, dy) offsets of the visibility block centered on a cell
-/// (deterministic order: the assembly order of the group's packet).
-const BLOCK_OFFSETS: [(i32, i32); 9] = [
-    (-RADIUS, -RADIUS), (0, -RADIUS), (RADIUS, -RADIUS),
-    (-RADIUS, 0), (0, 0), (RADIUS, 0),
-    (-RADIUS, RADIUS), (0, RADIUS), (RADIUS, RADIUS),
-];
-
-/// The cell containing the WIRE (integer) position (see the module
-/// docs): `floor(x / cell_size)` on the integer coordinates, so the
-/// client — which holds only wire coordinates — computes the same cell.
-#[inline]
-fn cell_of(x: i32, y: i32, cell_size: f32) -> Cell {
-    Cell(
-        (x as f32 / cell_size).floor() as i32,
-        (y as f32 / cell_size).floor() as i32,
-    )
-}
-
-/// The per-tick classification of one cell (a pure function of the
-/// cell's change list and its occupancy baseline — identical for every
-/// group that sees the cell; see the module docs, "The delta invariant"
-/// and "Dirty cells").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CellFrag {
-    /// Empty now, empty before, and no change recorded this tick:
-    /// nothing for any group.
-    Silent,
-    /// Non-empty before, empty now: the group's packet carries one
-    /// `CellExit` record for it (the client forgets the whole cell in
-    /// one record).
-    Exited,
-    /// Empty before, non-empty now: no baseline exists for the cell —
-    /// its FULL records go into the group's packet (upserts in a delta
-    /// packet; full content in a fresh group's packet).
-    Appeared,
-    /// Non-empty before and now, content changed: the cell's delta
-    /// piece (its change list: exits + updates).
-    Delta,
-}
-
-/// One cell's changes this tick — the delta's source of truth (module
-/// docs, "Dirty cells"): the change list *is* the diff, so no per-cell
-/// content comparison is ever run. Built incrementally in `update` from
-/// the dirty set; persistent map, cleared in place each tick.
-#[derive(Default)]
-struct CellChanges {
-    /// Records whose wire content changed, or that newly occupy the cell
-    /// (wire id, wire x, wire y). Encoded as `entities` upserts (field
-    /// 2) — except for an appeared cell, whose group gets the cell's
-    /// FULL piece instead (the upserts would be redundant: the client
-    /// has no baseline for a cell that was empty).
-    updates: Vec<(u64, i32, i32)>,
-    /// Wire ids that left the cell (a cell-to-cell move or a despawn).
-    /// Encoded as `removed` (field 3) — except when the whole cell
-    /// exited, in which case one `CellExit` record supersedes them.
-    exits: Vec<u64>,
-    /// The cell was empty at the end of the last tick (set at the end
-    /// of `update`, order-independently — see there).
-    appeared: bool,
-    /// The cell is empty now (and was not empty then) — same evaluation.
-    exited: bool,
-}
-
-/// The per-tick member-event counters of one touched cell (module docs,
-/// "Dirty cells"): the order-independent group-birth arithmetic
-/// reconstructs the before-tick member count from
-/// `now − in + out`, so a same-tick exit+entry into the same cell
-/// cannot fake a birth.
-#[derive(Default)]
-struct TouchInfo {
-    /// Member entities that entered this cell this tick (joins into it,
-    /// cell crossings into it).
-    member_in: u32,
-    /// Member entities that left it (crossings out, leavers).
-    member_out: u32,
-}
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
 /// fresh group members, keep-alive fulls as the loss-recovery path.
+/// The cell-delta engine itself ([`crate::common::CellBook`] /
+/// [`crate::common::CellPieces`]) is shared with the sharded spatial
+/// composite; this room contributes only the session surface and the
+/// single-world feeding of the bookkeeping.
 pub struct AoiRoom {
     runner: SystemRunner,
     /// Which entity belongs to which player (Faz 2: keyed by the STABLE
@@ -389,55 +307,11 @@ pub struct AoiRoom {
     /// SESSION-scoped content under a stable key: a resume clears it
     /// (`on_resume`) so the fresh session re-baselines with a full.
     conn_view: HashMap<PlayerId, Cell>,
-    /// The current buckets: `cell → (wire id → (x, y))` — the content of
-    /// every cell, maintained **incrementally** in `update` from the
-    /// dirty set (module docs, "Dirty cells"): an entity enters/leaves a
-    /// bucket when its wire position/cell changes. Invariant: after
-    /// `update`, the buckets equal the world's current content (they are
-    /// temporarily stale during the CONTROL phase — joins not yet
-    /// bucketed, leavers not yet removed — and nothing reads them
-    /// between `update` and the next `update`'s dirty query).
-    buckets: HashMap<Cell, HashMap<u64, (i32, i32)>>,
-    /// The cells that were occupied (any content, members or not) at the
-    /// end of the last `update`: the appearance/exit baseline. Rolled
-    /// once per touched cell at the end of `update` (the per-tick cost
-    /// is proportional to the movers, not to the occupied cells).
-    prev_occupied: HashSet<Cell>,
-    /// Each bucketed entity's cell at the end of the last `update`
-    /// (written in `update`, read by the dirty query, `on_leave`'s
-    /// removal parking, and `group_of` — the per-connection group
-    /// lookups of the broadcast phase are O(1) table reads, not
-    /// per-connection world queries).
-    last_cell: HashMap<Entity, Cell>,
-    /// The member count of each cell (maintained incrementally in
-    /// `update`; empty entries removed): the group-birth arithmetic's
-    /// "now" input (module docs, "The full/delta decision" + "Dirty
-    /// cells").
-    member_counts: HashMap<Cell, u32>,
-    /// The cells touched this tick (a cell is touched when one of its
-    /// records is added to or removed from its bucket) with their
-    /// member-event counters (persistent map, cleared in place each
-    /// tick): the per-cell flag/birth pass at the end of `update`
-    /// iterates exactly this map — O(movers), never O(cells).
-    touched: HashMap<Cell, TouchInfo>,
-    /// Each touched cell's change list for this tick (persistent map,
-    /// cleared in place each tick): the delta's source of truth — the
-    /// change list *is* the diff (no per-cell content comparison is
-    /// ever run; module docs, "Dirty cells").
-    cell_changes: HashMap<Cell, CellChanges>,
-    /// Leavers parked in `on_leave` — `(entity, wire id, cell)` — and
-    /// applied in `update`: a despawn is not a component write, so it is
-    /// invisible to the `Changed<Position>` query (module docs, "Dirty
-    /// cells").
-    pending_removals: Vec<(Entity, u64, Cell)>,
-    /// The member entities (maintained in `on_join`/`on_leave`): the
-    /// dirty loop's O(1) membership test (member counts, birth
-    /// arithmetic).
-    members: HashSet<Entity>,
-    /// Cells with members now but none last tick: their groups are fresh
-    /// this tick and must emit a FULL packet on their first tick (module
-    /// docs, "The full/delta decision").
-    born_groups: HashSet<Cell>,
+    /// The content bookkeeping (buckets, change lists, occupancy and
+    /// member baselines, parked removals, born groups) — the shared
+    /// engine ([`crate::common::CellBook`]); this room feeds it from the
+    /// bevy dirty query alone (no borrowed strip exists here).
+    book: CellBook,
     /// The global tick of the current step (set in `update`): the
     /// `private` seam has no `TickCtx`, so the tick it stamps into
     /// payloads comes from here.
@@ -447,43 +321,12 @@ pub struct AoiRoom {
     //    `private` once per group/conn in unspecified order, and the
     //    cache makes the pieces order-independent: the same (cell, kind)
     //    is computed once, shared as frozen `Bytes` by reference). ──
-    /// Each cell's encoded FULL records (the `entities` entries, field 2)
-    /// of its current content; shared by every consumer this tick (a
-    /// fresh group's full, a keep-alive full, a one-shot private full,
-    /// an *appeared* cell's upserts).
-    full_pieces: HashMap<Cell, Bytes>,
-    /// Each changed cell's encoded delta: the `removed` entries
-    /// (field 3; `None` when the cell lost no entity) + the `entities`
-    /// entries (field 2) of its changed/new records (assembled from the
-    /// cell's change list — see [`Self::cell_changes`]).
-    delta_pieces: HashMap<Cell, (Option<Bytes>, Bytes)>,
-    /// Each exited cell's encoded `cell_exits` entry (field 4).
-    exit_markers: HashMap<Cell, Bytes>,
-    /// The assembled FULL snapshot of a cell's 3×3 view (header + the
-    /// full pieces), shared between the fresh-group packet, the keep-
-    /// alive full, and the one-shot private full.
-    full_view: HashMap<Cell, Bytes>,
-    /// The scratch behind [`Self::full_view`] (reused across assemblies;
-    /// `split_to` hands out zero-copy views — no per-assembly allocation).
-    full_scratch: BytesMut,
-    /// The per-tick, per-cell classification cache: `classify` is a pure
-    /// function of the per-tick change list, which does not change during
-    /// the tick, so the first group that asks a cell computes its
-    /// fragment **once** and every later group (every later *pass* of the
-    /// same group — the 3×3 block is walked four times per group) reuses
-    /// it — including the negative answer (`Silent`), which is a hash
-    /// miss on the change list, not a scan.
-    frag_cache: HashMap<Cell, CellFrag>,
+    pieces: CellPieces,
     /// The groups that emitted a FULL this tick (a fresh group in
     /// `snapshot`, a silent group in `keepalive`): a member of such a
     /// group is baselined by that frame (it precedes the private frame in
     /// the batch), so `private` skips its one-shot full.
     group_full_emitted: HashSet<Cell>,
-    /// Entity records encoded into pieces so far this tick (polled once
-    /// per step by the room via `GameLogic::encoded_records`) — the
-    /// overlap measurement: ~E per tick in steady state (one encoding per
-    /// entity, in its own cell's piece).
-    encoded: u64,
 }
 
 impl AoiRoom {
@@ -510,24 +353,10 @@ impl AoiRoom {
             spawn_half: half.max(1.0),
             input: HashMap::new(),
             conn_view: HashMap::new(),
-            buckets: HashMap::new(),
-            prev_occupied: HashSet::new(),
-            last_cell: HashMap::new(),
-            member_counts: HashMap::new(),
-            touched: HashMap::new(),
-            cell_changes: HashMap::new(),
-            pending_removals: Vec::new(),
-            members: HashSet::new(),
-            born_groups: HashSet::new(),
+            book: CellBook::default(),
             tick: 0,
-            full_pieces: HashMap::new(),
-            delta_pieces: HashMap::new(),
-            exit_markers: HashMap::new(),
-            full_view: HashMap::new(),
-            full_scratch: BytesMut::new(),
-            frag_cache: HashMap::new(),
+            pieces: CellPieces::default(),
             group_full_emitted: HashSet::new(),
-            encoded: 0,
         }
     }
 
@@ -537,187 +366,6 @@ impl AoiRoom {
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
         self
-    }
-
-    /// The snapshot header: `sequence` (field 1, varint) + the `delta`
-    /// flag (field 5; written only when true — a `false`/absent flag
-    /// means FULL, per `game.proto`).
-    fn write_header(buf: &mut BytesMut, tick: u64, delta: bool) {
-        buf.put_u8(0x08); // field 1 (sequence), varint
-        encode_varint(tick, buf);
-        if delta {
-            buf.put_u8(0x28); // field 5 (delta), varint
-            buf.put_u8(1);
-        }
-    }
-
-    /// Encode `records` as `entities` entries (field 2, length-
-    /// delimited) — one pre-encoded piece, shareable by reference.
-    /// (Encoding straight into the buffer: no per-record allocation.)
-    fn encode_records(records: &[(u64, i32, i32)]) -> Bytes {
-        let mut out = BytesMut::new();
-        for &(wire, x, y) in records {
-            let rec = crate::game::EntityRecord {
-                entity: wire,
-                x,
-                y,
-            };
-            out.put_u8(0x12); // field 2 (entities), length-delimited
-            encode_varint(rec.encoded_len() as u64, &mut out);
-            rec.encode(&mut out)
-                .expect("protobuf encode into an in-memory buffer failed");
-        }
-        out.freeze()
-    }
-
-    /// Encode `exits` as `removed` entries (field 3, varint) — the
-    /// entity-exit piece of a delta.
-    fn encode_exits(exits: &[u64]) -> Bytes {
-        let mut out = BytesMut::new();
-        for &wire in exits {
-            out.put_u8(0x18); // field 3 (removed), varint
-            encode_varint(wire, &mut out);
-        }
-        out.freeze()
-    }
-
-    /// Encode one `cell_exits` entry (field 4, length-delimited) for
-    /// `cell` — the single record that makes the client forget a whole
-    /// cell.
-    fn encode_cell_exit(cell: Cell) -> Bytes {
-        let msg = crate::game::CellExit {
-            x: cell.0,
-            y: cell.1,
-        };
-        let mut out = BytesMut::new();
-        out.put_u8(0x22); // field 4 (cell_exits), length-delimited
-        encode_varint(msg.encoded_len() as u64, &mut out);
-        msg.encode(&mut out)
-            .expect("protobuf encode into an in-memory buffer failed");
-        out.freeze()
-    }
-
-    /// The cell's FULL piece (its complete current content, encoded once
-    /// per tick; `None` for an empty cell).
-    fn full_piece(&mut self, c: &Cell) -> Option<Bytes> {
-        if !self.full_pieces.contains_key(c)
-            && let Some(bucket) = self.buckets.get(c)
-        {
-            let records: Vec<(u64, i32, i32)> =
-                bucket.iter().map(|(&w, &(x, y))| (w, x, y)).collect();
-            self.encoded += records.len() as u64;
-            self.full_pieces.insert(*c, Self::encode_records(&records));
-        }
-        self.full_pieces.get(c).cloned()
-    }
-
-    /// A changed cell's delta piece: `(exits, updates)` assembled from
-    /// the cell's change list — the change list *is* the diff (module
-    /// docs, "Dirty cells"), so no per-cell content comparison is run
-    /// (encoded once per tick). `None` when the cell has no change list
-    /// (the caller classifies first; such a cell is silent for the
-    /// tick).
-    fn delta_piece(&mut self, c: &Cell) -> Option<&(Option<Bytes>, Bytes)> {
-        if !self.delta_pieces.contains_key(c)
-            && let Some(ch) = self.cell_changes.get(c)
-            && (!ch.exits.is_empty() || !ch.updates.is_empty())
-        {
-            self.encoded += ch.updates.len() as u64;
-            self.delta_pieces.insert(
-                *c,
-                (
-                    (!ch.exits.is_empty()).then(|| Self::encode_exits(&ch.exits)),
-                    Self::encode_records(&ch.updates),
-                ),
-            );
-        }
-        self.delta_pieces.get(c)
-    }
-
-    /// One `CellExit` marker for an exited cell (encoded once per tick).
-    fn exit_marker(&mut self, c: &Cell) -> Bytes {
-        if !self.exit_markers.contains_key(c) {
-            self.exit_markers.insert(*c, Self::encode_cell_exit(*c));
-        }
-        self.exit_markers.get(c).expect("inserted above").clone()
-    }
-
-    /// The per-tick classification of `c` (see [`CellFrag`]).
-    ///
-    /// Computed **once per cell per tick, including the negative answer**
-    /// (the memoization of this round's item (a)): the per-tick change
-    /// list does not change during the tick, so the first caller's
-    /// result is valid for every later caller (every other group, and
-    /// every other *pass* of the same group's `snapshot` — the 3×3 block
-    /// is walked four times per group). The `Silent` answer is cached
-    /// too, and with the dirty set (item (b)) it costs one hash miss on
-    /// the change list — a cell that had no change this tick is never
-    /// scanned, and a cell that did is classified by its flags, not by a
-    /// comparison. Within a tick the classification is a pure function
-    /// of the (change list, occupancy baseline) pair, both frozen until
-    /// the next `update` — memoization is exact, not an approximation.
-    fn classify(&mut self, c: &Cell) -> CellFrag {
-        if let Some(&frag) = self.frag_cache.get(c) {
-            return frag;
-        }
-        let frag = match self.cell_changes.get(c) {
-            // No change recorded this tick: nothing for any group
-            // (covers both "empty all along" and "occupied, untouched" —
-            // the latter is impossible to have *content* in without a
-            // change record, so both read the same way).
-            None => CellFrag::Silent,
-            // The flags are set at the end of `update`, order-
-            // independently (see there); `appeared` outranks `exited`
-            // (they are mutually exclusive by construction).
-            Some(ch) if ch.appeared => CellFrag::Appeared,
-            Some(ch) if ch.exited => CellFrag::Exited,
-            Some(_) => CellFrag::Delta,
-        };
-        self.frag_cache.insert(*c, frag);
-        frag
-    }
-
-    /// The assembled FULL snapshot of `cell`'s 3×3 view (header with
-    /// `delta = false` + the full pieces of every non-empty cell) —
-    /// computed once per tick and shared (a fresh group's packet, the
-    /// keep-alive full, and the one-shot private full all reuse these
-    /// bytes).
-    fn full_of(&mut self, cell: &Cell) -> Bytes {
-        if let Some(bytes) = self.full_view.get(cell) {
-            return bytes.clone();
-        }
-        self.full_scratch.clear();
-        Self::write_header(&mut self.full_scratch, self.tick, false);
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            if let Some(piece) = self.full_piece(&c) {
-                self.full_scratch.extend_from_slice(&piece);
-            }
-        }
-        let bytes = self.full_scratch.split_to(self.full_scratch.len()).freeze();
-        self.full_view.insert(*cell, bytes.clone());
-        bytes
-    }
-
-    /// Mark `c` as touched this tick (the end-of-`update` flag/birth
-    /// pass iterates exactly the touched cells — proportional to the
-    /// movers, not to the world).
-    #[inline]
-    fn touch_cell(&mut self, c: Cell) {
-        self.touched.entry(c).or_default();
-    }
-
-    /// Count a member entering (`in = true`) or leaving (`in = false`)
-    /// cell `c` — the order-independent birth arithmetic's input (the
-    /// call also marks the cell touched).
-    #[inline]
-    fn member_event(&mut self, c: Cell, in_: bool) {
-        let t = self.touched.entry(c).or_default();
-        if in_ {
-            t.member_in += 1;
-        } else {
-            t.member_out += 1;
-        }
     }
 }
 
@@ -751,7 +399,7 @@ impl GameLogic<World> for AoiRoom {
         let Some(&entity) = self.player_entity.get(&player) else {
             return Cell(0, 0);
         };
-        if let Some(&c) = self.last_cell.get(&entity) {
+        if let Some(&c) = self.book.last_cell.get(&entity) {
             return c;
         }
         let pos = world.entity(entity).get::<Position>().copied().unwrap_or_default();
@@ -761,7 +409,10 @@ impl GameLogic<World> for AoiRoom {
     /// Assemble `cell`'s packet from this tick's pieces (module docs):
     /// a fresh group gets a FULL packet; an established group gets a
     /// DELTA packet (exits, then cell exits, then updates) — or nothing
-    /// (returns `false`) when the whole 3×3 is silent for it.
+    /// (returns `false`) when the whole 3×3 is silent for it. The
+    /// assembly itself is the shared engine
+    /// ([`crate::common::assemble_group_packet`]); this hook only feeds
+    /// it this room's state.
     fn snapshot(
         &mut self,
         _world: &mut World,
@@ -772,70 +423,14 @@ impl GameLogic<World> for AoiRoom {
         out: &mut bytes::BytesMut,
     ) -> bool {
         debug_assert_eq!(ctx.tick, self.tick, "update must precede snapshot");
-        if self.born_groups.contains(cell) {
-            // Fresh group: every member is new to this view — the first
-            // packet is a full (delta=false), so the members end the tick
-            // baselined (the invariant starts from here).
-            self.group_full_emitted.insert(*cell);
-            let full = self.full_of(cell);
-            out.extend_from_slice(&full);
-            return true;
-        }
-        // Established group: a delta packet (delta=true) — but only when
-        // at least one cell has something to say (silence writes no
-        // bytes; the core's scratch stays empty on a `false`).
-        let mut any = false;
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            match self.classify(&c) {
-                CellFrag::Silent => {}
-                _ => any = true,
-            }
-        }
-        if !any {
-            return false;
-        }
-        Self::write_header(out, ctx.tick, true);
-        // Pass 1: entity exits (field 3) of every cell — exits before
-        // updates, so a cell-to-cell move is exited from its source
-        // before it is updated in its target.
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            if matches!(self.classify(&c), CellFrag::Delta)
-                && let Some((exits, _)) = self.delta_piece(&c)
-                && let Some(e) = exits
-            {
-                out.extend_from_slice(e);
-            }
-        }
-        // Pass 2: cell exits (field 4) — one record per cell that became
-        // empty (the client forgets the whole cell at once).
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            if matches!(self.classify(&c), CellFrag::Exited) {
-                out.extend_from_slice(&self.exit_marker(&c));
-            }
-        }
-        // Pass 3: updates (field 2): delta pieces' changed records, and
-        // appeared cells' full records (upserts — the client has no
-        // baseline for a cell that was empty).
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            match self.classify(&c) {
-                CellFrag::Delta => {
-                    if let Some((_, updates)) = self.delta_piece(&c) {
-                        out.extend_from_slice(updates);
-                    }
-                }
-                CellFrag::Appeared => {
-                    if let Some(piece) = self.full_piece(&c) {
-                        out.extend_from_slice(&piece);
-                    }
-                }
-                _ => {}
-            }
-        }
-        true
+        assemble_group_packet(
+            &mut self.pieces,
+            &self.book,
+            cell,
+            &mut self.group_full_emitted,
+            ctx.tick,
+            out,
+        )
     }
 
     /// Keep-alive (on the cadence tick, whether this group emitted this
@@ -856,15 +451,13 @@ impl GameLogic<World> for AoiRoom {
     ) -> bool {
         debug_assert_eq!(_ctx.tick, self.tick, "update must precede keepalive");
         self.group_full_emitted.insert(*group);
-        let full = self.full_of(group);
+        let full = self.pieces.full_view(&self.book.buckets, self.tick, group);
         out.extend_from_slice(&full);
         true
     }
 
     fn encoded_records(&mut self) -> u64 {
-        let n = self.encoded;
-        self.encoded = 0;
-        n
+        self.pieces.take_encoded()
     }
 
     /// The per-connection private frame: a one-shot FULL view for a
@@ -907,7 +500,7 @@ impl GameLogic<World> for AoiRoom {
                 // (field 3, one length-delimited `RpcResponse` each)
                 // instead of a second frame — the per-connection
                 // per-tick slot is one frame.
-                let full = self.full_of(&c);
+                let full = self.pieces.full_view(&self.book.buckets, self.tick, &c);
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
@@ -940,7 +533,7 @@ impl GameLogic<World> for AoiRoom {
         // membership test — it selects which of the changed entities
         // count toward the per-cell member arithmetic).
         if let Some(&entity) = self.player_entity.get(&admission.player) {
-            self.members.insert(entity);
+            self.book.members.insert(entity);
         }
         admission
     }
@@ -951,7 +544,7 @@ impl GameLogic<World> for AoiRoom {
         // baseline (a re-join is a new session: fresh input state, fresh
         // one-shot full).
         if let Some(&entity) = self.player_entity.get(&player) {
-            self.members.remove(&entity);
+            self.book.members.remove(&entity);
             // Despawns are NOT component writes: the `Changed<Position>`
             // query in `update` cannot see the entity once it is gone,
             // so the removal must be parked here (module docs, "Dirty
@@ -966,9 +559,9 @@ impl GameLogic<World> for AoiRoom {
                 .entity(entity)
                 .get::<WireId>()
                 .map(|w| w.get());
-            let cell = self.last_cell.get(&entity).copied();
+            let cell = self.book.last_cell.get(&entity).copied();
             if let (Some(wire), Some(cell)) = (wire, cell) {
-                self.pending_removals.push((entity, wire, cell));
+                self.book.pending_removals.push((entity, wire, cell));
             }
         }
         crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
@@ -1049,179 +642,38 @@ impl GameLogic<World> for AoiRoom {
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
-        self.cell_changes.clear();
-        self.touched.clear();
-        self.born_groups.clear();
-        self.frag_cache.clear();
-        self.full_pieces.clear();
-        self.delta_pieces.clear();
-        self.exit_markers.clear();
-        self.full_view.clear();
+        self.book.begin_tick();
+        self.pieces.begin_tick();
         self.group_full_emitted.clear();
-        self.encoded = 0;
         self.tick = ctx.tick;
 
         // The dirty set (module docs, "Dirty cells"): bevy's change
         // detection flags every `Position` write — by any writer, through
-        // any API (a system, `ingest`, a direct `world.entity_mut` in a
-        // test or future code) — so no writer can forget to mark a cell
-        // dirty: the mark lives in bevy's write path itself. The query
-        // window is "writes since the end of the previous `update`"
+        // any API — so no writer can forget to mark a cell dirty: the
+        // mark lives in bevy's write path itself. The query window is
+        // "writes since the end of the previous `update`"
         // (`clear_trackers` at the bottom of this method closes THIS
         // tick's window), so CONTROL-phase joins (spawn writes) are
         // inside it; CONVERT-phase writes touch `MoveTarget`, not
         // `Position`, and reach the query through the systems' resulting
-        // `Position` writes; a same-value rewrite is tracked (bevy marks
-        // every write, even an identical one) and degrades to a no-op
-        // below through the wire comparison. Only the changed entities
-        // are visited — per-tick work is proportional to the movers, not
-        // to the entity count.
-        let mut query =
-            world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();        for (entity, wire_id, pos) in query.iter(world) {
-            let wire = wire_id.get();
-            let (x, y) = (pos.x as i32, pos.y as i32);
-            let new_cell = cell_of(x, y, self.cell_size);
-            let is_member = self.members.contains(&entity);
-            match self.last_cell.get(&entity).copied() {
-                None => {
-                    // New this tick (a join, or a spawn between
-                    // updates): an upsert in its cell.
-                    self.cell_changes
-                        .entry(new_cell)
-                        .or_default()
-                        .updates
-                        .push((wire, x, y));
-                    self.buckets.entry(new_cell).or_default().insert(wire, (x, y));
-                    self.last_cell.insert(entity, new_cell);
-                    self.touch_cell(new_cell);
-                    if is_member {
-                        *self.member_counts.entry(new_cell).or_default() += 1;
-                        self.member_event(new_cell, /*in:*/ true);
-                    }
-                }
-                Some(old) if old == new_cell => {
-                    // Moved inside its cell (or a move too small to
-                    // change the WIRE position — quantization, module
-                    // docs): a record only when the wire content
-                    // actually changed.
-                    let changed = self
-                        .buckets
-                        .get(&old)
-                        .and_then(|b| b.get(&wire))
-                        .is_none_or(|&(px, py)| px != x || py != y);
-                    if changed {
-                        self.cell_changes
-                            .entry(new_cell)
-                            .or_default()
-                            .updates
-                            .push((wire, x, y));
-                        self.buckets
-                            .get_mut(&old)
-                            .expect("bucket invariant: tracked in last_cell")
-                            .insert(wire, (x, y));
-                        self.touch_cell(new_cell);
-                    }
-                }
-                Some(old) => {
-                    // A cell change: an exit in the source cell, an
-                    // upsert in the target (the packet passes fix the
-                    // wire order: `removed` before `entities`).
-                    self.cell_changes.entry(old).or_default().exits.push(wire);
-                    if let Some(b) = self.buckets.get_mut(&old) {
-                        b.remove(&wire);
-                        if b.is_empty() {
-                            self.buckets.remove(&old);
-                        }
-                    }
-                    self.touch_cell(old);
-                    self.cell_changes
-                        .entry(new_cell)
-                        .or_default()
-                        .updates
-                        .push((wire, x, y));
-                    self.buckets.entry(new_cell).or_default().insert(wire, (x, y));
-                    self.last_cell.insert(entity, new_cell);
-                    self.touch_cell(new_cell);
-                    if is_member {
-                        if let Some(n) = self.member_counts.get_mut(&old) {
-                            *n -= 1;
-                            if *n == 0 {
-                                self.member_counts.remove(&old);
-                            }
-                        }
-                        *self.member_counts.entry(new_cell).or_default() += 1;
-                        self.member_event(old, /*in:*/ false);
-                        self.member_event(new_cell, /*in:*/ true);
-                    }
-                }
-            }
-        }
+        // `Position` writes. Only the changed entities are visited —
+        // per-tick work is proportional to the movers, not to the entity
+        // count. (The pass itself — including its quantization no-op and
+        // its member arithmetic — is the shared engine,
+        // [`crate::common::CellBook::dirty_pass`].)
+        self.book.dirty_pass(world, self.cell_size);
 
         // Leavers: despawns are invisible to the change query — applied
-        // from the removals parked in `on_leave` (wire id + the cell the
-        // entity occupied at the end of the last `update`).
-        for (entity, wire, cell) in std::mem::take(&mut self.pending_removals) {
-            self.last_cell.remove(&entity);
-            self.cell_changes.entry(cell).or_default().exits.push(wire);
-            if let Some(b) = self.buckets.get_mut(&cell) {
-                b.remove(&wire);
-                if b.is_empty() {
-                    self.buckets.remove(&cell);
-                }
-            }
-            self.touch_cell(cell);
-            // A parked removal is always a member's (connections own the
-            // despawned entities); the join+leave-within-one-tick case
-            // never parked a removal (the `last_cell` guard in
-            // `on_leave`), so there is no count to undo for it.
-            if let Some(n) = self.member_counts.get_mut(&cell) {
-                *n -= 1;
-                if *n == 0 {
-                    self.member_counts.remove(&cell);
-                }
-            }
-            self.member_event(cell, /*in:*/ false);
-        }
+        // from the removals parked in `on_leave`.
+        self.book.apply_removals();
 
-        // The per-cell flags, the group birth, and the occupancy roll
-        // (module docs, "Dirty cells") — all order-independent:
-        // `prev_occupied` was frozen for the whole dirty loop (it is
-        // rolled only here, against the final bucket state), and the
-        // member arithmetic reconstructs the before-tick count from the
-        // net events (`now − in + out`), so a same-tick exit+entry into
-        // the same cell cannot fake a birth. The pass iterates exactly
-        // the touched cells — O(movers), never O(occupied cells).
-        for (c, t) in self.touched.iter() {
-            let occupied_now = self.buckets.contains_key(c);
-            let occupied_prev = self.prev_occupied.contains(c);
-            let ch = self
-                .cell_changes
-                .get_mut(c)
-                .expect("a touched cell has a change entry");
-            ch.appeared = occupied_now && !occupied_prev;
-            ch.exited = occupied_prev && !occupied_now;
-            let now = self.member_counts.get(c).copied().unwrap_or(0);
-            let before = now.wrapping_sub(t.member_in).wrapping_add(t.member_out);
-            debug_assert!(
-                before.saturating_add(t.member_in) >= t.member_out,
-                "member count went negative for {c:?}"
-            );
-            if before == 0 && now > 0 {
-                self.born_groups.insert(*c);
-            }
-            if occupied_now {
-                self.prev_occupied.insert(*c);
-            } else {
-                self.prev_occupied.remove(c);
-            }
-        }
+        // The per-cell flags, the group birth, and the occupancy roll —
+        // order-independent, against the final bucket state (single-room
+        // execution: every content source of the tick has landed by now,
+        // so the roll sits here; the sharded composite defers it until
+        // its borrowed strip has been integrated).
+        self.book.roll();
 
-        // Close this tick's change window: bevy's change tick advances
-        // here, so the NEXT `update`'s query sees exactly the writes
-        // made since now — the next CONTROL phase's join spawns
-        // included. Standalone bevy does not call this on its own
-        // (it is the system-scheduler's job, and there is none here —
-        // see `docs/DESIGN.md` §7).
         world.clear_trackers();
     }
 }
@@ -1970,7 +1422,7 @@ mod tests {
         let m = place(&mut world, &mut room, ConnectionId(7), 44.0, 0.0); // Cell(2,0)
         room.update(&mut world, &ctx(2));
         assert!(
-            room.born_groups.contains(&Cell(2, 0)),
+            room.book.born_groups.contains(&Cell(2, 0)),
             "a member joining an NPC-held cell is a fresh group (member count 0 → 1)"
         );
         let mut out = bytes::BytesMut::new();
@@ -2010,13 +1462,13 @@ mod tests {
         room.on_join(&mut world, ConnectionId(9));
         room.on_leave(&mut world, PlayerId(9));
         assert!(
-            room.pending_removals.is_empty(),
+            room.book.pending_removals.is_empty(),
             "no removal to park (the entity was never bucketed)"
         );
 
         room.update(&mut world, &ctx(2));
         assert_eq!(
-            *room.member_counts.get(&Cell(0, 0)).expect("member count"),
+            *room.book.member_counts.get(&Cell(0, 0)).expect("member count"),
             1,
             "the member counts are intact"
         );

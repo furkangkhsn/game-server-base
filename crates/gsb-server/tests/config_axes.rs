@@ -203,9 +203,9 @@ fn explicit_spatial_delta_resolves_to_the_aoi_room() {
 
 // ── Supported-combination mapping ──────────────────────────────────────
 
-/// Each SUPPORTED combination resolves to its existing room kind. These
-/// are all five factories that exist today — Faz A re-expresses the old
-/// surface, it invents none.
+/// Each SUPPORTED combination resolves to its room kind. These are the
+/// factories that exist today — Faz A re-expressed the pre-axes surface,
+/// and the Faz B composite added the sharded × spatial pair to it.
 #[test]
 fn every_supported_combination_maps_to_its_existing_room() {
     let cases = [
@@ -256,6 +256,21 @@ fn every_supported_combination_maps_to_its_existing_room() {
             Some(Topology::Sharded),
             Some(Communication::AlwaysFull),
             RoomKind::Sharded,
+        ),
+        (
+            // The Faz B composite: reachable ONLY through the explicit
+            // topology key (the bare legacy "spatial" spelling means
+            // single × spatial — the single-world AoiRoom).
+            Visibility::Spatial,
+            Some(Topology::Sharded),
+            None,
+            RoomKind::ShardedSpatial,
+        ),
+        (
+            Visibility::Spatial,
+            Some(Topology::Sharded),
+            Some(Communication::Delta),
+            RoomKind::ShardedSpatial,
         ),
     ];
     for (legacy_value, topology, communication, want_kind) in cases {
@@ -345,22 +360,40 @@ fn sharded_delta_names_roadmap_faz_b_and_c() {
     }
 }
 
-/// `sharded × spatial` has no implementation until the Faz B composite;
-/// requesting it today refuses startup instead of silently running
-/// whole-shard snapshots under an AOI-flavored config.
+/// The Faz B composite resolves END-TO-END on the config surface:
+/// `sharded × spatial` maps onto the per-shard cell-delta room, and the
+/// derived and explicit delta spellings agree (same room, one behavior —
+/// the per-shard cell encoding IS the delta packaging on the grid).
 #[test]
-fn sharded_spatial_names_roadmap_faz_b() {
-    let err = rejected(&with_axes(
+fn sharded_spatial_resolves_to_the_faz_b_composite() {
+    // Derived spelling: explicit topology key + legacy spatial visibility.
+    let derived = resolved(&with_axes(
         &legacy(Visibility::Spatial),
         Some(Topology::Sharded),
         None,
     ));
-    match err {
-        ServerError::ShardedSpatial => {}
-        other => panic!("wrong error kind: {other}"),
-    }
-    let msg = err.to_string();
-    assert!(msg.contains("Faz B"), "message must name Faz B: {msg}");
+    assert_eq!(derived.topology, Topology::Sharded);
+    assert_eq!(derived.visibility, VisibilityAxis::Spatial);
+    assert_eq!(derived.communication, Communication::Delta);
+    assert_eq!(derived.kind, RoomKind::ShardedSpatial);
+
+    // Fully explicit triple: the same room, no disagreement.
+    let explicit = resolved(&with_axes(
+        &legacy(Visibility::Spatial),
+        Some(Topology::Sharded),
+        Some(Communication::Delta),
+    ));
+    assert_eq!(explicit, derived);
+
+    // An explicit always-full stays honored as written (full frames are
+    // what the wire speaks everywhere; the composite serves them too).
+    let full = resolved(&with_axes(
+        &legacy(Visibility::Spatial),
+        Some(Topology::Sharded),
+        Some(Communication::AlwaysFull),
+    ));
+    assert_eq!(full.kind, RoomKind::ShardedSpatial);
+    assert_eq!(full.communication, Communication::AlwaysFull);
 }
 
 /// Team/PVS interest reaches across shard seams, violating the shard

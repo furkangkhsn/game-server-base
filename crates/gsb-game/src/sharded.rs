@@ -47,17 +47,104 @@
 //! connection in the shard. The sharded visibility is the region +
 //! margin (above), not a finer per-cell block; within a shard everyone
 //! sees the same bytes.
+//!
+//! ## The spatial composite ([`ShardedSpatialRoom`] — ROADMAP Faz B)
+//!
+//! [`ShardedSpatialRoom`] is the `sharded × spatial` selection: the SAME
+//! grid topology, migration protocol and border seam, but each shard's
+//! broadcast phase groups its connections by **spatial cell**
+//! (`GroupKey = Cell`, sized like [`crate::aoi::AoiRoom`]'s from the
+//! config's `aoi_cell_size`) instead of one whole-shard group. The cell
+//! encoding/delta engine itself is NOT duplicated: the shared
+//! [`crate::common::CellBook`] / [`crate::common::CellPieces`] machinery
+//! drives both rooms. What this module adds on top is exactly the part a
+//! single world cannot have — the borrowed border strip — and it is the
+//! load-bearing subtlety of the whole composite:
+//!
+//! ### THE borrowed-strip × delta-ledger subtlety (why a naive port decays)
+//!
+//! The borrowed records arrive at the broadcast phase FULLY REPLACED every
+//! tick (the receiver-side view of the seq-stamped border-delta protocol
+//! is kept wholesale by the core actor; quarantine aside, the flattened
+//! slice always names every currently-borrowed entity and its CURRENT
+//! truncated position). Diffing that slice against "the world as of last
+//! tick" — the way own entities are diffed through bevy's change
+//! detection — would therefore flag EVERY borrowed record as written on
+//! EVERY tick: every cell touching the strip would go dirty tick after
+//! tick, the deltas would degenerate toward full re-carries, and the
+//! entire byte economy of the cell encoding would evaporate exactly where
+//! shards touch (the densest places — players cluster near points of
+//! interest, and POIs sit near seams by design).
+//!
+//! So the borrowed set participates in the delta bookkeeping through its
+//! OWN ledger: the room keeps the PREVIOUS tick's borrowed view
+//! (`prev_borrowed`: wire → wire position) and diffs the NEW view against
+//! THAT — entered (absent before), exited (gone now), moved (position
+//! changed), silent (identical wire position ⇒ NO change entry at all).
+//! Only the diff lands in the shared [`crate::common::CellBook`] change
+//! lists, so a static strip costs nothing beyond the comparison itself,
+//! and a moving boundary entity produces exactly one upsert (plus an exit
+//! when it changes cell) — the same shape an own-entity mover produces.
+//!
+//! Why ONE flat ledger instead of per-neighbor ledgers: the wire ids are
+//! range-partitioned PER SHARD, so a borrowed id identifies exactly one
+//! neighbor for the room's whole lifetime — the union of per-neighbor
+//! diffs is mathematically the flat diff, minus a second level of maps.
+//! (The core actor already merges the per-neighbor views into the sorted
+//! slice this room receives; it also drops a neighbor's stale copy of an
+//! entity that just migrated IN — own wins — which composes cleanly: the
+//! ledger simply never saw that id, so no spurious exit is ever shipped
+//! for it.)
+//!
+//! Two protocol events fall out of the ledger correctly BY CONSTRUCTION,
+//! not by extra code: a QUARANTINED neighbor (a rejected border delta —
+//! `stale_until_full`) vanishes from the flattened slice, which the
+//! ledger renders as exits, and the healing Full re-renders as entries —
+//! exactly what clients should see; and a crossing entity appears as an
+//! exit on the leaving side's strip and an entry on the arriving side's,
+//! with the own-wins filter swallowing the double view on the transition
+//! tick (the accepted one-tick alignment blink, never a duplicate).
+//!
+//! ### Ordering: why the occupancy/birth roll cannot live in `update`
+//!
+//! Own entities are bucketed during `update` (the bevy dirty pass); the
+//! borrowed diff can only run later — the core hands the strip to the
+//! logic at the broadcast phase, after `update`. The shared engine's
+//! appeared/exited/birth flags must reflect the FINAL content of the
+//! tick, so the composite defers [`crate::common::CellBook::roll`] until
+//! the first broadcast-phase call integrates the strip (a once-per-tick
+//! guard; every snapshot/keepalive/private call is preceded by it). With
+//! no connections there is no broadcast and no roll — and no client to
+//! tell; the next broadcast's roll re-baselines from the final buckets
+//! and any fresh group opens with a full packet regardless of flags.
+//!
+//! ### Migration correctness (fresh-member rule)
+//!
+//! A player migrating INTO a shard is dropped into a cell whose group may
+//! be long-established — a delta would carry nothing to build their view
+//! from. [`ShardLogic::on_migrate_in`] therefore clears the arrival's
+//! view baseline, so the arrival's next `private` frame is the one-shot
+//! FULL of their new 3×3 (skipped only when the group's own packet that
+//! batch was already a full) — the same contract a late joiner gets on
+//! the single-world AOI room. Symmetrically, a migrate-out removes the
+//! leaver's baseline and parks the despawn removal (despawns are not
+//! component writes) so the seam cell's delta carries the exit.
 
 use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Entity, World};
+use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
+use prost::encoding::varint::encode_varint;
 use prost::Message;
 
+use crate::common::{
+    assemble_group_packet, cell_of, Cell, CellBook, CellPieces,
+};
 use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
 use crate::economy::EconomyService;
 use crate::op;
@@ -880,6 +967,488 @@ impl ShardedRoom {
     }
 }
 
+/// The `sharded × spatial` composite (ROADMAP Faz B — see the module
+/// docs, "The spatial composite"): the grid topology of
+/// [`ShardedRoom`] with each shard's broadcast phase re-grouped by
+/// spatial cell and delta-encoded against last-sent content — AoiRoom's
+/// engine ([`crate::common::CellBook`] / [`crate::common::CellPieces`])
+/// driven per shard, plus THE borrowed-strip ledger that keeps a static
+/// border silent.
+///
+/// Composition, not duplication: everything the grid protocol owns
+/// (minting, migration state, park ledger, border cache, RPC plumbing,
+/// economy) lives in the wrapped [`ShardedRoom`] and is delegated; this
+/// type adds only the spatial broadcast surface (group key, packets,
+/// view baselines) and the strip integration.
+pub struct ShardedSpatialRoom {
+    /// The grid-protocol half (delegated hooks; same module, so its
+    /// private tables are readable where the seam requires it).
+    inner: ShardedRoom,
+    /// World units per cell edge (the config's `aoi_cell_size`; the same
+    /// knob the single-world AOI room turns).
+    cell_size: f32,
+    /// The content bookkeeping shared with [`crate::aoi::AoiRoom`] —
+    /// buckets over OWN entities AND borrowed records alike, change
+    /// lists, member counts, born groups. Fed from two sources: the
+    /// bevy dirty pass in `update` (own entities) and
+    /// [`Self::integrate_borrowed`] (the strip diff).
+    book: CellBook,
+    /// THE ledger (module docs, "THE borrowed-strip × delta-ledger
+    /// subtlety"): the previous tick's flattened borrowed view,
+    /// `wire → (x, y)` truncated. The new slice is diffed against THIS,
+    /// never against the buckets, so an unchanged strip dirties nothing.
+    prev_borrowed: HashMap<u64, (i32, i32)>,
+    /// Once-per-tick guard for the strip integration + deferred roll:
+    /// the tick whose broadcast-phase preparation has already run.
+    integrated_tick: u64,
+    /// Per-player view baseline (`player → the cell whose FULL view was
+    /// last delivered to it`): missing/other ⇒ the one-shot private
+    /// full. Cleared on join/resume/migrate-in/migrate-out — a fresh
+    /// session or a fresh shard MUST re-baseline (module docs, "Migration
+    /// correctness").
+    conn_view: HashMap<PlayerId, Cell>,
+    /// The global tick of the current step (set in `update`).
+    tick: u64,
+    // ── Per-tick piece caches (cleared in `update`, computed lazily in
+    //    the broadcast phase; order-independent across groups). ──
+    pieces: CellPieces,
+    /// The groups that emitted a FULL this tick (fresh group /
+    /// keepalive): their members' private frames skip the one-shot.
+    group_full_emitted: HashSet<Cell>,
+}
+
+impl ShardedSpatialRoom {
+    /// Build shard `index` of a `shard_count`-shard room over a square
+    /// map of half-size `half`, broadcasting with cells of `cell_size`
+    /// world units (see [`ShardedRoom::new`] for the shared halves).
+    pub fn new(index: usize, shard_count: usize, spawn_half: f32, cell_size: f32) -> Self {
+        Self {
+            inner: ShardedRoom::new(index, shard_count, spawn_half),
+            cell_size: cell_size.max(0.5),
+            book: CellBook::default(),
+            prev_borrowed: HashMap::new(),
+            integrated_tick: 0,
+            conn_view: HashMap::new(),
+            tick: 0,
+            pieces: CellPieces::default(),
+            group_full_emitted: HashSet::new(),
+        }
+    }
+
+    /// Set the disconnect-park grace on the wrapped shard (builder-style,
+    /// like [`ShardedRoom::with_disconnect_grace`]; every shard of a room
+    /// should carry the same policy).
+    #[must_use]
+    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
+        self.inner = self.inner.with_disconnect_grace(grace);
+        self
+    }
+
+    /// Attach the economy service handle (see [`ShardedRoom::with_economy`]).
+    #[must_use]
+    pub fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.inner = self.inner.with_economy(economy);
+        self
+    }
+
+    /// THE strip integration (module docs, "THE borrowed-strip ×
+    /// delta-ledger subtlety") plus the deferred occupancy/birth roll:
+    /// idempotent per tick, invoked at the top of every broadcast-phase
+    /// hook. Diff the NEW borrowed slice against [`Self::prev_borrowed`]
+    /// — entered/exited/moved only; an identical wire position records
+    /// NOTHING (the evaporation guard) — feed the diff into the shared
+    /// bookkeeping as non-member content, then roll the flags against
+    /// the final bucket state.
+    fn integrate_borrowed(&mut self, borrowed: &[BorderRecord<StripPos>]) {
+        if self.integrated_tick == self.tick {
+            return;
+        }
+        let mut new_view: HashMap<u64, (i32, i32)> =
+            HashMap::with_capacity(borrowed.len());
+        for rec in borrowed {
+            let pos = (rec.state.x, rec.state.y);
+            new_view.insert(rec.wire, pos);
+            match self.prev_borrowed.get(&rec.wire).copied() {
+                None => {
+                    // Entered the visible set (first contact, a healing
+                    // Full after quarantine, or a crossing-in): an upsert
+                    // in its containing cell — borrowed content joins the
+                    // cell's group content for members of that cell.
+                    let c = cell_of(rec.state.x, rec.state.y, self.cell_size);
+                    self.book.record_appearance(rec.wire, rec.state.x, rec.state.y, c, false);
+                }
+                Some(prev) if prev != pos => {
+                    // Moved: one upsert — or exit+upsert when the move
+                    // crossed a cell boundary (the packet passes fix the
+                    // wire order).
+                    let old_c = cell_of(prev.0, prev.1, self.cell_size);
+                    let new_c = cell_of(rec.state.x, rec.state.y, self.cell_size);
+                    if old_c == new_c {
+                        self.book.record_update(new_c, rec.wire, rec.state.x, rec.state.y);
+                    } else {
+                        self.book.record_cross(
+                            old_c,
+                            new_c,
+                            rec.wire,
+                            rec.state.x,
+                            rec.state.y,
+                            false,
+                        );
+                    }
+                }
+                Some(_) => {
+                    // Unchanged since the previous tick: NOT a change —
+                    // no dirtying, no upsert, no re-carrier (this arm is
+                    // why the delta savings survive at the seams).
+                }
+            }
+        }
+        // Exited the visible set (left the neighbor's strip, the neighbor
+        // migrated it onward, or its view went quarantined): exits in the
+        // cells their previous records occupied.
+        for (wire, &(px, py)) in &self.prev_borrowed {
+            if !new_view.contains_key(wire) {
+                let c = cell_of(px, py, self.cell_size);
+                self.book.record_exit(c, *wire, false);
+            }
+        }
+        self.prev_borrowed = new_view;
+        // Every content source of the tick has landed (own dirty pass +
+        // removals ran in `update`; the strip diff above) — NOW the
+        // appeared/exited/birth classification is sound.
+        self.book.roll();
+        self.integrated_tick = self.tick;
+    }
+
+    /// Broadcast-phase precondition: integrate this tick's strip before
+    /// any packet/full/baseline work reads the bookkeeping (idempotent —
+    /// snapshot runs once per group, the integration must run once per
+    /// tick).
+    fn ensure_ready(&mut self, ctx: &TickCtx, borrowed: &[BorderRecord<StripPos>]) {
+        debug_assert_eq!(ctx.tick, self.tick, "update must precede broadcast");
+        self.integrate_borrowed(borrowed);
+    }
+
+    /// The roll-only variant for hooks that receive NO strip (`keepalive`,
+    /// `private`): by the actor's phase order a snapshot always preceded
+    /// them this tick (the integration already ran), so this normally
+    /// no-ops on the guard; should an ordering anomaly ever skip the
+    /// snapshot pass, roll with whatever the own-entity passes landed —
+    /// NEVER fabricate a diff from an empty slice (that would read as
+    /// "everything exited").
+    fn ensure_rolled(&mut self) {
+        if self.integrated_tick != self.tick {
+            self.book.roll();
+            self.integrated_tick = self.tick;
+        }
+    }
+}
+
+// The shared contract with a CELL group key: every hook either delegates
+// to the wrapped shard (grid protocol) or drives the shared cell-delta
+// engine (broadcast surface).
+impl GameLogic<World> for ShardedSpatialRoom {
+    type GroupKey = Cell;
+    type Strip = StripPos;
+
+    fn snapshot_op(&self) -> u16 {
+        op::WORLD_SNAPSHOT
+    }
+
+    fn private_op(&self) -> u16 {
+        op::PRIVATE
+    }
+
+    /// The connection's group is the cell its entity's records land in —
+    /// read from the O(1) `last_cell` table (written by the dirty pass),
+    /// world-position fallback for the pre-first-update window (a join or
+    /// migration-in processed in the CONTROL phase of the very tick being
+    /// broadcast).
+    fn group_of(&self, world: &World, player: PlayerId) -> Cell {
+        let Some(&entity) = self.inner.player_entity.get(&player) else {
+            return Cell(0, 0);
+        };
+        if let Some(&c) = self.book.last_cell.get(&entity) {
+            return c;
+        }
+        let pos = world
+            .entity(entity)
+            .get::<Position>()
+            .copied()
+            .unwrap_or_default();
+        cell_of(pos.x as i32, pos.y as i32, self.cell_size)
+    }
+
+    /// This cell's packet over the shard's own region content PLUS the
+    /// integrated borrowed strip: a fresh group gets the 3×3 full; an
+    /// established group gets the delta passes — all through the shared
+    /// engine (the strip's enters/exits/moves sit in the same change
+    /// lists the own movers wrote, so nothing here knows the difference).
+    fn snapshot(
+        &mut self,
+        _world: &mut World,
+        ctx: &TickCtx,
+        cell: &Cell,
+        borrowed: &[BorderRecord<StripPos>],
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        self.ensure_ready(ctx, borrowed);
+        assemble_group_packet(
+            &mut self.pieces,
+            &self.book,
+            cell,
+            &mut self.group_full_emitted,
+            ctx.tick,
+            out,
+        )
+    }
+
+    /// Keep-alive on the cadence tick: a freshly encoded FULL of the
+    /// group's view (a cached payload would be a delta — meaningless to
+    /// re-send), whether the group emitted this tick or not. Same
+    /// recovery contract as [`crate::aoi::AoiRoom::keepalive`].
+    fn keepalive(
+        &mut self,
+        _world: &mut World,
+        _ctx: &TickCtx,
+        group: &Cell,
+        _last: Option<&bytes::Bytes>,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        self.ensure_rolled();
+        self.group_full_emitted.insert(*group);
+        let full = self.pieces.full_view(&self.book.buckets, self.tick, group);
+        out.extend_from_slice(&full);
+        true
+    }
+
+    fn encoded_records(&mut self) -> u64 {
+        self.pieces.take_encoded()
+    }
+
+    fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        let admission = self.inner.on_join(world, conn);
+        // Member bookkeeping for the birth arithmetic (the wrapped shard
+        // owns the tables; the spatial layer owns membership).
+        if let Some(&entity) = self.inner.player_entity.get(&admission.player) {
+            self.book.members.insert(entity);
+        }
+        admission
+    }
+
+    fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        // Park the despawn removal BEFORE delegating (the delegate
+        // despawns): despawns are not component writes, so the dirty pass
+        // cannot see them. A join+leave inside one tick parks nothing
+        // (never bucketed — the `last_cell` guard).
+        if let Some(&entity) = self.inner.player_entity.get(&player) {
+            self.book.members.remove(&entity);
+            let wire = world.entity(entity).get::<WireId>().map(|w| w.get());
+            let cell = self.book.last_cell.get(&entity).copied();
+            if let (Some(wire), Some(cell)) = (wire, cell) {
+                self.book.pending_removals.push((entity, wire, cell));
+            }
+        }
+        self.inner.on_leave(world, player);
+        self.conn_view.remove(&player);
+    }
+
+    fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
+        self.inner.ingest(world, ctx, actions)
+    }
+
+    fn on_disconnect(
+        &mut self,
+        world: &mut World,
+        player: PlayerId,
+        identity: &str,
+    ) -> Detach {
+        self.inner.on_disconnect(world, player, identity)
+    }
+
+    fn on_detach_expired(
+        &mut self,
+        world: &mut World,
+        player: PlayerId,
+        to: gsb_core::room::ExpireTo,
+    ) {
+        self.inner.on_detach_expired(world, player, to)
+    }
+
+    fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
+        self.inner.resume_lookup(world, identity)
+    }
+
+    fn on_resume(
+        &mut self,
+        world: &mut World,
+        identity: &str,
+        conn: ConnectionId,
+        player: PlayerId,
+        entity: EntityId,
+    ) {
+        self.inner.on_resume(world, identity, conn, player, entity);
+        // The resumed SESSION has no view baseline: the next private frame
+        // delivers a fresh one-shot full (same contract as a re-join).
+        self.conn_view.remove(&player);
+    }
+
+    /// The per-connection private frame: the one-shot FULL view for a
+    /// connection without a baseline for its CURRENT cell (join, resume,
+    /// cell crossing, migration arrival) — skipped when the group's own
+    /// emission this batch was already a full — plus the ordinary input
+    /// ack / queued RPC answers.
+    fn private(
+        &mut self,
+        _world: &mut World,
+        player: PlayerId,
+        group: &Cell,
+        responses: &[gsb_core::rpc::RpcReply],
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        self.ensure_rolled();
+        let c = *group;
+        if self.conn_view.get(&player).copied() != Some(c) {
+            if self.group_full_emitted.contains(&c) {
+                // The group's own full is ahead of this frame in the same
+                // batch: it already baselined the connection.
+                self.conn_view.insert(player, c);
+            } else {
+                // The one-shot private full: pre-encoded WorldSnapshot
+                // bytes inside the Private message's snapshot oneof
+                // (field 2, length-delimited); queued RPC answers ride
+                // the SAME frame (field 3).
+                let full = self.pieces.full_view(&self.book.buckets, self.tick, &c);
+                out.put_u8(0x12); // Private field 2 (snapshot), LEN
+                encode_varint(full.len() as u64, out);
+                out.extend_from_slice(&full);
+                crate::common::append_responses(responses, out);
+                self.conn_view.insert(player, c);
+                return true;
+            }
+        }
+        crate::common::emit_private(&mut self.inner.input, player, responses, out)
+    }
+
+    fn update(&mut self, world: &mut World, ctx: &TickCtx) {
+        // Grid half: systems, range-aware orphan stamping, border-cache
+        // rebuild (positions just changed).
+        self.inner.update(world, ctx);
+        // Spatial half: clear the per-tick state, run the own-entity
+        // dirty pass, apply parked removals — but do NOT roll yet: the
+        // borrowed strip arrives later than `update` (module docs, "why
+        // the occupancy/birth roll cannot live in `update`"); the first
+        // broadcast-phase call integrates it and rolls against the final
+        // content.
+        self.book.begin_tick();
+        self.pieces.begin_tick();
+        self.group_full_emitted.clear();
+        self.tick = ctx.tick;
+        self.book.dirty_pass(world, self.cell_size);
+        self.book.apply_removals();
+        // Close this tick's bevy change window (the core never calls
+        // this — there is no system scheduler here; see
+        // `docs/DESIGN.md` §7).
+        world.clear_trackers();
+    }
+
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<RequestDecision> {
+        self.inner.handle_request(world, ctx, req)
+    }
+
+    fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
+        self.inner.match_result(world)
+    }
+}
+
+// The sharding seam: pure delegation — the composite changes WHAT a
+// shard broadcasts, not how the grid moves entities across itself.
+impl ShardLogic<World> for ShardedSpatialRoom {
+    type State = <ShardedRoom as ShardLogic<World>>::State;
+
+    fn index(&self) -> usize {
+        self.inner.index()
+    }
+
+    fn shard_count(&self) -> usize {
+        self.inner.shard_count()
+    }
+
+    fn serial_base(&self) -> u64 {
+        self.inner.serial_base()
+    }
+
+    fn serial_range(&self) -> u64 {
+        self.inner.serial_range()
+    }
+
+    fn serial_used(&self) -> u64 {
+        self.inner.serial_used()
+    }
+
+    fn neighbors(&self) -> &[usize] {
+        self.inner.neighbors()
+    }
+
+    fn collect_migrations(
+        &mut self,
+        world: &mut World,
+        neighbor: usize,
+    ) -> Vec<Migrating<Self::State>> {
+        self.inner.collect_migrations(world, neighbor)
+    }
+
+    fn on_migrate_in(
+        &mut self,
+        world: &mut World,
+        wire: u64,
+        state: Self::State,
+        player: Option<PlayerId>,
+    ) {
+        self.inner.on_migrate_in(world, wire, state, player);
+        let Some(player) = player else { return };
+        // Member bookkeeping for the receiving cell's birth arithmetic…
+        if let Some(&entity) = self.inner.player_entity.get(&player) {
+            self.book.members.insert(entity);
+        }
+        // …and the FRESH-MEMBER RULE (module docs, "Migration
+        // correctness"): the arrival has no baseline for its new cell's
+        // view — clear it so the next private frame is the one-shot full
+        // of the local world.
+        self.conn_view.remove(&player);
+    }
+
+    fn on_migrate_out(&mut self, world: &mut World, wire: u64) {
+        // Capture BEFORE the delegate despawns: the leaver's last cell
+        // (for the parked removal — the seam cell's delta carries the
+        // exit) and its stable player (for the baseline drop).
+        if let Some(entity) = self.inner.wire_entity.get(&wire).copied() {
+            self.book.members.remove(&entity);
+            let cell = self.book.last_cell.get(&entity).copied();
+            if let Some(cell) = cell {
+                self.book.pending_removals.push((entity, wire, cell));
+            }
+            if let Some(player) = self.inner.entity_player.get(&entity).copied() {
+                self.conn_view.remove(&player);
+            }
+        }
+        self.inner.on_migrate_out(world, wire);
+    }
+
+    fn collect_border(&self, world: &World) -> Vec<BorderRecord<StripPos>> {
+        self.inner.collect_border(world)
+    }
+
+    fn own_wires(&self, world: &World) -> Vec<u64> {
+        self.inner.own_wires(world)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -1153,6 +1722,263 @@ mod tests {
         assert!(
             s.snapshot(&mut w, &ctx(3), &(), &moved, &mut out3),
             "borrowed movement ⇒ content change ⇒ emit"
+        );
+    }
+    // ══ The Faz B spatial composite ([`ShardedSpatialRoom`]) ════════════
+    //
+    // The behavior locks of the `sharded × spatial` selection: cell
+    // grouping per shard, seam continuity through the borrowed strip, the
+    // evaporation guard (a static strip stays silent), and the
+    // fresh-member rule for migration arrivals. `cell_size = 20`,
+    // half = 50, 2 shards: s0 = x ∈ [-50, 0], s1 = x ∈ [0, 50]; border
+    // margin 12.5; wire x=-1 → Cell(-1, ·), x=5 → Cell(0, ·), x=25 →
+    // Cell(1, ·), x=45 → Cell(2, ·); y=-10 → row -1, y=15 → row 0.
+
+    /// Join a player on a [`ShardedSpatialRoom`] and move its entity to an
+    /// exact position. Returns the wire id.
+    fn place_spatial(
+        world: &mut World,
+        room: &mut ShardedSpatialRoom,
+        conn: ConnectionId,
+        x: f32,
+        y: f32,
+    ) -> u64 {
+        let admission = room.on_join(world, conn);
+        let entity = *room.inner.player_entity.get(&admission.player).expect("registered");
+        world.entity_mut(entity).insert(Position { x, y });
+        admission.entity
+    }
+
+    /// Cells group members by position within ONE shard: a group sees its
+    /// own cell plus the 3×3 ring — co-located and adjacent residents in,
+    /// far cells out — and fresh groups open with a full packet.
+    #[test]
+    fn sharded_spatial_cells_group_members_by_position() {
+        let mut world = World::new();
+        let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
+        let a = place_spatial(&mut world, &mut s1, ConnectionId(1), 5.0, -10.0); // Cell(0,-1)
+        let b = place_spatial(&mut world, &mut s1, ConnectionId(2), 25.0, -10.0); // Cell(1,-1)
+        let c = place_spatial(&mut world, &mut s1, ConnectionId(3), 45.0, -10.0); // Cell(2,-1)
+        s1.update(&mut world, &ctx(1));
+
+        let mut out = bytes::BytesMut::new();
+        assert!(
+            s1.snapshot(&mut world, &ctx(1), &Cell(0, -1), &[], &mut out),
+            "A's group emits (fresh)"
+        );
+        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+        assert!(!snap.delta, "a fresh group's first packet is a full");
+        let seen: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
+        assert!(seen.contains(&a) && seen.contains(&b), "own + adjacent visible: {seen:?}");
+        assert!(!seen.contains(&c), "two cells away is outside the 3×3: {seen:?}");
+
+        let mut out2 = bytes::BytesMut::new();
+        assert!(s1.snapshot(&mut world, &ctx(1), &Cell(2, -1), &[], &mut out2));
+        let seen2: BTreeSet<u64> =
+            crate::game::WorldSnapshot::decode(out2.as_ref()).expect("snapshot").entities.iter().map(|e| e.entity).collect();
+        assert!(seen2.contains(&c) && seen2.contains(&b), "C's group mirrors: {seen2:?}");
+        assert!(!seen2.contains(&a), "far member not leaked across cells: {seen2:?}");
+    }
+
+    /// A client-view accumulator with FULL/DELTA application semantics
+    /// (upserts, per-entity removals, whole-cell forgets) — what an
+    /// observer's connection holds after each packet.
+    #[derive(Default)]
+    struct ClientView {
+        ents: HashMap<u64, (i32, i32)>,
+    }
+
+    impl ClientView {
+        fn apply(&mut self, snap: &crate::game::WorldSnapshot, cell_size: f32) {
+            if !snap.delta {
+                self.ents.clear();
+            }
+            for ce in &snap.cell_exits {
+                let exited = Cell(ce.x, ce.y);
+                self.ents.retain(|_, &mut (x, y)| cell_of(x, y, cell_size) != exited);
+            }
+            for w in &snap.removed {
+                self.ents.remove(w);
+            }
+            for e in &snap.entities {
+                self.ents.insert(e.entity, (e.x, e.y));
+            }
+        }
+    }
+
+    /// Seam continuity: an observer beside the border sees the neighbor's
+    /// strip entities CONTINUOUSLY while they move on the other side —
+    /// every tick's applied view carries the mover at its CURRENT
+    /// truncated position (the accepted one-tick alignment blink is not
+    /// observable here because the exporter rebuilds its cache before the
+    /// exchange and the receiver integrates before its broadcast).
+    #[test]
+    fn borrowed_border_entities_render_without_gap_across_seam() {
+        let mut w0 = World::new();
+        let mut w1 = World::new();
+        let mut s0 = ShardedRoom::new(0, 2, 50.0);
+        let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
+        let m = place(&mut w0, &mut s0, ConnectionId(1), -1.0, -10.0);
+        let _o = place_spatial(&mut w1, &mut s1, ConnectionId(2), 5.0, -10.0);
+
+        // The neighbor mover walks along the seam INSIDE its own region
+        // (no migration), staying inside the observer shard's frame.
+        let walk = [(-1.0f32, -10.0f32), (-3.0, -12.0), (-6.0, -14.0), (-9.0, -11.0)];
+        let mut view = ClientView::default();
+        for (t, pos) in walk.iter().enumerate() {
+            let tick = t as u64 + 1;
+            let entity = *s0.player_entity.get(&PlayerId(1)).unwrap();
+            w0.entity_mut(entity).insert(Position { x: pos.0, y: pos.1 });
+
+            // Mirror the actor order on both shards: update → export →
+            // update → broadcast-with-borrowed.
+            s0.update(&mut w0, &ctx(tick));
+            let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
+            s1.update(&mut w1, &ctx(tick));
+            let mut out = bytes::BytesMut::new();
+            assert!(
+                s1.snapshot(&mut w1, &ctx(tick), &Cell(0, -1), &borrowed, &mut out),
+                "tick {tick}: the observer's group emits"
+            );
+            let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+            view.apply(&snap, 20.0);
+            assert_eq!(
+                view.ents.get(&m).copied(),
+                Some((pos.0 as i32, pos.1 as i32)),
+                "tick {tick}: the seam entity renders at its current position                  (no gap, no stale ghost)"
+            );
+        }
+    }
+
+    /// THE EVAPORATION GUARD (module docs, "THE borrowed-strip ×
+    /// delta-ledger subtlety"): the borrowed slice arrives full every
+    /// tick, yet STATIC strip records must not dirty any group — no
+    /// upserts shipped tick after tick — while a genuine strip move still
+    /// ships exactly that one record.
+    #[test]
+    fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
+        let mut w0 = World::new();
+        let mut w1 = World::new();
+        let mut s0 = ShardedRoom::new(0, 2, 50.0);
+        let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
+        let p = place(&mut w0, &mut s0, ConnectionId(1), -1.0, -10.0); // Cell(-1,-1)
+        let q = place(&mut w0, &mut s0, ConnectionId(2), -3.0, 15.0); // Cell(-1,0)
+        let _o = place_spatial(&mut w1, &mut s1, ConnectionId(3), 5.0, -10.0); // Cell(0,-1)
+
+        // Tick 1: first contact — everything enters once.
+        s0.update(&mut w0, &ctx(1));
+        let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
+        s1.update(&mut w1, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(s1.snapshot(&mut w1, &ctx(1), &Cell(0, -1), &borrowed, &mut out));
+        let seen: BTreeSet<u64> = crate::game::WorldSnapshot::decode(out.as_ref())
+            .expect("snapshot").entities.iter().map(|e| e.entity).collect();
+        assert!(seen.contains(&p) && seen.contains(&q), "strip baselined once: {seen:?}");
+
+        // Ticks 2–3: the SAME slice arrives (full replacement every tick
+        // — exactly the shape the naive port chokes on): silence, zero
+        // encoded records.
+        for tick in [2u64, 3] {
+            s0.update(&mut w0, &ctx(tick));
+            let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
+            s1.update(&mut w1, &ctx(tick));
+            let mut out = bytes::BytesMut::new();
+            assert!(
+                !s1.snapshot(&mut w1, &ctx(tick), &Cell(0, -1), &borrowed, &mut out),
+                "tick {tick}: unchanged strip ⇒ silent"
+            );
+            assert!(out.is_empty(), "tick {tick}: no bytes at all");
+            assert_eq!(
+                s1.encoded_records(),
+                0,
+                "tick {tick}: NO upserts shipped for unchanged borrowed records"
+            );
+        }
+
+        // Tick 4: one strip record moves — exactly that record ships.
+        let entity_p = *s0.player_entity.get(&PlayerId(1)).unwrap();
+        w0.entity_mut(entity_p).insert(Position { x: -5.0, y: -10.0 }); // same cell
+        s0.update(&mut w0, &ctx(4));
+        let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
+        s1.update(&mut w1, &ctx(4));
+        let mut out = bytes::BytesMut::new();
+        assert!(s1.snapshot(&mut w1, &ctx(4), &Cell(0, -1), &borrowed, &mut out));
+        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+        assert!(snap.delta);
+        assert_eq!(snap.entities.len(), 1, "only the mover re-carried: {snap:?}");
+        assert_eq!(snap.entities[0].entity, p);
+        assert_eq!((snap.entities[0].x, snap.entities[0].y), (-5, -10));
+        assert!(snap.entities.iter().all(|e| e.entity != q), "static q untouched");
+        assert_eq!(s1.encoded_records(), 1);
+    }
+
+    /// Migration correctness (module docs, "Migration correctness"): a
+    /// player migrating INTO an established mid-cell arrives as a FRESH
+    /// group member — the very next private frame is the one-shot FULL of
+    /// their new view (the established group's own packet stayed a delta
+    /// and could not have baselined them).
+    #[test]
+    fn migrated_player_gets_private_full_on_arrival() {
+        use crate::game::private::Payload;
+
+        let mut w1 = World::new();
+        let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
+        let r = place_spatial(&mut w1, &mut s1, ConnectionId(1), 25.0, -10.0); // Cell(1,-1)
+        s1.update(&mut w1, &ctx(1));
+        let mut out = bytes::BytesMut::new();
+        assert!(
+            s1.snapshot(&mut w1, &ctx(1), &Cell(1, -1), &[], &mut out),
+            "resident establishes the group"
+        );
+
+        // An arrival from the west shard into Cell(0,-1) — mid-cell, an
+        // already-established neighborhood (its cell sits inside the
+        // resident group's 3×3).
+        let arrival_wire = 42_u64; // any id from another range (test-only)
+        s1.on_migrate_in(
+            &mut w1,
+            arrival_wire,
+            ShardedRoomState {
+                pos: Position { x: 5.0, y: -10.0 },
+                speed: DEFAULT_SPEED,
+                target: None,
+                park: None,
+            },
+            Some(PlayerId(9)),
+        );
+        s1.update(&mut w1, &ctx(2));
+
+        // The ESTABLISHED resident group's packet is a delta carrying the
+        // arrival's upsert — it does NOT baseline the arrival.
+        out.clear();
+        assert!(s1.snapshot(&mut w1, &ctx(2), &Cell(1, -1), &[], &mut out));
+        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+        assert!(snap.delta, "established group stays in delta mode");
+        assert!(snap.entities.iter().any(|e| e.entity == arrival_wire));
+
+        // The arrival's private frame for ITS cell: the one-shot FULL.
+        let mut pbuf = bytes::BytesMut::new();
+        assert!(
+            s1.private(&mut w1, PlayerId(9), &Cell(0, -1), &[], &mut pbuf),
+            "the arrival receives the one-shot private full"
+        );
+        let frame = crate::game::Private::decode(pbuf.as_ref()).expect("private frame");
+        let full = match frame.payload {
+            Some(Payload::Snapshot(s)) => s,
+            other => panic!("expected the snapshot oneof, got {other:?}"),
+        };
+        assert!(!full.delta, "the one-shot is a FULL");
+        let seen: BTreeSet<u64> = full.entities.iter().map(|e| e.entity).collect();
+        assert!(
+            seen.contains(&arrival_wire) && seen.contains(&r),
+            "the arrival sees itself AND the local resident immediately: {seen:?}"
+        );
+
+        // One-shot means one-shot.
+        let mut pbuf2 = bytes::BytesMut::new();
+        assert!(
+            !s1.private(&mut w1, PlayerId(9), &Cell(0, -1), &[], &mut pbuf2),
+            "the second private call ships nothing further"
         );
     }
 }
