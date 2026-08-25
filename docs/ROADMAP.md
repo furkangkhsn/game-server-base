@@ -3246,10 +3246,11 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
     ödünç border şeridi delta defterine entegre edilir (borrowed set
     her tick tam geldiğinden diff'i önceki borrowed görünümüne karşı
     kurulmalı — yoksa her tick dirty olur).
-  - **Faz C:** communication modunun per-link otomatik türetilmesi:
-    aynı-process komşu → always-full (byte bedava, CPU kıt);
-    cross-process/cross-machine komşu → delta (byte transport parası;
-    A/B ölçümü: 0.39×). Config override'ı opsiyonel.
+  - **Faz C:** ✅ Kapatıldı — `ShardLink::exchange_mode()` seam'i:
+    InProc ⇒ AlwaysFull (byte mpsc-move'da bedava, lokal CPU kıt;
+    CROSS-SHARD §7 A/B ölçümü), Ipc/Net ⇒ Delta (gelecek; DISTRIBUTED
+    §4b codec sahipliği). Karışık-mod mahalle desteği testli.
+    Test 284 → 287.
   - Zemin hazır: `GameLogic` sözleşmesi mod-farkını destekliyor
     (snapshot bool + keepalive hook); **delta motoru Faz B'de ortak
     bileşen olarak common.rs'e çıkarıldı** (`CellBook`/`CellPieces` —
