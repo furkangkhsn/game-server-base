@@ -3251,8 +3251,12 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
     cross-process/cross-machine komşu → delta (byte transport parası;
     A/B ölçümü: 0.39×). Config override'ı opsiyonel.
   - Zemin hazır: `GameLogic` sözleşmesi mod-farkını destekliyor
-    (snapshot bool + keepalive hook), delta codec'i AoiRoom'da yaşıyor,
-    `BorderRecord<Strip>` jenerikliği ve `ShardLink` seam'i Faz B/C'nin
+    (snapshot bool + keepalive hook); **delta motoru Faz B'de ortak
+    bileşen olarak common.rs'e çıkarıldı** (`CellBook`/`CellPieces` —
+    aoi ve sharded paylaşıyor) → "ortak codec çıkarımı" maddesinin
+    yarısı gerçekleşti; kalan: team/pvs/all stratejilerinin bu motora
+    adoptasyonu (tetikleyicili — demo ölçeğinde kazanç yok).
+    `BorderRecord<Strip>` jenerikliği ve `ShardLink` seam'i Faz C'nin
     primitifleri olarak duruyor. Kısıt: `team × sharded` gibi lokalite-
     karşıtı kombolar cross-shard abonelik katmanı ister (DISTRIBUTED.md
     ufuk maddesi).
