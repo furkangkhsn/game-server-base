@@ -100,7 +100,7 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   değil, "T süre boyunca frame yok" ile yakalanır. 100k bağlantıda maliyet:
   0 ekstra görev, ~15 MB bekleyen `Sleep` (~150 B × 100k), ~1–2 core
   (yalnızca gerçekten boşta olan bağlantılar uyanır). Elenen
-  alternatiflerin 100k matematiği: ROADMAP "Kapatılanlar (koruma katmanı
+  alternatiflerin 100k matematiği: CHANGELOG "Kapatılanlar (koruma katmanı
   turu)".
 - **Oda başına 1 görev:** room actor. Tick'ler **tek global ticker görevinden**
   gelir (`tokio::sync::broadcast`): oda actor'ünün *tek* await'i
@@ -630,7 +630,7 @@ sızması yok.
 - **Ölçülen ticaret:** AOI ~9× kodlama maliyeti taşır (her kayıt 9 komşu
   bloğa girer) ama bant genişliğini O(entity) → O(görünürlük) yapar; hücre
   boyutu küçükçe bant kazancı %80+ (1000/2000). Break-even + yeni darboğaz
-  (adım süresi/CPU) ROADMAP "Kapatılanlar (metrik düzeltme + AOI turu)"
+  (adım süresi/CPU) CHANGELOG "Kapatılanlar (metrik düzeltme + AOI turu)"
   bölümünde ölçülmüş. Break-even bu turun D1'inde ölçüldü (aşağıda);
   10k+ ölçekli oda segmentasyonu hâlâ P2.
 
@@ -779,7 +779,7 @@ geometriye koşullu.
  sayılar + faz dökümü + spek sapmaları). Ring/spread gibi **her entity her
  tick hareket eden** profillerde delta'nın bant kazancı yine yok (orijinal
  ölçüm tabanı aynen — `ring`/`spread` profilleri değişmedi). Ham RESULT
- satırları + makine bilgisi: ROADMAP "Kapatılanlar (delta yayın + input
+ satırları + makine bilgisi: CHANGELOG "Kapatılanlar (delta yayın + input
  sıralama turu)" C maddesi. Detay + elenen alternatifler: aynı ROADMAP
  bölümü + yeni turun ilgili maddeleri.
 
@@ -1143,7 +1143,7 @@ anında saf tamsayı aritmetik: bin alt-kenarı semantiği (hata < 8 µs);
 `step_p90_fine_us` (4096 değeri = "sıra tavan üstünde"; ince bin alt
 kenarları 4088'de tavanlanır, bu yüzden belirsizlik yok). Served
 stream: **GSM3** (GSM2 + oda başına 512×u32). Gerekçe + ölçülen taban
-çalışması: ROADMAP "Kapatılanlar (ölçüm çözünürlüğü + taban turu)".
+çalışması: CHANGELOG "Kapatılanlar (ölçüm çözünürlüğü + taban turu)".
 
 Hızlar (`hz`, `*_s`) **örnek aralığı** üzerinden hesaplanır: her oda örneği
 kendi `emit_at`'ını taşır (oda `Instant::now()`); oran `latest.emit_at −
@@ -1162,7 +1162,7 @@ işlenince break eder; oda, kontrol drenajını — kalan leave'leri — tamamla
 **Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
 logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan
 programatik (yük üreticisi ve testler bu yoldan kullanır). Yük testi
-sayıları ve ilk doyma analizi: ROADMAP "Kapatılanlar (metrik + yük turu)".
+sayıları ve ilk doyma analizi: CHANGELOG "Kapatılanlar (metrik + yük turu)".
 
 ## 13. Derleme zamanı korumaları
 
@@ -1261,7 +1261,7 @@ trafiki). Yani **segmentasyon adım-duvarını kaydırır**; duvarın *kaynağı
 (tek actor = tek thread bütçesi) aynen kalır, shard'lar arası dağılır.
 Bölünebilir oyunlarda çoklu oda aynı işi (daha) ucuz yapar; segmentasyon
 özel olarak *tek sürekli dünya* sınıfına aittir. Detay + elenmiş
-alternatifler: ROADMAP "Kapatılanlar (oda segmentasyonu turu)".
+alternatifler: CHANGELOG "Kapatılanlar (oda segmentasyonu turu)".
 
 ### 14.4 Hangi oyun aileleri sığıyor
 

@@ -66,7 +66,7 @@ için gömülü varsayılanlar kullanılır.
 ## Yük testi (gsb-loadgen)
 
 Kalıcı yük üreticisi binary'si (ilk uçtan uca sayılar ve doyma analizi:
-`docs/ROADMAP.md` "metrik + yük turu"):
+`docs/CHANGELOG.md` "metrik + yük turu"):
 
 ```sh
 cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
@@ -119,8 +119,9 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
 
 - `docs/DESIGN.md` — mimari kararlar, ölçekleme, metrik altyapısı (§12),
   kısıtlar ve yol haritası.
-- `docs/ROADMAP.md` — ne kaldı; kapatılan turlar (ham yük testi sayıları
-  dahil).
+- `docs/ROADMAP.md` — açık işler ve öncelikler.
+- `docs/CHANGELOG.md` — tamamlanan turların tam kaydı (ham yük testi
+  sayıları dahil).
 - `docs/TICK-ARCHITECTURE.md` — broadcast tabanlı tick mimarisi.
 - `docs/RPC-CONTROL-PLANE.md` — RPC deseni ve kontrol düzlemi tasarımı.
 - `docs/OPS.md` — ops yüzeyi tasarımı (/metrics, /healthz, admin API).
