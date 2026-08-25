@@ -281,9 +281,9 @@ async fn slow_validator_times_out_actor_responsive() {
 #[tokio::test]
 async fn ticket_pins_room() {
     // Live registry with the pinned room pre-created.
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
-        logic: Box::new(NoopLogic) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+        logic: Box::new(NoopLogic) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
@@ -391,6 +391,7 @@ async fn no_hook_local_auth_unchanged() {
 struct NoopLogic;
 impl GameLogic<()> for NoopLogic {
     type GroupKey = ();
+    type Strip = ();
     fn snapshot_op(&self) -> u16 {
         0x7F10
     }
@@ -403,7 +404,7 @@ impl GameLogic<()> for NoopLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false

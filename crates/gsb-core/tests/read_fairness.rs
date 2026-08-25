@@ -45,6 +45,7 @@ struct RecorderLogic;
 
 impl GameLogic<FirstSeen> for RecorderLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         OP_SNAP
@@ -61,7 +62,7 @@ impl GameLogic<FirstSeen> for RecorderLogic {
         _w: &mut FirstSeen,
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false // no snapshots: the observation seam is the match result

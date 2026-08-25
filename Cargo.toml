@@ -73,6 +73,11 @@ prost-build = "0.14"
 protoc-bin-vendored = "3"
 bytes = "1"
 
+# QUIC transport (Tur: DISTRIBUTED/ROADMAP quinn round)
+quinn = "0.11"
+# WebSocket handshake accept-key (ws transport; yalnız protokol zorunluluğu)
+sha1 = "0.10"
+
 # OS entropy (rUDP cookie key): the getrandom(2)/BCryptGenRandom reader.
 # Not a crypto layer — 16 bytes of uniform material is all the key needs.
 getrandom = "0.4"

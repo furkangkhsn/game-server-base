@@ -29,7 +29,7 @@ use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
-use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic};
+use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
@@ -50,6 +50,7 @@ struct PanicAfterJoinLogic {
 
 impl GameLogic<()> for PanicAfterJoinLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         0x7E00
@@ -65,7 +66,7 @@ impl GameLogic<()> for PanicAfterJoinLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false
@@ -102,6 +103,7 @@ struct TimeBombShardLogic {
 
 impl GameLogic<()> for TimeBombShardLogic {
     type GroupKey = ();
+    type Strip = ();
     fn snapshot_op(&self) -> u16 {
         0x7D00
     }
@@ -114,7 +116,7 @@ impl GameLogic<()> for TimeBombShardLogic {
         _w: &mut (),
         _ctx: &TickCtx,
         _g: &(),
-        _borrowed: &[BorrowedRecord],
+        _borrowed: &[BorderRecord<()>],
         _out: &mut bytes::BytesMut,
     ) -> bool {
         false
@@ -168,7 +170,7 @@ impl ShardLogic<()> for TimeBombShardLogic {
     }
     fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _player: Option<PlayerId>) {}
     fn on_migrate_out(&mut self, _w: &mut (), _wire: u64) {}
-    fn collect_border(&self, _w: &()) -> Vec<BorrowedRecord> {
+    fn collect_border(&self, _w: &()) -> Vec<BorderRecord<()>> {
         Vec::new()
     }
     fn own_wires(&self, _w: &()) -> Vec<u64> {
@@ -186,7 +188,7 @@ fn config(id: RoomId, restart_on_panic: bool) -> RoomConfig {
 }
 
 fn start(
-    factory: RoomFactory<(), (), ()>,
+    factory: RoomFactory<(), (), (), ()>,
 ) -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
@@ -312,12 +314,12 @@ async fn stop(tx: Mailbox<RegistryMsg>, handle: tokio::task::JoinHandle<()>) {
 /// dispatched into the dead control channel).
 #[tokio::test]
 async fn panicking_room_is_removed_and_members_notified() {
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
         logic: Box::new(PanicAfterJoinLogic {
             joined: false,
             armed: true,
-        }) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+        }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (tx, handle) = start(factory);
     let id = RoomId(21);
@@ -362,7 +364,7 @@ async fn restarted_room_comes_back_when_policy_enabled() {
     // Every build observed by the test through a channel (the codebase's
     // observation idiom — no shared counters read across tasks).
     let (seen_tx, mut seen_rx) = mpsc::unbounded_channel::<u64>();
-    let factory: RoomFactory<(), (), ()> = Arc::new(move |_id, _config| {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| {
         let n = build_n.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = seen_tx.send(n);
         BuiltRoom::Single {
@@ -372,7 +374,7 @@ async fn restarted_room_comes_back_when_policy_enabled() {
             logic: Box::new(PanicAfterJoinLogic {
                 joined: false,
                 armed: n == 1,
-            }) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+            }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
         }
     });
     let (tx, handle) = start(factory);
@@ -428,21 +430,21 @@ async fn shard_death_takes_down_the_whole_logical_room() {
     // deadline lives in the shard's own logic (moved in, not shared), and
     // the margin makes the join-before-death order deterministic without
     // gating the panic on membership.
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Sharded {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Sharded {
         shards: vec![
             (
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 0,
                     detonate_at: None,
-                }) as Box<dyn ShardLogic<(), GroupKey = (), State = ()>>,
+                }) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
             (
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 1,
                     detonate_at: Some(Instant::now() + Duration::from_millis(300)),
-                }) as Box<dyn ShardLogic<(), GroupKey = (), State = ()>>,
+                }) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
         ],
         // Every join homes to shard 0 (pure router; the death comes from

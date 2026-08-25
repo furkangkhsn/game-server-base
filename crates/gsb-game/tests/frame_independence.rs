@@ -82,6 +82,7 @@ struct FrameLogic {
 // room-exclusive hook used (empty `RoomLogic` impl at the bottom).
 impl GameLogic<World> for FrameLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         OBS_OP
@@ -143,7 +144,7 @@ impl GameLogic<World> for FrameLogic {
         world: &mut World,
         _ctx: &TickCtx,
         _group: &Self::GroupKey,
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let Some(e) = self.entity else {

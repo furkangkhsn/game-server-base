@@ -49,6 +49,7 @@ impl SeqLogic {
 // impl below).
 impl GameLogic<()> for SeqLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         COUNT_OP
@@ -66,7 +67,7 @@ impl GameLogic<()> for SeqLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &Self::GroupKey,
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let count = self.conn_entity.len();
@@ -102,10 +103,10 @@ impl GameLogic<()> for SeqLogic {
 
 impl RoomLogic<()> for SeqLogic {}
 
-fn factory() -> RoomFactory<(), (), ()> {
+fn factory() -> RoomFactory<(), (), (), ()> {
     std::sync::Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
-        logic: Box::new(SeqLogic::new()) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+        logic: Box::new(SeqLogic::new()) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     })
 }
 

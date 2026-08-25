@@ -35,6 +35,7 @@ struct ResultLogic {
 
 impl GameLogic<()> for ResultLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         0x7F00
@@ -50,7 +51,7 @@ impl GameLogic<()> for ResultLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false
@@ -87,7 +88,7 @@ fn config(id: RoomId) -> RoomConfig {
 }
 
 fn start(
-    factory: RoomFactory<(), (), ()>,
+    factory: RoomFactory<(), (), (), ()>,
     result_sink: Option<Mailbox<MatchResult>>,
 ) -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
@@ -200,12 +201,12 @@ async fn create_idempotent_same_config_builds_once() {
     // The factory counts its own builds (the idempotency oracle): a
     // duplicate create must not invoke it.
     let (build_tx, mut build_rx) = mpsc::unbounded_channel::<()>();
-    let factory: RoomFactory<(), (), ()> = Arc::new(move |_id, _config| {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| {
         let _ = build_tx.send(());
         BuiltRoom::Single {
             world: (),
             logic: Box::new(ResultLogic { result: None })
-                as Box<dyn RoomLogic<(), GroupKey = ()>>,
+                as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
         }
     });
     let (tx, handle) = start(factory, None);
@@ -237,10 +238,10 @@ async fn create_idempotent_same_config_builds_once() {
 /// guard) — the existing room is untouched.
 #[tokio::test]
 async fn create_conflict_different_config() {
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
         logic: Box::new(ResultLogic { result: None })
-            as Box<dyn RoomLogic<(), GroupKey = ()>>,
+            as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (tx, handle) = start(factory, None);
     let id = RoomId(8);
@@ -271,10 +272,10 @@ async fn create_conflict_different_config() {
 /// on an absent room) and id reuse after destruction.
 #[tokio::test]
 async fn status_lifecycle_absent_running_destroyed_reused() {
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
         logic: Box::new(ResultLogic { result: None })
-            as Box<dyn RoomLogic<(), GroupKey = ()>>,
+            as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (tx, handle) = start(factory, None);
     let id = RoomId(9);
@@ -315,10 +316,10 @@ async fn status_lifecycle_absent_running_destroyed_reused() {
 /// room).
 #[tokio::test]
 async fn status_reports_members() {
-    let factory: RoomFactory<(), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Single {
         world: (),
         logic: Box::new(ResultLogic { result: None })
-            as Box<dyn RoomLogic<(), GroupKey = ()>>,
+            as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (tx, handle) = start(factory, None);
     let id = RoomId(10);
@@ -347,11 +348,11 @@ async fn status_reports_members() {
 async fn match_result_reports_on_destroy() {
     let payload: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
     let factory_payload = payload.clone();
-    let factory: RoomFactory<(), (), ()> = Arc::new(move |_id, _config| BuiltRoom::Single {
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| BuiltRoom::Single {
         world: (),
         logic: Box::new(ResultLogic {
             result: Some(factory_payload.clone()),
-        }) as Box<dyn RoomLogic<(), GroupKey = ()>>,
+        }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     });
     let (result_tx, mut result_rx) = channel::<MatchResult>(64);
     let (tx, handle) = start(factory, Some(result_tx));

@@ -68,22 +68,27 @@ use crate::ticker::Ticker;
 /// growing table.
 const RETIRED_SET_CAP: usize = 65_536;
 
-/// One shard of a sharded room: its `World` + its [`ShardLogic`].
-pub type Shard<W, G, St> = (W, Box<dyn ShardLogic<W, GroupKey = G, State = St>>);
+/// One shard of a sharded room: its `World` + its [`ShardLogic`]. `Sp`
+/// is the logic's strip payload ([`ShardLogic::Strip`] via
+/// [`crate::room::GameLogic::Strip`]).
+pub type Shard<W, G, St, Sp> = (
+    W,
+    Box<dyn ShardLogic<W, GroupKey = G, State = St, Strip = Sp>>,
+);
 
 /// The outcome of a room factory: one room actor (the pre-sharding shape)
 /// or a **sharded room** — N shard actors forming one logical room (see
 /// [`crate::shard`]).
 ///
-/// `St` is the sharded room's migration state type
-/// ([`crate::shard::ShardLogic::State`]); it is unused by the
-/// [`BuiltRoom::Single`] arm (a single-room-only factory can pick any
-/// `St`, e.g. `()`).
-pub enum BuiltRoom<W, G, St> {
+/// `St` is the sharded room's migration state and `Sp` its boundary-strip
+/// payload ([`crate::shard::ShardLogic::State`] / the shared
+/// `GameLogic::Strip`); both are unused by the [`BuiltRoom::Single`] arm
+/// (a single-room-only factory can pick any types, e.g. `()`).
+pub enum BuiltRoom<W, G, St, Sp> {
     /// One room actor (today's shape).
     Single {
         world: W,
-        logic: Box<dyn RoomLogic<W, GroupKey = G>>,
+        logic: Box<dyn RoomLogic<W, GroupKey = G, Strip = Sp>>,
     },
     /// N shard actors (indices `0..N`, the vec order) forming one logical
     /// room. `home_shard` maps a joining connection to the shard that owns
@@ -92,7 +97,7 @@ pub enum BuiltRoom<W, G, St> {
     /// the entity's first boundary crossing migrates it to the right
     /// shard (at most one tick of cross-boundary staleness).
     Sharded {
-        shards: Vec<Shard<W, G, St>>,
+        shards: Vec<Shard<W, G, St, Sp>>,
         home_shard: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
     },
 }
@@ -101,9 +106,9 @@ pub enum BuiltRoom<W, G, St> {
 /// never names the concrete game types. `G` is the game logic's group key
 /// (`RoomLogic::GroupKey` / `ShardLogic::GroupKey`); the room stores
 /// per-group state under it. `St` is the sharded room's migration state
-/// (see [`BuiltRoom`]).
-pub type RoomFactory<W, G, St> =
-    Arc<dyn Fn(RoomId, &RoomConfig) -> BuiltRoom<W, G, St> + Send + Sync>;
+/// and `Sp` its strip payload (see [`BuiltRoom`]).
+pub type RoomFactory<W, G, St, Sp> =
+    Arc<dyn Fn(RoomId, &RoomConfig) -> BuiltRoom<W, G, St, Sp> + Send + Sync>;
 
 /// A room's status, as known to the registry's table (the control plane's
 /// vocabulary — see [`RegistryMsg::RoomStatus`]).
@@ -284,8 +289,15 @@ pub enum RegistryMsg {
 /// single room's control channel, or a sharded room's shard mailboxes.
 /// `Clone` because the registry hands a copy to each dispatcher op.
 /// `St` is the sharded room's migration state (see [`BuiltRoom`]).
+/// The dispatcher's per-connection room state while ops are in flight
+/// (see `spawn_conn_ops`): room id, the entity the join created, the
+/// room handle, the join's epoch and the resume identity. A named alias
+/// because the tuple grew past clippy's complexity eye when the strip
+/// payload joined the handle's generics.
+type InRoom<St, Sp> = (RoomId, EntityId, RoomHandle<St, Sp>, u64, String);
+
 #[derive(Clone)]
-enum RoomHandle<St> {
+enum RoomHandle<St, Sp> {
     /// A single room: one control mailbox.
     Single(Mailbox<RoomControl>),
     /// A sharded room: one mailbox per shard (indices = shard indices).
@@ -293,14 +305,14 @@ enum RoomHandle<St> {
     /// `home_shard`); `Leave`/`Shutdown` go to ALL of them (exactly one
     /// shard owns the connection — the entity-id guard makes the others
     /// no-ops; see `crate::shard`, "Connection ownership").
-    Sharded(Vec<Mailbox<ShardMsg<St>>>),
+    Sharded(Vec<Mailbox<ShardMsg<St, Sp>>>),
 }
 
 /// Operations on a connection's room relationship, processed by that
 /// connection's dispatcher task — **in order**, which is what makes
 /// leave→rejoin race-free: a `Leave` can never overtake (or be overtaken
 /// by) the `Join` it follows.
-enum RoomOp<St> {
+enum RoomOp<St, Sp> {
     /// Join `room`: round-trip the control `Join` (the home shard, when the
     /// room is sharded — `shard` carries the registry's pick), reply to
     /// the connection actor (with the per-connection action channel),
@@ -314,7 +326,7 @@ enum RoomOp<St> {
     /// client (§5).
     Join {
         room: RoomId,
-        handle: RoomHandle<St>,
+        handle: RoomHandle<St, Sp>,
         /// The home shard index (sharded rooms only).
         shard: Option<usize>,
         /// The room incarnation this handle was taken from (stamped by the
@@ -363,10 +375,10 @@ enum OpOutcome {
 /// it enforces the room cap for sharded rooms — a shard cannot count the
 /// room without shared state).
 #[derive(Clone)]
-struct ShardGroup<St> {
+struct ShardGroup<St, Sp> {
     /// One mailbox per shard index (the registry's own senders; the
     /// shards' neighbors hold clones of the same channels).
-    mailboxes: Vec<Mailbox<ShardMsg<St>>>,
+    mailboxes: Vec<Mailbox<ShardMsg<St, Sp>>>,
     /// Maps a joining connection to its home shard (pure; see
     /// [`BuiltRoom::Sharded`]).
     home: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
@@ -381,11 +393,11 @@ struct ShardGroup<St> {
     pending: u64,
 }
 
-struct RoomEntry<St> {
+struct RoomEntry<St, Sp> {
     /// The single room's control mailbox (single rooms only).
     control: Option<Mailbox<RoomControl>>,
     /// The sharded room's state (sharded rooms only).
-    shards: Option<ShardGroup<St>>,
+    shards: Option<ShardGroup<St, Sp>>,
     /// The config the room was created with (the idempotent-create
     /// comparison: a resent create must match it EXACTLY to be a no-op —
     /// see `RegistryMsg::CreateRoom`).
@@ -434,13 +446,13 @@ struct ConnInfo {
 /// The registry actor. `W`/`G` are the room's world / group-key types;
 /// `St` is the sharded room's migration state (unused by single rooms —
 /// see [`BuiltRoom`]).
-pub struct Registry<W, G, St> {
-    factory: RoomFactory<W, G, St>,
+pub struct Registry<W, G, St, Sp> {
+    factory: RoomFactory<W, G, St, Sp>,
     inbox: Inbox<RegistryMsg>,
     /// Sender half of our own mailbox: cloned to dispatcher tasks so they
     /// can report back.
     self_mailbox: Mailbox<RegistryMsg>,
-    rooms: HashMap<RoomId, RoomEntry<St>>,
+    rooms: HashMap<RoomId, RoomEntry<St, Sp>>,
     /// Per-room-id incarnation counter: bumped on every install (first
     /// create AND each panic rebuild). A room id can outlive several
     /// incarnations (destroy → re-create, death → restart); each death
@@ -449,7 +461,7 @@ pub struct Registry<W, G, St> {
     /// cancellation plumbing, just one integer comparison at report time.
     room_gen: HashMap<RoomId, u64>,
     conns: HashMap<ConnectionId, ConnInfo>,
-    conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp<St>>>,
+    conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp<St, Sp>>>,
     ticker: Ticker,
     /// Local control-plane counters (flushed as a sample whenever a table
     /// changes — event-driven; no timer, no new await; see
@@ -519,11 +531,15 @@ pub struct Registry<W, G, St> {
     retired_order: VecDeque<RoomId>,
 }
 
-impl<W, G, St> Registry<W, G, St>
+impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
     W: Send + 'static,
     G: Eq + Hash + Clone + Debug + Send + 'static,
     St: Debug + Send + 'static,
+    // The strip payload's trait bounds (`GameLogic::Strip`) — the
+    // registry never inspects payloads, but both actor shapes it spawns
+    // require them.
+    Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     // The actor's wiring: every mailbox/value the control plane owns
     // arrives here (the composition point; same shape as
@@ -532,7 +548,7 @@ where
     pub fn new(
         inbox: Inbox<RegistryMsg>,
         self_mailbox: Mailbox<RegistryMsg>,
-        factory: RoomFactory<W, G, St>,
+        factory: RoomFactory<W, G, St, Sp>,
         ticker: Ticker,
         // Outbound metrics path (see `crate::metrics`): a bounded channel;
         // the registry sends with the synchronous `try_send` (no await).
@@ -657,7 +673,12 @@ where
     /// it would kill the registry itself, exactly as it does today. The
     /// watch covers the spawned tick-loop tasks, whose panics are contained
     /// by tokio's task boundary.
-    fn install_room(&mut self, config: RoomConfig, built: BuiltRoom<W, G, St>, run_every: u64) {
+    fn install_room(
+        &mut self,
+        config: RoomConfig,
+        built: BuiltRoom<W, G, St, Sp>,
+        run_every: u64,
+    ) {
         let id = config.id;
         // This incarnation's generation (0 = first create for this id,
         // +1 per rebuild/re-create): copied into every death watcher of
@@ -721,15 +742,16 @@ where
                 // reach shard b, indexed by the receiver's index — the
                 // actor indexes it that way; non-neighbor slots are
                 // dummies, closed senders that are never sent to).
-                let mut rxs: Vec<Inbox<ShardMsg<St>>> = Vec::with_capacity(n);
+                let mut rxs: Vec<Inbox<ShardMsg<St, Sp>>> = Vec::with_capacity(n);
                 let mut reg_txs = Vec::with_capacity(n);
-                let (dummy_tx, _dummy_rx) = channel::<ShardMsg<St>>(1);
+                let (dummy_tx, _dummy_rx) = channel::<ShardMsg<St, Sp>>(1);
                 for _ in 0..n {
                     let (tx, rx) = channel(config.control_capacity);
                     reg_txs.push(tx.clone());
                     rxs.push(rx);
                 }
-                let mut txs: Vec<Vec<Mailbox<ShardMsg<St>>>> = Vec::with_capacity(n);
+                let mut txs: Vec<Vec<Mailbox<ShardMsg<St, Sp>>>> =
+                    Vec::with_capacity(n);
                 for a in 0..n {
                     let mut row = Vec::with_capacity(n);
                     for (b, tx_b) in reg_txs.iter().enumerate() {
@@ -1834,12 +1856,11 @@ where
     fn spawn_conn_ops(
         conn: ConnectionId,
         registry: Mailbox<RegistryMsg>,
-    ) -> mpsc::Sender<RoomOp<St>> {
-        let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St>>(16);
+    ) -> mpsc::Sender<RoomOp<St, Sp>> {
+        let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St, Sp>>(16);
         tokio::spawn(async move {
             // (room, entity, handle, the join's epoch, the resume key)
-            let mut in_room: Option<(RoomId, EntityId, RoomHandle<St>, u64, String)> =
-                None;
+            let mut in_room: Option<InRoom<St, Sp>> = None;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
@@ -1964,7 +1985,7 @@ where
         conn: ConnectionId,
         entity: EntityId,
         epoch: u64,
-        handle: RoomHandle<St>,
+        handle: RoomHandle<St, Sp>,
     ) {
         match handle {
             RoomHandle::Single(control) => {
@@ -1992,7 +2013,7 @@ where
         conn: ConnectionId,
         entity: EntityId,
         identity: String,
-        handle: RoomHandle<St>,
+        handle: RoomHandle<St, Sp>,
     ) {
         match handle {
             RoomHandle::Single(control) => {
@@ -2024,7 +2045,7 @@ where
     async fn dispatch_plain_join(
         conn: ConnectionId,
         _room: RoomId,
-        handle: &RoomHandle<St>,
+        handle: &RoomHandle<St, Sp>,
         shard: Option<usize>,
         epoch: u64,
         out: mpsc::Sender<FrameBatch>,
@@ -2071,7 +2092,7 @@ where
     async fn dispatch_resume(
         conn: ConnectionId,
         room: RoomId,
-        handle: &RoomHandle<St>,
+        handle: &RoomHandle<St, Sp>,
         shard: Option<usize>,
         epoch: u64,
         identity: String,

@@ -726,6 +726,7 @@ impl AoiRoom {
 // impl below stays empty (both exclusive methods have defaults).
 impl GameLogic<World> for AoiRoom {
     type GroupKey = Cell;
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -767,7 +768,7 @@ impl GameLogic<World> for AoiRoom {
         ctx: &TickCtx,
         cell: &Cell,
         // Single-room execution: no boundary records exist here.
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         debug_assert_eq!(ctx.tick, self.tick, "update must precede snapshot");

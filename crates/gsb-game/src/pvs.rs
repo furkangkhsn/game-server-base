@@ -266,6 +266,7 @@ impl SectorRoom {
 // room-exclusive hook used (empty `RoomLogic` impl at the bottom).
 impl GameLogic<World> for SectorRoom {
     type GroupKey = Sector;
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -296,7 +297,7 @@ impl GameLogic<World> for SectorRoom {
         ctx: &TickCtx,
         sector: &Sector,
         // Single-room execution: no boundary records exist here.
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let mut content: HashMap<u64, (i32, i32)> = HashMap::new();

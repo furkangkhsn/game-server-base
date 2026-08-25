@@ -69,6 +69,7 @@ struct ShardRpcLogic {
 
 impl GameLogic<()> for ShardRpcLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         OP_SNAP
@@ -84,7 +85,7 @@ impl GameLogic<()> for ShardRpcLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false // no group snapshots: batches carry only private frames
@@ -183,7 +184,7 @@ impl ShardLogic<()> for ShardRpcLogic {
     }
     fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _p: Option<PlayerId>) {}
     fn on_migrate_out(&mut self, _w: &mut (), _wire: u64) {}
-    fn collect_border(&self, _w: &()) -> Vec<gsb_core::shard::BorrowedRecord> {
+    fn collect_border(&self, _w: &()) -> Vec<gsb_core::shard::BorderRecord<()>> {
         Vec::new()
     }
     fn own_wires(&self, _w: &()) -> Vec<u64> {
@@ -193,7 +194,7 @@ impl ShardLogic<()> for ShardRpcLogic {
 
 struct ShardHandle {
     /// The shard's control mailbox (join/shutdown).
-    tx: Mailbox<ShardMsg<()>>,
+    tx: Mailbox<ShardMsg<(), ()>>,
     metrics_rx: mpsc::Receiver<MetricsEvent>,
     handle: tokio::task::JoinHandle<()>,
     resolvers: mpsc::UnboundedReceiver<Resolver>,

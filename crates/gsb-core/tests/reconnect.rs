@@ -45,7 +45,7 @@ use gsb_core::room::{
     Action, Admission, Detach, ExpireTo, GameLogic, ResumeFound, RoomActor, RoomConfig,
     RoomControl, RoomLogic, TickCtx,
 };
-use gsb_core::shard::{BorrowedRecord, Migrating, ShardActor, ShardLogic};
+use gsb_core::shard::{BorderRecord, Migrating, ShardActor, ShardLogic};
 use gsb_core::ticker::{Ticker, TickInfo};
 use prost::Message as _;
 use tokio::sync::{mpsc, oneshot};
@@ -108,6 +108,7 @@ impl ParkLogic {
 
 impl GameLogic<()> for ParkLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         SNAPSHOT_OP
@@ -122,7 +123,7 @@ impl GameLogic<()> for ParkLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &Self::GroupKey,
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let mut ids: Vec<EntityId> = self.player_entity.values().copied().collect();
@@ -926,7 +927,7 @@ fn reg_config(id: RoomId) -> RoomConfig {
 }
 
 fn start_registry(
-    factory: RoomFactory<(), (), ()>,
+    factory: RoomFactory<(), (), (), ()>,
 ) -> (Mailbox<RegistryMsg>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
@@ -1052,7 +1053,7 @@ async fn repeated_reconnects_are_accepted_on_first_attempt() {
 /// A factory whose rooms hold EVERY disconnect (the parked-slot shape the
 /// supersedence test needs; the room-side policy lives here, where §3 put
 /// it).
-fn parking_factory() -> RoomFactory<(), (), ()> {
+fn parking_factory() -> RoomFactory<(), (), (), ()> {
     std::sync::Arc::new(|_id, _cfg| {
         let (ops_tx, _ops) = mpsc::channel(16);
         let mut logic = ParkLogic::new(ops_tx);
@@ -1188,6 +1189,7 @@ struct PanicAfterJoin {
 
 impl GameLogic<()> for PanicAfterJoin {
     type GroupKey = ();
+    type Strip = ();
     fn snapshot_op(&self) -> u16 {
         0x7600
     }
@@ -1200,7 +1202,7 @@ impl GameLogic<()> for PanicAfterJoin {
         _w: &mut (),
         _c: &TickCtx,
         _g: &(),
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         _o: &mut bytes::BytesMut,
     ) -> bool {
         false
@@ -1228,7 +1230,7 @@ impl RoomLogic<()> for PanicAfterJoin {}
 #[tokio::test]
 async fn persistent_room_rebuilds_after_panic_even_without_flag() {
     let build_n = std::sync::atomic::AtomicU64::new(0);
-    let factory: RoomFactory<(), (), ()> = std::sync::Arc::new(move |_id, _cfg| {
+    let factory: RoomFactory<(), (), (), ()> = std::sync::Arc::new(move |_id, _cfg| {
         let n = build_n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         BuiltRoom::Single {
             world: (),
@@ -1306,6 +1308,7 @@ mod shard_test {
 
     impl GameLogic<SWorld> for SLogic {
         type GroupKey = ();
+        type Strip = ();
         fn snapshot_op(&self) -> u16 {
             0x7700
         }
@@ -1318,7 +1321,7 @@ mod shard_test {
             _w: &mut SWorld,
             _c: &TickCtx,
             _g: &(),
-            _borrowed: &[BorrowedRecord],
+            _borrowed: &[BorderRecord<()>],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false
@@ -1408,7 +1411,7 @@ mod shard_test {
         ) {
         }
         fn on_migrate_out(&mut self, _w: &mut SWorld, _wire: u64) {}
-        fn collect_border(&self, _w: &SWorld) -> Vec<BorrowedRecord> {
+        fn collect_border(&self, _w: &SWorld) -> Vec<BorderRecord<()>> {
             Vec::new()
         }
         fn own_wires(&self, w: &SWorld) -> Vec<u64> {
@@ -1419,7 +1422,7 @@ mod shard_test {
 
     pub struct ShardPair {
         pub tick_tx: tokio::sync::broadcast::Sender<TickInfo>,
-        pub shards: [Mailbox<gsb_core::shard::ShardMsg<()>>; 2],
+        pub shards: [Mailbox<gsb_core::shard::ShardMsg<(), ()>>; 2],
         pub handles: Vec<tokio::task::JoinHandle<()>>,
         t0: Instant,
         next_tick: u64,
@@ -1428,9 +1431,9 @@ mod shard_test {
     impl ShardPair {
         pub fn new(hold: bool) -> Self {
             let (tick_tx, _) = tokio::sync::broadcast::channel(64);
-            let (tx0, rx0) = channel::<gsb_core::shard::ShardMsg<()>>(128);
-            let (tx1, rx1) = channel::<gsb_core::shard::ShardMsg<()>>(128);
-            let (dummy, _d) = channel::<gsb_core::shard::ShardMsg<()>>(1);
+            let (tx0, rx0) = channel::<gsb_core::shard::ShardMsg<(), ()>>(128);
+            let (tx1, rx1) = channel::<gsb_core::shard::ShardMsg<(), ()>>(128);
+            let (dummy, _d) = channel::<gsb_core::shard::ShardMsg<(), ()>>(1);
             let mk_cfg = || RoomConfig {
                 id: RoomId(91),
                 tick_hz: 60.0,

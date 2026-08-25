@@ -54,7 +54,7 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
-use gsb_core::shard::{BorrowedRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
+use gsb_core::shard::{BorderRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
 use gsb_ecs::SystemRunner;
 use prost::Message;
 
@@ -62,6 +62,17 @@ use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
 use crate::economy::EconomyService;
 use crate::op;
 use crate::room::spawn_pos;
+
+/// The demo's visibility-strip payload ([`GameLogic::Strip`]): the
+/// entity's TRUNCATED position — exactly the content the core-fixed
+/// boundary record carried before generalization, so this round changes
+/// no wire bytes. A game needing more across the seam extends THIS type
+/// (velocity, facing, hp snapshot); the core never learns about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StripPos {
+    pub x: i32,
+    pub y: i32,
+}
 
 /// The full state of a migrating entity (everything the entity carries in
 /// its components — position, speed, and the pending move target, if any).
@@ -192,7 +203,7 @@ pub struct ShardedRoom {
     /// to the phase-4 migrate-out despawns (an entity that just crossed
     /// out is still exported) — harmless: the receiving shard owns it
     /// now and its own-wires filter drops the stale copy (own wins).
-    border_cache: Vec<BorrowedRecord>,
+    border_cache: Vec<BorderRecord<StripPos>>,
     /// The wire content of the last emitted snapshot (single group,
     /// `GroupKey = ()`): `wire → (x, y)` (truncated).
     last: HashMap<u64, (i32, i32)>,
@@ -322,6 +333,7 @@ impl ShardedRoom {
 // supertrait; the sharding seam stays on `ShardLogic` below.
 impl GameLogic<World> for ShardedRoom {
     type GroupKey = ();
+    type Strip = StripPos;
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -341,7 +353,7 @@ impl GameLogic<World> for ShardedRoom {
         world: &mut World,
         ctx: &TickCtx,
         _group: &Self::GroupKey,
-        borrowed: &[BorrowedRecord],
+        borrowed: &[BorderRecord<StripPos>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         // The shard's own world (wire id, truncated position), collected
@@ -369,8 +381,8 @@ impl GameLogic<World> for ShardedRoom {
             content.insert(*w, (*x, *y));
         }
         for rec in borrowed {
-            if self.in_border_frame(rec.x, rec.y) {
-                content.entry(rec.wire).or_insert((rec.x, rec.y));
+            if self.in_border_frame(rec.state.x, rec.state.y) {
+                content.entry(rec.wire).or_insert((rec.state.x, rec.state.y));
             }
         }
 
@@ -592,10 +604,12 @@ impl GameLogic<World> for ShardedRoom {
                 || (pos.y - y0) < b
                 || (y1 - pos.y) < b;
             if near {
-                self.border_cache.push(BorrowedRecord {
+                self.border_cache.push(BorderRecord {
                     wire: wire.get(),
-                    x: pos.x as i32,
-                    y: pos.y as i32,
+                    state: StripPos {
+                        x: pos.x as i32,
+                        y: pos.y as i32,
+                    },
                 });
             }
         }
@@ -843,7 +857,7 @@ impl ShardLogic<World> for ShardedRoom {
         }
     }
 
-    fn collect_border(&self, _world: &World) -> Vec<BorrowedRecord> {
+    fn collect_border(&self, _world: &World) -> Vec<BorderRecord<StripPos>> {
         // The boundary cache (rebuilt in `update`; see the field docs for
         // the one-tick-stale-with-respect-to-migrate-out note). The set is
         // this shard's entities within `border` of any edge of the region
@@ -1043,7 +1057,7 @@ mod tests {
 
         // Shard 1's snapshot (its own world is empty here) includes the
         // borrowed records that pass its frame filter.
-        let borrowed: Vec<BorrowedRecord> = s0.collect_border(&w0);
+        let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
         let mut out = bytes::BytesMut::new();
         assert!(
             s1.snapshot(&mut w1, &ctx(1), &(), &borrowed, &mut out),
@@ -1094,7 +1108,7 @@ mod tests {
         // borrowed content matters): the seam entity is in its frame, the
         // east entity is 23+ units away (beyond the 6.25 margin) and
         // filtered out.
-        let borrowed: Vec<BorrowedRecord> = border;
+        let borrowed: Vec<BorderRecord<StripPos>> = border;
         let mut out = bytes::BytesMut::new();
         assert!(s0.snapshot(&mut w0, &ctx(1), &(), &borrowed, &mut out));
         let seen = snap_ids(&out);
@@ -1113,10 +1127,9 @@ mod tests {
         let mut s = ShardedRoom::new(0, 4, 50.0);
         let a = place(&mut w, &mut s, ConnectionId(1), -10.0, -10.0);
 
-        let borrowed = vec![BorrowedRecord {
+        let borrowed = vec![BorderRecord {
             wire: 999,
-            x: -1,
-            y: -10,
+            state: StripPos { x: -1, y: -10 },
         }];
         let mut out1 = bytes::BytesMut::new();
         assert!(s.snapshot(&mut w, &ctx(1), &(), &borrowed, &mut out1));
@@ -1132,10 +1145,9 @@ mod tests {
         );
 
         // A borrowed record moving is a content change ⇒ re-emit.
-        let moved = vec![BorrowedRecord {
+        let moved = vec![BorderRecord {
             wire: 999,
-            x: -1,
-            y: -9,
+            state: StripPos { x: -1, y: -9 },
         }];
         let mut out3 = bytes::BytesMut::new();
         assert!(

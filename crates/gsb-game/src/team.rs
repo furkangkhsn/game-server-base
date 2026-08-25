@@ -346,6 +346,7 @@ impl TeamRoom {
 // room-exclusive hook used (empty `RoomLogic` impl at the bottom).
 impl GameLogic<World> for TeamRoom {
     type GroupKey = Team;
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -384,7 +385,7 @@ impl GameLogic<World> for TeamRoom {
         ctx: &TickCtx,
         team: &Team,
         // Single-room execution: no boundary records exist here.
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let t = team.0 as usize;

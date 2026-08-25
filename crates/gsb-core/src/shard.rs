@@ -312,15 +312,27 @@ const TOMBSTONE_TTL_TICKS: u64 = 256;
 /// the other half of the same correctness contract.
 const TOMBSTONE_SWEEP_EVERY_TICKS: u64 = 512;
 
-/// A neighbor shard's boundary entity, as included in this shard's
-/// snapshots (mirrors the wire `EntityRecord`: identity + truncated
-/// position). `Copy` on purpose: the export is cloned per neighbor and the
-/// borrowed set is re-sent whole every tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorrowedRecord {
+/// One neighbor's boundary entity, as included in this shard's snapshots:
+/// the CORE-MANAGED identity envelope (`wire` — minted from the room's
+/// range-partitioned counters, deduplicated by the own-wins filter,
+/// exited by the delta protocol) around a LOGIC-OWNED payload (`state`).
+///
+/// Why the split lives here: the seam's identity vocabulary (wire ids)
+/// is the core's — every protocol mechanism keys off it — but WHAT an
+/// entity must carry across the seam is the game's decision
+/// (`docs/TRAIT-ARCHITECTURE.md`: state AND encoding belong to the
+/// logic). A position-only game keeps the payload minimal; a combat or
+/// prediction game extends it (velocity, facing, hp snapshot) without
+/// touching this crate. Serialization at process-boundary links is the
+/// future work of `docs/DISTRIBUTED.md` §4b — the codec will belong to
+/// the logic because the payload type already does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderRecord<S> {
+    /// The entity's wire identity (core vocabulary — see the module docs,
+    /// "Wire identity").
     pub wire: u64,
-    pub x: i32,
-    pub y: i32,
+    /// The game-defined strip payload, opaque to the core.
+    pub state: S,
 }
 
 /// One neighbor's boundary update (CROSS-SHARD §6.4 pin 1–2): either the
@@ -336,7 +348,7 @@ pub struct BorrowedRecord {
 /// and treats any mismatch as a lost exchange, triggering a resync (pin 3a)
 /// instead of silently diverging.
 #[derive(Debug)]
-pub enum BorderExchange {
+pub enum BorderExchange<S> {
     /// The complete boundary strip: the receiver replaces its whole view
     /// for this neighbor and re-baselines its expected sequence. Accepted
     /// at ANY time — this is what makes a rebuilt shard's recovery
@@ -347,7 +359,7 @@ pub enum BorderExchange {
         seq: u64,
         /// The tick index the set was sampled at (diagnostics).
         tick: u64,
-        entities: Vec<BorrowedRecord>,
+        entities: Vec<BorderRecord<S>>,
     },
     /// The difference against the receiver's last-known state. Applied
     /// atomically ONLY when `seq` matches the expected value exactly; any
@@ -358,7 +370,7 @@ pub enum BorderExchange {
         /// See [`BorderExchange::Full::tick`].
         tick: u64,
         /// New or changed boundary records.
-        upserts: Vec<BorrowedRecord>,
+        upserts: Vec<BorderRecord<S>>,
         /// Wire ids that LEFT the strip since the last accepted exchange.
         exits: Vec<u64>,
     },
@@ -370,26 +382,47 @@ pub enum BorderExchange {
 // implementation can be judged against real numbers; the delta branch
 // reuses this exact accounting for an apples-to-apples comparison.
 
-/// The accounted payload size of one FULL [`BorderExchange`]: a u64 seq
-/// header plus one record per entity (a `BorrowedRecord` is u64 wire
-/// then two i32 coordinates — exactly 16 bytes, its in-memory layout).
-/// The in-process channel moves the vec without serializing, so this is
+/// The accounted payload size of ONE record: a u64 wire id plus the
+/// payload's IN-MEMORY size. In process nothing is serialized, so this is
 /// the wire-format LOWER bound a process-boundary deployment would pay
-/// for the same full-state exchange; both the baseline and any delta
-/// implementation account through this one helper (and
-/// [`delta_payload_len`] for deltas) so the numbers stay comparable.
-fn border_payload_len(records: usize) -> u64 {
-    (std::mem::size_of::<u64>() + records * std::mem::size_of::<BorrowedRecord>()) as u64
+/// (the real codec is future work owned by the logic —
+/// `docs/DISTRIBUTED.md` §4b); accounting through one helper keeps every
+/// sender/receiver number comparable.
+fn border_record_len<S>(r: &BorderRecord<S>) -> u64 {
+    (std::mem::size_of::<u64>() + std::mem::size_of_val(&r.state)) as u64
+}
+
+/// The accounted payload size of one FULL [`BorderExchange`]: a u64 seq
+/// header plus one record per entity. Both the baseline and the delta
+/// implementation account through this helper (and [`delta_payload_len`]
+/// for deltas) so the numbers stay comparable.
+fn border_payload_len<'a, S: 'a>(
+    records: impl Iterator<Item = &'a BorderRecord<S>>,
+) -> u64 {
+    std::mem::size_of::<u64>() as u64 + records.map(border_record_len).sum::<u64>()
 }
 
 /// The accounted payload size of one DELTA [`BorderExchange`]: the same
-/// u64 seq header, 16 bytes per upserted record and 8 bytes per exit
-/// (a bare wire id). Same lower-bound accounting discipline as
+/// u64 seq header, one record per upsert and 8 bytes per exit (a bare
+/// wire id). Same lower-bound accounting discipline as
 /// [`border_payload_len`] — this is what a delta costs on a wire.
-fn delta_payload_len(upserts: usize, exits: usize) -> u64 {
-    (std::mem::size_of::<u64>()
-        + upserts * std::mem::size_of::<BorrowedRecord>()
-        + exits * std::mem::size_of::<u64>()) as u64
+fn delta_payload_len<S>(upserts: &[BorderRecord<S>], exits: usize) -> u64 {
+    std::mem::size_of::<u64>() as u64
+        + upserts.iter().map(border_record_len).sum::<u64>()
+        + (exits as u64) * std::mem::size_of::<u64>() as u64
+}
+
+/// The OWNED exchange payload computed before the send (phase 5): the
+/// ledger commit on send success reads this instead of the queued
+/// message, so no clone of the strip is kept alive for the commit.
+/// Module-level because it is generic over the strip payload (a nested
+/// item cannot see its parent's generics).
+enum Commit<S> {
+    Full,
+    Delta {
+        upserts: Vec<BorderRecord<S>>,
+        exits: Vec<u64>,
+    },
 }
 
 /// How often each neighbor is force-served a FULL exchange even when
@@ -477,12 +510,12 @@ struct BorderStats {
 /// two flags that force the next exchange to be a Full. Keyed by shard
 /// index like the mailbox table; created lazily on first export.
 #[derive(Debug)]
-struct NeighborExport {
+struct NeighborExport<S> {
     /// The strip as THIS neighbor last accepted it (wire → record): the
     /// baseline every delta is diffed against. Advanced only on a
     /// successfully queued exchange — a Full overwrites it with the whole
     /// current strip, a Delta applies its own upserts/exits.
-    ledger: HashMap<u64, BorrowedRecord>,
+    ledger: HashMap<u64, BorderRecord<S>>,
     /// The sequence number stamped on the last exchange QUEUED for this
     /// neighbor (monotonic per sender incarnation; a fresh actor restarts
     /// at 0 and leads with a Full, which is exactly why a rebuilt shard
@@ -500,7 +533,7 @@ struct NeighborExport {
     resync_requested: bool,
 }
 
-impl Default for NeighborExport {
+impl<S> Default for NeighborExport<S> {
     /// A brand-new entry means UNKNOWN receiver state — first contact,
     /// or a freshly rebuilt incarnation meeting a receiver that still
     /// holds the dead incarnation's view. The protocol's answer to
@@ -520,11 +553,11 @@ impl Default for NeighborExport {
 /// persistent borrowed view built incrementally from the neighbor's
 /// exchanges, plus the continuity guard. Replaces the full-era
 /// latest-whole-exchange slot.
-#[derive(Debug, Default)]
-struct NeighborView {
+#[derive(Debug)]
+struct NeighborView<S> {
     /// The borrowed boundary records, keyed by wire id (upserts insert,
     /// exits remove — no ghosts survive an exit).
-    recs: HashMap<u64, BorrowedRecord>,
+    recs: HashMap<u64, BorderRecord<S>>,
     /// The sequence number the NEXT delta from this neighbor must carry.
     /// A mismatch means an exchange went missing: reject, request a
     /// resync, stop trusting the view until a Full re-baselines it.
@@ -535,6 +568,18 @@ struct NeighborView {
     /// rendering possibly-diverged borrowed entities (ghost positions,
     /// despawned ids) would be worse than their brief absence.
     stale_until_full: bool,
+}
+
+impl<S> Default for NeighborView<S> {
+    /// A fresh view trusts nothing yet: empty records, expecting sequence
+    /// 0 (a Full re-baselines), not quarantined.
+    fn default() -> Self {
+        Self {
+            recs: HashMap::new(),
+            expected_seq: 0,
+            stale_until_full: false,
+        }
+    }
 }
 
 /// A player's channel halves, moved with a migrating player entity
@@ -596,9 +641,10 @@ pub type ResumeReply = Result<Option<(EntityId, Mailbox<Action>)>, CoreError>;
 /// channel per shard: control (join/leave/shutdown) and the shard
 /// protocol (migrate/border) share it — all are drained with `try_recv`
 /// at the tick boundary, and the exchange traffic is small (a few
-/// messages per neighbor per tick).
+/// messages per neighbor per tick). `S` is the migration state and `B`
+/// the boundary-strip payload (both game-owned; see [`ShardLogic`]).
 #[derive(Debug)]
-pub enum ShardMsg<S> {
+pub enum ShardMsg<S, B> {
     /// A player joins this shard (the registry routed it here through
     /// `home_shard`; `epoch` is the join's epoch — see module docs).
     Join {
@@ -654,7 +700,10 @@ pub enum ShardMsg<S> {
     /// A neighbor's boundary update (§6.4): a Full replaces this shard's
     /// view of that neighbor wholesale; a Delta applies its upserts/exits
     /// when its sequence number matches the expected one exactly.
-    Border { from: usize, exchange: BorderExchange },
+    Border {
+        from: usize,
+        exchange: BorderExchange<B>,
+    },
     /// A neighbor rejected our delta stream (sequence gap or a view it
     /// had marked stale): serve that neighbor a FULL on the next phase 5.
     /// Deliberately a tiny standalone message on the same bounded mailbox
@@ -734,12 +783,23 @@ pub trait ShardLogic<W>: GameLogic<W> {
     /// despawn it and clean its bookkeeping.
     fn on_migrate_out(&mut self, world: &mut W, wire: u64);
 
-    /// This shard's boundary entities (full wire records) for the phase-5
-    /// export to the neighbors. The actor diffs this set against its
-    /// per-neighbor ledgers and ships only deltas (upserts + exits) —
-    /// except where a Full is due (first contact, resync, periodic
-    /// cadence, post-drop healing), when the same set ships whole.
-    fn collect_border(&self, world: &W) -> Vec<BorrowedRecord>;
+    /// This shard's boundary entities for the phase-5 export to the
+    /// neighbors. Each record pairs the CORE-managed wire identity with a
+    /// LOGIC-owned payload ([`GameLogic::Strip`] — the visibility-strip
+    /// content is the game's decision: position-only games keep it
+    /// minimal, combat/prediction games extend it). The actor diffs this
+    /// set against its per-neighbor ledgers and ships only deltas
+    /// (upserts + exits) — except where a Full is due (first contact,
+    /// resync, periodic cadence, post-drop healing), when the same set
+    /// ships whole.
+    ///
+    /// Change detection is WHOLESALE [`PartialEq`] on the payload: any
+    /// field difference produces an upsert. A game that wants looser
+    /// equivalence (ignore-jitter) implements it in ITS type — quantize
+    /// or round inside the `PartialEq`, or report an already-quantized
+    /// payload from this method — so the core's diff stays one comparison
+    /// and the equivalence policy lives where the payload lives.
+    fn collect_border(&self, world: &W) -> Vec<BorderRecord<Self::Strip>>;
 
     /// The wire ids of this shard's OWN entities (the snapshot's own
     /// records). Used to keep a migrating entity from appearing twice in
@@ -766,7 +826,7 @@ pub trait ShardLogic<W>: GameLogic<W> {
 /// the protocol to reason about, not a refactor. The seam does not
 /// demultiplex — the CONTROL drain plus `handle_msg` stay the single
 /// inbound authority.
-pub(crate) type NeighborMsg<S> = ShardMsg<S>;
+pub(crate) type NeighborMsg<S, B> = ShardMsg<S, B>;
 
 /// Why a best-effort [`ShardLink::send`] refused a message. The refused
 /// value travels back INSIDE the error so a failed send loses nothing:
@@ -806,17 +866,18 @@ impl<M> LinkFull<M> {
 /// healing rules live in the message semantics (§4), not in the link.
 /// Object-safe on purpose: the future Ipc/Net links will be separate
 /// types held as trait objects beside today's.
-pub(crate) trait ShardLink<S>: Send {
+pub(crate) trait ShardLink<S, B>: Send {
     /// En-queue one message for the peer, best-effort: a full or dead
     /// link refuses and hands the message BACK ([`LinkFull`]) — the
     /// caller's healing rules decide what that loss means. Never blocks,
     /// never awaits.
-    fn send(&mut self, msg: NeighborMsg<S>) -> Result<(), LinkFull<NeighborMsg<S>>>;
+    fn send(&mut self, msg: NeighborMsg<S, B>)
+    -> Result<(), LinkFull<NeighborMsg<S, B>>>;
 
     /// Take every queued inbound message, in send order (FIFO). The
     /// CONTROL phase drains through here; an empty queue yields an empty
     /// vec. Never blocks.
-    fn drain(&mut self) -> Vec<NeighborMsg<S>>;
+    fn drain(&mut self) -> Vec<NeighborMsg<S, B>>;
 }
 
 /// The in-process [`ShardLink`] (`docs/DISTRIBUTED.md` §3, "today"
@@ -829,19 +890,19 @@ pub(crate) trait ShardLink<S>: Send {
 /// receive end it delivers nothing. Both are total functions instead of
 /// panics so the same type serves every wiring (per-neighbor outbound
 /// slots, the actor's own inbound inbox, and the paired form tests use).
-pub(crate) struct InProcLink<S> {
+pub(crate) struct InProcLink<S, B> {
     /// The peer's mailbox (a clone of its shared per-shard inbox sender).
-    tx: Option<Mailbox<ShardMsg<S>>>,
+    tx: Option<Mailbox<ShardMsg<S, B>>>,
     /// This side's receive half. `None` on today's per-neighbor outbound
     /// slots: their inbound traffic lands in the shard's OWN shared
     /// inbox, whose link lives separately on the actor.
-    rx: Option<Inbox<ShardMsg<S>>>,
+    rx: Option<Inbox<ShardMsg<S, B>>>,
 }
 
-impl<S> InProcLink<S> {
+impl<S, B> InProcLink<S, B> {
     /// Wrap one outbound per-neighbor mailbox: the actor sends into the
     /// neighbor's shared inbox and never receives here.
-    fn outbound(tx: Mailbox<ShardMsg<S>>) -> Self {
+    fn outbound(tx: Mailbox<ShardMsg<S, B>>) -> Self {
         Self {
             tx: Some(tx),
             rx: None,
@@ -851,7 +912,7 @@ impl<S> InProcLink<S> {
     /// Wrap the shard's own inbound inbox — the CONTROL drain's source,
     /// carrying registry control AND neighbor protocol messages on one
     /// bounded FIFO (registry.rs pass 1).
-    fn inbound(rx: Inbox<ShardMsg<S>>) -> Self {
+    fn inbound(rx: Inbox<ShardMsg<S, B>>) -> Self {
         Self {
             tx: None,
             rx: Some(rx),
@@ -859,8 +920,11 @@ impl<S> InProcLink<S> {
     }
 }
 
-impl<S: Send> ShardLink<S> for InProcLink<S> {
-    fn send(&mut self, msg: NeighborMsg<S>) -> Result<(), LinkFull<NeighborMsg<S>>> {
+impl<S: Send, B: Send> ShardLink<S, B> for InProcLink<S, B> {
+    fn send(
+        &mut self,
+        msg: NeighborMsg<S, B>,
+    ) -> Result<(), LinkFull<NeighborMsg<S, B>>> {
         match &self.tx {
             Some(tx) => tx.try_send(msg).map_err(|e| match e {
                 mpsc::error::TrySendError::Full(msg) => LinkFull::Full { msg },
@@ -872,7 +936,7 @@ impl<S: Send> ShardLink<S> for InProcLink<S> {
         }
     }
 
-    fn drain(&mut self) -> Vec<NeighborMsg<S>> {
+    fn drain(&mut self) -> Vec<NeighborMsg<S, B>> {
         let mut out = Vec::new();
         if let Some(rx) = &mut self.rx {
             while let Ok(m) = rx.try_recv() {
@@ -885,24 +949,25 @@ impl<S: Send> ShardLink<S> for InProcLink<S> {
 
 /// The shard actor. Owns one shard's world, its player table (the
 /// shard's share of the room's members), and its group table — the
-/// same ownership discipline as the room actor (`RoomActor<W, G>`), plus
-/// the shard protocol state (neighbor mailboxes, the delta protocol's
-/// per-neighbor sender ledgers and receiver views, the pending
-/// migrate-out marks, the deferred migrations, the conn-epoch tables).
-/// `G` is the snapshot group key, `St`
-/// the migration state (see [`ShardLogic`]).
-pub struct ShardActor<W, G, St> {
+/// same ownership discipline as the room actor (`RoomActor<W, G, Sp>`),
+/// plus the shard protocol state (neighbor mailboxes, the delta
+/// protocol's per-neighbor sender ledgers and receiver views, the
+/// pending migrate-out marks, the deferred migrations, the conn-epoch
+/// tables). `G` is the snapshot group key, `St` the migration state and
+/// `Sp` the boundary-strip payload (all three game-owned; see
+/// [`ShardLogic`] and [`GameLogic::Strip`]).
+pub struct ShardActor<W, G, St, Sp> {
     config: RoomConfig,
     index: usize,
     world: W,
-    logic: Box<dyn ShardLogic<W, GroupKey = G, State = St>>,
+    logic: Box<dyn ShardLogic<W, GroupKey = G, State = St, Strip = Sp>>,
     tick_rx: broadcast::Receiver<TickInfo>,
     /// The shard's own inbound link over the shared per-shard inbox
     /// (registry control AND neighbor protocol messages ride ONE bounded
     /// FIFO — registry.rs pass 1). Held as a [`ShardLink`] so the CONTROL
     /// drain crosses the seam: a future process-boundary deployment swaps
     /// the transport without touching the tick body.
-    inbox: Box<dyn ShardLink<St>>,
+    inbox: Box<dyn ShardLink<St, Sp>>,
     /// This shard's members, keyed by STABLE player identity (Faz 2 —
     /// same shape as the room actor; a resume or migration never re-keys
     /// this table).
@@ -957,23 +1022,23 @@ pub struct ShardActor<W, G, St> {
     /// passed in, moved not cloned, so queue capacity, FIFO order and
     /// drop timing are the channel's, unchanged. Non-neighbor slots keep
     /// their dummy senders (wrapped, never sent to).
-    links: Vec<Box<dyn ShardLink<St>>>,
+    links: Vec<Box<dyn ShardLink<St, Sp>>>,
     /// The borrowed boundary view per neighbor (the RECEIVER side of the
     /// delta protocol): persistent records built incrementally from
     /// Fulls/Deltas, with the expected-sequence guard per neighbor.
-    border: HashMap<usize, NeighborView>,
+    border: HashMap<usize, NeighborView<Sp>>,
     /// The SENDER side of the delta protocol: what each neighbor last
     /// accepted from us (ledger + seq + the force-Full flags). Created
     /// lazily on first export; a fresh actor starts empty, so a rebuilt
     /// shard's first exchange is always a Full.
-    export: HashMap<usize, NeighborExport>,
+    export: HashMap<usize, NeighborExport<Sp>>,
     /// Entities marked out by a successful `Migrate` send: (wire, the tick
     /// index at which the shard despawns them).
     pending_out: Vec<(u64, u64)>,
     /// Migrations that arrived early (install gate not open — see
     /// `handle_msg`): re-offered at the next tick's CONTROL, in send
     /// order.
-    deferred: VecDeque<ShardMsg<St>>,
+    deferred: VecDeque<ShardMsg<St, Sp>>,
     run_every: u64,
     last_at: Option<Instant>,
     steps: u64,
@@ -1022,11 +1087,15 @@ pub struct ShardActor<W, G, St> {
     result_sink: Option<Mailbox<crate::registry::MatchResult>>,
 }
 
-impl<W, G, St> ShardActor<W, G, St>
+impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where
     W: Send + 'static,
     G: Eq + Hash + Clone + Debug + Send + 'static,
     St: Debug + Send + 'static,
+    // The strip rides every exchange and view; the bounds mirror what
+    // the delta protocol does with it (diff via PartialEq, clone into
+    // each neighbor's message, store in the actor's maps).
+    Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     /// Build a shard actor. `neighbors` is indexed by shard index (the
     /// unused slots may be any closed/unused mailbox — only the
@@ -1040,10 +1109,10 @@ where
         config: RoomConfig,
         index: usize,
         world: W,
-        logic: Box<dyn ShardLogic<W, GroupKey = G, State = St>>,
+        logic: Box<dyn ShardLogic<W, GroupKey = G, State = St, Strip = Sp>>,
         tick_rx: broadcast::Receiver<TickInfo>,
-        shard_rx: Inbox<ShardMsg<St>>,
-        neighbors: Vec<Mailbox<ShardMsg<St>>>,
+        shard_rx: Inbox<ShardMsg<St, Sp>>,
+        neighbors: Vec<Mailbox<ShardMsg<St, Sp>>>,
         run_every: u64,
         metrics: mpsc::Sender<MetricsEvent>,
         result_sink: Option<Mailbox<crate::registry::MatchResult>>,
@@ -1093,7 +1162,7 @@ where
             links: neighbors
                 .into_iter()
                 .map(InProcLink::outbound)
-                .map(|l| Box::new(l) as Box<dyn ShardLink<St>>)
+                .map(|l| Box::new(l) as Box<dyn ShardLink<St, Sp>>)
                 .collect(),
             border: HashMap::new(),
             export: HashMap::new(),
@@ -1872,8 +1941,8 @@ where
             // the ledger update both want membership tests, and duplicate
             // wires (a game bug if any) collapse deterministically to the
             // last record instead of corrupting the ledger bookkeeping.
-            let current: HashMap<u64, BorrowedRecord> =
-                records.iter().copied().map(|r| (r.wire, r)).collect();
+            let current: HashMap<u64, BorderRecord<Sp>> =
+                records.into_iter().map(|r| (r.wire, r)).collect();
             // Pin 3c: the low-frequency periodic Full — one comparison per
             // neighbor, taken once per tick.
             let periodic_full = t.tick.is_multiple_of(BORDER_FULL_EVERY_TICKS);
@@ -1904,21 +1973,14 @@ where
                 // back: the exchange carries a clone of exactly these
                 // upserts/exits (one small-allocation copy per send — the
                 // honest price counted in phase 5).
-                enum Commit {
-                    Full,
-                    Delta {
-                        upserts: Vec<BorrowedRecord>,
-                        exits: Vec<u64>,
-                    },
-                }
                 let (exchange, payload, recs_shipped, commit) = if force_full {
                     (
                         BorderExchange::Full {
                             seq,
                             tick,
-                            entities: records.clone(),
+                            entities: current.values().cloned().collect(),
                         },
-                        border_payload_len(current.len()),
+                        border_payload_len(current.values()),
                         current.len(),
                         Commit::Full,
                     )
@@ -1930,8 +1992,13 @@ where
                     let mut upserts = Vec::new();
                     for r in current.values() {
                         match st.ledger.get(&r.wire) {
-                            Some(prev) if prev.x == r.x && prev.y == r.y => {}
-                            _ => upserts.push(*r),
+                            // Whole-payload equality IS the change test:
+                            // any field difference ships an upsert. A looser
+                            // equivalence (ignore-jitter) is the payload
+                            // owner's business — implemented in its
+                            // `PartialEq` or by quantizing at collection.
+                            Some(prev) if *prev == *r => {}
+                            _ => upserts.push(r.clone()),
                         }
                     }
                     let mut exits: Vec<u64> = st
@@ -1958,7 +2025,7 @@ where
                             upserts: upserts.clone(),
                             exits: exits.clone(),
                         },
-                        delta_payload_len(upserts.len(), exits.len()),
+                        delta_payload_len(&upserts, exits.len()),
                         upserts.len() + exits.len(),
                         Commit::Delta { upserts, exits },
                     )
@@ -1996,7 +2063,7 @@ where
                         }
                         shipped_records += recs_shipped as u64;
                         shipped_bytes += payload;
-                        equiv_full_bytes += border_payload_len(current.len());
+                        equiv_full_bytes += border_payload_len(current.values());
                         records_max = records_max.max(recs_shipped);
                     }
                     Err(_) => {
@@ -2048,7 +2115,7 @@ where
 
     /// Handle one shard-channel message (phase 0). Returns `false` when
     /// the actor should stop.
-    fn handle_msg(&mut self, m: ShardMsg<St>, ctx: &TickCtx) -> bool {
+    fn handle_msg(&mut self, m: ShardMsg<St, Sp>, ctx: &TickCtx) -> bool {
         match m {
             ShardMsg::Join {
                 conn,
@@ -2395,13 +2462,14 @@ where
                 match exchange {
                     BorderExchange::Full { seq, entities, .. } => {
                         let recs = entities.len();
+                        let bytes = border_payload_len(entities.iter());
                         let view = self.border.entry(from).or_default();
                         view.recs = entities.into_iter().map(|r| (r.wire, r)).collect();
                         view.expected_seq = seq.wrapping_add(1);
                         view.stale_until_full = false;
                         s.imports += 1;
                         s.import_records += recs as u64;
-                        s.import_bytes += border_payload_len(recs);
+                        s.import_bytes += bytes;
                     }
                     BorderExchange::Delta {
                         seq,
@@ -2443,6 +2511,7 @@ where
                         } else {
                             let ups = upserts.len();
                             let exs = exits.len();
+                            let bytes = delta_payload_len(&upserts, exs);
                             for r in upserts {
                                 view.recs.insert(r.wire, r);
                             }
@@ -2453,7 +2522,7 @@ where
                             view.stale_until_full = false;
                             s.imports += 1;
                             s.import_records += (ups + exs) as u64;
-                            s.import_bytes += delta_payload_len(ups, exs);
+                            s.import_bytes += bytes;
                         }
                     }
                 }
@@ -2676,10 +2745,10 @@ where
         // hole) is EXCLUDED: rendering possibly-diverged borrowed entities
         // would be worse than their brief absence; the healing Full
         // restores them within a tick or two.
-        let mut borrowed: Vec<BorrowedRecord> = Vec::new();
+        let mut borrowed: Vec<BorderRecord<Sp>> = Vec::new();
         for recs in self.border.values() {
             if !recs.stale_until_full {
-                borrowed.extend(recs.recs.values().copied());
+                borrowed.extend(recs.recs.values().cloned());
             }
         }
         borrowed.sort_unstable_by_key(|r| r.wire);
@@ -2946,6 +3015,25 @@ mod tests {
 
     use crate::channel::channel;
 
+    /// The strip payload these protocol tests use: exactly what the old
+    /// core-fixed record carried (identity + truncated position), so
+    /// every assertion keeps its pre-generalization meaning while the
+    /// envelope becomes the generic [`BorderRecord`] around a
+    /// game-owned payload.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TStrip {
+        x: i32,
+        y: i32,
+    }
+
+    /// Shorthand for building one expected/actual border record.
+    fn rec(wire: u64, x: i32, y: i32) -> BorderRecord<TStrip> {
+        BorderRecord {
+            wire,
+            state: TStrip { x, y },
+        }
+    }
+
     /// The test world: wire → (x, y, mode); `mode` ∈ {-1, 0, +1} = the
     /// per-tick x step. The map is [-10, 10): shard 0 owns x < 0, shard 1
     /// owns x >= 0 (one boundary at x = 0 — the smallest topology).
@@ -3003,6 +3091,7 @@ mod tests {
     // stays on `ShardLogic`.
     impl GameLogic<TWorld> for TLogic {
         type GroupKey = ();
+        type Strip = TStrip;
 
         fn snapshot_op(&self) -> u16 {
             0x7100
@@ -3016,7 +3105,7 @@ mod tests {
             w: &mut TWorld,
             _ctx: &TickCtx,
             _g: &Self::GroupKey,
-            borrowed: &[BorrowedRecord],
+            borrowed: &[BorderRecord<TStrip>],
             out: &mut bytes::BytesMut,
         ) -> bool {
             // The test's wire format: own entities + the borrowed boundary
@@ -3029,7 +3118,7 @@ mod tests {
                 .map(|(wire, (x, y, _))| (*wire, *x as i32, *y as i32))
                 .collect();
             for b in borrowed {
-                recs.push((b.wire, b.x, b.y));
+                recs.push((b.wire, b.state.x, b.state.y));
             }
             recs.sort_unstable_by_key(|r| r.0);
             for (wire, x, y) in &recs {
@@ -3165,16 +3254,12 @@ mod tests {
             }
             w.ents.remove(&wire);
         }
-        fn collect_border(&self, w: &TWorld) -> Vec<BorrowedRecord> {
+        fn collect_border(&self, w: &TWorld) -> Vec<BorderRecord<TStrip>> {
             // Border = entities within 1 unit of the region edge (x = 0).
             w.ents
                 .iter()
                 .filter(|(_, (x, _, _))| x.abs() <= 1.0)
-                .map(|(wire, (x, y, _))| BorrowedRecord {
-                    wire: *wire,
-                    x: *x as i32,
-                    y: *y as i32,
-                })
+                .map(|(wire, (x, y, _))| rec(*wire, *x as i32, *y as i32))
                 .collect()
         }
         fn own_wires(&self, w: &TWorld) -> Vec<u64> {
@@ -3187,7 +3272,7 @@ mod tests {
     /// reports) through the obs channel.
     struct Harness {
         tick_tx: broadcast::Sender<TickInfo>,
-        shard_txs: [Mailbox<ShardMsg<TState>>; 2],
+        shard_txs: [Mailbox<ShardMsg<TState, TStrip>>; 2],
         obs: mpsc::Receiver<Obs>,
         ops: mpsc::Receiver<(PlayerId, u16)>,
         #[allow(dead_code)]
@@ -3207,11 +3292,11 @@ mod tests {
     impl Harness {
         fn new() -> Self {
             let (tick_tx, _) = broadcast::channel(64);
-            let (tx0, rx0) = channel::<ShardMsg<TState>>(128);
-            let (tx1, rx1) = channel::<ShardMsg<TState>>(128);
+            let (tx0, rx0) = channel::<ShardMsg<TState, TStrip>>(128);
+            let (tx1, rx1) = channel::<ShardMsg<TState, TStrip>>(128);
             let (obs_tx, obs_rx) = mpsc::channel(4096);
             let (ops_tx, ops_rx) = mpsc::channel(4096);
-            let (dummy_tx, _dummy_rx) = channel::<ShardMsg<TState>>(1);
+            let (dummy_tx, _dummy_rx) = channel::<ShardMsg<TState, TStrip>>(1);
             let cfg = RoomConfig {
                 id: RoomId(7),
                 keepalive_hz: 0.0, // silence the keep-alive re-sends
@@ -3407,12 +3492,12 @@ mod tests {
     // -----------------------------------------------------------------
 
     /// An unspawned shard actor for the table tests above/below.
-    fn bare_shard(index: usize) -> ShardActor<TWorld, (), TState> {
+    fn bare_shard(index: usize) -> ShardActor<TWorld, (), TState, TStrip> {
         let (_tick_tx, tick_rx) = broadcast::channel(64);
-        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
+        let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
         // Two dummy neighbor slots (TLogic::neighbors targets 0 and 1).
-        let (n0, _n0_rx) = channel::<ShardMsg<TState>>(8);
-        let (n1, _n1_rx) = channel::<ShardMsg<TState>>(8);
+        let (n0, _n0_rx) = channel::<ShardMsg<TState, TStrip>>(8);
+        let (n1, _n1_rx) = channel::<ShardMsg<TState, TStrip>>(8);
         let (obs, _obs_rx) = mpsc::channel(16);
         let (ops, _ops_rx) = mpsc::channel(16);
         ShardActor::new(
@@ -3459,7 +3544,7 @@ mod tests {
 
     /// Drive one Join through `handle_msg`; returns the minted entity.
     async fn join_direct(
-        a: &mut ShardActor<TWorld, (), TState>,
+        a: &mut ShardActor<TWorld, (), TState, TStrip>,
         conn: ConnectionId,
         epoch: u64,
         tick: u64,
@@ -3490,7 +3575,7 @@ mod tests {
         epoch: u64,
         entity: EntityId,
         at_tick: u64,
-    ) -> ShardMsg<TState> {
+    ) -> ShardMsg<TState, TStrip> {
         let (out, _out_rx) = mpsc::channel::<FrameBatch>(8);
         let (_act_tx, act_rx) = mpsc::channel::<Action>(8);
         ShardMsg::Migrate {
@@ -4059,6 +4144,7 @@ mod tests {
 
     impl GameLogic<TWorld> for KaLogic {
         type GroupKey = ();
+        type Strip = TStrip;
 
         fn snapshot_op(&self) -> u16 {
             0x7180
@@ -4073,7 +4159,7 @@ mod tests {
             w: &mut TWorld,
             _ctx: &TickCtx,
             _g: &Self::GroupKey,
-            _borrowed: &[BorrowedRecord],
+            _borrowed: &[BorderRecord<TStrip>],
             out: &mut bytes::BytesMut,
         ) -> bool {
             if !self.dirty {
@@ -4149,7 +4235,7 @@ mod tests {
         ) {
         }
         fn on_migrate_out(&mut self, _w: &mut TWorld, _wire: u64) {}
-        fn collect_border(&self, _w: &TWorld) -> Vec<BorrowedRecord> {
+        fn collect_border(&self, _w: &TWorld) -> Vec<BorderRecord<TStrip>> {
             Vec::new()
         }
         fn own_wires(&self, w: &TWorld) -> Vec<u64> {
@@ -4166,9 +4252,9 @@ mod tests {
     #[tokio::test]
     async fn sharded_keepalive_resends_cached_snapshot_to_silent_group() {
         let (_tick_tx, tick_rx) = broadcast::channel(64);
-        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
-        let (n0, _n0_rx) = channel::<ShardMsg<TState>>(8);
-        let (n1, _n1_rx) = channel::<ShardMsg<TState>>(8);
+        let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
+        let (n0, _n0_rx) = channel::<ShardMsg<TState, TStrip>>(8);
+        let (n1, _n1_rx) = channel::<ShardMsg<TState, TStrip>>(8);
         let mut a = ShardActor::new(
             RoomConfig {
                 id: RoomId(11),
@@ -4276,7 +4362,7 @@ mod tests {
     /// again; a link whose receive end is gone reports `Closed`.
     #[test]
     fn inproc_link_preserves_fifo_and_drop_semantics() {
-        let (tx, rx) = channel::<ShardMsg<TState>>(2);
+        let (tx, rx) = channel::<ShardMsg<TState, TStrip>>(2);
         let mut link = InProcLink {
             tx: Some(tx),
             rx: Some(rx),
@@ -4319,7 +4405,7 @@ mod tests {
         // Closed: a link whose receive end is gone refuses with `Closed`
         // (not Full), still handing the message back; a send-only link's
         // drain is simply empty.
-        let (tx, rx) = channel::<ShardMsg<TState>>(1);
+        let (tx, rx) = channel::<ShardMsg<TState, TStrip>>(1);
         drop(rx);
         let mut dead = InProcLink {
             tx: Some(tx),
@@ -4351,9 +4437,9 @@ mod tests {
         }
     }
 
-    fn rig_actor(index: usize, neighbors: Vec<Mailbox<ShardMsg<TState>>>) -> ShardActor<TWorld, (), TState> {
+    fn rig_actor(index: usize, neighbors: Vec<Mailbox<ShardMsg<TState, TStrip>>>) -> ShardActor<TWorld, (), TState, TStrip> {
         let (_tick_tx, tick_rx) = broadcast::channel(64);
-        let (_self_tx, rx) = channel::<ShardMsg<TState>>(16);
+        let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
         ShardActor::new(
             RoomConfig {
                 id: RoomId(13),
@@ -4378,14 +4464,14 @@ mod tests {
     /// the strip is `|x| <= 1`, and x stays strictly inside the owner's
     /// region so no migration path ever fires under these tests.
     struct BorderRig {
-        s0: ShardActor<TWorld, (), TState>,
-        s1: ShardActor<TWorld, (), TState>,
+        s0: ShardActor<TWorld, (), TState, TStrip>,
+        s1: ShardActor<TWorld, (), TState, TStrip>,
         /// What s0 exports to s1 lands here (test-held receiving end).
-        tx01: Mailbox<ShardMsg<TState>>,
-        rx01: Inbox<ShardMsg<TState>>,
+        tx01: Mailbox<ShardMsg<TState, TStrip>>,
+        rx01: Inbox<ShardMsg<TState, TStrip>>,
         /// What s1 sends back (resync requests) lands here.
-        _tx10: Mailbox<ShardMsg<TState>>,
-        rx10: Inbox<ShardMsg<TState>>,
+        _tx10: Mailbox<ShardMsg<TState, TStrip>>,
+        rx10: Inbox<ShardMsg<TState, TStrip>>,
     }
 
     impl BorderRig {
@@ -4394,8 +4480,8 @@ mod tests {
             let (tx10, rx10) = mpsc::channel(16);
             // Slot fillers for the unused self-slots (never targeted:
             // TLogic::neighbors is [1] for index 0 and [0] for index 1).
-            let (d0, _d0rx) = channel::<ShardMsg<TState>>(1);
-            let (d1, _d1rx) = channel::<ShardMsg<TState>>(1);
+            let (d0, _d0rx) = channel::<ShardMsg<TState, TStrip>>(1);
+            let (d1, _d1rx) = channel::<ShardMsg<TState, TStrip>>(1);
             let s0 = rig_actor(0, vec![d0, tx01.clone()]);
             let s1 = rig_actor(1, vec![tx10.clone(), d1]);
             BorderRig {
@@ -4417,7 +4503,7 @@ mod tests {
         /// Take everything shard 0 exported (WITHOUT delivering): the
         /// test inspects each message and decides deliver vs drop — the
         /// exact seam a lost exchange needs.
-        fn drain01(&mut self) -> Vec<ShardMsg<TState>> {
+        fn drain01(&mut self) -> Vec<ShardMsg<TState, TStrip>> {
             let mut out = Vec::new();
             while let Ok(m) = self.rx01.try_recv() {
                 out.push(m);
@@ -4426,14 +4512,14 @@ mod tests {
         }
 
         /// Feed messages into shard 1's CONTROL handler.
-        fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState>>) {
+        fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState, TStrip>>) {
             for m in msgs {
                 assert!(self.s1.handle_msg(m, &tctx(999)), "s1 keeps running");
             }
         }
 
         /// Feed messages into shard 0's CONTROL handler.
-        fn deliver_to_s0(&mut self, msgs: Vec<ShardMsg<TState>>) {
+        fn deliver_to_s0(&mut self, msgs: Vec<ShardMsg<TState, TStrip>>) {
             for m in msgs {
                 assert!(self.s0.handle_msg(m, &tctx(999)), "s0 keeps running");
             }
@@ -4441,13 +4527,14 @@ mod tests {
     }
 
     /// Seed a boundary entity straight into a shard's world.
-    fn put(a: &mut ShardActor<TWorld, (), TState>, wire: u64, x: f32, y: f32) {
+    fn put(a: &mut ShardActor<TWorld, (), TState, TStrip>, wire: u64, x: f32, y: f32) {
         a.world.ents.insert(wire, (x, y, 0));
     }
 
     /// Assert the batch is exactly one Border carrying a Full; return its
-    /// (seq, entities).
-    fn expect_full(msgs: &[ShardMsg<TState>]) -> (u64, &[BorrowedRecord]) {
+    /// (seq, entities). Generic over the strip payload so every rig
+    /// (positional and rich) reuses one helper.
+    fn expect_full<S: Debug>(msgs: &[ShardMsg<TState, S>]) -> (u64, &[BorderRecord<S>]) {
         assert_eq!(msgs.len(), 1, "exactly one export message: {msgs:?}");
         match &msgs[0] {
             ShardMsg::Border {
@@ -4459,10 +4546,10 @@ mod tests {
     }
 
     /// Assert the batch is exactly one Border carrying a Delta; return
-    /// its (seq, upserts, exits).
-    fn expect_delta(
-        msgs: &[ShardMsg<TState>],
-    ) -> (u64, &[BorrowedRecord], &[u64]) {
+    /// its (seq, upserts, exits). Generic over the strip payload.
+    fn expect_delta<S: Debug>(
+        msgs: &[ShardMsg<TState, S>],
+    ) -> (u64, &[BorderRecord<S>], &[u64]) {
         assert_eq!(msgs.len(), 1, "exactly one export message: {msgs:?}");
         match &msgs[0] {
             ShardMsg::Border {
@@ -4494,7 +4581,7 @@ mod tests {
         let (seq, entities) = expect_full(&msgs);
         assert_eq!(
             entities,
-            [BorrowedRecord { wire: 100, x: -1, y: 0 }],
+            [rec(100, -1, 0)],
             "bootstrap Full carries the strip"
         );
         r.deliver_to_s1(msgs);
@@ -4510,17 +4597,17 @@ mod tests {
         r.step0(2);
         let msgs = r.drain01();
         let (_seq2, upserts, exits) = expect_delta(&msgs);
-        assert_eq!(upserts, [BorrowedRecord { wire: 100, x: -1, y: 1 }]);
+        assert_eq!(upserts, [rec(100, -1, 1)]);
         assert!(exits.is_empty(), "a move is not an exit");
         r.deliver_to_s1(msgs);
-        assert_eq!(r.s1.border[&0].recs[&100].y, 1, "position updated");
+        assert_eq!(r.s1.border[&0].recs[&100].state.y, 1, "position updated");
 
         // A second entity enters: only IT is new.
         put(&mut r.s0, 101, -1.0, 5.0);
         r.step0(3);
         let msgs = r.drain01();
         let (_seq3, upserts, _exits3) = expect_delta(&msgs);
-        assert_eq!(upserts, [BorrowedRecord { wire: 101, x: -1, y: 5 }]);
+        assert_eq!(upserts, [rec(101, -1, 5)]);
         r.deliver_to_s1(msgs);
         assert_eq!(r.s1.border[&0].recs.len(), 2);
 
@@ -4576,7 +4663,7 @@ mod tests {
             "the mismatch quarantines the view"
         );
         assert_eq!(
-            r.s1.border[&0].recs[&100].y, 0,
+            r.s1.border[&0].recs[&100].state.y, 0,
             "nothing after the last GOOD exchange was applied (no \
              half-applied state)"
         );
@@ -4608,12 +4695,12 @@ mod tests {
         let (_, entities) = expect_full(&msgs);
         assert_eq!(
             entities,
-            [BorrowedRecord { wire: 100, x: -1, y: 2 }],
+            [rec(100, -1, 2)],
             "the healing Full re-baselines everything"
         );
         r.deliver_to_s1(msgs);
         assert!(!r.s1.border[&0].stale_until_full, "quarantine lifted");
-        assert_eq!(r.s1.border[&0].recs[&100].y, 2, "view correct again");
+        assert_eq!(r.s1.border[&0].recs[&100].state.y, 2, "view correct again");
         assert!(
             !r.s1.border[&0].stale_until_full
                 && r.s1.border[&0].expected_seq == 5,
@@ -4639,7 +4726,7 @@ mod tests {
         // incarnation respawned different entities), fresh export state,
         // its own channel to the SAME receiver.
         let (tx01p, mut rx01p) = mpsc::channel(16);
-        let (d, _drx) = channel::<ShardMsg<TState>>(1);
+        let (d, _drx) = channel::<ShardMsg<TState, TStrip>>(1);
         std::mem::forget(_drx);
         let mut s0p = rig_actor(0, vec![d, tx01p]);
         put(&mut s0p, 200, -1.0, 7.0);
@@ -4652,7 +4739,7 @@ mod tests {
         let (seq, entities) = expect_full(&first);
         assert_eq!(
             entities,
-            [BorrowedRecord { wire: 200, x: -1, y: 7 }],
+            [rec(200, -1, 7)],
             "the FRESH incarnation's first exchange is a Full of ITS strip"
         );
         r.deliver_to_s1(first);
@@ -4763,12 +4850,12 @@ mod tests {
         let (_, entities) = expect_full(&msgs);
         assert_eq!(
             entities,
-            [BorrowedRecord { wire: 100, x: -1, y: 1 }],
+            [rec(100, -1, 1)],
             "the healing Full contains what the dropped delta carried"
         );
         r.deliver_to_s1(msgs);
         assert_eq!(
-            r.s1.border[&0].recs[&100].y, 1,
+            r.s1.border[&0].recs[&100].state.y, 1,
             "the receiver converged despite the loss"
         );
         assert!(!r.s0.export[&1].needs_full, "flag consumed");
@@ -4816,18 +4903,14 @@ mod tests {
                 exchange: BorderExchange::Delta {
                     seq: 2, // matches the expected sequence after the Full
                     tick: 2,
-                    upserts: vec![BorrowedRecord {
-                        wire: w_own,
-                        x: -9, // the STALE pre-crossing position
-                        y: 0,
-                    }],
+                    upserts: vec![rec(w_own, -9, 0)],
                     exits: vec![],
                 },
             },
             &tctx(2),
         );
         assert_eq!(
-            r.s1.border[&0].recs.get(&w_own).map(|b| b.x),
+            r.s1.border[&0].recs.get(&w_own).map(|b| b.state.x),
             Some(-9),
             "the stale copy IS in the borrowed view (delta applied)"
         );
@@ -4857,4 +4940,333 @@ mod tests {
             "the OWN record won over the delta-applied stale copy"
         );
     }
+    // -----------------------------------------------------------------
+    // Rich-strip locks: the visibility-strip payload is the GAME's type
+    // ([`GameLogic::Strip`]). These locks prove the generalization does
+    // what the core-fixed record could not: a payload field beyond
+    // position must survive BOTH exchange paths (Full bootstrap and
+    // Delta upsert), and a change in ANY payload field — not just the
+    // coordinates — must fire the delta diff.
+    // -----------------------------------------------------------------
+
+    /// A strip payload with one field BEYOND position (a facing-like
+    /// quantity; the combat/prediction shape this generalization exists
+    /// for).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TRich {
+        x: i32,
+        y: i32,
+        facing: i16,
+    }
+
+    /// A minimal shard logic whose strip carries [`TRich`]. The payload is
+    /// assembled from game state (`TWorld`'s third slot read as facing) —
+    /// exactly the ownership split under test: the core could never have
+    /// derived this field. `update` is a no-op, so entities stay put and
+    /// only an explicit mutation changes anything.
+    struct RichLogic {
+        index: usize,
+    }
+
+    impl GameLogic<TWorld> for RichLogic {
+        type GroupKey = ();
+        type Strip = TRich;
+
+        fn snapshot_op(&self) -> u16 {
+            0x7300
+        }
+        fn private_op(&self) -> u16 {
+            0x7301
+        }
+        fn group_of(&self, _w: &TWorld, _p: PlayerId) -> Self::GroupKey {}
+        fn snapshot(
+            &mut self,
+            _w: &mut TWorld,
+            _c: &TickCtx,
+            _g: &Self::GroupKey,
+            _borrowed: &[BorderRecord<TRich>],
+            _out: &mut bytes::BytesMut,
+        ) -> bool {
+            false // no members join in these tests; nothing ever emits
+        }
+        fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> Admission {
+            let wire = self.index as u64 * SHARD_SERIAL_RANGE + conn.0;
+            w.ents.insert(wire, ((conn.0 % 20) as f32 - 10.0, 0.0, 0));
+            Admission {
+                player: PlayerId(conn.0),
+                entity: wire,
+            }
+        }
+        fn on_leave(&mut self, _w: &mut TWorld, _player: PlayerId) {}
+        fn ingest(&mut self, _w: &mut TWorld, _c: &TickCtx, actions: &mut Vec<Action>) {
+            actions.clear();
+        }
+        fn update(&mut self, _w: &mut TWorld, _c: &TickCtx) {}
+    }
+
+    impl ShardLogic<TWorld> for RichLogic {
+        type State = TState;
+
+        fn index(&self) -> usize {
+            self.index
+        }
+        fn shard_count(&self) -> usize {
+            2
+        }
+        fn serial_base(&self) -> u64 {
+            self.index as u64 * SHARD_SERIAL_RANGE
+        }
+        fn serial_range(&self) -> u64 {
+            SHARD_SERIAL_RANGE
+        }
+        fn serial_used(&self) -> u64 {
+            0
+        }
+        fn neighbors(&self) -> &[usize] {
+            if self.index == 0 {
+                &[1]
+            } else {
+                &[0]
+            }
+        }
+        fn collect_migrations(
+            &mut self,
+            _w: &mut TWorld,
+            _nb: usize,
+        ) -> Vec<Migrating<TState>> {
+            Vec::new()
+        }
+        fn on_migrate_in(
+            &mut self,
+            _w: &mut TWorld,
+            _wire: u64,
+            _state: TState,
+            _player: Option<PlayerId>,
+        ) {
+        }
+        fn on_migrate_out(&mut self, _w: &mut TWorld, _wire: u64) {}
+        fn collect_border(&self, w: &TWorld) -> Vec<BorderRecord<TRich>> {
+            // The strip: same |x| <= 1 frame as TLogic, plus the CUSTOM
+            // field from game state.
+            w.ents
+                .iter()
+                .filter(|(_, (x, _, _))| x.abs() <= 1.0)
+                .map(|(wire, (x, y, facing))| BorderRecord {
+                    wire: *wire,
+                    state: TRich {
+                        x: *x as i32,
+                        y: *y as i32,
+                        facing: *facing as i16,
+                    },
+                })
+                .collect()
+        }
+        fn own_wires(&self, w: &TWorld) -> Vec<u64> {
+            w.ents.keys().copied().collect()
+        }
+    }
+
+    /// Two bare [`RichLogic`] actors wired through channels the TEST
+    /// controls (the [`BorderRig`] pattern, typed over [`TRich`]).
+    struct RichRig {
+        s0: ShardActor<TWorld, (), TState, TRich>,
+        s1: ShardActor<TWorld, (), TState, TRich>,
+        /// What s0 exports to s1 lands here (test-held receiving end).
+        rx01: Inbox<ShardMsg<TState, TRich>>,
+        /// What s1 sends back lands here.
+        rx10: Inbox<ShardMsg<TState, TRich>>,
+    }
+
+    impl RichRig {
+        fn new() -> Self {
+            let (tx01, rx01) = mpsc::channel(16);
+            let (tx10, rx10) = mpsc::channel(16);
+            let build = |index: usize, tx: Mailbox<ShardMsg<TState, TRich>>, other: Mailbox<ShardMsg<TState, TRich>>| {
+                let (_tick_tx, tick_rx) = broadcast::channel(64);
+                let (_self_tx, rx) = channel::<ShardMsg<TState, TRich>>(16);
+                ShardActor::new(
+                    RoomConfig {
+                        id: RoomId(15),
+                        keepalive_hz: 0.0,
+                        metrics_cadence_hz: 0.0,
+                        ..Default::default()
+                    },
+                    index,
+                    TWorld::default(),
+                    Box::new(RichLogic { index }),
+                    tick_rx,
+                    rx,
+                    vec![tx, other],
+                    1,
+                    metrics_null(),
+                    None, // no result sink
+                )
+            };
+            let (d0, _d0rx) = mpsc::channel(1);
+            let (d1, _d1rx) = mpsc::channel(1);
+            RichRig {
+                s0: build(0, d0, tx01),
+                s1: build(1, tx10, d1),
+                rx01,
+                rx10,
+            }
+        }
+
+        /// Run shard 0's phases at this tick index (its exports land in
+        /// `rx01`).
+        fn step0(&mut self, tick: u64) {
+            assert!(self.s0.step_phases(&tinfo(tick)), "shard 0 keeps running");
+        }
+
+        /// Take everything shard 0 exported (WITHOUT delivering).
+        fn drain01(&mut self) -> Vec<ShardMsg<TState, TRich>> {
+            let mut out = Vec::new();
+            while let Ok(m) = self.rx01.try_recv() {
+                out.push(m);
+            }
+            out
+        }
+
+        /// Feed messages into shard 1's CONTROL handler.
+        fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState, TRich>>) {
+            for m in msgs {
+                assert!(self.s1.handle_msg(m, &tctx(999)), "s1 keeps running");
+            }
+        }
+    }
+
+    /// Seed a boundary entity straight into a shard's world (the third
+    /// tuple slot is the FACING source for [`RichLogic`]'s strip).
+    fn put_rich(a: &mut ShardActor<TWorld, (), TState, TRich>, wire: u64, x: f32, facing: i8) {
+        a.world.ents.insert(wire, (x, 0.0, facing));
+    }
+
+    /// Rich lock 1 — a strip record whose payload has a field beyond
+    /// position arrives INTACT through both paths: the Full bootstrap on
+    /// first contact, and the Delta upsert after ONLY the custom field
+    /// changed. The receiving view (typed over the SAME logic-defined
+    /// payload) holds the exact values the sender's logic assembled.
+    #[tokio::test]
+    async fn rich_strip_record_survives_full_and_delta_paths() {
+        let mut r = RichRig::new();
+
+        // Bootstrap: first contact ships the whole strip as a Full, with
+        // the custom field intact.
+        put_rich(&mut r.s0, 100, -1.0, 7);
+        r.step0(1);
+        let msgs = r.drain01();
+        let (seq, entities) = expect_full(&msgs);
+        assert_eq!(
+            entities,
+            [BorderRecord {
+                wire: 100,
+                state: TRich {
+                    x: -1,
+                    y: 0,
+                    facing: 7
+                }
+            }],
+            "the Full bootstrap carries the RICH record whole"
+        );
+        r.deliver_to_s1(msgs);
+        assert_eq!(
+            r.s1.border[&0].recs[&100].state,
+            TRich {
+                x: -1,
+                y: 0,
+                facing: 7
+            },
+            "the FULL path preserved every payload field"
+        );
+        assert_eq!(
+            r.s1.border[&0].expected_seq,
+            seq + 1,
+            "receiver sequence re-baselined by the Full"
+        );
+
+        // Change ONLY the custom field (position untouched): the next
+        // exchange is a delta whose upsert carries the new value intact.
+        r.s0.world.ents.get_mut(&100).unwrap().2 = 9;
+        r.step0(2);
+        let msgs = r.drain01();
+        let (_seq2, upserts, exits) = expect_delta(&msgs);
+        assert_eq!(
+            upserts,
+            [BorderRecord {
+                wire: 100,
+                state: TRich {
+                    x: -1,
+                    y: 0,
+                    facing: 9
+                }
+            }],
+            "the DELTA upsert carries the custom field"
+        );
+        assert!(exits.is_empty());
+        r.deliver_to_s1(msgs);
+        assert_eq!(
+            r.s1.border[&0].recs[&100].state.facing, 9,
+            "the DELTA path preserved the custom field end to end"
+        );
+        assert_eq!(
+            (r.s1.border[&0].recs[&100].state.x, r.s1.border[&0].recs[&100].state.y),
+            (-1, 0),
+            "position unchanged alongside it"
+        );
+    }
+
+    /// Rich lock 2 — the delta diff keys off WHOLE-payload equality: a
+    /// change confined to the custom field fires an upsert, a tick with
+    /// no change of any field ships NOTHING (the silent-tick skip that
+    /// is the delta's entire point). A position-only diff would miss the
+    /// first half; an always-ship design would waste the second.
+    #[tokio::test]
+    async fn delta_diff_fires_on_custom_field_change() {
+        let mut r = RichRig::new();
+
+        // Bootstrap (Full) and settle the ledger.
+        put_rich(&mut r.s0, 100, -1.0, 3);
+        r.step0(1);
+        {
+            let msgs = r.drain01();
+            r.deliver_to_s1(msgs);
+        }
+
+        // Quiet tick: no field changed ⇒ NOTHING ships.
+        r.step0(2);
+        assert!(
+            r.drain01().is_empty(),
+            "an unchanged strip ships nothing"
+        );
+
+        // Change ONLY the custom field: the next tick ships exactly one
+        // upsert, carrying the new facing at the unchanged position.
+        r.s0.world.ents.get_mut(&100).unwrap().2 = 4;
+        r.step0(3);
+        let msgs = r.drain01();
+        let (_seq, upserts, exits) = expect_delta(&msgs);
+        assert_eq!(
+            upserts,
+            [BorderRecord {
+                wire: 100,
+                state: TRich {
+                    x: -1,
+                    y: 0,
+                    facing: 4
+                }
+            }],
+            "a custom-field-only change fires the delta"
+        );
+        assert!(exits.is_empty(), "no exit: the entity never left");
+        r.deliver_to_s1(msgs);
+        assert_eq!(
+            r.s1.border[&0].recs[&100].state.facing, 4,
+            "the receiving view took the custom-field update"
+        );
+
+        // And quietness resumes once the change was accepted.
+        r.step0(4);
+        assert!(r.drain01().is_empty(), "no further change ⇒ silent again");
+    }
+
 }

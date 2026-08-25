@@ -241,6 +241,7 @@ impl GameLogic<World> for DemoRoom {
     // the `last` ledger above must be keyed by group; see the module
     // docs and `RoomLogic::snapshot`.)
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         op::WORLD_SNAPSHOT
@@ -260,7 +261,7 @@ impl GameLogic<World> for DemoRoom {
         _group: &Self::GroupKey,
         // Single-room execution: no boundary records exist here (the
         // sharded actor folds its border exchange into this same seam).
-        _borrowed: &[gsb_core::shard::BorrowedRecord],
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         // Collect the broadcastable state (wire id, truncated wire

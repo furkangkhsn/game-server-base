@@ -21,6 +21,9 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 
+quinn.workspace = true
+sha1.workspace = true
+
 [dev-dependencies]
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):
 # no certificate is ever committed to the repository.

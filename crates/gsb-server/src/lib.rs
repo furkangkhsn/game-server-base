@@ -609,7 +609,7 @@ fn demo_room_factory(
     spawn_half: f32,
     disconnect_grace: std::time::Duration,
     economy: gsb_game::economy::EconomyService,
-) -> RoomFactory<World, (), ()> {
+) -> RoomFactory<World, (), (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
@@ -617,7 +617,7 @@ fn demo_room_factory(
                 .with_disconnect_grace(disconnect_grace)
                 .with_economy(economy.clone()),
         )
-            as Box<dyn RoomLogic<World, GroupKey = ()>>,
+            as Box<dyn RoomLogic<World, GroupKey = (), Strip = ()>>,
     })
 }
 
@@ -634,13 +634,13 @@ fn aoi_room_factory(
     cell_size: f32,
     spawn_half: f32,
     disconnect_grace: std::time::Duration,
-) -> RoomFactory<World, gsb_game::aoi::Cell, ()> {
+) -> RoomFactory<World, gsb_game::aoi::Cell, (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
             gsb_game::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half)
                 .with_disconnect_grace(disconnect_grace),
-        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell>>,
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::aoi::Cell, Strip = ()>>,
     })
 }
 
@@ -651,13 +651,13 @@ fn team_room_factory(
     vision_radius: f32,
     spawn_half: f32,
     disconnect_grace: std::time::Duration,
-) -> RoomFactory<World, gsb_game::team::Team, ()> {
+) -> RoomFactory<World, gsb_game::team::Team, (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
             gsb_game::team::TeamRoom::with_spawn_half(vision_radius, spawn_half)
                 .with_disconnect_grace(disconnect_grace),
-        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team>>,
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::team::Team, Strip = ()>>,
     })
 }
 
@@ -667,13 +667,13 @@ fn team_room_factory(
 fn pvs_room_factory(
     spawn_half: f32,
     disconnect_grace: std::time::Duration,
-) -> RoomFactory<World, gsb_game::pvs::Sector, ()> {
+) -> RoomFactory<World, gsb_game::pvs::Sector, (), ()> {
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
             gsb_game::pvs::SectorRoom::with_spawn_half(spawn_half)
                 .with_disconnect_grace(disconnect_grace),
-        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector>>,
+        ) as Box<dyn RoomLogic<World, GroupKey = gsb_game::pvs::Sector, Strip = ()>>,
     })
 }
 
@@ -698,9 +698,16 @@ fn sharded_room_factory(
     shard_count: usize,
     disconnect_grace: std::time::Duration,
     economy: gsb_game::economy::EconomyService,
-) -> RoomFactory<World, (), gsb_game::sharded::ShardedRoomState> {
+) -> RoomFactory<World, (), gsb_game::sharded::ShardedRoomState, gsb_game::sharded::StripPos> {
     Arc::new(move |_id, _config| {
-        let shards: Vec<gsb_core::registry::Shard<World, (), gsb_game::sharded::ShardedRoomState>> =
+        let shards: Vec<
+            gsb_core::registry::Shard<
+                World,
+                (),
+                gsb_game::sharded::ShardedRoomState,
+                gsb_game::sharded::StripPos,
+            >,
+        > =
             (0..shard_count)
                 .map(|i| {
                     (
@@ -715,6 +722,7 @@ fn sharded_room_factory(
                                     World,
                                     GroupKey = (),
                                     State = gsb_game::sharded::ShardedRoomState,
+                                    Strip = gsb_game::sharded::StripPos,
                                 >,
                             >,
                     )

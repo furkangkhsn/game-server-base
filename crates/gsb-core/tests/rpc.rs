@@ -75,6 +75,7 @@ struct RpcLogic {
 
 impl GameLogic<()> for RpcLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         OP_SNAP
@@ -85,7 +86,7 @@ impl GameLogic<()> for RpcLogic {
 
     fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _borrowed: &[gsb_core::shard::BorrowedRecord], _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _borrowed: &[gsb_core::shard::BorderRecord<()>], _o: &mut bytes::BytesMut) -> bool {
         false // no group snapshots: batches carry only private frames
     }
 

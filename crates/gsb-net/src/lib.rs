@@ -40,6 +40,8 @@ pub mod pump;
 pub mod tcp;
 pub mod tls;
 pub mod transport;
+pub mod quic;
 pub mod udp;
+pub mod ws;
 
 pub use transport::{BoxFuture, Endpoint, Listener, Transport};

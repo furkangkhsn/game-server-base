@@ -45,7 +45,7 @@ use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{
     Action, Admission, Detach, ExpireTo, GameLogic, ResumeFound, RoomConfig, RoomLogic, TickCtx,
 };
-use gsb_core::shard::BorrowedRecord;
+use gsb_core::shard::BorderRecord;
 use gsb_core::ticker::Ticker;
 use gsb_protocol::base::{Auth, Heartbeat};
 use gsb_protocol::{base_table, op};
@@ -388,6 +388,7 @@ struct HoldLogic {
 
 impl GameLogic<()> for HoldLogic {
     type GroupKey = ();
+    type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
         SNAP_OP
@@ -402,7 +403,7 @@ impl GameLogic<()> for HoldLogic {
         _w: &mut (),
         _c: &TickCtx,
         _g: &Self::GroupKey,
-        _borrowed: &[BorrowedRecord],
+        _borrowed: &[BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         let mut ids: Vec<EntityId> = self.player_entity.values().copied().collect();
@@ -457,7 +458,7 @@ impl GameLogic<()> for HoldLogic {
 
 impl RoomLogic<()> for HoldLogic {}
 
-fn hold_factory() -> RoomFactory<(), (), ()> {
+fn hold_factory() -> RoomFactory<(), (), (), ()> {
     Arc::new(|_id, _cfg| BuiltRoom::Single {
         world: (),
         logic: Box::new(HoldLogic {

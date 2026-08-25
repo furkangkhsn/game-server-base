@@ -505,11 +505,28 @@ pub struct TickCtx {
 /// or the group key `GroupKey`.
 pub trait GameLogic<W>: Send {
     /// Opaque key partitioning the room's connections into snapshot groups.
-    /// `()` = one group per room (everyone sees the whole world);
+    /// `()` = one per room (everyone sees the whole world);
     /// `ConnectionId` = one snapshot per connection; anything else (e.g. a
     /// zone id) is a legitimate future grouping. `Debug` so the room's
     /// group diagnostics can name a misbehaving group.
     type GroupKey: Eq + Hash + Clone + Debug;
+
+    /// What an entity carries across a SHARD boundary (the
+    /// visibility-strip payload inside [`shard::BorderRecord`]). Lives on
+    /// THIS supertrait because [`Self::snapshot`] is the single encode
+    /// seam both actors share — the borrowed set reaches the encoder
+    /// typed, so the payload type must be visible here too.
+    ///
+    /// Ownership follows the architecture rule (`docs/TRAIT-ARCHITECTURE.md`):
+    /// the wire identity (`wire`) is core-managed, but WHAT travels beside
+    /// it — position only, or velocity/facing/hp for combat/prediction
+    /// games — is the game's decision, exactly like the migration
+    /// [`shard::ShardLogic::State`]. Any logic that never runs sharded
+    /// picks `()` and never sees a record. Serialization at
+    /// process-boundary links stays future work owned by the logic
+    /// (`docs/DISTRIBUTED.md` §4b). `PartialEq` is load-bearing on the
+    /// sharded path: it IS the delta upsert test.
+    type Strip: Debug + Clone + PartialEq + Send + 'static;
 
     /// Opcode under which the room ships group snapshots.
     fn snapshot_op(&self) -> u16;
@@ -566,13 +583,15 @@ pub trait GameLogic<W>: Send {
     /// empty slice. The parameter lives here — on the shared supertrait,
     /// not on the shard subtrait — so ONE method serves both actors and
     /// the fan-out machinery stays textually identical: a plain room's
-    /// "no change" test simply never sees borrowed content.
+    /// "no change" test simply never sees borrowed content. Each record's
+    /// payload is the game's own [`Self::Strip`] type, so encoding it is
+    /// fully in the logic's hands.
     fn snapshot(
         &mut self,
         world: &mut W,
         ctx: &TickCtx,
         group: &Self::GroupKey,
-        borrowed: &[crate::shard::BorrowedRecord],
+        borrowed: &[crate::shard::BorderRecord<Self::Strip>],
         out: &mut bytes::BytesMut,
     ) -> bool;
 
@@ -1090,13 +1109,15 @@ impl Default for RoomCounters {
 /// binding table), and the group table; everything mutable is local, so
 /// no synchronization is needed.
 ///
-/// `G` is the game logic's group key ([`GameLogic::GroupKey`]); the room
+/// `G` is the game logic's group key ([`GameLogic::GroupKey`]) and `Sp`
+/// its strip payload ([`GameLogic::Strip`], opaque here — the room never
+/// exchanges borders); the room
 /// stores per-group state (last snapshot, this tick's ship, diagnostics)
-/// under it.
-pub struct RoomActor<W, G> {
+/// under the key.
+pub struct RoomActor<W, G, Sp> {
     config: RoomConfig,
     world: W,
-    logic: Box<dyn RoomLogic<W, GroupKey = G>>,
+    logic: Box<dyn RoomLogic<W, GroupKey = G, Strip = Sp>>,
     tick_rx: broadcast::Receiver<TickInfo>,
     control_rx: Inbox<RoomControl>,
     /// The room's members, keyed by their STABLE player identity (Faz 2,
@@ -1204,9 +1225,13 @@ pub struct RoomActor<W, G> {
     result_sink: Option<Mailbox<crate::registry::MatchResult>>,
 }
 
-impl<W, G> RoomActor<W, G>
+impl<W, G, Sp> RoomActor<W, G, Sp>
 where
     G: Eq + Hash + Clone + Debug,
+    // The strip payload's trait bounds (`GameLogic::Strip`) — restated so
+    // calls through the logic object type-check; the room itself never
+    // touches the payloads.
+    Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     // The actor's wiring (the base's actor constructors take every
     // mailbox the actor owns — the `new` is the composition point).
@@ -1214,7 +1239,7 @@ where
     pub fn new(
         config: RoomConfig,
         world: W,
-        logic: Box<dyn RoomLogic<W, GroupKey = G>>,
+        logic: Box<dyn RoomLogic<W, GroupKey = G, Strip = Sp>>,
         tick_rx: broadcast::Receiver<TickInfo>,
         control_rx: Inbox<RoomControl>,
         run_every: u64,
@@ -2718,6 +2743,7 @@ mod tests {
     // (both exclusive methods have defaults).
     impl GameLogic<()> for RebindLogic {
         type GroupKey = ();
+        type Strip = ();
         fn snapshot_op(&self) -> u16 {
             0x7400
         }
@@ -2730,7 +2756,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             _g: &(),
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false
@@ -2984,6 +3010,7 @@ mod tests {
 
     impl GameLogic<()> for RecLogic {
         type GroupKey = ();
+        type Strip = ();
 
         fn snapshot_op(&self) -> u16 {
             0x7000
@@ -3001,7 +3028,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             _g: &Self::GroupKey,
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false
@@ -3401,6 +3428,7 @@ mod tests {
 
     impl GameLogic<()> for GroupLogic {
         type GroupKey = PlayerId;
+        type Strip = ();
 
         fn snapshot_op(&self) -> u16 {
             0x7010
@@ -3418,7 +3446,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             group: &Self::GroupKey,
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             out: &mut bytes::BytesMut,
         ) -> bool {
             if !self.dirty.remove(group) {
@@ -3682,6 +3710,7 @@ mod tests {
 
     impl GameLogic<()> for FairLogic {
         type GroupKey = PlayerId;
+        type Strip = ();
 
         fn snapshot_op(&self) -> u16 {
             0x7020
@@ -3699,7 +3728,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             group: &Self::GroupKey,
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             out: &mut bytes::BytesMut,
         ) -> bool {
             // "Unchanged" = the world step this group emitted at is the
@@ -4204,6 +4233,7 @@ mod tests {
 
     impl GameLogic<()> for SilentLogic {
         type GroupKey = PlayerId;
+        type Strip = ();
 
         fn snapshot_op(&self) -> u16 {
             0x7030
@@ -4221,7 +4251,7 @@ mod tests {
             _w: &mut (),
             _c: &TickCtx,
             _g: &Self::GroupKey,
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             _o: &mut bytes::BytesMut,
         ) -> bool {
             false // even the first tick: a contract violation

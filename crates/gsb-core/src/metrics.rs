@@ -1794,6 +1794,7 @@ mod tests {
     // hook used (empty `RoomLogic` impl).
     impl crate::room::GameLogic<()> for AlwaysLogic {
         type GroupKey = ();
+        type Strip = ();
         fn snapshot_op(&self) -> u16 {
             0x7200
         }
@@ -1806,7 +1807,7 @@ mod tests {
             _w: &mut (),
             _c: &crate::room::TickCtx,
             _g: &Self::GroupKey,
-            _borrowed: &[crate::shard::BorrowedRecord],
+            _borrowed: &[crate::shard::BorderRecord<()>],
             out: &mut bytes::BytesMut,
         ) -> bool {
             out.extend_from_slice(b"x");
