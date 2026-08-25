@@ -15,7 +15,7 @@
 //! Harness: the manual-ticker idiom of `gsb-core/tests/reconnect.rs` —
 //! the metrics channel carries one sample per step, so a recv is the
 //! step-completed barrier. Unlike those core-level tests, the world here
-//! is a real bevy World driven by [`gsb_game::room::DemoRoom`] (the
+//! is a real bevy World driven by [`gsb_game::room::OpenRoom`] (the
 //! actual game), so these are game-band locks: the policy answers, the
 //! ledger behavior, and the bot's synthesized input riding the ordinary
 //! ingest path.
@@ -62,7 +62,7 @@ impl H {
             metrics_cadence_hz: 60.0,
             ..Default::default()
         };
-        let logic = gsb_game::room::DemoRoom::new().with_disconnect_grace(grace);
+        let logic = gsb_game::room::OpenRoom::new().with_disconnect_grace(grace);
         let actor = RoomActor::new(
             config,
             bevy_ecs::world::World::new(),

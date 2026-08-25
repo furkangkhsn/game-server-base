@@ -1,7 +1,7 @@
 //! The machinery the demo rooms share — everything that is **not** a
 //! visibility-strategy decision.
 //!
-//! The four rooms ([`crate::room::DemoRoom`], [`crate::aoi::AoiRoom`],
+//! The four rooms ([`crate::room::OpenRoom`], [`crate::aoi::AoiRoom`],
 //! [`crate::team::TeamRoom`], [`crate::pvs::SectorRoom`]) run the *same*
 //! game: the same components, the same movement system, the same wire
 //! format, the same spawn distribution, the same identity rules. They
@@ -296,7 +296,7 @@ pub(crate) fn run_systems(runner: &mut SystemRunner, world: &mut World, ctx: &Ti
 /// costs nothing in steady state (the orphan query matches nothing once
 /// every entity is stamped).
 ///
-/// Call site: `DemoRoom` stamps in the broadcast pass (its `snapshot`
+/// Call site: `OpenRoom` stamps in the broadcast pass (its `snapshot`
 /// collects the content it encodes), the other rooms stamp in `update`
 /// (their per-tick caches are built right after). Either call site keeps
 /// the guarantee: an orphan appears in the very snapshot that notices

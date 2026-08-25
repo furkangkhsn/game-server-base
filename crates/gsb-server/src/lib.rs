@@ -2,7 +2,7 @@
 //!
 //! [`start_server`] wires the whole stack together: the transport (default
 //! TCP, pluggable), the registry actor (control plane), the pre-created
-//! rooms (via the game crate's [`gsb_game::room::DemoRoom`]), and the accept
+//! rooms (via the game crate's [`gsb_game::room::OpenRoom`]), and the accept
 //! loop. It must be called from inside a tokio runtime.
 //!
 //! ```text
@@ -148,11 +148,13 @@ impl std::fmt::Display for Topology {
 /// client — a full frame every time, or deltas converging on the keepalive
 /// full (`docs/ROADMAP.md`, P2; the N-delta + 1-full convergence rule).
 ///
-/// WHY the axis exists even though nothing serves client-facing delta yet:
-/// the spatial room already diffs per cell INTERNALLY, so the axis records
-/// a real distinction the roadmap generalizes (per-link derivation, Faz C);
-/// naming it explicitly today fails at startup with an error pointing at
-/// the phase that will deliver it — a request is never silently downgraded.
+/// WHY the axis exists even though only one room serves client-facing
+/// delta yet: the spatial room already diffs per cell INTERNALLY, so the
+/// axis records a real distinction the roadmap generalizes (per-link
+/// derivation, Faz C). Under `single × spatial` an explicit request
+/// resolves to that same AoiRoom; everywhere else it fails at startup
+/// with an error pointing at the phase that will deliver it — a request
+/// is never silently downgraded.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Communication {
@@ -161,9 +163,10 @@ pub enum Communication {
     #[default]
     AlwaysFull,
     /// Client-facing delta frames with periodic/full keepalive
-    /// convergence. NO strategy serves this yet: under `topology =
-    /// "single"` the error names the common codec gap; under
-    /// `topology = "sharded"` it names ROADMAP Faz B/C.
+    /// convergence. Served today ONLY by `single × spatial` (AoiRoom's
+    /// internal per-cell diff): every other combination — all/team/pvs on
+    /// `single`, anything on `sharded` — refuses startup with an error
+    /// naming the roadmap phase that will deliver it.
     Delta,
 }
 
@@ -235,8 +238,9 @@ impl std::fmt::Display for VisibilityAxis {
 /// config resolves to without starting a server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomKind {
-    /// `gsb_game::room::DemoRoom` — single actor, whole-world groups.
-    Demo,
+    /// `gsb_game::room::OpenRoom` — single actor, whole-world groups
+    /// (open visibility: everyone sees everything).
+    Open,
     /// `gsb_game::aoi::AoiRoom` — single actor, spatial AOI cells.
     Aoi,
     /// `gsb_game::team::TeamRoom` — single actor, team fog of war.
@@ -482,10 +486,12 @@ pub struct Config {
     ///   other visibility ⇒ `always-full`. A derived value DESCRIBES what
     ///   the mapped room already does; it requests nothing new;
     /// - set: the explicit key WINS over the derivation, and an explicit
-    ///   `"delta"` is a REQUEST for client-facing delta snapshots — no
-    ///   strategy serves those yet, so it REFUSES STARTUP with an error
-    ///   naming the roadmap phase that will deliver them (never a silent
-    ///   downgrade to full frames).
+    ///   `"delta"` is a REQUEST for client-facing delta snapshots — served
+    ///   only where a delta implementation exists today (`single ×
+    ///   spatial`, the same AoiRoom the derived spelling builds); every
+    ///   other combination REFUSES STARTUP with an error naming the
+    ///   roadmap phase that will deliver them (never a silent downgrade
+    ///   to full frames).
     pub communication: Option<Communication>,
     /// The legacy input encoding of TWO of the three selection axes (see
     /// [`Visibility`] and the derivation below).
@@ -502,10 +508,10 @@ pub struct Config {
     /// | `"pvs"`     | single  × pvs     × always-full |
     /// | `"sharded"` | sharded × all     × always-full |
     ///
-    /// ¹ describes the spatial room's INTERNAL per-cell diff; it is not a
-    /// client-facing delta request — that is the explicit
-    /// [`Self::communication`] key's job, and it is rejected until the
-    /// common codec ships.
+    /// ¹ names the packaging the spatial room ALREADY serves (its
+    /// internal per-cell diff): the explicit [`Self::communication`] key
+    /// resolves to the same room there; outside `single × spatial` an
+    /// explicit `"delta"` is rejected until the common codec ships.
     ///
     /// Precedence: an explicit [`Self::topology`] /
     /// [`Self::communication`] key always overrides its derived cell.
@@ -709,18 +715,23 @@ impl Config {
     ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
     ///    rooms actually do).
     ///
-    /// Combination validation runs on the RESOLVED triple. Only five
-    /// combinations have an implementation today (single × {all, spatial,
-    /// team, pvs} × always-full, and sharded × all × always-full);
-    /// everything else is rejected HERE with an error naming the roadmap
-    /// phase/document that will deliver it — a supported-combination check
-    /// must refuse at startup, never misconfigure a running server.
+    /// Combination validation runs on the RESOLVED triple. Only six
+    /// combinations have an implementation today (single × {all, team,
+    /// pvs} × always-full, single × spatial × {always-full, delta}, and
+    /// sharded × all × always-full); everything else is rejected HERE
+    /// with an error naming the roadmap phase/document that will deliver
+    /// it — a supported-combination check must refuse at startup, never
+    /// misconfigure a running server.
     ///
-    /// One deliberate exemption: the DERIVED `delta` under `spatial`
-    /// describes that room's existing internal per-cell diff, so it passes
-    /// validation exactly as the pre-axes config did. Only an EXPLICIT
-    /// `communication = "delta"` requests client-facing delta packaging —
-    /// which nothing serves yet — and is always rejected.
+    /// One exemption on the communication axis: under
+    /// `single × spatial`, `delta` names the packaging AoiRoom ALREADY
+    /// serves (its internal per-cell diff), so BOTH spellings resolve to
+    /// that same room — the derived one (legacy `visibility = "spatial"`,
+    /// key omitted) and an explicit `communication = "delta"` request
+    /// alike. Same room, one behavior; two spellings must not disagree.
+    /// Everywhere else an explicit `communication = "delta"` requests
+    /// client-facing delta frames nothing serves yet (all/team/pvs on
+    /// single; anything on sharded) and is rejected.
     pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
         // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
         // a contradiction warns (behavior still follows the explicit key).
@@ -757,7 +768,7 @@ impl Config {
         // decide what the world IS), then the packaging axis. Each
         // rejection names the roadmap phase/document that delivers it.
         let kind = match (topology, visibility) {
-            (Topology::Single, VisibilityAxis::All) => RoomKind::Demo,
+            (Topology::Single, VisibilityAxis::All) => RoomKind::Open,
             (Topology::Single, VisibilityAxis::Spatial) => RoomKind::Aoi,
             (Topology::Single, VisibilityAxis::Team) => RoomKind::Team,
             (Topology::Single, VisibilityAxis::Pvs) => RoomKind::Sector,
@@ -776,12 +787,21 @@ impl Config {
             }
         };
 
-        // An EXPLICIT delta request has no implementation anywhere today:
-        // client-facing delta frames wait for the common codec (single)
-        // and for the per-shard delta book / per-link derivation
-        // (sharded). A DERIVED delta never gets here as a rejection — it
-        // described an existing room, above.
-        if self.communication == Some(Communication::Delta) {
+        // An EXPLICIT delta request resolves only where a client-facing
+        // delta implementation exists TODAY: single × spatial is served by
+        // AoiRoom (its internal per-cell diff IS the delta packaging), so
+        // the explicit spelling must land on the same room as the derived
+        // one — rejecting it there while accepting the derived spelling of
+        // the identical triple would make two names for one room disagree.
+        // Everywhere else (all/team/pvs on single, anything on sharded)
+        // delta frames wait for the common codec (single) and for the
+        // per-shard delta book / per-link derivation (sharded): fail
+        // cleanly instead of silently serving full frames under a config
+        // that asked for deltas. Sharded × spatial never reaches this arm
+        // (rejected above), so a sharded rejection here implies all.
+        if self.communication == Some(Communication::Delta)
+            && !(topology == Topology::Single && visibility == VisibilityAxis::Spatial)
+        {
             return Err(match topology {
                 Topology::Single => ServerError::SingleDelta,
                 Topology::Sharded => ServerError::ShardedDelta,
@@ -843,10 +863,11 @@ pub enum ServerError {
              topology = \"single\"")]
     ShardedCrossInterest(String),
 
-    #[error("communication = \"delta\" under topology = \"single\": delta \
-             client snapshots exist only in the spatial strategy today \
-             (ROADMAP: ortak DeltaSnapshotCodec); use communication = \
-             \"always-full\"")]
+    #[error("communication = \"delta\" with topology = \"single\" needs a \
+             visibility that serves delta today: only spatial (AoiRoom) \
+             does; all/team/pvs have no delta packaging yet (ROADMAP: \
+             ortak DeltaSnapshotCodec) — use visibility = \"spatial\" or \
+             communication = \"always-full\"")]
     SingleDelta,
 
     #[error("communication = \"delta\" with topology = \"sharded\" has no \
@@ -1280,16 +1301,18 @@ pub fn build_table() -> Arc<MessageTable> {
     Arc::new(table)
 }
 
-/// The room factory for the demo game: an empty bevy `World` + a
-/// [`gsb_game::room::DemoRoom`] over a spawn map of half-size
-/// `spawn_half`. Group key is `()` (one group per room) — the AOI-**off**
-/// baseline: every connection receives the whole world.
+/// The open-visibility room factory: an empty bevy `World` + an
+/// [`gsb_game::room::OpenRoom`] over a spawn map of half-size
+/// `spawn_half`. Group key is `()` (one group per room) — the OPEN
+/// strategy: everyone sees everything, every connection receives the
+/// whole world (the unrestricted baseline the restricted visibility
+/// strategies are measured against).
 ///
 /// `economy` is the in-process economy service (the RPC pattern's
 /// external-I/O reference adapter, see `gsb_game::economy`): ONE service
 /// per server (a platform service, not a per-room one), shared by clone
 /// with every room the factory builds.
-fn demo_room_factory(
+fn open_room_factory(
     spawn_half: f32,
     disconnect_grace: std::time::Duration,
     economy: gsb_game::economy::EconomyService,
@@ -1297,7 +1320,7 @@ fn demo_room_factory(
     Arc::new(move |_id, _config| BuiltRoom::Single {
         world: World::new(),
         logic: Box::new(
-            gsb_game::room::DemoRoom::with_spawn_half(spawn_half)
+            gsb_game::room::OpenRoom::with_spawn_half(spawn_half)
                 .with_disconnect_grace(disconnect_grace)
                 .with_economy(economy.clone()),
         )
@@ -1310,7 +1333,7 @@ fn demo_room_factory(
 /// cell edge). Group key is a spatial [`gsb_game::aoi::Cell`] — the
 /// spatial path: one snapshot per cell, shared by reference with the
 /// cell's occupants. Note the `RoomFactory`'s group-key associated type
-/// differs from `demo_room_factory`'s (`Cell` vs `()`), so the strategies
+/// differs from `open_room_factory`'s (`Cell` vs `()`), so the strategies
 /// cannot be stored in one value — `start_inner` picks the factory at the
 /// config boundary. This is entirely on the game/server side; `gsb-core`
 /// stays generic over the group key and is untouched.
@@ -1609,7 +1632,7 @@ async fn start_inner(
     // identical and each yields a `JoinHandle<()>`. `resolve_selection`
     // already validated the combination; every arm here is a supported one.
     let _registry = match selection.kind {
-        RoomKind::Demo => {
+        RoomKind::Open => {
             // One economy service per server (the RPC pattern's
             // external-I/O reference adapter; shared by clone with every
             // demo room the factory builds).
@@ -1621,7 +1644,7 @@ async fn start_inner(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    demo_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
+                    open_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,

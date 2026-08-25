@@ -76,7 +76,7 @@ impl TestRoom {
         let actor = RoomActor::new(
             config,
             World::new(),
-            Box::new(gsb_game::room::DemoRoom::new()),
+            Box::new(gsb_game::room::OpenRoom::new()),
             tick_rx,
             control_rx,
             1, // room rate == global rate in these tests

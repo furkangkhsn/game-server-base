@@ -2,7 +2,7 @@
 //!
 //! ## What it changes (and what it deliberately does not touch)
 //!
-//! [`DemoRoom`](crate::room::DemoRoom) uses `GroupKey = ()` (one snapshot
+//! [`OpenRoom`](crate::room::OpenRoom) uses `GroupKey = ()` (one snapshot
 //! group per room, everyone sees the whole world) and
 //! [`AoiRoom`](crate::aoi::AoiRoom) uses `GroupKey = Cell` (spatial).
 //! `TeamRoom` makes the group key the **team identity**: exactly two groups,
@@ -28,7 +28,7 @@
 //! - **every neutral entity** (an entity with a `Position` but no connection
 //!   — bullets, wards, traps — has no team and is broadcast to *all* teams;
 //!   this is what keeps the broadcast set exactly "has a `Position`",
-//!   structurally, like in `DemoRoom`/`AoiRoom`),
+//!   structurally, like in `OpenRoom`/`AoiRoom`),
 //! - an enemy entity **only if** at least one of `T`'s own units is within
 //!   `vision_radius` of it.
 //!
@@ -238,7 +238,7 @@ impl TeamRoom {
     }
 
     /// Build a team-fog room over a square spawn map of half-size `half`
-    /// (see `gsb_game::room::DemoRoom::with_spawn_half`).
+    /// (see `gsb_game::room::OpenRoom::with_spawn_half`).
     #[must_use]
     pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self {
@@ -261,7 +261,7 @@ impl TeamRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
@@ -448,7 +448,7 @@ impl GameLogic<World> for TeamRoom {
         crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`) ---------------------------
     //
     // Visibility of a parked hero (RECONNECT §3.2): under team fog a
@@ -512,7 +512,7 @@ impl GameLogic<World> for TeamRoom {
         crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
-    /// The per-connection input acknowledgment (see `DemoRoom::private`).
+    /// The per-connection input acknowledgment (see `OpenRoom::private`).
     fn private(
         &mut self,
         _world: &mut World,

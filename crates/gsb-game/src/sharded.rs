@@ -271,7 +271,7 @@ impl ShardedRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     /// Every shard of a room should carry the same policy (the factory
     /// builds them uniformly).
     #[must_use]
@@ -282,7 +282,7 @@ impl ShardedRoom {
 
     /// Attach the economy service handle (the RPC pattern's external-I/O
     /// half on the sharded path — Faz 3; see [`Self::economy`]). Builder-
-    /// style, like [`crate::room::DemoRoom::with_economy`]; every shard of
+    /// style, like [`crate::room::OpenRoom::with_economy`]; every shard of
     /// a room gets a clone of the ONE server-wide service.
     #[must_use]
     pub fn with_economy(mut self, economy: EconomyService) -> Self {
@@ -475,7 +475,7 @@ impl GameLogic<World> for ShardedRoom {
         crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`; this shard-side mirror keys
     //    its ledger by identity like the others but tracks the WIRE id,
     //    because that is what survives migrations) ----------------------
@@ -616,7 +616,7 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     /// The demo's two request kinds on the SHARDED path (Faz 3 — the same
-    /// contract as [`crate::room::DemoRoom::handle_request`], resolved
+    /// contract as [`crate::room::OpenRoom::handle_request`], resolved
     /// against THIS shard's world):
     ///
     /// - `ABILITY` (room-local): range check + a real world mutation (the
@@ -703,7 +703,7 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     /// This shard's match result (the Faz 3 promotion; the per-shard
-    /// sibling of [`crate::room::DemoRoom::match_result`]): the FINAL
+    /// sibling of [`crate::room::OpenRoom::match_result`]): the FINAL
     /// snapshot of this shard's own region at teardown. One logical room
     /// therefore yields one such payload PER SHARD through the shared
     /// sink (all under the logical room id — the platform adapter

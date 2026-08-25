@@ -23,7 +23,7 @@ use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_game::game::{Private, WorldSnapshot};
 use gsb_game::op;
-use gsb_game::room::DemoRoom;
+use gsb_game::room::OpenRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -58,7 +58,7 @@ impl TestRoom {
         let actor = RoomActor::new(
             config,
             World::new(),
-            Box::new(DemoRoom::new()),
+            Box::new(OpenRoom::new()),
             tick_rx,
             control_rx,
             1, // room rate == global rate

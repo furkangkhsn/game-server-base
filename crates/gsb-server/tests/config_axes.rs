@@ -60,8 +60,9 @@ fn rejected(cfg: &Config) -> ServerError {
 /// Every legacy `visibility` value derives EXACTLY the documented axes
 /// and still lands on the same room it built before the axes existed:
 /// `"sharded"` splits into topology=sharded + visibility=all (it was a
-/// topology statement all along), spatial's derived delta describes its
-/// internal per-cell diff without requesting client-facing delta frames.
+/// topology statement all along), spatial's derived `delta` names the
+/// packaging AoiRoom already serves (its internal per-cell diff) — the
+/// same room an explicit `communication = "delta"` request resolves to.
 #[test]
 fn legacy_visibility_values_derive_the_documented_axes() {
     let cases = [
@@ -70,7 +71,7 @@ fn legacy_visibility_values_derive_the_documented_axes() {
             Topology::Single,
             VisibilityAxis::All,
             Communication::AlwaysFull,
-            RoomKind::Demo,
+            RoomKind::Open,
         ),
         (
             Visibility::Spatial,
@@ -117,14 +118,14 @@ fn legacy_visibility_values_derive_the_documented_axes() {
 }
 
 /// The default config (no keys at all) is single × all × always-full →
-/// DemoRoom: the least-surprising starting point, unchanged since ever.
+/// OpenRoom: the least-surprising starting point, unchanged since ever.
 #[test]
 fn default_config_derives_the_all_baseline() {
     let sel = resolved(&Config::default());
     assert_eq!(sel.topology, Topology::Single);
     assert_eq!(sel.visibility, VisibilityAxis::All);
     assert_eq!(sel.communication, Communication::AlwaysFull);
-    assert_eq!(sel.kind, RoomKind::Demo);
+    assert_eq!(sel.kind, RoomKind::Open);
 }
 
 // ── Explicit-key precedence ────────────────────────────────────────────
@@ -143,7 +144,7 @@ fn explicit_topology_overrides_the_legacy_sharded_spelling() {
     assert_eq!(sel.topology, Topology::Single);
     // The visibility half of the sharded spelling decodes to `all`.
     assert_eq!(sel.visibility, VisibilityAxis::All);
-    assert_eq!(sel.kind, RoomKind::Demo);
+    assert_eq!(sel.kind, RoomKind::Open);
 }
 
 /// The symmetric direction: an explicit `topology = "sharded"` upgrades a
@@ -176,6 +177,30 @@ fn explicit_communication_always_full_pins_spatial_to_full_frames() {
     assert_eq!(sel.kind, RoomKind::Aoi, "spatial still maps onto the AOI room");
 }
 
+/// Consistency of the two spellings (the round's fix): an EXPLICIT
+/// `communication = "delta"` under single × spatial resolves to the SAME
+/// AoiRoom the derived spelling always built — delta packaging already
+/// exists there (the internal per-cell diff), so the explicit request must
+/// not fail while its derived twin succeeds. Same room, one behavior.
+#[test]
+fn explicit_spatial_delta_resolves_to_the_aoi_room() {
+    // The derived spelling (legacy key only) — the pre-existing path.
+    let derived = resolved(&legacy(Visibility::Spatial));
+    assert_eq!(derived.topology, Topology::Single);
+    assert_eq!(derived.visibility, VisibilityAxis::Spatial);
+    assert_eq!(derived.communication, Communication::Delta);
+    assert_eq!(derived.kind, RoomKind::Aoi);
+
+    // The fully explicit triple — must agree on every axis.
+    let explicit = resolved(&with_axes(
+        &legacy(Visibility::Spatial),
+        Some(Topology::Single),
+        Some(Communication::Delta),
+    ));
+    assert_eq!(explicit, derived, "explicit and derived spellings agree");
+    assert_eq!(explicit.kind, RoomKind::Aoi);
+}
+
 // ── Supported-combination mapping ──────────────────────────────────────
 
 /// Each SUPPORTED combination resolves to its existing room kind. These
@@ -190,12 +215,20 @@ fn every_supported_combination_maps_to_its_existing_room() {
             Visibility::All,
             Some(Topology::Single),
             Some(Communication::AlwaysFull),
-            RoomKind::Demo,
+            RoomKind::Open,
         ),
         (
             Visibility::Spatial,
             Some(Topology::Single),
             Some(Communication::AlwaysFull),
+            RoomKind::Aoi,
+        ),
+        (
+            // Explicit spatial × delta is the SAME room as the derived
+            // spelling: delta is AoiRoom's native packaging.
+            Visibility::Spatial,
+            Some(Topology::Single),
+            Some(Communication::Delta),
             RoomKind::Aoi,
         ),
         (
@@ -253,14 +286,15 @@ fn resolution_is_deterministic() {
 
 // ── Unsupported-combination rejection ──────────────────────────────────
 
-/// `single × delta` is rejected for EVERY visibility: client-facing delta
-/// snapshots do not exist yet anywhere (only the spatial room diffs
-/// internally), so the error names the common codec gap on the roadmap.
+/// `single × delta` is rejected for every visibility WITHOUT a delta
+/// implementation (all/team/pvs — spatial is the exemption that resolves,
+/// see `explicit_spatial_delta_resolves_to_the_aoi_room`); the message
+/// names which visibility CAN serve delta today plus the codec gap on the
+/// roadmap.
 #[test]
-fn single_delta_is_rejected_for_every_visibility_naming_the_codec_gap() {
+fn single_delta_rejected_for_visibilities_without_a_delta_impl() {
     for v in [
         Visibility::All,
-        Visibility::Spatial,
         Visibility::Team,
         Visibility::Pvs,
     ] {
@@ -271,8 +305,12 @@ fn single_delta_is_rejected_for_every_visibility_naming_the_codec_gap() {
         }
         let msg = err.to_string();
         assert!(
-            msg.contains("delta client snapshots exist only in the spatial strategy today"),
-            "message must name the codec gap: {msg}"
+            msg.contains("only spatial (AoiRoom) does"),
+            "message must name the one visibility serving delta today: {msg}"
+        );
+        assert!(
+            msg.contains("all/team/pvs have no delta packaging yet"),
+            "message must name which visibilities lack delta: {msg}"
         );
         assert!(
             msg.contains("ROADMAP"),

@@ -76,7 +76,7 @@
 //!   phase, so it is in the sector snapshot that its sector emits on the
 //!   first broadcast — the joiner sees its sector's full visibility set.
 //! - **Broadcast set**: exactly "has a `Position`" (orphan stamping in
-//!   `update`, structural like `DemoRoom`).
+//!   `update`, structural like `OpenRoom`).
 //! - **Self-contained**: no delta, no history; the per-sector ledger
 //!   compares exactly the wire content of that sector's last emitted
 //!   snapshot (per-group bookkeeping contract), so an entity crossing a
@@ -254,7 +254,7 @@ impl SectorRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
@@ -358,7 +358,7 @@ impl GameLogic<World> for SectorRoom {
         crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`) ---------------------------
 
     fn on_disconnect(
@@ -414,7 +414,7 @@ impl GameLogic<World> for SectorRoom {
         crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
-    /// The per-connection input acknowledgment (see `DemoRoom::private`).
+    /// The per-connection input acknowledgment (see `OpenRoom::private`).
     fn private(
         &mut self,
         _world: &mut World,

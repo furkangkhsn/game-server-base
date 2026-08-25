@@ -39,7 +39,7 @@ pub struct RoomId(pub u64);
 ///
 /// Deliberately a plain `u64` so this crate stays ECS-agnostic: the game
 /// crate chooses the identity space behind it. The demo assigns a
-/// room-local, never-reused serial at spawn (see gsb-game's `DemoRoom`
+/// room-local, never-reused serial at spawn (see gsb-game's `OpenRoom`
 /// and `game.proto`, `EntityRecord.entity`).
 pub type EntityId = u64;
 

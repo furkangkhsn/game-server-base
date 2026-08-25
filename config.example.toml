@@ -190,16 +190,21 @@ keepalive_hz = 1.0
 # SUPPORTED TODAY (everything else REFUSES STARTUP, with an error naming
 # the roadmap phase/document that will deliver it):
 #
-#   single  x all     x always-full   (DemoRoom)
+#   single  x all     x always-full   (OpenRoom)
 #   single  x spatial x always-full   (AoiRoom)
+#   single  x spatial x delta         (AoiRoom — delta is its native
+#                                      packaging, so the explicit request
+#                                      resolves to the same room as the
+#                                      derived spelling)
 #   single  x team    x always-full   (TeamRoom)
 #   single  x pvs     x always-full   (SectorRoom)
 #   sharded x all     x always-full   (ShardedRoom grid)
 #
 # Rejected combinations:
-#   communication = "delta" anywhere        - client-facing delta frames
-#     wait for the common DeltaSnapshotCodec (single: ROADMAP codec gap;
-#     sharded: ROADMAP Faz B/C).
+#   communication = "delta" outside single x spatial - client-facing delta
+#     frames exist only in the spatial room today (all/team/pvs wait for
+#     the common DeltaSnapshotCodec on ROADMAP; sharded waits for its Faz
+#     B/C delta book and per-link derivation).
 #   topology = "sharded" + visibility = "spatial" - per-shard cell-grouped
 #     broadcast is ROADMAP Faz B.
 #   topology = "sharded" + visibility = "team"/"pvs" - cross-shard interest

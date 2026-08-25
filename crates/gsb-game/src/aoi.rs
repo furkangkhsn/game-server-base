@@ -242,7 +242,7 @@
 //!   visibility block (one-shot private full, or the group's own fresh
 //!   full in the same batch).
 //! - **Broadcast set**: exactly "has a `Position`" (orphan stamping in
-//!   `update`, structural like `DemoRoom`).
+//!   `update`, structural like `OpenRoom`).
 //! - **Convergence**: the delta stream and the full stream produce the
 //!   same client view of the same world (two paths, one result).
 //! - **No ghosts, no duplicates**: an entity in a cell the client cannot
@@ -496,7 +496,7 @@ impl AoiRoom {
     }
 
     /// Build an AOI room over a square spawn map of half-size `half` (see
-    /// `gsb_game::room::DemoRoom::with_spawn_half`).
+    /// `gsb_game::room::OpenRoom::with_spawn_half`).
     #[must_use]
     pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self {
@@ -532,7 +532,7 @@ impl AoiRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::DemoRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
@@ -975,7 +975,7 @@ impl GameLogic<World> for AoiRoom {
         self.conn_view.remove(&player);
     }
 
-    // -- the disconnect policy (see `crate::room::DemoRoom`, the shared
+    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`) ---------------------------
 
     fn on_disconnect(
@@ -1037,7 +1037,7 @@ impl GameLogic<World> for AoiRoom {
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::run_systems(&mut self.runner, world, ctx);
-        // Orphan stamping (idempotent, mirrors `DemoRoom`): entities with
+        // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with
         // a `Position` but no `WireId` get the next serial, so the
         // broadcast set is exactly "has a `Position`". It runs BEFORE the
         // dirty query below: the query requires a `WireId`, and a

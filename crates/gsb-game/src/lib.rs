@@ -4,7 +4,7 @@
 //! game. It plugs into the core via the [`gsb_core::room::GameLogic`]
 //! supertrait — the single-source shared contract (see
 //! `docs/TRAIT-ARCHITECTURE.md`) — narrowed by [`gsb_core::room::RoomLogic`]
-//! with the room-exclusive request/result seams (see [`room::DemoRoom`]),
+//! with the room-exclusive request/result seams (see [`room::OpenRoom`]),
 //! and it registers its wire messages with the
 //! [`gsb_protocol::MessageTable`] (see [`register`]).
 //!
@@ -17,7 +17,7 @@
 //! the *visibility strategy* differs (selected in `gsb-server`'s config,
 //! see `docs/DESIGN.md` §8):
 //!
-//! - [`room::DemoRoom`] — `GroupKey = ()`: everyone sees the whole world
+//! - [`room::OpenRoom`] — `GroupKey = ()`: everyone sees the whole world
 //!   (the baseline, no grouping).
 //! - [`aoi::AoiRoom`] — `GroupKey = Cell`: spatial AOI (3×3 cell block).
 //! - [`team::TeamRoom`] — `GroupKey = Team`: team fog of war (2 groups;

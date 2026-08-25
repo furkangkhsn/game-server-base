@@ -1,4 +1,4 @@
-//! [`DemoRoom`]: the demo game's game-logic implementation — the shared
+//! [`OpenRoom`]: the demo game's game-logic implementation — the shared
 //! contract on [`GameLogic`](gsb_core::room::GameLogic), the room-exclusive
 //! request/result seams on [`RoomLogic`].
 //!
@@ -101,8 +101,10 @@ use crate::op;
 /// `spawn_pos`.
 pub const DEFAULT_SPAWN_HALF: f32 = 50.0;
 
-/// The demo room: one moving entity per player, free 2D movement.
-pub struct DemoRoom {
+/// The open-visibility strategy room (`GroupKey = ()`): one moving entity
+/// per player, free 2D movement — everyone sees everything (the
+/// unrestricted baseline the restricted strategies are measured against).
+pub struct OpenRoom {
     runner: SystemRunner,
     /// Player → entity (Faz 2: keyed by the STABLE player identity — the
     /// mapping survives resume unchanged; only a join/leave touches it).
@@ -158,20 +160,20 @@ pub struct DemoRoom {
     park_ledger: HashMap<String, ParkEntry>,
 }
 
-impl Default for DemoRoom {
+impl Default for OpenRoom {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DemoRoom {
-    /// Build the demo room over the default 100×100 arena (bit-identical
+impl OpenRoom {
+    /// Build the open room over the default 100×100 arena (bit-identical
     /// spawn distribution to the pre-config rooms).
     pub fn new() -> Self {
         Self::with_spawn_half(DEFAULT_SPAWN_HALF)
     }
 
-    /// Build the demo room over a square spawn map of half-size `half`
+    /// Build the open room over a square spawn map of half-size `half`
     /// (entities spawn uniformly in `[-half, half]²`). The load
     /// generator's `spread` profile pairs this with its home distribution
     /// so spawn points and targets live on the same (possibly "wide")
@@ -235,7 +237,7 @@ pub fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
 // snapshot groups, the tick seam, membership, the reconnect surface —
 // implements the `GameLogic` supertrait; the request/result seams stay in
 // the `RoomLogic` impl below.
-impl GameLogic<World> for DemoRoom {
+impl GameLogic<World> for OpenRoom {
     // One group per room: everyone sees the whole world. (The interface
     // supports finer groupings, e.g. `GroupKey = ConnectionId` — but then
     // the `last` ledger above must be keyed by group; see the module
@@ -579,8 +581,8 @@ impl GameLogic<World> for DemoRoom {
 
 // Faz 3 trait promotion: `handle_request` / `match_result` moved onto the
 // shared `GameLogic` supertrait above; this impl remains the compile-time
-// marker that DemoRoom targets the single-room actor.
-impl RoomLogic<World> for DemoRoom {}
+// marker that OpenRoom targets the single-room actor.
+impl RoomLogic<World> for OpenRoom {}
 
 #[cfg(test)]
 mod tests {
@@ -603,7 +605,7 @@ mod tests {
     #[test]
     fn snapshot_emits_on_plain_position_write() {
         let mut world = World::new();
-        let mut room = DemoRoom::new();
+        let mut room = OpenRoom::new();
         let wire_id = room.on_join(&mut world, ConnectionId(1)).entity;
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
@@ -649,7 +651,7 @@ mod tests {
     #[test]
     fn wire_identity_survives_ecs_slot_reuse() {
         let mut world = World::new();
-        let mut room = DemoRoom::new();
+        let mut room = OpenRoom::new();
         let ctx = ctx1();
 
         // 129 join/leave cycles: every join gets a fresh wire id, every
@@ -723,7 +725,7 @@ mod tests {
 
     /// The publishable precondition is structural, not a discipline: an
     /// entity that carries a [`Position`] but never passed through
-    /// [`DemoRoom::on_join`] (bullets, NPCs, traps — anything not
+    /// [`OpenRoom::on_join`] (bullets, NPCs, traps — anything not
     /// player-spawned) must not be *silently invisible*. The broadcast
     /// pass stamps it with a fresh serial and includes it in the very
     /// next snapshot — restoring the pre-compact-identity contract
@@ -731,7 +733,7 @@ mod tests {
     #[test]
     fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
         let mut world = World::new();
-        let mut room = DemoRoom::new();
+        let mut room = OpenRoom::new();
         let ctx = ctx1();
 
         // Two players through the normal path (wire ids 1 and 2).
@@ -808,7 +810,7 @@ mod tests {
     #[test]
     fn snapshot_silent_when_wire_content_unchanged() {
         let mut world = World::new();
-        let mut room = DemoRoom::new();
+        let mut room = OpenRoom::new();
         room.on_join(&mut world, ConnectionId(1));
         let ctx = ctx1();
         let mut out = bytes::BytesMut::new();
