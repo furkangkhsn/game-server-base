@@ -3223,6 +3223,38 @@ saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
   allokasyonu; yeniden kullanılabilir buffer. (Load test verisiyle
   doğrulanacak — belki sorun değildir.)
 
+- [ ] **Konfigürasyon düzeltmesi: üç eksenli seçim — topology × visibility ×
+  communication** (dış danışma bulgusu): mevcut beş strateji
+  (all/spatial/team/pvs/sharded) iki FARKLI kavramı tek seviyede
+  birleştiriyordu. Doğru model üç dik eksendir:
+
+  | Eksen | Sorar | Değerler |
+  |---|---|---|
+  | `topology` | Dünyayı kim/sahip olarak nasıl hesaplıyor? | `single` \| `sharded(N)` |
+  | `visibility` | Bir birimin İÇİNDE kim kime hangi veriyi gönderecek? | `all` \| `spatial` \| `team` \| `pvs` |
+  | `communication` | Veri nasıl paketlenip taşınacak? | `always-full` \| `delta` (N delta + 1 full yakınsaması) |
+
+  Her kombinasyonun anlamı olmayabilir — kullanım anında belli olur;
+  desteklenmeyenler başlangıçta reddedilir/belgelenir.
+
+  - **Faz A:** config ayrıştırması; eski beşli anahtarın matrisin geçerli
+    kombinasyonlarına derlenmesi (geriye-dönük uyum zorunlu).
+  - **Faz B:** `sharded × spatial` kompoziti — her shard kendi içinde
+    hücre-gruplu yayın yapar (AoiRoom mantığının shard-içi örneklanması);
+    ödünç border şeridi delta defterine entegre edilir (borrowed set
+    her tick tam geldiğinden diff'i önceki borrowed görünümüne karşı
+    kurulmalı — yoksa her tick dirty olur).
+  - **Faz C:** communication modunun per-link otomatik türetilmesi:
+    aynı-process komşu → always-full (byte bedava, CPU kıt);
+    cross-process/cross-machine komşu → delta (byte transport parası;
+    A/B ölçümü: 0.39×). Config override'ı opsiyonel.
+  - Zemin hazır: `GameLogic` sözleşmesi mod-farkını destekliyor
+    (snapshot bool + keepalive hook), delta codec'i AoiRoom'da yaşıyor,
+    `BorderRecord<Strip>` jenerikliği ve `ShardLink` seam'i Faz B/C'nin
+    primitifleri olarak duruyor. Kısıt: `team × sharded` gibi lokalite-
+    karşıtı kombolar cross-shard abonelik katmanı ister (DISTRIBUTED.md
+    ufuk maddesi).
+
 ## P2 — Ölçek (load test sonrasına göre sıralanır)
 
 İlk yük turu (100/500/1000 — "Kapatılanlar (metrik + yük turu)")
