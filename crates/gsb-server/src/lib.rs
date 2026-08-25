@@ -39,10 +39,20 @@ use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFact
 use gsb_core::room::{RoomConfig, RoomLogic};
 use gsb_core::auth::TicketAuth;
 
-/// The visibility strategy of the demo rooms (config-selectable; all run
+/// The LEGACY config spelling of two of the three selection axes
+/// (`docs/ROADMAP.md`, P2 "Konfigürasyon düzeltmesi"): the demo rooms'
+/// visibility strategy (config-selectable; all run
 /// the SAME game — same components, movement, wire format — and differ
 /// only in how the world is partitioned into snapshot groups, see
 /// `docs/DESIGN.md` §8).
+///
+/// WHY it survives unchanged: backward compatibility — every pre-axes
+/// config file, test and caller encodes its choice in this one key. It is
+/// an INPUT ENCODING only: [`Config::resolve_selection`] decodes it into
+/// the authoritative axes ([`Topology`] × [`VisibilityAxis`] ×
+/// [`Communication`]) before anything runs, so no factory ever matches on
+/// this enum again. Its `"sharded"` variant is really a topology
+/// statement, which the decode makes explicit.
 ///
 /// Each variant is a different `RoomLogic` group key, so each needs its
 /// own registry instantiation (a `RoomFactory` is generic over the group
@@ -99,6 +109,161 @@ impl std::fmt::Display for Visibility {
         };
         f.write_str(s)
     }
+}
+
+/// The TOPOLOGY axis of the three-axis room selection (`docs/ROADMAP.md`,
+/// P2 "Konfigürasyon düzeltmesi"): who computes the world, and as how many
+/// authoritative pieces. Orthogonal to WHAT a group is ([`VisibilityAxis`])
+/// and HOW snapshots are packaged ([`Communication`]).
+///
+/// A separate key from the legacy [`Visibility`] spelling because
+/// `visibility = "sharded"` was never a visibility statement — it changed
+/// the ACTOR/OWNERSHIP structure (N shard actors + N worlds instead of one).
+/// The new key names that concept directly; the legacy spelling keeps
+/// working as an input encoding (see [`Config::resolve_selection`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Topology {
+    /// ONE room actor over ONE world — every shipped strategy except the
+    /// grid (the default, and the behavior of every pre-axes config).
+    #[default]
+    Single,
+    /// The map is cut into a `Config::shard_count`-cell grid; each shard is
+    /// its own actor + world with entity migration across the seams (see
+    /// `gsb_game::sharded`). Requires the count to be 1..=256.
+    Sharded,
+}
+
+impl std::fmt::Display for Topology {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Single => "single",
+            Self::Sharded => "sharded",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The COMMUNICATION axis: how snapshot data is packaged and carried to a
+/// client — a full frame every time, or deltas converging on the keepalive
+/// full (`docs/ROADMAP.md`, P2; the N-delta + 1-full convergence rule).
+///
+/// WHY the axis exists even though nothing serves client-facing delta yet:
+/// the spatial room already diffs per cell INTERNALLY, so the axis records
+/// a real distinction the roadmap generalizes (per-link derivation, Faz C);
+/// naming it explicitly today fails at startup with an error pointing at
+/// the phase that will deliver it — a request is never silently downgraded.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Communication {
+    /// Every snapshot frame carries the group's full state — what every
+    /// shipped room speaks on the wire today (the default).
+    #[default]
+    AlwaysFull,
+    /// Client-facing delta frames with periodic/full keepalive
+    /// convergence. NO strategy serves this yet: under `topology =
+    /// "single"` the error names the common codec gap; under
+    /// `topology = "sharded"` it names ROADMAP Faz B/C.
+    Delta,
+}
+
+impl std::fmt::Display for Communication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::AlwaysFull => "always-full",
+            Self::Delta => "delta",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The resolved VISIBILITY axis: within the world, WHO sees WHOM — the
+/// group-key choice of the room that will run (`docs/DESIGN.md` §8).
+///
+/// Deliberately NOT the legacy [`Visibility`] enum: that one fuses two
+/// axes (its `"sharded"` spelling is really a [`Topology`] statement), so
+/// a resolved selection carrying it could name impossible states (a
+/// "sharded group key"). This axis is produced only by
+/// [`Config::resolve_selection`]; there is no separate TOML key — the
+/// legacy `visibility` key doubles as its input encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisibilityAxis {
+    /// `GroupKey = ()`: everyone sees the whole world (the baseline).
+    All,
+    /// `GroupKey = Cell`: spatial AOI, 3×3 cell block (see
+    /// `gsb_game::aoi`).
+    Spatial,
+    /// `GroupKey = Team`: team fog of war, 2 groups (see
+    /// `gsb_game::team`).
+    Team,
+    /// `GroupKey = Sector`: static PVS over hand-authored convex sectors
+    /// (see `gsb_game::pvs`).
+    Pvs,
+}
+
+impl From<Visibility> for VisibilityAxis {
+    /// Decode the legacy five-value spelling into the axis. `"sharded"`
+    /// folds into [`VisibilityAxis::All`]: by the time this conversion
+    /// runs, the topology half of the spelling has already been extracted
+    /// (see [`Config::resolve_selection`]), and a shard grid's groups are
+    /// whole-world-per-shard today.
+    fn from(legacy: Visibility) -> Self {
+        match legacy {
+            Visibility::All | Visibility::Sharded => Self::All,
+            Visibility::Spatial => Self::Spatial,
+            Visibility::Team => Self::Team,
+            Visibility::Pvs => Self::Pvs,
+        }
+    }
+}
+
+impl std::fmt::Display for VisibilityAxis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::All => "all",
+            Self::Spatial => "spatial",
+            Self::Team => "team",
+            Self::Pvs => "pvs",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The concrete room build a validated selection maps onto: one variant
+/// per factory that exists TODAY (no new strategies — Faz A only re-expresses
+/// the old surface). Exposed so tests and tooling can assert WHICH room a
+/// config resolves to without starting a server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomKind {
+    /// `gsb_game::room::DemoRoom` — single actor, whole-world groups.
+    Demo,
+    /// `gsb_game::aoi::AoiRoom` — single actor, spatial AOI cells.
+    Aoi,
+    /// `gsb_game::team::TeamRoom` — single actor, team fog of war.
+    Team,
+    /// `gsb_game::pvs::SectorRoom` — single actor, sector PVS.
+    Sector,
+    /// `gsb_game::sharded::ShardedRoom` grid — N shard actors, whole-world
+    /// groups per shard (`BuiltRoom::Sharded`).
+    Sharded,
+}
+
+/// The fully-resolved three-axis selection: the raw config surface
+/// (legacy spellings + explicit keys) reduced to validated axes plus the
+/// room build they map onto. Produced ONLY by
+/// [`Config::resolve_selection`] — everything downstream of it (the
+/// factory pick in `start_inner`) reads THIS, never the legacy string, so
+/// the axes are authoritative and the old spellings are mere encodings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedSelection {
+    /// Who computes the world.
+    pub topology: Topology,
+    /// Who sees whom within it.
+    pub visibility: VisibilityAxis,
+    /// How snapshots are packaged for clients.
+    pub communication: Communication,
+    /// The existing factory this triple resolves to.
+    pub kind: RoomKind,
 }
 use gsb_net::tcp::TcpTransport;
 use gsb_net::tls::{TlsTransport, TlsTransportConfig};
@@ -290,10 +455,69 @@ pub struct Config {
     /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
     /// lost its last snapshot must not stay stale forever). `<= 0` disables.
     pub keepalive_hz: f64,
-    /// The visibility strategy of the demo rooms (see [`Visibility`]).
+    /// The TOPOLOGY selection axis (`"single"` | `"sharded"`; see
+    /// [`Topology`]): who computes the world and as how many authoritative
+    /// pieces.
+    ///
+    /// Value semantics (resolved ONCE at startup, see
+    /// [`Self::resolve_selection`]):
+    ///
+    /// - omitted (`None`, the default): DERIVED — `single`, except when the
+    ///   legacy `visibility` key reads `"sharded"` (that spelling was
+    ///   always a topology statement wearing a visibility name);
+    /// - set: the explicit key WINS over the legacy derivation. When the
+    ///   two disagree (e.g. legacy `visibility = "sharded"` next to
+    ///   explicit `topology = "single"`), a startup warn names which side
+    ///   took effect (the same courtesy `[[listeners]]` extends to the
+    ///   scalar transport keys) — behavior never changes silently.
+    pub topology: Option<Topology>,
+    /// The COMMUNICATION selection axis (`"always-full"` | `"delta"`;
+    /// see [`Communication`]): how snapshot data is packaged for clients.
+    ///
+    /// Value semantics (resolved ONCE at startup, see
+    /// [`Self::resolve_selection`]):
+    ///
+    /// - omitted (`None`, the default): DERIVED from the visibility axis —
+    ///   `spatial` ⇒ `delta` (its room diffs per cell internally), every
+    ///   other visibility ⇒ `always-full`. A derived value DESCRIBES what
+    ///   the mapped room already does; it requests nothing new;
+    /// - set: the explicit key WINS over the derivation, and an explicit
+    ///   `"delta"` is a REQUEST for client-facing delta snapshots — no
+    ///   strategy serves those yet, so it REFUSES STARTUP with an error
+    ///   naming the roadmap phase that will deliver them (never a silent
+    ///   downgrade to full frames).
+    pub communication: Option<Communication>,
+    /// The legacy input encoding of TWO of the three selection axes (see
+    /// [`Visibility`] and the derivation below).
+    ///
+    /// The four non-`"sharded"` spellings ARE the [`VisibilityAxis`]
+    /// values. `"sharded"` decodes to topology = `sharded` + visibility =
+    /// `all`. Full derivation table (when the new keys are omitted):
+    ///
+    /// | legacy `visibility` | resolved triple (topology × visibility × communication) |
+    /// |---|---|
+    /// | `"all"`     | single  × all     × always-full |
+    /// | `"spatial"` | single  × spatial × delta¹ |
+    /// | `"team"`    | single  × team    × always-full |
+    /// | `"pvs"`     | single  × pvs     × always-full |
+    /// | `"sharded"` | sharded × all     × always-full |
+    ///
+    /// ¹ describes the spatial room's INTERNAL per-cell diff; it is not a
+    /// client-facing delta request — that is the explicit
+    /// [`Self::communication`] key's job, and it is rejected until the
+    /// common codec ships.
+    ///
+    /// Precedence: an explicit [`Self::topology`] /
+    /// [`Self::communication`] key always overrides its derived cell.
+    /// Every legacy spelling resolves to one of the five supported
+    /// combinations, so pre-axes configs keep working unchanged; only
+    /// EXPLICIT new-axis requests can reach a rejected combination, and
+    /// those fail at startup naming the roadmap phase that will deliver
+    /// them (see [`ServerError`]).
     pub visibility: Visibility,
-    /// Number of shards per room (used only when
-    /// [`Self::visibility`] = [`Visibility::Sharded`]). The map is divided
+    /// Number of shards per room (used only when the RESOLVED topology is
+    /// [`Topology::Sharded`] — via legacy `visibility = "sharded"` OR an
+    /// explicit `topology = "sharded"`). The map is divided
     /// into a near-square grid of `rows × cols` shards (`rows * cols =
     /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
     /// 1..=256 (the grid topology); validated at startup. Default 4 (2×2).
@@ -420,6 +644,8 @@ impl Default for Config {
             max_unauth_conns: None,
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
+            topology: None,
+            communication: None,
             visibility: Visibility::default(),
             shard_count: 4,
             transport: TransportKind::default(),
@@ -462,6 +688,113 @@ impl Config {
         }
         Ok(cfg)
     }
+
+    /// Reduce the raw config surface to the validated three-axis selection
+    /// (topology × visibility × communication — `docs/ROADMAP.md`, P2
+    /// "Konfigürasyon düzeltmesi", Faz A) and map it onto the room build
+    /// that will run.
+    ///
+    /// This is THE gate between "what the operator wrote" and "what will
+    /// run": the composition root matches on the returned
+    /// [`ResolvedSelection::kind`] instead of the raw legacy string, so
+    /// the axes are authoritative and legacy spellings stay input
+    /// encodings. Derivation + precedence:
+    ///
+    /// 1. TOPOLOGY — explicit [`Self::topology`] wins; omission derives
+    ///    from the legacy encoding (`visibility = "sharded"` ⇒ sharded).
+    /// 2. VISIBILITY — decoded from the legacy [`Self::visibility`] key
+    ///    (`"sharded"` folds into `all`; its topology half was taken in
+    ///    step 1).
+    /// 3. COMMUNICATION — explicit [`Self::communication`] wins; omission
+    ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
+    ///    rooms actually do).
+    ///
+    /// Combination validation runs on the RESOLVED triple. Only five
+    /// combinations have an implementation today (single × {all, spatial,
+    /// team, pvs} × always-full, and sharded × all × always-full);
+    /// everything else is rejected HERE with an error naming the roadmap
+    /// phase/document that will deliver it — a supported-combination check
+    /// must refuse at startup, never misconfigure a running server.
+    ///
+    /// One deliberate exemption: the DERIVED `delta` under `spatial`
+    /// describes that room's existing internal per-cell diff, so it passes
+    /// validation exactly as the pre-axes config did. Only an EXPLICIT
+    /// `communication = "delta"` requests client-facing delta packaging —
+    /// which nothing serves yet — and is always rejected.
+    pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
+        // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
+        // a contradiction warns (behavior still follows the explicit key).
+        let legacy_sharded = self.visibility == Visibility::Sharded;
+        let topology = match self.topology {
+            Some(explicit) => {
+                if legacy_sharded && explicit == Topology::Single {
+                    warn!(
+                        resolved = %explicit,
+                        "`topology` takes precedence: ignoring the legacy \
+                         visibility = \"sharded\" spelling"
+                    );
+                }
+                explicit
+            }
+            None if legacy_sharded => Topology::Sharded,
+            None => Topology::Single,
+        };
+
+        // Stage 2 — VISIBILITY axis: decode the legacy five-value spelling.
+        let visibility = VisibilityAxis::from(self.visibility);
+
+        // Stage 3 — COMMUNICATION: explicit key wins over the derived
+        // default (the default mirrors what the mapped room does today).
+        let derived_communication = match visibility {
+            VisibilityAxis::Spatial => Communication::Delta,
+            VisibilityAxis::All | VisibilityAxis::Team | VisibilityAxis::Pvs => {
+                Communication::AlwaysFull
+            }
+        };
+        let communication = self.communication.unwrap_or(derived_communication);
+
+        // Stage 4 — combination validation, structural axes first (they
+        // decide what the world IS), then the packaging axis. Each
+        // rejection names the roadmap phase/document that delivers it.
+        let kind = match (topology, visibility) {
+            (Topology::Single, VisibilityAxis::All) => RoomKind::Demo,
+            (Topology::Single, VisibilityAxis::Spatial) => RoomKind::Aoi,
+            (Topology::Single, VisibilityAxis::Team) => RoomKind::Team,
+            (Topology::Single, VisibilityAxis::Pvs) => RoomKind::Sector,
+            (Topology::Sharded, VisibilityAxis::All) => RoomKind::Sharded,
+            // No implementation yet: every shard diffusing its own cell
+            // groups is the Faz B composite. Fail cleanly instead of
+            // silently running whole-shard snapshots under a config that
+            // asked for per-cell AOI across the grid.
+            (Topology::Sharded, VisibilityAxis::Spatial) => return Err(ServerError::ShardedSpatial),
+            // Locality-contrary combos: team/pvs interest reaches across
+            // shard seams, which needs a cross-shard subscription layer
+            // nobody has built (see docs/CROSS-SHARD.md §4 — interaction
+            // designs stay shard-local; docs/DISTRIBUTED.md horizon item).
+            (Topology::Sharded, other @ (VisibilityAxis::Team | VisibilityAxis::Pvs)) => {
+                return Err(ServerError::ShardedCrossInterest(other.to_string()))
+            }
+        };
+
+        // An EXPLICIT delta request has no implementation anywhere today:
+        // client-facing delta frames wait for the common codec (single)
+        // and for the per-shard delta book / per-link derivation
+        // (sharded). A DERIVED delta never gets here as a rejection — it
+        // described an existing room, above.
+        if self.communication == Some(Communication::Delta) {
+            return Err(match topology {
+                Topology::Single => ServerError::SingleDelta,
+                Topology::Sharded => ServerError::ShardedDelta,
+            });
+        }
+
+        Ok(ResolvedSelection {
+            topology,
+            visibility,
+            communication,
+            kind,
+        })
+    }
 }
 
 /// Configuration errors.
@@ -496,6 +829,31 @@ pub enum ServerError {
 
     #[error("invalid `shard_count` {0}: must be 1..=256 (grid topology)")]
     BadShardCount(u32),
+
+    #[error("topology = \"sharded\" with visibility = \"spatial\" has no \
+             implementation yet: per-shard cell-grouped broadcast is \
+             ROADMAP Faz B (the sharded × spatial composite); use \
+             visibility = \"all\" today")]
+    ShardedSpatial,
+
+    #[error("topology = \"sharded\" with visibility = \"{0}\" breaks shard \
+             locality: cross-shard interest needs a subscription layer \
+             that does not exist yet (docs/CROSS-SHARD.md §4 keeps every \
+             interaction design shard-local); run team/pvs rooms on \
+             topology = \"single\"")]
+    ShardedCrossInterest(String),
+
+    #[error("communication = \"delta\" under topology = \"single\": delta \
+             client snapshots exist only in the spatial strategy today \
+             (ROADMAP: ortak DeltaSnapshotCodec); use communication = \
+             \"always-full\"")]
+    SingleDelta,
+
+    #[error("communication = \"delta\" with topology = \"sharded\" has no \
+             implementation yet — the per-shard delta book lands with \
+             ROADMAP Faz B and per-link communication derivation with \
+             ROADMAP Faz C; use communication = \"always-full\"")]
+    ShardedDelta,
 
     #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
     BadTickRate(f64),
@@ -1148,12 +1506,19 @@ async fn start_inner(
     // keys; see `resolve_listeners`).
     let specs = resolve_listeners(&cfg)?;
 
+    // The three-axis selection (topology × visibility × communication):
+    // derive the axes from the legacy spellings, honor explicit keys, and
+    // validate the combination — BEFORE anything binds, so an unsupported
+    // combination fails cleanly at startup naming its roadmap phase (the
+    // same never-half-start principle as `resolve_listeners`).
+    let selection = cfg.resolve_selection()?;
+
     // The sharded topology is a grid of 1..=256 shards (see
     // `gsb_game::sharded::grid_shape`); a count outside that range would
-    // build a degenerate (or impossible) grid, so refuse to start.
-    if cfg.visibility == Visibility::Sharded
-        && !(1..=256).contains(&cfg.shard_count)
-    {
+    // build a degenerate (or impossible) grid, so refuse to start. Gated
+    // on the RESOLVED topology: both the legacy spelling AND an explicit
+    // `topology = "sharded"` take this path.
+    if selection.topology == Topology::Sharded && !(1..=256).contains(&cfg.shard_count) {
         return Err(ServerError::BadShardCount(cfg.shard_count));
     }
 
@@ -1237,13 +1602,14 @@ async fn start_inner(
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
-    // The factory (and hence the registry's group-key type) is chosen at
-    // this config boundary from the visibility strategy: each strategy is
-    // a different `RoomLogic` group key (`()`, `Cell`, `Team`, `Sector`),
-    // so the arms are otherwise identical and each yields a
-    // `JoinHandle<()>`.
-    let _registry = match cfg.visibility {
-        Visibility::All => {
+    // The factory (and hence the registry's group-key type) is chosen from
+    // the RESOLVED three-axis selection — never the raw legacy string: each
+    // room kind is a different `RoomLogic` group key (`()`, `Cell`, `Team`,
+    // `Sector`) or the sharded grid topology, so the arms are otherwise
+    // identical and each yields a `JoinHandle<()>`. `resolve_selection`
+    // already validated the combination; every arm here is a supported one.
+    let _registry = match selection.kind {
+        RoomKind::Demo => {
             // One economy service per server (the RPC pattern's
             // external-I/O reference adapter; shared by clone with every
             // demo room the factory builds).
@@ -1265,7 +1631,7 @@ async fn start_inner(
                 .run(),
             )
         }
-        Visibility::Spatial => {
+        RoomKind::Aoi => {
             let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
@@ -1281,7 +1647,7 @@ async fn start_inner(
                 .run(),
             )
         }
-        Visibility::Team => {
+        RoomKind::Team => {
             let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
@@ -1297,7 +1663,7 @@ async fn start_inner(
                 .run(),
             )
         }
-        Visibility::Pvs => {
+        RoomKind::Sector => {
             let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
@@ -1313,7 +1679,7 @@ async fn start_inner(
                 .run(),
             )
         }
-        Visibility::Sharded => {
+        RoomKind::Sharded => {
             let disconnect_grace = grace_of(&cfg);
             // One economy service per server, shared with the shards (the
             // Faz 3 promotion: the sharded path runs the full RPC

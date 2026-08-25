@@ -153,27 +153,68 @@ max_snapshot_bytes = 1400
 # clamped to every step would defeat the silence-when-unchanged gain.
 keepalive_hz = 1.0
 
-# Visibility strategy of the demo rooms:
-# "all" | "spatial" | "team" | "pvs" | "sharded".
-# The first four run the SAME game (same components, movement, wire format);
-# only the snapshot grouping (visibility) differs:
-#   all     - GroupKey = (): everyone sees the whole world (baseline)
-#   spatial - GroupKey = Cell: spatial AOI, 3x3 cell block (see aoi_cell_size)
-#   team    - GroupKey = Team: team fog of war, 2 groups (see team_vision_radius)
-#   pvs     - GroupKey = Sector: per-map-segment PVS, static visibility table
-# "sharded" is a TOPOLOGY change (not a group key): the ONE room is split into
-# N shard actors (a grid over the map) that migrate entities across the seams;
-# it runs the same game but scales the single-continuous-world class. See
-# docs/DESIGN.md §8.2 and docs/ROADMAP.md.
-# Default "all" (backward compatible; restricted visibility / sharding is an
-# explicit gameplay choice). See docs/DESIGN.md §8 and docs/ROADMAP.md.
+# ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
+# "Konfigürasyon düzeltmesi" — Faz A):
+#
+#   topology      = "single" | "sharded"
+#       Who computes the world, as how many authoritative pieces.
+#       "single": one room actor over one world (the default).
+#       "sharded": the map is cut into a shard_count grid; each shard is
+#       its own actor + world with entity migration across the seams.
+#   visibility    = "all" | "spatial" | "team" | "pvs"
+#       Who sees whom within the world (the snapshot group key):
+#       all     - everyone sees the whole world (baseline)
+#       spatial - spatial AOI, 3x3 cell block (see aoi_cell_size)
+#       team    - team fog of war, 2 groups (see team_vision_radius)
+#       pvs     - per-map-segment PVS, static visibility table
+#   communication = "always-full" | "delta"
+#       How snapshots are packaged for clients: a full frame every time,
+#       or deltas converging on the keepalive full.
+#
+# DERIVATION (when the new keys are omitted) from the legacy spelling:
+#
+#   visibility = "all"     →  single  x all      x always-full
+#   visibility = "spatial" →  single  x spatial  x delta*
+#   visibility = "team"    →  single  x team     x always-full
+#   visibility = "pvs"     →  single  x pvs      x always-full
+#   visibility = "sharded" →  sharded x all      x always-full
+#
+#   * describes what the spatial room already does INTERNALLY (per-cell
+#     diffing); it is not a client-facing delta request.
+#
+# PRECEDENCE: an explicit topology / communication key WINS over its
+# derived cell. Setting both sides of a contradiction (e.g. legacy
+# visibility = "sharded" next to topology = "single") logs a startup warn
+# naming which side took effect — behavior never changes silently.
+#
+# SUPPORTED TODAY (everything else REFUSES STARTUP, with an error naming
+# the roadmap phase/document that will deliver it):
+#
+#   single  x all     x always-full   (DemoRoom)
+#   single  x spatial x always-full   (AoiRoom)
+#   single  x team    x always-full   (TeamRoom)
+#   single  x pvs     x always-full   (SectorRoom)
+#   sharded x all     x always-full   (ShardedRoom grid)
+#
+# Rejected combinations:
+#   communication = "delta" anywhere        - client-facing delta frames
+#     wait for the common DeltaSnapshotCodec (single: ROADMAP codec gap;
+#     sharded: ROADMAP Faz B/C).
+#   topology = "sharded" + visibility = "spatial" - per-shard cell-grouped
+#     broadcast is ROADMAP Faz B.
+#   topology = "sharded" + visibility = "team"/"pvs" - cross-shard interest
+#     needs a subscription layer that does not exist yet (shard locality;
+#     docs/CROSS-SHARD.md §4).
 visibility = "all"
+#topology = "single"
+#communication = "always-full"
 
-# Number of shards (used only when visibility = "sharded"). The room's map is
-# cut into a grid of this many cells (1..=16; the grid picks the shape closest
-# to square). Each shard is one actor that owns its world slice; entities
-# migrate between neighboring shards when they cross a seam. See
-# docs/DESIGN.md §8.2.
+# Number of shards (used only when the RESOLVED topology is "sharded" —
+# via legacy visibility = "sharded" OR explicit topology = "sharded"). The
+# room's map is cut into a grid of this many cells (1..=256; the grid picks
+# the shape closest to square). Each shard is one actor that owns its world
+# slice; entities migrate between neighboring shards when they cross a
+# seam. See docs/DESIGN.md §8.2.
 #shard_count = 4
 
 # World units per AOI cell edge (used only when visibility = "spatial").
