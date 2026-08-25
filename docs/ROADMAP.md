@@ -67,7 +67,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → 172 → 184 → 197 → 205 → 215 → 225 → **231** (231/231 yeşil +1 var olan
+Test 58 → 83 → 97 → 111 → 120 → 124 → 154 → 161 → 163 → 166 → 172 → 184 → 197 → 205 → 215 → 225 → 231 → 240 → 259 → **265** (265/265 yeşil +1 var olan
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -3128,7 +3128,10 @@ istemci-decode artefaktıdır (sunucu duvarı değil).
 Ham RESULT satırları `.loadrun-logs/` altında tur etiketleriyle
 saklıdır (S0-S9). Ortam: 7950X 16C/32T, release, loadavg 5-11/32.
 
-- [ ] **Çoklu-listener: aynı haritada karışık transport istemcileri** —
+- [x] **Çoklu-listener: aynı haritada karışık transport istemcileri** —
+  Uygulandı ✅ (`[[listeners]]` dizisi; ConnectionId merkezi sayaç;
+  geriye-dönük uyum; 6 yeni e2e kilidi dahil üç transport tek odada
+  doğrulandı). Kalan: QUIC/WS listener'larının bu listeye takılması.
   config tek transport yerine listener LISTESİ alsın (`[[listener]]`
   transport+bind çiftleri); her listener kendi accept görevini koşturur,
   her kabul standart bağlantı aktörünü doğurur (ConnectionId merkezi
