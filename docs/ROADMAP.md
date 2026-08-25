@@ -210,7 +210,11 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     adoptasyonu (tetikleyicili — demo ölçeğinde kazanç yok).
     `BorderRecord<Strip>` jenerikliği ve `ShardLink` seam'i Faz C'nin
     primitifleri olarak duruyor.
-  - [ ] **`team × sharded` kompoziti** — tasarım HAZIR:
+  - [ ] **Kalıcılık** — iki ayrı sınıf olarak tasarlandı:
+    `docs/PERSISTENCE.md` (maç oyunları: her-tick typed checkpoint +
+    çift-tampon + çökme devre kesicisi; MMO: event-based + periodic
+    checkpoint, otorite merkezi katmanda). Uygulama tetikleyicili.
+- [ ] **`team × sharded` kompoziti** — tasarım HAZIR:
     `docs/CROSS-SHARD.md §8` (registry-hub byte-encoded takım-export;
     RegistryMsg monomorfik kalır, codec sahipliği logic'te — DISTRIBUTED
     §4b ilkesi; TTL sweep + fan-out + izolasyon kuralları dahil).

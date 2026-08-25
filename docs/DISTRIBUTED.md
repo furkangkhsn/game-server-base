@@ -249,4 +249,5 @@ staleness; partition → degrade-mode (§10) testleri.
 - Global mesaj sıralaması (Lamport/vector clock) — bedeli ödenmez
 - Dağıtılmış kilit/joint-authority — CROSS-SHARD §5
 - Otomatik shard-balancer (bildirimsel placement yeter v1'de)
-- Kalıcılık katmanı (process ölümünde world-state kurtarma)
+- Kalıcılık katmanı — tasarım `docs/PERSISTENCE.md`'e taşındı (iki sınıf:
+  maç-checkpoint clone deseni + MMO persistence-service; uygulama tetikleyicili)
