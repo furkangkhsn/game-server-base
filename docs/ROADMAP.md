@@ -129,6 +129,15 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   tarafında manuel yapılır (bayatlık semantiği korunur); gerçek çoklu-
   link karma mod testi ≥3-shard rig gerektirir.
 
+> **Devam notu (oturumlar-arası):** (1) Çoklu-listener'a QUIC/WS kapıları
+> ve (2) `team × sharded` export turları ÜÇER AYRI ajanda erken sonlandı —
+> ikisi de çok dosyalı hassas konum değişiklikleri gerektiriyor; taze
+> bağlamla TEK TUR halinde yapılmalı. (2)'nin sözleşmesi:
+> `docs/CROSS-SHARD.md §8`. (1)'in kapsamı: yukarıdaki çoklu-listener
+> maddesinin son paragrafı. Ortam notu: yeni bağımlılık indirilecekse
+> cargo komutları `CARGO_HOME=$PWD/.cargo` ile koşulmalı (HOME önbelleği
+> salt-okunur olabilir). Kommit disiplini: ajan aktifken asla `git add -A`.
+
 ## P0 — Ölçüm (önce veri, sonra optimize)
 
 - [x] **Load test harness'i** — kapatıldı: `gsb-loadgen` binary'si +
