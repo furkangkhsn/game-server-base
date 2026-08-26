@@ -277,9 +277,11 @@ pub struct ResolvedSelection {
     pub kind: RoomKind,
 }
 use gsb_net::tcp::TcpTransport;
+use gsb_net::quic::{QuicTransport, QuicTransportConfig};
 use gsb_net::tls::{TlsTransport, TlsTransportConfig};
 use gsb_net::transport::Transport;
 use gsb_net::udp::{UdpTransport, UdpTransportConfig};
+use gsb_net::ws::WsTransport;
 use gsb_protocol::MessageTable;
 
 /// The wire transport (see `config.example.toml` and `docs/DESIGN.md` §6).
@@ -320,12 +322,14 @@ impl std::fmt::Display for TransportKind {
 /// there: TLS is NOT a distinct wire framing — it is TCP with a rustls
 /// upgrade (the accept loop, pumps and actors cannot tell them apart), so
 /// the legacy scalar key keeps encoding it as `transport = "tcp"` plus the
-/// cert/key pair. A listener ARRAY needs to name the three *deployments*
-/// unambiguously in one key ("tls" carries its own cert/key paths per
+/// cert/key pair. A listener ARRAY needs to name the *deployments*
+/// unambiguously in one key ("tls"/"quic" carry their own cert/key paths per
 /// entry), and reusing `TransportKind` would silently widen the legacy
 /// scalar grammar (`transport = "tls"` would start parsing where it used
 /// to be a config error). Two small enums keep each grammar exactly as
-/// wide as it was.
+/// wide as it was. The same argument keeps "quic"/"ws" OUT of the legacy
+/// scalar grammar: they are array-only spellings, so an old config can
+/// never change meaning under a new parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ListenerTransport {
@@ -336,6 +340,15 @@ pub enum ListenerTransport {
     Tls,
     /// rUDP (one socket + one demux PER udp listener; see `gsb_net::udp`).
     Udp,
+    /// QUIC over one UDP socket (quinn): each connection carries exactly
+    /// ONE bidirectional stream framed like TCP (`gsb_net::quic`). The
+    /// entry MUST set both `tls_cert` and `tls_key` — QUIC mandates
+    /// TLS 1.3, and this is the SAME PEM pair the "tls" door loads (a
+    /// deployment serves one identity through both doors).
+    Quic,
+    /// WebSocket: RFC 6455 upgrade over plain TCP; every binary message
+    /// carries exactly one length-prefixed game frame (`gsb_net::ws`).
+    Ws,
 }
 
 impl std::fmt::Display for ListenerTransport {
@@ -344,6 +357,8 @@ impl std::fmt::Display for ListenerTransport {
             Self::Tcp => "tcp",
             Self::Tls => "tls",
             Self::Udp => "udp",
+            Self::Quic => "quic",
+            Self::Ws => "ws",
         };
         f.write_str(s)
     }
@@ -365,15 +380,17 @@ impl std::fmt::Display for ListenerTransport {
 /// per door for no demonstrated need.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ListenerEntry {
-    /// Which transport this listener serves (`"tcp"`, `"tls"`, `"udp"`).
+    /// Which transport this listener serves (`"tcp"`, `"tls"`, `"udp"`,
+    /// `"quic"`, `"ws"`).
     pub transport: ListenerTransport,
     /// Socket address to bind (e.g. `"0.0.0.0:7777"`, `"127.0.0.1:0"`).
     /// Required: an unnamed door is a config mistake, not a default.
     pub bind: String,
     /// Path to the PEM certificate chain (leaf first) — REQUIRED (with
-    /// `tls_key`) when `transport = "tls"`; forbidden otherwise (a "tcp"
-    /// or "udp" entry carrying TLS files is a startup error, never a
-    /// silent reinterpretation of the entry).
+    /// `tls_key`) when `transport = "tls"` or `transport = "quic"` (QUIC
+    /// is TLS 1.3 underneath; both doors load the same identity), and
+    /// forbidden otherwise (a "tcp"/"udp"/"ws" entry carrying TLS files
+    /// is a startup error, never a silent reinterpretation of the entry).
     pub tls_cert: Option<String>,
     /// Path to the PEM private key matching [`Self::tls_cert`] — see there.
     pub tls_key: Option<String>,
@@ -562,8 +579,9 @@ pub struct Config {
     pub tls_key: String,
     /// The listener table (`[[listeners]]`): MULTIPLE independent sockets
     /// serving the ONE room/map simultaneously — e.g. a TLS-TCP door for
-    /// paying clients next to a plain-TCP door for a LAN build, or an rUDP
-    /// door beside both. Every accepted endpoint flows into the SAME
+    /// paying clients next to a plain-TCP door for a LAN build, an rUDP
+    /// or QUIC door beside both, and a WebSocket door for browser-adjacent
+    /// clients. Every accepted endpoint flows into the SAME
     /// pipeline (same registry, same rooms, one shared connection-id
     /// sequence), so which door a client walked in through is invisible
     /// above the accept loop.
@@ -943,6 +961,34 @@ pub enum ServerError {
         /// The offending entry's bind address (names the entry in logs).
         bind: String,
     },
+
+    #[error("`[[listeners]]` entry `{bind}` sets transport = \"quic\" with \
+             tls_cert but no tls_key: QUIC is TLS 1.3 underneath and needs \
+             BOTH files; refusing to start half-configured (the same rule \
+             as the \"tls\" door)")]
+    ListenerQuicCertNeedsKey {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+
+    #[error("`[[listeners]]` entry `{bind}` sets transport = \"quic\" with \
+             tls_key but no tls_cert: QUIC is TLS 1.3 underneath and needs \
+             BOTH files; refusing to start half-configured (the same rule \
+             as the \"tls\" door)")]
+    ListenerQuicKeyNeedsCert {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
+
+    #[error("`[[listeners]]` entry `{bind}`: transport = \"ws\" cannot carry \
+             tls_cert/tls_key — the WebSocket door upgrades PLAIN TCP today \
+             (a wss:// door would be ws-over-TLS-TCP, a composition this \
+             grammar does not express yet); attach the files to a \"tls\" \
+             entry instead of silently reinterpreting this one")]
+    ListenerWsWithTls {
+        /// The offending entry's bind address (names the entry in logs).
+        bind: String,
+    },
 }
 
 /// One fully-validated listener, ready to bind: the config grammar
@@ -963,6 +1009,17 @@ pub(crate) enum ListenerSpec {
     /// rUDP; global udp knobs apply (`udp_max_datagram_bytes`,
     /// `udp_cookie_key`) — see `ListenerEntry` for why they stay global.
     Udp { addr: SocketAddr },
+    /// QUIC (quinn over one UDP socket) with these PEM files (loaded at
+    /// bind time; the SAME pair a "tls" door would load).
+    Quic {
+        addr: SocketAddr,
+        cert_pem: String,
+        key_pem: String,
+    },
+    /// WebSocket upgrade over plain TCP (`gsb_net::ws`); no per-entry
+    /// files (wss is not a spelling this grammar expresses — see
+    /// [`ServerError::ListenerWsWithTls`]).
+    Ws { addr: SocketAddr },
 }
 
 impl ListenerSpec {
@@ -971,7 +1028,9 @@ impl ListenerSpec {
         match self {
             Self::Tcp { addr }
             | Self::Tls { addr, .. }
-            | Self::Udp { addr } => *addr,
+            | Self::Udp { addr }
+            | Self::Quic { addr, .. }
+            | Self::Ws { addr } => *addr,
         }
     }
 }
@@ -984,8 +1043,8 @@ impl ListenerSpec {
 ///   `tls_*` → `UdpWithTls`), so existing configs keep failing in exactly
 ///   the ways they always did;
 /// - `listeners` non-empty → one spec per entry, each validated on its own
-///   ("tls" needs both files; "tcp"/"udp" take none), with a warn when any
-///   legacy scalar was also touched (see [`Config::listeners`]);
+///   ("tls"/"quic" need both files; "tcp"/"udp"/"ws" take none), with a
+///   warn when any legacy scalar was also touched (see [`Config::listeners`]);
 /// - `listeners` empty → `EmptyListeners`.
 ///
 /// Duplicates are detected over PARSED addresses (not raw strings).
@@ -1029,13 +1088,22 @@ fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, ServerError> {
                                 }
                             }
                             ListenerTransport::Tls => {
+                                // The variants are STATE-descriptive (the
+                                // legacy scalar path set the convention:
+                                // cert-set-key-missing → CertNeedsKey), so
+                                // each check reports the file it is missing
+                                // — a half-set entry must be named by the
+                                // message that describes IT. (Found during
+                                // the QUIC/WS listener round: this arm had
+                                // the two constructors swapped relative to
+                                // their texts, untested until now.)
                                 if e.tls_cert.is_none() {
-                                    return Err(ServerError::ListenerTlsCertNeedsKey {
+                                    return Err(ServerError::ListenerTlsKeyNeedsCert {
                                         bind: e.bind.clone(),
                                     });
                                 }
                                 if e.tls_key.is_none() {
-                                    return Err(ServerError::ListenerTlsKeyNeedsCert {
+                                    return Err(ServerError::ListenerTlsCertNeedsKey {
                                         bind: e.bind.clone(),
                                     });
                                 }
@@ -1043,6 +1111,30 @@ fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, ServerError> {
                             ListenerTransport::Udp => {
                                 if e.tls_cert.is_some() || e.tls_key.is_some() {
                                     return Err(ServerError::ListenerUdpWithTls {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                            }
+                            // QUIC is TLS 1.3 underneath: the exact same
+                            // both-files rule as the "tls" door, with its
+                            // own error variants so the message names the
+                            // right door kind (same state-descriptive
+                            // convention — see the Tls arm above).
+                            ListenerTransport::Quic => {
+                                if e.tls_cert.is_none() {
+                                    return Err(ServerError::ListenerQuicKeyNeedsCert {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                                if e.tls_key.is_none() {
+                                    return Err(ServerError::ListenerQuicCertNeedsKey {
+                                        bind: e.bind.clone(),
+                                    });
+                                }
+                            }
+                            ListenerTransport::Ws => {
+                                if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                    return Err(ServerError::ListenerWsWithTls {
                                         bind: e.bind.clone(),
                                     });
                                 }
@@ -1097,6 +1189,12 @@ fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, ServerError> {
                 key_pem: key.expect("tls entry validated to carry a key path"),
             },
             ListenerTransport::Udp => ListenerSpec::Udp { addr },
+            ListenerTransport::Quic => ListenerSpec::Quic {
+                addr,
+                cert_pem: cert.expect("quic entry validated to carry a cert path"),
+                key_pem: key.expect("quic entry validated to carry a key path"),
+            },
+            ListenerTransport::Ws => ListenerSpec::Ws { addr },
         };
         specs.push(spec);
     }
@@ -2132,6 +2230,24 @@ async fn bind_listener(
                 idle_timeout,
                 cookie_key,
             },
+        }),
+        ListenerSpec::Quic { cert_pem, key_pem, .. } => Arc::new(QuicTransport {
+            config: QuicTransportConfig {
+                cert_chain_pem: cert_pem.clone(),
+                key_pem: key_pem.clone(),
+                max_frame_bytes: cfg.max_frame_bytes,
+            },
+        }),
+        ListenerSpec::Ws { .. } => Arc::new(WsTransport {
+            // The global frame cap bounds the FRAME BODY (op + payload);
+            // one WS message carries exactly that body behind its own
+            // 4-byte length prefix (the wire contract), so the WS-level
+            // ceiling is the body cap plus exactly that prefix. Derived,
+            // not a separate knob, on purpose: a frame legal on every
+            // other door must be legal here too, and per-listener
+            // overrides would fork the pipeline's semantics per door
+            // (see `ListenerEntry`).
+            max_message_bytes: cfg.max_frame_bytes.saturating_add(4),
         }),
     };
     let listener = transport.bind(spec.addr()).await?;

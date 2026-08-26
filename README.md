@@ -32,11 +32,13 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
   kendisi tutar; core, world tipine `W` jeneriği ile tamamen ECS'sizdir.
 - **Protokol:** protobuf (`prost` / Unity'de `Google.Protobuf`).
   `[u32 LE uzunluk][u16 LE opcode][protobuf payload]`.
-- **Taşıma:** varsayılan TCP; rUDP de bugün beraberinde gelir —
-  `config.example.toml` içinde `transport = "udp"` yeterli (stateless
-  cookie el sıkışması; kontrol bandı güvenilir `REL`, oyun bandı
-  kayıp-toleranslı `RAW`). `Transport`/`Listener`/`Endpoint` soyutlaması
-  sayesinde aktör koduna tek satır dokunulmaz.
+- **Taşıma:** aktör koduna tek satır dokunmayan `Transport`/`Listener`/
+  `Endpoint` soyutlamasının arkasında beş kapı: düz TCP (varsayılan),
+  TLS-TCP (rustls), rUDP (`transport = "udp"`; stateless cookie el
+  sıkışması; kontrol bandı güvenilir `REL`, oyun bandı kayıp-toleranslı
+  `RAW`), QUIC (quinn; tek bi-stream + length-prefix = TCP semantiği) ve
+  WebSocket (RFC 6455; her binary mesaj bir game frame). Aynı odalara
+  hizmet veren karışık kapı listesi `[[listeners]]` tablosuyla kurulur.
 
 ## Crate haritası
 
@@ -53,7 +55,7 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 ```sh
-cargo test --workspace          # 237 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), güvenlik (TLS taşıması, auth rate-limit, pre-auth cap'ler), çoklu-listener (aynı haritada karışık transport), border-delta exchange, ops yüzeyi (/metrics, /healthz, admin API), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
+cargo test --workspace          # 292 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), güvenlik (TLS taşıması, auth rate-limit, pre-auth cap'ler), çoklu-listener (aynı haritada karışık transport: TCP/TLS/rUDP/QUIC/WS), border-delta exchange, ops yüzeyi (/metrics, /healthz, admin API), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
 cargo run -p gsb-server -- config.example.toml
 cargo run -p gsb-server --example client   # AUTH + JOIN + MOVE_TO, snapshotları yazdırır

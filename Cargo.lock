@@ -787,6 +787,7 @@ dependencies = [
  "gsb-net",
  "gsb-protocol",
  "prost",
+ "quinn",
  "rcgen",
  "rustls",
  "rustls-pemfile",

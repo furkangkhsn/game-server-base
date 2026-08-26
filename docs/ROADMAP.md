@@ -75,7 +75,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **280** (280/280 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **292** (292/292 yeşil; tarihsel
 ilerleme 58 → ... → 279 için `docs/CHANGELOG.md` başlığına bakınız).
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
@@ -130,12 +130,12 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   link karma mod testi ≥3-shard rig gerektirir.
 
 > **Devam notu (oturumlar-arası):** (1) Çoklu-listener'a QUIC/WS kapıları
-> ve (2) `team × sharded` export turları ÜÇER AYRI ajanda erken sonlandı —
-> ikisi de çok dosyalı hassas konum değişiklikleri gerektiriyor; taze
-> bağlamla TEK TUR halinde yapılmalı. (2)'nin sözleşmesi:
-> `docs/CROSS-SHARD.md §8`. (1)'in kapsamı: yukarıdaki çoklu-listener
-> maddesinin son paragrafı. Ortam notu: yeni bağımlılık indirilecekse
-> cargo komutları `CARGO_HOME=$PWD/.cargo` ile koşulmalı (HOME önbelleği
+> **KAPANDI** (çoklu-listener maddesinin son paragrafı; tur kaydı:
+> CHANGELOG "çoklu-listener'a QUIC + WS kapıları turu"). Kalan tek
+> sözleşmeli tur: (2) `team × sharded` export — üç ayrı ajanda erken
+> sonlandı; sözleşmesi: `docs/CROSS-SHARD.md §8`; taze bağlamla TEK TUR
+> halinde yapılmalı. Ortam notu: yeni bağımlılık indirilecekse cargo
+> komutları `CARGO_HOME=$PWD/.cargo` ile koşulmalı (HOME önbelleği
 > salt-okunur olabilir). Kommit disiplini: ajan aktifken asla `git add -A`.
 
 ## P0 — Ölçüm (önce veri, sonra optimize)

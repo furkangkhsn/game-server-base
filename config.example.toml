@@ -28,15 +28,16 @@ transport = "tcp"
 
 # MULTIPLE LISTENERS ([[listeners]]): independent doors that serve the SAME
 # rooms/map simultaneously — e.g. a TLS door for public clients next to a
-# plain-TCP door for a LAN build, or an rUDP door beside both. Every
-# accepted client joins the same registry, the same rooms, and shares one
-# connection-id sequence; which door a client used is invisible to rooms.
+# plain-TCP door for a LAN build, a QUIC or rUDP door beside both, or a
+# WebSocket door for browser-adjacent clients. Every accepted client joins
+# the same registry, the same rooms, and shares one connection-id sequence;
+# which door a client used is invisible to rooms.
 #
 #   [[listeners]]
-#   transport = "tcp" | "tls" | "udp"     # required
+#   transport = "tcp" | "tls" | "udp" | "quic" | "ws"   # required
 #   bind      = "0.0.0.0:7777"            # required
-#   tls_cert  = "/etc/gsb/cert.pem"       # "tls" entries ONLY (with tls_key)
-#   tls_key   = "/etc/gsb/key.pem"        # "tls" entries ONLY (with tls_cert)
+#   tls_cert  = "/etc/gsb/cert.pem"       # "tls"/"quic" entries ONLY (with tls_key)
+#   tls_key   = "/etc/gsb/key.pem"        # "tls"/"quic" entries ONLY (with tls_cert)
 #
 # Example: an encrypted public door plus a plaintext LAN door:
 #   [[listeners]]
@@ -53,17 +54,23 @@ transport = "tcp"
 # - When `[[listeners]]` is ABSENT (the default), exactly ONE listener is
 #   derived from the scalar keys above (transport/bind/tls_cert/tls_key)
 #   with identical behavior — existing configs keep working unchanged.
+#   The legacy scalar grammar stays tcp/udp(+tls files) only: "quic" and
+#   "ws" are array-only spellings.
 # - When PRESENT and non-empty, the array WINS and the scalar transport
 #   keys are ignored (a warning is logged at startup if any of them was
 #   also set).
 # - An explicitly EMPTY array refuses startup.
 # - Duplicate concrete bind addresses refuse startup. Port 0 is exempt:
 #   each ":0" entry asks the OS for its own free port (ephemeral doors).
-# - "tls" requires BOTH tls_cert and tls_key on the entry; "tcp"/"udp"
-#   entries take none. A "udp" entry honors the global udp_* knobs below
+# - "tls" and "quic" require BOTH tls_cert and tls_key on the entry (QUIC
+#   is TLS 1.3 underneath and loads the same identity); "tcp"/"udp"/"ws"
+#   entries take none. A half-set entry refuses startup with the error
+#   naming it. A "udp" entry honors the global udp_* knobs below
 #   (per-listener overrides are deliberately not supported: capacities,
 #   budgets and idle windows are policies of the one actor stack, not of
-#   a socket); each udp entry owns its own socket and demux.
+#   a socket); each udp entry owns its own socket and demux. Frame limits,
+#   channel capacities and idle windows apply to every door alike; a WS
+#   message ceiling derives from max_frame_bytes (+ its 4-byte prefix).
 
 
 # rUDP only: maximum outbound datagram size in bytes. 1472 = typical

@@ -5,6 +5,67 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (çoklu-listener'a QUIC + WS kapıları turu)
+
+Kaynak: üç ayrı oturumda erken sonlanan sözleşmeli tur (ROADMAP devam
+notu). Kapsam: çoklu-listener maddesinin kalan paragrafı — hazır olan
+`QuicTransport` (`gsb-net/src/quic.rs`) ve WS listener'ının
+(`gsb-net/src/ws.rs`) `[[listeners]]` tablosuna takılması. Aktör/oda
+katmanına dokunulmadı: iki yeni kapı da mevcut `bind_listener` →
+`run_accept` → `AcceptPipeline` yoluna girer; tek ConnectionId sayacı,
+tek registry, transport-bağımsız odalar değişmedi.
+
+### Kararlar
+
+- **"quic" girdisi tls_cert/tls_key'i YENİDEN KULLANIR** (iki yeni alan
+  yok): QUIC altında TLS 1.3 ZORUNLUDUR; "tls" kapısıyla aynı PEM
+  çiftini yüklemek "bir kimlik, iki kapı" demektir. Elenen alternatif:
+  ayrı `quic_cert`/`quic_key` anahtarları — aynı dosyaların kopya
+  yazımı + iki kapının sessizce farklı kimliğe kayma riski; hiçbir
+  kullanım senaryosu göstermedi.
+- **WS mesaj tavanı türetilir, knob eklenmez**:
+  `max_frame_bytes + 4` (WS mesajı = 4 baytlık uzunluk öneki + frame
+  gövdesi; gövde tavanı tüm kapılarda ortak). Elenen alternatif: ayrı
+  `ws_max_message_bytes` — diğer kapıların yasakladığı bir frame'in WS
+  kapısından geçmesi ya da tersi, tek aktör yığını politikasını kapı
+  başına fork ederdi (ListenerEntry dokümanındaki global-knob ilkesi).
+- **"quic"/"ws" legacy skaler gramer'e SOKULMADI** (yalnız dizi
+  yazımı): `TransportKind`'in genişliği sabit kalır; eski bir config
+  yeni parser altında anlam değiştiremez ("tls" için kurulan aynı
+  gramer-genişliği argümanı).
+- **wss bu gramarde ifade edilmiyor**: `transport = "ws"` düz TCP üstü
+  RFC 6455 upgrade'idir; TLS dosyası taşıyan "ws" girdisi startup'ta
+  `ListenerWsWithTls` ile reddedilir (sessiz yeniden yorumlama yok).
+  Gerçek ihtiyaç doğduğunda "wss" ayrı yazım olarak eklenir.
+
+### Turun yakaladığı hata (düzeltildi + kilitlendi)
+
+Mevcut TLS-array doğrulama kolu iki error variant'ını kendi metinlerine
+göre TERS kullanıyordu (`cert`'siz girdi "with tls_cert but no tls_key"
+mesajı veriyordu; legacy skaler yol doğruydu, dizi yolu değildi).
+Hiçbir test yönünü kilitlemiyordu. Düzeltme state-descriptive eşlemeyle
+yapıldı ve hem "tls" hem "quic" kolları için yarım-dosya testleri
+(`tls_entry_without_both_tls_files_refuses_startup`,
+`quic_entry_without_both_tls_files_refuses_startup`) yönü mühürledi.
+
+### Doğrulama
+
+- İki karışık-transport e2e: `quic_and_tcp_doors_serve_one_room`
+  (gerçek quinn istemcisi — mini-PKI'ya güvenir, ALPN `gsb-net/1`, tek
+  bi-stream — düz-TCP istemciyle aynı odada karşılıklı görünürlük) ve
+  `websocket_and_rudp_doors_serve_one_room` (ham-TCP RFC 6455 istemci —
+  gerçek upgrade handshake, accept-key RFC 6455 §1.3 vektörüyle
+  doğrulanır, maskeli binary mesaj başına tek game frame — rUDP
+  istemciyle aynı odada karşılıklı görünürlük).
+- Config kilitlemeleri: yukarıdaki yarım-dosya ikilisi +
+  `ws_entry_with_tls_files_refuses_startup`.
+- Süit: 287 → **292** (multi_listener 6 → 11). clippy --workspace
+  --all-targets: 0 uyarı. loadgen 50 istemci × 3 sn: left=50,
+  errors=0, dropped=0, tick_hz_med=30.01.
+- Bağımlılık notu: gsb-server'a yalnız DEV-dep olarak `quinn` eklendi
+  (sunucunun konuştuğu crate'in gerçek istemcisi; release derlemesine
+  girmez).
+
 ## Kapatılanlar (regresyon ölçüm turu)
 
 Kaynak: reconnect → trait birleşimi → shard-RPC → ops → güvenlik
