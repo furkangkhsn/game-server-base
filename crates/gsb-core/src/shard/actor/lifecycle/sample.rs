@@ -1,0 +1,78 @@
+//! The metrics sample: the shard's counters, gauges and border
+//! accounting, snapshotted once per report period.
+
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::time::Instant;
+use crate::id::RoomId;
+use crate::metrics::RoomSample;
+use crate::shard::actor::ShardActor;
+
+impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
+where
+    W: Send + 'static,
+    G: Eq + Hash + Clone + Debug + Send + 'static,
+    St: Debug + Send + 'static,
+    // The strip rides every exchange and view; the bounds mirror what
+    // the delta protocol does with it (diff via PartialEq, clone into
+    // each neighbor's message, store in the actor's maps).
+    Sp: Debug + Clone + PartialEq + Send + 'static,
+{
+    /// Build this shard's metrics sample. The sample id is the logical
+    /// room id shifted into the shard sub-space (`room << 16 | index` —
+    /// see module docs, "Metrics identity") so every shard is its own
+    /// report line (the collector keys by the sample id).
+    pub(crate) fn sample(&self) -> RoomSample {
+        RoomSample {
+            room: RoomId(self.config.id.0.saturating_mul(1 << 16) + self.index as u64),
+            emit_at: Instant::now(),
+            steps: self.steps,
+            budget_us: self.budget_us,
+            lagged_events: self.m.lagged_events,
+            lagged_ticks: self.m.lagged_ticks,
+            step_min_us: self.m.step_min_us,
+            step_max_us: self.m.step_max_us,
+            step_sum_us: self.m.step_sum_us,
+            step_hist: self.m.step_hist,
+            step_fine_hist: self.m.step_fine_hist,
+            late_min_us: self.m.late_min_us,
+            late_max_us: self.m.late_max_us,
+            late_sum_us: self.m.late_sum_us,
+            dropped_frames: self.m.dropped_frames,
+            dropped_actions: self.m.dropped_actions,
+            keepalive_resends: self.m.keepalive_resends,
+            snapshots: self.m.snapshots,
+            snap_bytes: self.m.snap_bytes,
+            snap_bytes_max: self.m.snap_bytes_max,
+            snap_overflows: self.m.snap_overflows,
+            snap_records: self.m.snap_records,
+            shipped_bytes: self.m.shipped_bytes,
+            shipped_frames: self.m.shipped_frames,
+            private_frames: self.m.private_frames,
+            joins: self.m.joins,
+            leaves: self.m.leaves,
+            detached: self.conns.values().filter(|rc| rc.detached).count() as u32,
+            resumes: self.m.resumes,
+            resume_rejected_stale: self.m.resume_rejected_stale,
+            detach_expired_despawn: self.m.detach_expired_despawn,
+            detach_expired_ai: self.m.detach_expired_ai,
+            // Faz 3: this shard runs the RPC machinery (the room actor's
+            // counters, mirrored one-to-one) — no longer pinned to zero.
+            requests_local: self.m.requests_local,
+            requests_external: self.m.requests_external,
+            requests_rejected_malformed: self.m.requests_rejected_malformed,
+            requests_rejected_dup: self.m.requests_rejected_dup,
+            requests_rejected_no_handler: self.m.requests_rejected_no_handler,
+            requests_rejected_logic: self.m.requests_rejected_logic,
+            requests_rejected_conn_cap: self.m.requests_rejected_conn_cap,
+            requests_rejected_room_cap: self.m.requests_rejected_room_cap,
+            requests_timed_out: self.m.requests_timed_out,
+            requests_late: self.m.requests_late,
+            pending_requests: self.pending_total as u32,
+            groups: self.groups.len() as u32,
+            members: self.conns.len() as u32,
+            max_group: self.m.step_max_group,
+            metrics_dropped: self.m.metrics_dropped,
+        }
+    }
+}
