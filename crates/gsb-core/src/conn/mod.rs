@@ -1,0 +1,219 @@
+//! The connection actor: one per client connection.
+//!
+//! Three tasks cooperate per connection (the "1 reader + 1 writer" pattern):
+//!
+//! ```text
+//! socket read half ──▶ [reader pump] ──InMsg::Frame──▶ connection actor ◀──RegistryMsg── registry
+//!                                                        │  (mailbox-driven; its
+//! socket write half ◀── [writer pump] ◀──FrameBody─────┘   only await is recv)
+//! room broadcast fan-out channels ─────────────────────────┘
+//! ```
+//!
+//! The actor decodes the envelope, runs the auth/join/leave state machine
+//! against the registry, and forwards game-band opcodes to the room's
+//! per-connection action channel (non-blocking `try_send`: a flooding
+//! client drops its own input, never stalls the actor or the room). It
+//! never multiplexes: every branch is a channel receive.
+//!
+//! **Protocol violation budget** (the anti-amplification guardrail): the
+//! `reply_err` funnel — the single exit for every protocol error this
+//! actor answers — keeps a small budget in actor-local state. Each
+//! violation has a *class*:
+//!
+//! - **hard** (weight [`HARD_VIOLATION_WEIGHT`]): no legitimate client
+//!   path reaches it — an unknown opcode, a malformed payload, an auth
+//!   state violation (out-of-order or double AUTH);
+//! - **race** (weight [`RACE_VIOLATION_WEIGHT`]): a legitimate
+//!   ~1-RTT-wide transition can produce it — the room was destroyed and
+//!   an in-flight action arrives room-less, an action races a LEAVE, or
+//!   the leave→rejoin window strays;
+//! - **not a violation** (weight 0): server-side conditions (registry
+//!   gone during shutdown, message-table type mismatch) — answered as
+//!   before, never counted; the budget is for *client* violations.
+//!
+//! The first [`VIOLATION_ANSWER_LIMIT`] violations are answered with an
+//! `ERROR` frame (diagnosis for the client developer); after that the
+//! funnel goes **silent** — every further violation is counted but
+//! unanswered, which bounds the amplification (a fire-and-forget ~10-byte
+//! client packet can no longer buy unlimited server allocation + encode +
+//! queue cost). When the weighted lifetime score reaches
+//! [`VIOLATION_BUDGET`] the connection is **closed** (an `ERROR` code 9
+//! with the reason, then the normal teardown cascade) and the close is
+//! reported with the peer address (the actor carries it — see `peer`) so
+//! a layer outside the server (firewall, fail2ban, future auth) can act.
+//!
+//! Lifetime total (not a sliding window): a legitimate connection
+//! accumulates only a handful of race-class stray packets across its whole
+//! life, so a budget sized well above that churn can never be exhausted by
+//! honest traffic — while sustained violation traffic (the measured
+//! incident: 50 rejected clients, 1550 answered errors in 8 s) exhausts it
+//! within seconds. A sliding window would need per-violation timestamps
+//! for no gain: the failure mode it addresses (many early violations,
+//! then honesty) does not occur per-connection.
+//!
+//! **Pre-auth rate limits** (docs/SECURITY.md §3, the second guardrail
+//! family in this file): three more mechanisms live in the same actor-local
+//! state, reusing the budget machinery above instead of adding any new
+//! enforcement path:
+//!
+//! - **AUTH attempt window** (§3.1): at most three `AUTH` attempts per ten
+//!   seconds per connection; an attempt past the window's allowance is a
+//!   *hard* violation and rides the budget above (four of them close).
+//!   Attempts one-to-three keep the ordinary ticket-rejection path (ERROR
+//!   code 10, connection alive) — a legitimate client retrying a rejected
+//!   ticket is never budgeted for trying.
+//! - **Pre-auth heartbeat throttle** (§3.2): before auth success a
+//!   heartbeat ACK is answered at most once per second; surplus heartbeats
+//!   are counted in a dedicated counter and NOT answered — deliberately
+//!   *not* violations (see the field's doc: a buggy-but-honest client must
+//!   not burn its budget on liveness probes). After auth success
+//!   heartbeats keep their exact pre-existing behavior.
+//! - **Pre-auth frame budget** (§3.3): at most 64 inbound frames of any
+//!   kind before auth success; crossing the budget closes the connection
+//!   immediately (`ERROR` code 9 naming the policy). Auth success retires
+//!   the counter's relevance naturally: it only gates the WaitingAuth
+//!   phase.
+
+mod actor;
+
+pub use actor::ConnectionActor;
+
+use std::time::Duration;
+
+
+use gsb_protocol::{FrameBody, ProtoError};
+
+use crate::id::RoomId;
+
+/// How often an active connection flushes its wire-byte counters as a
+/// sample (a connection with no inbound frames does not flush until its
+/// final flush at close — it has nothing new to report in the meantime).
+const METRICS_FLUSH_EVERY: Duration = Duration::from_millis(500);
+
+/// How many violations (of any class) are *answered* with an `ERROR`
+/// frame before the funnel goes silent for the rest of the connection.
+/// The first few answers are the diagnosis the client developer needs;
+/// every answer after that is pure amplification surface.
+const VIOLATION_ANSWER_LIMIT: u32 = 3;
+
+/// Weighted lifetime score at which the connection is closed. Sized
+/// against *legitimate* churn: race-class transitions (room destroyed
+/// under in-flight input, leave/rejoin windows) produce 1-3 stray packets
+/// each, so even a connection that churns through several of them stays
+/// far below 16 — while a sustained violator (the measured incident ran
+/// ~4 stray game-band packets/s per rejected client) reaches it in a
+/// handful of seconds. See the module docs for the lifetime-total
+/// rationale.
+const VIOLATION_BUDGET: u32 = 16;
+
+/// Score a hard violation adds (no legitimate path reaches it, so each
+/// occurrence is strong evidence of a broken or hostile client).
+const HARD_VIOLATION_WEIGHT: u32 = 4;
+
+/// Score a race-class violation adds (legitimate transitions reach it, so
+/// each occurrence is weak evidence).
+const RACE_VIOLATION_WEIGHT: u32 = 1;
+
+/// The AUTH-attempt sliding window (docs/SECURITY.md §3.1): attempts
+/// older than this fall out of the allowance.
+///
+/// Why ten seconds cannot touch honest traffic: a legitimate retry of a
+/// rejected ticket is paced by fetching a FRESH ticket from the platform
+/// (a round trip through the matchmaker/auth service), and a client that
+/// keeps failing surfaces the error to its user instead of spinning —
+/// three attempts in ten seconds is already generous headroom above any
+/// real retry loop, while a scripted credential-stuffing loop hits the
+/// wall on its fourth attempt.
+const AUTH_WINDOW: Duration = Duration::from_secs(10);
+
+/// AUTH attempts admitted per [`AUTH_WINDOW`] per connection (§3.1).
+/// Attempts one-to-three are processed normally (ticket rejection or
+/// success); attempt four-plus in-window is a HARD violation riding the
+/// existing budget (weight 4 → four of them close the connection), so no
+/// second enforcement mechanism exists for the flood case.
+const AUTH_ATTEMPTS_PER_WINDOW: usize = 3;
+
+/// Minimum spacing between ANSWERED pre-auth heartbeat ACKs
+/// (docs/SECURITY.md §3.2). One answer per second still proves liveness
+/// to an honest waiting-in-lobby client; anything faster pre-auth is the
+/// 1:1 amplification shape the cap exists to close. Post-auth heartbeats
+/// are throttled by nothing (the liveness signal must stay intact).
+const PREAUTH_HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Pre-auth total inbound frame budget (docs/SECURITY.md §3.3): at most
+/// this many frames of ANY kind before auth success; crossing it closes
+/// the connection immediately (`ERROR` code 9 naming the policy).
+///
+/// Sized against the legitimate handshake: AUTH (plus a few ticket
+/// retries), then JOIN, then heartbeats at their ~10 s cadence sums to
+/// single digits even for a slow client stuck in `WaitingAuth` — while an
+/// unauthenticated sender that keeps producing frames after the server's
+/// answers has no honest reason to exist, and the budget stops its
+/// control-frame generation from being free. Auth success retires the
+/// counter's relevance (it only gates the WaitingAuth phase); post-auth
+/// traffic is bounded by the action-channel and violation machinery
+/// instead.
+const PREAUTH_FRAME_BUDGET: u32 = 64;
+
+/// The violation class of a protocol error, as counted by the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViolationClass {
+    /// No legitimate client path reaches this error.
+    Hard,
+    /// A legitimate ~1-RTT transition can produce this error (room gone
+    /// under in-flight input, action racing a LEAVE, leave→rejoin window).
+    Race,
+    /// Server-side condition, not a client violation (registry gone,
+    /// message-table type mismatch): answered, never counted.
+    None,
+}
+
+impl ViolationClass {
+    fn weight(self) -> u32 {
+        match self {
+            Self::Hard => HARD_VIOLATION_WEIGHT,
+            Self::Race => RACE_VIOLATION_WEIGHT,
+            Self::None => 0,
+        }
+    }
+}
+
+/// Classify a protocol error for the violation budget. The split follows
+/// the state machine, not the error text: `NotInRoom` is the *only* error
+/// a legitimate client can hit in flight (its state and the server's
+/// briefly disagree across join/leave/destroy transitions); every other
+/// error means the client sent something no correct client sends.
+fn violation_class(e: &ProtoError) -> ViolationClass {
+    match e {
+        ProtoError::NotInRoom => ViolationClass::Race,
+        ProtoError::Other(_) => ViolationClass::None,
+        // UnknownOpcode / Decode / MalformedFrame / NotAuthenticated /
+        // AlreadyAuthenticated / RoomNotFound: hard.
+        _ => ViolationClass::Hard,
+    }
+}
+
+/// Messages addressed to the connection actor.
+#[derive(Debug)]
+pub enum ConnIn {
+    /// A frame decoded from the network (envelope intact).
+    Frame(FrameBody),
+    /// The peer closed or the socket errored; the actor should clean up.
+    Closed { reason: String },
+    /// The server is closing this connection on its own initiative (idle
+    /// timeout, connection capacity). The actor replies with an `ERROR`
+    /// frame (code 9, the reason as the message) so the client can tell a
+    /// server decision apart from a network failure, then cleans up.
+    ServerClosed { reason: String },
+    /// The room the connection was in got destroyed.
+    RoomGone(RoomId),
+    /// Server-wide shutdown.
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnState {
+    WaitingAuth,
+    Authed,
+    InRoom { room: RoomId },
+}

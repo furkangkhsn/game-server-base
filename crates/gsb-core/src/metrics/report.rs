@@ -1,0 +1,199 @@
+//! The report the collector publishes: per-room, registry and network
+//! views, plus the lookups a consumer needs to read one room out.
+
+use std::time::{Duration, Instant};
+
+
+use crate::id::{ConnectionId, RoomId};
+use crate::metrics::*;
+
+
+/// Per-room slice of a report: current gauges + rates over the last
+/// report period (rates are 0.0 until the room has reported twice).
+#[derive(Debug, Clone, Copy)]
+pub struct RoomReport {
+    pub room: RoomId,
+    /// Steps (cumulative) and measured rate (Δsteps/s since the previous
+    /// report). Compare against the room's configured `tick_hz`: the room
+    /// is on rate when these agree.
+    ///
+    /// Note: a report window in which the room emitted **no new sample**
+    /// (the 1 Hz sample cadence and the 1 Hz report cadence are not
+    /// phase-locked, and shutdown's final report often is such a window)
+    /// reports `hz = 0.0` — read it as "no sample in this window", not
+    /// "the room stopped". Consumers wanting a stable rate should median
+    /// the positive windows (the load generator does).
+    pub steps: u64,
+    pub hz: f64,
+    /// The room's tick budget in µs (the overflow boundary of the histogram).
+    pub budget_us: u64,
+    pub step_min_us: u64,
+    pub step_mean_us: f64,
+    pub step_max_us: u64,
+    /// Cumulative step duration histogram ([`HIST_EDGES`] as fractions of
+    /// [`Self::budget_us`]); bins `>= HIST_OVERFLOW_BIN` are budget overflow.
+    pub step_hist: [u64; HIST_BINS],
+    /// Fine step-duration histogram (cumulative; fixed 8 µs bins covering
+    /// `[0, FINE_HIST_CAP_US)` µs — sub-budget resolution alongside
+    /// [`Self::step_hist`]; `u64` so the shard fold can sum per element).
+    pub step_fine_hist: [u64; FINE_HIST_BINS],
+    pub late_min_us: u64,
+    pub late_mean_us: f64,
+    pub late_max_us: u64,
+    /// Broadcast `Lagged` occurrences / missed ticks (cumulative).
+    pub lagged_events: u64,
+    pub lagged_ticks: u64,
+    /// Batches dropped (cumulative) and drop rate (Δ/s).
+    pub dropped: u64,
+    pub dropped_s: f64,
+    pub dropped_actions: u64,
+    pub keepalive_resends: u64,
+    /// Snapshots encoded (cumulative) and encoded-byte rate (Δ/s).
+    pub snapshots: u64,
+    pub snap_bytes_s: f64,
+    pub snap_bytes_max: u32,
+    pub snap_overflows: u64,
+    /// Entity records encoded (cumulative; overlap-metric numerator — see
+    /// [`RoomSample::snap_records`]).
+    pub snap_records: u64,
+    /// Bytes shipped to clients (cumulative) and shipped-byte rate (Δ/s)
+    /// — the server-side bytes-out for this room.
+    pub shipped_bytes: u64,
+    pub shipped_s: f64,
+    pub groups: u32,
+    pub members: u32,
+    pub max_group: u32,
+    pub joins: u64,
+    pub leaves: u64,
+    /// Detached-but-parked connections right now (gauge; their slots are
+    /// held — see [`RoomSample::detached`]).
+    pub detached: u32,
+    pub resumes: u64,
+    pub resume_rejected_stale: u64,
+    pub detach_expired_despawn: u64,
+    pub detach_expired_ai: u64,
+    /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
+    /// (pending) requests, rejections split by cause (see
+    /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and
+    /// late reports dropped by the reconciliation.
+    pub requests_local: u64,
+    pub requests_external: u64,
+    pub requests_rejected_malformed: u64,
+    pub requests_rejected_dup: u64,
+    pub requests_rejected_no_handler: u64,
+    pub requests_rejected_logic: u64,
+    pub requests_rejected_conn_cap: u64,
+    pub requests_rejected_room_cap: u64,
+    pub requests_timed_out: u64,
+    pub requests_late: u64,
+    /// RPC: external requests currently in flight (gauge).
+    pub pending_requests: u32,
+    /// Metric samples dropped on a full metrics channel (cumulative).
+    pub metrics_dropped: u64,
+}
+
+/// Registry slice of a report (latest gauges + cumulative counters).
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryReport {
+    pub rooms: u32,
+    pub conns: u32,
+    pub rooms_created: u64,
+    pub rooms_destroyed: u64,
+    /// Unexpected room/shard deaths (see [`RegistrySample::rooms_died`]).
+    pub rooms_died: u64,
+    pub joins: u64,
+    pub leaves: u64,
+    pub opens: u64,
+    pub closes: u64,
+}
+
+/// Network slice of a report (cumulative since startup).
+#[derive(Debug, Clone, Copy)]
+pub struct NetReport {
+    /// Bytes in over all connections (frame bodies).
+    pub bytes_in: u64,
+    /// Bytes out: room fan-out + connection control frames.
+    pub bytes_out_room: u64,
+    pub bytes_out_control: u64,
+    pub bytes_out_total: u64,
+    pub frames_in: u64,
+    /// Control frames sent by connection actors.
+    pub frames_out: u64,
+    /// Input actions dropped on full (bounded) per-connection action
+    /// channels (cumulative, all connections). The per-connection
+    /// attribution (who dropped what) is in
+    /// [`MetricReport::actions_dropped_top`].
+    pub actions_dropped: u64,
+    /// Protocol-violation events counted by the connection actors'
+    /// violation budgets (cumulative, all connections). 0 on a healthy
+    /// server; the per-event signal (peer address, close reason) is the
+    /// structured tracing event emitted at budget exhaustion.
+    pub violations: u64,
+}
+
+/// One periodic report: the server's current numeric state.
+#[derive(Debug, Clone)]
+pub struct MetricReport {
+    /// Total metric samples dropped on the (bounded) metrics channel across
+    /// all producers this report window. 0 in normal operation (A2 makes each
+    /// room send at most one sample per report period); non-zero signals the
+    /// collector falling behind (or a startup/shutdown flush burst).
+    pub metrics_dropped: u64,
+    /// Wall-clock instant at which the collector emitted this report (the
+    /// `at` argument of [`MetricAccumulator::report`]).
+    ///
+    /// WHY on the value itself: the HTTP ops surface's `/healthz` answers
+    /// "is the metrics ticker alive" from the *age* of the latest watch
+    /// snapshot. Stamping the emission time into the value means ONE
+    /// `watch::Sender<MetricReport>` carries content and freshness
+    /// together — no second channel, no shared timestamp cell, no extra
+    /// task whose only job would be copying a clock.
+    pub emitted_at: Instant,
+    pub rooms: Vec<RoomReport>,
+    pub registry: Option<RegistryReport>,
+    pub net: NetReport,
+    /// Cumulative input-action drops per connection, worst offenders first
+    /// (up to 5; ties broken by connection id). LIVE connections only — a
+    /// closed connection's entry retires into the cumulative net total at
+    /// its final flush. Empty when nothing was dropped by any currently
+    /// connected peer — the only loss point for input is a connection's
+    /// own full action channel, so this list names the flooders still on
+    /// the wire.
+    pub actions_dropped_top: Vec<(ConnectionId, u64)>,
+}
+
+impl MetricReport {
+    /// The watch channel's initial value (before the collector's first real
+    /// emission): an empty report stamped *five periods in the past*, i.e.
+    /// already past every staleness threshold a consumer applies (the HTTP
+    /// `/healthz` threshold is three — see `gsb_server::http`). WHY back-
+    /// dated instead of "now": an unstaled placeholder would let a health
+    /// check answer "ok" during startup from a report nobody produced; the
+    /// honest initial state is "no fresh report yet". The subtraction can
+    /// fail on a platform whose monotonic clock started less than five
+    /// periods ago (fresh boot); then "now" is the best available stamp and
+    /// the window of wrong-side-of-threshold answers is bounded by one
+    /// collector period anyway.
+    pub fn initial_stale(period: Duration) -> Self {
+        let emitted_at = Instant::now()
+            .checked_sub(period.saturating_mul(5))
+            .unwrap_or_else(Instant::now);
+        Self {
+            metrics_dropped: 0,
+            emitted_at,
+            rooms: Vec::new(),
+            registry: None,
+            net: NetReport {
+                bytes_in: 0,
+                bytes_out_room: 0,
+                bytes_out_control: 0,
+                bytes_out_total: 0,
+                frames_in: 0,
+                frames_out: 0,
+                actions_dropped: 0,
+                violations: 0,
+            },
+            actions_dropped_top: Vec::new(),
+        }
+    }
+}
