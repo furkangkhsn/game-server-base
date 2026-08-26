@@ -1,0 +1,555 @@
+//! The `[[listeners]]` grammar: one entry per door.
+
+use tracing::warn;
+use crate::config::*;
+
+/// The per-listener transport spelling inside a `[[listeners]]` entry.
+///
+/// WHY a separate enum from [`TransportKind`] instead of a `Tls` variant
+/// there: TLS is NOT a distinct wire framing — it is TCP with a rustls
+/// upgrade (the accept loop, pumps and actors cannot tell them apart), so
+/// the legacy scalar key keeps encoding it as `transport = "tcp"` plus the
+/// cert/key pair. A listener ARRAY needs to name the *deployments*
+/// unambiguously in one key ("tls"/"quic" carry their own cert/key paths per
+/// entry), and reusing `TransportKind` would silently widen the legacy
+/// scalar grammar (`transport = "tls"` would start parsing where it used
+/// to be a config error). Two small enums keep each grammar exactly as
+/// wide as it was. The same argument keeps "quic"/"ws" OUT of the legacy
+/// scalar grammar: they are array-only spellings, so an old config can
+/// never change meaning under a new parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListenerTransport {
+    /// Length-prefixed plaintext TCP.
+    Tcp,
+    /// The same framing over rustls; the entry MUST set both
+    /// `tls_cert` and `tls_key`.
+    Tls,
+    /// rUDP (one socket + one demux PER udp listener; see `gsb_net::udp`).
+    Udp,
+    /// QUIC over one UDP socket (quinn): each connection carries exactly
+    /// ONE bidirectional stream framed like TCP (`gsb_net::quic`). The
+    /// entry MUST set both `tls_cert` and `tls_key` — QUIC mandates
+    /// TLS 1.3, and this is the SAME PEM pair the "tls" door loads (a
+    /// deployment serves one identity through both doors).
+    Quic,
+    /// WebSocket: RFC 6455 upgrade over plain TCP; every binary message
+    /// carries exactly one length-prefixed game frame (`gsb_net::ws`).
+    Ws,
+}
+
+impl std::fmt::Display for ListenerTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Tcp => "tcp",
+            Self::Tls => "tls",
+            Self::Udp => "udp",
+            Self::Quic => "quic",
+            Self::Ws => "ws",
+        };
+        f.write_str(s)
+    }
+}
+
+/// One `[[listeners]]` entry: an independent socket that accepts clients
+/// into the SAME rooms as every other listener (rooms/actors are
+/// transport-agnostic by design; only the composition root ever picks a
+/// transport).
+///
+/// Per-entry keys are deliberately minimal: `transport` + `bind` are the
+/// identity of a listener; `tls_cert`/`tls_key` exist because each TLS
+/// listener legitimately owns its own certificate (e.g. an internal-CA
+/// listener next to a public-CA one on different addresses). Everything
+/// else stays a GLOBAL knob on purpose (simplest sound choice): frame
+/// limits, channel capacities, idle windows and the rUDP budget/key are
+/// deployment-wide policies of ONE actor stack, not properties of a
+/// socket — per-listener overrides would fork the pipeline's semantics
+/// per door for no demonstrated need.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ListenerEntry {
+    /// Which transport this listener serves (`"tcp"`, `"tls"`, `"udp"`,
+    /// `"quic"`, `"ws"`).
+    pub transport: ListenerTransport,
+    /// Socket address to bind (e.g. `"0.0.0.0:7777"`, `"127.0.0.1:0"`).
+    /// Required: an unnamed door is a config mistake, not a default.
+    pub bind: String,
+    /// Path to the PEM certificate chain (leaf first) — REQUIRED (with
+    /// `tls_key`) when `transport = "tls"` or `transport = "quic"` (QUIC
+    /// is TLS 1.3 underneath; both doors load the same identity), and
+    /// forbidden otherwise (a "tcp"/"udp"/"ws" entry carrying TLS files
+    /// is a startup error, never a silent reinterpretation of the entry).
+    pub tls_cert: Option<String>,
+    /// Path to the PEM private key matching [`Self::tls_cert`] — see there.
+    pub tls_key: Option<String>,
+}
+
+/// Server configuration (see `config.example.toml`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// Socket address to bind (e.g. `"0.0.0.0:7777"`, `"127.0.0.1:0"`).
+    pub bind: String,
+    /// Global tick rate in ticks per second. Every room must run at a rate
+    /// that divides this one (a room at `global / k` steps every k-th tick).
+    pub tick_hz: f64,
+    /// Number of rooms to pre-create at startup (ids `1..=room_count`).
+    pub room_count: u64,
+    /// Maximum frame body size in bytes (transport-level guard).
+    pub max_frame_bytes: usize,
+    /// Capacity of each room's control channel (join/leave/shutdown).
+    pub room_control: usize,
+    /// Capacity of each connection's action channel (inputs buffered until
+    /// the room's next tick).
+    pub conn_action: usize,
+    /// Capacity of each connection's inbound (frames in) mailbox.
+    pub conn_inbox: usize,
+    /// Capacity of each connection's outbound (batches out) channel.
+    pub conn_out: usize,
+    /// Session-lifecycle idle window, in seconds: a connection that sends
+    /// *no* inbound frame (heartbeat, input, anything) for this long is
+    /// closed by the server on its own initiative (a gentle `ERROR` frame,
+    /// code 9, then EOF). This is the half-open-TCP guardrail — a client
+    /// whose cable was pulled or power lost sends no FIN/RST, and its
+    /// 3 tasks + 2 channels + registry entry would otherwise sit until
+    /// process death. `0` disables the check.
+    ///
+    /// Default 30 s: comfortably above the ~10 s heartbeat cadence a
+    /// well-behaved client should keep (any inbound frame resets the
+    /// window, so a live client can never trip it), and short enough that
+    /// a dead-but-open connection is detected within a minute. Clients
+    /// that never send *anything* (not even heartbeats) must stay below
+    /// this with whatever traffic they do send.
+    pub idle_timeout_secs: f64,
+    /// Per-room membership cap (see `RoomConfig::max_players`); a join
+    /// into a full room is rejected with `ERROR` code 8 (the connection
+    /// stays alive). `None` = unlimited.
+    pub max_players: Option<u32>,
+    /// Server-wide connection cap, enforced at connection birth by the
+    /// registry (the count lives in its table, so the guardrail does —
+    /// the accept loop cannot see disconnects without a second awaited
+    /// source). A rejected connection gets `ERROR` code 9 + EOF and no
+    /// registry entry. `None` = unlimited.
+    ///
+    /// Default 100_000: the design goal itself (DESIGN §1, "100k+ concurrent
+    /// connections") as a hard guardrail — beyond the goal is an unmeasured
+    /// region, and the cap keeps the server's behavior there defined (gentle
+    /// rejection) instead of unbounded resource growth.
+    pub max_connections: Option<u64>,
+    /// Cap on simultaneously UNAUTHENTICATED connections
+    /// (docs/SECURITY.md §4): a scripted handshake storm must not grow
+    /// server memory without bound while the total cap is still far away.
+    /// A connection over this cap is rejected at birth (`ERROR` code 9,
+    /// "server at unauthenticated capacity", no registry entry) — exactly
+    /// the [`Self::max_connections`] rejection path, checked in addition
+    /// to it. Authenticated connections (and detached/resumed sessions —
+    /// they carry tickets, so they are authenticated by construction)
+    /// never count against it.
+    ///
+    /// Value semantics (resolved ONCE at startup, see `unauth_cap_of`):
+    ///
+    /// - omitted (`None`, the default): derived as
+    ///   `max(max_connections / 4, 64)` — 25 % of the total cap, floored
+    ///   at 64 so even a tiny deployment keeps real headroom for a lobby
+    ///   full of slow-but-honest handshakes;
+    /// - when `max_connections` is unlimited: the same formula runs
+    ///   against the built-in default base ([`DEFAULT_MAX_CONNECTIONS`],
+    ///   so the derived default is 25_000). Decision (the contract left
+    ///   this open, "simplest sound choice wins"): an unlimited-total
+    ///   server still needs a bounded half-open-handshake pool, and taking
+    ///   the formula's base from the documented design-goal constant keeps
+    ///   ONE derivation instead of two behaviors — while 25 k simultaneous
+    ///   pre-auth handshakes is far beyond any legitimate slow-auth flow
+    ///   yet still a hard bound on storm memory;
+    /// - `n > 0`: used exactly;
+    /// - `0`: the cap is DISABLED (the config-file convention here: 0 =
+    ///   unlimited) for deployments behind an external gate.
+    pub max_unauth_conns: Option<u64>,
+    /// Warn when a room group's snapshot payload exceeds this many bytes
+    /// (rUDP MTU readiness; default = `max_frame_bytes`).
+    pub max_snapshot_bytes: usize,
+    /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
+    /// lost its last snapshot must not stay stale forever). `<= 0` disables.
+    pub keepalive_hz: f64,
+    /// The TOPOLOGY selection axis (`"single"` | `"sharded"`; see
+    /// [`Topology`]): who computes the world and as how many authoritative
+    /// pieces.
+    ///
+    /// Value semantics (resolved ONCE at startup, see
+    /// [`Self::resolve_selection`]):
+    ///
+    /// - omitted (`None`, the default): DERIVED — `single`, except when the
+    ///   legacy `visibility` key reads `"sharded"` (that spelling was
+    ///   always a topology statement wearing a visibility name);
+    /// - set: the explicit key WINS over the legacy derivation. When the
+    ///   two disagree (e.g. legacy `visibility = "sharded"` next to
+    ///   explicit `topology = "single"`), a startup warn names which side
+    ///   took effect (the same courtesy `[[listeners]]` extends to the
+    ///   scalar transport keys) — behavior never changes silently.
+    pub topology: Option<Topology>,
+    /// The COMMUNICATION selection axis (`"always-full"` | `"delta"`;
+    /// see [`Communication`]): how snapshot data is packaged for clients.
+    ///
+    /// Value semantics (resolved ONCE at startup, see
+    /// [`Self::resolve_selection`]):
+    ///
+    /// - omitted (`None`, the default): DERIVED from the visibility axis —
+    ///   `spatial` ⇒ `delta` (its room diffs per cell internally), every
+    ///   other visibility ⇒ `always-full`. A derived value DESCRIBES what
+    ///   the mapped room already does; it requests nothing new;
+    /// - set: the explicit key WINS over the derivation, and an explicit
+    ///   `"delta"` is a REQUEST for client-facing delta snapshots — served
+    ///   only where a delta implementation exists today (`single ×
+    ///   spatial`, the same AoiRoom the derived spelling builds); every
+    ///   other combination REFUSES STARTUP with an error naming the
+    ///   roadmap phase that will deliver them (never a silent downgrade
+    ///   to full frames).
+    pub communication: Option<Communication>,
+    /// The legacy input encoding of TWO of the three selection axes (see
+    /// [`Visibility`] and the derivation below).
+    ///
+    /// The four non-`"sharded"` spellings ARE the [`VisibilityAxis`]
+    /// values. `"sharded"` decodes to topology = `sharded` + visibility =
+    /// `all`. Full derivation table (when the new keys are omitted):
+    ///
+    /// | legacy `visibility` | resolved triple (topology × visibility × communication) |
+    /// |---|---|
+    /// | `"all"`     | single  × all     × always-full |
+    /// | `"spatial"` | single  × spatial × delta¹ |
+    /// | `"team"`    | single  × team    × always-full |
+    /// | `"pvs"`     | single  × pvs     × always-full |
+    /// | `"sharded"` | sharded × all     × always-full |
+    ///
+    /// ¹ names the packaging the spatial rooms ALREADY serve (the
+    /// single-world per-cell diff; on the grid, the Faz B composite via
+    /// an explicit `topology = "sharded"`): the explicit
+    /// [`Self::communication`] key resolves to the same room there;
+    /// elsewhere an explicit `"delta"` is rejected until its codec
+    /// ships.
+    ///
+    /// Precedence: an explicit [`Self::topology`] /
+    /// [`Self::communication`] key always overrides its derived cell.
+    /// Every legacy spelling resolves to one of the five supported
+    /// combinations, so pre-axes configs keep working unchanged; only
+    /// EXPLICIT new-axis requests can reach a rejected combination, and
+    /// those fail at startup naming the roadmap phase that will deliver
+    /// them (see [`ServerError`]).
+    pub visibility: Visibility,
+    /// Number of shards per room (used only when the RESOLVED topology is
+    /// [`Topology::Sharded`] — via legacy `visibility = "sharded"` OR an
+    /// explicit `topology = "sharded"`). The map is divided
+    /// into a near-square grid of `rows × cols` shards (`rows * cols =
+    /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
+    /// 1..=256 (the grid topology); validated at startup. Default 4 (2×2).
+    pub shard_count: u32,
+    /// The transport (see [`TransportKind`]).
+    pub transport: TransportKind,
+    /// The rUDP datagram budget in bytes (transport-level guard; default
+    /// 1472 = MTU 1500 − IP 20 − UDP 8). Used only when
+    /// [`Self::transport`] = `Udp`. See `gsb_net::udp` (feature 3:
+    /// oversized frames are dropped and counted, never fragmented).
+    pub udp_max_datagram_bytes: usize,
+    /// The rUDP cookie key as 32 hex characters (16 bytes). Used only
+    /// when [`Self::transport`] = `Udp`. `None` (the default) = draw the
+    /// key from the OS entropy source at bind time; if that draw fails
+    /// the server refuses to start — a predictable key would invert the
+    /// handshake's anti-amplification property (see `gsb_net::udp`).
+    pub udp_cookie_key: Option<String>,
+    /// Path to the server certificate chain, PEM (leaf first). Empty (the
+    /// default) = plaintext TCP, byte-identical behavior to before the TLS
+    /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
+    /// (docs/SECURITY.md §2). Setting one WITHOUT the other is a startup
+    /// error — no silent half-configured fallback; setting either with
+    /// `transport = "udp"` is also a startup error (rUDP is experimental
+    /// and takes no TLS).
+    pub tls_cert: String,
+    /// Path to the PEM private key matching [`Self::tls_cert`]. See there.
+    pub tls_key: String,
+    /// The listener table (`[[listeners]]`): MULTIPLE independent sockets
+    /// serving the ONE room/map simultaneously — e.g. a TLS-TCP door for
+    /// paying clients next to a plain-TCP door for a LAN build, an rUDP
+    /// or QUIC door beside both, and a WebSocket door for browser-adjacent
+    /// clients. Every accepted endpoint flows into the SAME
+    /// pipeline (same registry, same rooms, one shared connection-id
+    /// sequence), so which door a client walked in through is invisible
+    /// above the accept loop.
+    ///
+    /// Semantics:
+    ///
+    /// - ABSENT (the default): exactly ONE listener is DERIVED from the
+    ///   legacy scalar keys (`transport` + `bind` + `tls_cert`/`tls_key`),
+    ///   byte-identical to pre-multi-listener behavior. Existing configs,
+    ///   tests and deployments are untouched.
+    /// - PRESENT and non-empty: the array WINS; the legacy scalar keys are
+    ///   ignored. A startup warn fires when any legacy scalar differs from
+    ///   its built-in default, so an operator who set both sees which one
+    ///   took effect (the config parser cannot distinguish "explicitly set
+    ///   to the default value" from "omitted", so identical-to-default
+    ///   legacy keys stay silent).
+    /// - PRESENT but empty: a startup error — a server with zero doors is
+    ///   never a valid deployment, and silently falling back to the scalar
+    ///   keys would hide the mistake.
+    pub listeners: Option<Vec<ListenerEntry>>,
+    /// World units per AOI cell edge (used when the resolved visibility
+    /// axis is `Spatial` — the single-world AoiRoom AND the sharded ×
+    /// spatial composite's per-shard cells). See `gsb_game::aoi` for the
+    /// `max_snapshot_bytes` / density relation and the measured
+    /// break-even.
+    pub aoi_cell_size: f32,
+    /// World units an enemy must be within to be visible to a team (used
+    /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
+    /// the vision source model.
+    pub team_vision_radius: f32,
+    /// Half-size of the square map entities spawn on (all four demo rooms;
+    /// default 50 = the historical 100×100 arena, bit-identical). A load
+    /// profile that places entities on a "wide map" (the generator's
+    /// `spread` profile) pairs a large value here with the same value in
+    /// the clients' `--spawn-half-size`, so spawn points and targets live
+    /// on the same map and the run is statistically steady from tick 1.
+    /// The PVS strategy's *visibility map* stays its hand-authored 100×100
+    /// sectors regardless (see `gsb_game::pvs::SectorRoom::spawn_half`).
+    pub spawn_half_size: f32,
+    /// The demo rooms' disconnect-park grace, in seconds (`config.example.toml`:
+    /// `disconnect_grace_secs`; RECONNECT §3): how long a dropped
+    /// transport's entity STAYS in the world — visible in snapshots,
+    /// holding its room-cap slot — before the hold ends toward the bot
+    /// handover ([`ExpireTo::AiHandover`]; the demo stub bot then keeps
+    /// playing the hero through the ordinary input path). A human who
+    /// rejoins inside the window resumes onto the live entity with the
+    /// same wire id (the implicit resume, §14.3).
+    ///
+    /// Default 30 s; `0` restores the pre-reconnect semantics exactly
+    /// (disconnect = despawn). Flows into every room the factories build
+    /// (the game-level knob rides the factory closure like
+    /// `spawn_half_size`, not [`RoomConfig`] — it is policy, not core
+    /// mechanics).
+    pub disconnect_grace_secs: f64,
+    /// Bind address of the HTTP ops surface (`docs/OPS.md`): `/healthz`,
+    /// `/metrics`, `/rooms`, and the room-admin writes. The empty string
+    /// (the default) DISABLES the listener entirely — the default
+    /// deployment gains no extra socket and no new attack surface. When
+    /// set, it also redirects the metrics reports into the surface's
+    /// `watch` snapshot (see `start_inner`). WHY localhost by convention:
+    /// v1 ships no auth/TLS (OPS §5), so anything that can reach this port
+    /// can scrape metrics AND open/close rooms — bind beyond loopback only
+    /// as an explicit, network-guarded decision (e.g. `"127.0.0.1:9090"`,
+    /// never `"0.0.0.0"`).
+    pub http_listen: String,
+}
+
+/// The built-in default server-wide connection cap (DESIGN §1's design
+/// goal as a guardrail). Single source of truth for the `Config` default
+/// AND the unauth-cap derivation when `max_connections` is unlimited.
+pub(crate) const DEFAULT_MAX_CONNECTIONS: u64 = 100_000;
+
+/// The floor of the derived unauthenticated-connection cap
+/// (`unauth_cap_of`): even the smallest deployment gets real headroom for
+/// slow-but-honest handshakes instead of a cap that rounds to near-zero.
+pub(crate) const MIN_UNAUTH_CONNS: u64 = 64;
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bind: "0.0.0.0:7777".into(),
+            tick_hz: 30.0,
+            room_count: 1,
+            max_frame_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
+            room_control: 128,
+            conn_action: 256,
+            conn_inbox: 1024,
+            conn_out: 256,
+            idle_timeout_secs: 30.0,
+            max_players: Some(10_000),
+            max_connections: Some(DEFAULT_MAX_CONNECTIONS),
+            max_unauth_conns: None,
+            max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
+            keepalive_hz: 1.0,
+            topology: None,
+            communication: None,
+            visibility: Visibility::default(),
+            shard_count: 4,
+            transport: TransportKind::default(),
+            udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
+            udp_cookie_key: None,
+            tls_cert: String::new(),
+            tls_key: String::new(),
+            listeners: None,
+            aoi_cell_size: 20.0,
+            team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
+            spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
+            disconnect_grace_secs: gsb_game::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
+            http_listen: String::new(),
+        }
+    }
+}
+
+impl Config {
+    /// Load configuration from a TOML file.
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        let mut cfg: Self = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        // Config-file convenience: an explicit 0 means "unlimited" for the
+        // caps (a cap of 0 would be a room/server nobody can enter). This
+        // mirrors the loadgen CLI semantics (`--max-players 0` etc.).
+        // Omitting the key keeps the built-in default (see `Default`);
+        // `idle_timeout_secs = 0` is already handled at use time.
+        if cfg.max_players == Some(0) {
+            cfg.max_players = None;
+        }
+        if cfg.max_connections == Some(0) {
+            cfg.max_connections = None;
+        }
+        Ok(cfg)
+    }
+
+    /// Reduce the raw config surface to the validated three-axis selection
+    /// (topology × visibility × communication — `docs/ROADMAP.md`, P2
+    /// "Konfigürasyon düzeltmesi", Faz A) and map it onto the room build
+    /// that will run.
+    ///
+    /// This is THE gate between "what the operator wrote" and "what will
+    /// run": the composition root matches on the returned
+    /// [`ResolvedSelection::kind`] instead of the raw legacy string, so
+    /// the axes are authoritative and legacy spellings stay input
+    /// encodings. Derivation + precedence:
+    ///
+    /// 1. TOPOLOGY — explicit [`Self::topology`] wins; omission derives
+    ///    from the legacy encoding (`visibility = "sharded"` ⇒ sharded).
+    /// 2. VISIBILITY — decoded from the legacy [`Self::visibility`] key
+    ///    (`"sharded"` folds into `all`; its topology half was taken in
+    ///    step 1).
+    /// 3. COMMUNICATION — explicit [`Self::communication`] wins; omission
+    ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
+    ///    rooms actually do).
+    ///
+    /// Combination validation runs on the RESOLVED triple. Only six
+    /// combinations have an implementation today (single × {all, team,
+    /// pvs} × always-full, single × spatial × delta, sharded × all ×
+    /// always-full, and sharded × spatial × delta — the Faz B composite);
+    /// everything else is rejected HERE with an error naming the roadmap
+    /// phase/document that will deliver it — a supported-combination check
+    /// must refuse at startup, never misconfigure a running server.
+    ///
+    /// The communication axis is therefore FUNCTIONALLY DETERMINED by the
+    /// visibility axis today, and validation enforces that in both
+    /// directions rather than letting either spelling drift from the room
+    /// that runs:
+    ///
+    /// - under `spatial` (either topology) the room speaks delta and only
+    ///   delta — AoiRoom's internal per-cell diff, the Faz B composite's
+    ///   per-shard cell-delta broadcast — so the derived value and an
+    ///   explicit `delta` agree on one room, and an explicit
+    ///   `always-full` is REJECTED (no spatial room has a full-frame mode);
+    /// - under `all`/`team`/`pvs` the room speaks full frames only, so an
+    ///   explicit `delta` is REJECTED (client-facing delta packaging waits
+    ///   on the shared codec round).
+    ///
+    /// The consequence worth stating: no ACCEPTED [`ResolvedSelection`]
+    /// can report a `communication` its room does not speak.
+    pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
+        // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
+        // a contradiction warns (behavior still follows the explicit key).
+        let legacy_sharded = self.visibility == Visibility::Sharded;
+        let topology = match self.topology {
+            Some(explicit) => {
+                if legacy_sharded && explicit == Topology::Single {
+                    warn!(
+                        resolved = %explicit,
+                        "`topology` takes precedence: ignoring the legacy \
+                         visibility = \"sharded\" spelling"
+                    );
+                }
+                explicit
+            }
+            None if legacy_sharded => Topology::Sharded,
+            None => Topology::Single,
+        };
+
+        // Stage 2 — VISIBILITY axis: decode the legacy five-value spelling.
+        let visibility = VisibilityAxis::from(self.visibility);
+
+        // Stage 3 — COMMUNICATION: explicit key wins over the derived
+        // default (the default mirrors what the mapped room does today).
+        let derived_communication = match visibility {
+            VisibilityAxis::Spatial => Communication::Delta,
+            VisibilityAxis::All | VisibilityAxis::Team | VisibilityAxis::Pvs => {
+                Communication::AlwaysFull
+            }
+        };
+        let communication = self.communication.unwrap_or(derived_communication);
+
+        // Stage 4 — combination validation, structural axes first (they
+        // decide what the world IS), then the packaging axis. Each
+        // supported mapping names its factory; each REJECTION names the
+        // roadmap phase/document that delivers it.
+        let kind = match (topology, visibility) {
+            (Topology::Single, VisibilityAxis::All) => RoomKind::Open,
+            (Topology::Single, VisibilityAxis::Spatial) => RoomKind::Aoi,
+            (Topology::Single, VisibilityAxis::Team) => RoomKind::Team,
+            (Topology::Single, VisibilityAxis::Pvs) => RoomKind::Sector,
+            (Topology::Sharded, VisibilityAxis::All) => RoomKind::Sharded,
+            // The Faz B composite: every shard of the grid broadcasts with
+            // cell-grouped spatial visibility over its OWN region, the
+            // borrowed border strip folded into the per-cell delta ledger.
+            (Topology::Sharded, VisibilityAxis::Spatial) => RoomKind::ShardedSpatial,
+            // Locality-contrary combos: team/pvs interest reaches across
+            // shard seams, which needs a cross-shard subscription layer
+            // nobody has built (see docs/CROSS-SHARD.md §4 — interaction
+            // designs stay shard-local; docs/DISTRIBUTED.md horizon item).
+            (Topology::Sharded, other @ (VisibilityAxis::Team | VisibilityAxis::Pvs)) => {
+                return Err(ServerError::ShardedCrossInterest(other.to_string()))
+            }
+        };
+
+        // An EXPLICIT delta request resolves only where a client-facing
+        // delta implementation exists TODAY: `spatial` — on either
+        // topology. Under `single` that is AoiRoom's internal per-cell
+        // diff; under `sharded` it is the Faz B composite's per-shard
+        // cell-delta broadcast (the same wire format). Everywhere else
+        // (all/team/pvs) delta frames wait for their packaging: fail
+        // cleanly instead of silently serving full frames under a config
+        // that asked for deltas.
+        if self.communication == Some(Communication::Delta)
+            && visibility != VisibilityAxis::Spatial
+        {
+            return Err(match topology {
+                Topology::Single => ServerError::SingleDelta,
+                Topology::Sharded => ServerError::ShardedDelta,
+            });
+        }
+
+        // The MIRROR of the check above, and for the same reason. Spatial
+        // rooms speak delta and only delta: AoiRoom's unit of encoding is
+        // the per-cell diff and the Faz B composite's is the per-shard
+        // cell delta — neither has a full-frame mode to select (their
+        // fulls are the keep-alive / late-join recovery path, not a wire
+        // setting). An explicit `always-full` here therefore names
+        // packaging nothing serves, exactly as an explicit `delta` does
+        // under all/team/pvs. Refusing keeps `ResolvedSelection` truthful
+        // BY CONSTRUCTION: no accepted selection can report a
+        // communication its room does not speak. An OMITTED key still
+        // derives `Delta` above, so a config that never mentioned the axis
+        // is untouched.
+        if self.communication == Some(Communication::AlwaysFull)
+            && visibility == VisibilityAxis::Spatial
+        {
+            return Err(match topology {
+                Topology::Single => ServerError::SingleAlwaysFull,
+                Topology::Sharded => ServerError::ShardedAlwaysFull,
+            });
+        }
+
+        Ok(ResolvedSelection {
+            topology,
+            visibility,
+            communication,
+            kind,
+        })
+    }
+}

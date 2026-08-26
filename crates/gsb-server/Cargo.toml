@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "gsb-loadgen"
-path = "src/loadgen.rs"
+path = "src/loadgen/main.rs"
 
 [dependencies]
 tokio = { workspace = true }
