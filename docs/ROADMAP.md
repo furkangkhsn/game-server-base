@@ -75,7 +75,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **292** (292/292 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **294** (294/294 yeşil; tarihsel
 ilerleme 58 → ... → 279 için `docs/CHANGELOG.md` başlığına bakınız).
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
@@ -102,6 +102,43 @@ turunda** shard'ların bağlantı-churn'üyle sonsuz büyüyen iki tablosu
 budandı, metrik biriktiricileri kapanan varlıkları bırakacak şekilde
 düzenlendi ve supervision turunun ortaya çıkardığı roster-drift panigi
 düzeltildi (aşağıda, "Kapatılanlar (tablo budama turu)").
+
+En son **dış inceleme düzeltme turu (park sızıntısı + eksen çelişkisi)**:
+iki doğrulanmış bulgu kapatıldı.
+
+1. **Park expiry registry satırını sızdırıyordu.** Grace room/shard
+   tarafında biter (politika logic'in), ama oda bunu KİMSEYE söylemiyordu:
+   registry'nin `detached` satırı, temsil ettiği entity despawn edildikten
+   sonra da ayakta kalıyordu. Satırı serbest bırakabilen tek iki olay
+   (aynı identity ile resume, odanın ölmesi) geri dönmeyen bir oyuncuda
+   hiç gerçekleşmez — kalıcı odada terk edilen her oturum bir
+   `max_connections` slotunu, sharded'da ayrıca bir `ShardGroup` üye
+   slotunu KALICI tutuyordu (ölçüldü: 2 shard'lık odada park dolduktan
+   sonra `members` 1'de çakılı kalıyor). Kod bunu "accepted v1 imprecision
+   — caps close slightly early" diye belgelemişti; oysa RECONNECT §4 zaten
+   "`members` sayacı … expire'te düşer" diyor: kabul edilmiş bir takas
+   değil, uygulanmamış bir tasarım şartıydı. Düzeltme:
+   `RegistryMsg::ParkExpired`; oda/shard `Despawn` kolunda raporluyor
+   (senkron `try_send` — tick gövdesi await'siz kalır; DOLU mailbox
+   sonraki tick'e kuyruklanır, çünkü düşen rapor sızıntıyı geri açardı;
+   KAPALI mailbox'ta bırakılır). AI-handover kolu bilinçli olarak
+   raporlanmaz: orada entity botla YAŞIYOR, slotu gerçekten tutuyor ve
+   hâlâ geçerli bir resume hedefi (§9).
+2. **`communication = "always-full"` + `visibility = "spatial"` sessizce
+   yanlış yapılandırıyordu.** Çözümleyici kabul ediyor, `AlwaysFull`
+   raporluyor, ama seçtiği oda (`Aoi` / `ShardedSpatial`) delta
+   yayınlıyordu — üstelik testi bu ayrışmayı "honored as written" diye
+   kilitlemişti. Ters yön (`delta` + all/team/pvs) zaten reddediliyordu;
+   simetrik hale getirildi (`SingleAlwaysFull` / `ShardedAlwaysFull`).
+   Sonuç: KABUL EDİLEN hiçbir `ResolvedSelection`, odasının konuşmadığı
+   bir communication raporlayamaz. Anahtar YAZILMAMIŞSA türetme
+   değişmedi, yani eksene hiç dokunmamış config etkilenmez.
+   `config.example.toml`'un desteklenen-kombo tablosu da Faz B'den beri
+   çürüktü (sharded × spatial'ı hâlâ "reddedilir" diyordu), yenilendi.
+
+Test 292 → **294** (ikisi de mutation-verified; süit tamamen yeşil,
+clippy 0 uyarı).
+
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
