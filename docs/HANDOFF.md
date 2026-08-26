@@ -7,8 +7,17 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-Mimari skoru 9.0/10, 287 test yeşil, ağaç temiz. Teknik borç listesi
-fiilen boş — görevin, sözleşmeli turları devam ettirmek ve disiplini korumak.
+294 test yeşil, clippy 0 uyarı, ağaç temiz. Teknik borç listesi fiilen
+boş — görevin, sözleşmeli turları devam ettirmek ve disiplini korumak.
+
+**Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
+207. Her modül kendi dizini; hedef dosya boyutu 200-250 satır. Bir
+dosyayı büyütmek yerine alt modüle böl — ve bir struct'ın impl'ini
+bölerken KARDEŞ değil ÇOCUK modül kullan (çocuk atasının private
+alanlarını görür, kapsülleme bozulmaz). Hedefi aşan 44 dosya var ve
+her biri bilinçli: trait/trait-impl tek blok olmak zorunda, ve tek
+sürekli prosedürü ikiye bölmek yarı kurulmuş durumu modül sınırından
+geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 
 ## ÖNCE OKU (sırayla)
 
@@ -56,33 +65,35 @@ fiilen boş — görevin, sözleşmeli turları devam ettirmek ve disiplini koru
 
 ## İŞ SIRASI (sözleşmeli turlar)
 
-1. **Çoklu-listener'a QUIC + WS kapıları** — ÜÇ KEZ ajan kaybedilen tur;
-   TAZE BAĞLAMDA TEK TUR halinde yap. Sözleşme: ROADMAP "Çoklu-listener"
-   maddesinin son paragrafı. `QuicTransport` (gsb-net/src/quic.rs) ve WS
-   listener (gsb-net/src/ws.rs) hazır; yalnız `ListenerTransport`'a
-   variant eklenip accept görevleri bağlanacak + 2 karışık-transport
-   e2e testi.
-2. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
+1. **Yayın paketi** — LICENSE + CI (.github: test/clippy/**fmt**) +
+   MSRV. Artık ilk sırada: 207 dosyalık, 44 modül-sınırı görünürlük
+   kuralı olan bir ağaç elle koşulan `cargo test` disiplinine
+   bağlı kalamaz. `cargo fmt --check` şu an KIRIK (hiç koşulmamış);
+   tek mekanik commit'te normalize edip CI'da kapı yap.
+2. **WS uyum kapısı** — el yazımı RFC 6455 artık `[[listeners]]`'tan
+   erişilebilir, yani servis yolunda. Bilinen açık: fragmentasyon
+   sırasında araya giren veri çerçevesi (§5.4) reddedilmiyor
+   (`ws/reader/dispatch.rs`, OP_BIN kolu `frag_opcode`'a bakmıyor).
+   Tek guard'lık düzeltme + CI'da Autobahn `wstest` kapısı.
+3. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon
    kuralları dahil).
-3. **Cross-seam etkileşim paketi** — ROADMAP maddesindeki 3 parça:
+4. **Cross-seam etkileşim paketi** — ROADMAP maddesindeki 3 parça:
    borrowed-view gameplay erişimi · `ShardMsg::RemoteEffect`
    primitifi · histeresizli crystallization tetikleyicisi.
-4. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
+5. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
    ortak DeltaSnapshotCodec adoptasyonu (all/team/pvs), Ipc/NetLink,
    QUIC rehome.
 
 ## BEKLEYEN KULLANICI KARARLARI (kendine sor, tek başına verme)
 
-- Yayın paketi: LICENSE + CI (.github: test/clippy/fmt) + MSRV —
-  yarım gün; kullanmaya başlanacaksa ilk iş.
 - `metrics` crate fasadına geçiş mi elle render mı (OPS §6 kenar notu).
 
 ## DOĞRULAMA TABAN ÇİZGİSİ
 
 Her turdan sonra: `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 287 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 294 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

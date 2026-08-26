@@ -139,6 +139,44 @@ iki doğrulanmış bulgu kapatıldı.
 Test 292 → **294** (ikisi de mutation-verified; süit tamamen yeşil,
 clippy 0 uyarı).
 
+En son **okunabilirlik turu**: kaynak ağacı modül dizinlerine bölündü —
+**40 dosya → 207**, en büyük dosya **5541 → 663**, medyan ~600 → ~190.
+Saf yeniden düzenleme; davranış değişmedi (294 test yeşil, clippy 0
+uyarı, loadgen 30 Hz / 0 hata).
+
+Turun asıl işi dosya taşımak değil, **fonksiyon çıkarmaktı** — ve üç dev
+fonksiyonun üçü de kesme noktalarını zaten kendi yorumlarında yazmıştı:
+
+- `registry::run` 845 → **206**: 16 mesajlık dispatch'ten 8 kol `on_*`
+  metoduna çıktı. Kollardaki 7 `continue` `return` oldu — match döngünün
+  tek ifadesi olduğu için eşdeğer, ve derleyici `continue`'un fonksiyon
+  sınırını geçmesine izin vermediği için dönüşüm mekanik olarak güvenli.
+- `room::step_phases` 553 → **119** ve `shard::step_phases` 811 → **204**:
+  `// -- Phase 0b`, `// -- Phase 1 — READ` banner'ları kesme noktalarıydı;
+  fazlar arası geçen tek yerel değişkenler `ctx`, `actions`, `requests`.
+  Shard'da `phase_migrate`/`phase_border`'a tick bilgisi artık imzada
+  açıkça geçiyor.
+- `conn::handle_frame` 381 → **88**: AUTH (182) ve JOIN (113) kolları
+  metoda çıktı.
+
+**Yöntem kuralı (yeni turlar için bağlayıcı):** bir struct'ın impl'i
+bölünürken KARDEŞ değil ÇOCUK modül kullanılır. Çocuk atasının private
+alanlarını gördüğü için `RoomActor`/`ShardActor`/`ConnectionActor`/`Demux`
+alanları kendi ağaçlarında private kaldı — hiçbiri `pub`/`pub(crate)`
+olmadı. Testlerin gördüğü alanlarda `pub(in crate::room)` var; bu
+genişletme DEĞİL, bölünmeden önceki görünürlüğün aynısı (testler zaten
+aynı modüldeydi).
+
+**Hedefi aşan 44 dosya bilinçli** ve üç sınıfa ayrılıyor: (1) Rust'ın
+izin vermediği yerler — trait ve trait impl tek blok olmak zorunda
+(`GameLogic`, her odanın `impl GameLogic`'i); (2) tek sürekli prosedür
+(`broadcast_phase`, `print_report`, `orchestrate`, `start_inner`) — ikiye
+bölmek yarı kurulmuş durumu modül sınırından geçirmek olurdu; (3) tek
+`match` — `shard/actor/messages.rs` (463) kollarını çıkarmak DENENDİ ve
+GERİ ALINDI: kollar epoch/binding guard'larını paylaşıyor, ayırınca
+sıralama argümanı dosyalara dağılıyor. `registry::run`'da aynı iş
+çalıştı çünkü orada kollar bağımsızdı — fark kodun kendisinde.
+
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
