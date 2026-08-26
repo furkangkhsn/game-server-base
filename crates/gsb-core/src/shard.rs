@@ -1130,6 +1130,15 @@ pub struct ShardActor<W, G, St, Sp> {
     /// synchronous `try_send` on teardown (no await, best effort). Every
     /// shard of a logical room shares the registry's sink.
     result_sink: Option<Mailbox<crate::registry::MatchResult>>,
+    /// The registry's mailbox, used for exactly one report: a park that
+    /// expired toward despawn
+    /// ([`crate::registry::RegistryMsg::ParkExpired`]). `None` for a
+    /// directly-driven shard (the test rigs) — no registry to tell.
+    registry: Option<Mailbox<crate::registry::RegistryMsg>>,
+    /// Park expiries not yet accepted by the registry's mailbox; retried
+    /// on later ticks rather than dropped. See the room actor's field of
+    /// the same name for why a dropped report would reopen the leak.
+    park_reports: Vec<ConnectionId>,
 }
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
@@ -1231,7 +1240,19 @@ where
             completions,
             completions_tx,
             result_sink,
+            registry: None,
+            park_reports: Vec::new(),
         }
+    }
+
+    /// Give this shard the registry mailbox it reports park expiries on
+    /// (see [`crate::registry::RegistryMsg::ParkExpired`]). A builder for
+    /// the same reason the room actor uses one: the direct-drive rigs
+    /// construct shards without a registry, and `new` is already at the
+    /// argument limit.
+    pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Run until the ticker channel closes or a `Shutdown` is processed on
@@ -1572,6 +1593,16 @@ where
                 match to {
                     ExpireTo::Despawn => {
                         self.m.detach_expired_despawn += 1;
+                        // The registry is holding a detached row for this
+                        // session — and on the grid that row also holds a
+                        // slot in the ShardGroup member count, the only
+                        // whole-room capacity view there is. Report the
+                        // end so both come back.
+                        if self.registry.is_some()
+                            && let Some(conn) = self.conns.get(&player).map(|rc| rc.conn)
+                        {
+                            self.park_reports.push(conn);
+                        }
                         self.despawn_conn(player, false);
                         debug!(
                             room = %self.config.id,
@@ -1595,6 +1626,24 @@ where
                     }
                 }
             }
+        }
+
+        // -- Park-expiry reports: hand the registry back the rows (and the
+        //    member slots) whose holds ended this tick, plus anything an
+        //    earlier tick could not place. Synchronous `try_send` (the
+        //    tick body stays await-free); a FULL mailbox keeps the id
+        //    queued for the next tick instead of dropping it, a CLOSED one
+        //    drops it (the registry is gone — no table left to leak into).
+        if !self.park_reports.is_empty()
+            && let Some(registry) = &self.registry
+        {
+            let room = self.config.id;
+            self.park_reports.retain(|&conn| {
+                matches!(
+                    registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
+                    Err(mpsc::error::TrySendError::Full(_))
+                )
+            });
         }
 
         // -- Phase 1 — READ (the room's bounded pull: per-connection

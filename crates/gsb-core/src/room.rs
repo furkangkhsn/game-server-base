@@ -1223,6 +1223,21 @@ pub struct RoomActor<W, G, Sp> {
     /// [`RoomLogic::match_result`]): a bounded mailbox, sent to with the
     /// synchronous `try_send` on shutdown (no await, best effort).
     result_sink: Option<Mailbox<crate::registry::MatchResult>>,
+    /// The registry's mailbox, used for exactly one report: a park that
+    /// expired toward despawn ([`crate::registry::RegistryMsg::ParkExpired`]).
+    /// `None` for a standalone room (the direct-drive test harnesses) — it
+    /// then simply has no registry to tell.
+    registry: Option<Mailbox<crate::registry::RegistryMsg>>,
+    /// Park expiries not yet accepted by the registry's mailbox.
+    ///
+    /// The report is a `try_send` (the tick body stays synchronous — the
+    /// room's only await is `tick_rx.recv()`), so a momentarily full
+    /// registry mailbox would otherwise DROP it — and a dropped report is
+    /// the very leak this message exists to close. Un-sent ids wait here
+    /// and are retried on later ticks instead. Bounded in practice by the
+    /// parks that expire while the registry is saturated, and it drains as
+    /// soon as the registry catches up.
+    park_reports: Vec<ConnectionId>,
 }
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
@@ -1316,7 +1331,19 @@ where
             completions,
             completions_tx,
             result_sink,
+            registry: None,
+            park_reports: Vec::new(),
         }
+    }
+
+    /// Give the room the registry mailbox it reports park expiries on
+    /// (see [`crate::registry::RegistryMsg::ParkExpired`]). A builder
+    /// instead of another `new` parameter: every direct-drive harness
+    /// constructs rooms without a registry, and `new` is already at the
+    /// argument limit.
+    pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Run until the ticker channel closes or a control `Shutdown` is
@@ -1609,6 +1636,17 @@ where
                 match to {
                     ExpireTo::Despawn => {
                         self.m.detach_expired_despawn += 1;
+                        // The registry is holding a detached row (and a
+                        // cap slot) for this session; the despawn below
+                        // is the event that ends it, and this room is the
+                        // only actor that sees it happen. Queued only when
+                        // there IS a registry — a standalone room has no
+                        // reader, so the queue must not accumulate.
+                        if self.registry.is_some()
+                            && let Some(conn) = self.conns.get(&pid).map(|rc| rc.conn)
+                        {
+                            self.park_reports.push(conn);
+                        }
                         self.despawn_conn(pid, false);
                         debug!(room = %self.config.id, %pid, "detach hold expired: despawn");
                     }
@@ -1629,6 +1667,27 @@ where
                     }
                 }
             }
+        }
+
+        // -- Park-expiry reports: hand the registry back the rows (and cap
+        //    slots) whose holds ended this tick, plus anything an earlier
+        //    tick could not place. Synchronous `try_send` — the tick body
+        //    stays await-free — and whatever the mailbox refuses stays
+        //    queued for the next tick rather than being dropped (a dropped
+        //    report IS the leak this closes).
+        //    A CLOSED mailbox (the registry is gone — the process is
+        //    coming down) drops the report instead of retrying forever:
+        //    there is no table left to leak into.
+        if !self.park_reports.is_empty()
+            && let Some(registry) = &self.registry
+        {
+            let room = self.config.id;
+            self.park_reports.retain(|&conn| {
+                matches!(
+                    registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
+                    Err(mpsc::error::TrySendError::Full(_))
+                )
+            });
         }
 
         // -- Phase 1 — READ: pull each connection's actions (non-blocking;

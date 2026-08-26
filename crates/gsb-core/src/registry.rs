@@ -257,12 +257,37 @@ pub enum RegistryMsg {
     /// room (the dispatcher's `Close` now reports this instead of
     /// `LeaveDone`): the affiliation is KEPT but marked detached — the
     /// parked entity still holds its cap slot (§4), so the registry's
-    /// member view must not drop either. The slot is released later: by a
-    /// resume that re-affiliates the identity (SpawnDone cleanup), by the
-    /// room-side expiry reflected through a fresh SpawnDone for another
-    /// member of the room... never automatically — see the accepted v1
-    /// imprecision documented on the `ConnClosed` handler.
+    /// member view must not drop either. The slot is released by exactly
+    /// three events: a resume that re-affiliates the identity (SpawnDone
+    /// cleanup), the room ending (destroy/death/`notify_room_gone`), and
+    /// the room reporting the hold's own expiry ([`Self::ParkExpired`]).
     DetachDone { conn: ConnectionId, room: RoomId },
+    /// A parked entity's hold ended toward DESPAWN and the room dropped
+    /// it through the ordinary leave funnel: release the detached row this
+    /// registry has been holding the slot with.
+    ///
+    /// WHY the room has to say this. The grace is room-side policy (the
+    /// logic picks it per player, and a combat-held park has no deadline
+    /// at all), so the room is the only actor that can know a hold ended;
+    /// the registry cannot age these rows out on a timer of its own
+    /// without being wrong about exactly the holds that matter. Before
+    /// this message existed the room told nobody, and a detached row
+    /// survived the entity it stood for — one leaked row plus one leaked
+    /// `max_connections` slot per player who never came back, released
+    /// only if the room itself ended. A persistent room never does.
+    ///
+    /// Idempotent and self-guarding: the registry acts only on a row that
+    /// is still detached AND still affiliated with `room`, so a report
+    /// that races a resume (which already released the row and re-keyed
+    /// the identity onto a live [`ConnectionId`]) is a silent no-op.
+    /// Connection ids are minted monotonically and never reused, so the
+    /// report can never land on a later session.
+    ///
+    /// Not sent for the AI-handover arm: that hold ends with the entity
+    /// still ALIVE under a bot, still holding its slot, and still a valid
+    /// resume target (`docs/RECONNECT.md` §9) — the row is doing its job
+    /// there, not leaking.
+    ParkExpired { conn: ConnectionId, room: RoomId },
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see
@@ -431,15 +456,27 @@ struct ConnInfo {
     /// the flag just stays as the session carried it.
     authed: bool,
     /// The transport died but the entity is parked room-side: the
-    /// affiliation is kept (slot held, §4) with this mark. A resumed or
-    /// fresh session for the same identity releases the entry; a room
-    /// destroy/death clears it like any affiliation. Accepted v1
-    /// imprecision: a hold that expires WITHOUT the identity ever
-    /// returning leaves this entry until one of those events — the
-    /// registry-side count errs CONSERVATIVELY (it overcounts members, so
-    /// caps close slightly early instead of ever letting a room
-    /// overfill), and the room side — which enforces its own cap against
-    /// its own table — is exact.
+    /// affiliation is kept (slot held, §4) with this mark. Released by
+    /// exactly three events, which between them cover every way a park can
+    /// end: a resumed or fresh session for the same identity, a room
+    /// destroy/death (like any affiliation), and the room's own
+    /// [`RegistryMsg::ParkExpired`] report when the hold runs out toward
+    /// despawn.
+    ///
+    /// That third one used to be missing, and its absence was not the
+    /// bounded imprecision it was documented as. A hold that expired
+    /// without the identity ever returning left this entry standing
+    /// forever — the room had despawned the entity, but the row kept a
+    /// `max_connections` slot (and, on the grid, a `ShardGroup` member
+    /// slot) reserved for a session that no longer existed. In a
+    /// persistent room, which never ends, that accumulates one dead
+    /// reservation per abandoned session until the caps refuse live
+    /// players on behalf of nobody. The room reports the expiry now; see
+    /// [`RegistryMsg::ParkExpired`].
+    ///
+    /// The AI-handover arm is deliberately NOT reported: that hold ends
+    /// with the entity alive under a bot, genuinely holding its slot and
+    /// still a valid resume target (`docs/RECONNECT.md` §9).
     detached: bool,
 }
 
@@ -705,6 +742,10 @@ where
                         self.metrics.clone(),
                         self.result_sink.clone(),
                     )
+                    // The park-expiry report path (`ParkExpired`): the
+                    // room is the only actor that sees a hold end, and
+                    // this registry is holding the row it ends.
+                    .with_registry(self.self_mailbox.clone())
                     .run(),
                 );
                 Self::spawn_room_watcher(
@@ -797,6 +838,10 @@ where
                             // payload per shard — see `crate::shard`).
                             self.result_sink.clone(),
                         )
+                        // The park-expiry report path (`ParkExpired`) —
+                        // as for a single room, plus the ShardGroup member
+                        // slot the detached row holds on the grid.
+                        .with_registry(self.self_mailbox.clone())
                         .run(),
                     );
                     Self::spawn_room_watcher(
@@ -1524,6 +1569,36 @@ where
                     {
                         info.detached = true;
                         debug!(%conn, room = %room, "player detached (slot held)");
+                    }
+                }
+                RegistryMsg::ParkExpired { conn, room } => {
+                    // Guarded on BOTH marks: a row that is no longer
+                    // detached (a resume re-affiliated it) or no longer in
+                    // this room has already been settled by the event that
+                    // changed it — this report is then a stale echo and
+                    // must not touch anything.
+                    let released = self
+                        .conns
+                        .get(&conn)
+                        .is_some_and(|i| i.detached && i.room == Some(room));
+                    if released {
+                        self.conns.remove(&conn);
+                        // The detached row was carrying this member (a
+                        // detach deliberately does NOT decrement, §4), so
+                        // the release hands the count back — the same
+                        // accounting the resume-supersedence path does.
+                        if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
+                            e.members = e.members.saturating_sub(1);
+                        }
+                        // The despawn went through the room's ordinary
+                        // leave funnel, so it counts as a leave here too.
+                        self.reg_leaves += 1;
+                        self.emit_metrics();
+                        debug!(
+                            %conn,
+                            room = %room,
+                            "park expired: detached row released (slot returned)"
+                        );
                     }
                 }
                 RegistryMsg::OpsClosed { conn } => {

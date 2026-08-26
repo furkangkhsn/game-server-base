@@ -52,6 +52,9 @@ use tokio::sync::{mpsc, oneshot};
 
 const SNAPSHOT_OP: u16 = 0x7500;
 
+/// Wire ids per shard when [`ParkLogic`] is driven as a [`ShardLogic`].
+const SHARD_SERIAL_RANGE: u64 = 1000;
+
 // =====================================================================
 // Shared test logic: one struct covers every room-level case via knobs.
 //
@@ -76,6 +79,15 @@ struct ParkLogic {
     /// Wildcard policy for connections without an explicit entry (used by
     /// the registry-driven tests, whose factory cannot know conn ids).
     hold_default: bool,
+    /// The grace the wildcard policy hands out. Effectively "never expires"
+    /// by default (the supersedence tests need the park to outlive them);
+    /// the park-expiry tests shorten it so the sweep actually fires.
+    hold_grace: Duration,
+    /// Shard index, used only when this logic is driven as a
+    /// [`ShardLogic`]. It offsets the minted wire ids into a per-shard
+    /// range; index 0 (the default, and what every single-room test uses)
+    /// leaves them exactly as they were.
+    index: usize,
     /// The park ledger (§4: it lives in the LOGIC; the core only queries).
     ledger: HashMap<String, Ledg>,
     /// The `may_release` answer for combat-helds (flipped by the test).
@@ -97,6 +109,8 @@ impl ParkLogic {
             player_entity: HashMap::new(),
             policy: HashMap::new(),
             hold_default: false,
+            hold_grace: Duration::from_secs(3600),
+            index: 0,
             ledger: HashMap::new(),
             release_ok: false,
             ops,
@@ -139,11 +153,11 @@ impl GameLogic<()> for ParkLogic {
         // Test identity policy: the conn id doubles as the player id, so
         // tests can address players by the conn they joined with.
         let player = PlayerId(c.0);
-        self.player_entity.insert(player, self.next_id);
-        Admission {
-            player,
-            entity: self.next_id,
-        }
+        // Wire ids live in this shard's range (index 0 = the identity
+        // offset every single-room test already relies on).
+        let entity = self.index as u64 * SHARD_SERIAL_RANGE + self.next_id;
+        self.player_entity.insert(player, entity);
+        Admission { player, entity }
     }
 
     fn on_leave(&mut self, _w: &mut (), player: PlayerId) {
@@ -158,8 +172,8 @@ impl GameLogic<()> for ParkLogic {
             .get(&player)
             .copied()
             .or_else(|| {
-                self.hold_default.then(|| Detach::Hold {
-                    grace: Some(Duration::from_secs(3600)),
+                self.hold_default.then_some(Detach::Hold {
+                    grace: Some(self.hold_grace),
                     to: ExpireTo::Despawn,
                 })
             })
@@ -245,6 +259,44 @@ impl GameLogic<()> for ParkLogic {
 // Faz 3 promotion: `handle_request` moved to `GameLogic`; this impl stays
 // as the single-room marker.
 impl RoomLogic<()> for ParkLogic {}
+
+// The same logic driven as a SHARD, so the park mechanics (and the tests
+// that exercise them) do not need a second implementation. Nothing here
+// migrates or borders — the shard cases in this file are about the park
+// lifecycle, not about the seam.
+impl ShardLogic<()> for ParkLogic {
+    type State = ();
+
+    fn index(&self) -> usize {
+        self.index
+    }
+    fn shard_count(&self) -> usize {
+        2
+    }
+    fn serial_base(&self) -> u64 {
+        self.index as u64 * SHARD_SERIAL_RANGE
+    }
+    fn serial_range(&self) -> u64 {
+        SHARD_SERIAL_RANGE
+    }
+    fn serial_used(&self) -> u64 {
+        self.next_id
+    }
+    fn neighbors(&self) -> &[usize] {
+        &[]
+    }
+    fn collect_migrations(&mut self, _w: &mut (), _nb: usize) -> Vec<Migrating<()>> {
+        Vec::new()
+    }
+    fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _player: Option<PlayerId>) {}
+    fn on_migrate_out(&mut self, _w: &mut (), _wire: u64) {}
+    fn collect_border(&self, _w: &()) -> Vec<BorderRecord<()>> {
+        Vec::new()
+    }
+    fn own_wires(&self, _w: &()) -> Vec<u64> {
+        self.player_entity.values().copied().collect()
+    }
+}
 
 // =====================================================================
 // Manual-ticker room harness (read_fairness.rs idiom): the metrics
@@ -1063,6 +1115,177 @@ fn parking_factory() -> RoomFactory<(), (), (), ()> {
             logic: Box::new(logic),
         }
     })
+}
+
+/// The parking factory with a grace short enough for the sweep to fire
+/// inside a test (the wildcard park is otherwise effectively permanent).
+fn expiring_factory(grace: Duration) -> RoomFactory<(), (), (), ()> {
+    std::sync::Arc::new(move |_id, _cfg| {
+        let (ops_tx, _ops) = mpsc::channel(16);
+        let mut logic = ParkLogic::new(ops_tx);
+        logic.hold_default = true;
+        logic.hold_grace = grace;
+        BuiltRoom::Single {
+            world: (),
+            logic: Box::new(logic),
+        }
+    })
+}
+
+/// [`start_registry`] keeping the metrics receiver, so a test can read the
+/// registry's OWN table size (`RegistrySample::conns`) instead of
+/// inferring it.
+fn start_registry_observed(
+    factory: RoomFactory<(), (), (), ()>,
+) -> (
+    Mailbox<RegistryMsg>,
+    mpsc::Receiver<MetricsEvent>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, rx) = channel::<RegistryMsg>(4096);
+    let (ticker, _ticker_task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
+    let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(256);
+    let handle = tokio::spawn(
+        Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, None).run(),
+    );
+    (tx, metrics_rx, handle)
+}
+
+/// Drain whatever the registry has emitted and return its latest sample.
+/// The registry flushes on state change, so the caller triggers one first.
+async fn latest_registry_sample(
+    metrics: &mut mpsc::Receiver<MetricsEvent>,
+) -> gsb_core::metrics::RegistrySample {
+    let mut last = None;
+    while let Ok(ev) = metrics.try_recv() {
+        if let MetricsEvent::Registry(s) = ev {
+            last = Some(s);
+        }
+    }
+    last.expect("registry emitted at least one sample")
+}
+
+/// A park that ends in DESPAWN must release the REGISTRY's table row, not
+/// only the room's.
+///
+/// The room owns the park deadline (the grace is room-side policy), so the
+/// room is the only actor that learns the hold ended — and it used to tell
+/// nobody. The registry's `detached` row therefore outlived the entity it
+/// was holding a slot for, and the only things that could ever release it
+/// were a resume for the same identity or the room ending. Neither happens
+/// to a player who simply never comes back to a persistent room, so every
+/// abandoned session leaked one row AND one `max_connections` slot,
+/// permanently: the cap eventually refuses live players on behalf of
+/// sessions that ended long ago.
+///
+/// Read through `RegistrySample::conns` — the leaked table itself, not a
+/// proxy for it.
+#[tokio::test]
+async fn park_expiry_releases_the_registry_row() {
+    let (tx, mut metrics, handle) = start_registry_observed(expiring_factory(
+        Duration::from_millis(80),
+    ));
+    let room = RoomId(73);
+    create_room(&tx, reg_config(room)).await.expect("create");
+
+    let _c1 = open_conn(&tx, ConnectionId(1)).await;
+    spawn_as(&tx, ConnectionId(1), room, "ana")
+        .await
+        .expect("first session joins");
+    // Transport death → the room parks the entity and holds the slot.
+    close_conn(&tx, ConnectionId(1)).await;
+
+    // Outlive the grace so the room's sweep expires the hold and despawns
+    // through the ordinary leave funnel.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // A second connection, opened only to make the registry flush a fresh
+    // sample (its counters emit on state change). With the expired park
+    // released, the table holds exactly this one connection.
+    let _c2 = open_conn(&tx, ConnectionId(2)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let s = latest_registry_sample(&mut metrics).await;
+    assert_eq!(
+        s.conns, 1,
+        "the expired park's row must be released; only the live conn #2 \
+         should remain in the registry table"
+    );
+
+    stop_registry(tx, handle).await;
+}
+
+/// The sharded twin of [`expiring_factory`]: two shards of the same park
+/// logic, every join homing to shard 0.
+fn expiring_sharded_factory(grace: Duration) -> RoomFactory<(), (), (), ()> {
+    std::sync::Arc::new(move |_id, _cfg| {
+        let shard = |index: usize| {
+            let (ops_tx, _ops) = mpsc::channel(16);
+            let mut logic = ParkLogic::new(ops_tx);
+            logic.hold_default = true;
+            logic.hold_grace = grace;
+            logic.index = index;
+            (
+                (),
+                Box::new(logic) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
+            )
+        };
+        BuiltRoom::Sharded {
+            shards: vec![shard(0), shard(1)],
+            home_shard: std::sync::Arc::new(|_conn| 0),
+        }
+    })
+}
+
+/// The shard actor carries its own copy of the park sweep, so it carries
+/// its own copy of the leak: [`park_expiry_releases_the_registry_row`] for
+/// the grid.
+///
+/// The sharded path has a second thing to get right — a detached row also
+/// holds a slot in the registry's `ShardGroup` member count (which is what
+/// enforces `max_players` for a sharded room, since no single actor sees
+/// the whole roster). Releasing the row must hand that count back too, or
+/// the room stays "full" forever with nobody in it.
+#[tokio::test]
+async fn sharded_park_expiry_releases_the_registry_row_and_the_member_slot() {
+    // The grace has to outlive the settle window below (the assertion
+    // that the hold is still ALIVE), so it is longer than the single-room
+    // test's.
+    let (tx, mut metrics, handle) =
+        start_registry_observed(expiring_sharded_factory(Duration::from_millis(500)));
+    let room = RoomId(74);
+    create_room(&tx, reg_config(room)).await.expect("create");
+
+    let _c1 = open_conn(&tx, ConnectionId(1)).await;
+    spawn_as(&tx, ConnectionId(1), room, "ana")
+        .await
+        .expect("first session joins");
+    close_conn(&tx, ConnectionId(1)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        status(&tx, room).await,
+        RoomStatus::Running { members: 1 },
+        "the parked player holds its slot while the hold is alive"
+    );
+
+    // Outlive the grace: the shard's sweep expires the hold and despawns.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    assert_eq!(
+        status(&tx, room).await,
+        RoomStatus::Running { members: 0 },
+        "the expired park must hand its member slot back"
+    );
+
+    let _c2 = open_conn(&tx, ConnectionId(2)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let s = latest_registry_sample(&mut metrics).await;
+    assert_eq!(
+        s.conns, 1,
+        "the expired park's row must be released; only the live conn #2 \
+         should remain in the registry table"
+    );
+
+    stop_registry(tx, handle).await;
 }
 
 async fn stop_registry(tx: Mailbox<RegistryMsg>, handle: tokio::task::JoinHandle<()>) {
