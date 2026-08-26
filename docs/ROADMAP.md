@@ -1,5 +1,13 @@
 # Ne kaldı? — gsb Geliştirme Listesi
 
+> **Kod doğrulama turu:** P1 maddelerinin kodda yeniden taranmasıyla üç
+> maddenin durumu güncellendi — `max_players`/`RoomFull` fiilen kapanmış
+> (join yolu + ERROR 8 + shard guardrail + test), `Güvenlik yüzeyi`'nin
+> iki alt parçası (`TicketAuth` hook'u, `max_connections` cap'i) kapanmış
+> (yalnız post-auth aksiyon rate-limit'i açık), `Oturum zaman aşımı`
+> yarı kurulmuş (reader idle-timeout var; yarı-ölü bağlantı süpürmesi
+> yok). Aşağıdaki maddeler bu doğrulamayı yansıtıyor.
+
 Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
 kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
 `docs/TICK-ARCHITECTURE.md`); yayın fazı **grup başına tam dünya
@@ -169,14 +177,37 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   taşınması (RECONNECT §14.1); rUDP üstünde e2e varyantı (deneysel
   statüye bağlı).
 
-- [ ] **Oturum zaman aşımı** — ölü TCP bağlantısı (RST'siz kopma) slot +
-  görev + kayıt işgal etmeye devam ediyor. Heartbeat son-görülme damgası
-  + aralıklı süpürme (kanal mesajıyla, kilit yok).
-- [ ] **`RoomConfig.max_players` + doluluk yanıtı** — `CoreError::RoomFull`
-  zaten mevcut (bugün kurulmuyor — yayınlabilirlik turu MADDE 3
-  taraması); doluysa JOIN'de `ERROR (room full)`.
-- [ ] **Güvenlik yüzeyi** — `Authenticator` trait'i (AUTH bugün no-op),
-  bağlantı sayısı limiti, aksiyon rate-limit.
+- [~] **Oturum zaman aşımı** — *yarı kurulmuş.* Reader pump'un idle
+  zaman aşımı (`idle_timeout_secs`, vars. 30 sn) **istemci sessiz**
+  durumunu yakalıyor: hiçbir frame gelmezse pump `ConnIn::Closed`
+  gönderir, teardown kaskadı (registry → oda `Leave`) çalışır. Kalan
+  boşluk **yarı-ölü bağlantı**: istemci hâlâ heartbeat atıyor ama karşı
+  taraf gitmiş (RST'siz kopma) — bu, idle pencereyi *tetiklemiyor*
+  (trafik var), slot + görev + kayıt işgal etmeye devam ediyor. Çözüm:
+  heartbeat son-görülme damgası + aralıklı süpürme (kanal mesajıyla,
+  kilit yok) — mevcut detach-hold sweep'ine (`room.rs` Phase 0c) bir
+  besleyici. 10k cap'li odada zombi slot'ların temizlenmesi, cap'ın
+  *gerçek* kapasiteyi yansıtması için şart.
+- [x] **`RoomConfig.max_players` + doluluk yanıtı** — kapatıldı: join
+  yolu cap'i kontrol ediyor (`room.rs` — `conns.len() >= cap` →
+  `CoreError::RoomFull`, entity/kanal/durum oluşturulmaz), connection
+  actor `RoomFull`'u ERROR code 8'e map'liyor (bağlantı canlı kalır,
+  başka odaya join olabilir), registry shard yolunda da aynı guardrail
+  (`registry.rs`), regresyon kilidi `room.rs` testinde (`max_players:
+  Some(2)`). ROADMAP'in eski "bugün kurulmuyor" notu yayınlabilirlik
+  turu öncesine ait — tarama tamamlandı ve kuruldu.
+- [~] **Güvenlik yüzeyi** — *iki alt parça kapatıldı, biri açık.*
+  `Authenticator` → **`TicketAuth`/`TicketValidator` hook'u kuruldu**
+  (`gsb_core::auth`: platform'a delegasyon — sunucu platform'un keşfettiği
+  ticket'ı doğrular, kendi kimlik sistemi kurmaz; `Fn(Bytes) -> Future`
+  şekli, timeout, amplification bound, config'ten `ticket: Option<TicketAuth>`
+  ile besleniyor; `None` = legacy local-auth yolu, tüm eski akış
+  değişmez). Bağlantı sayısı limiti → **`max_connections` cap'i
+  kuruldu** (registry `ConnOpened`'te enforce + pre-auth cap türetimi
+  `max(cap/4, 64)`, SECURITY §4). Kalan: **post-auth aksiyon
+  rate-limit** (bugün yalnızca pre-auth rate-limit'leri var — AUTH
+  penceresi, pre-auth heartbeat, pre-auth frame bütçesi; post-auth girdi
+  rate-limit'i yok, Tick/Action maddesinde de notlu).
 - [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
   simülasyon: 30 Hz × 10 u/sn'de tick başına 0.33 birim → istemci 3
   tick'te bir değişim görür (delta turunda bu kuantizasyon **gap
