@@ -163,19 +163,11 @@ fn explicit_topology_sharded_upgrades_a_legacy_single_config() {
     assert_eq!(sel.kind, RoomKind::Sharded);
 }
 
-/// An explicit `communication = "always-full"` overrides the spatial
-/// derivation: the request is honored as written (and stays supported —
-/// full frames are what the wire speaks everywhere today).
-#[test]
-fn explicit_communication_always_full_pins_spatial_to_full_frames() {
-    let sel = resolved(&with_axes(
-        &legacy(Visibility::Spatial),
-        None,
-        Some(Communication::AlwaysFull),
-    ));
-    assert_eq!(sel.communication, Communication::AlwaysFull);
-    assert_eq!(sel.kind, RoomKind::Aoi, "spatial still maps onto the AOI room");
-}
+// (An explicit `communication = "always-full"` under spatial USED to
+// resolve here, asserting it was "honored as written" while mapping onto
+// the delta-only AoiRoom — the selection reported a packaging its room did
+// not speak. It is a startup rejection now; see
+// `explicit_always_full_under_spatial_is_rejected_on_both_topologies`.)
 
 /// Consistency of the two spellings (the round's fix): an EXPLICIT
 /// `communication = "delta"` under single × spatial resolves to the SAME
@@ -218,14 +210,10 @@ fn every_supported_combination_maps_to_its_existing_room() {
             RoomKind::Open,
         ),
         (
-            Visibility::Spatial,
-            Some(Topology::Single),
-            Some(Communication::AlwaysFull),
-            RoomKind::Aoi,
-        ),
-        (
             // Explicit spatial × delta is the SAME room as the derived
-            // spelling: delta is AoiRoom's native packaging.
+            // spelling: delta is AoiRoom's native packaging. (Its
+            // always-full sibling is NOT a supported combination — the
+            // room has no full-frame mode; see the rejection test.)
             Visibility::Spatial,
             Some(Topology::Single),
             Some(Communication::Delta),
@@ -384,16 +372,44 @@ fn sharded_spatial_resolves_to_the_faz_b_composite() {
         Some(Communication::Delta),
     ));
     assert_eq!(explicit, derived);
+}
 
-    // An explicit always-full stays honored as written (full frames are
-    // what the wire speaks everywhere; the composite serves them too).
-    let full = resolved(&with_axes(
-        &legacy(Visibility::Spatial),
-        Some(Topology::Sharded),
-        Some(Communication::AlwaysFull),
-    ));
-    assert_eq!(full.kind, RoomKind::ShardedSpatial);
-    assert_eq!(full.communication, Communication::AlwaysFull);
+/// The mirror of the explicit-delta rejection, and the reason this test
+/// exists: `spatial` rooms speak delta and ONLY delta (AoiRoom's per-cell
+/// diff on `single`, the Faz B composite's per-shard cell delta on
+/// `sharded` — neither has a full-frame mode). An explicit
+/// `communication = "always-full"` therefore asks for packaging no spatial
+/// room serves, exactly as `communication = "delta"` asks for packaging no
+/// all/team/pvs room serves. Both must refuse at startup: accepting this
+/// one used to resolve to `communication = always-full` while the room
+/// that ran broadcast deltas — a running server misconfigured by a check
+/// whose whole job is to prevent that.
+///
+/// Omitting the key still DERIVES delta (see
+/// `legacy_visibility_values_derive_the_documented_axes`), so no config
+/// that never mentioned the axis is affected.
+#[test]
+fn explicit_always_full_under_spatial_is_rejected_on_both_topologies() {
+    for (topology, want_single) in [(Topology::Single, true), (Topology::Sharded, false)] {
+        let err = rejected(&with_axes(
+            &legacy(Visibility::Spatial),
+            Some(topology),
+            Some(Communication::AlwaysFull),
+        ));
+        match (&err, want_single) {
+            (ServerError::SingleAlwaysFull, true) | (ServerError::ShardedAlwaysFull, false) => {}
+            (other, _) => panic!("wrong error kind for {topology}: {other}"),
+        }
+        let msg = err.to_string();
+        assert!(
+            msg.contains("spatial"),
+            "message must name the spatial visibility that forces delta: {msg}"
+        );
+        assert!(
+            msg.contains("delta"),
+            "message must name the packaging the room actually speaks: {msg}"
+        );
+    }
 }
 
 /// Team/PVS interest reaches across shard seams, violating the shard

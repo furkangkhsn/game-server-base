@@ -198,22 +198,32 @@ keepalive_hz = 1.0
 # the roadmap phase/document that will deliver it):
 #
 #   single  x all     x always-full   (OpenRoom)
-#   single  x spatial x always-full   (AoiRoom)
-#   single  x spatial x delta         (AoiRoom — delta is its native
-#                                      packaging, so the explicit request
-#                                      resolves to the same room as the
-#                                      derived spelling)
+#   single  x spatial x delta         (AoiRoom — delta is its ONLY
+#                                      packaging, so the derived spelling
+#                                      and an explicit "delta" resolve to
+#                                      the same room)
 #   single  x team    x always-full   (TeamRoom)
 #   single  x pvs     x always-full   (SectorRoom)
 #   sharded x all     x always-full   (ShardedRoom grid)
+#   sharded x spatial x delta         (ShardedSpatialRoom grid — the Faz B
+#                                      composite: the same N-actor
+#                                      topology, each shard broadcasting
+#                                      cell-grouped deltas over its own
+#                                      region)
+#
+# In other words the communication axis is DETERMINED by the visibility
+# axis today: spatial rooms speak delta and only delta, every other room
+# speaks full frames and only full frames. Omit the key and the right value
+# is derived; write it and it must agree with what the room speaks.
 #
 # Rejected combinations:
-#   communication = "delta" outside single x spatial - client-facing delta
-#     frames exist only in the spatial room today (all/team/pvs wait for
-#     the common DeltaSnapshotCodec on ROADMAP; sharded waits for its Faz
-#     B/C delta book and per-link derivation).
-#   topology = "sharded" + visibility = "spatial" - per-shard cell-grouped
-#     broadcast is ROADMAP Faz B.
+#   communication = "delta" with visibility = "all"/"team"/"pvs" -
+#     client-facing delta frames exist only in the spatial rooms today
+#     (the rest wait for the common DeltaSnapshotCodec on ROADMAP).
+#   communication = "always-full" with visibility = "spatial" - the mirror
+#     of the above: no spatial room has a full-frame mode (their fulls are
+#     the keepalive / late-join recovery path, not a wire setting), so the
+#     request names packaging nothing serves. Omit the key instead.
 #   topology = "sharded" + visibility = "team"/"pvs" - cross-shard interest
 #     needs a subscription layer that does not exist yet (shard locality;
 #     docs/CROSS-SHARD.md §4).

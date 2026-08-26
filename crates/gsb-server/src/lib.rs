@@ -158,8 +158,11 @@ impl std::fmt::Display for Topology {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Communication {
-    /// Every snapshot frame carries the group's full state — what every
-    /// shipped room speaks on the wire today (the default).
+    /// Every snapshot frame carries the group's full state — what the
+    /// `all`, `team` and `pvs` rooms speak on the wire (the default, and
+    /// the only packaging those rooms have). NOT selectable under
+    /// `spatial`: those rooms have no full-frame mode, so the combination
+    /// refuses startup rather than resolving to a room that deltas.
     #[default]
     AlwaysFull,
     /// Client-facing delta frames with periodic/full keepalive
@@ -741,25 +744,30 @@ impl Config {
     ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
     ///    rooms actually do).
     ///
-    /// Combination validation runs on the RESOLVED triple. Only seven
+    /// Combination validation runs on the RESOLVED triple. Only six
     /// combinations have an implementation today (single × {all, team,
-    /// pvs} × always-full, single × spatial × {always-full, delta},
-    /// sharded × all × always-full, and sharded × spatial × {always-full,
-    /// delta} — the Faz B composite); everything else is rejected HERE
-    /// with an error naming the roadmap phase/document that will deliver
-    /// it — a supported-combination check must refuse at startup, never
-    /// misconfigure a running server.
+    /// pvs} × always-full, single × spatial × delta, sharded × all ×
+    /// always-full, and sharded × spatial × delta — the Faz B composite);
+    /// everything else is rejected HERE with an error naming the roadmap
+    /// phase/document that will deliver it — a supported-combination check
+    /// must refuse at startup, never misconfigure a running server.
     ///
-    /// One exemption on the communication axis: under `spatial` visibility
-    /// on EITHER topology, `delta` names packaging that already exists —
-    /// AoiRoom's internal per-cell diff (single) and the Faz B composite's
-    /// per-shard cell-delta broadcast (sharded) — so BOTH spellings
-    /// resolve to the same room as the derived one (legacy
-    /// `visibility = "spatial"`, key omitted) and an explicit
-    /// `communication = "delta"` request alike. Same room, one behavior;
-    /// two spellings must not disagree. Everywhere else an explicit
-    /// `communication = "delta"` requests client-facing delta frames
-    /// nothing serves yet (all/team/pvs) and is rejected.
+    /// The communication axis is therefore FUNCTIONALLY DETERMINED by the
+    /// visibility axis today, and validation enforces that in both
+    /// directions rather than letting either spelling drift from the room
+    /// that runs:
+    ///
+    /// - under `spatial` (either topology) the room speaks delta and only
+    ///   delta — AoiRoom's internal per-cell diff, the Faz B composite's
+    ///   per-shard cell-delta broadcast — so the derived value and an
+    ///   explicit `delta` agree on one room, and an explicit
+    ///   `always-full` is REJECTED (no spatial room has a full-frame mode);
+    /// - under `all`/`team`/`pvs` the room speaks full frames only, so an
+    ///   explicit `delta` is REJECTED (client-facing delta packaging waits
+    ///   on the shared codec round).
+    ///
+    /// The consequence worth stating: no ACCEPTED [`ResolvedSelection`]
+    /// can report a `communication` its room does not speak.
     pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
         // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
         // a contradiction warns (behavior still follows the explicit key).
@@ -832,6 +840,27 @@ impl Config {
             });
         }
 
+        // The MIRROR of the check above, and for the same reason. Spatial
+        // rooms speak delta and only delta: AoiRoom's unit of encoding is
+        // the per-cell diff and the Faz B composite's is the per-shard
+        // cell delta — neither has a full-frame mode to select (their
+        // fulls are the keep-alive / late-join recovery path, not a wire
+        // setting). An explicit `always-full` here therefore names
+        // packaging nothing serves, exactly as an explicit `delta` does
+        // under all/team/pvs. Refusing keeps `ResolvedSelection` truthful
+        // BY CONSTRUCTION: no accepted selection can report a
+        // communication its room does not speak. An OMITTED key still
+        // derives `Delta` above, so a config that never mentioned the axis
+        // is untouched.
+        if self.communication == Some(Communication::AlwaysFull)
+            && visibility == VisibilityAxis::Spatial
+        {
+            return Err(match topology {
+                Topology::Single => ServerError::SingleAlwaysFull,
+                Topology::Sharded => ServerError::ShardedAlwaysFull,
+            });
+        }
+
         Ok(ResolvedSelection {
             topology,
             visibility,
@@ -895,6 +924,22 @@ pub enum ServerError {
              communication derivation arrives with ROADMAP Faz C — use \
              visibility = \"spatial\" or communication = \"always-full\"")]
     ShardedDelta,
+
+    #[error("communication = \"always-full\" with visibility = \"spatial\" \
+             asks for packaging no spatial room serves: AoiRoom encodes \
+             per-cell DELTA pieces and has no full-frame mode (its fulls \
+             are the keep-alive/late-join recovery path, not a wire \
+             setting) — omit `communication` (it derives delta) or move to \
+             visibility = \"all\"/\"team\"/\"pvs\"")]
+    SingleAlwaysFull,
+
+    #[error("communication = \"always-full\" with visibility = \"spatial\" \
+             asks for packaging no spatial room serves: the sharded × \
+             spatial composite (ROADMAP Faz B) broadcasts per-shard \
+             cell-grouped DELTA and has no full-frame mode — omit \
+             `communication` (it derives delta), or use \
+             visibility = \"all\" for whole-world frames per shard")]
+    ShardedAlwaysFull,
 
     #[error("invalid `tick_hz` {0}: must be finite and > 0 (the global ticker derives its period as 1/hz; a rate without a period refuses startup instead of panicking)")]
     BadTickRate(f64),
