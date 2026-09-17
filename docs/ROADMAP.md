@@ -177,6 +177,16 @@ GERİ ALINDI: kollar epoch/binding guard'larını paylaşıyor, ayırınca
 sıralama argümanı dosyalara dağılıyor. `registry::run`'da aynı iş
 çalıştı çünkü orada kollar bağımsızdı — fark kodun kendisinde.
 
+En son **yayın paketi turu** (HANDOFF iş sırası 1): MIT `LICENSE`,
+`rust-version = "1.95.0"` + `rust-toolchain.toml` 1.95.0'a sabit (alt
+sınır `bevy_ecs 0.19.1`'den; 1.94.1 reddediliyor), `repository` yer
+tutucusu kaldırıldı, `.github/workflows/ci.yml` (fmt check · clippy
+`-D warnings` · test), `CONTRIBUTING.md`. `cargo fmt --check` artık
+temiz (201 dosyalık saf format kommiti; fmt'nin import sıralamasının
+açığa çıkardığı tek yedek glob import önden ayrı kommitte kaldırıldı).
+Test 294 → 294. İki bulgu P3'e yazıldı. Ayrıntı: CHANGELOG "yayın
+paketi turu".
+
 Aşağıdakiler **ölçülmemiş performans** (10k+ ölçek aşağıda ölçüldü;
 kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 **güvenlik** başlıklarındaki kalan işler.
@@ -405,6 +415,15 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   yüksek yoğunluklu odalar için farklılaşma.
 - [ ] **`gsb-client` yardımcı crate'i** — `read_frame` mantığı e2e testi
   ile örnek istemcide birebir kopyalanmış; tek yerde yaşatmak.
+- [ ] **`protoc-bin-vendored` bağlı değil** — `gsb-protocol` build-dep
+  olarak bildiriyor, `build.rs` panik mesajı "using vendored protoc"
+  diyor, ama build sistem `protoc`'unu çağırıyor
+  (`PROTOC=/nonexistent/protoc` ile düşüyor; CI `protobuf-compiler`
+  kuruyor). Ya bağla ya bağımlılığı ve mesajı kaldır (yayın paketi
+  turu bulgusu).
+- [ ] **`loadgen/churn.rs` log string'inde gömülü boşluk blokları** —
+  "stale … resume … same … connection" metni iki yerde 38'er boşluk
+  taşıyor (yayın paketi turu bulgusu; rustfmt literal'e dokunmaz).
 
 ## Bilinçli olarak yapılmayanlar (referans)
 

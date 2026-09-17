@@ -65,11 +65,12 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 
 ## İŞ SIRASI (sözleşmeli turlar)
 
-1. **Yayın paketi** — LICENSE + CI (.github: test/clippy/**fmt**) +
-   MSRV. Artık ilk sırada: 207 dosyalık, 44 modül-sınırı görünürlük
-   kuralı olan bir ağaç elle koşulan `cargo test` disiplinine
-   bağlı kalamaz. `cargo fmt --check` şu an KIRIK (hiç koşulmamış);
-   tek mekanik commit'te normalize edip CI'da kapı yap.
+1. ~~**Yayın paketi**~~ — **KAPANDI** (CHANGELOG "yayın paketi turu"):
+   MIT `LICENSE`, MSRV = sabit toolchain = 1.95.0 (alt sınır
+   `bevy_ecs 0.19.1`), `.github/workflows/ci.yml` (fmt check · clippy
+   `-D warnings` · test; build sistem `protoc` ister), `CONTRIBUTING.md`.
+   `cargo fmt --all --check` temiz — artık CI kapısı; yeni kod
+   formatlanmış gelmeli.
 2. **WS uyum kapısı** — el yazımı RFC 6455 artık `[[listeners]]`'tan
    erişilebilir, yani servis yolunda. Bilinen açık: fragmentasyon
    sırasında araya giren veri çerçevesi (§5.4) reddedilmiyor
@@ -92,8 +93,9 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 
 ## DOĞRULAMA TABAN ÇİZGİSİ
 
-Her turdan sonra: `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
---all-targets` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
+Her turdan sonra: `cargo fmt --all --check` → temiz;
+`CARGO_HOME=$PWD/.cargo cargo clippy --workspace
+--all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
 --workspace` → tamamen yeşil (bugün itibarıyla 294 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

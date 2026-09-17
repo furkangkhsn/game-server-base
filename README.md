@@ -54,6 +54,11 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 
 ## Hızlı başlangıç
 
+Gereksinimler: Rust **1.95.0** (`rust-toolchain.toml` ile sabit; MSRV de
+bu) ve sistemde `protoc` (`prost-build` çağırır; Debian/Ubuntu:
+`protobuf-compiler`). CI: `.github/workflows/ci.yml` (fmt · clippy
+`-D warnings` · test).
+
 ```sh
 cargo test --workspace          # 294 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), güvenlik (TLS taşıması, auth rate-limit, pre-auth cap'ler), çoklu-listener (aynı haritada karışık transport: TCP/TLS/rUDP/QUIC/WS), border-delta exchange, ops yüzeyi (/metrics, /healthz, admin API), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı
 cargo run -p gsb-server         # varsayılan config (0.0.0.0:7777, 1 oda, 30 Hz global)
@@ -130,3 +135,9 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
 - `docs/TRAIT-ARCHITECTURE.md` — GameLogic birleşimi, PlayerId yolu.
 - `docs/RECONNECT.md` — kopan oyuncu politikası (detach/resume/bot devri)
   tasarımı — **uygulanmadı**, uygulamanın sözleşmesi.
+- `CONTRIBUTING.md` — katkı disiplini (lint yasakları, aktör kuralları,
+  fmt/clippy/test kapıları).
+
+## Lisans
+
+MIT — `LICENSE`.

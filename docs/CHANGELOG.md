@@ -5,6 +5,84 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (yayın paketi turu)
+
+Kaynak: `docs/HANDOFF.md` iş sırası madde 1. Kapsam: 207 dosyalık ağacın
+elle koşulan `cargo test` disiplinine bağlı kalmaması için yayın
+hijyeni — LICENSE, CI, MSRV, format kapısı. Davranış değişmedi (test
+sayısı 294 → **294**).
+
+### Kommitler
+
+1. **Yedek glob import'u kaldırıldı** (`gsb-net/src/udp/client/io.rs`).
+   Beklenmeyen bulgu: dosya hem `crate::udp::*` hem `super::*` import
+   ediyordu; ata (`udp/client.rs`) zaten `crate::udp::*`'ı glob'luyor,
+   yani ikincisi birincinin tüm isimlerini taşıyor. rustc örtüşen
+   glob'larda "kullanıldı" kredisini KAYNAK SIRASINA göre veriyor:
+   bugünkü sırada uyarı yok, ama `cargo fmt` `super::*`'ı öne alınca
+   `unused_imports` `clippy -D warnings`'i kırıyordu. fmt kommitinin
+   saf kalması için ayrı, önden kommit.
+2. **`cargo fmt --all`** — 201 dosya, yalnız format. `rustfmt.toml`
+   EKLENMEDİ: varsayılanlar (stil edition'ı crate'lerin `edition =
+   "2024"`'ünden) her dosyayı hatasız formatlıyor; varsayılan-dışı bir
+   seçeneğe somut ihtiyaç yok. Elenen alternatif: `reorder_imports =
+   false` — tek bir yedek import yüzünden tüm ağacın import stilini
+   varsayılandan ayırmak olurdu. rustfmt'nin kıramadığı 100 kolon üstü
+   satırlar (log/format makrolarındaki uzun string literal'ler, satır
+   sonu yorumları) elle yeniden yazılmadı.
+3. **LICENSE + MSRV + CI + CONTRIBUTING.**
+   - MIT (2026, furkangkhsn); yedi crate'in hepsi zaten
+     `license.workspace = true`.
+   - `rust-version = "1.95.0"` (yedi crate `rust-version.workspace =
+     true` ile miras alır) ve `rust-toolchain.toml` `stable` →
+     **`1.95.0`**. MSRV'nin alt sınırı bağımlılıktan geliyor: lockfile'daki
+     en yüksek `rust-version` `bevy_ecs 0.19.1` = 1.95.0; rustc 1.94.1
+     build'i "bevy_ecs@0.19.1 requires rustc 1.95.0" ile reddediyor.
+     1.94'ün altı denenmedi — bu lockfile ile kendi kodumuzdan bağımsız
+     olarak derlenemez. MSRV = sabit toolchain olduğundan CI'da ayrı
+     MSRV işi yok.
+   - `repository = "https://example.local/..."` yer tutucusu
+     KALDIRILDI: git remote yok, hiçbir crate alanı miras almıyordu;
+     uydurma URL yazmak alanın yokluğundan kötü.
+   - `.github/workflows/ci.yml`: ubuntu-24.04 + 1.95.0 üzerinde üç iş —
+     `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+     -- -D warnings`, `cargo test --workspace`. gsb-lint taraması her
+     build script'te koştuğu için yasak desen kapısı clippy/test
+     işlerinin içinde. Elenen alternatif: ayrı bir lint işi — aynı
+     taramayı üçüncü kez derlemek olurdu.
+   - `CONTRIBUTING.md`: HANDOFF/README'deki bağlayıcı disiplinin özeti
+     (yeni kural eklenmedi).
+
+### Turun bulguları (açık bırakıldı — ROADMAP P3)
+
+- **Build sistem `protoc`'una bağlı.** `gsb-protocol` build-dep olarak
+  `protoc-bin-vendored` bildiriyor ve `build.rs`'in panik mesajı "using
+  vendored protoc" diyor, ama crate hiçbir yerde bağlanmamış:
+  `PROTOC=/nonexistent/protoc` ile build "Could not find `protoc`" ile
+  düşüyor. CI bu yüzden `protobuf-compiler` kuruyor.
+- **`loadgen/churn.rs` log metninde gömülü boşluk blokları**: "join
+  answered 'stale … resume' … same … connection" string literal'i iki
+  yerde 38'er boşluk taşıyor (eski bir satır birleştirmenin izi).
+  rustfmt literal'e dokunmaz; format turunda düzeltilmedi.
+
+### CI'da kırılganlık riski (test silinmedi / `#[ignore]` eklenmedi)
+
+Paylaşımlı runner'larda duvar saatine bakan süitler: `loadgen_smoke`
+(debug build'de 20-40 Hz aralığı, ≥60 adım), frame-independence,
+idle/heartbeat timeout'ları, READ adaleti ve supervision testleri.
+Yerel makinede (16C/32T) hepsi yeşil; runner'da oynaklık görülürse
+önce veri (hangi test, hangi eşik), sonra karar.
+
+### Doğrulama
+
+- `cargo fmt --all --check`: temiz. `cargo clippy --workspace
+  --all-targets -- -D warnings`: 0 uyarı. `cargo test --workspace`:
+  294 passed, 0 failed (1 ignored: gsb-lint doctest, önceden de öyle).
+- loadgen 50 istemci × 3 sn (release): left=50, errors=0, dropped=0,
+  tick_hz_med=30.01, server_hz=29.97, panik yok.
+- `ci.yml` PyYAML ile ayrıştırıldı; her `run` komutu yerelde aynen
+  koşuldu (GitHub Actions'ın kendisi burada koşulamadı).
+
 ## Kapatılanlar (çoklu-listener'a QUIC + WS kapıları turu)
 
 Kaynak: üç ayrı oturumda erken sonlanan sözleşmeli tur (ROADMAP devam
