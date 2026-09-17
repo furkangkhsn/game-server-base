@@ -174,7 +174,24 @@ impl super::ConnectionActor {
             // room, not here.
             self.m_out_bytes = self.m_out_bytes.saturating_add(2 + fb.payload.len() as u64);
             self.m_out_frames += 1;
-            let _ = self.out.send(vec![fb]).await;
+            // A bounded `send` resolves `Err` only when the channel is
+            // CLOSED, and the sole receiver is this connection's writer
+            // pump: it exits when a socket write or flush fails, i.e. when
+            // the peer is definitively gone. (`Full` still parks here — a
+            // merely SLOW reader is tolerated by design, and a stalled
+            // write is a separate, unresolved question; see the session
+            // timeout item in docs/ROADMAP.md.)
+            //
+            // So `Err` means this connection can never receive another
+            // byte. Record it; the run loop tears the session down after
+            // this frame, which is what releases the room slot and the
+            // registry row. Discarding the error instead — as this did —
+            // left a permanently unreachable session holding its slot
+            // until the reader's idle window happened to notice, and
+            // FOREVER when `idle_timeout_secs = 0` disables that window.
+            if self.out.send(vec![fb]).await.is_err() {
+                self.w_closing = true;
+            }
         }
     }
 }

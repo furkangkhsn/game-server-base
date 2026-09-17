@@ -62,6 +62,7 @@ impl super::ConnectionActor {
             m_preauth_hb_extra: 0,
             preauth_frames: 0,
             p_closing: false,
+            w_closing: false,
             m_flushed_in_bytes: 0,
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
@@ -109,7 +110,7 @@ impl super::ConnectionActor {
                     // exactly like a `ServerClosed`. Same teardown for the
                     // §3.3 pre-auth budget (its own code-9 notice was sent
                     // by `close_preauth_budget`).
-                    if self.v_closing || self.p_closing {
+                    if self.v_closing || self.p_closing || self.w_closing {
                         break;
                     }
                 }

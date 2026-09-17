@@ -106,6 +106,14 @@ pub struct ConnectionActor {
     /// a capacity policy, not a scored violation — but the teardown is the
     /// ordinary cascade either way.
     p_closing: bool,
+    /// Set when a write to the outbound channel found it CLOSED — the
+    /// writer pump exited because the socket write failed, so this
+    /// connection can never receive another byte. Checked by the run loop
+    /// next to `v_closing`. Unlike those two this is not a policy: it is
+    /// the discovery that the session is already half-dead, and the only
+    /// honest response is the ordinary teardown (no close notice is sent —
+    /// there is nothing left to send it through).
+    w_closing: bool,
     m_flushed_in_bytes: u64,
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,
