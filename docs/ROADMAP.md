@@ -271,17 +271,54 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   taşınması (RECONNECT §14.1); rUDP üstünde e2e varyantı (deneysel
   statüye bağlı).
 
-- [~] **Oturum zaman aşımı** — *yarı kurulmuş.* Reader pump'un idle
-  zaman aşımı (`idle_timeout_secs`, vars. 30 sn) **istemci sessiz**
-  durumunu yakalıyor: hiçbir frame gelmezse pump `ConnIn::Closed`
-  gönderir, teardown kaskadı (registry → oda `Leave`) çalışır. Kalan
-  boşluk **yarı-ölü bağlantı**: istemci hâlâ heartbeat atıyor ama karşı
-  taraf gitmiş (RST'siz kopma) — bu, idle pencereyi *tetiklemiyor*
-  (trafik var), slot + görev + kayıt işgal etmeye devam ediyor. Çözüm:
-  heartbeat son-görülme damgası + aralıklı süpürme (kanal mesajıyla,
-  kilit yok) — mevcut detach-hold sweep'ine (`room.rs` Phase 0c) bir
-  besleyici. 10k cap'li odada zombi slot'ların temizlenmesi, cap'ın
-  *gerçek* kapasiteyi yansıtması için şart.
+- [~] **Oturum zaman aşımı** — *bir parça kapandı, ikisi ürün kararı
+  bekliyor.* Reader pump'un idle zaman aşımı (`idle_timeout_secs`,
+  vars. 30 sn) **istemci sessiz** durumunu yakalıyor: hiçbir frame
+  gelmezse pump `ConnIn::ServerClosed` gönderir, teardown kaskadı
+  (registry → oda `Detach`) çalışır.
+
+  **DÜZELTME (teknik borç turu, madde b).** Bu maddenin eski metni
+  boşluğu yanlış tarif ediyordu: *"istemci hâlâ heartbeat atıyor ama
+  karşı taraf gitmiş (RST'siz kopma)"*. Bu durum tutarsız — sunucu
+  açısından **istemci zaten karşı taraftır**; heartbeat frame'leri
+  gelmeye devam ediyorsa yol açık, istemcinin TCP yığını canlı ve
+  uygulaması heartbeat zamanlayıcısını çalıştıracak kadar ayakta
+  demektir. Önerilen çözüm de (heartbeat son-görülme damgası +
+  süpürme) bir **no-op**'tu: heartbeat, mevcut idle penceresini
+  sıfırlayan şeyin ta kendisi (`pump.rs` her okumayı yeniden sarar),
+  dolayısıyla aynı olayı ikinci bir saate damgalamak birincisinin
+  görmediği hiçbir şeyi görmez. Phase 0c de "tüm bağlantıları gezen"
+  bir döngü değil — yalnızca `detached` satırlara bakar, canlı bir
+  bağlantıyı hiç görmez.
+
+  Gerçek boşluk **soketin diğer yarısındaydı** ve üç katman birden
+  görmezden geliyordu: writer pump bir yazma/flush hatasında çıkar ama
+  elinde inbox yoktur (sessiz çıkış); oda fan-out'u
+  `TrySendError::Closed`'ı `Full` ile aynı sayar (batch'i sakla, gelecek
+  tick tekrar dene — sonsuza kadar); bağlantı aktörü de gönderim
+  sonucunu atıyordu (`let _ = self.out.send(..)`). Sonuç: bir daha tek
+  bayt alamayacak bir oturum, registry satırını ve `max_players`
+  slot'unu tutmaya devam ediyordu — varsayılan kurulumda reader'ın 30
+  sn'lik penceresi sonunda süpürene kadar, `idle_timeout_secs = 0`
+  (pencereyi kapatan, desteklenen ayar) ile **sonsuza kadar**.
+  - [x] **Kapandı:** kapalı out kanalı artık bağlantıyı düşürüyor
+    (`w_closing`, mevcut `v_closing`/`p_closing` deseni; yeni mesaj
+    sınıfı, süpürme, zamanlayıcı ya da tick gövdesine await YOK).
+    Kilit: `tests/half_dead.rs`.
+  - [ ] **Ürün kararı 1 — tıkanmış yazma.** `sink.send().await`'in
+    süresi yok: okumayı bırakan ama göndermeye devam eden bir istemci
+    writer'ı süresiz park eder (kanal `Full`, `Closed` değil), oda her
+    tick `dropped_frames` sayar ve slot durur. Düzeltmek bir *eşik*
+    ister (kaç saniye? kaç ardışık düşme?) ve mevcut "yavaş istemci
+    tolere edilir; snapshot kendi kendine yeter, keepalive bayatlığı
+    sınırlar" kararıyla çelişir. Sayı ürün kararıdır.
+  - [ ] **Ürün kararı 2 — AFK/zombi oturum.** Canlılık "herhangi bir
+    frame" olarak tanımlı (`config.example.toml`: heartbeat dahil), yani
+    yalnızca heartbeat atan bir oturum **tasarım gereği** ölümsüz. Bunu
+    değiştirmek *trafik* penceresinden ayrı bir *anlamlı etkinlik*
+    penceresi demek — bir AFK politikası — ve `e2e.rs::
+    active_heartbeat_survives` regresyon kilidini bilerek değiştirmeyi
+    gerektirir.
 - [x] **`RoomConfig.max_players` + doluluk yanıtı** — kapatıldı: join
   yolu cap'i kontrol ediyor (`room.rs` — `conns.len() >= cap` →
   `CoreError::RoomFull`, entity/kanal/durum oluşturulmaz), connection
@@ -298,10 +335,38 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   ile besleniyor; `None` = legacy local-auth yolu, tüm eski akış
   değişmez). Bağlantı sayısı limiti → **`max_connections` cap'i
   kuruldu** (registry `ConnOpened`'te enforce + pre-auth cap türetimi
-  `max(cap/4, 64)`, SECURITY §4). Kalan: **post-auth aksiyon
-  rate-limit** (bugün yalnızca pre-auth rate-limit'leri var — AUTH
-  penceresi, pre-auth heartbeat, pre-auth frame bütçesi; post-auth girdi
-  rate-limit'i yok, Tick/Action maddesinde de notlu).
+  `max(cap/4, 64)`, SECURITY §4).
+
+  **Post-auth girdi (teknik borç turu, madde c — ölçüldü ve bölündü).**
+  Üç pre-auth limitinin üçü de `ConnState::WaitingAuth`'a bağlı, yani
+  auth sonrası tamamen kapanıyor. Kalan maruziyet iki ayrı şeydi:
+  - [x] **Çöp opcode bedavaydı — kapandı.** Bilinmeyen *base-band*
+    opcode hard ihlal sayılırken, tabloda tanımsız bir *game-band*
+    opcode körlemesine iletiliyor, odanın tick bütçesinden çekiliyor ve
+    ancak oyunun ingest'inde sessizce atılıyordu: cevap yok, puan yok,
+    sınır yok. Mesaj tablosu sunucunun tel sözleşmesi olduğuna göre
+    (DESIGN §5) tanımsız opcode artık base-band'deki kardeşiyle aynı
+    hard ihlal — mevcut ağırlıklı ömür bütçesi, yeni mekanizma yok.
+    Kilit: `violation.rs::undefined_game_band_opcode_is_a_hard_violation`
+    + tersi `registered_game_band_opcode_keeps_its_race_class`.
+  - [ ] **Ürün kararı — geçerli girdinin HACMİ.** Per-tick çekme bütçesi
+    (16/bağlantı/tick ≈ 480/sn) **odayı** sınırlar, istemcinin gönderme
+    hızını değil; bütçeyi aşan girdi göndericinin kendi bounded
+    kanalında birikir ve taşarsa **kendi** girdisini düşürür — sayılıp
+    ona atfedilerek (`gsb_net_actions_dropped_total` +
+    `actions_dropped_top`). Yani hasar kendine dönüktür ve zaten
+    ölçülür. Bunun üstüne bir hız limiti koymak bir *sayı* seçmek
+    demektir (saniyede kaç aksiyon meşru?) — bu bir oynanış
+    parametresidir, ve SECURITY §3'ün pre-auth heartbeat'leri
+    bilerek bütçelememe gerekçesiyle (dürüst-ama-hatalı istemciyi
+    zorla düşürmek) aynı riski taşır.
+  - [ ] **Ürün kararı — post-auth HEARTBEAT_ACK amplifikasyonu.**
+    Auth sonrası her heartbeat koşulsuz cevaplanıyor (`frame.rs`): tek
+    1:1 gelen→giden dönüşümü bu. SECURITY §3 kararı 2 bunu pre-auth'ta
+    kapattı ama post-auth'u "liveness sinyali" diye dokunulmaz bıraktı.
+    Kısmak istemciye görünen semantiği değiştirir (RTT ölçen bir
+    istemci heartbeat başına cevap bekler) ve `e2e.rs::
+    active_heartbeat_survives`'ın kenarına değer.
 - [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
   simülasyon: 30 Hz × 10 u/sn'de tick başına 0.33 birim → istemci 3
   tick'te bir değişim görür (delta turunda bu kuantizasyon **gap
@@ -313,7 +378,8 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   kararı Unity tarafıyla birlikte (proto değişimi).
 - [x] **Tick/Action kanal ayrımı** — broadcast tick + per-user action +
   control kanalı olarak çözüldü (bkz. Kapatılanlar). Kalan parça: bağlantı
-  başına girdi rate-limit (güvenlik maddesi).
+  başına girdi rate-limit — çöp opcode tarafı kapandı, geçerli girdinin
+  hacmi ürün kararı olarak açık (güvenlik maddesi).
 - [ ] **Entity bazlı yayın rate limit** — 30Hz snapshot yerine 10–15Hz +
   istemci interpolasyonu (Unity tarafında küçük ama gerçek iş).
 - [ ] **Bağlantı başına Vec churn** — her tick × bağlantı yeni Vec

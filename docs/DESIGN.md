@@ -166,8 +166,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   bağlantı başına tick başına `max_actions_per_conn_per_tick` (varsayılan
   16 = 30 Hz'de ~480 aksiyon/sn) ve oda başına tick başına
   `max_pending_actions` (varsayılan 65536). Oda **çekişini yaptığı
-  aksiyonu asla atmaz** — `RoomCounters.dropped_actions` yapısal olarak 0
-  kalır (sözleşme uyumu için alanda korunur); bağlantı o tick'te odaya
+  aksiyonu asla atmaz** — bu yüzden oda kapsamında bir girdi-düşme sayacı
+  **yoktur**: olsaydı yalnızca 0 raporlayabilirdi ve operatör bunu "girdi
+  hiç düşmüyor" diye okurdu (bkz. "teknik borç turu", madde a); bağlantı o tick'te odaya
   ne gömebileceği **kendi** bütçesiyle sınırlıdır, dolayısıyla bir
   flooding bağlantı başka bir bağlantının aksiyonunu **artık evicted
   edemez** (eski merged-list'in "aşım → en eskiyi at" davranışı,

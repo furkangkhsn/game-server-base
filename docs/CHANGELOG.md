@@ -5,6 +5,184 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (teknik borç turu — ölü metrik, yarı-ölü bağlantı, post-auth girdi)
+
+Kaynak: doğrulanmış üç borç (a-c) + bir kozmetik (d). Her madde **önce
+kodda doğrulandı**; iki yerde doğrulama iddiayı DEĞİŞTİRDİ (b'de ROADMAP
+metni yanlıştı, c'de maruziyet iddia edilenden farklı bir yerdeydi).
+Test sayısı 314 → **319** (+5; hiçbir test silinmedi, `#[ignore]`
+eklenmedi — bir testin harness'i düzeltildi ve bir vakum assertion
+gerçek bir assertion'la değiştirildi, ikisi de aşağıda gerekçeli).
+
+### Kommitler
+
+1. **`4465c47` — Sarmalanan churn log literal'i onarıldı (madde d).**
+   `loadgen/churn.rs`'teki stale-resume mesajı üç kaynak satırına `\`
+   devamı olmadan sarılmıştı, yani her satırın girintisi string'in
+   İÇİNE girmişti: basılan metin ~38 boşlukluk iki koşu taşıyordu.
+   rustfmt string literal'lerini hiç yeniden yazmadığı için her format
+   turundan sağ çıkmıştı. `\` devamıyla düzeltildi (satır sonunu ve
+   sonraki satırın baştaki boşluğunu yutar) — ağaçta zaten kullanılan
+   biçim. Başka hiçbir kod yeniden akıtılmadı.
+
+2. **`dd064e9` — Yapısal olarak hep-sıfır oda sayacı emekli edildi
+   (madde a).** `RoomCounters::dropped_actions` 0'a kuruluyor ve ne oda
+   ne shard aktörü tarafından **hiç** yazılmıyordu; buna rağmen
+   `scope=room` log satırında basılıyor ve Prometheus yüzeyinden
+   `gsb_room_dropped_actions_total` olarak, "Input actions dropped on
+   READ-channel overflow" HELP metniyle **dışa veriliyordu**. Operatör
+   kalıcı sıfırı "girdi hiç düşmüyor" diye okur — sunucunun iddia
+   edecek durumda olmadığı bir cümle.
+
+   **Seçenek 1 (sayacı gerçek düşme noktasında doğru bağla) zaten
+   yapılmıştı** — başka yerde ve daha iyisiyle: tek girdi-kaybı noktası
+   bağlantı aktörünün odanın aksiyon kanalına yaptığı `try_send`'idir ve
+   orası `m_actions_dropped` → `ConnSample::actions_dropped` →
+   `NetReport::actions_dropped` → `gsb_net_actions_dropped_total`
+   zincirini, üstelik `actions_dropped_top` ile **kime ait olduğu**
+   bilgisiyle birlikte zaten besliyor. Aynı olayı ODA kapsamına taşımak
+   ya odanın control kanalını (zaten toplanmış bir sinyal için hot
+   path'e ek iş) ya da tick gövdesine await (yasak) gerektirirdi — ve
+   **yanlış atfederdi**: aksiyonu oda düşürmedi, gönderen düşürdü.
+   Odanın READ fazı sınırlı bir *çekme*dir ve **erteler**; oda kapsamlı
+   bir düşme sayacı bağlanmamış değil, ilkesel olarak bağlanamaz.
+
+   Bu yüzden seçenek 2: sample'dan, rapordan, log satırından ve
+   Prometheus yüzeyinden kaldırıldı. Giden-batch düşme ailesi
+   (`gsb_room_dropped_total` / `_s`) gerçekten yazılan ayrı bir sayaçtır,
+   dokunulmadı. Loadgen metrik çerçevesi alanı birlikte düşürdü; magic
+   GSM5 → **GSM6** (iki uç da aynı binary'de, format kayamaz).
+
+   **Envanter (istenen tarama):** `RoomCounters`'ın 39 alanı tek tek
+   mutasyon noktası için tarandı — `dropped_actions` **tek** yazılmayan
+   alandı; kalan 38'inin hepsinin oda ve/veya shard tarafında en az bir
+   artırma noktası var. Shard tarafı aynı `RoomCounters` tipini
+   paylaşıyor, yani aynı yalanı o da veriyordu ve aynı kaldırmayla
+   kapandı. **Yan bulgu (düzeltilmedi, rapor edildi):**
+   `step_fine_hist` shard aktöründe hiç yazılmıyor (oda
+   `lifecycle.rs`'te yazıyor, shard `lifecycle.rs`'te yok) — sonuç
+   "sıfır sayaç" değil, `gsb_room_step_duration_us` p50/p99 satırlarının
+   sharded odalar için **hiç basılmaması** (renderer yok değeri tahmin
+   etmek yerine satırı atlıyor). Ayrı bir borç.
+
+   Kilit: `input_drops_are_exported_only_at_the_net_scope` — net kapsam
+   gerçek toplamı atfıyla taşıyor, iki yüzeyin hiçbiri oda kapsamlı bir
+   girdi-düşme anahtarı ilan etmiyor. Mutation check: Prometheus
+   ailesini (`|_r| 0` ile) geri koymak testi kırıyor; log satırına
+   `dropped_actions=` anahtarını geri koymak da.
+
+   **`read_fairness.rs` notu:** oradaki `dropped_actions == 0`
+   assertion'ı **iki kez birden vakumdu** — alan hiç yazılmıyordu VE
+   okuduğu kanal step barrier'ı tarafından zaten boşaltılmıştı, yani
+   boş kuyrukta geçiyordu. Yerine gerçek bir assertion kondu: son
+   barrier örneği odanın her paced tick'te bir adım tamamladığını
+   gösteriyor (flood odayı durdurmadı). Testin asıl davranış kilidi (her
+   bağlantı bir rotasyon içinde erişiliyor + "overload gerçekti"
+   koruması) olduğu gibi duruyor.
+
+3. **`3c4e32b` — Giden yolu ölmüş bağlantı düşürülüyor (madde b).**
+   ROADMAP'in tarif ettiği boşluk **yanlıştı** (madde metni bu turda
+   düzeltildi): "istemci heartbeat atıyor ama karşı taraf gitmiş"
+   tutarsız bir durum, ve önerilen çözüm (heartbeat son-görülme damgası
+   + Phase 0c süpürmesi) bir no-op'tu — heartbeat mevcut idle
+   penceresini sıfırlayan şeyin ta kendisi.
+
+   Gerçek boşluk soketin **yazma** yarısındaydı ve üç katman birden
+   görmezden geliyordu: writer pump yazma/flush hatasında çıkar ama
+   elinde inbox yok (sessiz); oda fan-out'u `TrySendError::Closed`'ı
+   `Full` ile aynı sayıp sonsuza kadar tekrar dener; bağlantı aktörü de
+   `let _ = self.out.send(..)` ile sonucu atıyordu. Bir daha tek bayt
+   alamayacak oturum registry satırını ve `max_players` slot'unu
+   tutuyordu — varsayılanda reader'ın 30 sn penceresi süpürene kadar,
+   `idle_timeout_secs = 0` ile sonsuza kadar.
+
+   Bounded bir `send` yalnızca kanal KAPALIYKEN `Err` verir ve tek
+   alıcısı o bağlantının writer pump'ıdır; yani `Err` bir politika
+   yargısı değil, kesin bir olgudur. `w_closing` ile kaydediliyor, run
+   loop mevcut `v_closing`/`p_closing` yanında kırılıyor — olağan
+   teardown kaskadı, kapanış bildirimi yok (gönderecek yol kalmadı),
+   yeni mesaj sınıfı yok, süpürme yok, zamanlayıcı yok, hiçbir tick
+   gövdesine await eklenmedi.
+
+   **Elenen alternatifler:** (i) ROADMAP'in heartbeat damgası + Phase 0c
+   besleyicisi — no-op olduğu için elendi (aynı olay, ikinci saat); (ii)
+   `Full` durumunu da düşürmek — "yavaş istemci tolere edilir"
+   kararıyla çelişir, bir eşik sayısı ister, ürün kararı olarak açık
+   bırakıldı; (iii) `SO_KEEPALIVE` (socket2) — ortogonal ve ucuz ama
+   yeni bağımlılık + ayrı bir savunma hattı, bu turun kapsamı değil.
+
+   Kilit: `tests/half_dead.rs::closed_out_channel_tears_the_session_down`
+   (auth sonrası, out alıcısı düşürülmüşken sıradaki heartbeat
+   `RegistryMsg::ConnClosed` üretiyor ve aktör çıkıyor). Mutation check:
+   `let _ =`'i geri koymak testi o rapor için zaman aşımına düşürüyor.
+   Tersi `healthy_out_channel_keeps_the_session_alive`: erişilebilir
+   bağlantı sekiz heartbeat'i cevaplıyor ve hiç kapalı raporlanmıyor —
+   düzeltme "her yazmada kapat"a dejenere olamaz.
+
+4. **`f0d3ad7` — Tanımsız game-band opcode'lar ihlal bütçesine yazılıyor
+   (madde c).** Maruziyet ölçüldü: üç pre-auth limitinin üçü de
+   `ConnState::WaitingAuth`'a bağlı, auth sonrası tamamen kapanıyor.
+   Kalan gerçek açık **bant sınırının çöpü bedava yapmasıydı**:
+   bilinmeyen *base-band* opcode cevaplanıp bütçeleniyor (dördüncüde
+   kapanış), ama tanımsız bir *game-band* opcode körlemesine
+   iletiliyor, odanın tick bütçesinden **çekiliyor** ve ancak oyunun
+   ingest'inde sessizce atılıyordu — cevap yok, puan yok, sınır yok.
+
+   Mesaj tablosu sunucunun tel sözleşmesidir (DESIGN §5; `wire_contract
+   .rs` emekli numaraların orada asla görünmemesini zaten garanti eder),
+   dolayısıyla tabloda olmayan bir opcode bu sunucunun konuşmadığı bir
+   mesajdır — base-band kuralının dayandığı önermenin aynısı. Mevcut
+   `reply_err(UnknownOpcode)` → ağırlıklı ömür bütçesi yeniden
+   kullanıldı; `is_registered` zaten vardı. Kontrol oda-durumu testinden
+   ÖNCE koşuyor, böylece sınıflar ayrı kalıyor: tanımsız opcode oda
+   durumundan bağımsız düşmancadır, KAYITLI bir game op'un leave sonrası
+   gelmesi ise olağan ~1-RTT stray'dir ve race sınıfını korur.
+
+   **Elenen alternatifler:** (i) geçerli girdiye hız limiti (token
+   bucket / pencere) — paralel mekanizma olurdu ve bir *sayı* seçmeyi
+   gerektirir (saniyede kaç aksiyon meşru? oynanış parametresi); ayrıca
+   bütçeyi aşan girdi zaten göndericinin kendi kanalında taşıp **kendi**
+   girdisini düşürüyor, sayılıp ona atfedilerek — hasar kendine dönük ve
+   ölçülü; (ii) post-auth heartbeat'i kısmak — tek gerçek 1:1
+   amplifikasyon bu, ama istemciye görünen semantiği değiştirir (RTT)
+   ve `e2e.rs::active_heartbeat_survives`'a değer: ürün kararı olarak
+   açık bırakıldı; (iii) bozuk MOVE_TO payload'ını bütçelemek — SECURITY
+   §3'ün "dürüst-ama-hatalı istemciyi zorla düşürme" gerekçesiyle
+   elendi (opcode tanımsızlığı niyet belirtir, payload bozukluğu
+   belirtmez).
+
+   **Harness düzeltmesi (test gevşetmesi DEĞİL):** `violation.rs` aktörü
+   çıplak `base_table()` ile kuruyordu — hiçbir mesaj kaydetmeyen bir
+   oyunun tablosu, ki `build_table()` böyle bir şey üretmez. O tabloda
+   HER game-band opcode tanımsızdır, yani stray-frame testi race
+   sınıfını test ediyor **gibi görünüyordu**. Harness artık gerçek bir
+   tablo gibi bir game opcode'u kaydediyor; testin assertion'ları (kod
+   6, ağırlık 1, 15 < 16, 16'ncıda kapanış) aynen duruyor.
+
+   Kilit: `undefined_game_band_opcode_is_a_hard_violation` ([1,1,1,9] +
+   teardown) ve tersi `registered_game_band_opcode_keeps_its_race_class`
+   (tanımlı op'un dört stray'i kod 6 alıyor ve bağlantı yaşıyor —
+   tanımsız bir op o sayıda kapatırdı). Mutation check: `is_registered`
+   kolunu düşürmek birincisini kırıyor, ikincisi geçmeye devam ediyor.
+
+### Doğrulama
+
+`cargo fmt --all --check` temiz · `cargo clippy --workspace
+--all-targets -- -D warnings` 0 uyarı · `cargo test --workspace`
+**319 passed / 0 failed / 1 ignored** (gsb-lint doctest) · loadgen
+`50 --duration 3` → `left=50 errors=0`, panik yok.
+
+### Bu turda YAPILMAYANLAR
+
+- Tıkanmış yazmaya süre sınırı (ürün kararı: eşik sayısı).
+- AFK/zombi oturum politikası (ürün kararı; `active_heartbeat_survives`
+  kilidini bilerek değiştirmeyi gerektirir).
+- Geçerli girdiye hacim limiti (ürün kararı: oynanış parametresi).
+- Post-auth HEARTBEAT_ACK kısması (ürün kararı: istemci RTT semantiği).
+- `step_fine_hist`'in shard tarafında yazılmaması (ayrı borç, rapor
+  edildi).
+- `SO_KEEPALIVE` (yeni bağımlılık, ayrı savunma hattı).
+
 ## Kapatılanlar (protokol sertleştirme turu)
 
 Kaynak: dış incelemenin protokol katmanında bulduğu üç zayıflık (a-c) +
