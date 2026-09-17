@@ -1,9 +1,13 @@
 # gsb: Reconnect/Detach Tasarımı — Kopan Oyuncunun Politikası
 
-> Durum: TASARIM (uygulanmadı). Bu doküman uygulamanın sözleşmesidir;
+> Durum: UYGULANDI (ROADMAP P1 `[x]` — Tur A core mekaniği, Tur B demo
+> park politikası). Bu doküman uygulamanın sözleşmesi olarak geçerlidir;
 > kodla çelişirse kod ya da bu doküman hatalıdır ve ikisinden biri
-> düzeltilir. Karar tabloları "Kararlar" bölümündedir; elenen
-> alternatifler bölümlerinin içinde saklıdır.
+> düzeltilir. Davranış kilidi: `crates/gsb-core/tests/reconnect.rs`
+> (detach/resume, epoch-guard, park süresi dolması, ERROR 12) ve
+> `crates/gsb-server/tests/loadgen_smoke.rs::loadgen_churn_smoke`
+> (§14.5 churn profili). Karar tabloları "Kararlar"
+> bölümündedir; elenen alternatifler bölümlerinin içinde saklıdır.
 
 ## 1. Amaç ve kapsam
 

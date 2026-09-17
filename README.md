@@ -139,7 +139,9 @@ Core/net/protocol/ecs crate'lerine dokunulmaz.
 - `docs/OPS.md` — ops yüzeyi tasarımı (/metrics, /healthz, admin API).
 - `docs/TRAIT-ARCHITECTURE.md` — GameLogic birleşimi, PlayerId yolu.
 - `docs/RECONNECT.md` — kopan oyuncu politikası (detach/resume/bot devri)
-  tasarımı — **uygulanmadı**, uygulamanın sözleşmesi.
+  tasarımı — **uygulandı** (ROADMAP P1 `[x]`; core mekaniği + demo park
+  politikası, `crates/gsb-core/tests/reconnect.rs`), uygulamanın
+  sözleşmesi olarak geçerliliğini koruyor.
 - `CONTRIBUTING.md` — katkı disiplini (lint yasakları, aktör kuralları,
   fmt/clippy/test kapıları).
 
