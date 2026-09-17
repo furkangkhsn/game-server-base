@@ -61,6 +61,9 @@ impl super::ConnectionActor {
                 return;
             }
         };
+        if !self.check_protocol_version(auth.protocol_version).await {
+            return;
+        }
         // Ticket-auth (the control-plane hook, see `crate::auth`):
         // the hook is the identity authority. Two shapes, decided
         // by the server's configuration (not per frame):
@@ -193,6 +196,64 @@ impl super::ConnectionActor {
                 },
             )
             .await;
+    }
+
+    /// The protocol version gate (DESIGN §5.5): the protocol's ONE
+    /// version check, on the frame that is already first and already
+    /// refusable. Returns `true` when the AUTH may proceed.
+    ///
+    /// Three outcomes, and no new machinery for any of them:
+    ///
+    /// - `0` — a client built before the field existed. ACCEPTED, warned
+    ///   once. Refusing it would break every existing client on the day
+    ///   the field lands, and the field exists to establish
+    ///   compatibility, not to end it.
+    /// - the server's own version — accepted silently.
+    /// - anything else — [`base::ErrorCode::ProtocolVersion`], with both
+    ///   numbers in the message so the client knows what to upgrade to.
+    ///   The connection STAYS ALIVE in `WaitingAuth` and the violation
+    ///   budget is NOT touched: the frame is well-formed and the client
+    ///   is merely the wrong build (the same family as a ticket
+    ///   rejection). The incompatible peer needs no cleanup path of its
+    ///   own — the pre-auth frame budget and the idle timeout already
+    ///   bound an unauthenticated connection.
+    async fn check_protocol_version(&mut self, version: u32) -> bool {
+        if version == gsb_protocol::PROTOCOL_VERSION {
+            return true;
+        }
+        if version == 0 {
+            warn!(
+                %self.conn,
+                %self.peer,
+                server = gsb_protocol::PROTOCOL_VERSION,
+                "client presented no protocol version (legacy, pre-versioning \
+                 build); accepted"
+            );
+            return true;
+        }
+        warn!(
+            %self.conn,
+            %self.peer,
+            client = version,
+            server = gsb_protocol::PROTOCOL_VERSION,
+            "protocol version mismatch (normal rejection; the connection stays \
+             alive, but retrying cannot help — the client must be rebuilt)"
+        );
+        let _ = self
+            .send_frame(
+                op::base::ERROR,
+                &base::Error::new(
+                    base::ErrorCode::ProtocolVersion,
+                    format!(
+                        "protocol version mismatch: this server speaks version \
+                         {}, the client presented {version}; rebuild the client \
+                         against the server's .proto files",
+                        gsb_protocol::PROTOCOL_VERSION
+                    ),
+                ),
+            )
+            .await;
+        false
     }
 
     /// The single exit for ticket-validation failures (see `crate::auth`

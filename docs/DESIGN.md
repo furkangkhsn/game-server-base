@@ -306,7 +306,11 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   timeout, sunucu bağlantı cap'i ya da bağlantının protokol-ihlal
   bütçesinin tükenmesi — mesaj hangisi olduğunu söyler; hemen ardından
   bağlantı kapatılır), `10` bilet doğrulama başarısız, `11` join bileti
-  eşleşmiyor, `12` oda emekli.
+  eşleşmiyor, `12` oda emekli, `13` protokol sürümü uyuşmazlığı (§5.5).
+- **Protokol sürümü:** `Auth.protocol_version` (alan 3) — oturum başına
+  tek kontrol, AUTH'ta. `0` = sürümsüz/legacy (kabul, uyarı loglanır),
+  `gsb_protocol::PROTOCOL_VERSION` = kabul, başka her şey = ERROR 13,
+  bağlantı yaşar. Ayrıntı ve elenen alternatifler: §5.5.
 - **Seriştirme:** protobuf. Rust tarafında `prost`, Unity tarafında
   `Google.Protobuf` — aynı `.proto` dosyaları her iki tarafta kullanılır.
   Mesajlar `MessageTable`'da opcode→(de)koducu olarak kayıt edilir; tablo
@@ -479,6 +483,76 @@ yeri çıplak sayı yazamaz.
    diyor. `CoreError::wire_code` bu yüzden 4'e düşen on varyantı
    catch-all yerine TEK TEK sayar: davranış aynı, gözden kaçma imkânı
    yok.
+
+### 5.5 Protokol sürümü: AUTH'a binen tek alan
+
+**Karar: sürüm alanı EKLENDİ** — `Auth.protocol_version = 3`, sabit
+`gsb_protocol::PROTOCOL_VERSION` (bugün `1`) ve yeni bir reddetme sınıfı
+`ERROR_CODE_PROTOCOL_VERSION = 13`. Yeni round trip yok, yeni opcode yok,
+yeni frame yok, yeni durum yok.
+
+**Neden ertelenmedi.** Bu bir varsayım değil; bu depoda **iki kez oldu**:
+
+1. `0888441` — `MoveTo` ve `EntityRecord` koordinatları `sfixed32` →
+   `sint32`. Aynı alan numarası, FARKLI wire type (I32 → varint). Eski
+   istemci sessizce yanlış ayrıştırır.
+2. `2ac28d2` — opcode `1003` `ENTITY_STATE`'ten `WORLD_SNAPSHOT`'a
+   geçirildi. Aynı numara, bambaşka mesaj.
+
+İkisinde de sunucunun elinde karşıdakinin hangi wire'ı konuştuğunu
+anlamanın hiçbir yolu yoktu.
+
+**Ve asıl gerekçe: geciktikçe değersizleşiyor.** Alan bugün eklenirse
+"göndermeyen" = tek bir sınıf, bugünden ÖNCEKİ istemciler (`0` =
+sürümsüz/legacy). İki yıl sonra eklenirse iki yıllık istemci de `0`
+gönderir ve sunucu "eski" ile "yeni ama sürümsüz"ü ayıramaz — tam olarak
+alanın çözmesi istenen belirsizlik. Bir *base*'in çatallanacağı ilk gün
+bu alanın en ucuz olduğu gündür.
+
+**Sözleşme (tamamı):**
+
+- `Auth.protocol_version` (alan 3, `uint32`). Yeni proto3 alanı =
+  toplamalı: göndermeyen istemcinin ürettiği baytlar **birebir aynı**
+  (varsayılan 0 kodlanmaz) — `wire_contract.rs` bunu kilitliyor.
+- `0` = **sürümsüz (legacy)**. KABUL EDİLİR; sunucu `warn` seviyesinde
+  bir kez loglar. Reddetmek mevcut her istemciyi (örnek istemci, loadgen,
+  Unity tarafı) bir anda kırardı ve alanın amacı uyumluluk KURMAK.
+- `protocol_version == PROTOCOL_VERSION` → kabul.
+- Başka her şey → `ERROR_CODE_PROTOCOL_VERSION` (13). Mesaj iki sayıyı da
+  taşır ("server speaks N, client presented M") ki istemci neye
+  yükselteceğini bilsin.
+- **Bağlantı YAŞAR** ve durum `WaitingAuth` kalır — bilet reddiyle (10)
+  aynı aile: çerçeve iyi biçimli, bu bir protokol İHLALİ değil, o yüzden
+  ihlal bütçesine **yazılmaz**. Uyumsuz istemci oturumu düzeltemez ama
+  bunun için yeni bir temizleme mekanizmasına da gerek yok: pre-auth
+  frame bütçesi (§3.3) ve idle timeout kimliği doğrulanmamış bağlantıyı
+  zaten sınırlıyor. **Sıfır yeni koruma makinesi** — minimallik testi
+  budur.
+- Politika **tam eşitlik**, aralık değil. Tetikleyici: ikinci bir
+  protokol sürümü gerçekten yayınlandığında min/max aralığı (ya da
+  özellik pazarlığı) tartışılır. Önce veri.
+
+**Elenen alternatifler:**
+
+1. **Ertelemek** (ROADMAP'e tetikleyiciyle yazmak). Reddedildi: yukarıdaki
+   "geciktikçe değersizleşir" argümanı. Maliyet bir alan + bir enum
+   değeri + üç test; ertelemenin maliyeti kalıcı bir belirsizlik sınıfı.
+2. **Ayrı bir HELLO/VERSION opcode'u ve round trip'i.** Her bağlantıya
+   bir RTT ve bir durum daha ekler; AUTH zaten ilk frame ve zaten
+   reddedilebilir bir kapı. Sürüm bilgisinin oraya binmesi bedava.
+3. **Sürümü frame başlığına koymak** (`[len][u16 op][u8 ver][payload]`).
+   Her frame'de 1 bayt × her bağlantı × her tick — ve daha kötüsü, bu
+   BİR WIRE DEĞİŞİKLİĞİ olurdu, yani tanıtmak istediği sorunun ta
+   kendisini yaratırdı. Sürüm oturum başına bir kez söylenir.
+4. **`AuthResult`'a da sunucu sürümünü eklemek.** Yalnız BAŞARI yolunda
+   bilgi taşır — istemcinin zaten bildiği durum. Asıl gereken bilgi
+   (sunucu hangi sürümü konuşuyor) reddetme mesajında ve orada.
+5. **Uyumsuzlukta bağlantıyı KAPATMAK** (kod 9 ailesi). Sessiz/ani
+   kapatma istemciyi reconnect-backoff döngüsüne sokar — kod 8'in
+   gerekçesinde zaten belgelenmiş desen. Yaşayan bağlantı + pre-auth
+   cap'ler daha ucuz ve daha az yeni kural.
+6. **Sürümü config'ten okunur yapmak.** Tetikleyicisiz esneklik: bugün
+   tek bir doğru değer var ve o `gsb-protocol`'ün sabiti.
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 

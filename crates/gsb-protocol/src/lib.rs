@@ -17,6 +17,30 @@
 //! - `1..=64`     base control band (defined in [`op`])
 //! - `1000..=`    game band (each game crate defines its own opcodes)
 
+/// The wire protocol version this build speaks, sent by a client in
+/// [`base::Auth::protocol_version`] and checked once, at AUTH.
+///
+/// The single source of the number: the server compares against it and
+/// every reference client (the example, the loadgen) sends it, so there
+/// is no second place to keep in step.
+///
+/// Bump it when a change would make an older peer MISPARSE — a field's
+/// wire type changing under the same number, an opcode being reused for
+/// a different message, a framing change. Do NOT bump for additive
+/// changes (a new field, a new message, a new opcode, a new `ErrorCode`
+/// value): proto3 and the opcode bands already handle those, and a bump
+/// would lock out clients that are in fact compatible.
+///
+/// `0` is reserved for "unversioned": what a client built before this
+/// field existed sends. The server accepts it with a warning — see
+/// `base.proto` and `docs/DESIGN.md` §5.5.
+///
+/// Version 1 is the wire as of the protocol-hardening round. The two
+/// breaks that happened BEFORE versioning existed (0888441's
+/// sfixed32 -> sint32 coordinates, 2ac28d2's reuse of opcode 1003) are
+/// the reason this constant exists; they are inside "unversioned".
+pub const PROTOCOL_VERSION: u32 = 1;
+
 pub mod op {
     /// Base control band.
     pub mod base {
@@ -284,11 +308,13 @@ mod tests {
         let msg = base::Auth {
             name: "neo".into(),
             ticket: vec![],
+            protocol_version: PROTOCOL_VERSION,
         };
         let fb = table.frame(op::base::AUTH_REQ, &msg).expect("encode");
         let decoded = table.decode(fb.op, &fb.payload).expect("decode");
         let auth = decoded.downcast_ref::<base::Auth>().expect("type");
         assert_eq!(auth.name, "neo");
+        assert_eq!(auth.protocol_version, PROTOCOL_VERSION);
     }
 
     #[test]

@@ -129,6 +129,11 @@ async fn main() {
     let auth = Auth {
         name: "client-1".into(),
         ticket: vec![],
+        // A client states the wire version it was built against; the
+        // server refuses a mismatch with ERROR_CODE_PROTOCOL_VERSION
+        // (DESIGN §5.5). Sending 0 would be accepted too, as a legacy
+        // pre-versioning client — a reference client does not.
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     };
     let join = JoinRoom { room_id: 1 };
     w.write_all(&frame(

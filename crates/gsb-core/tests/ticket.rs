@@ -49,6 +49,7 @@ fn auth_frame(name: &str, ticket: &[u8]) -> gsb_protocol::FrameBody {
     let a = base::Auth {
         name: name.into(),
         ticket: ticket.to_vec(),
+        protocol_version: 0,
     };
     frame(op::base::AUTH_REQ, &a.encode_to_vec())
 }

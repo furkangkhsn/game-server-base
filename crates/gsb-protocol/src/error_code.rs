@@ -11,9 +11,15 @@
 use crate::ProtoError;
 use crate::base::ErrorCode;
 
-/// Every code, pinned to the number the pre-enum comment table gave it
-/// (`base.proto` before this round; see `docs/CHANGELOG.md`). A change
-/// here is a WIRE change and must be a deliberate one.
+/// The highest code currently defined. Bumped in the same commit that
+/// adds a code — which is unavoidable, because two tests below fail
+/// until it is.
+const HIGHEST_CODE: i32 = 13;
+
+/// Every code, pinned to its number: 0..=12 to what the pre-enum comment
+/// table in `base.proto` gave them, 13 onward to what was chosen when
+/// the code was added. A change here is a WIRE change and must be a
+/// deliberate one.
 #[test]
 fn numbers_match_the_pre_enum_comment_table() {
     assert_eq!(ErrorCode::Unspecified as i32, 0);
@@ -29,15 +35,19 @@ fn numbers_match_the_pre_enum_comment_table() {
     assert_eq!(ErrorCode::TicketInvalid as i32, 10);
     assert_eq!(ErrorCode::RoomMismatch as i32, 11);
     assert_eq!(ErrorCode::RoomRetired as i32, 12);
+    // Added with the protocol-version handshake (DESIGN §5.5).
+    assert_eq!(ErrorCode::ProtocolVersion as i32, 13);
 }
 
-/// The enum is exactly 0..=12 with no gaps — so a new code cannot be
-/// slipped in at a number the old comment table already spent, and this
-/// test fails the moment one is appended (forcing the author to extend
-/// the pinned list above and the docs beside it).
+/// The code space is contiguous from 0 with no gaps — so a new code
+/// cannot be slipped in at a number an older build already spent, and
+/// this test fails the moment one is appended, forcing the author to
+/// extend the pinned list above and the docs beside it. (It has already
+/// done its job once: adding ERROR_CODE_PROTOCOL_VERSION = 13 for
+/// DESIGN §5.5 failed here first.)
 #[test]
-fn the_code_space_is_exactly_zero_through_twelve() {
-    let all: Vec<i32> = (0..=12).collect();
+fn the_code_space_is_contiguous_from_zero() {
+    let all: Vec<i32> = (0..=HIGHEST_CODE).collect();
     let known: Vec<i32> = (0..=64)
         .filter(|n| ErrorCode::try_from(*n).is_ok())
         .collect();
@@ -98,7 +108,7 @@ fn no_mapping_is_unspecified() {
 fn the_code_field_encodes_exactly_as_the_old_uint32_did() {
     use prost::Message;
 
-    for n in 0..=12i32 {
+    for n in 0..=HIGHEST_CODE {
         let code = ErrorCode::try_from(n).expect("in range");
         let got = crate::base::Error::new(code, "").encode_to_vec();
         if n == 0 {

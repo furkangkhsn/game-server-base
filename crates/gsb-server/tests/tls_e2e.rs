@@ -92,6 +92,7 @@ async fn full_flow_over_tls_auth_join_move_snapshots() {
     let auth = Auth {
         name: "tls-e2e".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     };
     tls.write_all(&frame(
         gsb_protocol::op::base::AUTH_REQ,
@@ -196,6 +197,7 @@ async fn wrong_ca_is_rejected_in_the_handshake_on_both_ends() {
     let auth = Auth {
         name: "after-reject".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     };
     good.write_all(&frame(
         gsb_protocol::op::base::AUTH_REQ,
@@ -297,6 +299,7 @@ async fn empty_tls_keys_mean_plaintext_tcp() {
     let auth = Auth {
         name: "plain".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     };
     stream
         .write_all(&frame(

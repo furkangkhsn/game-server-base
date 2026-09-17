@@ -265,6 +265,7 @@ async fn join_and_observe_movement(kind: Kind) {
     let auth = Auth {
         name: "e2e".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     client
@@ -374,6 +375,7 @@ async fn idle_connection_is_closed(kind: Kind) {
     let auth = Auth {
         name: "idle".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     client
@@ -432,6 +434,7 @@ async fn active_heartbeat_survives(kind: Kind) {
     let auth = Auth {
         name: "active".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     client
@@ -491,6 +494,7 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
@@ -525,6 +529,7 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let auth_b = Auth {
         name: "b".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     b.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_b)
@@ -606,6 +611,7 @@ async fn connection_capacity_rejects(kind: Kind) {
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
@@ -686,6 +692,7 @@ async fn flooder_drops_attributed(kind: Kind) {
     let auth = Auth {
         name: "flood".into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     client
@@ -977,6 +984,7 @@ fn auth_wire(name: &str, ticket: &[u8]) -> (u16, Vec<u8>) {
         Auth {
             name: name.into(),
             ticket: ticket.to_vec(),
+            protocol_version: gsb_protocol::PROTOCOL_VERSION,
         }
         .encode_to_vec(),
     )

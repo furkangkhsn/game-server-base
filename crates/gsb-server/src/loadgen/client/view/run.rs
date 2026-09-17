@@ -80,6 +80,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     let auth_payload = Auth {
         name: format!("lg-{id}"),
         ticket: vec![],
+        // A reference client states its wire version (DESIGN §5.5).
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     }
     .encode_to_vec();
     let join_payload = JoinRoom { room_id: p.room }.encode_to_vec();

@@ -145,6 +145,8 @@ pub(crate) async fn run_churn_client(
         let auth_payload = Auth {
             name: name.clone(),
             ticket: vec![],
+            // A reference client states its wire version (DESIGN §5.5).
+            protocol_version: gsb_protocol::PROTOCOL_VERSION,
         }
         .encode_to_vec();
         if send_wire(&mut wire, op::base::AUTH_REQ, auth_payload)

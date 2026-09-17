@@ -195,6 +195,7 @@ async fn server_side_conditions_are_never_counted() {
     let auth = Auth {
         name: "neo".into(),
         ticket: vec![],
+        protocol_version: 0,
     }
     .encode_to_vec();
     in_tx
@@ -242,6 +243,7 @@ async fn double_auth_is_a_hard_violation() {
     let auth = Auth {
         name: "neo".into(),
         ticket: vec![],
+        protocol_version: 0,
     }
     .encode_to_vec();
     in_tx

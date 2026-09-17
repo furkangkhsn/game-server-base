@@ -28,6 +28,33 @@ message Auth {
   // hook decides its format). Empty + a configured validator =
   // rejected (ERROR code 10).
   bytes ticket = 2;
+  // The wire protocol version this client was built against. There is
+  // exactly one version check in the protocol and this is it: no HELLO
+  // round trip, no per-frame version byte — the version rides the frame
+  // that already has to be first and already has to be refusable.
+  //
+  //   0  = UNVERSIONED (legacy). Accepted, with a server-side warning.
+  //        This is what every client built before the field existed
+  //        sends, since proto3 does not encode a default-valued scalar —
+  //        which is also why adding this field changed no bytes.
+  //   N  = the client speaks version N. Accepted when it equals the
+  //        server's version, otherwise rejected with
+  //        ERROR_CODE_PROTOCOL_VERSION; the error `message` carries both
+  //        numbers so the client knows what to upgrade to.
+  //
+  // A mismatch is a NORMAL rejection: the connection STAYS ALIVE, the
+  // state stays "waiting for auth", and it is never counted against the
+  // protocol-violation budget (the frame is well-formed — the client is
+  // simply the wrong build). An incompatible client cannot fix the
+  // session, but it needs no cleanup path of its own either: the
+  // pre-auth frame budget and the idle timeout already bound an
+  // unauthenticated connection.
+  //
+  // The acceptance policy is exact equality, deliberately not a range.
+  // See `docs/DESIGN.md` §5.5 for the decision, its rejected
+  // alternatives, and the trigger for revisiting it (a second protocol
+  // version actually shipping).
+  uint32 protocol_version = 3;
 }
 
 message AuthResult {
@@ -132,6 +159,12 @@ enum ErrorCode {
   // unknown, may retry": 12 means "definitively over"
   // (docs/RECONNECT.md §8).
   ERROR_CODE_ROOM_RETIRED = 12;
+  // The client's `Auth.protocol_version` is not the version this server
+  // speaks. A normal rejection — the connection STAYS ALIVE and is not
+  // charged to the violation budget — but retrying is pointless: the
+  // client must be rebuilt. The `message` names both versions. See
+  // `Auth.protocol_version` and `docs/DESIGN.md` §5.5.
+  ERROR_CODE_PROTOCOL_VERSION = 13;
 }
 
 // Server error, sent as a response to the message that caused it (or

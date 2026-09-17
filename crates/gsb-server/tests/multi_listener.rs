@@ -386,6 +386,7 @@ async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
     let auth = Auth {
         name: name.into(),
         ticket: vec![],
+        protocol_version: gsb_protocol::PROTOCOL_VERSION,
     };
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth.encode_to_vec())

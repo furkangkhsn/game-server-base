@@ -108,6 +108,22 @@ sahiplenir). Opcode bantları: `1..=64` temel kontrol (auth/join/leave/heartbeat
 error), `1000+` oyun bandı (`MOVE_TO=1000`, `WORLD_SNAPSHOT=1003`,
 `PRIVATE=1004`).
 
+**Sürüm ve hata sözleşmesi** (protokol sertleştirme turu, DESIGN §5.2-5.5):
+
+- İstemci ilk frame'inde (`AUTH_REQ`) `Auth.protocol_version` gönderir;
+  `gsb_protocol::PROTOCOL_VERSION` tek doğruluk kaynağıdır. `0` =
+  sürümsüz (eski istemci) — kabul edilir, loglanır. Uyuşmazlık: `ERROR`
+  kod 13, **bağlantı yaşar** (istemci yeniden derlenmeli). Tek kontrol,
+  ek round trip yok.
+- `ERROR` kodları bir yorum tablosu değil, üretilen bir proto enum'ı:
+  `gsb.base.ErrorCode`. Bilmediği bir kodu alan istemci onu
+  `ERROR_CODE_OTHER` gibi işler (ham sayı korunur, loglanabilir); `0`
+  asla gönderilmez.
+- RPC zarfının **iki yarısı da** `base.proto`'da (`RpcRequest` +
+  `RpcResponse`); `game.proto` onu `import` eder.
+- Kaldırılmış alan numaraları `reserved` (bkz. `EntityRecord`), emekli
+  opcode'lar `gsb_game::op::RETIRED` listesinde ve testle kilitli.
+
 Bant genişliği: yayın, entity başına **tam, kendi kendine yeten snapshot**
 gönderir; yavaş istemciye düşen batch en fazla 1 tick bayatlık yaratır.
 Delta kodlanmış AOI snapshot'ları (spatial strateji), takım sisi (fog of
