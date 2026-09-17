@@ -119,3 +119,23 @@ fn private_snapshot_arm_keeps_its_hand_encoded_tag() {
     };
     assert_eq!(frame.encode_to_vec(), &[0x12, 0x02, 0x08, 0x01]);
 }
+
+/// A retired opcode must never be registered again. `gsb_game::op::
+/// RETIRED` names the two the demo game removed in 2ac28d2
+/// (ENTITY_SPAWNED = 1001, ENTITY_REMOVED = 1002); registering a new
+/// message under one of them would silently misparse for any peer still
+/// speaking the old protocol — the opcode-space equivalent of recycling
+/// a protobuf field number, which `.proto` guards with `reserved` and
+/// the opcode space has no keyword for.
+#[test]
+fn retired_opcodes_stay_out_of_the_message_table() {
+    let mut table = gsb_protocol::base_table();
+    gsb_game::register(&mut table);
+    for op in gsb_game::op::RETIRED {
+        assert!(
+            !table.is_registered(op),
+            "opcode {op} is retired (see gsb_game::op::RETIRED) but a \
+             message is registered under it"
+        );
+    }
+}

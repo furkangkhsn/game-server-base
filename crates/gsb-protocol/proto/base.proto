@@ -1,7 +1,18 @@
 // Base (transport-agnostic) protocol messages shared by every gsb server.
-// Game-specific messages live in gsb-game/proto/game.proto.
+// Game-specific messages live in gsb-game/proto/game.proto (which imports
+// this file — see `RpcResponse` and `docs/DESIGN.md` §5.2 for the
+// message-ownership rule: core-governed contracts live HERE).
 //
 // The Unity counterpart uses Google.Protobuf with these same files.
+//
+// FIELD-NUMBER HISTORY: no field has ever been removed from this file.
+// The protocol-hardening round audited the whole history of base.proto
+// (`git log -p -- crates/gsb-protocol/proto/base.proto`): every commit
+// that touched it (88b0544, 3b9e5e3, 483e3a2, 5c9ac08, f13c6fb) only
+// ADDED messages, fields and comments. There is therefore nothing to
+// `reserved` here, and no speculative range is declared. When a field IS
+// removed, reserve its number AND its name in the same commit, citing
+// that commit — see `EntityRecord` in game.proto for the worked example.
 
 syntax = "proto3";
 

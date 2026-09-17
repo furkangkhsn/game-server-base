@@ -1,5 +1,23 @@
 // Game-specific protocol messages (demo game).
 // The Unity counterpart uses Google.Protobuf with this same file.
+//
+// RETIRED NAMES — do not resurrect them with new meanings. Commit
+// 2ac28d2 ("Replace per-connection dirty ledger with per-group full
+// world snapshots") deleted three messages when membership became
+// "presence in the snapshot":
+//   - `EntitySpawned` (fields: entity=1, x=2, y=3) — RENAMED to
+//     `EntityRecord`, which still carries those three numbers;
+//   - `EntityRemoved` (fields: entity=1) — deleted outright;
+//   - `EntityState`   (fields: entity=1, x=2, y=3, version=4) —
+//     deleted; `EntityRecord` inside `WorldSnapshot` took over its role
+//     WITHOUT the version field (see `EntityRecord`'s `reserved 4`).
+// Their opcodes went with them: 1001 (ENTITY_SPAWNED) and 1002
+// (ENTITY_REMOVED) are retired and must stay unused — see
+// `gsb-game/src/op.rs`, which is where the opcode space is declared and
+// where a test locks them out of the message table. (1003 was reused in
+// that same commit: ENTITY_STATE -> WORLD_SNAPSHOT. That reuse is
+// history, not precedent — it is exactly the silent recycling these
+// notes exist to prevent from happening again.)
 
 syntax = "proto3";
 
@@ -168,6 +186,25 @@ message EntityRecord {
   // ~6 B/record smaller for the same content.
   sint32 x = 2;
   sint32 y = 3;
+
+  // Field 4 WAS used on the per-entity record and was removed: it was
+  // `uint64 version = 4` on `EntityState`, the message whose role this
+  // one took over in commit 2ac28d2 ("Per record, the version field is
+  // dropped (21 -> 16 bytes): ordering and staleness are handled by the
+  // sequence"). Its source, the `EntityVersion` / `bump()` ECS
+  // component, was deleted in the same line of work. Reserved so the
+  // number can never come back meaning something else — protoc, not a
+  // reviewer, enforces that.
+  //
+  // ROADMAP contemplates a per-entity version returning for delta
+  // broadcast. If it does it takes a FRESH number: reusing 4 for a
+  // version with different semantics is precisely what this line
+  // forbids, and reusing it for the identical semantics buys nothing
+  // (no peer of that vintage is still speaking this protocol — the
+  // record's coordinate types changed from sfixed32 to sint32 in
+  // 0888441, so those bytes no longer parse anyway).
+  reserved 4;
+  reserved "version";
 }
 
 // Server → client: the snapshot of the room's snapshot group.

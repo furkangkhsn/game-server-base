@@ -386,6 +386,38 @@ yazmaz.
    `InputAck` ve `WorldSnapshot` oneof kolları oyun tipleridir. Sahiplik
    kuralı (yukarıda) onu `game.proto`'da tutar.
 
+### 5.3 Emekli numaralar: `reserved` ve emekli opcode'lar
+
+Kural: **kullanılıp kaldırılan hiçbir alan numarası sessizce geri
+dönüştürülemez.** Bir alan silindiğinde aynı commit'te numarası VE adı
+`reserved` edilir, gerekçe olarak silen commit sayılır. Spekülatif aralık
+rezerve edilmez — gerekçesiz `reserved` numarayı boşa harcar.
+
+Protokol sertleştirme turunda iki `.proto` dosyasının tüm geçmişi
+tarandı (`git log -p -- crates/*/proto`):
+
+- **`base.proto`: hiç alan kaldırılmamış.** Dosyaya dokunan her commit
+  (88b0544, 3b9e5e3, 483e3a2, 5c9ac08, f13c6fb) yalnız EKLEMİŞ. Rezerve
+  edilecek numara yok; dosyanın başına bu denetimin sonucu yazıldı ki
+  bir sonraki bakıcı geçmişi yeniden çıkarmak zorunda kalmasın.
+- **`game.proto`: tek gerçek kaldırma, `EntityState.version = 4`**
+  (2ac28d2 — "Per record, the version field is dropped (21 → 16 bytes)";
+  kaynağı olan `EntityVersion`/`bump()` ECS component'i aynı iş
+  hattında silindi). Rolünü devralan `EntityRecord`'da `reserved 4;` +
+  `reserved "version";`. Kapı derleme zamanında: alan 4 geri eklenirse
+  protoc `Field "version" uses reserved number 4` ile build'i kırar.
+  ROADMAP delta yayını için entity başına versiyonu geri getirmeyi
+  düşünüyor — geldiğinde YENİ numara alır.
+
+Aynı sınıf tehlike **opcode uzayında** da var ve orada `reserved`
+anahtar kelimesi yok. 2ac28d2 üç opcode'u emekli etti ve birini (1003,
+`ENTITY_STATE` → `WORLD_SNAPSHOT`) yeniden kullandı — tam olarak bu
+kuralın engellemek istediği şey. Kalan ikisi artık
+`gsb_game::op::RETIRED` listesinde (1001 `ENTITY_SPAWNED`, 1002
+`ENTITY_REMOVED`) ve `wire_contract.rs::retired_opcodes_stay_out_of_
+the_message_table` bunların `MessageTable`'a kaydedilmesini kırıyor.
+Yeni bir oyun crate'i kendi `RETIRED` listesini tutar.
+
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
 ```rust

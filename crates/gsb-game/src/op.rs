@@ -1,4 +1,29 @@
 //! Game-band opcodes (>= [`gsb_protocol::op::GAME_BAND_START`]).
+//!
+//! # Retired opcodes
+//!
+//! [`RETIRED`] lists opcodes this game once used and removed. An opcode
+//! is the same kind of contract as a protobuf field number: recycling a
+//! retired one with a different message silently misparses for anyone
+//! still speaking the old protocol. The `.proto` side expresses this
+//! with `reserved`; the opcode space has no such keyword, so the list
+//! plus [`crate::register`]'s test is the enforcement.
+//!
+//! This game has already paid for the lesson once: commit 2ac28d2 reused
+//! 1003 (`ENTITY_STATE`) for `WORLD_SNAPSHOT` while retiring 1001 and
+//! 1002 beside it.
+
+/// Opcodes this game used and removed; never reuse them for a new
+/// message.
+///
+/// - `1001` — `ENTITY_SPAWNED` ("an entity entered the room"), and
+/// - `1002` — `ENTITY_REMOVED` ("an entity left the room"),
+///
+/// both introduced in 88b0544 and deleted in 2ac28d2, when membership
+/// became "presence in the group snapshot" and the two event frames had
+/// nothing left to say. See `proto/game.proto`'s header for the message
+/// definitions that went with them.
+pub const RETIRED: [u16; 2] = [1001, 1002];
 
 /// Client → server: "move my entity toward (x, y)".
 pub const MOVE_TO: u16 = 1000;
