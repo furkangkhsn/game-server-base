@@ -3,6 +3,7 @@ name = "gsb-protocol"
 description = "Wire protocol for gsb: frame envelope, opcodes, and the message registry (protobuf payloads)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 

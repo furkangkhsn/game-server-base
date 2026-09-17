@@ -3,6 +3,7 @@ name = "gsb-ecs"
 description = "ECS layer for gsb: bevy_ecs binding and the System trait. No game types here."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

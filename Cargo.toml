@@ -14,7 +14,9 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://example.local/game-server-base"
+# MSRV == the pinned toolchain (rust-toolchain.toml): bevy_ecs 0.19.1
+# declares rust-version 1.95.0, and 1.94.1 refuses to build the lockfile.
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 # internal crates

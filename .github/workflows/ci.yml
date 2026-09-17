@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in lockstep with rust-toolchain.toml and `rust-version` in
+  # Cargo.toml. MSRV == pinned toolchain (bevy_ecs 0.19.1 declares
+  # rust-version 1.95.0), so a separate MSRV build job would only repeat
+  # the clippy/test jobs on the same compiler.
+  RUST_TOOLCHAIN: "1.95.0"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # prost-build shells out to a system `protoc` (the build scripts do
+      # not wire protoc-bin-vendored), so the compiler must be on PATH.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # The gsb-lint policy scan runs inside every crate's build script,
+      # so this job also enforces the banned-pattern list.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      # Loopback-only (TCP/UDP/QUIC/WS on 127.0.0.1, ephemeral ports); no
+      # outbound network. Several suites assert wall-clock tick rates and
+      # timeouts (e.g. loadgen_smoke expects 20-40 Hz in a debug build).
+      - run: cargo test --workspace

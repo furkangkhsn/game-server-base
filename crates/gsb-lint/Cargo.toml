@@ -3,6 +3,7 @@ name = "gsb-lint"
 description = "Build-time policy checks for the gsb workspace: bans tokio::select and lock types in gsb crates."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

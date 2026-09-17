@@ -3,6 +3,7 @@ name = "gsb-server"
 description = "gsb composition root: configuration, server bootstrap, and the demo binary."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 

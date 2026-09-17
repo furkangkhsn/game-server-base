@@ -3,6 +3,7 @@ name = "gsb-game"
 description = "Demo game logic for gsb: components, movement system, and a RoomLogic implementation."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 

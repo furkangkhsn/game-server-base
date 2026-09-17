@@ -3,6 +3,7 @@ name = "gsb-net"
 description = "Network layer for gsb: pluggable Transport/Listener/Endpoint traits, pump tasks, and the default TCP transport."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 

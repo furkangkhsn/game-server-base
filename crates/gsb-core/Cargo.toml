@@ -3,6 +3,7 @@ name = "gsb-core"
 description = "Core actor machinery for gsb: ids, channels, registry, room actor (5-phase tick), connection actor. ECS-agnostic."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 
