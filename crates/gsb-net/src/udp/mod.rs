@@ -71,36 +71,109 @@
 //! REL, `op >= 1000` (game band) is RAW.
 //!
 //! **Status: experimental (v1).** Validated on loopback and by the e2e
-//! suite; NOT hardened for lossy real-world networks. The known gap:
-//! the REL give-up (`RETRANSIT_MAX`) is silent — a frame abandoned
-//! after 250 ms wedges its direction's cumulative stream (the receiver
-//! never advances past the hole) while the session stays alive and the
-//! RAW game band keeps flowing, so the wedge is invisible. Production
-//! deployments should run a hardened transport behind the same
-//! [`crate::Transport`] seam, or close this gap first (give-up ⇒
-//! session-fatal, or memory-bounded retransmit with a no-ACK death
-//! threshold — see ROADMAP "dış inceleme hızlı düzeltme turu", Kalan).
+//! suite; NOT hardened for lossy real-world networks. The silent REL
+//! give-up this paragraph used to name is closed — see "The REL liveness
+//! bound" below. Production deployments should still run a hardened
+//! transport behind the same [`crate::Transport`] seam.
 //!
 //! ## Band semantics (feature 2)
 //!
-//! - **Control band (AUTH/JOIN/LEAVE/HEARTBEAT/ERROR): reliable within
-//!   the give-up bound.** Loss would break correctness (a lost JOIN
-//!   result hangs the client; a lost HEARTBEAT is tolerable only
+//! - **Control band (AUTH/JOIN/LEAVE/HEARTBEAT/ERROR): reliable for as
+//!   long as the band is alive.** Loss would break correctness (a lost
+//!   JOIN result hangs the client; a lost HEARTBEAT is tolerable only
 //!   because HEARTBEAT_ACK is not state — but the *request* may be).
 //!   Each direction keeps its own sequence: the sender retransmits the
-//!   oldest un-ACKed REL frame every `RETRANSIT_RTO` until it is ACKed
-//!   or `RETRANSIT_MAX` elapses (give-up, counted — and see the status
-//!   note above: the count has NO consequence today, which is exactly
-//!   why this transport is experimental). The receiver deduplicates
-//!   (cumulative), buffers a small out-of-order window, and only
-//!   advances when the gap fills — control frames are never delivered
-//!   out of order (AUTH before JOIN is a property of `seq`, not of
-//!   luck).
+//!   oldest un-ACKed REL frame every [`RETRANSIT_RTO`] until it is
+//!   ACKed. An individual frame is **never** abandoned; the *band* is
+//!   declared dead as a whole (see "The REL liveness bound" below). The
+//!   receiver deduplicates (cumulative), buffers a small out-of-order
+//!   window, and only advances when the gap fills — control frames are
+//!   never delivered out of order (AUTH before JOIN is a property of
+//!   `seq`, not of luck).
 //! - **Snapshot band (WORLD_SNAPSHOT & co.): RAW.** The room's snapshots
 //!   are self-contained (a client that loses one heals on the next
 //!   snapshot or the keep-alive resend — `RoomConfig::keepalive_hz`), so
 //!   reliable delivery would cost seq/ack/retransmit state for nothing.
 //!   RAW frames are unordered and unnumbered, by design.
+//!
+//! ## The REL liveness bound (why a give-up is not a statistic)
+//!
+//! v1 popped a REL frame that had gone un-ACKed for 250 ms, incremented
+//! a counter and continued. That was the transport's worst failure mode,
+//! because it was **silent**: the cumulative receiver never advances past
+//! the hole, so the direction is wedged forever, while the session stays
+//! alive and the RAW game band keeps flowing. A client whose
+//! `JOIN_ROOM_RESULT` was the abandoned frame waits forever — no error,
+//! no retry, no close — and the server holds its room slot and registry
+//! row the whole time.
+//!
+//! **Decision: memory-bounded retransmit + a no-ACK-progress death
+//! threshold.** A frame is retransmitted for as long as the band is
+//! alive. The band is declared dead when the sender's cumulative ACK has
+//! not advanced *at all* for [`REL_NO_ACK_FATAL`] while something is
+//! outstanding, or when the un-ACKed queue reaches [`RETRANSIT_CAP`].
+//! Death is **session-fatal and loud**: the writer hands
+//! `ConnIn::ServerClosed` to the connection actor over its mailbox — an
+//! in-process channel, never the socket, which is precisely what is in
+//! doubt — and the actor runs its ordinary teardown (final metrics
+//! flush, `RegistryMsg::ConnClosed`). From there the death is
+//! indistinguishable from a dropped TCP socket: the registry releases the
+//! row of an unaffiliated session outright and routes a DETACH for a room
+//! member, whose `on_disconnect` policy owns the entity and its slot from
+//! then on (`docs/RECONNECT.md` §4).
+//!
+//! **Why "no ACK progress for X" and not "this frame aged out":** they
+//! differ exactly where it matters. Per-frame aging measures one
+//! datagram's luck; 250 ms of loss is an ordinary event on a bad mobile
+//! link (an LTE handover is tens of ms, a Wi-Fi roam 100-500 ms, a
+//! Wi-Fi↔cellular switch 1-3 s), so a per-frame bound would kill
+//! sessions that today merely stutter — trading a silent bug for a noisy
+//! one. Cumulative-ACK progress measures the *channel*: as long as the
+//! peer confirms anything, the link is working and every outstanding
+//! frame is still going to arrive.
+//!
+//! **The threshold: 5 s.** It clears every stutter above with headroom
+//! (5-15× a Wi-Fi roam, ~2× the worst Wi-Fi↔cellular switch), and it is
+//! ~100 retransmissions of the same frame at the 50 ms RTO: a path that
+//! delivers nothing in 100 tries over 5 s is not stuttering, it is down.
+//! It also sits well below the demux's 30 s `idle_timeout`, which is the
+//! only other death signal — and that one watches INBOUND silence, so a
+//! peer that keeps sending RAW input while never ACKing (the exact
+//! reported shape) is invisible to it.
+//!
+//! **Rejected — give-up ⇒ session-fatal (the other named candidate).**
+//! Correct about the consequence (an undeliverable control frame must
+//! end the session) and wrong about the trigger: at `RETRANSIT_MAX`
+//! = 250 ms it declares death after five attempts, so a single handover
+//! blackout disconnects a healthy player. Raising `RETRANSIT_MAX` to a
+//! survivable value turns it into this design with a worse name — the
+//! per-frame clock only *approximates* channel liveness, and does so
+//! badly under bursty loss (the first frame after a 4 s quiet period
+//! carries the whole blackout in its own age).
+//!
+//! **Rejected — RTO backoff + a retry count (the TCP shape).** A retry
+//! budget with exponential backoff expresses the same bound in units
+//! nobody can reason about (how many retries is 5 s? depends on the
+//! backoff curve), and backoff needs RTT estimation to be worth
+//! anything, which this transport does not have yet (see "What is still
+//! open"). The wall-clock bound is the honest statement of the policy;
+//! adding backoff later changes the retransmit *schedule* without
+//! touching the death rule.
+//!
+//! **Rejected — tell the client instead of closing.** There is no path
+//! to tell it: the ERROR frame is itself a control-band frame and would
+//! queue behind the hole. Anything we could still deliver (a RAW
+//! notice) would need a new opcode outside the message table and a
+//! client that understands it — a protocol change to make a dead
+//! session marginally more polite.
+//!
+//! **The memory bound.** With no per-frame give-up the un-ACKed queue is
+//! no longer bounded by the 250 ms clock, so it is bounded explicitly:
+//! [`RETRANSIT_CAP`] frames per direction per session. Control frames
+//! are small (tens of bytes), so the realistic ceiling is a few KB;
+//! the absolute one (every frame at the full datagram budget) is
+//! ~380 KB, and it is only reachable by a session whose ACKs have
+//! already stopped — i.e. one already inside its dying window.
 //!
 //! ## MTU (feature 3)
 //!
@@ -180,8 +253,20 @@ pub const KIND_HELLO: u8 = 3;
 
 /// The retransmit interval of the reliable control band.
 const RETRANSIT_RTO: Duration = Duration::from_millis(50);
-/// Max age of an un-ACKed reliable frame before it is given up (counted).
-const RETRANSIT_MAX: Duration = Duration::from_millis(250);
+/// How long the reliable band may make NO cumulative-ACK progress at all
+/// — while something is outstanding — before that direction is declared
+/// dead and the session ends. See the module docs, "The REL liveness
+/// bound", for why the bound is on the CHANNEL and not on a frame's age,
+/// and for the 5 s figure against real lossy-link numbers.
+const REL_NO_ACK_FATAL: Duration = Duration::from_secs(5);
+/// Memory bound of the un-ACKed retransmit queue (per direction, per
+/// session). Reaching it means the peer has confirmed nothing while this
+/// many control frames piled up, which is the same death as
+/// [`REL_NO_ACK_FATAL`] arriving early. Sized far above any legitimate
+/// burst: the control band is AUTH/JOIN/LEAVE/HEARTBEAT_ACK/ERROR, and
+/// the actor's own guardrails (violation answer limit, pre-auth frame
+/// budget) already cap how many of those a client can provoke.
+const RETRANSIT_CAP: usize = 256;
 /// Out-of-order window of the reliable receiver (control frames per
 /// direction are rare; 16 is far beyond any realistic gap).
 const OOB_CAP: usize = 16;

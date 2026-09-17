@@ -21,7 +21,10 @@ pub struct UdpClientStats {
     pub dup_in: u64,
     /// Inbound REL frames dropped on a full out-of-order window.
     pub oob_dropped: u64,
-    /// Outbound REL frames given up (no ACK within RETRANSIT_MAX).
+    /// Outbound REL frames still outstanding when the reliable band was
+    /// declared dead (see the module docs, "The REL liveness bound"). A
+    /// frame is never abandoned on its own age — the whole band dies at
+    /// once, and [`UdpClient::is_established`] flips to `false`.
     pub gave_up: u64,
 }
 
@@ -47,6 +50,9 @@ pub struct UdpClient {
     out_seq: u32,
     acked: u32,
     out_retransmit: VecDeque<(u32, Bytes, Instant)>,
+    /// When the cumulative ACK last advanced (or "now" while nothing is
+    /// outstanding) — the mirror of the server writer's liveness clock.
+    ack_progress: Instant,
     pub stats: UdpClientStats,
     buf: Vec<u8>,
     /// A RAW frame produced by `process_datagram`, awaiting hand-back to
@@ -105,6 +111,7 @@ impl UdpClient {
             out_seq: 0,
             acked: 1,
             out_retransmit: VecDeque::new(),
+            ack_progress: Instant::now(),
             stats: UdpClientStats::default(),
             buf: vec![0u8; 2048],
             raw: None,
@@ -146,7 +153,11 @@ impl UdpClient {
         self.sock.local_addr().ok()
     }
 
-    /// Whether the handshake completed.
+    /// Whether the session is live: the handshake completed and the
+    /// reliable band has not been declared dead. This is the client's
+    /// liveness API — UDP has no EOF, so the flip from `true` to `false`
+    /// is the only "the session is over" signal a caller gets (the
+    /// server's equivalent is the connection actor's teardown).
     pub fn is_established(&self) -> bool {
         self.established
     }
@@ -156,6 +167,15 @@ impl UdpClient {
     pub async fn send_frame(&mut self, op: u16, payload: impl Into<Bytes>) -> std::io::Result<()> {
         let frame = FrameBody::new(op, payload.into());
         if is_control(op) {
+            if self.out_retransmit.len() >= RETRANSIT_CAP {
+                // The memory bound of the module docs, mirrored: this many
+                // control frames outstanding with nothing confirmed is the
+                // same death as the no-ACK clock arriving early.
+                self.declare_rel_dead();
+                return Err(std::io::Error::other(
+                    "rUDP reliable control band is dead (retransmit queue full, no ACK progress)",
+                ));
+            }
             self.out_seq = self.out_seq.wrapping_add(1);
             let dg = Bytes::from(encode_rel(self.out_seq, &frame));
             self.out_retransmit

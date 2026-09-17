@@ -146,6 +146,74 @@ async fn server_retransmits_until_ack() {
     );
 }
 
+/// The REL liveness bound, memory arm: against a peer that completes
+/// the handshake and then ACKs NOTHING, the un-ACKed queue fills to
+/// [`RETRANSIT_CAP`] and the writer ends the session — loudly, through
+/// the connection ACTOR's mailbox (an in-process channel), not by
+/// quietly dropping a frame and continuing. This is the arm that fires
+/// in milliseconds; the wall-clock arm ([`REL_NO_ACK_FATAL`]) and the
+/// room-slot release it causes are locked end to end in
+/// `gsb-server/tests/udp_rel_liveness.rs`.
+#[tokio::test]
+async fn unacked_control_band_closes_the_session_at_the_memory_bound() {
+    let (_listener, addr, mut eps, _accept) = bound_transport(UdpTransportConfig::default()).await;
+
+    // A raw client: it handshakes and then never sends another byte —
+    // in particular it never ACKs a single REL frame.
+    let raw = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
+        .await
+        .expect("bind");
+    let mut buf = vec![0u8; 2048];
+    let nonce = 0x5EED_1234_5EED_1234u64;
+    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
+        .await
+        .expect("challenge")
+        .expect("recv");
+    let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
+    raw.send_to(&encode_hello(nonce, cookie), addr)
+        .await
+        .unwrap();
+
+    let mut ep = tokio::time::timeout(Duration::from_secs(3), eps.recv())
+        .await
+        .expect("endpoint")
+        .expect("endpoint");
+    let (in_tx, mut in_rx) = ep.take_inbox(16);
+    let (out_tx, out_rx) = ep.take_outbox(16);
+    let (_r, _w) = ep.start_pump(ConnectionId(1), in_tx, out_rx, None);
+
+    // Feed control-band frames until the bound is crossed. Every one of
+    // them is reliable, so every one of them stays outstanding.
+    let feeder = tokio::spawn(async move {
+        for i in 0..(RETRANSIT_CAP + 8) {
+            let fb = FrameBody::new(
+                gsb_protocol::op::base::HEARTBEAT_ACK,
+                Bytes::from(vec![(i & 0xFF) as u8]),
+            );
+            if out_tx.send(vec![fb]).await.is_err() {
+                break; // the writer is gone: the bound fired
+            }
+        }
+    });
+
+    let closed = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
+        .await
+        .expect("the bound must close the session well inside 5 s")
+        .expect("the actor must be told, not left waiting");
+    match closed {
+        gsb_core::conn::ConnIn::ServerClosed { reason } => {
+            assert!(
+                reason.contains("reliable control band"),
+                "the close must name the reliable band: {reason}"
+            );
+        }
+        other => panic!("expected ServerClosed, got {other:?}"),
+    }
+    feeder.abort();
+    drop(raw);
+}
+
 /// Idle teardown (item: no FIN in UDP — the previous turn's
 /// `idle_timeout` must work): a silent client's session is swept and
 /// its actor gets `ConnIn::ServerClosed` on its inbound channel.
