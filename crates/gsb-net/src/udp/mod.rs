@@ -136,10 +136,14 @@
 //! REL, `op >= 1000` (game band) is RAW.
 //!
 //! **Status: experimental (v1).** Validated on loopback and by the e2e
-//! suite; NOT hardened for lossy real-world networks. The silent REL
-//! give-up this paragraph used to name is closed — see "The REL liveness
-//! bound" below. Production deployments should still run a hardened
-//! transport behind the same [`crate::Transport`] seam.
+//! suite; NOT hardened for lossy real-world networks. Two correctness
+//! gaps this paragraph used to name are now **closed**: the silent REL
+//! give-up (see "The REL liveness bound") and the handshake cookie that
+//! never expired (see "Cookie rotation"). The label stays, because what
+//! is missing is not a bug list but a body of work — see "What is still
+//! open" at the end of this doc. Production deployments should still run
+//! a hardened transport behind the same [`crate::Transport`] seam;
+//! graduating this one is a product decision, not a code change.
 //!
 //! ## Band semantics (feature 2)
 //!
@@ -285,6 +289,46 @@
 //! <5% of the cost and breaks the single-`accept()` future / the shared
 //! connection-id space; per-due O(N) sweeps rejected: 80× the cost of
 //! the heap under join churn).
+//!
+//! ## What is still open (why the label stays)
+//!
+//! Each of these was re-verified against the code at the time this list
+//! was written; none of them is a one-line fix, and each is the kind of
+//! thing a hardened transport ships with.
+//!
+//! - **No congestion control and no pacing.** Nothing in this module
+//!   limits the rate at which a session's writer puts datagrams on the
+//!   socket: the only thing bounding server pps is the room's own tick
+//!   and snapshot budget. On loopback that is invisible; on a real
+//!   network a room fan-out plus retransmissions can push a slow path
+//!   into a loss spiral it has no way to back out of. (Verified: no
+//!   token bucket, no pacer, no window anywhere under `udp/`.)
+//! - **Fixed RTO, no RTT estimation.** [`RETRANSIT_RTO`] is a compile-time
+//!   50 ms for every peer on earth, and it never backs off. A 200 ms path
+//!   therefore gets ~4 redundant copies of every control frame before the
+//!   first ACK can possibly arrive — wasteful in the good case and
+//!   actively harmful in the loss case, which is exactly why the
+//!   backoff-shaped alternative was rejected for the liveness bound until
+//!   this exists. (Verified: no RTT sample is taken; the constant is used
+//!   as-is by both the writer and the client.)
+//! - **NAT rebinding ends the session.** Sessions are keyed by the
+//!   peer's 4-tuple, so a rebind is a new address: a new handshake, a new
+//!   `ConnectionId`, and the old session lingering until the idle sweep.
+//!   A mobile client that changes network loses its session where QUIC
+//!   would migrate it. Fixing this needs a connection id on the wire and
+//!   an identity to re-bind it to — a protocol change plus the auth
+//!   layer, not a patch. (Verified: `Demux::sessions` is keyed by
+//!   `SocketAddr` and `handle_hello` early-returns for a known one.)
+//! - **No receive-buffer tuning.** ONE socket carries every session, so
+//!   its kernel receive queue is the first and only buffer under a burst,
+//!   and it is left at the system default: `tokio::net::UdpSocket`
+//!   (1.53.1) exposes no `SO_RCVBUF` setter, so raising it needs the raw
+//!   fd. (Verified: the only mention is the note in `bind`.)
+//! - **No crypto layer and no fragmentation**, both declared out of scope
+//!   for v1 rather than pending: the cookie is an anti-spoofing measure,
+//!   not a security boundary (nothing is signed or encrypted), and an
+//!   over-budget datagram is dropped and counted rather than split (see
+//!   "MTU").
 
 mod client;
 mod cookie;

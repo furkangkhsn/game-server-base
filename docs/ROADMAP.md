@@ -75,8 +75,9 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **314** (314/314 yeşil; tarihsel
-ilerleme 58 → ... → 294 için `docs/CHANGELOG.md` başlığına bakınız).
+Test sayısı: bugün itibarıyla **327** (327/327 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 için `docs/CHANGELOG.md` başlığına
+bakınız).
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -94,10 +95,12 @@ ulaşılmaz kalıyordu; mutation-verified testle kilitlendi). Aşağıda,
 registry tablosunda zombi `Running` kaydı bırakmıyor: ölüm izleniyor,
 üyeler `RoomGone` ile haberdar ediliyor, opsiyonel `restart_on_panic`
 politikası odayı fabrikadan boş olarak yeniden kuruyor (aşağıda,
-"Kapatılanlar (supervision turu)"). rUDP REL bandının sessiz give-up'ı ise
-**bilinçli olarak ertelendi**: rUDP deneysel statüsüne alındı, üretimde aynı
-`Transport` seam'i arkasından kanıtlanmış taşıma koşacak (`udp.rs` modül
-dokümanındaki "Status: experimental" beyanıyla). En son **tablo budama
+"Kapatılanlar (supervision turu)"). rUDP REL bandının sessiz give-up'ı o turda
+**bilinçli olarak ertelenmişti** (taşıma deneysel statüye alındı); en
+sonki **rUDP doğruluk turu** onu ve cookie'nin tekrar-oynatılabilirliğini
+kapattı (aşağıda, "Kapatılanlar (rUDP doğruluk turu)") — taşıma yine de
+DENEYSEL: mezuniyet ürün kararı, kalan iş `crates/gsb-net/src/udp/mod.rs`
+"What is still open" başlığında madde madde doğrulandı. En son **tablo budama
 turunda** shard'ların bağlantı-churn'üyle sonsuz büyüyen iki tablosu
 budandı, metrik biriktiricileri kapanan varlıkları bırakacak şekilde
 düzenlendi ve supervision turunun ortaya çıkardığı roster-drift panigi
@@ -487,12 +490,11 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   açık yol olduğu için `PROTOC`/`PATH` aramasının önüne geçiyor. CI iki
   işte de `protobuf-compiler` kurmuyor — bağlamanın bozulması CI'ı
   düşürür, davranış kilidi bu.
-- [ ] **`loadgen/churn.rs` log string'inde gömülü boşluk blokları** —
-  "stale … resume … same … connection" metni iki yerde 38'er boşluk
-  taşıyor (yayın paketi turu bulgusu; rustfmt literal'e dokunmaz).
-  Protokol sertleştirme turu bu bloğun HEMEN yanındaki `match e.code`
-  kolunu enum'a çevirdi ama literal'e bilinçli olarak dokunmadı (kapsam
-  dışı; bu madde açık kalıyor).
+- [x] **`loadgen/churn.rs` log string'inde gömülü boşluk blokları** —
+  **KAPANDI** (teknik borç turu, `4465c47`): literal `\` devamıyla
+  yeniden yazıldı, gömülü 38'er boşluk gitti. Bu satır kapandıktan sonra
+  da açık duruyordu; rUDP doğruluk turunun doküman taramasında yakalandı
+  (kodda doğrulandı: `churn.rs`'te 38 boşlukluk koşu kalmadı).
 
 ## Protokol sözleşmesi (protokol sertleştirme turu sonrası)
 

@@ -5,6 +5,232 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (rUDP doğruluk turu — sessiz REL give-up, tekrar oynatılabilir cookie)
+
+Kaynak: doğrulanmış dış inceleme raporundaki iki rUDP bulgusu. İkisi de
+daha önce **bilinçli olarak ertelenmişti** (taşıma "experimental"
+statüsüne alınmıştı); kullanıcı bu turda ikisinin de kapatılmasına karar
+verdi. Taşıma **deneysel kalmaya devam ediyor** — mezuniyet ayrı bir
+karar, kalan iş aşağıda madde madde doğrulandı.
+
+Test sayısı 319 → **327** (+8; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi). Her iki düzeltme de mutation-verified: üçer
+mutasyon denendi, her biri en az bir testi düşürdü.
+
+### Kommitler
+
+1. **`0a5a9cb` — REL bandı gerçekten güvenilir: sessiz give-up yerine
+   ACK-ilerlemesi ölçen ölüm eşiği (madde A).**
+
+   **Bulgu (kodda doğrulandı):** `writer.rs:174`, `retransmit_pass` —
+   `RETRANSIT_MAX`'ten (250 ms) eski bir kontrol frame'i kuyruktan
+   atılıyor, `gave_up` artırılıyor ve döngü devam ediyordu. Başka
+   HİÇBİR ŞEY olmuyordu. Alıcının cumulative akışı deliğin ötesine asla
+   geçemediği için o yön kalıcı olarak tıkanıyor, ama oturum yaşıyor ve
+   RAW oyun bandı akmaya devam ediyor — yani tıkanma GÖRÜNMEZ. Kaybolan
+   frame `JOIN_ROOM_RESULT` ise istemci sonsuza kadar bekler (hata yok,
+   retry yok, kapanma yok) ve sunucu o oturumun tuttuğu her şeyi tutmaya
+   devam eder.
+
+   **Aday 1 (elendi): give-up ⇒ oturum-ölümcül.** Sonuç konusunda doğru
+   (teslim edilemeyen bir kontrol frame'i oturumu bitirmeli), TETİKLEYİCİ
+   konusunda yanlış: 250 ms'de, yani beş denemeden sonra ölüm ilan eder.
+   Oysa 250 ms'lik kayıp kötü bir mobil hatta OLAĞAN bir olaydır — LTE
+   handover onlarca ms, Wi-Fi roam 100-500 ms, Wi-Fi↔hücresel geçiş
+   1-3 sn. Bu eşik bugün yalnızca *kekeleyen* oturumları öldürürdü:
+   sessiz bir hata yerine gürültülü bir hata. `RETRANSIT_MAX`'i
+   yaşanabilir bir değere çıkarmak ise onu bu tasarımın kötü isimli bir
+   kopyası yapar — tek frame'in yaşı kanalın canlılığını ancak
+   YAKLAŞIK ölçer ve patlamalı kayıpta kötü ölçer (4 sn sessizlikten
+   sonraki ilk frame bütün karartmayı kendi yaşında taşır).
+
+   **Aday 2 (seçildi): bellek-sınırlı yeniden gönderim + ACK-ilerlemesi
+   olmayan süre eşiği.** Bir frame, bant yaşadığı sürece yeniden
+   gönderilir; hiçbir zaman tek başına terk edilmez. BANT bütün olarak
+   ölü ilan edilir: kuyrukta bir şey varken cumulative ACK
+   `REL_NO_ACK_FATAL` (5 sn) boyunca HİÇ ilerlemediyse, ya da un-ACK'li
+   kuyruk `RETRANSIT_CAP`'e (256 frame) ulaştıysa.
+
+   **Eşik gerekçesi (5 sn).** Yukarıdaki bütün kekemelikleri payla
+   geçer (Wi-Fi roam'un 5-15 katı, en kötü Wi-Fi↔hücresel geçişin ~2
+   katı) ve 50 ms RTO'da aynı frame'in ~100 yeniden gönderimi demektir:
+   5 sn içinde 100 denemede hiçbir şey teslim edemeyen bir yol
+   kekelemiyor, ölü. Ayrıca demux'un 30 sn'lik `idle_timeout`'unun çok
+   altında — ve o sweep GELEN sessizliği izler, yani RAW girdi göndermeye
+   devam edip hiç ACK'lemeyen peer (raporlanan şeklin ta kendisi) ona
+   görünmez.
+
+   **Ölüm gürültülü ve oturum-ölümcül.** Writer, connection actor'ün
+   MAILBOX'ına `ConnIn::ServerClosed` bırakır — süreç-içi bir kanal,
+   ASLA soket (şüphe altında olan tam da o) — ve actor olağan teardown'ını
+   koşar (son metrik flush'ı, `RegistryMsg::ConnClosed`). Oradan sonrası
+   düşmüş bir TCP soketinden ayırt edilemez: registry, ilişkisiz bir
+   oturumun satırını doğrudan bırakır; oda üyesi için DETACH yönlendirir
+   ve entity ile slotun sahibi odanın `on_disconnect` politikası olur
+   (RECONNECT §4).
+
+   **Diğer elenenler:** (a) *RTO backoff + retry sayacı (TCP şekli)* —
+   aynı sınırı kimsenin akıl yürütemeyeceği birimlerle ifade eder (kaç
+   retry 5 sn eder? backoff eğrisine bağlı) ve backoff'un bir işe
+   yaraması için RTT kestirimi gerekir, ki bu taşımada henüz yok;
+   (b) *kapatmak yerine istemciye haber vermek* — haber verecek yol yok,
+   ERROR'un kendisi kontrol bandı frame'idir ve deliğin arkasına
+   kuyruklanır; RAW bir bildirim ise message-table dışı yeni bir opcode
+   ve onu anlayan bir istemci ister (ölü bir oturumu biraz daha kibar
+   yapmak için protokol değişikliği).
+
+   **Bellek sınırı.** Per-frame give-up kalkınca kuyruğu 250 ms'lik saat
+   sınırlamıyor; açıkça sınırlandı: yön ve oturum başına 256 frame.
+   Kontrol frame'leri küçüktür (onlarca bayt), yani gerçekçi tavan birkaç
+   KB; mutlak tavan (her frame tam datagram bütçesinde) ~380 KB ve ona
+   yalnızca ACK'leri ZATEN durmuş, yani ölüm penceresine girmiş bir
+   oturum ulaşabilir.
+
+   **İstemci yarısı aynalandı** (tek frame terk etme yok, aynı eşik, aynı
+   bellek sınırı); `is_established` `false`'a döner — UDP'de EOF olmadığı
+   için bir çağıranın alabildiği TEK "oturum bitti" sinyali budur.
+   `UdpClientStats::gave_up` adını korudu ve artık bant öldüğünde kuyrukta
+   kalanı sayıyor (loadgen `RESULT` satırı değişmedi).
+
+   **Testler:** bellek kolu `gsb-net`'te (el sıkışıp sonra hiç ACK'lemeyen
+   peer; milisaniyeler) ve duvar-saati kolu uçtan uca `gsb-server`'da
+   (`tests/udp_rel_liveness.rs`: ACK'lemeyi bırakan iki peer; registry
+   ikisinin de olağan close'unu görüyor ve park edilmeyen satırı
+   bırakıyor). Mutasyonlar: duvar-saati kolunu, bellek kolunu ya da
+   actor'e haber vermeyi kapatmak — üçü de birer testi düşürdü.
+
+   Writer'ın güvenilir-bant yarısı **ÇOCUK** modüle taşındı
+   (`writer/reliable.rs`), iki dosya da 200-250 hedefinin içinde.
+
+2. **`8c74d8b` — El sıkışma cookie'si artık son kullanma tarihli
+   (madde B).**
+
+   **Bulgu (kodda doğrulandı):** `cookie.rs`, `compute(&self, nonce,
+   peer)` yalnız key, istemci nonce'u ve peer adresini karıştırıyordu.
+   Zaman terimi YOK, rotasyon YOK: telden yakalanan bir proof proses
+   ömrü boyunca geçerli kalıyor, yani anti-spoofing el sıkışması aynı
+   görünen adresten süresiz tekrar oynatılabiliyordu.
+
+   **Düzeltme:** `F`'ye dördüncü terim — bind'dan bu yana geçen
+   `COOKIE_SLOT` (10 sn) periyodunun tamsayı sayacı olan bir **zaman
+   dilimi**, doğrulama anında monotonik bir `Instant`'tan hesaplanır.
+   Sunucu challenge'ı güncel dilim için üretir, proof'u güncel **ya da
+   bir önceki** dilim için kabul eder.
+
+   **Bilinçli olarak DEĞİŞMEYENLER:** (a) *tel* — hâlâ
+   `3 HELLO [u64 LE nonce][u64 LE cookie]`, her yönde 18 bayt; slot
+   gönderilmez (sunucunun kendi iki hesabı aynı saatten okur) ve
+   cookie'den tek bit çalınmaz; (b) *statelessness* — el-sıkışma öncesi
+   tablo yok, timer görevi yok, paylaşılan rotasyon durumu yok, kilit
+   yok; demux tek-beklenen-kaynak özdeşliğini korur, rotasyonun maliyeti
+   el sıkışma başına iki tamsayı bölmesi; (c) *key* — hâlâ entropi
+   türevli, hâlâ bind'da BİR KEZ çekiliyor, hâlâ "entropi ya da başlama".
+   Slot PUBLIC bir sayaçtır ve tam da public olduğu için key'le birlikte
+   katlanır. Ayrım artık isimlerde de yaşıyor: `cookie_key_*` testleri
+   SIRRI, `cookie_slot_*` / `cookie_proof_*` / `cookie_clock_*` testleri
+   SON KULLANMA'yı kilitler; `cookie_key_is_not_derived_from_the_wall_
+   clock` tek karakter değişmeden duruyor.
+
+   **Aralık ve açık kalan pencere.** Proof, üretildiği dilimden sonraki
+   dilimin sonuna kadar yaşar: pencere **10-20 sn**. İki yönden
+   boyutlandı — *altında*, kırmaması gereken el sıkışma: proof,
+   challenge alındıktan bir RTT + istemci zamanlayıcı gecikmesi sonra
+   üretilir (kötü hatta ~300 ms, telsizi uykudan kalkan telefonda birkaç
+   saniye), 10 sn bunun 3-30 katıdır ve meşru bir el sıkışma rotasyona
+   yenilmez; yenilse bile istemcinin retry'si taze challenge alır (sunucu
+   bunda idempotent). *Üstünde*, bıraktığı maruziyet: 10-20 sn, herhangi
+   bir gerçekçi yakala→tekrar-oynat hattının çevrim süresinden kısadır.
+   **Sınırı geçen el sıkışma:** challenge dilim N'de üretilip proof dilim
+   N+1'de geldiğinde doğrulama önce N+1'i, sonra N'i dener ve KABUL eder
+   — önceki-dilim toleransının tek varlık sebebi budur. N-2 ve öncesi
+   reddedilir (`bad_cookie` sayılır, cevap verilmez).
+
+   **Elenen alternatifler:** (a) *zaman damgasını cookie bitlerine
+   gömmek* — 64 bitin 16'sını kaba üretim zamanına ayırıp tek dilim
+   doğrulamak; aynı politikayı ifade eder ama cookie'nin dayandığı tek
+   şeyi, sahte üretilemez değerin genişliğini, 64'ten 48 bite indirir;
+   (b) *üretilen cookie'leri bir kümede tutmak* — tam tek-kullanımlık
+   semantik, ama stateless el sıkışmanın var olma sebebi olan
+   "doğrulanmamış peer başına tahsis yok" kuralını çiğner (saldırganın
+   sahte challenge istekleri tabloyu boyutlandırır); (c) *key'i
+   döndürmek* — gözlemlenebilir davranış aynı, ama sabitin yerine mutable
+   bir sır koyar (aynı anda iki key yaşar, ikisi de demux görevinden
+   yazılır, `bind`'ın entropi garantisi her çalışma-zamanı çekilişi için
+   de geçerli olmak zorunda kalır). Slot terimi aynı son-kullanma'yı
+   key'i DEĞİŞMEZ bırakarak sağlar.
+
+   **Testler:** slot `F`'nin terimidir; süresi geçmiş dilimin proof'u
+   reddedilir; bir rotasyonu geçen proof kabul edilir (ve tolerans dilim
+   0'da sarmalanmaz); başka bir peer'ın proof'u her dilimde reddedilir;
+   saat periyot başına bir dilim ilerler. Artı aynı süre-geçti/tolerans
+   çifti demux'un gerçek `handle_hello`'sundan geçirilerek. Mutasyonlar:
+   slotu `F`'den düşürmek, önceki-dilim toleransını kaldırmak, ya da
+   geçmiş bütün dilimleri kabul etmek — üçü de birer testi düşürdü.
+
+3. **Bu doküman commit'i — statü beyanı ve doküman çürüğü
+   (maddeler C + D).**
+
+   `udp/mod.rs`'in "Status: experimental" paragrafı yeniden yazıldı:
+   kapanan iki boşluk adıyla anılıyor, ama **etiket kalıyor** —
+   mezuniyet ürün kararı. Kalan iş yeni bir "What is still open"
+   başlığında, her madde koda karşı DOĞRULANARAK listelendi:
+
+   - **congestion control / pacing yok** — `udp/` altında token bucket,
+     pacer ya da pencere yok; sunucu pps'sini sınırlayan tek şey odanın
+     tick + snapshot bütçesi (doğrulandı: sıfır eşleşme);
+   - **sabit RTO, RTT kestirimi yok** — `RETRANSIT_RTO` derleme zamanı
+     50 ms ve hiç geri çekilmiyor; hiçbir yerde RTT örneği alınmıyor
+     (doğrulandı: sabit, writer ve client tarafından olduğu gibi
+     kullanılıyor). Liveness eşiğinde backoff şeklinin elenmesinin sebebi
+     de bu;
+   - **NAT rebinding oturumu bitiriyor** — `Demux::sessions` 4-tuple ile
+     anahtarlı, `handle_hello` bilinen adres için erken dönüyor; rebind =
+     yeni adres = yeni el sıkışma + yeni `ConnectionId` (doğrulandı);
+   - **`SO_RCVBUF` ayarı yok** — tek soket her oturumu taşıyor, çekirdek
+     alım kuyruğu patlamada ilk ve tek tampon ve sistem varsayılanında;
+     `tokio::net::UdpSocket` (1.53.1) setter sunmuyor, raw fd gerekir
+     (doğrulandı: koddaki tek iz `bind`'daki not);
+   - **kripto katmanı ve parçalama yok** — ikisi de v1 kapsam DIŞI
+     (bekleyen değil): cookie tek başına bir güvenlik sınırı değil, bütçe
+     üstü datagram bölünmüyor, atılıp sayılıyor.
+
+   **Doküman çürüğü (D).** `docs/ROADMAP.md:78` "Test sayısı: bugün
+   itibarıyla **314**" diyordu; main'deki gerçek sayı **319**'du (teknik
+   borç turu beş test ekledi, bu satırı güncellemedi — README doğruydu).
+   Satır bu turun sonundaki **327**'ye çekildi ve tarihsel zincire
+   314 → 319 eklendi. Aynı taramada ikinci bir çürük yakalandı:
+   `loadgen/churn.rs` gömülü-boşluk maddesi P3'te hâlâ `[ ]` işaretliydi,
+   oysa teknik borç turu (`4465c47`) onu kapatmıştı — kodda doğrulandı
+   (dosyada 38 boşlukluk koşu kalmadı), madde `[x]`'e çekildi. ROADMAP'in
+   rUDP give-up ertelemesi de artık erteleme değil: bu tura işaret
+   ediyor. README/HANDOFF sayıları 327'ye, README'nin taşıma satırı iki
+   yeni davranışa (cookie rotasyonu, REL bandının oturum-ölümcül ölümü)
+   güncellendi.
+
+### Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **327 passed / 0 failed / 1 ignored**
+  (gsb-lint doctest)
+- `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
+  ve aynısının `--transport udp` varyantı: ikisinde de `left=50`,
+  `errors=0`, panik yok (ham satırlar aşağıda).
+
+TCP (`50 --duration 3`):
+
+```text
+RESULT mode=in-proc visibility=all shards=1 max_snap_bytes=1400 clients=50 connected=50 joined=50 left=50 snap_total=4100 snap_per_client_p50=82.0 tick_hz_med=30.00 client_in_bps=556983 client_out_bps=3867 out_bps_per_conn=10977 moves=850 errors=0 steps=90 server_hz=30.02 step_p50_us=130 step_p50_fine_us=24 step_p90_fine_us=48 step_max_us=192 step_over_budget_pct=0.0 dropped=0 late_max_us=127 peak_payload_b=402 snap_overflows=0 records_per_tick=0.0 overlap_x=0.00 server_in_bps=2534 server_out_bps=548833 peak_conns=50 metrics_dropped=0 profile=ring offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=tcp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=800 ack_processed_max=16 ack_lag_max_ms=34 fulls=4100 private_fulls=0 deltas=0 gap_drops=0 view_size=2500 still_frac=0.9 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_to=0 req_late=0 req_pending=0 churn_cycles=0 resumed=0 fresh_joins=0 room_resumes=0 resume_rejected_stale=0 detach_expired_ai=0 detach_expired_despawn=0
+```
+
+rUDP (`50 --duration 3 --transport udp`) — (A)'nın en olası regresyon
+yüzeyi; istemci tarafı sayaçlar temiz (`retrans_out=0 gave_up=0`), yani
+kayıpsız loopback'te yeni ölüm eşiği hiç tetiklenmiyor:
+
+```text
+RESULT mode=in-proc visibility=all shards=1 max_snap_bytes=1400 clients=50 connected=50 joined=50 left=50 snap_total=4100 snap_per_client_p50=82.0 tick_hz_med=30.00 client_in_bps=556683 client_out_bps=3068 out_bps_per_conn=11028 moves=850 errors=0 steps=90 server_hz=30.01 step_p50_us=130 step_p50_fine_us=32 step_p90_fine_us=72 step_max_us=203 step_over_budget_pct=0.0 dropped=0 late_max_us=15 peak_payload_b=402 snap_overflows=0 records_per_tick=0.0 overlap_x=0.00 server_in_bps=2501 server_out_bps=551400 peak_conns=50 metrics_dropped=0 profile=ring offset=0 procs=1 server_pid=0 client_pids=0 affinity=none server_cpu_s=0.0 clients_cpu_s=0.0 join_rejected=0 cap_rejected=0 budget_rejected=0 actions_dropped=0 actions_dropped_top= transport=udp retrans_out=0 dup_in=0 oob_dropped=0 gave_up=0 acks=800 ack_processed_max=16 ack_lag_max_ms=34 fulls=4100 private_fulls=0 deltas=0 gap_drops=0 view_size=2500 still_frac=0.9 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_to=0 req_late=0 req_pending=0 churn_cycles=0 resumed=0 fresh_joins=0 room_resumes=0 resume_rejected_stale=0 detach_expired_ai=0 detach_expired_despawn=0
+```
+
 ## Kapatılanlar (teknik borç turu — ölü metrik, yarı-ölü bağlantı, post-auth girdi)
 
 Kaynak: doğrulanmış üç borç (a-c) + bir kozmetik (d). Her madde **önce
