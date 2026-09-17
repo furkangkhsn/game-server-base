@@ -55,9 +55,14 @@ mimarisine sahip bir Rust oyun sunucusu temeli.
 ## Hızlı başlangıç
 
 Gereksinimler: Rust **1.95.0** (`rust-toolchain.toml` ile sabit; MSRV de
-bu) ve sistemde `protoc` (`prost-build` çağırır; Debian/Ubuntu:
-`protobuf-compiler`). CI: `.github/workflows/ci.yml` (fmt · clippy
-`-D warnings` · test).
+bu) — **başkası yok**. Sistemde `protoc` kurulu olmak zorunda değil:
+proto build script'leri (`gsb-protocol`, `gsb-game`)
+`protoc-bin-vendored`'ın gömülü ikilisini `prost-build`'e açıkça verir
+(`Config::protoc_executable`), bu da `PROTOC`/`PATH` aramasının önüne
+geçer. Gömülü ikilinin bulunmadığı egzotik bir hedefte build script bir
+`cargo:warning` basıp eski davranışa (`PROTOC`, sonra `PATH`) düşer;
+orada sistem `protoc`'u gerekir. CI: `.github/workflows/ci.yml` (fmt ·
+clippy `-D warnings` · test).
 
 ```sh
 cargo test --workspace          # 294 test: framing, lint, ticker/oda tick'i, RPC (tek oda + shard — rpc_shard süiti), bilet/kontrol düzlemi, READ adaleti (döner imleç), supervision (panik eden oda/shard), tablo budama (epoch/tombstone TTL, metrik emekliliği), reconnect (detach/resume/bot devri, PlayerId sürekliliği), trait birleşimi (GameLogic + sharded keepalive + shard-RPC), güvenlik (TLS taşıması, auth rate-limit, pre-auth cap'ler), çoklu-listener (aynı haritada karışık transport: TCP/TLS/rUDP/QUIC/WS), border-delta exchange, ops yüzeyi (/metrics, /healthz, admin API), görünürlük (delta AOI, PVS, takım sisi, sharded), kare-bağımsızlık, kimlik değişmezi, yayınlanabilirlik, e2e, metrik akışı, yük dumanı

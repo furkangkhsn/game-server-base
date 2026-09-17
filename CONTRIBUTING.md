@@ -8,9 +8,13 @@ Bu dosya `docs/HANDOFF.md` ve `README.md`'deki bağlayıcı disiplinin kısa
 - Toolchain `rust-toolchain.toml` ile sabitlenmiştir (Rust **1.95.0**,
   `rustfmt` + `clippy`); MSRV (`Cargo.toml` → `rust-version`) aynı
   sürümdür — `bevy_ecs 0.19.1` 1.95.0 ister.
-- Build sistemde `protoc` ister: `prost-build` onu PATH'ten (ya da
-  `PROTOC` ortam değişkeninden) çağırır (Debian/Ubuntu:
-  `apt-get install protobuf-compiler`).
+- Build **sistemde `protoc` istemez**: `gsb-protocol` ve `gsb-game` build
+  script'leri `protoc_bin_vendored::protoc_bin_path()`'i
+  `Config::protoc_executable` ile `prost-build`'e verir; açık yol olduğu
+  için `PROTOC`/`PATH` aramasının önüne geçer (yanlış bir `PROTOC` build'i
+  kıramaz). Gömülü ikilinin bulunmadığı bir hedefte `cargo:warning`
+  basılır ve `PROTOC` → `PATH` aramasına düşülür; orada sistem `protoc`'u
+  gerekir.
 - Yeni bağımlılık indirilecekse cargo komutlarının başına
   `CARGO_HOME=$PWD/.cargo` ekle (HOME önbelleği salt-okunur olabilir;
   `.cargo` gitignore'dadır).

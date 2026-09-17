@@ -732,6 +732,7 @@ dependencies = [
  "gsb-protocol",
  "prost",
  "prost-build",
+ "protoc-bin-vendored",
  "tokio",
  "tracing",
 ]
