@@ -40,7 +40,10 @@ pub struct RoomConfig {
     /// room pulls in one tick. This is a *pull* bound, not a drop bound —
     /// when it is exhausted the room simply pulls no more this tick and the
     /// remainder waits in the senders' bounded channels (the room never
-    /// drops an action; see [`RoomCounters::dropped_actions`]). It bounds
+    /// drops an action — which is why there is no room-scope drop counter;
+    /// the architecture's only input-loss point is a connection's own full
+    /// action channel, counted there as
+    /// [`crate::metrics::ConnSample::actions_dropped`]). It bounds
     /// the tick's ingest cost, which is what the 10k-connection load wall
     /// measured (the room's serial step path, not its memory).
     pub max_pending_actions: usize,

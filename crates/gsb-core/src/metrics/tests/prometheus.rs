@@ -184,3 +184,83 @@ fn initial_stale_placeholder_is_past_any_threshold() {
         report.emitted_at.elapsed()
     );
 }
+
+/// Input-drop honesty lock (the retired room-scope counter).
+///
+/// The room's READ phase is a bounded *pull* that defers, so the room
+/// never drops an action: a room-scope input-drop counter could only ever
+/// export 0, and an operator scraping a permanently-zero
+/// `gsb_room_dropped_actions_total` would read it as "no input is ever
+/// dropped". The surface must therefore advertise the signal ONLY where it
+/// is really produced — the connection actor's `try_send`, aggregated at
+/// the net scope with per-connection attribution.
+///
+/// This locks both halves: the room scope offers no input-drop family in
+/// either exported surface, and the net-scope family carries the real
+/// number end to end.
+#[test]
+fn input_drops_are_exported_only_at_the_net_scope() {
+    let mut acc = MetricAccumulator::default();
+    let t = Instant::now();
+    acc.apply(MetricsEvent::Room(room_sample(RoomId(1), t, 10)));
+    // Two connections drop their own input on full action channels.
+    for (conn, dropped) in [(7u64, 5u64), (9, 2)] {
+        acc.apply(MetricsEvent::Conn(ConnSample {
+            conn: ConnectionId(conn),
+            bytes_in: 0,
+            bytes_out: 0,
+            frames_in: 0,
+            frames_out: 0,
+            actions_dropped: dropped,
+            metrics_dropped: 0,
+            violations: 0,
+            last: false,
+        }));
+    }
+    let report = acc.report(t);
+    let prom = report.render_prometheus();
+    let lines = report.render();
+
+    // -- The real signal survives, with attribution.
+    assert!(
+        prom.contains("gsb_net_actions_dropped_total 7\n"),
+        "the net scope exports the summed real drops: {prom}"
+    );
+    let net = lines
+        .iter()
+        .find(|l| l.contains("scope=net") && l.contains("actions_dropped="))
+        .expect("the log line carries the net-scope drop total");
+    assert!(
+        net.contains("actions_dropped=7"),
+        "the log line agrees with the exposition: {net}"
+    );
+    assert_eq!(
+        report.actions_dropped_top,
+        vec![(ConnectionId(7), 5), (ConnectionId(9), 2)]
+    );
+
+    // -- The room scope advertises no input-drop family. `gsb_room_dropped_*`
+    //    still legitimately covers OUTBOUND batch drops (`dropped_total` /
+    //    `dropped_s`), so the assertion is on the retired name and on any
+    //    room-labeled line that mentions dropped actions at all.
+    assert!(
+        !prom.contains("dropped_actions"),
+        "no exported family may advertise a room-scope input-drop counter: {prom}"
+    );
+    assert!(
+        prom.contains("gsb_room_dropped_total{room=\"r1\"}"),
+        "sanity: the outbound batch-drop family is untouched"
+    );
+    let room = lines
+        .iter()
+        .find(|l| l.contains("scope=room"))
+        .expect("a room line was rendered");
+    assert!(
+        !room.contains("dropped_actions="),
+        "the room log line must not carry an input-drop key: {room}"
+    );
+    assert!(
+        room.contains("dropped="),
+        "sanity: the room line still reports outbound batch drops: {room}"
+    );
+}

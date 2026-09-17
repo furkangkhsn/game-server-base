@@ -22,7 +22,7 @@
 //! option is the one used: **bounded + `try_send`** — a plain synchronous
 //! call that *drops* on overflow instead of parking. This is the project's
 //! existing pattern (`OutSink::flush` → `dropped_frames`; the per-connection
-//! action channel → `dropped_actions`).
+//! action channel → `ConnSample::actions_dropped`).
 //!
 //! A drop here is *harmless*: every sample's counters are cumulative, so a
 //! lost sample carries nothing the next sample does not already carry —
@@ -63,7 +63,12 @@
 //!   body duration min/mean/max + a budget-relative log-2 histogram (the
 //!   tick budget is the overflow boundary — see [`HIST_EDGES`]);
 //! - *drops*: batches dropped at the fan-out (`dropped_frames`, slow
-//!   client) and input actions dropped on overflow (`dropped_actions`);
+//!   client). Input drops are NOT a room-scope counter: the room's READ
+//!   phase is a bounded pull that defers rather than drops, so the only
+//!   input-loss point is a connection's own full action channel — counted
+//!   at the net scope (`ConnSample::actions_dropped` →
+//!   `NetReport::actions_dropped`) and attributed to its sender by
+//!   `MetricReport::actions_dropped_top`;
 //! - *broadcast*: snapshots encoded, encoded bytes, largest payload seen,
 //!   keep-alive re-sends, payloads shipped to clients (bytes/frames),
 //!   private frames;

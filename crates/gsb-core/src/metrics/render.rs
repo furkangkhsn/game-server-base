@@ -30,7 +30,7 @@ impl MetricReport {
                  step_hist=[{}] \
                  late_min_us={} late_mean_us={:.1} late_max_us={} \
                  lagged_events={} lagged_ticks={} dropped={} dropped_s={:.1} \
-                 dropped_actions={} keepalive_resends={} snapshots={} \
+                 keepalive_resends={} snapshots={} \
                  snap_bytes_s={:.0} snap_bytes_max={} snap_overflows={} \
                  snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
@@ -61,7 +61,6 @@ impl MetricReport {
                 r.lagged_ticks,
                 r.dropped,
                 r.dropped_s,
-                r.dropped_actions,
                 r.keepalive_resends,
                 r.snapshots,
                 r.snap_bytes_s,

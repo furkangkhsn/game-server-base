@@ -81,7 +81,6 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.lagged_events += r.lagged_events;
         acc.lagged_ticks += r.lagged_ticks;
         acc.dropped += r.dropped;
-        acc.dropped_actions += r.dropped_actions;
         acc.keepalive_resends += r.keepalive_resends;
         acc.snapshots += r.snapshots;
         acc.snap_bytes_max = acc.snap_bytes_max.max(r.snap_bytes_max);

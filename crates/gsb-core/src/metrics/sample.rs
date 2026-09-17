@@ -50,8 +50,6 @@ pub struct RoomSample {
     /// Outbound batches dropped at the fan-out (out channel full: slow
     /// client), cumulative.
     pub dropped_frames: u64,
-    /// Input actions dropped on READ overflow, cumulative.
-    pub dropped_actions: u64,
     /// Keep-alive re-sends (unchanged groups re-sending their cached
     /// snapshot), cumulative.
     pub keepalive_resends: u64,

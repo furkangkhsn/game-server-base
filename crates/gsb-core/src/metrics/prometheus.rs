@@ -368,13 +368,6 @@ impl MetricReport {
         );
         counters(
             &mut out,
-            "gsb_room_dropped_actions_total",
-            "Input actions dropped on READ-channel overflow, cumulative.",
-            rooms,
-            |r| r.dropped_actions,
-        );
-        counters(
-            &mut out,
             "gsb_room_keepalive_resends_total",
             "Keep-alive re-sends of unchanged groups, cumulative.",
             rooms,

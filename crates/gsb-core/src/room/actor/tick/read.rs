@@ -58,10 +58,15 @@ where
         //    left is shared around, not taken by the same fixed prefix
         //    every tick.
         //
-        //    Consequence: the room never drops an action (`dropped_actions`
-        //    stays 0). The architecture's only input-loss point is a
-        //    connection's own full action channel — self-inflicted and
-        //    attributed (see `conn::ConnectionActor`).
+        //    Consequence: the room never drops an action. That is why
+        //    there is NO room-scope input-drop counter: it could only ever
+        //    report 0, and an operator reading a permanently-zero
+        //    `gsb_room_dropped_actions_total` would conclude no input is
+        //    ever lost. The architecture's only input-loss point is a
+        //    connection's own full action channel — self-inflicted, counted
+        //    at the drop site (`conn::ConnectionActor`) and exported at the
+        //    net scope as `gsb_net_actions_dropped_total` with
+        //    per-connection attribution.
         let per_conn = self.config.max_actions_per_conn_per_tick;
         let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();

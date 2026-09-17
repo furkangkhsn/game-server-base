@@ -114,14 +114,6 @@ pub(crate) struct RoomCounters {
     pub(crate) late_sum_us: u64,
     /// Outbound batches dropped at the fan-out (slow client), cumulative.
     pub(crate) dropped_frames: u64,
-    /// Input actions dropped by the room, cumulative. **Always 0 since the
-    /// READ phase became a bounded pull** (per-connection per-tick budget +
-    /// room-level pull budget — see the phase's comment): overflow stays in
-    /// the senders' bounded channels and the only input-loss point is a
-    /// connection's own full action channel, counted *there*, attributed to
-    /// its sender (see `ConnSample::actions_dropped`). The counter is kept
-    /// for the report's format compatibility.
-    pub(crate) dropped_actions: u64,
     /// Keep-alive re-sends, cumulative.
     pub(crate) keepalive_resends: u64,
     /// Group snapshots encoded, cumulative (+ encoded bytes, max payload).
@@ -213,7 +205,6 @@ impl Default for RoomCounters {
             late_max_us: 0,
             late_sum_us: 0,
             dropped_frames: 0,
-            dropped_actions: 0,
             keepalive_resends: 0,
             snapshots: 0,
             snap_bytes: 0,

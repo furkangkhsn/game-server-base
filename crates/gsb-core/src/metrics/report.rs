@@ -44,7 +44,6 @@ pub struct RoomReport {
     /// Batches dropped (cumulative) and drop rate (Δ/s).
     pub dropped: u64,
     pub dropped_s: f64,
-    pub dropped_actions: u64,
     pub keepalive_resends: u64,
     /// Snapshots encoded (cumulative) and encoded-byte rate (Δ/s).
     pub snapshots: u64,

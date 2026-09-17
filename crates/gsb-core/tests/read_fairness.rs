@@ -295,23 +295,29 @@ async fn sustained_overload_reaches_every_connection_within_n_ticks() {
 
     // Exactly N paced steps: each tick is awaited to completion (a fresh
     // sample), so the rotation guarantee's bound is measured exactly.
+    let mut last_barrier = None;
     for _ in 0..N_CONNS {
         h.tick();
-        let _barrier = h.step_done().await;
+        last_barrier = Some(h.step_done().await);
     }
 
-    // Structural no-drop preserved under overload: work was DEFERRED, not
-    // dropped — read from the freshest sample (the drain reaches past any
-    // backlog to the last completed step).
-    let mut dropped_actions = 0u64;
-    while let Ok(ev) = h.metrics_rx.try_recv() {
-        if let MetricsEvent::Room(s) = ev {
-            dropped_actions = dropped_actions.max(s.dropped_actions);
-        }
-    }
-    assert_eq!(
-        dropped_actions, 0,
-        "the room never drops an action, not under overload"
+    // The overload never stalls the room: the flooder's excess sits in its
+    // own bounded channel and the room keeps stepping, one completed step
+    // per paced tick (the barrier sample is the step body's last act, so
+    // its `steps` counts steps that actually finished).
+    //
+    // There is deliberately no room-scope input-drop counter to assert on:
+    // the READ phase is a bounded pull that DEFERS, so such a counter could
+    // only ever read 0 — the architecture's single input-loss point is a
+    // connection's own full action channel, counted at the drop site and
+    // exported at the net scope. The deferral itself is what the ledger
+    // assertions below prove.
+    let barrier = last_barrier.expect("the paced loop ran at least one step");
+    assert!(
+        barrier.steps >= N_CONNS,
+        "the room stopped stepping under the flood: {} steps after \
+         {N_CONNS} paced ticks",
+        barrier.steps
     );
 
     // The ledger rides out through the match-result seam at shutdown.

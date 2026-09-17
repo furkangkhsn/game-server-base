@@ -27,7 +27,7 @@ use gsb_core::metrics::{
 ///     [u32; FINE_HIST_BINS] step_fine_hist
 ///     u64 late_min_us  f64 late_mean_us  u64 late_max_us
 ///     u64 lagged_events  u64 lagged_ticks  u64 dropped  f64 dropped_s
-///     u64 dropped_actions  u64 keepalive_resends  u64 snapshots
+///     u64 keepalive_resends  u64 snapshots
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u32 groups  u32 members  u32 max_group  u64 joins  u64 leaves
@@ -66,7 +66,13 @@ use gsb_core::metrics::{
 /// _no_handler / _logic / _conn / _room` — one per terminal reject
 /// decision in the room's tick body; the buckets answer distinct
 /// operational questions, which the cap-sizing measurement needs).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D35;
+/// GSM6 = the GSM5 layout with the room-scope `dropped_actions` counter
+/// REMOVED. It was never written by either the room or the shard actor
+/// (the READ phase is a bounded pull that defers), so it only ever
+/// carried 0; the real input-loss signal is the net-scope
+/// `actions_dropped` total already in this frame, counted at the
+/// connection actor's `try_send` and attributed by the `n_top` tail.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D36;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -111,7 +117,6 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.lagged_ticks);
         w.u64(room.dropped);
         w.f64(room.dropped_s);
-        w.u64(room.dropped_actions);
         w.u64(room.keepalive_resends);
         w.u64(room.snapshots);
         w.f64(room.snap_bytes_s);
@@ -262,7 +267,6 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             lagged_ticks: r.u64()?,
             dropped: r.u64()?,
             dropped_s: r.f64()?,
-            dropped_actions: r.u64()?,
             keepalive_resends: r.u64()?,
             snapshots: r.u64()?,
             snap_bytes_s: r.f64()?,

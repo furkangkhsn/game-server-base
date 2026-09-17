@@ -39,7 +39,6 @@ where
             late_max_us: self.m.late_max_us,
             late_sum_us: self.m.late_sum_us,
             dropped_frames: self.m.dropped_frames,
-            dropped_actions: self.m.dropped_actions,
             keepalive_resends: self.m.keepalive_resends,
             snapshots: self.m.snapshots,
             snap_bytes: self.m.snap_bytes,
