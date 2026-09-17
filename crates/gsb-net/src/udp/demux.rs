@@ -47,6 +47,11 @@ pub(super) struct Demux {
     sock: Arc<UdpSocket>,
     end_tx: Sender<Endpoint>,
     cookie: CookieKey,
+    /// The cookie's time term (see [`CookieClock`]): started at bind, read
+    /// at every handshake. No timer task, no shared state — the slot is
+    /// recomputed from the clock on each use, which is the only shape a
+    /// single-awaited actor can have.
+    clock: CookieClock,
     inbox_cap: usize,
     outbox_cap: usize,
     max_datagram: usize,
@@ -145,6 +150,7 @@ pub(super) async fn demux(
         sock,
         end_tx,
         cookie,
+        clock: CookieClock::new(),
         inbox_cap,
         outbox_cap,
         max_datagram,

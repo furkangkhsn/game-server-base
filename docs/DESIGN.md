@@ -608,8 +608,9 @@ yaşar; (4) peer adresi endpoint'ten aktöre taşınır (ihlal kapatma
 sinyali; §14.5).
 
 **El sıkışma (stateless cookie):** `istemci→HELLO{nonce,0}` /
-`sunucu→HELLO{nonce,F(nonce,peer,key)}` / `istemci→HELLO{nonce,cookie}`
-→ oturum kurulur. `F` = splitmix64 katlanması. **Cookie key** proses başına 16 bayttır;
+`sunucu→HELLO{nonce,F(nonce,peer,key,slot)}` /
+`istemci→HELLO{nonce,cookie}` → oturum kurulur. `F` = splitmix64
+katlanması. **Cookie key** proses başına 16 bayttır;
 iki kaynaktan biriyle kurulur: (1) konfigürasyonda `cookie_key`
 verilmişse o (operatör denetimi — deploy'da sabit anahtar isteyenler
 için), (2) verilmediyse **OS entropisinden** (`getrandom`) 16 bayt.
@@ -620,7 +621,59 @@ tahmin edilebilir bir değer asla kullanılmaz). v1'de kriptografik katman
 edilemez, dolayısıyla sahte-proof koruması key'in *gibi görünen*
 (tahmin edilemez) olmasına dayanır. Çift yönlü mesajlar
 aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
-üretilemez. NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
+üretilemez.
+
+**Cookie rotasyonu (yakalanan proof'un son kullanma tarihi):** key tek
+başına yetmiyordu. `F` yalnız (key, nonce, peer)'in fonksiyonu olduğu
+sürece telden yakalanan bir proof **proses ömrü boyunca** geçerli
+kalır — aynı görünen adresten istediği zaman tekrar oynatan biri
+oturumu yeniden kurar; el sıkışmanın bütün işi olan "bu dönüş yolunun
+sahibi olduğunu ŞİMDİ kanıtla" cümlesinden "şimdi" düşer. Bu yüzden
+`F`'nin dördüncü terimi bir **zaman dilimi** (slot): bind'dan bu yana
+geçen `COOKIE_SLOT` (10 sn) periyodunun tamsayı sayacı. Sunucu
+challenge'ı GÜNCEL dilim için üretir, proof'u güncel **ya da bir
+önceki** dilim için kabul eder.
+
+- **Tel değişmedi:** hâlâ `3 HELLO [u64 nonce][u64 cookie]`, her iki
+  yönde 18 bayt. Slot gönderilmez — sunucunun kendi iki hesabı da onu
+  aynı saatten okur, istemcinin varlığından haberi olması gerekmez.
+- **El sıkışma stateless kalır:** slot doğrulama anında bir `Instant`'tan
+  yeniden hesaplanır. El-sıkışma öncesi tablo yok, timer görevi yok,
+  paylaşılan rotasyon durumu yok, kilitlenecek bir şey yok.
+- **Sır hâlâ key:** entropi türevli, asla saat türevli değil. Slot
+  *public* bir sayaçtır ve tam da public olduğu için key'le birlikte
+  katlanır. İkisi karıştırılmamalı: KEY = tahmin edilemezlik,
+  SLOT = son kullanma.
+
+**Aralık: 10 sn, yani 10-20 sn'lik tekrar-oynatma penceresi.** Proof,
+üretildiği dilimden SONRAKİ dilimin sonuna kadar kullanılabilir; pencere
+proof'un dilim içindeki yerine göre bir ile iki periyot arasıdır. İki
+gerçek sayıya göre boyutlandı: (a) *altında*, kırmamak zorunda olduğu el
+sıkışma — proof, challenge alındıktan bir RTT sonra üretilir, artı
+istemci zamanlayıcısının eklediği gecikme (kötü bir hatta ~300 ms,
+telsizi uykudan kalkan bir telefonda birkaç saniye); 10 sn bunun 3-30
+katı, dolayısıyla meşru bir el sıkışma rotasyona asla yenilmez (yenilse
+bile istemcinin kendi retry'si taze challenge alır — sunucu bunda
+idempotenttir); (b) *üstünde*, açık bıraktığı maruziyet — 10-20 sn,
+herhangi bir gerçekçi yakala→tekrar-oynat hattının çevrim süresinden
+kısa, ve rotasyonun çalışma zamanı maliyeti el sıkışma başına iki
+tamsayı bölmesi, sıfır durum.
+
+**Elenen alternatifler:** (1) *zaman damgasını cookie bitlerine gömmek*
+— 64 bitin 16'sını kaba bir üretim zamanına ayırıp tek dilim doğrulamak;
+aynı politikayı ifade eder ama cookie'nin dayandığı tek şeyi, sahte
+üretilemez değerin genişliğini, 64 bitten 48'e indirir; (2) *üretilen
+cookie'leri bir kümede tutmak* — tam tek-kullanımlık semantik, ama
+stateless el sıkışmanın var olma sebebi olan "doğrulanmamış peer başına
+tahsis yok" kuralını çiğner (saldırganın sahte challenge istekleri
+tabloyu boyutlandırır); (3) *key'i döndürmek* — gözlemlenebilir davranış
+aynı, ama sabitin yerine mutable bir sır koyar (aynı anda iki key yaşar,
+ikisi de demux görevinden yazılır ve `bind`'ın "entropi ya da başlama"
+garantisi artık çalışma zamanındaki her yeni çekiliş için de geçerli
+olmak zorundadır). Slot terimi aynı son-kullanma'yı key'i değişmez
+bırakarak sağlar — bir kez, bind'da çekilir, testin kilitlediği gibi.
+
+NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
 yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
 kadar yaşar — sınır: `idle_timeout`).
 

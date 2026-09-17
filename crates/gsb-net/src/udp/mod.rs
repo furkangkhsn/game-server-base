@@ -25,16 +25,16 @@
 //!
 //! ```text
 //! client → HELLO { nonce, cookie: 0 }        (challenge request)
-//! server → HELLO { nonce, cookie: F(nonce, peer, key) }
+//! server → HELLO { nonce, cookie: F(nonce, peer, key, slot) }
 //! client → HELLO { nonce, cookie }           (proof)
 //! server: cookie verified → session established (channels pre-created)
 //! ```
 //!
 //! `F` is a per-process-keyed mix (splitmix64 folds of `nonce`, the peer
-//! address, and the key) — not a KDF: v1 has no crypto layer (out of
-//! scope), and the property needed is "unforgeable over the network
-//! without the key". The challenge response is well-formed only for a
-//! well-formed challenge (same 18-byte size), so forged-traffic
+//! address, the key and the time slot) — not a KDF: v1 has no crypto
+//! layer (out of scope), and the property needed is "unforgeable over the
+//! network without the key". The challenge response is well-formed only
+//! for a well-formed challenge (same 18-byte size), so forged-traffic
 //! amplification stays at ratio ≤ 1, and a forged proof needs the
 //! cookie, which needs the key.
 //!
@@ -52,7 +52,72 @@
 //! rather than weaken it, and a startup warning is not a security
 //! posture (see [`CookieKey`]).
 //!
-//! `UDP_HELLO`/`UDP_ACK` opcodes live in the base band but are
+//! ## Cookie rotation (why a captured proof expires)
+//!
+//! The key alone is not enough. With `F` a function of (key, nonce,
+//! peer) only, a proof observed once on the wire stays valid **for the
+//! life of the process**: anyone who can replay it from the same apparent
+//! address re-establishes a session whenever they like, and the
+//! handshake's whole job — "prove you own this return path, now" — loses
+//! the "now".
+//!
+//! So `F` takes a fourth term: a **time slot** ([`CookieClock`]), an
+//! integer counter of [`COOKIE_SLOT`] periods since bind. The server
+//! mints the challenge for the current slot and accepts a proof for the
+//! current slot **or the previous one**. Nothing else changes:
+//!
+//! - **the wire is untouched** — still `3 HELLO [u64 nonce][u64 cookie]`,
+//!   18 bytes each way. The slot is not sent: both sides of the server's
+//!   own computation read it from the same clock, and the client never
+//!   needs to know it exists;
+//! - **the handshake stays stateless** — the slot is recomputed from an
+//!   `Instant` at verification time. No pre-handshake table, no timer
+//!   task, no shared rotation state, nothing to lock. The demux keeps its
+//!   single awaited source;
+//! - **the key stays the secret** — entropy-derived, never clock-derived
+//!   (see [`CookieKey`]). The slot is a public counter and is folded WITH
+//!   the key precisely because it is public. Keep the two apart: the KEY
+//!   is unpredictability, the SLOT is expiry. The test names say which is
+//!   which.
+//!
+//! **The interval: 10 s, so a replay window of 10-20 s.** A proof is
+//! usable until the end of the slot after the one it was issued in, so
+//! the window is one to two periods depending on where in its slot the
+//! proof was minted. Sized against the two real numbers:
+//!
+//! - *below*, the handshake it must not break. A proof is produced one
+//!   RTT after the challenge is received, plus whatever the client's
+//!   scheduler adds — call it 300 ms on a bad link, a couple of seconds
+//!   for a phone whose radio was asleep. 10 s of grace is 3-30× that, so
+//!   a legitimate handshake never loses a race with the rotation (and if
+//!   one somehow did, the client's own retry mints a fresh challenge —
+//!   the server is idempotent in it);
+//! - *above*, the exposure it leaves. 10-20 s is short enough that a
+//!   captured proof is worthless by the time any realistic capture →
+//!   replay pipeline turns it around, and long enough that the rotation
+//!   costs exactly nothing at runtime (two integer divisions per
+//!   handshake, no state).
+//!
+//! **Rejected — a timestamp inside the cookie's bits.** Spending, say,
+//! 16 of the cookie's 64 bits on a coarse issue time would let the server
+//! verify a single slot with an explicit age check. It buys nothing here
+//! (the two-slot acceptance already expresses the same policy) and costs
+//! the thing the cookie actually rests on: an unforgeable value narrowed
+//! from 64 bits to 48.
+//!
+//! **Rejected — a remembered set of issued cookies.** Exact
+//! single-use semantics, and exactly the per-unverified-peer allocation
+//! the stateless handshake exists to avoid. An attacker's forged
+//! challenge requests would size the table.
+//!
+//! **Rejected — rotating the KEY on an interval instead.** Same
+//! observable behaviour, but it puts a mutable secret where a constant
+//! used to be (two keys live at once, both written from the demux task,
+//! and `bind`'s "entropy or refuse to start" guarantee now has to hold
+//! for every re-draw at runtime). The slot term achieves the expiry with
+//! the key still immutable — drawn once, at bind, exactly as tested.
+//!
+//! //! `UDP_HELLO`/`UDP_ACK` opcodes live in the base band but are
 //! **transport markers**: they travel in their own datagram kinds and are
 //! handled below the actor layer (the connection actor never sees them;
 //! they are not message-table messages).
@@ -236,7 +301,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 
 // Re-homed internals: each lives in the module that owns its concern,
 // and is named here so every child module reaches it by one path.
-use cookie::CookieKey;
+use cookie::{CookieClock, CookieKey};
 use demux::{UdpSession, demux};
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;
@@ -250,6 +315,12 @@ pub const KIND_RAW: u8 = 0;
 pub const KIND_REL: u8 = 1;
 pub const KIND_ACK: u8 = 2;
 pub const KIND_HELLO: u8 = 3;
+
+/// The rotation period of the handshake cookie's TIME TERM (see
+/// [`CookieClock`], and the module docs, "Cookie rotation"). A proof is
+/// accepted for its own slot and the previous one, so the replay window
+/// a captured proof leaves open is between one and two of these.
+const COOKIE_SLOT: Duration = Duration::from_secs(10);
 
 /// The retransmit interval of the reliable control band.
 const RETRANSIT_RTO: Duration = Duration::from_millis(50);

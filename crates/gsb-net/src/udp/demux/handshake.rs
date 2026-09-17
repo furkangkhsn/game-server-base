@@ -21,17 +21,21 @@ impl super::Demux {
         if self.sessions.contains_key(&peer) {
             return;
         }
-        let expected = self.cookie.compute(nonce, peer);
+        // The cookie's time term, read from the clock HERE (not stored,
+        // not ticked by anyone): the challenge is minted for the current
+        // slot, and a proof is accepted for the current slot or the
+        // previous one. That is what makes a captured proof expire.
+        let slot = self.clock.slot();
         if cookie == 0 {
             // Challenge request: answer with the proof (stateless — no
             // state allocated before the proof; the response is the same
             // size as the request, so forged traffic cannot amplify).
             self.challenges += 1;
-            let hello = encode_hello(nonce, expected);
+            let hello = encode_hello(nonce, self.cookie.compute(nonce, peer, slot));
             if let Err(e) = self.sock.try_send_to(&hello, peer) {
                 debug!(%peer, %e, "rUDP: challenge send failed");
             }
-        } else if cookie == expected {
+        } else if self.cookie.verify(nonce, peer, cookie, slot) {
             // Proof verified: establish the session. The mailboxes are
             // created HERE (not in the accept loop) so that every
             // post-INIT2 datagram — the client's AUTH included — is
@@ -92,7 +96,8 @@ impl super::Demux {
                 }
             }
         } else {
-            // Forged or stale proof: drop, count, answer nothing.
+            // Forged, or issued more than one rotation ago (a replay of a
+            // captured proof): drop, count, answer nothing.
             self.bad_cookie += 1;
         }
     }

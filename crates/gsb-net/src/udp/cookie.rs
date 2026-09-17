@@ -1,6 +1,7 @@
 //! The stateless handshake's cookie key (see the module docs, "The key").
 
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use crate::udp::*;
 
@@ -52,8 +53,14 @@ impl CookieKey {
         Ok(Self::from_bytes(b))
     }
 
-    /// F(nonce, peer, key) — the stateless cookie.
-    pub(super) fn compute(&self, nonce: u64, peer: SocketAddr) -> u64 {
+    /// F(nonce, peer, key, slot) — the stateless cookie.
+    ///
+    /// `slot` is the TIME TERM (see [`CookieClock`]): it is what makes a
+    /// captured proof expire. It is a *public* counter — anyone can read
+    /// a clock — so it is folded WITH the key rather than mixed in on its
+    /// own; the secrecy of the whole function still rests entirely on the
+    /// entropy-derived key, exactly as before.
+    pub(super) fn compute(&self, nonce: u64, peer: SocketAddr, slot: u64) -> u64 {
         let (ip, port) = match peer {
             SocketAddr::V4(v4) => (v4.ip().to_bits() as u64, v4.port()),
             SocketAddr::V6(v6) => {
@@ -70,8 +77,84 @@ impl CookieKey {
         sm64(&mut t);
         x ^= t;
         x ^= (port as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut s = self.1.rotate_left(17) ^ slot.wrapping_mul(0xD6E8_FEB8_6659_FD93);
+        sm64(&mut s);
+        x ^= s;
         sm64(&mut x);
         x
+    }
+
+    /// Verify a proof against the CURRENT slot and the previous one.
+    ///
+    /// The previous slot is the in-flight grace: a challenge issued at
+    /// the last millisecond of slot N is answered during slot N+1, and
+    /// rejecting it would fail an honest handshake for no gain. Two slots
+    /// is also the exact size of the replay window this leaves open —
+    /// between one and two [`COOKIE_SLOT`] periods, depending on where in
+    /// its slot the proof was issued.
+    ///
+    /// Not a constant-time comparison, deliberately: the cookie is not a
+    /// secret the server holds and compares against an attacker-supplied
+    /// guess over many attempts — it is derived per (nonce, peer, slot),
+    /// so there is no fixed value for a timing oracle to converge on, and
+    /// v1 declares no crypto layer (module docs, "Handshake").
+    pub(super) fn verify(&self, nonce: u64, peer: SocketAddr, cookie: u64, slot: u64) -> bool {
+        if cookie == self.compute(nonce, peer, slot) {
+            return true;
+        }
+        slot.checked_sub(1)
+            .is_some_and(|prev| cookie == self.compute(nonce, peer, prev))
+    }
+}
+
+/// The handshake's **time term**: a monotonic slot counter, derived from
+/// the clock at verification time.
+///
+/// Keep the distinction from [`CookieKey`] in view — they answer two
+/// different questions and must not be conflated:
+///
+/// - the **key** is the SECRET. It must be unpredictable, so it is drawn
+///   from OS entropy and never from a clock (see [`CookieKey`]);
+/// - the **slot** is the EXPIRY. It must be *shared* between the server's
+///   two computations of `F` (issue and verify), so it is derived from
+///   the clock and is deliberately public — an attacker who knows the
+///   slot still cannot produce a cookie without the key.
+///
+/// The base is an [`Instant`] captured at bind time, so the counter is
+/// monotonic and immune to wall-clock jumps (NTP steps, DST, an operator
+/// setting the date). Rotation needs **no timer task and no shared
+/// state**: every call recomputes the slot from the elapsed time, which
+/// is the only way a single-awaited actor could have it at all.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CookieClock {
+    base: Instant,
+}
+
+impl CookieClock {
+    /// Start the counter now (bind time).
+    pub(super) fn new() -> Self {
+        Self::started_at(Instant::now())
+    }
+
+    /// Start the counter at an explicit base — the seam the rotation
+    /// tests drive (a base in the past *is* a server that has been up
+    /// that long).
+    pub(super) fn started_at(base: Instant) -> Self {
+        Self { base }
+    }
+
+    /// The current slot.
+    pub(super) fn slot(&self) -> u64 {
+        self.slot_at(Instant::now())
+    }
+
+    /// The slot `now` falls in: elapsed time since the base, floored to
+    /// [`COOKIE_SLOT`]. Saturating, so an instant before the base (which
+    /// cannot happen with a monotonic clock, but costs nothing to state)
+    /// is slot 0.
+    pub(super) fn slot_at(&self, now: Instant) -> u64 {
+        let elapsed = now.saturating_duration_since(self.base).as_millis();
+        (elapsed / COOKIE_SLOT.as_millis()) as u64
     }
 }
 

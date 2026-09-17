@@ -11,6 +11,7 @@
 | TCP üstüne TLS (rustls) | Tur A | ✅ Uygulandı |
 | Auth rate-limit + pre-auth amplifikasyon sınırı | Tur B | ✅ Uygulandı |
 | Pre-auth oturum tahsis sınırı | Tur B | ✅ Uygulandı |
+| rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 
