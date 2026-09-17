@@ -3,7 +3,6 @@
 //! [`super::UdpClient`]'s private state directly.
 
 use std::time::Instant;
-use crate::udp::*;
 use super::*;
 
 impl UdpClient {
