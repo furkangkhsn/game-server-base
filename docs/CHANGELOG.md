@@ -5,6 +5,133 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (protokol sertleştirme turu)
+
+Kaynak: dış incelemenin protokol katmanında bulduğu üç zayıflık (a-c) +
+sürüm sorusu (d) + ROADMAP P3'te bekleyen iki küçük borç (e-f). Kapsam
+**sahiplik, isimlendirme ve denetlenebilirlik**; davranış değişmedi ve
+**tel değişmedi** (aşağıda kanıt). Test sayısı 294 → **314** (+20; hiçbir
+test silinmedi, gevşetilmedi, `#[ignore]` eklenmedi).
+
+### Kommitler
+
+1. **`5e21a09` — Gömülü protoc build script'lere bağlandı.**
+   `gsb-protocol` `protoc-bin-vendored`'ı build-dep olarak bildiriyor ve
+   panik mesajı "using vendored protoc" diyordu, ama hiçbir yere
+   bağlanmamıştı: `PROTOC=/nonexistent/protoc` ile build "Could not find
+   `protoc`" ile düşüyordu (yayın paketi turunun açık bıraktığı bulgu).
+   `gsb-game` crate'i bağımlılığı bildirmiyordu bile. İkisi de artık
+   `protoc_bin_vendored::protoc_bin_path()`'i
+   `Config::protoc_executable` ile veriyor — AÇIK yol olduğu için
+   `PROTOC`/`PATH` aramasının önüne geçer, yani yanlış bir `PROTOC`
+   build'i kıramaz. Gömülü ikilinin olmadığı hedefte `cargo:warning` +
+   eski davranışa düşüş.
+   **Elenen alternatif:** bağımlılığı ve mesajı kaldırıp sistem
+   `protoc`'unu şart koşmak — daha küçük diff, ama klonlanmak için var
+   olan bir base'de gereksiz bir ön koşul; bağımlılık zaten lockfile'da
+   ve bildirilen niyet açıkça gömülü yoldu.
+   **Davranış kilidi CI'ın kendisi:** iki iş de artık
+   `protobuf-compiler` KURMUYOR, yani bağlamanın bozulması CI'ı build
+   script'te düşürür — hiçbir in-process testin yapamayacağı bir kapı.
+   Doğrulama: `PROTOC=/nonexistent/protoc` ile build → Finished; `PROTOC`
+   unset + PATH yalnızca cargo/rustc/cc'ye indirgenmiş (protoc hiçbir
+   yerde) → Finished.
+2. **`5f37c85` — "Reconnect uygulanmadı" iddiası düzeltildi.** README
+   `docs/RECONNECT.md`'yi "**uygulanmadı**" diye listeliyordu ve
+   dokümanın kendi durum satırı "TASARIM (uygulanmadı)" diyordu. İkisi de
+   bayattı: ROADMAP P1 `[x]`, `crates/gsb-core/tests/reconnect.rs` 16
+   test + `loadgen_smoke.rs::loadgen_churn_smoke` (§14.5 churn). İki
+   satır da düzeltildi ve kilidi tutan testleri adıyla anıyor.
+3. **`3bab835` — RPC yanıt zarfı base protokole taşındı.** Zarfın istek
+   yarısı (`RpcRequest`) base, yanıt yarısı (`RpcResponse`) oyun
+   protokolündeydi; oysa iki yarının da kuralı core'un
+   (`gsb_core::rpc`: id uzayı, duplike/timeout, tam-bir-cevap
+   değişmezi). İkinci bir oyun crate'i yanıt zarfını yeniden icat etmek
+   zorunda kalırdı. `RpcResponse` artık `base.proto`'da; `game.proto`
+   `import "base.proto"` ediyor ve `Private.responses` alanı
+   `gsb.base.RpcResponse` tipinde. `gsb_core::rpc` bir
+   `From<&RpcReply> for base::RpcResponse` kazandı: alan eşlemesi ve
+   proto3'ün dayattığı `u16 → u32` genişletmesi core'da, oyun başına
+   değil. Build: `extern_path(".gsb.base", "::gsb_protocol::base")` —
+   `gsb.base` tipleri ikinci kez ÜRETİLMİYOR; `base.proto`'nun dizini
+   `links = "gsb-base-proto"` üzerinden `DEP_GSB_BASE_PROTO_DIR` olarak
+   taşınıyor. Karar ve dört elenen alternatif: `docs/DESIGN.md` §5.2.
+4. **`00de2b3` — Gerçekten kaldırılmış tek alan numarası rezerve
+   edildi.** İki `.proto`'nun tüm geçmişi tarandı. `base.proto`'dan
+   **hiç alan kaldırılmamış** (her commit yalnız eklemiş) — rezerve
+   edilecek bir şey yok, ve spekülatif aralık yazılmadı; denetimin
+   sonucu dosyanın başına not edildi. `game.proto`'da tek kaldırma:
+   `EntityState.version = 4` (2ac28d2), rolünü devralan
+   `EntityRecord`'da artık `reserved 4;` + `reserved "version";`. Kapı
+   derleme zamanında (protoc: `Field "version" uses reserved number 4`).
+   Opcode uzayında `reserved` yok, bu yüzden emekli 1001/1002
+   `gsb_game::op::RETIRED`'da ve bir test onları `MessageTable`'ın
+   dışında tutuyor. Kural: `docs/DESIGN.md` §5.3.
+5. **`f878ad7` — ERROR kodları yorum tablosundan üretilen enum'a.**
+   `gsb.base.ErrorCode`; `Error.code` alanının tipi `uint32` →
+   `ErrorCode`. Rust eşlemeleri (`ProtoError::wire_code`,
+   `CoreError::wire_code`) **tüketici match** — yeni bir varyant testi
+   değil DERLEMEYİ kırar (mutasyonla doğrulandı). `CoreError`'ın eskiden
+   `_ => 4`'e düşen on varyantı tek tek sayılıyor: davranış aynı,
+   gözden kaçma imkânı yok. `base::Error::new` sunucu tarafında hata
+   üretmenin tek yolu. Loadgen'in iki istemci yolu ve örnek istemci de
+   artık üretilen enum'la eşleşiyor (elle kopyalanan sayılar gitti).
+   Sıfır değer ve ileri uyumluluk kuralı: §5.4.
+6. **`9fe6beb` — Protokol sürümü AUTH yoluna eklendi.**
+   `Auth.protocol_version` (alan 3), `gsb_protocol::PROTOCOL_VERSION`
+   (= 1), `ERROR_CODE_PROTOCOL_VERSION = 13`. Ek round trip / opcode /
+   frame / durum yok ve **yeni koruma makinesi yok** (uyumsuz eş zaten
+   pre-auth frame bütçesi ve idle timeout ile sınırlı). `0` = sürümsüz,
+   kabul. Karar, gerekçe ve altı elenen alternatif: §5.5 — koda GİRMEDEN
+   ÖNCE yazıldı (doküman geleneği).
+
+### Turun beklenmedik bulguları
+
+- **Sürüm sorusu (d) teorik değildi.** Bu depoda tel iki kez kırıldı ve
+  ikisinde de sunucunun karşıdakinin hangi wire'ı konuştuğunu anlama
+  yolu yoktu: `0888441` (`sfixed32` → `sint32`, aynı alan numarası
+  FARKLI wire type) ve `2ac28d2` (opcode 1003 `ENTITY_STATE`'ten
+  `WORLD_SNAPSHOT`'a). Bu, ertelememe kararının ana gerekçesi oldu;
+  ikincisi ise alanın **geciktikçe değersizleşmesi** (bugün "0
+  gönderen" tek bir sınıf: bu commit'ten önceki istemciler).
+- **`the_code_space_is_contiguous_from_zero` testi kendi turunda
+  çalıştı.** (c)'de yazılan "kod uzayı bitişik" testi, (d)'de kod 13
+  eklenince ÖNCE kırıldı ve sabitlenmiş listeyi genişletmeye zorladı —
+  tam olarak tasarlandığı davranış.
+- **`2ac28d2` opcode 1003'ü zaten geri dönüştürmüştü.** (b)'nin
+  engellemeye çalıştığı şeyin bu depodaki gerçek örneği; geri alınamaz,
+  bu yüzden `game.proto` başına "tarih, emsal değil" notu olarak yazıldı.
+
+### Tel değişmediğinin kanıtı
+
+- `.proto` diff'inde **hiçbir mevcut alan numarası değişmedi**
+  (`git diff 5e6531a..HEAD -- crates/*/proto`): `RpcResponse`'un 1..5'i
+  `game.proto`'dan silinip `base.proto`'ya aynen eklendi,
+  `Private.responses = 3` yalnız tip adıyla nitelendi, `Error.code = 1`
+  yalnız tip değiştirdi (varint → varint), `Auth.protocol_version = 3`
+  tamamen yeni.
+- `crates/gsb-game/tests/wire_contract.rs` — beklenen baytlar taşımadan
+  ÖNCEKİ ağaçtan alındı, taşımadan sonra aynen geçiyor. Mutasyon:
+  `bytes payload = 5` → `= 6` yapıldığında iki bayt testi de kırıldı.
+- `error_code::the_code_field_encodes_exactly_as_the_old_uint32_did` —
+  0..=13 için tek tek `[0x08, n]` (0 hiç kodlanmıyor, eski `uint32` gibi).
+- `protocol_version::the_new_field_costs_nothing_on_the_wire_when_unset`
+  — set edilmemiş alan hiç bayt üretmiyor (`[0x0A,0x03,'n','e','o']`).
+- Gerçek soket üzerinden çerçeve çözen e2e/TLS/multi-listener süitleri
+  `code == 8/9/10` iddialarıyla dokunulmadan geçiyor.
+
+### Doğrulama
+
+- `cargo fmt --all --check`: temiz (exit 0).
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0,
+  0 uyarı.
+- `cargo test --workspace`: **314 passed, 0 failed, 1 ignored**
+  (gsb-lint doctest, önceden de öyle).
+- loadgen 50 istemci × 3 sn (release): `left=50 errors=0 dropped=0
+  tick_hz_med=30.00 server_hz=30.01 peak_conns=50`, panik yok.
+- Yukarıdakiler crate'lerin `lib.rs`'lerine satır eklenip önbellek
+  gerçekten kirletilerek koşuldu, sonra `git checkout` ile geri alındı.
+
 ## Kapatılanlar (yayın paketi turu)
 
 Kaynak: `docs/HANDOFF.md` iş sırası madde 1. Kapsam: 207 dosyalık ağacın

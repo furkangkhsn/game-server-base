@@ -75,8 +75,8 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **294** (294/294 yeşil; tarihsel
-ilerleme 58 → ... → 279 için `docs/CHANGELOG.md` başlığına bakınız).
+Test sayısı: bugün itibarıyla **314** (314/314 yeşil; tarihsel
+ilerleme 58 → ... → 294 için `docs/CHANGELOG.md` başlığına bakınız).
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -415,15 +415,45 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   yüksek yoğunluklu odalar için farklılaşma.
 - [ ] **`gsb-client` yardımcı crate'i** — `read_frame` mantığı e2e testi
   ile örnek istemcide birebir kopyalanmış; tek yerde yaşatmak.
-- [ ] **`protoc-bin-vendored` bağlı değil** — `gsb-protocol` build-dep
-  olarak bildiriyor, `build.rs` panik mesajı "using vendored protoc"
-  diyor, ama build sistem `protoc`'unu çağırıyor
-  (`PROTOC=/nonexistent/protoc` ile düşüyor; CI `protobuf-compiler`
-  kuruyor). Ya bağla ya bağımlılığı ve mesajı kaldır (yayın paketi
-  turu bulgusu).
+- [x] **`protoc-bin-vendored` bağlı değil** — **KAPANDI** (protokol
+  sertleştirme turu, `5e21a09`). `gsb-protocol` VE `gsb-game` build
+  script'leri gömülü ikiliyi `Config::protoc_executable` ile veriyor;
+  açık yol olduğu için `PROTOC`/`PATH` aramasının önüne geçiyor. CI iki
+  işte de `protobuf-compiler` kurmuyor — bağlamanın bozulması CI'ı
+  düşürür, davranış kilidi bu.
 - [ ] **`loadgen/churn.rs` log string'inde gömülü boşluk blokları** —
   "stale … resume … same … connection" metni iki yerde 38'er boşluk
   taşıyor (yayın paketi turu bulgusu; rustfmt literal'e dokunmaz).
+  Protokol sertleştirme turu bu bloğun HEMEN yanındaki `match e.code`
+  kolunu enum'a çevirdi ama literal'e bilinçli olarak dokunmadı (kapsam
+  dışı; bu madde açık kalıyor).
+
+## Protokol sözleşmesi (protokol sertleştirme turu sonrası)
+
+Kapanmış maddeler — yeniden açılmadan önce `docs/DESIGN.md` §5.2-5.5
+okunmalı:
+
+- [x] **RPC zarfının iki yarısı da base'de** (`3bab835`, DESIGN §5.2).
+  `RpcResponse` `base.proto`'ya taşındı, `game.proto` import ediyor;
+  `extern_path` ile tip ikinci kez üretilmiyor. Mesaj sahipliği kuralı
+  §5.2'de: sözleşmeyi core belirliyorsa mesaj base'dedir.
+- [x] **`reserved` disiplini** (`00de2b3`, DESIGN §5.3). `base.proto`'dan
+  hiç alan kaldırılmamış (denetlendi, not edildi); `game.proto`'daki tek
+  kaldırma (`EntityState.version = 4`) `EntityRecord`'da rezerve;
+  emekli opcode'lar `gsb_game::op::RETIRED` + test.
+- [x] **ERROR kodları üretilen enum** (`f878ad7`, DESIGN §5.4).
+  `gsb.base.ErrorCode`; iki Rust eşlemesi de tüketici match, yeni varyant
+  derlemeyi kırar. İleri uyumluluk kuralı (bilinmeyen kod → OTHER, 0 asla
+  gönderilmez) belgelendi ve testlendi.
+- [x] **Protokol sürümü** (`9fe6beb`, DESIGN §5.5). `Auth.
+  protocol_version` + `PROTOCOL_VERSION` + ERROR 13. Politika TAM
+  EŞİTLİK; `0` = sürümsüz, kabul.
+  **Tetikleyici (açık bırakılan tek parça):** ikinci bir protokol sürümü
+  gerçekten yayınlandığında min/max ARALIK politikası (ya da özellik
+  pazarlığı) tartışılacak. Bugün tek bir doğru değer var, aralık
+  tetikleyicisiz esneklik olurdu. `PROTOCOL_VERSION` yalnız ESKİ bir eşi
+  YANLIŞ AYRIŞTIRACAK bir değişiklikte artar (alan wire type'ı, opcode
+  geri dönüşümü, çerçeveleme); toplamalı değişiklikte ARTMAZ.
 
 ## Bilinçli olarak yapılmayanlar (referans)
 

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-294 test yeşil, clippy 0 uyarı, ağaç temiz. Teknik borç listesi fiilen
+314 test yeşil, clippy 0 uyarı, ağaç temiz. Teknik borç listesi fiilen
 boş — görevin, sözleşmeli turları devam ettirmek ve disiplini korumak.
 
 **Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
@@ -68,22 +68,35 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 1. ~~**Yayın paketi**~~ — **KAPANDI** (CHANGELOG "yayın paketi turu"):
    MIT `LICENSE`, MSRV = sabit toolchain = 1.95.0 (alt sınır
    `bevy_ecs 0.19.1`), `.github/workflows/ci.yml` (fmt check · clippy
-   `-D warnings` · test; build sistem `protoc` ister), `CONTRIBUTING.md`.
+   `-D warnings` · test), `CONTRIBUTING.md`. (Build artık sistem
+   `protoc`'u İSTEMİYOR — protokol sertleştirme turu gömülü protoc'u
+   bağladı, CI'daki `protobuf-compiler` adımları kaldırıldı.)
    `cargo fmt --all --check` temiz — artık CI kapısı; yeni kod
    formatlanmış gelmeli.
-2. **WS uyum kapısı** — el yazımı RFC 6455 artık `[[listeners]]`'tan
+2. ~~**Protokol sertleştirme**~~ — **KAPANDI** (CHANGELOG "protokol
+   sertleştirme turu"): RPC yanıt zarfı base'e taşındı (DESIGN §5.2),
+   `reserved` disiplini kuruldu (§5.3), ERROR kodları üretilen enum
+   oldu (§5.4) ve protokol sürümü AUTH'a eklendi (§5.5). Tel
+   değişmedi. Yeni kod yazarken: `ERROR` üretmenin tek yolu
+   `base::Error::new(ErrorCode::…, msg)`; yeni bir `CoreError`/
+   `ProtoError` varyantı eklemek `wire_code` eşlemesini DERLEMEZ hale
+   getirir (kasıtlı); `.proto`'dan alan silersen aynı commit'te
+   numarasını VE adını `reserved` et, commit'i gerekçe olarak an.
+   Açık kalan tek parça sürüm ARALIĞI politikası — tetikleyicisi
+   ROADMAP'te ("Protokol sözleşmesi" bölümü).
+3. **WS uyum kapısı** — el yazımı RFC 6455 artık `[[listeners]]`'tan
    erişilebilir, yani servis yolunda. Bilinen açık: fragmentasyon
    sırasında araya giren veri çerçevesi (§5.4) reddedilmiyor
    (`ws/reader/dispatch.rs`, OP_BIN kolu `frag_opcode`'a bakmıyor).
    Tek guard'lık düzeltme + CI'da Autobahn `wstest` kapısı.
-3. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
+4. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon
    kuralları dahil).
-4. **Cross-seam etkileşim paketi** — ROADMAP maddesindeki 3 parça:
+5. **Cross-seam etkileşim paketi** — ROADMAP maddesindeki 3 parça:
    borrowed-view gameplay erişimi · `ShardMsg::RemoteEffect`
    primitifi · histeresizli crystallization tetikleyicisi.
-5. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
+6. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
    ortak DeltaSnapshotCodec adoptasyonu (all/team/pvs), Ipc/NetLink,
    QUIC rehome.
 
@@ -96,6 +109,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 294 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 314 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
