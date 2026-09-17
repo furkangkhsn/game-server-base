@@ -31,10 +31,7 @@ pub struct TlsPki {
 pub fn mint_tls_pki(tag: &str) -> TlsPki {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "gsb-server-tls-{tag}-{}-{n}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("gsb-server-tls-{tag}-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     // The mini-CA (self-signed; unconstrained for a test root).

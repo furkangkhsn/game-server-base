@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc, watch};
 
-use crate::ticker::TickInfo;
 use crate::metrics::*;
-
+use crate::ticker::TickInfo;
 
 /// Where reports go. All sinks are message-passing: the collector never
 /// shares its accumulator.

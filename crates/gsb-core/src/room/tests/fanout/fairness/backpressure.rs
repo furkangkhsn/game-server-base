@@ -35,7 +35,7 @@ async fn full_outbound_channel_drops_then_recovers() {
         control_rx,
         1,
         null_metrics_tx(),
-            None,
+        None,
     );
     let handle = tokio::spawn(actor.run());
     let t0 = Instant::now();
@@ -53,8 +53,7 @@ async fn full_outbound_channel_drops_then_recovers() {
 
     // One connection, an outbound channel of capacity 64.
     let (out_tx, mut rx) = mpsc::channel::<FrameBatch>(64);
-    let (reply_tx, reply_rx) =
-        oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+    let (reply_tx, reply_rx) = oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
     control
         .send(RoomControl::Join {
             conn: ConnectionId(1),
@@ -90,8 +89,7 @@ async fn full_outbound_channel_drops_then_recovers() {
         .map(|b| {
             assert_eq!(b[0].op, 0x7020, "snapshot opcode");
             u64::from_le_bytes(
-                b[0]
-                    .payload
+                b[0].payload
                     .get(0..8)
                     .expect("8-byte payload")
                     .try_into()
@@ -200,34 +198,41 @@ async fn keepalive_above_tick_warns_at_construction_and_clamps_to_every_step() {
 
     // Direct construction with keepalive_hz = 60 under a 30 Hz room —
     // the misconfiguration the registry would have rejected.
-    let actor = tracing::subscriber::with_default(WarnCapture { tx: warn_tx.clone() }, || {
-        RoomActor::new(
-            RoomConfig {
-                id: RoomId(25),
-                keepalive_hz: 60.0,
-                ..Default::default()
-            },
-            (),
-            Box::new(GroupLogic {
-                player_entity: HashMap::new(),
-                next: 0,
-                dirty: std::collections::HashSet::new(),
-                step_no: 0,
-                steps: step_tx,
-            }),
-            tick_rx,
-            control_rx,
-            1,
-            null_metrics_tx(),
-            None,
-        )
-    });
+    let actor = tracing::subscriber::with_default(
+        WarnCapture {
+            tx: warn_tx.clone(),
+        },
+        || {
+            RoomActor::new(
+                RoomConfig {
+                    id: RoomId(25),
+                    keepalive_hz: 60.0,
+                    ..Default::default()
+                },
+                (),
+                Box::new(GroupLogic {
+                    player_entity: HashMap::new(),
+                    next: 0,
+                    dirty: std::collections::HashSet::new(),
+                    step_no: 0,
+                    steps: step_tx,
+                }),
+                tick_rx,
+                control_rx,
+                1,
+                null_metrics_tx(),
+                None,
+            )
+        },
+    );
     let handle = tokio::spawn(actor.run());
     let t0 = Instant::now();
 
     // The construction-time warn fired exactly once and names both
     // rates (synchronous: the warn! runs inside the constructor).
-    let w = warns.try_recv().expect("misconfigured construction must warn");
+    let w = warns
+        .try_recv()
+        .expect("misconfigured construction must warn");
     assert!(
         w.contains("keepalive_hz=60") && w.contains("tick_hz=30"),
         "warn must name both rates: {w}"
@@ -240,8 +245,7 @@ async fn keepalive_above_tick_warns_at_construction_and_clamps_to_every_step() {
     // Clamped behavior: the join's own emission, then EVERY step is a
     // keep-alive step (interval 1) re-sending the cached snapshot.
     let (out_tx, mut a_rx) = mpsc::channel::<FrameBatch>(64);
-    let (reply_tx, reply_rx) =
-        oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+    let (reply_tx, reply_rx) = oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
     control
         .send(RoomControl::Join {
             conn: ConnectionId(26),
@@ -292,28 +296,33 @@ async fn keepalive_above_tick_warns_at_construction_and_clamps_to_every_step() {
         let (_tick2, tick_rx2) = broadcast::channel(8);
         let (_control2, control_rx2) = channel(8);
         let (step2_tx, _step2_rx) = mpsc::channel::<u64>(8);
-        tracing::subscriber::with_default(WarnCapture { tx: warn_tx.clone() }, || {
-            let _actor2 = RoomActor::new(
-                RoomConfig {
-                    id: RoomId(27),
-                    keepalive_hz: keepalive,
-                    ..Default::default()
-                },
-                (),
-                Box::new(GroupLogic {
-                    player_entity: HashMap::new(),
-                    next: 0,
-                    dirty: std::collections::HashSet::new(),
-                    step_no: 0,
-                    steps: step2_tx,
-                }),
-                tick_rx2,
-                control_rx2,
-                1,
-                null_metrics_tx(),
-            None,
-            );
-        });
+        tracing::subscriber::with_default(
+            WarnCapture {
+                tx: warn_tx.clone(),
+            },
+            || {
+                let _actor2 = RoomActor::new(
+                    RoomConfig {
+                        id: RoomId(27),
+                        keepalive_hz: keepalive,
+                        ..Default::default()
+                    },
+                    (),
+                    Box::new(GroupLogic {
+                        player_entity: HashMap::new(),
+                        next: 0,
+                        dirty: std::collections::HashSet::new(),
+                        step_no: 0,
+                        steps: step2_tx,
+                    }),
+                    tick_rx2,
+                    control_rx2,
+                    1,
+                    null_metrics_tx(),
+                    None,
+                );
+            },
+        );
     }
     assert!(
         warns.try_recv().is_err(),

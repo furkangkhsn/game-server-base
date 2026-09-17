@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use gsb_core::conn::ConnIn;
-use gsb_protocol::op;
 use gsb_protocol::FrameBody;
+use gsb_protocol::op;
 use tracing::{debug, warn};
 
 use crate::udp::*;

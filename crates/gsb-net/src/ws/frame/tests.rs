@@ -2,8 +2,8 @@
 //! message carries exactly one length-prefixed game frame.
 
 use super::*;
-use gsb_protocol::FrameBody;
 use crate::ws::{OP_BIN, OP_PING};
+use gsb_protocol::FrameBody;
 
 #[test]
 fn server_frames_are_unmasked_with_correct_lengths() {

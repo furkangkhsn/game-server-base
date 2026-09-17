@@ -75,8 +75,7 @@ pub(crate) trait ShardLink<S, B>: Send {
     /// link refuses and hands the message BACK ([`LinkFull`]) — the
     /// caller's healing rules decide what that loss means. Never blocks,
     /// never awaits.
-    fn send(&mut self, msg: NeighborMsg<S, B>)
-    -> Result<(), LinkFull<NeighborMsg<S, B>>>;
+    fn send(&mut self, msg: NeighborMsg<S, B>) -> Result<(), LinkFull<NeighborMsg<S, B>>>;
 
     /// Take every queued inbound message, in send order (FIFO). The
     /// CONTROL phase drains through here; an empty queue yields an empty
@@ -144,10 +143,7 @@ impl<S: Send, B: Send> ShardLink<S, B> for InProcLink<S, B> {
         self.mode
     }
 
-    fn send(
-        &mut self,
-        msg: NeighborMsg<S, B>,
-    ) -> Result<(), LinkFull<NeighborMsg<S, B>>> {
+    fn send(&mut self, msg: NeighborMsg<S, B>) -> Result<(), LinkFull<NeighborMsg<S, B>>> {
         match &self.tx {
             Some(tx) => tx.try_send(msg).map_err(|e| match e {
                 mpsc::error::TrySendError::Full(msg) => LinkFull::Full { msg },

@@ -78,12 +78,8 @@ struct TlsListenerHandle {
 /// Open a PEM file with the path in the error message (a bare `NotFound`
 /// without the filename tells the operator nothing).
 fn open_pem(path: &str, what: &str) -> io::Result<BufReader<std::fs::File>> {
-    let file = std::fs::File::open(path).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("cannot open {what} file `{path}`: {e}"),
-        )
-    })?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot open {what} file `{path}`: {e}")))?;
     Ok(BufReader::new(file))
 }
 
@@ -116,7 +112,10 @@ fn load_server_config(cfg: &TlsTransportConfig) -> io::Result<rustls::ServerConf
         .map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("malformed private-key PEM in `tls_key` file `{}`: {e}", cfg.key_pem),
+                format!(
+                    "malformed private-key PEM in `tls_key` file `{}`: {e}",
+                    cfg.key_pem
+                ),
             )
         })?
         .ok_or_else(|| {
@@ -226,8 +225,7 @@ impl TlsListenerHandle {
                   idle_timeout: Option<Duration>| {
                 let reader = FrameReader::new(read_half, max_frame_bytes);
                 let writer = FrameWriter::new(write_half);
-                let (read, write) =
-                    spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
                 (Some(read), write)
             },
         )

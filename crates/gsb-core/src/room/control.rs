@@ -2,14 +2,13 @@
 //! to do, what the logic answers about a disconnect, and the per-tick
 //! context every logic hook receives.
 
-use std::fmt::Debug;
-use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
 use crate::channel::{FrameBatch, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use crate::room::*;
-
+use std::fmt::Debug;
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
 
 /// What a room's logic wants to happen to a disconnected player's entity
 /// (the detach policy — `docs/RECONNECT.md` §3: *transport death is a
@@ -26,7 +25,10 @@ pub enum Detach {
     /// (the ceiling that makes a harassed lock impossible to extend
     /// forever). What happens at the end: the player returns first
     /// (resume) or `to` runs.
-    Hold { grace: Option<Duration>, to: ExpireTo },
+    Hold {
+        grace: Option<Duration>,
+        to: ExpireTo,
+    },
 }
 
 /// Where a parked entity goes when its hold ends without a resume.

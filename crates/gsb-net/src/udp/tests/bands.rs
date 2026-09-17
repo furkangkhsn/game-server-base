@@ -32,11 +32,14 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         )])
         .await
         .unwrap();
-    let ok = tokio::time::timeout(Duration::from_secs(3), client.recv_frame(Duration::from_millis(200)))
-        .await
-        .expect("window")
-        .expect("recv")
-        .expect("the in-budget frame must arrive");
+    let ok = tokio::time::timeout(
+        Duration::from_secs(3),
+        client.recv_frame(Duration::from_millis(200)),
+    )
+    .await
+    .expect("window")
+    .expect("recv")
+    .expect("the in-budget frame must arrive");
     assert_eq!(ok.payload.len(), 25);
 
     // RAW band, 40-byte payload → 43-byte datagram: over the 40-byte
@@ -57,11 +60,14 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         )])
         .await
         .unwrap();
-    let ctl = tokio::time::timeout(Duration::from_secs(3), client.recv_frame(Duration::from_millis(1000)))
-        .await
-        .expect("window")
-        .expect("recv")
-        .expect("control must still be delivered");
+    let ctl = tokio::time::timeout(
+        Duration::from_secs(3),
+        client.recv_frame(Duration::from_millis(1000)),
+    )
+    .await
+    .expect("window")
+    .expect("recv")
+    .expect("control must still be delivered");
     assert_eq!(ctl.op, gsb_protocol::op::base::HEARTBEAT_ACK);
 
     // The oversized frame must NOT arrive (neither whole nor
@@ -73,7 +79,10 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
     .await
     .expect("window")
     .expect("recv");
-    assert!(next.is_none(), "the oversized frame must be dropped, not delivered");
+    assert!(
+        next.is_none(),
+        "the oversized frame must be dropped, not delivered"
+    );
 }
 
 /// Reliability, server side: a control frame the client never ACKs is
@@ -81,8 +90,7 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
 /// again with an identical payload).
 #[tokio::test]
 async fn server_retransmits_until_ack() {
-    let (_listener, addr, mut eps, _accept) =
-        bound_transport(UdpTransportConfig::default()).await;
+    let (_listener, addr, mut eps, _accept) = bound_transport(UdpTransportConfig::default()).await;
 
     // Raw client (full ACK control).
     let raw = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
@@ -90,9 +98,7 @@ async fn server_retransmits_until_ack() {
         .expect("bind");
     let mut buf = vec![0u8; 2048];
     let nonce = 0x0123_4567_89AB_CDEFu64;
-    raw.send_to(&encode_hello(nonce, 0), addr)
-        .await
-        .unwrap();
+    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
         .await
         .expect("challenge")
@@ -134,7 +140,10 @@ async fn server_retransmits_until_ack() {
         .expect("retransmit must arrive")
         .expect("recv");
     let second = buf[..n2].to_vec();
-    assert_eq!(first, second, "the retransmit is byte-identical (same seq, same payload)");
+    assert_eq!(
+        first, second,
+        "the retransmit is byte-identical (same seq, same payload)"
+    );
 }
 
 /// Idle teardown (item: no FIN in UDP — the previous turn's

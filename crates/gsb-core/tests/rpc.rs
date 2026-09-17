@@ -27,11 +27,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bytes::BufMut;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
-use gsb_core::room::{Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
-use gsb_core::rpc::RequestDecision;
 use gsb_core::metrics::{MetricsEvent, RoomSample};
+use gsb_core::room::{
+    Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx,
+};
+use gsb_core::rpc::RequestDecision;
 use gsb_core::ticker::TickInfo;
 use gsb_protocol::base;
 use prost::Message;
@@ -86,7 +88,14 @@ impl GameLogic<()> for RpcLogic {
 
     fn group_of(&self, _w: &(), _p: PlayerId) -> Self::GroupKey {}
 
-    fn snapshot(&mut self, _w: &mut (), _c: &TickCtx, _g: &(), _borrowed: &[gsb_core::shard::BorderRecord<()>], _o: &mut bytes::BytesMut) -> bool {
+    fn snapshot(
+        &mut self,
+        _w: &mut (),
+        _c: &TickCtx,
+        _g: &(),
+        _borrowed: &[gsb_core::shard::BorderRecord<()>],
+        _o: &mut bytes::BytesMut,
+    ) -> bool {
         false // no group snapshots: batches carry only private frames
     }
 
@@ -221,8 +230,7 @@ impl Harness {
 
     fn tick(&mut self) {
         self.next_tick += 1;
-        let at =
-            self.t0 + Duration::from_secs_f64(self.next_tick as f64 * (1.0 / 30.0));
+        let at = self.t0 + Duration::from_secs_f64(self.next_tick as f64 * (1.0 / 30.0));
         self.tick_tx
             .send(TickInfo {
                 tick: self.next_tick,
@@ -234,8 +242,9 @@ impl Harness {
     /// Join `conn`, keeping its action mailbox + out receiver.
     async fn join(&mut self, conn: ConnectionId) {
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply_tx, reply_rx) =
-            oneshot::channel::<Result<(gsb_core::EntityId, Mailbox<Action>), gsb_core::CoreError>>();
+        let (reply_tx, reply_rx) = oneshot::channel::<
+            Result<(gsb_core::EntityId, Mailbox<Action>), gsb_core::CoreError>,
+        >();
         self.control
             .send(RoomControl::Join {
                 conn,
@@ -475,13 +484,16 @@ async fn local_request_answered_same_tick_only_own_conn() {
     h.request(ConnectionId(1), 7, OP_LOCAL, &[]).await;
     h.tick();
 
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(7, true)]);
 
     // Conn 2 must NOT have received the reply: nothing private reached
     // it in this tick (the room ships a batch only when there is
     // content, so the leak check is "no private frame arrives").
-    h.assert_no_private(ConnectionId(2), Duration::from_millis(150)).await;
+    h.assert_no_private(ConnectionId(2), Duration::from_millis(150))
+        .await;
     h.shutdown().await;
 }
 
@@ -492,7 +504,9 @@ async fn local_reject_same_tick() {
     h.join(ConnectionId(1)).await;
     h.request(ConnectionId(1), 3, OP_REJECT, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(3, false)]);
     h.shutdown().await;
 }
@@ -517,13 +531,16 @@ async fn external_request_does_not_block_tick_answers_later_tick() {
     // the next tick) — the tick body never awaits the future.
     h.request(ConnectionId(2), 12, OP_LOCAL, &[]).await;
     h.tick();
-    let replies2 = h.private_replies(ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2 = h
+        .private_replies(ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2, vec![(12, true)]);
 
     // Conn 1 has no answer yet (still in flight, well before the
     // default 5 s deadline): nothing private reached it in the two
     // ticks above.
-    h.assert_no_private(ConnectionId(1), Duration::from_millis(150)).await;
+    h.assert_no_private(ConnectionId(1), Duration::from_millis(150))
+        .await;
 
     // (The resolver is dropped with the harness; the worker exits on
     // the request's timeout — the room's sweep would have answered it
@@ -551,7 +568,9 @@ async fn external_round_trip_later_tick() {
         .expect("resolver alive");
     // The report is reconciled on a later tick's CONTROL phase (the
     // read ticks while waiting).
-    let replies = h.wait_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(21, true)]);
     h.shutdown().await;
 }
@@ -572,7 +591,9 @@ async fn external_error_is_normal_rejection() {
         .expect("resolver alive");
     // The report is reconciled on a later tick (the read ticks while
     // waiting).
-    let replies = h.wait_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(31, false)]);
     h.shutdown().await;
 }
@@ -589,9 +610,12 @@ async fn external_immediate_still_later_tick() {
     // Same-tick answer is impossible: the completion channel is drained
     // at the START of a tick, and the worker was spawned at its end —
     // so nothing private reaches conn 1 in this window.
-    h.assert_no_private(ConnectionId(1), Duration::from_millis(150)).await;
+    h.assert_no_private(ConnectionId(1), Duration::from_millis(150))
+        .await;
     // The answer rides a later tick (the read ticks while waiting).
-    let replies = h.wait_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(41, true)]);
     h.shutdown().await;
 }
@@ -626,18 +650,22 @@ async fn timeout_swept_exactly_one_answer() {
     // must not fire early).
     tokio::time::sleep(Duration::from_millis(50)).await;
     h.tick();
-    h.assert_no_private(ConnectionId(1), Duration::from_millis(40)).await;
+    h.assert_no_private(ConnectionId(1), Duration::from_millis(40))
+        .await;
 
     // Wait past the deadline, then tick: the sweep answers it.
     tokio::time::sleep(Duration::from_millis(60)).await; // ~110 ms total
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(51, false)]);
 
     // Exactly one answer: the connection stays quiet afterwards (a
     // second answer would be a protocol breach; the worker's guard has
     // already exited without reporting, so none can come).
-    h.assert_no_private(ConnectionId(1), Duration::from_millis(150)).await;
+    h.assert_no_private(ConnectionId(1), Duration::from_millis(150))
+        .await;
     h.shutdown().await;
 }
 
@@ -668,7 +696,9 @@ async fn conn_close_in_flight_frees_slots_and_drops_late_report() {
     // suffices — no worker report involved).
     h.request(ConnectionId(2), 62, OP_EXT, &[]).await;
     h.tick();
-    let replies2 = h.private_replies(ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2 = h
+        .private_replies(ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2, vec![(62, false)]);
 
     // Conn 1 leaves mid-flight: its slot is freed.
@@ -699,7 +729,9 @@ async fn conn_close_in_flight_frees_slots_and_drops_late_report() {
     // drain. `wait_replies` ticks while waiting, which is exactly what
     // the room needs to reconcile it (the read is the authority on
     // "the answer arrived").
-    let replies2b = h.wait_replies(ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2b = h
+        .wait_replies(ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2b, vec![(63, true)]);
     h.shutdown().await;
 }
@@ -719,7 +751,9 @@ async fn duplicate_inflight_id_rejected_then_reusable() {
     // Duplicate while in flight: normal rejection, same tick.
     h.request(ConnectionId(1), 71, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, false)]);
 
     // Resolve the original: the answer for 71 arrives on a later tick
@@ -728,14 +762,18 @@ async fn duplicate_inflight_id_rejected_then_reusable() {
         .resolve
         .send(Ok(vec![1, 2, 3]))
         .expect("resolver alive");
-    let replies = h.wait_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, true)]);
 
     // The id is reusable now: a NEW request with the same id is
     // processed (room-local → answered same tick).
     h.request(ConnectionId(1), 71, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, true)]);
     h.shutdown().await;
 }
@@ -762,7 +800,9 @@ async fn per_conn_pending_cap() {
     // The third: rejected in the same tick (per-connection cap).
     h.request(ConnectionId(1), 83, OP_EXT, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(83, false)]);
     h.shutdown().await;
 }
@@ -774,7 +814,9 @@ async fn id_zero_rejected() {
     h.join(ConnectionId(1)).await;
     h.request(ConnectionId(1), 0, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(0, false)]);
     h.shutdown().await;
 }
@@ -789,13 +831,17 @@ async fn malformed_envelope_rejected() {
     h.join(ConnectionId(1)).await;
     h.raw_envelope(ConnectionId(1), &[0xFF, 0xFF, 0xFF]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(0, false)]);
     // The room still serves the connection (a well-formed request on
     // the next tick is answered normally).
     h.request(ConnectionId(1), 91, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(91, true)]);
     h.shutdown().await;
 }
@@ -809,7 +855,9 @@ async fn no_handler_rejected() {
     h.join(ConnectionId(1)).await;
     h.request(ConnectionId(1), 95, OP_UNKNOWN, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(95, false)]);
     h.shutdown().await;
 }
@@ -840,7 +888,9 @@ async fn actions_before_requests_same_tick() {
         .unwrap();
     h.request(ConnectionId(1), 101, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(101, true)]);
     h.shutdown().await;
 }
@@ -887,8 +937,13 @@ impl Rejects {
     /// counters — the test triggered one reject path and nothing else
     /// touches these six).
     fn assert_only(&self, name: &str, n: u64, moved: u64) {
-        assert_eq!(moved, n, "{name}: the triggered bucket must increment by {n}");
-        let total = self.malformed + self.dup + self.no_handler
+        assert_eq!(
+            moved, n,
+            "{name}: the triggered bucket must increment by {n}"
+        );
+        let total = self.malformed
+            + self.dup
+            + self.no_handler
             + self.logic
             + self.conn_cap
             + self.room_cap;
@@ -910,13 +965,17 @@ async fn reject_bucket_malformed() {
     // Source 1: garbage payload under the envelope op (decode failure).
     h.raw_envelope(ConnectionId(1), &[0xFF, 0xFF, 0xFF]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(0, false)]);
 
     // Source 2: well-formed envelope, `id = 0`.
     h.request(ConnectionId(1), 0, OP_LOCAL, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(0, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -938,7 +997,9 @@ async fn reject_bucket_dup() {
     h.request(ConnectionId(1), 101, OP_EXT, &[]).await; // registers pending
     h.request(ConnectionId(1), 101, OP_LOCAL, &[]).await; // same id: dup
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(101, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -957,7 +1018,9 @@ async fn reject_bucket_no_handler() {
 
     h.request(ConnectionId(1), 105, OP_UNKNOWN, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(105, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -974,7 +1037,9 @@ async fn reject_bucket_logic() {
 
     h.request(ConnectionId(1), 102, OP_REJECT, &[]).await;
     h.tick();
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(102, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -1002,7 +1067,9 @@ async fn reject_bucket_conn_cap() {
     h.request(ConnectionId(1), 111, OP_EXT, &[]).await;
     h.request(ConnectionId(1), 112, OP_EXT, &[]).await;
     h.tick(); // first registers, second hits the per-connection cap
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(112, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -1035,7 +1102,9 @@ async fn reject_bucket_room_cap() {
 
     h.request(ConnectionId(2), 122, OP_EXT, &[]).await;
     h.tick(); // room cap reached; conn 2's own count is 0
-    let replies = h.private_replies(ConnectionId(2), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(122, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());
@@ -1067,7 +1136,9 @@ async fn reject_bucket_both_caps_prefers_conn_cap() {
 
     h.request(ConnectionId(1), 132, OP_EXT, &[]).await;
     h.tick(); // over both caps
-    let replies = h.private_replies(ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(132, false)]);
 
     let r = Rejects::of(&h.latest_room_sample());

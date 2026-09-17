@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
@@ -46,7 +46,7 @@ use gsb_core::room::{
     RoomControl, RoomLogic, TickCtx,
 };
 use gsb_core::shard::{BorderRecord, Migrating, ShardActor, ShardLogic};
-use gsb_core::ticker::{Ticker, TickInfo};
+use gsb_core::ticker::{TickInfo, Ticker};
 use prost::Message as _;
 use tokio::sync::{mpsc, oneshot};
 
@@ -117,7 +117,6 @@ impl ParkLogic {
             req_slots: slot_tx,
         }
     }
-
 }
 
 impl GameLogic<()> for ParkLogic {
@@ -384,11 +383,7 @@ impl RoomH {
     async fn join(
         &mut self,
         conn: ConnectionId,
-    ) -> (
-        EntityId,
-        Mailbox<Action>,
-        mpsc::Receiver<FrameBatch>,
-    ) {
+    ) -> (EntityId, Mailbox<Action>, mpsc::Receiver<FrameBatch>) {
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
         let (reply_tx, reply_rx) =
             oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
@@ -984,8 +979,19 @@ fn start_registry(
     let (tx, rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<MetricsEvent>(64);
-    let handle =
-        tokio::spawn(Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, None).run());
+    let handle = tokio::spawn(
+        Registry::new(
+            rx,
+            tx.clone(),
+            factory,
+            ticker,
+            metrics_tx,
+            None,
+            None,
+            None,
+        )
+        .run(),
+    );
     (tx, handle)
 }
 
@@ -1019,9 +1025,12 @@ async fn destroy_room(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
 
 async fn status(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(RegistryMsg::RoomStatus { id, reply: reply_tx })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::RoomStatus {
+        id,
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
     tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
@@ -1146,7 +1155,17 @@ fn start_registry_observed(
     let (ticker, _ticker_task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(256);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, None).run(),
+        Registry::new(
+            rx,
+            tx.clone(),
+            factory,
+            ticker,
+            metrics_tx,
+            None,
+            None,
+            None,
+        )
+        .run(),
     );
     (tx, metrics_rx, handle)
 }
@@ -1182,9 +1201,8 @@ async fn latest_registry_sample(
 /// proxy for it.
 #[tokio::test]
 async fn park_expiry_releases_the_registry_row() {
-    let (tx, mut metrics, handle) = start_registry_observed(expiring_factory(
-        Duration::from_millis(80),
-    ));
+    let (tx, mut metrics, handle) =
+        start_registry_observed(expiring_factory(Duration::from_millis(80)));
     let room = RoomId(73);
     create_room(&tx, reg_config(room)).await.expect("create");
 
@@ -1558,7 +1576,10 @@ mod shard_test {
             let player = PlayerId(conn.0);
             w.ents.insert(wire, player);
             self.player_ent.insert(player, wire);
-            Admission { player, entity: wire }
+            Admission {
+                player,
+                entity: wire,
+            }
         }
         fn on_leave(&mut self, w: &mut SWorld, player: PlayerId) {
             if let Some(wire) = self.player_ent.remove(&player) {
@@ -1572,7 +1593,8 @@ mod shard_test {
 
         fn on_disconnect(&mut self, _w: &mut SWorld, player: PlayerId, identity: &str) -> Detach {
             if self.hold_on_disconnect && self.player_ent.contains_key(&player) {
-                self.ledger.insert(identity.to_string(), SLedg::Held(player));
+                self.ledger
+                    .insert(identity.to_string(), SLedg::Held(player));
                 return Detach::Hold {
                     grace: Some(Duration::from_secs(3600)),
                     to: ExpireTo::Despawn,
@@ -1640,7 +1662,6 @@ mod shard_test {
         fn own_wires(&self, w: &SWorld) -> Vec<u64> {
             w.ents.keys().copied().collect()
         }
-
     }
 
     pub struct ShardPair {
@@ -1737,11 +1758,7 @@ mod shard_test {
                 .await
                 .expect("shard alive");
             self.tick().await;
-            reply_rx
-                .await
-                .expect("join reply")
-                .expect("join ok")
-                .0
+            reply_rx.await.expect("join reply").expect("join ok").0
         }
 
         /// The registry's broadcast shape: the SAME detach goes to BOTH

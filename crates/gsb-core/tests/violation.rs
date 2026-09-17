@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gsb_core::channel::{channel, FrameBatch};
+use gsb_core::channel::{FrameBatch, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::ConnectionId;
 use gsb_core::metrics::MetricsEvent;
@@ -35,7 +35,9 @@ fn frame(op: u16, payload: &[u8]) -> gsb_protocol::FrameBody {
 /// Spawn a connection actor with a *dead* registry (no receiver: every
 /// registry send fails immediately) and a drained-by-nobody metrics
 /// channel. Returns the inbox sender and the out receiver.
-fn spawn_actor(conn: u64) -> (
+fn spawn_actor(
+    conn: u64,
+) -> (
     mpsc::Sender<ConnIn>,
     mpsc::Receiver<FrameBatch>,
     JoinHandle<()>,
@@ -53,7 +55,7 @@ fn spawn_actor(conn: u64) -> (
         out_tx,
         metrics_tx,
         None, // local auth (no ticket hook): these tests cover the
-        // pre-hook protocol-violation budget, unchanged by the hook.
+              // pre-hook protocol-violation budget, unchanged by the hook.
     );
     let h = tokio::spawn(actor.run());
     (inbox_tx, out_rx, h)
@@ -120,7 +122,10 @@ async fn hard_violations_answer_three_then_silence_then_close() {
     assert_eq!(codes, vec![1, 1, 1, 9]);
     // The connection is torn down: the actor dropped its out sender.
     assert!(
-        tokio::time::timeout(WAIT, out.recv()).await.unwrap().is_none(),
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
         "no frames after the budget close"
     );
     handle.await.expect("actor exits");
@@ -170,7 +175,10 @@ async fn race_class_strays_do_not_exhaust_the_budget() {
     assert_eq!(code, 9);
     assert!(msg.contains("violation"));
     assert!(
-        tokio::time::timeout(WAIT, out.recv()).await.unwrap().is_none(),
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
         "teardown after the close"
     );
     handle.await.expect("actor exits");
@@ -264,7 +272,10 @@ async fn double_auth_is_a_hard_violation() {
         }
     }
     assert!(
-        tokio::time::timeout(WAIT, out.recv()).await.unwrap().is_none(),
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
         "teardown after the close"
     );
     handle.await.expect("actor exits");

@@ -15,13 +15,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::error::CoreError;
-use crate::room::{
-    Detach, ExpireTo, ResumeFound, RoomConn, TickCtx,
-};
+use crate::room::{Detach, ExpireTo, ResumeFound, RoomConn, TickCtx};
 
 use crate::shard::actor::ShardActor;
 use crate::shard::*;
-
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where
@@ -110,8 +107,7 @@ where
                 if let Some(&player) = self.binding.get(&conn)
                     && self.conns.get(&player).map(|c| c.entity) == Some(entity)
                 {
-                    let decision =
-                        self.logic.on_disconnect(&mut self.world, player, &identity);
+                    let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
                     match decision {
                         Detach::Despawn => {
                             // Today's close semantics, unchanged.
@@ -209,7 +205,11 @@ where
                 let _ = reply.send(outcome);
                 true
             }
-            ShardMsg::Leave { conn, entity, epoch } => {
+            ShardMsg::Leave {
+                conn,
+                entity,
+                epoch,
+            } => {
                 // Stale-leave guard (binding + entity id): only the entity
                 // this player currently owns.
                 if let Some(&player) = self.binding.get(&conn)

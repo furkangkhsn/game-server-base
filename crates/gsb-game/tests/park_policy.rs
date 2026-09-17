@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::room::{Action, Detach, ExpireTo, GameLogic, RoomActor, RoomConfig, RoomControl};
@@ -142,7 +142,10 @@ impl H {
             .await
             .expect("control alive");
         self.step().await;
-        let (entity, actions) = reply_rx.await.expect("reply dropped").expect("join accepted");
+        let (entity, actions) = reply_rx
+            .await
+            .expect("reply dropped")
+            .expect("join accepted");
         (entity, actions, out_rx)
     }
 
@@ -207,7 +210,11 @@ async fn apply_snapshots(
             if frame.op == op::WORLD_SNAPSHOT
                 && let Ok(snap) = WorldSnapshot::decode(&frame.payload[..])
             {
-                *view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                *view = snap
+                    .entities
+                    .iter()
+                    .map(|e| (e.entity, (e.x, e.y)))
+                    .collect();
                 fresh = true;
             }
         }
@@ -521,8 +528,7 @@ mod sharded_park {
     #[test]
     fn shard_bot_feeds_after_expiry_through_ingest() {
         let mut w = bevy_ecs::prelude::World::new();
-        let mut s =
-            ShardedRoom::new(0, 1, 50.0).with_disconnect_grace(Duration::from_millis(1));
+        let mut s = ShardedRoom::new(0, 1, 50.0).with_disconnect_grace(Duration::from_millis(1));
 
         let pid = s.on_join(&mut w, ConnectionId(1)).player;
         assert!(matches!(
@@ -550,7 +556,10 @@ mod sharded_park {
         // Off-cadence tick: the gate synthesizes nothing.
         let mut acts: Vec<Action> = Vec::new();
         s.ingest(&mut w, &ctx(29), &mut acts);
-        assert!(targets(&mut w).is_empty(), "off-cadence tick must not drive");
+        assert!(
+            targets(&mut w).is_empty(),
+            "off-cadence tick must not drive"
+        );
 
         // ON-cadence tick: one synthesized frame → one REAL MoveTarget.
         let mut acts: Vec<Action> = Vec::new();

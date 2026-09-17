@@ -1,13 +1,13 @@
 //! The room's member table rows and its local counters — owned by the
 //! actor, shared in shape with the shard actor, and flushed to the
 //! metrics channel as a sample.
-use std::fmt::Debug;
-use std::time::Instant;
-use tokio::sync::mpsc;
 use crate::channel::{FrameBatch, Inbox};
 use crate::id::{ConnectionId, EntityId};
 use crate::metrics::{FINE_HIST_BINS, HIST_BINS};
 use crate::room::*;
+use std::fmt::Debug;
+use std::time::Instant;
+use tokio::sync::mpsc;
 
 /// Per-player row of the room (or shard) member table. `pub(crate)`
 /// because the shard actor reuses the same table shape (a shard's `conns`

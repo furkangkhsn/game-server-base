@@ -96,9 +96,6 @@ pub use collector::{MetricSink, MetricsCollector};
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MetricsEvent, RegistrySample, RoomSample};
 
-
-
-
 /// Histogram bin edges for the per-step body duration, each expressed as a
 /// fraction of the room's **tick budget** (one period, in µs). Each edge is
 /// a `(num, den)` pair so the concrete µs edge is `ceil(budget_us * num / den)`
@@ -122,8 +119,19 @@ pub use sample::{ConnSample, MetricsEvent, RegistrySample, RoomSample};
 /// budget a bin boundary at *any* rate, which is exactly the criterion the
 /// spec fixes for this fix.
 pub const HIST_EDGES: [(u64, u64); 13] = [
-    (1, 128), (1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2),
-    (1, 1), (2, 1), (4, 1), (8, 1), (16, 1), (32, 1),
+    (1, 128),
+    (1, 64),
+    (1, 32),
+    (1, 16),
+    (1, 8),
+    (1, 4),
+    (1, 2),
+    (1, 1),
+    (2, 1),
+    (4, 1),
+    (8, 1),
+    (16, 1),
+    (32, 1),
 ];
 /// Number of histogram bins (`HIST_EDGES.len() + 1`).
 pub const HIST_BINS: usize = HIST_EDGES.len() + 1;

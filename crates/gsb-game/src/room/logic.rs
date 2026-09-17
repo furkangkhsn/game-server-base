@@ -4,7 +4,6 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
@@ -96,8 +95,7 @@ impl GameLogic<World> for OpenRoom {
         // Encoding into an in-memory buffer cannot fail (no I/O, unbounded
         // capacity); treat a failure as a bug rather than dropping the
         // snapshot.
-        snap
-            .encode(out)
+        snap.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
 
         self.last.clear();
@@ -142,12 +140,7 @@ impl GameLogic<World> for OpenRoom {
     // -- the disconnect policy (docs/RECONNECT.md §3/§5/§9; the hook
     //    bodies are shared with every demo room — see `crate::common`) --
 
-    fn on_disconnect(
-        &mut self,
-        _world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
         crate::common::park_on_disconnect(
             &self.player_entity,
             player,
@@ -180,12 +173,7 @@ impl GameLogic<World> for OpenRoom {
     ) {
         // Faz 2 shrink: ledger consume + seq/ack reset only — the
         // player-keyed tables kept their keys across the disconnect.
-        crate::common::park_resume(
-            &mut self.park_ledger,
-            &mut self.input,
-            identity,
-            player,
-        );
+        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -277,9 +265,10 @@ impl GameLogic<World> for OpenRoom {
                 }
                 // The effect: a real mutation, applied in this tick (it
                 // rides the same tick's snapshot out to the group).
-                world
-                    .entity_mut(entity)
-                    .insert(MoveTarget { x: use_msg.x as f32, y: use_msg.y as f32 });
+                world.entity_mut(entity).insert(MoveTarget {
+                    x: use_msg.x as f32,
+                    y: use_msg.y as f32,
+                });
                 let res = crate::game::AbilityResult {
                     ok: true,
                     reason: String::new(),

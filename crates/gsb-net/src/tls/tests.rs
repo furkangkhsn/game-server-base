@@ -27,16 +27,13 @@ struct TestPki {
 fn mint_pki(tag: &str) -> TestPki {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "gsb-net-tls-{tag}-{}-{n}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("gsb-net-tls-{tag}-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     // The mini-CA.
     let ca_key = rcgen::KeyPair::generate().expect("ca key");
-    let mut ca_params = rcgen::CertificateParams::new(vec!["gsb test CA".into()])
-        .expect("ca params");
+    let mut ca_params =
+        rcgen::CertificateParams::new(vec!["gsb test CA".into()]).expect("ca params");
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
 
@@ -123,8 +120,7 @@ async fn handshake_then_frames_flow_both_ways() {
     // view mirrors the server's exactly (same generic adapters over the
     // split rustls halves).
     let connector = client_connector(&pki);
-    let name: rustls::pki_types::ServerName<'static> =
-        "localhost".try_into().expect("dns name");
+    let name: rustls::pki_types::ServerName<'static> = "localhost".try_into().expect("dns name");
     let tcp = tokio::net::TcpStream::connect(bound).await.expect("tcp");
     let tls = connector.connect(name, tcp).await.expect("tls handshake");
     let (tls_r, tls_w) = tokio::io::split(tls);
@@ -211,8 +207,7 @@ async fn wrong_ca_fails_the_handshake() {
     });
 
     let connector = client_connector(&other);
-    let name: rustls::pki_types::ServerName<'static> =
-        "localhost".try_into().expect("dns name");
+    let name: rustls::pki_types::ServerName<'static> = "localhost".try_into().expect("dns name");
     let tcp = tokio::net::TcpStream::connect(bound).await.unwrap();
     let result = connector.connect(name, tcp).await;
     assert!(result.is_err(), "client must reject the unknown CA");

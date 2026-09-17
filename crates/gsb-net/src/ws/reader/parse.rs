@@ -4,8 +4,6 @@
 
 use std::io;
 
-
-
 use crate::ws::*;
 
 impl super::WsReader {

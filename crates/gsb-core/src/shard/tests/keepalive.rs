@@ -89,11 +89,7 @@ impl ShardLogic<TWorld> for KaLogic {
     fn neighbors(&self) -> &[usize] {
         &[]
     }
-    fn collect_migrations(
-        &mut self,
-        _w: &mut TWorld,
-        _nb: usize,
-    ) -> Vec<Migrating<TState>> {
+    fn collect_migrations(&mut self, _w: &mut TWorld, _nb: usize) -> Vec<Migrating<TState>> {
         Vec::new()
     }
     fn on_migrate_in(

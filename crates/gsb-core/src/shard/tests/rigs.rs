@@ -178,7 +178,12 @@ impl Harness {
     }
 
     /// Send one input action (the connection actor's role).
-    pub(in crate::shard::tests) async fn act(&self, actions: &mpsc::Sender<Action>, conn: ConnectionId, op: u16) {
+    pub(in crate::shard::tests) async fn act(
+        &self,
+        actions: &mpsc::Sender<Action>,
+        conn: ConnectionId,
+        op: u16,
+    ) {
         actions
             .send(Action {
                 conn,
@@ -194,7 +199,12 @@ impl Harness {
 
     /// The registry's leave broadcast: to ALL shards (exactly one owns
     /// the connection; the others no-op on the entity-id guard).
-    pub(in crate::shard::tests) async fn leave(&self, conn: ConnectionId, entity: EntityId, epoch: u64) {
+    pub(in crate::shard::tests) async fn leave(
+        &self,
+        conn: ConnectionId,
+        entity: EntityId,
+        epoch: u64,
+    ) {
         for shard in 0..2 {
             self.shard_txs[shard]
                 .send(ShardMsg::Leave {
@@ -357,7 +367,10 @@ pub(in crate::shard::tests) fn rig_logic(index: usize) -> TLogic {
     }
 }
 
-pub(in crate::shard::tests) fn rig_actor(index: usize, neighbors: Vec<Mailbox<ShardMsg<TState, TStrip>>>) -> ShardActor<TWorld, (), TState, TStrip> {
+pub(in crate::shard::tests) fn rig_actor(
+    index: usize,
+    neighbors: Vec<Mailbox<ShardMsg<TState, TStrip>>>,
+) -> ShardActor<TWorld, (), TState, TStrip> {
     let (_tick_tx, tick_rx) = broadcast::channel(64);
     let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
     ShardActor::new(
@@ -463,14 +476,21 @@ impl BorderRig {
 }
 
 /// Seed a boundary entity straight into a shard's world.
-pub(in crate::shard::tests) fn put(a: &mut ShardActor<TWorld, (), TState, TStrip>, wire: u64, x: f32, y: f32) {
+pub(in crate::shard::tests) fn put(
+    a: &mut ShardActor<TWorld, (), TState, TStrip>,
+    wire: u64,
+    x: f32,
+    y: f32,
+) {
     a.world.ents.insert(wire, (x, y, 0));
 }
 
 /// Assert the batch is exactly one Border carrying a Full; return its
 /// (seq, entities). Generic over the strip payload so every rig
 /// (positional and rich) reuses one helper.
-pub(in crate::shard::tests) fn expect_full<S: Debug>(msgs: &[ShardMsg<TState, S>]) -> (u64, &[BorderRecord<S>]) {
+pub(in crate::shard::tests) fn expect_full<S: Debug>(
+    msgs: &[ShardMsg<TState, S>],
+) -> (u64, &[BorderRecord<S>]) {
     assert_eq!(msgs.len(), 1, "exactly one export message: {msgs:?}");
     match &msgs[0] {
         ShardMsg::Border {

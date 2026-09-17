@@ -172,7 +172,6 @@ use std::time::Duration;
 
 use gsb_protocol::op;
 
-
 /// Datagram kinds (see module docs).
 pub const KIND_RAW: u8 = 0;
 pub const KIND_REL: u8 = 1;

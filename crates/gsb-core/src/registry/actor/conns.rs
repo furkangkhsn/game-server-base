@@ -26,11 +26,7 @@ where
     // require them.
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    pub(super) async fn on_conn_opened(
-        &mut self,
-        conn: ConnectionId,
-        inbox: Mailbox<ConnIn>,
-    ) {
+    pub(super) async fn on_conn_opened(&mut self, conn: ConnectionId, inbox: Mailbox<ConnIn>) {
         // Connection cap, enforced at birth: the count lives
         // here (the connection table is the only place that
         // sees both opens and closes), so the guardrail is
@@ -90,10 +86,7 @@ where
         self.emit_metrics();
     }
 
-    pub(super) async fn on_conn_closed(
-        &mut self,
-        conn: ConnectionId,
-    ) {
+    pub(super) async fn on_conn_closed(&mut self, conn: ConnectionId) {
         // The connection actor is gone for good. The entity's
         // fate is no longer decided HERE (the old code removed
         // the affiliation and sent a despawn-causing leave):

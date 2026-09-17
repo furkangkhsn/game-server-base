@@ -4,10 +4,8 @@
 
 use std::collections::BTreeMap;
 
-
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
-
 
 mod report;
 
@@ -99,8 +97,13 @@ impl MetricAccumulator {
                 match self.rooms.get_mut(&s.room) {
                     Some(acc) => acc.latest = s,
                     None => {
-                        self.rooms
-                            .insert(s.room, RoomAcc { latest: s, prev: None });
+                        self.rooms.insert(
+                            s.room,
+                            RoomAcc {
+                                latest: s,
+                                prev: None,
+                            },
+                        );
                     }
                 }
             }

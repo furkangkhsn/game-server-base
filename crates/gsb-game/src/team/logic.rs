@@ -3,7 +3,6 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
@@ -77,8 +76,7 @@ impl GameLogic<World> for TeamRoom {
             });
         }
         // In-memory encode cannot fail; treat a failure as a bug.
-        snap
-            .encode(out)
+        snap.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
 
         self.encoded += content.len() as u64;
@@ -127,12 +125,7 @@ impl GameLogic<World> for TeamRoom {
     // in the content rebuild / snapshot encoder below — which is
     // game-band policy, deliberately not implemented in the base.
 
-    fn on_disconnect(
-        &mut self,
-        _world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
         crate::common::park_on_disconnect(
             &self.player_entity,
             player,

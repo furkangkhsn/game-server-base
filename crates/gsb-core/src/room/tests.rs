@@ -5,24 +5,24 @@
 
 use super::*;
 use crate::channel::channel;
-use gsb_protocol::FrameBody;
-use std::time::Duration;
-use crate::error::CoreError;
-use crate::ticker::TickInfo;
-use crate::metrics::MetricsEvent;
-use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use crate::channel::{FrameBatch, Mailbox};
-use tokio::sync::{broadcast, mpsc, oneshot};
-use std::collections::HashMap;
-use std::time::Instant;
+use crate::error::CoreError;
+use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
+use crate::metrics::MetricsEvent;
 use crate::room::config::FALLBACK_TICK_PERIOD;
+use crate::ticker::TickInfo;
+use gsb_protocol::FrameBody;
+use std::collections::HashMap;
+use std::time::Duration;
+use std::time::Instant;
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 mod binding;
-mod tick;
-mod groups;
 mod fanout;
+mod groups;
 mod guardrails;
 mod stubs;
+mod tick;
 use stubs::*;
 
 /// Synchronous peek helper for the test above (the reply was already
@@ -59,10 +59,7 @@ async fn wait_steps(steps: &mut mpsc::Receiver<u64>, n: u64) {
 }
 
 fn batch_frames(batch: &[FrameBody]) -> Vec<(u16, Vec<u8>)> {
-    batch
-        .iter()
-        .map(|f| (f.op, f.payload.to_vec()))
-        .collect()
+    batch.iter().map(|f| (f.op, f.payload.to_vec())).collect()
 }
 
 /// Receive one batch with a timeout (the positive-side barrier: the

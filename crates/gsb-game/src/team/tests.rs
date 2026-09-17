@@ -10,10 +10,10 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::components::{DEFAULT_SPEED, Position, Speed};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
-use crate::components::{Position, Speed, DEFAULT_SPEED};
 
 use super::*;
 use gsb_core::id::PlayerId;
@@ -42,7 +42,10 @@ fn place(
     y: f32,
 ) -> (u64, PlayerId) {
     let admission = room.on_join(world, conn);
-    let entity = *room.player_entity.get(&admission.player).expect("registered");
+    let entity = *room
+        .player_entity
+        .get(&admission.player)
+        .expect("registered");
     world.entity_mut(entity).insert(Position { x, y });
     (admission.entity, admission.player)
 }
@@ -78,7 +81,10 @@ fn enemy_out_of_vision_absent_in_one_team_present_in_other() {
     let mut out0 = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
     let t0 = snap_ids(&out0);
-    assert!(t0.contains(&a) && t0.contains(&b), "team 0 sees A,B: {t0:?}");
+    assert!(
+        t0.contains(&a) && t0.contains(&b),
+        "team 0 sees A,B: {t0:?}"
+    );
     assert!(!t0.contains(&c), "C is out of team 0's vision: {t0:?}");
 
     // Team 1 (same tick): own team {B, C} + in-vision enemies {A}
@@ -87,7 +93,10 @@ fn enemy_out_of_vision_absent_in_one_team_present_in_other() {
     let mut out1 = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Team(1), &[], &mut out1));
     let t1 = snap_ids(&out1);
-    assert!(t1.contains(&a) && t1.contains(&b) && t1.contains(&c), "team 1: {t1:?}");
+    assert!(
+        t1.contains(&a) && t1.contains(&b) && t1.contains(&c),
+        "team 1: {t1:?}"
+    );
 }
 
 /// Own team is always visible, with NO range limit (400+ units away),
@@ -97,9 +106,9 @@ fn own_team_always_visible_regardless_of_distance() {
     let mut world = World::new();
     let mut room = TeamRoom::new(25.0);
 
-    let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);       // team 0
-    let (d, _) = place(&mut world, &mut room, ConnectionId(4), 400.0, 400.0);  // team 0, far
-    let (b, _) = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0);     // team 1
+    let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
+    let (d, _) = place(&mut world, &mut room, ConnectionId(4), 400.0, 400.0); // team 0, far
+    let (b, _) = place(&mut world, &mut room, ConnectionId(1), 10.0, 0.0); // team 1
 
     room.update(&mut world, &ctx(1));
 
@@ -107,7 +116,10 @@ fn own_team_always_visible_regardless_of_distance() {
     let mut out0 = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Team(0), &[], &mut out0));
     let t0 = snap_ids(&out0);
-    assert!(t0.contains(&a) && t0.contains(&d), "own team is always in the package: {t0:?}");
+    assert!(
+        t0.contains(&a) && t0.contains(&d),
+        "own team is always in the package: {t0:?}"
+    );
     assert!(t0.contains(&b), "B is within 25 of A: {t0:?}");
 
     // Team 1's snapshot has B but NOT D (D is far from every team-1 unit).
@@ -126,7 +138,7 @@ fn enemy_entering_vision_keeps_its_wire_identity() {
     let mut world = World::new();
     let mut room = TeamRoom::new(25.0);
 
-    let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0);      // team 0
+    let (a, _) = place(&mut world, &mut room, ConnectionId(2), 0.0, 0.0); // team 0
     let (b, pb) = place(&mut world, &mut room, ConnectionId(1), 100.0, 100.0); // team 1, far
     room.update(&mut world, &ctx(1));
 
@@ -142,11 +154,16 @@ fn enemy_entering_vision_keeps_its_wire_identity() {
 
     // B moves into A's vision: (5,0), distance 5 < 25.
     let entity_b = *room.player_entity.get(&pb).unwrap();
-    world.entity_mut(entity_b).insert(Position { x: 5.0, y: 0.0 });
+    world
+        .entity_mut(entity_b)
+        .insert(Position { x: 5.0, y: 0.0 });
     room.update(&mut world, &ctx(2));
 
     let mut out0b = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "vision change re-emits");
+    assert!(
+        room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b),
+        "vision change re-emits"
+    );
     let t0 = snap_ids(&out0b);
     assert!(
         t0.contains(&b),
@@ -175,15 +192,24 @@ fn enemy_leaving_vision_drops_from_snapshot_self_contained() {
 
     // B leaves vision.
     let entity_b = *room.player_entity.get(&pb).unwrap();
-    world.entity_mut(entity_b).insert(Position { x: 300.0, y: 300.0 });
+    world
+        .entity_mut(entity_b)
+        .insert(Position { x: 300.0, y: 300.0 });
     room.update(&mut world, &ctx(2));
 
     let mut out0b = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "vision change re-emits");
+    assert!(
+        room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b),
+        "vision change re-emits"
+    );
     let snap = crate::game::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
     let t0b: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
     assert!(!t0b.contains(&b), "B dropped out: {t0b:?}");
-    assert_eq!(t0b, [a].into_iter().collect(), "exactly {a} remains — no stale record");
+    assert_eq!(
+        t0b,
+        [a].into_iter().collect(),
+        "exactly {a} remains — no stale record"
+    );
     assert_eq!(snap.sequence, 2, "sequence advanced (order/duplicate-safe)");
 
     // B's own team still has B (own-team visibility is unconditional).
@@ -217,9 +243,20 @@ fn neutral_entity_is_broadcast_to_all_teams() {
 
     // B is within 25 of A, so BOTH teams see both players; the neutral
     // orphan goes to both packages as well.
-    assert_eq!(t0, [a, b, 3].into_iter().collect(), "team 0: A, B (in vision), neutral: {t0:?}");
-    assert_eq!(t1, [a, b, 3].into_iter().collect(), "team 1: B, A (in vision), neutral: {t1:?}");
-    assert!(t0.contains(&3) && t1.contains(&3), "neutral stamped with fresh serial 3");
+    assert_eq!(
+        t0,
+        [a, b, 3].into_iter().collect(),
+        "team 0: A, B (in vision), neutral: {t0:?}"
+    );
+    assert_eq!(
+        t1,
+        [a, b, 3].into_iter().collect(),
+        "team 1: B, A (in vision), neutral: {t1:?}"
+    );
+    assert!(
+        t0.contains(&3) && t1.contains(&3),
+        "neutral stamped with fresh serial 3"
+    );
 }
 
 /// "No change" contract: with a static world (no movement targets),
@@ -245,18 +282,32 @@ fn team_no_change_when_static_and_ledgers_independent() {
     // Second: both silent, regardless of order.
     room.update(&mut world, &ctx(2));
     let mut o2 = bytes::BytesMut::new();
-    assert!(!room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut o2), "team 1 silent");
-    assert!(!room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut o2), "team 0 silent");
+    assert!(
+        !room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut o2),
+        "team 1 silent"
+    );
+    assert!(
+        !room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut o2),
+        "team 0 silent"
+    );
     assert!(o2.is_empty(), "no bytes written on silence");
 
     // A movement in ONE team re-emits that team only.
     let entity = *room.player_entity.get(&pmover).unwrap();
-    world.entity_mut(entity).insert(Position { x: 8.0, y: 19.0 });
+    world
+        .entity_mut(entity)
+        .insert(Position { x: 8.0, y: 19.0 });
     room.update(&mut world, &ctx(3));
     let mut o3 = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(3), &Team(0), &[], &mut o3), "mover's team re-emits");
+    assert!(
+        room.snapshot(&mut world, &ctx(3), &Team(0), &[], &mut o3),
+        "mover's team re-emits"
+    );
     let mut o4 = bytes::BytesMut::new();
-    assert!(!room.snapshot(&mut world, &ctx(3), &Team(1), &[], &mut o4), "other team still silent");
+    assert!(
+        !room.snapshot(&mut world, &ctx(3), &Team(1), &[], &mut o4),
+        "other team still silent"
+    );
 }
 
 /// Item D, pinned: team membership is WORLD STATE (the
@@ -323,15 +374,25 @@ fn runtime_team_change_moves_the_group_and_keeps_the_wire_identity() {
 
     room.update(&mut world, &ctx(2));
     let mut out0b = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b), "team 0 re-emits");
+    assert!(
+        room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b),
+        "team 0 re-emits"
+    );
     let mut out1b = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut out1b), "team 1 re-emits");
+    assert!(
+        room.snapshot(&mut world, &ctx(2), &Team(1), &[], &mut out1b),
+        "team 1 re-emits"
+    );
     let t0b = snap_ids(&out0b);
     let t1b = snap_ids(&out1b);
 
     // A LEFT team 0's package (it is now an enemy 30 from A2, outside
     // team 0's vision): the group transition is visible in the bytes.
-    assert_eq!(t0b, [a2].into_iter().collect(), "team 0: A is gone: {t0b:?}");
+    assert_eq!(
+        t0b,
+        [a2].into_iter().collect(),
+        "team 0: A is gone: {t0b:?}"
+    );
 
     // A APPEARED in team 1's package as OWN TEAM — with the SAME wire
     // id it had before the transition (identity did not change on the

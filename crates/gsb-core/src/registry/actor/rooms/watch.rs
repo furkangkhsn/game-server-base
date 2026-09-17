@@ -1,14 +1,14 @@
 //! The death watch: one task per spawned room/shard, and the
 //! notification members get when their room ends by any route.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use tracing::debug;
 use crate::channel::Mailbox;
 use crate::conn::ConnIn;
 use crate::id::{ConnectionId, RoomId};
-use crate::registry::*;
 use crate::registry::actor::Registry;
+use crate::registry::*;
+use std::fmt::Debug;
+use std::hash::Hash;
+use tracing::debug;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where

@@ -1,16 +1,16 @@
 //! Birth, the tick loop (whose only await is the ticker receive), the
 //! measured step, and the metrics sample.
 
+use crate::channel::{Inbox, Mailbox};
+use crate::metrics::MetricsEvent;
+use crate::room::*;
+use crate::ticker::TickInfo;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, warn};
-use crate::channel::{Inbox, Mailbox};
-use crate::metrics::MetricsEvent;
-use crate::ticker::TickInfo;
-use crate::room::*;
 
 use crate::room::actor::RoomActor;
 
@@ -47,8 +47,7 @@ where
         // which is the cap) — the usual backpressure rule; the room drains
         // it every tick's CONTROL phase, so a full channel only parks a
         // worker until the next tick, never the room.
-        let (completions_tx, completions) =
-            mpsc::channel(config.max_pending_requests.max(1));
+        let (completions_tx, completions) = mpsc::channel(config.max_pending_requests.max(1));
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
                 // The registry rejects this relationship at room creation;

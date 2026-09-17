@@ -2,15 +2,15 @@
 //! tables. Every task the registry started exits because the channel
 //! it reads closes — none is cancelled.
 
+use crate::channel::Mailbox;
+use crate::conn::ConnIn;
+use crate::registry::actor::Registry;
+use crate::registry::*;
+use crate::room::RoomControl;
+use crate::shard::ShardMsg;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tracing::{debug, warn};
-use crate::channel::Mailbox;
-use crate::conn::ConnIn;
-use crate::room::RoomControl;
-use crate::shard::ShardMsg;
-use crate::registry::*;
-use crate::registry::actor::Registry;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where

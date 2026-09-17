@@ -32,7 +32,11 @@ impl GameLogic<World> for SectorRoom {
         let Some(&entity) = self.player_entity.get(&player) else {
             return Sector(SECTOR_OUT);
         };
-        let pos = world.entity(entity).get::<Position>().copied().unwrap_or_default();
+        let pos = world
+            .entity(entity)
+            .get::<Position>()
+            .copied()
+            .unwrap_or_default();
         sector_of(pos)
     }
 
@@ -83,8 +87,7 @@ impl GameLogic<World> for SectorRoom {
             });
         }
         // In-memory encode cannot fail; treat a failure as a bug.
-        snap
-            .encode(out)
+        snap.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
 
         self.encoded += content.len() as u64;
@@ -111,12 +114,7 @@ impl GameLogic<World> for SectorRoom {
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`) ---------------------------
 
-    fn on_disconnect(
-        &mut self,
-        _world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
         crate::common::park_on_disconnect(
             &self.player_entity,
             player,

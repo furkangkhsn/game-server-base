@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bytes::BufMut;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, TickCtx};
@@ -179,7 +179,11 @@ impl ShardLogic<()> for ShardRpcLogic {
     fn neighbors(&self) -> &[usize] {
         &[]
     }
-    fn collect_migrations(&mut self, _w: &mut (), _nb: usize) -> Vec<gsb_core::shard::Migrating<()>> {
+    fn collect_migrations(
+        &mut self,
+        _w: &mut (),
+        _nb: usize,
+    ) -> Vec<gsb_core::shard::Migrating<()>> {
         Vec::new()
     }
     fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _state: (), _p: Option<PlayerId>) {}
@@ -227,10 +231,7 @@ impl Harness {
                 config.clone(),
                 i,
                 (),
-                Box::new(ShardRpcLogic {
-                    index: i,
-                    ext_tx,
-                }),
+                Box::new(ShardRpcLogic { index: i, ext_tx }),
                 tick_rx,
                 rx,
                 vec![],
@@ -257,8 +258,7 @@ impl Harness {
 
     fn tick(&mut self) {
         self.next_tick += 1;
-        let at =
-            self.t0 + Duration::from_secs_f64(self.next_tick as f64 * (1.0 / 30.0));
+        let at = self.t0 + Duration::from_secs_f64(self.next_tick as f64 * (1.0 / 30.0));
         self.tick_tx
             .send(TickInfo {
                 tick: self.next_tick,
@@ -270,8 +270,9 @@ impl Harness {
     /// Join `conn` on `shard`, keeping its action mailbox + out receiver.
     async fn join(&mut self, shard: usize, conn: ConnectionId) {
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply_tx, reply_rx) = oneshot::
-            channel::<Result<(gsb_core::EntityId, Mailbox<Action>), gsb_core::CoreError>>();
+        let (reply_tx, reply_rx) = oneshot::channel::<
+            Result<(gsb_core::EntityId, Mailbox<Action>), gsb_core::CoreError>,
+        >();
         let tx = self.shards[shard].as_ref().expect("shard alive").tx.clone();
         tx.send(ShardMsg::Join {
             conn,
@@ -493,11 +494,14 @@ async fn shard_local_request_answered_same_tick_only_own_conn() {
     h.request(0, ConnectionId(1), 7, OP_LOCAL).await;
     h.tick();
 
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(7, true)]);
 
     // No leak: conn 2 sees nothing private this tick.
-    h.assert_no_private(0, ConnectionId(2), Duration::from_millis(150)).await;
+    h.assert_no_private(0, ConnectionId(2), Duration::from_millis(150))
+        .await;
     h.shutdown().await;
 }
 
@@ -519,16 +523,21 @@ async fn shard_external_reply_arrives_later_tick() {
     h.join(0, ConnectionId(2)).await;
     h.request(0, ConnectionId(2), 12, OP_LOCAL).await;
     h.tick();
-    let replies2 = h.private_replies(0, ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2 = h
+        .private_replies(0, ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2, vec![(12, true)]);
-    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(150)).await;
+    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(150))
+        .await;
 
     // Resolve: the report reconciles on a later tick's 0b phase.
     resolver
         .resolve
         .send(Ok(b"answer-bytes".to_vec()))
         .expect("resolver alive");
-    let replies = h.wait_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(11, true)]);
     h.shutdown().await;
 }
@@ -548,18 +557,27 @@ async fn shard_duplicate_inflight_id_rejected_without_reprocessing() {
     // Duplicate while in flight: normal rejection, same tick.
     h.request(0, ConnectionId(1), 71, OP_LOCAL).await;
     h.tick();
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, false)]);
 
     // Resolve the original; its answer arrives on a later tick.
-    resolver.resolve.send(Ok(vec![1, 2, 3])).expect("resolver alive");
-    let replies = h.wait_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    resolver
+        .resolve
+        .send(Ok(vec![1, 2, 3]))
+        .expect("resolver alive");
+    let replies = h
+        .wait_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, true)]);
 
     // The id is reusable now: a new request under the same id processes.
     h.request(0, ConnectionId(1), 71, OP_LOCAL).await;
     h.tick();
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(71, true)]);
     h.shutdown().await;
 }
@@ -589,16 +607,20 @@ async fn shard_timeout_sweep_answers_timeout_reason() {
     // Before the deadline: no answer (the sweep must not fire early).
     tokio::time::sleep(Duration::from_millis(50)).await;
     h.tick();
-    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(40)).await;
+    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(40))
+        .await;
 
     // Past the deadline, the next tick sweeps it.
     tokio::time::sleep(Duration::from_millis(60)).await; // ~110 ms total
     h.tick();
-    let replies = h.wait_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .wait_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(51, false)]);
 
     // Exactly one answer: the connection stays quiet afterwards.
-    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(150)).await;
+    h.assert_no_private(0, ConnectionId(1), Duration::from_millis(150))
+        .await;
     h.shutdown().await;
 }
 
@@ -628,7 +650,9 @@ async fn shard_per_conn_pending_cap_rejects_overflow() {
     // The third: rejected in the same tick (per-connection cap).
     h.request(0, ConnectionId(1), 83, OP_EXT).await;
     h.tick();
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(83, false)]);
     h.shutdown().await;
 }
@@ -655,7 +679,9 @@ async fn shard_session_close_midflight_frees_slots_and_drops_late_report() {
     // The shard-wide cap (1): conn 2's external request is rejected now.
     h.request(0, ConnectionId(2), 62, OP_EXT).await;
     h.tick();
-    let replies2 = h.private_replies(0, ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2 = h
+        .private_replies(0, ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2, vec![(62, false)]);
 
     // Conn 1 closes mid-flight (entity id 1): its slot frees.
@@ -668,18 +694,26 @@ async fn shard_session_close_midflight_frees_slots_and_drops_late_report() {
     assert_eq!(resolver2.id, 63);
 
     // Conn 1's late report arrives after its session is gone: dropped.
-    resolver1.resolve.send(Ok(b"stale".to_vec())).expect("alive");
+    resolver1
+        .resolve
+        .send(Ok(b"stale".to_vec()))
+        .expect("alive");
     h.tick();
     h.tick();
 
     // Conn 2 is unaffected: its own request resolves to exactly one answer.
     resolver2.resolve.send(Ok(b"ok63".to_vec())).expect("alive");
-    let replies2b = h.wait_replies(0, ConnectionId(2), Duration::from_secs(2)).await;
+    let replies2b = h
+        .wait_replies(0, ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(replies2b, vec![(63, true)]);
 
     // The reconciliation counted the stale report exactly once.
     let s = h.latest_sample(0);
-    assert_eq!(s.requests_late, 1, "the stale report was dropped and counted");
+    assert_eq!(
+        s.requests_late, 1,
+        "the stale report was dropped and counted"
+    );
     assert_eq!(
         s.pending_requests, 0,
         "both requests settled: the late one was dropped, conn 2's was \
@@ -703,8 +737,12 @@ async fn shard_requests_are_isolated_across_shards_of_one_room() {
     h.request(1, ConnectionId(2), 92, OP_LOCAL).await;
     h.tick();
 
-    let r1 = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
-    let r2 = h.private_replies(1, ConnectionId(2), Duration::from_secs(2)).await;
+    let r1 = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
+    let r2 = h
+        .private_replies(1, ConnectionId(2), Duration::from_secs(2))
+        .await;
     assert_eq!(r1, vec![(91, true)]);
     assert_eq!(r2, vec![(92, true)]);
 
@@ -732,12 +770,16 @@ async fn shard_request_counters_flow_into_the_metrics_sample() {
     h.request(0, ConnectionId(1), 101, OP_EXT).await; // registers pending
     h.request(0, ConnectionId(1), 101, OP_LOCAL).await; // dup id: rejected
     h.tick();
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(101, false)]);
 
     h.request(0, ConnectionId(1), 102, OP_LOCAL).await; // same-tick local
     h.tick();
-    let replies = h.private_replies(0, ConnectionId(1), Duration::from_secs(2)).await;
+    let replies = h
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .await;
     assert_eq!(replies, vec![(102, true)]);
 
     let s = h.latest_sample(0);
@@ -747,7 +789,10 @@ async fn shard_request_counters_flow_into_the_metrics_sample() {
     assert_eq!(s.requests_rejected_malformed, 0);
     assert_eq!(s.requests_timed_out, 0);
     assert_eq!(s.requests_late, 0);
-    assert_eq!(s.pending_requests, 1, "the external request stays in flight");
+    assert_eq!(
+        s.pending_requests, 1,
+        "the external request stays in flight"
+    );
     h.shutdown().await;
 }
 

@@ -8,9 +8,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::id::PlayerId;
-use crate::room::{
-    ExpireTo, 
-};
+use crate::room::ExpireTo;
 
 use crate::shard::actor::ShardActor;
 
@@ -27,93 +25,92 @@ where
     /// Tick phase 0c — the detach-hold sweep and the park-expiry reports
     /// the registry is waiting on.
     pub(crate) fn phase_detach_sweep(&mut self) {
-    // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
-    //    room actor's (§14.4 — core owns the clock; timed holds fire
-    //    on their deadline, combat-helds on `may_release`; the ended
-    //    hold goes to `on_detach_expired` and then despawns or turns
-    //    bot-fed). Runs BEFORE READ so an expired row is gone before
-    //    this tick's pulls.
-    if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
-        let now = Instant::now();
-        let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
-        let mut ask: Vec<PlayerId> = Vec::new();
-        for (&player, rc) in &self.conns {
-            if !rc.detached || rc.bot_fed {
-                continue;
-            }
-            match rc.detach_deadline {
-                Some(dl) if now >= dl => due.push((player, rc.expire_to)),
-                Some(_) => {}
-                None => ask.push(player),
-            }
-        }
-        for player in ask {
-            if self.logic.may_release(&mut self.world, player) {
-                let to = self
-                    .conns
-                    .get(&player)
-                    .map(|rc| rc.expire_to)
-                    .unwrap_or(ExpireTo::Despawn);
-                due.push((player, to));
-            }
-        }
-        for (player, to) in due {
-            self.logic.on_detach_expired(&mut self.world, player, to);
-            match to {
-                ExpireTo::Despawn => {
-                    self.m.detach_expired_despawn += 1;
-                    // The registry is holding a detached row for this
-                    // session — and on the grid that row also holds a
-                    // slot in the ShardGroup member count, the only
-                    // whole-room capacity view there is. Report the
-                    // end so both come back.
-                    if self.registry.is_some()
-                        && let Some(conn) = self.conns.get(&player).map(|rc| rc.conn)
-                    {
-                        self.park_reports.push(conn);
-                    }
-                    self.despawn_conn(player, false);
-                    debug!(
-                        room = %self.config.id,
-                        shard = self.index,
-                        %player,
-                        "detach hold expired: despawn"
-                    );
+        // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
+        //    room actor's (§14.4 — core owns the clock; timed holds fire
+        //    on their deadline, combat-helds on `may_release`; the ended
+        //    hold goes to `on_detach_expired` and then despawns or turns
+        //    bot-fed). Runs BEFORE READ so an expired row is gone before
+        //    this tick's pulls.
+        if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
+            let now = Instant::now();
+            let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
+            let mut ask: Vec<PlayerId> = Vec::new();
+            for (&player, rc) in &self.conns {
+                if !rc.detached || rc.bot_fed {
+                    continue;
                 }
-                ExpireTo::AiHandover => {
-                    self.m.detach_expired_ai += 1;
-                    if let Some(rc) = self.conns.get_mut(&player) {
-                        rc.bot_fed = true;
-                        rc.detach_deadline = None;
-                    }
-                    debug!(
-                        room = %self.config.id,
-                        shard = self.index,
-                        %player,
-                        "detach hold expired: AI handover (bot_fed; Tur B seam)"
-                    );
+                match rc.detach_deadline {
+                    Some(dl) if now >= dl => due.push((player, rc.expire_to)),
+                    Some(_) => {}
+                    None => ask.push(player),
                 }
             }
+            for player in ask {
+                if self.logic.may_release(&mut self.world, player) {
+                    let to = self
+                        .conns
+                        .get(&player)
+                        .map(|rc| rc.expire_to)
+                        .unwrap_or(ExpireTo::Despawn);
+                    due.push((player, to));
+                }
+            }
+            for (player, to) in due {
+                self.logic.on_detach_expired(&mut self.world, player, to);
+                match to {
+                    ExpireTo::Despawn => {
+                        self.m.detach_expired_despawn += 1;
+                        // The registry is holding a detached row for this
+                        // session — and on the grid that row also holds a
+                        // slot in the ShardGroup member count, the only
+                        // whole-room capacity view there is. Report the
+                        // end so both come back.
+                        if self.registry.is_some()
+                            && let Some(conn) = self.conns.get(&player).map(|rc| rc.conn)
+                        {
+                            self.park_reports.push(conn);
+                        }
+                        self.despawn_conn(player, false);
+                        debug!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            %player,
+                            "detach hold expired: despawn"
+                        );
+                    }
+                    ExpireTo::AiHandover => {
+                        self.m.detach_expired_ai += 1;
+                        if let Some(rc) = self.conns.get_mut(&player) {
+                            rc.bot_fed = true;
+                            rc.detach_deadline = None;
+                        }
+                        debug!(
+                            room = %self.config.id,
+                            shard = self.index,
+                            %player,
+                            "detach hold expired: AI handover (bot_fed; Tur B seam)"
+                        );
+                    }
+                }
+            }
         }
-    }
 
-    // -- Park-expiry reports: hand the registry back the rows (and the
-    //    member slots) whose holds ended this tick, plus anything an
-    //    earlier tick could not place. Synchronous `try_send` (the
-    //    tick body stays await-free); a FULL mailbox keeps the id
-    //    queued for the next tick instead of dropping it, a CLOSED one
-    //    drops it (the registry is gone — no table left to leak into).
-    if !self.park_reports.is_empty()
-        && let Some(registry) = &self.registry
-    {
-        let room = self.config.id;
-        self.park_reports.retain(|&conn| {
-            matches!(
-                registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
-                Err(mpsc::error::TrySendError::Full(_))
-            )
-        });
-    }
-
+        // -- Park-expiry reports: hand the registry back the rows (and the
+        //    member slots) whose holds ended this tick, plus anything an
+        //    earlier tick could not place. Synchronous `try_send` (the
+        //    tick body stays await-free); a FULL mailbox keeps the id
+        //    queued for the next tick instead of dropping it, a CLOSED one
+        //    drops it (the registry is gone — no table left to leak into).
+        if !self.park_reports.is_empty()
+            && let Some(registry) = &self.registry
+        {
+            let room = self.config.id;
+            self.park_reports.retain(|&conn| {
+                matches!(
+                    registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
+                    Err(mpsc::error::TrySendError::Full(_))
+                )
+            });
+        }
     }
 }

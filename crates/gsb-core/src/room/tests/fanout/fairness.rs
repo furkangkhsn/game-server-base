@@ -34,7 +34,7 @@ async fn all_dirty_groups_emit_on_the_same_tick() {
         control_rx,
         1,
         null_metrics_tx(),
-            None,
+        None,
     );
     let handle = tokio::spawn(actor.run());
     let t0 = Instant::now();
@@ -105,8 +105,7 @@ async fn all_dirty_groups_emit_on_the_same_tick() {
             .iter()
             .map(|b| {
                 u64::from_le_bytes(
-                    b[0]
-                        .payload
+                    b[0].payload
                         .get(0..8)
                         .expect("8-byte payload")
                         .try_into()

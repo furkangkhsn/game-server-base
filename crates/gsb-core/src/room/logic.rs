@@ -6,11 +6,10 @@
 //! divided across files without inventing traits the design does not
 //! have.
 
-use std::fmt::Debug;
-use std::hash::Hash;
 use crate::id::{ConnectionId, EntityId, PlayerId};
 use crate::room::*;
-
+use std::fmt::Debug;
+use std::hash::Hash;
 
 /// Game-side behaviour shared by every actor shape — the single source of
 /// the contract that used to be duplicated between the room and the shard
@@ -212,12 +211,7 @@ pub trait GameLogic<W>: Send {
     ///
     /// Default: [`Detach::Despawn`] — every pre-reconnect logic keeps
     /// today's behavior exactly, unchanged.
-    fn on_disconnect(
-        &mut self,
-        _world: &mut W,
-        _player: PlayerId,
-        _identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _world: &mut W, _player: PlayerId, _identity: &str) -> Detach {
         Detach::Despawn
     }
 

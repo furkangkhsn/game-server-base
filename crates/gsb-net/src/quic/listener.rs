@@ -19,11 +19,11 @@ use gsb_core::id::ConnectionId;
 use crate::framed::FrameReader;
 use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
+use crate::quic::*;
 use crate::transport::BoxFuture;
 use crate::transport::Endpoint;
 use crate::transport::Listener;
 use crate::transport::Transport;
-use crate::quic::*;
 
 impl Transport for QuicTransport {
     fn bind(
@@ -123,8 +123,7 @@ impl QuicListenerHandle {
                   idle_timeout: Option<Duration>| {
                 let reader: QuicReader = FrameReader::new(recv, max_frame_bytes);
                 let writer: QuicWriter = FrameWriter::new(send);
-                let (read, write) =
-                    spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
                 (Some(read), write)
             },
         )

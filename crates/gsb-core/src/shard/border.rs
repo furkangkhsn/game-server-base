@@ -5,9 +5,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-
-
-
 /// One neighbor's boundary entity, as included in this shard's snapshots:
 /// the CORE-MANAGED identity envelope (`wire` — minted from the room's
 /// range-partitioned counters, deduplicated by the own-wins filter,

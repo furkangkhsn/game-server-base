@@ -96,7 +96,9 @@ impl std::fmt::Display for TicketError {
 /// across connections (cloned into each validating connection actor);
 /// the returned future is `Send` because it runs in a spawned worker.
 pub type TicketValidator = Arc<
-    dyn Fn(bytes::Bytes) -> Pin<Box<dyn Future<Output = Result<ValidatedTicket, TicketError>> + Send>>
+    dyn Fn(
+            bytes::Bytes,
+        ) -> Pin<Box<dyn Future<Output = Result<ValidatedTicket, TicketError>> + Send>>
         + Send
         + Sync,
 >;

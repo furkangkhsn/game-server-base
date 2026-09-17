@@ -1,15 +1,15 @@
 //! Admission and rebinding: a fresh join's seat, a resume's channel
 //! swap onto a live entity, and the one despawn funnel both end in.
 
+use crate::channel::{FrameBatch, Mailbox};
+use crate::error::CoreError;
+use crate::id::{ConnectionId, EntityId, PlayerId};
+use crate::room::actor::RoomActor;
+use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
-use crate::channel::{FrameBatch, Mailbox};
-use crate::error::CoreError;
-use crate::id::{ConnectionId, EntityId, PlayerId};
-use crate::room::*;
-use crate::room::actor::RoomActor;
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -150,7 +150,10 @@ where
         // reused.
         let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
         let (entity, old_conn) = {
-            let rc = self.conns.get_mut(&player).expect("parked row checked by caller");
+            let rc = self
+                .conns
+                .get_mut(&player)
+                .expect("parked row checked by caller");
             rc.out = out;
             rc.actions = act_rx;
             rc.detached = false;

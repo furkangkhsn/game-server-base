@@ -1,7 +1,6 @@
 //! The in-process server the default mode runs against: a real
 //! server on an ephemeral port, its metrics captured from the channel.
 
-
 use gsb_core::metrics::MetricReport;
 
 use tokio::sync::mpsc;
@@ -76,7 +75,9 @@ pub(crate) async fn start_inprocess(
 /// is the channel); keep every report — the peak gauges (connection
 /// count) and a stable tick rate need the series, not just the last
 /// (shutdown) report.
-pub(crate) async fn drain_reports(mut rx: mpsc::UnboundedReceiver<MetricReport>) -> Vec<MetricReport> {
+pub(crate) async fn drain_reports(
+    mut rx: mpsc::UnboundedReceiver<MetricReport>,
+) -> Vec<MetricReport> {
     let mut all = Vec::new();
     while let Some(r) = rx.recv().await {
         all.push(r);

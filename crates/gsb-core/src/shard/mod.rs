@@ -280,14 +280,11 @@ mod msg;
 mod tests;
 
 pub use actor::ShardActor;
-pub use border::{BorderExchange, BorderRecord};
 pub(crate) use border::*;
+pub use border::{BorderExchange, BorderRecord};
 pub(crate) use link::*;
 pub use logic::ShardLogic;
 pub use msg::{Migrating, PlayerMigration, ResumeReply, ShardMsg};
-
-
-
 
 /// Identities per shard in the wire-id range partitioning (see module
 /// docs, "Wire identity"): 2^20 ≈ 100× the measured 10k single-room wall

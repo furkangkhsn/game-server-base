@@ -8,18 +8,18 @@ use super::*;
 use futures::SinkExt;
 use futures::StreamExt;
 
-use gsb_core::channel::channel;
-use gsb_protocol::FrameBody;
-use crate::transport::Transport;
 use crate::framed::{FrameReader, FrameWriter};
-use gsb_core::id::ConnectionId;
-use gsb_core::conn::ConnIn;
-use gsb_core::channel::FrameBatch;
-use tracing::debug;
-use std::sync::Arc;
-use std::net::SocketAddr;
-use std::io;
 use crate::quic::config::idle_timeout;
+use crate::transport::Transport;
+use gsb_core::channel::FrameBatch;
+use gsb_core::channel::channel;
+use gsb_core::conn::ConnIn;
+use gsb_core::id::ConnectionId;
+use gsb_protocol::FrameBody;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::debug;
 
 async fn connect(
     addr: SocketAddr,
@@ -98,10 +98,7 @@ struct TestPki {
 fn mint_pki(tag: &str) -> TestPki {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "gsb-net-quic-{tag}-{}-{n}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("gsb-net-quic-{tag}-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     // The mini-CA.
@@ -164,8 +161,7 @@ async fn handshake_then_frames_flow_both_ways_over_quic() {
         let endpoint = listener.accept().await.expect("accept + handshake");
         let (in_tx, mut in_rx) = channel::<ConnIn>(8);
         let (out_tx, out_rx) = channel::<FrameBatch>(8);
-        let (read, write) =
-            endpoint.start_pump(ConnectionId(1), in_tx.clone(), out_rx, None);
+        let (read, write) = endpoint.start_pump(ConnectionId(1), in_tx.clone(), out_rx, None);
         // Echo the first received frame back.
         match in_rx.recv().await.expect("inbox open") {
             ConnIn::Frame(f) => {

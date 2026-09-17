@@ -59,21 +59,23 @@ async fn join_rejected_when_room_is_full() {
 
     // Existing members are unaffected: the surviving member's action
     // still reaches the ingest on the next step.
-    _a1
-        .send(Action {
-            conn: ConnectionId(1),
-            player: PlayerId(1),
-            op: 0x1500,
-            payload: bytes::Bytes::new(),
-        })
-        .await
-        .expect("member's action channel alive");
+    _a1.send(Action {
+        conn: ConnectionId(1),
+        player: PlayerId(1),
+        op: 0x1500,
+        payload: bytes::Bytes::new(),
+    })
+    .await
+    .expect("member's action channel alive");
     h.tick(period);
     let op = tokio::time::timeout(Duration::from_secs(2), ops.recv())
         .await
         .expect("timed out waiting for the member op")
         .expect("ops closed");
-    assert_eq!(op, 0x1500, "the surviving member's action is still ingested");
+    assert_eq!(
+        op, 0x1500,
+        "the surviving member's action is still ingested"
+    );
     h.shutdown().await;
 }
 
@@ -178,18 +180,15 @@ async fn flooder_cannot_evict_other_connections_actions() {
         }
     }
     assert_eq!(
-        total,
-        188,
+        total, 188,
         "the room ingested the full expected volume (20 + 168)"
     );
     assert_eq!(
-        victim_ops,
-        20,
+        victim_ops, 20,
         "EVERY victim op was ingested — the flood evicted none of them"
     );
     assert_eq!(
-        flood_ops,
-        168,
+        flood_ops, 168,
         "the room pulled exactly 8 flood ops per tick (its per-conn budget)"
     );
     // The flooder's excess was DEFERRED in its own channel: the room

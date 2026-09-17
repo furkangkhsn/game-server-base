@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
 use bytes::Bytes;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
@@ -101,7 +101,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 
@@ -220,7 +222,11 @@ async fn ack_is_monotonic_and_never_exceeds_processed() {
     // the spawn lattice is ±50, so the chase takes longer than the
     // ack-cadence window above).
     advance_and_collect(&mut room, &mut a_rx, 500, &mut acks, &mut view).await;
-    assert_eq!(view.get(&a_id).copied(), Some((5, 0)), "the entity moved: {view:?}");
+    assert_eq!(
+        view.get(&a_id).copied(),
+        Some((5, 0)),
+        "the entity moved: {view:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -342,9 +348,17 @@ async fn legacy_unnumbered_input_is_processed_but_never_acked() {
     // (Settle: the spawn lattice is ±50.)
     advance_and_collect(&mut room, &mut a_rx, 500, &mut acks, &mut view).await;
     // The entity followed BOTH inputs (unnumbered input is processed).
-    assert_eq!(view.get(&a_id).copied(), Some((9, 0)), "unnumbered input is processed: {view:?}");
+    assert_eq!(
+        view.get(&a_id).copied(),
+        Some((9, 0)),
+        "unnumbered input is processed: {view:?}"
+    );
 
     // But NO ack was ever sent (seq 0 never advances the high-water
     // mark; a pre-seq client sees exactly the old wire semantics).
-    assert_eq!(acks, Vec::<u64>::new(), "no acks for a legacy (unnumbered) client");
+    assert_eq!(
+        acks,
+        Vec::<u64>::new(),
+        "no acks for a legacy (unnumbered) client"
+    );
 }

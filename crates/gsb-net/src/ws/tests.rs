@@ -4,20 +4,20 @@
 //! before).
 
 use super::*;
-use gsb_core::channel::channel;
-use tokio::io::AsyncReadExt;
-use gsb_core::id::ConnectionId;
 use crate::transport::Transport;
+use bytes::Bytes;
+use gsb_core::channel::FrameBatch;
+use gsb_core::channel::channel;
+use gsb_core::conn::ConnIn;
+use gsb_core::id::ConnectionId;
+use gsb_protocol::FrameBody;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use std::time::Duration;
-use std::net::SocketAddr;
-use bytes::Bytes;
-use gsb_protocol::FrameBody;
-use gsb_core::channel::FrameBatch;
-use gsb_core::conn::ConnIn;
-use std::sync::Arc;
-use std::io;
 
 /// The canonical RFC 6455 §1.3 example pair.
 pub(super) const RFC_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -58,10 +58,7 @@ async fn serve_echo(idle_timeout: Option<Duration>) -> SocketAddr {
 }
 
 /// Same, with an explicit message-size ceiling.
-async fn serve_echo_max(
-    max_message_bytes: usize,
-    idle_timeout: Option<Duration>,
-) -> SocketAddr {
+async fn serve_echo_max(max_message_bytes: usize, idle_timeout: Option<Duration>) -> SocketAddr {
     let transport: Arc<dyn Transport> = Arc::new(WsTransport { max_message_bytes });
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     let listener = transport.bind(addr).await.expect("bind");

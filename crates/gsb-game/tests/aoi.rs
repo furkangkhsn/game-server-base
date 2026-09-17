@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
 use bytes::Bytes;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
@@ -190,7 +190,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 }
@@ -255,9 +257,15 @@ async fn aoi_room_fanout_and_cell_transition() {
     let a_ids = conns[0].view.ids();
     let b_ids = conns[1].view.ids();
     let c_ids = conns[2].view.ids();
-    assert!(a_ids.contains(&a_id) && a_ids.contains(&b_id), "A sees B: {a_ids:?}");
+    assert!(
+        a_ids.contains(&a_id) && a_ids.contains(&b_id),
+        "A sees B: {a_ids:?}"
+    );
     assert!(!a_ids.contains(&c_id), "A does not see far C: {a_ids:?}");
-    assert!(b_ids.contains(&b_id) && b_ids.contains(&a_id), "B sees A: {b_ids:?}");
+    assert!(
+        b_ids.contains(&b_id) && b_ids.contains(&a_id),
+        "B sees A: {b_ids:?}"
+    );
     assert!(!b_ids.contains(&c_id), "B does not see far C: {b_ids:?}");
     assert!(c_ids.contains(&c_id), "C sees itself: {c_ids:?}");
     assert!(
@@ -284,7 +292,10 @@ async fn aoi_room_fanout_and_cell_transition() {
         c_ids2.contains(&c_id) && c_ids2.contains(&a_id),
         "C now sees A: {c_ids2:?}"
     );
-    assert!(!b_ids2.contains(&a_id), "B no longer sees A after it left: {b_ids2:?}");
+    assert!(
+        !b_ids2.contains(&a_id),
+        "B no longer sees A after it left: {b_ids2:?}"
+    );
     assert!(
         a_ids2.contains(&a_id),
         "A keeps its wire id across the cell move: {a_ids2:?}"

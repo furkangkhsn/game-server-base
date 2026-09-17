@@ -11,13 +11,13 @@ use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
 
 use super::*;
+use crate::common::{Cell, cell_of};
+use crate::components::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
-use crate::components::*;
-use std::collections::HashMap;
+use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
 use prost::Message;
-use gsb_core::shard::{ShardLogic, SHARD_SERIAL_RANGE, BorderRecord};
-use crate::common::{Cell, cell_of};
+use std::collections::HashMap;
 
 mod spatial;
 
@@ -31,15 +31,12 @@ fn ctx(tick: u64) -> TickCtx {
 
 /// Place a player at an exact position (join, then move the entity)
 /// for a deterministic region assignment. Returns the wire id.
-fn place(
-    world: &mut World,
-    room: &mut ShardedRoom,
-    conn: ConnectionId,
-    x: f32,
-    y: f32,
-) -> u64 {
+fn place(world: &mut World, room: &mut ShardedRoom, conn: ConnectionId, x: f32, y: f32) -> u64 {
     let admission = room.on_join(world, conn);
-    let entity = *room.player_entity.get(&admission.player).expect("registered");
+    let entity = *room
+        .player_entity
+        .get(&admission.player)
+        .expect("registered");
     world.entity_mut(entity).insert(Position { x, y });
     admission.entity
 }
@@ -134,7 +131,9 @@ fn migration_reports_crossing_with_full_state() {
     let mut s0 = ShardedRoom::new(0, 4, 50.0); // x in [-50, 0)
     let w = place(&mut world, &mut s0, ConnectionId(1), -1.0, -10.0);
     let entity = *s0.player_entity.get(&PlayerId(1)).unwrap();
-    world.entity_mut(entity).insert(MoveTarget { x: 1.0, y: -10.0 });
+    world
+        .entity_mut(entity)
+        .insert(MoveTarget { x: 1.0, y: -10.0 });
 
     // Still in shard 0: no migration to shard 1 (or anyone).
     assert!(
@@ -143,7 +142,9 @@ fn migration_reports_crossing_with_full_state() {
     );
 
     // Move across the seam (x: -1 → +1): now in shard 1's region.
-    world.entity_mut(entity).insert(Position { x: 1.0, y: -10.0 });
+    world
+        .entity_mut(entity)
+        .insert(Position { x: 1.0, y: -10.0 });
     let to1 = s0.collect_migrations(&mut world, 1);
     assert_eq!(to1.len(), 1, "crossing reported once");
     let m = &to1[0];
@@ -305,7 +306,11 @@ fn place_spatial(
     y: f32,
 ) -> u64 {
     let admission = room.on_join(world, conn);
-    let entity = *room.inner.player_entity.get(&admission.player).expect("registered");
+    let entity = *room
+        .inner
+        .player_entity
+        .get(&admission.player)
+        .expect("registered");
     world.entity_mut(entity).insert(Position { x, y });
     admission.entity
 }

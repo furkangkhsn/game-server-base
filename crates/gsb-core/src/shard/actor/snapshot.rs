@@ -1,17 +1,15 @@
 //! Phase 6 — BROADCAST: the room's broadcast phase with the borrowed
 //! border strip folded into each group's view.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use tracing::warn;
 
 use crate::id::PlayerId;
-use crate::room::{
-    GroupState, TickCtx,
-};
+use crate::room::{GroupState, TickCtx};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -44,8 +42,7 @@ where
         for (&player, rc) in &self.conns {
             members.entry(rc.group.clone()).or_default().push(player);
         }
-        self.m.step_max_group =
-            members.values().map(Vec::len).max().unwrap_or(0) as u32;
+        self.m.step_max_group = members.values().map(Vec::len).max().unwrap_or(0) as u32;
         let gone: Vec<G> = self
             .groups
             .keys()
@@ -131,9 +128,9 @@ where
         let mut buf = bytes::BytesMut::new();
         for (group, st) in self.groups.iter_mut() {
             buf.clear();
-            let emitted =
-                self.logic
-                    .snapshot(&mut self.world, ctx, group, &borrowed, &mut buf);
+            let emitted = self
+                .logic
+                .snapshot(&mut self.world, ctx, group, &borrowed, &mut buf);
             if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;
@@ -206,8 +203,10 @@ where
             }
         }
 
-        self.m.snap_records =
-            self.m.snap_records.saturating_add(self.logic.encoded_records());
+        self.m.snap_records = self
+            .m
+            .snap_records
+            .saturating_add(self.logic.encoded_records());
 
         // 6d. Per-connection fan-out (same as the room's 4d).
         let mut dropped: u64 = 0;
@@ -227,14 +226,11 @@ where
                 continue;
             }
             rc.batch.clear();
-            if let Some(payload) = self
-                .groups
-                .get(&rc.group)
-                .and_then(|st| st.sent.clone())
-            {
+            if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
-                rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
+                rc.batch
+                    .push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
             // This connection's queued RPC answers for the tick (Faz 3:
             // same-tick local replies and, on later ticks, the reconciled

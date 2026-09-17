@@ -10,10 +10,9 @@ use tracing::{debug, warn};
 use gsb_protocol::op;
 use gsb_protocol::{FrameBody, ProtoError, base};
 
+use crate::conn::*;
 use crate::registry::RegistryMsg;
 use crate::room::Action;
-use crate::conn::*;
-
 
 impl super::ConnectionActor {
     pub(super) async fn handle_frame(&mut self, frame: FrameBody) {
@@ -55,9 +54,9 @@ impl super::ConnectionActor {
                 // session's liveness signal).
                 if self.state == ConnState::WaitingAuth {
                     let now = Instant::now();
-                    let due = self.last_preauth_hb_ack.is_none_or(|t| {
-                        now.duration_since(t) >= PREAUTH_HEARTBEAT_MIN_INTERVAL
-                    });
+                    let due = self
+                        .last_preauth_hb_ack
+                        .is_none_or(|t| now.duration_since(t) >= PREAUTH_HEARTBEAT_MIN_INTERVAL);
                     if !due {
                         self.m_preauth_hb_extra += 1;
                         debug!(
@@ -173,8 +172,7 @@ impl super::ConnectionActor {
             // Metrics: count this control frame's wire bytes (frame body:
             // 2-byte op + payload). Room fan-out bytes are counted by the
             // room, not here.
-            self.m_out_bytes =
-                self.m_out_bytes.saturating_add(2 + fb.payload.len() as u64);
+            self.m_out_bytes = self.m_out_bytes.saturating_add(2 + fb.payload.len() as u64);
             self.m_out_frames += 1;
             let _ = self.out.send(vec![fb]).await;
         }

@@ -2,7 +2,6 @@
 //! `demux`, so the actor's private session state stays private to
 //! its own module tree.
 
-
 use super::*;
 use crate::udp::wire::*;
 use bytes::Bytes;
@@ -91,10 +90,7 @@ async fn inbound_rel_reorders_and_dedupes() {
     let f2 = in_rx.try_recv().expect("second frame");
     assert!(in_rx.is_empty());
     match (&f1, &f2) {
-        (
-            gsb_core::conn::ConnIn::Frame(a),
-            gsb_core::conn::ConnIn::Frame(b),
-        ) => {
+        (gsb_core::conn::ConnIn::Frame(a), gsb_core::conn::ConnIn::Frame(b)) => {
             assert_eq!(a.payload.as_ref(), b"first");
             assert_eq!(b.payload.as_ref(), b"second");
         }

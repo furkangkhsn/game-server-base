@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use bevy_ecs::world::World;
 
-
 use gsb_core::registry::{BuiltRoom, RoomFactory};
 use gsb_core::room::RoomLogic;
 use gsb_protocol::MessageTable;
@@ -39,8 +38,7 @@ pub(super) fn open_room_factory(
             gsb_game::room::OpenRoom::with_spawn_half(spawn_half)
                 .with_disconnect_grace(disconnect_grace)
                 .with_economy(economy.clone()),
-        )
-            as Box<dyn RoomLogic<World, GroupKey = (), Strip = ()>>,
+        ) as Box<dyn RoomLogic<World, GroupKey = (), Strip = ()>>,
     })
 }
 
@@ -130,27 +128,26 @@ pub(super) fn sharded_room_factory(
                 gsb_game::sharded::ShardedRoomState,
                 gsb_game::sharded::StripPos,
             >,
-        > =
-            (0..shard_count)
-                .map(|i| {
-                    (
-                        World::new(),
-                        Box::new(
-                            gsb_game::sharded::ShardedRoom::new(i, shard_count, spawn_half)
-                                .with_disconnect_grace(disconnect_grace)
-                                .with_economy(economy.clone()),
-                        )
-                            as Box<
-                                dyn gsb_core::shard::ShardLogic<
+        > = (0..shard_count)
+            .map(|i| {
+                (
+                    World::new(),
+                    Box::new(
+                        gsb_game::sharded::ShardedRoom::new(i, shard_count, spawn_half)
+                            .with_disconnect_grace(disconnect_grace)
+                            .with_economy(economy.clone()),
+                    )
+                        as Box<
+                            dyn gsb_core::shard::ShardLogic<
                                     World,
                                     GroupKey = (),
                                     State = gsb_game::sharded::ShardedRoomState,
                                     Strip = gsb_game::sharded::StripPos,
                                 >,
-                            >,
-                    )
-                })
-                .collect();
+                        >,
+                )
+            })
+            .collect();
         BuiltRoom::Sharded {
             shards,
             home_shard: Arc::new(move |conn| {
@@ -188,32 +185,31 @@ pub(super) fn sharded_spatial_room_factory(
                 gsb_game::sharded::ShardedRoomState,
                 gsb_game::sharded::StripPos,
             >,
-        > =
-            (0..shard_count)
-                .map(|i| {
-                    (
-                        World::new(),
-                        Box::new(
-                            gsb_game::sharded::ShardedSpatialRoom::new(
-                                i,
-                                shard_count,
-                                spawn_half,
-                                cell_size,
-                            )
-                            .with_disconnect_grace(disconnect_grace)
-                            .with_economy(economy.clone()),
+        > = (0..shard_count)
+            .map(|i| {
+                (
+                    World::new(),
+                    Box::new(
+                        gsb_game::sharded::ShardedSpatialRoom::new(
+                            i,
+                            shard_count,
+                            spawn_half,
+                            cell_size,
                         )
-                            as Box<
-                                dyn gsb_core::shard::ShardLogic<
+                        .with_disconnect_grace(disconnect_grace)
+                        .with_economy(economy.clone()),
+                    )
+                        as Box<
+                            dyn gsb_core::shard::ShardLogic<
                                     World,
                                     GroupKey = gsb_game::aoi::Cell,
                                     State = gsb_game::sharded::ShardedRoomState,
                                     Strip = gsb_game::sharded::StripPos,
                                 >,
-                            >,
-                    )
-                })
-                .collect();
+                        >,
+                )
+            })
+            .collect();
         BuiltRoom::Sharded {
             shards,
             home_shard: Arc::new(move |conn| {

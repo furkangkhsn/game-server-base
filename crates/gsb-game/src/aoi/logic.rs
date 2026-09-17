@@ -3,23 +3,20 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-
 use bevy_ecs::prelude::World;
 use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
-use gsb_core::room::{
-    Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx,
-};
+use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use prost::encoding::varint::encode_varint;
 
 // The public cell type lives with the shared machinery (both spatial
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
+use crate::aoi::*;
 pub use crate::common::Cell;
 use crate::common::{assemble_group_packet, cell_of};
 use crate::components::{Position, WireId};
 use crate::op;
-use crate::aoi::*;
 
 impl GameLogic<World> for AoiRoom {
     type GroupKey = Cell;
@@ -51,7 +48,11 @@ impl GameLogic<World> for AoiRoom {
         if let Some(&c) = self.book.last_cell.get(&entity) {
             return c;
         }
-        let pos = world.entity(entity).get::<Position>().copied().unwrap_or_default();
+        let pos = world
+            .entity(entity)
+            .get::<Position>()
+            .copied()
+            .unwrap_or_default();
         cell_of(pos.x as i32, pos.y as i32, self.cell_size)
     }
 
@@ -204,10 +205,7 @@ impl GameLogic<World> for AoiRoom {
             // (no `update` ran between the join and the leave), so it
             // never entered the buckets — nothing to remove, no member
             // count to undo.
-            let wire = world
-                .entity(entity)
-                .get::<WireId>()
-                .map(|w| w.get());
+            let wire = world.entity(entity).get::<WireId>().map(|w| w.get());
             let cell = self.book.last_cell.get(&entity).copied();
             if let (Some(wire), Some(cell)) = (wire, cell) {
                 self.book.pending_removals.push((entity, wire, cell));
@@ -220,12 +218,7 @@ impl GameLogic<World> for AoiRoom {
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
     //    hook bodies live in `crate::common`) ---------------------------
 
-    fn on_disconnect(
-        &mut self,
-        _world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
         crate::common::park_on_disconnect(
             &self.player_entity,
             player,

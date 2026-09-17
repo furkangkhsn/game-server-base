@@ -1,13 +1,13 @@
 //! Phase 0 — CONTROL: joins, leaves, resumes and shutdown, plus the
 //! roster bookkeeping every one of them touches.
 
+use crate::error::CoreError;
+use crate::id::PlayerId;
+use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
 use tracing::{debug, warn};
-use crate::error::CoreError;
-use crate::id::PlayerId;
-use crate::room::*;
 
 use crate::room::actor::RoomActor;
 
@@ -42,7 +42,10 @@ where
     /// supervision round surfaced).
     pub(super) fn roster_remove(&mut self, player: &PlayerId) {
         if let Some(idx) = self.roster_pos.remove(player) {
-            let relocated = *self.roster.last().expect("pos entry implies non-empty roster");
+            let relocated = *self
+                .roster
+                .last()
+                .expect("pos entry implies non-empty roster");
             self.roster.swap_remove(idx);
             if relocated != *player {
                 // `insert`, not `get_mut`: the relocated element's entry
@@ -55,9 +58,7 @@ where
 
     pub(in crate::room) fn handle_control(&mut self, c: RoomControl) -> bool {
         match c {
-            RoomControl::Join { conn, out, reply } => {
-                self.admit_fresh(conn, out, reply)
-            }
+            RoomControl::Join { conn, out, reply } => self.admit_fresh(conn, out, reply),
             RoomControl::Leave { conn, entity } => {
                 // Stale-leave guard: resolve the session through the
                 // binding, then only the entity this player currently
@@ -71,7 +72,11 @@ where
                 }
                 true
             }
-            RoomControl::Detach { conn, entity, identity } => {
+            RoomControl::Detach {
+                conn,
+                entity,
+                identity,
+            } => {
                 // Transport death (registry `ConnClosed` route): the POLICY
                 // is the logic's (§3 — the registry only reports the fact).
                 // Same stale guard as `Leave`: binding first, then the
@@ -79,8 +84,7 @@ where
                 if let Some(&player) = self.binding.get(&conn)
                     && self.conns.get(&player).map(|c| c.entity) == Some(entity)
                 {
-                    let decision =
-                        self.logic.on_disconnect(&mut self.world, player, &identity);
+                    let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
                     match decision {
                         Detach::Despawn => {
                             // Byte-for-byte the old close semantics.
@@ -176,10 +180,7 @@ where
                         // calls); the ledger consumption itself stays
                         // exactly-once regardless — this actor is
                         // single-threaded.
-                        if epoch != 0
-                            && rc.session_epoch != 0
-                            && epoch <= rc.session_epoch
-                        {
+                        if epoch != 0 && rc.session_epoch != 0 && epoch <= rc.session_epoch {
                             self.m.resume_rejected_stale += 1;
                             warn!(
                                 room = %self.config.id,

@@ -9,9 +9,7 @@ use tracing::debug;
 
 use crate::channel::{FrameBatch, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{
-    Action, 
-};
+use crate::room::Action;
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -88,8 +86,10 @@ where
         let moved_epoch = self.conn_epoch.remove(&old_conn);
         self.binding.remove(&old_conn);
         self.binding.insert(conn, player);
-        self.conn_epoch.insert(conn, epoch.max(moved_epoch.unwrap_or(0)));
-        self.logic.on_resume(&mut self.world, identity, conn, player, entity);
+        self.conn_epoch
+            .insert(conn, epoch.max(moved_epoch.unwrap_or(0)));
+        self.logic
+            .on_resume(&mut self.world, identity, conn, player, entity);
         debug!(
             room = %self.config.id,
             shard = self.index,

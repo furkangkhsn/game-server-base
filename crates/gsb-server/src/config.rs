@@ -2,19 +2,15 @@
 //! grammar, and the validation that refuses an unserveable
 //! combination before any socket exists.
 
-
-
-
-
 mod listeners;
 mod resolve;
 
 mod axes;
 pub use axes::*;
 
-pub use resolve::{ConfigError, ServerError};
 pub(crate) use listeners::*;
 pub(crate) use resolve::ListenerSpec;
+pub use resolve::{ConfigError, ServerError};
 
 /// The LEGACY config spelling of two of the three selection axes
 /// (`docs/ROADMAP.md`, P2 "Konfigürasyon düzeltmesi"): the demo rooms'

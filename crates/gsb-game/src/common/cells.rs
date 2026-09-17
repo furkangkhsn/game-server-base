@@ -8,11 +8,9 @@ mod pieces;
 pub(crate) use book::*;
 pub(crate) use pieces::*;
 
-
 use bytes::{BufMut, Bytes, BytesMut};
-use prost::encoding::varint::encode_varint;
 use prost::Message;
-
+use prost::encoding::varint::encode_varint;
 
 /// A spatial cell of the world grid — the AOI group key. Cell indices
 /// are the floor of (wire position / `cell_size`) — see the module docs
@@ -28,9 +26,15 @@ pub(crate) const RADIUS: i32 = 1;
 /// The (dx, dy) offsets of the visibility block centered on a cell
 /// (deterministic order: the assembly order of the group's packet).
 pub(crate) const BLOCK_OFFSETS: [(i32, i32); 9] = [
-    (-RADIUS, -RADIUS), (0, -RADIUS), (RADIUS, -RADIUS),
-    (-RADIUS, 0), (0, 0), (RADIUS, 0),
-    (-RADIUS, RADIUS), (0, RADIUS), (RADIUS, RADIUS),
+    (-RADIUS, -RADIUS),
+    (0, -RADIUS),
+    (RADIUS, -RADIUS),
+    (-RADIUS, 0),
+    (0, 0),
+    (RADIUS, 0),
+    (-RADIUS, RADIUS),
+    (0, RADIUS),
+    (RADIUS, RADIUS),
 ];
 
 /// The cell containing the WIRE (integer) position: `floor(x / cell_size)`
@@ -62,11 +66,7 @@ pub(crate) fn write_snapshot_header(buf: &mut BytesMut, tick: u64, delta: bool) 
 pub(crate) fn encode_entity_records(records: &[(u64, i32, i32)]) -> Bytes {
     let mut out = BytesMut::new();
     for &(wire, x, y) in records {
-        let rec = crate::game::EntityRecord {
-            entity: wire,
-            x,
-            y,
-        };
+        let rec = crate::game::EntityRecord { entity: wire, x, y };
         out.put_u8(0x12); // field 2 (entities), length-delimited
         encode_varint(rec.encoded_len() as u64, &mut out);
         rec.encode(&mut out)

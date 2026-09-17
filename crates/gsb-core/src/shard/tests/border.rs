@@ -72,13 +72,6 @@ fn inproc_link_preserves_fifo_and_drop_semantics() {
     assert!(dead.drain().is_empty());
 }
 
-
-
-
-
-
-
-
 /// Delta lock 1 — an entity entering the strip appears in the
 /// neighbor's view; moving updates it in place; leaving removes it
 /// (no ghost). The bootstrap is an explicit Full; every later step is
@@ -134,10 +127,6 @@ async fn delta_exchange_applies_upserts_and_exits_correctly() {
     assert!(upserts.is_empty(), "a leave is not an upsert");
     assert_eq!(exits, [101]);
     r.deliver_to_s1(msgs);
-    assert_eq!(
-        r.s1.border[&0].recs.len(),
-        1,
-        "no ghost after the exit"
-    );
+    assert_eq!(r.s1.border[&0].recs.len(), 1, "no ghost after the exit");
     assert!(!r.s1.border[&0].recs.contains_key(&101));
 }

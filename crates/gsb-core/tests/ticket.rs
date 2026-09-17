@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gsb_core::auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
-use gsb_core::channel::{channel, FrameBatch};
+use gsb_core::channel::{FrameBatch, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
@@ -289,12 +289,23 @@ async fn ticket_pins_room() {
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<MetricsEvent>(1);
     let reg_handle = tokio::spawn(
-        Registry::new(reg_rx, reg_tx.clone(), factory, ticker, metrics_tx, None, None, None).run(),
+        Registry::new(
+            reg_rx,
+            reg_tx.clone(),
+            factory,
+            ticker,
+            metrics_tx,
+            None,
+            None,
+            None,
+        )
+        .run(),
     );
     // Create room 1 (the ticket's room).
     {
-        let (reply_tx, reply_rx) =
-            tokio::sync::oneshot::channel::<Result<gsb_core::registry::RoomStatus, gsb_core::error::CoreError>>();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
+            Result<gsb_core::registry::RoomStatus, gsb_core::error::CoreError>,
+        >();
         reg_tx
             .send(RegistryMsg::CreateRoom {
                 config: RoomConfig {
@@ -343,12 +354,18 @@ async fn ticket_pins_room() {
     assert_eq!(r.room, 1);
 
     // Join room 2 (NOT the pinned room): code 11, local rejection.
-    inbox_tx.send(ConnIn::Frame(join_frame(2))).await.expect("inbox open");
+    inbox_tx
+        .send(ConnIn::Frame(join_frame(2)))
+        .await
+        .expect("inbox open");
     let (code, _msg) = read_error(&mut out_rx).await;
     assert_eq!(code, 11, "a non-pinned join is a normal rejection");
 
     // Join room 1 (the pinned room): accepted (the registry spawns).
-    inbox_tx.send(ConnIn::Frame(join_frame(1))).await.expect("inbox open");
+    inbox_tx
+        .send(ConnIn::Frame(join_frame(1)))
+        .await
+        .expect("inbox open");
     let batch = tokio::time::timeout(WAIT, out_rx.recv())
         .await
         .expect("timed out")
@@ -364,7 +381,10 @@ async fn ticket_pins_room() {
     );
     drop(inbox_tx);
     handle.await.unwrap();
-    reg_tx.send(RegistryMsg::Shutdown).await.expect("registry gone");
+    reg_tx
+        .send(RegistryMsg::Shutdown)
+        .await
+        .expect("registry gone");
     drop(reg_tx);
     reg_handle.await.unwrap();
 }

@@ -35,13 +35,10 @@ async fn migration_never_drops_or_duplicates() {
             1,
             "tick {t}: wire {wire} owned by {owners:?} (must be exactly one)"
         );
-        let Some((x, mode)) = c[owners[0]].iter().find_map(|e| {
-            if e.0 == wire {
-                Some((e.1, e.3))
-            } else {
-                None
-            }
-        }) else {
+        let Some((x, mode)) = c[owners[0]]
+            .iter()
+            .find_map(|e| if e.0 == wire { Some((e.1, e.3)) } else { None })
+        else {
             panic!("tick {t}: owner {} lost the entity", owners[0]);
         };
         // Position continuity: the step applied this tick equals the
@@ -92,9 +89,7 @@ async fn wire_identity_stable_and_disjoint() {
     let mut crossed_at = None;
     for _ in 0..30 {
         let c = h.tick().await;
-        if c[1].iter().any(|(w, _, _, _)| *w == w0)
-            && !reported_out(&h.migrated, h.t, 1, w0)
-        {
+        if c[1].iter().any(|(w, _, _, _)| *w == w0) && !reported_out(&h.migrated, h.t, 1, w0) {
             crossed_at = Some(h.t);
             break;
         }
@@ -170,7 +165,10 @@ async fn in_flight_action_survives_migration() {
     // crossing tick already ran before the send; only shard 1 can
     // pull it now).
     let ops = h.ops_drained().await;
-    let n = ops.iter().filter(|(p, op)| *p == PlayerId(conn.0) && *op == 1001).count();
+    let n = ops
+        .iter()
+        .filter(|(p, op)| *p == PlayerId(conn.0) && *op == 1001)
+        .count();
     assert_eq!(n, 1, "ops: {ops:?}");
 }
 
@@ -311,9 +309,7 @@ async fn boundary_entities_are_visible_to_both_sides() {
             })
             .collect()
     }
-    async fn read_snapshot(
-        rx: &mut mpsc::Receiver<FrameBatch>,
-    ) -> Option<Vec<(u64, i32, i32)>> {
+    async fn read_snapshot(rx: &mut mpsc::Receiver<FrameBatch>) -> Option<Vec<(u64, i32, i32)>> {
         let batch = rx.recv().await.expect("snapshot stream alive");
         batch
             .into_iter()

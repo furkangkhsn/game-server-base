@@ -37,10 +37,10 @@
 
 mod framed;
 pub mod pump;
+pub mod quic;
 pub mod tcp;
 pub mod tls;
 pub mod transport;
-pub mod quic;
 pub mod udp;
 pub mod ws;
 

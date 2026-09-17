@@ -5,10 +5,8 @@ use std::time::Instant;
 
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    MetricReport, NetReport, RegistryReport,
-    RoomReport, FINE_HIST_BINS, HIST_BINS,
+    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport,
 };
-
 
 /// Metric-report wire format (server process → orchestrator, one TCP
 /// connection). The *data* is exactly what the in-process mode already
@@ -203,13 +201,16 @@ impl<'a> R<'a> {
         self.take(1).map(|s| s[0])
     }
     fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))
+        self.take(4)
+            .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
     }
     fn u64(&mut self) -> Option<u64> {
-        self.take(8).map(|s| u64::from_le_bytes(s.try_into().unwrap()))
+        self.take(8)
+            .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
     }
     fn f64(&mut self) -> Option<f64> {
-        self.take(8).map(|s| f64::from_le_bytes(s.try_into().unwrap()))
+        self.take(8)
+            .map(|s| f64::from_le_bytes(s.try_into().unwrap()))
     }
     fn done(&self) -> bool {
         self.i == self.b.len()

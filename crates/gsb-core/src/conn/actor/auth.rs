@@ -9,9 +9,8 @@ use tracing::{debug, warn};
 use gsb_protocol::op;
 use gsb_protocol::{FrameBody, ProtoError, base};
 
-use crate::registry::RegistryMsg;
 use crate::conn::*;
-
+use crate::registry::RegistryMsg;
 
 impl super::ConnectionActor {
     /// The AUTH_REQ arm of [`Self::handle_frame`]: the attempt window,
@@ -87,16 +86,15 @@ impl super::ConnectionActor {
                 // rejection (the client presents one — it does not
                 // hold a valid ticket, and the connection stays
                 // alive to retry).
-                self.reply_ticket_error(
-                    crate::auth::TicketError::Rejected("no ticket presented".into()),
-                )
+                self.reply_ticket_error(crate::auth::TicketError::Rejected(
+                    "no ticket presented".into(),
+                ))
                 .await;
                 return;
             }
-            let (reply_tx, reply_rx) =
-                oneshot::channel::<
-                    Result<crate::auth::ValidatedTicket, crate::auth::TicketError>,
-                >();
+            let (reply_tx, reply_rx) = oneshot::channel::<
+                Result<crate::auth::ValidatedTicket, crate::auth::TicketError>,
+            >();
             let ticket = auth.ticket.clone();
             tokio::spawn(async move {
                 // The validator's own future (the platform's
@@ -105,8 +103,7 @@ impl super::ConnectionActor {
                 // outlive `timeout` (a resource guard), and the
                 // actor's park above cannot outlive it either.
                 let outcome =
-                    tokio::time::timeout(hook.timeout, (hook.validator)(ticket.into()))
-                        .await;
+                    tokio::time::timeout(hook.timeout, (hook.validator)(ticket.into())).await;
                 let result = match outcome {
                     Ok(r) => r,
                     Err(_elapsed) => Err(crate::auth::TicketError::TimedOut),

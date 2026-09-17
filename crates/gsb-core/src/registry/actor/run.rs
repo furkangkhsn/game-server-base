@@ -28,7 +28,9 @@ where
         debug!("registry actor started");
         while let Some(msg) = self.inbox.recv().await {
             match msg {
-                RegistryMsg::CreateRoom { config, reply } => self.on_create_room(config, reply).await,
+                RegistryMsg::CreateRoom { config, reply } => {
+                    self.on_create_room(config, reply).await
+                }
                 RegistryMsg::DestroyRoom { id, reply } => self.on_destroy_room(id, reply).await,
                 RegistryMsg::RoomStatus { id, reply } => {
                     // Table-only answer (the registry never awaits a room):
@@ -134,9 +136,7 @@ where
                     if left {
                         // Sharded room: the registry's counter loses the
                         // member (see `ShardGroup`).
-                        if let Some(e) =
-                            self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
-                        {
+                        if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
                             e.members = e.members.saturating_sub(1);
                         }
                         self.reg_leaves += 1;

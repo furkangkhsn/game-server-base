@@ -3,9 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{
-    Auth, Error, JoinRoom, JoinRoomResult,
-};
+use gsb_protocol::base::{Auth, Error, JoinRoom, JoinRoomResult};
 use gsb_protocol::op;
 use prost::Message;
 
@@ -37,9 +35,7 @@ pub(crate) async fn churn_join(
         while Instant::now() < join_deadline {
             match recv_wire(wire, Duration::from_millis(250)).await {
                 Got::Frame(op::base::JOIN_ROOM_RESULT, payload) => {
-                    return JoinRoomResult::decode(&payload[..])
-                        .ok()
-                        .map(|m| m.entity);
+                    return JoinRoomResult::decode(&payload[..]).ok().map(|m| m.entity);
                 }
                 Got::Frame(op::base::ERROR, payload) => {
                     let e = Error::decode(&payload[..]).unwrap_or_default();
@@ -72,7 +68,12 @@ pub(crate) async fn churn_join(
     None
 }
 
-pub(crate) async fn run_churn_client(id: u64, p: ClientParams, cycle: Duration, max_drops: u64) -> ClientReport {
+pub(crate) async fn run_churn_client(
+    id: u64,
+    p: ClientParams,
+    cycle: Duration,
+    max_drops: u64,
+) -> ClientReport {
     let mut rep = ClientReport {
         id,
         connected: false,
@@ -185,8 +186,7 @@ pub(crate) async fn run_churn_client(id: u64, p: ClientParams, cycle: Duration, 
                 };
                 seq += 1;
                 let payload = msg.encode_to_vec();
-                rep.bytes_out +=
-                    wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
+                rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
                 if send_wire(&mut wire, gsb_game::op::MOVE_TO, payload)
                     .await
                     .is_err()

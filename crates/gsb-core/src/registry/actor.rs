@@ -11,9 +11,8 @@ use tokio::sync::mpsc;
 use crate::channel::{Inbox, Mailbox};
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::{MetricsEvent, RegistrySample};
-use crate::ticker::Ticker;
 use crate::registry::*;
-
+use crate::ticker::Ticker;
 
 mod conns;
 mod dispatch;

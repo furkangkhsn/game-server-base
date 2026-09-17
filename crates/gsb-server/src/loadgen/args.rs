@@ -1,8 +1,8 @@
 //! The command line: every knob the generator takes, and the usage
 //! text that documents them.
 
-use std::time::Duration;
 use crate::*;
+use std::time::Duration;
 
 pub(crate) fn parse_args() -> Args {
     let mut args = Args {
@@ -89,9 +89,9 @@ pub(crate) fn parse_args() -> Args {
                     "team" => gsb_server::Visibility::Team,
                     "pvs" => gsb_server::Visibility::Pvs,
                     "sharded" => gsb_server::Visibility::Sharded,
-                    other => panic!(
-                        "--visibility: expected all|spatial|team|pvs|sharded, got {other}"
-                    ),
+                    other => {
+                        panic!("--visibility: expected all|spatial|team|pvs|sharded, got {other}")
+                    }
                 };
             }
             "--topology" => {

@@ -6,10 +6,10 @@ use gsb_core::metrics::MetricReport;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
-use tokio::sync::mpsc;
 use super::*;
 use crate::codec::*;
 use crate::server::*;
+use tokio::sync::mpsc;
 
 /// The server process (`--serve`): the same server the in-process mode
 /// runs, as a standalone process. Without `--metrics-listen`, reports go
@@ -45,8 +45,7 @@ pub(crate) async fn serve(args: Args) {
     );
     match args.metrics_listen {
         Some(listen) => {
-            let listen: SocketAddr =
-                listen.parse().expect("valid --metrics-listen HOST:PORT");
+            let listen: SocketAddr = listen.parse().expect("valid --metrics-listen HOST:PORT");
             let (tx, rx) = mpsc::unbounded_channel::<MetricReport>();
             let handle = gsb_server::start_server_metrics(cfg, tx)
                 .await

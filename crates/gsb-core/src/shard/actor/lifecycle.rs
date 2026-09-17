@@ -11,10 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::channel::{Inbox, Mailbox};
 use crate::metrics::{MetricsEvent, hist_index};
-use crate::room::{
-    RoomConfig,
-    RoomCounters,
-};
+use crate::room::{RoomConfig, RoomCounters};
 use crate::ticker::TickInfo;
 
 use crate::shard::actor::ShardActor;
@@ -255,9 +252,7 @@ where
         // this shard actually exchanged something in the window, so a
         // quiet shard logs nothing and the steady state reads as clean
         // per-second rates.
-        if self.steps.is_multiple_of(self.border_every)
-            && !self.logic.neighbors().is_empty()
-        {
+        if self.steps.is_multiple_of(self.border_every) && !self.logic.neighbors().is_empty() {
             let s = std::mem::take(&mut self.bstats);
             if s.exports > 0 || s.imports > 0 {
                 info!(

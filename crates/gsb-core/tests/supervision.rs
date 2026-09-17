@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
@@ -193,15 +193,23 @@ fn start(
     let (tx, rx) = channel::<RegistryMsg>(4096);
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
-    let handle =
-        tokio::spawn(Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, None).run());
+    let handle = tokio::spawn(
+        Registry::new(
+            rx,
+            tx.clone(),
+            factory,
+            ticker,
+            metrics_tx,
+            None,
+            None,
+            None,
+        )
+        .run(),
+    );
     (tx, handle)
 }
 
-async fn create_with(
-    tx: &Mailbox<RegistryMsg>,
-    cfg: RoomConfig,
-) -> Result<RoomStatus, CoreError> {
+async fn create_with(tx: &Mailbox<RegistryMsg>, cfg: RoomConfig) -> Result<RoomStatus, CoreError> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: cfg,
@@ -217,9 +225,12 @@ async fn create_with(
 
 async fn status(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<RoomStatus>();
-    tx.send(RegistryMsg::RoomStatus { id, reply: reply_tx })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::RoomStatus {
+        id,
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
     tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
@@ -245,10 +256,7 @@ async fn status_until(tx: &Mailbox<RegistryMsg>, id: RoomId, pred: impl Fn(&Room
 
 /// Open a connection and hand the test its inbox receiver (so the test can
 /// observe what the registry sends it — the notification path under test).
-async fn open_conn(
-    tx: &Mailbox<RegistryMsg>,
-    conn: ConnectionId,
-) -> mpsc::Receiver<ConnIn> {
+async fn open_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) -> mpsc::Receiver<ConnIn> {
     let (inbox_tx, inbox_rx) = mpsc::channel::<ConnIn>(16);
     tx.send(RegistryMsg::ConnOpened {
         conn,
@@ -264,9 +272,8 @@ async fn spawn(
     conn: ConnectionId,
     room: RoomId,
 ) -> Result<EntityId, CoreError> {
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<Action>), CoreError>,
-    >();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
     let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(64);
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
@@ -286,9 +293,7 @@ async fn spawn(
 }
 
 async fn spawn_ok(tx: &Mailbox<RegistryMsg>, conn: ConnectionId, room: RoomId) -> EntityId {
-    spawn(tx, conn, room)
-        .await
-        .expect("join should succeed")
+    spawn(tx, conn, room).await.expect("join should succeed")
 }
 
 async fn expect_room_gone(inbox_rx: &mut mpsc::Receiver<ConnIn>, id: RoomId) {
@@ -302,9 +307,7 @@ async fn expect_room_gone(inbox_rx: &mut mpsc::Receiver<ConnIn>, id: RoomId) {
 /// the registry would outlive the test — it breaks its loop on the message,
 /// so the sender must simply not be resurrected afterwards).
 async fn stop(tx: Mailbox<RegistryMsg>, handle: tokio::task::JoinHandle<()>) {
-    tx.send(RegistryMsg::Shutdown)
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::Shutdown).await.expect("registry gone");
     drop(tx);
     handle.await.unwrap();
 }
@@ -392,8 +395,7 @@ async fn restarted_room_comes_back_when_policy_enabled() {
     expect_room_gone(&mut member_inbox, id).await;
     // ...and the SAME id answers Running again (the rebirth is synchronous
     // with the reap, so the table never rests at Absent for this query).
-    status_until(&tx, id, |s| matches!(s, RoomStatus::Running { members: 0 }))
-        .await;
+    status_until(&tx, id, |s| matches!(s, RoomStatus::Running { members: 0 })).await;
 
     // Exactly two builds happened: initial + one rebirth (drain what is
     // there, then require quiet — a third build would mean the rebuilt
@@ -437,14 +439,16 @@ async fn shard_death_takes_down_the_whole_logical_room() {
                 Box::new(TimeBombShardLogic {
                     index: 0,
                     detonate_at: None,
-                }) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
+                })
+                    as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
             (
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 1,
                     detonate_at: Some(Instant::now() + Duration::from_millis(300)),
-                }) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
+                })
+                    as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
         ],
         // Every join homes to shard 0 (pure router; the death comes from

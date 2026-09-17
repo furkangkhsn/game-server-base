@@ -21,7 +21,7 @@ use tokio::net::TcpStream;
 
 mod common;
 
-use common::{tls_client_connector, TLS_SERVER_NAME};
+use common::{TLS_SERVER_NAME, tls_client_connector};
 
 /// A listener-table entry for the given door kind on an ephemeral port.
 fn entry(
@@ -59,7 +59,9 @@ async fn connect(
             Client::Tcp(s)
         }
         gsb_server::ListenerTransport::Tls => {
-            let tcp = TcpStream::connect(addr).await.expect("TCP under TLS connects");
+            let tcp = TcpStream::connect(addr)
+                .await
+                .expect("TCP under TLS connects");
             tcp.set_nodelay(true).ok();
             let connector = tls_client_connector(pki);
             let dns: rustls::pki_types::ServerName<'static> =
@@ -121,13 +123,14 @@ impl Client {
                 .await
                 .ok()
                 .flatten()),
-            Client::Udp(c) => Ok(c.recv_frame(window).await?.map(|f| (f.op, f.payload.to_vec()))),
-            Client::Quic(c) => {
-                Ok(tokio::time::timeout(window, read_quic_frame(&mut c.recv))
-                    .await
-                    .ok()
-                    .flatten())
-            }
+            Client::Udp(c) => Ok(c
+                .recv_frame(window)
+                .await?
+                .map(|f| (f.op, f.payload.to_vec()))),
+            Client::Quic(c) => Ok(tokio::time::timeout(window, read_quic_frame(&mut c.recv))
+                .await
+                .ok()
+                .flatten()),
             Client::Ws(c) => Ok(tokio::time::timeout(window, c.recv_game())
                 .await
                 .ok()
@@ -177,8 +180,8 @@ async fn connect_quic(pki: &common::TlsPki, addr: std::net::SocketAddr) -> QuicC
         .with_root_certificates(roots)
         .with_no_client_auth();
     tls.alpn_protocols = vec![gsb_net::quic::ALPN_PROTOCOL.to_vec()];
-    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
-        .expect("QUIC client TLS setup");
+    let crypto =
+        quinn::crypto::rustls::QuicClientConfig::try_from(tls).expect("QUIC client TLS setup");
     let client_config = quinn::ClientConfig::new(std::sync::Arc::new(crypto));
     let mut endpoint =
         quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("client endpoint");
@@ -249,12 +252,7 @@ fn encode_client_ws_frame(payload: &[u8], key: [u8; 4]) -> Vec<u8> {
         frame.extend_from_slice(&(l7 as u64).to_be_bytes());
     }
     frame.extend_from_slice(&key);
-    frame.extend(
-        payload
-            .iter()
-            .enumerate()
-            .map(|(i, b)| b ^ key[i & 3]),
-    );
+    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
     frame
 }
 
@@ -395,10 +393,7 @@ async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
         .expect("AUTH_REQ goes out");
     let join = JoinRoom { room_id: 1 };
     client
-        .write_frame(
-            gsb_protocol::op::base::JOIN_ROOM_REQ,
-            &join.encode_to_vec(),
-        )
+        .write_frame(gsb_protocol::op::base::JOIN_ROOM_REQ, &join.encode_to_vec())
         .await
         .expect("JOIN_ROOM_REQ goes out");
 
@@ -499,14 +494,8 @@ async fn two_listeners_serve_one_room() {
 
     // Client A walks the TLS door (addrs[0], config order), B the plain
     // door (addrs[1]).
-    let mut tls_a = connect(
-        gsb_server::ListenerTransport::Tls,
-        &pki,
-        handle.addrs[0],
-    )
-    .await;
-    let mut tcp_b =
-        connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[1]).await;
+    let mut tls_a = connect(gsb_server::ListenerTransport::Tls, &pki, handle.addrs[0]).await;
+    let mut tcp_b = connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[1]).await;
 
     let ent_a = auth_and_join(&mut tls_a, "tls-a").await;
     let ent_b = auth_and_join(&mut tcp_b, "tcp-b").await;
@@ -553,18 +542,8 @@ async fn connection_ids_are_unique_across_listeners() {
         .expect("two-listener server starts");
 
     let mut via_tls = [
-        connect(
-            gsb_server::ListenerTransport::Tls,
-            &pki,
-            handle.addrs[0],
-        )
-        .await,
-        connect(
-            gsb_server::ListenerTransport::Tls,
-            &pki,
-            handle.addrs[0],
-        )
-        .await,
+        connect(gsb_server::ListenerTransport::Tls, &pki, handle.addrs[0]).await,
+        connect(gsb_server::ListenerTransport::Tls, &pki, handle.addrs[0]).await,
     ];
     let mut via_tcp = [
         connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[1]).await,
@@ -627,12 +606,7 @@ async fn legacy_single_transport_config_still_works() {
         "no [[listeners]] means exactly one derived door"
     );
     assert_eq!(handle.addr, handle.addrs[0]);
-    let mut client = connect(
-        gsb_server::ListenerTransport::Tls,
-        &pki,
-        handle.addr,
-    )
-    .await;
+    let mut client = connect(gsb_server::ListenerTransport::Tls, &pki, handle.addr).await;
     let ent = auth_and_join(&mut client, "legacy-tls").await;
     wait_until_sees("legacy-tls", &mut client, &[ent]).await;
     handle.stop().await;
@@ -646,12 +620,7 @@ async fn legacy_single_transport_config_still_works() {
     .await
     .expect("legacy plaintext config starts");
     assert_eq!(handle.addrs.len(), 1);
-    let mut client = connect(
-        gsb_server::ListenerTransport::Tcp,
-        &pki,
-        handle.addr,
-    )
-    .await;
+    let mut client = connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addr).await;
     let ent = auth_and_join(&mut client, "legacy-plain").await;
     wait_until_sees("legacy-plain", &mut client, &[ent]).await;
     handle.stop().await;
@@ -745,20 +714,9 @@ async fn three_transports_serve_one_room_including_rudp() {
         .expect("three-listener server starts");
     assert_eq!(handle.addrs.len(), 3);
 
-    let mut tcp_c =
-        connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[0]).await;
-    let mut tls_c = connect(
-        gsb_server::ListenerTransport::Tls,
-        &pki,
-        handle.addrs[1],
-    )
-    .await;
-    let mut udp_c = connect(
-        gsb_server::ListenerTransport::Udp,
-        &pki,
-        handle.addrs[2],
-    )
-    .await;
+    let mut tcp_c = connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[0]).await;
+    let mut tls_c = connect(gsb_server::ListenerTransport::Tls, &pki, handle.addrs[1]).await;
+    let mut udp_c = connect(gsb_server::ListenerTransport::Udp, &pki, handle.addrs[2]).await;
 
     let ent_tcp = auth_and_join(&mut tcp_c, "door-tcp").await;
     let ent_tls = auth_and_join(&mut tls_c, "door-tls").await;
@@ -805,14 +763,8 @@ async fn quic_and_tcp_doors_serve_one_room() {
         .expect("quic+tcp server starts");
     assert_eq!(handle.addrs.len(), 2);
 
-    let mut quic_c = connect(
-        gsb_server::ListenerTransport::Quic,
-        &pki,
-        handle.addrs[0],
-    )
-    .await;
-    let mut tcp_c =
-        connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[1]).await;
+    let mut quic_c = connect(gsb_server::ListenerTransport::Quic, &pki, handle.addrs[0]).await;
+    let mut tcp_c = connect(gsb_server::ListenerTransport::Tcp, &pki, handle.addrs[1]).await;
 
     let ent_quic = auth_and_join(&mut quic_c, "door-quic").await;
     let ent_tcp = auth_and_join(&mut tcp_c, "door-tcp").await;
@@ -852,14 +804,8 @@ async fn websocket_and_rudp_doors_serve_one_room() {
         .expect("ws+udp server starts");
     assert_eq!(handle.addrs.len(), 2);
 
-    let mut ws_c =
-        connect(gsb_server::ListenerTransport::Ws, &pki, handle.addrs[0]).await;
-    let mut udp_c = connect(
-        gsb_server::ListenerTransport::Udp,
-        &pki,
-        handle.addrs[1],
-    )
-    .await;
+    let mut ws_c = connect(gsb_server::ListenerTransport::Ws, &pki, handle.addrs[0]).await;
+    let mut udp_c = connect(gsb_server::ListenerTransport::Udp, &pki, handle.addrs[1]).await;
 
     let ent_ws = auth_and_join(&mut ws_c, "door-ws").await;
     let ent_udp = auth_and_join(&mut udp_c, "door-udp").await;

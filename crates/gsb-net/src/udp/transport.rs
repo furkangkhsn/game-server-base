@@ -124,9 +124,7 @@ impl Listener for UdpListenerHandle {
             // (`try_send`), so a slow accept loop can never stall the
             // demux (and therefore every other session).
             let rx = self.end_rx.clone();
-            match tokio::task::spawn_blocking(move || rx.recv())
-                .await
-            {
+            match tokio::task::spawn_blocking(move || rx.recv()).await {
                 Ok(Ok(endpoint)) => Ok(endpoint),
                 Ok(Err(_)) | Err(_) => Err(std::io::Error::other("rUDP demux gone")),
             }

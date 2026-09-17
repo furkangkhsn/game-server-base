@@ -5,19 +5,13 @@ use std::io;
 use std::io::BufReader;
 use std::sync::Arc;
 
-
-
 use crate::quic::*;
 
 /// Open a PEM file with the path in the error message (same rule as the
 /// TLS transport: a bare `NotFound` tells the operator nothing).
 pub(super) fn open_pem(path: &str, what: &str) -> io::Result<BufReader<std::fs::File>> {
-    let file = std::fs::File::open(path).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("cannot open {what} file `{path}`: {e}"),
-        )
-    })?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot open {what} file `{path}`: {e}")))?;
     Ok(BufReader::new(file))
 }
 
@@ -60,7 +54,10 @@ pub(super) fn load_server_config(cfg: &QuicTransportConfig) -> io::Result<quinn:
         .map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("malformed private-key PEM in `tls_key` file `{}`: {e}", cfg.key_pem),
+                format!(
+                    "malformed private-key PEM in `tls_key` file `{}`: {e}",
+                    cfg.key_pem
+                ),
             )
         })?
         .ok_or_else(|| {

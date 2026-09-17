@@ -92,13 +92,10 @@ pub(crate) async fn run(args: Args) {
     let n = args.clients;
     let mut p = ClientParams {
         addr,
-        tls: args
-            .tls_ca
-            .clone()
-            .map(|ca_path| TlsOpts {
-                ca_path,
-                server_name: args.tls_server_name.clone(),
-            }),
+        tls: args.tls_ca.clone().map(|ca_path| TlsOpts {
+            ca_path,
+            server_name: args.tls_server_name.clone(),
+        }),
         room: args.room,
         move_ms: args.move_ms,
         stagger_ms: args.stagger_ms,

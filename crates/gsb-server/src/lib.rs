@@ -22,8 +22,8 @@ pub(crate) mod config;
 mod http;
 
 pub use boot::{
-    build_table, start_server, start_server_metrics, start_server_metrics_with,
-    start_server_with, ServerHandle, ServerHooks,
+    ServerHandle, ServerHooks, build_table, start_server, start_server_metrics,
+    start_server_metrics_with, start_server_with,
 };
 pub use config::{
     Communication, Config, ConfigError, ListenerEntry, ListenerTransport, ResolvedSelection,
@@ -31,6 +31,3 @@ pub use config::{
 };
 
 use crate::config::*;
-
-
-

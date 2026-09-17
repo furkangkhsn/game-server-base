@@ -61,8 +61,6 @@ use std::time::Duration;
 mod args;
 use args::*;
 
-
-
 /// The client movement profile (the load's *shape*, not the server's
 /// visibility strategy):
 ///
@@ -334,7 +332,9 @@ fn main() {
     let workers = if args.workers > 0 {
         args.workers
     } else {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

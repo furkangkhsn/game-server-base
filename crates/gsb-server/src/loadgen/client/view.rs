@@ -2,8 +2,8 @@
 //! and deltas exactly as a real client would, so a wrong stream is
 //! visible as a wrong view.
 
-use std::collections::HashMap;
 use super::*;
+use std::collections::HashMap;
 
 mod run;
 pub(crate) use run::*;
@@ -45,7 +45,10 @@ pub(crate) enum Apply {
 impl ClientView {
     #[inline]
     fn cell_of(x: i32, y: i32, cell_size: f32) -> (i32, i32) {
-        ((x as f32 / cell_size).floor() as i32, (y as f32 / cell_size).floor() as i32)
+        (
+            (x as f32 / cell_size).floor() as i32,
+            (y as f32 / cell_size).floor() as i32,
+        )
     }
 
     fn apply(&mut self, s: &gsb_game::game::WorldSnapshot) -> Apply {

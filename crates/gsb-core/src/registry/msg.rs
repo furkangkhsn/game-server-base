@@ -10,9 +10,8 @@ use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
-use crate::room::{Action, RoomConfig};
 use crate::registry::*;
-
+use crate::room::{Action, RoomConfig};
 
 /// Messages addressed to the registry actor.
 #[derive(Debug)]

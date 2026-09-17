@@ -9,8 +9,8 @@ use bytes::Bytes;
 
 use gsb_protocol::FrameBody;
 
-use crate::ws::*;
 use super::Step;
+use crate::ws::*;
 
 impl super::WsReader {
     /// Map one assembled data message onto the wire contract: exactly one

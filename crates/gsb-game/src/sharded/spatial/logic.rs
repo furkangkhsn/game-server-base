@@ -3,7 +3,6 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-
 use bevy_ecs::prelude::World;
 use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
@@ -12,9 +11,7 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::encoding::varint::encode_varint;
 
-use crate::common::{
-    assemble_group_packet, cell_of, Cell,
-};
+use crate::common::{Cell, assemble_group_packet, cell_of};
 use crate::components::{Position, WireId};
 use crate::op;
 use crate::sharded::*;
@@ -129,12 +126,7 @@ impl GameLogic<World> for ShardedSpatialRoom {
         self.inner.ingest(world, ctx, actions)
     }
 
-    fn on_disconnect(
-        &mut self,
-        world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, world: &mut World, player: PlayerId, identity: &str) -> Detach {
         self.inner.on_disconnect(world, player, identity)
     }
 

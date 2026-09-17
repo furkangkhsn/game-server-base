@@ -1,14 +1,14 @@
 //! The per-connection dispatcher task: it serializes that
 //! connection's room operations so the registry never awaits a room.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use tokio::sync::mpsc;
 use crate::channel::Mailbox;
 use crate::error::CoreError;
 use crate::id::ConnectionId;
-use crate::registry::*;
 use crate::registry::actor::Registry;
+use crate::registry::*;
+use std::fmt::Debug;
+use std::hash::Hash;
+use tokio::sync::mpsc;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
@@ -56,15 +56,7 @@ where
                         // route it at the park ledger first; fall back to
                         // the plain join when nothing holds the identity.
                         let outcome = if identity.is_empty() {
-                            Self::dispatch_plain_join(
-                                conn,
-                                room,
-                                &handle,
-                                shard,
-                                epoch,
-                                out,
-                            )
-                            .await
+                            Self::dispatch_plain_join(conn, room, &handle, shard, epoch, out).await
                         } else {
                             Self::dispatch_resume(
                                 conn,

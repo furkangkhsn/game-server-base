@@ -7,9 +7,7 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
-use crate::common::{
-    cell_of, Cell, CellBook, CellPieces,
-};
+use crate::common::{Cell, CellBook, CellPieces, cell_of};
 use crate::economy::EconomyService;
 use crate::sharded::*;
 
@@ -112,8 +110,7 @@ impl ShardedSpatialRoom {
         if self.integrated_tick == self.tick {
             return;
         }
-        let mut new_view: HashMap<u64, (i32, i32)> =
-            HashMap::with_capacity(borrowed.len());
+        let mut new_view: HashMap<u64, (i32, i32)> = HashMap::with_capacity(borrowed.len());
         for rec in borrowed {
             let pos = (rec.state.x, rec.state.y);
             new_view.insert(rec.wire, pos);
@@ -124,7 +121,8 @@ impl ShardedSpatialRoom {
                     // in its containing cell — borrowed content joins the
                     // cell's group content for members of that cell.
                     let c = cell_of(rec.state.x, rec.state.y, self.cell_size);
-                    self.book.record_appearance(rec.wire, rec.state.x, rec.state.y, c, false);
+                    self.book
+                        .record_appearance(rec.wire, rec.state.x, rec.state.y, c, false);
                 }
                 Some(prev) if prev != pos => {
                     // Moved: one upsert — or exit+upsert when the move
@@ -133,7 +131,8 @@ impl ShardedSpatialRoom {
                     let old_c = cell_of(prev.0, prev.1, self.cell_size);
                     let new_c = cell_of(rec.state.x, rec.state.y, self.cell_size);
                     if old_c == new_c {
-                        self.book.record_update(new_c, rec.wire, rec.state.x, rec.state.y);
+                        self.book
+                            .record_update(new_c, rec.wire, rec.state.x, rec.state.y);
                     } else {
                         self.book.record_cross(
                             old_c,

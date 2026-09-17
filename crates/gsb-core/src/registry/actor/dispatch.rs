@@ -9,9 +9,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::channel::{FrameBatch, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::registry::*;
 use crate::room::{Action, RoomControl};
 use crate::shard::ShardMsg;
-use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
@@ -140,11 +140,8 @@ where
                 let mut accepted: Option<(EntityId, Mailbox<Action>)> = None;
                 let mut stale: Option<CoreError> = None;
                 for _ in 0..n {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(5),
-                        agg_rx.recv(),
-                    )
-                    .await
+                    match tokio::time::timeout(std::time::Duration::from_secs(5), agg_rx.recv())
+                        .await
                     {
                         Ok(Some(Ok(Some(pair)))) => accepted = Some(pair),
                         Ok(Some(Err(e))) => stale = Some(e),

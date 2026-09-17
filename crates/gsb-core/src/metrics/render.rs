@@ -1,10 +1,7 @@
 //! The one-line human/log rendering of a report (the Prometheus
 //! exposition is the sibling `prometheus` module).
 
-
-
 use crate::metrics::*;
-
 
 impl MetricReport {
     /// Render as one parseable `key=value` line per scope (stable format:
@@ -15,8 +12,15 @@ impl MetricReport {
             lines.push(format!(
                 "gsb-metric scope=registry rooms={} conns={} opens={} closes={} \
                  joins={} leaves={} rooms_created={} rooms_destroyed={} rooms_died={}",
-                r.rooms, r.conns, r.opens, r.closes, r.joins, r.leaves,
-                r.rooms_created, r.rooms_destroyed, r.rooms_died
+                r.rooms,
+                r.conns,
+                r.opens,
+                r.closes,
+                r.joins,
+                r.leaves,
+                r.rooms_created,
+                r.rooms_destroyed,
+                r.rooms_died
             ));
         }
         for r in &self.rooms {
@@ -38,27 +42,55 @@ impl MetricReport {
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
                  req_to={} req_late={} \
                  req_pending={} metrics_dropped={}",
-                r.room, r.steps, r.hz, r.budget_us,
-                r.step_min_us, r.step_mean_us, r.step_max_us,
+                r.room,
+                r.steps,
+                r.hz,
+                r.budget_us,
+                r.step_min_us,
+                r.step_mean_us,
+                r.step_max_us,
                 r.step_hist
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(","),
-                r.late_min_us, r.late_mean_us, r.late_max_us,
-                r.lagged_events, r.lagged_ticks, r.dropped, r.dropped_s,
-                r.dropped_actions, r.keepalive_resends, r.snapshots,
-                r.snap_bytes_s, r.snap_bytes_max, r.snap_overflows,
+                r.late_min_us,
+                r.late_mean_us,
+                r.late_max_us,
+                r.lagged_events,
+                r.lagged_ticks,
+                r.dropped,
+                r.dropped_s,
+                r.dropped_actions,
+                r.keepalive_resends,
+                r.snapshots,
+                r.snap_bytes_s,
+                r.snap_bytes_max,
+                r.snap_overflows,
                 r.snap_records,
-                r.shipped_bytes, r.shipped_s,
-                r.groups, r.members, r.max_group, r.joins, r.leaves,
-                r.detached, r.resumes, r.resume_rejected_stale,
-                r.detach_expired_despawn, r.detach_expired_ai,
-                r.requests_local, r.requests_external,
-                r.requests_rejected_malformed, r.requests_rejected_dup,
-                r.requests_rejected_no_handler, r.requests_rejected_logic,
-                r.requests_rejected_conn_cap, r.requests_rejected_room_cap,
-                r.requests_timed_out, r.requests_late, r.pending_requests,
+                r.shipped_bytes,
+                r.shipped_s,
+                r.groups,
+                r.members,
+                r.max_group,
+                r.joins,
+                r.leaves,
+                r.detached,
+                r.resumes,
+                r.resume_rejected_stale,
+                r.detach_expired_despawn,
+                r.detach_expired_ai,
+                r.requests_local,
+                r.requests_external,
+                r.requests_rejected_malformed,
+                r.requests_rejected_dup,
+                r.requests_rejected_no_handler,
+                r.requests_rejected_logic,
+                r.requests_rejected_conn_cap,
+                r.requests_rejected_room_cap,
+                r.requests_timed_out,
+                r.requests_late,
+                r.pending_requests,
                 r.metrics_dropped
             ));
         }
@@ -67,9 +99,15 @@ impl MetricReport {
             "gsb-metric scope=net bytes_in={} bytes_out_room={} \
              bytes_out_control={} bytes_out_total={} frames_in={} frames_out={} \
              actions_dropped={} violations={} metrics_dropped={}",
-            n.bytes_in, n.bytes_out_room, n.bytes_out_control,
-            n.bytes_out_total, n.frames_in, n.frames_out, n.actions_dropped,
-            n.violations, self.metrics_dropped
+            n.bytes_in,
+            n.bytes_out_room,
+            n.bytes_out_control,
+            n.bytes_out_total,
+            n.frames_in,
+            n.frames_out,
+            n.actions_dropped,
+            n.violations,
+            self.metrics_dropped
         ));
         if !self.actions_dropped_top.is_empty() {
             // Attribution of the net-scope `actions_dropped`: which

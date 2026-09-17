@@ -2,14 +2,12 @@
 //! that silences the funnel and eventually closes, and the pre-auth
 //! frame cap that shares the same close path.
 
-
 use tracing::{debug, warn};
 
 use gsb_protocol::op;
 use gsb_protocol::{ProtoError, base};
 
 use crate::conn::*;
-
 
 impl super::ConnectionActor {
     /// The single funnel for protocol errors: every `ERROR` frame this
@@ -46,7 +44,12 @@ impl super::ConnectionActor {
     ///    decision, the message carries the specificity), emit the
     ///    structured close signal with the peer address, and flag the run
     ///    loop to tear the connection down.
-    pub(super) async fn count_violation(&mut self, class: ViolationClass, code: u32, message: String) {
+    pub(super) async fn count_violation(
+        &mut self,
+        class: ViolationClass,
+        code: u32,
+        message: String,
+    ) {
         let weight = class.weight();
         if weight == 0 {
             // Server-side condition: answered exactly as before the
@@ -95,7 +98,13 @@ impl super::ConnectionActor {
                 "closing connection: protocol violation budget exhausted"
             );
             let _ = self
-                .send_frame(op::base::ERROR, &base::Error { code: 9, message: reason })
+                .send_frame(
+                    op::base::ERROR,
+                    &base::Error {
+                        code: 9,
+                        message: reason,
+                    },
+                )
                 .await;
         }
     }

@@ -188,10 +188,7 @@ impl ShardedRoom {
     fn in_border_frame(&self, x: i32, y: i32) -> bool {
         let (x0, x1, y0, y1) = self.rect();
         let b = self.border;
-        x as f32 >= x0 - b
-            && x as f32 <= x1 + b
-            && y as f32 >= y0 - b
-            && y as f32 <= y1 + b
+        x as f32 >= x0 - b && x as f32 <= x1 + b && y as f32 >= y0 - b && y as f32 <= y1 + b
     }
 }
 

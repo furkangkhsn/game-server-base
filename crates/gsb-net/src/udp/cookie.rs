@@ -2,7 +2,6 @@
 
 use std::net::SocketAddr;
 
-
 use crate::udp::*;
 
 /// The per-process cookie key: 16 bytes (two u64 words), either the

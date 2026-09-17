@@ -1,15 +1,13 @@
 //! One simulated client's whole life: connect, auth, join, move on
 //! a timer, and report what it saw.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use gsb_protocol::base::{
-    Auth, Error, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult,
-};
+use super::*;
+use gsb_protocol::base::{Auth, Error, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult};
 use gsb_protocol::op;
 use prost::Message;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
-use super::*;
 
 pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     let mut rep = ClientReport {
@@ -94,11 +92,17 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
         Wire::Udp(c) => {
             rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, auth_payload.len());
-            if c.send_frame(op::base::AUTH_REQ, auth_payload).await.is_err() {
+            if c.send_frame(op::base::AUTH_REQ, auth_payload)
+                .await
+                .is_err()
+            {
                 return rep;
             }
             rep.bytes_out += wire_in_bytes(op::base::JOIN_ROOM_REQ, join_payload.len());
-            if c.send_frame(op::base::JOIN_ROOM_REQ, join_payload).await.is_err() {
+            if c.send_frame(op::base::JOIN_ROOM_REQ, join_payload)
+                .await
+                .is_err()
+            {
                 return rep;
             }
         }
@@ -120,8 +124,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // `still_frac` fraction of the ids is "still" — it issues ONE MOVE_TO
     // (settling at a ring target) and then sends nothing more; the moving
     // minority chases the ring target as in the historical profile.
-    let is_still =
-        p.profile == Profile::Still && (id % 100) as f64 / 100.0 < p.still_frac;
+    let is_still = p.profile == Profile::Still && (id % 100) as f64 / 100.0 < p.still_frac;
     let mut settled = false;
     loop {
         let now = Instant::now();
@@ -144,8 +147,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     // entities crowd the central band — the *clustered*
                     // layout.
                     Profile::Ring => {
-                        let angle = (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618)
-                            * 4.0;
+                        let angle =
+                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 4.0;
                         (angle.cos() * 40.0, angle.sin() * 40.0)
                     }
                     // The *spread* profile: each client wanders a small
@@ -192,25 +195,29 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                         }
                     }
                     Wire::Udp(c) => {
-                        rep.bytes_out +=
-                            wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
-                        if c.send_frame(gsb_game::op::MOVE_TO, move_payload).await.is_err() {
+                        rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
+                        if c.send_frame(gsb_game::op::MOVE_TO, move_payload)
+                            .await
+                            .is_err()
+                        {
                             break; // session gone (the writer gave up)
                         }
                     }
                 }
             }
         }
-        let timeout = p.deadline
+        let timeout = p
+            .deadline
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(250));
         // TCP: None from read_frame = EOF (the loop breaks below); rUDP:
         // None = "quiet window" (no EOF exists — the deadline ends the
         // run instead).
         let got = match &mut wire {
-            Wire::Tcp { r, .. } => {
-                tokio::time::timeout(timeout, read_frame(r.as_mut())).await.ok().flatten()
-            }
+            Wire::Tcp { r, .. } => tokio::time::timeout(timeout, read_frame(r.as_mut()))
+                .await
+                .ok()
+                .flatten(),
             Wire::Udp(c) => c
                 .recv_frame(timeout)
                 .await
@@ -240,26 +247,28 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     break;
                 }
             }
-            gsb_game::op::WORLD_SNAPSHOT => match gsb_game::game::WorldSnapshot::decode(&payload[..]) {
-                Ok(m) => {
-                    rep.snapshots += 1;
-                    let at = Instant::now();
-                    if rep.seq_first.is_none() {
-                        rep.seq_first = Some((m.sequence, at));
+            gsb_game::op::WORLD_SNAPSHOT => {
+                match gsb_game::game::WorldSnapshot::decode(&payload[..]) {
+                    Ok(m) => {
+                        rep.snapshots += 1;
+                        let at = Instant::now();
+                        if rep.seq_first.is_none() {
+                            rep.seq_first = Some((m.sequence, at));
+                        }
+                        rep.seq_last = Some((m.sequence, at));
+                        // The client half of the delta protocol (see
+                        // `ClientView`): apply it, whatever the strategy's
+                        // mode (a full-snapshot room's frames are all fulls).
+                        match view.apply(&m) {
+                            Apply::Full => rep.fulls += 1,
+                            Apply::Delta => rep.deltas += 1,
+                            Apply::NoBaseline => rep.gap_drops += 1,
+                            Apply::Stale => {}
+                        }
                     }
-                    rep.seq_last = Some((m.sequence, at));
-                    // The client half of the delta protocol (see
-                    // `ClientView`): apply it, whatever the strategy's
-                    // mode (a full-snapshot room's frames are all fulls).
-                    match view.apply(&m) {
-                        Apply::Full => rep.fulls += 1,
-                        Apply::Delta => rep.deltas += 1,
-                        Apply::NoBaseline => rep.gap_drops += 1,
-                        Apply::Stale => {}
-                    }
+                    Err(_) => rep.errors += 1,
                 }
-                Err(_) => rep.errors += 1,
-            },
+            }
             gsb_game::op::PRIVATE => {
                 let pr = match gsb_game::game::Private::decode(&payload[..]) {
                     Ok(pr) => pr,
@@ -378,7 +387,9 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
         Wire::Udp(c) => {
             rep.bytes_out += wire_in_bytes(op::base::LEAVE_ROOM_REQ, leave_payload.len());
-            c.send_frame(op::base::LEAVE_ROOM_REQ, leave_payload).await.is_ok()
+            c.send_frame(op::base::LEAVE_ROOM_REQ, leave_payload)
+                .await
+                .is_ok()
         }
     };
     if leave_sent {
@@ -386,9 +397,10 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         while Instant::now() < leave_deadline {
             let timeout = leave_deadline.saturating_duration_since(Instant::now());
             let got = match &mut wire {
-                Wire::Tcp { r, .. } => {
-                    tokio::time::timeout(timeout, read_frame(r.as_mut())).await.ok().flatten()
-                }
+                Wire::Tcp { r, .. } => tokio::time::timeout(timeout, read_frame(r.as_mut()))
+                    .await
+                    .ok()
+                    .flatten(),
                 Wire::Udp(c) => c
                     .recv_frame(timeout)
                     .await

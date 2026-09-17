@@ -1,10 +1,7 @@
 //! Small statistics over the collected reports: medians,
 //! percentiles, and the budget-overshoot fraction.
 
-
-use gsb_core::metrics::{
-    hist_edge_us, HIST_OVERFLOW_BIN,
-};
+use gsb_core::metrics::{HIST_OVERFLOW_BIN, hist_edge_us};
 
 use crate::client::*;
 
@@ -53,7 +50,11 @@ pub(crate) fn hist_percentile(hist: &[u64], budget_us: u64, max_us: u64, p: f64)
     for (i, &n) in hist.iter().enumerate() {
         acc += n;
         if acc as f64 >= target {
-            let lo = if i == 0 { 0 } else { hist_edge_us(budget_us, i - 1) };
+            let lo = if i == 0 {
+                0
+            } else {
+                hist_edge_us(budget_us, i - 1)
+            };
             let hi = if i < hist.len() - 1 {
                 hist_edge_us(budget_us, i)
             } else {

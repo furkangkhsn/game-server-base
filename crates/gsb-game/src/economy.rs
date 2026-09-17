@@ -71,10 +71,7 @@ impl EconomyService {
                 let latency = latency;
                 tokio::spawn(async move {
                     tokio::time::sleep(latency).await;
-                    let price = PRICES
-                        .iter()
-                        .find(|(k, _)| *k == kind)
-                        .map(|(_, p)| *p);
+                    let price = PRICES.iter().find(|(k, _)| *k == kind).map(|(_, p)| *p);
                     let result = match price {
                         Some(p) => Ok(p),
                         None => Err(format!("unknown item `{kind}`")),
@@ -100,7 +97,14 @@ impl EconomyService {
         let (reply_tx, reply_rx) = oneshot::channel();
         let tx = self.tx.clone();
         async move {
-            if tx.send(EconomyBuy { kind, reply: reply_tx }).await.is_err() {
+            if tx
+                .send(EconomyBuy {
+                    kind,
+                    reply: reply_tx,
+                })
+                .await
+                .is_err()
+            {
                 return Err("economy service gone".into());
             }
             match reply_rx.await {

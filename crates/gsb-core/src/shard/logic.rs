@@ -4,7 +4,6 @@
 //! NOT split further: a trait is one item.
 use std::fmt::Debug;
 
-
 use crate::id::PlayerId;
 use crate::room::GameLogic;
 use crate::shard::*;
@@ -52,11 +51,8 @@ pub trait ShardLogic<W>: GameLogic<W> {
     /// player entities. The shard sends the `Migrate` messages itself and
     /// despawns the entities on the next tick (see module docs,
     /// "Migration protocol"); the logic only *reports* the crossings.
-    fn collect_migrations(
-        &mut self,
-        world: &mut W,
-        neighbor: usize,
-    ) -> Vec<Migrating<Self::State>>;
+    fn collect_migrations(&mut self, world: &mut W, neighbor: usize)
+    -> Vec<Migrating<Self::State>>;
 
     /// Install a migrating entity: spawn it with its full state, keeping
     /// its wire id. `player` is present for player entities (the shard

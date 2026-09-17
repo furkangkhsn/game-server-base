@@ -50,7 +50,10 @@ fn prometheus_render_exposes_families_and_values() {
     assert!(out.contains("gsb_registry_opens_total 5\n"));
     assert!(out.contains("# TYPE gsb_room_steps_total counter\n"));
     assert!(out.contains("gsb_room_steps_total{room=\"r1\"} 100\n"));
-    assert!(out.contains("gsb_room_hz{room=\"r1\"} 0\n"), "no previous sample ⇒ hz gauge 0");
+    assert!(
+        out.contains("gsb_room_hz{room=\"r1\"} 0\n"),
+        "no previous sample ⇒ hz gauge 0"
+    );
     assert!(out.contains("gsb_net_bytes_in_total 0\n"));
 
     // Histogram: budget 33 333 µs ⇒ first edge ceil(33333/128) = 261.
@@ -148,7 +151,10 @@ fn prometheus_counter_families_all_end_in_total() {
             }
         }
     }
-    assert!(counters > 20, "the suite covers the counter families: {counters}");
+    assert!(
+        counters > 20,
+        "the suite covers the counter families: {counters}"
+    );
 }
 
 /// An empty report (the watch placeholder / a server with no registry

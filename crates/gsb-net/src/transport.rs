@@ -140,11 +140,7 @@ impl Endpoint {
 
     /// Carry a pre-created outbound mailbox (rUDP: created by the demux at
     /// handshake; the demux keeps the sender for ACK piggyback).
-    pub fn with_outbox(
-        mut self,
-        out_tx: Mailbox<FrameBatch>,
-        out_rx: Inbox<FrameBatch>,
-    ) -> Self {
+    pub fn with_outbox(mut self, out_tx: Mailbox<FrameBatch>, out_rx: Inbox<FrameBatch>) -> Self {
         self.out_box = Some((out_tx, out_rx));
         self
     }
@@ -160,10 +156,7 @@ impl Endpoint {
 
     /// Take the connection's outbound mailbox (same contract as
     /// [`Self::take_inbox`]).
-    pub fn take_outbox(
-        &mut self,
-        capacity: usize,
-    ) -> (Mailbox<FrameBatch>, Inbox<FrameBatch>) {
+    pub fn take_outbox(&mut self, capacity: usize) -> (Mailbox<FrameBatch>, Inbox<FrameBatch>) {
         self.out_box
             .take()
             .unwrap_or_else(|| gsb_core::channel::channel(capacity))

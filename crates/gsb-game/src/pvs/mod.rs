@@ -104,10 +104,14 @@ pub struct Sector(pub u8);
 
 /// The hand-written sectors of the demo map (module docs, "The map"):
 /// convex polygons, counter-clockwise, tiling the [-50, 50]² arena.
-const SECTOR_WEST: u8 = 0; /// `A`: x ∈ [-50, 0], y ∈ [-50, 20].
-const SECTOR_EAST: u8 = 1; /// `B`: x ∈ [0, 50], y ∈ [-50, 20].
-const SECTOR_NW: u8 = 2; /// `C`: x ∈ [-50, -10], y ∈ [20, 50].
-const SECTOR_NE: u8 = 3; /// `D`: x ∈ [-10, 50], y ∈ [20, 50].
+const SECTOR_WEST: u8 = 0;
+/// `A`: x ∈ [-50, 0], y ∈ [-50, 20].
+const SECTOR_EAST: u8 = 1;
+/// `B`: x ∈ [0, 50], y ∈ [-50, 20].
+const SECTOR_NW: u8 = 2;
+/// `C`: x ∈ [-50, -10], y ∈ [20, 50].
+const SECTOR_NE: u8 = 3;
+/// `D`: x ∈ [-10, 50], y ∈ [20, 50].
 /// Positions outside every hand-written sector (a target beyond the map).
 pub const SECTOR_OUT: u8 = 4;
 

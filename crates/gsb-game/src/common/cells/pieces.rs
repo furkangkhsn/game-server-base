@@ -61,11 +61,7 @@ impl CellPieces {
 
     /// The per-tick classification of `c` (see [`CellFrag`]) — memoized
     /// per cell per tick, negative answer included.
-    pub(crate) fn classify(
-        &mut self,
-        changes: &HashMap<Cell, CellChanges>,
-        c: &Cell,
-    ) -> CellFrag {
+    pub(crate) fn classify(&mut self, changes: &HashMap<Cell, CellChanges>, c: &Cell) -> CellFrag {
         if let Some(&frag) = self.frag_cache.get(c) {
             return frag;
         }

@@ -3,10 +3,9 @@
 //! report window.
 use std::time::Instant;
 
-
+use super::MetricAccumulator;
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
-use super::MetricAccumulator;
 
 impl MetricAccumulator {
     /// Snapshot the accumulated state as a report and advance the rate

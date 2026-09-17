@@ -1,12 +1,12 @@
 //! The five-phase tick body. Each phase that carries real weight is a
 //! child module; this file is the order they run in.
 
+use crate::room::*;
+use crate::ticker::TickInfo;
+use prost::Message;
 use std::fmt::Debug;
 use std::hash::Hash;
-use prost::Message;
 use tracing::warn;
-use crate::ticker::TickInfo;
-use crate::room::*;
 
 use crate::room::actor::RoomActor;
 

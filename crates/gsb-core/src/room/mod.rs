@@ -64,7 +64,6 @@
 
 use std::fmt::Debug;
 
-
 use crate::id::{ConnectionId, EntityId, PlayerId};
 
 mod actor;
@@ -79,9 +78,8 @@ mod tests;
 pub use actor::RoomActor;
 pub use config::RoomConfig;
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
-pub use logic::{GameLogic, RoomLogic};
 pub(crate) use counters::{GroupState, RoomConn, RoomCounters};
-
+pub use logic::{GameLogic, RoomLogic};
 
 /// A client action forwarded by the connection actor. The payload is still
 /// encoded; the game crate decodes it against its own message types.

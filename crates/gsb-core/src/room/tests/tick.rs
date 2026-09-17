@@ -3,11 +3,6 @@
 
 use super::*;
 
-
-
-
-
-
 #[tokio::test]
 async fn room_steps_on_ticks_and_pulls_actions() {
     let (dt_tx, mut dts) = mpsc::channel(16);
@@ -175,7 +170,7 @@ async fn lagged_receiver_catches_up_and_keeps_stepping() {
         control_rx,
         1,
         null_metrics_tx(),
-            None,
+        None,
     );
     let handle = tokio::spawn(actor.run());
 
@@ -215,7 +210,7 @@ async fn room_exits_when_ticker_closes() {
         control_rx,
         1,
         null_metrics_tx(),
-            None,
+        None,
     );
     let handle = tokio::spawn(actor.run());
     drop(tick_tx); // ticker aborted → broadcast closes

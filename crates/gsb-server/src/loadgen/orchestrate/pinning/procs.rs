@@ -1,15 +1,15 @@
 //! Spawning and watching the pinned child processes.
 
+use super::*;
+use gsb_core::metrics::MetricReport;
+use gsb_net::udp::UdpClient;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use gsb_core::metrics::MetricReport;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
-use gsb_net::udp::UdpClient;
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::mpsc;
-use super::*;
 
 /// Spawn a child process, optionally pinned to `mask` (logical CPUs) via
 /// `taskset -c`. Stdout is piped only when `pipe_stdout` (the client
@@ -25,7 +25,11 @@ pub(crate) async fn spawn_pinned(
 ) -> std::io::Result<Child> {
     let mut cmd = match (mask, taskset) {
         (Some(mask), Some(ts)) => {
-            let cpus = mask.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+            let cpus = mask
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
             eprintln!("orchestrate: {label} pinned to cores {cpus}");
             let mut c = Command::new(ts);
             c.arg("-c").arg(cpus).arg(exe);
@@ -270,7 +274,9 @@ pub(crate) async fn orchestrate(args: Args) {
         "--transport".into(),
         args.transport.to_string(),
         "--duration".into(),
-        (args.duration + Duration::from_secs(3)).as_secs().to_string(),
+        (args.duration + Duration::from_secs(3))
+            .as_secs()
+            .to_string(),
         "--workers".into(),
         server_workers.to_string(),
     ];
@@ -320,8 +326,7 @@ pub(crate) async fn orchestrate(args: Args) {
     // their connect_ms stays a pure measurement of a ready server.
     // The probe itself becomes one clean open/close on the server (it
     // carries no frames and never joins a room).
-    let server_addr: SocketAddr =
-        format!("127.0.0.1:{server_port}").parse().expect("addr");
+    let server_addr: SocketAddr = format!("127.0.0.1:{server_port}").parse().expect("addr");
     let probe_deadline = Instant::now() + Duration::from_secs(10);
     // Readiness: a TCP connect probe on tcp; on udp there is no SYN to
     // probe with — one cookie-handshake CHALLENGE (a bare challenge
@@ -331,8 +336,7 @@ pub(crate) async fn orchestrate(args: Args) {
         .expect("probe socket binds");
     loop {
         let ready = if args.transport == gsb_server::TransportKind::Udp {
-            UdpClient::challenge_probe(&probe_sock, server_addr, Duration::from_millis(200))
-                .await
+            UdpClient::challenge_probe(&probe_sock, server_addr, Duration::from_millis(200)).await
         } else {
             match TcpStream::connect(server_addr).await {
                 Ok(mut s) => {
@@ -346,7 +350,9 @@ pub(crate) async fn orchestrate(args: Args) {
             break;
         }
         if Instant::now() >= probe_deadline {
-            eprintln!("orchestrate: server socket not ready after 10 s; clients will report their own connect failures");
+            eprintln!(
+                "orchestrate: server socket not ready after 10 s; clients will report their own connect failures"
+            );
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -448,8 +454,7 @@ pub(crate) async fn orchestrate(args: Args) {
     let t0: Vec<Option<u64>> = pids.iter().map(|&p| proc_ticks(p)).collect();
 
     // ── metric reports from the server socket ─────────────────────────
-    let metrics_addr: SocketAddr =
-        format!("127.0.0.1:{metrics_port}").parse().expect("addr");
+    let metrics_addr: SocketAddr = format!("127.0.0.1:{metrics_port}").parse().expect("addr");
     let metrics_task = tokio::spawn(async move {
         // The server binds its metrics listener shortly after spawn;
         // retry until it accepts (one awaited source at a time).
@@ -526,7 +531,9 @@ pub(crate) async fn orchestrate(args: Args) {
         client_exit_ok = false;
     }
     if !client_exit_ok {
-        eprintln!("orchestrate: WARNING — a client child exited non-success; the merged numbers below cover what it reported");
+        eprintln!(
+            "orchestrate: WARNING — a client child exited non-success; the merged numbers below cover what it reported"
+        );
     }
 
     // Drain each child's lines (the reader tasks exit on pipe EOF, which
@@ -582,8 +589,7 @@ pub(crate) async fn orchestrate(args: Args) {
     }
     // The metric stream ends when the server's export task ends (its
     // channel closes on the clean stop), so this await is bounded.
-    let server_reports: Vec<MetricReport> =
-        metrics_task.await.expect("metrics reader panicked");
+    let server_reports: Vec<MetricReport> = metrics_task.await.expect("metrics reader panicked");
 
     // CPU seconds per process over the run (ticks / USER_HZ). Each side
     // uses its own t1 (sampled while that side was still alive): the

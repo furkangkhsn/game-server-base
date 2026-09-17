@@ -9,9 +9,9 @@ use tracing::{debug, warn};
 
 use crate::error::CoreError;
 use crate::id::RoomId;
+use crate::registry::*;
 use crate::room::{RoomConfig, RoomControl};
 use crate::shard::ShardMsg;
-use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
@@ -106,11 +106,7 @@ where
         let _ = reply.send(Ok(RoomStatus::Running { members: 0 }));
     }
 
-    pub(super) async fn on_destroy_room(
-        &mut self,
-        id: RoomId,
-        reply: oneshot::Sender<RoomStatus>,
-    ) {
+    pub(super) async fn on_destroy_room(&mut self, id: RoomId, reply: oneshot::Sender<RoomStatus>) {
         if let Some(entry) = self.rooms.remove(&id) {
             // The entry is gone FIRST (synchronously) — this is
             // also what makes the death watcher's late report
@@ -159,12 +155,7 @@ where
         }
     }
 
-    pub(super) async fn on_room_died(
-        &mut self,
-        id: RoomId,
-        shard: Option<usize>,
-        generation: u64,
-    ) {
+    pub(super) async fn on_room_died(&mut self, id: RoomId, shard: Option<usize>, generation: u64) {
         // The design trick (no cancellation plumbing): a NORMAL
         // end — `DestroyRoom`, server `Shutdown` — removes the
         // table entry first, so this report finds either no

@@ -1,7 +1,6 @@
 //! The transport and listener grammar of the config surface: which
 //! door kinds exist and what each entry must carry.
 
-
 mod listeners;
 pub use listeners::*;
 

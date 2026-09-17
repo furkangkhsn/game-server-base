@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
 use bytes::Bytes;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
@@ -122,7 +122,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 }
@@ -223,8 +225,7 @@ async fn team_fog_fanout_cheat_and_identity() {
 
     // B leaves A's team's vision ((60,60): 84.8 from A, 78 from B's spot).
     move_to(&b_act, c_b, 60, 60).await;
-    let (a_ids2, _b_ids2, c_ids2) =
-        advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 600).await;
+    let (a_ids2, _b_ids2, c_ids2) = advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 600).await;
     assert!(
         !a_ids2.contains(&b_id),
         "B dropped out of A's team's package: {a_ids2:?}"
@@ -242,8 +243,7 @@ async fn team_fog_fanout_cheat_and_identity() {
     // carries in A's package must be the SAME one from before the
     // transition — previously untested, now pinned.
     move_to(&b_act, c_b, 10, 0).await;
-    let (a_ids3, _b_ids3, _c_ids3) =
-        advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 600).await;
+    let (a_ids3, _b_ids3, _c_ids3) = advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 600).await;
     assert!(
         a_ids3.contains(&b_id),
         "B back in A's team's package — with the SAME wire id it had before \

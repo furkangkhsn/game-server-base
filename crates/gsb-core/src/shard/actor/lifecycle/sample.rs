@@ -1,12 +1,12 @@
 //! The metrics sample: the shard's counters, gauges and border
 //! accounting, snapshotted once per report period.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::time::Instant;
 use crate::id::RoomId;
 use crate::metrics::RoomSample;
 use crate::shard::actor::ShardActor;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::time::Instant;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where

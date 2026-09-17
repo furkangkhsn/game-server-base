@@ -8,9 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, PlayerId};
-use crate::room::{
-    Action, ExpireTo,
-};
+use crate::room::{Action, ExpireTo};
 use crate::shard::*;
 
 /// A player's channel halves, moved with a migrating player entity

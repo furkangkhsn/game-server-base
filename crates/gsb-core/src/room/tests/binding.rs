@@ -47,12 +47,7 @@ impl GameLogic<()> for RebindLogic {
         a.clear();
     }
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
-    fn on_disconnect(
-        &mut self,
-        _w: &mut (),
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, _w: &mut (), player: PlayerId, identity: &str) -> Detach {
         if self.ents.contains_key(&player) {
             self.held.insert(identity.to_string(), player);
         }
@@ -143,11 +138,18 @@ fn resume_rekeys_only_the_binding() {
     });
     let reply = rrx.try_recv().expect("reply sent synchronously");
     let (entity, _actions) = reply.expect("resume accepted");
-    assert_eq!(entity, ents[&ConnectionId(2)], "the SAME wire id comes back");
+    assert_eq!(
+        entity,
+        ents[&ConnectionId(2)],
+        "the SAME wire id comes back"
+    );
 
     let pid = pid_of[&ConnectionId(2)];
     // The binding moved — and it is the ONLY table that did.
-    assert!(!actor.binding.contains_key(&ConnectionId(2)), "old row gone");
+    assert!(
+        !actor.binding.contains_key(&ConnectionId(2)),
+        "old row gone"
+    );
     assert_eq!(actor.binding[&ConnectionId(9)], pid, "new row, SAME player");
     assert_eq!(actor.conns[&pid].conn, ConnectionId(9), "row re-pointed");
     assert!(!actor.conns[&pid].detached, "rebound row live");

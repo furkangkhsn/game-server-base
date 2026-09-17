@@ -58,7 +58,6 @@ pub(crate) use table::*;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-
 use crate::id::{ConnectionId, RoomId};
 use crate::room::{RoomConfig, RoomLogic};
 use crate::shard::ShardLogic;

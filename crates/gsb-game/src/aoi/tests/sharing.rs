@@ -30,7 +30,11 @@ fn aoi_cell_exit_is_one_record_and_shared() {
     // becomes empty; BOTH groups' packets carry exactly one
     // cell-exit record for it (one record, not one per entity), and
     // no entity records for it at all.
-    let ent = world.entity(e).get::<crate::components::WireId>().expect("stamped").get();
+    let ent = world
+        .entity(e)
+        .get::<crate::components::WireId>()
+        .expect("stamped")
+        .get();
     world.entity_mut(e).insert(Position { x: 5.0, y: 400.0 });
     room.update(&mut world, &ctx(3));
 
@@ -48,7 +52,11 @@ fn aoi_cell_exit_is_one_record_and_shared() {
             "one cell-exit record for the emptied cell (group {group:?}): {snap:?}"
         );
         let exit: &CellExit = &snap.cell_exits[0];
-        assert_eq!((exit.x, exit.y), (0, 1), "the exited cell is named: {snap:?}");
+        assert_eq!(
+            (exit.x, exit.y),
+            (0, 1),
+            "the exited cell is named: {snap:?}"
+        );
         assert!(
             snap.entities.iter().all(|r| r.entity != ent),
             "the departed entity is not re-carried (group {group:?})"
@@ -77,7 +85,11 @@ fn aoi_encoding_is_once_per_cell_not_per_group() {
     let mut out = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
     assert!(room.snapshot(&mut world, &ctx(1), &Cell(1, 0), &[], &mut out));
-    assert_eq!(room.encoded_records(), 3, "2 shared + 1 exclusive, each once");
+    assert_eq!(
+        room.encoded_records(),
+        3,
+        "2 shared + 1 exclusive, each once"
+    );
 
     // Tick 2: static → silence, nothing encoded.
     room.update(&mut world, &ctx(2));
@@ -91,7 +103,11 @@ fn aoi_encoding_is_once_per_cell_not_per_group() {
     room.update(&mut world, &ctx(3));
     assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out));
     assert!(room.snapshot(&mut world, &ctx(3), &Cell(1, 0), &[], &mut out));
-    assert_eq!(room.encoded_records(), 1, "the shared cell's delta is encoded once");
+    assert_eq!(
+        room.encoded_records(),
+        1,
+        "the shared cell's delta is encoded once"
+    );
 }
 
 /// The pieces concatenate into a decodable `WorldSnapshot`: header +
@@ -116,7 +132,11 @@ fn aoi_concatenated_pieces_are_valid_protobuf() {
         seen.contains(&a) && seen.contains(&b) && seen.contains(&c),
         "the group's packet is the union of the three cells' blocks: {seen:?}"
     );
-    assert_eq!(snap.entities.len(), 3, "exactly the union, no duplicates: {snap:?}");
+    assert_eq!(
+        snap.entities.len(),
+        3,
+        "exactly the union, no duplicates: {snap:?}"
+    );
 }
 
 // ── Cache-invalidation tests (round item (a)): the per-tick
@@ -253,8 +273,16 @@ fn aoi_two_groups_same_cell_same_block() {
     assert!(room.snapshot(&mut world, &ctx(2), &Cell(3, 0), &[], &mut out_b));
     let s_a = decode(&out_a);
     let s_b = decode(&out_b);
-    assert_eq!(s_a.entities.len(), 1, "group A's delta carries only the shared cell's mover: {s_a:?}");
-    assert_eq!(s_b.entities.len(), 1, "group B's delta carries only the shared cell's mover: {s_b:?}");
+    assert_eq!(
+        s_a.entities.len(),
+        1,
+        "group A's delta carries only the shared cell's mover: {s_a:?}"
+    );
+    assert_eq!(
+        s_b.entities.len(),
+        1,
+        "group B's delta carries only the shared cell's mover: {s_b:?}"
+    );
     assert_eq!(
         (s_a.entities[0].entity, s_a.entities[0].x, s_a.entities[0].y),
         (s_b.entities[0].entity, s_b.entities[0].x, s_b.entities[0].y),

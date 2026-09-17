@@ -164,15 +164,24 @@ fn team_of(conn: ConnectionId) -> Team {
 /// `vision_radius * √2` away), so the exact squared-distance filter below
 /// is the only correctness mechanism.
 const VISION_OFFSETS: [(i32, i32); 9] = [
-    (-1, -1), (0, -1), (1, -1),
-    (-1, 0), (0, 0), (1, 0),
-    (-1, 1), (0, 1), (1, 1),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (0, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
 ];
 
 /// The grid cell containing `pos`, for a grid of `cell_size` (world units).
 #[inline]
 fn grid_cell(pos: Position, cell_size: f32) -> Cell {
-    Cell((pos.x / cell_size).floor() as i32, (pos.y / cell_size).floor() as i32)
+    Cell(
+        (pos.x / cell_size).floor() as i32,
+        (pos.y / cell_size).floor() as i32,
+    )
 }
 
 /// One unit's record in the per-tick cache: wire id, truncated wire
@@ -293,10 +302,9 @@ impl TeamRoom {
             let cell = self.cells.entry(c).or_insert([Vec::new(), Vec::new()]);
             match member {
                 Some(m) => {
-                    let team = m.0 .0 as usize;
+                    let team = m.0.0 as usize;
                     cell[team].push((pos.x, pos.y));
-                    self.team_units[team]
-                        .push((wire_id.get(), x, y, pos.x, pos.y));
+                    self.team_units[team].push((wire_id.get(), x, y, pos.x, pos.y));
                 }
                 None => {
                     self.neutral.push((wire_id.get(), x, y));
@@ -318,10 +326,7 @@ impl TeamRoom {
         for t in 0..TEAM_COUNT as usize {
             let enemy = 1 - t;
             for &(id, x, y, ex, ey) in &self.team_units[enemy] {
-                let c = grid_cell(
-                    Position { x: ex, y: ey },
-                    r,
-                );
+                let c = grid_cell(Position { x: ex, y: ey }, r);
                 let mut visible = false;
                 'outer: for (dx, dy) in VISION_OFFSETS {
                     let Some(cell_units) = self.cells.get(&Cell(c.0 + dx, c.1 + dy)) else {

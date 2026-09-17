@@ -1,10 +1,9 @@
 //! The room's configuration: rates, capacities, and the derived tick
 //! period every phase budget is measured against.
 
+use crate::id::RoomId;
 use std::fmt::Debug;
 use std::time::Duration;
-use crate::id::RoomId;
-
 
 /// Static configuration for a room.
 ///

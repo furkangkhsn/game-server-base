@@ -76,8 +76,7 @@ async fn seq_gap_triggers_resync_full() {
     assert!(!r.s1.border[&0].stale_until_full, "quarantine lifted");
     assert_eq!(r.s1.border[&0].recs[&100].state.y, 2, "view correct again");
     assert!(
-        !r.s1.border[&0].stale_until_full
-            && r.s1.border[&0].expected_seq == 5,
+        !r.s1.border[&0].stale_until_full && r.s1.border[&0].expected_seq == 5,
         "sequence re-baselined past the healing Full"
     );
 }
@@ -170,7 +169,10 @@ async fn periodic_full_fires_on_cadence() {
 
     // And quietness resumes right after.
     r.step0(BORDER_FULL_EVERY_TICKS + 1);
-    assert!(r.drain01().is_empty(), "no change after the cadence ⇒ silent");
+    assert!(
+        r.drain01().is_empty(),
+        "no change after the cadence ⇒ silent"
+    );
 
     // Counter cross-check within this run: two Fulls (bootstrap +
     // periodic), one delta, zero drops.
@@ -205,10 +207,7 @@ async fn send_failure_marks_neighbor_for_full_resync() {
     // A strip change now ships a delta — which MUST fail.
     put(&mut r.s0, 100, -1.0, 1.0);
     r.step0(2);
-    assert_eq!(
-        r.s0.bstats.delta_drops, 1,
-        "the failed delta is counted"
-    );
+    assert_eq!(r.s0.bstats.delta_drops, 1, "the failed delta is counted");
     assert!(
         r.s0.export[&1].needs_full,
         "the failure flags the neighbor for a Full"
@@ -256,11 +255,7 @@ async fn own_wins_filter_applies_to_delta_applied_records() {
         },
         &tctx(1),
     ));
-    let w_own = reply_rx
-        .await
-        .expect("join reply")
-        .expect("join ok")
-        .0;
+    let w_own = reply_rx.await.expect("join reply").expect("join ok").0;
 
     // Bootstrap an EMPTY strip from shard 0 (Full, first contact),
     // then apply a DELTA that inserts the stale borrowed copy of the

@@ -1,10 +1,6 @@
 //! The human-readable report and the single scriptable RESULT line.
 
-
-use gsb_core::metrics::{
-    MetricReport,
-    RoomReport, FINE_HIST_BINS, HIST_BINS,
-};
+use gsb_core::metrics::{FINE_HIST_BINS, HIST_BINS, MetricReport, RoomReport};
 
 use super::*;
 use crate::client::*;

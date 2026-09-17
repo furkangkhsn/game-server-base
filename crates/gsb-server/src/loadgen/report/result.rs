@@ -1,10 +1,8 @@
 //! The report itself: the human-readable block and the single
 //! scriptable RESULT line under it.
 
-use gsb_core::metrics::{
-    fine_hist_percentile_us, MetricReport, FINE_HIST_CAP_US,
-};
 use super::*;
+use gsb_core::metrics::{FINE_HIST_CAP_US, MetricReport, fine_hist_percentile_us};
 
 pub(crate) fn print_report(
     args: &Args,
@@ -113,7 +111,11 @@ pub(crate) fn print_report(
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(0);
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
 
     let connected = reports.iter().filter(|r| r.connected).count();
     let joined = reports.iter().filter(|r| r.joined).count();
@@ -143,7 +145,11 @@ pub(crate) fn print_report(
     let oob_dropped: u64 = reports.iter().map(|r| r.oob_dropped).sum();
     let gave_up: u64 = reports.iter().map(|r| r.gave_up).sum();
     let acks: u64 = reports.iter().map(|r| r.acks).sum();
-    let ack_processed_max: u64 = reports.iter().map(|r| r.ack_processed_max).max().unwrap_or(0);
+    let ack_processed_max: u64 = reports
+        .iter()
+        .map(|r| r.ack_processed_max)
+        .max()
+        .unwrap_or(0);
     let ack_lag_max_ms: u128 = reports.iter().map(|r| r.ack_lag_max_ms).max().unwrap_or(0);
     let fulls: u64 = reports.iter().map(|r| r.fulls).sum();
     let private_fulls: u64 = reports.iter().map(|r| r.private_fulls).sum();
@@ -165,8 +171,7 @@ pub(crate) fn print_report(
     );
     println!(
         "clients: transport={} connected={connected}/{} joined={joined} left={left} errors={errors} join_rejected={join_rejected} cap_rejected={cap_rejected} budget_rejected={budget_rejected}",
-        args.transport,
-        args.clients
+        args.transport, args.clients
     );
     // The rUDP client-side reliability picture (all zero on TCP): what
     // the clients' own reliable band had to do to keep the control path
@@ -214,8 +219,14 @@ pub(crate) fn print_report(
     // ack stream (count, highest processed mark, worst lag).
     println!(
         "client view: fulls={} private_fulls={} deltas={} gap_drops={} final_view_total={} | acks={} ack_processed_max={} ack_lag_max_ms={}",
-        fulls, private_fulls, deltas, gap_drops, view_size_total,
-        acks, ack_processed_max, ack_lag_max_ms
+        fulls,
+        private_fulls,
+        deltas,
+        gap_drops,
+        view_size_total,
+        acks,
+        ack_processed_max,
+        ack_lag_max_ms
     );
 
     let room = last_room_agg;
@@ -365,34 +376,27 @@ pub(crate) fn print_report(
         errors,
         room.map(|r| r.steps).unwrap_or(0),
         server_hz,
-        room
-            .map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
+        room.map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
             .unwrap_or(0.0),
-        room
-            .map(|r| {
-                fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50)
-                    .unwrap_or(FINE_HIST_CAP_US)
-            })
-            .unwrap_or(FINE_HIST_CAP_US),
-        room
-            .map(|r| {
-                fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90)
-                    .unwrap_or(FINE_HIST_CAP_US)
-            })
-            .unwrap_or(FINE_HIST_CAP_US),
+        room.map(|r| {
+            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50).unwrap_or(FINE_HIST_CAP_US)
+        })
+        .unwrap_or(FINE_HIST_CAP_US),
+        room.map(|r| {
+            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90).unwrap_or(FINE_HIST_CAP_US)
+        })
+        .unwrap_or(FINE_HIST_CAP_US),
         room.map(|r| r.step_max_us).unwrap_or(0),
-        room.map(|r| over_budget_frac(&r.step_hist) * 100.0).unwrap_or(0.0),
+        room.map(|r| over_budget_frac(&r.step_hist) * 100.0)
+            .unwrap_or(0.0),
         room.map(|r| r.dropped).unwrap_or(0),
         room.map(|r| r.late_max_us).unwrap_or(0),
         room.map(|r| r.snap_bytes_max as u64).unwrap_or(0),
         room.map(|r| r.snap_overflows).unwrap_or(0),
         rec_per_tick,
         overlap,
-        net
-            .map(|n| (n.bytes_in as f64 / dur) as u64)
-            .unwrap_or(0),
-        net
-            .map(|n| (n.bytes_out_total as f64 / dur) as u64)
+        net.map(|n| (n.bytes_in as f64 / dur) as u64).unwrap_or(0),
+        net.map(|n| (n.bytes_out_total as f64 / dur) as u64)
             .unwrap_or(0),
         peak_conns,
         last_room.map(|l| l.metrics_dropped).unwrap_or(0),
@@ -404,10 +408,15 @@ pub(crate) fn print_report(
         args.offset,
         sep.map(|s| s.procs).unwrap_or(1),
         sep.map(|s| s.server_pid).unwrap_or(0),
-        sep
-            .map(|s| s.client_pids.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
+        sep.map(|s| s
+            .client_pids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(","))
             .unwrap_or_else(|| "0".to_string()),
-        sep.map(|s| s.affinity.clone()).unwrap_or_else(|| "none".to_string()),
+        sep.map(|s| s.affinity.clone())
+            .unwrap_or_else(|| "none".to_string()),
         sep.map(|s| s.server_cpu_s).unwrap_or(0.0),
         sep.map(|s| s.clients_cpu_s).unwrap_or(0.0),
         join_rejected,

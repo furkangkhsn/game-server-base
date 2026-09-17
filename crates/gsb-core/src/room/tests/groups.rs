@@ -3,13 +3,6 @@
 
 use super::*;
 
-
-
-
-
-
-
-
 #[tokio::test]
 async fn per_connection_groups_isolate_snapshots_and_private() {
     let (step_tx, mut steps) = mpsc::channel(64);
@@ -65,8 +58,14 @@ async fn per_connection_groups_isolate_snapshots_and_private() {
     // unchanged, so nothing is re-emitted.
     room.leave(ConnectionId(0x70), c_ent).await;
     wait_steps(&mut steps, 4).await;
-    assert!(drain_all(&mut a_rx).await.is_empty(), "A unchanged ⇒ no batch");
-    assert!(drain_all(&mut b_rx).await.is_empty(), "B unchanged ⇒ no batch");
+    assert!(
+        drain_all(&mut a_rx).await.is_empty(),
+        "A unchanged ⇒ no batch"
+    );
+    assert!(
+        drain_all(&mut b_rx).await.is_empty(),
+        "B unchanged ⇒ no batch"
+    );
 
     // Nothing changed anymore: no snapshot is emitted at all.
     room.step().await;

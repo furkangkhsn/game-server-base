@@ -2,8 +2,8 @@
 //! reliable band's retransmit pass. A child module, so it reaches
 //! [`super::UdpClient`]'s private state directly.
 
-use std::time::Instant;
 use super::*;
+use std::time::Instant;
 
 impl UdpClient {
     /// Handle one inbound datagram (from the server). Returns `true` when
@@ -41,7 +41,9 @@ impl UdpClient {
                             }
                             self.in_expected = self.in_expected.wrapping_add(1);
                         }
-                        let _ = self.sock.try_send_to(&encode_ack(self.in_expected), self.peer);
+                        let _ = self
+                            .sock
+                            .try_send_to(&encode_ack(self.in_expected), self.peer);
                     }
                     std::cmp::Ordering::Less => {
                         // The server retransmitted a frame already ACKed:
@@ -49,7 +51,9 @@ impl UdpClient {
                         // re-ACK; never re-deliver (control runs exactly
                         // once, in order).
                         self.stats.dup_in += 1;
-                        let _ = self.sock.try_send_to(&encode_ack(self.in_expected), self.peer);
+                        let _ = self
+                            .sock
+                            .try_send_to(&encode_ack(self.in_expected), self.peer);
                     }
                     std::cmp::Ordering::Greater => {
                         if self.in_oob.len() < OOB_CAP {

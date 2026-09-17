@@ -74,9 +74,7 @@ impl UdpClient {
         while !got_challenge && Instant::now() < challenge_deadline {
             let hello = encode_hello(nonce, 0);
             sock.send_to(&hello, addr).await?;
-            match tokio::time::timeout(Duration::from_millis(500), sock.recv_from(&mut buf))
-                .await
-            {
+            match tokio::time::timeout(Duration::from_millis(500), sock.recv_from(&mut buf)).await {
                 Ok(Ok((n, from))) if from == addr && n >= 18 && buf[0] == KIND_HELLO => {
                     let echoed = u64::from_le_bytes(buf[1..9].try_into().unwrap());
                     if echoed == nonce {

@@ -14,18 +14,18 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::game::{CellExit, WorldSnapshot};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
-use crate::game::{CellExit, WorldSnapshot};
 use prost::Message;
 
-use crate::components::{Position, Speed, DEFAULT_SPEED};
+use crate::components::{DEFAULT_SPEED, Position, Speed};
 
 use super::*;
+use crate::components::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
-use crate::components::*;
 
 mod sharing;
 
@@ -41,7 +41,10 @@ fn ctx(tick: u64) -> TickCtx {
 /// position for a deterministic cell placement. Returns the wire id.
 fn place(world: &mut World, room: &mut AoiRoom, conn: ConnectionId, x: f32, y: f32) -> u64 {
     let admission = room.on_join(world, conn);
-    let entity = *room.player_entity.get(&admission.player).expect("registered");
+    let entity = *room
+        .player_entity
+        .get(&admission.player)
+        .expect("registered");
     world.entity_mut(entity).insert(Position { x, y });
     admission.entity
 }
@@ -71,14 +74,20 @@ fn aoi_block_contains_near_not_far() {
     let snap = decode(&out);
     assert!(!snap.delta, "a fresh group's first packet is a full");
     let near = ids(&snap);
-    assert!(near.contains(&a) && near.contains(&b), "co-residents visible: {near:?}");
+    assert!(
+        near.contains(&a) && near.contains(&b),
+        "co-residents visible: {near:?}"
+    );
     assert!(!near.contains(&c), "far cell must not be visible: {near:?}");
 
     let mut out2 = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Cell(5, 0), &[], &mut out2));
     let far = ids(&decode(&out2));
     assert!(far.contains(&c), "C sees itself: {far:?}");
-    assert!(!far.contains(&a) && !far.contains(&b), "far C does not see A/B: {far:?}");
+    assert!(
+        !far.contains(&a) && !far.contains(&b),
+        "far C does not see A/B: {far:?}"
+    );
 }
 
 /// Cell transition: an entity crossing a boundary changes group; the
@@ -101,7 +110,9 @@ fn aoi_cell_transition_block_and_identity() {
 
     // A moves into B's cell (Cell(3,0)); identity must be preserved.
     let entity_a = *room.player_entity.get(&PlayerId(1)).unwrap();
-    world.entity_mut(entity_a).insert(Position { x: 60.0, y: 0.0 });
+    world
+        .entity_mut(entity_a)
+        .insert(Position { x: 60.0, y: 0.0 });
     room.update(&mut world, &ctx(2));
 
     // Group Cell(3,0) is established (B since tick 1): its packet is
@@ -115,7 +126,10 @@ fn aoi_cell_transition_block_and_identity() {
     let snap_b = decode(&out_b);
     assert!(snap_b.delta, "an established group ships a delta");
     let now_b = ids(&snap_b);
-    assert!(now_b.contains(&a), "A is an update in the new cell's delta: {now_b:?}");
+    assert!(
+        now_b.contains(&a),
+        "A is an update in the new cell's delta: {now_b:?}"
+    );
     assert!(snap_b.removed.iter().all(|w| *w != a), "A is not exited");
 
     // Group Cell(0,0): A left its only resident cell → the cell
@@ -129,11 +143,7 @@ fn aoi_cell_transition_block_and_identity() {
     let snap_a = decode(&out_a);
     assert!(snap_a.delta);
     assert!(snap_a.entities.is_empty(), "no entity records: {snap_a:?}");
-    let exits: BTreeSet<(i32, i32)> = snap_a
-        .cell_exits
-        .iter()
-        .map(|e| (e.x, e.y))
-        .collect();
+    let exits: BTreeSet<(i32, i32)> = snap_a.cell_exits.iter().map(|e| (e.x, e.y)).collect();
     assert!(
         exits.contains(&(0, 0)),
         "the emptied cell is exited as one record: {exits:?}"
@@ -193,7 +203,10 @@ fn aoi_late_join_sees_full_visibility_block() {
     };
     assert!(!snap.delta, "the one-shot full is a full snapshot");
     let seen = ids(&snap);
-    assert!(seen.contains(&a) && seen.contains(&d), "sees co-residents: {seen:?}");
+    assert!(
+        seen.contains(&a) && seen.contains(&d),
+        "sees co-residents: {seen:?}"
+    );
     assert!(seen.contains(&b), "sees itself: {seen:?}");
 
     // A second private call the same tick (or a later tick with no
@@ -225,7 +238,11 @@ fn aoi_broadcast_set_position_is_stamped() {
     let snap = decode(&out);
     let ids = ids(&snap);
     assert!(ids.contains(&a), "resident present: {ids:?}");
-    assert_eq!(ids.len(), 2, "orphan stamped and broadcast (2 entities): {ids:?}");
+    assert_eq!(
+        ids.len(),
+        2,
+        "orphan stamped and broadcast (2 entities): {ids:?}"
+    );
     assert!(!ids.contains(&0), "wire ids start at 1");
 }
 
@@ -242,7 +259,10 @@ fn aoi_no_change_when_block_static() {
 
     room.update(&mut world, &ctx(1));
     let mut out1 = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(1), &cell, &[], &mut out1), "first emit (full)");
+    assert!(
+        room.snapshot(&mut world, &ctx(1), &cell, &[], &mut out1),
+        "first emit (full)"
+    );
 
     room.update(&mut world, &ctx(2));
     let mut out2 = bytes::BytesMut::new();
@@ -253,7 +273,9 @@ fn aoi_no_change_when_block_static() {
     assert!(out2.is_empty(), "no bytes written on silence");
 
     let entity = *room.player_entity.get(&PlayerId(1)).unwrap();
-    world.entity_mut(entity).insert(Position { x: 7.0, y: 19.0 });
+    world
+        .entity_mut(entity)
+        .insert(Position { x: 7.0, y: 19.0 });
     room.update(&mut world, &ctx(3));
     let mut out3 = bytes::BytesMut::new();
     assert!(
@@ -291,5 +313,8 @@ fn aoi_keepalive_ships_fresh_full() {
     let snap = decode(&ka);
     assert!(!snap.delta, "the keep-alive payload is a full");
     let seen = ids(&snap);
-    assert!(seen.contains(&a) && seen.contains(&b), "the full carries the view: {seen:?}");
+    assert!(
+        seen.contains(&a) && seen.contains(&b),
+        "the full carries the view: {seen:?}"
+    );
 }

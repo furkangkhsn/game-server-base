@@ -3,10 +3,8 @@
 
 use std::time::{Duration, Instant};
 
-
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
-
 
 /// Per-room slice of a report: current gauges + rates over the last
 /// report period (rates are 0.0 until the room has reported twice).

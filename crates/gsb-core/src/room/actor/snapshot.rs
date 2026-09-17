@@ -1,13 +1,13 @@
 //! Phase 4 — BROADCAST: one snapshot per group, encoded once and
 //! shared by reference with every member of it.
 
-use std::collections::hash_map::Entry;
+use crate::id::{ConnectionId, PlayerId};
+use crate::room::*;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tracing::warn;
-use crate::id::{ConnectionId, PlayerId};
-use crate::room::*;
 
 use crate::room::actor::RoomActor;
 
@@ -38,9 +38,8 @@ where
         let mut members: HashMap<G, Vec<PlayerId>> = HashMap::new();
         for (&player, rc) in &self.conns {
             members.entry(rc.group.clone()).or_default().push(player);
-        }        // Gauge for the per-step sample: the largest group this tick.
-        self.m.step_max_group =
-            members.values().map(Vec::len).max().unwrap_or(0) as u32;
+        } // Gauge for the per-step sample: the largest group this tick.
+        self.m.step_max_group = members.values().map(Vec::len).max().unwrap_or(0) as u32;
         // Drop groups whose members all left (frees the cached snapshot).
         let gone: Vec<G> = self
             .groups
@@ -122,7 +121,9 @@ where
             // No boundary records on the single-room path: the borrowed
             // slice is a sharded-execution-only input (see
             // `GameLogic::snapshot`).
-            let emitted = self.logic.snapshot(&mut self.world, ctx, group, &[], &mut buf);
+            let emitted = self
+                .logic
+                .snapshot(&mut self.world, ctx, group, &[], &mut buf);
             if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;
@@ -198,8 +199,10 @@ where
         //      payload is opaque to the core, so the number of encoded
         //      records can only come from the logic — polled exactly once
         //      per step, right after the phase that produced them.
-        self.m.snap_records =
-            self.m.snap_records.saturating_add(self.logic.encoded_records());
+        self.m.snap_records = self
+            .m
+            .snap_records
+            .saturating_add(self.logic.encoded_records());
 
         // 4d. Per-connection fan-out: one batch per connection — the
         //     group's shared snapshot (Bytes refcount, never copied) plus
@@ -233,15 +236,12 @@ where
             // the retained capacity is what makes the reuse free — and, if
             // the outbound channel is full, put back for the next tick.
             rc.batch.clear();
-            if let Some(payload) = self
-                .groups
-                .get(&rc.group)
-                .and_then(|st| st.sent.clone())
-            {
+            if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
                 // Metrics: one shipped frame and its wire payload size.
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
-                rc.batch.push(gsb_protocol::FrameBody::new(snap_op, payload));
+                rc.batch
+                    .push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
             // This connection's queued RPC answers for the tick (empty for
             // the common case — the `has_replies` guard above keeps the
@@ -255,12 +255,18 @@ where
                 &[]
             };
             pbuf.clear();
-            if self.logic.private(&mut self.world, player, &rc.group, replies, &mut pbuf) {
+            if self
+                .logic
+                .private(&mut self.world, player, &rc.group, replies, &mut pbuf)
+            {
                 // Metrics: one shipped private frame and its payload size.
                 self.m.private_frames += 1;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
-                rc.batch.push(gsb_protocol::FrameBody::new(priv_op, pbuf.split_to(pbuf.len()).freeze()));
+                rc.batch.push(gsb_protocol::FrameBody::new(
+                    priv_op,
+                    pbuf.split_to(pbuf.len()).freeze(),
+                ));
             }
             if !rc.batch.is_empty() {
                 let batch = std::mem::take(&mut rc.batch);
@@ -299,13 +305,16 @@ where
         reason: String,
         payload: bytes::Bytes,
     ) {
-        self.queued.entry(conn).or_default().push(crate::rpc::RpcReply {
-            id,
-            ok,
-            op,
-            reason,
-            payload,
-        });
+        self.queued
+            .entry(conn)
+            .or_default()
+            .push(crate::rpc::RpcReply {
+                id,
+                ok,
+                op,
+                reason,
+                payload,
+            });
     }
 
     /// Drop a connection's request state (pending set + queued answers).

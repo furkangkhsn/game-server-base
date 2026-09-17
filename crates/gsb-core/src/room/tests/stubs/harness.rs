@@ -41,8 +41,7 @@ impl Harness {
     /// `at = t0 + n * period`, so dts are deterministic.
     pub(in crate::room::tests) fn tick(&mut self, period: Duration) {
         self.next_tick += 1;
-        let at =
-            self.t0 + Duration::from_secs_f64(self.next_tick as f64 * period.as_secs_f64());
+        let at = self.t0 + Duration::from_secs_f64(self.next_tick as f64 * period.as_secs_f64());
         self.tick_tx
             .send(TickInfo {
                 tick: self.next_tick,

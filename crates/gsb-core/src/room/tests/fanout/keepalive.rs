@@ -52,10 +52,6 @@ impl GameLogic<()> for SilentLogic {
 // hook used (empty `RoomLogic` impl).
 impl RoomLogic<()> for SilentLogic {}
 
-
-
-
-
 #[tokio::test]
 async fn never_emitted_group_warns_once_naming_the_group() {
     // Only this test sets the process-global default; the other tests
@@ -77,7 +73,7 @@ async fn never_emitted_group_warns_once_naming_the_group() {
         control_rx,
         1,
         null_metrics_tx(),
-            None,
+        None,
     );
     let handle = tokio::spawn(actor.run());
     let t0 = Instant::now();
@@ -85,8 +81,7 @@ async fn never_emitted_group_warns_once_naming_the_group() {
     // Tick 1: the join is processed, the group is created (Vacant —
     // no check yet) and its first `snapshot()` returns `false`.
     let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
-    let (reply_tx, reply_rx) =
-        oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+    let (reply_tx, reply_rx) = oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
     control
         .send(RoomControl::Join {
             conn: ConnectionId(42),

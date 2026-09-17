@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
@@ -95,14 +95,23 @@ fn start(
     let (ticker, _ticker_task) = Ticker::spawn(HZ, 64).expect("valid tick rate");
     let (metrics_tx, _metrics_rx) = mpsc::channel::<gsb_core::metrics::MetricsEvent>(1);
     let handle = tokio::spawn(
-        Registry::new(rx, tx.clone(), factory, ticker, metrics_tx, None, None, result_sink).run(),
+        Registry::new(
+            rx,
+            tx.clone(),
+            factory,
+            ticker,
+            metrics_tx,
+            None,
+            None,
+            result_sink,
+        )
+        .run(),
     );
     (tx, handle)
 }
 
 async fn create(tx: &Mailbox<RegistryMsg>, id: RoomId) -> Result<RoomStatus, CoreError> {
-    let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: config(id),
         reply: reply_tx,
@@ -115,12 +124,8 @@ async fn create(tx: &Mailbox<RegistryMsg>, id: RoomId) -> Result<RoomStatus, Cor
         .expect("reply dropped")
 }
 
-async fn create_with(
-    tx: &Mailbox<RegistryMsg>,
-    cfg: RoomConfig,
-) -> Result<RoomStatus, CoreError> {
-    let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
+async fn create_with(tx: &Mailbox<RegistryMsg>, cfg: RoomConfig) -> Result<RoomStatus, CoreError> {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<RoomStatus, CoreError>>();
     tx.send(RegistryMsg::CreateRoom {
         config: cfg,
         reply: reply_tx,
@@ -135,9 +140,12 @@ async fn create_with(
 
 async fn destroy(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<RoomStatus>();
-    tx.send(RegistryMsg::DestroyRoom { id, reply: reply_tx })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::DestroyRoom {
+        id,
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
     tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
@@ -146,9 +154,12 @@ async fn destroy(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
 
 async fn status(tx: &Mailbox<RegistryMsg>, id: RoomId) -> RoomStatus {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<RoomStatus>();
-    tx.send(RegistryMsg::RoomStatus { id, reply: reply_tx })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::RoomStatus {
+        id,
+        reply: reply_tx,
+    })
+    .await
+    .expect("registry gone");
     tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
@@ -171,9 +182,8 @@ async fn spawn(
     room: RoomId,
     out: mpsc::Sender<FrameBatch>,
 ) -> EntityId {
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<Action>), CoreError>,
-    >();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
         room,
@@ -330,10 +340,7 @@ async fn status_reports_members() {
     let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(64);
     spawn(&tx, conn, id, out_tx).await;
 
-    assert_eq!(
-        status(&tx, id).await,
-        RoomStatus::Running { members: 1 }
-    );
+    assert_eq!(status(&tx, id).await, RoomStatus::Running { members: 1 });
     // Clean registry shutdown (the test holds the only other mailbox
     // clone; without Shutdown the registry would outlive the test).
     tx.send(RegistryMsg::Shutdown).await.expect("registry gone");

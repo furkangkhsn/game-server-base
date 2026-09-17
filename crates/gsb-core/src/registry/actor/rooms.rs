@@ -8,9 +8,9 @@ use std::hash::Hash;
 use tracing::debug;
 
 use crate::channel::{Inbox, Mailbox, channel};
+use crate::registry::*;
 use crate::room::{RoomActor, RoomConfig};
 use crate::shard::{ShardActor, ShardMsg};
-use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
@@ -76,13 +76,7 @@ where
                     .with_registry(self.self_mailbox.clone())
                     .run(),
                 );
-                Self::spawn_room_watcher(
-                    id,
-                    None,
-                    generation,
-                    handle,
-                    self.self_mailbox.clone(),
-                );
+                Self::spawn_room_watcher(id, None, generation, handle, self.self_mailbox.clone());
                 self.rooms.insert(
                     id,
                     RoomEntry {
@@ -119,8 +113,7 @@ where
                     reg_txs.push(tx.clone());
                     rxs.push(rx);
                 }
-                let mut txs: Vec<Vec<Mailbox<ShardMsg<St, Sp>>>> =
-                    Vec::with_capacity(n);
+                let mut txs: Vec<Vec<Mailbox<ShardMsg<St, Sp>>>> = Vec::with_capacity(n);
                 for a in 0..n {
                     let mut row = Vec::with_capacity(n);
                     for (b, tx_b) in reg_txs.iter().enumerate() {

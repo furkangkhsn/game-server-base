@@ -30,14 +30,14 @@ mod bot;
 mod cells;
 mod park;
 
-pub use cells::Cell;
 pub(crate) use bot::*;
+pub use cells::Cell;
 pub(crate) use cells::*;
 pub(crate) use park::*;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, World, Without};
+use bevy_ecs::prelude::{Entity, Without, World};
 use bytes::BufMut;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, Admission, TickCtx};
@@ -277,8 +277,7 @@ pub(crate) fn append_responses(responses: &[gsb_core::rpc::RpcReply], out: &mut 
         };
         out.put_u8(0x1A); // Private field 3 (responses), LEN
         prost::encoding::varint::encode_varint(msg.encoded_len() as u64, out);
-        msg
-            .encode(out)
+        msg.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
     }
 }

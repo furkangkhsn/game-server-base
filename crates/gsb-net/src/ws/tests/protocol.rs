@@ -3,12 +3,12 @@
 //! so the echo-server helpers are shared, not duplicated.
 
 use super::*;
-use std::sync::Arc;
 use crate::transport::Transport;
-use gsb_core::id::ConnectionId;
 use gsb_core::channel::FrameBatch;
 use gsb_core::conn::ConnIn;
+use gsb_core::id::ConnectionId;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 /// Handshake succeeds with the RFC-vector accept key, and masked binary
 /// game frames echo back one-for-one — including one big enough to force
@@ -41,8 +41,7 @@ async fn fragmented_binary_message_reassembles() {
     let addr = serve_echo(None).await;
     let mut client = FakeWsClient::connect(addr).await;
 
-    let envelope =
-        encode_game_envelope(&FrameBody::new(9, b"fragmented-game-frame".as_slice()));
+    let envelope = encode_game_envelope(&FrameBody::new(9, b"fragmented-game-frame".as_slice()));
     let mid = envelope.len() / 3;
     let (first, rest) = envelope.split_at(mid);
     let (second, third) = rest.split_at(rest.len() / 2);

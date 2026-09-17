@@ -1,6 +1,5 @@
 //! Cookie-key tests: the entropy-source property the handshake rests on.
 
-
 use super::*;
 
 /// Reference of the REMOVED v1 derivation (wall-clock nanoseconds),
@@ -23,8 +22,12 @@ fn legacy_time_key(nanos_since_epoch: u64) -> CookieKey {
 /// one candidate is 2^-128, the window holds ≤ ~10^5 of them).
 #[test]
 fn cookie_key_is_not_derived_from_the_wall_clock() {
-    let now_ns =
-        || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+    let now_ns = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    };
     let t0 = now_ns();
     let key = CookieKey::generate().expect("OS entropy in test");
     let t1 = now_ns();

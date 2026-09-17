@@ -11,8 +11,8 @@ use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
-use crate::room::Action;
 use crate::registry::*;
+use crate::room::Action;
 
 use crate::registry::actor::Registry;
 
@@ -47,8 +47,7 @@ where
         // resume target (the re-affiliation cleanup in
         // `SpawnDone` releases it).
         if !identity.is_empty() {
-            let mut evicted: Vec<(ConnectionId, Option<Mailbox<ConnIn>>)> =
-                Vec::new();
+            let mut evicted: Vec<(ConnectionId, Option<Mailbox<ConnIn>>)> = Vec::new();
             for (&other, info) in &self.conns {
                 if other != conn
                     && !info.detached
@@ -68,10 +67,9 @@ where
                      live one (ERROR 9 to the old socket)"
                 );
                 if let Some(inbox) = inbox {
-                    let reason =
-                        "a newer session for this player superseded this \
+                    let reason = "a newer session for this player superseded this \
                          connection"
-                            .to_string();
+                        .to_string();
                     tokio::spawn(async move {
                         let _ = inbox.send(ConnIn::ServerClosed { reason }).await;
                     });
@@ -110,8 +108,7 @@ where
         // ends (the `pending += 1` below re-borrows mutably).
         let sharded_pick = match &entry.shards {
             Some(group) => {
-                let rejoin =
-                    self.conns.get(&conn).and_then(|i| i.room) == Some(room);
+                let rejoin = self.conns.get(&conn).and_then(|i| i.room) == Some(room);
                 let at_cap = match group.cap {
                     Some(cap) => !rejoin && group.members + group.pending >= cap,
                     None => false,
@@ -132,9 +129,7 @@ where
                 }
                 // Reserve against the cap until the join settles
                 // (SpawnDone / SpawnFailed release it).
-                if let Some(e) =
-                    self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
-                {
+                if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {
                     e.pending += 1;
                 }
                 // Clamp a router bug (an out-of-range pick)
@@ -183,8 +178,7 @@ where
             // cap reservation never settles (the dispatcher
             // never saw the op), so release it here.
             if sharded_room
-                && let Some(e) =
-                    self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
+                && let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
             {
                 e.pending = e.pending.saturating_sub(1);
             }

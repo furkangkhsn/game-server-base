@@ -102,8 +102,7 @@ impl TcpListenerHandle {
                   idle_timeout: Option<std::time::Duration>| {
                 let reader = TcpReader::new(read_half, max_frame_bytes);
                 let writer = TcpWriter::new(write_half);
-                let (read, write) =
-                    spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
                 (Some(read), write)
             },
         )
@@ -122,10 +121,7 @@ impl FrameReader<OwnedReadHalf> {
         impl Sink<FrameBody, Error = std::io::Error> + 'static,
     ) {
         let (r, w) = stream.into_split();
-        (
-            FrameReader::new(r, max_frame_bytes),
-            FrameWriter::new(w),
-        )
+        (FrameReader::new(r, max_frame_bytes), FrameWriter::new(w))
     }
 }
 

@@ -25,30 +25,34 @@ pub(super) fn udp_pump_spawner(
     peer: SocketAddr,
     max_datagram: usize,
 ) -> PumpSpawner {
-    Box::new(move |conn: ConnectionId,
-          _in_tx: Mailbox<ConnIn>,
-          out_rx: Inbox<FrameBatch>,
-          _idle: Option<Duration>| {
-        // `in_tx` is already registered in the demux (at handshake) and
-        // `idle` is its deadline heap's concern — neither belongs to the
-        // per-connection part.
-        let writer = tokio::spawn(UdpWriter {
-            conn,
-            sock,
-            peer,
-            out_rx,
-            max_datagram,
-            seq: 0,
-            acked: 1,
-            retransmit: VecDeque::new(),
-            dropped_oversized: 0,
-            retransmits: 0,
-            gave_up: 0,
-            oversized_warned: false,
-        }
-        .run());
-        (None, writer)
-    })
+    Box::new(
+        move |conn: ConnectionId,
+              _in_tx: Mailbox<ConnIn>,
+              out_rx: Inbox<FrameBatch>,
+              _idle: Option<Duration>| {
+            // `in_tx` is already registered in the demux (at handshake) and
+            // `idle` is its deadline heap's concern — neither belongs to the
+            // per-connection part.
+            let writer = tokio::spawn(
+                UdpWriter {
+                    conn,
+                    sock,
+                    peer,
+                    out_rx,
+                    max_datagram,
+                    seq: 0,
+                    acked: 1,
+                    retransmit: VecDeque::new(),
+                    dropped_oversized: 0,
+                    retransmits: 0,
+                    gave_up: 0,
+                    oversized_warned: false,
+                }
+                .run(),
+            );
+            (None, writer)
+        },
+    )
 }
 
 /// The per-session writer: outbound batches → datagrams, with the
@@ -82,7 +86,7 @@ impl UdpWriter {
             let batch = match tokio::time::timeout(RETRANSIT_RTO, self.out_rx.recv()).await {
                 Ok(Some(b)) => Some(b),
                 Ok(None) => break, // the actor (and the room) are gone
-                Err(_) => None, // RTO: retransmit pass only
+                Err(_) => None,    // RTO: retransmit pass only
             };
             if let Some(batch) = batch {
                 for frame in batch {
@@ -92,8 +96,7 @@ impl UdpWriter {
                         // and prune the retransmit buffer.
                         let ok = frame.payload.len() >= 4;
                         if ok {
-                            let ack =
-                                u32::from_le_bytes(frame.payload[..4].try_into().unwrap());
+                            let ack = u32::from_le_bytes(frame.payload[..4].try_into().unwrap());
                             self.acked = self.acked.max(ack);
                             while let Some(&(s, _, _)) = self.retransmit.front() {
                                 if s < self.acked {

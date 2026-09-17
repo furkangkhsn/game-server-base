@@ -12,11 +12,10 @@ use gsb_protocol::op;
 use gsb_protocol::{MessageTable, base};
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
+use crate::conn::*;
 use crate::id::ConnectionId;
 use crate::metrics::{ConnSample, MetricsEvent};
 use crate::registry::RegistryMsg;
-use crate::conn::*;
-
 
 impl super::ConnectionActor {
     #[allow(clippy::too_many_arguments)]
@@ -84,8 +83,9 @@ impl super::ConnectionActor {
                 ConnIn::Frame(frame) => {
                     // Metrics: count this frame's wire bytes (frame body:
                     // 2-byte op + payload) before handling it.
-                    self.m_in_bytes =
-                        self.m_in_bytes.saturating_add(2 + frame.payload.len() as u64);
+                    self.m_in_bytes = self
+                        .m_in_bytes
+                        .saturating_add(2 + frame.payload.len() as u64);
                     self.m_in_frames += 1;
                     self.maybe_flush_metrics(false);
                     // Pre-auth total frame budget (§3.3): counted BEFORE

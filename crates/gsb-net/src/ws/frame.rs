@@ -2,12 +2,10 @@
 //! (server frames are never masked), and the game envelope that rides
 //! inside one binary message.
 
-
 use bytes::Bytes;
 use bytes::BytesMut;
 
 use gsb_protocol::FrameBody;
-
 
 /// XOR `payload` in place with the 4-byte mask (used both directions in the
 /// tests; on the server read path it unmasks client frames).

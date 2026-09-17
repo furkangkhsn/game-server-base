@@ -1,9 +1,7 @@
 //! The client's wire: framing, the transport variants a load client
 //! can speak, and the byte accounting each one costs.
 
-
 use tokio::io::{AsyncRead, AsyncReadExt};
-
 
 pub(crate) fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
     let body = 2 + payload.len();

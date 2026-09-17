@@ -13,7 +13,6 @@ use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::room::{Action, RoomConfig, RoomControl};
 use crate::shard::ShardMsg;
 
-
 /// How a connection's room-relationship ops reach the room side: the
 /// single room's control channel, or a sharded room's shard mailboxes.
 /// `Clone` because the registry hands a copy to each dispatcher op.

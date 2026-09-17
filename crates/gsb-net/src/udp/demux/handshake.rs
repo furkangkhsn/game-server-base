@@ -68,14 +68,11 @@ impl super::Demux {
             // registry's notification clone + the pump parameter, which
             // the UDP spawner ignores — there is no per-connection
             // reader).
-            let endpoint = Endpoint::new(udp_pump_spawner(
-                self.sock.clone(),
-                peer,
-                self.max_datagram,
-            ))
-            .with_peer(peer)
-            .with_inbox(endpoint_in_tx, in_rx)
-            .with_outbox(out_tx, out_rx);
+            let endpoint =
+                Endpoint::new(udp_pump_spawner(self.sock.clone(), peer, self.max_datagram))
+                    .with_peer(peer)
+                    .with_inbox(endpoint_in_tx, in_rx)
+                    .with_outbox(out_tx, out_rx);
             match self.end_tx.try_send(endpoint) {
                 Ok(()) => {}
                 Err(crossbeam_channel::TrySendError::Full(_)) => {

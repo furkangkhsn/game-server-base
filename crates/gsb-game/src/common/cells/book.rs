@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Changed, Entity, World};
 
-use crate::components::{Position, WireId};
 use crate::common::*;
+use crate::components::{Position, WireId};
 
 /// The per-tick CONTENT bookkeeping of a cell-encoded delta broadcaster —
 /// the current buckets, the change lists, and the occupancy/member
@@ -192,8 +192,7 @@ impl CellBook {
     /// nothing (the cell can still classify `Silent`), so the stream is
     /// content-identical to a diff-based design.
     pub(crate) fn dirty_pass(&mut self, world: &mut World, cell_size: f32) {
-        let mut query =
-            world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();
+        let mut query = world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();
         for (entity, wire_id, pos) in query.iter(world) {
             let wire = wire_id.get();
             let (x, y) = (pos.x as i32, pos.y as i32);

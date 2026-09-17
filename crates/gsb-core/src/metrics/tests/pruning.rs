@@ -98,8 +98,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
     }));
     let r = acc.report(Instant::now());
     assert_eq!(
-        r.net.actions_dropped,
-        10,
+        r.net.actions_dropped, 10,
         "cumulative total includes retired drops (5 + 1 + 4)"
     );
     assert_eq!(

@@ -42,8 +42,6 @@ pub mod ticker;
 pub use auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
 pub use error::CoreError;
 pub use id::{ConnectionId, EntityId, PlayerId, RoomId};
-pub use metrics::{
-    MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent,
-};
+pub use metrics::{MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 pub use registry::{MatchResult, RoomStatus};
 pub use room::{Admission, Detach, ExpireTo, GameLogic, ResumeFound};

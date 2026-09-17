@@ -162,8 +162,7 @@ fn owners_at(
 ) -> Vec<usize> {
     (0..2)
         .filter(|&s| {
-            content[s].iter().any(|(w, _, _, _)| *w == wire)
-                && !reported_out(migrated, t, s, wire)
+            content[s].iter().any(|(w, _, _, _)| *w == wire) && !reported_out(migrated, t, s, wire)
         })
         .collect()
 }

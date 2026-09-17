@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
 use bytes::Bytes;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
@@ -117,7 +117,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 }
@@ -218,15 +220,18 @@ async fn pvs_fanout_wall_and_sector_transition() {
     );
     // B sees nothing beyond itself (B is linked only with D, which is
     // empty; A and C are unlinked with B).
-    assert_eq!(b_ids, [b_id].into_iter().collect(), "B sees exactly itself: {b_ids:?}");
+    assert_eq!(
+        b_ids,
+        [b_id].into_iter().collect(),
+        "B sees exactly itself: {b_ids:?}"
+    );
     assert!(!c_ids.contains(&b_id), "C does not see B: {c_ids:?}");
 
     // A crosses into sector C ((-15, 25), 5 units from C): wire identity
     // unchanged; A's package becomes sector C's (A and C now share the
     // group); the wall did not move: B's package is untouched.
     move_to(&a_act, ConnectionId(1), -15, 25).await;
-    let (a_ids2, b_ids2, c_ids2) =
-        advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 400).await;
+    let (a_ids2, b_ids2, c_ids2) = advance(&mut room, &mut a_rx, &mut b_rx, &mut c_rx, 400).await;
     assert!(
         a_ids2.contains(&a_id) && a_ids2.contains(&c_id),
         "A (now in sector C) sees C and itself: {a_ids2:?}"

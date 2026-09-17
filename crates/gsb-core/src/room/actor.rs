@@ -2,19 +2,18 @@
 //! modules by tick phase and by control path; they are children, so
 //! the world and the tables stay private to this module tree.
 
-use std::collections::HashMap;
-use std::time::Instant;
-use tokio::sync::{broadcast, mpsc};
 use crate::channel::{Inbox, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
 use crate::metrics::MetricsEvent;
-use crate::ticker::TickInfo;
 use crate::room::*;
+use crate::ticker::TickInfo;
+use std::collections::HashMap;
+use std::time::Instant;
+use tokio::sync::{broadcast, mpsc};
 
-
-mod snapshot;
 mod control;
 mod lifecycle;
+mod snapshot;
 mod tick;
 
 /// The room actor. Owns the world, the player table (+ its session
@@ -110,7 +109,8 @@ pub struct RoomActor<W, G, Sp> {
     /// head can expire.) Owner of the pending state: the room is the
     /// single authority on "is this request still pending" (module docs
     /// of `crate::rpc`).
-    pub(in crate::room) pending: HashMap<ConnectionId, std::collections::VecDeque<crate::rpc::PendingRequest>>,
+    pub(in crate::room) pending:
+        HashMap<ConnectionId, std::collections::VecDeque<crate::rpc::PendingRequest>>,
     /// Total in-flight external requests (the room-wide cap).
     pub(in crate::room) pending_total: usize,
     /// This tick's queued RPC answers per transport session; drained in

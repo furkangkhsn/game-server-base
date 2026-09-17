@@ -1,7 +1,7 @@
 //! The `[[listeners]]` grammar: one entry per door.
 
-use tracing::warn;
 use crate::config::*;
+use tracing::warn;
 
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
 ///
@@ -503,7 +503,7 @@ impl Config {
             // nobody has built (see docs/CROSS-SHARD.md §4 — interaction
             // designs stay shard-local; docs/DISTRIBUTED.md horizon item).
             (Topology::Sharded, other @ (VisibilityAxis::Team | VisibilityAxis::Pvs)) => {
-                return Err(ServerError::ShardedCrossInterest(other.to_string()))
+                return Err(ServerError::ShardedCrossInterest(other.to_string()));
             }
         };
 
@@ -515,8 +515,7 @@ impl Config {
         // (all/team/pvs) delta frames wait for their packaging: fail
         // cleanly instead of silently serving full frames under a config
         // that asked for deltas.
-        if self.communication == Some(Communication::Delta)
-            && visibility != VisibilityAxis::Spatial
+        if self.communication == Some(Communication::Delta) && visibility != VisibilityAxis::Spatial
         {
             return Err(match topology {
                 Topology::Single => ServerError::SingleDelta,

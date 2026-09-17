@@ -4,15 +4,15 @@
 //! before).
 
 use super::*;
-use tokio::sync::mpsc;
-use crate::ticker::TickInfo;
 use crate::id::{ConnectionId, RoomId};
+use crate::ticker::TickInfo;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
+mod collector;
 mod histogram;
 mod prometheus;
-mod collector;
 mod pruning;
 
 /// The accumulator applies all three event kinds and rates are
@@ -132,8 +132,14 @@ fn accumulator_applies_events_and_computes_rates() {
     assert_eq!(second.metrics_dropped, 3);
     assert!((r.hz - 30.0).abs() < 1e-6, "hz from delta over 1 s");
     assert!((r.dropped_s - 2.0).abs() < 1e-6, "drop rate from delta");
-    assert!((r.shipped_s - 30_000.0).abs() < 1e-6, "shipped rate from delta");
-    assert!((r.snap_bytes_s - 3_000.0).abs() < 1e-6, "encode rate from delta");
+    assert!(
+        (r.shipped_s - 30_000.0).abs() < 1e-6,
+        "shipped rate from delta"
+    );
+    assert!(
+        (r.snap_bytes_s - 3_000.0).abs() < 1e-6,
+        "encode rate from delta"
+    );
     assert_eq!(r.steps, 60);
     assert_eq!(r.step_mean_us, 420.0 / 60.0);
     assert_eq!(r.members, 3);

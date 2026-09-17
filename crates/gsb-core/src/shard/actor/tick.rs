@@ -7,10 +7,8 @@ use std::hash::Hash;
 use prost::Message;
 use tracing::{debug, warn};
 
-use crate::room::{
-    Action, TickCtx,
-};
-use crate::rpc::{RpcRequest, RPC_REQ_OP};
+use crate::room::{Action, TickCtx};
+use crate::rpc::{RPC_REQ_OP, RpcRequest};
 use crate::ticker::TickInfo;
 
 use crate::shard::actor::ShardActor;

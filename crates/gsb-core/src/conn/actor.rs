@@ -11,12 +11,11 @@ use tokio::sync::mpsc;
 use gsb_protocol::MessageTable;
 
 use crate::channel::{FrameBatch, Inbox, Mailbox};
+use crate::conn::*;
 use crate::id::ConnectionId;
 use crate::metrics::MetricsEvent;
 use crate::registry::RegistryMsg;
 use crate::room::Action;
-use crate::conn::*;
-
 
 mod auth;
 mod frame;

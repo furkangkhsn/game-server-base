@@ -29,7 +29,9 @@ fn aoi_structural_dirty_direct_write() {
     // The third-party writer moves the ghost across cells — the room
     // has no hook for this write; the delta must still carry the
     // exit (source cell) and the arrival (target cell).
-    world.entity_mut(ghost).insert(Position { x: 125.0, y: 0.0 }); // Cell(6,0)
+    world
+        .entity_mut(ghost)
+        .insert(Position { x: 125.0, y: 0.0 }); // Cell(6,0)
     room.update(&mut world, &ctx(2));
 
     let mut out = bytes::BytesMut::new();
@@ -45,8 +47,7 @@ fn aoi_structural_dirty_direct_write() {
     assert!(room.snapshot(&mut world, &ctx(2), &Cell(6, 0), &[], &mut out2));
     let s2 = decode(&out2);
     assert!(
-        s2
-            .entities
+        s2.entities
             .iter()
             .any(|e| e.entity == ghost_wire && (e.x, e.y) == (125, 0)),
         "the arrival is recorded: {s2:?}"
@@ -63,12 +64,24 @@ fn aoi_partial_delta_only_mover_recorded() {
     let mut room = AoiRoom::new(20.0);
     // Five members, one cell (Cell(0,0): x = 3, 6, 9, 12, 15).
     let ws: Vec<u64> = (1..=5)
-        .map(|i| place(&mut world, &mut room, ConnectionId(i), (i as f32) * 3.0, 0.0))
+        .map(|i| {
+            place(
+                &mut world,
+                &mut room,
+                ConnectionId(i),
+                (i as f32) * 3.0,
+                0.0,
+            )
+        })
         .collect();
     room.update(&mut world, &ctx(1));
     let mut out = bytes::BytesMut::new();
     assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
-    assert_eq!(ids(&decode(&out)).len(), 5, "the fresh full carries all five");
+    assert_eq!(
+        ids(&decode(&out)).len(),
+        5,
+        "the fresh full carries all five"
+    );
     assert_eq!(room.encoded_records(), 5);
 
     // Only member 3 (x=9) moves — a direct write (no MOVE_TO, no
@@ -151,10 +164,20 @@ fn aoi_leave_removal_in_delta_and_cell_exit() {
     assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
     let s2 = decode(&out2);
     assert!(s2.delta);
-    assert_eq!(s2.removed.len(), 1, "the leaver's wire id is removed: {s2:?}");
+    assert_eq!(
+        s2.removed.len(),
+        1,
+        "the leaver's wire id is removed: {s2:?}"
+    );
     assert_eq!(s2.removed[0], w1);
-    assert!(!s2.removed.contains(&w2), "the remaining entity is NOT removed: {s2:?}");
-    assert!(s2.entities.is_empty(), "the remaining entity is not re-carried: {s2:?}");
+    assert!(
+        !s2.removed.contains(&w2),
+        "the remaining entity is NOT removed: {s2:?}"
+    );
+    assert!(
+        s2.entities.is_empty(),
+        "the remaining entity is not re-carried: {s2:?}"
+    );
     assert_eq!(room.encoded_records(), 0, "exits are not 'encoded records'");
 
     // The last one leaves: a `CellExit` supersedes the per-entity
@@ -166,7 +189,10 @@ fn aoi_leave_removal_in_delta_and_cell_exit() {
     let s3 = decode(&out3);
     assert_eq!(s3.cell_exits.len(), 1, "one cell-exit record: {s3:?}");
     assert_eq!((s3.cell_exits[0].x, s3.cell_exits[0].y), (0, 0));
-    assert!(s3.removed.is_empty(), "the cell-exit supersedes the entity records: {s3:?}");
+    assert!(
+        s3.removed.is_empty(),
+        "the cell-exit supersedes the entity records: {s3:?}"
+    );
     assert!(s3.entities.is_empty());
 }
 
@@ -240,7 +266,11 @@ fn aoi_join_leave_same_tick_inert() {
 
     room.update(&mut world, &ctx(2));
     assert_eq!(
-        *room.book.member_counts.get(&Cell(0, 0)).expect("member count"),
+        *room
+            .book
+            .member_counts
+            .get(&Cell(0, 0))
+            .expect("member count"),
         1,
         "the member counts are intact"
     );

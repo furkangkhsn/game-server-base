@@ -10,7 +10,6 @@ use sha1::Sha1;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-
 use crate::ws::*;
 
 /// Standard-alphabet base64 with padding, hand-rolled (~15 lines) so the

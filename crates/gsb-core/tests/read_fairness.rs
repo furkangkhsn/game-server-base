@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::registry::MatchResult;
@@ -68,7 +68,11 @@ impl GameLogic<FirstSeen> for RecorderLogic {
         false // no snapshots: the observation seam is the match result
     }
 
-    fn on_join(&mut self, _w: &mut FirstSeen, c: gsb_core::ConnectionId) -> gsb_core::room::Admission {
+    fn on_join(
+        &mut self,
+        _w: &mut FirstSeen,
+        c: gsb_core::ConnectionId,
+    ) -> gsb_core::room::Admission {
         // Test identity policy: the conn id doubles as the player id.
         gsb_core::room::Admission {
             player: gsb_core::PlayerId(c.0),

@@ -1,11 +1,11 @@
 //! The metrics sample: the actor's counters and gauges, snapshotted
 //! once per report period and sent with a non-blocking try_send.
 
+use crate::metrics::RoomSample;
+use crate::room::actor::RoomActor;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
-use crate::metrics::RoomSample;
-use crate::room::actor::RoomActor;
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where

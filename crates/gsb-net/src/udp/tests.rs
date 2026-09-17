@@ -2,17 +2,17 @@
 //! forged proofs, the datagram budget and the reliable band's
 //! retransmit clock.
 
-use crate::udp::*;
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use std::net::SocketAddr;
-use std::time::Duration;
-use bytes::Bytes;
-use tokio::net::UdpSocket;
 use crate::transport::Endpoint;
-use gsb_protocol::FrameBody;
-use gsb_core::id::ConnectionId;
 use crate::transport::{Listener, Transport};
+use crate::udp::*;
+use bytes::Bytes;
+use gsb_core::id::ConnectionId;
+use gsb_protocol::FrameBody;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 
 /// Bind a transport and run an accept loop that hands endpoints to an
 /// unbounded channel (the unit-test stand-in for the server's accept
@@ -54,8 +54,7 @@ async fn bound_transport(
 /// delivers a control frame to the client's reliable band.
 #[tokio::test]
 async fn sequential_handshakes_and_writer_roundtrip() {
-    let (listener, addr, mut eps, _accept) =
-        bound_transport(UdpTransportConfig::default()).await;
+    let (listener, addr, mut eps, _accept) = bound_transport(UdpTransportConfig::default()).await;
 
     let a = UdpClient::connect(addr).await.expect("A handshake");
     let ep_a = tokio::time::timeout(Duration::from_secs(3), eps.recv())
@@ -75,13 +74,19 @@ async fn sequential_handshakes_and_writer_roundtrip() {
     let (in_tx, _in_rx) = ep_b.take_inbox(16);
     let (out_tx, out_rx) = ep_b.take_outbox(16);
     let (_reader, _writer) = ep_b.start_pump(ConnectionId(2), in_tx, out_rx, None);
-    let fb = FrameBody::new(gsb_protocol::op::base::HEARTBEAT_ACK, Bytes::from(vec![7, 9]));
+    let fb = FrameBody::new(
+        gsb_protocol::op::base::HEARTBEAT_ACK,
+        Bytes::from(vec![7, 9]),
+    );
     out_tx.send(vec![fb]).await.expect("send to writer");
-    let got = tokio::time::timeout(Duration::from_secs(3), b.recv_frame(Duration::from_millis(1000)))
-        .await
-        .expect("B recv window")
-        .expect("B recv")
-        .expect("no frame for B");
+    let got = tokio::time::timeout(
+        Duration::from_secs(3),
+        b.recv_frame(Duration::from_millis(1000)),
+    )
+    .await
+    .expect("B recv window")
+    .expect("B recv")
+    .expect("no frame for B");
     assert_eq!(got.op, gsb_protocol::op::base::HEARTBEAT_ACK);
     assert_eq!(got.payload.as_ref(), &[7u8, 9]);
 
@@ -95,8 +100,7 @@ async fn sequential_handshakes_and_writer_roundtrip() {
 /// endpoint — and the rejection leaves other clients unharmed.
 #[tokio::test]
 async fn forged_proof_is_rejected() {
-    let (_listener, addr, mut eps, _accept) =
-        bound_transport(UdpTransportConfig::default()).await;
+    let (_listener, addr, mut eps, _accept) = bound_transport(UdpTransportConfig::default()).await;
 
     let raw = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
         .await
@@ -131,7 +135,9 @@ async fn forged_proof_is_rejected() {
 
     // The rejection is scoped to the attacker: a real client still
     // gets a session.
-    let c = UdpClient::connect(addr).await.expect("real client still works");
+    let c = UdpClient::connect(addr)
+        .await
+        .expect("real client still works");
     let _ep = tokio::time::timeout(Duration::from_secs(3), eps.recv())
         .await
         .expect("real endpoint")

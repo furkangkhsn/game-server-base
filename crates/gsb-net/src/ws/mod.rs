@@ -61,7 +61,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use transport::{WsTransport, DEFAULT_MAX_MESSAGE_BYTES};
+pub use transport::{DEFAULT_MAX_MESSAGE_BYTES, WsTransport};
 
 // Re-homed internals, named here so every child reaches them by one path.
 use frame::{RawFrame, apply_mask, encode_game_envelope, encode_server_frame};
@@ -70,9 +70,6 @@ use reader::WsReader;
 use writer::{WsOut, WsWriter, ws_writer_task};
 
 use std::time::Duration;
-
-
-
 
 /// The RFC 6455 §1.3 magic GUID appended to the client key before hashing.
 const MAGIC_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

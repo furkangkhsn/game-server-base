@@ -10,14 +10,10 @@ use tokio::sync::{broadcast, mpsc};
 use crate::channel::{Inbox, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
 use crate::metrics::MetricsEvent;
-use crate::room::{
-    GroupState, RoomConn, RoomConfig,
-    RoomCounters,
-};
+use crate::room::{GroupState, RoomConfig, RoomConn, RoomCounters};
 use crate::rpc::{Completion, PendingRequest, RpcReply};
-use crate::ticker::TickInfo;
 use crate::shard::*;
-
+use crate::ticker::TickInfo;
 
 mod lifecycle;
 mod messages;

@@ -1,7 +1,6 @@
 //! The demo AI handover: a disconnected player's entity keeps moving
 //! under synthesized input until it is reclaimed.
 
-
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};

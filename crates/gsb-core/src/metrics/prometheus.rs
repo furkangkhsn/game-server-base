@@ -1,10 +1,7 @@
 //! The Prometheus text exposition the ops surface serves at /metrics:
 //! one HELP/TYPE pair per family, room ids as labels.
 
-
-
 use crate::metrics::*;
-
 
 impl MetricReport {
     /// Render as Prometheus text exposition format, version 0.0.4 (the
@@ -39,7 +36,11 @@ impl MetricReport {
             if v.is_nan() {
                 "NaN".to_owned()
             } else if v.is_infinite() {
-                if v > 0.0 { "+Inf".to_owned() } else { "-Inf".to_owned() }
+                if v > 0.0 {
+                    "+Inf".to_owned()
+                } else {
+                    "-Inf".to_owned()
+                }
             } else {
                 format!("{v}")
             }
@@ -55,15 +56,60 @@ impl MetricReport {
         // Registry scope (control-plane gauges + cumulative counters).
         if let Some(reg) = &self.registry {
             for (name, kind, help, v) in [
-                ("gsb_registry_rooms", "gauge", "Current room count.", u64::from(reg.rooms)),
-                ("gsb_registry_conns", "gauge", "Current registered connection count.", u64::from(reg.conns)),
-                ("gsb_registry_rooms_created_total", "counter", "Rooms created, cumulative.", reg.rooms_created),
-                ("gsb_registry_rooms_destroyed_total", "counter", "Rooms destroyed, cumulative.", reg.rooms_destroyed),
-                ("gsb_registry_rooms_died_total", "counter", "Rooms/shards died unexpectedly (panicked), cumulative.", reg.rooms_died),
-                ("gsb_registry_joins_total", "counter", "Joins completed, cumulative.", reg.joins),
-                ("gsb_registry_leaves_total", "counter", "Leaves completed, cumulative.", reg.leaves),
-                ("gsb_registry_opens_total", "counter", "Connections opened, cumulative.", reg.opens),
-                ("gsb_registry_closes_total", "counter", "Connections closed, cumulative.", reg.closes),
+                (
+                    "gsb_registry_rooms",
+                    "gauge",
+                    "Current room count.",
+                    u64::from(reg.rooms),
+                ),
+                (
+                    "gsb_registry_conns",
+                    "gauge",
+                    "Current registered connection count.",
+                    u64::from(reg.conns),
+                ),
+                (
+                    "gsb_registry_rooms_created_total",
+                    "counter",
+                    "Rooms created, cumulative.",
+                    reg.rooms_created,
+                ),
+                (
+                    "gsb_registry_rooms_destroyed_total",
+                    "counter",
+                    "Rooms destroyed, cumulative.",
+                    reg.rooms_destroyed,
+                ),
+                (
+                    "gsb_registry_rooms_died_total",
+                    "counter",
+                    "Rooms/shards died unexpectedly (panicked), cumulative.",
+                    reg.rooms_died,
+                ),
+                (
+                    "gsb_registry_joins_total",
+                    "counter",
+                    "Joins completed, cumulative.",
+                    reg.joins,
+                ),
+                (
+                    "gsb_registry_leaves_total",
+                    "counter",
+                    "Leaves completed, cumulative.",
+                    reg.leaves,
+                ),
+                (
+                    "gsb_registry_opens_total",
+                    "counter",
+                    "Connections opened, cumulative.",
+                    reg.opens,
+                ),
+                (
+                    "gsb_registry_closes_total",
+                    "counter",
+                    "Connections closed, cumulative.",
+                    reg.closes,
+                ),
             ] {
                 out.push_str("# HELP ");
                 out.push_str(name);
@@ -79,14 +125,46 @@ impl MetricReport {
         // per-actor log lines, not in this aggregate).
         let n = &self.net;
         for (name, help, v) in [
-            ("gsb_net_bytes_in_total", "Wire bytes received over all connections (frame bodies), cumulative.", n.bytes_in),
-            ("gsb_net_bytes_out_room_total", "Snapshot+private payload bytes shipped by rooms, cumulative.", n.bytes_out_room),
-            ("gsb_net_bytes_out_control_total", "Control-frame bytes sent by connection actors, cumulative.", n.bytes_out_control),
-            ("gsb_net_bytes_out_total", "Total wire bytes sent, cumulative.", n.bytes_out_total),
-            ("gsb_net_frames_in_total", "Frames received over all connections, cumulative.", n.frames_in),
-            ("gsb_net_frames_out_total", "Control frames sent by connection actors, cumulative.", n.frames_out),
-            ("gsb_net_actions_dropped_total", "Input actions dropped on full per-connection action channels, cumulative.", n.actions_dropped),
-            ("gsb_net_violations_total", "Protocol-violation events counted by violation budgets, cumulative.", n.violations),
+            (
+                "gsb_net_bytes_in_total",
+                "Wire bytes received over all connections (frame bodies), cumulative.",
+                n.bytes_in,
+            ),
+            (
+                "gsb_net_bytes_out_room_total",
+                "Snapshot+private payload bytes shipped by rooms, cumulative.",
+                n.bytes_out_room,
+            ),
+            (
+                "gsb_net_bytes_out_control_total",
+                "Control-frame bytes sent by connection actors, cumulative.",
+                n.bytes_out_control,
+            ),
+            (
+                "gsb_net_bytes_out_total",
+                "Total wire bytes sent, cumulative.",
+                n.bytes_out_total,
+            ),
+            (
+                "gsb_net_frames_in_total",
+                "Frames received over all connections, cumulative.",
+                n.frames_in,
+            ),
+            (
+                "gsb_net_frames_out_total",
+                "Control frames sent by connection actors, cumulative.",
+                n.frames_out,
+            ),
+            (
+                "gsb_net_actions_dropped_total",
+                "Input actions dropped on full per-connection action channels, cumulative.",
+                n.actions_dropped,
+            ),
+            (
+                "gsb_net_violations_total",
+                "Protocol-violation events counted by violation budgets, cumulative.",
+                n.violations,
+            ),
         ] {
             out.push_str("# HELP ");
             out.push_str(name);
@@ -118,30 +196,85 @@ impl MetricReport {
             out.push('\n');
             let _ = writeln!(out, "# TYPE {name} {kind}");
             for r in rooms {
-                let _ = writeln!(
-                    out,
-                    "{name}{{room=\"r{}\"}} {}",
-                    r.room.0,
-                    val(f(r))
-                );
+                let _ = writeln!(out, "{name}{{room=\"r{}\"}} {}", r.room.0, val(f(r)));
             }
         }
-        fn counters(out: &mut String, name: &str, help: &str, rooms: &[RoomReport], f: impl Fn(&RoomReport) -> u64) {
+        fn counters(
+            out: &mut String,
+            name: &str,
+            help: &str,
+            rooms: &[RoomReport],
+            f: impl Fn(&RoomReport) -> u64,
+        ) {
             family(out, name, "counter", help, rooms, |r| f(r) as f64);
         }
-        fn gauges(out: &mut String, name: &str, help: &str, rooms: &[RoomReport], f: impl Fn(&RoomReport) -> f64) {
+        fn gauges(
+            out: &mut String,
+            name: &str,
+            help: &str,
+            rooms: &[RoomReport],
+            f: impl Fn(&RoomReport) -> f64,
+        ) {
             family(out, name, "gauge", help, rooms, f);
         }
 
         // Tick health.
-        gauges(&mut out, "gsb_room_hz", "Measured room step rate (Δsteps/s over the last sample interval).", rooms, |r| r.hz);
-        gauges(&mut out, "gsb_room_budget_us", "The room's tick budget in microseconds (one period).", rooms, |r| r.budget_us as f64);
-        gauges(&mut out, "gsb_room_step_min_us", "Minimum step body duration, µs.", rooms, |r| r.step_min_us as f64);
-        gauges(&mut out, "gsb_room_step_mean_us", "Mean step body duration, µs.", rooms, |r| r.step_mean_us);
-        gauges(&mut out, "gsb_room_step_max_us", "Maximum step body duration, µs.", rooms, |r| r.step_max_us as f64);
-        gauges(&mut out, "gsb_room_late_min_us", "Minimum tick processing latency (step start − ticker timestamp), µs.", rooms, |r| r.late_min_us as f64);
-        gauges(&mut out, "gsb_room_late_mean_us", "Mean tick processing latency, µs.", rooms, |r| r.late_mean_us);
-        gauges(&mut out, "gsb_room_late_max_us", "Maximum tick processing latency, µs.", rooms, |r| r.late_max_us as f64);
+        gauges(
+            &mut out,
+            "gsb_room_hz",
+            "Measured room step rate (Δsteps/s over the last sample interval).",
+            rooms,
+            |r| r.hz,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_budget_us",
+            "The room's tick budget in microseconds (one period).",
+            rooms,
+            |r| r.budget_us as f64,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_step_min_us",
+            "Minimum step body duration, µs.",
+            rooms,
+            |r| r.step_min_us as f64,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_step_mean_us",
+            "Mean step body duration, µs.",
+            rooms,
+            |r| r.step_mean_us,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_step_max_us",
+            "Maximum step body duration, µs.",
+            rooms,
+            |r| r.step_max_us as f64,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_late_min_us",
+            "Minimum tick processing latency (step start − ticker timestamp), µs.",
+            rooms,
+            |r| r.late_min_us as f64,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_late_mean_us",
+            "Mean tick processing latency, µs.",
+            rooms,
+            |r| r.late_mean_us,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_late_max_us",
+            "Maximum tick processing latency, µs.",
+            rooms,
+            |r| r.late_max_us as f64,
+        );
 
         // Step-duration distribution #1: budget-relative log2 histogram,
         // exported with REAL microsecond bucket edges (derived per room from
@@ -198,48 +331,264 @@ impl MetricReport {
         }
 
         // Drops and broadcast fan-out.
-        counters(&mut out, "gsb_room_steps_total", "Steps run, cumulative.", rooms, |r| r.steps);
-        counters(&mut out, "gsb_room_lagged_events_total", "Broadcast Lagged occurrences, cumulative.", rooms, |r| r.lagged_events);
-        counters(&mut out, "gsb_room_lagged_ticks_total", "Missed tick indices caught up, cumulative.", rooms, |r| r.lagged_ticks);
-        counters(&mut out, "gsb_room_dropped_total", "Outbound batches dropped at the fan-out (slow client), cumulative.", rooms, |r| r.dropped);
-        gauges(&mut out, "gsb_room_dropped_s", "Batch drop rate (Δ/s over the last sample interval).", rooms, |r| r.dropped_s);
-        counters(&mut out, "gsb_room_dropped_actions_total", "Input actions dropped on READ-channel overflow, cumulative.", rooms, |r| r.dropped_actions);
-        counters(&mut out, "gsb_room_keepalive_resends_total", "Keep-alive re-sends of unchanged groups, cumulative.", rooms, |r| r.keepalive_resends);
-        counters(&mut out, "gsb_room_snapshots_total", "Group snapshots encoded, cumulative.", rooms, |r| r.snapshots);
-        gauges(&mut out, "gsb_room_snap_bytes_s", "Encoded snapshot byte rate (Δ/s).", rooms, |r| r.snap_bytes_s);
-        gauges(&mut out, "gsb_room_snap_bytes_max", "Largest single group payload seen, bytes.", rooms, |r| f64::from(r.snap_bytes_max));
-        counters(&mut out, "gsb_room_snap_overflows_total", "Snapshots exceeding max_snapshot_bytes, cumulative.", rooms, |r| r.snap_overflows);
-        counters(&mut out, "gsb_room_snap_records_total", "Entity records encoded (overlap-metric numerator), cumulative.", rooms, |r| r.snap_records);
-        counters(&mut out, "gsb_room_shipped_bytes_total", "Bytes shipped to connections (fan-out copies), cumulative.", rooms, |r| r.shipped_bytes);
-        gauges(&mut out, "gsb_room_shipped_s", "Shipped-byte rate (Δ/s).", rooms, |r| r.shipped_s);
+        counters(
+            &mut out,
+            "gsb_room_steps_total",
+            "Steps run, cumulative.",
+            rooms,
+            |r| r.steps,
+        );
+        counters(
+            &mut out,
+            "gsb_room_lagged_events_total",
+            "Broadcast Lagged occurrences, cumulative.",
+            rooms,
+            |r| r.lagged_events,
+        );
+        counters(
+            &mut out,
+            "gsb_room_lagged_ticks_total",
+            "Missed tick indices caught up, cumulative.",
+            rooms,
+            |r| r.lagged_ticks,
+        );
+        counters(
+            &mut out,
+            "gsb_room_dropped_total",
+            "Outbound batches dropped at the fan-out (slow client), cumulative.",
+            rooms,
+            |r| r.dropped,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_dropped_s",
+            "Batch drop rate (Δ/s over the last sample interval).",
+            rooms,
+            |r| r.dropped_s,
+        );
+        counters(
+            &mut out,
+            "gsb_room_dropped_actions_total",
+            "Input actions dropped on READ-channel overflow, cumulative.",
+            rooms,
+            |r| r.dropped_actions,
+        );
+        counters(
+            &mut out,
+            "gsb_room_keepalive_resends_total",
+            "Keep-alive re-sends of unchanged groups, cumulative.",
+            rooms,
+            |r| r.keepalive_resends,
+        );
+        counters(
+            &mut out,
+            "gsb_room_snapshots_total",
+            "Group snapshots encoded, cumulative.",
+            rooms,
+            |r| r.snapshots,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_snap_bytes_s",
+            "Encoded snapshot byte rate (Δ/s).",
+            rooms,
+            |r| r.snap_bytes_s,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_snap_bytes_max",
+            "Largest single group payload seen, bytes.",
+            rooms,
+            |r| f64::from(r.snap_bytes_max),
+        );
+        counters(
+            &mut out,
+            "gsb_room_snap_overflows_total",
+            "Snapshots exceeding max_snapshot_bytes, cumulative.",
+            rooms,
+            |r| r.snap_overflows,
+        );
+        counters(
+            &mut out,
+            "gsb_room_snap_records_total",
+            "Entity records encoded (overlap-metric numerator), cumulative.",
+            rooms,
+            |r| r.snap_records,
+        );
+        counters(
+            &mut out,
+            "gsb_room_shipped_bytes_total",
+            "Bytes shipped to connections (fan-out copies), cumulative.",
+            rooms,
+            |r| r.shipped_bytes,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_shipped_s",
+            "Shipped-byte rate (Δ/s).",
+            rooms,
+            |r| r.shipped_s,
+        );
 
         // Group/membership state.
-        gauges(&mut out, "gsb_room_groups", "Current snapshot group count.", rooms, |r| f64::from(r.groups));
-        gauges(&mut out, "gsb_room_members", "Current member count.", rooms, |r| f64::from(r.members));
-        gauges(&mut out, "gsb_room_max_group", "Largest snapshot group right now.", rooms, |r| f64::from(r.max_group));
-        gauges(&mut out, "gsb_room_detached", "Detached-but-parked connections right now (their cap slots are held).", rooms, |r| f64::from(r.detached));
+        gauges(
+            &mut out,
+            "gsb_room_groups",
+            "Current snapshot group count.",
+            rooms,
+            |r| f64::from(r.groups),
+        );
+        gauges(
+            &mut out,
+            "gsb_room_members",
+            "Current member count.",
+            rooms,
+            |r| f64::from(r.members),
+        );
+        gauges(
+            &mut out,
+            "gsb_room_max_group",
+            "Largest snapshot group right now.",
+            rooms,
+            |r| f64::from(r.max_group),
+        );
+        gauges(
+            &mut out,
+            "gsb_room_detached",
+            "Detached-but-parked connections right now (their cap slots are held).",
+            rooms,
+            |r| f64::from(r.detached),
+        );
 
         // Session lifecycle.
-        counters(&mut out, "gsb_room_joins_total", "Joins processed, cumulative.", rooms, |r| r.joins);
-        counters(&mut out, "gsb_room_leaves_total", "Leaves processed, cumulative.", rooms, |r| r.leaves);
-        counters(&mut out, "gsb_room_resumes_total", "Resumes accepted onto parked sessions, cumulative.", rooms, |r| r.resumes);
-        counters(&mut out, "gsb_room_resume_rejected_stale_total", "Resume attempts rejected as stale, cumulative.", rooms, |r| r.resume_rejected_stale);
-        counters(&mut out, "gsb_room_detach_expired_despawn_total", "Detach holds expired toward despawn, cumulative.", rooms, |r| r.detach_expired_despawn);
-        counters(&mut out, "gsb_room_detach_expired_ai_total", "Detach holds expired toward AI handover, cumulative.", rooms, |r| r.detach_expired_ai);
+        counters(
+            &mut out,
+            "gsb_room_joins_total",
+            "Joins processed, cumulative.",
+            rooms,
+            |r| r.joins,
+        );
+        counters(
+            &mut out,
+            "gsb_room_leaves_total",
+            "Leaves processed, cumulative.",
+            rooms,
+            |r| r.leaves,
+        );
+        counters(
+            &mut out,
+            "gsb_room_resumes_total",
+            "Resumes accepted onto parked sessions, cumulative.",
+            rooms,
+            |r| r.resumes,
+        );
+        counters(
+            &mut out,
+            "gsb_room_resume_rejected_stale_total",
+            "Resume attempts rejected as stale, cumulative.",
+            rooms,
+            |r| r.resume_rejected_stale,
+        );
+        counters(
+            &mut out,
+            "gsb_room_detach_expired_despawn_total",
+            "Detach holds expired toward despawn, cumulative.",
+            rooms,
+            |r| r.detach_expired_despawn,
+        );
+        counters(
+            &mut out,
+            "gsb_room_detach_expired_ai_total",
+            "Detach holds expired toward AI handover, cumulative.",
+            rooms,
+            |r| r.detach_expired_ai,
+        );
 
         // RPC.
-        counters(&mut out, "gsb_room_requests_local_total", "RPC requests answered room-local, cumulative.", rooms, |r| r.requests_local);
-        counters(&mut out, "gsb_room_requests_external_total", "RPC requests delegated to workers, cumulative.", rooms, |r| r.requests_external);
-        counters(&mut out, "gsb_room_requests_rejected_malformed_total", "RPC rejections: malformed envelope/id=0, cumulative.", rooms, |r| r.requests_rejected_malformed);
-        counters(&mut out, "gsb_room_requests_rejected_dup_total", "RPC rejections: duplicate in-flight id, cumulative.", rooms, |r| r.requests_rejected_dup);
-        counters(&mut out, "gsb_room_requests_rejected_no_handler_total", "RPC rejections: no handler for the op, cumulative.", rooms, |r| r.requests_rejected_no_handler);
-        counters(&mut out, "gsb_room_requests_rejected_logic_total", "RPC rejections: the logic's own reject decision, cumulative.", rooms, |r| r.requests_rejected_logic);
-        counters(&mut out, "gsb_room_requests_rejected_conn_cap_total", "RPC rejections: per-connection pending cap, cumulative.", rooms, |r| r.requests_rejected_conn_cap);
-        counters(&mut out, "gsb_room_requests_rejected_room_cap_total", "RPC rejections: room-wide pending cap, cumulative.", rooms, |r| r.requests_rejected_room_cap);
-        counters(&mut out, "gsb_room_requests_timed_out_total", "RPC pending requests swept as timed out, cumulative.", rooms, |r| r.requests_timed_out);
-        counters(&mut out, "gsb_room_requests_late_total", "RPC worker reports dropped as late, cumulative.", rooms, |r| r.requests_late);
-        gauges(&mut out, "gsb_room_pending_requests", "External RPC requests currently in flight.", rooms, |r| f64::from(r.pending_requests));
-        counters(&mut out, "gsb_room_metrics_dropped_total", "Metric samples this room dropped on a full metrics channel, cumulative.", rooms, |r| r.metrics_dropped);
+        counters(
+            &mut out,
+            "gsb_room_requests_local_total",
+            "RPC requests answered room-local, cumulative.",
+            rooms,
+            |r| r.requests_local,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_external_total",
+            "RPC requests delegated to workers, cumulative.",
+            rooms,
+            |r| r.requests_external,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_malformed_total",
+            "RPC rejections: malformed envelope/id=0, cumulative.",
+            rooms,
+            |r| r.requests_rejected_malformed,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_dup_total",
+            "RPC rejections: duplicate in-flight id, cumulative.",
+            rooms,
+            |r| r.requests_rejected_dup,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_no_handler_total",
+            "RPC rejections: no handler for the op, cumulative.",
+            rooms,
+            |r| r.requests_rejected_no_handler,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_logic_total",
+            "RPC rejections: the logic's own reject decision, cumulative.",
+            rooms,
+            |r| r.requests_rejected_logic,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_conn_cap_total",
+            "RPC rejections: per-connection pending cap, cumulative.",
+            rooms,
+            |r| r.requests_rejected_conn_cap,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_rejected_room_cap_total",
+            "RPC rejections: room-wide pending cap, cumulative.",
+            rooms,
+            |r| r.requests_rejected_room_cap,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_timed_out_total",
+            "RPC pending requests swept as timed out, cumulative.",
+            rooms,
+            |r| r.requests_timed_out,
+        );
+        counters(
+            &mut out,
+            "gsb_room_requests_late_total",
+            "RPC worker reports dropped as late, cumulative.",
+            rooms,
+            |r| r.requests_late,
+        );
+        gauges(
+            &mut out,
+            "gsb_room_pending_requests",
+            "External RPC requests currently in flight.",
+            rooms,
+            |r| f64::from(r.pending_requests),
+        );
+        counters(
+            &mut out,
+            "gsb_room_metrics_dropped_total",
+            "Metric samples this room dropped on a full metrics channel, cumulative.",
+            rooms,
+            |r| r.metrics_dropped,
+        );
 
         out
     }

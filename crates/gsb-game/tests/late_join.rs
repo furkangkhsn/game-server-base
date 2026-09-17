@@ -121,7 +121,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 
@@ -187,7 +189,11 @@ async fn late_joiner_receives_full_world_snapshot() {
     // So feed ticks and take a batch *whenever one arrives* — not on every
     // tick — until B sees the movement.
 
-    let move_to = gsb_game::game::MoveTo { x: a_start.x + 100, y: a_start.y + 100, seq: 0 };
+    let move_to = gsb_game::game::MoveTo {
+        x: a_start.x + 100,
+        y: a_start.y + 100,
+        seq: 0,
+    };
     a_actions
         .send(Action {
             conn: c_a,
@@ -251,13 +257,15 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
     // Consume the rejoin tick's batch: E2 is in the snapshot, E1 is not
     // (membership = presence in the snapshot).
     let batch = next_batch(&mut a_rx).await;
-    let seen: Vec<u64> = snapshot(&batch)
-        .entities
-        .iter()
-        .map(|e| e.entity)
-        .collect();
-    assert!(seen.contains(&e2), "rejoined entity E2 must be in the snapshot");
-    assert!(!seen.contains(&e1), "left entity E1 must be out of the snapshot");
+    let seen: Vec<u64> = snapshot(&batch).entities.iter().map(|e| e.entity).collect();
+    assert!(
+        seen.contains(&e2),
+        "rejoined entity E2 must be in the snapshot"
+    );
+    assert!(
+        !seen.contains(&e1),
+        "left entity E1 must be out of the snapshot"
+    );
 
     // A *stale* leave for E1 arrives late: it must be ignored.
     room.control
@@ -274,7 +282,11 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
     // sub-integer movement ticks emit nothing — feed ticks until the next
     // snapshot arrives (the integer position changes within a few ticks at
     // 10 units/s, 30 Hz).
-    let move_to = gsb_game::game::MoveTo { x: -20, y: 20, seq: 0 };
+    let move_to = gsb_game::game::MoveTo {
+        x: -20,
+        y: 20,
+        seq: 0,
+    };
     a_actions
         .send(Action {
             conn: c_a,
@@ -295,16 +307,15 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
         }
     }
     let batch = batch.expect("E2 must produce a snapshot after MOVE_TO");
-    let seen: Vec<u64> = snapshot(&batch)
-        .entities
-        .iter()
-        .map(|e| e.entity)
-        .collect();
+    let seen: Vec<u64> = snapshot(&batch).entities.iter().map(|e| e.entity).collect();
     assert!(
         seen.contains(&e2),
         "rejoined entity E2 must survive the stale leave"
     );
-    assert!(!seen.contains(&e1), "stale-leave victim E1 must not reappear");
+    assert!(
+        !seen.contains(&e1),
+        "stale-leave victim E1 must not reappear"
+    );
 
     room.shutdown().await;
 }

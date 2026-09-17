@@ -1,6 +1,5 @@
 //! The composite's sharding half.
 
-
 use bevy_ecs::prelude::World;
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};

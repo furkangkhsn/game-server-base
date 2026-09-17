@@ -8,7 +8,7 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
-use gsb_core::shard::{BorderRecord};
+use gsb_core::shard::BorderRecord;
 use prost::Message;
 
 use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
@@ -67,7 +67,9 @@ impl GameLogic<World> for ShardedRoom {
         }
         for rec in borrowed {
             if self.in_border_frame(rec.state.x, rec.state.y) {
-                content.entry(rec.wire).or_insert((rec.state.x, rec.state.y));
+                content
+                    .entry(rec.wire)
+                    .or_insert((rec.state.x, rec.state.y));
             }
         }
 
@@ -89,14 +91,10 @@ impl GameLogic<World> for ShardedRoom {
         let mut entries: Vec<(&u64, &(i32, i32))> = content.iter().collect();
         entries.sort_unstable_by_key(|(w, _)| **w);
         for (w, &(x, y)) in entries {
-            snap.entities.push(crate::game::EntityRecord {
-                entity: *w,
-                x,
-                y,
-            });
+            snap.entities
+                .push(crate::game::EntityRecord { entity: *w, x, y });
         }
-        snap
-            .encode(out)
+        snap.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
 
         self.encoded += content.len() as u64;
@@ -119,18 +117,18 @@ impl GameLogic<World> for ShardedRoom {
         let player = self.mint_player();
         let wire = self.mint();
         let entity = world
-            .spawn((
-                Position { x, y },
-                Speed(DEFAULT_SPEED),
-                WireId::new(wire),
-            ))
+            .spawn((Position { x, y }, Speed(DEFAULT_SPEED), WireId::new(wire)))
             .id();
         self.player_entity.insert(player, entity);
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
-        self.input.insert(player, crate::common::InputState::default());
-        Admission { player, entity: wire }
+        self.input
+            .insert(player, crate::common::InputState::default());
+        Admission {
+            player,
+            entity: wire,
+        }
     }
 
     fn on_leave(&mut self, world: &mut World, player: PlayerId) {
@@ -165,12 +163,7 @@ impl GameLogic<World> for ShardedRoom {
     //    its ledger by identity like the others but tracks the WIRE id,
     //    because that is what survives migrations) ----------------------
 
-    fn on_disconnect(
-        &mut self,
-        world: &mut World,
-        player: PlayerId,
-        identity: &str,
-    ) -> Detach {
+    fn on_disconnect(&mut self, world: &mut World, player: PlayerId, identity: &str) -> Detach {
         if self.park.grace.is_zero() || identity.is_empty() {
             return Detach::Despawn;
         }
@@ -284,10 +277,7 @@ impl GameLogic<World> for ShardedRoom {
         self.border_cache.clear();
         let mut query = world.query::<(&WireId, &Position)>();
         for (wire, pos) in query.iter(world) {
-            let near = (pos.x - x0) < b
-                || (x1 - pos.x) < b
-                || (pos.y - y0) < b
-                || (y1 - pos.y) < b;
+            let near = (pos.x - x0) < b || (x1 - pos.x) < b || (pos.y - y0) < b || (y1 - pos.y) < b;
             if near {
                 self.border_cache.push(BorderRecord {
                     wire: wire.get(),
@@ -329,7 +319,9 @@ impl GameLogic<World> for ShardedRoom {
                     ));
                 };
                 let Some(entity) = self.player_entity.get(&req.player).copied() else {
-                    return Some(RequestDecision::Reject("no entity for this connection".into()));
+                    return Some(RequestDecision::Reject(
+                        "no entity for this connection".into(),
+                    ));
                 };
                 let Ok(he) = world.get_entity(entity) else {
                     return Some(RequestDecision::Reject("entity already gone".into()));
@@ -346,9 +338,10 @@ impl GameLogic<World> for ShardedRoom {
                         (dx * dx + dy * dy).sqrt()
                     )));
                 }
-                world
-                    .entity_mut(entity)
-                    .insert(MoveTarget { x: use_msg.x as f32, y: use_msg.y as f32 });
+                world.entity_mut(entity).insert(MoveTarget {
+                    x: use_msg.x as f32,
+                    y: use_msg.y as f32,
+                });
                 let res = crate::game::AbilityResult {
                     ok: true,
                     reason: String::new(),
@@ -357,7 +350,9 @@ impl GameLogic<World> for ShardedRoom {
             }
             op::ECONOMY => {
                 let Ok(buy) = <crate::game::BuyItem as Message>::decode(&req.payload[..]) else {
-                    return Some(RequestDecision::Reject("undecodable BuyItem payload".into()));
+                    return Some(RequestDecision::Reject(
+                        "undecodable BuyItem payload".into(),
+                    ));
                 };
                 let Some(economy) = self.economy.clone() else {
                     return Some(RequestDecision::Reject(

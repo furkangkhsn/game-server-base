@@ -80,17 +80,9 @@ impl ShardLogic<TWorld> for RichLogic {
         0
     }
     fn neighbors(&self) -> &[usize] {
-        if self.index == 0 {
-            &[1]
-        } else {
-            &[0]
-        }
+        if self.index == 0 { &[1] } else { &[0] }
     }
-    fn collect_migrations(
-        &mut self,
-        _w: &mut TWorld,
-        _nb: usize,
-    ) -> Vec<Migrating<TState>> {
+    fn collect_migrations(&mut self, _w: &mut TWorld, _nb: usize) -> Vec<Migrating<TState>> {
         Vec::new()
     }
     fn on_migrate_in(

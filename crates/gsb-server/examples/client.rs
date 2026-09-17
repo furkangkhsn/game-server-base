@@ -116,7 +116,10 @@ async fn main() {
         stream.set_nodelay(true).ok();
         println!("connected to {addr}");
         let (tr, tw) = stream.into_split();
-        (Box::new(tr) as Box<dyn AsyncRead + Unpin + Send>, Box::new(tw))
+        (
+            Box::new(tr) as Box<dyn AsyncRead + Unpin + Send>,
+            Box::new(tw),
+        )
     };
     let mut r = r;
     let mut w = w;
@@ -161,7 +164,11 @@ async fn main() {
             tokio::time::sleep(Duration::from_millis(150)).await;
             i += 1;
             let angle = (i as f32) * 0.7;
-            let msg = gsb_game::game::MoveTo { x: (angle.cos() * 40.0) as i32, y: (angle.sin() * 40.0) as i32, seq: i as u64 };
+            let msg = gsb_game::game::MoveTo {
+                x: (angle.cos() * 40.0) as i32,
+                y: (angle.sin() * 40.0) as i32,
+                seq: i as u64,
+            };
             if w.write_all(&frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec()))
                 .await
                 .is_err()
@@ -179,8 +186,7 @@ async fn main() {
             break;
         }
         // One wait, no multiplexing: a bounded read attempt.
-        let result =
-            tokio::time::timeout(Duration::from_millis(200), read_frame(r.as_mut())).await;
+        let result = tokio::time::timeout(Duration::from_millis(200), read_frame(r.as_mut())).await;
         let Some((op, payload)) = result.ok().flatten() else {
             continue;
         };
@@ -212,7 +218,10 @@ async fn main() {
                 if m.sequence <= last_seq.unwrap_or(0) {
                     println!("WORLD_SNAPSHOT seq={} duplicate — discarded", m.sequence);
                 } else if m.delta && last_seq.is_none() {
-                    println!("WORLD_SNAPSHOT seq={} delta without baseline — dropped (next full heals)", m.sequence);
+                    println!(
+                        "WORLD_SNAPSHOT seq={} delta without baseline — dropped (next full heals)",
+                        m.sequence
+                    );
                 } else {
                     if m.delta {
                         for &w in &m.removed {
@@ -258,7 +267,10 @@ async fn main() {
                 match m.payload {
                     Some(gsb_game::game::private::Payload::Ack(a)) => {
                         acked_max = acked_max.max(a.processed_up_to);
-                        println!("PRIVATE ack: processed_up_to={} (max so far {})", a.processed_up_to, acked_max);
+                        println!(
+                            "PRIVATE ack: processed_up_to={} (max so far {})",
+                            a.processed_up_to, acked_max
+                        );
                     }
                     Some(gsb_game::game::private::Payload::Snapshot(s)) => {
                         // The one-shot private full: applied UNCONDITIONALLY
@@ -269,7 +281,10 @@ async fn main() {
                             view.insert(e.entity, (e.x, e.y));
                         }
                         last_seq = Some(s.sequence);
-                        println!("PRIVATE full: {} entities (baseline reset)", s.entities.len());
+                        println!(
+                            "PRIVATE full: {} entities (baseline reset)",
+                            s.entities.len()
+                        );
                     }
                     None => {}
                 }

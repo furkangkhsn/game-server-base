@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gsb_core::auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
-use gsb_core::channel::{channel, FrameBatch};
+use gsb_core::channel::{FrameBatch, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
@@ -167,7 +167,7 @@ fn has_op(batch: &FrameBatch, want: u16) -> bool {
 /// Short-window silence check: nothing arrives within 400 ms.
 async fn expect_quiet(out: &mut mpsc::Receiver<FrameBatch>) {
     match tokio::time::timeout(Duration::from_millis(400), out.recv()).await {
-        Err(_) => {}                      // silence, as expected
+        Err(_) => {} // silence, as expected
         Ok(None) => panic!("out channel closed unexpectedly"),
         Ok(Some(b)) => panic!("expected silence, got batch: {b:?}"),
     }
@@ -214,7 +214,10 @@ async fn auth_flood_exhausts_violation_budget_and_closes() {
     );
     // Teardown: the actor dropped its out sender.
     assert!(
-        tokio::time::timeout(WAIT, out.recv()).await.unwrap().is_none(),
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
         "no frames after the budget close"
     );
     handle.await.expect("actor exits");
@@ -307,7 +310,10 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
         .expect("inbox open");
     let batch = next_batch(&mut out).await;
     assert!(has_op(&batch, op::base::AUTH_RESULT), "auth succeeds");
-    match tokio::time::timeout(WAIT, reg_rx.recv()).await.expect("timed out") {
+    match tokio::time::timeout(WAIT, reg_rx.recv())
+        .await
+        .expect("timed out")
+    {
         Some(RegistryMsg::Authed { conn }) => assert_eq!(conn, ConnectionId(3)),
         other => panic!("expected RegistryMsg::Authed, got {other:?}"),
     }
@@ -351,15 +357,17 @@ async fn preauth_frame_budget_closes_at_64() {
         }
     }
     let batch = next_batch(&mut out).await;
-    let (code, msg) =
-        error_in(&batch).unwrap_or_else(|| panic!("batch without ERROR: {batch:?}"));
+    let (code, msg) = error_in(&batch).unwrap_or_else(|| panic!("batch without ERROR: {batch:?}"));
     assert_eq!(code, 9, "a policy close uses the server-decision code");
     assert!(
         msg.contains("pre-auth frame budget"),
         "the reason must name the policy: {msg}"
     );
     assert!(
-        tokio::time::timeout(WAIT, out.recv()).await.unwrap().is_none(),
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
         "teardown after the pre-auth budget close"
     );
     handle.await.expect("actor exits");
@@ -445,7 +453,14 @@ impl GameLogic<()> for HoldLogic {
         }
     }
 
-    fn on_resume(&mut self, _w: &mut (), identity: &str, _c: ConnectionId, _p: PlayerId, _e: EntityId) {
+    fn on_resume(
+        &mut self,
+        _w: &mut (),
+        identity: &str,
+        _c: ConnectionId,
+        _p: PlayerId,
+        _e: EntityId,
+    ) {
         self.ledger.remove(identity);
     }
 
@@ -551,7 +566,10 @@ async fn spawn_as(
 }
 
 async fn expect_birth_rejection(mut inbox: mpsc::Receiver<ConnIn>, why: &str) {
-    match tokio::time::timeout(WAIT, inbox.recv()).await.expect("timed out") {
+    match tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("timed out")
+    {
         Some(ConnIn::ServerClosed { reason }) => {
             assert!(
                 reason.contains("unauthenticated capacity"),

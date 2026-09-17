@@ -1,10 +1,9 @@
 //! The sharding half: this room's index, wire range, neighbours, and
 //! the migration/border callbacks the shard actor drives.
 
-
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
-use gsb_core::shard::{BorderRecord, Migrating, ShardLogic, SHARD_SERIAL_RANGE};
+use gsb_core::shard::{BorderRecord, Migrating, SHARD_SERIAL_RANGE, ShardLogic};
 
 use crate::components::{MoveTarget, Position, Speed, WireId};
 use crate::sharded::*;
@@ -48,8 +47,7 @@ impl ShardLogic<World> for ShardedRoom {
         // docs). Each entity is in exactly one region, so it is reported
         // to exactly one neighbor.
         let mut out: Vec<Migrating<Self::State>> = Vec::new();
-        let mut query = world
-            .query::<(Entity, &WireId, &Position, &Speed, Option<&MoveTarget>)>();
+        let mut query = world.query::<(Entity, &WireId, &Position, &Speed, Option<&MoveTarget>)>();
         for (entity, wire, pos, speed, target) in query.iter(world) {
             if self.region_of(*pos) == neighbor {
                 // §14.2: the park record travels WITH the player state.

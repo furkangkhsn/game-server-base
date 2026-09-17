@@ -6,13 +6,12 @@ use std::sync::Arc;
 
 use tokio::task::JoinHandle;
 
-
+use gsb_core::auth::TicketAuth;
 use gsb_core::channel::{Inbox, Mailbox};
 use gsb_core::error::CoreError;
 use gsb_core::id::RoomId;
 use gsb_core::registry::{MatchResult, RegistryMsg, RoomStatus};
 use gsb_core::room::RoomConfig;
-use gsb_core::auth::TicketAuth;
 
 mod accept;
 mod factories;
@@ -55,7 +54,8 @@ pub(crate) async fn registry_open_room(
         .send(RegistryMsg::CreateRoom { config, reply: tx })
         .await
         .map_err(|_| CoreError::Io("registry gone".into()))?;
-    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))?
+    rx.await
+        .map_err(|_| CoreError::Io("registry dropped the reply".into()))?
 }
 
 /// Idempotent destroy (see [`RegistryMsg::DestroyRoom`]).
@@ -68,7 +68,8 @@ pub(crate) async fn registry_close_room(
         .send(RegistryMsg::DestroyRoom { id, reply: tx })
         .await
         .map_err(|_| CoreError::Io("registry gone".into()))?;
-    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+    rx.await
+        .map_err(|_| CoreError::Io("registry dropped the reply".into()))
 }
 
 /// Table-only status query (see [`RegistryMsg::RoomStatus`]).
@@ -81,7 +82,8 @@ pub(crate) async fn registry_room_status(
         .send(RegistryMsg::RoomStatus { id, reply: tx })
         .await
         .map_err(|_| CoreError::Io("registry gone".into()))?;
-    rx.await.map_err(|_| CoreError::Io("registry dropped the reply".into()))
+    rx.await
+        .map_err(|_| CoreError::Io("registry dropped the reply".into()))
 }
 
 /// Handle to a running server.

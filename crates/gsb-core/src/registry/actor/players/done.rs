@@ -2,12 +2,12 @@
 //! reservation, the member count, and the resume-supersedence cleanup
 //! that releases the parked row an identity just replaced.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use tracing::debug;
 use crate::conn::ConnIn;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::actor::Registry;
+use std::fmt::Debug;
+use std::hash::Hash;
+use tracing::debug;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
@@ -96,10 +96,7 @@ where
                     .conns
                     .iter()
                     .filter(|(c, i)| {
-                        **c != conn
-                            && i.detached
-                            && i.identity == identity
-                            && i.room == Some(room)
+                        **c != conn && i.detached && i.identity == identity && i.room == Some(room)
                     })
                     .map(|(c, _)| *c)
                     .collect();
@@ -122,10 +119,7 @@ where
                 // lands here with zero releases — its +1 is the
                 // genuine new member.)
                 if released > 0
-                    && let Some(e) = self
-                        .rooms
-                        .get_mut(&room)
-                        .and_then(|e| e.shards.as_mut())
+                    && let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut())
                 {
                     e.members = e.members.saturating_sub(released);
                 }

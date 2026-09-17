@@ -7,9 +7,9 @@ use std::hash::Hash;
 use tracing::debug;
 
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::registry::*;
 use crate::room::RoomControl;
 use crate::shard::ShardMsg;
-use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
@@ -100,9 +100,13 @@ where
     /// owns the connection; the entity-id guard makes the others no-ops).
     /// The ROOM decides despawn-vs-hold via its `on_disconnect` policy;
     /// this path only reports the transport death.
-    pub(super) fn send_detach_direct(&mut self, conn: ConnectionId, room: RoomId, entity: EntityId) {
-        let Some(identity) = self.conns.get(&conn).map(|i| i.identity.clone())
-        else {
+    pub(super) fn send_detach_direct(
+        &mut self,
+        conn: ConnectionId,
+        room: RoomId,
+        entity: EntityId,
+    ) {
+        let Some(identity) = self.conns.get(&conn).map(|i| i.identity.clone()) else {
             return;
         };
         let handle = match self.rooms.get(&room) {

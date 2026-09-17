@@ -62,12 +62,14 @@ fn tls_cfg(pki: &TlsPki) -> gsb_server::Config {
 }
 
 /// Connect a rustls client trusting ONLY `pki`'s CA.
-async fn connect_tls(pki: &TlsPki, addr: std::net::SocketAddr) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+async fn connect_tls(
+    pki: &TlsPki,
+    addr: std::net::SocketAddr,
+) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let tcp = TcpStream::connect(addr).await?;
     tcp.set_nodelay(true).ok();
     let connector = common::tls_client_connector(pki);
-    let dns: rustls::pki_types::ServerName<'static> =
-        TLS_SERVER_NAME.try_into().expect("dns name");
+    let dns: rustls::pki_types::ServerName<'static> = TLS_SERVER_NAME.try_into().expect("dns name");
     connector.connect(dns, tcp).await
 }
 
@@ -113,8 +115,10 @@ async fn full_flow_over_tls_auth_join_move_snapshots() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| panic!("timed out (move_sent={move_sent})"));
-        let Some((op, payload)) =
-            tokio::time::timeout(remaining, read_frame(&mut tls)).await.ok().flatten()
+        let Some((op, payload)) = tokio::time::timeout(remaining, read_frame(&mut tls))
+            .await
+            .ok()
+            .flatten()
         else {
             panic!("connection ended or stalled during the flow");
         };
@@ -128,8 +132,12 @@ async fn full_flow_over_tls_auth_join_move_snapshots() {
                 my_entity = m.entity;
                 assert!(my_entity != 0, "entity id must be non-zero");
                 if !move_sent {
-                    let move_to =
-                        gsb_game::game::MoveTo { x: 10, y: 10, seq: 0 }.encode_to_vec();
+                    let move_to = gsb_game::game::MoveTo {
+                        x: 10,
+                        y: 10,
+                        seq: 0,
+                    }
+                    .encode_to_vec();
                     tls.write_all(&frame(gsb_game::op::MOVE_TO, &move_to))
                         .await
                         .unwrap();
@@ -176,8 +184,7 @@ async fn wrong_ca_is_rejected_in_the_handshake_on_both_ends() {
     // The rogue client trusts only its own CA.
     let tcp = TcpStream::connect(handle.addr).await.unwrap();
     let connector = common::tls_client_connector(&rogue_pki);
-    let dns: rustls::pki_types::ServerName<'static> =
-        TLS_SERVER_NAME.try_into().expect("dns name");
+    let dns: rustls::pki_types::ServerName<'static> = TLS_SERVER_NAME.try_into().expect("dns name");
     let result = connector.connect(dns, tcp).await;
     assert!(result.is_err(), "the unknown CA must fail the handshake");
 
@@ -202,8 +209,10 @@ async fn wrong_ca_is_rejected_in_the_handshake_on_both_ends() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .expect("timed out waiting for AUTH_RESULT");
-        let Some((op, payload)) =
-            tokio::time::timeout(remaining, read_frame(&mut good)).await.ok().flatten()
+        let Some((op, payload)) = tokio::time::timeout(remaining, read_frame(&mut good))
+            .await
+            .ok()
+            .flatten()
         else {
             panic!("connection died during post-rejection auth");
         };
@@ -278,7 +287,9 @@ async fn empty_tls_keys_mean_plaintext_tcp() {
         ..Default::default()
     };
     assert!(cfg.tls_cert.is_empty() && cfg.tls_key.is_empty());
-    let handle = gsb_server::start_server(cfg).await.expect("plaintext starts");
+    let handle = gsb_server::start_server(cfg)
+        .await
+        .expect("plaintext starts");
     let mut stream = TcpStream::connect(handle.addr).await.unwrap();
     // A PLAINTEXT handshake must work: if the default had silently turned
     // into TLS, these raw bytes would fail the server's rustls accept and
@@ -299,8 +310,10 @@ async fn empty_tls_keys_mean_plaintext_tcp() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .expect("timed out waiting for the plaintext AUTH_RESULT");
-        let Some((op, payload)) =
-            tokio::time::timeout(remaining, read_frame(&mut stream)).await.ok().flatten()
+        let Some((op, payload)) = tokio::time::timeout(remaining, read_frame(&mut stream))
+            .await
+            .ok()
+            .flatten()
         else {
             panic!("plaintext path broken: connection ended");
         };

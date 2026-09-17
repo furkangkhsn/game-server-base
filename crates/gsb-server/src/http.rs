@@ -38,7 +38,6 @@ use gsb_core::id::RoomId;
 use gsb_core::metrics::MetricReport;
 use gsb_core::registry::RegistryMsg;
 
-
 mod routes;
 use routes::*;
 

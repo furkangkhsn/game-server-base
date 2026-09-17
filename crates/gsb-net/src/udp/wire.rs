@@ -1,7 +1,6 @@
 //! Datagram encoding and parsing: the on-the-wire shapes of the four
 //! rUDP datagram kinds, shared by the server and client sides.
 
-
 use bytes::Bytes;
 use gsb_protocol::FrameBody;
 

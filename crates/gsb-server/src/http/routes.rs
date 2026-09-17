@@ -1,13 +1,13 @@
 //! Routing and the handlers behind each endpoint.
 
-use std::collections::BTreeSet;
-use tokio::sync::{mpsc, oneshot};
+use crate::boot::{registry_close_room, registry_open_room, registry_room_status};
+use crate::http::*;
 use gsb_core::error::CoreError;
 use gsb_core::id::RoomId;
 use gsb_core::registry::RoomStatus;
 use gsb_core::room::RoomConfig;
-use crate::boot::{registry_close_room, registry_open_room, registry_room_status};
-use crate::http::*;
+use std::collections::BTreeSet;
+use tokio::sync::{mpsc, oneshot};
 
 /// Route one parsed request head. Known paths with the wrong verb answer
 /// 405 (the resource exists, the method does not); unknown paths answer
@@ -250,7 +250,10 @@ pub(super) fn optional_f64(query: &str, key: &str) -> Result<Option<f64>, &'stat
 /// statuses are still reachable through `/metrics`, and the set is a
 /// listing convenience, not an authority (the registry stays the single
 /// authority on room existence; every rendered status is queried there).
-pub(super) async fn run_room_bookkeeper(mut rx: mpsc::Receiver<RoomsMsg>, mut known: BTreeSet<u64>) {
+pub(super) async fn run_room_bookkeeper(
+    mut rx: mpsc::Receiver<RoomsMsg>,
+    mut known: BTreeSet<u64>,
+) {
     while let Some(msg) = rx.recv().await {
         match msg {
             RoomsMsg::Seen(id) => {

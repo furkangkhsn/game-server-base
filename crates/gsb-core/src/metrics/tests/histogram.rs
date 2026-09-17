@@ -94,7 +94,10 @@ fn fine_hist_percentiles_known_distributions() {
 #[test]
 fn fine_hist_cap_and_overflow() {
     assert_eq!(fine_hist_index(0), Some(0));
-    assert_eq!(fine_hist_index(FINE_HIST_CAP_US - 1), Some(FINE_HIST_BINS - 1));
+    assert_eq!(
+        fine_hist_index(FINE_HIST_CAP_US - 1),
+        Some(FINE_HIST_BINS - 1)
+    );
     assert_eq!(fine_hist_index(FINE_HIST_CAP_US), None);
     assert_eq!(fine_hist_index(u64::MAX), None);
 

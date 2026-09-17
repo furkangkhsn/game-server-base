@@ -5,7 +5,6 @@ use std::net::SocketAddr;
 
 use tracing::warn;
 
-
 use crate::*;
 
 impl ListenerSpec {
@@ -42,131 +41,132 @@ pub(crate) fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, Serve
     // entry's transport kind, its (still unparsed) bind string, and its
     // optional TLS files. The tls-file COMBINATION checks are grammar-level
     // policy, so they run here, per entry.
-    let mut entries: Vec<(ListenerTransport, String, Option<String>, Option<String>)> =
-        match &cfg.listeners {
-            Some(entries) if entries.is_empty() => return Err(ServerError::EmptyListeners),
-            Some(entries) => {
-                // Prefer-the-array warning: fire only when a legacy scalar
-                // actually differs from its built-in default. The deserializer
-                // cannot tell "explicitly set to the default value" from
-                // "omitted", so an operator who left every scalar alone gets
-                // no noise; one who set both sees which side won.
-                let def = Config::default();
-                let legacy_touched = cfg.bind != def.bind
-                    || cfg.transport != def.transport
-                    || cfg.tls_cert != def.tls_cert
-                    || cfg.tls_key != def.tls_key;
-                if legacy_touched {
-                    warn!(
-                        entries = entries.len(),
-                        "`[[listeners]]` takes precedence: ignoring the legacy                          scalar transport keys (transport/bind/tls_cert/tls_key)"
-                    );
-                }
-                entries
-                    .iter()
-                    .map(|e| {
-                        match e.transport {
-                            ListenerTransport::Tcp => {
-                                if e.tls_cert.is_some() || e.tls_key.is_some() {
-                                    return Err(ServerError::ListenerTcpWithTls {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                            }
-                            ListenerTransport::Tls => {
-                                // The variants are STATE-descriptive (the
-                                // legacy scalar path set the convention:
-                                // cert-set-key-missing → CertNeedsKey), so
-                                // each check reports the file it is missing
-                                // — a half-set entry must be named by the
-                                // message that describes IT. (Found during
-                                // the QUIC/WS listener round: this arm had
-                                // the two constructors swapped relative to
-                                // their texts, untested until now.)
-                                if e.tls_cert.is_none() {
-                                    return Err(ServerError::ListenerTlsKeyNeedsCert {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                                if e.tls_key.is_none() {
-                                    return Err(ServerError::ListenerTlsCertNeedsKey {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                            }
-                            ListenerTransport::Udp => {
-                                if e.tls_cert.is_some() || e.tls_key.is_some() {
-                                    return Err(ServerError::ListenerUdpWithTls {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                            }
-                            // QUIC is TLS 1.3 underneath: the exact same
-                            // both-files rule as the "tls" door, with its
-                            // own error variants so the message names the
-                            // right door kind (same state-descriptive
-                            // convention — see the Tls arm above).
-                            ListenerTransport::Quic => {
-                                if e.tls_cert.is_none() {
-                                    return Err(ServerError::ListenerQuicKeyNeedsCert {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                                if e.tls_key.is_none() {
-                                    return Err(ServerError::ListenerQuicCertNeedsKey {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
-                            }
-                            ListenerTransport::Ws => {
-                                if e.tls_cert.is_some() || e.tls_key.is_some() {
-                                    return Err(ServerError::ListenerWsWithTls {
-                                        bind: e.bind.clone(),
-                                    });
-                                }
+    let mut entries: Vec<(ListenerTransport, String, Option<String>, Option<String>)> = match &cfg
+        .listeners
+    {
+        Some(entries) if entries.is_empty() => return Err(ServerError::EmptyListeners),
+        Some(entries) => {
+            // Prefer-the-array warning: fire only when a legacy scalar
+            // actually differs from its built-in default. The deserializer
+            // cannot tell "explicitly set to the default value" from
+            // "omitted", so an operator who left every scalar alone gets
+            // no noise; one who set both sees which side won.
+            let def = Config::default();
+            let legacy_touched = cfg.bind != def.bind
+                || cfg.transport != def.transport
+                || cfg.tls_cert != def.tls_cert
+                || cfg.tls_key != def.tls_key;
+            if legacy_touched {
+                warn!(
+                    entries = entries.len(),
+                    "`[[listeners]]` takes precedence: ignoring the legacy                          scalar transport keys (transport/bind/tls_cert/tls_key)"
+                );
+            }
+            entries
+                .iter()
+                .map(|e| {
+                    match e.transport {
+                        ListenerTransport::Tcp => {
+                            if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                return Err(ServerError::ListenerTcpWithTls {
+                                    bind: e.bind.clone(),
+                                });
                             }
                         }
-                        Ok((
-                            e.transport,
-                            e.bind.clone(),
-                            e.tls_cert.clone(),
-                            e.tls_key.clone(),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, ServerError>>()?
+                        ListenerTransport::Tls => {
+                            // The variants are STATE-descriptive (the
+                            // legacy scalar path set the convention:
+                            // cert-set-key-missing → CertNeedsKey), so
+                            // each check reports the file it is missing
+                            // — a half-set entry must be named by the
+                            // message that describes IT. (Found during
+                            // the QUIC/WS listener round: this arm had
+                            // the two constructors swapped relative to
+                            // their texts, untested until now.)
+                            if e.tls_cert.is_none() {
+                                return Err(ServerError::ListenerTlsKeyNeedsCert {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                            if e.tls_key.is_none() {
+                                return Err(ServerError::ListenerTlsCertNeedsKey {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                        }
+                        ListenerTransport::Udp => {
+                            if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                return Err(ServerError::ListenerUdpWithTls {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                        }
+                        // QUIC is TLS 1.3 underneath: the exact same
+                        // both-files rule as the "tls" door, with its
+                        // own error variants so the message names the
+                        // right door kind (same state-descriptive
+                        // convention — see the Tls arm above).
+                        ListenerTransport::Quic => {
+                            if e.tls_cert.is_none() {
+                                return Err(ServerError::ListenerQuicKeyNeedsCert {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                            if e.tls_key.is_none() {
+                                return Err(ServerError::ListenerQuicCertNeedsKey {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                        }
+                        ListenerTransport::Ws => {
+                            if e.tls_cert.is_some() || e.tls_key.is_some() {
+                                return Err(ServerError::ListenerWsWithTls {
+                                    bind: e.bind.clone(),
+                                });
+                            }
+                        }
+                    }
+                    Ok((
+                        e.transport,
+                        e.bind.clone(),
+                        e.tls_cert.clone(),
+                        e.tls_key.clone(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ServerError>>()?
+        }
+        None => {
+            // Legacy derivation: the single-scalar era's exact
+            // semantics, INCLUDING its error variants, so existing
+            // configs keep failing in exactly the ways they always did.
+            match (cfg.tls_cert.is_empty(), cfg.tls_key.is_empty()) {
+                (true, true) | (false, false) => {}
+                (false, true) => return Err(ServerError::TlsCertNeedsKey),
+                (true, false) => return Err(ServerError::TlsKeyNeedsCert),
             }
-            None => {
-                // Legacy derivation: the single-scalar era's exact
-                // semantics, INCLUDING its error variants, so existing
-                // configs keep failing in exactly the ways they always did.
-                match (cfg.tls_cert.is_empty(), cfg.tls_key.is_empty()) {
-                    (true, true) | (false, false) => {}
-                    (false, true) => return Err(ServerError::TlsCertNeedsKey),
-                    (true, false) => return Err(ServerError::TlsKeyNeedsCert),
-                }
-                if cfg.transport == TransportKind::Udp && !cfg.tls_cert.is_empty() {
-                    return Err(ServerError::UdpWithTls);
-                }
-                let (kind, cert, key) = match cfg.transport {
-                    TransportKind::Udp => (ListenerTransport::Udp, None, None),
-                    TransportKind::Tcp if !cfg.tls_cert.is_empty() => (
-                        ListenerTransport::Tls,
-                        Some(cfg.tls_cert.clone()),
-                        Some(cfg.tls_key.clone()),
-                    ),
-                    TransportKind::Tcp => (ListenerTransport::Tcp, None, None),
-                };
-                vec![(kind, cfg.bind.clone(), cert, key)]
+            if cfg.transport == TransportKind::Udp && !cfg.tls_cert.is_empty() {
+                return Err(ServerError::UdpWithTls);
             }
-        };
+            let (kind, cert, key) = match cfg.transport {
+                TransportKind::Udp => (ListenerTransport::Udp, None, None),
+                TransportKind::Tcp if !cfg.tls_cert.is_empty() => (
+                    ListenerTransport::Tls,
+                    Some(cfg.tls_cert.clone()),
+                    Some(cfg.tls_key.clone()),
+                ),
+                TransportKind::Tcp => (ListenerTransport::Tcp, None, None),
+            };
+            vec![(kind, cfg.bind.clone(), cert, key)]
+        }
+    };
 
     // Stage 2 — parse every bind up front: a malformed address is a config
     // error that must fail BEFORE any socket exists (never half-start).
     let mut specs: Vec<ListenerSpec> = Vec::with_capacity(entries.len());
     for (kind, raw_bind, cert, key) in entries.drain(..) {
-        let addr: SocketAddr = raw_bind.parse().map_err(
-            |e: std::net::AddrParseError| ServerError::BadBind(raw_bind.clone(), e.to_string()),
-        )?;
+        let addr: SocketAddr = raw_bind.parse().map_err(|e: std::net::AddrParseError| {
+            ServerError::BadBind(raw_bind.clone(), e.to_string())
+        })?;
         let spec = match kind {
             ListenerTransport::Tcp => ListenerSpec::Tcp { addr },
             ListenerTransport::Tls => ListenerSpec::Tls {

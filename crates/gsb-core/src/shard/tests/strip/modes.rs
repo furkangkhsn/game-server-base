@@ -56,7 +56,8 @@ async fn always_full_keeps_view_exact_across_unchanged_ticks() {
         assert_eq!(entities.len(), 1, "tick {tick} ships the strip");
         r.deliver_to_s1(msgs);
         assert_eq!(
-            r.s1.border[&0].recs.len(), 1,
+            r.s1.border[&0].recs.len(),
+            1,
             "view stays exactly one record at tick {tick}"
         );
     }
@@ -79,7 +80,10 @@ async fn opposite_directions_run_different_packagings() {
     put(&mut r.s0, 100, -1.0, 0.0);
     put(&mut r.s1, 200, 1.0, 0.0);
 
-    let tinfo = |tick: u64| TickInfo { tick, at: Instant::now() };
+    let tinfo = |tick: u64| TickInfo {
+        tick,
+        at: Instant::now(),
+    };
 
     // Tick 5: both shards step and bootstrap (needs_full ⇒ Full lead).
     r.step0(5);
@@ -87,8 +91,16 @@ async fn opposite_directions_run_different_packagings() {
     // Deliver each direction's exchanges so views establish BEFORE
     // the assertions: delivery feeds inboxes, processing happens on
     // the NEXT step.
-    for m in r.drain01() { r.deliver_to_s1(vec![m]); }
-    for m in { let mut v=Vec::new(); while let Ok(m)=r.rx10.try_recv(){v.push(m);} v } {
+    for m in r.drain01() {
+        r.deliver_to_s1(vec![m]);
+    }
+    for m in {
+        let mut v = Vec::new();
+        while let Ok(m) = r.rx10.try_recv() {
+            v.push(m);
+        }
+        v
+    } {
         r.deliver_to_s0(vec![m]);
     }
     r.step0(6);
@@ -103,20 +115,36 @@ async fn opposite_directions_run_different_packagings() {
     let _ = r.s1.step_phases(&tinfo(7));
     let m01 = r.drain01();
     let mut m10: Vec<_> = Vec::new();
-    while let Ok(m) = r.rx10.try_recv() { m10.push(m); }
+    while let Ok(m) = r.rx10.try_recv() {
+        m10.push(m);
+    }
 
     assert!(
-        m01.iter().any(|m| matches!(m,
-            ShardMsg::Border { exchange: BorderExchange::Full { .. }, .. })),
+        m01.iter().any(|m| matches!(
+            m,
+            ShardMsg::Border {
+                exchange: BorderExchange::Full { .. },
+                ..
+            }
+        )),
         "AlwaysFull direction keeps shipping fulls"
     );
     assert!(
-        m10.iter().any(|m| matches!(m,
-            ShardMsg::Border { exchange: BorderExchange::Delta { .. }, .. })),
+        m10.iter().any(|m| matches!(
+            m,
+            ShardMsg::Border {
+                exchange: BorderExchange::Delta { .. },
+                ..
+            }
+        )),
         "Delta direction ships an upsert"
     );
-    for m in m01 { r.deliver_to_s1(vec![m]); }
-    for m in m10 { r.deliver_to_s0(vec![m]); }
+    for m in m01 {
+        r.deliver_to_s1(vec![m]);
+    }
+    for m in m10 {
+        r.deliver_to_s0(vec![m]);
+    }
 
     // Views converge to the moved positions.
     r.step0(8);
@@ -147,7 +175,9 @@ impl RichRig {
     fn new() -> Self {
         let (tx01, rx01) = mpsc::channel(16);
         let (tx10, _rx10) = mpsc::channel(16);
-        let build = |index: usize, tx: Mailbox<ShardMsg<TState, TRich>>, other: Mailbox<ShardMsg<TState, TRich>>| {
+        let build = |index: usize,
+                     tx: Mailbox<ShardMsg<TState, TRich>>,
+                     other: Mailbox<ShardMsg<TState, TRich>>| {
             let (_tick_tx, tick_rx) = broadcast::channel(64);
             let (_self_tx, rx) = channel::<ShardMsg<TState, TRich>>(16);
             ShardActor::new(
@@ -178,7 +208,9 @@ impl RichRig {
         // AlwaysFull).
         s0.force_exchange_modes(vec![ExchangeMode::AlwaysFull, ExchangeMode::Delta]);
         s1.force_exchange_modes(vec![ExchangeMode::Delta, ExchangeMode::AlwaysFull]);
-        RichRig { s0, s1,
+        RichRig {
+            s0,
+            s1,
             rx01,
             _rx10,
         }
@@ -281,7 +313,10 @@ async fn rich_strip_record_survives_full_and_delta_paths() {
         "the DELTA path preserved the custom field end to end"
     );
     assert_eq!(
-        (r.s1.border[&0].recs[&100].state.x, r.s1.border[&0].recs[&100].state.y),
+        (
+            r.s1.border[&0].recs[&100].state.x,
+            r.s1.border[&0].recs[&100].state.y
+        ),
         (-1, 0),
         "position unchanged alongside it"
     );
@@ -306,10 +341,7 @@ async fn delta_diff_fires_on_custom_field_change() {
 
     // Quiet tick: no field changed ⇒ NOTHING ships.
     r.step0(2);
-    assert!(
-        r.drain01().is_empty(),
-        "an unchanged strip ships nothing"
-    );
+    assert!(r.drain01().is_empty(), "an unchanged strip ships nothing");
 
     // Change ONLY the custom field: the next tick ships exactly one
     // upsert, carrying the new facing at the unchanged position.

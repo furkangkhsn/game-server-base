@@ -80,7 +80,6 @@ pub use actor::ConnectionActor;
 
 use std::time::Duration;
 
-
 use gsb_protocol::{FrameBody, ProtoError};
 
 use crate::id::RoomId;

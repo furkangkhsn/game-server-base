@@ -8,9 +8,9 @@ use gsb_protocol::op;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use gsb_net::udp::UdpClient;
 use super::*;
 use crate::wire::*;
+use gsb_net::udp::UdpClient;
 
 mod view;
 pub(crate) use view::*;
@@ -180,11 +180,8 @@ pub(crate) async fn connect_wire(
                 let stream = TcpStream::connect(addr).await?;
                 stream.set_nodelay(true).ok();
                 let connector = tls_connector(&opts.ca_path);
-                let dns: rustls::pki_types::ServerName<'static> = opts
-                    .server_name
-                    .clone()
-                    .try_into()
-                    .map_err(|_| {
+                let dns: rustls::pki_types::ServerName<'static> =
+                    opts.server_name.clone().try_into().map_err(|_| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             format!("--tls-server-name `{}` is not a DNS name", opts.server_name),

@@ -139,7 +139,6 @@ mod tests;
 pub use room::ShardedRoom;
 pub use spatial::ShardedSpatialRoom;
 
-
 use gsb_core::id::PlayerId;
 
 use crate::components::{MoveTarget, Position};

@@ -3,7 +3,6 @@
 //! those against each sample's own stamp).
 use std::time::Instant;
 
-
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
 

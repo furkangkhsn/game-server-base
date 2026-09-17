@@ -102,7 +102,11 @@ async fn room_counters_flow_to_collector() {
     assert_eq!(r.joins, 1);
     assert_eq!(r.groups, 1);
     assert_eq!(r.max_group, 1);
-    assert!(r.steps >= 4, "room stepped on the fed ticks: {} steps", r.steps);
+    assert!(
+        r.steps >= 4,
+        "room stepped on the fed ticks: {} steps",
+        r.steps
+    );
     assert!(r.snapshots > 0, "snapshots were encoded and counted");
     assert!(
         r.dropped > 0,

@@ -23,15 +23,31 @@ fn sharded_spatial_cells_group_members_by_position() {
     let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
     assert!(!snap.delta, "a fresh group's first packet is a full");
     let seen: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
-    assert!(seen.contains(&a) && seen.contains(&b), "own + adjacent visible: {seen:?}");
-    assert!(!seen.contains(&c), "two cells away is outside the 3×3: {seen:?}");
+    assert!(
+        seen.contains(&a) && seen.contains(&b),
+        "own + adjacent visible: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&c),
+        "two cells away is outside the 3×3: {seen:?}"
+    );
 
     let mut out2 = bytes::BytesMut::new();
     assert!(s1.snapshot(&mut world, &ctx(1), &Cell(2, -1), &[], &mut out2));
-    let seen2: BTreeSet<u64> =
-        crate::game::WorldSnapshot::decode(out2.as_ref()).expect("snapshot").entities.iter().map(|e| e.entity).collect();
-    assert!(seen2.contains(&c) && seen2.contains(&b), "C's group mirrors: {seen2:?}");
-    assert!(!seen2.contains(&a), "far member not leaked across cells: {seen2:?}");
+    let seen2: BTreeSet<u64> = crate::game::WorldSnapshot::decode(out2.as_ref())
+        .expect("snapshot")
+        .entities
+        .iter()
+        .map(|e| e.entity)
+        .collect();
+    assert!(
+        seen2.contains(&c) && seen2.contains(&b),
+        "C's group mirrors: {seen2:?}"
+    );
+    assert!(
+        !seen2.contains(&a),
+        "far member not leaked across cells: {seen2:?}"
+    );
 }
 
 /// A client-view accumulator with FULL/DELTA application semantics
@@ -49,7 +65,8 @@ impl ClientView {
         }
         for ce in &snap.cell_exits {
             let exited = Cell(ce.x, ce.y);
-            self.ents.retain(|_, &mut (x, y)| cell_of(x, y, cell_size) != exited);
+            self.ents
+                .retain(|_, &mut (x, y)| cell_of(x, y, cell_size) != exited);
         }
         for w in &snap.removed {
             self.ents.remove(w);
@@ -77,12 +94,18 @@ fn borrowed_border_entities_render_without_gap_across_seam() {
 
     // The neighbor mover walks along the seam INSIDE its own region
     // (no migration), staying inside the observer shard's frame.
-    let walk = [(-1.0f32, -10.0f32), (-3.0, -12.0), (-6.0, -14.0), (-9.0, -11.0)];
+    let walk = [
+        (-1.0f32, -10.0f32),
+        (-3.0, -12.0),
+        (-6.0, -14.0),
+        (-9.0, -11.0),
+    ];
     let mut view = ClientView::default();
     for (t, pos) in walk.iter().enumerate() {
         let tick = t as u64 + 1;
         let entity = *s0.player_entity.get(&PlayerId(1)).unwrap();
-        w0.entity_mut(entity).insert(Position { x: pos.0, y: pos.1 });
+        w0.entity_mut(entity)
+            .insert(Position { x: pos.0, y: pos.1 });
 
         // Mirror the actor order on both shards: update → export →
         // update → broadcast-with-borrowed.
@@ -126,8 +149,15 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
     let mut out = bytes::BytesMut::new();
     assert!(s1.snapshot(&mut w1, &ctx(1), &Cell(0, -1), &borrowed, &mut out));
     let seen: BTreeSet<u64> = crate::game::WorldSnapshot::decode(out.as_ref())
-        .expect("snapshot").entities.iter().map(|e| e.entity).collect();
-    assert!(seen.contains(&p) && seen.contains(&q), "strip baselined once: {seen:?}");
+        .expect("snapshot")
+        .entities
+        .iter()
+        .map(|e| e.entity)
+        .collect();
+    assert!(
+        seen.contains(&p) && seen.contains(&q),
+        "strip baselined once: {seen:?}"
+    );
 
     // Ticks 2–3: the SAME slice arrives (full replacement every tick
     // — exactly the shape the naive port chokes on): silence, zero
@@ -151,7 +181,8 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
 
     // Tick 4: one strip record moves — exactly that record ships.
     let entity_p = *s0.player_entity.get(&PlayerId(1)).unwrap();
-    w0.entity_mut(entity_p).insert(Position { x: -5.0, y: -10.0 }); // same cell
+    w0.entity_mut(entity_p)
+        .insert(Position { x: -5.0, y: -10.0 }); // same cell
     s0.update(&mut w0, &ctx(4));
     let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
     s1.update(&mut w1, &ctx(4));
@@ -159,10 +190,17 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
     assert!(s1.snapshot(&mut w1, &ctx(4), &Cell(0, -1), &borrowed, &mut out));
     let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
     assert!(snap.delta);
-    assert_eq!(snap.entities.len(), 1, "only the mover re-carried: {snap:?}");
+    assert_eq!(
+        snap.entities.len(),
+        1,
+        "only the mover re-carried: {snap:?}"
+    );
     assert_eq!(snap.entities[0].entity, p);
     assert_eq!((snap.entities[0].x, snap.entities[0].y), (-5, -10));
-    assert!(snap.entities.iter().all(|e| e.entity != q), "static q untouched");
+    assert!(
+        snap.entities.iter().all(|e| e.entity != q),
+        "static q untouched"
+    );
     assert_eq!(s1.encoded_records(), 1);
 }
 

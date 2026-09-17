@@ -42,15 +42,10 @@ pub(crate) fn range_cpus(r: &str) -> Option<Vec<u32>> {
 /// information at all — in which case pinning is skipped rather than
 /// guessing).
 pub(crate) fn pin_masks(server_cores: u32, procs: u32) -> Option<(Vec<u32>, Vec<Vec<u32>>)> {
-    let ncpu = std::thread::available_parallelism()
-        .ok()?
-        .get()
-        .max(1) as u32;
+    let ncpu = std::thread::available_parallelism().ok()?.get().max(1) as u32;
     let mut groups: Vec<Vec<u32>> = Vec::new();
     for cpu in 0..ncpu {
-        let path = format!(
-            "/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
-        );
+        let path = format!("/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list");
         let list = std::fs::read_to_string(&path).ok()?;
         let set: Vec<u32> = list
             .trim()

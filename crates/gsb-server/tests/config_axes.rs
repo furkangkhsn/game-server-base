@@ -108,7 +108,10 @@ fn legacy_visibility_values_derive_the_documented_axes() {
     for (legacy_value, want_topology, want_visibility, want_communication, want_kind) in cases {
         let sel = resolved(&legacy(legacy_value));
         assert_eq!(sel.topology, want_topology, "topology for {legacy_value}");
-        assert_eq!(sel.visibility, want_visibility, "visibility for {legacy_value}");
+        assert_eq!(
+            sel.visibility, want_visibility,
+            "visibility for {legacy_value}"
+        );
         assert_eq!(
             sel.communication, want_communication,
             "communication for {legacy_value}"
@@ -233,12 +236,7 @@ fn every_supported_combination_maps_to_its_existing_room() {
         ),
         // Sharded × all is reachable BOTH via the legacy spelling and via
         // the explicit topology key.
-        (
-            Visibility::Sharded,
-            None,
-            None,
-            RoomKind::Sharded,
-        ),
+        (Visibility::Sharded, None, None, RoomKind::Sharded),
         (
             Visibility::All,
             Some(Topology::Sharded),
@@ -296,11 +294,7 @@ fn resolution_is_deterministic() {
 /// roadmap.
 #[test]
 fn single_delta_rejected_for_visibilities_without_a_delta_impl() {
-    for v in [
-        Visibility::All,
-        Visibility::Team,
-        Visibility::Pvs,
-    ] {
+    for v in [Visibility::All, Visibility::Team, Visibility::Pvs] {
         let err = rejected(&with_axes(&legacy(v), None, Some(Communication::Delta)));
         match err {
             ServerError::SingleDelta => {}
@@ -418,11 +412,7 @@ fn explicit_always_full_under_spatial_is_rejected_on_both_topologies() {
 #[test]
 fn sharded_team_and_pvs_violate_cross_shard_locality() {
     for v in [Visibility::Team, Visibility::Pvs] {
-        let err = rejected(&with_axes(
-            &legacy(v),
-            Some(Topology::Sharded),
-            None,
-        ));
+        let err = rejected(&with_axes(&legacy(v), Some(Topology::Sharded), None));
         match &err {
             ServerError::ShardedCrossInterest(axis) => {
                 assert_eq!(*axis, VisibilityAxis::from(v).to_string())
@@ -481,7 +471,10 @@ async fn explicit_sharded_topology_starts_end_to_end() {
 
 /// Write a temp TOML file and parse it back (`Config::from_file`).
 fn parse_toml(name: &str, body: &str) -> Config {
-    let path = std::env::temp_dir().join(format!("gsb-config-axes-{}-{name}.toml", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "gsb-config-axes-{}-{name}.toml",
+        std::process::id()
+    ));
     std::fs::write(&path, body).expect("write temp config");
     let parsed = Config::from_file(&path).expect("parse temp config");
     let _ = std::fs::remove_file(&path);

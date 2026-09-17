@@ -15,7 +15,6 @@ impl MaskGen {
     }
 }
 
-
 /// Encode one client-to-server WS frame (masked unless `mask` says no).
 pub(super) fn encode_client_frame(
     fin: bool,

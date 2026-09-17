@@ -1,7 +1,6 @@
 //! The JOIN_ROOM_REQ path: admission, the reply, and the action-channel
 //! wiring a joined session runs on.
 
-
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
@@ -9,12 +8,11 @@ use gsb_protocol::op;
 use gsb_protocol::{FrameBody, ProtoError, base};
 
 use crate::channel::Mailbox;
+use crate::conn::*;
 use crate::error::CoreError;
 use crate::id::{EntityId, RoomId};
 use crate::registry::RegistryMsg;
 use crate::room::Action;
-use crate::conn::*;
-
 
 impl super::ConnectionActor {
     /// The JOIN_ROOM_REQ arm of [`Self::handle_frame`]: admission into a
@@ -81,10 +79,7 @@ impl super::ConnectionActor {
                 self.state = ConnState::InRoom { room };
                 self.actions = Some(actions);
                 let _ = self
-                    .send_frame(
-                        op::base::JOIN_ROOM_RESULT,
-                        &base::JoinRoomResult { entity },
-                    )
+                    .send_frame(op::base::JOIN_ROOM_RESULT, &base::JoinRoomResult { entity })
                     .await;
                 debug!(%self.conn, room = %room, entity, "joined room");
             }

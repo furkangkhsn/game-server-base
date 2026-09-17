@@ -24,7 +24,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, AuthResult, Error, Heartbeat, HeartbeatAck, JoinRoom, JoinRoomResult};
+use gsb_protocol::base::{
+    Auth, AuthResult, Error, Heartbeat, HeartbeatAck, JoinRoom, JoinRoomResult,
+};
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -72,9 +74,7 @@ impl Client {
 
     async fn connect(kind: Kind, addr: std::net::SocketAddr) -> std::io::Result<Self> {
         match kind {
-            Kind::Tcp => TcpStream::connect(addr)
-                .await
-                .map(Client::Tcp),
+            Kind::Tcp => TcpStream::connect(addr).await.map(Client::Tcp),
             Kind::Udp => gsb_net::udp::UdpClient::connect(addr)
                 .await
                 .map(|c| Client::Udp(Box::new(c))),
@@ -82,9 +82,8 @@ impl Client {
                 let tcp = TcpStream::connect(addr).await?;
                 tcp.set_nodelay(true).ok();
                 let connector = common::tls_client_connector(&pki);
-                let dns: rustls::pki_types::ServerName<'static> = common::TLS_SERVER_NAME
-                    .try_into()
-                    .expect("dns name");
+                let dns: rustls::pki_types::ServerName<'static> =
+                    common::TLS_SERVER_NAME.try_into().expect("dns name");
                 connector
                     .connect(dns, tcp)
                     .await
@@ -95,11 +94,7 @@ impl Client {
 
     /// Send one application frame (the wire encoding is transport-
     /// specific: length-prefixed body vs datagram kind).
-    async fn write_frame(
-        &mut self,
-        op: u16,
-        payload: &[u8],
-    ) -> std::io::Result<()> {
+    async fn write_frame(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
         // The stream transports share the exact same byte shape: TCP and
         // TLS differ ONLY in what carries it.
         fn framed(op: u16, payload: &[u8]) -> Vec<u8> {
@@ -165,7 +160,7 @@ impl Client {
             };
             match self.recv(remaining.min(Duration::from_millis(150))).await? {
                 Recv::Frame((op, _)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => {
-                    return Ok(true)
+                    return Ok(true);
                 }
                 Recv::Closed => return Ok(false),
                 Recv::TimedOut | Recv::Frame(_) => {}
@@ -317,7 +312,12 @@ async fn join_and_observe_movement(kind: Kind) {
                 assert!(my_entity != 0, "entity id must be non-zero");
                 // Force movement so the room re-emits a snapshot.
                 if !move_sent {
-                    let move_to = gsb_game::game::MoveTo { x: 10, y: 10, seq: 0 }.encode_to_vec();
+                    let move_to = gsb_game::game::MoveTo {
+                        x: 10,
+                        y: 10,
+                        seq: 0,
+                    }
+                    .encode_to_vec();
                     client
                         .write_frame(gsb_game::op::MOVE_TO, &move_to)
                         .await
@@ -332,10 +332,7 @@ async fn join_and_observe_movement(kind: Kind) {
             gsb_game::op::WORLD_SNAPSHOT => {
                 let m: gsb_game::game::WorldSnapshot =
                     gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                assert!(
-                    m.sequence > 0,
-                    "snapshot sequence must be monotonic (> 0)"
-                );
+                assert!(m.sequence > 0, "snapshot sequence must be monotonic (> 0)");
                 let Some(rec) = m.entities.iter().find(|e| e.entity == my_entity) else {
                     continue; // snapshot that arrived before the join result
                 };
@@ -470,7 +467,10 @@ async fn active_heartbeat_survives(kind: Kind) {
             Recv::TimedOut => {} // quiet window: no ack this round
         }
     }
-    assert!(acks >= 3, "heartbeats were answered throughout: {acks} acks");
+    assert!(
+        acks >= 3,
+        "heartbeats were answered throughout: {acks} acks"
+    );
     handle.stop().await;
 }
 
@@ -485,7 +485,9 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let addr = handle.addr;
 
     // Player A takes the only seat.
-    let mut a = Client::connect(kind.clone(), addr).await.expect("A connects");
+    let mut a = Client::connect(kind.clone(), addr)
+        .await
+        .expect("A connects");
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
@@ -501,7 +503,11 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let mut a_joined = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     while !a_joined {
-        let (op, _payload) = match a.recv(deadline.saturating_duration_since(Instant::now())).await.unwrap() {
+        let (op, _payload) = match a
+            .recv(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => panic!("A's connection ended before the join"),
             Recv::TimedOut => {
@@ -530,7 +536,11 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let mut b_rejected = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     while !b_rejected {
-        let (op, payload) = match b.recv(deadline.saturating_duration_since(Instant::now())).await.unwrap() {
+        let (op, payload) = match b
+            .recv(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => panic!("B's connection ended before the rejection"),
             Recv::TimedOut => {
@@ -555,7 +565,11 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut acked = false;
     while !acked {
-        let (op, payload) = match b.recv(deadline.saturating_duration_since(Instant::now())).await.unwrap() {
+        let (op, payload) = match b
+            .recv(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => panic!("B's connection was dropped after all"),
             Recv::TimedOut => {
@@ -586,7 +600,9 @@ async fn connection_capacity_rejects(kind: Kind) {
     let addr = handle.addr;
 
     // A takes the only seat (and auths, so it is fully live).
-    let mut a = Client::connect(kind.clone(), addr).await.expect("A connects");
+    let mut a = Client::connect(kind.clone(), addr)
+        .await
+        .expect("A connects");
     let auth_a = Auth {
         name: "a".into(),
         ticket: vec![],
@@ -631,7 +647,11 @@ async fn connection_capacity_rejects(kind: Kind) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut acked = false;
     while !acked {
-        let (op, _payload) = match a.recv(deadline.saturating_duration_since(Instant::now())).await.unwrap() {
+        let (op, _payload) = match a
+            .recv(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => panic!("A's connection ended"),
             Recv::TimedOut => {
@@ -654,7 +674,8 @@ async fn flooder_drops_attributed(kind: Kind) {
     // Same config shape as every other flow (cfg_on picks TCP+PEM paths
     // for the TLS arm — identical to what an operator would write).
     let cfg = cfg_on(kind.clone(), None, None, None);
-    let (rep_tx, rep_rx) = tokio::sync::mpsc::unbounded_channel::<gsb_core::metrics::MetricReport>();
+    let (rep_tx, rep_rx) =
+        tokio::sync::mpsc::unbounded_channel::<gsb_core::metrics::MetricReport>();
     let handle = gsb_server::start_server_metrics(cfg, rep_tx)
         .await
         .expect("server starts");
@@ -681,7 +702,11 @@ async fn flooder_drops_attributed(kind: Kind) {
     let mut joined = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     while !joined {
-        let (op, _payload) = match client.recv(deadline.saturating_duration_since(Instant::now())).await.unwrap() {
+        let (op, _payload) = match client
+            .recv(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => panic!("server closed the flooder before the join"),
             Recv::TimedOut => {
@@ -723,7 +748,8 @@ async fn flooder_drops_attributed(kind: Kind) {
                 }
             });
             while flood_start.elapsed() < Duration::from_secs(3) {
-                let _ = tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
             }
             flood.await.expect("flood task exits");
         }
@@ -831,7 +857,11 @@ async fn violation_budget_close(kind: Kind) {
         // A short recv window, not the whole remaining: on rUDP the close
         // has no EOF, so the loop must keep cycling (and probing) — one
         // long wait would sleep straight through the deadline.
-        let (op, payload) = match client.recv(remaining.min(Duration::from_millis(500))).await.unwrap() {
+        let (op, payload) = match client
+            .recv(remaining.min(Duration::from_millis(500)))
+            .await
+            .unwrap()
+        {
             Recv::Frame(f) => f,
             Recv::Closed => break, // TCP EOF: the close
             Recv::TimedOut => {
@@ -840,9 +870,7 @@ async fn violation_budget_close(kind: Kind) {
                 }
                 // rUDP has no EOF: once the close ERROR is out (or all
                 // the answers are in), a failed probe is the close.
-                if (close_reason.is_some() || answered >= 3)
-                    && !client.probe().await.unwrap()
-                {
+                if (close_reason.is_some() || answered >= 3) && !client.probe().await.unwrap() {
                     break;
                 }
                 continue;
@@ -1030,7 +1058,10 @@ async fn control_plane_room_lifecycle_is_idempotent_over_the_wire() {
     let cfg7 = room_cfg(7);
     let s1 = handle.open_room(cfg7.clone()).await.expect("first open");
     assert_eq!(s1, gsb_core::registry::RoomStatus::Running { members: 0 });
-    let s2 = handle.open_room(cfg7.clone()).await.expect("second open (retry)");
+    let s2 = handle
+        .open_room(cfg7.clone())
+        .await
+        .expect("second open (retry)");
     assert_eq!(
         s2,
         gsb_core::registry::RoomStatus::Running { members: 0 },
@@ -1053,19 +1084,31 @@ async fn control_plane_room_lifecycle_is_idempotent_over_the_wire() {
     // Status: running, then the close lifecycle (destroyed → absent →
     // an idempotent close no-op).
     assert_eq!(
-        handle.room_status(gsb_core::id::RoomId(7)).await.expect("status"),
+        handle
+            .room_status(gsb_core::id::RoomId(7))
+            .await
+            .expect("status"),
         gsb_core::registry::RoomStatus::Running { members: 0 }
     );
     assert_eq!(
-        handle.close_room(gsb_core::id::RoomId(7)).await.expect("close"),
+        handle
+            .close_room(gsb_core::id::RoomId(7))
+            .await
+            .expect("close"),
         gsb_core::registry::RoomStatus::Destroyed
     );
     assert_eq!(
-        handle.room_status(gsb_core::id::RoomId(7)).await.expect("status"),
+        handle
+            .room_status(gsb_core::id::RoomId(7))
+            .await
+            .expect("status"),
         gsb_core::registry::RoomStatus::Absent
     );
     assert_eq!(
-        handle.close_room(gsb_core::id::RoomId(7)).await.expect("close no-op"),
+        handle
+            .close_room(gsb_core::id::RoomId(7))
+            .await
+            .expect("close no-op"),
         gsb_core::registry::RoomStatus::Absent
     );
 
@@ -1123,11 +1166,16 @@ async fn control_plane_match_result_reports_on_close() {
     let handle = gsb_server::start_server(cfg_on(Kind::Tcp, None, None, None))
         .await
         .expect("server starts");
-    let mut a = Client::connect(Kind::Tcp, handle.addr).await.expect("client");
+    let mut a = Client::connect(Kind::Tcp, handle.addr)
+        .await
+        .expect("client");
     auth_and_join(&mut a, 1).await;
 
     assert_eq!(
-        handle.close_room(gsb_core::id::RoomId(1)).await.expect("close"),
+        handle
+            .close_room(gsb_core::id::RoomId(1))
+            .await
+            .expect("close"),
         gsb_core::registry::RoomStatus::Destroyed
     );
     let mut handle = handle;
@@ -1239,7 +1287,10 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     }
 
     // --- External-I/O (ECONOMY): the round trip over the wire.
-    let buy = gsb_game::game::BuyItem { kind: "potion".into() }.encode_to_vec();
+    let buy = gsb_game::game::BuyItem {
+        kind: "potion".into(),
+    }
+    .encode_to_vec();
     let (op, payload) = rpc_wire(2, gsb_game::op::ECONOMY, &buy);
     a.write_frame(op, &payload).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1276,7 +1327,10 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     //     external reply in A's stream. An inverted order means the
     //     two writes straddled a tick boundary (a scheduling race, not
     //     a protocol fact) — the pair is replayed with fresh ids.
-    let buy2 = gsb_game::game::BuyItem { kind: "potion".into() }.encode_to_vec();
+    let buy2 = gsb_game::game::BuyItem {
+        kind: "potion".into(),
+    }
+    .encode_to_vec();
     let use2 = gsb_game::game::AbilityUse {
         x: a_pos.0,
         y: a_pos.1,
@@ -1325,7 +1379,7 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
         if local_first.expect("both seen") {
             settled = true;
             break; // the local answer rode the ingest tick; the
-                   // external one necessarily rode a later one.
+            // external one necessarily rode a later one.
         }
         // Straddled tick boundary: this pair proves nothing about
         // ordering — replay with fresh ids.
@@ -1399,7 +1453,10 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
             Recv::TimedOut => {}
         }
     }
-    assert!(a.probe().await.unwrap(), "A must survive the ticket rejection");
+    assert!(
+        a.probe().await.unwrap(),
+        "A must survive the ticket rejection"
+    );
 
     // A valid ticket: the hook's identity (player + pinned room).
     let (op, payload) = auth_wire("a", b"good");
@@ -1462,8 +1519,15 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     }
 
     // Continuous movement: every tick ships a snapshot for A.
-    let move_to = gsb_game::game::MoveTo { x: 50, y: 50, seq: 0 }.encode_to_vec();
-    a.write_frame(gsb_game::op::MOVE_TO, &move_to).await.unwrap();
+    let move_to = gsb_game::game::MoveTo {
+        x: 50,
+        y: 50,
+        seq: 0,
+    }
+    .encode_to_vec();
+    a.write_frame(gsb_game::op::MOVE_TO, &move_to)
+        .await
+        .unwrap();
 
     // Now B authenticates with the SLOW ticket (250 ms of validation).
     // While B's actor is parked on the validator, A's snapshot stream
@@ -1475,9 +1539,7 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     let window_start = Instant::now();
     let mut snapshots_in_window: Vec<u64> = Vec::new();
     let deadline = Instant::now() + Duration::from_millis(900);
-    while Instant::now() - window_start < Duration::from_millis(350)
-        && Instant::now() < deadline
-    {
+    while Instant::now() - window_start < Duration::from_millis(350) && Instant::now() < deadline {
         match a.recv(Duration::from_millis(50)).await.unwrap() {
             Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
                 let m = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
@@ -1495,10 +1557,11 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
         snapshots_in_window.len()
     );
     // Strictly increasing: the ticker kept its rate (no stall).
-    let increasing = snapshots_in_window
-        .windows(2)
-        .all(|w| w[1] > w[0]);
-    assert!(increasing, "snapshot sequences must be strictly increasing: {snapshots_in_window:?}");
+    let increasing = snapshots_in_window.windows(2).all(|w| w[1] > w[0]);
+    assert!(
+        increasing,
+        "snapshot sequences must be strictly increasing: {snapshots_in_window:?}"
+    );
 
     // B's slow validation completes (well inside the 2 s hook timeout).
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1547,10 +1610,18 @@ async fn drain_snapshots(
 ) {
     let deadline = Instant::now() + window;
     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        match client.recv(remaining.min(Duration::from_millis(100))).await.unwrap() {
+        match client
+            .recv(remaining.min(Duration::from_millis(100)))
+            .await
+            .unwrap()
+        {
             Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
                 if let Ok(snap) = gsb_game::game::WorldSnapshot::decode(&payload[..]) {
-                    *view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                    *view = snap
+                        .entities
+                        .iter()
+                        .map(|e| (e.entity, (e.x, e.y)))
+                        .collect();
                 }
             }
             Recv::Frame(_) => {}
@@ -1577,7 +1648,11 @@ async fn await_movement(
         match client.recv(remaining).await.unwrap() {
             Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
                 let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                *view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                *view = snap
+                    .entities
+                    .iter()
+                    .map(|e| (e.entity, (e.x, e.y)))
+                    .collect();
                 if let Some(pos) = view.get(&entity)
                     && *pos != first
                 {
@@ -1600,7 +1675,9 @@ async fn resume_over_real_socket() {
     let addr = handle.addr;
 
     // -- observer takes a seat first ------------------------------------
-    let mut obs = Client::connect(Kind::Tcp, addr).await.expect("observer connects");
+    let mut obs = Client::connect(Kind::Tcp, addr)
+        .await
+        .expect("observer connects");
     let (op, payload) = auth_wire("obs", &[]);
     obs.write_frame(op, &payload).await.unwrap();
     let (op, payload) = join_wire(1);
@@ -1621,7 +1698,9 @@ async fn resume_over_real_socket() {
     }
 
     // -- hero joins ------------------------------------------------------
-    let mut hero = Client::connect(Kind::Tcp, addr).await.expect("hero connects");
+    let mut hero = Client::connect(Kind::Tcp, addr)
+        .await
+        .expect("hero connects");
     let (op, payload) = auth_wire("hero-rider", &[]);
     hero.write_frame(op, &payload).await.unwrap();
     let (op, payload) = join_wire(1);
@@ -1650,14 +1729,13 @@ async fn resume_over_real_socket() {
     }
 
     // -- the hero moves once (input works pre-drop) ----------------------
-    let move_wire = |x: i32, y: i32, seq: u64| {
-        gsb_game::game::MoveTo { x, y, seq }.encode_to_vec()
-    };
+    let move_wire = |x: i32, y: i32, seq: u64| gsb_game::game::MoveTo { x, y, seq }.encode_to_vec();
     let payload = move_wire(-20, -20, 0);
-    hero.write_frame(gsb_game::op::MOVE_TO, &payload).await.unwrap();
+    hero.write_frame(gsb_game::op::MOVE_TO, &payload)
+        .await
+        .unwrap();
 
-    let mut obs_view: std::collections::HashMap<u64, (i32, i32)> =
-        std::collections::HashMap::new();
+    let mut obs_view: std::collections::HashMap<u64, (i32, i32)> = std::collections::HashMap::new();
     // First: learn the hero's CURRENT (pre-command) position…
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut first_pos = None;
@@ -1668,7 +1746,11 @@ async fn resume_over_real_socket() {
         match obs.recv(remaining).await.unwrap() {
             Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
                 let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                obs_view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                obs_view = snap
+                    .entities
+                    .iter()
+                    .map(|e| (e.entity, (e.x, e.y)))
+                    .collect();
                 first_pos = obs_view.get(&hero_entity).copied();
             }
             Recv::Frame(_) => {}
@@ -1723,7 +1805,10 @@ async fn resume_over_real_socket() {
 
     // -- …and the new session's inputs WORK -------------------------------
     let payload = move_wire(30, 30, 1);
-    hero2.write_frame(gsb_game::op::MOVE_TO, &payload).await.unwrap();
+    hero2
+        .write_frame(gsb_game::op::MOVE_TO, &payload)
+        .await
+        .unwrap();
     // From wherever the park left it, the hero now converges toward
     // (30, 30): watch the OBSERVER's view for the approach.
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -1735,7 +1820,11 @@ async fn resume_over_real_socket() {
         match obs.recv(remaining).await.unwrap() {
             Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
                 let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                obs_view = snap.entities.iter().map(|e| (e.entity, (e.x, e.y))).collect();
+                obs_view = snap
+                    .entities
+                    .iter()
+                    .map(|e| (e.entity, (e.x, e.y)))
+                    .collect();
                 if let Some(&(x, y)) = obs_view.get(&hero_entity) {
                     let (dx, dy) = ((x - 30) as f32, (y - 30) as f32);
                     best = best.min((dx * dx + dy * dy).sqrt());

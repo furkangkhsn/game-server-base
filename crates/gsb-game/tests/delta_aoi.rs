@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
 use bytes::Bytes;
-use gsb_core::channel::{channel, FrameBatch, Mailbox};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
@@ -87,7 +87,10 @@ impl View {
     /// The server's own cell formula (floor of the WIRE coordinates /
     /// cell_size) — the client needs it to service `CellExit`.
     fn cell_of(x: i32, y: i32, cell_size: f32) -> (i32, i32) {
-        ((x as f32 / cell_size).floor() as i32, (y as f32 / cell_size).floor() as i32)
+        (
+            (x as f32 / cell_size).floor() as i32,
+            (y as f32 / cell_size).floor() as i32,
+        )
     }
 
     /// Apply a GROUP snapshot: fulls replace; deltas apply on top in the
@@ -286,7 +289,9 @@ impl TestRoom {
             .await
             .expect("control channel alive");
         self.tick();
-        let (entity, actions) = reply(reply_rx).await.expect("join accepted (room not full)");
+        let (entity, actions) = reply(reply_rx)
+            .await
+            .expect("join accepted (room not full)");
         (entity, out_rx, actions)
     }
 }
@@ -359,16 +364,26 @@ async fn delta_stream_converges_with_full_stream() {
     advance(&mut room, &mut conns, 60).await;
 
     // The delta-fed view converged to the true content.
-    assert_view(&conns[0].view, &[(a_id, 3, 3), (b_id, 15, 0)], "A's delta view");
+    assert_view(
+        &conns[0].view,
+        &[(a_id, 3, 3), (b_id, 15, 0)],
+        "A's delta view",
+    );
     // The far client (its own group, untouched by A's move) converged
     // too.
     assert_view(&conns[2].view, &[(c_id, 45, 0)], "C's far view");
     // The premise: both modes actually ran. A applied the fresh-group
     // full at join and deltas afterwards; C's silent group keeps alive
     // with FRESH fulls at 1 Hz (the keep-alive path); B applied deltas.
-    assert!(conns[0].deltas > 0, "A applied deltas (the delta stream ran)");
+    assert!(
+        conns[0].deltas > 0,
+        "A applied deltas (the delta stream ran)"
+    );
     assert!(conns[0].fulls >= 1, "A started from a full");
-    assert!(conns[2].fulls >= 2, "C's silent group kept alive with fresh fulls");
+    assert!(
+        conns[2].fulls >= 2,
+        "C's silent group kept alive with fresh fulls"
+    );
     assert!(conns[1].deltas > 0, "B applied deltas too");
 }
 
@@ -403,7 +418,11 @@ async fn cell_change_all_client_positions_no_ghosts_no_duplicates() {
     advance(&mut room, &mut conns, 500).await;
 
     // The settled layout.
-    assert_view(&conns[1].view, &[(p_id, 5, 5), (b_id, 0, 0), (s_id, -10, 5)], "B (both cells) settled");
+    assert_view(
+        &conns[1].view,
+        &[(p_id, 5, 5), (b_id, 0, 0), (s_id, -10, 5)],
+        "B (both cells) settled",
+    );
     assert_view(
         &conns[2].view,
         &[(p_id, 5, 5), (s_id, -10, 5), (b_id, 0, 0)],
@@ -445,13 +464,27 @@ async fn cell_change_all_client_positions_no_ghosts_no_duplicates() {
     }
 
     assert!(!b_ever_lost_p, "B (both cells) must never lose P mid-move");
-    assert!(!s_leaked_after_departure, "S (source only) must not re-ghost P after it left");
-    assert!(!t_preghosted, "T (target only) must not see P before it arrives");
+    assert!(
+        !s_leaked_after_departure,
+        "S (source only) must not re-ghost P after it left"
+    );
+    assert!(
+        !t_preghosted,
+        "T (target only) must not see P before it arrives"
+    );
 
     // The settled end state (P arrived at (25,5) = Cell(1,0): 20 units
     // = 60 ticks, well inside the 120-tick window).
-    assert_view(&conns[1].view, &[(p_id, 25, 5), (b_id, 0, 0), (s_id, -10, 5)], "B after the crossing");
-    assert_view(&conns[2].view, &[(s_id, -10, 5), (b_id, 0, 0)], "S after P left (no ghost)");
+    assert_view(
+        &conns[1].view,
+        &[(p_id, 25, 5), (b_id, 0, 0), (s_id, -10, 5)],
+        "B after the crossing",
+    );
+    assert_view(
+        &conns[2].view,
+        &[(s_id, -10, 5), (b_id, 0, 0)],
+        "S after P left (no ghost)",
+    );
     assert_view(
         &conns[3].view,
         &[(t_id, 45, 5), (p_id, 25, 5)],
@@ -466,7 +499,10 @@ async fn cell_change_all_client_positions_no_ghosts_no_duplicates() {
             "P's identity/position consistent"
         );
     }
-    assert!(!conns[2].view.entities.contains_key(&p_id), "S no longer holds P");
+    assert!(
+        !conns[2].view.entities.contains_key(&p_id),
+        "S no longer holds P"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -532,7 +568,11 @@ async fn cell_exit_entities_vanish_client_side() {
         "one record per exited cell: {snap:?}"
     );
     let exit = &snap.cell_exits[0];
-    assert_eq!((exit.x, exit.y), (0, 0), "the exited cell is named: {snap:?}");
+    assert_eq!(
+        (exit.x, exit.y),
+        (0, 0),
+        "the exited cell is named: {snap:?}"
+    );
     for &w in &ids {
         assert!(
             snap.entities.iter().all(|e| e.entity != w),
@@ -611,8 +651,14 @@ async fn late_join_sees_full_world_one_shot() {
         &[(a_id, 0, 0), (b_id, 15, 0), (c_id, 5, 0)],
         "late joiner's settled view",
     );
-    assert!(conns[2].private_fulls >= 1, "C received the one-shot private full(s)");
-    assert!(conns[2].deltas > 0, "C applied deltas (the group stayed in delta mode)");
+    assert!(
+        conns[2].private_fulls >= 1,
+        "C received the one-shot private full(s)"
+    );
+    assert!(
+        conns[2].deltas > 0,
+        "C applied deltas (the group stayed in delta mode)"
+    );
 
     // Proof the group is in delta mode (not full mode) for C: a small
     // move by A is a DELTA that updates C's view.
@@ -659,7 +705,10 @@ async fn delta_loss_recovers_within_keepalive_bound() {
     let chase = |tick: u64| -> Option<(i32, i32)> {
         tick.is_multiple_of(15).then(|| {
             let angle = (tick as f64 / 15.0) * 1.7;
-            ((10.0 + angle.cos() * 8.0) as i32, (10.0 + angle.sin() * 8.0) as i32)
+            (
+                (10.0 + angle.cos() * 8.0) as i32,
+                (10.0 + angle.sin() * 8.0) as i32,
+            )
         })
     };
 
@@ -740,13 +789,15 @@ async fn delta_loss_recovers_within_keepalive_bound() {
     let ids = conns[0].view.ids();
     assert!(
         ids.contains(&a_id) && ids.contains(&b_id),
-        "healed view: {:?}", conns[0].view.entities
+        "healed view: {:?}",
+        conns[0].view.entities
     );
     // B (no loss) never sat without a baseline in the window (its group
     // stream kept running for it; the keep-alive fulls it shares with A
     // are normal group traffic, not a sign of loss).
     assert_eq!(
-        conns[1].gap_drops, b_stats_before_window.2,
+        conns[1].gap_drops,
+        b_stats_before_window.2,
         "B was never without a baseline: {:?}",
         (conns[1].fulls, conns[1].deltas, conns[1].gap_drops)
     );

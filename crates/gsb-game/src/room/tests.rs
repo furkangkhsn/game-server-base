@@ -6,12 +6,12 @@
 use super::*;
 use std::time::Duration;
 
+use crate::components::*;
+use bevy_ecs::prelude::*;
 use gsb_core::id::RoomId;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{GameLogic, TickCtx};
-use crate::components::*;
 use prost::Message;
-use bevy_ecs::prelude::*;
 
 fn ctx1() -> TickCtx {
     TickCtx {
@@ -31,7 +31,10 @@ fn snapshot_emits_on_plain_position_write() {
     let wire_id = room.on_join(&mut world, ConnectionId(1)).entity;
     let ctx = ctx1();
     let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
+    assert!(
+        room.snapshot(&mut world, &ctx, &(), &[], &mut out),
+        "join emits"
+    );
     assert_eq!(wire_id, 1, "first entity gets wire id 1");
 
     // The bevy handle is the room's business (player_entity); the
@@ -124,14 +127,15 @@ fn wire_identity_survives_ecs_slot_reuse() {
     // holds entity #128 (it lost the leave snapshots). From the new
     // snapshot alone it must classify the record.
     let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
+    assert!(
+        room.snapshot(&mut world, &ctx, &(), &[], &mut out),
+        "join emits"
+    );
     let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
     assert_eq!(snap.entities.len(), 1);
     let rec = &snap.entities[0];
     assert_eq!(rec.entity, wire_id, "snapshot carries the fresh wire id");
-    let old_view: std::collections::HashSet<u64> = [wire_ids[127]]
-        .into_iter()
-        .collect();
+    let old_view: std::collections::HashSet<u64> = [wire_ids[127]].into_iter().collect();
     assert!(
         !old_view.contains(&rec.entity),
         "the client must see a NEW entity, not entity #128 moving \
@@ -211,7 +215,9 @@ fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
 
     // The stamped entity moves: the *same* identity at a new position
     // (a client reads "the same entity moved", not "a new entity").
-    world.entity_mut(bullet).insert(Position { x: 9.0, y: -3.0 });
+    world
+        .entity_mut(bullet)
+        .insert(Position { x: 9.0, y: -3.0 });
     let mut out3 = bytes::BytesMut::new();
     assert!(
         room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
@@ -236,7 +242,10 @@ fn snapshot_silent_when_wire_content_unchanged() {
     room.on_join(&mut world, ConnectionId(1));
     let ctx = ctx1();
     let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx, &(), &[], &mut out), "join emits");
+    assert!(
+        room.snapshot(&mut world, &ctx, &(), &[], &mut out),
+        "join emits"
+    );
 
     // A position write with no content change...
     let entity = *room.player_entity.get(&PlayerId(1)).unwrap();

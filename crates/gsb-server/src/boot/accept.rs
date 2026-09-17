@@ -2,27 +2,26 @@
 //! sequence shared by every door.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-
+use crate::config::*;
+use gsb_core::auth::TicketAuth;
 use gsb_core::channel::Mailbox;
 use gsb_core::conn::ConnectionActor;
 use gsb_core::id::ConnectionId;
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::RegistryMsg;
-use gsb_core::auth::TicketAuth;
-use gsb_net::tcp::TcpTransport;
 use gsb_net::quic::{QuicTransport, QuicTransportConfig};
+use gsb_net::tcp::TcpTransport;
 use gsb_net::tls::{TlsTransport, TlsTransportConfig};
 use gsb_net::transport::Transport;
 use gsb_net::udp::{UdpTransport, UdpTransportConfig};
 use gsb_net::ws::WsTransport;
 use gsb_protocol::MessageTable;
-use crate::config::*;
 
 /// The server-wide connection-id sequence: ONE monotonic counter shared by
 /// every accept task.
@@ -178,7 +177,9 @@ pub(super) async fn bind_listener(
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
             max_frame_bytes: cfg.max_frame_bytes,
         }),
-        ListenerSpec::Tls { cert_pem, key_pem, .. } => Arc::new(TlsTransport {
+        ListenerSpec::Tls {
+            cert_pem, key_pem, ..
+        } => Arc::new(TlsTransport {
             config: TlsTransportConfig {
                 cert_chain_pem: cert_pem.clone(),
                 key_pem: key_pem.clone(),
@@ -197,7 +198,9 @@ pub(super) async fn bind_listener(
                 cookie_key,
             },
         }),
-        ListenerSpec::Quic { cert_pem, key_pem, .. } => Arc::new(QuicTransport {
+        ListenerSpec::Quic {
+            cert_pem, key_pem, ..
+        } => Arc::new(QuicTransport {
             config: QuicTransportConfig {
                 cert_chain_pem: cert_pem.clone(),
                 key_pem: key_pem.clone(),

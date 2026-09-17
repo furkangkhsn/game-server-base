@@ -28,20 +28,20 @@ use crate::room::Admission;
 use std::time::Duration;
 
 use crate::channel::channel;
+use crate::channel::{FrameBatch, Inbox, Mailbox};
+use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
+use crate::metrics::MetricsEvent;
+use crate::room::GameLogic;
 use crate::room::{Action, RoomConfig, TickCtx};
 use crate::ticker::TickInfo;
-use crate::metrics::MetricsEvent;
-use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
-use crate::channel::{FrameBatch, Inbox, Mailbox};
-use tokio::sync::{broadcast, mpsc, oneshot};
-use std::time::{Instant};
 use std::collections::HashMap;
-use crate::room::GameLogic;
 use std::fmt::Debug;
+use std::time::Instant;
+use tokio::sync::{broadcast, mpsc, oneshot};
 
-mod migration;
-mod keepalive;
 mod border;
+mod keepalive;
+mod migration;
 mod strip;
 
 mod rigs;
@@ -110,11 +110,7 @@ struct TLogic {
 
 impl TLogic {
     fn region_of(x: f32) -> usize {
-        if x < 0.0 {
-            0
-        } else {
-            1
-        }
+        if x < 0.0 { 0 } else { 1 }
     }
 }
 
@@ -217,8 +213,11 @@ impl GameLogic<TWorld> for TLogic {
         // (phase 3 — before the phase-4 migration bookkeeping, which
         // is accounted for by the harness's "reported out last tick"
         // rule — see `owners_at`).
-        let mut c: Vec<(u64, f32, f32, i8)> =
-            w.ents.iter().map(|(wire, e)| (*wire, e.0, e.1, e.2)).collect();
+        let mut c: Vec<(u64, f32, f32, i8)> = w
+            .ents
+            .iter()
+            .map(|(wire, e)| (*wire, e.0, e.1, e.2))
+            .collect();
         c.sort_unstable_by_key(|e| e.0);
         let _ = self.obs.try_send(Obs::Content(self.index, ctx.tick, c));
     }
@@ -243,17 +242,15 @@ impl ShardLogic<TWorld> for TLogic {
         self.next_serial
     }
     fn neighbors(&self) -> &[usize] {
-        if self.index == 0 {
-            &[1]
-        } else {
-            &[0]
-        }
+        if self.index == 0 { &[1] } else { &[0] }
     }
     fn collect_migrations(&mut self, w: &mut TWorld, neighbor: usize) -> Vec<Migrating<TState>> {
         let mut out = Vec::new();
         for (&wire, (x, y, mode)) in &w.ents {
             if TLogic::region_of(*x) == neighbor {
-                let _ = self.obs.try_send(Obs::Migrate(self.index, self.last_tick, wire));
+                let _ = self
+                    .obs
+                    .try_send(Obs::Migrate(self.index, self.last_tick, wire));
                 out.push(Migrating {
                     wire,
                     state: TState {

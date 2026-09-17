@@ -30,15 +30,26 @@ fn loadgen_smoke() {
     let kv: std::collections::HashMap<String, String> = result_line
         .split_whitespace()
         .skip(1)
-        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|kv| {
+            kv.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect();
-    let get = |k: &str| -> String { kv.get(k).cloned().unwrap_or_else(|| panic!("missing {k} in: {result_line}")) };
+    let get = |k: &str| -> String {
+        kv.get(k)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {k} in: {result_line}"))
+    };
 
     assert_eq!(get("mode"), "in-proc");
     assert_eq!(get("clients"), "3");
     // The full client path must work: connect, auth, join, leave.
     assert_eq!(get("connected"), "3", "all clients connect over real TCP");
-    assert_eq!(get("joined"), "3", "all clients complete the join handshake");
+    assert_eq!(
+        get("joined"),
+        "3",
+        "all clients complete the join handshake"
+    );
     assert_eq!(get("left"), "3", "all clients leave cleanly");
     assert_eq!(get("errors"), "0");
 
@@ -71,7 +82,10 @@ fn loadgen_smoke() {
 
     // The registry must have registered all 3 connections at some point.
     let peak: u32 = get("peak_conns").parse().expect("number");
-    assert!(peak >= 3, "registry never saw all 3 connections: peak={peak}");
+    assert!(
+        peak >= 3,
+        "registry never saw all 3 connections: peak={peak}"
+    );
 
     // Server-side bytes must flow (snapshots out, MOVE_TOs in).
     let out_bps: u64 = get("server_out_bps").parse().expect("number");
@@ -93,10 +107,7 @@ fn loadgen_smoke() {
 /// only), so every RPC counter must be present and exactly 0 — garbage
 /// values (a shifted queue) fail the zero check, missing keys fail the
 /// `get`.
-fn assert_metric_queue(
-    kv: &std::collections::HashMap<String, String>,
-    result_line: &str,
-) {
+fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_line: &str) {
     let get = |k: &str| -> String {
         kv.get(k)
             .cloned()
@@ -109,7 +120,10 @@ fn assert_metric_queue(
     // histogram or the room itself is broken, not just slow).
     let p50: u64 = get("step_p50_fine_us").parse().expect("number");
     let p90: u64 = get("step_p90_fine_us").parse().expect("number");
-    assert!(p50 > 0, "step_p50_fine_us must be positive for a ticking room");
+    assert!(
+        p50 > 0,
+        "step_p50_fine_us must be positive for a ticking room"
+    );
     assert!(
         p90 >= p50,
         "fine histogram invariant violated: p90 {p90} < p50 {p50}"
@@ -179,7 +193,10 @@ fn loadgen_smoke_separate_processes() {
     let kv: std::collections::HashMap<String, String> = result_line
         .split_whitespace()
         .skip(1)
-        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|kv| {
+            kv.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect();
     let get = |k: &str| -> String {
         kv.get(k)
@@ -209,7 +226,10 @@ fn loadgen_smoke_separate_processes() {
         "server-reported step rate {server_hz} Hz far from the configured 30 Hz"
     );
     let steps: u64 = get("steps").parse().expect("number");
-    assert!(steps >= 60, "3 s at ~30 Hz should yield ~90 room steps, got {steps}");
+    assert!(
+        steps >= 60,
+        "3 s at ~30 Hz should yield ~90 room steps, got {steps}"
+    );
     // The client-measured rate too (merged from the children's records).
     let client_hz: f64 = get("tick_hz_med").parse().expect("number");
     assert!(
@@ -268,7 +288,10 @@ fn loadgen_churn_smoke() {
     let kv: std::collections::HashMap<String, String> = result_line
         .split_whitespace()
         .skip(1)
-        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|kv| {
+            kv.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect();
     let get = |k: &str| -> String {
         kv.get(k)
@@ -302,7 +325,10 @@ fn loadgen_churn_smoke() {
          same-wire-id joins exactly"
     );
     let stale: u64 = get("resume_rejected_stale").parse().expect("number");
-    assert_eq!(stale, 0, "no stale rejects in the one-drop-per-identity herd");
+    assert_eq!(
+        stale, 0,
+        "no stale rejects in the one-drop-per-identity herd"
+    );
     // No expiry ran (grace ≫ run) and nothing fell back to a fresh join.
     let fresh: u64 = get("fresh_joins").parse().expect("number");
     assert_eq!(fresh, 0, "no identity lost its park inside the grace");

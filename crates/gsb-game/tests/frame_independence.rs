@@ -19,7 +19,9 @@ use bevy_ecs::prelude::{Entity, World};
 use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
-use gsb_core::room::{Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx};
+use gsb_core::room::{
+    Action, Admission, GameLogic, RoomActor, RoomConfig, RoomControl, RoomLogic, TickCtx,
+};
 use gsb_core::ticker::TickInfo;
 use gsb_ecs::{System, SystemCtx};
 use gsb_protocol::FrameBody;
@@ -255,7 +257,11 @@ impl SimRoom {
             self.join_reply = Some(rx);
             return false;
         };
-        let move_to = gsb_game::game::MoveTo { x: 1000, y: 1000, seq: 0 };
+        let move_to = gsb_game::game::MoveTo {
+            x: 1000,
+            y: 1000,
+            seq: 0,
+        };
         // The join reply became ready *before* this tick's batch was flushed
         // (control phase precedes the broadcast phase), so the action
         // channel is open and empty: try_send cannot fail.

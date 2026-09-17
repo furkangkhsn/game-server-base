@@ -9,16 +9,15 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
-
+use crate::boot::accept::*;
+use crate::boot::factories::*;
+use crate::config::*;
+use crate::*;
 use gsb_core::channel::channel;
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{MatchResult, Registry, RegistryMsg};
 use gsb_core::room::RoomConfig;
-use crate::boot::accept::*;
-use crate::boot::factories::*;
-use crate::config::*;
-use crate::*;
 
 /// Start the server (local auth; no ticket hook). Must be called from
 /// inside a tokio runtime. Metric reports go to the tracing logger (one
@@ -138,17 +137,19 @@ async fn start_inner(
     let (metric_sink, http_task, http_addr) = if cfg.http_listen.is_empty() {
         (metric_sink, None, None)
     } else {
-        let listen: SocketAddr = cfg.http_listen.parse().map_err(|e: std::net::AddrParseError| {
-            ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
-        })?;
+        let listen: SocketAddr =
+            cfg.http_listen
+                .parse()
+                .map_err(|e: std::net::AddrParseError| {
+                    ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
+                })?;
         let listener = TcpListener::bind(listen)
             .await
             .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
-        let bound = listener.local_addr().map_err(|e| {
-            ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
-        })?;
-        let (report_tx, report_rx) =
-            watch::channel(MetricReport::initial_stale(REPORT_PERIOD));
+        let bound = listener
+            .local_addr()
+            .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
+        let (report_tx, report_rx) = watch::channel(MetricReport::initial_stale(REPORT_PERIOD));
         let task = http::spawn(
             listener,
             reg_tx.clone(),
@@ -182,13 +183,7 @@ async fn start_inner(
     // reported, never a stall.
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
     let metrics = tokio::spawn(
-        MetricsCollector::new(
-            ticker.subscribe(),
-            metrics_rx,
-            metric_sink,
-            REPORT_PERIOD,
-        )
-        .run(),
+        MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD).run(),
     );
 
     // The match-result sink (the control plane's result seam, feature A):
@@ -251,7 +246,11 @@ async fn start_inner(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    team_room_factory(cfg.team_vision_radius, cfg.spawn_half_size, disconnect_grace),
+                    team_room_factory(
+                        cfg.team_vision_radius,
+                        cfg.spawn_half_size,
+                        disconnect_grace,
+                    ),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -377,9 +376,8 @@ async fn start_inner(
 
     // Session-lifecycle idle window (`0` disables): the reader pump's
     // clock on TCP, the demux deadline heap's window on rUDP.
-    let idle_timeout = (cfg.idle_timeout_secs > 0.0).then(|| {
-        std::time::Duration::from_secs_f64(cfg.idle_timeout_secs)
-    });
+    let idle_timeout = (cfg.idle_timeout_secs > 0.0)
+        .then(|| std::time::Duration::from_secs_f64(cfg.idle_timeout_secs));
 
     // The rUDP cookie key: the operator's 32-hex-char config string, or
     // `None` = the transport draws 16 bytes from the OS entropy source
@@ -390,9 +388,7 @@ async fn start_inner(
     // listener draws its own socket (and its own demux), but they all run
     // the same handshake policy — per-listener keys would let an operator
     // quietly weaken one door of an otherwise identical deployment.
-    let has_udp = specs
-        .iter()
-        .any(|s| matches!(s, ListenerSpec::Udp { .. }));
+    let has_udp = specs.iter().any(|s| matches!(s, ListenerSpec::Udp { .. }));
     let cookie_key = if has_udp {
         cfg.udp_cookie_key
             .as_deref()
@@ -412,8 +408,7 @@ async fn start_inner(
     // already-bound listeners are closed explicitly (not just dropped): a
     // dropped `UdpListener` would leave its demux task reading the socket —
     // `Listener::close` is the only door that stops it.
-    let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> =
-        Vec::with_capacity(specs.len());
+    let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> = Vec::with_capacity(specs.len());
     let mut addrs: Vec<SocketAddr> = Vec::with_capacity(specs.len());
     for spec in &specs {
         match bind_listener(spec, &cfg, idle_timeout, cookie_key).await {
