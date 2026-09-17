@@ -125,10 +125,7 @@ impl super::ConnectionActor {
                     let _ = self
                         .send_frame(
                             op::base::ERROR,
-                            &base::Error {
-                                code: 9,
-                                message: reason,
-                            },
+                            &base::Error::new(base::ErrorCode::ServerClosed, reason),
                         )
                         .await;
                     break;
@@ -139,10 +136,7 @@ impl super::ConnectionActor {
                     let _ = self
                         .send_frame(
                             op::base::ERROR,
-                            &base::Error {
-                                code: 5,
-                                message: "room destroyed".into(),
-                            },
+                            &base::Error::new(base::ErrorCode::RoomDestroyed, "room destroyed"),
                         )
                         .await;
                     break;

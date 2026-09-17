@@ -120,7 +120,7 @@ async fn read_auth_result(out: &mut mpsc::Receiver<FrameBatch>) -> base::AuthRes
     panic!("batch without AUTH_RESULT");
 }
 
-async fn read_error(out: &mut mpsc::Receiver<FrameBatch>) -> (u32, String) {
+async fn read_error(out: &mut mpsc::Receiver<FrameBatch>) -> (i32, String) {
     let batch = tokio::time::timeout(WAIT, out.recv())
         .await
         .expect("timed out")

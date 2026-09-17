@@ -293,16 +293,20 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
-- **ERROR kodları** (`base.Error.code`; Unity tarafının el referansı —
-  `gsb-protocol/proto/base.proto`'daki yorumla birebir aynı): `1`
-  bilinmeyen opcode, `2` decode hatası, `3` auth (authsuz / tekrar
-  auth), `4` oda işlemi başarısız (oda yok / tick hızı uyuşmazlığı),
+- **ERROR kodları** — artık bir yorum tablosu değil, gerçek bir proto
+  `enum`: `gsb.base.ErrorCode` (bkz. §5.4). `base.Error.code` alanının
+  tipi `uint32`'den `ErrorCode`'a geçti; tel değişmedi (proto3 enum'ı da
+  varint, 1..12 aralığında bayt-birebir aynı). Numaralar ve anlamları
+  değişmedi: `1` bilinmeyen opcode, `2` decode hatası, `3` auth (authsuz
+  / tekrar auth), `4` oda işlemi başarısız (oda yok / tick hızı
+  uyuşmazlığı — istemci kararı "geçici/bilinmiyor, tekrar denenebilir"),
   `5` oda imha edildi, `6` odada değil, `7` diğer, **`8` oda dolu**
   (nazik reddi — bağlantı **yaşar**, başka odaya join edebilir; sessiz
-  kapatma reconnect fırtınası üretirdi), **`9` sunucu
-  kapattı** (idle timeout, sunucu bağlantı cap'i ya da bağlantının
-  protokol-ihlal bütçesinin tükenmesi — mesaj hangisi olduğunu söyler;
-  hemen ardından bağlantı kapatılır).
+  kapatma reconnect fırtınası üretirdi), **`9` sunucu kapattı** (idle
+  timeout, sunucu bağlantı cap'i ya da bağlantının protokol-ihlal
+  bütçesinin tükenmesi — mesaj hangisi olduğunu söyler; hemen ardından
+  bağlantı kapatılır), `10` bilet doğrulama başarısız, `11` join bileti
+  eşleşmiyor, `12` oda emekli.
 - **Seriştirme:** protobuf. Rust tarafında `prost`, Unity tarafında
   `Google.Protobuf` — aynı `.proto` dosyaları her iki tarafta kullanılır.
   Mesajlar `MessageTable`'da opcode→(de)koducu olarak kayıt edilir; tablo
@@ -417,6 +421,64 @@ kuralın engellemek istediği şey. Kalan ikisi artık
 `ENTITY_REMOVED`) ve `wire_contract.rs::retired_opcodes_stay_out_of_
 the_message_table` bunların `MessageTable`'a kaydedilmesini kırıyor.
 Yeni bir oyun crate'i kendi `RETIRED` listesini tutar.
+
+### 5.4 `ErrorCode`: yorum tablosu değil, makine-kontrollü enum
+
+ERROR kodları `base.proto`'da `message Error`'un üstünde bir **yorum
+tablosu**ydı (1..12). Rust tarafı bu numaraları `gsb-core`'un bağlantı
+aktöründe tam sayı literalleri olarak — üstelik iki ayrı `_ =>`
+catch-all'ın arkasında — taşıyordu; loadgen ve örnek istemci ise kendi
+`match e.code { 8 => …, 9 => … }` kopyalarını tutuyordu. Üç yerin elle
+uyumlu kalması gerekiyordu.
+
+Artık `enum ErrorCode` gerçek bir proto enum'ı: her istemci dili için
+ÜRETİLİYOR, numaralandırma protoc tarafından kontrol ediliyor ve
+`Error.code` alanının tipi `ErrorCode`. **Anlamların hiçbiri
+değişmedi**; **tel de değişmedi** (proto3 enum'ı `uint32` gibi varint,
+1..12'de bayt-birebir aynı — `error_code::the_code_field_encodes_exactly
+_as_the_old_uint32_did` bunu 0..=12 için tek tek doğruluyor).
+
+**Sıfır değer ve ileri uyumluluk** (proto3 enum'ı sıfır değer
+zorunlu kılar; mevcut uzay 1'den başlıyordu):
+
+- `ERROR_CODE_UNSPECIFIED = 0` **asla gönderilmez.** İki eşleme de
+  (`ProtoError::wire_code`, `CoreError::wire_code`) onu üretemez ve iki
+  test bunu kilitler. Sunucunun 0 ALMA durumu yok: ERROR gelen bir
+  base-band opcode'u değil, bu yüzden sunucuya gönderilen bir `Error`
+  çerçevesi `UNKNOWN_OPCODE` ile yanıtlanır ve ihlal bütçesine yazılır.
+- **İstemci kuralı:** tanımadığı bir kod (gelecekteki bir numara) ya da 0
+  → `ERROR_CODE_OTHER` gibi davran. `message` her zaman dolu, onu göster;
+  döngüde tekrar deneme; bilinen bir kodun kararına EŞLEME. Bağlantının
+  yaşayıp yaşamadığı **koddan çıkarılmaz** — onu taşıma söyler (yalnız
+  `SERVER_CLOSED` ve `ROOM_DESTROYED` kapanışla gelir, ve sokete güvenen
+  istemci gelecekteki bir kapanış kodunu bilmeden de doğru işler).
+- proto3 enum'ları AÇIK: tanınmayan numara ham `i32` alanında korunur,
+  düşmez. Bu yüzden istemci gerçek numarayı loglayıp sınıfı OTHER olarak
+  işleyebilir (`an_unknown_code_survives_decoding`).
+
+**Sızıntıya karşı kapı derleme zamanında:** iki eşleme de TÜKETİCİ
+(exhaustive) `match`. Yeni bir `CoreError` ya da `ProtoError` varyantı
+eklemek kodu **derlenmez hale getirir** — mutasyon kontrolüyle
+doğrulandı (`non-exhaustive patterns: ... not covered`). Bir testten
+güçlü: unutulan varyant CI'ya bile ulaşamaz. `base::Error::new(code,
+message)` sunucu tarafında hata üretmenin tek yolu, yani hiçbir çağrı
+yeri çıplak sayı yazamaz.
+
+**Elenen alternatifler:**
+
+1. **Alanı `uint32` bırakıp enum'u yalnızca belge/sabit olarak eklemek.**
+   Numaralandırmayı yine de protoc kontrol ederdi ama üretilen istemci
+   tipli bir alan almazdı ve `match e.code { 8 => … }` kopyaları
+   kalırdı — yani turun kapatmak istediği elle-uyum sorunu sürerdi.
+2. **Rust tarafında `#[repr(u32)]` kendi enum'umuz.** Tel sözleşmesini
+   `.proto`'nun dışına taşırdı; Unity tarafı yine elle kopyalardı. Tek
+   doğruluk kaynağı `.proto` olmalı.
+3. **Kodları yeniden numaralandırmak / sınıfları birleştirmek** (ör. 3'ün
+   iki auth hâlini ayırmak, `_ => 4` düşenlerine 6/7 vermek). Tel
+   değişikliği olurdu; görev "her mevcut sayısal anlam aynı kalacak"
+   diyor. `CoreError::wire_code` bu yüzden 4'e düşen on varyantı
+   catch-all yerine TEK TEK sayar: davranış aynı, gözden kaçma imkânı
+   yok.
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 

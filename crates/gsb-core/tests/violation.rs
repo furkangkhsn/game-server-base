@@ -61,7 +61,7 @@ fn spawn_actor(
     (inbox_tx, out_rx, h)
 }
 
-async fn read_err(out: &mut mpsc::Receiver<FrameBatch>) -> Option<(u32, String)> {
+async fn read_err(out: &mut mpsc::Receiver<FrameBatch>) -> Option<(i32, String)> {
     let batch = tokio::time::timeout(WAIT, out.recv())
         .await
         .ok()?
@@ -78,7 +78,7 @@ async fn read_err(out: &mut mpsc::Receiver<FrameBatch>) -> Option<(u32, String)>
 }
 
 /// Read with a short window: `None` = silence (the budget's silent phase).
-async fn read_err_quiet(out: &mut mpsc::Receiver<FrameBatch>) -> Option<(u32, String)> {
+async fn read_err_quiet(out: &mut mpsc::Receiver<FrameBatch>) -> Option<(i32, String)> {
     let batch = tokio::time::timeout(Duration::from_millis(400), out.recv())
         .await
         .ok()?

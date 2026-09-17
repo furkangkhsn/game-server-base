@@ -39,12 +39,11 @@ impl super::ConnectionActor {
         self.auth_attempts
             .retain(|t| now.duration_since(*t) < AUTH_WINDOW);
         if self.auth_attempts.len() >= AUTH_ATTEMPTS_PER_WINDOW {
-            // Auth-family ERROR code 3 (the documented "auth"
-            // class: unauthenticated / re-auth) — no new wire
+            // The auth class (unauthenticated / re-auth) — no new wire
             // vocabulary; the message carries the specificity.
             self.count_violation(
                 ViolationClass::Hard,
-                3,
+                base::ErrorCode::Auth,
                 format!(
                     "auth attempt rate limit exceeded: max \
                      {AUTH_ATTEMPTS_PER_WINDOW} attempts per \
@@ -162,10 +161,10 @@ impl super::ConnectionActor {
                     let _ = self
                         .send_frame(
                             op::base::ERROR,
-                            &base::Error {
-                                code: 7,
-                                message: "ticket validator unavailable".into(),
-                            },
+                            &base::Error::new(
+                                base::ErrorCode::Other,
+                                "ticket validator unavailable",
+                            ),
                         )
                         .await;
                 }
@@ -209,10 +208,7 @@ impl super::ConnectionActor {
         let _ = self
             .send_frame(
                 op::base::ERROR,
-                &base::Error {
-                    code: 10,
-                    message: e.to_string(),
-                },
+                &base::Error::new(base::ErrorCode::TicketInvalid, e.to_string()),
             )
             .await;
     }

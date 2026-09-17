@@ -1,5 +1,8 @@
 //! Core error types.
 
+#[cfg(test)]
+mod tests;
+
 /// Errors that can be reported across the control plane.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -58,6 +61,54 @@ pub enum CoreError {
 
     #[error("io error: {0}")]
     Io(String),
+}
+
+impl CoreError {
+    /// The wire error class a control-plane failure is reported to the
+    /// client as. The join reply in the connection actor
+    /// (`conn/actor/room.rs`) is the one place a `CoreError` reaches the
+    /// wire.
+    ///
+    /// The match is EXHAUSTIVE on purpose: adding a `CoreError` variant
+    /// stops compiling here until someone chooses its wire code, so a
+    /// new variant cannot silently inherit a number nobody decided on.
+    /// The `_ =>` catch-all this replaces is exactly what let a variant
+    /// ship unconsidered.
+    ///
+    /// Every number is unchanged from that catch-all's behaviour:
+    /// `RoomFull` was 8, `RoomRetired` was 12, everything else was 4.
+    /// `RoomOpFailed` is the honest class for that "everything else" —
+    /// its documented client decision is "temporary or unknown, read the
+    /// `message`, you may retry", which is what a stale resume, a
+    /// tick-rate mismatch and a vanished room all are from the client's
+    /// side.
+    ///
+    /// Never returns [`gsb_protocol::base::ErrorCode::Unspecified`];
+    /// `base.proto` states that as a protocol guarantee.
+    pub fn wire_code(&self) -> gsb_protocol::base::ErrorCode {
+        use gsb_protocol::base::ErrorCode;
+        match self {
+            // A full room is a GENTLE reject with its own class: the
+            // connection stays alive and the client picks another room
+            // (see `conn/actor/room.rs` for why closing instead would
+            // produce a reconnect storm against an already-busy server).
+            Self::RoomFull(_) => ErrorCode::RoomFull,
+            // "Definitively over — return to the lobby, never retry"
+            // (RECONNECT §8): the decision class 4 cannot express.
+            Self::RoomRetired(_) => ErrorCode::RoomRetired,
+            Self::RoomNotFound(_)
+            | Self::NotInRoom
+            | Self::RoomExists(_)
+            | Self::RoomConflict(_)
+            | Self::TickRate { .. }
+            | Self::KeepaliveRate { .. }
+            | Self::InvalidTickRate { .. }
+            | Self::RoomGone
+            | Self::ResumeStale
+            | Self::Protocol(_)
+            | Self::Io(_) => ErrorCode::RoomOpFailed,
+        }
+    }
 }
 
 impl From<gsb_protocol::ProtoError> for CoreError {

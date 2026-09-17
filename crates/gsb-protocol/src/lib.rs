@@ -58,6 +58,26 @@ pub mod base {
     include!(concat!(env!("OUT_DIR"), "/gsb.base.rs"));
 }
 
+impl base::Error {
+    /// Build an `ERROR` payload from a typed code.
+    ///
+    /// The generated field is `i32` because proto3 enums are OPEN — an
+    /// unrecognised number from a future peer must survive the round
+    /// trip rather than collapse to the default. Server-side that
+    /// openness is a liability, not a feature: this constructor is the
+    /// only way the tree builds an error, so no call site can type a
+    /// bare number and no code outside [`base::ErrorCode`] can be sent.
+    pub fn new(code: base::ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code: code as i32,
+            message: message.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod error_code;
+
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -87,6 +107,37 @@ pub enum ProtoError {
 
     #[error("protocol error: {0}")]
     Other(String),
+}
+
+impl ProtoError {
+    /// The wire error class this protocol error is reported as.
+    ///
+    /// The match is EXHAUSTIVE on purpose: adding a `ProtoError` variant
+    /// stops compiling here until someone chooses its wire code, so a
+    /// new variant can never ship an undocumented number. That is the
+    /// point of the enum — before it, this mapping was integer literals
+    /// behind a `_ =>` catch-all in `gsb-core`'s connection actor while
+    /// the numbering lived in a comment table two crates away, and the
+    /// two had to be kept in step by hand.
+    ///
+    /// Never returns [`base::ErrorCode::Unspecified`]: `base.proto`
+    /// states that as a protocol guarantee and the `error_code` tests
+    /// lock it.
+    pub fn wire_code(&self) -> base::ErrorCode {
+        match self {
+            Self::UnknownOpcode(_) => base::ErrorCode::UnknownOpcode,
+            Self::Decode { .. } => base::ErrorCode::Decode,
+            // Both auth-state errors share class 3: the client's decision
+            // ("fix my auth state, then retry") is the same for either.
+            Self::NotAuthenticated | Self::AlreadyAuthenticated => base::ErrorCode::Auth,
+            Self::RoomNotFound(_) => base::ErrorCode::RoomOpFailed,
+            Self::NotInRoom => base::ErrorCode::NotInRoom,
+            // These two had no class of their own before the enum either:
+            // they were the members of the old `_ =>` arm and stay class
+            // 7, with the `message` carrying the specificity.
+            Self::MalformedFrame(_) | Self::Other(_) => base::ErrorCode::Other,
+        }
+    }
 }
 
 /// A decoded message payload without its envelope.

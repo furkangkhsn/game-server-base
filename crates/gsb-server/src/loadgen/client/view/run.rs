@@ -2,7 +2,9 @@
 //! a timer, and report what it saw.
 
 use super::*;
-use gsb_protocol::base::{Auth, Error, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult};
+use gsb_protocol::base::{
+    Auth, Error, ErrorCode, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult,
+};
 use gsb_protocol::op;
 use prost::Message;
 use std::collections::HashMap;
@@ -311,15 +313,23 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             }
             op::base::ERROR => {
                 let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
-                match e.code {
+                // Classified through the GENERATED enum (prost's
+                // `code()` accessor), so this consumer and the server
+                // cannot drift apart by hand-copied numbers.
+                match e.code() {
                     // The guardrails, observed from the client side:
-                    // 8 = room full (gentle reject, connection stays);
-                    // 9 = server closed the connection — either the
+                    // RoomFull = gentle reject, the connection stays;
+                    // ServerClosed = the server closed us — either the
                     // connection-capacity cap or the protocol-violation
-                    // budget (same code; the message separates them).
-                    8 => rep.join_rejected += 1,
-                    9 if e.message.contains("violation") => rep.budget_rejected += 1,
-                    9 => rep.cap_rejected += 1,
+                    // budget (same class; the message separates them).
+                    ErrorCode::RoomFull => rep.join_rejected += 1,
+                    ErrorCode::ServerClosed if e.message.contains("violation") => {
+                        rep.budget_rejected += 1
+                    }
+                    ErrorCode::ServerClosed => rep.cap_rejected += 1,
+                    // base.proto's forward-compatibility rule: an unknown
+                    // or unspecified code is a plain error, never guessed
+                    // onto a known decision.
                     _ => rep.errors += 1,
                 }
             }

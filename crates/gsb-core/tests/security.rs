@@ -153,7 +153,7 @@ async fn next_batch(out: &mut mpsc::Receiver<FrameBatch>) -> FrameBatch {
         .expect("out channel closed")
 }
 
-fn error_in(batch: &FrameBatch) -> Option<(u32, String)> {
+fn error_in(batch: &FrameBatch) -> Option<(i32, String)> {
     batch.iter().find(|f| f.op == op::base::ERROR).map(|f| {
         let e = gsb_protocol::base::Error::decode(f.payload.as_ref()).expect("Error decode");
         (e.code, e.message)

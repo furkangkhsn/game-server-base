@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use gsb_protocol::base::{
-    Auth, AuthResult, Error, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
+    Auth, AuthResult, Error, ErrorCode, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
 };
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -209,7 +209,17 @@ async fn main() {
             }
             gsb_protocol::op::base::ERROR => {
                 let m: Error = Error::decode(&payload[..]).unwrap();
-                println!("ERROR code={} message={}", m.code, m.message);
+                // Both halves, as base.proto's forward-compatibility rule
+                // asks of a client: the RAW number (preserved by the open
+                // proto3 enum, so a future code is still reportable) and
+                // the class this build knows it as. A code this client
+                // does not know reads back as UNSPECIFIED and must be
+                // handled like ERROR_CODE_OTHER.
+                let class = match m.code() {
+                    ErrorCode::Unspecified => "unknown to this client; treat as OTHER",
+                    known => known.as_str_name(),
+                };
+                println!("ERROR code={} ({}) message={}", m.code, class, m.message);
             }
             gsb_game::op::WORLD_SNAPSHOT => {
                 let m: gsb_game::game::WorldSnapshot =

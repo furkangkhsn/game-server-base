@@ -44,14 +44,14 @@ impl super::ConnectionActor {
             let _ = self
                 .send_frame(
                     op::base::ERROR,
-                    &base::Error {
-                        code: 11,
-                        message: format!(
+                    &base::Error::new(
+                        base::ErrorCode::RoomMismatch,
+                        format!(
                             "ticket pins room {} (the platform-set room); \
                              joining room {} is rejected",
                             v.room, room
                         ),
-                    },
+                    ),
                 )
                 .await;
             return;
@@ -99,18 +99,10 @@ impl super::ConnectionActor {
                 // resume (`ResumeStale`) is an ordinary rejection:
                 // code 4 with its reason; the client re-auths and
                 // its next join falls through to a fresh join.
-                let code = match &e {
-                    CoreError::RoomFull(_) => 8,
-                    CoreError::RoomRetired(_) => 12,
-                    _ => 4,
-                };
                 let _ = self
                     .send_frame(
                         op::base::ERROR,
-                        &base::Error {
-                            code,
-                            message: e.to_string(),
-                        },
+                        &base::Error::new(e.wire_code(), e.to_string()),
                     )
                     .await;
             }
@@ -118,10 +110,7 @@ impl super::ConnectionActor {
                 let _ = self
                     .send_frame(
                         op::base::ERROR,
-                        &base::Error {
-                            code: 4,
-                            message: "registry unavailable".into(),
-                        },
+                        &base::Error::new(base::ErrorCode::RoomOpFailed, "registry unavailable"),
                     )
                     .await;
             }

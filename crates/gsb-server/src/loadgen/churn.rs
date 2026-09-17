@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, Error, JoinRoom, JoinRoomResult};
+use gsb_protocol::base::{Auth, Error, ErrorCode, JoinRoom, JoinRoomResult};
 use gsb_protocol::op;
 use prost::Message;
 
@@ -39,10 +39,16 @@ pub(crate) async fn churn_join(
                 }
                 Got::Frame(op::base::ERROR, payload) => {
                     let e = Error::decode(&payload[..]).unwrap_or_default();
-                    match e.code {
+                    // Classified through the GENERATED enum, not
+                    // hand-copied numbers: `code()` is prost's accessor
+                    // for the open enum field. The `_` arm implements the
+                    // forward-compatibility rule from `base.proto` — an
+                    // unknown or unspecified code counts as a plain
+                    // error, never as one of the known decisions.
+                    match e.code() {
                         // The gentle stale-resume reject: retry with the
                         // same connection's next epoch.
-                        4 => {
+                        ErrorCode::RoomOpFailed => {
                             if !retriable {
                                 eprintln!(
                                     "churn client {id}: join answered 'stale                                      resume' (code 4); retrying on the same                                      connection (core join-epoch quirk)"
@@ -51,8 +57,8 @@ pub(crate) async fn churn_join(
                             retriable = true;
                             break;
                         }
-                        8 => rep.join_rejected += 1,
-                        9 => rep.cap_rejected += 1,
+                        ErrorCode::RoomFull => rep.join_rejected += 1,
+                        ErrorCode::ServerClosed => rep.cap_rejected += 1,
                         _ => rep.errors += 1,
                     }
                 }
