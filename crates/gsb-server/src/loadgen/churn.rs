@@ -51,7 +51,9 @@ pub(crate) async fn churn_join(
                         ErrorCode::RoomOpFailed => {
                             if !retriable {
                                 eprintln!(
-                                    "churn client {id}: join answered 'stale                                      resume' (code 4); retrying on the same                                      connection (core join-epoch quirk)"
+                                    "churn client {id}: join answered 'stale \
+                                     resume' (code 4); retrying on the same \
+                                     connection (core join-epoch quirk)"
                                 );
                             }
                             retriable = true;
