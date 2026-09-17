@@ -8,6 +8,12 @@ fn main() {
     }
     cfg.compile_protos(&[format!("{proto_dir}/base.proto")], &[proto_dir])
         .expect("prost codegen failed (using vendored protoc)");
+    // Publish the proto directory to DIRECT dependents (via the `links`
+    // key, see Cargo.toml) as `DEP_GSB_BASE_PROTO_DIR`: a game protocol
+    // imports `base.proto` for `gsb.base.RpcResponse`, and its build
+    // script needs this path as a protoc include. A relative
+    // `../gsb-protocol/proto` would only work inside this workspace.
+    println!("cargo:dir={proto_dir}");
     println!("cargo:rerun-if-changed=proto/base.proto");
 }
 

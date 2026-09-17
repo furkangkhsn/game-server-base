@@ -5,6 +5,14 @@ syntax = "proto3";
 
 package gsb.game;
 
+// The RPC response envelope (`gsb.base.RpcResponse`, carried in
+// `Private.responses` below). BOTH halves of the correlated-request
+// envelope are core contracts and live in the base protocol — see that
+// file for why, and `docs/DESIGN.md` §5.2 for the ownership rule. A
+// Unity (or other) client generated from this file must generate
+// `base.proto` alongside it; the wire bytes are unchanged by the import.
+import "base.proto";
+
 // Client → server: "move my entity toward (x, y)".
 message MoveTo {
   // Zig-zag varint: 1 byte for |v| <= 63, 2 for |v| <= 8191, and never
@@ -83,32 +91,20 @@ message Private {
   }
   // The connection's RPC responses for this tick (empty = none; the
   // frame is then absent or carries only ack/snapshot). Each entry is
-  // matched by `RpcResponse.id` to the client's `RpcRequest.id` (see
-  // `gsb.base.RpcRequest` for the correlation-space rules). A client
-  // that receives an `id` it does not recognize (its request was lost
-  // and the server answered a retransmission, or it recycled the number)
-  // should treat the entry as an answer to the oldest matching pending
-  // request or discard it — the id is per-connection, so a foreign
-  // entry is impossible by construction.
-  repeated RpcResponse responses = 3;
-}
-
-// Server → client: the answer to one correlated request (see
-// `gsb.base.RpcRequest`). `id` echoes the request's correlation id; `op`
-// echoes the request's inner opcode (the client may dispatch on it
-// without its own request table). `ok` true: `payload` is the response
-// body (the encoded message of the response kind paired with `op`).
-// `ok` false: `reason` is a human-readable, client-actionable string
-// (normal rejection — "no handler", "pending limit", "timed out", the
-// logic's own reason; NOT a protocol-violation signal).
-message RpcResponse {
-  uint64 id = 1;
-  bool ok = 2;
-  // The request's inner opcode (echoed; `uint32` on the wire — see
-  // `gsb.base.RpcRequest.op`).
-  uint32 op = 3;
-  string reason = 4;
-  bytes payload = 5;
+  // matched by `gsb.base.RpcResponse.id` to the client's
+  // `gsb.base.RpcRequest.id` (see the base protocol for the
+  // correlation-space rules and for the envelope's own documentation).
+  // A client that receives an `id` it does not recognize (its request
+  // was lost and the server answered a retransmission, or it recycled
+  // the number) should treat the entry as an answer to the oldest
+  // matching pending request or discard it — the id is per-connection,
+  // so a foreign entry is impossible by construction.
+  //
+  // The field number (3) and the LEN wire type are unchanged by the
+  // envelope's move from `gsb.game` to `gsb.base`: the AOI one-shot
+  // path hand-encodes this tag (`aoi/logic.rs`, `0x1A`), and
+  // `gsb-game/tests/wire_contract.rs` locks the bytes.
+  repeated gsb.base.RpcResponse responses = 3;
 }
 
 // Client → server (RPC inner op ABILITY = 1005): "use my ability toward

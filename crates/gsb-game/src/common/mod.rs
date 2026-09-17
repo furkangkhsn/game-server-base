@@ -243,16 +243,10 @@ pub(crate) fn emit_private(
                 processed_up_to: upto,
             })
         }),
-        responses: responses
-            .iter()
-            .map(|r| crate::game::RpcResponse {
-                id: r.id,
-                ok: r.ok,
-                op: r.op as u32,
-                reason: r.reason.clone(),
-                payload: r.payload.to_vec(),
-            })
-            .collect(),
+        // The core owns both halves of the RPC envelope (base.proto), so
+        // the reply's wire shape comes from the core's conversion — the
+        // game crate never re-derives the field mapping.
+        responses: responses.iter().map(Into::into).collect(),
     };
     frame
         .encode(out)
@@ -263,18 +257,13 @@ pub(crate) fn emit_private(
 /// Append this connection's queued RPC answers to a HAND-ENCODED
 /// `Private` frame body (the AOI one-shot full path, which cannot go
 /// through the generated type without re-encoding the snapshot): field
-/// 3 (`responses`, tag 0x1A), one length-delimited `RpcResponse` per
-/// entry. No allocation beyond the per-message length probe (responses
-/// are rare — the steady-state tick has none).
+/// 3 (`responses`, tag 0x1A), one length-delimited
+/// `gsb.base.RpcResponse` per entry. No allocation beyond the
+/// per-message length probe (responses are rare — the steady-state tick
+/// has none).
 pub(crate) fn append_responses(responses: &[gsb_core::rpc::RpcReply], out: &mut bytes::BytesMut) {
     for r in responses {
-        let msg = crate::game::RpcResponse {
-            id: r.id,
-            ok: r.ok,
-            op: r.op as u32,
-            reason: r.reason.clone(),
-            payload: r.payload.to_vec(),
-        };
+        let msg: gsb_protocol::base::RpcResponse = r.into();
         out.put_u8(0x1A); // Private field 3 (responses), LEN
         prost::encoding::varint::encode_varint(msg.encoded_len() as u64, out);
         msg.encode(out)

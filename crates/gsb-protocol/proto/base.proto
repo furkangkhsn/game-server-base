@@ -114,3 +114,39 @@ message RpcRequest {
   uint32 op = 2;
   bytes payload = 3;
 }
+
+// Server → client: the answer to one correlated request (see
+// `RpcRequest`). `id` echoes the request's correlation id; `op` echoes
+// the request's inner opcode (the client may dispatch on it without its
+// own request table). `ok` true: `payload` is the response body (the
+// encoded message of the response kind paired with `op`). `ok` false:
+// `reason` is a human-readable, client-actionable string (normal
+// rejection — "no handler", "pending limit", "timed out", the logic's
+// own reason; NOT a protocol-violation signal).
+//
+// THIS MESSAGE HAS NO OPCODE. It never rides a frame of its own: the
+// room delivers it inside the per-connection private frame that the GAME
+// protocol owns (`gsb.game.Private.responses`, a repeated field), so the
+// answer shares the input ack's per-tick, per-connection delivery —
+// bounded, attributed, no extra channel. The game protocol imports this
+// file to reference it.
+//
+// It lives HERE, next to `RpcRequest`, because the correlated-request
+// contract is a CORE contract: both halves of the envelope, the id
+// space, and the duplicate/timeout rules are identical for every game
+// crate, and the core (`gsb_core::rpc`) is the authority on all of them.
+// A second game crate inherits the envelope instead of re-inventing it.
+// The move from `gsb.game` (where the response half used to live, up to
+// commit 5f37c85) is an ownership refactor only: protobuf puts no type
+// names on the wire, so the field numbers and the encoded bytes are
+// unchanged — locked by `gsb-game/tests/wire_contract.rs`. See
+// `docs/DESIGN.md` §5.2.
+message RpcResponse {
+  uint64 id = 1;
+  bool ok = 2;
+  // The request's inner opcode (echoed; `uint32` on the wire — see
+  // `RpcRequest.op`).
+  uint32 op = 3;
+  string reason = 4;
+  bytes payload = 5;
+}

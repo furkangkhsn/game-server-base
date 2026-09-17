@@ -330,6 +330,62 @@ aynı tabloyu uygular). Oyun geliştiricinin pratik kuralı: garanti
 gerektiren oyun işlemi için yeni taşıma icat etme — RPC desenini kullan
 (bkz. `docs/RPC-CONTROL-PLANE.md`).
 
+### 5.2 Mesaj sahipliği: hangi `.proto` dosyasına ne girer
+
+Kural: **bir mesajın sözleşmesini core belirliyorsa mesaj
+`base.proto`'dadır; oyun belirliyorsa `game.proto`'dadır.** Sahiplik
+mesajın nereye *gömüldüğüne* değil, kuralını kimin yazdığına bakar.
+
+Bu ayrım protokol sertleştirme turunda bir asimetriyi kapattı: korelasyonlu
+istek zarfının **istek yarısı** (`RpcRequest`) `base.proto`'daydı ama
+**yanıt yarısı** (`RpcResponse`) `game.proto`'daydı. Oysa zarfın iki
+yarısının kuralı da core'un: id uzayı (0 reddi, PENDING duplike reddi,
+cevaplanmış id'nin geri dönüşü), timeout süpürmesi ve "istek başına tam
+bir cevap" değişmezi `gsb_core::rpc`'de yaşıyor. İkinci bir oyun crate'i
+yanıt zarfını sıfırdan yazmak zorunda kalırdı ve core sözleşmenin
+tamamını tek yerde ifade edemezdi. `RpcResponse` artık `base.proto`'da;
+`game.proto` `import "base.proto"` ile `gsb.base.RpcResponse`'a referans
+veriyor ve `Private.responses` (alan 3) değişmedi.
+
+**Tel değişmedi.** Protobuf tel formatında tip adı yoktur: alan numaraları
+(1..5) ve kodlanmış baytlar birebir aynı. Kilit:
+`crates/gsb-game/tests/wire_contract.rs` — beklenen baytlar taşımadan
+ÖNCEKİ ağaçtan alındı ve taşımadan sonra aynen geçti (mutasyon kontrolü:
+`bytes payload = 5` → `= 6` yapıldığında iki test de kırıldı).
+
+Rust tarafı: `gsb-game`'in build script'i `prost_build`'e
+`extern_path(".gsb.base", "::gsb_protocol::base")` verir — `gsb.base`
+tipleri ikinci kez ÜRETİLMEZ, `gsb-protocol`'ün ürettikleri kullanılır
+(iki kopya aynı baytı kodlar ama ayrı Rust tipi olurdu; kaldırılan
+duplikasyon tam olarak bu). `base.proto`'nun dizini `gsb-protocol`'ün
+`links = "gsb-base-proto"` anahtarı üzerinden `DEP_GSB_BASE_PROTO_DIR`
+olarak dependent'a taşınır. `gsb_core::rpc::RpcReply` →
+`gsb.base.RpcResponse` dönüşümü de core'da (`From` impl'i): oyun crate'i
+alan eşlemesini ve proto3'ün dayattığı `u16 → u32` genişletmesini elle
+yazmaz.
+
+**Elenen alternatifler:**
+
+1. **Bayt-birebir duplikasyon + uygunluk testi** (zarfı iki dosyada da
+   tanımla, testle kilitle). Görev tanımının açıkça izin verdiği geri
+   dönüş yoluydu; gerekmedi. Cross-crate proto import'u `extern_path` ile
+   sorunsuz çalıştı, build sırası problemi yok (build script yalnız .proto
+   DOSYASINI ister, derlenmiş crate'i değil). Duplikasyon her oyun
+   crate'inde bir kopya daha demekti — kapatılan asimetrinin aynısı.
+2. **Göreli include yolu** (`../gsb-protocol/proto`). Bu workspace'te
+   çalışır, `gsb-protocol` registry'den geldiği anda kırılır — ki README'nin
+   "yeni oyun = yeni `gsb-game`" senaryosu tam olarak odur. `links` +
+   `DEP_*` cargo'nun bu iş için tanımlı mekanizması.
+3. **`RpcResponse`'a kendi opcode'unu vermek** (core'un kendi frame'iyle
+   cevaplaması). Zarfın yeri düzelirdi ama teslim modeli bozulurdu: cevap
+   şu an bağlantı başına tek tick'lik `Private` frame'ine biniyor
+   (sınırlı, atfedilmiş, ek kanalsız). Ayrı frame = tick başına ikinci
+   frame + yeni opcode = tel değişikliği. Görev "sahiplik refactor'ü, tel
+   refactor'ü değil" diyordu.
+4. **`Private`'ı da base'e taşımak.** `Private` gerçekten oyun mesajı:
+   `InputAck` ve `WorldSnapshot` oneof kolları oyun tipleridir. Sahiplik
+   kuralı (yukarıda) onu `game.proto`'da tutar.
+
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
 ```rust

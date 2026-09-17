@@ -157,6 +157,31 @@ pub struct RpcReply {
     pub payload: Bytes,
 }
 
+impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
+    /// The reply's wire shape. Kept HERE, next to the request decoding,
+    /// because the core owns the whole correlated-request envelope —
+    /// both halves now live in `base.proto`. Without it every game crate
+    /// re-writes this mapping (and the `u16 -> u32` op widening the
+    /// proto3 type system forces) by hand, which is the per-game
+    /// duplication the envelope's move to the base protocol removes.
+    ///
+    /// Takes `&RpcReply`: the room hands the logic a *slice* of queued
+    /// replies for the tick and keeps ownership (a reply may be shaped
+    /// into more than one encoder — see the AOI one-shot path).
+    fn from(r: &RpcReply) -> Self {
+        Self {
+            id: r.id,
+            ok: r.ok,
+            // The op space is `u16` by protocol contract; proto3 has no
+            // 16-bit integer, so the wire field is `uint32` and this
+            // widening is lossless and total.
+            op: u32::from(r.op),
+            reason: r.reason.clone(),
+            payload: r.payload.to_vec(),
+        }
+    }
+}
+
 /// An in-flight external request: the correlation id, the inner op
 /// (echoed in the answer, so the deferred reply can be shaped like the
 /// same-tick ones without re-reading the original request), and the
