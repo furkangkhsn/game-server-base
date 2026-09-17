@@ -98,6 +98,30 @@ impl super::ConnectionActor {
             unknown if unknown < gsb_protocol::op::GAME_BAND_START => {
                 self.reply_err(ProtoError::UnknownOpcode(unknown)).await;
             }
+            // Unknown *game-band* opcode. The message table is this
+            // server's wire contract (DESIGN §5: messages are registered
+            // there opcode -> codec, built once at startup and shared
+            // read-only), so an opcode absent from it is not a message
+            // this server speaks — including a RETIRED number, which
+            // `wire_contract.rs` guarantees stays unregistered forever.
+            // No legitimate client can send one, exactly as for the base
+            // band above, so it is the same hard violation.
+            //
+            // Without this the band boundary decided whether garbage was
+            // free: base-band garbage was budgeted and closed after four
+            // frames, while an authenticated client could send undefined
+            // game-band opcodes forever at zero cost. Each one was
+            // decoded, forwarded, PULLED by the room (spending its
+            // per-tick budget) and only then silently discarded by the
+            // game's ingest — no answer, no score, no bound.
+            //
+            // Checked BEFORE the room-state test below, so the classes
+            // stay distinct: an undefined opcode is hostile whatever the
+            // room state, while a REGISTERED game op arriving after a
+            // leave is the ordinary ~1-RTT stray and keeps its race class.
+            unknown if !self.table.is_registered(unknown) => {
+                self.reply_err(ProtoError::UnknownOpcode(unknown)).await;
+            }
             // Game band: the game crate owns these opcodes (the message
             // table is built per game); the room's ingest decides.
             _ => self.forward_to_room(frame).await,

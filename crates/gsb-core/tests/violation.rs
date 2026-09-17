@@ -32,6 +32,25 @@ fn frame(op: u16, payload: &[u8]) -> gsb_protocol::FrameBody {
     gsb_protocol::FrameBody::new(op, payload.to_vec())
 }
 
+/// The message table these tests drive the actor with. It is
+/// `base_table()` plus ONE registered game-band opcode at
+/// [`op::GAME_BAND_START`], because that is what a real server's table
+/// always looks like: `build_table()` composes the base messages with the
+/// game's `register()`. The bare base table would model a server whose
+/// game defines no messages at all, under which every game-band opcode is
+/// undefined — and since an undefined game-band opcode is now a hard
+/// violation (the actor's `is_registered` check), the stray-frame test
+/// below would be testing the wrong class entirely.
+///
+/// `Heartbeat` stands in for the game message: nothing here decodes a
+/// game-band payload (the actor forwards those encoded), so only the
+/// opcode's PRESENCE in the table matters.
+fn test_table() -> gsb_protocol::MessageTable {
+    let mut table = base_table();
+    table.reg::<Heartbeat>(op::GAME_BAND_START);
+    table
+}
+
 /// Spawn a connection actor with a *dead* registry (no receiver: every
 /// registry send fails immediately) and a drained-by-nobody metrics
 /// channel. Returns the inbox sender and the out receiver.
@@ -49,7 +68,7 @@ fn spawn_actor(
     let actor = ConnectionActor::new(
         ConnectionId(conn),
         SocketAddr::from(([127, 0, 0, 1], 40_000u16 + conn as u16)),
-        Arc::new(base_table()),
+        Arc::new(test_table()),
         reg_tx,
         inbox,
         out_tx,
@@ -280,5 +299,97 @@ async fn double_auth_is_a_hard_violation() {
             .is_none(),
         "teardown after the close"
     );
+    handle.await.expect("actor exits");
+}
+
+/// Post-auth garbage is not free: a game-band opcode the message table
+/// does not define is a HARD violation, exactly like an unknown
+/// base-band opcode.
+///
+/// Before this, the band boundary decided whether garbage cost anything.
+/// An unknown base-band opcode was answered and budgeted; an undefined
+/// GAME-band opcode was forwarded blind, pulled by the room out of its
+/// per-tick budget, and silently discarded by the game's ingest — no
+/// answer, no score, no bound, forever. An authenticated client could
+/// therefore keep the whole inbound path busy at zero cost to itself.
+///
+/// `op::GAME_BAND_START + 1` is deliberately NOT registered by
+/// `test_table()`, so it models exactly that: a well-formed frame in the
+/// game band carrying an opcode this server does not speak.
+#[tokio::test]
+async fn undefined_game_band_opcode_is_a_hard_violation() {
+    let (in_tx, mut out, handle) = spawn_actor(5);
+    let undefined = op::GAME_BAND_START + 1;
+
+    // Weight 4 each, budget 16: answered on 1-3, closed on the 4th.
+    for _ in 0..4 {
+        in_tx
+            .send(ConnIn::Frame(frame(undefined, &[])))
+            .await
+            .expect("inbox open");
+    }
+    let mut codes = Vec::new();
+    for _ in 0..4 {
+        let (code, _) = read_err(&mut out).await.expect("answered");
+        codes.push(code);
+    }
+    assert_eq!(
+        codes,
+        vec![1, 1, 1, 9],
+        "an undefined game-band opcode answers code 1 and exhausts the \
+         budget at the same rate as an undefined base-band one"
+    );
+    assert!(
+        tokio::time::timeout(WAIT, out.recv())
+            .await
+            .unwrap()
+            .is_none(),
+        "the connection is torn down after the budget close"
+    );
+    handle.await.expect("actor exits");
+}
+
+/// The converse, so the rule cannot degenerate into "all game traffic is
+/// hostile": a REGISTERED game-band opcode arriving while the connection
+/// is not in a room keeps its RACE class (weight 1, code 6) — the
+/// legitimate ~1-RTT stray after a leave. The two classes are decided by
+/// whether the server defines the opcode, never by room state.
+#[tokio::test]
+async fn registered_game_band_opcode_keeps_its_race_class() {
+    let (in_tx, mut out, handle) = spawn_actor(6);
+
+    // Four strays of a DEFINED game op: at weight 1 that is score 4,
+    // nowhere near the budget — an undefined opcode would have closed
+    // the connection on this very count.
+    for _ in 0..4 {
+        in_tx
+            .send(ConnIn::Frame(frame(op::GAME_BAND_START, &[])))
+            .await
+            .expect("inbox open");
+    }
+    for _ in 0..3 {
+        let (code, _) = read_err(&mut out).await.expect("answered");
+        assert_eq!(code, 6, "a defined op out of room is not-in-a-room");
+    }
+    assert!(
+        read_err_quiet(&mut out).await.is_none(),
+        "the 4th is silent (answer limit), not a close"
+    );
+
+    // Still alive.
+    let hb = Heartbeat { tick: 1 }.encode_to_vec();
+    in_tx
+        .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
+        .await
+        .expect("inbox open");
+    let batch = tokio::time::timeout(WAIT, out.recv())
+        .await
+        .expect("timed out")
+        .expect("out open");
+    assert!(
+        batch.iter().any(|f| f.op == op::base::HEARTBEAT_ACK),
+        "the connection survives defined-opcode strays"
+    );
+    in_tx.send(ConnIn::Shutdown).await.expect("inbox open");
     handle.await.expect("actor exits");
 }
