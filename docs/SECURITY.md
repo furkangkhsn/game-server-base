@@ -11,6 +11,8 @@
 | TCP üstüne TLS (rustls) | Tur A | ✅ Uygulandı |
 | Auth rate-limit + pre-auth amplifikasyon sınırı | Tur B | ✅ Uygulandı |
 | Pre-auth oturum tahsis sınırı | Tur B | ✅ Uygulandı |
+| Post-auth HEARTBEAT_ACK kısması (§3.2'nin ikinci yarısı) | Bağlantı sınırları turu | ✅ Uygulandı |
+| Tıkanmış yazmaya süre sınırı (`write_stall_secs`) | Bağlantı sınırları turu | ✅ Uygulandı (§3.5) |
 | rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
@@ -48,9 +50,68 @@
 | # | Karar | Gerekçe |
 |---|---|---|
 | 1 | **AUTH deneme limiti:** bağlantı başına 10 sn pencerede 3 deneme; aşımı HARD-violation (bütçe puanı) | Mevcut ihlal-bütçesi makinesinin yeniden kullanımı — yeni mekanizma yok; meşru istemci 3 denemede asla aşmaz |
-| 2 | **Pre-auth HEARTBEAT yanıtı:** auth öncesi en fazla 1/sn cevap; fazlası sessizce sayılır (RACE-violation değil, sayaç) | HEARTBEAT 1:1 cevap amplifikasyonunun kapatılması; auth sonrası heartbeat dokunulmaz (liveness sinyali) |
+| 2 | **HEARTBEAT yanıtı (her iki faz):** en fazla 1/sn cevap; fazlası sessizce sayılır (RACE-violation değil, sayaç) | HEARTBEAT 1:1 cevap amplifikasyonunun kapatılması. **GÜNCELLENDİ** (bağlantı sınırları turu): kural artık auth sonrasını da kapsıyor — aşağıya bakınız |
 | 3 | **Pre-auth toplam frame bütçesi:** auth başarısına kadar toplam N=64 frame; aşımında bağlantı kapanır (ERROR 9) | Auth etmeden sonsuz kontrol-frame üretebilmenin kapatılması; N meşru el sıkışmayı (AUTH+JOIN+heartbeat'ler) fazlasıyla karşılar |
 | 4 | Hepsi bağlantı actor'ünün yerel durumunda — kilit/kanal eklenmez | Mevcut violation-budget ile aynı desen |
+
+### 3.2'nin ikinci yarısı — post-auth kısma (bağlantı sınırları turu)
+
+Tur B'nin kararı yalnız `WaitingAuth` fazına bağlıydı; auth başarısından
+sonra her heartbeat koşulsuz cevaplanıyordu, yani mimarinin tek 1:1
+gelen→giden dönüşümü kimliği doğrulanmış istemcilere sınırsız açıktı.
+Aynı mekanizma sınırın ötesine taşındı — yeni bir makine değil, aynı
+eşik.
+
+**Neden istemciye görünen semantik değişmiyor:** düzgün bir istemci
+saniyede bir heartbeat atar, yani eşiğin kendi temposundadır; her
+cevabını ve `HeartbeatAck.tick`'ten okuduğu RTT'yi olduğu gibi alır.
+Saniyede binlerce atan bir istemci aralık başına bir cevap alır, gerisi
+sayılır.
+
+**Canlılıkla etkileşim (doğrulandı, teste kilitlendi):** idle penceresini
+sıfırlayan şey frame'in GELMESİDİR, cevabı değil (`pump.rs` her okumayı
+yeniden sarar). Yani cevapsız bırakılan bir heartbeat göndericisini asla
+"sessiz" göstermez. Kilit:
+`e2e.rs::active_heartbeat_survives_the_idle_window` — eşiğin
+cevapladığından dört kat hızlı heartbeat atan istemci
+beş saniye boyunca hiç kapatılmıyor, ve ack sayısı İKİ taraftan da
+doğrulanıyor (hâlâ cevaplanıyor; artık gönderim hızıyla 1:1 değil).
+
+**Saat tek, sayaç iki.** Saat tek çünkü kısma tek bir hız sınırlayıcıdır;
+auth başarısında BİR kez sıfırlanır (§3.3 frame bütçesini emekliye ayıran
+aynı faz sınırı), bu da bağlantı ömrü boyunca tam olarak bir fazladan
+cevap eder (AUTH bir kez başarılı olur) ve "authenticated oturumun ilk
+heartbeat'i her zaman cevaplanır" garantisini verir. Sayaçlar ayrı çünkü
+farklı soruları yanıtlarlar: pre-auth fazlalık §3.2'nin GÜVENLİK sinyali
+(yanında §3.3 bütçesi ve §4 cap'i vardır, çare bir pre-auth guardrail'i
+sıkmaktır), post-auth fazlalık ise BİLİNEN bir istemcinin heartbeat
+zamanlayıcısının bozuk olduğunu söyler — bir hata raporu, bir saldırı
+değil.
+
+**Bütçeye yazılmıyor** (pre-auth gerekçesinin aynısı): kısma zaten
+maliyeti sınırlıyor, dolayısıyla puanlamak düşman tarafında hiçbir şey
+kazandırmaz; yalnız dürüst-ama-hatalı istemciyi (gevşek bir NAT
+keepalive'ı) zorla düşürür.
+
+## 3.5. Oturum yaşam döngüsü: iki saat, iki yön
+
+Reader pump'un idle penceresi (`idle_timeout_secs`) yarım-açık TCP'yi
+yakalar. Soketin DİĞER yarısı bağlantı sınırları turuna kadar sınırsızdı:
+okumayı bırakan ama bağlantısını açık tutan bir istemcinin alım penceresi
+kapanır, writer pump soket yazmasının içinde süresiz park eder, giden
+kanal DOLU kalır (KAPALI değil — yani `w_closing` teardown'ı tetiklenmez),
+oda her tick bir frame düşürür ve oturum hiçbir şey alamazken oda
+slot'unu ve registry satırını tutmaya devam eder. Gelen sessizlik bunu
+göremez, çünkü böyle bir istemcinin sessiz olması gerekmez (ROADMAP'teki
+şekil tam olarak "okumayı bırakan ama göndermeye devam eden" istemcidir).
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **`write_stall_secs` (vars. 10 sn; `0` kapatır)** — soketine bu süre boyunca hiçbir şey BAŞARIYLA yazılamamış bağlantı olağan teardown'la kapatılır | rUDP REL bandının canlılık sınırının TCP tarafındaki kardeşi; `idle_timeout_secs` ile aynı sözleşme (f64 saniye, `0` kapalı) — ikisi bir çifttir, yön başına bir saat |
+| 2 | Ölçü **İLERLEME**, yaş değil | Yaş düşük-Hz odayı cezalandırır, yüksek-Hz'i ödüllendirir. İlerleme ise tam ayırmak istediğimiz iki istemciyi ayırır: geride kalan ama HÂLÂ BOŞALTAN istemcinin yazmaları tamamlanır ve saat her birinde yeniden başlar ("yavaş istemci tolere edilir" sözleşmesi aynen durur, düşen snapshot'ları eskisi gibi sayılır); hiç boşaltmayan istemcininki hiç tamamlanmaz |
+| 3 | Saat writer pump'un yazma deadline'ında; bağlantı başına zamanlayıcı görev YOK | Reader'ın idiomunun aynısı: tek awaited işlemi bir deadline'a sarmak (`tokio::time::timeout` tek future'a; ikinci canlı kaynak değil) |
+| 4 | Verdict aktörün mailbox'ından gider, soketten değil; ve `sink.close()` çağrılmaz | Teardown, tıkanmış olan şeyin bir bayt daha kabul etmesini asla gerektirmemeli (rUDP `die()` ile aynı ilke) |
+| 5 | rUDP bu saati almaz | Datagram `try_send_to` park etmez; o yönün canlılığı REL bandının ACK-ilerleme saatidir |
 
 ## 4. Pre-auth tahsis sınırı (Tur B)
 
@@ -68,6 +129,12 @@ handshake-timeout kapanması.
 Tur B: auth flood → bütçe tükenimi + kapanma; pre-auth heartbeat
 fırtınası → sessiz sayaç; 64-frame aşımı → ERROR 9; unauthed cap
 dolunca yeni bağlantının reddi + authed olanın etkilenmemesi.
+Bağlantı sınırları turu: post-auth heartbeat fırtınası → aralık başına
+tek cevap + sessiz sayaç + puanlanmama (`security.rs`), auth sınırının
+tek sıfırlaması (`security.rs`), kısma ile idle penceresinin dikişi
+(`e2e.rs`); hiç okumayan peer → writer pump'un stall raporu ve soketi
+beklemeden çıkışı (`gsb-net` `tcp::tests::stall`), ve uçtan uca oturumun
+bitişi + registry satırının bırakılışı (`write_stall.rs`).
 
 ## 6. NOT-DONE
 

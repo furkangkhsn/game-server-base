@@ -75,13 +75,14 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **340** (340/340 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 için `docs/CHANGELOG.md`
-başlığına bakınız). Son tur: **park sızıntısı + shard metrik boşluğu** —
-politika park etmeyi reddettiğinde (`disconnect_grace_secs = 0`, yani
-varsayılan) registry satırının kalıcı olarak sızması kapatıldı
-(`ParkExpired` → `DetachDespawned`), shard'ın `step_fine_hist`'i
-dolduruldu.
+Test sayısı: bugün itibarıyla **344** (344/344 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 için `docs/CHANGELOG.md`
+başlığına bakınız). Son tur: **bağlantı sınırları** — bekleyen dört ürün
+kararından ikisi kapandı: tıkanmış yazmaya süre sınırı
+(`write_stall_secs`, ilerleme tabanlı) ve post-auth HEARTBEAT_ACK
+kısması. İkisi de mevcut mekanizmaların simetrik tamamlanmasıdır: biri
+reader'ın idle saatinin yazma tarafındaki eşi, öteki §3.2 eşiğinin auth
+sınırının ötesine taşınması.
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -344,13 +345,27 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     (`w_closing`, mevcut `v_closing`/`p_closing` deseni; yeni mesaj
     sınıfı, süpürme, zamanlayıcı ya da tick gövdesine await YOK).
     Kilit: `tests/half_dead.rs`.
-  - [ ] **Ürün kararı 1 — tıkanmış yazma.** `sink.send().await`'in
-    süresi yok: okumayı bırakan ama göndermeye devam eden bir istemci
-    writer'ı süresiz park eder (kanal `Full`, `Closed` değil), oda her
-    tick `dropped_frames` sayar ve slot durur. Düzeltmek bir *eşik*
-    ister (kaç saniye? kaç ardışık düşme?) ve mevcut "yavaş istemci
-    tolere edilir; snapshot kendi kendine yeter, keepalive bayatlığı
-    sınırlar" kararıyla çelişir. Sayı ürün kararıdır.
+  - [x] **Kapandı — tıkanmış yazma (bağlantı sınırları turu).**
+    Kullanıcı kararı: eşik **süre** cinsinden, ve ölçü **İLERLEME**
+    (yaş değil) — `write_stall_secs`, varsayılan 10 sn, `0` kapatır,
+    `idle_timeout_secs`'in sözleşmesiyle birebir. Soketine bu süre
+    boyunca hiçbir şey başarıyla yazılamamış bağlantı olağan teardown'la
+    kapanır. "Yavaş istemci tolere edilir" sözleşmesiyle çelişmiyor,
+    çünkü geride kalan ama hâlâ boşaltan istemcinin her tamamlanan
+    yazması saati yeniden başlatır; düşen snapshot'ları eskisi gibi
+    sayılır. Saat writer pump'un yazma deadline'ında (reader'ın
+    idiomunun aynısı), verdict aktörün mailbox'ından gider ve
+    `sink.close()` çağrılmaz — teardown, tıkanmış olanın bir bayt daha
+    kabul etmesini gerektirmez. Kilitler: `gsb-net`
+    `tcp::tests::stall` (gerçek loopback, hiç okumayan peer + tersi) ve
+    `write_stall.rs` (uçtan uca: oturum biter, registry satırı bırakılır
+    — QUIC kapısından, çünkü alım penceresini İSTEMCİ ayarlar, yani
+    koşul megabayt yerine kilobaytla zorlanır). SECURITY §3.5.
+
+    Turda çıkan yan bulgu: kanal dolduğunda aktörün kendisi de
+    `send_frame`'de park ediyor, inbox doluyor ve reader `in_tx.send`'de
+    parkediyordu — yani idle deadline'ı ARTIK KURULMUYORDU bile. Yeni
+    saat bu düğümün dışındadır (writer'ın kendi görevindedir).
   - [ ] **Ürün kararı 2 — AFK/zombi oturum.** Canlılık "herhangi bir
     frame" olarak tanımlı (`config.example.toml`: heartbeat dahil), yani
     yalnızca heartbeat atan bir oturum **tasarım gereği** ölümsüz. Bunu
@@ -399,13 +414,21 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     parametresidir, ve SECURITY §3'ün pre-auth heartbeat'leri
     bilerek bütçelememe gerekçesiyle (dürüst-ama-hatalı istemciyi
     zorla düşürmek) aynı riski taşır.
-  - [ ] **Ürün kararı — post-auth HEARTBEAT_ACK amplifikasyonu.**
-    Auth sonrası her heartbeat koşulsuz cevaplanıyor (`frame.rs`): tek
-    1:1 gelen→giden dönüşümü bu. SECURITY §3 kararı 2 bunu pre-auth'ta
-    kapattı ama post-auth'u "liveness sinyali" diye dokunulmaz bıraktı.
-    Kısmak istemciye görünen semantiği değiştirir (RTT ölçen bir
-    istemci heartbeat başına cevap bekler) ve `e2e.rs::
-    active_heartbeat_survives`'ın kenarına değer.
+  - [x] **Kapandı — post-auth HEARTBEAT_ACK amplifikasyonu (bağlantı
+    sınırları turu).** Kullanıcı kararı: aynı §3.2 eşiği auth sınırının
+    ötesine taşındı (yeni makine yok). Semantik endişesi ölçüldü ve
+    geçersiz çıktı: düzgün bir istemci saniyede bir heartbeat atar, yani
+    eşiğin kendi temposundadır — her cevabını ve `HeartbeatAck.tick`'ten
+    okuduğu RTT'yi olduğu gibi alır. Saat tek (auth başarısında BİR
+    sıfırlama: authenticated oturumun ilk heartbeat'i her zaman
+    cevaplanır), sayaç iki (pre-auth fazlalık güvenlik sinyali,
+    post-auth fazlalık istemci-kalitesi sinyali — birleştirmek
+    §3.2'nin sayacına kendi sorusunu yanıtlatamaz hale getirirdi).
+    Fazlalık bilerek bütçeye YAZILMIYOR (pre-auth gerekçesinin aynısı).
+    `active_heartbeat_survives_the_idle_window` gevşetilmedi,
+    GÜÇLENDİRİLDİ: artık kısma ile idle penceresinin dikişini pinliyor
+    (penceresini sıfırlayan frame'in GELMESİ, cevabı değil) ve ack
+    sayısını iki taraftan da doğruluyor. SECURITY §3.2.
 - [ ] **Koordinat formatı kararı** — `sint32` (zig-zag varint, tam sayı) wire vs `f32`
   simülasyon: 30 Hz × 10 u/sn'de tick başına 0.33 birim → istemci 3
   tick'te bir değişim görür (delta turunda bu kuantizasyon **gap

@@ -7,15 +7,18 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-340 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+344 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
-**dört maddeyi ürün kararına bıraktı** — tıkanmış yazmaya süre sınırı,
-AFK/zombi oturum politikası, geçerli girdiye hacim limiti, post-auth
-HEARTBEAT_ACK kısması. Dördü de bir SAYI ya da istemciye görünen
-semantik değişikliği ister; tek başına verme, ROADMAP'teki gerekçeleri
-oku.
+**dört maddeyi ürün kararına bıraktı**. Bunlardan **ikisi kapandı**
+(CHANGELOG "bağlantı sınırları turu"): tıkanmış yazmaya süre sınırı
+(`write_stall_secs`, ilerleme tabanlı, vars. 10 sn) ve post-auth
+HEARTBEAT_ACK kısması (§3.2 eşiği auth sınırının ötesine taşındı).
+**İkisi hâlâ açık** — AFK/zombi oturum politikası ve geçerli girdiye
+hacim limiti. İkisi de bir oynanış parametresi seçmeyi ister (mevcut bir
+mekanizmayı simetrik tamamlamayı değil, ki kapanan ikisi oydu); tek
+başına verme, ROADMAP'teki gerekçeleri oku.
 
 O turun açık yan bulgusu (`step_fine_hist` shard aktöründe hiç
 yazılmıyor) **kapandı** — bkz. CHANGELOG "park sızıntısı + shard metrik
@@ -140,6 +143,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 340 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 344 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

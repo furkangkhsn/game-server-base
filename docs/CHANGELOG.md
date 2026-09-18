@@ -5,6 +5,199 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (bağlantı sınırları turu)
+
+Teknik borç turunun ürün kararına bıraktığı **dört** maddeden **ikisi**
+kapandı — ikisi de yeni bir makine değil, var olan bir mekanizmanın
+simetrik tamamlanması:
+
+1. **Tıkanmış yazmaya süre sınırı** (`write_stall_secs`) — reader
+   pump'un idle saatinin soketin öteki yarısındaki eşi, ve rUDP REL
+   bandının geçen turda inen canlılık sınırının TCP tarafındaki kardeşi.
+2. **Post-auth HEARTBEAT_ACK kısması** — SECURITY §3.2 eşiğinin auth
+   sınırının ötesine taşınması.
+
+Açık kalan iki madde (AFK/zombi oturum politikası, geçerli girdinin
+hacmi) bu turda **kasıtlı olarak ellenmedi**: ikisi de bir oynanış
+parametresi seçmeyi ister, mevcut bir mekanizmayı tamamlamayı değil.
+
+Test sayısı 340 → **344** (+4; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi — üç test SÖZLEŞME DEĞİŞİKLİĞİNE uyarlandı,
+aşağıda). İki düzeltme de mutation-verified.
+
+### 1. `5e17056` — tıkanmış giden yol ilerlemeye bağlandı
+
+**Bulgu (koddan doğrulandı).** Giden yolun iki ucu zaten ele alınmıştı:
+kanal DOLU ise oda batch'i düşürür ve sayar (tasarım gereği yavaş
+istemci tolere edilir), kanal KAPALI ise bağlantı yıkılır (`w_closing`,
+iki tur önce). Arada kalan durumun sınırı yoktu: okumayı bırakan bir
+istemcinin alım penceresi kapanır → `FrameWriter::poll_ready`/`poll_flush`
+`drain`'de `poll_write`'ı Pending görür → writer pump `sink.send().await`
+içinde süresiz park eder → kanal DOLU kalır (asla KAPALI olmaz) → oda her
+tick `dropped_frames` sayar → oturum hiçbir şey alamazken oda slot'unu ve
+registry satırını tutar. Reader'ın idle penceresi bunu göremez: o GELEN
+sessizliği izler, ve böyle bir istemcinin sessiz olması gerekmez.
+
+**Turda çıkan, beklenenden kötü olan yan bulgu.** Kanal dolduğunda
+zincir bununla da kalmıyordu: bağlantı aktörünün kendisi `send_frame`'in
+`self.out.send(..).await`'inde park eder, inbox'ı dolar, ve reader pump
+`in_tx.send(..).await`'te park eder — reader'ın deadline'ı yalnız
+`stream.next()`'i sarar, `send`'i değil. Yani idle penceresi bu noktadan
+sonra ARTIK KURULMUYORDU bile. Üç görev, iki kanal ve bir registry satırı
+process ömrü boyunca kilitli kalıyordu; hiçbir katman fark edemezdi.
+
+**Elenen alternatifler.**
+
+- **Yaşa bağlamak** ("bir frame N saniyedir gönderilemedi"). Elenme
+  gerekçesi: düşük-Hz odayı cezalandırır, yüksek-Hz'i ödüllendirir —
+  aynı tıkanma 5 Hz'lik bir odada daha geç, 120 Hz'likte daha erken
+  fark edilirdi; oysa ölçülen şey soketin durumudur, odanın temposu
+  değil. Ayrıca istenen sözleşme (tıkla değil SÜREYLE) bunu zaten
+  dışlıyordu.
+- **Ardışık düşme sayısına bağlamak** ("oda üst üste N batch düşürdü").
+  Elenme gerekçesi: aynı tick-bağımlılığı, artı yanlış katman — düşme
+  ODANIN gözlemi, tıkanma ise SOKETİN durumu; kanal dolu ama soket
+  boşalıyor olabilir (gerçek yavaş istemci) ve o istemci ölmemeli.
+- **Bağlantı başına zamanlayıcı görev / süpürme mesajı.** Elenme
+  gerekçesi: mimari kuralı (bağlantı başına yeni görev yok; aktörün tek
+  await'i mailbox'ı) ve reader'ın zaten kanıtlanmış idiomu varken
+  gereksiz — deadline tek awaited işlemin etrafına sarılır.
+- **Aktörün `out.send`'ini `try_send`'e çevirmek.** Elenme gerekçesi:
+  kontrol frame'lerini (AUTH_RESULT, ERROR) sessizce düşürürdü;
+  tıkanmanın TEŞHİSİ değil, semptomunu gizlemek olurdu.
+
+**Seçilen:** İLERLEME. Soketine `write_stall_secs` boyunca hiçbir şey
+başarıyla yazılamamışsa yön ölüdür. Bu, ayırmak istediğimiz iki
+istemciyi tam olarak ayırır: geride kalan ama HÂLÂ BOŞALTAN istemcinin
+her yazması tamamlanır ve saati yeniden başlatır (sözleşme aynen durur,
+düşen snapshot'ları eskisi gibi sayılır); hiç boşaltmayanınki hiç
+tamamlanmaz. Varsayılan 10 sn: loopback/LAN'da soketin bir bayt bile
+kabul etmediği on saniye yavaşlık değildir.
+
+Mekanik reader'ın precedent'ini birebir izler — tek awaited işlem bir
+deadline'a sarılır (`tokio::time::timeout` TEK future'a; ikinci canlı
+kaynak değil), ve deadline son tamamlanan yazmadan bu yana pencereden
+KALANI kadardır, yani N frame'lik bir batch N değil bir pencere alır.
+Beklemek stall değildir: kanal boşken saat yeniden başlar.
+
+Koşulun kendisinin dayattığı iki ayrıntı: stall çıkışı `sink.close()`
+ÇAĞIRMAZ (nazik kapanış flush eder, ve çalışmayan şey tam olarak
+flush'tır), ve raporlamadan ÖNCE giden kanalın alıcısını düşürür — böylece
+aktörün kendi sonraki `send`'i, dolu olması bu pump'ın boşaltmayı
+bırakmasından kaynaklanan bir kanalda park etmek yerine hızlıca hata
+verir. Olağan çıkışlar da artık aynı pencere altında kapanıyor: çıkarken
+tıkanan bir soket önceden writer görevini sonsuza dek tutabiliyordu.
+
+Konfig `idle_timeout_secs`'in sözleşmesini birebir alır (f64 saniye,
+`0` kapatır, kullanım anında map'lenir) ve yanına konur. `Endpoint::
+start_pump` artık çıplak bir idle `Option<Duration>` yerine
+`PumpTimeouts` çiftini alır: yön başına bir saat, ikisi de isimli.
+rUDP ikisini de yok sayar (gelen sessizlik demux deadline heap'inin
+işi, giden canlılık REL bandının ACK-ilerleme saati; datagram
+`try_send_to` park etmez).
+
+**Kilitler.** `gsb-net` `tcp::tests::stall`: GERÇEK loopback soketi,
+bağlantıyı kabul edip hiç okumayan bir peer, ve writer'ın stall'ı
+raporlayıp soket hiçbir şey kabul etmeden ÇIKIŞI. Tersi: boşlukları
+pencereden UZUN olan bir damla akış asla stall sayılmaz (beklemek de
+stall değildir). `write_stall.rs` uçtan uca: odaya giren, göndermeye
+devam eden ve okumayı bırakan bir peer oturumunu ve registry satırını
+kaybeder. Bu sonuncusu QUIC kapısından koşar — saat paylaşılan pump'ta
+yaşadığı için her stream kapısı aynı kodu çalıştırır, ve alım
+penceresini İSTEMCİ ayarlayabilen tek kapı QUIC'tir; böylece "okumayı
+bıraktı" koşulu megabaytlarca çekirdek tamponu yerine kilobaytla
+zorlanır.
+
+**Mutation-check:** saati kapat → iki stall testi de kırmızı;
+beklerken-sıfırlamayı kaldır → ters test kırmızı.
+
+### 2. `0e1356e` — HEARTBEAT_ACK kısması auth sınırının ötesine
+
+**Bulgu (koddan doğrulandı).** §3.2'nin 1/sn cevap eşiği yalnız
+`ConnState::WaitingAuth`'a bağlıydı; auth başarısından sonra her
+heartbeat koşulsuz cevaplanıyordu. Mimarinin tek 1:1 gelen→giden
+dönüşümü, kimliği doğrulanmış istemcilere sınırsız açıktı.
+
+**Endişe ölçüldü ve geçersiz çıktı.** ROADMAP maddesi kısmanın
+"istemciye görünen semantiği değiştireceğini" söylüyordu. Düzgün bir
+istemci saniyede bir heartbeat atar, yani eşiğin kendi temposundadır:
+her cevabını ve `HeartbeatAck.tick`'ten okuduğu RTT'yi olduğu gibi alır.
+Değişen tek şey, saniyede binlerce atan istemcinin artık aralık başına
+bir cevap alması.
+
+**Canlılık etkileşimi (doğrulandı).** idle penceresini sıfırlayan şey
+frame'in GELMESİDİR, cevabı değil (`pump.rs` her okumayı yeniden sarar),
+dolayısıyla cevapsız bırakılan bir heartbeat göndericisini asla sessiz
+göstermez. Heartbeat'i başka hiçbir sunucu mekanizması okumaz.
+
+**Elenen alternatifler.**
+
+- **Fazlalığı ihlal bütçesine yazmak.** Elenme gerekçesi: pre-auth alan
+  dokümanının gerekçesinin aynısı — kısma zaten maliyeti sınırlıyor
+  (bağlantı başına aralıkta bir küçük ACK), o yüzden puanlamak düşman
+  tarafında hiçbir şey kazandırmaz; yalnız gevşek bir NAT keepalive'ını
+  ya da bozuk zamanlayıcılı bir istemciyi zorla düşürürdü. Tanımsız
+  opcode bozuk/düşman istemci KANITIDIR; canlılık yoklaması değildir.
+- **İki ayrı saat (faz başına bir tane).** Elenme gerekçesi: kısma TEK
+  bir hız sınırlayıcıdır; iki saat iki mekanizma olurdu.
+- **Sayaçları birleştirmek.** Elenme gerekçesi: ikisi farklı soruları
+  farklı çarelerle yanıtlıyor. KİMLİKSİZ bir peer'ın fazlalığı §3.2'nin
+  güvenlik sinyalidir (yanında §3.3 bütçesi ve §4 cap'i vardır; çare bir
+  pre-auth guardrail'i sıkmaktır); kimliğini kanıtlamış bir peer'ınki
+  BİLİNEN bir istemcinin heartbeat zamanlayıcısının bozuk olduğunu
+  söyler — bir hata raporu. Birleştirmek, tek bir u64 kazanmak için
+  §3.2'nin sayacına kendi sorusunu yanıtlatamaz hale getirirdi.
+- **Auth'ta saati sıfırlamamak.** Elenme gerekçesi: authenticated
+  oturumun ilk heartbeat'i cevapsız kalabilirdi ve AUTH'tan hemen sonra
+  yoklayan bir istemci sessizliği ölü sunucu diye okuyabilirdi. Tek
+  sıfırlamanın bedeli bağlantı ömrü boyunca tam olarak bir fazladan
+  cevaptır (AUTH bir kez başarılı olur; ikincisi hard ihlaldir), yani
+  bir kaldıraç değildir.
+
+**Seçilen:** tek saat (`last_hb_ack`, `HEARTBEAT_ACK_MIN_INTERVAL`), auth
+başarısında bir sıfırlama (§3.3 bütçesini emekliye ayıran aynı faz
+sınırı; artık iki auth yolunun paylaştığı `authenticated()` geçişi), iki
+sayaç (`m_preauth_hb_extra` + `m_hb_extra`, ikisi de aktör-local ve
+debug-log — pre-auth sayacının zaten sahip olduğu şekil).
+
+**Sözleşme değişikliğine uyarlanan testler** (hiçbiri gevşetilmedi;
+kendi özellikleri korundu):
+
+- `security.rs::preauth_heartbeat_flood_is_counted_not_answered` — eski
+  post-auth bölümü 1:1 cevabı iddia ediyordu; artık auth sınırının tek
+  sıfırlamasını ve ardından eşiğin devam ettiğini pinliyor.
+- `half_dead.rs::healthy_out_channel_keeps_the_session_alive` — kendi
+  özelliği ("canlılık trafiği bağlantıyı kesmenin gerekçesi olamaz")
+  korundu: oturum tüm fırtınayı atlatıyor ve aralıktan sonra yeniden
+  cevaplıyor.
+- `e2e.rs::active_heartbeat_survives_the_idle_window` — GÜÇLENDİRİLDİ.
+  Koşu 3,5 → 5 sn, ve ack sayısı artık İKİ taraftan doğrulanıyor: hâlâ
+  boyunca cevaplanıyor (alt sınır, eski iddia) ve gönderim hızıyla artık
+  1:1 değil (üst sınır, yeni iddia). Böylece bu test kısma ile idle
+  penceresinin dikişinin de kilidi oldu.
+
+Yeni kilit:
+`security.rs::postauth_heartbeat_flood_is_answered_once_counted_and_never_scored`
+— bir cevap, otuz dokuz sessiz sayım, ve ihlal
+bütçesinin on katı bir fırtınanın ardından oturumun yalnız `Shutdown` ile
+bitmesi (puanlanmama özelliği).
+
+**Mutation-check:** faz kapısını geri koy → iki crate'te üç test kırmızı.
+
+### Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **344 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` → `left=50 errors=0`, panik yok;
+  `--transport udp` ile de aynı. Registry özet satırları 114c827
+  tabanıyla BİREBİR: TCP `conns=0 opens=50 closes=50`, rUDP
+  `conns=50 opens=50 closes=0` (rUDP'de FIN yoktur — oturumlar demux'un
+  idle süpürmesine kadar yaşar; 3 sn'lik koşu onu görmez). Yani yanlış
+  pozitif bir stall öldürmesi yok: 50 istemcinin hiçbiri eşiğin
+  yakınından geçmiyor (istemciler sürekli okuyor; `out_bps_per_conn`
+  ~11 KB/s).
+
 ## Kapatılanlar (minimum sayaçlar turu)
 
 Bir önceki turun kardeş-alan denetiminin bıraktığı açık bulgu kapandı:
