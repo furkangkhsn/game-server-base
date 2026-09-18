@@ -234,7 +234,7 @@ impl RichRig {
     /// Feed messages into shard 1's CONTROL handler.
     fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState, TRich>>) {
         for m in msgs {
-            assert!(self.s1.handle_msg(m, &tctx(999)), "s1 keeps running");
+            assert!(self.s1.handle_msg(m, 999), "s1 keeps running");
         }
     }
 }

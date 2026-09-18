@@ -88,6 +88,13 @@ where
                     }
                     ExpireTo::AiHandover => {
                         self.m.detach_expired_ai += 1;
+                        // A bot-fed row stays OFF the input-idle clock
+                        // (the park already took it off): the bot's input
+                        // is synthesized inside the logic's `ingest` and
+                        // never crosses an action channel, so it is not
+                        // input by the structural definition — and an
+                        // AI-handover must not become an AFK bypass.
+                        self.idle.stop(pid);
                         if let Some(rc) = self.conns.get_mut(&pid) {
                             rc.bot_fed = true;
                             // The deadline must never re-fire (the row stays

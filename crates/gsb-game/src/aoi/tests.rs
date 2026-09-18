@@ -29,11 +29,12 @@ use gsb_core::room::GameLogic;
 
 mod sharing;
 
-fn ctx(tick: u64) -> TickCtx {
+fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),
         tick,
         dt: Duration::from_secs_f64(1.0 / 30.0),
+        idle: Default::default(),
     }
 }
 

@@ -191,6 +191,32 @@ pub struct RoomConfig {
     /// Default `false`; ordinary `PartialEq` participant like every other
     /// field (a retry carries its class identically).
     pub persistent: bool,
+    /// **Input-idle ceiling**, in seconds — `None` (the default) = OFF.
+    ///
+    /// AFK is a GAME decision, not the base's: standing still in an MMO
+    /// town is legitimate play, thirty motionless seconds in a MOBA is a
+    /// bot-takeover trigger. The base therefore ships the *signal*
+    /// unconditionally ([`crate::room::IdleView`], reachable from every
+    /// tick hook through `TickCtx::since_input`) and leaves the policy to
+    /// the logic. This field is the other half: a capacity SAFETY VALVE
+    /// for operators, not a policy.
+    ///
+    /// When set, a member whose last action-bearing frame is at least
+    /// this old is handed to the ordinary disconnect path — the room
+    /// calls [`crate::room::GameLogic::on_disconnect`], exactly as a dead
+    /// transport does, and the GAME decides park / AI handover / despawn.
+    /// The base despawns nothing on its own: one decision point, and a
+    /// MOBA gets bot-takeover-on-AFK for free.
+    ///
+    /// Off by default because there is no value that is right for every
+    /// game, and a ceiling that fires on a legitimately motionless player
+    /// is worse than no ceiling at all. A parked (detached) or bot-fed
+    /// member is never subject to it — neither has a live input source.
+    ///
+    /// `Some(0)` is treated as OFF as well: a zero ceiling would expire
+    /// every member on its first sweep, which is never what an operator
+    /// means by "0".
+    pub max_idle_input_secs: Option<u64>,
 }
 
 impl Default for RoomConfig {
@@ -212,6 +238,8 @@ impl Default for RoomConfig {
             request_timeout: Duration::from_secs(5),
             restart_on_panic: false,
             persistent: false,
+            // OFF: the feature is invisible until an operator asks for it.
+            max_idle_input_secs: None,
         }
     }
 }
@@ -242,6 +270,14 @@ impl RoomConfig {
     /// construction (and, under `restart_on_panic`, respawning straight
     /// into the same panic forever). A degraded-but-alive room beats a
     /// panic loop: the fallback keeps every derived quantity well-defined.
+    /// The input-idle ceiling as a duration, or `None` when it is off
+    /// (unset, or an explicit `0` — see the field docs).
+    pub(crate) fn max_idle_input(&self) -> Option<Duration> {
+        self.max_idle_input_secs
+            .filter(|s| *s > 0)
+            .map(Duration::from_secs)
+    }
+
     pub fn period(&self) -> Duration {
         let hz = self.tick_hz;
         if hz.is_finite() && hz > 0.0 {

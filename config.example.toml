@@ -178,6 +178,30 @@ max_snapshot_bytes = 1400
 # clamped to every step would defeat the silence-when-unchanged gain.
 keepalive_hz = 1.0
 
+# INPUT-IDLE CEILING (saniye) — KAPALI varsayılan.
+#
+# AFK bir OYUN kararıdır: MMO kasabasında kıpırdamadan durmak meşru
+# oynayıştır, MOBA'da 30 saniye hareketsizlik bot devri tetikleyicisidir.
+# Bu yüzden base yalnızca SİNYALİ koşulsuz yayınlar (oyun mantığı her
+# tick hook'unda `ctx.since_input(player)` ile okur) ve politikayı oyuna
+# bırakır. Bu anahtar politikanın kendisi değil, operatörün kapasite
+# emniyet supabıdır.
+#
+# Açıldığında: son AKSİYON TAŞIYAN karesi bu kadar eski olan bir üye,
+# odanın olağan kopma yoluna verilir — `GameLogic::on_disconnect`
+# çağrılır ve park / AI devri / despawn kararını OYUN verir; base
+# kendiliğinden hiçbir şeyi despawn etmez.
+#
+# "Aksiyon taşıyan" YAPISAL tanımlıdır: bağlantı aktörünün odaya
+# `Action` olarak ilettiği her kare (kayıtlı her oyun-bandı opcode'u +
+# base-bandı RPC istek zarfı). HEARTBEAT bağlantı aktöründe yanıtlanır,
+# odaya hiç ulaşmaz — yani nabız oturumu canlı tutar ama bu saati
+# SIFIRLAMAZ. Park edilmiş (detached) ya da bot beslenen satırlar bu
+# tavana hiç tabi değildir.
+#
+# Anahtarı hiç yazmamak (varsayılan) ve 0 yazmak aynı anlama gelir: KAPALI.
+# max_idle_input_secs = 300
+
 # ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
 # "Konfigürasyon düzeltmesi" — Faz A):
 #

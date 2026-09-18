@@ -13,11 +13,12 @@ use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{GameLogic, TickCtx};
 use prost::Message;
 
-fn ctx1() -> TickCtx {
+fn ctx1() -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),
         tick: 1,
         dt: Duration::from_secs_f64(1.0 / 30.0),
+        idle: Default::default(),
     }
 }
 

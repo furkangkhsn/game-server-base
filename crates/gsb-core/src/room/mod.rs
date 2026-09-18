@@ -70,6 +70,7 @@ mod actor;
 mod config;
 mod control;
 mod counters;
+mod idle;
 mod logic;
 
 #[cfg(test)]
@@ -79,6 +80,8 @@ pub use actor::RoomActor;
 pub use config::RoomConfig;
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
 pub(crate) use counters::{GroupState, RoomConn, RoomCounters};
+pub(crate) use idle::IdleClock;
+pub use idle::IdleView;
 pub use logic::{GameLogic, RoomLogic};
 
 /// A client action forwarded by the connection actor. The payload is still

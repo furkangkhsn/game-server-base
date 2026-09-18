@@ -90,6 +90,8 @@ where
             conn_epoch: HashMap::new(),
             conn_tombstone: HashMap::new(),
             last_tombstone_sweep: None,
+            idle: crate::room::IdleClock::default(),
+            idle_ceiling_warns: 0,
             groups: HashMap::new(),
             links: neighbors
                 .into_iter()

@@ -58,12 +58,17 @@ where
             for mig in migrations {
                 let player = mig.player.and_then(|p| {
                     let entry = self.conns.remove(&p)?;
+                    // The input-idle stamp travels with the row and this
+                    // shard's clock loses it (a rolled-back send below
+                    // puts it straight back).
+                    let last_input = self.idle.last(p);
+                    self.idle.stop(p);
                     // The binding row travels too (the receiving shard
                     // installs its own): the session stays bound to this
                     // player across the move, so control broadcasts still
                     // find the owner.
                     self.binding.remove(&entry.conn);
-                    Some(PlayerMigration {
+                    Some(Box::new(PlayerMigration {
                         player: p,
                         conn: entry.conn,
                         // The epoch of the join this entity belongs to: the
@@ -80,7 +85,9 @@ where
                         expire_to: entry.expire_to,
                         bot_fed: entry.bot_fed,
                         session_epoch: entry.session_epoch,
-                    })
+                        identity: entry.identity,
+                        last_input,
+                    }))
                 });
                 // The session whose request state dies with a COMMITTED
                 // move (the Ok arm below); read before the send consumes
@@ -131,6 +138,7 @@ where
                                 p.player,
                                 RoomConn {
                                     conn: p.conn,
+                                    identity: p.identity,
                                     out: p.out,
                                     actions: p.actions,
                                     entity: p.entity,
@@ -144,6 +152,9 @@ where
                                 },
                             );
                             self.binding.insert(p.conn, p.player);
+                            if let Some(at) = p.last_input {
+                                self.idle.start(p.player, at);
+                            }
                             warn!(
                                 room = %self.config.id,
                                 shard = self.index,

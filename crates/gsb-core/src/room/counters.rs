@@ -28,6 +28,15 @@ pub(crate) struct RoomConn<G> {
     /// session-scoped thing owned by this row: pruning its RPC request
     /// state and removing its binding row on despawn.
     pub(crate) conn: ConnectionId,
+    /// The RESUME KEY this member joined (or resumed) under
+    /// (`ValidatedTicket.player`, or `Auth.name` on the local-auth path;
+    /// empty = anonymous). The registry supplies it on every identified
+    /// join and on the transport-death detach, but the input-idle ceiling
+    /// synthesizes a detach with no message behind it — and handing
+    /// [`GameLogic::on_disconnect`] an empty key there would make an
+    /// idle-kicked player unparkable and unresumable (a ledger keyed by
+    /// identity cannot hold ""). So the row remembers it.
+    pub(crate) identity: String,
     pub(crate) out: mpsc::Sender<FrameBatch>,
     /// This connection's input, written by its connection actor as frames
     /// arrive; pulled non-blockingly at each step.

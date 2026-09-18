@@ -34,6 +34,7 @@ where
         handle: &RoomHandle<St, Sp>,
         shard: Option<usize>,
         epoch: u64,
+        identity: String,
         out: mpsc::Sender<FrameBatch>,
     ) -> OpOutcome {
         let (joined_tx, joined_rx) =
@@ -53,6 +54,7 @@ where
                     .send(ShardMsg::Join {
                         conn,
                         epoch,
+                        identity,
                         out,
                         reply: joined_tx,
                     })
@@ -156,7 +158,7 @@ where
                 }
                 // All shards answered "not here": transparent fresh join
                 // (§5) through the ordinary path.
-                Self::dispatch_plain_join(conn, room, handle, shard, epoch, out).await
+                Self::dispatch_plain_join(conn, room, handle, shard, epoch, identity, out).await
             }
         }
     }

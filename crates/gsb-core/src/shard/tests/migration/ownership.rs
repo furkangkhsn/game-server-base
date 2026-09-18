@@ -249,7 +249,7 @@ async fn ghost_migrate_after_leave_is_rejected() {
                 y: 0.0,
                 mode: 0,
             },
-            player: Some(PlayerMigration {
+            player: Some(Box::new(PlayerMigration {
                 player: PlayerId(conn.0),
                 conn,
                 epoch: 1,
@@ -261,7 +261,9 @@ async fn ghost_migrate_after_leave_is_rejected() {
                 expire_to: crate::room::ExpireTo::Despawn,
                 bot_fed: false,
                 session_epoch: 0,
-            }),
+                identity: String::new(),
+                last_input: None,
+            })),
         })
         .await
         .expect("shard channel open");

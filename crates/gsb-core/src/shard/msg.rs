@@ -49,6 +49,15 @@ pub struct PlayerMigration {
     /// See [`crate::room::RoomConn::session_epoch`] (the resume guard's
     /// stamp survives migrations).
     pub session_epoch: u64,
+    /// See [`crate::room::RoomConn::identity`] — the resume key travels
+    /// with the row, or a migrated member could not be parked under it.
+    pub identity: String,
+    /// The input-idle clock's stamp for this player (see
+    /// [`crate::room::IdleView`]): the clock is per-ACTOR, so a crossing
+    /// has to carry it or a player would reset its idleness every time it
+    /// changes shard. `None` = the player is off the clock (parked or
+    /// bot-fed), which the receiving shard reproduces by not starting one.
+    pub last_input: Option<std::time::Instant>,
 }
 
 /// A migrating entity: the full game state plus the owning player, when
@@ -79,6 +88,14 @@ pub enum ShardMsg<S, B> {
     Join {
         conn: ConnectionId,
         epoch: u64,
+        /// The resume key this session authenticated under (empty =
+        /// anonymous). Carried so the shard's member row can remember it,
+        /// exactly like the single room's: an identified player reaches a
+        /// SHARDED room through this arm whenever no ledger held it (the
+        /// broadcast-resume's transparent fallback, §5), and the
+        /// input-idle ceiling has to be able to hand `on_disconnect` a
+        /// real resume key.
+        identity: String,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
@@ -124,7 +141,12 @@ pub enum ShardMsg<S, B> {
         at_tick: u64,
         wire: u64,
         state: S,
-        player: Option<PlayerMigration>,
+        /// Boxed: `PlayerMigration` carries the whole core-side row (two
+        /// channel halves, the detach flags, the resume key, the
+        /// input-idle stamp) and is by far the biggest thing a
+        /// `ShardMsg` can hold — inlining it would make EVERY shard
+        /// message, and every `Result` a link send returns, that large.
+        player: Option<Box<PlayerMigration>>,
     },
     /// A neighbor's boundary update (§6.4): a Full replaces this shard's
     /// view of that neighbor wholesale; a Delta applies its upserts/exits

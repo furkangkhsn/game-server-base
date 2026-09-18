@@ -22,6 +22,7 @@ mod counters;
 mod fanout;
 mod groups;
 mod guardrails;
+mod idle;
 mod stubs;
 mod tick;
 use stubs::*;

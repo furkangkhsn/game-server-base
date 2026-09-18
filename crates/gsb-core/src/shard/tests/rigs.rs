@@ -161,6 +161,7 @@ impl Harness {
             .send(ShardMsg::Join {
                 conn,
                 epoch,
+                identity: String::new(),
                 out: out_tx,
                 reply: reply_tx,
             })
@@ -273,14 +274,6 @@ pub(in crate::shard::tests) fn bare_shard(index: usize) -> ShardActor<TWorld, ()
     )
 }
 
-pub(in crate::shard::tests) fn tctx(tick: u64) -> TickCtx {
-    TickCtx {
-        room: RoomId(9),
-        tick,
-        dt: Duration::from_secs_f64(1.0 / 30.0),
-    }
-}
-
 pub(in crate::shard::tests) fn tinfo(tick: u64) -> TickInfo {
     TickInfo {
         tick,
@@ -314,10 +307,11 @@ pub(in crate::shard::tests) async fn join_direct(
             ShardMsg::Join {
                 conn,
                 epoch,
+                identity: String::new(),
                 out: out_tx,
                 reply: reply_tx
             },
-            &tctx(tick)
+            tick
         ),
         "a join must never stop the actor"
     );
@@ -345,7 +339,7 @@ pub(in crate::shard::tests) fn ghost_migrate(
             y: 0.0,
             mode: 0,
         },
-        player: Some(PlayerMigration {
+        player: Some(Box::new(PlayerMigration {
             // Test identity policy: the conn id doubles as the player.
             player: PlayerId(conn.0),
             conn,
@@ -358,7 +352,9 @@ pub(in crate::shard::tests) fn ghost_migrate(
             expire_to: crate::room::ExpireTo::Despawn,
             bot_fed: false,
             session_epoch: 0,
-        }),
+            identity: String::new(),
+            last_input: None,
+        })),
     }
 }
 
@@ -475,14 +471,14 @@ impl BorderRig {
     /// Feed messages into shard 1's CONTROL handler.
     pub(in crate::shard::tests) fn deliver_to_s1(&mut self, msgs: Vec<ShardMsg<TState, TStrip>>) {
         for m in msgs {
-            assert!(self.s1.handle_msg(m, &tctx(999)), "s1 keeps running");
+            assert!(self.s1.handle_msg(m, 999), "s1 keeps running");
         }
     }
 
     /// Feed messages into shard 0's CONTROL handler.
     pub(in crate::shard::tests) fn deliver_to_s0(&mut self, msgs: Vec<ShardMsg<TState, TStrip>>) {
         for m in msgs {
-            assert!(self.s0.handle_msg(m, &tctx(999)), "s0 keeps running");
+            assert!(self.s0.handle_msg(m, 999), "s0 keeps running");
         }
     }
 }

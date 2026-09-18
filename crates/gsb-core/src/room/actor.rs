@@ -71,6 +71,22 @@ pub struct RoomActor<W, G, Sp> {
     /// membership changes between reads degrade to a shifted start
     /// offset, never an out-of-range index.
     pub(in crate::room) read_cursor: usize,
+    /// The input-idle clock: when each member last sent an
+    /// action-bearing frame (see [`crate::room::IdleView`] for the
+    /// structural definition and for who is deliberately NOT on it).
+    /// Non-generic so the tick context can lend it to the game logic
+    /// without dragging `G` through every hook signature; stamped by the
+    /// READ phase, started/stopped at the same funnels `binding` is.
+    pub(in crate::room) idle: IdleClock,
+    /// How many input-idle-ceiling warnings this room has emitted. The
+    /// guard is `== 0`, so the answer is always 0 or 1: the ceiling is a
+    /// standing property of the room, and a room that is shedding idle
+    /// members sheds many — one line per member per rotation would bury
+    /// the signal. A counter rather than a flag so the warn-ONCE contract
+    /// is observable (and lockable) without going through a tracing
+    /// subscriber, whose callsite-interest caching makes cross-test
+    /// capture unreliable.
+    pub(in crate::room) idle_ceiling_warns: u32,
     pub(in crate::room) groups: HashMap<G, GroupState>,
     /// Number of global ticks between steps (1 = room rate == global rate).
     pub(in crate::room) run_every: u64,

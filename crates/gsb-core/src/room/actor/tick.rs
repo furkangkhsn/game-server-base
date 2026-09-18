@@ -12,6 +12,7 @@ use crate::room::actor::RoomActor;
 
 mod completions;
 mod detach;
+mod idle;
 mod read;
 mod requests;
 
@@ -50,11 +51,6 @@ where
                 None => self.config.period(),
             }
         };
-        let ctx = TickCtx {
-            room: self.config.id,
-            tick: t.tick,
-            dt,
-        };
 
         // -- Phase 0 — CONTROL (before actions: a fresh join's action
         //    channel is only registered once its Join has been processed).
@@ -68,7 +64,26 @@ where
 
         self.phase_detach_sweep();
 
-        let mut actions = self.phase_read();
+        self.phase_idle_sweep(t.at);
+
+        let mut actions = self.phase_read(t.at);
+
+        // -- The tick context is built HERE, after every phase that
+        //    writes the idle clock has run, because it LENDS that clock to
+        //    the logic (`ctx.since_input`). The clock is moved out of the
+        //    actor for the duration of the body: the phases below take
+        //    `&mut self`, which a borrow living inside `ctx` would
+        //    forbid. The move is an O(1) pointer swap, nothing between
+        //    here and the restore reads or writes the clock, and no phase
+        //    below this point returns early — so the restore is
+        //    unconditional.
+        let idle = std::mem::take(&mut self.idle);
+        let ctx = TickCtx {
+            room: self.config.id,
+            tick: t.tick,
+            dt,
+            idle: crate::room::IdleView::new(&idle, t.at),
+        };
         // -- Phase 2a — split the requests out of the pulled actions (the
         //    RPC pattern, see `crate::rpc`). A request is an action
         //    carrying the base-band envelope opcode; the core decodes the
@@ -140,6 +155,9 @@ where
         //    [group snapshot] + [private?].
         //    (the step counter was bumped at the top of `step`)
         self.broadcast_phase(&ctx);
+        // The lend is over (NLL ends `ctx`'s borrow at its last use);
+        // hand the clock back to the actor.
+        self.idle = idle;
         true
     }
 }

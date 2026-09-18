@@ -3,6 +3,7 @@
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::time::Instant;
 use tracing::debug;
 
 use crate::room::actor::RoomActor;
@@ -16,9 +17,13 @@ where
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     /// Tick phase 1 — READ: the bounded, rotating pull of each live
-    /// connection's actions, plus the binding translation that maps a
-    /// wire session onto its stable player.
-    pub(super) fn phase_read(&mut self) -> Vec<Action> {
+    /// connection's actions, the input-idle stamp that pull produces, and
+    /// the binding translation that maps a wire session onto its stable
+    /// player.
+    ///
+    /// `now` is the tick's own wall clock (the ticker's `at`), so the
+    /// phase needs no clock read of its own.
+    pub(super) fn phase_read(&mut self, now: Instant) -> Vec<Action> {
         // -- Phase 1 — READ: pull each connection's actions (non-blocking;
         //    per-connection isolation — one flooder only fills its own
         //    channel), bounded twice:
@@ -87,7 +92,9 @@ where
             // row is skipped (§3.2): its input source is dead — nothing
             // pulls from it — but the visit still counts toward the
             // rotation so the cursor's fairness contract is untouched.
-            if let Some(rc) = self.conns.get_mut(&self.roster[idx])
+            let player = self.roster[idx];
+            let mut pulled = 0usize;
+            if let Some(rc) = self.conns.get_mut(&player)
                 && !rc.detached
             {
                 for _ in 0..per_conn {
@@ -97,11 +104,26 @@ where
                     match rc.actions.try_recv() {
                         Ok(a) => {
                             budget -= 1;
+                            pulled += 1;
                             actions.push(a);
                         }
                         Err(_) => break, // channel drained
                     }
                 }
+            }
+            // -- The INPUT-IDLE stamp. This pull IS the structural
+            //    definition of "action-bearing" (see `crate::room::IdleView`):
+            //    a frame moves this clock exactly when the connection
+            //    actor forwarded it here as an `Action`. A heartbeat is
+            //    answered inside the connection actor and never reaches
+            //    this channel, so a heartbeat-only client stays connected
+            //    and goes input-idle — which is the whole point of the
+            //    signal. Cost: ONE stamp per member that actually
+            //    delivered input this tick; a silent member costs nothing
+            //    at all, so the bookkeeping does not scale with idle
+            //    players.
+            if pulled > 0 {
+                self.idle.touch(player, now);
             }
             visited += 1;
             idx += 1;

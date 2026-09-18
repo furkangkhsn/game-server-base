@@ -1883,6 +1883,7 @@ mod shard_test {
                 .send(gsb_core::shard::ShardMsg::Join {
                     conn,
                     epoch,
+                    identity: String::new(),
                     out,
                     reply: reply_tx,
                 })

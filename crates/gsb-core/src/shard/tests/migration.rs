@@ -25,7 +25,7 @@ async fn leave_prunes_the_epoch_entry() {
             entity,
             epoch: 7
         },
-        &tctx(11)
+        11
     ));
     assert!(
         !a.conn_epoch.contains_key(&conn),
@@ -51,7 +51,7 @@ async fn leave_prunes_the_epoch_entry() {
             entity: other_entity.wrapping_add(1),
             epoch: 3
         },
-        &tctx(13)
+        13
     ));
     assert!(
         a.conns.contains_key(&PlayerId(other.0)),
@@ -88,7 +88,7 @@ async fn stale_migrate_rejected_then_tombstone_expires() {
             entity: wire,
             epoch: 2
         },
-        &tctx(101)
+        101
     ));
     assert_eq!(
         a.conn_tombstone.get(&conn),
@@ -99,7 +99,7 @@ async fn stale_migrate_rejected_then_tombstone_expires() {
     // The ghost arrives WITHIN the TTL window. `at_tick < ctx.tick`
     // so the install gate is open — only the epoch gate can stop it.
     // Existing behavior preserved: rejected.
-    assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 99), &tctx(102)));
+    assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 99), 102));
     assert!(
         !a.conns.contains_key(&PlayerId(conn.0)),
         "the ghost migrate must not install the dead join"
@@ -129,7 +129,7 @@ async fn stale_migrate_rejected_then_tombstone_expires() {
     // Observable accept-path: the same (stale) migration now passes
     // the gate — proving expiry opened it — and migrate-in
     // re-inserts the pruned epoch entry (see CHANGE 1's comment).
-    assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 700), &tctx(713)));
+    assert!(a.handle_msg(ghost_migrate(conn, 2, wire, 700), 713));
     assert!(
         a.conns.contains_key(&PlayerId(conn.0)),
         "with the tombstone expired the gate no longer rejects"

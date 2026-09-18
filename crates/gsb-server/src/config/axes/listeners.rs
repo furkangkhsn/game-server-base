@@ -192,6 +192,17 @@ pub struct Config {
     /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
     /// lost its last snapshot must not stay stale forever). `<= 0` disables.
     pub keepalive_hz: f64,
+    /// **Input-idle ceiling**, in seconds — omitted (`None`, the default)
+    /// = OFF, and `0` = OFF too.
+    ///
+    /// A capacity safety valve, not an AFK policy: AFK is the game's call
+    /// (the base publishes the SIGNAL unconditionally — see
+    /// `gsb_core::room::IdleView` — and a game writes its rule on it).
+    /// When set, a member whose last ACTION-bearing frame is at least
+    /// this old is handed to the room's ordinary disconnect policy
+    /// (`on_disconnect`), which decides park / AI handover / despawn.
+    /// Heartbeats keep a session alive and never reset this clock.
+    pub max_idle_input_secs: Option<u64>,
     /// The TOPOLOGY selection axis (`"single"` | `"sharded"`; see
     /// [`Topology`]): who computes the world and as how many authoritative
     /// pieces.
@@ -386,6 +397,9 @@ impl Default for Config {
             max_unauth_conns: None,
             max_snapshot_bytes: gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES,
             keepalive_hz: 1.0,
+            // OFF: AFK is a game decision, so the base's ceiling stays
+            // invisible until an operator asks for it.
+            max_idle_input_secs: None,
             topology: None,
             communication: None,
             visibility: Visibility::default(),

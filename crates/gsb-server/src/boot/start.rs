@@ -349,6 +349,7 @@ async fn start_inner(
             max_snapshot_bytes: cfg.max_snapshot_bytes,
             keepalive_hz: cfg.keepalive_hz,
             max_players: cfg.max_players.map(|n| n as usize),
+            max_idle_input_secs: cfg.max_idle_input_secs,
             ..Default::default()
         };
         {

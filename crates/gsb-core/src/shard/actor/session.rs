@@ -75,11 +75,14 @@ where
             rc.bot_fed = false;
             rc.detach_deadline = None;
             rc.session_epoch = epoch;
+            rc.identity = identity.to_string();
             old_conn = rc.conn;
             rc.conn = conn;
             entity = rc.entity;
         }
         self.m.resumes += 1;
+        // The clock RESTARTS with the new session (the room actor's rule).
+        self.idle.start(player, std::time::Instant::now());
         // THE binding move + its session-epoch companion (see the
         // enumeration above): the old session loses both rows; the new
         // session owns the player from here on.
@@ -111,6 +114,7 @@ where
         };
         self.binding.remove(&rc.conn);
         self.conn_epoch.remove(&rc.conn);
+        self.idle.stop(player);
         // The request state goes with the SESSION (the room actor's rule):
         // in-flight requests release their slots and any queued answer is
         // dropped (a reply to a gone session is not delivered); late

@@ -56,7 +56,16 @@ where
                         // route it at the park ledger first; fall back to
                         // the plain join when nothing holds the identity.
                         let outcome = if identity.is_empty() {
-                            Self::dispatch_plain_join(conn, room, &handle, shard, epoch, out).await
+                            Self::dispatch_plain_join(
+                                conn,
+                                room,
+                                &handle,
+                                shard,
+                                epoch,
+                                identity.clone(),
+                                out,
+                            )
+                            .await
                         } else {
                             Self::dispatch_resume(
                                 conn,

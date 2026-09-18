@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::channel::{Inbox, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
 use crate::metrics::MetricsEvent;
-use crate::room::{GroupState, RoomConfig, RoomConn, RoomCounters};
+use crate::room::{GroupState, IdleClock, RoomConfig, RoomConn, RoomCounters};
 use crate::rpc::{Completion, PendingRequest, RpcReply};
 use crate::shard::*;
 use crate::ticker::TickInfo;
@@ -90,6 +90,14 @@ pub struct ShardActor<W, G, St, Sp> {
     /// `TOMBSTONE_SWEEP_EVERY_TICKS` past it — no timer task, no extra
     /// awaited source.
     pub(in crate::shard) last_tombstone_sweep: Option<u64>,
+    /// The input-idle clock (the room actor's field, mirrored): when
+    /// each member last sent an action-bearing frame. Started at
+    /// join/migrate-in/resume, stopped at despawn/migrate-out/detach/AI
+    /// handover, stamped by the READ phase.
+    pub(in crate::shard) idle: IdleClock,
+    /// How many input-idle-ceiling warnings this shard has emitted —
+    /// always 0 or 1 (the room actor's warn-once rule and its rationale).
+    pub(in crate::shard) idle_ceiling_warns: u32,
     pub(in crate::shard) groups: HashMap<G, GroupState>,
     /// One outbound link per shard index (used for the neighbors'
     /// indices) — [`InProcLink`] wrappers around exactly the mailboxes

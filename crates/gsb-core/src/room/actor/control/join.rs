@@ -8,6 +8,7 @@ use crate::room::actor::RoomActor;
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -27,6 +28,7 @@ where
     pub(super) fn admit_fresh(
         &mut self,
         conn: ConnectionId,
+        identity: String,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     ) -> bool {
@@ -69,6 +71,7 @@ where
             admission.player,
             RoomConn {
                 conn,
+                identity,
                 out,
                 actions: act_rx,
                 entity: admission.entity,
@@ -86,6 +89,10 @@ where
         );
         let _ = reply.send(Ok((admission.entity, act_tx)));
         self.roster_add(admission.player);
+        // The input-idle clock starts at the join, not at the first
+        // action: a client that connects and never plays must be visible
+        // as idle-of-input from the moment it takes a slot.
+        self.idle.start(admission.player, Instant::now());
         debug!(
             room = %self.config.id,
             %conn,
@@ -160,11 +167,16 @@ where
             rc.bot_fed = false;
             rc.detach_deadline = None;
             rc.session_epoch = epoch;
+            rc.identity = identity.clone();
             let old = rc.conn;
             rc.conn = conn;
             (rc.entity, old)
         };
         self.m.resumes += 1;
+        // The clock RESTARTS with the new session: the park took the row
+        // off it (a parked row has no input source), and the returning
+        // human must not inherit the idleness its disconnect accumulated.
+        self.idle.start(player, Instant::now());
         // THE binding move — the whole remaining re-key surface (see the
         // enumeration above). The old session's row is removed first so a
         // stray frame under the dead conn finds no binding from here on
@@ -193,6 +205,7 @@ where
         // expiry/despawn half of the binding lifecycle).
         self.binding.remove(&rc.conn);
         self.roster_remove(&player);
+        self.idle.stop(player);
         // The request state goes with the SESSION: in-flight requests
         // are released (their slots free up for other connections) and
         // any queued answer is dropped (a reply to a gone session is not

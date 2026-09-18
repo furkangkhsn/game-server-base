@@ -277,6 +277,7 @@ impl Harness {
         tx.send(ShardMsg::Join {
             conn,
             epoch: 1,
+            identity: String::new(),
             out: out_tx,
             reply: reply_tx,
         })

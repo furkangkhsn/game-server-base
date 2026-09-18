@@ -56,9 +56,88 @@ where
         }
     }
 
+    /// THE disconnect path (`docs/RECONNECT.md` §3): ask the policy what
+    /// happens to this member's entity, then run the arm it chose.
+    ///
+    /// Two callers, ONE decision point — that is the whole reason this is
+    /// a function: the registry's `RoomControl::Detach` (a transport that
+    /// actually died) and the input-idle ceiling
+    /// ([`RoomConfig::max_idle_input_secs`], a transport that is alive but
+    /// has stopped playing). The ceiling deliberately does not invent a
+    /// second fate for an entity: it hands the member to this path and the
+    /// GAME decides park / AI handover / despawn, which is also what gives
+    /// a MOBA bot-takeover-on-AFK for nothing.
+    ///
+    /// Callers own the guards (binding + entity + "not already parked").
+    pub(in crate::room) fn detach_player(
+        &mut self,
+        player: PlayerId,
+        conn: ConnectionId,
+        identity: &str,
+    ) {
+        match self.logic.on_disconnect(&mut self.world, player, identity) {
+            Detach::Despawn => {
+                // Byte-for-byte the old close semantics — plus the report
+                // the registry is waiting on.
+                //
+                // The registry marked this connection's row `detached` and
+                // KEPT it (slot held, §4) the moment the transport died,
+                // before the policy had answered. A park that never starts
+                // has no hold and no deadline, so the phase-0c sweep can
+                // never fire for it: this arm is the ONLY place that learns
+                // the row is dead. Queued only when there IS a registry — a
+                // standalone room has no reader, so the queue must not
+                // accumulate. The flush is phase 0c, in this same tick
+                // (CONTROL runs first).
+                if self.registry.is_some() {
+                    self.despawn_reports.push(conn);
+                }
+                self.despawn_conn(player, false);
+            }
+            Detach::Hold { grace, to } => {
+                // Park it: keep the row (under its STABLE player key —
+                // nothing is re-keyed), the entity, the world state, the
+                // group membership AND the cap slot (§4 — members
+                // accounting does not drop). The binding row stays too: the
+                // parked row still belongs to that session until a resume
+                // re-points it. The clock is CORE-owned (§14.4): the grace
+                // is written here as an absolute deadline and the phase-0c
+                // sweep fires it.
+                let rc = self.conns.get_mut(&player).expect("guarded by caller");
+                rc.detached = true;
+                rc.expire_to = to;
+                rc.detach_deadline = grace.map(|g| Instant::now() + g);
+                // OFF the input-idle clock while parked: the row has no
+                // live input source, so counting its silence would
+                // double-count a member the detach machinery already owns
+                // (and would let the idle ceiling fire on top of a hold).
+                // A resume restarts the clock.
+                self.idle.stop(player);
+                // Today's leave semantics for in-flight work (§11 "RPC
+                // pending detach anında"): pending requests drop, late
+                // reports are silently discarded (structural already),
+                // queued answers for the dead session go.
+                self.drop_conn_request_state(conn);
+                debug!(
+                    room = %self.config.id,
+                    %conn,
+                    %player,
+                    ?grace,
+                    ?to,
+                    "player detached (entity parked)"
+                );
+            }
+        }
+    }
+
     pub(in crate::room) fn handle_control(&mut self, c: RoomControl) -> bool {
         match c {
-            RoomControl::Join { conn, out, reply } => self.admit_fresh(conn, out, reply),
+            RoomControl::Join { conn, out, reply } => {
+                // A plain (unidentified) join: the registry routes every
+                // NON-empty identity through `Resume` instead, so this
+                // arm is the anonymous one by construction.
+                self.admit_fresh(conn, String::new(), out, reply)
+            }
             RoomControl::Leave { conn, entity } => {
                 // Stale-leave guard: resolve the session through the
                 // binding, then only the entity this player currently
@@ -83,61 +162,13 @@ where
                 // entity this player currently owns.
                 if let Some(&player) = self.binding.get(&conn)
                     && self.conns.get(&player).map(|c| c.entity) == Some(entity)
+                    // A row that is ALREADY parked has had its policy run
+                    // once; a second Detach for it is a duplicate (the
+                    // transport of an idle-expired member dying later is
+                    // exactly that shape) and must not re-ask the policy.
+                    && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
-                    match decision {
-                        Detach::Despawn => {
-                            // Byte-for-byte the old close semantics —
-                            // plus the report the registry is waiting on.
-                            //
-                            // The registry marked this connection's row
-                            // `detached` and KEPT it (slot held, §4) the
-                            // moment the transport died, before the policy
-                            // had answered. A park that never starts has
-                            // no hold and no deadline, so the phase-0c
-                            // sweep can never fire for it: this arm is the
-                            // ONLY place that learns the row is dead.
-                            // Queued only when there IS a registry — a
-                            // standalone room has no reader, so the queue
-                            // must not accumulate. The flush is phase 0c,
-                            // in this same tick (CONTROL runs first).
-                            if self.registry.is_some() {
-                                self.despawn_reports.push(conn);
-                            }
-                            self.despawn_conn(player, false);
-                        }
-                        Detach::Hold { grace, to } => {
-                            // Park it: keep the row (under its STABLE
-                            // player key — nothing is re-keyed), the
-                            // entity, the world state, the group membership
-                            // AND the cap slot (§4 — members accounting
-                            // does not drop). The binding row stays too:
-                            // the parked row still belongs to that (dead)
-                            // session until a resume re-points it. The
-                            // clock is CORE-owned (§14.4): the grace is
-                            // written here as an absolute deadline and the
-                            // CONTROL sweep below fires it.
-                            let rc = self.conns.get_mut(&player).expect("guarded above");
-                            rc.detached = true;
-                            rc.expire_to = to;
-                            rc.detach_deadline = grace.map(|g| Instant::now() + g);
-                            // Today's leave semantics for in-flight work
-                            // (§11 "RPC pending detach anında"): pending
-                            // requests drop, late reports are silently
-                            // discarded (structural already), queued answers
-                            // for the dead session go.
-                            self.drop_conn_request_state(conn);
-                            debug!(
-                                room = %self.config.id,
-                                %conn,
-                                %player,
-                                entity,
-                                ?grace,
-                                ?to,
-                                "player detached (entity parked)"
-                            );
-                        }
-                    }
+                    self.detach_player(player, conn, &identity);
                 }
                 true
             }
@@ -153,7 +184,7 @@ where
                 // never resumes (nothing to look up; the local-auth demo
                 // may still send names, an anonymous client cannot).
                 if identity.is_empty() {
-                    return self.admit_fresh(conn, out, reply);
+                    return self.admit_fresh(conn, identity, out, reply);
                 }
                 match self.logic.resume_lookup(&self.world, &identity) {
                     ResumeFound::Held(player) => {
@@ -173,7 +204,7 @@ where
                                 %player,
                                 "resume rejected: ledger holds a row the table lost"
                             );
-                            return self.admit_fresh(conn, out, reply);
+                            return self.admit_fresh(conn, identity, out, reply);
                         };
                         if !rc.detached {
                             // The player's row is LIVE (a double session of
@@ -186,7 +217,7 @@ where
                                 %player,
                                 "resume rejected: ledger holds a live row"
                             );
-                            return self.admit_fresh(conn, out, reply);
+                            return self.admit_fresh(conn, identity, out, reply);
                         }
                         // Epoch guard (§7): one integer comparison rejects a
                         // delayed duplicate/replay AFTER a newer session
@@ -228,9 +259,9 @@ where
                             "resume rejected stale (hold ended); falling back \
                              to a fresh join"
                         );
-                        self.admit_fresh(conn, out, reply)
+                        self.admit_fresh(conn, identity, out, reply)
                     }
-                    ResumeFound::Never => self.admit_fresh(conn, out, reply),
+                    ResumeFound::Never => self.admit_fresh(conn, identity, out, reply),
                 }
             }
             RoomControl::Shutdown => false,

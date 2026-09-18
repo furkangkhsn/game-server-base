@@ -88,6 +88,8 @@ where
             roster: Vec::new(),
             roster_pos: HashMap::new(),
             read_cursor: 0,
+            idle: IdleClock::default(),
+            idle_ceiling_warns: 0,
             groups: HashMap::new(),
             run_every: run_every.max(1),
             last_at: None,

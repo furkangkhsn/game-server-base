@@ -250,10 +250,11 @@ async fn own_wins_filter_applies_to_delta_applied_records() {
         ShardMsg::Join {
             conn: ConnectionId(10),
             epoch: 1,
+            identity: String::new(),
             out: out_tx,
             reply: reply_tx,
         },
-        &tctx(1),
+        1,
     ));
     let w_own = reply_rx.await.expect("join reply").expect("join ok").0;
 
@@ -276,7 +277,7 @@ async fn own_wins_filter_applies_to_delta_applied_records() {
                 exits: vec![],
             },
         },
-        &tctx(2),
+        2,
     );
     assert_eq!(
         r.s1.border[&0].recs.get(&w_own).map(|b| b.state.x),

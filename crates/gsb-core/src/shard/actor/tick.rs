@@ -7,7 +7,8 @@ use std::hash::Hash;
 use prost::Message;
 use tracing::{debug, warn};
 
-use crate::room::{Action, TickCtx};
+use crate::id::PlayerId;
+use crate::room::{Action, IdleView, TickCtx};
 use crate::rpc::{RPC_REQ_OP, RpcRequest};
 use crate::ticker::TickInfo;
 
@@ -17,6 +18,7 @@ use crate::shard::*;
 mod border;
 mod completions;
 mod detach;
+mod idle;
 mod migrate;
 mod requests;
 
@@ -57,11 +59,6 @@ where
                 None => self.config.period(),
             }
         };
-        let ctx = TickCtx {
-            room: self.config.id,
-            tick: t.tick,
-            dt,
-        };
 
         // -- Tombstone TTL sweep (lazy, CONTROL). Bounded cost: the
         //    tombstone table only ever holds leaves of the last TTL
@@ -82,9 +79,9 @@ where
         //    racing Migrate is still in flight when its tombstone expires.
         if self
             .last_tombstone_sweep
-            .is_none_or(|at| ctx.tick.saturating_sub(at) >= TOMBSTONE_SWEEP_EVERY_TICKS)
+            .is_none_or(|at| t.tick.saturating_sub(at) >= TOMBSTONE_SWEEP_EVERY_TICKS)
         {
-            let now = ctx.tick;
+            let now = t.tick;
             self.conn_tombstone
                 .retain(|_, (_, wrote)| now.saturating_sub(*wrote) < TOMBSTONE_TTL_TICKS);
             self.last_tombstone_sweep = Some(now);
@@ -97,7 +94,7 @@ where
         //    re-offered FIRST, in send order.
         let deferred = std::mem::take(&mut self.deferred);
         for m in deferred {
-            if !self.handle_msg(m, &ctx) {
+            if !self.handle_msg(m, t.tick) {
                 return false;
             }
         }
@@ -108,7 +105,7 @@ where
         // synchronously (sends go to neighbors' inboxes), and on Shutdown
         // any leftovers die with the actor's inbox either way.
         for m in self.inbox.drain() {
-            if !self.handle_msg(m, &ctx) {
+            if !self.handle_msg(m, t.tick) {
                 return false;
             }
         }
@@ -116,17 +113,26 @@ where
         self.phase_completions();
 
         self.phase_detach_sweep();
+
+        self.phase_idle_sweep(t.at);
         // -- Phase 1 — READ (the room's bounded pull: per-connection
         //    fairness budget + shard-level pull budget).
         let per_conn = self.config.max_actions_per_conn_per_tick;
         let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();
-        for r in self.conns.values_mut() {
+        // Players that delivered input this tick — stamped into the
+        // input-idle clock after the pull (the clock is a sibling field
+        // of `conns`, which the loop holds mutably). The buffer is a
+        // local: it only ever holds THIS tick's active members, and a
+        // quiet shard never pushes to it.
+        let mut acted: Vec<PlayerId> = Vec::new();
+        for (&player, r) in self.conns.iter_mut() {
             // A detached (or bot-fed) row has no live input source; skip
             // it exactly like the room's rotation does.
             if r.detached {
                 continue;
             }
+            let mut pulled = 0usize;
             for _ in 0..per_conn {
                 if budget == 0 {
                     break;
@@ -134,14 +140,26 @@ where
                 match r.actions.try_recv() {
                     Ok(a) => {
                         budget -= 1;
+                        pulled += 1;
                         actions.push(a);
                     }
                     Err(_) => break,
                 }
             }
+            if pulled > 0 {
+                acted.push(player);
+            }
             if budget == 0 {
                 break;
             }
+        }
+        // The INPUT-IDLE stamp (the room actor's READ-phase stamp,
+        // mirrored): the pull above IS the structural definition of
+        // "action-bearing" — a heartbeat is answered in the connection
+        // actor and never reaches this channel. One stamp per member that
+        // actually delivered input; a silent member costs nothing.
+        for player in acted {
+            self.idle.touch(player, t.at);
         }
 
         // -- Phase 1.5 — BINDING TRANSLATION: byte-for-byte the room
@@ -219,6 +237,21 @@ where
             }
         });
 
+        // -- The tick context is built HERE, after every phase that
+        //    writes the idle clock has run, because it LENDS that clock to
+        //    the logic (`ctx.since_input`). The clock is moved out of the
+        //    actor for the body: the phases below take `&mut self`, which
+        //    a borrow living inside `ctx` would forbid. O(1) pointer
+        //    swap; nothing below reads or writes the clock, and no phase
+        //    below returns early, so the restore is unconditional.
+        let idle = std::mem::take(&mut self.idle);
+        let ctx = TickCtx {
+            room: self.config.id,
+            tick: t.tick,
+            dt,
+            idle: IdleView::new(&idle, t.at),
+        };
+
         // -- Phase 2b — CONVERT.
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
 
@@ -232,6 +265,9 @@ where
         // -- Phase 6 — BROADCAST (the room's broadcast phase with the
         //    borrowed boundary set folded into every group's snapshot).
         self.broadcast_phase(&ctx);
+        // The lend is over (NLL ends `ctx`'s borrow at its last use);
+        // hand the clock back to the actor.
+        self.idle = idle;
         true
     }
 

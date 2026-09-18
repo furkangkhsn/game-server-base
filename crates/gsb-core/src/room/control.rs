@@ -138,11 +138,29 @@ pub enum RoomControl {
 }
 
 /// Per-tick metadata handed to the game logic.
+///
+/// The lifetime is the input-idle view's ([`Self::idle`]): the actor
+/// lends its clock to the tick body, so a logic hook can ask "how long
+/// since this player last acted?" without an await, without a per-player
+/// task and without a new method on the logic surface.
 #[derive(Debug, Clone, Copy)]
-pub struct TickCtx {
+pub struct TickCtx<'a> {
     pub room: RoomId,
     /// Global tick index (from the ticker; all rooms share one clock).
     pub tick: u64,
     /// Time since the previous step (covers any ticks missed in between).
     pub dt: Duration,
+    /// Per-player input idleness — the AFK signal (see [`IdleView`] for
+    /// what counts as input). A hand-built context defaults to the EMPTY
+    /// view, whose every answer is `None`.
+    pub idle: IdleView<'a>,
+}
+
+impl TickCtx<'_> {
+    /// Time since `player`'s last action-bearing frame. `None` means the
+    /// player has no input clock here: not a member, parked (detached),
+    /// or bot-fed. Shorthand for [`IdleView::since_input`].
+    pub fn since_input(&self, player: PlayerId) -> Option<Duration> {
+        self.idle.since_input(player)
+    }
 }

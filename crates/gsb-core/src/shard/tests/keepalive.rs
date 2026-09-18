@@ -150,10 +150,11 @@ async fn sharded_keepalive_resends_cached_snapshot_to_silent_group() {
         ShardMsg::Join {
             conn: ConnectionId(1),
             epoch: 1,
+            identity: String::new(),
             out: out_tx,
             reply: reply_tx,
         },
-        &tctx(1),
+        1,
     ));
     let _wire = reply_rx.await.expect("join reply").expect("join ok");
 

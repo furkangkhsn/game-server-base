@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::error::CoreError;
-use crate::room::{Detach, ExpireTo, ResumeFound, RoomConn, TickCtx};
+use crate::room::{ExpireTo, ResumeFound, RoomConn};
 
 use crate::shard::actor::ShardActor;
 use crate::shard::*;
@@ -30,11 +30,12 @@ where
     // each neighbor's message, store in the actor's maps).
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    pub(crate) fn handle_msg(&mut self, m: ShardMsg<St, Sp>, ctx: &TickCtx) -> bool {
+    pub(crate) fn handle_msg(&mut self, m: ShardMsg<St, Sp>, tick: u64) -> bool {
         match m {
             ShardMsg::Join {
                 conn,
                 epoch,
+                identity,
                 out,
                 reply,
             } => {
@@ -72,6 +73,7 @@ where
                     admission.player,
                     RoomConn {
                         conn,
+                        identity,
                         out,
                         actions: act_rx,
                         entity: admission.entity,
@@ -84,6 +86,9 @@ where
                         session_epoch: 0,
                     },
                 );
+                // The input-idle clock starts at the join (the room
+                // actor's rule, mirrored).
+                self.idle.start(admission.player, Instant::now());
                 let _ = reply.send(Ok((admission.entity, act_tx)));
                 debug!(
                     room = %self.config.id,
@@ -106,49 +111,12 @@ where
                 // others no-ops (the same shape as a broadcast `Leave`).
                 if let Some(&player) = self.binding.get(&conn)
                     && self.conns.get(&player).map(|c| c.entity) == Some(entity)
+                    // A row that is ALREADY parked has had its policy run
+                    // once; a second Detach for it is a duplicate (the
+                    // room actor's guard, mirrored).
+                    && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
-                    match decision {
-                        Detach::Despawn => {
-                            // Today's close semantics, plus the registry
-                            // report — the room actor's arm mirrored (see
-                            // it for the full argument). A declined park
-                            // never starts a hold, so no phase-0c sweep
-                            // can ever end it; on the grid the unreported
-                            // row also keeps a `ShardGroup` member slot,
-                            // the only whole-room capacity view there is.
-                            // Flushed in this same tick's phase 0c (the
-                            // mailbox drain runs first).
-                            if self.registry.is_some() {
-                                self.despawn_reports.push(conn);
-                            }
-                            self.despawn_conn(player, false);
-                        }
-                        Detach::Hold { grace, to } => {
-                            // Park: keep row (stable key)/entity/slot and
-                            // the binding row; core owns the clock (§14.4).
-                            // The dead session's in-flight requests die with
-                            // it (RECONNECT §11 — the room actor's detach
-                            // semantics, now mirrored): pending entries are
-                            // dropped and late worker reports are silently
-                            // discarded by the 0b reconciliation.
-                            let rc = self.conns.get_mut(&player).expect("guarded above");
-                            rc.detached = true;
-                            rc.expire_to = to;
-                            rc.detach_deadline = grace.map(|g| Instant::now() + g);
-                            self.drop_conn_request_state(conn);
-                            debug!(
-                                room = %self.config.id,
-                                shard = self.index,
-                                %conn,
-                                %player,
-                                entity,
-                                ?grace,
-                                ?to,
-                                "player detached on shard (entity parked)"
-                            );
-                        }
-                    }
+                    self.detach_player(player, conn, &identity);
                 }
                 true
             }
@@ -270,11 +238,11 @@ where
                             // older entry whole (conservative: its guard,
                             // being for an equal-or-newer death, lives
                             // longer).
-                            e.insert((epoch, ctx.tick));
+                            e.insert((epoch, tick));
                         }
                     }
                     Entry::Vacant(e) => {
-                        e.insert((epoch, ctx.tick));
+                        e.insert((epoch, tick));
                     }
                 }
                 true
@@ -294,7 +262,7 @@ where
                 // shard's tick body interleave on the runtime) is
                 // deferred until the gate opens — installing it now would
                 // put the entity in two shards for one tick.
-                if ctx.tick <= at_tick {
+                if tick <= at_tick {
                     self.deferred.push_back(ShardMsg::Migrate {
                         from,
                         at_tick,
@@ -344,10 +312,17 @@ where
                     debug_assert!(!self.conns.contains_key(&p.player));
                     self.conn_epoch.insert(p.conn, p.epoch);
                     self.binding.insert(p.conn, p.player);
+                    // The input-idle stamp rode along: restore it rather
+                    // than restarting the clock, or a shard crossing would
+                    // silently forgive an idle player.
+                    if let Some(at) = p.last_input {
+                        self.idle.start(p.player, at);
+                    }
                     self.conns.insert(
                         p.player,
                         RoomConn {
                             conn: p.conn,
+                            identity: p.identity,
                             out: p.out,
                             actions: p.actions,
                             entity: p.entity,
