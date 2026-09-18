@@ -238,6 +238,15 @@ where
         }
         self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
         self.m.step_hist[hist_index(self.budget_us, step_us)] += 1;
+        // The fine histogram runs ALONGSIDE the log2 one, from the SAME
+        // `step_us` the line above bins — the room actor's accounting,
+        // mirrored (sub-budget resolution; the overflow semantics of
+        // `step_hist` are untouched). One saturating increment, integer
+        // only (no float on the hot path); steps at/above the cap are
+        // simply absent from it.
+        if let Some(fi) = crate::metrics::fine_hist_index(step_us) {
+            self.m.step_fine_hist[fi] = self.m.step_fine_hist[fi].saturating_add(1);
+        }
 
         if self.steps.is_multiple_of(self.metrics_every)
             && let Err(mpsc::error::TrySendError::Full(_)) =

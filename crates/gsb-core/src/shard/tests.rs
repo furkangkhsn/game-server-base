@@ -41,6 +41,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 mod border;
 mod keepalive;
+mod metrics;
 mod migration;
 mod strip;
 
