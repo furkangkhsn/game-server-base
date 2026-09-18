@@ -33,6 +33,11 @@ use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
+// Child module of this test binary (an integration-test root is its own
+// crate root, so the path is explicit).
+#[path = "supervision/counters.rs"]
+mod counters;
+
 const WAIT: Duration = Duration::from_secs(5);
 const HZ: f64 = 60.0;
 

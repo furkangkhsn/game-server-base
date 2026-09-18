@@ -20,6 +20,11 @@ use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCt
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
 
+// Child module of this test binary (an integration-test root is its own
+// crate root, so the path is explicit).
+#[path = "registry/counters.rs"]
+mod counters;
+
 const WAIT: Duration = Duration::from_secs(5);
 const COUNT_OP: u16 = 0x7E00;
 /// Global (and room) tick rate: room rate divides global, run_every = 1.
