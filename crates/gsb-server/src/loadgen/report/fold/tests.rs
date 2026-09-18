@@ -12,9 +12,10 @@ use std::time::Instant;
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{
     FINE_HIST_BINS, HIST_BINS, HIST_OVERFLOW_BIN, MetricReport, NetReport, RoomReport,
+    fine_hist_percentile_us,
 };
 
-use super::{fold_rooms, report_members, report_steps};
+use super::{fine_percentiles_us, fold_rooms, folded_steps, report_members, report_steps};
 
 mod rules;
 
@@ -39,7 +40,8 @@ fn shard(i: usize) -> RoomReport {
     step_hist[HIST_OVERFLOW_BIN] = over;
     // Fine bins chosen so the p50 taken over the HISTOGRAM population
     // (600) and the p50 taken over the folded `steps` (300, the room's
-    // tick count) land in DIFFERENT bins.
+    // tick count) land in DIFFERENT bins — see
+    // `a_percentile_over_the_folded_histogram_needs_the_folded_population`.
     let mut step_fine_hist = [0u64; FINE_HIST_BINS];
     step_fine_hist[[2usize, 9, 1][i]] = steps;
     RoomReport {

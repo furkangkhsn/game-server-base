@@ -134,6 +134,43 @@ fn the_first_shard_is_absorbed_exactly_once() {
     );
 }
 
+/// A percentile over the FOLDED fine histogram must be taken against the
+/// folded histogram's population (the shards' steps SUMMED), not against
+/// `RoomReport::steps` (the room's tick count, folded with MAX). The
+/// load generator's `step_p50_fine_us` / `step_p90_fine_us` handed it
+/// `steps`, so on a 4-shard room it printed roughly the p12.5 under a
+/// p50 label.
+#[test]
+fn a_percentile_over_the_folded_histogram_needs_the_folded_population() {
+    let f = fold_rooms(&three_shards()).expect("three shard reports fold");
+
+    assert_eq!(folded_steps(&f), TOTAL_STEPS, "the histogram's population");
+    assert_eq!(f.steps, 300, "the room's tick count is NOT that population");
+
+    let right = fine_hist_percentile_us(&f.step_fine_hist, folded_steps(&f), 50);
+    let wrong = fine_hist_percentile_us(&f.step_fine_hist, f.steps, 50);
+    assert_eq!(
+        right,
+        Some(16),
+        "p50 over the 600 steps the histogram holds"
+    );
+    assert_eq!(wrong, Some(8), "p50 mis-taken over 300 — a lower bin");
+    assert_ne!(right, wrong, "the two denominators must not be confused");
+
+    // And the pairing the report lines actually use.
+    assert_eq!(
+        fine_percentiles_us(&f),
+        (16, 72),
+        "step_p50_fine_us / step_p90_fine_us over the folded population"
+    );
+    let naive = |q| fine_hist_percentile_us(&f.step_fine_hist, f.steps, q);
+    assert_eq!(
+        (naive(50), naive(90)),
+        (Some(8), Some(16)),
+        "what the lines printed while they passed the tick count"
+    );
+}
+
 /// `hz = 0.0` means "this shard emitted no sample in this window" (see
 /// `RoomReport::hz`), not "this shard stopped". A plain `min` would let
 /// one quiet shard report the whole room as stopped.
@@ -182,7 +219,7 @@ fn folding_one_room_is_the_identity() {
     assert_eq!(f.requests_local, only.requests_local);
     close(f.late_mean_us, only.late_mean_us, "late_mean_us");
     assert_eq!(
-        f.step_hist.iter().sum::<u64>(),
+        folded_steps(&f),
         only.steps,
         "one actor bins every step exactly once, so the histogram's \
          population is its step count"

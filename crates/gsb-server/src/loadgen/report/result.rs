@@ -2,7 +2,7 @@
 //! scriptable RESULT line under it.
 
 use super::*;
-use gsb_core::metrics::{FINE_HIST_CAP_US, MetricReport, fine_hist_percentile_us};
+use gsb_core::metrics::{FINE_HIST_CAP_US, MetricReport};
 
 pub(crate) fn print_report(
     args: &Args,
@@ -248,10 +248,11 @@ pub(crate) fn print_report(
         // `FINE_HIST_CAP_US` marks "the rank is at/above the cap" —
         // unambiguous, since no fine-bin lower edge equals the cap
         // (they top out at 4088).
-        let p50_fine =
-            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50).unwrap_or(FINE_HIST_CAP_US);
-        let p90_fine =
-            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90).unwrap_or(FINE_HIST_CAP_US);
+        // Against the folded HISTOGRAM's population, not `steps`: the two
+        // histograms fold with SUM and `steps` with MAX, so on a sharded
+        // room `steps` is a shard-count fraction of the distribution the
+        // percentile is taken over (see `folded_steps`).
+        let (p50_fine, p90_fine) = fine_percentiles_us(&r);
         println!(
             "server room (final): steps={} hz={:.2} budget_us={} step_min_us={} step_mean_us={:.1} step_max_us={} step_p50_us~{:.0} step_p99_us~{:.0} step_p50_fine_us={} step_p90_fine_us={} over_budget={:.1}% hist=[{}]",
             r.steps,
@@ -378,14 +379,10 @@ pub(crate) fn print_report(
         server_hz,
         room.map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
             .unwrap_or(0.0),
-        room.map(|r| {
-            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 50).unwrap_or(FINE_HIST_CAP_US)
-        })
-        .unwrap_or(FINE_HIST_CAP_US),
-        room.map(|r| {
-            fine_hist_percentile_us(&r.step_fine_hist, r.steps, 90).unwrap_or(FINE_HIST_CAP_US)
-        })
-        .unwrap_or(FINE_HIST_CAP_US),
+        room.map(|r| fine_percentiles_us(&r).0)
+            .unwrap_or(FINE_HIST_CAP_US),
+        room.map(|r| fine_percentiles_us(&r).1)
+            .unwrap_or(FINE_HIST_CAP_US),
         room.map(|r| r.step_max_us).unwrap_or(0),
         room.map(|r| over_budget_frac(&r.step_hist) * 100.0)
             .unwrap_or(0.0),

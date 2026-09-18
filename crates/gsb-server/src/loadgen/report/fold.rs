@@ -27,7 +27,7 @@
 //! | MIN (positive) | `hz` | The shards step together, so a lagging shard drags the room. `hz = 0.0` means "no sample in this window" (see [`RoomReport::hz`]), not "stopped", so a zero is skipped rather than min'd. |
 //! | MIN (config) | `budget_us` | CONFIGURATION, not a measurement — the shards share one `RoomConfig` and always agree. If they ever do not, the smaller budget is the honest answer: it is the denominator of the overflow fraction and of the histogram edges, and it reads overflow *earlier*. |
 //! | MEAN, steps-weighted | `step_mean_us`, `late_mean_us` | A mean of means is not a mean. Each shard's mean is `sum / steps`, so weighting by `steps` and dividing by the total reconstructs `Σsum / Σsteps` exactly. |
-//! | SUM, element-wise | `step_hist`, `step_fine_hist` | The union of the shards' step distributions, so percentiles and over-budget % are room-wide. |
+//! | SUM, element-wise | `step_hist`, `step_fine_hist` | The union of the shards' step distributions, so percentiles and over-budget % are room-wide. See [`folded_steps`] for the population this union covers. |
 //! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, the whole `requests_*` family, `metrics_dropped` | Cumulative counters over disjoint work. |
 //! | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | A RATE computed per shard cannot be averaged: the shards' counters are disjoint over the same wall clock, so the room's rate is their sum. (Averaging would report a quarter of the room's loss on a 4-shard room.) |
 //! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) |
@@ -35,7 +35,7 @@
 //! This fold runs once, in the load generator's end-of-run
 //! `print_report` — never on a tick path.
 
-use gsb_core::metrics::{MetricReport, RoomReport};
+use gsb_core::metrics::{FINE_HIST_CAP_US, MetricReport, RoomReport, fine_hist_percentile_us};
 
 #[cfg(test)]
 mod tests;
@@ -54,6 +54,42 @@ pub(crate) fn report_members(report: &MetricReport) -> u32 {
 /// marks the report's recency.
 pub(crate) fn report_steps(report: &MetricReport) -> u64 {
     report.rooms.iter().map(|r| r.steps).max().unwrap_or(0)
+}
+
+/// The number of steps a (possibly folded) report's step histograms
+/// cover — which is NOT [`RoomReport::steps`] once shards are folded.
+///
+/// `steps` folds with MAX (the room's tick count); the two histograms
+/// fold with SUM (the union of the shards' distributions), so their
+/// population is Σsteps. A percentile taken over a folded histogram must
+/// be taken against THIS number: handing
+/// `gsb_core::metrics::fine_hist_percentile_us` the tick count instead
+/// asks for a rank a shard-count fraction of the way into the union, and
+/// the answer comes back far too low (on a 4-shard room the "p50" is
+/// really the p12.5).
+///
+/// The log2 histogram is the exact population, not an estimate of it:
+/// `RoomCounters::observe_step_us` bins every step it observes and its
+/// top bin is unbounded, so `Σ step_hist == Σ steps` for every actor.
+/// The FINE histogram cannot be used for this — steps at or above its
+/// cap are deliberately absent from it, which is exactly why
+/// `fine_hist_percentile_us` takes the population as an argument.
+pub(crate) fn folded_steps(r: &RoomReport) -> u64 {
+    r.step_hist.iter().sum()
+}
+
+/// The sub-budget percentile pair the report lines print
+/// (`step_p50_fine_us` / `step_p90_fine_us`), taken against
+/// [`folded_steps`] — the one place that pairing is written down, so a
+/// second consumer cannot reach for `steps` again.
+///
+/// [`FINE_HIST_CAP_US`] is the "the rank sits at or above the fine
+/// histogram's cap" answer: unambiguous, since no fine-bin lower edge
+/// equals the cap (they top out at 4088).
+pub(crate) fn fine_percentiles_us(r: &RoomReport) -> (u64, u64) {
+    let pop = folded_steps(r);
+    let at = |q| fine_hist_percentile_us(&r.step_fine_hist, pop, q).unwrap_or(FINE_HIST_CAP_US);
+    (at(50), at(90))
 }
 
 /// Fold a report's rooms into ONE [`RoomReport`] so the
