@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod lagged;
+
 #[tokio::test]
 async fn room_steps_on_ticks_and_pulls_actions() {
     let (dt_tx, mut dts) = mpsc::channel(16);
@@ -136,58 +138,6 @@ async fn slower_room_steps_on_every_kth_global_tick() {
     }
 
     h.shutdown().await;
-}
-
-#[tokio::test]
-async fn lagged_receiver_catches_up_and_keeps_stepping() {
-    let (dt_tx, mut dts) = mpsc::channel(16);
-    let (op_tx, _ops) = mpsc::channel(16);
-    // Buffer of 2: flooding it makes the receiver lag deterministically
-    // *before* the room starts consuming.
-    let (tick_tx, lagged_rx) = broadcast::channel(2);
-    let (_control, control_rx) = channel(16);
-    let t0 = Instant::now();
-    let period = Duration::from_secs_f64(1.0 / 30.0);
-    for i in 1..=10u64 {
-        tick_tx
-            .send(TickInfo {
-                tick: i,
-                at: t0 + Duration::from_secs_f64(i as f64 * period.as_secs_f64()),
-            })
-            .expect("channel open");
-    }
-    let actor = RoomActor::new(
-        RoomConfig {
-            id: RoomId(1),
-            ..Default::default()
-        },
-        (),
-        Box::new(RecLogic {
-            dts: dt_tx,
-            ops: op_tx,
-        }),
-        lagged_rx,
-        control_rx,
-        1,
-        null_metrics_tx(),
-        None,
-    );
-    let handle = tokio::spawn(actor.run());
-
-    // The room skips the lagged ticks (Lagged → continue) and steps on
-    // the two still-buffered ticks (9 and 10), then the sender is
-    // dropped → Closed → clean exit.
-    drop(tick_tx);
-    tokio::time::timeout(Duration::from_secs(2), handle)
-        .await
-        .expect("room did not exit on closed ticker")
-        .expect("room task panicked");
-    let mut count = 0;
-    while let Ok(dt) = dts.try_recv() {
-        count += 1;
-        assert!(dt <= period * 2);
-    }
-    assert_eq!(count, 2, "expected exactly the two buffered ticks");
 }
 
 #[tokio::test]
