@@ -23,6 +23,7 @@ mod fanout;
 mod groups;
 mod guardrails;
 mod idle;
+mod sampling;
 mod shipping;
 mod stubs;
 mod tick;
