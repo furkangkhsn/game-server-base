@@ -75,7 +75,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **386** (386/386 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **388** (388/388 yeşil; tarihsel
 ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 için
 `docs/CHANGELOG.md` başlığına bakınız). Son tur: **metrik fold
 denetimi** — sharded oda raporunu tek satıra katlayan `fold_rooms`
@@ -247,7 +247,7 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   (CHANGELOG "sayaç envanteri kapanış turu"). Maddenin kendi listesi
   BAYATTI ve tur ona güvenmedi: envanter sıfırdan yeniden türetildi
   (metrik yüzeyine ulaşan her tip alan alan tarandı), sonra kapatıldı.
-  Test 361 → **386**; 41 mutasyonun tamamı öldürüldü, kırılamayan test
+  Test 361 → **388**; 43 mutasyonun tamamı öldürüldü, kırılamayan test
   yok. Kapananlar: RoomSample'ın `lagged_*`, `keepalive_resends` (oda
   tarafı), `step_fine_hist` (oda tarafı), `snap_bytes*`,
   `snap_overflows`, `snap_records`, `shipped_*`, `private_frames`,

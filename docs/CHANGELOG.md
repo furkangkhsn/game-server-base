@@ -27,7 +27,7 @@ sürmek gerekir; ve bir alanın YALNIZCA sıfır olduğunu assert eden bir
 test, hiç yazılmayan bir alandan ayırt edilemez — bu turda
 `requests_timed_out` tam olarak o durumdaydı.
 
-Test sayısı 361 → **386** (+25; hiçbir test silinmedi, gevşetilmedi,
+Test sayısı 361 → **388** (+27; hiçbir test silinmedi, gevşetilmedi,
 `#[ignore]` eklenmedi). Wire protokolü değişmedi; loadgen'in İÇ metrik
 export formatı GSM6 → GSM7 (iki uç da aynı ikili). Mutex/RwLock/
 parking_lot/select! yok; clippy 0 uyarı.
@@ -35,7 +35,7 @@ parking_lot/select! yok; clippy 0 uyarı.
 ### 1. Yöntem: her test mutation-check'li
 
 Turun her testi kırılarak doğrulandı: sayacın artışı bozuldu, testin
-DÜŞTÜĞÜ görüldü, bozma geri alındı. Toplam **41 mutasyon**, hepsi
+DÜŞTÜĞÜ görüldü, bozma geri alındı. Toplam **43 mutasyon**, hepsi
 öldürüldü; kırılamayan test olmadı. Bozmalar üç sınıfta toplandı:
 
 1. **hiç artmayan sayaç** (`+= 1` → `+= 0`) — "her zaman sıfır" hatası,
