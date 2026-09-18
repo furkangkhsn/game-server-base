@@ -288,6 +288,18 @@ pub(in crate::shard::tests) fn tinfo(tick: u64) -> TickInfo {
     }
 }
 
+/// A tick stamped `late_by` in the PAST, so the actor's measured tick
+/// latency (`step start − t.at`) is at least `late_by`: the test sets the
+/// latency it wants to observe instead of racing the scheduler for it.
+pub(in crate::shard::tests) fn tinfo_late_by(tick: u64, late_by: Duration) -> TickInfo {
+    TickInfo {
+        tick,
+        at: Instant::now()
+            .checked_sub(late_by)
+            .expect("the monotonic clock is further from its epoch than the test's offset"),
+    }
+}
+
 /// Drive one Join through `handle_msg`; returns the minted entity.
 pub(in crate::shard::tests) async fn join_direct(
     a: &mut ShardActor<TWorld, (), TState, TStrip>,

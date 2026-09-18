@@ -30,6 +30,12 @@ pub struct RoomSample {
     /// use it to map bins back to µs and to read the overflow boundary.
     pub budget_us: u64,
     /// Step body duration, µs: min / max / sum (mean = sum / steps).
+    ///
+    /// All three are CUMULATIVE over the actor's life — never reset, so
+    /// the extremes are the smallest and largest step the actor has ever
+    /// taken, not this sample interval's. `*_min_us` really is a minimum:
+    /// it held the first step's duration until the "min counters" round
+    /// (see `RoomCounters::observe_step_us`).
     pub step_min_us: u64,
     pub step_max_us: u64,
     pub step_sum_us: u64,
@@ -43,7 +49,8 @@ pub struct RoomSample {
     /// this does not touch).
     pub step_fine_hist: [u32; FINE_HIST_BINS],
     /// Tick processing latency (step start − the ticker's `at`
-    /// timestamp), µs: min / max / sum.
+    /// timestamp), µs: min / max / sum — cumulative over the actor's
+    /// life, same rule as the `step_*` trio above.
     pub late_min_us: u64,
     pub late_max_us: u64,
     pub late_sum_us: u64,

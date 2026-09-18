@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::channel::{Inbox, Mailbox};
-use crate::metrics::{MetricsEvent, hist_index};
+use crate::metrics::MetricsEvent;
 use crate::room::{RoomConfig, RoomCounters};
 use crate::ticker::TickInfo;
 
@@ -219,34 +219,16 @@ where
 
         // -- tick latency (same measurement as the room actor).
         let late_us = Instant::now().saturating_duration_since(t.at).as_micros() as u64;
-        if self.steps == 1 {
-            self.m.late_min_us = late_us;
-            self.m.late_max_us = late_us;
-        } else if late_us > self.m.late_max_us {
-            self.m.late_max_us = late_us;
-        }
-        self.m.late_sum_us = self.m.late_sum_us.saturating_add(late_us);
+        self.m.observe_late_us(self.steps, late_us);
 
         let t0 = Instant::now();
         let keep = self.step_phases(t);
         let step_us = t0.elapsed().as_micros() as u64;
-        if self.steps == 1 {
-            self.m.step_min_us = step_us;
-            self.m.step_max_us = step_us;
-        } else if step_us > self.m.step_max_us {
-            self.m.step_max_us = step_us;
-        }
-        self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
-        self.m.step_hist[hist_index(self.budget_us, step_us)] += 1;
-        // The fine histogram runs ALONGSIDE the log2 one, from the SAME
-        // `step_us` the line above bins — the room actor's accounting,
-        // mirrored (sub-budget resolution; the overflow semantics of
-        // `step_hist` are untouched). One saturating increment, integer
-        // only (no float on the hot path); steps at/above the cap are
-        // simply absent from it.
-        if let Some(fi) = crate::metrics::fine_hist_index(step_us) {
-            self.m.step_fine_hist[fi] = self.m.step_fine_hist[fi].saturating_add(1);
-        }
+        // The same accounting the room actor runs — literally the same
+        // code now (`RoomCounters::observe_step_us`) rather than a
+        // hand-kept mirror of it: extremes, sum, and both histograms from
+        // this one `step_us`.
+        self.m.observe_step_us(self.steps, self.budget_us, step_us);
 
         if self.steps.is_multiple_of(self.metrics_every)
             && let Err(mpsc::error::TrySendError::Full(_)) =

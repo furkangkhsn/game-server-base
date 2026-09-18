@@ -58,15 +58,97 @@ async fn sharded_step_fills_the_fine_duration_histogram() {
     // timing-dependent: it separates "binned the measured duration" from
     // "binned some other number".
     //
-    // Deliberately NOT bracketed from below by `step_min_us`: that field
-    // is not a minimum. Both actors set it only on `steps == 1` and never
-    // lower it afterwards, so it holds the (typically cold, slowest) first
-    // step's duration forever — a defect of its own, shared by the room
-    // and the shard, and out of this change's scope.
+    // It is now bracketed from BELOW by `step_min_us` as well. That was
+    // impossible when this test was written: `step_min_us` was not a
+    // minimum on either actor (assigned only under `steps == 1`, never
+    // lowered), so it carried the cold first step's duration and sat
+    // ABOVE a warm p50 — the bracket would have failed on correct code,
+    // and the comment here said so. The "min counters" round made it a
+    // real minimum, so the bracket became a true statement about the same
+    // five observations: the assertion gets strictly stronger.
+    //
+    // Compared at BIN granularity, because `fine_hist_percentile_us`
+    // answers the bin's LOWER EDGE (the documented ±8 µs semantics): a
+    // p50 in the same bin as the minimum reads up to 7 µs below it, which
+    // is the helper working, not the ranking being wrong.
+    let min_bin = crate::metrics::fine_hist_index(s.step_min_us)
+        .expect("this rig's steps are far under the fine cap");
+    let p50_bin = (p50 / crate::metrics::FINE_HIST_US_PER_BIN) as usize;
+    assert!(
+        p50_bin >= min_bin,
+        "the fine histogram must bin the duration the step measured: the \
+         p50 bin ({p50_bin}, edge {p50} µs) is below the bin the minimum \
+         {} µs lands in ({min_bin})",
+        s.step_min_us
+    );
     assert!(
         p50 <= s.step_max_us,
         "the fine histogram must bin the duration the step measured: p50 \
          {p50} µs exceeds step_max_us {}",
         s.step_max_us
+    );
+}
+
+/// `late_min_us` must be a MINIMUM — a later, smaller tick latency has to
+/// pull it down.
+///
+/// It did not. Both actors seeded the pair on `steps == 1` and then only
+/// ever raised the maximum; no arm lowered the minimum, so the field held
+/// the FIRST step's latency for the process's whole life and every
+/// consumer that reads it — the `gsb-metric scope=room` line, the
+/// `gsb_room_late_min_us` gauge whose HELP says "Minimum", the loadgen
+/// summary — printed a first-observation under a minimum's name.
+///
+/// Deterministic, not timing-dependent: the latency is `step start −
+/// t.at`, and the test owns `t.at`. A tick stamped 50 ms in the past is
+/// observed at ≥ 50 ms late; the next, stamped 2 ms in the past, at ≥ 2 ms
+/// — so the second observation is strictly the smaller one by a margin
+/// that no scheduling jitter in a bare, empty-world step can close.
+#[tokio::test]
+async fn a_faster_tick_lowers_the_shards_late_minimum() {
+    let mut a = bare_shard(0);
+
+    assert!(a.step(&tinfo_late_by(1, Duration::from_millis(50))));
+    let seeded = a.sample().late_min_us;
+    assert!(
+        seeded >= 50_000,
+        "the first step must observe the 50 ms the tick was stamped late: {seeded} µs"
+    );
+
+    assert!(a.step(&tinfo_late_by(2, Duration::from_millis(2))));
+
+    let s = a.sample();
+    assert_eq!(s.steps, 2, "two steps were run");
+    // The second observation was at most ~a few ms; the first was at
+    // least 50 ms. A true minimum tracks the second.
+    assert!(
+        s.late_min_us < seeded,
+        "a later, smaller tick latency must lower the reported minimum: \
+         late_min_us {} still equals the first step's {seeded} µs",
+        s.late_min_us
+    );
+    assert!(
+        s.late_min_us < 20_000,
+        "late_min_us {} µs must track the ~2 ms observation, not the 50 ms one",
+        s.late_min_us
+    );
+    // The seeding half of the contract: a minimum initialised to 0 could
+    // never be lowered and would report 0 forever, so it must start from
+    // a real observation and stay above zero here (both ticks were
+    // stamped milliseconds in the past).
+    assert!(
+        s.late_min_us > 0,
+        "late_min_us must be seeded from the first observation, never left at 0"
+    );
+    assert!(
+        s.late_max_us >= seeded,
+        "the maximum must still hold the 50 ms observation: {} µs",
+        s.late_max_us
+    );
+    assert!(
+        s.late_min_us <= s.late_max_us,
+        "min {} must not exceed max {}",
+        s.late_min_us,
+        s.late_max_us
     );
 }

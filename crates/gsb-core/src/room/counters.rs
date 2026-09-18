@@ -9,6 +9,11 @@ use std::fmt::Debug;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+mod observe;
+
+#[cfg(test)]
+mod tests;
+
 /// Per-player row of the room (or shard) member table. `pub(crate)`
 /// because the shard actor reuses the same table shape (a shard's `conns`
 /// is the shard's share of the room's members — see `crate::shard`).

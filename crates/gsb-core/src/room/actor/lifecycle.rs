@@ -199,32 +199,15 @@ where
         //    start minus the ticker's timestamp; covers broadcast delivery
         //    + the room's queue behind the ticker).
         let late_us = Instant::now().saturating_duration_since(t.at).as_micros() as u64;
-        if self.steps == 1 {
-            self.m.late_min_us = late_us;
-            self.m.late_max_us = late_us;
-        } else if late_us > self.m.late_max_us {
-            self.m.late_max_us = late_us;
-        }
-        self.m.late_sum_us = self.m.late_sum_us.saturating_add(late_us);
+        self.m.observe_late_us(self.steps, late_us);
 
         let t0 = Instant::now();
         let keep = self.step_phases(t);
         let step_us = t0.elapsed().as_micros() as u64;
-        if self.steps == 1 {
-            self.m.step_min_us = step_us;
-            self.m.step_max_us = step_us;
-        } else if step_us > self.m.step_max_us {
-            self.m.step_max_us = step_us;
-        }
-        self.m.step_sum_us = self.m.step_sum_us.saturating_add(step_us);
-        self.m.step_hist[crate::metrics::hist_index(self.budget_us, step_us)] += 1;
-        // The fine histogram runs ALONGSIDE the log2 one (sub-budget
-        // resolution; the overflow semantics of `step_hist` are untouched).
-        // One saturating increment, integer only (no float on the hot
-        // path); steps at/above the cap are simply absent from it.
-        if let Some(fi) = crate::metrics::fine_hist_index(step_us) {
-            self.m.step_fine_hist[fi] = self.m.step_fine_hist[fi].saturating_add(1);
-        }
+        // Extremes, sum and both histograms in one place, shared with the
+        // shard actor (see `RoomCounters::observe_step_us`): integer only,
+        // no allocation, no await — the tick body stays synchronous.
+        self.m.observe_step_us(self.steps, self.budget_us, step_us);
 
         // A2: emit a sample at most every `metrics_every` steps (the send
         // cadence tracks the collector's report cadence; the counters are

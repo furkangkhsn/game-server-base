@@ -9,6 +9,9 @@ use crate::stats::*;
 mod result;
 pub(crate) use result::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Extra facts of a separate-process (orchestrated) run; `None` for the
 /// in-process and external-direct modes.
 pub(crate) struct SepInfo {
@@ -50,6 +53,8 @@ pub(crate) fn report_steps(report: &MetricReport) -> u64 {
 ///   (the room's total);
 /// - worst-case gauges (step_max, late_max, snap_bytes_max, max_group): MAX
 ///   (the bottleneck shard);
+/// - best-case gauges (step_min, late_min): MIN (the fastest shard) — the
+///   fold for a minimum is `min`, never "whatever the first shard said";
 /// - rates: MIN hz (the slowest shard is the room's rate — the shards step
 ///   together, so a lagging shard drags the room);
 /// - `step_hist`: element-wise SUM (the union of all shards' step
@@ -77,6 +82,11 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         for i in 0..FINE_HIST_BINS {
             acc.step_fine_hist[i] += r.step_fine_hist[i];
         }
+        // `late_min_us` was missing from this loop, so the folded room
+        // kept `first`'s value — shard 0's, since the reports are ordered
+        // by sample id. A minimum folds with `min`, like `step_min_us`
+        // two lines up.
+        acc.late_min_us = acc.late_min_us.min(r.late_min_us);
         acc.late_max_us = acc.late_max_us.max(r.late_max_us);
         acc.lagged_events += r.lagged_events;
         acc.lagged_ticks += r.lagged_ticks;
