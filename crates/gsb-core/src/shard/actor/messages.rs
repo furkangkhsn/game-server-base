@@ -110,7 +110,18 @@ where
                     let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
                     match decision {
                         Detach::Despawn => {
-                            // Today's close semantics, unchanged.
+                            // Today's close semantics, plus the registry
+                            // report — the room actor's arm mirrored (see
+                            // it for the full argument). A declined park
+                            // never starts a hold, so no phase-0c sweep
+                            // can ever end it; on the grid the unreported
+                            // row also keeps a `ShardGroup` member slot,
+                            // the only whole-room capacity view there is.
+                            // Flushed in this same tick's phase 0c (the
+                            // mailbox drain runs first).
+                            if self.registry.is_some() {
+                                self.despawn_reports.push(conn);
+                            }
                             self.despawn_conn(player, false);
                         }
                         Detach::Hold { grace, to } => {

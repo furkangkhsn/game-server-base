@@ -137,21 +137,44 @@ pub enum RegistryMsg {
     /// member view must not drop either. The slot is released by exactly
     /// three events: a resume that re-affiliates the identity (SpawnDone
     /// cleanup), the room ending (destroy/death/`notify_room_gone`), and
-    /// the room reporting the hold's own expiry ([`Self::ParkExpired`]).
+    /// the room reporting the detach's end toward despawn
+    /// ([`Self::DetachDespawned`]).
     DetachDone { conn: ConnectionId, room: RoomId },
-    /// A parked entity's hold ended toward DESPAWN and the room dropped
-    /// it through the ordinary leave funnel: release the detached row this
+    /// The detached session's entity is GONE: the room dropped it through
+    /// the ordinary leave funnel, so release the detached row this
     /// registry has been holding the slot with.
     ///
-    /// WHY the room has to say this. The grace is room-side policy (the
-    /// logic picks it per player, and a combat-held park has no deadline
-    /// at all), so the room is the only actor that can know a hold ended;
-    /// the registry cannot age these rows out on a timer of its own
-    /// without being wrong about exactly the holds that matter. Before
-    /// this message existed the room told nobody, and a detached row
-    /// survived the entity it stood for — one leaked row plus one leaked
-    /// `max_connections` slot per player who never came back, released
-    /// only if the room itself ended. A persistent room never does.
+    /// Sent from the two — and only two — places a detach reaches despawn
+    /// (`docs/RECONNECT.md` §3, §4):
+    ///
+    /// 1. the DETACH itself, when the logic's `on_disconnect` answers
+    ///    `Detach::Despawn` (it declines to park at all — the shape of
+    ///    `disconnect_grace_secs = 0`, and of any per-player policy that
+    ///    says this one is not worth holding). The room despawns in that
+    ///    same control phase; nothing is ever parked;
+    /// 2. the hold-expiry sweep, when a park that DID start runs out
+    ///    toward `ExpireTo::Despawn`.
+    ///
+    /// WHY the room has to say this. Both the decision and the grace are
+    /// room-side policy (the logic picks them per player, and a
+    /// combat-held park has no deadline at all), so the room is the only
+    /// actor that can know the detach ended; the registry cannot age
+    /// these rows out on a timer of its own without being wrong about
+    /// exactly the cases that matter. The registry has already marked the
+    /// row `detached` and kept it by the time the policy answers — that
+    /// mark is speculative, and this message is what resolves it.
+    ///
+    /// When the room told nobody, a detached row survived the entity it
+    /// stood for — one leaked row plus one leaked `max_connections` slot
+    /// per player who never came back, released only if the room itself
+    /// ended. A persistent room never does.
+    ///
+    /// NAMING (this variant used to be `ParkExpired`). It was minted for
+    /// sender 2 alone, and read as a lie on sender 1, where nothing was
+    /// ever parked and nothing expired — the policy declined. The name
+    /// now describes the registry-facing FACT ("this detached row's
+    /// entity was despawned"), which is what both senders report and what
+    /// the arm below acts on, rather than one of the two causes.
     ///
     /// Idempotent and self-guarding: the registry acts only on a row that
     /// is still detached AND still affiliated with `room`, so a report
@@ -164,7 +187,7 @@ pub enum RegistryMsg {
     /// still ALIVE under a bot, still holding its slot, and still a valid
     /// resume target (`docs/RECONNECT.md` §9) — the row is doing its job
     /// there, not leaking.
-    ParkExpired { conn: ConnectionId, room: RoomId },
+    DetachDespawned { conn: ConnectionId, room: RoomId },
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see

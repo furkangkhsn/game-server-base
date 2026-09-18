@@ -70,8 +70,10 @@ where
                         self.metrics.clone(),
                         self.result_sink.clone(),
                     )
-                    // The park-expiry report path (`ParkExpired`): the
-                    // room is the only actor that sees a hold end, and
+                    // The detach-despawn report path
+                    // (`DetachDespawned`): the room is the only actor
+                    // that sees a detach reach despawn — whether the
+                    // policy declined to park or a hold ran out — and
                     // this registry is holding the row it ends.
                     .with_registry(self.self_mailbox.clone())
                     .run(),
@@ -159,9 +161,10 @@ where
                             // payload per shard — see `crate::shard`).
                             self.result_sink.clone(),
                         )
-                        // The park-expiry report path (`ParkExpired`) —
-                        // as for a single room, plus the ShardGroup member
-                        // slot the detached row holds on the grid.
+                        // The detach-despawn report path
+                        // (`DetachDespawned`) — as for a single room,
+                        // plus the ShardGroup member slot the detached
+                        // row holds on the grid.
                         .with_registry(self.self_mailbox.clone())
                         .run(),
                     );

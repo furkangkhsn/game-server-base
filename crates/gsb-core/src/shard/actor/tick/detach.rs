@@ -1,4 +1,4 @@
-//! Phase 0c — the detach-hold sweep and the park-expiry reports.
+//! Phase 0c — the detach-hold sweep and the detach-despawn reports.
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -22,7 +22,7 @@ where
     // each neighbor's message, store in the actor's maps).
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    /// Tick phase 0c — the detach-hold sweep and the park-expiry reports
+    /// Tick phase 0c — the detach-hold sweep and the detach-despawn reports
     /// the registry is waiting on.
     pub(crate) fn phase_detach_sweep(&mut self) {
         // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
@@ -68,7 +68,7 @@ where
                         if self.registry.is_some()
                             && let Some(conn) = self.conns.get(&player).map(|rc| rc.conn)
                         {
-                            self.park_reports.push(conn);
+                            self.despawn_reports.push(conn);
                         }
                         self.despawn_conn(player, false);
                         debug!(
@@ -95,19 +95,23 @@ where
             }
         }
 
-        // -- Park-expiry reports: hand the registry back the rows (and the
-        //    member slots) whose holds ended this tick, plus anything an
-        //    earlier tick could not place. Synchronous `try_send` (the
-        //    tick body stays await-free); a FULL mailbox keeps the id
+        // -- Detach-despawn reports: hand the registry back the rows (and
+        //    the member slots) whose detaches ended in a despawn this
+        //    tick, plus anything an earlier tick could not place. BOTH
+        //    producers feed this one queue — the sweep above (a hold that
+        //    ran out) and the `ShardMsg::Detach` handler's
+        //    `Detach::Despawn` arm (a policy that declined to park),
+        //    drained earlier in this same tick. Synchronous `try_send`
+        //    (the tick body stays await-free); a FULL mailbox keeps the id
         //    queued for the next tick instead of dropping it, a CLOSED one
         //    drops it (the registry is gone — no table left to leak into).
-        if !self.park_reports.is_empty()
+        if !self.despawn_reports.is_empty()
             && let Some(registry) = &self.registry
         {
             let room = self.config.id;
-            self.park_reports.retain(|&conn| {
+            self.despawn_reports.retain(|&conn| {
                 matches!(
-                    registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
+                    registry.try_send(crate::registry::RegistryMsg::DetachDespawned { conn, room }),
                     Err(mpsc::error::TrySendError::Full(_))
                 )
             });

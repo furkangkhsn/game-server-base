@@ -158,24 +158,31 @@ pub(crate) struct ConnInfo {
     /// parked/resumed session never consumes unauthenticated capacity —
     /// the flag just stays as the session carried it.
     pub(crate) authed: bool,
-    /// The transport died but the entity is parked room-side: the
-    /// affiliation is kept (slot held, §4) with this mark. Released by
-    /// exactly three events, which between them cover every way a park can
-    /// end: a resumed or fresh session for the same identity, a room
+    /// The transport died and the entity MAY be parked room-side: the
+    /// affiliation is kept (slot held, §4) with this mark, which is set
+    /// speculatively — before the room's policy has answered. Released by
+    /// exactly three events, which between them cover every way a detach
+    /// can end: a resumed or fresh session for the same identity, a room
     /// destroy/death (like any affiliation), and the room's own
-    /// [`RegistryMsg::ParkExpired`] report when the hold runs out toward
-    /// despawn.
+    /// [`RegistryMsg::DetachDespawned`] report — the policy declining to
+    /// park, or a hold running out toward despawn.
     ///
-    /// That third one used to be missing, and its absence was not the
-    /// bounded imprecision it was documented as. A hold that expired
-    /// without the identity ever returning left this entry standing
-    /// forever — the room had despawned the entity, but the row kept a
-    /// `max_connections` slot (and, on the grid, a `ShardGroup` member
-    /// slot) reserved for a session that no longer existed. In a
+    /// That third one used to be missing entirely, and its absence was not
+    /// the bounded imprecision it was documented as. A detach that reached
+    /// despawn without the identity ever returning left this entry
+    /// standing forever — the room had despawned the entity, but the row
+    /// kept a `max_connections` slot (and, on the grid, a `ShardGroup`
+    /// member slot) reserved for a session that no longer existed. In a
     /// persistent room, which never ends, that accumulates one dead
     /// reservation per abandoned session until the caps refuse live
-    /// players on behalf of nobody. The room reports the expiry now; see
-    /// [`RegistryMsg::ParkExpired`].
+    /// players on behalf of nobody.
+    ///
+    /// It was then closed for only ONE of the two ways a detach reaches
+    /// despawn — the hold-expiry sweep. The `Detach::Despawn` arm, where
+    /// the policy declines to park at all, starts no hold and so is never
+    /// swept; with the default-off `disconnect_grace_secs = 0` that is
+    /// EVERY disconnect. Both arms report now; see
+    /// [`RegistryMsg::DetachDespawned`].
     ///
     /// The AI-handover arm is deliberately NOT reported: that hold ends
     /// with the entity alive under a bot, genuinely holding its slot and

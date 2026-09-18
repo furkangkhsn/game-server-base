@@ -166,13 +166,16 @@ pub struct ShardActor<W, G, St, Sp> {
     /// synchronous `try_send` on teardown (no await, best effort). Every
     /// shard of a logical room shares the registry's sink.
     pub(in crate::shard) result_sink: Option<Mailbox<crate::registry::MatchResult>>,
-    /// The registry's mailbox, used for exactly one report: a park that
-    /// expired toward despawn
-    /// ([`crate::registry::RegistryMsg::ParkExpired`]). `None` for a
+    /// The registry's mailbox, used for exactly one report: a detach that
+    /// ended in despawn
+    /// ([`crate::registry::RegistryMsg::DetachDespawned`]) — the policy
+    /// declining to park, or a hold running out. `None` for a
     /// directly-driven shard (the test rigs) — no registry to tell.
     pub(in crate::shard) registry: Option<Mailbox<crate::registry::RegistryMsg>>,
-    /// Park expiries not yet accepted by the registry's mailbox; retried
-    /// on later ticks rather than dropped. See the room actor's field of
-    /// the same name for why a dropped report would reopen the leak.
-    pub(in crate::shard) park_reports: Vec<ConnectionId>,
+    /// Detach-despawn reports not yet accepted by the registry's mailbox;
+    /// retried on later ticks rather than dropped. Written by the
+    /// `ShardMsg::Detach` handler and by the phase-0c hold sweep, flushed
+    /// once at the end of phase 0c. See the room actor's field of the same
+    /// name for why a dropped report would reopen the leak.
+    pub(in crate::shard) despawn_reports: Vec<ConnectionId>,
 }

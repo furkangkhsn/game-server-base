@@ -105,12 +105,12 @@ where
             completions_tx,
             result_sink,
             registry: None,
-            park_reports: Vec::new(),
+            despawn_reports: Vec::new(),
         }
     }
 
-    /// Give the room the registry mailbox it reports park expiries on
-    /// (see [`crate::registry::RegistryMsg::ParkExpired`]). A builder
+    /// Give the room the registry mailbox it reports detach-despawns on
+    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]). A builder
     /// instead of another `new` parameter: every direct-drive harness
     /// constructs rooms without a registry, and `new` is already at the
     /// argument limit.

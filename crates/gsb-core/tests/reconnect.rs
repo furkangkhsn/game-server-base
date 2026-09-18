@@ -1306,6 +1306,137 @@ async fn sharded_park_expiry_releases_the_registry_row_and_the_member_slot() {
     stop_registry(tx, handle).await;
 }
 
+/// A factory whose rooms DECLINE to park: `on_disconnect` answers
+/// [`Detach::Despawn`] straight away. This is the shipped shape of
+/// `disconnect_grace_secs = 0` (`gsb-game`'s `park_on_disconnect` returns
+/// `Despawn` on a zero grace), and of every policy that decides this
+/// particular player is not worth holding.
+fn declining_factory() -> RoomFactory<(), (), (), ()> {
+    std::sync::Arc::new(|_id, _cfg| {
+        let (ops_tx, _ops) = mpsc::channel(16);
+        // `hold_default = false` + no per-conn policy entry = the
+        // `unwrap_or(Detach::Despawn)` arm of `ParkLogic::on_disconnect`.
+        let logic = ParkLogic::new(ops_tx);
+        BuiltRoom::Single {
+            world: (),
+            logic: Box::new(logic),
+        }
+    })
+}
+
+/// A policy that declines to park leaks the registry row exactly the way
+/// an unreported hold expiry did.
+///
+/// The registry marks a closing connection's row `detached` and KEEPS it
+/// (§4 — the slot is held for the park) BEFORE the room's policy has
+/// answered; it then waits to be told how the detach ended. The hold-
+/// expiry sweep tells it. The `Detach::Despawn` arm — where the policy
+/// declines and the room despawns immediately — used to tell it nothing,
+/// and no sweep ever runs for a park that never started: there is no hold
+/// and no deadline. So the row stood forever with `room = Some(..)` and
+/// `detached = true`, holding a `max_connections` slot and counting
+/// toward `room_members` for an entity that was already gone.
+///
+/// This is the DEFAULT-OFF configuration's path: with
+/// `disconnect_grace_secs = 0` every single disconnect leaked.
+#[tokio::test]
+async fn declined_park_releases_the_registry_row() {
+    let (tx, mut metrics, handle) = start_registry_observed(declining_factory());
+    let room = RoomId(75);
+    create_room(&tx, reg_config(room)).await.expect("create");
+
+    let _c1 = open_conn(&tx, ConnectionId(1)).await;
+    spawn_as(&tx, ConnectionId(1), room, "ana")
+        .await
+        .expect("first session joins");
+    // Transport death → the policy declines to park → the room despawns
+    // in the very same control phase. Nothing is left to expire.
+    close_conn(&tx, ConnectionId(1)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(
+        status(&tx, room).await,
+        RoomStatus::Running { members: 0 },
+        "a declined park holds no slot: the entity was despawned on the \
+         spot, so the registry's member view must not still count it"
+    );
+
+    // A second connection, opened only to make the registry flush a fresh
+    // sample (its counters emit on state change). With the declined
+    // park's row released, the table holds exactly this one connection.
+    let _c2 = open_conn(&tx, ConnectionId(2)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let s = latest_registry_sample(&mut metrics).await;
+    assert_eq!(
+        s.conns, 1,
+        "the declined park's row must be released; only the live conn #2 \
+         should remain in the registry table"
+    );
+
+    stop_registry(tx, handle).await;
+}
+
+/// The sharded twin of [`declining_factory`]: two shards of the same park
+/// logic, every join homing to shard 0, none of them parking.
+fn declining_sharded_factory() -> RoomFactory<(), (), (), ()> {
+    std::sync::Arc::new(move |_id, _cfg| {
+        let shard = |index: usize| {
+            let (ops_tx, _ops) = mpsc::channel(16);
+            let mut logic = ParkLogic::new(ops_tx);
+            logic.index = index;
+            (
+                (),
+                Box::new(logic) as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
+            )
+        };
+        BuiltRoom::Sharded {
+            shards: vec![shard(0), shard(1)],
+            home_shard: std::sync::Arc::new(|_conn| 0),
+        }
+    })
+}
+
+/// The shard actor runs its own copy of the detach policy
+/// (`ShardMsg::Detach`), so it carries its own copy of the declined-park
+/// leak: [`declined_park_releases_the_registry_row`] for the grid.
+///
+/// As on the hold-expiry path, the sharded case has the extra thing to
+/// get right — a detached row also holds a slot in the registry's
+/// `ShardGroup` member count, which is what enforces `max_players` for a
+/// sharded room (no single shard sees the whole roster). A declined park
+/// that reports nothing leaves the room permanently "full" with nobody
+/// in it.
+#[tokio::test]
+async fn sharded_declined_park_releases_the_registry_row_and_the_member_slot() {
+    let (tx, mut metrics, handle) = start_registry_observed(declining_sharded_factory());
+    let room = RoomId(76);
+    create_room(&tx, reg_config(room)).await.expect("create");
+
+    let _c1 = open_conn(&tx, ConnectionId(1)).await;
+    spawn_as(&tx, ConnectionId(1), room, "ana")
+        .await
+        .expect("first session joins");
+    close_conn(&tx, ConnectionId(1)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(
+        status(&tx, room).await,
+        RoomStatus::Running { members: 0 },
+        "the declined park must hand its member slot back"
+    );
+
+    let _c2 = open_conn(&tx, ConnectionId(2)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let s = latest_registry_sample(&mut metrics).await;
+    assert_eq!(
+        s.conns, 1,
+        "the declined park's row must be released; only the live conn #2 \
+         should remain in the registry table"
+    );
+
+    stop_registry(tx, handle).await;
+}
+
 async fn stop_registry(tx: Mailbox<RegistryMsg>, handle: tokio::task::JoinHandle<()>) {
     tx.send(RegistryMsg::Shutdown).await.ok();
     drop(tx);

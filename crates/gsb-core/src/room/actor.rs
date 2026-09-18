@@ -135,19 +135,26 @@ pub struct RoomActor<W, G, Sp> {
     /// [`RoomLogic::match_result`]): a bounded mailbox, sent to with the
     /// synchronous `try_send` on shutdown (no await, best effort).
     pub(in crate::room) result_sink: Option<Mailbox<crate::registry::MatchResult>>,
-    /// The registry's mailbox, used for exactly one report: a park that
-    /// expired toward despawn ([`crate::registry::RegistryMsg::ParkExpired`]).
+    /// The registry's mailbox, used for exactly one report: a detach that
+    /// ended in despawn
+    /// ([`crate::registry::RegistryMsg::DetachDespawned`]) — the policy
+    /// declining to park, or a hold running out.
     /// `None` for a standalone room (the direct-drive test harnesses) — it
     /// then simply has no registry to tell.
     pub(in crate::room) registry: Option<Mailbox<crate::registry::RegistryMsg>>,
-    /// Park expiries not yet accepted by the registry's mailbox.
+    /// Detach-despawn reports not yet accepted by the registry's mailbox.
     ///
     /// The report is a `try_send` (the tick body stays synchronous — the
     /// room's only await is `tick_rx.recv()`), so a momentarily full
     /// registry mailbox would otherwise DROP it — and a dropped report is
     /// the very leak this message exists to close. Un-sent ids wait here
     /// and are retried on later ticks instead. Bounded in practice by the
-    /// parks that expire while the registry is saturated, and it drains as
+    /// detaches that end while the registry is saturated, and it drains as
     /// soon as the registry catches up.
-    pub(in crate::room) park_reports: Vec<ConnectionId>,
+    ///
+    /// Written from BOTH producers — the CONTROL phase's `Detach::Despawn`
+    /// arm and the phase-0c hold sweep — and flushed once, at the end of
+    /// phase 0c. CONTROL runs first in the same tick, so a declined park
+    /// is normally reported on the tick it happens.
+    pub(in crate::room) despawn_reports: Vec<ConnectionId>,
 }

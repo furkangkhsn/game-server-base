@@ -157,7 +157,7 @@ where
                         debug!(%conn, room = %room, "player detached (slot held)");
                     }
                 }
-                RegistryMsg::ParkExpired { conn, room } => {
+                RegistryMsg::DetachDespawned { conn, room } => {
                     // Guarded on BOTH marks: a row that is no longer
                     // detached (a resume re-affiliated it) or no longer in
                     // this room has already been settled by the event that
@@ -183,7 +183,7 @@ where
                         debug!(
                             %conn,
                             room = %room,
-                            "park expired: detached row released (slot returned)"
+                            "detach ended in despawn: row released (slot returned)"
                         );
                     }
                 }

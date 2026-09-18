@@ -1,4 +1,4 @@
-//! Phase 0c — the detach-hold sweep and the park-expiry reports.
+//! Phase 0c — the detach-hold sweep and the detach-despawn reports.
 
 use crate::id::PlayerId;
 use crate::room::*;
@@ -19,7 +19,7 @@ where
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     /// Tick phase 0c — the detach-hold sweep (`docs/RECONNECT.md` §14.4)
-    /// and the park-expiry reports the registry is waiting on.
+    /// and the detach-despawn reports the registry is waiting on.
     pub(super) fn phase_detach_sweep(&mut self) {
         // -- Phase 0c — detach-hold sweep (§14.4: the deadline clock is
         //    CORE-owned; the logic owns the policy). Two arms, exactly as
@@ -81,7 +81,7 @@ where
                         if self.registry.is_some()
                             && let Some(conn) = self.conns.get(&pid).map(|rc| rc.conn)
                         {
-                            self.park_reports.push(conn);
+                            self.despawn_reports.push(conn);
                         }
                         self.despawn_conn(pid, false);
                         debug!(room = %self.config.id, %pid, "detach hold expired: despawn");
@@ -105,22 +105,26 @@ where
             }
         }
 
-        // -- Park-expiry reports: hand the registry back the rows (and cap
-        //    slots) whose holds ended this tick, plus anything an earlier
-        //    tick could not place. Synchronous `try_send` — the tick body
-        //    stays await-free — and whatever the mailbox refuses stays
-        //    queued for the next tick rather than being dropped (a dropped
-        //    report IS the leak this closes).
+        // -- Detach-despawn reports: hand the registry back the rows (and
+        //    cap slots) whose detaches ended in a despawn this tick, plus
+        //    anything an earlier tick could not place. BOTH producers feed
+        //    this one queue — the sweep above (a hold that ran out) and
+        //    the CONTROL phase's `Detach::Despawn` arm (a policy that
+        //    declined to park at all), which runs earlier in this same
+        //    tick. Synchronous `try_send` — the tick body stays await-free
+        //    — and whatever the mailbox refuses stays queued for the next
+        //    tick rather than being dropped (a dropped report IS the leak
+        //    this closes).
         //    A CLOSED mailbox (the registry is gone — the process is
         //    coming down) drops the report instead of retrying forever:
         //    there is no table left to leak into.
-        if !self.park_reports.is_empty()
+        if !self.despawn_reports.is_empty()
             && let Some(registry) = &self.registry
         {
             let room = self.config.id;
-            self.park_reports.retain(|&conn| {
+            self.despawn_reports.retain(|&conn| {
                 matches!(
-                    registry.try_send(crate::registry::RegistryMsg::ParkExpired { conn, room }),
+                    registry.try_send(crate::registry::RegistryMsg::DetachDespawned { conn, room }),
                     Err(mpsc::error::TrySendError::Full(_))
                 )
             });

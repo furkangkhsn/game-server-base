@@ -119,12 +119,12 @@ where
             completions_tx,
             result_sink,
             registry: None,
-            park_reports: Vec::new(),
+            despawn_reports: Vec::new(),
         }
     }
 
-    /// Give this shard the registry mailbox it reports park expiries on
-    /// (see [`crate::registry::RegistryMsg::ParkExpired`]). A builder for
+    /// Give this shard the registry mailbox it reports detach-despawns on
+    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]). A builder for
     /// the same reason the room actor uses one: the direct-drive rigs
     /// construct shards without a registry, and `new` is already at the
     /// argument limit.

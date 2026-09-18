@@ -87,7 +87,23 @@ where
                     let decision = self.logic.on_disconnect(&mut self.world, player, &identity);
                     match decision {
                         Detach::Despawn => {
-                            // Byte-for-byte the old close semantics.
+                            // Byte-for-byte the old close semantics —
+                            // plus the report the registry is waiting on.
+                            //
+                            // The registry marked this connection's row
+                            // `detached` and KEPT it (slot held, §4) the
+                            // moment the transport died, before the policy
+                            // had answered. A park that never starts has
+                            // no hold and no deadline, so the phase-0c
+                            // sweep can never fire for it: this arm is the
+                            // ONLY place that learns the row is dead.
+                            // Queued only when there IS a registry — a
+                            // standalone room has no reader, so the queue
+                            // must not accumulate. The flush is phase 0c,
+                            // in this same tick (CONTROL runs first).
+                            if self.registry.is_some() {
+                                self.despawn_reports.push(conn);
+                            }
                             self.despawn_conn(player, false);
                         }
                         Detach::Hold { grace, to } => {
