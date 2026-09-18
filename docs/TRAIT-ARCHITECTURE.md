@@ -102,6 +102,34 @@ result-sink makinesi de gerekir. Bu iki ayrı iştir:
   `keepalive_above_tick`/cache testlerinin shard karşılığı).
 - Faz 2/3 kendi kilitlerini kendi turlarında ekler.
 
+## 7b. `TickCtx` ve AFK sinyali (girdi-boşta turu)
+
+Mantık yüzeyinin METOT listesi değişmedi — `GameLogic`'e hiçbir hook
+eklenmedi. Değişen, her hook'un zaten aldığı **per-tick bağlam**:
+
+```rust
+pub struct TickCtx<'a> {
+    pub room: RoomId,
+    pub tick: u64,
+    pub dt: Duration,
+    pub idle: IdleView<'a>,          // YENİ
+}
+impl TickCtx<'_> {
+    pub fn since_input(&self, player: PlayerId) -> Option<Duration>;
+}
+```
+
+Gerekçe ve elenen alternatifler `docs/CHANGELOG.md`, "AFK sinyali +
+girdi-boşta tavanı turu" §1'de. Özet: AFK politikası oyunun işidir ve
+oyunun onu yazabilmesi için tick içinden, await'siz okunabilen bir
+per-oyuncu sinyale ihtiyacı vardır; bunu var olan dikişe eklemek yeni
+bir hook icat etmekten ucuzdur. Bedeli `TickCtx`'in bir ömür parametresi
+almasıdır — elle kurulan bir bağlam `idle: Default::default()` (BOŞ
+görünüm, her sorguya `None`) verir ve `&TickCtx` yazan imzalar
+değişmeden derlenir.
+
+Detach/park/bot etkileşimi: `docs/RECONNECT.md` §16.
+
 ## 8. Bilinçli olarak yapılmayanlar
 
 - Tek unified trait (B) ve macro üretimi (C) — bkz. §3.

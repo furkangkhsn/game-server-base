@@ -75,14 +75,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **344** (344/344 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 için `docs/CHANGELOG.md`
-başlığına bakınız). Son tur: **bağlantı sınırları** — bekleyen dört ürün
-kararından ikisi kapandı: tıkanmış yazmaya süre sınırı
-(`write_stall_secs`, ilerleme tabanlı) ve post-auth HEARTBEAT_ACK
-kısması. İkisi de mevcut mekanizmaların simetrik tamamlanmasıdır: biri
-reader'ın idle saatinin yazma tarafındaki eşi, öteki §3.2 eşiğinin auth
-sınırının ötesine taşınması.
+Test sayısı: bugün itibarıyla **356** (356/356 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 için
+`docs/CHANGELOG.md` başlığına bakınız). Son tur: **AFK sinyali +
+girdi-boşta tavanı** — bekleyen dört ürün kararından üçüncüsü kapandı.
+Base artık "herhangi bir frame geldi" (canlılık) ile "aksiyon geldi"
+(girdi) saatlerini ayırıyor: sinyal koşulsuz yayınlanıyor
+(`TickCtx::since_input`), tavan (`max_idle_input_secs`) varsayılan
+KAPALI, ve açıkken kararı oyunun `on_disconnect`'i veriyor. Açık kalan
+tek ürün kararı: geçerli girdiye hacim limiti.
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -366,13 +367,22 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     `send_frame`'de park ediyor, inbox doluyor ve reader `in_tx.send`'de
     parkediyordu — yani idle deadline'ı ARTIK KURULMUYORDU bile. Yeni
     saat bu düğümün dışındadır (writer'ın kendi görevindedir).
-  - [ ] **Ürün kararı 2 — AFK/zombi oturum.** Canlılık "herhangi bir
-    frame" olarak tanımlı (`config.example.toml`: heartbeat dahil), yani
-    yalnızca heartbeat atan bir oturum **tasarım gereği** ölümsüz. Bunu
-    değiştirmek *trafik* penceresinden ayrı bir *anlamlı etkinlik*
-    penceresi demek — bir AFK politikası — ve `e2e.rs::
-    active_heartbeat_survives` regresyon kilidini bilerek değiştirmeyi
-    gerektirir.
+  - [x] **Ürün kararı 2 — AFK/zombi oturum — KAPANDI** (CHANGELOG
+    "AFK sinyali + girdi-boşta tavanı turu"). Karar: AFK'nın KENDİSİ
+    oyunun kararıdır, base ona bir SİNYAL verir ve bir TAVAN sunar.
+    - **Sinyal (koşulsuz):** `IdleClock` her üyenin son *aksiyon taşıyan*
+      karesini tutar; oyun mantığı `TickCtx::since_input(player)` ile
+      okur. Tanım YAPISAL: bağlantı aktörünün odaya `Action` olarak
+      ilettiği kare (kayıtlı game-band opcode + base-band RPC zarfı).
+      HEARTBEAT bağlantı aktöründe yanıtlanır, odaya hiç ulaşmaz — yani
+      trafik penceresi ile etkinlik penceresi artık AYRI saatlerdir ve
+      `e2e.rs::active_heartbeat_survives_the_idle_window` **hiç
+      değişmedi** (canlılık sözleşmesi aynen duruyor).
+    - **Tavan (varsayılan KAPALI):** `max_idle_input_secs`. Açıkken
+      süresi dolan üye, ölü taşımanın gittiği AYNI yola verilir
+      (`on_disconnect`) — park / AI devri / despawn kararını oyun verir,
+      base kendiliğinden despawn etmez. Kapasite emniyet supabı, politika
+      değil.
 - [x] **`RoomConfig.max_players` + doluluk yanıtı** — kapatıldı: join
   yolu cap'i kontrol ediyor (`room.rs` — `conns.len() >= cap` →
   `CoreError::RoomFull`, entity/kanal/durum oluşturulmaz), connection

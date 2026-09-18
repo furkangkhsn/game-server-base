@@ -392,3 +392,64 @@ Davranış testleri yetmez; iki ölçüm maddesi:
 - **Tur B — demo politika:** MOBA-tipi park (grace + base'e alma),
   bot stub (`ingest` sentezi, reclaim), §12 madde 9 ve uçtan uca senaryo;
   mass-reconnect churn profili (14.5).
+
+## 16. Girdi-boşta tavanı ile etkileşim (AFK turu)
+
+`RoomConfig::max_idle_input_secs` (varsayılan **KAPALI**) bu dokümanın
+makinesine yeni bir kader EKLEMEZ; ona yeni bir TETİKLEYİCİ ekler.
+
+**Tetikleyici.** Base her üye için, son *aksiyon taşıyan* karesinin
+zamanını tutar (yapısal tanım: bağlantı aktörünün odaya `Action` olarak
+ilettiği kare — kayıtlı game-band opcode + base-band RPC zarfı;
+HEARTBEAT bağlantı aktöründe yanıtlanır ve odaya hiç ulaşmaz). Mantık bu
+sinyali `TickCtx::since_input(player)` ile her tick hook'unun içinden
+okur; AFK politikası yazmanın yeri burasıdır.
+
+**Tavan ne yapar.** Süresi dolan üye §3'ün AYNI yoluna verilir:
+`GameLogic::on_disconnect` çağrılır ve dönen `Detach` ne diyorsa o olur —
+`Despawn`, `Hold { grace, to }`, `ExpireTo::AiHandover` dahil. Yani:
+
+- Base **kendiliğinden despawn etmez**; §3'ün "kopmak bir gerçektir, ne
+  olacağı politika" ilkesi tavan için de aynen geçerlidir. Tek fark
+  "gerçek"in ne olduğudur: taşımanın ölmesi değil, oynamanın durması.
+- MOBA'nın **bot devri AFK'da bedava gelir**: politika zaten
+  `ExpireTo::AiHandover` döndürüyorsa, AFK kalan oyuncunun kahramanını
+  bot devralır ve oyuncu döndüğünde §7 swap'ı ile geri alır.
+- Satırın **resume anahtarı** (`RoomConn.identity`) `on_disconnect`'e
+  verilir. Tavan arkasında bir `RoomControl::Detach` mesajı olmadan
+  tetiklendiği için satır bu anahtarı join/resume anında saklar; boş bir
+  anahtar park defterini anlamsız kılardı (§4: defter kimlikle
+  anahtarlıdır).
+
+**Park/bot ile çifte sayım YOK.** Detach kolu (her iki aktörde) satırı
+girdi saatinden ÇIKARIR, ve AI devri kolu da öyle yapar. Sonuç:
+
+| Satır | Girdi saatinde mi? | `since_input` | Tavan onu görür mü? |
+|---|---|---|---|
+| Canlı üye | evet | `Some(d)` | evet |
+| Park edilmiş (detached) | **hayır** | `None` | **hayır** |
+| Bot beslenen (AI devri) | **hayır** | `None` | **hayır** |
+| Resume edilmiş | evet (saat sıfırlanır) | `Some(d)` | evet |
+
+**Bot girdisi girdi SAYILMAZ** ve bu yapısal bir sonuçtur, ayrı bir
+kural değil: bot sürüşü §9 gereği mantığın `ingest`'i İÇİNDE
+sentezlenir, aksiyon kanalını hiç geçmez — yani yukarıdaki tanıma göre
+aksiyon taşıyan bir kare yoktur. Aksi hâlde AI devri sonsuz bir AFK
+bypass'ı olurdu.
+
+**Shard.** Aynı makine shard aktöründe de vardır. Girdi damgası göçen
+oyuncu yüküyle (`PlayerMigration.last_input`) TAŞINIR — §14.2'nin park
+meta'sı ile aynı gerekçe: saat per-aktördür, taşınmazsa hareket eden
+boşta bir varlık her sınır geçişinde affedilir.
+
+**Bilinen sınır (bilinçli).** Tavan oda ÜYELİĞİNİ sonlandırır, SOKETİ
+kapatmaz. Taşıma bağlantı/registry katmanının malıdır ve onun kendi
+tavanı (`idle_timeout_secs`) zaten vardır — heartbeat atan bir istemci
+tanımı gereği taşıma-boşta DEĞİLDİR. Idle-kick edilmiş istemci
+`LEAVE_ROOM_REQ` göndermiş gibi bir durumdadır: bağlantısı yaşar ve
+yeniden join edebilir (ki §14.3 gereği bu join örtük resume denemesidir,
+yani park edilmiş varlığını geri alır). Bir sonraki oyun karesi kapalı
+aksiyon kanalına çarpar ve bağlantı aktörü kendini odadan ayırır. Base'e
+oda→registry "şu bağlantıyı kapat" mesajı EKLEMEK bu turun kapsamı
+dışında bırakıldı: yeni bir kontrol-düzlemi fiili, ve operasyonel karar
+(AFK'yı odadan mı atmalı yoksa sunucudan mı) dağıtımın kararıdır.

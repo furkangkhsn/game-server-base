@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-344 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+356 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -15,10 +15,17 @@ Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
 (CHANGELOG "bağlantı sınırları turu"): tıkanmış yazmaya süre sınırı
 (`write_stall_secs`, ilerleme tabanlı, vars. 10 sn) ve post-auth
 HEARTBEAT_ACK kısması (§3.2 eşiği auth sınırının ötesine taşındı).
-**İkisi hâlâ açık** — AFK/zombi oturum politikası ve geçerli girdiye
-hacim limiti. İkisi de bir oynanış parametresi seçmeyi ister (mevcut bir
-mekanizmayı simetrik tamamlamayı değil, ki kapanan ikisi oydu); tek
-başına verme, ROADMAP'teki gerekçeleri oku.
+**Üçüncüsü de kapandı** (CHANGELOG "AFK sinyali + girdi-boşta tavanı
+turu"): AFK artık base'in kararı DEĞİL — base koşulsuz bir SİNYAL
+yayınlıyor (`TickCtx::since_input`, "aksiyon taşıyan kare" yapısal
+tanımı) ve varsayılan KAPALI bir TAVAN sunuyor
+(`max_idle_input_secs`); tavan dolduğunda kararı oyunun
+`on_disconnect`'i veriyor, base kendiliğinden despawn etmiyor. Detach /
+park / bot etkileşimi: `docs/RECONNECT.md` §16.
+
+**Bir madde hâlâ açık** — geçerli girdiye hacim limiti. Bir oynanış
+parametresi seçmeyi ister (mevcut bir mekanizmayı simetrik tamamlamayı
+değil); tek başına verme, ROADMAP'teki gerekçeleri oku.
 
 O turun açık yan bulgusu (`step_fine_hist` shard aktöründe hiç
 yazılmıyor) **kapandı** — bkz. CHANGELOG "park sızıntısı + shard metrik
@@ -143,6 +150,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 344 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 356 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

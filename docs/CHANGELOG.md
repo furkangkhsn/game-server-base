@@ -5,6 +5,179 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (AFK sinyali + girdi-boşta tavanı turu)
+
+Teknik borç turunun ürün kararına bıraktığı dört maddeden **üçüncüsü**
+kapandı: **AFK / zombi oturum**. Kalan tek madde geçerli girdiye hacim
+limiti.
+
+**Sorun (koddan doğrulandı).** Base'in tek canlılık kavramı "herhangi
+bir frame geldi" idi (reader pump'un `idle_timeout_secs` penceresi).
+Sonsuza dek heartbeat atan ama hiç oynamayan bir istemci, aktif bir
+oyuncudan AYIRT EDİLEMİYORDU. Bu canlılık için doğru, AFK için
+kullanışsız.
+
+**Karar (parent tasarladı, kullanıcı onayladı): AFK base'in kararı
+DEĞİL.** MMO kasabasında kıpırdamadan durmak meşru oynayıştır, MOBA'da
+30 saniye hareketsizlik bot devri tetikleyicisidir. Bu yüzden tur iki
+parçalıdır: koşulsuz bir **sinyal** ve varsayılan KAPALI bir **tavan**.
+
+Test sayısı 344 → **356** (+12; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi). Davranış testleri mutation-verified (aşağıda).
+
+### 1. Sinyal — `IdleClock` + `TickCtx::since_input`
+
+**"Aksiyon taşıyan" tanımı YAPISALDIR**, opcode listesi değil — base
+oyunun opcode'larını bilmez. Bir oyun yazarının okuyacağı hâliyle:
+
+> Bir kare, bağlantı aktörü onu odaya `Action` olarak ilettiği anda —
+> ve tam olarak o anda — girdi saatini sıfırlar (`forward_to_room`):
+> mesaj tablosunda KAYITLI her oyun-bandı opcode'u, artı base-bandı RPC
+> istek zarfı (`RPC_REQ`). Bağlantı aktörünün kendi yanıtladığı ya da
+> reddettiği hiçbir şey saati kıpırdatmaz: AUTH, JOIN/LEAVE, HEARTBEAT,
+> bilinmeyen opcode, ihlal bütçesine düşen kare. Nabız *taşımayı* canlı
+> tutar (reader'ın idle penceresi), *girdi* saatini olduğu yerde
+> bırakır.
+
+Saat READ fazında damgalanır — aksiyonların gerçekten çekildiği yerde.
+
+**Mantık nasıl okur (seçilen dikiş).** `TickCtx` bir `IdleView` alanı
+kazandı; `ctx.since_input(player)` her tick hook'unun içinden, await'siz,
+bağlantı başına görev açmadan, mantık yüzeyine YENİ BİR METOT EKLEMEDEN
+çalışır. `TickCtx` bunun için bir ömür (lifetime) parametresi aldı;
+aktörler tick gövdesi boyunca saati kendilerinden DIŞARI taşır (O(1)
+pointer takası), çünkü alttaki fazlar `&mut self` alır.
+
+**Elenen alternatifler.**
+
+1. **`TickCtx`'in doğrudan `conns` tablosunu ödünç alması** — ELENDİ.
+   Tablo oyunun grup anahtarı `G` üzerinden generic; `TickCtx`'i
+   generic yapmak `G`'yi her hook imzasına bulaştırırdı. Ayrıca ödünç
+   `self`'ten gelirdi ve `phase_requests`/`broadcast_phase`'in
+   `&mut self` çağrılarıyla ödünç çakışırdı (tick gövdesini yeniden
+   kurmak gerekirdi).
+2. **Mantığın sinyali kendi tutması** (`ingest`'te gelen aksiyonlardan)
+   — ELENDİ. Tanımın otoritesi base'dedir; ayrıca her oyun
+   join/leave/detach/bot/resume yaşam döngüsünü yeniden yazardı ve
+   tavan yine de base'in saatini isterdi.
+3. **Mantık yüzeyine yeni bir hook** (`on_idle`, ya da bir
+   `idle_since()` sorgu metodu) — ELENDİ: sözleşme "var olan dikişi
+   genişlet, yeni hook icat etme"; `TickCtx` zaten her hook'un aldığı
+   per-tick dikiştir.
+4. **Damgayı `RoomConn` satırında tutmak** (yaşam döngüsü bedava
+   olurdu) — ELENDİ: generic satır mantığa ödünç verilemez. Bunun
+   yerine `IdleClock` TEK kaynak oldu ve `binding`'in tam olarak aynı
+   üç huninde (join / resume / despawn) açılıp kapanıyor.
+5. **Saati her tick tüm üyeler için yansıtan bir per-tick projeksiyon**
+   — ELENDİ: tick başına O(üye) kopya, 10k'da ölçülür.
+
+**Saatte OLMAYANLAR.** Park edilmiş (detached) ve bot beslenen satırlar
+saatten tamamen çıkarılır: ikisinin de canlı girdi kaynağı yoktur, READ
+onlar için çekim yapmaz, ve bot girdisi mantığın `ingest`'i İÇİNDE
+sentezlenir — aksiyon kanalını hiç geçmez, yani yukarıdaki yapısal
+tanıma göre girdi değildir. Bu aynı zamanda AI devrinin bir AFK
+bypass'ına dönüşmesini yapısal olarak engeller. Resume saati yeniden
+başlatır. Shard geçişinde damga `PlayerMigration` ile TAŞINIR — yoksa
+hareket eden boşta bir varlık her sınır geçişinde affedilirdi.
+
+### 2. Tavan — `max_idle_input_secs` (varsayılan `None` = KAPALI)
+
+Açıkken son aksiyon taşıyan karesi bu kadar eski olan üye, **ölü
+taşımanın gittiği AYNI yola** verilir: yeni `detach_player` — tek işi
+iki çağıran için TEK karar noktası olmak. Oyunun `on_disconnect`'i park
+/ AI devri / despawn kararını verir; **base kendiliğinden hiçbir şeyi
+despawn etmez.** Bu iki karar noktası yerine bir tane bırakır ve MOBA'ya
+AFK'da bot devrini bedavaya verir.
+
+Uyarı oda başına BİR KEZ (diğer zorlayıcı tavanların kuralı). Sayaç
+olarak tutuluyor, bayrak olarak değil: `tracing` callsite ilgi
+önbelleğini süreç genelinde tuttuğu için kapsamlı (scoped) bir abone ile
+yakalama aynı ikili içindeki başka testlerden etkilenir — sözleşme
+böylece deterministik biçimde kilitlenebiliyor.
+
+`Some(0)` da KAPALI sayılır: sıfır tavan ilk süpürmede herkesi
+düşürürdü, ki hiçbir operatör "0" ile bunu kastetmez.
+
+**Tavanın elenen alternatifleri.**
+
+1. **Base'in doğrudan despawn etmesi** — ELENDİ (sözleşmenin güçlü
+   tavsiyesi): entity'nin kaderi için ikinci bir karar noktası açardı ve
+   park/bot-devri hikâyesini baypas ederdi.
+2. **Tavanı bağlantı aktörüne koymak** (soketi kapatıp ölü-taşıma
+   yolunu tetiklemek) — ELENDİ: oda tarafında tick başına sıfır maliyet
+   olurdu ama sinyal odada yaşıyor, tanım iki yere kopyalanırdı, ve
+   sözleşme "shard aktöründe de aynala" diyor — yani iş aktörlerde.
+   Bilinen sonucu §3'te (RECONNECT) belgelendi.
+3. **Tavanın kendi `ExpireTo`/politika enum'unu taşıması** — ELENDİ:
+   `on_disconnect` zaten tam olarak bu vokabüleri döndürüyor.
+
+### 3. Tick başına maliyet
+
+- **Tavan KAPALI (varsayılan):** tick başına BİR `Option` testi, üye
+  başına sıfır. Artı gerçekten girdi TESLİM EDEN üye başına bir damga
+  (hash arama + vektör yazımı) — sessiz üye hiçbir şeye mal olmaz, yani
+  muhasebe boşta oyuncularla ölçeklenmez.
+- **Tavan AÇIK:** saatin slot vektörü üzerinde sınırlı bir ROTASYON
+  (adım başına en çok `SWEEP_BUDGET = 64` slot, kaldığı yerden devam —
+  READ fazının döner imleç disiplini). Yani süpürme maliyeti üye
+  sayısından BAĞIMSIZ sabit. Bedeli tespit gecikmesi: her üye bir
+  rotasyon içinde (10k üye @ 30 Hz ≈ 157 adım ≈ 5 sn) incelenir — onlarca
+  saniyelik bir tavanın yanında gürültü, ve bu bir TAVAN: geç davranmak
+  güvenlidir, erken davranmak olmazdı.
+
+### 4. Yan değişiklikler (gerekçeleriyle)
+
+- **`RoomConn.identity`**: tavan, arkasında mesaj OLMAYAN bir detach
+  sentezler; `on_disconnect`'e boş anahtar vermek idle-kick edilmiş
+  oyuncuyu park edilemez ve resume edilemez kılardı (demo park defteri
+  boş kimliği zaten reddediyor). Satır artık resume anahtarını
+  hatırlıyor. Aynı sebeple `ShardMsg::Join` da onu taşıyor (kimlikli bir
+  oyuncu, hiçbir defter tutmadığında sharded odaya BU koldan girer) ve
+  `PlayerMigration` göçürüyor.
+- **Zaten park edilmiş satıra gelen ikinci `Detach` yok sayılıyor**
+  (politika iki kez sorulmuyor) — idle-kick edilmiş bir üyenin
+  taşımasının sonradan ölmesi tam olarak bu şekildedir.
+- **`ShardMsg::Migrate` artık `PlayerMigration`'ı kutuluyor**: iki yeni
+  alan enum'u clippy'nin `result_large_err` eşiğinin üstüne itti, ki bu
+  her link gönderiminin `Result`'ını o boyuta çıkarırdı.
+
+### 5. Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **356 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` (tcp ve `--transport udp`) →
+  `left=50`, `errors=0`, panik yok. Adım zamanları 6c0962d taban
+  çizgisiyle aynı: `step_p50_us` dört koşuda da 130; ince histogramın
+  p50'si taban 32 µs'ye karşı HEAD'de 40/24/32/32 µs (8 µs'lik tek bin,
+  koşular-arası gürültü), UDP'de taban 32 → HEAD 32 µs.
+
+### 6. Mutation-check
+
+| Mutasyon | Kırılan |
+|---|---|
+| READ her ziyarette damgalıyor (`pulled > 0` guard'ı kalkıyor) | 4 test |
+| Tavan tanımsızken varsayılan bir değere düşüyor | 3 test |
+| Uyarı her seferinde basılıyor | 2 test (oda + shard) |
+| Park kolu satırı saatten çıkarmıyor | 2 test (oda + shard) |
+| `on_disconnect`'e boş kimlik veriliyor | 3 test |
+
+Dördüncü mutasyon ilk denemede HAYATTA KALDI — süpürme satırı
+`detach_player`'dan önce kendisi saatten çıkarıyordu, yani park kolunun
+kendi `idle.stop`'u test edilemezdi. Gereksiz kopya kaldırıldı ve eksik
+durum (GERÇEK taşıma ölümüyle park edilmiş, deadline'ı hiç olmayan bir
+combat-held satırın tavan tarafından yeniden düşürülmemesi) kendi
+testini aldı (`ffdedc0`).
+
+### 7. Yapılmayanlar
+
+- **Metrik sayacı eklenmedi.** Idle-expiry, oda örneklemine yeni bir alan
+  eklemeden mevcut sayaçlarda görünüyor (politika `Despawn` derse
+  `leaves`/`DetachDespawned`, `Hold` derse park sayaçları). Yeni bir
+  `RoomSample` alanı, ROADMAP'te zaten açık olan `fold_rooms` denetimini
+  büyütürdü; bilinçli kapsam dışı.
+- **Soket kapatılmıyor.** Bkz. `docs/RECONNECT.md` §16.
+
 ## Kapatılanlar (bağlantı sınırları turu)
 
 Teknik borç turunun ürün kararına bıraktığı **dört** maddeden **ikisi**
