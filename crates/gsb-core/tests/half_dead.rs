@@ -146,6 +146,12 @@ async fn closed_out_channel_tears_the_session_down() {
 /// heartbeats and stays reachable. This is the regression guard for
 /// `active_heartbeat_survives` at the actor level — liveness traffic must
 /// not become a reason to disconnect.
+///
+/// Note the heartbeats here arrive back to back, far above the §3.2
+/// answer rate, so only the first and the one after the interval are
+/// ANSWERED; the rest are counted and silently ignored. That is the
+/// throttle, not a teardown — which is exactly what this test has to
+/// tell apart.
 #[tokio::test]
 async fn healthy_out_channel_keeps_the_session_alive() {
     let (in_tx, mut out, mut reg, handle) = spawn_actor(2);
@@ -158,15 +164,37 @@ async fn healthy_out_channel_keeps_the_session_alive() {
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
             .await
             .expect("inbox open");
-        let batch = tokio::time::timeout(WAIT, out.recv())
-            .await
-            .expect("timed out waiting for HEARTBEAT_ACK")
-            .expect("out open");
-        assert!(
-            batch.iter().any(|f| f.op == op::base::HEARTBEAT_ACK),
-            "every post-auth heartbeat is answered"
-        );
+        if tick == 0 {
+            let batch = tokio::time::timeout(WAIT, out.recv())
+                .await
+                .expect("timed out waiting for HEARTBEAT_ACK")
+                .expect("out open");
+            assert!(
+                batch.iter().any(|f| f.op == op::base::HEARTBEAT_ACK),
+                "the first post-auth heartbeat is answered"
+            );
+        }
     }
+    assert!(
+        reg.try_recv().is_err(),
+        "a reachable connection is never reported closed"
+    );
+    // Still reachable after the throttle interval: an answer, not a
+    // close — the session survived the whole burst.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let hb = Heartbeat { tick: 99 }.encode_to_vec();
+    in_tx
+        .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
+        .await
+        .expect("inbox open");
+    let batch = tokio::time::timeout(WAIT, out.recv())
+        .await
+        .expect("timed out waiting for the post-interval HEARTBEAT_ACK")
+        .expect("out open");
+    assert!(
+        batch.iter().any(|f| f.op == op::base::HEARTBEAT_ACK),
+        "the session is alive and answering again after the interval"
+    );
     assert!(
         reg.try_recv().is_err(),
         "a reachable connection is never reported closed"

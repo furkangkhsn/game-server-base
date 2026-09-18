@@ -424,6 +424,13 @@ async fn idle_connection_is_closed(kind: Kind) {
 /// against a 1 s window) is never touched — its window resets on every
 /// frame (the TCP reader pump's clock; the rUDP demux deadline heap), and
 /// it keeps getting its heartbeat acks for the whole run.
+///
+/// It also pins the seam between that window and the §3.2 ACK throttle,
+/// which is the thing most easily got wrong: the idle window is reset by
+/// the ARRIVAL of a frame, never by the answer, so throttling answers can
+/// never make a live client look idle. This client heartbeats four times
+/// faster than the throttle answers and is still never closed — while the
+/// ack count stays at the throttled rate, not the send rate.
 async fn active_heartbeat_survives(kind: Kind) {
     let handle = gsb_server::start_server(cfg_on(kind.clone(), Some(1.0), None, None))
         .await
@@ -442,13 +449,13 @@ async fn active_heartbeat_survives(kind: Kind) {
         .await
         .unwrap();
 
-    // 3.5 s of 250 ms heartbeats against a 1 s window: 5+ resets.
+    // 5 s of 250 ms heartbeats against a 1 s window: 19 resets.
     let t0 = Instant::now();
     let mut acks = 0u64;
     let mut next_hb = t0;
     loop {
         let elapsed = t0.elapsed();
-        if elapsed >= Duration::from_millis(3500) {
+        if elapsed >= Duration::from_millis(5000) {
             break;
         }
         if Instant::now() >= next_hb {
@@ -473,6 +480,15 @@ async fn active_heartbeat_survives(kind: Kind) {
     assert!(
         acks >= 3,
         "heartbeats were answered throughout: {acks} acks"
+    );
+    // The §3.2 throttle's upper half: twenty heartbeats went out over the
+    // five seconds, and at one answer per second only a handful can come
+    // back. A 1:1 answer rate here would mean the post-auth throttle is
+    // gone.
+    assert!(
+        acks <= 10,
+        "post-auth heartbeat answers are throttled to ~1/s, not 1:1 with \
+         the 4/s send rate: {acks} acks"
     );
     handle.stop().await;
 }

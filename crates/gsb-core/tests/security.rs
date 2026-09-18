@@ -4,11 +4,12 @@
 //!   connection; the fourth-plus in-window rides the EXISTING violation
 //!   budget as a hard violation — attempts one-to-three keep the normal
 //!   ticket-rejection path (ERROR 10, connection alive);
-//! - the pre-auth heartbeat throttle (§3.2): at most one ACK per second
-//!   before auth success; surplus heartbeats are counted in a dedicated
-//!   counter and deliberately NOT budgeted (a buggy-but-honest client
-//!   must not burn its budget on liveness probes — the throttle itself
-//!   already caps the amplification). Post-auth heartbeats are untouched;
+//! - the heartbeat-ACK throttle (§3.2): at most one ACK per second, in
+//!   BOTH connection phases; surplus heartbeats are counted in a
+//!   dedicated counter per phase and deliberately NOT budgeted (a
+//!   buggy-but-honest client must not burn its budget on liveness probes
+//!   — the throttle itself already caps the amplification). The clock
+//!   spans the auth boundary with ONE reset at auth success;
 //! - the pre-auth frame budget (§3.3): 64 inbound frames of any kind
 //!   before auth success, crossing = immediate close (ERROR 9 naming the
 //!   policy); auth success retires the counter naturally;
@@ -319,19 +320,104 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
         Some(RegistryMsg::Authed { conn }) => assert_eq!(conn, ConnectionId(3)),
         other => panic!("expected RegistryMsg::Authed, got {other:?}"),
     }
-    // …and post-auth heartbeats keep the UNCHANGED behavior: every single
-    // one answered, no throttle (liveness signal intact).
+    // …and auth success restarts the throttle's clock exactly once: the
+    // FIRST post-auth heartbeat is answered even though a pre-auth ACK
+    // went out moments ago (a client probing right after AUTH must never
+    // read silence as a dead server)…
+    in_tx
+        .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
+        .await
+        .expect("inbox open");
+    let batch = next_batch(&mut out).await;
+    assert!(
+        has_op(&batch, op::base::HEARTBEAT_ACK),
+        "the first post-auth heartbeat is answered"
+    );
+    // …after which the SAME throttle keeps running: a burst buys one
+    // answer per interval and the rest are counted, not answered — and
+    // still not violations (no ERROR frame anywhere).
     for _ in 0..3 {
         in_tx
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
             .await
             .expect("inbox open");
-        let batch = next_batch(&mut out).await;
-        assert!(
-            has_op(&batch, op::base::HEARTBEAT_ACK),
-            "post-auth heartbeats are all answered"
-        );
     }
+    expect_quiet(&mut out).await;
+    in_tx.send(ConnIn::Shutdown).await.expect("inbox open");
+    handle.await.expect("actor exits cleanly on Shutdown");
+}
+
+/// THE POST-AUTH HALF of §3.2: the same one-answer-per-interval throttle
+/// keeps running after auth success. A well-behaved client heartbeats at
+/// roughly the throttle's own cadence, so nothing about its RTT semantics
+/// changes; a client sending a burst gets ONE answer per interval and the
+/// rest are counted silently.
+///
+/// Three properties at once, and the third is the point: the surplus is
+/// NOT charged to the violation budget. A chatty NAT keepalive or a
+/// client with a misconfigured heartbeat timer is not hostile the way an
+/// undefined opcode is, and the throttle already caps what the flood can
+/// buy (one small ACK per interval per connection), so scoring it would
+/// only disconnect honest-but-buggy clients. That reasoning is the
+/// pre-auth field doc's, kept consistent across the auth boundary.
+#[tokio::test]
+async fn postauth_heartbeat_flood_is_answered_once_counted_and_never_scored() {
+    let (in_tx, mut out, handle) = spawn_actor(9, None);
+    // Authenticate first: this test is entirely about the post-auth side.
+    in_tx
+        .send(ConnIn::Frame(auth_frame("ana", b"")))
+        .await
+        .expect("inbox open");
+    let batch = next_batch(&mut out).await;
+    assert!(has_op(&batch, op::base::AUTH_RESULT), "auth succeeds");
+
+    // A burst far past the violation budget (16 / weight 4 = four hard
+    // violations close a connection): if any of these were scored, the
+    // session would be gone long before the burst ended.
+    let hb = Heartbeat { tick: 1 }.encode_to_vec();
+    for _ in 0..40 {
+        in_tx
+            .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
+            .await
+            .expect("inbox open");
+    }
+    let batch = next_batch(&mut out).await;
+    assert!(
+        has_op(&batch, op::base::HEARTBEAT_ACK),
+        "the first post-auth heartbeat is answered (a client that keeps \
+         the normal cadence sees no change at all)"
+    );
+    // …and the other thirty-nine buy exactly nothing: no ACK, and no
+    // ERROR either — they are counted, not violations.
+    expect_quiet(&mut out).await;
+
+    // The session is alive and unscored: after the interval the next
+    // heartbeat is answered again, on the same connection.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let hb = Heartbeat { tick: 2 }.encode_to_vec();
+    in_tx
+        .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
+        .await
+        .expect("inbox open");
+    let batch = next_batch(&mut out).await;
+    assert!(
+        has_op(&batch, op::base::HEARTBEAT_ACK),
+        "the throttle answers again once the interval has passed: {batch:?}"
+    );
+    let ack = batch
+        .iter()
+        .find(|f| f.op == op::base::HEARTBEAT_ACK)
+        .expect("the ack is in this batch");
+    assert_eq!(
+        gsb_protocol::base::HeartbeatAck::decode(ack.payload.as_ref())
+            .expect("HeartbeatAck decode")
+            .tick,
+        2,
+        "the answer still echoes the heartbeat's tick: the RTT semantics \
+         a client reads off the ACK are untouched"
+    );
+
+    // Clean shutdown proves the run loop was never torn down.
     in_tx.send(ConnIn::Shutdown).await.expect("inbox open");
     handle.await.expect("actor exits cleanly on Shutdown");
 }

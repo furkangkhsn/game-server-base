@@ -42,32 +42,42 @@ impl super::ConnectionActor {
                         return;
                     }
                 };
-                // Pre-auth heartbeat throttle (§3.2): at most one ACK per
-                // second before auth success — the 1:1 request/response
-                // amplification of unauthenticated liveness probing ends
-                // here. Surplus heartbeats are counted in a dedicated
-                // counter and get NO answer, deliberately NOT budgeted
-                // (see the field doc: the throttle already caps the cost,
-                // so scoring them would only punish honest-buggy clients).
-                // Post-auth the branch below is byte-identical to the
-                // pre-Tur-B behavior: every heartbeat answered (the
-                // session's liveness signal).
-                if self.state == ConnState::WaitingAuth {
-                    let now = Instant::now();
-                    let due = self
-                        .last_preauth_hb_ack
-                        .is_none_or(|t| now.duration_since(t) >= PREAUTH_HEARTBEAT_MIN_INTERVAL);
-                    if !due {
+                // Heartbeat ACK throttle (§3.2): at most one ACK per
+                // interval, in BOTH phases — the 1:1 request/response
+                // amplification of liveness probing ends here. Surplus
+                // heartbeats are counted (per phase, so the pre-auth
+                // security signal stays legible) and get NO answer,
+                // deliberately NOT budgeted: the throttle already caps
+                // the cost, so scoring them would only punish an
+                // honest-but-buggy client — a chatty NAT keepalive is not
+                // hostile the way an undefined opcode is.
+                //
+                // The throttle answers, never the LIVENESS of the
+                // session: the reader pump's idle window is reset by the
+                // arrival of any inbound frame, so an unanswered
+                // heartbeat still keeps its sender alive. Nothing else
+                // reads the ACK either — `HeartbeatAck.tick` is the
+                // client's own RTT sample, and a client on the ~1/s
+                // cadence the throttle is sized for still gets every one.
+                let now = Instant::now();
+                let due = self
+                    .last_hb_ack
+                    .is_none_or(|t| now.duration_since(t) >= HEARTBEAT_ACK_MIN_INTERVAL);
+                if !due {
+                    if self.state == ConnState::WaitingAuth {
                         self.m_preauth_hb_extra += 1;
-                        debug!(
-                            %self.conn,
-                            extra = self.m_preauth_hb_extra,
-                            "pre-auth heartbeat over the 1/s answer rate; counted, not answered"
-                        );
-                        return;
+                    } else {
+                        self.m_hb_extra += 1;
                     }
-                    self.last_preauth_hb_ack = Some(now);
+                    debug!(
+                        %self.conn,
+                        preauth_extra = self.m_preauth_hb_extra,
+                        extra = self.m_hb_extra,
+                        "heartbeat over the 1/s answer rate; counted, not answered"
+                    );
+                    return;
                 }
+                self.last_hb_ack = Some(now);
                 let _ = self
                     .send_frame(
                         op::base::HEARTBEAT_ACK,

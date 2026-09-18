@@ -62,12 +62,13 @@
 //!   Attempts one-to-three keep the ordinary ticket-rejection path (ERROR
 //!   code 10, connection alive) — a legitimate client retrying a rejected
 //!   ticket is never budgeted for trying.
-//! - **Pre-auth heartbeat throttle** (§3.2): before auth success a
-//!   heartbeat ACK is answered at most once per second; surplus heartbeats
-//!   are counted in a dedicated counter and NOT answered — deliberately
-//!   *not* violations (see the field's doc: a buggy-but-honest client must
-//!   not burn its budget on liveness probes). After auth success
-//!   heartbeats keep their exact pre-existing behavior.
+//! - **Heartbeat ACK throttle** (§3.2): a heartbeat ACK is answered at
+//!   most once per second, in BOTH phases; surplus heartbeats are counted
+//!   in a dedicated counter (one per phase — see the two fields) and NOT
+//!   answered — deliberately *not* violations (a buggy-but-honest client
+//!   must not burn its budget on liveness probes). The clock spans the
+//!   auth boundary with a single reset at auth success, so the first
+//!   heartbeat of an authenticated session is always answered.
 //! - **Pre-auth frame budget** (§3.3): at most 64 inbound frames of any
 //!   kind before auth success; crossing the budget closes the connection
 //!   immediately (`ERROR` code 9 naming the policy). Auth success retires
@@ -132,12 +133,26 @@ const AUTH_WINDOW: Duration = Duration::from_secs(10);
 /// second enforcement mechanism exists for the flood case.
 const AUTH_ATTEMPTS_PER_WINDOW: usize = 3;
 
-/// Minimum spacing between ANSWERED pre-auth heartbeat ACKs
-/// (docs/SECURITY.md §3.2). One answer per second still proves liveness
-/// to an honest waiting-in-lobby client; anything faster pre-auth is the
-/// 1:1 amplification shape the cap exists to close. Post-auth heartbeats
-/// are throttled by nothing (the liveness signal must stay intact).
-const PREAUTH_HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+/// Minimum spacing between ANSWERED heartbeat ACKs, in BOTH connection
+/// phases (docs/SECURITY.md §3.2).
+///
+/// One answer per second is the whole guardrail: a well-behaved client
+/// heartbeats at about this cadence, so its ACKs — and the RTT it reads
+/// off `HeartbeatAck.tick` — are untouched, while a client sending
+/// thousands per second gets exactly one answer per interval and buys
+/// nothing with the rest. That is the 1:1 request/response amplification
+/// this closes, and it is the same shape before and after auth: a
+/// successful AUTH proves who the peer is, not that its heartbeat timer
+/// is sane.
+///
+/// The clock is per connection and spans the auth boundary, with ONE
+/// reset at auth success (see `handle_auth`) — the same phase boundary
+/// that retires the §3.3 frame budget. That grants exactly one extra
+/// answer over a connection's entire life (AUTH succeeds once; a second
+/// one is a hard violation), so it is not a lever, and it keeps the
+/// guarantee every post-auth flow relies on: the first heartbeat after a
+/// successful AUTH is always answered.
+const HEARTBEAT_ACK_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Pre-auth total inbound frame budget (docs/SECURITY.md §3.3): at most
 /// this many frames of ANY kind before auth success; crossing it closes

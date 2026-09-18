@@ -13,6 +13,21 @@ use crate::conn::*;
 use crate::registry::RegistryMsg;
 
 impl super::ConnectionActor {
+    /// The single auth-success transition, shared by the ticket path and
+    /// the local-auth path.
+    ///
+    /// It also restarts the §3.2 heartbeat-ACK clock — the one phase
+    /// boundary that clock has, the same one that retires the §3.3
+    /// pre-auth frame budget. Cost: exactly one extra answered heartbeat
+    /// over a connection's whole life (AUTH succeeds once — a second one
+    /// is a hard violation). Benefit: the first heartbeat of an
+    /// authenticated session is ALWAYS answered, so a client that probes
+    /// right after AUTH never reads silence as a dead server.
+    fn authenticated(&mut self) {
+        self.state = ConnState::Authed;
+        self.last_hb_ack = None;
+    }
+
     /// The AUTH_REQ arm of [`Self::handle_frame`]: the attempt window,
     /// ticket validation and the state transition into `Authenticated`.
     pub(super) async fn handle_auth(&mut self, frame: FrameBody) {
@@ -123,7 +138,7 @@ impl super::ConnectionActor {
                     // the room for the next join.
                     self.ticket = Some(v.clone());
                     self.identity = v.player.clone();
-                    self.state = ConnState::Authed;
+                    self.authenticated();
                     // §4: the connection leaves the registry's
                     // unauthenticated pool (the cap lives where the
                     // connection table lives). A failed send means
@@ -174,7 +189,7 @@ impl super::ConnectionActor {
             }
             return;
         }
-        self.state = ConnState::Authed;
+        self.authenticated();
         // §4: same unauthenticated-pool notice as the ticket path.
         let _ = self
             .registry

@@ -83,9 +83,11 @@ pub struct ConnectionActor {
     /// Admitted-only recording also means an honest client's ten quiet
     /// seconds always fully restore its allowance.
     auth_attempts: VecDeque<Instant>,
-    /// When the last pre-auth heartbeat ACK went out (§3.2). Consulted
-    /// only while `WaitingAuth`; post-auth heartbeats answer unconditionally.
-    last_preauth_hb_ack: Option<Instant>,
+    /// When the last heartbeat ACK went out (§3.2). ONE clock for the
+    /// whole connection — the throttle is one rate limiter, not two —
+    /// reset once at auth success so the first heartbeat of an
+    /// authenticated session is always answered.
+    last_hb_ack: Option<Instant>,
     /// Surplus PRE-AUTH heartbeats counted silently (§3.2): over-rate
     /// liveness probes that got no ACK. A dedicated counter, deliberately
     /// NOT a violation despite the contract's "counted" wording: the
@@ -96,6 +98,17 @@ pub struct ConnectionActor {
     /// disconnect. Liveness probing is not evidence of hostility; a real
     /// frame flood pre-auth is closed by the §3.3 budget anyway.
     m_preauth_hb_extra: u64,
+    /// The same, POST-auth. Kept separate from the field above rather
+    /// than merged, because the two answer different questions with
+    /// different remedies: a surplus from an UNAUTHENTICATED peer is the
+    /// §3.2 security signal (that peer is also under the §3.3 frame
+    /// budget and the §4 unauth cap, and the operator's move is to
+    /// tighten a pre-auth guardrail), while a surplus from a peer that
+    /// has proven who it is says a known client's heartbeat timer is
+    /// misconfigured — a bug report, not an attack. Merging them would
+    /// cost §3.2's counter the ability to answer its own question. The
+    /// mechanism above them is shared; only the attribution is not.
+    m_hb_extra: u64,
     /// Inbound frames since the connection opened, while still
     /// `WaitingAuth` (§3.3). Auth success retires its relevance: every
     /// check is gated on the WaitingAuth state, so nothing to reset.
