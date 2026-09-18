@@ -112,6 +112,11 @@ async fn room_counters_flow_to_collector() {
         r.dropped > 0,
         "the unconsumed out channel must have produced drops, visible outside the actor"
     );
+    assert!(
+        r.shipped_frames > 0,
+        "the fan-out's frame count reached the report over the real path \
+         (actor counter -> sample -> accumulator -> report)"
+    );
     assert!(r.step_max_us > 0, "step duration was measured");
     assert_eq!(r.step_hist.iter().sum::<u64>(), r.steps);
     // The join reply proves the room is alive and processing.

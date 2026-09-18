@@ -28,7 +28,7 @@
 //! | MIN (config) | `budget_us` | CONFIGURATION, not a measurement — the shards share one `RoomConfig` and always agree. If they ever do not, the smaller budget is the honest answer: it is the denominator of the overflow fraction and of the histogram edges, and it reads overflow *earlier*. |
 //! | MEAN, steps-weighted | `step_mean_us`, `late_mean_us` | A mean of means is not a mean. Each shard's mean is `sum / steps`, so weighting by `steps` and dividing by the total reconstructs `Σsum / Σsteps` exactly. |
 //! | SUM, element-wise | `step_hist`, `step_fine_hist` | The union of the shards' step distributions, so percentiles and over-budget % are room-wide. See [`folded_steps`] for the population this union covers. |
-//! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, the whole `requests_*` family, `metrics_dropped` | Cumulative counters over disjoint work. |
+//! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, the whole `requests_*` family, `metrics_dropped` | Cumulative counters over disjoint work. |
 //! | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | A RATE computed per shard cannot be averaged: the shards' counters are disjoint over the same wall clock, so the room's rate is their sum. (Averaging would report a quarter of the room's loss on a 4-shard room.) |
 //! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) |
 //!
@@ -148,6 +148,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             snap_records,
             shipped_bytes,
             shipped_s,
+            shipped_frames,
+            private_frames,
             groups,
             members,
             max_group,
@@ -211,6 +213,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.snap_overflows += snap_overflows;
         acc.snap_records += snap_records;
         acc.shipped_bytes += shipped_bytes;
+        acc.shipped_frames += shipped_frames;
+        acc.private_frames += private_frames;
         acc.joins += joins;
         acc.leaves += leaves;
         acc.resumes += resumes;

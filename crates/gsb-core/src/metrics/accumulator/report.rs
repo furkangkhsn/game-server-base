@@ -61,6 +61,8 @@ impl MetricAccumulator {
                 snap_records: latest.snap_records,
                 shipped_bytes: latest.shipped_bytes,
                 shipped_s,
+                shipped_frames: latest.shipped_frames,
+                private_frames: latest.private_frames,
                 groups: latest.groups,
                 members: latest.members,
                 max_group: latest.max_group,

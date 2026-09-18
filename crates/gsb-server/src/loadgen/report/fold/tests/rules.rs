@@ -64,6 +64,8 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.snap_records, 6_000, "snap_records");
     assert_eq!(f.shipped_bytes, 60_000, "shipped_bytes");
     close(f.shipped_s, 600.0, "shipped_s");
+    assert_eq!(f.shipped_frames, 150, "shipped_frames");
+    assert_eq!(f.private_frames, 15, "private_frames");
 
     // SUM — the shards PARTITION the room's population.
     assert_eq!(f.groups, 6, "groups");

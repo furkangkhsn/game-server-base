@@ -57,6 +57,19 @@ pub struct RoomReport {
     /// — the server-side bytes-out for this room.
     pub shipped_bytes: u64,
     pub shipped_s: f64,
+    /// Frames shipped to clients (cumulative), and how many of them were
+    /// PRIVATE (per-connection: RPC answers, acks, one-shot fulls).
+    ///
+    /// Not derivable from the bytes: `shipped_bytes / shipped_frames` is
+    /// the mean frame size, and a datagram transport (rUDP) is bounded by
+    /// PACKETS as well as by bytes — the same byte rate in twice as many
+    /// frames is a different load. The private split separates
+    /// per-connection traffic from the shared snapshot fan-out
+    /// (`shipped_frames - private_frames` is the broadcast half), which
+    /// is the encode-per-unit decision input `snap_records` answers from
+    /// the encode side.
+    pub shipped_frames: u64,
+    pub private_frames: u64,
     pub groups: u32,
     pub members: u32,
     pub max_group: u32,

@@ -30,6 +30,7 @@ use gsb_core::metrics::{
 ///     u64 keepalive_resends  u64 snapshots
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
+///     u64 shipped_frames  u64 private_frames
 ///     u32 groups  u32 members  u32 max_group  u64 joins  u64 leaves
 ///     u64 req_local  u64 req_ext
 ///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
@@ -72,7 +73,14 @@ use gsb_core::metrics::{
 /// carried 0; the real input-loss signal is the net-scope
 /// `actions_dropped` total already in this frame, counted at the
 /// connection actor's `try_send` and attributed by the `n_top` tail.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D36;
+/// GSM7 = the GSM6 layout plus each room's shipped FRAME counts
+/// (`shipped_frames` and the `private_frames` half of it). Both actors
+/// had maintained them since the fan-out was written and neither ever
+/// reached a report, so nothing could read them; they are not derivable
+/// from `shipped_bytes` (a datagram transport is bounded by packets as
+/// well as by bytes, and the private half is the per-connection share of
+/// the fan-out).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D37;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -125,6 +133,8 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.snap_records);
         w.u64(room.shipped_bytes);
         w.f64(room.shipped_s);
+        w.u64(room.shipped_frames);
+        w.u64(room.private_frames);
         w.u32(room.groups);
         w.u32(room.members);
         w.u32(room.max_group);
@@ -275,6 +285,8 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             snap_records: r.u64()?,
             shipped_bytes: r.u64()?,
             shipped_s: r.f64()?,
+            shipped_frames: r.u64()?,
+            private_frames: r.u64()?,
             groups: r.u32()?,
             members: r.u32()?,
             max_group: r.u32()?,

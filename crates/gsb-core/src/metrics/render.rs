@@ -34,6 +34,7 @@ impl MetricReport {
                  snap_bytes_s={:.0} snap_bytes_max={} snap_overflows={} \
                  snap_records={} \
                  shipped_bytes={} shipped_s={:.0} \
+                 shipped_frames={} private_frames={} \
                  groups={} members={} max_group={} joins={} leaves={} \
                  detached={} resumes={} resume_rejected_stale={} \
                  detach_expired_despawn={} detach_expired_ai={} \
@@ -69,6 +70,8 @@ impl MetricReport {
                 r.snap_records,
                 r.shipped_bytes,
                 r.shipped_s,
+                r.shipped_frames,
+                r.private_frames,
                 r.groups,
                 r.members,
                 r.max_group,

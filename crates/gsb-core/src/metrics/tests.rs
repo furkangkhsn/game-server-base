@@ -110,6 +110,8 @@ fn accumulator_applies_events_and_computes_rates() {
         dropped_frames: 4,
         snap_bytes: 6_000,
         shipped_bytes: 60_000,
+        shipped_frames: 75,
+        private_frames: 15,
         ..room0
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
@@ -140,6 +142,18 @@ fn accumulator_applies_events_and_computes_rates() {
         "encode rate from delta"
     );
     assert_eq!(r.steps, 60);
+    // The shipped FRAME counts are carried straight through (cumulative
+    // counters, no rate): they were maintained by both actors and
+    // reached no report at all until the round that added them here, so
+    // the carry itself is what this pins. Not derivable from
+    // `shipped_bytes` — 60_000 bytes in 75 frames is an 800-byte mean
+    // frame, which is the datagram-transport question the byte rate
+    // alone cannot answer.
+    assert_eq!(r.shipped_frames, 75, "shipped frames reach the report");
+    assert_eq!(
+        r.private_frames, 15,
+        "and the private share of them stays distinguishable"
+    );
     assert_eq!(r.step_mean_us, 420.0 / 60.0);
     assert_eq!(r.members, 3);
     assert_eq!(second.registry.unwrap().conns, 3);

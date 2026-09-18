@@ -69,6 +69,8 @@ fn shard(i: usize) -> RoomReport {
         snap_records: [1_000, 2_000, 3_000][i],
         shipped_bytes: [10_000, 20_000, 30_000][i],
         shipped_s: [100.0, 200.0, 300.0][i],
+        shipped_frames: [40, 50, 60][i],
+        private_frames: [4, 5, 6][i],
         groups: [1, 2, 3][i],
         members: [11, 13, 26][i],
         max_group: [5, 9, 4][i],

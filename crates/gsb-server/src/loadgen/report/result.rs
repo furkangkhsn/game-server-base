@@ -273,7 +273,7 @@ pub(crate) fn print_report(
                 .join(",")
         );
         println!(
-            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} keepalive_resends={} snapshots={} max_payload_b={} snap_overflows={} out_bps_per_conn={:.0} groups={} members={} max_group={} joins={} leaves={} metrics_dropped={}",
+            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} keepalive_resends={} snapshots={} max_payload_b={} snap_overflows={} out_bps_per_conn={:.0} shipped_frames={} private_frames={} mean_frame_b={:.0} groups={} members={} max_group={} joins={} leaves={} metrics_dropped={}",
             r.late_max_us,
             r.lagged_events,
             r.lagged_ticks,
@@ -283,6 +283,16 @@ pub(crate) fn print_report(
             r.snap_bytes_max,
             r.snap_overflows,
             out_bps_per_conn,
+            r.shipped_frames,
+            r.private_frames,
+            // Mean shipped frame size: the datagram-transport half of
+            // the outbound load (rUDP is bounded by packets as well as
+            // by bytes, so the byte rate alone does not say it).
+            if r.shipped_frames > 0 {
+                r.shipped_bytes as f64 / r.shipped_frames as f64
+            } else {
+                0.0
+            },
             r.groups,
             r.members,
             r.max_group,
