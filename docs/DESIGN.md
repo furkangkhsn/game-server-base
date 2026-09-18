@@ -1423,6 +1423,15 @@ kenarları 4088'de tavanlanır, bu yüzden belirsizlik yok). Served
 stream: **GSM3** (GSM2 + oda başına 512×u32). Gerekçe + ölçülen taban
 çalışması: CHANGELOG "Kapatılanlar (ölçüm çözünürlüğü + taban turu)".
 
+Her **iki** aktör de binler — oda ve shard, aynı `t0.elapsed()`'ten,
+`step_hist` ile aynı satırda. Bu bir süre yalnız oda tarafında doğruydu;
+shard alanı gönderiyor ama hiç artırmıyordu ve `fine_hist_percentile_us`
+boş histogramda `None` döndüğü için sharded odaların
+`gsb_room_step_duration_us` p50/p99 satırları **hiç basılmıyordu**
+(loadgen'in `unwrap_or(FINE_HIST_CAP_US)` geri düşüşü ise aynı odaları
+tavanda gösteriyordu). Kapatıldı ve kilitlendi: CHANGELOG "Kapatılanlar
+(park sızıntısı + shard metrik boşluğu turu)".
+
 Hızlar (`hz`, `*_s`) **örnek aralığı** üzerinden hesaplanır: her oda örneği
 kendi `emit_at`'ını taşır (oda `Instant::now()`); oran `latest.emit_at −
 prev.emit_at` üzerinedir, rapor penceresi üzerinden değil — örnek gönderim

@@ -75,9 +75,13 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **327** (327/327 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 için `docs/CHANGELOG.md` başlığına
-bakınız).
+Test sayısı: bugün itibarıyla **330** (330/330 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 için `docs/CHANGELOG.md`
+başlığına bakınız). Son tur: **park sızıntısı + shard metrik boşluğu** —
+politika park etmeyi reddettiğinde (`disconnect_grace_secs = 0`, yani
+varsayılan) registry satırının kalıcı olarak sızması kapatıldı
+(`ParkExpired` → `DetachDespawned`), shard'ın `step_fine_hist`'i
+dolduruldu.
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -240,7 +244,9 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   "doğru yolda arttığını" doğrulayan testi OLMAYAN sayaçların tam listesi
   "Kapatılanlar (reject-bucket wiring + sayaç envanteri turu)"
   bölümündeki tabloda. Kısaca: RoomSample `step_min/sum_us`,
-  `step_fine_hist` (oda tarafı), `late_*`, `lagged_*`,
+  `step_fine_hist` (**oda tarafı**; shard tarafı "park sızıntısı + shard
+  metrik boşluğu turu"nda hem yazıldı hem kilitlendi), `late_*`,
+  `lagged_*`,
   `keepalive_resends`, `snap_bytes*`, `snap_overflows`, `snap_records`,
   `shipped_*`, `private_frames`, `leaves`,
   `requests_local/external/timed_out/late`, `pending_requests`;
@@ -252,6 +258,24 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   `metrics_cadence_hz`). Öncelik önerisi: operasyonel sinyaller
   (cap/overflow ailesi + `requests_*` kardeşleri), sonra süre/
   histogram ailesi, en son log-düzeyi değerler.
+- [ ] **`step_min_us` / `late_min_us` minimum DEĞİL** — "park sızıntısı +
+  shard metrik boşluğu turu"nun kardeş-alan denetiminde bulundu, o turun
+  kapsamı dışında bırakıldı. İki alan da hem oda hem shard aktöründe
+  yalnız `if self.steps == 1` altında atanıyor
+  (`room/actor/lifecycle.rs`, `shard/actor/lifecycle.rs`) ve onları aşağı
+  çeken bir kol YOK — yani her biri **ilk adımın** değerini process ömrü
+  boyunca taşıyor, üstelik ilk adım tipik olarak en soğuk ve en yavaş
+  olanı. Loadgen çıktısında olgu çıplak: `step_min_us=176
+  step_mean_us=36.3 step_max_us=176` (ortalama "minimum"un beşte biri).
+  `_max_us` ve `_sum_us` kardeşleri doğru; kusur yalnız `_min_us`
+  ikilisinde. Etkilenen yüzeyler: `gsb_room_step_min_us`,
+  `gsb_room_late_min_us`, loadgen `step_min_us=` satırı ve
+  `MetricReport`. Düzeltme tek kol (`else if x < min { min = x }`), ama
+  YAYINLANMIŞ bir metriğin anlamını değiştirir (bugünkü değer "ilk adım",
+  yarınki "minimum"), o yüzden kendi turunu ve açık bir kararı hak
+  ediyor: alanı düzeltmek mi, yoksa dürüstçe `step_first_us` diye yeniden
+  adlandırmak mı. Düzeltilirse "doğru-yol testi" maddesindeki
+  `step_min/sum_us` satırı da aynı turda kapatılabilir.
 - [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
   kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.
 

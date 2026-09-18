@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-327 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+330 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -15,9 +15,21 @@ Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
 AFK/zombi oturum politikası, geçerli girdiye hacim limiti, post-auth
 HEARTBEAT_ACK kısması. Dördü de bir SAYI ya da istemciye görünen
 semantik değişikliği ister; tek başına verme, ROADMAP'teki gerekçeleri
-oku. Ayrıca açık bir yan bulgu: `step_fine_hist` shard aktöründe hiç
-yazılmıyor, yani sharded odalar için `gsb_room_step_duration_us`
-p50/p99 satırları hiç basılmıyor.
+oku.
+
+O turun açık yan bulgusu (`step_fine_hist` shard aktöründe hiç
+yazılmıyor) **kapandı** — bkz. CHANGELOG "park sızıntısı + shard metrik
+boşluğu turu". Aynı tur, bir öncekinin yarım kalan park sızıntısını da
+kapattı: registry satırı artık politika park etmeyi REDDETTİĞİNDE de
+bırakılıyor (`disconnect_grace_secs = 0`, yani varsayılan, tam olarak bu
+koldur); `RegistryMsg::ParkExpired` → `DetachDespawned`.
+
+Yerine **yeni bir açık yan bulgu** geçti (o turun kardeş-alan
+denetiminden, bilinçli olarak düzeltilmedi): `step_min_us` ve
+`late_min_us` hiçbir aktörde minimum değil — yalnız ilk adımda atanıyor,
+aşağı çeken kol yok, yani ilk adımın değerini sonsuza kadar taşıyorlar.
+Düzeltmesi tek satır ama YAYINLANMIŞ bir metriğin anlamını değiştirir;
+ROADMAP'te kendi maddesi ve kararı var — tek başına verme.
 
 **Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
 207. Her modül kendi dizini; hedef dosya boyutu 200-250 satır. Bir
@@ -118,6 +130,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 327 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 330 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -5,6 +5,180 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (park sızıntısı + shard metrik boşluğu turu)
+
+İki bağımsız madde. Birincisi bir önceki turun (`f966164`, "park
+expiry") **yarım kaldığının** tespiti: registry satırı yalnız hold
+dolduğunda bırakılıyordu, politika park etmeyi REDDETTİĞİNDE değil — ve
+reddetme, varsayılan konfigürasyonda (`disconnect_grace_secs = 0`) her
+kopmada olan şeydir. İkincisi ROADMAP/HANDOFF'ta açık yan bulgu olarak
+duran shard `step_fine_hist` boşluğu.
+
+Test sayısı 327 → **330** (+3; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi). Her iki düzeltme de mutation-verified.
+
+### Kommitler
+
+1. **`df948c8` — politika park etmeyi reddettiğinde registry satırı
+   bırakılır.**
+
+   **Bulgu (adım adım kodda doğrulandı):**
+
+   - `Registry::on_conn_closed` (`registry/actor/conns.rs`) bağlı bir
+     satırı `detached` işaretleyip **tutar**. Bu işaret
+     **SPEKÜLATİFTİR**: odanın politikası daha cevap vermeden yazılır,
+     çünkü registry artık entity'nin kaderine karar vermez (RECONNECT
+     §3/§4).
+   - Odanın `Detach::Despawn` kolu (`room/actor/control.rs`) —
+     `on_disconnect`'in park etmeyi reddettiği kol — `despawn_conn` ile
+     olağan leave hunisinden geçiriyor ve registry'ye **hiçbir şey**
+     söylemiyordu.
+   - Bırakma raporunun tek göndericisi faz-0c hold süpürmesiydi
+     (`room/actor/tick/detach.rs`, `shard/actor/tick/detach.rs`).
+     Hiç başlamayan bir park'ın hold'u ve deadline'ı yoktur; süpürme o
+     satır için **asla** çalışamaz. `grep -rn` ile başka gönderici
+     olmadığı doğrulandı.
+   - Satırın diğer iki bırakma yolu (aynı kimlikle resume, odanın
+     bitmesi) geri dönmeyen bir oyuncuya ve kalıcı bir odaya hiç uğramaz.
+
+   Sonuç: satır `room = Some(..)` + `detached = true` ile sonsuza kadar
+   duruyordu. `Registry::room_members` (`registry/actor.rs`) onu saymaya
+   devam ettiği için oturum, çoktan gitmiş bir entity adına hem bir
+   `max_players` hem bir `max_connections` slotu tutuyordu. Yazının
+   iddia ettiği üretim senaryosu (`disconnect_grace_secs = 0.0`, bağlan,
+   AUTH+JOIN, `members == 1`, bağlantıyı düşür, `members` 1'de kalır)
+   **testte birebir tekrarlandı** ve düzeltmeden önce kırıldı.
+
+   **Elenen alternatif 1: registry kendi zamanlayıcısıyla eskitsin.**
+   Reddedildi — hem karar hem grace oda tarafı politikadır (logic
+   oyuncu başına seçer, combat-held bir park'ın deadline'ı hiç yoktur),
+   yani registry tam da önemli olan vakalarda yanlış olurdu. Raporu
+   olayı gören aktör verir.
+
+   **Elenen alternatif 2: `ConnClosed` satırı hemen silsin (spekülatif
+   işareti hiç yazma).** Reddedildi — park mekanizmasının tamamını
+   yıkar: hold gerçekten başladığında satır ve slot RECONNECT §4 gereği
+   tutulmalıdır.
+
+   **Elenen alternatif 3 (isimlendirme): `ParkExpired`'ı olduğu gibi
+   yeniden kullan.** Reddedildi. İsim yalnız süpürme için basılmıştı ve
+   yeni göndericide yalan okunuyor: orada park EDİLMEDİ ve hiçbir şey
+   "expire" etmedi — politika reddetti. "Park expired", park'ın hiç var
+   olmadığı bir kolu anlatıyorsa bu, deponun karşı yazdığı türden
+   sürüklenmedir.
+
+   **Elenen alternatif 4 (isimlendirme): kardeş mesaj ekle
+   (`ParkExpired` + `DetachDespawned`).** Reddedildi. Registry'nin
+   gördüğü OLGU tektir — "bu detached satırın entity'si despawn edildi"
+   — ve registry kolu iki gönderici için harfi harfine aynıdır. Tek
+   eylem için iki isim, sürüklenmenin öbür yönüdür.
+
+   **Seçilen:** `RegistryMsg::ParkExpired` → **`DetachDespawned`**
+   (aktörlerdeki `park_reports` → `despawn_reports`). İsim artık iki
+   nedenden birini değil, ikisinin de bildirdiği olguyu anlatıyor.
+   Varyant `pub` ama `gsb-core` dışında hiçbir yerde anılmıyor; dış
+   kullanıcı yok.
+
+   **Uygulama.** Her iki aktör de olguyu öğrendiği koldan bildiriyor:
+   odanın CONTROL fazı (`room/actor/control.rs`) ve shard'ın
+   `ShardMsg::Detach` işleyicisi (`shard/actor/messages.rs`). İkisi de
+   mevcut rapor kuyruğunu besliyor; kuyruk faz 0c sonunda bir kez
+   boşaltılıyor ve CONTROL/mailbox drenajı aynı tick'te daha önce
+   çalıştığı için reddedilen park normalde olduğu tick'te bildiriliyor.
+
+   **Dolu-mailbox semantiği** bilinçli olarak süpürmeninkiyle aynı:
+   senkron `try_send` (tick/control gövdeleri await'siz kalır), **FULL**
+   mailbox id'yi bir sonraki tick'e yeniden kuyruklar — düşürülen bir
+   rapor tam da bu sızıntıyı yeniden açar —, **CLOSED** olan düşürür
+   (registry gitmiştir; sızılacak tablo kalmamıştır). Kuyruğa yalnız
+   registry VARSA yazılır, böylece direct-drive test rig'leri birikmez.
+
+   **AI-handover kolu hâlâ bilinçli olarak bildirilmiyor:** o hold,
+   entity bir bot altında CANLI, slotunu gerçekten tutarak ve hâlâ
+   geçerli bir resume hedefi olarak biter (RECONNECT §9).
+
+   Testler: `declined_park_releases_the_registry_row` ve
+   `sharded_declined_park_releases_the_registry_row_and_the_member_slot`
+   (`tests/reconnect.rs`). İkisi de düzeltmeden ÖNCE yazıldı ve
+   `members: 1` ile kırıldı. Mutation-check **ayrı ayrı** yapıldı:
+   odanın raporunu bastırmak yalnız birincisini, shard'ınkini bastırmak
+   yalnız ikincisini düşürüyor; iki hold-expiry testi her iki
+   mutasyonda da yeşil kalıyor (yani yeni testler yeni kolları
+   kilitliyor, eskisini değil).
+
+2. **`35a965b` — shard'ın adım yolunda ince histogram doldurulur.**
+
+   **Bulgu:** `ShardActor::sample` (`shard/actor/lifecycle/sample.rs:37`)
+   `step_fine_hist`'i gönderiyordu, ama shard tarafında onu artıran
+   hiçbir şey yoktu — ince sabit-bin histogramı yalnız oda aktörü
+   yazıyordu (`room/actor/lifecycle.rs:226`). Sharded bir oda alanı
+   ilan edip sonsuza kadar sıfır dizi gönderiyordu.
+
+   **Tüketicinin gerçekte ne yaptığı (varsayılmadı, okundu):**
+
+   - Prometheus yüzeyi `gsb_room_step_duration_us` p50/p99 satırlarını
+     `if let Some(us) = fine_hist_percentile_us(..)` arkasında basıyor
+     (`metrics/prometheus.rs:323`) ve o yardımcı boş histogramda `None`
+     dönüyor (`metrics/mod.rs:212`). Yani sharded oda için kuantil
+     satırları **sessizce hiç basılmıyordu** — yanlış değil, YOK.
+     İddia doğrulandı.
+   - Loadgen özeti daha kötü: `report/result.rs:252` geri düşüşü
+     `unwrap_or(FINE_HIST_CAP_US)` ile yapıyor, yani `step_p50_fine_us`
+     / `step_p90_fine_us` her sharded oda için **4096** basıyordu:
+     uydurulmuş ve "patolojik yavaş" okunan bir sayı. Yazının bilmediği
+     ikinci tüketici.
+
+   **Elenen alternatif: alanı shard örneğinden kaldır.** Görevin izin
+   verdiği ikinci yol, ama koşulu sağlanmıyor: ölçüm shard'da ZATEN
+   var — `step_hist`, `step_min/max/sum_us` ve `late_*`'ı besleyen,
+   `step_phases` çevresindeki aynı `t0.elapsed()`. Var olan ölçümü
+   silmek, olmayan bir eksikliği belgelemek olurdu.
+
+   **Seçilen:** aynı üç satır shard'da da binliyor. Yalnız tamsayı, tek
+   `saturating_add`, hot path'te float yok; cap'in üstündeki adımlar
+   oda tarafındaki gibi dışarıda kalır. Loadgen raporundaki eleman-bazlı
+   `step_fine_hist` toplaması (`loadgen/report.rs:78`) zaten vardı ve
+   sıfır topluyordu.
+
+   Test: `sharded_step_fills_the_fine_duration_histogram`
+   (`shard/tests/metrics.rs`) — gerçek bir `ShardActor::step` üzerinde.
+   İki mutasyonla doğrulandı: artırmayı kaldırmak adım-başına-bir
+   sayımında, başka bir değeri binlemek `p50 <= step_max_us`
+   tutarlılığında düşürüyor.
+
+   **KARDEŞ ALAN DENETİMİ (bu turda DEĞİŞTİRİLMEDİ, bulgu olarak
+   kayda geçiriliyor):** aynı muhasebe bloğu tarandı.
+
+   - `step_hist`, `step_max_us`, `step_sum_us`, `late_max_us`,
+     `late_sum_us`: iki aktörde de doğru, boşluk yok.
+   - `step_min_us` ve `late_min_us` **hiçbir aktörde minimum değil.**
+     İkisi de yalnız `if self.steps == 1` altında atanıyor ve onları
+     aşağı çeken bir kol YOK — yani her biri ilk adımın değerini
+     process ömrü boyunca taşıyor, üstelik ilk adım tipik olarak en
+     soğuk ve en yavaş olanı. Bu turun loadgen çıktısında olgu çıplak
+     duruyor: `step_min_us=176 step_mean_us=36.3 step_max_us=176` —
+     ortalama, "minimum"un beşte biri. `gsb_room_step_min_us`,
+     `gsb_room_late_min_us` ve loadgen'in `step_min_us=` satırı
+     dolayısıyla minimum adı takmış ilk-adım göstergeleridir.
+     Bu, madde 2'nin kusuru (shard'da hiç yazılmamak) DEĞİL; iki
+     aktörün paylaştığı ayrı bir kusur. Kendi turuna ve kendi kararına
+     bırakıldı — yeni testin yüzdelik iddiası da bilerek `step_min_us`
+     ile alttan sınırlanmıyor (gerekçe test yorumunda).
+
+### Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **330 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` → `left=50 errors=0`, panik yok
+- aynısı `--transport udp` ile → `left=50 errors=0`, panik yok
+
+rUDP koşusunun `server registry (final): conns=50 ... closes=0`
+satırı bu turdan ÖNCE de aynıdır (taban `2791a79` ile koşularak
+karşılaştırıldı): rUDP'nin EOF'u yoktur, oturumlar son rapordan sonra
+idle-timeout ile ölür, yani `on_conn_closed` o pencerede hiç
+çalışmamıştır — detach yolu ile ilgisi yoktur.
+
 ## Kapatılanlar (rUDP doğruluk turu — sessiz REL give-up, tekrar oynatılabilir cookie)
 
 Kaynak: doğrulanmış dış inceleme raporundaki iki rUDP bulgusu. İkisi de

@@ -99,9 +99,40 @@ artık **despawn emri göndermez**; `RoomControl::Detach { conn, entity }`
 gönderir ve oda politikaya göre davranır. Bağlılık tablosuna "detached"
 işareti düşer: oda hâlâ bilinir, bağlantı yoktur.
 
+Bu işaret **spekülatiftir**: politika daha cevap vermeden yazılır, çünkü
+registry entity'nin kaderine karar vermez. İşareti ÇÖZEN olay odadan
+gelir; registry kendi zamanlayıcısıyla eskitmez (karar da grace de oda
+tarafı politikadır — combat-held bir park'ın deadline'ı hiç yoktur).
+
 **Slot muhasebesi:** park edilen oyuncu oda kapasitesinden yer tutar
 (MOBA'da slot onundur). `members` sayacı detach'te düşmez; resume yeniden
-aynı slotu kullanır; expire'te düşer.
+aynı slotu kullanır; park bittiğinde düşer.
+
+**Spekülatif işaret tam olarak üç olayla bırakılır** (aralarında bir
+detach'in bitebileceği her yolu kapsarlar):
+
+1. aynı kimlik için bir resume ya da taze oturum (satır yeniden
+   bağlanır);
+2. odanın bitmesi (destroy/death/`notify_room_gone`) — her bağlılık gibi;
+3. odanın kendi **`RegistryMsg::DetachDespawned`** raporu: detached
+   satırın entity'si despawn edildi. Bunun **iki** göndericisi vardır ve
+   ikisi de gereklidir:
+   - `on_disconnect` **`Detach::Despawn`** dediğinde, yani politika park
+     etmeyi hiç kabul etmediğinde (`disconnect_grace_secs = 0`'ın şekli).
+     Burada hold da deadline da hiç doğmaz, dolayısıyla süpürme bu satır
+     için asla çalışmaz — raporu veren, olguyu gören DETACH kolunun
+     kendisidir;
+   - başlamış bir hold `ExpireTo::Despawn`'a doğru dolduğunda (§14.4
+     süpürmesi).
+
+`ExpireTo::AiHandover` kolu **bilinçli olarak bildirilmez**: o hold,
+entity bir bot altında canlı, slotunu gerçekten tutarak ve hâlâ geçerli
+bir resume hedefi olarak biter (§9) — satır işini yapmaktadır.
+
+Rapor senkron `try_send`'dir (tick/control gövdeleri await'siz kalır);
+DOLU bir registry mailbox'ı raporu düşürmez, bir sonraki tick'e yeniden
+kuyruklar — düşürülen rapor sızıntının kendisidir. KAPALI olan düşürür
+(sızılacak tablo kalmamıştır).
 
 ## 5. Reattach: resume akışı
 
