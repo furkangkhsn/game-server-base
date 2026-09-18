@@ -23,6 +23,7 @@ mod fanout;
 mod groups;
 mod guardrails;
 mod idle;
+mod shipping;
 mod stubs;
 mod tick;
 use stubs::*;
