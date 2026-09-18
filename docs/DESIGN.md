@@ -1395,7 +1395,7 @@ durdurulamaz.
 | oda | `steps`, `hz` (Δadım/örnek-aralığı), `late_*` (tick gecikmesi), `step_*` + `step_hist` (adım süresi dağılımı: tick bütçesinin **oranları**, log-2 merdiven 1/128×…32×; `(1,1)` kenarı = bütçe = aşım sınırı) | konfigure hıza ulaşılıyor mu? adım bütçesinin (33 ms @30 Hz) neresindeyiz? bütçe aşılıyor mu? |
 | oda | `lagged_events/ticks` | broadcast tamponu aşıldı mı (oda tick kaçırıyor mu)? |
 | oda | `dropped`, `keepalive_resends` | fan-out backpressure'ı (yavaş istemci) var mı? |
-| oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_*` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali) |
+| oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_bytes`/`shipped_s`, `shipped_frames`, `private_frames` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali), kaç KARE ve bunların kaçı özel (datagram taşıması bayt kadar PAKET ile de sınırlı; `shipped_bytes/shipped_frames` = ortalama kare boyu, `shipped_frames − private_frames` = fan-out'un yayın yarısı) |
 | oda | `groups`, `members`, `max_group`, `joins`, `leaves` | oda doluluğu ve churn |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif)
@@ -1458,7 +1458,7 @@ ailesine katılır). Tablo kodda, onu uygulayan tek döngünün yanındadır
 | MIN (konfig) | `budget_us` | ÖLÇÜM DEĞİL KONFİGÜRASYON: shard'lar tek `RoomConfig` paylaşır, hep aynıdır. Ayrışırlarsa dürüst cevap küçüktür — aşım oranının ve histogram kenarlarının paydasıdır, küçük bütçe aşımı daha ERKEN okur. |
 | ORTALAMA, adım-ağırlıklı | `step_mean_us`, `late_mean_us` | Ortalamaların ortalaması ortalama değildir. Her shard'ın ortalaması `sum / steps` olduğundan `steps` ile ağırlıklandırıp toplam adıma bölmek `Σsum / Σsteps`'i birebir kurar. |
 | SUM, eleman bazında | `step_hist`, `step_fine_hist` | Shard dağılımlarının birleşimi; böylece percentiller ve bütçe aşım %'si oda geneli olur. |
-| SUM | `lagged_*`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_*`, `requests_*` ailesinin tamamı, `metrics_dropped` | Ayrık iş üzerindeki kümülatif sayaçlar. |
+| SUM | `lagged_*`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_*`, `requests_*` ailesinin tamamı, `metrics_dropped` | Ayrık iş üzerindeki kümülatif sayaçlar. |
 | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | Shard başına hesaplanmış bir ORAN ortalanamaz: sayaçlar aynı duvar saati üzerinde ayrıktır, odanın oranı toplamlarıdır (ortalamak 4 shard'lık odada kaybın dörtte birini raporlardı). |
 | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauge, ama **bölünmüş** gauge — shard'lar odanın bağlantılarını, gruplarını, park edilmiş oturumlarını ve uçuştaki isteklerini PAYLAŞTIRIR, yani odanın değeri toplamdır. Karşı örnek `max_group`/`snap_bytes_max`: bunlar bir popülasyon değil, popülasyon ÜZERİNDE bir uçtur. |
 
@@ -1503,6 +1503,21 @@ Ortak bilinen sınırlılık: **shutdown sırasında registry'nin kümülatif
 sayaçları oda sayılarının gerisinde kalabilir** (registry `Shutdown`
 işlenince break eder; oda, kontrol drenajını — kalan leave'leri — tamamlayıp
 çıkar). Kapanış anındaki kesin değerler için oda kapsamı otoritedir.
+
+**Her sayacın bir doğru-yol testi vardır.** Bu yüzeyin sayaçları
+(`RoomSample`, `RegistrySample`, `ConnSample`, `UdpClientStats` — ve
+`RoomReport` üzerinden rapora ulaşan her alan) tek tek, gerçek üretim
+yolu sürülerek ve O alanın arttığı assert edilerek kilitlenmiştir;
+kapsama tablosu ve kalan kuyruk: CHANGELOG "sayaç envanteri kapanış
+turu". Yeni bir sayaç eklerken kural aynıdır ve iki parçalıdır:
+(1) elle kurulmuş bir örnek üzerinde assert etmek SAYMAZ — aktörü sür;
+(2) alanın yalnızca SIFIR olduğunu assert eden bir test, hiç yazılmayan
+bir alandan ayırt edilemez (bu depoda iki kez gerçekten olan hata: hep
+sıfır kalan bir sayaç ve hiç yazılmayan bir histogram) — sayacı artıran
+yolu tetikle, ve testi onu en çok benzediği KOMŞUSUNDAN ayıracak
+biçimde yaz (tepe ≠ sonuncu, akış ≠ gauge, ölüm ≠ destroy, ihlal ≠
+trafik, kadans ≠ kayıp). Testi mutation-check et: artışı boz, testin
+düştüğünü gör, geri al.
 
 **Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
 logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan

@@ -5,6 +5,213 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (sayaç envanteri kapanış turu)
+
+**Tur kapsamı.** P0'ın "Kalan metrik sayaçları için doğru-yol testleri"
+maddesi kapandı, ve yanında son turun geçerken fark ettiği iki öksüz
+alan (`shipped_frames` / `private_frames`) bir tüketiciye bağlandı.
+
+Turun ilk işi ROADMAP'teki listeye GÜVENMEMEK oldu: liste bayattı.
+"reject-bucket wiring + sayaç envanteri turu"nda yazıldığından beri üç
+tur (minimum sayaçlar, park sızıntısı + shard metrik boşluğu, metrik
+fold denetimi) adı geçen alanların bir kısmını zaten kapatmıştı.
+Envanter sıfırdan yeniden türetildi — metrik yüzeyine ulaşan her tip
+(`RoomSample`, `RegistrySample`, `ConnSample`, `NetReport`,
+`UdpClientStats`) alan alan tarandı, her alan için "gerçek üretim
+yolunu süren ve O alanın arttığını assert eden bir test var mı?"
+sorusu koddan yanıtlandı. Tablo aşağıda (§2), turdan ÖNCE ve SONRA.
+
+Kapsama kriteri değişmedi (reject-bucket turunun koyduğu standart):
+elle kurulmuş bir örnek üzerinde assert etmek saymaz, gerçek aktörü
+sürmek gerekir; ve bir alanın YALNIZCA sıfır olduğunu assert eden bir
+test, hiç yazılmayan bir alandan ayırt edilemez — bu turda
+`requests_timed_out` tam olarak o durumdaydı.
+
+Test sayısı 361 → **386** (+25; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi). Wire protokolü değişmedi; loadgen'in İÇ metrik
+export formatı GSM6 → GSM7 (iki uç da aynı ikili). Mutex/RwLock/
+parking_lot/select! yok; clippy 0 uyarı.
+
+### 1. Yöntem: her test mutation-check'li
+
+Turun her testi kırılarak doğrulandı: sayacın artışı bozuldu, testin
+DÜŞTÜĞÜ görüldü, bozma geri alındı. Toplam **41 mutasyon**, hepsi
+öldürüldü; kırılamayan test olmadı. Bozmalar üç sınıfta toplandı:
+
+1. **hiç artmayan sayaç** (`+= 1` → `+= 0`) — "her zaman sıfır" hatası,
+   bu depoda iki kez gerçekten olmuş bir hata;
+2. **yanlış kola bağlı sayaç** — `leaves`'i join yoluna, `joins`'i
+   conn-open yoluna, `violations`'ı gelen-kare yoluna, `rooms_died`'ı
+   sıradan destroy'a bağlamak. Bunlar rapor satırında YAN YANA duran
+   alanlar; yanlış kova operatöre kendinden emin ve yanlış cevap verir;
+3. **doğru sayaç, yanlış semantik** — `snap_bytes_max`'ı koşulsuz
+   atamak (tepe yerine sonuncu), `lagged_ticks`'e `missed` yerine 1
+   eklemek, ince histogramı sabit bir sayıyla binlemek, `gave_up`'a
+   kuyruk boyu yerine 1 eklemek, `oob_dropped`'ı pencere sınırından bir
+   erken ateşlemek.
+
+Üçüncü sınıf yeni testlerin çoğunun şeklini belirledi: her test, sayacı
+KENDİSİNE en çok benzeyen komşusundan ayıran bir gözlem içeriyor
+(detay §3).
+
+### 2. Envanter (ÖNCE → SONRA)
+
+**evet** = gerçek yolu tetikleyen ve o alanın arttığını assert eden test
+var; **kısmi** = yalnız bir aktörde (oda/shard) var; **smoke** = sayaç
+okunuyor ama yalnız sıfır/salimlik; **hayır** = yok; **N/A** = ölçüm
+değil (kimlik, zaman damgası, konfigürasyon yankısı).
+
+**RoomSample** (iki aktör de üretir: oda ve shard):
+
+| Alan | Önce | Sonra | Test |
+|---|---|---|---|
+| `room`, `emit_at`, `budget_us` | N/A | N/A | kimlik / damga / konfig yankısı |
+| `steps` | evet | evet | `room_counters_flow_to_collector` |
+| `lagged_events`, `lagged_ticks` | **hayır** | **evet** | `lag_counts_one_event_and_every_missed_tick_index` |
+| `step_min/max/sum_us`, `step_hist` | evet | evet | `duration_counters_stay_mutually_consistent` + unit |
+| `step_fine_hist` | **kısmi** (shard) | **evet** | `the_rooms_step_fills_the_fine_duration_histogram` |
+| `late_min/max/sum_us` | evet | evet | `a_faster_tick_lowers_the_rooms_late_minimum` |
+| `dropped_frames` | evet | evet | `room_counters_flow_to_collector` |
+| `keepalive_resends` | **kısmi** (shard) | **evet** | `keepalive_resend_counts_the_unchanged_group_only` |
+| `snapshots` | evet | evet | flow + `snapshot_bytes_sum_and_peak_…` |
+| `snap_bytes`, `snap_bytes_max` | **hayır** | **evet** | `snapshot_bytes_sum_and_peak_track_the_encoded_payloads` |
+| `snap_overflows` | **hayır** | **evet** | `every_oversized_snapshot_is_counted_not_just_the_first` + `the_overflow_boundary_is_strictly_above_the_budget` |
+| `snap_records` | **hayır** | **evet** | `snap_records_accumulates_the_logics_encoded_record_count` |
+| `shipped_bytes` | **hayır** | **evet** | `shipped_counters_count_every_fanout_copy_…` |
+| `shipped_frames`, `private_frames` | **hayır + ÖKSÜZ** | **evet + taşınıyor** | aynı + §4 |
+| `joins` | evet | evet | flow test |
+| `leaves` | **hayır** | **evet** | `leaves_counts_the_control_plane_leave` |
+| `detached`, `resumes`, `resume_rejected_stale`, `detach_expired_*` | evet | evet | `tests/reconnect.rs` |
+| `requests_local`, `requests_external` | **kısmi** (shard) | **evet** | `requests_local_counts_every_same_tick_answer_not_every_tick`, `requests_external_counts_the_delegation_…` |
+| `requests_rejected_*` (6) | evet | evet | `buckets::reject_bucket_*` |
+| `requests_timed_out` | **hayır** (yalnız `== 0`) | **evet** | `requests_timed_out_counts_the_sweep` |
+| `requests_late` | evet | evet | `reconnect.rs`, `rpc_shard.rs` |
+| `pending_requests` | **kısmi** (shard) | **evet** | `requests_external_counts_the_delegation_and_pending_tracks_flight` |
+| `groups`, `members`, `max_group` | evet | evet | flow test |
+| `metrics_dropped` | **smoke** | **evet** | `a_full_metrics_channel_drops_the_sample_and_counts_it` |
+
+**RegistrySample** — turdan önce **tek bir alanı bile** test edilmemişti
+(`conns` hariç, o da park sızıntısı turunda dolaylı):
+
+| Alan | Önce | Sonra | Test |
+|---|---|---|---|
+| `rooms`, `rooms_created`, `rooms_destroyed` | hayır | **evet** | `room_creates_and_destroys_are_flow_while_rooms_is_the_table_size`, `a_destroy_of_an_absent_room_is_not_counted` |
+| `rooms_died` | hayır | **evet** | `an_unexpected_death_counts_in_rooms_died_not_rooms_destroyed` |
+| `conns`, `opens`, `closes` | smoke | **evet** | `open_and_close_counters_are_flow_while_conns_is_the_table_size` |
+| `joins`, `leaves` | hayır | **evet** | `join_and_leave_counters_are_independent_of_open_and_close` |
+| `metrics_dropped` | hayır | hayır | **açık kaldı** — §5 |
+
+**ConnSample / NetReport:**
+
+| Alan | Önce | Sonra | Test |
+|---|---|---|---|
+| `actions_dropped` (+ `actions_dropped_top`) | evet | evet | `e2e::flooder_drops_attributed` |
+| `bytes_in`, `bytes_out` | smoke | evet (in) / smoke (out) | `violations_frames_and_the_final_flag_reach_the_sample` |
+| `frames_in`, `frames_out` | hayır | **evet** | aynı + `ordinary_answered_frames_are_not_violations` |
+| `violations` | hayır | **evet** | aynı ikili |
+| `last` | hayır | **evet** | `violations_frames_and_the_final_flag_reach_the_sample` |
+| `metrics_dropped` | hayır | hayır | **açık kaldı** — §5 |
+
+**UdpClientStats** — dördü de turdan önce testsizdi:
+
+| Alan | Önce | Sonra | Test |
+|---|---|---|---|
+| `dup_in` | hayır | **evet** | `dup_in_counts_a_server_retransmit_without_redelivering_it` |
+| `oob_dropped` | hayır | **evet** | `oob_dropped_counts_only_past_the_reorder_window` |
+| `retrans_out` | hayır | **evet** | `retrans_out_counts_re_sends_and_respects_the_rto` |
+| `gave_up` | hayır | **evet** | `gave_up_counts_everything_outstanding_when_the_band_dies` + `an_idle_client_never_gives_up` |
+
+### 3. Testlerin şekli: sayacı komşusundan ayırmak
+
+Bir sayacı "arttı mı?" diye sormak yetmiyor; bu depoda bulunan hatalar
+sayacın YANLIŞ KOLA bağlı olmasıydı. Bu yüzden her test, alanı ona en
+çok benzeyen şeyden ayıran bir gözlem taşıyor:
+
+- **tepe ≠ sonuncu** — `snap_bytes_max` daha KÜÇÜK bir yükten sağ
+  çıkmalı. MTU hazırlık sinyali tam olarak "büyük snapshot patlaması +
+  sessiz bir tick" durumunda yanlış okurdu;
+- **her seferinde ≠ bir kez** — `snap_overflows` her aşan emit'i sayar;
+  uyarı grup başına BİR kez düşer, yani oranı ölçebilen tek şey sayaç.
+  Grup başına sayan bir sayaç, her tick aşan bir odada 1 okurdu;
+- **akış ≠ gauge** — `opens`/`closes` vs `conns`,
+  `rooms_created`/`rooms_destroyed` vs `rooms`. "Conn cap neden
+  bağlıyor?" sorusunun cevabı closes'ın KAYBOLUP kaybolmadığı, ve bunu
+  gauge söyleyemez;
+- **ölüm ≠ destroy** — `rooms_died` iki yönden de assert edildi: ölüm
+  destroy'a yazılmamalı, sıradan destroy da `rooms_died`'ı kirletmemeli.
+  Ölümü destroy sayan bir sunucu, her odası patlarken sağlıklı ama
+  yoğun bir kontrol düzlemi gibi görünürdü;
+- **ihlal ≠ trafik** — ilk ihlal testinde GELEN her kare zaten bir
+  ihlaldi, yani gelen-kare yoluna bağlı bir `violations` o testi
+  geçerdi. İkinci test bunu kapatıyor: bir throttle aralığındaki iki
+  heartbeat = 2 giren, 1 çıkan ack, 0 ihlal;
+- **kadans ≠ kayıp** — `metrics_dropped`, örneklemeyen bir adımı
+  saymamalı. Sayarsa varsayılan konfigürasyonlu her oda (30 Hz tick, 1
+  Hz kadans) saniyede 29 kayıp bildirir ve sürekli doymuş görünür;
+- **bant ölümü ≠ sessizlik** — `gave_up` bekleyen işin tamamını birden
+  sayar ve `is_established`'ı düşürür; boşta bir istemci ise ne kadar
+  sessiz kalırsa kalsın ölmez (ölüm saati cevapsız İŞİ ölçer).
+
+### 4. İki öksüz alan: `shipped_frames` / `private_frames`
+
+Son turun geçerken not ettiği bulgu doğrulandı: iki sayaç da fan-out
+yazıldığından beri İKİ aktör tarafından da tutuluyor, `RoomSample`'a
+konuyor ve orada bitiyor. Ne akümülatör, ne renderer, ne Prometheus
+yüzeyi, ne loadgen'in codec'i ya da foldu onlara dokunuyordu — yani
+hiçbir tüketici okuyamıyordu.
+
+**Karar: TAŞIMAK** (silmek değil). `shipped_bytes` ile gereksiz
+değiller:
+
+- `shipped_bytes / shipped_frames` = ortalama kare boyu. Datagram
+  taşıması (rUDP, ağaçta ve deneysel) BAYT kadar PAKET ile de sınırlı:
+  aynı bayt hızı iki katı karede farklı bir yük demektir, ve bunu bayt
+  sayacı tek başına söyleyemez;
+- `shipped_frames − private_frames` = fan-out'un yayın yarısı.
+  Özel/yayın ayrımı, `snap_records`'un encode tarafından yanıtladığı
+  sorunun gönderme tarafındaki karşılığı; encode tarafı kaç KOPYA
+  çıktığını bilmiyor.
+
+**Elenen alternatif — kaynakta silmek.** İki aktörden de sayaçları
+kaldırmak daha küçük bir yama olurdu ve "kimsenin okuyamadığı sayaç"
+kuralını da sağlardı. Elendi çünkü yukarıdaki iki soru gerçek ve başka
+hiçbir alan onları yanıtlamıyor; ayrıca rUDP ağaçta duruyor, yani paket
+sayısı bugünden ilgili.
+
+Uçtan uca taşındı, her durakta bir kural ve bir tüketici ile:
+`RoomReport` alanları → akümülatör doğrudan geçiriyor (kendi oranları
+yok, kümülatif sayaçlar) → `fold_rooms` **SUM** kuralı (`shipped_bytes`
+ile aynı sınıf: ayrık iş üzerinde kümülatif sayaç; DESIGN §12 tablosunun
+SUM satırı da genişletildi) → GSM6 → GSM7 → tüketiciler: `gsb-metric
+scope=room` renderer satırı ve loadgen'in `server room (final)` satırı
+(türetilmiş `mean_frame_b` ile birlikte).
+
+Foldun tam destructure'ı burada tasarlandığı gibi çalıştı: alanları
+eklemek, kural yazılana kadar **E0063 ile derlemeyi kırdı** (§13'ün
+derleme-zamanı koruma ailesi).
+
+### 5. Açık kalan (düşük değerli kuyruk)
+
+`RegistrySample::metrics_dropped` ve `ConnSample::metrics_dropped`.
+Odanınki bu turda kapandı (`a_full_metrics_channel_drops_the_sample_
+and_counts_it`) ve mekanizma üçünde de aynı: dolu bir bounded kanalda
+`try_send` başarısız olur, üretici kendi sayacını artırır, sayı bir
+sonraki geçen örnekle çıkar. Oda tarafında kapatmak bu davranışı
+kilitliyor; kalan ikisi aynı desenin kopyaları ve ikisi de tasarım
+gereği zararsız (sayaçlar kümülatif — sonraki örnek her şeyi taşır).
+Ayrıca ikisini sürmek için üretici tarafında kanalı doldurmak
+gerekiyor: registry olay-tetikli örnekler (bir test durum değişikliği
+üretmeli), conn aktörü ise en fazla `METRICS_FLUSH_EVERY`de bir
+flush'lar (kısa bir test yalnız son flush'ı görür) — yani her ikisi de
+oda sürümünden belirgin biçimde daha kırılgan testler olurdu, aynı
+mekanizmayı ikinci ve üçüncü kez doğrulamak için.
+
+`ConnSample::bytes_out` de tam değil: yeni test `bytes_in > 0` assert
+ediyor, `bytes_out` ise hâlâ yalnız smoke (loadgen `server_out_bps > 0`).
+Kare sayaçları (`frames_out`) tam kapandığı için bayt yarısının
+gerileme riski düşük.
+
+
 ## Kapatılanlar (metrik fold denetimi turu)
 
 "minimum sayaçlar turu"nun bıraktığı açık yan bulgu —

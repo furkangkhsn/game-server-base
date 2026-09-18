@@ -75,7 +75,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **361** (361/361 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **386** (386/386 yeşil; tarihsel
 ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 için
 `docs/CHANGELOG.md` başlığına bakınız). Son tur: **metrik fold
 denetimi** — sharded oda raporunu tek satıra katlayan `fold_rooms`
@@ -243,26 +243,39 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
 - [x] **Temel metrik** — kapatıldı: `gsb_core::metrics` +
   `MetricsCollector` (1 s rapor; log/kanal sink); kapsam ve tasarım
   "Kapatılanlar (metrik + yük turu)" + DESIGN §12'de.
-- [ ] **Kalan metrik sayaçları için doğru-yol testleri** — reject
-  bucket'larının (bu turda kapatıldı) aynı sınıfındaki kalan boşluk:
-  "doğru yolda arttığını" doğrulayan testi OLMAYAN sayaçların tam listesi
-  "Kapatılanlar (reject-bucket wiring + sayaç envanteri turu)"
-  bölümündeki tabloda. Kısaca: RoomSample `step_fine_hist` (**oda
-  tarafı**; shard tarafı "park sızıntısı + shard metrik boşluğu turu"nda
-  hem yazıldı hem kilitlendi), `lagged_*`,
-  `keepalive_resends`, `snap_bytes*`, `snap_overflows`, `snap_records`,
-  `shipped_*`, `private_frames`, `leaves`,
-  `requests_local/external/timed_out/late`, `pending_requests`;
-  RegistrySample `rooms_created/destroyed`, `joins/leaves`,
-  `opens/closes`; ConnSample `frames_in/out`, `violations`, `last`;
-  UdpClientStats `retrans_out`, `dup_in`, `oob_dropped`, `gave_up`.
-  (`step_min/sum_us` ve `late_*` "minimum sayaçlar turu"nda kapandı:
-  `room/counters/tests.rs` + iki aktörün davranış testleri.)
-  Yöntem: sayaç başına yolu tetikleyip artışı assert eden test (altyapı
-  deseni: `tests/rpc.rs`'te `latest_room_sample` + adım başına
-  `metrics_cadence_hz`). Öncelik önerisi: operasyonel sinyaller
-  (cap/overflow ailesi + `requests_*` kardeşleri), sonra süre/
-  histogram ailesi, en son log-düzeyi değerler.
+- [x] **Kalan metrik sayaçları için doğru-yol testleri** — kapatıldı
+  (CHANGELOG "sayaç envanteri kapanış turu"). Maddenin kendi listesi
+  BAYATTI ve tur ona güvenmedi: envanter sıfırdan yeniden türetildi
+  (metrik yüzeyine ulaşan her tip alan alan tarandı), sonra kapatıldı.
+  Test 361 → **386**; 41 mutasyonun tamamı öldürüldü, kırılamayan test
+  yok. Kapananlar: RoomSample'ın `lagged_*`, `keepalive_resends` (oda
+  tarafı), `step_fine_hist` (oda tarafı), `snap_bytes*`,
+  `snap_overflows`, `snap_records`, `shipped_*`, `private_frames`,
+  `leaves`, `requests_local/external/timed_out`, `pending_requests`
+  (oda tarafı), `metrics_dropped`; **RegistrySample'ın tamamı**
+  (`rooms`, `rooms_created/destroyed/died`, `joins/leaves`,
+  `opens/closes` — bu tip turdan önce tek bir testi bile yoktu);
+  ConnSample'ın `frames_in/out`, `violations`, `last`;
+  UdpClientStats'ın dördü (`retrans_out`, `dup_in`, `oob_dropped`,
+  `gave_up`). Tam ÖNCE/SONRA tablosu CHANGELOG §2'de.
+  Yöntem notu (sonraki turlar için): bir alanın YALNIZCA sıfır olduğunu
+  assert eden test, hiç yazılmayan bir alandan ayırt edilemez —
+  `requests_timed_out` tam olarak o durumdaydı. Ve testler sayacı
+  "arttı mı" diye değil, **komşusundan ayırt ederek** yazıldı (tepe ≠
+  sonuncu, akış ≠ gauge, ölüm ≠ destroy, ihlal ≠ trafik, kadans ≠
+  kayıp); bu depoda bulunan hatalar hep yanlış kola bağlı sayaçlardı.
+
+  **Açık kalan kuyruk (bilinçli):** `RegistrySample::metrics_dropped` ve
+  `ConnSample::metrics_dropped` — mekanizma üç üreticide de aynı ve oda
+  tarafında kapatıldı, kalan ikisi aynı desenin kopyaları; ikisi de
+  tasarım gereği zararsız (sayaçlar kümülatif, sonraki örnek her şeyi
+  taşır) ve ikisini sürmek oda sürümünden belirgin biçimde daha
+  kırılgan testler gerektirirdi (registry olay-tetikli örnekler; conn
+  aktörü en fazla `METRICS_FLUSH_EVERY`de bir flush'lar). Ayrıca
+  `ConnSample::bytes_out` hâlâ smoke düzeyinde (`frames_out` tam
+  kapandığı için gerileme riski düşük). Bunlar tetikleyici beklesin:
+  bir metrik kanalı doyması gerçekten gözlenirse kapatılır.
+
 - [x] **`step_min_us` / `late_min_us` minimum DEĞİL** — kapatıldı
   (CHANGELOG "minimum sayaçlar turu"). Kullanıcı kararı **ONARIM**:
   alanlar gerçek minimum yapıldı; `step_first_us` diye yeniden adlandırma
