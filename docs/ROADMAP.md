@@ -75,15 +75,17 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **356** (356/356 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 için
-`docs/CHANGELOG.md` başlığına bakınız). Son tur: **AFK sinyali +
-girdi-boşta tavanı** — bekleyen dört ürün kararından üçüncüsü kapandı.
-Base artık "herhangi bir frame geldi" (canlılık) ile "aksiyon geldi"
-(girdi) saatlerini ayırıyor: sinyal koşulsuz yayınlanıyor
-(`TickCtx::since_input`), tavan (`max_idle_input_secs`) varsayılan
-KAPALI, ve açıkken kararı oyunun `on_disconnect`'i veriyor. Açık kalan
-tek ürün kararı: geçerli girdiye hacim limiti.
+Test sayısı: bugün itibarıyla **361** (361/361 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 için
+`docs/CHANGELOG.md` başlığına bakınız). Son tur: **metrik fold
+denetimi** — sharded oda raporunu tek satıra katlayan `fold_rooms`
+alan alan değil toplu denetlendi. Her alanın katlama kuralı
+kararlaştırılıp koda yazıldı ve kural YAPISAL hâle getirildi (tam
+destructure → yeni alan derlemiyor). Bir önceki tur: **AFK sinyali +
+girdi-boşta tavanı** — bekleyen dört ürün kararından üçüncüsü kapandı
+(`TickCtx::since_input` sinyali + varsayılan KAPALI
+`max_idle_input_secs` tavanı). Açık kalan tek ürün kararı: geçerli
+girdiye hacim limiti.
 `#[ignore]`'lu gsb-lint doctest; hiçbir eski test silinmedi/ihmal edilmedi). Ara turlar: **reconnect/detach** (tasarım
 `docs/RECONNECT.md`; core mekaniği + demo park/bot + global epoch düzeltmesi — aşağıda P1), **trait birleşimi + PlayerId**
 (`docs/TRAIT-ARCHITECTURE.md` Faz 1-2; shard keepalive terfisi, RebindKey küçültmesi), **Faz 3** (shard-RPC + match-result,
@@ -274,21 +276,22 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   Loadgen kanıtı: TCP `step_min_us` 264 → **9** (`step_p50_fine_us=40`).
   Bununla birlikte aşağıdaki "doğru-yol testi" maddesinin
   `step_min/sum_us` ve `late_*` satırları da kapandı.
-- [ ] **`fold_rooms` eksik katlıyor (minimumlar dışında)** — "minimum
-  sayaçlar turu"nun envanterinde bulundu, o turun sözleşmesi (yalnız
-  minimumlar) dışında kalanlar düzeltilmedi.
-  `loadgen::report::fold_rooms` akümülatörü `*first`'ten başlatıyor ve
-  döngüde şu alanlara HİÇ dokunmuyor: `late_mean_us` (folded rapor ilk
-  shard'ın ortalamasını taşıyor — gerçek bir kusur, ama bir ortalama,
-  minimum değil), `budget_us` (shard'lar arasında zaten aynı, zararsız),
-  `req_*` ailesi, `metrics_dropped`, `pending_requests` ve `dropped_s` /
-  `snap_bytes_s` / `shipped_s` oranları. Yani sharded bir oda için bu
-  satırların hepsi "shard 0 ne dediyse o". Tek tek değil, toplu bir
-  **fold denetimi** hak ediyor: her alan için katlama kuralı (SUM /
-  MAX / MIN / ağırlıklı ortalama / gauge) bir kez kararlaştırılıp
-  `fold_rooms` doc yorumundaki listeye yazılmalı, ve alan başına test.
-  Tetikleyici yok sayılmaz: sharded oda loadgen'de ölçülüyor, bu
-  satırlar rapor ediliyor.
+- [x] **`fold_rooms` eksik katlıyor (minimumlar dışında)** — kapatıldı
+  (CHANGELOG "metrik fold denetimi turu"). Toplu denetim yapıldı: her
+  alan için kural kararlaştırıldı (SUM / MIN / MAX / adım-ağırlıklı
+  ortalama / bölünmüş gauge / KATLANMAZ) ve kural **koda**, onu
+  uygulayan tek döngünün yanına yazıldı; tablo DESIGN §12'ye de işlendi.
+  Yapısal koruma: döngü `RoomReport`'u tam destructure ediyor, yani yeni
+  bir alan E0027 ile derlemeyi kırıyor — kural artık derleme zamanında.
+  Maddedeki alanların hepsi düzeldi (`late_mean_us` ağırlıklı ortalama,
+  `budget_us` MIN, `req_*` + `metrics_dropped` + `pending_requests` SUM,
+  üç `*_s` oranı SUM). Denetim ayrıca iki alan-dışı hata buldu:
+  akümülatör shard 0'ı HER toplamda iki kez sayıyordu (50 istemcilik
+  sharded koşu `members=61` diyordu) ve loadgen'in ince-histogram
+  percentilleri nüfus olarak `steps`'i veriyordu (`steps` MAX,
+  histogramlar SUM ile katlanır → 4 shard'da "p50" kabaca p12.5 idi).
+  `detached` da MAX'tan SUM'a alındı: komşuları `members`/`groups` ile
+  aynı cinsten bölünmüş bir gauge.
 
 - [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
   kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.

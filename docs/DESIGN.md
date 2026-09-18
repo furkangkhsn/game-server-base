@@ -1433,7 +1433,53 @@ toplam ve iki histogram — artık `RoomCounters::observe_late_us` /
 ucu da SEED eder (sıfırdan başlayan bir minimum sonsuza dek 0 kalırdı);
 `*_min/max/sum_us` üçlüsü kümülatiftir, örnek aralığına ait değil.
 Sharded odada rapor katlaması (`loadgen::report::fold_rooms`) bir
-minimum için `min`'dir.
+minimum için `min`'dir — ve yalnız minimumlar için değil: aşağıdaki
+tablo her alanı bağlar.
+
+**Katlama (fold) kuralları — alan başına.** Sharded oda N shard
+aktörüdür; her biri kendi örnek kimliğiyle (`room << 16 | index`) ayrı
+bir üreticidir, yani toplayıcı N satır raporlar ve tek-oda şeklindeki
+her tüketici onları birleştirmek zorundadır. Kural üç turda üç kez tek
+tek düzeltildi (`step_min_us`, `late_min_us`, sonra toplu denetim);
+sebep alanlar değil ŞEKİL'di — fold ilk satırın kopyasını mutasyona
+uğratıyordu, dokunulmayan alan sessizce shard 0'ı raporluyordu. Artık
+döngü `RoomReport`'u **tam destructure** eder: yeni bir alan, kuralı
+yazılana kadar **derlemeyi kırar** (§13'ün derleme-zamanı koruma
+ailesine katılır). Tablo kodda, onu uygulayan tek döngünün yanındadır
+(`crates/gsb-server/src/loadgen/report/fold.rs`); burada kaydı için:
+
+| Kural | Alanlar | Neden |
+|---|---|---|
+| KATLANMAZ | `room` | Ölçüm değil kimlik; katlanmış satır ilk shard'ın id'sini taşır, hiçbir tüketici basmaz. |
+| MAX | `steps` | Shard'lar TEK global ticker'la aynı adımda ilerler: odanın adım sayısı bir shard'ınkidir, toplamları değil. `report_steps`'in tazelik ölçütü de budur. |
+| MAX | `step_max_us`, `late_max_us`, `snap_bytes_max`, `max_group` | Oda genelinde en kötü hâl (darboğaz shard). |
+| MIN | `step_min_us`, `late_min_us` | Oda genelinde en iyi hâl. Bir minimumun foldu `min`'dir, "ilk shard ne dediyse o" değil. |
+| MIN (pozitifler) | `hz` | Shard'lar birlikte adımlar, geride kalan shard odayı geri çeker. `hz = 0.0` "bu pencerede örnek yok" demektir (§ `RoomReport::hz`), "durdu" değil — sıfır min'e katılmaz, atlanır. |
+| MIN (konfig) | `budget_us` | ÖLÇÜM DEĞİL KONFİGÜRASYON: shard'lar tek `RoomConfig` paylaşır, hep aynıdır. Ayrışırlarsa dürüst cevap küçüktür — aşım oranının ve histogram kenarlarının paydasıdır, küçük bütçe aşımı daha ERKEN okur. |
+| ORTALAMA, adım-ağırlıklı | `step_mean_us`, `late_mean_us` | Ortalamaların ortalaması ortalama değildir. Her shard'ın ortalaması `sum / steps` olduğundan `steps` ile ağırlıklandırıp toplam adıma bölmek `Σsum / Σsteps`'i birebir kurar. |
+| SUM, eleman bazında | `step_hist`, `step_fine_hist` | Shard dağılımlarının birleşimi; böylece percentiller ve bütçe aşım %'si oda geneli olur. |
+| SUM | `lagged_*`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_*`, `requests_*` ailesinin tamamı, `metrics_dropped` | Ayrık iş üzerindeki kümülatif sayaçlar. |
+| SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | Shard başına hesaplanmış bir ORAN ortalanamaz: sayaçlar aynı duvar saati üzerinde ayrıktır, odanın oranı toplamlarıdır (ortalamak 4 shard'lık odada kaybın dörtte birini raporlardı). |
+| SUM | `groups`, `members`, `detached`, `pending_requests` | Gauge, ama **bölünmüş** gauge — shard'lar odanın bağlantılarını, gruplarını, park edilmiş oturumlarını ve uçuştaki isteklerini PAYLAŞTIRIR, yani odanın değeri toplamdır. Karşı örnek `max_group`/`snap_bytes_max`: bunlar bir popülasyon değil, popülasyon ÜZERİNDE bir uçtur. |
+
+**Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
+iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi
+saymazlar. Katlanmış bir histogram üzerinde percentil, histogramın
+kendi nüfusuna (`Σsteps`) sorulmalıdır —
+`loadgen::report::fold::folded_steps`. Log2 histogram bu nüfusun TAM
+kendisidir (her adım binlenir, üst bin sınırsız → `Σ step_hist ==
+Σ steps`); ince histogram olamaz, çünkü tavan üstü adımlar kasten onda
+yoktur — `fine_hist_percentile_us`'in nüfusu parametre almasının sebebi
+de budur. Loadgen'in `step_p50_fine_us` / `step_p90_fine_us` satırları
+bir süre tick sayısını veriyordu ve 4 shard'lık odada "p50" etiketi
+altında kabaca p12.5 basıyordu; kapatıldı: CHANGELOG "metrik fold
+denetimi turu".
+
+Prometheus yüzeyi ve log renderer **katlamaz**: örnek kimliği başına
+bir satır basarlar (shard'lar `room="r<id>"` etiketiyle ayrı seri), yani
+oda-geneli toplama tüketicinin (PromQL'in) işidir. Katlayan tek yer
+loadgen'in rapor yoludur, ve orada da hot path'te değildir: fold koşu
+sonunda bir kez çalışır.
 
 Her **iki** aktör de binler — oda ve shard, aynı `t0.elapsed()`'ten,
 `step_hist` ile aynı satırda. Bu bir süre yalnız oda tarafında doğruydu;

@@ -5,6 +5,161 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (metrik fold denetimi turu)
+
+"minimum sayaçlar turu"nun bıraktığı açık yan bulgu —
+`loadgen::report::fold_rooms` minimumlar DIŞINDA da eksik katlıyor —
+alan alan değil **toplu** kapandı. Sözleşme buydu: tek tek düzeltmeyi
+bırak, foldun tamamını denetle, alan başına bir kural kararlaştır,
+kuralı **koda** yaz ve bir sonraki alanın sessizce unutulmasını
+YAPISAL olarak imkânsız kıl.
+
+Test sayısı 356 → **361** (+7 yeni fold testi, −2 eski fold testi
+yerine geçti; hiçbir test silinmedi, gevşetilmedi, `#[ignore]`
+eklenmedi).
+
+### 1. Neden tek tek düzeltmek işe yaramıyordu
+
+Üç tur üç alan düzeltti: `step_min_us`, sonra `late_min_us`, sonra bu
+denetim. Sorun alanlar değil **şekildi**. Fold ilk satırın bir
+KOPYASINI mutasyona uğratıyordu (`acc = *first`) ve elle seçilmiş bir
+alt kümeye dokunuyordu; dokunulmayan alan sessizce shard 0'ın değerini
+raporluyordu ve hiçbir şey sormuyordu. Bir alan eklemek derlemeyi
+kırmıyordu — kural kod incelemesine bağlıydı, derleme zamanına değil
+(§13'ün tam tersi).
+
+### 2. Yapısal koruma
+
+Döngü artık `RoomReport`'u **tam (exhaustive) destructure** ediyor:
+`..` yok, atlanan alan yok, kullanılmayan binding yok ("kullanılmayan
+binding = kimsenin yazmadığı kural"). `RoomReport`'a alan eklemek
+`fold_rooms`'ta **E0027** ile derlemeyi kırıyor — deneyle doğrulandı.
+Katlanmayan tek alan (`room`, bir kimlik) gerekçesi yazılmış hâlde
+`_`'ye bağlanıyor, yani o da bir karar.
+
+Kural tablosu modülün doc yorumunda, onu uygulayan TEK döngünün
+yanında (`crates/gsb-server/src/loadgen/report/fold.rs`); aynı tablo
+DESIGN §12'ye de işlendi.
+
+### 3. Merge noktalarının tam listesi (denetimin kapsamı)
+
+| Nokta | Ne birleşiyor | Durum |
+|---|---|---|
+| `loadgen::report::fold_rooms` | N shard raporu → 1 oda raporu | bu turun konusu; yeniden yazıldı |
+| `loadgen::report::report_members` | oda üyeliği, SUM | doğruydu |
+| `loadgen::report::report_steps` | rapor tazeliği, MAX | doğruydu |
+| `loadgen::report::result::print_report` → `server_hz` | oda başına `hz`'in pozitifleri üzerinden MIN, sonra raporlar arası medyan | doğruydu; fold'un `hz` kuralı buna hizalandı |
+| `MetricAccumulator::apply` (`Conn` kolu) | bağlantı aktörlerinin delta örnekleri → net toplamlar, SUM | doğruydu |
+| `MetricAccumulator::report` | `net.bytes_out_room` (odaların `shipped_bytes` SUM'u) + üst düzey `metrics_dropped` (oda + registry + conn SUM'u) | doğruydu |
+| `metrics::prometheus` (`/metrics`) | **birleştirmiyor** — örnek kimliği başına bir satır (`room="r<id>"`), shard'lar ayrı seri | değişiklik gerekmedi |
+| `metrics::render` (log satırları) | **birleştirmiyor** — oda başına bir satır | değişiklik gerekmedi |
+| `loadgen::codec` `encode_report`/`decode_report` | birleştirme değil, ama aynı struct üzerinde alan alan geçiş (ayrı-süreç modu) | decoder'ın struct literal'i zaten alan eklemede derlemiyor |
+
+Fold hot path'te DEĞİL: `print_report` koşu sonunda bir kez çalışır;
+toplayıcının `report()`'u da oda tick'inin dışındaki toplayıcı
+görevindedir (rapor temposu, vars. 1 Hz).
+
+### 4. Değişen alanlar: önce → sonra
+
+Hepsi yalnız **sharded** odayı etkiler; tek odalı rapor hâlâ birebir
+kimlik foldudur (erken dönüş).
+
+| Alan | Önce | Sonra |
+|---|---|---|
+| **her SUM alanı** (`members`, `groups`, `joins`, `leaves`, `snapshots`, `snap_records`, `shipped_bytes`, `dropped`, `lagged_*`, `keepalive_resends`, `snap_overflows`, `resume*`, `detach_expired_*`, iki histogram) | shard 0 İKİ KEZ toplanıyordu (`acc = *first` + tüm dilim üzerinde döngü) | tohum iteratörden tüketiliyor; her shard tam bir kez |
+| `late_mean_us` | shard 0'ın ortalaması | shard ortalamalarının **adım-ağırlıklı** ortalaması |
+| `dropped_s`, `snap_bytes_s`, `shipped_s` | shard 0'ın oranı | shard oranlarının **SUM**'u (oran ortalanamaz) |
+| `requests_*` ailesinin tamamı (10 alan) | shard 0'ınki | SUM |
+| `pending_requests` | shard 0'ınki | SUM (gauge, ama **bölünmüş** bir gauge) |
+| `metrics_dropped` | shard 0'ınki | SUM |
+| `detached` | MAX ("en kötü shard'ın park sayısı") | SUM — `members`/`groups` ile aynı cinsten bölünmüş gauge |
+| `budget_us` | shard 0'ınki | MIN (konfigürasyon; aşağıda) |
+| `hz` | sıfırları da sayan `min` | rapor **veren** shard'lar üzerinden MIN |
+| `step_p50_fine_us` / `step_p90_fine_us` (tüketici) | percentil, katlanmış histograma **`steps`** nüfusuyla soruluyordu | `folded_steps` (histogramın kendi nüfusu) |
+
+Son satır ayrı bir kusurdur ve fold kurallarının etkileşiminden doğar:
+`steps` MAX ile katlanır (shard'lar tek global ticker'la aynı adımda),
+iki histogram ise SUM ile. Katlamadan sonra ikisi aynı şeyi saymaz; tick
+sayısını nüfus diye vermek 4 shard'lık bir odada "p50" etiketi altında
+kabaca p12.5'i bastırıyordu.
+
+### 5. Kararların gerekçeleri (elenen alternatifler)
+
+1. **`budget_us` için "shard'lar ayrışırsa bayrak"** — ELENDİ. Yeni bir
+   `RoomReport` alanı demekti; codec'e, Prometheus yüzeyine ve log
+   renderer'a kadar dalga yapardı, üstelik shard'lar tek `RoomConfig`
+   paylaştığı için hiç tetiklenmezdi. Seçilen: **MIN**. Dürüst olan
+   taraf budur — `budget_us` aşım oranının ve histogram kenarlarının
+   paydası; küçük bütçe aşımı **daha erken** okur (bir eşik için
+   güvenli yön). Ayrıca bütçeler ayrışırsa `step_hist` toplamı zaten
+   ölçülemez hâle gelir, ki bunu tablo yazılı olarak söylüyor.
+2. **`steps` için SUM** (histogram nüfusuyla kendiliğinden uyuşurdu) —
+   ELENDİ. `steps` hem `hz` ile karşılaştırılan tick sayısı hem de
+   `records_per_tick = Δkayıt / Δadım` paydası; SUM onu shard sayısıyla
+   çarpar ve iki okumayı da bozar. Bunun yerine **tüketici** düzeltildi
+   (`folded_steps`).
+3. **Katlanmış nüfusu `RoomReport`'a yeni bir alan olarak taşımak** —
+   ELENDİ: log2 histogramı zaten TAM nüfustur (her adım binlenir, üst
+   bin sınırsız → `Σ step_hist == Σ steps`), yani türetilebilen bir
+   şeyi tel formatına ve her tüketiciye taşımak olurdu. İnce histogram
+   bu işe yaramaz: tavan üstü adımlar kasten onda yok — zaten
+   `fine_hist_percentile_us`'in nüfusu parametre olarak almasının sebebi
+   bu.
+4. **`detached` MAX kalsın** ("en kötü shard'ın park yükü") — ELENDİ.
+   Komşuları `members` ve `groups` aynı bölünmüş gauge cinsindendir ve
+   SUM'lanıyordu; aynı satırda aynı cinsten iki alanın farklı katlanması
+   tam olarak bu turun kapattığı hata sınıfıdır. Ekstremum kalanlar
+   (`max_group`, `snap_bytes_max`) bir POPÜLASYON değil, popülasyon
+   ÜZERİNDE bir uçtur — tablo bu ayrımı yazıyor.
+5. **Fold'u `RoomReport`'a bir `impl` metodu yapmak** — ELENDİ: kural
+   loadgen'in tüketici kararıdır (hangi satırın oda, hangisinin shard
+   olduğunu bilen taraf), `gsb-core`'un rapor tipinin değil.
+6. **Sadece bir doküman tablosu** — ELENDİ (sözleşme zaten reddediyordu):
+   bir sonraki alanı unutulmaktan koruyan şey derleyicidir, tablo değil.
+
+### 6. Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **361 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` (tcp ve `--transport udp`) →
+  `left=50`, `errors=0`, panik yok.
+- **Sharded koşu** (`--topology sharded --shard-count 4`, 50 istemci,
+  8 s) — turun etkisinin görünür olduğu yer. `2486dae` tabanı → HEAD:
+
+```text
+taban: steps=240 step_p50_fine_us=16 step_p90_fine_us=24 hist=[1200,0,...]
+       groups=5 members=61 joins=61 snapshots=1160
+       records_per_tick=131.7 overlap_x=2.63
+HEAD : steps=240 step_p50_fine_us=32 step_p90_fine_us=40 hist=[960,0,...]
+       groups=4 members=50 joins=50 snapshots=928
+       records_per_tick=107.7 overlap_x=2.15
+```
+
+`hist` toplamı 1200 → 960: 240 adım × 4 shard, taban ise 5 shard'lık
+kütle taşıyordu (shard 0 iki kez). `members=61` 50 istemcilik bir koşuda
+şeffaf biçimde yanlıştı. `records_per_tick` düşüşü ≈ 4/5 oranındadır,
+yani tam olarak fazladan sayılan shard kadar.
+
+### 7. Mutation-check
+
+| Mutasyon | Kırılan |
+|---|---|
+| `detached` SUM → MAX | 1 test |
+| `pending_requests` SUM → MAX | 1 test |
+| `dropped_s` SUM → MAX | 1 test |
+| `late_mean_us` ağırlıksız | 1 test |
+| çifte sayım geri getiriliyor | 3 test |
+| `budget_us` MIN → MAX | 1 test |
+| `requests_local` katlanmıyor | 1 test |
+| `metrics_dropped` katlanmıyor | 1 test |
+| `hz` sıfırları da sayıyor | 1 test |
+| `fine_percentiles_us` nüfus olarak `steps` alıyor | 1 test |
+| `RoomReport`'a alan ekleniyor | **derlemiyor** (E0027) |
+
+Fikstür üç **FARKLI** shard raporu verir ve hiçbir ekstremumu ilk ya da
+son shard'a koymaz: aynı girdilerle her yanlış kural doğru görünür.
+
 ## Kapatılanlar (AFK sinyali + girdi-boşta tavanı turu)
 
 Teknik borç turunun ürün kararına bıraktığı dört maddeden **üçüncüsü**

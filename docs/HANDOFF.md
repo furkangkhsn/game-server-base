@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-356 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+361 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -43,13 +43,19 @@ yeni bir süre sayacı eklerken oraya ekle, aktörlerin `lifecycle.rs`'ine
 değil. İlk gözlemin iki ucu da SEED etmesi bir tuzak koruması: sıfırdan
 başlayan bir minimum sonsuza dek 0 kalır.
 
-Yerine **yeni bir açık yan bulgu** geçti (o turun min-alan
-envanterinden, bilinçli olarak kapsam dışı bırakıldı):
-`loadgen::report::fold_rooms` minimumlar DIŞINDA da eksik katlıyor —
-`late_mean_us`, `req_*` ailesi, `metrics_dropped`, `pending_requests` ve
-`*_s` oranları döngüde hiç güncellenmiyor, yani sharded bir oda için
-hepsi "shard 0 ne dediyse o". ROADMAP'te kendi maddesi var; toplu bir
-fold denetimi turu istiyor.
+Onun yerine geçen yan bulgu (`fold_rooms` minimumlar DIŞINDA da eksik
+katlıyor) da **kapandı** — bkz. CHANGELOG "metrik fold denetimi turu".
+Artık her alanın katlama kuralı kararlaştırılmış, koda yazılmış ve
+DESIGN §12'ye işlenmiştir; kural YAPISALDIR: fold döngüsü
+`RoomReport`'u tam destructure eder, yani rapora alan eklemek kuralı
+yazılana kadar **derlemez** (E0027). Yeni bir metrik alanı eklerken üç
+yer seni zaten derlemeyi kırarak uyarır: iki aktörün `sample()`'ı,
+toplayıcının `RoomReport` literal'i ve `fold_rooms`'un destructure'ı.
+Denetimin iki yan bulgusu da kapandı: akümülatör shard 0'ı HER toplamda
+iki kez sayıyordu (50 istemcilik sharded koşu `members=61` diyordu) ve
+loadgen'in ince-histogram percentilleri yanlış nüfusa soruluyordu
+(`steps` MAX, histogramlar SUM ile katlanır → `folded_steps`).
+**Açık yan bulgu kalmadı.**
 
 **Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
 207. Her modül kendi dizini; hedef dosya boyutu 200-250 satır. Bir
@@ -150,6 +156,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 356 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 361 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
