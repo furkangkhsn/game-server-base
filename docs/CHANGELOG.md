@@ -5,6 +5,154 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (minimum sayaçlar turu)
+
+Bir önceki turun kardeş-alan denetiminin bıraktığı açık bulgu kapandı:
+`step_min_us` ve `late_min_us` **hiçbir aktörde minimum değildi**. İkisi
+de yalnız `if self.steps == 1` altında atanıyordu ve onları aşağı çeken
+kol yoktu — yani her biri ilk adımın değerini process ömrü boyunca
+taşıyordu. İlk adım tipik olarak en soğuk ve en yavaş olanıdır, yani
+alanlar yalnız bayat değil, **dağılımın YANLIŞ UCUNU** raporluyordu; hem
+de yanında gerçekten maksimum olan bir `step_max_us` dururken.
+
+Test sayısı 330 → **340** (+10; hiçbir test silinmedi, gevşetilmedi,
+`#[ignore]` eklenmedi — bir test DÜZELTİLDİ, aşağıda). Düzeltme
+mutation-verified.
+
+### Kullanıcı kararı: ONARIM (yeniden adlandırma ELENDİ)
+
+ROADMAP maddesi kararı açık bırakmıştı: alanı düzeltmek mi, yoksa
+dürüstçe `step_first_us` diye yeniden adlandırmak mı.
+
+**Elenen alternatif — `step_first_us` / `late_first_us`.** Ucuz ve
+yayınlanmış metriğin değerini değiştirmiyor. Elenme gerekçesi: yanındaki
+`step_max_us` GERÇEK bir maksimum. Aynı satırda, aynı Prometheus
+ailesinde, farklı anlama gelen bir "min" her okuyucuyu yanıltır — ve
+zaten istenen ölçüm bir minimumdu, bir ilk-gözlem değil. Ayrıca
+"ilk adımın süresi" operasyonel olarak neredeyse değersiz bir sayıdır
+(bir kez ölçülür, bir daha asla değişmez), oysa minimum her turda
+"bu oda ne kadar hızlı olabiliyor" sorusunu yanıtlar.
+
+**Seçilen:** alanlar gerçek minimum yapıldı. Yayınlanmış metriğin anlamı
+değişti (dünkü değer "ilk adım", bugünkü "minimum") — bu turun tek
+bilinçli kırıcı değişikliği. Prometheus `# HELP` metinleri
+DEĞİŞTİRİLMEDİ: ikisi de zaten "Minimum ..." diyordu, yani belge doğru,
+yalan söyleyen koddu.
+
+### Kommitler
+
+1. **`98e35e4` — minimum sayaçlar gerçekten minimum.**
+
+   **Bulgu (koddan doğrulandı):** `room/actor/lifecycle.rs:202` ve
+   `shard/actor/lifecycle.rs:222` — dört alan (iki aktör × `step`/`late`)
+   yalnız seeding kolunda atanıyor, `else if` kolu sadece maksimumu
+   yükseltiyor. Loadgen çıktısında olgu çıplak, hatta beklenenden daha
+   keskin: düzeltme öncesi TCP koşusu `step_min_us=264 step_mean_us=41.1
+   step_max_us=264` — **min ile max BİREBİR aynı**, çünkü soğuk ilk adım
+   aynı zamanda koşunun en yavaş adımıydı. Düzeltme sonrası aynı koşu
+   `step_min_us=9 step_mean_us=48.1 step_max_us=163`.
+
+   **Muhasebe tek yere alındı.** Blok iki kez yazılıydı (ikinci kopya
+   "the room actor's accounting, mirrored" yorumuyla), o yüzden kusur da
+   iki kez taşınıyordu. `RoomCounters::observe_late_us` /
+   `observe_step_us` — `room/counters.rs`'in **ÇOCUK** modülü
+   (`counters/observe.rs`), yani sayaç alanları private kalıyor. İki
+   aktör artık aynı kodu çağırıyor: extremumlar, toplam ve iki histogram
+   tek ölçümden. Tamsayı, allocation yok, await yok — tick gövdesi
+   senkron kalıyor.
+
+   **Seeding KORUNDU, ve bu fiksin asıl tuzağı odur.** İlk gözlem iki
+   ucu da SET eder; sıfırdan başlayıp `min = min.min(x)` yazmak minimumu
+   sonsuza dek 0'da bırakırdı — orijinal buglardan DAHA kötü, çünkü 0
+   makul bir süre gibi okunur, oysa soğuk ilk adım gözle fark edilir.
+   Ayrı bir testle kilitlendi.
+
+   **İKİNCİ, GİZLİ ÖRNEK (toplama katmanı).**
+   `loadgen::report::fold_rooms` `step_min_us`'i `min` ile katlıyordu ama
+   `late_min_us`'e **hiç dokunmuyordu**. Akümülatör `*first`'ten
+   başladığı için sharded bir oda, shard 0'ın gecikme minimumunu odanın
+   minimumu diye raporluyordu (shard'lar örnek id'sine göre sıralı —
+   `room << 16 | index` — yani hep shard 0). Bir minimumun katlaması
+   `min`'dir. Düzeltildi.
+
+   **TÜM MİN-BENZERİ ALAN ENVANTERİ** (metrics yüzeyi, room, shard, conn,
+   registry, net, udp client stats tarandı):
+
+   | Alan | Hüküm |
+   |---|---|
+   | `step_min_us` (oda + shard) | **KUSUR — düzeltildi** |
+   | `late_min_us` (oda + shard) | **KUSUR — düzeltildi** |
+   | `fold_rooms` → `late_min_us` | **KUSUR — katlanmıyordu, düzeltildi** |
+   | `fold_rooms` → `step_min_us` | zaten doğru (`min`) — teste bağlandı |
+   | `fold_rooms` → `hz` (`min`) | doğru, kasıtlı: en yavaş shard odanın hızıdır |
+   | `MetricAccumulator::report` → `latest.*_min_us` | doğru: her shard KENDİ RoomId'siyle örnek gönderir, aktörler arası birleştirme burada olmaz; alan aktörde kümülatif |
+   | `ClientReport::seq_first` | **"ilk" KASITLI** — bir extremum değil, hız penceresinin bir ucu (`(last−first)/Δt`) |
+   | `*_max_us`, `snap_bytes_max`, `max_group`, `ack_lag_max_ms`, `ack_processed_max` | doğru: 0'dan başlayıp yükseliyorlar, bir maksimum için doğru başlangıç |
+   | `UdpClientStats` (`retrans_out`, `dup_in`, `oob_dropped`, `gave_up`) | min yok, hepsi kümülatif sayaç |
+   | RegistrySample, NetReport, ConnSample | min yok |
+
+   **Bu turda DÜZELTİLMEYEN komşu bulgu (kayda geçiriliyor):**
+   `fold_rooms` `late_mean_us`'i de katlamıyor — folded rapor ilk
+   shard'ın ortalamasını taşıyor. Gerçek bir kusur, ama bir ORTALAMA,
+   bir minimum değil; bu turun sözleşmesi minimumlardı. ROADMAP'e kendi
+   maddesi olarak yazıldı; aynı denetimde `fold_rooms`'un `budget_us`,
+   `req_*` ailesi, `metrics_dropped`, `pending_requests` ve `*_s`
+   oranlarını da katlamadığı görüldü — toplu bir "fold denetimi" turu
+   hak ediyor.
+
+   **DÜZELTİLEN test (silinmedi, gevşetilmedi — GÜÇLENDİRİLDİ):**
+   `sharded_step_fills_the_fine_duration_histogram`
+   (`shard/tests/metrics.rs`). Bu test p50'sini bilerek `step_min_us` ile
+   ALTTAN sınırlamıyordu ve yorumu bunun sebebini yazıyordu: "o alan bir
+   minimum değil". Yani test, buglı semantiği belgeleyen bir yorumla
+   birlikte yaşıyordu — ve doğru kodda o bracket geçerdi, buglı kodda
+   geçmezdi. Artık bracket var, bin granülerliğinde (`fine_hist_
+   percentile_us` bin'in ALT KENARINI döndürür — belgelenmiş ±8 µs), yani
+   iddia aynı beş gözlem üzerinde kesinlikle daha güçlü.
+
+   **Yeni testler (hepsi düzeltmeden ÖNCE kırmızı):**
+
+   - `room/counters/tests.rs` (5 test): sentetik sürelerle tam-değer
+     kilidi. Azalan-sonra-artan dizide minimum ORTADA (ne "ilkini tut"
+     ne "sonuncusunu tut" geçebilir); ilk gözlem iki ucu seed eder;
+     extremumlar iki histogram ile uyuşur; cap üstü adım skalerleri yine
+     hareket ettirir.
+   - `a_faster_tick_lowers_the_rooms_late_minimum` /
+     `..._the_shards_late_minimum`: GERÇEK aktörler, doğrudan
+     `step()`lenerek. Gecikme `adım başlangıcı − t.at` olduğu ve testi
+     `t.at`'e sahip olduğu için "sonraki, daha hızlı gözlem raporlanan
+     minimumu düşürür" iddiası DETERMİNİSTİK — scheduler ile yarış yok.
+   - `duration_counters_stay_mutually_consistent`: 64 gerçek adımda
+     min ≤ ortalama ≤ max, ve gözlem varken minimum 0 değil.
+   - `folding_shards_takes_the_minimum_of_every_minimum` (loadgen bin
+     içi unit test): küçük değer ÜÇ shard'ın İKİNCİSİNDE, yani ne
+     "ilkini tut" ne "sonuncusunu tut" geçer.
+
+   **Mutation-check:** step `min` kolunu sil → 4 test kırmızı; late `min`
+   kolunu sil → 4 test kırmızı; seeding kolunu sil (minimum 0'da kalır)
+   → **8 test kırmızı**; fold'daki `min`'i `max` yap → fold testi
+   kırmızı.
+
+### Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **340 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` → `left=50 errors=0`, panik yok
+
+  | | `step_min_us` | `step_p50_fine_us` | `step_max_us` |
+  |---|---|---|---|
+  | TCP önce | 264 | 32 | 264 |
+  | TCP sonra | **9** | 40 | 163 |
+  | UDP önce | 210 | 40 | 210 |
+  | UDP sonra | **13** | 24 | 233 |
+
+  Önceki satırlarda `min == max` olması tesadüf değil: soğuk ilk adım
+  koşunun en yavaş adımıydı, yani "minimum" tam olarak maksimumu
+  gösteriyordu. Sonraki satırlarda minimum medyanın altında — sözleşme.
+
+- aynısı `--transport udp` ile → `left=50 errors=0`, panik yok
+
 ## Kapatılanlar (park sızıntısı + shard metrik boşluğu turu)
 
 İki bağımsız madde. Birincisi bir önceki turun (`f966164`, "park

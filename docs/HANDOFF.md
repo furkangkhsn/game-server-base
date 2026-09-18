@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-330 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+340 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -24,12 +24,22 @@ kapattı: registry satırı artık politika park etmeyi REDDETTİĞİNDE de
 bırakılıyor (`disconnect_grace_secs = 0`, yani varsayılan, tam olarak bu
 koldur); `RegistryMsg::ParkExpired` → `DetachDespawned`.
 
-Yerine **yeni bir açık yan bulgu** geçti (o turun kardeş-alan
-denetiminden, bilinçli olarak düzeltilmedi): `step_min_us` ve
-`late_min_us` hiçbir aktörde minimum değil — yalnız ilk adımda atanıyor,
-aşağı çeken kol yok, yani ilk adımın değerini sonsuza kadar taşıyorlar.
-Düzeltmesi tek satır ama YAYINLANMIŞ bir metriğin anlamını değiştirir;
-ROADMAP'te kendi maddesi ve kararı var — tek başına verme.
+Onun yerine geçen açık yan bulgu (`step_min_us` / `late_min_us`
+minimum değil) da **kapandı** — bkz. CHANGELOG "minimum sayaçlar turu".
+Kullanıcı kararı ONARIM oldu: alanlar gerçek minimum yapıldı,
+`step_first_us` yeniden adlandırması elendi. Muhasebe iki aktörden
+`RoomCounters::observe_late_us`/`observe_step_us` çocuk modülüne alındı —
+yeni bir süre sayacı eklerken oraya ekle, aktörlerin `lifecycle.rs`'ine
+değil. İlk gözlemin iki ucu da SEED etmesi bir tuzak koruması: sıfırdan
+başlayan bir minimum sonsuza dek 0 kalır.
+
+Yerine **yeni bir açık yan bulgu** geçti (o turun min-alan
+envanterinden, bilinçli olarak kapsam dışı bırakıldı):
+`loadgen::report::fold_rooms` minimumlar DIŞINDA da eksik katlıyor —
+`late_mean_us`, `req_*` ailesi, `metrics_dropped`, `pending_requests` ve
+`*_s` oranları döngüde hiç güncellenmiyor, yani sharded bir oda için
+hepsi "shard 0 ne dediyse o". ROADMAP'te kendi maddesi var; toplu bir
+fold denetimi turu istiyor.
 
 **Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
 207. Her modül kendi dizini; hedef dosya boyutu 200-250 satır. Bir
@@ -130,6 +140,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 330 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 340 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

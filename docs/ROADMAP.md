@@ -75,7 +75,7 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **330** (330/330 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **340** (340/340 yeşil; tarihsel
 ilerleme 58 → ... → 294 → 314 → 319 → 327 için `docs/CHANGELOG.md`
 başlığına bakınız). Son tur: **park sızıntısı + shard metrik boşluğu** —
 politika park etmeyi reddettiğinde (`disconnect_grace_secs = 0`, yani
@@ -243,39 +243,51 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   bucket'larının (bu turda kapatıldı) aynı sınıfındaki kalan boşluk:
   "doğru yolda arttığını" doğrulayan testi OLMAYAN sayaçların tam listesi
   "Kapatılanlar (reject-bucket wiring + sayaç envanteri turu)"
-  bölümündeki tabloda. Kısaca: RoomSample `step_min/sum_us`,
-  `step_fine_hist` (**oda tarafı**; shard tarafı "park sızıntısı + shard
-  metrik boşluğu turu"nda hem yazıldı hem kilitlendi), `late_*`,
-  `lagged_*`,
+  bölümündeki tabloda. Kısaca: RoomSample `step_fine_hist` (**oda
+  tarafı**; shard tarafı "park sızıntısı + shard metrik boşluğu turu"nda
+  hem yazıldı hem kilitlendi), `lagged_*`,
   `keepalive_resends`, `snap_bytes*`, `snap_overflows`, `snap_records`,
   `shipped_*`, `private_frames`, `leaves`,
   `requests_local/external/timed_out/late`, `pending_requests`;
   RegistrySample `rooms_created/destroyed`, `joins/leaves`,
   `opens/closes`; ConnSample `frames_in/out`, `violations`, `last`;
   UdpClientStats `retrans_out`, `dup_in`, `oob_dropped`, `gave_up`.
+  (`step_min/sum_us` ve `late_*` "minimum sayaçlar turu"nda kapandı:
+  `room/counters/tests.rs` + iki aktörün davranış testleri.)
   Yöntem: sayaç başına yolu tetikleyip artışı assert eden test (altyapı
   deseni: `tests/rpc.rs`'te `latest_room_sample` + adım başına
   `metrics_cadence_hz`). Öncelik önerisi: operasyonel sinyaller
   (cap/overflow ailesi + `requests_*` kardeşleri), sonra süre/
   histogram ailesi, en son log-düzeyi değerler.
-- [ ] **`step_min_us` / `late_min_us` minimum DEĞİL** — "park sızıntısı +
-  shard metrik boşluğu turu"nun kardeş-alan denetiminde bulundu, o turun
-  kapsamı dışında bırakıldı. İki alan da hem oda hem shard aktöründe
-  yalnız `if self.steps == 1` altında atanıyor
-  (`room/actor/lifecycle.rs`, `shard/actor/lifecycle.rs`) ve onları aşağı
-  çeken bir kol YOK — yani her biri **ilk adımın** değerini process ömrü
-  boyunca taşıyor, üstelik ilk adım tipik olarak en soğuk ve en yavaş
-  olanı. Loadgen çıktısında olgu çıplak: `step_min_us=176
-  step_mean_us=36.3 step_max_us=176` (ortalama "minimum"un beşte biri).
-  `_max_us` ve `_sum_us` kardeşleri doğru; kusur yalnız `_min_us`
-  ikilisinde. Etkilenen yüzeyler: `gsb_room_step_min_us`,
-  `gsb_room_late_min_us`, loadgen `step_min_us=` satırı ve
-  `MetricReport`. Düzeltme tek kol (`else if x < min { min = x }`), ama
-  YAYINLANMIŞ bir metriğin anlamını değiştirir (bugünkü değer "ilk adım",
-  yarınki "minimum"), o yüzden kendi turunu ve açık bir kararı hak
-  ediyor: alanı düzeltmek mi, yoksa dürüstçe `step_first_us` diye yeniden
-  adlandırmak mı. Düzeltilirse "doğru-yol testi" maddesindeki
-  `step_min/sum_us` satırı da aynı turda kapatılabilir.
+- [x] **`step_min_us` / `late_min_us` minimum DEĞİL** — kapatıldı
+  (CHANGELOG "minimum sayaçlar turu"). Kullanıcı kararı **ONARIM**:
+  alanlar gerçek minimum yapıldı; `step_first_us` diye yeniden adlandırma
+  ELENDİ (yanındaki `step_max_us` gerçek bir maksimum — aynı satırda
+  farklı anlama gelen bir "min" her okuyucuyu yanıltır). Muhasebe iki
+  aktörden `RoomCounters::observe_late_us`/`observe_step_us` çocuk
+  modülüne alındı; ilk gözlemin iki ucu da SEED etmesi korundu (sıfırdan
+  başlayan bir minimum sonsuza dek 0 kalırdı). Aynı turda **ikinci, gizli
+  örnek** de kapandı: `loadgen::report::fold_rooms` `late_min_us`'i hiç
+  katlamıyordu, yani sharded oda shard 0'ın değerini raporluyordu.
+  Loadgen kanıtı: TCP `step_min_us` 264 → **9** (`step_p50_fine_us=40`).
+  Bununla birlikte aşağıdaki "doğru-yol testi" maddesinin
+  `step_min/sum_us` ve `late_*` satırları da kapandı.
+- [ ] **`fold_rooms` eksik katlıyor (minimumlar dışında)** — "minimum
+  sayaçlar turu"nun envanterinde bulundu, o turun sözleşmesi (yalnız
+  minimumlar) dışında kalanlar düzeltilmedi.
+  `loadgen::report::fold_rooms` akümülatörü `*first`'ten başlatıyor ve
+  döngüde şu alanlara HİÇ dokunmuyor: `late_mean_us` (folded rapor ilk
+  shard'ın ortalamasını taşıyor — gerçek bir kusur, ama bir ortalama,
+  minimum değil), `budget_us` (shard'lar arasında zaten aynı, zararsız),
+  `req_*` ailesi, `metrics_dropped`, `pending_requests` ve `dropped_s` /
+  `snap_bytes_s` / `shipped_s` oranları. Yani sharded bir oda için bu
+  satırların hepsi "shard 0 ne dediyse o". Tek tek değil, toplu bir
+  **fold denetimi** hak ediyor: her alan için katlama kuralı (SUM /
+  MAX / MIN / ağırlıklı ortalama / gauge) bir kez kararlaştırılıp
+  `fold_rooms` doc yorumundaki listeye yazılmalı, ve alan başına test.
+  Tetikleyici yok sayılmaz: sharded oda loadgen'de ölçülüyor, bu
+  satırlar rapor ediliyor.
+
 - [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
   kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.
 

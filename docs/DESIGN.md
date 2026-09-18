@@ -1423,6 +1423,18 @@ kenarları 4088'de tavanlanır, bu yüzden belirsizlik yok). Served
 stream: **GSM3** (GSM2 + oda başına 512×u32). Gerekçe + ölçülen taban
 çalışması: CHANGELOG "Kapatılanlar (ölçüm çözünürlüğü + taban turu)".
 
+**`*_min_us` gerçek minimumdur.** Bir süre öyle değildi: `step_min_us`
+ve `late_min_us` iki aktörde de yalnız ilk adımda atanıyordu ve onları
+aşağı çeken kol yoktu, yani ilk adımın (tipik olarak en soğuk ve en
+yavaş olanın) değerini process ömrü boyunca taşıyorlardı. Kapatıldı:
+CHANGELOG "minimum sayaçlar turu". Muhasebenin tamamı — iki extremum,
+toplam ve iki histogram — artık `RoomCounters::observe_late_us` /
+`observe_step_us`'te, iki aktörün çağırdığı TEK yerde. İlk gözlem iki
+ucu da SEED eder (sıfırdan başlayan bir minimum sonsuza dek 0 kalırdı);
+`*_min/max/sum_us` üçlüsü kümülatiftir, örnek aralığına ait değil.
+Sharded odada rapor katlaması (`loadgen::report::fold_rooms`) bir
+minimum için `min`'dir.
+
 Her **iki** aktör de binler — oda ve shard, aynı `t0.elapsed()`'ten,
 `step_hist` ile aynı satırda. Bu bir süre yalnız oda tarafında doğruydu;
 shard alanı gönderiyor ama hiç artırmıyordu ve `fine_hist_percentile_us`
