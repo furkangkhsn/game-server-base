@@ -114,7 +114,7 @@ impl Rig {
     /// client takes (§14.3: a ticket-pinned JOIN is the implicit resume
     /// attempt, and an empty ledger makes it a transparent fresh join) —
     /// so the row remembers its resume key.
-    fn join(&mut self, conn: ConnectionId, identity: &str) -> Mailbox<Action> {
+    fn join(&mut self, conn: ConnectionId, identity: &str) -> (EntityId, Mailbox<Action>) {
         let (out_tx, out_rx) = mpsc::channel::<FrameBatch>(64);
         self._outs.push(out_rx);
         let (rtx, mut rrx) = oneshot::channel();
@@ -125,11 +125,9 @@ impl Rig {
             out: out_tx,
             reply: rtx,
         });
-        let (_e, actions) = rrx
-            .try_recv()
+        rrx.try_recv()
             .expect("reply sent synchronously")
-            .expect("join accepted");
-        actions
+            .expect("join accepted")
     }
 
     /// Step the room with an exact synthetic wall clock: `at = t0 + secs`.
@@ -181,7 +179,7 @@ fn cfg(id: u64, ceiling: Option<u64>) -> RoomConfig {
 #[test]
 fn a_heartbeat_only_client_is_input_idle_while_it_stays_a_member() {
     let mut r = Rig::new(cfg(50, None), Detach::Despawn);
-    let _actions = r.join(ConnectionId(1), "ana");
+    let (_e, _actions) = r.join(ConnectionId(1), "ana");
     let p = PlayerId(1);
     // Ten seconds of ticks and NOTHING on the action channel — which is
     // all a heartbeat-only client ever produces here.
@@ -206,7 +204,7 @@ fn a_heartbeat_only_client_is_input_idle_while_it_stays_a_member() {
 #[test]
 fn an_action_resets_the_input_clock() {
     let mut r = Rig::new(cfg(51, None), Detach::Despawn);
-    let actions = r.join(ConnectionId(1), "ana");
+    let (_e, actions) = r.join(ConnectionId(1), "ana");
     let p = PlayerId(1);
     for k in 1..=5u64 {
         r.step_at(k, k);
@@ -251,7 +249,7 @@ fn an_action_resets_the_input_clock() {
 #[test]
 fn with_the_ceiling_unset_nothing_ever_happens() {
     let mut r = Rig::new(cfg(52, None), Detach::Despawn);
-    let _actions = r.join(ConnectionId(1), "ana");
+    let (_e, _actions) = r.join(ConnectionId(1), "ana");
     let p = PlayerId(1);
     // Ten minutes of perfect silence.
     for k in 1..=60u64 {
@@ -287,7 +285,7 @@ fn the_ceiling_runs_the_disconnect_policy_with_the_rows_identity() {
             to: ExpireTo::AiHandover,
         },
     );
-    let _actions = r.join(ConnectionId(1), "ana");
+    let (_e, _actions) = r.join(ConnectionId(1), "ana");
     let p = PlayerId(1);
     for k in 1..=3u64 {
         r.step_at(k, k);
@@ -330,7 +328,7 @@ fn the_ceiling_runs_the_disconnect_policy_with_the_rows_identity() {
 fn the_ceiling_warns_once_not_per_tick() {
     let mut r = Rig::new(cfg(54, Some(5)), Detach::Despawn);
     for c in 1..=3u64 {
-        let _a = r.join(ConnectionId(c), "ana");
+        let (_e, _a) = r.join(ConnectionId(c), "ana");
     }
     // Age everybody past the ceiling and keep stepping well beyond the
     // first expiry.
@@ -354,7 +352,7 @@ fn the_ceiling_warns_once_not_per_tick() {
 #[test]
 fn a_despawning_policy_takes_the_ordinary_leave_funnel() {
     let mut r = Rig::new(cfg(55, Some(5)), Detach::Despawn);
-    let _actions = r.join(ConnectionId(1), "ana");
+    let (_e, _actions) = r.join(ConnectionId(1), "ana");
     let p = PlayerId(1);
     r.step_at(1, 30);
     assert_eq!(r.disconnects(), vec![(p, "ana".to_string())]);
@@ -365,5 +363,50 @@ fn a_despawning_policy_takes_the_ordinary_leave_funnel() {
         r.actor.idle.len(),
         0,
         "and its input clock (no stale slot survives the despawn)"
+    );
+}
+
+/// A player parked by a REAL transport death must not be double-counted
+/// by the idle clock: the detach takes the row off it, so however long
+/// the hold lasts the ceiling never asks the policy a second time. (Without
+/// that, the ceiling would fire on top of every park whose grace outlives
+/// it — two mechanisms racing for one entity.)
+#[test]
+fn a_transport_death_park_is_never_re_expired_by_the_ceiling() {
+    let mut r = Rig::new(
+        cfg(56, Some(5)),
+        Detach::Hold {
+            grace: None, // combat-held: the hold has no deadline at all
+            to: ExpireTo::Despawn,
+        },
+    );
+    let (entity, _actions) = r.join(ConnectionId(1), "ana");
+    let p = PlayerId(1);
+    // The transport dies; the policy parks the entity.
+    r.actor.handle_control(RoomControl::Detach {
+        conn: ConnectionId(1),
+        entity,
+        identity: "ana".into(),
+    });
+    assert_eq!(
+        r.disconnects(),
+        vec![(p, "ana".to_string())],
+        "the transport death ran the policy once"
+    );
+    assert!(r.actor.conns[&p].detached, "parked");
+    // Far past the ceiling, for a long time. `may_release` defaults to
+    // `true`, so phase 0c ends this combat-held park on the first step —
+    // the assertion that matters is that the CEILING never spoke.
+    for k in 1..=40u64 {
+        r.step_at(k, 100 + k);
+    }
+    assert!(
+        r.disconnects().is_empty(),
+        "the input-idle ceiling must not re-run the disconnect policy on \
+         a row the detach path already owns"
+    );
+    assert_eq!(
+        r.actor.idle_ceiling_warns, 0,
+        "…and must not even warn about it"
     );
 }

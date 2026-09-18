@@ -102,7 +102,8 @@ where
                      This warning is emitted once per shard."
                 );
             }
-            self.idle.stop(player);
+            // No `idle.stop` here: both arms of `detach_player` already
+            // take the row off the clock (the room actor's rule).
             self.detach_player(player, conn, &identity);
         }
     }

@@ -82,10 +82,10 @@ where
                      This warning is emitted once per room."
                 );
             }
-            // Off the clock first: `detach_player`'s Despawn arm removes
-            // the row (and with it the clock entry) while its Hold arm
-            // parks it, and a parked row must not be swept again.
-            self.idle.stop(player);
+            // No `idle.stop` here on purpose: BOTH arms of
+            // `detach_player` take the row off the clock (the despawn
+            // funnel on one side, the park on the other), and duplicating
+            // it here would mask a regression in either.
             self.detach_player(player, conn, &identity);
         }
     }
