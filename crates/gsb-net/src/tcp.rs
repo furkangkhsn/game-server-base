@@ -99,10 +99,10 @@ impl TcpListenerHandle {
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
-                  idle_timeout: Option<std::time::Duration>| {
+                  timeouts: crate::pump::PumpTimeouts| {
                 let reader = TcpReader::new(read_half, max_frame_bytes);
                 let writer = TcpWriter::new(write_half);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },
         )

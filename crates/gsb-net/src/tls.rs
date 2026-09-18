@@ -222,10 +222,10 @@ impl TlsListenerHandle {
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
-                  idle_timeout: Option<Duration>| {
+                  timeouts: crate::pump::PumpTimeouts| {
                 let reader = FrameReader::new(read_half, max_frame_bytes);
                 let writer = FrameWriter::new(write_half);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },
         )

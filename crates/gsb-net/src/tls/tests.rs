@@ -100,7 +100,12 @@ async fn handshake_then_frames_flow_both_ways() {
         let endpoint = listener.accept().await.expect("accept + handshake");
         let (in_tx, mut in_rx) = channel::<ConnIn>(8);
         let (out_tx, out_rx) = channel::<FrameBatch>(8);
-        let (read, write) = endpoint.start_pump(ConnectionId(1), in_tx.clone(), out_rx, None);
+        let (read, write) = endpoint.start_pump(
+            ConnectionId(1),
+            in_tx.clone(),
+            out_rx,
+            crate::pump::PumpTimeouts::default(),
+        );
         // Echo the first received frame back.
         match in_rx.recv().await.expect("inbox open") {
             ConnIn::Frame(f) => {

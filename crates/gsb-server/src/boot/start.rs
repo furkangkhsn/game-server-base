@@ -374,10 +374,16 @@ async fn start_inner(
         }
     }
 
-    // Session-lifecycle idle window (`0` disables): the reader pump's
-    // clock on TCP, the demux deadline heap's window on rUDP.
+    // The session-lifecycle pair, one per socket direction (`0` disables
+    // either): the reader pump's idle window — the demux deadline heap's
+    // window on rUDP — and the writer pump's write stall.
     let idle_timeout = (cfg.idle_timeout_secs > 0.0)
         .then(|| std::time::Duration::from_secs_f64(cfg.idle_timeout_secs));
+    let timeouts = gsb_net::pump::PumpTimeouts {
+        idle: idle_timeout,
+        write_stall: (cfg.write_stall_secs > 0.0)
+            .then(|| std::time::Duration::from_secs_f64(cfg.write_stall_secs)),
+    };
 
     // The rUDP cookie key: the operator's 32-hex-char config string, or
     // `None` = the transport draws 16 bytes from the OS entropy source
@@ -434,7 +440,7 @@ async fn start_inner(
         ticket_auth: hooks.ticket,
         conn_inbox: cfg.conn_inbox,
         conn_out: cfg.conn_out,
-        idle_timeout,
+        timeouts,
         conn_ids: Arc::new(ConnIdSeq::new()),
     };
 

@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
@@ -29,11 +29,15 @@ pub(super) fn udp_pump_spawner(
         move |conn: ConnectionId,
               in_tx: Mailbox<ConnIn>,
               out_rx: Inbox<FrameBatch>,
-              _idle: Option<Duration>| {
+              _timeouts: crate::pump::PumpTimeouts| {
             // `in_tx` is already registered in the demux (at handshake);
             // the copy handed here is the writer's ONE way to end the
-            // session when the reliable band dies (see `die`). `idle` is
-            // the demux deadline heap's concern — not a per-connection one.
+            // session when the reliable band dies (see `die`). Neither
+            // pump deadline applies here: inbound silence is the demux
+            // deadline heap's concern, and this writer's own liveness
+            // bound is the REL band's ACK-progress clock (see `reliable`),
+            // which is the datagram equivalent of the stream pumps' write
+            // stall — a datagram `try_send_to` never parks.
             let writer = tokio::spawn(
                 UdpWriter {
                     conn,

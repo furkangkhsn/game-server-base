@@ -73,7 +73,12 @@ async fn sequential_handshakes_and_writer_roundtrip() {
     // Drive B's outbound path: pump + a control frame.
     let (in_tx, _in_rx) = ep_b.take_inbox(16);
     let (out_tx, out_rx) = ep_b.take_outbox(16);
-    let (_reader, _writer) = ep_b.start_pump(ConnectionId(2), in_tx, out_rx, None);
+    let (_reader, _writer) = ep_b.start_pump(
+        ConnectionId(2),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
     let fb = FrameBody::new(
         gsb_protocol::op::base::HEARTBEAT_ACK,
         Bytes::from(vec![7, 9]),

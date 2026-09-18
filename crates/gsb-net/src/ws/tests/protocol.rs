@@ -131,7 +131,12 @@ async fn close_handshake_echoes_code_and_reports_peer_closed() {
     // makes the writer pump emit the transport's own (empty) close,
     // which would race the client-initiated one.
     let (out_tx, out_rx) = channel::<FrameBatch>(8);
-    let (read, write) = endpoint.start_pump(ConnectionId(5), in_tx, out_rx, None);
+    let (read, write) = endpoint.start_pump(
+        ConnectionId(5),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
     tokio::spawn(async move {
         if let Some(read) = read {
             let _ = read.await;
@@ -181,7 +186,10 @@ async fn idle_timeout_still_applies_to_websockets() {
         ConnectionId(6),
         in_tx,
         out_rx,
-        Some(Duration::from_millis(200)),
+        crate::pump::PumpTimeouts {
+            idle: Some(Duration::from_millis(200)),
+            write_stall: None,
+        },
     );
     // Hold the connection OPEN (binding matters: dropping it would send
     // a FIN and look like a clean close) and say nothing — after the

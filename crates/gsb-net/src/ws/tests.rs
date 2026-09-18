@@ -72,7 +72,15 @@ async fn serve_echo_max(max_message_bytes: usize, idle_timeout: Option<Duration>
         };
         let (in_tx, mut in_rx) = channel::<ConnIn>(16);
         let (out_tx, out_rx) = channel::<FrameBatch>(16);
-        let (read, write) = endpoint.start_pump(ConnectionId(77), in_tx, out_rx, idle_timeout);
+        let (read, write) = endpoint.start_pump(
+            ConnectionId(77),
+            in_tx,
+            out_rx,
+            crate::pump::PumpTimeouts {
+                idle: idle_timeout,
+                write_stall: None,
+            },
+        );
         while let Some(msg) = in_rx.recv().await {
             match msg {
                 // Echo; if the writer side is gone the pump exit ends

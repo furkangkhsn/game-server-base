@@ -120,6 +120,28 @@ pub struct Config {
     /// that never send *anything* (not even heartbeats) must stay below
     /// this with whatever traffic they do send.
     pub idle_timeout_secs: f64,
+    /// Session-lifecycle write-stall window, in seconds: a connection to
+    /// whose socket NOTHING has been written successfully for this long —
+    /// while the server had something to write — is closed by the server
+    /// on its own initiative, through the ordinary teardown. This is the
+    /// other half of the socket from [`Self::idle_timeout_secs`], and the
+    /// two are a pair: inbound silence cannot see a peer that keeps its
+    /// connection open and simply stops READING. Such a peer's receive
+    /// window closes, the writer pump parks inside its socket write, the
+    /// outbound channel stays FULL (never closed, so the half-dead
+    /// teardown never fires), the room drops a frame every tick, and the
+    /// session holds its room slot and registry row while receiving
+    /// nothing. `0` disables the check.
+    ///
+    /// Default 10 s. The bound is on PROGRESS, not age, so it does not
+    /// touch the "a slow client is tolerated" contract: every completed
+    /// frame write restarts the window, and a client that is merely
+    /// BEHIND still completes writes — its socket keeps draining, just
+    /// lazily, and its dropped snapshots are counted (`dropped_frames`)
+    /// exactly as before. Ten seconds of a socket accepting not one byte
+    /// is not slowness; on a loopback or LAN path it is hundreds of
+    /// kilobytes of kernel buffer that stopped moving entirely.
+    pub write_stall_secs: f64,
     /// Per-room membership cap (see `RoomConfig::max_players`); a join
     /// into a full room is rejected with `ERROR` code 8 (the connection
     /// stays alive). `None` = unlimited.
@@ -358,6 +380,7 @@ impl Default for Config {
             conn_inbox: 1024,
             conn_out: 256,
             idle_timeout_secs: 30.0,
+            write_stall_secs: 10.0,
             max_players: Some(10_000),
             max_connections: Some(DEFAULT_MAX_CONNECTIONS),
             max_unauth_conns: None,
@@ -398,7 +421,8 @@ impl Config {
         // caps (a cap of 0 would be a room/server nobody can enter). This
         // mirrors the loadgen CLI semantics (`--max-players 0` etc.).
         // Omitting the key keeps the built-in default (see `Default`);
-        // `idle_timeout_secs = 0` is already handled at use time.
+        // `idle_timeout_secs = 0` / `write_stall_secs = 0` are already
+        // handled at use time.
         if cfg.max_players == Some(0) {
             cfg.max_players = None;
         }

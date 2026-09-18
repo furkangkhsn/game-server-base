@@ -5,7 +5,6 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tokio::net::tcp::OwnedReadHalf;
@@ -118,7 +117,7 @@ impl WsListenerHandle {
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
-                  idle_timeout: Option<Duration>| {
+                  timeouts: crate::pump::PumpTimeouts| {
                 let (queue_tx, queue_rx) = mpsc::channel::<WsOut>(OUT_QUEUE_CAPACITY);
                 // Detached on purpose: it is an implementation detail of the
                 // adapter, owned by nobody above the pump layer; it exits by
@@ -136,7 +135,7 @@ impl WsListenerHandle {
                     permit: None,
                     closing,
                 };
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },
         )

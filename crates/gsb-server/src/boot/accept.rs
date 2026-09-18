@@ -80,8 +80,9 @@ pub(super) struct AcceptPipeline {
     pub(super) conn_inbox: usize,
     /// Outbound channel capacity (same contract as `conn_inbox`).
     pub(super) conn_out: usize,
-    /// The session idle window (`None` disables) handed to the pumps.
-    pub(super) idle_timeout: Option<std::time::Duration>,
+    /// The session-lifecycle deadlines handed to the pumps: the reader's
+    /// idle window and the writer's write stall (each `None` disables).
+    pub(super) timeouts: gsb_net::pump::PumpTimeouts,
     /// THE shared id sequence across every listener's loop.
     pub(super) conn_ids: Arc<ConnIdSeq>,
 }
@@ -131,8 +132,9 @@ pub(super) async fn run_accept(
 
         // Reader + writer pumps (they finish on their own when the
         // peer or the actor goes away; the idle window, if enabled,
-        // is what detects a half-open peer that sends nothing).
-        let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx, pipeline.idle_timeout);
+        // is what detects a half-open peer that sends nothing, and the
+        // write stall the peer that stops reading).
+        let _pumps = endpoint.start_pump(conn, in_tx.clone(), out_rx, pipeline.timeouts);
 
         // Register before spawning the actor: the registry owns the
         // notification path, and it must know the inbox before any

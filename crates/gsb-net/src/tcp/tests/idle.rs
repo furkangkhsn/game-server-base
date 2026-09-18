@@ -4,6 +4,8 @@
 
 use super::*;
 
+use crate::pump::PumpTimeouts;
+
 /// A peer that connects and says nothing: the reader must give up
 /// after the idle window and tell the connection actor
 /// (`ConnIn::ServerClosed`, idle reason).
@@ -20,7 +22,10 @@ async fn idle_peer_gets_server_closed() {
         writer,
         in_tx,
         out_rx,
-        Some(Duration::from_millis(200)),
+        PumpTimeouts {
+            idle: Some(Duration::from_millis(200)),
+            write_stall: None,
+        },
     );
     let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
         .await
@@ -94,7 +99,10 @@ async fn active_peer_resets_the_idle_window() {
         DiscardSink,
         in_tx,
         out_rx,
-        Some(Duration::from_millis(250)),
+        PumpTimeouts {
+            idle: Some(Duration::from_millis(250)),
+            write_stall: None,
+        },
     );
 
     // 100 ms cadence: the window (250 ms) can never elapse between
@@ -164,7 +172,10 @@ async fn eof_reports_peer_closed_not_idle() {
         writer,
         in_tx,
         out_rx,
-        Some(Duration::from_millis(200)),
+        PumpTimeouts {
+            idle: Some(Duration::from_millis(200)),
+            write_stall: None,
+        },
     );
     let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
         .await

@@ -124,3 +124,10 @@ use gsb_core::channel::channel;
 use gsb_core::id::ConnectionId;
 
 mod idle;
+
+// ── session-lifecycle write stall (the writer pump's deadline) ──
+//
+// The symmetric guardrail: a peer that stops READING wedges the writer
+// inside its socket write, which no inbound clock can see.
+
+mod stall;

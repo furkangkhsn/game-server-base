@@ -5,7 +5,6 @@
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tracing::debug;
 use tracing::warn;
@@ -120,10 +119,10 @@ impl QuicListenerHandle {
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
-                  idle_timeout: Option<Duration>| {
+                  timeouts: crate::pump::PumpTimeouts| {
                 let reader: QuicReader = FrameReader::new(recv, max_frame_bytes);
                 let writer: QuicWriter = FrameWriter::new(send);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, idle_timeout);
+                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },
         )

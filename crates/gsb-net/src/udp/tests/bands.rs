@@ -22,7 +22,12 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         .expect("endpoint");
     let (in_tx, _in_rx) = ep.take_inbox(16);
     let (out_tx, out_rx) = ep.take_outbox(16);
-    let (_r, _w) = ep.start_pump(ConnectionId(1), in_tx, out_rx, None);
+    let (_r, _w) = ep.start_pump(
+        ConnectionId(1),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
 
     // RAW band, 25-byte payload → 28-byte datagram: fits.
     out_tx
@@ -115,7 +120,12 @@ async fn server_retransmits_until_ack() {
         .expect("endpoint");
     let (in_tx, _in_rx) = ep.take_inbox(16);
     let (out_tx, out_rx) = ep.take_outbox(16);
-    let (_r, _w) = ep.start_pump(ConnectionId(1), in_tx, out_rx, None);
+    let (_r, _w) = ep.start_pump(
+        ConnectionId(1),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
     out_tx
         .send(vec![FrameBody::new(
             gsb_protocol::op::base::ERROR,
@@ -181,7 +191,12 @@ async fn unacked_control_band_closes_the_session_at_the_memory_bound() {
         .expect("endpoint");
     let (in_tx, mut in_rx) = ep.take_inbox(16);
     let (out_tx, out_rx) = ep.take_outbox(16);
-    let (_r, _w) = ep.start_pump(ConnectionId(1), in_tx, out_rx, None);
+    let (_r, _w) = ep.start_pump(
+        ConnectionId(1),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
 
     // Feed control-band frames until the bound is crossed. Every one of
     // them is reliable, so every one of them stays outstanding.

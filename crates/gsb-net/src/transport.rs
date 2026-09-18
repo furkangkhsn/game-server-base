@@ -13,13 +13,14 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::ConnectionId;
+
+use crate::pump::PumpTimeouts;
 
 /// A boxed, 'static, Send future.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -60,14 +61,14 @@ pub trait Listener: Send + Sync + 'static {
 }
 
 /// The pump spawner closure: hands a connection's channel ends (and the
-/// idle-timeout policy) to the transport and returns the reader/writer
-/// task handles.
+/// session-lifecycle deadline policy) to the transport and returns the
+/// reader/writer task handles.
 pub type PumpSpawner = Box<
     dyn FnOnce(
             ConnectionId,
             Mailbox<ConnIn>,
             Inbox<FrameBatch>,
-            Option<Duration>,
+            PumpTimeouts,
         ) -> (Option<JoinHandle<()>>, JoinHandle<()>)
         + Send,
 >;
@@ -107,7 +108,7 @@ impl Endpoint {
             ConnectionId,
             Mailbox<ConnIn>,
             Inbox<FrameBatch>,
-            Option<Duration>,
+            PumpTimeouts,
         ) -> (Option<JoinHandle<()>>, JoinHandle<()>)
         + Send
         + 'static,
@@ -168,23 +169,24 @@ impl Endpoint {
     /// - `in_tx`: where decoded frames go (the connection actor's inbox).
     /// - `out_rx`: where outbound batches come from (the room fan-out +
     ///   the connection actor's own control frames).
-    /// - `idle_timeout`: the session-lifecycle idle window for the reader
-    ///   (`None` disables; see `pump::spawn_pumps`).
+    /// - `timeouts`: the session-lifecycle deadlines, one per socket
+    ///   direction — the reader's idle window and the writer's write
+    ///   stall (`None` each disables; see [`PumpTimeouts`]).
     ///
     /// Returns the reader and writer task handles. The reader handle is
     /// `None` for transports whose read path is **shared across
     /// connections** (the rUDP demux: one task reads the single socket for
     /// every session and demuxes; it is owned by the listener, not by any
     /// endpoint, so no per-endpoint handle exists). When the peer goes
-    /// away (or the idle window elapses) the tasks that do exist finish on
+    /// away (or either window elapses) the tasks that do exist finish on
     /// their own.
     pub fn start_pump(
         self,
         conn: ConnectionId,
         in_tx: Mailbox<ConnIn>,
         out_rx: Inbox<FrameBatch>,
-        idle_timeout: Option<Duration>,
+        timeouts: PumpTimeouts,
     ) -> (Option<JoinHandle<()>>, JoinHandle<()>) {
-        (self.pump)(conn, in_tx, out_rx, idle_timeout)
+        (self.pump)(conn, in_tx, out_rx, timeouts)
     }
 }
