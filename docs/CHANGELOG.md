@@ -35,7 +35,7 @@ parking_lot/select! yok; clippy 0 uyarı.
 ### 1. Yöntem: her test mutation-check'li
 
 Turun her testi kırılarak doğrulandı: sayacın artışı bozuldu, testin
-DÜŞTÜĞÜ görüldü, bozma geri alındı. Toplam **43 mutasyon**, hepsi
+DÜŞTÜĞÜ görüldü, bozma geri alındı. Toplam **46 mutasyon**, hepsi
 öldürüldü; kırılamayan test olmadı. Bozmalar üç sınıfta toplandı:
 
 1. **hiç artmayan sayaç** (`+= 1` → `+= 0`) — "her zaman sıfır" hatası,

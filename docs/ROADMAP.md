@@ -247,7 +247,7 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   (CHANGELOG "sayaç envanteri kapanış turu"). Maddenin kendi listesi
   BAYATTI ve tur ona güvenmedi: envanter sıfırdan yeniden türetildi
   (metrik yüzeyine ulaşan her tip alan alan tarandı), sonra kapatıldı.
-  Test 361 → **388**; 43 mutasyonun tamamı öldürüldü, kırılamayan test
+  Test 361 → **388**; 46 mutasyonun tamamı öldürüldü, kırılamayan test
   yok. Kapananlar: RoomSample'ın `lagged_*`, `keepalive_resends` (oda
   tarafı), `step_fine_hist` (oda tarafı), `snap_bytes*`,
   `snap_overflows`, `snap_records`, `shipped_*`, `private_frames`,
