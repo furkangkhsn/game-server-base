@@ -170,3 +170,52 @@ async fn duration_counters_stay_mutually_consistent() {
          cannot be the zero the counter was initialised to"
     );
 }
+
+/// The ROOM actor fills the fine step-duration histogram, once per step.
+///
+/// The shard actor's twin of this is
+/// `shard::tests::metrics::sharded_step_fills_the_fine_duration_histogram`,
+/// and it exists because the shard's copy of this path was silently
+/// never incrementing it (CHANGELOG "park sızıntısı + shard metrik
+/// boşluğu turu"): the field was sent, always zero, and the percentile
+/// helper's `None` on an empty histogram made the Prometheus p50/p99
+/// lines for those rooms disappear entirely. The room side was correct
+/// but untested at the ACTOR level — the accounting lives in
+/// `RoomCounters::observe_step_us`, which both actors call and which has
+/// its own unit test, so the only thing left unlocked was whether this
+/// actor calls it. That is exactly what was broken on the other one.
+#[tokio::test]
+async fn the_rooms_step_fills_the_fine_duration_histogram() {
+    let mut r = bare_room();
+    let a = &mut r.actor;
+    for t in 1..=5 {
+        assert!(a.step(&tick_late_by(t, Duration::from_millis(1))));
+    }
+
+    let s = a.sample();
+    assert_eq!(s.steps, 5, "five steps were run");
+    assert_eq!(
+        s.step_hist.iter().sum::<u64>(),
+        s.steps,
+        "the coarse histogram counts every step"
+    );
+    // Every step of a bare, empty-world room is orders of magnitude
+    // under the fine cap (`FINE_HIST_CAP_US` = 4096 µs), so all five
+    // must be present — a step at or above the cap is deliberately
+    // absent from this histogram, and none of these can be.
+    let fine: u64 = s.step_fine_hist.iter().copied().map(u64::from).sum();
+    assert_eq!(
+        fine, s.steps,
+        "the room's step path must increment the fine histogram once per \
+         step, the way the shard actor's does"
+    );
+    // And it must bin the duration the step actually MEASURED, not some
+    // other number: the bin `step_max_us` falls in has to be occupied.
+    let max_bin = crate::metrics::fine_hist_index(s.step_max_us)
+        .expect("this rig's steps are far under the fine cap");
+    assert!(
+        s.step_fine_hist[max_bin] > 0,
+        "the bin step_max_us ({} µs) lands in ({max_bin}) must be occupied",
+        s.step_max_us
+    );
+}

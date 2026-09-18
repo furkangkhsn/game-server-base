@@ -26,6 +26,11 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+// Child module of this test binary (an integration-test root is its own
+// crate root, so the path is explicit).
+#[path = "violation/counters.rs"]
+mod counters;
+
 const WAIT: Duration = Duration::from_secs(5);
 
 fn frame(op: u16, payload: &[u8]) -> gsb_protocol::FrameBody {
