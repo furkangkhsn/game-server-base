@@ -5,6 +5,69 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Ölçüm kaydı (sharded yeniden ölçüm + write-stall A/B)
+
+Kod değişikliği yok; iki ölçüm ve bir doküman düzeltmesi.
+
+**1. Sharded kapasite ölçümü yeniden alındı.** Fold denetimi turu,
+loadgen'in shard raporlarını katlarken shard 0'ı her SUM'da iki kez
+saydığını buldu (50 istemcili 4-shard koşusunda `joins=61`, `groups=5`).
+"Oda segmentasyonu turu"nun 10k tablosu bu katlamadan geçmişti, o yüzden
+sonuç bugünkü kodla yeniden alındı (`--orchestrate 10000 --procs 8 --pin
+--duration 30`, `all`; write-stall koruması ölçüm için kapalı — açıkken
+sunucu doymuş istemcileri keser, aşağıya bkz.):
+
+| Konfig | adım p50 | adım max | bütçe aşımı | (orijinal aşım) |
+|---|---|---|---|---|
+| C1 — tek oda | 6250 µs | 76 483 µs | %2,6 | %3,4 |
+| `sharded N=4` | 3126 µs | 25 796 µs | %0,0 | %0,2 |
+| `sharded N=8` | 1563 µs | 25 238 µs | %0,0 | %0,0 |
+
+**Sonuç korunuyor:** tek oda 10k'da bütçeyi aşıyor, sharded aşmıyor, N
+arttıkça p50 düşüyor. Fold hatası bu sonucu üretmemişti — C1 tek satır
+olduğu için katlamadan hiç geçmiyordu. Mutlak sayılar orijinalle birebir
+kıyaslanamaz: üç koşuda da loadgen istemci tarafı doyuyor (joined
+5934–7032, orijinalde 10 000) ve makinede arka plan yükü vardı; kıyas
+sıralama olarak geçerli, mutlak değer olarak değil.
+
+**2. Write-stall kesimlerinin sebebi — A/B.** İlk yeniden ölçümde (koruma
+varsayılan açık) C1 koşusunda sunucu 4486 oturumu `write stall` ile kesti,
+ama `RESULT` satırı `errors=0` diyordu. Stall gözlemlenebilirliği turu
+(aşağıda) sebep-bazlı sayaçları ekledi ve saati frame yerine bayt
+ilerlemesine bağladı. Aynı 10k C1 koşusu, iki commit'te dönüşümlü ikişer
+kez:
+
+| Koşu | commit | joined | write_stall | outbound_dead | bütçe aşımı |
+|---|---|---|---|---|---|
+| A#1 | `c2b7160` (yalnız sayaçlar) | 9389 | 4658 | 172 | %2,3 |
+| B#1 | `d8d9030` (bayt ilerlemesi) | 9350 | 4202 | 167 | %2,8 |
+| A#2 | `c2b7160` | 9568 | 4469 | 67 | %1,6 |
+| B#2 | `d8d9030` | 9289 | 4518 | 86 | %3,3 |
+
+Fark gürültü içinde. **Kesilenler yavaş-ama-okuyan istemciler değil,
+10 sn boyunca hiç okumayan istemciler** — doymuş loadgen süreçleri
+(bağlantı başına 1,2–1,6 MB/sn, ~80 KB frame). Koruma tasarlandığı gibi
+çalışıyor; bayt-granüler düzeltme ilke olarak doğru (yavaş okuyucu testle
+kilitli) ama bu kesimlerin sebebi değildi. Kök sebep koruma değil, o
+senaryonun bant genişliği: 10k oyuncuyu tek odada `all` görünürlükle
+sürmek desteklenen bir kullanım değil (AOI / delta / sharding bunun
+için var). Kapasite ölçümlerinde artık `--write-stall-secs 0`
+kullanılmalı ve `RESULT` satırındaki `server_closes=` her koşuda
+okunmalı.
+
+**Açık kalan küçük kusur:** `outbound_dead` (67–172 / koşu) büyük olasılıkla
+da write-stall'dır: pump kararını aktörün mailbox'ına `try_send` ile
+bırakıyor; aşırı yükte mailbox doluysa karar düşüyor ve aktör kapanışı
+sebepsiz `outbound_dead` olarak kaydediyor. Toplam kesim sayısı doğru,
+yalnız sebep ataması aşırı yükte kayıyor.
+
+**3. Doküman düzeltmesi.** `CROSS-SHARD.md` §7 hâlâ "delta KABUL
+EDİLDİ" ve "always-full … elenen alternatif" diyordu; oysa aynı gün
+gelen Faz C (`f431296`) süreç-içi link'i sabit `AlwaysFull` yaptı.
+Delta border kodu main'de ama hiçbir çalışan konfigürasyon kullanmıyor
+(yalnız testler `force_exchange_modes` ile). §7'ye "Güncel durum" notu
+ve §9'a "uykuda" durumu eklendi; tarihî karar metni korunarak.
+
 ## Kapatılanlar (stall gözlemlenebilirliği + bayt-granüler ilerleme turu)
 
 **Tetikleyici (ölçüm).** 10k kapasite ölçümü yeniden koşuldu

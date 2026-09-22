@@ -173,6 +173,24 @@ SUMMARY-C2.md, c1/c2.out/.err).
 
 ### Karar (A/B ölçümü sonrası güncellendi): delta KABUL EDİLDİ ✅
 
+> **Güncel durum — Faz C bu kararı süreç-içi için geçersiz kıldı.**
+> Aşağıdaki karar merge anındaki (`ddd38a6`, 2026-08-25) kayıttır ve
+> olduğu gibi korunuyor. Aynı gün gelen Faz C (`f431296`) paketlemeyi
+> link sınıfına bağladı: bugün var olan TEK link türü `InProcLink`,
+> sabit olarak `ExchangeMode::AlwaysFull` ilan eder
+> (`crates/gsb-core/src/shard/link.rs`). Gerekçe bu bölümün kendi
+> ölçümü: süreç içinde byte bir mpsc taşımasıdır, bedeli yoktur; delta
+> diff'i ise faz-5'in CPU'sunu 40–55× artırır (tablodaki µs sütunu).
+> Delta, henüz var olmayan `Ipc`/`Net` link'lerine ayrılmıştır.
+>
+> Sonuç: delta border kodu main'de ama **hiçbir çalışan konfigürasyon
+> onu kullanmıyor** — yalnız testler, crate-içi `force_exchange_modes`
+> kolu ile Delta-modlu rig kurarak çalıştırıyor
+> (`shard/tests/border.rs`, `strip/modes.rs`, `rigs.rs`). Kod uykudadır;
+> ilk gerçek tüketicisi DISTRIBUTED'daki süreçler-arası link olacaktır.
+> Aşağıdaki "always-full … elenen alternatif" cümlesi de bu yüzden
+> geçersizdir: always-full elenmedi, süreç-içinin tek modu oldu.
+
 `border-delta` branch'inde dört-pinli tasarım implement edildi ve aynı
 enstrümantasyonla A/B ölçüldü (B1'/B2alt'/C2' — baseline B1/B2alt/C2 ile
 birebir senaryolar):
@@ -269,7 +287,7 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 
 | Kalem | Durum |
 |---|---|
-| Delta border exchange (§6.4) | ✅ Faz B/C — main'de |
+| Delta border exchange (§6.4) | 💤 main'de ama **uykuda** — Faz C'den beri süreç-içi link'ler `AlwaysFull`; delta yalnız testlerde (`force_exchange_modes`) koşar, ilk tüketici `Ipc`/`Net` link'i (§7 "Güncel durum") |
 | sharded × spatial kompoziti | ✅ Faz B — main'de |
 | Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
 | team × sharded (bu bölüm) | 🔜 Tasarım hazır — taze oturumda uygulanır |
