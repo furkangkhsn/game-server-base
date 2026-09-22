@@ -9,13 +9,13 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
-use std::task::ready;
 
 use bytes::Bytes;
 use futures::Sink;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::mpsc;
+use tokio_util::sync::PollSender;
 
 use gsb_protocol::FrameBody;
 
@@ -89,17 +89,39 @@ async fn ws_writer_task(
 
 /// Pump-facing writer: pushes encoded game frames onto the shared outbound
 /// queue. Flushing is implicit — once queued, the writer task owns delivery.
-/// Backpressure comes from the bounded queue via a reserved-capacity permit
+/// Backpressure comes from the bounded queue via a capacity reservation
 /// taken in `poll_ready` and spent in `start_send`. `closing` guarantees at
 /// most ONE close frame ever leaves this connection (the read path's echo
 /// or failure-close wins; the sink's teardown close only fires otherwise).
+///
+/// The reservation is a [`PollSender`], which keeps its pending reserve
+/// future across polls. That is load-bearing: a reserve future that is
+/// built afresh on each `poll_ready` and dropped on `Pending` takes its
+/// waiter off the channel's wait list, so the slot freeing up later wakes
+/// nobody — the pump then sleeps until something else happens to poll it
+/// (with the stall clock off: forever).
 pub(super) struct WsWriter {
-    pub(super) tx: mpsc::Sender<WsOut>,
-    pub(super) permit: Option<mpsc::OwnedPermit<WsOut>>,
-    pub(super) closing: Arc<AtomicBool>,
+    tx: PollSender<WsOut>,
+    closing: Arc<AtomicBool>,
     /// Bytes the socket-writer task has written (it is the only writer;
     /// this side only reads). See [`WriteProgress`] below.
-    pub(super) written: Arc<AtomicU64>,
+    written: Arc<AtomicU64>,
+}
+
+impl WsWriter {
+    /// `tx` and `written` are what [`spawn_socket_writer`] returned;
+    /// `closing` is shared with the read path.
+    pub(super) fn new(
+        tx: mpsc::Sender<WsOut>,
+        closing: Arc<AtomicBool>,
+        written: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            tx: PollSender::new(tx),
+            closing,
+            written,
+        }
+    }
 }
 
 /// The WS door's byte signal comes from the socket-writer TASK, not from
@@ -117,44 +139,22 @@ impl Sink<FrameBody> for WsWriter {
     type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        if this.permit.is_some() {
-            return Poll::Ready(Ok(()));
-        }
-        // `reserve_owned` takes the sender by value, so hand it a cheap
-        // clone (an Arc bump); the permit itself is what gets stored.
-        let mut reserve = std::pin::pin!(this.tx.clone().reserve_owned());
-        match ready!(reserve.as_mut().poll(cx)) {
-            Ok(permit) => {
-                this.permit = Some(permit);
-                Poll::Ready(Ok(()))
-            }
-            Err(_) => Poll::Ready(Err(writer_gone())),
-        }
+        // Registers this task as a waiter that STAYS registered while
+        // Pending (see the type docs), and is a no-op when a slot is
+        // already reserved.
+        self.get_mut()
+            .tx
+            .poll_reserve(cx)
+            .map_err(|_| writer_gone())
     }
 
     fn start_send(self: Pin<&mut Self>, item: FrameBody) -> io::Result<()> {
-        let this = self.get_mut();
-        match this.permit.take() {
-            Some(permit) => {
-                // `send` hands the sender back (chaining API); drop it.
-                let _ = permit.send(WsOut::Game(encode_game_envelope(&item)));
-                Ok(())
-            }
-            // Unreachable after a successful poll_ready; a defensive error
-            // beats a panic either way.
-            None => {
-                use tokio::sync::mpsc::error::TrySendError;
-                match this.tx.try_send(WsOut::Game(encode_game_envelope(&item))) {
-                    Ok(()) => Ok(()),
-                    Err(TrySendError::Full(_)) => Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "websocket outbound queue full",
-                    )),
-                    Err(TrySendError::Closed(_)) => Err(writer_gone()),
-                }
-            }
-        }
+        // Spends the slot `poll_ready` reserved. Without one (a caller
+        // that skipped `poll_ready`) this is an error, never a panic.
+        self.get_mut()
+            .tx
+            .send_item(WsOut::Game(encode_game_envelope(&item)))
+            .map_err(|_| writer_gone())
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -167,8 +167,10 @@ impl Sink<FrameBody> for WsWriter {
         // noise. The actual socket shutdown happens when every queue end is
         // gone (writer task then shuts the half).
         let this = self.get_mut();
-        if !this.closing.swap(true, Ordering::SeqCst) {
-            let _ = this.tx.try_send(WsOut::Control(OP_CLOSE, Vec::new()));
+        if !this.closing.swap(true, Ordering::SeqCst)
+            && let Some(tx) = this.tx.get_ref()
+        {
+            let _ = tx.try_send(WsOut::Control(OP_CLOSE, Vec::new()));
         }
         Poll::Ready(Ok(()))
     }

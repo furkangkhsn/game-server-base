@@ -129,12 +129,7 @@ impl WsListenerHandle {
                     queue_tx.clone(),
                     closing.clone(),
                 );
-                let writer = WsWriter {
-                    tx: queue_tx,
-                    permit: None,
-                    closing,
-                    written,
-                };
+                let writer = WsWriter::new(queue_tx, closing, written);
                 let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },

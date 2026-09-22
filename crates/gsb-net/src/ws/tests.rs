@@ -28,6 +28,7 @@ pub(super) const RFC_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 mod client;
 use client::*;
 mod protocol;
+mod queue;
 mod slow_reader;
 
 async fn read_http_head(stream: &mut TcpStream) -> String {

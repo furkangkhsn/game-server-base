@@ -58,12 +58,7 @@ async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
     let (ours, mut peer) = tight_pair().await;
     let (_read_half, write_half) = ours.into_split();
     let (tx, written) = spawn_socket_writer(write_half);
-    let writer = WsWriter {
-        tx,
-        permit: None,
-        closing: Arc::new(AtomicBool::new(false)),
-        written,
-    };
+    let writer = WsWriter::new(tx, Arc::new(AtomicBool::new(false)), written);
     let (in_tx, mut in_rx) = channel::<ConnIn>(8);
     let (out_tx, out_rx) = channel::<FrameBatch>(4);
     let (read, _write) = crate::pump::spawn_pumps(
