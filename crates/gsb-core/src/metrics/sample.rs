@@ -3,6 +3,7 @@
 //! those against each sample's own stamp).
 use std::time::Instant;
 
+use crate::conn::ServerClose;
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
 
@@ -207,6 +208,18 @@ pub struct ConnSample {
     /// violating); the per-event detail (peer address, close reason) is in
     /// the tracing close signal, not here.
     pub violations: u64,
+    /// Why the SERVER ended this session — set on the final sample only
+    /// (`last = true`), and only when the end was a server verdict (see
+    /// [`ServerClose`]); `None` for a client-side end and on every
+    /// earlier sample. The collector counts it into
+    /// [`NetReport::server_closes`].
+    ///
+    /// Caveat shared with every other delta here: the final sample is a
+    /// `try_send` like the rest, so a metrics channel that is FULL at the
+    /// instant of the close loses it (the loss itself is then counted
+    /// nowhere — the actor is gone). The channel is 4096 deep and drained
+    /// every tick, so this needs thousands of closes inside one tick.
+    pub server_close: Option<ServerClose>,
     /// True on the actor's final flush (connection closing).
     pub last: bool,
 }

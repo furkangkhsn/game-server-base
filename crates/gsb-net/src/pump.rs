@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
-use gsb_core::conn::ConnIn;
+use gsb_core::conn::{ConnIn, ServerClose};
 use gsb_core::id::ConnectionId;
 use gsb_protocol::FrameBody;
 
@@ -114,6 +114,7 @@ where
                              server closing the connection"
                         );
                         exit_msg = Some(ConnIn::ServerClosed {
+                            cause: ServerClose::IdleTimeout,
                             reason: format!("idle timeout: no client traffic for {t:?}"),
                         });
                         break;
@@ -136,8 +137,16 @@ where
                 }
                 Err(e) => {
                     warn!(%conn, error = %e, "reader pump: io error");
-                    exit_msg = Some(ConnIn::Closed {
-                        reason: e.to_string(),
+                    // `InvalidData` is the transport REFUSING the stream
+                    // (an oversized or undecodable frame, a WebSocket
+                    // protocol violation, a corrupt TLS record): the
+                    // server's verdict, not the peer leaving. Same silent
+                    // teardown either way; only the attribution differs.
+                    let reason = e.to_string();
+                    exit_msg = Some(if e.kind() == std::io::ErrorKind::InvalidData {
+                        ConnIn::StreamRejected { reason }
+                    } else {
+                        ConnIn::Closed { reason }
                     });
                     break;
                 }

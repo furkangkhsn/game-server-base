@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::channel::{FrameBatch, Mailbox};
-use crate::conn::ConnIn;
+use crate::conn::{ConnIn, ServerClose};
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
@@ -71,7 +71,12 @@ where
                          connection"
                         .to_string();
                     tokio::spawn(async move {
-                        let _ = inbox.send(ConnIn::ServerClosed { reason }).await;
+                        let _ = inbox
+                            .send(ConnIn::ServerClosed {
+                                cause: ServerClose::Superseded,
+                                reason,
+                            })
+                            .await;
                     });
                 }
                 self.direct_leave(old_conn);

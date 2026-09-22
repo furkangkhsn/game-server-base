@@ -100,7 +100,8 @@ impl MetricReport {
         lines.push(format!(
             "gsb-metric scope=net bytes_in={} bytes_out_room={} \
              bytes_out_control={} bytes_out_total={} frames_in={} frames_out={} \
-             actions_dropped={} violations={} metrics_dropped={}",
+             actions_dropped={} violations={} metrics_dropped={} \
+             server_closes={}{}",
             n.bytes_in,
             n.bytes_out_room,
             n.bytes_out_control,
@@ -109,7 +110,15 @@ impl MetricReport {
             n.frames_out,
             n.actions_dropped,
             n.violations,
-            self.metrics_dropped
+            self.metrics_dropped,
+            n.server_closes.total(),
+            // One stable key per reason (`server_close_<reason>=N`, zeros
+            // included), so a grep for one reason never depends on which
+            // others happened to fire.
+            n.server_closes
+                .iter()
+                .map(|(r, c)| format!(" server_close_{}={c}", r.label()))
+                .collect::<String>()
         ));
         if !self.actions_dropped_top.is_empty() {
             // Attribution of the net-scope `actions_dropped`: which

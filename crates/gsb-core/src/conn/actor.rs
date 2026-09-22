@@ -18,6 +18,7 @@ use crate::registry::RegistryMsg;
 use crate::room::Action;
 
 mod auth;
+mod close;
 mod frame;
 mod lifecycle;
 mod room;
@@ -120,13 +121,21 @@ pub struct ConnectionActor {
     /// ordinary cascade either way.
     p_closing: bool,
     /// Set when a write to the outbound channel found it CLOSED — the
-    /// writer pump exited because the socket write failed, so this
-    /// connection can never receive another byte. Checked by the run loop
+    /// writer pump exited (a socket write failed, or the write-stall
+    /// window ran out), so this connection can never receive another
+    /// byte. Which of the two it was is read off the mailbox at exit
+    /// (`adopt_pending_close`). Checked by the run loop
     /// next to `v_closing`. Unlike those two this is not a policy: it is
     /// the discovery that the session is already half-dead, and the only
     /// honest response is the ordinary teardown (no close notice is sent —
     /// there is nothing left to send it through).
     w_closing: bool,
+    /// Why the SERVER ended this session, when it did (see
+    /// [`ServerClose`]); `None` for a client-side end. The first verdict
+    /// wins — a close notice that then fails to send (`w_closing`) does
+    /// not overwrite the verdict that sent it. Reported once, on the
+    /// final metrics flush.
+    server_close: Option<ServerClose>,
     m_flushed_in_bytes: u64,
     m_flushed_in_frames: u64,
     m_flushed_out_bytes: u64,

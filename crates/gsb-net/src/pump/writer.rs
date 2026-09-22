@@ -18,11 +18,12 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use futures::SinkExt;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
-use gsb_core::conn::ConnIn;
+use gsb_core::conn::{ConnIn, ServerClose};
 use gsb_core::id::ConnectionId;
 use gsb_protocol::FrameBody;
 
@@ -125,10 +126,6 @@ where
                 }
             }
         }
-        // Closing the outbound channel FIRST makes the actor's own next
-        // send fail fast (`w_closing`) instead of parking on a channel
-        // that is full precisely because this pump stopped draining it.
-        drop(out_rx);
         match stalled {
             Some(reason) => {
                 warn!(
@@ -137,15 +134,39 @@ where
                     "writer pump: nothing written to the socket for the stall \
                      window; server ending the session"
                 );
+                // The verdict is POSTED before the outbound channel is
+                // closed, with a `try_send` that cannot park: the actor is
+                // typically parked on that full channel right now, and the
+                // close below wakes it with a failed send (`w_closing`) —
+                // at which point it looks in its mailbox for the reason
+                // (`adopt_pending_close`). Posting first means the reason
+                // is already there to find, so the close is counted as the
+                // write stall it is rather than as a bare dead outbound
+                // path. Only a FULL mailbox defers the post to the
+                // awaited send after the close (the pre-existing order).
+                let deferred = match in_tx.try_send(ConnIn::ServerClosed {
+                    cause: ServerClose::WriteStall,
+                    reason,
+                }) {
+                    Err(TrySendError::Full(msg)) => Some(msg),
+                    Ok(()) | Err(TrySendError::Closed(_)) => None,
+                };
+                // Closing the outbound channel makes the actor's own next
+                // send fail fast instead of parking on a channel that is
+                // full precisely because this pump stopped draining it.
+                drop(out_rx);
                 // NOT `sink.close()`: a graceful close flushes, and the
                 // socket is the thing that is stuck. The teardown must
                 // never need the peer to accept one more byte.
-                let _ = in_tx.send(ConnIn::ServerClosed { reason }).await;
+                if let Some(msg) = deferred {
+                    let _ = in_tx.send(msg).await;
+                }
             }
             // The ordinary exits (peer gone, channel closed) still say
             // goodbye on the wire — under the same window, so a socket
             // that wedges on the way out cannot pin this task forever.
             None => {
+                drop(out_rx);
                 let _ = step(sink.close(), write_stall, &mut progress).await;
             }
         }

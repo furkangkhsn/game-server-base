@@ -115,6 +115,7 @@ impl Demux {
             self.swept_idle += 1;
             let reason = format!("idle timeout: no client traffic for {idle:?}");
             match session.in_tx.try_send(ConnIn::ServerClosed {
+                cause: gsb_core::conn::ServerClose::IdleTimeout,
                 reason: reason.clone(),
             }) {
                 Ok(()) => {

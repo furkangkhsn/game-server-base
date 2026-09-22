@@ -217,7 +217,8 @@ async fn unacked_control_band_closes_the_session_at_the_memory_bound() {
         .expect("the bound must close the session well inside 5 s")
         .expect("the actor must be told, not left waiting");
     match closed {
-        gsb_core::conn::ConnIn::ServerClosed { reason } => {
+        gsb_core::conn::ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::RelDead);
             assert!(
                 reason.contains("reliable control band"),
                 "the close must name the reliable band: {reason}"

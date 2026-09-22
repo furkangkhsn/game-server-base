@@ -458,7 +458,8 @@ async fn conn_opened_rejected_at_connection_capacity() {
         .expect("timed out")
         .expect("inbox closed");
     match msg {
-        ConnIn::ServerClosed { reason } => {
+        ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::ConnCap);
             assert!(reason.contains("capacity"), "reason: {reason}")
         }
         other => panic!("expected ServerClosed, got {other:?}"),

@@ -77,6 +77,7 @@ impl super::ConnectionActor {
         }
         if self.v_score >= VIOLATION_BUDGET && !self.v_closing {
             self.v_closing = true;
+            self.server_closing(ServerClose::ViolationBudget);
             let reason = format!(
                 "protocol violation budget exhausted: {} violations ({} \
                  answered) in this connection's lifetime",
@@ -109,6 +110,7 @@ impl super::ConnectionActor {
     /// ordinary teardown cascade via `p_closing`.
     pub(super) async fn close_preauth_budget(&mut self) {
         self.p_closing = true;
+        self.server_closing(ServerClose::PreauthBudget);
         warn!(
             %self.conn,
             %self.peer,

@@ -59,6 +59,9 @@ pub struct MetricAccumulator {
     /// Summed delta of protocol-violation events across all connection
     /// actors (the violation budget's activity, cumulative).
     conn_violations: u64,
+    /// Server-initiated session closes by reason (cumulative; one per
+    /// closed session at most, from its final sample).
+    conn_server_closes: ServerCloses,
     /// Cumulative input-action drops per connection (the sender's
     /// attribution: which connection's own input was lost to its full
     /// action channel). The collector owns this state — the connection
@@ -120,6 +123,9 @@ impl MetricAccumulator {
                 self.conn_metrics_dropped =
                     self.conn_metrics_dropped.saturating_add(c.metrics_dropped);
                 self.conn_violations = self.conn_violations.saturating_add(c.violations);
+                if let Some(reason) = c.server_close {
+                    self.conn_server_closes.add(reason);
+                }
                 if c.last {
                     // The final flush is the connection actor's LAST
                     // emission (its deltas fold above first — a closing

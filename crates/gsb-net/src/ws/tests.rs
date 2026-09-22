@@ -86,7 +86,12 @@ async fn serve_echo_max(max_message_bytes: usize, idle_timeout: Option<Duration>
                 // Echo; if the writer side is gone the pump exit ends
                 // this loop anyway.
                 ConnIn::Frame(frame) => drop(out_tx.send(vec![frame]).await),
-                ConnIn::Closed { .. } | ConnIn::ServerClosed { .. } => break,
+                // Every end the reader pump reports: the peer left, the
+                // server's verdict, or the stream refused (a protocol
+                // violation — what the failure-close tests provoke).
+                ConnIn::Closed { .. }
+                | ConnIn::ServerClosed { .. }
+                | ConnIn::StreamRejected { .. } => break,
                 _ => {}
             }
         }

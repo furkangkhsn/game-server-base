@@ -161,6 +161,20 @@ pub(crate) fn print_report(
     let fresh_joins_total: u64 = reports.iter().map(|r| r.fresh_joins).sum();
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
+    // Sessions the SERVER ended on its own (write stall, idle window,
+    // violation budget, …). Cumulative and monotonic, so the report with
+    // the largest total is the latest word on every reason — including a
+    // post-teardown final report, which can only add. This is the number
+    // `errors` cannot show: a session killed for not draining its socket
+    // gets no ERROR frame through that socket, so its client sees only
+    // silence, and a capacity run can shed half its clients with
+    // `errors=0`.
+    let server_closes = server_reports
+        .iter()
+        .map(|r| r.net.server_closes)
+        .max_by_key(|c| c.total())
+        .unwrap_or_default();
+    let server_closes_total = server_closes.total();
 
     println!("=== gsb loadgen raw report ===");
     println!(
@@ -170,9 +184,23 @@ pub(crate) fn print_report(
         args.offset + args.clients.saturating_sub(1)
     );
     println!(
-        "clients: transport={} connected={connected}/{} joined={joined} left={left} errors={errors} join_rejected={join_rejected} cap_rejected={cap_rejected} budget_rejected={budget_rejected}",
+        "clients: transport={} connected={connected}/{} joined={joined} left={left} errors={errors} server_closes={server_closes_total} join_rejected={join_rejected} cap_rejected={cap_rejected} budget_rejected={budget_rejected}",
         args.transport, args.clients
     );
+    // `errors` counts what the CLIENTS saw; the server's own verdicts sit
+    // next to it, and a non-zero total is called out so a summary reading
+    // "errors=0" cannot pass for a clean run.
+    println!(
+        "server closes: total={server_closes_total} by_reason={}",
+        server_closes.nonzero_summary()
+    );
+    if server_closes_total > 0 {
+        println!(
+            "WARNING: the server ended {server_closes_total} session(s) on its own initiative ({}); \
+             errors={errors} counts only what the clients observed — this run is NOT clean",
+            server_closes.nonzero_summary()
+        );
+    }
     // The rUDP client-side reliability picture (all zero on TCP): what
     // the clients' own reliable band had to do to keep the control path
     // loss-free (retrans_out = their retransmits; dup_in = the SERVER's
@@ -344,7 +372,7 @@ pub(crate) fn print_report(
     println!(
         "RESULT mode={} visibility={} shards={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
-         out_bps_per_conn={:.0} moves={} errors={} steps={} server_hz={:.2} \
+         out_bps_per_conn={:.0} moves={} errors={} server_closes={} steps={} server_hz={:.2} \
          step_p50_us={:.0} step_p50_fine_us={} step_p90_fine_us={} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
          peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
@@ -358,7 +386,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}",
+             detach_expired_ai={} detach_expired_despawn={}{}",
         mode,
         args.visibility,
         // Shard-aware like the legacy spelling: the EXPLICIT topology key
@@ -385,6 +413,7 @@ pub(crate) fn print_report(
         out_bps_per_conn,
         moves,
         errors,
+        server_closes_total,
         room.map(|r| r.steps).unwrap_or(0),
         server_hz,
         room.map(|r| hist_percentile(&r.step_hist, r.budget_us, r.step_max_us, 0.50))
@@ -479,5 +508,12 @@ pub(crate) fn print_report(
         room.map(|r| r.resume_rejected_stale).unwrap_or(0),
         room.map(|r| r.detach_expired_ai).unwrap_or(0),
         room.map(|r| r.detach_expired_despawn).unwrap_or(0),
+        // One key per server-close reason (`server_close_<reason>=N`,
+        // zeros included — every key always present, like the req_rej_*
+        // family). `server_closes=` above is the single total to grep.
+        server_closes
+            .iter()
+            .map(|(r, n)| format!(" server_close_{}={n}", r.label()))
+            .collect::<String>(),
     );
 }

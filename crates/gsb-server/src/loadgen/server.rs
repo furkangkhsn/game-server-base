@@ -17,6 +17,8 @@ pub(crate) struct ServerOverrides {
     pub(crate) max_players: Option<u32>,
     pub(crate) max_connections: Option<u64>,
     pub(crate) idle_timeout_secs: Option<f64>,
+    /// The writer's stall window (`None` = config default; `0` = off).
+    pub(crate) write_stall_secs: Option<f64>,
     /// The demo rooms' disconnect-park grace (`None` = config default).
     pub(crate) disconnect_grace_secs: Option<f64>,
 }
@@ -30,6 +32,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(s) = o.idle_timeout_secs {
         cfg.idle_timeout_secs = s;
+    }
+    if let Some(s) = o.write_stall_secs {
+        cfg.write_stall_secs = s;
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);

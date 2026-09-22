@@ -33,7 +33,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gsb_core::metrics::{MetricReport, RegistryReport};
+use gsb_core::conn::ServerClose;
+use gsb_core::metrics::{MetricReport, NetReport, RegistryReport};
 use gsb_protocol::base::{Auth, JoinRoom};
 use prost::Message;
 use tokio::sync::mpsc;
@@ -144,13 +145,16 @@ async fn read_until(recv: &mut quinn::RecvStream, want: u16) {
 }
 
 /// Drain metric reports until one carries a registry section satisfying
-/// `done` (the `udp_rel_liveness.rs` idiom).
+/// `done` (the `udp_rel_liveness.rs` idiom). Returns that section and the
+/// report's net scope (read off the SAME report: the connection actor's
+/// final sample is queued before its `ConnClosed` reaches the registry,
+/// so a report that shows the close also carries its verdict).
 async fn registry_until(
     rx: &mut mpsc::UnboundedReceiver<MetricReport>,
     what: &str,
     deadline: Instant,
     done: impl Fn(&RegistryReport) -> bool,
-) -> RegistryReport {
+) -> (RegistryReport, NetReport) {
     let mut last: Option<RegistryReport> = None;
     loop {
         let remaining = deadline
@@ -160,7 +164,7 @@ async fn registry_until(
             Ok(Some(report)) => {
                 if let Some(reg) = report.registry {
                     if done(&reg) {
-                        return reg;
+                        return (reg, report.net);
                     }
                     last = Some(reg);
                 }
@@ -230,7 +234,7 @@ async fn a_peer_that_stops_reading_loses_its_session() {
         }
     });
 
-    let before = registry_until(
+    let (before, _) = registry_until(
         &mut reports,
         "the connection to be registered",
         Instant::now() + Duration::from_secs(15),
@@ -242,7 +246,7 @@ async fn a_peer_that_stops_reading_loses_its_session() {
     // From here the client reads NOTHING. Its advertised window stops
     // moving, the server's writes stop completing, and the stall window
     // is the only thing left that can end this.
-    let after = registry_until(
+    let (after, net) = registry_until(
         &mut reports,
         "the stalled session to end through the ordinary teardown",
         Instant::now() + Duration::from_secs(40),
@@ -259,6 +263,19 @@ async fn a_peer_that_stops_reading_loses_its_session() {
         "the registry row must be released (nothing parks this session — \
          the default disconnect policy despawns): {after:?}"
     );
+    // And the close is COUNTED, under its own reason: a capacity run
+    // whose clients stop draining must see the server shed them — the
+    // stalled socket cannot carry the ERROR notice, so no client-side
+    // counter ever moves.
+    for (reason, n) in net.server_closes.iter() {
+        assert_eq!(
+            n,
+            u64::from(reason == ServerClose::WriteStall),
+            "{}: the one close is a write stall: {}",
+            reason.label(),
+            net.server_closes.nonzero_summary()
+        );
+    }
 
     // Keep the read half alive to the very end: a dropped handle would
     // let quinn close the connection and prove nothing.

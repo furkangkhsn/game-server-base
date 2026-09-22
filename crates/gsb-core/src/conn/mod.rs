@@ -76,8 +76,10 @@
 //!   phase.
 
 mod actor;
+mod close;
 
 pub use actor::ConnectionActor;
+pub use close::ServerClose;
 
 use std::time::Duration;
 
@@ -213,12 +215,21 @@ pub enum ConnIn {
     /// A frame decoded from the network (envelope intact).
     Frame(FrameBody),
     /// The peer closed or the socket errored; the actor should clean up.
+    /// A CLIENT-side end: never counted as a server close.
     Closed { reason: String },
+    /// The transport refused the inbound byte stream (the reader pump's
+    /// `InvalidData` exit: an oversized or undecodable frame, a WebSocket
+    /// protocol violation, a corrupt TLS record). The actor cleans up
+    /// exactly as for [`Self::Closed`] — no notice is sent, the stream is
+    /// untrustworthy past this point — but it is the SERVER's verdict,
+    /// counted as [`ServerClose::StreamRejected`].
+    StreamRejected { reason: String },
     /// The server is closing this connection on its own initiative (idle
-    /// timeout, connection capacity). The actor replies with an `ERROR`
-    /// frame (code 9, the reason as the message) so the client can tell a
-    /// server decision apart from a network failure, then cleans up.
-    ServerClosed { reason: String },
+    /// timeout, write stall, connection capacity, …; `cause` says which —
+    /// see [`ServerClose`]). The actor replies with an `ERROR` frame (code
+    /// 9, the reason as the message) so the client can tell a server
+    /// decision apart from a network failure, then cleans up.
+    ServerClosed { cause: ServerClose, reason: String },
     /// The room the connection was in got destroyed.
     RoomGone(RoomId),
     /// Server-wide shutdown.

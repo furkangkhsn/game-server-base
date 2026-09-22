@@ -658,7 +658,12 @@ async fn expect_birth_rejection(mut inbox: mpsc::Receiver<ConnIn>, why: &str) {
         .await
         .expect("timed out")
     {
-        Some(ConnIn::ServerClosed { reason }) => {
+        Some(ConnIn::ServerClosed { cause, reason }) => {
+            assert_eq!(
+                cause,
+                gsb_core::conn::ServerClose::UnauthCap,
+                "{why}: the refusal must carry its counted reason"
+            );
             assert!(
                 reason.contains("unauthenticated capacity"),
                 "{why}: wrong rejection reason: {reason}"

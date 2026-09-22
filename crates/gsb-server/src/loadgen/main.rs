@@ -195,6 +195,13 @@ struct Args {
     /// seconds (`--idle-timeout-secs F`; 0 = disabled; unspecified = the
     /// server config default, 30 s).
     idle_timeout_secs: Option<f64>,
+    /// Session-lifecycle write-stall window of the in-process / served
+    /// server, in seconds (`--write-stall-secs F`; 0 = disabled;
+    /// unspecified = the server config default, 10 s). The other
+    /// direction's twin of `idle_timeout_secs`: how long the server's
+    /// writer may go without writing to a socket before it ends that
+    /// session.
+    write_stall_secs: Option<f64>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -303,6 +310,10 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        default, 100 000)
   --idle-timeout-secs F               idle session window (0 = disabled;
                                        default: the server config default, 30)
+  --write-stall-secs F                write-stall window: a session the
+                                       server cannot write to for F seconds
+                                       is ended (0 = disabled; default: the
+                                       server config default, 10)
 
 Client behaviour:
   --flood-id K                        client K floods MOVE_TO in a tight loop

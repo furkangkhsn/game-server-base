@@ -85,7 +85,10 @@ impl super::UdpWriter {
         );
         if self
             .in_tx
-            .try_send(ConnIn::ServerClosed { reason })
+            .try_send(ConnIn::ServerClosed {
+                cause: gsb_core::conn::ServerClose::RelDead,
+                reason,
+            })
             .is_err()
         {
             // Closed: the actor is already gone — nothing to tell. Full:

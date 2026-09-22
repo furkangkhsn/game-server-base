@@ -139,6 +139,13 @@ pub struct NetReport {
     /// server; the per-event signal (peer address, close reason) is the
     /// structured tracing event emitted at budget exhaustion.
     pub violations: u64,
+    /// Sessions the SERVER ended on its own initiative, by reason
+    /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
+    /// the taxonomy and what is deliberately not in it). A client-side
+    /// end is never counted, so on a healthy run this is all zeros — and a
+    /// load measurement whose clients saw no errors can still read here
+    /// that the server shed half of them.
+    pub server_closes: ServerCloses,
 }
 
 /// One periodic report: the server's current numeric state.
@@ -202,6 +209,7 @@ impl MetricReport {
                 frames_out: 0,
                 actions_dropped: 0,
                 violations: 0,
+                server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),
         }

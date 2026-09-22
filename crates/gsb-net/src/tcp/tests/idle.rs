@@ -32,7 +32,8 @@ async fn idle_peer_gets_server_closed() {
         .expect("inbox open")
         .expect("pump notified");
     match msg {
-        ConnIn::ServerClosed { reason } => {
+        ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::IdleTimeout);
             assert!(
                 reason.contains("idle timeout"),
                 "the idle reason must say why: {reason}"
@@ -138,7 +139,8 @@ async fn active_peer_resets_the_idle_window() {
         .expect("inbox open")
         .expect("pump notified");
     match msg {
-        ConnIn::ServerClosed { reason } => {
+        ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::IdleTimeout);
             assert!(reason.contains("idle timeout"), "reason: {reason}");
         }
         other => panic!("expected ServerClosed, got {other:?}"),

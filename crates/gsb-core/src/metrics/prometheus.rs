@@ -3,6 +3,8 @@
 
 use crate::metrics::*;
 
+mod closes;
+
 impl MetricReport {
     /// Render as Prometheus text exposition format, version 0.0.4 (the
     /// scrape format of `/metrics`; see `docs/OPS.md` §3/§5): a
@@ -173,6 +175,7 @@ impl MetricReport {
             out.push('\n');
             let _ = write!(out, "# TYPE {name} counter\n{name} {v}\n");
         }
+        closes::render(&mut out, &n.server_closes);
 
         let rooms = &self.rooms;
         if rooms.is_empty() {

@@ -302,6 +302,10 @@ pub(crate) async fn orchestrate(args: Args) {
         sargs.push("--idle-timeout-secs".into());
         sargs.push(s.to_string());
     }
+    if let Some(s) = args.write_stall_secs {
+        sargs.push("--write-stall-secs".into());
+        sargs.push(s.to_string());
+    }
     if let Some(f) = args.disconnect_grace_secs {
         sargs.push("--disconnect-grace-secs".into());
         sargs.push(f.to_string());

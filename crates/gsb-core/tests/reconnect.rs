@@ -1492,7 +1492,10 @@ async fn double_session_supersedes_the_parked_one() {
         .await
         .expect("bob #2 supersedes");
     match tokio::time::timeout(WAIT, bob_inbox.recv()).await {
-        Ok(Some(ConnIn::ServerClosed { reason })) => assert!(!reason.is_empty()),
+        Ok(Some(ConnIn::ServerClosed { cause, reason })) => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::Superseded);
+            assert!(!reason.is_empty())
+        }
         other => panic!("expected ServerClosed for the superseded socket: {other:?}"),
     }
     assert_eq!(

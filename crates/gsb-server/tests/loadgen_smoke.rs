@@ -151,6 +151,21 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         assert_eq!(v, 0, "smoke runs no RPC traffic; {k} must be 0");
     }
 
+    // Server-initiated closes: the total and one key per reason, all
+    // present (a shifted net-scope queue fails the parse or the zero) and
+    // all 0 — a smoke run's clients leave on their own, so any non-zero
+    // here is the server shedding a healthy client.
+    let mut keys = vec!["server_closes".to_string()];
+    keys.extend(
+        gsb_core::conn::ServerClose::ALL
+            .iter()
+            .map(|r| format!("server_close_{}", r.label())),
+    );
+    for k in &keys {
+        let v: u64 = get(k).parse().expect("number");
+        assert_eq!(v, 0, "a smoke run sheds no client; {k} must be 0");
+    }
+
     // The collector kept up (0 samples dropped on the metrics channel).
     let dropped: u64 = get("metrics_dropped").parse().expect("number");
     assert_eq!(dropped, 0, "metrics channel dropped samples: {dropped}");

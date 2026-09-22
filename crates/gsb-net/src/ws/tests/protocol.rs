@@ -201,7 +201,8 @@ async fn idle_timeout_still_applies_to_websockets() {
         .expect("inbox open")
         .expect("pump notified");
     match msg {
-        ConnIn::ServerClosed { reason } => {
+        ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::IdleTimeout);
             assert!(reason.contains("idle timeout"), "reason: {reason}");
         }
         other => panic!("expected ServerClosed, got {other:?}"),
@@ -209,6 +210,42 @@ async fn idle_timeout_still_applies_to_websockets() {
     read.expect("reader pump exits").await.unwrap();
     drop(out_tx);
     write.await.expect("writer pump exits");
+}
+
+/// A WebSocket protocol violation is the transport REFUSING the stream:
+/// besides the 1002 close frame on the wire (pinned above), the reader
+/// pump reports `StreamRejected` — the server's verdict — and not
+/// `Closed`, which the client-initiated close handshake above pins as
+/// the peer leaving.
+#[tokio::test]
+async fn a_protocol_violation_is_a_stream_rejection() {
+    let transport: Arc<dyn Transport> = Arc::new(WsTransport::default());
+    let listener = transport
+        .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("bind");
+    let client = tokio::spawn(FakeWsClient::connect(listener.local_addr().unwrap()));
+    let endpoint = listener.accept().await.expect("ws accept");
+    let (in_tx, mut in_rx) = channel::<ConnIn>(8);
+    let (_out_tx, out_rx) = channel::<FrameBatch>(8);
+    let (_read, _write) = endpoint.start_pump(
+        ConnectionId(7),
+        in_tx,
+        out_rx,
+        crate::pump::PumpTimeouts::default(),
+    );
+    let mut client = client.await.expect("client handshake");
+    let envelope = encode_game_envelope(&FrameBody::new(1, b"sneaky".as_slice()));
+    client.send_ws_binary_unmasked(&envelope).await;
+
+    let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
+        .await
+        .expect("the reader pump reported the rejection")
+        .expect("inbox open");
+    assert!(
+        matches!(msg, ConnIn::StreamRejected { .. }),
+        "a protocol violation is the server's verdict, not a peer close: {msg:?}"
+    );
 }
 
 impl FakeWsClient {

@@ -3,9 +3,10 @@
 
 use std::time::Instant;
 
+use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport,
+    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, ServerCloses,
 };
 
 /// Metric-report wire format (server process → orchestrator, one TCP
@@ -16,7 +17,7 @@ use gsb_core::metrics::{
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = 0x47534D31 "GSM1"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSM8"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -45,7 +46,8 @@ use gsb_core::metrics::{
 ///                u64 opens  u64 closes
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
-///   u64 actions_dropped
+///   u64 actions_dropped  u64 violations
+///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 /// ```
 ///
@@ -80,7 +82,13 @@ use gsb_core::metrics::{
 /// from `shipped_bytes` (a datagram transport is bounded by packets as
 /// well as by bytes, and the private half is the per-connection share of
 /// the fan-out).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D37;
+/// GSM8 = the GSM7 layout plus the net-scope server-close counters, one
+/// `u64` per `ServerClose` reason in `ServerClose::ALL` order, right
+/// after `violations`. Without them a separate-process capacity run
+/// could not see the server shedding its clients: the kills reach the
+/// clients as silence (the stalled socket cannot carry an ERROR), so no
+/// client-side counter moves.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D38;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -181,6 +189,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.frames_out);
     w.u64(r.net.actions_dropped);
     w.u64(r.net.violations);
+    for (_, n) in r.net.server_closes.iter() {
+        w.u64(n);
+    }
     w.u32(r.actions_dropped_top.len() as u32);
     for (conn, n) in &r.actions_dropped_top {
         w.u64(conn.0);
@@ -335,6 +346,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         frames_out: r.u64()?,
         actions_dropped: r.u64()?,
         violations: r.u64()?,
+        server_closes: {
+            let mut counts = [0u64; ServerClose::COUNT];
+            for n in &mut counts {
+                *n = r.u64()?;
+            }
+            ServerCloses::from_counts(counts)
+        },
     };
     let n_top = r.u32()?;
     let mut actions_dropped_top = Vec::with_capacity(n_top as usize);

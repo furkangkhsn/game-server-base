@@ -37,6 +37,7 @@ pub(crate) fn parse_args() -> Args {
         max_players: None,
         max_connections: None,
         idle_timeout_secs: None,
+        write_stall_secs: None,
         flood_id: None,
         churn_secs: None,
         churn_cycles: 0,
@@ -126,6 +127,9 @@ pub(crate) fn parse_args() -> Args {
             }
             "--idle-timeout-secs" => {
                 args.idle_timeout_secs = Some(v().parse().expect("number"));
+            }
+            "--write-stall-secs" => {
+                args.write_stall_secs = Some(v().parse().expect("number"));
             }
             "--flood-id" => args.flood_id = Some(v().parse().expect("number")),
             "--churn-secs" => {

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+mod closes;
 mod collector;
 mod histogram;
 mod prometheus;
@@ -92,6 +93,7 @@ fn accumulator_applies_events_and_computes_rates() {
         actions_dropped: 0,
         metrics_dropped: 2,
         violations: 0,
+        server_close: None,
         last: false,
     }));
 
@@ -123,6 +125,7 @@ fn accumulator_applies_events_and_computes_rates() {
         actions_dropped: 7,
         metrics_dropped: 0,
         violations: 3,
+        server_close: None,
         last: true,
     }));
 

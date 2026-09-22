@@ -87,6 +87,7 @@
 //! samples and current gauges, nothing else.
 
 mod accumulator;
+mod closes;
 mod collector;
 mod prometheus;
 mod render;
@@ -97,6 +98,7 @@ mod sample;
 mod tests;
 
 pub use accumulator::MetricAccumulator;
+pub use closes::ServerCloses;
 pub use collector::{MetricSink, MetricsCollector};
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MetricsEvent, RegistrySample, RoomSample};

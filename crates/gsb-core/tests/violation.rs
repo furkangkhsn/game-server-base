@@ -28,6 +28,8 @@ use tokio::task::JoinHandle;
 
 // Child module of this test binary (an integration-test root is its own
 // crate root, so the path is explicit).
+#[path = "violation/closes.rs"]
+mod closes;
 #[path = "violation/counters.rs"]
 mod counters;
 

@@ -64,6 +64,7 @@ impl super::ConnectionActor {
             preauth_frames: 0,
             p_closing: false,
             w_closing: false,
+            server_close: None,
             m_flushed_in_bytes: 0,
             m_flushed_in_frames: 0,
             m_flushed_out_bytes: 0,
@@ -111,19 +112,36 @@ impl super::ConnectionActor {
                     // exactly like a `ServerClosed`. Same teardown for the
                     // §3.3 pre-auth budget (its own code-9 notice was sent
                     // by `close_preauth_budget`).
+                    // (The two budgets recorded their verdict when they
+                    // fired; a dead outbound path is attributed here.)
                     if self.v_closing || self.p_closing || self.w_closing {
+                        if self.w_closing {
+                            self.adopt_pending_close();
+                        }
                         break;
                     }
                 }
                 ConnIn::Closed { reason } => {
+                    // Client-side end: no server verdict is recorded.
                     debug!(%self.conn, %reason, "connection closed by peer/io");
                     break;
                 }
-                ConnIn::ServerClosed { reason } => {
-                    // The server made this decision (idle timeout, server at
-                    // connection capacity). Unlike a peer EOF the client may
-                    // still be listening: tell it why, then clean up.
-                    warn!(%self.conn, %reason, "server closing connection");
+                ConnIn::StreamRejected { reason } => {
+                    // The transport refused the byte stream: the same
+                    // silent teardown as a peer close, but the server's
+                    // verdict (see `ServerClose::StreamRejected`).
+                    self.server_closing(ServerClose::StreamRejected);
+                    debug!(%self.conn, %reason, "inbound stream rejected by the transport");
+                    break;
+                }
+                ConnIn::ServerClosed { cause, reason } => {
+                    // The server made this decision (idle timeout, write
+                    // stall, connection capacity, …). Unlike a peer EOF the
+                    // client may still be listening: tell it why, then
+                    // clean up. The verdict is recorded BEFORE the notice,
+                    // so a notice that cannot be sent does not lose it.
+                    self.server_closing(cause);
+                    warn!(%self.conn, ?cause, %reason, "server closing connection");
                     let _ = self
                         .send_frame(
                             op::base::ERROR,
@@ -133,6 +151,7 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::RoomGone(room) => {
+                    self.server_closing(ServerClose::RoomGone);
                     warn!(%self.conn, room = %room, "room destroyed; detaching");
                     self.detach();
                     let _ = self
@@ -144,6 +163,8 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::Shutdown => {
+                    // Not a per-session verdict: never counted (see
+                    // `ServerClose`, "deliberately NOT a reason").
                     debug!(%self.conn, "connection shutdown (server)");
                     break;
                 }
@@ -174,6 +195,11 @@ impl super::ConnectionActor {
         let adrops = self.m_actions_dropped;
         let drops = self.m_metrics_dropped;
         let viols = self.m_violations;
+        // The server-close verdict rides the FINAL sample only (one per
+        // session), and forces it out even when every delta is zero — a
+        // connection refused at birth has sent and received nothing, and
+        // its refusal must still be counted.
+        let server_close = if last { self.server_close } else { None };
         if in_b == 0
             && in_f == 0
             && out_b == 0
@@ -181,6 +207,7 @@ impl super::ConnectionActor {
             && adrops == 0
             && drops == 0
             && viols == 0
+            && server_close.is_none()
         {
             return;
         }
@@ -209,6 +236,7 @@ impl super::ConnectionActor {
                 actions_dropped: adrops,
                 metrics_dropped: drops,
                 violations: viols,
+                server_close,
                 last,
             }))
         {

@@ -8,7 +8,7 @@ use std::hash::Hash;
 use tracing::{debug, warn};
 
 use crate::channel::Mailbox;
-use crate::conn::ConnIn;
+use crate::conn::{ConnIn, ServerClose};
 use crate::id::ConnectionId;
 use crate::registry::*;
 
@@ -45,6 +45,7 @@ where
             tokio::spawn(async move {
                 let _ = inbox
                     .send(ConnIn::ServerClosed {
+                        cause: ServerClose::ConnCap,
                         reason: "server at connection capacity".into(),
                     })
                     .await;
@@ -74,6 +75,7 @@ where
             tokio::spawn(async move {
                 let _ = inbox
                     .send(ConnIn::ServerClosed {
+                        cause: ServerClose::UnauthCap,
                         reason: "server at unauthenticated capacity".into(),
                     })
                     .await;

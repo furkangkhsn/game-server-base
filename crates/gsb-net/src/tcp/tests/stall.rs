@@ -85,10 +85,13 @@ async fn deaf_peer_ends_the_session() {
         )
         .expect("pump notified");
     match msg {
-        ConnIn::ServerClosed { reason } => assert!(
-            reason.contains("write stall"),
-            "the stall reason must say why: {reason}"
-        ),
+        ConnIn::ServerClosed { cause, reason } => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::WriteStall);
+            assert!(
+                reason.contains("write stall"),
+                "the stall reason must say why: {reason}"
+            )
+        }
         other => panic!("expected ServerClosed, got {other:?}"),
     }
 
@@ -163,6 +166,76 @@ async fn a_draining_peer_is_never_stalled() {
         .await
         .expect("writer pump exits when the channel closes")
         .expect("no panic");
+    read.abort();
+    peer.abort();
+}
+
+/// The verdict is in the actor's mailbox BEFORE the outbound channel
+/// closes. The connection actor learns of a stall first as a failed send
+/// — typically while parked on the very channel the stalled pump stopped
+/// draining — and then looks in its mailbox for the reason
+/// (`adopt_pending_close`); a verdict posted only AFTER the close could
+/// be missed there, and the close would be counted as a bare dead
+/// outbound path instead of the write stall it is.
+///
+/// The pump runs on a worker thread while this test spins on the
+/// outbound channel's closed flag and reads the mailbox the instant it
+/// flips. A pump that closes first and posts second leaves a window of
+/// a microsecond or so, and the spin lands in it: with the two steps
+/// swapped this test failed 10 runs out of 10 (a race cannot be forced
+/// to lose every time, so that is a measured rate, not a proof).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stall_verdict_is_posted_before_the_outbound_channel_closes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let peer = deaf_peer(listener);
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (reader, writer) = TcpReader::for_stream(stream, CHUNK * 2);
+    let (in_tx, mut in_rx) = channel::<ConnIn>(8);
+    let (out_tx, out_rx) = channel::<FrameBatch>(4);
+    let (read, write) = spawn_pumps(
+        ConnectionId(13),
+        reader,
+        writer,
+        in_tx,
+        out_rx,
+        PumpTimeouts {
+            idle: None,
+            write_stall: Some(Duration::from_millis(300)),
+        },
+    );
+
+    // Fill the channel until the socket wedges, then SPIN (no await, no
+    // yield) on the closed flag: the pump runs on a worker thread, so the
+    // mailbox is read within nanoseconds of the close — the narrowest
+    // window this side can observe. (A parked send would be woken only
+    // after the pump had long finished both steps, so it could not tell
+    // the two orders apart.)
+    let frame = FrameBody::new(7, vec![0u8; CHUNK]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match out_tx.try_send(vec![frame.clone()]) {
+            Ok(()) => continue,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stalled pump never closed its outbound channel"
+        );
+        std::hint::spin_loop();
+    }
+    match in_rx.try_recv() {
+        Ok(ConnIn::ServerClosed { cause, .. }) => {
+            assert_eq!(cause, gsb_core::conn::ServerClose::WriteStall)
+        }
+        other => panic!(
+            "the outbound channel closed before the stall verdict was in \
+             the mailbox: {other:?}"
+        ),
+    }
+
+    let _ = tokio::time::timeout(Duration::from_secs(5), write).await;
     read.abort();
     peer.abort();
 }
