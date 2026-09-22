@@ -1402,6 +1402,7 @@ durdurulamaz.
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
 | düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
+| net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`
 (log-2, bütçe oranları) **bütçe sorusunu** yanıtlar: bütçeye göre
@@ -1474,6 +1475,21 @@ de budur. Loadgen'in `step_p50_fine_us` / `step_p90_fine_us` satırları
 bir süre tick sayısını veriyordu ve 4 shard'lık odada "p50" etiketi
 altında kabaca p12.5 basıyordu; kapatıldı: CHANGELOG "metrik fold
 denetimi turu".
+
+**`server_closes` bu tabloda yok — `RoomReport`'ta değil, `NetReport`'ta.**
+Net kapsam sunucu başına TEKTİR, `fold_rooms`'un katladığı shard
+satırlarından biri değildir; yani yapısal destructure ona dokunmaz ve
+bir karar da gerektirmez. Kuralı yine de yazılı: bağlantı aktörü
+hükmünü yalnız SON örneğinde ve en fazla bir kez taşır
+(`ConnSample::server_close`), toplayıcı bağlantılar üzerinden **SUM**
+eder (ayrık oturumlar, her biri tek kapanış); sayaç kümülatif ve
+monotondur, bu yüzden loadgen rapor serisinden **toplamı en büyük**
+olanı alır (kapanış sonrası son rapor yalnız ekleyebilir). Kabul
+edilen bedel: son örnek de `try_send`'dir, kanal kapanış anında DOLUysa
+hüküm düşer ve düşüş hiçbir yerde sayılmaz (aktör gitmiştir) — 4096
+derinlik ve tick başına boşaltmayla bir tick içinde binlerce kapanış
+gerekir. Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
+loadgen `RESULT`'ı aynı anahtarları taşır, GSM8 sebep başına bir `u64`.
 
 Prometheus yüzeyi ve log renderer **katlamaz**: örnek kimliği başına
 bir satır basarlar (shard'lar `room="r<id>"` etiketiyle ayrı seri), yani

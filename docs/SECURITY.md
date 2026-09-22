@@ -12,7 +12,8 @@
 | Auth rate-limit + pre-auth amplifikasyon sınırı | Tur B | ✅ Uygulandı |
 | Pre-auth oturum tahsis sınırı | Tur B | ✅ Uygulandı |
 | Post-auth HEARTBEAT_ACK kısması (§3.2'nin ikinci yarısı) | Bağlantı sınırları turu | ✅ Uygulandı |
-| Tıkanmış yazmaya süre sınırı (`write_stall_secs`) | Bağlantı sınırları turu | ✅ Uygulandı (§3.5) |
+| Tıkanmış yazmaya süre sınırı (`write_stall_secs`) | Bağlantı sınırları turu | ✅ Uygulandı (§3.5); **bayt-granüler** (stall gözlemlenebilirliği turu) |
+| Sunucu-başlatımlı kapanış sayaçları, sebep bazında | Stall gözlemlenebilirliği turu | ✅ Uygulandı (§3.6) |
 | rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
@@ -107,11 +108,39 @@ göremez, çünkü böyle bir istemcinin sessiz olması gerekmez (ROADMAP'teki
 
 | # | Karar | Gerekçe |
 |---|---|---|
-| 1 | **`write_stall_secs` (vars. 10 sn; `0` kapatır)** — soketine bu süre boyunca hiçbir şey BAŞARIYLA yazılamamış bağlantı olağan teardown'la kapatılır | rUDP REL bandının canlılık sınırının TCP tarafındaki kardeşi; `idle_timeout_secs` ile aynı sözleşme (f64 saniye, `0` kapalı) — ikisi bir çifttir, yön başına bir saat |
-| 2 | Ölçü **İLERLEME**, yaş değil | Yaş düşük-Hz odayı cezalandırır, yüksek-Hz'i ödüllendirir. İlerleme ise tam ayırmak istediğimiz iki istemciyi ayırır: geride kalan ama HÂLÂ BOŞALTAN istemcinin yazmaları tamamlanır ve saat her birinde yeniden başlar ("yavaş istemci tolere edilir" sözleşmesi aynen durur, düşen snapshot'ları eskisi gibi sayılır); hiç boşaltmayan istemcininki hiç tamamlanmaz |
+| 1 | **`write_stall_secs` (vars. 10 sn; `0` kapatır)** — soketi bu süre boyunca tek bir BAYT bile kabul etmemiş (ve yazılacak bir şeyi olan) bağlantı olağan teardown'la kapatılır | rUDP REL bandının canlılık sınırının TCP tarafındaki kardeşi; `idle_timeout_secs` ile aynı sözleşme (f64 saniye, `0` kapalı) — ikisi bir çifttir, yön başına bir saat |
+| 2 | Ölçü **İLERLEME**, yaş değil — ve **BAYT**, kare değil | Yaş düşük-Hz odayı cezalandırır, yüksek-Hz'i ödüllendirir. İlerleme ise tam ayırmak istediğimiz iki istemciyi ayırır: geride kalan ama HÂLÂ BOŞALTAN istemcinin soketi bayt kabul eder ve saat her baytta yeniden başlar — pencereden uzun süren bir KARENİN ortasında da ("yavaş istemci tolere edilir" sözleşmesi aynen durur, düşen snapshot'ları eskisi gibi sayılır); hiç boşaltmayan istemcininki hiç bayt kabul etmez. **Düzeltme (stall gözlemlenebilirliği turu):** ilk uygulama saati yalnız bir karenin gönderimi BÜTÜN OLARAK tamamlanınca sıfırlıyordu; kare pencereden uzun sürede boşalınca okuyan istemci öldürülüyordu — kareler büyüdükçe ilerleme sınırı sessizce bir yaş sınırına dönüşüyordu (10k ölçümü: ~80 KB kareler, 4486 öldürme). Sinyal: yazıcıdaki monoton bayt sayacı (`gsb_net::pump::WriteProgress`), bekleyen işlemin kendi `&mut`'u üzerinden okunur; deadline'da baytlar ilerlemişse AYNI işlem yeni bir pencereyle beklenir |
 | 3 | Saat writer pump'un yazma deadline'ında; bağlantı başına zamanlayıcı görev YOK | Reader'ın idiomunun aynısı: tek awaited işlemi bir deadline'a sarmak (`tokio::time::timeout` tek future'a; ikinci canlı kaynak değil) |
 | 4 | Verdict aktörün mailbox'ından gider, soketten değil; ve `sink.close()` çağrılmaz | Teardown, tıkanmış olan şeyin bir bayt daha kabul etmesini asla gerektirmemeli (rUDP `die()` ile aynı ilke) |
 | 5 | rUDP bu saati almaz | Datagram `try_send_to` park etmez; o yönün canlılığı REL bandının ACK-ilerleme saatidir |
+| 6 | Bilinen kalıntılar | (a) TLS: kare tamponu boşaldıktan sonra rustls'in tuttuğu son ≤64 KiB `poll_flush` içinde bayt sayısı raporlamadan boşalır. (b) Çekirdek: dolu gönderim tamponunda bloklu yazıcı ancak tamponun ~üçte biri boşalınca uyandırılır — B baytlık tamponda B / (3 × pencere)'den yavaş okuyan istemci uyanmalar arasında sessiz görünür. (c) WS kapısında soketi başka görev yazar; bayt sayısı pump'a ilk kez deadline'da görünür, orada sınır son bayttan itibaren iki pencereye kadardır |
+
+## 3.6. Sunucu-başlatımlı kapanışların sayımı (stall gözlemlenebilirliği turu)
+
+Bir koruma sessizce kesiyorsa ölçüm yalan söyler: 10k ölçümünde sunucu
+4486 oturumu write stall ile kapattı, istemci özeti `errors=0` dedi —
+tıkanmış soket ERROR bildirimini taşıyamaz, istemci tarafında hiçbir
+sayaç kıpırdamaz. Artık sunucunun KENDİ kararıyla bitirdiği her oturum
+sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
+
+| Sebep | Koruma |
+|---|---|
+| `idle_timeout` | §3.5 reader idle penceresi; rUDP demux idle süpürmesi |
+| `write_stall` | §3.5 writer ilerleme saati |
+| `rel_dead` | rUDP REL canlılık sınırı / retransmit tavanı |
+| `violation_budget` | §3 ihlal bütçesi (AUTH seli dahil — §3.1) |
+| `preauth_budget` | §3.3 pre-auth kare bütçesi |
+| `stream_rejected` | taşıma seviyesi red: `max_frame_bytes`, çözülemeyen kare, WS protokol ihlali, bozuk TLS kaydı (önceden istemci kapanışı gibi görünüyordu) |
+| `conn_cap` / `unauth_cap` | `max_connections` / §4 unauthed cap'i, doğumda red |
+| `superseded` | aynı kimliğin yeni oturumu eskisini kapattı |
+| `room_gone` | oda oturumun altında yok edildi / öldü |
+| `outbound_dead` | giden kanal kapalı bulundu ve kayıtlı hüküm yok (çoğunlukla yazma hatasıyla gitmiş bir peer'ın kuyruğu; bekleyen bir stall hükmü ya da peer kapanışı mailbox'tan okunup ona atfedilir) |
+
+Sayılmayanlar, bilerek: istemci-tarafı son (EOF, RST, WS kapanış el
+sıkışması) — dökme değildir; sunucu kapanışı (`Shutdown`) — oturum
+hakkında hüküm değil ve toplayıcı onunla birlikte öldüğü için
+gözlenemez; ticket / protokol sürümü reddi — bağlantı açık kalır;
+girdi-boşta tavanı — entity'yi politikaya verir, oturumu bitirmez.
 
 ## 4. Pre-auth tahsis sınırı (Tur B)
 
@@ -135,6 +164,12 @@ tek sıfırlaması (`security.rs`), kısma ile idle penceresinin dikişi
 (`e2e.rs`); hiç okumayan peer → writer pump'un stall raporu ve soketi
 beklemeden çıkışı (`gsb-net` `tcp::tests::stall`), ve uçtan uca oturumun
 bitişi + registry satırının bırakılışı (`write_stall.rs`).
+Stall gözlemlenebilirliği turu: pencereden uzun süren tek bir kareyi
+yavaş ama sürekli okuyan peer HAYATTA kalır — TCP (küçültülmüş çekirdek
+tamponları), QUIC (istemcinin 2 KiB alım penceresi) ve WS yazma yolu
+(`*::tests::slow_reader`); hiç okumayan WS peer'ı hâlâ ölür; her kapanış
+yolu kendi sebep kovasında sayılır ve komşu kovalar kıpırdamaz
+(`server_closes.rs`, `violation/closes.rs`, `write_stall.rs`).
 
 ## 6. NOT-DONE
 

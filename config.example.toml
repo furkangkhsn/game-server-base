@@ -131,21 +131,27 @@ conn_out = 256
 idle_timeout_secs = 30.0
 
 # Session write-stall window, in seconds: the other half of the socket.
-# A connection to whose socket NOTHING has been written successfully for
-# this long — while the server had something to write — is closed by the
-# server, through the same teardown as the idle window above. The two are
+# A connection whose socket has accepted not one BYTE for this long —
+# while the server had something to write — is closed by the server,
+# through the same teardown as the idle window above. The two are
 # a pair: inbound silence cannot see a peer that keeps its connection open
 # and simply stops READING. Such a peer's receive window closes, the
 # writer pump parks inside its socket write, the outbound channel stays
 # full (never closed), the room drops a frame every tick, and the session
 # holds its room slot and registry row while receiving nothing.
 #
-# The bound is on PROGRESS, not age: every completed frame write restarts
-# the window, so a client that is merely BEHIND — still draining, just
-# slowly — is tolerated exactly as before (its dropped snapshots keep
-# being counted). Ten seconds of a socket accepting not one byte is not
-# slowness. The clock lives in the writer pump's write deadline — no extra
-# task or message per connection. 0 disables the check.
+# The bound is on PROGRESS, not age — and on BYTES, not frames: every byte
+# the socket accepts restarts the window, even in the middle of a frame
+# that takes longer than the window to drain, so a client that is merely
+# BEHIND — still draining, just slowly — is tolerated exactly as before
+# (its dropped snapshots keep being counted). Ten seconds of a socket
+# accepting not one byte is not slowness. (Kernel caveat: Linux wakes a
+# writer blocked on a full send buffer only after roughly a third of it
+# has drained, so a reader slower than about buffer / (3 x window) still
+# looks silent between wake-ups.) The clock lives in the writer pump's
+# write deadline — no extra task or message per connection. 0 disables
+# the check. Every close it makes is counted:
+# gsb_net_server_closes_total{reason="write_stall"} (DESIGN §12).
 write_stall_secs = 10.0
 
 # Per-room membership cap. A join into a full room is answered with a

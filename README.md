@@ -68,7 +68,7 @@ there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
 clippy `-D warnings` · test).
 
 ```sh
-# 388 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 409 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -78,8 +78,9 @@ clippy `-D warnings` · test).
 # AOI, PVS, team fog, sharded), frame independence, identity invariant, publishability,
 # e2e, metric flow, load smoke, wire contract (RPC envelope bytes, retired opcodes),
 # ERROR code enumeration, protocol version handshake, session lifecycle (idle window +
-# write stall) and heartbeat-ACK throttling, AFK signal (input-idle clock + default-off
-# ceiling), sharded report folding (per-field fold rule).
+# byte-granular write stall, server-close reasons) and heartbeat-ACK throttling, AFK
+# signal (input-idle clock + default-off ceiling), sharded report folding (per-field
+# fold rule).
 cargo test --workspace
 
 cargo run -p gsb-server                    # default config (0.0.0.0:7777, 1 room, 30 Hz global)
@@ -107,8 +108,15 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 ```
 
 Output: human-readable report + single line `RESULT mode=.. clients=.. joined=..
-snap_per_client_p50=.. tick_hz_med=.. server_hz=.. step_p50_us=.. dropped=..
-server_in_bps=.. server_out_bps=.. peak_conns=..` (scriptable).
+snap_per_client_p50=.. tick_hz_med=.. errors=.. server_closes=.. server_hz=..
+step_p50_us=.. dropped=.. server_in_bps=.. server_out_bps=.. peak_conns=..`
+(scriptable). `errors` counts what the clients observed; `server_closes` counts
+the sessions the server ended on its own initiative (write stall, idle window,
+violation budget, …), with one `server_close_<reason>=N` key per reason — a
+client whose socket the server gave up on never receives the ERROR frame, so only
+the server-side count can show it. A non-zero total also prints a `WARNING` line.
+`--write-stall-secs F` / `--idle-timeout-secs F` override the two session windows
+of the in-process, `--serve` and orchestrated server (0 = disabled).
 Smoke test (`gsb-server/tests/loadgen_smoke.rs`) actually spawns the binary inside the suite
 and verifies `RESULT`; heavy runs are deliberately kept outside the suite
 (to avoid slowing it down or making it flaky).

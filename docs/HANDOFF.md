@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-388 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+409 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -56,6 +56,14 @@ iki kez sayıyordu (50 istemcilik sharded koşu `members=61` diyordu) ve
 loadgen'in ince-histogram percentilleri yanlış nüfusa soruluyordu
 (`steps` MAX, histogramlar SUM ile katlanır → `folded_steps`).
 **Açık yan bulgu kalmadı.**
+
+Sonraki tur (CHANGELOG "stall gözlemlenebilirliği + bayt-granüler
+ilerleme turu"): sunucunun başlattığı her kapanış artık sebebiyle
+sayılıyor (`ServerClose`, `gsb_net_server_closes_total{reason}`,
+loadgen `server_closes=`) ve write-stall saati kare değil BAYT ölçüyor.
+Yeni bir sunucu-kapanış yolu eklersen ona bir `ServerClose` sebebi ver
+(`ConnIn::ServerClosed { cause, .. }`) — istemci-tarafı son ve shutdown
+bilerek sayılmaz. Bekleyen: 10k A/B ölçümü (`1c22c99` ↔ `6f3d8f5`).
 
 **Kaynak ağacı yeniden düzenlendi** (okunabilirlik turu): 40 dosya →
 207. Her modül kendi dizini; hedef dosya boyutu 200-250 satır. Bir
@@ -156,6 +164,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 388 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 409 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

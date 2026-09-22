@@ -75,13 +75,21 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **388** (388/388 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 için
-`docs/CHANGELOG.md` başlığına bakınız). Son tur: **metrik fold
-denetimi** — sharded oda raporunu tek satıra katlayan `fold_rooms`
-alan alan değil toplu denetlendi. Her alanın katlama kuralı
-kararlaştırılıp koda yazıldı ve kural YAPISAL hâle getirildi (tam
-destructure → yeni alan derlemiyor). Bir önceki tur: **AFK sinyali +
+Test sayısı: bugün itibarıyla **409** (409/409 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 → 388 için
+`docs/CHANGELOG.md` başlığına bakınız). Son tur: **stall
+gözlemlenebilirliği + bayt-granüler ilerleme** — 10k ölçümünde sunucu
+4486 oturumu write stall ile kapatırken `RESULT` `errors=0` diyordu.
+Sunucunun başlattığı her kapanış artık sebebiyle sayılıyor
+(`gsb_net_server_closes_total{reason}`, loadgen `server_closes=`), ve
+stall saati kare tamamlanmasını değil soketin kabul ettiği BAYTI
+ölçüyor (pencereden uzun süren bir kareyi okuyan yavaş istemci artık
+öldürülmüyor); yan bulgu olarak WS kapısının kuyruk uyandırması
+düzeltildi. 10k A/B ölçümü iki kommit üzerinde bekliyor. Önceki tur:
+**metrik fold denetimi** — sharded oda raporunu tek satıra katlayan
+`fold_rooms` alan alan değil toplu denetlendi. Her alanın katlama
+kuralı kararlaştırılıp koda yazıldı ve kural YAPISAL hâle getirildi
+(tam destructure → yeni alan derlemiyor). Daha önceki tur: **AFK sinyali +
 girdi-boşta tavanı** — bekleyen dört ürün kararından üçüncüsü kapandı
 (`TickCtx::since_input` sinyali + varsayılan KAPALI
 `max_idle_input_secs` tavanı). Açık kalan tek ürün kararı: geçerli
@@ -383,6 +391,18 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     `send_frame`'de park ediyor, inbox doluyor ve reader `in_tx.send`'de
     parkediyordu — yani idle deadline'ı ARTIK KURULMUYORDU bile. Yeni
     saat bu düğümün dışındadır (writer'ın kendi görevindedir).
+  - [x] **Kapandı — saat baytı ölçüyor + kapanışlar sayılıyor (stall
+    gözlemlenebilirliği turu).** İlk uygulama saati bir karenin
+    gönderimi BÜTÜN OLARAK tamamlanınca sıfırlıyordu: pencereden uzun
+    sürede boşalan bir kareyi okuyan istemci öldürülüyordu (10k
+    ölçümü: 4486 öldürme, ~80 KB kareler) ve bu öldürmeler hiçbir
+    sayaçta görünmüyordu (`errors=0`). Artık soketin kabul ettiği her
+    bayt saati yeniden başlatır (`WriteProgress`), ve sunucunun
+    başlattığı her kapanış sebep bazında sayılır (SECURITY §3.6, DESIGN
+    §12). Kalan kalıntılar (TLS kuyruğu ≤64 KiB, çekirdek uyanma
+    histerezi, WS'de iki pencereye kadar sınır) SECURITY §3.5'te.
+    Bekleyen: ebeveynin 10k A/B ölçümü (`1c22c99` ↔ `6f3d8f5`) — 4486'nın
+    kaçının yavaş-ama-okuyan olduğunu o söyleyecek.
   - [x] **Ürün kararı 2 — AFK/zombi oturum — KAPANDI** (CHANGELOG
     "AFK sinyali + girdi-boşta tavanı turu"). Karar: AFK'nın KENDİSİ
     oyunun kararıdır, base ona bir SİNYAL verir ve bir TAVAN sunar.

@@ -5,6 +5,314 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kapatılanlar (stall gözlemlenebilirliği + bayt-granüler ilerleme turu)
+
+**Tetikleyici (ölçüm).** 10k kapasite ölçümü yeniden koşuldu
+(`gsb-loadgen --orchestrate 10000 --procs 8 --pin --duration 30`, tek
+oda, `all` görünürlük). Sunucu **4486 oturumu** `write stall: nothing
+written to the socket for 10s` ile öldürdü — ama loadgen'in `RESULT`
+satırı `errors=0` diyordu; öldürmeler ancak log grep'iyle bulundu. O
+senaryoda kareler ~80 KB (`max_payload_b=81696`), bağlantı başına çıkış
+~1,2-1,6 MB/s, istemci süreçleri doymuş. Koddan doğrulanan iki kusur:
+
+- **Kusur A — öldürmeler görünmezdi.** Sunucunun başlattığı kapanışlar
+  için hiçbir sayaç yoktu, sebep bazında hiç yoktu. Tıkanmış bir soket
+  ERROR bildirimini taşıyamaz, yani hiçbir istemci-tarafı sayaç
+  kıpırdamaz: bir kapasite ölçümü istemcilerinin yarısını sessizce
+  dökebiliyordu.
+- **Kusur B — stall saati KAREyi ölçüyordu, baytı değil.** Saat yalnız
+  `sink.send(frame)` (ve `flush`) BÜTÜN OLARAK tamamlandığında
+  sıfırlanıyordu; `FrameWriter::drain` tampon bitene dek `poll_write`
+  döngüler. Yani düzenli ama yavaş okuyan istemci (80 KB karelerle
+  ~8 KB/s altı) baytlar akarken öldürülüyordu. Log mesajı ("nothing
+  written") ve korumanın tasarım ilkesi ("ilerleme, yaş değil") bayt
+  diyordu; uygulama kare diyordu. Kareler büyüdükçe koruma sessizce bir
+  YAŞ sınırına dönüşüyordu.
+
+4486'nın kaçının yavaş-ama-okuyan (B), kaçının hiç okumayan olduğu
+bilinmiyor. Kommit sırası bu yüzden: **önce gözlemlenebilirlik
+(davranış değişmez), sonra davranış düzeltmesi** — ebeveyn 10k ölçümünü
+iki kommitte A/B olarak koşacak.
+
+| Kommit | Konu | Test |
+|---|---|---|
+| `1c22c99` | Sunucu kapanışlarını sebep bazında say (+ `--write-stall-secs`) | 388 → 404 |
+| `6f3d8f5` | Stall saatini bayt-granüler yap | 404 → 408 |
+| `2ecc9e5` | WS yazıcı kuyruğunun uyandırmasını kayıtlı tut (yan bulgu) | 408 → **409** |
+
+Hiçbir test silinmedi, gevşetilmedi, `#[ignore]` eklenmedi. Wire
+protokolü değişmedi; loadgen'in iç metrik formatı GSM7 → GSM8.
+Mutex/RwLock/parking_lot/select! yok; clippy 0 uyarı.
+
+### 1. `1c22c99` — sunucu kapanışları, sebep bazında
+
+**Taksonomi** (`gsb_core::conn::ServerClose`; dışa açım sırası
+`ServerClose::ALL`, yeni sebep SONA eklenir):
+
+| Sebep (`reason=`) | Nerede karar veriliyor |
+|---|---|
+| `idle_timeout` | reader pump'un idle penceresi (TCP/TLS/WS/QUIC) **ve** rUDP demux'un idle süpürmesi — soketsiz taşımadaki aynı koruma |
+| `write_stall` | writer pump'un ilerleme saati |
+| `rel_dead` | rUDP REL bandı: ACK ilerlemesi yok **veya** retransmit birikimi tavanı aşıldı (`UdpWriter::die`) |
+| `violation_budget` | bağlantı aktörünün ağırlıklı ihlal bütçesi tükendi |
+| `preauth_budget` | SECURITY §3.3 pre-auth kare bütçesi aşıldı |
+| `stream_rejected` | taşıma gelen bayt akışını REDDETTİ — reader pump'un `InvalidData` çıkışı: `max_frame_bytes` üstü kare, çözülemeyen kare gövdesi, WS protokol ihlali, bozuk TLS kaydı |
+| `conn_cap` | doğumda red: `max_connections` |
+| `unauth_cap` | doğumda red: `max_unauth_conns` (§4) |
+| `superseded` | aynı kimlik aynı odada yeni oturum açtı ("en son kazanan") |
+| `room_gone` | oturumun odası yok edildi / öldü (`ConnIn::RoomGone`) |
+| `outbound_dead` | giden kanal KAPALI bulundu (`w_closing`) ve kayıtlı bir hüküm yok |
+
+**Bilerek sayılmayanlar.** İstemci-tarafı son (EOF, RST, WS kapanış
+el sıkışması, TLS `close_notify`) — aile "sunucu çalışırken hangi
+oturumları döktü" sorusunu yanıtlar, istemcinin gitmesi dökme değildir;
+bu ayrım koda da yazıldı (`ConnIn::Closed` hüküm taşımaz). **Sunucu
+kapanışı** (`ConnIn::Shutdown`): oturum hakkında bir hüküm değil, ve
+zaten gözlenemez — toplayıcı ticker'la aynı teardown'da çıkar, bu
+kapanışlar raporlanır ya da raporlanmaz, zamanlamaya göre (rUDP'de
+FIN olmadığı için her koşunun sonunda 50 oturum böyle kapanır —
+sayılsaydı her temiz rUDP koşusu `server_closes=50` derdi). **Ticket
+/ protokol sürümü reddi**: bağlantı açık kalır (ERROR 10 / 13); yalnız
+SELİ kapatır, o da `violation_budget`'tır. **Girdi-boşta tavanı**
+(`max_idle_input_secs`): ENTITY'yi disconnect politikasına verir,
+taşıma oturumunu bitirmez.
+
+**Yol.** `ConnIn::ServerClosed` artık `cause: ServerClose` taşır (her
+gönderici — iki pump, rUDP demux ve writer, registry'nin üç yolu —
+sebebini koyar); yeni `ConnIn::StreamRejected`, `Closed`'ın sessiz
+teardown ikizidir (önceden bu çıkış "peer closed" gibi `Closed` olarak
+geliyordu — **istemci kapanışı sanılan bir sunucu kararıydı**). Bağlantı
+aktörü İLK hükmü kaydeder (bildirim sonra gönderilemezse `w_closing`
+hükmün üstüne yazmaz) ve tek çıkışındaki SON `ConnSample`'da bir kez
+raporlar (`server_close: Option<ServerClose>`; hüküm varsa tüm
+deltalar sıfırken bile son örnek gider — doğumda reddedilen bağlantı
+hiç kare görmemiştir). Toplayıcı `NetReport::server_closes`'a
+(`ServerCloses`, sebep başına kümülatif) SUM'lar. Dışa açım:
+
+- Prometheus: **tek aile, `reason` etiketi** —
+  `gsb_net_server_closes_total{reason="write_stall"}`; bilinen her
+  sebep sıfırken de basılır (ilk artıştan itibaren rate/alert
+  alınabilsin).
+- Log satırı (`scope=net`): `server_closes=<toplam>` + sebep başına
+  sabit anahtar `server_close_<reason>=N`.
+- loadgen: GSM8 (net kapsamında `violations`'dan sonra sebep başına
+  bir `u64`), `RESULT` satırında `server_closes=<toplam>` (tek sayıya
+  grep bununla çalışır) + her sebep için `server_close_<reason>=N`
+  (hepsi her zaman mevcut, `req_rej_*` ailesi gibi). İnsan özeti
+  `errors=` yanına `server_closes=` koyar, `server closes: total=..
+  by_reason=..` satırı basar, ve toplam sıfırdan büyükse `WARNING: the
+  server ended N session(s) on its own initiative (..); errors=0 counts
+  only what the clients observed — this run is NOT clean`.
+
+**Ölü giden yolun atfı.** Writer pump çıkınca giden kanal kapanır;
+aktör bunu önce başarısız bir `send` olarak öğrenir — tipik olarak
+tıkanmış pump'ın boşaltmayı bıraktığı o DOLU kanalda park etmişken.
+Pump'ın kendi raporu (`ServerClosed`, ya da reader'ın `Closed`'ı) o anda
+mailbox'ta ARKADA bekliyordur; yalnız gönderim hatasına bakan bir aktör
+her write stall'ı `outbound_dead` diye yazardı. İki parça:
+
+1. Writer pump stall hükmünü artık giden kanalı kapatmadan ÖNCE
+   `try_send` ile postalar (park edemez); yalnız DOLU mailbox postayı
+   kapanıştan sonraki awaited `send`'e erteler (eski sıra).
+2. Aktör `w_closing`'de çıkmadan önce mailbox'ını senkron `try_recv`
+   ile tarar (`adopt_pending_close`; await eklenmez, döngü zaten
+   çıkıyor): bekleyen sunucu hükmü benimsenir, bekleyen peer kapanışı
+   → sayılmaz, bekleyen shutdown → sayılmaz, hiçbiri yoksa
+   `outbound_dead`.
+
+**Elenen alternatifler.**
+
+- **Registry'de saymak** (`RegistryMsg::ConnClosed`'a sebep eklemek).
+  Lehine: registry'ye gönderim awaited `send`, kayıpsız; sayaç
+  kümülatif örnekte, düşen örnek zararsız. Elenme: doğumda reddedilen
+  bağlantılar registry tablosuna HİÇ girmez (red yolu tam da budur),
+  yani `conn_cap`/`unauth_cap` ayrı bir yan yol isterdi; ve hüküm
+  aktörde oluşuyor. Seçilen mevcut `ConnSample` yolu; **kabul edilen
+  bedel** (kodda belgeli): son örnek de `try_send`, kanal kapanış anında
+  DOLUysa hüküm kaybolur ve kayıp hiçbir yerde sayılmaz (aktör gitmiştir).
+  Kanal 4096 derin ve her tick boşaltılıyor; bir tick içinde binlerce
+  kapanış gerekir.
+- **Reason string'ini ayrıştırmak** (`"write stall: …"`, `"idle
+  timeout: …"`). Elenme: mesaj metni insan için; sayaç tipe bağlı olmalı.
+  Yeni bir varyant `ServerClose::index`/`label`'in tam `match`'inde
+  derlenmez.
+- **Sebep başına ayrı Prometheus metriği**
+  (`gsb_net_server_closes_write_stall_total`). Elenme: DESIGN'ın
+  "id/kategori isimde değil etikette" kuralı; tüketici aileyi toplar ya
+  da filtreler.
+- **Shutdown'ı saymak.** Elenme: yukarıda — hüküm değil, gözlenemez,
+  rUDP'nin her temiz koşusunu kirletirdi.
+- **Stream reddine ERROR 9 bildirimi eklemek.** Bu kommitte davranış
+  değişmez kuralı gereği ELENDİ (açık kalan küçük iyileştirme; §7).
+- **`outbound_dead`'i doğrudan `write_stall` saymak.** Elenme: writer
+  pump bir yazma HATASINDA da çıkar (peer gitti — istemci-tarafı son);
+  ikisini ayıran tek şey mailbox'taki rapor.
+
+**`--write-stall-secs F`** (loadgen): `--idle-timeout-secs`'in birebir
+aynası (0 = kapalı, belirtilmezse sunucu varsayılanı 10); in-process
+sunucuya, `--serve`'e ve `--orchestrate`'in sunucu sürecine taşınır
+(orkestrasyonda sunucu komut satırında `--write-stall-secs 7.5`
+görüldü). `--help` güncellendi.
+
+### 2. `6f3d8f5` — stall saati bayt sayar
+
+Saat artık taşımanın kabul ettiği HER baytta sıfırlanır:
+
+- **`gsb_net::pump::WriteProgress`** — yazıcı üzerinde monoton bir bayt
+  sayacı; `spawn_pumps` bunu şart koşar. `FrameWriter` (TCP, TLS, QUIC)
+  `n > 0` dönen her `poll_write`'ta artırır. WS kapısının soketini
+  kendi görevi yazar; sayacı o görevin tek yazar olduğu bir atomik
+  (`Arc<AtomicU64>`; kapı zaten `closing: Arc<AtomicBool>` paylaşıyordu)
+  ve görev `write_all` yerine bir `write` döngüsüyle yazar (tek
+  `write_all` future'ı yalnız KARENİN TAMAMI çıkınca "bitti" derdi).
+  `spawn_socket_writer` görevin ve pump'ın sayacını TEK yerden, aynı
+  `Arc` olarak verir — pump'ın yazıcısı hiçbir şeyin yazmadığı bir
+  sayaca bağlanamaz.
+- **Sayaç pump'a nasıl ulaşıyor** (kilitsiz): pump yazıcının sahibi ve
+  bekleyen bir `send` boyunca ona `&mut` ile erişir; `SinkExt::send`'in
+  future'ı o TEK `&mut`'u tuttuğu için bekleme sırasında kimse sayaca
+  bakamazdı. Onun yerine `writer::op::Op`: aynı üç adımı yapar
+  (`poll_ready` → `start_send` → `poll_flush`), aynı `&mut`'u tutar,
+  sayacı O ödünç üzerinden okur — her poll'da (pump soket yazılabilir
+  olduğunda, yani tam baytlar akarken uyandırılır) ve her deadline'da.
+  Deadline dolduğunda baytlar ilerlemişse pencere yeniden başlar ve
+  AYNI bekleyen işlem yeniden beklenir: timeout'a `&mut op` verilir,
+  `op` taşınmaz — yarım yazılmış kare ne kaybolur ne çift gönderilir.
+  Görev yok, zamanlayıcı yok, kilit yok; tek-await + deadline idiomu
+  aynen duruyor.
+
+**Önerilen şekilden sapma ve gerekçesi.** Önerilen: sayaç yalnız
+deadline'da kontrol edilir, ilerlediyse pencere yeniden başlar. Somut
+sorun: kare ORTASINDA okumayı bırakan peer, son bayttan sonra bir
+pencere değil **iki pencereye kadar** yaşar (pencere son kontrolden
+başlar, son bayttan değil) — belgelenen 10 sn'lik sınır sessizce 20
+sn olurdu. Sapma küçük: sayaç ayrıca her poll'da okunur ve değiştiği
+AN damgalanır; soketi pump'ın sahip olduğu kapılarda (TCP/TLS/QUIC)
+sınır yeniden son bayttan itibaren bir penceredir. WS kapısında soket
+başka görevde yazıldığı için sayaç ilk kez deadline'da görülür, orada
+sınır iki pencereye kadardır (belgelendi).
+
+**Kalıntılar (belgelendi).** (1) TLS: kare tamponu boşaldıktan sonra
+rustls'in hâlâ tuttuğu son ≤64 KiB `poll_flush` içinde boşalır ve bayt
+sayısı raporlanmaz; pencere başına bundan yavaş okuyan peer bir karenin
+KUYRUĞUNDA hâlâ takılabilir. (2) Çekirdek: Linux, dolu bir gönderim
+tamponunda bloklu yazıcıyı ancak tamponun yaklaşık üçte biri
+boşalınca uyandırır; tamponu B bayt olan bir soket için B / (3 ×
+pencere)'den yavaş okuyan istemci uyanmalar arasında hâlâ sessiz
+görünür. Bu uygulama tarafından ölçmenin doğal sınırı — ve 10k
+senaryosunda neden önemli olduğunu da açıklar: bellek baskısında
+çekirdek tamponları küçülür, 80 KB'lık kare bir uyanmada sığmaz, kare
+saati çok-uyanmalı her kareyi "ilerleme yok" sayardı.
+
+**Elenen alternatifler.**
+
+- **Yalnız deadline'da gözlem** (önerilen şekil): yukarıda — iki kat
+  sınır.
+- **Yazıcıda zaman damgası** (`poll_write` başına `Instant::now()`, WS
+  için atomik nanosaniye). Elenme: poll-anı gözlemi aynı hassasiyeti
+  saf bir sayaçla veriyor; WS'de de damgayı taşımak için ikinci bir
+  atomik alan gerekirdi.
+- **Deadline'da işlemi düşürüp yeniden kurmak.** Elenme: yarım yazılmış
+  kareyi kaybeder ya da çift gönderir.
+- **Her kapıda `Arc<AtomicU64>`.** Elenme: TCP/TLS/QUIC'te sayaç zaten
+  pump'ın kendi görevinde; paylaşım yalnız soketi başka görevde olan
+  WS'de gerekli.
+- **`Sink` trait object üzerinden okumak.** Mümkün değil: pump yazıcı
+  tipinde generic, ama bekleyen `send` `&mut`'u tuttuğu sürece hiçbir
+  trait metodu çağrılamaz — sorun tip değil, ödünç.
+
+### 3. `2ecc9e5` — yan bulgu: WS kuyruğu pump'ı uyandırmıyordu
+
+WS için bayt testini yazarken çıktı (koddan ve testle doğrulandı).
+`WsWriter::poll_ready` her poll'da taze bir `reserve_owned` future'ı
+kuruyor, `Pending` dönünce DÜŞÜRÜYORDU. Bekleyen bir reserve'ü düşürmek
+bekleyiciyi kanalın bekleme listesinden SİLER: sonradan boşalan slot
+kimseyi uyandırmaz. Kapının 64 karelik kuyruğu bir kez dolunca writer
+pump, başka bir şey onu poll edene dek uyudu — stall saati kapalıyken
+SONSUZA dek (oturum bir daha bayt almaz), açıkken yalnız saatin
+deadline'ı uyandırıyordu: kare saati altında bu, kuyruğu bir pencere
+boyunca dolu kalan HER WS oturumunu, soket ne kadar hızlı boşalırsa
+boşalsın öldürüyordu. Düzeltme: rezervasyon artık
+`tokio_util::sync::PollSender` (bekleyen reserve future'ını poll'lar
+arasında saklar). Kilit: `ws::tests::queue` — stall saati hiç yokken,
+her şey tıkanana kadar hiç okumayan sonra hızla okuyan peer, 100 × 256
+KiB'lik karenin her baytını almalı; düzeltmeden önce ~75 karede takılır.
+
+### 4. Test tekniği
+
+- **TCP** (`tcp::tests::slow_reader`): iki çekirdek tamponu da küçültüldü
+  (`SO_SNDBUF`/`SO_RCVBUF` = 4096; açık boyut otomatik ayarı da
+  kapatır), peer 8 ms'de bir 1 KiB okur, TEK 256 KiB'lik kare ~2 sn'de
+  (~7 pencere) boşalır; peer kareyi eksiksiz almalı, hiçbir kapanış
+  raporlanmamalı, ve boşalma ≥ 3 pencere sürmeli (tamponlar kareyi
+  yutarsa test boş geçmesin diye).
+- **QUIC** (`quic::tests::slow_reader`): geçen turun tekniği — alım
+  penceresini İSTEMCİ ayarlar (2 KiB), sunucu okunanın en fazla o kadar
+  önüne geçebilir, çekirdek tamponu yok. 10 ms'de 1 KiB, 128 KiB kare ~5
+  pencere.
+- **WS** (`ws::tests::slow_reader`): gerçek kapıdan yapılamadı — kabul
+  edilen soketin tamponu testten küçültülemiyor, loopback'te gönderim
+  tamponu 4 MiB'a kadar otomatik büyüyor ve çekirdek uyanma histerezi
+  yavaş okuyucuyu saniyeler arayla megabaytlık patlamalara çeviriyor
+  (bu çekirdeğe dair bir ifade, saate değil). Onun yerine kapının kendi
+  soket-yazıcı görevi ve pump-yüzlü yazıcısı, taşımanın kullandığı AYNI
+  `spawn_socket_writer`'la, dar bir soket üzerinde kuruldu; pump dolu
+  kuyrukta beklerken peer ~125 KB/s okur. Gerçek kapıdan: hiç okumayan
+  WS peer'ı hâlâ ölür (`a_deaf_ws_peer_still_dies`).
+- TCP ve QUIC testleri `1c22c99` üzerinde KIRMIZI (TCP: 40 KB okunmuşken
+  374 ms'de `WriteStall`; QUIC: 29 KB'ta akış kapandı). WS testi yeni
+  API'yi (`spawn_socket_writer`) kullandığı için eski kommitte derlenmez;
+  onun kilidi mutasyonla doğrulandı (§5). Mevcut sağır-peer testleri
+  (`tcp::tests::stall`, `write_stall.rs`) yeşil kaldı.
+
+### 5. Mutation-check
+
+| # | Bozma | Düşen testler |
+|---|---|---|
+| 1 | pump idle hükmü `IdleTimeout` → `WriteStall` | `server_closes::a_silent_client…`, `tcp::tests::idle` (2), `ws::…::idle_timeout_still_applies…` |
+| 2 | writer hükmü `WriteStall` → `IdleTimeout` | `write_stall.rs`, `tcp::tests::stall` (2) |
+| 3 | `ViolationBudget` → `PreauthBudget` | `closes::the_violation_budget…`, `server_closes::a_violating_client…` |
+| 4 | `PreauthBudget` → `ViolationBudget` | `closes::the_preauth_budget…` |
+| 5 | `adopt_pending_close` mailbox'a bakmıyor | `closes::a_dead_outbound_path_adopts…`, `…_behind_a_peer_close…` |
+| 6 | writer önce kanalı kapatıp SONRA postalıyor | `the_stall_verdict_is_posted_before…` — 10 koşunun 10'unda (yarış zorla kaybettirilemez; ölçülen oran) |
+| 7 | reader'ın `InvalidData` → `StreamRejected` sınıflaması kaldırıldı | `an_oversized_frame_is_a_stream_rejection…`, `a_protocol_violation_is_a_stream_rejection` |
+| 8 | toplayıcı hükmü eklemiyor | `metrics::tests::closes`, `server_closes` (2) |
+| 9 | `Op::observe` pencereyi yeniden başlatmıyor (= kare saati) | TCP, QUIC, WS yavaş-okuyucu testleri (3) |
+| 10 | `FrameWriter` bayt saymıyor | TCP, QUIC yavaş-okuyucu |
+| 11 | WS soket görevi bayt saymıyor | WS yavaş-okuyucu |
+| 12 | `WsWriter::poll_ready` `Pending`'de rezervasyonu bırakıyor (`abort_send`) | `ws::tests::queue` |
+
+Kilitlenmeyen tek şey: poll-anı gözleminin HASSASİYETİ (deadline-only
+gözleme geri dönmek yavaş-okuyucu testlerini geçirir; farkı "son
+bayttan bir pencere" ile "iki pencereye kadar" arasında ölçen bir
+zamanlama testi kırılgan olurdu).
+
+### 6. Doğrulama
+
+- `cargo fmt --all --check` → temiz
+- `cargo clippy --workspace --all-targets -- -D warnings` → 0 uyarı
+- `cargo test --workspace` → **409 passed / 0 failed / 1 ignored**
+- `gsb-loadgen -- 50 --duration 3` → `left=50 errors=0
+  server_closes=0`, 11 sebep anahtarının hepsi 0; `--transport udp` ile
+  aynı (registry `conns=50 closes=0` — rUDP'de FIN yok, oturumlar
+  shutdown'la biter ve bilerek sayılmaz); `--topology sharded
+  --shard-count 4 --duration 8` → aynı. Panik yok.
+- Negatif gösterim: `gsb-loadgen 5 --duration 2 --idle-timeout-secs
+  0.05 --move-ms 500` → `errors=0 server_closes=5`, `by_reason=
+  idle_timeout:5` ve WARNING satırı.
+- 10k A/B ölçümü BU TURDA KOŞULMADI (ebeveyn `1c22c99` ve `6f3d8f5`
+  üzerinde koşacak).
+
+### 7. Yapılmayanlar / açık kalanlar
+
+- `stream_rejected` kapanışlarına ERROR 9 bildirimi (davranış değişikliği;
+  istemciye "karen reddedildi" demek faydalı olurdu).
+- Son `ConnSample`'ın dolu kanalda kaybı sayılmıyor (§1, kabul edilen
+  bedel).
+- TLS'in ≤64 KiB kuyruk kalıntısı ve çekirdek uyanma histerezi (§2).
+- loadgen istemcisi ERROR 9'u hâlâ yalnız `violation` / diğer (=
+  `cap_rejected`) diye ayırıyor; sunucu tarafı sayaç artık otorite.
+
 ## Kapatılanlar (sayaç envanteri kapanış turu)
 
 **Tur kapsamı.** P0'ın "Kalan metrik sayaçları için doğru-yol testleri"
