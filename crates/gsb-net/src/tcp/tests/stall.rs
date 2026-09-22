@@ -37,7 +37,7 @@ fn deaf_peer(listener: TcpListener) -> JoinHandle<()> {
 }
 
 /// THE PROPERTY: a peer that never reads ends the session. The writer
-/// pump notices that no write has completed for the whole window and
+/// pump notices that the socket has taken no byte for the whole window and
 /// reports it to the connection actor over the actor's mailbox — the
 /// ordinary `ConnIn::ServerClosed` teardown entry, the same one the
 /// reader's idle window and the rUDP liveness bound use.
@@ -110,7 +110,9 @@ async fn deaf_peer_ends_the_session() {
 /// The converse, so the fix cannot be "close whenever a write is slow":
 /// a peer that is merely BEHIND — it drains, just lazily — keeps its
 /// session. This is the "slow client is tolerated" contract: the clock
-/// measures completed writes, and a draining socket completes them.
+/// measures bytes the socket accepts, and a draining socket accepts them.
+/// (`slow_reader` locks the harder half: a peer slower than one FRAME per
+/// window.)
 #[tokio::test]
 async fn a_draining_peer_is_never_stalled() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -146,7 +148,7 @@ async fn a_draining_peer_is_never_stalled() {
 
     // A trickle whose GAPS are longer than the window (400 ms against
     // 300 ms), for several windows in a row. Two things must hold: each
-    // completed write restarts the clock, and waiting for work is not a
+    // write the socket takes restarts the clock, and waiting for work is not a
     // stall at all — a session with nothing to say for a while (a quiet
     // room, a low-Hz tick) is not a dead direction.
     for _ in 0..4u32 {

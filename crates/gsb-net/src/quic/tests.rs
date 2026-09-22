@@ -204,3 +204,4 @@ async fn handshake_then_frames_flow_both_ways_over_quic() {
 }
 
 mod certs;
+mod slow_reader;

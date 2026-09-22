@@ -11,8 +11,9 @@
 //! - the reader's **idle timeout**: when no client frame arrives within
 //!   the window, the pump notifies the connection actor via
 //!   [`ConnIn::ServerClosed`] and stops;
-//! - the writer's **write stall**: when no write to the socket COMPLETES
-//!   within the window, the same notification is sent (see [`writer`]).
+//! - the writer's **write stall**: when the socket accepts no BYTE within
+//!   the window while there is something to write, the same notification
+//!   is sent (see [`writer`] and [`WriteProgress`]).
 //!
 //! The reader's timeout covers a half-open TCP connection (cable pulled,
 //! power lost, no FIN/RST) that would otherwise sit in the reader forever,
@@ -58,14 +59,36 @@ pub struct PumpTimeouts {
     /// the pump re-wraps every read, so the deadline always starts at the
     /// previous frame's arrival.
     pub idle: Option<Duration>,
-    /// How long the writer may go without a single COMPLETED write to the
-    /// socket while it has something to write. Progress, not age: every
-    /// successful frame write (and flush) restarts the window, so a
-    /// client that is merely BEHIND — still draining bytes, just slowly —
-    /// never trips it, while a client that has stopped draining entirely
-    /// does. An idle outbound path is not a stall either: the window
-    /// restarts whenever the pump is waiting for work.
+    /// How long the writer may go without the socket accepting a single
+    /// BYTE while it has something to write. Progress, not age — and
+    /// bytes, not frames: every byte the transport takes restarts the
+    /// window (see [`WriteProgress`]), so a client that is merely BEHIND —
+    /// still draining, just slowly, even slower than one frame per window
+    /// — never trips it, while a client that has stopped draining
+    /// entirely does. An idle outbound path is not a stall either: the
+    /// window restarts whenever the pump is waiting for work.
     pub write_stall: Option<Duration>,
+}
+
+/// The byte signal the write-stall clock runs on: a monotonic count of
+/// the bytes the transport has accepted from this writer so far.
+///
+/// Only CHANGES are read — the value itself means nothing, and it never
+/// needs to be exact across doors, only to move whenever the socket takes
+/// a byte and never otherwise. Implemented by the stream framing writer
+/// (`FrameWriter`: TCP, TLS, QUIC — bumped on every `poll_write` that
+/// returns `n > 0`) and by the WebSocket door's writer (bumped by the
+/// door's socket-writer task, the only thing that touches its socket).
+///
+/// Why a trait on the writer rather than a value passed in: the pump owns
+/// the writer and polls it through a `&mut` for the whole of a pending
+/// send; reading the count through that same borrow (see
+/// `writer::op::Op`) needs no lock and no cell — the one door whose
+/// socket lives in another task (WebSocket) shares a single-writer
+/// atomic, the way it already shares its `closing` flag.
+pub trait WriteProgress {
+    /// Bytes the transport has accepted so far (monotonic).
+    fn bytes_written(&self) -> u64;
 }
 
 /// Spawn both pump tasks for a connection.
@@ -73,8 +96,9 @@ pub struct PumpTimeouts {
 /// - `reader` yields decoded frames; when it errors, ends, or stays silent
 ///   for `timeouts.idle`, the connection actor is notified via `in_tx`.
 /// - `writer` consumes outbound batches and writes them to the socket;
-///   when no write completes for `timeouts.write_stall`, the connection
-///   actor is notified through the SAME mailbox (see [`writer`]).
+///   when the socket accepts no byte for `timeouts.write_stall`, the
+///   connection actor is notified through the SAME mailbox (see
+///   [`writer`]).
 pub fn spawn_pumps<Reader, Writer>(
     conn: ConnectionId,
     reader: Reader,
@@ -85,7 +109,8 @@ pub fn spawn_pumps<Reader, Writer>(
 ) -> (JoinHandle<()>, JoinHandle<()>)
 where
     Reader: futures::Stream<Item = std::io::Result<FrameBody>> + Unpin + Send + 'static,
-    Writer: futures::Sink<FrameBody, Error = std::io::Error> + Unpin + Send + 'static,
+    Writer:
+        futures::Sink<FrameBody, Error = std::io::Error> + WriteProgress + Unpin + Send + 'static,
 {
     // The writer gets its OWN handle on the actor's mailbox: its verdict
     // travels that IN-PROCESS channel, never the socket — which is

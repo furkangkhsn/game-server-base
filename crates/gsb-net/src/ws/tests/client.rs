@@ -59,7 +59,13 @@ pub(super) struct FakeWsClient {
 
 impl FakeWsClient {
     pub(super) async fn connect(addr: SocketAddr) -> Self {
-        let mut stream = TcpStream::connect(addr).await.expect("client connect");
+        let stream = TcpStream::connect(addr).await.expect("client connect");
+        Self::handshake(stream, addr).await
+    }
+
+    /// The handshake over a stream the caller connected (e.g. one with a
+    /// shrunk receive buffer).
+    pub(super) async fn handshake(mut stream: TcpStream, addr: SocketAddr) -> Self {
         let request = format!(
             "GET /gsb HTTP/1.1\r\n\
              Host: {addr}\r\n\
@@ -85,6 +91,11 @@ impl FakeWsClient {
             stream,
             masks: MaskGen(42),
         }
+    }
+
+    /// Hand the upgraded socket back for raw byte-level reading.
+    pub(super) fn into_stream(self) -> TcpStream {
+        self.stream
     }
 
     /// Raw variant used by the malformed-handshake tests.

@@ -9,7 +9,6 @@ use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
 
@@ -118,11 +117,11 @@ impl WsListenerHandle {
                   in_tx: Mailbox<ConnIn>,
                   out_rx: Inbox<FrameBatch>,
                   timeouts: crate::pump::PumpTimeouts| {
-                let (queue_tx, queue_rx) = mpsc::channel::<WsOut>(OUT_QUEUE_CAPACITY);
-                // Detached on purpose: it is an implementation detail of the
-                // adapter, owned by nobody above the pump layer; it exits by
-                // itself when every queue end is dropped.
-                let _ws_writer = tokio::spawn(ws_writer_task(write_half, queue_rx));
+                // The socket-writer task is detached on purpose: it is an
+                // implementation detail of the adapter, owned by nobody
+                // above the pump layer; it exits by itself when every
+                // queue end is dropped.
+                let (queue_tx, written) = spawn_socket_writer(write_half);
                 let closing = Arc::new(AtomicBool::new(false));
                 let reader = WsReader::new(
                     read_half,
@@ -134,6 +133,7 @@ impl WsListenerHandle {
                     tx: queue_tx,
                     permit: None,
                     closing,
+                    written,
                 };
                 let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)

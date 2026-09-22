@@ -120,9 +120,9 @@ pub struct Config {
     /// that never send *anything* (not even heartbeats) must stay below
     /// this with whatever traffic they do send.
     pub idle_timeout_secs: f64,
-    /// Session-lifecycle write-stall window, in seconds: a connection to
-    /// whose socket NOTHING has been written successfully for this long —
-    /// while the server had something to write — is closed by the server
+    /// Session-lifecycle write-stall window, in seconds: a connection
+    /// whose socket has accepted not one BYTE for this long — while the
+    /// server had something to write — is closed by the server
     /// on its own initiative, through the ordinary teardown. This is the
     /// other half of the socket from [`Self::idle_timeout_secs`], and the
     /// two are a pair: inbound silence cannot see a peer that keeps its
@@ -133,14 +133,19 @@ pub struct Config {
     /// session holds its room slot and registry row while receiving
     /// nothing. `0` disables the check.
     ///
-    /// Default 10 s. The bound is on PROGRESS, not age, so it does not
-    /// touch the "a slow client is tolerated" contract: every completed
-    /// frame write restarts the window, and a client that is merely
-    /// BEHIND still completes writes — its socket keeps draining, just
-    /// lazily, and its dropped snapshots are counted (`dropped_frames`)
-    /// exactly as before. Ten seconds of a socket accepting not one byte
-    /// is not slowness; on a loopback or LAN path it is hundreds of
-    /// kilobytes of kernel buffer that stopped moving entirely.
+    /// Default 10 s. The bound is on PROGRESS, not age — and on BYTES, not
+    /// frames — so it does not touch the "a slow client is tolerated"
+    /// contract: every byte the socket accepts restarts the window, even
+    /// in the middle of a frame that takes longer than the window to
+    /// drain, so a client that is merely BEHIND keeps its session while
+    /// its dropped snapshots are counted (`dropped_frames`) exactly as
+    /// before. Ten seconds of a socket accepting not one byte is not
+    /// slowness; on a loopback or LAN path it is hundreds of kilobytes of
+    /// kernel buffer that stopped moving entirely. (One caveat from the
+    /// kernel, not the clock: Linux wakes a writer blocked on a full send
+    /// buffer only once roughly a third of it has drained, so with a send
+    /// buffer of B bytes a reader slower than about B / (3 × window) is
+    /// still seen as silent between wake-ups.)
     pub write_stall_secs: f64,
     /// Per-room membership cap (see `RoomConfig::max_players`); a join
     /// into a full room is rejected with `ERROR` code 8 (the connection

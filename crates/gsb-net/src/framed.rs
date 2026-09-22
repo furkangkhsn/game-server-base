@@ -27,6 +27,8 @@ use tokio_util::codec::LengthDelimitedCodec;
 
 use gsb_protocol::FrameBody;
 
+use crate::pump::WriteProgress;
+
 /// A length-delimited codec configured the gsb way: little-endian prefix,
 /// `max_frame_bytes` body ceiling (the transport-level guard).
 pub(crate) fn codec(max_frame_bytes: usize) -> LengthDelimitedCodec {
@@ -70,6 +72,9 @@ impl<S: AsyncRead + Unpin> Stream for FrameReader<S> {
 pub(crate) struct FrameWriter<S> {
     inner: S,
     buf: BytesMut,
+    /// Bytes the underlying writer has accepted (the write-stall clock's
+    /// signal — see [`WriteProgress`]).
+    written: u64,
 }
 
 impl<S: AsyncWrite + Unpin> FrameWriter<S> {
@@ -77,6 +82,7 @@ impl<S: AsyncWrite + Unpin> FrameWriter<S> {
         Self {
             inner: sink,
             buf: BytesMut::with_capacity(1024),
+            written: 0,
         }
     }
 
@@ -89,7 +95,24 @@ impl<S: AsyncWrite + Unpin> FrameWriter<S> {
             }
             let n = ready!(Pin::new(&mut this.inner).poll_write(cx, &this.buf))?;
             this.buf.advance(n);
+            // Progress: the socket took `n` bytes of a frame that may be
+            // far from done. (`n == 0` is not progress; the next
+            // iteration surfaces it as the writer's own error or Pending.)
+            this.written += n as u64;
         }
+    }
+}
+
+/// The count moves on every `poll_write` that accepted bytes — for TCP the
+/// kernel's socket buffer, for QUIC the stream's flow-control credit (the
+/// peer's reads), for TLS rustls's bounded plaintext buffer. One residual
+/// on TLS: once the frame buffer here is empty, the LAST ≤64 KiB rustls
+/// still holds drain inside `poll_flush`, which reports no byte count;
+/// a peer slower than that per window can still trip the clock at a
+/// frame's tail.
+impl<S> WriteProgress for FrameWriter<S> {
+    fn bytes_written(&self) -> u64 {
+        self.written
     }
 }
 

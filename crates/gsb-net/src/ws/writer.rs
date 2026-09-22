@@ -5,6 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
@@ -18,6 +19,7 @@ use tokio::sync::mpsc;
 
 use gsb_protocol::FrameBody;
 
+use crate::pump::WriteProgress;
 use crate::ws::*;
 
 /// Outbound work for the single socket-writer task.
@@ -35,19 +37,49 @@ pub(super) enum WsOut {
     Shutdown,
 }
 
+/// Spawn the door's socket-writer task. Returns the queue into it and
+/// the byte count it keeps — the SAME `Arc` the task bumps, handed out
+/// from one place so the pump's writer can never be wired to a count
+/// nothing writes.
+pub(super) fn spawn_socket_writer(sock: OwnedWriteHalf) -> (mpsc::Sender<WsOut>, Arc<AtomicU64>) {
+    let (tx, rx) = mpsc::channel::<WsOut>(OUT_QUEUE_CAPACITY);
+    let written = Arc::new(AtomicU64::new(0));
+    tokio::spawn(ws_writer_task(sock, rx, Arc::clone(&written)));
+    (tx, written)
+}
+
 /// The ONLY task that ever writes to the socket. It awaits exactly one
 /// source — the queue — which merges the writer pump's game traffic with
 /// the reader's control replies (no multiplexing anywhere).
-pub(super) async fn ws_writer_task(mut sock: OwnedWriteHalf, mut rx: mpsc::Receiver<WsOut>) {
-    while let Some(out) = rx.recv().await {
+///
+/// `written` is the write-stall clock's byte signal for this door (see
+/// [`WsWriter`]'s [`WriteProgress`]): this task is the only writer of it,
+/// bumping it on every partial socket write — which is why a frame is
+/// written with a `write` loop rather than `write_all`, whose single
+/// future would only say "done" once the whole frame is out.
+async fn ws_writer_task(
+    mut sock: OwnedWriteHalf,
+    mut rx: mpsc::Receiver<WsOut>,
+    written: Arc<AtomicU64>,
+) {
+    'queue: while let Some(out) = rx.recv().await {
         let bytes = match out {
             WsOut::Game(envelope) => Bytes::from(encode_server_frame(OP_BIN, &envelope)),
             WsOut::Control(op, payload) => Bytes::from(encode_server_frame(op, &payload)),
             // Both halves drop here: the peer sees a prompt TCP FIN.
             WsOut::Shutdown => break,
         };
-        if sock.write_all(&bytes).await.is_err() {
-            break;
+        let mut off = 0;
+        while off < bytes.len() {
+            match sock.write(&bytes[off..]).await {
+                // `Ok(0)` is `write_all`'s WriteZero error: the socket is
+                // done taking bytes.
+                Ok(0) | Err(_) => break 'queue,
+                Ok(n) => {
+                    off += n;
+                    written.fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
         }
     }
     // Last queue end dropped, write failed, or shutdown requested: shut the
@@ -65,6 +97,20 @@ pub(super) struct WsWriter {
     pub(super) tx: mpsc::Sender<WsOut>,
     pub(super) permit: Option<mpsc::OwnedPermit<WsOut>>,
     pub(super) closing: Arc<AtomicBool>,
+    /// Bytes the socket-writer task has written (it is the only writer;
+    /// this side only reads). See [`WriteProgress`] below.
+    pub(super) written: Arc<AtomicU64>,
+}
+
+/// The WS door's byte signal comes from the socket-writer TASK, not from
+/// this sink: the pump's sends here complete when a QUEUE slot frees,
+/// i.e. when the task has finished an earlier frame — counting those
+/// would be the frame-granular clock again, one queue away. A relaxed
+/// load is enough: only a change is ever looked for.
+impl WriteProgress for WsWriter {
+    fn bytes_written(&self) -> u64 {
+        self.written.load(Ordering::Relaxed)
+    }
 }
 
 impl Sink<FrameBody> for WsWriter {

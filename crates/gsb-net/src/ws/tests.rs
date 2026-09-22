@@ -28,6 +28,7 @@ pub(super) const RFC_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 mod client;
 use client::*;
 mod protocol;
+mod slow_reader;
 
 async fn read_http_head(stream: &mut TcpStream) -> String {
     let mut buf = Vec::with_capacity(512);

@@ -118,7 +118,7 @@ impl FrameReader<OwnedReadHalf> {
         max_frame_bytes: usize,
     ) -> (
         impl Stream<Item = std::io::Result<FrameBody>> + 'static,
-        impl Sink<FrameBody, Error = std::io::Error> + 'static,
+        impl Sink<FrameBody, Error = std::io::Error> + crate::pump::WriteProgress + 'static,
     ) {
         let (r, w) = stream.into_split();
         (FrameReader::new(r, max_frame_bytes), FrameWriter::new(w))

@@ -1,23 +1,30 @@
 //! The writer pump and its progress clock. A child of [`super`], so the
 //! stall bookkeeping stays private to the pump module tree.
 //!
-//! The clock answers ONE question: has anything at all been written
-//! successfully to this socket lately? Not "is the client behind" (a
-//! client that is merely behind still drains, and the fan-out already
-//! tolerates it by dropping snapshots), and not "how old is this frame"
-//! (age would punish a low-Hz room and reward a high-Hz one). The
-//! symmetric judgment to the rUDP reliable band's liveness bound, which
-//! asks the same of the peer's cumulative ACK.
+//! The clock answers ONE question: has the socket accepted any BYTE
+//! lately? Not "is the client behind" (a client that is merely behind
+//! still drains, and the fan-out already tolerates it by dropping
+//! snapshots), not "how old is this frame" (age would punish a low-Hz
+//! room and reward a high-Hz one), and not "did the last frame finish"
+//! (a frame that takes longer than the window to drain would kill a peer
+//! that reads all along — and as frames grow, a completion clock quietly
+//! turns into an age bound). The symmetric judgment to the rUDP reliable
+//! band's liveness bound, which asks the same of the peer's cumulative
+//! ACK.
 //!
 //! Observing it while the pump is parked inside an await is the reader's
-//! idiom exactly: wrap the single awaited operation in a deadline. Here
-//! the deadline is what REMAINS of the window since the last completed
-//! write, so a batch of N frames gets one window in total rather than N.
+//! idiom: wrap the single awaited operation in a deadline. The deadline
+//! is what REMAINS of the window since the transport last accepted a byte
+//! ([`WriteProgress`], read through the pending operation itself — see
+//! [`op`]); when it fires with bytes having moved in the meantime, the
+//! window restarts and the SAME pending operation is awaited again (a
+//! half-written frame is never dropped or re-sent). A batch of N frames
+//! still gets one window in total, not N: only bytes restart it.
 
-use std::future::Future;
+mod op;
+
 use std::time::{Duration, Instant};
 
-use futures::SinkExt;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -27,39 +34,51 @@ use gsb_core::conn::{ConnIn, ServerClose};
 use gsb_core::id::ConnectionId;
 use gsb_protocol::FrameBody;
 
+use crate::pump::WriteProgress;
+use op::Op;
+
 /// How one awaited sink operation ended.
 enum Step {
     /// It completed: the socket took the bytes, the clock restarts.
     Wrote,
     /// It failed: the peer is definitively gone (the pre-existing exit).
     Gone,
-    /// It never completed inside the remaining window: the direction is
-    /// dead (see the module docs).
+    /// The transport accepted no byte for a whole window while it was
+    /// pending: the direction is dead (see the module docs).
     Stalled,
 }
 
-/// Await one sink operation under what is left of the stall window,
-/// restarting the window when it completes.
+/// Await one sink operation under the stall window, restarting the
+/// window whenever the transport accepts a byte, and once more when the
+/// operation completes.
 ///
 /// `tokio::time::timeout` wraps a SINGLE future here, exactly as the
 /// reader's idle window does: it is a deadline on one operation, never a
-/// second live source — a write that completes always wins.
-async fn step<F, E>(fut: F, stall: Option<Duration>, progress: &mut Instant) -> Step
+/// second live source — a write that completes always wins. What is new
+/// is only what happens when the deadline fires: the operation is not
+/// dropped (it is borrowed, `&mut op`, not moved into the timeout), the
+/// byte count is read, and if it moved the same operation is awaited
+/// under a fresh window.
+async fn step<W>(mut op: Op<'_, W>, stall: Option<Duration>, progress: &mut Instant) -> Step
 where
-    F: Future<Output = Result<(), E>>,
+    W: futures::Sink<FrameBody, Error = std::io::Error> + WriteProgress + Unpin,
 {
     let outcome = match stall {
-        Some(window) => {
-            let remaining = window.saturating_sub(progress.elapsed());
+        Some(window) => loop {
+            let remaining = window.saturating_sub(op.observe().elapsed());
             if remaining.is_zero() {
                 return Step::Stalled;
             }
-            match tokio::time::timeout(remaining, fut).await {
-                Ok(outcome) => outcome,
-                Err(_) => return Step::Stalled,
+            match tokio::time::timeout(remaining, &mut op).await {
+                Ok(outcome) => break outcome,
+                // Pending at the deadline. Loop: `observe` above re-reads
+                // the byte count — bytes accepted since the last look
+                // (on a door whose socket is written by another task,
+                // this is where they are first seen) restart the window.
+                Err(_) => continue,
             }
-        }
-        None => fut.await,
+        },
+        None => op.await,
     };
     match outcome {
         Ok(()) => {
@@ -79,8 +98,8 @@ where
 /// `RegistryMsg::ConnClosed`, registry/room release), so the death is
 /// indistinguishable from any other end of session.
 ///
-/// `write_stall`: the progress window (`None` disables the clock and the
-/// loop is byte-for-byte the pre-existing one).
+/// `write_stall`: the progress window (`None` disables the clock: every
+/// operation is simply awaited to completion).
 pub(super) fn spawn<Writer>(
     conn: ConnectionId,
     writer: Writer,
@@ -89,7 +108,8 @@ pub(super) fn spawn<Writer>(
     write_stall: Option<Duration>,
 ) -> JoinHandle<()>
 where
-    Writer: futures::Sink<FrameBody, Error = std::io::Error> + Unpin + Send + 'static,
+    Writer:
+        futures::Sink<FrameBody, Error = std::io::Error> + WriteProgress + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut sink = writer;
@@ -102,7 +122,13 @@ where
             // accumulate window.)
             progress = Instant::now();
             for frame in batch {
-                match step(sink.send(frame), write_stall, &mut progress).await {
+                match step(
+                    Op::send(&mut sink, frame, progress),
+                    write_stall,
+                    &mut progress,
+                )
+                .await
+                {
                     Step::Wrote => {}
                     Step::Gone => {
                         warn!(%conn, "writer pump: send failed; peer gone");
@@ -114,7 +140,7 @@ where
                     }
                 }
             }
-            match step(sink.flush(), write_stall, &mut progress).await {
+            match step(Op::flush(&mut sink, progress), write_stall, &mut progress).await {
                 Step::Wrote => {}
                 Step::Gone => {
                     warn!(%conn, "writer pump: flush failed; peer gone");
@@ -167,7 +193,7 @@ where
             // that wedges on the way out cannot pin this task forever.
             None => {
                 drop(out_rx);
-                let _ = step(sink.close(), write_stall, &mut progress).await;
+                let _ = step(Op::close(&mut sink, progress), write_stall, &mut progress).await;
             }
         }
         debug!(%conn, "writer pump stopped");

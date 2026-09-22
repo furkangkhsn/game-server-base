@@ -132,6 +132,10 @@ mod idle;
 
 mod stall;
 
+// The same clock against a peer that is slow but never stops: it must
+// count bytes, not frames.
+mod slow_reader;
+
 // ── the transport refusing the stream (a server verdict) ──
 
 /// A frame over `max_frame_bytes` is the transport REFUSING the stream:

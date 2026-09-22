@@ -75,6 +75,12 @@ async fn active_peer_resets_the_idle_window() {
             Poll::Ready(Ok(()))
         }
     }
+    // No socket, no bytes (and no stall clock armed below either).
+    impl crate::pump::WriteProgress for DiscardSink {
+        fn bytes_written(&self) -> u64 {
+            0
+        }
+    }
 
     /// Stream view over the mpsc receiver (this tokio version's
     /// `Receiver` has no `Stream` impl): frames arrive exactly when

@@ -211,14 +211,16 @@ impl super::ConnectionActor {
             // A bounded `send` resolves `Err` only when the channel is
             // CLOSED, and the sole receiver is this connection's writer
             // pump: it exits when a socket write or flush fails (the peer
-            // is definitively gone) or when nothing has been written to
-            // the socket for the whole write-stall window — and that pump
-            // drops the receiver BEFORE reporting the stall, so this send
-            // fails fast instead of parking on a channel that is full
-            // precisely because nothing is draining it. (`Full` still
-            // parks here in the ordinary case — a merely SLOW reader is
-            // tolerated by design, and stays so: the stall bound measures
-            // completed writes, not backlog.)
+            // is definitively gone) or when the socket has accepted no
+            // byte for the whole write-stall window — and on a stall that
+            // pump posts its verdict to the mailbox and THEN drops the
+            // receiver, so this send fails fast instead of parking on a
+            // channel that is full precisely because nothing is draining
+            // it, and the verdict is already waiting for the run loop to
+            // adopt (`adopt_pending_close`). (`Full` still parks here in
+            // the ordinary case — a merely SLOW reader is tolerated by
+            // design, and stays so: the stall bound measures bytes the
+            // socket accepts, not backlog.)
             //
             // So `Err` means this connection can never receive another
             // byte. Record it; the run loop tears the session down after

@@ -67,7 +67,7 @@ pub use transport::{DEFAULT_MAX_MESSAGE_BYTES, WsTransport};
 use frame::{RawFrame, apply_mask, encode_game_envelope, encode_server_frame};
 use handshake::perform_upgrade;
 use reader::WsReader;
-use writer::{WsOut, WsWriter, ws_writer_task};
+use writer::{WsOut, WsWriter, spawn_socket_writer};
 
 use std::time::Duration;
 
