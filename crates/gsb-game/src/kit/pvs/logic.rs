@@ -5,40 +5,46 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::World;
+use bevy_ecs::prelude::{With, World};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
-use prost::Message;
 
+use crate::kit::codec::RecordCodec;
+use crate::kit::common::{put_entity_records, write_full_header};
+use crate::kit::game::Game;
 use crate::kit::identity::WireId;
 use crate::kit::pvs::*;
-use crate::kit::seam;
-use crate::kit::seam::Position;
+use crate::kit::space::SectorMap;
 
-impl GameLogic<World> for SectorRoom {
-    type GroupKey = Sector;
+/// The game's broadcast marker (the codec's `Marker`).
+type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
+/// The game's record query (the codec's `Query`).
+type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
+
+impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
+    type GroupKey = M::Sector;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     /// The connection's group is the sector its entity is in (re-evaluated
     /// every tick by the room — a crossing player changes sector and thus
-    /// group, and starts receiving the new sector's snapshot).
-    fn group_of(&self, world: &World, player: PlayerId) -> Sector {
+    /// group, and starts receiving the new sector's snapshot). What the
+    /// room cannot place — a player without an entity, an entity without
+    /// the map's position — is grouped in the map's containment sector.
+    fn group_of(&self, world: &World, player: PlayerId) -> M::Sector {
         let Some(&entity) = self.player_entity.get(&player) else {
-            return Sector(SECTOR_OUT);
+            return self.map.outside();
         };
-        let pos = world
-            .entity(entity)
-            .get::<Position>()
-            .copied()
-            .unwrap_or_default();
-        sector_of(pos)
+        match world.entity(entity).get::<M::Pos>() {
+            Some(pos) => self.map.sector_of(pos),
+            None => self.map.outside(),
+        }
     }
 
     /// Encode `sector`'s snapshot: the union of the buckets of every sector
@@ -50,19 +56,16 @@ impl GameLogic<World> for SectorRoom {
         &mut self,
         _world: &mut World,
         ctx: &TickCtx,
-        sector: &Sector,
+        sector: &M::Sector,
         // Single-room execution: no boundary records exist here.
         _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        let mut content: HashMap<u64, (i32, i32)> = HashMap::new();
-        let mask = VISIBLE_FROM[sector.0 as usize];
-        for s in 0..VISIBLE_FROM.len() as u8 {
-            if mask & (1 << s) != 0
-                && let Some(bucket) = self.buckets.get(&Sector(s))
-            {
-                for &(wire_id, x, y) in bucket {
-                    content.insert(wire_id, (x, y));
+        let mut content: HashMap<u64, Wire<G>> = HashMap::new();
+        for s in self.map.visible_from(*sector) {
+            if let Some(bucket) = self.buckets.get(&s) {
+                for (wire_id, wire) in bucket {
+                    content.insert(*wire_id, wire.clone());
                 }
             }
         }
@@ -73,23 +76,14 @@ impl GameLogic<World> for SectorRoom {
             return false;
         }
 
-        let mut snap = seam::WorldSnapshot {
-            sequence: ctx.tick,
-            entities: Vec::with_capacity(content.len()),
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
-        for (&wire_id, &(x, y)) in &content {
-            snap.entities.push(seam::EntityRecord {
-                entity: wire_id,
-                x,
-                y,
-            });
-        }
-        // In-memory encode cannot fail; treat a failure as a bug.
-        snap.encode(out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        // The FULL envelope (header + one record per entity, in content
+        // order), byte-identical to the typed `WorldSnapshot` encoding.
+        write_full_header(out, ctx.tick);
+        put_entity_records(
+            self.game.codec(),
+            content.iter().map(|(id, wire)| (*id, wire)),
+            out,
+        );
 
         self.encoded += content.len() as u64;
         self.last.insert(*sector, content);
@@ -97,11 +91,11 @@ impl GameLogic<World> for SectorRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        crate::kit::common::on_join(
+        crate::kit::common::join(
+            &mut self.game,
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.minter,
-            self.spawn_half,
             world,
             conn,
             &mut self.input,
@@ -151,16 +145,15 @@ impl GameLogic<World> for SectorRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        seam::synthesize_bot_moves(
-            self.park_ledger
-                .values()
-                .filter(|e| e.bot)
-                .map(|e| (e.player, e.entity)),
+        crate::kit::common::ingest(
+            &mut self.game,
             world,
             ctx,
             actions,
-        );
-        seam::ingest(&self.player_entity, world, actions, &mut self.input)
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+        )
     }
 
     /// The per-connection input acknowledgment (see `OpenRoom::private`).
@@ -168,7 +161,7 @@ impl GameLogic<World> for SectorRoom {
         &mut self,
         _world: &mut World,
         player: PlayerId,
-        _group: &Sector,
+        _group: &M::Sector,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
@@ -176,27 +169,33 @@ impl GameLogic<World> for SectorRoom {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::kit::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::systems(&mut self.game, world, ctx);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities
-        // with a `Position` but no `WireId` get the next serial, so the
-        // broadcast set is exactly "has a `Position`" — structural, never
-        // silently invisible. Done here (before the bucket build) so
-        // freshly-stamped entities are in the buckets the broadcast phase
-        // reads.
-        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
+        // with the codec's marker but no `WireId` get the next serial, so
+        // the broadcast set is exactly "has the marker" — structural,
+        // never silently invisible. Done here (before the bucket build)
+        // so freshly-stamped entities are in the buckets the broadcast
+        // phase reads.
+        crate::kit::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
 
         // Bucket the world by sector, once per tick (each entity exactly
         // once); a sector's snapshot is the union of the buckets its
-        // visibility table entry names.
+        // visibility entry names. An entity without the map's position
+        // lands in the containment sector.
         self.buckets.clear();
-        let mut query = world.query::<(&WireId, &Position)>();
-        for (wire_id, pos) in query.iter(world) {
-            let s = sector_of(*pos);
+        let codec = self.game.codec();
+        let mut query =
+            world.query_filtered::<(&WireId, RecordQuery<G>, Option<&M::Pos>), With<Marker<G>>>();
+        for (wire_id, item, pos) in query.iter(world) {
+            let s = match pos {
+                Some(pos) => self.map.sector_of(pos),
+                None => self.map.outside(),
+            };
             self.buckets
                 .entry(s)
                 .or_default()
-                .push((wire_id.get(), pos.x as i32, pos.y as i32));
+                .push((wire_id.get(), codec.wire(item)));
         }
     }
 
@@ -207,4 +206,4 @@ impl GameLogic<World> for SectorRoom {
     }
 }
 
-impl RoomLogic<World> for SectorRoom {}
+impl<G: Game, M: SectorMap> RoomLogic<World> for SectorRoom<G, M> {}

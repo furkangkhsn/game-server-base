@@ -57,17 +57,8 @@ pub(crate) use crate::demo::codec::DemoCodec;
 
 // ── SectorMap (§4.2) ─────────────────────────────────────────────────────
 
-// SectorMap::Sector: the sector key (the sector room's GroupKey) and the
-// out-of-map sector the room falls back to. Consumer: PVS.
-pub(crate) use crate::demo::sectors::{SECTOR_OUT, Sector};
-
-// SectorMap::sector_of: point-in-convex-sector lookup over the demo map.
-// Consumer: PVS.
-pub(crate) use crate::demo::sectors::sector_of;
-
-// SectorMap::visible_from: the static visibility table (a u16 bitmask per
-// sector today; §8.4 notes its 16-sector ceiling). Consumer: PVS.
-pub(crate) use crate::demo::sectors::VISIBLE_FROM;
+// (no entry) The sector room is generic over `SectorMap`; the demo hands
+// its map data to the kit's `ConvexSectors2` preset.
 
 // ── Partition (§4.2) ─────────────────────────────────────────────────────
 
@@ -82,8 +73,7 @@ pub(crate) use crate::demo::sectors::VISIBLE_FROM;
 // (`DemoGame`); the entries below are the same hooks called directly by
 // the rooms not yet generic over the game.
 
-// Game::spawn_player (the kit stamps WireId). Consumers: team, PVS (via
-// `common::on_join`), sharded.
+// Game::spawn_player (the kit stamps WireId). Consumer: sharded.
 pub(crate) use crate::demo::spawn::spawn_player;
 
 // Game::Mig + capture: the migrating game state the sharded rooms read
@@ -115,10 +105,6 @@ pub(crate) use crate::demo::rpc::handle_request;
 // sharded rooms; `DemoGame` state in the converted ones). Consumer:
 // sharded.
 pub(crate) use crate::demo::economy::EconomyService;
-
-// Game::spawn_player's configuration: the default spawn map half-size
-// the room constructors fall back to. Consumers: team, PVS.
-pub(crate) use crate::demo::spawn::DEFAULT_SPAWN_HALF;
 
 // Game::SNAPSHOT_OP / Game::PRIVATE_OP: the frame opcodes. Consumers:
 // team, PVS, sharded.
@@ -156,4 +142,4 @@ pub(crate) use crate::demo::components::DEFAULT_SPEED;
 
 // The demo map's named sectors the PVS tests address directly.
 #[cfg(test)]
-pub(crate) use crate::demo::sectors::{SECTOR_EAST, SECTOR_NW, SECTOR_WEST};
+pub(crate) use crate::demo::sectors::{SECTOR_EAST, SECTOR_NW, SECTOR_OUT, SECTOR_WEST};

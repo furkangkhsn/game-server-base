@@ -107,10 +107,20 @@ pub mod aoi {
         crate::kit::aoi::AoiRoom<crate::demo::play::DemoGame, crate::kit::space::Grid2>;
 }
 
-/// The PVS room and the demo map's sector key (compatibility path).
+/// The PVS room and the demo map's sector key (compatibility path; the
+/// strategy's design notes live on the kit's generic
+/// [`SectorRoom`](crate::kit::pvs::SectorRoom)).
 pub mod pvs {
-    pub use crate::demo::sectors::{SECTOR_OUT, Sector};
-    pub use crate::kit::pvs::SectorRoom;
+    pub use crate::demo::sectors::SECTOR_OUT;
+    pub use crate::kit::space::Sector;
+
+    /// The PVS room running the demo game over its four-sector map in the
+    /// kit's convex-sector preset (constructors: `new`, `with_spawn_half`,
+    /// `with_disconnect_grace`).
+    pub type SectorRoom = crate::kit::pvs::SectorRoom<
+        crate::demo::play::DemoGame,
+        crate::kit::space::ConvexSectors2<crate::demo::components::Position>,
+    >;
 }
 
 /// The sharded rooms, their grid partition and migration state, and the

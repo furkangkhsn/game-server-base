@@ -1,7 +1,7 @@
 //! The demo's PVS map (hand-written, convex, tiles the [-50, 50]² arena):
-//! the sectors, the precomputed static visibility table, and the
-//! point-in-sector lookup the sector room groups by (the future
-//! `SectorMap`, KIT-ARCHITECTURE §4.2 — map data is the game's, §2).
+//! the sectors and the precomputed static visibility table, handed to the
+//! kit's 2D sector preset (`ConvexSectors2`, the `SectorMap` of
+//! KIT-ARCHITECTURE §4.2 — map data is the game's, §2).
 //!
 //! ```text
 //!        C | D            y
@@ -24,15 +24,12 @@
 //!   exactly one sector (shared edges go to the first sector in the fixed
 //!   test order — deterministic). A position outside every sector (a
 //!   client sending a target beyond the map) lands in [`SECTOR_OUT`],
-//!   which sees only itself: the broadcast set stays "has a `Position`"
-//!   and a runaway entity can never leak into the map's visibility.
+//!   (the preset's containment sector), which sees only itself: the
+//!   broadcast set stays "has a `Position`" and a runaway entity can
+//!   never leak into the map's visibility.
 
 use crate::demo::components::Position;
-
-/// A map sector — the PVS group key (a region *inside* a room; deliberately
-/// not `RoomId`, which names a gsb room).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sector(pub u8);
+use crate::kit::space::{ConvexSectors2, Sector};
 
 /// The hand-written sectors of the demo map (module docs, "The map"):
 /// convex polygons, counter-clockwise, tiling the [-50, 50]² arena.
@@ -44,7 +41,8 @@ pub(crate) const SECTOR_NW: u8 = 2;
 /// `C`: x ∈ [-50, -10], y ∈ [20, 50].
 const SECTOR_NE: u8 = 3;
 /// `D`: x ∈ [-10, 50], y ∈ [20, 50].
-/// Positions outside every hand-written sector (a target beyond the map).
+/// Positions outside every hand-written sector (a target beyond the map):
+/// the preset's containment sector, one past the last polygon.
 pub const SECTOR_OUT: u8 = 4;
 
 /// The sector polygons (index = sector id, counter-clockwise winding).
@@ -59,9 +57,9 @@ const SECTORS: [[(f32, f32); 4]; 4] = [
     [(-10.0, 20.0), (50.0, 20.0), (50.0, 50.0), (-10.0, 50.0)],
 ];
 
-/// The precomputed **static** visibility table: for each sector, a bitmask
-/// of the sectors visible *from* it (itself included). This is the PVS —
-/// the hand-authored map geometry (transitions/sightlines) frozen into a
+/// The precomputed **static** visibility table: for each sector, the
+/// sectors visible *from* it (itself included). This is the PVS — the
+/// hand-authored map geometry (transitions/sightlines) frozen into a
 /// table the runtime only reads.
 ///
 /// - `A` sees `A` and `C` (open passage north of the west lobby).
@@ -71,48 +69,35 @@ const SECTORS: [[(f32, f32); 4]; 4] = [
 /// - `A` and `B` see NEITHER each other: they are geometrically adjacent
 ///   (3 units apart at the closest) but separated by a wall — the table
 ///   is the law, not the distance.
-/// - `OUT` sees only itself (a runaway entity leaks into nothing).
-pub(crate) const VISIBLE_FROM: [u16; 5] = [
-    1 << SECTOR_WEST | 1 << SECTOR_NW,
-    1 << SECTOR_EAST | 1 << SECTOR_NE,
-    1 << SECTOR_WEST | 1 << SECTOR_NW | 1 << SECTOR_NE,
-    1 << SECTOR_EAST | 1 << SECTOR_NW | 1 << SECTOR_NE,
-    1 << SECTOR_OUT,
+/// - `OUT` sees only itself (the preset's rule: a runaway entity leaks
+///   into nothing).
+const VISIBLE_FROM: [&[u8]; 4] = [
+    &[SECTOR_WEST, SECTOR_NW],
+    &[SECTOR_EAST, SECTOR_NE],
+    &[SECTOR_WEST, SECTOR_NW, SECTOR_NE],
+    &[SECTOR_EAST, SECTOR_NW, SECTOR_NE],
 ];
 
-/// True when `(x, y)` is inside (or on the edge of) a counter-clockwise
-/// convex polygon. A point is inside a convex polygon iff all edge
-/// cross products have the same sign (edge points count as inside, so
-/// shared sector boundaries are owned by the first sector in test order —
-/// deterministic).
-fn in_convex(poly: &[(f32, f32); 4], x: f32, y: f32) -> bool {
-    let mut sign = 0.0f32;
-    let n = poly.len();
-    for i in 0..n {
-        let (ax, ay) = poly[i];
-        let (bx, by) = poly[(i + 1) % n];
-        let cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
-        if cross.abs() < 1e-9 {
-            continue; // on the edge
-        }
-        let s = cross.signum();
-        if sign == 0.0 {
-            sign = s;
-        } else if s != sign {
-            return false;
-        }
-    }
-    true
+/// The demo map as the kit's convex-sector preset over [`Position`].
+pub fn demo_map() -> ConvexSectors2<Position> {
+    ConvexSectors2::new(
+        SECTORS.iter().map(|poly| poly.to_vec()).collect(),
+        VISIBLE_FROM
+            .iter()
+            .map(|list| list.iter().map(|&s| Sector(s)).collect())
+            .collect(),
+    )
 }
 
-/// The sector containing `pos`: the first (fixed order) sector whose
-/// polygon contains it, or [`SECTOR_OUT`] when outside all of them.
-#[inline]
-pub(crate) fn sector_of(pos: Position) -> Sector {
-    for (i, poly) in SECTORS.iter().enumerate() {
-        if in_convex(poly, pos.x, pos.y) {
-            return Sector(i as u8);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kit::space::SectorMap;
+
+    /// The demo's named out-of-map sector is the preset's containment
+    /// sector.
+    #[test]
+    fn sector_out_is_the_containment_sector() {
+        assert_eq!(demo_map().outside(), Sector(SECTOR_OUT));
     }
-    Sector(SECTOR_OUT)
 }

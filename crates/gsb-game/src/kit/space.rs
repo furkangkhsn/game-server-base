@@ -13,8 +13,10 @@ use std::hash::Hash;
 
 use bytes::BytesMut;
 
+mod sectors;
 mod vision;
 
+pub use sectors::{ConvexSectors2, Sector, SectorMap};
 pub use vision::{Vision, VisionGrid2};
 
 /// Where a value lies on the ground plane — the accessor the kit's 2D

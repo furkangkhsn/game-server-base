@@ -7,10 +7,12 @@
 use crate::demo::components::Position;
 use crate::demo::economy::EconomyService;
 use crate::demo::play::DemoGame;
+use crate::demo::sectors::demo_map;
 use crate::demo::spawn::DEFAULT_SPAWN_HALF;
 use crate::kit::aoi::AoiRoom;
+use crate::kit::pvs::SectorRoom;
 use crate::kit::room::OpenRoom;
-use crate::kit::space::{Grid2, VisionGrid2};
+use crate::kit::space::{ConvexSectors2, Grid2, VisionGrid2};
 use crate::kit::team::TeamRoom;
 
 impl OpenRoom<DemoGame> {
@@ -80,5 +82,33 @@ impl TeamRoom<DemoGame, VisionGrid2<Position>> {
     #[must_use]
     pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self::with_game(DemoGame::new(half), VisionGrid2::new(vision_radius))
+    }
+}
+
+/// The demo's PVS: its hand-authored four-sector map (`demo_map`) in the
+/// kit's convex-sector preset over the demo's `Position`.
+impl SectorRoom<DemoGame, ConvexSectors2<Position>> {
+    /// Build a PVS room over the demo map and the default 100×100 spawn
+    /// arena.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_spawn_half(DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build a PVS room whose spawn map has half-size `half`. The demo
+    /// *PVS map* stays the hand-authored 100×100 sectors; this only
+    /// affects where joins place entities (a `spread`-profile run places
+    /// them outside every sector — they land in the containment sector
+    /// and see only themselves, which is exactly what the PVS strategy
+    /// promises for off-map positions).
+    #[must_use]
+    pub fn with_spawn_half(half: f32) -> Self {
+        Self::with_game(DemoGame::new(half), demo_map())
+    }
+}
+
+impl Default for SectorRoom<DemoGame, ConvexSectors2<Position>> {
+    fn default() -> Self {
+        Self::new()
     }
 }

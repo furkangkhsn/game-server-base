@@ -1,13 +1,16 @@
-//! [`SectorRoom`]: per-map-segment (PVS) game logic for the demo game.
+//! [`SectorRoom`]: per-map-segment (PVS) game logic, generic over the
+//! game (`G: Game`) and the map (`M: SectorMap`, KIT-ARCHITECTURE §4.2).
+//! The sections below speak in the demo's terms (its four-sector map
+//! through the kit's `ConvexSectors2` preset).
 //!
 //! ## What it changes (and what it deliberately does not touch)
 //!
 //! Visibility here is **not distance at all** — it is the map's own
-//! geometry. The map is a set of hand-defined **convex sectors**
-//! ([`SECTORS`]) plus the transitions between them, and a **precomputed
-//! static visibility table** ([`VISIBLE_FROM`]): which sectors see which
-//! sectors. An entity's group is the sector containing its position
-//! (`GroupKey = Sector` — deliberately *not* `RoomId`, which already means
+//! geometry. The map is a set of hand-defined **convex sectors** plus
+//! the transitions between them, and a **precomputed static visibility
+//! table**: which sectors see which sectors. An entity's group is the
+//! sector containing its position (`GroupKey = Sector` — deliberately
+//! *not* `RoomId`, which already means
 //! a gsb room; a sector is a region *inside* a room); a sector's snapshot
 //! is the union of the entities of every sector the table says is visible
 //! from it. The room's *existing* machinery then produces one snapshot per
@@ -20,7 +23,7 @@
 //! precomputation a real PVS pipeline (BSP/portal graphs) would produce.
 //! What the seam proves is that "visibility" is a *static lookup over
 //! hand-authored map data* — the runtime does `sector_of(position)` (a
-//! point-in-convex test) and then `VISIBLE_FROM[sector]` (a table read),
+//! point-in-convex test) and then `visible_from(sector)` (a table read),
 //! never a distance comparison. That is what separates PVS from distance
 //! AOI: two entities **3 units apart** do not see each other when their
 //! sectors are unlinked in the table (a wall), and entities 60 units apart
@@ -31,10 +34,10 @@
 //!
 //! The map — the convex sectors, the static visibility table and the
 //! out-of-map sector — is game data (KIT-ARCHITECTURE §2: map data is the
-//! game's), so it lives with the demo game and reaches this room through
-//! the seam (`sector_of`, `VISIBLE_FROM`, `Sector`, `SECTOR_OUT`; the
-//! future `SectorMap`, §4.2). The room only does the two lookups:
-//! `sector_of(position)` and `VISIBLE_FROM[sector]`.
+//! game's), so the room takes it as a [`SectorMap`] value (the demo: its
+//! hand-authored polygons and table in the kit's `ConvexSectors2`
+//! preset). The room only does the two lookups: `sector_of(position)`
+//! and `visible_from(sector)`.
 //!
 //! ## Alternatives considered and rejected
 //!
@@ -75,81 +78,71 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
-use gsb_ecs::SystemRunner;
 
-use crate::kit::seam;
-use crate::kit::seam::{SECTOR_OUT, Sector, VISIBLE_FROM, sector_of};
+use crate::kit::common::{InputSeq, ParkEntry, ParkPolicy};
+use crate::kit::game::{Game, Wire};
+use crate::kit::identity::Minter;
+use crate::kit::space::SectorMap;
+// The demo map's out-of-map sector and the preset's sector key, in
+// scope for the in-module tests (they address sectors directly through
+// `use super::*`).
+#[cfg(test)]
+use crate::kit::seam::SECTOR_OUT;
+#[cfg(test)]
+use crate::kit::space::Sector;
 
 /// The PVS room: sector group key, static-table visibility, per-sector
 /// "no change" ledger.
-pub struct SectorRoom {
-    runner: SystemRunner,
+pub struct SectorRoom<G: Game, M: SectorMap> {
+    /// The game (its hooks, its codec and its own state).
+    game: G,
+    /// The map: sectors + static visibility table (game data).
+    map: M,
     /// Which entity belongs to which player (Faz 2: keyed by the STABLE
     /// player identity — the mapping survives resume unchanged).
     player_entity: HashMap<PlayerId, Entity>,
-    /// The player-identity counter (the demo's [`PlayerId`] minting
+    /// The player-identity counter (the room's [`PlayerId`] minting
     /// policy); monotonic, never reused within the room's lifetime.
     next_player_id: u64,
     /// The disconnect-park policy + ledger (see `crate::kit::common` and
-    /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
-    park: crate::kit::common::ParkPolicy,
-    park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
+    /// RECONNECT §3/§9; the hook bodies are shared with every room).
+    park: ParkPolicy,
+    park_ledger: HashMap<String, ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
-    minter: crate::kit::identity::Minter,
-    /// Half-size of the square spawn map (see the demo's `spawn_pos`).
-    /// The demo *PVS map* stays the hand-authored 100×100 sectors; this
-    /// only affects where `on_join` places entities (a `spread`-profile
-    /// run places them outside every sector — they land in
-    /// [`SECTOR_OUT`] and see only themselves, which is exactly what the
-    /// PVS strategy promises for off-map positions).
-    spawn_half: f32,
-    /// Per-sector "no change" ledger: `sector → (wire id → (x, y))`, the
-    /// exact wire content of that sector's last emitted snapshot. Keyed by
-    /// group (sector) per the [`GameLogic::snapshot`] contract.
-    last: HashMap<Sector, HashMap<u64, (i32, i32)>>,
+    minter: Minter,
+    /// Per-sector "no change" ledger: `sector → (wire id → wire value)`,
+    /// the exact wire content of that sector's last emitted snapshot.
+    /// Keyed by group (sector) per the [`GameLogic::snapshot`] contract.
+    last: HashMap<M::Sector, HashMap<u64, Wire<G>>>,
     /// Per-tick bucket cache, rebuilt in [`Self::update`]: `sector →
-    /// [(wire id, x, y)]`. Each entity is bucketed **once** per tick; a
-    /// sector's snapshot is the union of the buckets of the sectors
-    /// [`VISIBLE_FROM`] says are visible from it, assembled by reference
-    /// without re-querying the world.
-    buckets: HashMap<Sector, Vec<(u64, i32, i32)>>,
+    /// [(wire id, wire value)]`. Each entity is bucketed **once** per
+    /// tick; a sector's snapshot is the union of the buckets of the
+    /// sectors the map says are visible from it, assembled without
+    /// re-querying the world.
+    buckets: HashMap<M::Sector, Vec<(u64, Wire<G>)>>,
     /// Per-player input sequence state (strategy-independent; see
-    /// the demo's `ingest` / `crate::kit::common::emit_private`).
-    input: crate::kit::common::InputSeq,
+    /// `crate::kit::common::emit_private`).
+    input: InputSeq,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
 }
 
-impl Default for SectorRoom {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SectorRoom {
-    /// Build a PVS room over the demo map (module docs, "The map") and the
-    /// default 100×100 spawn arena.
+impl<G: Game, M: SectorMap> SectorRoom<G, M> {
+    /// Build a PVS room running `game` over the map `map`.
     #[must_use]
-    pub fn new() -> Self {
-        Self::with_spawn_half(seam::DEFAULT_SPAWN_HALF)
-    }
-
-    /// Build a PVS room whose spawn map has half-size `half` (see the
-    /// `spawn_half` field docs for what that means on the fixed PVS map).
-    #[must_use]
-    pub fn with_spawn_half(half: f32) -> Self {
+    pub fn with_game(game: G, map: M) -> Self {
         Self {
-            runner: seam::movement_runner(),
+            game,
+            map,
             player_entity: HashMap::new(),
             next_player_id: 0,
-            park: crate::kit::common::ParkPolicy::default(),
+            park: ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            minter: crate::kit::identity::Minter::sequential(),
-            spawn_half: half.max(1.0),
+            minter: Minter::sequential(),
             last: HashMap::new(),
             buckets: HashMap::new(),
-            input: crate::kit::common::InputSeq::default(),
+            input: InputSeq::default(),
             encoded: 0,
         }
     }
@@ -160,6 +153,16 @@ impl SectorRoom {
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
         self
+    }
+
+    /// The game this room runs.
+    pub fn game(&self) -> &G {
+        &self.game
+    }
+
+    /// The game this room runs, for configuration after construction.
+    pub fn game_mut(&mut self) -> &mut G {
+        &mut self.game
     }
 }
 

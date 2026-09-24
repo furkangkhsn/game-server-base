@@ -46,49 +46,11 @@ pub(crate) use park::*;
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Component, Entity, With, Without, World};
-use gsb_core::id::{ConnectionId, PlayerId};
-use gsb_core::room::{Admission, TickCtx};
+use gsb_core::id::PlayerId;
+use gsb_core::room::TickCtx;
 use gsb_ecs::{SystemCtx, SystemRunner};
 
 use crate::kit::identity::{Minter, WireId};
-use crate::kit::seam;
-
-/// The player-spawn path of the rooms that are not yet generic over the
-/// game (team, PVS — phase 1b; the generic twin is [`join`]): the
-/// deterministic spawn
-/// point (same distribution in every strategy — a fair comparison in the
-/// load generator), a fresh wire identity AND a fresh stable player
-/// identity through their minting counters, the player→entity table
-/// update, and the input session reset (a (re)join is a new input
-/// session — see [`InputSeq`]). Returns the [`Admission`] (the stable
-/// `PlayerId` keys every table from here on; the entity/wire id also
-/// goes to the joiner in `JOIN_ROOM_RESULT`, so both paths share one
-/// space). Identity policy note: the demo mints a fresh PlayerId per
-/// first join; resume stability comes from the park ledger carrying it.
-pub(super) fn on_join(
-    player_entity: &mut HashMap<PlayerId, Entity>,
-    next_player_id: &mut u64,
-    minter: &mut Minter,
-    spawn_half: f32,
-    world: &mut World,
-    conn: ConnectionId,
-    input: &mut InputSeq,
-) -> Admission {
-    *next_player_id += 1;
-    let player = PlayerId(*next_player_id);
-    input.begin(player);
-    // The spawn point is derived from the TRANSPORT session id (as it
-    // always was): the load generator's home distribution pairs with it.
-    // (Game side: the spawn point and the player bundle; kit side: the
-    // identity stamped on it.)
-    let wire = minter.mint();
-    let entity = seam::spawn_player(world, conn, spawn_half, wire);
-    player_entity.insert(player, entity);
-    Admission {
-        player,
-        entity: wire.get(),
-    }
-}
 
 /// The leave path, shared by all rooms: no remove event — the entity
 /// simply drops out of the next snapshot (membership is expressed by
