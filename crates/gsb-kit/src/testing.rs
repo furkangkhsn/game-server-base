@@ -25,6 +25,9 @@ pub(crate) struct Culling<G>(pub G);
 impl<G: Game> Game for Culling<G> {
     type Codec = G::Codec;
 
+    const SNAPSHOT_OP: u16 = G::SNAPSHOT_OP;
+    const PRIVATE_OP: u16 = G::PRIVATE_OP;
+
     fn codec(&self) -> &Self::Codec {
         self.0.codec()
     }
@@ -76,6 +79,9 @@ pub(crate) struct Vetoing<G>(pub G);
 
 impl<G: Game> Game for Vetoing<G> {
     type Codec = G::Codec;
+
+    const SNAPSHOT_OP: u16 = G::SNAPSHOT_OP;
+    const PRIVATE_OP: u16 = G::PRIVATE_OP;
 
     fn codec(&self) -> &Self::Codec {
         self.0.codec()

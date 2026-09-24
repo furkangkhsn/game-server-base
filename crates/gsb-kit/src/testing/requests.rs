@@ -42,6 +42,9 @@ impl Recording {
 impl Game for Recording {
     type Codec = <Fixture as Game>::Codec;
 
+    const SNAPSHOT_OP: u16 = <Fixture as Game>::SNAPSHOT_OP;
+    const PRIVATE_OP: u16 = <Fixture as Game>::PRIVATE_OP;
+
     fn codec(&self) -> &Self::Codec {
         self.game.codec()
     }

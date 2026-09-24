@@ -123,6 +123,10 @@ pub(crate) struct Fixture {
 impl Game for Fixture {
     type Codec = FixCodec;
 
+    /// The fixture's own frame opcodes (no kit test reads them).
+    const SNAPSHOT_OP: u16 = 1901;
+    const PRIVATE_OP: u16 = 1902;
+
     fn codec(&self) -> &FixCodec {
         &self.codec
     }

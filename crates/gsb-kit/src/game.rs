@@ -28,14 +28,90 @@ use crate::team::Team;
 /// A game the kit's rooms can run. Statically dispatched: every room is
 /// generic over it (`OpenRoom<G>`, `AoiRoom<G, S>`), and the only type
 /// erasure is the server's room factory (`Box<dyn RoomLogic<…>>`).
+///
+/// The two frame opcodes have no default: every game picks its own
+/// block, so two games cannot share a number by forgetting to (a server
+/// hosting several games registers them in one message table). A game
+/// that names them compiles:
+///
+/// ```
+/// # use std::collections::HashMap;
+/// # use bevy_ecs::prelude::{Changed, Component, Entity, World};
+/// # use gsb_core::id::{ConnectionId, PlayerId};
+/// # use gsb_core::room::{Action, TickCtx};
+/// # use gsb_kit::codec::RecordCodec;
+/// # use gsb_kit::game::{Game, InputSeq};
+/// # #[derive(Component)]
+/// # struct Pos(i32);
+/// # struct Codec;
+/// # impl RecordCodec for Codec {
+/// #     type Marker = Pos;
+/// #     type Query = &'static Pos;
+/// #     type Dirty = Changed<Pos>;
+/// #     type Wire = i32;
+/// #     fn wire(&self, pos: &Pos) -> i32 { pos.0 }
+/// #     fn encode(&self, _id: u64, _wire: &i32, _out: &mut bytes::BytesMut) {}
+/// # }
+/// struct MyGame(Codec);
+///
+/// impl Game for MyGame {
+///     type Codec = Codec;
+///     const SNAPSHOT_OP: u16 = 1301;
+///     const PRIVATE_OP: u16 = 1302;
+///     fn codec(&self) -> &Codec { &self.0 }
+///     fn spawn_player(&mut self, world: &mut World, _: ConnectionId) -> Entity {
+///         world.spawn(Pos(0)).id()
+///     }
+///     fn ingest(&mut self, _: &mut World, _: &TickCtx, _: &mut Vec<Action>,
+///               _: &HashMap<PlayerId, Entity>, _: &mut InputSeq) {}
+///     fn systems(&mut self, _: &mut World, _: &TickCtx) {}
+/// }
+/// ```
+///
+/// …and the same game without them does not:
+///
+/// ```compile_fail,E0046
+/// # use std::collections::HashMap;
+/// # use bevy_ecs::prelude::{Changed, Component, Entity, World};
+/// # use gsb_core::id::{ConnectionId, PlayerId};
+/// # use gsb_core::room::{Action, TickCtx};
+/// # use gsb_kit::codec::RecordCodec;
+/// # use gsb_kit::game::{Game, InputSeq};
+/// # #[derive(Component)]
+/// # struct Pos(i32);
+/// # struct Codec;
+/// # impl RecordCodec for Codec {
+/// #     type Marker = Pos;
+/// #     type Query = &'static Pos;
+/// #     type Dirty = Changed<Pos>;
+/// #     type Wire = i32;
+/// #     fn wire(&self, pos: &Pos) -> i32 { pos.0 }
+/// #     fn encode(&self, _id: u64, _wire: &i32, _out: &mut bytes::BytesMut) {}
+/// # }
+/// struct MyGame(Codec);
+///
+/// impl Game for MyGame {
+///     type Codec = Codec;
+///     fn codec(&self) -> &Codec { &self.0 }
+///     fn spawn_player(&mut self, world: &mut World, _: ConnectionId) -> Entity {
+///         world.spawn(Pos(0)).id()
+///     }
+///     fn ingest(&mut self, _: &mut World, _: &TickCtx, _: &mut Vec<Action>,
+///               _: &HashMap<PlayerId, Entity>, _: &mut InputSeq) {}
+///     fn systems(&mut self, _: &mut World, _: &TickCtx) {}
+/// }
+/// ```
 pub trait Game: Send + 'static {
     /// How an entity becomes a wire record (§4.1).
     type Codec: RecordCodec;
 
-    /// The opcode of the snapshot frame (`WorldSnapshot`).
-    const SNAPSHOT_OP: u16 = 1003;
-    /// The opcode of the per-connection private frame (`Private`).
-    const PRIVATE_OP: u16 = 1004;
+    /// The opcode of the snapshot frame (`WorldSnapshot`) — the game's
+    /// own, in the game band (≥ 1000; the 2D demo: 1003, the arena:
+    /// 1101, the MMO: 1201).
+    const SNAPSHOT_OP: u16;
+    /// The opcode of the per-connection private frame (`Private`) — the
+    /// game's own (the 2D demo: 1004, the arena: 1102, the MMO: 1202).
+    const PRIVATE_OP: u16;
 
     /// The game's record codec.
     fn codec(&self) -> &Self::Codec;

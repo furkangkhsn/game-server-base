@@ -149,10 +149,11 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
                 self.conn_view.insert(player, c);
             } else {
                 // The one-shot private full (one per join/crossing):
-                // the frame is the `Private` message (opcode 1004) —
-                // the pre-encoded WorldSnapshot bytes ride in the
-                // `snapshot` oneof (field 2, length-delimited). A
-                // queued RPC answer is appended to the SAME frame
+                // the frame is the `Private` message (the game's
+                // `PRIVATE_OP`) — the pre-encoded WorldSnapshot bytes
+                // ride in the `snapshot` oneof (field 2,
+                // length-delimited). A queued RPC answer is appended to
+                // the SAME frame
                 // (field 3, one length-delimited `RpcResponse` each)
                 // instead of a second frame — the per-connection
                 // per-tick slot is one frame.

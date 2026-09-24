@@ -58,6 +58,9 @@ struct Arena3(Codec3);
 impl Game for Arena3 {
     type Codec = Codec3;
 
+    const SNAPSHOT_OP: u16 = 1901;
+    const PRIVATE_OP: u16 = 1902;
+
     fn codec(&self) -> &Codec3 {
         &self.0
     }

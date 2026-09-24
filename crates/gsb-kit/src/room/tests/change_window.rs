@@ -47,6 +47,9 @@ struct ClearsTrackers(crate::testing::Fixture);
 impl crate::game::Game for ClearsTrackers {
     type Codec = crate::testing::FixCodec;
 
+    const SNAPSHOT_OP: u16 = 1901;
+    const PRIVATE_OP: u16 = 1902;
+
     fn codec(&self) -> &Self::Codec {
         self.0.codec()
     }
