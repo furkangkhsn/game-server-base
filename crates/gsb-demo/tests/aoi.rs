@@ -13,7 +13,6 @@
 //! client positions, cell-exit vanishing, late-join one-shot full,
 //! loss-recovery bound) live in `delta_aoi.rs`.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bevy_ecs::prelude::World;
@@ -23,9 +22,10 @@ use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_demo::aoi::AoiRoom;
-use gsb_demo::game::{Private, WorldSnapshot};
+use gsb_demo::game::{CellExit, EntityRecord};
 use gsb_demo::op;
 use gsb_demo::prelude::*;
+use gsb_kit::client::{ClientDecoder, ClientView};
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -39,56 +39,42 @@ async fn reply<T>(rx: oneshot::Receiver<T>) -> T {
         .expect("reply dropped")
 }
 
-/// The client-side world view (the protocol's client half — the same
-/// rules as `View` in `delta_aoi.rs`; the spatial stream is
-/// delta-coded, so the held view is the observable).
-struct View {
-    entities: HashMap<u64, (i32, i32)>,
-    last_seq: Option<u64>,
+/// The demo's decode seam for the kit's reference client
+/// (`gsb_kit::client`, the client rules of `kit.proto` — the same view
+/// `delta_aoi.rs` and the load generator run; the spatial stream is
+/// delta-coded, so the held view is the observable): a record is kept as
+/// its wire position in the server's cell of it (`CELL_SIZE`, the room's
+/// grid); a `CellExit` names the cell by its index.
+struct DemoDecoder;
+
+/// The room's AOI cell edge (wire units).
+const CELL_SIZE: f32 = 20.0;
+
+impl ClientDecoder for DemoDecoder {
+    type Record = (i32, i32);
+    type Cell = (i32, i32);
+
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
+        let e = EntityRecord::decode(body)?;
+        let cell = (
+            (e.x as f32 / CELL_SIZE).floor() as i32,
+            (e.y as f32 / CELL_SIZE).floor() as i32,
+        );
+        Ok((e.entity, cell, (e.x, e.y)))
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+        let c = CellExit::decode(body)?;
+        Ok((c.x, c.y))
+    }
 }
 
-impl View {
-    fn new() -> Self {
-        Self {
-            entities: HashMap::new(),
-            last_seq: None,
-        }
-    }
+/// The client-side world view.
+type View = ClientView<DemoDecoder>;
 
-    fn apply_group(&mut self, s: &WorldSnapshot) {
-        if s.sequence <= self.last_seq.unwrap_or(0) {
-            return; // duplicate/stale
-        }
-        if s.delta {
-            if self.last_seq.is_none() {
-                return; // no baseline: drop until the next full
-            }
-            for &w in &s.removed {
-                self.entities.remove(&w);
-            }
-            for e in &s.entities {
-                self.entities.insert(e.entity, (e.x, e.y));
-            }
-        } else {
-            self.entities.clear();
-            for e in &s.entities {
-                self.entities.insert(e.entity, (e.x, e.y));
-            }
-        }
-        self.last_seq = Some(s.sequence);
-    }
-
-    fn apply_private_full(&mut self, s: &WorldSnapshot) {
-        self.entities.clear();
-        for e in &s.entities {
-            self.entities.insert(e.entity, (e.x, e.y));
-        }
-        self.last_seq = Some(s.sequence);
-    }
-
-    fn ids(&self) -> Vec<u64> {
-        self.entities.keys().copied().collect()
-    }
+/// The wire ids a view holds.
+fn ids(view: &View) -> Vec<u64> {
+    view.ids().collect()
 }
 
 struct Conn {
@@ -102,7 +88,7 @@ impl Conn {
         Self {
             rx,
             actions,
-            view: View::new(),
+            view: View::new(DemoDecoder),
         }
     }
 
@@ -110,14 +96,15 @@ impl Conn {
         for f in batch.iter() {
             match f.op {
                 op::WORLD_SNAPSHOT => {
-                    let s = WorldSnapshot::decode(f.payload.as_ref()).expect("decodable");
-                    self.view.apply_group(&s);
+                    self.view
+                        .apply_snapshot(f.payload.as_ref())
+                        .expect("decodable");
                 }
                 op::PRIVATE => {
-                    let p = Private::decode(f.payload.as_ref()).expect("decodable private");
-                    if let Some(gsb_demo::game::private::Payload::Snapshot(s)) = p.payload {
-                        self.view.apply_private_full(&s);
-                    }
+                    // A one-shot full is applied; acks are not part of the view.
+                    self.view
+                        .apply_private(f.payload.as_ref())
+                        .expect("decodable private");
                 }
                 other => panic!("unexpected frame op {other}"),
             }
@@ -255,9 +242,9 @@ async fn aoi_room_fanout_and_cell_transition() {
 
     // Same-cell co-residents are visible; the far cell is not (the
     // clients' HELD views — the delta stream's observable).
-    let a_ids = conns[0].view.ids();
-    let b_ids = conns[1].view.ids();
-    let c_ids = conns[2].view.ids();
+    let a_ids = ids(&conns[0].view);
+    let b_ids = ids(&conns[1].view);
+    let c_ids = ids(&conns[2].view);
     assert!(
         a_ids.contains(&a_id) && a_ids.contains(&b_id),
         "A sees B: {a_ids:?}"
@@ -282,9 +269,9 @@ async fn aoi_room_fanout_and_cell_transition() {
     // Cell(0,0) — no longer sees A (the entity exit was applied). A's
     // wire identity is unchanged across the cell move (the identity
     // invariant).
-    let a_ids2 = conns[0].view.ids();
-    let b_ids2 = conns[1].view.ids();
-    let c_ids2 = conns[2].view.ids();
+    let a_ids2 = ids(&conns[0].view);
+    let b_ids2 = ids(&conns[1].view);
+    let c_ids2 = ids(&conns[2].view);
     assert!(
         a_ids2.contains(&a_id) && a_ids2.contains(&c_id),
         "A now sees C: {a_ids2:?}"

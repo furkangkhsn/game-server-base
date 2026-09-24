@@ -1,29 +1,45 @@
-//! The MMO client's view under the kit's client rules (written out in
-//! gsb-kit's `kit.proto`): a FULL — group snapshot or one-shot private —
-//! replaces the view; a DELTA with a baseline applies `removed`, then
-//! `cell_exits` (every held record in that ground cell is forgotten),
-//! then the upserts; a delta without a baseline is dropped; a stale
-//! sequence is discarded. (The MMO's own test client applies the same
-//! rules to in-process channels; GAME-MODULE G4 folds the copies into
-//! one kit client.)
-
-use std::collections::BTreeMap;
+//! The MMO client's view: the kit's reference client (`gsb_kit::client`,
+//! the client rules of gsb-kit's `kit.proto`) over the MMO's decode seam
+//! — a FULL (group snapshot or one-shot private) replaces the view; a
+//! DELTA with a baseline applies `removed`, then `cell_exits` (every held
+//! record in that ground cell is forgotten), then the upserts; a delta
+//! without a baseline is dropped; a stale sequence is discarded. (The
+//! MMO's own test client runs the same kit view on in-process channels.)
 
 use gsb_demo_mmo::codec::to_dm;
-use gsb_demo_mmo::mmo::{self, EntityRecord, Private, WorldSnapshot, private};
+use gsb_demo_mmo::mmo::{self, CellExit, EntityRecord};
 use gsb_demo_mmo::op;
 use gsb_demo_mmo::world::client_cell;
+use gsb_kit::client::{Apply, ClientDecoder, ClientError, ClientView, PrivateEvent};
 use prost::Message;
 
 use super::{Client, View};
+
+/// The MMO's decode seam: a record is kept whole, in its ground cell
+/// (`client_cell`); a `CellExit` names the ground cell `(x, z)`.
+#[derive(Default)]
+pub struct MmoDecoder;
+
+impl ClientDecoder for MmoDecoder {
+    type Record = EntityRecord;
+    type Cell = (i32, i32);
+
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), EntityRecord), prost::DecodeError> {
+        let r = EntityRecord::decode(body)?;
+        Ok((r.entity, client_cell(r.x, r.z), r))
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+        let c = CellExit::decode(body)?;
+        Ok((c.x, c.z))
+    }
+}
 
 /// What an MMO client holds.
 #[derive(Default)]
 pub struct MmoView {
     /// The current view: wire id → record.
-    pub records: BTreeMap<u64, EntityRecord>,
-    baseline: bool,
-    last_seq: u64,
+    pub records: ClientView<MmoDecoder>,
     /// Every input ack, in order.
     pub acks: Vec<u64>,
     /// Frames that changed the view (full or applied delta).
@@ -40,38 +56,29 @@ impl View for MmoView {
     fn apply(&mut self, code: u16, payload: &[u8]) {
         match code {
             op::MMO_SNAPSHOT => {
-                let s = WorldSnapshot::decode(payload).expect("mmo snapshot");
-                self.apply_group(s);
-            }
-            op::MMO_PRIVATE => {
-                let p = Private::decode(payload).expect("mmo private");
-                match p.payload {
-                    Some(private::Payload::Ack(a)) => self.acks.push(a.processed_up_to),
-                    Some(private::Payload::Snapshot(s)) => {
-                        assert!(!s.delta, "the one-shot private view is a full");
-                        self.replace(s);
-                    }
-                    None => {}
+                let s = self.records.apply_snapshot(payload).expect("mmo snapshot");
+                if let Apply::Full | Apply::Delta = s.apply {
+                    self.book();
                 }
             }
+            op::MMO_PRIVATE => match self.records.apply_private(payload) {
+                Ok(PrivateEvent::Ack(up_to)) => self.acks.push(up_to),
+                Ok(PrivateEvent::Full { .. }) => self.book(),
+                Ok(PrivateEvent::Empty) => {}
+                Err(ClientError::PrivateDelta) => panic!("the one-shot private view is a full"),
+                Err(e) => panic!("mmo private: {e}"),
+            },
             other => panic!("unexpected MMO frame op {other}"),
         }
     }
 }
 
 impl MmoView {
-    fn replace(&mut self, s: WorldSnapshot) {
-        self.records = s.entities.iter().map(|r| (r.entity, *r)).collect();
-        self.baseline = true;
-        self.last_seq = s.sequence;
-        self.book();
-    }
-
     /// Book one applied frame (and the watched id's presence after it).
     fn book(&mut self) {
         self.applied += 1;
         if let Some(id) = self.watch {
-            if self.records.contains_key(&id) {
+            if self.records.contains(id) {
                 self.watched = true;
             } else if self.watched {
                 self.lost += 1;
@@ -79,33 +86,9 @@ impl MmoView {
         }
     }
 
-    fn apply_group(&mut self, s: WorldSnapshot) {
-        if self.baseline && s.sequence <= self.last_seq {
-            return; // stale: discarded
-        }
-        if !s.delta {
-            return self.replace(s);
-        }
-        if !self.baseline {
-            return; // no baseline yet: dropped until a full
-        }
-        for id in &s.removed {
-            self.records.remove(id);
-        }
-        for exit in &s.cell_exits {
-            self.records
-                .retain(|_, r| client_cell(r.x, r.z) != (exit.x, exit.z));
-        }
-        for r in &s.entities {
-            self.records.insert(r.entity, *r);
-        }
-        self.last_seq = s.sequence;
-        self.book();
-    }
-
     /// Whether the view has had its first full.
     pub fn has_baseline(&self) -> bool {
-        self.baseline
+        self.records.has_baseline()
     }
 
     /// The wire ids of the players in view, sorted.
@@ -115,23 +98,26 @@ impl MmoView {
 
     /// The wire ids of `kind` in view, sorted.
     pub fn of_kind(&self, kind: mmo::Kind) -> Vec<u64> {
-        self.records
+        let mut ids: Vec<u64> = self
+            .records
             .values()
             .filter(|r| r.kind == kind as i32)
             .map(|r| r.entity)
-            .collect()
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 }
 
 impl Client<MmoView> {
     /// This client's own record, if in view.
     pub fn me(&self) -> Option<EntityRecord> {
-        self.view.records.get(&self.entity).copied()
+        self.view.records.get(self.entity).copied()
     }
 
     /// The record of `id`, if in view.
     pub fn sees(&self, id: u64) -> Option<EntityRecord> {
-        self.view.records.get(&id).copied()
+        self.view.records.get(id).copied()
     }
 
     /// Walk toward `(x, z)` metres.

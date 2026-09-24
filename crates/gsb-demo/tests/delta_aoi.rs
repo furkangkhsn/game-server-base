@@ -35,9 +35,10 @@ use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_demo::aoi::AoiRoom;
-use gsb_demo::game::{Private, WorldSnapshot};
+use gsb_demo::game::{CellExit, EntityRecord, Private, WorldSnapshot};
 use gsb_demo::op;
 use gsb_demo::prelude::*;
+use gsb_kit::client::{ClientDecoder, ClientError, ClientView, PrivateEvent};
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -54,111 +55,54 @@ async fn reply<T>(rx: oneshot::Receiver<T>) -> T {
         .expect("reply dropped")
 }
 
-/// The client-side world view (the protocol's client half — see
-/// `ClientView` in the load generator for the twin implementation).
-struct View {
-    entities: HashMap<u64, (i32, i32)>,
-    last_seq: Option<u64>,
+/// The demo's decode seam for the kit's reference client
+/// (`gsb_kit::client`, the client rules of `kit.proto` — the load
+/// generator's client view runs the same one): a record is kept as its
+/// wire position, in the server's own cell of it (floor of the WIRE
+/// coordinates / cell_size — the client needs it to service `CellExit`);
+/// a `CellExit` names the cell by its index.
+struct DemoDecoder {
     cell_size: f32,
 }
 
-/// The outcome of applying one GROUP snapshot (for the counters).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Apply {
-    /// A full was applied (the view was replaced).
-    Full,
-    /// A delta was applied on top (consecutive or across a gap — the
-    /// stream is event-driven; the keep-alive full is the convergence
-    /// guarantee).
-    Delta,
-    /// A delta dropped with no baseline at all (a fresh client before
-    /// its first full).
-    NoBaseline,
-    /// A duplicate/stale sequence: discarded (not an error).
-    Stale,
+impl ClientDecoder for DemoDecoder {
+    type Record = (i32, i32);
+    type Cell = (i32, i32);
+
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
+        let e = EntityRecord::decode(body)?;
+        let cell = (
+            (e.x as f32 / self.cell_size).floor() as i32,
+            (e.y as f32 / self.cell_size).floor() as i32,
+        );
+        Ok((e.entity, cell, (e.x, e.y)))
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+        let c = CellExit::decode(body)?;
+        Ok((c.x, c.y))
+    }
 }
 
-impl View {
-    fn new(cell_size: f32) -> Self {
-        Self {
-            entities: HashMap::new(),
-            last_seq: None,
-            cell_size,
-        }
-    }
+/// The client-side world view (the protocol's client half).
+type View = ClientView<DemoDecoder>;
 
-    /// The server's own cell formula (floor of the WIRE coordinates /
-    /// cell_size) — the client needs it to service `CellExit`.
-    fn cell_of(x: i32, y: i32, cell_size: f32) -> (i32, i32) {
-        (
-            (x as f32 / cell_size).floor() as i32,
-            (y as f32 / cell_size).floor() as i32,
-        )
-    }
+/// The view as wire id → position.
+fn entities(view: &View) -> HashMap<u64, (i32, i32)> {
+    view.iter().map(|(id, &at)| (id, at)).collect()
+}
 
-    /// Apply a GROUP snapshot: fulls replace; deltas apply on top in the
-    /// fixed order; a delta with a gap (or no baseline) is dropped until
-    /// the next full; duplicates/stale sequences are discarded.
-    fn apply(&mut self, s: &WorldSnapshot) -> Apply {
-        if s.sequence <= self.last_seq.unwrap_or(0) {
-            return Apply::Stale;
-        }
-        if s.delta {
-            // A delta needs a baseline; a sequence gap does NOT
-            // disqualify it (event-driven stream — `game.proto` docs).
-            if self.last_seq.is_none() {
-                return Apply::NoBaseline;
-            }
-            for &w in &s.removed {
-                self.entities.remove(&w);
-            }
-            for c in &s.cell_exits {
-                // A `CellExit` carries the cell's INDEX (the kit's
-                // `Grid2::encode_cell`), not a position.
-                let cell = (c.x, c.y);
-                self.entities
-                    .retain(|_, (x, y)| Self::cell_of(*x, *y, self.cell_size) != cell);
-            }
-            for e in &s.entities {
-                self.entities.insert(e.entity, (e.x, e.y));
-            }
-            self.last_seq = Some(s.sequence);
-            return Apply::Delta;
-        }
-        self.entities.clear();
-        for e in &s.entities {
-            self.entities.insert(e.entity, (e.x, e.y));
-        }
-        self.last_seq = Some(s.sequence);
-        Apply::Full
-    }
-
-    /// The one-shot PRIVATE full (a per-connection baseline reset):
-    /// applied unconditionally, outside the group stream's sequence
-    /// logic (see the `Private{snapshot}` docs in `game.proto`).
-    fn apply_private_full(&mut self, s: &WorldSnapshot) {
-        self.entities.clear();
-        for e in &s.entities {
-            self.entities.insert(e.entity, (e.x, e.y));
-        }
-        self.last_seq = Some(s.sequence);
-    }
-
-    fn ids(&self) -> BTreeSet<u64> {
-        self.entities.keys().copied().collect()
-    }
+/// The wire ids in the view.
+fn ids(view: &View) -> BTreeSet<u64> {
+    view.ids().collect()
 }
 
 /// One observed connection: its out channel + the view it applies every
-/// batch to + per-test counters.
+/// batch to (which keeps the per-test counters).
 struct Conn {
     rx: mpsc::Receiver<FrameBatch>,
     actions: Mailbox<Action>,
     view: View,
-    fulls: u64,
-    deltas: u64,
-    gap_drops: u64,
-    private_fulls: u64,
     /// The last group snapshot that carried `cell_exits` (raw, for the
     /// one-record-per-cell assertion).
     last_exit_snap: Option<WorldSnapshot>,
@@ -169,13 +113,29 @@ impl Conn {
         Self {
             rx,
             actions,
-            view: View::new(cell_size),
-            fulls: 0,
-            deltas: 0,
-            gap_drops: 0,
-            private_fulls: 0,
+            view: View::new(DemoDecoder { cell_size }),
             last_exit_snap: None,
         }
+    }
+
+    /// Fulls applied: group fulls and one-shot private fulls.
+    fn fulls(&self) -> u64 {
+        self.view.counters().fulls
+    }
+
+    /// Group deltas applied.
+    fn deltas(&self) -> u64 {
+        self.view.counters().deltas
+    }
+
+    /// Group deltas dropped without a baseline.
+    fn gap_drops(&self) -> u64 {
+        self.view.counters().gap_drops
+    }
+
+    /// One-shot private fulls applied.
+    fn private_fulls(&self) -> u64 {
+        self.view.counters().private_fulls
     }
 
     /// Apply one batch (the frames in arrival order: the group snapshot
@@ -188,36 +148,23 @@ impl Conn {
         for f in batch.iter() {
             match f.op {
                 op::WORLD_SNAPSHOT => {
-                    let Ok(s) = WorldSnapshot::decode(f.payload.as_ref()) else {
+                    if self.view.apply_snapshot(f.payload.as_ref()).is_err() {
                         panic!("undecodable group snapshot");
-                    };
-                    match self.view.apply(&s) {
-                        Apply::Full => self.fulls += 1,
-                        Apply::Delta => self.deltas += 1,
-                        Apply::NoBaseline => self.gap_drops += 1,
-                        Apply::Stale => {}
                     }
+                    let s = WorldSnapshot::decode(f.payload.as_ref()).expect("decodable");
                     if !s.cell_exits.is_empty() {
                         self.last_exit_snap = Some(s);
                     }
                 }
-                op::PRIVATE => {
-                    let Ok(p) = Private::decode(f.payload.as_ref()) else {
-                        panic!("undecodable private frame");
-                    };
-                    match p.payload {
-                        Some(gsb_demo::game::private::Payload::Snapshot(s)) => {
-                            assert!(!s.delta, "a private snapshot must be a full");
-                            self.private_fulls += 1;
-                            self.fulls += 1;
-                            self.view.apply_private_full(&s);
-                        }
-                        Some(gsb_demo::game::private::Payload::Ack(_)) => {
-                            // Input acks are not part of the view.
-                        }
-                        None => panic!("empty private oneof"),
+                op::PRIVATE => match self.view.apply_private(f.payload.as_ref()) {
+                    // Input acks are not part of the view.
+                    Ok(PrivateEvent::Full { .. } | PrivateEvent::Ack(_)) => {}
+                    Ok(PrivateEvent::Empty) => panic!("empty private oneof"),
+                    Err(ClientError::PrivateDelta) => {
+                        panic!("a private snapshot must be a full")
                     }
-                }
+                    Err(_) => panic!("undecodable private frame"),
+                },
                 other => panic!("unexpected frame op {other}"),
             }
         }
@@ -333,7 +280,7 @@ async fn advance(room: &mut TestRoom, conns: &mut [Conn], ticks: u32) {
 /// The joiner's view must equal `want` (wire id → position).
 fn assert_view(view: &View, want: &[(u64, i32, i32)], what: &str) {
     let got: HashMap<u64, (i32, i32)> = want.iter().map(|(w, x, y)| (*w, (*x, *y))).collect();
-    assert_eq!(view.entities, got, "client view wrong: {what}");
+    assert_eq!(entities(view), got, "client view wrong: {what}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -381,15 +328,15 @@ async fn delta_stream_converges_with_full_stream() {
     // full at join and deltas afterwards; C's silent group keeps alive
     // with FRESH fulls at 1 Hz (the keep-alive path); B applied deltas.
     assert!(
-        conns[0].deltas > 0,
+        conns[0].deltas() > 0,
         "A applied deltas (the delta stream ran)"
     );
-    assert!(conns[0].fulls >= 1, "A started from a full");
+    assert!(conns[0].fulls() >= 1, "A started from a full");
     assert!(
-        conns[2].fulls >= 2,
+        conns[2].fulls() >= 2,
         "C's silent group kept alive with fresh fulls"
     );
-    assert!(conns[1].deltas > 0, "B applied deltas too");
+    assert!(conns[1].deltas() > 0, "B applied deltas too");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -450,15 +397,15 @@ async fn cell_change_all_client_positions_no_ghosts_no_duplicates() {
         }
         // Invariants, tick by tick (B is the oracle: it sees both cells,
         // so its copy of P is P's wire position):
-        if let Some((px, _py)) = conns[1].view.entities.get(&p_id).copied() {
+        if let Some((px, _py)) = conns[1].view.get(p_id).copied() {
             // S (source only) must never see P once P's wire position
             // left the source cell (x >= 20): a re-ghost.
-            if px >= 20 && conns[2].view.entities.contains_key(&p_id) {
+            if px >= 20 && conns[2].view.contains(p_id) {
                 s_leaked_after_departure = true;
             }
             // T (target only) must never see P while P's wire position
             // is still in the source cell (x < 20): a pre-ghost.
-            if px < 20 && conns[3].view.entities.contains_key(&p_id) {
+            if px < 20 && conns[3].view.contains(p_id) {
                 t_preghosted = true;
             }
         } else {
@@ -499,15 +446,12 @@ async fn cell_change_all_client_positions_no_ghosts_no_duplicates() {
     // Identity: the SAME wire id, consistent, in every view that holds P.
     for v in [&conns[1].view, &conns[3].view] {
         assert_eq!(
-            v.entities.get(&p_id).copied(),
+            v.get(p_id).copied(),
             Some((25, 5)),
             "P's identity/position consistent"
         );
     }
-    assert!(
-        !conns[2].view.entities.contains_key(&p_id),
-        "S no longer holds P"
-    );
+    assert!(!conns[2].view.contains(p_id), "S no longer holds P");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -640,7 +584,7 @@ async fn cell_exit_names_the_cell_index_away_from_the_origin() {
     for _ in 0..150 {
         advance(&mut room, &mut conns, 1).await;
         let o = &mut conns[observer];
-        assert!(o.view.entities.contains_key(&o_id), "O never loses itself");
+        assert!(o.view.contains(o_id), "O never loses itself");
         if let Some(snap) = o.last_exit_snap.take() {
             let exits: Vec<(i32, i32)> = snap.cell_exits.iter().map(|e| (e.x, e.y)).collect();
             assert_eq!(exits, [(1, 0)], "the exited cell is named: {snap:?}");
@@ -715,26 +659,26 @@ async fn late_join_sees_full_world_one_shot() {
         "late joiner's settled view",
     );
     assert!(
-        conns[2].private_fulls >= 1,
+        conns[2].private_fulls() >= 1,
         "C received the one-shot private full(s)"
     );
     assert!(
-        conns[2].deltas > 0,
+        conns[2].deltas() > 0,
         "C applied deltas (the group stayed in delta mode)"
     );
 
     // Proof the group is in delta mode (not full mode) for C: a small
     // move by A is a DELTA that updates C's view.
-    let deltas_before = conns[2].deltas;
+    let deltas_before = conns[2].deltas();
     move_to(&conns[1].actions, ConnectionId(1), 4, 0).await;
     advance(&mut room, &mut conns, 60).await;
     assert_eq!(
-        conns[2].view.entities.get(&a_id).copied(),
+        conns[2].view.get(a_id).copied(),
         Some((4, 0)),
         "C sees A's move"
     );
     assert!(
-        conns[2].deltas > deltas_before,
+        conns[2].deltas() > deltas_before,
         "C's view update came from a delta (group still in delta mode)"
     );
     assert_view(
@@ -788,9 +732,9 @@ async fn delta_loss_recovers_within_keepalive_bound() {
             }
         }
     }
-    let view_before_loss = conns[0].view.entities.clone();
-    let fulls_before_window = conns[0].fulls;
-    let b_stats_before_window = (conns[1].fulls, conns[1].deltas, conns[1].gap_drops);
+    let view_before_loss = entities(&conns[0].view);
+    let fulls_before_window = conns[0].fulls();
+    let b_stats_before_window = (conns[1].fulls(), conns[1].deltas(), conns[1].gap_drops());
 
     // LOSS: 12 ticks of A's batches dropped client-side (B is fine).
     for _ in 0..12 {
@@ -823,7 +767,7 @@ async fn delta_loss_recovers_within_keepalive_bound() {
                 c.apply_batch(&batch, false);
             }
         }
-        if recovered_at.is_none() && conns[0].view.entities != view_before_loss {
+        if recovered_at.is_none() && entities(&conns[0].view) != view_before_loss {
             recovered_at = Some(room.now_tick());
         }
         // (No early break: the window must run to the end so the
@@ -843,26 +787,26 @@ async fn delta_loss_recovers_within_keepalive_bound() {
     // The convergence guarantee actually ran: a FRESH full reached A
     // after the loss window (not a re-send — the view healed).
     assert!(
-        conns[0].fulls > fulls_before_window,
+        conns[0].fulls() > fulls_before_window,
         "a keep-alive full healed A (fulls {} -> {})",
         fulls_before_window,
-        conns[0].fulls
+        conns[0].fulls()
     );
     // The healed view holds both entities.
-    let ids = conns[0].view.ids();
+    let ids = ids(&conns[0].view);
     assert!(
         ids.contains(&a_id) && ids.contains(&b_id),
         "healed view: {:?}",
-        conns[0].view.entities
+        entities(&conns[0].view)
     );
     // B (no loss) never sat without a baseline in the window (its group
     // stream kept running for it; the keep-alive fulls it shares with A
     // are normal group traffic, not a sign of loss).
     assert_eq!(
-        conns[1].gap_drops,
+        conns[1].gap_drops(),
         b_stats_before_window.2,
         "B was never without a baseline: {:?}",
-        (conns[1].fulls, conns[1].deltas, conns[1].gap_drops)
+        (conns[1].fulls(), conns[1].deltas(), conns[1].gap_drops())
     );
 }
 
