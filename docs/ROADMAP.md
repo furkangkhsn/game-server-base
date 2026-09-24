@@ -75,9 +75,9 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **534** (534/534 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **537** (537/537 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 için `docs/CHANGELOG.md` başlığına bakınız).
 Son tur: **süreli bekletmede veto + veto tavanı** (`docs/RECONNECT.md`
 §17) — `may_release` artık süreli bekletmenin deadline'ında da soruluyor
 (veto uzatır, her tick yeniden sorulur), duran veto yeni
@@ -166,7 +166,7 @@ Sunucunun başlattığı her kapanış artık sebebiyle sayılıyor
 stall saati kare tamamlanmasını değil soketin kabul ettiği BAYTI
 ölçüyor (pencereden uzun süren bir kareyi okuyan yavaş istemci artık
 öldürülmüyor); yan bulgu olarak WS kapısının kuyruk uyandırması
-düzeltildi. 10k A/B ölçümü iki kommit üzerinde bekliyor. Daha önce:
+düzeltildi. 10k A/B ölçümü alındı; açık kalan `outbound_dead` yanlış atfı da kapandı (writer pump hüküm için doğumda bir mailbox slotu ayırıyor — CHANGELOG "Küçük düzeltme paketi"). Daha önce:
 **metrik fold denetimi** — sharded oda raporunu tek satıra katlayan
 `fold_rooms` alan alan değil toplu denetlendi. Her alanın katlama
 kuralı kararlaştırılıp koda yazıldı ve kural YAPISAL hâle getirildi
@@ -490,6 +490,9 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     10k A/B ölçümü alındı (CHANGELOG "Ölçüm kaydı"; commit'ler e-posta
     düzeltmesinden sonra `c2b7160` ↔ `d8d9030`): fark gürültü içinde —
     kesilenler yavaş-ama-okuyan değil, hiç okumayan istemcilerdi.
+    Aşırı yükteki `outbound_dead` yanlış atfı (koşu başına 67–172) da
+    kapandı: stall hükmü doğumda ayrılmış mailbox slotuna gidiyor
+    (SECURITY §3.5 karar 4).
   - [x] **Ürün kararı 2 — AFK/zombi oturum — KAPANDI** (CHANGELOG
     "AFK sinyali + girdi-boşta tavanı turu"). Karar: AFK'nın KENDİSİ
     oyunun kararıdır, base ona bir SİNYAL verir ve bir TAVAN sunar.

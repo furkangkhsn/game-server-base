@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-534 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+537 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -140,6 +140,12 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
 
+**Küçük düzeltme paketi** (CHANGELOG): Faz 5'in son yan gözlemi kapandı —
+`ShardedSpatialRoom` ödünç şeridi `Partition::admits` ile süzüyor
+(`sharded/tests/frame_filter.rs`); aşırı yükteki `outbound_dead` yanlış
+atfı, writer pump'ın doğumda ayırdığı mailbox slotuyla kapandı
+(SECURITY §3.5).
+
 **Süreli bekletmede veto + veto tavanı** (RECONNECT §17, CHANGELOG):
 `GameLogic::may_release` süreli bekletmenin deadline'ında da soruluyor
 (veto uzatır, her tick yeniden sorulur); duran veto
@@ -263,6 +269,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 534 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 537 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

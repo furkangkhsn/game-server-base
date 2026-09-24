@@ -5,6 +5,64 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük düzeltme paketi: sharded × spatial çerçeve süzgeci + dolu mailbox'ta stall hükmü (`fix/small-bundle`)
+
+**Commit'ler** (`08e6e13..`): `3b5b7ca` kit (çerçeve süzgeci), `ff9b8ea`
+gsb-net (ayrılmış hüküm slotu). `gsb-core` ve `gsb-server` dokunulmadı;
+wire baytları ve demo iddiaları aynı.
+
+### 1. `ShardedSpatialRoom` artık `Partition::admits`'i uyguluyor (`3b5b7ca`)
+
+Faz 5'in yan gözlemi (KIT-ARCHITECTURE §10): düz `ShardedRoom` ödünç
+şeridi `admits` ile süzüyor, kompozit bütün şeridi hücre defterine
+alıyordu. "Görünürlük hücreyle sınırlı, yani doğru" varsayımı genelde
+tutmuyor: hücre kenarı bölgeye göre büyükse bir grubun 3×3'ü komşunun
+UZAK kenarına uzanıyor. Kit fikstüründe (4×4, bölge 25, kenar payı 6,25,
+hücre 20) shard 0'ın `Cell(-2,-2)` grubu shard 1'in doğu kenarındaki
+(x = -1) kaydı görüyordu; düz oda aynı kaydı reddediyor.
+
+- **Düzeltme:** `integrate_borrowed` şeridi deftere almadan önce aynı
+  süzgeçten geçiriyor; defter SÜZÜLMÜŞ görünümü tutuyor (çerçeveden çıkan
+  kayıt çıkış, geri giren giriş). F1'in çıkış-atlama kuralı değişmedi.
+- **Kanıt:** `sharded/tests/frame_filter.rs` (2), düzeltmesiz ikisi de
+  kırıldı. Ebeveynin bağımsız mutasyonu (süzgeci kapatmak) ikisini de
+  kırıyor.
+- **Etkisi:** loadgen sharded × spatial (N=4, 8 sn) `out_bps_per_conn`
+  ~%10 düştü (3229–3278 → 2877–2933, üç çift dönüşümlü) — artık
+  gönderilmeyen uzak şerit kayıtları; `snap_total` gürültü içinde.
+
+**Elenen alternatifler.** Süzgeci paket aşamasında uygulamak (defterde
+olup pakette olmayan kayıt istemcinin çıkış/giriş muhasebesini bozar);
+gözlemi "zararsız" diye açık bırakmak (partition'ın reddettiği kayıt
+istemciye gidiyordu — doğruluk kusuru).
+
+### 2. Aşırı yükte `outbound_dead` yanlış atfı (`ff9b8ea`)
+
+"Ölçüm kaydı"nın açık küçük kusuru (10k: koşu başına 67–172
+`outbound_dead`). Mekanizma koddan doğrulandı: mailbox hüküm anında
+DOLU; pump'ın `try_send`'i düşüyor, hüküm kapanıştan sonraki awaited
+`send`'e erteleniyor; uyanan aktör `adopt_pending_close`'da hükmü
+bulamıyor ve `outbound_dead` yazıyor.
+
+- **Düzeltme:** writer pump doğumda (mailbox boşken) mailbox'ın kendi
+  kapasitesinden bir slot ayırıyor (`try_reserve_owned`,
+  `pump/writer/verdict.rs`); stall hükmü giden kanal kapanmadan ÖNCE
+  `OwnedPermit::send` ile o slota gidiyor — senkron, dolu mailbox'ta da
+  başarısız olamaz. Aktör kodu, imzalar değişmedi; await yok, sınırsız
+  kanal yok. Bedel: bağlantı başına bir mailbox slotu.
+- **Kanıt:** `gsb-net/src/pump/tests.rs` (gerçek `ConnectionActor` +
+  `spawn_pumps`, dolu mailbox); düzeltmesiz her koşuda `OutboundDead`.
+  10k ölçümü yeniden alınmadı.
+
+**Elenen alternatifler.** `Arc<OnceLock<ServerClose>>` / atomik sebep
+kodu (her kapıya ve `gsb-server`'a yeni parametre; ikinci doğruluk
+kaynağı); kanal-kapandı sinyalinin sebep taşıması (`Mailbox` takma adını
+sarmalamak çekirdeğe yayılır); kapanıştan önce awaited `send`
+(kilitlenme); `adopt_pending_close`'da bekleme (aktöre await); sınırsız
+kanal / büyük mailbox (kural; yalnız eşiği kaydırır).
+
+**Doğrulama:** 537 / 0 / 1 ignored; clippy 0; kapanış kontrolü 85.
+
 ## Süreli bekletmede `may_release` vetosu + veto tavanı (`fix/may-release-deadline`)
 
 `docs/RECONNECT.md` §17: "kopan karakter 20 sn sonra çıkış yapsın — ama
