@@ -53,7 +53,11 @@ fn wire(x: i32, y: i32, z: i32) -> Wire3 {
 #[test]
 fn a_ground_plane_3d_game_uses_the_planar_presets_unchanged() {
     let p = pos(1.0, 2.0, 3.0);
-    assert_eq!((p.planar(), p.y), ([1.0, 3.0], 2.0), "the plane drops height");
+    assert_eq!(
+        (p.planar(), p.y),
+        ([1.0, 3.0], 2.0),
+        "the plane drops height"
+    );
 
     let grid = Grid2::new(20.0);
     assert_eq!(grid.cell_of(&wire(5, 0, 45)), Cell(0, 2));

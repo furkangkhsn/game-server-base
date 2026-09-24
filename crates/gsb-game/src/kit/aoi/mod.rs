@@ -118,12 +118,15 @@
 //!
 //! - **Despawns are not writes.** `on_leave` despawns the entity in the
 //!   CONTROL phase, so the query (which iterates live entities) cannot
-//!   see it: the leave parks `(entity, wire id, cell)` in
+//!   see it: the leave parks the entity (a member) in
 //!   `pending_removals`, which `update` applies against the buckets
-//!   (the cell the entity was in is read from `last_cell`, written in
-//!   `update` and nowhere else). A join+leave within one tick parks
-//!   nothing — the entity never made it into `last_cell`, hence never
-//!   into the buckets.
+//!   (its wire id and the cell it was in are read from `last_cell`,
+//!   written in `update` and nowhere else). A join+leave within one
+//!   tick parks nothing — the entity never made it into `last_cell`,
+//!   hence never into the buckets. A despawn nobody parked — the GAME
+//!   despawning an NPC — is read from the world's removed-component
+//!   buffers in `update`, before the tick's one change-window close
+//!   (KIT-ARCHITECTURE §8.2).
 //! - **Quantization.** Wire positions are i32 truncations of f32 motion:
 //!   a sub-cell move can leave the wire position untouched. The dirty
 //!   query still flags the write, and the same-cell branch compares the
