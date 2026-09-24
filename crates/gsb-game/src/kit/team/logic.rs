@@ -56,7 +56,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        let t = team.0 as usize;
+        let t = self.team_slot(*team);
         let content = &self.contents[t];
         if self.last[t] == *content {
             return false;

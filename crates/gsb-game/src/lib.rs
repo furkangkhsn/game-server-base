@@ -20,7 +20,8 @@
 //! - [`room::OpenRoom`] — `GroupKey = ()`: everyone sees the whole world
 //!   (the baseline, no grouping).
 //! - [`aoi::AoiRoom`] — `GroupKey = Cell`: spatial AOI (3×3 cell block).
-//! - [`team::TeamRoom`] — `GroupKey = Team`: team fog of war (2 groups;
+//! - [`team::TeamRoom`] — `GroupKey = Team`: team fog of war (one group
+//!   per team — the demo assigns 2;
 //!   `group_of` looks at game state, not position).
 //! - [`pvs::SectorRoom`] — `GroupKey = Sector`: per-map-segment PVS
 //!   (static visibility table over hand-authored convex sectors).
@@ -79,7 +80,8 @@ pub use kit::DEFAULT_DISCONNECT_GRACE;
 /// (compatibility path; the strategy's design notes live on the kit's
 /// generic [`TeamRoom`](crate::kit::team::TeamRoom)).
 pub mod team {
-    pub use crate::kit::team::{DEFAULT_VISION_RADIUS, TEAM_COUNT, Team, TeamMember};
+    pub use crate::demo::spawn::TEAM_COUNT;
+    pub use crate::kit::team::{DEFAULT_VISION_RADIUS, Team, TeamMember};
 
     /// The team-fog room running the demo game over the kit's 2D vision
     /// preset: the kit's generic [`TeamRoom`](crate::kit::team::TeamRoom)

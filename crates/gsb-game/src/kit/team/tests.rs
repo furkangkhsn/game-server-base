@@ -409,3 +409,5 @@ fn runtime_team_change_moves_the_group_and_keeps_the_wire_identity() {
     );
     assert_eq!(t1b, [a, b, b2].into_iter().collect(), "team 1: {t1b:?}");
 }
+
+mod teams;

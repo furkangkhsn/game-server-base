@@ -8,7 +8,7 @@ use gsb_core::id::ConnectionId;
 
 use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 use crate::kit::identity::WireId;
-use crate::kit::team::{TEAM_COUNT, Team};
+use crate::kit::team::Team;
 
 /// The default spawn map half-size (world units): the historical 100×100
 /// arena. A room built with it spawns bit-identically to the pre-config
@@ -55,6 +55,10 @@ pub(crate) fn spawn_player(
 ) -> Entity {
     world.spawn((player_bundle(conn, spawn_half), wire)).id()
 }
+
+/// The number of teams in the demo (a 2-team game; the kit's team room
+/// runs any number — the count is this assignment policy's).
+pub const TEAM_COUNT: u8 = 2;
 
 /// The join-time team *assignment rule* (the demo: conn parity, i.e.
 /// "signup order" — team 0, 1, 0, 1, …). This decides what the team

@@ -5,8 +5,9 @@
 //! [`OpenRoom`](crate::kit::room::OpenRoom) uses `GroupKey = ()` (one snapshot
 //! group per room, everyone sees the whole world) and
 //! [`AoiRoom`](crate::kit::aoi::AoiRoom) uses `GroupKey = Cell` (spatial).
-//! `TeamRoom` makes the group key the **team identity**: exactly two groups,
-//! one per team. This is the proof that grouping is *not* a spatial concept:
+//! `TeamRoom` makes the group key the **team identity**: one group per
+//! team, as many teams as the game assigns (KIT-ARCHITECTURE §8.4 — the
+//! count used to be fixed at two). This is the proof that grouping is *not* a spatial concept:
 //! a connection's group is a function of *who the player is* (game state —
 //! the team its entity belongs to, kept in the world as the
 //! [`TeamMember`] component), not *where the player is*. Note what this
@@ -47,7 +48,7 @@
 //!   seam.
 //! - *Per-connection groups (`GroupKey = (Team, ConnectionId)`)* — would
 //!   make every connection its own snapshot group: per-connection payloads,
-//!   per-connection encoding, and the "2 groups" property (the whole point
+//!   per-connection encoding, and the "one group per team" property (the whole point
 //!   of the comparison) would be gone. Rejected.
 //! - *Enemy entities grant vision for their own team only* — that is what
 //!   own-team visibility already is; the spec's rule is that the *enemy's*
@@ -85,16 +86,17 @@
 //!   that team's clients — the *content* of the per-connection batches is
 //!   asserted, not just a bandwidth number.
 //! - **Broadcast set**: the broadcast set is exactly "has a `Position`"
-//!   (orphan stamping in `update`); neutral entities go to *both* teams.
+//!   (orphan stamping in `update`); neutral entities go to *every* team.
 //! - **Self-contained**: no delta, no history; the per-team ledger compares
 //!   exactly the wire content of that team's last emitted snapshot, so an
 //!   enemy dropping out of vision *removes its record* from the next
 //!   snapshot and the client reads "gone" from the full replacement alone.
-//! - **Per-group ledger**: the two teams' ledgers are independent (the
+//! - **Per-group ledger**: the teams' ledgers are independent (the
 //!   `GameLogic::snapshot` per-group bookkeeping contract); one team's
 //!   emission never changes the other team's "unchanged?" answer in the
 //!   same tick.
 
+mod content;
 mod logic;
 
 #[cfg(test)]
@@ -102,23 +104,21 @@ mod tests;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Component, Entity, With, World};
+use bevy_ecs::prelude::{Component, Entity};
 use gsb_core::id::PlayerId;
 
 use crate::kit::codec::RecordCodec;
 use crate::kit::common::{InputSeq, ParkEntry, ParkPolicy};
 use crate::kit::game::{Game, TeamGame, Wire};
-use crate::kit::identity::{Minter, WireId};
+use crate::kit::identity::Minter;
 use crate::kit::space::Vision;
 
-/// A player's team — the team-fog group key. Exactly [`TEAM_COUNT`] teams
-/// exist; membership is *game state*, kept in the world as the entity's
-/// [`TeamMember`] component (see its docs), never a position.
+/// A player's team — the team-fog group key. How many teams exist is
+/// the game's assignment policy ([`TeamGame::team_of`]); membership is
+/// *game state*, kept in the world as the entity's [`TeamMember`]
+/// component (see its docs), never a position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Team(pub u8);
-
-/// The number of teams (the demo is a 2-team game).
-pub const TEAM_COUNT: u8 = 2;
 
 /// Default vision radius in world units (see module docs).
 pub const DEFAULT_VISION_RADIUS: f32 = 25.0;
@@ -181,26 +181,30 @@ pub struct TeamRoom<G: TeamGame, V: Vision> {
     park_ledger: HashMap<String, ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
     minter: Minter,
+    /// The per-team tables below are indexed by the team number and
+    /// grow to the highest team the world has shown (never shrink — a
+    /// team slot is a few empty containers).
+    ///
     /// Per-team "no change" ledger: `team → (wire id → wire value)`, the
     /// exact wire content of that team's last emitted snapshot. Keyed by
     /// group (team) per the [`GameLogic::snapshot`] contract: one call
-    /// must not change the other team's answer in the same tick.
-    last: [HashMap<u64, Wire<G>>; TEAM_COUNT as usize],
+    /// must not change another team's answer in the same tick.
+    last: Vec<HashMap<u64, Wire<G>>>,
     /// Per-tick cache, rebuilt in [`Self::update`] (each entity exactly
     /// once): per team, its units; plus the neutral (ownerless)
     /// entities, which go to *every* team's snapshot.
-    team_units: [Vec<UnitRec<Wire<G>, V::Pos>>; TEAM_COUNT as usize],
+    team_units: Vec<Vec<UnitRec<Wire<G>, V::Pos>>>,
     neutral: Vec<(u64, Wire<G>)>,
-    /// Per-tick grid cache for the enemy-vision test: `cell → per-team
-    /// unit positions`. A *cache*, not the group key (unlike `AoiRoom`,
-    /// whose cells *are* the groups).
-    cells: HashMap<V::Cell, [Vec<V::Pos>; TEAM_COUNT as usize]>,
+    /// Per-tick grid cache for the enemy-vision test: `(cell, team) →
+    /// that team's unit positions in the cell`. A *cache*, not the group
+    /// key (unlike `AoiRoom`, whose cells *are* the groups).
+    cells: HashMap<(V::Cell, Team), Vec<V::Pos>>,
     /// Per-tick content, rebuilt in [`Self::update`]: `team →
     /// (wire id → wire value)` — exactly what that team's snapshot
     /// carries (own team ∪ neutral ∪ in-vision enemies). `snapshot`
     /// answers from this so every team's snapshot is the *same tick's*
     /// state.
-    contents: [HashMap<u64, Wire<G>>; TEAM_COUNT as usize],
+    contents: Vec<HashMap<u64, Wire<G>>>,
     /// Per-player input sequence state (strategy-independent; see
     /// `crate::kit::common::emit_private`).
     input: InputSeq,
@@ -222,11 +226,11 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             park: ParkPolicy::default(),
             park_ledger: HashMap::new(),
             minter: Minter::sequential(),
-            last: [HashMap::new(), HashMap::new()],
-            team_units: [Vec::new(), Vec::new()],
+            last: Vec::new(),
+            team_units: Vec::new(),
             neutral: Vec::new(),
             cells: HashMap::new(),
-            contents: [HashMap::new(), HashMap::new()],
+            contents: Vec::new(),
             input: InputSeq::default(),
             encoded: 0,
         }
@@ -248,80 +252,6 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
     /// The game this room runs, for configuration after construction.
     pub fn game_mut(&mut self) -> &mut G {
         &mut self.game
-    }
-
-    /// Rebuild the per-tick caches (module docs): team units, neutrals, the
-    /// vision grid, and — the important part — each team's *content*: own
-    /// team ∪ neutral ∪ enemy units in team vision.
-    fn rebuild(&mut self, world: &mut World) {
-        let Self {
-            game,
-            vision,
-            team_units,
-            neutral,
-            cells,
-            contents,
-            ..
-        } = self;
-        for units in team_units.iter_mut() {
-            units.clear();
-        }
-        neutral.clear();
-        cells.clear();
-
-        // Membership is read from the WORLD (each entity's `TeamMember`
-        // component, written at join): no reverse connection map — the
-        // component *is* the table, and a runtime team change needs no
-        // bookkeeping here at all. An entity without the component is
-        // neutral (ownerless): broadcast to ALL teams — the broadcast set
-        // stays exactly the codec's marker.
-        let codec = game.codec();
-        let mut query = world.query_filtered::<(
-            &WireId,
-            RecordQuery<G>,
-            Option<&V::Pos>,
-            Option<&TeamMember>,
-        ), With<Marker<G>>>();
-        for (wire_id, item, pos, member) in query.iter(world) {
-            let wire = codec.wire(item);
-            match member {
-                Some(m) => {
-                    let team = m.0.0 as usize;
-                    if let Some(p) = pos {
-                        cells
-                            .entry(vision.cell(p))
-                            .or_insert([Vec::new(), Vec::new()])[team]
-                            .push(*p);
-                    }
-                    team_units[team].push((wire_id.get(), wire, pos.copied()));
-                }
-                None => neutral.push((wire_id.get(), wire)),
-            }
-        }
-        // Content: own team + neutral, then enemy units in vision.
-        for (t, content) in contents.iter_mut().enumerate() {
-            content.clear();
-            for (id, wire, _) in &team_units[t] {
-                content.insert(*id, wire.clone());
-            }
-            for (id, wire) in neutral.iter() {
-                content.insert(*id, wire.clone());
-            }
-        }
-        for (t, content) in contents.iter_mut().enumerate() {
-            let enemy = 1 - t;
-            for (id, wire, pos) in &team_units[enemy] {
-                let Some(target) = pos else { continue };
-                let visible = vision.neighborhood(vision.cell(target)).any(|c| {
-                    cells
-                        .get(&c)
-                        .is_some_and(|units| units[t].iter().any(|v| vision.sees(v, target)))
-                });
-                if visible {
-                    content.insert(*id, wire.clone());
-                }
-            }
-        }
     }
 }
 
