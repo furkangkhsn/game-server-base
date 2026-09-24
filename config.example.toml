@@ -6,8 +6,10 @@
 # The game this server hosts (docs/GAME-MODULE.md): one of the games
 # compiled into the build (cargo features). "demo" (the default) is the 2D
 # demo; its settings are the flat keys below (visibility, topology,
-# shard_count, aoi_cell_size, ...). An unknown name refuses startup and
-# lists the compiled-in games.
+# shard_count, aoi_cell_size, ...), all commented out at their defaults so
+# the file stays valid for "arena" and "mmo" too (they refuse the demo's
+# keys when written). An unknown name refuses startup and lists the
+# compiled-in games.
 game = "demo"
 
 # Socket address to bind.
@@ -282,7 +284,7 @@ keepalive_hz = 1.0
 #   topology = "sharded" + visibility = "team"/"pvs" - cross-shard interest
 #     needs a subscription layer that does not exist yet (shard locality;
 #     docs/CROSS-SHARD.md §4).
-visibility = "all"
+#visibility = "all"
 #topology = "single"
 #communication = "always-full"
 
@@ -295,11 +297,11 @@ visibility = "all"
 #shard_count = 4
 
 # World units per AOI cell edge (used only when visibility = "spatial").
-aoi_cell_size = 20.0
+#aoi_cell_size = 20.0
 
 # World units an enemy must be within to be visible to a team
 # (used only when visibility = "team").
-team_vision_radius = 25.0
+#team_vision_radius = 25.0
 
 # Half-size of the square map entities spawn on (all demo rooms; the demo
 # map has no walls, so the map is as big as the game wants it). Default 50
@@ -309,7 +311,7 @@ team_vision_radius = 25.0
 # map. Note: for visibility = "pvs" the VISIBILITY map stays the
 # hand-authored 100x100 sectors regardless (off-map spawns land in the
 # SECTOR_OUT catch-all and see only themselves).
-spawn_half_size = 50.0
+#spawn_half_size = 50.0
 
 # Disconnect-park grace of the demo rooms, in seconds (docs/RECONNECT.md
 # §3): when a client's transport dies WITHOUT a leave, the player's
@@ -325,7 +327,7 @@ spawn_half_size = 50.0
 #
 # Default 30. 0 restores the pre-reconnect semantics exactly: disconnect
 # = instant despawn.
-disconnect_grace_secs = 30.0
+#disconnect_grace_secs = 30.0
 
 # HTTP ops surface (docs/OPS.md): GET /healthz (liveness from the age of
 # the latest metrics report), GET /metrics (Prometheus text exposition,
@@ -348,10 +350,10 @@ disconnect_grace_secs = 30.0
 # keys written above, which those games fix: visibility, topology,
 # communication, shard_count, aoi_cell_size, team_vision_radius,
 # spawn_half_size and disconnect_grace_secs (the demo's; each game names
-# its own below). This file WRITES several of them for the demo — delete
-# them (not just the `game` line) before switching a copy to "arena" or
-# "mmo". Keep the tables LAST: in TOML every key after a [table] header
-# belongs to it.
+# its own below). This file writes the demo's keys COMMENTED OUT, at
+# their defaults, so a copy switches games by its `game` line alone;
+# uncomment one only for the demo. Keep the tables LAST: in TOML every
+# key after a [table] header belongs to it.
 
 # game = "arena" — one room with 3D team fog of war (single × team ×
 # always-full; vision radius 15 m, the arena's own).

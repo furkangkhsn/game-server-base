@@ -1,13 +1,15 @@
-//! `config.example.toml` against the hosted games (GAME-MODULE G2): its
-//! commented `[arena]` / `[mmo]` sections, uncommented, are accepted by
-//! their games; and — a finding — the file as shipped cannot simply be
-//! switched to another game, because it writes the demo's flat keys
-//! explicitly and the other games refuse them. Configure only: nothing
-//! binds (the example's port is a real one).
+//! `config.example.toml` against the hosted games (GAME-MODULE G2): the
+//! file as shipped hosts the demo exactly as its documented defaults
+//! would; a copy switched to another game by its `game` line alone
+//! starts that game (the demo's flat keys, which the other games
+//! refuse, are written commented out — finding K5); and its commented
+//! `[arena]` / `[mmo]` sections, uncommented, are accepted by their
+//! games. Configure only: nothing binds (the example's port is a real
+//! one).
 
 #![cfg(all(feature = "game-demo", feature = "game-arena", feature = "game-mmo"))]
 
-use gsb_server::{Config, GameError, ServerError};
+use gsb_server::{Config, ServerError};
 
 const EXAMPLE: &str = include_str!("../../../config.example.toml");
 
@@ -24,7 +26,8 @@ fn configure(game: &str, cfg: &Config) -> Result<(), ServerError> {
     module.configure(&cfg.raw, cfg)
 }
 
-/// The demo's flat keys the example writes explicitly.
+/// The demo's flat keys the example documents (commented out, at their
+/// defaults).
 const DEMO_KEYS: [&str; 5] = [
     "visibility",
     "aoi_cell_size",
@@ -33,55 +36,109 @@ const DEMO_KEYS: [&str; 5] = [
     "disconnect_grace_secs",
 ];
 
+/// The line that opens the games' own tables (commented): everything
+/// before it is the flat, top-level part of the file.
+const TABLES_START: &str = "#[arena]";
+
+/// The example with its commented demo keys uncommented (the flat part
+/// only — `[arena]` has its own `disconnect_grace_secs`): the file as it
+/// shipped before K5, every demo key written explicitly.
+fn with_demo_keys_written() -> String {
+    let mut text = String::new();
+    let mut flat = true;
+    let mut written = Vec::new();
+    for line in EXAMPLE.lines() {
+        flat &= line != TABLES_START;
+        let key = line.strip_prefix('#').and_then(|l| l.split(" = ").next());
+        match key {
+            Some(k) if flat && DEMO_KEYS.contains(&k) => {
+                written.push(k);
+                text.push_str(&line[1..]);
+            }
+            _ => text.push_str(line),
+        }
+        text.push('\n');
+    }
+    written.sort_unstable();
+    let mut expected = DEMO_KEYS;
+    expected.sort_unstable();
+    assert_eq!(
+        written, expected,
+        "each demo key documented once, commented"
+    );
+    text
+}
+
+/// The example as shipped hosts the demo, and exactly as the demo keys it
+/// documents would: uncommenting them changes nothing (same resolved
+/// selection, same demo settings) — the commented values ARE the
+/// defaults, and the file resolves as it did when it wrote them.
 #[test]
 fn the_example_hosts_the_demo_as_shipped() {
     let cfg = load(EXAMPLE);
     assert_eq!(cfg.game, "demo");
     configure("demo", &cfg).expect("the demo takes the example");
+    for key in DEMO_KEYS {
+        assert!(cfg.raw.get(key).is_none(), "`{key}` is written commented");
+    }
+
+    let written = load(&with_demo_keys_written());
+    configure("demo", &written).expect("the demo takes its keys");
+    assert_eq!(
+        cfg.resolve_selection().expect("resolves"),
+        written.resolve_selection().expect("resolves"),
+        "the same room selection"
+    );
+    assert_eq!(cfg.visibility, written.visibility);
+    assert_eq!(cfg.aoi_cell_size, written.aoi_cell_size);
+    assert_eq!(cfg.team_vision_radius, written.team_vision_radius);
+    assert_eq!(cfg.spawn_half_size, written.spawn_half_size);
+    assert_eq!(cfg.disconnect_grace_secs, written.disconnect_grace_secs);
 }
 
-/// FINDING: `game = "arena"` / `"mmo"` in a copy of the example refuses
-/// startup on the first demo key it writes (`visibility`) — the
-/// operator has to delete the demo's keys first.
+/// K5 fixed: a copy of the example switched to another game by its
+/// `game` line ALONE starts that game — the file writes none of the keys
+/// the other games refuse.
 #[test]
-fn switching_the_example_to_another_game_trips_on_the_demo_keys() {
-    let cfg = load(EXAMPLE);
-    for game in ["arena", "mmo"] {
-        match configure(game, &cfg) {
-            Err(ServerError::Game(GameError::Module { source, .. })) => {
-                let msg = source.to_string();
-                assert!(msg.contains("`visibility`"), "{game}: {msg}");
-            }
-            other => panic!("{game}: expected a refusal, got {other:?}"),
+fn switching_the_example_to_another_game_needs_only_the_game_line() {
+    for game in ["demo", "arena", "mmo"] {
+        let text = EXAMPLE.replacen("game = \"demo\"", &format!("game = \"{game}\""), 1);
+        let cfg = load(&text);
+        assert_eq!(cfg.game, game);
+        if let Err(e) = configure(game, &cfg) {
+            panic!("{game} refused the example: {e}");
         }
     }
 }
 
-/// The commented `[arena]` / `[mmo]` examples, uncommented (and the
-/// demo's flat keys dropped), are accepted by their games.
+/// The commented `[arena]` / `[mmo]` examples, uncommented, are accepted
+/// by their games (and ignored by the demo).
 #[test]
 fn the_commented_game_tables_are_valid() {
     let mut text = String::new();
+    let mut tables = false;
     for line in EXAMPLE.lines() {
-        let flat = line.split([' ', '=']).next().unwrap_or("");
-        if DEMO_KEYS.contains(&flat) {
-            continue;
-        }
-        let game_line = [
-            "#[arena]",
-            "#teams",
-            "#disconnect_grace_secs",
-            "#[mmo]",
-            "#logout",
-        ]
-        .iter()
-        .any(|p| line.starts_with(p));
+        tables |= line == TABLES_START;
+        let game_line = tables
+            && [
+                "#[arena]",
+                "#teams",
+                "#disconnect_grace_secs",
+                "#[mmo]",
+                "#logout",
+            ]
+            .iter()
+            .any(|p| line.starts_with(p));
         text.push_str(if game_line { &line[1..] } else { line });
         text.push('\n');
     }
     let cfg = load(&text);
     let raw = &cfg.raw;
     assert!(raw.get("arena").is_some_and(|t| t.get("teams").is_some()));
+    assert!(
+        raw.get("arena")
+            .is_some_and(|t| t.get("disconnect_grace_secs").is_some())
+    );
     assert!(raw.get("mmo").is_some_and(|t| t.get("logout").is_some()));
     for game in ["arena", "mmo"] {
         if let Err(e) = configure(game, &cfg) {
