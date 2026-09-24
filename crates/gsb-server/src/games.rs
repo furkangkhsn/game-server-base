@@ -12,7 +12,9 @@ use crate::{GameError, GameModule};
 pub mod arena;
 #[cfg(feature = "game-demo")]
 pub mod demo;
-#[cfg(feature = "game-arena")]
+#[cfg(feature = "game-mmo")]
+pub mod mmo;
+#[cfg(any(feature = "game-arena", feature = "game-mmo"))]
 pub mod settings;
 
 /// The `game` config key's default: the 2D demo, the game every
@@ -29,6 +31,8 @@ const GAMES: &[Entry] = &[
     (demo::DemoModule::NAME, demo::DemoModule::boxed),
     #[cfg(feature = "game-arena")]
     (arena::ArenaModule::NAME, arena::ArenaModule::boxed),
+    #[cfg(feature = "game-mmo")]
+    (mmo::MmoModule::NAME, mmo::MmoModule::boxed),
 ];
 
 /// The names of the games compiled into this build.
