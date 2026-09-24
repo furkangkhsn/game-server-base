@@ -75,9 +75,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **409** (409/409 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 → 388 için
-`docs/CHANGELOG.md` başlığına bakınız). Son tur: **stall
+Test sayısı: bugün itibarıyla **411** (411/411 yeşil; tarihsel
+ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 → 388 → 409
+için `docs/CHANGELOG.md` başlığına bakınız). Son tur: **gsb-kit Faz 0**
+(`docs/KIT-ARCHITECTURE.md` §10) — `gsb-game/src` `kit/` (stratejiler +
+ortak makine) ve `demo/` (örnek oyun) olarak bölündü, davranış ve wire
+baytları aynı, public yollar aynı; kit'in demo'ya her erişimi geçici
+`kit/seam.rs`'ten geçiyor (25 öğe = Faz 1 iş listesi) ve kural bir
+kaynak-tarayan testle kilitli. Sıradaki: Faz 1 (bağımlılığın ters
+çevrilmesi). Önceki tur: **stall
 gözlemlenebilirliği + bayt-granüler ilerleme** — 10k ölçümünde sunucu
 4486 oturumu write stall ile kapatırken `RESULT` `errors=0` diyordu.
 Sunucunun başlattığı her kapanış artık sebebiyle sayılıyor
@@ -85,7 +91,7 @@ Sunucunun başlattığı her kapanış artık sebebiyle sayılıyor
 stall saati kare tamamlanmasını değil soketin kabul ettiği BAYTI
 ölçüyor (pencereden uzun süren bir kareyi okuyan yavaş istemci artık
 öldürülmüyor); yan bulgu olarak WS kapısının kuyruk uyandırması
-düzeltildi. 10k A/B ölçümü iki kommit üzerinde bekliyor. Önceki tur:
+düzeltildi. 10k A/B ölçümü iki kommit üzerinde bekliyor. Daha önce:
 **metrik fold denetimi** — sharded oda raporunu tek satıra katlayan
 `fold_rooms` alan alan değil toplu denetlendi. Her alanın katlama
 kuralı kararlaştırılıp koda yazıldı ve kural YAPISAL hâle getirildi

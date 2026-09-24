@@ -52,7 +52,7 @@ architecture for MOBA / MMORPG projects.
 | `gsb-ecs` | `System` trait, `SystemRunner` |
 | `gsb-core` | IDs, channels, global ticker, registry actor, room actor (5-phase tick), connection actor |
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump tasks + default TCP |
-| `gsb-game` | **All game logic** (components, systems, `RoomLogic`, game proto) |
+| `gsb-game` | **All game logic** (components, systems, `RoomLogic`, game proto); split internally into `kit/` (reusable visibility strategies and machinery) and `demo/` (the example game) ahead of the `gsb-kit`/`gsb-demo` crate split — see `docs/KIT-ARCHITECTURE.md` |
 | `gsb-server` | Composition root: config, startup, `gsb-server` binary + client example + `gsb-loadgen` load generator |
 
 ## Quick start
@@ -68,7 +68,7 @@ there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
 clippy `-D warnings` · test).
 
 ```sh
-# 409 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 411 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -80,7 +80,7 @@ clippy `-D warnings` · test).
 # ERROR code enumeration, protocol version handshake, session lifecycle (idle window +
 # byte-granular write stall, server-close reasons) and heartbeat-ACK throttling, AFK
 # signal (input-idle clock + default-off ceiling), sharded report folding (per-field
-# fold rule).
+# fold rule), kit/demo layering (the kit reaches the demo only through its seam).
 cargo test --workspace
 
 cargo run -p gsb-server                    # default config (0.0.0.0:7777, 1 room, 30 Hz global)

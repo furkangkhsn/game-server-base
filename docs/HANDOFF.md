@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-409 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+411 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -73,6 +73,15 @@ alanlarını görür, kapsülleme bozulmaz). Hedefi aşan 44 dosya var ve
 her biri bilinçli: trait/trait-impl tek blok olmak zorunda, ve tek
 sürekli prosedürü ikiye bölmek yarı kurulmuş durumu modül sınırından
 geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
+
+**gsb-kit tasarımı onaylandı ve Faz 0 tamam** (`docs/KIT-ARCHITECTURE.md`
+§10, CHANGELOG "gsb-kit Faz 0 turu"): `gsb-game/src` artık `kit/`
+(stratejiler + ortak makine) ve `demo/` (örnek oyun). Kit kodu demo'ya
+YALNIZ `kit/seam.rs` üzerinden erişir — `kit/` altında seam dışında her
+`crate::` yolu `kit::` ile devam etmeli, `src/layering.rs` testi bunu
+kırar. Kit'e demo bağımlılığı eklemen gerekirse seam'e, hedef seam
+grubuna, tek satırlık gerekçeyle ekle. Seam'in içeriği Faz 1'in iş
+listesidir; Faz 1 bitince seam boşalır ve silinir.
 
 ## ÖNCE OKU (sırayla)
 
@@ -164,6 +173,6 @@ geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 409 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 411 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor. Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 tamam (§10, "Faz 0 sonucu"). Kararlar §12.**
 
 ## 1. Neden
 
@@ -305,7 +305,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 
 | Faz | Kapsam | Büyüklük | Kapı |
 |---|---|---|---|
-| 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil |
+| 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
 | 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, `Grid3`, 3D takım sisi, proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
@@ -317,6 +317,112 @@ sınır-şeridi entegrasyonuyla (`sharded/spatial.rs:109-169`) birlikte
 generic yaparken baytları birebir korumaktır; `wire_contract.rs`,
 `delta_aoi.rs` ve `aoi/tests/sharing.rs` bunu kilitler ve Faz 1 sonunda
 **değişmeden** geçmek zorundadır.
+
+### Faz 0 sonucu
+
+**Tamamlandı** (`kit/phase-0`, `a51e8c7..`; CHANGELOG "gsb-kit Faz 0
+turu"). `gsb-game/src` artık iki özel modülden oluşuyor:
+
+- `kit/` — `room` (`OpenRoom`), `aoi`, `team`, `pvs`, `sharded`,
+  `common` (hücre-delta motoru, park politikası, girdi sıra/ack kuralı
+  `InputState::admit`, `Private` çerçeveleme, yetim damgalama, basım),
+  `identity` (`WireId` — §4.4 gereği Faz 0'da kit'e taşındı) ve geçici
+  `seam`.
+- `demo/` — `components`, `systems` (+ `movement_runner`), `economy`,
+  `op`, `game` (üretilen proto), `register`, `spawn` (`spawn_pos`,
+  `DEFAULT_SPAWN_HALF`, `spawn_player`, `team_of`, `restore_migrant`),
+  `input` (`MOVE_TO` çözme), `bot`, `rpc` (`ABILITY`/`ECONOMY`),
+  `sectors` (PVS haritası), `wire` (`StripPos`).
+
+Eski public yolların hepsi (`gsb_game::room`, `::aoi`, `::team`, `::pvs`,
+`::sharded`, `::components`, `::systems`, `::economy`, `::op`, `::game`,
+`::register`, `::DEFAULT_DISCONNECT_GRACE`) kökten yeniden ihraç
+ediliyor; `crates/gsb-game` dışında tek bir dosya değişmedi. Bu
+dokümandaki `dosya:satır` referansları Faz 0 öncesi yollardır:
+`common/…` → `kit/common/…`, `aoi|team|pvs|sharded/…` → `kit/…/…`,
+`room/…` → `kit/room/…`, `common/bot.rs` → `demo/bot.rs`,
+`components.rs` → `demo/components.rs` + `kit/identity.rs`.
+
+**Değişmez (kilitli):** `kit/` altında `seam.rs` dışındaki her `crate::`
+yolu `kit::` ile devam eder (yorumlar dahil). Bu, "seam dışında
+`crate::demo` yok" kuralından bilinçli olarak sıkıdır: kök, demo
+öğelerini eski yollardan yeniden ihraç ettiği için `crate::room::spawn_pos`
+yazan bir kit dosyası `crate::demo` yazmadan seam'i atlardı. Kural
+`src/layering.rs`'teki kaynak-tarayan birim testiyle kilitli
+(mutation-check: `kit/team/logic.rs`'e eklenen bir `crate::room`
+referansı testi kırıyor). Elle: `grep -rn "crate::demo"
+crates/gsb-game/src/kit` → yalnız `kit/seam.rs`.
+
+**Seam envanteri = Faz 1 iş listesi** (25 öğe, 19 `use` satırı; ayrıca
+yalnız testlerde 4 öğe):
+
+| Hedef seam | Öğeler |
+|---|---|
+| `RecordCodec` (§4.1) | `Position` (Marker/Query; Vision/SectorMap/Partition'ın `Pos`'u da bu), `EntityRecord` (kayıt gövdesi), `StripPos` (`Wire` = sharded `Strip`) |
+| `CellSpace` (§4.2) | `CellExit` (`encode_cell` gövdesi) |
+| `Vision` (§4.2) | — (`Position` okur; ızgara zaten kit'te, gelecekteki `Grid2`) |
+| `SectorMap` (§4.2) | `Sector`, `SECTOR_OUT`, `sector_of`, `VISIBLE_FROM` |
+| `Partition` (§4.2) | — (`Position` okur; ızgara bölme zaten kit'te, gelecekteki `GridPartition2`) |
+| `Game` kancaları (§4.3) | `spawn_player`, `team_of` (`on_player_spawned`), `MoveTarget` + `Speed` (`Mig`/capture), `restore_migrant` (`restore`), `movement_runner` (`systems`), `ingest`, `synthesize_bot_moves` (`bot_actions`), `handle_request` + `EconomyService`, `DEFAULT_SPAWN_HALF`, `WORLD_SNAPSHOT`/`PRIVATE` (`SNAPSHOT_OP`/`PRIVATE_OP`) |
+| Kimlik (§4.4) | — (`WireId` kit'e taşındı; kalan iş kit-içi: `Minter`, §8.1) |
+| Kit zarfı (§5) | `WorldSnapshot`, `Private`, `private::Payload`, `InputAck` (Faz 2'de kit proto'suna) |
+| Test fikstürleri | `DEFAULT_SPEED`, `SECTOR_WEST`/`EAST`/`NW` (Faz 1'in kit test oyunu yerine geçer) |
+
+**Temiz bölünmeyenler** (kit tarafında kaldı, demo bağımlılığı seam'den):
+
+1. `collect_migrations`: yakalama (capture) bölge sorgusuyla kaynaşık
+   (`(&WireId, &Position, &Speed, Option<&MoveTarget>)`); ayırmak sorgu
+   sırasını/filtresini değiştirirdi. `&Speed` şartı (§8.5 açığı)
+   olduğu gibi korundu.
+2. `ShardedRoomState`: public tip, oyun durumunu (`pos`, `speed`,
+   `target`) ve kit durumunu (`park`) birlikte taşıyor — Faz 1'de
+   `KitMig<G::Mig>`.
+3. Snapshot kodlayıcıları (`OpenRoom`, `TeamRoom`, `SectorRoom`,
+   `ShardedRoom`, `match_result` ×2) ve `stamp_orphans`/`dirty_pass`:
+   `EntityRecord`'u `Position`'dan satır içinde kuruyorlar —
+   `RecordCodec`'in ta kendisi; Faz 1 işi.
+4. Odaların `spawn_half` ve `economy` alanları + `with_spawn_half` /
+   `with_economy` kurucuları: demo yapılandırması kit odasında duruyor,
+   çünkü public kurucu imzaları Faz 0'da değişemez.
+5. Sharded park kopyası (`kit/sharded/room/logic.rs` `on_disconnect` …
+   `on_resume`) ortak `park.rs` ile birleştirilmedi — §4.4'e göre Faz 1.
+
+**Tasarıma notlar (sapma değil, kayıt):**
+
+- `in_convex`, harita verisiyle birlikte `demo/sectors.rs`'e gitti;
+  §7'nin `ConvexSectors2` ön-ayarı Faz 1'de onu kit'e geri alacak.
+- `OpenRoom` ve `ShardedRoom`'daki birebir aynı iki `handle_request`
+  gövdesi tek bir demo fonksiyonunda (`demo/rpc.rs`) birleşti (mantık
+  aynı, iki kopya → bir).
+- `match_result` §4.3'teki `Game` listesinde yok: kodek + zarfla kit
+  tarafında genel yazılabilir (Faz 1).
+- Kök uyumluluk modülleri (`gsb_game::room`, `::pvs`, `::sharded`,
+  `::components`) artık kısa belge taşıyor; stratejilerin uzun modül
+  belgeleri özel `kit::*` modüllerinde (rustdoc uyarısı 37 → 14).
+
+**Görünürlük genişletmeleri** (hiçbir struct alanı genişletilmedi):
+`team_of`, `sector_of`, `VISIBLE_FROM`, `SECTOR_WEST/EAST/NW` —
+private → `pub(crate)` (modül sınırını geçtikleri için);
+`pub(in crate::sharded)` alanlar aynı kapsamla `pub(in
+crate::kit::sharded)` oldu.
+
+**Doğrulama:** 411 test (409 + 2 katman testi) / 0 hata / 1 ignored;
+`wire_contract.rs`, `delta_aoi.rs` ve `aoi/tests/sharing*.rs`
+değişmeden geçti (yalnız modül içi testlerin import yolları değişti).
+Loadgen (50 istemci), 412d863 ↔ HEAD:
+
+| Koşu | left | errors | server_closes | step_p50_fine_us | snap_total | out_bps_per_conn |
+|---|---|---|---|---|---|---|
+| tcp 3 sn — taban | 50 | 0 | 0 | 32 | 4100 | 11021 |
+| tcp 3 sn — HEAD | 50 | 0 | 0 | 40 | 4150 | 10961 |
+| udp 3 sn — taban | 50 | 0 | 0 | 40 | 4150 | 11019 |
+| udp 3 sn — HEAD | 50 | 0 | 0 | 32 | 4150 | 11053 |
+| sharded N=4, 8 sn — taban | 50 | 0 | 0 | 24 | 11526 | 7129 |
+| sharded N=4, 8 sn — HEAD | 50 | 0 | 0 | 40 | 11470 | 7093 |
+
+`step_p50_fine_us` 8 µs'lik kovalarla ölçülür; sharded farkı için üçer
+dönüşümlü A/B koşusu alındı: taban 32/32/24, HEAD 40/24/16 — gürültü
+içinde.
 
 ## 11. Kabul kriteri
 

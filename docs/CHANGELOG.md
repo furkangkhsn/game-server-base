@@ -5,6 +5,67 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 0 turu (modül bölmesi: `kit/` + `demo/` + geçici seam)
+
+`docs/KIT-ARCHITECTURE.md` §10'un ilk fazı. **Davranış değişikliği yok,
+wire baytları aynı**; kod yalnızca `crates/gsb-game/src` içinde taşındı.
+
+**Ne yapıldı.** `gsb-game/src` iki özel modüle ayrıldı. `kit/`:
+stratejiler (`room`/`OpenRoom`, `aoi`, `team`, `pvs`, `sharded`), ortak
+makine (`common`: hücre-delta motoru, park politikası, girdi sıra/ack
+kuralı, `Private` çerçeveleme, yetim damgalama, basım) ve kit'e ait
+`identity` (`WireId`). `demo/`: bileşenler, hareket sistemi, economy
+servisi, opcode'lar, üretilen proto, `register`, spawn dağılımı, `MOVE_TO`
+çözme, bot, RPC işleyicileri, PVS haritası, `StripPos`. Karışık
+fonksiyonlar işlevine göre bölündü: `on_join` (kit: basım + tablolar;
+demo: `spawn_player`), `ingest` (demo: çözme + uygulama; kit: sıra
+kuralı `InputState::admit`), `handle_request` (iki birebir kopya →
+`demo/rpc.rs`'te tek gövde), `on_migrate_in` (demo: `restore_migrant`),
+takım ataması (`team_of` → demo). Taşımalar `git mv` ile; 8 kod
+commit'i, her biri derleniyor ve tüm süit yeşil.
+
+**Seam.** Kit'in demo'ya her erişimi tek modülden, `kit/seam.rs`'ten
+geçiyor; içeriği hedef seam'e göre sıralı (RecordCodec / CellSpace /
+Vision / SectorMap / Partition / Game / kimlik / kit zarfı / test
+fikstürleri) ve **Faz 1'in iş listesi**: 25 öğe + 4 test-yalnız öğe.
+Kural `src/layering.rs`'teki kaynak-tarayan testle kilitli: `kit/`
+altında seam dışındaki her `crate::` yolu `kit::` ile devam etmeli
+(yorumlar dahil). Envanter, temiz bölünmeyenler ve notlar:
+KIT-ARCHITECTURE §10 "Faz 0 sonucu".
+
+**Public API.** Eski yolların hepsi kökten yeniden ihraç ediliyor
+(`gsb_game::room`, `::aoi`, `::team`, `::pvs`, `::sharded`,
+`::components`, …); `crates/gsb-game` dışında hiçbir dosya değişmedi.
+
+**Elenen alternatifler.**
+- *Yalnız `grep crate::demo` kuralı:* kök uyumluluk yolları
+  (`crate::room::spawn_pos`, `crate::components::Position`) demo'ya
+  seam'i atlayarak ulaşmayı mümkün bırakırdı; kural "`crate::` yolu
+  `kit::` ile devam eder" olarak sıkılaştırıldı.
+- *`WireId`'yi demo'da bırakıp seam'den geçirmek:* §4.4 kimliği kit'e
+  veriyor ve basım zaten kit'te; tipi taşımak saf bir taşıma, seam'de
+  tutmak Faz 1'e geri taşınacak ~10 referans demekti.
+- *`collect_migrations`'ı bölmek:* yakalama bölge sorgusuyla kaynaşık;
+  bölmek sorgu filtresini (`&Speed` şartı, §8.5) ya da sırayı
+  değiştirirdi — kit'te kaldı, tipleri seam'den.
+- *Crate'leri şimdi bölmek:* §9 (kit demo'ya bağımlı olurdu).
+
+**Yan bulgu (kapsam dışı, düzeltilmedi).** `gsb-server/tests/write_stall.rs`
+`a_peer_that_stops_reading_loses_its_session` bir tam-süit koşusunda
+bir kez kırıldı (`closes=1, conns=1`), tek başına üç koşuda geçti.
+Sebep testte: registry `ConnClosed`'da `closes`'u artırıp metrik
+yayıyor, bağlı satırı ise odanın sonraki `DetachDespawned`'ına kadar
+tutuyor; test yalnız `closes >= 1`'i bekleyip `conns == 0`'ı iddia
+ediyor. Ayrı iş olarak işaretlendi.
+
+**Doğrulama.** fmt temiz · clippy `-D warnings` 0 uyarı · test **411**
+geçti / 0 hata / 1 ignored (409 + 2 katman testi). Loadgen (50 istemci,
+412d863 ↔ HEAD): tcp `left=50 errors=0 server_closes=0`, `snap_total`
+4100 ↔ 4150, `out_bps_per_conn` 11021 ↔ 10961, `step_p50_fine_us` 32 ↔
+40; udp 4150 ↔ 4150, 11019 ↔ 11053, 40 ↔ 32; sharded N=4 (8 sn) 11526 ↔
+11470, 7129 ↔ 7093, 24 ↔ 40 — dönüşümlü üçer A/B'de taban 32/32/24,
+HEAD 40/24/16: gürültü içinde.
+
 ## Ölçüm kaydı (sharded yeniden ölçüm + write-stall A/B)
 
 Kod değişikliği yok; iki ölçüm ve bir doküman düzeltmesi.
