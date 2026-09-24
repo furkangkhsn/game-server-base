@@ -6,7 +6,7 @@
 
 use bevy_ecs::prelude::Entity;
 use bevy_ecs::world::World;
-use gsb_ecs::{System, SystemCtx};
+use gsb_ecs::{System, SystemCtx, SystemRunner};
 
 use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 
@@ -77,4 +77,13 @@ impl System for MovementSystem {
             }
         }
     }
+}
+
+/// The system stack every demo room runs (the demo game is the same in
+/// all of them — only visibility differs; the future `Game::systems`,
+/// KIT-ARCHITECTURE §4.3).
+pub(crate) fn movement_runner() -> SystemRunner {
+    let mut runner = SystemRunner::new();
+    runner.add(MovementSystem);
+    runner
 }

@@ -31,7 +31,7 @@
 //! the joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and
 //! the broadcast pass (everything else that is broadcastable, see
 //! below). Both sites go through **one minting point**,
-//! [`crate::common::next_serial`], which is the only caller of the
+//! [`crate::kit::common::next_serial`], which is the only caller of the
 //! crate-private [`WireId::new`]: the counter's space is closed to
 //! everything else in the crate, and `WireId`'s private field plus the
 //! removed `Default` derive close it to every other crate as well.
@@ -90,16 +90,13 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bevy_ecs::prelude::Entity;
-use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::id::PlayerId;
 use gsb_ecs::SystemRunner;
 
-use crate::common::ParkEntry;
 use crate::economy::EconomyService;
+use crate::kit::common::ParkEntry;
 
-/// The default spawn map half-size (world units): the historical 100×100
-/// arena. A room built with it spawns bit-identically to the pre-config
-/// `spawn_pos`.
-pub const DEFAULT_SPAWN_HALF: f32 = 50.0;
+pub use crate::demo::spawn::{DEFAULT_SPAWN_HALF, spawn_pos};
 
 /// The open-visibility strategy room (`GroupKey = ()`): one moving entity
 /// per player, free 2D movement — everyone sees everything (the
@@ -116,7 +113,7 @@ pub struct OpenRoom {
     next_player_id: u64,
     /// The room's wire-identity counter (see module docs, "Wire identity").
     /// Monotonic; a value is never re-used within the room's lifetime. The
-    /// **only** writer is [`crate::common::next_serial`] — the single
+    /// **only** writer is [`crate::kit::common::next_serial`] — the single
     /// minting point for every [`WireId`] this room ever stamps.
     next_wire_id: u64,
     /// Half-size of the square spawn map (see [`spawn_pos`]): entities
@@ -136,11 +133,11 @@ pub struct OpenRoom {
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
     /// Per-player input sequence state (high-water mark + last ack;
-    /// see `crate::common::ingest` / `emit_private`). Strategy-independent:
+    /// see `crate::kit::common::ingest` / `emit_private`). Strategy-independent:
     /// every room numbers and acknowledges its clients' input the same
     /// way (the client's prediction reconciliation does not care which
     /// visibility strategy the server picked).
-    input: HashMap<PlayerId, crate::common::InputState>,
+    input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -150,10 +147,10 @@ pub struct OpenRoom {
     /// deployment always has one (the platform's economy is the thing
     /// the request is delegated to).
     economy: Option<EconomyService>,
-    /// The disconnect-park policy knob (see `crate::common::ParkPolicy`
+    /// The disconnect-park policy knob (see `crate::kit::common::ParkPolicy`
     /// and RECONNECT §3): how long a dropped transport's hero stays in
     /// the world. Zero = the pre-reconnect despawn-on-disconnect.
-    park: crate::common::ParkPolicy,
+    park: crate::kit::common::ParkPolicy,
     /// The demo park ledger (§4: it lives in the LOGIC — the core only
     /// queries it through `resume_lookup`). Identity → parked entity +
     /// bot marker; consumed by a resume, tombstoned by an expiry.
@@ -180,7 +177,7 @@ impl OpenRoom {
     /// map.
     pub fn with_spawn_half(half: f32) -> Self {
         Self {
-            runner: crate::common::movement_runner(),
+            runner: crate::kit::seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
             next_wire_id: 0,
@@ -189,7 +186,7 @@ impl OpenRoom {
             input: HashMap::new(),
             encoded: 0,
             economy: None,
-            park: crate::common::ParkPolicy::default(),
+            park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
         }
     }
@@ -212,25 +209,6 @@ impl OpenRoom {
         self.economy = Some(economy);
         self
     }
-}
-
-/// Deterministic pseudo-random spawn point in a square arena of half-size
-/// `half`, derived from the connection id (stable across room re-joins in
-/// the same session). `half = 50` reproduces the historical 100×100 arena
-/// exactly: the same 1000×1000 lattice, just scaled. `pub` so the other
-/// rooms share the exact same spawn distribution (a fair comparison in
-/// the load generator) and the sharded room factory can route a join to
-/// the home shard by computing the spawn position's region.
-pub fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
-    // The historical 100×100 lattice, scaled: `half = 50` multiplies by
-    // exactly 1.0, so the default is bit-identical to the pre-config
-    // formula (a re-derivation like `(h % 1000) * 2 * half / 1000` would
-    // double-round and drift by ulps for some ids).
-    let h = conn.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let scale = half / 50.0;
-    let x = ((h % 1000) as f32 / 10.0 - 50.0) * scale;
-    let y = (((h >> 32) % 1000) as f32 / 10.0 - 50.0) * scale;
-    (x, y)
 }
 
 // Faz 1 trait split (docs/TRAIT-ARCHITECTURE.md): the shared contract —

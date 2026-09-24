@@ -13,9 +13,9 @@ use prost::encoding::varint::encode_varint;
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
 use crate::aoi::*;
-pub use crate::common::Cell;
-use crate::common::{assemble_group_packet, cell_of};
 use crate::components::{Position, WireId};
+pub use crate::kit::common::Cell;
+use crate::kit::common::{assemble_group_packet, cell_of};
 use crate::op;
 
 impl GameLogic<World> for AoiRoom {
@@ -61,7 +61,7 @@ impl GameLogic<World> for AoiRoom {
     /// DELTA packet (exits, then cell exits, then updates) — or nothing
     /// (returns `false`) when the whole 3×3 is silent for it. The
     /// assembly itself is the shared engine
-    /// ([`crate::common::assemble_group_packet`]); this hook only feeds
+    /// ([`crate::kit::common::assemble_group_packet`]); this hook only feeds
     /// it this room's state.
     fn snapshot(
         &mut self,
@@ -154,12 +154,12 @@ impl GameLogic<World> for AoiRoom {
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
-                crate::common::append_responses(responses, out);
+                crate::kit::common::append_responses(responses, out);
                 self.conn_view.insert(player, c);
                 return true;
             }
         }
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::kit::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
@@ -170,7 +170,7 @@ impl GameLogic<World> for AoiRoom {
         // delivers the one-shot full and records the baseline — via the
         // group's own fresh full when the group is born, or via the
         // private frame otherwise.
-        let admission = crate::common::on_join(
+        let admission = crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.next_wire_id,
@@ -211,15 +211,15 @@ impl GameLogic<World> for AoiRoom {
                 self.book.pending_removals.push((entity, wire, cell));
             }
         }
-        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
+        crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
         self.conn_view.remove(&player);
     }
 
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
-    //    hook bodies live in `crate::common`) ---------------------------
+    //    hook bodies live in `crate::kit::common`) ---------------------------
 
     fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
-        crate::common::park_on_disconnect(
+        crate::kit::common::park_on_disconnect(
             &self.player_entity,
             player,
             identity,
@@ -234,11 +234,11 @@ impl GameLogic<World> for AoiRoom {
         player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, player, to);
+        crate::kit::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
-        crate::common::park_lookup(world, &self.park_ledger, identity)
+        crate::kit::common::park_lookup(world, &self.park_ledger, identity)
     }
 
     fn on_resume(
@@ -249,7 +249,7 @@ impl GameLogic<World> for AoiRoom {
         player: PlayerId,
         _entity: EntityId,
     ) {
-        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
+        crate::kit::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
         // The resumed SESSION has no view baseline: clearing the entry
         // under the STABLE key makes `private` deliver a fresh one-shot
         // full (a resume is a new session — same contract as a re-join).
@@ -258,7 +258,7 @@ impl GameLogic<World> for AoiRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::synthesize_bot_moves(
+        crate::kit::seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -267,11 +267,11 @@ impl GameLogic<World> for AoiRoom {
             ctx,
             actions,
         );
-        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
+        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::run_systems(&mut self.runner, world, ctx);
         // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with
         // a `Position` but no `WireId` get the next serial, so the
         // broadcast set is exactly "has a `Position`". It runs BEFORE the
@@ -280,7 +280,7 @@ impl GameLogic<World> for AoiRoom {
         // `on_join`) is already inside this tick's change window — the
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
-        crate::common::stamp_orphans(&mut self.next_wire_id, world);
+        crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
@@ -302,7 +302,7 @@ impl GameLogic<World> for AoiRoom {
         // per-tick work is proportional to the movers, not to the entity
         // count. (The pass itself — including its quantization no-op and
         // its member arithmetic — is the shared engine,
-        // [`crate::common::CellBook::dirty_pass`].)
+        // [`crate::kit::common::CellBook::dirty_pass`].)
         self.book.dirty_pass(world, self.cell_size);
 
         // Leavers: despawns are invisible to the change query — applied

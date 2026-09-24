@@ -199,10 +199,10 @@ pub struct TeamRoom {
     /// The player-identity counter (the demo's [`PlayerId`] minting
     /// policy); monotonic, never reused within the room's lifetime.
     next_player_id: u64,
-    /// The disconnect-park policy + ledger (see `crate::common` and
+    /// The disconnect-park policy + ledger (see `crate::kit::common` and
     /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
-    park: crate::common::ParkPolicy,
-    park_ledger: HashMap<String, crate::common::ParkEntry>,
+    park: crate::kit::common::ParkPolicy,
+    park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
     next_wire_id: u64,
     /// World units an enemy must be within to be visible to a team (see
@@ -232,8 +232,8 @@ pub struct TeamRoom {
     /// this so both teams' snapshots are the *same tick's* state.
     contents: [HashMap<u64, (i32, i32)>; TEAM_COUNT as usize],
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_private`).
-    input: HashMap<PlayerId, crate::common::InputState>,
+    /// `crate::kit::common::ingest` / `emit_private`).
+    input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -253,10 +253,10 @@ impl TeamRoom {
     #[must_use]
     pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self {
-            runner: crate::common::movement_runner(),
+            runner: crate::kit::seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
-            park: crate::common::ParkPolicy::default(),
+            park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             next_wire_id: 0,
             vision_radius: vision_radius.max(1.0),

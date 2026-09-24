@@ -7,8 +7,8 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
-use crate::common::{Cell, CellBook, CellPieces, cell_of};
 use crate::economy::EconomyService;
+use crate::kit::common::{Cell, CellBook, CellPieces, cell_of};
 use crate::sharded::*;
 
 mod logic;
@@ -18,7 +18,7 @@ mod shard;
 /// docs, "The spatial composite"): the grid topology of
 /// [`ShardedRoom`] with each shard's broadcast phase re-grouped by
 /// spatial cell and delta-encoded against last-sent content — AoiRoom's
-/// engine ([`crate::common::CellBook`] / [`crate::common::CellPieces`])
+/// engine ([`crate::kit::common::CellBook`] / [`crate::kit::common::CellPieces`])
 /// driven per shard, plus THE borrowed-strip ledger that keeps a static
 /// border silent.
 ///

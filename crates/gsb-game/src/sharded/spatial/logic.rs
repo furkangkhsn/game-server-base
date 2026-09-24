@@ -11,8 +11,8 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::encoding::varint::encode_varint;
 
-use crate::common::{Cell, assemble_group_packet, cell_of};
 use crate::components::{Position, WireId};
+use crate::kit::common::{Cell, assemble_group_packet, cell_of};
 use crate::op;
 use crate::sharded::*;
 
@@ -186,12 +186,12 @@ impl GameLogic<World> for ShardedSpatialRoom {
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
-                crate::common::append_responses(responses, out);
+                crate::kit::common::append_responses(responses, out);
                 self.conn_view.insert(player, c);
                 return true;
             }
         }
-        crate::common::emit_private(&mut self.inner.input, player, responses, out)
+        crate::kit::common::emit_private(&mut self.inner.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

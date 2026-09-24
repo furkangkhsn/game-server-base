@@ -85,7 +85,7 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        let admission = crate::common::on_join(
+        let admission = crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.next_wire_id,
@@ -111,11 +111,11 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn on_leave(&mut self, world: &mut World, player: PlayerId) {
-        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
+        crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
-    //    hook bodies live in `crate::common`) ---------------------------
+    //    hook bodies live in `crate::kit::common`) ---------------------------
     //
     // Visibility of a parked hero (RECONNECT §3.2): under team fog a
     // disconnected player's entity keeps its TeamMember component, so it
@@ -126,7 +126,7 @@ impl GameLogic<World> for TeamRoom {
     // game-band policy, deliberately not implemented in the base.
 
     fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
-        crate::common::park_on_disconnect(
+        crate::kit::common::park_on_disconnect(
             &self.player_entity,
             player,
             identity,
@@ -141,11 +141,11 @@ impl GameLogic<World> for TeamRoom {
         player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, player, to);
+        crate::kit::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
-        crate::common::park_lookup(world, &self.park_ledger, identity)
+        crate::kit::common::park_lookup(world, &self.park_ledger, identity)
     }
 
     fn on_resume(
@@ -157,11 +157,11 @@ impl GameLogic<World> for TeamRoom {
         _entity: EntityId,
     ) {
         // Faz 2 shrink: ledger consume + seq/ack reset only.
-        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
+        crate::kit::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::common::synthesize_bot_moves(
+        crate::kit::seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -170,7 +170,7 @@ impl GameLogic<World> for TeamRoom {
             ctx,
             actions,
         );
-        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
+        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (see `OpenRoom::private`).
@@ -182,18 +182,18 @@ impl GameLogic<World> for TeamRoom {
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::kit::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::run_systems(&mut self.runner, world, ctx);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities
         // with a `Position` but no `WireId` get the next serial, so the
         // broadcast set is exactly "has a `Position`" — structural, never
         // silently invisible. Done before `rebuild` so freshly-stamped
         // entities are in this tick's content.
-        crate::common::stamp_orphans(&mut self.next_wire_id, world);
+        crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
 
         self.rebuild(world);
     }

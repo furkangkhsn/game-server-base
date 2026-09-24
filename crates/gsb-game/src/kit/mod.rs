@@ -3,7 +3,9 @@
 //! sharded composites, park/resume bookkeeping, the input seq/ack rule,
 //! wire-identity minting and the snapshot/`Private` framing.
 
+pub(crate) mod common;
 pub mod identity;
+pub(crate) mod seam;
 
 /// The demo rooms' default disconnect-park grace (RECONNECT §3): how
 /// long a dropped transport's hero stays parked before its hold ends

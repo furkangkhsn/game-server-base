@@ -8,12 +8,12 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::{Detach, ExpireTo, ResumeFound};
 
-use crate::common::*;
+use crate::kit::common::*;
 
 /// The demo rooms' disconnect-park knob. `grace = 0` disables parking
 /// entirely ([`Detach::Despawn`] — the byte-for-byte pre-reconnect
 /// behavior), so an operator can turn the feature off without losing the
-/// code path. The default lives at [`crate::DEFAULT_DISCONNECT_GRACE`]
+/// code path. The default lives at [`crate::kit::DEFAULT_DISCONNECT_GRACE`]
 /// (the one public constant the server config defaults from).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ParkPolicy {
@@ -23,14 +23,14 @@ pub(crate) struct ParkPolicy {
 impl Default for ParkPolicy {
     fn default() -> Self {
         Self {
-            grace: crate::DEFAULT_DISCONNECT_GRACE,
+            grace: crate::kit::DEFAULT_DISCONNECT_GRACE,
         }
     }
 }
 
 /// One entry of the demo park ledger (§4: "park defteri logic'te yaşar" —
 /// the ledger lives in the game logic; the core only queries it through
-/// [`crate::room::RoomLogic::resume_lookup`]).
+/// [`gsb_core::room::GameLogic::resume_lookup`]).
 ///
 /// Keyed by identity (the resume key: ticket player or local-auth name),
 /// because THAT is what survives the transport death. The entry carries
@@ -98,7 +98,7 @@ pub(crate) fn park_on_disconnect(
 /// identity (despawn arm — the core runs `on_leave`, we just forget the
 /// entry so a later join is a transparent fresh join) or latches the bot
 /// marker (AI arm — the entity keeps playing, driven by
-/// [`synthesize_bot_moves`]).
+/// [`seam::synthesize_bot_moves`](crate::kit::seam::synthesize_bot_moves)).
 pub(crate) fn park_on_expire(
     ledger: &mut HashMap<String, ParkEntry>,
     player: PlayerId,

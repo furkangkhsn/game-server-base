@@ -56,7 +56,7 @@ impl GameLogic<World> for OpenRoom {
             // idempotence). The full query below runs *after* the
             // stamps, so it sees every broadcastable entity exactly once
             // (stamped and pre-stamped alike).
-            crate::common::stamp_orphans(&mut self.next_wire_id, world);
+            crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
                 current.push((wire_id.get(), pos.x as i32, pos.y as i32));
@@ -122,7 +122,7 @@ impl GameLogic<World> for OpenRoom {
         // by presence in the next snapshot, which now includes the new
         // entity (the join happened in the control phase, before this
         // tick's broadcast).
-        crate::common::on_join(
+        crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.next_wire_id,
@@ -134,14 +134,14 @@ impl GameLogic<World> for OpenRoom {
     }
 
     fn on_leave(&mut self, world: &mut World, player: PlayerId) {
-        crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
+        crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
     // -- the disconnect policy (docs/RECONNECT.md §3/§5/§9; the hook
-    //    bodies are shared with every demo room — see `crate::common`) --
+    //    bodies are shared with every demo room — see `crate::kit::common`) --
 
     fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
-        crate::common::park_on_disconnect(
+        crate::kit::common::park_on_disconnect(
             &self.player_entity,
             player,
             identity,
@@ -156,11 +156,11 @@ impl GameLogic<World> for OpenRoom {
         player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        crate::common::park_on_expire(&mut self.park_ledger, player, to);
+        crate::kit::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
     fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
-        crate::common::park_lookup(world, &self.park_ledger, identity)
+        crate::kit::common::park_lookup(world, &self.park_ledger, identity)
     }
 
     fn on_resume(
@@ -173,7 +173,7 @@ impl GameLogic<World> for OpenRoom {
     ) {
         // Faz 2 shrink: ledger consume + seq/ack reset only — the
         // player-keyed tables kept their keys across the disconnect.
-        crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
+        crate::kit::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -181,7 +181,7 @@ impl GameLogic<World> for OpenRoom {
         // (RECONNECT §9: "bot = bağlantısız girdi kaynağı" — an input
         // source without a connection): one decode/sequence/move path for
         // both.
-        crate::common::synthesize_bot_moves(
+        crate::kit::seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -190,7 +190,7 @@ impl GameLogic<World> for OpenRoom {
             ctx,
             actions,
         );
-        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
+        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (the group snapshot is
@@ -205,11 +205,11 @@ impl GameLogic<World> for OpenRoom {
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::kit::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::run_systems(&mut self.runner, world, ctx);
     }
 
     /// The demo's two request kinds (the RPC pattern's two halves, see

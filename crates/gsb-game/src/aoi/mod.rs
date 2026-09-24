@@ -263,14 +263,14 @@ use gsb_ecs::SystemRunner;
 // The public cell type lives with the shared machinery (both spatial
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
-pub use crate::common::Cell;
-use crate::common::{CellBook, CellPieces};
+pub use crate::kit::common::Cell;
+use crate::kit::common::{CellBook, CellPieces};
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
 /// fresh group members, keep-alive fulls as the loss-recovery path.
-/// The cell-delta engine itself ([`crate::common::CellBook`] /
-/// [`crate::common::CellPieces`]) is shared with the sharded spatial
+/// The cell-delta engine itself ([`crate::kit::common::CellBook`] /
+/// [`crate::kit::common::CellPieces`]) is shared with the sharded spatial
 /// composite; this room contributes only the session surface and the
 /// single-world feeding of the bookkeeping.
 pub struct AoiRoom {
@@ -281,10 +281,10 @@ pub struct AoiRoom {
     /// The player-identity counter (the demo's [`PlayerId`] minting
     /// policy); monotonic, never reused within the room's lifetime.
     next_player_id: u64,
-    /// The disconnect-park policy + ledger (see `crate::common` and
+    /// The disconnect-park policy + ledger (see `crate::kit::common` and
     /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
-    park: crate::common::ParkPolicy,
-    park_ledger: HashMap<String, crate::common::ParkEntry>,
+    park: crate::kit::common::ParkPolicy,
+    park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
     /// The room's single wire-identity counter (see module docs,
     /// "Invariants preserved" / `game.proto`).
     next_wire_id: u64,
@@ -295,8 +295,8 @@ pub struct AoiRoom {
     /// configuration, not a strategy decision.
     spawn_half: f32,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_private`).
-    input: HashMap<PlayerId, crate::common::InputState>,
+    /// `crate::kit::common::ingest` / `emit_private`).
+    input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the
     /// group's own full in the same batch). A player whose entry is
@@ -307,7 +307,7 @@ pub struct AoiRoom {
     conn_view: HashMap<PlayerId, Cell>,
     /// The content bookkeeping (buckets, change lists, occupancy and
     /// member baselines, parked removals, born groups) — the shared
-    /// engine ([`crate::common::CellBook`]); this room feeds it from the
+    /// engine ([`crate::kit::common::CellBook`]); this room feeds it from the
     /// bevy dirty query alone (no borrowed strip exists here).
     book: CellBook,
     /// The global tick of the current step (set in `update`): the
@@ -341,10 +341,10 @@ impl AoiRoom {
     #[must_use]
     pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self {
-            runner: crate::common::movement_runner(),
+            runner: crate::kit::seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
-            park: crate::common::ParkPolicy::default(),
+            park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             next_wire_id: 0,
             cell_size: cell_size.max(0.5),

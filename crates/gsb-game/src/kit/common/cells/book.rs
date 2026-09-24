@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::{Changed, Entity, World};
 
-use crate::common::*;
-use crate::components::{Position, WireId};
+use crate::kit::common::*;
+use crate::kit::identity::WireId;
+use crate::kit::seam::Position;
 
 /// The per-tick CONTENT bookkeeping of a cell-encoded delta broadcaster —
 /// the current buckets, the change lists, and the occupancy/member

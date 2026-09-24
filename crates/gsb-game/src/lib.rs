@@ -45,8 +45,6 @@ pub mod room;
 pub mod sharded;
 pub mod team;
 
-mod common;
-
 // ── Compatibility paths (phase 0) ─────────────────────────────────────────
 //
 // The crate's public API predates the kit/demo split: every consumer

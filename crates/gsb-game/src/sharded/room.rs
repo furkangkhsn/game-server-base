@@ -39,8 +39,8 @@ pub struct ShardedRoom {
     /// Player → entity (this shard's players; Faz 2: keyed by the STABLE
     /// player identity, which survives resume AND migration unchanged).
     pub(in crate::sharded) player_entity: HashMap<PlayerId, Entity>,
-    /// The disconnect-park policy (see `crate::common`; RECONNECT §3).
-    pub(in crate::sharded) park: crate::common::ParkPolicy,
+    /// The disconnect-park policy (see `crate::kit::common`; RECONNECT §3).
+    pub(in crate::sharded) park: crate::kit::common::ParkPolicy,
     /// The park ledger of THIS shard's parked players (§4: it lives in
     /// the logic; §14.2: records travel with migrations inside
     /// [`ShardedRoomState`], so a detached entity crossing a seam is
@@ -77,10 +77,10 @@ pub struct ShardedRoom {
     /// Entity records encoded during the most recent broadcast phase.
     pub(in crate::sharded) encoded: u64,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::ingest` / `emit_private`). The session stays bound to
+    /// `crate::kit::common::ingest` / `emit_private`). The session stays bound to
     /// this shard even if its entity migrates (its input is routed
     /// through this shard's room), so the session lives here.
-    pub(in crate::sharded) input: HashMap<PlayerId, crate::common::InputState>,
+    pub(in crate::sharded) input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// The economy service handle (the RPC pattern's external-I/O half on
     /// the SHARDED path — Faz 3; see `crate::economy`); `None` = this
     /// shard answers `ECONOMY` requests with a normal "not configured"
@@ -113,7 +113,7 @@ impl ShardedRoom {
             neighbors.push(index + cols);
         }
         Self {
-            runner: crate::common::movement_runner(),
+            runner: crate::kit::seam::movement_runner(),
             index,
             shard_count,
             cols,
@@ -123,7 +123,7 @@ impl ShardedRoom {
             border: (cell_w.min(cell_h)) / 4.0,
             neighbors,
             player_entity: HashMap::new(),
-            park: crate::common::ParkPolicy::default(),
+            park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             entity_player: HashMap::new(),
             wire_entity: HashMap::new(),

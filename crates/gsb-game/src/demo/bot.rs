@@ -6,8 +6,8 @@ use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use prost::Message;
 
-use crate::components::Position;
-use crate::op;
+use crate::demo::components::Position;
+use crate::demo::op;
 
 /// How often the demo bot picks a new wander target, in ticks (~1 s at
 /// the default 30 Hz).
@@ -41,11 +41,12 @@ fn bot_jitter(x_bits: u32, y_bits: u32, round: u64) -> (f32, f32) {
 /// their ledger entries; the sharded room resolves its wire-keyed ledger
 /// through its own tables first) — and push them INTO the tick's action
 /// list, ahead of any wire actions. They are indistinguishable from
-/// client frames: the ordinary [`ingest`] decodes them, applies the
-/// sequence rule (seq = 0: unnumbered, never fights a human high-water
-/// mark) and writes the real [`MoveTarget`] — which is the whole point:
-/// the bot is an input source without a connection, exercising the REAL
-/// movement system, not a parallel teleport path.
+/// client frames: the ordinary [`ingest`](crate::demo::input::ingest)
+/// decodes them, applies the sequence rule (seq = 0: unnumbered, never
+/// fights a human high-water mark) and writes the real
+/// [`MoveTarget`](crate::demo::components::MoveTarget) — which is the
+/// whole point: the bot is an input source without a connection,
+/// exercising the REAL movement system, not a parallel teleport path.
 pub(crate) fn synthesize_bot_moves(
     bots: impl Iterator<Item = (PlayerId, Entity)>,
     world: &World,
@@ -66,7 +67,7 @@ pub(crate) fn synthesize_bot_moves(
             continue;
         };
         let (jx, jy) = bot_jitter(pos.x.to_bits(), pos.y.to_bits(), round);
-        let msg = crate::game::MoveTo {
+        let msg = crate::demo::game::MoveTo {
             x: (pos.x + jx) as i32,
             y: (pos.y + jy) as i32,
             seq: 0,
@@ -81,21 +82,3 @@ pub(crate) fn synthesize_bot_moves(
         });
     }
 }
-
-// ════════════════════════════════════════════════════════════════════════
-// The shared CELL-DELTA machinery: the spatial visibility strategies run
-// the same encoding engine, so it lives here once. Two rooms drive it —
-// [`crate::aoi::AoiRoom`] (single world) and
-// [`crate::sharded::ShardedSpatialRoom`] (the Faz B per-shard composite) —
-// and they differ only in WHAT feeds the bookkeeping (bevy's dirty query
-// alone vs the dirty query PLUS a diff of the borrowed border strip) and
-// in who counts as a member. The wire format (header/pieces/oneof framing)
-// and the delta arithmetic
-// (change list = the diff, order-independent flags/birth roll) are
-// byte-for-byte common.
-//
-// What deliberately stayed per-room: the session surface (`conn_view`,
-// `group_full_emitted` consumers, `private`'s one-shot shape) and — on the
-// sharded side — the borrowed-strip ledger, which is that room's
-// load-bearing subtlety (see its module docs).
-// ════════════════════════════════════════════════════════════════════════

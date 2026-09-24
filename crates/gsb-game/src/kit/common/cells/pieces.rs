@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::{Bytes, BytesMut};
 
-use crate::common::*;
+use crate::kit::common::*;
 
 /// The per-tick encoded-piece caches of a cell-delta broadcaster: every
 /// piece is computed lazily ONCE per (cell, kind) per tick and shared as

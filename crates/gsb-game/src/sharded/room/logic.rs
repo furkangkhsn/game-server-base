@@ -124,7 +124,7 @@ impl GameLogic<World> for ShardedRoom {
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
         self.input
-            .insert(player, crate::common::InputState::default());
+            .insert(player, crate::kit::common::InputState::default());
         Admission {
             player,
             entity: wire,
@@ -154,12 +154,12 @@ impl GameLogic<World> for ShardedRoom {
             .values()
             .filter(|e| e.bot)
             .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.player, en)));
-        crate::common::synthesize_bot_moves(bots, world, ctx, actions);
-        crate::common::ingest(&self.player_entity, world, actions, &mut self.input)
+        crate::kit::seam::synthesize_bot_moves(bots, world, ctx, actions);
+        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
-    //    hook bodies live in `crate::common`; this shard-side mirror keys
+    //    hook bodies live in `crate::kit::common`; this shard-side mirror keys
     //    its ledger by identity like the others but tracks the WIRE id,
     //    because that is what survives migrations) ----------------------
 
@@ -247,11 +247,11 @@ impl GameLogic<World> for ShardedRoom {
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::kit::common::emit_private(&mut self.input, player, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::run_systems(&mut self.runner, world, ctx);
 
         // Orphan stamping, range-aware (the demo game has no NPCs, but the
         // broadcast set stays structural — "has a Position" — like the

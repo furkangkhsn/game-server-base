@@ -1,8 +1,8 @@
 //! The machinery the demo rooms share — everything that is **not** a
 //! visibility-strategy decision.
 //!
-//! The four rooms ([`crate::room::OpenRoom`], [`crate::aoi::AoiRoom`],
-//! [`crate::team::TeamRoom`], [`crate::pvs::SectorRoom`]) run the *same*
+//! The four rooms (`OpenRoom`, `AoiRoom`, `TeamRoom`, `SectorRoom`) run
+//! the *same*
 //! game: the same components, the same movement system, the same wire
 //! format, the same spawn distribution, the same identity rules. They
 //! differ in exactly the two things the group-snapshot architecture
@@ -22,15 +22,18 @@
 //!
 //! **The minting point.** [`next_serial`] is the *only* caller of
 //! [`WireId::new`] in the crate (crate-private constructor, no `Default`
-//! on the type — see `components.rs`): every room's counter is the only
+//! on the type — see `kit/identity.rs`): every room's counter is the only
 //! source of identities for that room's entities, and the counter's
 //! space stays closed to everything else.
+//!
+//! **Phase 0 (KIT-ARCHITECTURE §10).** The game-side halves of what used
+//! to live here — the movement system stack, `MOVE_TO` decoding, the bot
+//! wander, the spawn bundle — moved to the demo module; this module reaches
+//! them only through [`crate::kit::seam`].
 
-mod bot;
 mod cells;
 mod park;
 
-pub(crate) use bot::*;
 pub use cells::Cell;
 pub(crate) use cells::*;
 pub(crate) use park::*;
@@ -40,22 +43,13 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{Entity, Without, World};
 use bytes::BufMut;
 use gsb_core::id::{ConnectionId, PlayerId};
-use gsb_core::room::{Action, Admission, TickCtx};
+use gsb_core::room::{Admission, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
-use crate::op;
-use crate::room::spawn_pos;
-use crate::systems::MovementSystem;
-
-/// The system stack every demo room runs (the demo game is the same in
-/// all of them — only visibility differs).
-pub(crate) fn movement_runner() -> SystemRunner {
-    let mut runner = SystemRunner::new();
-    runner.add(MovementSystem);
-    runner
-}
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::Position;
 
 /// Mint the next wire identity from the room's single monotonic counter
 /// (see module docs, "The minting point").
@@ -66,7 +60,7 @@ pub(crate) fn next_serial(next_wire_id: &mut u64) -> WireId {
 }
 
 /// Per-connection input sequence state (shared by all rooms; see
-/// [`ingest`] and [`emit_private`]).
+/// [`Self::admit`] and [`emit_private`]).
 ///
 /// `hwm` is the highest input sequence this connection has *processed*
 /// (the high-water mark); `acked` is the highest sequence already
@@ -80,6 +74,44 @@ pub(crate) struct InputState {
     pub hwm: u64,
     /// Highest seq already acked (the last `InputAck` sent).
     pub acked: u64,
+}
+
+impl InputState {
+    /// **Input sequence rule** (the client prediction-reconciliation
+    /// signal) — whether an input numbered `seq` is processed; the game's
+    /// input decoder (the demo's `ingest`) asks this for every decoded
+    /// input. The client numbers its inputs (monotonic from 1 per
+    /// session, `seq = 0` = unnumbered legacy). The server processes a
+    /// numbered action only when it is *strictly newer* than this
+    /// connection's high-water mark:
+    ///
+    /// - `seq > hwm` — process, and advance `hwm = seq`;
+    /// - `seq <= hwm` — a duplicate or a reordered/late action: **dropped,
+    ///   silently**. This is a *normal race* of the lossy game band (a
+    ///   retransmission or an out-of-order arrival), not a protocol
+    ///   violation: no error is answered and nothing is counted against the
+    ///   connection's violation budget (which is spent on structural
+    ///   protocol errors, and a client re-sending its own input is always
+    ///   legitimate). Applying a stale target would regress the entity to an
+    ///   old command, so dropping is the only correct behaviour;
+    /// - `seq = 0` (legacy/unnumbered) — process, never advance `hwm`. This
+    ///   keeps unnumbered clients (and all pre-seq tests) working unchanged.
+    ///
+    /// Gaps (a lost input) do not block the mark: the ack is a
+    /// high-water mark, not a contiguity claim (see `InputAck` in
+    /// `game.proto`).
+    #[inline]
+    pub(crate) fn admit(&mut self, seq: u64) -> bool {
+        if seq == 0 {
+            // Legacy/unnumbered: process, never advance the mark.
+            true
+        } else if seq > self.hwm {
+            self.hwm = seq;
+            true
+        } else {
+            false // duplicate / reordered late: dropped (normal race)
+        }
+    }
 }
 
 /// The player-spawn path, shared by all rooms: the deterministic spawn
@@ -106,11 +138,10 @@ pub(crate) fn on_join(
     input.insert(player, InputState::default());
     // The spawn point is derived from the TRANSPORT session id (as it
     // always was): the load generator's home distribution pairs with it.
-    let (x, y) = spawn_pos(conn, spawn_half);
+    // (Game side: the spawn point and the player bundle; kit side: the
+    // identity stamped on it.)
     let wire = next_serial(next_wire_id);
-    let entity = world
-        .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
-        .id();
+    let entity = seam::spawn_player(world, conn, spawn_half, wire);
     player_entity.insert(player, entity);
     Admission {
         player,
@@ -135,74 +166,6 @@ pub(crate) fn on_leave(
     {
         world.despawn(entity);
         input.remove(&player);
-    }
-}
-
-/// `MOVE_TO` ingestion, shared by all rooms: decode the game message,
-/// guard against stale actions (connection not in the room) and vanished
-/// entities, enforce the per-connection input sequence rule (see below),
-/// and write the [`MoveTarget`]. Anything else is ignored with a warning
-/// (the op code is the router; undecodable payloads are a client bug,
-/// not a reason to drop the connection).
-///
-/// **Input sequence rule** (the client prediction-reconciliation signal):
-/// the client numbers its inputs (monotonic from 1 per session, `seq = 0`
-/// = unnumbered legacy). The server processes a numbered action only
-/// when it is *strictly newer* than this connection's high-water mark:
-///
-/// - `seq > hwm` — process, and advance `hwm = seq`;
-/// - `seq <= hwm` — a duplicate or a reordered/late action: **dropped,
-///   silently**. This is a *normal race* of the lossy game band (a
-///   retransmission or an out-of-order arrival), not a protocol
-///   violation: no error is answered and nothing is counted against the
-///   connection's violation budget (which is spent on structural
-///   protocol errors, and a client re-sending its own input is always
-///   legitimate). Applying a stale target would regress the entity to an
-///   old command, so dropping is the only correct behaviour;
-/// - `seq = 0` (legacy/unnumbered) — process, never advance `hwm`. This
-///   keeps unnumbered clients (and all pre-seq tests) working unchanged.
-///
-/// Gaps (a lost input) do not block the mark: the ack is a
-/// high-water mark, not a contiguity claim (see `InputAck` in
-/// `game.proto`).
-pub(crate) fn ingest(
-    player_entity: &HashMap<PlayerId, Entity>,
-    world: &mut World,
-    actions: &mut Vec<Action>,
-    input: &mut HashMap<PlayerId, InputState>,
-) {
-    for action in actions.drain(..) {
-        if action.op != op::MOVE_TO {
-            continue;
-        }
-        let Ok(msg) = <crate::game::MoveTo as Message>::decode(&action.payload[..]) else {
-            tracing::warn!(?action.op, "undecodable MOVE_TO payload ignored");
-            continue;
-        };
-        // Faz 2: actions are keyed by the STABLE player id the core's
-        // binding stamped at ingest (bot-synthesized frames carry it
-        // directly). A stale/unbound action drops right here — the same
-        // silent-skip posture this path always had.
-        let Some(entity) = player_entity.get(&action.player).copied() else {
-            continue; // not in a room (stale action)
-        };
-        if world.get_entity(entity).is_err() {
-            continue; // entity already gone
-        }
-        // The sequence rule (see the docs above). `or_default` is a
-        // defensive fallback only: `on_join` inserts the session state.
-        let st = input.entry(action.player).or_default();
-        if msg.seq == 0 {
-            // Legacy/unnumbered: process, never advance the mark.
-        } else if msg.seq > st.hwm {
-            st.hwm = msg.seq;
-        } else {
-            continue; // duplicate / reordered late: dropped (normal race)
-        }
-        world.entity_mut(entity).insert(MoveTarget {
-            x: msg.x as f32,
-            y: msg.y as f32,
-        });
     }
 }
 
@@ -237,9 +200,9 @@ pub(crate) fn emit_private(
     if ack_up_to.is_none() && responses.is_empty() {
         return false;
     }
-    let frame = crate::game::Private {
+    let frame = seam::Private {
         payload: ack_up_to.map(|upto| {
-            crate::game::private::Payload::Ack(crate::game::InputAck {
+            seam::private::Payload::Ack(seam::InputAck {
                 processed_up_to: upto,
             })
         }),
@@ -288,7 +251,7 @@ pub(crate) fn run_systems(runner: &mut SystemRunner, world: &mut World, ctx: &Ti
 /// stamped with the next serial, so the broadcast set is exactly "has a
 /// `Position`" and nothing can be silently invisible. Two passes (the
 /// orphan query holds the world borrow, so collect first, then write —
-/// the same pattern as [`MovementSystem`]); the stamp is idempotent and
+/// the same pattern as the demo's movement system); the stamp is idempotent and
 /// costs nothing in steady state (the orphan query matches nothing once
 /// every entity is stamped).
 ///
@@ -321,4 +284,22 @@ pub(crate) fn stamp_orphans(next_wire_id: &mut u64, world: &mut World) {
 // (the same shape as `ingest` / `on_join` above): every `RoomLogic` demo
 // room calls the same five hooks with its own tables, and the sharded
 // variant carries the park record inside the migrating state (§14.2).
+// ════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════
+// The shared CELL-DELTA machinery: the spatial visibility strategies run
+// the same encoding engine, so it lives here once. Two rooms drive it —
+// [`crate::kit::aoi::AoiRoom`] (single world) and
+// [`crate::kit::sharded::ShardedSpatialRoom`] (the Faz B per-shard composite) —
+// and they differ only in WHAT feeds the bookkeeping (bevy's dirty query
+// alone vs the dirty query PLUS a diff of the borrowed border strip) and
+// in who counts as a member. The wire format (header/pieces/oneof framing)
+// and the delta arithmetic
+// (change list = the diff, order-independent flags/birth roll) are
+// byte-for-byte common.
+//
+// What deliberately stayed per-room: the session surface (`conn_view`,
+// `group_full_emitted` consumers, `private`'s one-shot shape) and — on the
+// sharded side — the borrowed-strip ledger, which is that room's
+// load-bearing subtlety (see its module docs).
 // ════════════════════════════════════════════════════════════════════════

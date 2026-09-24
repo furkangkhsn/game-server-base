@@ -3,7 +3,7 @@
 //! ## What it is
 //!
 //! The same game as the other four rooms (same components, movement
-//! system, wire format, spawn distribution — see [`crate::common`]), but
+//! system, wire format, spawn distribution — see [`crate::kit::common`]), but
 //! the world is partitioned into a **grid of shards**: a room of
 //! `shard_count` actors, each owning its rectangular region of the map.
 //! The core machinery (`gsb_core::shard`) runs the shard protocol
@@ -56,7 +56,7 @@
 //! (`GroupKey = Cell`, sized like [`crate::aoi::AoiRoom`]'s from the
 //! config's `aoi_cell_size`) instead of one whole-shard group. The cell
 //! encoding/delta engine itself is NOT duplicated: the shared
-//! [`crate::common::CellBook`] / [`crate::common::CellPieces`] machinery
+//! [`crate::kit::common::CellBook`] / [`crate::kit::common::CellPieces`] machinery
 //! drives both rooms. What this module adds on top is exactly the part a
 //! single world cannot have — the borrowed border strip — and it is the
 //! load-bearing subtlety of the whole composite:
@@ -81,7 +81,7 @@
 //! (`prev_borrowed`: wire → wire position) and diffs the NEW view against
 //! THAT — entered (absent before), exited (gone now), moved (position
 //! changed), silent (identical wire position ⇒ NO change entry at all).
-//! Only the diff lands in the shared [`crate::common::CellBook`] change
+//! Only the diff lands in the shared [`crate::kit::common::CellBook`] change
 //! lists, so a static strip costs nothing beyond the comparison itself,
 //! and a moving boundary entity produces exactly one upsert (plus an exit
 //! when it changes cell) — the same shape an own-entity mover produces.
@@ -111,7 +111,7 @@
 //! borrowed diff can only run later — the core hands the strip to the
 //! logic at the broadcast phase, after `update`. The shared engine's
 //! appeared/exited/birth flags must reflect the FINAL content of the
-//! tick, so the composite defers [`crate::common::CellBook::roll`] until
+//! tick, so the composite defers [`crate::kit::common::CellBook::roll`] until
 //! the first broadcast-phase call integrates the strip (a once-per-tick
 //! guard; every snapshot/keepalive/private call is preceded by it). With
 //! no connections there is no broadcast and no roll — and no client to

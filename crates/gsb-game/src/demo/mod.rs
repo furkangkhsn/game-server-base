@@ -11,9 +11,12 @@
 //! code reaches this module ONLY through `crate::kit::seam`, which lists
 //! every such coupling (the phase-1 work list).
 
+pub(crate) mod bot;
 pub mod components;
 pub mod economy;
+pub(crate) mod input;
 pub mod op;
+pub mod spawn;
 pub mod systems;
 
 /// Generated game protocol messages (package `gsb.game`, file `game.proto`).

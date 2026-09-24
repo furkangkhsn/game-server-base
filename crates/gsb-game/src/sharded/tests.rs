@@ -11,8 +11,8 @@ use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
 
 use super::*;
-use crate::common::{Cell, cell_of};
 use crate::components::*;
+use crate::kit::common::{Cell, cell_of};
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
