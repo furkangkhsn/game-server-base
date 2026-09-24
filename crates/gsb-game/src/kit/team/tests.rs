@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::components::{DEFAULT_SPEED, Position, Speed};
+use crate::kit::seam::{DEFAULT_SPEED, Position, Speed};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
@@ -52,7 +52,7 @@ fn place(
 }
 
 fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
-    crate::game::WorldSnapshot::decode(out.as_ref())
+    crate::kit::seam::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot payload")
         .entities
         .iter()
@@ -203,7 +203,7 @@ fn enemy_leaving_vision_drops_from_snapshot_self_contained() {
         room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b),
         "vision change re-emits"
     );
-    let snap = crate::game::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
     let t0b: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
     assert!(!t0b.contains(&b), "B dropped out: {t0b:?}");
     assert_eq!(

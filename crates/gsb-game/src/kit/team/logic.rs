@@ -8,18 +8,18 @@ use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use prost::Message;
 
-use crate::op;
-use crate::team::*;
+use crate::kit::seam;
+use crate::kit::team::*;
 
 impl GameLogic<World> for TeamRoom {
     type GroupKey = Team;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     /// The connection's group is its team — game state kept in the world
@@ -61,7 +61,7 @@ impl GameLogic<World> for TeamRoom {
             return false;
         }
 
-        let mut snap = crate::game::WorldSnapshot {
+        let mut snap = seam::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
             removed: Vec::new(),
@@ -69,7 +69,7 @@ impl GameLogic<World> for TeamRoom {
             delta: false,
         };
         for (&wire_id, &(x, y)) in content {
-            snap.entities.push(crate::game::EntityRecord {
+            snap.entities.push(seam::EntityRecord {
                 entity: wire_id,
                 x,
                 y,
@@ -106,7 +106,9 @@ impl GameLogic<World> for TeamRoom {
             .expect("inserted above");
         // Team assignment hashes the TRANSPORT session id (as it always
         // has): the load generator's team distribution pairs with it.
-        world.entity_mut(entity).insert(TeamMember(team_of(conn)));
+        world
+            .entity_mut(entity)
+            .insert(TeamMember(seam::team_of(conn)));
         admission
     }
 
@@ -114,7 +116,7 @@ impl GameLogic<World> for TeamRoom {
         crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
+    // -- the disconnect policy (see `crate::kit::room::OpenRoom`, the shared
     //    hook bodies live in `crate::kit::common`) ---------------------------
     //
     // Visibility of a parked hero (RECONNECT §3.2): under team fog a
@@ -161,7 +163,7 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::kit::seam::synthesize_bot_moves(
+        seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -170,7 +172,7 @@ impl GameLogic<World> for TeamRoom {
             ctx,
             actions,
         );
-        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (see `OpenRoom::private`).

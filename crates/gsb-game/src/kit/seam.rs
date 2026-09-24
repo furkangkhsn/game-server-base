@@ -28,6 +28,9 @@ pub(crate) use crate::demo::game::CellExit;
 // Game::spawn_player: spawn point + player bundle (the kit stamps WireId).
 pub(crate) use crate::demo::spawn::spawn_player;
 
+// Game::on_player_spawned: the team room's join-time team assignment.
+pub(crate) use crate::demo::spawn::team_of;
+
 // Game::systems: the demo's system stack (movement).
 pub(crate) use crate::demo::systems::movement_runner;
 

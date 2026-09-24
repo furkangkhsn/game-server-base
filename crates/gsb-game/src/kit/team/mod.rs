@@ -2,9 +2,9 @@
 //!
 //! ## What it changes (and what it deliberately does not touch)
 //!
-//! [`OpenRoom`](crate::room::OpenRoom) uses `GroupKey = ()` (one snapshot
+//! [`OpenRoom`](crate::kit::room::OpenRoom) uses `GroupKey = ()` (one snapshot
 //! group per room, everyone sees the whole world) and
-//! [`AoiRoom`](crate::aoi::AoiRoom) uses `GroupKey = Cell` (spatial).
+//! [`AoiRoom`](crate::kit::aoi::AoiRoom) uses `GroupKey = Cell` (spatial).
 //! `TeamRoom` makes the group key the **team identity**: exactly two groups,
 //! one per team. This is the proof that grouping is *not* a spatial concept:
 //! a connection's group is a function of *who the player is* (game state —
@@ -104,11 +104,13 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use bevy_ecs::prelude::{Component, Entity, World};
-use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::id::PlayerId;
 use gsb_ecs::SystemRunner;
 
-use crate::aoi::Cell;
-use crate::components::{Position, WireId};
+use crate::kit::aoi::Cell;
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::Position;
 
 /// A player's team — the team-fog group key. Exactly [`TEAM_COUNT`] teams
 /// exist; membership is *game state*, kept in the world as the entity's
@@ -130,7 +132,8 @@ pub const DEFAULT_VISION_RADIUS: f32 = 25.0;
 /// state* and unchangeable at runtime. Now the team *is* world state:
 ///
 /// - Written exactly once at join, by `on_join` (from the join-time
-///   assignment rule, [`team_of`] — conn parity, i.e. "signup order"), on
+///   assignment rule — the game's `team_of`: conn parity, i.e. "signup
+///   order"), on
 ///   the player's entity.
 /// - Read by `group_of` (the connection's snapshot group) and by `rebuild`
 ///   (own-team visibility + who grants vision for the team), both of which
@@ -147,16 +150,6 @@ pub const DEFAULT_VISION_RADIUS: f32 = 25.0;
 /// "not in `player_entity`" check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct TeamMember(pub Team);
-
-/// The join-time team *assignment rule* (the demo: conn parity, i.e.
-/// "signup order" — team 0, 1, 0, 1, …). This decides what `on_join`
-/// *writes* into the entity's [`TeamMember`]; it is not consulted again
-/// afterwards (runtime team changes are component writes, and `group_of`
-/// reads the world, not this function).
-#[inline]
-fn team_of(conn: ConnectionId) -> Team {
-    Team((conn.0 % u64::from(TEAM_COUNT)) as u8)
-}
 
 /// The (dx, dy) offsets of the 3×3 cell neighborhood. A grid of
 /// `vision_radius`-sized cells makes the neighborhood a *superset* of the
@@ -208,7 +201,7 @@ pub struct TeamRoom {
     /// World units an enemy must be within to be visible to a team (see
     /// module docs, "Vision source model").
     vision_radius: f32,
-    /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`);
+    /// Half-size of the square spawn map (see the demo's `spawn_pos`);
     /// configuration, not a strategy decision.
     spawn_half: f32,
     /// Per-team "no change" ledger: `team → (wire id → (x, y))`, the exact
@@ -232,7 +225,7 @@ pub struct TeamRoom {
     /// this so both teams' snapshots are the *same tick's* state.
     contents: [HashMap<u64, (i32, i32)>; TEAM_COUNT as usize],
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::kit::common::ingest` / `emit_private`).
+    /// the demo's `ingest` / `crate::kit::common::emit_private`).
     input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
@@ -245,15 +238,15 @@ impl TeamRoom {
     /// degenerate `0` cannot make vision "only the exact same point".
     #[must_use]
     pub fn new(vision_radius: f32) -> Self {
-        Self::with_spawn_half(vision_radius, crate::room::DEFAULT_SPAWN_HALF)
+        Self::with_spawn_half(vision_radius, seam::DEFAULT_SPAWN_HALF)
     }
 
     /// Build a team-fog room over a square spawn map of half-size `half`
-    /// (see `gsb_game::room::OpenRoom::with_spawn_half`).
+    /// (see [`crate::kit::room::OpenRoom::with_spawn_half`]).
     #[must_use]
     pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self {
-            runner: crate::kit::seam::movement_runner(),
+            runner: seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
             park: crate::kit::common::ParkPolicy::default(),
@@ -272,7 +265,7 @@ impl TeamRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::kit::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
