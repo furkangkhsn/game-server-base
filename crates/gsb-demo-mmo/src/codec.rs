@@ -28,8 +28,8 @@
 //! **The wire's `Planar` is in METRES** (`floor(dm / 10)`), the
 //! position's unit, not in decimetres: then every ground-plane preset
 //! works in the one world unit — `Grid2`'s cell edge is in metres, and
-//! `GridPartition2::admits` (the plain `ShardedRoom`'s border frame
-//! filter; the MMO's spatial composite does not call it) compares the
+//! `GridPartition2::admits` (the sharded rooms' border frame filter —
+//! the MMO's spatial composite applies it too) compares the
 //! wire projection with a region rectangle in the POSITION's unit —
 //! `Planar`'s unit contract (Phase 4 found it unwritten, finding F3 in
 //! `docs/KIT-ARCHITECTURE.md` §10; the kit now documents it and a debug

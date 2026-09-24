@@ -36,7 +36,7 @@ fn arriving(x: f32, y: f32, speed: Option<f32>) -> KitMig<FixMig> {
 /// One broadcast tick of `room` for the groups `cells` with the strip
 /// `borrowed`: `update`, then every group's snapshot (the first one
 /// integrates the strip).
-fn tick(
+pub(super) fn tick(
     world: &mut World,
     room: &mut ShardedSpatialRoom,
     t: u64,
@@ -56,7 +56,7 @@ fn tick(
 
 /// The group's current FULL view (its keep-alive), as `(wire, x)`
 /// pairs in packet order.
-fn full_view(
+pub(super) fn full_view(
     world: &mut World,
     room: &mut ShardedSpatialRoom,
     t: u64,

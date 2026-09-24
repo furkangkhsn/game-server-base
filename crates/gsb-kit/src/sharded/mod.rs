@@ -85,6 +85,12 @@
 //! (`prev_borrowed`: wire → wire position) and diffs the NEW view against
 //! THAT — entered (absent before), exited (gone now), moved (position
 //! changed), silent (identical wire position ⇒ NO change entry at all).
+//! The view is the FILTERED strip: every record first passes the frame
+//! filter the plain shard applies ([`crate::space::Partition::admits`] —
+//! a neighbour exports its whole border, and the parts far from this
+//! region are not this shard's content, even where a cell's 3×3 would
+//! reach them), so leaving the frame reads as an exit and entering it
+//! as an entry.
 //! Only the diff lands in the shared [`crate::common::CellBook`] change
 //! lists, so a static strip costs nothing beyond the comparison itself,
 //! and a moving boundary entity produces exactly one upsert (plus an exit

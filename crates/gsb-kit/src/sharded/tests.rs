@@ -21,6 +21,7 @@ use prost::Message;
 
 mod change_window;
 mod diagonals;
+mod frame_filter;
 mod ghosts;
 mod lent_arrival;
 mod migration;

@@ -131,6 +131,15 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
         let mut new_view: HashMap<u64, Wire<G>> = HashMap::with_capacity(borrowed.len());
         for rec in borrowed {
             let value = &rec.state;
+            // The frame filter, exactly as the plain shard applies it: a
+            // neighbour exports its WHOLE border, and a record far from
+            // this region is not this shard's content — even where a
+            // cell's 3×3 would reach it. A filtered record is absent
+            // from the view, so leaving the frame reads as an exit and
+            // re-entering it as an entry.
+            if !self.inner.partition.admits(self.inner.index, value) {
+                continue;
+            }
             new_view.insert(rec.wire, value.clone());
             match self.prev_borrowed.get(&rec.wire) {
                 None => {

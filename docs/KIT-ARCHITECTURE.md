@@ -1600,7 +1600,8 @@ eklendi — aşağıdaki gözlemlerin ilki).
 Tetikleyicisiz gözlemler (iş yok): kit'in opcode varsayılanları
 (varsayılansız ilişkili sabit daha dürüst olurdu), `Vision::sees`
 birim başına yarıçap taşımıyor, `TeamRoom` yalnız full gönderiyor,
-`ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi),
+`ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi —
+sonradan kapandı, "Faz 5 sonucu" gözlemleri),
 join / `spawn_player` hesap kimliğini görmüyor (çekirdek). Sıra
 önerisi: F1 (hata) önce ve kendi commit'inde, önce kırılan testiyle
 (`findings::f1_…` zaten hazır); ardından eklemeler (F2, F4,
@@ -1677,7 +1678,17 @@ kayıt sayısı ya da iddia değişmedi):
   shard'ların defterine giriyor. Görünürlük hücreyle sınırlı olduğu için
   doğru; F1'in köşegen ışınlanma belirtisinin bir tetikleyicisi buydu
   (ara shard'ın şeridi hedef shard'a varıştan bir tick önce ödünç
-  veriyordu), F1 düzeltmesiyle zararsız.
+  veriyordu), F1 düzeltmesiyle zararsız. **→ Kapandı** (Faz 5 sonrası,
+  `fix/small-bundle`): "görünürlük hücreyle sınırlı, yani doğru"
+  varsayımı genelde tutmuyor — hücre kenarı bölgeye göre büyükse bir
+  grubun 3×3'ü komşunun UZAK kenarına uzanıyor (kit fikstüründe 4×4,
+  bölge 25, kenar payı 6,25, hücre 20: shard 0'ın `Cell(-2,-2)`
+  grubu, shard 1'in doğu kenarındaki x = -1 kaydını görüyordu; düz
+  `ShardedRoom` aynı kaydı reddediyor). Kompozit artık şeridi deftere
+  almadan önce aynı `admits` süzgecinden geçiriyor
+  (`integrate_borrowed`); defter SÜZÜLMÜŞ görünümü tuttuğu için çerçeve
+  dışına çıkan kayıt çıkış, geri giren giriş olarak okunuyor
+  (`sharded/tests/frame_filter.rs`). Baytlar ve demo iddiaları aynı.
 - 8-komşulukla 2×2'de her shard diğer üçünün şeridini alıyor: şerit
   trafiği kenar başına değil shard başına üç komşu (MMO'nun bilinçli
   seçimi; varsayılan 4-komşuluk).
