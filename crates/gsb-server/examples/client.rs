@@ -16,12 +16,39 @@
 
 use std::time::Duration;
 
+use gsb_kit::client::{Apply, ClientDecoder, ClientView, PrivateEvent, Snapshot};
 use gsb_protocol::base::{
     Auth, AuthResult, Error, ErrorCode, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
 };
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// The demo's decode seam for the kit's reference client: a record is
+/// kept as its wire position, in the server's cell of it (floor of the
+/// WIRE coordinates / cell_size); a `CellExit` names the cell's index.
+struct DemoDecoder {
+    cell_size: f32,
+}
+
+impl ClientDecoder for DemoDecoder {
+    type Record = (i32, i32);
+    type Cell = (i32, i32);
+
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
+        let e = gsb_demo::game::EntityRecord::decode(body)?;
+        let cell = (
+            (e.x as f32 / self.cell_size).floor() as i32,
+            (e.y as f32 / self.cell_size).floor() as i32,
+        );
+        Ok((e.entity, cell, (e.x, e.y)))
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+        let c = gsb_demo::game::CellExit::decode(body)?;
+        Ok((c.x, c.y))
+    }
+}
 
 fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
     let body = 2 + payload.len();
@@ -150,14 +177,14 @@ async fn main() {
     .unwrap();
     w.flush().await.unwrap();
 
-    // The client's world view (the protocol's client half, `game.proto`):
-    // a full replaces it, a delta applies on top of it (even across a
-    // sequence gap — the stream is event-driven; the keep-alive full is
-    // the convergence guarantee), a delta with no baseline is dropped
-    // until the next full, a duplicate (seq <= last accepted) is
-    // discarded.
-    let mut view: std::collections::HashMap<u64, (i32, i32)> = std::collections::HashMap::new();
-    let mut last_seq: Option<u64> = None;
+    // The client's world view: the kit's reference client
+    // (`gsb_kit::client`, the client rules of `kit.proto`) — a full
+    // replaces it, a delta applies on top of it (even across a sequence
+    // gap — the stream is event-driven; the keep-alive full is the
+    // convergence guarantee), a delta with no baseline is dropped until
+    // the next full, a duplicate (seq <= last accepted) is discarded, the
+    // one-shot private full is applied unconditionally.
+    let mut view = ClientView::new(DemoDecoder { cell_size: 20.0 });
     let mut acked_max: u64 = 0;
 
     // Mover task: every 150 ms, a MOVE_TO around a circle of radius 40,
@@ -226,84 +253,44 @@ async fn main() {
                 };
                 println!("ERROR code={} ({}) message={}", m.code, class, m.message);
             }
-            gsb_demo::op::WORLD_SNAPSHOT => {
-                let m: gsb_demo::game::WorldSnapshot =
-                    gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                // The client rules (`game.proto`):
-                if m.sequence <= last_seq.unwrap_or(0) {
-                    println!("WORLD_SNAPSHOT seq={} duplicate — discarded", m.sequence);
-                } else if m.delta && last_seq.is_none() {
-                    println!(
-                        "WORLD_SNAPSHOT seq={} delta without baseline — dropped (next full heals)",
-                        m.sequence
-                    );
-                } else {
-                    if m.delta {
-                        for &w in &m.removed {
-                            view.remove(&w);
-                        }
-                        for c in &m.cell_exits {
-                            // Forget every held entity in the exited cell
-                            // (the server's formula: floor of the WIRE
-                            // coordinates / cell_size — cell_size 20 here).
-                            let (cx, cy) = (c.x, c.y);
-                            view.retain(|_, (x, y)| {
-                                // (the floor, not the truncated quotient —
-                                // the server's formula)
-                                (*x as f32 / 20.0).floor() as i32 != cx
-                                    || (*y as f32 / 20.0).floor() as i32 != cy
-                            });
-                        }
-                        for e in &m.entities {
-                            view.insert(e.entity, (e.x, e.y));
-                        }
-                    } else {
-                        view.clear();
-                        for e in &m.entities {
-                            view.insert(e.entity, (e.x, e.y));
-                        }
-                    }
-                    last_seq = Some(m.sequence);
-                    let kind = if m.delta { "delta" } else { "FULL" };
-                    println!(
-                        "WORLD_SNAPSHOT seq={} {kind}: now {} entities held ({})",
-                        m.sequence,
-                        view.len(),
-                        view.iter()
-                            .map(|(id, (x, y))| format!("{id}=({x}, {y})"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
-            }
-            gsb_demo::op::PRIVATE => {
-                let m: gsb_demo::game::Private =
-                    gsb_demo::game::Private::decode(&payload[..]).unwrap();
-                match m.payload {
-                    Some(gsb_demo::game::private::Payload::Ack(a)) => {
-                        acked_max = acked_max.max(a.processed_up_to);
+            gsb_demo::op::WORLD_SNAPSHOT => match view.apply_snapshot(&payload) {
+                Ok(Snapshot { sequence, apply }) => match apply {
+                    Apply::Stale => println!("WORLD_SNAPSHOT seq={sequence} duplicate — discarded"),
+                    Apply::NoBaseline => println!(
+                        "WORLD_SNAPSHOT seq={sequence} delta without baseline — dropped (next full heals)"
+                    ),
+                    Apply::Full | Apply::Delta => {
+                        let kind = if apply == Apply::Delta {
+                            "delta"
+                        } else {
+                            "FULL"
+                        };
                         println!(
-                            "PRIVATE ack: processed_up_to={} (max so far {})",
-                            a.processed_up_to, acked_max
+                            "WORLD_SNAPSHOT seq={sequence} {kind}: now {} entities held ({})",
+                            view.len(),
+                            view.iter()
+                                .map(|(id, (x, y))| format!("{id}=({x}, {y})"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         );
                     }
-                    Some(gsb_demo::game::private::Payload::Snapshot(s)) => {
-                        // The one-shot private full: applied UNCONDITIONALLY
-                        // (it is a different stream from the group frames and
-                        // resets this connection's baseline).
-                        view.clear();
-                        for e in &s.entities {
-                            view.insert(e.entity, (e.x, e.y));
-                        }
-                        last_seq = Some(s.sequence);
-                        println!(
-                            "PRIVATE full: {} entities (baseline reset)",
-                            s.entities.len()
-                        );
-                    }
-                    None => {}
+                },
+                Err(e) => println!("WORLD_SNAPSHOT rejected: {e}"),
+            },
+            gsb_demo::op::PRIVATE => match view.apply_private(&payload) {
+                Ok(PrivateEvent::Ack(up_to)) => {
+                    acked_max = acked_max.max(up_to);
+                    println!("PRIVATE ack: processed_up_to={up_to} (max so far {acked_max})");
                 }
-            }
+                // The one-shot private full: applied UNCONDITIONALLY (it
+                // is a different stream from the group frames and resets
+                // this connection's baseline).
+                Ok(PrivateEvent::Full { .. }) => {
+                    println!("PRIVATE full: {} entities (baseline reset)", view.len());
+                }
+                Ok(PrivateEvent::Empty) => {}
+                Err(e) => println!("PRIVATE rejected: {e}"),
+            },
             other => println!("frame op={other} ({} bytes)", payload.len()),
         }
     }
