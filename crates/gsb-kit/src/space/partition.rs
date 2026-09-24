@@ -8,11 +8,11 @@
 //! entity, whether it is near a border) and the wire value (whether a
 //! neighbour's border record is near this shard).
 
-use std::marker::PhantomData;
-
 use bevy_ecs::component::Component;
 
-use crate::space::Planar;
+mod grid;
+
+pub use grid::GridPartition2;
 
 /// How a map is split into shard regions, which shards border each
 /// other, and what crosses a border. `W` is the game's wire value (the
@@ -43,6 +43,17 @@ pub trait Partition<W>: Send + 'static {
     /// frame filter — a neighbour exports its whole border, and the parts
     /// far from `idx` are not).
     fn admits(&self, idx: usize, wire: &W) -> bool;
+
+    /// Debug builds: check that `wire` — the codec's wire value of the
+    /// entity at `pos` — agrees with `pos` the way [`Self::admits`]
+    /// assumes, and panic with the reason when it does not (the default
+    /// checks nothing). The sharded rooms call it for every entity they
+    /// export when they rebuild the border strip; an implementation
+    /// keeps its test inside `cfg!(debug_assertions)`, so a release build
+    /// pays nothing. [`GridPartition2`] checks the unit contract of
+    /// [`Planar`](crate::space::Planar): the wire's projection must be
+    /// in the position's unit.
+    fn debug_check_wire(&self, _pos: &Self::Pos, _wire: &W) {}
 }
 
 /// The grid shape for `shard_count` shards: `rows` = the largest divisor
@@ -93,160 +104,4 @@ fn region_at(
     let col = (((x + half) / cell_w).floor() as i32).clamp(0, (cols - 1) as i32);
     let row = (((y + half) / cell_h).floor() as i32).clamp(0, (rows - 1) as i32);
     row as usize * cols + col as usize
-}
-
-/// The 2D grid preset: a square map `[-half, half]²` on the ground plane
-/// split into a `grid_shape(shard_count)` grid of rectangular regions,
-/// the 4-neighbourhood (west, east, north, south) — or, opted in with
-/// [`Self::with_diagonals`], the 8-neighbourhood — and a border margin of
-/// a quarter of the smaller region edge on each side of every shared
-/// edge. Reads any position component with an `f32` [`Planar`]
-/// projection and any wire value with an `i32` one.
-pub struct GridPartition2<P> {
-    shard_count: usize,
-    rows: usize,
-    cols: usize,
-    /// Half-size of the square map (clamped to at least 1).
-    half: f32,
-    cell_w: f32,
-    cell_h: f32,
-    /// The border margin: a quarter of the smaller region edge.
-    border: f32,
-    /// Whether the regions sharing only a corner are neighbours too (the
-    /// 8-neighbourhood, [`Self::with_diagonals`]).
-    diagonals: bool,
-    _pos: PhantomData<fn() -> P>,
-}
-
-impl<P> GridPartition2<P> {
-    /// A grid of `shard_count` regions (1..=256) over a map of half-size
-    /// `half`.
-    #[must_use]
-    pub fn new(shard_count: usize, half: f32) -> Self {
-        let (rows, cols) = grid_shape(shard_count);
-        let half = half.max(1.0);
-        let cell_w = 2.0 * half / cols as f32;
-        let cell_h = 2.0 * half / rows as f32;
-        Self {
-            shard_count,
-            rows,
-            cols,
-            half,
-            cell_w,
-            cell_h,
-            border: cell_w.min(cell_h) / 4.0,
-            diagonals: false,
-            _pos: PhantomData,
-        }
-    }
-
-    /// The 8-neighbourhood: the regions that share only a CORNER with a
-    /// region are its neighbours too. A player near a corner then sees
-    /// the diagonal region's corner through the border strip (with the
-    /// 4-neighbourhood nothing is lent across a corner), and a crossing
-    /// through a corner — or a jump — into the diagonal region takes one
-    /// hop instead of two. The cost: every region exchanges its strip
-    /// with up to eight neighbours instead of four (each receiver's
-    /// [`Partition::admits`] keeps only the part near itself — for a
-    /// diagonal neighbour, the corner square). Every shard of a room must
-    /// use the same partition. Not the default: the 4-neighbourhood is
-    /// the preset's established topology (routes, exchange fan-out).
-    #[must_use]
-    pub fn with_diagonals(mut self) -> Self {
-        self.diagonals = true;
-        self
-    }
-
-    /// Region `idx`'s rectangle `[x0, x1] × [y0, y1]`.
-    fn rect(&self, idx: usize) -> (f32, f32, f32, f32) {
-        let row = idx / self.cols;
-        let col = idx % self.cols;
-        let x0 = -self.half + col as f32 * self.cell_w;
-        let y0 = -self.half + row as f32 * self.cell_h;
-        (x0, x0 + self.cell_w, y0, y0 + self.cell_h)
-    }
-}
-
-impl<P, W> Partition<W> for GridPartition2<P>
-where
-    P: Component + Planar<Coord = f32>,
-    W: Planar<Coord = i32>,
-{
-    type Pos = P;
-
-    fn shard_count(&self) -> usize {
-        self.shard_count
-    }
-
-    #[inline]
-    fn region_of(&self, pos: &P) -> usize {
-        let [x, y] = pos.planar();
-        region_at(
-            x,
-            y,
-            self.half,
-            (self.rows, self.cols),
-            (self.cell_w, self.cell_h),
-        )
-    }
-
-    /// West, east, north, south — then, with [`Self::with_diagonals`],
-    /// the corners (north-west, north-east, south-west, south-east): the
-    /// edge neighbours stay first, so a route's first hop prefers an edge
-    /// when both are shortest.
-    fn neighbors(&self, idx: usize) -> Vec<usize> {
-        let row = idx / self.cols;
-        let col = idx % self.cols;
-        let mut neighbors = Vec::with_capacity(if self.diagonals { 8 } else { 4 });
-        let (west, east) = (col > 0, col + 1 < self.cols);
-        let (north, south) = (row > 0, row + 1 < self.rows);
-        if west {
-            neighbors.push(idx - 1);
-        }
-        if east {
-            neighbors.push(idx + 1);
-        }
-        if north {
-            neighbors.push(idx - self.cols);
-        }
-        if south {
-            neighbors.push(idx + self.cols);
-        }
-        if self.diagonals {
-            if north && west {
-                neighbors.push(idx - self.cols - 1);
-            }
-            if north && east {
-                neighbors.push(idx - self.cols + 1);
-            }
-            if south && west {
-                neighbors.push(idx + self.cols - 1);
-            }
-            if south && east {
-                neighbors.push(idx + self.cols + 1);
-            }
-        }
-        neighbors
-    }
-
-    /// Within `border` of any edge of the region rectangle (the export
-    /// covers the whole border; each receiver's [`Self::admits`] keeps
-    /// the part near itself).
-    #[inline]
-    fn exports(&self, idx: usize, pos: &P) -> bool {
-        let [x, y] = pos.planar();
-        let (x0, x1, y0, y1) = self.rect(idx);
-        let b = self.border;
-        (x - x0) < b || (x1 - x) < b || (y - y0) < b || (y1 - y) < b
-    }
-
-    /// Within `border` of the region rectangle, including the thin
-    /// overlap into it.
-    #[inline]
-    fn admits(&self, idx: usize, wire: &W) -> bool {
-        let [x, y] = wire.planar();
-        let (x0, x1, y0, y1) = self.rect(idx);
-        let b = self.border;
-        x as f32 >= x0 - b && x as f32 <= x1 + b && y as f32 >= y0 - b && y as f32 <= y1 + b
-    }
 }

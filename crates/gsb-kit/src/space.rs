@@ -35,6 +35,17 @@ pub use vision::{Vision, VisionGrid2, VisionGrid3};
 /// value, and then uses the planar presets unchanged. A preset that
 /// needs all three axes ([`VisionGrid3`]) reads [`Spatial`] instead; a
 /// type can implement both.
+///
+/// **The unit.** The projection reports the value in a unit of the
+/// game's choosing, but a preset that reads BOTH a position and a wire
+/// value compares them in one unit: [`GridPartition2`] tests a
+/// neighbour's wire value against region rectangles laid out in the
+/// position's unit. So a game's position `Planar` and wire `Planar` must
+/// report the SAME unit — a wire quantized finer than the position
+/// (centimetres over metres) projects back to the position's unit (see
+/// [`GridPartition2`]; debug builds check it). A preset reading only one
+/// of the two ([`Grid2`]: the wire; the vision and sector presets: the
+/// position) takes its own parameters in that value's unit.
 pub trait Planar {
     /// The coordinate type: `i32` for a quantized wire value, `f32` for
     /// a simulation position.

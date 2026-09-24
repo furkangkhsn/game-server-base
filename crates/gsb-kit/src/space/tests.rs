@@ -9,6 +9,8 @@ use bevy_ecs::component::Component;
 
 use super::*;
 
+mod units;
+
 /// A 3D game's simulation position: the kit has never seen this type.
 #[derive(Debug, Clone, Copy, Component)]
 struct Pos3 {

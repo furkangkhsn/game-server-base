@@ -30,10 +30,11 @@
 //! works in the one world unit — `Grid2`'s cell edge is in metres, and
 //! `GridPartition2::admits` (the plain `ShardedRoom`'s border frame
 //! filter; the MMO's spatial composite does not call it) compares the
-//! wire projection with a region rectangle in the POSITION's unit. The
-//! kit does not state that contract (a design finding —
-//! `docs/KIT-ARCHITECTURE.md` §10, "Faz 4 sonucu", F3): a `[x_dm, z_dm]`
-//! projection compiles and silently misfilters there. Coarsening to
+//! wire projection with a region rectangle in the POSITION's unit —
+//! `Planar`'s unit contract (Phase 4 found it unwritten, finding F3 in
+//! `docs/KIT-ARCHITECTURE.md` §10; the kit now documents it and a debug
+//! build checks it on every exported entity): a `[x_dm, z_dm]`
+//! projection compiles and misfilters there. Coarsening to
 //! whole metres costs nothing: a cell edge (64 m) is a whole number of
 //! metres, so the cell is still `floor(x_dm / 640)`
 //! ([`crate::world::client_cell`]).

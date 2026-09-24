@@ -195,9 +195,14 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             world.query_filtered::<(&WireId, RecordQuery<G>, &P::Pos), With<Marker<G>>>();
         for (wire, item, pos) in query.iter(world) {
             if self.partition.exports(self.index, pos) {
+                let state = codec.wire(item);
+                // Debug builds: the wire must agree with the position the
+                // way the receivers' frame filter assumes (the preset: one
+                // unit — `Planar`'s contract, KIT-ARCHITECTURE §10, F3).
+                self.partition.debug_check_wire(pos, &state);
                 self.border_cache.push(BorderRecord {
                     wire: wire.get(),
-                    state: codec.wire(item),
+                    state,
                 });
             }
         }
