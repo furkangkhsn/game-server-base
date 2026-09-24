@@ -2,12 +2,12 @@
 //! a timer, and report what it saw.
 
 use super::*;
+use gsb_kit::client::PrivateEvent;
 use gsb_protocol::base::{
     Auth, Error, ErrorCode, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult,
 };
 use gsb_protocol::op;
 use prost::Message;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 
@@ -46,14 +46,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         fresh_joins: 0,
     };
 
-    // The client-side world view (the delta protocol's client half — see
-    // `ClientView`; fulls replace, deltas apply on top, gaps drop until
-    // the next full).
-    let mut view = ClientView {
-        entities: HashMap::new(),
-        last_seq: None,
+    // The client-side world view (the delta protocol's client half — the
+    // kit's reference client, see `ClientView`; fulls replace, deltas
+    // apply on top, a delta without a baseline drops until the next full).
+    let mut view = ClientView::new(DemoDecoder {
         cell_size: p.cell_size,
-    };
+    });
 
     // Optional connect stagger (see `Args::stagger_ms`).
     if p.stagger_ms > 0.0 {
@@ -252,67 +250,49 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 }
             }
             gsb_demo::op::WORLD_SNAPSHOT => {
-                match gsb_demo::game::WorldSnapshot::decode(&payload[..]) {
-                    Ok(m) => {
+                // The client half of the delta protocol (see
+                // `ClientView`): apply it, whatever the strategy's mode (a
+                // full-snapshot room's frames are all fulls). The view
+                // counts fulls / deltas / no-baseline drops itself.
+                match view.apply_snapshot(&payload) {
+                    Ok(s) => {
                         rep.snapshots += 1;
                         let at = Instant::now();
                         if rep.seq_first.is_none() {
-                            rep.seq_first = Some((m.sequence, at));
+                            rep.seq_first = Some((s.sequence, at));
                         }
-                        rep.seq_last = Some((m.sequence, at));
-                        // The client half of the delta protocol (see
-                        // `ClientView`): apply it, whatever the strategy's
-                        // mode (a full-snapshot room's frames are all fulls).
-                        match view.apply(&m) {
-                            Apply::Full => rep.fulls += 1,
-                            Apply::Delta => rep.deltas += 1,
-                            Apply::NoBaseline => rep.gap_drops += 1,
-                            Apply::Stale => {}
-                        }
+                        rep.seq_last = Some((s.sequence, at));
                     }
                     Err(_) => rep.errors += 1,
                 }
             }
-            gsb_demo::op::PRIVATE => {
-                let pr = match gsb_demo::game::Private::decode(&payload[..]) {
-                    Ok(pr) => pr,
-                    Err(_) => {
-                        rep.errors += 1;
-                        continue;
-                    }
-                };
-                match pr.payload {
-                    Some(gsb_demo::game::private::Payload::Ack(ack)) => {
-                        // Section A: the server's per-connection input
-                        // high-water mark. `now` is this loop iteration's
-                        // instant — the ack's lag is measured against the
-                        // send instant of the acked seq (index seq-1).
-                        rep.acks += 1;
-                        rep.ack_processed_max = rep.ack_processed_max.max(ack.processed_up_to);
-                        if ack.processed_up_to > 0 {
-                            let i = ack.processed_up_to as usize - 1;
-                            if i < sent_at.len() {
-                                let lag = Instant::now().duration_since(sent_at[i]);
-                                rep.ack_lag_max_ms = rep.ack_lag_max_ms.max(lag.as_millis());
-                            }
+            gsb_demo::op::PRIVATE => match view.apply_private(&payload) {
+                Ok(PrivateEvent::Ack(up_to)) => {
+                    // Section A: the server's per-connection input
+                    // high-water mark. `now` is this loop iteration's
+                    // instant — the ack's lag is measured against the
+                    // send instant of the acked seq (index seq-1).
+                    rep.acks += 1;
+                    rep.ack_processed_max = rep.ack_processed_max.max(up_to);
+                    if up_to > 0 {
+                        let i = up_to as usize - 1;
+                        if i < sent_at.len() {
+                            let lag = Instant::now().duration_since(sent_at[i]);
+                            rep.ack_lag_max_ms = rep.ack_lag_max_ms.max(lag.as_millis());
                         }
                     }
-                    Some(gsb_demo::game::private::Payload::Snapshot(sn)) => {
-                        // A one-shot FULL view (a fresh group member — late
-                        // join or a group crossing). It MUST be a full: a
-                        // delta here would be a protocol error, and a
-                        // wrong-mode client must not silently misapply it.
-                        if sn.delta {
-                            rep.errors += 1;
-                        } else {
-                            rep.private_fulls += 1;
-                            rep.fulls += 1;
-                            view.apply_private_full(&sn);
-                        }
-                    }
-                    None => rep.errors += 1,
                 }
-            }
+                // A one-shot FULL view (a fresh group member — late join
+                // or a group crossing), applied by the view (counted in
+                // its fulls and private fulls).
+                Ok(PrivateEvent::Full { .. }) => {}
+                // No payload arm: this client sends no RPCs, so an empty
+                // private frame is unexpected.
+                Ok(PrivateEvent::Empty) => rep.errors += 1,
+                // Undecodable, or a private DELTA — a protocol error (a
+                // wrong-mode client must not silently misapply it).
+                Err(_) => rep.errors += 1,
+            },
             op::base::ERROR => {
                 let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
                 // Classified through the GENERATED enum (prost's
@@ -339,8 +319,14 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
     }
 
-    // The final client view size (the delta protocol's end state).
-    rep.view_size = view.entities.len() as u64;
+    // The view's counters and final size (the delta protocol's end
+    // state).
+    let c = view.counters();
+    rep.fulls = c.fulls;
+    rep.private_fulls = c.private_fulls;
+    rep.deltas = c.deltas;
+    rep.gap_drops = c.gap_drops;
+    rep.view_size = view.len() as u64;
 
     if flooded {
         // The input flood: write MOVE_TO as fast as the socket accepts,
