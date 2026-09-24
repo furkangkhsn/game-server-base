@@ -132,10 +132,11 @@ pub struct OpenRoom {
     /// `RoomLogic::snapshot`).
     last: HashMap<u64, (i32, i32)>,
     /// Per-player input sequence state (high-water mark + last ack;
-    /// see `crate::kit::common::ingest` / `emit_private`). Strategy-independent:
-    /// every room numbers and acknowledges its clients' input the same
-    /// way (the client's prediction reconciliation does not care which
-    /// visibility strategy the server picked).
+    /// see the demo's `ingest` / `crate::kit::common::emit_private`).
+    /// Strategy-independent: every room numbers and acknowledges its
+    /// clients' input the same way (the client's prediction
+    /// reconciliation does not care which visibility strategy the server
+    /// picked).
     input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).

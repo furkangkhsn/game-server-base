@@ -77,9 +77,10 @@ pub struct ShardedRoom {
     /// Entity records encoded during the most recent broadcast phase.
     pub(in crate::kit::sharded) encoded: u64,
     /// Per-player input sequence state (strategy-independent; see
-    /// the demo's `ingest` / `crate::kit::common::emit_private`). The session stays bound to
-    /// this shard even if its entity migrates (its input is routed
-    /// through this shard's room), so the session lives here.
+    /// the demo's `ingest` / `crate::kit::common::emit_private`). The
+    /// session stays bound to this shard even if its entity migrates (its
+    /// input is routed through this shard's room), so the session lives
+    /// here.
     pub(in crate::kit::sharded) input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// The economy service handle (the RPC pattern's external-I/O half on
     /// the SHARDED path — Faz 3; the demo's economy service); `None` = this
