@@ -55,7 +55,7 @@ architecture for MOBA / MMORPG projects.
 | `gsb-kit` | **Pluggable game components, generic over the game**: the visibility strategies (open, AOI, team fog, PVS) and sharded composites as complete `GameLogic` rooms, the cell-delta engine, park/resume, the input seq/ack rule, wire identity, the snapshot/`Private` envelopes (own `kit.proto`), and presets (`Grid2`, `VisionGrid2`, `VisionGrid3`, `ConvexSectors2`, `GridPartition2`) read through the `Planar`/`Spatial` accessors. Depends on no game — see `docs/KIT-ARCHITECTURE.md` |
 | `gsb-demo` | **The example game**: 2D components, movement, the demo wire protocol (`game.proto`, a typed mirror of the kit envelope), input/bot/RPC/economy; implements the kit's seams and instantiates its rooms (constructors: `gsb_demo::prelude`) |
 | `gsb-demo-arena` | **Validation demo: a 3D team arena** built on `gsb-kit`'s public API only (no kit or core change): `Pos3` (`Spatial`), its own 3D movement, a centimetre-quantized record codec, round-robin teams over three sides, **3D team fog of war** (`TeamRoom` + `VisionGrid3` — height counts), its own `arena.proto` (typed mirror of the kit envelope). Not wired into the server; verified through the real room actor (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3 sonucu") |
-| `gsb-demo-mmo` | **Validation demo: a 3D MMO world** — the closing check, built on `gsb-kit`'s public API only (no kit or core change): `Pos3` with a ground-plane `Planar` (`[x, z]`), a decimetre-quantized record codec (position + kind + hit points), mobs spawned and despawned by game code that migrate without any speed component, flyers, a logout bot, **a ground-plane grid AOI over a sharded world** (`ShardedSpatialRoom` + `Grid2` + `GridPartition2`, 2×2 shards — height ignored), its own `mmo.proto`. Not wired into the server; verified through four real shard actors (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4 sonucu", including the recorded kit design findings) |
+| `gsb-demo-mmo` | **Validation demo: a 3D MMO world** — the closing check, built on `gsb-kit`'s public API only: `Pos3` with a ground-plane `Planar` (`[x, z]`), a decimetre-quantized record codec (position + kind + hit points), mobs spawned and despawned by game code that migrate without any speed component, flyers, a logout timer (hold, then release the slot; an optional logout bot), **a ground-plane grid AOI over a sharded world** (`ShardedSpatialRoom` + `Grid2` + `GridPartition2` with corners, 2×2 shards — height ignored), its own `mmo.proto`. Not wired into the server; verified through four real shard actors (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4 sonucu"; the kit design findings it recorded were fixed in "Faz 5 sonucu") |
 | `gsb-server` | Composition root: config, startup, `gsb-server` binary + client example + `gsb-loadgen` load generator |
 
 ## Quick start
@@ -72,7 +72,7 @@ there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
 clippy `-D warnings` · test).
 
 ```sh
-# 478 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 497 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -89,11 +89,13 @@ clippy `-D warnings` · test).
 # on a fixture game (single WireId minter, codec/grid wire pins, the kit-owned change
 # window in every room, more than two teams / sixteen sectors, non-adjacent and
 # Speed-less migration, despawns by game code, request forwarding in every room,
-# ground-plane 3D presets, 3D team fog), demo record values through the kit rooms,
+# ground-plane 3D presets, 3D team fog, arrivals in a lent cell, the 8-neighbourhood
+# grid, Planar's unit check, the disconnect policy and veto in every room, team chosen
+# at the spawn, required frame opcodes), demo record values through the kit rooms,
 # the 3D arena through the room actor (three-team fog, height, shared vision, movement,
 # input ack, arena mirror bytes), the 3D MMO through four shard actors (ground-plane AOI,
-# player / speed-less mob / teleport shard crossings, game-code despawn, park and logout
-# bot, MMO mirror bytes, pinned kit design findings).
+# player / speed-less mob / teleport shard crossings, game-code despawn, park, logout
+# timer and logout bot, MMO mirror bytes, the kit design findings flipped to fixed).
 cargo test --workspace
 
 cargo run -p gsb-server                    # default config (0.0.0.0:7777, 1 room, 30 Hz global)
@@ -175,7 +177,9 @@ team fog) or `gsb-demo-mmo` (3D, ground-plane AOI over shards), on top
 of `gsb-kit`:
 
 1. Write its `proto/` (`import "kit.proto"`; declare typed mirrors of the
-   kit's `WorldSnapshot`/`Private` with its own record type) + opcodes;
+   kit's `WorldSnapshot`/`Private` with its own record type — the client
+   rules are written in `kit.proto`) + opcodes (its own block: `Game`'s
+   `SNAPSHOT_OP`/`PRIVATE_OP` have no default);
 2. Define its components and systems;
 3. Implement the kit's seams — `RecordCodec` (what a record's bytes are),
    `Game` (+ `TeamGame` / `ShardGame` for those strategies), and

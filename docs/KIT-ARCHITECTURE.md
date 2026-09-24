@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazlarının hepsi tamam; Faz 0, Faz 1 (1a + 1b), Faz 2 (crate bölmesi), Faz 3 (3D arena demosu) ve Faz 4 (3D MMO demosu, kapanış doğrulaması — ikisi de kit'e ve çekirdeğe dokunmadan) (§10, "Faz 0 sonucu" … "Faz 4 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil (§11). Sıradaki: kit düzeltme turu — girdisi §10'un "Faz 3 + Faz 4 tasarım bulguları" listesi (biri, F1, bir doğruluk hatası). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — bütün fazlar tamam; Faz 0, Faz 1 (1a + 1b), Faz 2 (crate bölmesi), Faz 3 (3D arena demosu) ve Faz 4 (3D MMO demosu, kapanış doğrulaması — ikisi de kit'e ve çekirdeğe dokunmadan), Faz 5 (kit düzeltme turu: iki demonun kaydettiği bulguların hepsi kapandı — F1 doğruluk hatası dahil) (§10, "Faz 0 sonucu" … "Faz 5 sonucu"; derlenen imzalar §4.5, §4.6 + "Faz 5 eklemeleri"; kit proto'su §5). Üç demo, düzeltilmiş kit üzerinde yeşil; kabul kriterinin dördü de sağlandı (§11). Kararlar §12.**
 
 ## 1. Neden
 
@@ -428,6 +428,57 @@ Elenen alternatifler:
     ters harita `entity_wire` ve yönlendirme tablosu `route` geldi.
     Hiçbir alanın görünürlüğü genişletilmedi.
 
+**Faz 5 eklemeleri** (kit düzeltme turu, §10 "Faz 5 sonucu"; hepsi
+ekleme — bir tanesi, A3, oyun yazarı için kırıcı):
+
+```rust
+pub trait Game: Send + 'static {
+    type Codec: RecordCodec;
+    const SNAPSHOT_OP: u16;                         // A3: varsayılan YOK (eskiden 1003)
+    const PRIVATE_OP: u16;                          // A3: varsayılan YOK (eskiden 1004)
+    // … §4.5'teki kancalar aynı …
+    fn may_release(&mut self, _w: &mut World, _entity: Entity) -> bool { true } // F4
+}
+pub trait TeamGame: Game {
+    fn spawn_team_player(&mut self, w: &mut World, conn: ConnectionId)
+        -> (Entity, Team) { /* spawn_player, sonra team_of */ }            // A1
+    fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
+}
+pub trait Partition<W>: Send + 'static {
+    // … §4.6'daki metotlar aynı …
+    fn debug_check_wire(&self, _pos: &Self::Pos, _wire: &W) {}               // F3
+}
+impl<P> GridPartition2<P> { pub fn with_diagonals(self) -> Self }          // F2
+// Her oda (OpenRoom, AoiRoom, TeamRoom, SectorRoom, ShardedRoom,
+// ShardedSpatialRoom):
+pub fn with_disconnect_policy(self, grace: Option<Duration>, to: ExpireTo) -> Self; // F4
+```
+
+- **`with_disconnect_policy(grace, to)`** (F4): `grace` —
+  `Some(0)` park yok (anında despawn), `Some(d)` en çok `d` bekletme,
+  `None` oyunun `Game::may_release` vetosu kalkana dek bekletme (savaş
+  kilidi; varsayılan kanca `true` → bir sonraki tick); `to` — biten
+  bekletme `ExpireTo::AiHandover` (varsayılan) ya da
+  `ExpireTo::Despawn` (slot bırakılır). `with_disconnect_grace(g)`
+  anlamını korur (`grace = Some(g)`, seçili `to` kalır); varsayılan
+  politika değişmedi (30 sn → AI devri). Her oda çekirdeğin
+  `GameLogic::may_release`'ini bekletilen oyuncunun entity'siyle
+  oyuna iletir. Çekirdeğin anlamı gereği veto yalnız süresiz
+  bekletmede sorulur: "süreli bekletme + savaş vetosu" birlikte ifade
+  edilemez (çekirdek kararı, §10 "Faz 5 sonucu" gözlem).
+- **`spawn_team_player`** (A1): takım odası her katılımda bunu çağırır
+  (kit-içi `common::join_with` spawn adımını parametre alır).
+  Varsayılanı eski iki adım; tek fark `team_of` artık kit wire
+  kimliğini damgalamadan ÖNCE soruluyor (hiçbir kit oyunu orada kimliği
+  okumuyordu). Ezen oyuna `team_of` sorulmaz (yine uygulanır — ör.
+  `TeamMember`'ı geri okur).
+- **`debug_check_wire`** (F3): sharded odalar şeridi yeniden kurarken
+  ihraç ettikleri her entity için çağırır; `GridPartition2`'nin
+  gövdesi `cfg!(debug_assertions)` içinde (release'de boş): wire
+  izdüşümü konumunkinden bir şerit genişliğinden fazla uzaksa panik.
+- **`with_diagonals`** (F2): 8-komşuluk; kenar komşuları listede önce
+  (en kısa yollar eşitse rota kenarı seçer). Varsayılan 4-komşuluk.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
@@ -530,14 +581,19 @@ yaygın durumlar için hazır uygulamalarını taşır:
 | `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` **tetikleyici: hacimsel AOI isteyen bir oyun** (kontrol demolarından hiçbiri kullanmıyor — MMO yer düzleminde `Grid2`) |
 | `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi) |
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
-| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği) | `GridPartition2` 1b'de; `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`) |
+| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2) | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
 
 Ön-ayarlar oyunun tiplerini somut bir konum tipi üzerinden değil
 **erişimci trait'ler** üzerinden okur: 2D ön-ayarlar `Planar`'ı
 (`[Coord; 2]`; simülasyon `f32`, wire `i32`), 3D ön-ayarlar
 `Spatial`'ı (`[Coord; 3]`; Faz 2'de kuruldu, bugün tek okuyucusu
-`VisionGrid3`). Tasarım ve elenen alternatifler: §4.6.
+`VisionGrid3`). Tasarım ve elenen alternatifler: §4.6. **Birim
+sözleşmesi** (Faz 5, F3): hem konumu hem wire'ı okuyan ön-ayar
+(`GridPartition2`) ikisini tek birimde karşılaştırır — oyunun konum
+`Planar`'ı ile wire `Planar`'ı AYNI birimi raporlamalı (konumdan ince
+nicemlenen wire, konumun birimine geri izdüşürülür); debug build'de
+`Partition::debug_check_wire` denetler.
 
 İzometrik bir oyun kendi 2D konumuna `Planar` uygular ve `Grid2` takar;
 bir FPS `Pos3`'ünü seçer ve AOI'yi yer düzleminde (`Planar` → `[x, z]`
@@ -623,6 +679,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları; arenanın 3D ön-ayarı (`Spatial`, `VisionGrid3`) — **tamam**, aşağıda "Faz 2 sonucu" | ~400–600 satır, çoğu yol | tüm testler + loadgen |
 | 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `VisionGrid3`), proto — **tamam, kit ve çekirdek dokunulmadan**, aşağıda "Faz 3 sonucu" (iki engelleyici olmayan tasarım bulgusu) | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) — **tamam, kit ve çekirdek dokunulmadan**, aşağıda "Faz 4 sonucu" (dört tasarım bulgusu, biri doğruluk hatası) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
+| 5 | Kit düzeltme turu: Faz 3 + Faz 4 bulguları (F1–F4, A1–A2) ve opcode varsayılanları (A3), her biri kendi commit'inde, önce kırılan testiyle; demolar düzeltmeleri kullanıyor, bulgu kilitleri çevrildi — **tamam**, aşağıda "Faz 5 sonucu" | ~1 700 satır (çoğu test) | baytlar aynı, çekirdek dokunulmadan, kapanış kontrolü + loadgen gürültü içinde |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
 sharded). Faz 1'in en riskli parçası `CellBook`/`CellPieces`'i
@@ -1520,14 +1577,18 @@ Kapanış doğrulamasının iki turunda (arena, MMO) kit'e tek satır
 dokunulmadan kaydedilen her bulgu, en küçük kit değişikliğiyle (F =
 Faz 4, yukarıda; A = Faz 3'ün arena bulguları, "Faz 3 sonucu" 1 ve 2):
 
-| # | Bulgu | Tür | En küçük kit değişikliği |
-|---|---|---|---|
-| F1 | Sharded × spatial: kendi ödünç hücresine göç eden entity yeni shard'ının kovasından siliniyor (varış full'unda kendini kaybetme; hücresinde yalnızsa süresiz görünmezlik) | **doğruluk hatası** | `ShardedSpatialRoom::integrate_borrowed`: artık own olan ve dirty pass'in aynı hücreye koyduğu kimlik için `record_exit`'i atla (kit-içi, ~6 satır); `findings::f1_…` çevrilir |
-| F2 | `GridPartition2` 4-komşuluk: köşegen shard köşeden hiçbir şey ödünç vermiyor | eksik özellik (MMO görünürlüğü) | `GridPartition2::with_diagonals()` — 8-komşuluk bayrağı, varsayılan aynı (ekleme); `findings::f2_…` çevrilir |
-| F4 | Park politikası her beklemeyi AI devrine bitiriyor; "sonra bırak" ve savaş vetosu ifade edilemiyor | eksik politika | `ParkPolicy.to: ExpireTo` + `with_disconnect_policy(grace, to)` (ekleme); ya da varsayılanlı `Game::disconnect_policy` |
-| A1 | Takım, spawn'dan SONRA soruluyor (takıma bağlı spawn noktası `spawn_player`'da seçilip geri okunuyor) | seam sırası | `TeamGame::spawn_team_player(&mut self, world, conn) -> (Entity, Team)`, varsayılanı bugünkü sıra (ekleme) |
-| F3 | `Planar`'ın birim sözleşmesi yazılı değil (`GridPartition2::admits` wire'ı konumun biriminde okuyor) | belge | `Planar` / `GridPartition2` belgesine bir cümle (tetikleyiciyle `wire_scale`) |
-| A2 | Kit zarfının istemci kuralları `kit.proto`'da değil demo'nun `game.proto`'sunda | belge | kuralları `kit.proto`'ya taşı, demo'nun aynası atıf yapsın (yalnız yorum) |
+| # | Bulgu | Tür | En küçük kit değişikliği | Durum |
+|---|---|---|---|---|
+| F1 | Sharded × spatial: kendi ödünç hücresine göç eden entity yeni shard'ının kovasından siliniyor (varış full'unda kendini kaybetme; hücresinde yalnızsa süresiz görünmezlik) | **doğruluk hatası** | `ShardedSpatialRoom::integrate_borrowed`: artık own olan ve dirty pass'in aynı hücreye koyduğu kimlik için `record_exit`'i atla (kit-içi, ~6 satır); `findings::f1_…` çevrilir | **çözüldü** — Faz 5, `c8ed9ba` |
+| F2 | `GridPartition2` 4-komşuluk: köşegen shard köşeden hiçbir şey ödünç vermiyor | eksik özellik (MMO görünürlüğü) | `GridPartition2::with_diagonals()` — 8-komşuluk bayrağı, varsayılan aynı (ekleme); `findings::f2_…` çevrilir | **çözüldü** — Faz 5, `fc4d10b` |
+| F4 | Park politikası her beklemeyi AI devrine bitiriyor; "sonra bırak" ve savaş vetosu ifade edilemiyor | eksik politika | `ParkPolicy.to: ExpireTo` + `with_disconnect_policy(grace, to)` (ekleme); ya da varsayılanlı `Game::disconnect_policy` | **çözüldü** — Faz 5, `cfc51dc` |
+| A1 | Takım, spawn'dan SONRA soruluyor (takıma bağlı spawn noktası `spawn_player`'da seçilip geri okunuyor) | seam sırası | `TeamGame::spawn_team_player(&mut self, world, conn) -> (Entity, Team)`, varsayılanı bugünkü sıra (ekleme) | **çözüldü** — Faz 5, `c076fd0` |
+| F3 | `Planar`'ın birim sözleşmesi yazılı değil (`GridPartition2::admits` wire'ı konumun biriminde okuyor) | belge | `Planar` / `GridPartition2` belgesine bir cümle (tetikleyiciyle `wire_scale`) | **çözüldü** — Faz 5, `deb1d4e` (belge + debug denetimi) |
+| A2 | Kit zarfının istemci kuralları `kit.proto`'da değil demo'nun `game.proto`'sunda | belge | kuralları `kit.proto`'ya taşı, demo'nun aynası atıf yapsın (yalnız yorum) | **çözüldü** — Faz 5, `7356bd7` |
+| A3 | Kit'in `Game::SNAPSHOT_OP` / `PRIVATE_OP` varsayılanları 2D demo'nun numaraları (gözlem, aşağıda) | API dürüstlüğü | varsayılansız ilişkili sabit (oyun yazarı için kırıcı) | **çözüldü** — Faz 5, `2d39767` |
+
+**Hepsi Faz 5'te çözüldü** (§10 "Faz 5 sonucu"; A3 bu tabloya Faz 5'te
+eklendi — aşağıdaki gözlemlerin ilki).
 
 Tetikleyicisiz gözlemler (iş yok): kit'in opcode varsayılanları
 (varsayılansız ilişkili sabit daha dürüst olurdu), `Vision::sees`
@@ -1543,6 +1604,101 @@ clippy --workspace --all-targets -- -D warnings` 0 uyarı; loadgen (50
 istemci, 3 sn) `left=50 errors=0` — MMO sunucuya ve loadgen'e bağlı
 değil (§12 kapsam dışı), çalışma zamanında değişen kod yok; koşu yalnız
 workspace'in sağlam kaldığının kanıtı (A/B alınmadı).
+
+### Faz 5 sonucu
+
+**Tamamlandı** (`kit/phase-5-findings`, `32118b2..`; CHANGELOG "gsb-kit
+Faz 5 turu"). Kit düzeltme turu: iki kontrol demosunun "kit'e dokunma"
+kuralıyla kaydettiği her bulgu (yukarıdaki tablo) kit'te kapandı, her
+biri kendi commit'inde ve kendi kanıtlayan testiyle; demolar düzeltmeyi
+kullanacak şekilde güncellendi, bulguları bugünkü (hatalı) davranışla
+sabitleyen testler çevrildi. **`gsb-core`'a dokunulmadı** (`git diff
+32118b2.. --stat -- crates/gsb-core` boş); wire baytları değişmedi
+(`gsb-demo`'nun `wire_contract.rs`, `kit_wire.rs`, `delta_aoi.rs`, kit'in
+`aoi/tests/sharing*`, arenanın ve MMO'nun `wire.rs`'i dokunulmadan
+yeşil — `git diff 32118b2.. --stat -- crates/gsb-demo/tests
+crates/gsb-demo-arena/tests crates/gsb-demo-mmo/tests/wire.rs
+crates/gsb-kit/src/aoi/tests*` boş).
+
+| # | Commit | Kit değişikliği | Kanıtlayan test (önce kırıldı) | Demo tarafı |
+|---|---|---|---|---|
+| F1 | `c8ed9ba` | `integrate_borrowed`'ın çıkış döngüsü: kimlik artık bu shard'ın (`inner.wire_entity`) ve own kaydı ödünç kopyanın hücresindeyse (`book.cell_of_entity(e) == Some(c)`) `record_exit` atlanıyor; başka hücredeki ödünç kopya bayattır, çıkar. Modül belgesinin "defter o kimliği hiç görmedi" varsayımı düzeltildi | `sharded/tests/lent_arrival.rs` (4): hücresinde yalnız NPC'nin varışı (komşu gruba ne `removed` ne `cell_exits`; sonraki her full'da tek kez), oyuncunun varış one-shot full'unda kendini görmesi — ikisi düzeltmesiz kırıldı; farklı hücreye varış (bayat kopya kalmıyor; "her own kimliği atla" aşırı düzeltmesini kıran test) ve ters yön (komşuya giden entity'nin şeritten geri dönüşü, aynı tick ve bir tick sonra) — bugün doğru, sabitlendi | `findings::f1_…` çevrildi (`…_stays_visible_on_its_new_shard`: O, M'yi 258 tick boyunca her tick görüyor; A'nın saldırısı geçişten önce M'ye işliyor, sonra işlemiyor — geçişin kanıtı); `crossing`'in iki F1 geçici çözümü kalktı (aşağıda) |
+| F2 | `fc4d10b` | `GridPartition2::with_diagonals()`: 8-komşuluk (kenarlar listede önce); yönlendirme (`first_hops`) ve şerit komşu grafını izliyor, köşegen alıcının `admits`'i köşe karesini tutuyor. Varsayılan 4-komşuluk | `sharded/tests/diagonals.rs` (4): komşu listeleri (2×2, 3×3 merkez/kenar/köşe, her ızgarada simetri), her ızgarada şah-hamlesi en kısa rotalar, köşe geçişinin tek adımda köşegene gitmesi, köşegen shard'ın köşeden ödünç alması — köşegenler yok sayılınca dördü de kırıldı | MMO `world::partition()` 8-komşuluğa geçti; `findings::f2_…` çevrildi (`…_lends_across_a_corner`: X köşedeki üç mob'u da görüyor); ışınlanma testi köşegene TEK adım / tek tick yolda |
+| F3 | `deb1d4e` | `Planar` ve `GridPartition2` belgesine birim sözleşmesi; `Partition::debug_check_wire` (varsayılanlı, boş) — sharded odalar ihraç ettikleri her entity için çağırıyor, `GridPartition2` debug build'de wire izdüşümü konumunkinden bir şerit genişliğinden uzaksa panikliyor (release'de derlenip gidiyor). Derleme zamanı denetim mümkün değil: birim tiplerde yok. `GridPartition2` çocuk modüle taşındı (`space/partition/grid.rs`) | `space/tests/units.rs` (4): belirti (metre ↔ desimetre izdüşümünde çerçeve filtresi 128 m → 12,8 m), aynı birimli wire'ın haritanın her yerinde denetimden geçmesi, ince birimin panik (`should_panic`, yalnız debug) — denetim kapatılınca kırıldı —, sharded odanın tam olarak ihraç edilen entity'leri denetlemesi — çağrı eklenmeden kırıldı | MMO'nun kodek belgesi; MMO wire `Planar`'ı desimetreye çevrilince MMO entegrasyon testleri artık ilk ihraçta panikliyor |
+| F4 | `cfc51dc` | `ParkPolicy { grace: Option<Duration>, to: ExpireTo }`; her odada `with_disconnect_policy(grace, to)`; `Game::may_release(world, entity)` (varsayılan `true`) ve her odanın `GameLogic::may_release`'i oyuna iletmesi. Varsayılan politika aynı | `common/park/tests.rs` (2): politika matrisi ve veto ALTI odada (open, AOI, team, PVS, sharded, sharded × spatial) vetolayan fikstür oyunuyla — sona sabit `AiHandover`, vetonun yok sayılması ve tek odanın iletmeyi unutması ayrı ayrı kırdı | MMO asıl çıkış sayacına geçti (`LOGOUT_GRACE`, sonra `Despawn`); `reconnect`: süre dolunca çıkış (aşağıda); çıkış botu `AiHandover` politikasıyla erişilebilir ve kendi gerçek-aktör testini koruyor. AI devri örneği: 2D demo'nun `park_policy::grace_expiry_hands_over_to_a_wandering_bot`'u (`detach_expired_ai == 1`, doğrulandı) |
+| A1 | `c076fd0` | `TeamGame::spawn_team_player(world, conn) -> (Entity, Team)` (varsayılanı `spawn_player` + `team_of`); `TeamRoom::on_join` onu kit-içi `common::join_with` ile çağırıyor. Tek sözleşme farkı: `team_of` artık wire damgasından önce soruluyor (hiçbir kit oyunu orada kimliği okumuyordu) | `team/tests/spawn_team.rs` (2): iki üslü fikstür oyunu (katılım sırasıyla takım, `team_of` panikliyor) — oda `team_of`'u sorunca kırıldı; varsayılan yol conn paritesini koruyor | Arena `spawn_team_player`'ı eziyor (round-robin + üste spawn), `HomeBase` kalktı: bot üssü kit'in `TeamMember`'ından buluyor. Arenanın testlerinin iddiaları aynı (birim testleri `spawn_team_player` çağırıyor, bot testi takımı kit gibi kaydediyor); eski sıraya dönüş arenanın beş entegrasyon testini kırdı |
+| A2 | `7356bd7` | İstemci kuralları (full/delta, uygulama sırası, baseline'sız delta, sıra boşluğu, yinelenen kare, keep-alive yakınsaması, one-shot full'un koşulsuz baseline sıfırlaması) `kit.proto`'ya taşındı, her oyun için yazıldı (hangi odalar delta gönderir) | yalnız yorum — alan, numara, tip değişmedi; bütün wire testleri değişmeden yeşil | demo'nun `game.proto`'su kısa özet + atıf; arena ve MMO aynaları atıf |
+| A3 | `2d39767` | `Game::SNAPSHOT_OP` / `PRIVATE_OP` varsayılansız (oyun yazarı için kırıcı: sabitleri adlandırmayan `impl Game` derlenmez, E0046). Üç demo zaten açıkça bildiriyor (1003/1004, 1101/1102, 1201/1202) — bayt değişmedi; kit'in test oyunları fikstürün bloğunu (1901/1902) bildiriyor | `Game`'in iki doctest'i: sabitleri adlandıran asgari oyun derleniyor, aynısı onlarsız derlenmiyor (`compile_fail,E0046` — varsayılanlar varken kırıldı) | — |
+
+**Bilerek değiştirilen test iddiaları** (başka hiçbir beklenen bayt,
+kayıt sayısı ya da iddia değişmedi):
+1. `gsb-demo-mmo/tests/findings.rs` — `f1_…`: "O, M'yi hiç görmüyor" →
+   "O ve A, M'yi her tick görüyor" (+ saldırıyla geçiş kanıtı; A'nın
+   girişi `-30` → `-20` m, saldırı menzili için); `f2_…`: "X köşegen
+   mob'u görmüyor" → "X dört kaydın hepsini görüyor". Modül belgesi:
+   bulgular Faz 5'te düzeltildi.
+2. `gsb-demo-mmo/tests/crossing.rs` — oyuncu geçişi: "P kendini YALNIZ
+   varış tick'inde kaybedebilir" izni kalktı (`P` her tick kendini
+   görüyor); ışınlanma: iniş tick'inden sonra P'nin kendisinde ve D'de
+   görünmesi ZORUNLU (eskiden görünüyorsa konumu denetleniyordu),
+   "bir hücre batıya yürü, sonra görünür" adımı kalktı (P waystone'da
+   duruyor ve görünüyor), yolda geçen süre `2` → `1` tick (F2: tek
+   adım), test adı `…_non_adjacent_…` → `…_the_diagonal_shard_…`.
+3. `gsb-demo-mmo/tests/reconnect.rs` — `grace_expiry_hands_the_character
+   _to_the_logout_bot` → `grace_expiry_logs_the_character_out`: F4
+   kilidi `(detach_expired_despawn, members) == (0, 2)` →
+   `(detach_expired_despawn, detach_expired_ai) == (1, 0)`, `(members,
+   detached) == (1, 0)`, karakter görünümden çıkıyor, resume kabul
+   edilmiyor; eski AI-devri iddiaları yeni `an_ai_handover_policy_hands
+   _the_character_to_the_logout_bot`'ta (açık `AiHandover` politikası).
+4. `gsb-demo-arena/src/game/tests.rs` — iddialar aynı; iki test
+   `spawn_player` + `team_of` yerine `spawn_team_player` çağırıyor, bot
+   testi takımı kit'in `TeamMember`'ı olarak kaydediyor (`HomeBase`
+   kalktı).
+
+**Gözlemler (bu turda açılmayan, tetikleyicisiz):**
+- Çekirdeğin `may_release` anlamı: veto yalnız SÜRESİZ bekletmede
+  soruluyor (süreli bekletmede süre tavandır). "Çıkış sayacı + savaşta
+  gecikme" birlikte bir çekirdek kararı ister; kit ikisini ayrı ayrı
+  sunuyor.
+- `ShardedSpatialRoom` hâlâ `admits`'i uygulamıyor (F3'ün yan gözlemi):
+  uzak ihraç kayıtları (ör. ışınlanan oyuncunun bölge dışı konumu) ara
+  shard'ların defterine giriyor. Görünürlük hücreyle sınırlı olduğu için
+  doğru; F1'in köşegen ışınlanma belirtisinin bir tetikleyicisi buydu
+  (ara shard'ın şeridi hedef shard'a varıştan bir tick önce ödünç
+  veriyordu), F1 düzeltmesiyle zararsız.
+- 8-komşulukla 2×2'de her shard diğer üçünün şeridini alıyor: şerit
+  trafiği kenar başına değil shard başına üç komşu (MMO'nun bilinçli
+  seçimi; varsayılan 4-komşuluk).
+
+**Kapanış kontrolü (Faz 5 kit'i üzerinde):** `cargo test -p gsb-demo
+-p gsb-demo-arena -p gsb-demo-mmo` → **83 passed / 0 failed** (2D demo
+43, arena 15, MMO 25 — MMO +1: `AiHandover` politikasıyla çıkış botu
+testi). Üç görünürlük modeli, değiştirilmiş kit üzerinde; 2D demo'nun
+bayt kilitleri dokunulmadan.
+
+**Loadgen** (50 istemci; `32118b2` ↔ HEAD `2d39767` ikilileri —
+sonraki commit yalnız doküman — dönüşümlü): Her koşuda `left=50`,
+`errors=0`, `server_closes=0` (iki tarafta da):
+
+| Koşu | step_p50_fine_us (taban / HEAD, 3 çift) | snap_total (taban / HEAD) | out_bps_per_conn (taban / HEAD) |
+|---|---|---|---|
+| tcp 3 sn | 56 40 32 / 56 40 24 | 4101 / 4100 | 11018 / 11063 |
+| spatial 3 sn | 96 112 112 / 88 88 112 | 4135 / 4094 | 1944 / 1909 |
+| sharded N=4, 8 sn | 40 48 40 / 40 40 32 | 11470 / 11445 | 7067 / 7027 |
+| sharded × spatial N=4, 8 sn | 80 80 64 / 88 56 56 | 11539 / 11528 | 3322 / 3305 |
+
+snap_total / out_bps ilk çiftin değerleri. Tek kovadan büyük fark
+yalnız HEAD lehine (spatial ikinci çift −24 µs, sharded × spatial ikinci
+çift −24 µs); HEAD'in tek yukarıdaki değeri bir kova (sharded × spatial
+ilk çift +8 µs). F1 (şerit çıkışında bir tablo araması, yalnız şeritten
+düşen kimlik başına) ve F2 (varsayılan 4-komşulukta değişmeyen yol) sıcak
+yolda ölçülebilir iş eklemiyor; F3'ün denetimi release'de derlenip
+gidiyor — gürültü içinde.
+
+**Doğrulama:** 478 + 19 = **497** test / 0 hata / 1 ignored (F1 +4, F2
++4, F3 +4, F4 +3, A1 +2, A3 +2 doctest); `cargo clippy --workspace
+--all-targets -- -D warnings` 0 uyarı; `cargo fmt --all --check` temiz.
 
 ## 11. Kabul kriteri
 
@@ -1574,6 +1730,26 @@ dokundu; `kit_wire.rs` kit zarfını demo'nun aynasına sabitliyor). (3) Son A/B
 içinde); Faz 3 ve 4 çalışma zamanında kod değiştirmedi, yalnız loadgen
 sağlamlık koşusu. (4) Sağlandı: `crates/gsb-core` Faz 0'dan beri
 dokunulmadı.
+
+**Son durum (Faz 5 sonunda — kabul).** Dördü de sağlandı:
+1. **Üç demo aynı kit'i kullanıyor:** 2D demo, 3D arena, 3D MMO ayrı
+   crate'ler, yalnız kit'in public yüzeyiyle; demoların kaydettiği her
+   tasarım bulgusu kit'te kapandı (§10 "Faz 3 + Faz 4 tasarım
+   bulguları", hepsi **çözüldü**; "Faz 5 sonucu"). Kanıt: kapanış
+   kontrolü `cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`
+   → 83 passed / 0 failed; kit tarafında her düzeltmenin önce kırılan
+   testi ve mutation-check'i.
+2. **Mevcut istemciler değişmeden çalışıyor:** 2D demo'nun wire
+   baytları aynı — `wire_contract.rs`, `kit_wire.rs`, `delta_aoi.rs`,
+   kit'in `aoi/tests/sharing*`'i, arenanın ve MMO'nun `wire.rs`'i Faz
+   5'te dokunulmadan yeşil (`git diff 32118b2.. --stat` bu dosyalarda
+   boş); A3'ün kaldırdığı varsayılanlar demo'da zaten açıkça bildirilen
+   1003/1004'tü.
+3. **Performans gürültü içinde:** Faz 5 loadgen A/B'si (`32118b2` ↔
+   `2d39767`, dört senaryo, dönüşümlü üçer çift — §10 "Faz 5 sonucu");
+   Faz 1 ve 2'nin A/B'leri yeniden düzenleme öncesine karşı.
+4. **`gsb-core` dokunulmadı:** `git diff 32118b2.. --stat --
+   crates/gsb-core` boş; çekirdek Faz 0'dan beri aynı.
 
 ## 12. Kararlar (kullanıcı, 2026-09-24)
 

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-478 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+497 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -138,16 +138,25 @@ devri, `mmo.proto` (opcode'lar 1200..=1204); entegrasyon testleri
 gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
-fazları bitti.** Sıradaki: **kit düzeltme turu** — girdisi
-KIT-ARCHITECTURE §10 "Faz 3 + Faz 4 tasarım bulguları" (altı madde).
-Önce F1 (doğruluk hatası: sharded × spatial'da şeritten ödünç
-verilmiş hücresine göç eden entity yeni shard'ının kovasından
-siliniyor; ~6 satırlık kit-içi düzeltme `integrate_borrowed`'ta) kendi
-commit'inde — kırılan testi hazır: `gsb-demo-mmo/tests/findings.rs`'in
-`f1_…`'i bugünkü (hatalı) davranışı sabitliyor, düzeltmeyle kırılır ve
-çevrilir (`f2_…` F2 için aynı). Ardından eklemeler (F2
-`GridPartition2::with_diagonals`, F4 park sonu seçimi, A1
-`TeamGame::spawn_team_player`), belgeler (F3, A2).
+fazları bitti.**
+
+**Faz 5 tamam — kit düzeltme turu** (KIT-ARCHITECTURE §10 "Faz 5
+sonucu", CHANGELOG "gsb-kit Faz 5 turu"): iki demonun bulgularının
+hepsi kit'te kapandı, her biri kendi commit'inde, önce kırılan
+testiyle. F1: sharded × spatial'da ödünç hücresine göç eden entity
+artık yeni shard'ının kovasından silinmiyor (`integrate_borrowed`,
+`sharded/tests/lent_arrival.rs`). F2: `GridPartition2::with_diagonals()`
+(8-komşuluk; varsayılan 4). F3: `Planar`'ın birim sözleşmesi — konum ve
+wire izdüşümü AYNI birimde; `Partition::debug_check_wire` debug'da
+denetliyor. F4: her odada `with_disconnect_policy(grace, to)` +
+`Game::may_release` (varsayılan politika aynı). A1:
+`TeamGame::spawn_team_player` (takıma bağlı spawn). A2: istemci
+kuralları `kit.proto`'da. A3: **`Game::SNAPSHOT_OP` / `PRIVATE_OP`
+varsayılansız** — yeni bir oyun kendi opcode bloğunu seçmek zorunda.
+`gsb-core` dokunulmadı, baytlar aynı; kit tasarımının kabul kriteri
+(§11) tamamlandı. Kit'e yeni bir şey eklerken: altı odanın hepsinde
+aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
+`common/park/tests.rs`).
 
 ## ÖNCE OKU (sırayla)
 
@@ -239,6 +248,6 @@ commit'inde — kırılan testi hazır: `gsb-demo-mmo/tests/findings.rs`'in
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 478 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 497 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

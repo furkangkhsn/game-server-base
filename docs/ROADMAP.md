@@ -75,10 +75,22 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **478** (478/478 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **497** (497/497 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **gsb-kit Faz 4** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **gsb-kit Faz 5** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 5
+sonucu") — **kit düzeltme turu**: iki kontrol demosunun kaydettiği
+bulguların hepsi kit'te kapandı, her biri kendi commit'inde ve önce
+kırılan testiyle — F1 (doğruluk: sharded × spatial'da ödünç hücresine
+göç eden entity artık silinmiyor), F2 (`GridPartition2::with_diagonals`,
+MMO kullanıyor), F3 (`Planar` birim sözleşmesi + debug denetimi), F4
+(`with_disconnect_policy` + `Game::may_release`; varsayılan aynı, MMO
+çıkış sayacına geçti), A1 (`TeamGame::spawn_team_player`, arena
+`HomeBase`'i bıraktı), A2 (istemci kuralları `kit.proto`'da), A3
+(opcode sabitleri varsayılansız — oyun yazarı için kırıcı). Çekirdek ve
+baytlar dokunulmadı; kapanış kontrolü 83/83; loadgen gürültü içinde.
+**Kit tasarımının kabul kriterinin dördü de sağlandı** (§11). Önceki
+tur: **gsb-kit Faz 4** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4
 sonucu") — **3D MMO demosu** `gsb-demo-mmo`, kapanış doğrulaması: yalnız
 kit'in public yüzeyiyle shard'lı dünya üzerinde yer-düzlemi ızgara AOI
 (`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`, 2×2 shard,
@@ -90,9 +102,8 @@ can), park → AI devri, `mmo.proto` (opcode'lar 1200..=1204); 24 test
 (82/82). Dört tasarım bulgusu kayıtlı — biri **doğruluk hatası** (F1:
 sharded × spatial'da şeritten ödünç verilmiş hücresine göç eden entity
 yeni shard'ında siliniyor), köşegen şerit yok (F2), `Planar` birim
-sözleşmesi (F3), park sonu seçilemiyor (F4). **Sıradaki:** kit
-düzeltme turu — girdisi KIT-ARCHITECTURE §10 "Faz 3 + Faz 4 tasarım
-bulguları" (önce F1, önce kırılan testiyle). Önceki tur: **gsb-kit Faz 3** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3
+sözleşmesi (F3), park sonu seçilemiyor (F4) — hepsi Faz 5'te kapandı.
+Önceki tur: **gsb-kit Faz 3** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3
 sonucu") — **3D arena demosu** `gsb-demo-arena`, kit'in kabul testi:
 yalnız kit'in public yüzeyiyle yazılmış 3D takım sisi (yükseklik
 sayılır, üç takım, `TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, yarıçap

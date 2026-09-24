@@ -5,6 +5,75 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 5 turu (kit düzeltme turu — demoların bulguları)
+
+`docs/KIT-ARCHITECTURE.md` §10 "Faz 5 sonucu": iki kontrol demosunun
+"kit'e dokunma" kuralıyla kaydettiği tasarım bulgularının (F1–F4, A1–A2)
+ve arena turunun opcode gözleminin (A3) hepsi kit'te kapandı — her biri
+kendi commit'inde, önce kırılan testiyle, mutation-check'li. Demolar
+düzeltmeleri kullanıyor; bulguları hatalı davranışla sabitleyen
+testler çevrildi. **`gsb-core`'a dokunulmadı**; 2D demo'nun ve iki
+3D demonun bayt kilitleri dokunulmadan yeşil.
+
+**Commit'ler** (`32118b2..`): `c8ed9ba` F1, `fc4d10b` F2, `deb1d4e` F3,
+`cfc51dc` F4, `c076fd0` A1, `7356bd7` A2, `2d39767` A3, ardından bu
+doküman commit'i.
+
+**Davranış değişiklikleri (açıkça):**
+- **F1 — doğruluk düzeltmesi (sharded × spatial, 2D demo'nun bu yolu
+  dahil):** şeritten ödünç verildiği hücreye göç eden entity artık yeni
+  shard'ının kovasından silinmiyor. Önce: varış tick'inin one-shot
+  full'u gelen oyuncunun kendisini içermiyordu; hücresinde yalnız bir
+  entity o hücrede kıpırdayana dek yeni shard'ında görünmüyordu (komşu
+  gruplara `cell_exits` gidiyordu). Farklı hücredeki bayat ödünç kopya
+  eskisi gibi çıkarılıyor. Wire biçimi aynı; akış artık doğru.
+- **F2 — yalnız ekleme:** `GridPartition2::with_diagonals()`
+  (8-komşuluk). Varsayılan 4-komşuluk değişmedi (sunucunun demo
+  odaları aynı).
+- **F3 — belge + debug denetimi:** `Planar` / `GridPartition2` birim
+  sözleşmesi yazılı; `Partition::debug_check_wire` (varsayılanlı, boş)
+  — `GridPartition2` debug build'de wire izdüşümü konumdan bir şerit
+  genişliğinden uzaksa panikliyor. Release'de davranış aynı; debug'da
+  birimi yanlış bir oyun artık ilk ihraçta panikliyor.
+- **F4 — varsayılan politika DEĞİŞMEDİ:** her odada
+  `with_disconnect_policy(grace: Option<Duration>, to: ExpireTo)` ve
+  `Game::may_release` (varsayılan `true`, her oda iletiyor). Varsayılan
+  hâlâ 30 sn → AI devri; `with_disconnect_grace` anlamını koruyor.
+  MMO asıl çıkış sayacına geçti (20 sn bekletme, sonra slot bırakılır).
+- **A1 — varsayılanlı ekleme:** `TeamGame::spawn_team_player(world,
+  conn) -> (Entity, Team)`, takım odası her katılımda onu çağırıyor;
+  varsayılanı eski iki adım. İnce sözleşme farkı: `team_of` artık kit
+  wire kimliğini damgalamadan ÖNCE soruluyor (hiçbir kit oyunu orada
+  kimliği okumuyordu). Arena ezdi, `HomeBase` kalktı.
+- **A2 — yalnız yorum:** istemci kuralları `kit.proto`'da; demo'nun
+  `game.proto`'su ve 3D demoların aynaları oraya atıf yapıyor.
+- **A3 — OYUN YAZARI İÇİN KIRICI:** `Game::SNAPSHOT_OP` /
+  `PRIVATE_OP` varsayılansız; sabitleri adlandırmayan `impl Game`
+  derlenmez (E0046). Üç demo zaten açıkça bildiriyordu — bayt değişmedi.
+
+**Testler (+19 → 497):** kit — `sharded/tests/lent_arrival.rs` (4, F1),
+`sharded/tests/diagonals.rs` (4, F2), `space/tests/units.rs` (4, F3),
+`common/park/tests.rs` (2, F4: altı odanın hepsi), `team/tests/
+spawn_team.rs` (2, A1), `Game`'in iki doctest'i (A3); MMO —
+`reconnect::an_ai_handover_policy_hands_the_character_to_the_logout_bot`
+(+1). **Bilerek değiştirilen iddialar:** MMO `findings::f1_…` /
+`f2_…` çevrildi; `crossing`'in F1 izinleri kalktı (varış tick'inde
+kendini kaybetme izni; ışınlanmada "bir hücre yürü" adımı) ve
+ışınlanma tek adım (yolda 2 → 1 tick, F2); `reconnect`'in süre-dolumu
+testi çıkışı iddia ediyor (F4 kilidi `(0, 2)` → despawn 1 / AI 0,
+slot bırakıldı); arena birim testleri `spawn_team_player` çağırıyor
+(iddialar aynı). Ayrıntı: KIT-ARCHITECTURE §10 "Faz 5 sonucu".
+
+**Doğrulama:** `cargo test --workspace` → 497 passed / 0 failed / 1
+ignored; clippy `-D warnings` 0; fmt temiz; kapanış kontrolü `cargo test
+-p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo` → 83 / 0 (43 + 15 + 25);
+`git diff 32118b2.. -- crates/gsb-core` boş. Loadgen (50 istemci,
+`32118b2` ↔ `2d39767`, dönüşümlü üç çift; hepsinde `left=50 errors=0
+server_closes=0`) step_p50_fine_us taban / HEAD: tcp 56 40 32 / 56 40
+24, spatial 96 112 112 / 88 88 112, sharded N=4 40 48 40 / 40 40 32,
+sharded × spatial N=4 80 80 64 / 88 56 56 — gürültü içinde (snap_total
+ve out_bps_per_conn ±%1).
+
 ## gsb-kit Faz 4 turu (3D MMO demosu `gsb-demo-mmo` — kapanış doğrulaması)
 
 `docs/KIT-ARCHITECTURE.md` §10'un Faz 4'ü ve §13: kit'in yalnız public
