@@ -158,7 +158,7 @@ sonuna eklenen yeni bir `game=<ad>` anahtarı.
 | Faz | Kapsam | Kapı |
 |---|---|---|
 | G1 ✅ | Trait + `RegistryParts`; `factories.rs` + çözümleyici demo modülüne **olduğu gibi** taşınır; `Config` alanları ve `resolve_selection` uyumluluk katmanı olarak kalır; `--no-default-features` derlemesi; §6 karar 10'daki orkestratör düzeltmesi | tüm testler değişmeden yeşil; loadgen A/B gürültü içinde |
-| G2 | Arena ve MMO modülleri (config bölümleri, MMO join yönlendirici, politika eşlemesi) + ikisinin gerçek `Registry` üzerinden uçtan uca testleri | yeni e2e testleri; kit/demo/core diff'i boş |
+| G2 ✅ | Arena ve MMO modülleri (config bölümleri, MMO join yönlendirici, politika eşlemesi) + ikisinin gerçek `Registry` üzerinden uçtan uca testleri | yeni e2e testleri; kit/demo/core diff'i boş |
 | G3 | Loadgen: `LoadBot` + generic görünüm, demo botu birebir, `--game` her iki çocuğa iletilir, arena ve MMO botları, ilk ölçüm tabanları | demo için RESULT/CLIENT birebir (+`game=`); arena/MMO ilk sayılar |
 | G4 | Kit istemci kurallarının `gsb_kit::client` modülüne alınması (tetikleyici var: üç kopya) + çözücü seam'i; demo ve MMO test istemcilerinin ona geçirilmesi | test iddiaları değişmez |
 
@@ -290,6 +290,161 @@ G2: MMO'nun gerçek `Registry` altında **ilk kez** çalışması — kaydı
 olmayan oturumların yönlendirilmesi, churn modunda shard'lar arası resume,
 `room_count > 1` ya da `/rooms/open` ile birden fazla MMO dünyası. Bu, F1
 gibi yeni bulgular çıkarabilir; çıkarırsa raporlanır.
+
+### G2 sonucu (2026-09-25)
+
+**Tamam.** Altı commit (+ bu doküman), her biri kendi başına yeşil:
+arena modülü, MMO modülü, ortak test desteği + arena e2e + config
+dosyası testleri, MMO e2e'leri, iki kit bulgusunun kilidi, örnek config.
+`gsb-core`, `gsb-kit`, `gsb-demo`, `gsb-demo-arena`, `gsb-demo-mmo`
+**değişmedi** (`git diff 27f2b1e.. --stat` bu beşinde boş). Test sayısı
+551 → 579 (+10 birim: ayar okuma / reddetme / yönlendirici; +18
+entegrasyon: 2 arena e2e, 4 config dosyası, 3 MMO e2e, 3 çıkış/resume,
+1 çoklu dünya, 2 bulgu kilidi, 3 örnek config); 1 ignored doctest aynı;
+hiçbir mevcut test değişmedi. Özellikler: `default = ["game-demo",
+"game-arena", "game-mmo"]`; `--no-default-features` ve her oyun
+özelliği tek başına (`--no-default-features --features game-arena` /
+`game-mmo`) lib + bins clippy temiz.
+
+**Arena (`games/arena.rs`, `game = "arena"`).** Tek strateji: tek oda ×
+takım sisi × always-full — `TeamRoom<ArenaGame, VisionGrid3<Pos3>>`,
+her oda kimliğine yeni bir `ArenaGame` (round-robin her odada baştan).
+`[arena]` tablosu:
+
+| Anahtar | Varsayılan | Anlamı |
+|---|---|---|
+| `teams` | 3 (`DEFAULT_TEAMS`) | oda başına takım, 1..=255 |
+| `disconnect_grace_secs` | 30 (kit'in `DEFAULT_DISCONNECT_GRACE`) | düşen oyuncunun birimi bu kadar bekletilir, sonra arenanın botu onu üssüne götürür (AI devri); 0 = hemen çıkar |
+
+Görüş yarıçapı (15 m, 3D) oyunun sabiti; operatöre açılmadı.
+
+**MMO (`games/mmo.rs`, `game = "mmo"`).** Her oda kimliği BÜTÜN bir
+shard'lı dünya: MMO'nun dört `ShardedSpatialRoom` shard'ı tek realm'den.
+Yönlendirme (§6 karar 6): kayıtlı karakteri olan oturum kaydının
+shard'ına (`world::home_shard`), olmayan **varsayılan durak taşının
+(0) shard'ına** — o shard'ın `spawn_player`'ı kaydı olmayan karakteri
+tam oraya koyuyor; birim testi ikisini birbirine sabitliyor. Politika
+(§6 karar 5): MMO'nun çıkış sayacı + savaş vetosu. `[mmo]` tablosu:
+
+| Anahtar | Varsayılan | Anlamı |
+|---|---|---|
+| `logout_grace_secs` | 20 (`LOGOUT_GRACE`) | düşen karakter bu kadar dünyada kalır (resume edilebilir), sonra çıkar — savaştaysa savaş soğuyana dek bekler (çekirdeğin `max_detach_hold`'u sınırlar); 0 = hemen çıkar (park yok, veto da yok) |
+| `logout` | `"release"` | `"release"` = slot bırakılır (`ExpireTo::Despawn`); `"bot"` = çıkış botu en yakın durak taşına yürütür, slot tutulur (`AiHandover`) |
+
+Realm (içerik + kayıtlı karakterler) TOML'a açılmadı: katalog
+`Realm::standard()` kullanır; gömen taraf `MmoModule::with_realm(realm)`
++ `start_game_server` ile kendi realm'ini verir (testler böyle).
+
+**İki oyunun da reddettikleri** (açıkça yazılırsa başlatma hatası,
+mesaj anahtarı ve nedenini adlandırır — `games::settings::SettingsError`,
+`GameError::Module`'ün kaynağı): üç eksen (`visibility`, `topology`,
+`communication`), `shard_count`, `aoi_cell_size`, `team_vision_radius`,
+`spawn_half_size` ve demo'nun düz `disconnect_grace_secs`'i.
+
+**§4 taslağından sapmalar ve nedenleri:**
+
+1. **Demo'nun düz `disconnect_grace_secs`'i her iki oyunda da
+   REDDEDİLİYOR, eşlenmiyor.** §6.5 "reddedebilir" diyordu; seçilen bu.
+   Arena kendi grace'ini `[arena]`'dan okur (anlamı aynı: bekletme →
+   bot). MMO'da anlam FARKLI: demo anahtarı "bekletme, sonra bot" demek,
+   MMO'nunki "bekletme (savaşta uzar), sonra çıkış" — sessizce eşlemek
+   oyun değiştiren bir operatörü yanıltırdı. Ret mesajı doğru anahtarı
+   adlandırıyor (`[mmo] logout_grace_secs`).
+2. **Oyunun kendi tablosunda bilinmeyen anahtar da hata** (taslakta
+   yoktu; karar 2'nin ruhu — yazım hatası sessizce yok sayılmaz). Sabit
+   anahtar tablonun İÇİNE yazılırsa da (`[mmo] shard_count`) aynı
+   "sabit" hatası; tablonun kendi anahtarı bir düz anahtarla aynı adı
+   taşıyabilir (arenanın `disconnect_grace_secs`'i) — bilinen önce gelir.
+   Başka oyunun tablosu yok sayılır (bir dosya birkaç oyunun bölümünü
+   taşıyabilir; demo da `[arena]`/`[mmo]`'ya bakmaz).
+3. **`games::settings` public** (`own_table`, `integer`, `seconds`,
+   `choice`, `SettingsError`): üçüncü taraf bir modül kendi tablosunu
+   aynı kurallarla okuyabilsin.
+4. **`gsb-kit` isteğe bağlı doğrudan bağımlılık** (iki oyun özelliği
+   açar): fabrika tipleri kit'in `Team`, `Cell`, `KitMig`'ini adlandırıyor.
+   Oyunsuz ağaçta hâlâ kit yok.
+5. **`MmoModule::with_realm`** (taslakta yoktu): içerik ve kayıtlı
+   karakterler koddan verilir; testlerin senaryolu realm'leri bunun
+   üzerinden.
+6. **Test desteği `tests/hosted/`**: TCP ya da TLS üzerinde çerçeveli
+   istemci (okuyucu yarısı kendi görevinde, bounded kanal), oyun başına
+   `View` (arena: full; MMO: kit'in istemci kuralları). MMO görünümü kit
+   istemci kurallarının **dördüncü kopyası** — G4'ün tetikleyicisi
+   güçlendi.
+
+**Uçtan uca testler (gerçek `start_server`/`start_game_server`, gerçek
+soketler) ve mutation-check'ler** (yedekten geri yüklenerek; korunan
+crate'lere yapılan geçici mutasyonlar geri alındı, diff boş):
+
+| Test | Kanıtladığı | Mutation → sonuç |
+|---|---|---|
+| `arena_e2e::three_teams_see_their_fog_over_{tcp,tls}` | `game = "arena"`, üç takım; alınan HER snapshot'ta sis kuralı ağ tarafından (düşman yalnız 15 m içinde); yükseklik: 20 m yukarıdaki gizli, 10 m'deki ikisini de görüyor; görüşe girip çıkma; numaralı girdiler ack'leniyor | arenada `VISION_RADIUS` 25 → kırıldı |
+| `hosted_config::an_unknown_game_lists_all_three` | bilinmeyen oyun hatası `demo`, `arena`, `mmo`'yu listeliyor | — |
+| `hosted_config::explicitly_written_fixed_keys_refuse_startup` | dosyadan her sabit anahtar reddediliyor, anahtarı adlandırıyor; `[arena] team` bilinmeyen | `visibility` sabit listesinden çıkarıldı → kırıldı |
+| `hosted_config::the_arena_table_is_read_from_a_file` | `[arena] teams = 2` → üçüncü giren takım arkadaşını görüyor | `teams` yok sayıldı → kırıldı |
+| `hosted_config::a_demo_config_without_a_game_key_still_hosts_the_demo` | `game`'siz eski config demo'yu başlatıyor; yanındaki `[mmo]` yok sayılıyor | — |
+| `mmo_e2e::joins_land_on_the_shard_of_their_character` | kaydı olan shard'ına, olmayan shard 0'a (waystone 0) — basan shard wire id'nin aralığından okunuyor: göç değil, yönlendirme | yönlendirici hep varsayılan → kırıldı |
+| `mmo_e2e::a_walker_across_a_seam_keeps_itself_and_is_seen_across_it` | x = 0 dikişini geçen oyuncu HER uygulanan karede kendini tutuyor, iki komşu da onu; geçişten sonra shard 0'daki komşu onu sınırın öbür yanından görüyor | kit'te F1 düzeltmesi geçici geri alındı → kırıldı ("lost") |
+| `mmo_e2e::a_travel_lands_on_the_destination_shard` | `Travel` köşegen shard'a aynı wire id ile iniyor, oradaki oyuncu görüyor, sonraki girdiyi hedef shard işliyor ve ack'liyor | — |
+| `mmo_logout::a_fighter_is_held_past_the_grace_and_a_peaceful_player_logs_out` | 1 sn çıkış: barışçıl olan grace sonrası çıkıyor, vuruş yapan savaşta TUTULUYOR, soğuyunca çıkıyor; registry iki satırı da bırakıyor | `release` → `AiHandover` → kırıldı; MMO'da veto kapatıldı → kırıldı |
+| `mmo_logout::the_mmo_table_sets_the_logout_timer` | `game = "mmo"` + `[mmo] logout_grace_secs = 1` DOSYADAN, katalog üzerinden | grace yok sayıldı (20 sn) → kırıldı |
+| `mmo_logout::a_character_parked_on_another_shard_resumes_there` | shard 0'da girip shard 1'e yürüyen, orada düşen karakter aynı adla resume ediliyor (registry'nin resume yayını buluyor), aynı wire id, girdi çalışıyor | — |
+| `mmo_rooms::every_mmo_room_is_a_whole_sharded_world` | `room_count = 2` + `POST /rooms/open` ile açılan üçüncü oda: üç ayrı dünya (aynı waystone, üç id uzayında aynı ilk wire id, birbirini görmüyor, girdi yalnız kendi dünyasını oynatıyor) | — |
+| `example_config::*` | örnek config demo'yu olduğu gibi barındırıyor; yorumdaki `[arena]`/`[mmo]` açılınca oyunları kabul ediyor; bulgu K5'in kilidi | örnekte `logout = "despawn"` → kırıldı |
+
+**`room_count > 1` ve `/rooms/open` ile birden fazla MMO dünyası
+ÇALIŞIYOR** — beklenen risk çıkmadı: her oda kimliği fabrikadan bütün
+bir shard grubu alıyor, registry grupları oda bazında tutuyor. Cross-
+shard resume ve savaş vetosu da gerçek registry altında ilk denemede
+doğru.
+
+**Bulgular:**
+
+- **K1 — Göçü tetikleyen girdi hiç ack'lenmiyor** (kit; test
+  `mmo_findings::k1_…`). Kaynak shard oturumu MIGRATE'te (faz 4)
+  devrediyor — ack'i yayacak BROADCAST'tan (faz 6) önce; hedef shard'ın
+  `InputSeq`'inde oyuncu için iz yok. Bir `Travel`'ın ack'i hiç gelmiyor;
+  bir SONRAKİ girdinin ack'i (yüksek su işareti) onu da kapsıyor.
+  2D demo'nun sharded odaları aynı kit yolunda.
+- **K2 — Sıra kuralı göçte sıfırlanıyor** (kit; test
+  `mmo_findings::k2_…`). Shard içinde geç kalan numaralı girdi düşüyor;
+  göçten sonra hedefte, `Travel`'dan KÜÇÜK numaralı bir girdi işleniyor
+  — yeniden sıralanan ya da çiftlenen bir datagram (rUDP oyun bandı)
+  tekrar oynatılır.
+- **K3 — Kaynak shard'da `InputSeq` girdisi sızıyor** (kit; kod
+  okuması, ağdan gözlenemiyor): `ShardedRoom::on_migrate_out`
+  (`gsb-kit/src/sharded/room/shard.rs`) oyuncunun `input` kaydını
+  `end` etmiyor; her göç kaynakta bir `states` girdisi bırakıyor (uzun
+  ömürlü sunucuda göç eden oturum sayısıyla büyür). Çekirdek aynı yerde
+  idle saatini (`idle.stop`) temizliyor; kit temizlemiyor.
+  **K1–K3'ün en küçük düzeltmesi (gsb-kit, çekirdeğe dokunmadan):**
+  `KitMig`'e oyuncunun işaretini ve bekleyen ack'ini (`hwm`, `acked`)
+  eklemek; `collect_migrations` onu alıp kaynakta `input.end(player)`
+  yapar, `on_migrate_in` hedefte kurar — bekleyen ack hedefin ilk
+  yayınında çıkar (K1), kural sürer (K2), kaynak temizlenir (K3). O
+  gün `mmo_findings` bilerek kırılır ve çevrilir.
+- **K4 — Kayıtlı karakterler oturuma bağlı; gerçek sunucu onları
+  dolduramaz** (bilinen sınır, §6 karar 6 / KIT-ARCHITECTURE Faz 4
+  gözlem 1; artık uçtan uca görünür). Bağlantı kimlikleri kabulde
+  basılıyor, realm başlangıçta fabrikaya gömülü: katalogla barındırılan
+  MMO'da HER oturum kaydısız → hepsi shard 0'a, waystone 0'a. Sonuç
+  G3 için önemli: MMO botları yalnız yürüyüp `Travel` etmezse yük tek
+  shard'da toplanır. Düzeltme çekirdekte (`on_join`'a hesap kimliği) ya
+  da yönlendiriciye kimlik vermekte — bu işin kapsamı dışında.
+- **K5 — Örnek config oyun değiştirmeye tuzak** (test
+  `example_config::switching_…`). `config.example.toml` demo'nun düz
+  anahtarlarını (`visibility`, `aoi_cell_size`, `team_vision_radius`,
+  `spawn_half_size`, `disconnect_grace_secs`) varsayılan değerleriyle
+  AÇIKÇA yazıyor; kopyada yalnız `game = "arena"` yapmak başlatmayı
+  `visibility`'de reddettiriyor (tasarım gereği doğru davranış).
+  Örneğe not eklendi; kalıcı çözüm o satırları örnekte yoruma almak
+  (demo için etkisi yok: değerler varsayılan) — bu turda yalnız ekleme
+  yapıldı, karar bakımcıya.
+
+**Açık küçük iş:** CI'ın `no-game` işi yalnız `--no-default-features`'ı
+derliyor; her oyun özelliğinin tek başına derlendiği iki adım
+(`--no-default-features --features game-arena` / `game-mmo`) eklenmeli
+(yerelde temiz).
 
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
