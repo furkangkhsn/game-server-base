@@ -6,11 +6,25 @@
 
 use bevy_ecs::prelude::Component;
 
+use crate::kit::space::Planar;
+
 /// Position on the 2D map plane (world units).
 #[derive(Debug, Clone, Copy, PartialEq, Default, Component)]
 pub struct Position {
     pub x: f32,
     pub y: f32,
+}
+
+/// The simulation position on the ground plane — what the kit's 2D
+/// simulation presets (team vision, the PVS sector map, the shard grid)
+/// read.
+impl Planar for Position {
+    type Coord = f32;
+
+    #[inline]
+    fn planar(&self) -> [f32; 2] {
+        [self.x, self.y]
+    }
 }
 
 /// Where the owner wants the entity to go. Inserted by `ingest`, removed

@@ -1,5 +1,7 @@
 //! [`CellSpace`] — the AOI's space over WIRE values (KIT-ARCHITECTURE
-//! §4.2), and [`Grid2`], its 2D grid preset (§7).
+//! §4.2), and [`Grid2`], its 2D grid preset (§7); [`Planar`] — the
+//! accessor through which every 2D preset reads a game's position or
+//! wire type without knowing it.
 //!
 //! The AOI cell is computed from the wire value, not from the
 //! simulation state: the client holds only wire values and must derive
@@ -10,6 +12,27 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use bytes::BytesMut;
+
+/// Where a value lies on the ground plane — the accessor the kit's 2D
+/// presets read a game's types through (§7): [`Grid2`] reads the codec's
+/// wire value (`Coord = i32`), the simulation presets read the
+/// position component (`Coord = f32`).
+///
+/// The projection is the GAME's choice, made once per type: a top-down
+/// 2D game answers `[x, y]`; a 3D game whose world lives on the ground
+/// plane answers `[x, z]` for its `Pos3 { x, y, z }` and for its 3D wire
+/// value, and then uses the planar presets unchanged. A preset that
+/// needs all three axes (the future `Grid3`) reads a separate spatial
+/// accessor; a type can implement both.
+pub trait Planar {
+    /// The coordinate type: `i32` for a quantized wire value, `f32` for
+    /// a simulation position.
+    type Coord: Copy;
+
+    /// The value's two ground-plane coordinates, in a fixed axis order
+    /// (the first is the grid's column axis, the second its row axis).
+    fn planar(&self) -> [Self::Coord; 2];
+}
 
 /// A cell partition of the wire-value space: the AOI group key, the
 /// visibility neighbourhood, and the body of the `CellExit` record.
@@ -66,9 +89,11 @@ pub(crate) fn cell_of(x: i32, y: i32, cell_size: f32) -> Cell {
     )
 }
 
-/// The 2D grid preset: square cells of `cell_size` wire units over an
-/// integer `(x, y)` wire value, a 3×3 view, and a `CellExit` body of
-/// `{ sint32 x = 1; sint32 y = 2; }` (proto3: a zero index is omitted).
+/// The 2D grid preset: square cells of `cell_size` wire units over any
+/// wire value with an integer ground-plane projection ([`Planar`] with
+/// `Coord = i32`), a 3×3 view, and a `CellExit` body of
+/// `{ sint32 x = 1; sint32 y = 2; }` (the cell's two plane indices;
+/// proto3: a zero index is omitted).
 ///
 /// `cell_size` is the one tunable: it must keep a cell's 3×3 block under
 /// the snapshot byte budget at the expected peak density, and it sets
@@ -89,11 +114,12 @@ impl Grid2 {
     }
 }
 
-impl CellSpace<(i32, i32)> for Grid2 {
+impl<W: Planar<Coord = i32>> CellSpace<W> for Grid2 {
     type Cell = Cell;
 
     #[inline]
-    fn cell_of(&self, &(x, y): &(i32, i32)) -> Cell {
+    fn cell_of(&self, wire: &W) -> Cell {
+        let [x, y] = wire.planar();
         cell_of(x, y, self.cell_size)
     }
 

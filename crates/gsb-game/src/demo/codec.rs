@@ -1,7 +1,8 @@
 //! The demo's [`RecordCodec`] (KIT-ARCHITECTURE §4.1): an entity is
 //! broadcast iff it has a [`Position`]; its record is the TRUNCATED
-//! position, `(x as i32, y as i32)`, written as `game.proto`'s
-//! `EntityRecord { uint64 entity = 1; sint32 x = 2; sint32 y = 3; }`.
+//! position, [`StripPos`] `{ x as i32, y as i32 }`, written as
+//! `game.proto`'s `EntityRecord { uint64 entity = 1; sint32 x = 2;
+//! sint32 y = 3; }`.
 
 use bevy_ecs::prelude::Changed;
 use bytes::BytesMut;
@@ -9,6 +10,7 @@ use prost::Message;
 
 use crate::demo::components::Position;
 use crate::demo::game::EntityRecord;
+use crate::demo::wire::StripPos;
 use crate::kit::codec::RecordCodec;
 
 /// The demo's record codec — a zero-sized value: the quantization is
@@ -21,17 +23,20 @@ impl RecordCodec for DemoCodec {
     type Marker = Position;
     type Query = &'static Position;
     type Dirty = Changed<Position>;
-    /// The truncated wire position (the same value the sharded rooms'
-    /// border strip carries as `StripPos`).
-    type Wire = (i32, i32);
+    /// The truncated wire position — also the sharded rooms' border
+    /// strip payload (`Strip = Wire`).
+    type Wire = StripPos;
 
     #[inline]
-    fn wire(&self, pos: &Position) -> (i32, i32) {
-        (pos.x as i32, pos.y as i32)
+    fn wire(&self, pos: &Position) -> StripPos {
+        StripPos {
+            x: pos.x as i32,
+            y: pos.y as i32,
+        }
     }
 
     #[inline]
-    fn encode(&self, id: u64, &(x, y): &(i32, i32), out: &mut BytesMut) {
+    fn encode(&self, id: u64, &StripPos { x, y }: &StripPos, out: &mut BytesMut) {
         EntityRecord { entity: id, x, y }
             .encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
@@ -57,7 +62,7 @@ mod tests {
             for x in SAMPLES {
                 for y in SAMPLES {
                     let mut out = BytesMut::new();
-                    DemoCodec.encode(id, &(x, y), &mut out);
+                    DemoCodec.encode(id, &StripPos { x, y }, &mut out);
                     let typed = EntityRecord { entity: id, x, y }.encode_to_vec();
                     assert_eq!(&out[..], &typed[..], "({id}, {x}, {y})");
                 }
@@ -74,7 +79,7 @@ mod tests {
         for x in SAMPLES {
             for y in SAMPLES {
                 let mut out = BytesMut::new();
-                grid.encode_cell(Cell(x, y), &mut out);
+                CellSpace::<StripPos>::encode_cell(&grid, Cell(x, y), &mut out);
                 let typed = CellExit { x, y }.encode_to_vec();
                 assert_eq!(&out[..], &typed[..], "Cell({x}, {y})");
             }

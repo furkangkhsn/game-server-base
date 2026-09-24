@@ -40,12 +40,12 @@ pub struct ShardedSpatialRoom {
     /// lists, member counts, born groups. Fed from two sources: the
     /// bevy dirty pass in `update` (own entities) and
     /// [`Self::integrate_borrowed`] (the strip diff).
-    pub(in crate::kit::sharded) book: CellBook<(i32, i32), Cell>,
+    pub(in crate::kit::sharded) book: CellBook<StripPos, Cell>,
     /// THE ledger (module docs, "THE borrowed-strip × delta-ledger
     /// subtlety"): the previous tick's flattened borrowed view,
     /// `wire → (x, y)` truncated. The new slice is diffed against THIS,
     /// never against the buckets, so an unchanged strip dirties nothing.
-    pub(in crate::kit::sharded) prev_borrowed: HashMap<u64, (i32, i32)>,
+    pub(in crate::kit::sharded) prev_borrowed: HashMap<u64, StripPos>,
     /// Once-per-tick guard for the strip integration + deferred roll:
     /// the tick whose broadcast-phase preparation has already run.
     pub(in crate::kit::sharded) integrated_tick: u64,
@@ -117,9 +117,9 @@ impl ShardedSpatialRoom {
         if self.integrated_tick == self.tick {
             return;
         }
-        let mut new_view: HashMap<u64, (i32, i32)> = HashMap::with_capacity(borrowed.len());
+        let mut new_view: HashMap<u64, StripPos> = HashMap::with_capacity(borrowed.len());
         for rec in borrowed {
-            let pos = (rec.state.x, rec.state.y);
+            let pos = rec.state;
             new_view.insert(rec.wire, pos);
             match self.prev_borrowed.get(&rec.wire).copied() {
                 None => {
@@ -134,7 +134,7 @@ impl ShardedSpatialRoom {
                     // Moved: one upsert — or exit+upsert when the move
                     // crossed a cell boundary (the packet passes fix the
                     // wire order).
-                    let old_c = cell_of(prev.0, prev.1, self.cell_size);
+                    let old_c = cell_of(prev.x, prev.y, self.cell_size);
                     let new_c = cell_of(rec.state.x, rec.state.y, self.cell_size);
                     if old_c == new_c {
                         self.book.record_update(new_c, rec.wire, pos);
@@ -152,9 +152,9 @@ impl ShardedSpatialRoom {
         // Exited the visible set (left the neighbor's strip, the neighbor
         // migrated it onward, or its view went quarantined): exits in the
         // cells their previous records occupied.
-        for (wire, &(px, py)) in &self.prev_borrowed {
+        for (wire, prev) in &self.prev_borrowed {
             if !new_view.contains_key(wire) {
-                let c = cell_of(px, py, self.cell_size);
+                let c = cell_of(prev.x, prev.y, self.cell_size);
                 self.book.record_exit(c, *wire, false);
             }
         }
