@@ -349,6 +349,7 @@ pub(in crate::shard::tests) fn ghost_migrate(
             actions: act_rx,
             detached: false,
             detach_deadline: None,
+            detach_ceiling: None,
             expire_to: crate::room::ExpireTo::Despawn,
             bot_fed: false,
             session_epoch: 0,

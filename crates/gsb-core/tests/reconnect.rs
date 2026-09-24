@@ -90,7 +90,10 @@ struct ParkLogic {
     index: usize,
     /// The park ledger (§4: it lives in the LOGIC; the core only queries).
     ledger: HashMap<String, Ledg>,
-    /// The `may_release` answer for combat-helds (flipped by the test).
+    /// The `may_release` answer (flipped by the test). `true` by default —
+    /// the trait's own default, "no veto": since the veto is also asked
+    /// at a TIMED hold's deadline (RECONNECT §14.4), a fixture that
+    /// vetoed by default would hold every timed park past its grace.
     release_ok: bool,
     /// Observed ingested ops: (player, op) — proves input does or does
     /// not flow (and WHO it was attributed to).
@@ -112,7 +115,7 @@ impl ParkLogic {
             hold_grace: Duration::from_secs(3600),
             index: 0,
             ledger: HashMap::new(),
-            release_ok: false,
+            release_ok: true,
             ops,
             req_slots: slot_tx,
         }

@@ -73,7 +73,7 @@ where
             rc.actions = act_rx;
             rc.detached = false;
             rc.bot_fed = false;
-            rc.detach_deadline = None;
+            rc.clear_hold_clock();
             rc.session_epoch = epoch;
             rc.identity = identity.to_string();
             old_conn = rc.conn;

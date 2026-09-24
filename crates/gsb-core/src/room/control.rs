@@ -19,12 +19,14 @@ pub enum Detach {
     /// This is the trait method's default, so every pre-reconnect logic
     /// keeps byte-for-byte its old semantics without recompiling anything.
     Despawn,
-    /// The entity lives on, parked. `grace = None` → only
-    /// [`GameLogic::may_release`] ends the hold (combat-held);
-    /// `Some(d)` → the hold ends at the latest `d` after the disconnect
-    /// (the ceiling that makes a harassed lock impossible to extend
-    /// forever). What happens at the end: the player returns first
-    /// (resume) or `to` runs.
+    /// The entity lives on, parked. `grace = Some(d)` → the hold lasts
+    /// `d`, then ends unless [`GameLogic::may_release`] vetoes (a logout
+    /// timer that waits out a fight); `None` → only `may_release` ends it
+    /// (combat-held). A veto can extend either hold at most until
+    /// [`RoomConfig::max_detach_hold`] after the disconnect (the ceiling
+    /// that makes a harass-lock impossible to extend forever). What
+    /// happens at the end: the player returns first (resume) or `to`
+    /// runs.
     Hold {
         grace: Option<Duration>,
         to: ExpireTo,

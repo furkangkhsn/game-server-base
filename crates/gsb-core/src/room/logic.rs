@@ -215,24 +215,29 @@ pub trait GameLogic<W>: Send {
         Detach::Despawn
     }
 
-    /// May the hold end NOW? Asked every CONTROL phase while a detached
-    /// player is held WITHOUT a grace deadline (combat-held): the
-    /// logic answers "no" while the hold must persist (an enemy nearby),
-    /// "yes" to release. A veto extends the hold; the ceiling against an
-    /// endless veto is the policy choosing `Hold { grace: Some(_) }`
-    /// (§14.4: with a grace, the core's own timer ends the hold and this
-    /// method is not consulted for timed holds). Cost note: only the
-    /// (rarely populated) detached set is asked, per §14.4.
+    /// May the hold end NOW? Asked on every sweep (the tick's phase 0c)
+    /// for a held player whose grace has RUN OUT — a timed hold
+    /// (`Hold { grace: Some(d) }`) from its deadline on, an untimed one
+    /// (`grace: None`, combat-held) from the first sweep. The logic
+    /// answers "no" while the hold must persist (the character is in
+    /// combat — "log out after 20 s, but not mid-fight"), "yes" to end it
+    /// toward the policy's `ExpireTo`. A veto extends the hold until the
+    /// next ask; the bound against an endless veto (the harass-lock) is
+    /// [`crate::room::RoomConfig::max_detach_hold`], measured from the
+    /// detach — a veto still standing there is overridden (§14.4). Cost
+    /// note: at most one ask per held row per tick, and only rows past
+    /// their grace are asked.
     ///
-    /// Default: `true` (no logic veto — the hold ends at once, which for
-    /// a `grace = None` hold means "expire immediately": logics that
-    /// never want a hold simply return `Detach::Despawn` instead).
+    /// Default: `true` (no logic veto — a timed hold ends at its
+    /// deadline, an untimed one at the first sweep: logics that never
+    /// want a hold simply return `Detach::Despawn` instead).
     fn may_release(&mut self, _world: &mut W, _player: PlayerId) -> bool {
         true
     }
 
-    /// The hold ended without a resume (grace expired, or `may_release`
-    /// cleared a combat-held player): the entity's end, as chosen by the
+    /// The hold ended without a resume (`may_release` released it once
+    /// its grace ran out, or the veto ceiling overrode it): the entity's
+    /// end, as chosen by the
     /// policy's [`ExpireTo`]. After this call the core runs the ordinary
     /// despawn path for [`ExpireTo::Despawn`] (`on_leave` remains THE
     /// single despawn funnel — snapshot/membership contracts hang off

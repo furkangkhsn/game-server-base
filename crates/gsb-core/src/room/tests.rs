@@ -22,6 +22,7 @@ mod counters;
 mod fanout;
 mod groups;
 mod guardrails;
+mod hold;
 mod idle;
 mod sampling;
 mod shipping;

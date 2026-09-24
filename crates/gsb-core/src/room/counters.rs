@@ -9,7 +9,10 @@ use std::fmt::Debug;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+mod hold;
 mod observe;
+
+pub(crate) use hold::HoldEnd;
 
 #[cfg(test)]
 mod tests;
@@ -60,10 +63,15 @@ pub(crate) struct RoomConn<G> {
     /// the entity stays in `ingest`, `update`, snapshots, group
     /// membership, and the member/slot accounting (§4).
     pub(crate) detached: bool,
-    /// When the hold ends at the latest (`Detach::Hold.grace` mapped to an
-    /// absolute instant by the CORE — §14.4 deadline ownership);
-    /// `None` = combat-held, only [`GameLogic::may_release`] ends it.
+    /// When the hold's grace runs out (`Detach::Hold.grace` mapped to an
+    /// absolute instant by the CORE — §14.4 deadline ownership): from
+    /// then on [`GameLogic::may_release`] is asked every sweep;
+    /// `None` = combat-held, asked from the first sweep.
     pub(crate) detach_deadline: Option<Instant>,
+    /// The latest instant a `may_release` veto can keep the hold
+    /// (detach time + [`RoomConfig::max_detach_hold`]); `None` = no
+    /// ceiling. See `hold.rs` for the sweep's use of both instants.
+    pub(crate) detach_ceiling: Option<Instant>,
     /// The policy's chosen end ([`ExpireTo`]) when the hold expires.
     pub(crate) expire_to: ExpireTo,
     /// The hold expired toward [`ExpireTo::AiHandover`]: the entity keeps

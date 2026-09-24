@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::room::actor::RoomActor;
 
@@ -21,17 +21,18 @@ where
     /// Tick phase 0c — the detach-hold sweep (`docs/RECONNECT.md` §14.4)
     /// and the detach-despawn reports the registry is waiting on.
     pub(super) fn phase_detach_sweep(&mut self) {
-        // -- Phase 0c — detach-hold sweep (§14.4: the deadline clock is
-        //    CORE-owned; the logic owns the policy). Two arms, exactly as
-        //    resolved in §14.4:
-        //
-        //    - `grace = Some(d)`: the core fires its OWN deadline —
-        //      `may_release` is not consulted for timed holds (the grace
-        //      IS the ceiling that makes an endless veto impossible);
-        //    - `grace = None` (combat-held): the core asks `may_release`
-        //      every tick — the detached set is tiny (parks are rare),
-        //      so the per-tick cost is a filter pass over the table that
-        //      short-circuits on the `detached` flag.
+        // -- Phase 0c — detach-hold sweep (§14.4: the clock is CORE-owned;
+        //    the logic owns the policy). The logic's `may_release` veto is
+        //    asked about every held row whose grace has run out — a timed
+        //    hold (`grace = Some(d)`) from its deadline on, an untimed
+        //    (combat-held) one from its first sweep — once per sweep. A
+        //    veto extends the hold to the next sweep; a veto still standing
+        //    at the row's ceiling (`RoomConfig::max_detach_hold` after the
+        //    detach) is overridden: the harass-lock bound. A logic that
+        //    never vetoes therefore ends every hold on the same sweep as
+        //    before the veto was asked at a deadline. Bounded: at most one
+        //    ask per held row per tick, the held set is small (parks are
+        //    rare) and short-circuits on the `detached` flag.
         //
         //    The ended hold is handed to `on_detach_expired(to)` and then:
         //    Despawn → the ordinary despawn path (`on_leave` stays THE one
@@ -40,31 +41,27 @@ where
         //    this is the documented seam).
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
             let now = Instant::now();
-            // Timed holds past their deadline + combat-helds the logic is
-            // ready to release. Collected first so each logic callback runs
-            // against an unborrowed `self`.
+            // Collected first so each logic callback runs against an
+            // unborrowed `self`.
+            let ask: Vec<PlayerId> = self
+                .conns
+                .iter()
+                .filter(|(_, rc)| rc.hold_asks(now))
+                .map(|(&pid, _)| pid)
+                .collect();
             let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
-            let mut ask: Vec<PlayerId> = Vec::new();
-            for (&pid, rc) in &self.conns {
-                if !rc.detached || rc.bot_fed {
-                    continue;
-                }
-                match rc.detach_deadline {
-                    Some(dl) if now >= dl => due.push((pid, rc.expire_to)),
-                    Some(_) => {}
-                    None => ask.push(pid),
-                }
-            }
             for pid in ask {
-                if self.logic.may_release(&mut self.world, pid) {
-                    // The veto cleared: the hold ends NOW, toward the same
-                    // `ExpireTo` the policy chose at detach time.
-                    let to = self
-                        .conns
-                        .get(&pid)
-                        .map(|rc| rc.expire_to)
-                        .unwrap_or(ExpireTo::Despawn);
-                    due.push((pid, to));
+                let released = self.logic.may_release(&mut self.world, pid);
+                let Some(rc) = self.conns.get(&pid) else {
+                    continue;
+                };
+                match rc.hold_end(released, now) {
+                    HoldEnd::Extend => {}
+                    HoldEnd::Release(to) => due.push((pid, to)),
+                    HoldEnd::Forced(to) => {
+                        self.warn_detach_ceiling(pid, rc.conn);
+                        due.push((pid, to));
+                    }
                 }
             }
             for (pid, to) in due {
@@ -96,11 +93,10 @@ where
                         // AI-handover must not become an AFK bypass.
                         self.idle.stop(pid);
                         if let Some(rc) = self.conns.get_mut(&pid) {
+                            // The marker takes the row out of the sweep for
+                            // good (the bot holds it); the clock goes too.
                             rc.bot_fed = true;
-                            // The deadline must never re-fire (the row stays
-                            // held by the bot); clearing it also takes the
-                            // row out of the `may_release` polling set.
-                            rc.detach_deadline = None;
+                            rc.clear_hold_clock();
                         }
                         debug!(
                             room = %self.config.id,
@@ -135,6 +131,25 @@ where
                     Err(mpsc::error::TrySendError::Full(_))
                 )
             });
+        }
+    }
+
+    /// Warn ONCE per room that the veto ceiling overrode a standing
+    /// `may_release` veto (the other forced ceilings' rule: a logic that
+    /// keeps vetoing past it does so for many holds, and one line per
+    /// hold would bury the signal). The count is the observable.
+    fn warn_detach_ceiling(&mut self, player: PlayerId, conn: crate::id::ConnectionId) {
+        if self.detach_ceiling_warns == 0 {
+            self.detach_ceiling_warns += 1;
+            warn!(
+                room = %self.config.id,
+                %player,
+                %conn,
+                max_detach_hold = ?self.config.max_detach_hold,
+                "detach-hold ceiling reached (max_detach_hold): a standing \
+                 may_release veto was overridden and the hold ended toward \
+                 its ExpireTo. This warning is emitted once per room."
+            );
         }
     }
 }

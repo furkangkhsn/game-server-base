@@ -98,6 +98,9 @@ pub struct ShardActor<W, G, St, Sp> {
     /// How many input-idle-ceiling warnings this shard has emitted —
     /// always 0 or 1 (the room actor's warn-once rule and its rationale).
     pub(in crate::shard) idle_ceiling_warns: u32,
+    /// How many detach-hold-ceiling warnings this shard has emitted —
+    /// 0 or 1 (the room actor's `detach_ceiling_warns`, mirrored).
+    pub(in crate::shard) detach_ceiling_warns: u32,
     pub(in crate::shard) groups: HashMap<G, GroupState>,
     /// One outbound link per shard index (used for the neighbors'
     /// indices) — [`InProcLink`] wrappers around exactly the mailboxes

@@ -90,6 +90,7 @@ where
             read_cursor: 0,
             idle: IdleClock::default(),
             idle_ceiling_warns: 0,
+            detach_ceiling_warns: 0,
             groups: HashMap::new(),
             run_every: run_every.max(1),
             last_at: None,

@@ -101,12 +101,11 @@ where
                 // accounting does not drop). The binding row stays too: the
                 // parked row still belongs to that session until a resume
                 // re-points it. The clock is CORE-owned (§14.4): the grace
-                // is written here as an absolute deadline and the phase-0c
-                // sweep fires it.
+                // and the veto ceiling are written here as absolute
+                // instants and the phase-0c sweep reads them.
+                let ceiling = self.config.max_detach_hold;
                 let rc = self.conns.get_mut(&player).expect("guarded by caller");
-                rc.detached = true;
-                rc.expire_to = to;
-                rc.detach_deadline = grace.map(|g| Instant::now() + g);
+                rc.park(grace, to, ceiling, Instant::now());
                 // OFF the input-idle clock while parked: the row has no
                 // live input source, so counting its silence would
                 // double-count a member the detach machinery already owns

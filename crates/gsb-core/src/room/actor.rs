@@ -87,6 +87,11 @@ pub struct RoomActor<W, G, Sp> {
     /// subscriber, whose callsite-interest caching makes cross-test
     /// capture unreliable.
     pub(in crate::room) idle_ceiling_warns: u32,
+    /// How many detach-hold-ceiling warnings this room has emitted
+    /// ([`crate::room::RoomConfig::max_detach_hold`]) — 0 or 1, the
+    /// warn-once rule above: a room whose logic keeps vetoing past the
+    /// ceiling will do it for many holds.
+    pub(in crate::room) detach_ceiling_warns: u32,
     pub(in crate::room) groups: HashMap<G, GroupState>,
     /// Number of global ticks between steps (1 = room rate == global rate).
     pub(in crate::room) run_every: u64,

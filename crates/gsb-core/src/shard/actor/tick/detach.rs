@@ -5,10 +5,10 @@ use std::hash::Hash;
 use std::time::Instant;
 
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::id::PlayerId;
-use crate::room::ExpireTo;
+use crate::room::{ExpireTo, HoldEnd};
 
 use crate::shard::actor::ShardActor;
 
@@ -26,33 +26,34 @@ where
     /// the registry is waiting on.
     pub(crate) fn phase_detach_sweep(&mut self) {
         // -- Phase 0c — detach-hold sweep: the shard-side mirror of the
-        //    room actor's (§14.4 — core owns the clock; timed holds fire
-        //    on their deadline, combat-helds on `may_release`; the ended
+        //    room actor's (§14.4 — core owns the clock; the `may_release`
+        //    veto is asked once per sweep about every held row whose grace
+        //    has run out, a veto extends the hold, a veto still standing at
+        //    the row's `max_detach_hold` ceiling is overridden; the ended
         //    hold goes to `on_detach_expired` and then despawns or turns
         //    bot-fed). Runs BEFORE READ so an expired row is gone before
         //    this tick's pulls.
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
             let now = Instant::now();
+            let ask: Vec<PlayerId> = self
+                .conns
+                .iter()
+                .filter(|(_, rc)| rc.hold_asks(now))
+                .map(|(&player, _)| player)
+                .collect();
             let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
-            let mut ask: Vec<PlayerId> = Vec::new();
-            for (&player, rc) in &self.conns {
-                if !rc.detached || rc.bot_fed {
-                    continue;
-                }
-                match rc.detach_deadline {
-                    Some(dl) if now >= dl => due.push((player, rc.expire_to)),
-                    Some(_) => {}
-                    None => ask.push(player),
-                }
-            }
             for player in ask {
-                if self.logic.may_release(&mut self.world, player) {
-                    let to = self
-                        .conns
-                        .get(&player)
-                        .map(|rc| rc.expire_to)
-                        .unwrap_or(ExpireTo::Despawn);
-                    due.push((player, to));
+                let released = self.logic.may_release(&mut self.world, player);
+                let Some(rc) = self.conns.get(&player) else {
+                    continue;
+                };
+                match rc.hold_end(released, now) {
+                    HoldEnd::Extend => {}
+                    HoldEnd::Release(to) => due.push((player, to)),
+                    HoldEnd::Forced(to) => {
+                        self.warn_detach_ceiling(player, rc.conn);
+                        due.push((player, to));
+                    }
                 }
             }
             for (player, to) in due {
@@ -82,7 +83,7 @@ where
                         self.m.detach_expired_ai += 1;
                         if let Some(rc) = self.conns.get_mut(&player) {
                             rc.bot_fed = true;
-                            rc.detach_deadline = None;
+                            rc.clear_hold_clock();
                         }
                         debug!(
                             room = %self.config.id,
@@ -115,6 +116,25 @@ where
                     Err(mpsc::error::TrySendError::Full(_))
                 )
             });
+        }
+    }
+
+    /// Warn ONCE per shard that the veto ceiling overrode a standing
+    /// `may_release` veto (the room actor's `warn_detach_ceiling`,
+    /// mirrored).
+    fn warn_detach_ceiling(&mut self, player: PlayerId, conn: crate::id::ConnectionId) {
+        if self.detach_ceiling_warns == 0 {
+            self.detach_ceiling_warns += 1;
+            warn!(
+                room = %self.config.id,
+                shard = self.index,
+                %player,
+                %conn,
+                max_detach_hold = ?self.config.max_detach_hold,
+                "detach-hold ceiling reached (max_detach_hold): a standing \
+                 may_release veto was overridden and the hold ended toward \
+                 its ExpireTo. This warning is emitted once per shard."
+            );
         }
     }
 }

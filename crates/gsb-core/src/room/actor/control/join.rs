@@ -82,6 +82,7 @@ where
                 batch: Vec::new(),
                 detached: false,
                 detach_deadline: None,
+                detach_ceiling: None,
                 expire_to: ExpireTo::Despawn,
                 bot_fed: false,
                 session_epoch: 0,
@@ -165,7 +166,7 @@ where
             rc.actions = act_rx;
             rc.detached = false;
             rc.bot_fed = false;
-            rc.detach_deadline = None;
+            rc.clear_hold_clock();
             rc.session_epoch = epoch;
             rc.identity = identity.clone();
             let old = rc.conn;

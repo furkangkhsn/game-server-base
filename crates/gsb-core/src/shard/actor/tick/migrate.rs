@@ -82,6 +82,7 @@ where
                         // keeps skipping its dead halves (§3.2 + §7).
                         detached: entry.detached,
                         detach_deadline: entry.detach_deadline,
+                        detach_ceiling: entry.detach_ceiling,
                         expire_to: entry.expire_to,
                         bot_fed: entry.bot_fed,
                         session_epoch: entry.session_epoch,
@@ -146,6 +147,7 @@ where
                                     batch: Vec::new(),
                                     detached: p.detached,
                                     detach_deadline: p.detach_deadline,
+                                    detach_ceiling: p.detach_ceiling,
                                     expire_to: p.expire_to,
                                     bot_fed: p.bot_fed,
                                     session_epoch: p.session_epoch,

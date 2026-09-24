@@ -42,6 +42,10 @@ pub struct PlayerMigration {
     pub detached: bool,
     /// See [`crate::room::RoomConn::detach_deadline`].
     pub detach_deadline: Option<std::time::Instant>,
+    /// See [`crate::room::RoomConn::detach_ceiling`] — measured from the
+    /// DETACH, so a crossing must not restart it (a parked entity walked
+    /// back and forth across a seam would otherwise never reach it).
+    pub detach_ceiling: Option<std::time::Instant>,
     /// See [`crate::room::RoomConn::expire_to`].
     pub expire_to: ExpireTo,
     /// See [`crate::room::RoomConn::bot_fed`].

@@ -217,7 +217,34 @@ pub struct RoomConfig {
     /// every member on its first sweep, which is never what an operator
     /// means by "0".
     pub max_idle_input_secs: Option<u64>,
+    /// **Detach-hold ceiling**: the longest a [`crate::room::GameLogic::
+    /// may_release`] veto can keep a parked entity, measured from the
+    /// DETACH (`docs/RECONNECT.md` §14.4, §11 "harass-lock").
+    ///
+    /// The veto is asked when a timed hold reaches its deadline and on
+    /// every sweep of an untimed one; `false` extends the hold. A veto
+    /// still standing at `detach + max_detach_hold` is overridden: the
+    /// hold ends toward its `ExpireTo` and the room warns once. The
+    /// ceiling only overrides a VETO — it never shortens a grace, so a
+    /// logic that does not veto ends every hold exactly where it did
+    /// before the ceiling existed.
+    ///
+    /// Default [`DEFAULT_MAX_DETACH_HOLD`] (10 min). `None` = no ceiling
+    /// (a veto holds while it stands — only for a trusted `may_release`);
+    /// `Some(ZERO)` = no extension: a veto is overridden the first time it
+    /// is asked (a timed hold ends at its deadline, as before the veto was
+    /// asked there). Literal on purpose, unlike
+    /// [`Self::max_idle_input_secs`]'s "0 = off": zero has a safe meaning
+    /// here, and "off" would turn a typo into the unbounded lock.
+    pub max_detach_hold: Option<Duration>,
 }
+
+/// The default [`RoomConfig::max_detach_hold`]: ten minutes — 30× the MMO
+/// demo's 20 s logout timer, 20× the kit's 30 s default grace, twice a
+/// 5-minute MOBA abandon window. An "in combat" state lasts seconds after
+/// the last hit; one still standing after ten minutes of its owner being
+/// unable to act is someone else keeping it alive (the harass-lock).
+pub const DEFAULT_MAX_DETACH_HOLD: Duration = Duration::from_secs(600);
 
 impl Default for RoomConfig {
     fn default() -> Self {
@@ -240,6 +267,7 @@ impl Default for RoomConfig {
             persistent: false,
             // OFF: the feature is invisible until an operator asks for it.
             max_idle_input_secs: None,
+            max_detach_hold: Some(DEFAULT_MAX_DETACH_HOLD),
         }
     }
 }

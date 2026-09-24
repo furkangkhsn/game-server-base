@@ -77,9 +77,9 @@ mod logic;
 mod tests;
 
 pub use actor::RoomActor;
-pub use config::RoomConfig;
+pub use config::{DEFAULT_MAX_DETACH_HOLD, RoomConfig};
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
-pub(crate) use counters::{GroupState, RoomConn, RoomCounters};
+pub(crate) use counters::{GroupState, HoldEnd, RoomConn, RoomCounters};
 pub(crate) use idle::IdleClock;
 pub use idle::IdleView;
 pub use logic::{GameLogic, RoomLogic};

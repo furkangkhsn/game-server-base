@@ -4,7 +4,9 @@
 > park politikası). Bu doküman uygulamanın sözleşmesi olarak geçerlidir;
 > kodla çelişirse kod ya da bu doküman hatalıdır ve ikisinden biri
 > düzeltilir. Davranış kilidi: `crates/gsb-core/tests/reconnect.rs`
-> (detach/resume, epoch-guard, park süresi dolması, ERROR 12) ve
+> (detach/resume, epoch-guard, park süresi dolması, ERROR 12),
+> `crates/gsb-core/src/{room,shard}/tests/hold.rs` (süreli bekletmede
+> `may_release` vetosu ve veto tavanı, §17) ve
 > `crates/gsb-server/tests/loadgen_smoke.rs::loadgen_churn_smoke`
 > (§14.5 churn profili). Karar tabloları "Kararlar"
 > bölümündedir; elenen alternatifler bölümlerinin içinde saklıdır.
@@ -50,14 +52,16 @@ Transport koptu            (gerçek — pump fark eder)
 fn on_disconnect(&mut self, world: &mut W, conn: ConnectionId,
                  identity: &str) -> Detach;
 
-/// Hold sırasında (her tick'in CONTROL fazında sorulur):
-/// detach şimdi sona erdirilebilir mi? (combat-held politikası burada
-/// "hayır" der; rakip uzaklaşınca "evet" döner.)
+/// Hold'un süresi dolduktan sonra her süpürmede sorulur (süreli hold
+/// deadline'ından itibaren, süresiz hold ilk süpürmeden itibaren):
+/// detach şimdi sona erdirilebilir mi? (savaştaki karakter için
+/// "hayır" der; savaş bitince "evet" döner. Veto en fazla
+/// `RoomConfig::max_detach_hold` kadar uzatır — §17.)
 fn may_release(&mut self, world: &mut W, conn: ConnectionId) -> bool {
     true // varsayılan: mantık-vetosu yok
 }
 
-/// Hold bitti (grace doldu VE may_release) — entity'nin sonu:
+/// Hold bitti (grace doldu VE may_release — ya da veto tavanı aşıldı):
 fn on_detach_expired(&mut self, world: &mut W, conn: ConnectionId,
                      to: ExpireTo);
 ```
@@ -66,8 +70,9 @@ fn on_detach_expired(&mut self, world: &mut W, conn: ConnectionId,
 enum Detach {
     /// Eski davranış: hemen despawn (lobbi, sohbet).
     Despawn,
-    /// Entity yaşar. `grace = None` → yalnız `may_release` karar verir
-    /// (combat-held); `Some(d)` → en geç d sonra bitiş.
+    /// Entity yaşar. `grace = Some(d)` → d sonra `may_release`'e sorulur
+    /// (çıkış sayacı + savaşta çıkış yok); `None` → yalnız `may_release`
+    /// karar verir (combat-held). İkisinde de veto tavanı §17.
     /// Bitişte ne olacağı: insan geri dönerse resume, dönmezse `to`.
     Hold { grace: Option<Duration>, to: ExpireTo },
 }
@@ -273,7 +278,7 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | Sunucu restartı | Kapsam dışı; herkes fresh (§1) |
 | Park slotu cap hesabı | Detach'te düşmez, expire'de düşer (§4) |
 | Pause-abuse / scout-abuse | grace süresi ve tekrar-cezası oyun config'i; base mekanizma verir |
-| Combat-lock sonsuz uzatma (harass-lock) | `Hold.grace = Some(üst sınır)` ile tavan; `None` yalnız güvenilir `may_release` sözü olan politikalar için |
+| Combat-lock sonsuz uzatma (harass-lock) | Çekirdekte mutlak tavan: `RoomConfig::max_detach_hold` (varsayılan 10 dk, DETACH anından ölçülür). Tavanda hâlâ duran veto ezilir, hold `ExpireTo`'suna biter, oda bir kez uyarır; süreli ve süresiz hold'a aynı tavan (§17) |
 | Ölüyken düşme | Politika detayı — respawn sayacı world'te yaşar, otomatik doğru |
 | RPC pending detach anında | Bugünkü leave semantiği: pending düşer, late raporlar sessizce atılır (zaten yapısal) |
 | rUDP üstünde resume | Transport-agnostic: resume bağlantı katmanındadır; rUDP deneysel statüsünü değiştirmez |
@@ -288,7 +293,8 @@ disiplinine uygun "doğru yolda artış" testleriyle.
    aynı resume'u görür, tek kabul.
 4. `stale_resume_rejected_after_expire` — epoch guard.
 5. `grace_expiry_falls_back_to_ai_handover` / `_to_despawn` — iki ExpireTo.
-6. `may_release_veto_extends_hold_until_cleared` — combat-held.
+6. `may_release_veto_extends_hold_until_cleared` — combat-held;
+   süreli hold'da veto ve tavan: `{room,shard}/tests/hold.rs` (§17).
 7. `double_session_supersedes_the_parked_one`.
 8. `connect_to_retired_ephemeral_room_is_error_12` /
    `persistent_room_rebuilds_after_panic_even_without_flag`.
@@ -362,12 +368,19 @@ Grace'i logic bildirir, süpürgeyi core sürer — durum nerede?
 `detach_deadline: Option<Instant>` detach anında `Detach.grace`
 değerinden yazılır. CONTROL fazındaki mevcut sweep mantığı iki dal:
 
-- `grace = Some(d)`: core kendi deadline'ını görüp süresi dolanı
-  `on_detach_expired`'e teslim eder;
+- `grace = Some(d)`: core kendi deadline'ını izler; deadline gelince
+  `may_release` sorar — "evet" alanı `on_detach_expired`'e teslim
+  eder, "hayır" hold'u uzatır ve soru sonraki her süpürmede tekrarlanır;
 - `grace = None` (combat-held): core HER tick `may_release` sorar
   (detached küçük olduğu için ucuz; park nadiren doludur), "evet"
-  alanı bitirir. Mantık-vetosu süreyi uzatabilir ama `Hold.grace =
-  Some(üst sınır)` seçen politikalar için tavan core'dadır.
+  alanı bitirir.
+
+Her iki kolda da vetonun üst sınırı core'dadır: `detach_ceiling =
+detach anı + RoomConfig::max_detach_hold`; tavanda hâlâ duran veto
+ezilir (§17). *Tarihçe:* ilk uygulamada süreli hold'a veto hiç
+sorulmuyordu ("grace'in kendisi tavandır"); "20 sn sonra çıkış, ama
+savaştayken değil" ifade edilemiyordu (KIT-ARCHITECTURE §10, F4
+gözlemi) — §17 bunu kapattı.
 
 ### 14.5 Ölçüm planı (önce veri)
 
@@ -453,3 +466,91 @@ aksiyon kanalına çarpar ve bağlantı aktörü kendini odadan ayırır. Base'e
 oda→registry "şu bağlantıyı kapat" mesajı EKLEMEK bu turun kapsamı
 dışında bırakıldı: yeni bir kontrol-düzlemi fiili, ve operasyonel karar
 (AFK'yı odadan mı atmalı yoksa sunucudan mı) dağıtımın kararıdır.
+
+## 17. Süreli bekletmede veto ve veto tavanı (`max_detach_hold`)
+
+Amaç: "kopan karakter 20 sn sonra çıkış yapsın — ama savaştayken değil".
+İlk uygulamada `may_release` yalnız süresiz hold'da (`grace = None`)
+soruluyordu; süreli hold deadline'ında koşulsuz bitiyordu ("grace'in
+kendisi tavandır"). Çıkış sayacı ile savaş vetosu birlikte ifade
+edilemiyordu (KIT-ARCHITECTURE §10, F4 gözlemi).
+
+**Anlam.**
+
+1. Süreli hold deadline'ına varınca core `may_release`'i sorar. `true`
+   → hold bugünkü gibi `ExpireTo`'suna biter (aynı süpürme, aynı
+   sayaçlar). `false` → hold uzar.
+2. **Yeniden sorma ritmi: her süpürme** (her tick'in 0c fazı). Süresiz
+   hold'un zaten kullandığı ritim — tek kural, tek kod yolu
+   (`RoomConn::hold_asks`/`hold_end`, iki aktör de aynı yardımcıyı
+   çağırır). Veto kalktığı anın ilk tick'inde hold biter: savaş bitince
+   karakter gecikmeden çıkar. Maliyet sınırlı: tick başına bekletilen
+   satır başına en çok bir çağrı, yalnız süresi dolmuş satırlar; küme
+   küçük ve oda kapasitesiyle sınırlıdır (park edilen satır slot tutar,
+   §4); `may_release`'in bir bileşen okuması kadar ucuz olması
+   sözleşmedir. *Elenen:* sınırlı geri çekilme (1, 2, 4 … sn) — vetonun
+   kalkışını gecikmeli görür (savaş biter, karakter saniyelerce daha
+   dünyada kalır), satır başına ek durum ister (sonraki soru anı; göçte
+   de taşınması gerekirdi); kazancı zaten seyrek olan bir çağrıyı
+   seyreltmekten ibaret.
+3. **Tavan:** `RoomConfig::max_detach_hold: Option<Duration>`, DETACH
+   anından ölçülür (`RoomConn.detach_ceiling`; göçte
+   `PlayerMigration.detach_ceiling` ile taşınır — sınır geçişi tavanı
+   sıfırlamaz, yeni sahip shard uygular). Tavanda veto hâlâ duruyorsa
+   hold `ExpireTo`'suna zorla biter ve oda (shard'da shard aktörü)
+   **bir kez** uyarır; sayaç `detach_ceiling_warns`
+   (`idle_ceiling_warns` deseni: 0 ya da 1, tracing'e girmeden
+   kilitlenebilir).
+4. **Tavan yalnız vetoyu ezer, grace'i kısaltmaz.** Grace'i tavandan
+   uzun bir hold grace'in sonuna kadar yaşar (o anda veto varsa hemen
+   ezilir — tavan geçmiştir). Sıra: önce soru, sonra tavan; tavandan
+   sonra gelen `true` olağan bitiştir (uyarı yok), "zorla" yalnız
+   gerçekten ezilen bir vetodur. Böylece hiç veto etmeyen oyunda
+   davranış bire bir aynıdır (kilit:
+   `a_logic_that_never_vetoes_ends_every_hold_where_it_did` ve shard
+   eşi).
+5. **Varsayılan `Some(10 dk)`** (`DEFAULT_MAX_DETACH_HOLD`): MMO
+   demosunun 20 sn çıkış sayacının 30×, kit'in 30 sn varsayılan
+   grace'inin 20×, 5 dakikalık bir MOBA terk penceresinin 2×. "Savaşta"
+   durumu son vuruştan sonra saniyeler sürer; sahibi hiçbir şey
+   yapamazken on dakika sonra hâlâ duran bir savaş, başkasının onu
+   canlı tutmasıdır — sınırlanan kilit budur. Maliyet: park edilen satır
+   kapasiteden ve registry'den en çok 10 dk yer tutar.
+6. **`None` = tavan yok** (veto durdukça tutar — yalnız güvenilir
+   `may_release` için; süresiz hold'un eski davranışı). **`Some(ZERO)`
+   = uzatma yok:** veto ilk sorulduğunda ezilir — süreli hold
+   deadline'ında biter (vetonun sorulmadığı eski davranış), süresiz hold
+   ilk süpürmede. Bilinçli olarak literaldir ve
+   `max_idle_input_secs`'in "0 = kapalı" kuralından ayrılır: orada
+   sıfırın anlamlı okuması yoktu (her üyeyi ilk süpürmede atmak), burada
+   güvenli ve kesin bir anlamı var; "0 = kapalı" bir yazım hatasını
+   sınırsız kilide çevirirdi. Temsil edilemeyecek kadar uzak tavan
+   (`Duration::MAX`) tavansız sayılır (aktör taşmada paniklemez).
+
+**Süresiz hold kararı: tavan onlara da uygulanır.** Harass-lock
+vetonun özelliğidir, grace'in değil: süresiz hold SAF vetodur, yani en
+açık olan yol odur. Eski "`None` yalnız güvenilir `may_release` sözü
+olan politikalar için" kuralı belgede duran, zorlanmayan bir sözdü;
+takılı kalan tek bir veto slotu ve registry satırını süreç boyunca
+sızdırırdı. Davranış değişikliği dardır — yalnız vetosu 10 dk'dan uzun
+duran süresiz hold farklılaşır — ve tam eski davranışı isteyen oda
+`max_detach_hold: None` der. *Elenen:* tavanı yalnız süreli hold'a
+uygulamak (iki kural; en açık yol korumasız kalır).
+
+**§16 ile ilişki.** İki tavan bağımsızdır: girdi-boşta tavanı üyeyi
+`on_disconnect`'e verir; politikanın başlattığı hold her hold gibi
+`max_detach_hold`'a tabidir (saati o detach anında başlar).
+
+**Elenen diğer alternatifler.**
+
+- *Tavan = grace'in katı* (ör. 3× grace): süresiz hold'da tanımsız,
+  oyuna göre değişen, config'te görünmeyen bir sınır.
+- *Grace'i de kesen mutlak üst sınır:* veto etmeyen oyunun davranışını
+  değiştirirdi (uzun grace'li bir bekletme 10 dk'da kesilirdi).
+- *Oyun başına tavan* (`Detach::Hold`'a alan): `Detach` API'sine kırıcı
+  ekleme; tavan operatörün güvenlik vanasıdır (oda config'i), oyun
+  kuralı değil — oyun kuralı `may_release`'tir.
+- *`RoomSample`'a `detach_forced` sayacı:* gözlemlenebilirlik için doğru
+  yer, ama metrik şemasına ek (sample alanı, toplayıcı, raporlayıcı) bu
+  turun kapsamı dışı; bir kez uyarı + aktör sayacı şimdilik yeterli,
+  açık iş olarak kalır.

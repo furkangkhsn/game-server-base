@@ -258,6 +258,7 @@ async fn ghost_migrate_after_leave_is_rejected() {
                 actions: ghost_act_rx,
                 detached: false,
                 detach_deadline: None,
+                detach_ceiling: None,
                 expire_to: crate::room::ExpireTo::Despawn,
                 bot_fed: false,
                 session_epoch: 0,
