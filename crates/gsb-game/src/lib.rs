@@ -70,7 +70,21 @@ mod layering;
 
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
-pub use kit::{aoi, team};
+pub use kit::team;
+
+/// The AOI room and its cell key (compatibility path; the strategy's
+/// design notes live on the kit's generic
+/// [`AoiRoom`](crate::kit::aoi::AoiRoom)).
+pub mod aoi {
+    pub use crate::kit::space::Cell;
+
+    /// The AOI room running the demo game over the kit's 2D grid preset:
+    /// the kit's generic [`AoiRoom`](crate::kit::aoi::AoiRoom)
+    /// instantiated with the demo's `Game` and `Grid2` (constructors:
+    /// `new`, `with_spawn_half`, `with_disconnect_grace`).
+    pub type AoiRoom =
+        crate::kit::aoi::AoiRoom<crate::demo::play::DemoGame, crate::kit::space::Grid2>;
+}
 
 /// The PVS room and the demo map's sector key (compatibility path).
 pub mod pvs {

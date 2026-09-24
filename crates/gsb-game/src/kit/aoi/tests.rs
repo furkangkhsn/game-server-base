@@ -29,6 +29,10 @@ use gsb_core::room::GameLogic;
 
 mod sharing;
 
+/// The instantiation these tests drive: the demo game over the kit's 2D
+/// grid preset (shadows the generic room of `use super::*`).
+type AoiRoom = super::AoiRoom<crate::kit::seam::DemoGame, crate::kit::space::Grid2>;
+
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),

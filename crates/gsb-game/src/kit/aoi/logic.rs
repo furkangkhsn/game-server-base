@@ -9,26 +9,27 @@ use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use prost::encoding::varint::encode_varint;
 
-// The public cell type lives with the shared machinery (both spatial
-// rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
-// historical public path every caller uses.
 use crate::kit::aoi::*;
+use crate::kit::codec::RecordCodec;
 use crate::kit::common::assemble_group_packet;
+use crate::kit::game::{Game, Wire};
 use crate::kit::identity::WireId;
-use crate::kit::seam;
-use crate::kit::seam::{DemoCodec, Position};
-pub use crate::kit::space::Cell;
 use crate::kit::space::CellSpace;
 
-impl GameLogic<World> for AoiRoom {
-    type GroupKey = Cell;
+/// The game's broadcast marker (the codec's `Marker`).
+type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
+/// The game's record query (the codec's `Query`).
+type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
+
+impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
+    type GroupKey = S::Cell;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     /// The connection's group is the cell its entity's records land in
@@ -40,22 +41,23 @@ impl GameLogic<World> for AoiRoom {
     /// is O(N) ECS work per tick with no structural way to shrink it;
     /// the table makes it O(1) and it stays current because `update`
     /// always precedes the broadcast phase). The world fallback covers
-    /// the one window where the table has no entry (an entity spawned
-    /// without a `Position`, which the dirty query cannot see until it
-    /// is stamped — defensive; `on_join` always spawns with one).
-    fn group_of(&self, world: &World, player: PlayerId) -> Cell {
+    /// the window where the table has no entry yet — the join itself
+    /// (the core asks for the joiner's group right after `on_join`,
+    /// before any `update`): the cell of the entity's current record,
+    /// read from the world. An entity without the record's components
+    /// (defensive — the join always spawns them) falls back to the
+    /// space's default cell, as does a player without an entity.
+    fn group_of(&self, world: &World, player: PlayerId) -> S::Cell {
         let Some(&entity) = self.player_entity.get(&player) else {
-            return Cell(0, 0);
+            return S::Cell::default();
         };
         if let Some(&c) = self.book.last_cell.get(&entity) {
             return c;
         }
-        let pos = world
-            .entity(entity)
-            .get::<Position>()
-            .copied()
-            .unwrap_or_default();
-        self.grid.cell_of(&(pos.x as i32, pos.y as i32))
+        match world.entity(entity).get_components::<RecordQuery<G>>() {
+            Ok(item) => self.space.cell_of(&self.game.codec().wire(item)),
+            Err(_) => S::Cell::default(),
+        }
     }
 
     /// Assemble `cell`'s packet from this tick's pieces (module docs):
@@ -69,7 +71,7 @@ impl GameLogic<World> for AoiRoom {
         &mut self,
         _world: &mut World,
         ctx: &TickCtx,
-        cell: &Cell,
+        cell: &S::Cell,
         // Single-room execution: no boundary records exist here.
         _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
@@ -78,8 +80,8 @@ impl GameLogic<World> for AoiRoom {
         assemble_group_packet(
             &mut self.pieces,
             &self.book,
-            &DemoCodec,
-            &self.grid,
+            self.game.codec(),
+            &self.space,
             cell,
             &mut self.group_full_emitted,
             out,
@@ -98,7 +100,7 @@ impl GameLogic<World> for AoiRoom {
         &mut self,
         _world: &mut World,
         _ctx: &TickCtx,
-        group: &Cell,
+        group: &S::Cell,
         _last: Option<&bytes::Bytes>,
         out: &mut bytes::BytesMut,
     ) -> bool {
@@ -106,7 +108,7 @@ impl GameLogic<World> for AoiRoom {
         self.group_full_emitted.insert(*group);
         let full = self
             .pieces
-            .full_view(&DemoCodec, &self.grid, &self.book.buckets, group);
+            .full_view(self.game.codec(), &self.space, &self.book.buckets, group);
         out.extend_from_slice(&full);
         true
     }
@@ -128,7 +130,7 @@ impl GameLogic<World> for AoiRoom {
         &mut self,
         _world: &mut World,
         player: PlayerId,
-        group: &Cell,
+        group: &S::Cell,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
@@ -155,9 +157,9 @@ impl GameLogic<World> for AoiRoom {
                 // (field 3, one length-delimited `RpcResponse` each)
                 // instead of a second frame — the per-connection
                 // per-tick slot is one frame.
-                let full = self
-                    .pieces
-                    .full_view(&DemoCodec, &self.grid, &self.book.buckets, &c);
+                let full =
+                    self.pieces
+                        .full_view(self.game.codec(), &self.space, &self.book.buckets, &c);
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
@@ -177,11 +179,11 @@ impl GameLogic<World> for AoiRoom {
         // delivers the one-shot full and records the baseline — via the
         // group's own fresh full when the group is born, or via the
         // private frame otherwise.
-        let admission = crate::kit::common::on_join(
+        let admission = crate::kit::common::join(
+            &mut self.game,
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.minter,
-            self.spawn_half,
             world,
             conn,
             &mut self.input,
@@ -202,8 +204,8 @@ impl GameLogic<World> for AoiRoom {
         // one-shot full).
         if let Some(&entity) = self.player_entity.get(&player) {
             self.book.members.remove(&entity);
-            // Despawns are NOT component writes: the `Changed<Position>`
-            // query in `update` cannot see the entity once it is gone,
+            // Despawns are NOT component writes: the codec's dirty query
+            // in `update` cannot see the entity once it is gone,
             // so the removal must be parked here (module docs, "Dirty
             // cells") — the wire id and the cell the entity occupied at
             // the end of the last `update` (`last_cell`, written in
@@ -265,29 +267,28 @@ impl GameLogic<World> for AoiRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        seam::synthesize_bot_moves(
-            self.park_ledger
-                .values()
-                .filter(|e| e.bot)
-                .map(|e| (e.player, e.entity)),
+        crate::kit::common::ingest(
+            &mut self.game,
             world,
             ctx,
             actions,
-        );
-        seam::ingest(&self.player_entity, world, actions, &mut self.input)
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+        )
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::kit::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::systems(&mut self.game, world, ctx);
         // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with
-        // a `Position` but no `WireId` get the next serial, so the
-        // broadcast set is exactly "has a `Position`". It runs BEFORE the
+        // the codec's marker but no `WireId` get the next serial, so the
+        // broadcast set is exactly "has the marker". It runs BEFORE the
         // dirty query below: the query requires a `WireId`, and a
-        // stamped orphan's `Position` write (by the spawner, outside
+        // stamped orphan's record write (by the spawner, outside
         // `on_join`) is already inside this tick's change window — the
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
-        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
+        crate::kit::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
@@ -297,20 +298,21 @@ impl GameLogic<World> for AoiRoom {
         self.tick = ctx.tick;
 
         // The dirty set (module docs, "Dirty cells"): bevy's change
-        // detection flags every `Position` write — by any writer, through
-        // any API — so no writer can forget to mark a cell dirty: the
-        // mark lives in bevy's write path itself. The query window is
-        // "writes since the end of the previous `update`"
-        // (`clear_trackers` at the bottom of this method closes THIS
-        // tick's window), so CONTROL-phase joins (spawn writes) are
-        // inside it; CONVERT-phase writes touch `MoveTarget`, not
-        // `Position`, and reach the query through the systems' resulting
-        // `Position` writes. Only the changed entities are visited —
+        // detection flags every write the codec's `Dirty` filter names
+        // (the demo: every `Position` write) — by any writer, through any
+        // API — so no writer can forget to mark a cell dirty: the mark
+        // lives in bevy's write path itself. The query window is "writes
+        // since the end of the previous `update`" (the kit's ONE
+        // `clear_trackers` call, at the bottom of this method, closes
+        // THIS tick's window), so CONTROL-phase joins (spawn writes) are
+        // inside it; the demo's CONVERT-phase writes touch `MoveTarget`,
+        // not `Position`, and reach the query through the systems'
+        // resulting `Position` writes. Only the changed entities are visited —
         // per-tick work is proportional to the movers, not to the entity
         // count. (The pass itself — including its quantization no-op and
         // its member arithmetic — is the shared engine,
         // [`crate::kit::common::CellBook::dirty_pass`].)
-        self.book.dirty_pass(world, &DemoCodec, &self.grid);
+        self.book.dirty_pass(world, self.game.codec(), &self.space);
 
         // Leavers: despawns are invisible to the change query — applied
         // from the removals parked in `on_leave`.
@@ -323,8 +325,10 @@ impl GameLogic<World> for AoiRoom {
         // its borrowed strip has been integrated).
         self.book.roll();
 
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it).
         crate::kit::common::close_change_window(world);
     }
 }
 
-impl RoomLogic<World> for AoiRoom {}
+impl<G: Game, S: CellSpace<Wire<G>>> RoomLogic<World> for AoiRoom<G, S> {}

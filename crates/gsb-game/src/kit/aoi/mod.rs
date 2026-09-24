@@ -1,5 +1,11 @@
-//! [`AoiRoom`]: an Area-of-Interest (AOI) game logic for the demo game —
-//! in its **cell-encoded delta** form.
+//! [`AoiRoom`]: an Area-of-Interest (AOI) game logic — in its
+//! **cell-encoded delta** form — generic over the game (`G: Game`,
+//! KIT-ARCHITECTURE §4.3) and the cell space (`S: CellSpace<Wire<G>>`,
+//! §4.2). The sections below speak in the terms of the demo's
+//! instantiation (`DemoGame` + the kit's `Grid2` preset: `Position`
+//! records, a 3×3 block of `cell_size` cells); for another game read
+//! "the codec's `Dirty` filter" for `Changed<Position>`, "the space's
+//! view" for the 3×3 block.
 //!
 //! ## Encoding unit vs audience (the design, decided — see the module
 //! docs' "Why this shape")
@@ -258,15 +264,15 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
-use gsb_ecs::SystemRunner;
 
-// The public cell type lives with the shared machinery (both spatial
-// rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
-// historical public path every caller uses.
-use crate::kit::common::{CellBook, CellPieces};
-use crate::kit::seam;
+use crate::kit::common::{CellBook, CellPieces, InputSeq, ParkEntry, ParkPolicy};
+use crate::kit::game::{Game, Wire};
+use crate::kit::identity::Minter;
+use crate::kit::space::CellSpace;
+// The 2D grid preset's cell type (the demo's group key) — re-exported
+// here because `gsb_game::aoi::Cell` is the historical public path every
+// caller uses.
 pub use crate::kit::space::Cell;
-use crate::kit::space::Grid2;
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
@@ -275,30 +281,29 @@ use crate::kit::space::Grid2;
 /// [`crate::kit::common::CellPieces`]) is shared with the sharded spatial
 /// composite; this room contributes only the session surface and the
 /// single-world feeding of the bookkeeping.
-pub struct AoiRoom {
-    runner: SystemRunner,
+pub struct AoiRoom<G: Game, S: CellSpace<Wire<G>>> {
+    /// The game (its hooks, its codec and its own state).
+    game: G,
+    /// The cell space (the demo: `Grid2` — world units per cell edge;
+    /// see module docs, "Cell size" — it also sets the leak band,
+    /// "Security parameter").
+    space: S,
     /// Which entity belongs to which player (Faz 2: keyed by the STABLE
     /// player identity — the mapping survives resume unchanged).
     player_entity: HashMap<PlayerId, Entity>,
-    /// The player-identity counter (the demo's [`PlayerId`] minting
+    /// The player-identity counter (the room's [`PlayerId`] minting
     /// policy); monotonic, never reused within the room's lifetime.
     next_player_id: u64,
     /// The disconnect-park policy + ledger (see `crate::kit::common` and
-    /// RECONNECT §3/§9; the hook bodies are shared with every demo room).
-    park: crate::kit::common::ParkPolicy,
-    park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
+    /// RECONNECT §3/§9; the hook bodies are shared with every room).
+    park: ParkPolicy,
+    park_ledger: HashMap<String, ParkEntry>,
     /// The room's single wire-identity counter (see module docs,
     /// "Invariants preserved" / `game.proto`).
-    minter: crate::kit::identity::Minter,
-    /// The cell space: world units per cell edge (see module docs, "Cell
-    /// size" — it also sets the leak band, "Security parameter").
-    grid: Grid2,
-    /// Half-size of the square spawn map (see the demo's `spawn_pos`);
-    /// configuration, not a strategy decision.
-    spawn_half: f32,
+    minter: Minter,
     /// Per-player input sequence state (strategy-independent; see
-    /// the demo's `ingest` / `crate::kit::common::emit_private`).
-    input: crate::kit::common::InputSeq,
+    /// `crate::kit::common::emit_private`).
+    input: InputSeq,
     /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the
     /// group's own full in the same batch). A player whose entry is
@@ -306,12 +311,12 @@ pub struct AoiRoom {
     /// group's view and gets a one-shot private full (see `private`).
     /// SESSION-scoped content under a stable key: a resume clears it
     /// (`on_resume`) so the fresh session re-baselines with a full.
-    conn_view: HashMap<PlayerId, Cell>,
+    conn_view: HashMap<PlayerId, S::Cell>,
     /// The content bookkeeping (buckets, change lists, occupancy and
     /// member baselines, parked removals, born groups) — the shared
     /// engine ([`crate::kit::common::CellBook`]); this room feeds it from the
     /// bevy dirty query alone (no borrowed strip exists here).
-    book: CellBook<(i32, i32), Cell>,
+    book: CellBook<Wire<G>, S::Cell>,
     /// The global tick of the current step (set in `update`): the
     /// `private` seam has no `TickCtx`, so the tick it stamps into
     /// payloads comes from here.
@@ -321,37 +326,27 @@ pub struct AoiRoom {
     //    `private` once per group/conn in unspecified order, and the
     //    cache makes the pieces order-independent: the same (cell, kind)
     //    is computed once, shared as frozen `Bytes` by reference). ──
-    pieces: CellPieces<Cell>,
+    pieces: CellPieces<S::Cell>,
     /// The groups that emitted a FULL this tick (a fresh group in
     /// `snapshot`, a silent group in `keepalive`): a member of such a
     /// group is baselined by that frame (it precedes the private frame in
     /// the batch), so `private` skips its one-shot full.
-    group_full_emitted: HashSet<Cell>,
+    group_full_emitted: HashSet<S::Cell>,
 }
 
-impl AoiRoom {
-    /// Build an AOI room with the given `cell_size` (world units per cell
-    /// edge) over the default 100×100 spawn arena. Clamped to a sane
-    /// minimum so a degenerate `0` cannot produce a single infinite cell.
+impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
+    /// Build an AOI room running `game` over the cell space `space`.
     #[must_use]
-    pub fn new(cell_size: f32) -> Self {
-        Self::with_spawn_half(cell_size, seam::DEFAULT_SPAWN_HALF)
-    }
-
-    /// Build an AOI room over a square spawn map of half-size `half` (see
-    /// [`crate::kit::room::OpenRoom::with_spawn_half`]).
-    #[must_use]
-    pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
+    pub fn with_game(game: G, space: S) -> Self {
         Self {
-            runner: seam::movement_runner(),
+            game,
+            space,
             player_entity: HashMap::new(),
             next_player_id: 0,
-            park: crate::kit::common::ParkPolicy::default(),
+            park: ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            minter: crate::kit::identity::Minter::sequential(),
-            grid: Grid2::new(cell_size),
-            spawn_half: half.max(1.0),
-            input: crate::kit::common::InputSeq::default(),
+            minter: Minter::sequential(),
+            input: InputSeq::default(),
             conn_view: HashMap::new(),
             book: CellBook::default(),
             tick: 0,
@@ -366,6 +361,16 @@ impl AoiRoom {
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;
         self
+    }
+
+    /// The game this room runs.
+    pub fn game(&self) -> &G {
+        &self.game
+    }
+
+    /// The game this room runs, for configuration after construction.
+    pub fn game_mut(&mut self) -> &mut G {
+        &mut self.game
     }
 }
 

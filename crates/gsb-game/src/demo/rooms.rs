@@ -7,7 +7,9 @@
 use crate::demo::economy::EconomyService;
 use crate::demo::play::DemoGame;
 use crate::demo::spawn::DEFAULT_SPAWN_HALF;
+use crate::kit::aoi::AoiRoom;
 use crate::kit::room::OpenRoom;
+use crate::kit::space::Grid2;
 
 impl OpenRoom<DemoGame> {
     /// Build the open room over the default 100×100 arena (bit-identical
@@ -38,5 +40,24 @@ impl OpenRoom<DemoGame> {
 impl Default for OpenRoom<DemoGame> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The demo's AOI: the kit's 2D grid preset over the demo's truncated
+/// `(x, y)` wire value.
+impl AoiRoom<DemoGame, Grid2> {
+    /// Build an AOI room with the given `cell_size` (world units per cell
+    /// edge) over the default 100×100 spawn arena. Clamped to a sane
+    /// minimum so a degenerate `0` cannot produce a single infinite cell.
+    #[must_use]
+    pub fn new(cell_size: f32) -> Self {
+        Self::with_spawn_half(cell_size, DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build an AOI room over a square spawn map of half-size `half` (see
+    /// [`OpenRoom::with_spawn_half`]).
+    #[must_use]
+    pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
+        Self::with_game(DemoGame::new(half), Grid2::new(cell_size))
     }
 }

@@ -123,6 +123,11 @@ pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};
 // ── Test fixtures (kit's in-module tests drive the kit rooms with the
 //    demo game; phase 1 replaces them with the kit's own small test game)
 
+// The demo's `Game`: the kit's generic rooms' in-module tests drive the
+// demo instantiation.
+#[cfg(test)]
+pub(crate) use crate::demo::play::DemoGame;
+
 // The typed `CellExit` mirror the AOI tests decode snapshots with.
 #[cfg(test)]
 pub(crate) use crate::demo::game::CellExit;
