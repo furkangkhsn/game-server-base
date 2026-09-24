@@ -14,10 +14,11 @@ use prost::encoding::varint::encode_varint;
 use crate::kit::codec::RecordCodec;
 use crate::kit::common::assemble_group_packet;
 use crate::kit::game::{Game, ShardGame, Wire};
-use crate::kit::identity::WireId;
 use crate::kit::sharded::*;
 use crate::kit::space::{CellSpace, Partition};
 
+/// The game's broadcast marker (the codec's `Marker`).
+type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
 /// The game's record query (the codec's `Query`).
 type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
@@ -48,7 +49,7 @@ where
         let Some(&entity) = self.inner.player_entity.get(&player) else {
             return S::Cell::default();
         };
-        if let Some(&c) = self.book.last_cell.get(&entity) {
+        if let Some(c) = self.book.cell_of_entity(&entity) {
             return c;
         }
         match world.entity(entity).get_components::<RecordQuery<G>>() {
@@ -127,10 +128,8 @@ where
         // (never bucketed — the `last_cell` guard).
         if let Some(&entity) = self.inner.player_entity.get(&player) {
             self.book.members.remove(&entity);
-            let wire = world.entity(entity).get::<WireId>().map(|w| w.get());
-            let cell = self.book.last_cell.get(&entity).copied();
-            if let (Some(wire), Some(cell)) = (wire, cell) {
-                self.book.pending_removals.push((entity, wire, cell));
+            if self.book.last_cell.contains_key(&entity) {
+                self.book.pending_removals.push((entity, true));
             }
         }
         self.inner.on_leave(world, player);
@@ -231,6 +230,9 @@ where
         self.book
             .dirty_pass(world, self.inner.game.codec(), &self.space);
         self.book.apply_removals();
+        // Every despawn nobody parked (game code despawning an NPC —
+        // §8.2), read before this tick's change-window close.
+        self.book.sweep_removed::<Marker<G>>(world);
         // The tick's ONE change-window close (§4.4: the kit owns it; a
         // game hook never calls it — the core has no system scheduler
         // that would; see `docs/DESIGN.md` §7).

@@ -21,6 +21,7 @@ use prost::Message;
 use std::collections::HashMap;
 
 mod change_window;
+mod ghosts;
 mod migration;
 mod spatial;
 

@@ -13,7 +13,6 @@ use crate::kit::aoi::*;
 use crate::kit::codec::RecordCodec;
 use crate::kit::common::assemble_group_packet;
 use crate::kit::game::{Game, Wire};
-use crate::kit::identity::WireId;
 use crate::kit::space::CellSpace;
 
 /// The game's broadcast marker (the codec's `Marker`).
@@ -51,7 +50,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         let Some(&entity) = self.player_entity.get(&player) else {
             return S::Cell::default();
         };
-        if let Some(&c) = self.book.last_cell.get(&entity) {
+        if let Some(c) = self.book.cell_of_entity(&entity) {
             return c;
         }
         match world.entity(entity).get_components::<RecordQuery<G>>() {
@@ -207,17 +206,15 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
             // Despawns are NOT component writes: the codec's dirty query
             // in `update` cannot see the entity once it is gone,
             // so the removal must be parked here (module docs, "Dirty
-            // cells") — the wire id and the cell the entity occupied at
-            // the end of the last `update` (`last_cell`, written in
-            // `update` and nowhere else). A join+leave inside one tick
-            // parks nothing: the entity never made it into `last_cell`
-            // (no `update` ran between the join and the leave), so it
-            // never entered the buckets — nothing to remove, no member
-            // count to undo.
-            let wire = world.entity(entity).get::<WireId>().map(|w| w.get());
-            let cell = self.book.last_cell.get(&entity).copied();
-            if let (Some(wire), Some(cell)) = (wire, cell) {
-                self.book.pending_removals.push((entity, wire, cell));
+            // cells") — applied against the wire id and the cell the
+            // entity occupied at the end of the last `update`
+            // (`last_cell`, written in `update` and nowhere else). A
+            // join+leave inside one tick parks nothing: the entity never
+            // made it into `last_cell` (no `update` ran between the join
+            // and the leave), so it never entered the buckets — nothing
+            // to remove, no member count to undo.
+            if self.book.last_cell.contains_key(&entity) {
+                self.book.pending_removals.push((entity, true));
             }
         }
         crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
@@ -315,8 +312,12 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         self.book.dirty_pass(world, self.game.codec(), &self.space);
 
         // Leavers: despawns are invisible to the change query — applied
-        // from the removals parked in `on_leave`.
+        // from the removals parked in `on_leave` …
         self.book.apply_removals();
+        // … and every despawn nobody parked (game code despawning an
+        // NPC — §8.2), from the world's removed-component buffers, read
+        // before this tick's change-window close empties them.
+        self.book.sweep_removed::<Marker<G>>(world);
 
         // The per-cell flags, the group birth, and the occupancy roll —
         // order-independent, against the final bucket state (single-room

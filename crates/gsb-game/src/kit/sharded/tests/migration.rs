@@ -113,3 +113,26 @@ fn routing_reaches_every_region_by_shortest_paths() {
         }
     }
 }
+
+/// An NPC leaving a spatial shard by migration removes its record but
+/// no membership: the cell it shared with a player keeps that player's
+/// member count (a migrating NPC used to be booked out as a member,
+/// zeroing the count — the next arrival would then fake a group birth).
+#[test]
+fn npc_migrating_out_keeps_the_cells_member_count() {
+    let mut world = World::new();
+    let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
+    let _p = place_spatial(&mut world, &mut s1, ConnectionId(1), 5.0, -10.0); // Cell(0,-1)
+    let npc = world.spawn(Position { x: 8.0, y: -8.0 }).id(); // Cell(0,-1)
+    s1.update(&mut world, &ctx(1));
+    let npc_wire = world.get::<WireId>(npc).expect("stamped").get();
+    assert_eq!(s1.book.member_counts.get(&Cell(0, -1)), Some(&1));
+
+    s1.on_migrate_out(&mut world, npc_wire);
+    s1.update(&mut world, &ctx(2));
+    assert_eq!(
+        s1.book.member_counts.get(&Cell(0, -1)),
+        Some(&1),
+        "the player is still the cell's one member"
+    );
+}

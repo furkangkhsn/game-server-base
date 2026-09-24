@@ -27,6 +27,7 @@ use crate::kit::identity::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 
+mod ghosts;
 mod sharing;
 
 /// The instantiation these tests drive: the demo game over the kit's 2D

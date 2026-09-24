@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use bevy_ecs::prelude::{Entity, With, World};
+use bevy_ecs::prelude::{Component, Entity, With, World};
 
 use crate::kit::codec::RecordCodec;
 use crate::kit::common::*;
@@ -34,10 +34,13 @@ pub(crate) struct CellBook<W, C> {
     /// [`Self::roll`] against the final bucket state (order-
     /// independence — a same-tick exit+entry cannot flip either flag).
     pub prev_occupied: HashSet<C>,
-    /// Each bucketed entity's cell at the end of the last pass (written
-    /// by the dirty pass, read by it, by removal parking, and by the
-    /// O(1) `group_of` lookups of the broadcast phase).
-    pub last_cell: HashMap<Entity, C>,
+    /// Each bucketed entity's wire id and cell at the end of the last
+    /// pass (written by the dirty pass, read by it, by the removal
+    /// passes, and by the O(1) `group_of` lookups of the broadcast
+    /// phase). The wire id is kept here because a despawned entity's
+    /// components are gone: this is what [`Self::sweep_removed`] learns
+    /// a despawned entity's record from.
+    pub last_cell: HashMap<Entity, (u64, C)>,
     /// The member count of each cell (empty entries removed): the
     /// birth arithmetic's "now" input. Borrowed records are never
     /// members — they carry no connection on this side.
@@ -51,11 +54,13 @@ pub(crate) struct CellBook<W, C> {
     pub cell_changes: HashMap<C, CellChanges<W>>,
     /// Removals parked by the CONTROL phase (leaves, migrations-out):
     /// a despawn is not a component write, so the dirty query cannot see
-    /// it — the entity, its wire id and its last cell are parked here and
-    /// applied by [`Self::apply_removals`]. A join+leave within one tick
-    /// parks nothing — the entity never made it into `last_cell`, hence
-    /// never into the buckets.
-    pub pending_removals: Vec<(Entity, u64, C)>,
+    /// it — the entity and whether it counted as a member are parked
+    /// here and applied by [`Self::apply_removals`] against `last_cell`.
+    /// A join+leave within one tick parks nothing — the entity never
+    /// made it into `last_cell`, hence never into the buckets. (Despawns
+    /// nobody parks — game code despawning an NPC — are found by
+    /// [`Self::sweep_removed`].)
+    pub pending_removals: Vec<(Entity, bool)>,
     /// The member entities (maintained by the room on join/leave/migrate):
     /// the dirty loop's O(1) membership test.
     pub members: HashSet<Entity>,
@@ -213,12 +218,12 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
             let value = codec.wire(item);
             let new_cell = space.cell_of(&value);
             let is_member = self.members.contains(&entity);
-            match self.last_cell.get(&entity).copied() {
+            match self.last_cell.get(&entity).map(|&(_, c)| c) {
                 None => {
                     // New this tick (a join, a migration-in, or a spawn
                     // between passes): an upsert in its cell.
                     self.record_appearance(wire, value, new_cell, is_member);
-                    self.last_cell.insert(entity, new_cell);
+                    self.last_cell.insert(entity, (wire, new_cell));
                 }
                 Some(old) if old == new_cell => {
                     // Moved inside its cell — a record only when the wire
@@ -234,21 +239,61 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
                 }
                 Some(old) => {
                     self.record_cross(old, new_cell, wire, value, is_member);
-                    self.last_cell.insert(entity, new_cell);
+                    self.last_cell.insert(entity, (wire, new_cell));
                 }
             }
         }
     }
 
+    /// The cell `entity`'s records landed in at the end of the last pass.
+    #[inline]
+    pub(crate) fn cell_of_entity(&self, entity: &Entity) -> Option<C> {
+        self.last_cell.get(entity).map(|&(_, c)| c)
+    }
+
     /// Apply the removals parked during the CONTROL phase (despawns are
     /// invisible to the change query — module docs of the rooms).
     pub(crate) fn apply_removals(&mut self) {
-        for (entity, wire, cell) in std::mem::take(&mut self.pending_removals) {
+        for (entity, member) in std::mem::take(&mut self.pending_removals) {
+            if let Some((wire, cell)) = self.last_cell.remove(&entity) {
+                self.record_exit(cell, wire, member);
+            }
+        }
+    }
+
+    /// The despawns (and broadcast-marker removals) nobody parked — game
+    /// code despawning an NPC, a bullet expiring — read from the world's
+    /// removed-component buffers (§8.2: without this they stayed in the
+    /// buckets as ghosts every later packet re-carried). Runs after
+    /// [`Self::apply_removals`] (a parked removal has left `last_cell`,
+    /// so it is not counted twice) and BEFORE the tick's change-window
+    /// close, which empties the buffers (§4.4 — the kit is the single
+    /// caller of `World::clear_trackers`, once per tick, so every
+    /// despawn since the previous close is in the buffer exactly once).
+    ///
+    /// An entity that lost the marker `M` but is still alive leaves the
+    /// view the same way; one whose marker came back within the tick
+    /// (still carrying the same wire id) was placed by the dirty pass and
+    /// stays.
+    pub(crate) fn sweep_removed<M: Component>(&mut self, world: &World) {
+        for entity in world.removed::<WireId>().chain(world.removed::<M>()) {
+            let Some(&(wire, cell)) = self.last_cell.get(&entity) else {
+                continue; // never bucketed, or already removed
+            };
+            let alive = world.get_entity(entity).ok();
+            let still_placed = alive.is_some_and(|e| {
+                e.contains::<M>() && e.get::<WireId>().is_some_and(|w| w.get() == wire)
+            });
+            if still_placed {
+                continue;
+            }
             self.last_cell.remove(&entity);
-            // A parked removal is always a member's (connections own the
-            // despawned entities); the join+leave-within-one-tick case
-            // never parked a removal, so there is no count to undo for it.
-            self.record_exit(cell, wire, /*member=*/ true);
+            let member = if alive.is_some() {
+                self.members.contains(&entity)
+            } else {
+                self.members.remove(&entity)
+            };
+            self.record_exit(cell, wire, member);
         }
     }
 

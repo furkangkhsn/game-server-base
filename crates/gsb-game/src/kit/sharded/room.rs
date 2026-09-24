@@ -1,7 +1,7 @@
 //! The whole-world sharded room: N shard actors over one map, every
 //! shard broadcasting its own slice to everyone in it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, With, Without, World};
 use gsb_core::id::PlayerId;
@@ -58,8 +58,19 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     pub(in crate::kit::sharded) park_ledger: HashMap<String, ParkEntry>,
     /// Entity → owning player (only entities owned by a player).
     pub(in crate::kit::sharded) entity_player: HashMap<Entity, PlayerId>,
-    /// Wire id → entity (every entity, for migrate-out despawn).
+    /// Wire id → entity: every entity this shard currently owns, kept in
+    /// sync on every mutation (join/leave/migrate-in/out/stamp, and a
+    /// despawn by game code — swept from the world's removed buffer,
+    /// §8.2). Its key set is the owned-wire set `own_wires` reports
+    /// (`own_wires` takes `&World`, it cannot query). Accuracy matters
+    /// for the core's duplicate filter: a stale entry for an entity that
+    /// just migrated out would hide the neighbor's (now-correct) record
+    /// of it, dropping it from this shard's view for a tick.
     pub(in crate::kit::sharded) wire_entity: HashMap<u64, Entity>,
+    /// Entity → wire id, the reverse of `wire_entity`: a despawned
+    /// entity's components are gone, so this is how the sweep finds the
+    /// wire id of an entity the game despawned.
+    pub(in crate::kit::sharded) entity_wire: HashMap<Entity, u64>,
     /// This shard's identity counter over its disjoint range
     /// (`index * SHARD_SERIAL_RANGE + n` — a range [`Minter`], the only
     /// construction path of [`WireId`]). BOTH identity spaces draw from
@@ -67,13 +78,6 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// range-exhaustion guard (`serial_used`) stays exact over
     /// everything the range backs.
     pub(in crate::kit::sharded) minter: Minter,
-    /// The wire ids this shard currently owns, kept in sync on every
-    /// mutation (join/leave/migrate-in/out). `own_wires` takes `&World`
-    /// (it cannot query), so it reads this set instead. Accuracy matters
-    /// for the core's duplicate filter: a stale entry for an entity that
-    /// just migrated out would hide the neighbor's (now-correct) record
-    /// of it, dropping it from this shard's view for a tick.
-    pub(in crate::kit::sharded) own_wires: HashSet<u64>,
     /// This shard's boundary records (module docs, "Visibility model"),
     /// rebuilt at the end of `update` (positions change in the game's
     /// systems). `collect_border` takes `&World` (it cannot query), so it
@@ -111,8 +115,8 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             park_ledger: HashMap::new(),
             entity_player: HashMap::new(),
             wire_entity: HashMap::new(),
+            entity_wire: HashMap::new(),
             minter: Minter::range(index as u64 * SHARD_SERIAL_RANGE),
-            own_wires: HashSet::new(),
             border_cache: Vec::new(),
             last: HashMap::new(),
             encoded: 0,
@@ -155,6 +159,18 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
     pub(in crate::kit::sharded) fn step(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::kit::common::systems(&mut self.game, world, ctx);
 
+        // Entities despawned since the last close that no hook of ours
+        // despawned (game code — an NPC dying; §8.2): forget their wire
+        // ids. The leave and migrate-out paths clean their own entries,
+        // so for them this finds nothing. Read before the tick's
+        // change-window close empties the buffer.
+        for entity in world.removed::<WireId>() {
+            if let Some(wire) = self.entity_wire.remove(&entity) {
+                self.wire_entity.remove(&wire);
+                self.entity_player.remove(&entity);
+            }
+        }
+
         // Orphan stamping, range-aware (the broadcast set stays
         // structural — "has the codec's marker" — like the other rooms):
         // entities with the marker but no `WireId` get the next serial
@@ -168,7 +184,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             let wire = self.minter.mint();
             world.entity_mut(entity).insert(wire);
             self.wire_entity.insert(wire.get(), entity);
-            self.own_wires.insert(wire.get());
+            self.entity_wire.insert(entity, wire.get());
         }
 
         // Rebuild the border cache (positions just changed in the game's

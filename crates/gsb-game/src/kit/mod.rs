@@ -35,6 +35,8 @@ pub(crate) mod seam;
 pub mod sharded;
 pub mod space;
 pub mod team;
+#[cfg(test)]
+mod testing;
 
 /// The demo rooms' default disconnect-park grace (RECONNECT §3): how
 /// long a dropped transport's hero stays parked before its hold ends

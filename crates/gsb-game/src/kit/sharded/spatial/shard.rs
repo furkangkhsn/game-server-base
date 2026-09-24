@@ -73,10 +73,11 @@ where
         // (for the parked removal — the seam cell's delta carries the
         // exit) and its stable player (for the baseline drop).
         if let Some(entity) = self.inner.wire_entity.get(&wire).copied() {
-            self.book.members.remove(&entity);
-            let cell = self.book.last_cell.get(&entity).copied();
-            if let Some(cell) = cell {
-                self.book.pending_removals.push((entity, wire, cell));
+            // A migrating NPC was never a member: the flag keeps the
+            // cell's member arithmetic exact.
+            let member = self.book.members.remove(&entity);
+            if self.book.last_cell.contains_key(&entity) {
+                self.book.pending_removals.push((entity, member));
             }
             if let Some(player) = self.inner.entity_player.get(&entity).copied() {
                 self.conn_view.remove(&player);

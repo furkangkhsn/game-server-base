@@ -112,7 +112,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         );
         world.entity_mut(entity).insert(self.minter.arrival(wire));
         self.wire_entity.insert(wire, entity);
-        self.own_wires.insert(wire);
+        self.entity_wire.insert(entity, wire);
         if let Some(player) = player {
             // The session's channel halves were moved with the message
             // (the core re-registers its row and binding); here the logic
@@ -144,7 +144,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             if let Some(player) = self.entity_player.remove(&entity) {
                 self.player_entity.remove(&player);
             }
-            self.own_wires.remove(&wire);
+            self.entity_wire.remove(&entity);
             // §14.2 symmetry: the park record left with the entity (it
             // was attached to the migration state); drop it here so the
             // old shard's ledger never answers for a player it no longer
@@ -164,8 +164,9 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
     }
 
     fn own_wires(&self, _world: &World) -> Vec<u64> {
-        // The owned-wire set (kept in sync on every mutation; see the
-        // field docs for why it cannot be a stale cache).
-        self.own_wires.iter().copied().collect()
+        // The owned-wire set: `wire_entity`'s keys (kept in sync on every
+        // mutation; see the field docs for why it cannot be a stale
+        // cache).
+        self.wire_entity.keys().copied().collect()
     }
 }

@@ -12,7 +12,6 @@ use gsb_core::shard::BorderRecord;
 
 use crate::kit::common::{put_entity_records, write_full_header};
 use crate::kit::game::{ShardGame, Wire};
-use crate::kit::identity::WireId;
 use crate::kit::sharded::room::*;
 use crate::kit::space::Partition;
 
@@ -109,7 +108,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         self.player_entity.insert(player, entity);
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
-        self.own_wires.insert(wire);
+        self.entity_wire.insert(entity, wire);
         self.input.begin(player);
         Admission {
             player,
@@ -121,9 +120,8 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         if let Some(entity) = self.player_entity.remove(&player)
             && world.get_entity(entity).is_ok()
         {
-            if let Some(wire) = world.get::<WireId>(entity).copied() {
-                self.wire_entity.remove(&wire.get());
-                self.own_wires.remove(&wire.get());
+            if let Some(wire) = self.entity_wire.remove(&entity) {
+                self.wire_entity.remove(&wire);
             }
             self.entity_player.remove(&entity);
             self.input.end(player);
