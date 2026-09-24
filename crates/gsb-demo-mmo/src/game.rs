@@ -1,7 +1,8 @@
 //! [`MmoGame`] — the MMO's kit hooks (KIT-ARCHITECTURE §4.3/§4.6):
 //! [`Game`] (spawn a character at its saved position, `MoveTo` /
 //! `Attack` / `Travel` input, the camps + movement + lifecycle systems,
-//! the logout bot) and [`ShardGame`] (`MmoMig`, `capture`, `restore`).
+//! the optional logout bot) and [`ShardGame`] (`MmoMig`, `capture`,
+//! `restore`).
 //!
 //! One instance per SHARD: a shard's game spawns mobs only from the
 //! camps on its own ground ([`Realm::spawns_of`]); every shard knows the
@@ -11,11 +12,13 @@
 //! **Disconnects (the kit's park machinery).** A dropped session's
 //! character is PARKED for the room's grace (it stays in the world, keeps
 //! its wire id and slot; a resume within the grace reclaims it); when the
-//! grace runs out the kit hands it to the bot — [`Game::bot_actions`]
-//! walks it to the nearest waystone, a safe spot, where it stays. An
-//! MMO's usual "logout timer" (hold, then RELEASE the slot) is not
-//! expressible: the kit's park policy always ends a hold in AI handover
-//! (a design finding — `docs/KIT-ARCHITECTURE.md` §10, "Faz 4 sonucu").
+//! grace runs out the logout completes: the kit releases the slot and the
+//! character leaves the world — the MMO's usual logout timer
+//! ([`crate::mmo_shard`]'s policy; before the kit's Phase 5 every hold
+//! ended in AI handover — `docs/KIT-ARCHITECTURE.md` §10, F4). A room
+//! built to end the hold in AI handover instead gets the logout bot:
+//! [`Game::bot_actions`] walks the character to the nearest waystone, a
+//! safe spot, where it stays.
 
 use std::collections::HashMap;
 
@@ -89,7 +92,8 @@ impl Game for MmoGame {
             .id()
     }
 
-    /// The logout bot: a character whose disconnect grace ran out walks
+    /// The logout bot (a room whose disconnect policy ends in AI handover
+    /// — not the MMO's default): a character whose disconnect grace ran out walks
     /// to the nearest waystone through the ordinary input path (an
     /// unnumbered `MoveTo`, decoded by [`Game::ingest`] like a client's).
     /// Sent only while it is not already walking there.

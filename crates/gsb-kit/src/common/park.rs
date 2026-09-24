@@ -9,21 +9,37 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::{Detach, ExpireTo, ResumeFound};
 
 use crate::common::*;
+use crate::game::Game;
 
-/// The kit rooms' disconnect-park knob. `grace = 0` disables parking
-/// entirely ([`Detach::Despawn`] — the byte-for-byte pre-reconnect
-/// behavior), so an operator can turn the feature off without losing the
-/// code path. The default lives at [`crate::DEFAULT_DISCONNECT_GRACE`]
-/// (the one public constant the server config defaults from).
+#[cfg(test)]
+mod tests;
+
+/// The kit rooms' disconnect-park policy: how long a dropped
+/// transport's entity is held, and where the hold ends.
+///
+/// - `grace = Some(0)` disables parking entirely ([`Detach::Despawn`] —
+///   the byte-for-byte pre-reconnect behavior), so an operator can turn
+///   the feature off without losing the code path;
+/// - `grace = Some(d)` holds for at most `d` (the core's own deadline);
+/// - `grace = None` holds until the game's
+///   [`Game::may_release`](crate::game::Game::may_release) veto clears
+///   (combat-held — the core asks every tick);
+///
+/// and an ended hold goes `to` the bot ([`ExpireTo::AiHandover`], the
+/// default) or releases the slot ([`ExpireTo::Despawn`]). The default
+/// grace lives at [`crate::DEFAULT_DISCONNECT_GRACE`] (the one public
+/// constant the server config defaults from).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ParkPolicy {
-    pub grace: Duration,
+    pub grace: Option<Duration>,
+    pub to: ExpireTo,
 }
 
 impl Default for ParkPolicy {
     fn default() -> Self {
         Self {
-            grace: crate::DEFAULT_DISCONNECT_GRACE,
+            grace: Some(crate::DEFAULT_DISCONNECT_GRACE),
+            to: ExpireTo::AiHandover,
         }
     }
 }
@@ -51,8 +67,8 @@ pub(crate) struct ParkEntry {
 }
 
 /// The policy answer to a transport death (the `on_disconnect` hook
-/// body shared by every single-world kit room): park the entity for
-/// the configured grace toward AI handover, recording the ledger entry.
+/// body shared by every kit room): park the entity for the configured
+/// grace toward the configured end, recording the ledger entry.
 /// A connection we do not know (stale detach) cannot park anything.
 ///
 /// Visibility note (§3.2): nothing else changes — the entity keeps its
@@ -69,7 +85,7 @@ pub(crate) fn park_on_disconnect(
     policy: &ParkPolicy,
     ledger: &mut HashMap<String, ParkEntry>,
 ) -> Detach {
-    if policy.grace.is_zero() || identity.is_empty() {
+    if policy.grace.is_some_and(|g| g.is_zero()) || identity.is_empty() {
         // Disabled (or nothing to resume with): the old semantics.
         return Detach::Despawn;
     }
@@ -84,8 +100,8 @@ pub(crate) fn park_on_disconnect(
                 },
             );
             Detach::Hold {
-                grace: Some(policy.grace),
-                to: ExpireTo::AiHandover,
+                grace: policy.grace,
+                to: policy.to,
             }
         }
         // Stale detach (no entity of ours): fall through to despawn,
@@ -111,6 +127,21 @@ pub(crate) fn park_on_expire(
                 e.bot = true;
             }
         }
+    }
+}
+
+/// The `may_release` hook body: the game's veto on ending an untimed
+/// (combat-held) hold, asked about the parked player's entity. A player
+/// without an entity here has nothing to hold: released.
+pub(crate) fn park_may_release<G: Game>(
+    game: &mut G,
+    player_entity: &HashMap<PlayerId, Entity>,
+    world: &mut World,
+    player: PlayerId,
+) -> bool {
+    match player_entity.get(&player) {
+        Some(&entity) => game.may_release(world, entity),
+        None => true,
     }
 }
 

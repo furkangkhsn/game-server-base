@@ -93,6 +93,19 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
         self
     }
 
+    /// Set the whole disconnect-park policy on the wrapped shard (see
+    /// [`crate::room::OpenRoom::with_disconnect_policy`]; every shard of a
+    /// room should carry the same policy).
+    #[must_use]
+    pub fn with_disconnect_policy(
+        mut self,
+        grace: Option<std::time::Duration>,
+        to: gsb_core::room::ExpireTo,
+    ) -> Self {
+        self.inner = self.inner.with_disconnect_policy(grace, to);
+        self
+    }
+
     /// The game this shard runs.
     pub fn game(&self) -> &G {
         self.inner.game()

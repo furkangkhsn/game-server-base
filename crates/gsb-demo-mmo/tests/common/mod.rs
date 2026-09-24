@@ -22,12 +22,12 @@ use bevy_ecs::prelude::World;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::{MetricsEvent, RoomSample};
-use gsb_core::room::{Action, RoomConfig};
+use gsb_core::room::{Action, ExpireTo, RoomConfig};
 use gsb_core::shard::{ShardActor, ShardLogic, ShardMsg};
 use gsb_core::ticker::TickInfo;
 use gsb_demo_mmo::codec::MmoWire;
 use gsb_demo_mmo::world::{SHARDS, home_shard};
-use gsb_demo_mmo::{MmoMig, Pos3, Realm, mmo_shard};
+use gsb_demo_mmo::{MmoMig, MmoShard, Pos3, Realm, mmo_shard};
 use gsb_kit::sharded::KitMig;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -56,8 +56,21 @@ impl Mmo {
         Self::with(realm, gsb_demo_mmo::LOGOUT_GRACE, 2.0)
     }
 
-    /// The room over `realm` with disconnect `grace` and `keepalive_hz`.
+    /// The room over `realm` with disconnect `grace` (ending the MMO's
+    /// way: the slot is released) and `keepalive_hz`.
     pub fn with(realm: &Realm, grace: Duration, keepalive_hz: f64) -> Self {
+        Self::build(realm, keepalive_hz, |s| s.with_disconnect_grace(grace))
+    }
+
+    /// The room over `realm` with a disconnect hold of `grace` that ends
+    /// toward `to`, and `keepalive_hz`.
+    pub fn with_policy(realm: &Realm, grace: Duration, to: ExpireTo, keepalive_hz: f64) -> Self {
+        Self::build(realm, keepalive_hz, |s| {
+            s.with_disconnect_policy(Some(grace), to)
+        })
+    }
+
+    fn build(realm: &Realm, keepalive_hz: f64, policy: impl Fn(MmoShard) -> MmoShard) -> Self {
         let config = RoomConfig {
             id: RoomId(7),
             tick_hz: TICK_HZ,
@@ -76,7 +89,7 @@ impl Mmo {
         }
         let mut metrics = Vec::new();
         for (i, rx) in rxs.into_iter().enumerate() {
-            let logic = mmo_shard(i, realm).with_disconnect_grace(grace);
+            let logic = policy(mmo_shard(i, realm));
             let links = (0..SHARDS)
                 .map(|j| {
                     let near = logic.neighbors().contains(&j);

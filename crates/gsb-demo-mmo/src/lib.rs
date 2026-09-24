@@ -23,8 +23,8 @@
 //! - [`world`] — the map, the shard grid and the AOI grid parameters;
 //! - [`realm`] — saved characters and the mob spawn table;
 //! - [`game`] — its `Game` and `ShardGame` hooks (spawn, input, camps,
-//!   mob routes and lifetimes, player movement, the logout bot, the
-//!   migrating state [`MmoMig`]);
+//!   mob routes and lifetimes, player movement, the optional logout bot,
+//!   the migrating state [`MmoMig`]);
 //! - [`mmo`] + [`op`] — its wire (`proto/mmo.proto`) and opcodes.
 //!
 //! Everything around the hooks — wire identity, AOI grouping, the
@@ -51,6 +51,7 @@ pub use realm::{MobSpawn, Realm};
 
 use std::time::Duration;
 
+use gsb_core::room::ExpireTo;
 use gsb_kit::sharded::{ShardedRoom, ShardedSpatialRoom};
 use gsb_kit::space::{Grid2, GridPartition2};
 use gsb_protocol::MessageTable;
@@ -68,18 +69,24 @@ pub mod mmo {
 /// running [`MmoGame`] over the ground-plane shard grid and AOI grid.
 pub type MmoShard = ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>;
 
-/// How long a disconnected character stays parked before the logout bot
-/// takes it (the room's disconnect grace).
+/// The logout timer: how long a disconnected character stays in the
+/// world (parked, slot held, resumable) before the logout releases its
+/// slot (the room's disconnect grace).
 pub const LOGOUT_GRACE: Duration = Duration::from_secs(20);
 
 /// Shard `index` of the MMO room over `realm` (every shard of the room is
-/// built from the same realm), with the MMO's [`LOGOUT_GRACE`]. (A free
-/// function, not a constructor: the room type is the kit's, so an
-/// inherent impl here is E0116.)
+/// built from the same realm), with the MMO's logout timer: a hold of
+/// [`LOGOUT_GRACE`] that ends by RELEASING the slot
+/// ([`ExpireTo::Despawn`]). An operator who prefers the logout bot (the
+/// character walks to the nearest waystone and stays, slot held) rebuilds
+/// it with `.with_disconnect_policy(Some(grace), ExpireTo::AiHandover)`.
+/// (A free function, not a constructor: the room type is the kit's, so
+/// an inherent impl here is E0116.)
 #[must_use]
 pub fn mmo_shard(index: usize, realm: &Realm) -> MmoShard {
     let shard = ShardedRoom::with_game(MmoGame::for_shard(index, realm), world::partition(), index);
-    ShardedSpatialRoom::with_shard(shard, world::aoi_grid()).with_disconnect_grace(LOGOUT_GRACE)
+    ShardedSpatialRoom::with_shard(shard, world::aoi_grid())
+        .with_disconnect_policy(Some(LOGOUT_GRACE), ExpireTo::Despawn)
 }
 
 /// Register the MMO's wire messages with `table` (the server builds one

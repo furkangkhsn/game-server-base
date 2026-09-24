@@ -9,7 +9,8 @@ use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 
 use crate::common::InputSeq;
-use crate::game::{Game, ShardGame};
+use crate::game::{Game, ShardGame, TeamGame};
+use crate::team::Team;
 
 /// Marks an entity the [`Culling`] game despawns in its next systems
 /// run.
@@ -53,6 +54,60 @@ impl<G: Game> Game for Culling<G> {
 }
 
 impl<G: ShardGame> ShardGame for Culling<G> {
+    type Mig = G::Mig;
+
+    fn capture(&self, world: &World, entity: Entity) -> G::Mig {
+        self.0.capture(world, entity)
+    }
+    fn restore(&mut self, world: &mut World, mig: G::Mig) -> Entity {
+        self.0.restore(world, mig)
+    }
+}
+
+/// Marks an entity the [`Vetoing`] game refuses to release from a
+/// disconnect hold (it is "in combat").
+#[derive(Debug, Clone, Copy, Component)]
+pub(crate) struct InCombat;
+
+/// A game whose [`Game::may_release`] vetoes ending an untimed hold
+/// while the parked entity carries [`InCombat`] — the combat veto of
+/// RECONNECT §14.4.
+pub(crate) struct Vetoing<G>(pub G);
+
+impl<G: Game> Game for Vetoing<G> {
+    type Codec = G::Codec;
+
+    fn codec(&self) -> &Self::Codec {
+        self.0.codec()
+    }
+    fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
+        self.0.spawn_player(world, conn)
+    }
+    fn ingest(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        players: &HashMap<PlayerId, Entity>,
+        seq: &mut InputSeq,
+    ) {
+        self.0.ingest(world, ctx, actions, players, seq);
+    }
+    fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
+        self.0.systems(world, ctx);
+    }
+    fn may_release(&mut self, world: &mut World, entity: Entity) -> bool {
+        !world.entity(entity).contains::<InCombat>()
+    }
+}
+
+impl<G: TeamGame> TeamGame for Vetoing<G> {
+    fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team {
+        self.0.team_of(world, conn, entity)
+    }
+}
+
+impl<G: ShardGame> ShardGame for Vetoing<G> {
     type Mig = G::Mig;
 
     fn capture(&self, world: &World, entity: Entity) -> G::Mig {

@@ -144,6 +144,10 @@ where
         self.inner.on_disconnect(world, player, identity)
     }
 
+    fn may_release(&mut self, world: &mut World, player: PlayerId) -> bool {
+        self.inner.may_release(world, player)
+    }
+
     fn on_detach_expired(
         &mut self,
         world: &mut World,

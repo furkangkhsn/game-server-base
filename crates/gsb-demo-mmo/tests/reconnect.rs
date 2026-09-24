@@ -5,20 +5,21 @@
 //! 1. a dropped session's character is PARKED: it stays in the world
 //!    (others keep seeing it), holds its slot, and a resume reclaims it
 //!    with the same wire id and working numbered input;
-//! 2. when the grace runs out the kit hands it to the MMO's logout bot:
-//!    it stays alive, holds its slot, and walks to the nearest waystone;
-//! 3. a zero grace releases the slot at once (no park at all).
-//!
-//! What the kit does NOT let the MMO express — a hold whose expiry
-//! RELEASES the slot (the usual MMO logout timer) — is locked in case 2
-//! and recorded as a design finding (KIT-ARCHITECTURE §10, "Faz 4
-//! sonucu", F4).
+//! 2. when the grace runs out the logout completes — the MMO's logout
+//!    timer: the slot is released, the character leaves every view, and
+//!    nothing is left to resume (Phase 4 could not express this: the
+//!    kit ended every hold in AI handover — KIT-ARCHITECTURE §10, F4);
+//! 3. a room built to end the hold in AI handover instead hands the
+//!    character to the MMO's logout bot: it stays alive, holds its slot,
+//!    and walks to the nearest waystone;
+//! 4. a zero grace releases the slot at once (no park at all).
 
 mod common;
 
 use std::time::Duration;
 
 use common::Mmo;
+use gsb_core::room::ExpireTo;
 use gsb_demo_mmo::{Pos3, Realm};
 
 fn realm() -> Realm {
@@ -65,7 +66,7 @@ async fn a_parked_character_stays_and_resumes_with_its_wire_id() {
 }
 
 #[tokio::test]
-async fn grace_expiry_hands_the_character_to_the_logout_bot() {
+async fn grace_expiry_logs_the_character_out() {
     let mut room = Mmo::with(&realm(), Duration::from_millis(100), 2.0);
     let p = room.join(1, "ann", &mut []).await;
     let mut cs = vec![room.join(2, "obs", &mut []).await];
@@ -75,9 +76,32 @@ async fn grace_expiry_hands_the_character_to_the_logout_bot() {
     room.steps(&mut cs, 3).await;
 
     let s = room.sample(0);
+    assert_eq!(
+        (s.detach_expired_despawn, s.detach_expired_ai),
+        (1, 0),
+        "the hold ended in a logout, not in AI handover"
+    );
+    assert_eq!((s.members, s.detached), (1, 0), "the slot is released");
+    assert!(cs[0].get(p.id).is_none(), "the character left the world");
+    assert!(
+        room.resume(9, 2, "ann", &mut cs).await.is_none(),
+        "nothing is left to resume"
+    );
+}
+
+#[tokio::test]
+async fn an_ai_handover_policy_hands_the_character_to_the_logout_bot() {
+    let grace = Duration::from_millis(100);
+    let mut room = Mmo::with_policy(&realm(), grace, ExpireTo::AiHandover, 2.0);
+    let p = room.join(1, "ann", &mut []).await;
+    let mut cs = vec![room.join(2, "obs", &mut []).await];
+    room.steps(&mut cs, 3).await;
+    room.detach(&p, "ann", &mut cs).await;
+    tokio::time::sleep(Duration::from_millis(250)).await; // the grace is wall-clock
+    room.steps(&mut cs, 3).await;
+
+    let s = room.sample(0);
     assert_eq!(s.detach_expired_ai, 1, "the hold ended in AI handover");
-    // F4: the kit's park policy ends EVERY hold in AI handover — the MMO
-    // cannot make the expiry release the slot.
     assert_eq!(
         (s.detach_expired_despawn, s.members),
         (0, 2),

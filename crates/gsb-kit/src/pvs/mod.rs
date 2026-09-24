@@ -151,7 +151,21 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
     /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
+        self.park.grace = Some(grace);
+        self
+    }
+
+    /// Set the whole disconnect-park policy (see
+    /// [`crate::room::OpenRoom::with_disconnect_policy`]; RECONNECT
+    /// §3/§14.4).
+    #[must_use]
+    pub fn with_disconnect_policy(
+        mut self,
+        grace: Option<std::time::Duration>,
+        to: gsb_core::room::ExpireTo,
+    ) -> Self {
         self.park.grace = grace;
+        self.park.to = to;
         self
     }
 

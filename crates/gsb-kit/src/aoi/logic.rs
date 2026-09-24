@@ -234,6 +234,10 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         )
     }
 
+    fn may_release(&mut self, world: &mut World, player: PlayerId) -> bool {
+        crate::common::park_may_release(&mut self.game, &self.player_entity, world, player)
+    }
+
     fn on_detach_expired(
         &mut self,
         _world: &mut World,
