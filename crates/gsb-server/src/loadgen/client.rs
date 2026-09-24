@@ -87,7 +87,7 @@ pub(crate) struct ClientReport {
 }
 
 /// The `spread` profile's deterministic home for client `id`: the SAME
-/// lattice the server's `gsb_game::room::spawn_pos` uses (same hash, same
+/// lattice the server's `gsb_demo::room::spawn_pos` uses (same hash, same
 /// scaling), so spawn points and homes live on the same map. The
 /// *distribution* is what the profile contributes (uniform over the map,
 /// statistically steady from tick 1 — see `Profile::Spread`).

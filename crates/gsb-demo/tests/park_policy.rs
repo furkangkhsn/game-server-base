@@ -15,7 +15,7 @@
 //! Harness: the manual-ticker idiom of `gsb-core/tests/reconnect.rs` —
 //! the metrics channel carries one sample per step, so a recv is the
 //! step-completed barrier. Unlike those core-level tests, the world here
-//! is a real bevy World driven by [`gsb_game::room::OpenRoom`] (the
+//! is a real bevy World driven by [`gsb_demo::room::OpenRoom`] (the
 //! actual game), so these are game-band locks: the policy answers, the
 //! ledger behavior, and the bot's synthesized input riding the ordinary
 //! ingest path.
@@ -34,8 +34,8 @@ use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::metrics::{MetricsEvent, RoomSample};
 use gsb_core::room::{Action, Detach, ExpireTo, GameLogic, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::game::{MoveTo, WorldSnapshot};
-use gsb_game::op;
+use gsb_demo::game::{MoveTo, WorldSnapshot};
+use gsb_demo::op;
 use prost::Message;
 use tokio::sync::{mpsc, oneshot};
 
@@ -62,7 +62,7 @@ impl H {
             metrics_cadence_hz: 60.0,
             ..Default::default()
         };
-        let logic = gsb_game::room::OpenRoom::new().with_disconnect_grace(grace);
+        let logic = gsb_demo::room::OpenRoom::new().with_disconnect_grace(grace);
         let actor = RoomActor::new(
             config,
             bevy_ecs::world::World::new(),
@@ -447,8 +447,8 @@ mod sharded_park {
     use super::*;
     use bevy_ecs::prelude::Entity;
     use gsb_core::shard::ShardLogic;
-    use gsb_game::components::Position;
-    use gsb_game::sharded::ShardedRoom;
+    use gsb_demo::components::Position;
+    use gsb_demo::sharded::ShardedRoom;
 
     #[test]
     fn park_record_travels_inside_the_migration_state() {
@@ -478,7 +478,7 @@ mod sharded_park {
         // The player's entity migrates WHILE detached (its pending move
         // target kept it walking): force it just across the seam into
         // shard 1's region (grid 2×2 ⇒ shard 1 = x∈[0,50], y∈[-50,0]).
-        let mut q = w0.query::<(Entity, &gsb_game::components::WireId)>();
+        let mut q = w0.query::<(Entity, &gsb_demo::components::WireId)>();
         let (e, _wid) = q.iter(&w0).next().expect("hero entity");
         drop(q);
         w0.entity_mut(e).insert(Position { x: 1.0, y: -10.0 });
@@ -541,8 +541,8 @@ mod sharded_park {
             gsb_core::room::ResumeFound::Held(_)
         ));
 
-        fn targets(w: &mut bevy_ecs::prelude::World) -> Vec<gsb_game::components::MoveTarget> {
-            let mut q = w.query::<&gsb_game::components::MoveTarget>();
+        fn targets(w: &mut bevy_ecs::prelude::World) -> Vec<gsb_demo::components::MoveTarget> {
+            let mut q = w.query::<&gsb_demo::components::MoveTarget>();
             q.iter(w).copied().collect()
         }
         assert!(targets(&mut w).is_empty(), "nothing drives the hero yet");

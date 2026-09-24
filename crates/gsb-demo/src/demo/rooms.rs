@@ -1,7 +1,7 @@
 //! The demo's rooms: the kit's generic strategy rooms instantiated with
 //! [`DemoGame`], plus the constructors every consumer (`gsb-server`'s
 //! factories, the load generator, the tests) has always called. The
-//! crate root's compatibility paths (`gsb_game::room::OpenRoom`, …) are
+//! crate root's compatibility paths (`gsb_demo::room::OpenRoom`, …) are
 //! type aliases onto these instantiations.
 
 use crate::demo::components::Position;

@@ -276,7 +276,7 @@ pub struct Config {
     /// [`Topology::Sharded`] — via legacy `visibility = "sharded"` OR an
     /// explicit `topology = "sharded"`). The map is divided
     /// into a near-square grid of `rows × cols` shards (`rows * cols =
-    /// shard_count`, see [`gsb_game::sharded::grid_shape`]). Must be
+    /// shard_count`, see [`gsb_demo::sharded::grid_shape`]). Must be
     /// 1..=256 (the grid topology); validated at startup. Default 4 (2×2).
     pub shard_count: u32,
     /// The transport (see [`TransportKind`]).
@@ -329,12 +329,12 @@ pub struct Config {
     pub listeners: Option<Vec<ListenerEntry>>,
     /// World units per AOI cell edge (used when the resolved visibility
     /// axis is `Spatial` — the single-world AoiRoom AND the sharded ×
-    /// spatial composite's per-shard cells). See `gsb_game::aoi` for the
+    /// spatial composite's per-shard cells). See `gsb_demo::aoi` for the
     /// `max_snapshot_bytes` / density relation and the measured
     /// break-even.
     pub aoi_cell_size: f32,
     /// World units an enemy must be within to be visible to a team (used
-    /// only when [`Self::visibility`] = `Team`). See `gsb_game::team` for
+    /// only when [`Self::visibility`] = `Team`). See `gsb_demo::team` for
     /// the vision source model.
     pub team_vision_radius: f32,
     /// Half-size of the square map entities spawn on (all four demo rooms;
@@ -344,7 +344,7 @@ pub struct Config {
     /// the clients' `--spawn-half-size`, so spawn points and targets live
     /// on the same map and the run is statistically steady from tick 1.
     /// The PVS strategy's *visibility map* stays its hand-authored 100×100
-    /// sectors regardless (see `gsb_game::pvs::SectorRoom::spawn_half`).
+    /// sectors regardless (see `gsb_demo::pvs::SectorRoom::spawn_half`).
     pub spawn_half_size: f32,
     /// The demo rooms' disconnect-park grace, in seconds (`config.example.toml`:
     /// `disconnect_grace_secs`; RECONNECT §3): how long a dropped
@@ -416,9 +416,9 @@ impl Default for Config {
             tls_key: String::new(),
             listeners: None,
             aoi_cell_size: 20.0,
-            team_vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
-            spawn_half_size: gsb_game::room::DEFAULT_SPAWN_HALF,
-            disconnect_grace_secs: gsb_game::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
+            team_vision_radius: gsb_demo::team::DEFAULT_VISION_RADIUS,
+            spawn_half_size: gsb_demo::room::DEFAULT_SPAWN_HALF,
+            disconnect_grace_secs: gsb_demo::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
             http_listen: String::new(),
         }
     }

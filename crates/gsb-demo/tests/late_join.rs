@@ -19,12 +19,12 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::game::WorldSnapshot;
+use gsb_demo::game::WorldSnapshot;
 use gsb_protocol::FrameBody;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use gsb_game::op;
+use gsb_demo::op;
 
 const WAIT: Duration = Duration::from_secs(5);
 /// Nominal period for synthetic timestamps (the room default is 30 Hz).
@@ -76,7 +76,7 @@ impl TestRoom {
         let actor = RoomActor::new(
             config,
             World::new(),
-            Box::new(gsb_game::room::OpenRoom::new()),
+            Box::new(gsb_demo::room::OpenRoom::new()),
             tick_rx,
             control_rx,
             1, // room rate == global rate in these tests
@@ -189,7 +189,7 @@ async fn late_joiner_receives_full_world_snapshot() {
     // So feed ticks and take a batch *whenever one arrives* — not on every
     // tick — until B sees the movement.
 
-    let move_to = gsb_game::game::MoveTo {
+    let move_to = gsb_demo::game::MoveTo {
         x: a_start.x + 100,
         y: a_start.y + 100,
         seq: 0,
@@ -282,7 +282,7 @@ async fn stale_leave_cannot_kill_rejoined_entity() {
     // sub-integer movement ticks emit nothing — feed ticks until the next
     // snapshot arrives (the integer position changes within a few ticks at
     // 10 units/s, 30 Hz).
-    let move_to = gsb_game::game::MoveTo {
+    let move_to = gsb_demo::game::MoveTo {
         x: -20,
         y: 20,
         seq: 0,

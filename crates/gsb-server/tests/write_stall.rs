@@ -61,7 +61,7 @@ fn cfg(pki: &common::TlsPki) -> gsb_server::Config {
         idle_timeout_secs: 0.0,
         write_stall_secs: STALL_SECS,
         // No parking: the disconnect policy REFUSES to hold the entity
-        // (`gsb-game`'s `park_on_disconnect` returns no-park at zero
+        // (`gsb-demo`'s `park_on_disconnect` returns no-park at zero
         // grace), so the registry row is released outright instead of
         // waiting out a grace window. That makes `conns` the direct
         // evidence the row is gone.
@@ -225,8 +225,8 @@ async fn a_peer_that_stops_reading_loses_its_session() {
             };
             send(
                 &mut send_a,
-                gsb_game::op::MOVE_TO,
-                gsb_game::game::MoveTo { x, y, seq }.encode_to_vec(),
+                gsb_demo::op::MOVE_TO,
+                gsb_demo::game::MoveTo { x, y, seq }.encode_to_vec(),
             )
             .await;
             seq += 1;

@@ -111,7 +111,7 @@ async fn start_inner(
     let selection = cfg.resolve_selection()?;
 
     // The sharded topology is a grid of 1..=256 shards (see
-    // `gsb_game::sharded::grid_shape`); a count outside that range would
+    // `gsb_demo::sharded::grid_shape`); a count outside that range would
     // build a degenerate (or impossible) grid, so refuse to start. Gated
     // on the RESOLVED topology: both the legacy spelling AND an explicit
     // `topology = "sharded"` take this path.
@@ -206,8 +206,8 @@ async fn start_inner(
             // One economy service per server (the RPC pattern's
             // external-I/O reference adapter; shared by clone with every
             // demo room the factory builds).
-            let economy = gsb_game::economy::EconomyService::spawn(
-                gsb_game::economy::EconomyService::default_latency(),
+            let economy = gsb_demo::economy::EconomyService::spawn(
+                gsb_demo::economy::EconomyService::default_latency(),
             );
             let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
@@ -282,8 +282,8 @@ async fn start_inner(
             // Faz 3 promotion: the sharded path runs the full RPC
             // machinery, so `ECONOMY` requests delegate exactly like the
             // single-room demo's).
-            let economy = gsb_game::economy::EconomyService::spawn(
-                gsb_game::economy::EconomyService::default_latency(),
+            let economy = gsb_demo::economy::EconomyService::spawn(
+                gsb_demo::economy::EconomyService::default_latency(),
             );
             tokio::spawn(
                 Registry::new(
@@ -312,8 +312,8 @@ async fn start_inner(
             let disconnect_grace = grace_of(&cfg);
             // One economy service per server, shared with the shards —
             // identical wiring to the whole-shard grid above.
-            let economy = gsb_game::economy::EconomyService::spawn(
-                gsb_game::economy::EconomyService::default_latency(),
+            let economy = gsb_demo::economy::EconomyService::spawn(
+                gsb_demo::economy::EconomyService::default_latency(),
             );
             tokio::spawn(
                 Registry::new(

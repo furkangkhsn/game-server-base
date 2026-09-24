@@ -313,14 +313,14 @@ async fn join_and_observe_movement(kind: Kind) {
                 assert!(my_entity != 0, "entity id must be non-zero");
                 // Force movement so the room re-emits a snapshot.
                 if !move_sent {
-                    let move_to = gsb_game::game::MoveTo {
+                    let move_to = gsb_demo::game::MoveTo {
                         x: 10,
                         y: 10,
                         seq: 0,
                     }
                     .encode_to_vec();
                     client
-                        .write_frame(gsb_game::op::MOVE_TO, &move_to)
+                        .write_frame(gsb_demo::op::MOVE_TO, &move_to)
                         .await
                         .unwrap();
                     move_sent = true;
@@ -330,9 +330,9 @@ async fn join_and_observe_movement(kind: Kind) {
                 let m: Error = Error::decode(&payload[..]).unwrap();
                 panic!("server error: code={} message={}", m.code, m.message);
             }
-            gsb_game::op::WORLD_SNAPSHOT => {
-                let m: gsb_game::game::WorldSnapshot =
-                    gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            gsb_demo::op::WORLD_SNAPSHOT => {
+                let m: gsb_demo::game::WorldSnapshot =
+                    gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 assert!(m.sequence > 0, "snapshot sequence must be monotonic (> 0)");
                 let Some(rec) = m.entities.iter().find(|e| e.entity == my_entity) else {
                     continue; // snapshot that arrived before the join result
@@ -751,7 +751,7 @@ async fn flooder_drops_attributed(kind: Kind) {
     // socket), so the flood interleaves NON-BLOCKING read-drains; the
     // flood frames travel the lossy game band, so retransmit state never
     // gets in the way.
-    let move_payload = gsb_game::game::MoveTo { x: 1, y: 1, seq: 0 }.encode_to_vec();
+    let move_payload = gsb_demo::game::MoveTo { x: 1, y: 1, seq: 0 }.encode_to_vec();
     match client {
         Client::Tcp(stream) => {
             let (mut r, mut w) = stream.into_split();
@@ -759,7 +759,7 @@ async fn flooder_drops_attributed(kind: Kind) {
                 let body = 2 + move_payload.len();
                 let mut out = Vec::with_capacity(4 + body);
                 out.extend_from_slice(&(body as u32).to_le_bytes());
-                out.extend_from_slice(&gsb_game::op::MOVE_TO.to_le_bytes());
+                out.extend_from_slice(&gsb_demo::op::MOVE_TO.to_le_bytes());
                 out.extend_from_slice(&move_payload);
                 out
             };
@@ -782,7 +782,7 @@ async fn flooder_drops_attributed(kind: Kind) {
                 let body = 2 + move_payload.len();
                 let mut out = Vec::with_capacity(4 + body);
                 out.extend_from_slice(&(body as u32).to_le_bytes());
-                out.extend_from_slice(&gsb_game::op::MOVE_TO.to_le_bytes());
+                out.extend_from_slice(&gsb_demo::op::MOVE_TO.to_le_bytes());
                 out.extend_from_slice(&move_payload);
                 out
             };
@@ -801,7 +801,7 @@ async fn flooder_drops_attributed(kind: Kind) {
         }
         Client::Udp(mut c) => {
             while Instant::now() < fdeadline {
-                c.send_frame(gsb_game::op::MOVE_TO, move_payload.clone())
+                c.send_frame(gsb_demo::op::MOVE_TO, move_payload.clone())
                     .await
                     .unwrap();
                 // Non-blocking drain (keep the outbound path moving):
@@ -1210,7 +1210,7 @@ async fn control_plane_match_result_reports_on_close() {
     assert_eq!(result.room, gsb_core::id::RoomId(1));
     // The demo's result is its final world snapshot (self-contained,
     // delta=false) and it carries the player that was in the room.
-    let snap = gsb_game::game::WorldSnapshot::decode(&result.payload[..])
+    let snap = gsb_demo::game::WorldSnapshot::decode(&result.payload[..])
         .expect("the result is a WorldSnapshot");
     assert!(!snap.delta, "the shutdown snapshot is a full");
     assert!(
@@ -1247,8 +1247,8 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| panic!("timed out waiting for A's snapshot"));
         match a.recv(remaining).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                let m = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                let m = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 if let Some(rec) = m.entities.iter().find(|e| e.entity == a_entity) {
                     a_pos = (rec.x, rec.y);
                     break;
@@ -1261,12 +1261,12 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     }
 
     // --- Room-local (ABILITY): request → answer, and B never sees it.
-    let use_msg = gsb_game::game::AbilityUse {
+    let use_msg = gsb_demo::game::AbilityUse {
         x: a_pos.0,
         y: a_pos.1,
     }
     .encode_to_vec();
-    let (op, payload) = rpc_wire(1, gsb_game::op::ABILITY, &use_msg);
+    let (op, payload) = rpc_wire(1, gsb_demo::op::ABILITY, &use_msg);
     a.write_frame(op, &payload).await.unwrap();
 
     // A: read until the reply for id 1 arrives; remember the snapshot
@@ -1275,8 +1275,8 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while a_reply.is_none() && Instant::now() < deadline {
         match a.recv(Duration::from_millis(200)).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
-                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::PRIVATE => {
+                let m = gsb_demo::game::Private::decode(&payload[..]).unwrap();
                 for r in &m.responses {
                     if r.id == 1 {
                         a_reply = Some((r.ok, r.op as u16));
@@ -1290,15 +1290,15 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     }
     let (ok, op) = a_reply.expect("A's local request must be answered");
     assert!(ok, "an in-range ability must succeed");
-    assert_eq!(op, gsb_game::op::ABILITY, "the answer carries the inner op");
+    assert_eq!(op, gsb_demo::op::ABILITY, "the answer carries the inner op");
 
     // B: drain its stream for a window; it must NOT carry a reply for
     // A's id (the answer is per-connection private).
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         match b.recv(Duration::from_millis(50)).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
-                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::PRIVATE => {
+                let m = gsb_demo::game::Private::decode(&payload[..]).unwrap();
                 assert!(
                     !m.responses.iter().any(|r| r.id == 1),
                     "A's reply leaked to B"
@@ -1311,22 +1311,22 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     }
 
     // --- External-I/O (ECONOMY): the round trip over the wire.
-    let buy = gsb_game::game::BuyItem {
+    let buy = gsb_demo::game::BuyItem {
         kind: "potion".into(),
     }
     .encode_to_vec();
-    let (op, payload) = rpc_wire(2, gsb_game::op::ECONOMY, &buy);
+    let (op, payload) = rpc_wire(2, gsb_demo::op::ECONOMY, &buy);
     a.write_frame(op, &payload).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut answered: Option<Vec<u8>> = None;
     while answered.is_none() && Instant::now() < deadline {
         match a.recv(Duration::from_millis(200)).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
-                let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::PRIVATE => {
+                let m = gsb_demo::game::Private::decode(&payload[..]).unwrap();
                 for r in &m.responses {
                     if r.id == 2 {
                         assert!(r.ok, "buying a potion must succeed");
-                        assert_eq!(r.op as u16, gsb_game::op::ECONOMY);
+                        assert_eq!(r.op as u16, gsb_demo::op::ECONOMY);
                         answered = Some(r.payload.clone());
                     }
                 }
@@ -1336,7 +1336,7 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
             Recv::TimedOut => {}
         }
     }
-    let result = gsb_game::game::BuyResult::decode(
+    let result = gsb_demo::game::BuyResult::decode(
         &answered.expect("the external request must be answered")[..],
     )
     .expect("the answer decodes as BuyResult");
@@ -1351,11 +1351,11 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     //     external reply in A's stream. An inverted order means the
     //     two writes straddled a tick boundary (a scheduling race, not
     //     a protocol fact) — the pair is replayed with fresh ids.
-    let buy2 = gsb_game::game::BuyItem {
+    let buy2 = gsb_demo::game::BuyItem {
         kind: "potion".into(),
     }
     .encode_to_vec();
-    let use2 = gsb_game::game::AbilityUse {
+    let use2 = gsb_demo::game::AbilityUse {
         x: a_pos.0,
         y: a_pos.1,
     }
@@ -1364,9 +1364,9 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
     for attempt in 0..8 {
         let ext_id = 100 + attempt;
         let loc_id = 101 + attempt;
-        let (op, payload) = rpc_wire(ext_id, gsb_game::op::ECONOMY, &buy2);
+        let (op, payload) = rpc_wire(ext_id, gsb_demo::op::ECONOMY, &buy2);
         a.write_frame(op, &payload).await.unwrap();
-        let (op, payload) = rpc_wire(loc_id, gsb_game::op::ABILITY, &use2);
+        let (op, payload) = rpc_wire(loc_id, gsb_demo::op::ABILITY, &use2);
         a.write_frame(op, &payload).await.unwrap();
 
         let mut local_first: Option<bool> = None;
@@ -1375,8 +1375,8 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !(ext_seen && loc_seen) && Instant::now() < deadline {
             match a.recv(Duration::from_millis(200)).await.unwrap() {
-                Recv::Frame((op, payload)) if op == gsb_game::op::PRIVATE => {
-                    let m = gsb_game::game::Private::decode(&payload[..]).unwrap();
+                Recv::Frame((op, payload)) if op == gsb_demo::op::PRIVATE => {
+                    let m = gsb_demo::game::Private::decode(&payload[..]).unwrap();
                     for r in &m.responses {
                         if r.id == loc_id {
                             if !ext_seen {
@@ -1543,13 +1543,13 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     }
 
     // Continuous movement: every tick ships a snapshot for A.
-    let move_to = gsb_game::game::MoveTo {
+    let move_to = gsb_demo::game::MoveTo {
         x: 50,
         y: 50,
         seq: 0,
     }
     .encode_to_vec();
-    a.write_frame(gsb_game::op::MOVE_TO, &move_to)
+    a.write_frame(gsb_demo::op::MOVE_TO, &move_to)
         .await
         .unwrap();
 
@@ -1565,8 +1565,8 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     let deadline = Instant::now() + Duration::from_millis(900);
     while Instant::now() - window_start < Duration::from_millis(350) && Instant::now() < deadline {
         match a.recv(Duration::from_millis(50)).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                let m = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                let m = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 snapshots_in_window.push(m.sequence);
             }
             Recv::Frame(_) => {}
@@ -1639,8 +1639,8 @@ async fn drain_snapshots(
             .await
             .unwrap()
         {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                if let Ok(snap) = gsb_game::game::WorldSnapshot::decode(&payload[..]) {
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                if let Ok(snap) = gsb_demo::game::WorldSnapshot::decode(&payload[..]) {
                     *view = snap
                         .entities
                         .iter()
@@ -1670,8 +1670,8 @@ async fn await_movement(
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| panic!("timed out waiting for entity {entity} to move"));
         match client.recv(remaining).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                let snap = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 *view = snap
                     .entities
                     .iter()
@@ -1753,9 +1753,9 @@ async fn resume_over_real_socket() {
     }
 
     // -- the hero moves once (input works pre-drop) ----------------------
-    let move_wire = |x: i32, y: i32, seq: u64| gsb_game::game::MoveTo { x, y, seq }.encode_to_vec();
+    let move_wire = |x: i32, y: i32, seq: u64| gsb_demo::game::MoveTo { x, y, seq }.encode_to_vec();
     let payload = move_wire(-20, -20, 0);
-    hero.write_frame(gsb_game::op::MOVE_TO, &payload)
+    hero.write_frame(gsb_demo::op::MOVE_TO, &payload)
         .await
         .unwrap();
 
@@ -1768,8 +1768,8 @@ async fn resume_over_real_socket() {
             .checked_duration_since(Instant::now())
             .expect("no snapshot naming the hero");
         match obs.recv(remaining).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                let snap = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 obs_view = snap
                     .entities
                     .iter()
@@ -1830,7 +1830,7 @@ async fn resume_over_real_socket() {
     // -- …and the new session's inputs WORK -------------------------------
     let payload = move_wire(30, 30, 1);
     hero2
-        .write_frame(gsb_game::op::MOVE_TO, &payload)
+        .write_frame(gsb_demo::op::MOVE_TO, &payload)
         .await
         .unwrap();
     // From wherever the park left it, the hero now converges toward
@@ -1842,8 +1842,8 @@ async fn resume_over_real_socket() {
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| panic!("resumed hero never moved toward (30,30): best {best}"));
         match obs.recv(remaining).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_game::op::WORLD_SNAPSHOT => {
-                let snap = gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+                let snap = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 obs_view = snap
                     .entities
                     .iter()

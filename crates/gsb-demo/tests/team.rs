@@ -7,7 +7,7 @@
 //! it" is proven by the bytes that were (not) shipped.
 //!
 //! (The exact same-tick asymmetry — both teams' snapshots of ONE tick
-//! compared — is pinned at the logic level in `gsb_game::team::tests`; the
+//! compared — is pinned at the logic level in `gsb_demo::team::tests`; the
 //! actor level here proves the room's fan-out delivers each group's
 //! package to exactly that group's members.)
 //!
@@ -27,9 +27,9 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::game::WorldSnapshot;
-use gsb_game::op;
-use gsb_game::team::TeamRoom;
+use gsb_demo::game::WorldSnapshot;
+use gsb_demo::op;
+use gsb_demo::team::TeamRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -130,7 +130,7 @@ impl TestRoom {
 }
 
 async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) {
-    let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
+    let msg = gsb_demo::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
             player: gsb_core::PlayerId(conn.0),

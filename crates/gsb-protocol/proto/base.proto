@@ -1,5 +1,5 @@
 // Base (transport-agnostic) protocol messages shared by every gsb server.
-// Game-specific messages live in gsb-game/proto/game.proto (which imports
+// Game-specific messages live in gsb-demo/proto/game.proto (which imports
 // this file — see `RpcResponse` and `docs/DESIGN.md` §5.2 for the
 // message-ownership rule: core-governed contracts live HERE).
 //
@@ -235,7 +235,7 @@ message RpcRequest {
 // The move from `gsb.game` (where the response half used to live, up to
 // commit 5f37c85) is an ownership refactor only: protobuf puts no type
 // names on the wire, so the field numbers and the encoded bytes are
-// unchanged — locked by `gsb-game/tests/wire_contract.rs`. See
+// unchanged — locked by `gsb-demo/tests/wire_contract.rs`. See
 // `docs/DESIGN.md` §5.2.
 message RpcResponse {
   uint64 id = 1;

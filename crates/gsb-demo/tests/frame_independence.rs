@@ -27,9 +27,9 @@ use gsb_ecs::{System, SystemCtx};
 use gsb_protocol::FrameBody;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use gsb_game::components::{MoveTarget, Position, Speed};
-use gsb_game::op;
-use gsb_game::systems::MovementSystem;
+use gsb_demo::components::{MoveTarget, Position, Speed};
+use gsb_demo::op;
+use gsb_demo::systems::MovementSystem;
 use prost::Message;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -119,7 +119,7 @@ impl GameLogic<World> for FrameLogic {
             if a.op != op::MOVE_TO {
                 continue;
             }
-            let Ok(m) = gsb_game::game::MoveTo::decode(&a.payload[..]) else {
+            let Ok(m) = gsb_demo::game::MoveTo::decode(&a.payload[..]) else {
                 continue;
             };
             if let Some(e) = self.entity {
@@ -257,7 +257,7 @@ impl SimRoom {
             self.join_reply = Some(rx);
             return false;
         };
-        let move_to = gsb_game::game::MoveTo {
+        let move_to = gsb_demo::game::MoveTo {
             x: 1000,
             y: 1000,
             seq: 0,

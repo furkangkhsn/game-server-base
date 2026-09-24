@@ -6,7 +6,7 @@ members = [
     "crates/gsb-ecs",
     "crates/gsb-core",
     "crates/gsb-net",
-    "crates/gsb-game",
+    "crates/gsb-demo",
     "crates/gsb-server",
 ]
 
@@ -25,7 +25,7 @@ gsb-protocol = { path = "crates/gsb-protocol" }
 gsb-ecs = { path = "crates/gsb-ecs" }
 gsb-core = { path = "crates/gsb-core" }
 gsb-net = { path = "crates/gsb-net" }
-gsb-game = { path = "crates/gsb-game" }
+gsb-demo = { path = "crates/gsb-demo" }
 gsb-server = { path = "crates/gsb-server" }
 
 # async runtime

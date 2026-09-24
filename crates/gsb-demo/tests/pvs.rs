@@ -2,7 +2,7 @@
 //!
 //! Pins what the *room* does with the sector group key (the logic-level
 //! visibility-table behavior — the 3-unit wall test, linked sightlines,
-//! OUT containment — lives in `gsb_game::pvs::tests`):
+//! OUT containment — lives in `gsb_demo::pvs::tests`):
 //!
 //! - **the wall**: A in sector A at (-1, 0) and B in sector B at (2, 0)
 //!   are 3 units apart and do NOT see each other (A and B are unlinked in
@@ -22,9 +22,9 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::game::WorldSnapshot;
-use gsb_game::op;
-use gsb_game::pvs::SectorRoom;
+use gsb_demo::game::WorldSnapshot;
+use gsb_demo::op;
+use gsb_demo::pvs::SectorRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -125,7 +125,7 @@ impl TestRoom {
 }
 
 async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) {
-    let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
+    let msg = gsb_demo::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
             player: gsb_core::PlayerId(conn.0),

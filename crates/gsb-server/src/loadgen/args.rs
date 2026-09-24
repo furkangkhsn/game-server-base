@@ -20,7 +20,7 @@ pub(crate) fn parse_args() -> Args {
         topology: None,
         shard_count: 4,
         cell_size: 20.0,
-        vision_radius: gsb_game::team::DEFAULT_VISION_RADIUS,
+        vision_radius: gsb_demo::team::DEFAULT_VISION_RADIUS,
         max_snapshot_bytes: 1400,
         server_spawn_half: 50.0,
         serve: false,

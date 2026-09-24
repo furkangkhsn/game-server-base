@@ -28,7 +28,7 @@ gsb-core = { workspace = true }
 gsb-ecs = { workspace = true }
 gsb-net = { workspace = true }
 gsb-protocol = { workspace = true }
-gsb-game = { workspace = true }
+gsb-demo = { workspace = true }
 bevy_ecs = { workspace = true }
 # TLS client side (example client + loadgen --tls-ca) and server config.
 rustls = { workspace = true }

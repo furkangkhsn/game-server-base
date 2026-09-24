@@ -133,13 +133,13 @@ async fn full_flow_over_tls_auth_join_move_snapshots() {
                 my_entity = m.entity;
                 assert!(my_entity != 0, "entity id must be non-zero");
                 if !move_sent {
-                    let move_to = gsb_game::game::MoveTo {
+                    let move_to = gsb_demo::game::MoveTo {
                         x: 10,
                         y: 10,
                         seq: 0,
                     }
                     .encode_to_vec();
-                    tls.write_all(&frame(gsb_game::op::MOVE_TO, &move_to))
+                    tls.write_all(&frame(gsb_demo::op::MOVE_TO, &move_to))
                         .await
                         .unwrap();
                     move_sent = true;
@@ -149,9 +149,9 @@ async fn full_flow_over_tls_auth_join_move_snapshots() {
                 let m: Error = Error::decode(&payload[..]).unwrap();
                 panic!("server error: code={} message={}", m.code, m.message);
             }
-            gsb_game::op::WORLD_SNAPSHOT => {
-                let m: gsb_game::game::WorldSnapshot =
-                    gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            gsb_demo::op::WORLD_SNAPSHOT => {
+                let m: gsb_demo::game::WorldSnapshot =
+                    gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 assert!(m.sequence > 0, "snapshot sequence must be monotonic");
                 let Some(rec) = m.entities.iter().find(|e| e.entity == my_entity) else {
                     continue; // snapshot that raced ahead of the join result

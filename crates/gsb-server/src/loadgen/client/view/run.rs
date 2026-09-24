@@ -183,7 +183,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 let seq = next_seq;
                 next_seq += 1;
                 sent_at.push(now);
-                let msg = gsb_game::game::MoveTo {
+                let msg = gsb_demo::game::MoveTo {
                     x: tx as i32,
                     y: ty as i32,
                     seq,
@@ -192,15 +192,15 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 rep.moves += 1;
                 match &mut wire {
                     Wire::Tcp { w, .. } => {
-                        let f = frame(gsb_game::op::MOVE_TO, &move_payload);
+                        let f = frame(gsb_demo::op::MOVE_TO, &move_payload);
                         rep.bytes_out += f.len() as u64;
                         if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
                             break; // peer gone
                         }
                     }
                     Wire::Udp(c) => {
-                        rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, move_payload.len());
-                        if c.send_frame(gsb_game::op::MOVE_TO, move_payload)
+                        rep.bytes_out += wire_in_bytes(gsb_demo::op::MOVE_TO, move_payload.len());
+                        if c.send_frame(gsb_demo::op::MOVE_TO, move_payload)
                             .await
                             .is_err()
                         {
@@ -251,8 +251,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     break;
                 }
             }
-            gsb_game::op::WORLD_SNAPSHOT => {
-                match gsb_game::game::WorldSnapshot::decode(&payload[..]) {
+            gsb_demo::op::WORLD_SNAPSHOT => {
+                match gsb_demo::game::WorldSnapshot::decode(&payload[..]) {
                     Ok(m) => {
                         rep.snapshots += 1;
                         let at = Instant::now();
@@ -273,8 +273,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     Err(_) => rep.errors += 1,
                 }
             }
-            gsb_game::op::PRIVATE => {
-                let pr = match gsb_game::game::Private::decode(&payload[..]) {
+            gsb_demo::op::PRIVATE => {
+                let pr = match gsb_demo::game::Private::decode(&payload[..]) {
                     Ok(pr) => pr,
                     Err(_) => {
                         rep.errors += 1;
@@ -282,7 +282,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     }
                 };
                 match pr.payload {
-                    Some(gsb_game::game::private::Payload::Ack(ack)) => {
+                    Some(gsb_demo::game::private::Payload::Ack(ack)) => {
                         // Section A: the server's per-connection input
                         // high-water mark. `now` is this loop iteration's
                         // instant — the ack's lag is measured against the
@@ -297,7 +297,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                             }
                         }
                     }
-                    Some(gsb_game::game::private::Payload::Snapshot(sn)) => {
+                    Some(gsb_demo::game::private::Payload::Snapshot(sn)) => {
                         // A one-shot FULL view (a fresh group member — late
                         // join or a group crossing). It MUST be a full: a
                         // delta here would be a protocol error, and a
@@ -351,10 +351,10 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // stays UNNUMBERED (seq 0, legacy): it probes the drop-attribution
         // guardrails, not the sequence rule (a numbered flood would only
         // spin the high-water mark).
-        let msg = gsb_game::game::MoveTo { x: 0, y: 0, seq: 0 };
+        let msg = gsb_demo::game::MoveTo { x: 0, y: 0, seq: 0 };
         match &mut wire {
             Wire::Tcp { w, .. } => {
-                let f = frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec());
+                let f = frame(gsb_demo::op::MOVE_TO, &msg.encode_to_vec());
                 while Instant::now() < p.deadline {
                     if w.write_all(&f).await.is_err() {
                         break; // peer gone
@@ -370,14 +370,14 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 // band, so retransmit state never gets in the way.
                 let payload = msg.encode_to_vec();
                 while Instant::now() < p.deadline {
-                    if c.send_frame(gsb_game::op::MOVE_TO, payload.clone())
+                    if c.send_frame(gsb_demo::op::MOVE_TO, payload.clone())
                         .await
                         .is_err()
                     {
                         break;
                     }
                     rep.moves += 1;
-                    rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
+                    rep.bytes_out += wire_in_bytes(gsb_demo::op::MOVE_TO, payload.len());
                     while c.recv_frame(Duration::ZERO).await.ok().flatten().is_some() {}
                 }
             }

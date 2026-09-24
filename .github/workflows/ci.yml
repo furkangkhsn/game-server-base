@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # No protoc install step: the proto build scripts (gsb-protocol,
-      # gsb-game) hand prost-build the `protoc-bin-vendored` binary, so
+      # gsb-demo) hand prost-build the `protoc-bin-vendored` binary, so
       # the build needs neither a system protoc nor `PROTOC`.
       - uses: dtolnay/rust-toolchain@master
         with:

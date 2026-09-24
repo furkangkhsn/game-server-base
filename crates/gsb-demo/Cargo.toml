@@ -1,6 +1,6 @@
 [package]
-name = "gsb-game"
-description = "Demo game logic for gsb: components, movement system, and a RoomLogic implementation."
+name = "gsb-demo"
+description = "Example game for gsb-kit: the 2D demo game (components, movement, wire protocol) running on the kit's rooms."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

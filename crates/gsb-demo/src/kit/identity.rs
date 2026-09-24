@@ -31,7 +31,7 @@ use bevy_ecs::prelude::Component;
 /// compile-level lock:
 ///
 /// ```compile_fail
-/// let forged = gsb_game::components::WireId(42);
+/// let forged = gsb_demo::components::WireId(42);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct WireId(u64);

@@ -39,15 +39,15 @@ pub enum Visibility {
     /// other strategies are measured against.
     All,
     /// `GroupKey = Cell`: spatial AOI (3×3 cell block, see
-    /// [`gsb_game::aoi`]).
+    /// [`gsb_demo::aoi`]).
     Spatial,
     /// `GroupKey = Team`: team fog of war (2 groups, team vision; see
-    /// [`gsb_game::team`]).
+    /// [`gsb_demo::team`]).
     Team,
     /// `GroupKey = Sector`: per-map-segment PVS (static visibility table
-    /// over hand-authored convex sectors; see [`gsb_game::pvs`]).
+    /// over hand-authored convex sectors; see [`gsb_demo::pvs`]).
     Pvs,
-    /// Grid of shards (see [`gsb_game::sharded`]): the room is `shard_count`
+    /// Grid of shards (see [`gsb_demo::sharded`]): the room is `shard_count`
     /// actors, each owning a rectangular region of the map, with entity
     /// migration across region boundaries and boundary visibility. This is
     /// a different *topology* (N actors + N worlds), not just a group key,
@@ -103,7 +103,7 @@ pub enum Topology {
     Single,
     /// The map is cut into a `Config::shard_count`-cell grid; each shard is
     /// its own actor + world with entity migration across the seams (see
-    /// `gsb_game::sharded`). Requires the count to be 1..=256.
+    /// `gsb_demo::sharded`). Requires the count to be 1..=256.
     Sharded,
 }
 
@@ -171,13 +171,13 @@ pub enum VisibilityAxis {
     /// `GroupKey = ()`: everyone sees the whole world (the baseline).
     All,
     /// `GroupKey = Cell`: spatial AOI, 3×3 cell block (see
-    /// `gsb_game::aoi`).
+    /// `gsb_demo::aoi`).
     Spatial,
     /// `GroupKey = Team`: team fog of war, 2 groups (see
-    /// `gsb_game::team`).
+    /// `gsb_demo::team`).
     Team,
     /// `GroupKey = Sector`: static PVS over hand-authored convex sectors
-    /// (see `gsb_game::pvs`).
+    /// (see `gsb_demo::pvs`).
     Pvs,
 }
 
@@ -216,19 +216,19 @@ impl std::fmt::Display for VisibilityAxis {
 /// config resolves to without starting a server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomKind {
-    /// `gsb_game::room::OpenRoom` — single actor, whole-world groups
+    /// `gsb_demo::room::OpenRoom` — single actor, whole-world groups
     /// (open visibility: everyone sees everything).
     Open,
-    /// `gsb_game::aoi::AoiRoom` — single actor, spatial AOI cells.
+    /// `gsb_demo::aoi::AoiRoom` — single actor, spatial AOI cells.
     Aoi,
-    /// `gsb_game::team::TeamRoom` — single actor, team fog of war.
+    /// `gsb_demo::team::TeamRoom` — single actor, team fog of war.
     Team,
-    /// `gsb_game::pvs::SectorRoom` — single actor, sector PVS.
+    /// `gsb_demo::pvs::SectorRoom` — single actor, sector PVS.
     Sector,
-    /// `gsb_game::sharded::ShardedRoom` grid — N shard actors, whole-world
+    /// `gsb_demo::sharded::ShardedRoom` grid — N shard actors, whole-world
     /// groups per shard (`BuiltRoom::Sharded`).
     Sharded,
-    /// `gsb_game::sharded::ShardedSpatialRoom` grid — the SAME N-actor
+    /// `gsb_demo::sharded::ShardedSpatialRoom` grid — the SAME N-actor
     /// topology, but each shard broadcasts with cell-grouped spatial AOI
     /// deltas over its own region (the Faz B composite;
     /// `BuiltRoom::Sharded`, different shard logic).

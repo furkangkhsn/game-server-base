@@ -429,9 +429,9 @@ async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
 /// Send one MOVE_TO so the room keeps producing change-driven snapshots
 /// (on top of the 1 Hz keep-alive) while the test drains other clients.
 async fn nudge(client: &mut Client, x: i32, y: i32) {
-    let move_to = gsb_game::game::MoveTo { x, y, seq: 0 }.encode_to_vec();
+    let move_to = gsb_demo::game::MoveTo { x, y, seq: 0 }.encode_to_vec();
     client
-        .write_frame(gsb_game::op::MOVE_TO, &move_to)
+        .write_frame(gsb_demo::op::MOVE_TO, &move_to)
         .await
         .expect("MOVE_TO goes out");
 }
@@ -452,11 +452,11 @@ async fn wait_until_sees(client_name: &str, client: &mut Client, wanted: &[u64])
             .await
             .expect("socket works")
             .unwrap_or_else(|| panic!("{client_name}: connection ended while waiting"));
-        if op != gsb_game::op::WORLD_SNAPSHOT {
+        if op != gsb_demo::op::WORLD_SNAPSHOT {
             continue;
         }
-        let m: gsb_game::game::WorldSnapshot =
-            gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+        let m: gsb_demo::game::WorldSnapshot =
+            gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
         let seen: HashSet<u64> = m.entities.iter().map(|e| e.entity).collect();
         if wanted.is_subset(&seen) {
             return seen;

@@ -1,7 +1,7 @@
 //! Wire-contract locks for the frames whose DEFINITION moved between
 //! .proto files without the bytes being allowed to move with it.
 //!
-//! The RPC response envelope was defined in `gsb-game/proto/game.proto`
+//! The RPC response envelope was defined in `gsb-demo/proto/game.proto`
 //! (package `gsb.game`) and now lives in `gsb-protocol/proto/base.proto`
 //! (package `gsb.base`) — see `docs/DESIGN.md` §5.2. Protobuf puts no
 //! type names on the wire, so that move is a pure ownership refactor:
@@ -11,7 +11,7 @@
 
 use prost::Message;
 
-use gsb_game::game::{InputAck, Private, WorldSnapshot, private};
+use gsb_demo::game::{InputAck, Private, WorldSnapshot, private};
 use gsb_protocol::base::RpcResponse;
 
 /// A `Private` frame carrying an input ack AND two RPC responses (an ok
@@ -120,7 +120,7 @@ fn private_snapshot_arm_keeps_its_hand_encoded_tag() {
     assert_eq!(frame.encode_to_vec(), &[0x12, 0x02, 0x08, 0x01]);
 }
 
-/// A retired opcode must never be registered again. `gsb_game::op::
+/// A retired opcode must never be registered again. `gsb_demo::op::
 /// RETIRED` names the two the demo game removed in 2ac28d2
 /// (ENTITY_SPAWNED = 1001, ENTITY_REMOVED = 1002); registering a new
 /// message under one of them would silently misparse for any peer still
@@ -130,11 +130,11 @@ fn private_snapshot_arm_keeps_its_hand_encoded_tag() {
 #[test]
 fn retired_opcodes_stay_out_of_the_message_table() {
     let mut table = gsb_protocol::base_table();
-    gsb_game::register(&mut table);
-    for op in gsb_game::op::RETIRED {
+    gsb_demo::register(&mut table);
+    for op in gsb_demo::op::RETIRED {
         assert!(
             !table.is_registered(op),
-            "opcode {op} is retired (see gsb_game::op::RETIRED) but a \
+            "opcode {op} is retired (see gsb_demo::op::RETIRED) but a \
              message is registered under it"
         );
     }

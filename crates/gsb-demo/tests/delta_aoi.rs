@@ -32,9 +32,9 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::aoi::AoiRoom;
-use gsb_game::game::{Private, WorldSnapshot};
-use gsb_game::op;
+use gsb_demo::aoi::AoiRoom;
+use gsb_demo::game::{Private, WorldSnapshot};
+use gsb_demo::op;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -201,13 +201,13 @@ impl Conn {
                         panic!("undecodable private frame");
                     };
                     match p.payload {
-                        Some(gsb_game::game::private::Payload::Snapshot(s)) => {
+                        Some(gsb_demo::game::private::Payload::Snapshot(s)) => {
                             assert!(!s.delta, "a private snapshot must be a full");
                             self.private_fulls += 1;
                             self.fulls += 1;
                             self.view.apply_private_full(&s);
                         }
-                        Some(gsb_game::game::private::Payload::Ack(_)) => {
+                        Some(gsb_demo::game::private::Payload::Ack(_)) => {
                             // Input acks are not part of the view.
                         }
                         None => panic!("empty private oneof"),
@@ -297,7 +297,7 @@ impl TestRoom {
 }
 
 async fn move_to(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32) {
-    let msg = gsb_game::game::MoveTo { x, y, seq: 0 };
+    let msg = gsb_demo::game::MoveTo { x, y, seq: 0 };
     actions
         .send(Action {
             player: gsb_core::PlayerId(conn.0),
@@ -625,7 +625,7 @@ async fn late_join_sees_full_world_one_shot() {
             }
         } else if f.op == op::PRIVATE {
             let p = Private::decode(f.payload.as_ref()).expect("decodable");
-            if let Some(gsb_game::game::private::Payload::Snapshot(s)) = p.payload {
+            if let Some(gsb_demo::game::private::Payload::Snapshot(s)) = p.payload {
                 assert!(!s.delta, "a private snapshot must be a full");
                 saw_full = true;
             }

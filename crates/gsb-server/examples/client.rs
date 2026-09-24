@@ -169,12 +169,12 @@ async fn main() {
             tokio::time::sleep(Duration::from_millis(150)).await;
             i += 1;
             let angle = (i as f32) * 0.7;
-            let msg = gsb_game::game::MoveTo {
+            let msg = gsb_demo::game::MoveTo {
                 x: (angle.cos() * 40.0) as i32,
                 y: (angle.sin() * 40.0) as i32,
                 seq: i as u64,
             };
-            if w.write_all(&frame(gsb_game::op::MOVE_TO, &msg.encode_to_vec()))
+            if w.write_all(&frame(gsb_demo::op::MOVE_TO, &msg.encode_to_vec()))
                 .await
                 .is_err()
                 || w.flush().await.is_err()
@@ -226,9 +226,9 @@ async fn main() {
                 };
                 println!("ERROR code={} ({}) message={}", m.code, class, m.message);
             }
-            gsb_game::op::WORLD_SNAPSHOT => {
-                let m: gsb_game::game::WorldSnapshot =
-                    gsb_game::game::WorldSnapshot::decode(&payload[..]).unwrap();
+            gsb_demo::op::WORLD_SNAPSHOT => {
+                let m: gsb_demo::game::WorldSnapshot =
+                    gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 // The client rules (`game.proto`):
                 if m.sequence <= last_seq.unwrap_or(0) {
                     println!("WORLD_SNAPSHOT seq={} duplicate — discarded", m.sequence);
@@ -276,18 +276,18 @@ async fn main() {
                     );
                 }
             }
-            gsb_game::op::PRIVATE => {
-                let m: gsb_game::game::Private =
-                    gsb_game::game::Private::decode(&payload[..]).unwrap();
+            gsb_demo::op::PRIVATE => {
+                let m: gsb_demo::game::Private =
+                    gsb_demo::game::Private::decode(&payload[..]).unwrap();
                 match m.payload {
-                    Some(gsb_game::game::private::Payload::Ack(a)) => {
+                    Some(gsb_demo::game::private::Payload::Ack(a)) => {
                         acked_max = acked_max.max(a.processed_up_to);
                         println!(
                             "PRIVATE ack: processed_up_to={} (max so far {})",
                             a.processed_up_to, acked_max
                         );
                     }
-                    Some(gsb_game::game::private::Payload::Snapshot(s)) => {
+                    Some(gsb_demo::game::private::Payload::Snapshot(s)) => {
                         // The one-shot private full: applied UNCONDITIONALLY
                         // (it is a different stream from the group frames and
                         // resets this connection's baseline).

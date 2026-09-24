@@ -13,7 +13,7 @@
 //     WITHOUT the version field (see `EntityRecord`'s `reserved 4`).
 // Their opcodes went with them: 1001 (ENTITY_SPAWNED) and 1002
 // (ENTITY_REMOVED) are retired and must stay unused — see
-// `gsb-game/src/op.rs`, which is where the opcode space is declared and
+// `gsb-demo/src/op.rs`, which is where the opcode space is declared and
 // where a test locks them out of the message table. (1003 was reused in
 // that same commit: ENTITY_STATE -> WORLD_SNAPSHOT. That reuse is
 // history, not precedent — it is exactly the silent recycling these
@@ -121,7 +121,7 @@ message Private {
   // The field number (3) and the LEN wire type are unchanged by the
   // envelope's move from `gsb.game` to `gsb.base`: the AOI one-shot
   // path hand-encodes this tag (`aoi/logic.rs`, `0x1A`), and
-  // `gsb-game/tests/wire_contract.rs` locks the bytes.
+  // `gsb-demo/tests/wire_contract.rs` locks the bytes.
   repeated gsb.base.RpcResponse responses = 3;
 }
 
@@ -144,7 +144,7 @@ message AbilityResult {
 // Client → server (RPC inner op ECONOMY = 1006): "buy item `kind`". The
 // demo's EXTERNAL-I/O request kind: the answer requires a round trip to
 // the in-process economy service (the reference adapter for delegated
-// work — see `gsb_game::economy`), so the room cannot answer in the
+// work — see `gsb_demo::economy`), so the room cannot answer in the
 // current tick: it registers the request as pending and the answer
 // arrives on a later tick (the server-side request timeout bounds the
 // wait).

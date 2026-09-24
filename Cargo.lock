@@ -713,15 +713,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gsb-ecs"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "gsb-lint",
-]
-
-[[package]]
-name = "gsb-game"
+name = "gsb-demo"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
@@ -735,6 +727,14 @@ dependencies = [
  "protoc-bin-vendored",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "gsb-ecs"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "gsb-lint",
 ]
 
 [[package]]
@@ -782,8 +782,8 @@ dependencies = [
  "bevy_ecs",
  "bytes",
  "gsb-core",
+ "gsb-demo",
  "gsb-ecs",
- "gsb-game",
  "gsb-lint",
  "gsb-net",
  "gsb-protocol",

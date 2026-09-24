@@ -2,7 +2,7 @@
 //!
 //! The wire identity (`WireId`) is not here: identity is kit-owned
 //! (KIT-ARCHITECTURE §4.4) and lives in `crate::kit::identity`; the
-//! public `gsb_game::components` path still re-exports it.
+//! public `gsb_demo::components` path still re-exports it.
 
 use bevy_ecs::prelude::Component;
 

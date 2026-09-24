@@ -21,9 +21,9 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
 use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
-use gsb_game::game::{Private, WorldSnapshot};
-use gsb_game::op;
-use gsb_game::room::OpenRoom;
+use gsb_demo::game::{Private, WorldSnapshot};
+use gsb_demo::op;
+use gsb_demo::room::OpenRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -119,7 +119,7 @@ impl TestRoom {
 
 /// Send a NUMBERED input (`seq = 0` for the legacy path).
 async fn send_seq(actions: &Mailbox<Action>, conn: ConnectionId, x: i32, y: i32, seq: u64) {
-    let msg = gsb_game::game::MoveTo { x, y, seq };
+    let msg = gsb_demo::game::MoveTo { x, y, seq };
     actions
         .send(Action {
             player: gsb_core::PlayerId(conn.0),
@@ -161,10 +161,10 @@ async fn advance_and_collect(
                         privates += 1;
                         let p = Private::decode(f.payload.as_ref()).expect("decodable private");
                         match p.payload {
-                            Some(gsb_game::game::private::Payload::Ack(a)) => {
+                            Some(gsb_demo::game::private::Payload::Ack(a)) => {
                                 acks.push(a.processed_up_to);
                             }
-                            Some(gsb_game::game::private::Payload::Snapshot(_)) => {
+                            Some(gsb_demo::game::private::Payload::Snapshot(_)) => {
                                 panic!("the demo room sends no private snapshots");
                             }
                             None => panic!("empty private oneof"),

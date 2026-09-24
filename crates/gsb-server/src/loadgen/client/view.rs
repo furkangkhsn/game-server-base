@@ -9,7 +9,7 @@ mod run;
 pub(crate) use run::*;
 
 /// The client-side world view the protocol prescribes (see the
-/// `WorldSnapshot` docs in `gsb_game/proto/game.proto`): a full REPLACES
+/// `WorldSnapshot` docs in `gsb_demo/proto/game.proto`): a full REPLACES
 /// the view; a delta applies ON TOP in the fixed order `removed` →
 /// `cell_exits` → `entities` — even across a sequence gap (the stream is
 /// event-driven: a gap is normal, and the records are absolute, so a
@@ -51,7 +51,7 @@ impl ClientView {
         )
     }
 
-    fn apply(&mut self, s: &gsb_game::game::WorldSnapshot) -> Apply {
+    fn apply(&mut self, s: &gsb_demo::game::WorldSnapshot) -> Apply {
         if s.sequence <= self.last_seq.unwrap_or(0) {
             return Apply::Stale;
         }
@@ -87,7 +87,7 @@ impl ClientView {
     /// The one-shot private full (a per-connection baseline reset — see
     /// the `Private{snapshot}` docs in `game.proto`): applied
     /// UNCONDITIONALLY, outside the group stream's sequence logic.
-    fn apply_private_full(&mut self, s: &gsb_game::game::WorldSnapshot) {
+    fn apply_private_full(&mut self, s: &gsb_demo::game::WorldSnapshot) {
         self.entities.clear();
         for e in &s.entities {
             self.entities.insert(e.entity, (e.x, e.y));

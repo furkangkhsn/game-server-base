@@ -23,7 +23,7 @@
 //! appears in this file only. The same check by hand:
 //!
 //! ```text
-//! grep -rn "crate::demo" crates/gsb-game/src/kit   # → only kit/seam.rs
+//! grep -rn "crate::demo" crates/gsb-demo/src/kit   # → only kit/seam.rs
 //! ```
 
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────

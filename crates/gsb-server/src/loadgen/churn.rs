@@ -189,15 +189,15 @@ pub(crate) async fn run_churn_client(
             }
             if now >= next_move {
                 next_move = now + p.move_ms;
-                let msg = gsb_game::game::MoveTo {
+                let msg = gsb_demo::game::MoveTo {
                     x: ((id as i64 % 80) - 40) as i32,
                     y: ((id as i64 % 37) - 18) as i32,
                     seq,
                 };
                 seq += 1;
                 let payload = msg.encode_to_vec();
-                rep.bytes_out += wire_in_bytes(gsb_game::op::MOVE_TO, payload.len());
-                if send_wire(&mut wire, gsb_game::op::MOVE_TO, payload)
+                rep.bytes_out += wire_in_bytes(gsb_demo::op::MOVE_TO, payload.len());
+                if send_wire(&mut wire, gsb_demo::op::MOVE_TO, payload)
                     .await
                     .is_err()
                 {

@@ -2,7 +2,7 @@
 //!
 //! [`start_server`] wires the whole stack together: the transport (default
 //! TCP, pluggable), the registry actor (control plane), the pre-created
-//! rooms (via the game crate's [`gsb_game::room::OpenRoom`]), and the accept
+//! rooms (via the game crate's [`gsb_demo::room::OpenRoom`]), and the accept
 //! loop. It must be called from inside a tokio runtime.
 //!
 //! ```text
@@ -14,7 +14,7 @@
 //! endpoint pumps             (control plane)              room actor (pulls)
 //! (reader/writer per conn)                               │
 //!                                                        ▼
-//!                                         World (bevy_ecs) + RoomLogic (gsb-game)
+//!                                         World (bevy_ecs) + RoomLogic (gsb-demo)
 //! ```
 
 pub(crate) mod boot;

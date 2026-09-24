@@ -12,7 +12,7 @@ use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 
 /// Moves entities toward their [`MoveTarget`] on every tick in which they
 /// actually move. The broadcast phase notices the resulting position
-/// change by comparing wire content (see `gsb_game::room`).
+/// change by comparing wire content (see `gsb_demo::room`).
 ///
 /// Two passes by design: first collect the writes while the query iterator
 /// holds the world borrow, then apply them. This keeps the hot path free of
