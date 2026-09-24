@@ -15,10 +15,10 @@ use crate::kit::common::InputSeq;
 use crate::kit::game::{Game, ShardGame, TeamGame};
 use crate::kit::pvs::SectorRoom;
 use crate::kit::room::OpenRoom;
-use crate::kit::seam::{DemoGame, Position};
 use crate::kit::sharded::{ShardedRoom, ShardedSpatialRoom};
 use crate::kit::space::{ConvexSectors2, Grid2, GridPartition2, Sector, VisionGrid2};
 use crate::kit::team::{Team, TeamRoom};
+use crate::kit::testing::{Fixture, Position};
 
 /// The request op the test game answers (any op: the room does not
 /// look at it).
@@ -26,21 +26,21 @@ const OP: u16 = 4242;
 
 /// A game that answers every request it is asked, and records it.
 struct Recording {
-    game: DemoGame,
+    game: Fixture,
     asked: Vec<u16>,
 }
 
 impl Recording {
     fn new() -> Self {
         Self {
-            game: DemoGame::default(),
+            game: Fixture::default(),
             asked: Vec::new(),
         }
     }
 }
 
 impl Game for Recording {
-    type Codec = <DemoGame as Game>::Codec;
+    type Codec = <Fixture as Game>::Codec;
 
     fn codec(&self) -> &Self::Codec {
         self.game.codec()
@@ -81,7 +81,7 @@ impl TeamGame for Recording {
 }
 
 impl ShardGame for Recording {
-    type Mig = <DemoGame as ShardGame>::Mig;
+    type Mig = <Fixture as ShardGame>::Mig;
 
     fn capture(&self, world: &World, entity: Entity) -> Self::Mig {
         self.game.capture(world, entity)

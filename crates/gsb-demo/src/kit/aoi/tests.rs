@@ -14,13 +14,13 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::kit::seam::{CellExit, WorldSnapshot};
+use crate::kit::testing::{CellExit, WorldSnapshot};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
 use prost::Message;
 
-use crate::kit::seam::{DEFAULT_SPEED, Position, Speed};
+use crate::kit::testing::{DEFAULT_SPEED, Position, Speed};
 
 use super::*;
 use crate::kit::identity::*;
@@ -30,9 +30,9 @@ use gsb_core::room::GameLogic;
 mod ghosts;
 mod sharing;
 
-/// The instantiation these tests drive: the demo game over the kit's 2D
+/// The instantiation these tests drive: the fixture game over the kit's 2D
 /// grid preset (shadows the generic room of `use super::*`).
-type AoiRoom = super::AoiRoom<crate::kit::seam::DemoGame, crate::kit::space::Grid2>;
+type AoiRoom = super::AoiRoom<crate::kit::testing::Fixture, crate::kit::space::Grid2>;
 
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
@@ -202,9 +202,9 @@ fn aoi_late_join_sees_full_visibility_block() {
         room.private(&mut world, PlayerId(3), &Cell(0, 0), &[], &mut priv_out),
         "a late joiner receives the one-shot full"
     );
-    let full = crate::kit::seam::TypedPrivate::decode(priv_out.as_ref()).expect("private frame");
+    let full = crate::kit::testing::Private::decode(priv_out.as_ref()).expect("private frame");
     let snap = match full.payload {
-        Some(crate::kit::seam::typed_private::Payload::Snapshot(s)) => s,
+        Some(crate::kit::testing::private::Payload::Snapshot(s)) => s,
         other => panic!("expected the snapshot oneof, got {other:?}"),
     };
     assert!(!snap.delta, "the one-shot full is a full snapshot");

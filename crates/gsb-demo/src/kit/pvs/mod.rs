@@ -83,13 +83,13 @@ use crate::kit::common::{InputSeq, ParkEntry, ParkPolicy};
 use crate::kit::game::{Game, Wire};
 use crate::kit::identity::Minter;
 use crate::kit::space::SectorMap;
-// The demo map's out-of-map sector and the preset's sector key, in
+// The fixture map's out-of-map sector and the preset's sector key, in
 // scope for the in-module tests (they address sectors directly through
 // `use super::*`).
 #[cfg(test)]
-use crate::kit::seam::SECTOR_OUT;
-#[cfg(test)]
 use crate::kit::space::Sector;
+#[cfg(test)]
+use crate::kit::testing::SECTOR_OUT;
 
 /// The PVS room: sector group key, static-table visibility, per-sector
 /// "no change" ledger.

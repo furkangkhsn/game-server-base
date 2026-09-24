@@ -2,8 +2,8 @@
 //! table's capacity is the map's, not a bitmask's.
 
 use super::*;
-use crate::kit::seam::DemoGame;
 use crate::kit::space::{ConvexSectors2, SectorMap};
+use crate::kit::testing::Fixture;
 
 /// A strip of `n` unit squares along x (sector `i` = `[i, i+1] × [0, 1]`):
 /// each sector sees itself and its two neighbours, and the two ends see
@@ -47,7 +47,7 @@ fn twenty_sector_map_keeps_every_sightline() {
     assert_eq!(map.outside(), Sector(20));
 
     let mut world = World::new();
-    let mut room = super::super::SectorRoom::with_game(DemoGame::default(), map);
+    let mut room = super::super::SectorRoom::with_game(Fixture::default(), map);
     let mut place = |world: &mut World, conn: u64, x: f32| {
         let admission = room.on_join(world, ConnectionId(conn));
         let entity = room.player_entity[&admission.player];

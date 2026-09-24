@@ -4,142 +4,6 @@
 
 use super::*;
 
-/// (b) structural dirty marking: a `Position` written by a writer
-/// the room has no hook into (a direct `world.entity_mut` — no
-/// system, no `MOVE_TO`, no invalidation call) still produces the
-/// correct delta: the mark is set inside bevy's write path, so it
-/// cannot be forgotten by any present or future writer.
-#[test]
-fn aoi_structural_dirty_direct_write() {
-    let mut world = World::new();
-    let mut room = AoiRoom::new(20.0);
-    let _m = place(&mut world, &mut room, ConnectionId(1), 0.0, 0.0); // Cell(0,0)
-    // Two third-party entities the room never sees through
-    // on_join/ingest (a co-resident keeps the source cell
-    // non-empty, so the exit takes the per-entity `removed` path —
-    // the whole-cell `CellExit` path is covered by
-    // `aoi_leave_removal_in_delta_and_cell_exit`).
-    let ghost = world
-        .spawn((Position { x: 100.0, y: 0.0 }, Speed(DEFAULT_SPEED)))
-        .id(); // Cell(5,0)
-    world.spawn((Position { x: 110.0, y: 0.0 }, Speed(DEFAULT_SPEED))); // Cell(5,0)
-    room.update(&mut world, &ctx(1));
-    let ghost_wire = world.entity(ghost).get::<WireId>().expect("stamped").get();
-
-    // The third-party writer moves the ghost across cells — the room
-    // has no hook for this write; the delta must still carry the
-    // exit (source cell) and the arrival (target cell).
-    world
-        .entity_mut(ghost)
-        .insert(Position { x: 125.0, y: 0.0 }); // Cell(6,0)
-    room.update(&mut world, &ctx(2));
-
-    let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Cell(5, 0), &[], &mut out));
-    let s = decode(&out);
-    assert!(s.delta);
-    assert!(
-        s.removed.contains(&ghost_wire),
-        "the exit is recorded without any room hook: {s:?}"
-    );
-
-    let mut out2 = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Cell(6, 0), &[], &mut out2));
-    let s2 = decode(&out2);
-    assert!(
-        s2.entities
-            .iter()
-            .any(|e| e.entity == ghost_wire && (e.x, e.y) == (125, 0)),
-        "the arrival is recorded: {s2:?}"
-    );
-}
-
-/// (b) partial delta: a cell with five records of which ONE changed
-/// ships exactly that one record — the other four are neither
-/// re-carried nor re-encoded (the change list is the diff; no
-/// per-cell content comparison runs).
-#[test]
-fn aoi_partial_delta_only_mover_recorded() {
-    let mut world = World::new();
-    let mut room = AoiRoom::new(20.0);
-    // Five members, one cell (Cell(0,0): x = 3, 6, 9, 12, 15).
-    let ws: Vec<u64> = (1..=5)
-        .map(|i| {
-            place(
-                &mut world,
-                &mut room,
-                ConnectionId(i),
-                (i as f32) * 3.0,
-                0.0,
-            )
-        })
-        .collect();
-    room.update(&mut world, &ctx(1));
-    let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
-    assert_eq!(
-        ids(&decode(&out)).len(),
-        5,
-        "the fresh full carries all five"
-    );
-    assert_eq!(room.encoded_records(), 5);
-
-    // Only member 3 (x=9) moves — a direct write (no MOVE_TO, no
-    // system).
-    let ent = *room.player_entity.get(&PlayerId(3)).unwrap();
-    world.entity_mut(ent).insert(Position { x: 18.0, y: 0.0 }); // still Cell(0,0)
-    room.update(&mut world, &ctx(2));
-    let mut out2 = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2));
-    let s2 = decode(&out2);
-    assert!(s2.delta);
-    assert_eq!(s2.entities.len(), 1, "exactly the mover's record: {s2:?}");
-    assert_eq!(s2.entities[0].entity, ws[2]);
-    assert_eq!((s2.entities[0].x, s2.entities[0].y), (18, 0));
-    assert!(s2.removed.is_empty(), "no exits: {s2:?}");
-    assert_eq!(
-        room.encoded_records(),
-        1,
-        "one encoding — the other four records are not re-encoded"
-    );
-}
-
-/// (b) quantization: a move that leaves the WIRE position (i32
-/// truncation) untouched produces no record — the cell stays silent
-/// (no stale delta leaks) while the f32 world keeps moving; the
-/// first wire-unit change does produce the record.
-#[test]
-fn aoi_quantized_move_no_wire_change_no_record() {
-    let mut world = World::new();
-    let mut room = AoiRoom::new(20.0);
-    let _m = place(&mut world, &mut room, ConnectionId(1), 0.5, 0.5); // wire (0,0), Cell(0,0)
-    room.update(&mut world, &ctx(1));
-    let mut out = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out));
-
-    // The f32 position changes; the wire position (0,0) does not.
-    let ent = *room.player_entity.get(&PlayerId(1)).unwrap();
-    world.entity_mut(ent).insert(Position { x: 0.9, y: 0.5 });
-    room.update(&mut world, &ctx(2));
-    let mut out2 = bytes::BytesMut::new();
-    assert!(
-        !room.snapshot(&mut world, &ctx(2), &Cell(0, 0), &[], &mut out2),
-        "an unchanged wire position is a no-op: the cell is silent, no stale delta"
-    );
-    assert_eq!(room.encoded_records(), 0);
-
-    // Crossing the wire boundary (x: 0.9 → 1.0) flips the record.
-    world.entity_mut(ent).insert(Position { x: 1.0, y: 0.5 });
-    room.update(&mut world, &ctx(3));
-    let mut out3 = bytes::BytesMut::new();
-    assert!(room.snapshot(&mut world, &ctx(3), &Cell(0, 0), &[], &mut out3));
-    let s3 = decode(&out3);
-    assert!(s3.delta);
-    assert_eq!(s3.entities.len(), 1);
-    assert_eq!((s3.entities[0].x, s3.entities[0].y), (1, 0));
-    assert_eq!(room.encoded_records(), 1);
-}
-
 /// (b) the despawn path: a leave is not a component write — the
 /// removal is parked in `on_leave` and applied by `update`. The
 /// cell's delta carries the leaver's wire id in `removed`; when the
@@ -257,8 +121,8 @@ fn aoi_join_leave_same_tick_inert() {
     assert!(room.snapshot(&mut world, &ctx(1), &Cell(0, 0), &[], &mut out)); // fresh full
 
     // A connection that joins AND leaves before the next update.
-    room.on_join(&mut world, ConnectionId(9));
-    room.on_leave(&mut world, PlayerId(9));
+    let joined = room.on_join(&mut world, ConnectionId(9));
+    room.on_leave(&mut world, joined.player);
     assert!(
         room.book.pending_removals.is_empty(),
         "no removal to park (the entity was never bucketed)"

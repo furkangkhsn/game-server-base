@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::kit::seam::{DEFAULT_SPEED, Position, Speed};
+use crate::kit::testing::{DEFAULT_SPEED, Position, Speed};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
@@ -20,10 +20,10 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 use prost::Message;
 
-/// The instantiation these tests drive: the demo game over the kit's 2D
+/// The instantiation these tests drive: the fixture game over the kit's 2D
 /// vision preset (shadows the generic room of `use super::*`).
 type TeamRoom =
-    super::TeamRoom<crate::kit::seam::DemoGame, crate::kit::space::VisionGrid2<Position>>;
+    super::TeamRoom<crate::kit::testing::Fixture, crate::kit::space::VisionGrid2<Position>>;
 
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
@@ -57,7 +57,7 @@ fn place(
 }
 
 fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
-    crate::kit::seam::WorldSnapshot::decode(out.as_ref())
+    crate::kit::testing::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot payload")
         .entities
         .iter()
@@ -208,7 +208,7 @@ fn enemy_leaving_vision_drops_from_snapshot_self_contained() {
         room.snapshot(&mut world, &ctx(2), &Team(0), &[], &mut out0b),
         "vision change re-emits"
     );
-    let snap = crate::kit::seam::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
+    let snap = crate::kit::testing::WorldSnapshot::decode(out0b.as_ref()).expect("snapshot");
     let t0b: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
     assert!(!t0b.contains(&b), "B dropped out: {t0b:?}");
     assert_eq!(

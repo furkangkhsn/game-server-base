@@ -1,5 +1,6 @@
-//! Test-only games for the kit's in-module tests: wrappers around a
-//! game that add one behaviour a test needs (compiled for tests only).
+//! Test-only games for the kit's in-module tests (compiled for tests
+//! only): the fixture game (`fixture`) and wrappers around a game that
+//! add one behaviour a test needs.
 
 use std::collections::HashMap;
 
@@ -62,4 +63,7 @@ impl<G: ShardGame> ShardGame for Culling<G> {
     }
 }
 
+mod fixture;
 mod requests;
+
+pub(crate) use fixture::*;

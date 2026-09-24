@@ -15,7 +15,7 @@ fn an_npc_despawned_by_game_code_leaves_the_shard() {
     let mut world = World::new();
     let mut s1 = super::super::ShardedSpatialRoom::with_shard(
         super::super::ShardedRoom::with_game(
-            Culling(DemoGame::default()),
+            Culling(Fixture::default()),
             GridPartition2::<Position>::new(2, 50.0),
             1,
         ),

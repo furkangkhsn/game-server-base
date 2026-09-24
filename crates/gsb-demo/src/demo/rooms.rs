@@ -147,7 +147,7 @@ impl ShardedSpatialRoom<DemoGame, GridPartition2<Position>, Grid2> {
     /// halves).
     pub fn new(index: usize, shard_count: usize, spawn_half: f32, cell_size: f32) -> Self {
         Self::with_shard(
-            ShardedRoom::new(index, shard_count, spawn_half),
+            ShardedRoom::<DemoGame, GridPartition2<Position>>::new(index, shard_count, spawn_half),
             Grid2::new(cell_size),
         )
     }
@@ -160,3 +160,6 @@ impl ShardedSpatialRoom<DemoGame, GridPartition2<Position>, Grid2> {
         self
     }
 }
+
+#[cfg(test)]
+mod tests;

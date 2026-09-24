@@ -13,7 +13,7 @@ use crate::kit::testing::{Culling, Doomed};
 fn an_npc_despawned_by_game_code_leaves_every_view() {
     let mut world = World::new();
     let mut room = super::super::AoiRoom::with_game(
-        Culling(crate::kit::seam::DemoGame::default()),
+        Culling(crate::kit::testing::Fixture::default()),
         crate::kit::space::Grid2::new(20.0),
     );
     let observer = room.on_join(&mut world, ConnectionId(1));

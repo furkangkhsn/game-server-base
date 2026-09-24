@@ -92,7 +92,7 @@ fn routing_reaches_every_region_by_shortest_paths() {
     for n in [1usize, 2, 3, 4, 6, 8, 12, 16] {
         let (_, cols) = grid_shape(n);
         let grid = GridPartition2::<Position>::new(n, 50.0);
-        let neighbors = |j: usize| Partition::<StripPos>::neighbors(&grid, j);
+        let neighbors = |j: usize| Partition::<WirePos>::neighbors(&grid, j);
         let tables: Vec<Vec<usize>> = (0..n).map(|i| first_hops(i, n, neighbors)).collect();
         for from in 0..n {
             for to in 0..n {

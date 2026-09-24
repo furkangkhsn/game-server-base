@@ -1,19 +1,18 @@
 //! The phase-0 layering rule, checked by scanning the source tree (the
 //! same approach `gsb-lint` takes for its banned patterns): kit code
-//! reaches demo code ONLY through `crate::kit::seam` (KIT-ARCHITECTURE
-//! §10, phase 0).
+//! does not reach demo code (KIT-ARCHITECTURE §10, phase 0). Until phase
+//! 2 the only exemption was `crate::kit::seam`; the seam is gone (the
+//! kit's envelope comes from its own proto, its tests run a fixture
+//! game), so now no file is exempt.
 //!
-//! The check is deliberately stricter than "no `crate::demo` outside the
-//! seam": under `kit/`, every `crate::` path outside `kit/seam.rs` must
-//! continue with `kit::`. The crate root re-exports demo items under the
-//! old public paths (`crate::components`, `crate::room::spawn_pos`, …), so
-//! a kit file naming one of those would reach the demo past the seam
-//! without ever spelling `crate::demo`. Comments are scanned too: a doc
-//! link is a path like any other.
+//! Under `kit/`, every `crate::` path must continue with `kit::`. The
+//! crate root re-exports demo items under the old public paths
+//! (`crate::components`, `crate::room::spawn_pos`, …), so a kit file
+//! naming one of those would reach the demo without ever spelling
+//! `crate::demo`. Comments are scanned too: a doc link is a path like
+//! any other.
 
 use std::path::{Path, PathBuf};
-
-const SEAM: &str = "seam.rs";
 
 fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).expect("readable source directory");
@@ -64,8 +63,6 @@ fn kit_reaches_the_demo_only_through_the_seam() {
         .join("kit");
     let mut files = Vec::new();
     walk_rs(&kit, &mut files);
-    let seam = kit.join(SEAM);
-    assert!(seam.is_file(), "the seam module must exist: {seam:?}");
     // A vacuous pass (wrong directory, nothing scanned) must not count.
     assert!(
         files.len() > 20,
@@ -74,7 +71,7 @@ fn kit_reaches_the_demo_only_through_the_seam() {
     );
 
     let mut offenders = Vec::new();
-    for file in files.iter().filter(|f| **f != seam) {
+    for file in &files {
         let text = std::fs::read_to_string(file).expect("readable source file");
         for (line, src) in non_kit_paths(&text) {
             let rel = file.strip_prefix(&kit).unwrap_or(file).display();
@@ -83,15 +80,9 @@ fn kit_reaches_the_demo_only_through_the_seam() {
     }
     assert!(
         offenders.is_empty(),
-        "kit code must reach the demo through crate::kit::seam only \
-         (every other crate path under kit/ continues with kit::):\n{}",
+        "kit code must not reach the demo (every crate path under kit/ \
+         continues with kit::):\n{}",
         offenders.join("\n")
-    );
-
-    let seam_text = std::fs::read_to_string(&seam).expect("readable seam");
-    assert!(
-        seam_text.contains("crate::demo::"),
-        "the seam is where the kit's demo imports live"
     );
 }
 

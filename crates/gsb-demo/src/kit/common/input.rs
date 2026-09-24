@@ -9,7 +9,7 @@ use bytes::BufMut;
 use gsb_core::id::PlayerId;
 use prost::Message;
 
-use crate::kit::seam;
+use gsb_kit::proto;
 
 /// Per-connection input sequence state (see [`Self::admit`] and
 /// [`emit_private`]).
@@ -134,9 +134,9 @@ pub(crate) fn emit_private(
     if ack_up_to.is_none() && responses.is_empty() {
         return false;
     }
-    let frame = seam::Private {
+    let frame = proto::Private {
         payload: ack_up_to.map(|upto| {
-            seam::private::Payload::Ack(seam::InputAck {
+            proto::private::Payload::Ack(proto::InputAck {
                 processed_up_to: upto,
             })
         }),

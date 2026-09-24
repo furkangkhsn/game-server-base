@@ -12,13 +12,12 @@ use gsb_core::room::TickCtx;
 
 use super::*;
 use crate::kit::identity::*;
-use crate::kit::seam::*;
-use crate::kit::space::{Cell, cell_of};
+use crate::kit::space::Cell;
+use crate::kit::testing::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
 use prost::Message;
-use std::collections::HashMap;
 
 mod change_window;
 mod ghosts;
@@ -28,15 +27,15 @@ mod spatial;
 /// The spatial composite over the same instantiation, with the kit's 2D
 /// grid AOI.
 type ShardedSpatialRoom = super::ShardedSpatialRoom<
-    crate::kit::seam::DemoGame,
+    crate::kit::testing::Fixture,
     crate::kit::space::GridPartition2<Position>,
     crate::kit::space::Grid2,
 >;
 
-/// The instantiation these tests drive: the demo game over the kit's 2D
+/// The instantiation these tests drive: the fixture game over the kit's 2D
 /// grid partition (shadows the generic room of `use super::*`).
 type ShardedRoom =
-    super::ShardedRoom<crate::kit::seam::DemoGame, crate::kit::space::GridPartition2<Position>>;
+    super::ShardedRoom<crate::kit::testing::Fixture, crate::kit::space::GridPartition2<Position>>;
 
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
@@ -60,7 +59,7 @@ fn place(world: &mut World, room: &mut ShardedRoom, conn: ConnectionId, x: f32, 
 }
 
 fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
-    crate::kit::seam::WorldSnapshot::decode(out.as_ref())
+    crate::kit::testing::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot payload")
         .entities
         .iter()
@@ -122,7 +121,7 @@ fn wire_ranges_are_disjoint_and_stable() {
     // Migrate w0 from shard 0 into shard 1: the id is preserved.
     let entity0 = *s0.player_entity.get(&PlayerId(1)).unwrap();
     let state = KitMig {
-        game: DemoMig {
+        game: FixMig {
             pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
             speed: world0.entity(entity0).get::<Speed>().map(|s| s.0),
             target: world0.entity(entity0).get::<MoveTarget>().copied(),
@@ -204,7 +203,7 @@ fn border_visibility_across_the_seam() {
 
     // Shard 1's snapshot (its own world is empty here) includes the
     // borrowed records that pass its frame filter.
-    let borrowed: Vec<BorderRecord<StripPos>> = s0.collect_border(&w0);
+    let borrowed: Vec<BorderRecord<WirePos>> = s0.collect_border(&w0);
     let mut out = bytes::BytesMut::new();
     assert!(
         s1.snapshot(&mut w1, &ctx(1), &(), &borrowed, &mut out),
@@ -255,7 +254,7 @@ fn frame_filter_discards_far_neighbor_edges() {
     // borrowed content matters): the seam entity is in its frame, the
     // east entity is 23+ units away (beyond the 6.25 margin) and
     // filtered out.
-    let borrowed: Vec<BorderRecord<StripPos>> = border;
+    let borrowed: Vec<BorderRecord<WirePos>> = border;
     let mut out = bytes::BytesMut::new();
     assert!(s0.snapshot(&mut w0, &ctx(1), &(), &borrowed, &mut out));
     let seen = snap_ids(&out);
@@ -276,7 +275,7 @@ fn snapshot_union_and_no_change() {
 
     let borrowed = vec![BorderRecord {
         wire: 999,
-        state: StripPos { x: -1, y: -10 },
+        state: WirePos { x: -1, y: -10 },
     }];
     let mut out1 = bytes::BytesMut::new();
     assert!(s.snapshot(&mut w, &ctx(1), &(), &borrowed, &mut out1));
@@ -294,7 +293,7 @@ fn snapshot_union_and_no_change() {
     // A borrowed record moving is a content change ⇒ re-emit.
     let moved = vec![BorderRecord {
         wire: 999,
-        state: StripPos { x: -1, y: -9 },
+        state: WirePos { x: -1, y: -9 },
     }];
     let mut out3 = bytes::BytesMut::new();
     assert!(

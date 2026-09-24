@@ -3,11 +3,10 @@
 //! `use super::*` reaches the parent's private items exactly as
 //! before).
 
-use super::*;
 use std::time::Duration;
 
 use crate::kit::identity::*;
-use crate::kit::seam::*;
+use crate::kit::testing::*;
 use bevy_ecs::prelude::*;
 use gsb_core::id::RoomId;
 use gsb_core::id::{ConnectionId, PlayerId};
@@ -16,6 +15,10 @@ use prost::Message;
 
 mod change_window;
 
+/// The instantiation these tests drive: the kit's fixture game (shadows
+/// the generic room of `use super::*`).
+type OpenRoom = super::OpenRoom<crate::kit::testing::Fixture>;
+
 fn ctx1() -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),
@@ -23,38 +26,6 @@ fn ctx1() -> TickCtx<'static> {
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
     }
-}
-
-/// The "no change" decision compares the wire content: a plain
-/// `Position` write — no version component, no bump discipline — must
-/// still be broadcast whenever it changes a truncated coordinate.
-#[test]
-fn snapshot_emits_on_plain_position_write() {
-    let mut world = World::new();
-    let mut room = OpenRoom::new();
-    let wire_id = room.on_join(&mut world, ConnectionId(1)).entity;
-    let ctx = ctx1();
-    let mut out = bytes::BytesMut::new();
-    assert!(
-        room.snapshot(&mut world, &ctx, &(), &[], &mut out),
-        "join emits"
-    );
-    assert_eq!(wire_id, 1, "first entity gets wire id 1");
-
-    // The bevy handle is the room's business (player_entity); the
-    // join reply carried the wire id, not the bevy bits.
-    let e = *room.player_entity.get(&PlayerId(1)).unwrap();
-    world.entity_mut(e).insert(Position { x: 42.0, y: -7.0 });
-
-    let mut out2 = bytes::BytesMut::new();
-    assert!(
-        room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
-        "a plain position write must still emit"
-    );
-    let snap = crate::kit::seam::WorldSnapshot::decode(out2.as_ref()).expect("decode");
-    assert_eq!(snap.entities.len(), 1);
-    assert_eq!(snap.entities[0].x, 42);
-    assert_eq!(snap.entities[0].y, -7);
 }
 
 /// The identity invariant (see `game.proto`, `EntityRecord.entity`):
@@ -135,7 +106,7 @@ fn wire_identity_survives_ecs_slot_reuse() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out),
         "join emits"
     );
-    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("decode");
+    let snap = crate::kit::testing::WorldSnapshot::decode(out.as_ref()).expect("decode");
     assert_eq!(snap.entities.len(), 1);
     let rec = &snap.entities[0];
     assert_eq!(rec.entity, wire_id, "snapshot carries the fresh wire id");
@@ -151,89 +122,6 @@ fn wire_identity_survives_ecs_slot_reuse() {
     // so a client keyed by index would hit its map and misread the new
     // entity as entity #128 teleporting to a spawn point. The wire id
     // is the field that carries the distinction.
-}
-
-/// The publishable precondition is structural, not a discipline: an
-/// entity that carries a [`Position`] but never passed through
-/// [`OpenRoom::on_join`] (bullets, NPCs, traps — anything not
-/// player-spawned) must not be *silently invisible*. The broadcast
-/// pass stamps it with a fresh serial and includes it in the very
-/// next snapshot — restoring the pre-compact-identity contract
-/// (broadcast set = "has a `Position`").
-#[test]
-fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
-    let mut world = World::new();
-    let mut room = OpenRoom::new();
-    let ctx = ctx1();
-
-    // Two players through the normal path (wire ids 1 and 2).
-    room.on_join(&mut world, ConnectionId(1));
-    room.on_join(&mut world, ConnectionId(2));
-
-    // A "bullet" spawned directly into the world — no `on_join`.
-    let bullet = world.spawn(Position { x: 7.0, y: -3.0 }).id();
-    assert!(
-        world.get::<WireId>(bullet).is_none(),
-        "precondition: the entity has no wire identity"
-    );
-
-    // The next snapshot must include it, with a fresh wire id.
-    let mut out = bytes::BytesMut::new();
-    assert!(
-        room.snapshot(&mut world, &ctx, &(), &[], &mut out),
-        "a new entity is a wire-content change ⇒ emit"
-    );
-    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("decode");
-    assert_eq!(
-        snap.entities.len(),
-        3,
-        "the orphan must not be silently invisible"
-    );
-    let rec = snap
-        .entities
-        .iter()
-        .find(|e| e.x == 7 && e.y == -3)
-        .expect("the orphan's record");
-    assert_eq!(
-        rec.entity, 3,
-        "it gets the next free serial from the room's single counter \
-         (fresh: never handed out before, never re-used)"
-    );
-    assert!(
-        world.get::<WireId>(bullet).is_some(),
-        "the entity is stamped (one assignment)"
-    );
-
-    // Idempotent: the same wire content emits nothing, and the
-    // identity is stable across snapshots.
-    let mut out2 = bytes::BytesMut::new();
-    assert!(
-        !room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
-        "unchanged content ⇒ silent (no re-stamp, no re-emit)"
-    );
-    assert_eq!(
-        world.get::<WireId>(bullet).copied().map(WireId::get),
-        Some(3),
-        "the identity is stable across snapshots"
-    );
-
-    // The stamped entity moves: the *same* identity at a new position
-    // (a client reads "the same entity moved", not "a new entity").
-    world
-        .entity_mut(bullet)
-        .insert(Position { x: 9.0, y: -3.0 });
-    let mut out3 = bytes::BytesMut::new();
-    assert!(
-        room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
-        "movement ⇒ wire content changed ⇒ emit"
-    );
-    let snap3 = crate::kit::seam::WorldSnapshot::decode(out3.as_ref()).expect("decode");
-    let rec3 = snap3
-        .entities
-        .iter()
-        .find(|e| e.entity == 3)
-        .expect("same identity in the new snapshot");
-    assert_eq!((rec3.x, rec3.y), (9, -3));
 }
 
 /// Identical wire content stays silent (a write that leaves the
@@ -272,6 +160,6 @@ fn snapshot_silent_when_wire_content_unchanged() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
         "leave ⇒ wire content changed ⇒ emit"
     );
-    let snap = crate::kit::seam::WorldSnapshot::decode(out3.as_ref()).expect("decode");
+    let snap = crate::kit::testing::WorldSnapshot::decode(out3.as_ref()).expect("decode");
     assert!(snap.entities.is_empty(), "left: empty world snapshot");
 }

@@ -19,15 +19,14 @@
 //!   hooks);
 //! - `identity` — the kit-owned wire identity (`WireId`) and its single
 //!   `Minter` (§4.4);
-//! - `seam` — **temporary**: the kit's envelope types, generated from the
-//!   demo's proto until phase 2 gives the kit its own (plus the test
-//!   fixtures).
+//! - `testing` (tests only) — the kit's own fixture game and test
+//!   wrappers.
 //!
 //! The dependency points one way (§3: "kit, demo'yu asla görmez"): the
-//! only kit→demo references left are the seam's envelope imports, and
-//! the rule enforced here is the structural one — every kit→demo
-//! reference is an import from `seam`, and nothing else under `kit/`
-//! names a crate path outside `crate::kit`.
+//! kit's envelope comes from its own proto (`gsb_kit::proto`), its tests
+//! run the fixture game, and nothing under `kit/` names a crate path
+//! outside `crate::kit` (the `layering` test). The crate split (phase 2)
+//! moves this module into `gsb-kit`.
 
 pub mod aoi;
 pub mod codec;
@@ -36,7 +35,6 @@ pub mod game;
 pub mod identity;
 pub mod pvs;
 pub mod room;
-pub(crate) mod seam;
 pub mod sharded;
 pub mod space;
 pub mod team;

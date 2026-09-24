@@ -10,14 +10,14 @@ use gsb_core::room::Action;
 use super::*;
 use crate::kit::common::InputSeq;
 use crate::kit::game::{Game, TeamGame};
-use crate::kit::seam::DemoGame;
 use crate::kit::space::VisionGrid2;
+use crate::kit::testing::Fixture;
 
-/// The demo game with a three-team assignment rule (conn mod 3).
-struct ThreeTeams(DemoGame);
+/// The fixture game with a three-team assignment rule (conn mod 3).
+struct ThreeTeams(Fixture);
 
 impl Game for ThreeTeams {
-    type Codec = <DemoGame as Game>::Codec;
+    type Codec = <Fixture as Game>::Codec;
 
     fn codec(&self) -> &Self::Codec {
         self.0.codec()
@@ -53,7 +53,7 @@ impl TeamGame for ThreeTeams {
 fn three_teams_each_see_own_units_and_enemies_in_their_vision() {
     let mut world = World::new();
     let mut room = super::super::TeamRoom::with_game(
-        ThreeTeams(DemoGame::default()),
+        ThreeTeams(Fixture::default()),
         VisionGrid2::<Position>::new(25.0),
     );
     let mut place = |world: &mut World, conn: u64, x: f32, y: f32| {

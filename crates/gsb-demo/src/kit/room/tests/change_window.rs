@@ -39,3 +39,44 @@ fn open_room_closes_the_change_window_every_tick() {
         );
     }
 }
+
+/// A game whose systems close the change window themselves — the
+/// ownership violation §4.4 rules out.
+struct ClearsTrackers(crate::kit::testing::Fixture);
+
+impl crate::kit::game::Game for ClearsTrackers {
+    type Codec = crate::kit::testing::FixCodec;
+
+    fn codec(&self) -> &Self::Codec {
+        self.0.codec()
+    }
+    fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
+        self.0.spawn_player(world, conn)
+    }
+    fn ingest(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<gsb_core::room::Action>,
+        players: &std::collections::HashMap<PlayerId, Entity>,
+        seq: &mut crate::kit::common::InputSeq,
+    ) {
+        self.0.ingest(world, ctx, actions, players, seq);
+    }
+    fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
+        self.0.systems(world, ctx);
+        world.clear_trackers();
+    }
+}
+
+/// The kit owns the tick's one `clear_trackers` call: a hook that
+/// makes it too would hide its own writes from the codec's `Dirty`
+/// filter, so debug builds stop it at the hook boundary.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "the kit owns the change window")]
+fn a_hook_closing_the_change_window_is_caught() {
+    let mut world = World::new();
+    let mut room = super::super::OpenRoom::with_game(ClearsTrackers(Default::default()));
+    room.update(&mut world, &ctx(1));
+}
