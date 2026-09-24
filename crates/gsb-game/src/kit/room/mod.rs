@@ -138,7 +138,7 @@ pub struct OpenRoom {
     /// clients' input the same way (the client's prediction
     /// reconciliation does not care which visibility strategy the server
     /// picked).
-    input: HashMap<PlayerId, crate::kit::common::InputState>,
+    input: crate::kit::common::InputSeq,
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
@@ -184,7 +184,7 @@ impl OpenRoom {
             minter: crate::kit::identity::Minter::sequential(),
             spawn_half: half.max(1.0),
             last: HashMap::new(),
-            input: HashMap::new(),
+            input: crate::kit::common::InputSeq::default(),
             encoded: 0,
             economy: None,
             park: crate::kit::common::ParkPolicy::default(),

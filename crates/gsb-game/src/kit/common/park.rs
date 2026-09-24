@@ -143,10 +143,10 @@ pub(crate) fn park_lookup(
 /// itself before calling into here.
 pub(crate) fn park_resume(
     ledger: &mut HashMap<String, ParkEntry>,
-    input: &mut HashMap<PlayerId, InputState>,
+    input: &mut InputSeq,
     identity: &str,
     player: PlayerId,
 ) {
     ledger.remove(identity);
-    input.remove(&player);
+    input.end(player);
 }

@@ -1,6 +1,6 @@
 //! The demo's input path: `MOVE_TO` decoding and application (the future
 //! `Game::ingest`, KIT-ARCHITECTURE §4.3). The sequence rule it applies
-//! is the kit's ([`InputState::admit`]).
+//! is the kit's ([`InputSeq::admit`]).
 
 use std::collections::HashMap;
 
@@ -11,12 +11,12 @@ use prost::Message;
 
 use crate::demo::components::MoveTarget;
 use crate::demo::op;
-use crate::kit::common::InputState;
+use crate::kit::common::InputSeq;
 
 /// `MOVE_TO` ingestion, shared by all rooms: decode the game message,
 /// guard against stale actions (connection not in the room) and vanished
 /// entities, enforce the per-connection input sequence rule (the kit's
-/// [`InputState::admit`] — a duplicate or reordered numbered input is
+/// [`InputSeq::admit`] — a duplicate or reordered numbered input is
 /// dropped silently, an unnumbered one always processes), and write the
 /// [`MoveTarget`]. Anything else is ignored with a warning (the op code is
 /// the router; undecodable payloads are a client bug, not a reason to
@@ -25,7 +25,7 @@ pub(crate) fn ingest(
     player_entity: &HashMap<PlayerId, Entity>,
     world: &mut World,
     actions: &mut Vec<Action>,
-    input: &mut HashMap<PlayerId, InputState>,
+    input: &mut InputSeq,
 ) {
     for action in actions.drain(..) {
         if action.op != op::MOVE_TO {
@@ -45,10 +45,8 @@ pub(crate) fn ingest(
         if world.get_entity(entity).is_err() {
             continue; // entity already gone
         }
-        // The sequence rule (kit). `or_default` is a defensive fallback
-        // only: `on_join` inserts the session state.
-        let st = input.entry(action.player).or_default();
-        if !st.admit(msg.seq) {
+        // The sequence rule (kit).
+        if !input.admit(action.player, msg.seq) {
             continue; // duplicate / reordered late: dropped (normal race)
         }
         world.entity_mut(entity).insert(MoveTarget {

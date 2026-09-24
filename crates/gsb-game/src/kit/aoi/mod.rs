@@ -297,7 +297,7 @@ pub struct AoiRoom {
     spawn_half: f32,
     /// Per-player input sequence state (strategy-independent; see
     /// the demo's `ingest` / `crate::kit::common::emit_private`).
-    input: HashMap<PlayerId, crate::kit::common::InputState>,
+    input: crate::kit::common::InputSeq,
     /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the
     /// group's own full in the same batch). A player whose entry is
@@ -350,7 +350,7 @@ impl AoiRoom {
             minter: crate::kit::identity::Minter::sequential(),
             cell_size: cell_size.max(0.5),
             spawn_half: half.max(1.0),
-            input: HashMap::new(),
+            input: crate::kit::common::InputSeq::default(),
             conn_view: HashMap::new(),
             book: CellBook::default(),
             tick: 0,

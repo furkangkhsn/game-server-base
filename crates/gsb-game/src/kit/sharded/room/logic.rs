@@ -120,8 +120,7 @@ impl GameLogic<World> for ShardedRoom {
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
-        self.input
-            .insert(player, crate::kit::common::InputState::default());
+        self.input.begin(player);
         Admission {
             player,
             entity: wire,
@@ -137,7 +136,7 @@ impl GameLogic<World> for ShardedRoom {
                 self.own_wires.remove(&wire.get());
             }
             self.entity_player.remove(&entity);
-            self.input.remove(&player);
+            self.input.end(player);
             world.despawn(entity);
         }
     }
@@ -227,7 +226,7 @@ impl GameLogic<World> for ShardedRoom {
         // Faz 2 shrink: consume the ledger entry + seq/ack reset. Nothing
         // to re-key — every table is keyed by the STABLE player id.
         self.park_ledger.remove(identity);
-        self.input.remove(&player);
+        self.input.end(player);
     }
 
     /// The per-connection private frame: the pending input

@@ -83,7 +83,7 @@ pub struct ShardedRoom {
     /// session stays bound to this shard even if its entity migrates (its
     /// input is routed through this shard's room), so the session lives
     /// here.
-    pub(in crate::kit::sharded) input: HashMap<PlayerId, crate::kit::common::InputState>,
+    pub(in crate::kit::sharded) input: crate::kit::common::InputSeq,
     /// The economy service handle (the RPC pattern's external-I/O half on
     /// the SHARDED path — Faz 3; the demo's economy service); `None` = this
     /// shard answers `ECONOMY` requests with a normal "not configured"
@@ -135,7 +135,7 @@ impl ShardedRoom {
             border_cache: Vec::new(),
             last: HashMap::new(),
             encoded: 0,
-            input: HashMap::new(),
+            input: crate::kit::common::InputSeq::default(),
             economy: None,
         }
     }
