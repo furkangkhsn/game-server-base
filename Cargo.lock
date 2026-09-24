@@ -731,6 +731,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsb-demo-arena"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bytes",
+ "gsb-core",
+ "gsb-kit",
+ "gsb-lint",
+ "gsb-protocol",
+ "prost",
+ "prost-build",
+ "protoc-bin-vendored",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "gsb-ecs"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,79 @@
+// The 3D arena's wire (KIT-ARCHITECTURE §12: the arena validation demo).
+//
+// Two kinds of messages live here:
+//
+// - the arena's OWN messages: its input (`MoveTo`) and its entity record
+//   (`UnitRecord`, the body the arena's `RecordCodec::encode` writes);
+// - its client-facing TYPED MIRRORS of the kit's envelope
+//   (`gsb.kit.WorldSnapshot`, `gsb.kit.Private` in gsb-kit's `kit.proto`).
+//   The kit writes those frames with OPAQUE record bodies (`repeated
+//   bytes entities = 2`); a `repeated UnitRecord entities = 2` under the
+//   same number is the same bytes on the wire (both length-delimited), so
+//   an arena client decodes the kit's frames with the mirror unchanged.
+//   `tests/wire.rs` pins the two definitions to identical bytes. The kit's
+//   `InputAck` is used as is (imported, not mirrored).
+//
+// UNITS. Every coordinate on this wire is an integer number of
+// CENTIMETRES (the arena's world unit is the metre; see `src/codec.rs`
+// for the quantization and why centimetres). Axis order x, y, z with y
+// UP (height).
+
+syntax = "proto3";
+
+package gsb.arena;
+
+import "base.proto";
+import "kit.proto";
+
+// Client -> server (op `ARENA_MOVE_TO`): "move my unit toward (x, y, z)".
+// The target is clamped into the arena's volume on the server.
+message MoveTo {
+  // Target, centimetres. Zig-zag varints: <= 2 bytes each across the
+  // whole arena (|v| <= 5000 horizontally, 0..3000 in height).
+  sint32 x = 1;
+  sint32 y = 2;
+  sint32 z = 3;
+  // Client-assigned input sequence number: monotonic from 1 within one
+  // session, 0 = unnumbered (always processed, never acknowledged). The
+  // rule is the kit's (`gsb_kit::game::InputSeq`); the acknowledgment
+  // comes back as `gsb.kit.InputAck` in the `Private` frame.
+  uint64 seq = 4;
+}
+
+// One unit's record: the body of each `WorldSnapshot.entities` entry.
+message UnitRecord {
+  // The kit-minted wire identity (monotonic within the room, never
+  // reused; the joiner learns its own from JOIN_ROOM_RESULT).
+  uint64 entity = 1;
+  // Position, centimetres (rounded to nearest).
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 z = 4;
+}
+
+// Typed mirror of `gsb.kit.WorldSnapshot` (op `ARENA_SNAPSHOT`). The
+// team-fog room the arena runs emits FULL snapshots only: each frame
+// is the team's complete view and replaces the client's view (a unit
+// that left the team's vision is simply absent). Field 4 (`cell_exits`)
+// is not mirrored: the arena runs no cell space, so no frame carries it
+// (a decoder would skip it anyway).
+message WorldSnapshot {
+  uint64 sequence = 1;
+  repeated UnitRecord entities = 2;
+  // Delta frames only (never sent by the team-fog room; mirrored so a
+  // client written against this file needs no change if it ever is).
+  repeated uint64 removed = 3;
+  bool delta = 5;
+}
+
+// Typed mirror of `gsb.kit.Private` (op `ARENA_PRIVATE`): the
+// per-connection frame carrying the input acknowledgment and the RPC
+// responses. Field 4 (`game`, the kit's opaque per-game payload) is not
+// mirrored: the arena sends no private payload of its own.
+message Private {
+  oneof payload {
+    gsb.kit.InputAck ack = 1;
+    WorldSnapshot snapshot = 2;
+  }
+  repeated gsb.base.RpcResponse responses = 3;
+}
