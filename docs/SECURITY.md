@@ -14,6 +14,7 @@
 | Post-auth HEARTBEAT_ACK kısması (§3.2'nin ikinci yarısı) | Bağlantı sınırları turu | ✅ Uygulandı |
 | Tıkanmış yazmaya süre sınırı (`write_stall_secs`) | Bağlantı sınırları turu | ✅ Uygulandı (§3.5); **bayt-granüler** (stall gözlemlenebilirliği turu) |
 | Sunucu-başlatımlı kapanış sayaçları, sebep bazında | Stall gözlemlenebilirliği turu | ✅ Uygulandı (§3.6) |
+| WS kapısının RFC 6455 uyumu (parça arası veri çerçevesi, uzunluk kodlaması, kapanış kodları) + CI'da Autobahn kapısı | WS uyum kapısı turu | ✅ Uygulandı (§3.7); Autobahn işi yerelde koşulmadı |
 | rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
@@ -142,6 +143,87 @@ hakkında hüküm değil ve toplayıcı onunla birlikte öldüğü için
 gözlenemez; ticket / protokol sürümü reddi — bağlantı açık kalır;
 girdi-boşta tavanı — entity'yi politikaya verir, oturumu bitirmez.
 
+## 3.7. WebSocket kapısının RFC 6455 uyumu (WS uyum kapısı turu)
+
+El yazımı RFC 6455 kapısı `[[listeners]]`'tan (`transport = "ws"`)
+erişildiği için servis yolunda. Okuyucu (`gsb-net/src/ws/reader/`)
+RFC 6455 §5 (çerçeveleme) ve §7'ye (kapanış) karşı kural kural
+denetlendi. Her kural okuyucu seviyesinde bir testle kilitli:
+`ws::tests::{fragmentation, framing, close_frames}` çıplak bir
+`WsReader`'ı loopback soketten besler ve reddin kapanış kodunu doğrudan
+giden kuyruktan okur (arada peer yok, kod birebir görünür). "Hata" =
+bağlantı kapanış koduyla düşürülür, reader pump `StreamRejected` bildirir
+(§3.6 `stream_rejected`).
+
+| Kural | Önce | Şimdi | Test |
+|---|---|---|---|
+| §5.4 açık parçalı mesajın içinde yeni BIN, FIN'siz | yarım mesaj **sessizce atılıp** yenisine başlanıyordu | 1002 | `fragmentation::a_new_unfinished_binary_frame_inside_an_open_message_fails_with_1002` |
+| §5.4 açık parçalı mesajın içinde yeni BIN, FIN'li | mesajın **içinde** oyun karesi olarak teslim ediliyordu | 1002 | `fragmentation::a_new_complete_binary_frame_inside_an_open_message_fails_with_1002` |
+| §5.4 açık BIN mesajının içinde TEXT | 1003 | 1002 | `fragmentation::a_text_frame_inside_an_open_binary_message_fails_with_1002` |
+| Açık mesaj yokken TEXT (sözleşme) | 1003 | 1003 | `fragmentation::a_text_frame_with_no_message_open_still_fails_with_1003`, `protocol::text_message_is_rejected_with_1003` |
+| Açık mesaj yokken CONT | 1002 | 1002 | `fragmentation::a_continuation_with_no_message_open_fails_with_1002` |
+| Parçalar arasında PING / PONG / CLOSE | izinli | izinli: pong cevaplanır, mesaj tek kare olarak birleşir; close el sıkışmayı tamamlar, yarım mesaj bırakılır | `fragmentation::ping_and_pong_between_fragments_leave_the_message_intact`, `fragmentation::a_close_between_fragments_completes_the_close_handshake` |
+| §5.2 RSV1-3, uzantı yokken | 1002 | 1002 | `framing::reserved_bits_without_an_extension_fail_with_1002` |
+| §5.2 ayrılmış opcode (3-7, 0xB-0xF) | 1002 | 1002 | `framing::reserved_opcodes_fail_with_1002` |
+| §5.5 kontrol çerçevesi > 125 B ya da parçalı | 1002 | 1002 (125 B sınırı kabul) | `framing::oversized_or_fragmented_control_frames_fail_with_1002` |
+| §5.1 maskesiz istemci çerçevesi | 1002 | 1002 | `framing::an_unmasked_client_frame_fails_with_1002`, `protocol::unmasked_client_frame_is_rejected_with_1002` |
+| §5.2 64-bit uzunluğun MSB'si 1 | 1009 (tavan aşımı sanılıyordu) | 1002, tavandan önce | `framing::a_64_bit_length_with_the_high_bit_set_fails_with_1002` |
+| §5.2 minimal olmayan uzunluk kodlaması (16/64-bit biçimde kısa uzunluk) | kabul | 1002 | `framing::non_minimal_length_encodings_fail_with_1002`; sınırlar: `framing::minimal_lengths_at_every_form_boundary_are_delivered` |
+| Tavan üstü uzunluk | 1009 | 1009 | `framing::a_64_bit_length_over_the_ceiling_still_fails_with_1009`, `protocol::oversized_declared_length_is_rejected_with_1009` |
+| §5.5.1 1 baytlık close yükü | 1002 | 1002 | `close_frames::a_one_byte_close_payload_fails_with_1002` |
+| §7.4 gönderilemez kapanış kodu (0-999, 1004-1006, 1015, 1016-2999, ≥ 5000) | **yankılanıyordu** | 1002 | `close_frames::an_unsendable_close_code_fails_with_1002` |
+| §7.4 gönderilebilir kod (1000-1003, 1007-1014, 3000-4999) | yankı | yankı (yalnız kod) | `close_frames::every_sendable_close_code_is_echoed` |
+| §8.1 UTF-8 olmayan kapanış sebebi | kod yankılanıyordu | 1007 | `close_frames::a_close_reason_that_is_not_utf8_fails_with_1007`; 123 B çok-baytlı sebep kabul: `close_frames::a_maximal_utf8_reason_is_accepted` |
+| §7.1 kapanış el sıkışması (kod yankısı, sonra sunucu önce kapatır) | var | var | `close_frames::an_empty_close_is_echoed_empty`, `protocol::close_handshake_echoes_code_and_reports_peer_closed` |
+
+### Kararlar
+
+| # | Karar | Gerekçe (elenen alternatif) |
+|---|---|---|
+| 1 | Açık BIN mesajının içindeki TEXT **1002**, 1003 değil | İlk kusur tipi değil çerçevelemedir: text destekleyen bir uç da orada 1002 göndermek zorunda (Autobahn 5.18 text-içinde-text için 1002 bekler). 1003'ü korumak (elenen) ihlali "desteklenmeyen veri" gibi gösterirdi. Tek başına TEXT 1003 kalır: sözleşme kararı değişmedi |
+| 2 | Minimal olmayan uzunluk **reddedilir** (1002) | RFC bunu gönderene MUST olarak koyar. Tarayıcı asla üretmez; aynı çerçevenin iki kodlaması aradaki bir ayrıştırıcıyla anlaşmazlık vektörüdür. Kabul etmek (elenen) uyumlu hiçbir istemciye yaramazdı |
+| 3 | 1012-1014 **gönderilebilir** sayılır | IANA kayıtlı (servis yeniden başlıyor / sonra dene / bad gateway). Yalnız RFC'nin 1000-1011'i (elenen) "yeniden başlıyorum" diyen bir peer'ı 1002 ile düşürürdü |
+| 4 | Yankı yalnız kodu taşır, sebebi değil | RFC "genellikle kodu yankılar" der; sebebi doğrulamak yetiyor, geri göndermek bir şey kazandırmaz |
+
+### Autobahn kapısı (CI `autobahn` işi)
+
+- **Hedef** `gsb-net/examples/ws_autobahn.rs`: üretim kapısı (handshake,
+  ayrıştırıcı, birleştirme, kontrol çerçeveleri, kapanış, pump'lar) +
+  **opak mesaj eşlemesi** (`WsMessageMapping::Opaque`: binary mesaj
+  olduğu gibi yankılanır). Autobahn bir echo sunucusu bekler ve rastgele
+  binary yükleri geri ister; oyun zarfı bunları 1007 ile reddeder. Elenen
+  alternatifler: (a) `gsb-server`'ı hedeflemek: echo vakalarının hemen
+  hepsi sözleşme gereği FAIL olurdu, sinyal kalmazdı. (b) Harness'e ayrı
+  bir okuyucu: test edilen kod üretim kodu olmazdı. (c) Opak modu bir cargo
+  feature'ının arkasına koymak: varsayılan clippy/test örneği derlemezdi.
+  Opak eşleme config'ten seçilemez; TEXT orada da 1003'tür.
+- **Kapsam:** her vaka koşar, sözleşme gereği dışlananlar hariç. Text
+  echo / text UTF-8 vakaları kapı text'i 1003 ile reddettiği için
+  dışlanır: `1.1.*`, `3.2-3.4`, `4.1.3-5`, `4.2.3-5`, `5.3-5.8`, `5.15`,
+  `5.18-5.20`, `6.*`, `7.1.1`, `7.1.5`, `7.1.6`, `9.1/9.3/9.5/9.7.*`,
+  `10.*`. `12.*` ve `13.*` da dışlanır, çünkü permessage-deflate
+  sunulmuyor. Her dışlamanın gerekçesi tek yerde:
+  `.github/autobahn/autobahn.py` (`EXCLUDED`); spec'i o dosya üretir,
+  raporu o dosya yargılar.
+- **Build'i kırma kuralı:** koşan her vaka hem `behavior` hem
+  `behaviorClose`'da OK/INFORMATIONAL olmalı. `ACCEPTED` (bugün boş; her
+  giriş gerekçeli) dışında NON-STRICT / FAILED / UNCLEAN / WRONG CODE
+  build'i kırar. Her gruptan bir zorunlu vaka koşmuş olmalı; dışlanan
+  bir vaka koşmuşsa da kırılır.
+- **Not:** Autobahn'ın parçalama grubu (5.*) binary mesaj
+  araya girmesini hiç denemez (vakaların hepsi text). Bu turun kapattığı
+  açık yalnız yukarıdaki birim testleriyle kilitli; Autobahn onu
+  yakalamazdı.
+- **Yerelde koşulmadı:** imaj (`crossbario/autobahn-testsuite:0.8.2`)
+  indirilemedi, etiket de yerelde doğrulanamadı. Yerelde doğrulananlar:
+  harness'e elle yazılmış bir istemciyle Autobahn biçimli 69 vaka
+  (0 B-16 MiB binary echo, chop'lar, ping/pong, RSV, opcode, parçalı
+  kontrol, 7.x kapanış kodları, 7.5.1'in baytları) yeşil geçti; CI
+  adımlarının kabuk kısmı (harness başlatma, port bekleme, spec üretimi)
+  yerelde koştu; `check` sentetik raporlarla sınandı; YAML parse edildi.
+  İlk CI koşusu beklenmedik bir sonuç verirse iki yol var: düzelt, ya da
+  `ACCEPTED`'e gerekçesiyle ekle. Sessizce gevşetmek yok.
+
 ## 4. Pre-auth tahsis sınırı (Tur B)
 
 | # | Karar | Gerekçe |
@@ -170,6 +252,9 @@ tamponları), QUIC (istemcinin 2 KiB alım penceresi) ve WS yazma yolu
 (`*::tests::slow_reader`); hiç okumayan WS peer'ı hâlâ ölür; her kapanış
 yolu kendi sebep kovasında sayılır ve komşu kovalar kıpırdamaz
 (`server_closes.rs`, `violation/closes.rs`, `write_stall.rs`).
+WS uyum kapısı turu: §3.7 tablosunun her satırı okuyucu seviyesinde
+(`gsb-net` `ws::tests::{fragmentation, framing, close_frames}`), opak
+eşleme `ws::tests::opaque`'ta; CI'da Autobahn fuzzing client'ı.
 
 ## 6. NOT-DONE
 

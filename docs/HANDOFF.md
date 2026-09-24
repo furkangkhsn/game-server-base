@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-497 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+521 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -223,11 +223,14 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
    numarasını VE adını `reserved` et, commit'i gerekçe olarak an.
    Açık kalan tek parça sürüm ARALIĞI politikası — tetikleyicisi
    ROADMAP'te ("Protokol sözleşmesi" bölümü).
-3. **WS uyum kapısı** — el yazımı RFC 6455 artık `[[listeners]]`'tan
-   erişilebilir, yani servis yolunda. Bilinen açık: fragmentasyon
-   sırasında araya giren veri çerçevesi (§5.4) reddedilmiyor
-   (`ws/reader/dispatch.rs`, OP_BIN kolu `frag_opcode`'a bakmıyor).
-   Tek guard'lık düzeltme + CI'da Autobahn `wstest` kapısı.
+3. ~~**WS uyum kapısı**~~ — **KOD TARAFI KAPANDI** (CHANGELOG "WS uyum
+   kapısı turu", SECURITY §3.7): §5.4 araya girme guard'ı (1002), §5.2
+   uzunluk kuralları, §7.4/§8.1 kapanış doğrulaması; her kural okuyucu
+   seviyesinde testli. CI'daki `autobahn` işi (`examples/ws_autobahn` +
+   `.github/autobahn/autobahn.py`) **yerelde hiç koşulmadı**, ilk CI
+   koşusu ilk gerçek koşusu. Açık kalan: o koşunun raporunu oku. Her
+   beklenmedik sonuç ya düzeltilir ya `ACCEPTED`'e gerekçesiyle girer;
+   imaj etiketi `0.8.2` de o koşuda doğrulanır.
 4. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon
@@ -248,6 +251,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 497 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 521 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -69,15 +69,17 @@ explicitly provide the embedded binary of `protoc-bin-vendored` to `prost-build`
 `PROTOC`/`PATH`. On an exotic target where the embedded binary is not found, the build script
 prints a `cargo:warning` and falls back to the old behavior (`PROTOC`, then `PATH`);
 there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
-clippy `-D warnings` · test).
+clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
+WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 497 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 521 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
 # sharded keepalive + shard RPC), security (TLS transport, auth rate limit, pre-auth
 # caps), multi-listener (mixed transports on the same map: TCP/TLS/rUDP/QUIC/WS),
+# WebSocket RFC 6455 conformance at the reader (fragmentation, framing, close frames),
 # border-delta exchange, ops surface (/metrics, /healthz, admin API), visibility (delta
 # AOI, PVS, team fog, sharded), frame independence, identity invariant, publishability,
 # e2e, metric flow, load smoke, wire contract (RPC envelope bytes, retired opcodes),

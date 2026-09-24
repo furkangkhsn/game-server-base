@@ -75,10 +75,20 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **497** (497/497 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **521** (521/521 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **gsb-kit Faz 5** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 5
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **WS uyum kapısı** (`docs/SECURITY.md` §3.7): el yazımı RFC
+6455 okuyucusu §5 ve §7'ye karşı kural kural denetlendi. Bilinen açık
+kapandı: açık parçalı mesajın içindeki yeni veri çerçevesi yarım mesajı
+sessizce atıyor ya da içine teslim ediliyordu, artık 1002. Denetimin
+bulduğu üç sapma da kapandı: MSB'li 64-bit uzunluk 1009 yerine 1002,
+minimal olmayan uzunluk 1002, gönderilemez kapanış kodu 1002 ve UTF-8
+olmayan sebep 1007. Her kural okuyucu seviyesinde kilitli (+24 test).
+CI'da Autobahn fuzzing client işi var; hedefi üretim kapısı + opak mesaj
+eşlemesi. Text vakaları sözleşme gereği gerekçeli olarak dışlandı. İş
+**yerelde koşulmadı** (imaj indirme izni yok); ilk CI koşusu onun ilk
+gerçek koşusu olacak. Önceki tur: **gsb-kit Faz 5** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 5
 sonucu") — **kit düzeltme turu**: iki kontrol demosunun kaydettiği
 bulguların hepsi kit'te kapandı, her biri kendi commit'inde ve önce
 kırılan testiyle — F1 (doğruluk: sharded × spatial'da ödünç hücresine

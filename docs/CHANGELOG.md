@@ -5,6 +5,71 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## WS uyum kapısı turu (RFC 6455 denetimi + Autobahn CI kapısı)
+
+HANDOFF iş sırası madde 3. El yazımı RFC 6455 kapısı `[[listeners]]`
+üzerinden servis yolunda olduğu için okuyucu RFC 6455 §5 (çerçeveleme) ve
+§7'ye (kapanış) karşı kural kural denetlendi. Bilinen açık ve denetimin
+bulduğu üç sapma kapandı; her biri önce kırılan testiyle geldi ve
+mutation-check'li. Tam kural tablosu (önce → şimdi → test):
+`docs/SECURITY.md` §3.7.
+
+**Commit'ler** (`2c8725c..`): `ba3be1e` parça arası veri çerçevesi,
+`2c01207` uzunluk kodlaması, `54af477` kapanış çerçevesi doğrulaması,
+`564edec` opak eşleme + Autobahn harness'i, `e7cf7bf` CI işi, ardından
+bu doküman commit'i.
+
+**Davranış değişiklikleri (açıkça; hepsi yalnız kural dışı istemciyi
+etkiler, uyumlu istemci için tel aynı):**
+- **Bilinen açık, §5.4:** açık parçalı bir mesajın içinde gelen yeni BIN
+  çerçevesi, FIN'siz ise yarım mesajı **sessizce atıyordu**, FIN'li ise
+  mesajın **içinde** oyun karesi olarak teslim ediliyordu. Şimdi ikisi
+  de 1002. Aynı yerdeki TEXT 1003 yerine 1002 alıyor (ilk kusur
+  çerçeveleme). Tek başına TEXT hâlâ 1003: sözleşme kararı değişmedi.
+  Düzeltme, iki veri kolunun önünde tek bir guard.
+- **§5.2:** MSB'si 1 olan 64-bit uzunluk 1009 (tavan aşımı) sanılıyordu;
+  artık tavandan önce 1002. Minimal olmayan uzunluk kodlaması kabul
+  ediliyordu; artık 1002.
+- **§7.4 / §8.1:** her iki baytlık kapanış kodu yankılanıyordu; artık
+  gönderilemez kodlar (0-999, 1004-1006, 1015, 1016-2999, ≥ 5000) 1002,
+  UTF-8 olmayan sebep 1007 alıyor. 1000-1003, 1007-1014 ve 3000-4999
+  eskisi gibi yankılanıyor (yalnız kod).
+- **Yalnız ekleme:** `WsTransport.mapping: WsMessageMapping`
+  (`GameEnvelope` varsayılan = tel sözleşmesi; `Opaque` yalnız
+  conformance harness'i için, config'ten seçilemez). `WsTransport`'u
+  struct literal'iyle kuran dış kod bu alanı eklemeli (`..Default::default()`
+  de olur).
+
+**Testler (+24 → 521):** `gsb-net` `ws::tests::fragmentation` (7: üç
+açık + dört kilit, parça arası PING/PONG/CLOSE dahil), `ws::tests::framing`
+(8), `ws::tests::close_frames` (6), `ws::tests::opaque` (3). Hepsi yeni
+okuyucu-seviyesi `ws::tests::rig` üzerinde: çıplak `WsReader` + loopback
+soket; kapanış kodu doğrudan giden kuyruktan okunuyor. Önce-kırılan
+kanıt: fix'lerden önce 7 test kırmızıydı (üç araya girme; MSB → 1009;
+minimal olmayan uzunluk teslim edildi; gönderilemez kod ve UTF-8 olmayan
+sebep yankılandı). Mutation'lar (her biri yedekten geri yüklendi):
+guard'ı yalnız BIN'e daraltmak → text testi kırılıyor; guard'ı kapatmak →
+3 test; MSB denetimini kapatmak, 64-bit minimal sınırını `< u16::MAX` ya
+da `< 126` yapmak, 16-bit denetimini kapatmak ya da `<= 126` yapmak →
+her biri kendi testini kırıyor; kod denetimini kapatmak, 1015'i
+izinlilere katmak, 1012-1014'ü çıkarmak, UTF-8 denetimini kapatmak →
+her biri kendi testini kırıyor; opak eşlemenin okuyucu ya da yazıcı
+kolunu kapatmak → `opaque` testleri kırılıyor.
+
+**Autobahn kapısı:** CI'da yeni `autobahn` işi. `examples/ws_autobahn`
+(release) 127.0.0.1:9001'de başlıyor; `crossbario/autobahn-testsuite:0.8.2`
+fuzzingclient modunda ona karşı koşuyor; `.github/autobahn/autobahn.py`
+spec'i üretiyor ve raporu yargılıyor (kural ve dışlamalar SECURITY §3.7).
+**Yerelde koşulmadı:** imaj indirme izni yok. Yerelde doğrulananlar:
+elle yazılmış istemciyle Autobahn biçimli 69 vaka yeşil, CI'nın kabuk
+adımları, `check`'in sentetik raporlarla davranışı, YAML parse.
+
+**Elenenler:** tam `gsb-server`'ı Autobahn'a hedeflemek (echo vakaları
+sözleşme gereği FAIL olurdu), harness'e ayrı okuyucu yazmak (test edilen
+kod üretim kodu olmazdı), opak modu cargo feature'ının arkasına koymak
+(varsayılan lint/test örneği derlemezdi). Kararların gerekçeleri SECURITY
+§3.7'de.
+
 ## gsb-kit Faz 5 turu (kit düzeltme turu — demoların bulguları)
 
 `docs/KIT-ARCHITECTURE.md` §10 "Faz 5 sonucu": iki kontrol demosunun

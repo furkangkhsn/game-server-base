@@ -27,6 +27,9 @@ cargo clippy --workspace --all-targets -- -D warnings   # 0 uyarı
 cargo test --workspace                                   # tamamen yeşil
 ```
 
+CI ayrıca `autobahn` işini koşar: WS kapısına karşı Autobahn fuzzing
+client'ı (`docs/SECURITY.md` §3.7; yerelde docker imajı gerekir).
+
 Tur sonu ayrıca:
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → `left=50`, `errors=0`, panik yok.
