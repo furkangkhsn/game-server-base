@@ -35,6 +35,8 @@ type Msg = ShardMsg<KitMig<MmoMig>, MmoWire>;
 
 const WAIT: Duration = Duration::from_secs(5);
 pub const TICK_HZ: f64 = 30.0;
+/// The core's default veto ceiling (what an unconfigured room runs).
+const DEFAULT_CEILING: Option<Duration> = Some(gsb_core::room::DEFAULT_MAX_DETACH_HOLD);
 
 /// The MMO room: four shard actors over one ticker.
 pub struct Mmo {
@@ -59,23 +61,40 @@ impl Mmo {
     /// The room over `realm` with disconnect `grace` (ending the MMO's
     /// way: the slot is released) and `keepalive_hz`.
     pub fn with(realm: &Realm, grace: Duration, keepalive_hz: f64) -> Self {
-        Self::build(realm, keepalive_hz, |s| s.with_disconnect_grace(grace))
+        Self::build(realm, keepalive_hz, DEFAULT_CEILING, |s| {
+            s.with_disconnect_grace(grace)
+        })
+    }
+
+    /// [`Self::with`] under the room config's veto ceiling `ceiling`
+    /// (`RoomConfig::max_detach_hold`: how long a fight can hold a
+    /// disconnected character past its grace).
+    pub fn with_ceiling(realm: &Realm, grace: Duration, ceiling: Duration) -> Self {
+        Self::build(realm, 2.0, Some(ceiling), |s| {
+            s.with_disconnect_grace(grace)
+        })
     }
 
     /// The room over `realm` with a disconnect hold of `grace` that ends
     /// toward `to`, and `keepalive_hz`.
     pub fn with_policy(realm: &Realm, grace: Duration, to: ExpireTo, keepalive_hz: f64) -> Self {
-        Self::build(realm, keepalive_hz, |s| {
+        Self::build(realm, keepalive_hz, DEFAULT_CEILING, |s| {
             s.with_disconnect_policy(Some(grace), to)
         })
     }
 
-    fn build(realm: &Realm, keepalive_hz: f64, policy: impl Fn(MmoShard) -> MmoShard) -> Self {
+    fn build(
+        realm: &Realm,
+        keepalive_hz: f64,
+        ceiling: Option<Duration>,
+        policy: impl Fn(MmoShard) -> MmoShard,
+    ) -> Self {
         let config = RoomConfig {
             id: RoomId(7),
             tick_hz: TICK_HZ,
             keepalive_hz,
             metrics_cadence_hz: TICK_HZ, // one sample per step: the barrier
+            max_detach_hold: ceiling,
             ..Default::default()
         };
         let (tick_tx, _) = broadcast::channel(64);

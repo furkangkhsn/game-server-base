@@ -13,10 +13,10 @@ use gsb_kit::identity::WireId;
 use prost::Message;
 
 use crate::codec::from_dm;
-use crate::components::{Mob, MoveTarget, Pos3, Vitals};
+use crate::components::{InCombat, Mob, MoveTarget, Pos3, Vitals};
 use crate::mmo::{Attack, MoveTo, Travel};
 use crate::op;
-use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, WAYSTONES};
+use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, COMBAT_TICKS, WAYSTONES};
 
 /// One decoded input.
 enum Input {
@@ -49,13 +49,14 @@ fn decode(action: &Action) -> Option<(u64, Input)> {
         .ok()
 }
 
-/// Decode and apply the tick's actions for the players with a live
-/// entity in this shard's world.
+/// Decode and apply the tick's actions (global tick `tick`) for the
+/// players with a live entity in this shard's world.
 pub(crate) fn ingest(
     players: &HashMap<PlayerId, Entity>,
     world: &mut World,
     actions: &mut Vec<Action>,
     seq: &mut InputSeq,
+    tick: u64,
 ) {
     for action in actions.drain(..) {
         let Some((n, input)) = decode(&action) else {
@@ -81,7 +82,7 @@ pub(crate) fn ingest(
                     .entity_mut(entity)
                     .insert(MoveTarget { x: at.x, z: at.z });
             }
-            Input::Attack { target } => attack(world, entity, target),
+            Input::Attack { target } => attack(world, entity, target, tick),
             Input::Travel { waystone } => travel(world, entity, waystone),
         }
     }
@@ -103,8 +104,9 @@ fn travel(world: &mut World, entity: Entity, waystone: usize) {
 /// Hit the mob with wire id `target` if it is in THIS shard's world and
 /// within reach; a mob brought to zero hit points is despawned — game
 /// code, not a leave (the kit's ghost sweep, §8.2, tells every client
-/// that saw it, on this shard and through the border strip).
-fn attack(world: &mut World, attacker: Entity, target: u64) {
+/// that saw it, on this shard and through the border strip). A hit that
+/// lands puts the attacker in combat for [`COMBAT_TICKS`].
+fn attack(world: &mut World, attacker: Entity, target: u64, tick: u64) {
     let Some(&from) = world.get::<Pos3>(attacker) else {
         return;
     };
@@ -123,7 +125,11 @@ fn attack(world: &mut World, attacker: Entity, target: u64) {
         return;
     };
     vitals.hp = vitals.hp.saturating_sub(ATTACK_DAMAGE);
-    if vitals.hp == 0 {
+    let killed = vitals.hp == 0;
+    world.entity_mut(attacker).insert(InCombat {
+        until: tick.saturating_add(COMBAT_TICKS),
+    });
+    if killed {
         world.despawn(victim);
     }
 }

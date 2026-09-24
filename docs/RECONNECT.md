@@ -537,6 +537,17 @@ duran süresiz hold farklılaşır — ve tam eski davranışı isteyen oda
 `max_detach_hold: None` der. *Elenen:* tavanı yalnız süreli hold'a
 uygulamak (iki kural; en açık yol korumasız kalır).
 
+**Demo.** MMO'nun politikası "çıkış sayacı + savaşta çıkış yok"tur:
+`LOGOUT_GRACE` (20 sn) sonra `ExpireTo::Despawn`, ama isabet eden her
+saldırı saldırgana `InCombat { until: tick + COMBAT_TICKS }` (6 sn)
+yazar ve `MmoGame::may_release` bu işaret dururken "hayır" der; savaş
+sistemi süresi dolan işareti kaldırır, çıkış bir sonraki tick'in
+süpürmesinde tamamlanır. İşaret sınır geçişinde `MmoMig` ile göçer.
+Gerçek shard aktörleri üzerinden kilit:
+`gsb-demo-mmo/tests/combat_logout.rs` (savaştaki karakter grace'ten
+sonra savaş bitene dek bekler ve tam o tick'ten sonra çıkar; tavanı
+aşan savaş çıkışı zorlar).
+
 **§16 ile ilişki.** İki tavan bağımsızdır: girdi-boşta tavanı üyeyi
 `on_disconnect`'e verir; politikanın başlattığı hold her hold gibi
 `max_detach_hold`'a tabidir (saati o detach anında başlar).

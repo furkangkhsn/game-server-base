@@ -10,18 +10,21 @@
 
 use bevy_ecs::prelude::{Entity, World};
 
-use crate::components::{Mob, MoveTarget, Pos3, RunSpeed, Vitals};
+use crate::components::{InCombat, Mob, MoveTarget, Pos3, RunSpeed, Vitals};
 
 /// A migrating entity's game state: a player's or a mob's.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MmoMig {
-    /// A player: position, vitals, run speed and the pending walk (a
-    /// player running across a seam keeps running on the other side).
+    /// A player: position, vitals, run speed, the pending walk (a
+    /// player running across a seam keeps running on the other side) and
+    /// its combat state (a fight does not end at a seam — nor does the
+    /// no-logout-in-combat rule for a parked character).
     Player {
         pos: Pos3,
         vitals: Vitals,
         speed: f32,
         target: Option<MoveTarget>,
+        combat: Option<InCombat>,
     },
     /// A mob: position (a flyer's altitude included), vitals (damage
     /// taken so far) and its whole brain — route, current leg, pace and
@@ -49,6 +52,7 @@ pub(crate) fn capture(world: &World, entity: Entity) -> MmoMig {
             vitals,
             speed: e.get::<RunSpeed>().map_or(crate::world::RUN_SPEED, |s| s.0),
             target: e.get::<MoveTarget>().copied(),
+            combat: e.get::<InCombat>().copied(),
         },
     }
 }
@@ -62,10 +66,14 @@ pub(crate) fn restore(world: &mut World, mig: MmoMig) -> Entity {
             vitals,
             speed,
             target,
+            combat,
         } => {
             let mut e = world.spawn((pos, vitals, RunSpeed(speed)));
             if let Some(target) = target {
                 e.insert(target);
+            }
+            if let Some(combat) = combat {
+                e.insert(combat);
             }
             e.id()
         }

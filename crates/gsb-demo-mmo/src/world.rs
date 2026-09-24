@@ -54,6 +54,11 @@ pub const ATTACK_RANGE: f32 = 30.0;
 /// Damage per landed attack.
 pub const ATTACK_DAMAGE: u16 = 25;
 
+/// How long a player stays in combat after its last landed attack, in
+/// ticks: 6 s at the MMO's 30 Hz — the usual MMO "in combat" timer. A
+/// disconnected character is not logged out before it runs out.
+pub const COMBAT_TICKS: u64 = 180;
+
 /// The waystones (`Travel` destinations) — one at the centre of every
 /// region, on the ground. Waystone `i` is in shard `i`'s region.
 pub const WAYSTONES: [[f32; 2]; SHARDS] = [

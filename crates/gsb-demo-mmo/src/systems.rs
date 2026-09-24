@@ -1,14 +1,14 @@
 //! The MMO's systems (its `Game::systems`, KIT-ARCHITECTURE §6 — the kit
 //! has no movement or AI trait; it only sees the resulting component
 //! writes, spawns and despawns): the camps spawning mobs, the mobs
-//! walking their routes, the mobs' end of life, and the players running
-//! to their targets. All movement is on the ground plane; a flyer keeps
+//! walking their routes, the mobs' end of life, the players running
+//! to their targets, and their combat state running out. All movement is on the ground plane; a flyer keeps
 //! its altitude.
 
 use bevy_ecs::prelude::{Entity, World};
 use bevy_ecs::query::QueryState;
 
-use crate::components::{Mob, MoveTarget, Pos3, RunSpeed, Vitals};
+use crate::components::{InCombat, Mob, MoveTarget, Pos3, RunSpeed, Vitals};
 use crate::realm::MobSpawn;
 
 /// Step `pos` toward `(tx, tz)` on the ground by at most `step` metres;
@@ -84,6 +84,7 @@ pub(crate) struct Systems {
     walkers: Option<Walkers>,
     runners: Option<Runners>,
     dying: Vec<Entity>,
+    cooled: Vec<Entity>,
 }
 
 impl Systems {
@@ -91,6 +92,22 @@ impl Systems {
         self.mobs_walk(world, dt);
         self.mobs_die(world, tick);
         self.players_run(world, dt);
+        self.combat_cools(world, tick);
+    }
+
+    /// A player whose last landed hit is [`crate::world::COMBAT_TICKS`]
+    /// old leaves combat (a parked one may now log out: the core asks
+    /// the veto again on the next tick).
+    fn combat_cools(&mut self, world: &mut World, tick: u64) {
+        let mut q = world.query::<(Entity, &InCombat)>();
+        self.cooled.extend(
+            q.iter(world)
+                .filter(|(_, c)| c.until <= tick)
+                .map(|(e, _)| e),
+        );
+        for e in self.cooled.drain(..) {
+            world.entity_mut(e).remove::<InCombat>();
+        }
     }
 
     /// Every mob walks its route at its own pace (the pace is the

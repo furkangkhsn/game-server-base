@@ -180,14 +180,16 @@ fn the_logout_bot_walks_to_the_nearest_waystone() {
     assert!(again.is_empty(), "already walking there");
 }
 
-/// Capture/restore round-trips a player's walk and a mob's whole brain.
+/// Capture/restore round-trips a player's walk and combat state and a
+/// mob's whole brain.
 #[test]
 fn capture_and_restore_carry_players_and_mobs() {
     let mut a = World::new();
     let mut b = World::new();
     let mut game = MmoGame::for_shard(0, &Realm::empty());
     let hero = game.spawn_player(&mut a, ConnectionId(1));
-    a.entity_mut(hero).insert(MoveTarget { x: 5.0, z: -5.0 });
+    a.entity_mut(hero)
+        .insert((MoveTarget { x: 5.0, z: -5.0 }, InCombat { until: 99 }));
     let flyer = MobSpawn::once(Kind::Flyer, Pos3::new(-5.0, 80.0, -5.0), 1, 50, 40).walking(
         vec![[5.0, -5.0], [5.0, 5.0]],
         4.0,
@@ -207,6 +209,9 @@ fn capture_and_restore_carry_players_and_mobs() {
     );
     let mut q = b.query::<&MoveTarget>();
     assert_eq!(q.iter(&b).count(), 1, "the player's walk travelled");
+    let mut q = b.query::<&InCombat>();
+    let combat: Vec<_> = q.iter(&b).copied().collect();
+    assert_eq!(combat, vec![InCombat { until: 99 }], "so did the fight");
 }
 
 /// The live spawn table stays on the map, every shard runs camps, and

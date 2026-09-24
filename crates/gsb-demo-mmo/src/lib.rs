@@ -71,13 +71,16 @@ pub type MmoShard = ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>;
 
 /// The logout timer: how long a disconnected character stays in the
 /// world (parked, slot held, resumable) before the logout releases its
-/// slot (the room's disconnect grace).
+/// slot (the room's disconnect grace) — or longer, while it is in combat
+/// ([`game::MmoGame`]'s `may_release` veto).
 pub const LOGOUT_GRACE: Duration = Duration::from_secs(20);
 
 /// Shard `index` of the MMO room over `realm` (every shard of the room is
 /// built from the same realm), with the MMO's logout timer: a hold of
 /// [`LOGOUT_GRACE`] that ends by RELEASING the slot
-/// ([`ExpireTo::Despawn`]). An operator who prefers the logout bot (the
+/// ([`ExpireTo::Despawn`]), and not while the character is in combat (the
+/// game's veto; the room config's `max_detach_hold` bounds how long a
+/// fight can hold it). An operator who prefers the logout bot (the
 /// character walks to the nearest waystone and stays, slot held) rebuilds
 /// it with `.with_disconnect_policy(Some(grace), ExpireTo::AiHandover)`.
 /// (A free function, not a constructor: the room type is the kit's, so

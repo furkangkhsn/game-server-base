@@ -105,3 +105,14 @@ pub struct Mob {
     /// The global tick at which the mob despawns (a camp's wave ends).
     pub dies_at: u64,
 }
+
+/// A player is IN COMBAT until global tick `until`: every attack of its
+/// that lands sets `until` to [`crate::world::COMBAT_TICKS`] past the
+/// hit, and the combat system removes the marker once it has passed. A
+/// disconnected character does not log out while it carries one (the
+/// MMO's `Game::may_release` veto). Travels with the player across a
+/// shard border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct InCombat {
+    pub until: u64,
+}

@@ -12,7 +12,11 @@
 //! **Disconnects (the kit's park machinery).** A dropped session's
 //! character is PARKED for the room's grace (it stays in the world, keeps
 //! its wire id and slot; a resume within the grace reclaims it); when the
-//! grace runs out the logout completes: the kit releases the slot and the
+//! grace runs out the logout completes — unless the character is IN
+//! COMBAT ([`InCombat`], set by its landed attacks): then
+//! [`Game::may_release`] vetoes and the logout waits for the fight to
+//! end (bounded by the core's `RoomConfig::max_detach_hold`,
+//! `docs/RECONNECT.md` §17). The kit then releases the slot and the
 //! character leaves the world — the MMO's usual logout timer
 //! ([`crate::mmo_shard`]'s policy; before the kit's Phase 5 every hold
 //! ended in AI handover — `docs/KIT-ARCHITECTURE.md` §10, F4). A room
@@ -29,7 +33,7 @@ use gsb_kit::game::{Game, InputSeq, ShardGame};
 use prost::Message;
 
 use crate::codec::{MmoCodec, to_dm};
-use crate::components::{Kind, MoveTarget, Pos3, RunSpeed, Vitals};
+use crate::components::{InCombat, Kind, MoveTarget, Pos3, RunSpeed, Vitals};
 use crate::migrate::{self, MmoMig};
 use crate::realm::Realm;
 use crate::systems::{Camps, Systems};
@@ -132,17 +136,27 @@ impl Game for MmoGame {
     fn ingest(
         &mut self,
         world: &mut World,
-        _ctx: &TickCtx,
+        ctx: &TickCtx,
         actions: &mut Vec<Action>,
         players: &HashMap<PlayerId, Entity>,
         seq: &mut InputSeq,
     ) {
-        input::ingest(players, world, actions, seq);
+        input::ingest(players, world, actions, seq, ctx.tick);
     }
 
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
         self.camps.run(world, ctx.tick);
         self.systems.run(world, ctx.tick, ctx.dt.as_secs_f32());
+    }
+
+    /// No logout in combat: a parked character whose disconnect grace
+    /// ran out stays in the world while it is [`InCombat`]; the core asks
+    /// again every tick, and the logout completes on the first tick after
+    /// the fight has cooled down.
+    fn may_release(&mut self, world: &mut World, entity: Entity) -> bool {
+        !world
+            .get_entity(entity)
+            .is_ok_and(|e| e.contains::<InCombat>())
     }
 }
 
