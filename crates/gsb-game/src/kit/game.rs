@@ -20,6 +20,7 @@ use gsb_core::rpc::{RequestDecision, RpcRequest};
 
 use crate::kit::codec::RecordCodec;
 use crate::kit::common::InputSeq;
+use crate::kit::team::Team;
 
 /// A game the kit's rooms can run. Statically dispatched: every room is
 /// generic over it (`OpenRoom<G>`, `AoiRoom<G, S>`), and the only type
@@ -82,6 +83,21 @@ pub trait Game: Send + 'static {
     ) -> Option<RequestDecision> {
         None
     }
+}
+
+/// A game the team-fog room can run: team assignment is game policy
+/// (§2 — "takım ataması"), asked once per join.
+///
+/// A strategy-specific extension of [`Game`] rather than a `Game` hook:
+/// only the team room calls it, and a game that never runs team fog
+/// should not have to answer it.
+pub trait TeamGame: Game {
+    /// The team of the player whose entity [`Game::spawn_player`] just
+    /// spawned for `conn` (the kit has stamped its wire identity). The
+    /// room writes the answer into the world as the entity's
+    /// [`TeamMember`](crate::kit::team::TeamMember); later team changes
+    /// are plain component writes.
+    fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
 }
 
 /// The wire value of game `G`'s records.

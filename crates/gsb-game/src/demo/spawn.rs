@@ -62,7 +62,7 @@ pub(crate) fn spawn_player(
 /// [`TeamMember`](crate::kit::team::TeamMember); it is not
 /// consulted again afterwards (runtime team changes are component
 /// writes, and `group_of` reads the world, not this function). The
-/// future `Game::on_player_spawned` (KIT-ARCHITECTURE §4.3).
+/// demo's `TeamGame::team_of` (KIT-ARCHITECTURE §4.3).
 #[inline]
 pub(crate) fn team_of(conn: ConnectionId) -> Team {
     Team((conn.0 % u64::from(TEAM_COUNT)) as u8)

@@ -15,7 +15,8 @@ use crate::demo::codec::DemoCodec;
 use crate::demo::economy::EconomyService;
 use crate::demo::{bot, input, op, rpc, spawn, systems};
 use crate::kit::common::{InputSeq, run_systems};
-use crate::kit::game::Game;
+use crate::kit::game::{Game, TeamGame};
+use crate::kit::team::Team;
 
 /// The demo game: one moving entity per player on a square 2D map, free
 /// movement toward the latest `MOVE_TO` target, two request kinds
@@ -115,6 +116,13 @@ impl Game for DemoGame {
         players: &HashMap<PlayerId, Entity>,
     ) -> Option<RequestDecision> {
         rpc::handle_request(players, self.economy.as_ref(), world, req)
+    }
+}
+
+/// The demo's team policy: conn parity (see [`spawn::team_of`]).
+impl TeamGame for DemoGame {
+    fn team_of(&mut self, _world: &World, conn: ConnectionId, _entity: Entity) -> Team {
+        spawn::team_of(conn)
     }
 }
 

@@ -20,6 +20,11 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 use prost::Message;
 
+/// The instantiation these tests drive: the demo game over the kit's 2D
+/// vision preset (shadows the generic room of `use super::*`).
+type TeamRoom =
+    super::TeamRoom<crate::kit::seam::DemoGame, crate::kit::space::VisionGrid2<Position>>;
+
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),

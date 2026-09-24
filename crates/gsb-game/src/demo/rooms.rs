@@ -4,12 +4,14 @@
 //! crate root's compatibility paths (`gsb_game::room::OpenRoom`, …) are
 //! type aliases onto these instantiations.
 
+use crate::demo::components::Position;
 use crate::demo::economy::EconomyService;
 use crate::demo::play::DemoGame;
 use crate::demo::spawn::DEFAULT_SPAWN_HALF;
 use crate::kit::aoi::AoiRoom;
 use crate::kit::room::OpenRoom;
-use crate::kit::space::Grid2;
+use crate::kit::space::{Grid2, VisionGrid2};
+use crate::kit::team::TeamRoom;
 
 impl OpenRoom<DemoGame> {
     /// Build the open room over the default 100×100 arena (bit-identical
@@ -59,5 +61,24 @@ impl AoiRoom<DemoGame, Grid2> {
     #[must_use]
     pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self::with_game(DemoGame::new(half), Grid2::new(cell_size))
+    }
+}
+
+/// The demo's team fog: the kit's 2D vision preset over the demo's
+/// `Position` (a uniform vision radius on the map plane).
+impl TeamRoom<DemoGame, VisionGrid2<Position>> {
+    /// Build a team-fog room with the given `vision_radius` (world units)
+    /// over the default 100×100 spawn arena. Clamped to a sane minimum so a
+    /// degenerate `0` cannot make vision "only the exact same point".
+    #[must_use]
+    pub fn new(vision_radius: f32) -> Self {
+        Self::with_spawn_half(vision_radius, DEFAULT_SPAWN_HALF)
+    }
+
+    /// Build a team-fog room over a square spawn map of half-size `half`
+    /// (see [`OpenRoom::with_spawn_half`]).
+    #[must_use]
+    pub fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
+        Self::with_game(DemoGame::new(half), VisionGrid2::new(vision_radius))
     }
 }

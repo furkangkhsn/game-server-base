@@ -74,7 +74,22 @@ mod layering;
 
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
-pub use kit::team;
+
+/// The team-fog room, its group key and membership component
+/// (compatibility path; the strategy's design notes live on the kit's
+/// generic [`TeamRoom`](crate::kit::team::TeamRoom)).
+pub mod team {
+    pub use crate::kit::team::{DEFAULT_VISION_RADIUS, TEAM_COUNT, Team, TeamMember};
+
+    /// The team-fog room running the demo game over the kit's 2D vision
+    /// preset: the kit's generic [`TeamRoom`](crate::kit::team::TeamRoom)
+    /// instantiated with the demo's `Game` and `VisionGrid2<Position>`
+    /// (constructors: `new`, `with_spawn_half`, `with_disconnect_grace`).
+    pub type TeamRoom = crate::kit::team::TeamRoom<
+        crate::demo::play::DemoGame,
+        crate::kit::space::VisionGrid2<crate::demo::components::Position>,
+    >;
+}
 
 /// The AOI room and its cell key (compatibility path; the strategy's
 /// design notes live on the kit's generic

@@ -1,25 +1,26 @@
-//! The team room's game-logic implementation: two groups, each seeing
-//! its own units plus whatever its vision radius reveals.
+//! The team room's game-logic implementation: one group per team, each
+//! seeing its own units plus whatever its vision reveals.
 //!
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
-use prost::Message;
 
-use crate::kit::seam;
+use crate::kit::common::{put_entity_records, write_full_header};
+use crate::kit::game::TeamGame;
+use crate::kit::space::Vision;
 use crate::kit::team::*;
 
-impl GameLogic<World> for TeamRoom {
+impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     type GroupKey = Team;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     /// The connection's group is its team — game state kept in the world
@@ -61,23 +62,14 @@ impl GameLogic<World> for TeamRoom {
             return false;
         }
 
-        let mut snap = seam::WorldSnapshot {
-            sequence: ctx.tick,
-            entities: Vec::with_capacity(content.len()),
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
-        for (&wire_id, &(x, y)) in content {
-            snap.entities.push(seam::EntityRecord {
-                entity: wire_id,
-                x,
-                y,
-            });
-        }
-        // In-memory encode cannot fail; treat a failure as a bug.
-        snap.encode(out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        // The FULL envelope (header + one record per entity, in content
+        // order), byte-identical to the typed `WorldSnapshot` encoding.
+        write_full_header(out, ctx.tick);
+        put_entity_records(
+            self.game.codec(),
+            content.iter().map(|(id, wire)| (*id, wire)),
+            out,
+        );
 
         self.encoded += content.len() as u64;
         self.last[t] = content.clone();
@@ -85,11 +77,11 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        let admission = crate::kit::common::on_join(
+        let admission = crate::kit::common::join(
+            &mut self.game,
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.minter,
-            self.spawn_half,
             world,
             conn,
             &mut self.input,
@@ -104,11 +96,11 @@ impl GameLogic<World> for TeamRoom {
             .get(&admission.player)
             .copied()
             .expect("inserted above");
-        // Team assignment hashes the TRANSPORT session id (as it always
-        // has): the load generator's team distribution pairs with it.
-        world
-            .entity_mut(entity)
-            .insert(TeamMember(seam::team_of(conn)));
+        // Team assignment is game policy (`TeamGame::team_of` — the
+        // demo hashes the TRANSPORT session id, as it always has: the
+        // load generator's team distribution pairs with it).
+        let team = self.game.team_of(world, conn, entity);
+        world.entity_mut(entity).insert(TeamMember(team));
         admission
     }
 
@@ -163,16 +155,15 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        seam::synthesize_bot_moves(
-            self.park_ledger
-                .values()
-                .filter(|e| e.bot)
-                .map(|e| (e.player, e.entity)),
+        crate::kit::common::ingest(
+            &mut self.game,
             world,
             ctx,
             actions,
-        );
-        seam::ingest(&self.player_entity, world, actions, &mut self.input)
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+        )
     }
 
     /// The per-connection input acknowledgment (see `OpenRoom::private`).
@@ -188,14 +179,14 @@ impl GameLogic<World> for TeamRoom {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::kit::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::systems(&mut self.game, world, ctx);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities
-        // with a `Position` but no `WireId` get the next serial, so the
-        // broadcast set is exactly "has a `Position`" — structural, never
-        // silently invisible. Done before `rebuild` so freshly-stamped
-        // entities are in this tick's content.
-        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
+        // with the codec's marker but no `WireId` get the next serial, so
+        // the broadcast set is exactly "has the marker" — structural,
+        // never silently invisible. Done before `rebuild` so
+        // freshly-stamped entities are in this tick's content.
+        crate::kit::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
 
         self.rebuild(world);
     }
@@ -207,4 +198,4 @@ impl GameLogic<World> for TeamRoom {
     }
 }
 
-impl RoomLogic<World> for TeamRoom {}
+impl<G: TeamGame, V: Vision> RoomLogic<World> for TeamRoom<G, V> {}

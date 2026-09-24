@@ -13,6 +13,10 @@ use std::hash::Hash;
 
 use bytes::BytesMut;
 
+mod vision;
+
+pub use vision::{Vision, VisionGrid2};
+
 /// Where a value lies on the ground plane — the accessor the kit's 2D
 /// presets read a game's types through (§7): [`Grid2`] reads the codec's
 /// wire value (`Coord = i32`), the simulation presets read the

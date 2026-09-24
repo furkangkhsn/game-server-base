@@ -269,10 +269,11 @@ use crate::kit::common::{CellBook, CellPieces, InputSeq, ParkEntry, ParkPolicy};
 use crate::kit::game::{Game, Wire};
 use crate::kit::identity::Minter;
 use crate::kit::space::CellSpace;
-// The 2D grid preset's cell type (the demo's group key) — re-exported
-// here because `gsb_game::aoi::Cell` is the historical public path every
-// caller uses.
-pub use crate::kit::space::Cell;
+// The 2D grid preset's cell key, in scope for the in-module tests (they
+// drive the demo's `Grid2` instantiation and name its cells through
+// `use super::*`).
+#[cfg(test)]
+use crate::kit::space::Cell;
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for

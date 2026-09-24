@@ -86,10 +86,6 @@ pub(crate) use crate::demo::sectors::VISIBLE_FROM;
 // `common::on_join`), sharded.
 pub(crate) use crate::demo::spawn::spawn_player;
 
-// Game::on_player_spawned: the team room's join-time team assignment.
-// Consumer: team.
-pub(crate) use crate::demo::spawn::team_of;
-
 // Game::Mig + capture: the migrating game state the sharded rooms read
 // in `collect_migrations` and carry in `ShardedRoomState` (position is
 // above) — the speed and the pending move target. Consumer: sharded.
