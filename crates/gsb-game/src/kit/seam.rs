@@ -23,6 +23,19 @@ pub(crate) use crate::demo::game::EntityRecord;
 // CellSpace::encode_cell: the typed body of a `CellExit` record.
 pub(crate) use crate::demo::game::CellExit;
 
+// ── SectorMap (§4.2) ─────────────────────────────────────────────────────
+
+// SectorMap::Sector: the sector key (the sector room's GroupKey) and the
+// out-of-map sector the room falls back to.
+pub(crate) use crate::demo::sectors::{SECTOR_OUT, Sector};
+
+// SectorMap::sector_of: point-in-convex-sector lookup over the demo map.
+pub(crate) use crate::demo::sectors::sector_of;
+
+// SectorMap::visible_from: the static visibility table (a u16 bitmask per
+// sector today; §8.4 notes its 16-sector ceiling).
+pub(crate) use crate::demo::sectors::VISIBLE_FROM;
+
 // ── Game hooks (§4.3) ────────────────────────────────────────────────────
 
 // Game::spawn_player: spawn point + player bundle (the kit stamps WireId).
@@ -67,3 +80,7 @@ pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};
 // inspect demo entities directly).
 #[cfg(test)]
 pub(crate) use crate::demo::components::{DEFAULT_SPEED, Speed};
+
+// The demo map's named sectors the PVS tests address directly.
+#[cfg(test)]
+pub(crate) use crate::demo::sectors::{SECTOR_EAST, SECTOR_NW, SECTOR_WEST};

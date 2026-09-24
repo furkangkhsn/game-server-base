@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::components::{DEFAULT_SPEED, Position, Speed};
+use crate::kit::seam::{DEFAULT_SPEED, Position, SECTOR_EAST, SECTOR_NW, SECTOR_WEST, Speed};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
@@ -42,7 +42,7 @@ fn place(world: &mut World, room: &mut SectorRoom, conn: ConnectionId, x: f32, y
 }
 
 fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
-    crate::game::WorldSnapshot::decode(out.as_ref())
+    crate::kit::seam::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot payload")
         .entities
         .iter()
@@ -178,7 +178,7 @@ fn sector_transition_snapshot_and_identity() {
         room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_NW), &[], &mut out_c),
         "new sector re-emits"
     );
-    let snap_c = crate::game::WorldSnapshot::decode(out_c.as_ref()).expect("snapshot");
+    let snap_c = crate::kit::seam::WorldSnapshot::decode(out_c.as_ref()).expect("snapshot");
     let now_c: BTreeSet<u64> = snap_c.entities.iter().map(|e| e.entity).collect();
     assert!(now_c.contains(&p1), "P1 in C's snapshot: {now_c:?}");
     let rec_c = snap_c
@@ -197,7 +197,7 @@ fn sector_transition_snapshot_and_identity() {
     // so the crossing did not end A's visibility of P1).
     let mut out_a2 = bytes::BytesMut::new();
     room.snapshot(&mut world, &ctx(2), &Sector(SECTOR_WEST), &[], &mut out_a2);
-    let snap_a = crate::game::WorldSnapshot::decode(out_a2.as_ref()).expect("snapshot");
+    let snap_a = crate::kit::seam::WorldSnapshot::decode(out_a2.as_ref()).expect("snapshot");
     let rec_a = snap_a
         .entities
         .iter()

@@ -10,19 +10,20 @@ use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use prost::Message;
 
-use crate::components::{Position, WireId};
-use crate::op;
-use crate::pvs::*;
+use crate::kit::identity::WireId;
+use crate::kit::pvs::*;
+use crate::kit::seam;
+use crate::kit::seam::Position;
 
 impl GameLogic<World> for SectorRoom {
     type GroupKey = Sector;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     /// The connection's group is the sector its entity is in (re-evaluated
@@ -72,7 +73,7 @@ impl GameLogic<World> for SectorRoom {
             return false;
         }
 
-        let mut snap = crate::game::WorldSnapshot {
+        let mut snap = seam::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
             removed: Vec::new(),
@@ -80,7 +81,7 @@ impl GameLogic<World> for SectorRoom {
             delta: false,
         };
         for (&wire_id, &(x, y)) in &content {
-            snap.entities.push(crate::game::EntityRecord {
+            snap.entities.push(seam::EntityRecord {
                 entity: wire_id,
                 x,
                 y,
@@ -111,7 +112,7 @@ impl GameLogic<World> for SectorRoom {
         crate::kit::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
+    // -- the disconnect policy (see `crate::kit::room::OpenRoom`, the shared
     //    hook bodies live in `crate::kit::common`) ---------------------------
 
     fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
@@ -150,7 +151,7 @@ impl GameLogic<World> for SectorRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::kit::seam::synthesize_bot_moves(
+        seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -159,7 +160,7 @@ impl GameLogic<World> for SectorRoom {
             ctx,
             actions,
         );
-        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (see `OpenRoom::private`).

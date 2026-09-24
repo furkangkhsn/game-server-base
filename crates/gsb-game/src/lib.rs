@@ -39,7 +39,6 @@
 mod demo;
 mod kit;
 
-pub mod pvs;
 pub mod sharded;
 
 // ── Compatibility paths (phase 0) ─────────────────────────────────────────
@@ -53,6 +52,12 @@ pub mod sharded;
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
 pub use kit::{aoi, team};
+
+/// The PVS room and the demo map's sector key (compatibility path).
+pub mod pvs {
+    pub use crate::demo::sectors::{SECTOR_OUT, Sector};
+    pub use crate::kit::pvs::SectorRoom;
+}
 
 /// The open-visibility room and the demo's spawn distribution
 /// (compatibility path).

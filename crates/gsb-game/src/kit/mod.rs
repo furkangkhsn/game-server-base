@@ -6,6 +6,7 @@
 pub mod aoi;
 pub(crate) mod common;
 pub mod identity;
+pub mod pvs;
 pub mod room;
 pub(crate) mod seam;
 pub mod team;
