@@ -5,6 +5,83 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 1a turu (seam trait'leri, generic delta motoru, `OpenRoom<G>` / `AoiRoom<G, S>`)
+
+`docs/KIT-ARCHITECTURE.md` §10'un Faz 1'inin ilk yarısı. **Wire baytları
+aynı**: `wire_contract.rs`, `delta_aoi.rs`, `aoi/tests/sharing*.rs`
+değişmeden geçti; `crates/gsb-game` dışında hiçbir dosya değişmedi.
+
+**Ne yapıldı.**
+- §4 seam'leri: `RecordCodec` (Marker / Query / Dirty / `Wire`,
+  `wire`, `encode`), `CellSpace<W>` (+ kit'in `Grid2` ön-ayarı) ve
+  `Game` (kodek, opcode'lar, `spawn_player`, `bot_actions`, `ingest`,
+  `systems`, `handle_request`). Derlenen imzalar ve on sapma, gerekçeleriyle:
+  KIT-ARCHITECTURE §4.5.
+- Kimlik: `WireId::new` kalktı; tek inşa yolu kit-özel `Minter`
+  (`Sequential` / `Range`). Sharded odanın üç doğrudan çağrısı (join,
+  yetim damgası, göç girişi) ondan geçiyor — **§8.1 kapandı**, bir
+  `compile_fail` doctest'i kilitliyor.
+- Girdi sıra kuralı kit tipi oldu: `InputSeq` (oyun yalnız
+  `admit(player, seq)` görüyor).
+- Delta motoru generic: `CellBook<W, C>`, `CellPieces<C>`,
+  `assemble_group_packet`; gövdeler oyundan (kodek, uzay), zarflar
+  kit'ten (`common/frame.rs`, `put_delimited`: bir baytlık uzunluk
+  yuvası, ortak durumda kopya yok). Kayıt kodlama sayısı değişmedi
+  (değişiklik testi hâlâ tipli `Wire` karşılaştırması).
+- `OpenRoom<G: Game>` ve `AoiRoom<G, S: CellSpace<Wire<G>>>`; ortak
+  muhasebe `common/hooks.rs`'te kit ile `Game` kancaları arasında
+  bölündü. Demo: `DemoGame`, `DemoCodec` (`Wire = (i32, i32)`), `Grid2`;
+  eski kurucular `demo/rooms.rs`'te, eski yollar tip takma adı.
+- Değişiklik takibinin tek sahibi kit (§4.4): iki oda da
+  `clear_trackers`'ı `update` sonunda bir kez çağırıyor, bir kancanın
+  çağırması debug'da yakalanıyor. **§8.3 `OpenRoom` için kanıtlandı ve
+  kapandı:** oda bunu hiç çağırmıyordu, her ayrılışın despawn'ı odanın
+  ömrü boyunca silinen-bileşen tamponunda kalıyordu (önce testle
+  kanıtlandı, sonra düzeltildi).
+- Seam: çevrilen iki oda seam'den hiçbir şey almıyor; kalan her öğe
+  tüketicisiyle etiketlendi (= 1b iş listesi, KIT-ARCHITECTURE §10
+  "Faz 1a sonucu").
+
+**Test:** 411 → 419 (iki `Minter`, bir `compile_fail` doctest,
+`put_delimited`, demo kodeki ↔ tipli `EntityRecord` ve `Grid2` ↔ tipli
+`CellExit` bayt sabitlemeleri, `OpenRoom` değişiklik penceresi,
+kanca bekçisi). Loadgen tcp / udp / spatial / sharded / sharded ×
+spatial, taban ↔ HEAD dönüşümlü: gürültü içinde (tablo §10).
+
+**Elenen alternatifler.**
+- *`RecordCodec::encoded_len` (ya da `CellSpace` için eşi):* protobuf
+  uzunluk önekini gövdeden önce bilmek için; ama gövdeyle tutarlı
+  kalması gereken ikinci bir metot, bozulduğunda sessizce kırık çerçeve
+  demek. `put_delimited` aynı baytları tek metotla ve ortak durumda
+  kopyasız üretiyor.
+- *Gövdeyi geçici bir tampona kodlayıp kopyalamak:* doğru ama kayıt
+  başına bir kopya; bir baytlık yuva onu yalnız 128 baytı aşan (nadir)
+  gövdelere bırakıyor.
+- *`Minter` public bir enum:* varyant alanları public olan bir enum'u
+  herkes kurar, yani istediği kimliği basar; tip kit-özel.
+- *Göçle gelen kimlik için `WireId`'yi `ShardedRoomState` içinde
+  taşımak:* çekirdeğin `Migrating::wire`'ı zaten ham `u64` (çekirdek
+  dokunulmaz); ikinci bir kopya tutarsızlık kapısı olurdu —
+  `Minter::arrival` tek, kit-içi yol.
+- *`AoiRoom<G>`'yi `Game::handle_request`'e bağlamak:* AOI odası
+  istek cevaplamaya başlardı — davranış değişikliği; karar bekliyor.
+- *Kit'te demo tiplerine varsayılan tip parametreleri
+  (`AoiRoom<G = DemoGame>`):* kit demo'yu adlandırırdı (§3); eski yollar
+  bunun yerine kökte tip takma adı.
+- *1b odalarının (takım, PVS, sharded) snapshot kodlayıcılarını da
+  `DemoCodec`'e çevirmek (`EntityRecord`'u seam'den düşürmek için):*
+  1b'nin odalarını başlatmak demekti; bilinçli olarak bırakıldı.
+- *`Pos2` ön-ayarı:* 1a odalarının kullandığı tek kodek demo'nun;
+  kullanılmayan bir ön-ayar kurulmadı.
+
+**Tasarım bulguları (KIT-ARCHITECTURE §10 "Faz 1a sonucu"):** seam
+sayıca küçülmedi (tüketicilerin hepsi 1b'de); `AoiRoom<G>`'nin istek
+yönlendirmesi karar bekliyor; demo kurucuları kit'in generic tipleri
+üzerinde inherent impl — Faz 2'nin crate bölmesinde serbest
+fonksiyona ya da uzantı trait'ine dönmeli; `Grid2` `CellExit` gövdesini
+kendisi yazıyor (demo testiyle sabit); katman tarayıcısı çıplak
+`crate::kit` yolunu da kabul ediyor.
+
 ## gsb-kit Faz 0 turu (modül bölmesi: `kit/` + `demo/` + geçici seam)
 
 `docs/KIT-ARCHITECTURE.md` §10'un ilk fazı. **Davranış değişikliği yok,

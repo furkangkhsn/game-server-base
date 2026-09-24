@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-411 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+419 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -82,6 +82,15 @@ YALNIZ `kit/seam.rs` üzerinden erişir — `kit/` altında seam dışında her
 kırar. Kit'e demo bağımlılığı eklemen gerekirse seam'e, hedef seam
 grubuna, tek satırlık gerekçeyle ekle. Seam'in içeriği Faz 1'in iş
 listesidir; Faz 1 bitince seam boşalır ve silinir.
+
+**Faz 1a tamam** (KIT-ARCHITECTURE §4.5 ve §10 "Faz 1a sonucu",
+CHANGELOG "gsb-kit Faz 1a turu"): §4 trait'leri (`kit::codec`,
+`kit::space` + `Grid2`, `kit::game`) var, `OpenRoom<G>` ve
+`AoiRoom<G, S>` generic, demo `DemoGame`/`DemoCodec` ile uyguluyor.
+`WireId`'yi yalnız kit'in `Minter`'ı kurabilir. Generic bir odada
+`World::clear_trackers`'ı yalnız kit çağırır (`update` sonunda bir kez);
+bir `Game` kancası çağırırsa debug'da panik. Seam'de kalan her öğe
+tüketicisiyle etiketli = Faz 1b iş listesi (takım, PVS, sharded).
 
 ## ÖNCE OKU (sırayla)
 
@@ -173,6 +182,6 @@ listesidir; Faz 1 bitince seam boşalır ve silinir.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 411 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 419 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

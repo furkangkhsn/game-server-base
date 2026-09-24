@@ -778,6 +778,8 @@ referential future = unsafe/mio olmadan çıkmaz).
   kapatılamaz" hükmünün geri kalanını kapatır: sayacın sahibi zaten oda
   actor'ünün yerel durumuydu; eksik olan yalnızca tipin mint tarafının
   tek noktaya indirgenmesiydi (bkz. ROADMAP "metrik + yük turu").
+  *(gsb-kit Faz 1a sonrası: `WireId::new` yok; tipin tek inşa yolu
+  kit'in `Minter`'ı — `kit/identity.rs`, KIT-ARCHITECTURE §4.4/§8.1.)*
 - **Yayınlanabilir küme (= `Position` taşımak) — yapısal ön koşul:** bir
   entity yayınlanabilmesi için `Position` taşıması yeterli ve bu ön
   koşul **yorumda yaşayan bir disiplin değil, kodda yapısal**dır:
@@ -950,7 +952,8 @@ trait şekli değişmedi; tek core değişimi ekleyici bir sayacıdır
 Ortak **oda muhasebesi** (identity minting, connection tablosu, input
 ingestion, sistem yürütme, orphan stamp) ise 4 odada birebir aynıydı —
 `gsb_game::common` modülüne tek kopya olarak taşındı; `common::next_serial`
-artık `WireId::new`'ün tek çağrıcısı. Detay + elenen alternatifler: ROADMAP
+artık `WireId::new`'ün tek çağrıcısı (gsb-kit Faz 1a sonrası: tek inşa
+yolu kit'in `Minter`'ı). Detay + elenen alternatifler: ROADMAP
 "Kapatılanlar (görünürlük stratejileri turu)" C maddesi.
 
 **Ölçülenler (N=1 000, 30 Hz; detay ROADMAP D2 ve ayrı-proces turu):**

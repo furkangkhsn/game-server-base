@@ -75,15 +75,21 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **411** (411/411 yeşil; tarihsel
+Test sayısı: bugün itibarıyla **419** (419/419 yeşil; tarihsel
 ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 → 388 → 409
-için `docs/CHANGELOG.md` başlığına bakınız). Son tur: **gsb-kit Faz 0**
-(`docs/KIT-ARCHITECTURE.md` §10) — `gsb-game/src` `kit/` (stratejiler +
-ortak makine) ve `demo/` (örnek oyun) olarak bölündü, davranış ve wire
-baytları aynı, public yollar aynı; kit'in demo'ya her erişimi geçici
-`kit/seam.rs`'ten geçiyor (25 öğe = Faz 1 iş listesi) ve kural bir
-kaynak-tarayan testle kilitli. Sıradaki: Faz 1 (bağımlılığın ters
-çevrilmesi). Önceki tur: **stall
+→ 411 için `docs/CHANGELOG.md` başlığına bakınız). Son tur: **gsb-kit
+Faz 1a** (`docs/KIT-ARCHITECTURE.md` §4.5, §10 "Faz 1a sonucu") — §4
+seam trait'leri (`RecordCodec`, `CellSpace` + `Grid2`, `Game`) kuruldu,
+hücre-delta motoru oyunun wire değeri üzerinden generic oldu,
+`OpenRoom<G>` ve `AoiRoom<G, S>` çevrildi, `WireId`'nin tek inşa yolu
+kit'in `Minter`'ı (§8.1 kapandı), `OpenRoom`'un değişiklik penceresi
+açığı kanıtlanıp kapandı (§8.3'ün o odaya düşen kısmı); wire baytları
+ve public yollar aynı, loadgen gürültü içinde. Sıradaki: Faz 1b (takım
+sisi, PVS, sharded kompozitler, oradaki §8 açıkları, seam'in
+silinmesi). Önceki tur: **gsb-kit Faz 0** — `gsb-game/src` `kit/` ve
+`demo/` olarak bölündü, kit'in demo'ya her erişimi geçici
+`kit/seam.rs`'ten geçiyor ve kural bir kaynak-tarayan testle kilitli.
+Daha önce: **stall
 gözlemlenebilirliği + bayt-granüler ilerleme** — 10k ölçümünde sunucu
 4486 oturumu write stall ile kapatırken `RESULT` `errors=0` diyordu.
 Sunucunun başlattığı her kapanış artık sebebiyle sayılıyor

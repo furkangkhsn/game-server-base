@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 tamam (§10, "Faz 0 sonucu"). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 ve Faz 1a tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu"; derlenen imzalar §4.5). Kararlar §12.**
 
 ## 1. Neden
 
@@ -194,6 +194,99 @@ kısıtlarıyla (`GroupKey: Eq + Hash + Clone + Debug`,
   onunla birleştirilir. `bot.rs` ise tamamen demo'dur; kit yalnızca
   "bot beslenen park oyuncuları" listesini `Game::bot_actions`'a verir.
 
+### 4.5 Faz 1a: derlenen imzalar ve sapmalar
+
+§4.1–§4.3'teki taslaklar koda karşı kontrol edilmişti ama
+derlenmemişti. Faz 1a'da derlenen hâlleri (`kit/codec.rs`,
+`kit/space.rs`, `kit/game.rs`, `kit/identity.rs`,
+`kit/common/input.rs`):
+
+```rust
+pub trait RecordCodec: Send + 'static {
+    type Marker: Component;
+    type Query: ReadOnlyQueryData + SingleEntityQueryData + ReleaseStateQueryData;
+    type Dirty: QueryFilter;
+    type Wire: Clone + Eq + Debug + Send + 'static;
+    fn wire(&self, item: QueryItem<'_, '_, Self::Query>) -> Self::Wire;
+    fn encode(&self, id: u64, wire: &Self::Wire, out: &mut BytesMut); // yalnız gövde
+}
+pub trait CellSpace<W>: Send + 'static {
+    type Cell: Eq + Hash + Copy + Debug + Default + Send + 'static;
+    fn cell_of(&self, wire: &W) -> Self::Cell;
+    fn view(&self, cell: Self::Cell) -> impl Iterator<Item = Self::Cell>;
+    fn encode_cell(&self, cell: Self::Cell, out: &mut BytesMut);          // yalnız gövde
+}
+pub trait Game: Send + 'static {
+    type Codec: RecordCodec;
+    const SNAPSHOT_OP: u16 = 1003;
+    const PRIVATE_OP: u16 = 1004;
+    fn codec(&self) -> &Self::Codec;
+    fn spawn_player(&mut self, w: &mut World, conn: ConnectionId) -> Entity;
+    fn bot_actions(&mut self, _w: &World, _ctx: &TickCtx,
+                   _bots: impl Iterator<Item = (PlayerId, Entity)>, _out: &mut Vec<Action>) {}
+    fn ingest(&mut self, w: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>,
+              players: &HashMap<PlayerId, Entity>, seq: &mut InputSeq);
+    fn systems(&mut self, w: &mut World, ctx: &TickCtx);
+    fn handle_request(&mut self, _w: &mut World, _ctx: &TickCtx, _r: &RpcRequest,
+                      _players: &HashMap<PlayerId, Entity>) -> Option<RequestDecision> { None }
+}
+pub type Wire<G> = <<G as Game>::Codec as RecordCodec>::Wire;
+```
+
+Kit tarafı: `Minter` (`Sequential { used }` / `Range { base, used }`,
+yalnız `kit` modülüne görünür; `mint() -> WireId`, `next_serial() ->
+u64`, `used()`, `arrival(u64) -> WireId`), `InputSeq` (`admit(player,
+seq)` public; `begin`/`end`/ack okuması kit-içi), `CellBook<W, C>`,
+`CellPieces<C>`.
+
+**Sapmalar ve gerekçeleri:**
+
+1. **`RecordCodec::Query`'ye `SingleEntityQueryData +
+   ReleaseStateQueryData` eklendi.** Kit bir entity'nin kaydını sorgu
+   geçişi DIŞINDA da okuyor: çekirdek `on_join`'den hemen sonra, hiçbir
+   `update` koşmadan `group_of`'u çağırıyor (`room/actor/control/join.rs`)
+   ve AOI'nin o anki cevabı entity'nin gerçek hücresi olmalı
+   (`world.entity(e).get_components::<Query>()`). İki sınır bevy'de tek
+   entity okumasının şartı; `&T` ikisini de sağlıyor.
+2. **`ROQueryItem` yerine `QueryItem`.** Salt-okunur bir sorguda ikisi
+   aynı tip; `QueryItem` genel kodda normalize edilecek bir izdüşüm
+   daha az demek.
+3. **`encode` / `encode_cell` yalnız gövdeyi yazar, uzunluk metodu
+   yok.** Kit zarfı `put_delimited` ile yazıyor: gövde çıktıya
+   doğrudan, bir baytlık uzunluk yuvasının arkasına yazılıyor; 128
+   baytı aşan (nadir) bir gövde sağa kaydırılıyor. Böylece ne
+   `encoded_len` gibi gövdeyle tutarlı kalması gereken ikinci bir
+   metot ne de kayıt başına bir kopya gerekiyor.
+4. **`CellSpace::Cell: Default`.** `group_of` her zaman bir anahtar
+   döndürmek zorunda: entity'si olmayan bir oyuncu (ya da kayıt
+   bileşenleri olmayan bir entity) varsayılan hücreye düşüyor —
+   `Grid2` için `Cell(0, 0)`, eski kodun cevabının ta kendisi.
+5. **`Game::codec(&self)`.** Taslakta yalnız `type Codec` vardı; kodek
+   metotları `&self` aldığı için odanın bir kodek DEĞERİNE ihtiyacı var
+   (nicemleme parametresi taşıyan bir kodek de örnek verisidir).
+6. **`bot_actions` dilim yerine `impl Iterator` alıyor.** Bugünkü
+   çağrı şekli bir iteratör (park defterinin `bot` filtreli görünümü);
+   dilim her tick bir `Vec` tahsisi demekti. Statik dispatch korunuyor
+   (`Game` hiçbir yerde `dyn` değil).
+7. **`handle_request`'e `players` eklendi.** Demo'nun işleyicisi
+   isteyenin entity'sini kararlı `PlayerId` ile odanın tablosundan
+   çözüyor — `ingest`'in `players` parametresiyle aynı sebep.
+8. **`Mig`, `on_player_spawned`, `capture`, `restore` Faz 1a'da yok.**
+   Onları kullanan odalar (takım, sharded) 1b'nin; kullanılmayan bir
+   trait öğesi derlenmemiş bir taslaktan farksız. 1b ekliyor.
+9. **`Minter` public bir enum değil, kit-özel.** Varyant alanları
+   public olan bir enum'u herkes kurabilir, yani istediği kimliği
+   basabilirdi; bu yüzden tip `pub(super)` (yalnız `kit`). İki ek:
+   `next_serial` (shard'ın kararlı `PlayerId`'leri aynı aralıktan
+   çekiyor — çekirdeğin tükenme bekçisi `serial_used` ikisini de
+   saymalı) ve `arrival` (göçle gelen entity'nin kimliği çekirdekte ham
+   `u64` taşınıyor — `Migrating::wire`, çekirdek dokunulmaz — ve alıcı
+   shard onu yeniden `WireId` yapmalı; bu bir basım değil, kimliği
+   kardeş shard'ın aralığı basmıştı).
+10. **`CellBook<W, C>`, `CellPieces<C>`.** Taslak `CellBook<Wire>`
+    diyordu; hücre anahtarı da genel (uzayın `Cell`'i). `CellPieces`
+    yalnız hücre anahtarlı baytları tutuyor, `W`'ye ihtiyacı yok.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
@@ -254,7 +347,9 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 1. **Bayat değişmez:** DESIGN "`common::next_serial`, `WireId::new`'ün
    tek çağrıcısı" diyor; oysa `sharded/room/logic.rs:120,268` ve
    `sharded/room/shard.rs:88` de çağırıyor. Kit'e taşınan `Minter`
-   bunu yapısal olarak kapatır.
+   bunu yapısal olarak kapatır. **Faz 1a'da kapandı:** `WireId::new`
+   yok; tipin tek inşa yolu `kit/identity.rs`'teki `Minter` (üç çağrı
+   noktası da ondan geçiyor), bir `compile_fail` doctest'i kilitliyor.
 2. **Hayalet entity şüphesi:** AOI ve spatial kompozit despawn'ı yalnızca
    `on_leave` / göç çıkışından öğreniyor. Oyun kodunun despawn ettiği
    bir NPC büyük olasılıkla defterde ve `last_cell`'de kalıyor.
@@ -262,6 +357,9 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 3. **`clear_trackers` yalnız iki odada çağrılıyor** (AOI ve spatial
    kompozit). Open, Team, PVS ve `ShardedRoom`'da silinen-bileşen
    tamponlarının büyüdüğünden şüpheleniliyor. **Ölçülmedi.**
+   **Faz 1a:** `OpenRoom` için testle kanıtlandı (her `on_leave`
+   despawn'ı odanın ömrü boyunca tamponda kalıyordu) ve kapandı; Team,
+   PVS ve `ShardedRoom` 1b'de.
 4. **Sabit sınırlar:** takım sayısı 2'ye sabit (`[_; 2]` diziler), PVS
    görünürlük tablosu `u16` bitmask olduğu için 16 sektörle sınırlı,
    bitişik olmayan bir bölgeye düşen entity hiçbir komşuya göç
@@ -306,7 +404,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | Faz | Kapsam | Büyüklük | Kapı |
 |---|---|---|---|
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
-| 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
+| 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), 1b: takım sisi, PVS, sharded kompozitler, oradaki §8 açıkları, seam'in silinmesi | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
 | 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `Grid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
@@ -423,6 +521,125 @@ Loadgen (50 istemci), 412d863 ↔ HEAD:
 `step_p50_fine_us` 8 µs'lik kovalarla ölçülür; sharded farkı için üçer
 dönüşümlü A/B koşusu alındı: taban 32/32/24, HEAD 40/24/16 — gürültü
 içinde.
+
+### Faz 1a sonucu
+
+**Tamamlandı** (`kit/phase-1`, `ee019e8..`; CHANGELOG "gsb-kit Faz 1a
+turu"). Faz 1 iki tura bölündü: 1a seam'leri kurdu, ortak makineyi ve
+en basit iki stratejiyi çevirdi; 1b takım sisini, PVS'i, sharded
+kompozitleri ve oradaki §8 açıklarını çevirip seam'i silecek.
+
+- **Seam'ler:** `kit::codec::RecordCodec`, `kit::space::CellSpace<W>`
+  (+ `Grid2` ön-ayarı: `Cell`, 3×3 görünüm, `cell_of`, `CellExit`
+  gövdesi), `kit::game::Game`. Derlenen imzalar ve her sapma: §4.5.
+- **Kimlik:** `WireId`'nin yapıcısı yok; tek inşa yolu kit-özel
+  `Minter` (§8.1 kapandı).
+- **Girdi:** `InputSeq` — oyunun gördüğü tek şey `admit(player, seq)`.
+- **Delta motoru:** `CellBook<W, C>` / `CellPieces<C>` /
+  `assemble_group_packet` generic; kayıt gövdesi `RecordCodec::encode`'dan,
+  hücre-çıkış gövdesi `CellSpace::encode_cell`'den; zarfları (sequence,
+  delta bayrağı, `removed`, `cell_exits`, `entities`, sabit sıra) kit
+  yazıyor (`common/frame.rs`).
+- **Odalar:** `OpenRoom<G: Game>`, `AoiRoom<G: Game, S:
+  CellSpace<Wire<G>>>`. Ortak muhasebe `common/hooks.rs`'te kit ile
+  `Game` kancaları arasında bölündü (`join`: oyun spawn eder, kit basar
+  ve damgalar; `ingest`: kit bot-beslenen park oyuncularını verir, oyun
+  çözer; `systems`; `close_change_window`); `stamp_orphans` kodekin
+  `Marker`'ı üzerinden generic.
+- **Demo:** `DemoGame` (`demo/play.rs`), `DemoCodec` (`demo/codec.rs`:
+  `Marker = Position`, `Query = &Position`, `Dirty = Changed<Position>`,
+  `Wire = (i32, i32)`), `Grid2` ön-ayarı. Eski kurucular
+  (`OpenRoom::{new, with_spawn_half, with_economy}`,
+  `AoiRoom::{new, with_spawn_half}`) `demo/rooms.rs`'te
+  `OpenRoom<DemoGame>` / `AoiRoom<DemoGame, Grid2>` üzerinde;
+  `gsb_game::room::OpenRoom` ve `gsb_game::aoi::AoiRoom` bu
+  örneklemelere tip takma adı. `crates/gsb-game` dışında tek dosya
+  değişmedi.
+- **Değişiklik takibi (§4.4):** filtre kodekin (`Dirty`);
+  `World::clear_trackers`'ı her iki çevrilmiş oda da `update` sonunda
+  bir kez, kit'in `close_change_window`'u ile çağırıyor. Debug
+  derlemelerde bir `Game` kancasının onu çağırması yakalanıyor
+  (`last_change_tick` karşılaştırması). `OpenRoom` bunu hiç
+  çağırmıyordu — §8.3 onun için kanıtlandı ve kapandı.
+
+**Tasarımla çelişen / tasarımın öngörmediği (kayıt):**
+
+1. **Seam sayıca küçülmedi.** Çevrilen iki oda seam'den hiçbir şey
+   almıyor, ama kalan her öğenin 1b'de bir tüketicisi var (takım, PVS,
+   sharded) ya da kit zarfı (Faz 2). Tek gerçek çıkış `CellExit`
+   (artık yalnız test fikstürü); giriş: `DemoCodec` (sharded spatial
+   kompozit generic motoru demo kodekiyle örnekliyor) ve test fikstürü
+   `DemoGame`. Seam: 25 öğe (19 `use` satırı) + 6 test-yalnız öğe.
+2. **`AoiRoom<G>` isteği oyuna yönlendirmiyor.** AOI odası hiçbir zaman
+   istek cevaplamadı (çekirdek "no handler" diyordu); `Game::handle_request`'e
+   bağlamak AOI'nin `ABILITY`/`ECONOMY` cevaplamaya başlaması, yani bir
+   davranış değişikliği demek. Bilinçli olarak bağlanmadı; karar
+   bekliyor (1b ya da kullanıcı).
+3. **Faz 2 için tuzak:** demo'nun kurucuları kit'in generic tipleri
+   üzerinde inherent impl (`impl OpenRoom<DemoGame> { fn new() }`).
+   Bu yalnız iki taraf aynı crate'teyken yasal; crate bölmesinde
+   bunlar serbest fonksiyonlara ya da bir uzantı trait'ine dönmeli
+   (`gsb_game::room::OpenRoom::new()` yolu o zaman değişir).
+4. **`Grid2` bir wire biçimi taşıyor:** `CellExit` gövdesini (`sint32 x
+   = 1; sint32 y = 2;`, proto3 sıfır atlama dahil) kit ön-ayarı
+   yazıyor; demo'nun tipli `CellExit`'ine bir demo testi sabitliyor.
+   Başka bir hücre-çıkış biçimi isteyen oyun kendi `CellSpace`'ini
+   yazar.
+5. **`Pos2` ön-ayarı kurulmadı:** 1a odalarının kullandığı tek kodek
+   demo'nunki; nicemleme (kesme) bir oyun kararı, `DemoCodec` demo'da.
+6. **Katman tarayıcısı genişledi:** `pub(in crate::kit)` gibi çıplak
+   `crate::kit` yolu artık kabul ediliyor (öncesinde yalnız `kit::`);
+   öz-testi hem bunu hem de `crate::kitchen`'ın hâlâ yakalandığını
+   sabitliyor.
+
+**Kalan seam envanteri = Faz 1b iş listesi:**
+
+| Hedef seam | Öğe → tüketiciler |
+|---|---|
+| `RecordCodec` | `Position` → takım, PVS, sharded; `EntityRecord` → takım/PVS/sharded kodlayıcıları; `StripPos` → sharded; `DemoCodec` → sharded spatial |
+| `SectorMap` | `Sector`, `SECTOR_OUT`, `sector_of`, `VISIBLE_FROM` → PVS |
+| `Game` kancaları | `spawn_player` → takım, PVS (`common::on_join`), sharded; `team_of` → takım; `MoveTarget` + `Speed` (`Mig`) → sharded; `restore_migrant` → sharded; `movement_runner`, `ingest`, `synthesize_bot_moves` → takım, PVS, sharded; `handle_request` + `EconomyService` → sharded; `DEFAULT_SPAWN_HALF` → takım, PVS; `WORLD_SNAPSHOT`/`PRIVATE` → takım, PVS, sharded |
+| Kit zarfı (Faz 2) | `WorldSnapshot`, `Private`, `private::Payload`, `InputAck` → `common::emit_private` (her oda), takım/PVS/sharded kodlayıcıları |
+| Test fikstürleri | `DemoGame`, `CellExit`, `DEFAULT_SPEED`, `SECTOR_WEST`/`EAST`/`NW` |
+
+Faz 0'ın "temiz bölünmeyenler" listesinden kalan: `collect_migrations`
+ve `ShardedRoomState` (1b), takım/PVS/sharded snapshot kodlayıcıları +
+sharded `match_result` (1b — `OpenRoom`'unki ve `stamp_orphans`/
+`dirty_pass` generic oldu), takım/PVS/sharded odalarındaki
+`spawn_half`/`economy` alanları (çevrilen iki odada artık `DemoGame`
+durumu), sharded park kopyası (1b).
+
+**Görünürlük:** hiçbir struct alanı genişletilmedi (`ShardedRoom`'un
+`serial_used` alanı aynı kapsamla `minter` oldu). Yeni public öğeler:
+`InputSeq` (+ `admit`), `OpenRoom::{with_game, game, game_mut}`,
+`AoiRoom::{with_game, game, game_mut}`, `Grid2`, `Cell: Default`,
+`DemoGame`, `DemoCodec`, `kit::{codec, space, game}` modülleri.
+Daraltılan: `common::on_join` / `stamp_orphans` → `pub(super)`.
+
+**Doğrulama:** 419 test (411 + 8: iki `Minter`, bir `compile_fail`
+doctest, `put_delimited`, iki demo wire sabitlemesi, değişiklik
+penceresi, kanca bekçisi) / 0 hata / 1 ignored. `wire_contract.rs`,
+`delta_aoi.rs`, `aoi/tests/sharing.rs` ve `aoi/tests/sharing/delta.rs`
+değişmeden geçti (`git diff ee019e8..` boş); yalnız `aoi/tests.rs`'e
+demo örneklemesini adlandıran bir tip takma adı eklendi. Loadgen (50
+istemci, 3 sn), ee019e8 ↔ 4628aef dönüşümlü (sonraki commit'ler kod
+değiştirmiyor):
+
+| Koşu | left | errors | server_closes | step_p50_fine_us (3 çift) | snap_total | out_bps_per_conn |
+|---|---|---|---|---|---|---|
+| tcp — taban | 50 | 0 | 0 | 72 / 56 / 56 | 4100 | 11018 |
+| tcp — HEAD | 50 | 0 | 0 | 88 / 48 / 56 | 4101 | 11067 |
+| udp — taban | 50 | 0 | 0 | 56 / 64 / 64 | 4150 | 11048 |
+| udp — HEAD | 50 | 0 | 0 | 56 / 64 / 64 | 4100 | 11004 |
+| spatial — taban | 50 | 0 | 0 | 128 / 120 / 128 | 4091 | 1982 |
+| spatial — HEAD | 50 | 0 | 0 | 128 / 120 / 136 | 4086 | 1934 |
+| sharded N=4 — taban | 50 | 0 | 0 | 40 / 48 | 4082 | 5667 |
+| sharded N=4 — HEAD | 50 | 0 | 0 | 40 / 48 | 4033 | 5792 |
+| sharded × spatial — taban | 50 | 0 | 0 | 56 / 64 | 4034 | 2134 |
+| sharded × spatial — HEAD | 50 | 0 | 0 | 64 / 64 | 4047 | 2164 |
+
+snap_total / out_bps ilk çiftin değerleri. Tek çiftlik 2 kovalık fark
+(tcp 72 ↔ 88) diğer çiftlerde tekrarlanmıyor — gürültü içinde.
 
 ## 11. Kabul kriteri
 
