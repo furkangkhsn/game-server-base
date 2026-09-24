@@ -75,20 +75,29 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **433** (433/433 yeşil; tarihsel
-ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 → 388 → 409
-→ 411 → 419 için `docs/CHANGELOG.md` başlığına bakınız). Son tur:
-**gsb-kit Faz 1b** (`docs/KIT-ARCHITECTURE.md` §4.6, §10 "Faz 1b
+Test sayısı: bugün itibarıyla **439** (439/439 yeşil, 1 ignored doctest;
+tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
+388 → 409 → 411 → 419 → 433 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **gsb-kit Faz 2** (`docs/KIT-ARCHITECTURE.md` §5.1, §10 "Faz 2
+sonucu") — **crate bölmesi**: `gsb-game` → `gsb-demo` (örnek oyun) ve
+yeni `gsb-kit` (stratejiler, delta motoru, sharded kompozitler,
+park/resume, ön-ayarlar, kendi `kit.proto`'su — `Private`'a oyunun özel
+yükü için `bytes game = 4`); kit hiçbir profilde demo'ya bağlı değil
+(katman testi emekli, yerine cargo döngüsü + kit manifest testi); kit
+testleri kendi fikstür oyununda, demo kodeğinin değerine bakan 11 test
+demo'da; demo kurucuları uzantı trait'leri (`gsb_demo::prelude`); kit
+ile demo'nun tipli aynası crate sınırında aynı baytlara kilitli;
+arenanın 3D ön-ayarı `Spatial` + `VisionGrid3` kuruldu (`Grid3` /
+`GridPartition3` tetikleyici bekliyor); wire baytları ve public yollar
+aynı, loadgen gürültü içinde. Sıradaki: Faz 3 (3D arena demosu,
+`gsb-demo-arena`). Önceki tur: **gsb-kit Faz 1b** (§4.6, §10 "Faz 1b
 sonucu") — **Faz 1 bitti**: takım sisi, PVS ve iki sharded kompozit
 oyun üzerinden generic (`Vision`, `SectorMap`, `Partition`, `TeamGame`,
 `ShardGame`, `KitMig`; 2D ön-ayarlar `VisionGrid2`, `ConvexSectors2`,
 `GridPartition2`), ön-ayarlar oyunun tiplerini `Planar` erişimcisiyle
-okuyor (yer düzleminde bir 3D oyun kit'e dokunmadan kullanır), sharded
-park kopyası birleşti, §8.2–§8.5 açıklarının hepsi önce testle
-kanıtlanıp kapandı, bütün kit odaları istekleri oyuna yönlendiriyor
-(AOI / takım / PVS için bilinçli davranış değişikliği), seam kit
-zarfına indi; wire baytları ve public yollar aynı, loadgen gürültü
-içinde. Sıradaki: Faz 2 (crate bölmesi + kit proto'su). Önceki tur:
+okuyor, sharded park kopyası birleşti, §8.2–§8.5 açıklarının hepsi önce
+testle kanıtlanıp kapandı, bütün kit odaları istekleri oyuna
+yönlendiriyor, seam kit zarfına indi. Daha önce:
 **gsb-kit Faz 1a** (`docs/KIT-ARCHITECTURE.md` §4.5, §10 "Faz 1a sonucu") — §4
 seam trait'leri (`RecordCodec`, `CellSpace` + `Grid2`, `Game`) kuruldu,
 hücre-delta motoru oyunun wire değeri üzerinden generic oldu,

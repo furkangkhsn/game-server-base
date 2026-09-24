@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 ve Faz 1 (1a + 1b) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu"; derlenen imzalar §4.5, §4.6). Sıradaki: Faz 2 (crate bölmesi). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0, Faz 1 (1a + 1b) ve Faz 2 (crate bölmesi) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu", "Faz 2 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Sıradaki: Faz 3 (3D arena demosu). Kararlar §12.**
 
 ## 1. Neden
 
@@ -12,7 +12,7 @@ Unity benzetmesiyle üç katman vardır:
 |---|---|
 | Motor çekirdeği | `gsb-core` (+ `gsb-ecs`, `gsb-net`, `gsb-protocol`) |
 | Paketler (Netcode, Cinemachine…) | **`gsb-kit`** — bu doküman |
-| Örnek projeler | **`gsb-demo`** (bugünkü `gsb-game`) |
+| Örnek projeler | **`gsb-demo`** (eski `gsb-game`; Faz 2) |
 
 **Bugünkü durum.** Çekirdek zaten temiz: `gsb-core`'da konum, hücre,
 grid, koordinat kavramı yoktur. Sharding bile göçü ve sınır şeridini
@@ -354,7 +354,10 @@ hücreyi, bölgeyi, görüşü ve sektörü değiştirmiyor). Faz 2'nin 3D
 ön-ayarları (`Grid3`, 3D görüş ızgarası, `GridPartition3`) ayrı bir
 uzamsal erişimciyi okuyacak (`Spatial { type Coord; fn spatial(&self)
 -> [Coord; 3] }`); bir tip ikisini birden uygulayabilir (arena: `Grid3`
-için `Spatial`; MMO: yer düzlemi için `Planar`).
+için `Spatial`; MMO: yer düzlemi için `Planar`). *(Faz 2: `Spatial`
+tam bu imzayla ve yalnız arenanın gerektirdiği 3D ön-ayar —
+`VisionGrid3` — kuruldu; `Grid3` ve `GridPartition3`'ün hiçbir kontrol
+demosu kullanmıyor, tetikleyici bekliyorlar: §7.)*
 
 Elenen alternatifler:
 - *Ön-ayara izdüşüm tip parametresi* (`Grid2<Proj>`, `Proj:
@@ -452,6 +455,62 @@ hücre gövdelerinin oyundan gelmesidir. `Private` bugün kapalı bir
 oneof'tur; oyunun kendi özel yükünü taşıyabilmesi için ayrılmış bir
 `bytes` alanı eklenmelidir.
 
+### 5.1 Faz 2: derlenen kit proto'su
+
+`crates/gsb-kit/proto/kit.proto` (`package gsb.kit`, `import
+"base.proto"`); Rust tarafı `gsb_kit::proto`:
+
+```proto
+message InputAck { uint64 processed_up_to = 1; }
+message WorldSnapshot {
+  uint64 sequence = 1;
+  repeated bytes entities = 2;    // RecordCodec::encode gövdesi
+  repeated uint64 removed = 3;    // kit PACKED olmayan biçimde yazar (bkz. aşağı)
+  repeated bytes cell_exits = 4;  // CellSpace::encode_cell gövdesi
+  bool delta = 5;
+}
+message Private {
+  oneof payload { InputAck ack = 1; WorldSnapshot snapshot = 2; }
+  repeated gsb.base.RpcResponse responses = 3;
+  bytes game = 4;                 // oyunun kendi özel yükü (opak)
+}
+```
+
+- **`Private.game = 4`:** 4 numarası `Private`'ta (ve bölündüğü
+  `gsb.game.Private`'ta) hiç kullanılmadı (`git log -p` ile tarandı).
+  Oneof'un dışında, `responses` gibi: bir tick hem ack hem oyun yükü
+  taşıyabilir. Hiçbir kit odası bugün yazmıyor — yuva, bir oyunun ilk
+  özel mesajı zarfı yeniden numaralamak zorunda kalmasın diye açık;
+  onu dolduran `Game` kancası ilk kullanıcısıyla (tetikleyici) gelir.
+- **`removed` packed değil:** kit her kimliği ayrı bir `0x18` etiketiyle
+  yazıyor, üretilmiş bir kodlayıcı proto3'ün varsayılanı olan packed
+  biçimi yazar; her protobuf ayrıştırıcısı ikisini de kabul eder. Bu
+  yüzden proto'ya `[packed = false]` konmadı: demo'nun (değişmeyen)
+  tipli aynası packed-varsayılan, iki tanımın üretilmiş kodlayıcıları
+  aynı baytı yazmalı.
+- **Oyunun tipli aynası:** demo'nun `game.proto`'su `import "kit.proto"`
+  ile `InputAck`'i olduğu gibi kullanıyor (`gsb_demo::game::InputAck`
+  yeniden ihraç), `WorldSnapshot` ve `Private`'ı tipli ayna olarak
+  koruyor (aynı numaralar, `EntityRecord` / `CellExit` gövdeleri).
+  Ayna `game = 4`'ü bildirmiyor (demo göndermiyor; ayrıştırıcı
+  bilinmeyen alanı atlar) — bu sayede `wire_contract.rs`'in `Private`
+  literal'i değişmedi. Özel yükü olan bir oyun o numarayı kendi mesaj
+  tipiyle yazar.
+- **Build:** `gsb-kit/build.rs` diğerlerinin kalıbında (gsb-lint,
+  vendored protoc, `.gsb.base` için `extern_path`) ve proto dizinini
+  `links = "gsb-kit-proto"` ile yayınlıyor (`DEP_GSB_KIT_PROTO_DIR`);
+  `gsb-demo/build.rs` onu include edip `.gsb.kit` için `extern_path`
+  veriyor (kit tipleri ikinci kez üretilmiyor).
+- **Bayt uyumluluğu kilitli:** kit tarafında alan numaraları
+  (`proto::tests`, bayt bayt), demo tarafında iki tanım (`tests/
+  kit_wire.rs`): kurulmuş kareler (full; `removed` + `cell_exits` +
+  kayıtlı delta; ack + yanıtlı ve one-shot full + yanıtlı `Private`)
+  iki tanımda aynı baytı kodluyor ve birbirini kendine çözüyor; gerçek
+  bir demo `AoiRoom`'unun elle yazdığı kareler (full, üç değişim
+  türünü birden taşıyan delta, yanıtlı one-shot private full) iki
+  tanımdan da aynı içeriğe çözülüyor ve aynı baytlara yeniden
+  kodlanıyor. Mutation-check: `cell_exits = 4 → 6` üç testi de kırdı.
+
 ## 6. Hareket bir trait değildir
 
 Hareket oynanışın kendisidir: FPS'te fizik, zıplama, eğilme; MOBA'da
@@ -468,21 +527,22 @@ yaygın durumlar için hazır uygulamalarını taşır:
 | Ön-ayar | İçerik | Durum |
 |---|---|---|
 | `Pos2<i32>`, `Pos2<f32>`, `Pos3<f32>` | konum bileşenleri + `RecordCodec` (farklı nicemleme seçenekleriyle) | kurulmadı (§10 "Faz 1a sonucu" 5) |
-| `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` Faz 2 |
-| `VisionGrid2`, 3D eşi | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi) | `VisionGrid2` 1b'de; 3D Faz 2 |
+| `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` **tetikleyici: hacimsel AOI isteyen bir oyun** (kontrol demolarından hiçbiri kullanmıyor — MMO yer düzleminde `Grid2`) |
+| `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi) |
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
-| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği) | `GridPartition2` 1b'de; 3 Faz 2 |
+| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği) | `GridPartition2` 1b'de; `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
 
 Ön-ayarlar oyunun tiplerini somut bir konum tipi üzerinden değil
 **erişimci trait'ler** üzerinden okur: 2D ön-ayarlar `Planar`'ı
-(`[Coord; 2]`; simülasyon `f32`, wire `i32`), Faz 2'nin 3D ön-ayarları
-bir `Spatial` erişimcisini (`[Coord; 3]`). Tasarım ve elenen
-alternatifler: §4.6.
+(`[Coord; 2]`; simülasyon `f32`, wire `i32`), 3D ön-ayarlar
+`Spatial`'ı (`[Coord; 3]`; Faz 2'de kuruldu, bugün tek okuyucusu
+`VisionGrid3`). Tasarım ve elenen alternatifler: §4.6.
 
 İzometrik bir oyun kendi 2D konumuna `Planar` uygular ve `Grid2` takar;
 bir FPS `Pos3`'ünü seçer ve AOI'yi yer düzleminde (`Planar` → `[x, z]`
-+ `Grid2`) ya da hacimsel (`Spatial` + `Grid3`) yapabilir. Alışılmadık
++ `Grid2`) ya da hacimsel (`Spatial` + `Grid3` — tetikleyiciyle kurulur)
+yapabilir. Alışılmadık
 bir oyun kendi tipine seam trait'lerini doğrudan uygular.
 
 ## 8. Harita sırasında bulunan mevcut açıklar
@@ -560,8 +620,8 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 |---|---|---|---|
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), **1b tamam** (aşağıda "Faz 1b sonucu": takım sisi, PVS, sharded kompozitler, §8.2–§8.5, seam kit zarfına indi) | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
-| 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
-| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `Grid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
+| 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları; arenanın 3D ön-ayarı (`Spatial`, `VisionGrid3`) — **tamam**, aşağıda "Faz 2 sonucu" | ~400–600 satır, çoğu yol | tüm testler + loadgen |
+| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `VisionGrid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
@@ -935,6 +995,191 @@ karışık (taban 120 80 80 104, HEAD 120 104 96 96). Aynı senaryoyu tek
 taban 37,4 / 40,2 µs, HEAD 40,7 / 40,5 µs verdi. Mantık birebir aynı
 (yukarıdaki eşdeğerlik koşumu); fark gürültü içinde sayıldı.
 
+### Faz 2 sonucu
+
+**Tamamlandı** (`kit/phase-2`, `a75e7b7..`; CHANGELOG "gsb-kit Faz 2
+turu"). Workspace'te artık `crates/gsb-kit` ve `crates/gsb-demo`
+(yeniden adlandırılan `gsb-game`, `git mv`) var; kit hiçbir profilde
+demo'ya bağlı değil.
+
+**Crate grafı** (`cargo tree --depth 1 -e normal,build,dev`, yalnız
+`gsb-*`):
+
+| Crate | Bağımlılıklar (`gsb-*`) |
+|---|---|
+| `gsb-lint` | — |
+| `gsb-protocol` | build: `gsb-lint` |
+| `gsb-ecs` | build: `gsb-lint` |
+| `gsb-core` | `gsb-protocol`; build: `gsb-lint` |
+| `gsb-net` | `gsb-core`, `gsb-protocol`; build: `gsb-lint` |
+| **`gsb-kit`** | `gsb-core`, `gsb-protocol`; build: `gsb-lint` (ayrıca `bevy_ecs`, `prost`, `bytes`) |
+| **`gsb-demo`** | `gsb-core`, `gsb-ecs`, **`gsb-kit`**, `gsb-protocol`; build: `gsb-lint` |
+| `gsb-server` | `gsb-core`, `gsb-demo`, `gsb-ecs`, `gsb-net`, `gsb-protocol`; build: `gsb-lint` |
+
+`cargo tree -p gsb-kit -e normal,dev,build | grep -c gsb-demo` → `0`.
+Kit `gsb-ecs`'e de bağlı değil: tek kullanımı (`run_systems`, bir
+`SystemRunner` çağrısı) yalnız demo'nundu ve demo'nun `Game::systems`'ine
+taşındı.
+
+**Katman kuralı artık yapısal.** Faz 0'ın kaynak-tarayan katman testi
+(`src/layering.rs`, 2 test) emekli edildi: kit ayrı bir crate ve
+`gsb-kit`'e normal bir `gsb-demo` bağımlılığı eklemek cargo'da derlenmez
+("cyclic package dependency: package `gsb-demo` … depends on itself").
+Dev-dependency döngüsünü cargo kabul ediyor (kit'in ikinci bir kopyasını
+derler; test kopyasının tipleri oyununkiler olmaz) — o açığı kit'in
+tek manifest testi kapatıyor (`the_kit_manifest_names_no_game_crate`:
+bağımlılık tablolarından herhangi biri motor dışı bir `gsb-*` crate
+adlandırırsa kırılır; `[dev-dependencies] gsb-demo` eklenerek
+mutation-check edildi).
+
+**Kit proto'su:** §5.1 (alan numaraları, `Private.game = 4`, `removed`'ın
+packed olmayan yazımı, tipli ayna, build, bayt-uyumluluk kilidi).
+
+**Demo kurucuları: uzantı trait'leri.** Demo'nun kurucuları kit'in altı
+generic oda tipi üzerinde inherent impl'di — crate sınırında E0116. Her
+oda için bir demo trait'i (`OpenRoomExt`, `AoiRoomExt`, `TeamRoomExt`,
+`SectorRoomExt`, `ShardedRoomExt`, `ShardedSpatialRoomExt`); hepsi odayı
+adlandıran uyumluluk modülünden ve `gsb_demo::prelude`'dan ihraç
+ediliyor. Çağrı sözdizimi aynı (`OpenRoom::new()`,
+`AoiRoom::with_spawn_half(c, h).with_disconnect_grace(g)`,
+`.with_economy(e)`); `gsb-server`'ın fabrikalarına ve demo testlerine
+tek satır `use gsb_demo::prelude::*;` eklendi. Elenen: serbest
+fonksiyonlar (her çağrı yeri yeniden yazılır, `with_economy` builder
+zincirini iç içe çağrıya çevirir), newtype sarmalayıcılar (her
+`GameLogic` / `ShardLogic` metodu altı kez delege), kit'te oyun
+üzerinden generic kurucular (kit demo'nun spawn haritasını, harita
+verisini, ekonomi servisini bilemez). `OpenRoom<DemoGame>` ve
+`SectorRoom<DemoGame, _>`'in `Default` impl'leri aynı yetim kuralıyla
+kalktı — çağıranı yoktu.
+
+**Fikstür oyunu** (`gsb-kit/src/testing/`, yalnız `#[cfg(test)]`,
+public API'nin dışında — oyun yazarına örnek `gsb-demo`'nun kendisi):
+`Fixture` — `Position` / `Speed` / `MoveTarget`, kesen bir kodek
+(`FixCodec`, gövde `{ uint64 entity = 1; sint32 x = 2; sint32 y = 3; }`),
+conn paritesiyle takım, konum + hız + hedef taşıyan göç (`FixMig`),
+dört sektörlü harita, kit zarfının prost-derive tipli aynaları
+(`WorldSnapshot`, `Private`), altı oda için kurucular. Girdi çözmez,
+sistemi yok, oyuncuları orijine spawn eder (testler yerleştirir).
+Mevcut sarmalayıcılar (`Culling`, `Recording`, `ThreeTeams`,
+`ClearsTrackers`) artık onu sarıyor.
+
+**Test göçü** (e80d2e4'te `gsb-game`'in 96 testi → bugün):
+
+| Grup | Sayı | Yeni yer |
+|---|---|---|
+| Kit'in modül içi testleri (kodeğin yazdığı değere bakmayan: fikstür üzerinde ya da oyundan bağımsız — `put_delimited`, iki `Minter`, bölme/yönlendirme, 3D yer düzlemi kilidi) | 51 | `gsb-kit` modül içi, aynı ad ve aynı modül yolu (`kit::` öneki düştü) |
+| `WireId` `compile_fail` doctest | 1 | `gsb-kit` (yol `gsb_kit::identity::WireId`; hâlâ doğru sebeple — E0603 özel kurucu — kırıldığı doğrulandı) |
+| Demo kodeğinin yazdığı DEĞERE bakan kit testleri | 11 | `gsb-demo` `src/demo/rooms/tests/{open,aoi,pvs,sharded}.rs`, aynı ad |
+| Kit bekçisi `a_hook_closing_the_change_window_is_caught` (demo'daydı) | 1 | `gsb-kit` `room::tests::change_window`, fikstürle |
+| Demo birim testleri (kodek ×2, `SECTOR_OUT`) | 3 | `gsb-demo`, aynen |
+| Entegrasyon testleri (`tests/*.rs`, 9 dosya) | 27 | `gsb-demo/tests/`, aynı dosyalar (yalnız `gsb_game` → `gsb_demo` ve bir `prelude` import'u) |
+| Katman tarayıcısı (`layering`) | 2 | **emekli** (yukarıda) |
+
+Demo'ya taşınan 11 test: `aoi_tick_cache_no_stale_block`,
+`aoi_silent_delta_silent_no_stale`, `aoi_two_groups_same_cell_same_block`,
+`aoi_structural_dirty_direct_write`, `aoi_partial_delta_only_mover_recorded`,
+`aoi_quantized_move_no_wire_change_no_record`,
+`sector_transition_snapshot_and_identity`,
+`borrowed_border_entities_render_without_gap_across_seam`,
+`delta_bookkeeping_ignores_unchanged_borrowed_strip`,
+`snapshot_emits_on_plain_position_write`,
+`entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id`. Ölçüt
+test başına: bir assertion'ın beklenen değeri demo kodeğinin yazdığı
+bir kayıttan (çözülmüş, kesilmiş koordinat) ya da nicemlemesinden
+geliyorsa test demo'nundur. Beklenen bayt, kayıt sayısı ve assertion
+hiçbirinde değişmedi; yalnız tesisat: oyuncunun entity'si odanın özel
+tablosundan değil public wire id'sinden bulunuyor (`entity_of`), istemci
+görünümü hücreyi kit'in `pub(crate)` `cell_of`'u yerine `Grid2`'nin
+public `CellSpace::cell_of`'uyla hesaplıyor. Taban ↔ HEAD her testin
+gövdesi normalize edilip karşılaştırıldı (tip adları, import yolları):
+fark yalnız bu tesisat satırlarında ve aşağıdaki tek düzeltmede.
+
+**Gizli bir test hatası bulundu ve düzeltildi.**
+`aoi_join_leave_same_tick_inert`, `ConnectionId(9)` ile katılıp
+`PlayerId(9)`'u bırakıyordu — oysa katılım `PlayerId(2)` basar: ayrılış
+hiç olmuyordu, test yalnız demo conn 9'u gözlenen hücrenin dışına spawn
+ettiği için geçiyordu (fikstür orijine spawn edince kırıldı: "the member
+counts are intact", 2 ≠ 1). Test artık katılımın döndürdüğü oyuncuyu
+bırakıyor; aynı düzeltme e80d2e4'ün kodunda da geçiyor (orada
+`joined.player != PlayerId(9)` da doğrulandı). Assertion'lar aynı.
+
+**Sayılar:** 433 − 2 (emekli katman testleri) + 8 yeni = **439** / 0 hata
+/ 1 ignored. Yeni: kit zarfının alan numaraları ×2, `kit_wire` ×2,
+manifest ×1, `VisionGrid3` ×2, üç takımlı 3D takım sisi ×1.
+
+**3D ön-ayarlar — var olan ve tetikleyici bekleyen.**
+- Kuruldu: `Spatial { type Coord; fn spatial(&self) -> [Coord; 3] }`
+  (§4.6'nın öngördüğü imza), `Cell3`, `VisionGrid3<P>` (`Vision`:
+  yarıçap kenarlı küp hücreler, 27 hücrelik komşuluk, kesin 3D mesafe,
+  yarıçap `VisionGrid2` gibi sınırlanıyor). Testler: yükseklik ayırıyor
+  (düzlem ön-ayarı aynı noktaya koyduğu iki birimi 3D ön-ayar
+  ayırıyor), komşuluk 27 farklı hücre ve ızgara sözleşmesini sınır
+  üstü bir kafeste tutuyor, üç takımlı bir `TeamRoom<_, VisionGrid3>`
+  bir düşmanın tam üstündeki birimi o takımın paketinden dışarıda
+  bırakıyor. Mutation-check: yükseklik terimi atılınca birinci ve oda
+  testi, iki katmanlı komşulukta sözleşme testi kırıldı.
+- MMO'nun yolu değişmedi ve kilitli: 3D `Pos3`/`Wire3` `Planar`'ı
+  `[x, z]` olarak uygulayıp `Grid2` + `GridPartition2`'yi kullanıyor
+  (`space::tests::a_ground_plane_3d_game_uses_the_planar_presets_unchanged`,
+  fikstürden bağımsız, aynen taşındı; aynı `Pos3` artık `Spatial`'ı da
+  uyguluyor — bir tip iki erişimciyi birden).
+- **Kurulmadı (tetikleyici):** `Grid3` (hacimsel AOI) ve `GridPartition3`
+  (3D sharding) — kontrol demolarının hiçbiri kullanmıyor (§7).
+
+**Public yüzeydeki değişiklikler** (derleyici buldu, ikisi de
+genişletme değil zorunluluk): `InputSeq` `Game::ingest`'in imzasında
+ama özel `common` modülündeydi — `gsb_kit::game::InputSeq` yeniden
+ihracı; `run_systems` demo'ya taşındı. Kit'te `pub(in crate::kit)` →
+`pub(crate)`, `pub(in crate::kit::sharded)` → `pub(in crate::sharded)`
+(aynı kapsam). Hiçbir alan genişletilmedi. Demo'nun public yolları
+aynı (tip takma adları ve yeniden ihraçlar); yeni: `gsb_demo::prelude`,
+altı `*Ext` trait'i, `gsb_demo::game::InputAck` artık kit'in tipi.
+
+**Tasarımla çelişen / tasarımın öngörmediği (kayıt):**
+
+1. **`aoi/tests/sharing*.rs` bölündü.** Görev tanımı paylaşım/delta
+   testlerini "demo kodeğiyle bayt sabitleyen" grup olarak `gsb-demo`'ya
+   gönderiyordu; oysa bu testler ham bayt sabitlemiyor, çözülmüş
+   değerlere ve kit'in özel defterine (`book.born_groups`,
+   `member_counts`, `pending_removals`, `conn_view`) bakıyor. Özel
+   deftere bakan ya da kodeğin değerine bakmayan 6'sı kit'te fikstürle
+   kaldı (görünürlük genişletmeden taşınamazlardı); kodeğin değerine
+   bakan 6'sı demo'ya gitti. Ölçüt test başına uygulandı (yukarıda).
+2. **§12'nin "`Grid3` (27 hücre)"u bir `CellSpace` değil bir `Vision`
+   ızgarası:** arena için kurulan ön-ayar `VisionGrid3` adını taşıyor;
+   hacimsel AOI `Grid3` tetikleyici bekliyor. §10/§12 metnine not
+   düşüldü.
+3. **`a75e7b7` tek başına derlenmiyor:** yeniden adlandırma commit'i
+   yalnız `git mv`'leri içeriyor (çalışma ağacındaki yol düzeltmeleri
+   bir pathspec hatası yüzünden sahnelenmedi; amend yasak), içerik
+   yarısı `10fec02`. İkili birlikte derleniyor ve yeşil; sonraki her
+   commit tek başına derleniyor ve yeşil.
+4. **`gsb-core`'daki iki yorum** hâlâ `gsb-game` adını anıyor (çekirdek
+   dokunulmaz kuralı).
+
+**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `eafa986` ikilileri, dönüşümlü
+üçer çift; sonraki commit'ler yalnız doküman). Her koşuda `left=50`,
+`errors=0`, `server_closes=0`:
+
+| Koşu | step_p50_fine_us (taban / HEAD, 3 çift) | snap_total (taban / HEAD) | out_bps_per_conn (taban / HEAD) |
+|---|---|---|---|
+| tcp 3 sn | 56 64 128 / 64 72 112 | 4100 / 4100 | 11026 / 10996 |
+| udp 3 sn | 56 64 128 / 56 80 56 | 4150 / 4100 | 10987 / 11023 |
+| spatial 3 sn | 120 120 160 / 112 128 152 | 4085 / 4094 | 1924 / 1974 |
+| team 3 sn | 72 80 88 / 80 96 96 | 4100 / 4100 | 11066 / 11021 |
+| pvs 3 sn | 80 88 88 / 80 112 40 | 4100 / 4141 | 6095 / 6072 |
+| sharded N=4, 8 sn | 56 104 40 / 48 80 48 | 11474 / 11476 | 7192 / 7080 |
+
+snap_total / out_bps ilk çiftin değerleri. Üçüncü çiftte tcp ve udp
+tabanı birlikte 128'e sıçradı (makine yükü; aynı çiftte HEAD 112 / 56).
+`team`'in ilk üç çiftinde HEAD bir-iki kova yukarıdaydı; altı çift daha
+alındı: taban 96 88 88 72 80 64, HEAD 96 80 72 72 72 80 — dokuz çiftte
+ortalama 80,9 / 82,7 µs (bir kovanın dörtte biri), işaret çiftten çifte değişiyor; 10
+sn'lik dört çift de karışık (taban 56 80 272 88, HEAD 64 56 96 176; iki
+koşu makine yüküyle sıçradı). Çalışma zamanında değişen kod yok (kayıt
+ve zarf yolları aynı; tek fark `emit_private`'ın boş `game` alanı) —
+gürültü içinde sayıldı.
+
 ## 11. Kabul kriteri
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
@@ -963,13 +1208,14 @@ Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
 | Demo | Crate | Konum / wire | Sınadığı kit yüzeyi |
 |---|---|---|---|
 | 2D (mevcut) | `gsb-demo` | `Pos2` f32 sim, `(i32,i32)` wire | **bayt uyumluluğu** (mevcut istemciler, loadgen), tüm stratejiler |
-| 3D arena | `gsb-demo-arena` | `Pos3<f32>`, 3D wire | **savaş sisi / takım görüşü** (MOBA tarzı: bir takım, üyelerinden herhangi birinin gördüğünü görür); `Vision` seam'i 3D mesafeyle, görüş-komşuluk ızgarası olarak `Grid3` (27 hücre); 2'den fazla takım (sabit-2 açığının kapandığını sınar); küçük oda, hızlı hareket |
+| 3D arena | `gsb-demo-arena` | `Pos3<f32>`, 3D wire | **savaş sisi / takım görüşü** (MOBA tarzı: bir takım, üyelerinden herhangi birinin gördüğünü görür); `Vision` seam'i 3D mesafeyle, görüş-komşuluk ızgarası olarak `Grid3` (27 hücre) *(Faz 2: bu ızgara `VisionGrid3` adıyla kuruldu — `Vision`'ın 3D ön-ayarı; `CellSpace` olan hacimsel AOI `Grid3` değil, §7)*; 2'den fazla takım (sabit-2 açığının kapandığını sınar); küçük oda, hızlı hareket |
 | 3D MMO | `gsb-demo-mmo` | `Pos3<f32>`, yer-düzlemi hücre | **grid AOI + shard'lı dünya**: sharded × spatial kompoziti, 3D konumda **yer-düzlemi** `Partition` + `Grid2` AOI, oyun kodunun spawn/despawn ettiği NPC'ler (hayalet-entity düzeltmesini sınar), park/bot reconnect politikası, NPC göçü (`Speed`'siz entity açığını sınar) |
 
 Arena ve MMO bilinçli olarak farklı **görünürlük modelleri** sınar
 (kullanıcı kararı): arena takım bazlı görüşü (`Vision`), MMO uzamsal
 ızgara + sharding'i (`CellSpace` + `Partition`). Uzay tarafında da
-farklılar: arena 3D veriyi hacimsel ızgarayla (`Grid3`) işler, MMO yer
+farklılar: arena 3D veriyi hacimsel ızgarayla (`Grid3`; Faz 2'de
+`VisionGrid3` olarak kuruldu) işler, MMO yer
 düzlemine yansıtır (`Grid2` + `GridPartition2`). Böylece ön-ayarların 3D
 veriyle iki farklı kombinasyonu da sınanır.
 

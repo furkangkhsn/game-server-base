@@ -27,7 +27,7 @@ architecture for MOBA / MMORPG projects.
 - **Frame-rate independence:** simulation advances with `dt = real elapsed time`;
   missed ticks are compensated with a single catch-up step
   (upper bound: 4 periods). Same distance in the same real time at both 15 Hz
-  and 100 Hz (`gsb-game/tests/frame_independence.rs`).
+  and 100 Hz (`gsb-demo/tests/frame_independence.rs`).
 - **ECS:** `bevy_ecs` (standalone). The room actor exclusively
   holds a `World`; core is completely ECS-free via the `W` generic over the world type.
 - **Protocol:** protobuf (`prost` / `Google.Protobuf` in Unity).
@@ -52,14 +52,15 @@ architecture for MOBA / MMORPG projects.
 | `gsb-ecs` | `System` trait, `SystemRunner` |
 | `gsb-core` | IDs, channels, global ticker, registry actor, room actor (5-phase tick), connection actor |
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump tasks + default TCP |
-| `gsb-game` | **All game logic** (components, systems, `RoomLogic`, game proto); split internally into `kit/` (reusable visibility strategies and machinery) and `demo/` (the example game) ahead of the `gsb-kit`/`gsb-demo` crate split — see `docs/KIT-ARCHITECTURE.md` |
+| `gsb-kit` | **Pluggable game components, generic over the game**: the visibility strategies (open, AOI, team fog, PVS) and sharded composites as complete `GameLogic` rooms, the cell-delta engine, park/resume, the input seq/ack rule, wire identity, the snapshot/`Private` envelopes (own `kit.proto`), and presets (`Grid2`, `VisionGrid2`, `VisionGrid3`, `ConvexSectors2`, `GridPartition2`) read through the `Planar`/`Spatial` accessors. Depends on no game — see `docs/KIT-ARCHITECTURE.md` |
+| `gsb-demo` | **The example game**: 2D components, movement, the demo wire protocol (`game.proto`, a typed mirror of the kit envelope), input/bot/RPC/economy; implements the kit's seams and instantiates its rooms (constructors: `gsb_demo::prelude`) |
 | `gsb-server` | Composition root: config, startup, `gsb-server` binary + client example + `gsb-loadgen` load generator |
 
 ## Quick start
 
 Requirements: Rust **1.95.0** (pinned via `rust-toolchain.toml`; this is also the
 MSRV), **nothing else**. Having `protoc` installed on the system is not required:
-proto build scripts (`gsb-protocol`, `gsb-game`)
+proto build scripts (`gsb-protocol`, `gsb-kit`, `gsb-demo`)
 explicitly provide the embedded binary of `protoc-bin-vendored` to `prost-build`
 (`Config::protoc_executable`), which takes precedence over searching
 `PROTOC`/`PATH`. On an exotic target where the embedded binary is not found, the build script
@@ -68,7 +69,7 @@ there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
 clippy `-D warnings` · test).
 
 ```sh
-# 433 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 439 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -80,10 +81,12 @@ clippy `-D warnings` · test).
 # ERROR code enumeration, protocol version handshake, session lifecycle (idle window +
 # byte-granular write stall, server-close reasons) and heartbeat-ACK throttling, AFK
 # signal (input-idle clock + default-off ceiling), sharded report folding (per-field
-# fold rule), kit/demo layering (the kit reaches the demo only through its seam), kit
-# seams (single WireId minter, codec/grid wire pins, the kit-owned change window in every
-# room, more than two teams / sixteen sectors, non-adjacent and Speed-less migration,
-# despawns by game code, request forwarding in every room, ground-plane 3D presets).
+# fold rule), kit/demo layering (the kit's manifest names no game crate), kit envelope
+# (field numbers frozen; kit and demo typed mirror pinned to identical bytes), kit seams
+# on a fixture game (single WireId minter, codec/grid wire pins, the kit-owned change
+# window in every room, more than two teams / sixteen sectors, non-adjacent and
+# Speed-less migration, despawns by game code, request forwarding in every room,
+# ground-plane 3D presets, 3D team fog), demo record values through the kit rooms.
 cargo test --workspace
 
 cargo run -p gsb-server                    # default config (0.0.0.0:7777, 1 room, 30 Hz global)
@@ -149,7 +152,7 @@ error), `1000+` game band (`MOVE_TO=1000`, `WORLD_SNAPSHOT=1003`,
 - **Both halves** of the RPC envelope are in `base.proto` (`RpcRequest` +
   `RpcResponse`); `game.proto` imports it.
 - Removed field numbers are `reserved` (see `EntityRecord`), retired
-  opcodes are in the `gsb_game::op::RETIRED` list and locked by tests.
+  opcodes are in the `gsb_demo::op::RETIRED` list and locked by tests.
 
 Bandwidth: broadcast sends a **full, self-contained snapshot** per entity;
 a batch dropped for a slow client causes at most 1 tick of staleness.
@@ -160,15 +163,18 @@ the `visibility` key in config (`all` / `spatial` / `team` /
 
 ## The next game
 
-Writing new game logic = only modifying the `gsb-game` crate:
+A new game is a new crate like `gsb-demo`, on top of `gsb-kit`:
 
-1. Update `proto/game.proto` + ops;
-2. Define components/`System`;
-3. Implement `RoomLogic<World>`;
-4. Bind the `demo_room_factory()` and `build_table()` call in `gsb-server`
-   to the new factory.
+1. Write its `proto/` (`import "kit.proto"`; declare typed mirrors of the
+   kit's `WorldSnapshot`/`Private` with its own record type) + opcodes;
+2. Define its components and systems;
+3. Implement the kit's seams — `RecordCodec` (what a record's bytes are),
+   `Game` (+ `TeamGame` / `ShardGame` for those strategies), and
+   `Planar` / `Spatial` on its position and wire types to use the
+   presets — and pick a room + preset (`AoiRoom<G, Grid2>`, …);
+4. Bind the room factory and `build_table()` call in `gsb-server` to it.
 
-The core/net/protocol/ecs crates are untouched.
+The core/net/protocol/ecs/kit crates are untouched.
 
 ## Documentation
 
@@ -181,6 +187,8 @@ The core/net/protocol/ecs crates are untouched.
 - `docs/RPC-CONTROL-PLANE.md`: RPC pattern and control plane design.
 - `docs/OPS.md`: ops surface design (/metrics, /healthz, admin API).
 - `docs/TRAIT-ARCHITECTURE.md`: GameLogic unification, PlayerId path.
+- `docs/KIT-ARCHITECTURE.md`: `gsb-kit` design (the seams a game implements,
+  the kit proto and its typed mirrors, presets, the phases and their results).
 - `docs/RECONNECT.md`: disconnected player policy (detach/resume/bot handover)
   design: **implemented** (ROADMAP P1 `[x]`; core mechanics + demo park
   policy, `crates/gsb-core/tests/reconnect.rs`), remains valid as the

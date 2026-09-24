@@ -5,6 +5,128 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 2 turu (crate bölmesi: `gsb-kit` + `gsb-demo`, kit proto'su, `Spatial` + `VisionGrid3`)
+
+`docs/KIT-ARCHITECTURE.md` §10'un Faz 2'si: workspace'te artık
+`crates/gsb-kit` (stratejiler, delta motoru, sharded kompozitler,
+park/resume, ön-ayarlar, kendi proto'su) ve `crates/gsb-demo` (yeniden
+adlandırılan `gsb-game`, örnek oyun). **Kit hiçbir profilde demo'ya
+bağlı değil** (`cargo tree -p gsb-kit -e normal,dev,build | grep -c
+gsb-demo` → 0). **Wire baytları aynı:** `wire_contract.rs`,
+`delta_aoi.rs` ve diğer entegrasyon testleri yalnız `gsb_game` →
+`gsb_demo` ve bir `prelude` import'uyla taşındı; demo kodeğinin değerine
+bakan 11 modül içi test demo'ya aynı ad ve assertion'larla gitti.
+`gsb-core` dokunulmadı; `gsb-server`'da yalnız yol değişiklikleri.
+
+**Ne yapıldı.**
+- **`gsb-game` → `gsb-demo`** (`git mv`; paket `gsb-demo`, lib
+  `gsb_demo`, açıklama "example game for gsb-kit"). Public yollar aynı
+  (tip takma adları ve yeniden ihraçlar).
+- **Kit proto'su** (`gsb-kit/proto/kit.proto`, `gsb.kit`):
+  `WorldSnapshot` (opak `repeated bytes` kayıt ve hücre gövdeleri),
+  `InputAck` ve `Private` — oyunun kendi özel yükü için yeni `bytes
+  game = 4` yuvasıyla (4 hiç kullanılmamıştı; hiçbir oda henüz
+  yazmıyor). `build.rs` diğerlerinin kalıbında, proto dizinini `links =
+  "gsb-kit-proto"` ile yayınlıyor. Demo'nun `game.proto`'su onu import
+  ediyor: `InputAck` kit'in (`gsb_demo::game::InputAck` yeniden ihraç),
+  `WorldSnapshot` / `Private` demo'nun tipli aynası (istemciler
+  değişmedi). Ayrıntı: KIT-ARCHITECTURE §5.1.
+- **Bayt uyumluluğu crate sınırında kilitli:** kit tarafında alan
+  numaraları bayt bayt (`proto::tests` ×2); demo tarafında
+  `tests/kit_wire.rs` ×2 — kurulmuş kareler (full; `removed` +
+  `cell_exits` + kayıtlı delta; ack + yanıtlı ve one-shot full +
+  yanıtlı `Private`) iki tanımda aynı baytları kodluyor ve birbirini
+  kendine çözüyor; gerçek bir demo `AoiRoom`'unun yazdığı kareler iki
+  tanımdan aynı içeriğe çözülüp aynı baytlara yeniden kodlanıyor.
+- **Kit testleri kendi fikstür oyununda** (`gsb-kit/src/testing/`,
+  yalnız testlerde): konum / hız / hedef, kesen bir kodek, conn
+  paritesiyle takım, göç durumu, dört sektörlü harita, kit zarfının
+  prost-derive tipli aynaları, altı oda için kurucular. Seam boşaldı ve
+  silindi.
+- **Demo kurucuları uzantı trait'leri** (`OpenRoomExt` … 
+  `ShardedSpatialRoomExt`, `gsb_demo::prelude`): kit tiplerindeki
+  inherent impl crate sınırında E0116'dır; çağrı sözdizimi aynı kaldı.
+- **Crate bölmesi** (`git mv` ile `src/kit/*` → `gsb-kit/src/*`):
+  `crate::kit::` → `crate::`, kapsamlar aynı. Derleyicinin bulduğu iki
+  public-yüzey ihtiyacı: `InputSeq` (`Game::ingest`'in imzasında, özel
+  modüldeydi) `gsb_kit::game`'den ihraç ediliyor; `run_systems` demo'ya
+  taşındı (kit `gsb-ecs`'e bağlı değil).
+- **Katman testi emekli, yerine yapısal kural:** `layering.rs` (2 test)
+  kalktı — normal bir kit → demo bağımlılığı cargo döngüsü (derlenmez);
+  cargo'nun kabul ettiği dev-dependency döngüsünü kit'in manifest testi
+  yakalıyor (mutation-check'li).
+- **3D ön-ayar:** `Spatial` erişimcisi (`[Coord; 3]`), `Cell3`,
+  `VisionGrid3<P>` (27 hücrelik komşuluk, kesin 3D mesafe) — arenanın
+  2'den fazla takımlı savaş sisi için. `Grid3` ve `GridPartition3`
+  kurulmadı (tetikleyici bekliyor, §7).
+
+**Bulunan hata.** `aoi_join_leave_same_tick_inert` katıldığı oyuncuyu
+değil `PlayerId(9)`'u bırakıyordu (katılım `PlayerId(2)` basar):
+ayrılış hiç olmuyordu, test demo'nun spawn dağılımı sayesinde
+geçiyordu. Fikstür orijine spawn edince kırıldı; artık katılımın
+oyuncusunu bırakıyor (e80d2e4'ün kodunda da geçiyor). Assertion'lar
+aynı.
+
+**Test:** 433 → 439 (−2 emekli katman testi, +8: kit zarfı alan
+numaraları ×2, `kit_wire` ×2, kit manifest ×1, `VisionGrid3` ×2, üç
+takımlı 3D takım sisi ×1). Taban'daki 96 `gsb-game` testinin her
+birinin yeni yeri: KIT-ARCHITECTURE §10 "Faz 2 sonucu".
+
+**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `eafa986` ikilileri, dönüşümlü
+üçer çift; sonraki commit'ler yalnız doküman). Her koşuda `left=50`,
+`errors=0`, `server_closes=0`:
+
+| Koşu | step_p50_fine_us (taban / HEAD, 3 çift) | snap_total (taban / HEAD) | out_bps_per_conn (taban / HEAD) |
+|---|---|---|---|
+| tcp 3 sn | 56 64 128 / 64 72 112 | 4100 / 4100 | 11026 / 10996 |
+| udp 3 sn | 56 64 128 / 56 80 56 | 4150 / 4100 | 10987 / 11023 |
+| spatial 3 sn | 120 120 160 / 112 128 152 | 4085 / 4094 | 1924 / 1974 |
+| team 3 sn | 72 80 88 / 80 96 96 | 4100 / 4100 | 11066 / 11021 |
+| pvs 3 sn | 80 88 88 / 80 112 40 | 4100 / 4141 | 6095 / 6072 |
+| sharded N=4, 8 sn | 56 104 40 / 48 80 48 | 11474 / 11476 | 7192 / 7080 |
+
+snap_total / out_bps ilk çiftin değerleri. Üçüncü çiftte tcp ve udp
+tabanı birlikte 128'e sıçradı (makine yükü; aynı çiftte HEAD 112 / 56).
+`team`'in ilk üç çiftinde HEAD bir-iki kova yukarıdaydı; altı çift daha
+alındı: taban 96 88 88 72 80 64, HEAD 96 80 72 72 72 80 — dokuz çiftte
+ortalama 80,9 / 82,7 µs (bir kovanın dörtte biri), işaret çiftten çifte değişiyor; 10
+sn'lik dört çift de karışık (taban 56 80 272 88, HEAD 64 56 96 176; iki
+koşu makine yüküyle sıçradı). Çalışma zamanında değişen kod yok (kayıt
+ve zarf yolları aynı; tek fark `emit_private`'ın boş `game` alanı) —
+gürültü içinde sayıldı.
+
+**Elenen alternatifler.**
+- *Paylaşım/delta testlerini topluca demo'ya taşımak:* bir kısmı kit'in
+  özel defterine bakıyor (`born_groups`, `member_counts`,
+  `pending_removals`, `conn_view`); taşımak alan görünürlüğünü
+  genişletmek demekti. Ölçüt test başına: demo kodeğinin yazdığı değere
+  bakan demo'ya, bakmayan fikstüre.
+- *Fikstürü yalnız kodek düzeyinde tutup testleri demo'da çalıştırmak:*
+  kit'in özel alanlarına erişimi kaybettirir; kit kendi davranışını
+  kendi crate'inde test etmeli.
+- *Fikstürü public bir `testing` modülü (ya da cargo feature'ı) yapmak:*
+  oyun yazarına örnek zaten `gsb-demo`; public bir fikstür oyunu
+  API yüzeyi ve bakım yükü, bugün bir kullanıcısı yok.
+- *Kit'e `gsb-demo`'yu dev-dependency yapmak:* cargo buna izin verir ama
+  kit'in ikinci bir kopyasını derler (testteki tipler demo'nun tipleri
+  olmaz) ve katman kuralını tam da test profilinde deler.
+- *Demo kurucuları için serbest fonksiyonlar / newtype'lar / kit'te
+  generic kurucular:* §10 "Faz 2 sonucu".
+- *`kit.proto`'da `removed` için `[packed = false]`:* kit'in elle yazdığı
+  biçimi betimlerdi ama üretilmiş kodlayıcılarda demo'nun (değişmeyen,
+  packed-varsayılan) aynasından farklı bayt üretirdi; ayrıştırıcılar
+  ikisini de okuyor.
+- *Demo aynasına `Private.game = 4`'ü eklemek:* demo göndermiyor, ve
+  `wire_contract.rs`'in `Private` literal'ini değiştirmek gerekirdi.
+- *`Grid3` / `GridPartition3`'ü şimdi kurmak:* kontrol demolarından
+  hiçbiri kullanmıyor (tetikleyicisiz iş yapılmaz).
+
+**Tasarım bulguları (KIT-ARCHITECTURE §10 "Faz 2 sonucu"):** §12'nin
+arena için "`Grid3` (27 hücre)" dediği ızgara bir `CellSpace` değil
+bir `Vision` ön-ayarı (`VisionGrid3`); `InputSeq`'in public yolu yoktu
+(crate içinde fark edilmez, crate sınırı yakaladı); demo'nun kurucuları
+yetim kuralına takıldı (1a'dan beri kayıtlı tuzak).
+
 ## gsb-kit Faz 1b turu (takım sisi, PVS, sharded kompozitler generic; §8.2–§8.5; seam kit zarfına indi)
 
 `docs/KIT-ARCHITECTURE.md` §10'un Faz 1'inin ikinci yarısı — **Faz 1

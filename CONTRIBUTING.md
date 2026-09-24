@@ -8,8 +8,8 @@ Bu dosya `docs/HANDOFF.md` ve `README.md`'deki bağlayıcı disiplinin kısa
 - Toolchain `rust-toolchain.toml` ile sabitlenmiştir (Rust **1.95.0**,
   `rustfmt` + `clippy`); MSRV (`Cargo.toml` → `rust-version`) aynı
   sürümdür — `bevy_ecs 0.19.1` 1.95.0 ister.
-- Build **sistemde `protoc` istemez**: `gsb-protocol` ve `gsb-game` build
-  script'leri `protoc_bin_vendored::protoc_bin_path()`'i
+- Build **sistemde `protoc` istemez**: `gsb-protocol`, `gsb-kit` ve
+  `gsb-demo` build script'leri `protoc_bin_vendored::protoc_bin_path()`'i
   `Config::protoc_executable` ile `prost-build`'e verir; açık yol olduğu
   için `PROTOC`/`PATH` aramasının önüne geçer (yanlış bir `PROTOC` build'i
   kıramaz). Gömülü ikilinin bulunmadığı bir hedefte `cargo:warning`

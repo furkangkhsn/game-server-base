@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-433 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+439 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -75,13 +75,11 @@ sürekli prosedürü ikiye bölmek yarı kurulmuş durumu modül sınırından
 geçirmek demek. Yeni bir istisna eklersen commit mesajında gerekçelendir.
 
 **gsb-kit tasarımı onaylandı ve Faz 0 tamam** (`docs/KIT-ARCHITECTURE.md`
-§10, CHANGELOG "gsb-kit Faz 0 turu"): `gsb-game/src` artık `kit/`
-(stratejiler + ortak makine) ve `demo/` (örnek oyun). Kit kodu demo'ya
-YALNIZ `kit/seam.rs` üzerinden erişir — `kit/` altında seam dışında her
-`crate::` yolu `kit::` ile devam etmeli, `src/layering.rs` testi bunu
-kırar. Kit'e demo bağımlılığı eklemen gerekirse seam'e, hedef seam
-grubuna, tek satırlık gerekçeyle ekle. Seam'in içeriği Faz 1'in iş
-listesidir; Faz 1 bitince seam boşalır ve silinir.
+§10, CHANGELOG "gsb-kit Faz 0 turu"): `gsb-game/src` `kit/` (stratejiler
++ ortak makine) ve `demo/` (örnek oyun) olarak bölündü; kit'in demo'ya
+her erişimi geçici bir seam'den geçiyordu ve bir kaynak-tarayan test
+kuralı kilitliyordu. *(Faz 2'de seam silindi, iki modül iki crate oldu —
+aşağıda.)*
 
 **Faz 1a tamam** (KIT-ARCHITECTURE §4.5 ve §10 "Faz 1a sonucu",
 CHANGELOG "gsb-kit Faz 1a turu"): §4 trait'leri (`kit::codec`,
@@ -102,10 +100,25 @@ konum tipi sokma. §8.2–§8.5 kapandı; oyun kodunun despawn'ları
 silinen-bileşen tamponundan okunuyor, yani `clear_trackers`'ın tek
 sahibinin kit olması artık doğruluk şartı. Bütün kit odaları istekleri
 `Game::handle_request`'e yönlendirir. Seam'de test dışı yalnız kit
-zarfı (`Private`, `InputAck`) kaldı — Faz 2'de (crate bölmesi) kit
-proto'suna geçince seam silinir; o turda demo kurucularının kit
-tipleri üzerindeki inherent impl'leri de serbest fonksiyona / uzantı
-trait'ine dönmeli.
+zarfı (`Private`, `InputAck`) kaldı — Faz 2'de kit proto'suna geçti.
+
+**Faz 2 tamam — crate bölmesi** (KIT-ARCHITECTURE §5.1 ve §10 "Faz 2
+sonucu", CHANGELOG "gsb-kit Faz 2 turu"): workspace'te `crates/gsb-kit`
+(stratejiler, delta motoru, sharded kompozitler, park/resume,
+ön-ayarlar, kendi `kit.proto`'su) ve `crates/gsb-demo` (eski
+`gsb-game`, örnek oyun) var. **Kit hiçbir oyunu görmez, testlerinde
+bile:** kit'in testleri kendi fikstür oyununda (`gsb-kit/src/testing/`)
+koşar; `gsb-kit`'e bir `gsb-*` oyun crate'i bağımlılığı eklemek ya
+cargo döngüsüdür ya da (dev-dependency) kit'in manifest testini kırar.
+Bir kit testi bir oyunun kodeğinin YAZDIĞI değere (çözülmüş koordinat,
+nicemleme) bakıyorsa o test oyunun crate'ine aittir (demo'da
+`src/demo/rooms/tests/`). Kit'in zarfı `gsb.kit`'tir; demo'nun
+`game.proto`'su onun tipli aynasını taşır ve `tests/kit_wire.rs` ikisini
+aynı baytlara kilitler — zarfa alan eklersen iki tarafı birlikte
+güncelle. Demo odalarının kurucuları uzantı trait'leridir: kullanan
+dosyaya `use gsb_demo::prelude::*;`. Sıradaki: Faz 3 (3D arena demosu,
+`gsb-demo-arena`: `Spatial` + `VisionGrid3` hazır; `Grid3` /
+`GridPartition3` bilerek yok).
 
 ## ÖNCE OKU (sırayla)
 
@@ -197,6 +210,6 @@ trait'ine dönmeli.
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 433 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 439 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

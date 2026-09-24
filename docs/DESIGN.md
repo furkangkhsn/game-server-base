@@ -358,11 +358,12 @@ veriyor ve `Private.responses` (alan 3) değişmedi.
 
 **Tel değişmedi.** Protobuf tel formatında tip adı yoktur: alan numaraları
 (1..5) ve kodlanmış baytlar birebir aynı. Kilit:
-`crates/gsb-game/tests/wire_contract.rs` — beklenen baytlar taşımadan
+`crates/gsb-demo/tests/wire_contract.rs` — beklenen baytlar taşımadan
 ÖNCEKİ ağaçtan alındı ve taşımadan sonra aynen geçti (mutasyon kontrolü:
 `bytes payload = 5` → `= 6` yapıldığında iki test de kırıldı).
 
-Rust tarafı: `gsb-game`'in build script'i `prost_build`'e
+Rust tarafı: oyun crate'inin (`gsb-demo`; kit bölmesinden beri
+`gsb-kit` de) build script'i `prost_build`'e
 `extern_path(".gsb.base", "::gsb_protocol::base")` verir — `gsb.base`
 tipleri ikinci kez ÜRETİLMEZ, `gsb-protocol`'ün ürettikleri kullanılır
 (iki kopya aynı baytı kodlar ama ayrı Rust tipi olurdu; kaldırılan
@@ -383,7 +384,7 @@ yazmaz.
    crate'inde bir kopya daha demekti — kapatılan asimetrinin aynısı.
 2. **Göreli include yolu** (`../gsb-protocol/proto`). Bu workspace'te
    çalışır, `gsb-protocol` registry'den geldiği anda kırılır — ki README'nin
-   "yeni oyun = yeni `gsb-game`" senaryosu tam olarak odur. `links` +
+   "yeni oyun = yeni bir oyun crate'i" senaryosu tam olarak odur. `links` +
    `DEP_*` cargo'nun bu iş için tanımlı mekanizması.
 3. **`RpcResponse`'a kendi opcode'unu vermek** (core'un kendi frame'iyle
    cevaplaması). Zarfın yeri düzelirdi ama teslim modeli bozulurdu: cevap
@@ -393,7 +394,12 @@ yazmaz.
    refactor'ü değil" diyordu.
 4. **`Private`'ı da base'e taşımak.** `Private` gerçekten oyun mesajı:
    `InputAck` ve `WorldSnapshot` oneof kolları oyun tipleridir. Sahiplik
-   kuralı (yukarıda) onu `game.proto`'da tutar.
+   kuralı (yukarıda) onu `game.proto`'da tutar. *(gsb-kit Faz 2: zarf —
+   `Private`, `InputAck`, `WorldSnapshot` — artık kit'in `kit.proto`'sunda
+   (`gsb.kit`, kayıt ve hücre gövdeleri opak `bytes`); `game.proto`
+   `InputAck`'i oradan alıyor, `WorldSnapshot` ile `Private`'ın tipli
+   aynasını taşıyor. Baytlar aynı: KIT-ARCHITECTURE §5 ve §10 "Faz 2
+   sonucu".)*
 
 ### 5.3 Emekli numaralar: `reserved` ve emekli opcode'lar
 
@@ -422,7 +428,7 @@ Aynı sınıf tehlike **opcode uzayında** da var ve orada `reserved`
 anahtar kelimesi yok. 2ac28d2 üç opcode'u emekli etti ve birini (1003,
 `ENTITY_STATE` → `WORLD_SNAPSHOT`) yeniden kullandı — tam olarak bu
 kuralın engellemek istediği şey. Kalan ikisi artık
-`gsb_game::op::RETIRED` listesinde (1001 `ENTITY_SPAWNED`, 1002
+`gsb_demo::op::RETIRED` listesinde (1001 `ENTITY_SPAWNED`, 1002
 `ENTITY_REMOVED`) ve `wire_contract.rs::retired_opcodes_stay_out_of_
 the_message_table` bunların `MessageTable`'a kaydedilmesini kırıyor.
 Yeni bir oyun crate'i kendi `RETIRED` listesini tutar.
@@ -906,7 +912,7 @@ sızması yok.
 - **Kimlik değişmezi korunur:** wire id `on_join`/yeni `Position` damgasında
   **bir kez** basılır, hücre değişiminde değişmez; sonradan giren kendi
   hücresinin ilk bloğunda **tam kümesini** görür (test:
-  `gsb_game::aoi::tests` + `tests/aoi.rs`).
+  `gsb-kit`'in `aoi::tests`'i + `gsb-demo`'nun `tests/aoi.rs`'i).
 - **Ölçülen ticaret:** AOI ~9× kodlama maliyeti taşır (her kayıt 9 komşu
   bloğa girer) ama bant genişliğini O(entity) → O(görünürlük) yapar; hücre
   boyutu küçükçe bant kazancı %80+ (1000/2000). Break-even + yeni darboğaz
@@ -1081,7 +1087,7 @@ bölerek ölçekler; dünya hâlâ tek actor'da, tek `World`'de, tek tick
 gövesindedir. `sharded` bunun **üstüne**, *topoloji* düzeyinde bir
 katmandır: **tek oda N shard actor'üne** bölünür. N shard'ın her biri
 haritanın bir kesitini (grid hücresini) **tek başına** sahip olan bağımsız
-bir `World` + `ShardLogic`'tir (gsb-game tarafında `ShardedRoom`); paralellik
+bir `World` + `ShardLogic`'tir (`gsb-kit`'in `ShardedRoom`'u, `gsb-demo`'da örneklenir); paralellik
 hedefe ulaşıp var olan oda actor modelinin kendisinden gelir (N görev),
 thread havuzu değil. Bu, §14.4'te "katman eklenmeden sığmıyor" olarak
 notlanan *sınır olmayan tek dünya* sınıfının ilk uygulamasıdır.
@@ -1266,7 +1272,7 @@ doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
   tarafındaki paylaşımlı defter yanlış kullanımı bu testle yakalanamaz:
   oda, meşru sessizlik ile ihlali ayırt edemez, o kullanım sözleşme
   metniyle korunur — §4 Tanı maddesi).
-- **gsb-game:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
+- **gsb-demo:** gecikmeli giriş — hareketsiz A'nın olduğu odaya B girerse B,
   aynı tick'in `WORLD_SNAPSHOT`'ında **A dahil tüm dünyayı** görür; A
   hareket edince B, sonraki snapshot'larda yeni konumu görür (üyelik ve
   durum snapshot'ta varlıkla/val ile ifade edilir). Stale leave —
