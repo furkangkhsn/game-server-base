@@ -121,7 +121,8 @@ ham `toml::Table`'ı alır:
   mevcut config'ler ve testler değişmez). `Config`'in demo alanları bu
   turda **uyumluluk için kalır** (struct-literal kullanan testler
   kırılmaz); çözümleyici, `RoomKind` ve eksen hataları demo modülüne taşınır.
-- **Arena ve MMO** ayarlarını bir `[game]` tablosundan okur.
+- **Arena ve MMO** ayarlarını **kendi adlarını taşıyan** bir tablodan
+  okur (`[arena]`, `[mmo]`) — bkz. §6 karar 1'in G1 düzeltmesi.
 - Bir oyunun sabitlediği bir şeyi (arena için eksenler; MMO için
   `aoi_cell_size`, `shard_count`) ayarlayan **açıkça yazılmış** bir anahtar
   başlatmada hata verir — sessizce yok sayılmaz. Açık yazılmış olup
@@ -293,8 +294,13 @@ gibi yeni bulgular çıkarabilir; çıkarırsa raporlanır.
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
 1. **Config yeri:** demo'nun anahtarları eski düz yerlerinde kalır (geriye
-   uyumluluk); yeni oyunlar `[game]` tablosu kullanır. `Config`'in demo
-   alanları bu işte silinmez.
+   uyumluluk); yeni oyunlar **kendi adlarını taşıyan** bir tablo kullanır
+   (`[arena]`, `[mmo]`). `Config`'in demo alanları bu işte silinmez.
+   *G1 düzeltmesi:* ilk karar `[game]` tablosuydu; ama `game = "arena"`
+   dizesi (karar 3) ile `[game]` tablosu aynı TOML belgesinde aynı
+   anahtarı iki kez tanımlar, birlikte var olamaz. Oyun adını taşıyan
+   tablo çakışmayı yapısal olarak kaldırır ve hangi tablonun hangi oyuna
+   ait olduğunu da okunur kılar.
 2. **Oyunun sabitlediği bir anahtar açıkça yazılmışsa:** başlatma hatası.
    Repodaki kural zaten bu (desteklenmeyen kombinasyonlar başlatmada
    reddedilir); sessiz yok sayma bir operatörü yanıltır.

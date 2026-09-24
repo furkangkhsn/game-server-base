@@ -5,6 +5,65 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Oyun modülü G1 turu (`srv/g1-module`)
+
+Sunucu artık barındırdığı oyunu tek bir nesne-güvenli seam'in arkasında
+tutuyor (`docs/GAME-MODULE.md` §4.1, §5 "G1 sonucu"). `gsb-core`,
+`gsb-kit` ve üç demo crate'i değişmedi.
+
+- **`GameModule` + `RegistryParts`** (`gsb-server/src/game.rs`): trait'in
+  generic parametresi yok; `RegistryParts::spawn<W, G, St, Sp>` tek generic
+  metot ve registry'nin sınırlarını birebir taşıyor. `spawn_registry`
+  yalnız `RegistryParts::spawn`'ın üretebildiği bir `RegistryTask`
+  döndürür. `start_inner`'ın altı kollu `match`'i
+  `module.spawn_registry(parts)`'a indi; mesaj tablosu = base +
+  `module.register`.
+- **2D demo modülü** (`src/games/demo/`): fabrikalar (`git mv`),
+  üç-eksen çözümleyici, `RoomKind`/`VisibilityAxis`/`ResolvedSelection`,
+  ekonomi servisi, shard-sayısı kontrolü olduğu gibi taşındı. Uyumluluk:
+  `Config`'in demo alanları, `Config::resolve_selection`, kökteki
+  `build_table` ve seçim tipleri yerinde; eksen hataları `ServerError`'da,
+  mesajları bayt-bayt aynı.
+- **Oyun seçimi:** `game = "demo"` (varsayılan); bilinmeyen ad başlatmada
+  derlenmiş oyunların listesiyle reddedilir (`ServerError::Game`).
+  `Config::raw` ayrıştırılmış dosyayı modüle taşır. Açık modül için
+  `start_game_server(module, cfg)` / `start_game_server_with(…)`.
+- **Oyunsuz derleme:** `gsb-demo` isteğe bağlı, varsayılan açık
+  `game-demo` özelliği; `cargo build -p gsb-server --lib
+  --no-default-features` oyunsuz derleniyor — CI `no-game` işi.
+  `gsb-loadgen` ve örnek istemci `required-features = ["game-demo"]`.
+- **RESULT:** satırın sonuna `game=<ad>` (tek değişiklik).
+- **Hata düzeltmesi (karar 10):** orkestratör istemci çocuklarına
+  `--cell-size` iletmiyordu; istemci görünümü 20 ile hücre hesaplarken
+  sunucu iletilen değeri kullanıyordu. Önce kırılan iki testle; ebeveynin
+  bağımsız mutasyonu (bayrak adını bozmak) ikisini de kırıyor.
+- **Kasıtlı davranış değişikliği (karar 11):** ekonomi servisi artık altı
+  demo odasının HEPSİNE bağlı — AOI, team ve PVS odaları `ECONOMY`'ye
+  "economy service not configured" yerine gerçek cevap veriyor.
+  `tests/economy_rooms.rs` altı yapının her birinde bir gidiş-dönüş
+  sürüyor (düzeltmeden önce üçü kırıktı).
+
+Testler 537 → 551 (+2 orkestratör, +6 ekonomi, +5 modül, +1 varsayılan
+kilidi); mevcut iddialar değişmedi (`loadgen_smoke`'a `game=demo`
+iddiası eklendi). Loadgen A/B (dönüşümlü; tcp, spatial, team,
+sharded×4): her anahtar aynı sırada ve biçimde, sayılar gürültü içinde,
+sonda `game=demo`.
+
+**Elenen alternatifler:** `start_server_with(module, cfg)` adı (mevcut
+public `start_server_with(cfg, hooks)` ile çakışır → `start_game_server*`);
+eksen hatalarını `GameError`'a taşımak (mevcut testler ve çağıranlar
+kırılırdı; yalnız üretici taşındı); `spawn_registry → JoinHandle<()>`
+(bir modül registry'yi başlatmadan herhangi bir görev döndürebilirdi →
+`RegistryTask`); ham tabloyu ayrı parametreyle taşımak (`start_server(cfg)`
+yalnız `Config` alıyor → `Config::raw`); `Config` varsayılanları için
+`gsb-kit`'e koşulsuz bağımlılık (oyunsuz derlemeyi kit'e bağlardı →
+sunucu-yerel sabitler + kilit testi); ekonomi düzeltmesi için `gsb-demo`'ya
+`with_economy` eklemek (korunan crate → kit'in public `game_mut()`'u).
+
+**G2 için karar:** `game = "…"` dizesi ile `[game]` tablosu aynı TOML
+belgesinde birlikte olamaz → oyunların tablosu kendi adını taşır
+(`[arena]`, `[mmo]`; GAME-MODULE §6 karar 1).
+
 ## Küçük düzeltme paketi: sharded × spatial çerçeve süzgeci + dolu mailbox'ta stall hükmü (`fix/small-bundle`)
 
 **Commit'ler** (`08e6e13..`): `3b5b7ca` kit (çerçeve süzgeci), `ff9b8ea`

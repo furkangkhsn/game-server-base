@@ -71,9 +71,12 @@ Bağımlılık yönü tek yönlüdür: **kit, demo'yu asla görmez.**
 
 ## 4. Seam'ler
 
-Hepsi statik dispatch'tir (generic); tip silme yalnızca sunucunun
-fabrikasında yapılır (`gsb-server/src/boot/factories.rs` bunu bugün de
-`Box<dyn RoomLogic<…>>` ile yapıyor). Generic'ler viral değildir:
+Hepsi statik dispatch'tir (generic); tip silme sunucu tarafında yapılır.
+*Düzeltme (GAME-MODULE §3):* "fabrikada" demek kesin değildi — fabrika
+imzası `G`, `St`, `Sp`'yi `Registry<W, G, St, Sp>`'ye taşır; gerçek
+generic-olmayan sınır registry'nin başlatıldığı yer
+(`Mailbox<RegistryMsg>`, `gsb-server/src/game.rs` `RegistryParts::spawn`).
+Demo'nun fabrikaları bugün `gsb-server/src/games/demo/factories.rs`'te. Generic'ler viral değildir:
 fabrika imzasında yalnız ilişkili tipler (`Cell`, `Wire`, `Mig`) görünür.
 
 ### 4.1 `RecordCodec` — bir entity'nin wire kaydı

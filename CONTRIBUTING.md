@@ -25,6 +25,7 @@ Bu dosya `docs/HANDOFF.md` ve `README.md`'deki bağlayıcı disiplinin kısa
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings   # 0 uyarı
 cargo test --workspace                                   # tamamen yeşil
+cargo build -p gsb-server --lib --no-default-features    # oyunsuz sunucu çekirdeği
 ```
 
 CI ayrıca `autobahn` işini koşar: WS kapısına karşı Autobahn fuzzing

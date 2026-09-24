@@ -75,10 +75,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **537** (537/537 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **551** (551/551 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **süreli bekletmede veto + veto tavanı** (`docs/RECONNECT.md`
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **oyun modülü G1** (`docs/GAME-MODULE.md`) — sunucu oyunu
+nesne-güvenli `GameModule` seam'i arkasında barındırıyor; 2D demo ilk
+modül (`game = "demo"`), oyunsuz derleme CI kapısı, RESULT'ta `game=`,
+orkestratör `--cell-size` ve ekonomi asimetrisi düzeltildi. Sıradaki:
+G2 (arena + MMO modülleri, oyun adını taşıyan config tablosu).
+Önceki tur: **süreli bekletmede veto + veto tavanı** (`docs/RECONNECT.md`
 §17) — `may_release` artık süreli bekletmenin deadline'ında da soruluyor
 (veto uzatır, her tick yeniden sorulur), duran veto yeni
 `RoomConfig::max_detach_hold` (varsayılan 10 dk, kopuştan itibaren;

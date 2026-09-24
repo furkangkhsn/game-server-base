@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-537 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+551 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -140,6 +140,20 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
 
+**Oyun modülü G1 tamam** (`docs/GAME-MODULE.md` §5 "G1 sonucu",
+CHANGELOG "Oyun modülü G1 turu"): sunucu oyunu `GameModule`
+(`gsb-server/src/game.rs`) arkasında barındırıyor; oyuna özgü her şey
+`src/games/<ad>/` içinde, her oyun bir cargo özelliği (`game-demo`
+varsayılan açık). Config'in `game` anahtarı derlenmiş oyunlardan birini
+seçer; üçüncü taraf `start_game_server(module, cfg)` kullanır.
+`cargo build -p gsb-server --lib --no-default-features` bir CI kapısı —
+`games/` dışına oyun tipi sızdırırsan kırılır. Registry'yi modül başlatır
+(`RegistryParts::spawn`, tek generic metot). Demo'nun düz config
+anahtarları ve `Config::resolve_selection` uyumluluk katmanı; eksen
+hataları `ServerError`'da kaldı. Ekonomi servisi artık altı demo odasının
+hepsine bağlı. Yeni oyunların ayarları kendi adını taşıyan tabloda
+(`[arena]`, `[mmo]`).
+
 **Küçük düzeltme paketi** (CHANGELOG): Faz 5'in son yan gözlemi kapandı —
 `ShardedSpatialRoom` ödünç şeridi `Partition::admits` ile süzüyor
 (`sharded/tests/frame_filter.rs`); aşırı yükteki `outbound_dead` yanlış
@@ -269,6 +283,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 537 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 551 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
