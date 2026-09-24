@@ -54,9 +54,11 @@ pub struct Sector(pub u8);
 pub struct ConvexSectors2<P> {
     /// The sector polygons (index = sector), convex, counter-clockwise.
     polygons: Vec<Vec<(f32, f32)>>,
-    /// Per sector (the containment sector last): the bitmask of the
-    /// sectors visible from it.
-    visible: Vec<u16>,
+    /// Per sector (the containment sector last): the sectors visible
+    /// from it, in the order the map listed them. A list, not a bitmask:
+    /// the table holds as many sectors as the key can name (§8.4 — the
+    /// `u16` mask it replaced capped a map at 16).
+    visible: Vec<Vec<Sector>>,
     _pos: PhantomData<fn() -> P>,
 }
 
@@ -68,8 +70,10 @@ impl<P> ConvexSectors2<P> {
     ///
     /// # Panics
     ///
-    /// When `visible_from` does not have one entry per polygon, or a
-    /// listed sector is not a polygon of the map.
+    /// When `visible_from` does not have one entry per polygon, a listed
+    /// sector is not a polygon of the map, or the map has more polygons
+    /// than the key names (255: the containment sector takes the next
+    /// index).
     #[must_use]
     pub fn new(polygons: Vec<Vec<(f32, f32)>>, visible_from: Vec<Vec<Sector>>) -> Self {
         assert_eq!(
@@ -77,17 +81,12 @@ impl<P> ConvexSectors2<P> {
             polygons.len(),
             "one visibility entry per sector"
         );
-        let out = polygons.len();
-        let mut visible: Vec<u16> = visible_from
-            .iter()
-            .map(|list| {
-                list.iter().fold(0, |mask, s| {
-                    assert!(usize::from(s.0) < out, "{s:?} is not a sector of the map");
-                    mask | (1 << s.0)
-                })
-            })
-            .collect();
-        visible.push(1 << out);
+        let out = u8::try_from(polygons.len()).expect("at most 255 sectors (the key is a u8)");
+        for s in visible_from.iter().flatten() {
+            assert!(s.0 < out, "{s:?} is not a sector of the map");
+        }
+        let mut visible = visible_from;
+        visible.push(vec![Sector(out)]);
         Self {
             polygons,
             visible,
@@ -117,10 +116,7 @@ impl<P: Component + Planar<Coord = f32>> SectorMap for ConvexSectors2<P> {
     }
 
     fn visible_from(&self, sector: Sector) -> impl Iterator<Item = Sector> + '_ {
-        let mask = self.visible[usize::from(sector.0)];
-        (0..self.visible.len())
-            .filter(move |s| mask & (1 << s) != 0)
-            .map(|s| Sector(s as u8))
+        self.visible[usize::from(sector.0)].iter().copied()
     }
 }
 

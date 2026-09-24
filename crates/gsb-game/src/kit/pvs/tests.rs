@@ -321,3 +321,5 @@ fn orphan_stamped_and_outside_map_is_contained() {
     }
     let _ = runaway;
 }
+
+mod many_sectors;
