@@ -1,7 +1,6 @@
 //! The `[[listeners]]` grammar: one entry per door.
 
 use crate::config::*;
-use tracing::warn;
 
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
 ///
@@ -213,7 +212,7 @@ pub struct Config {
     /// pieces.
     ///
     /// Value semantics (resolved ONCE at startup, see
-    /// [`Self::resolve_selection`]):
+    /// `Config::resolve_selection`):
     ///
     /// - omitted (`None`, the default): DERIVED — `single`, except when the
     ///   legacy `visibility` key reads `"sharded"` (that spelling was
@@ -228,7 +227,7 @@ pub struct Config {
     /// see [`Communication`]): how snapshot data is packaged for clients.
     ///
     /// Value semantics (resolved ONCE at startup, see
-    /// [`Self::resolve_selection`]):
+    /// `Config::resolve_selection`):
     ///
     /// - omitted (`None`, the default): DERIVED from the visibility axis —
     ///   `spatial` ⇒ `delta` (its room diffs per cell internally), every
@@ -245,7 +244,7 @@ pub struct Config {
     /// The legacy input encoding of TWO of the three selection axes (see
     /// [`Visibility`] and the derivation below).
     ///
-    /// The four non-`"sharded"` spellings ARE the [`VisibilityAxis`]
+    /// The four non-`"sharded"` spellings ARE the `VisibilityAxis`
     /// values. `"sharded"` decodes to topology = `sharded` + visibility =
     /// `all`. Full derivation table (when the new keys are omitted):
     ///
@@ -372,6 +371,20 @@ pub struct Config {
     /// as an explicit, network-guarded decision (e.g. `"127.0.0.1:9090"`,
     /// never `"0.0.0.0"`).
     pub http_listen: String,
+    /// The game this server hosts (docs/GAME-MODULE.md §6 decision 3): the
+    /// name of one of the games compiled into the build (cargo features;
+    /// see `gsb_server::games::compiled_in`). Default `"demo"`, the 2D
+    /// demo every pre-module config runs. An unknown name refuses startup
+    /// with the list of the compiled-in games.
+    pub game: String,
+    /// The parsed config file, kept whole for the game module
+    /// (GAME-MODULE §4.3): a module reads its own keys from it and tells
+    /// an EXPLICITLY written key from a defaulted one — which the typed
+    /// fields above cannot, as every field has a default. Filled by
+    /// [`Config::from_file`]; empty for a config built in code (nothing
+    /// was written explicitly).
+    #[serde(skip)]
+    pub raw: toml::Table,
 }
 
 /// The built-in default server-wide connection cap (DESIGN §1's design
@@ -420,6 +433,8 @@ impl Default for Config {
             spawn_half_size: gsb_demo::room::DEFAULT_SPAWN_HALF,
             disconnect_grace_secs: gsb_demo::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
             http_listen: String::new(),
+            game: crate::games::DEFAULT_GAME.into(),
+            raw: toml::Table::new(),
         }
     }
 }
@@ -448,150 +463,12 @@ impl Config {
         if cfg.max_connections == Some(0) {
             cfg.max_connections = None;
         }
+        // The same text as a plain table, for the game module (see
+        // `Config::raw`); it parsed as a `Config` just above.
+        cfg.raw = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+            path: path.display().to_string(),
+            source: e,
+        })?;
         Ok(cfg)
-    }
-
-    /// Reduce the raw config surface to the validated three-axis selection
-    /// (topology × visibility × communication — `docs/ROADMAP.md`, P2
-    /// "Konfigürasyon düzeltmesi", Faz A) and map it onto the room build
-    /// that will run.
-    ///
-    /// This is THE gate between "what the operator wrote" and "what will
-    /// run": the composition root matches on the returned
-    /// [`ResolvedSelection::kind`] instead of the raw legacy string, so
-    /// the axes are authoritative and legacy spellings stay input
-    /// encodings. Derivation + precedence:
-    ///
-    /// 1. TOPOLOGY — explicit [`Self::topology`] wins; omission derives
-    ///    from the legacy encoding (`visibility = "sharded"` ⇒ sharded).
-    /// 2. VISIBILITY — decoded from the legacy [`Self::visibility`] key
-    ///    (`"sharded"` folds into `all`; its topology half was taken in
-    ///    step 1).
-    /// 3. COMMUNICATION — explicit [`Self::communication`] wins; omission
-    ///    derives `spatial ⇒ delta, otherwise always-full` (what today's
-    ///    rooms actually do).
-    ///
-    /// Combination validation runs on the RESOLVED triple. Only six
-    /// combinations have an implementation today (single × {all, team,
-    /// pvs} × always-full, single × spatial × delta, sharded × all ×
-    /// always-full, and sharded × spatial × delta — the Faz B composite);
-    /// everything else is rejected HERE with an error naming the roadmap
-    /// phase/document that will deliver it — a supported-combination check
-    /// must refuse at startup, never misconfigure a running server.
-    ///
-    /// The communication axis is therefore FUNCTIONALLY DETERMINED by the
-    /// visibility axis today, and validation enforces that in both
-    /// directions rather than letting either spelling drift from the room
-    /// that runs:
-    ///
-    /// - under `spatial` (either topology) the room speaks delta and only
-    ///   delta — AoiRoom's internal per-cell diff, the Faz B composite's
-    ///   per-shard cell-delta broadcast — so the derived value and an
-    ///   explicit `delta` agree on one room, and an explicit
-    ///   `always-full` is REJECTED (no spatial room has a full-frame mode);
-    /// - under `all`/`team`/`pvs` the room speaks full frames only, so an
-    ///   explicit `delta` is REJECTED (client-facing delta packaging waits
-    ///   on the shared codec round).
-    ///
-    /// The consequence worth stating: no ACCEPTED [`ResolvedSelection`]
-    /// can report a `communication` its room does not speak.
-    pub fn resolve_selection(&self) -> Result<ResolvedSelection, ServerError> {
-        // Stage 1 — TOPOLOGY: explicit key wins over the legacy spelling;
-        // a contradiction warns (behavior still follows the explicit key).
-        let legacy_sharded = self.visibility == Visibility::Sharded;
-        let topology = match self.topology {
-            Some(explicit) => {
-                if legacy_sharded && explicit == Topology::Single {
-                    warn!(
-                        resolved = %explicit,
-                        "`topology` takes precedence: ignoring the legacy \
-                         visibility = \"sharded\" spelling"
-                    );
-                }
-                explicit
-            }
-            None if legacy_sharded => Topology::Sharded,
-            None => Topology::Single,
-        };
-
-        // Stage 2 — VISIBILITY axis: decode the legacy five-value spelling.
-        let visibility = VisibilityAxis::from(self.visibility);
-
-        // Stage 3 — COMMUNICATION: explicit key wins over the derived
-        // default (the default mirrors what the mapped room does today).
-        let derived_communication = match visibility {
-            VisibilityAxis::Spatial => Communication::Delta,
-            VisibilityAxis::All | VisibilityAxis::Team | VisibilityAxis::Pvs => {
-                Communication::AlwaysFull
-            }
-        };
-        let communication = self.communication.unwrap_or(derived_communication);
-
-        // Stage 4 — combination validation, structural axes first (they
-        // decide what the world IS), then the packaging axis. Each
-        // supported mapping names its factory; each REJECTION names the
-        // roadmap phase/document that delivers it.
-        let kind = match (topology, visibility) {
-            (Topology::Single, VisibilityAxis::All) => RoomKind::Open,
-            (Topology::Single, VisibilityAxis::Spatial) => RoomKind::Aoi,
-            (Topology::Single, VisibilityAxis::Team) => RoomKind::Team,
-            (Topology::Single, VisibilityAxis::Pvs) => RoomKind::Sector,
-            (Topology::Sharded, VisibilityAxis::All) => RoomKind::Sharded,
-            // The Faz B composite: every shard of the grid broadcasts with
-            // cell-grouped spatial visibility over its OWN region, the
-            // borrowed border strip folded into the per-cell delta ledger.
-            (Topology::Sharded, VisibilityAxis::Spatial) => RoomKind::ShardedSpatial,
-            // Locality-contrary combos: team/pvs interest reaches across
-            // shard seams, which needs a cross-shard subscription layer
-            // nobody has built (see docs/CROSS-SHARD.md §4 — interaction
-            // designs stay shard-local; docs/DISTRIBUTED.md horizon item).
-            (Topology::Sharded, other @ (VisibilityAxis::Team | VisibilityAxis::Pvs)) => {
-                return Err(ServerError::ShardedCrossInterest(other.to_string()));
-            }
-        };
-
-        // An EXPLICIT delta request resolves only where a client-facing
-        // delta implementation exists TODAY: `spatial` — on either
-        // topology. Under `single` that is AoiRoom's internal per-cell
-        // diff; under `sharded` it is the Faz B composite's per-shard
-        // cell-delta broadcast (the same wire format). Everywhere else
-        // (all/team/pvs) delta frames wait for their packaging: fail
-        // cleanly instead of silently serving full frames under a config
-        // that asked for deltas.
-        if self.communication == Some(Communication::Delta) && visibility != VisibilityAxis::Spatial
-        {
-            return Err(match topology {
-                Topology::Single => ServerError::SingleDelta,
-                Topology::Sharded => ServerError::ShardedDelta,
-            });
-        }
-
-        // The MIRROR of the check above, and for the same reason. Spatial
-        // rooms speak delta and only delta: AoiRoom's unit of encoding is
-        // the per-cell diff and the Faz B composite's is the per-shard
-        // cell delta — neither has a full-frame mode to select (their
-        // fulls are the keep-alive / late-join recovery path, not a wire
-        // setting). An explicit `always-full` here therefore names
-        // packaging nothing serves, exactly as an explicit `delta` does
-        // under all/team/pvs. Refusing keeps `ResolvedSelection` truthful
-        // BY CONSTRUCTION: no accepted selection can report a
-        // communication its room does not speak. An OMITTED key still
-        // derives `Delta` above, so a config that never mentioned the axis
-        // is untouched.
-        if self.communication == Some(Communication::AlwaysFull)
-            && visibility == VisibilityAxis::Spatial
-        {
-            return Err(match topology {
-                Topology::Single => ServerError::SingleAlwaysFull,
-                Topology::Sharded => ServerError::ShardedAlwaysFull,
-            });
-        }
-
-        Ok(ResolvedSelection {
-            topology,
-            visibility,
-            communication,
-            kind,
-        })
     }
 }

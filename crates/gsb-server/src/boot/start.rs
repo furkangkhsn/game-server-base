@@ -10,61 +10,16 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::boot::accept::*;
-use crate::boot::factories::*;
 use crate::config::*;
 use crate::*;
 use gsb_core::channel::channel;
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
-use gsb_core::registry::{MatchResult, Registry, RegistryMsg};
+use gsb_core::registry::{MatchResult, RegistryMsg};
 use gsb_core::room::RoomConfig;
 
-/// Start the server (local auth; no ticket hook). Must be called from
-/// inside a tokio runtime. Metric reports go to the tracing logger (one
-/// `gsb-metric` line per scope per second; visible under `RUST_LOG=info`,
-/// silent without a subscriber).
-pub async fn start_server(cfg: Config) -> Result<ServerHandle, ServerError> {
-    start_server_with(cfg, ServerHooks::default()).await
-}
-
-/// Start the server (local auth; no ticket hook) with a programmatic
-/// metrics consumer: each report is sent to `report_tx` (see
-/// [`gsb_core::metrics`]). Used by the load generator and by tests that
-/// assert on server-side counters.
-pub async fn start_server_metrics(
-    cfg: Config,
-    report_tx: mpsc::UnboundedSender<MetricReport>,
-) -> Result<ServerHandle, ServerError> {
-    start_server_metrics_with(cfg, ServerHooks::default(), report_tx).await
-}
-
-/// Start the server with the platform's hooks (feature A, control-plane
-/// entry): see [`ServerHooks`] for the ticket-validation hook. Everything
-/// else is identical to [`start_server`].
-pub async fn start_server_with(
-    cfg: Config,
-    hooks: ServerHooks,
-) -> Result<ServerHandle, ServerError> {
-    start_inner(cfg, MetricSink::Log, hooks).await
-}
-
-/// Start the server with the platform's hooks and a programmatic metrics
-/// consumer (the [`start_server_with`] + [`start_server_metrics`]
-/// composition; see both).
-pub async fn start_server_metrics_with(
-    cfg: Config,
-    hooks: ServerHooks,
-    report_tx: mpsc::UnboundedSender<MetricReport>,
-) -> Result<ServerHandle, ServerError> {
-    start_inner(cfg, MetricSink::Channel(report_tx), hooks).await
-}
-
-/// The config's grace as a `Duration`, clamped at zero: a negative value
-/// would panic `from_secs_f64`, and "negative grace" can only mean
-/// "disabled" anyway.
-fn grace_of(cfg: &Config) -> std::time::Duration {
-    std::time::Duration::from_secs_f64(cfg.disconnect_grace_secs.max(0.0))
-}
+mod entry;
+pub use entry::*;
 
 /// Resolve the effective unauthenticated-connection cap ONCE, at startup
 /// (see [`Config::max_unauth_conns`] for the semantics): an explicit
@@ -90,7 +45,10 @@ fn unauth_cap_of(cfg: &Config) -> Option<u64> {
 /// cadence ever changes.
 const REPORT_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Start `module` under `cfg`: the one startup procedure every public
+/// entry point funnels into.
 async fn start_inner(
+    mut module: Box<dyn GameModule>,
     cfg: Config,
     metric_sink: MetricSink,
     hooks: ServerHooks,
@@ -103,23 +61,19 @@ async fn start_inner(
     // keys; see `resolve_listeners`).
     let specs = resolve_listeners(&cfg)?;
 
-    // The three-axis selection (topology × visibility × communication):
-    // derive the axes from the legacy spellings, honor explicit keys, and
-    // validate the combination — BEFORE anything binds, so an unsupported
-    // combination fails cleanly at startup naming its roadmap phase (the
-    // same never-half-start principle as `resolve_listeners`).
-    let selection = cfg.resolve_selection()?;
+    // The game's own settings (the demo: its three-axis selection and
+    // shard-count check), validated BEFORE anything binds, so a bad game
+    // config fails cleanly at startup (the same never-half-start
+    // principle as `resolve_listeners`).
+    module.configure(&cfg.raw, &cfg)?;
+    info!(game = module.name(), selection = %module.describe(), "game module configured");
 
-    // The sharded topology is a grid of 1..=256 shards (see
-    // `gsb_demo::sharded::grid_shape`); a count outside that range would
-    // build a degenerate (or impossible) grid, so refuse to start. Gated
-    // on the RESOLVED topology: both the legacy spelling AND an explicit
-    // `topology = "sharded"` take this path.
-    if selection.topology == Topology::Sharded && !(1..=256).contains(&cfg.shard_count) {
-        return Err(ServerError::BadShardCount(cfg.shard_count));
-    }
-
-    let table = build_table();
+    // The wire table: the base protocol plus the game's messages.
+    let table = {
+        let mut table = gsb_protocol::base_table();
+        module.register(&mut table);
+        Arc::new(table)
+    };
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(4096);
 
     // The HTTP ops surface (`docs/OPS.md`), enabled by a non-empty
@@ -195,145 +149,17 @@ async fn start_inner(
 
     // The registry runs until Shutdown; dropping the handle is fine. It
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
-    // The factory (and hence the registry's group-key type) is chosen from
-    // the RESOLVED three-axis selection — never the raw legacy string: each
-    // room kind is a different `RoomLogic` group key (`()`, `Cell`, `Team`,
-    // `Sector`) or the sharded grid topology, so the arms are otherwise
-    // identical and each yields a `JoinHandle<()>`. `resolve_selection`
-    // already validated the combination; every arm here is a supported one.
-    //
-    // One economy service per server (the RPC pattern's external-I/O
-    // reference adapter), shared by clone with every room of EVERY build:
-    // each kit room forwards requests to the game, so the service is what
-    // decides whether `ECONOMY` is answered — uniformly, whatever the axes
-    // resolved to (GAME-MODULE §6 decision 11).
-    let economy = gsb_demo::economy::EconomyService::spawn(
-        gsb_demo::economy::EconomyService::default_latency(),
-    );
-    let _registry = match selection.kind {
-        RoomKind::Open => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    open_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-        RoomKind::Aoi => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    aoi_room_factory(
-                        cfg.aoi_cell_size,
-                        cfg.spawn_half_size,
-                        disconnect_grace,
-                        economy,
-                    ),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-        RoomKind::Team => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    team_room_factory(
-                        cfg.team_vision_radius,
-                        cfg.spawn_half_size,
-                        disconnect_grace,
-                        economy,
-                    ),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-        RoomKind::Sector => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    pvs_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-        RoomKind::Sharded => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    sharded_room_factory(
-                        cfg.spawn_half_size,
-                        cfg.shard_count as usize,
-                        disconnect_grace,
-                        economy,
-                    ),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    // Faz 3: every shard reports ITS final state through
-                    // the shared sink at its own teardown — one payload
-                    // per shard under the logical room id (the adapter
-                    // concatenates/filters; see `gsb_core::shard`).
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-        RoomKind::ShardedSpatial => {
-            let disconnect_grace = grace_of(&cfg);
-            tokio::spawn(
-                Registry::new(
-                    reg_rx,
-                    reg_tx.clone(),
-                    sharded_spatial_room_factory(
-                        cfg.spawn_half_size,
-                        cfg.shard_count as usize,
-                        cfg.aoi_cell_size,
-                        disconnect_grace,
-                        economy,
-                    ),
-                    ticker.clone(),
-                    metrics_tx.clone(),
-                    cfg.max_connections,
-                    unauth_cap_of(&cfg),
-                    // Same per-shard result reporting as the plain grid.
-                    Some(result_tx.clone()),
-                )
-                .run(),
-            )
-        }
-    };
+    // The game module picks the room factory (and with it the registry's
+    // generic types) and spawns the registry through `RegistryParts`.
+    let _registry = module.spawn_registry(RegistryParts {
+        inbox: reg_rx,
+        self_mailbox: reg_tx.clone(),
+        ticker: ticker.clone(),
+        metrics: metrics_tx.clone(),
+        max_connections: cfg.max_connections,
+        max_unauth_conns: unauth_cap_of(&cfg),
+        result_sink: Some(result_tx.clone()),
+    });
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
     // configure a slower rate that divides it).

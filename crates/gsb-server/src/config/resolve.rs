@@ -203,6 +203,11 @@ pub enum ServerError {
         /// The offending entry's bind address (names the entry in logs).
         bind: String,
     },
+
+    /// Game selection or a game module's own configuration failed (see
+    /// [`crate::GameError`]).
+    #[error(transparent)]
+    Game(#[from] crate::GameError),
 }
 
 /// One fully-validated listener, ready to bind: the config grammar

@@ -50,7 +50,7 @@ pub(super) fn open_room_factory(
 /// spatial path: one snapshot per cell, shared by reference with the
 /// cell's occupants. Note the `RoomFactory`'s group-key associated type
 /// differs from `open_room_factory`'s (`Cell` vs `()`), so the strategies
-/// cannot be stored in one value — `start_inner` picks the factory at the
+/// cannot be stored in one value — the demo module picks the factory at the
 /// config boundary. This is entirely on the game/server side; `gsb-core`
 /// stays generic over the group key and is untouched.
 pub(super) fn aoi_room_factory(

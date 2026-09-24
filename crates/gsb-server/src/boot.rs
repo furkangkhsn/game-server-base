@@ -14,11 +14,12 @@ use gsb_core::registry::{MatchResult, RegistryMsg, RoomStatus};
 use gsb_core::room::RoomConfig;
 
 mod accept;
-mod factories;
 mod start;
 
-pub use factories::build_table;
-pub use start::{start_server, start_server_metrics, start_server_metrics_with, start_server_with};
+pub use start::{
+    start_game_server, start_game_server_with, start_server, start_server_metrics,
+    start_server_metrics_with, start_server_with,
+};
 
 /// The composition-root's platform hooks (the base ships the wiring, the
 /// platform ships the behaviour):

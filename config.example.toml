@@ -3,6 +3,13 @@
 # (`gsb-server config.toml`), or point the binary at it: `gsb-server path.toml`.
 # Missing keys fall back to the defaults shown here.
 
+# The game this server hosts (docs/GAME-MODULE.md): one of the games
+# compiled into the build (cargo features). "demo" (the default) is the 2D
+# demo; its settings are the flat keys below (visibility, topology,
+# shard_count, aoi_cell_size, ...). An unknown name refuses startup and
+# lists the compiled-in games.
+game = "demo"
+
 # Socket address to bind.
 bind = "0.0.0.0:7777"
 
