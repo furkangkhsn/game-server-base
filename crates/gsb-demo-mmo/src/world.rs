@@ -13,9 +13,12 @@
 //!   around it on the ground. The seams at x = 0 and z = 0 fall on cell
 //!   edges, and a cell's view reaches at most ONE cell (64 m) across a
 //!   seam — inside the 128 m border strip, so everything a player at the
-//!   seam should see from the neighbouring shard is lent to its shard.
-//!   (Except across a region CORNER: see `docs/KIT-ARCHITECTURE.md` §10,
-//!   "Faz 4 sonucu", design findings.)
+//!   seam should see from the neighbouring shard is lent to its shard —
+//!   across a region CORNER too: the grid is the preset's 8-neighbourhood
+//!   ([`GridPartition2::with_diagonals`]), a world with corners being the
+//!   MMO's reality (with the default 4-neighbourhood the diagonal shard
+//!   lent nothing — `docs/KIT-ARCHITECTURE.md` §10, F2). A jump into the
+//!   diagonal shard (a waystone `Travel`) is one hop.
 
 use gsb_kit::space::{Grid2, GridPartition2, shard_at};
 
@@ -60,11 +63,13 @@ pub const WAYSTONES: [[f32; 2]; SHARDS] = [
     [256.0, 256.0],
 ];
 
-/// The shard grid: [`SHARDS`] regions over the map (the kit's preset,
-/// reading [`Pos3`] and the wire value through `Planar`).
+/// The shard grid: [`SHARDS`] regions over the map, every region a
+/// neighbour of the other three (the kit's preset with its
+/// 8-neighbourhood, reading [`Pos3`] and the wire value through
+/// `Planar`).
 #[must_use]
 pub fn partition() -> GridPartition2<Pos3> {
-    GridPartition2::new(SHARDS, WORLD_HALF)
+    GridPartition2::new(SHARDS, WORLD_HALF).with_diagonals()
 }
 
 /// The AOI grid: [`CELL_SIZE`] cells, 3×3 view (the kit's preset).

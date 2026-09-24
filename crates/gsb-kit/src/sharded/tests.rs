@@ -20,6 +20,7 @@ use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
 use prost::Message;
 
 mod change_window;
+mod diagonals;
 mod ghosts;
 mod lent_arrival;
 mod migration;

@@ -87,9 +87,10 @@ pub(crate) fn ingest(
     }
 }
 
-/// Teleport to a waystone: the position jumps (possibly into a shard
-/// region far from this one — the kit routes the entity there hop by
-/// hop, §8.4) and the pending walk is cancelled.
+/// Teleport to a waystone: the position jumps (possibly into another
+/// shard's region — the kit hands the entity to it, hop by hop were it
+/// not a neighbour, §8.4; on the MMO's 2×2 grid with corners every
+/// region is one hop away) and the pending walk is cancelled.
 fn travel(world: &mut World, entity: Entity, waystone: usize) {
     let Some(&[x, z]) = WAYSTONES.get(waystone) else {
         return; // no such waystone

@@ -1,9 +1,10 @@
 //! Shard-border crossings through the real shard actors: a PLAYER runs
 //! across a seam, a flying MOB (no player, no speed-like component)
 //! patrols across one, and a player TELEPORTS into the diagonally
-//! opposite shard (not a neighbour of its own — the kit routes it hop by
-//! hop). Each keeps its wire id and the state its `MmoMig` carries, and
-//! the clients on both sides keep a consistent stream.
+//! opposite shard (a neighbour across the corner — the MMO's grid is the
+//! kit's 8-neighbourhood). Each keeps its wire id and the state its
+//! `MmoMig` carries, and the clients on both sides keep a consistent
+//! stream.
 
 mod common;
 
@@ -130,13 +131,15 @@ async fn a_mob_crossing_a_seam_keeps_its_id_and_its_brain() {
     );
 }
 
-/// P (shard 0) uses the waystone of shard 3 — the diagonal, not a
-/// neighbour. The session is never held by two shards; it is in flight
-/// for exactly two ticks (two hops through an edge neighbour, which
-/// installs and forwards it within one tick — §8.4) and lands on shard 3
-/// once, with the same wire id, the cancelled walk staying cancelled.
+/// P (shard 0) uses the waystone of shard 3 — the diagonal, a neighbour
+/// across the corner (`GridPartition2::with_diagonals`). The session is
+/// never held by two shards; it is in flight for exactly one tick (one
+/// hop, straight to shard 3 — with the kit's default 4-neighbourhood it
+/// took two, through an edge neighbour: KIT-ARCHITECTURE §10, F2) and
+/// lands on shard 3 once, with the same wire id, the cancelled walk
+/// staying cancelled.
 #[tokio::test]
-async fn a_teleport_into_a_non_adjacent_shard_lands_once_with_the_same_id() {
+async fn a_teleport_into_the_diagonal_shard_lands_once_with_the_same_id() {
     let realm = Realm::empty()
         .with_login(1, Pos3::new(-256.0, 0.0, -250.0))
         .with_login(2, Pos3::new(250.0, 0.0, 250.0));
@@ -184,7 +187,7 @@ async fn a_teleport_into_a_non_adjacent_shard_lands_once_with_the_same_id() {
         }
     }
     assert_eq!(owners, [Some(0), None, Some(3)], "owned by shard 3, once");
-    assert_eq!(in_flight, 2, "two hops, one tick each");
+    assert_eq!(in_flight, 1, "one hop, one tick");
 
     // The waystone's cell (4,4): P stands there alone — and shows, to
     // itself and to D (before the kit's F1 fix the landing erased it from

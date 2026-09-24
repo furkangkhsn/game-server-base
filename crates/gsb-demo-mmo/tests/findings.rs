@@ -71,16 +71,18 @@ async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard()
     assert_eq!(cs[0].get(m).map(|r| r.hp), Some(35), "M is shard 1's now");
 }
 
-/// F2 — `GridPartition2` is a 4-neighbourhood, and a border strip is
-/// only exchanged between neighbours: across a region CORNER nothing is
-/// lent. X stands 10 m from the map's centre in shard 0; its 3×3 ground
-/// block reaches one cell into shards 1, 2 and 3. It sees the mobs of
-/// the two edge neighbours but not the one of the diagonal shard 3,
-/// although that mob is exactly as close.
+/// F2 — `GridPartition2` knew only the 4-neighbourhood, and a border
+/// strip is only exchanged between neighbours: across a region CORNER
+/// nothing was lent. X stands 10 m from the map's centre in shard 0; its
+/// 3×3 ground block reaches one cell into shards 1, 2 and 3. It saw the
+/// mobs of the two edge neighbours but not the one of the diagonal
+/// shard 3, although that mob is exactly as close. The kit now offers
+/// the 8-neighbourhood (`GridPartition2::with_diagonals`) and the MMO's
+/// grid opts in (`world::partition`).
 ///
-/// Correct: X sees all three.
+/// Correct (asserted): X sees all three.
 #[tokio::test]
-async fn f2_the_diagonal_shard_lends_nothing_across_a_corner() {
+async fn f2_the_diagonal_shard_lends_across_a_corner() {
     let at = |x: f32, z: f32| MobSpawn::once(Kind::Mob, Pos3::new(x, 0.0, z), 1, 100_000, 60);
     let realm = Realm::empty()
         .with_login(1, Pos3::new(-10.0, 0.0, -10.0)) // X: shard 0, cell (-1,-1)
@@ -90,13 +92,11 @@ async fn f2_the_diagonal_shard_lends_nothing_across_a_corner() {
     let mut room = Mmo::new(&realm);
     let mut cs = vec![room.join(1, "", &mut []).await];
     room.steps(&mut cs, 40).await;
-    let seen: Vec<(i32, i32)> = cs[0].view.values().map(|r| (r.x, r.z)).collect();
-    assert!(
-        seen.contains(&(100, -100)) && seen.contains(&(-100, 100)),
-        "{seen:?}"
-    );
-    assert!(
-        !seen.contains(&(100, 100)),
-        "F2 fixed? X sees the diagonal shard's mob — flip this test"
+    let mut seen: Vec<(i32, i32)> = cs[0].view.values().map(|r| (r.x, r.z)).collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        [(-100, -100), (-100, 100), (100, -100), (100, 100)],
+        "X itself and the three mobs around the corner"
     );
 }

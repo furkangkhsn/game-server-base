@@ -97,7 +97,8 @@ fn region_at(
 
 /// The 2D grid preset: a square map `[-half, half]²` on the ground plane
 /// split into a `grid_shape(shard_count)` grid of rectangular regions,
-/// the 4-neighbourhood (west, east, north, south), and a border margin of
+/// the 4-neighbourhood (west, east, north, south) — or, opted in with
+/// [`Self::with_diagonals`], the 8-neighbourhood — and a border margin of
 /// a quarter of the smaller region edge on each side of every shared
 /// edge. Reads any position component with an `f32` [`Planar`]
 /// projection and any wire value with an `i32` one.
@@ -111,6 +112,9 @@ pub struct GridPartition2<P> {
     cell_h: f32,
     /// The border margin: a quarter of the smaller region edge.
     border: f32,
+    /// Whether the regions sharing only a corner are neighbours too (the
+    /// 8-neighbourhood, [`Self::with_diagonals`]).
+    diagonals: bool,
     _pos: PhantomData<fn() -> P>,
 }
 
@@ -131,8 +135,26 @@ impl<P> GridPartition2<P> {
             cell_w,
             cell_h,
             border: cell_w.min(cell_h) / 4.0,
+            diagonals: false,
             _pos: PhantomData,
         }
+    }
+
+    /// The 8-neighbourhood: the regions that share only a CORNER with a
+    /// region are its neighbours too. A player near a corner then sees
+    /// the diagonal region's corner through the border strip (with the
+    /// 4-neighbourhood nothing is lent across a corner), and a crossing
+    /// through a corner — or a jump — into the diagonal region takes one
+    /// hop instead of two. The cost: every region exchanges its strip
+    /// with up to eight neighbours instead of four (each receiver's
+    /// [`Partition::admits`] keeps only the part near itself — for a
+    /// diagonal neighbour, the corner square). Every shard of a room must
+    /// use the same partition. Not the default: the 4-neighbourhood is
+    /// the preset's established topology (routes, exchange fan-out).
+    #[must_use]
+    pub fn with_diagonals(mut self) -> Self {
+        self.diagonals = true;
+        self
     }
 
     /// Region `idx`'s rectangle `[x0, x1] × [y0, y1]`.
@@ -168,21 +190,41 @@ where
         )
     }
 
+    /// West, east, north, south — then, with [`Self::with_diagonals`],
+    /// the corners (north-west, north-east, south-west, south-east): the
+    /// edge neighbours stay first, so a route's first hop prefers an edge
+    /// when both are shortest.
     fn neighbors(&self, idx: usize) -> Vec<usize> {
         let row = idx / self.cols;
         let col = idx % self.cols;
-        let mut neighbors = Vec::with_capacity(4);
-        if col > 0 {
+        let mut neighbors = Vec::with_capacity(if self.diagonals { 8 } else { 4 });
+        let (west, east) = (col > 0, col + 1 < self.cols);
+        let (north, south) = (row > 0, row + 1 < self.rows);
+        if west {
             neighbors.push(idx - 1);
         }
-        if col + 1 < self.cols {
+        if east {
             neighbors.push(idx + 1);
         }
-        if row > 0 {
+        if north {
             neighbors.push(idx - self.cols);
         }
-        if row + 1 < self.rows {
+        if south {
             neighbors.push(idx + self.cols);
+        }
+        if self.diagonals {
+            if north && west {
+                neighbors.push(idx - self.cols - 1);
+            }
+            if north && east {
+                neighbors.push(idx - self.cols + 1);
+            }
+            if south && west {
+                neighbors.push(idx + self.cols - 1);
+            }
+            if south && east {
+                neighbors.push(idx + self.cols + 1);
+            }
         }
         neighbors
     }
