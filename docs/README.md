@@ -9,6 +9,7 @@ These design documents are written in Turkish. All code and API documentation in
 | `CROSS-SHARD.md` | Design contract for cross-shard entity interactions, remote effects, and boundary sharing. |
 | `DESIGN.md` | Core architectural design document covering actor constraints, scaling targets, network transports, tick execution, and the metrics pipeline. |
 | `DISTRIBUTED.md` | Design contract for distributed multi-process and multi-machine shard topologies using the ShardLink abstraction. |
+| `GAME-MODULE.md` | Design for making `gsb-server` host any game built on `gsb-kit` (an object-safe `GameModule` that spawns its own registry) and for a game-generic load generator. |
 | `HANDOFF.md` | Session handoff context and operational instructions for continuing development rounds and preserving architecture discipline. |
 | `KIT-ARCHITECTURE.md` | Design (approved; phases 0–2 implemented) of `gsb-kit`, the pluggable crate of reusable strategies (AOI, team fog, PVS, delta engine, sharded composites, presets) generic over the game, and `gsb-demo`, the example game on top of it: the seams, the kit proto and typed mirrors, the phases and their results. |
 | `OPS.md` | Operational interface design specifying HTTP endpoints for Prometheus metrics, health checks, and room administration. |
