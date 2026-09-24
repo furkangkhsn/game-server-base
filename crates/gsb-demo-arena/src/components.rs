@@ -70,10 +70,3 @@ pub struct MoveTarget3(pub Pos3);
 /// Movement speed, metres per second.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Speed(pub f32);
-
-/// The team base a unit spawned at (and a bot-fed unit retreats to) —
-/// the team number the arena assigned at spawn. The kit's team room
-/// asks `TeamGame::team_of` right after the spawn; the arena answers by
-/// reading this back (see `game.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct HomeBase(pub u8);

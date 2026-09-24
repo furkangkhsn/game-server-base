@@ -410,5 +410,6 @@ fn runtime_team_change_moves_the_group_and_keeps_the_wire_identity() {
 }
 
 mod change_window;
+mod spawn_team;
 mod teams;
 mod vision3;

@@ -1,7 +1,7 @@
 //! [`ArenaGame`] — the arena's kit hooks (KIT-ARCHITECTURE §4.3/§4.6):
-//! [`Game`] (spawn at the team base, `MoveTo` input, the movement
-//! system, a bot that retreats to base) and [`TeamGame`] (round-robin
-//! team assignment by join order).
+//! [`Game`] (`MoveTo` input, the movement system, a bot that retreats
+//! to base) and [`TeamGame`] (round-robin team assignment by join
+//! order, and the spawn at the team's base).
 //!
 //! **Team assignment: round-robin by join order** (`n`-th join → team
 //! `n mod teams`). Team sizes never differ by more than one over a
@@ -16,12 +16,14 @@
 //!   rule would rebalance barely moves — not worth a world scan per
 //!   join.
 //!
-//! **The team is decided in `spawn_player`, not in `team_of`.** The kit
-//! calls `spawn_player` first and `team_of` right after, but an arena
-//! spawns a unit AT ITS TEAM'S BASE — the spawn point depends on the
-//! team. So the spawn hook makes the decision and records it on the
-//! unit ([`HomeBase`]), and `team_of` reads it back. (Recorded as a
-//! design finding: `docs/KIT-ARCHITECTURE.md` §10, "Faz 3 sonucu".)
+//! **The team is decided AT the spawn.** An arena spawns a unit AT ITS
+//! TEAM'S BASE — the spawn point depends on the team — so the arena
+//! overrides the kit's `TeamGame::spawn_team_player`: one step chooses
+//! the team and spawns at its base, and the kit records the team as the
+//! unit's `TeamMember` (the bot reads it back to find the base). Phase 3
+//! had to decide in `spawn_player` and keep a duplicate team component
+//! for `team_of` to read back — the kit asked for the team after the
+//! spawn (`docs/KIT-ARCHITECTURE.md` §10, finding A1).
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -30,11 +32,11 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_kit::game::{Game, InputSeq, TeamGame};
-use gsb_kit::team::Team;
+use gsb_kit::team::{Team, TeamMember};
 use prost::Message;
 
 use crate::codec::{ArenaCodec, Cm3};
-use crate::components::{DEFAULT_SPEED, HomeBase, MoveTarget3, Pos3, Speed};
+use crate::components::{DEFAULT_SPEED, MoveTarget3, Pos3, Speed};
 use crate::movement::Movement;
 use crate::{input, op};
 
@@ -104,18 +106,11 @@ impl Game for ArenaGame {
         &self.codec
     }
 
-    /// Round-robin the joiner onto a team (module docs) and spawn its
-    /// unit at that team's base, beside the team-mates already there.
-    fn spawn_player(&mut self, world: &mut World, _conn: ConnectionId) -> Entity {
-        let teams = u64::from(self.teams);
-        let team = (self.joined % teams) as u8;
-        let slot = (self.joined / teams) as f32;
-        self.joined += 1;
-        let mut at = self.base_of(team);
-        at.x += SLOT_SPACING * slot;
-        world
-            .spawn((at.clamped(), Speed(DEFAULT_SPEED), HomeBase(team)))
-            .id()
+    /// The unit of a joiner, at its team's base (the team room calls
+    /// [`TeamGame::spawn_team_player`] instead, which this is the first
+    /// half of).
+    fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
+        self.spawn_team_player(world, conn).0
     }
 
     /// A bot-fed unit (its player's disconnect grace ran out) retreats
@@ -133,7 +128,7 @@ impl Game for ArenaGame {
             let Ok(unit) = world.get_entity(entity) else {
                 continue;
             };
-            let Some(&HomeBase(team)) = unit.get::<HomeBase>() else {
+            let Some(&TeamMember(Team(team))) = unit.get::<TeamMember>() else {
                 continue;
             };
             let base = Cm3::from(self.base_of(team));
@@ -171,11 +166,26 @@ impl Game for ArenaGame {
     }
 }
 
-/// The team the joiner was spawned for (see the module docs: decided
-/// by [`Game::spawn_player`], recorded as the unit's [`HomeBase`]).
+/// The team is chosen at the spawn (module docs).
 impl TeamGame for ArenaGame {
+    /// Round-robin the joiner onto a team (module docs) and spawn its
+    /// unit at that team's base, beside the team-mates already there.
+    fn spawn_team_player(&mut self, world: &mut World, _conn: ConnectionId) -> (Entity, Team) {
+        let teams = u64::from(self.teams);
+        let team = (self.joined % teams) as u8;
+        let slot = (self.joined / teams) as f32;
+        self.joined += 1;
+        let mut at = self.base_of(team);
+        at.x += SLOT_SPACING * slot;
+        let unit = world.spawn((at.clamped(), Speed(DEFAULT_SPEED))).id();
+        (unit, Team(team))
+    }
+
+    /// The team of `entity`, as the kit recorded it. The kit does not ask
+    /// (the arena overrides `spawn_team_player`); the answer stays true
+    /// for any caller.
     fn team_of(&mut self, world: &World, _conn: ConnectionId, entity: Entity) -> Team {
-        Team(world.get::<HomeBase>(entity).map_or(0, |b| b.0))
+        world.get::<TeamMember>(entity).map_or(Team(0), |m| m.0)
     }
 }
 

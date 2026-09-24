@@ -77,7 +77,13 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        let admission = crate::common::join(
+        // Team assignment is game policy, decided in the spawn step
+        // (`TeamGame::spawn_team_player` — by default `spawn_player`
+        // then `team_of`; the demo hashes the TRANSPORT session id, as it
+        // always has: the load generator's team distribution pairs with
+        // it; an arena overrides it to spawn at the team's base).
+        let mut team = None;
+        let admission = crate::common::join_with(
             &mut self.game,
             &mut self.player_entity,
             &mut self.next_player_id,
@@ -85,6 +91,11 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
             world,
             conn,
             &mut self.input,
+            |game, world, conn| {
+                let (entity, t) = game.spawn_team_player(world, conn);
+                team = Some(t);
+                entity
+            },
         );
         // Team membership goes into the WORLD (the component), not just
         // this room's bookkeeping: `group_of` and `rebuild` read it from
@@ -96,10 +107,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
             .get(&admission.player)
             .copied()
             .expect("inserted above");
-        // Team assignment is game policy (`TeamGame::team_of` — the
-        // demo hashes the TRANSPORT session id, as it always has: the
-        // load generator's team distribution pairs with it).
-        let team = self.game.team_of(world, conn, entity);
+        let team = team.expect("the spawn step ran");
         world.entity_mut(entity).insert(TeamMember(team));
         admission
     }

@@ -101,17 +101,36 @@ pub trait Game: Send + 'static {
 }
 
 /// A game the team-fog room can run: team assignment is game policy
-/// (§2 — "takım ataması"), asked once per join.
+/// (§2 — "takım ataması"), decided once per join.
 ///
 /// A strategy-specific extension of [`Game`] rather than a `Game` hook:
 /// only the team room calls it, and a game that never runs team fog
 /// should not have to answer it.
 pub trait TeamGame: Game {
+    /// Spawn a joining player's entity AND choose its team — what the
+    /// team room calls on every join, in place of
+    /// [`Game::spawn_player`]. Override it when the spawn depends on the
+    /// team (an arena spawns a unit at its team's base): the decision is
+    /// made once, where the spawn point needs it. The default is the
+    /// two-step answer of a game whose spawn does not care —
+    /// [`Game::spawn_player`], then [`Self::team_of`]. Like
+    /// `spawn_player`, the entity must carry the codec's `Marker`; the
+    /// kit stamps its wire identity right after and writes the team into
+    /// the world as the entity's
+    /// [`TeamMember`](crate::team::TeamMember) (later team changes are
+    /// plain component writes).
+    fn spawn_team_player(&mut self, world: &mut World, conn: ConnectionId) -> (Entity, Team) {
+        let entity = self.spawn_player(world, conn);
+        let team = self.team_of(world, conn, entity);
+        (entity, team)
+    }
+
     /// The team of the player whose entity [`Game::spawn_player`] just
-    /// spawned for `conn` (the kit has stamped its wire identity). The
-    /// room writes the answer into the world as the entity's
-    /// [`TeamMember`](crate::team::TeamMember); later team changes
-    /// are plain component writes.
+    /// spawned for `conn` — asked by the default
+    /// [`Self::spawn_team_player`] right after that spawn, before the kit
+    /// stamps the entity's wire identity. A game that overrides
+    /// `spawn_team_player` is not asked (it still answers: the team of
+    /// `entity`, e.g. read back from its `TeamMember`).
     fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
 }
 

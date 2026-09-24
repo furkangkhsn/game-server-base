@@ -32,10 +32,37 @@ pub(crate) fn join<G: Game>(
     conn: ConnectionId,
     input: &mut InputSeq,
 ) -> Admission {
+    join_with(
+        game,
+        players,
+        next_player_id,
+        minter,
+        world,
+        conn,
+        input,
+        G::spawn_player,
+    )
+}
+
+/// [`join`] with the spawn step given: `spawn` stands in for
+/// [`Game::spawn_player`] (the team room's
+/// [`TeamGame::spawn_team_player`](crate::game::TeamGame::spawn_team_player),
+/// which decides the team in the same step).
+#[allow(clippy::too_many_arguments)] // `join`'s seven plus the spawn step
+pub(crate) fn join_with<G: Game>(
+    game: &mut G,
+    players: &mut HashMap<PlayerId, Entity>,
+    next_player_id: &mut u64,
+    minter: &mut Minter,
+    world: &mut World,
+    conn: ConnectionId,
+    input: &mut InputSeq,
+    spawn: impl FnOnce(&mut G, &mut World, ConnectionId) -> Entity,
+) -> Admission {
     *next_player_id += 1;
     let player = PlayerId(*next_player_id);
     input.begin(player);
-    let entity = game.spawn_player(world, conn);
+    let entity = spawn(game, world, conn);
     debug_assert!(
         world
             .entity(entity)

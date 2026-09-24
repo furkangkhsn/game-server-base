@@ -28,8 +28,7 @@ fn teams_are_assigned_round_robin_by_join_order() {
     let conns = [8u64, 2, 4, 6, 10, 12, 14]; // all even: parity would say one team
     let mut teams = Vec::new();
     for (i, conn) in conns.into_iter().enumerate() {
-        let unit = game.spawn_player(&mut world, ConnectionId(conn));
-        let team = game.team_of(&world, ConnectionId(conn), unit);
+        let (unit, team) = game.spawn_team_player(&mut world, ConnectionId(conn));
         teams.push(team.0);
         let at = *world.get::<Pos3>(unit).expect("spawned with a position");
         let base = game.base_of(team.0);
@@ -65,8 +64,9 @@ fn team_bases_are_outside_each_others_vision() {
 fn a_bot_fed_unit_retreats_to_its_base_through_the_input_path() {
     let mut world = World::new();
     let mut game = ArenaGame::default();
-    game.spawn_player(&mut world, ConnectionId(1)); // team 0
-    let unit = game.spawn_player(&mut world, ConnectionId(2)); // team 1
+    game.spawn_team_player(&mut world, ConnectionId(1)); // team 0
+    let (unit, team) = game.spawn_team_player(&mut world, ConnectionId(2)); // team 1
+    world.entity_mut(unit).insert(TeamMember(team)); // the kit's record
     let away = Pos3::new(-40.0, 10.0, 40.0);
     world
         .entity_mut(unit)
