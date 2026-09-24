@@ -36,38 +36,31 @@
 //! decision (identity minting, the connection table, input ingestion, the
 //! system run, orphan stamping) lives in [`common`], once.
 
-/// The demo rooms' default disconnect-park grace (RECONNECT §3): how
-/// long a dropped transport's hero stays parked before its hold ends
-/// toward the bot handover. The single source of the default — referenced
-/// by `config.example.toml`'s `disconnect_grace_secs` documentation and
-/// by the server config's `Default` impl, so they cannot drift.
-pub const DEFAULT_DISCONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+mod demo;
+mod kit;
 
 pub mod aoi;
-pub mod components;
-pub mod economy;
-pub mod op;
 pub mod pvs;
 pub mod room;
 pub mod sharded;
-pub mod systems;
 pub mod team;
 
 mod common;
 
-/// Generated game protocol messages (package `gsb.game`, file `game.proto`).
-pub mod game {
-    include!(concat!(env!("OUT_DIR"), "/gsb.game.rs"));
-}
+// ── Compatibility paths (phase 0) ─────────────────────────────────────────
+//
+// The crate's public API predates the kit/demo split: every consumer
+// (`gsb-server`'s factories and config, the load generator, the tests,
+// the examples) names items by these paths. Phase 0 moves the code, not
+// the paths — these re-exports keep every old path resolving to the same
+// item until the crate split (phase 2) defines the new public surface.
 
-use gsb_protocol::MessageTable;
+pub use demo::{economy, game, op, register, systems};
+pub use kit::DEFAULT_DISCONNECT_GRACE;
 
-/// Register the demo game's wire messages with `table`.
-///
-/// The server builds one [`MessageTable`] at startup (base messages + game
-/// messages) and shares it read-only between all actors.
-pub fn register(table: &mut MessageTable) {
-    table.reg::<game::MoveTo>(op::MOVE_TO);
-    table.reg::<game::WorldSnapshot>(op::WORLD_SNAPSHOT);
-    table.reg::<game::Private>(op::PRIVATE);
+/// ECS components of the demo game (compatibility path: the demo's
+/// components plus the kit-owned [`WireId`](components::WireId)).
+pub mod components {
+    pub use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
+    pub use crate::kit::identity::WireId;
 }

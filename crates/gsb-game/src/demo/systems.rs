@@ -8,7 +8,7 @@ use bevy_ecs::prelude::Entity;
 use bevy_ecs::world::World;
 use gsb_ecs::{System, SystemCtx};
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
+use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 
 /// Moves entities toward their [`MoveTarget`] on every tick in which they
 /// actually move. The broadcast phase notices the resulting position
