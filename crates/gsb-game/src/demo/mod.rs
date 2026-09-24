@@ -16,6 +16,7 @@ pub mod components;
 pub mod economy;
 pub(crate) mod input;
 pub mod op;
+pub(crate) mod rpc;
 pub mod spawn;
 pub mod systems;
 

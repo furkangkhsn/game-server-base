@@ -10,9 +10,10 @@ use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogi
 use gsb_core::rpc::RequestDecision;
 use prost::Message;
 
-use crate::components::{MoveTarget, Position, WireId};
-use crate::op;
-use crate::room::*;
+use crate::kit::identity::WireId;
+use crate::kit::room::*;
+use crate::kit::seam;
+use crate::kit::seam::Position;
 
 impl GameLogic<World> for OpenRoom {
     // One group per room: everyone sees the whole world. (The interface
@@ -23,10 +24,10 @@ impl GameLogic<World> for OpenRoom {
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     fn group_of(&self, _world: &World, _player: PlayerId) -> Self::GroupKey {
@@ -78,7 +79,7 @@ impl GameLogic<World> for OpenRoom {
             return false;
         }
 
-        let mut snap = crate::game::WorldSnapshot {
+        let mut snap = seam::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(current.len()),
             removed: Vec::new(),
@@ -86,7 +87,7 @@ impl GameLogic<World> for OpenRoom {
             delta: false,
         };
         for (entity, x, y) in &current {
-            snap.entities.push(crate::game::EntityRecord {
+            snap.entities.push(seam::EntityRecord {
                 entity: *entity,
                 x: *x,
                 y: *y,
@@ -181,7 +182,7 @@ impl GameLogic<World> for OpenRoom {
         // (RECONNECT §9: "bot = bağlantısız girdi kaynağı" — an input
         // source without a connection): one decode/sequence/move path for
         // both.
-        crate::kit::seam::synthesize_bot_moves(
+        seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -190,7 +191,7 @@ impl GameLogic<World> for OpenRoom {
             ctx,
             actions,
         );
-        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     /// The per-connection input acknowledgment (the group snapshot is
@@ -212,103 +213,18 @@ impl GameLogic<World> for OpenRoom {
         crate::kit::common::run_systems(&mut self.runner, world, ctx);
     }
 
-    /// The demo's two request kinds (the RPC pattern's two halves, see
-    /// `game.proto`):
-    ///
-    /// - `ABILITY` (room-local): the answer is computed in this tick —
-    ///   a range check against the requester's current position and a
-    ///   real world mutation (the entity gets a `MoveTarget` toward the
-    ///   requested point) — and returned in the same tick's private
-    ///   frame. The same-tick snapshot the requester already receives
-    ///   reflects the mutation: the request and its effect share a tick.
-    /// - `ECONOMY` (external I/O): the answer needs a round trip to the
-    ///   economy service (see `crate::economy`), which the room cannot
-    ///   await. The decision is `External` with an owning future; the
-    ///   core registers the request as pending, runs the future in a
-    ///   worker task, and delivers the answer on a later tick through
-    ///   the same private path (the client sees one shape for both).
+    /// The demo's two request kinds (`ABILITY`, answered in this tick;
+    /// `ECONOMY`, delegated to the economy service and answered on a
+    /// later tick) — the handler body is the game's (the future
+    /// `Game::handle_request`), resolved against this room's
+    /// player→entity table and its economy handle.
     fn handle_request(
         &mut self,
         world: &mut World,
         _ctx: &TickCtx,
         req: &gsb_core::rpc::RpcRequest,
     ) -> Option<RequestDecision> {
-        match req.op {
-            op::ABILITY => {
-                let Ok(use_msg) = <crate::game::AbilityUse as Message>::decode(&req.payload[..])
-                else {
-                    return Some(RequestDecision::Reject(
-                        "undecodable AbilityUse payload".into(),
-                    ));
-                };
-                let Some(entity) = self.player_entity.get(&req.player).copied() else {
-                    return Some(RequestDecision::Reject(
-                        "no entity for this connection".into(),
-                    ));
-                };
-                let Ok(he) = world.get_entity(entity) else {
-                    return Some(RequestDecision::Reject("entity already gone".into()));
-                };
-                let Some(pos) = he.get::<Position>().copied() else {
-                    return Some(RequestDecision::Reject("entity has no position".into()));
-                };
-                // Room-local validation (a demo rule: the ability reaches
-                // 10 world units). Runs synchronously in this tick.
-                let dx = use_msg.x as f32 - pos.x;
-                let dy = use_msg.y as f32 - pos.y;
-                const RANGE: f32 = 10.0;
-                if dx * dx + dy * dy > RANGE * RANGE {
-                    return Some(RequestDecision::Reject(format!(
-                        "target out of range ({} > {RANGE})",
-                        (dx * dx + dy * dy).sqrt()
-                    )));
-                }
-                // The effect: a real mutation, applied in this tick (it
-                // rides the same tick's snapshot out to the group).
-                world.entity_mut(entity).insert(MoveTarget {
-                    x: use_msg.x as f32,
-                    y: use_msg.y as f32,
-                });
-                let res = crate::game::AbilityResult {
-                    ok: true,
-                    reason: String::new(),
-                };
-                Some(RequestDecision::Reply(res.encode_to_vec().into()))
-            }
-            op::ECONOMY => {
-                let Ok(buy) = <crate::game::BuyItem as Message>::decode(&req.payload[..]) else {
-                    return Some(RequestDecision::Reject(
-                        "undecodable BuyItem payload".into(),
-                    ));
-                };
-                let Some(economy) = self.economy.clone() else {
-                    return Some(RequestDecision::Reject(
-                        "economy service not configured".into(),
-                    ));
-                };
-                // The room captures a CLONE of the service handle (a
-                // cheap sender clone) — the future owns everything it
-                // needs and borrows nothing from the room (see the
-                // `RequestDecision::External` contract).
-                let fut = async move {
-                    match economy.buy(buy.kind).await {
-                        Ok(price) => {
-                            let res = crate::game::BuyResult {
-                                ok: true,
-                                reason: String::new(),
-                                price,
-                            };
-                            Ok(res.encode_to_vec().into())
-                        }
-                        Err(reason) => Err(reason),
-                    }
-                };
-                Some(RequestDecision::External(Box::pin(fut)))
-            }
-            // Not a request op this logic handles: the core answers with
-            // a normal "no handler" rejection (no waiting on a timeout).
-            _ => None,
-        }
+        seam::handle_request(&self.player_entity, self.economy.as_ref(), world, req)
     }
 
     /// The demo's match result (the control plane's result seam, feature
@@ -318,11 +234,11 @@ impl GameLogic<World> for OpenRoom {
     /// `WorldSnapshot` message (the platform's adapter decodes it
     /// against the same schema it uses for live snapshots).
     fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
-        let mut entities: Vec<crate::game::EntityRecord> = Vec::new();
+        let mut entities: Vec<seam::EntityRecord> = Vec::new();
         {
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
-                entities.push(crate::game::EntityRecord {
+                entities.push(seam::EntityRecord {
                     entity: wire_id.get(),
                     x: pos.x as i32,
                     y: pos.y as i32,
@@ -330,7 +246,7 @@ impl GameLogic<World> for OpenRoom {
             }
         }
         entities.sort_by_key(|e| e.entity);
-        let snap = crate::game::WorldSnapshot {
+        let snap = seam::WorldSnapshot {
             // The shutdown snapshot has no live ticker: sequence 0 marks
             // "terminal" (live snapshots are strictly positive ticks).
             sequence: 0,

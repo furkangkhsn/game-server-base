@@ -6,7 +6,8 @@
 use super::*;
 use std::time::Duration;
 
-use crate::components::*;
+use crate::kit::identity::*;
+use crate::kit::seam::*;
 use bevy_ecs::prelude::*;
 use gsb_core::id::RoomId;
 use gsb_core::id::{ConnectionId, PlayerId};
@@ -48,7 +49,7 @@ fn snapshot_emits_on_plain_position_write() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out2),
         "a plain position write must still emit"
     );
-    let snap = crate::game::WorldSnapshot::decode(out2.as_ref()).expect("decode");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out2.as_ref()).expect("decode");
     assert_eq!(snap.entities.len(), 1);
     assert_eq!(snap.entities[0].x, 42);
     assert_eq!(snap.entities[0].y, -7);
@@ -132,7 +133,7 @@ fn wire_identity_survives_ecs_slot_reuse() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out),
         "join emits"
     );
-    let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("decode");
     assert_eq!(snap.entities.len(), 1);
     let rec = &snap.entities[0];
     assert_eq!(rec.entity, wire_id, "snapshot carries the fresh wire id");
@@ -180,7 +181,7 @@ fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out),
         "a new entity is a wire-content change ⇒ emit"
     );
-    let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("decode");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("decode");
     assert_eq!(
         snap.entities.len(),
         3,
@@ -224,7 +225,7 @@ fn entity_spawned_outside_on_join_is_broadcast_with_fresh_wire_id() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
         "movement ⇒ wire content changed ⇒ emit"
     );
-    let snap3 = crate::game::WorldSnapshot::decode(out3.as_ref()).expect("decode");
+    let snap3 = crate::kit::seam::WorldSnapshot::decode(out3.as_ref()).expect("decode");
     let rec3 = snap3
         .entities
         .iter()
@@ -269,6 +270,6 @@ fn snapshot_silent_when_wire_content_unchanged() {
         room.snapshot(&mut world, &ctx, &(), &[], &mut out3),
         "leave ⇒ wire content changed ⇒ emit"
     );
-    let snap = crate::game::WorldSnapshot::decode(out3.as_ref()).expect("decode");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out3.as_ref()).expect("decode");
     assert!(snap.entities.is_empty(), "left: empty world snapshot");
 }

@@ -5,6 +5,7 @@
 
 pub(crate) mod common;
 pub mod identity;
+pub mod room;
 pub(crate) mod seam;
 
 /// The demo rooms' default disconnect-park grace (RECONNECT §3): how

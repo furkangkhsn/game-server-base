@@ -37,8 +37,22 @@ pub(crate) use crate::demo::input::ingest;
 // Game::bot_actions: the bot's synthesized wander input.
 pub(crate) use crate::demo::bot::synthesize_bot_moves;
 
+// Game::handle_request: the ABILITY / ECONOMY request handlers …
+pub(crate) use crate::demo::rpc::handle_request;
+
+// … and the economy service handle they delegate to (a room field today;
+// Game state in phase 1).
+pub(crate) use crate::demo::economy::EconomyService;
+
+// Game::spawn_player's configuration: the default spawn map half-size
+// the room constructors fall back to.
+pub(crate) use crate::demo::spawn::DEFAULT_SPAWN_HALF;
+
+// Game::SNAPSHOT_OP / Game::PRIVATE_OP: the frame opcodes.
+pub(crate) use crate::demo::op::{PRIVATE, WORLD_SNAPSHOT};
+
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────
 
 // The snapshot / private-frame envelopes and the input ack: generated
 // from the demo's game.proto today; the kit proto owns them in phase 2.
-pub(crate) use crate::demo::game::{InputAck, Private, private};
+pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};

@@ -93,10 +93,9 @@ use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
 use gsb_ecs::SystemRunner;
 
-use crate::economy::EconomyService;
 use crate::kit::common::ParkEntry;
-
-pub use crate::demo::spawn::{DEFAULT_SPAWN_HALF, spawn_pos};
+use crate::kit::seam;
+use crate::kit::seam::EconomyService;
 
 /// The open-visibility strategy room (`GroupKey = ()`): one moving entity
 /// per player, free 2D movement — everyone sees everything (the
@@ -116,7 +115,7 @@ pub struct OpenRoom {
     /// **only** writer is [`crate::kit::common::next_serial`] — the single
     /// minting point for every [`WireId`] this room ever stamps.
     next_wire_id: u64,
-    /// Half-size of the square spawn map (see [`spawn_pos`]): entities
+    /// Half-size of the square spawn map (see the demo's `spawn_pos`): entities
     /// spawn uniformly in `[-half, half]²`. Configuration, not a
     /// strategy decision — the demo map has no walls, so the map is as
     /// big as the game wants it (a load profile's "wide map" is just a
@@ -142,7 +141,7 @@ pub struct OpenRoom {
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
     /// The economy service handle (the RPC pattern's external-I/O half,
-    /// see `crate::economy`); `None` = the room answers `ECONOMY`
+    /// the demo's economy service); `None` = the room answers `ECONOMY`
     /// requests with a normal rejection ("not configured"). A real
     /// deployment always has one (the platform's economy is the thing
     /// the request is delegated to).
@@ -167,7 +166,7 @@ impl OpenRoom {
     /// Build the open room over the default 100×100 arena (bit-identical
     /// spawn distribution to the pre-config rooms).
     pub fn new() -> Self {
-        Self::with_spawn_half(DEFAULT_SPAWN_HALF)
+        Self::with_spawn_half(seam::DEFAULT_SPAWN_HALF)
     }
 
     /// Build the open room over a square spawn map of half-size `half`
@@ -177,7 +176,7 @@ impl OpenRoom {
     /// map.
     pub fn with_spawn_half(half: f32) -> Self {
         Self {
-            runner: crate::kit::seam::movement_runner(),
+            runner: seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
             next_wire_id: 0,
@@ -202,7 +201,7 @@ impl OpenRoom {
     }
 
     /// Attach the economy service handle (the RPC pattern's external-I/O
-    /// half; see `crate::economy`). The room delegates `ECONOMY`
+    /// half; the demo's economy service). The room delegates `ECONOMY`
     /// requests to it; the answer arrives on a later tick through the
     /// room's completion channel.
     pub fn with_economy(mut self, economy: EconomyService) -> Self {

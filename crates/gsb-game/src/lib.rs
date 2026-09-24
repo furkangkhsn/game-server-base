@@ -41,7 +41,6 @@ mod kit;
 
 pub mod aoi;
 pub mod pvs;
-pub mod room;
 pub mod sharded;
 pub mod team;
 
@@ -55,6 +54,13 @@ pub mod team;
 
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
+
+/// The open-visibility room and the demo's spawn distribution
+/// (compatibility path).
+pub mod room {
+    pub use crate::demo::spawn::{DEFAULT_SPAWN_HALF, spawn_pos};
+    pub use crate::kit::room::OpenRoom;
+}
 
 /// ECS components of the demo game (compatibility path: the demo's
 /// components plus the kit-owned [`WireId`](components::WireId)).
