@@ -45,6 +45,7 @@ pub(super) struct WsReader {
     scratch: Vec<u8>,
     buf: BytesMut,
     max_message_bytes: usize,
+    mapping: WsMessageMapping,
     ctrl: mpsc::Sender<WsOut>,
     /// Set as soon as this connection has queued a close frame, so the
     /// writer pump's teardown never emits a second one.
@@ -58,6 +59,7 @@ impl WsReader {
     pub(super) fn new(
         sock: OwnedReadHalf,
         max_message_bytes: usize,
+        mapping: WsMessageMapping,
         ctrl: mpsc::Sender<WsOut>,
         closing: Arc<AtomicBool>,
     ) -> Self {
@@ -66,6 +68,7 @@ impl WsReader {
             scratch: vec![0u8; READ_CHUNK],
             buf: BytesMut::with_capacity(READ_CHUNK),
             max_message_bytes,
+            mapping,
             ctrl,
             closing,
             frag_opcode: None,

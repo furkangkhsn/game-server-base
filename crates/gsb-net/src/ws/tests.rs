@@ -30,6 +30,7 @@ use client::*;
 mod close_frames;
 mod fragmentation;
 mod framing;
+mod opaque;
 mod protocol;
 mod queue;
 mod rig;
@@ -65,7 +66,19 @@ async fn serve_echo(idle_timeout: Option<Duration>) -> SocketAddr {
 
 /// Same, with an explicit message-size ceiling.
 async fn serve_echo_max(max_message_bytes: usize, idle_timeout: Option<Duration>) -> SocketAddr {
-    let transport: Arc<dyn Transport> = Arc::new(WsTransport { max_message_bytes });
+    serve_echo_with(
+        WsTransport {
+            max_message_bytes,
+            mapping: WsMessageMapping::GameEnvelope,
+        },
+        idle_timeout,
+    )
+    .await
+}
+
+/// Same, over any transport configuration.
+async fn serve_echo_with(transport: WsTransport, idle_timeout: Option<Duration>) -> SocketAddr {
+    let transport: Arc<dyn Transport> = Arc::new(transport);
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     let listener = transport.bind(addr).await.expect("bind");
     let addr = listener.local_addr().expect("local addr");

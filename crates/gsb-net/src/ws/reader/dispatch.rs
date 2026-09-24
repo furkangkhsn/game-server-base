@@ -14,8 +14,12 @@ use crate::ws::*;
 
 impl super::WsReader {
     /// Map one assembled data message onto the wire contract: exactly one
-    /// length-prefixed game frame per binary message.
+    /// length-prefixed game frame per binary message. (The conformance
+    /// harness's opaque mapping hands the message over whole instead.)
     fn deliver(&mut self, msg: Bytes) -> io::Result<Step> {
+        if self.mapping == WsMessageMapping::Opaque {
+            return Ok(Step::Yield(FrameBody::new(0, msg)));
+        }
         if msg.len() < 4 {
             return Err(self.proto_fail(
                 1007,

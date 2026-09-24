@@ -24,7 +24,8 @@ use crate::ws::*;
 
 /// Outbound work for the single socket-writer task.
 pub(super) enum WsOut {
-    /// One complete game frame's `[u32 LE len][op][payload]` envelope, to
+    /// One complete game frame's `[u32 LE len][op][payload]` envelope (or,
+    /// under the opaque mapping, the bare payload), to
     /// go out as ONE unmasked FIN binary message (the WS frame layer is
     /// applied here, at the only place that touches the socket).
     Game(Bytes),
@@ -102,6 +103,7 @@ async fn ws_writer_task(
 /// (with the stall clock off: forever).
 pub(super) struct WsWriter {
     tx: PollSender<WsOut>,
+    mapping: WsMessageMapping,
     closing: Arc<AtomicBool>,
     /// Bytes the socket-writer task has written (it is the only writer;
     /// this side only reads). See [`WriteProgress`] below.
@@ -113,11 +115,13 @@ impl WsWriter {
     /// `closing` is shared with the read path.
     pub(super) fn new(
         tx: mpsc::Sender<WsOut>,
+        mapping: WsMessageMapping,
         closing: Arc<AtomicBool>,
         written: Arc<AtomicU64>,
     ) -> Self {
         Self {
             tx: PollSender::new(tx),
+            mapping,
             closing,
             written,
         }
@@ -151,9 +155,13 @@ impl Sink<FrameBody> for WsWriter {
     fn start_send(self: Pin<&mut Self>, item: FrameBody) -> io::Result<()> {
         // Spends the slot `poll_ready` reserved. Without one (a caller
         // that skipped `poll_ready`) this is an error, never a panic.
-        self.get_mut()
-            .tx
-            .send_item(WsOut::Game(encode_game_envelope(&item)))
+        let this = self.get_mut();
+        let message = match this.mapping {
+            WsMessageMapping::GameEnvelope => encode_game_envelope(&item),
+            WsMessageMapping::Opaque => item.payload,
+        };
+        this.tx
+            .send_item(WsOut::Game(message))
             .map_err(|_| writer_gone())
     }
 

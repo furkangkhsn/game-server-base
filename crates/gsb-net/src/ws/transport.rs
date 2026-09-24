@@ -36,19 +36,42 @@ pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 #[derive(Clone)]
 pub struct WsTransport {
     pub max_message_bytes: usize,
+    /// How a binary message maps to a frame. Every server door uses
+    /// [`WsMessageMapping::GameEnvelope`] — the wire contract.
+    pub mapping: WsMessageMapping,
 }
 
 impl Default for WsTransport {
     fn default() -> Self {
         Self {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            mapping: WsMessageMapping::GameEnvelope,
         }
     }
+}
+
+/// How one WS binary message maps to a [`gsb_protocol::FrameBody`]. Only
+/// the message layer differs: framing, fragmentation, control frames, the
+/// close handshake and every rejection are the same code either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WsMessageMapping {
+    /// The gsb wire contract (module docs): each message is exactly one
+    /// `[u32 LE len][u16 LE op][payload]` envelope, validated (1007).
+    #[default]
+    GameEnvelope,
+    /// The whole message is an opaque payload: inbound it becomes a frame
+    /// with op 0, outbound a frame's payload is sent as the message and
+    /// its op is dropped. It exists for the RFC 6455 conformance harness
+    /// (`examples/ws_autobahn.rs`): the Autobahn fuzzing client checks
+    /// echoes of arbitrary binary payloads, which the envelope would
+    /// refuse. Server configuration cannot select it.
+    Opaque,
 }
 
 pub(super) struct WsListenerHandle {
     listener: TcpListener,
     max_message_bytes: usize,
+    mapping: WsMessageMapping,
 }
 
 impl Transport for WsTransport {
@@ -62,6 +85,7 @@ impl Transport for WsTransport {
             Ok(Arc::new(WsListenerHandle {
                 listener,
                 max_message_bytes: self.max_message_bytes,
+                mapping: self.mapping,
             }) as Arc<dyn Listener>)
         })
     }
@@ -112,6 +136,7 @@ impl WsListenerHandle {
         peer: SocketAddr,
     ) -> Endpoint {
         let max_message_bytes = self.max_message_bytes;
+        let mapping = self.mapping;
         Endpoint::new(
             move |conn: ConnectionId,
                   in_tx: Mailbox<ConnIn>,
@@ -126,10 +151,11 @@ impl WsListenerHandle {
                 let reader = WsReader::new(
                     read_half,
                     max_message_bytes,
+                    mapping,
                     queue_tx.clone(),
                     closing.clone(),
                 );
-                let writer = WsWriter::new(queue_tx, closing, written);
+                let writer = WsWriter::new(queue_tx, mapping, closing, written);
                 let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },

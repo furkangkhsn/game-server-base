@@ -34,6 +34,10 @@ impl ReaderRig {
     }
 
     pub(super) async fn with_max(max_message_bytes: usize) -> Self {
+        Self::with(max_message_bytes, WsMessageMapping::GameEnvelope).await
+    }
+
+    pub(super) async fn with(max_message_bytes: usize, mapping: WsMessageMapping) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let client = TcpStream::connect(addr).await.expect("connect");
@@ -43,6 +47,7 @@ impl ReaderRig {
         let reader = WsReader::new(
             read_half,
             max_message_bytes,
+            mapping,
             tx,
             Arc::new(AtomicBool::new(false)),
         );

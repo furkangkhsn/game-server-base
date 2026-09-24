@@ -20,6 +20,7 @@ use gsb_net::tcp::TcpTransport;
 use gsb_net::tls::{TlsTransport, TlsTransportConfig};
 use gsb_net::transport::Transport;
 use gsb_net::udp::{UdpTransport, UdpTransportConfig};
+use gsb_net::ws::WsMessageMapping;
 use gsb_net::ws::WsTransport;
 use gsb_protocol::MessageTable;
 
@@ -219,6 +220,9 @@ pub(super) async fn bind_listener(
             // overrides would fork the pipeline's semantics per door
             // (see `ListenerEntry`).
             max_message_bytes: cfg.max_frame_bytes.saturating_add(4),
+            // The wire contract; the opaque mapping is the conformance
+            // harness's alone and is not reachable from configuration.
+            mapping: WsMessageMapping::GameEnvelope,
         }),
     };
     let listener = transport.bind(spec.addr()).await?;

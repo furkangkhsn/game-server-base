@@ -63,7 +63,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use transport::{DEFAULT_MAX_MESSAGE_BYTES, WsTransport};
+pub use transport::{DEFAULT_MAX_MESSAGE_BYTES, WsMessageMapping, WsTransport};
 
 // Re-homed internals, named here so every child reaches them by one path.
 use frame::{RawFrame, apply_mask, encode_game_envelope, encode_server_frame};
