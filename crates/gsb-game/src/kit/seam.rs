@@ -7,7 +7,18 @@
 //! deleted.
 //!
 //! The rule is locked by a source-scanning unit test
-//! (`crate::layering`), not only by review.
+//! (`crate::layering`), not only by review: under `kit/`, every `crate::`
+//! path outside this file continues with `kit::`, and `crate::demo`
+//! appears in this file only. The same check by hand:
+//!
+//! ```text
+//! grep -rn "crate::demo" crates/gsb-game/src/kit   # → only kit/seam.rs
+//! ```
+//!
+//! Some §4 seams have no entry of their own: they consume `Position`
+//! (listed once, under RecordCodec) and nothing else from the game — the
+//! kit-side machinery behind them (the 2D cell grid, the vision grid, the
+//! shard grid) is the future §7 preset and already lives in the kit.
 
 // ── RecordCodec (§4.1) ───────────────────────────────────────────────────
 
@@ -27,6 +38,13 @@ pub(crate) use crate::demo::wire::StripPos;
 // CellSpace::encode_cell: the typed body of a `CellExit` record.
 pub(crate) use crate::demo::game::CellExit;
 
+// ── Vision (§4.2) ────────────────────────────────────────────────────────
+
+// (no entry) The team room reads `Position` as `Vision::Pos`; its vision
+// grid (`grid_cell`, `VISION_OFFSETS`, the squared-distance test) is the
+// future `Grid2` preset and is kit code already. The team assignment rule
+// is a Game hook (below).
+
 // ── SectorMap (§4.2) ─────────────────────────────────────────────────────
 
 // SectorMap::Sector: the sector key (the sector room's GroupKey) and the
@@ -39,6 +57,13 @@ pub(crate) use crate::demo::sectors::sector_of;
 // SectorMap::visible_from: the static visibility table (a u16 bitmask per
 // sector today; §8.4 notes its 16-sector ceiling).
 pub(crate) use crate::demo::sectors::VISIBLE_FROM;
+
+// ── Partition (§4.2) ─────────────────────────────────────────────────────
+
+// (no entry) The sharded rooms read `Position` as `Partition::Pos`; the
+// grid partition itself (`grid_shape`, `shard_at`, the neighbour list,
+// the border frame) is the future `GridPartition2` preset and is kit code
+// already. The border strip's payload is `RecordCodec::Wire` (above).
 
 // ── Game hooks (§4.3) ────────────────────────────────────────────────────
 
@@ -78,6 +103,13 @@ pub(crate) use crate::demo::spawn::DEFAULT_SPAWN_HALF;
 
 // Game::SNAPSHOT_OP / Game::PRIVATE_OP: the frame opcodes.
 pub(crate) use crate::demo::op::{PRIVATE, WORLD_SNAPSHOT};
+
+// ── Identity (§4.4) ──────────────────────────────────────────────────────
+
+// (no entry) `WireId` moved into the kit in phase 0 (`kit::identity`);
+// what remains for phase 1 is kit-internal: one `Minter`
+// (sequential / range) replacing `next_serial` and the sharded rooms'
+// direct `WireId::new` calls (§8.1).
 
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────
 

@@ -33,11 +33,32 @@
 //! sharding design and the wire-id range partitioning.
 //!
 //! Everything the rooms share that is *not* a visibility-strategy
-//! decision (identity minting, the connection table, input ingestion, the
-//! system run, orphan stamping) lives in [`common`], once.
+//! decision (identity minting, the connection table, the input seq/ack
+//! rule, the system run, orphan stamping, the cell-delta engine, park
+//! bookkeeping) lives once, in the kit's `common` module.
+//!
+//! ## Layout: `kit` and `demo` (KIT-ARCHITECTURE §10, phase 0)
+//!
+//! The source is split in two private modules ahead of the crate split
+//! (`gsb-kit` / `gsb-demo`, phase 2):
+//!
+//! - `kit` — the reusable strategies and machinery: the five rooms, the
+//!   cell-delta engine, park/resume, the input sequence rule, wire
+//!   identity, the snapshot/`Private` framing.
+//! - `demo` — the example game: components, movement, the wire messages
+//!   and opcodes, the spawn distribution, input decoding, the bot, the
+//!   RPC handlers and the economy service, the PVS map.
+//!
+//! The kit still calls into the demo in places (phase 1 inverts that
+//! dependency); every such call goes through ONE module, `kit::seam`,
+//! whose contents are the phase-1 work list. A unit test (`layering`)
+//! locks the rule. The public paths below are unchanged.
 
 mod demo;
 mod kit;
+
+#[cfg(test)]
+mod layering;
 
 // ── Compatibility paths (phase 0) ─────────────────────────────────────────
 //
