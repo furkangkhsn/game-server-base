@@ -6,7 +6,7 @@ use bevy_ecs::prelude::{Entity, World};
 
 use crate::demo::components::{MoveTarget, Position, Speed};
 use crate::demo::play::DemoGame;
-use crate::kit::game::ShardGame;
+use gsb_kit::game::ShardGame;
 
 /// The demo's migrating game state (`ShardGame::Mig`): everything a
 /// demo entity carries in its components. The kit wraps it with its own

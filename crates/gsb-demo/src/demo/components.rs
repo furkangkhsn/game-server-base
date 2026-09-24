@@ -1,12 +1,12 @@
 //! ECS components of the demo game.
 //!
 //! The wire identity (`WireId`) is not here: identity is kit-owned
-//! (KIT-ARCHITECTURE §4.4) and lives in `crate::kit::identity`; the
+//! (KIT-ARCHITECTURE §4.4) and lives in `gsb_kit::identity`; the
 //! public `gsb_demo::components` path still re-exports it.
 
 use bevy_ecs::prelude::Component;
 
-use crate::kit::space::Planar;
+use gsb_kit::space::Planar;
 
 /// Position on the 2D map plane (world units).
 #[derive(Debug, Clone, Copy, PartialEq, Default, Component)]

@@ -742,6 +742,9 @@ dependencies = [
 name = "gsb-kit"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
+ "bytes",
+ "gsb-core",
  "gsb-lint",
  "gsb-protocol",
  "prost",

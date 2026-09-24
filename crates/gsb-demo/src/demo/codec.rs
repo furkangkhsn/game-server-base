@@ -11,7 +11,7 @@ use prost::Message;
 use crate::demo::components::Position;
 use crate::demo::game::EntityRecord;
 use crate::demo::wire::StripPos;
-use crate::kit::codec::RecordCodec;
+use gsb_kit::codec::RecordCodec;
 
 /// The demo's record codec — a zero-sized value: the quantization is
 /// fixed (truncation to the integer wire lattice), so there is no
@@ -50,7 +50,7 @@ mod tests {
 
     use super::*;
     use crate::demo::game::CellExit;
-    use crate::kit::space::{Cell, CellSpace, Grid2};
+    use gsb_kit::space::{Cell, CellSpace, Grid2};
 
     const SAMPLES: [i32; 9] = [0, 1, -1, 63, -64, 64, 1_000, -70_000, i32::MIN];
 

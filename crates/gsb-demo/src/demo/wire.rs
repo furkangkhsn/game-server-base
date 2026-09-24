@@ -3,7 +3,7 @@
 //! strip (`RecordCodec::Wire`, KIT-ARCHITECTURE §4.1: the sharded
 //! `Strip` IS the game's wire value).
 
-use crate::kit::space::Planar;
+use gsb_kit::space::Planar;
 
 /// The demo's wire value ([`DemoCodec`](crate::demo::codec::DemoCodec)'s
 /// `Wire`) and, identically, its visibility-strip payload

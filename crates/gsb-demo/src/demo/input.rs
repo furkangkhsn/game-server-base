@@ -11,7 +11,7 @@ use prost::Message;
 
 use crate::demo::components::MoveTarget;
 use crate::demo::op;
-use crate::kit::common::InputSeq;
+use gsb_kit::game::InputSeq;
 
 /// `MOVE_TO` ingestion, shared by all rooms: decode the game message,
 /// guard against stale actions (connection not in the room) and vanished

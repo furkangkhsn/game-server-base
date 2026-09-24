@@ -8,8 +8,8 @@ use gsb_core::shard::{BorderRecord, ShardLogic};
 use super::*;
 use crate::aoi::Cell;
 use crate::demo::wire::StripPos;
-use crate::kit::space::{CellSpace, Grid2};
 use crate::sharded::{ShardedRoom, ShardedSpatialRoom};
+use gsb_kit::space::{CellSpace, Grid2};
 
 /// A client-view accumulator with FULL/DELTA application semantics
 /// (upserts, per-entity removals, whole-cell forgets) — what an

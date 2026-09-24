@@ -9,14 +9,13 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::rpc::{RequestDecision, RpcRequest};
-use gsb_ecs::SystemRunner;
+use gsb_ecs::{SystemCtx, SystemRunner};
 
 use crate::demo::codec::DemoCodec;
 use crate::demo::economy::EconomyService;
 use crate::demo::{bot, input, op, rpc, spawn, systems};
-use crate::kit::common::{InputSeq, run_systems};
-use crate::kit::game::{Game, TeamGame};
-use crate::kit::team::Team;
+use gsb_kit::game::{Game, InputSeq, TeamGame};
+use gsb_kit::team::Team;
 
 /// The demo game: one moving entity per player on a square 2D map, free
 /// movement toward the latest `MOVE_TO` target, two request kinds
@@ -104,8 +103,14 @@ impl Game for DemoGame {
         input::ingest(players, world, actions, seq);
     }
 
+    /// The demo's system stack, single-threaded and ordered (the room
+    /// actor is the only owner of the world).
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
-        run_systems(&mut self.runner, world, ctx);
+        let sys_ctx = SystemCtx {
+            tick: ctx.tick,
+            dt: ctx.dt.as_secs_f32(),
+        };
+        self.runner.run_all(world, &sys_ctx);
     }
 
     fn handle_request(

@@ -123,7 +123,7 @@ message Private {
   //
   // The field number (3) and the LEN wire type are unchanged by the
   // envelope's move from `gsb.game` to `gsb.base`: the AOI one-shot
-  // path hand-encodes this tag (`aoi/logic.rs`, `0x1A`), and
+  // path hand-encodes this tag (gsb-kit's `aoi/logic.rs`, `0x1A`), and
   // `gsb-demo/tests/wire_contract.rs` locks the bytes.
   repeated gsb.base.RpcResponse responses = 3;
 }

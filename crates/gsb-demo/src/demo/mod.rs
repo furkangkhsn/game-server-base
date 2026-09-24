@@ -1,4 +1,4 @@
-//! The example game (KIT-ARCHITECTURE §3: the future `gsb-demo`).
+//! The example game (KIT-ARCHITECTURE §3).
 //!
 //! Everything here is a *game* decision in the §2 sense — "what the bytes
 //! are and how the game plays": the components and the 2D position type,
@@ -7,12 +7,11 @@
 //! border, input decoding, the bot's wander, the RPC request handlers
 //! and the economy service they delegate to, the PVS map data.
 //!
-//! The demo uses the kit (`crate::kit`) — that is the dependency
-//! direction: it implements the kit's seams (`DemoGame`: `Game`,
-//! `TeamGame`, `ShardGame`; `DemoCodec`; `Planar` for `Position` and
-//! `StripPos`) and instantiates the kit's rooms with them (`rooms`).
-//! The only reverse references are the kit's envelope types, generated
-//! from this module's `game.proto` until phase 2 (`crate::kit::seam`).
+//! The demo uses the kit (`gsb_kit`) — that is the dependency direction:
+//! it implements the kit's seams (`DemoGame`: `Game`, `TeamGame`,
+//! `ShardGame`; `DemoCodec`; `Planar` for `Position` and `StripPos`) and
+//! instantiates the kit's rooms with them (`rooms`). The kit never sees
+//! this crate (it is a separate crate that depends on nothing here).
 
 pub(crate) mod bot;
 pub mod codec;

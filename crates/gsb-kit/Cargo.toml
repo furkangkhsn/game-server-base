@@ -17,10 +17,17 @@ build = "build.rs"
 links = "gsb-kit-proto"
 
 # The kit never depends on a game (KIT-ARCHITECTURE §3: "kit, demo'yu
-# asla görmez") — not even as a dev-dependency.
+# asla görmez") — not even as a dev-dependency: its tests run their own
+# fixture game (`src/testing/`), and `src/manifest.rs` fails if any table
+# below names a `gsb-*` crate that is not an engine crate. (A normal
+# dependency on a game is a cargo cycle anyway; a dev-dependency cycle is
+# accepted by cargo and would build a second copy of the kit.)
 [dependencies]
+gsb-core = { workspace = true }
 gsb-protocol = { workspace = true }
+bevy_ecs = { workspace = true }
 prost = { workspace = true }
+bytes = { workspace = true }
 
 [build-dependencies]
 gsb-lint = { workspace = true }

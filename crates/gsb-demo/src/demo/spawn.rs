@@ -5,7 +5,7 @@
 use gsb_core::id::ConnectionId;
 
 use crate::demo::components::{DEFAULT_SPEED, Position, Speed};
-use crate::kit::team::Team;
+use gsb_kit::team::Team;
 
 /// The default spawn map half-size (world units): the historical 100×100
 /// arena. A room built with it spawns bit-identically to the pre-config
@@ -47,7 +47,7 @@ pub const TEAM_COUNT: u8 = 2;
 /// The join-time team *assignment rule* (the demo: conn parity, i.e.
 /// "signup order" — team 0, 1, 0, 1, …). This decides what the team
 /// room's `on_join` *writes* into the entity's
-/// [`TeamMember`](crate::kit::team::TeamMember); it is not
+/// [`TeamMember`](gsb_kit::team::TeamMember); it is not
 /// consulted again afterwards (runtime team changes are component
 /// writes, and `group_of` reads the world, not this function). The
 /// demo's `TeamGame::team_of` (KIT-ARCHITECTURE §4.3).

@@ -20,8 +20,8 @@ use prost::Message;
 
 use crate::demo::components::{DEFAULT_SPEED, Position, Speed};
 use crate::demo::game::WorldSnapshot;
-use crate::kit::identity::WireId;
 use crate::prelude::*;
+use gsb_kit::identity::WireId;
 
 mod aoi;
 mod open;

@@ -25,12 +25,12 @@ use crate::demo::economy::EconomyService;
 use crate::demo::play::DemoGame;
 use crate::demo::sectors::demo_map;
 use crate::demo::spawn::DEFAULT_SPAWN_HALF;
-use crate::kit::aoi::AoiRoom;
-use crate::kit::pvs::SectorRoom;
-use crate::kit::room::OpenRoom;
-use crate::kit::sharded::{ShardedRoom, ShardedSpatialRoom};
-use crate::kit::space::{ConvexSectors2, Grid2, GridPartition2, VisionGrid2};
-use crate::kit::team::TeamRoom;
+use gsb_kit::aoi::AoiRoom;
+use gsb_kit::pvs::SectorRoom;
+use gsb_kit::room::OpenRoom;
+use gsb_kit::sharded::{ShardedRoom, ShardedSpatialRoom};
+use gsb_kit::space::{ConvexSectors2, Grid2, GridPartition2, VisionGrid2};
+use gsb_kit::team::TeamRoom;
 
 /// The demo's constructors for the open-visibility room
 /// (`OpenRoom<DemoGame>`).

@@ -29,7 +29,7 @@
 //!   never leak into the map's visibility.
 
 use crate::demo::components::Position;
-use crate::kit::space::{ConvexSectors2, Sector};
+use gsb_kit::space::{ConvexSectors2, Sector};
 
 /// The hand-written sectors of the demo map (module docs, "The map"):
 /// convex polygons, counter-clockwise, tiling the [-50, 50]² arena.
@@ -92,7 +92,7 @@ pub fn demo_map() -> ConvexSectors2<Position> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::space::SectorMap;
+    use gsb_kit::space::SectorMap;
 
     /// The demo's named out-of-map sector is the preset's containment
     /// sector.
