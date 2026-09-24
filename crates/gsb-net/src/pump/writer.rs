@@ -22,10 +22,10 @@
 //! still gets one window in total, not N: only bytes restart it.
 
 mod op;
+mod verdict;
 
 use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -36,6 +36,7 @@ use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
 use op::Op;
+use verdict::Verdict;
 
 /// How one awaited sink operation ended.
 enum Step {
@@ -93,7 +94,9 @@ where
 ///
 /// `in_tx` is the connection actor's mailbox — an IN-PROCESS channel.
 /// That is the whole point: when this pump has a verdict to deliver, the
-/// socket is the one thing that cannot carry it. The actor then runs its
+/// socket is the one thing that cannot carry it. One slot of it is
+/// reserved here, before the task starts ([`verdict`]): the verdict must
+/// land even when the mailbox is full. The actor then runs its
 /// ORDINARY teardown (the `ServerClosed` arm: final metrics flush,
 /// `RegistryMsg::ConnClosed`, registry/room release), so the death is
 /// indistinguishable from any other end of session.
@@ -111,6 +114,7 @@ where
     Writer:
         futures::Sink<FrameBody, Error = std::io::Error> + WriteProgress + Unpin + Send + 'static,
 {
+    let verdict = Verdict::reserve(in_tx, write_stall);
     tokio::spawn(async move {
         let mut sink = writer;
         let mut progress = Instant::now();
@@ -161,22 +165,20 @@ where
                      window; server ending the session"
                 );
                 // The verdict is POSTED before the outbound channel is
-                // closed, with a `try_send` that cannot park: the actor is
+                // closed, into the slot reserved at birth — synchronous,
+                // and it cannot fail on a full mailbox: the actor is
                 // typically parked on that full channel right now, and the
                 // close below wakes it with a failed send (`w_closing`) —
                 // at which point it looks in its mailbox for the reason
                 // (`adopt_pending_close`). Posting first means the reason
                 // is already there to find, so the close is counted as the
                 // write stall it is rather than as a bare dead outbound
-                // path. Only a FULL mailbox defers the post to the
-                // awaited send after the close (the pre-existing order).
-                let deferred = match in_tx.try_send(ConnIn::ServerClosed {
+                // path — overload included, where the mailbox is full of
+                // the client's frames (see [`verdict`]).
+                let deferred = verdict.post(ConnIn::ServerClosed {
                     cause: ServerClose::WriteStall,
                     reason,
-                }) {
-                    Err(TrySendError::Full(msg)) => Some(msg),
-                    Ok(()) | Err(TrySendError::Closed(_)) => None,
-                };
+                });
                 // Closing the outbound channel makes the actor's own next
                 // send fail fast instead of parking on a channel that is
                 // full precisely because this pump stopped draining it.
@@ -184,7 +186,9 @@ where
                 // NOT `sink.close()`: a graceful close flushes, and the
                 // socket is the thing that is stuck. The teardown must
                 // never need the peer to accept one more byte.
-                if let Some(msg) = deferred {
+                // Only when no slot could be reserved at birth: the
+                // pre-existing order (the verdict may miss the actor).
+                if let Some((in_tx, msg)) = deferred {
                     let _ = in_tx.send(msg).await;
                 }
             }

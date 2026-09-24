@@ -32,6 +32,9 @@
 
 mod writer;
 
+#[cfg(test)]
+mod tests;
+
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -115,6 +118,8 @@ where
     // The writer gets its OWN handle on the actor's mailbox: its verdict
     // travels that IN-PROCESS channel, never the socket — which is
     // precisely the thing that is stuck when it has a verdict to deliver.
+    // It reserves one slot of the mailbox before the reader can queue a
+    // frame, so the verdict lands even into a full mailbox.
     let write = writer::spawn(conn, writer, in_tx.clone(), out_rx, timeouts.write_stall);
     let idle_timeout = timeouts.idle;
 
