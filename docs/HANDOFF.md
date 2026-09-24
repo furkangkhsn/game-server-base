@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-419 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+433 test yeşil, clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -89,8 +89,23 @@ CHANGELOG "gsb-kit Faz 1a turu"): §4 trait'leri (`kit::codec`,
 `AoiRoom<G, S>` generic, demo `DemoGame`/`DemoCodec` ile uyguluyor.
 `WireId`'yi yalnız kit'in `Minter`'ı kurabilir. Generic bir odada
 `World::clear_trackers`'ı yalnız kit çağırır (`update` sonunda bir kez);
-bir `Game` kancası çağırırsa debug'da panik. Seam'de kalan her öğe
-tüketicisiyle etiketli = Faz 1b iş listesi (takım, PVS, sharded).
+bir `Game` kancası çağırırsa debug'da panik.
+
+**Faz 1b tamam — Faz 1 bitti** (KIT-ARCHITECTURE §4.6 ve §10 "Faz 1b
+sonucu", CHANGELOG "gsb-kit Faz 1b turu"): bütün odalar oyun üzerinden
+generic (`TeamRoom<G, V>`, `SectorRoom<G, M>`, `ShardedRoom<G, P>`,
+`ShardedSpatialRoom<G, P, S>`); strateji-özel oyun kancaları `Game`'in
+uzantılarında (`TeamGame`, `ShardGame`). Kit'in 2D ön-ayarları
+(`Grid2`, `VisionGrid2`, `ConvexSectors2`, `GridPartition2`) oyunun
+tiplerini yalnız `Planar` erişimcisiyle okur — yeni bir ön-ayara somut
+konum tipi sokma. §8.2–§8.5 kapandı; oyun kodunun despawn'ları
+silinen-bileşen tamponundan okunuyor, yani `clear_trackers`'ın tek
+sahibinin kit olması artık doğruluk şartı. Bütün kit odaları istekleri
+`Game::handle_request`'e yönlendirir. Seam'de test dışı yalnız kit
+zarfı (`Private`, `InputAck`) kaldı — Faz 2'de (crate bölmesi) kit
+proto'suna geçince seam silinir; o turda demo kurucularının kit
+tipleri üzerindeki inherent impl'leri de serbest fonksiyona / uzantı
+trait'ine dönmeli.
 
 ## ÖNCE OKU (sırayla)
 
@@ -182,6 +197,6 @@ tüketicisiyle etiketli = Faz 1b iş listesi (takım, PVS, sharded).
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 419 passed);
+--workspace` → tamamen yeşil (bugün itibarıyla 433 passed);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

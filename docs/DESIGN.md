@@ -925,7 +925,7 @@ ile seçilir (sunucu + `gsb-loadgen`):
 |----------|-----------|-------------------|-------|
 | `all` (varsayılan) | `()` (1 grup) | her entity her yerde | taban; eski davranış |
 | `spatial` | `Cell` (mekansal hücre) | 3×3 hücre bloğu (bu turdan itibaren delta kodlu — §8.1 "Delta yayın") | MMO/AOI (§8, önceki tur) |
-| `team` | `Team` (2 grup) | takım üyesi + menzildeki düşman (takım üyelik world state: `TeamMember` componenti; `group_of` world okur) | MOBA/takım sisli |
+| `team` | `Team` (takım başına 1 grup; demo 2 takım atar) | takım üyesi + menzildeki düşman (takım üyelik world state: `TeamMember` componenti; `group_of` world okur) | MOBA/takım sisli |
 | `pvs` | `Sector` (harita bölgesi) | statik görünürlük tablosu (elle convex sektörler) | FPS/PVS |
 
 Takım üyeliği **dünya içi bir oyun durumudur** (`TeamMember(Team)` componenti;

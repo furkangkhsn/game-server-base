@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 ve Faz 1a tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu"; derlenen imzalar §4.5). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0 ve Faz 1 (1a + 1b) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu"; derlenen imzalar §4.5, §4.6). Sıradaki: Faz 2 (crate bölmesi). Kararlar §12.**
 
 ## 1. Neden
 
@@ -287,6 +287,144 @@ seq)` public; `begin`/`end`/ack okuması kit-içi), `CellBook<W, C>`,
     diyordu; hücre anahtarı da genel (uzayın `Cell`'i). `CellPieces`
     yalnız hücre anahtarlı baytları tutuyor, `W`'ye ihtiyacı yok.
 
+### 4.6 Faz 1b: kalan seam'ler, konum erişimcisi ve sapmalar
+
+Faz 1b'de derlenen hâller (`kit/space.rs` + `kit/space/{vision,
+sectors,partition}.rs`, `kit/game.rs`, `kit/sharded/mod.rs`):
+
+```rust
+pub trait Planar {                                  // konum erişimcisi (aşağıda)
+    type Coord: Copy;
+    fn planar(&self) -> [Self::Coord; 2];
+}
+pub trait Vision: Send + 'static {                  // takım sisi — simülasyon konumu
+    type Pos: Component + Copy;
+    type Cell: Eq + Hash + Copy + Send + 'static;
+    fn cell(&self, pos: &Self::Pos) -> Self::Cell;
+    fn neighborhood(&self, cell: Self::Cell) -> impl Iterator<Item = Self::Cell>;
+    fn sees(&self, viewer: &Self::Pos, target: &Self::Pos) -> bool;
+}
+pub trait SectorMap: Send + 'static {               // PVS — statik harita verisi
+    type Pos: Component;
+    type Sector: Eq + Hash + Copy + Debug + Send + 'static;
+    fn sector_of(&self, pos: &Self::Pos) -> Self::Sector;
+    fn outside(&self) -> Self::Sector;
+    fn visible_from(&self, sector: Self::Sector) -> impl Iterator<Item = Self::Sector> + '_;
+}
+pub trait Partition<W>: Send + 'static {            // sharding — örnek verisi
+    type Pos: Component;
+    fn shard_count(&self) -> usize;
+    fn region_of(&self, pos: &Self::Pos) -> usize;
+    fn neighbors(&self, idx: usize) -> Vec<usize>;
+    fn exports(&self, idx: usize, pos: &Self::Pos) -> bool;
+    fn admits(&self, idx: usize, wire: &W) -> bool;
+}
+pub trait TeamGame: Game {
+    fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
+}
+pub trait ShardGame: Game {
+    type Mig: Debug + Send + 'static;
+    fn capture(&self, world: &World, entity: Entity) -> Self::Mig;
+    fn restore(&mut self, world: &mut World, mig: Self::Mig) -> Entity;
+}
+pub struct KitMig<M> { pub game: M, pub park: Option<ShardParkRecord> } // Deref<Target = M>
+```
+
+Odalar: `TeamRoom<G: TeamGame, V: Vision>` (`with_game(game, vision)`),
+`SectorRoom<G: Game, M: SectorMap>` (`with_game(game, map)`),
+`ShardedRoom<G: ShardGame, P: Partition<Wire<G>>>` (`with_game(game,
+partition, index)`; `State = KitMig<G::Mig>`, `Strip = Wire<G>`),
+`ShardedSpatialRoom<G, P, S: CellSpace<Wire<G>>>` (`with_shard(inner,
+space)`). Ön-ayarlar: `Grid2` (artık `CellSpace<W>` for `W: Planar<Coord
+= i32>`), `VisionGrid2<P>`, `ConvexSectors2<P>` (`Sector(pub u8)`),
+`GridPartition2<P>` (+ `grid_shape`, `shard_at`).
+
+**Konum erişimcisi (`Planar`) — tasarım.** Kit oyunun `Position`'ını ve
+wire tipini göremez; 2D ön-ayarların hepsi oyunun tiplerini tek bir
+küçük trait üzerinden okur: `Planar { type Coord; fn planar(&self) ->
+[Coord; 2] }`. Simülasyon ön-ayarları (`VisionGrid2`,
+`ConvexSectors2`, `GridPartition2`'nin bölge/ihraç testi) `Coord =
+f32`, wire ön-ayarları (`Grid2`, `GridPartition2::admits`) `Coord =
+i32` ister. İzdüşüm **oyunun** kararıdır ve tip başına bir kez
+verilir: 2D demo `[x, y]` der; Faz 4'ün MMO'su `Pos3 { x, y, z }`'si ve
+3D wire tipi için `[x, z]` der ve `Grid2` AOI'yi ve `GridPartition2`
+sharding'i **kit'e dokunmadan** kullanır (`kit/space/tests.rs` bunu
+kit'in hiç görmediği bir `Pos3`/`Wire3` çiftiyle kilitliyor: yükseklik
+hücreyi, bölgeyi, görüşü ve sektörü değiştirmiyor). Faz 2'nin 3D
+ön-ayarları (`Grid3`, 3D görüş ızgarası, `GridPartition3`) ayrı bir
+uzamsal erişimciyi okuyacak (`Spatial { type Coord; fn spatial(&self)
+-> [Coord; 3] }`); bir tip ikisini birden uygulayabilir (arena: `Grid3`
+için `Spatial`; MMO: yer düzlemi için `Planar`).
+
+Elenen alternatifler:
+- *Ön-ayara izdüşüm tip parametresi* (`Grid2<Proj>`, `Proj:
+  Project<W>`): yabancı tipler için de çalışır (yetim kuralı), ama her
+  ön-ayar ve her oda tipi bir parametre daha taşır; üç demo da kendi
+  tiplerine sahip, yetim durumu doğmuyor. Gerekirse sonradan eklenir.
+- *Ön-ayarda closure / fn işaretçisi* (`Grid2::new(size, |w| …)`):
+  işaretçi, sıcak yolda entity başına dolaylı çağrı (statik dispatch
+  kuralı); generic closure ön-ayar tipini fabrika takma adında
+  adlandırılamaz yapar.
+- *Kit'e ait somut konum tipi* (`Pos2`/`Pos3` bileşeni): oyunun bileşen
+  ve wire tiplerini dayatır — kit'in kaldırdığı bağlılığın ta kendisi
+  (§1). Kolaylık ön-ayarı olarak sonra eklenebilir.
+- *`Planar<T>` (koordinat tipi generic parametre):* bir tip hem `f32`
+  hem `i32` izdüşümü verebilirdi; hiç gerekmiyor (bir değer ya
+  simülasyon ya wire'dır) ve kullanım yerinde sınırı belirsizleştirir.
+  İlişkili tip = tip başına tek izdüşüm.
+- *`Into<[f32; 2]>`:* hangi eksenlerin düzlem olduğunu ön-ayar başına
+  seçemez, yabancı tipler için yine yetim kuralına takılır, ve
+  "dönüştürülebilir" ile "düzlemde şurada" anlamlarını karıştırır.
+
+**Sapmalar ve gerekçeleri** (§4.2/§4.3 taslağına ve §4.5'e göre):
+
+1. **`Vision` yarıçapı değerin kendisi taşır; `dist2` yerine `sees`.**
+   Taslak `cell(p, radius)` + `dist2(a, b)` diyordu (oda `≤ r²`'yi
+   hesaplardı). Yarıçap, `CellSpace`'in hücre boyu gibi modelin örnek
+   verisi; `sees` bir modelin testi kendisi tanımlamasına izin veriyor
+   (3D mesafe, görüş hattı). Izgara sözleşmesi yazılı: `sees(v, t)` ⇒
+   `cell(v)` ∈ `neighborhood(cell(t))`.
+2. **`SectorMap::visible_from` dilim değil iteratör; `outside()`
+   eklendi.** İteratör önayarın gösterimini serbest bırakıyor (1b'nin
+   ilk commit'i bit maskesini birebir taşıdı, ikincisi listeye
+   çevirdi — imza değişmedi). `outside()`: `group_of` her zaman cevap
+   vermeli; entity'si olmayan oyuncu ve harita konumu olmayan entity
+   (yalnız `Marker`'ı olan) sınırlama sektörüne düşer — hiçbir harita
+   sektörüne sızmayan tek yer.
+3. **`Partition`'a yönlendirme metodu eklenmedi.** Bitişik olmayan göç
+   (§8.4) `neighbors()` grafı üzerinde kit'in BFS'iyle (`first_hops`)
+   yönlendiriliyor; sözleşme: komşuluk simetrik, graf bağlantılı.
+4. **`Mig` / `capture` / `restore` `Game`'de değil, `ShardGame:
+   Game`'de.** Kararlı Rust'ta ilişkili tip varsayılanı yok: `Game`'in
+   içinde, hiç shard'lanmayan her oyun (Faz 3'ün arenası) bir `Mig`
+   adlandırıp hiçbir şeyin çağırmadığı iki kanca yazmak zorunda
+   kalırdı. Yalnız sharded odalar `ShardGame` ister.
+5. **`restore(&mut self, world, mig) -> Entity`**, taslaktaki
+   `restore(EntityWorldMut, mig)` değil: `spawn_player` ile simetrik —
+   oyun spawn eder, kit göçle gelen kimliği damgalar (`Minter::arrival`)
+   ve `Marker`'ı debug'da doğrular.
+6. **`on_player_spawned` eklenmedi; takım ataması `TeamGame::team_of`.**
+   Genel bir kanca her odada çağrılırdı ve demo, takımla ilgisi olmayan
+   odalarda da `TeamMember` yazardı. Oda cevabı `TeamMember` olarak
+   world'e kendisi yazar (sonraki değişimler düz bileşen yazımı).
+7. **`KitMig<M>` `Deref<Target = M>`.** Oyunun alanları doğrudan
+   okunur (`mig.pos`); kit'in yarısı (`park`) kendi alanında.
+8. **Demo'nun `Wire`'ı `(i32, i32)` değil `StripPos`.** `Strip = Wire`
+   ve public `gsb_game::sharded::StripPos` yolu aynı tipi adlandırmalı;
+   ayrıca `Planar`'ın oyuna ait bir wire tipi üzerinde çalıştığının ilk
+   örneği.
+9. **Anahtar genişlikleri:** `Team(pub u8)` (256 takım),
+   `ConvexSectors2`'nin `Sector(pub u8)`'i (255 sektör + sınırlama;
+   yapımda denetleniyor). Daha genişini isteyen oyun kendi
+   `SectorMap`'ini yazar — oda anahtar üzerinden generic.
+10. **Motor/tablo değişiklikleri:** `CellBook::last_cell` artık
+    `(wire, cell)` tutuyor (despawn edilmiş entity'nin kimliği ancak
+    buradan öğrenilir), `pending_removals` `(Entity, üye mi)`,
+    yeni `sweep_removed::<Marker>`; `ShardedRoom`'un `own_wires` kümesi
+    kalktı (`wire_entity`'nin anahtar kümesiyle birebir aynıydı), yerine
+    ters harita `entity_wire` ve yönlendirme tablosu `route` geldi.
+    Hiçbir alanın görünürlüğü genişletilmedi.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
@@ -327,17 +465,25 @@ ile çalışır; kit yalnızca **isteğe bağlı** hazır yardımcılar sunar (�
 Oyun yazarının her şeyi sıfırdan uygulamaması için kit, trait'lerin
 yaygın durumlar için hazır uygulamalarını taşır:
 
-| Ön-ayar | İçerik |
-|---|---|
-| `Pos2<i32>`, `Pos2<f32>`, `Pos3<f32>` | konum bileşenleri + `RecordCodec` (farklı nicemleme seçenekleriyle) |
-| `Grid2`, `Grid3` | `CellSpace` + `Vision` (2D'de 3×3, 3D'de 27 hücre görünüm) |
-| `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` |
-| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği) |
-| `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D |
+| Ön-ayar | İçerik | Durum |
+|---|---|---|
+| `Pos2<i32>`, `Pos2<f32>`, `Pos3<f32>` | konum bileşenleri + `RecordCodec` (farklı nicemleme seçenekleriyle) | kurulmadı (§10 "Faz 1a sonucu" 5) |
+| `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` Faz 2 |
+| `VisionGrid2`, 3D eşi | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi) | `VisionGrid2` 1b'de; 3D Faz 2 |
+| `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
+| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği) | `GridPartition2` 1b'de; 3 Faz 2 |
+| `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
 
-İzometrik bir oyun `Pos2<f32>` + `Grid2` takar; bir FPS `Pos3<f32>`
-seçer ve AOI'yi yer düzleminde (`Grid2`) ya da hacimsel (`Grid3`)
-yapabilir. Alışılmadık bir oyun kendi tipine trait'leri uygular.
+Ön-ayarlar oyunun tiplerini somut bir konum tipi üzerinden değil
+**erişimci trait'ler** üzerinden okur: 2D ön-ayarlar `Planar`'ı
+(`[Coord; 2]`; simülasyon `f32`, wire `i32`), Faz 2'nin 3D ön-ayarları
+bir `Spatial` erişimcisini (`[Coord; 3]`). Tasarım ve elenen
+alternatifler: §4.6.
+
+İzometrik bir oyun kendi 2D konumuna `Planar` uygular ve `Grid2` takar;
+bir FPS `Pos3`'ünü seçer ve AOI'yi yer düzleminde (`Planar` → `[x, z]`
++ `Grid2`) ya da hacimsel (`Spatial` + `Grid3`) yapabilir. Alışılmadık
+bir oyun kendi tipine seam trait'lerini doğrudan uygular.
 
 ## 8. Harita sırasında bulunan mevcut açıklar
 
@@ -353,19 +499,28 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 2. **Hayalet entity şüphesi:** AOI ve spatial kompozit despawn'ı yalnızca
    `on_leave` / göç çıkışından öğreniyor. Oyun kodunun despawn ettiği
    bir NPC büyük olasılıkla defterde ve `last_cell`'de kalıyor.
-   **Doğrulanmadı** — Faz 1'de önce testle kanıtlanacak.
+   **Faz 1b'de kanıtlandı ve kapandı** (`3090fa3`): grup hiç çıkış
+   almıyordu, keep-alive full'u ölü NPC'yi taşımaya devam ediyordu;
+   defter artık silinen-bileşen tamponlarını (`WireId` + `Marker`)
+   kapanıştan önce okuyor, shard tabloları da.
 3. **`clear_trackers` yalnız iki odada çağrılıyor** (AOI ve spatial
    kompozit). Open, Team, PVS ve `ShardedRoom`'da silinen-bileşen
    tamponlarının büyüdüğünden şüpheleniliyor. **Ölçülmedi.**
    **Faz 1a:** `OpenRoom` için testle kanıtlandı (her `on_leave`
-   despawn'ı odanın ömrü boyunca tamponda kalıyordu) ve kapandı; Team,
-   PVS ve `ShardedRoom` 1b'de.
+   despawn'ı odanın ömrü boyunca tamponda kalıyordu) ve kapandı;
+   **Faz 1b:** Team, PVS ve `ShardedRoom` için aynı test kırıldı ve
+   kapandı (`9aa398b`).
 4. **Sabit sınırlar:** takım sayısı 2'ye sabit (`[_; 2]` diziler), PVS
    görünürlük tablosu `u16` bitmask olduğu için 16 sektörle sınırlı,
    bitişik olmayan bir bölgeye düşen entity hiçbir komşuya göç
-   ettirilmiyor.
+   ettirilmiyor. **Faz 1b'de üçü de kanıtlandı ve kapandı:** takımlar
+   (`db434b6`), sektörler (`1873ca6`), bitişik olmayan göç — komşu
+   üzerinden adım adım yönlendirme, çekirdek değişmeden (`5f6bd3d`).
 5. **Varlık tipine bağlı göç:** `Speed` bileşeni olmayan bir NPC bugün
    hiç göç etmiyor (`sharded/room/shard.rs:50` sorgusu `&Speed` istiyor).
+   **Faz 1b'de kanıtlandı ve kapandı** (`a9b37f2`): kit `Marker`'ı
+   taşıyan her entity'yi göç ettiriyor, neyin taşındığı oyunun
+   `capture`'ı.
 
 ## 9. Elenen alternatifler
 
@@ -404,7 +559,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | Faz | Kapsam | Büyüklük | Kapı |
 |---|---|---|---|
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
-| 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), 1b: takım sisi, PVS, sharded kompozitler, oradaki §8 açıkları, seam'in silinmesi | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
+| 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), **1b tamam** (aşağıda "Faz 1b sonucu": takım sisi, PVS, sharded kompozitler, §8.2–§8.5, seam kit zarfına indi) | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
 | 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `Grid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
@@ -574,7 +729,8 @@ kompozitleri ve oradaki §8 açıklarını çevirip seam'i silecek.
    istek cevaplamadı (çekirdek "no handler" diyordu); `Game::handle_request`'e
    bağlamak AOI'nin `ABILITY`/`ECONOMY` cevaplamaya başlaması, yani bir
    davranış değişikliği demek. Bilinçli olarak bağlanmadı; karar
-   bekliyor (1b ya da kullanıcı).
+   bekliyor (1b ya da kullanıcı). *(1b: karar verildi — her kit odası
+   yönlendiriyor; "Faz 1b sonucu".)*
 3. **Faz 2 için tuzak:** demo'nun kurucuları kit'in generic tipleri
    üzerinde inherent impl (`impl OpenRoom<DemoGame> { fn new() }`).
    Bu yalnız iki taraf aynı crate'teyken yasal; crate bölmesinde
@@ -640,6 +796,144 @@ değiştirmiyor):
 
 snap_total / out_bps ilk çiftin değerleri. Tek çiftlik 2 kovalık fark
 (tcp 72 ↔ 88) diğer çiftlerde tekrarlanmıyor — gürültü içinde.
+
+### Faz 1b sonucu
+
+**Tamamlandı** (`kit/phase-1b`, `81c0186..`; CHANGELOG "gsb-kit Faz 1b
+turu"). **Faz 1 bitti:** her strateji odası oyun üzerinden generic,
+kit demo'ya yalnız kendi zarf tipleri için ulaşıyor.
+
+- **Odalar:** `TeamRoom<G: TeamGame, V: Vision>`, `SectorRoom<G: Game,
+  M: SectorMap>`, `ShardedRoom<G: ShardGame, P: Partition<Wire<G>>>`
+  (`State = KitMig<G::Mig>`, `Strip = Wire<G>`),
+  `ShardedSpatialRoom<G, P, S: CellSpace<Wire<G>>>`. İmzalar, konum
+  erişimcisi (`Planar`) ve her sapma: §4.6.
+- **Ön-ayarlar:** `Grid2` (artık `Planar` üzerinden), `VisionGrid2<P>`,
+  `ConvexSectors2<P>` (`in_convex` kit'e döndü), `GridPartition2<P>`;
+  hepsi oyunun tiplerini `Planar` ile okuyor (§7).
+- **Ortak makine:** sharded park kopyası ortak `park.rs` ile birleşti
+  (§4.4 — aynı `ParkEntry` defteri ve kanca gövdeleri; göçte kayıt
+  `ShardParkRecord` olarak `KitMig` içinde taşınıyor). Join / girdi /
+  sistemler / istek yolları ve snapshot zarfları her odada kit'in;
+  değişiklik penceresini her oda tick başına bir kez kapatıyor.
+- **İstek yönlendirmesi tekdüze** (ebeveyn kararı, 1a'nın açık
+  noktası 2): bütün kit odaları `Game::handle_request`'e soruyor —
+  AOI / takım / PVS için bilinçli davranış değişikliği (CHANGELOG).
+- **Demo:** `DemoGame` artık `TeamGame` (conn paritesi) ve
+  `ShardGame` (`DemoMig`: konum, varsa hız, hedef) da uyguluyor;
+  `Position` ve `StripPos` `Planar` uyguluyor; harita yalnız veri
+  (`demo_map`). Eski yollar tip takma adı, kurucular `demo/rooms.rs`'te;
+  `crates/gsb-game` dışında tek dosya değişmedi.
+
+**Son seam içeriği** (`kit/seam.rs`) — test dışı yalnız kit zarfı:
+
+```rust
+pub(crate) use crate::demo::game::{InputAck, Private, private};  // Faz 2: kit proto'su
+#[cfg(test)] pub(crate) use crate::demo::game::WorldSnapshot;     // testler çözüyor
+#[cfg(test)] pub(crate) use crate::demo::game::CellExit;
+#[cfg(test)] pub(crate) use crate::demo::play::DemoGame;
+#[cfg(test)] pub(crate) use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
+#[cfg(test)] pub(crate) use crate::demo::migrate::DemoMig;
+#[cfg(test)] pub(crate) use crate::demo::wire::StripPos;
+#[cfg(test)] pub(crate) use crate::demo::sectors::{SECTOR_EAST, SECTOR_NW, SECTOR_OUT, SECTOR_WEST};
+```
+
+Game kancası, kodek, sektör ya da bölme öğesi kalmadı (1a sonunda 25
+öğe / 19 `use` satırı + 6 test öğesiydi; şimdi 3 zarf öğesi / 1 satır +
+14 test fikstürü). Seam, Faz 2'de zarf kit proto'suna geçince silinir.
+
+**§8 açıklarının çözümü** (her biri önce kırılan testiyle, ayrı
+commit'te):
+
+| Açık | Kırılan test (düzeltmeden önce) | Düzeltme | Commit |
+|---|---|---|---|
+| §8.2 hayalet | AOI: oyunun despawn ettiği NPC için grup paketi hiç çıkmıyor ("the despawn is news for the group"); keep-alive full'u ölüyü taşıyor (`[1, 2]` ≠ `[1]`); spatial kompozit aynı | `CellBook::last_cell` `(wire, cell)`; `sweep_removed::<Marker>` silinen-bileşen tamponlarını (`WireId` + `Marker`) park edilen çıkışlardan sonra, pencere kapanmadan okur; shard tabloları `entity_wire` ile unutur; göçle çıkan NPC artık üye sayılmıyor | `3090fa3` |
+| §8.3 pencere | takım / PVS / düz sharded: "tick 1: the update closed the window: left 1, right 0" | her `update` sonunda `close_change_window` | `9aa398b` |
+| §8.4 takımlar | 3 takım: "index out of bounds: the len is 2 but the index is 2" | takım numarasıyla indekslenen, büyüyen tablolar; ızgara `(hücre, takım)` | `db434b6` |
+| §8.4 sektörler | 20 sektör: "attempt to shift left with overflow" (release'te sessiz yanlış görünürlük) | bit maskesi yerine sektör başına liste; anahtar `u8` → 255 sektör | `1873ca6` |
+| §8.4 bitişik olmayan göç | 2×2 köşegen: "handed to exactly one neighbour (to 1: 0, to 2: 0)" | komşu grafı üzerinde BFS yönlendirme tablosu; ara shard kurup sonraki tick'te iletir | `5f6bd3d` |
+| §8.5 `Speed`'siz göç | "the NPC's crossing is reported to shard 1: left 0, right 1" | göç sorgusu `Marker` + bölme konumu; taşınan durum oyunun `capture`'ı | `a9b37f2` |
+
+**Tasarımla çelişen / tasarımın öngörmediği (kayıt):**
+
+1. **§4.3'ün `Mig` / `capture` / `restore`'u `Game`'de değil**
+   (`ShardGame`, §4.6 sapma 4) ve **`on_player_spawned` yok**
+   (`TeamGame::team_of`, sapma 6).
+2. **Bitişik olmayan göç çekirdek değişmeden ancak adım adım
+   çözülebiliyor.** Çekirdek `collect_migrations`'ı yalnız
+   `neighbors()` için çağırıyor ve shard'lar yalnız komşularına gerçek
+   link tutuyor; sahibe doğrudan teslim, `neighbors()`'ı bütün shard'lar
+   yapmak (sınır değişimi herkes-herkese) demekti. Bedeli: adım başına
+   bir tick ve ara shard'ın entity'yi o tick boyunca kendi dünyasında
+   taşıması (snapshot'ında ve sınır ihracında görünür). Sözleşme: bir
+   `Partition`'ın komşuluk grafı bağlantılı olmalı (değilse ulaşılamayan
+   bölgeye giden entity bekler — `first_hops` onu hiç raporlamaz).
+3. **§4.4'ün "tek `clear_trackers` sahibi" kuralı artık doğruluk
+   taşıyor:** hayalet süpürmesi, iki kapanış arasındaki her despawn'ın
+   tamponda tam bir kez bulunmasına dayanıyor (bir kanca pencereyi
+   kapatırsa despawn'lar kaybolur — debug bekçisi bunu yakalıyor).
+4. **Göçle çıkan NPC'nin üyelik muhasebesi yanlıştı** (her park edilen
+   çıkış üye sayılıyordu); §8.5 düzeltmesiyle NPC'ler göç etmeye
+   başlayınca canlı bir hata olurdu. §8.2 commit'inde testle kapandı.
+5. **Faz 2 tuzağı büyüdü:** demo'nun kurucuları artık altı generic kit
+   tipi üzerinde inherent impl (`OpenRoom`, `AoiRoom`, `TeamRoom`,
+   `SectorRoom`, `ShardedRoom`, `ShardedSpatialRoom`); crate bölmesinde
+   serbest fonksiyona ya da uzantı trait'ine dönmeli.
+6. **`kit::aoi::Cell` yeniden ihracı kalktı** (tek tüketicisi takım
+   odasıydı); `gsb_game::aoi::Cell` kökten aynı. AOI'nin sabit test
+   dosyaları hücreyi `#[cfg(test)]` bir import'la alıyor.
+7. **Sabit olmayan bir çekirdek testi bir kez kırıldı:**
+   `room::tests::fanout::keepalive::never_emitted_group_warns_once_naming_the_group`
+   (20 ms uykulu zamanlama testi, `gsb-core` dokunulmadı); yeniden
+   koşularda geçti.
+
+**Görünürlük:** hiçbir alan genişletilmedi. Yeni public öğeler:
+`Planar`, `Vision`, `VisionGrid2`, `SectorMap`, `ConvexSectors2`,
+`Sector`, `Partition`, `GridPartition2` (`kit::space`; `grid_shape`,
+`shard_at` oraya taşındı), `TeamGame`, `ShardGame`, `KitMig`, odaların
+`with_game` / `with_shard` / `game` / `game_mut`'ı, `DemoMig`,
+`demo_map`, `gsb_game::sharded::{KitMig, DemoMig}`. Kaldırılan:
+`ShardedRoomState` yapısı (kök yolu artık `KitMig<DemoMig>` takma adı),
+`kit::team::TEAM_COUNT` (demo'ya; kök yolu aynı). Alan değişiklikleri:
+§4.6 sapma 10.
+
+**Sabit testlere dokunuş:** `git diff 81c0186.. --stat` —
+`crates/gsb-game/tests/` boş (`wire_contract.rs`, `delta_aoi.rs`,
+`team.rs`, `pvs.rs`, `park_policy.rs` … hiç değişmedi),
+`aoi/tests/sharing*.rs` boş; modül içi test dosyalarına yalnız tip
+takma adları (`TeamRoom`, `SectorRoom`, `ShardedRoom`,
+`ShardedSpatialRoom` → demo örneklemesi), yeni çocuk test modüllerinin
+`mod` satırları ve elle kurulan iki göç durumunun yeni şekli
+(`ShardedRoomState { pos, speed, target, park }` → `KitMig { game:
+DemoMig { … }, park }`, hız `Option`) eklendi. Beklenen bayt, kayıt
+sayısı ya da assertion değişmedi. Ek olarak, yalnız public API'yi
+kullanan geçici bir eşdeğerlik koşumu (commit'lenmedi) altı stratejiyi
+900 tick boyunca rastgele hareket, ayrılış ve yeniden katılımla
+sürdü; her snapshot / keep-alive / private çıktısının kanonik özeti
+taban ve HEAD'de birebir aynı çıktı.
+
+**Doğrulama:** 433 test (419 + 14) / 0 hata / 1 ignored. Loadgen (50
+istemci), 81c0186 ↔ HEAD dönüşümlü (ölçülen ikili `6ac1e3d`'nin;
+sonraki commit'ler yalnız yorum, biçim ve doküman):
+
+| Koşu | left | errors | server_closes | step_p50_fine_us (taban / HEAD, 3 çift) | snap_total (taban / HEAD) | out_bps_per_conn (taban / HEAD) |
+|---|---|---|---|---|---|---|
+| tcp 3 sn | 50 / 50 | 0 / 0 | 0 / 0 | 64 64 48 / 64 80 48 | 4100 / 4100 | 11044 / 11023 |
+| udp 3 sn | 50 / 50 | 0 / 0 | 0 / 0 | 56 64 40 / 56 64 32 | 4100 / 4100 | 11043 / 10987 |
+| spatial 3 sn | 50 / 50 | 0 / 0 | 0 / 0 | 104 128 104 / 120 136 128 | 4091 / 4092 | 2012 / 2014 |
+| team 3 sn | 50 / 50 | 0 / 0 | 0 / 0 | 72 80 72 / 64 80 56 | 4100 / 4100 | 11013 / 11003 |
+| pvs 3 sn | 50 / 50 | 0 / 0 | 0 / 0 | 72 64 64 / 72 88 48 | 4150 / 4150 | 6118 / 5964 |
+| sharded N=4, 8 sn | 50 / 50 | 0 / 0 | 0 / 0 | 40 40 32 / 40 40 32 | 11516 / 11466 | 7077 / 7005 |
+| sharded × spatial N=4, 8 sn | 50 / 50 | 0 / 0 | 0 / 0 | 64 64 72 / 64 64 72 | 11475 / 11479 | 3318 / 3303 |
+
+snap_total / out_bps ilk çiftin değerleri. `spatial`'in üç çiftinde
+HEAD 1–3 kova yukarıdaydı; altı çift daha alındı: taban 136 136 120 120
+120 128, HEAD 136 120 120 120 136 152 — dokuz çiftte ortalama fark bir
+kova (8 µs), işaret çiftten çifte değişiyor; 10 sn'lik dört çift de
+karışık (taban 120 80 80 104, HEAD 120 104 96 96). Aynı senaryoyu tek
+çekirdekte süren zamanlama koşumu `ingest + update` için tick başına
+taban 37,4 / 40,2 µs, HEAD 40,7 / 40,5 µs verdi. Mantık birebir aynı
+(yukarıdaki eşdeğerlik koşumu); fark gürültü içinde sayıldı.
 
 ## 11. Kabul kriteri
 

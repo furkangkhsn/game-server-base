@@ -68,7 +68,7 @@ there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
 clippy `-D warnings` · test).
 
 ```sh
-# 419 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 433 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -81,7 +81,9 @@ clippy `-D warnings` · test).
 # byte-granular write stall, server-close reasons) and heartbeat-ACK throttling, AFK
 # signal (input-idle clock + default-off ceiling), sharded report folding (per-field
 # fold rule), kit/demo layering (the kit reaches the demo only through its seam), kit
-# seams (single WireId minter, codec/grid wire pins, the kit-owned change window).
+# seams (single WireId minter, codec/grid wire pins, the kit-owned change window in every
+# room, more than two teams / sixteen sectors, non-adjacent and Speed-less migration,
+# despawns by game code, request forwarding in every room, ground-plane 3D presets).
 cargo test --workspace
 
 cargo run -p gsb-server                    # default config (0.0.0.0:7777, 1 room, 30 Hz global)
