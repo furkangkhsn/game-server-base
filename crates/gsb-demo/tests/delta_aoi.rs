@@ -13,7 +13,9 @@
 //!   cells, only the source, or only the target — no ghosts, no
 //!   duplicates, identity preserved;
 //! - a cell that leaves a group's view makes its entities vanish
-//!   client-side (one `CellExit` record per cell);
+//!   client-side (one `CellExit` record per cell) — and the record names
+//!   the cell by its INDEX, so a cell away from the origin forgets
+//!   exactly its own entities;
 //! - a mid-join client sees the full world (one-shot private full; the
 //!   group stays in delta mode for everyone);
 //! - a client that lost deltas recovers within the keep-alive bound
@@ -111,7 +113,9 @@ impl View {
                 self.entities.remove(&w);
             }
             for c in &s.cell_exits {
-                let cell = Self::cell_of(c.x, c.y, self.cell_size);
+                // A `CellExit` carries the cell's INDEX (the kit's
+                // `Grid2::encode_cell`), not a position.
+                let cell = (c.x, c.y);
                 self.entities
                     .retain(|_, (x, y)| Self::cell_of(*x, *y, self.cell_size) != cell);
             }
@@ -587,6 +591,64 @@ async fn cell_exit_entities_vanish_client_side() {
     for c in conns.iter().take(5) {
         assert_view(&c.view, &want_m, "movers in the new cell");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 3b. A `CellExit` names the CELL (its index), not a position: a cell
+//     away from the origin leaves exactly its own entities behind.
+// ─────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn cell_exit_names_the_cell_index_away_from_the_origin() {
+    let mut room = TestRoom::new();
+    // Five movers into Cell(1,0); the observer O in Cell(0,0) (its
+    // group's 3×3 spans x∈{-1..1}: it includes Cell(1,0), but NOT
+    // Cell(2,0) — the movers' destination). O sits in the cell a
+    // position-style reading of `CellExit(1,0)` would name (floor(1/20)
+    // = 0), so a misread exit forgets O itself and keeps the movers.
+    let mut conns = Vec::new();
+    let mut ids = Vec::new();
+    for i in 0..5usize {
+        let conn = ConnectionId(1 + i as u64);
+        let (id, rx, actions) = room.join(conn).await;
+        ids.push(id);
+        conns.push(Conn::new(rx, actions, 20.0));
+        move_to(&conns[i].actions, conn, 20 + i as i32, 0).await;
+    }
+    let o_conn = ConnectionId(6);
+    let (o_id, o_rx, o_act) = room.join(o_conn).await;
+    conns.push(Conn::new(o_rx, o_act, 20.0));
+    let observer = conns.len() - 1;
+    move_to(&conns[observer].actions, o_conn, 5, 0).await;
+    advance(&mut room, &mut conns, 500).await;
+    let mut want_o: Vec<(u64, i32, i32)> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, &w)| (w, 20 + i as i32, 0))
+        .collect();
+    want_o.push((o_id, 5, 0));
+    assert_view(&conns[observer].view, &want_o, "observer before departure");
+
+    // All five leave Cell(1,0) for Cell(2,0). The view is checked on the
+    // very tick the exit frame is applied — before a keep-alive full
+    // could paper over a misapplied exit.
+    conns[observer].last_exit_snap = None; // exits seen while settling
+    for (i, c) in conns.iter_mut().enumerate().take(5) {
+        move_to(&c.actions, ConnectionId(1 + i as u64), 45, 0).await;
+    }
+    let mut exit_checked = false;
+    for _ in 0..150 {
+        advance(&mut room, &mut conns, 1).await;
+        let o = &mut conns[observer];
+        assert!(o.view.entities.contains_key(&o_id), "O never loses itself");
+        if let Some(snap) = o.last_exit_snap.take() {
+            let exits: Vec<(i32, i32)> = snap.cell_exits.iter().map(|e| (e.x, e.y)).collect();
+            assert_eq!(exits, [(1, 0)], "the exited cell is named: {snap:?}");
+            assert_view(&o.view, &[(o_id, 5, 0)], "observer on the exit tick");
+            exit_checked = true;
+        }
+    }
+    assert!(exit_checked, "the observer's stream carried the cell exit");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

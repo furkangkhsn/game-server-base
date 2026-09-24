@@ -66,7 +66,9 @@ impl ClientView {
                 self.entities.remove(&w);
             }
             for c in &s.cell_exits {
-                let cell = Self::cell_of(c.x, c.y, self.cell_size);
+                // A `CellExit` carries the cell's INDEX (the kit's
+                // `Grid2::encode_cell`), not a position.
+                let cell = (c.x, c.y);
                 self.entities
                     .retain(|_, (x, y)| Self::cell_of(*x, *y, self.cell_size) != cell);
             }
