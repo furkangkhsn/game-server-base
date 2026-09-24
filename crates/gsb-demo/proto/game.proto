@@ -31,6 +31,19 @@ package gsb.game;
 // `base.proto` alongside it; the wire bytes are unchanged by the import.
 import "base.proto";
 
+// The kit's envelope (`gsb.kit`, gsb-kit's `kit.proto`): the kit owns
+// the snapshot frame, the private frame and the input ack
+// (KIT-ARCHITECTURE §5). `InputAck` is used as is; `WorldSnapshot` and
+// `Private` are declared below as this game's TYPED MIRRORS of the
+// kit's messages — the same numbers and wire types, with the game's own
+// record (`EntityRecord`) and cell-exit (`CellExit`) types in place of
+// the kit's opaque `bytes`. A `repeated EntityRecord` and a `repeated
+// bytes` under one number encode to identical bytes, so a client decodes
+// the kit's frames with these mirrors unchanged; gsb-demo's
+// `tests/kit_wire.rs` pins the pairs to identical bytes. A client
+// generated from this file must generate `kit.proto` alongside it.
+import "kit.proto";
+
 // Client → server: "move my entity toward (x, y)".
 message MoveTo {
   // Zig-zag varint: 1 byte for |v| <= 63, 2 for |v| <= 8191, and never
@@ -45,25 +58,11 @@ message MoveTo {
   // greater than the last seq it processed for this connection; a
   // duplicate or a reordered/late action is dropped as a normal race of
   // the lossy game band (NOT a protocol violation). The server reports
-  // its per-connection high-water mark back in `InputAck` (carried in
+  // its per-connection high-water mark back in `gsb.kit.InputAck` (carried in
   // the per-connection `Private` frame) — the signal a client's
   // prediction reconciliation needs to know which of its inputs are
   // already applied.
   uint64 seq = 3;
-}
-
-// Server → client: input acknowledgment. Per connection — carried in the
-// `Private` frame, never in the group snapshot (the snapshot is shared
-// by the group's members; the ack is not).
-message InputAck {
-  // The highest input sequence this connection has processed so far
-  // (high-water mark; monotonic; reset with the connection's session on
-  // (re)join). "Up to N" is a high-water mark, not a contiguity claim:
-  // gaps from loss on the loss-tolerant game band do not stop the mark
-  // from advancing — a client that needs lossless input rides the
-  // transport's reliable band. The mark never exceeds the highest seq
-  // actually processed, and it never regresses.
-  uint64 processed_up_to = 1;
 }
 
 // A cell that left a group's view (delta mode only): the client must
@@ -77,7 +76,11 @@ message CellExit {
   sint32 y = 2;
 }
 
-// Server → client: per-connection frame (opcode PRIVATE = 1004). The
+// Server → client: per-connection frame (opcode PRIVATE = 1004) — the
+// typed mirror of `gsb.kit.Private` (its `snapshot` arm is this file's
+// typed `WorldSnapshot`; the kit's `bytes game = 4` slot for a game's
+// own private payload is not declared: the demo sends none, and a
+// decoder skips it). The
 // group snapshot (opcode WORLD_SNAPSHOT) is shared by the group's
 // members; this frame is addressed to ONE connection. At most one frame
 // per tick per connection (the room's private seam), so the payload is
@@ -86,9 +89,9 @@ message CellExit {
 // AND answers a request ships both, in one frame).
 message Private {
   oneof payload {
-    // The connection's input high-water mark (see `InputAck`), sent on
-    // the ticks in which it advanced.
-    InputAck ack = 1;
+    // The connection's input high-water mark (see `gsb.kit.InputAck`),
+    // sent on the ticks in which it advanced.
+    gsb.kit.InputAck ack = 1;
     // A one-shot FULL view snapshot for a connection that just (re)joined
     // a group (or crossed into a new snapshot group): the connection has
     // no baseline for that group's view, and a delta has nothing to apply
@@ -207,7 +210,10 @@ message EntityRecord {
   reserved "version";
 }
 
-// Server → client: the snapshot of the room's snapshot group.
+// Server → client: the snapshot of the room's snapshot group — the
+// typed mirror of `gsb.kit.WorldSnapshot` (`entities` typed as the
+// demo's `EntityRecord`, `cell_exits` as `CellExit`; the kit writes the
+// frame, the demo's codec writes each record body).
 //
 // FULL mode (`delta` false/absent): the complete, self-contained state of
 // the group's view; the snapshot replaces the client's entire view of

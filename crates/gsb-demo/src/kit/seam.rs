@@ -28,15 +28,17 @@
 
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────
 
-// The private-frame envelope and the input ack: generated from the demo's
-// game.proto today; the kit proto owns them in phase 2. Consumer:
-// `common::emit_private` (every room).
-pub(crate) use crate::demo::game::{InputAck, Private, private};
+// The private-frame envelope and the input ack: the kit's own proto
+// (gsb-kit's `kit.proto`). Consumer: `common::emit_private` (every room).
+pub(crate) use gsb_kit::proto::{InputAck, Private, private};
 
 // The snapshot envelope: the kit writes it by hand (`common/frame.rs`);
-// the typed message is what the in-module tests decode snapshots with.
+// the demo's typed mirrors are what the in-module tests decode snapshots
+// and one-shot private fulls with.
 #[cfg(test)]
 pub(crate) use crate::demo::game::WorldSnapshot;
+#[cfg(test)]
+pub(crate) use crate::demo::game::{Private as TypedPrivate, private as typed_private};
 
 // ── Test fixtures (the kit's in-module tests drive the generic rooms
 //    with the demo's instantiation)

@@ -144,6 +144,8 @@ pub(crate) fn emit_private(
         // the reply's wire shape comes from the core's conversion — the
         // game crate never re-derives the field mapping.
         responses: responses.iter().map(Into::into).collect(),
+        // The game's own private payload slot: no kit room fills it.
+        game: Vec::new(),
     };
     frame
         .encode(out)

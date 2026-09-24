@@ -720,6 +720,7 @@ dependencies = [
  "bytes",
  "gsb-core",
  "gsb-ecs",
+ "gsb-kit",
  "gsb-lint",
  "gsb-protocol",
  "prost",
@@ -735,6 +736,17 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "gsb-lint",
+]
+
+[[package]]
+name = "gsb-kit"
+version = "0.1.0"
+dependencies = [
+ "gsb-lint",
+ "gsb-protocol",
+ "prost",
+ "prost-build",
+ "protoc-bin-vendored",
 ]
 
 [[package]]

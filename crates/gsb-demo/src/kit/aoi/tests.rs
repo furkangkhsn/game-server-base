@@ -202,9 +202,9 @@ fn aoi_late_join_sees_full_visibility_block() {
         room.private(&mut world, PlayerId(3), &Cell(0, 0), &[], &mut priv_out),
         "a late joiner receives the one-shot full"
     );
-    let full = crate::kit::seam::Private::decode(priv_out.as_ref()).expect("private frame");
+    let full = crate::kit::seam::TypedPrivate::decode(priv_out.as_ref()).expect("private frame");
     let snap = match full.payload {
-        Some(crate::kit::seam::private::Payload::Snapshot(s)) => s,
+        Some(crate::kit::seam::typed_private::Payload::Snapshot(s)) => s,
         other => panic!("expected the snapshot oneof, got {other:?}"),
     };
     assert!(!snap.delta, "the one-shot full is a full snapshot");

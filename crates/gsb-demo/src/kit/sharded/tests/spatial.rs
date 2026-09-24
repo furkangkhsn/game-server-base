@@ -211,7 +211,7 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
 /// and could not have baselined them).
 #[test]
 fn migrated_player_gets_private_full_on_arrival() {
-    use crate::kit::seam::private::Payload;
+    use crate::kit::seam::typed_private::Payload;
 
     let mut w1 = World::new();
     let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
@@ -256,7 +256,7 @@ fn migrated_player_gets_private_full_on_arrival() {
         s1.private(&mut w1, PlayerId(9), &Cell(0, -1), &[], &mut pbuf),
         "the arrival receives the one-shot private full"
     );
-    let frame = crate::kit::seam::Private::decode(pbuf.as_ref()).expect("private frame");
+    let frame = crate::kit::seam::TypedPrivate::decode(pbuf.as_ref()).expect("private frame");
     let full = match frame.payload {
         Some(Payload::Snapshot(s)) => s,
         other => panic!("expected the snapshot oneof, got {other:?}"),

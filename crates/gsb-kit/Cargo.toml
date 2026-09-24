@@ -1,0 +1,31 @@
+[package]
+name = "gsb-kit"
+description = "Pluggable game components for gsb: visibility strategies, the cell-delta engine, sharded composites, park/resume and presets, generic over the game."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+# Not a native library: `links` is the only cargo mechanism that lets a
+# build script publish metadata to its DIRECT dependents. A game's proto
+# imports `kit.proto` (its typed mirror reuses `gsb.kit.InputAck`), so the
+# game crate's build script must find this crate's `proto` directory —
+# which it cannot do by a relative path once gsb-kit comes from the
+# registry. The build script emits `cargo:dir=<abs path>`, delivered to
+# dependents as `DEP_GSB_KIT_PROTO_DIR` (the same arrangement as
+# gsb-protocol's `gsb-base-proto`).
+links = "gsb-kit-proto"
+
+# The kit never depends on a game (KIT-ARCHITECTURE §3: "kit, demo'yu
+# asla görmez") — not even as a dev-dependency.
+[dependencies]
+gsb-protocol = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

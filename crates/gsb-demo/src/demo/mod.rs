@@ -29,9 +29,14 @@ pub mod spawn;
 pub mod systems;
 pub mod wire;
 
-/// Generated game protocol messages (package `gsb.game`, file `game.proto`).
+/// Generated game protocol messages (package `gsb.game`, file `game.proto`):
+/// the demo's own messages and its typed mirrors of the kit's envelope
+/// (`WorldSnapshot`, `Private`). The kit's `InputAck` is used as is and
+/// re-exported here, so `game::InputAck` keeps naming it.
 pub mod game {
     include!(concat!(env!("OUT_DIR"), "/gsb.game.rs"));
+
+    pub use gsb_kit::proto::InputAck;
 }
 
 use gsb_protocol::MessageTable;

@@ -13,6 +13,13 @@ fn main() {
         "DEP_GSB_BASE_PROTO_DIR is not set: gsb-protocol must be a direct \
          dependency and must declare `links = \"gsb-base-proto\"`",
     );
+    // `game.proto` also imports `kit.proto` (its typed `Private` mirror
+    // reuses `gsb.kit.InputAck`); gsb-kit publishes its proto directory
+    // the same way.
+    let kit_dir = std::env::var("DEP_GSB_KIT_PROTO_DIR").expect(
+        "DEP_GSB_KIT_PROTO_DIR is not set: gsb-kit must be a direct \
+         dependency and must declare `links = \"gsb-kit-proto\"`",
+    );
 
     let mut cfg = prost_build::Config::new();
     if let Some(protoc) = vendored_protoc() {
@@ -23,12 +30,15 @@ fn main() {
     // would encode identically but be distinct Rust types, which is the
     // duplication this move exists to remove.
     cfg.extern_path(".gsb.base", "::gsb_protocol::base");
+    // Likewise the kit's envelope types: generated once, by gsb-kit.
+    cfg.extern_path(".gsb.kit", "::gsb_kit::proto");
     cfg.compile_protos(
         &[format!("{proto_dir}/game.proto")],
-        &[proto_dir, &base_dir],
+        &[proto_dir, &kit_dir, &base_dir],
     )
     .expect("prost codegen failed (using vendored protoc)");
     println!("cargo:rerun-if-changed=proto/game.proto");
+    println!("cargo:rerun-if-changed={kit_dir}/kit.proto");
     println!("cargo:rerun-if-changed={base_dir}/base.proto");
 }
 

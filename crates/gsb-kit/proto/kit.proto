@@ -1,0 +1,110 @@
+// The kit's own envelope (KIT-ARCHITECTURE §5): the snapshot frame, the
+// per-connection private frame and the input acknowledgment every kit
+// room writes, whatever the game.
+//
+// The kit decides WHO sees WHAT and WHEN; the game decides what the
+// bytes are. So the envelope carries the game's bytes opaquely: an
+// entity record (`WorldSnapshot.entities`) is the body the game's
+// `RecordCodec::encode` wrote, a cell exit (`cell_exits`) is the body
+// the game's `CellSpace::encode_cell` wrote.
+//
+// TYPED MIRRORS. Protobuf puts no type names on the wire, and a
+// `repeated bytes` field encodes to exactly the same bytes as a
+// `repeated <Message>` field under the same number (both are
+// length-delimited). A game's own .proto therefore declares a typed
+// mirror of these messages — `repeated EntityRecord entities = 2;`
+// instead of `repeated bytes entities = 2;` — and its clients decode
+// the kit's frames with it unchanged. The demo game's `game.proto` is
+// the first such mirror; `gsb-demo`'s wire-contract tests pin the two
+// definitions to identical bytes. A mirror must keep every number and
+// wire type below; it may leave out a field it never uses (a decoder
+// skips an unknown field).
+//
+// The kit writes `WorldSnapshot` and the `Private.snapshot` arm BY HAND
+// (pre-encoded, shared pieces — see `gsb-kit/src/common/frame.rs`); the
+// tags hand-written there are pinned against this file by the kit's
+// tests.
+//
+// A client generated from this file must generate `base.proto`
+// alongside it (`gsb.base.RpcResponse`).
+
+syntax = "proto3";
+
+package gsb.kit;
+
+import "base.proto";
+
+// Server → client: input acknowledgment. Per connection — carried in the
+// `Private` frame, never in the group snapshot (the snapshot is shared
+// by the group's members; the ack is not).
+message InputAck {
+  // The highest input sequence this connection has processed so far
+  // (high-water mark; monotonic; reset with the connection's session on
+  // (re)join). "Up to N" is a high-water mark, not a contiguity claim:
+  // gaps from loss on the loss-tolerant game band do not stop the mark
+  // from advancing — a client that needs lossless input rides the
+  // transport's reliable band. The mark never exceeds the highest seq
+  // actually processed, and it never regresses.
+  uint64 processed_up_to = 1;
+}
+
+// Server → client: the snapshot of the room's snapshot group (the
+// game's snapshot opcode; the demo: WORLD_SNAPSHOT = 1003).
+//
+// FULL mode (`delta` false/absent): the complete, self-contained state
+// of the group's view; it replaces the client's entire view.
+//
+// DELTA mode (`delta` true): the change of the group's view since the
+// PREVIOUS tick, applied ON TOP of the client's current view, in the
+// packet's field order: `removed` first, then `cell_exits`, then
+// `entities`. The client rules (baseline, sequence gaps, duplicates,
+// the keep-alive convergence guarantee) are written out on the demo's
+// typed mirror (`gsb-demo/proto/game.proto`, `WorldSnapshot`); they are
+// the kit's rules and hold for every game.
+message WorldSnapshot {
+  // Monotonic snapshot sequence (the room's global tick index; a gap is
+  // normal, a duplicate is discarded).
+  uint64 sequence = 1;
+  // Entity records: in full mode the complete view, in delta mode the
+  // upserts. Each entry is one record BODY written by the game's
+  // `RecordCodec::encode` (the demo: an `EntityRecord`).
+  repeated bytes entities = 2;
+  // DELTA mode only: wire ids that left the group's view this tick. The
+  // kit writes them UNPACKED (one `0x18` tag per id); a generated encoder
+  // writes proto3's default packed form. Every protobuf parser accepts
+  // both encodings of a repeated scalar, so the two decode identically.
+  repeated uint64 removed = 3;
+  // DELTA mode only: cells that left the group's view this tick (the
+  // client forgets every entity it holds for each). Each entry is one
+  // cell BODY written by the game's `CellSpace::encode_cell` (the kit's
+  // `Grid2` preset and the demo: a `CellExit { sint32 x = 1; sint32 y =
+  // 2; }`).
+  repeated bytes cell_exits = 4;
+  // true = delta; false/absent = full.
+  bool delta = 5;
+}
+
+// Server → client: the per-connection frame (the game's private opcode;
+// the demo: PRIVATE = 1004). At most one per tick per connection.
+message Private {
+  oneof payload {
+    // The connection's input high-water mark, on the ticks it advanced.
+    InputAck ack = 1;
+    // A one-shot FULL view for a connection that just (re)joined a group
+    // or crossed into a new one — applied unconditionally (a baseline
+    // reset; always `delta = false`). The kit hand-encodes this arm's
+    // tag (0x12) on the AOI and sharded × spatial paths.
+    WorldSnapshot snapshot = 2;
+  }
+  // The connection's RPC responses for this tick (see `base.proto` for
+  // the correlation rules). The kit hand-encodes this field's tag (0x1A)
+  // on the same paths.
+  repeated gsb.base.RpcResponse responses = 3;
+  // The game's own per-connection payload (KIT-ARCHITECTURE §5): opaque
+  // to the kit, typed by the game's mirror as its own message under this
+  // number. Empty = none. Number 4 was never used in this message (nor
+  // in the demo's `gsb.game.Private` it was split from). No kit room
+  // writes it yet — the slot is reserved so a game's first private
+  // message does not have to renumber the envelope.
+  bytes game = 4;
+}
