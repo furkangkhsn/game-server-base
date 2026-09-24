@@ -20,10 +20,15 @@ mod tests;
 /// - `grace = Some(0)` disables parking entirely ([`Detach::Despawn`] —
 ///   the byte-for-byte pre-reconnect behavior), so an operator can turn
 ///   the feature off without losing the code path;
-/// - `grace = Some(d)` holds for at most `d` (the core's own deadline);
-/// - `grace = None` holds until the game's
-///   [`Game::may_release`](crate::game::Game::may_release) veto clears
-///   (combat-held — the core asks every tick);
+/// - `grace = Some(d)` holds for `d` (the core's own deadline), then
+///   for as long as the game's
+///   [`Game::may_release`](crate::game::Game::may_release) vetoes (a
+///   logout timer that waits out a fight);
+/// - `grace = None` holds until that veto clears (combat-held — the
+///   core asks every tick);
+///
+/// either way at most the core's `RoomConfig::max_detach_hold` after the
+/// disconnect (RECONNECT §17);
 ///
 /// and an ended hold goes `to` the bot ([`ExpireTo::AiHandover`], the
 /// default) or releases the slot ([`ExpireTo::Despawn`]). The default
@@ -130,8 +135,9 @@ pub(crate) fn park_on_expire(
     }
 }
 
-/// The `may_release` hook body: the game's veto on ending an untimed
-/// (combat-held) hold, asked about the parked player's entity. A player
+/// The `may_release` hook body: the game's veto on ending a hold whose
+/// grace has run out (or that has none), asked about the parked player's
+/// entity. A player
 /// without an entity here has nothing to hold: released.
 pub(crate) fn park_may_release<G: Game>(
     game: &mut G,

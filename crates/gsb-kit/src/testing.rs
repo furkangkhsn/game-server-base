@@ -72,9 +72,9 @@ impl<G: ShardGame> ShardGame for Culling<G> {
 #[derive(Debug, Clone, Copy, Component)]
 pub(crate) struct InCombat;
 
-/// A game whose [`Game::may_release`] vetoes ending an untimed hold
-/// while the parked entity carries [`InCombat`] — the combat veto of
-/// RECONNECT §14.4.
+/// A game whose [`Game::may_release`] vetoes ending a hold while the
+/// parked entity carries [`InCombat`] — the combat veto of RECONNECT
+/// §14.4/§17.
 pub(crate) struct Vetoing<G>(pub G);
 
 impl<G: Game> Game for Vetoing<G> {

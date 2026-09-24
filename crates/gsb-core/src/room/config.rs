@@ -217,9 +217,10 @@ pub struct RoomConfig {
     /// every member on its first sweep, which is never what an operator
     /// means by "0".
     pub max_idle_input_secs: Option<u64>,
-    /// **Detach-hold ceiling**: the longest a [`crate::room::GameLogic::
-    /// may_release`] veto can keep a parked entity, measured from the
-    /// DETACH (`docs/RECONNECT.md` §14.4, §11 "harass-lock").
+    /// **Detach-hold ceiling**: the longest a
+    /// [`may_release`](crate::room::GameLogic::may_release) veto can keep
+    /// a parked entity, measured from the DETACH (`docs/RECONNECT.md`
+    /// §14.4, §11 "harass-lock", §17).
     ///
     /// The veto is asked when a timed hold reaches its deadline and on
     /// every sweep of an untimed one; `false` extends the hold. A veto

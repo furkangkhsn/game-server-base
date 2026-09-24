@@ -181,12 +181,16 @@ impl<G: Game> OpenRoom<G> {
     /// Set the whole disconnect-park policy (RECONNECT §3/§14.4): how
     /// long a dropped transport's entity is held, and where the hold
     /// ends. `grace`: `Some(Duration::ZERO)` — no park, despawn at once;
-    /// `Some(d)` — hold for at most `d`; `None` — hold until the game's
-    /// [`Game::may_release`] veto clears (combat-held; with the default
-    /// hook, no veto, that is the next tick). `to`: what an ended hold
-    /// becomes — [`ExpireTo::AiHandover`] (the default: the entity keeps
-    /// playing under [`Game::bot_actions`]) or [`ExpireTo::Despawn`]
-    /// (the slot is released — an MMO's logout timer). Builder-style.
+    /// `Some(d)` — hold for `d`, then while the game's
+    /// [`Game::may_release`] vetoes (a logout timer that waits out a
+    /// fight; with the default hook, no veto, the hold ends at `d`);
+    /// `None` — hold until that veto clears (combat-held; with the
+    /// default hook, the next tick). A standing veto is bounded by the
+    /// core's `RoomConfig::max_detach_hold` (RECONNECT §17). `to`: what
+    /// an ended hold becomes — [`ExpireTo::AiHandover`] (the default: the
+    /// entity keeps playing under [`Game::bot_actions`]) or
+    /// [`ExpireTo::Despawn`] (the slot is released — an MMO's logout
+    /// timer). Builder-style.
     #[must_use]
     pub fn with_disconnect_policy(mut self, grace: Option<Duration>, to: ExpireTo) -> Self {
         self.park.grace = grace;

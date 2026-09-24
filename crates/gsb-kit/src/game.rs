@@ -151,14 +151,16 @@ pub trait Game: Send + 'static {
     /// Run the game's systems for this tick.
     fn systems(&mut self, world: &mut World, ctx: &TickCtx);
 
-    /// The veto on ending a disconnect hold that has NO deadline — a
-    /// room built with `with_disconnect_policy(None, to)` (RECONNECT
-    /// §14.4, combat-held): asked every tick while the parked player's
-    /// `entity` is held that way. `false` keeps holding it (an enemy is
-    /// near, the fight is on), `true` ends the hold toward the policy's
-    /// `to`. Never asked for a timed hold: its grace is the ceiling that
-    /// makes an endless veto impossible. Default: `true` — no veto, an
-    /// untimed hold ends at the next tick.
+    /// The veto on ending a disconnect hold (RECONNECT §14.4/§17): asked
+    /// every tick about the parked player's `entity` once the hold's
+    /// grace has run out — a timed hold (`with_disconnect_policy(Some(d),
+    /// to)`, a logout timer) from its deadline on, an untimed one
+    /// (`None`, combat-held) from the first tick. `false` keeps holding
+    /// it (the character is in combat), `true` ends the hold toward the
+    /// policy's `to`. The core bounds a standing veto
+    /// (`RoomConfig::max_detach_hold`, from the disconnect): past it the
+    /// hold ends anyway. Default: `true` — no veto, a timed hold ends at
+    /// its deadline, an untimed one at the next tick.
     fn may_release(&mut self, _world: &mut World, _entity: Entity) -> bool {
         true
     }

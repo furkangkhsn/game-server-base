@@ -1,8 +1,9 @@
 //! The disconnect-park policy through EVERY kit room
 //! (KIT-ARCHITECTURE §10, F4): the hold's grace and its end are the
 //! game's choice (`with_disconnect_policy`), the default is unchanged
-//! (a timed hold toward the bot), and the combat veto of an untimed hold
-//! reaches the game (`Game::may_release`).
+//! (a timed hold toward the bot), and the combat veto of a hold — asked
+//! by the core at a timed hold's deadline and every tick of an untimed
+//! one (RECONNECT §17) — reaches the game (`Game::may_release`).
 
 use std::time::Duration;
 

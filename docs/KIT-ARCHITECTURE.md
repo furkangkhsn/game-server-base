@@ -455,17 +455,24 @@ pub fn with_disconnect_policy(self, grace: Option<Duration>, to: ExpireTo) -> Se
 ```
 
 - **`with_disconnect_policy(grace, to)`** (F4): `grace` —
-  `Some(0)` park yok (anında despawn), `Some(d)` en çok `d` bekletme,
-  `None` oyunun `Game::may_release` vetosu kalkana dek bekletme (savaş
-  kilidi; varsayılan kanca `true` → bir sonraki tick); `to` — biten
+  `Some(0)` park yok (anında despawn), `Some(d)` `d` bekletme, sonra
+  oyunun `Game::may_release` vetosu durdukça (çıkış sayacı + savaşta
+  çıkış yok; varsayılan kanca `true` → tam `d`'de biter), `None` veto
+  kalkana dek bekletme (savaş kilidi; varsayılan kanca → bir sonraki
+  tick); duran veto en çok çekirdeğin `RoomConfig::max_detach_hold`'u
+  kadar (varsayılan 10 dk, kopuştan itibaren; RECONNECT §17); `to` — biten
   bekletme `ExpireTo::AiHandover` (varsayılan) ya da
   `ExpireTo::Despawn` (slot bırakılır). `with_disconnect_grace(g)`
   anlamını korur (`grace = Some(g)`, seçili `to` kalır); varsayılan
   politika değişmedi (30 sn → AI devri). Her oda çekirdeğin
   `GameLogic::may_release`'ini bekletilen oyuncunun entity'siyle
-  oyuna iletir. Çekirdeğin anlamı gereği veto yalnız süresiz
-  bekletmede sorulur: "süreli bekletme + savaş vetosu" birlikte ifade
-  edilemez (çekirdek kararı, §10 "Faz 5 sonucu" gözlem).
+  oyuna iletir. Faz 5'te çekirdek vetoyu yalnız süresiz bekletmede
+  soruyordu ("süreli bekletme + savaş vetosu" ifade edilemiyordu — §10
+  "Faz 5 sonucu" gözlem); çekirdek artık vetoyu süreli bekletmenin
+  deadline'ında da soruyor ve duran vetoyu `max_detach_hold` ile
+  sınırlıyor (RECONNECT §17). Kit'te kod değişmedi: iletim zaten her
+  odadaydı; MMO demosu ikisini birlikte kullanıyor (çıkış sayacı +
+  savaşta çıkış yok).
 - **`spawn_team_player`** (A1): takım odası her katılımda bunu çağırır
   (kit-içi `common::join_with` spawn adımını parametre alır).
   Varsayılanı eski iki adım; tek fark `team_of` artık kit wire
@@ -1660,7 +1667,11 @@ kayıt sayısı ya da iddia değişmedi):
 - Çekirdeğin `may_release` anlamı: veto yalnız SÜRESİZ bekletmede
   soruluyor (süreli bekletmede süre tavandır). "Çıkış sayacı + savaşta
   gecikme" birlikte bir çekirdek kararı ister; kit ikisini ayrı ayrı
-  sunuyor.
+  sunuyor. **→ Kapandı** (Faz 5 sonrası, `fix/may-release-deadline`):
+  veto süreli bekletmenin deadline'ında da soruluyor, duran veto
+  `RoomConfig::max_detach_hold` (varsayılan 10 dk, kopuştan itibaren)
+  ile sınırlı; kit kodu değişmedi, MMO çıkış sayacı savaşta bekliyor
+  (RECONNECT §17).
 - `ShardedSpatialRoom` hâlâ `admits`'i uygulamıyor (F3'ün yan gözlemi):
   uzak ihraç kayıtları (ör. ışınlanan oyuncunun bölge dışı konumu) ara
   shard'ların defterine giriyor. Görünürlük hücreyle sınırlı olduğu için
