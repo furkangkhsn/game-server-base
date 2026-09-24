@@ -20,6 +20,7 @@ use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
 use prost::Message;
 use std::collections::HashMap;
 
+mod change_window;
 mod migration;
 mod spatial;
 

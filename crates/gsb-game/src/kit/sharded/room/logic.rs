@@ -205,6 +205,10 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         self.step(world, ctx);
+        // The tick's ONE change-window close (§4.4, §8.3 — see
+        // `TeamRoom::update`); the spatial composite runs `step` and
+        // closes after its own dirty pass instead.
+        crate::kit::common::close_change_window(world);
     }
 
     /// The game's request handlers on the SHARDED path (Faz 3 — the same

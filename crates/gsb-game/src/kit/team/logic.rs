@@ -189,6 +189,13 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         crate::kit::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
 
         self.rebuild(world);
+
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it). This room reads no change filter
+        // itself, but the window is world-wide: without the close the
+        // removed-component buffers grow with every despawn for the
+        // room's lifetime (§8.3).
+        crate::kit::common::close_change_window(world);
     }
 
     fn encoded_records(&mut self) -> u64 {

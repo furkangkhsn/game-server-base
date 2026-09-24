@@ -197,6 +197,10 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
                 .or_default()
                 .push((wire_id.get(), codec.wire(item)));
         }
+
+        // The tick's ONE change-window close (§4.4, §8.3 — see
+        // `TeamRoom::update`).
+        crate::kit::common::close_change_window(world);
     }
 
     fn encoded_records(&mut self) -> u64 {
