@@ -340,3 +340,38 @@ disconnect_grace_secs = 30.0
 # beyond localhost is an explicit decision that needs a network-level
 # guard (firewall/ACL), not just good intentions.
 #http_listen = "127.0.0.1:9090"
+
+# ── Hosted games' own tables ──────────────────────────────────────────
+# game = "arena" and game = "mmo" read ONLY the table named after them (a
+# table is ignored by every other game, so one file may carry several).
+# Inside it an unknown key refuses startup, and so does any of these flat
+# keys written above, which those games fix: visibility, topology,
+# communication, shard_count, aoi_cell_size, team_vision_radius,
+# spawn_half_size and disconnect_grace_secs (the demo's; each game names
+# its own below). This file WRITES several of them for the demo — delete
+# them (not just the `game` line) before switching a copy to "arena" or
+# "mmo". Keep the tables LAST: in TOML every key after a [table] header
+# belongs to it.
+
+# game = "arena" — one room with 3D team fog of war (single × team ×
+# always-full; vision radius 15 m, the arena's own).
+#[arena]
+# Teams per room (1..=255); joiners are dealt round-robin.
+#teams = 3
+# How long a dropped player's unit is held (resumable under the same
+# name) before the arena's bot walks it back to its base. 0 = it leaves
+# at once.
+#disconnect_grace_secs = 30.0
+
+# game = "mmo" — one 2×2 sharded world per room (sharded × spatial ×
+# delta; 64 m ground-plane AOI cells). Sessions without a saved
+# character start at waystone 0 (shard 0).
+#[mmo]
+# The logout timer: a dropped character stays in the world this long
+# (resumable) and then logs out — never while in combat (it waits for
+# the fight to cool down). 0 = log out at once.
+#logout_grace_secs = 20.0
+# What the logout does: "release" (the character leaves, its slot is
+# freed) or "bot" (the logout bot walks it to the nearest waystone,
+# where it stays, slot held).
+#logout = "release"
