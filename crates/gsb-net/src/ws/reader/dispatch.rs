@@ -44,6 +44,28 @@ impl super::WsReader {
         Ok(Step::Yield(frame))
     }
 
+    /// Validate a client close payload and build its echo: the status code
+    /// alone (an empty close echoes empty; the reason is not repeated).
+    /// §5.5.1: one byte is no code at all; §7.4: only a sendable code may
+    /// appear; §8.1: the reason must be UTF-8 (1007 otherwise).
+    fn close_echo(&mut self, payload: &[u8]) -> io::Result<Vec<u8>> {
+        let (code, reason) = match payload {
+            [] => return Ok(Vec::new()),
+            [hi, lo, reason @ ..] => (u16::from_be_bytes([*hi, *lo]), reason),
+            [_] => return Err(self.proto_fail(1002, "a 1-byte close payload has no status code")),
+        };
+        if !close_code_is_sendable(code) {
+            return Err(self.proto_fail(
+                1002,
+                format_args!("close code {code} may not appear on the wire"),
+            ));
+        }
+        if std::str::from_utf8(reason).is_err() {
+            return Err(self.proto_fail(1007, "close reason is not valid UTF-8"));
+        }
+        Ok(code.to_be_bytes().to_vec())
+    }
+
     /// Consume the next complete frame (waiting is the caller's job via
     /// [`Step::NeedData`]) and update assembly/control state.
     pub(super) fn step(&mut self) -> io::Result<Step> {
@@ -100,19 +122,7 @@ impl super::WsReader {
                 }
             }
             OP_CLOSE => {
-                // Echo the peer's status code (empty close echoes empty).
-                let echo = match frame.payload.as_slice() {
-                    [] => Vec::new(),
-                    [hi] => {
-                        return Err(self.proto_fail(
-                            1002,
-                            format_args!(
-                                "close payload must be empty or 2 bytes, got 1 ({hi:#04x})"
-                            ),
-                        ));
-                    }
-                    [hi, lo, ..] => vec![*hi, *lo],
-                };
+                let echo = self.close_echo(&frame.payload)?;
                 self.closing.store(true, Ordering::SeqCst);
                 let _ = self.ctrl.try_send(WsOut::Control(OP_CLOSE, echo));
                 // RFC 6455 §7.1.1: after echoing, the server closes first —
@@ -130,4 +140,14 @@ impl super::WsReader {
             other => Err(self.proto_fail(1002, format_args!("unknown opcode {other:#04x}"))),
         }
     }
+}
+
+/// RFC 6455 §7.4 status codes a peer may put in a close frame: the
+/// protocol's own 1000-1003 and 1007-1011, the IANA-registered 1012-1014
+/// (service restart, try again later, bad gateway), and the library /
+/// application ranges 3000-4999. Everything else is unused (0-999),
+/// reserved (1004, 1016-2999), API-only and never sent (1005, 1006,
+/// 1015), or undefined (5000+).
+fn close_code_is_sendable(code: u16) -> bool {
+    matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999)
 }
