@@ -75,10 +75,17 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **551** (551/551 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **579** (579/579 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **oyun modülü G1** (`docs/GAME-MODULE.md`) — sunucu oyunu
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **oyun modülü G2** (`docs/GAME-MODULE.md` §5 "G2 sonucu") —
+arena ve MMO sunucuda (`game = "arena" | "mmo"`, `[arena]` / `[mmo]`
+tabloları, sabit anahtarlar başlatmada reddediliyor), gerçek soketlerle
+uçtan uca testli; birden fazla MMO dünyası çalışıyor. Açık bulgular:
+K1–K3 (kit: `InputSeq` göçte taşınmıyor), K4 (kayıtlı karakter oturuma
+bağlı; MMO yükü shard 0'da başlar), K5 (örnek config'in düz demo
+anahtarları).
+Önceki tur: **oyun modülü G1** (`docs/GAME-MODULE.md`) — sunucu oyunu
 nesne-güvenli `GameModule` seam'i arkasında barındırıyor; 2D demo ilk
 modül (`game = "demo"`), oyunsuz derleme CI kapısı, RESULT'ta `game=`,
 orkestratör `--cell-size` ve ekonomi asimetrisi düzeltildi. Sıradaki:

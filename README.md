@@ -54,9 +54,9 @@ architecture for MOBA / MMORPG projects.
 | `gsb-net` | `Transport`/`Listener`/`Endpoint` + pump tasks + default TCP |
 | `gsb-kit` | **Pluggable game components, generic over the game**: the visibility strategies (open, AOI, team fog, PVS) and sharded composites as complete `GameLogic` rooms, the cell-delta engine, park/resume, the input seq/ack rule, wire identity, the snapshot/`Private` envelopes (own `kit.proto`), and presets (`Grid2`, `VisionGrid2`, `VisionGrid3`, `ConvexSectors2`, `GridPartition2`) read through the `Planar`/`Spatial` accessors. Depends on no game — see `docs/KIT-ARCHITECTURE.md` |
 | `gsb-demo` | **The example game**: 2D components, movement, the demo wire protocol (`game.proto`, a typed mirror of the kit envelope), input/bot/RPC/economy; implements the kit's seams and instantiates its rooms (constructors: `gsb_demo::prelude`) |
-| `gsb-demo-arena` | **Validation demo: a 3D team arena** built on `gsb-kit`'s public API only (no kit or core change): `Pos3` (`Spatial`), its own 3D movement, a centimetre-quantized record codec, round-robin teams over three sides, **3D team fog of war** (`TeamRoom` + `VisionGrid3` — height counts), its own `arena.proto` (typed mirror of the kit envelope). Not wired into the server; verified through the real room actor (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3 sonucu") |
-| `gsb-demo-mmo` | **Validation demo: a 3D MMO world** — the closing check, built on `gsb-kit`'s public API only: `Pos3` with a ground-plane `Planar` (`[x, z]`), a decimetre-quantized record codec (position + kind + hit points), mobs spawned and despawned by game code that migrate without any speed component, flyers, a logout timer (hold, then release the slot; an optional logout bot), **a ground-plane grid AOI over a sharded world** (`ShardedSpatialRoom` + `Grid2` + `GridPartition2` with corners, 2×2 shards — height ignored), its own `mmo.proto`. Not wired into the server; verified through four real shard actors (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4 sonucu"; the kit design findings it recorded were fixed in "Faz 5 sonucu") |
-| `gsb-server` | Composition root: config, startup, `gsb-server` binary + client example + `gsb-loadgen` load generator |
+| `gsb-demo-arena` | **Validation demo: a 3D team arena** built on `gsb-kit`'s public API only (no kit or core change): `Pos3` (`Spatial`), its own 3D movement, a centimetre-quantized record codec, round-robin teams over three sides, **3D team fog of war** (`TeamRoom` + `VisionGrid3` — height counts), its own `arena.proto` (typed mirror of the kit envelope). Hosted by the server as `game = "arena"` (settings in `[arena]`); verified through the real room actor (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3 sonucu") and end to end over TCP/TLS (`gsb-server/tests/arena_e2e.rs`) |
+| `gsb-demo-mmo` | **Validation demo: a 3D MMO world** — the closing check, built on `gsb-kit`'s public API only: `Pos3` with a ground-plane `Planar` (`[x, z]`), a decimetre-quantized record codec (position + kind + hit points), mobs spawned and despawned by game code that migrate without any speed component, flyers, a logout timer (hold, then release the slot; an optional logout bot), **a ground-plane grid AOI over a sharded world** (`ShardedSpatialRoom` + `Grid2` + `GridPartition2` with corners, 2×2 shards — height ignored), its own `mmo.proto`. Hosted by the server as `game = "mmo"` (settings in `[mmo]`; every room is a whole sharded world); verified through four real shard actors and end to end under the real registry (`gsb-server/tests/mmo_*.rs`) (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4 sonucu"; the kit design findings it recorded were fixed in "Faz 5 sonucu") |
+| `gsb-server` | Composition root: config, startup, the game modules (`game = "demo" | "arena" | "mmo"`, one cargo feature each), `gsb-server` binary + client example + `gsb-loadgen` load generator |
 
 ## Quick start
 
@@ -73,7 +73,7 @@ clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 551 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 579 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -187,7 +187,7 @@ of `gsb-kit`:
    `Game` (+ `TeamGame` / `ShardGame` for those strategies), and
    `Planar` / `Spatial` on its position and wire types to use the
    presets — and pick a room + preset (`AoiRoom<G, Grid2>`, …);
-4. Bind the room factory and `build_table()` call in `gsb-server` to it.
+4. Implement `gsb_server::GameModule` for it (read your own `[<name>]` table with `gsb_server::games::settings`), and host it through `start_game_server`, or add it to the catalog behind a cargo feature as `games/arena.rs` and `games/mmo.rs` do.
 
 The core/net/protocol/ecs/kit crates are untouched.
 

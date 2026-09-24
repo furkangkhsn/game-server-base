@@ -5,6 +5,50 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Oyun modülü G2 turu (`srv/g2-modules`)
+
+Arena ve MMO artık gerçek sunucuda, gerçek istemcilerle uçtan uca
+çalışıyor (`docs/GAME-MODULE.md` §5 "G2 sonucu"). `gsb-core`, `gsb-kit`
+ve üç demo crate'i değişmedi.
+
+- **Arena modülü** (`games/arena.rs`, `game = "arena"`, varsayılan açık
+  `game-arena` özelliği): tek oda × takım sisi × always-full
+  (`TeamRoom<ArenaGame, VisionGrid3<Pos3>>`). `[arena]`: `teams`
+  (1..=255, vars. 3), `disconnect_grace_secs` (vars. 30; sonunda arenanın
+  üsse dönüş botu).
+- **MMO modülü** (`games/mmo.rs`, `game = "mmo"`, `game-mmo`): her oda
+  kimliği bütün bir 2×2 shard'lı dünya. Join yönlendirmesi: kayıtlı
+  karakter → kaydının shard'ı; kaydı olmayan → waystone 0'ın shard'ı
+  (`spawn_player`'ın geri düşüşüyle aynı yer). `[mmo]`:
+  `logout_grace_secs` (vars. 20, savaş vetosu korunur), `logout =
+  "release" | "bot"`. `MmoModule::with_realm` gömen taraf için.
+- **Reddedilenler:** iki oyun da üç ekseni, `shard_count`,
+  `aoi_cell_size`, `team_vision_radius`, `spawn_half_size` ve demo'nun
+  düz `disconnect_grace_secs`'ini AÇIKÇA yazılırsa başlatmada reddeder
+  (MMO'nun mesajı `[mmo] logout_grace_secs`'i gösterir); oyunun
+  tablosunda bilinmeyen anahtar da hata. Okuyucular public
+  (`games::settings`). Bilinmeyen oyun hatası üç oyunu listeliyor.
+- **Uçtan uca testler** (`tests/hosted/` ortak istemci, TCP + TLS):
+  arenada her snapshot'ta ağ tarafından sis kuralı + yükseklik + ack;
+  MMO'da yönlendirme (basan shard wire id'den), dikiş geçişi, `Travel`,
+  savaşta tutulan / grace sonrası çıkan karakter + registry satırlarının
+  bırakılması, başka shard'da park edilmiş karakterin resume'u,
+  `room_count = 2` + `/rooms/open` ile üç ayrı dünya; config dosyasından
+  tablolar ve retler; eski demo config'i aynen.
+- **Bulgular (kit):** oyuncunun girdi durumu (`InputSeq`) göçte
+  taşınmıyor — göçü tetikleyen girdi hiç ack'lenmiyor (K1), sıra kuralı
+  hedefte sıfırlanıyor (K2), kaynakta girdi girdisi sızıyor (K3).
+  Bugünkü davranış `tests/mmo_findings.rs`'te kilitli; düzeltme kit'te.
+  K4: kayıtlı karakterler oturuma bağlı — gerçek sunucuda her MMO
+  oturumu shard 0'dan başlar. K5: `config.example.toml` demo'nun düz
+  anahtarlarını açıkça yazdığı için kopyası başka oyuna çevrilince
+  reddediliyor.
+
+Testler 551 → 579 (+10 birim, +18 entegrasyon); mevcut testlerin hiçbiri
+değişmedi. Ebeveynin bağımsız mutasyonu: MMO'nun sabit-anahtar
+listesinden `visibility`'yi çıkarmak birim testini kırıyor. Loadgen
+(demo) `left=50 errors=0 … game=demo`.
+
 ## Oyun modülü G1 turu (`srv/g1-module`)
 
 Sunucu artık barındırdığı oyunu tek bir nesne-güvenli seam'in arkasında
