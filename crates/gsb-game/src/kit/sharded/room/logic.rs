@@ -4,28 +4,28 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
-use prost::Message;
 
+use crate::kit::common::{put_entity_records, write_full_header};
+use crate::kit::game::{ShardGame, Wire};
 use crate::kit::identity::WireId;
-use crate::kit::seam;
-use crate::kit::seam::Position;
-use crate::kit::sharded::*;
+use crate::kit::sharded::room::*;
+use crate::kit::space::Partition;
 
-impl GameLogic<World> for ShardedRoom {
+impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P> {
     type GroupKey = ();
-    type Strip = StripPos;
+    type Strip = Wire<G>;
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
 
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     /// One group per shard (see module docs, "Group key").
@@ -38,38 +38,28 @@ impl GameLogic<World> for ShardedRoom {
         world: &mut World,
         ctx: &TickCtx,
         _group: &Self::GroupKey,
-        borrowed: &[BorderRecord<StripPos>],
+        borrowed: &[BorderRecord<Wire<G>>],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        // The shard's own world (wire id, truncated position), collected
-        // while the query holds the world borrow.
-        let mut own: Vec<(u64, i32, i32)> = Vec::new();
-        {
-            let mut query = world.query::<(&WireId, &Position)>();
-            for (wire, pos) in query.iter(world) {
-                own.push((wire.get(), pos.x as i32, pos.y as i32));
-            }
-        }
+        // The shard's own world (wire id, wire value).
+        let own = self.own_records(world);
 
         // The content is the own world plus the borrowed boundary records
         // (the core has already sorted them by wire and filtered out any
         // that are this shard's own — the own record wins over the
         // neighbor's one-tick-stale copy of an entity that just crossed
-        // in). The frame filter keeps only the records actually near this
-        // shard (module docs, "Visibility model"): a neighbor's export
-        // covers the neighbor's WHOLE boundary, and the parts of it far
-        // from this shard (the neighbor's other edges) are not visible
-        // here. "No change" includes the borrowed content: a neighbor's
-        // boundary entity moving is a content change for this shard.
-        let mut content: HashMap<u64, (i32, i32)> = HashMap::with_capacity(own.len());
-        for (w, x, y) in &own {
-            content.insert(*w, (*x, *y));
-        }
+        // in). The frame filter (`Partition::admits`) keeps only the
+        // records actually near this shard (module docs, "Visibility
+        // model"): a neighbor's export covers the neighbor's WHOLE
+        // boundary, and the parts of it far from this shard (the
+        // neighbor's other edges) are not visible here. "No change"
+        // includes the borrowed content: a neighbor's boundary entity
+        // moving is a content change for this shard.
+        let mut content: HashMap<u64, Wire<G>> = HashMap::with_capacity(own.len());
+        content.extend(own);
         for rec in borrowed {
-            if self.in_border_frame(rec.state.x, rec.state.y) {
-                content
-                    .entry(rec.wire)
-                    .or_insert((rec.state.x, rec.state.y));
+            if self.partition.admits(self.index, &rec.state) {
+                content.entry(rec.wire).or_insert_with(|| rec.state.clone());
             }
         }
 
@@ -77,24 +67,18 @@ impl GameLogic<World> for ShardedRoom {
             return false;
         }
 
-        let mut snap = seam::WorldSnapshot {
-            sequence: ctx.tick,
-            entities: Vec::with_capacity(content.len()),
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
         // Deterministic payload order (sort by wire — the own records are
         // in query order and the borrowed are already sorted; a single
         // sort over the merged content keeps the snapshot stable so the
         // ledger and the wire bytes are reproducible tick-to-tick).
-        let mut entries: Vec<(&u64, &(i32, i32))> = content.iter().collect();
+        let mut entries: Vec<(&u64, &Wire<G>)> = content.iter().collect();
         entries.sort_unstable_by_key(|(w, _)| **w);
-        for (w, &(x, y)) in entries {
-            snap.entities.push(seam::EntityRecord { entity: *w, x, y });
-        }
-        snap.encode(out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        write_full_header(out, ctx.tick);
+        put_entity_records(
+            self.game.codec(),
+            entries.into_iter().map(|(w, wire)| (*w, wire)),
+            out,
+        );
 
         self.encoded += content.len() as u64;
         self.last = content;
@@ -108,14 +92,20 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        // The spawn point derives from the TRANSPORT session id (as it
-        // always has — the load generator's home distribution pairs with
-        // it); the stable player identity comes from this shard's
-        // range-partitioned counter.
+        // The stable player identity and the wire identity both come from
+        // this shard's range-partitioned counter (player first, as it
+        // always was); the spawn is the game's (the demo derives the
+        // spawn point from the TRANSPORT session id — the load
+        // generator's home distribution pairs with it).
         let player = self.mint_player();
+        let entity = self.game.spawn_player(world, conn);
+        debug_assert!(
+            world.entity(entity).contains::<Marker<G>>(),
+            "Game::spawn_player must spawn the codec's Marker (the broadcast set)"
+        );
         let wire_id = self.minter.mint();
         let wire = wire_id.get();
-        let entity = seam::spawn_player(world, conn, self.half, wire_id);
+        world.entity_mut(entity).insert(wire_id);
         self.player_entity.insert(player, entity);
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
@@ -142,52 +132,32 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        // The bot's synthesized frames (RECONNECT §9), resolved through
-        // this shard's own wire table — the same shared helper the
-        // single-world rooms use.
-        let bots = self
-            .park_ledger
-            .values()
-            .filter(|e| e.bot)
-            .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.player, en)));
-        seam::synthesize_bot_moves(bots, world, ctx, actions);
-        seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        // The bot-fed parked players' synthesized frames (RECONNECT §9)
+        // ride the same list as the wire input — the shared kit path.
+        crate::kit::common::ingest(
+            &mut self.game,
+            world,
+            ctx,
+            actions,
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+        )
     }
 
-    // -- the disconnect policy (see `crate::kit::room::OpenRoom`, the shared
-    //    hook bodies live in `crate::kit::common`; this shard-side mirror keys
-    //    its ledger by identity like the others but tracks the WIRE id,
-    //    because that is what survives migrations) ----------------------
+    // -- the disconnect policy: the same ledger and hook bodies as every
+    //    single-world room (`crate::kit::common`); what is shard-specific
+    //    is that a ledger entry travels with its entity's migration
+    //    (`ShardLogic` impl) -----------------------------------------
 
-    fn on_disconnect(&mut self, world: &mut World, player: PlayerId, identity: &str) -> Detach {
-        if self.park.grace.is_zero() || identity.is_empty() {
-            return Detach::Despawn;
-        }
-        match self.player_entity.get(&player) {
-            Some(&entity) => {
-                let wire = world
-                    .entity(entity)
-                    .get::<WireId>()
-                    .map(|w| w.get())
-                    .unwrap_or_default();
-                if wire != 0 {
-                    self.park_ledger.insert(
-                        identity.to_string(),
-                        ShardParkRecord {
-                            identity: identity.to_string(),
-                            player,
-                            wire,
-                            bot: false,
-                        },
-                    );
-                }
-                Detach::Hold {
-                    grace: Some(self.park.grace),
-                    to: gsb_core::room::ExpireTo::AiHandover,
-                }
-            }
-            None => Detach::Despawn,
-        }
+    fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
+        crate::kit::common::park_on_disconnect(
+            &self.player_entity,
+            player,
+            identity,
+            &self.park,
+            &mut self.park_ledger,
+        )
     }
 
     fn on_detach_expired(
@@ -196,23 +166,11 @@ impl GameLogic<World> for ShardedRoom {
         player: PlayerId,
         to: gsb_core::room::ExpireTo,
     ) {
-        match to {
-            gsb_core::room::ExpireTo::Despawn => {
-                self.park_ledger.retain(|_, e| e.player != player);
-            }
-            gsb_core::room::ExpireTo::AiHandover => {
-                for e in self.park_ledger.values_mut().filter(|e| e.player == player) {
-                    e.bot = true;
-                }
-            }
-        }
+        crate::kit::common::park_on_expire(&mut self.park_ledger, player, to);
     }
 
-    fn resume_lookup(&self, _world: &World, identity: &str) -> ResumeFound {
-        match self.park_ledger.get(identity) {
-            Some(e) => ResumeFound::Held(e.player),
-            None => ResumeFound::Never,
-        }
+    fn resume_lookup(&self, world: &World, identity: &str) -> ResumeFound {
+        crate::kit::common::park_lookup(world, &self.park_ledger, identity)
     }
 
     fn on_resume(
@@ -225,8 +183,7 @@ impl GameLogic<World> for ShardedRoom {
     ) {
         // Faz 2 shrink: consume the ledger entry + seq/ack reset. Nothing
         // to re-key — every table is keyed by the STABLE player id.
-        self.park_ledger.remove(identity);
-        self.input.end(player);
+        crate::kit::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
     }
 
     /// The per-connection private frame: the pending input
@@ -247,101 +204,47 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::kit::common::run_systems(&mut self.runner, world, ctx);
-
-        // Orphan stamping, range-aware (the demo game has no NPCs, but the
-        // broadcast set stays structural — "has a Position" — like the
-        // other rooms): entities with a `Position` but no `WireId` get
-        // the next serial FROM THIS SHARD'S RANGE (a shared counter would
-        // mint ids outside the range and break the disjointness invariant).
-        let orphans: Vec<Entity> = world
-            .query_filtered::<(Entity, &Position), bevy_ecs::prelude::Without<WireId>>()
-            .iter(world)
-            .map(|(e, _)| e)
-            .collect();
-        for entity in orphans {
-            let wire = self.minter.mint();
-            world.entity_mut(entity).insert(wire);
-            self.wire_entity.insert(wire.get(), entity);
-            self.own_wires.insert(wire.get());
-        }
-
-        // Rebuild the border cache (positions just changed in the movement
-        // system; `collect_border` cannot query — it takes `&World`).
-        let (x0, x1, y0, y1) = self.rect();
-        let b = self.border;
-        self.border_cache.clear();
-        let mut query = world.query::<(&WireId, &Position)>();
-        for (wire, pos) in query.iter(world) {
-            let near = (pos.x - x0) < b || (x1 - pos.x) < b || (pos.y - y0) < b || (y1 - pos.y) < b;
-            if near {
-                self.border_cache.push(BorderRecord {
-                    wire: wire.get(),
-                    state: StripPos {
-                        x: pos.x as i32,
-                        y: pos.y as i32,
-                    },
-                });
-            }
-        }
+        self.step(world, ctx);
     }
 
-    /// The demo's two request kinds on the SHARDED path (Faz 3 — the same
-    /// contract, and the same game-side handler body, as
-    /// [`crate::kit::room::OpenRoom::handle_request`], resolved against
-    /// THIS shard's world and player table):
-    ///
-    /// - `ABILITY` (room-local): range check + a real world mutation (the
-    ///   entity gets a `MoveTarget`), answered in the same tick's private
-    ///   frame. The requester is looked up by its STABLE player id, so a
-    ///   session that resumed onto this shard resolves identically.
-    /// - `ECONOMY` (external I/O): delegated to the economy service via
-    ///   an owning future; the shard actor registers it pending and the
-    ///   answer rides a later tick's private path. A migration of the
-    ///   requesting session mid-flight drops its pending state at
-    ///   migrate-out (`gsb_core::shard` module docs) — the answer is
-    ///   forfeited by design, exactly like a detach.
+    /// The game's request handlers on the SHARDED path (Faz 3 — the same
+    /// contract as [`crate::kit::room::OpenRoom::handle_request`],
+    /// resolved against THIS shard's world and player table; the demo:
+    /// `ABILITY` answered in the same tick, `ECONOMY` delegated to the
+    /// economy service). A migration of the requesting session
+    /// mid-flight drops its pending state at migrate-out
+    /// (`gsb_core::shard` module docs) — the answer is forfeited by
+    /// design, exactly like a detach.
     fn handle_request(
         &mut self,
         world: &mut World,
-        _ctx: &TickCtx,
+        ctx: &TickCtx,
         req: &gsb_core::rpc::RpcRequest,
     ) -> Option<RequestDecision> {
-        seam::handle_request(&self.player_entity, self.economy.as_ref(), world, req)
+        self.game
+            .handle_request(world, ctx, req, &self.player_entity)
     }
 
     /// This shard's match result (the Faz 3 promotion; the per-shard
     /// sibling of [`crate::kit::room::OpenRoom::match_result`]): the FINAL
-    /// snapshot of this shard's own region at teardown. One logical room
-    /// therefore yields one such payload PER SHARD through the shared
-    /// sink (all under the logical room id — the platform adapter
-    /// concatenates/filters); the shards' ranges are disjoint, so the
-    /// concatenated entity set is collision-free by construction.
+    /// snapshot of this shard's own region at teardown, ordered by wire
+    /// id. One logical room therefore yields one such payload PER SHARD
+    /// through the shared sink (all under the logical room id — the
+    /// platform adapter concatenates/filters); the shards' ranges are
+    /// disjoint, so the concatenated entity set is collision-free by
+    /// construction.
     fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
-        let mut entities: Vec<seam::EntityRecord> = Vec::new();
-        {
-            let mut query = world.query::<(&WireId, &Position)>();
-            for (wire_id, pos) in query.iter(world) {
-                entities.push(seam::EntityRecord {
-                    entity: wire_id.get(),
-                    x: pos.x as i32,
-                    y: pos.y as i32,
-                });
-            }
-        }
-        entities.sort_by_key(|e| e.entity);
-        let snap = seam::WorldSnapshot {
-            // The shutdown snapshot has no live ticker: sequence 0 marks
-            // "terminal" (live snapshots are strictly positive ticks).
-            sequence: 0,
-            entities,
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
+        let mut records = self.own_records(world);
+        records.sort_by_key(|(id, _)| *id);
         let mut out = bytes::BytesMut::new();
-        snap.encode(&mut out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        // The shutdown snapshot has no live ticker: sequence 0 marks
+        // "terminal" (live snapshots are strictly positive ticks).
+        write_full_header(&mut out, 0);
+        put_entity_records(
+            self.game.codec(),
+            records.iter().map(|(id, wire)| (*id, wire)),
+            &mut out,
+        );
         Some(out.freeze())
     }
 }

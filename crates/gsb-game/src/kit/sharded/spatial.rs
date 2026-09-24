@@ -8,9 +8,13 @@ use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
 use crate::kit::common::{CellBook, CellPieces};
-use crate::kit::seam::EconomyService;
+use crate::kit::seam::{DemoGame, Position, StripPos};
 use crate::kit::sharded::*;
-use crate::kit::space::{Cell, Grid2, cell_of};
+use crate::kit::space::{Cell, Grid2, GridPartition2, cell_of};
+
+/// The grid-protocol half this composite wraps: the demo's shard
+/// (transitional — the composite becomes generic next).
+type DemoShard = ShardedRoom<DemoGame, GridPartition2<Position>>;
 
 mod logic;
 mod shard;
@@ -31,7 +35,7 @@ mod shard;
 pub struct ShardedSpatialRoom {
     /// The grid-protocol half (delegated hooks; same module, so its
     /// private tables are readable where the seam requires it).
-    pub(in crate::kit::sharded) inner: ShardedRoom,
+    pub(in crate::kit::sharded) inner: DemoShard,
     /// World units per cell edge (the config's `aoi_cell_size`; the same
     /// knob the single-world AOI room turns).
     pub(in crate::kit::sharded) cell_size: f32,
@@ -71,7 +75,7 @@ impl ShardedSpatialRoom {
     /// world units (see [`ShardedRoom::new`] for the shared halves).
     pub fn new(index: usize, shard_count: usize, spawn_half: f32, cell_size: f32) -> Self {
         Self {
-            inner: ShardedRoom::new(index, shard_count, spawn_half),
+            inner: DemoShard::new(index, shard_count, spawn_half),
             cell_size: cell_size.max(0.5),
             book: CellBook::default(),
             prev_borrowed: HashMap::new(),
@@ -92,17 +96,20 @@ impl ShardedSpatialRoom {
         self
     }
 
+    /// The game this shard runs.
+    pub fn game(&self) -> &DemoGame {
+        self.inner.game()
+    }
+
+    /// The game this shard runs, for configuration after construction.
+    pub fn game_mut(&mut self) -> &mut DemoGame {
+        self.inner.game_mut()
+    }
+
     /// The cell space over this composite's `cell_size` (the kit's
     /// `Grid2` preset — the same one the single-world AOI room uses).
     pub(in crate::kit::sharded) fn grid(&self) -> Grid2 {
         Grid2::new(self.cell_size)
-    }
-
-    /// Attach the economy service handle (see [`ShardedRoom::with_economy`]).
-    #[must_use]
-    pub fn with_economy(mut self, economy: EconomyService) -> Self {
-        self.inner = self.inner.with_economy(economy);
-        self
     }
 
     /// THE strip integration (module docs, "THE borrowed-strip ×

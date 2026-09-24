@@ -1,21 +1,25 @@
-//! [`ShardedRoom`]: the shard-level [`ShardLogic`] for the demo game.
+//! [`ShardedRoom`]: the shard-level [`ShardLogic`], generic over the game
+//! (`G: ShardGame`) and the map partition (`P: Partition<Wire<G>>`,
+//! KIT-ARCHITECTURE §4.2). The sections below speak in the demo's terms
+//! (the kit's `GridPartition2` preset over the demo's `Position`).
 //!
 //! ## What it is
 //!
-//! The same game as the other four rooms (same components, movement
-//! system, wire format, spawn distribution — see [`crate::kit::common`]), but
-//! the world is partitioned into a **grid of shards**: a room of
-//! `shard_count` actors, each owning its rectangular region of the map.
-//! The core machinery (`gsb_core::shard`) runs the shard protocol
-//! (migration, border exchange, range-partitioned wire ids); this module
-//! supplies only the game knowledge:
+//! The same game as the single-world rooms, but the world is
+//! partitioned: a room of `shard_count` actors, each owning one region
+//! of the map. The core machinery (`gsb_core::shard`) runs the shard
+//! protocol (migration, border exchange, range-partitioned wire ids);
+//! this module supplies what the core leaves to the logic:
 //!
-//! - the **region** of a position (grid cell → shard index),
-//! - the **neighbor** topology (4-neighborhood of the grid),
-//! - the **migration state** ([`ShardedRoomState`]: position, speed,
-//!   move target — everything the entity carries),
-//! - the **border** export/import (boundary visibility, one quarter-cell
-//!   margin on each side),
+//! - the **region** of a position and the **neighbor** topology (the
+//!   partition — the demo: a grid, 4-neighbourhood), plus the migration
+//!   routing over it (a region that is not a neighbour's is reached hop
+//!   by hop, §8.4),
+//! - the **migration state** ([`KitMig`]: the game's captured state —
+//!   `ShardGame::capture`/`restore` — plus the kit's park record),
+//! - the **border** export/import (boundary visibility; the demo grid:
+//!   a quarter-cell margin on each side), the strip payload being the
+//!   codec's wire value (`Strip = Wire`),
 //! - the **snapshot** (the shard's own world + the borrowed boundary
 //!   records, one group — `GroupKey = ()`).
 //!
@@ -23,8 +27,8 @@
 //!
 //! A player sees **its shard's whole region plus a boundary margin**: the
 //! own region (a `1/shard_count` slice of the map, in a grid cell) and the
-//! neighboring shards' boundary entities within [`border`] of the shared
-//! edge. This is distance-limited visibility — the class of game sharding
+//! neighboring shards' boundary entities within the border margin of the
+//! shared edge. This is distance-limited visibility — the class of game sharding
 //! serves (a single continuous world where far entities are irrelevant).
 //! A player at the seam sees across it (the borrowed records); a player
 //! deep in its region does not see the far shards. The margin is
@@ -139,38 +143,48 @@ mod tests;
 pub use room::ShardedRoom;
 pub use spatial::ShardedSpatialRoom;
 
+use std::ops::Deref;
+
 use gsb_core::id::PlayerId;
 
-// `StripPos` (the strip payload) is the demo's wire value — the future
-// `RecordCodec::Wire`; every sharded file names it through this import.
-use crate::kit::seam::{MoveTarget, Position, StripPos};
+// The grid helpers, in scope for the in-module tests (`use super::*`).
+#[cfg(test)]
+use crate::kit::space::{grid_shape, shard_at};
 
-/// The full state of a migrating entity (everything the entity carries in
-/// its components — position, speed if it has one, and the pending move
-/// target, if any).
-/// Opaque to the core; reconstructed into components on
-/// [`ShardedRoom::on_migrate_in`].
+/// The full state of a migrating entity: the GAME's captured state
+/// (`ShardGame::Mig` — the demo: position, speed if any, pending move
+/// target) and the KIT's park record. Opaque to the core; the game
+/// rebuilds its half on [`ShardedRoom`]'s `on_migrate_in`, the kit its
+/// own.
 ///
 /// The `park` field is the RECONNECT §14.2 rule in action: a parked (or
 /// bot-fed) player's ledger record is part of the migrating PLAYER state,
 /// not a side table — an entity that crosses a seam while detached
 /// carries its park record along, so the receiving shard's ledger answers
 /// the resume and keeps feeding the bot.
+///
+/// Derefs to the game's state, so its fields read straight through
+/// (`mig.pos` for the demo's `mig.game.pos`).
 #[derive(Debug, Clone)]
-pub struct ShardedRoomState {
-    pub pos: Position,
-    /// The entity's speed; `None` for an entity without one (an NPC the
-    /// game spawned with a position only — §8.5: it migrates too).
-    pub speed: Option<f32>,
-    pub target: Option<MoveTarget>,
+pub struct KitMig<M> {
+    /// The game's captured state.
+    pub game: M,
     /// The entity's park record, if it is parked or bot-fed (`None` for
     /// every live session and every NPC).
     pub park: Option<ShardParkRecord>,
 }
 
-/// One shard-side park-ledger entry / migration-carried record. Keyed by
-/// identity in the ledger; carried inside [`ShardedRoomState`] because
-/// that is what survives migrations.
+impl<M> Deref for KitMig<M> {
+    type Target = M;
+
+    fn deref(&self) -> &M {
+        &self.game
+    }
+}
+
+/// A park-ledger entry in transit: carried inside [`KitMig`] because
+/// that is what survives migrations (the receiving shard files it in its
+/// own ledger under `identity`, against the entity it rebuilt).
 #[derive(Debug, Clone)]
 pub struct ShardParkRecord {
     /// The resume key of the parked session.
@@ -180,72 +194,10 @@ pub struct ShardParkRecord {
     /// and what the bot synthesizes input under. Travels with the record
     /// across migrations, so the identity is stable end to end.
     pub player: PlayerId,
-    /// The parked entity's wire id — stable across migrations, so it is
-    /// what the bot resolves through this shard's wire table.
+    /// The parked entity's wire id — stable across migrations.
     pub wire: u64,
     /// Latched at AI-handover expiry: the bot owns the entity.
     pub bot: bool,
-}
-
-/// The grid shape for `shard_count` shards: `rows` = the largest divisor
-/// of `shard_count` that is ≤ √N, `cols` = N / rows — the shape closest
-/// to a square (balanced region sizes). `shard_count` must be 1..=256.
-///
-/// Examples: 1→1×1, 2→1×2, 4→2×2, 6→2×3, 8→2×4, 12→3×4, 16→4×4,
-/// 25→5×5.
-pub fn grid_shape(shard_count: usize) -> (usize, usize) {
-    assert!(
-        (1..=256).contains(&shard_count),
-        "shard_count must be 1..=256 (grid topology), got {shard_count}"
-    );
-    let sqrt = (shard_count as f64).sqrt().floor() as usize;
-    for d in (1..=sqrt).rev() {
-        if shard_count.is_multiple_of(d) {
-            return (d, shard_count / d);
-        }
-    }
-    (1, shard_count) // unreachable: d=1 always divides
-}
-
-/// The shard index owning the position `(x, y)` on a map of half-size
-/// `half`, partitioned into `shard_count` shards in a `grid_shape` grid.
-/// The map spans `[-half, half]²`; each column spans `2*half/cols` in x,
-/// each row `2*half/rows` in y. Positions are clamped into the grid (the
-/// map has no walls, but a stray coordinate must still own exactly one
-/// shard — the "exactly one owner" invariant).
-pub fn shard_at(x: f32, y: f32, half: f32, shard_count: usize) -> usize {
-    let (rows, cols) = grid_shape(shard_count);
-    let cell_w = 2.0 * half / cols as f32;
-    let cell_h = 2.0 * half / rows as f32;
-    let col = (((x + half) / cell_w).floor() as i32).clamp(0, (cols - 1) as i32);
-    let row = (((y + half) / cell_h).floor() as i32).clamp(0, (rows - 1) as i32);
-    row as usize * cols + col as usize
-}
-
-/// The 4-neighbourhood of shard `index` in a `rows × cols` grid, in the
-/// stable order west, east, north, south (the core sends border and
-/// migration messages to exactly these).
-pub(in crate::kit::sharded) fn grid_neighbors(
-    index: usize,
-    rows: usize,
-    cols: usize,
-) -> Vec<usize> {
-    let row = index / cols;
-    let col = index % cols;
-    let mut neighbors = Vec::with_capacity(4);
-    if col > 0 {
-        neighbors.push(index - 1);
-    }
-    if col + 1 < cols {
-        neighbors.push(index + 1);
-    }
-    if row > 0 {
-        neighbors.push(index - cols);
-    }
-    if row + 1 < rows {
-        neighbors.push(index + cols);
-    }
-    neighbors
 }
 
 /// The migration routing table of shard `from` over a partition of

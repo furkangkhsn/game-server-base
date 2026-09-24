@@ -4,10 +4,12 @@ use bevy_ecs::prelude::World;
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 
+use crate::kit::seam::StripPos;
+use crate::kit::sharded::spatial::DemoShard;
 use crate::kit::sharded::*;
 
 impl ShardLogic<World> for ShardedSpatialRoom {
-    type State = <ShardedRoom as ShardLogic<World>>::State;
+    type State = <DemoShard as ShardLogic<World>>::State;
 
     fn index(&self) -> usize {
         self.inner.index()

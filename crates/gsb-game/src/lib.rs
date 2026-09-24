@@ -124,12 +124,27 @@ pub mod pvs {
 }
 
 /// The sharded rooms, their grid partition and migration state, and the
-/// demo's border-strip payload (compatibility path).
+/// demo's border-strip payload (compatibility path; the strategies'
+/// design notes live on the kit's generic
+/// [`ShardedRoom`](crate::kit::sharded::ShardedRoom)).
 pub mod sharded {
+    pub use crate::demo::migrate::DemoMig;
     pub use crate::demo::wire::StripPos;
-    pub use crate::kit::sharded::{
-        ShardParkRecord, ShardedRoom, ShardedRoomState, ShardedSpatialRoom, grid_shape, shard_at,
-    };
+    pub use crate::kit::sharded::{KitMig, ShardParkRecord, ShardedSpatialRoom};
+    pub use crate::kit::space::{grid_shape, shard_at};
+
+    /// One shard of the demo's sharded world: the kit's generic
+    /// [`ShardedRoom`](crate::kit::sharded::ShardedRoom) instantiated with
+    /// the demo's `Game` over the kit's 2D grid partition (constructors:
+    /// `new`, `with_disconnect_grace`, `with_economy`).
+    pub type ShardedRoom = crate::kit::sharded::ShardedRoom<
+        crate::demo::play::DemoGame,
+        crate::kit::space::GridPartition2<crate::demo::components::Position>,
+    >;
+
+    /// The demo's migrating entity state: the demo's captured components
+    /// in the kit's envelope (`KitMig` — the park record rides along).
+    pub type ShardedRoomState = KitMig<DemoMig>;
 }
 
 /// The open-visibility room and the demo's spawn distribution

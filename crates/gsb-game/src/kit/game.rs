@@ -12,6 +12,7 @@
 //! tick — a hook must never call it).
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
@@ -98,6 +99,37 @@ pub trait TeamGame: Game {
     /// [`TeamMember`](crate::kit::team::TeamMember); later team changes
     /// are plain component writes.
     fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
+}
+
+/// A game the sharded rooms can run: what a migrating entity carries
+/// from one shard's world into its neighbour's (§4.3's `Mig`, `capture`,
+/// `restore`).
+///
+/// A strategy-specific extension of [`Game`] rather than part of it:
+/// only the sharded composites call these, and stable Rust has no
+/// associated-type defaults — inside `Game` every game that never shards
+/// would have to name a `Mig` and write two hooks nothing calls.
+///
+/// What the KIT carries around the game's state (in `KitMig`): the wire
+/// identity (the core's `Migrating::wire`), the owning player, and the
+/// park record of a detached player (RECONNECT §14.2). Which entities
+/// migrate is the kit's rule too: every entity carrying the codec's
+/// `Marker` and the partition's position, whatever else it has
+/// (§8.5).
+pub trait ShardGame: Game {
+    /// The game state a migrating entity carries (the demo: position,
+    /// speed if any, pending move target).
+    type Mig: Debug + Send + 'static;
+
+    /// Capture `entity`'s game state on the sending shard (it is
+    /// despawned there on the next tick by the core's protocol).
+    fn capture(&self, world: &World, entity: Entity) -> Self::Mig;
+
+    /// Rebuild a migrated entity on the receiving shard from its
+    /// captured state and return it; like [`Game::spawn_player`], the
+    /// spawned entity must carry the codec's `Marker`. The kit stamps
+    /// the identity the entity travelled with right after.
+    fn restore(&mut self, world: &mut World, mig: Self::Mig) -> Entity;
 }
 
 /// The wire value of game `G`'s records.

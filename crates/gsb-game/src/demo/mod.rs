@@ -16,6 +16,7 @@ pub mod codec;
 pub mod components;
 pub mod economy;
 pub(crate) mod input;
+pub mod migrate;
 pub mod op;
 pub mod play;
 pub mod rooms;

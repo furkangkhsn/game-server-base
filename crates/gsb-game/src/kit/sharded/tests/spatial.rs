@@ -230,10 +230,12 @@ fn migrated_player_gets_private_full_on_arrival() {
     s1.on_migrate_in(
         &mut w1,
         arrival_wire,
-        ShardedRoomState {
-            pos: Position { x: 5.0, y: -10.0 },
-            speed: Some(DEFAULT_SPEED),
-            target: None,
+        KitMig {
+            game: DemoMig {
+                pos: Position { x: 5.0, y: -10.0 },
+                speed: Some(DEFAULT_SPEED),
+                target: None,
+            },
             park: None,
         },
         Some(PlayerId(9)),

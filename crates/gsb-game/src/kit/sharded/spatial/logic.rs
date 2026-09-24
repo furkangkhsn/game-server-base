@@ -14,7 +14,7 @@ use prost::encoding::varint::encode_varint;
 use crate::kit::common::assemble_group_packet;
 use crate::kit::identity::WireId;
 use crate::kit::seam;
-use crate::kit::seam::{DemoCodec, Position};
+use crate::kit::seam::{DemoCodec, Position, StripPos};
 use crate::kit::sharded::*;
 use crate::kit::space::{Cell, cell_of};
 
@@ -207,7 +207,7 @@ impl GameLogic<World> for ShardedSpatialRoom {
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         // Grid half: systems, range-aware orphan stamping, border-cache
         // rebuild (positions just changed).
-        self.inner.update(world, ctx);
+        self.inner.step(world, ctx);
         // Spatial half: clear the per-tick state, run the own-entity
         // dirty pass, apply parked removals — but do NOT roll yet: the
         // borrowed strip arrives later than `update` (module docs, "why

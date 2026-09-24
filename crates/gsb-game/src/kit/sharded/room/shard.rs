@@ -1,24 +1,25 @@
 //! The sharding half: this room's index, wire range, neighbours, and
 //! the migration/border callbacks the shard actor drives.
 
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::{Entity, With, World};
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, SHARD_SERIAL_RANGE, ShardLogic};
 
+use crate::kit::common::ParkEntry;
+use crate::kit::game::{ShardGame, Wire};
 use crate::kit::identity::WireId;
-use crate::kit::seam;
-use crate::kit::seam::{MoveTarget, Position, Speed};
-use crate::kit::sharded::*;
+use crate::kit::sharded::room::*;
+use crate::kit::space::Partition;
 
-impl ShardLogic<World> for ShardedRoom {
-    type State = ShardedRoomState;
+impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P> {
+    type State = KitMig<G::Mig>;
 
     fn index(&self) -> usize {
         self.index
     }
 
     fn shard_count(&self) -> usize {
-        self.shard_count
+        self.partition.shard_count()
     }
 
     fn serial_base(&self) -> u64 {
@@ -42,7 +43,8 @@ impl ShardLogic<World> for ShardedRoom {
         world: &mut World,
         neighbor: usize,
     ) -> Vec<Migrating<Self::State>> {
-        // Entities whose POST-step position lies in a region that
+        // Every broadcast entity (the codec's marker — §8.5: whatever
+        // else it carries) whose POST-step position lies in a region that
         // `neighbor` is the first hop toward (`route` — the neighbour's
         // own region, or a region beyond it: §8.4); the crossing was
         // sampled at the end of this tick; the core installs them in the
@@ -50,42 +52,45 @@ impl ShardLogic<World> for ShardedRoom {
         // after — see `gsb_core::shard`'s module docs. Each entity is in
         // exactly one region, and each region has one first hop, so it is
         // reported to exactly one neighbor.
-        let mut out: Vec<Migrating<Self::State>> = Vec::new();
-        // Every broadcast entity migrates (§8.5): the speed is carried
-        // when the entity has one, not required.
-        let mut query = world.query::<(
-            Entity,
-            &WireId,
-            &Position,
-            Option<&Speed>,
-            Option<&MoveTarget>,
-        )>();
-        for (entity, wire, pos, speed, target) in query.iter(world) {
-            let region = self.region_of(*pos);
-            if region != self.index && self.route[region] == neighbor {
+        let mut crossing: Vec<(Entity, u64)> = Vec::new();
+        {
+            let mut query = world.query_filtered::<(Entity, &WireId, &P::Pos), With<Marker<G>>>();
+            for (entity, wire, pos) in query.iter(world) {
+                let region = self.partition.region_of(pos);
+                if region != self.index && self.route[region] == neighbor {
+                    crossing.push((entity, wire.get()));
+                }
+            }
+        }
+        crossing
+            .into_iter()
+            .map(|(entity, wire)| {
                 // §14.2: the park record travels WITH the player state.
                 // The ledger is tiny (parks are rare), so the reverse
                 // lookup is a scan over it.
                 let park = self
                     .park_ledger
-                    .values()
-                    .find(|p| p.wire == wire.get())
-                    .cloned();
-                out.push(Migrating {
-                    wire: wire.get(),
-                    state: ShardedRoomState {
-                        pos: *pos,
-                        speed: speed.map(|s| s.0),
-                        target: target.copied(),
+                    .iter()
+                    .find(|(_, p)| p.entity == entity)
+                    .map(|(identity, p)| ShardParkRecord {
+                        identity: identity.clone(),
+                        player: p.player,
+                        wire,
+                        bot: p.bot,
+                    });
+                Migrating {
+                    wire,
+                    // What else travels is the game's (`ShardGame::capture`).
+                    state: KitMig {
+                        game: self.game.capture(world, entity),
                         park,
                     },
                     // The stable player identity travels with the entity:
                     // the receiving shard keys its row under the SAME id.
                     player: self.entity_player.get(&entity).copied(),
-                });
-            }
-        }
-        out
+                }
+            })
+            .collect()
     }
 
     fn on_migrate_in(
@@ -95,16 +100,17 @@ impl ShardLogic<World> for ShardedRoom {
         state: Self::State,
         player: Option<PlayerId>,
     ) {
-        // Reconstruct the entity from its full state, keeping its wire
-        // identity (the id travels with the state — range partitioning;
-        // the sibling's minter minted it, this one only re-materializes it).
-        let entity = seam::restore_migrant(
-            world,
-            self.minter.arrival(wire),
-            state.pos,
-            state.speed,
-            state.target,
+        // The game rebuilds the entity from its captured state; the kit
+        // re-stamps the wire identity it travelled with (range
+        // partitioning — the sibling's minter minted it, this one only
+        // re-materializes it).
+        let KitMig { game: mig, park } = state;
+        let entity = self.game.restore(world, mig);
+        debug_assert!(
+            world.entity(entity).contains::<Marker<G>>(),
+            "ShardGame::restore must spawn the codec's Marker (the broadcast set)"
         );
+        world.entity_mut(entity).insert(self.minter.arrival(wire));
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
         if let Some(player) = player {
@@ -116,11 +122,18 @@ impl ShardLogic<World> for ShardedRoom {
             self.player_entity.insert(player, entity);
             self.entity_player.insert(entity, player);
         }
-        if let Some(park) = state.park {
+        if let Some(park) = park {
             // §14.2: a detached/bot-fed player's ledger record arrives
             // WITH the entity — the receiving shard now owns the park
             // (its `resume_lookup` answers, its ingest feeds the bot).
-            self.park_ledger.insert(park.identity.clone(), park);
+            self.park_ledger.insert(
+                park.identity,
+                ParkEntry {
+                    player: park.player,
+                    entity,
+                    bot: park.bot,
+                },
+            );
         }
     }
 
@@ -136,17 +149,17 @@ impl ShardLogic<World> for ShardedRoom {
             // was attached to the migration state); drop it here so the
             // old shard's ledger never answers for a player it no longer
             // hosts.
-            self.park_ledger.retain(|_, p| p.wire != wire);
+            self.park_ledger.retain(|_, p| p.entity != entity);
             world.despawn(entity);
         }
     }
 
-    fn collect_border(&self, _world: &World) -> Vec<BorderRecord<StripPos>> {
+    fn collect_border(&self, _world: &World) -> Vec<BorderRecord<Wire<G>>> {
         // The boundary cache (rebuilt in `update`; see the field docs for
         // the one-tick-stale-with-respect-to-migrate-out note). The set is
-        // this shard's entities within `border` of any edge of the region
-        // rectangle; the exchange is sent whole to every neighbor and the
-        // consumer's frame filter discards the irrelevant parts.
+        // what the partition exports from this region; the exchange is
+        // sent whole to every neighbor and each consumer's frame filter
+        // (`Partition::admits`) discards the irrelevant parts.
         self.border_cache.clone()
     }
 

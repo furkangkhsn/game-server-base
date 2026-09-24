@@ -23,6 +23,11 @@ use std::collections::HashMap;
 mod migration;
 mod spatial;
 
+/// The instantiation these tests drive: the demo game over the kit's 2D
+/// grid partition (shadows the generic room of `use super::*`).
+type ShardedRoom =
+    super::ShardedRoom<crate::kit::seam::DemoGame, crate::kit::space::GridPartition2<Position>>;
+
 fn ctx(tick: u64) -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),
@@ -106,10 +111,12 @@ fn wire_ranges_are_disjoint_and_stable() {
 
     // Migrate w0 from shard 0 into shard 1: the id is preserved.
     let entity0 = *s0.player_entity.get(&PlayerId(1)).unwrap();
-    let state = ShardedRoomState {
-        pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
-        speed: world0.entity(entity0).get::<Speed>().map(|s| s.0),
-        target: world0.entity(entity0).get::<MoveTarget>().copied(),
+    let state = KitMig {
+        game: DemoMig {
+            pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
+            speed: world0.entity(entity0).get::<Speed>().map(|s| s.0),
+            target: world0.entity(entity0).get::<MoveTarget>().copied(),
+        },
         park: None,
     };
     s1.on_migrate_in(&mut world1, w0, state, Some(PlayerId(1)));

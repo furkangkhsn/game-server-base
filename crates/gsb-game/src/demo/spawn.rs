@@ -1,13 +1,10 @@
 //! Where (and as what) the demo's players enter the world: the spawn
 //! map size, the deterministic spawn distribution, the player's
-//! component bundle, the join-time team assignment, and the rebuild of
-//! an entity that migrated in from a neighbouring shard.
+//! component bundle and the join-time team assignment.
 
-use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::ConnectionId;
 
-use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
-use crate::kit::identity::WireId;
+use crate::demo::components::{DEFAULT_SPEED, Position, Speed};
 use crate::kit::team::Team;
 
 /// The default spawn map half-size (world units): the historical 100×100
@@ -43,19 +40,6 @@ pub(crate) fn player_bundle(conn: ConnectionId, spawn_half: f32) -> (Position, S
     (Position { x, y }, Speed(DEFAULT_SPEED))
 }
 
-/// Spawn a joining player's entity with the wire identity the kit minted
-/// for it — the spawn path of the rooms not yet generic over the game
-/// (team, PVS, sharded — phase 1b); the generic rooms call
-/// `DemoGame::spawn_player` and stamp the identity themselves.
-pub(crate) fn spawn_player(
-    world: &mut World,
-    conn: ConnectionId,
-    spawn_half: f32,
-    wire: WireId,
-) -> Entity {
-    world.spawn((player_bundle(conn, spawn_half), wire)).id()
-}
-
 /// The number of teams in the demo (a 2-team game; the kit's team room
 /// runs any number — the count is this assignment policy's).
 pub const TEAM_COUNT: u8 = 2;
@@ -70,27 +54,4 @@ pub const TEAM_COUNT: u8 = 2;
 #[inline]
 pub(crate) fn team_of(conn: ConnectionId) -> Team {
     Team((conn.0 % u64::from(TEAM_COUNT)) as u8)
-}
-
-/// Rebuild a migrated entity on the receiving shard from the game state
-/// it carried (position, speed if it had one, pending move target),
-/// keeping the wire
-/// identity it travelled with — the future `Game::restore`
-/// (KIT-ARCHITECTURE §4.3). The kit keeps the bookkeeping around it
-/// (wire/player tables, the park record).
-pub(crate) fn restore_migrant(
-    world: &mut World,
-    wire: WireId,
-    pos: Position,
-    speed: Option<f32>,
-    target: Option<MoveTarget>,
-) -> Entity {
-    let entity = match speed {
-        Some(speed) => world.spawn((pos, Speed(speed), wire)).id(),
-        None => world.spawn((pos, wire)).id(),
-    };
-    if let Some(target) = target {
-        world.entity_mut(entity).insert(target);
-    }
-    entity
 }

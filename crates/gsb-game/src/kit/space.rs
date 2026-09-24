@@ -13,9 +13,11 @@ use std::hash::Hash;
 
 use bytes::BytesMut;
 
+mod partition;
 mod sectors;
 mod vision;
 
+pub use partition::{GridPartition2, Partition, grid_shape, shard_at};
 pub use sectors::{ConvexSectors2, Sector, SectorMap};
 pub use vision::{Vision, VisionGrid2};
 

@@ -12,7 +12,8 @@ use crate::demo::spawn::DEFAULT_SPAWN_HALF;
 use crate::kit::aoi::AoiRoom;
 use crate::kit::pvs::SectorRoom;
 use crate::kit::room::OpenRoom;
-use crate::kit::space::{ConvexSectors2, Grid2, VisionGrid2};
+use crate::kit::sharded::{ShardedRoom, ShardedSpatialRoom};
+use crate::kit::space::{ConvexSectors2, Grid2, GridPartition2, VisionGrid2};
 use crate::kit::team::TeamRoom;
 
 impl OpenRoom<DemoGame> {
@@ -110,5 +111,39 @@ impl SectorRoom<DemoGame, ConvexSectors2<Position>> {
 impl Default for SectorRoom<DemoGame, ConvexSectors2<Position>> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The demo's sharded world: the kit's 2D grid partition over the demo's
+/// `Position` (and its `StripPos` wire value for the border frame).
+impl ShardedRoom<DemoGame, GridPartition2<Position>> {
+    /// Build shard `index` of a `shard_count`-shard room over a square
+    /// map of half-size `spawn_half`. All shards of a room share it.
+    pub fn new(index: usize, shard_count: usize, spawn_half: f32) -> Self {
+        Self::with_game(
+            DemoGame::new(spawn_half),
+            GridPartition2::new(shard_count, spawn_half),
+            index,
+        )
+    }
+
+    /// Attach the economy service handle (the RPC pattern's external-I/O
+    /// half on the sharded path — Faz 3). Builder-style, like
+    /// [`OpenRoom::with_economy`]; every shard of a room gets a clone of
+    /// the ONE server-wide service.
+    #[must_use]
+    pub fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.game_mut().set_economy(economy);
+        self
+    }
+}
+
+impl ShardedSpatialRoom {
+    /// Attach the economy service handle (see
+    /// [`ShardedRoom::with_economy`]).
+    #[must_use]
+    pub fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.game_mut().set_economy(economy);
+        self
     }
 }

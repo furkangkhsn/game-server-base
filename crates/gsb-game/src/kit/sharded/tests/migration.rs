@@ -3,6 +3,7 @@
 //! whatever components the game gave it.
 
 use super::*;
+use crate::kit::space::{GridPartition2, Partition};
 
 /// An NPC the GAME spawned with a position and nothing else (no
 /// `Speed`, no player) crosses from shard 0 into shard 1: it is reported
@@ -89,17 +90,17 @@ fn non_adjacent_crossing_is_routed_through_a_neighbour() {
 #[test]
 fn routing_reaches_every_region_by_shortest_paths() {
     for n in [1usize, 2, 3, 4, 6, 8, 12, 16] {
-        let (rows, cols) = grid_shape(n);
-        let tables: Vec<Vec<usize>> = (0..n)
-            .map(|i| first_hops(i, n, |j| grid_neighbors(j, rows, cols)))
-            .collect();
+        let (_, cols) = grid_shape(n);
+        let grid = GridPartition2::<Position>::new(n, 50.0);
+        let neighbors = |j: usize| Partition::<StripPos>::neighbors(&grid, j);
+        let tables: Vec<Vec<usize>> = (0..n).map(|i| first_hops(i, n, neighbors)).collect();
         for from in 0..n {
             for to in 0..n {
                 let (mut at, mut hops) = (from, 0);
                 while at != to {
                     let next = tables[at].get(to).copied().expect("a hop per region");
                     assert!(
-                        grid_neighbors(at, rows, cols).contains(&next),
+                        neighbors(at).contains(&next),
                         "n={n}: hop {at}→{next} toward {to} is a neighbour"
                     );
                     at = next;
