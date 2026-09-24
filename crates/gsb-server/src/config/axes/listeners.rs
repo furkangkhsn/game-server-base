@@ -397,6 +397,17 @@ pub(crate) const DEFAULT_MAX_CONNECTIONS: u64 = 100_000;
 /// slow-but-honest handshakes instead of a cap that rounds to near-zero.
 pub(crate) const MIN_UNAUTH_CONNS: u64 = 64;
 
+// The demo's defaults for its flat keys (GAME-MODULE §6 decision 1),
+// spelled out so `Config` builds with no game compiled in. The demo
+// module's tests lock each one to `gsb-demo`'s own constant.
+
+/// `team_vision_radius`'s default (`gsb_demo::team::DEFAULT_VISION_RADIUS`).
+pub(crate) const DEMO_DEFAULT_VISION_RADIUS: f32 = 25.0;
+/// `spawn_half_size`'s default (`gsb_demo::room::DEFAULT_SPAWN_HALF`).
+pub(crate) const DEMO_DEFAULT_SPAWN_HALF: f32 = 50.0;
+/// `disconnect_grace_secs`'s default (`gsb_demo::DEFAULT_DISCONNECT_GRACE`).
+pub(crate) const DEMO_DEFAULT_DISCONNECT_GRACE_SECS: f64 = 30.0;
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -429,9 +440,9 @@ impl Default for Config {
             tls_key: String::new(),
             listeners: None,
             aoi_cell_size: 20.0,
-            team_vision_radius: gsb_demo::team::DEFAULT_VISION_RADIUS,
-            spawn_half_size: gsb_demo::room::DEFAULT_SPAWN_HALF,
-            disconnect_grace_secs: gsb_demo::DEFAULT_DISCONNECT_GRACE.as_secs_f64(),
+            team_vision_radius: DEMO_DEFAULT_VISION_RADIUS,
+            spawn_half_size: DEMO_DEFAULT_SPAWN_HALF,
+            disconnect_grace_secs: DEMO_DEFAULT_DISCONNECT_GRACE_SECS,
             http_listen: String::new(),
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),

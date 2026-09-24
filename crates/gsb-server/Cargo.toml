@@ -11,9 +11,23 @@ build = "build.rs"
 name = "gsb-server"
 path = "src/main.rs"
 
+# The load generator drives the demo's wire protocol (its bots are
+# per-game from GAME-MODULE G3 on), so it needs the demo compiled in.
 [[bin]]
 name = "gsb-loadgen"
 path = "src/loadgen/main.rs"
+required-features = ["game-demo"]
+
+# The example client speaks the demo's protocol too.
+[[example]]
+name = "client"
+required-features = ["game-demo"]
+
+[features]
+default = ["game-demo"]
+# One feature per hosted game; the `game` config key picks among the
+# compiled-in ones at startup.
+game-demo = ["dep:gsb-demo"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -28,7 +42,10 @@ gsb-core = { workspace = true }
 gsb-ecs = { workspace = true }
 gsb-net = { workspace = true }
 gsb-protocol = { workspace = true }
-gsb-demo = { workspace = true }
+# The 2D demo, hosted by the `game-demo` feature (docs/GAME-MODULE.md
+# §4.2). Without any game feature the library still builds: the
+# structural proof that the server core names no game.
+gsb-demo = { workspace = true, optional = true }
 bevy_ecs = { workspace = true }
 # TLS client side (example client + loadgen --tls-ca) and server config.
 rustls = { workspace = true }

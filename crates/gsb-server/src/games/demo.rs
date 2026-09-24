@@ -166,3 +166,6 @@ impl GameModule for DemoModule {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

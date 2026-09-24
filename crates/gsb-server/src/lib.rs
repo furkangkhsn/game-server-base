@@ -36,6 +36,7 @@ pub use config::{
 pub use game::{GameError, GameModule, RegistryParts, RegistryTask};
 // The 2D demo's selection types and wire table, at the paths they have
 // always had (compatibility, GAME-MODULE §6 decision 1).
+#[cfg(feature = "game-demo")]
 pub use games::demo::{ResolvedSelection, RoomKind, VisibilityAxis, build_table};
 
 use crate::config::*;

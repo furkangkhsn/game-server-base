@@ -52,6 +52,25 @@ jobs:
       # so this job also enforces the banned-pattern list.
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # The game-agnostic core (docs/GAME-MODULE.md §4.2): gsb-server with NO
+  # game feature must still build — the structural proof that the server
+  # core names no game. The loadgen and the example client require the
+  # demo (`required-features`), so they are skipped here; the gsb-server
+  # binary builds and refuses every `game` name at startup.
+  no-game:
+    name: no-game build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p gsb-server --lib --no-default-features
+      - run: cargo clippy -p gsb-server --lib --bins --no-default-features -- -D warnings
+
   test:
     name: test
     runs-on: ubuntu-24.04
