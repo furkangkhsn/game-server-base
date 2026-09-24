@@ -75,10 +75,21 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **439** (439/439 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **454** (454/454 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **gsb-kit Faz 2** (`docs/KIT-ARCHITECTURE.md` §5.1, §10 "Faz 2
+388 → 409 → 411 → 419 → 433 → 439 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **gsb-kit Faz 3** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3
+sonucu") — **3D arena demosu** `gsb-demo-arena`, kit'in kabul testi:
+yalnız kit'in public yüzeyiyle yazılmış 3D takım sisi (yükseklik
+sayılır, üç takım, `TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, yarıçap
+15 m), kendi 3D hareketi, santimetre nicemlemeli kodeği, katılım
+sırasıyla round-robin takım ataması, `arena.proto` (kit zarfının tipli
+aynası, opcode'lar 1100..=1102); 15 test (7'si gerçek oda aktörü
+üzerinden, mutation-check'li). **`gsb-kit` ve `gsb-core`'a dokunulmadı**;
+iki engelleyici olmayan tasarım bulgusu kayıtlı (takım spawn'dan sonra
+soruluyor; kit zarfının istemci kuralları demo'nun proto'sunda).
+Sıradaki: Faz 4 (3D MMO demosu, `gsb-demo-mmo`, kapanış doğrulaması —
+§13). Önceki tur: **gsb-kit Faz 2** (`docs/KIT-ARCHITECTURE.md` §5.1, §10 "Faz 2
 sonucu") — **crate bölmesi**: `gsb-game` → `gsb-demo` (örnek oyun) ve
 yeni `gsb-kit` (stratejiler, delta motoru, sharded kompozitler,
 park/resume, ön-ayarlar, kendi `kit.proto`'su — `Private`'a oyunun özel
@@ -89,8 +100,7 @@ demo'da; demo kurucuları uzantı trait'leri (`gsb_demo::prelude`); kit
 ile demo'nun tipli aynası crate sınırında aynı baytlara kilitli;
 arenanın 3D ön-ayarı `Spatial` + `VisionGrid3` kuruldu (`Grid3` /
 `GridPartition3` tetikleyici bekliyor); wire baytları ve public yollar
-aynı, loadgen gürültü içinde. Sıradaki: Faz 3 (3D arena demosu,
-`gsb-demo-arena`). Önceki tur: **gsb-kit Faz 1b** (§4.6, §10 "Faz 1b
+aynı, loadgen gürültü içinde. Daha önce: **gsb-kit Faz 1b** (§4.6, §10 "Faz 1b
 sonucu") — **Faz 1 bitti**: takım sisi, PVS ve iki sharded kompozit
 oyun üzerinden generic (`Vision`, `SectorMap`, `Partition`, `TeamGame`,
 `ShardGame`, `KitMig`; 2D ön-ayarlar `VisionGrid2`, `ConvexSectors2`,

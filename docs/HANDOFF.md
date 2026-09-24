@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-439 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+454 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -116,9 +116,22 @@ nicemleme) bakıyorsa o test oyunun crate'ine aittir (demo'da
 `game.proto`'su onun tipli aynasını taşır ve `tests/kit_wire.rs` ikisini
 aynı baytlara kilitler — zarfa alan eklersen iki tarafı birlikte
 güncelle. Demo odalarının kurucuları uzantı trait'leridir: kullanan
-dosyaya `use gsb_demo::prelude::*;`. Sıradaki: Faz 3 (3D arena demosu,
-`gsb-demo-arena`: `Spatial` + `VisionGrid3` hazır; `Grid3` /
-`GridPartition3` bilerek yok).
+dosyaya `use gsb_demo::prelude::*;`.
+
+**Faz 3 tamam — 3D arena demosu** (KIT-ARCHITECTURE §10 "Faz 3
+sonucu", CHANGELOG "gsb-kit Faz 3 turu"): `crates/gsb-demo-arena`,
+kit'in kabul testi — yalnız kit'in public yüzeyiyle yazılmış 3D takım
+sisi (`TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, üç takım, yükseklik
+sayılır), kendi hareketi / kodeği (santimetre) / proto'su (opcode'lar
+1100..=1102). **`gsb-kit` ve `gsb-core`'a dokunulmadı.** Bir demo'nun
+kit'te değişiklik gerektiren her ihtiyacı bir TASARIM BULGUSUDUR
+(§11): kit'i yamama, iç öğeleri kopyalama — kaydet. Faz 3'ün iki
+engelleyici olmayan bulgusu orada (takım spawn'dan sonra soruluyor;
+kit zarfının istemci kuralları demo'nun proto'sunda). Arena sunucuya ve
+loadgen'e bağlı değil (§12); testleri gerçek oda aktörü üzerinden.
+Sıradaki: Faz 4 (3D MMO demosu, `gsb-demo-mmo`, §13 — kapanış
+doğrulaması; `Grid3` / `GridPartition3` bilerek yok, MMO yer
+düzleminde `Grid2` + `GridPartition2` kullanır).
 
 ## ÖNCE OKU (sırayla)
 
@@ -210,6 +223,6 @@ dosyaya `use gsb_demo::prelude::*;`. Sıradaki: Faz 3 (3D arena demosu,
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 439 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 454 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

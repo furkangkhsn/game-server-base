@@ -5,6 +5,77 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 3 turu (3D arena demosu `gsb-demo-arena` — kit'in kabul testi)
+
+`docs/KIT-ARCHITECTURE.md` §10'un Faz 3'ü ve §11'in ilk kabul
+kriterinin ikinci demosu: kit'in yalnız public yüzeyiyle yazılmış bir
+3D takım arenası, görünürlük modeli **3D takım sisi** (yükseklik
+sayılır), üç takım. **`crates/gsb-kit` ve `crates/gsb-core`'a tek satır
+dokunulmadı** (`git diff addbcf5.. --stat -- crates/gsb-kit
+crates/gsb-core crates/gsb-demo crates/gsb-server` boş); arena sunucuya
+ve loadgen'e bağlanmadı (§12 kapsam dışı).
+
+**Ne yapıldı** (`3fc92ef`, `a36a7c7`; ~760 satır kaynak + ~650 satır
+test + proto).
+- **Crate `gsb-demo-arena`** (workspace üyesi, `[workspace.dependencies]`
+  girdisi; `gsb-kit` + `gsb-core` + `gsb-protocol`'e bağlı, `gsb-demo`'ya
+  değil; `build.rs` `gsb_lint::check`'i çağırıyor).
+- **Oyun:** `Pos3` (metre, y yukarı, `Spatial`), kendi 3D kinematik
+  hareket sistemi (dikey dahil), `ArenaCodec` (`Wire = Cm3`: en yakına
+  yuvarlanmış tam sayı santimetre — arenanın her koordinatı ≤ 2 baytlık
+  varint), `ArenaGame: Game + TeamGame` (üsse spawn, katılım sırasıyla
+  round-robin üç takım, `MoveTo` girdisi kit'in `InputSeq`'i altında,
+  üssüne çekilen bot), oda `TeamRoom<ArenaGame, VisionGrid3<Pos3>>`
+  (yarıçap 15 m).
+- **Wire:** `proto/arena.proto` — `MoveTo` (cm + `seq`), `UnitRecord`,
+  kit zarfının tipli aynaları (`WorldSnapshot`, `Private`); kit
+  proto'su demo'daki gibi `links` üzerinden import ediliyor. Opcode'lar
+  `1100..=1102` (demo'nunkilerden ayrık blok).
+- **Testler (+15):** 8 birim (nicemleme, kayıt gövdesi, round-robin,
+  üs mesafeleri, bot, 3D hareket ×2, opcode bandı) + 7 entegrasyon,
+  gerçek `RoomActor` üzerinden: üç takımın her üyesi tam olarak
+  takımının gördüğünü alıyor; paylaşılan takım görüşü; tam üstteki
+  yarıçap-dışı düşman gizli, yarıçap-içi görünür (2D sisin geçemediği
+  test); hareket görünürlüğü tick tick değiştiriyor; girdi sıra/ack;
+  kit zarfı ile aynanın bayt uyumluluğu (kurulmuş ve gerçek kareler —
+  gerçek kareler iki tanımda da kit'in yazdığı baytların aynısına
+  yeniden kodlanıyor). Mutation-check'ler: `Spatial`'de yükseklik
+  terimi yok / `VisionGrid2` ile değiştirme → yükseklik testleri;
+  iki takımlı parite / tek takım / herkese ayrı takım → sis testleri;
+  dikeyi yok sayan hareket → yükseklik, girdi, wire; sıra kuralını
+  yok sayan `ingest` → girdi; aynada `entities = 6` → wire (ayrıntı:
+  KIT-ARCHITECTURE §10 "Faz 3 sonucu").
+
+**Tasarım bulguları** (engelleyici değil; kit'e değişiklik
+gerekmedi): (1) oda takımı spawn'dan SONRA soruyor — takıma bağlı
+spawn noktası için arena takımı `spawn_player`'da seçip `HomeBase`'e
+yazıyor, `team_of` geri okuyor; en küçük düzeltme `TeamGame`'e
+varsayılanlı `spawn_team_player` (yalnız ekleme). (2) Kit zarfının
+istemci kuralları `kit.proto`'da değil demo'nun `game.proto`'sunda
+yazılı (belge bağlılığı; düzeltme yalnız yorum). Gözlemler: kit'in
+opcode varsayılanları demo'nun numaraları; `Vision::sees` birim başına
+yarıçap taşımıyor; takım odası yalnız full gönderiyor — hiçbiri arenayı
+engellemedi. KIT-ARCHITECTURE §10 "Faz 3 sonucu".
+
+**Elenen alternatifler.**
+- *Takımı conn modülüyle atamak* (demo'nun kuralı): oturum kimlikleri
+  sunucu-geneli, bir odanın katılanları aynı kalanı paylaşabilir.
+- *En küçük takımı doldurmak:* ayrılış bir park (birim ve takımı
+  kalıyor); katılım başına dünya taraması karşılığında kadro pek
+  değişmiyor.
+- *Takımı `team_of`'ta seçip birimi sonra üsse taşımak:* `team_of`
+  `&World` alıyor (taşıyamaz); bir sonraki tick'te taşımak birimi bir
+  tick yanlış yerde yayınlardı.
+- *Milimetre / desimetre / `f32` wire:* §10 "Faz 3 sonucu"nun codec
+  satırı.
+- *`Planar` da uygulamak:* arena hiçbir yer-düzlemi ön-ayarı
+  kullanmıyor (`VisionGrid2` yalnız mutasyon probunda, geçici).
+- *Arenayı sunucuya / loadgen'e bağlamak:* §12 kapsam dışı.
+
+**Test:** 439 → **454** (+15). Clippy 0 uyarı. Loadgen (50 istemci, 3
+sn) `left=50 errors=0` — çalışma zamanında değişen kod yok, A/B
+alınmadı.
+
 ## gsb-kit Faz 2 turu (crate bölmesi: `gsb-kit` + `gsb-demo`, kit proto'su, `Spatial` + `VisionGrid3`)
 
 `docs/KIT-ARCHITECTURE.md` §10'un Faz 2'si: workspace'te artık

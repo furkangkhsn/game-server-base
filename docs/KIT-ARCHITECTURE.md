@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0, Faz 1 (1a + 1b) ve Faz 2 (crate bölmesi) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu", "Faz 2 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Sıradaki: Faz 3 (3D arena demosu). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0, Faz 1 (1a + 1b), Faz 2 (crate bölmesi) ve Faz 3 (3D arena demosu — kit'e dokunmadan) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu", "Faz 2 sonucu", "Faz 3 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Sıradaki: Faz 4 (3D MMO demosu, kapanış doğrulaması). Kararlar §12.**
 
 ## 1. Neden
 
@@ -621,7 +621,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), **1b tamam** (aşağıda "Faz 1b sonucu": takım sisi, PVS, sharded kompozitler, §8.2–§8.5, seam kit zarfına indi) | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları; arenanın 3D ön-ayarı (`Spatial`, `VisionGrid3`) — **tamam**, aşağıda "Faz 2 sonucu" | ~400–600 satır, çoğu yol | tüm testler + loadgen |
-| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `VisionGrid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
+| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `VisionGrid3`), proto — **tamam, kit ve çekirdek dokunulmadan**, aşağıda "Faz 3 sonucu" (iki engelleyici olmayan tasarım bulgusu) | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
@@ -1179,6 +1179,120 @@ sn'lik dört çift de karışık (taban 56 80 272 88, HEAD 64 56 96 176; iki
 koşu makine yüküyle sıçradı). Çalışma zamanında değişen kod yok (kayıt
 ve zarf yolları aynı; tek fark `emit_private`'ın boş `game` alanı) —
 gürültü içinde sayıldı.
+
+### Faz 3 sonucu
+
+**Tamamlandı** (`kit/phase-3-arena`, `addbcf5..`; CHANGELOG "gsb-kit
+Faz 3 turu"). Workspace'te yeni `crates/gsb-demo-arena`: küçük bir 3D
+takım arenası, görünürlük modeli **3D takım sisi** (bir takım bir
+birimi, üyelerinden en az biri ona 3D mesafede görüş yarıçapı içinde
+olduğunda görür; yükseklik sayılır), üç takım. **Kabul testi olarak
+koştu: `crates/gsb-kit` ve `crates/gsb-core`'a tek satır dokunulmadı**
+(`git diff addbcf5.. --stat -- crates/gsb-kit crates/gsb-core` boş;
+`gsb-demo` ve `gsb-server` de). Arena `gsb-kit`'e ve `gsb-core`'a bağlı,
+`gsb-demo`'ya değil (`cargo tree -p gsb-demo-arena --depth 1`); yalnız
+kit'in public yüzeyini görüyor — `pub(crate)` bir şeye erişemediği için
+kanıt yapısal (§11.1).
+
+**Arenanın kendisi (oyunun işi, §2):**
+
+| Parça | Seçim | Gerekçe |
+|---|---|---|
+| Konum | `Pos3 { x, y, z: f32 }`, metre, **y yukarı**; `Spatial` → `[x, y, z]` | `Planar` uygulanmadı: arena hiçbir yer-düzlemi ön-ayarı kullanmıyor, sis bilerek hacimsel |
+| Hareket | kendi 3D kinematik hedefe-git sistemi (`Movement`, önbellekli `QueryState`; düz çizgi, sabit hız 12 m/sn, varışta hedefe oturma, duran birime yazmama) | §6: hareket trait'i yok; dikey hareket sıradan hareket (platforma tırmanmak yürümek gibi zaman alır) |
+| Codec | `Wire = Cm3` — **tam sayı santimetre, en yakına yuvarlanmış** `i32`; gövde `UnitRecord { uint64 entity = 1; sint32 x, y, z = 2..4 }` | 100 m × 30 m × 100 m arenanın her koordinatı ≤ 2 baytlık zig-zag varint (|v| ≤ 8191); kayıt ≤ 11 bayt (üç `float` ile 17); milimetre çoğu koordinatı 3 bayta iter, desimetre 12 m/sn'lik tırmanmayı tick başına basamaklar; kesme yerine yuvarlama sıfır çevresinde iki kat geniş hücreyi önler |
+| Takım ataması | **katılım sırasıyla round-robin** (n. katılım → takım `n mod 3`), takım üssünde spawn | takım boyları en fazla bir farklı; aktarım kimliğinden bağımsız. Elenen: conn modülü (oturum kimlikleri sunucu-geneli; bir odanın katılanları aynı kalanı paylaşabilir), en küçük takımı doldurmak (ayrılış park edildiği için kadro pek değişmiyor; katılım başına dünya taraması) |
+| Görüş | `VisionGrid3<Pos3>`, yarıçap **15 m** (zeminin kenarının beşte biri; tavan 30 m'ye karşı yalnız yükseklik farkı da saklayabiliyor) | üsler 25 m'lik halkada, üç takımda 43,3 m ara — taze spawn yalnız kendi takımını görür |
+| Oda | `ArenaRoom = TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, kurucu `arena_room(game)` (serbest fonksiyon — kit tipinde inherent impl E0116) | — |
+| Bot | park süresi dolan birim, sıradan girdi yolundan (`seq = 0` `MoveTo`) üssüne çekilir | — |
+| Wire | `proto/arena.proto` (`gsb.arena`): `MoveTo` (cm, `seq`), `UnitRecord`, kit zarfının tipli aynaları `WorldSnapshot` (`entities = 2` tipli; `cell_exits = 4` aynalanmadı — arenada hücre uzayı yok) ve `Private` (`game = 4` aynalanmadı — arena özel yük göndermiyor); `gsb.kit.InputAck` olduğu gibi. Build demo'nun kalıbında (`DEP_GSB_KIT_PROTO_DIR`, `.gsb.kit` / `.gsb.base` için `extern_path`) | — |
+| Opcode'lar | `ARENA_MOVE_TO = 1100`, `ARENA_SNAPSHOT = 1101`, `ARENA_PRIVATE = 1102` (`Game::SNAPSHOT_OP` / `PRIVATE_OP` ezildi) | oyun bandı; 2D demo'nunkilerden (1000–1006) ayrık blok — iki oyunu tek `MessageTable`'da barındıran bir sunucu yeniden numaralamak zorunda kalmasın |
+
+**Kit'ten kullanılanlar** (tamamı public): `codec::RecordCodec`;
+`game::{Game, TeamGame, InputSeq}` (`InputSeq::admit`; birim testinde
+`InputSeq::default()`); `team::{TeamRoom, Team}` (`TeamRoom::with_game`;
+oda `TeamMember`'ı kendisi yazıyor); `space::{Spatial, VisionGrid3}`
+(`VisionGrid3::new`); `proto::{WorldSnapshot, Private, private::Payload,
+InputAck}` (`InputAck` arena proto'sunda `extern_path` ile; diğerleri
+yalnız wire testlerinde); build tarafında `links = "gsb-kit-proto"`.
+Kullanılmayan her şey (diğer odalar, `Planar`, `Grid2`, `CellSpace`,
+sharded tipler, `WireId`) gerekmedi.
+
+**Testler** (15: 8 birim + 7 entegrasyon; entegrasyonlar gerçek
+`gsb-core` `RoomActor`'ı üzerinden, elle beslenen ticker'la, her
+bağlantının kanalına gerçekten düşen kareleri arenanın tipli aynasıyla
+çözerek):
+
+| Test | Kilitlediği | Mutation-check (arena tarafında, yedekten geri yüklenerek) |
+|---|---|---|
+| `fog::each_team_receives_exactly_what_its_members_see` | üç takımın her üyesi tam olarak takımının gördüğünü alıyor — fazlası da eksiği de yok | iki takımlı parite, herkese takım 0, her katılana ayrı takım → kırıldı |
+| `fog::team_vision_is_shared_by_members_and_only_by_them` | bir üyenin gördüğü birim takımın uzaktaki üyesine de gidiyor, görmeyen takıma gitmiyor — kendi üyesi yaklaşana dek | aynı üç mutasyon → kırıldı |
+| `height::a_unit_straight_above_beyond_the_radius_is_hidden` | aynı zemin noktasında 20 m yukarıdaki düşman görünmüyor, 10 m yukarıdaki görünüyor (düzlem mesafesi 0 — 2D sis bunu geçemez) | `Spatial`'den yükseklik terimi atıldı; `VisionGrid3` yerine `VisionGrid2` (`Planar` `[x, z]`); hareket dikey ekseni yok saydı → kırıldı |
+| `height::movement_brings_enemies_into_view_and_takes_them_out` | 25 m'den inen düşman 15 m'ye girdiği İLK tick'te (kayıtta 14,6–15,0 m) pakete giriyor, pakette olduğu her tick'te yarıçap içinde; tırmanınca ilk tick'te çıkıyor; zeminde yürüyen düşman girip çıkıyor | aynı üç mutasyon → kırıldı |
+| `input::numbered_inputs_are_acked_and_stale_ones_dropped` | kit'in `InputSeq`'i arenanın `ingest`'i üzerinden: tekdüze yüksek-su ack'i, geç / yinelenen girdi düşüyor ve birimi eski hedefe döndürmüyor, `seq = 0` uygulanıp ack'lenmiyor | sıra kuralını yok sayan `ingest` → kırıldı |
+| `wire::kit_envelope_and_arena_mirror_encode_identically` | kurulmuş kareler (full, delta, ack + yanıt, one-shot full) iki tanımda aynı bayt, birbirini kendine çözüyor | aynanın `entities = 2 → 6` → kırıldı |
+| `wire::real_room_frames_decode_identically_through_both_definitions` | gerçek odanın yazdığı takım paketi ve ack karesi `gsb_kit::proto` ve aynadan aynı içeriğe çözülüyor, ikisi de **kit'in elle yazdığı baytların aynısına** yeniden kodlanıyor; kayıtlar santimetre | aynı mutasyon ve dikey hareketsizlik → kırıldı |
+
+Birim testleri: nicemleme (yuvarlama, simetri, doygunluk), kayıt gövdesi
+= tipli `UnitRecord`, katılım sırasıyla round-robin (hepsi çift yedi
+conn → 0,1,2,0,1,2,0), üslerin birbirinin görüşü dışında olması (3–5
+takım), bot'un girdi yolundan üsse çekilmesi, 3D doğru boyunca hareket
+ve varış, duran birime yazılmaması, opcode bandı.
+
+**Tasarım bulguları.** Kit'in public API'si arenayı **engellemedi**:
+kit'e değişiklik gerekmedi, hiçbir kit iç öğesi kopyalanmadı, hiçbir
+şey etrafından dolaşılmadı. Karşılaşılan iki pürüz (ikisi de
+engelleyici değil, kayıt):
+
+1. **Takım ataması spawn'dan SONRA soruluyor.** Oda önce
+   `Game::spawn_player`'ı, hemen ardından `TeamGame::team_of`'u
+   çağırıyor (`common::join` → `TeamRoom::on_join`). Takım oyununda
+   spawn noktası takıma bağlı (üs), yani karar spawn'da verilmek
+   zorunda: arena takımı `spawn_player`'da seçip birime `HomeBase`
+   olarak yazıyor, `team_of` yalnız onu geri okuyor. Sonuç: `team_of`
+   pratikte bir okuyucu, takım bilgisi de dünyada iki bileşende
+   (`HomeBase` + kit'in `TeamMember`'ı). Çalışıyor, çünkü kit iki
+   çağrının sırasını ve aynı katılıma ait olduklarını belgeliyor
+   (`team_of` "the player whose entity `spawn_player` just spawned").
+   **En küçük kit değişikliği (yalnız ekleme):** `TeamGame`'e
+   varsayılanlı bir kanca — `fn spawn_team_player(&mut self, world:
+   &mut World, conn) -> (Entity, Team)`, varsayılanı bugünkü sıra
+   (`spawn_player`, ardından `team_of`) — ve `TeamRoom::on_join`'in
+   katılımda onu çağırması (kit-içi: `common::join`'e spawn adımını
+   parametre olarak geçmek). Mevcut oyunlar (demo'nun conn paritesi)
+   değişmeden derlenir; takıma bağlı spawn isteyen oyun kancayı ezip
+   takımı ve üssü tek yerde seçer. Tetikleyici: takıma bağlı spawn
+   isteyen ikinci bir oyun (Faz 4'ün MMO'su takım sisi kullanmıyor).
+2. **Kit zarfının istemci kuralları demo'nun proto'sunda yazılı.**
+   `kit.proto`'nun `WorldSnapshot` yorumu delta/full istemci
+   kurallarını (baseline, sıra boşluğu, yinelenen kare, keep-alive
+   yakınsaması) "kit'in kuralları, her oyun için geçerli" diye anıyor
+   ama metni `gsb-demo/proto/game.proto`'ya yönlendiriyor. İkinci bir
+   oyunun istemci yazarı kit'in sözleşmesini öğrenmek için diğer
+   örnek oyunun proto'sunu okumak zorunda — bir belge bağlılığı (kod
+   değil). Arena kendi aynasına yalnız kendi odasının (takım sisi:
+   yalnız full) kuralını yazdı. **En küçük kit değişikliği:** yalnız
+   yorum — istemci kurallarını `kit.proto`'ya taşımak (demo'nun aynası
+   oraya atıf yapar).
+
+**Gözlemler (bulgu değil — arena bunlara takılmadı):**
+- `Game::SNAPSHOT_OP` / `PRIVATE_OP`'un kit'teki varsayılanları 2D
+  demo'nun numaraları (1003 / 1004). Arena ezdi; ezmeyi unutan bir oyun
+  demo'yla aynı opcode'u kullanır. Varsayılansız ilişkili sabit (derleme
+  hatasıyla zorunlu kılmak) daha dürüst olurdu; tetikleyici yok.
+- `Vision::sees(viewer, target)` yalnız iki konumu alıyor: birim başına
+  görüş yarıçapı (MOBA'nın ward / kahraman farkı) ancak yarıçapı konum
+  tipine gömen kendi `Vision`'ıyla yazılabilir. Arena bilinçli olarak
+  tekdüze yarıçap seçti.
+- `TeamRoom` yalnız full gönderir; hızlı hareket eden bir arenada her
+  tick her takıma bir full demek. Stratejinin tasarımı (§10 "Faz 1b"),
+  ölçülmedi, tetikleyicisiz iş yapılmaz.
+
+**Doğrulama:** 439 + 15 = **454** test / 0 hata / 1 ignored; `cargo
+clippy --workspace --all-targets -- -D warnings` 0 uyarı; loadgen
+(50 istemci, 3 sn) `left=50 errors=0` — arena sunucuya ve loadgen'e
+bağlı değil (§12 kapsam dışı), çalışma zamanında değişen kod yok; koşu
+yalnız workspace'in sağlam kaldığının kanıtı (A/B alınmadı).
 
 ## 11. Kabul kriteri
 
