@@ -1,5 +1,6 @@
 //! [`Vision`] — the team-fog seam over SIMULATION positions
-//! (KIT-ARCHITECTURE §4.2), and [`VisionGrid2`], its 2D preset (§7).
+//! (KIT-ARCHITECTURE §4.2), and its presets (§7): [`VisionGrid2`] on the
+//! ground plane, [`VisionGrid3`] in 3D.
 //!
 //! Team vision is a distance test between units, so it reads the
 //! simulation position (not the wire value the AOI space reads). The
@@ -13,7 +14,7 @@ use std::marker::PhantomData;
 
 use bevy_ecs::component::Component;
 
-use crate::space::{BLOCK_OFFSETS, Cell, Planar};
+use crate::space::{BLOCK_OFFSETS, Cell, Cell3, Planar, Spatial};
 
 /// How a game's units see each other (the team room's vision source
 /// model: a unit sees what [`Self::sees`] says it sees).
@@ -101,5 +102,73 @@ impl<P: Component + Copy + Planar<Coord = f32>> Vision for VisionGrid2<P> {
         let dx = vx - tx;
         let dy = vy - ty;
         dx * dx + dy * dy <= self.radius2
+    }
+}
+
+/// The 3D vision preset: a uniform vision `radius` in space (any
+/// position component with an `f32` [`Spatial`] projection), a grid of
+/// `radius`-edged cubic cells, and the 27-cell neighbourhood (the cell
+/// and its 26 face, edge and corner neighbours). A radius-edged cube
+/// makes the 3×3×3 block a superset of the radius ball — two units
+/// within `radius` differ by at most `radius` on every axis, so their
+/// cell indices by at most one — and the exact squared 3D distance test
+/// decides. Unlike [`VisionGrid2`], height separates: a unit directly
+/// above another, farther than `radius`, is out of sight.
+pub struct VisionGrid3<P> {
+    radius: f32,
+    /// `radius²`, computed once (the per-pair test compares against it).
+    radius2: f32,
+    _pos: PhantomData<fn() -> P>,
+}
+
+impl<P> VisionGrid3<P> {
+    /// A vision grid of `radius` world units, clamped to a sane minimum
+    /// (as [`VisionGrid2::new`]).
+    #[must_use]
+    pub fn new(radius: f32) -> Self {
+        let radius = radius.max(1.0);
+        Self {
+            radius,
+            radius2: radius * radius,
+            _pos: PhantomData,
+        }
+    }
+
+    /// The (clamped) vision radius.
+    pub fn radius(&self) -> f32 {
+        self.radius
+    }
+}
+
+impl<P: Component + Copy + Spatial<Coord = f32>> Vision for VisionGrid3<P> {
+    type Pos = P;
+    type Cell = Cell3;
+
+    #[inline]
+    fn cell(&self, pos: &P) -> Cell3 {
+        let [x, y, z] = pos.spatial();
+        Cell3(
+            (x / self.radius).floor() as i32,
+            (y / self.radius).floor() as i32,
+            (z / self.radius).floor() as i32,
+        )
+    }
+
+    /// The 3×3×3 block, in a fixed order (third axis outermost).
+    #[inline]
+    fn neighborhood(&self, cell: Cell3) -> impl Iterator<Item = Cell3> {
+        (-1..=1).flat_map(move |dz| {
+            (-1..=1).flat_map(move |dy| {
+                (-1..=1).map(move |dx| Cell3(cell.0 + dx, cell.1 + dy, cell.2 + dz))
+            })
+        })
+    }
+
+    #[inline]
+    fn sees(&self, viewer: &P, target: &P) -> bool {
+        let [vx, vy, vz] = viewer.spatial();
+        let [tx, ty, tz] = target.spatial();
+        let (dx, dy, dz) = (vx - tx, vy - ty, vz - tz);
+        dx * dx + dy * dy + dz * dz <= self.radius2
     }
 }

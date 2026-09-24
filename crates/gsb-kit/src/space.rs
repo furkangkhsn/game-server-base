@@ -1,7 +1,7 @@
 //! [`CellSpace`] — the AOI's space over WIRE values (KIT-ARCHITECTURE
-//! §4.2), and [`Grid2`], its 2D grid preset (§7); [`Planar`] — the
-//! accessor through which every 2D preset reads a game's position or
-//! wire type without knowing it.
+//! §4.2), and [`Grid2`], its 2D grid preset (§7); [`Planar`] and
+//! [`Spatial`] — the accessors through which the 2D and 3D presets read
+//! a game's position or wire type without knowing it.
 //!
 //! The AOI cell is computed from the wire value, not from the
 //! simulation state: the client holds only wire values and must derive
@@ -22,7 +22,7 @@ mod tests;
 
 pub use partition::{GridPartition2, Partition, grid_shape, shard_at};
 pub use sectors::{ConvexSectors2, Sector, SectorMap};
-pub use vision::{Vision, VisionGrid2};
+pub use vision::{Vision, VisionGrid2, VisionGrid3};
 
 /// Where a value lies on the ground plane — the accessor the kit's 2D
 /// presets read a game's types through (§7): [`Grid2`] reads the codec's
@@ -33,8 +33,8 @@ pub use vision::{Vision, VisionGrid2};
 /// 2D game answers `[x, y]`; a 3D game whose world lives on the ground
 /// plane answers `[x, z]` for its `Pos3 { x, y, z }` and for its 3D wire
 /// value, and then uses the planar presets unchanged. A preset that
-/// needs all three axes (the future `Grid3`) reads a separate spatial
-/// accessor; a type can implement both.
+/// needs all three axes ([`VisionGrid3`]) reads [`Spatial`] instead; a
+/// type can implement both.
 pub trait Planar {
     /// The coordinate type: `i32` for a quantized wire value, `f32` for
     /// a simulation position.
@@ -44,6 +44,28 @@ pub trait Planar {
     /// (the first is the grid's column axis, the second its row axis).
     fn planar(&self) -> [Self::Coord; 2];
 }
+
+/// Where a value lies in 3D space — the accessor the kit's 3D presets
+/// read a game's types through (§7; today [`VisionGrid3`]), the
+/// three-axis sibling of [`Planar`].
+///
+/// The axis order is the game's (the 3D presets are isotropic: a
+/// uniform radius, cubic cells). A 3D game typically implements both
+/// accessors on its position: `Spatial` for true 3D presets (the arena's
+/// team vision, where height matters) and `Planar` (`[x, z]`) for the
+/// ground-plane ones (an MMO's AOI and shard grid).
+pub trait Spatial {
+    /// The coordinate type: `f32` for a simulation position.
+    type Coord: Copy;
+
+    /// The value's three coordinates, in a fixed axis order.
+    fn spatial(&self) -> [Self::Coord; 3];
+}
+
+/// A cubic cell of a 3D grid — [`VisionGrid3`]'s cell key. Cell indices
+/// are the floor of (position / cell edge) on each axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Cell3(pub i32, pub i32, pub i32);
 
 /// A cell partition of the wire-value space: the AOI group key, the
 /// visibility neighbourhood, and the body of the `CellExit` record.
