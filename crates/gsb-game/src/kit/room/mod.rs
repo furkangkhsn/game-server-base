@@ -8,7 +8,7 @@
 //! - `player_entity`: which entity belongs to which player (keyed by the
 //!   STABLE [`gsb_core::PlayerId`] — Faz 2 — so the mapping survives a
 //!   resume unchanged);
-//! - `next_player_id` / `next_wire_id`: the next stable player identity
+//! - `next_player_id` / `minter`: the next stable player identity
 //!   and the next wire identity to hand out (see below);
 //! - `last`: the wire content (wire id → truncated `(x, y)`) of the
 //!   **last emitted** snapshot of the room's single group
@@ -30,11 +30,11 @@
 //! call sites: `on_join` (player entities — the same value also goes to
 //! the joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and
 //! the broadcast pass (everything else that is broadcastable, see
-//! below). Both sites go through **one minting point**,
-//! [`crate::kit::common::next_serial`], which is the only caller of the
-//! crate-private [`WireId::new`]: the counter's space is closed to
-//! everything else in the crate, and `WireId`'s private field plus the
-//! removed `Default` derive close it to every other crate as well.
+//! below). Both sites go through **one minting point**, the room's
+//! [`crate::kit::identity::Minter`] — the only code that can construct a
+//! [`WireId`] at all (its field is private to the identity module, it has
+//! no constructor and no `Default`): the counter's space is closed to
+//! everything else in this crate and in every other crate.
 //! Bevy's own `(index, generation)` stays internal: its `to_bits()` low
 //! half is `0xFFFFFFFF - index`, so the varint was 5 bytes in any
 //! realistic room; the serial is 1 byte while the room's total identity
@@ -110,11 +110,12 @@ pub struct OpenRoom {
     /// lifetime. Stability across resume comes from the park ledger
     /// carrying the id, not from re-minting.
     next_player_id: u64,
-    /// The room's wire-identity counter (see module docs, "Wire identity").
-    /// Monotonic; a value is never re-used within the room's lifetime. The
-    /// **only** writer is [`crate::kit::common::next_serial`] — the single
-    /// minting point for every [`WireId`] this room ever stamps.
-    next_wire_id: u64,
+    /// The room's wire-identity counter (see module docs, "Wire identity"):
+    /// the single minting point for every [`WireId`] this room ever
+    /// stamps ([`crate::kit::identity::Minter`] — the only construction
+    /// path of the type). Monotonic; a value is never re-used within the
+    /// room's lifetime.
+    minter: crate::kit::identity::Minter,
     /// Half-size of the square spawn map (see the demo's `spawn_pos`): entities
     /// spawn uniformly in `[-half, half]²`. Configuration, not a
     /// strategy decision — the demo map has no walls, so the map is as
@@ -180,7 +181,7 @@ impl OpenRoom {
             runner: seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
-            next_wire_id: 0,
+            minter: crate::kit::identity::Minter::sequential(),
             spawn_half: half.max(1.0),
             last: HashMap::new(),
             input: HashMap::new(),

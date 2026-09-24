@@ -30,7 +30,7 @@ impl ShardLogic<World> for ShardedRoom {
     }
 
     fn serial_used(&self) -> u64 {
-        self.serial_used
+        self.minter.used()
     }
 
     fn neighbors(&self) -> &[usize] {
@@ -85,10 +85,11 @@ impl ShardLogic<World> for ShardedRoom {
         player: Option<PlayerId>,
     ) {
         // Reconstruct the entity from its full state, keeping its wire
-        // identity (the id travels with the state — range partitioning).
+        // identity (the id travels with the state — range partitioning;
+        // the sibling's minter minted it, this one only re-materializes it).
         let entity = seam::restore_migrant(
             world,
-            WireId::new(wire),
+            self.minter.arrival(wire),
             state.pos,
             state.speed,
             state.target,

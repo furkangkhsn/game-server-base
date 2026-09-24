@@ -288,7 +288,7 @@ pub struct AoiRoom {
     park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
     /// The room's single wire-identity counter (see module docs,
     /// "Invariants preserved" / `game.proto`).
-    next_wire_id: u64,
+    minter: crate::kit::identity::Minter,
     /// World units per cell edge (see module docs, "Cell size" — it also
     /// sets the leak band, "Security parameter").
     cell_size: f32,
@@ -347,7 +347,7 @@ impl AoiRoom {
             next_player_id: 0,
             park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            next_wire_id: 0,
+            minter: crate::kit::identity::Minter::sequential(),
             cell_size: cell_size.max(0.5),
             spawn_half: half.max(1.0),
             input: HashMap::new(),

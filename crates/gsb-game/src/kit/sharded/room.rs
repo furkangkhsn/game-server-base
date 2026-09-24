@@ -50,12 +50,14 @@ pub struct ShardedRoom {
     pub(in crate::kit::sharded) entity_player: HashMap<Entity, PlayerId>,
     /// Wire id → entity (every entity, for migrate-out despawn).
     pub(in crate::kit::sharded) wire_entity: HashMap<u64, Entity>,
-    /// How many identities this shard has minted (the range is
-    /// `index * SHARD_SERIAL_RANGE + serial_used`). BOTH identity spaces
-    /// draw from this one counter — wire ids AND stable player ids — so
-    /// the core's range-exhaustion guard stays exact over everything the
-    /// range backs.
-    pub(in crate::kit::sharded) serial_used: u64,
+    /// This shard's identity counter over its disjoint range
+    /// (`index * SHARD_SERIAL_RANGE + n` — a range
+    /// [`Minter`](crate::kit::identity::Minter), the only construction
+    /// path of [`WireId`](crate::kit::identity::WireId)). BOTH identity
+    /// spaces draw from this one counter — wire ids AND stable player
+    /// ids — so the core's range-exhaustion guard (`serial_used`) stays
+    /// exact over everything the range backs.
+    pub(in crate::kit::sharded) minter: crate::kit::identity::Minter,
     /// The wire ids this shard currently owns, kept in sync on every
     /// mutation (join/leave/migrate-in/out). `own_wires` takes `&World`
     /// (it cannot query), so it reads this set instead. Accuracy matters
@@ -128,7 +130,7 @@ impl ShardedRoom {
             park_ledger: HashMap::new(),
             entity_player: HashMap::new(),
             wire_entity: HashMap::new(),
-            serial_used: 0,
+            minter: crate::kit::identity::Minter::range(index as u64 * SHARD_SERIAL_RANGE),
             own_wires: HashSet::new(),
             border_cache: Vec::new(),
             last: HashMap::new(),
@@ -167,18 +169,11 @@ impl ShardedRoom {
         (x0, x0 + self.cell_w, y0, y0 + self.cell_h)
     }
 
-    /// Mint the next identity from this shard's disjoint range (both
-    /// wire ids and stable player ids draw from the ONE counter — see
-    /// the `serial_used` field docs).
-    fn mint(&mut self) -> u64 {
-        self.serial_used += 1;
-        self.index as u64 * SHARD_SERIAL_RANGE + self.serial_used
-    }
-
     /// Mint the next STABLE player identity (Faz 2): range-partitioned
-    /// like the wire ids, so two shards never mint the same player.
+    /// like the wire ids — drawn from the SAME counter (see the `minter`
+    /// field docs), so two shards never mint the same player.
     fn mint_player(&mut self) -> PlayerId {
-        PlayerId(self.mint())
+        PlayerId(self.minter.next_serial())
     }
 
     /// Whether the (truncated) position `(x, y)` lies in the border frame

@@ -106,10 +106,8 @@ pub(crate) use crate::demo::op::{PRIVATE, WORLD_SNAPSHOT};
 
 // ── Identity (§4.4) ──────────────────────────────────────────────────────
 
-// (no entry) `WireId` moved into the kit in phase 0 (`kit::identity`);
-// what remains for phase 1 is kit-internal: one `Minter`
-// (sequential / range) replacing `next_serial` and the sharded rooms'
-// direct `WireId::new` calls (§8.1).
+// (no entry) `WireId` and its single `Minter` (sequential / range) are
+// kit-owned (`kit::identity`, §8.1 closed in phase 1a).
 
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────
 

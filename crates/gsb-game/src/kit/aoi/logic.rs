@@ -174,7 +174,7 @@ impl GameLogic<World> for AoiRoom {
         let admission = crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
-            &mut self.next_wire_id,
+            &mut self.minter,
             self.spawn_half,
             world,
             conn,
@@ -281,7 +281,7 @@ impl GameLogic<World> for AoiRoom {
         // `on_join`) is already inside this tick's change window — the
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
-        crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
+        crate::kit::common::stamp_orphans(&mut self.minter, world);
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).

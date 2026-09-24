@@ -95,7 +95,7 @@ pub struct SectorRoom {
     park: crate::kit::common::ParkPolicy,
     park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
-    next_wire_id: u64,
+    minter: crate::kit::identity::Minter,
     /// Half-size of the square spawn map (see the demo's `spawn_pos`).
     /// The demo *PVS map* stays the hand-authored 100×100 sectors; this
     /// only affects where `on_join` places entities (a `spread`-profile
@@ -145,7 +145,7 @@ impl SectorRoom {
             next_player_id: 0,
             park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            next_wire_id: 0,
+            minter: crate::kit::identity::Minter::sequential(),
             spawn_half: half.max(1.0),
             last: HashMap::new(),
             buckets: HashMap::new(),

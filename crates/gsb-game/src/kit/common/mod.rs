@@ -14,17 +14,16 @@
 //!
 //! This is deliberately a set of plain functions over the rooms' fields
 //! (not a trait, not a struct that owns the fields): each room keeps its
-//! own `runner` / `player_entity` / `next_wire_id` fields (the group-key
+//! own `runner` / `player_entity` / `minter` fields (the group-key
 //! type is per-room, and the inline tests reach into these fields), and
 //! the shared behaviour is the only copy. A *Visibility* trait over the
 //! strategies was considered and rejected — see `docs/ROADMAP.md`,
 //! visibility turn, Bölüm C.
 //!
-//! **The minting point.** [`next_serial`] is the *only* caller of
-//! [`WireId::new`] in the crate (crate-private constructor, no `Default`
-//! on the type — see `kit/identity.rs`): every room's counter is the only
-//! source of identities for that room's entities, and the counter's
-//! space stays closed to everything else.
+//! **The minting point.** Every identity a room stamps is drawn from the
+//! room's one [`Minter`] (`kit/identity.rs`) — the only construction
+//! path of [`WireId`] (private field, no constructor, no `Default`): the
+//! counter's space stays closed to everything else.
 //!
 //! **Phase 0 (KIT-ARCHITECTURE §10).** The game-side halves of what used
 //! to live here — the movement system stack, `MOVE_TO` decoding, the bot
@@ -47,17 +46,9 @@ use gsb_core::room::{Admission, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 use prost::Message;
 
-use crate::kit::identity::WireId;
+use crate::kit::identity::{Minter, WireId};
 use crate::kit::seam;
 use crate::kit::seam::Position;
-
-/// Mint the next wire identity from the room's single monotonic counter
-/// (see module docs, "The minting point").
-#[inline]
-pub(crate) fn next_serial(next_wire_id: &mut u64) -> WireId {
-    *next_wire_id += 1;
-    WireId::new(*next_wire_id)
-}
 
 /// Per-connection input sequence state (shared by all rooms; see
 /// [`Self::admit`] and [`emit_private`]).
@@ -124,10 +115,10 @@ impl InputState {
 /// goes to the joiner in `JOIN_ROOM_RESULT`, so both paths share one
 /// space). Identity policy note: the demo mints a fresh PlayerId per
 /// first join; resume stability comes from the park ledger carrying it.
-pub(crate) fn on_join(
+pub(super) fn on_join(
     player_entity: &mut HashMap<PlayerId, Entity>,
     next_player_id: &mut u64,
-    next_wire_id: &mut u64,
+    minter: &mut Minter,
     spawn_half: f32,
     world: &mut World,
     conn: ConnectionId,
@@ -140,7 +131,7 @@ pub(crate) fn on_join(
     // always was): the load generator's home distribution pairs with it.
     // (Game side: the spawn point and the player bundle; kit side: the
     // identity stamped on it.)
-    let wire = next_serial(next_wire_id);
+    let wire = minter.mint();
     let entity = seam::spawn_player(world, conn, spawn_half, wire);
     player_entity.insert(player, entity);
     Admission {
@@ -260,14 +251,14 @@ pub(crate) fn run_systems(runner: &mut SystemRunner, world: &mut World, ctx: &Ti
 /// (their per-tick caches are built right after). Either call site keeps
 /// the guarantee: an orphan appears in the very snapshot that notices
 /// it.
-pub(crate) fn stamp_orphans(next_wire_id: &mut u64, world: &mut World) {
+pub(super) fn stamp_orphans(minter: &mut Minter, world: &mut World) {
     let orphans: Vec<Entity> = world
         .query_filtered::<(Entity, &Position), Without<WireId>>()
         .iter(world)
         .map(|(entity, _)| entity)
         .collect();
     for entity in orphans {
-        world.entity_mut(entity).insert(next_serial(next_wire_id));
+        world.entity_mut(entity).insert(minter.mint());
     }
 }
 

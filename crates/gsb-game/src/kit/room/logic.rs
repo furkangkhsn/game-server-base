@@ -57,7 +57,7 @@ impl GameLogic<World> for OpenRoom {
             // idempotence). The full query below runs *after* the
             // stamps, so it sees every broadcastable entity exactly once
             // (stamped and pre-stamped alike).
-            crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
+            crate::kit::common::stamp_orphans(&mut self.minter, world);
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
                 current.push((wire_id.get(), pos.x as i32, pos.y as i32));
@@ -126,7 +126,7 @@ impl GameLogic<World> for OpenRoom {
         crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
-            &mut self.next_wire_id,
+            &mut self.minter,
             self.spawn_half,
             world,
             conn,

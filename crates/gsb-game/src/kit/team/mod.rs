@@ -197,7 +197,7 @@ pub struct TeamRoom {
     park: crate::kit::common::ParkPolicy,
     park_ledger: HashMap<String, crate::kit::common::ParkEntry>,
     /// The room's single wire-identity counter (mirrors the other rooms).
-    next_wire_id: u64,
+    minter: crate::kit::identity::Minter,
     /// World units an enemy must be within to be visible to a team (see
     /// module docs, "Vision source model").
     vision_radius: f32,
@@ -251,7 +251,7 @@ impl TeamRoom {
             next_player_id: 0,
             park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
-            next_wire_id: 0,
+            minter: crate::kit::identity::Minter::sequential(),
             vision_radius: vision_radius.max(1.0),
             spawn_half: half.max(1.0),
             last: [HashMap::new(), HashMap::new()],

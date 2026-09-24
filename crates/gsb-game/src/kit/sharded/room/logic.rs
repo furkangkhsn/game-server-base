@@ -113,8 +113,9 @@ impl GameLogic<World> for ShardedRoom {
         // it); the stable player identity comes from this shard's
         // range-partitioned counter.
         let player = self.mint_player();
-        let wire = self.mint();
-        let entity = seam::spawn_player(world, conn, self.half, WireId::new(wire));
+        let wire_id = self.minter.mint();
+        let wire = wire_id.get();
+        let entity = seam::spawn_player(world, conn, self.half, wire_id);
         self.player_entity.insert(player, entity);
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
@@ -260,10 +261,10 @@ impl GameLogic<World> for ShardedRoom {
             .map(|(e, _)| e)
             .collect();
         for entity in orphans {
-            let wire = self.mint();
-            world.entity_mut(entity).insert(WireId::new(wire));
-            self.wire_entity.insert(wire, entity);
-            self.own_wires.insert(wire);
+            let wire = self.minter.mint();
+            world.entity_mut(entity).insert(wire);
+            self.wire_entity.insert(wire.get(), entity);
+            self.own_wires.insert(wire.get());
         }
 
         // Rebuild the border cache (positions just changed in the movement

@@ -88,7 +88,7 @@ impl GameLogic<World> for TeamRoom {
         let admission = crate::kit::common::on_join(
             &mut self.player_entity,
             &mut self.next_player_id,
-            &mut self.next_wire_id,
+            &mut self.minter,
             self.spawn_half,
             world,
             conn,
@@ -195,7 +195,7 @@ impl GameLogic<World> for TeamRoom {
         // broadcast set is exactly "has a `Position`" — structural, never
         // silently invisible. Done before `rebuild` so freshly-stamped
         // entities are in this tick's content.
-        crate::kit::common::stamp_orphans(&mut self.next_wire_id, world);
+        crate::kit::common::stamp_orphans(&mut self.minter, world);
 
         self.rebuild(world);
     }
