@@ -56,7 +56,10 @@ jobs:
   # game feature must still build — the structural proof that the server
   # core names no game. The loadgen and the example client require the
   # demo (`required-features`), so they are skipped here; the gsb-server
-  # binary builds and refuses every `game` name at startup.
+  # binary builds and refuses every `game` name at startup. Each hosted
+  # game's feature must also build ALONE (no demo beside it): the proof
+  # that a game module leans on nothing another game's feature brings
+  # (the job keeps its name: it may be a required status check).
   no-game:
     name: no-game build
     runs-on: ubuntu-24.04
@@ -70,6 +73,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p gsb-server --lib --no-default-features
       - run: cargo clippy -p gsb-server --lib --bins --no-default-features -- -D warnings
+      - run: cargo build -p gsb-server --lib --no-default-features --features game-arena
+      - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-arena -- -D warnings
+      - run: cargo build -p gsb-server --lib --no-default-features --features game-mmo
+      - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-mmo -- -D warnings
 
   test:
     name: test
