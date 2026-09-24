@@ -20,6 +20,7 @@ use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
 use prost::Message;
 use std::collections::HashMap;
 
+mod migration;
 mod spatial;
 
 fn ctx(tick: u64) -> TickCtx<'static> {
@@ -107,11 +108,7 @@ fn wire_ranges_are_disjoint_and_stable() {
     let entity0 = *s0.player_entity.get(&PlayerId(1)).unwrap();
     let state = ShardedRoomState {
         pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
-        speed: world0
-            .entity(entity0)
-            .get::<Speed>()
-            .map(|s| s.0)
-            .unwrap_or(DEFAULT_SPEED),
+        speed: world0.entity(entity0).get::<Speed>().map(|s| s.0),
         target: world0.entity(entity0).get::<MoveTarget>().copied(),
         park: None,
     };

@@ -73,7 +73,8 @@ pub(crate) fn team_of(conn: ConnectionId) -> Team {
 }
 
 /// Rebuild a migrated entity on the receiving shard from the game state
-/// it carried (position, speed, pending move target), keeping the wire
+/// it carried (position, speed if it had one, pending move target),
+/// keeping the wire
 /// identity it travelled with — the future `Game::restore`
 /// (KIT-ARCHITECTURE §4.3). The kit keeps the bookkeeping around it
 /// (wire/player tables, the park record).
@@ -81,10 +82,13 @@ pub(crate) fn restore_migrant(
     world: &mut World,
     wire: WireId,
     pos: Position,
-    speed: f32,
+    speed: Option<f32>,
     target: Option<MoveTarget>,
 ) -> Entity {
-    let entity = world.spawn((pos, Speed(speed), wire)).id();
+    let entity = match speed {
+        Some(speed) => world.spawn((pos, Speed(speed), wire)).id(),
+        None => world.spawn((pos, wire)).id(),
+    };
     if let Some(target) = target {
         world.entity_mut(entity).insert(target);
     }

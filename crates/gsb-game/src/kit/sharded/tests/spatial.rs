@@ -232,7 +232,7 @@ fn migrated_player_gets_private_full_on_arrival() {
         arrival_wire,
         ShardedRoomState {
             pos: Position { x: 5.0, y: -10.0 },
-            speed: DEFAULT_SPEED,
+            speed: Some(DEFAULT_SPEED),
             target: None,
             park: None,
         },

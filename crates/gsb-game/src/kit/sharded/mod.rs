@@ -146,7 +146,8 @@ use gsb_core::id::PlayerId;
 use crate::kit::seam::{MoveTarget, Position, StripPos};
 
 /// The full state of a migrating entity (everything the entity carries in
-/// its components — position, speed, and the pending move target, if any).
+/// its components — position, speed if it has one, and the pending move
+/// target, if any).
 /// Opaque to the core; reconstructed into components on
 /// [`ShardedRoom::on_migrate_in`].
 ///
@@ -158,7 +159,9 @@ use crate::kit::seam::{MoveTarget, Position, StripPos};
 #[derive(Debug, Clone)]
 pub struct ShardedRoomState {
     pub pos: Position,
-    pub speed: f32,
+    /// The entity's speed; `None` for an entity without one (an NPC the
+    /// game spawned with a position only — §8.5: it migrates too).
+    pub speed: Option<f32>,
     pub target: Option<MoveTarget>,
     /// The entity's park record, if it is parked or bot-fed (`None` for
     /// every live session and every NPC).

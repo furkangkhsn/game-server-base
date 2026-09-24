@@ -49,7 +49,15 @@ impl ShardLogic<World> for ShardedRoom {
         // docs). Each entity is in exactly one region, so it is reported
         // to exactly one neighbor.
         let mut out: Vec<Migrating<Self::State>> = Vec::new();
-        let mut query = world.query::<(Entity, &WireId, &Position, &Speed, Option<&MoveTarget>)>();
+        // Every broadcast entity migrates (§8.5): the speed is carried
+        // when the entity has one, not required.
+        let mut query = world.query::<(
+            Entity,
+            &WireId,
+            &Position,
+            Option<&Speed>,
+            Option<&MoveTarget>,
+        )>();
         for (entity, wire, pos, speed, target) in query.iter(world) {
             if self.region_of(*pos) == neighbor {
                 // §14.2: the park record travels WITH the player state.
@@ -64,7 +72,7 @@ impl ShardLogic<World> for ShardedRoom {
                     wire: wire.get(),
                     state: ShardedRoomState {
                         pos: *pos,
-                        speed: speed.0,
+                        speed: speed.map(|s| s.0),
                         target: target.copied(),
                         park,
                     },
