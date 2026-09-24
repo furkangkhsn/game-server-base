@@ -5,6 +5,69 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Süreli bekletmede `may_release` vetosu + veto tavanı (`fix/may-release-deadline`)
+
+`docs/RECONNECT.md` §17: "kopan karakter 20 sn sonra çıkış yapsın — ama
+savaştayken değil" artık ifade edilebiliyor. Önce `GameLogic::may_release`
+yalnız süresiz bekletmede (`grace = None`) soruluyordu; süreli bekletme
+deadline'ında koşulsuz bitiyordu (KIT-ARCHITECTURE §10, F4 gözlemi).
+
+**Commit'ler** (`e96fc94..`): `32e64f0` çekirdek (oda + shard aktörü),
+`00d2e4f` kit belgeleri, `207c390` MMO "çıkış sayacı + savaşta çıkış yok".
+
+**Davranış değişiklikleri (açıkça):**
+- **Süreli bekletme deadline'ında veto soruluyor.** `true` → bugünkü gibi
+  `ExpireTo`'ya biter (aynı süpürme, aynı sayaçlar); `false` → bekletme
+  uzar, soru her süpürmede (her tick'in 0c fazı) tekrarlanır. Hiç veto
+  etmeyen oyun için davranış bire bir aynı (kilitli).
+- **Yeni `RoomConfig::max_detach_hold: Option<Duration>`** — varsayılan
+  `Some(10 dk)` (`DEFAULT_MAX_DETACH_HOLD`), DETACH anından ölçülür;
+  tavanda hâlâ duran veto ezilir, bekletme `ExpireTo`'suna biter, aktör
+  bir kez uyarır (`detach_ceiling_warns`). Tavan yalnız vetoyu ezer,
+  grace'i asla kısaltmaz. `None` = tavan yok; `Some(ZERO)` = uzatma yok
+  (literal — `max_idle_input_secs`'in "0 = kapalı"sından bilinçli sapma);
+  temsil edilemeyen tavan = tavan yok. Tavan göçle taşınır
+  (`PlayerMigration.detach_ceiling`, public struct'a yeni alan).
+- **Süresiz bekletmeye de aynı tavan uygulanır** (davranış değişikliği:
+  yalnız vetosu 10 dk'dan uzun duran süresiz bekletme farklılaşır;
+  `max_detach_hold: None` eski davranışı birebir geri verir).
+- **Kit:** kod değişmedi (iletim zaten altı odadaydı), belgeler yeni
+  anlama göre güncellendi.
+- **MMO:** isabet eden saldırı saldırgana `InCombat { until }` yazar
+  (`COMBAT_TICKS` = 180 tick, 6 sn); `MmoGame::may_release` bu işaret
+  dururken çıkışı veto eder; işaret göçer (`MmoMig::Player.combat`).
+
+**Kullanıcı kararı ve bir düzeltme:** semantiği kullanıcı onayladı
+("süre dolunca veto sorulsun, uzatsın, mutlak tavan geçerli olsun").
+Ebeveynin önerisi tavanın zaten var olduğunu (`max_detach_hold`)
+söylüyordu — yanlıştı; eski tasarımda tavan grace'in kendisiydi
+(RECONNECT §276). Tavan bu turda yeni bir ayar olarak eklendi.
+
+**Elenen alternatifler:** sınırlı geri çekilmeli yeniden sorma (vetonun
+kalkışını gecikmeli görür, göçmesi gereken ek durum ister); tavanı yalnız
+süreli bekletmeye uygulamak (en açık yol — saf veto — korumasız kalırdı);
+tavan = grace'in katı (süresizde tanımsız); grace'i de kesen mutlak üst
+sınır (veto etmeyen oyunun davranışını değiştirirdi); oyun başına tavan
+(`Detach` API'sine kırıcı ekleme — tavan operatör vanasıdır); `RoomSample`'a
+`detach_forced` sayacı (metrik şeması ekleri kapsam dışı, açık iş).
+
+**Testler (+13 → 534):** `gsb-core/src/room/tests/hold.rs` (6),
+`gsb-core/src/shard/tests/hold.rs` (5 — göçte tavanın taşınması dahil),
+`gsb-demo-mmo/tests/combat_logout.rs` (2, gerçek dört shard aktörü).
+Önce kırıldılar (eski süpürmede oda 4/6, shard 4/5; MMO vetosu olmadan
+2/2); 13 mutation'ın hepsi yakalandı. Ebeveynin bağımsız mutation'ı:
+tavan kontrolünü kapatmak oda + shard'da 6 tavan testini kırıyor.
+**Bilerek değiştirilen fikstür:** `gsb-core/tests/reconnect.rs`'in
+`ParkLogic.release_ok` varsayılanı `false` → `true` (trait'in "veto yok"
+varsayılanı; eski `false` artık her süreli park'ı veto ederdi). Hiçbir
+iddia değişmedi.
+
+**Doğrulama:** 534 / 0 hata / 1 ignored; clippy `-D warnings` temiz;
+kapanış kontrolü 85/85; loadgen 50 istemci 3 sn `left=50 errors=0`;
+churn 50 istemci (`--churn-secs 1.5`) `errors=0 resumed=50
+resume_rejected_stale=0` (churn istemcisi LEAVE göndermez: `left=0`
+yapısal).
+
 ## WS uyum kapısı turu (RFC 6455 denetimi + Autobahn CI kapısı)
 
 HANDOFF iş sırası madde 3. El yazımı RFC 6455 kapısı `[[listeners]]`

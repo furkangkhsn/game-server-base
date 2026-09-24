@@ -75,10 +75,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **521** (521/521 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **534** (534/534 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **WS uyum kapısı** (`docs/SECURITY.md` §3.7): el yazımı RFC
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **süreli bekletmede veto + veto tavanı** (`docs/RECONNECT.md`
+§17) — `may_release` artık süreli bekletmenin deadline'ında da soruluyor
+(veto uzatır, her tick yeniden sorulur), duran veto yeni
+`RoomConfig::max_detach_hold` (varsayılan 10 dk, kopuştan itibaren;
+süresiz bekletmeye de uygulanır) ile sınırlı; veto etmeyen oyunda
+davranış aynı. MMO "çıkış sayacı + savaşta çıkış yok"a geçti.
+Önceki tur: **WS uyum kapısı** (`docs/SECURITY.md` §3.7): el yazımı RFC
 6455 okuyucusu §5 ve §7'ye karşı kural kural denetlendi. Bilinen açık
 kapandı: açık parçalı mesajın içindeki yeni veri çerçevesi yarım mesajı
 sessizce atıyor ya da içine teslim ediliyordu, artık 1002. Denetimin
@@ -87,8 +93,9 @@ minimal olmayan uzunluk 1002, gönderilemez kapanış kodu 1002 ve UTF-8
 olmayan sebep 1007. Her kural okuyucu seviyesinde kilitli (+24 test).
 CI'da Autobahn fuzzing client işi var; hedefi üretim kapısı + opak mesaj
 eşlemesi. Text vakaları sözleşme gereği gerekçeli olarak dışlandı. İş
-**yerelde koşulmadı** (imaj indirme izni yok); ilk CI koşusu onun ilk
-gerçek koşusu olacak. Önceki tur: **gsb-kit Faz 5** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 5
+yerelde gerçek imajla (`crossbario/autobahn-testsuite:25.10.1`) koşuldu:
+98 vaka, 96 OK + 2 INFORMATIONAL, denetleyici geçti (ilk yazılan `0.8.2`
+etiketi yoktu, düzeltildi). Önceki tur: **gsb-kit Faz 5** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 5
 sonucu") — **kit düzeltme turu**: iki kontrol demosunun kaydettiği
 bulguların hepsi kit'te kapandı, her biri kendi commit'inde ve önce
 kırılan testiyle — F1 (doğruluk: sharded × spatial'da ödünç hücresine
@@ -409,6 +416,10 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   attempt`. Kalan not: oda içi anahtarların uzun vadede PlayerId'ye
   taşınması (RECONNECT §14.1); rUDP üstünde e2e varyantı (deneysel
   statüye bağlı).
+  Sonraki tur: süreli bekletmede `may_release` vetosu + mutlak veto
+  tavanı `max_detach_hold` (harass-lock çekirdekte sınırlı, §17). Açık:
+  zorla bitirilen bekletmeler için `RoomSample` sayacı; sunucu
+  config'inde `max_detach_hold` ayarı.
 
 - [~] **Oturum zaman aşımı** — *bir parça kapandı, ikisi ürün kararı
   bekliyor.* Reader pump'un idle zaman aşımı (`idle_timeout_secs`,

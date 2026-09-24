@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-521 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+534 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -140,6 +140,17 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
 
+**Süreli bekletmede veto + veto tavanı** (RECONNECT §17, CHANGELOG):
+`GameLogic::may_release` süreli bekletmenin deadline'ında da soruluyor
+(veto uzatır, her tick yeniden sorulur); duran veto
+`RoomConfig::max_detach_hold` (varsayılan 10 dk, DETACH'tan; `None` =
+tavan yok, `Some(ZERO)` = uzatma yok) ile sınırlı — süresiz bekletme
+dahil. Tavan yalnız vetoyu ezer, grace'i kısaltmaz; tek kod yolu iki
+aktör için `room/counters/hold.rs`. Kit kodu değişmedi. MMO: `InCombat`
++ `MmoGame::may_release` (çıkış savaş bitene dek bekler). Test fikstürü
+yazarken: `may_release` varsayılanını `true` tut — `false`, her süreli
+park'ı veto eder.
+
 **Faz 5 tamam — kit düzeltme turu** (KIT-ARCHITECTURE §10 "Faz 5
 sonucu", CHANGELOG "gsb-kit Faz 5 turu"): iki demonun bulgularının
 hepsi kit'te kapandı, her biri kendi commit'inde, önce kırılan
@@ -252,6 +263,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 521 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 534 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
