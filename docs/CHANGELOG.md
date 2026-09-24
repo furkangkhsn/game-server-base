@@ -5,6 +5,38 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Kit düzeltme turu: K1–K3, K5, tek-oyun CI (`fix/kit-input-migration`)
+
+G2'nin gerçek sunucu altında bulduğu kit bulguları kapandı
+(`docs/GAME-MODULE.md` §5 "Kit düzeltme turu"). `gsb-core` değişmedi;
+wire baytları aynı.
+
+- **K1–K3 — oyuncunun girdi oturumu göçle taşınıyor** (`4d83d01`):
+  `KitMig`'e `input: Option<ShardInputRecord { hwm, acked }>`;
+  `collect_migrations` okur (reddedilen gönderimde kaynakta kalır),
+  `on_migrate_out` siler (K3: kaynakta sızıntı yok), `on_migrate_in`
+  kurar (`InputSeq::adopt`). Göçü tetikleyen girdi (MMO'nun `Travel`'ı)
+  artık hedef shard tarafından tek kez ack'leniyor (K1); sıra kuralı
+  göçte sıfırlanmıyor, eski/çift datagram hedefte düşüyor (K2). İki
+  sharded odada da; 2D demo'nun sharded odaları aynı yolda. `KitMig` ve
+  kayıtları `sharded/mig.rs`'e taşındı. Göç mesajı 24 bayt büyüdü (demo
+  `ShardMsg` 112 → 136, MMO 144 → 168); gelecekteki Ipc/Net codec'i yeni
+  alanı kapsamalı. `mmo_findings` kilitleri doğru davranışa çevrildi.
+  Ebeveynin bağımsız mutasyonu (varışta taşınan kaydı yok saymak): 7 kit
+  testinin 6'sı ve iki gerçek-sunucu MMO testi kırılıyor.
+- **K5 — örnek config oyun değiştirmeye hazır** (`80da518`):
+  `config.example.toml` demo'nun beş düz anahtarını varsayılanlarıyla
+  YORUMDA yazıyor; kopyada yalnız `game` satırını değiştirmek arena /
+  MMO'yu başlatıyor. Değiştirilmemiş örnek demo'yu aynen eskisi gibi
+  barındırıyor (aynı çözülmüş seçim).
+- **CI** (`c8fa79a`): `no-game` işi her oyun özelliğini tek başına da
+  derliyor ve lint'liyor.
+
+Test sayısı 579 → **586** (+7 kit birim testi). Loadgen A/B (50 istemci,
+4 shard, sharded ve sharded × spatial, dönüşümlü üçer çift) gürültü
+içinde; istemcinin saydığı ack'ler 2291–2296 → 2297–2298 (göçte
+kaybolanlar geri geldi).
+
 ## Oyun modülü G2 turu (`srv/g2-modules`)
 
 Arena ve MMO artık gerçek sunucuda, gerçek istemcilerle uçtan uca

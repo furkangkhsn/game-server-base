@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-579 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+586 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -140,6 +140,17 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
 
+**Kit düzeltme turu tamam** (`docs/GAME-MODULE.md` §5 "Kit düzeltme
+turu", CHANGELOG): sharded odalarda oyuncunun girdi oturumu (`InputSeq`:
+`hwm`, `acked`) göçle birlikte `KitMig.input` (`ShardInputRecord`) içinde
+taşınıyor — kaynak `collect_migrations`'ta OKUR, `on_migrate_out`'ta
+siler, hedef `on_migrate_in`'de kurar (`InputSeq::adopt`). Yeni bir kit
+kaydı `KitMig`'e girerse aynı deseni izle: toplarken okuma, taşıma
+kesinleşince silme (reddedilen gönderimde oyuncu kaynakta kalır).
+`KitMig` bugün serileştirilmiyor; Ipc/Net linkinin codec'i her alanı
+kapsamalı. `config.example.toml`'da demo anahtarları yorumda: yeni bir
+düz demo anahtarı da yorumda yazılmalı (`example_config` kilitliyor).
+
 **Oyun modülü G2 tamam** (`docs/GAME-MODULE.md` §5 "G2 sonucu",
 CHANGELOG "Oyun modülü G2 turu"): `game = "arena"` ve `game = "mmo"`
 gerçek sunucuda; ayarları yalnız kendi tablolarında (`[arena]`: `teams`,
@@ -149,7 +160,7 @@ hata. Okuyucular `games::settings`'te public. MMO'nun her oda kimliği
 bütün bir shard grubu; kaydı olmayan oturum waystone 0'a (shard 0).
 Uçtan uca test yazarken `tests/hosted/`'ı kullan; gömülü realm için
 `MmoModule::with_realm` + `start_game_server`. K4 (kayıtlı karakter
-oturuma bağlı) bilinen sınır.
+oturuma bağlı) bilinen sınır; K1–K3 ve K5 sonraki turda kapandı.
 
 **Oyun modülü G1 tamam** (`docs/GAME-MODULE.md` §5 "G1 sonucu",
 CHANGELOG "Oyun modülü G1 turu"): sunucu oyunu `GameModule`
@@ -294,6 +305,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 579 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 586 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -26,6 +26,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings   # 0 uyarı
 cargo test --workspace                                   # tamamen yeşil
 cargo build -p gsb-server --lib --no-default-features    # oyunsuz sunucu çekirdeği
+cargo build -p gsb-server --lib --no-default-features --features game-arena   # tek oyun
+cargo build -p gsb-server --lib --no-default-features --features game-mmo     # tek oyun
 ```
 
 CI ayrıca `autobahn` işini koşar: WS kapısına karşı Autobahn fuzzing
