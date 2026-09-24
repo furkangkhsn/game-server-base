@@ -1,6 +1,6 @@
-//! The demo's RPC request handlers (the future `Game::handle_request`,
-//! KIT-ARCHITECTURE §4.3): one body, shared by every room that answers
-//! requests (the open room and the sharded rooms).
+//! The demo's RPC request handlers (the body of its
+//! `Game::handle_request`, KIT-ARCHITECTURE §4.3): every kit room
+//! forwards requests to it.
 
 use std::collections::HashMap;
 

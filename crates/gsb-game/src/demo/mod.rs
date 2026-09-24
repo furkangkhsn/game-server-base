@@ -3,13 +3,16 @@
 //! Everything here is a *game* decision in the §2 sense — "what the bytes
 //! are and how the game plays": the components and the 2D position type,
 //! the movement system, the wire messages and opcodes, the spawn
-//! distribution, input decoding, the bot's wander, the RPC request
-//! handlers and the economy service they delegate to.
+//! distribution, the team assignment, what migrates across a shard
+//! border, input decoding, the bot's wander, the RPC request handlers
+//! and the economy service they delegate to, the PVS map data.
 //!
-//! The demo may use the kit (`crate::kit`) freely — that is the target
-//! dependency direction. The reverse direction is the phase-0 seam: kit
-//! code reaches this module ONLY through `crate::kit::seam`, which lists
-//! every such coupling (the phase-1 work list).
+//! The demo uses the kit (`crate::kit`) — that is the dependency
+//! direction: it implements the kit's seams (`DemoGame`: `Game`,
+//! `TeamGame`, `ShardGame`; `DemoCodec`; `Planar` for `Position` and
+//! `StripPos`) and instantiates the kit's rooms with them (`rooms`).
+//! The only reverse references are the kit's envelope types, generated
+//! from this module's `game.proto` until phase 2 (`crate::kit::seam`).
 
 pub(crate) mod bot;
 pub mod codec;

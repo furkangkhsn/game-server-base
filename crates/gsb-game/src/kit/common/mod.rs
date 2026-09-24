@@ -1,34 +1,27 @@
-//! The machinery the demo rooms share — everything that is **not** a
+//! The machinery the kit's rooms share — everything that is **not** a
 //! visibility-strategy decision.
 //!
-//! The four rooms (`OpenRoom`, `AoiRoom`, `TeamRoom`, `SectorRoom`) run
-//! the *same*
-//! game: the same components, the same movement system, the same wire
-//! format, the same spawn distribution, the same identity rules. They
-//! differ in exactly the two things the group-snapshot architecture
-//! leaves to the game: the group key (`GroupKey`) and what lands in each
-//! group's snapshot. Everything else — wire-identity minting, the
-//! connection→entity table, `MOVE_TO` ingestion, the system run, orphan
-//! stamping — is byte-for-byte identical across the rooms, so it lives
-//! here, once.
+//! Every room runs a game through the same seams (`Game`, its codec, its
+//! spaces). The rooms differ in exactly the two things the
+//! group-snapshot architecture leaves to the strategy: the group key
+//! (`GroupKey`) and what lands in each group's snapshot. Everything else
+//! — wire-identity minting, the player→entity table, the join and input
+//! paths around the game's hooks, orphan stamping, the change window,
+//! the park ledger, the snapshot and `Private` envelopes, the cell-delta
+//! engine — lives here, once.
 //!
-//! This is deliberately a set of plain functions over the rooms' fields
-//! (not a trait, not a struct that owns the fields): each room keeps its
-//! own `runner` / `player_entity` / `minter` fields (the group-key
-//! type is per-room, and the inline tests reach into these fields), and
-//! the shared behaviour is the only copy. A *Visibility* trait over the
-//! strategies was considered and rejected — see `docs/ROADMAP.md`,
-//! visibility turn, Bölüm C.
+//! This is deliberately a set of plain functions and engine types over
+//! the rooms' fields (not a trait, not a struct that owns the fields):
+//! each room keeps its own `player_entity` / `minter` / ledger fields
+//! (the group-key type is per-room, and the inline tests reach into
+//! these fields), and the shared behaviour is the only copy. A
+//! *Visibility* trait over the strategies was considered and rejected —
+//! see `docs/ROADMAP.md`, visibility turn, Bölüm C.
 //!
 //! **The minting point.** Every identity a room stamps is drawn from the
 //! room's one [`Minter`] (`kit/identity.rs`) — the only construction
 //! path of [`WireId`] (private field, no constructor, no `Default`): the
 //! counter's space stays closed to everything else.
-//!
-//! **Phase 0 (KIT-ARCHITECTURE §10).** The game-side halves of what used
-//! to live here — the movement system stack, `MOVE_TO` decoding, the bot
-//! wander, the spawn bundle — moved to the demo module; this module reaches
-//! them only through [`crate::kit::seam`].
 
 mod cells;
 mod frame;

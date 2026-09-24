@@ -98,7 +98,7 @@ pub(crate) fn park_on_disconnect(
 /// identity (despawn arm — the core runs `on_leave`, we just forget the
 /// entry so a later join is a transparent fresh join) or latches the bot
 /// marker (AI arm — the entity keeps playing, driven by
-/// [`seam::synthesize_bot_moves`](crate::kit::seam::synthesize_bot_moves)).
+/// [`Game::bot_actions`](crate::kit::game::Game::bot_actions)).
 pub(crate) fn park_on_expire(
     ledger: &mut HashMap<String, ParkEntry>,
     player: PlayerId,

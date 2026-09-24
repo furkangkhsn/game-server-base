@@ -3,26 +3,31 @@
 //! sharded composites, park/resume bookkeeping, the input seq/ack rule,
 //! wire-identity minting and the snapshot/`Private` framing.
 //!
-//! - `codec` (`RecordCodec`, §4.1), `space` (`CellSpace` + the `Grid2`
-//!   preset, §4.2), `game` (`Game`, §4.3) — the seams a game implements;
-//! - `room` (`all`: `OpenRoom<G>`), `aoi` (`AoiRoom<G, S>`), `team`
-//!   (`TeamRoom`), `pvs` (`SectorRoom`), `sharded` (`ShardedRoom`,
-//!   `ShardedSpatialRoom`) — the strategies, one module each (the first
-//!   two generic over the game since phase 1a);
+//! - `codec` (`RecordCodec`, §4.1), `space` (`Planar`, `CellSpace`,
+//!   `Vision`, `SectorMap`, `Partition` and their 2D presets `Grid2`,
+//!   `VisionGrid2`, `ConvexSectors2`, `GridPartition2`, §4.2/§7), `game`
+//!   (`Game` and its strategy extensions `TeamGame`, `ShardGame`, §4.3)
+//!   — the seams a game implements;
+//! - `room` (`OpenRoom<G>`), `aoi` (`AoiRoom<G, S>`), `team`
+//!   (`TeamRoom<G, V>`), `pvs` (`SectorRoom<G, M>`), `sharded`
+//!   (`ShardedRoom<G, P>`, `ShardedSpatialRoom<G, P, S>`) — the
+//!   strategies, one module each, every one generic over the game since
+//!   phase 1;
 //! - `common` — what every strategy shares (cell-delta engine and the
 //!   snapshot envelope, park policy, the input sequence rule, `Private`
 //!   framing, orphan stamping, the room accounting around the `Game`
 //!   hooks);
 //! - `identity` — the kit-owned wire identity (`WireId`) and its single
 //!   `Minter` (§4.4);
-//! - `seam` — **temporary**: the one module through which kit code still
-//!   reaches the demo game (the phase-1b work list, see its docs).
+//! - `seam` — **temporary**: the kit's envelope types, generated from the
+//!   demo's proto until phase 2 gives the kit its own (plus the test
+//!   fixtures).
 //!
-//! The dependency points one way in the target design (§3: "kit, demo'yu
-//! asla görmez"); until phase 1 finishes inverting it, the rule enforced
-//! here is the weaker, structural one: every kit→demo reference is an
-//! import from `seam`, and nothing else under `kit/` names a crate path
-//! outside `crate::kit`.
+//! The dependency points one way (§3: "kit, demo'yu asla görmez"): the
+//! only kit→demo references left are the seam's envelope imports, and
+//! the rule enforced here is the structural one — every kit→demo
+//! reference is an import from `seam`, and nothing else under `kit/`
+//! names a crate path outside `crate::kit`.
 
 pub mod aoi;
 pub mod codec;

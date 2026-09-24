@@ -1,16 +1,21 @@
-//! **THE phase-0 seam — temporary.** Every place kit code reaches demo
-//! code or a demo type goes through this one module (KIT-ARCHITECTURE
-//! §10, phase 0): outside this file, nothing under `kit/` names the demo
-//! module. Its contents are therefore the exact, reviewable work list of
-//! phase 1 (dependency inversion): each item below is grouped by the §4
-//! seam it will become, and phase 1 is done when this file is empty and
-//! deleted.
+//! **The kit→demo seam, after phase 1.** Every place kit code reaches
+//! demo code or a demo type goes through this one module
+//! (KIT-ARCHITECTURE §10): outside this file, nothing under `kit/` names
+//! the demo module.
 //!
-//! **After phase 1a** the §4.1/§4.2/§4.3 traits exist (`kit::codec`,
-//! `kit::space`, `kit::game`) and the two converted rooms — `OpenRoom<G>`
-//! and `AoiRoom<G, S>` — consume nothing from here: every remaining
-//! entry names its consumers, all of them phase 1b's (the team and PVS
-//! rooms and the sharded composites) or the kit's envelope (phase 2).
+//! **Phase 1 emptied it** of everything the kit needed the demo game
+//! for: the codec, the spaces, the sector map, the partition and every
+//! gameplay hook are seams the demo implements (`kit::codec`,
+//! `kit::space`, `kit::game`), and every room is generic over them. What
+//! remains outside the test fixtures is the kit's own envelope — the
+//! `Private` frame and the input ack, generated from the demo's
+//! `game.proto` today — which phase 2 moves into the kit's proto, after
+//! which this file is deleted.
+//!
+//! The test fixtures are genuinely fixtures: the kit's in-module tests
+//! drive the generic rooms with the demo's instantiation (its `Game`,
+//! components, wire value, map constants) and decode snapshots with the
+//! demo's typed mirror.
 //!
 //! The rule is locked by a source-scanning unit test
 //! (`crate::layering`), not only by review: under `kit/`, every `crate::`
@@ -33,8 +38,8 @@ pub(crate) use crate::demo::game::{InputAck, Private, private};
 #[cfg(test)]
 pub(crate) use crate::demo::game::WorldSnapshot;
 
-// ── Test fixtures (kit's in-module tests drive the kit rooms with the
-//    demo game; phase 1 replaces them with the kit's own small test game)
+// ── Test fixtures (the kit's in-module tests drive the generic rooms
+//    with the demo's instantiation)
 
 // The typed `CellExit` mirror the AOI tests decode snapshots with.
 #[cfg(test)]
