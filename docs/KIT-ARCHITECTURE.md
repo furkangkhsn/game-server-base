@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: TASARIM — onay bekliyor. Kod yazılmadı.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor. Kararlar §12.**
 
 ## 1. Neden
 
@@ -308,7 +308,8 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil |
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
-| 3 | İkinci demo: 3D `f32` (bileşenler, hareket, codec, 3D ön-ayarlar, proto, istemci görünümü) | ~800–1 200 satır | **kabul testi** (§11) |
+| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, `Grid3`, 3D takım sisi, proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
+| 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
 sharded). Faz 1'in en riskli parçası `CellBook`/`CellPieces`'i
@@ -321,23 +322,48 @@ generic yaparken baytları birebir korumaktır; `wire_contract.rs`,
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
 
-1. **İki farklı demo aynı kit'i kullanır:** mevcut 2D `sint32` demo ve
-   yeni 3D `f32` demo, AOI'yi ve delta motorunu **kit koduna hiç
-   dokunmadan** kullanır. Birinde çalışıp diğerinde çalışmayan her şey
-   kit'e değil oyuna aittir.
+1. **Üç farklı demo aynı kit'i kullanır** (üç kontrol mekanizması, §12):
+   mevcut 2D `sint32` demo, 3D arena ve 3D MMO, kit'in stratejilerini
+   ve delta motorunu **kit koduna hiç dokunmadan** kullanır. Her demo
+   ayrı bir crate'tir ve yalnız `gsb-kit`'in **public** yüzeyini
+   görür — `pub(crate)` bir şeye erişemediği için kanıt yapısaldır.
+   Bir demo'da çalışıp diğerinde çalışmayan her şey kit'e değil oyuna
+   aittir; bir demo'nun ihtiyacı kit'te değişiklik gerektiriyorsa bu
+   bir tasarım bulgusudur ve kayda geçirilir.
 2. **Mevcut istemciler değişmeden çalışır:** 2D demo'nun wire baytları
    yeniden düzenleme öncesiyle birebir aynıdır.
 3. **Performans:** loadgen sonuçları yeniden düzenleme öncesiyle gürültü
    içindedir.
 4. **`gsb-core` dokunulmamıştır.**
 
-## 12. Açık sorular (kullanıcı kararı)
+## 12. Kararlar (kullanıcı, 2026-09-24)
 
-1. **İkinci demo hangi tür olsun?** Öneri: küçük bir 3D `f32` "arena"
-   (FPS/TPS benzeri): serbest 3D hareket + AOI + takım sisi. 2D demo'dan
-   en uzak düşen örnek, soyutlamayı en sert sınayandır.
-2. **İsimler:** `gsb-kit` mi, `gsb-extras` mı? `gsb-game` → `gsb-demo`
-   yeniden adlandırması uygun mu?
-3. **§8'deki açıklar** Faz 1'in içinde mi kapansın (öneri: evet, ayrı
-   commit'lerle, çünkü taşınan kod zaten o dosyalar), yoksa önce ayrı
-   bir turda mı?
+1. **İsimler:** `gsb-kit` ve `gsb-demo` (`gsb-game` yeniden adlandırılır).
+2. **§8'deki açıklar Faz 1'de** kapanır — her biri önce davranış testiyle
+   kanıtlanır, sonra ayrı commit'le düzeltilir.
+3. **Üç kontrol demosu** (Faz 3 ve Faz 4):
+
+| Demo | Crate | Konum / wire | Sınadığı kit yüzeyi |
+|---|---|---|---|
+| 2D (mevcut) | `gsb-demo` | `Pos2` f32 sim, `(i32,i32)` wire | **bayt uyumluluğu** (mevcut istemciler, loadgen), tüm stratejiler |
+| 3D arena | `gsb-demo-arena` | `Pos3<f32>`, 3D wire | `Grid3` (27 hücre) AOI, 3D mesafeli takım sisi, küçük oda, hızlı hareket |
+| 3D MMO | `gsb-demo-mmo` | `Pos3<f32>`, yer-düzlemi hücre | büyük dünya: sharded × spatial kompoziti, 3D konumda **yer-düzlemi** `Partition` + `Grid2` AOI, oyun kodunun spawn/despawn ettiği NPC'ler (hayalet-entity düzeltmesini sınar), park/bot reconnect politikası, NPC göçü (`Speed`'siz entity açığını sınar) |
+
+Arena ve MMO bilinçli olarak farklı uzay seçimleri yapar: biri hacimsel
+(`Grid3`), diğeri 3D veriyi yer düzlemine yansıtır (`Grid2` +
+`GridPartition2`). Böylece ön-ayarların 3D veriyle iki farklı kombinasyonu
+da sınanır.
+
+**Kapsam dışı (bilinçli):** `gsb-server`'ın ve loadgen'in oyundan
+bağımsız yapılması (§9). Sunucu ikilisi ve loadgen 2D demo'ya bağlı kalır;
+3D demolar kendi crate testleriyle (oda aktörü üzerinden, gerçek
+`GameLogic` yolu) doğrulanır. Faz 4 sonunda, her demonun uçtan uca
+çalışabilmesi için gereken en küçük sunucu kancası ihtiyacı ayrıca
+değerlendirilir.
+
+## 13. Faz 4 — MMO demosu (kapanış doğrulaması)
+
+Faz 3'ün (3D arena) ardından gelir. Amaç, "her şey yerine oturdu mu"
+sorusunu en ağır kullanım senaryosuyla cevaplamaktır. MMO demosu kit'te
+bir değişiklik gerektirirse, bu turun raporu o değişikliği ve gerekçesini
+ayrıca listeler; kabul kriteri 1'e göre bu bir tasarım bulgusudur.
