@@ -49,21 +49,55 @@ message InputAck {
 }
 
 // Server → client: the snapshot of the room's snapshot group (the
-// game's snapshot opcode; the demo: WORLD_SNAPSHOT = 1003).
+// game's snapshot opcode, `Game::SNAPSHOT_OP`).
+//
+// THE CLIENT RULES below are the kit's and hold for every game: a
+// game's typed mirror points here instead of restating them.
 //
 // FULL mode (`delta` false/absent): the complete, self-contained state
-// of the group's view; it replaces the client's entire view.
+// of the group's view; it replaces the client's entire view. Packet loss
+// is healed by the next full. The open, team-fog, PVS and plain sharded
+// rooms send full frames only; the AOI and sharded × spatial rooms send
+// a full when a group is fresh and on the keep-alive cadence, deltas
+// otherwise.
 //
 // DELTA mode (`delta` true): the change of the group's view since the
-// PREVIOUS tick, applied ON TOP of the client's current view, in the
-// packet's field order: `removed` first, then `cell_exits`, then
-// `entities`. The client rules (baseline, sequence gaps, duplicates,
-// the keep-alive convergence guarantee) are written out on the demo's
-// typed mirror (`gsb-demo/proto/game.proto`, `WorldSnapshot`); they are
-// the kit's rules and hold for every game.
+// PREVIOUS tick (server-side: per group and cell), applied ON TOP of the
+// client's current view. The application order is fixed by the packet
+// layout: `removed` (entity exits) first, then `cell_exits`, then
+// `entities` (upserts) — so an entity that moved between two cells the
+// client sees is exited from its source before it is updated in its
+// target, and a client that sees only one of the two cells sees exactly
+// the exit or exactly the update (both correct for it).
+//
+// CLIENT RULES (delta mode):
+// - a delta WITHOUT a baseline (a fresh connection that has not applied
+//  a full yet) is DROPPED until the next full — the server ships a
+//  one-shot full via `Private` to every fresh group member (same batch)
+//  and a full on the keep-alive cadence;
+// - a delta WITH a baseline is applied on top, even across a sequence
+//  gap: the records are absolute (upserts of current values, forgets by
+//  absolute wire id, forgets by absolute cell) and idempotent, so
+//  applying them over a stale view is safe. A sequence gap in the
+//  group's stream is NORMAL, not proof of loss — the stream is
+//  event-driven (a group ships a frame only when its content changes,
+//  and even a moving entity is silent for a run of ticks: the game's
+//  wire values are quantized while motion is continuous), and it is the
+//  client's only signal that some intermediate frames (possibly
+//  carrying exits) may be missing. The worst case is a stale view — at
+//  most one keep-alive period (a missed exit may ghost briefly) — and
+//  the next keep-alive full restores exact state;
+// - a duplicate (sequence <= the last accepted) is discarded.
+//
+// CONVERGENCE GUARANTEE: every delta group ships a FRESH full snapshot
+// on the keep-alive cadence (active or silent), so any client — however
+// many deltas it missed — holds the exact group view within one
+// keep-alive period, with no out-of-band resync request.
 message WorldSnapshot {
-  // Monotonic snapshot sequence (the room's global tick index; a gap is
-  // normal, a duplicate is discarded).
+  // Monotonic snapshot sequence (the room's global tick index). A gap is
+  // normal (an event-driven stream — see the message docs); a duplicate
+  // (<= the last accepted) is discarded. The keep-alive full is the
+  // convergence guarantee, not the gap rule.
   uint64 sequence = 1;
   // Entity records: in full mode the complete view, in delta mode the
   // upserts. Each entry is one record BODY written by the game's
@@ -75,25 +109,41 @@ message WorldSnapshot {
   // both encodings of a repeated scalar, so the two decode identically.
   repeated uint64 removed = 3;
   // DELTA mode only: cells that left the group's view this tick (the
-  // client forgets every entity it holds for each). Each entry is one
-  // cell BODY written by the game's `CellSpace::encode_cell` (the kit's
-  // `Grid2` preset and the demo: a `CellExit { sint32 x = 1; sint32 y =
-  // 2; }`).
+  // client forgets every entity it holds whose record lies in that cell
+  // — it derives an entity's cell from the record's wire value the way
+  // the game's cell space does; one record per cell, whatever the
+  // cell's population). Each entry is one cell BODY written by the
+  // game's `CellSpace::encode_cell` (the kit's `Grid2` preset and the
+  // demo: a `CellExit { sint32 x = 1; sint32 y = 2; }`).
   repeated bytes cell_exits = 4;
-  // true = delta; false/absent = full.
+  // true = delta (apply on top, with the client rules above);
+  // false/absent = full (replace the entire view). The modes are
+  // distinguishable on the wire so a client expecting one mode can
+  // detect the other and act instead of silently misapplying it.
   bool delta = 5;
 }
 
-// Server → client: the per-connection frame (the game's private opcode;
-// the demo: PRIVATE = 1004). At most one per tick per connection.
+// Server → client: the per-connection frame (the game's private opcode,
+// `Game::PRIVATE_OP`). At most one per tick per connection.
 message Private {
   oneof payload {
     // The connection's input high-water mark, on the ticks it advanced.
     InputAck ack = 1;
-    // A one-shot FULL view for a connection that just (re)joined a group
-    // or crossed into a new one — applied unconditionally (a baseline
-    // reset; always `delta = false`). The kit hand-encodes this arm's
-    // tag (0x12) on the AOI and sharded × spatial paths.
+    // A one-shot FULL view for a connection that just (re)joined a group,
+    // resumed, crossed into a new one or migrated to a new shard (the AOI
+    // and sharded × spatial rooms). The kit hand-encodes this arm's tag
+    // (0x12).
+    //
+    // CLIENT RULE: this snapshot is a per-connection baseline reset — it
+    // is applied UNCONDITIONALLY (it replaces the client's entire view
+    // and adopts its `sequence`), regardless of the group stream's last
+    // accepted sequence: it is a different stream from the group frames
+    // (which share the group's sequence logic), and on a crossing tick it
+    // arrives in the same batch right after the new group's delta (which
+    // a client without a baseline for the new group drops as a gap — the
+    // one-shot full is what establishes the baseline, within the same
+    // batch, before the next delta can arrive). It is always `delta =
+    // false`; a `true` flag here is a protocol error.
     WorldSnapshot snapshot = 2;
   }
   // The connection's RPC responses for this tick (see `base.proto` for

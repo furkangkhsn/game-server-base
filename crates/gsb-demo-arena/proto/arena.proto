@@ -54,7 +54,9 @@ message UnitRecord {
 // Typed mirror of `gsb.kit.WorldSnapshot` (op `ARENA_SNAPSHOT`). The
 // team-fog room the arena runs emits FULL snapshots only: each frame
 // is the team's complete view and replaces the client's view (a unit
-// that left the team's vision is simply absent). Field 4 (`cell_exits`)
+// that left the team's vision is simply absent). The client rules of
+// the kit's envelope (full/delta, sequence, duplicates) are written out
+// in gsb-kit's `kit.proto`. Field 4 (`cell_exits`)
 // is not mirrored: the arena runs no cell space, so no frame carries it
 // (a decoder would skip it anyway).
 message WorldSnapshot {

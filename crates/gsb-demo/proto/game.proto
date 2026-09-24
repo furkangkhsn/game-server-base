@@ -97,17 +97,8 @@ message Private {
     // no baseline for that group's view, and a delta has nothing to apply
     // against. Sent once per join / group crossing; afterwards the group
     // stays in delta mode for everyone (no per-connection groups).
-    //
-    // CLIENT RULE: this snapshot is a per-connection baseline reset — it
-    // is applied UNCONDITIONALLY (it replaces the client's entire view
-    // and adopts its `sequence`), regardless of the group stream's last
-    // accepted sequence: it is a different stream from the group frames
-    // (which share the group's sequence logic), and on a crossing tick it
-    // arrives in the same batch right after the new group's delta (which
-    // a client without a baseline for the new group drops as a gap — the
-    // one-shot full is what establishes the baseline, within the same
-    // batch, before the next delta can arrive). It is always `delta
-    // = false`; a `true` flag here is a protocol error.
+    // CLIENT RULE (the kit's — gsb-kit's `kit.proto`, `Private.snapshot`):
+    // a per-connection baseline reset, applied UNCONDITIONALLY.
     WorldSnapshot snapshot = 2;
   }
   // The connection's RPC responses for this tick (empty = none; the
@@ -216,43 +207,15 @@ message EntityRecord {
 // frame, the demo's codec writes each record body).
 //
 // FULL mode (`delta` false/absent): the complete, self-contained state of
-// the group's view; the snapshot replaces the client's entire view of
-// the world. Packet loss is healed automatically by the next full
-// snapshot.
+// the group's view; it replaces the client's entire view. DELTA mode
+// (`delta` true): the change since the previous tick (server-side: per
+// (group, cell) pair — see `docs/DESIGN.md` §8), applied on top in the
+// packet's order: `removed`, then `cell_exits`, then `entities`.
 //
-// DELTA mode (`delta` true): the change of the group's view since the
-// PREVIOUS tick (server-side: per (group, cell) pair — see
-// `docs/DESIGN.md` §8), applied ON TOP of the client's current view.
-// The application order is fixed by the packet layout: `removed` (entity
-// exits) first, then `cell_exits`, then `entities` (updates) — so an
-// entity that moved between two cells the client sees is exited from
-// its source before it is updated in its target, and a client that sees
-// only one of the two cells sees exactly the exit or exactly the update
-// (both correct for it).
-//
-// CLIENT RULES (delta mode):
-// - a delta WITHOUT a baseline (a fresh connection that has not applied
-//  a full yet) is DROPPED until the next full — the server ships one
-//  one-shot via `Private` to every fresh group member (same batch) and
-//  on the keep-alive cadence;
-// - a delta WITH a baseline is applied on top, even across a sequence
-//  gap: the records are absolute (upserts of current positions, forgets
-//  by absolute wire id, forgets by absolute cell) and idempotent, so
-//  applying them over a stale view is safe. A sequence gap in the
-//  group's stream is NORMAL, not proof of loss — the stream is
-//  event-driven (a group ships a frame only when its content changes,
-//  and even a moving entity is silent for a run of ticks: wire
-//  positions are integer-quantized while motion is fractional), and it
-//  is the client's only signal that some intermediate frames (possibly
-//  carrying exits) may be missing. The worst case is a stale view — at
-//  most one keep-alive period (a missed exit may ghost briefly) — and
-//  the next keep-alive full restores exact state.
-// - a duplicate (sequence <= the last accepted) is discarded.
-//
-// CONVERGENCE GUARANTEE: every group ships a FRESH full snapshot on the
-// keep-alive cadence (active or silent), so any client — however many
-// deltas it missed — holds the exact group view within one keep-alive
-// period, with no out-of-band resync request.
+// THE CLIENT RULES (baseline, sequence gaps, duplicates, the keep-alive
+// convergence guarantee) are the kit's, identical for every kit game,
+// and written out once in gsb-kit's `kit.proto` (`gsb.kit.WorldSnapshot`
+// and `Private.snapshot`).
 message WorldSnapshot {
   // Monotonic snapshot sequence (the room's global tick index). A gap is
   // normal (event-driven stream — see the message docs); a duplicate

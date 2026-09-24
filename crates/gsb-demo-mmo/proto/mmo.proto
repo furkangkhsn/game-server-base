@@ -100,7 +100,9 @@ message CellExit {
 // `removed`, then `cell_exits`, then `entities` (upserts). A delta
 // without a baseline is dropped; a duplicate `sequence` (<= the last
 // accepted) is discarded; the keep-alive full restores exact state.
-// These are the kit's client rules, identical for every kit game.
+// These are the kit's client rules, identical for every kit game —
+// written out in full in gsb-kit's `kit.proto` (`gsb.kit.WorldSnapshot`
+// and `Private.snapshot`).
 message WorldSnapshot {
   uint64 sequence = 1;
   repeated EntityRecord entities = 2;
