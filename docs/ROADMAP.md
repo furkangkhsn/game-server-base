@@ -421,8 +421,9 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   zorla bitirilen bekletmeler için `RoomSample` sayacı; sunucu
   config'inde `max_detach_hold` ayarı.
 
-- [~] **Oturum zaman aşımı** — *bir parça kapandı, ikisi ürün kararı
-  bekliyor.* Reader pump'un idle zaman aşımı (`idle_timeout_secs`,
+- [x] **Oturum zaman aşımı** — *kapandı: idle penceresi, yazma-tıkanma
+  sınırı (bayt ilerlemesi) ve AFK sinyali/tavanı — iki ürün kararı da
+  aşağıda kapandı.* Reader pump'un idle zaman aşımı (`idle_timeout_secs`,
   vars. 30 sn) **istemci sessiz** durumunu yakalıyor: hiçbir frame
   gelmezse pump `ConnIn::ServerClosed` gönderir, teardown kaskadı
   (registry → oda `Detach`) çalışır.
@@ -486,8 +487,9 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     başlattığı her kapanış sebep bazında sayılır (SECURITY §3.6, DESIGN
     §12). Kalan kalıntılar (TLS kuyruğu ≤64 KiB, çekirdek uyanma
     histerezi, WS'de iki pencereye kadar sınır) SECURITY §3.5'te.
-    Bekleyen: ebeveynin 10k A/B ölçümü (`1c22c99` ↔ `6f3d8f5`) — 4486'nın
-    kaçının yavaş-ama-okuyan olduğunu o söyleyecek.
+    10k A/B ölçümü alındı (CHANGELOG "Ölçüm kaydı"; commit'ler e-posta
+    düzeltmesinden sonra `c2b7160` ↔ `d8d9030`): fark gürültü içinde —
+    kesilenler yavaş-ama-okuyan değil, hiç okumayan istemcilerdi.
   - [x] **Ürün kararı 2 — AFK/zombi oturum — KAPANDI** (CHANGELOG
     "AFK sinyali + girdi-boşta tavanı turu"). Karar: AFK'nın KENDİSİ
     oyunun kararıdır, base ona bir SİNYAL verir ve bir TAVAN sunar.
