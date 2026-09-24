@@ -67,3 +67,47 @@ jobs:
       # outbound network. Several suites assert wall-clock tick rates and
       # timeouts (e.g. loadgen_smoke expects 20-40 Hz in a debug build).
       - run: cargo test --workspace
+
+  # RFC 6455 conformance of the hand-written WS door (docs/HANDOFF "WS uyum
+  # kapısı"). The Autobahn fuzzing client needs an ECHO server, so it drives
+  # examples/ws_autobahn.rs: the production door with the opaque message
+  # mapping (arbitrary binary payloads echo back instead of failing the game
+  # envelope). The case selection, every exclusion's reason (text is refused
+  # by the wire contract; compression is not offered) and the pass rule live
+  # in .github/autobahn/autobahn.py, which also judges the report.
+  autobahn:
+    name: autobahn (RFC 6455)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p gsb-net --example ws_autobahn
+      - name: Start the WS echo harness
+        run: |
+          mkdir -p autobahn
+          nohup ./target/release/examples/ws_autobahn 127.0.0.1:9001 \
+            > autobahn/harness.log 2>&1 &
+          for _ in $(seq 1 50); do
+            (exec 3<>/dev/tcp/127.0.0.1/9001) 2>/dev/null && exit 0
+            sleep 0.2
+          done
+          echo "harness did not start listening"; cat autobahn/harness.log; exit 1
+      - name: Run the Autobahn fuzzing client
+        run: |
+          python3 .github/autobahn/autobahn.py spec autobahn/fuzzingclient.json
+          docker run --rm --network host \
+            -v "$PWD/autobahn:/autobahn" \
+            crossbario/autobahn-testsuite:0.8.2 \
+            wstest -m fuzzingclient -s /autobahn/fuzzingclient.json
+      - name: Judge the report
+        run: python3 .github/autobahn/autobahn.py check autobahn/reports/index.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-report
+          path: autobahn/
+          if-no-files-found: warn
