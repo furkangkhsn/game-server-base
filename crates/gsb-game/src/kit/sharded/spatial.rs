@@ -7,9 +7,9 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
-use crate::economy::EconomyService;
 use crate::kit::common::{Cell, CellBook, CellPieces, cell_of};
-use crate::sharded::*;
+use crate::kit::seam::EconomyService;
+use crate::kit::sharded::*;
 
 mod logic;
 mod shard;
@@ -30,38 +30,38 @@ mod shard;
 pub struct ShardedSpatialRoom {
     /// The grid-protocol half (delegated hooks; same module, so its
     /// private tables are readable where the seam requires it).
-    pub(in crate::sharded) inner: ShardedRoom,
+    pub(in crate::kit::sharded) inner: ShardedRoom,
     /// World units per cell edge (the config's `aoi_cell_size`; the same
     /// knob the single-world AOI room turns).
-    pub(in crate::sharded) cell_size: f32,
-    /// The content bookkeeping shared with [`crate::aoi::AoiRoom`] —
+    pub(in crate::kit::sharded) cell_size: f32,
+    /// The content bookkeeping shared with [`crate::kit::aoi::AoiRoom`] —
     /// buckets over OWN entities AND borrowed records alike, change
     /// lists, member counts, born groups. Fed from two sources: the
     /// bevy dirty pass in `update` (own entities) and
     /// [`Self::integrate_borrowed`] (the strip diff).
-    pub(in crate::sharded) book: CellBook,
+    pub(in crate::kit::sharded) book: CellBook,
     /// THE ledger (module docs, "THE borrowed-strip × delta-ledger
     /// subtlety"): the previous tick's flattened borrowed view,
     /// `wire → (x, y)` truncated. The new slice is diffed against THIS,
     /// never against the buckets, so an unchanged strip dirties nothing.
-    pub(in crate::sharded) prev_borrowed: HashMap<u64, (i32, i32)>,
+    pub(in crate::kit::sharded) prev_borrowed: HashMap<u64, (i32, i32)>,
     /// Once-per-tick guard for the strip integration + deferred roll:
     /// the tick whose broadcast-phase preparation has already run.
-    pub(in crate::sharded) integrated_tick: u64,
+    pub(in crate::kit::sharded) integrated_tick: u64,
     /// Per-player view baseline (`player → the cell whose FULL view was
     /// last delivered to it`): missing/other ⇒ the one-shot private
     /// full. Cleared on join/resume/migrate-in/migrate-out — a fresh
     /// session or a fresh shard MUST re-baseline (module docs, "Migration
     /// correctness").
-    pub(in crate::sharded) conn_view: HashMap<PlayerId, Cell>,
+    pub(in crate::kit::sharded) conn_view: HashMap<PlayerId, Cell>,
     /// The global tick of the current step (set in `update`).
-    pub(in crate::sharded) tick: u64,
+    pub(in crate::kit::sharded) tick: u64,
     // ── Per-tick piece caches (cleared in `update`, computed lazily in
     //    the broadcast phase; order-independent across groups). ──
-    pub(in crate::sharded) pieces: CellPieces,
+    pub(in crate::kit::sharded) pieces: CellPieces,
     /// The groups that emitted a FULL this tick (fresh group /
     /// keepalive): their members' private frames skip the one-shot.
-    pub(in crate::sharded) group_full_emitted: HashSet<Cell>,
+    pub(in crate::kit::sharded) group_full_emitted: HashSet<Cell>,
 }
 
 impl ShardedSpatialRoom {

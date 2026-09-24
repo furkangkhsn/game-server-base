@@ -11,8 +11,9 @@ use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
 
 use super::*;
-use crate::components::*;
 use crate::kit::common::{Cell, cell_of};
+use crate::kit::identity::*;
+use crate::kit::seam::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
@@ -43,7 +44,7 @@ fn place(world: &mut World, room: &mut ShardedRoom, conn: ConnectionId, x: f32, 
 }
 
 fn snap_ids(out: &bytes::BytesMut) -> BTreeSet<u64> {
-    crate::game::WorldSnapshot::decode(out.as_ref())
+    crate::kit::seam::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot payload")
         .entities
         .iter()

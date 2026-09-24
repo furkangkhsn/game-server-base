@@ -20,7 +20,7 @@ fn sharded_spatial_cells_group_members_by_position() {
         s1.snapshot(&mut world, &ctx(1), &Cell(0, -1), &[], &mut out),
         "A's group emits (fresh)"
     );
-    let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
     assert!(!snap.delta, "a fresh group's first packet is a full");
     let seen: BTreeSet<u64> = snap.entities.iter().map(|e| e.entity).collect();
     assert!(
@@ -34,7 +34,7 @@ fn sharded_spatial_cells_group_members_by_position() {
 
     let mut out2 = bytes::BytesMut::new();
     assert!(s1.snapshot(&mut world, &ctx(1), &Cell(2, -1), &[], &mut out2));
-    let seen2: BTreeSet<u64> = crate::game::WorldSnapshot::decode(out2.as_ref())
+    let seen2: BTreeSet<u64> = crate::kit::seam::WorldSnapshot::decode(out2.as_ref())
         .expect("snapshot")
         .entities
         .iter()
@@ -59,7 +59,7 @@ struct ClientView {
 }
 
 impl ClientView {
-    fn apply(&mut self, snap: &crate::game::WorldSnapshot, cell_size: f32) {
+    fn apply(&mut self, snap: &crate::kit::seam::WorldSnapshot, cell_size: f32) {
         if !snap.delta {
             self.ents.clear();
         }
@@ -117,7 +117,7 @@ fn borrowed_border_entities_render_without_gap_across_seam() {
             s1.snapshot(&mut w1, &ctx(tick), &Cell(0, -1), &borrowed, &mut out),
             "tick {tick}: the observer's group emits"
         );
-        let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+        let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
         view.apply(&snap, 20.0);
         assert_eq!(
             view.ents.get(&m).copied(),
@@ -148,7 +148,7 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
     s1.update(&mut w1, &ctx(1));
     let mut out = bytes::BytesMut::new();
     assert!(s1.snapshot(&mut w1, &ctx(1), &Cell(0, -1), &borrowed, &mut out));
-    let seen: BTreeSet<u64> = crate::game::WorldSnapshot::decode(out.as_ref())
+    let seen: BTreeSet<u64> = crate::kit::seam::WorldSnapshot::decode(out.as_ref())
         .expect("snapshot")
         .entities
         .iter()
@@ -188,7 +188,7 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
     s1.update(&mut w1, &ctx(4));
     let mut out = bytes::BytesMut::new();
     assert!(s1.snapshot(&mut w1, &ctx(4), &Cell(0, -1), &borrowed, &mut out));
-    let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
     assert!(snap.delta);
     assert_eq!(
         snap.entities.len(),
@@ -211,7 +211,7 @@ fn delta_bookkeeping_ignores_unchanged_borrowed_strip() {
 /// and could not have baselined them).
 #[test]
 fn migrated_player_gets_private_full_on_arrival() {
-    use crate::game::private::Payload;
+    use crate::kit::seam::private::Payload;
 
     let mut w1 = World::new();
     let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
@@ -244,7 +244,7 @@ fn migrated_player_gets_private_full_on_arrival() {
     // arrival's upsert — it does NOT baseline the arrival.
     out.clear();
     assert!(s1.snapshot(&mut w1, &ctx(2), &Cell(1, -1), &[], &mut out));
-    let snap = crate::game::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
+    let snap = crate::kit::seam::WorldSnapshot::decode(out.as_ref()).expect("snapshot");
     assert!(snap.delta, "established group stays in delta mode");
     assert!(snap.entities.iter().any(|e| e.entity == arrival_wire));
 
@@ -254,7 +254,7 @@ fn migrated_player_gets_private_full_on_arrival() {
         s1.private(&mut w1, PlayerId(9), &Cell(0, -1), &[], &mut pbuf),
         "the arrival receives the one-shot private full"
     );
-    let frame = crate::game::Private::decode(pbuf.as_ref()).expect("private frame");
+    let frame = crate::kit::seam::Private::decode(pbuf.as_ref()).expect("private frame");
     let full = match frame.payload {
         Some(Payload::Snapshot(s)) => s,
         other => panic!("expected the snapshot oneof, got {other:?}"),

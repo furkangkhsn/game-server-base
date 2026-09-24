@@ -11,21 +11,22 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::encoding::varint::encode_varint;
 
-use crate::components::{Position, WireId};
 use crate::kit::common::{Cell, assemble_group_packet, cell_of};
-use crate::op;
-use crate::sharded::*;
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::Position;
+use crate::kit::sharded::*;
 
 impl GameLogic<World> for ShardedSpatialRoom {
     type GroupKey = Cell;
     type Strip = StripPos;
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
 
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     /// The connection's group is the cell its entity's records land in —
@@ -75,7 +76,7 @@ impl GameLogic<World> for ShardedSpatialRoom {
     /// Keep-alive on the cadence tick: a freshly encoded FULL of the
     /// group's view (a cached payload would be a delta — meaningless to
     /// re-send), whether the group emitted this tick or not. Same
-    /// recovery contract as [`crate::aoi::AoiRoom::keepalive`].
+    /// recovery contract as [`crate::kit::aoi::AoiRoom::keepalive`].
     fn keepalive(
         &mut self,
         _world: &mut World,

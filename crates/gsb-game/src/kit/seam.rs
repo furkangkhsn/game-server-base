@@ -18,6 +18,10 @@ pub(crate) use crate::demo::components::Position;
 // RecordCodec::encode: the typed body of one entity record.
 pub(crate) use crate::demo::game::EntityRecord;
 
+// RecordCodec::Wire: the demo's wire value (truncated position) — also
+// the sharded rooms' `Strip` payload (`Strip = Wire`).
+pub(crate) use crate::demo::wire::StripPos;
+
 // ── CellSpace (§4.2) ─────────────────────────────────────────────────────
 
 // CellSpace::encode_cell: the typed body of a `CellExit` record.
@@ -43,6 +47,14 @@ pub(crate) use crate::demo::spawn::spawn_player;
 
 // Game::on_player_spawned: the team room's join-time team assignment.
 pub(crate) use crate::demo::spawn::team_of;
+
+// Game::Mig + capture: the migrating game state the sharded rooms read
+// in `collect_migrations` and carry in `ShardedRoomState` (position is
+// above) — the speed and the pending move target.
+pub(crate) use crate::demo::components::{MoveTarget, Speed};
+
+// Game::restore: rebuild a migrated entity on the receiving shard.
+pub(crate) use crate::demo::spawn::restore_migrant;
 
 // Game::systems: the demo's system stack (movement).
 pub(crate) use crate::demo::systems::movement_runner;
@@ -76,10 +88,10 @@ pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};
 // ── Test fixtures (kit's in-module tests drive the kit rooms with the
 //    demo game; phase 1 replaces them with the kit's own small test game)
 
-// The demo's movement speed component and its default (tests spawn and
-// inspect demo entities directly).
+// The demo's default movement speed (tests spawn and inspect demo
+// entities directly).
 #[cfg(test)]
-pub(crate) use crate::demo::components::{DEFAULT_SPEED, Speed};
+pub(crate) use crate::demo::components::DEFAULT_SPEED;
 
 // The demo map's named sectors the PVS tests address directly.
 #[cfg(test)]

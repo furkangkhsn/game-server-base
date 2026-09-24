@@ -39,8 +39,6 @@
 mod demo;
 mod kit;
 
-pub mod sharded;
-
 // ── Compatibility paths (phase 0) ─────────────────────────────────────────
 //
 // The crate's public API predates the kit/demo split: every consumer
@@ -57,6 +55,15 @@ pub use kit::{aoi, team};
 pub mod pvs {
     pub use crate::demo::sectors::{SECTOR_OUT, Sector};
     pub use crate::kit::pvs::SectorRoom;
+}
+
+/// The sharded rooms, their grid partition and migration state, and the
+/// demo's border-strip payload (compatibility path).
+pub mod sharded {
+    pub use crate::demo::wire::StripPos;
+    pub use crate::kit::sharded::{
+        ShardParkRecord, ShardedRoom, ShardedRoomState, ShardedSpatialRoom, grid_shape, shard_at,
+    };
 }
 
 /// The open-visibility room and the demo's spawn distribution

@@ -53,7 +53,7 @@
 //! [`ShardedSpatialRoom`] is the `sharded × spatial` selection: the SAME
 //! grid topology, migration protocol and border seam, but each shard's
 //! broadcast phase groups its connections by **spatial cell**
-//! (`GroupKey = Cell`, sized like [`crate::aoi::AoiRoom`]'s from the
+//! (`GroupKey = Cell`, sized like [`crate::kit::aoi::AoiRoom`]'s from the
 //! config's `aoi_cell_size`) instead of one whole-shard group. The cell
 //! encoding/delta engine itself is NOT duplicated: the shared
 //! [`crate::kit::common::CellBook`] / [`crate::kit::common::CellPieces`] machinery
@@ -141,18 +141,9 @@ pub use spatial::ShardedSpatialRoom;
 
 use gsb_core::id::PlayerId;
 
-use crate::components::{MoveTarget, Position};
-
-/// The demo's visibility-strip payload ([`GameLogic::Strip`]): the
-/// entity's TRUNCATED position — exactly the content the core-fixed
-/// boundary record carried before generalization, so this round changes
-/// no wire bytes. A game needing more across the seam extends THIS type
-/// (velocity, facing, hp snapshot); the core never learns about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StripPos {
-    pub x: i32,
-    pub y: i32,
-}
+// `StripPos` (the strip payload) is the demo's wire value — the future
+// `RecordCodec::Wire`; every sharded file names it through this import.
+use crate::kit::seam::{MoveTarget, Position, StripPos};
 
 /// The full state of a migrating entity (everything the entity carries in
 /// its components — position, speed, and the pending move target, if any).

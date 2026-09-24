@@ -11,21 +11,21 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, MoveTarget, Position, Speed, WireId};
-use crate::op;
-use crate::room::spawn_pos;
-use crate::sharded::*;
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::Position;
+use crate::kit::sharded::*;
 
 impl GameLogic<World> for ShardedRoom {
     type GroupKey = ();
     type Strip = StripPos;
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
 
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     /// One group per shard (see module docs, "Group key").
@@ -77,7 +77,7 @@ impl GameLogic<World> for ShardedRoom {
             return false;
         }
 
-        let mut snap = crate::game::WorldSnapshot {
+        let mut snap = seam::WorldSnapshot {
             sequence: ctx.tick,
             entities: Vec::with_capacity(content.len()),
             removed: Vec::new(),
@@ -91,8 +91,7 @@ impl GameLogic<World> for ShardedRoom {
         let mut entries: Vec<(&u64, &(i32, i32))> = content.iter().collect();
         entries.sort_unstable_by_key(|(w, _)| **w);
         for (w, &(x, y)) in entries {
-            snap.entities
-                .push(crate::game::EntityRecord { entity: *w, x, y });
+            snap.entities.push(seam::EntityRecord { entity: *w, x, y });
         }
         snap.encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
@@ -113,12 +112,9 @@ impl GameLogic<World> for ShardedRoom {
         // always has — the load generator's home distribution pairs with
         // it); the stable player identity comes from this shard's
         // range-partitioned counter.
-        let (x, y) = spawn_pos(conn, self.half);
         let player = self.mint_player();
         let wire = self.mint();
-        let entity = world
-            .spawn((Position { x, y }, Speed(DEFAULT_SPEED), WireId::new(wire)))
-            .id();
+        let entity = seam::spawn_player(world, conn, self.half, WireId::new(wire));
         self.player_entity.insert(player, entity);
         self.entity_player.insert(entity, player);
         self.wire_entity.insert(wire, entity);
@@ -154,11 +150,11 @@ impl GameLogic<World> for ShardedRoom {
             .values()
             .filter(|e| e.bot)
             .filter_map(|e| self.wire_entity.get(&e.wire).map(|&en| (e.player, en)));
-        crate::kit::seam::synthesize_bot_moves(bots, world, ctx, actions);
-        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        seam::synthesize_bot_moves(bots, world, ctx, actions);
+        seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
-    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
+    // -- the disconnect policy (see `crate::kit::room::OpenRoom`, the shared
     //    hook bodies live in `crate::kit::common`; this shard-side mirror keys
     //    its ledger by identity like the others but tracks the WIRE id,
     //    because that is what survives migrations) ----------------------
@@ -291,8 +287,9 @@ impl GameLogic<World> for ShardedRoom {
     }
 
     /// The demo's two request kinds on the SHARDED path (Faz 3 — the same
-    /// contract as [`crate::room::OpenRoom::handle_request`], resolved
-    /// against THIS shard's world):
+    /// contract, and the same game-side handler body, as
+    /// [`crate::kit::room::OpenRoom::handle_request`], resolved against
+    /// THIS shard's world and player table):
     ///
     /// - `ABILITY` (room-local): range check + a real world mutation (the
     ///   entity gets a `MoveTarget`), answered in the same tick's private
@@ -310,91 +307,22 @@ impl GameLogic<World> for ShardedRoom {
         _ctx: &TickCtx,
         req: &gsb_core::rpc::RpcRequest,
     ) -> Option<RequestDecision> {
-        match req.op {
-            op::ABILITY => {
-                let Ok(use_msg) = <crate::game::AbilityUse as Message>::decode(&req.payload[..])
-                else {
-                    return Some(RequestDecision::Reject(
-                        "undecodable AbilityUse payload".into(),
-                    ));
-                };
-                let Some(entity) = self.player_entity.get(&req.player).copied() else {
-                    return Some(RequestDecision::Reject(
-                        "no entity for this connection".into(),
-                    ));
-                };
-                let Ok(he) = world.get_entity(entity) else {
-                    return Some(RequestDecision::Reject("entity already gone".into()));
-                };
-                let Some(pos) = he.get::<Position>().copied() else {
-                    return Some(RequestDecision::Reject("entity has no position".into()));
-                };
-                let dx = use_msg.x as f32 - pos.x;
-                let dy = use_msg.y as f32 - pos.y;
-                const RANGE: f32 = 10.0;
-                if dx * dx + dy * dy > RANGE * RANGE {
-                    return Some(RequestDecision::Reject(format!(
-                        "target out of range ({} > {RANGE})",
-                        (dx * dx + dy * dy).sqrt()
-                    )));
-                }
-                world.entity_mut(entity).insert(MoveTarget {
-                    x: use_msg.x as f32,
-                    y: use_msg.y as f32,
-                });
-                let res = crate::game::AbilityResult {
-                    ok: true,
-                    reason: String::new(),
-                };
-                Some(RequestDecision::Reply(res.encode_to_vec().into()))
-            }
-            op::ECONOMY => {
-                let Ok(buy) = <crate::game::BuyItem as Message>::decode(&req.payload[..]) else {
-                    return Some(RequestDecision::Reject(
-                        "undecodable BuyItem payload".into(),
-                    ));
-                };
-                let Some(economy) = self.economy.clone() else {
-                    return Some(RequestDecision::Reject(
-                        "economy service not configured".into(),
-                    ));
-                };
-                // An OWNING future (a cheap sender clone inside): borrows
-                // nothing from the shard (the `External` contract).
-                let fut = async move {
-                    match economy.buy(buy.kind).await {
-                        Ok(price) => {
-                            let res = crate::game::BuyResult {
-                                ok: true,
-                                reason: String::new(),
-                                price,
-                            };
-                            Ok(res.encode_to_vec().into())
-                        }
-                        Err(reason) => Err(reason),
-                    }
-                };
-                Some(RequestDecision::External(Box::pin(fut)))
-            }
-            // Not a request op this logic handles: the core answers with
-            // a normal "no handler" rejection.
-            _ => None,
-        }
+        seam::handle_request(&self.player_entity, self.economy.as_ref(), world, req)
     }
 
     /// This shard's match result (the Faz 3 promotion; the per-shard
-    /// sibling of [`crate::room::OpenRoom::match_result`]): the FINAL
+    /// sibling of [`crate::kit::room::OpenRoom::match_result`]): the FINAL
     /// snapshot of this shard's own region at teardown. One logical room
     /// therefore yields one such payload PER SHARD through the shared
     /// sink (all under the logical room id — the platform adapter
     /// concatenates/filters); the shards' ranges are disjoint, so the
     /// concatenated entity set is collision-free by construction.
     fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
-        let mut entities: Vec<crate::game::EntityRecord> = Vec::new();
+        let mut entities: Vec<seam::EntityRecord> = Vec::new();
         {
             let mut query = world.query::<(&WireId, &Position)>();
             for (wire_id, pos) in query.iter(world) {
-                entities.push(crate::game::EntityRecord {
+                entities.push(seam::EntityRecord {
                     entity: wire_id.get(),
                     x: pos.x as i32,
                     y: pos.y as i32,
@@ -402,7 +330,7 @@ impl GameLogic<World> for ShardedRoom {
             }
         }
         entities.sort_by_key(|e| e.entity);
-        let snap = crate::game::WorldSnapshot {
+        let snap = seam::WorldSnapshot {
             // The shutdown snapshot has no live ticker: sequence 0 marks
             // "terminal" (live snapshots are strictly positive ticks).
             sequence: 0,

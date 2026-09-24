@@ -20,6 +20,7 @@ pub(crate) mod rpc;
 pub mod sectors;
 pub mod spawn;
 pub mod systems;
+pub mod wire;
 
 /// Generated game protocol messages (package `gsb.game`, file `game.proto`).
 pub mod game {

@@ -4,7 +4,7 @@ use bevy_ecs::prelude::World;
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 
-use crate::sharded::*;
+use crate::kit::sharded::*;
 
 impl ShardLogic<World> for ShardedSpatialRoom {
     type State = <ShardedRoom as ShardLogic<World>>::State;

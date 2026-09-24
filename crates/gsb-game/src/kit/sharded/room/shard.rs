@@ -5,8 +5,10 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, SHARD_SERIAL_RANGE, ShardLogic};
 
-use crate::components::{MoveTarget, Position, Speed, WireId};
-use crate::sharded::*;
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::{MoveTarget, Position, Speed};
+use crate::kit::sharded::*;
 
 impl ShardLogic<World> for ShardedRoom {
     type State = ShardedRoomState;
@@ -84,12 +86,13 @@ impl ShardLogic<World> for ShardedRoom {
     ) {
         // Reconstruct the entity from its full state, keeping its wire
         // identity (the id travels with the state — range partitioning).
-        let entity = world
-            .spawn((state.pos, Speed(state.speed), WireId::new(wire)))
-            .id();
-        if let Some(target) = state.target {
-            world.entity_mut(entity).insert(target);
-        }
+        let entity = seam::restore_migrant(
+            world,
+            WireId::new(wire),
+            state.pos,
+            state.speed,
+            state.target,
+        );
         self.wire_entity.insert(wire, entity);
         self.own_wires.insert(wire);
         if let Some(player) = player {

@@ -9,6 +9,7 @@ pub mod identity;
 pub mod pvs;
 pub mod room;
 pub(crate) mod seam;
+pub mod sharded;
 pub mod team;
 
 /// The demo rooms' default disconnect-park grace (RECONNECT §3): how
