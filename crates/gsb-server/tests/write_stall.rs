@@ -250,7 +250,11 @@ async fn a_peer_that_stops_reading_loses_its_session() {
         &mut reports,
         "the stalled session to end through the ordinary teardown",
         Instant::now() + Duration::from_secs(40),
-        |r| r.closes >= 1,
+        // Wait for BOTH events, not just the first: the registry counts
+        // the close (`ConnClosed`) and may publish a sample before the
+        // row is released, which happens later on the room's
+        // `DetachDespawned`. Waiting on `closes` alone raced that release.
+        |r| r.closes >= 1 && r.conns == 0,
     )
     .await;
     assert_eq!(
