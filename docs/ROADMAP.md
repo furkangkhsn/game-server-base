@@ -75,10 +75,24 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **454** (454/454 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **478** (478/478 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **gsb-kit Faz 3** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3
+388 → 409 → 411 → 419 → 433 → 439 → 454 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **gsb-kit Faz 4** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4
+sonucu") — **3D MMO demosu** `gsb-demo-mmo`, kapanış doğrulaması: yalnız
+kit'in public yüzeyiyle shard'lı dünya üzerinde yer-düzlemi ızgara AOI
+(`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`, 2×2 shard,
+64 m hücre, `Planar` = `[x, z]`), oyun kodunun spawn/despawn ettiği ve
+hızsız göç eden mob'lar, desimetre nicemlemeli kodek (konum + tür +
+can), park → AI devri, `mmo.proto` (opcode'lar 1200..=1204); 24 test
+(12'si gerçek dört shard aktörü üzerinden, mutation-check'li).
+**Beş korunan crate'e dokunulmadı**; üç demo aynı kit üzerinde yeşil
+(82/82). Dört tasarım bulgusu kayıtlı — biri **doğruluk hatası** (F1:
+sharded × spatial'da şeritten ödünç verilmiş hücresine göç eden entity
+yeni shard'ında siliniyor), köşegen şerit yok (F2), `Planar` birim
+sözleşmesi (F3), park sonu seçilemiyor (F4). **Sıradaki:** kit
+düzeltme turu — girdisi KIT-ARCHITECTURE §10 "Faz 3 + Faz 4 tasarım
+bulguları" (önce F1, önce kırılan testiyle). Önceki tur: **gsb-kit Faz 3** (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3
 sonucu") — **3D arena demosu** `gsb-demo-arena`, kit'in kabul testi:
 yalnız kit'in public yüzeyiyle yazılmış 3D takım sisi (yükseklik
 sayılır, üç takım, `TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, yarıçap
@@ -88,8 +102,7 @@ aynası, opcode'lar 1100..=1102); 15 test (7'si gerçek oda aktörü
 üzerinden, mutation-check'li). **`gsb-kit` ve `gsb-core`'a dokunulmadı**;
 iki engelleyici olmayan tasarım bulgusu kayıtlı (takım spawn'dan sonra
 soruluyor; kit zarfının istemci kuralları demo'nun proto'sunda).
-Sıradaki: Faz 4 (3D MMO demosu, `gsb-demo-mmo`, kapanış doğrulaması —
-§13). Önceki tur: **gsb-kit Faz 2** (`docs/KIT-ARCHITECTURE.md` §5.1, §10 "Faz 2
+Önceki tur: **gsb-kit Faz 2** (`docs/KIT-ARCHITECTURE.md` §5.1, §10 "Faz 2
 sonucu") — **crate bölmesi**: `gsb-game` → `gsb-demo` (örnek oyun) ve
 yeni `gsb-kit` (stratejiler, delta motoru, sharded kompozitler,
 park/resume, ön-ayarlar, kendi `kit.proto`'su — `Private`'a oyunun özel

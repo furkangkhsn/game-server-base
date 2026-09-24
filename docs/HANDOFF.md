@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-454 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+478 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -129,9 +129,25 @@ kit'te değişiklik gerektiren her ihtiyacı bir TASARIM BULGUSUDUR
 engelleyici olmayan bulgusu orada (takım spawn'dan sonra soruluyor;
 kit zarfının istemci kuralları demo'nun proto'sunda). Arena sunucuya ve
 loadgen'e bağlı değil (§12); testleri gerçek oda aktörü üzerinden.
-Sıradaki: Faz 4 (3D MMO demosu, `gsb-demo-mmo`, §13 — kapanış
-doğrulaması; `Grid3` / `GridPartition3` bilerek yok, MMO yer
-düzleminde `Grid2` + `GridPartition2` kullanır).
+**Faz 4 tamam — 3D MMO demosu, kapanış doğrulaması** (KIT-ARCHITECTURE
+§10 "Faz 4 sonucu", CHANGELOG "gsb-kit Faz 4 turu"):
+`crates/gsb-demo-mmo` — shard'lı dünya üzerinde yer-düzlemi ızgara AOI
+(`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`, `Planar` =
+`[x, z]`), oyun kodunun spawn/despawn ettiği hızsız mob'lar, park → AI
+devri, `mmo.proto` (opcode'lar 1200..=1204); entegrasyon testleri
+gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
+üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
+(`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
+fazları bitti.** Sıradaki: **kit düzeltme turu** — girdisi
+KIT-ARCHITECTURE §10 "Faz 3 + Faz 4 tasarım bulguları" (altı madde).
+Önce F1 (doğruluk hatası: sharded × spatial'da şeritten ödünç
+verilmiş hücresine göç eden entity yeni shard'ının kovasından
+siliniyor; ~6 satırlık kit-içi düzeltme `integrate_borrowed`'ta) kendi
+commit'inde — kırılan testi hazır: `gsb-demo-mmo/tests/findings.rs`'in
+`f1_…`'i bugünkü (hatalı) davranışı sabitliyor, düzeltmeyle kırılır ve
+çevrilir (`f2_…` F2 için aynı). Ardından eklemeler (F2
+`GridPartition2::with_diagonals`, F4 park sonu seçimi, A1
+`TeamGame::spawn_team_player`), belgeler (F3, A2).
 
 ## ÖNCE OKU (sırayla)
 
@@ -223,6 +239,6 @@ düzleminde `Grid2` + `GridPartition2` kullanır).
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 454 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 478 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

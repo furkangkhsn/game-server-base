@@ -1,6 +1,6 @@
 # gsb-kit — Takılabilir Oyun Bileşenleri (Tasarım)
 
-**Durum: ONAYLANDI (2026-09-24) — uygulama fazları sürüyor; Faz 0, Faz 1 (1a + 1b), Faz 2 (crate bölmesi) ve Faz 3 (3D arena demosu — kit'e dokunmadan) tamam (§10, "Faz 0 sonucu", "Faz 1a sonucu", "Faz 1b sonucu", "Faz 2 sonucu", "Faz 3 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Sıradaki: Faz 4 (3D MMO demosu, kapanış doğrulaması). Kararlar §12.**
+**Durum: ONAYLANDI (2026-09-24) — uygulama fazlarının hepsi tamam; Faz 0, Faz 1 (1a + 1b), Faz 2 (crate bölmesi), Faz 3 (3D arena demosu) ve Faz 4 (3D MMO demosu, kapanış doğrulaması — ikisi de kit'e ve çekirdeğe dokunmadan) (§10, "Faz 0 sonucu" … "Faz 4 sonucu"; derlenen imzalar §4.5, §4.6; kit proto'su §5). Üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil (§11). Sıradaki: kit düzeltme turu — girdisi §10'un "Faz 3 + Faz 4 tasarım bulguları" listesi (biri, F1, bir doğruluk hatası). Kararlar §12.**
 
 ## 1. Neden
 
@@ -622,7 +622,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu — iki tura bölündü: **1a tamam** (aşağıda "Faz 1a sonucu"), **1b tamam** (aşağıda "Faz 1b sonucu": takım sisi, PVS, sharded kompozitler, §8.2–§8.5, seam kit zarfına indi) | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları; arenanın 3D ön-ayarı (`Spatial`, `VisionGrid3`) — **tamam**, aşağıda "Faz 2 sonucu" | ~400–600 satır, çoğu yol | tüm testler + loadgen |
 | 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `VisionGrid3`), proto — **tamam, kit ve çekirdek dokunulmadan**, aşağıda "Faz 3 sonucu" (iki engelleyici olmayan tasarım bulgusu) | ~800–1 200 satır | kabul kriteri 1 (§11) |
-| 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
+| 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) — **tamam, kit ve çekirdek dokunulmadan**, aşağıda "Faz 4 sonucu" (dört tasarım bulgusu, biri doğruluk hatası) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
 sharded). Faz 1'in en riskli parçası `CellBook`/`CellPieces`'i
@@ -1294,6 +1294,256 @@ clippy --workspace --all-targets -- -D warnings` 0 uyarı; loadgen
 bağlı değil (§12 kapsam dışı), çalışma zamanında değişen kod yok; koşu
 yalnız workspace'in sağlam kaldığının kanıtı (A/B alınmadı).
 
+### Faz 4 sonucu
+
+**Tamamlandı** (`kit/phase-4-mmo`, `89049d2..`; CHANGELOG "gsb-kit Faz 4
+turu"). Workspace'te yeni `crates/gsb-demo-mmo`: küçük bir 3D MMO
+dünyası, görünürlük modeli **shard'lı bir dünya üzerinde uzamsal ızgara
+AOI** — kit'in `sharded × spatial` kompoziti
+(`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`), 2D
+ön-ayarlar 3D verinin **yer düzleminde** (`Planar` = `[x, z]`).
+Konumlar 3D (metre, y yukarı; uçan mob'lar 200 m'ye kadar), ilgi
+yönetimi yüksekliği bilerek yok sayıyor — arenanın hacimsel sisinin
+tersi. **Kabul testi olarak koştu: beş korunan crate'e tek satır
+dokunulmadı** (`git diff 89049d2.. --stat -- crates/gsb-kit
+crates/gsb-core crates/gsb-demo crates/gsb-demo-arena crates/gsb-server`
+boş; `git log addbcf5.. -- crates/gsb-kit` boş — kit Faz 2'den beri
+aynı). MMO `gsb-kit` + `gsb-core` + `gsb-protocol`'e bağlı, iki demoya
+da değil (`cargo tree -p gsb-demo-mmo --depth 1`); yalnız kit'in public
+yüzeyini görüyor. Kit'te değişiklik gerektiren her ihtiyaç aşağıda
+**tasarım bulgusu** olarak kayıtlı — kit yamanmadı, iç öğe
+kopyalanmadı, hiçbir bulgunun etrafından sessizce dolaşılmadı.
+
+**MMO'nun kendisi (oyunun işi, §2):**
+
+| Parça | Seçim | Gerekçe |
+|---|---|---|
+| Konum | `Pos3 { x, y, z: f32 }`, metre, **y yukarı**; `Planar` → `[x, z]` | ilgi ve sharding yer düzleminde; `Spatial` uygulanmadı (hiçbir 3D ön-ayar kullanılmıyor) |
+| Dünya | 1 024 m × 1 024 m zemin (`WORLD_HALF = 512`), 200 m gök | — |
+| Bölme | `GridPartition2::new(4, 512)`: 2×2 shard, 512 m bölgeler, ön-ayarın şeridi 128 m (bölge kenarının dörtte biri) | N ≥ 4 (görev); dikişler x = 0 ve z = 0'da |
+| AOI | `Grid2::new(64)`: 64 m hücre, 3×3 görünüm (64–128 m) | dikişler hücre kenarına düşüyor; bir görünüm dikişin öbür yanına en çok bir hücre (64 m) uzanıyor — 128 m'lik şeridin içinde |
+| Codec | `Wire = MmoWire { x, y, z: i32 dm, kind, hp }` — **en yakına yuvarlanmış desimetre** + tür + can; `Dirty = Or<(Changed<Pos3>, Changed<Vitals>)>`; gövde `EntityRecord { entity = 1; x, y, z = 2..4; Kind kind = 5; uint32 hp = 6 }` | ±5 120 dm zemin, 0..2 000 dm yükseklik: her koordinat ≤ 2 baytlık zig-zag varint (üç koordinat etiketleriyle ≤ 9 bayt, üç `float` 15); santimetre ±81,9 m ötesini 3 bayta iter. 7 m/sn koşan oyuncu 30 Hz'de tick başına 23 cm — her tick bir kayıt; 1 m/sn'lik mob üç tickte bir; duran varlık bedava. Kesme yerine yuvarlama: dikişlerdeki sıfır hücresi iki kat geniş olmasın |
+| Wire'ın `Planar`'ı | `[x.div_euclid(10), z.div_euclid(10)]` — **metre** (konumun birimi), desimetre değil | ön-ayarlar tek dünya biriminde çalışsın (`Grid2`'nin hücre kenarı metre; `GridPartition2::admits` şerit kaydını bölge dikdörtgeniyle konumun biriminde karşılaştırıyor — bulgu F3); hücre yine `floor(dm / 640)` (istemcinin kuralı, birim testiyle `Grid2`'ye sabit) |
+| Hareket | oyuncular hedefe koşuyor (7 m/sn, zeminde); mob'lar rotalarında **kendi hızlarıyla** (`Mob` beyni; `Speed` benzeri bileşen YOK — §8.5'i doğrudan sınar); uçanlar irtifalarını koruyor | §6 |
+| NPC yaşam döngüsü | **oyun kodu:** spawn tablosunun kampları (`MobSpawn`: nokta, rota, hız, can, ilk tick, periyot, ömür) her shard'da yalnız kendi zeminindekileri spawn ediyor; kit damgalıyor (`Marker` = yayın); ömrü dolan mob `World::despawn`; canı sıfırlanan mob (`Attack`) `World::despawn` | §8.2'yi (hayalet) ve §8.5'i (göç) doğrudan sınar |
+| `Mig` | `MmoMig::Player { pos, vitals, speed, target }` / `MmoMig::Mob { pos, vitals, mob }` — mob'un bütün beyni (rota, bacak, hız, ölüm tick'i) | sınırı geçen oyuncu koşmaya, mob rotasına devam ediyor ve planlandığı tick'te yeni shard'da ölüyor |
+| Girdi | `MoveTo { x, z, seq }` (dm), `Attack { target, seq }` (yalnız kendi shard'ındaki, 30 m içindeki mob), `Travel { waystone, seq }` (anında ışınlanma, yürüyüşü iptal eder) — hepsi tek sıra uzayında, kit'in `InputSeq`'i | — |
+| Karakter kaydı | `Realm.logins`: kaydedilmiş karakter konumu, **oturum** kimliğiyle; join yönlendirmesi kayıtlı konumun shard'ı (`world::home_shard`) | `spawn_player` yalnız taşıma oturumunu alıyor (gözlem, aşağıda) |
+| Park politikası | kit'in park defteri: bağlantı düşünce karakter **bekletiliyor** (dünyada, aynı wire id, slot tutulu; `LOGOUT_GRACE = 20 sn`); süre dolunca kit **AI devrine** veriyor — MMO'nun botu karakteri en yakın waystone'a (güvenli nokta) yürütüyor; `grace = 0` hemen bırakıyor | "süre dolunca slotu bırak" (MMO'nun olağan çıkış sayacı) ifade edilemiyor — bulgu F4 |
+| Oda | `MmoShard` takma adı; kurucu `mmo_shard(index, &realm)` (serbest fonksiyon — kit tipinde inherent impl E0116) | — |
+| Wire | `proto/mmo.proto` (`gsb.mmo`): girdiler, `Kind` enum'u, `EntityRecord`, yer-düzlemi `CellExit { sint32 x = 1; sint32 z = 2; }` (`Grid2`'nin gövdesiyle bayt bayt aynı), kit zarfının tipli aynaları `WorldSnapshot` (`entities = 2`, `removed = 3`, `cell_exits = 4`, `delta = 5`) ve `Private` (`game = 4` aynalanmadı); `gsb.kit.InputAck` olduğu gibi; kit proto'su `links` (`DEP_GSB_KIT_PROTO_DIR`) üzerinden | — |
+| Opcode'lar | `MMO_MOVE_TO = 1200`, `MMO_SNAPSHOT = 1201`, `MMO_PRIVATE = 1202`, `MMO_ATTACK = 1203`, `MMO_TRAVEL = 1204` | 2D demo (1000–1006) ve arenadan (1100–1102) ayrık blok |
+
+**Kit'ten kullanılanlar** (tamamı public): `codec::RecordCodec`;
+`game::{Game, ShardGame, InputSeq}` (`InputSeq::admit`; birim testinde
+`InputSeq::default()`); `sharded::{ShardedRoom, ShardedSpatialRoom,
+KitMig}` (`ShardedRoom::with_game`, `ShardedSpatialRoom::with_shard`,
+`with_disconnect_grace`; `KitMig` yalnız test koşumunun mesaj tipinde);
+`space::{Planar, Grid2, GridPartition2, shard_at, CellSpace, Cell,
+Partition}` (`CellSpace`/`Cell`/`Partition` yalnız birim testlerinde:
+istemci hücresinin ve bölge filtresinin kit'le aynı olduğunu
+sabitlemek için); `identity::WireId` (`get()` — `Attack` hedefini
+çözmek için); `proto::{WorldSnapshot, Private, private::Payload,
+InputAck}` (`InputAck` MMO proto'sunda `extern_path` ile; diğerleri
+yalnız wire testlerinde); build tarafında `links = "gsb-kit-proto"`.
+Kullanılmayan her şey (diğer odalar, `Vision`/`SectorMap` ön-ayarları,
+`Spatial`, `TeamGame`) gerekmedi.
+
+**Testler** (24: 12 birim + 12 entegrasyon). **Entegrasyonların
+hepsi gerçek `gsb-core` shard aktörleri üzerinden:** dört `ShardActor`,
+registry'nin kablolamasıyla (komşu yuvalarında komşuların posta
+kutuları, gerisinde kukla), tek elle beslenen ticker; adım bariyeri
+metrik kanalı (`metrics_cadence_hz == tick_hz`: her shard yayın
+fazından SONRA tick başına bir örnek); istemciler kendi kanallarına
+gerçekten düşen kareleri MMO'nun tipli aynasıyla, kit'in istemci
+kurallarıyla (full / delta / `cell_exits` / one-shot private full)
+çözüyor ve her batch'te akış değişmezlerini (tick başına en çok bir
+snapshot + bir private, hiçbir karede tekrar eden kimlik) doğruluyor.
+Birim testleri odayı doğrudan sürüyor (`game::tests`'in biri —
+`attack_and_travel…` — MMO'nun gerçek kit odasını `GameLogic`
+metotlarıyla; kalanları oyun kancalarını, kodeği ve kit ön-ayarlarını
+doğrudan): onlar oda davranışı değil oyun mantığı ve wire sabitlemesi
+sınıyor, aktör gerekmiyor.
+
+| Test | Kilitlediği | Mutation-check (MMO tarafında, yedekten geri yüklenerek) |
+|---|---|---|
+| `aoi::a_player_sees_exactly_its_ground_cell_block_whatever_the_height` | iki oyuncunun her biri 40 tick boyunca (iki keep-alive full dahil) TAM OLARAK 3×3 yer hücresi bloğundakileri alıyor — komşu shard'ın şeridinden ödünç gelen dahil; komşu hücrede 150 m yukarıdaki uçan görünür, iki hücre ötede zemindeki mob görünmez, oysa uçan 3D'de daha uzak | `Planar` `[x, y]` (konum + wire) → kırıldı (tick 6: uçanlar görünmüyor) |
+| `crossing::a_player_crossing_a_seam_keeps_its_id_state_and_stream` | x = 0 dikişini koşarak geçen oyuncu: oturum shard 1'e taşınıyor, wire id + can aynı, taşınan yürüyüşle hedefe varıyor, hep ileri gidiyor; iki yandaki gözlemciler onu her tick görüyor (şerit önce ve sonra); kendini kaybetmesine YALNIZ varış tick'inde izin var — F1 | `Mig` hedefi taşımıyor → kırıldı ("B lost P at tick 150") |
+| `crossing::a_mob_crossing_a_seam_keeps_its_id_and_its_brain` | shard 0'ın kampından doğan, oyuncusu ve hız bileşeni olmayan uçan mob dikişi geçiyor: B her tick tam bir uçan ve aynı wire id görüyor; irtifa, shard 0'da aldığı hasar, rotanın ikinci bacağı ve shard 0'ın planladığı ölüm tick'i (605) yeni shard'da geçerli | `capture` mob'u oyuncu sayıyor (beyin taşınmıyor) → kırıldı |
+| `crossing::a_teleport_into_a_non_adjacent_shard_lands_once_with_the_same_id` | köşegen shard'ın waystone'una ışınlanan oyuncu: oturum hiçbir tick iki shard'da değil, iki tick yolda (iki adım — ara shard kurup AYNI tick'te iletiyor, §8.4), shard 3'e bir kez iniyor, iptal edilen yürüyüş geri gelmiyor, aynı wire id | `Travel` yürüyüşü iptal etmiyor → kırıldı |
+| `despawn::a_mob_killed_by_game_code_vanishes_everywhere_for_good` | oyun kodunun öldürdüğü mob (`World::despawn`) hem kendi shard'ındaki hem şeritten gören komşu shard'daki istemciden kalkıyor; dört keep-alive full boyunca hiçbir karede geri gelmiyor; yalnız canı değişen mob (konum aynı) iki yana da haber | öldürme despawn etmiyor → kırıldı; `Dirty` yalnız konum → kırıldı |
+| `reconnect::a_parked_character_stays_and_resumes_with_its_wire_id` | park: karakter dünyada kalıyor, slot tutulu (`members 2, detached 1`); yayın resume'u tam bir shard kabul ediyor, aynı wire id, numaralı girdi yeniden işliyor | — (park defteri kit'in; MMO yalnız politikayı seçiyor) |
+| `reconnect::grace_expiry_hands_the_character_to_the_logout_bot` | süre dolunca AI devri (`detach_expired_ai 1`), karakter canlı, bot onu en yakın waystone'a yürütüyor; **F4 kilidi:** `detach_expired_despawn 0`, slot tutulu | bot sessiz → kırıldı |
+| `reconnect::zero_grace_releases_the_slot_at_once` | `grace = 0`: slot hemen bırakılıyor, karakter görünümden çıkıyor, resume'u kimse kabul etmiyor | — |
+| `wire::kit_envelope_and_mmo_mirror_encode_identically` | kurulmuş kareler (full, `removed` + `cell_exits` + kayıtlı delta, ack + yanıt, one-shot full) iki tanımda aynı bayt, birbirini kendine çözüyor | aynada `entities = 6` → kırıldı |
+| `wire::real_shard_frames_decode_identically_through_both_definitions` | gerçek shard karelerinin hepsi (grup full'u, `removed`'lı delta, `cell_exits`'li delta — hücre (2,4), one-shot private full, ack) iki tanımdan aynı içeriğe çözülüyor ve aynı baytlara yeniden kodlanıyor; full ve private'lar kit'in elle yazdığı baytların TA KENDİSİNE (delta'lar olamaz: kit alanları istemcinin uygulama sırasıyla ve `removed`'ı packed olmadan yazıyor, üretilmiş kodlayıcı alan numarası sırasıyla — her ayrıştırıcı için aynı mesaj) | aynı mutasyon → kırıldı |
+| `findings::f1_…`, `findings::f2_…` | F1 ve F2'yi BUGÜNKÜ davranışla sabitliyor (aşağıda) — kit düzeltilince bilerek kırılır, çevrilir | kit-kopyası probları (aşağıda) |
+
+Birim testleri: nicemleme (yuvarlama, simetri, doygunluk), kayıt gövdesi
+= tipli `EntityRecord`, `Grid2`'nin wire üzerindeki hücresi = istemcinin
+`floor(dm / 640)`'ı (yükseklikten bağımsız), `CellExit` gövdesi = tipli
+ayna, shard ızgarasının wire'ı metre okuması (F3; mutasyon: wire
+`Planar`'ı desimetre → kırıldı), kayıtlı konumda spawn, kampların
+kendi zemininde spawn / periyot / ömür, kit odası üzerinden `Attack` +
+`Travel`, çıkış botu, `capture`/`restore` gidiş-dönüşü, canlı spawn
+tablosunun dört shard'ı da kapsaması, opcode bloğu.
+
+**Üç demo birlikte — kapanış kontrolü** (aynı kit, Faz 2'den beri
+değişmemiş: `git log --oneline addbcf5..HEAD -- crates/gsb-kit` boş):
+`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo` → **82
+passed / 0 failed** (2D demo 43, arena 15, MMO 24). Üç görünürlük
+modeli — 2D'de bütün stratejiler + bayt uyumluluğu, arenada 3D takım
+sisi (`Spatial` + `VisionGrid3`), MMO'da yer-düzlemi ızgara AOI +
+sharding (`Planar` + `Grid2` + `GridPartition2`) — tek kit üzerinde.
+
+**Sunucu kancası değerlendirmesi (§12 son paragraf).** MMO'yu uçtan
+uca çalıştırmak için sunucunun istediği üç şey MMO'da hazır ve public:
+shard başına mantık (`mmo_shard(i, &realm)`), mesaj tablosu
+(`gsb_demo_mmo::register`), join yönlendirmesi (`world::home_shard`,
+kayıtlı karakterin konumundan). Eksik olan sunucu tarafında: fabrika ve
+`build_table` 2D demo'ya bağlı (§9) — en küçük kanca, fabrika seçimini
+bir "oyun modülü"ne (fabrika fonksiyonu + `register` + `home_shard`)
+açmak; §9'un kapsam dışı bıraktığı iş, ayrı tur. Ayrıca join
+yönlendiricisi de `spawn_player` gibi yalnız oturum kimliğini görüyor
+(gözlem 1).
+
+**Tasarım bulguları.** Kit'in public API'si MMO'yu **inşa etmeyi
+engellemedi** — hiçbir kit değişikliği yapılmadan her parça kuruldu ve
+kabul testleri yeşil — ama dört yerde MMO'nun ihtiyacı kit'in
+bugünkü davranışının dışında kaldı; biri (F1) bir **doğruluk
+hatası**. Her biri için kanıt, gerekçe ve en küçük kit değişikliği:
+
+1. **F1 — Sharded × spatial: kendi hücresinde ödünç verilmiş bir
+   entity o hücreye göç edince yeni shard'ında siliniyor.** (Doğruluk
+   hatası; 2D demo'nun `sharded × spatial`'ında da aynı kod yolu.)
+   Bir entity dikişi geçerken alıcı shard onu zaten şeritten ödünç
+   tutuyordur (dikişe yakın her şey ihraç edilir). Göçün tick'inde
+   alıcının dirty pass'i OWN kaydı hücresine koyuyor
+   (`record_appearance`); ardından yayın fazında
+   `ShardedSpatialRoom::integrate_borrowed` entity'yi şeritte bulamıyor
+   (çekirdeğin own-wins filtresi onu düşürdü) ve ÖNCEKİ ödünç
+   konumunun hücresinden `record_exit` ediyor — own kaydın az önce
+   girdiği kovanın ta kendisinden. Modül belgesinin "the ledger simply
+   never saw that id" varsayımı yanlış: defter o kimliği her zaman
+   görmüştür. Sonuçlar (hepsi testle görüldü): varış tick'inin one-shot
+   full'u gelen oyuncunun kendisini içermiyor (`crossing` testinde
+   oyuncu varış tick'inde — 136 — kendini kaybediyor; bir sonraki
+   delta geri getiriyor); entity hücresinde YALNIZSA kova tamamen
+   gidiyor, hücre "exited" sınıflanıyor, o hücreyi gören herkes onu
+   `cell_exits` ile unutuyor ve entity o hücrede kıpırdamadıkça
+   (`record_update` var olmayan kovaya eklemiyor) hiçbir full'da, hiçbir
+   yeni katılanın görünümünde yok — yani **yeni shard'ında süresiz
+   görünmez**, oysa dikişin öbür yanındaki shard onu şeritten görmeye
+   devam ediyor (`findings::f1_…`: dikişi santimlerle geçip duran
+   mob; ayrıca köşegen ışınlanmada waystone'da duran oyuncu — `crossing`
+   testi bu yüzden inişten sonra onu bir hücre öteye yürütüp
+   doğruluyor). **En küçük kit değişikliği** (kit-içi, API yok, ~6
+   satır): `integrate_borrowed`'ın çıkış döngüsünde, şeritten düşen
+   kimlik artık bu shard'ın kendi entity'siyse
+   (`inner.wire_entity.get(wire)`) ve dirty pass onu aynı hücreye
+   koyduysa (`book.cell_of_entity(e) == Some(c)`) `record_exit`'i atla;
+   başka hücredeki bayat ödünç kopya yine çıkarılır. **Prob** (yalnız
+   çalışma alanının scratchpad kopyasında, bu worktree'de değil): bu
+   değişiklikle `gsb-kit` + `gsb-demo` + `gsb-demo-mmo` testlerinin
+   125'i geçti, 1'i kırıldı — bilerek sabitlenen `findings::f1_…`
+   (çevrilmesi gereken); `crossing`'deki kayıp-kendi tick'leri
+   `[136]` → `[]`.
+2. **F2 — `GridPartition2` 4-komşuluk: köşeden ödünç yok.** Şerit
+   yalnız komşular arasında değiş tokuş ediliyor, ön-ayarın komşuları
+   batı/doğu/kuzey/güney. Bir bölge köşesine yakın oyuncunun 3×3'ü
+   köşegen shard'a bir hücre uzanıyor, ama köşegen shard ona hiçbir şey
+   ödünç vermiyor: harita merkezine 10 m'deki oyuncu iki kenar
+   komşusunun mob'larını görüyor, köşegendekini (aynı uzaklıkta)
+   görmüyor (`findings::f2_…`). MMO kendi `Partition`'ını yazarak
+   (public seam) dolaşabilirdi — yapılmadı: turun konusu ön-ayar ve bu
+   tam da sessiz bir etrafından dolaşma olurdu. **En küçük kit
+   değişikliği** (yalnız ekleme): `GridPartition2::with_diagonals()` —
+   köşegenleri de komşu sayan 8-komşuluk bayrağı, varsayılan
+   değişmeden. **Prob:** varsayılanı 8-komşuluğa çevirmek köşe testini
+   çeviriyor ama iki kit yönlendirme testini (4-komşuluk rotalarını
+   sabitleyen) ve MMO'nun "iki adım" ışınlanma iddiasını kırıyor
+   (köşegen artık tek adım) — bu yüzden bayrak, varsayılan değişikliği
+   değil.
+3. **F3 — `Planar`'ın birim sözleşmesi yazılı değil.**
+   `GridPartition2::admits` wire değerinin `Planar`'ını bölge
+   dikdörtgeniyle konumun biriminde karşılaştırıyor; wire'ı konumdan
+   ince nicemleyen bir oyun (santimetre, desimetre) `[x_dm, z_dm]`
+   yazarsa derlenir ve düz `ShardedRoom`'da şerit sessizce yanlış
+   süzülür (128 m'lik kenar 12,8 m olur). MMO wire `Planar`'ını metreye
+   kabalaştırarak yaşıyor (hücre kenarı tam metre olduğu için bedelsiz;
+   birim testi + mutasyon kilitli). Engelleyici değil. **En küçük kit
+   değişikliği:** yalnız belge — `Planar` ve `GridPartition2`
+   belgelerine "wire izdüşümü konumun biriminde olmalı" (ya da,
+   tetikleyici çıkarsa, ön-ayara bir `wire_scale`). Yan gözlem: MMO'nun
+   odası (`ShardedSpatialRoom`) `admits`'i hiç çağırmıyor — komşunun
+   bütün ihracını deftere alıyor; görünürlük hücreyle sınırlı olduğu
+   için doğru, ama uzak ihraç kayıtları (ör. ışınlanan bir oyuncunun
+   bölge dışındaki konumu) ara shard'ların defterine giriyor.
+4. **F4 — Park politikası her beklemeyi AI devrine bitiriyor.** Kit
+   `on_disconnect`'e her zaman `Detach::Hold { grace: Some(grace), to:
+   ExpireTo::AiHandover }` cevabı veriyor (`common::park`,
+   `ParkPolicy { grace }`); oyun `ExpireTo`'yu seçemiyor. MMO'nun olağan
+   çıkış sayacı — "karakter süre boyunca dünyada kalsın, sonra slotu
+   bıraksın" (`ExpireTo::Despawn`) — ifade edilemiyor; savaşta çıkışı
+   geciktiren `may_release` vetosu da (`grace: None`) erişilemez.
+   Çekirdek ve kit'in defteri ikisini de zaten destekliyor
+   (`park_on_expire`'ın `Despawn` kolu var, hiçbir kit yolu onu
+   seçmiyor). MMO AI devriyle yaşıyor (bot karakteri güvenli noktaya
+   yürütüyor, slot tutulu) ve `reconnect` testi sınırı kilitliyor.
+   **En küçük kit değişikliği** (yalnız ekleme): `ParkPolicy`'ye `to:
+   ExpireTo` (varsayılan `AiHandover`) ve odalara
+   `with_disconnect_policy(grace, to)` kurucusu; kişi başına karar
+   isteyen oyun için alternatif `Game::disconnect_policy(&self, world,
+   entity) -> (Option<Duration>, ExpireTo)`, varsayılanı bugünkü cevap.
+   **Prob:** kopyada `to` `Despawn`'a çevrilince çekirdeğin `Despawn`
+   yolu kit defteriyle devreye giriyor (`detach_expired_ai` 1 → 0).
+
+**Gözlemler (kit bulgusu değil):**
+1. `spawn_player` — ve join yönlendiricisi — yalnız taşıma oturumunu
+   (`ConnectionId`) görüyor; hesap kimliği çekirdeğin `on_join(world,
+   conn)`'unda kalıyor (`ShardMsg::Join` onu taşıyor ama `GameLogic`'e
+   vermiyor). MMO kayıtlı karakterleri oturumla anahtarlıyor (sunucunun
+   login adımı doldururdu). Kit, çekirdeğin vermediğini veremez —
+   düzeltme çekirdekte (`on_join`'e kimlik), kapsam dışı.
+2. Şeritten görünen (komşunun sahip olduğu) mob'a saldırı yok:
+   CROSS-SHARD §2'nin `RemoteEffect`'i uygulanmadı (çekirdek). MMO
+   saldırıyı saldıranın shard'ında çözüyor.
+3. Eski yanda göç anında kırpışma ölçülmedi değil, **görülmedi**:
+   `crossing` testinde iki yandaki gözlemciler geçen oyuncuyu her tick
+   gördü.
+4. `Game::SNAPSHOT_OP` / `PRIVATE_OP` varsayılanları — MMO da ezdi
+   (Faz 3'ün gözlemi geçerli).
+
+### Faz 3 + Faz 4 tasarım bulguları — kit düzeltme turunun girdisi
+
+Kapanış doğrulamasının iki turunda (arena, MMO) kit'e tek satır
+dokunulmadan kaydedilen her bulgu, en küçük kit değişikliğiyle (F =
+Faz 4, yukarıda; A = Faz 3'ün arena bulguları, "Faz 3 sonucu" 1 ve 2):
+
+| # | Bulgu | Tür | En küçük kit değişikliği |
+|---|---|---|---|
+| F1 | Sharded × spatial: kendi ödünç hücresine göç eden entity yeni shard'ının kovasından siliniyor (varış full'unda kendini kaybetme; hücresinde yalnızsa süresiz görünmezlik) | **doğruluk hatası** | `ShardedSpatialRoom::integrate_borrowed`: artık own olan ve dirty pass'in aynı hücreye koyduğu kimlik için `record_exit`'i atla (kit-içi, ~6 satır); `findings::f1_…` çevrilir |
+| F2 | `GridPartition2` 4-komşuluk: köşegen shard köşeden hiçbir şey ödünç vermiyor | eksik özellik (MMO görünürlüğü) | `GridPartition2::with_diagonals()` — 8-komşuluk bayrağı, varsayılan aynı (ekleme); `findings::f2_…` çevrilir |
+| F4 | Park politikası her beklemeyi AI devrine bitiriyor; "sonra bırak" ve savaş vetosu ifade edilemiyor | eksik politika | `ParkPolicy.to: ExpireTo` + `with_disconnect_policy(grace, to)` (ekleme); ya da varsayılanlı `Game::disconnect_policy` |
+| A1 | Takım, spawn'dan SONRA soruluyor (takıma bağlı spawn noktası `spawn_player`'da seçilip geri okunuyor) | seam sırası | `TeamGame::spawn_team_player(&mut self, world, conn) -> (Entity, Team)`, varsayılanı bugünkü sıra (ekleme) |
+| F3 | `Planar`'ın birim sözleşmesi yazılı değil (`GridPartition2::admits` wire'ı konumun biriminde okuyor) | belge | `Planar` / `GridPartition2` belgesine bir cümle (tetikleyiciyle `wire_scale`) |
+| A2 | Kit zarfının istemci kuralları `kit.proto`'da değil demo'nun `game.proto`'sunda | belge | kuralları `kit.proto`'ya taşı, demo'nun aynası atıf yapsın (yalnız yorum) |
+
+Tetikleyicisiz gözlemler (iş yok): kit'in opcode varsayılanları
+(varsayılansız ilişkili sabit daha dürüst olurdu), `Vision::sees`
+birim başına yarıçap taşımıyor, `TeamRoom` yalnız full gönderiyor,
+`ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi),
+join / `spawn_player` hesap kimliğini görmüyor (çekirdek). Sıra
+önerisi: F1 (hata) önce ve kendi commit'inde, önce kırılan testiyle
+(`findings::f1_…` zaten hazır); ardından eklemeler (F2, F4,
+A1); belgeler (F3, A2) aynı turda.
+
+**Doğrulama:** 454 + 24 = **478** test / 0 hata / 1 ignored; `cargo
+clippy --workspace --all-targets -- -D warnings` 0 uyarı; loadgen (50
+istemci, 3 sn) `left=50 errors=0` — MMO sunucuya ve loadgen'e bağlı
+değil (§12 kapsam dışı), çalışma zamanında değişen kod yok; koşu yalnız
+workspace'in sağlam kaldığının kanıtı (A/B alınmadı).
+
 ## 11. Kabul kriteri
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
@@ -1311,6 +1561,19 @@ Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
 3. **Performans:** loadgen sonuçları yeniden düzenleme öncesiyle gürültü
    içindedir.
 4. **`gsb-core` dokunulmamıştır.**
+
+**Durum (Faz 4 sonunda).** (1) Sağlandı: 2D demo, 3D arena ve 3D MMO
+ayrı crate'ler, yalnız kit'in public yüzeyiyle, Faz 2'den beri
+değişmemiş aynı kit üzerinde yeşil (§10 "Faz 4 sonucu", kapanış
+kontrolü); kit'te değişiklik gerektiren her ihtiyaç tasarım bulgusu
+olarak kayıtlı (§10, "Faz 3 + Faz 4 tasarım bulguları" — biri, F1, bir
+doğruluk hatası; düzeltmesi sıradaki kit turunun işi). (2) Sağlandı:
+2D demo'nun wire testleri yeşil ve beklenen baytları hiç değişmedi
+(`wire_contract.rs`'e Faz 2'de yalnız crate yolu ve `prelude` import'u
+dokundu; `kit_wire.rs` kit zarfını demo'nun aynasına sabitliyor). (3) Son A/B Faz 2'de alındı (gürültü
+içinde); Faz 3 ve 4 çalışma zamanında kod değiştirmedi, yalnız loadgen
+sağlamlık koşusu. (4) Sağlandı: `crates/gsb-core` Faz 0'dan beri
+dokunulmadı.
 
 ## 12. Kararlar (kullanıcı, 2026-09-24)
 
@@ -1346,3 +1609,8 @@ Faz 3'ün (3D arena) ardından gelir. Amaç, "her şey yerine oturdu mu"
 sorusunu en ağır kullanım senaryosuyla cevaplamaktır. MMO demosu kit'te
 bir değişiklik gerektirirse, bu turun raporu o değişikliği ve gerekçesini
 ayrıca listeler; kabul kriteri 1'e göre bu bir tasarım bulgusudur.
+
+*(Tamamlandı: §10 "Faz 4 sonucu" — MMO kit'e dokunmadan kuruldu; kit
+değişikliği gerektiren dört ihtiyaç tasarım bulgusu olarak orada
+listeli, Faz 3'ünkülerle birlikte "Faz 3 + Faz 4 tasarım bulguları"
+tablosunda.)*

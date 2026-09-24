@@ -5,6 +5,95 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## gsb-kit Faz 4 turu (3D MMO demosu `gsb-demo-mmo` — kapanış doğrulaması)
+
+`docs/KIT-ARCHITECTURE.md` §10'un Faz 4'ü ve §13: kit'in yalnız public
+yüzeyiyle yazılmış küçük bir 3D MMO dünyası, görünürlük modeli
+**shard'lı dünya üzerinde yer-düzlemi ızgara AOI** —
+`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`, 2D
+ön-ayarlar 3D verinin yer düzleminde (`Planar` = `[x, z]`; yükseklik
+var, ilgi yönetimi onu yok sayıyor). **Beş korunan crate'e tek satır
+dokunulmadı** (`git diff 89049d2.. --stat -- crates/gsb-kit
+crates/gsb-core crates/gsb-demo crates/gsb-demo-arena crates/gsb-server`
+boş; kit `addbcf5`'ten beri aynı); MMO sunucuya ve loadgen'e bağlanmadı
+(§12 kapsam dışı).
+
+**Ne yapıldı** (`6d20fb4`, `0aabb72`; ~1 470 satır kaynak (birim testleri dahil),
+~1 280 satır entegrasyon testi, proto).
+- **Crate `gsb-demo-mmo`** (workspace üyesi; `gsb-kit` + `gsb-core` +
+  `gsb-protocol`'e bağlı, iki demoya da değil; `build.rs`
+  `gsb_lint::check`'i çağırıyor, kit proto'sunu `links` üzerinden
+  import ediyor).
+- **Oyun:** `Pos3` (metre, y yukarı), `Vitals` (tür + can),
+  `MmoCodec` (`Wire`: en yakına yuvarlanmış desimetre + tür + can —
+  dünyanın her koordinatı ≤ 2 baytlık varint; `Dirty` = konum VEYA can;
+  wire `Planar`'ı metre), 2×2 shard (512 m bölge, 128 m şerit), 64 m
+  AOI hücresi; oyun kodunun spawn/despawn ettiği mob'lar (kamp
+  tablosu, kendi hızıyla rota — `Speed` benzeri bileşen yok —, ömür,
+  saldırıyla ölüm), uçan mob'lar (irtifa), `MoveTo` / `Attack` /
+  `Travel` (waystone ışınlanması) girdileri, `MmoMig` (oyuncu: konum,
+  can, hız, yürüyüş; mob: bütün beyni), park politikası (bekletme →
+  AI devri: çıkış botu karakteri en yakın waystone'a yürütüyor).
+- **Wire:** `proto/mmo.proto` — girdiler, `Kind`, `EntityRecord`,
+  yer-düzlemi `CellExit { x, z }`, kit zarfının tipli aynaları;
+  opcode'lar `1200..=1204` (2D demo ve arenadan ayrık blok).
+- **Testler (+24):** 12 birim + 12 entegrasyon; entegrasyonların hepsi
+  **gerçek dört `ShardActor`** üzerinden (registry kablolaması, elle
+  ticker, metrik kanalı adım bariyeri, kit'in istemci kurallarıyla
+  çözen istemciler): yer-düzlemi AOI (tam 3×3 blok, şerit dahil;
+  150 m yukarıdaki komşu-hücre uçanı görünür, iki hücre ötedeki zemin
+  mob'u görünmez), dikişi geçen oyuncu ve hızsız uçan mob (wire id +
+  taşınan durum + iki yandan kesintisiz görünürlük), köşegen shard'a
+  ışınlanma (hop hop, tek sahip), oyun kodunun öldürdüğü mob'un iki
+  shard'dan kalıcı silinmesi (keep-alive full'larında hayalet yok),
+  park / AI devri / sıfır süre, gerçek karelerin bayt uyumluluğu (full,
+  `removed`'lı ve `cell_exits`'li delta, one-shot private full, ack).
+  Mutation-check'ler: `Planar` `[x, y]`, `capture` mob'u oyuncu sayıyor,
+  `Mig` yürüyüşü taşımıyor, ışınlanma yürüyüşü iptal etmiyor, öldürme
+  despawn etmiyor, `Dirty` yalnız konum, sessiz bot, aynada
+  `entities = 6`, wire `Planar`'ı desimetre — hepsi kırıldı (ayrıntı:
+  KIT-ARCHITECTURE §10 "Faz 4 sonucu").
+- **Kapanış kontrolü:** `cargo test -p gsb-demo -p gsb-demo-arena -p
+  gsb-demo-mmo` → 82 passed / 0 failed (43 + 15 + 24), aynı ve Faz
+  2'den beri değişmemiş kit üzerinde.
+
+**Tasarım bulguları** (kit yamanmadı; en küçük değişiklikleri ve
+kit-kopyası probları KIT-ARCHITECTURE §10 "Faz 4 sonucu"nda):
+(F1, **doğruluk hatası**) sharded × spatial'da şeritten ödünç verilmiş
+hücresine göç eden entity yeni shard'ının kovasından siliniyor —
+varış full'u geleni içermiyor, hücresinde yalnızsa süresiz görünmez
+(`integrate_borrowed`'ta ~6 satırlık kit-içi düzeltme; probda 125/126,
+kırılan tek test bilerek sabitlenen bulgu testi); (F2) `GridPartition2`
+4-komşuluk: köşegen shard köşeden hiçbir şey ödünç vermiyor
+(`with_diagonals()` eklemesi); (F3) `Planar`'ın birim sözleşmesi yazılı
+değil (belge); (F4) park politikası her beklemeyi AI devrine bitiriyor —
+"sonra slotu bırak" ifade edilemiyor (`ParkPolicy.to` eklemesi). F1 ve
+F2 `tests/findings.rs`'te bugünkü davranışla sabit (kit düzelince
+bilerek kırılır). Faz 3 + 4'ün birleşik bulgu listesi (kit düzeltme
+turunun girdisi): KIT-ARCHITECTURE §10 "Faz 3 + Faz 4 tasarım
+bulguları".
+
+**Elenen alternatifler.**
+- *Kendi `Partition`'ını yazarak köşe açığını kapatmak:* public seam
+  izin veriyor, ama turun konusu ön-ayar; bu, F2'nin etrafından sessiz
+  bir dolaşma olurdu.
+- *Kit odasını saran bir `GameLogic` ile park cevabını `Despawn`'a
+  çevirmek:* her kanca için delege — kit'in iç davranışını oyunda
+  yeniden yazmak; F4 olarak kaydedildi.
+- *Santimetre / `f32` wire:* ±81,9 m ötesi her koordinat 3 bayt / 5
+  bayt; desimetre MMO ölçeğinde yeterli ve değişim eşiği bedava.
+- *Wire `Planar`'ını desimetre bırakmak:* `Grid2`'nin hücre kenarını
+  640 yapmak yeterdi, ama `GridPartition2::admits` konumun birimini
+  bekliyor (F3) — iki izdüşüm tek birimde.
+- *Mob'lara `Speed` vermek:* §8.5'in sınanması için bilerek yok; hız
+  mob'un beyninde.
+- *MMO'yu sunucuya / loadgen'e bağlamak:* §12 kapsam dışı; en küçük
+  sunucu kancası değerlendirmesi §10 "Faz 4 sonucu"nda.
+
+**Test:** 454 → **478** (+24). Clippy 0 uyarı. Loadgen (50 istemci, 3
+sn) `left=50 errors=0` — çalışma zamanında değişen kod yok, A/B
+alınmadı.
+
 ## gsb-kit Faz 3 turu (3D arena demosu `gsb-demo-arena` — kit'in kabul testi)
 
 `docs/KIT-ARCHITECTURE.md` §10'un Faz 3'ü ve §11'in ilk kabul
