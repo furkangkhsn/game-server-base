@@ -1,0 +1,124 @@
+// The 3D MMO's wire (KIT-ARCHITECTURE §12/§13: the MMO validation demo).
+//
+// Two kinds of messages live here:
+//
+// - the MMO's OWN messages: its inputs (`MoveTo`, `Attack`, `Travel`)
+//   and its entity record (`EntityRecord`, the body the MMO's
+//   `RecordCodec::encode` writes);
+// - its client-facing TYPED MIRRORS of the kit's envelope
+//   (`gsb.kit.WorldSnapshot`, `gsb.kit.Private` in gsb-kit's `kit.proto`).
+//   The kit writes those frames with OPAQUE bodies (`repeated bytes
+//   entities = 2`, `repeated bytes cell_exits = 4`); a `repeated
+//   EntityRecord` / `repeated CellExit` under the same number is the same
+//   bytes on the wire (all length-delimited), so an MMO client decodes
+//   the kit's frames with the mirror unchanged. `tests/wire.rs` pins the
+//   two definitions to identical bytes. The kit's `InputAck` is used as
+//   is (imported, not mirrored).
+//
+// UNITS. Every coordinate on this wire is an integer number of
+// DECIMETRES (the MMO's world unit is the metre; see `src/codec.rs` for
+// the quantization and why decimetres). Axis order x, y, z with y UP
+// (height); the ground plane is (x, z).
+
+syntax = "proto3";
+
+package gsb.mmo;
+
+import "base.proto";
+import "kit.proto";
+
+// Client -> server (op `MMO_MOVE_TO`): "walk my character toward (x, z)
+// on the ground". Clamped into the world on the server.
+message MoveTo {
+  // Ground target, decimetres (<= 2 bytes each anywhere in the world).
+  sint32 x = 1;
+  sint32 z = 2;
+  // Client-assigned input sequence number: monotonic from 1 within one
+  // session, 0 = unnumbered (always processed, never acknowledged). The
+  // rule is the kit's (`gsb_kit::game::InputSeq`); the acknowledgment
+  // comes back as `gsb.kit.InputAck` in the `Private` frame.
+  uint64 seq = 3;
+}
+
+// Client -> server (op `MMO_ATTACK`): "hit the mob with wire id `target`".
+// Resolved on the attacker's shard only (a mob owned by a neighbouring
+// shard — seen through the border strip — is out of reach).
+message Attack {
+  uint64 target = 1;
+  uint64 seq = 2;
+}
+
+// Client -> server (op `MMO_TRAVEL`): "use waystone `waystone`" — an
+// instant teleport anywhere on the map (the world's waystone list).
+message Travel {
+  uint32 waystone = 1;
+  uint64 seq = 2;
+}
+
+// What an entity is (drives the client's model and nameplate).
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  PLAYER = 1;
+  // A ground mob.
+  MOB = 2;
+  // A flying mob: holds its altitude (a non-zero y).
+  FLYER = 3;
+}
+
+// One entity's record: the body of each `WorldSnapshot.entities` entry.
+message EntityRecord {
+  // The kit-minted wire identity (range-partitioned per shard, kept
+  // across shard migrations; the joiner learns its own from
+  // JOIN_ROOM_RESULT).
+  uint64 entity = 1;
+  // Position, decimetres (rounded to nearest). y is height.
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 z = 4;
+  Kind kind = 5;
+  // Hit points (a mob's drop as players hit it).
+  uint32 hp = 6;
+}
+
+// A ground-plane AOI cell that left the group's view (delta frames): the
+// client forgets every entity it holds whose record lies in it. The cell
+// of a record is `(floor(x / 640), floor(z / 640))` on its DECIMETRE
+// coordinates — 64 m cells on the ground plane; height is not part of
+// the cell (the MMO's interest management ignores it).
+message CellExit {
+  sint32 x = 1;
+  sint32 z = 2;
+}
+
+// Typed mirror of `gsb.kit.WorldSnapshot` (op `MMO_SNAPSHOT`): the
+// snapshot of the connection's AOI group (its 3x3 ground-plane cell
+// block, including the records a neighbouring shard lends through the
+// border strip).
+//
+// FULL (`delta` false): the complete view; replaces the client's view.
+// DELTA (`delta` true): applied on top of the current view, in order:
+// `removed`, then `cell_exits`, then `entities` (upserts). A delta
+// without a baseline is dropped; a duplicate `sequence` (<= the last
+// accepted) is discarded; the keep-alive full restores exact state.
+// These are the kit's client rules, identical for every kit game.
+message WorldSnapshot {
+  uint64 sequence = 1;
+  repeated EntityRecord entities = 2;
+  repeated uint64 removed = 3;
+  repeated CellExit cell_exits = 4;
+  bool delta = 5;
+}
+
+// Typed mirror of `gsb.kit.Private` (op `MMO_PRIVATE`): the
+// per-connection frame — the input acknowledgment, OR a one-shot FULL
+// view (applied unconditionally: a baseline reset on join, resume, cell
+// crossing or shard migration), plus the RPC responses. Field 4 (`game`,
+// the kit's opaque per-game payload) is not mirrored: the MMO sends no
+// private payload of its own.
+message Private {
+  oneof payload {
+    gsb.kit.InputAck ack = 1;
+    WorldSnapshot snapshot = 2;
+  }
+  repeated gsb.base.RpcResponse responses = 3;
+}

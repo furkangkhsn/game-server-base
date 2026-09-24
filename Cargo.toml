@@ -9,6 +9,7 @@ members = [
     "crates/gsb-kit",
     "crates/gsb-demo",
     "crates/gsb-demo-arena",
+    "crates/gsb-demo-mmo",
     "crates/gsb-server",
 ]
 
@@ -30,6 +31,7 @@ gsb-net = { path = "crates/gsb-net" }
 gsb-kit = { path = "crates/gsb-kit" }
 gsb-demo = { path = "crates/gsb-demo" }
 gsb-demo-arena = { path = "crates/gsb-demo-arena" }
+gsb-demo-mmo = { path = "crates/gsb-demo-mmo" }
 gsb-server = { path = "crates/gsb-server" }
 
 # async runtime

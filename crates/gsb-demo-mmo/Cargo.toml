@@ -1,0 +1,31 @@
+[package]
+name = "gsb-demo-mmo"
+description = "Validation demo for gsb-kit: a small 3D MMO world with a ground-plane grid AOI over a sharded world (ShardedSpatialRoom + Grid2 + GridPartition2), built on the kit's public API only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# KIT-ARCHITECTURE §11/§12: the MMO sees the kit's PUBLIC surface only,
+# and never the other example games (no `gsb-demo` / `gsb-demo-arena`
+# dependency).
+[dependencies]
+gsb-core = { workspace = true }
+gsb-protocol = { workspace = true }
+gsb-kit = { workspace = true }
+bevy_ecs = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
