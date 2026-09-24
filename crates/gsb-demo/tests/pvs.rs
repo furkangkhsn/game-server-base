@@ -24,6 +24,7 @@ use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_demo::game::WorldSnapshot;
 use gsb_demo::op;
+use gsb_demo::prelude::*;
 use gsb_demo::pvs::SectorRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};

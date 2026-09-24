@@ -18,6 +18,7 @@ use gsb_core::rpc::RpcReply;
 use gsb_demo::aoi::{AoiRoom, Cell};
 use gsb_demo::components::{Position, WireId};
 use gsb_demo::game::{CellExit, EntityRecord, InputAck};
+use gsb_demo::prelude::*;
 use gsb_kit::proto as kit;
 use gsb_protocol::base::RpcResponse;
 use prost::Message;

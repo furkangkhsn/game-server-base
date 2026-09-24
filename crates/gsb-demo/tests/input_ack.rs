@@ -23,6 +23,7 @@ use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_demo::game::{Private, WorldSnapshot};
 use gsb_demo::op;
+use gsb_demo::prelude::*;
 use gsb_demo::room::OpenRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};

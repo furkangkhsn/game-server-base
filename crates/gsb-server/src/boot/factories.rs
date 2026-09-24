@@ -7,6 +7,8 @@ use bevy_ecs::world::World;
 
 use gsb_core::registry::{BuiltRoom, RoomFactory};
 use gsb_core::room::RoomLogic;
+// The demo rooms' constructors (extension traits over the kit's rooms).
+use gsb_demo::prelude::*;
 use gsb_protocol::MessageTable;
 
 /// The demo composition: base protocol + demo game messages.

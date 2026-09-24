@@ -21,6 +21,7 @@ use prost::Message;
 use crate::demo::components::{DEFAULT_SPEED, Position, Speed};
 use crate::demo::game::WorldSnapshot;
 use crate::kit::identity::WireId;
+use crate::prelude::*;
 
 mod aoi;
 mod open;

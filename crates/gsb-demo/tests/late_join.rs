@@ -25,6 +25,7 @@ use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use gsb_demo::op;
+use gsb_demo::prelude::*;
 
 const WAIT: Duration = Duration::from_secs(5);
 /// Nominal period for synthetic timestamps (the room default is 30 Hz).

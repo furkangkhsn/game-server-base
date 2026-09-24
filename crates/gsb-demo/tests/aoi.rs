@@ -25,6 +25,7 @@ use gsb_core::ticker::TickInfo;
 use gsb_demo::aoi::AoiRoom;
 use gsb_demo::game::{Private, WorldSnapshot};
 use gsb_demo::op;
+use gsb_demo::prelude::*;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 

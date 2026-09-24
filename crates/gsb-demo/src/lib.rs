@@ -76,17 +76,30 @@ mod layering;
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
 
+/// The demo rooms' constructors (`OpenRoom::new()`,
+/// `AoiRoom::with_spawn_half(..)`, `.with_economy(..)`, …): one
+/// extension trait per room, since the room types are the kit's (see
+/// `demo/rooms.rs` for why). `use gsb_demo::prelude::*;` brings them all
+/// into scope.
+pub mod prelude {
+    pub use crate::demo::rooms::{
+        AoiRoomExt, OpenRoomExt, SectorRoomExt, ShardedRoomExt, ShardedSpatialRoomExt, TeamRoomExt,
+    };
+}
+
 /// The team-fog room, its group key and membership component
 /// (compatibility path; the strategy's design notes live on the kit's
 /// generic [`TeamRoom`](crate::kit::team::TeamRoom)).
 pub mod team {
+    pub use crate::demo::rooms::TeamRoomExt;
     pub use crate::demo::spawn::TEAM_COUNT;
     pub use crate::kit::team::{DEFAULT_VISION_RADIUS, Team, TeamMember};
 
     /// The team-fog room running the demo game over the kit's 2D vision
     /// preset: the kit's generic [`TeamRoom`](crate::kit::team::TeamRoom)
     /// instantiated with the demo's `Game` and `VisionGrid2<Position>`
-    /// (constructors: `new`, `with_spawn_half`, `with_disconnect_grace`).
+    /// (constructors: [`TeamRoomExt`]'s `new`, `with_spawn_half`; the
+    /// kit's `with_disconnect_grace`).
     pub type TeamRoom = crate::kit::team::TeamRoom<
         crate::demo::play::DemoGame,
         crate::kit::space::VisionGrid2<crate::demo::components::Position>,
@@ -97,12 +110,14 @@ pub mod team {
 /// design notes live on the kit's generic
 /// [`AoiRoom`](crate::kit::aoi::AoiRoom)).
 pub mod aoi {
+    pub use crate::demo::rooms::AoiRoomExt;
     pub use crate::kit::space::Cell;
 
     /// The AOI room running the demo game over the kit's 2D grid preset:
     /// the kit's generic [`AoiRoom`](crate::kit::aoi::AoiRoom)
     /// instantiated with the demo's `Game` and `Grid2` (constructors:
-    /// `new`, `with_spawn_half`, `with_disconnect_grace`).
+    /// [`AoiRoomExt`]'s `new`, `with_spawn_half`; the kit's
+    /// `with_disconnect_grace`).
     pub type AoiRoom =
         crate::kit::aoi::AoiRoom<crate::demo::play::DemoGame, crate::kit::space::Grid2>;
 }
@@ -111,12 +126,13 @@ pub mod aoi {
 /// strategy's design notes live on the kit's generic
 /// [`SectorRoom`](crate::kit::pvs::SectorRoom)).
 pub mod pvs {
+    pub use crate::demo::rooms::SectorRoomExt;
     pub use crate::demo::sectors::SECTOR_OUT;
     pub use crate::kit::space::Sector;
 
     /// The PVS room running the demo game over its four-sector map in the
-    /// kit's convex-sector preset (constructors: `new`, `with_spawn_half`,
-    /// `with_disconnect_grace`).
+    /// kit's convex-sector preset (constructors: [`SectorRoomExt`]'s
+    /// `new`, `with_spawn_half`; the kit's `with_disconnect_grace`).
     pub type SectorRoom = crate::kit::pvs::SectorRoom<
         crate::demo::play::DemoGame,
         crate::kit::space::ConvexSectors2<crate::demo::components::Position>,
@@ -129,6 +145,7 @@ pub mod pvs {
 /// [`ShardedRoom`](crate::kit::sharded::ShardedRoom)).
 pub mod sharded {
     pub use crate::demo::migrate::DemoMig;
+    pub use crate::demo::rooms::{ShardedRoomExt, ShardedSpatialRoomExt};
     pub use crate::demo::wire::StripPos;
     pub use crate::kit::sharded::{KitMig, ShardParkRecord};
     pub use crate::kit::space::{grid_shape, shard_at};
@@ -136,7 +153,8 @@ pub mod sharded {
     /// One shard of the demo's sharded world: the kit's generic
     /// [`ShardedRoom`](crate::kit::sharded::ShardedRoom) instantiated with
     /// the demo's `Game` over the kit's 2D grid partition (constructors:
-    /// `new`, `with_disconnect_grace`, `with_economy`).
+    /// [`ShardedRoomExt`]'s `new`, `with_economy`; the kit's
+    /// `with_disconnect_grace`).
     pub type ShardedRoom = crate::kit::sharded::ShardedRoom<
         crate::demo::play::DemoGame,
         crate::kit::space::GridPartition2<crate::demo::components::Position>,
@@ -144,8 +162,9 @@ pub mod sharded {
 
     /// One shard of the demo's sharded × spatial world: the kit's generic
     /// [`ShardedSpatialRoom`](crate::kit::sharded::ShardedSpatialRoom)
-    /// over the demo shard and the kit's 2D grid AOI (constructors: `new`,
-    /// `with_disconnect_grace`, `with_economy`).
+    /// over the demo shard and the kit's 2D grid AOI (constructors:
+    /// [`ShardedSpatialRoomExt`]'s `new`, `with_economy`; the kit's
+    /// `with_disconnect_grace`).
     pub type ShardedSpatialRoom = crate::kit::sharded::ShardedSpatialRoom<
         crate::demo::play::DemoGame,
         crate::kit::space::GridPartition2<crate::demo::components::Position>,
@@ -160,12 +179,14 @@ pub mod sharded {
 /// The open-visibility room and the demo's spawn distribution
 /// (compatibility path).
 pub mod room {
+    pub use crate::demo::rooms::OpenRoomExt;
     pub use crate::demo::spawn::{DEFAULT_SPAWN_HALF, spawn_pos};
 
     /// The open-visibility room running the demo game: the kit's generic
     /// [`OpenRoom`](crate::kit::room::OpenRoom) instantiated with the
-    /// demo's `Game` (constructors: `new`, `with_spawn_half`,
-    /// `with_economy`, `with_disconnect_grace`).
+    /// demo's `Game` (constructors: [`OpenRoomExt`]'s `new`,
+    /// `with_spawn_half`, `with_economy`; the kit's
+    /// `with_disconnect_grace`).
     pub type OpenRoom = crate::kit::room::OpenRoom<crate::demo::play::DemoGame>;
 }
 
