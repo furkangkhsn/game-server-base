@@ -184,7 +184,7 @@ impl GameLogic<World> for SectorRoom {
         // silently invisible. Done here (before the bucket build) so
         // freshly-stamped entities are in the buckets the broadcast phase
         // reads.
-        crate::kit::common::stamp_orphans(&mut self.minter, world);
+        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
 
         // Bucket the world by sector, once per tick (each entity exactly
         // once); a sector's snapshot is the union of the buckets its

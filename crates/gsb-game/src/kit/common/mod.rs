@@ -32,27 +32,30 @@
 
 mod cells;
 mod frame;
+mod hooks;
 mod input;
 mod park;
 
 pub(crate) use cells::*;
 pub(crate) use frame::*;
+pub(super) use hooks::*;
 pub use input::InputSeq;
 pub(crate) use input::{append_responses, emit_private};
 pub(crate) use park::*;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, Without, World};
+use bevy_ecs::prelude::{Component, Entity, With, Without, World};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Admission, TickCtx};
 use gsb_ecs::{SystemCtx, SystemRunner};
 
 use crate::kit::identity::{Minter, WireId};
 use crate::kit::seam;
-use crate::kit::seam::Position;
 
-/// The player-spawn path, shared by all rooms: the deterministic spawn
+/// The player-spawn path of the rooms that are not yet generic over the
+/// game (team, PVS — phase 1b; the generic twin is [`join`]): the
+/// deterministic spawn
 /// point (same distribution in every strategy — a fair comparison in the
 /// load generator), a fresh wire identity AND a fresh stable player
 /// identity through their minting counters, the player→entity table
@@ -119,10 +122,11 @@ pub(crate) fn run_systems(runner: &mut SystemRunner, world: &mut World, ctx: &Ti
 }
 
 /// The orphan stamp (the broadcast set is *structural*, not a
-/// discipline): entities with a [`Position`] but no [`WireId`] yet —
-/// anything spawned outside `on_join` (bullets, NPCs, traps, …) — are
-/// stamped with the next serial, so the broadcast set is exactly "has a
-/// `Position`" and nothing can be silently invisible. Two passes (the
+/// discipline): entities with the broadcast marker `M` (the codec's
+/// `Marker`; the demo: `Position`) but no [`WireId`] yet — anything
+/// spawned outside a join (bullets, NPCs, traps, …) — are stamped with
+/// the next serial, so the broadcast set is exactly "has the marker" and
+/// nothing can be silently invisible. Two passes (the
 /// orphan query holds the world borrow, so collect first, then write —
 /// the same pattern as the demo's movement system); the stamp is idempotent and
 /// costs nothing in steady state (the orphan query matches nothing once
@@ -133,11 +137,10 @@ pub(crate) fn run_systems(runner: &mut SystemRunner, world: &mut World, ctx: &Ti
 /// (their per-tick caches are built right after). Either call site keeps
 /// the guarantee: an orphan appears in the very snapshot that notices
 /// it.
-pub(super) fn stamp_orphans(minter: &mut Minter, world: &mut World) {
+pub(super) fn stamp_orphans<M: Component>(minter: &mut Minter, world: &mut World) {
     let orphans: Vec<Entity> = world
-        .query_filtered::<(Entity, &Position), Without<WireId>>()
+        .query_filtered::<Entity, (With<M>, Without<WireId>)>()
         .iter(world)
-        .map(|(entity, _)| entity)
         .collect();
     for entity in orphans {
         world.entity_mut(entity).insert(minter.mint());

@@ -28,7 +28,8 @@ fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Every `crate::` path in `text` (at an identifier boundary) that does
-/// not continue with `kit::`, as `(line number, line)`.
+/// not continue into the kit (`kit::…`, or the bare module `kit` as in
+/// `pub(in crate::kit)`), as `(line number, line)`.
 fn non_kit_paths(text: &str) -> Vec<(usize, String)> {
     let mut hits = Vec::new();
     for (i, line) in text.lines().enumerate() {
@@ -40,7 +41,14 @@ fn non_kit_paths(text: &str) -> Vec<(usize, String)> {
                 .next_back()
                 .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '$'));
             let rest = &line[start + "crate::".len()..];
-            if boundary && !rest.starts_with("kit::") {
+            let into_kit = rest.strip_prefix("kit").is_some_and(|after| {
+                after.starts_with("::")
+                    || after
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            });
+            if boundary && !into_kit {
                 hits.push((i + 1, line.trim().to_string()));
             }
             from = start + "crate::".len();
@@ -94,7 +102,9 @@ fn the_scanner_flags_root_and_demo_paths_but_not_kit_paths() {
                use crate::demo::spawn::spawn_pos;\n\
                let r = crate::room::spawn_pos(c, h);\n\
                // see [`crate::kit::aoi::AoiRoom`]\n\
-               let x = gsb_crate::other;\n";
+               let x = gsb_crate::other;\n\
+               pub(in crate::kit) fn f() {}\n\
+               use crate::kitchen::sink;\n";
     let hits: Vec<usize> = non_kit_paths(src).into_iter().map(|(l, _)| l).collect();
-    assert_eq!(hits, vec![2, 3]);
+    assert_eq!(hits, vec![2, 3, 7]);
 }

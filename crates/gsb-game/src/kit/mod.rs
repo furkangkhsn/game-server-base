@@ -21,6 +21,7 @@
 pub mod aoi;
 pub mod codec;
 pub(crate) mod common;
+pub mod game;
 pub mod identity;
 pub mod pvs;
 pub mod room;

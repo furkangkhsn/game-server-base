@@ -34,22 +34,26 @@ pub fn spawn_pos(conn: ConnectionId, half: f32) -> (f32, f32) {
     (x, y)
 }
 
-/// Spawn a joining player's entity: the deterministic spawn point on the
-/// room's spawn map (derived from the TRANSPORT session id, as it always
-/// was — the load generator's home distribution pairs with it), the
-/// demo's player bundle (position + default speed), and the wire identity
-/// the kit minted for it (the future `Game::spawn_player`, §4.3 — the kit
-/// keeps stamping the identity).
+/// A joining player's component bundle: the deterministic spawn point on
+/// the room's spawn map (derived from the TRANSPORT session id, as it
+/// always was — the load generator's home distribution pairs with it)
+/// and the default speed. `DemoGame::spawn_player` spawns exactly this.
+pub(crate) fn player_bundle(conn: ConnectionId, spawn_half: f32) -> (Position, Speed) {
+    let (x, y) = spawn_pos(conn, spawn_half);
+    (Position { x, y }, Speed(DEFAULT_SPEED))
+}
+
+/// Spawn a joining player's entity with the wire identity the kit minted
+/// for it — the spawn path of the rooms not yet generic over the game
+/// (team, PVS, sharded — phase 1b); the generic rooms call
+/// `DemoGame::spawn_player` and stamp the identity themselves.
 pub(crate) fn spawn_player(
     world: &mut World,
     conn: ConnectionId,
     spawn_half: f32,
     wire: WireId,
 ) -> Entity {
-    let (x, y) = spawn_pos(conn, spawn_half);
-    world
-        .spawn((Position { x, y }, Speed(DEFAULT_SPEED), wire))
-        .id()
+    world.spawn((player_bundle(conn, spawn_half), wire)).id()
 }
 
 /// The join-time team *assignment rule* (the demo: conn parity, i.e.

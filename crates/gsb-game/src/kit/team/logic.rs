@@ -195,7 +195,7 @@ impl GameLogic<World> for TeamRoom {
         // broadcast set is exactly "has a `Position`" — structural, never
         // silently invisible. Done before `rebuild` so freshly-stamped
         // entities are in this tick's content.
-        crate::kit::common::stamp_orphans(&mut self.minter, world);
+        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
 
         self.rebuild(world);
     }

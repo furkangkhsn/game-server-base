@@ -91,7 +91,12 @@ pub mod sharded {
 /// (compatibility path).
 pub mod room {
     pub use crate::demo::spawn::{DEFAULT_SPAWN_HALF, spawn_pos};
-    pub use crate::kit::room::OpenRoom;
+
+    /// The open-visibility room running the demo game: the kit's generic
+    /// [`OpenRoom`](crate::kit::room::OpenRoom) instantiated with the
+    /// demo's `Game` (constructors: `new`, `with_spawn_half`,
+    /// `with_economy`, `with_disconnect_grace`).
+    pub type OpenRoom = crate::kit::room::OpenRoom<crate::demo::play::DemoGame>;
 }
 
 /// ECS components of the demo game (compatibility path: the demo's

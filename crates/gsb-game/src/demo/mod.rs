@@ -17,6 +17,8 @@ pub mod components;
 pub mod economy;
 pub(crate) mod input;
 pub mod op;
+pub mod play;
+pub mod rooms;
 pub(crate) mod rpc;
 pub mod sectors;
 pub mod spawn;

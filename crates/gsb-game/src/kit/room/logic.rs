@@ -4,18 +4,36 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-use bevy_ecs::prelude::World;
+use bevy_ecs::prelude::{With, World};
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 use gsb_core::rpc::RequestDecision;
-use prost::Message;
 
+use crate::kit::codec::RecordCodec;
+use crate::kit::common::{put_entity_records, write_full_header};
+use crate::kit::game::{Game, Wire};
 use crate::kit::identity::WireId;
 use crate::kit::room::*;
-use crate::kit::seam;
-use crate::kit::seam::Position;
 
-impl GameLogic<World> for OpenRoom {
+/// The game's broadcast marker (the codec's `Marker`).
+type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
+/// The game's record query (the codec's `Query`).
+type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
+
+impl<G: Game> OpenRoom<G> {
+    /// Every broadcastable entity's `(wire id, wire value)`, in query
+    /// order.
+    fn collect_records(&self, world: &mut World) -> Vec<(u64, Wire<G>)> {
+        let codec = self.game.codec();
+        let mut query = world.query_filtered::<(&WireId, RecordQuery<G>), With<Marker<G>>>();
+        query
+            .iter(world)
+            .map(|(wire_id, item)| (wire_id.get(), codec.wire(item)))
+            .collect()
+    }
+}
+
+impl<G: Game> GameLogic<World> for OpenRoom<G> {
     // One group per room: everyone sees the whole world. (The interface
     // supports finer groupings, e.g. `GroupKey = ConnectionId` — but then
     // the `last` ledger above must be keyed by group; see the module
@@ -24,10 +42,10 @@ impl GameLogic<World> for OpenRoom {
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     fn group_of(&self, _world: &World, _player: PlayerId) -> Self::GroupKey {
@@ -44,66 +62,42 @@ impl GameLogic<World> for OpenRoom {
         _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        // Collect the broadcastable state (wire id, truncated wire
-        // position) while the query holds the world borrow.
-        let mut current: Vec<(u64, i32, i32)> = Vec::new();
-        {
-            // Identity assignment (module docs, "Wire identity"): entities
-            // with a `Position` but no `WireId` — spawned outside
-            // `on_join` (bullets, NPCs, traps, …) — are stamped with the
-            // next serial here, so the broadcast set is exactly "has a
-            // `Position`" and no entity can be silently invisible (see
-            // `common::stamp_orphans` for the two-pass pattern and
-            // idempotence). The full query below runs *after* the
-            // stamps, so it sees every broadcastable entity exactly once
-            // (stamped and pre-stamped alike).
-            crate::kit::common::stamp_orphans(&mut self.minter, world);
-            let mut query = world.query::<(&WireId, &Position)>();
-            for (wire_id, pos) in query.iter(world) {
-                current.push((wire_id.get(), pos.x as i32, pos.y as i32));
-            }
-        }
+        // Identity assignment (module docs, "Wire identity"): entities
+        // with the marker but no `WireId` — spawned outside `on_join`
+        // (bullets, NPCs, traps, …) — are stamped with the next serial
+        // here, so the broadcast set is exactly "has the marker" and no
+        // entity can be silently invisible (see `common::stamp_orphans`
+        // for the two-pass pattern and idempotence). The record query
+        // below runs *after* the stamps, so it sees every broadcastable
+        // entity exactly once (stamped and pre-stamped alike).
+        crate::kit::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
+        // The broadcastable state (wire id, wire value).
+        let current = self.collect_records(world);
 
         // "No change" = identical wire content: the same set of entities
-        // at the same (truncated) positions. A membership change
-        // (join/leave) or any position change flips it. The comparison is
-        // on exactly what the snapshot carries (see module docs).
+        // with the same wire values. A membership change (join/leave) or
+        // any record change flips it. The comparison is on exactly what
+        // the snapshot carries (see module docs).
         let changed = self.last.len() != current.len()
-            || current.iter().any(|(entity, x, y)| {
-                self.last
-                    .get(entity)
-                    .map(|(lx, ly)| *x != *lx || *y != *ly)
-                    .unwrap_or(true)
-            });
+            || current
+                .iter()
+                .any(|(entity, wire)| self.last.get(entity).is_none_or(|last| last != wire));
         if !changed {
             return false;
         }
 
-        let mut snap = seam::WorldSnapshot {
-            sequence: ctx.tick,
-            entities: Vec::with_capacity(current.len()),
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
-        for (entity, x, y) in &current {
-            snap.entities.push(seam::EntityRecord {
-                entity: *entity,
-                x: *x,
-                y: *y,
-            });
-        }
-        // Encoding into an in-memory buffer cannot fail (no I/O, unbounded
-        // capacity); treat a failure as a bug rather than dropping the
-        // snapshot.
-        snap.encode(out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        // The FULL envelope (header + one record per entity, in query
+        // order), byte-identical to the typed `WorldSnapshot` encoding.
+        write_full_header(out, ctx.tick);
+        put_entity_records(
+            self.game.codec(),
+            current.iter().map(|(id, wire)| (*id, wire)),
+            out,
+        );
 
-        self.last.clear();
-        for (entity, x, y) in &current {
-            self.last.insert(*entity, (*x, *y));
-        }
         self.encoded += current.len() as u64;
+        self.last.clear();
+        self.last.extend(current);
         true
     }
 
@@ -114,8 +108,7 @@ impl GameLogic<World> for OpenRoom {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        // Shared spawn path (`common::on_join`): deterministic spawn point
-        // (this room's spawn map, see the `spawn_half` field), a fresh
+        // Shared join path (`common::join`): the game's spawn, a fresh
         // stable player identity + wire identity through their minting
         // counters, and the player→entity table update. The entity value
         // is also returned to the joiner in `JOIN_ROOM_RESULT`, so both
@@ -123,11 +116,11 @@ impl GameLogic<World> for OpenRoom {
         // by presence in the next snapshot, which now includes the new
         // entity (the join happened in the control phase, before this
         // tick's broadcast).
-        crate::kit::common::on_join(
+        crate::kit::common::join(
+            &mut self.game,
             &mut self.player_entity,
             &mut self.next_player_id,
             &mut self.minter,
-            self.spawn_half,
             world,
             conn,
             &mut self.input,
@@ -182,16 +175,15 @@ impl GameLogic<World> for OpenRoom {
         // (RECONNECT §9: "bot = bağlantısız girdi kaynağı" — an input
         // source without a connection): one decode/sequence/move path for
         // both.
-        seam::synthesize_bot_moves(
-            self.park_ledger
-                .values()
-                .filter(|e| e.bot)
-                .map(|e| (e.player, e.entity)),
+        crate::kit::common::ingest(
+            &mut self.game,
             world,
             ctx,
             actions,
-        );
-        seam::ingest(&self.player_entity, world, actions, &mut self.input)
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+        )
     }
 
     /// The per-connection input acknowledgment (the group snapshot is
@@ -210,54 +202,42 @@ impl GameLogic<World> for OpenRoom {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::kit::common::run_systems(&mut self.runner, world, ctx);
+        crate::kit::common::systems(&mut self.game, world, ctx);
     }
 
-    /// The demo's two request kinds (`ABILITY`, answered in this tick;
-    /// `ECONOMY`, delegated to the economy service and answered on a
-    /// later tick) — the handler body is the game's (the future
-    /// `Game::handle_request`), resolved against this room's
-    /// player→entity table and its economy handle.
+    /// The game's request handlers ([`Game::handle_request`] — the demo:
+    /// `ABILITY`, answered in this tick; `ECONOMY`, delegated to the
+    /// economy service and answered on a later tick), resolved against
+    /// this room's player→entity table.
     fn handle_request(
         &mut self,
         world: &mut World,
-        _ctx: &TickCtx,
+        ctx: &TickCtx,
         req: &gsb_core::rpc::RpcRequest,
     ) -> Option<RequestDecision> {
-        seam::handle_request(&self.player_entity, self.economy.as_ref(), world, req)
+        self.game
+            .handle_request(world, ctx, req, &self.player_entity)
     }
 
-    /// The demo's match result (the control plane's result seam, feature
-    /// A): the room's FINAL snapshot at shutdown — the complete,
+    /// The match result (the control plane's result seam, feature A):
+    /// the room's FINAL snapshot at shutdown — the complete,
     /// self-contained state the game considers "the result" (who was in
-    /// the room, where they ended up). Encoded as the ordinary
-    /// `WorldSnapshot` message (the platform's adapter decodes it
-    /// against the same schema it uses for live snapshots).
+    /// the room, where they ended up), ordered by wire id. Encoded as the
+    /// ordinary `WorldSnapshot` envelope (the platform's adapter decodes
+    /// it against the same schema it uses for live snapshots).
     fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
-        let mut entities: Vec<seam::EntityRecord> = Vec::new();
-        {
-            let mut query = world.query::<(&WireId, &Position)>();
-            for (wire_id, pos) in query.iter(world) {
-                entities.push(seam::EntityRecord {
-                    entity: wire_id.get(),
-                    x: pos.x as i32,
-                    y: pos.y as i32,
-                });
-            }
-        }
-        entities.sort_by_key(|e| e.entity);
-        let snap = seam::WorldSnapshot {
-            // The shutdown snapshot has no live ticker: sequence 0 marks
-            // "terminal" (live snapshots are strictly positive ticks).
-            sequence: 0,
-            entities,
-            removed: Vec::new(),
-            cell_exits: Vec::new(),
-            delta: false,
-        };
+        let mut records = self.collect_records(world);
+        records.sort_by_key(|(id, _)| *id);
         let mut out = bytes::BytesMut::new();
-        snap.encode(&mut out)
-            .expect("protobuf encode into an in-memory buffer failed");
+        // The shutdown snapshot has no live ticker: sequence 0 marks
+        // "terminal" (live snapshots are strictly positive ticks; a 0
+        // sequence is omitted on the wire, as proto3 does).
+        write_full_header(&mut out, 0);
+        put_entity_records(
+            self.game.codec(),
+            records.iter().map(|(id, wire)| (*id, wire)),
+            &mut out,
+        );
         Some(out.freeze())
     }
 }
@@ -265,4 +245,4 @@ impl GameLogic<World> for OpenRoom {
 // Faz 3 trait promotion: `handle_request` / `match_result` moved onto the
 // shared `GameLogic` supertrait above; this impl remains the compile-time
 // marker that OpenRoom targets the single-room actor.
-impl RoomLogic<World> for OpenRoom {}
+impl<G: Game> RoomLogic<World> for OpenRoom<G> {}

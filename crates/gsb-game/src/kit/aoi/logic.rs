@@ -287,7 +287,7 @@ impl GameLogic<World> for AoiRoom {
         // `on_join`) is already inside this tick's change window — the
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
-        crate::kit::common::stamp_orphans(&mut self.minter, world);
+        crate::kit::common::stamp_orphans::<Position>(&mut self.minter, world);
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
@@ -323,7 +323,7 @@ impl GameLogic<World> for AoiRoom {
         // its borrowed strip has been integrated).
         self.book.roll();
 
-        world.clear_trackers();
+        crate::kit::common::close_change_window(world);
     }
 }
 

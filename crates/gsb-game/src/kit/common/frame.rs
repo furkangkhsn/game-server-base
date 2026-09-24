@@ -57,6 +57,17 @@ pub(crate) fn write_snapshot_header(buf: &mut BytesMut, tick: u64, delta: bool) 
     }
 }
 
+/// The header of a whole-world FULL snapshot, byte-identical to the
+/// proto3 encoding of a `WorldSnapshot` with only `sequence` and
+/// `entities` set: `sequence` is omitted when 0 (the terminal
+/// `match_result` snapshot), and `delta = false` is never written.
+pub(crate) fn write_full_header(buf: &mut BytesMut, sequence: u64) {
+    if sequence != 0 {
+        buf.put_u8(0x08); // field 1 (sequence), varint
+        encode_varint(sequence, buf);
+    }
+}
+
 /// Append `records` as `entities` entries (field 2): one
 /// length-delimited [`RecordCodec::encode`] body each, in iteration
 /// order.
