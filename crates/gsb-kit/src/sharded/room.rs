@@ -92,9 +92,10 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// Entity records encoded during the most recent broadcast phase.
     pub(in crate::sharded) encoded: u64,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::common::emit_private`). The session stays bound to
-    /// this shard even if its entity migrates (its input is routed
-    /// through this shard's room), so the session lives here.
+    /// `crate::common::emit_private`) of THIS shard's players. A
+    /// player's entry moves with it: carried in [`KitMig`]
+    /// ([`ShardInputRecord`]), dropped here when the move commits,
+    /// continued by the receiving shard.
     pub(in crate::sharded) input: InputSeq,
 }
 

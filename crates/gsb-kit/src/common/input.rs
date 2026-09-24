@@ -19,7 +19,8 @@ use crate::proto;
 /// *reported* to the connection. Both are reset on every (re)join — a
 /// rejoin is a new session, and the client is expected to restart its
 /// counter at 1 (the server-side reset makes the first input of the new
-/// session processable even if the client forgets).
+/// session processable even if the client forgets). A shard migration is
+/// NOT a new session: the sharded rooms carry both across the seam.
 #[derive(Debug, Default)]
 struct InputState {
     /// Highest processed seq (0 = nothing numbered processed yet).
@@ -96,6 +97,21 @@ impl InputSeq {
     /// the next input starts a fresh one).
     pub(crate) fn end(&mut self, player: PlayerId) {
         self.states.remove(&player);
+    }
+
+    /// `player`'s session state as `(hwm, acked)` — the high-water mark
+    /// and the last reported ack — or `None` when no session is tracked.
+    /// Read, not consumed: what a sharded room carries with a migrating
+    /// player (the entry leaves only when the move commits).
+    pub(crate) fn mark(&self, player: PlayerId) -> Option<(u64, u64)> {
+        self.states.get(&player).map(|st| (st.hwm, st.acked))
+    }
+
+    /// Continue `player`'s input session from a carried state (a
+    /// migration arrival): the sequence rule resumes at `hwm`, and a mark
+    /// past `acked` is reported in the next private frame.
+    pub(crate) fn adopt(&mut self, player: PlayerId, hwm: u64, acked: u64) {
+        self.states.insert(player, InputState { hwm, acked });
     }
 
     /// The pending ack for `player`, consumed: `Some(hwm)` when the mark

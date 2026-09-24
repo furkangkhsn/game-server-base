@@ -171,7 +171,8 @@ async fn a_travel_lands_on_the_destination_shard() {
     .await;
 
     // Its input now reaches the shard that holds it, which acks it (the
-    // `Travel`'s own ack is lost in the hand-off — see `mmo_findings`).
+    // `Travel`'s own ack, carried across the hand-off, is locked in
+    // `mmo_findings`).
     a.move_to(270.0, 256.0, 2).await;
     eventually(
         &mut [&mut a, &mut d],

@@ -78,16 +78,26 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
                         wire,
                         bot: p.bot,
                     });
+                // The stable player identity travels with the entity: the
+                // receiving shard keys its row under the SAME id.
+                let player = self.entity_player.get(&entity).copied();
+                // K1–K3: the player's input session travels too. Read,
+                // not taken: a refused send leaves the player here (the
+                // core rolls its row back and re-collects next tick), so
+                // the entry leaves only when the move commits
+                // (`on_migrate_out`).
+                let input = player
+                    .and_then(|p| self.input.mark(p))
+                    .map(|(hwm, acked)| ShardInputRecord { hwm, acked });
                 Migrating {
                     wire,
                     // What else travels is the game's (`ShardGame::capture`).
                     state: KitMig {
                         game: self.game.capture(world, entity),
                         park,
+                        input,
                     },
-                    // The stable player identity travels with the entity:
-                    // the receiving shard keys its row under the SAME id.
-                    player: self.entity_player.get(&entity).copied(),
+                    player,
                 }
             })
             .collect()
@@ -104,7 +114,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         // re-stamps the wire identity it travelled with (range
         // partitioning — the sibling's minter minted it, this one only
         // re-materializes it).
-        let KitMig { game: mig, park } = state;
+        let KitMig {
+            game: mig,
+            park,
+            input,
+        } = state;
         let entity = self.game.restore(world, mig);
         debug_assert!(
             world.entity(entity).contains::<Marker<G>>(),
@@ -121,6 +135,14 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             // stable key the sending shard used.
             self.player_entity.insert(player, entity);
             self.entity_player.insert(entity, player);
+            // K1–K3: the session continues from the carried state — the
+            // mark keeps the sequence rule, and an ack the source never
+            // sent goes out in this shard's next private frame. Without
+            // one (a sender that carried none), a fresh session.
+            match input {
+                Some(rec) => self.input.adopt(player, rec.hwm, rec.acked),
+                None => self.input.begin(player),
+            }
         }
         if let Some(park) = park {
             // §14.2: a detached/bot-fed player's ledger record arrives
@@ -143,6 +165,9 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         {
             if let Some(player) = self.entity_player.remove(&entity) {
                 self.player_entity.remove(&player);
+                // K3: the input session left with the player (inside
+                // `KitMig`); one entry would leak here per migration.
+                self.input.end(player);
             }
             self.entity_wire.remove(&entity);
             // §14.2 symmetry: the park record left with the entity (it

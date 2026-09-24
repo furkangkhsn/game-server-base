@@ -83,6 +83,7 @@ fn migrated_player_gets_private_full_on_arrival() {
                 target: None,
             },
             park: None,
+            input: None,
         },
         Some(PlayerId(9)),
     );

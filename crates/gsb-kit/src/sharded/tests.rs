@@ -23,6 +23,7 @@ mod change_window;
 mod diagonals;
 mod frame_filter;
 mod ghosts;
+mod input_carry;
 mod lent_arrival;
 mod migration;
 mod spatial;
@@ -130,6 +131,7 @@ fn wire_ranges_are_disjoint_and_stable() {
             target: world0.entity(entity0).get::<MoveTarget>().copied(),
         },
         park: None,
+        input: None,
     };
     s1.on_migrate_in(&mut world1, w0, state, Some(PlayerId(1)));
     let entity1 = *s1.player_entity.get(&PlayerId(1)).unwrap();

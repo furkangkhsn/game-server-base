@@ -145,71 +145,20 @@
 //! leaver's baseline and parks the despawn removal (despawns are not
 //! component writes) so the seam cell's delta carries the exit.
 
+mod mig;
 mod room;
 mod spatial;
 
 #[cfg(test)]
 mod tests;
 
+pub use mig::{KitMig, ShardInputRecord, ShardParkRecord};
 pub use room::ShardedRoom;
 pub use spatial::ShardedSpatialRoom;
-
-use std::ops::Deref;
-
-use gsb_core::id::PlayerId;
 
 // The grid helpers, in scope for the in-module tests (`use super::*`).
 #[cfg(test)]
 use crate::space::{grid_shape, shard_at};
-
-/// The full state of a migrating entity: the GAME's captured state
-/// (`ShardGame::Mig` — the demo: position, speed if any, pending move
-/// target) and the KIT's park record. Opaque to the core; the game
-/// rebuilds its half on [`ShardedRoom`]'s `on_migrate_in`, the kit its
-/// own.
-///
-/// The `park` field is the RECONNECT §14.2 rule in action: a parked (or
-/// bot-fed) player's ledger record is part of the migrating PLAYER state,
-/// not a side table — an entity that crosses a seam while detached
-/// carries its park record along, so the receiving shard's ledger answers
-/// the resume and keeps feeding the bot.
-///
-/// Derefs to the game's state, so its fields read straight through
-/// (`mig.pos` for the demo's `mig.game.pos`).
-#[derive(Debug, Clone)]
-pub struct KitMig<M> {
-    /// The game's captured state.
-    pub game: M,
-    /// The entity's park record, if it is parked or bot-fed (`None` for
-    /// every live session and every NPC).
-    pub park: Option<ShardParkRecord>,
-}
-
-impl<M> Deref for KitMig<M> {
-    type Target = M;
-
-    fn deref(&self) -> &M {
-        &self.game
-    }
-}
-
-/// A park-ledger entry in transit: carried inside [`KitMig`] because
-/// that is what survives migrations (the receiving shard files it in its
-/// own ledger under `identity`, against the entity it rebuilt).
-#[derive(Debug, Clone)]
-pub struct ShardParkRecord {
-    /// The resume key of the parked session.
-    pub identity: String,
-    /// The parked session's STABLE player identity (Faz 2): what
-    /// `resume_lookup` answers (the core finds its row by one lookup)
-    /// and what the bot synthesizes input under. Travels with the record
-    /// across migrations, so the identity is stable end to end.
-    pub player: PlayerId,
-    /// The parked entity's wire id — stable across migrations.
-    pub wire: u64,
-    /// Latched at AI-handover expiry: the bot owns the entity.
-    pub bot: bool,
-}
 
 /// The migration routing table of shard `from` over a partition of
 /// `shard_count` regions whose neighbour lists `neighbors_of` returns:
