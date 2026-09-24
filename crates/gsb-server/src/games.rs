@@ -8,8 +8,12 @@
 
 use crate::{GameError, GameModule};
 
+#[cfg(feature = "game-arena")]
+pub mod arena;
 #[cfg(feature = "game-demo")]
 pub mod demo;
+#[cfg(feature = "game-arena")]
+pub mod settings;
 
 /// The `game` config key's default: the 2D demo, the game every
 /// pre-module config and test has always run.
@@ -23,6 +27,8 @@ type Entry = (&'static str, fn() -> Box<dyn GameModule>);
 const GAMES: &[Entry] = &[
     #[cfg(feature = "game-demo")]
     (demo::DemoModule::NAME, demo::DemoModule::boxed),
+    #[cfg(feature = "game-arena")]
+    (arena::ArenaModule::NAME, arena::ArenaModule::boxed),
 ];
 
 /// The names of the games compiled into this build.

@@ -24,10 +24,12 @@ name = "client"
 required-features = ["game-demo"]
 
 [features]
-default = ["game-demo"]
+default = ["game-demo", "game-arena"]
 # One feature per hosted game; the `game` config key picks among the
 # compiled-in ones at startup.
 game-demo = ["dep:gsb-demo"]
+# The 3D team arena (`gsb-demo-arena`, docs/GAME-MODULE.md G2).
+game-arena = ["dep:gsb-demo-arena", "dep:gsb-kit"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -46,6 +48,10 @@ gsb-protocol = { workspace = true }
 # §4.2). Without any game feature the library still builds: the
 # structural proof that the server core names no game.
 gsb-demo = { workspace = true, optional = true }
+# The 3D arena (feature `game-arena`), and the kit whose room and
+# preset types its factory names.
+gsb-demo-arena = { workspace = true, optional = true }
+gsb-kit = { workspace = true, optional = true }
 bevy_ecs = { workspace = true }
 # TLS client side (example client + loadgen --tls-ca) and server config.
 rustls = { workspace = true }
