@@ -14,7 +14,9 @@
 //! the TCP codec rejects bad prefixes. One game frame per message also means
 //! a fragmented TCP segment can never silently split a game frame across two
 //! WS messages. Text messages are NOT part of the gsb wire contract and are
-//! rejected with 1003 (unsupported data).
+//! rejected with 1003 (unsupported data) — unless one arrives inside an
+//! open fragmented message, where it is first of all an interleaving
+//! violation (RFC 6455 §5.4) and fails with 1002 like any data frame there.
 //!
 //! # Why no `AsyncRead`/`AsyncWrite` adapter (adapter choice)
 //!

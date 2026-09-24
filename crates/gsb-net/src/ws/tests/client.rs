@@ -7,7 +7,7 @@ use super::*;
 /// A deterministic mask-key generator: RFC masking exists so proxies
 /// cannot guess payload bytes, not for secrecy — fixed keys are fine in
 /// tests and keep failures reproducible.
-pub(super) struct MaskGen(u32);
+pub(super) struct MaskGen(pub(super) u32);
 impl MaskGen {
     pub(super) fn next(&mut self) -> [u8; 4] {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);

@@ -76,6 +76,14 @@ impl super::WsReader {
                     Ok(Step::Continue)
                 }
             }
+            // §5.4: only CONTROL frames may interrupt a fragmented message.
+            // A data frame here starts a second message inside the first —
+            // a framing error, so 1002 even for text (the type question
+            // below never arises).
+            OP_TEXT | OP_BIN if self.frag_opcode.is_some() => Err(self.proto_fail(
+                1002,
+                "a new data message started inside an open fragmented one",
+            )),
             // Text is rejected whether fragmented or not: the gsb wire
             // contract has no textual frames (module docs).
             OP_TEXT => {
