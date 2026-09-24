@@ -208,6 +208,21 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         self.encoded = 0;
         n
     }
+
+    /// The game's request handlers
+    /// ([`Game::handle_request`](crate::kit::game::Game::handle_request)), resolved
+    /// against this room's player→entity table. Every kit room forwards:
+    /// whether a room answers game RPCs does not depend on its
+    /// visibility strategy.
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<gsb_core::rpc::RequestDecision> {
+        self.game
+            .handle_request(world, ctx, req, &self.player_entity)
+    }
 }
 
 impl<G: Game, M: SectorMap> RoomLogic<World> for SectorRoom<G, M> {}
