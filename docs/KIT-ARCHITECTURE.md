@@ -308,7 +308,7 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 | 0 | `gsb-game` içinde modül bölmesi: `kit/` ve `demo/`, geçici bir ara modül; davranış değişmez | ~1 gün | tüm testler değişmeden yeşil — **tamam**, aşağıda "Faz 0 sonucu" |
 | 1 | Bağımlılığın ters çevrilmesi: §4 trait'leri, generic `CellBook`/`CellPieces`, kit'e ait `WireId`/basım/Private zarfı, sharded park/join kopyalarının birleştirilmesi, §8 açıklarının testle doğrulanıp kapatılması, kit için küçük bir 2D test oyunu | ~3,5 bin satır dokunulur, +400–600 yeni | **baytlar birebir aynı** + loadgen gürültü içinde |
 | 2 | Crate bölmesi: `gsb-kit` (+ kendi proto'su) ve `gsb-demo`; `gsb-server` yolları | ~400–600 satır, çoğu yol | tüm testler + loadgen |
-| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, `Grid3`, 3D takım sisi, proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
+| 3 | 3D arena demosu (`gsb-demo-arena`): bileşenler, hareket, codec, savaş sisi / takım görüşü (`Vision` + `Grid3`), proto | ~800–1 200 satır | kabul kriteri 1 (§11) |
 | 4 | 3D MMO demosu (`gsb-demo-mmo`): büyük dünya, sharded × spatial, NPC'ler, park/bot (§13) | ~1 000–1 500 satır | **kapanış doğrulaması** — üç demo birlikte |
 
 Her fazın sonunda loadgen karşılaştırması alınır (tek oda, `spatial`,
@@ -452,13 +452,15 @@ Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
 | Demo | Crate | Konum / wire | Sınadığı kit yüzeyi |
 |---|---|---|---|
 | 2D (mevcut) | `gsb-demo` | `Pos2` f32 sim, `(i32,i32)` wire | **bayt uyumluluğu** (mevcut istemciler, loadgen), tüm stratejiler |
-| 3D arena | `gsb-demo-arena` | `Pos3<f32>`, 3D wire | `Grid3` (27 hücre) AOI, 3D mesafeli takım sisi, küçük oda, hızlı hareket |
-| 3D MMO | `gsb-demo-mmo` | `Pos3<f32>`, yer-düzlemi hücre | büyük dünya: sharded × spatial kompoziti, 3D konumda **yer-düzlemi** `Partition` + `Grid2` AOI, oyun kodunun spawn/despawn ettiği NPC'ler (hayalet-entity düzeltmesini sınar), park/bot reconnect politikası, NPC göçü (`Speed`'siz entity açığını sınar) |
+| 3D arena | `gsb-demo-arena` | `Pos3<f32>`, 3D wire | **savaş sisi / takım görüşü** (MOBA tarzı: bir takım, üyelerinden herhangi birinin gördüğünü görür); `Vision` seam'i 3D mesafeyle, görüş-komşuluk ızgarası olarak `Grid3` (27 hücre); 2'den fazla takım (sabit-2 açığının kapandığını sınar); küçük oda, hızlı hareket |
+| 3D MMO | `gsb-demo-mmo` | `Pos3<f32>`, yer-düzlemi hücre | **grid AOI + shard'lı dünya**: sharded × spatial kompoziti, 3D konumda **yer-düzlemi** `Partition` + `Grid2` AOI, oyun kodunun spawn/despawn ettiği NPC'ler (hayalet-entity düzeltmesini sınar), park/bot reconnect politikası, NPC göçü (`Speed`'siz entity açığını sınar) |
 
-Arena ve MMO bilinçli olarak farklı uzay seçimleri yapar: biri hacimsel
-(`Grid3`), diğeri 3D veriyi yer düzlemine yansıtır (`Grid2` +
-`GridPartition2`). Böylece ön-ayarların 3D veriyle iki farklı kombinasyonu
-da sınanır.
+Arena ve MMO bilinçli olarak farklı **görünürlük modelleri** sınar
+(kullanıcı kararı): arena takım bazlı görüşü (`Vision`), MMO uzamsal
+ızgara + sharding'i (`CellSpace` + `Partition`). Uzay tarafında da
+farklılar: arena 3D veriyi hacimsel ızgarayla (`Grid3`) işler, MMO yer
+düzlemine yansıtır (`Grid2` + `GridPartition2`). Böylece ön-ayarların 3D
+veriyle iki farklı kombinasyonu da sınanır.
 
 **Kapsam dışı (bilinçli):** `gsb-server`'ın ve loadgen'in oyundan
 bağımsız yapılması (§9). Sunucu ikilisi ve loadgen 2D demo'ya bağlı kalır;
