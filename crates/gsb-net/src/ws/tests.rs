@@ -28,6 +28,7 @@ pub(super) const RFC_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 mod client;
 use client::*;
 mod fragmentation;
+mod framing;
 mod protocol;
 mod queue;
 mod rig;

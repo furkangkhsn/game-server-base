@@ -35,7 +35,14 @@ impl super::WsReader {
                     return Ok(None);
                 }
                 off = 4;
-                u16::from_be_bytes([self.buf[2], self.buf[3]]) as usize
+                let len = u16::from_be_bytes([self.buf[2], self.buf[3]]) as usize;
+                // §5.2: the minimal encoding is a MUST. A browser never
+                // breaks it; two encodings of one frame are a parser-
+                // disagreement vector for anything in between.
+                if len < 0x7e {
+                    return Err(self.proto_fail(1002, "non-minimal 16-bit payload length"));
+                }
+                len
             }
             0x7f => {
                 if self.buf.len() < 10 {
@@ -45,6 +52,14 @@ impl super::WsReader {
                 raw.copy_from_slice(&self.buf[2..10]);
                 off = 10;
                 let raw = u64::from_be_bytes(raw);
+                // A malformed header, not a large message: judged before
+                // the ceiling so it gets 1002, not 1009.
+                if raw >> 63 != 0 {
+                    return Err(self.proto_fail(1002, "64-bit payload length has its MSB set"));
+                }
+                if raw <= u64::from(u16::MAX) {
+                    return Err(self.proto_fail(1002, "non-minimal 64-bit payload length"));
+                }
                 if raw > self.max_message_bytes as u64 {
                     return Err(self.proto_fail(
                         1009,
