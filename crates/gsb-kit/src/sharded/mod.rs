@@ -96,9 +96,14 @@
 //! diffs is mathematically the flat diff, minus a second level of maps.
 //! (The core actor already merges the per-neighbor views into the sorted
 //! slice this room receives; it also drops a neighbor's stale copy of an
-//! entity that just migrated IN — own wins — which composes cleanly: the
-//! ledger simply never saw that id, so no spurious exit is ever shipped
-//! for it.)
+//! entity that just migrated IN — own wins. The ledger HAS seen that id —
+//! a crossing entity is near the seam, so it was lent in until the tick it
+//! arrived — and reads the drop as an exit. Where the lent copy sat in
+//! the cell the arrival's own record now occupies, that exit is skipped:
+//! it would erase the own record from its bucket (KIT-ARCHITECTURE §10,
+//! F1 — the arrival missing from its own one-shot full, an entity alone
+//! in its cell invisible on its new shard until it moved cells). A lent
+//! copy in another cell is stale and exits as usual.)
 //!
 //! Two protocol events fall out of the ledger correctly BY CONSTRUCTION,
 //! not by extra code: a QUARANTINED neighbor (a rejected border delta —

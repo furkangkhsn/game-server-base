@@ -13,7 +13,7 @@ use gsb_demo_mmo::{MobSpawn, Pos3, Realm, components};
 
 /// Player P runs from shard 0 across the x = 0 seam into shard 1 while
 /// A (shard 0) and B (shard 1) watch: every tick P's own view holds P
-/// (no vanished self), P only ever moves forward, A and B see P before,
+/// (no vanished self — the arrival tick included), P only ever moves forward, A and B see P before,
 /// during and after the crossing (through the border strip on the side
 /// that does not own it), and P arrives with its wire id and hit points,
 /// having kept running on the pending walk its `MmoMig` carried.
@@ -35,36 +35,22 @@ async fn a_player_crossing_a_seam_keeps_its_id_state_and_stream() {
     cs[0].move_to(40.0, -200.0).await;
 
     let mut last_x = i32::MIN;
-    let mut crossed_at = None;
-    let mut lost = Vec::new();
+    let mut crossed = false;
     for _ in 0..360 {
         room.step(&mut cs).await;
-        if crossed_at.is_none() && room.members() == [1, 2, 0, 0] {
-            crossed_at = Some(room.tick);
-        }
+        crossed |= room.members() == [1, 2, 0, 0];
         for (who, c) in [("A", &cs[1]), ("B", &cs[2])] {
             assert!(c.get(p).is_some(), "{who} lost P at tick {}", room.tick);
         }
-        let Some(me) = cs[0].me() else {
-            lost.push(room.tick);
-            continue;
-        };
+        // Never lost — not even on the arrival tick, whose one-shot full
+        // omitted P itself before the kit's F1 fix (KIT-ARCHITECTURE §10).
+        let me = cs[0]
+            .me()
+            .unwrap_or_else(|| panic!("P lost itself at tick {}", room.tick));
         assert!(me.x >= last_x, "P moved backwards: {} -> {}", last_x, me.x);
         last_x = me.x;
     }
-    assert!(
-        crossed_at.is_some(),
-        "the session moved to shard 1 with its entity"
-    );
-    // KIT FINDING (docs/KIT-ARCHITECTURE.md §10, "Faz 4 sonucu", F1): the
-    // arrival tick's one-shot full omits the arriving entity itself — the
-    // sharded × spatial strip ledger exits the stale borrowed copy from
-    // the very bucket the dirty pass just placed the own record in. The
-    // next frame restores it; nothing else may ever lose it.
-    assert!(
-        lost.iter().all(|t| Some(*t) == crossed_at),
-        "P lost itself outside the arrival tick {crossed_at:?}: {lost:?}"
-    );
+    assert!(crossed, "the session moved to shard 1 with its entity");
     let me = *cs[0].me().expect("P");
     assert_eq!(
         (me.x, me.y, me.z, me.hp),
@@ -183,9 +169,11 @@ async fn a_teleport_into_a_non_adjacent_shard_lands_once_with_the_same_id() {
             owners.push(holder);
         }
         if holder == Some(3) {
-            // Landed: wherever P shows, it is standing on the waystone
-            // (the walk the teleport cancelled does not resume).
-            for r in [cs[0].me(), cs[1].get(p)].into_iter().flatten() {
+            // Landed: from the landing tick on, P shows to itself and to
+            // D, standing on the waystone (the walk the teleport
+            // cancelled does not resume).
+            for (who, r) in [("P", cs[0].me()), ("D", cs[1].get(p))] {
+                let r = r.unwrap_or_else(|| panic!("{who} misses P at tick {}", room.tick));
                 assert_eq!(
                     (r.x, r.z),
                     (2560, 2560),
@@ -198,15 +186,13 @@ async fn a_teleport_into_a_non_adjacent_shard_lands_once_with_the_same_id() {
     assert_eq!(owners, [Some(0), None, Some(3)], "owned by shard 3, once");
     assert_eq!(in_flight, 2, "two hops, one tick each");
 
-    // The waystone's cell (4,4): P stands there alone, and the arrival
-    // is invisible to every full (KIT FINDING F1 — pinned in
-    // `tests/findings.rs`). One step west into cell (3,4) and it shows.
-    cs[0].move_to(250.0, 256.0).await;
-    room.steps(&mut cs, 40).await;
-    let me = *cs[0].me().expect("P sees itself");
+    // The waystone's cell (4,4): P stands there alone — and shows, to
+    // itself and to D (before the kit's F1 fix the landing erased it from
+    // that cell for good; the test walked it one cell west to see it).
+    let me = *cs[0].me().expect("P sees itself on the waystone");
     assert_eq!(
         (me.x, me.y, me.z),
-        (2500, 0, 2560),
+        (2560, 0, 2560),
         "the old walk stayed cancelled"
     );
     assert_eq!(cs[1].get(p), Some(&me), "D sees P, same wire id");

@@ -151,11 +151,24 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
         }
         // Exited the visible set (left the neighbor's strip, the neighbor
         // migrated it onward, or its view went quarantined): exits in the
-        // cells their previous records occupied.
+        // cells their previous records occupied — except where that cell
+        // now holds this shard's OWN record of the same id (it migrated
+        // in: the core's own-wins filter dropped the lent copy, and the
+        // dirty pass placed the arrival in the very cell the lent copy
+        // occupied, overwriting it). An exit there would erase the own
+        // record (KIT-ARCHITECTURE §10, F1). A lent copy in ANOTHER cell
+        // than the own record is stale and still exits.
         for (wire, prev) in &self.prev_borrowed {
             if !new_view.contains_key(wire) {
                 let c = self.space.cell_of(prev);
-                self.book.record_exit(c, *wire, false);
+                let own_here = self
+                    .inner
+                    .wire_entity
+                    .get(wire)
+                    .is_some_and(|e| self.book.cell_of_entity(e) == Some(c));
+                if !own_here {
+                    self.book.record_exit(c, *wire, false);
+                }
             }
         }
         self.prev_borrowed = new_view;

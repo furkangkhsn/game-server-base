@@ -1,9 +1,9 @@
 //! KIT DESIGN FINDINGS, pinned (`docs/KIT-ARCHITECTURE.md` §10, "Faz 4
-//! sonucu", "Tasarım bulguları"). Each test asserts TODAY's behaviour of
-//! the unchanged kit where the MMO needs something else — so it is the
-//! executable record of the finding. When the kit is fixed these tests
-//! fail on purpose: flip each assertion to the behaviour its doc names
-//! as correct.
+//! sonucu", "Tasarım bulguları"). Phase 4 wrote each test against the
+//! unchanged kit, asserting the behaviour the MMO needed something else
+//! from — the executable record of the finding. The kit's Phase 5 fixed
+//! them ("Faz 5 sonucu"), and each test was flipped to assert the
+//! behaviour its doc names as correct.
 
 mod common;
 
@@ -12,24 +12,25 @@ use gsb_demo_mmo::components::Kind;
 use gsb_demo_mmo::{MobSpawn, Pos3, Realm};
 
 /// F1 — an entity that migrates into a shard whose strip already lent
-/// it, in the cell it arrives in, is erased from that cell's bucket.
+/// it, in the cell it arrives in, stays in that cell's bucket.
 ///
 /// M creeps across the x = 0 seam by centimetres and stops: from spawn
 /// to rest its wire value is `x = 0 dm` — ground cell (0, -5), shard 1's
 /// side of the seam — while its simulation position is still owned by
 /// shard 0 for its first ~120 ticks. So shard 1 lends-in M in cell
 /// (0, -5) through the border strip, tick after tick. When M migrates,
-/// shard 1's dirty pass places the OWN record in (0, -5); then the strip
+/// shard 1's dirty pass places the OWN record in (0, -5), and the strip
 /// ledger (`ShardedSpatialRoom::integrate_borrowed`) sees M missing from
-/// the strip (the core's own-wins filter) and `record_exit`s it — from
-/// the very bucket the own record now lives in. M is alone there, the
-/// bucket goes, the cell reads as exited: every client on shard 1 drops
-/// M and, M standing still, never gets it back. A client on shard 0 —
-/// across the seam — keeps seeing it through the strip.
+/// the strip (the core's own-wins filter). Before the kit's fix it
+/// `record_exit`ed M from the very bucket the own record lived in — M,
+/// alone there, vanished from every client on shard 1 for good, while a
+/// client on shard 0 kept seeing it through the strip. Now the ledger
+/// skips that exit.
 ///
-/// Correct: O (shard 1, next cell) sees M after the crossing too.
+/// Correct (asserted): O (shard 1, next cell) sees M on every tick —
+/// before, during and after the crossing — and so does A across the seam.
 #[tokio::test]
-async fn f1_an_entity_arriving_in_its_lent_cell_vanishes_on_its_new_shard() {
+async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard() {
     let creeper = MobSpawn::once(Kind::Mob, Pos3::new(-0.04, 0.0, -300.0), 1, 100_000, 60).walking(
         vec![[0.02, -300.0]],
         0.01,
@@ -37,7 +38,7 @@ async fn f1_an_entity_arriving_in_its_lent_cell_vanishes_on_its_new_shard() {
     );
     let realm = Realm::empty()
         .with_login(1, Pos3::new(100.0, 0.0, -300.0)) // O: shard 1, cell (1,-5)
-        .with_login(2, Pos3::new(-30.0, 0.0, -300.0)) // A: shard 0, cell (-1,-5)
+        .with_login(2, Pos3::new(-20.0, 0.0, -300.0)) // A: shard 0, cell (-1,-5)
         .with_spawn(creeper);
     let mut room = Mmo::new(&realm);
     let mut cs = vec![room.join(1, "", &mut []).await];
@@ -48,16 +49,26 @@ async fn f1_an_entity_arriving_in_its_lent_cell_vanishes_on_its_new_shard() {
     assert_eq!(m.len(), 1, "before the crossing O sees M through the strip");
     let m = m[0].0;
     assert!(cs[1].get(m).is_some());
+    // A's attack resolves on A's shard only: it lands while M is shard
+    // 0's (the hit shows on both sides)…
+    cs[1].attack(m).await;
+    room.steps(&mut cs, 2).await;
+    assert_eq!(cs[0].get(m).map(|r| r.hp), Some(35), "hit on shard 0");
 
-    room.steps(&mut cs, 140).await; // crossed at ~121, at rest from ~181
-    for _ in 0..120 {
+    // Crossed at ~121, at rest from ~181.
+    for _ in 0..258 {
         room.step(&mut cs).await;
         assert!(
-            cs[0].get(m).is_none(),
-            "F1 fixed? O sees M again — flip this test"
+            cs[0].get(m).is_some(),
+            "O lost M at tick {} (F1: the lent-cell exit erased it)",
+            room.tick
         );
-        assert!(cs[1].get(m).is_some(), "A, across the seam, still sees M");
+        assert!(cs[1].get(m).is_some(), "A, across the seam, sees M");
     }
+    // …and no longer does: M did cross into shard 1.
+    cs[1].attack(m).await;
+    room.steps(&mut cs, 2).await;
+    assert_eq!(cs[0].get(m).map(|r| r.hp), Some(35), "M is shard 1's now");
 }
 
 /// F2 — `GridPartition2` is a 4-neighbourhood, and a border strip is
