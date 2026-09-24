@@ -117,3 +117,63 @@ impl Game for DemoGame {
         rpc::handle_request(players, self.economy.as_ref(), world, req)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use bevy_ecs::prelude::{Entity, World};
+    use gsb_core::id::{ConnectionId, PlayerId, RoomId};
+    use gsb_core::room::{Action, GameLogic, TickCtx};
+
+    use super::*;
+    use crate::kit::room::OpenRoom;
+
+    /// A game whose systems close the change window themselves — the
+    /// ownership violation §4.4 rules out.
+    struct ClearsTrackers(DemoGame);
+
+    impl Game for ClearsTrackers {
+        type Codec = DemoCodec;
+
+        fn codec(&self) -> &DemoCodec {
+            self.0.codec()
+        }
+        fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
+            self.0.spawn_player(world, conn)
+        }
+        fn ingest(
+            &mut self,
+            world: &mut World,
+            ctx: &TickCtx,
+            actions: &mut Vec<Action>,
+            players: &HashMap<PlayerId, Entity>,
+            seq: &mut InputSeq,
+        ) {
+            self.0.ingest(world, ctx, actions, players, seq);
+        }
+        fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
+            self.0.systems(world, ctx);
+            world.clear_trackers();
+        }
+    }
+
+    /// The kit owns the tick's one `clear_trackers` call: a hook that
+    /// makes it too would hide its own writes from the codec's `Dirty`
+    /// filter, so debug builds stop it at the hook boundary.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "the kit owns the change window")]
+    fn a_hook_closing_the_change_window_is_caught() {
+        let mut world = World::new();
+        let mut room = OpenRoom::with_game(ClearsTrackers(DemoGame::default()));
+        let ctx = TickCtx {
+            room: RoomId(1),
+            tick: 1,
+            dt: Duration::from_secs_f64(1.0 / 30.0),
+            idle: Default::default(),
+        };
+        room.update(&mut world, &ctx);
+    }
+}

@@ -203,6 +203,12 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::kit::common::systems(&mut self.game, world, ctx);
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it). This room reads no change filter
+        // itself, but the window is world-wide: without the close the
+        // removed-component buffers grow with every despawn for the
+        // room's lifetime (§8.3).
+        crate::kit::common::close_change_window(world);
     }
 
     /// The game's request handlers ([`Game::handle_request`] — the demo:

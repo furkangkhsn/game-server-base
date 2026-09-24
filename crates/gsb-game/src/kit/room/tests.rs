@@ -14,6 +14,8 @@ use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{GameLogic, TickCtx};
 use prost::Message;
 
+mod change_window;
+
 fn ctx1() -> TickCtx<'static> {
     TickCtx {
         room: RoomId(1),
