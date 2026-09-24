@@ -4,45 +4,54 @@
 use crate::*;
 use std::time::Duration;
 
+impl Args {
+    /// Every knob at its default (what a bare `gsb-loadgen` runs with):
+    /// the starting point [`parse_args`] overrides, and the fixture the
+    /// command-line builders' tests start from.
+    pub(crate) fn defaults() -> Self {
+        Self {
+            clients: 100,
+            offset: 0,
+            duration: Duration::from_secs(10),
+            move_ms: Duration::from_millis(150),
+            room: 1,
+            stagger_ms: 0.0,
+            addr: None,
+            profile: Profile::Ring,
+            still_frac: 0.9,
+            spawn_half: 50.0,
+            visibility: gsb_server::Visibility::default(),
+            topology: None,
+            shard_count: 4,
+            cell_size: 20.0,
+            vision_radius: gsb_demo::team::DEFAULT_VISION_RADIUS,
+            max_snapshot_bytes: 1400,
+            server_spawn_half: 50.0,
+            serve: false,
+            bind: "127.0.0.1:7777".into(),
+            metrics_listen: None,
+            orchestrate: false,
+            transport: gsb_server::TransportKind::Tcp,
+            tls_ca: None,
+            tls_server_name: "localhost".into(),
+            procs: 1,
+            pin: false,
+            pin_server_cores: 8,
+            workers: 0,
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            flood_id: None,
+            churn_secs: None,
+            churn_cycles: 0,
+            disconnect_grace_secs: None,
+        }
+    }
+}
+
 pub(crate) fn parse_args() -> Args {
-    let mut args = Args {
-        clients: 100,
-        offset: 0,
-        duration: Duration::from_secs(10),
-        move_ms: Duration::from_millis(150),
-        room: 1,
-        stagger_ms: 0.0,
-        addr: None,
-        profile: Profile::Ring,
-        still_frac: 0.9,
-        spawn_half: 50.0,
-        visibility: gsb_server::Visibility::default(),
-        topology: None,
-        shard_count: 4,
-        cell_size: 20.0,
-        vision_radius: gsb_demo::team::DEFAULT_VISION_RADIUS,
-        max_snapshot_bytes: 1400,
-        server_spawn_half: 50.0,
-        serve: false,
-        bind: "127.0.0.1:7777".into(),
-        metrics_listen: None,
-        orchestrate: false,
-        transport: gsb_server::TransportKind::Tcp,
-        tls_ca: None,
-        tls_server_name: "localhost".into(),
-        procs: 1,
-        pin: false,
-        pin_server_cores: 8,
-        workers: 0,
-        max_players: None,
-        max_connections: None,
-        idle_timeout_secs: None,
-        write_stall_secs: None,
-        flood_id: None,
-        churn_secs: None,
-        churn_cycles: 0,
-        disconnect_grace_secs: None,
-    };
+    let mut args = Args::defaults();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {

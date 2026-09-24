@@ -11,6 +11,9 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::mpsc;
 
+mod child_args;
+use child_args::*;
+
 /// Spawn a child process, optionally pinned to `mask` (logical CPUs) via
 /// `taskset -c`. Stdout is piped only when `pipe_stdout` (the client
 /// processes' CLIENT lines); stderr is always inherited (visible).
@@ -379,56 +382,7 @@ pub(crate) async fn orchestrate(args: Args) {
             .and_then(|m| m.1.get(p as usize))
             .map(|m| m.len().max(1))
             .unwrap_or(args.workers.max(1));
-        let mut cargs = vec![
-            count.to_string(),
-            "--addr".into(),
-            format!("127.0.0.1:{server_port}"),
-            "--offset".into(),
-            offset.to_string(),
-            "--duration".into(),
-            args.duration.as_secs().to_string(),
-            "--move-ms".into(),
-            args.move_ms.as_millis().to_string(),
-            "--room".into(),
-            args.room.to_string(),
-            "--stagger-ms".into(),
-            args.stagger_ms.to_string(),
-            "--profile".into(),
-            match args.profile {
-                Profile::Ring => "ring".into(),
-                Profile::Spread => "spread".into(),
-                Profile::Still => "still".into(),
-            },
-            "--still-frac".into(),
-            args.still_frac.to_string(),
-            "--spawn-half-size".into(),
-            args.spawn_half.to_string(),
-            "--transport".into(),
-            args.transport.to_string(),
-            "--workers".into(),
-            workers.to_string(),
-        ];
-        // The flood client (by global id) belongs to exactly one child:
-        // forward the flag only to the child whose id range contains it.
-        if let Some(k) = args.flood_id
-            && offset <= k
-            && k < offset + count
-        {
-            cargs.push("--flood-id".into());
-            cargs.push(k.to_string());
-        }
-        if let Some(c) = args.churn_secs {
-            cargs.push("--churn-secs".into());
-            cargs.push(c.to_string());
-        }
-        if args.churn_cycles != 0 {
-            cargs.push("--churn-cycles".into());
-            cargs.push(args.churn_cycles.to_string());
-        }
-        if let Some(f) = args.disconnect_grace_secs {
-            cargs.push("--disconnect-grace-secs".into());
-            cargs.push(f.to_string());
-        }
+        let cargs = client_args(&args, count, offset, server_port, workers);
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
         let mut child = spawn_pinned(
