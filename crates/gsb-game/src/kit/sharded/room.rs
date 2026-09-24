@@ -36,6 +36,13 @@ pub struct ShardedRoom {
     /// order (west, east, north, south — the core sends border/migrate to
     /// exactly these).
     pub(in crate::kit::sharded) neighbors: Vec<usize>,
+    /// `route[region]`: the neighbour an entity whose position lies in
+    /// `region` is handed to — the first hop of a shortest path over the
+    /// neighbour graph (itself for a neighbour's region; this shard's
+    /// own index for its own region). A crossing into a region that is
+    /// not a neighbour's (a move through a grid corner, a jump) travels
+    /// hop by hop, one tick per hop (§8.4).
+    pub(in crate::kit::sharded) route: Vec<usize>,
     /// Player → entity (this shard's players; Faz 2: keyed by the STABLE
     /// player identity, which survives resume AND migration unchanged).
     pub(in crate::kit::sharded) player_entity: HashMap<PlayerId, Entity>,
@@ -100,21 +107,8 @@ impl ShardedRoom {
         let half = spawn_half.max(1.0);
         let cell_w = 2.0 * half / cols as f32;
         let cell_h = 2.0 * half / rows as f32;
-        let row = index / cols;
-        let col = index % cols;
-        let mut neighbors = Vec::with_capacity(4);
-        if col > 0 {
-            neighbors.push(index - 1);
-        }
-        if col + 1 < cols {
-            neighbors.push(index + 1);
-        }
-        if row > 0 {
-            neighbors.push(index - cols);
-        }
-        if row + 1 < rows {
-            neighbors.push(index + cols);
-        }
+        let neighbors = grid_neighbors(index, rows, cols);
+        let route = first_hops(index, shard_count, |i| grid_neighbors(i, rows, cols));
         Self {
             runner: seam::movement_runner(),
             index,
@@ -125,6 +119,7 @@ impl ShardedRoom {
             cell_h,
             border: (cell_w.min(cell_h)) / 4.0,
             neighbors,
+            route,
             player_entity: HashMap::new(),
             park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),

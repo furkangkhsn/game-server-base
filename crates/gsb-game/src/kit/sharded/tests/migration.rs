@@ -41,3 +41,74 @@ fn speedless_npc_migrates_across_the_seam() {
     s0.on_migrate_out(&mut w0, wire);
     assert!(w0.get_entity(npc).is_err(), "despawned on shard 0");
 }
+
+/// A crossing into a region that is NOT a neighbour of the owner (the
+/// 2×2 grid's diagonal: a move through the corner where four shards
+/// meet, or any jump): the entity is handed to the neighbour on a
+/// shortest path toward its region — exactly one neighbour — and that
+/// shard hands it on to the owner (§8.4: before, it was reported to
+/// nobody and stayed with the wrong owner).
+#[test]
+fn non_adjacent_crossing_is_routed_through_a_neighbour() {
+    let mut w0 = World::new();
+    let mut w1 = World::new();
+    // 2×2: shard 0 = x<0,y<0; 1 = x≥0,y<0; 2 = x<0,y≥0; 3 = x≥0,y≥0.
+    let mut s0 = ShardedRoom::new(0, 4, 50.0);
+    let mut s1 = ShardedRoom::new(1, 4, 50.0);
+    let wire = place(&mut w0, &mut s0, ConnectionId(1), -1.0, -1.0);
+    let entity = s0.player_entity[&PlayerId(1)];
+    w0.entity_mut(entity).insert(Position { x: 1.0, y: 1.0 }); // region 3
+
+    let to1 = s0.collect_migrations(&mut w0, 1);
+    let to2 = s0.collect_migrations(&mut w0, 2);
+    assert_eq!(
+        to1.len() + to2.len(),
+        1,
+        "handed to exactly one neighbour (to 1: {}, to 2: {})",
+        to1.len(),
+        to2.len()
+    );
+    // The grid routes columns first: shard 1 is the first hop.
+    let m = to1.into_iter().next().expect("routed through shard 1");
+    assert_eq!((m.wire, m.player), (wire, Some(PlayerId(1))));
+
+    // The intermediate shard installs it and hands it on to the owner.
+    s1.on_migrate_in(&mut w1, m.wire, m.state, m.player);
+    let to3 = s1.collect_migrations(&mut w1, 3);
+    assert_eq!(to3.len(), 1, "the second hop reaches region 3's owner");
+    assert_eq!((to3[0].wire, to3[0].player), (wire, Some(PlayerId(1))));
+    assert!(
+        s1.collect_migrations(&mut w1, 0).is_empty(),
+        "never sent back the way it came"
+    );
+}
+
+/// The routing table on every grid shape: from any shard, every other
+/// region's first hop is a neighbour, and following the hops reaches the
+/// region along a shortest (Manhattan) path.
+#[test]
+fn routing_reaches_every_region_by_shortest_paths() {
+    for n in [1usize, 2, 3, 4, 6, 8, 12, 16] {
+        let (rows, cols) = grid_shape(n);
+        let tables: Vec<Vec<usize>> = (0..n)
+            .map(|i| first_hops(i, n, |j| grid_neighbors(j, rows, cols)))
+            .collect();
+        for from in 0..n {
+            for to in 0..n {
+                let (mut at, mut hops) = (from, 0);
+                while at != to {
+                    let next = tables[at].get(to).copied().expect("a hop per region");
+                    assert!(
+                        grid_neighbors(at, rows, cols).contains(&next),
+                        "n={n}: hop {at}→{next} toward {to} is a neighbour"
+                    );
+                    at = next;
+                    hops += 1;
+                }
+                let manhattan =
+                    (from / cols).abs_diff(to / cols) + (from % cols).abs_diff(to % cols);
+                assert_eq!(hops, manhattan, "n={n}: {from}→{to} is a shortest path");
+            }
+        }
+    }
+}

@@ -42,12 +42,14 @@ impl ShardLogic<World> for ShardedRoom {
         world: &mut World,
         neighbor: usize,
     ) -> Vec<Migrating<Self::State>> {
-        // Entities whose POST-step position lies in `neighbor`'s region
-        // (the crossing was sampled at the end of this tick; the core
-        // installs them in the neighbor at the next tick and despawns
-        // them here the tick after — see `gsb_core::shard`'s module
-        // docs). Each entity is in exactly one region, so it is reported
-        // to exactly one neighbor.
+        // Entities whose POST-step position lies in a region that
+        // `neighbor` is the first hop toward (`route` — the neighbour's
+        // own region, or a region beyond it: §8.4); the crossing was
+        // sampled at the end of this tick; the core installs them in the
+        // neighbor at the next tick and despawns them here the tick
+        // after — see `gsb_core::shard`'s module docs. Each entity is in
+        // exactly one region, and each region has one first hop, so it is
+        // reported to exactly one neighbor.
         let mut out: Vec<Migrating<Self::State>> = Vec::new();
         // Every broadcast entity migrates (§8.5): the speed is carried
         // when the entity has one, not required.
@@ -59,7 +61,8 @@ impl ShardLogic<World> for ShardedRoom {
             Option<&MoveTarget>,
         )>();
         for (entity, wire, pos, speed, target) in query.iter(world) {
-            if self.region_of(*pos) == neighbor {
+            let region = self.region_of(*pos);
+            if region != self.index && self.route[region] == neighbor {
                 // §14.2: the park record travels WITH the player state.
                 // The ledger is tiny (parks are rare), so the reverse
                 // lookup is a scan over it.

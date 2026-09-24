@@ -221,3 +221,65 @@ pub fn shard_at(x: f32, y: f32, half: f32, shard_count: usize) -> usize {
     let row = (((y + half) / cell_h).floor() as i32).clamp(0, (rows - 1) as i32);
     row as usize * cols + col as usize
 }
+
+/// The 4-neighbourhood of shard `index` in a `rows × cols` grid, in the
+/// stable order west, east, north, south (the core sends border and
+/// migration messages to exactly these).
+pub(in crate::kit::sharded) fn grid_neighbors(
+    index: usize,
+    rows: usize,
+    cols: usize,
+) -> Vec<usize> {
+    let row = index / cols;
+    let col = index % cols;
+    let mut neighbors = Vec::with_capacity(4);
+    if col > 0 {
+        neighbors.push(index - 1);
+    }
+    if col + 1 < cols {
+        neighbors.push(index + 1);
+    }
+    if row > 0 {
+        neighbors.push(index - cols);
+    }
+    if row + 1 < rows {
+        neighbors.push(index + cols);
+    }
+    neighbors
+}
+
+/// The migration routing table of shard `from` over a partition of
+/// `shard_count` regions whose neighbour lists `neighbors_of` returns:
+/// for every region, the neighbour of `from` that begins a shortest path
+/// to it (breadth-first, neighbours in their listed order — deterministic).
+/// `from` maps to itself; a region the graph cannot reach maps to
+/// `usize::MAX` (never a neighbour: such an entity is never handed on).
+///
+/// The core hands a migrating entity only to a NEIGHBOUR
+/// (`ShardLogic::collect_migrations(neighbor)`, called for each of
+/// `neighbors()`), so an entity whose region is further away travels
+/// hop by hop: each intermediate shard installs it and routes it on.
+pub(in crate::kit::sharded) fn first_hops(
+    from: usize,
+    shard_count: usize,
+    neighbors_of: impl Fn(usize) -> Vec<usize>,
+) -> Vec<usize> {
+    let mut hop = vec![usize::MAX; shard_count];
+    hop[from] = from;
+    let mut queue = std::collections::VecDeque::new();
+    for n in neighbors_of(from) {
+        if hop[n] == usize::MAX {
+            hop[n] = n;
+            queue.push_back(n);
+        }
+    }
+    while let Some(at) = queue.pop_front() {
+        for n in neighbors_of(at) {
+            if hop[n] == usize::MAX {
+                hop[n] = hop[at];
+                queue.push_back(n);
+            }
+        }
+    }
+    hop
+}
