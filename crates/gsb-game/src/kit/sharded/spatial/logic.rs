@@ -11,43 +11,50 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::encoding::varint::encode_varint;
 
+use crate::kit::codec::RecordCodec;
 use crate::kit::common::assemble_group_packet;
+use crate::kit::game::{Game, ShardGame, Wire};
 use crate::kit::identity::WireId;
-use crate::kit::seam;
-use crate::kit::seam::{DemoCodec, Position, StripPos};
 use crate::kit::sharded::*;
-use crate::kit::space::{Cell, cell_of};
+use crate::kit::space::{CellSpace, Partition};
 
-impl GameLogic<World> for ShardedSpatialRoom {
-    type GroupKey = Cell;
-    type Strip = StripPos;
+/// The game's record query (the codec's `Query`).
+type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
+
+impl<G, P, S> GameLogic<World> for ShardedSpatialRoom<G, P, S>
+where
+    G: ShardGame,
+    P: Partition<Wire<G>>,
+    S: CellSpace<Wire<G>>,
+{
+    type GroupKey = S::Cell;
+    type Strip = Wire<G>;
 
     fn snapshot_op(&self) -> u16 {
-        seam::WORLD_SNAPSHOT
+        G::SNAPSHOT_OP
     }
 
     fn private_op(&self) -> u16 {
-        seam::PRIVATE
+        G::PRIVATE_OP
     }
 
     /// The connection's group is the cell its entity's records land in —
     /// read from the O(1) `last_cell` table (written by the dirty pass),
-    /// world-position fallback for the pre-first-update window (a join or
-    /// migration-in processed in the CONTROL phase of the very tick being
-    /// broadcast).
-    fn group_of(&self, world: &World, player: PlayerId) -> Cell {
+    /// with the fallback of the entity's current record for the
+    /// pre-first-update window (a join or migration-in processed in the
+    /// CONTROL phase of the very tick being broadcast); the space's
+    /// default cell when there is no entity or no record.
+    fn group_of(&self, world: &World, player: PlayerId) -> S::Cell {
         let Some(&entity) = self.inner.player_entity.get(&player) else {
-            return Cell(0, 0);
+            return S::Cell::default();
         };
         if let Some(&c) = self.book.last_cell.get(&entity) {
             return c;
         }
-        let pos = world
-            .entity(entity)
-            .get::<Position>()
-            .copied()
-            .unwrap_or_default();
-        cell_of(pos.x as i32, pos.y as i32, self.cell_size)
+        match world.entity(entity).get_components::<RecordQuery<G>>() {
+            Ok(item) => self.space.cell_of(&self.inner.game.codec().wire(item)),
+            Err(_) => S::Cell::default(),
+        }
     }
 
     /// This cell's packet over the shard's own region content PLUS the
@@ -59,17 +66,16 @@ impl GameLogic<World> for ShardedSpatialRoom {
         &mut self,
         _world: &mut World,
         ctx: &TickCtx,
-        cell: &Cell,
-        borrowed: &[BorderRecord<StripPos>],
+        cell: &S::Cell,
+        borrowed: &[BorderRecord<Wire<G>>],
         out: &mut bytes::BytesMut,
     ) -> bool {
         self.ensure_ready(ctx, borrowed);
-        let grid = self.grid();
         assemble_group_packet(
             &mut self.pieces,
             &self.book,
-            &DemoCodec,
-            &grid,
+            self.inner.game.codec(),
+            &self.space,
             cell,
             &mut self.group_full_emitted,
             out,
@@ -84,16 +90,18 @@ impl GameLogic<World> for ShardedSpatialRoom {
         &mut self,
         _world: &mut World,
         _ctx: &TickCtx,
-        group: &Cell,
+        group: &S::Cell,
         _last: Option<&bytes::Bytes>,
         out: &mut bytes::BytesMut,
     ) -> bool {
         self.ensure_rolled();
         self.group_full_emitted.insert(*group);
-        let grid = self.grid();
-        let full = self
-            .pieces
-            .full_view(&DemoCodec, &grid, &self.book.buckets, group);
+        let full = self.pieces.full_view(
+            self.inner.game.codec(),
+            &self.space,
+            &self.book.buckets,
+            group,
+        );
         out.extend_from_slice(&full);
         true
     }
@@ -173,7 +181,7 @@ impl GameLogic<World> for ShardedSpatialRoom {
         &mut self,
         _world: &mut World,
         player: PlayerId,
-        group: &Cell,
+        group: &S::Cell,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
@@ -189,10 +197,12 @@ impl GameLogic<World> for ShardedSpatialRoom {
                 // bytes inside the Private message's snapshot oneof
                 // (field 2, length-delimited); queued RPC answers ride
                 // the SAME frame (field 3).
-                let grid = self.grid();
-                let full = self
-                    .pieces
-                    .full_view(&DemoCodec, &grid, &self.book.buckets, &c);
+                let full = self.pieces.full_view(
+                    self.inner.game.codec(),
+                    &self.space,
+                    &self.book.buckets,
+                    &c,
+                );
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
@@ -218,13 +228,13 @@ impl GameLogic<World> for ShardedSpatialRoom {
         self.pieces.begin_tick(ctx.tick);
         self.group_full_emitted.clear();
         self.tick = ctx.tick;
-        let grid = self.grid();
-        self.book.dirty_pass(world, &DemoCodec, &grid);
+        self.book
+            .dirty_pass(world, self.inner.game.codec(), &self.space);
         self.book.apply_removals();
-        // Close this tick's bevy change window (the core never calls
-        // this — there is no system scheduler here; see
-        // `docs/DESIGN.md` §7).
-        world.clear_trackers();
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it — the core has no system scheduler
+        // that would; see `docs/DESIGN.md` §7).
+        crate::kit::common::close_change_window(world);
     }
 
     fn handle_request(

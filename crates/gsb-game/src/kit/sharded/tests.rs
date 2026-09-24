@@ -23,6 +23,14 @@ use std::collections::HashMap;
 mod migration;
 mod spatial;
 
+/// The spatial composite over the same instantiation, with the kit's 2D
+/// grid AOI.
+type ShardedSpatialRoom = super::ShardedSpatialRoom<
+    crate::kit::seam::DemoGame,
+    crate::kit::space::GridPartition2<Position>,
+    crate::kit::space::Grid2,
+>;
+
 /// The instantiation these tests drive: the demo game over the kit's 2D
 /// grid partition (shadows the generic room of `use super::*`).
 type ShardedRoom =

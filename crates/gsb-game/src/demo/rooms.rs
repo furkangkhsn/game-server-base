@@ -138,7 +138,20 @@ impl ShardedRoom<DemoGame, GridPartition2<Position>> {
     }
 }
 
-impl ShardedSpatialRoom {
+/// The demo's sharded × spatial composite: the demo shard with the
+/// kit's 2D grid AOI over the demo's wire value.
+impl ShardedSpatialRoom<DemoGame, GridPartition2<Position>, Grid2> {
+    /// Build shard `index` of a `shard_count`-shard room over a square
+    /// map of half-size `spawn_half`, broadcasting with cells of
+    /// `cell_size` world units (see [`ShardedRoom::new`] for the shared
+    /// halves).
+    pub fn new(index: usize, shard_count: usize, spawn_half: f32, cell_size: f32) -> Self {
+        Self::with_shard(
+            ShardedRoom::new(index, shard_count, spawn_half),
+            Grid2::new(cell_size),
+        )
+    }
+
     /// Attach the economy service handle (see
     /// [`ShardedRoom::with_economy`]).
     #[must_use]

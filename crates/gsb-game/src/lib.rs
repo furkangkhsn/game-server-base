@@ -130,7 +130,7 @@ pub mod pvs {
 pub mod sharded {
     pub use crate::demo::migrate::DemoMig;
     pub use crate::demo::wire::StripPos;
-    pub use crate::kit::sharded::{KitMig, ShardParkRecord, ShardedSpatialRoom};
+    pub use crate::kit::sharded::{KitMig, ShardParkRecord};
     pub use crate::kit::space::{grid_shape, shard_at};
 
     /// One shard of the demo's sharded world: the kit's generic
@@ -140,6 +140,16 @@ pub mod sharded {
     pub type ShardedRoom = crate::kit::sharded::ShardedRoom<
         crate::demo::play::DemoGame,
         crate::kit::space::GridPartition2<crate::demo::components::Position>,
+    >;
+
+    /// One shard of the demo's sharded × spatial world: the kit's generic
+    /// [`ShardedSpatialRoom`](crate::kit::sharded::ShardedSpatialRoom)
+    /// over the demo shard and the kit's 2D grid AOI (constructors: `new`,
+    /// `with_disconnect_grace`, `with_economy`).
+    pub type ShardedSpatialRoom = crate::kit::sharded::ShardedSpatialRoom<
+        crate::demo::play::DemoGame,
+        crate::kit::space::GridPartition2<crate::demo::components::Position>,
+        crate::kit::space::Grid2,
     >;
 
     /// The demo's migrating entity state: the demo's captured components

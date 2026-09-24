@@ -8,13 +8,9 @@ use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
 use crate::kit::common::{CellBook, CellPieces};
-use crate::kit::seam::{DemoGame, Position, StripPos};
+use crate::kit::game::{ShardGame, Wire};
 use crate::kit::sharded::*;
-use crate::kit::space::{Cell, Grid2, GridPartition2, cell_of};
-
-/// The grid-protocol half this composite wraps: the demo's shard
-/// (transitional — the composite becomes generic next).
-type DemoShard = ShardedRoom<DemoGame, GridPartition2<Position>>;
+use crate::kit::space::{CellSpace, Partition};
 
 mod logic;
 mod shard;
@@ -32,24 +28,25 @@ mod shard;
 /// economy) lives in the wrapped [`ShardedRoom`] and is delegated; this
 /// type adds only the spatial broadcast surface (group key, packets,
 /// view baselines) and the strip integration.
-pub struct ShardedSpatialRoom {
+pub struct ShardedSpatialRoom<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> {
     /// The grid-protocol half (delegated hooks; same module, so its
     /// private tables are readable where the seam requires it).
-    pub(in crate::kit::sharded) inner: DemoShard,
-    /// World units per cell edge (the config's `aoi_cell_size`; the same
-    /// knob the single-world AOI room turns).
-    pub(in crate::kit::sharded) cell_size: f32,
+    pub(in crate::kit::sharded) inner: ShardedRoom<G, P>,
+    /// The cell space over the wire value (the demo: `Grid2` with the
+    /// config's `aoi_cell_size` — the same knob the single-world AOI
+    /// room turns).
+    pub(in crate::kit::sharded) space: S,
     /// The content bookkeeping shared with [`crate::kit::aoi::AoiRoom`] —
     /// buckets over OWN entities AND borrowed records alike, change
     /// lists, member counts, born groups. Fed from two sources: the
     /// bevy dirty pass in `update` (own entities) and
     /// [`Self::integrate_borrowed`] (the strip diff).
-    pub(in crate::kit::sharded) book: CellBook<StripPos, Cell>,
+    pub(in crate::kit::sharded) book: CellBook<Wire<G>, S::Cell>,
     /// THE ledger (module docs, "THE borrowed-strip × delta-ledger
     /// subtlety"): the previous tick's flattened borrowed view,
-    /// `wire → (x, y)` truncated. The new slice is diffed against THIS,
+    /// `wire id → wire value`. The new slice is diffed against THIS,
     /// never against the buckets, so an unchanged strip dirties nothing.
-    pub(in crate::kit::sharded) prev_borrowed: HashMap<u64, StripPos>,
+    pub(in crate::kit::sharded) prev_borrowed: HashMap<u64, Wire<G>>,
     /// Once-per-tick guard for the strip integration + deferred roll:
     /// the tick whose broadcast-phase preparation has already run.
     pub(in crate::kit::sharded) integrated_tick: u64,
@@ -58,25 +55,25 @@ pub struct ShardedSpatialRoom {
     /// full. Cleared on join/resume/migrate-in/migrate-out — a fresh
     /// session or a fresh shard MUST re-baseline (module docs, "Migration
     /// correctness").
-    pub(in crate::kit::sharded) conn_view: HashMap<PlayerId, Cell>,
+    pub(in crate::kit::sharded) conn_view: HashMap<PlayerId, S::Cell>,
     /// The global tick of the current step (set in `update`).
     pub(in crate::kit::sharded) tick: u64,
     // ── Per-tick piece caches (cleared in `update`, computed lazily in
     //    the broadcast phase; order-independent across groups). ──
-    pub(in crate::kit::sharded) pieces: CellPieces<Cell>,
+    pub(in crate::kit::sharded) pieces: CellPieces<S::Cell>,
     /// The groups that emitted a FULL this tick (fresh group /
     /// keepalive): their members' private frames skip the one-shot.
-    pub(in crate::kit::sharded) group_full_emitted: HashSet<Cell>,
+    pub(in crate::kit::sharded) group_full_emitted: HashSet<S::Cell>,
 }
 
-impl ShardedSpatialRoom {
-    /// Build shard `index` of a `shard_count`-shard room over a square
-    /// map of half-size `half`, broadcasting with cells of `cell_size`
-    /// world units (see [`ShardedRoom::new`] for the shared halves).
-    pub fn new(index: usize, shard_count: usize, spawn_half: f32, cell_size: f32) -> Self {
+impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialRoom<G, P, S> {
+    /// Build the spatial composite around the shard `inner`,
+    /// broadcasting over the cell space `space` (see
+    /// [`ShardedRoom::with_game`] for the shared halves).
+    pub fn with_shard(inner: ShardedRoom<G, P>, space: S) -> Self {
         Self {
-            inner: DemoShard::new(index, shard_count, spawn_half),
-            cell_size: cell_size.max(0.5),
+            inner,
+            space,
             book: CellBook::default(),
             prev_borrowed: HashMap::new(),
             integrated_tick: 0,
@@ -97,19 +94,13 @@ impl ShardedSpatialRoom {
     }
 
     /// The game this shard runs.
-    pub fn game(&self) -> &DemoGame {
+    pub fn game(&self) -> &G {
         self.inner.game()
     }
 
     /// The game this shard runs, for configuration after construction.
-    pub fn game_mut(&mut self) -> &mut DemoGame {
+    pub fn game_mut(&mut self) -> &mut G {
         self.inner.game_mut()
-    }
-
-    /// The cell space over this composite's `cell_size` (the kit's
-    /// `Grid2` preset — the same one the single-world AOI room uses).
-    pub(in crate::kit::sharded) fn grid(&self) -> Grid2 {
-        Grid2::new(self.cell_size)
     }
 
     /// THE strip integration (module docs, "THE borrowed-strip ×
@@ -120,33 +111,35 @@ impl ShardedSpatialRoom {
     /// NOTHING (the evaporation guard) — feed the diff into the shared
     /// bookkeeping as non-member content, then roll the flags against
     /// the final bucket state.
-    fn integrate_borrowed(&mut self, borrowed: &[BorderRecord<StripPos>]) {
+    fn integrate_borrowed(&mut self, borrowed: &[BorderRecord<Wire<G>>]) {
         if self.integrated_tick == self.tick {
             return;
         }
-        let mut new_view: HashMap<u64, StripPos> = HashMap::with_capacity(borrowed.len());
+        let mut new_view: HashMap<u64, Wire<G>> = HashMap::with_capacity(borrowed.len());
         for rec in borrowed {
-            let pos = rec.state;
-            new_view.insert(rec.wire, pos);
-            match self.prev_borrowed.get(&rec.wire).copied() {
+            let value = &rec.state;
+            new_view.insert(rec.wire, value.clone());
+            match self.prev_borrowed.get(&rec.wire) {
                 None => {
                     // Entered the visible set (first contact, a healing
                     // Full after quarantine, or a crossing-in): an upsert
                     // in its containing cell — borrowed content joins the
                     // cell's group content for members of that cell.
-                    let c = cell_of(rec.state.x, rec.state.y, self.cell_size);
-                    self.book.record_appearance(rec.wire, pos, c, false);
+                    let c = self.space.cell_of(value);
+                    self.book
+                        .record_appearance(rec.wire, value.clone(), c, false);
                 }
-                Some(prev) if prev != pos => {
+                Some(prev) if prev != value => {
                     // Moved: one upsert — or exit+upsert when the move
                     // crossed a cell boundary (the packet passes fix the
                     // wire order).
-                    let old_c = cell_of(prev.x, prev.y, self.cell_size);
-                    let new_c = cell_of(rec.state.x, rec.state.y, self.cell_size);
+                    let old_c = self.space.cell_of(prev);
+                    let new_c = self.space.cell_of(value);
                     if old_c == new_c {
-                        self.book.record_update(new_c, rec.wire, pos);
+                        self.book.record_update(new_c, rec.wire, value.clone());
                     } else {
-                        self.book.record_cross(old_c, new_c, rec.wire, pos, false);
+                        self.book
+                            .record_cross(old_c, new_c, rec.wire, value.clone(), false);
                     }
                 }
                 Some(_) => {
@@ -161,7 +154,7 @@ impl ShardedSpatialRoom {
         // cells their previous records occupied.
         for (wire, prev) in &self.prev_borrowed {
             if !new_view.contains_key(wire) {
-                let c = cell_of(prev.x, prev.y, self.cell_size);
+                let c = self.space.cell_of(prev);
                 self.book.record_exit(c, *wire, false);
             }
         }
@@ -177,7 +170,7 @@ impl ShardedSpatialRoom {
     /// any packet/full/baseline work reads the bookkeeping (idempotent —
     /// snapshot runs once per group, the integration must run once per
     /// tick).
-    fn ensure_ready(&mut self, ctx: &TickCtx, borrowed: &[BorderRecord<StripPos>]) {
+    fn ensure_ready(&mut self, ctx: &TickCtx, borrowed: &[BorderRecord<Wire<G>>]) {
         debug_assert_eq!(ctx.tick, self.tick, "update must precede broadcast");
         self.integrate_borrowed(borrowed);
     }

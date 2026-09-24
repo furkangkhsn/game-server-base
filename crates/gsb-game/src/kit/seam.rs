@@ -21,19 +21,6 @@
 //! grep -rn "crate::demo" crates/gsb-game/src/kit   # → only kit/seam.rs
 //! ```
 
-// ── Transitional: the sharded spatial composite (generic next) ─────────
-
-// The composite still wraps the demo's shard and drives the cell-delta
-// engine with the demo's codec over the demo's wire value: the demo's
-// `Game`, its codec, its position (the group-of fallback) and its wire
-// value (the border strip's payload, `Strip = Wire`), and the frame
-// opcodes. Consumer: the sharded spatial composite.
-pub(crate) use crate::demo::codec::DemoCodec;
-pub(crate) use crate::demo::components::Position;
-pub(crate) use crate::demo::op::{PRIVATE, WORLD_SNAPSHOT};
-pub(crate) use crate::demo::play::DemoGame;
-pub(crate) use crate::demo::wire::StripPos;
-
 // ── Kit envelope (§5 — moves into the kit's own proto) ───────────────────
 
 // The private-frame envelope and the input ack: generated from the demo's
@@ -53,13 +40,20 @@ pub(crate) use crate::demo::game::WorldSnapshot;
 #[cfg(test)]
 pub(crate) use crate::demo::game::CellExit;
 
-// The demo's components and default movement speed (tests spawn and
-// inspect demo entities directly), and its migrating state (tests build
-// one by hand).
+// The demo's `Game`: the in-module tests of the generic rooms drive the
+// demo instantiation.
 #[cfg(test)]
-pub(crate) use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Speed};
+pub(crate) use crate::demo::play::DemoGame;
+
+// The demo's components and default movement speed (tests spawn and
+// inspect demo entities directly), its wire value (tests hand-build
+// border records) and its migrating state (tests build one by hand).
+#[cfg(test)]
+pub(crate) use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 #[cfg(test)]
 pub(crate) use crate::demo::migrate::DemoMig;
+#[cfg(test)]
+pub(crate) use crate::demo::wire::StripPos;
 
 // The demo map's named sectors the PVS tests address directly.
 #[cfg(test)]

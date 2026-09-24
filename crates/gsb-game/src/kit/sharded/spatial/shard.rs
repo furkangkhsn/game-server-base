@@ -4,12 +4,17 @@ use bevy_ecs::prelude::World;
 use gsb_core::id::PlayerId;
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 
-use crate::kit::seam::StripPos;
-use crate::kit::sharded::spatial::DemoShard;
+use crate::kit::game::{ShardGame, Wire};
 use crate::kit::sharded::*;
+use crate::kit::space::{CellSpace, Partition};
 
-impl ShardLogic<World> for ShardedSpatialRoom {
-    type State = <DemoShard as ShardLogic<World>>::State;
+impl<G, P, S> ShardLogic<World> for ShardedSpatialRoom<G, P, S>
+where
+    G: ShardGame,
+    P: Partition<Wire<G>>,
+    S: CellSpace<Wire<G>>,
+{
+    type State = KitMig<G::Mig>;
 
     fn index(&self) -> usize {
         self.inner.index()
@@ -80,7 +85,7 @@ impl ShardLogic<World> for ShardedSpatialRoom {
         self.inner.on_migrate_out(world, wire);
     }
 
-    fn collect_border(&self, world: &World) -> Vec<BorderRecord<StripPos>> {
+    fn collect_border(&self, world: &World) -> Vec<BorderRecord<Wire<G>>> {
         self.inner.collect_border(world)
     }
 
