@@ -10,6 +10,7 @@ These design documents are written in Turkish. All code and API documentation in
 | `DESIGN.md` | Core architectural design document covering actor constraints, scaling targets, network transports, tick execution, and the metrics pipeline. |
 | `DISTRIBUTED.md` | Design contract for distributed multi-process and multi-machine shard topologies using the ShardLink abstraction. |
 | `HANDOFF.md` | Session handoff context and operational instructions for continuing development rounds and preserving architecture discipline. |
+| `KIT-ARCHITECTURE.md` | Design (pending approval) for splitting the reusable strategies (AOI, team fog, PVS, delta engine, sharded composites) into a pluggable `gsb-kit` crate, separate from the example game. |
 | `OPS.md` | Operational interface design specifying HTTP endpoints for Prometheus metrics, health checks, and room administration. |
 | `PERSISTENCE.md` | Persistence architecture separating typed in-memory match checkpoints from centralized persistent world storage. |
 | `RECONNECT.md` | Contract for handling disconnected players through detach, park ledger retention, and session reattachment. |
