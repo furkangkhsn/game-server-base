@@ -13,11 +13,12 @@ use prost::encoding::varint::encode_varint;
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
 use crate::kit::aoi::*;
-pub use crate::kit::common::Cell;
-use crate::kit::common::{assemble_group_packet, cell_of};
+use crate::kit::common::assemble_group_packet;
 use crate::kit::identity::WireId;
 use crate::kit::seam;
-use crate::kit::seam::Position;
+use crate::kit::seam::{DemoCodec, Position};
+pub use crate::kit::space::Cell;
+use crate::kit::space::CellSpace;
 
 impl GameLogic<World> for AoiRoom {
     type GroupKey = Cell;
@@ -54,7 +55,7 @@ impl GameLogic<World> for AoiRoom {
             .get::<Position>()
             .copied()
             .unwrap_or_default();
-        cell_of(pos.x as i32, pos.y as i32, self.cell_size)
+        self.grid.cell_of(&(pos.x as i32, pos.y as i32))
     }
 
     /// Assemble `cell`'s packet from this tick's pieces (module docs):
@@ -77,9 +78,10 @@ impl GameLogic<World> for AoiRoom {
         assemble_group_packet(
             &mut self.pieces,
             &self.book,
+            &DemoCodec,
+            &self.grid,
             cell,
             &mut self.group_full_emitted,
-            ctx.tick,
             out,
         )
     }
@@ -102,7 +104,9 @@ impl GameLogic<World> for AoiRoom {
     ) -> bool {
         debug_assert_eq!(_ctx.tick, self.tick, "update must precede keepalive");
         self.group_full_emitted.insert(*group);
-        let full = self.pieces.full_view(&self.book.buckets, self.tick, group);
+        let full = self
+            .pieces
+            .full_view(&DemoCodec, &self.grid, &self.book.buckets, group);
         out.extend_from_slice(&full);
         true
     }
@@ -151,7 +155,9 @@ impl GameLogic<World> for AoiRoom {
                 // (field 3, one length-delimited `RpcResponse` each)
                 // instead of a second frame — the per-connection
                 // per-tick slot is one frame.
-                let full = self.pieces.full_view(&self.book.buckets, self.tick, &c);
+                let full = self
+                    .pieces
+                    .full_view(&DemoCodec, &self.grid, &self.book.buckets, &c);
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
@@ -286,7 +292,7 @@ impl GameLogic<World> for AoiRoom {
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
         self.book.begin_tick();
-        self.pieces.begin_tick();
+        self.pieces.begin_tick(ctx.tick);
         self.group_full_emitted.clear();
         self.tick = ctx.tick;
 
@@ -304,7 +310,7 @@ impl GameLogic<World> for AoiRoom {
         // count. (The pass itself — including its quantization no-op and
         // its member arithmetic — is the shared engine,
         // [`crate::kit::common::CellBook::dirty_pass`].)
-        self.book.dirty_pass(world, self.cell_size);
+        self.book.dirty_pass(world, &DemoCodec, &self.grid);
 
         // Leavers: despawns are invisible to the change query — applied
         // from the removals parked in `on_leave`.

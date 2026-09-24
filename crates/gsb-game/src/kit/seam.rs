@@ -33,10 +33,15 @@ pub(crate) use crate::demo::game::EntityRecord;
 // the sharded rooms' `Strip` payload (`Strip = Wire`).
 pub(crate) use crate::demo::wire::StripPos;
 
+// RecordCodec itself: the demo's codec (`Wire = (i32, i32)`), which the
+// generic cell-delta engine is instantiated with where a room is not yet
+// generic over the game.
+pub(crate) use crate::demo::codec::DemoCodec;
+
 // ── CellSpace (§4.2) ─────────────────────────────────────────────────────
 
-// CellSpace::encode_cell: the typed body of a `CellExit` record.
-pub(crate) use crate::demo::game::CellExit;
+// (no entry) The kit's `Grid2` preset (`kit::space`) writes the
+// `CellExit` body itself; the demo pins it to its typed `CellExit`.
 
 // ── Vision (§4.2) ────────────────────────────────────────────────────────
 
@@ -117,6 +122,10 @@ pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};
 
 // ── Test fixtures (kit's in-module tests drive the kit rooms with the
 //    demo game; phase 1 replaces them with the kit's own small test game)
+
+// The typed `CellExit` mirror the AOI tests decode snapshots with.
+#[cfg(test)]
+pub(crate) use crate::demo::game::CellExit;
 
 // The demo's default movement speed (tests spawn and inspect demo
 // entities directly).

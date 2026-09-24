@@ -31,11 +31,12 @@
 //! them only through [`crate::kit::seam`].
 
 mod cells;
+mod frame;
 mod input;
 mod park;
 
-pub use cells::Cell;
 pub(crate) use cells::*;
+pub(crate) use frame::*;
 pub use input::InputSeq;
 pub(crate) use input::{append_responses, emit_private};
 pub(crate) use park::*;

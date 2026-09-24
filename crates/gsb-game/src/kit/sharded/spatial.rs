@@ -7,9 +7,10 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
-use crate::kit::common::{Cell, CellBook, CellPieces, cell_of};
+use crate::kit::common::{CellBook, CellPieces};
 use crate::kit::seam::EconomyService;
 use crate::kit::sharded::*;
+use crate::kit::space::{Cell, Grid2, cell_of};
 
 mod logic;
 mod shard;
@@ -39,7 +40,7 @@ pub struct ShardedSpatialRoom {
     /// lists, member counts, born groups. Fed from two sources: the
     /// bevy dirty pass in `update` (own entities) and
     /// [`Self::integrate_borrowed`] (the strip diff).
-    pub(in crate::kit::sharded) book: CellBook,
+    pub(in crate::kit::sharded) book: CellBook<(i32, i32), Cell>,
     /// THE ledger (module docs, "THE borrowed-strip × delta-ledger
     /// subtlety"): the previous tick's flattened borrowed view,
     /// `wire → (x, y)` truncated. The new slice is diffed against THIS,
@@ -58,7 +59,7 @@ pub struct ShardedSpatialRoom {
     pub(in crate::kit::sharded) tick: u64,
     // ── Per-tick piece caches (cleared in `update`, computed lazily in
     //    the broadcast phase; order-independent across groups). ──
-    pub(in crate::kit::sharded) pieces: CellPieces,
+    pub(in crate::kit::sharded) pieces: CellPieces<Cell>,
     /// The groups that emitted a FULL this tick (fresh group /
     /// keepalive): their members' private frames skip the one-shot.
     pub(in crate::kit::sharded) group_full_emitted: HashSet<Cell>,
@@ -91,6 +92,12 @@ impl ShardedSpatialRoom {
         self
     }
 
+    /// The cell space over this composite's `cell_size` (the kit's
+    /// `Grid2` preset — the same one the single-world AOI room uses).
+    pub(in crate::kit::sharded) fn grid(&self) -> Grid2 {
+        Grid2::new(self.cell_size)
+    }
+
     /// Attach the economy service handle (see [`ShardedRoom::with_economy`]).
     #[must_use]
     pub fn with_economy(mut self, economy: EconomyService) -> Self {
@@ -121,8 +128,7 @@ impl ShardedSpatialRoom {
                     // in its containing cell — borrowed content joins the
                     // cell's group content for members of that cell.
                     let c = cell_of(rec.state.x, rec.state.y, self.cell_size);
-                    self.book
-                        .record_appearance(rec.wire, rec.state.x, rec.state.y, c, false);
+                    self.book.record_appearance(rec.wire, pos, c, false);
                 }
                 Some(prev) if prev != pos => {
                     // Moved: one upsert — or exit+upsert when the move
@@ -131,17 +137,9 @@ impl ShardedSpatialRoom {
                     let old_c = cell_of(prev.0, prev.1, self.cell_size);
                     let new_c = cell_of(rec.state.x, rec.state.y, self.cell_size);
                     if old_c == new_c {
-                        self.book
-                            .record_update(new_c, rec.wire, rec.state.x, rec.state.y);
+                        self.book.record_update(new_c, rec.wire, pos);
                     } else {
-                        self.book.record_cross(
-                            old_c,
-                            new_c,
-                            rec.wire,
-                            rec.state.x,
-                            rec.state.y,
-                            false,
-                        );
+                        self.book.record_cross(old_c, new_c, rec.wire, pos, false);
                     }
                 }
                 Some(_) => {

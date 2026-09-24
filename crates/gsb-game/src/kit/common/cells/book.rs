@@ -3,12 +3,15 @@
 //! group has anything to say at all.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::hash::Hash;
 
-use bevy_ecs::prelude::{Changed, Entity, World};
+use bevy_ecs::prelude::{Entity, With, World};
 
+use crate::kit::codec::RecordCodec;
 use crate::kit::common::*;
 use crate::kit::identity::WireId;
-use crate::kit::seam::Position;
+use crate::kit::space::CellSpace;
 
 /// The per-tick CONTENT bookkeeping of a cell-encoded delta broadcaster —
 /// the current buckets, the change lists, and the occupancy/member
@@ -17,49 +20,68 @@ use crate::kit::seam::Position;
 /// any other content source (the sharded composite's borrowed border
 /// strip) enters through the same four record primitives with
 /// `member = false`, so both sources share one arithmetic.
-#[derive(Default)]
-pub(crate) struct CellBook {
-    /// The current buckets: `cell → (wire id → (x, y))` — the content of
+///
+/// Generic over the wire value `W` (the codec's `Wire` — the unit of the
+/// change test) and the cell key `C` (the space's `Cell`).
+pub(crate) struct CellBook<W, C> {
+    /// The current buckets: `cell → (wire id → wire value)` — the content of
     /// every cell, maintained incrementally. Invariant: after a full tick
     /// body (dirty pass + every external source + roll), the buckets
     /// equal the visible world's current content.
-    pub buckets: HashMap<Cell, HashMap<u64, (i32, i32)>>,
+    pub buckets: HashMap<C, HashMap<u64, W>>,
     /// The cells that were occupied at the last roll: the appearance/
     /// exit baseline. Frozen while content mutates, rolled only by
     /// [`Self::roll`] against the final bucket state (order-
     /// independence — a same-tick exit+entry cannot flip either flag).
-    pub prev_occupied: HashSet<Cell>,
+    pub prev_occupied: HashSet<C>,
     /// Each bucketed entity's cell at the end of the last pass (written
     /// by the dirty pass, read by it, by removal parking, and by the
     /// O(1) `group_of` lookups of the broadcast phase).
-    pub last_cell: HashMap<Entity, Cell>,
+    pub last_cell: HashMap<Entity, C>,
     /// The member count of each cell (empty entries removed): the
     /// birth arithmetic's "now" input. Borrowed records are never
     /// members — they carry no connection on this side.
-    pub member_counts: HashMap<Cell, u32>,
+    pub member_counts: HashMap<C, u32>,
     /// The cells touched this tick with their member-event counters
     /// (persistent map, cleared in place each tick): the roll iterates
     /// exactly this map — O(movers), never O(cells).
-    pub touched: HashMap<Cell, TouchInfo>,
+    pub touched: HashMap<C, TouchInfo>,
     /// Each touched cell's change list for this tick (persistent map,
     /// cleared in place each tick): the delta's source of truth.
-    pub cell_changes: HashMap<Cell, CellChanges>,
+    pub cell_changes: HashMap<C, CellChanges<W>>,
     /// Removals parked by the CONTROL phase (leaves, migrations-out):
     /// a despawn is not a component write, so the dirty query cannot see
     /// it — the entity, its wire id and its last cell are parked here and
     /// applied by [`Self::apply_removals`]. A join+leave within one tick
     /// parks nothing — the entity never made it into `last_cell`, hence
     /// never into the buckets.
-    pub pending_removals: Vec<(Entity, u64, Cell)>,
+    pub pending_removals: Vec<(Entity, u64, C)>,
     /// The member entities (maintained by the room on join/leave/migrate):
     /// the dirty loop's O(1) membership test.
     pub members: HashSet<Entity>,
     /// Cells with members now but none at the last roll: their groups
     /// are fresh and must emit a FULL packet on their first tick.
-    pub born_groups: HashSet<Cell>,
+    pub born_groups: HashSet<C>,
 }
 
-impl CellBook {
+// Not derived: a derive would demand `W: Default` and `C: Default`.
+impl<W, C> Default for CellBook<W, C> {
+    fn default() -> Self {
+        Self {
+            buckets: HashMap::new(),
+            prev_occupied: HashSet::new(),
+            last_cell: HashMap::new(),
+            member_counts: HashMap::new(),
+            touched: HashMap::new(),
+            cell_changes: HashMap::new(),
+            pending_removals: Vec::new(),
+            members: HashSet::new(),
+            born_groups: HashSet::new(),
+        }
+    }
+}
+
+impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// Clear the per-tick state (persistent containers, in place).
     pub(crate) fn begin_tick(&mut self) {
         self.cell_changes.clear();
@@ -68,12 +90,12 @@ impl CellBook {
     }
 
     #[inline]
-    fn touch(&mut self, c: Cell) {
+    fn touch(&mut self, c: C) {
         self.touched.entry(c).or_default();
     }
 
     #[inline]
-    fn member_event(&mut self, c: Cell, in_: bool) {
+    fn member_event(&mut self, c: C, in_: bool) {
         let t = self.touched.entry(c).or_default();
         if in_ {
             t.member_in += 1;
@@ -85,20 +107,13 @@ impl CellBook {
     /// Primitive: a record NEWLY occupies `cell` (a join spawn, a fresh
     /// migration-in, a borrowed record entering the view). An upsert in
     /// the cell's change list.
-    pub(crate) fn record_appearance(
-        &mut self,
-        wire: u64,
-        x: i32,
-        y: i32,
-        cell: Cell,
-        member: bool,
-    ) {
+    pub(crate) fn record_appearance(&mut self, wire: u64, value: W, cell: C, member: bool) {
         self.cell_changes
             .entry(cell)
             .or_default()
             .updates
-            .push((wire, x, y));
-        self.buckets.entry(cell).or_default().insert(wire, (x, y));
+            .push((wire, value.clone()));
+        self.buckets.entry(cell).or_default().insert(wire, value);
         self.touch(cell);
         if member {
             *self.member_counts.entry(cell).or_default() += 1;
@@ -108,14 +123,14 @@ impl CellBook {
 
     /// Primitive: a record's wire content changed WITHIN `cell` (already
     /// known different — the quantization check belongs to the caller).
-    pub(crate) fn record_update(&mut self, cell: Cell, wire: u64, x: i32, y: i32) {
+    pub(crate) fn record_update(&mut self, cell: C, wire: u64, value: W) {
         self.cell_changes
             .entry(cell)
             .or_default()
             .updates
-            .push((wire, x, y));
+            .push((wire, value.clone()));
         if let Some(b) = self.buckets.get_mut(&cell) {
-            b.insert(wire, (x, y));
+            b.insert(wire, value);
         }
         self.touch(cell);
     }
@@ -123,15 +138,7 @@ impl CellBook {
     /// Primitive: a record moved from `old` cell to `new` — an exit in
     /// the source, an upsert in the target (the packet passes fix the
     /// wire order: `removed` before `entities`).
-    pub(crate) fn record_cross(
-        &mut self,
-        old: Cell,
-        new: Cell,
-        wire: u64,
-        x: i32,
-        y: i32,
-        member: bool,
-    ) {
+    pub(crate) fn record_cross(&mut self, old: C, new: C, wire: u64, value: W, member: bool) {
         self.cell_changes.entry(old).or_default().exits.push(wire);
         if let Some(b) = self.buckets.get_mut(&old) {
             b.remove(&wire);
@@ -144,8 +151,8 @@ impl CellBook {
             .entry(new)
             .or_default()
             .updates
-            .push((wire, x, y));
-        self.buckets.entry(new).or_default().insert(wire, (x, y));
+            .push((wire, value.clone()));
+        self.buckets.entry(new).or_default().insert(wire, value);
         self.touch(new);
         if member {
             if let Some(n) = self.member_counts.get_mut(&old) {
@@ -162,7 +169,7 @@ impl CellBook {
 
     /// Primitive: a record LEFT `cell` without a tracked position write
     /// (a parked despawn removal, a borrowed record exiting the view).
-    pub(crate) fn record_exit(&mut self, cell: Cell, wire: u64, member: bool) {
+    pub(crate) fn record_exit(&mut self, cell: C, wire: u64, member: bool) {
         self.cell_changes.entry(cell).or_default().exits.push(wire);
         if let Some(b) = self.buckets.get_mut(&cell) {
             b.remove(&wire);
@@ -183,27 +190,34 @@ impl CellBook {
     }
 
     /// The own-entity dirty pass: bevy's change detection flags every
-    /// `Position` write — by any writer, through any API — so the dirty
-    /// mark lives in bevy's write path itself and no writer can forget
-    /// it. Only changed entities are visited: per-tick work is
+    /// write the codec's [`RecordCodec::Dirty`] filter names (the demo:
+    /// `Changed<Position>`) — by any writer, through any API — so the
+    /// dirty mark lives in bevy's write path itself and no writer can
+    /// forget it. Only changed entities are visited: per-tick work is
     /// proportional to movers, not to the entity count.
     ///
-    /// Quantization: wire positions are i32 truncations of f32 motion —
-    /// a same-cell move whose wire position did not change records
-    /// nothing (the cell can still classify `Silent`), so the stream is
-    /// content-identical to a diff-based design.
-    pub(crate) fn dirty_pass(&mut self, world: &mut World, cell_size: f32) {
-        let mut query = world.query_filtered::<(Entity, &WireId, &Position), Changed<Position>>();
-        for (entity, wire_id, pos) in query.iter(world) {
+    /// Quantization: the change test is on the WIRE value (the demo's
+    /// i32 truncation of f32 motion) — a same-cell move whose wire value
+    /// did not change records nothing (the cell can still classify
+    /// `Silent`), so the stream is content-identical to a diff-based
+    /// design.
+    pub(crate) fn dirty_pass<R, S>(&mut self, world: &mut World, codec: &R, space: &S)
+    where
+        R: RecordCodec<Wire = W>,
+        S: CellSpace<W, Cell = C>,
+    {
+        let mut query =
+            world.query_filtered::<(Entity, &WireId, R::Query), (R::Dirty, With<R::Marker>)>();
+        for (entity, wire_id, item) in query.iter(world) {
             let wire = wire_id.get();
-            let (x, y) = (pos.x as i32, pos.y as i32);
-            let new_cell = cell_of(x, y, cell_size);
+            let value = codec.wire(item);
+            let new_cell = space.cell_of(&value);
             let is_member = self.members.contains(&entity);
             match self.last_cell.get(&entity).copied() {
                 None => {
                     // New this tick (a join, a migration-in, or a spawn
                     // between passes): an upsert in its cell.
-                    self.record_appearance(wire, x, y, new_cell, is_member);
+                    self.record_appearance(wire, value, new_cell, is_member);
                     self.last_cell.insert(entity, new_cell);
                 }
                 Some(old) if old == new_cell => {
@@ -213,13 +227,13 @@ impl CellBook {
                         .buckets
                         .get(&old)
                         .and_then(|b| b.get(&wire))
-                        .is_none_or(|&(px, py)| px != x || py != y);
+                        .is_none_or(|prev| *prev != value);
                     if changed {
-                        self.record_update(new_cell, wire, x, y);
+                        self.record_update(new_cell, wire, value);
                     }
                 }
                 Some(old) => {
-                    self.record_cross(old, new_cell, wire, x, y, is_member);
+                    self.record_cross(old, new_cell, wire, value, is_member);
                     self.last_cell.insert(entity, new_cell);
                 }
             }

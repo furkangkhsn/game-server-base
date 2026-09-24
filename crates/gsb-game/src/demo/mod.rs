@@ -12,6 +12,7 @@
 //! every such coupling (the phase-1 work list).
 
 pub(crate) mod bot;
+pub mod codec;
 pub mod components;
 pub mod economy;
 pub(crate) mod input;

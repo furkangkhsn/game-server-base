@@ -263,9 +263,10 @@ use gsb_ecs::SystemRunner;
 // The public cell type lives with the shared machinery (both spatial
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
-pub use crate::kit::common::Cell;
 use crate::kit::common::{CellBook, CellPieces};
 use crate::kit::seam;
+pub use crate::kit::space::Cell;
+use crate::kit::space::Grid2;
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
@@ -289,9 +290,9 @@ pub struct AoiRoom {
     /// The room's single wire-identity counter (see module docs,
     /// "Invariants preserved" / `game.proto`).
     minter: crate::kit::identity::Minter,
-    /// World units per cell edge (see module docs, "Cell size" — it also
-    /// sets the leak band, "Security parameter").
-    cell_size: f32,
+    /// The cell space: world units per cell edge (see module docs, "Cell
+    /// size" — it also sets the leak band, "Security parameter").
+    grid: Grid2,
     /// Half-size of the square spawn map (see the demo's `spawn_pos`);
     /// configuration, not a strategy decision.
     spawn_half: f32,
@@ -310,7 +311,7 @@ pub struct AoiRoom {
     /// member baselines, parked removals, born groups) — the shared
     /// engine ([`crate::kit::common::CellBook`]); this room feeds it from the
     /// bevy dirty query alone (no borrowed strip exists here).
-    book: CellBook,
+    book: CellBook<(i32, i32), Cell>,
     /// The global tick of the current step (set in `update`): the
     /// `private` seam has no `TickCtx`, so the tick it stamps into
     /// payloads comes from here.
@@ -320,7 +321,7 @@ pub struct AoiRoom {
     //    `private` once per group/conn in unspecified order, and the
     //    cache makes the pieces order-independent: the same (cell, kind)
     //    is computed once, shared as frozen `Bytes` by reference). ──
-    pieces: CellPieces,
+    pieces: CellPieces<Cell>,
     /// The groups that emitted a FULL this tick (a fresh group in
     /// `snapshot`, a silent group in `keepalive`): a member of such a
     /// group is baselined by that frame (it precedes the private frame in
@@ -348,7 +349,7 @@ impl AoiRoom {
             park: crate::kit::common::ParkPolicy::default(),
             park_ledger: HashMap::new(),
             minter: crate::kit::identity::Minter::sequential(),
-            cell_size: cell_size.max(0.5),
+            grid: Grid2::new(cell_size),
             spawn_half: half.max(1.0),
             input: crate::kit::common::InputSeq::default(),
             conn_view: HashMap::new(),

@@ -3,30 +3,36 @@
 //! one packet per group.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use bytes::{Bytes, BytesMut};
 
+use crate::kit::codec::RecordCodec;
 use crate::kit::common::*;
+use crate::kit::space::CellSpace;
 
 /// The per-tick encoded-piece caches of a cell-delta broadcaster: every
 /// piece is computed lazily ONCE per (cell, kind) per tick and shared as
 /// frozen `Bytes` by reference with every group that needs it — the
 /// "encode once, share the bytes" spine at cell granularity. Cleared in
 /// place at each tick start.
-#[derive(Default)]
-pub(crate) struct CellPieces {
+///
+/// Keyed by the space's cell `C`; the record and cell-exit bodies come
+/// from the codec / the space each method is handed (the kit writes the
+/// envelope around them).
+pub(crate) struct CellPieces<C> {
     /// Each cell's encoded FULL records (the `entities` entries, field 2)
     /// of its current content.
-    full_pieces: HashMap<Cell, Bytes>,
+    full_pieces: HashMap<C, Bytes>,
     /// Each changed cell's encoded delta: `(removed piece, entities piece)`
     /// assembled from the cell's change list.
-    delta_pieces: HashMap<Cell, (Option<Bytes>, Bytes)>,
+    delta_pieces: HashMap<C, (Option<Bytes>, Bytes)>,
     /// Each exited cell's encoded `cell_exits` entry (field 4).
-    exit_markers: HashMap<Cell, Bytes>,
-    /// The assembled FULL snapshot of a cell's 3×3 view (header + the
-    /// full pieces): shared between the fresh-group packet, the keep-
-    /// alive full, and the one-shot private full.
-    full_view: HashMap<Cell, Bytes>,
+    exit_markers: HashMap<C, Bytes>,
+    /// The assembled FULL snapshot of a cell's view (header + the full
+    /// pieces): shared between the fresh-group packet, the keep-alive
+    /// full, and the one-shot private full.
+    full_view: HashMap<C, Bytes>,
     /// The scratch behind `full_view` (reused across assemblies;
     /// `split_to` hands out zero-copy views — no per-assembly allocation).
     scratch: BytesMut,
@@ -35,22 +41,43 @@ pub(crate) struct CellPieces {
     /// is valid for every later group and every later pass — including
     /// the negative answer (`Silent`), which is a hash miss on the change
     /// list, not a scan.
-    frag_cache: HashMap<Cell, CellFrag>,
+    frag_cache: HashMap<C, CellFrag>,
     /// Entity records encoded into pieces so far this tick (the overlap
     /// measurement: ~E per tick — one encoding per entity, in its own
     /// cell's piece). Read/reset via [`Self::take_encoded`].
     encoded: u64,
+    /// The tick being broadcast (set by [`Self::begin_tick`]): the
+    /// sequence stamped into the assembled fulls.
+    tick: u64,
 }
 
-impl CellPieces {
-    /// Clear the per-tick caches (persistent containers, in place).
-    pub(crate) fn begin_tick(&mut self) {
+// Not derived: a derive would demand `C: Default`.
+impl<C> Default for CellPieces<C> {
+    fn default() -> Self {
+        Self {
+            full_pieces: HashMap::new(),
+            delta_pieces: HashMap::new(),
+            exit_markers: HashMap::new(),
+            full_view: HashMap::new(),
+            scratch: BytesMut::new(),
+            frag_cache: HashMap::new(),
+            encoded: 0,
+            tick: 0,
+        }
+    }
+}
+
+impl<C: Copy + Eq + Hash> CellPieces<C> {
+    /// Clear the per-tick caches (persistent containers, in place) and
+    /// record the tick they are built for.
+    pub(crate) fn begin_tick(&mut self, tick: u64) {
         self.full_pieces.clear();
         self.delta_pieces.clear();
         self.exit_markers.clear();
         self.full_view.clear();
         self.frag_cache.clear();
         self.encoded = 0;
+        self.tick = tick;
     }
 
     /// Records encoded so far this tick (polled once per step via
@@ -61,7 +88,7 @@ impl CellPieces {
 
     /// The per-tick classification of `c` (see [`CellFrag`]) — memoized
     /// per cell per tick, negative answer included.
-    pub(crate) fn classify(&mut self, changes: &HashMap<Cell, CellChanges>, c: &Cell) -> CellFrag {
+    pub(crate) fn classify<W>(&mut self, changes: &HashMap<C, CellChanges<W>>, c: &C) -> CellFrag {
         if let Some(&frag) = self.frag_cache.get(c) {
             return frag;
         }
@@ -77,18 +104,18 @@ impl CellPieces {
 
     /// The cell's FULL piece (its complete current content, encoded once
     /// per tick; `None` for an empty cell).
-    pub(crate) fn full_piece(
+    pub(crate) fn full_piece<R: RecordCodec>(
         &mut self,
-        buckets: &HashMap<Cell, HashMap<u64, (i32, i32)>>,
-        c: &Cell,
+        codec: &R,
+        buckets: &HashMap<C, HashMap<u64, R::Wire>>,
+        c: &C,
     ) -> Option<Bytes> {
         if !self.full_pieces.contains_key(c)
             && let Some(bucket) = buckets.get(c)
         {
-            let records: Vec<(u64, i32, i32)> =
-                bucket.iter().map(|(&w, &(x, y))| (w, x, y)).collect();
-            self.encoded += records.len() as u64;
-            self.full_pieces.insert(*c, encode_entity_records(&records));
+            self.encoded += bucket.len() as u64;
+            let piece = encode_entity_records(codec, bucket.iter().map(|(&w, v)| (w, v)));
+            self.full_pieces.insert(*c, piece);
         }
         self.full_pieces.get(c).cloned()
     }
@@ -98,10 +125,11 @@ impl CellPieces {
     /// per-cell content comparison is ever run (encoded once per tick).
     /// `None` when the cell has no change list (the caller classifies
     /// first; such a cell is silent for the tick).
-    pub(crate) fn delta_piece(
+    pub(crate) fn delta_piece<R: RecordCodec>(
         &mut self,
-        changes: &HashMap<Cell, CellChanges>,
-        c: &Cell,
+        codec: &R,
+        changes: &HashMap<C, CellChanges<R::Wire>>,
+        c: &C,
     ) -> Option<&(Option<Bytes>, Bytes)> {
         if !self.delta_pieces.contains_key(c)
             && let Some(ch) = changes.get(c)
@@ -112,7 +140,7 @@ impl CellPieces {
                 *c,
                 (
                     (!ch.exits.is_empty()).then(|| encode_entity_exits(&ch.exits)),
-                    encode_entity_records(&ch.updates),
+                    encode_entity_records(codec, ch.updates.iter().map(|(w, v)| (*w, v))),
                 ),
             );
         }
@@ -120,30 +148,35 @@ impl CellPieces {
     }
 
     /// One `CellExit` marker for an exited cell (encoded once per tick).
-    pub(crate) fn exit_marker(&mut self, c: &Cell) -> Bytes {
+    pub(crate) fn exit_marker<W, S: CellSpace<W, Cell = C>>(&mut self, space: &S, c: &C) -> Bytes {
         if !self.exit_markers.contains_key(c) {
-            self.exit_markers.insert(*c, encode_cell_exit(*c));
+            self.exit_markers
+                .insert(*c, encode_cell_exit::<W, S>(space, *c));
         }
         self.exit_markers.get(c).expect("inserted above").clone()
     }
 
-    /// The assembled FULL snapshot of `cell`'s 3×3 view (header with
-    /// `delta = false` + the full pieces of every non-empty cell) —
-    /// computed once per tick and shared.
-    pub(crate) fn full_view(
+    /// The assembled FULL snapshot of `cell`'s view (header with
+    /// `delta = false` + the full pieces of every non-empty cell of
+    /// [`CellSpace::view`]) — computed once per tick and shared.
+    pub(crate) fn full_view<R, S>(
         &mut self,
-        buckets: &HashMap<Cell, HashMap<u64, (i32, i32)>>,
-        tick: u64,
-        cell: &Cell,
-    ) -> Bytes {
+        codec: &R,
+        space: &S,
+        buckets: &HashMap<C, HashMap<u64, R::Wire>>,
+        cell: &C,
+    ) -> Bytes
+    where
+        R: RecordCodec,
+        S: CellSpace<R::Wire, Cell = C>,
+    {
         if let Some(bytes) = self.full_view.get(cell) {
             return bytes.clone();
         }
         self.scratch.clear();
-        write_snapshot_header(&mut self.scratch, tick, false);
-        for (dx, dy) in BLOCK_OFFSETS {
-            let c = Cell(cell.0 + dx, cell.1 + dy);
-            if let Some(piece) = self.full_piece(buckets, &c) {
+        write_snapshot_header(&mut self.scratch, self.tick, false);
+        for c in space.view(*cell) {
+            if let Some(piece) = self.full_piece(codec, buckets, &c) {
                 self.scratch.extend_from_slice(&piece);
             }
         }
@@ -154,34 +187,37 @@ impl CellPieces {
 }
 
 /// Assemble one group's packet from this tick's pieces: a FRESH group
-/// (it had no members at the last roll) gets a FULL packet of its 3×3
-/// view; an ESTABLISHED group gets a DELTA packet — exits (field 3),
+/// (it had no members at the last roll) gets a FULL packet of its view; an ESTABLISHED group gets a DELTA packet — exits (field 3),
 /// then cell exits (field 4), then updates/appeared fulls (field 2) —
 /// or nothing (`false`) when the whole block is silent. Marks a fresh
 /// group's full in `group_full_emitted` (the batch-ordering signal the
 /// private frame uses to skip its one-shot).
-pub(crate) fn assemble_group_packet(
-    pieces: &mut CellPieces,
-    book: &CellBook,
-    cell: &Cell,
-    group_full_emitted: &mut HashSet<Cell>,
-    tick: u64,
+pub(crate) fn assemble_group_packet<R, S>(
+    pieces: &mut CellPieces<S::Cell>,
+    book: &CellBook<R::Wire, S::Cell>,
+    codec: &R,
+    space: &S,
+    cell: &S::Cell,
+    group_full_emitted: &mut HashSet<S::Cell>,
     out: &mut BytesMut,
-) -> bool {
+) -> bool
+where
+    R: RecordCodec,
+    S: CellSpace<R::Wire>,
+{
     if book.born_groups.contains(cell) {
         // Fresh group: every member is new to this view — the first
         // packet is a full (delta=false), so the members end the tick
         // baselined (the invariant starts from here).
         group_full_emitted.insert(*cell);
-        let full = pieces.full_view(&book.buckets, tick, cell);
+        let full = pieces.full_view(codec, space, &book.buckets, cell);
         out.extend_from_slice(&full);
         return true;
     }
     // Established group: emit a delta only when at least one cell in the
     // block has something to say (silence writes no bytes).
     let mut any = false;
-    for (dx, dy) in BLOCK_OFFSETS {
-        let c = Cell(cell.0 + dx, cell.1 + dy);
+    for c in space.view(*cell) {
         if pieces.classify(&book.cell_changes, &c) != CellFrag::Silent {
             any = true;
         }
@@ -189,39 +225,36 @@ pub(crate) fn assemble_group_packet(
     if !any {
         return false;
     }
-    write_snapshot_header(out, tick, true);
+    write_snapshot_header(out, pieces.tick, true);
     // Pass 1: entity exits of every cell — exits before updates, so a
     // cell-to-cell move is exited from its source before it is updated
     // in its target.
-    for (dx, dy) in BLOCK_OFFSETS {
-        let c = Cell(cell.0 + dx, cell.1 + dy);
+    for c in space.view(*cell) {
         if pieces.classify(&book.cell_changes, &c) == CellFrag::Delta
-            && let Some((exits, _)) = pieces.delta_piece(&book.cell_changes, &c)
+            && let Some((exits, _)) = pieces.delta_piece(codec, &book.cell_changes, &c)
             && let Some(e) = exits
         {
             out.extend_from_slice(e);
         }
     }
     // Pass 2: cell exits — one record per cell that became empty.
-    for (dx, dy) in BLOCK_OFFSETS {
-        let c = Cell(cell.0 + dx, cell.1 + dy);
+    for c in space.view(*cell) {
         if pieces.classify(&book.cell_changes, &c) == CellFrag::Exited {
-            out.extend_from_slice(&pieces.exit_marker(&c));
+            out.extend_from_slice(&pieces.exit_marker(space, &c));
         }
     }
     // Pass 3: updates — delta pieces' changed records, and appeared
     // cells' full records (upserts — no baseline exists for a cell that
     // was empty).
-    for (dx, dy) in BLOCK_OFFSETS {
-        let c = Cell(cell.0 + dx, cell.1 + dy);
+    for c in space.view(*cell) {
         match pieces.classify(&book.cell_changes, &c) {
             CellFrag::Delta => {
-                if let Some((_, updates)) = pieces.delta_piece(&book.cell_changes, &c) {
+                if let Some((_, updates)) = pieces.delta_piece(codec, &book.cell_changes, &c) {
                     out.extend_from_slice(updates);
                 }
             }
             CellFrag::Appeared => {
-                if let Some(piece) = pieces.full_piece(&book.buckets, &c) {
+                if let Some(piece) = pieces.full_piece(codec, &book.buckets, &c) {
                     out.extend_from_slice(&piece);
                 }
             }

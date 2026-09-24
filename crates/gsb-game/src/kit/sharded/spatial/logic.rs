@@ -11,11 +11,12 @@ use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 use prost::encoding::varint::encode_varint;
 
-use crate::kit::common::{Cell, assemble_group_packet, cell_of};
+use crate::kit::common::assemble_group_packet;
 use crate::kit::identity::WireId;
 use crate::kit::seam;
-use crate::kit::seam::Position;
+use crate::kit::seam::{DemoCodec, Position};
 use crate::kit::sharded::*;
+use crate::kit::space::{Cell, cell_of};
 
 impl GameLogic<World> for ShardedSpatialRoom {
     type GroupKey = Cell;
@@ -63,12 +64,14 @@ impl GameLogic<World> for ShardedSpatialRoom {
         out: &mut bytes::BytesMut,
     ) -> bool {
         self.ensure_ready(ctx, borrowed);
+        let grid = self.grid();
         assemble_group_packet(
             &mut self.pieces,
             &self.book,
+            &DemoCodec,
+            &grid,
             cell,
             &mut self.group_full_emitted,
-            ctx.tick,
             out,
         )
     }
@@ -87,7 +90,10 @@ impl GameLogic<World> for ShardedSpatialRoom {
     ) -> bool {
         self.ensure_rolled();
         self.group_full_emitted.insert(*group);
-        let full = self.pieces.full_view(&self.book.buckets, self.tick, group);
+        let grid = self.grid();
+        let full = self
+            .pieces
+            .full_view(&DemoCodec, &grid, &self.book.buckets, group);
         out.extend_from_slice(&full);
         true
     }
@@ -183,7 +189,10 @@ impl GameLogic<World> for ShardedSpatialRoom {
                 // bytes inside the Private message's snapshot oneof
                 // (field 2, length-delimited); queued RPC answers ride
                 // the SAME frame (field 3).
-                let full = self.pieces.full_view(&self.book.buckets, self.tick, &c);
+                let grid = self.grid();
+                let full = self
+                    .pieces
+                    .full_view(&DemoCodec, &grid, &self.book.buckets, &c);
                 out.put_u8(0x12); // Private field 2 (snapshot), LEN
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
@@ -206,10 +215,11 @@ impl GameLogic<World> for ShardedSpatialRoom {
         // broadcast-phase call integrates it and rolls against the final
         // content.
         self.book.begin_tick();
-        self.pieces.begin_tick();
+        self.pieces.begin_tick(ctx.tick);
         self.group_full_emitted.clear();
         self.tick = ctx.tick;
-        self.book.dirty_pass(world, self.cell_size);
+        let grid = self.grid();
+        self.book.dirty_pass(world, &DemoCodec, &grid);
         self.book.apply_removals();
         // Close this tick's bevy change window (the core never calls
         // this — there is no system scheduler here; see
