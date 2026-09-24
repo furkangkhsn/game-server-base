@@ -201,14 +201,17 @@ async fn start_inner(
     // `Sector`) or the sharded grid topology, so the arms are otherwise
     // identical and each yields a `JoinHandle<()>`. `resolve_selection`
     // already validated the combination; every arm here is a supported one.
+    //
+    // One economy service per server (the RPC pattern's external-I/O
+    // reference adapter), shared by clone with every room of EVERY build:
+    // each kit room forwards requests to the game, so the service is what
+    // decides whether `ECONOMY` is answered — uniformly, whatever the axes
+    // resolved to (GAME-MODULE §6 decision 11).
+    let economy = gsb_demo::economy::EconomyService::spawn(
+        gsb_demo::economy::EconomyService::default_latency(),
+    );
     let _registry = match selection.kind {
         RoomKind::Open => {
-            // One economy service per server (the RPC pattern's
-            // external-I/O reference adapter; shared by clone with every
-            // demo room the factory builds).
-            let economy = gsb_demo::economy::EconomyService::spawn(
-                gsb_demo::economy::EconomyService::default_latency(),
-            );
             let disconnect_grace = grace_of(&cfg);
             tokio::spawn(
                 Registry::new(
@@ -230,7 +233,12 @@ async fn start_inner(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    aoi_room_factory(cfg.aoi_cell_size, cfg.spawn_half_size, disconnect_grace),
+                    aoi_room_factory(
+                        cfg.aoi_cell_size,
+                        cfg.spawn_half_size,
+                        disconnect_grace,
+                        economy,
+                    ),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -250,6 +258,7 @@ async fn start_inner(
                         cfg.team_vision_radius,
                         cfg.spawn_half_size,
                         disconnect_grace,
+                        economy,
                     ),
                     ticker.clone(),
                     metrics_tx.clone(),
@@ -266,7 +275,7 @@ async fn start_inner(
                 Registry::new(
                     reg_rx,
                     reg_tx.clone(),
-                    pvs_room_factory(cfg.spawn_half_size, disconnect_grace),
+                    pvs_room_factory(cfg.spawn_half_size, disconnect_grace, economy),
                     ticker.clone(),
                     metrics_tx.clone(),
                     cfg.max_connections,
@@ -278,13 +287,6 @@ async fn start_inner(
         }
         RoomKind::Sharded => {
             let disconnect_grace = grace_of(&cfg);
-            // One economy service per server, shared with the shards (the
-            // Faz 3 promotion: the sharded path runs the full RPC
-            // machinery, so `ECONOMY` requests delegate exactly like the
-            // single-room demo's).
-            let economy = gsb_demo::economy::EconomyService::spawn(
-                gsb_demo::economy::EconomyService::default_latency(),
-            );
             tokio::spawn(
                 Registry::new(
                     reg_rx,
@@ -310,11 +312,6 @@ async fn start_inner(
         }
         RoomKind::ShardedSpatial => {
             let disconnect_grace = grace_of(&cfg);
-            // One economy service per server, shared with the shards —
-            // identical wiring to the whole-shard grid above.
-            let economy = gsb_demo::economy::EconomyService::spawn(
-                gsb_demo::economy::EconomyService::default_latency(),
-            );
             tokio::spawn(
                 Registry::new(
                     reg_rx,
