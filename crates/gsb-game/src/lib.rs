@@ -49,10 +49,14 @@
 //!   and opcodes, the spawn distribution, input decoding, the bot, the
 //!   RPC handlers and the economy service, the PVS map.
 //!
-//! The kit still calls into the demo in places (phase 1 inverts that
-//! dependency); every such call goes through ONE module, `kit::seam`,
-//! whose contents are the phase-1 work list. A unit test (`layering`)
-//! locks the rule. The public paths below are unchanged.
+//! The kit's seams (`RecordCodec`, `CellSpace`, `Game`) exist since
+//! phase 1a and the demo implements them (`DemoGame`, `DemoCodec`, the
+//! kit's `Grid2` preset); the open and AOI rooms are generic over them.
+//! The remaining rooms still call into the demo; every such call goes
+//! through ONE module, `kit::seam`, whose contents are the phase-1b work
+//! list. A unit test (`layering`) locks the rule. The public paths below
+//! are unchanged (the converted rooms' old names are type aliases onto
+//! the demo instantiation).
 
 mod demo;
 mod kit;
