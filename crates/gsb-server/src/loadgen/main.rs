@@ -61,6 +61,11 @@ use std::time::Duration;
 mod args;
 use args::*;
 
+/// The game this generator drives: the 2D demo, the only game it has a
+/// bot for until GAME-MODULE G3 (`--game`). It names the server's `game`
+/// key and closes the RESULT line (`game=<name>`).
+const GAME: &str = gsb_server::games::demo::DemoModule::NAME;
+
 /// The client movement profile (the load's *shape*, not the server's
 /// visibility strategy):
 ///

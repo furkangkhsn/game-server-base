@@ -43,6 +43,9 @@ fn loadgen_smoke() {
 
     assert_eq!(get("mode"), "in-proc");
     assert_eq!(get("clients"), "3");
+    // The hosted game closes the line (GAME-MODULE §4.5).
+    assert_eq!(get("game"), "demo");
+    assert!(result_line.ends_with(" game=demo"), "{result_line}");
     // The full client path must work: connect, auth, join, leave.
     assert_eq!(get("connected"), "3", "all clients connect over real TCP");
     assert_eq!(

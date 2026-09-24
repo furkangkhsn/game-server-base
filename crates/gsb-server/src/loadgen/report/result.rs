@@ -386,7 +386,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}",
+             detach_expired_ai={} detach_expired_despawn={}{} game={}",
         mode,
         args.visibility,
         // Shard-aware like the legacy spelling: the EXPLICIT topology key
@@ -515,5 +515,8 @@ pub(crate) fn print_report(
             .iter()
             .map(|(r, n)| format!(" server_close_{}={n}", r.label()))
             .collect::<String>(),
+        // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
+        // addition; every key before it keeps its place and format).
+        crate::GAME,
     );
 }

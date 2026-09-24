@@ -30,6 +30,7 @@ pub(crate) async fn serve(args: Args) {
         max_snapshot_bytes: args.max_snapshot_bytes,
         spawn_half_size: args.server_spawn_half,
         transport: args.transport,
+        game: crate::GAME.into(),
         ..Default::default()
     };
     // Capacity / lifecycle overrides (same semantics as in-process: an

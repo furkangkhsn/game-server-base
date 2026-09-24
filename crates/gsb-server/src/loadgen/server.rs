@@ -68,6 +68,7 @@ pub(crate) async fn start_inprocess(
         max_snapshot_bytes,
         spawn_half_size: spawn_half,
         transport,
+        game: crate::GAME.into(),
         ..Default::default()
     };
     apply_overrides(&mut cfg, &overrides);
