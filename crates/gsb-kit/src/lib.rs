@@ -24,7 +24,11 @@
 //!   the `Game` hooks;
 //! - [`identity`] — the kit-owned wire identity (`WireId`) and its single
 //!   minter (§4.4);
-//! - [`proto`] — the kit's own envelope messages (§5).
+//! - [`proto`] — the kit's own envelope messages (§5);
+//! - [`client`] — the reference client half of that envelope: a
+//!   game-agnostic view (`ClientView`) that applies the frames under the
+//!   client rules `kit.proto` states, over a small decode seam the game
+//!   supplies (`ClientDecoder`).
 //!
 //! **The dependency points one way** (§3: "kit, demo'yu asla görmez"):
 //! the kit depends on the engine crates only, never on a game — not even
@@ -35,6 +39,7 @@
 //! `[dev-dependencies]` free of games.
 
 pub mod aoi;
+pub mod client;
 pub mod codec;
 mod common;
 pub mod game;
