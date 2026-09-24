@@ -191,7 +191,9 @@ kısıtlarıyla (`GroupKey: Eq + Hash + Clone + Debug`,
   tarafından `world.removed::<WireId>()` ile öğrenilir (§8'deki açığa
   bkz.).
 - **Girdi sıra/ack kuralı:** yüksek-su kuralı ve `InputAck` kit'tedir;
-  girdinin çözülmesi ve uygulanması oyunun `ingest`'indedir.
+  girdinin çözülmesi ve uygulanması oyunun `ingest`'indedir. Sharded
+  odalarda oyuncunun oturum durumu (`hwm`, `acked`) göçle birlikte
+  `KitMig` içinde taşınır (G2 bulguları K1–K3; `4d83d01`).
 - **Park/resume:** `common/park.rs` zaten oyundan bağımsızdır, olduğu
   gibi taşınır; sharded yoldaki kopyası (`sharded/room/logic.rs:166-234`)
   onunla birleştirilir. `bot.rs` ise tamamen demo'dur; kit yalnızca
@@ -330,7 +332,10 @@ pub trait ShardGame: Game {
     fn capture(&self, world: &World, entity: Entity) -> Self::Mig;
     fn restore(&mut self, world: &mut World, mig: Self::Mig) -> Entity;
 }
-pub struct KitMig<M> { pub game: M, pub park: Option<ShardParkRecord> } // Deref<Target = M>
+pub struct KitMig<M> { pub game: M, pub park: Option<ShardParkRecord>,
+                      pub input: Option<ShardInputRecord> } // Deref<Target = M>
+// `input` (hwm, acked): G2 bulguları K1–K3'ün düzeltmesi, `4d83d01`
+// (GAME-MODULE §5 "Kit düzeltme turu")
 ```
 
 Odalar: `TeamRoom<G: TeamGame, V: Vision>` (`with_game(game, vision)`),
@@ -414,7 +419,8 @@ Elenen alternatifler:
    odalarda da `TeamMember` yazardı. Oda cevabı `TeamMember` olarak
    world'e kendisi yazar (sonraki değişimler düz bileşen yazımı).
 7. **`KitMig<M>` `Deref<Target = M>`.** Oyunun alanları doğrudan
-   okunur (`mig.pos`); kit'in yarısı (`park`) kendi alanında.
+   okunur (`mig.pos`); kit'in yarısı (`park`; K1–K3'ten beri `input`
+   de) kendi alanında.
 8. **Demo'nun `Wire`'ı `(i32, i32)` değil `StripPos`.** `Strip = Wire`
    ve public `gsb_game::sharded::StripPos` yolu aynı tipi adlandırmalı;
    ayrıca `Planar`'ın oyuna ait bir wire tipi üzerinde çalıştığının ilk
@@ -1599,6 +1605,16 @@ Faz 4, yukarıda; A = Faz 3'ün arena bulguları, "Faz 3 sonucu" 1 ve 2):
 
 **Hepsi Faz 5'te çözüldü** (§10 "Faz 5 sonucu"; A3 bu tabloya Faz 5'te
 eklendi — aşağıdaki gözlemlerin ilki).
+
+**Sonradan (GAME-MODULE G2, gerçek sunucu altında) bulunan kit
+bulguları:** K1 (göçü tetikleyen girdi hiç ack'lenmiyor), K2 (sıra kuralı
+göçte sıfırlanıyor), K3 (kaynakta `InputSeq` girdisi sızıyor) — üçü de
+`4d83d01`'de **çözüldü**: `KitMig.input: Option<ShardInputRecord { hwm,
+acked }>`; `collect_migrations` okur, `on_migrate_out` siler,
+`on_migrate_in` kurar (`InputSeq::adopt`); iki sharded odada da (spatial
+kompozit delege ediyor). Kanıt: `sharded/tests/input_carry.rs` (7, önce
+kırıldı) ve çevrilen `gsb-server` `mmo_findings.rs`; ayrıntı
+GAME-MODULE §5 "Kit düzeltme turu".
 
 Tetikleyicisiz gözlemler (iş yok): kit'in opcode varsayılanları
 (varsayılansız ilişkili sabit daha dürüst olurdu), `Vision::sees`

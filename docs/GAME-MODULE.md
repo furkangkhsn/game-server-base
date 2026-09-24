@@ -390,7 +390,7 @@ crate'lere yapılan geçici mutasyonlar geri alındı, diff boş):
 | `mmo_logout::the_mmo_table_sets_the_logout_timer` | `game = "mmo"` + `[mmo] logout_grace_secs = 1` DOSYADAN, katalog üzerinden | grace yok sayıldı (20 sn) → kırıldı |
 | `mmo_logout::a_character_parked_on_another_shard_resumes_there` | shard 0'da girip shard 1'e yürüyen, orada düşen karakter aynı adla resume ediliyor (registry'nin resume yayını buluyor), aynı wire id, girdi çalışıyor | — |
 | `mmo_rooms::every_mmo_room_is_a_whole_sharded_world` | `room_count = 2` + `POST /rooms/open` ile açılan üçüncü oda: üç ayrı dünya (aynı waystone, üç id uzayında aynı ilk wire id, birbirini görmüyor, girdi yalnız kendi dünyasını oynatıyor) | — |
-| `example_config::*` | örnek config demo'yu olduğu gibi barındırıyor; yorumdaki `[arena]`/`[mmo]` açılınca oyunları kabul ediyor; bulgu K5'in kilidi | örnekte `logout = "despawn"` → kırıldı |
+| `example_config::*` | örnek config demo'yu olduğu gibi barındırıyor; yorumdaki `[arena]`/`[mmo]` açılınca oyunları kabul ediyor; bulgu K5'in kilidi (*K5 turunda çevrildi — aşağıda "Kit düzeltme turu"*) | örnekte `logout = "despawn"` → kırıldı |
 
 **`room_count > 1` ve `/rooms/open` ile birden fazla MMO dünyası
 ÇALIŞIYOR** — beklenen risk çıkmadı: her oda kimliği fabrikadan bütün
@@ -423,6 +423,9 @@ doğru.
   yapar, `on_migrate_in` hedefte kurar — bekleyen ack hedefin ilk
   yayınında çıkar (K1), kural sürer (K2), kaynak temizlenir (K3). O
   gün `mmo_findings` bilerek kırılır ve çevrilir.
+  **K1–K3 çözüldü — `4d83d01`** (aşağıda "Kit düzeltme turu"; tek
+  sapma: `collect_migrations` kaydı ALMIYOR, OKUYOR — `input.end`
+  `on_migrate_out`'ta).
 - **K4 — Kayıtlı karakterler oturuma bağlı; gerçek sunucu onları
   dolduramaz** (bilinen sınır, §6 karar 6 / KIT-ARCHITECTURE Faz 4
   gözlem 1; artık uçtan uca görünür). Bağlantı kimlikleri kabulde
@@ -439,12 +442,61 @@ doğru.
   `visibility`'de reddettiriyor (tasarım gereği doğru davranış).
   Örneğe not eklendi; kalıcı çözüm o satırları örnekte yoruma almak
   (demo için etkisi yok: değerler varsayılan) — bu turda yalnız ekleme
-  yapıldı, karar bakımcıya.
+  yapıldı, karar bakımcıya. **Çözüldü — `80da518`** (aşağıda).
 
 **Açık küçük iş:** CI'ın `no-game` işi yalnız `--no-default-features`'ı
 derliyor; her oyun özelliğinin tek başına derlendiği iki adım
 (`--no-default-features --features game-arena` / `game-mmo`) eklenmeli
-(yerelde temiz).
+(yerelde temiz). **Kapandı — `c8fa79a`** (aşağıda).
+
+### Kit düzeltme turu (K1–K3, K5, CI) sonucu (2026-09-25)
+
+**Tamam.** Üç commit (+ bu belge), her biri kendi başına yeşil; önce
+kırılan testler, mutation-check'ler yedekten geri yüklenerek. `gsb-core`
+**değişmedi** (`git diff 1b19ccb.. --stat -- crates/gsb-core` boş); wire
+baytları değişmedi (`gsb-demo`'nun `wire_contract.rs` / `kit_wire.rs` /
+`delta_aoi.rs`'i, kit'in `aoi/tests/sharing*`'i, arenanın ve MMO'nun
+wire testleri dokunulmadan yeşil). Test sayısı 579 → 586 (+7 kit birim
+testi); 1 ignored doctest aynı. Mevcut testlerde değişen yalnız: kit'in
+üç testindeki `KitMig { … }` literal'ine `input: None` (derlenmesi için;
+iddialar aynı), çevrilen iki kilit (`mmo_findings`, `example_config`)
+ve `mmo_e2e`'de bir yorum.
+
+| # | Commit | Değişiklik | Kanıtlayan test (önce kırıldı) | Mutation → sonuç |
+|---|---|---|---|---|
+| K1–K3 | `4d83d01` | `KitMig`'e `input: Option<ShardInputRecord { hwm, acked }>` (park kaydının yanında; `KitMig` ve kayıtları çocuk modül `sharded/mig.rs`'e taşındı). `collect_migrations` oyuncunun kaydını **okur** (almaz: reddedilen gönderimde oyuncu kaynakta kalır, çekirdek satırı geri alır ve sonraki tick yeniden toplar); `on_migrate_out` taşıma kesinleşince `input.end` (K3); `on_migrate_in` kaydı kurar (`InputSeq::adopt`) — hedefin sonraki private karesi kaynağın borçlu kaldığı ack'i taşır (K1), kural işaretini korur (K2). Kayıtsız bir varış yeni oturum başlatır. Spatial kompozit üç kancayı da delege ediyor: iki sharded oda da düzeldi | `gsb-kit` `sharded/tests/input_carry.rs` (7, fikstür oyunu): K1 (varışta ack 5, bir kez), zaten ack'lenmiş girdi yeniden ack'lenmiyor, K2 (4 ve 5 düşüyor, 6 işleniyor), K3 (commit'e dek kayıt kaynakta, sonra yok), reddedilen gönderim (kaynakta kural sürüyor, yeniden deneme aynı işareti taşıyor), köşegen iki adım (ara shard kurup devrediyor ve unutuyor), spatial kompozit (ack tek kez — ilk kare one-shot full ise bir tick sonra; K2, K3) — yedisi de düzeltmesiz kırıldı | hiç taşımamak → 6/7 kırıldı (+ `mmo_findings` ikisi de); `on_migrate_out`'ta `end` yok → K3, köşegen, spatial kırıldı; `collect`'te alıp silmek → reddedilen gönderim ve K3 kırıldı; `acked = hwm` ile kurmak → K1, reddedilen gönderim, köşegen, spatial kırıldı; `acked = 0` ile kurmak → "yeniden ack'lenmiyor" kırıldı |
+| K5 | `80da518` | `config.example.toml`'da demo'nun beş düz anahtarı (`visibility`, `aoi_cell_size`, `team_vision_radius`, `spawn_half_size`, `disconnect_grace_secs`) yoruma alındı, varsayılan değerleriyle belge olarak kaldı; çevresindeki notlar güncellendi | `example_config.rs` çevrildi (3): örnek demo'yu barındırıyor, beş anahtarı yazmıyor ve anahtarlar açılmış hâliyle (yani eski örnekle) AYNI oda seçimine ve demo ayarlarına çözülüyor; yalnız `game` satırı değiştirilmiş kopya demo / arena / mmo'yu başlatıyor; yorumdaki tablolar geçerli (açma artık yalnız tablo bölümünde — düz `disconnect_grace_secs` de yorumda). Eski örneğe karşı üçü de kırıldı | yorumdaki `aoi_cell_size` 25 → kırıldı; `spawn_half_size` yeniden yazıldı → üçü kırıldı; yorumdaki `visibility` "spatial" → kırıldı |
+| CI | `c8fa79a` | `no-game` işine `--no-default-features --features game-arena` ve `game-mmo` için build + clippy (`-D warnings`) adımları; işin adı aynı (zorunlu durum denetimi olabilir) | YAML PyYAML ile doğrulandı; dört komut yerelde temiz | — |
+
+**`mmo_findings.rs`'te değişenler** (K1/K2 kilidi çevrildi): modül
+belgesi düzeltmeyi anlatıyor; `k1_…_is_not_acked` →
+`k1_the_input_that_moves_a_player_to_another_shard_is_acked` — iniş
+sonrası 1,5 sn "ack yok" beklemesi yerine `acks == [1]` (Travel'ın ack'i
+geliyor), sonraki girdiyle `acks == [1, 2]` (tek kez, sırayla);
+`k2_…_restarts_…` → `k2_the_input_sequence_rule_holds_across_a_migration`
+— shard 0 kısmı aynı; shard 3'te eski seq 2 artık 1 sn boyunca tanık
+tarafından (256, 256)'da kalıyor (düştü), yeni seq 4 yürütüyor ve
+ack'leniyor. `mmo_e2e`'de yalnız bir yorum ("Travel'ın ack'i
+kayboluyor") güncellendi.
+
+**Göç mesajının boyutu:** `Option<ShardInputRecord>` 24 bayt —
+`KitMig<DemoMig>` 80 → 104, `KitMig<MmoMig>` 112 → 136;
+`ShardMsg<KitMig<DemoMig>, StripPos>` 112 → 136, MMO'nunki 144 → 168
+(`size_of`, 1b19ccb ve HEAD'de ölçüldü). `PlayerMigration` zaten
+kutulu; clippy (`result_large_err` dâhil) temiz. **Codec:** bugün
+`KitMig`'i hiçbir şey serileştirmiyor (in-process link taşıyor);
+DISTRIBUTED §4b'nin Ipc/Net linki kit'in codec'ine bu alanı da katmalı
+(`KitMig` belgesinde not).
+
+**Loadgen A/B** (50 istemci, 4 shard, 8 sn; `1b19ccb` ↔ HEAD, dönüşümlü
+üçer çift): sharded — `left=50 errors=0 server_closes=0` hepsinde,
+`snap_total` 11468–11517 ↔ 11464–11533, `out_bps_per_conn` 7065–7141 ↔
+7063–7108, `step_p50_fine_us` 24–56 ↔ 32–48; sharded × spatial — aynı
+temiz sayaçlar, `snap_total` 11472–11494 ↔ 11488–11496,
+`out_bps_per_conn` 2877–2893 ↔ 2894–2917, `step_p50_fine_us` 48–72 ↔
+40–64. Gürültü içinde. Düzeltmenin yan izi: istemcinin saydığı ack
+sayısı `acks` 2291–2296 → 2297–2298 (2298–2300 hamlede) — göçte
+kaybolan ack'ler geri geldi.
 
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
