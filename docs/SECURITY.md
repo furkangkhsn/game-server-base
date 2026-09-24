@@ -214,8 +214,14 @@ bağlantı kapanış koduyla düşürülür, reader pump `StreamRejected` bildir
   araya girmesini hiç denemez (vakaların hepsi text). Bu turun kapattığı
   açık yalnız yukarıdaki birim testleriyle kilitli; Autobahn onu
   yakalamazdı.
-- **Yerelde koşulmadı:** imaj (`crossbario/autobahn-testsuite:0.8.2`)
-  indirilemedi, etiket de yerelde doğrulanamadı. Yerelde doğrulananlar:
+- **Yerelde koşuldu (ebeveyn, 2026-09-25):** kullanıcı imaj indirmeye
+  izin verdi; `crossbario/autobahn-testsuite:25.10.1` fuzzingclient
+  modunda CI'nın adımlarıyla birebir koşuldu: **98 vaka koştu, 96 OK +
+  2 INFORMATIONAL (davranış ve kapanış), `autobahn.py check` geçti**,
+  `ACCEPTED` boş kaldı. Ajanın ilk yazdığı etiket `0.8.2` Docker Hub'da
+  **yok** (`docker manifest inspect` ile doğrulandı) — CI işi ilk
+  koşusunda imajı çekemeden düşerdi; etiket `25.10.1`'e sabitlendi.
+  Ajan turunda (indirme izni yokken) ayrıca doğrulananlar:
   harness'e elle yazılmış bir istemciyle Autobahn biçimli 69 vaka
   (0 B-16 MiB binary echo, chop'lar, ping/pong, RSV, opcode, parçalı
   kontrol, 7.x kapanış kodları, 7.5.1'in baytları) yeşil geçti; CI

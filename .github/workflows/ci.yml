@@ -101,7 +101,7 @@ jobs:
           python3 .github/autobahn/autobahn.py spec autobahn/fuzzingclient.json
           docker run --rm --network host \
             -v "$PWD/autobahn:/autobahn" \
-            crossbario/autobahn-testsuite:0.8.2 \
+            crossbario/autobahn-testsuite:25.10.1 \
             wstest -m fuzzingclient -s /autobahn/fuzzingclient.json
       - name: Judge the report
         run: python3 .github/autobahn/autobahn.py check autobahn/reports/index.json

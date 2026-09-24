@@ -227,10 +227,11 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
    kapısı turu", SECURITY §3.7): §5.4 araya girme guard'ı (1002), §5.2
    uzunluk kuralları, §7.4/§8.1 kapanış doğrulaması; her kural okuyucu
    seviyesinde testli. CI'daki `autobahn` işi (`examples/ws_autobahn` +
-   `.github/autobahn/autobahn.py`) **yerelde hiç koşulmadı**, ilk CI
-   koşusu ilk gerçek koşusu. Açık kalan: o koşunun raporunu oku. Her
-   beklenmedik sonuç ya düzeltilir ya `ACCEPTED`'e gerekçesiyle girer;
-   imaj etiketi `0.8.2` de o koşuda doğrulanır.
+   `.github/autobahn/autobahn.py`) yerelde gerçek imajla koşuldu
+   (`crossbario/autobahn-testsuite:25.10.1`): 98 vaka, 96 OK + 2
+   INFORMATIONAL, denetleyici geçti, `ACCEPTED` boş. İlk yazılan
+   `0.8.2` etiketi Docker Hub'da yoktu; düzeltildi. Kalan tek şey:
+   repo push edildiğinde CI'daki ilk koşunun raporuna bakmak.
 4. **team × sharded export** — sözleşme: `docs/CROSS-SHARD.md §8`
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon

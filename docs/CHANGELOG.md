@@ -57,10 +57,13 @@ her biri kendi testini kırıyor; opak eşlemenin okuyucu ya da yazıcı
 kolunu kapatmak → `opaque` testleri kırılıyor.
 
 **Autobahn kapısı:** CI'da yeni `autobahn` işi. `examples/ws_autobahn`
-(release) 127.0.0.1:9001'de başlıyor; `crossbario/autobahn-testsuite:0.8.2`
+(release) 127.0.0.1:9001'de başlıyor; `crossbario/autobahn-testsuite:25.10.1`
 fuzzingclient modunda ona karşı koşuyor; `.github/autobahn/autobahn.py`
 spec'i üretiyor ve raporu yargılıyor (kural ve dışlamalar SECURITY §3.7).
-**Yerelde koşulmadı:** imaj indirme izni yok. Yerelde doğrulananlar:
+**Yerel gerçek koşu (ebeveyn, izin sonrası):** 98 vaka, 96 OK + 2
+INFORMATIONAL, `autobahn.py check` geçti; ilk yazılan `0.8.2` etiketi
+Docker Hub'da yoktu, `25.10.1`'e düzeltildi. Ajan turunda (izin
+öncesi) doğrulananlar:
 elle yazılmış istemciyle Autobahn biçimli 69 vaka yeşil, CI'nın kabuk
 adımları, `check`'in sentetik raporlarla davranışı, YAML parse.
 
