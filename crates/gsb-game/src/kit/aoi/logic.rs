@@ -12,21 +12,22 @@ use prost::encoding::varint::encode_varint;
 // The public cell type lives with the shared machinery (both spatial
 // rooms speak it); re-exported here because `gsb_game::aoi::Cell` is the
 // historical public path every caller uses.
-use crate::aoi::*;
-use crate::components::{Position, WireId};
+use crate::kit::aoi::*;
 pub use crate::kit::common::Cell;
 use crate::kit::common::{assemble_group_packet, cell_of};
-use crate::op;
+use crate::kit::identity::WireId;
+use crate::kit::seam;
+use crate::kit::seam::Position;
 
 impl GameLogic<World> for AoiRoom {
     type GroupKey = Cell;
     type Strip = ();
 
     fn snapshot_op(&self) -> u16 {
-        op::WORLD_SNAPSHOT
+        seam::WORLD_SNAPSHOT
     }
     fn private_op(&self) -> u16 {
-        op::PRIVATE
+        seam::PRIVATE
     }
 
     /// The connection's group is the cell its entity's records land in
@@ -215,7 +216,7 @@ impl GameLogic<World> for AoiRoom {
         self.conn_view.remove(&player);
     }
 
-    // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
+    // -- the disconnect policy (see `crate::kit::room::OpenRoom`, the shared
     //    hook bodies live in `crate::kit::common`) ---------------------------
 
     fn on_disconnect(&mut self, _world: &mut World, player: PlayerId, identity: &str) -> Detach {
@@ -258,7 +259,7 @@ impl GameLogic<World> for AoiRoom {
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
-        crate::kit::seam::synthesize_bot_moves(
+        seam::synthesize_bot_moves(
             self.park_ledger
                 .values()
                 .filter(|e| e.bot)
@@ -267,7 +268,7 @@ impl GameLogic<World> for AoiRoom {
             ctx,
             actions,
         );
-        crate::kit::seam::ingest(&self.player_entity, world, actions, &mut self.input)
+        seam::ingest(&self.player_entity, world, actions, &mut self.input)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

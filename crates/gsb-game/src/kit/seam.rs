@@ -56,3 +56,11 @@ pub(crate) use crate::demo::op::{PRIVATE, WORLD_SNAPSHOT};
 // The snapshot / private-frame envelopes and the input ack: generated
 // from the demo's game.proto today; the kit proto owns them in phase 2.
 pub(crate) use crate::demo::game::{InputAck, Private, WorldSnapshot, private};
+
+// ── Test fixtures (kit's in-module tests drive the kit rooms with the
+//    demo game; phase 1 replaces them with the kit's own small test game)
+
+// The demo's movement speed component and its default (tests spawn and
+// inspect demo entities directly).
+#[cfg(test)]
+pub(crate) use crate::demo::components::{DEFAULT_SPEED, Speed};

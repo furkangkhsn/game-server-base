@@ -32,7 +32,7 @@ fn aoi_cell_exit_is_one_record_and_shared() {
     // no entity records for it at all.
     let ent = world
         .entity(e)
-        .get::<crate::components::WireId>()
+        .get::<crate::kit::identity::WireId>()
         .expect("stamped")
         .get();
     world.entity_mut(e).insert(Position { x: 5.0, y: 400.0 });

@@ -14,16 +14,16 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::game::{CellExit, WorldSnapshot};
+use crate::kit::seam::{CellExit, WorldSnapshot};
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::room::TickCtx;
 use prost::Message;
 
-use crate::components::{DEFAULT_SPEED, Position, Speed};
+use crate::kit::seam::{DEFAULT_SPEED, Position, Speed};
 
 use super::*;
-use crate::components::*;
+use crate::kit::identity::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 
@@ -197,9 +197,9 @@ fn aoi_late_join_sees_full_visibility_block() {
         room.private(&mut world, PlayerId(3), &Cell(0, 0), &[], &mut priv_out),
         "a late joiner receives the one-shot full"
     );
-    let full = crate::game::Private::decode(priv_out.as_ref()).expect("private frame");
+    let full = crate::kit::seam::Private::decode(priv_out.as_ref()).expect("private frame");
     let snap = match full.payload {
-        Some(crate::game::private::Payload::Snapshot(s)) => s,
+        Some(crate::kit::seam::private::Payload::Snapshot(s)) => s,
         other => panic!("expected the snapshot oneof, got {other:?}"),
     };
     assert!(!snap.delta, "the one-shot full is a full snapshot");

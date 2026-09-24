@@ -265,6 +265,7 @@ use gsb_ecs::SystemRunner;
 // historical public path every caller uses.
 pub use crate::kit::common::Cell;
 use crate::kit::common::{CellBook, CellPieces};
+use crate::kit::seam;
 
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
@@ -291,11 +292,11 @@ pub struct AoiRoom {
     /// World units per cell edge (see module docs, "Cell size" — it also
     /// sets the leak band, "Security parameter").
     cell_size: f32,
-    /// Half-size of the square spawn map (see `gsb_game::room::spawn_pos`);
+    /// Half-size of the square spawn map (see the demo's `spawn_pos`);
     /// configuration, not a strategy decision.
     spawn_half: f32,
     /// Per-player input sequence state (strategy-independent; see
-    /// `crate::kit::common::ingest` / `emit_private`).
+    /// the demo's `ingest` / `crate::kit::common::emit_private`).
     input: HashMap<PlayerId, crate::kit::common::InputState>,
     /// Per-PLAYER view baseline: `player → the cell whose FULL view was
     /// last delivered to it` (via the one-shot private full, or via the
@@ -333,15 +334,15 @@ impl AoiRoom {
     /// minimum so a degenerate `0` cannot produce a single infinite cell.
     #[must_use]
     pub fn new(cell_size: f32) -> Self {
-        Self::with_spawn_half(cell_size, crate::room::DEFAULT_SPAWN_HALF)
+        Self::with_spawn_half(cell_size, seam::DEFAULT_SPAWN_HALF)
     }
 
     /// Build an AOI room over a square spawn map of half-size `half` (see
-    /// `gsb_game::room::OpenRoom::with_spawn_half`).
+    /// [`crate::kit::room::OpenRoom::with_spawn_half`]).
     #[must_use]
     pub fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self {
-            runner: crate::kit::seam::movement_runner(),
+            runner: seam::movement_runner(),
             player_entity: HashMap::new(),
             next_player_id: 0,
             park: crate::kit::common::ParkPolicy::default(),
@@ -359,7 +360,7 @@ impl AoiRoom {
     }
 
     /// Set the disconnect-park grace (see
-    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
+    /// [`crate::kit::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     #[must_use]
     pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
         self.park.grace = grace;

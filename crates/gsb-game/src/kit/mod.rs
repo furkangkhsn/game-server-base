@@ -3,6 +3,7 @@
 //! sharded composites, park/resume bookkeeping, the input seq/ack rule,
 //! wire-identity minting and the snapshot/`Private` framing.
 
+pub mod aoi;
 pub(crate) mod common;
 pub mod identity;
 pub mod room;

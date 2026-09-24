@@ -39,7 +39,6 @@
 mod demo;
 mod kit;
 
-pub mod aoi;
 pub mod pvs;
 pub mod sharded;
 pub mod team;
@@ -54,6 +53,7 @@ pub mod team;
 
 pub use demo::{economy, game, op, register, systems};
 pub use kit::DEFAULT_DISCONNECT_GRACE;
+pub use kit::aoi;
 
 /// The open-visibility room and the demo's spawn distribution
 /// (compatibility path).
