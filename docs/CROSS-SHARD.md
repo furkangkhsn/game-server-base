@@ -168,9 +168,11 @@ ShardMsg::RemoteEffect(RemoteEffect {
 
 1. *`target_epoch`* ayrı bir hedef-epoch'u değil, efekt kimliğindeki
    ODA ENKARNASYONU epoch'udur (registry'nin kurulum nesli). Wire
-   kimlikleri bir enkarnasyon boyunca asla yeniden kullanılmaz (aralık
-   bölümleme + göçte kimlik korunur), yani hedef kimliği tam olarak
-   `(wire, epoch)`; hedef-başına bir epoch hiç bilgi taşımazdı.
+   kimlikleri bir enkarnasyon boyunca asla yeniden kullanılmaz (shard'ın
+   sayacı geri gitmez, shard'lar ayrık sınıflar basar — A30'dan beri iç
+   içe basım, önceden aralık bölümleme — ve göçte kimlik korunur), yani
+   hedef kimliği tam olarak `(wire, epoch)`; hedef-başına bir epoch hiç
+   bilgi taşımazdı.
 2. *Atıf "payload içinde"* değil ZARFTA: çekirdek §4.3 sıralamasını onunla
    yapar, oyunun codec'i olmadan okunabilmeli.
 3. *Rota: "shard bilinmiyorsa broadcast + epoch-guard tek-kabul"*
@@ -260,7 +262,11 @@ mover olmaz. Elenen: *seam'e yakın olan taşınır* — iki shard birbirini
 ≤ 1 tick bayat ödünç kopyadan görür; eşitlikte ya da bayatlıkta ikisi
 birden taşınıp yer değiştirir (swap → yine seam ötesi → ping-pong) ya da
 hiçbiri; *yükü az olan shard'a* — komşunun yükü bilinmez, bilmek mesaj
-ve uzlaşma ister; *rastgele* — deterministik değil.
+ve uzlaşma ister; *rastgele* — deterministik değil. (A30'dan beri wire
+id'leri iç içe basılıyor: "yüksek wire" artık "yüksek indeksli shard'ın
+bastığı" değil, kabaca "aynı sayıda çekimde daha geç çekilen" demek.
+Kural, deterministikliği ve iki shard'ın mesajsız anlaşması aynı;
+yalnız bir çiftte hangi tarafın taşındığı değişebilir.)
 
 **4. Sahiplik ↔ bölge (can alıcı karar).** Yalnız sahipliği değiştirmek
 yetmez: mover konumunda duruyor, bir sonraki tick `region_of` onu eski

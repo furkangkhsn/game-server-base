@@ -197,9 +197,29 @@ kısıtlarıyla (`GroupKey: Eq + Hash + Clone + Debug`,
 ### 4.4 Kit'in kendisinin sahip olduğu şeyler
 
 - **Kimlik:** `WireId(u64)` ve basımı kit'e taşınır, yapıcı kit-özel
-  kalır (`Minter::Sequential` / `Minter::Range`). Oyun bir entity'yi
+  kalır (`Minter::Sequential` / `Minter::Interleaved`). Oyun bir entity'yi
   "yayınlanabilir" yapmak için yalnızca `Marker` bileşenini ekler; kimliği
-  kit damgalar.
+  kit damgalar. **Wire kimliği (A30, 2026-09-25):** tek oda 1, 2, 3, …
+  basar; `N` shard'lı odada shard `i`'nin `n`'inci çekimi
+  `(n − 1) · N + i + 1` (`gsb_core::shard::interleaved_id` — çekirdekte
+  TEK formül; kit'in `Minter`'ı da test taslakları da onu çağırır).
+  Motorun wire id'den beklediği: (1) oda enkarnasyonunda tekil (shard'lar
+  arası da), (2) enkarnasyonda despawn'dan sonra bile yeniden
+  kullanılmaz (C1'in `(wire, epoch)` hedef kimliği buna dayanır), (3)
+  göçte korunur (alıcıda `Minter::arrival`, çekim değil), (4)
+  koordinasyonsuz basılır (kilit, mesaj, await yok), (5) motorun wire'a
+  göre sıraladığı yerde (kristalleşmenin alçak/yüksek kuralı, takım
+  görünümünün wire sırası) düz `u64` karşılaştırması. İç içe basım
+  hepsini yalnız `(i, N)` ile tutar — ikisi de enkarnasyon boyunca sabit
+  (bölmenin; yeniden kurulum yeni enkarnasyon, taze sayaçlar) — ve id'leri
+  küçük tutar: her shard `n` çektiğinde oda tam `1 ..= n·N`'yi
+  kullanmıştır; `N = 1` tek oda gibi sayar. Basan shard `(id − 1) mod N`
+  (`minting_shard`); motorda onu türeten yol yok (etki yönlendirmesi
+  borç vereni ve iletim tablosunu, kristalleşme borç vereni izler),
+  yalnız testler okur. Tükenme sınırı aynı: shard başına 2^20 çekim
+  (`SHARD_SERIAL_CAPACITY`; `ShardLogic::serial_capacity`), aşacak join
+  `RoomFull` — her id ≤ `2^20 · N`, eski aralıkların tavanı. Ölçüm ve
+  elenen alternatifler: §10 "A30".
 - **Değişiklik takibi:** filtre oyunundur (`Dirty`), ama
   `World::clear_trackers()`'ı tick başına **tek bir kez** kit çağırır.
   Bu dünya-geneli bir çağrıdır; iki sahibi olamaz.
@@ -254,7 +274,8 @@ pub trait Game: Send + 'static {
 pub type Wire<G> = <<G as Game>::Codec as RecordCodec>::Wire;
 ```
 
-Kit tarafı: `Minter` (`Sequential { used }` / `Range { base, used }`,
+Kit tarafı: `Minter` (`Sequential { used }` / `Range { base, used }` —
+A30'dan beri `Interleaved { index, shards, used }`,
 yalnız `kit` modülüne görünür; `mint() -> WireId`, `next_serial() ->
 u64`, `used()`, `arrival(u64) -> WireId`), `InputSeq` (`admit(player,
 seq)` public; `begin`/`end`/ack okuması kit-içi), `CellBook<W, C>`,
@@ -303,7 +324,8 @@ seq)` public; `begin`/`end`/ack okuması kit-içi), `CellBook<W, C>`,
    saymalı) ve `arrival` (göçle gelen entity'nin kimliği çekirdekte ham
    `u64` taşınıyor — `Migrating::wire`, çekirdek dokunulmaz — ve alıcı
    shard onu yeniden `WireId` yapmalı; bu bir basım değil, kimliği
-   kardeş shard'ın aralığı basmıştı).
+   kardeş shard'ın aralığı basmıştı — A30'dan beri: kardeş shard'ın
+   sayacı).
 10. **`CellBook<W, C>`, `CellPieces<C>`.** Taslak `CellBook<Wire>`
     diyordu; hücre anahtarı da genel (uzayın `Cell`'i). `CellPieces`
     yalnız hücre anahtarlı baytları tutuyor, `W`'ye ihtiyacı yok.
@@ -2421,7 +2443,8 @@ Wire id'ler shard'lı oyunlarda 3–4 baytlık varint: shard `k`'nin id
 aralığı `k · 2^20`'den başlıyor (`gsb_core::shard::SHARD_SERIAL_RANGE`,
 kit'in `Minter::range`'i) — shard 1'in id'leri 21, shard 2–3'ünkiler 22
 bit (savaş 500: kayıtların %55'inde id 4 B, %26'sında 3 B; demo 200'de
-%64'ünde 4 B). Tek odalı arenada id 1–2 B. Konum dışı alanlar (MMO `kind`
+%64'ünde 4 B). Tek odalı arenada id 1–2 B. **→ A30'da kapandı** (aşağıda
+"A30"): id'ler artık iç içe basılıyor, shard'lı oyunlarda 1–2 B. Konum dışı alanlar (MMO `kind`
 + `hp`, savaş `kind` + `faction` + `hp`) etiketleriyle kayıt başına 4–6 B
 ve neredeyse hiç değişmiyor (aşağıda).
 
@@ -2687,7 +2710,8 @@ mesaj, rUDP'de oyun bandı), sunucuda bağlantı başına geçmiş tutulur; CPU
   değişmez, id opak): shard aralığı `k · 2^20` yerine iç içe geçmiş basım
   (`n · S + k`) ya da daha dar aralıklar → id ≤ 2 B; demo/MMO/savaşta
   +7 … +14 puan. Çekirdeğin aralık tükenme koruması (`serial_range`) ve
-  id'leri sabitleyen testler etkilenir.
+  id'leri sabitleyen testler etkilenir. **→ Yapıldı: A30** (aşağıda;
+  ölçülen demo −15/−9 %, MMO −9/−7 %, savaş −7/−8 %).
 - *(d3) Paketli kayıt koşusu* (kit zarfı; anlam aynı): kayıt başına
   `0x12` + uzunluk yerine tek bir `bytes` alanında art arda kendini
   sınırlayan kayıtlar; +11 … +19 puan. İstemci kuralı yalnız "kayıtlar
@@ -2715,7 +2739,8 @@ Sıra (her adım ayrı karar, ayrı tur, her biri kendi başına ölçülür):
 
 1. **(d2) Kompakt wire id** — istemci kuralı değişmez; bugünkü
    gövdeyle tek başına demo −10 … −14 %, MMO −6 … −7 %, savaş −7 %
-   (arena 0: tek oda, id'ler zaten küçük).
+   (arena 0: tek oda, id'ler zaten küçük). **→ A30'da yapıldı**
+   (aşağıda "A30").
 2. **(d3) Paketli kayıt koşusu, oyun başına opt-in** — kit zarfı + iki
    küçük seam (aşağıda); (d1) oyunun kodeğinde (demolar için örnek
    kodek). Birlikte −43 … −58 %, rUDP'de kare kaybı yarıya.
@@ -2791,7 +2816,8 @@ baseline is applied on top, even across a sequence gap" cümlesi silinir.
    opcode'u/`protocol_version` yeter mi?
 3. **Wire id basımı değişebilir mi?** (iç içe geçmiş ya da dar aralık;
    çekirdeğin `SHARD_SERIAL_RANGE`/tükenme koruması, id'leri sabitleyen
-   testler.) Id istemciye opak; göçte id korunur, bu değişmez.
+   testler.) Id istemciye opak; göçte id korunur, bu değişmez. *(Cevap:
+   evet, herkese — A30'da iç içe basımla yapıldı.)*
 4. **A10'un önceliği** — Unity tarafında enterpolasyon taahhüdü var mı?
    Varsa sıra 1 → 2 → A10; yoksa 1 → 2 ve A10 bekler.
 5. **A22 BACKLOG'da nasıl kalsın?** Öneri: tetikleyicisi "(d)+A10
@@ -2818,6 +2844,171 @@ birim testi, +1 `loadgen_games` yakalama testi; args testine bir ret
 satırı); `cargo clippy --workspace --all-targets -- -D warnings` 0;
 `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` temiz;
 hiçbir bayt sabitleme testine dokunulmadı.
+
+### A30 — kompakt wire id: iç içe basım (2026-09-25)
+
+**Motor geneli varsayılan, istemci kuralı değişmedi** (`core/a30-compact-ids`;
+BACKLOG A30, E7'nin "kompakt wire id: evet"i). A22 ölçümü wire id'lerin
+kaydın %19–40'ı olduğunu gösterdi: shard `k` kimliklerini `k · 2^20`'den
+basıyordu (3–4 baytlık varint). Artık `N` shard'lı odada shard `i`'nin
+`n`'inci çekimi **`(n − 1) · N + i + 1`** (`gsb_core::shard::interleaved_id`);
+zarf düzeni ve istemci kuralları aynı, yalnız id DEĞERLERİ değişti.
+
+**Motorun wire id'den beklediği (değişmezler):**
+
+1. *Oda enkarnasyonunda tekil*, shard'lar arası da — istemci görünümü
+   kendi shard'ının kayıtlarını ödünç alınanlarla birleştirir, snapshot
+   defterleri wire id'ye göre haritadır.
+2. *Enkarnasyonda yeniden kullanılmaz* (despawn'dan sonra bile) — C1'in
+   uzak etki hedef kimliği `(wire, epoch)`, epoch oda enkarnasyonunun
+   (CROSS-SHARD §4b madde 1); yeniden çekilen id bayat bir etkiyi
+   yeni gelene indirirdi.
+3. *Göçte korunur* — `Migrating::wire` ile taşınır, alıcı
+   `Minter::arrival` ile yeniden `WireId` yapar (çekim değil).
+4. *Koordinasyonsuz basılır* — spawn senkron tick gövdesinde; kilit,
+   mesaj, await yok; shard'lar durum paylaşmaz.
+5. *Deterministik sıralama* — motorun wire'a göre sıraladığı yerler
+   (kristalleşmenin alçak/yüksek kuralı, takım görünümünün wire sırası
+   `sharded/team/content.rs`, ithal kayıtların sırası
+   `shard/team/imports.rs`) düz `u64` karşılaştırması: her tekil şema
+   bunu korur.
+
+**Aralık bölümlemesine dayanan yerler (hepsi bulundu, hepsi değişti):**
+
+| Yer | Eskiden | Şimdi |
+|---|---|---|
+| `gsb_core::shard::SHARD_SERIAL_RANGE` (aralık boyu) | `1 << 20` | kaldırıldı → `SHARD_SERIAL_CAPACITY` (shard başına çekim sınırı, aynı `1 << 20`) + `interleaved_id(i, N, n)` + `minting_shard(id, N)` (`shard/serial.rs`, tek formül) |
+| `ShardLogic::serial_base/serial_range/serial_used` | taban + aralık boyu + kullanılan | `serial_base` kaldırıldı (çekirdek hiç okumuyordu), `serial_range` → `serial_capacity`; `serial_used` aynı |
+| Çekirdeğin join koruması (`shard/actor/messages.rs`) | `used + 1 >= range` → `RoomFull` | `used + 1 >= capacity` → `RoomFull`, aynı log/hata yolu |
+| Kit `Minter::Range { base, used }` (`identity.rs`) | `base + n` | `Minter::Interleaved { index, shards, used }` → `interleaved_id` |
+| `ShardedRoom::with_game` (`sharded/room.rs`) | `Minter::range(i · 2^20)` | `Minter::interleaved(i, partition.shard_count())`; takım/spatial kompozitleri yalnız devrediyor |
+| Oyuncu kimliği (`mint_player`) | aynı sayaçtan, aralıkta | aynı sayaçtan, iç içe (tükenme sayımı tek sayı kalsın diye) |
+| "Hangi shard bastı" türetmesi | yalnız testlerde `id / 2^20` (`mmo_e2e`, `mmo_home`) | `minting_shard(id, 4)`; motor kodunda böyle bir yol YOK: etki yönlendirmesi borç vereni + iletim tablosunu, kristalleşmenin çapası borç vereni izliyor, takım ihracı wire'ı opak taşıyor |
+| Test taslakları (çekirdekte 12 `ShardLogic` taslağı, kit testleri) | `i · RANGE + x` ile "başka shard'ın id'si" uydurma | `interleaved_id(i, N, x)`; kendi politikasını belgeleyen iki taslak (`join_identity`'nin `SPAN`'ı, `reconnect`'in `SHARD_SPAN`'ı — indeks 0 tek oda gibi saysın diye) kendi şemasında kaldı |
+
+**Şema.** Her shard mod `N`'de kendi kalıntı sınıfını basar: sınıflar
+sayaçlar ne olursa olsun ayrık (1, 4), sınıf içinde sayaç geri gitmez
+(2), taşınan id çekim değildir (3), gereken tek bilgi `(i, N)` — ikisi de
+enkarnasyon boyunca sabit (bölmenin shard sayısı; yeniden kurulum yeni
+enkarnasyon, taze sayaçlar). Her shard `n` çektiğinde oda tam
+`1 ..= n·N`'yi kullanmıştır (yoğun); `N = 1` tek oda gibi 1, 2, 3, …
+sayar, shard 0'ın ilk id'si eskisi gibi 1. Basan shard `(id − 1) mod N`.
+
+**Tükenme sınırı.** Shard başına `SHARD_SERIAL_CAPACITY = 2^20` çekim;
+bir join sınırı aşacaksa (`serial_used() + 1 >= serial_capacity()` — bir
+join iki çekim yapar: oyuncu + entity) `RoomFull`, uyarı logu
+("raise the bound: SHARD_SERIAL_CAPACITY"), registry rezervasyonu
+bırakır — yol aynı. Fark: tekillik artık sınıra dayanmıyor (sınıflar
+her sayıda ayrık; eski aralıklarda sınırı aşan çekim komşu aralığa
+taşardı — üstelik orphan damgalaması (oyunun spawn ettiği NPC) koruma
+dışındaydı, yani çok NPC'li bir shard teorik olarak komşusunun aralığına
+basabilirdi; şimdi basamaz). Sınır her id'yi `2^20 · N` altında tutuyor
+— eski aralıkların tavanı.
+
+**Elenen alternatifler.**
+
+- *Daha dar aralıklar* (`i · 2^k`, küçük `k`): shard başına sabit ofset
+  kalır (4'lü odada shard 3 `3 · 2^k`'dan başlar), küçük `k` tükenmeyi
+  erişilebilir yapar; iç içe basım aynı sınırla en küçük değerleri verir.
+- *`n · N + i`* (serial 1'den): 1 … N−1 hiç basılmaz, shard 0 `N`'den
+  başlar; `+ 1`'li biçim 1'den yoğun.
+- *Registry'nin dağıttığı ayırıcı* (spawn başına gidiş-dönüş ya da id
+  partileri): koordinasyon — tick gövdesinde await ya da paylaşılmayan
+  tasarımda paylaşılan bileşen; önceden alınmış parti "ekstra adımlı
+  aralık bölümlemesi".
+- *Bağlantı başına wire'da yeniden eşleme* (her istemci kendi küçük
+  id'lerini görür): encode-once'ı bozar — grup karesi ve paylaşılan hücre
+  parçası tüm üyeler için bir kez kodlanır.
+- *Oyuncu id'si ile wire id'ye ayrı sayaç* (join iki değil bir wire
+  çekimi yapardı → shard'lı id'ler kabaca yarıya): tükenme koruması tek
+  sayı saysın diye paylaşılan sayaç korundu; ayrı bir tur konusu.
+
+**Davranış notu.** Kristalleşmede "yüksek wire taşınır" kuralı aynı,
+ama "yüksek wire" artık "yüksek indeksli shard'ın bastığı" değil, kabaca
+"aynı sayıda çekimde daha geç çekilen" (CROSS-SHARD §4c madde 3'e not
+düşüldü); takım görünümünün bütçe kesmesi de wire sırasıyla — eskiden
+alçak indeksli shard'ların entity'leri öne düşüyordu, şimdi daha eski
+çekimler. İkisi de deterministik ve iki shard mesajsız anlaşıyor.
+
+**Testler (önce başarısız).** Önce API'yi eski formülle kurdum (tüm eski
+testler yeşil kaldı — yeniden düzenleme davranışı korudu), yeni testler
+kırmızıydı; sonra formülü değiştirdim:
+
+- `shard::serial::tests` (3): shard'lar hiçbir zaman aynı değeri çekmez
+  ve değer basanı adlandırır (N = 1…9, 300 çekim); ilk `n` çekim tam
+  `1 ..= n·N` (eski formülle kırmızı: 1048577…); sınır `2^20 · N`'yi
+  aşmaz.
+- `shard::tests::identity::a_shard_refuses_joins_past_its_serial_capacity`:
+  kapasite 4'te üç join (2, 4, 6 — 2 shard'ın shard 1'i), dördüncüsü
+  `RoomFull`, hiçbir şey bağlanmaz; bir leave çekim geri vermez.
+- `shard::tests::migration::ownership::wire_identity_stable_and_disjoint`:
+  ilk çekimler `(1, 2)`, `minting_shard` `(0, 1)`; göçte id aynı (eski
+  aralık iddiaları bunlara çevrildi).
+- Kit `identity::tests::shard_draws_share_one_counter` (3, 7, 11 —
+  4'lünün shard 2'si), `a_single_shard_counts_like_a_single_world`;
+  `sharded::tests::identity::wire_ids_are_compact_disjoint_and_stable`
+  (ilk join'ların wire'ı 5 ve 6, göçte id korunur, varış çekim değildir:
+  alıcının sonraki wire'ı 14) ve `a_value_is_never_drawn_twice_in_a_room`
+  (dört shard × 50 tur join + NPC spawn + NPC despawn + leave: 600
+  çekim tam 1..=600, her biri kendi shard'ını adlandırıyor).
+- Değerleri kasten değişen, bayt sabitlemeyen testler: yukarıdaki göç
+  testi (ilk çekim değerleri) ve iki MMO testinin `minted_by`'ı. Uydurma
+  id'li testlerde çakışma/sıra düzeltmesi: `lent_arrival` iki testi
+  (beklenen görünüm artık sıralanıp karşılaştırılıyor — sahiplik
+  değişmedi, yalnız sayıların sırası), `crystal::signal::the_state_stays_bounded`
+  (uydurma rakipler 1..=3·CAP'ti ve B'nin yeni wire'ı 4'e çarptı → rakipler
+  artık shard 0'ın sınıfından). **Hiçbir bayt sabitleme testi
+  değişmedi:** zarf düzeni aynı ve sabitlenen id'ler ya tek odadan ya da
+  uydurma değer.
+
+**Mutasyonlar** (dosya scratchpad'e yedeklendi, bozuldu, hedef testler
+koşuldu, yedekten geri yüklendi — hepsi kırıldı):
+
+| Değişmez | Mutasyon | Kıran testler |
+|---|---|---|
+| shard'lar arası tekillik | formülden `+ index` düştü | `serial` 3 testi + çekirdek 4 (tükenme, göç kimliği, sınır görünürlüğü, hayalet göç), kit 3 |
+| despawn sonrası yeniden kullanmama | `Minter::Interleaved` sayacı ilerlemiyor | kit 5 test (600 çekim, ilk çekimler, `game::tests::every_game_spawning_room_hands_the_game_the_identity`) |
+| göçte koruma (kit) | `arrival` → `wire + 1` | `wire_ids_are_compact_disjoint_and_stable`, `shard_draws_share_one_counter` |
+| göçte koruma (çekirdek) | migrate-in `wire + 1` kurar | `wire_identity_stable_and_disjoint` |
+| tükenme koruması | `>=` → `>` ; koruma kaldırıldı | `a_shard_refuses_joins_past_its_serial_capacity` (ikisinde de) |
+
+**Ölçüm** (release, `gsb-loadgen N --game G --duration 10
+--write-stall-secs 0 --capture DIR --capture-clients 8`, demo için ayrıca
+`--visibility spatial --topology sharded --shard-count 4`; `f59d432`
+(önce) ile bu dal (sonra) dönüşümlü çiftler: önce, sonra, önce, sonra;
+32 çekirdek, başka ajanların işleriyle yüklü makine). Her koşuda
+`joined = left = N`, `errors=0`, `server_closes=0`, `dropped=0`,
+`server_hz` 29,94–30,00. `out_bps_per_conn` RESULT satırından; "örnek
+istemci B/sn" ve id boyu A22'nin çözümleyicisiyle yakalanan sekiz
+istemciden (yeniden kodlama sağlaması 32/32 birebir):
+
+| Oyun | N | `out_bps_per_conn` önce (1 / 2) | sonra (1 / 2) | Δ | örnek istemci B/sn önce → sonra | Δ | id alanı B (etiket + varint) önce → sonra | 1 dk yük önce | sonra |
+|---|---|---|---|---|---|---|---|---|---|
+| demo (sharded × spatial) | 200 | 11 965 / 11 642 | 10 079 / 9 891 | **−15,4 %** | 12 071 → 10 178 | −15,7 % | 4,00 → 2,68 | 23,3 / 19,6 | 21,4 / 17,5 |
+| demo | 500 | 25 788 / 27 715 | 24 216 / 24 449 | **−9,0 %** | 28 956 → 25 886 | −10,6 % | 4,06 → 2,87 | 21,1 / 26,1 | 28,5 / 26,6 |
+| arena (tek oda) | 200 | 40 143 / 40 577 | 39 915 / 40 308 | −0,6 % | 41 784 → 41 259 | −1,3 % | 2,35 → 2,35 | 30,2 / 28,0 | 28,6 / 26,9 |
+| arena | 500 | 96 957 / 98 962 | 98 966 / 99 086 | +1,1 % | 104 250 → 106 724 | +2,4 % | 2,74 → 2,73 | 28,7 / 24,2 | 28,4 / 21,5 |
+| MMO (sharded × spatial) | 200 | 21 369 / 21 815 | 19 609 / 19 879 | **−8,6 %** | 22 109 → 20 302 | −8,2 % | 3,94 → 2,69 | 19,3 / 19,2 | 17,7 / 22,9 |
+| MMO | 500 | 50 710 / 50 675 | 46 926 / 47 229 | **−7,1 %** | 54 682 → 51 357 | −6,1 % | 3,62 → 2,87 | 29,7 / 29,9 | 30,5 / 29,3 |
+| savaş (team × sharded) | 200 | 64 965 / 64 669 | 60 738 / 60 260 | **−6,7 %** | 66 767 → 62 152 | −6,9 % | 4,07 → 2,71 | 28,5 / 28,9 | 28,4 / 29,2 |
+| savaş | 500 | 177 073 / 178 001 | 163 652 / 163 824 | **−7,8 %** | 192 100 → 175 187 | −8,8 % | 4,24 → 2,89 | 27,8 / 26,3 | 26,5 / 23,3 |
+
+- **Ortalama id boyu:** varint 2,6–3,2 B → **1,7–1,9 B** (alan etiketiyle
+  3,6–4,2 → 2,7–2,9 B). Sonrasında shard'lı oyunlarda id'lerin tamamı
+  1–2 B (200'de %28–33'ü 1 B, 500'de %11–14'ü); önce %35–58'i 4 B idi.
+- **A22'nin tahminiyle uyumlu** ("P0 + kompakt id": demo −14/−10, MMO
+  −7/−6, savaş −7/−7). Arena tek oda: değişmedi (±%1–2 gürültü; id'ler
+  zaten `Sequential`). Sonraki yakalamalarda çözümleyicinin "P0 + kompakt
+  id" satırı %0,0 — kalan kaldıraç yok.
+- 500'de demo'nun çift içi yayılımı büyük (önce 25,8 k / 27,7 k): yük
+  ortalaması 21–29 arası oynadı; yön dört çiftte de aynı.
+
+**Doğrulama:** 821 → **827** test / 0 hata / 1 ignored (+3 `serial`,
++1 çekirdek tükenme, +1 kit tek-shard sayımı, +1 kit 600 çekim; kit'in
+eski aralık testi yeni kimlik dosyasına taşındı); `cargo clippy
+--workspace --all-targets -- -D warnings` 0; kapanış kontrolü, beş özellik
+derlemesi ve `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
+temiz.
 
 ## 11. Kabul kriteri
 

@@ -19,7 +19,7 @@ kökten ortadan kalkabilir.
 |---|---|
 | **Ortak (~17)** | `GroupKey`, `snapshot_op`, `private_op`, `group_of`, `snapshot`, `private`, `on_join`, `on_leave`, `on_disconnect`, `may_release`, `on_detach_expired`, `resume_lookup`, `on_resume`, `ingest`, `update`, `on_shutdown`, `encoded_records` |
 | **Yalnız Room** | `handle_request` (RPC), `match_result`, `keepalive` |
-| **Yalnız Shard** | `State`, `index`, `shard_count`, `serial_base/range/used`, `neighbors`, `collect_migrations`, `on_migrate_in/out`, `collect_border`, `own_wires` |
+| **Yalnız Shard** | `State`, `index`, `shard_count`, `serial_capacity/used` (A30'dan önce `serial_base/range/used`), `neighbors`, `collect_migrations`, `on_migrate_in/out`, `collect_border`, `own_wires` |
 
 Shard'ın eksikleri tesadüf değil: RPC pending-set/sweep'i, result-sink
 ve keepalive kadansı **aktör makinesi** gerektirir. Trait kopyası ile
@@ -37,7 +37,7 @@ GameLogic<W>                     ← 17 ortak metot (tek kaynak)
        collect_migrations, on_migrate_in/out, collect_border, own_wires)
 ```
 
-Derleme zamanı ayrım korunur: `neighbors()`/serial aralığı sharded
+Derleme zamanı ayrım korunur: `neighbors()`/serial kapasitesi sharded
 oyun için **zorunluluğunu kaybetmez** — unutulursa derlenmez, sessiz
 migrasyon kırılımı yapısal olarak imkânsızdır.
 

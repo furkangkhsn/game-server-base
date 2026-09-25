@@ -1322,15 +1322,23 @@ hücresi içine girdiğinde (AOI ile aynı bölge testi) shard onu
    tabloya baksaydı canlı join'ı reddederdi). Detay + testler: ROADMAP
    "Kapatılanlar (oda segmentasyonu turu)".
 
-**Wire kimliği (range partitioning).** Her shard kendi `WireId`
-aralığını basar: shard `i` → `i * 2^20 + serial` (`SHARD_SERIAL_RANGE =
-1 << 20`). Bu, (a) id'lerin shard'lar arası **çakışmasız** olmasını
-sağlar (ayrı aralıklar), (b) id'in **migrasyonda değişmemesini** sağlar
-(entity taşınırken `WireId`'siyle gider — istemci dünyasında kimlik
-stabil), (c) join'da aralık dolarsa `RoomFull` (sessiz taşma yok).
-Paylaşımlı (global) sayacı reddetme nedeni: join senkron tick gövdesinde
-koştuğu için global bir "sonraki id" kaynağı shard'lar arası senkronizasyon
-gerektirirdi; range partitioning bunu sıfır senkronizasyonla çözer.
+**Wire kimliği (iç içe basım — A30; önceden range partitioning).**
+`N` shard'lı odada shard `i`'nin `n`'inci çekimi `(n − 1) · N + i + 1`
+(`gsb_core::shard::interleaved_id`): her shard mod `N`'de kendi kalıntı
+sınıfını basar. Bu, (a) id'lerin shard'lar arası **çakışmasız** olmasını
+sağlar (ayrık sınıflar, sayaçlar ne olursa olsun), (b) id'in
+**migrasyonda değişmemesini** sağlar (entity taşınırken `WireId`'siyle
+gider — istemci dünyasında kimlik stabil; alıcıda çekim değil), (c) bir
+enkarnasyonda id'in **yeniden kullanılmamasını** sağlar (sayaç geri
+gitmez), (d) id'leri **küçük** tutar: her shard `n` çektiğinde oda tam
+`1 ..= n·N`'yi kullanmıştır (eski `i * 2^20` aralıkları 3–4 baytlık
+varint'ti, kaydın %19–40'ı). Shard başına çekim sınırı
+`SHARD_SERIAL_CAPACITY = 1 << 20`: join bu sınırı aşacaksa `RoomFull`
+(sessiz taşma yok); her id ≤ `2^20 · N` (eski tavan). Paylaşımlı (global)
+sayacı reddetme nedeni: join senkron tick gövdesinde koştuğu için global
+bir "sonraki id" kaynağı shard'lar arası senkronizasyon gerektirirdi; iç
+içe basım (range partitioning gibi) bunu sıfır senkronizasyonla çözer.
+Tasarım, değişmezler ve elenen alternatifler: KIT-ARCHITECTURE §10 "A30".
 
 **Sınır görünürlüğü (1-tick hizalama).** Komşu shard'lar her tick
 `BORDER` fazında sınıra yakın entity'lerinin **tam durumunu**
@@ -1359,7 +1367,8 @@ olayda N−1 no-op kabul edilebilir, kayıp güncelleme değil.
 
 **Kapasite.** Cap oda düzeyinde **tama** tutulur (registry
 `members + pending >= cap`); shard başına `ceil(cap/N)` değil —
-range-partitioned join, cap'in shard'lar arası dağılımını bilmez.
+shard'ın join'ı (kimliği kendi sayacından basar), cap'in shard'lar arası
+dağılımını bilmez.
 
 **Ölçümle sonuç (ayrı proses, `all`, 10k, 30 Hz; detay ROADMAP'te):**
 tek oda (`all`) 10k'da adım bütçesini aşıyor (p50 üstü adımlar,
