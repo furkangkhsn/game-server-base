@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **818** (818/818 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **821** (821/821 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **W2 — doğrulama oyunu "Cephe"** (KIT-ARCHITECTURE §10 "W2
+Son tur: **A22 faz 0** (KIT-ARCHITECTURE §10 "A22") — ölçüm + tasarım,
+wire değişmedi: değer-göreli kodlama şimdilik YAPILMAYACAK; kaldıraç
+sırası kompakt wire id → paketli kayıt koşusu + oyun kodeği → A10.
+Bakımcının beş cevabı bekleniyor (BACKLOG E7). Ölçüm aracı:
+`gsb-loadgen --capture`.
+Önceki tur: **W2 — doğrulama oyunu "Cephe"** (KIT-ARCHITECTURE §10 "W2
 sonucu", CROSS-SHARD §8b.8) — `gsb-demo-war`: üç fraksiyon, 2×2 shard
 üstünde takım sisi (müttefik harita geneli, düşman bir kulenin ya da
 müttefiğin görüşüyle); `game = "war"`, `--game war`; takım sayaçları

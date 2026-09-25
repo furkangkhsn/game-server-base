@@ -5,6 +5,39 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A22 faz 0 — değer düzeyinde delta: ölçüm ve tasarım (`kit/a22-value-delta`)
+
+Wire değişmedi (KIT-ARCHITECTURE §10 "A22 — değer düzeyinde delta").
+Tek kod: `gsb-loadgen --capture DIR [--capture-clients K]` — örneklenen
+istemcilerin oyun bandı kareleri + JOIN sonucu `client-<id>.gsbcap`'e
+(ölçüm aracı; orkestre/serve/churn reddedilir; yakalanan dosya
+`ClientView`'dan geçince istemcinin sayaçlarını birebir veriyor — test).
+
+- **Bayt anatomisi** (dört oyun, 200/500): bandın %87–96'sı grup
+  delta'ları; kayıt başına çerçeve (tag + uzunluk) %11–20, wire id
+  %19–40 (shard aralığı `k·2^20` → 3–4 B varint), konum %33–64, diğer
+  alanlar MMO/savaşta %25–33. Delta kayıtlarının %99'u yalnız konum
+  değiştiriyor ve tick başına değişim hep 1 zigzag bayta sığıyor.
+- **Yeniden oynatım** (500, bugüne göre): yalnız sıkı oyun kodeği
+  −25…−38 %; + paketli kayıt koşusu + kompakt id −43…−58 %; değer-göreli
+  kodlamanın bunun ÜSTÜNE katkısı −2…+8 puan (MMO +23); bağlantı başına
+  onaylı baseline 1000'de tick bütçesini aşıyor (arena ~35 ms/tick);
+  A10 (15 Hz) + mutlak sıkıştırma −59…−74 %.
+- **rUDP kayıp simülasyonu:** göreli seçenekler bayat görünüm oranını
+  5–10 kat artırıyor (baseline denetimsiz göreli: sessizce YANLIŞ
+  değer); küçük kareler ise parçalanmayı azalttığı için bugünkü kurallarda
+  bayatlığı yarıya indiriyor.
+- **Öneri:** değer-göreli kodlama şimdilik yapılmayacak; kaldıraç sırası
+  kompakt wire id → paketli kayıt koşusu + oyun kodeği → A10; A22 ancak
+  bunlardan sonra hâlâ baskı gören AOI tipi bir oyun için (adlandırılmış
+  baseline + resync). Beş bakımcı sorusu açık (BACKLOG E7).
+- **Yan bulgu (A22-1):** fan-out düşmesi one-shot full içeren batch'i
+  atınca `Baselines` istemciyi baseline'lı sayıyor — bugün zararsız
+  (keep-alive iyileştirir), herhangi bir göreli şemada doğruluk hatası
+  (BACKLOG F11).
+
+Testler 818 → 821. Çözümleyici (~1 850 satır) repoda değil.
+
 ## W2 turu — doğrulama oyunu "Cephe" (`demo/w2-war`)
 
 Kit'in dördüncü doğrulama oyunu ve W1'in `team × sharded` kompozitinin ilk

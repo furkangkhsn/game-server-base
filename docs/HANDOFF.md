@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-818 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+821 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**A22 faz 0 tamam** (KIT-ARCHITECTURE §10 "A22", CHANGELOG "A22 faz
+0"): kodda yalnız `gsb-loadgen --capture`; bölüm ölçümleri ve öneriyi
+içeriyor. Sıradaki iş bakımcının beş cevabına bağlı (BACKLOG E7): kayıt
+gövdesi protobuf'tan çıkabilir mi, zarfın yeni alanı nasıl sürümlenir,
+wire id basımı değişebilir mi, A10/Unity interpolasyon önceliği, A22
+tetikleyicisi. Uygulama turları `--capture` + `ClientView` ile ölçer.
 
 **W2 tamam** (KIT-ARCHITECTURE §10 "W2 sonucu", GAME-MODULE "W2 sonucu",
 CROSS-SHARD §8b.8): "Cephe" (`gsb-demo-war`) kompoziti kit'e dokunmadan
@@ -422,6 +429,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 818 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 821 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
