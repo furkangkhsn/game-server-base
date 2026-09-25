@@ -36,7 +36,9 @@ architecture for MOBA / MMORPG projects.
   `Endpoint` abstraction touching zero lines of actor code: plain TCP (default),
   TLS-TCP (rustls), rUDP (`transport = "udp"`; stateless cookie
   handshake: cookie rotates in 10 s slots, captured proof
-  expires within 10-20 s; reliable control band `REL`: if there is no ACK
+  expires within 10-20 s; lost handshake datagrams are re-sent until the
+  server's accept (`ACK{1}`) arrives — `connect` returns only for a session
+  the server holds, and gives up cleanly after 5 s; reliable control band `REL`: if there is no ACK
   progress for 5 s, the band is declared dead and the SESSION
   TERMINATES, no silent surrender; loss-tolerant game band `RAW`; over-MTU game frames are split into
   `FRAG` datagrams and reassembled by the client — at most 16 fragments,
@@ -75,7 +77,7 @@ clippy `-D warnings` · test · rustdoc `-D warnings` · the Autobahn RFC 6455 f
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 704 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 713 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -127,7 +129,8 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 # In-process: a real server (ephemeral port) + N real TCP clients;
 # server-side metrics are captured from the channel (no stdout parsing).
 # --stagger-ms MS: client i connects after an i×MS delay (default 0 = all at once;
-#  a loopback burst is the worst case for the accept path, see the ROADMAP finding).
+#  a loopback burst is the worst case for the accept path; rUDP heals a lost
+#  handshake datagram by re-sending it, counted as `hs_retries`).
 # --addr HOST:PORT: client-only mode against an external server.
 # --game demo|arena|mmo (default demo): the clients' bot and the in-process /
 #  served server's `game` key (forwarded to both orchestrated children). The

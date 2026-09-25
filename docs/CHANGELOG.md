@@ -5,6 +5,45 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## H turu — rUDP el sıkışma kaybı (`net/h-udp-handshake`)
+
+İstemci proof'u GÖNDERİNCE kendini bağlı sayıyordu; aynı anda 200+ el
+sıkışmada loopback'te sunucu soketinin alım kuyruğu taşıyor, proof
+kayboluyor, AUTH boşa düşüp REL bandı 5 sn sonra ölüyordu (U'nun yan
+bulgusu, BACKLOG 4b). Artık sunucu doğrulanan proof'a **kabul**
+(`ACK{1}`, 5 B) yolluyor; `UdpClient::connect` ancak sunucu oturumu
+tuttuğunu gösterince (kabul ya da herhangi bir oturum datagram'ı — o
+kaybolmaz, teslim edilir) dönüyor; o zamana kadar güncel adım (challenge
+isteği/proof) 50 ms'de bir yeniden gönderiliyor, 5 sn'de (REL canlılık
+sınırı) temiz `TimedOut`. Sunucu proof'ta idempotent: kurulu adresten
+gelen geçerli proof oturumun güncel ACK'iyle cevaplanıyor — ikinci
+oturum/`ConnectionId` yok; challenge isteği ya da geçersiz proof
+cevapsız (yansıtma yok). Vazgeçme sınırı < cookie dilimi (derleme
+zamanı `assert`): yeniden gönderim ilk cookie'yi kullanır, rotasyonu
+aşsa da doğrulanır (DESIGN §6 "El sıkışma kaybı", SECURITY §4.2).
+
+- **Bedel (pinlendi):** olaysız el sıkışma +1 datagram (5 B), `connect`
+  +1 RTT (QUIC Retry / DTLS HelloVerifyRequest şekli).
+- **Sayaçlar:** istemci `challenge_retries`/`proof_retries`, loadgen
+  `hs_retries`, sunucu demux `proofs_reanswered`.
+- **Elenen:** `SO_RCVBUF` büyütmek (B4; eşiği taşır, kaldırmaz), sunucu
+  tarafında el sıkışma hızlandırma (çekirdek datagram'ı sunucu görmeden
+  atıyor), kabulsüz ilk-datagram onayı (sessiz istemci bağlı olduğunu
+  öğrenemez), her karede cookie.
+- **rustdoc:** `udp/` altındaki 17 uyarı giderildi; küçük paketin
+  `pub mod udp` üzerindeki geçici `allow`'u kaldırıldı (ebeveyn). Yan
+  temizlik: DESIGN'daki eski "250 ms'de vazgeç" cümlesi, demux'ta kalkmış
+  `RETRANSIT_MAX` yorumu, orkestratörün `frag_*` anahtarlarını diğerleri
+  kadar katı ayrıştırması.
+
+A/B (1a0fc77'e karşı, `--stagger-ms` YOK, dönüşümlü, yük 6–30):
+joined/left demo 200 74,68 → 200,200; demo 500 149,161 → 500,500; arena
+200 99,70 → 200,200; arena 500 182,176 → 500,500. `gave_up` 202–702 →
+0; istemci `retrans_out` ~9–31 k → ~100–700; connect p99 ~0,5–1,5 sn →
+69–156 ms; hata/kapanış 0, 30 Hz. TCP demo 200 aynı. Testler 704 → 713
+(+9). Ajanın 16 mutasyonu yakalandı; ebeveynin bağımsız mutasyonu
+(tekrar gelen proof'a kabulü yeniden göndermemek) 2 testi kırıyor.
+
 ## Küçük paket turu (`misc/small-bundle`)
 
 Altı bağımsız madde, her biri kendi katmanında ve kendi commit'inde.

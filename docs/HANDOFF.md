@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-704 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+713 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -146,6 +146,12 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, takım odasında delta, team × sharded + senaryosu).
 
+**H tamam** (DESIGN §6 "El sıkışma kaybı", SECURITY §4.2, CHANGELOG
+"H turu"): rUDP `connect` sunucunun kabulünü (`ACK{1}`) bekliyor, kayıp
+proof/challenge/kabul yeniden gönderimle iyileşiyor, 5 sn'de temiz
+`TimedOut`. Loadgen rUDP ölçümlerinde artık `--stagger-ms` gerekmiyor;
+el sıkışma kaybı `hs_retries` ile görünür.
+
 **Küçük paket tamam** (CHANGELOG "Küçük paket turu"). Kendi özel yükü
 olan bir oyun `Game::session_private`'ı ezer: kit onu oturum başına bir
 kez (join ve resume sonrası ilk private karede, göçte değil) sorar, alan
@@ -159,8 +165,7 @@ birlikte değişir. rustdoc artık CI kapısı.
 **U tamam** (DESIGN §6 "MTU", SECURITY §4.1, CHANGELOG "U turu"): rUDP
 oyun bandında bütçeyi aşan kare FRAG datagram'larıyla gidiyor, istemci
 birleştiriyor (16 parça, 4 slot, 64 KiB, 250 ms); kit/çekirdek zarfı
-değişmedi. Loadgen rUDP ölçümlerinde `--stagger-ms 5` kullanın (el
-sıkışma proof kaybı düzelene dek — BACKLOG §1).
+değişmedi.
 
 **K4 tamam** (GAME-MODULE "K4 sonucu", CHANGELOG "K4 turu"): sharded
 yönlendirici `(conn, kimlik)` alıyor (`gsb_core::registry::HomeShard`),
@@ -387,6 +392,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 704 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 713 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
