@@ -5,6 +5,47 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## K4 turu — oyuncu kimliği → ev shard'ı (`kit/k4-player-home`)
+
+Çekirdek, sharded odanın join yönlendiricisine ve oyunun join kancasına
+oyuncunun **doğrulanmış kimliğini** veriyor (GAME-MODULE "K4 sonucu"):
+`registry::HomeShard = Arc<dyn Fn(ConnectionId, &str) -> usize + Send +
+Sync>` (`BuiltRoom::Sharded::home_shard`'ın tipi) ve
+`GameLogic::on_join_as(world, conn, identity)` (varsayılanı `on_join`;
+oda ve shard taze join'de onu çağırır). Kimlik, çekirdeğin zaten resume
+anahtarı olarak taşıdığı dize: ticket'ın `player`'ı, ticket'sız
+geliştirme yolunda iddia edilen `Auth.name` (herkes her ad olarak
+girebilir — SECURITY §4b), anonimde boş. Yeni tip, yeni mesaj alanı yok;
+wire baytları aynı. `PlayerId` taşıyıcı olamaz: join'in ÇIKTISI.
+
+- **Kit:** `Game::spawn_player_as` (varsayılanı `spawn_player`; açık,
+  AOI, sektör, sharded ve sharded×spatial odalar çağırır; takım odası
+  henüz çağırmıyor — W paketinde).
+- **MMO:** `Realm::logins` kimlikle anahtarlı (`with_login(name, pos)`,
+  `saved`); yönlendirici ve spawn aynı tabloyu okuyor; kaydısız/anonim
+  oyuncu varsayılan durak taşında. Park edilmiş karakter park edildiği
+  shard'da resume ediyor (broadcast-resume yönlendiriciden önce).
+- **Loadgen:** MMO'yu bot kadrosuyla barındırıyor (`lg-{id}` → waystone
+  `id mod 4` halkası); ilk-`Travel` hilesi kaldırıldı, bayrak tutulmadı
+  (sayılar G3 bandında).
+- **Kasıtlı API değişikliği:** `home_shard` closure'ları iki argüman
+  alır (`|conn, _identity: &str|`); `Realm::with_login` sayı yerine ad
+  alır.
+
+Testler 664 → 670 (çekirdek `join_identity` 2, kit 1, `mmo_home` 2,
+loadgen botu 2, yerine geçen dağılma testi −1). Ajanın mutasyonları
+(registry/shard/oda boş kimlik, MMO boş arama, ticket yerine `Auth.name`,
+resume broadcast'ını atlamak, loadgen'in katalog MMO'yu barındırması)
+yakalandı. Ebeveynin bağımsız mutasyonu (`Realm::saved` hep `None`):
+5 test kırılıyor (MMO birimi, loadgen kadrosu, `mmo_e2e`, iki
+`mmo_home`).
+
+**Ölçüm** (`gsb-loadgen 200 --game mmo --duration 10 --write-stall-secs
+0`, release, yük 5,0 / 4,6 / 3,8): `shard_members` 53,50,50,47 /
+54,49,50,47 / 54,47,51,48 — ilk `Travel` olmadan; step p50/p90 120/160,
+104/152, 120/160 µs; `out_bps_per_conn` ~21,4 k; `errors=0`,
+`server_closes=0`, 30 Hz, `gap_drops=155` (G3 ile aynı).
+
 ## D turu — göç tick'i: ölümlü kopyaya yerel darbe (`fix/d-migration-tick`)
 
 C2'nin yan bulgusu kapatıldı (CROSS-SHARD §4d). Göç eden entity eski

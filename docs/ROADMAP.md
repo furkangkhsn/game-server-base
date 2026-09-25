@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **664** (664/664 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **670** (670/670 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **D — göç tick'i** (CROSS-SHARD §4d) — göç eden entity'nin eski
+Son tur: **K4 — oyuncu kimliği → ev shard'ı** (GAME-MODULE "K4
+sonucu") — çekirdek yönlendiriciye ve join kancasına doğrulanmış kimliği
+veriyor (`HomeShard`, `on_join_as`), kit `spawn_player_as`'a iletiyor,
+MMO realm'i onunla anahtarlı; gerçek istemcilerle MMO yükü dört shard'a
+yayılıyor (200 bot: 53,50,50,47), loadgen'in ilk-`Travel` hilesi yok.
+Önceki tur: **D — göç tick'i** (CROSS-SHARD §4d) — göç eden entity'nin eski
 shard'daki ölümlü kopyasına `h + 1`'de inen yerel darbe artık yeni sahibe
 yönleniyor ve bir kez uygulanıyor (kopya oyun kancalarından gizli, yeni
 sahibin ödünç kaydı); kopya ikinci kez davranmıyor. Çekirdekte tek ekleme

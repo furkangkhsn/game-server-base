@@ -17,11 +17,11 @@ bağımsız mutasyon, `main`'e fast-forward. Push yok.
 | # | Paket | Yeri | Durum |
 |---|---|---|---|
 | 1 | **D — göç tick'i ölümlü kopyası:** göç eden entity kaynak dünyada bir tick daha duruyor, o tick'teki YEREL darbe kopyaya iniyor | `gsb_kit::sharded` (+ MMO testi) | ✅ `9ce1b1d` (CROSS-SHARD §4d) |
-| 2 | **K4 — oyuncu kimliği → ev shard'ı:** kayıtlı karakter oturuma bağlı, gerçek sunucuda herkes shard 0'da | çekirdek (ince seam: `home_shard` + join kancasına doğrulanmış kimlik) + kit + MMO. Anahtar: ticket'ın `player`'ı; ticket'sız eski yol (`Auth.name`) yalnız geliştirme yolu olarak belgelenir | sırada |
+| 2 | **K4 — oyuncu kimliği → ev shard'ı:** kayıtlı karakter oturuma bağlı, gerçek sunucuda herkes shard 0'da | çekirdek (ince seam: `home_shard` + join kancasına doğrulanmış kimlik) + kit + MMO. Anahtar: ticket'ın `player`'ı; ticket'sız eski yol (`Auth.name`) yalnız geliştirme yolu olarak belgelenir | ✅ `438c48b` (GAME-MODULE "K4 sonucu") |
 | 3 | **U — rUDP parçalama:** kümelenmiş MMO `snap_overflows` + arena G3-1 (full'lar 1400 B'yi aşıyor); rUDP 1472 B üstü datagramı atıyor | `gsb-net/udp` (oyun bandı, sunucu→istemci). Kit/çekirdek zarfı değişmez | yürüyor |
 | 4 | **Küçük paket:** G3-3 (arena istemcisi takımını wire'dan öğrenemiyor), G3-2 (join'de delta'lar private full'dan önce — inceleme), loadgen CLI hataları panikle, rustdoc uyarıları + CI doc kapısı, `max_detach_hold` sunucu config'inde yok, `RoomSample`'da zorlanmış bırakma / uzak etki / crystal sayaçları, göç sayısı raporu (F3) | her biri kendi crate'inde, ayrı commit | sırada |
 | 5 | **T — takım odasında delta:** arena yalnız full gönderiyor (bağlantı başı ~234 KB/s @1000) | `gsb_kit::team` (ortak delta motoru) | sırada |
-| 6 | **W — team × sharded kompoziti + onu gerektiren senaryo:** CROSS-SHARD §8 (registry-hub takım-export); yeni bir doğrulama oyunu (fraksiyon savaşı: takım sisi, shard'lı büyük harita) | kit + registry + yeni demo crate + sunucu modülü + loadgen botu | sırada |
+| 6 | **W — team × sharded kompoziti + onu gerektiren senaryo:** CROSS-SHARD §8 (registry-hub takım-export); yeni bir doğrulama oyunu (fraksiyon savaşı: takım sisi, shard'lı büyük harita); K4'ten: `TeamGame::spawn_team_player`'a kimlik | kit + registry + yeni demo crate + sunucu modülü + loadgen botu | sırada |
 
 ## 2. Bırakılanlar
 
@@ -85,7 +85,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 
 | Madde | Tetikleyici | Kaynak |
 |---|---|---|
-| C1 Kalıcılık (maç checkpoint'i; MMO kalıcılık servisi) | maç: tek makine çökmesi can sıkarsa; MMO: harita gerçek oyuncuya açılırsa | PERSISTENCE:94-109, ROADMAP:657 |
+| C1 Kalıcılık (maç checkpoint'i; MMO kalıcılık servisi). K4'ten: stok sunucunun MMO realm'inde karakter kaynağı yok (herkes waystone 0), çıkışta konum yazılmıyor | maç: tek makine çökmesi can sıkarsa; MMO: harita gerçek oyuncuya açılırsa | PERSISTENCE:94-109, ROADMAP:657 |
 | C2 Çok süreçli / çok makineli shard topolojisi (yerleşim config'i dahil) | A2, A4, B8 | DISTRIBUTED:25-40, CROSS-SHARD:670 |
 | C3 Otomatik shard dengeleyici | — | DISTRIBUTED:38, 264 |
 | C4 Sunucular/bölgeler arası, yük dengeleyici | — (v1 dışı) | ROADMAP:757, DESIGN:12 |

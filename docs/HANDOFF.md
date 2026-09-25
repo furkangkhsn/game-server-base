@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-664 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+670 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,15 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, takım odasında delta, team × sharded + senaryosu).
+
+**K4 tamam** (GAME-MODULE "K4 sonucu", CHANGELOG "K4 turu"): sharded
+yönlendirici `(conn, kimlik)` alıyor (`gsb_core::registry::HomeShard`),
+taze join `GameLogic::on_join_as`'tan geçiyor, kit `Game::spawn_player_as`'ı
+çağırıyor, MMO `Realm::logins` kimlikle anahtarlı. Ticket'sız yolda
+kimlik = iddia edilen `Auth.name` → yalnız geliştirme yolu (SECURITY
+§4b). Loadgen MMO'yu bot kadrosuyla barındırıyor (`bot/mmo/roster.rs`).
+Stok `gsb-server` MMO'sunda kayıtlı karakter yok (kalıcılık gelene dek
+herkes waystone 0'da).
 
 **D tamam** (CROSS-SHARD §4d, CHANGELOG "D turu"): `h`'de devredilen
 entity'nin kopyası `h + 1`'de eski dünyada durur ama oyunun kancaları onu
@@ -362,6 +371,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 664 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 670 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
