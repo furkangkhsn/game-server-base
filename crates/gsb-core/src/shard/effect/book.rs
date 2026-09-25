@@ -6,8 +6,10 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::shard::border::NeighborView;
 use crate::shard::effect::window::{Seen, Window};
 use crate::shard::effect::{EFFECT_BUDGET_PER_TICK, EffectId, RemoteEffect};
+use crate::shard::seam::CrossSeam;
 
 /// Effect counters of one shard, cumulative since birth (read by the
 /// tests, logged by the ~1 s summary line when they moved).
@@ -142,6 +144,17 @@ impl EffectBook {
     pub(crate) fn fold_outbox(&mut self) {
         self.stats.emitted += std::mem::take(&mut self.out.emitted);
         self.stats.refused += std::mem::take(&mut self.out.refused);
+    }
+
+    /// The seam the tick hooks receive: the borrowed strip (`views`,
+    /// read in `lenders` order) with this book's forwarding table and
+    /// outbox.
+    pub(crate) fn seam<'a, S>(
+        &'a mut self,
+        views: &'a HashMap<usize, NeighborView<S>>,
+        lenders: &'a [usize],
+    ) -> CrossSeam<'a, S> {
+        CrossSeam::new(views, lenders, &self.forwarded, &mut self.out)
     }
 
     /// The duplicate check for `id` (its origin already validated).

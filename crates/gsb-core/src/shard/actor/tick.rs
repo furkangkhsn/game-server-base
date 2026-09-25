@@ -265,7 +265,7 @@ where
             &mut self.world,
             &ctx,
             &mut actions,
-            &mut CrossSeam::new(&self.border, &self.lenders, &mut self.effects.out),
+            &mut self.effects.seam(&self.border, &self.lenders),
         );
 
         self.phase_requests(&requests, &ctx);
@@ -273,7 +273,7 @@ where
         self.logic.update_seam(
             &mut self.world,
             &ctx,
-            &mut CrossSeam::new(&self.border, &self.lenders, &mut self.effects.out),
+            &mut self.effects.seam(&self.border, &self.lenders),
         );
         // -- Phase 3b — EFFECTS OUT: what the hooks emitted (and what
         //    phase 0d forwarded) leaves for its authority.

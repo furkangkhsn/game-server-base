@@ -65,6 +65,35 @@ fn an_effect_on_a_migrated_target_goes_on_to_its_new_owner() {
     assert_eq!(s0.effects.stats.orphaned, 1);
 }
 
+/// The migration tick, from the old owner's own hooks: in the tick after
+/// the target left (its doomed copy is still in this world, nobody lends
+/// it yet) an effect the hooks emit at it goes to the new owner, stamped
+/// as any emission — and `departed` names that owner. After the
+/// forwarding table's TTL the target is unknown here again.
+#[test]
+fn an_effect_emitted_at_a_target_that_just_left_goes_to_its_new_owner() {
+    let (mut s0, mut rx1) = crossing();
+    assert!(s0.step_phases(&tinfo(3)));
+    drain(&mut rx1);
+    s0.world.script = vec![(50, 9)];
+    assert!(s0.step_phases(&tinfo(4)));
+    let id = |seq| EffectId {
+        origin: 0,
+        epoch: 0,
+        seq,
+    };
+    assert_eq!(s0.world.emits, [Ok(id(1))]);
+    assert_eq!(s0.world.departed, [(50, Some(1))]);
+    assert_eq!(effects_in(drain(&mut rx1)), [fx(50, 9, 0, 1, 4)]);
+
+    let lapse = 3 + EFFECT_FORWARD_TTL_TICKS;
+    s0.world.script = vec![(50, 9)];
+    assert!(s0.step_phases(&tinfo(lapse)));
+    assert_eq!(s0.world.emits[1], Err(EmitRefused::NotLent));
+    assert_eq!(s0.world.departed[1], (50, None));
+    assert!(effects_in(drain(&mut rx1)).is_empty());
+}
+
 /// A target that comes BACK is this shard's again: effects on it apply
 /// here instead of chasing its old move.
 #[test]

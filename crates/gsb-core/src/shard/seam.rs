@@ -39,12 +39,23 @@ pub struct Lent<'a, S> {
 /// **Write.** [`Self::emit`] queues one effect for the target's
 /// authority (the lender), stamped and sequenced by the core; the actor
 /// sends it after the systems phase.
+///
+/// **Handed on.** [`Self::departed`] names the neighbour an entity of
+/// THIS shard went to, while the old owner remembers the move (the
+/// forwarding table: written when the migration commits, kept
+/// [`EFFECT_FORWARD_TTL_TICKS`]). In the tick after the move the entity
+/// is still in this world — the doomed copy the migrate phase despawns
+/// — and nobody lends it yet: the only party that knows the move
+/// committed is this actor (a refused send leaves the entity here).
+/// [`Self::emit`] routes a target nobody lends to that neighbour.
 pub struct CrossSeam<'a, S> {
     views: &'a HashMap<usize, NeighborView<S>>,
     /// The lenders' indices, ascending: the deterministic lookup order
     /// (an entity handed between two neighbours can be lent by both for
     /// a tick; the lower index answers, and forwards if it is stale).
     lenders: &'a [usize],
+    /// The forwarding table: `wire → (new owner, lapse tick)`.
+    forwarded: &'a HashMap<u64, (usize, u64)>,
     out: &'a mut EffectOutbox,
 }
 
@@ -52,11 +63,13 @@ impl<'a, S> CrossSeam<'a, S> {
     pub(crate) fn new(
         views: &'a HashMap<usize, NeighborView<S>>,
         lenders: &'a [usize],
+        forwarded: &'a HashMap<u64, (usize, u64)>,
         out: &'a mut EffectOutbox,
     ) -> Self {
         Self {
             views,
             lenders,
+            forwarded,
             out,
         }
     }
@@ -107,13 +120,21 @@ impl<'a, S> CrossSeam<'a, S> {
         self.out.tick
     }
 
+    /// The neighbour this shard handed its entity `wire` on to, if a
+    /// migration of it committed less than [`EFFECT_FORWARD_TTL_TICKS`]
+    /// ago and it has not come back (see the type docs, "Handed on").
+    pub fn departed(&self, wire: u64) -> Option<usize> {
+        self.forwarded.get(&wire).map(|&(to, _)| to)
+    }
+
     /// Queue an effect on the lent entity `target` for its authority:
     /// `source` is the acting entity's wire id (attribution; `0` = none),
     /// `payload` the game's bytes. The core mints the idempotency key
-    /// and stamps the tick; the answer is that key. Refused — nothing
-    /// queued — when no neighbour lends `target`
-    /// ([`EmitRefused::NotLent`]) or this tick's budget is spent
-    /// ([`EmitRefused::Budget`]).
+    /// and stamps the tick; the answer is that key. The authority is the
+    /// lender — or, for a target nobody lends that this shard just
+    /// handed on, its new owner ([`Self::departed`]). Refused — nothing
+    /// queued — when neither knows `target` ([`EmitRefused::NotLent`])
+    /// or this tick's budget is spent ([`EmitRefused::Budget`]).
     ///
     /// Validation is the CALLER's (CROSS-SHARD §2, anti-cheat locality):
     /// check range/angle against [`Self::lent`]'s record before emitting;
@@ -124,7 +145,8 @@ impl<'a, S> CrossSeam<'a, S> {
         source: u64,
         payload: Bytes,
     ) -> Result<EffectId, EmitRefused> {
-        let Some(lender) = self.lent(target).map(|l| l.lender) else {
+        let lender = self.lent(target).map(|l| l.lender);
+        let Some(lender) = lender.or_else(|| self.departed(target)) else {
             self.out.refused += 1;
             return Err(EmitRefused::NotLent);
         };
@@ -157,6 +179,7 @@ impl<'a, S> CrossSeam<'a, S> {
 pub struct SeamStage<S> {
     views: HashMap<usize, NeighborView<S>>,
     lenders: Vec<usize>,
+    forwarded: HashMap<u64, (usize, u64)>,
     out: EffectOutbox,
 }
 
@@ -168,6 +191,7 @@ impl<S> SeamStage<S> {
         Self {
             views: HashMap::new(),
             lenders: Vec::new(),
+            forwarded: HashMap::new(),
             out,
         }
     }
@@ -181,9 +205,16 @@ impl<S> SeamStage<S> {
         view.recs.insert(record.wire, record);
     }
 
+    /// Record this shard's entity `wire` as handed on to neighbour `to`
+    /// (a committed migration — [`CrossSeam::departed`]).
+    pub fn depart(&mut self, wire: u64, to: usize) {
+        let lapse = self.out.tick + EFFECT_FORWARD_TTL_TICKS;
+        self.forwarded.insert(wire, (to, lapse));
+    }
+
     /// The seam the hooks receive.
     pub fn seam(&mut self) -> CrossSeam<'_, S> {
-        CrossSeam::new(&self.views, &self.lenders, &mut self.out)
+        CrossSeam::new(&self.views, &self.lenders, &self.forwarded, &mut self.out)
     }
 
     /// What was emitted so far: `(authority, effect)` in emission order.

@@ -85,6 +85,9 @@ struct TWorld {
     emits: Vec<Result<EffectId, EmitRefused>>,
     /// What the last `update_seam` saw lent: `(wire, lender)`, sorted.
     seen_lent: Vec<(u64, usize)>,
+    /// `(target, CrossSeam::departed(target))` of every scripted
+    /// emission, asked just before it.
+    departed: Vec<(u64, Option<usize>)>,
 }
 
 /// The migration state (the demo's shape).
@@ -313,6 +316,7 @@ impl ShardLogic<TWorld> for TLogic {
         seen.sort_unstable();
         w.seen_lent = seen;
         for (target, source) in std::mem::take(&mut w.script) {
+            w.departed.push((target, seam.departed(target)));
             let answer = seam.emit(target, source, bytes::Bytes::from_static(b"hit"));
             w.emits.push(answer);
         }

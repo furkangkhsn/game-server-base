@@ -86,7 +86,7 @@ where
                     continue;
                 }
             }
-            let mut seam = CrossSeam::new(&self.border, &self.lenders, &mut book.out);
+            let mut seam = book.seam(&self.border, &self.lenders);
             let outcome = self
                 .logic
                 .apply_remote_effect(&mut self.world, tick, &effect, &mut seam);
