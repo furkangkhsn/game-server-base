@@ -1143,9 +1143,11 @@ artık evinden oraya yürür.
 - **Çıkışta kayıt yok.** Realm statik: çıkış yapan karakter bir sonraki
   taze join'de kaydına döner (son konumuna değil) — `mmo_home` bunu
   sabitliyor. Konumu çıkışta yazmak kalıcılık turunun işi.
-- **Takım odası kimliği oyuna iletmiyor** (`TeamGame::spawn_team_player`
-  kimliksiz). Tetikleyici: kayıtlı karakterli bir takım oyunu (W paketi
-  bunu isteyebilir).
+- ~~**Takım odası kimliği oyuna iletmiyor** (`TeamGame::spawn_team_player`
+  kimliksiz).~~ **W1'de kapandı** (`83f040b`):
+  `TeamGame::spawn_team_player_as(world, conn, identity)`, varsayılanı
+  `spawn_team_player` (arena'nın üs doğumu değişmez); `TeamRoom` ve
+  `ShardedTeamRoom` onu `on_join_as`'tan çağırır (CROSS-SHARD §8b).
 - **Eski yol güveni** (SECURITY §4b): ticket'sız sunucuda karakter
   anahtarı istemcinin iddiası.
 

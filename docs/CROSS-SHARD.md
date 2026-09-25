@@ -861,10 +861,11 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 
 ## 8b. W1 sonucu — team × sharded kompoziti (branch `kit/w1-team-sharded`)
 
-> Durum: **tasarım** (bu alt bölüm kod yazılmadan önce yazıldı; §8
-> sözleşmedir, aşağıdaki her sapma gerekçesiyle kayıtlıdır). BACKLOG §1
-> satır 6'nın (W) ilk yarısı: W1 kompozit, W2 onun üstüne doğrulama
-> oyununu kurar.
+> Durum: **uygulandı** (W1, §8b.7). §8b.1–§8b.6 kod yazılmadan önce
+> tasarım olarak yazıldı; §8 sözleşmedir, aşağıdaki her sapma
+> gerekçesiyle kayıtlıdır (uygulamada değişen tek kural — nötrler —
+> §8b.5 madde 8'de işaretli). BACKLOG §1 satır 6'nın (W) ilk yarısı: W1
+> kompozit, W2 onun üstüne doğrulama oyununu kurar.
 
 **Senaryo ("Cephe", W2'nin oyunu).** Büyük harita 2×2 shard ızgarası
 (MMO gibi zemin düzlemi bölümü), üç fraksiyon, TAKIM SİSİ: oyuncu (a)
@@ -890,8 +891,8 @@ T'nin BU shard'daki görünür kümesini export eder** =
   ötesinde duran düşman: gören müttefik bu shard'da, düşman komşuda).
 
 Hiçbir zaman export EDİLMEYEN: ithal edilmiş kayıtlar (yankı döngüsü
-olurdu — kayıt yalnız onu yerel olarak bilen shard'dan çıkar), nötr
-entity'ler (§8b.5).
+olurdu — kayıt yalnız onu yerel olarak bilen shard'dan çıkar) ve
+kimsenin görmediği nötr entity'ler (§8b.5 madde 8).
 
 **Sınırlar (sayılan, asla sınırsız değil).**
 
@@ -1055,9 +1056,16 @@ TeamGame`.
 7. **TTL 64 tick** (§8.2'nin örneği 256): canlı kaynak her tick tazeler;
    TTL yalnız sessizleşmiş kaynağın hayaletinin ömrünü sınırlar — 30
    Hz'de ~2 s.
-8. **Nötrler export edilmez:** kendi shard'ında herkese (TeamRoom
-   kuralı), komşuda yalnız görüşle (ödünç kayıt nötr/düşman ayırt
-   edilemez). Harita geneli nötr (ele geçirme noktası) W2'nin kararı.
+8. **Nötrler: kendi shard'ında herkese, başka yerde sisle.** Kendi
+   shard'ında her takıma (TeamRoom kuralı); başka shard'daki bir takım
+   onu yalnız bir birimi görürse görür — düşman gibi. *Uygulamada
+   değişti:* tasarım "nötrler export edilmez" diyordu; ama ödünç bir
+   kayıt nötr/düşman ayırt edilemez (takımı yok), yani komşunun gördüğü
+   ödünç nötr zaten export ediliyordu — kendi nötrünü gören birimin
+   export'undan çıkarmak kuralı yerine göre değiştirirdi. Tek kural:
+   bir takımın birimlerinin gördüğü, üyesi olmayan her şey (düşman ya da
+   nötr, kendi ya da ödünç) export edilir. Harita geneli nötr (ele
+   geçirme noktası) W2'nin kararı.
 9. **Göç: kopya yok, en fazla bir tick boşluk.** Üye m, A → B, tick h:
    B'nin görüntüleyicileri m'yi `h + 1`'de kendi kaydı olarak görür;
    üçüncü shard C, A'nın `h` export'undan (`h + 1`) sonra B'nin `h + 1`
@@ -1079,6 +1087,154 @@ paket turu dokuz sayaç için 29 dosyaya dokundu. Henüz üretim kullanıcısı
 olmayan bir özellik için tel sürümü değiştirmek erken; loadgen botunu
 kuracak W2, ölçüm isterse terfi ettirir.
 
+### 8b.7 Uygulama (W1 — `kit/w1-team-sharded`, `e99d90c..`)
+
+**Commit'ler** (her biri kendi başına yeşil): `5c73895` (bu tasarım),
+`405e898` (çekirdek: TEAMS fazı + registry hub'ı), `83f040b` (kit:
+`TeamGame::spawn_team_player_as`, K4 kalıntısı), `2fb51bd` (hub'ın
+kaynağa geri röle etmediğini kilitleyen test), `5a47687` (kit:
+`ShardedTeamRoom`), `4d1d231` (gerçek registry + dört shard aktörüyle
+senaryo testleri).
+
+**Çekirdek seam farkı (tamamı).**
+
+- `ShardLogic::team_exchange(&mut self, world, ctx, borrowed, imported)
+  -> Option<TeamExport>` — varsayılan `None`. `GameLogic` DEĞİŞMEDİ.
+- Yeni tipler (`gsb_core::shard`): `TeamRecord { team, wire, bytes }`,
+  `TeamExport { views, records }`, `TeamImport { from, tick, records }`,
+  `TeamImports` (+ `ImportedRecord`); sabitler `TEAM_EXPORT_TTL_TICKS`
+  (64), `TEAM_HUB_SWEEP_EVERY_TICKS` (64), `TEAM_EXPORT_MAX_RECORDS`
+  (16 384), `TEAM_EXPORT_MAX_VIEWS` (256).
+- `ShardMsg::TeamImport(TeamImport)`; `RegistryMsg::TeamExport { room,
+  generation, from, tick, export }`. İkisi de monomorfik içerik.
+- Faz 5b TEAMS (`shard/actor/tick/teams.rs`): süpür + birleştir → kanca
+  → tavan → `try_send`. Düzleştirilmiş ödünç küme artık bir kez
+  (`borrowed_view`) kurulup faz 5b'ye ve 6'ya veriliyor — faz 6'nın
+  davranışı aynı.
+- Registry: `ShardGroup::teams: TeamHub` (`registry/hub.rs`), `run.rs`'te
+  bir kol (nesil denetimi). Hub yalnız abonelik tutar, kayıt tutmaz.
+- Sayaçlar: `team_exchange_summary` (shard, ~1 s) ve
+  `team_hub_summary` (oda, 256 export tick'i) log satırları.
+
+**Kit.** `sharded/team.rs` (+ `content`, `frames`, `logic`, `shard`):
+`ShardedTeamRoom<G, P, V>` (`with_shard(inner, vision, lent_pos)`,
+`with_delta`, `with_team_budget`, `with_crystallize`,
+`with_disconnect_*`, `over_budget`), `TeamMig<M>`,
+`DEFAULT_TEAM_BUDGET`. `SetLedger`'ın yazıcısı crate-özel
+`WriteRecord<W>`'ye gevşedi (`RecordCodec` için blanket impl — mevcut
+odaların baytları aynı; `team/tests/delta/full_only` kilidi yeşil).
+`ShardedRoom::admit` (katılım yardımcısı, `room/join.rs`) iki oda
+arasında paylaşılıyor. `Team` artık `Ord`. Kit'e dev-dependency olarak
+`tokio` (`test-util`): gerçek aktör testleri duraklatılmış saatte
+koşuyor — ticker yalnız bütün aktörler boştayken ilerler, yani bir
+tick'in export'ları bir sonraki tick başlamadan rölelenmiş olur ve
+adım bariyeri kesin.
+
+**Testler** (740 → 776, +36). Çekirdek 17: `shard/team/tests.rs` (6:
+wholesale, takım izolasyonu, en yeni tick kazanır / eşitlikte küçük
+kaynak, TTL, eski import yeni yuvayı ezmez, yuva tavanı),
+`registry/hub/tests.rs` (6: yalnız o takımı görüntüleyen DİĞER
+shard'lara, hiç export etmemiş shard'a hiçbir şey, bir kez temizleme
+sonra sessizlik, reddedilen röle sayılır ve tekrar denenir, TTL
+süpürmesi, bilinmeyen indeks), `shard/tests/teams.rs` (5: export
+registry'ye damgalı gider / `None` ve registry'siz shard göndermez, bir
+kez boş export, reddedilen export sayılır ve temizleme tekrar denenir,
+tavanlar, import mantığa birleşik ulaşır ve TTL'de düşer). Kit 19:
+K4 2 (`team/tests/spawn_team.rs`), kompozit birim 9
+(`sharded/tests/team*`: üyeler önce + görülenler, bütçe, nötr kendi
+shard'ında herkese, export gövdesi birimi izler ve değişmedikçe aynı
+tahsis, bir wire bir kez + öncelik yerel > ödünç > ithal, ithal asla
+yeniden export edilmez, ithalde takım izolasyonu, ödünç kaydın görüşü
+ve `lent_pos = None`, göçte takım taşınır, gelen oyuncuya one-shot
+full, giden-dönen oyuncuya yeniden one-shot full), gerçek aktör 8
+(`sharded/tests/team_actors*`: müttefik harita geneli + uzak müttefiğin
+gördüğü düşman — full ve delta modda; üçüncü takımın tüm koşu boyunca
+izolasyonu; seam ötesi düşman tek kayıt, kendi shard'ının taze
+kaydıyla; ayrılan üye bir sonraki export'la gider, TTL sonrası da
+hayalet yok; sessizleşen kaynağın kaydı TTL'de düşer (63. tick'te var,
+65.'te yok); bayat küme bir sonraki export'la iyileşir; başka
+enkarnasyonun export'u yok sayılır; seam'i yürüyerek geçen üye hiçbir
+karede iki kez yok, hiçbir görüntüleyicide bir tick'ten uzun
+kaybolmuyor — ayrıldığı shard'daki müttefikte tam bir tick, varış ve
+uzak shard'da sıfır).
+
+**Önce kırılan.** K4: `TeamRoom` kimliği iletmezken (turdan önceki
+`logic.rs`) yeni test kırıldı. Kompozit: `team_exchange` `None`
+döndürünce (varsayılan kanca — takas yok) ve çekirdekte TEAMS fazı hiç
+koşmayınca, 8 gerçek aktör testinin 8'i de kırıldı.
+
+**Mutation-check** (her biri scratchpad yedeğinden geri yüklendi;
+hepsi en az bir testi kırdı): hub her takımı her hedefe röle ediyor
+(izolasyon); hub kaynağın yuvasını röle sırasında tabloda tutuyor
+(kendine röle); hub görüntüleyicisi olmayan shard'a boş import
+gönderiyor (yalnız barındıran shard'lara yayılım); temizleme importu
+yok; hub süpürmesi hiç düşürmüyor; alıcı yuvaları hiç süresi dolmuyor
+(TTL — çekirdek 2 + gerçek aktör 1); birleştirmede en eski tick
+kazanıyor; dedup yok; yuva wholesale değil (ekleme — gerçek aktörde
+bayat küme ve ayrılan üye testleri de kırıldı); yuva tavanı yok; export
+tavanı yok; temizleme export'u yok; hiçbir şey tutulmazken de her tick
+gönderim; reddedilen export yine de "tutuluyor" sayıyor; `settle` yok
+(9 test); registry nesil denetimi yok. Kit: her takımın ithali her
+takıma (izolasyon — birim 1 + gerçek aktör 2); ithal bilinen değeri
+eziyor ve bilinen wire ithal baytından gösteriliyor (öncelik — birim +
+seam testi); bütçe yok sayılıyor; bütçe üyeleri kesiyor; düşman görüşsüz
+export; ödünç kayıt hiç görülmüyor; ithal yeniden export; görüntülenen
+takımlar = birimi olan her takım; kendi nötrü gösterilmiyor; gövde
+önbelleği hiç yeniden kodlamıyor / hiç yeniden kullanmıyor; göçte takım
+taşınmıyor; göç çıkışı VE girişi baseline'ı silmiyor (ikisi birlikte:
+biri diğerinin yedeği — ikisinden biri tek başına eşdeğer mutant);
+katılımda kimlik düşüyor; ithal gövdesi zarfsız yazılıyor.
+
+**Ölçüm — mevcut sharded oyunlar etkilenmedi** (release, 200 istemci,
+`--duration 10 --write-stall-secs 0`, `e99d90c` ↔ W1 dönüşümlü üç çift;
+makine başka ajanların derlemeleriyle yüklüydü — 1 dk yük ortalaması
+42–54 / 32 çekirdek). Her koşuda `left=200 errors=0 server_closes=0`,
+`server_hz` 29,98–30,00:
+
+| Senaryo | Yük (taban / W1) | `out_bps_per_conn` taban / W1 | step p50/p90 fine µs taban / W1 | peak payload B taban / W1 |
+|---|---|---|---|---|
+| MMO (`--game mmo`) | 46,5·45,4·46,3 / 53,6·48,1·46,4 | 21 621·21 720·21 165 / 21 510·21 204·21 525 | 224/760·200/384·224/664 / 224/736·208/312·208/568 | 911·900·900 / 876·895·893 |
+| demo sharded (`--visibility sharded --shard-count 4`) | 51,2·46,1·45,0 / 50,0·44,1·42,2 | 28 569·28 570·29 350 / 28 535·28 878·29 470 | 184/352·184/320·160/224 / 176/288·192/576·160/256 | 1504·1500·1517 / 1534·1480·1528 |
+
+İki oyunun da mantığı `team_exchange`'i uygulamıyor (varsayılan `None`):
+faz 5b onlar için bir birleştirme çağrısı (boş) ve bir sanal çağrıdan
+ibaret; fark gürültü içinde. MMO'nun `gap_drops`'u (72/148/152) ve
+demo'nun `snap_overflows`'u (24–49) iki tarafta da aynı aralıkta.
+
+**Kapılar** (kod commit'lendikten sonra, her crate'in `lib.rs`'ine
+yeniden derleme işareti eklenerek, sonra `git checkout crates`):
+`cargo fmt --all --check` temiz; `cargo clippy --workspace
+--all-targets -- -D warnings` 0 uyarı; `cargo test --workspace` →
+**776 passed / 0 failed / 1 ignored**; kapanış kontrolü `cargo test -p
+gsb-demo -p gsb-demo-arena -p gsb-demo-mmo` → **98 passed / 0
+failed**; `cargo build -p gsb-server --lib --no-default-features`, ve
+ayrı ayrı `--features game-demo`, `--features game-arena`, `--features
+game-mmo` temiz; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
+--no-deps` temiz. Byte-pinning testleri dokunulmadı ve yeşil (mevcut
+hiçbir oda/oyunun istemci baytı değişmedi).
+
+**W2 için: bir oyun bunu nasıl kullanır.**
+
+1. Oyun `ShardGame + TeamGame` uygular; saklı karakteri
+   `spawn_team_player_as(world, conn, identity)` ile yerleştirir (takım +
+   konum), sunucu modülünün `home_shard`'ı aynı kimlikten aynı konumu
+   okur. Gözcü kulesi/ward = `TeamMember` + konum bileşeni taşıyan
+   NPC (kit orphan olarak damgalar, görüş kaynağıdır).
+2. Fabrika her shard için `ShardedTeamRoom::with_shard(ShardedRoom::
+   with_game(game, partition, i), VisionGrid2::new(r), lent_pos)` kurar;
+   `lent_pos` nicemlenmiş wire'dan görüş konumu (`None` = ödünç kayıt
+   görüşe katılmaz). `with_delta()` (arena gibi), gerekiyorsa
+   `with_team_budget(n)`.
+3. İstemci tarafı değişmez: kare zarfı takım odasınınki (`ClientView`,
+   `kit.proto`). İthal kayıt, kaynağın kodlayıcısının yazdığı gövdedir —
+   istemci ayırt edemez.
+4. W2'nin açık kararları: harita geneli nötrler (ele geçirme noktası —
+   bugün kendi shard'ında herkese, başka yerde sisle), export temposu
+   (bugün her tick; `every k` gerekirse), sayaçların metrik yoluna
+   terfisi (loadgen botu kurulunca), registry bandı (A13 tetikleyicisi —
+   loadgen'le ölçülecek), `Private.game` ile takım bildirimi (arena'nın
+   `Welcome` kalıbı).
+
 ## 9. Uygulama durumları
 
 | Kalem | Durum |
@@ -1086,7 +1242,7 @@ kuracak W2, ölçüm isterse terfi ettirir.
 | Delta border exchange (§6.4) | 💤 main'de ama **uykuda** — Faz C'den beri süreç-içi link'ler `AlwaysFull`; delta yalnız testlerde (`force_exchange_modes`) koşar, ilk tüketici `Ipc`/`Net` link'i (§7 "Güncel durum") |
 | sharded × spatial kompoziti | ✅ Faz B — main'de |
 | Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
-| team × sharded (§8, §8b) | ◐ W1 — tasarım §8b (kompozit + hub); doğrulama oyunu W2 |
+| team × sharded (§8, §8b) | ✅ W1 — kompozit + registry hub (§8b.7); ◐ doğrulama oyunu, sunucu modülü, loadgen botu W2 |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |

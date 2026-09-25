@@ -173,7 +173,10 @@ pub trait Game: Send + 'static {
 çağırır (`OpenRoom`, `AoiRoom`, `SectorRoom`, `ShardedRoom`,
 `ShardedSpatialRoom`); sharded odanın yönlendiricisi
 (`registry::HomeShard`) aynı kimliği görür, yani ikisi anlaşabilir.
-Takım odası çağırmaz (`TeamGame::spawn_team_player` kimliksiz).
+Takım odaları (`TeamRoom`, `ShardedTeamRoom`) onun takım karşılığını
+çağırır: `TeamGame::spawn_team_player_as(world, conn, identity) ->
+(Entity, Team)`, varsayılanı `spawn_team_player` (W1 — K4'ün kalıntısı
+kapandı; §10 "W1 sonucu").
 
 Oda tipleri bunları bir araya getirir:
 
@@ -185,6 +188,7 @@ Oda tipleri bunları bir araya getirir:
 | `SectorRoom<G, M: SectorMap>` | `M::Sector` | `()` | — |
 | `ShardedRoom<G, P: Partition<Wire<G>>>` | `()` | `Wire<G>` | `KitMig<G::Mig>` |
 | `ShardedSpatialRoom<G, P, S>` | `S::Cell` | `Wire<G>` | `KitMig<G::Mig>` |
+| `ShardedTeamRoom<G, P, V: Vision>` | `Team` | `Wire<G>` | `TeamMig<G::Mig>` |
 
 Bu sınırların hepsi `GameLogic` / `ShardLogic`'in bugünkü
 kısıtlarıyla (`GroupKey: Eq + Hash + Clone + Debug`,
@@ -2122,6 +2126,76 @@ gsb-demo -p gsb-demo-arena -p gsb-demo-mmo` → **98 passed / 0 failed**
 warnings` 0 uyarı; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
 --no-deps` temiz; özellik derlemeleri (`--no-default-features`, tek tek
 `game-demo` / `game-arena` / `game-mmo`) temiz.
+
+### W1 sonucu — team × sharded kompoziti (2026-09-25)
+
+**Tamamlandı** (`kit/w1-team-sharded`, `e99d90c..`; BACKLOG §1 satır
+6'nın ilk yarısı — W2 doğrulama oyununu bunun üstüne kurar). Tasarım,
+§8'den sapmalar, çekirdek seam'i, testler, mutasyonlar ve ölçüm:
+CROSS-SHARD §8b. Burada kit yüzeyi.
+
+**Yeni kompozit: `ShardedTeamRoom<G, P, V>`** (`sharded/team.rs`;
+`G: ShardGame + TeamGame`, `P: Partition<Wire<G>>`, `V: Vision`) —
+`ShardedSpatialRoom` kalıbı: grid protokolü (göç, border şeridi, seam
+kancaları, park, RPC) sarılan `ShardedRoom<G, P>`'de; kompozit takım
+yüzeyini ekler. `GroupKey = Team`, `Strip = Wire<G>` (C1'in seam
+kancaları bu tipe bağlı — değişmedi), göç durumu `TeamMig<G::Mig> {
+kit: KitMig<G::Mig>, team: Option<Team> }` (`TeamMember` kit'in
+bileşeni, oyunun `capture`'ı onu bilmez; varışta yeniden yazılır).
+
+```rust
+ShardedTeamRoom::with_shard(inner: ShardedRoom<G, P>, vision: V,
+                            lent_pos: fn(&Wire<G>) -> Option<V::Pos>)
+    .with_delta()                  // takım odasının delta modu
+    .with_team_budget(n)           // varsayılan DEFAULT_TEAM_BUDGET = 1024
+    .with_crystallize(..) / .with_disconnect_grace(..) / .with_disconnect_policy(..)
+room.over_budget()                 // bütçenin kestiği kayıt, kümülatif
+```
+
+- **İçerik, çekirdeğin TEAMS fazında** (`ShardLogic::team_exchange`,
+  faz 5b): takım başına önce üyeler (oyuncular ve `TeamMember`'lı NPC'ler
+  — gözcü kuleleri), sonra bu shard'ın KENDİ birimlerinin gördüğü, üyesi
+  olmayan her şey (kendi entity ve border şeridinin ödünç kayıtları;
+  ödünç kayıt görüşe `lent_pos` ile girer, takımı bilinmez → yalnız
+  HEDEF). Bu küme export edilir (bütçeyle kesilir); görüntülenen takımın
+  içeriğine ayrıca bu shard'ın nötrleri ve diğer shard'ların O TAKIM
+  için export ettikleri eklenir. Bir wire bir kez; yük önceliği
+  **yerel > ödünç > ithal**, görünürlük birleşim. İthal asla yeniden
+  export edilmez. Snapshot çağrıları bu tick'in içeriğinden okur
+  (TeamRoom'un `update` önbelleğinin karşılığı).
+- **Kodlama.** İçerik değeri `Shown<W> { Typed(W), Encoded(Bytes) }`;
+  `common::SetLedger`'ın yazım sınırı `RecordCodec`'ten crate-özel
+  `WriteRecord<W>`'ye gevşedi (`RecordCodec` için blanket impl —
+  mevcut odalar bayt bayt aynı). Kompozitin yazıcısı ithal gövdeyi aynı
+  `entities` zarfına olduğu gibi koyar (`common::put_entity_body`):
+  istemci ayırt edemez. Export gövdeleri wire başına önbellekli (değer
+  değişmedikçe aynı `Bytes`).
+- **Oturum.** Göçle gelen (ya da gidip dönen) oyuncunun baseline'ı
+  düşer: delta modunda one-shot private full (spatial kompozitin
+  taze-üye kuralı). Katılım `TeamGame::spawn_team_player_as` üstünden.
+
+**`TeamGame` yüzeyi (K4 kalıntısı kapandı).** `spawn_team_player_as(&mut
+self, world, conn, identity) -> (Entity, Team)`, varsayılanı
+`spawn_team_player` — arena'nın üs doğumu değişmez. `TeamRoom` artık
+`on_join_as`'ı uygular (`on_join` boş kimlikle iner) ve bunu çağırır.
+`Team` artık `PartialOrd + Ord` (takımlar sıralı küme anahtarı).
+`ShardGame` değişmedi.
+
+**Paylaşılan parçalar.** `ShardedRoom::admit(world, spawn)` (katılımın
+iki kimliği + tablolar; `sharded/room/join.rs`) sharded oda ve
+kompozitin ortak katılımı. `testing::fix_lent_pos` ve kompozitin fixture
+kurucusu.
+
+**Kit'e dev-dependency: `tokio` (`test-util`).** Gerçek registry + dört
+shard aktörü testleri (`sharded/tests/team_actors*`) duraklatılmış
+saatte koşar: ticker yalnız her aktör boştayken ilerler, yani bir
+tick'in export'ları sonraki tick başlamadan rölelenir ve metrik
+kanalındaki adım bariyeri kesindir. Kit hâlâ hiçbir oyuna bağlı değil
+(`manifest.rs` kilidi yeşil).
+
+**Doğrulama:** 740 → **776** test / 0 hata / 1 ignored; kapanış
+kontrolü, özellik derlemeleri, clippy, rustdoc kapısı ve dönüşümlü
+loadgen A/B'si CROSS-SHARD §8b.7'de.
 
 ## 11. Kabul kriteri
 
