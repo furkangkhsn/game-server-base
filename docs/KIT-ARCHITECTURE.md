@@ -2340,6 +2340,485 @@ kontrolü `cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo -p
 gsb-demo-war` → **124 passed / 0 failed** (2D demo, arena, MMO 98 +
 savaş 26); dört oyun tek kit üzerinde, dört görünürlük modeli.
 
+### A22 — değer düzeyinde delta: ölçüm ve seçenekler (2026-09-25)
+
+**Faz 0: ölçüm + tasarım, wire değişikliği YOK** (`kit/a22-value-delta`;
+BACKLOG A22). Soru: kaydı grubun son gönderdiği değere göre göreli
+kodlamak (A22) bandı ne kadar düşürür, istemci sözleşmesine (`kit.proto`:
+upsert'ler mutlak ve idempotent, baseline'lı delta boşluk olsa da
+uygulanır) ve encode-once'a ne mal olur — ve aynı baytı daha ucuza
+kazandıran başka bir kaldıraç var mı? Kod tarafında yalnız bir ölçüm
+aracı eklendi; kit, çekirdek, oyunlar ve hiçbir istemci baytı değişmedi.
+
+**Araç (repoda, kalıcı): `gsb-loadgen --capture DIR [--capture-clients
+K]`.** Örneklenen K istemcinin (varsayılan 8, id'lere eşit aralıkla
+yayılmış — farklı takımlar/hücreler) aldığı oyun bandı karelerini
+(grup snapshot'ı, private kare) ve JOIN sonucunu (istemcinin kendi wire
+id'si) geliş sırasıyla bellekte tutar, oturum bitince istemci başına bir
+`client-<id>.gsbcap` dosyası yazar (biçim `loadgen/capture.rs` başında).
+İstemcinin gönderdiğini ve uyguladığını değiştirmez; yalnız düz koşuda
+(orkestre/`--serve`/churn reddedilir). Kilit: `loadgen_games.rs`
+`loadgen_captures_the_frames_its_clients_applied` — dosya kit'in
+`ClientView`'ından geçirilince istemcinin `CLIENT` satırındaki
+snapshot/full/delta/private full/`gap_drops`/ack/görünüm sayılarını
+birebir veriyor (mutasyon: private kareleri kaydetmemek → kırıldı; küçük
+snapshot'ları atlamak → kırıldı). Neden kalıcı: A22'nin uygulama turu,
+A10 ve A14 (zstd) aynı "önce/sonra" baytına ihtiyaç duyacak.
+
+**Çözümleyici (repoda DEĞİL, bu turun scratchpad'inde; `a22an`,
+bağımlılıksız ~1 850 satır Rust):** yakalanan kareleri kit'in istemci
+kurallarıyla yürür (full değiştirir; delta `removed` → `cell_exits` →
+upsert; private full koşulsuz), her kaydı oyunun alan düzeniyle (demo
+`EntityRecord`, arena/MMO/savaş `UnitRecord`/`EntityRecord` — alan 1 id,
+konum alanları, diğerleri) byte byte ayırır, her upsert'i GRUBUN o
+kareden önceki değerine (TCP'de kayıpsız istemcinin görünümü = grubun
+`held`'i) göre sınıflar, aday kodlamalarla aynı kareleri yeniden kodlar
+(bugünkü protobuf yeniden kodlaması yakalanan baytla BİREBİR tuttu —
+sekiz koşunun sekizinde sağlama), rUDP kaybını simüle eder ve
+kodlama/çözme CPU'sunu ölçer (yuvarlak-dönüş denetimli). Prototip olduğu
+için repoya alınmadı: uygulama turu gerçek kodlayıcıyı yazınca ölçüm
+`--capture` + kit'in kendi `ClientView`'ıyla yapılır.
+
+**Koşular** (release, 32 çekirdek, makine başka ajanların işleriyle
+yüklü; `gsb-loadgen N --game G --duration 10 --write-stall-secs 0
+--capture DIR --capture-clients 8`, demo için ayrıca `--visibility
+spatial --topology sharded --shard-count 4`; N = 200, 500). Her koşuda
+`joined = left = N`, `errors=0`, `server_closes=0`, fan-out `dropped=0`,
+`server_hz` 29,99–30,01:
+
+| Oyun (oda) | N | 1 dk yük | `out_bps_per_conn` | örnek istemci B/sn | kayıt/kare | en büyük kare (B) |
+|---|---|---|---|---|---|---|
+| demo (sharded × spatial, ring) | 200 / 500 | 18,5 / 14,4 | 11 617 / 27 941 | 12 558 / 29 029 | 32,5 / 79,6 | 1 519 / 3 483 |
+| arena (takım sisi, delta) | 200 / 500 | 21,1 / 15,7 | 40 082 / 98 106 | 42 402 / 106 179 | 96,6 / 238,7 | 1 950 / 4 916 |
+| MMO (sharded × spatial) | 200 / 500 | 17,4 / 17,8 | 21 433 / 50 768 | 22 182 / 54 216 | 38,3 / 95,4 | 893 / 2 258 |
+| savaş (team × sharded, delta) | 200 / 500 | 14,9 / 15,8 | 67 488 / 178 611 | 69 027 / 193 023 | 105,8 / 292,8 | 3 468 / 9 118 |
+
+("örnek istemci B/sn": yakalanan sekiz istemcinin baytı + kare başına
+6 B TCP başlığı / yakalama süresi; sunucunun ölçtüğüyle uyumlu.)
+
+#### Bayt anatomisi
+
+Kare türleri (tüm baytların payı, 500'de; 200 aynı resim): grup
+delta'ları **%87–96**, grup full'ları (taze + keep-alive) %3–7, private
+one-shot full'lar demo'da %6 (AOI grup geçişleri; 200'de %9), diğerlerinde
+≤ %1; ack/oturum kareleri ≤ %0,5. Yani bant = hareketli birimlerin delta
+kayıtları. Kare içi (bütün karelerin toplamı):
+
+| Oyun | N | TCP başlığı + zarf başlığı | kayıt çerçevesi (`0x12` + uzunluk) | wire id (alan 1) | konum alanları | diğer alanlar | `removed` + `cell_exits` | ort. kayıt gövdesi (id / konum / diğer) |
+|---|---|---|---|---|---|---|---|---|
+| demo | 200 | %3,0 | %18,8 | **%40,3** | %35,6 | — | %2,3 | 8,1 B (4,3 / 3,8 / 0) |
+| demo | 500 | %1,4 | %20,0 | **%38,2** | %38,1 | — | %2,4 | 7,6 B (3,8 / 3,8 / 0) |
+| arena | 200 | %0,9 | %16,3 | %19,2 | **%63,5** | — | %0,1 | 10,1 B (2,4 / 7,8 / 0) |
+| arena | 500 | %0,4 | %16,2 | %22,2 | **%61,2** | — | %0,1 | 10,3 B (2,7 / 7,6 / 0) |
+| MMO | 200 | %1,7 | %12,3 | %24,2 | %37,0 | %24,6 | %0,1 | 13,9 B (3,9 / 6,0 / 4,0) |
+| MMO | 500 | %0,7 | %12,7 | %23,0 | %38,1 | %25,4 | %0,1 | 13,6 B (3,6 / 6,0 / 4,0) |
+| savaş | 200 | %0,5 | %11,0 | %22,5 | %33,0 | %33,0 | 0 | 16,1 B (4,1 / 6,0 / 6,0) |
+| savaş | 500 | %0,2 | %10,9 | %23,2 | %32,8 | %32,8 | 0 | 16,2 B (4,3 / 6,0 / 6,0) |
+
+Üç şey konumdan bağımsız: **kayıt başına 2 B çerçeve** (%11–20),
+**wire id** (%19–40) ve **konum dışı alanlar** (MMO/savaş %25–33).
+Wire id'ler shard'lı oyunlarda 3–4 baytlık varint: shard `k`'nin id
+aralığı `k · 2^20`'den başlıyor (`gsb_core::shard::SHARD_SERIAL_RANGE`,
+kit'in `Minter::range`'i) — shard 1'in id'leri 21, shard 2–3'ünkiler 22
+bit (savaş 500: kayıtların %55'inde id 4 B, %26'sında 3 B; demo 200'de
+%64'ünde 4 B). Tek odalı arenada id 1–2 B. Konum dışı alanlar (MMO `kind`
++ `hp`, savaş `kind` + `faction` + `hp`) etiketleriyle kayıt başına 4–6 B
+ve neredeyse hiç değişmiyor (aşağıda).
+
+#### Değer değişimi — grubun son gönderdiğine göre
+
+| Oyun | N | delta upsert'leri: yeni / yeniden giren¹ / değişmemiş / yalnız konum / konum dışı değişti | keep-alive + taze full'larda değişmemiş | private full'larda değişmemiş |
+|---|---|---|---|---|
+| demo | 200 | %3,4 / %5,5 / %0,9 / %90,2 / 0 | %58,5 | %78,1 |
+| demo | 500 | %3,2 / %5,5 / %0,8 / %90,5 / 0 | %60,9 | %77,7 |
+| arena | 200 | %0,7 / 0 / 0 / %99,3 / 0 | %10,3 | (hepsi yeni) |
+| arena | 500 | %0,7 / 0 / 0 / %99,3 / 0 | %6,6 | (hepsi yeni) |
+| MMO | 200 | %0,6 / %0,4 / 0 / %99,0 / %0,1 | %4,7 | %84,4 |
+| MMO | 500 | %0,5 / %0,4 / 0 / %99,0 / 0 | %2,5 | %72,6 |
+| savaş | 200 | %0,4 / 0 / 0 / %99,5 / %0,1 | %24,4 | (hepsi yeni) |
+| savaş | 500 | %0,3 / 0 / 0 / %99,1 / %0,6 | %11,7 | %19,8 |
+
+¹ AOI: aynı karede `removed`/`cell_exits` ile çıkıp hedef hücrenin
+parçasında geri gelen kayıt (hücre geçişi) — paylaşılan hücre parçasında
+mutlak kalmak zorunda (aşağıda).
+
+Defterler zaten değişmeyeni göndermiyor (delta'larda değişmemiş ≤ %0,9);
+"değişmeden yeniden gönderim" yalnız full'larda ve full'lar baytın
+%3–16'sı. Delta'daki kayıtların **%99'u yalnız konumu değiştirmiş**.
+Eksen başına |Δ| (wire birimi, delta'daki değişmiş kayıtlar):
+
+| Oyun | birim | x p50/p90/p99 | y | z | zigzag(Δ) 1 B'ye sığan |
+|---|---|---|---|---|---|
+| demo | tamsayı birim | 1/1/1 (%45 = 0) | 1/1/1 | — | %100 |
+| arena | cm | 20–28 / 39 / 41 (maks 42) | 17–19 / 33 / 40 | 6–11 / 31 / 37 | %100 (Δ ∈ ±63: 7 bit) |
+| MMO | dm | 2/2/3 | hep 0 (yer) | 2/2/3 | %100 (Δ ∈ ±7: 4 bit) |
+| savaş | dm | 1–2/2/3 | hep 0 | 1–2/2/3 | %100 (4 bitlik) |
+
+(Ara sıra büyük sıçramalar — MMO `Travel`, savaş ölüm → üs — binlerce
+dm; ≤ 7 dışında kalan oran %0,05'in altında.) Yani göreli kodlama bir konum eksenini 2
+bayttan (etiket hariç) 1 bayta ya da yarım bayta indirir; kazanç
+kayıttaki etiket, id ve çerçeve baytlarının yanında küçük kalır.
+
+#### Aday kodlamaların yeniden oynatımı
+
+Aynı kareler, kayıt gövdesi ve (varsa) zarf değiştirilerek yeniden
+kodlandı; başlık, `removed`, `cell_exits`, private sarmalayıcı ve ack
+kareleri bugünkü gibi sayıldı. Adaylar:
+
+- **P0** bugün (protobuf gövde, kayıt başına `0x12` + uzunluk).
+- **D1** etiketsiz varint gövde (id, sonra her alan zigzag/varint) —
+  yalnız oyunun kodeği değişir.
+- **D2** harita genişliğinde bit paketli gövde (arena x/z 14, y 12 bit;
+  MMO 14/11/14 + kind 2 + hp 10; savaş 14/8/14 + 2 + 2 + 7; demo 8/8) —
+  yalnız oyunun kodeği.
+- **run** kit zarfında "paketli kayıt koşusu": kayıtlar tek bir `bytes`
+  alanında art arda, kayıt başına çerçeve yok (kayıtlar kendini
+  sınırlıyor) — kit zarfı değişir, anlam MUTLAK kalır.
+- **origin** karenin konum kutusunun köşesi başlıkta, konumlar kutuya
+  göre en dar bit genişliğinde (mutlak, idempotent).
+- **kompakt id**: her wire id < 16 384 (2 B varint) — shard aralıklarını
+  iç içe geçiren ya da küçülten bir id basımı.
+- **D5** alan düzeyinde kısmi upsert (değişen alanlar, MUTLAK değerle;
+  istemci birleştirir).
+- **R1/R2** değer-göreli (a): kayıt = id + başlık baytı + değişen
+  eksenlerin Δ'sı (R1 zigzag varint; R2 sınıflı: eksen başına 4 bit / 1 B
+  / varint) + değişen diğer alanlar mutlak; baseline'ı olmayan ya da
+  yeniden giren kayıt mutlak (D2 gövde + başlık). Full'lar mutlak.
+- **(b)** R2 + run + karede `base_seq` (varint fark).
+- **K1** anahtar kare göreli: Δ grubun son FULL'undaki değere göre.
+- **(c)** bağlantı başına onaylı baseline (Quake 3 / Overwatch): kare =
+  bağlantının 3 ya da 6 tick önce onayladığı görünümden farkı (kaydı o
+  tarihten beri değişen her şey + çıkanlar `removed` olarak); keep-alive
+  full'ları gerekmez.
+- **A10** varlık başına yayın hızı: kayıt en çok her 2. (15 Hz) ya da 3.
+  (10 Hz) tick'te yeniden gönderilir, bekleyen kayıt vadesi gelince o
+  anki değeriyle (yeni ve yeniden giren kayıt hemen).
+
+Bugüne göre bant (istemci başına B/sn değişimi; sekiz örnek istemci):
+
+| Aday | demo 200 | demo 500 | arena 200 | arena 500 | MMO 200 | MMO 500 | savaş 200 | savaş 500 |
+|---|---|---|---|---|---|---|---|---|
+| P0 bugün (B/sn) | 12 558 | 29 029 | 42 402 | 106 179 | 22 182 | 54 216 | 69 027 | 193 023 |
+| D1 etiketsiz (yalnız oyun) | −26 % | −28 % | −27 % | −26 % | −25 % | −25 % | −28 % | −27 % |
+| D2 bit paketli (yalnız oyun) | −26 % | −28 % | −31 % | −29 % | −25 % | −25 % | −39 % | −38 % |
+| D2 + run (kit zarfı) | −44 % | −48 % | −47 % | −45 % | −37 % | −38 % | −49 % | −49 % |
+| **D2 + run + kompakt id** | **−58 %** | **−58 %** | **−47 %** | **−45 %** | **−44 %** | **−43 %** | **−57 %** | **−57 %** |
+| D2 + run + origin | −44 % | −47 % | −47 % | −45 % | −48 % | −50 % | −54 % | −54 % |
+| D5 kısmi upsert (mutlak) | −23 % | −25 % | −22 % | −21 % | −39 % | −41 % | −46 % | −46 % |
+| R1 göreli varint (a) | −23 % | −25 % | −41 % | −40 % | −49 % | −51 % | −55 % | −55 % |
+| R2 göreli (a) | −24 % | −26 % | −39 % | −36 % | −48 % | −49 % | −54 % | −54 % |
+| R2 + run (a) | −42 % | −46 % | −55 % | −53 % | −60 % | −62 % | −65 % | −64 % |
+| (b) = R2 + run + `base_seq` | −42 % | −46 % | −55 % | −52 % | −59 % | −62 % | −65 % | −64 % |
+| R2 + run + kompakt id | −56 % | −56 % | −55 % | −53 % | −67 % | −67 % | −72 % | −72 % |
+| savaş, ithal kayıtlar mutlak² (R2 + run / + kompakt id) | — | — | — | — | — | — | −50 % / −57 % | −50 % / −58 % |
+| K1 anahtar kare göreli | −41 % | −45 % | −39 % | −37 % | −54 % | −55 % | −59 % | −59 % |
+| (c) bağlantı başı, 3 tick gecikme | **+12 %** | **+10 %** | −50 % | −48 % | −57 % | −60 % | −57 % | −58 % |
+| (c) bağlantı başı, 6 tick gecikme | +27 % | +23 % | −34 % | −32 % | −51 % | −53 % | −51 % | −52 % |
+| A10 15 Hz, bugünkü gövde | −3 % | −3 % | −45 % | −46 % | −45 % | −46 % | −38 % | −40 % |
+| A10 15 Hz + D2 + run | −46 % | −49 % | −70 % | −70 % | −65 % | −66 % | −69 % | −70 % |
+| **A10 15 Hz + D2 + run + kompakt id** | **−59 %** | **−59 %** | **−70 %** | **−70 %** | **−68 %** | **−69 %** | **−73 %** | **−74 %** |
+| A10 10 Hz + D2 + run | −53 % | −56 % | −79 % | −79 % | −75 % | −76 % | −78 % | −79 % |
+
+² Savaşın görünümünün çoğu BAŞKA shard'ların kodladığı gövdeler
+(`Shown::Encoded` — çekirdeğin takım rölesi `TeamRecord { bytes }` opak
+bayt taşır): tipli değer olmadan Δ hesaplanamaz. Satır, izleyicinin
+shard bölgesi + 200 m şerit dışındaki kayıtları (izleyicinin kendi
+kaydının konumundan — yakalanan JOIN sonucu) mutlak sayar. Göreli
+kodlama savaşta ancak kodeğe bir `decode` seam'i (ya da röleye tipli
+değer) eklenirse "R2 + run" satırına iner.
+
+Okuma:
+
+1. **Mutlak sıkıştırma kazancın çoğunu alıyor.** Bugünkü protobuf
+   gövdenin etiketleri + kayıt çerçevesi + şişkin id'ler baytın ~yarısı;
+   "D2 + run + kompakt id" dört oyunda **−43 … −58 %** — ve istemci
+   kurallarından hiçbiri değişmiyor (kayıt hâlâ mutlak, idempotent,
+   kayba dayanıklı; encode-once aynen).
+2. **Göreli kodlamanın bunun üstüne kattığı** (aynı zarf ve id'lerle):
+   demo **−2 puan (daha kötü)** — Δ ±1 zaten 1 B, mutlak koordinat da 1 B,
+   göreli başlık baytı fazladan; arena **+8**; savaş **+1** (ithaller
+   mutlak kaldıkça; decode seam'iyle +15); MMO **+23** (AOI, ithal yok,
+   `kind`+`hp` her kayıtta 4 B). Tek anlamlı kazanç MMO tipi oyunda.
+3. **A10 (varlık başına hız) göreli kodlamadan büyük** ve onunla değil
+   mutlak sıkıştırmayla birleşiyor: 15 Hz + D2 + run + kompakt id
+   **−59 … −74 %**; savaş 1000'in ~365 KB/sn'si kabaca ~95 KB/sn olur
+   (500'deki oranla ölçeklenmiş tahmin). Demo'da A10 bugünkü gövdeyle
+   yalnız −3 %: tamsayı konum zaten 2–3 tick'te bir değişiyor.
+4. **(c) bant olarak da kazanmıyor:** onaylı baseline 3–6 tick geride,
+   Δ'lar ve gönderilen küme büyüyor (demo'da hücre çıkışları yerine id
+   başına `removed` — **+10 … +27 %**); keep-alive'ı kaldırmasına rağmen
+   R2 + run'dan kötü.
+5. **origin** yalnız AOI MMO'da (+11–12 puan; 3×3 × 64 m blok) ve
+   savaşta (+5) anlamlı; zarfa oyun anlamı (hangi alan konum) sokar.
+6. **D5** (kısmi mutlak upsert) konum dışı alanları olan oyunlarda D2'ye
+   yakın/iyi (MMO −40 %, savaş −46 %), arenada kötü (maske baytı).
+
+#### Kayıp: rUDP oyun bandında
+
+Bağımsız datagram kaybı (%1, %5); 1 472 B üstü kare FRAG'a bölünür ve
+herhangi bir parçası kaybolursa kare kaybolur (DESIGN §6 "MTU"). Her
+istemci akışı × 20 tohum; "bayat" = istemci görünümünde kayıpsız
+görünümden farklı ya da eksik/fazla kayıt, tick başına görünümün yüzdesi
+olarak ortalama. "Koşu" = görünümün yarısından fazlası yanlışken art arda
+geçen tick'ler.
+
+| Politika | kare kaybı %1 → bayat (koşu) | kare kaybı %5 → bayat (koşu) |
+|---|---|---|
+| bugün: mutlak, boşluk olsa da uygula (P0 boyları) | arena 500 %3,0 (1,0) · MMO 500 %2,0 (1,1) · savaş 500 %4,7 (1,1) · demo 500 %1,1 | %14,3 · %9,8 · **%21,7** (1,3) · %5,7 |
+| aynı kurallar, D2 + run + kompakt id boyları | %1,9 · %1,1 · **%2,3** · %0,9 | %9,4 · %5,2 · **%11,1** · %5,1 |
+| (a) göreli, baseline denetimi yok | %19,6 (17 tick) · %12,4 · %20,8 (18) · %3,9 — **yanlış değerler** | %59 · %43 · %62 · %18 |
+| (b) `base_seq` kapılı, sonraki full'a kadar düşür | %22,9 (17,5) · %14,3 · %25,1 (18) · %10,9 | %67 · %48 · %69 · %42 |
+| (b) + yeniden senkron isteği (RTT 3 tick) | %5,8 (3,8) · %3,5 · %6,4 (3,9) · %2,5 | %24 · %16 · %26 · %12 |
+| K1 anahtar kare göreli | %3,9 (2,0) · %2,3 · %5,4 (2,7) · %2,3 | %17 · %9,7 · %24 · %9,9 |
+
+(200'lük koşular aynı sıralamayı veriyor; tam tablo scratchpad'de.)
+
+- Bugünkü kurallar kaybı zaten iyi taşıyor: bir kayıp ≈ bir tick'lik
+  bayatlık, çünkü hareketli birimler bir sonraki delta'da yeniden mutlak
+  gelir. **Göreli kodlama bunu bozuyor:** kaybolan delta sonrası her
+  delta yanlış tabana uygulanır ((a): sessizce yanlış konumlar,
+  keep-alive'a — 1 sn'ye — kadar birikir) ya da düşürülür ((b): görünüm
+  keep-alive'a kadar donar, ~16–26 tick). Yeniden senkron isteği bunu
+  bugünkünün ~2 katına indiriyor ama istemci → sunucu yeni bir mesaj ve
+  kayıp başına bir one-shot full demek. K1 en dayanıklı göreli biçim
+  (yalnız anahtar karenin kaybı dondurur) ama bandı Δ büyüdükçe erir
+  (arena −37 %).
+- **Küçük kare = az kayıp:** mutlak sıkıştırma kareyi yarıya indirince
+  FRAG parça sayısı düşüyor; savaş 500'de %1 datagram kaybında kare kaybı
+  %4,8 → %2,4, %5'te %22 → %11. rUDP'de mutlak yol bandı VE bayatlığı
+  birlikte düşürüyor.
+
+#### CPU
+
+Grup delta kareleri üzerinde (beş turun en küçüğü; makine yüklü,
+±%20 gürültü), ns/kare (ns/kayıt):
+
+| | demo 500 | arena 500 | MMO 500 | savaş 500 |
+|---|---|---|---|---|
+| kodlama, bugün (P0) — grup başına | 1 235 (14,1) | 3 811 (13,3) | 2 069 (18,1) | 7 030 (20,2) |
+| kodlama, D2 + run | 1 130 (12,9) | 3 835 (13,4) | 2 311 (20,2) | 6 939 (19,9) |
+| kodlama, R2 + run + defterden baseline araması | 2 508 (28,6) | 9 036 (31,6) | 3 940 (34,5) | 13 334 (38,2) |
+| (c) bağlantı başına: görünümün tamamını onaylı görünümle karşılaştır + kodla | 11 224 (202 kayıt; 55,5) | 16 341 (304; 53,8) | 9 760 (121; 80,7) | 27 120 (442; 61,4) |
+| çözme, bugün (P0) — istemci karesi başına | 2 591 (29,6) | 9 318 (32,6) | 4 017 (35,2) | 13 872 (39,8) |
+| çözme, R2 + run (görünümdeki baseline'a Δ) | 2 745 (31,3) | 8 109 (28,3) | 2 969 (26,0) | 10 837 (31,1) |
+
+- (a)/(b)'nin kodlaması kayıt başına ~2×, ama buradaki ölçüm her kayıtta
+  bir hash araması içeriyor; gerçek defterde eski değer elde: `SetLedger::
+  emit_delta`'nın `Entry::Occupied` kolu, `CellBook`'ta hücre içi
+  güncellemede kovanın önceki değeri. Grup başına kodlandığı için (savaş
+  shard'ında ≤ 3 takım karesi) tick başına onlarca µs — önemsiz.
+- İstemci tarafı **ucuzlar** (bayt az, etiket yok): R2 çözümü P0'dan
+  %10–25 hızlı (demo eşit). A24'ü (istemci delta maliyeti) kötüleştirmez.
+- **(c) encode-once'ı bozuyor ve 1000'de sığmıyor:** maliyet bağlantı
+  başına görünümün tamamı. Savaş 1000 (görünüm ~956, W2): ~61 ns × 956 ≈
+  58 µs/bağlantı/tick → 1000 bağlantıda ~58 ms/tick, dört shard aktörüne
+  bölünse shard başına ~14,6 ms (33 ms'lik tick'in %44'ü); bugün aynı iş
+  shard başına ≤ 3 takım karesi ≈ ≤ 60 µs (~250×). Arena 1000 (tek oda
+  aktörü, takım görünümü ~650): ~54 ns × 650 × 1000 ≈ 35 ms/tick — tick
+  bütçesinin üstünde. Artı bağlantı başına onaylı durum geçmişi (varlık
+  başına son onaylı değer tablosu bile ~1000 × 956 kayıt) ve onay yolu
+  (bugün istemci snapshot'ı onaylamıyor; `InputAck` ters yön).
+
+#### Seçenekler — istemci kuralı, seam, taşıma, shard
+
+**(a) Grubun son gönderdiğine göre göreli, encode-once korunur.**
+- *İstemci kuralı:* "baseline'lı delta boşluk olsa da uygulanır" DÜŞER:
+  göreli kayıt yalnız grubun bir önceki karesini uygulamış istemcide
+  doğrudur; kaybolmuş kareden sonraki her göreli kayıt yanlış değer
+  üretir ve istemci bunu SEZEMEZ (sequence boşluğu olay güdümlü akışta
+  normal). Bu yüzden (a) tek başına güvensiz: yalnız her üyenin grubun
+  tabanını tuttuğu garanti edilirse doğru.
+- *Garanti nerede kırılıyor:* rUDP oyun bandı (kayıp + FRAG); TCP/WS/
+  TLS/QUIC güvenilir ama **çekirdeğin fan-out'u dolu çıkış kanalında
+  batch'i düşürüyor** (`dropped_frames`; T turunda arena 1000'de
+  1 000–1 800) — "güvenilir taşıma" ≠ "her kare ulaştı". (a) bu yüzden
+  çekirdekten kit'e "şu oyuncunun batch'i düştü" sinyali ister (`GameLogic`
+  kancası → kit `Baselines::forget` → sonraki tick one-shot full).
+- *Seam:* `RecordCodec::encode_delta(id, old: &Wire, new: &Wire, out) ->
+  bool` (varsayılan `false` = mutlak yaz), `ClientDecoder::record_delta(body,
+  &mut Record)`; kit eski değeri defterden verir. İthal gövdeler için
+  `RecordCodec::decode(body) -> Option<(u64, Wire)>` ya da röleye tipli
+  değer (çekirdek opak; kit-içi değer tablosu gerekir).
+- *AOI hücre parçaları:* parça bir kez kodlanıp hücreyi gören her gruba
+  paylaşılıyor; hücre içi güncelleme herkeste aynı tabana dayanır (hücreyi
+  gören her grup onu önceki tick'te de gördü — grup = sabit hücre bloğu,
+  blok değişen bağlantı one-shot full alıyor), ama **hücreye GİREN kayıt**
+  (geçiş; demo'da delta upsert'lerinin %5,5'i) mutlak kalmak zorunda:
+  kaynak hücreyi görmeyen gruplar tabanı tutmuyor.
+- *Göç / ödünç / ithal:* sahiplik değişince (kendi → ödünç, ithal →
+  kendi, `Shown::Encoded` ↔ `Typed`) defterdeki değerin türü değişir →
+  o kayıt bir kez mutlak. Göç eden oyuncunun kendisi zaten one-shot full
+  alıyor (yeni grup).
+- *Keep-alive / one-shot full:* mutlak kalır, tabanı sıfırlar.
+
+**(b) Kare tabanını adlandırır (`base_seq`), istemci yalnız o tabandaysa
+uygular.**
+- *İstemci kuralı:* delta, istemcinin o gruptaki son kabul edilmiş
+  sequence'ı `base_seq`'e eşitse uygulanır; değilse baseline'sız delta
+  gibi düşürülür ve bir sonraki full'u bekler (ya da yeniden senkron
+  ister). Bugünkü "boşluk olsa da uygula" kuralının yerine geçer; boşluk
+  artık tespit edilebilir kayıptır.
+- *Sunucu:* grup başına son gönderilen sequence (defter zaten tutuyor:
+  `SetLedger` adımı; AOI için grup başına son kare tick'i). One-shot
+  full'un sequence'ı = grubun o tick'teki karesi → sonraki delta'nın
+  tabanıyla eşleşir (G3-2 sırası korunur).
+- *Taşıma:* TCP'de fan-out düşmesi kendiliğinden yakalanır (istemci
+  düşürür), ama iyileşme keep-alive'a kadar ~1 sn donmuş görünüm; rUDP'de
+  %1 kayıpta görünümün ~%14–25'i bayat (tablo) — yeniden senkron isteği
+  (istemci → sunucu yeni kontrol mesajı, sunucuda `Baselines::forget`)
+  olmadan oyun bandında kullanılamaz.
+- *Seam:* (a) ile aynı + zarfta `base_seq` alanı + istemcide grup başına
+  son kabul sequence'ı (bugün zaten var).
+
+**(c) Bağlantı başına onaylı baseline.** İstemci kuralı en temiz
+(taban her zaman istemcinin onayladığı kare; kayıp yalnız Δ'yı büyütür),
+ama encode-once gider, istemci → sunucu snapshot onayı gerekir (yeni
+mesaj, rUDP'de oyun bandı), sunucuda bağlantı başına geçmiş tutulur; CPU
+1000'de tick bütçesini aşıyor ve bant (a)'dan kötü. **Elendi.**
+
+**(d) Göreli değil, daha sıkı mutlak kodlama.** Üç bağımsız parça:
+- *(d1) Oyunun kodeği* (kit değişmez): etiketsiz/bit paketli gövde
+  (−25 … −39 %). Kit sözleşmesi buna zaten izin veriyor (gövde opak
+  bayt; `Wire = Bytes` de mümkün) — ama oyunun `.proto`'sundaki tipli
+  ayna artık kaydı çözemez: ayna `repeated bytes entities` bildirir,
+  istemci gövdeyi elle çözer (loadgen'in çözücüleri zaten
+  `client::wire::Fields` ile elle yürüyor). Karar gerekir (soru 1).
+- *(d2) Kompakt wire id* (çekirdek/kit id basımı; istemci kuralı
+  değişmez, id opak): shard aralığı `k · 2^20` yerine iç içe geçmiş basım
+  (`n · S + k`) ya da daha dar aralıklar → id ≤ 2 B; demo/MMO/savaşta
+  +7 … +14 puan. Çekirdeğin aralık tükenme koruması (`serial_range`) ve
+  id'leri sabitleyen testler etkilenir.
+- *(d3) Paketli kayıt koşusu* (kit zarfı; anlam aynı): kayıt başına
+  `0x12` + uzunluk yerine tek bir `bytes` alanında art arda kendini
+  sınırlayan kayıtlar; +11 … +19 puan. İstemci kuralı yalnız "kayıtlar
+  alan 2'de ya da alan 6'da" diye genişler (aşağıda önerilen metin).
+- *(origin)* AOI'de ek +5 … +12 puan, ama zarfa "konum alanı" bilgisini
+  sokar; ertelenir.
+
+**(e) Birleşimler.** Ölçülen en iyi mutlak yol "D2 + run + kompakt id"
+(−43 … −58 %); en iyi göreli "R2 + run + kompakt id" (−53 … −72 %,
+savaşta decode seam'iyle); ikisinin üstüne A10 15 Hz (−59 … −74 %,
+mutlak). "Her yerde (d), yalnız güvenilir taşımada (b)" birleşimi ölçülen
+farkı yalnız MMO tipi AOI oyununda (+23 puan) haklı çıkarıyor; arenada
++8, savaşta decode seam'i olmadan +1, demo'da eksi.
+
+#### Öneri
+
+**A22'yi (değer-göreli kodlama) şimdi yapmayın.** Veri, kazancın
+çoğunun göreli kodlamadan değil bugünkü kaydın şişkinliğinden geldiğini
+gösteriyor: protobuf etiketleri, kayıt başına çerçeve ve 3–4 baytlık
+shard id'leri. Bunlar kaldırılınca göreli kodlamanın ek kazancı −2 …
++8 puana iniyor (MMO hariç: +23), buna karşılık istemci sözleşmesinin kalbi —
+mutlak, idempotent, kayba dayanıklı upsert — gidiyor ve yerine taban
+takibi, yeniden senkron mesajı ve çekirdekten düşme sinyali geliyor.
+Sıra (her adım ayrı karar, ayrı tur, her biri kendi başına ölçülür):
+
+1. **(d2) Kompakt wire id** — istemci kuralı değişmez; bugünkü
+   gövdeyle tek başına demo −10 … −14 %, MMO −6 … −7 %, savaş −7 %
+   (arena 0: tek oda, id'ler zaten küçük).
+2. **(d3) Paketli kayıt koşusu, oyun başına opt-in** — kit zarfı + iki
+   küçük seam (aşağıda); (d1) oyunun kodeğinde (demolar için örnek
+   kodek). Birlikte −43 … −58 %, rUDP'de kare kaybı yarıya.
+3. **A10 varlık başına yayın hızı** — en büyük sonraki kaldıraç (15 Hz:
+   arena/MMO/savaşta +17 … +26 puan; demo +1 — tamsayı konumu zaten
+   seyrek değişiyor), istemci enterpolasyonu ister (Unity tarafı).
+4. **A22 ancak bundan sonra ve bir MMO tipi oyun hâlâ bant sıkıntısı
+   gösterirse**, (b) biçiminde: oda başına opt-in, yeniden senkron
+   isteği + çekirdek düşme sinyaliyle, ithaller için `decode` seam'iyle.
+   (a) tek başına (sessiz yanlış değer) ve (c) (CPU, bant) elendi.
+
+*Önerilen `kit.proto` istemci kuralı metni (adım 2; `kit.proto`'ya bu
+turda DOKUNULMADI):*
+
+```proto
+  // Entity records: in full mode the complete view, in delta mode the
+  // upserts. Each entry is one record BODY written by the game's
+  // `RecordCodec::encode` (the demo: an `EntityRecord`).
+  repeated bytes entities = 2;
+  ...
+  // RECORD RUN (a game's opt-in, `RecordCodec::RUN`): the same records
+  // as `entities`, written back to back in ONE field instead of one
+  // length-delimited entry each — every record in the game's
+  // self-delimiting run format (its client decoder reads one record off
+  // the front of the run and knows where it ends). A frame carries its
+  // records in `entities` OR in `records`, never both. The records keep
+  // every rule of `entities`: in full mode the complete view, in delta
+  // mode absolute, idempotent upserts applied after `removed` and
+  // `cell_exits`, even across a sequence gap.
+  bytes records = 6;
+```
+
+Kural bölümüne tek cümle: "`entities` in the rules below means the
+frame's records, whichever field carries them (`entities` = 2 or the
+`records` run = 6)." Başka hiçbir istemci kuralı değişmez.
+
+*Seam (adım 2):* `RecordCodec` — `const RUN: bool = false;` (true: kit
+kayıtları alan 6'ya art arda yazar, `encode` kendini sınırlayan kayıt
+yazar; ithal gövdeler aynı biçimde olduğu için olduğu gibi eklenir);
+`ClientDecoder` — `fn run_record(&self, run: &mut &[u8]) -> Result<(u64,
+Self::Record), ClientError>` (varsayılan: `Malformed("no record run")`);
+`ClientView`'ın ikinci yürüyüşü alan 6'yı bununla tüketir. `SetLedger` /
+`CellPieces` / `put_entity_body` yalnız çerçeve yazımını değiştirir
+(yazıcı `WriteRecord` üstünden, bayt baytına `RUN = false`'da bugünkü).
+Tek dikkat: paylaşılan hücre parçaları bugün kayıt başına çerçeveli
+bayt parçaları; run modunda parça çerçevesiz kayıt dizisi olur ve grup
+karesi parçaları tek alan 6'nın gövdesinde birleştirir (uzunluk önekini
+en sona yazmak için ölçü önce toplanır — `put_delimited`'ın tekniği).
+
+*(b) seçilirse önerilecek metin (kayıt için):* "DELTA frames carry
+`base_seq` (field 7): the sequence of the group frame (or one-shot
+private full) the delta was encoded against. A client applies a delta
+only if its last accepted sequence for the group equals `base_seq`;
+otherwise it drops it as it drops a delta without a baseline, and heals
+at the next full (group full, keep-alive full or the one-shot full a
+resync request (op …) obtains). Records flagged relative are the
+difference from the value the client holds; a relative record for an id
+the client does not hold is a protocol error." — ve "a delta WITH a
+baseline is applied on top, even across a sequence gap" cümlesi silinir.
+
+#### Bakımcının karar vermesi gerekenler
+
+1. **Oyun kayıt gövdesi protobuf'tan çıkabilir mi?** (d1) tipli aynanın
+   kaydı çözmesini bırakır (ayna `repeated bytes`, gövde elle). Kabulse
+   dört demo için örnek bit paketli kodek bir turun işi. Değilse (d3)
+   de anlamını yitirir (protobuf gövdesi kendini sınırlamaz, koşuda yine
+   uzunluk ister) ve kalan yalnız (d2): −43 … −58 % yerine −0 … −14 %
+   (ölçüldü: "P0 + kompakt id" demo −14/−10, arena 0, MMO −7/−6, savaş
+   −7/−7).
+2. **Kit zarfına yeni alan (`records = 6`) — sürüm nasıl?** Oyun başına
+   opt-in (eski istemci o oyunda yeni alanı bilmezse kayıtları görmez);
+   E5 (protokol sürüm müzakeresi) şimdi mi gerekli, yoksa oyun
+   opcode'u/`protocol_version` yeter mi?
+3. **Wire id basımı değişebilir mi?** (iç içe geçmiş ya da dar aralık;
+   çekirdeğin `SHARD_SERIAL_RANGE`/tükenme koruması, id'leri sabitleyen
+   testler.) Id istemciye opak; göçte id korunur, bu değişmez.
+4. **A10'un önceliği** — Unity tarafında enterpolasyon taahhüdü var mı?
+   Varsa sıra 1 → 2 → A10; yoksa 1 → 2 ve A10 bekler.
+5. **A22 BACKLOG'da nasıl kalsın?** Öneri: tetikleyicisi "(d)+A10
+   sonrası hâlâ bant/MTU baskısı gösteren AOI tipi bir oyun" olarak
+   yeniden yazılsın; biçim (b) + yeniden senkron + düşme sinyali.
+
+**Bulgular (kayıt):**
+
+- **A22-1 — fan-out düşmesi one-shot full'u da düşürüyor.** Çekirdek dolu
+  çıkış kanalında batch'in tamamını atıyor; o batch'te one-shot full
+  varsa `Baselines` oyuncuyu baseline'lı sayar, istemci keep-alive'a
+  kadar delta'ları düşürür (bugünkü kurallarla güvenli: en çok bir
+  keep-alive). Göreli her seçenekte bu bir doğruluk sorunudur → düşme
+  sinyali gerekir. Bugün kod değişmedi.
+- **A22-2 — shard id'leri kaydın ~%23–40'ı.** `k · 2^20` aralıkları shard
+  1–3'ün id'lerini 3–4 baytlık varint yapıyor; tek odalı arenada yok.
+- **A22-3 — keep-alive/private full'lar değişmemiş kayıt taşıyor ama
+  baytın ≤ %16'sı:** keep-alive temposunu oynatmak kaldıraç değil.
+- Sayılar ve politika simülasyonu 32 çekirdekli, yüklü (1 dk 14–21)
+  makinede, loopback TCP; rUDP kaybı simüle (gerçek ağ değil).
+
+**Doğrulama:** 818 → **821** test / 0 hata / 1 ignored (+2 `capture`
+birim testi, +1 `loadgen_games` yakalama testi; args testine bir ret
+satırı); `cargo clippy --workspace --all-targets -- -D warnings` 0;
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` temiz;
+hiçbir bayt sabitleme testine dokunulmadı.
+
 ## 11. Kabul kriteri
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
