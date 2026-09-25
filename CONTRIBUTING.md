@@ -36,6 +36,8 @@ client'ı (`docs/SECURITY.md` §3.7; yerelde docker imajı gerekir).
 Tur sonu ayrıca:
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 (ve `--game arena`, `--game mmo` ile) → `left=50`, `errors=0`, panik yok.
+Loadgen'in reddettiği bir komut satırı panik değildir: stderr'de tek
+satır (`gsb-loadgen: <sebep>`) ve çıkış kodu 2; `--help` stdout + 0.
 
 ## Yasak desenler (`gsb-lint`)
 

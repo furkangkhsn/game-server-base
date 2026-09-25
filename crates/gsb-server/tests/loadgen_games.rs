@@ -12,6 +12,7 @@ use std::process::{Command, Output};
 fn loadgen(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
         .args(args)
+        .env("RUST_BACKTRACE", "1")
         .output()
         .expect("spawning gsb-loadgen")
 }
@@ -152,12 +153,18 @@ fn loadgen_orchestrates_the_mmo() {
 
 /// The command line refuses what cannot run: an unknown game (naming
 /// the compiled-in ones) and a demo flag written for another game (in
-/// either order) — the server's "explicitly written fixed key" rule.
+/// either order) — the server's "explicitly written fixed key" rule. A
+/// refusal is a message on stderr and exit status 2: no panic, no
+/// backtrace (even with `RUST_BACKTRACE` set).
 #[test]
 fn loadgen_refuses_a_wrong_game_line() {
     let stderr = |out: Output| {
-        assert!(!out.status.success(), "must refuse");
-        String::from_utf8_lossy(&out.stderr).into_owned()
+        let e = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(2), "a usage error: {e}");
+        assert!(e.starts_with("gsb-loadgen: "), "{e}");
+        assert!(!e.contains("panicked") && !e.contains("backtrace"), "{e}");
+        assert_eq!(e.lines().count(), 1, "one line: {e}");
+        e
     };
     let e = stderr(loadgen(&["1", "--game", "chess"]));
     assert!(e.contains("unknown game `chess`"), "{e}");
@@ -178,4 +185,11 @@ fn loadgen_refuses_a_wrong_game_line() {
         e.contains("--cell-size does not apply to --game mmo"),
         "{e}"
     );
+    let e = stderr(loadgen(&["--duration", "soon"]));
+    assert!(
+        e.contains("--duration: expected a number, got `soon`"),
+        "{e}"
+    );
+    let e = stderr(loadgen(&["1", "--bogus"]));
+    assert!(e.contains("unknown flag --bogus (try --help)"), "{e}");
 }

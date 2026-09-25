@@ -373,7 +373,19 @@ Misc:
   -h, --help                this text";
 
 fn main() {
-    let args = parse_args();
+    // A refused command line is a message and exit status 2 (a usage
+    // error), never a panic: the reason is the whole diagnosis.
+    let args = match parse_args() {
+        Ok(Cli::Run(args)) => *args,
+        Ok(Cli::Help) => {
+            println!("{USAGE}");
+            return;
+        }
+        Err(e) => {
+            eprintln!("gsb-loadgen: {e}");
+            std::process::exit(2);
+        }
+    };
     // Default worker count = available_parallelism: `workers = 0` used to
     // mean a SINGLE worker, which at ≥1000 in-process clients starved the
     // room actor between ticks (measured: 19-22 Hz with sub-ms steps and

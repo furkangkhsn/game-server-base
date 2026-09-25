@@ -53,9 +53,52 @@ impl Args {
     }
 }
 
-pub(crate) fn parse_args() -> Args {
-    let mut args = Args::defaults();
+/// A command line the generator refuses: `main` prints it on stderr and
+/// exits with status 2 (a usage error) — no panic, no backtrace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CliError(pub(crate) String);
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CliError {}
+
+/// What the command line asks for.
+pub(crate) enum Cli {
+    /// A run (whichever mode its flags pick).
+    Run(Box<Args>),
+    /// `-h` / `--help`: print the usage text and exit successfully.
+    Help,
+}
+
+/// `flag`'s value `s` as a number.
+fn number<T: std::str::FromStr>(flag: &str, s: String) -> Result<T, CliError> {
+    s.parse()
+        .map_err(|_| CliError(format!("{flag}: expected a number, got `{s}`")))
+}
+
+/// `Err(why)` unless `ok`.
+fn refuse_unless(ok: bool, why: &str) -> Result<(), CliError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(CliError(why.to_string()))
+    }
+}
+
+/// The process's own command line (see [`parse`]).
+pub(crate) fn parse_args() -> Result<Cli, CliError> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    parse(&argv)
+}
+
+/// Parse `argv` (the arguments after the program name) into a run or a
+/// help request, or the reason the line cannot run.
+pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
+    let mut args = Args::defaults();
     // The game-specific flags written, checked against `--game` once the
     // whole line is read (the flags may come in any order).
     let mut game_flags: Vec<String> = Vec::new();
@@ -70,39 +113,37 @@ pub(crate) fn parse_args() -> Args {
             if i < argv.len() {
                 let s = argv[i].clone();
                 i += 1;
-                s
+                Ok(s)
             } else {
-                panic!("{a} needs a value (try --help)")
+                Err(CliError(format!("{a} needs a value (try --help)")))
             }
         };
         match a.as_str() {
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                std::process::exit(0);
-            }
-            "--game" => args.game = crate::bot::game_named(&v()).unwrap_or_else(|e| panic!("{e}")),
-            "--duration" => args.duration = Duration::from_secs_f64(v().parse().expect("number")),
-            "--move-ms" => args.move_ms = Duration::from_millis(v().parse().expect("number")),
-            "--room" => args.room = v().parse().expect("number"),
-            "--offset" => args.offset = v().parse().expect("number"),
-            "--stagger-ms" => args.stagger_ms = v().parse().expect("number"),
-            "--addr" => args.addr = Some(v()),
+            "-h" | "--help" => return Ok(Cli::Help),
+            "--game" => args.game = crate::bot::game_named(&v()?).map_err(CliError)?,
+            "--duration" => args.duration = Duration::from_secs_f64(number(&a, v()?)?),
+            "--move-ms" => args.move_ms = Duration::from_millis(number(&a, v()?)?),
+            "--room" => args.room = number(&a, v()?)?,
+            "--offset" => args.offset = number(&a, v()?)?,
+            "--stagger-ms" => args.stagger_ms = number(&a, v()?)?,
+            "--addr" => args.addr = Some(v()?),
             "--profile" => {
-                args.profile = Profile::parse(&v())
-                    .unwrap_or_else(|| panic!("--profile: expected ring|spread|still (try --help)"))
+                args.profile = Profile::parse(&v()?).ok_or_else(|| {
+                    CliError("--profile: expected ring|spread|still (try --help)".into())
+                })?
             }
             "--still-frac" => {
-                let f: f64 = v().parse().expect("number");
-                assert!((0.0..=1.0).contains(&f), "--still-frac must be in 0..=1");
+                let f: f64 = number(&a, v()?)?;
+                refuse_unless((0.0..=1.0).contains(&f), "--still-frac must be in 0..=1")?;
                 args.still_frac = f;
             }
             "--spawn-half-size" => {
-                let s = v().parse().expect("number");
+                let s = number(&a, v()?)?;
                 args.spawn_half = s;
                 args.server_spawn_half = s; // one knob: spawn map = home map
             }
             "--visibility" => {
-                let s = v();
+                let s = v()?;
                 args.visibility = match s.as_str() {
                     "all" => gsb_server::Visibility::All,
                     "spatial" => gsb_server::Visibility::Spatial,
@@ -110,143 +151,104 @@ pub(crate) fn parse_args() -> Args {
                     "pvs" => gsb_server::Visibility::Pvs,
                     "sharded" => gsb_server::Visibility::Sharded,
                     other => {
-                        panic!("--visibility: expected all|spatial|team|pvs|sharded, got {other}")
+                        return Err(CliError(format!(
+                            "--visibility: expected all|spatial|team|pvs|sharded, got {other}"
+                        )));
                     }
                 };
             }
             "--topology" => {
-                let s = v();
+                let s = v()?;
                 args.topology = match s.as_str() {
                     "single" => Some(gsb_server::Topology::Single),
                     "sharded" => Some(gsb_server::Topology::Sharded),
-                    other => panic!("--topology: expected single|sharded, got {other}"),
+                    other => {
+                        return Err(CliError(format!(
+                            "--topology: expected single|sharded, got {other}"
+                        )));
+                    }
                 };
             }
             "--shard-count" => {
-                args.shard_count = v().parse().expect("number");
+                args.shard_count = number(&a, v()?)?;
             }
-            "--cell-size" => args.cell_size = v().parse().expect("number"),
-            "--vision-radius" => args.vision_radius = v().parse().expect("number"),
-            "--max-snapshot-bytes" => args.max_snapshot_bytes = v().parse().expect("number"),
+            "--cell-size" => args.cell_size = number(&a, v()?)?,
+            "--vision-radius" => args.vision_radius = number(&a, v()?)?,
+            "--max-snapshot-bytes" => args.max_snapshot_bytes = number(&a, v()?)?,
             "--serve" => args.serve = true,
-            "--bind" => args.bind = v(),
-            "--metrics-listen" => args.metrics_listen = Some(v()),
+            "--bind" => args.bind = v()?,
+            "--metrics-listen" => args.metrics_listen = Some(v()?),
             "--orchestrate" => args.orchestrate = true,
-            "--procs" => args.procs = v().parse().expect("number"),
+            "--procs" => args.procs = number(&a, v()?)?,
             "--pin" => args.pin = true,
-            "--pin-server-cores" => args.pin_server_cores = v().parse().expect("number"),
-            "--workers" => args.workers = v().parse().expect("number"),
+            "--pin-server-cores" => args.pin_server_cores = number(&a, v()?)?,
+            "--workers" => args.workers = number(&a, v()?)?,
             "--max-players" => {
-                let n: u32 = v().parse().expect("number");
+                let n: u32 = number(&a, v()?)?;
                 args.max_players = Some(n);
             }
             "--max-connections" => {
-                let n: u64 = v().parse().expect("number");
+                let n: u64 = number(&a, v()?)?;
                 args.max_connections = Some(n);
             }
             "--idle-timeout-secs" => {
-                args.idle_timeout_secs = Some(v().parse().expect("number"));
+                args.idle_timeout_secs = Some(number(&a, v()?)?);
             }
             "--write-stall-secs" => {
-                args.write_stall_secs = Some(v().parse().expect("number"));
+                args.write_stall_secs = Some(number(&a, v()?)?);
             }
-            "--flood-id" => args.flood_id = Some(v().parse().expect("number")),
+            "--flood-id" => args.flood_id = Some(number(&a, v()?)?),
             "--churn-secs" => {
-                let f: f64 = v().parse().expect("number");
-                assert!(f > 0.0, "--churn-secs must be > 0");
+                let f: f64 = number(&a, v()?)?;
+                refuse_unless(f > 0.0, "--churn-secs must be > 0")?;
                 args.churn_secs = Some(f);
             }
             "--disconnect-grace-secs" => {
-                args.disconnect_grace_secs = Some(v().parse().expect("number"));
+                args.disconnect_grace_secs = Some(number(&a, v()?)?);
             }
             "--mmo-duel-frac" => {
-                let f: f64 = v().parse().expect("number");
-                assert!((0.0..=1.0).contains(&f), "--mmo-duel-frac must be in 0..=1");
+                let f: f64 = number(&a, v()?)?;
+                refuse_unless((0.0..=1.0).contains(&f), "--mmo-duel-frac must be in 0..=1")?;
                 args.mmo_duel_frac = f;
             }
             "--mmo-crystallize" => {
-                args.mmo_crystallize = match v().as_str() {
+                args.mmo_crystallize = match v()?.as_str() {
                     "on" => Some(true),
                     "off" => Some(false),
-                    other => panic!("--mmo-crystallize: expected on|off, got {other}"),
+                    other => {
+                        return Err(CliError(format!(
+                            "--mmo-crystallize: expected on|off, got {other}"
+                        )));
+                    }
                 };
             }
             "--churn-cycles" => {
-                args.churn_cycles = v().parse().expect("number");
+                args.churn_cycles = number(&a, v()?)?;
             }
             "--transport" => {
-                let s = v();
+                let s = v()?;
                 args.transport = match s.as_str() {
                     "tcp" => gsb_server::TransportKind::Tcp,
                     "udp" => gsb_server::TransportKind::Udp,
-                    other => panic!("--transport: expected tcp|udp, got {other}"),
+                    other => {
+                        return Err(CliError(format!(
+                            "--transport: expected tcp|udp, got {other}"
+                        )));
+                    }
                 };
             }
-            "--tls-ca" => args.tls_ca = Some(v()),
-            "--tls-server-name" => args.tls_server_name = v(),
-            s if s.starts_with("--") => panic!("unknown flag {s} (try --help)"),
-            s => args.clients = s.parse().expect("N must be a number"),
+            "--tls-ca" => args.tls_ca = Some(v()?),
+            "--tls-server-name" => args.tls_server_name = v()?,
+            s if s.starts_with("--") => {
+                return Err(CliError(format!("unknown flag {s} (try --help)")));
+            }
+            s => args.clients = number("N", s.to_string())?,
         }
     }
-    // The spread profile's default map (a "wide map": 2000×2000) — the
-    // ring profile stays on the historical 100×100 arena, so the default
-    // run is bit-identical to the historical one.
-    if args.spawn_half == 50.0 && args.profile == Profile::Spread {
-        args.spawn_half = 1000.0;
-        args.server_spawn_half = 1000.0;
-    }
-    let written: Vec<&str> = game_flags.iter().map(String::as_str).collect();
-    if let Err(e) = crate::bot::check_game_flags(args.game, &written) {
-        panic!("{e}");
-    }
-    if args.orchestrate && args.serve {
-        panic!("--orchestrate and --serve are mutually exclusive (try --help)");
-    }
-    // The connect stagger sleeps `GLOBAL id × stagger_ms` (partition
-    // invariance: a `--procs P` split connects each id at the same
-    // instant as a single-process run), so the LAST client's delay is
-    // `N × stagger_ms` against ONE shared window of `--duration`. A
-    // schedule where that overruns the window silently starves the late
-    // partitions — they sleep past their own deadline and report
-    // joined=0 — which reads as a server problem. Refuse to start
-    // instead: shrink `--stagger-ms`, grow `--duration`, or drop the
-    // stagger (the herd then lands on admission, not on connect).
-    let window = args.duration;
-    let last_connect = Duration::from_secs_f64(args.clients as f64 * args.stagger_ms / 1000.0);
-    if last_connect > window {
-        panic!(
-            "--stagger-ms {} × {} clients = {:.1}s of connect spread exceeds the \
-             {}s run window: the late partitions would sleep past the deadline \
-             and join nothing. Use --stagger-ms <= {:.1} (window/clients), or a \
-             longer --duration",
-            args.stagger_ms,
-            args.clients,
-            last_connect.as_secs_f64(),
-            window.as_secs(),
-            window.as_secs_f64() / args.clients as f64 * 1000.0,
-        );
-    }
-    // TLS is an external-client feature this round: there is no way to hand
-    // the in-process/served server its cert/key here, so a CA without an
-    // external target would silently test plaintext against a plaintext
-    // server — refuse instead of lying. And rUDP takes no TLS anywhere
-    // (docs/SECURITY.md §2 decision 7).
-    if args.tls_ca.is_some() && args.addr.is_none() {
-        panic!(
-            "--tls-ca requires --addr HOST:PORT: the in-process server has no \
-             TLS config this round (it stays plaintext)"
-        );
-    }
-    if args.tls_ca.is_some() && args.transport == gsb_server::TransportKind::Udp {
-        panic!("--tls-ca with --transport udp is contradictory: rUDP takes no TLS");
-    }
-    if args.serve && args.clients != 100 && args.addr.is_none() {
-        // `gsb-loadgen --serve` takes no client count; a bare number
-        // before --serve is the N of a client run, so this is a mistake.
-        eprintln!("note: --serve ignores the client count (it runs no clients)");
-    }
-    if !args.serve && !args.orchestrate && args.clients == 0 {
-        panic!("N must be > 0");
-    }
-    args
+    check::check(&mut args, &game_flags)?;
+    Ok(Cli::Run(Box::new(args)))
 }
+
+mod check;
+#[cfg(test)]
+mod tests;
