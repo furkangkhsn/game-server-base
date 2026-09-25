@@ -31,6 +31,7 @@ mod migration;
 mod seam;
 mod spatial;
 mod team;
+mod team_actors;
 
 /// The spatial composite over the same instantiation, with the kit's 2D
 /// grid AOI.

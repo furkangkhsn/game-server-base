@@ -30,6 +30,13 @@ prost = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 
+# The real-actor tests of the sharded team composite run the core's
+# registry and shard actors on a paused-clock runtime (`test-util`): the
+# ticker's sleeps auto-advance only when every actor is idle, so each
+# tick's exports are relayed before the next tick begins.
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [build-dependencies]
 gsb-lint = { workspace = true }
 prost-build = { workspace = true }
