@@ -20,12 +20,15 @@ pub(super) struct Stats {
     pub(super) long_runs: u64,
     /// The longest run.
     pub(super) max_run: usize,
+    /// A digest of every frame's content in arrival order (FNV-1a over
+    /// the parts, the framing aside): the session's content pin.
+    pub(super) digest: u64,
 }
 
 impl Stats {
     /// Count one tick's frames of one client.
     pub(super) fn see(&mut self, frames: &[(bool, Parts)]) {
-        for (_, p) in frames {
+        for (private, p) in frames {
             self.fulls += u64::from(!p.delta);
             self.deltas += u64::from(p.delta);
             self.removed += p.removed.len() as u64;
@@ -33,6 +36,32 @@ impl Stats {
             self.records += p.records.len() as u64;
             self.long_runs += u64::from(p.run_len >= 0x80);
             self.max_run = self.max_run.max(p.run_len);
+            self.fold(u64::from(*private));
+            self.fold(p.sequence);
+            self.fold(u64::from(p.delta));
+            for &id in &p.removed {
+                self.fold(id);
+            }
+            for exit in &p.exits {
+                self.fold(exit.len() as u64);
+                exit.iter().for_each(|&b| self.fold(u64::from(b)));
+            }
+            for &(id, x, y) in &p.records {
+                self.fold(id);
+                self.fold(u64::from(x as u32));
+                self.fold(u64::from(y as u32));
+            }
+            self.fold(u64::MAX); // the frame's end
+        }
+    }
+
+    /// Fold one value into [`Self::digest`] (FNV-1a, byte by byte).
+    fn fold(&mut self, v: u64) {
+        if self.digest == 0 {
+            self.digest = 0xCBF2_9CE4_8422_2325;
+        }
+        for b in v.to_le_bytes() {
+            self.digest = (self.digest ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3);
         }
     }
 }

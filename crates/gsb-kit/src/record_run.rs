@@ -8,6 +8,11 @@
 //! room actors: `rig`); the sharded kinds on four shard logics per room
 //! stepped in the core's phase order (`shards` — why not the actors:
 //! see there).
+//!
+//! Every session's content is also PINNED (a digest of every frame the
+//! `entities` side received, taken before the per-record send rate
+//! existed — A10): a game on the default rate ships exactly what it
+//! shipped before, room kind by room kind.
 
 use bevy_ecs::prelude::World;
 use gsb_core::registry::RoomFactory;
@@ -41,7 +46,7 @@ const SHARDS: usize = 4;
 const TICKS: u64 = 600;
 
 /// Play the seeded session on the actor twin (the single-room kinds).
-async fn play<G, St, Sp>(factory: RoomFactory<World, G, St, Sp>, seed: u64) -> Rig
+async fn play<G, St, Sp>(factory: RoomFactory<World, G, St, Sp>, seed: u64, pin: u64) -> Rig
 where
     G: Eq + std::hash::Hash + Clone + std::fmt::Debug + Send + 'static,
     St: std::fmt::Debug + Send + 'static,
@@ -54,7 +59,7 @@ where
     }
     assert_eq!(rig.counters().errors, 0);
     assert!(rig.players() >= 5, "a crowd played");
-    exercised(&rig.stats);
+    exercised(&rig.stats, pin);
     rig
 }
 
@@ -62,6 +67,7 @@ where
 fn play_shards<G: Key, St: Mig>(
     build: fn(bool, usize) -> Shard<G, St>,
     seed: u64,
+    pin: u64,
 ) -> Shards<G, St> {
     let mut twin = Shards::new(build, SHARDS);
     let mut script = Script::new(seed, 20);
@@ -70,13 +76,23 @@ fn play_shards<G: Key, St: Mig>(
     }
     assert_eq!(twin.counters().errors, 0);
     assert!(twin.spread().len() == SHARDS, "every shard hosted players");
-    exercised(&twin.stats);
+    exercised(&twin.stats, pin);
     twin
 }
 
 /// Both framings carried the same content, and the run was exercised
 /// (multi-byte run lengths included).
-fn exercised((ent, run): &(Stats, Stats)) {
+///
+/// `pin` is the session's content digest as the kit produced it before
+/// the per-record send rate existed (A10, measured at `a4c8d3e`): a
+/// game that keeps the default rate — every codec here — ships exactly
+/// the same content, frame by frame.
+fn exercised((ent, run): &(Stats, Stats), pin: u64) {
+    assert_eq!(
+        ent.digest, pin,
+        "the session's content changed: {:#018x}",
+        ent.digest
+    );
     assert_eq!(
         (ent.fulls, ent.deltas, ent.removed, ent.exits, ent.records),
         (run.fulls, run.deltas, run.removed, run.exits, run.records),
@@ -95,7 +111,7 @@ async fn the_open_room_runs_alike() {
             open::<FixCodec>()
         }
     };
-    play(single(build), 0xA31_0001).await;
+    play(single(build), 0xA31_0001, 0xa3c3_e651_99d6_a8e2).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -107,7 +123,7 @@ async fn the_aoi_room_runs_alike() {
             aoi::<FixCodec>()
         }
     };
-    let rig = play(single(build), 0xA31_0002).await;
+    let rig = play(single(build), 0xA31_0002, 0x5986_a521_5957_9f93).await;
     let (_, run) = &rig.stats;
     assert!(
         run.deltas > 100 && run.removed > 0 && run.exits > 0,
@@ -125,7 +141,7 @@ async fn the_team_room_runs_alike_in_both_modes() {
             team::<FixCodec>(false)
         }
     };
-    play(single(full), 0xA31_0003).await;
+    play(single(full), 0xA31_0003, 0x988b_3bc9_5d44_b2e0).await;
     let delta = |run| {
         if run {
             team::<PackedCodec>(true)
@@ -133,7 +149,7 @@ async fn the_team_room_runs_alike_in_both_modes() {
             team::<FixCodec>(true)
         }
     };
-    let rig = play(single(delta), 0xA31_0004).await;
+    let rig = play(single(delta), 0xA31_0004, 0xac73_56d7_8629_d4a5).await;
     let (_, run) = &rig.stats;
     assert!(run.deltas > 100 && run.removed > 0, "{run:?}");
     assert!(rig.counters().private_fulls > 0);
@@ -148,7 +164,7 @@ async fn the_pvs_room_runs_alike() {
             pvs::<FixCodec>()
         }
     };
-    play(single(build), 0xA31_0005).await;
+    play(single(build), 0xA31_0005, 0xbeb8_bc71_a161_5392).await;
 }
 
 #[test]
@@ -160,7 +176,7 @@ fn the_sharded_room_runs_alike() {
             Box::new(plain::<FixCodec>(i))
         }
     };
-    play_shards(build, 0xA31_0006);
+    play_shards(build, 0xA31_0006, 0xdf1f_13ed_b36a_34e6);
 }
 
 #[test]
@@ -172,7 +188,7 @@ fn the_sharded_spatial_room_runs_alike() {
             spatial::<FixCodec>(i)
         }
     };
-    let twin = play_shards(build, 0xA31_0007);
+    let twin = play_shards(build, 0xA31_0007, 0x0a6d_3d8a_867e_11aa);
     let (_, run) = &twin.stats;
     assert!(
         run.deltas > 100 && run.removed > 0 && run.exits > 0,
@@ -190,7 +206,7 @@ fn the_sharded_team_room_runs_alike_in_both_modes() {
             team_shard::<FixCodec>(i, false)
         }
     };
-    play_shards(full, 0xA31_0008);
+    play_shards(full, 0xA31_0008, 0x7ae7_32bd_b87a_4f32);
     let delta = |run, i| {
         if run {
             team_shard::<PackedCodec>(i, true)
@@ -198,7 +214,7 @@ fn the_sharded_team_room_runs_alike_in_both_modes() {
             team_shard::<FixCodec>(i, true)
         }
     };
-    let twin = play_shards(delta, 0xA31_0009);
+    let twin = play_shards(delta, 0xA31_0009, 0x5f8a_5195_6263_99ab);
     let (_, run) = &twin.stats;
     assert!(run.deltas > 100 && run.removed > 0, "{run:?}");
     assert!(twin.counters().private_fulls > 0);
