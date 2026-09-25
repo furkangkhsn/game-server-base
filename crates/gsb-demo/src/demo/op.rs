@@ -34,7 +34,7 @@ pub const MOVE_TO: u16 = 1000;
 pub const WORLD_SNAPSHOT: u16 = 1003;
 
 /// Reserved for per-connection private frames
-/// ([`gsb_core::room::RoomLogic::private`]); the demo game uses it for
+/// ([`gsb_core::room::GameLogic::private`]); the demo game uses it for
 /// input acks, one-shot full views, and RPC responses
 /// (`Private.responses`).
 pub const PRIVATE: u16 = 1004;

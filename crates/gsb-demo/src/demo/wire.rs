@@ -5,7 +5,7 @@
 
 use gsb_kit::space::Planar;
 
-/// The demo's wire value ([`DemoCodec`](crate::demo::codec::DemoCodec)'s
+/// The demo's wire value (`DemoCodec`'s
 /// `Wire`) and, identically, its visibility-strip payload
 /// ([`GameLogic::Strip`](gsb_core::room::GameLogic::Strip)): the
 /// entity's TRUNCATED position — exactly the content the core-fixed

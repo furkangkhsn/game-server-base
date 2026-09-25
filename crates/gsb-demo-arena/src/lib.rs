@@ -29,7 +29,7 @@
 //!   record, typed mirrors of the kit's envelope) and opcodes.
 //!
 //! What it takes from the kit: the team-fog room
-//! ([`TeamRoom`](gsb_kit::team::TeamRoom)) over the kit's 3D vision
+//! ([`TeamRoom`]) over the kit's 3D vision
 //! preset ([`VisionGrid3`]) — see [`ArenaRoom`]. Everything the room
 //! does around the hooks (wire identity, grouping by team, the per-team
 //! content and "no change" ledger, the snapshot and `Private`

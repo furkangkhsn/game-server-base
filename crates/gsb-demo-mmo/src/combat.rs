@@ -2,8 +2,8 @@
 //! an attack on an entity a neighbour lends through the border strip is
 //! validated here (range, against the lent record — the anti-cheat
 //! locality rule of `docs/CROSS-SHARD.md` §2) and sent to its owner as a
-//! remote effect, which the owner applies ([`Combat::apply_remote`]). One
-//! function ([`Combat::strike`]) changes hit points, on whichever shard
+//! remote effect, which the owner applies (`Combat::apply_remote`). One
+//! function (`Combat::strike`) changes hit points, on whichever shard
 //! owns the victim: a mob at zero dies there; a player at zero is
 //! DEFEATED (back at the nearest waystone, full health). Both put a
 //! player victim in combat — the owner marks it, so a parked character
