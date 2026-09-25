@@ -28,7 +28,11 @@
 //!   towers of the region, or across a seam);
 //! - otherwise `MoveTo`: the ring round the post, 20–45 m out (by id) —
 //!   inside the 60 m vision, so a post's defenders see each other — at
-//!   0.15 rad/s, starting at the golden angle times the id.
+//!   0.15 rad/s (6 m/s at most), starting at the golden angle times the
+//!   id. Round the MIDDLE capture point the ring is 70–95 m out: it
+//!   crosses both seams (the widest rings the corner region too), so the
+//!   middle's defenders walk through all four regions (migrations) and
+//!   strike across seams (remote effects).
 //!
 //! The draws are a per-client SplitMix64 stream seeded by the id: a run
 //! is reproducible, and an orchestrated run makes the same draws as an
@@ -57,8 +61,16 @@ mod tests;
 const ATTACK_EVERY: Duration = Duration::from_secs(5);
 /// The mean time between two moves to another post.
 const MOVE_ON_EVERY: Duration = Duration::from_secs(40);
-/// The ring's angular speed (rad/s).
+/// The ring's angular speed (rad/s) — at most: a wide ring turns slower
+/// so its target never outruns the unit ([`RING_SPEED`]).
 const RING_RAD_S: f64 = 0.15;
+/// The ring target's top speed on the ground (m/s): below the 7 m/s run.
+const RING_SPEED: f64 = 6.0;
+/// The middle capture point's ring starts this far out (metres): 70–95 m
+/// round a point 60 m from each seam (85 m from the corner) — every such
+/// ring crosses both seams, the widest the corner region too, so its
+/// defenders migrate and fight across the seams.
+const MIDDLE_RING: f64 = 70.0;
 
 /// The posts, ground `(x, z)` metres: every tower (faction-major, region
 /// order), then the capture points. Computed once.
@@ -86,8 +98,14 @@ pub(crate) fn nearest_posts(at: usize) -> [usize; 3] {
 /// run, metres (module docs).
 pub(crate) fn ring(post: usize, id: u64, elapsed: Duration) -> [f32; 2] {
     let [px, pz] = posts()[post];
-    let radius = 20.0 + (id % 6) as f64 * 5.0;
-    let angle = elapsed.as_secs_f64() * RING_RAD_S + id as f64 * (TAU * 0.381_966);
+    let inner = if [px, pz] == POINTS[0] {
+        MIDDLE_RING
+    } else {
+        20.0
+    };
+    let radius = inner + (id % 6) as f64 * 5.0;
+    let omega = RING_RAD_S.min(RING_SPEED / radius);
+    let angle = elapsed.as_secs_f64() * omega + id as f64 * (TAU * 0.381_966);
     [
         px + (radius * angle.cos()) as f32,
         pz + (radius * angle.sin()) as f32,

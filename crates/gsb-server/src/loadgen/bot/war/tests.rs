@@ -130,7 +130,8 @@ fn the_bot_strikes_only_an_enemy_player_in_reach() {
 
 /// The roster: faction `id mod 3` on post `(id / 3) mod 14`, so every
 /// post is held by all three factions and every shard has characters;
-/// the ring stays within 45 m of its post.
+/// a tower's ring stays within 45 m of its post, the middle point's
+/// rings (70–95 m) run through all four regions.
 #[test]
 fn the_roster_spreads_every_faction_over_every_shard() {
     let mut shards = [[0u32; 3]; SHARDS];
@@ -139,8 +140,24 @@ fn the_roster_spreads_every_faction_over_every_shard() {
         let f = roster::faction(id);
         shards[home_shard(&at)][usize::from(f.0)] += 1;
         let [px, pz] = posts()[roster::home_post(id)];
-        assert!(((at.x - px).powi(2) + (at.z - pz).powi(2)).sqrt() <= 45.01);
+        let r = ((at.x - px).powi(2) + (at.z - pz).powi(2)).sqrt();
+        assert!(r <= 95.01 && ([px, pz] == POINTS[0] || r <= 45.01), "{r}");
     }
+    let middle = posts()
+        .iter()
+        .position(|p| *p == POINTS[0])
+        .expect("a post");
+    let mut regions = [false; SHARDS];
+    for id in 0..6 {
+        for t in 0..120 {
+            let [x, z] = ring(middle, id, Duration::from_secs(t));
+            regions[home_shard(&gsb_demo_war::Pos3::ground(x, z))] = true;
+        }
+    }
+    assert_eq!(
+        regions, [true; SHARDS],
+        "the middle ring crosses both seams"
+    );
     for (s, per) in shards.iter().enumerate() {
         assert!(per.iter().all(|&n| n >= 3), "shard {s}: {per:?}");
     }
