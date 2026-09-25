@@ -10,8 +10,7 @@ use tracing::{debug, warn};
 use crate::error::CoreError;
 use crate::id::RoomId;
 use crate::registry::*;
-use crate::room::{RoomConfig, RoomControl};
-use crate::shard::ShardMsg;
+use crate::room::RoomConfig;
 
 use crate::registry::actor::Registry;
 
@@ -106,7 +105,7 @@ where
         let _ = reply.send(Ok(RoomStatus::Running { members: 0 }));
     }
 
-    pub(super) async fn on_destroy_room(&mut self, id: RoomId, reply: oneshot::Sender<RoomStatus>) {
+    pub(super) fn on_destroy_room(&mut self, id: RoomId, reply: oneshot::Sender<RoomStatus>) {
         if let Some(entry) = self.rooms.remove(&id) {
             // The entry is gone FIRST (synchronously) — this is
             // also what makes the death watcher's late report
@@ -118,24 +117,13 @@ where
             // below (same helper on purpose: a member must not
             // be able to tell how the room ended).
             self.notify_room_gone(id);
-            // The room processes it on its next tick (the ticker
-            // is still running); aborting the ticker later closes
-            // its broadcast as a backstop.
-            match (entry.control, entry.shards) {
-                (Some(control), _) => {
-                    let _ = control.send(RoomControl::Shutdown).await;
-                }
-                (None, Some(group)) => {
-                    // Sharded: one Shutdown per shard. Bounded
-                    // sends (the same idiom as the single room);
-                    // a stalled shard parks the send briefly and
-                    // the ticker abort remains the backstop.
-                    for tx in &group.mailboxes {
-                        let _ = tx.send(ShardMsg::Shutdown).await;
-                    }
-                }
-                (None, None) => {}
-            }
+            // The room processes it on its next tick (the ticker is
+            // still running). Never awaited (see `super::stop`): a
+            // full control channel gets the Shutdown from a spawned
+            // sender, so a destroy racing the server stop — the
+            // ticker already aborted, the channel full of detaches —
+            // can no longer park the registry before it answers.
+            Self::stop_room(entry);
             self.reg_destroyed += 1;
             self.emit_room_gone(id);
             self.emit_metrics();

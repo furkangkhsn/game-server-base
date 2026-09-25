@@ -31,7 +31,7 @@ where
                 RegistryMsg::CreateRoom { config, reply } => {
                     self.on_create_room(config, reply).await
                 }
-                RegistryMsg::DestroyRoom { id, reply } => self.on_destroy_room(id, reply).await,
+                RegistryMsg::DestroyRoom { id, reply } => self.on_destroy_room(id, reply),
                 RegistryMsg::RoomStatus { id, reply } => {
                     // Table-only answer (the registry never awaits a room):
                     // a present entry means running (the member count comes
@@ -196,7 +196,7 @@ where
                     generation,
                 } => self.on_room_died(id, shard, generation).await,
                 RegistryMsg::Shutdown => {
-                    self.on_shutdown().await;
+                    self.on_shutdown();
                     break;
                 }
             }

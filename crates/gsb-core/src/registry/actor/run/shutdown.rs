@@ -1,13 +1,12 @@
-//! Ordered teardown: drain the dispatchers, stop the ticker, drop the
-//! tables. Every task the registry started exits because the channel
-//! it reads closes — none is cancelled.
+//! Ordered teardown: drain the dispatchers, notify the connections, stop
+//! the rooms without awaiting them, drop the tables. Every task the
+//! registry started exits because the channel it reads closes — none is
+//! cancelled.
 
 use crate::channel::Mailbox;
 use crate::conn::ConnIn;
 use crate::registry::actor::Registry;
 use crate::registry::*;
-use crate::room::RoomControl;
-use crate::shard::ShardMsg;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tracing::{debug, warn};
@@ -22,8 +21,10 @@ where
     // require them.
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    /// The `Shutdown` arm of [`Self::run`].
-    pub(super) async fn on_shutdown(&mut self) {
+    /// The `Shutdown` arm of [`Self::run`]. Synchronous by design:
+    /// nothing on this path may wait for a room (see the `stop` module),
+    /// so the registry always exits and drops its `Ticker`.
+    pub(super) fn on_shutdown(&mut self) {
         warn!("registry shutting down");
         // 1. Ask every dispatcher to drain (final leaves for
         //    in-flight joins), then drop the senders so they
@@ -46,13 +47,16 @@ where
         self.conns.clear();
         // 3. Stop every room (a single room via its control
         //    channel; a sharded room via one Shutdown per
-        //    shard) — processed on the next tick; the
-        //    composition root aborts the ticker afterwards,
-        //    which closes the broadcast as a backstop for any
-        //    room that misses the window.
-        // `std::mem::take` rather than `drain()`: the loop
-        // body awaits, and a live drain borrow would fight
-        // the awaited sends' executor hops in future edits.
+        //    shard) WITHOUT awaiting any of them (see the
+        //    `stop` module): the composition root aborts the
+        //    ticker right after enqueueing our `Shutdown`, so a
+        //    room whose channel is full never drains it again —
+        //    a bounded send here would park the registry
+        //    forever, and with it the `Ticker` whose drop closes
+        //    the broadcast (the rooms' global stop signal). A
+        //    room that sees neither its `Shutdown` on a tick nor
+        //    anything else still exits through `Closed` once we
+        //    return and drop the `Ticker`.
         //
         // No `RoomGone` notice here, DELIBERATELY: this is
         // the whole-server shutdown — the collector dies with
@@ -64,17 +68,7 @@ where
         // notify: they happen mid-flight, where an accumulator
         // would otherwise outlive its room forever.
         for (id, entry) in std::mem::take(&mut self.rooms) {
-            match (entry.control, entry.shards) {
-                (Some(control), _) => {
-                    let _ = control.send(RoomControl::Shutdown).await;
-                }
-                (None, Some(group)) => {
-                    for tx in &group.mailboxes {
-                        let _ = tx.send(ShardMsg::Shutdown).await;
-                    }
-                }
-                (None, None) => {}
-            }
+            Self::stop_room(entry);
             debug!(room = %id, "room stopped");
         }
         // 4. Stop the actor now. (It cannot wait for the mailbox
