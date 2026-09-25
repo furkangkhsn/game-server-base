@@ -5,6 +5,31 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A30 — kompakt wire id: iç içe basım (`core/a30-compact-ids`)
+
+Motor geneli varsayılan; zarf düzeni ve istemci kuralları aynı, yalnız
+id değerleri değişti (KIT-ARCHITECTURE §10 "A30").
+
+- `N` shard'lı odada shard `i`'nin `n`'inci çekimi `(n − 1)·N + i + 1`
+  (`gsb_core::shard::interleaved_id`; tersi `minting_shard`); kit
+  `Minter::Range` → `Minter::Interleaved`. `SHARD_SERIAL_RANGE` kalktı →
+  `SHARD_SERIAL_CAPACITY` (aynı 2^20; shard başına çekim sınırı, aynı
+  `RoomFull` yolu); `ShardLogic::serial_base` kalktı, `serial_range` →
+  `serial_capacity`.
+- Değişmezler korunuyor (tekil, enkarnasyonda yeniden kullanılmaz, göçte
+  korunur, koordinasyonsuz, deterministik sıra); tekillik artık sınıra
+  dayanmıyor (eskiden korumasız orphan damgalaması komşu aralığa
+  taşabilirdi). Kristalleşmede "yüksek wire" artık kabaca "daha geç
+  çekilen" (kural aynı, deterministik).
+- Ölçüm (`f59d432`'ye karşı dönüşümlü çiftler, `out_bps_per_conn`, 200 /
+  500): demo −15,4 / −9,0 %, MMO −8,6 / −7,1 %, savaş −6,7 / −7,8 %;
+  arena (tek oda) değişmedi. Ortalama id varint 2,6–3,2 B → 1,7–1,9 B.
+- Hiçbir bayt sabitleme testi değişmedi.
+
+Testler 821 → 827. Ajanın 5 değişmez mutasyonu yakalandı; ebeveynin
+bağımsız mutasyonu (her shard'ı tek shard'lı oda gibi basmak) kit, MMO ve
+savaşta 8'den fazla testi kırıyor.
+
 ## A22 faz 0 — değer düzeyinde delta: ölçüm ve tasarım (`kit/a22-value-delta`)
 
 Wire değişmedi (KIT-ARCHITECTURE §10 "A22 — değer düzeyinde delta").

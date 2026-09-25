@@ -55,14 +55,15 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A19 Dinamik adaptif tick hızı | — | DESIGN:1213 |
 | A20 Join/leave için tick içi hızlı yol | gerekirse | DESIGN:1221, TICK-ARCHITECTURE:134 |
 | A21 Dinamik oda bölme/birleştirme, bölgeler arası | — | DESIGN:892 |
-| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11) + ithal kayıtlar için `RecordCodec::decode` | kompakt id (A30) + paketli koşu (A31) + A10'dan sonra hâlâ bant/MTU baskısı gören AOI tipi oyun | KIT-ARCHITECTURE §10 "A22" |
+| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11) + ithal kayıtlar için `RecordCodec::decode` | kompakt id (A30 ✅) + paketli koşu (A31) + A10'dan sonra hâlâ bant/MTU baskısı gören AOI tipi oyun | KIT-ARCHITECTURE §10 "A22" |
 | A23 Demo sunucusunda `team × delta` (config şu an reddediyor; kit hazır) | demo'da takım delta'sı isteyen koşu | KIT-ARCHITECTURE §10 "T sonucu" |
 | A25 Takım export'u her tick; `every k` temposu (W2 ölçtü, gerekmedi: 1000'de 0 düşme; tempo istemci baytını değiştirmez, görmeyi k tick geciktirir) | `team_export_drops > 0` ya da registry gecikmesi | CROSS-SHARD §8b.1 |
 | A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle; W2-1 kanıtı: bölüm artefaktı (shard 3 oyuncusu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki shard 0 oyuncusu görmüyor); en küçük değişiklik varlık başına "harita geneli" bayrağı | herkesin durumunu görmesi gereken bir hedef | CROSS-SHARD §8b.5 |
 | A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul; W2'de ölçülmedi — loadgen kısa kayıp-geri gelişleri saymıyor) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
 | A29 Takım bütçesi üyeleri wire sırasıyla kesiyor (ilk tick'te doğan kuleler kalır, en yeni oyuncular gider) | bütçe gerçekten kesmeye başlarsa | KIT-ARCHITECTURE W2-3 |
-| A30 Kompakt wire id (bugün shard aralığı `k·2^20` → 3–4 B varint; id kaydın %19–40'ı; bugünkü gövdeyle −6…−14 %) — istemci kuralı değişmez; çekirdeğin aralık guard'ı ve id'yi pinleyen testler değişir | **sırada** (E7: evet) | KIT-ARCHITECTURE §10 "A22" |
-| A31 Paketli kayıt koşusu (`kit.proto`'ya `bytes records = 6`, `RecordCodec::RUN`, `ClientDecoder::run_record`) — kit'te OPT-IN yapı taşı; gövde formatı oyunun (A30 ile −43…−58 % ölçüldü); doğrulama tek demoda | **sırada**, A30'dan sonra (E7) | KIT-ARCHITECTURE §10 "A22" |
+| ~~A30 Kompakt wire id~~ **Yapıldı (2026-09-25, `9dfab9e`):** iç içe basım `(n − 1)·N + i + 1`; shard'lı oyunlarda −7…−15 %, id varint 2,6–3,2 → 1,7–1,9 B; istemci kuralı ve zarf aynı | ✅ | KIT-ARCHITECTURE §10 "A30" |
+| A32 Shard'da oyuncu id'si ile wire id'ye ayrı sayaç (join bugün iki çekim yapıyor; ayrılırsa shard'lı wire id'ler kabaca yarıya iner) — tükenme koruması iki sayacı birlikte saymalı | A31'den sonra bant yine sıkışırsa | KIT-ARCHITECTURE §10 "A30" |
+| A31 Paketli kayıt koşusu (`kit.proto`'ya `bytes records = 6`, `RecordCodec::RUN`, `ClientDecoder::run_record`) — kit'te OPT-IN yapı taşı; gövde formatı oyunun (A30 ile −43…−58 % ölçüldü); doğrulama tek demoda | **sırada** (A30 yapıldı; E7) | KIT-ARCHITECTURE §10 "A22" |
 | A24 İstemci tarafında delta uygulaması maliyeti (orkestre arena 1000'de `clients_cpu_s` +%15) | yük verisi sorun gösterirse | KIT-ARCHITECTURE §10 "T sonucu" |
 
 ### B. Taşıma ve operasyon

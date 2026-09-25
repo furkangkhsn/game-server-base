@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-821 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+827 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,18 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**A30 tamam** (KIT-ARCHITECTURE §10 "A30", CHANGELOG "A30"): wire id'ler
+iç içe basılıyor; formül çekirdekte tek yerde
+(`gsb_core::shard::{interleaved_id, minting_shard, SHARD_SERIAL_CAPACITY}`),
+kit'in `Minter::Interleaved`'i onu çağırıyor; `ShardLogic` artık
+`serial_capacity` + `serial_used` istiyor (`serial_base` yok). Kendi
+id'sini basan yeni bir `ShardLogic` taslağı `interleaved_id` kullanmalı.
+
+**Motor, oyun değil (kullanıcı kuralı):** kit/çekirdek yapı taşı sunar;
+kayıt formatı, zarf sürümlemesi, gönderim hızı, interpolasyon oyunun
+kararı — yeni seam'ler opt-in, varsayılan bugünkü baytlar; demolar yalnız
+bir seam'i doğrulayacak kadar dokunulur.
 
 **A22 faz 0 tamam** (KIT-ARCHITECTURE §10 "A22", CHANGELOG "A22 faz
 0"): kodda yalnız `gsb-loadgen --capture`; bölüm ölçümleri ve öneriyi
@@ -429,6 +441,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 821 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 827 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

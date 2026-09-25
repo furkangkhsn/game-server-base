@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **821** (821/821 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **827** (827/827 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **A22 faz 0** (KIT-ARCHITECTURE §10 "A22") — ölçüm + tasarım,
+Son tur: **A30 — kompakt wire id** (KIT-ARCHITECTURE §10 "A30") —
+shard'lar wire id'leri iç içe basıyor (`(n − 1)·N + i + 1`), istemci
+kuralı aynı; shard'lı oyunlarda bant −7…−15 %, id 1–2 B. Sıradaki: A31
+(paketli kayıt koşusu, opt-in yapı taşı).
+Önceki tur: **A22 faz 0** (KIT-ARCHITECTURE §10 "A22") — ölçüm + tasarım,
 wire değişmedi: değer-göreli kodlama şimdilik YAPILMAYACAK; kaldıraç
 sırası kompakt wire id → paketli kayıt koşusu + oyun kodeği → A10.
 Bakımcının beş cevabı bekleniyor (BACKLOG E7). Ölçüm aracı:
