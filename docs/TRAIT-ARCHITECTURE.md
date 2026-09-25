@@ -84,6 +84,13 @@ result-sink makinesi de gerekir. Bu iki ayrı iştir:
   kapı açıktır.
 - Sıralama: FAZ 1'den SONRA — aksi halde re-key değişikliği iki kopyada
   yapılır.
+- *K4 notu (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı"):* PlayerId
+  bir karakteri anahtarlayamaz — join'in ÇIKTISIDIR (oyun basar,
+  oda/shard-yerel, her taze oturumda yeni), yönlendirme anında yoktur.
+  Karakter anahtarı resume kimliğidir (`String`: ticket'ın `player`'ı /
+  eski yolda `Auth.name`); join yönlendiricisi ve
+  `GameLogic::on_join_as` onu alır. Zincir: kimlik → (park defteri) →
+  PlayerId → entity.
 
 ## 6. Faz tablosu
 

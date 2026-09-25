@@ -150,6 +150,8 @@ pub trait Game: Send + 'static {
     const SNAPSHOT_OP: u16 = 1003;
     const PRIVATE_OP: u16 = 1004;
     fn spawn_player(&mut self, w: &mut World, conn: ConnectionId) -> Entity; // WireId'yi kit basar
+    fn spawn_player_as(&mut self, w: &mut World, conn: ConnectionId, identity: &str)
+        -> Entity { self.spawn_player(w, conn) }  // K4: doğrulanmış kimlikle
     fn on_player_spawned(&mut self, _w: &mut World, _c: ConnectionId, _e: Entity) {}
     fn ingest(&mut self, w: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>,
               players: &HashMap<PlayerId, Entity>, seq: &mut InputSeq);
@@ -162,6 +164,16 @@ pub trait Game: Send + 'static {
     fn restore(&mut self, e: EntityWorldMut<'_>, m: Self::Mig);
 }
 ```
+
+*K4 (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı"):*
+`spawn_player_as` oyuncunun **doğrulanmış kimliğini** alır (ticket'ın
+`player`'ı; ticket'sız geliştirme yolunda iddia edilen `Auth.name`; boş
+= anonim) ve kayıtlı bir karakteri yerleştirmek için ezilir; varsayılanı
+`spawn_player`. Kit odaları onu çekirdeğin `GameLogic::on_join_as`'ından
+çağırır (`OpenRoom`, `AoiRoom`, `SectorRoom`, `ShardedRoom`,
+`ShardedSpatialRoom`); sharded odanın yönlendiricisi
+(`registry::HomeShard`) aynı kimliği görür, yani ikisi anlaşabilir.
+Takım odası çağırmaz (`TeamGame::spawn_team_player` kimliksiz).
 
 Oda tipleri bunları bir araya getirir:
 
@@ -327,6 +339,8 @@ pub trait Partition<W>: Send + 'static {            // sharding — örnek veris
 pub trait TeamGame: Game {
     fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team;
 }
+// (`Game` K4'te `spawn_player_as(world, conn, identity)` kazandı — §4.3;
+//  takım odası onu çağırmaz, `ShardGame` değişmedi)
 pub trait ShardGame: Game {
     type Mig: Debug + Send + 'static;
     fn capture(&self, world: &World, entity: Entity) -> Self::Mig;
@@ -1544,7 +1558,7 @@ kopyalanmadı, hiçbir bulgunun etrafından sessizce dolaşılmadı.
 | NPC yaşam döngüsü | **oyun kodu:** spawn tablosunun kampları (`MobSpawn`: nokta, rota, hız, can, ilk tick, periyot, ömür) her shard'da yalnız kendi zeminindekileri spawn ediyor; kit damgalıyor (`Marker` = yayın); ömrü dolan mob `World::despawn`; canı sıfırlanan mob (`Attack`) `World::despawn` | §8.2'yi (hayalet) ve §8.5'i (göç) doğrudan sınar |
 | `Mig` | `MmoMig::Player { pos, vitals, speed, target }` / `MmoMig::Mob { pos, vitals, mob }` — mob'un bütün beyni (rota, bacak, hız, ölüm tick'i) | sınırı geçen oyuncu koşmaya, mob rotasına devam ediyor ve planlandığı tick'te yeni shard'da ölüyor |
 | Girdi | `MoveTo { x, z, seq }` (dm), `Attack { target, seq }` (yalnız kendi shard'ındaki, 30 m içindeki mob), `Travel { waystone, seq }` (anında ışınlanma, yürüyüşü iptal eder) — hepsi tek sıra uzayında, kit'in `InputSeq`'i | — |
-| Karakter kaydı | `Realm.logins`: kaydedilmiş karakter konumu, **oturum** kimliğiyle; join yönlendirmesi kayıtlı konumun shard'ı (`world::home_shard`) | `spawn_player` yalnız taşıma oturumunu alıyor (gözlem, aşağıda) |
+| Karakter kaydı | `Realm.logins`: kaydedilmiş karakter konumu, **oturum** kimliğiyle; join yönlendirmesi kayıtlı konumun shard'ı (`world::home_shard`) | `spawn_player` yalnız taşıma oturumunu alıyor (gözlem, aşağıda). *K4'ten beri doğrulanmış oyuncu kimliğiyle (`spawn_player_as`) — GAME-MODULE "K4 sonucu"* |
 | Park politikası | kit'in park defteri: bağlantı düşünce karakter **bekletiliyor** (dünyada, aynı wire id, slot tutulu; `LOGOUT_GRACE = 20 sn`); süre dolunca kit **AI devrine** veriyor — MMO'nun botu karakteri en yakın waystone'a (güvenli nokta) yürütüyor; `grace = 0` hemen bırakıyor | "süre dolunca slotu bırak" (MMO'nun olağan çıkış sayacı) ifade edilemiyor — bulgu F4 |
 | Oda | `MmoShard` takma adı; kurucu `mmo_shard(index, &realm)` (serbest fonksiyon — kit tipinde inherent impl E0116) | — |
 | Wire | `proto/mmo.proto` (`gsb.mmo`): girdiler, `Kind` enum'u, `EntityRecord`, yer-düzlemi `CellExit { sint32 x = 1; sint32 z = 2; }` (`Grid2`'nin gövdesiyle bayt bayt aynı), kit zarfının tipli aynaları `WorldSnapshot` (`entities = 2`, `removed = 3`, `cell_exits = 4`, `delta = 5`) ve `Private` (`game = 4` aynalanmadı); `gsb.kit.InputAck` olduğu gibi; kit proto'su `links` (`DEP_GSB_KIT_PROTO_DIR`) üzerinden | — |
@@ -1621,7 +1635,7 @@ kayıtlı karakterin konumundan). Eksik olan sunucu tarafında: fabrika ve
 bir "oyun modülü"ne (fabrika fonksiyonu + `register` + `home_shard`)
 açmak; §9'un kapsam dışı bıraktığı iş, ayrı tur. Ayrıca join
 yönlendiricisi de `spawn_player` gibi yalnız oturum kimliğini görüyor
-(gözlem 1).
+(gözlem 1; *K4 turunda kapandı — yönlendirici `(conn, kimlik)` alıyor*).
 
 **Tasarım bulguları.** Kit'in public API'si MMO'yu **inşa etmeyi
 engellemedi** — hiçbir kit değişikliği yapılmadan her parça kuruldu ve
@@ -1720,7 +1734,10 @@ hatası**. Her biri için kanıt, gerekçe ve en küçük kit değişikliği:
    conn)`'unda kalıyor (`ShardMsg::Join` onu taşıyor ama `GameLogic`'e
    vermiyor). MMO kayıtlı karakterleri oturumla anahtarlıyor (sunucunun
    login adımı doldururdu). Kit, çekirdeğin vermediğini veremez —
-   düzeltme çekirdekte (`on_join`'e kimlik), kapsam dışı.
+   düzeltme çekirdekte (`on_join`'e kimlik), kapsam dışı. **Kapandı —
+   K4 turu** (GAME-MODULE "K4 sonucu"): çekirdek `home_shard`'a ve
+   `GameLogic::on_join_as`'a doğrulanmış kimliği veriyor, kit onu
+   `Game::spawn_player_as`'a iletiyor, MMO realm'i onunla anahtarlı.
 2. Şeritten görünen (komşunun sahip olduğu) mob'a saldırı yok:
    CROSS-SHARD §2'nin `RemoteEffect`'i uygulanmadı (çekirdek). MMO
    saldırıyı saldıranın shard'ında çözüyor.

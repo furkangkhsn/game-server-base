@@ -95,7 +95,9 @@ yarısı ölü).
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-
-auth yolunda `Auth.name` — bu yolda resume yalnız demo amaçlıdır). Park
+auth yolunda `Auth.name` — bu yolda resume yalnız demo amaçlıdır). K4'ten
+beri aynı kimlik oyunun **karakter anahtarıdır** da (join yönlendiricisi
+ve `GameLogic::on_join_as` onu alır — §6'nın sonu; SECURITY §4b). Park
 defteri **`RoomLogic`'te yaşar**: `identity → park durumu (entity, hold
 başlangıcı, meta)` — core generic kalır, oyun dünyasını bilir.
 
@@ -188,6 +190,19 @@ Tek-kazanan garantisi: identity başına park kaydı tek shard'tadır (entity
 tek shard'tadır — migration protokolünün exactly-once değişmezi). İki
 shard'ın aynı resume'u kabul etmesi yapısal olarak imkânsızdır; testle
 kilitlecektir.
+
+**K4 ile etkileşim (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı").**
+`home_shard` artık `(conn, kimlik)` alır — kimlik bu belgenin resume
+anahtarının ta kendisi (§4: `ValidatedTicket.player` ya da eski yolda
+`Auth.name`) — ve oyunun join kancası (`GameLogic::on_join_as`) aynı
+kimlikle kayıtlı karakteri yerleştirir. Sıra değişmedi: kimlikli bir
+join önce bu broadcast-resume'dur; yönlendiriciye yalnız bütün shard'lar
+"burada değil" dediğinde (taze join) danışılır. Yani park edilmiş bir
+oyuncu, yönlendiricinin onun kaydı için seçeceği shard'da değil, park
+edildiği shard'da devam eder; park bittiyse taze join kaydına iner.
+Kilit: `gsb-server/tests/mmo_home.rs::a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save`
+(kaydı shard 1'de, park'ı shard 2'de olan karakter shard 2'de resume
+ediyor; çıkıştan sonra shard 1'e taze join).
 
 ## 7. Kanal swap: `ShardMsg::Resume` / `RoomControl::Resume`
 

@@ -238,6 +238,26 @@ bağlantı kapanış koduyla düşürülür, reader pump `StreamRejected` bildir
 | 2 | **Unauthed cap:** `max_connections * %25` (min 64); aşan yeni bağlantı ERROR 9 ile nazikçe reddedilir | Script'li handshake fırtınasının (çok IP'li) bellek büyütmesini sınırlar; meşru yavaş-auth akışı için bol pay |
 | 3 | Sayımlar aktör-local sayaçlarla; detach/resume bu sınıfa girmez (resume ticket'lıdır, authed sayılır) | RECONNECT semantiği korunur |
 
+## 4b. Oyuncu kimliği = karakter anahtarı (K4)
+
+K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının
+doğrulanmış kimliği yalnız resume anahtarı değil, oyunun **karakter
+anahtarıdır** da: sharded odanın join yönlendiricisi
+(`registry::HomeShard`) ve join kancası (`GameLogic::on_join_as` → kit'in
+`Game::spawn_player_as`) onu alır; MMO kayıtlı karakteri onunla bulur.
+
+| Yol | Kimlik | Güven |
+|---|---|---|
+| Ticket hook yapılandırılmış | `ValidatedTicket.player` (doğrulayıcının döndürdüğü; `Auth.name` yok sayılır) | Platformun kimliği. Hangi hesabın hangi karakteri oynayabileceği platformun kararı — bilete kodlanır (`player` = hesap/karakter); sunucu ayrıca bir karakter alanı kabul ETMEZ |
+| Ticket'sız (eski yerel auth) | İstemcinin iddia ettiği `Auth.name` | **YOK — yalnız geliştirme / demo / loadgen yolu.** Herkes her karakter olarak girebilir, başkasının park edilmiş karakterini devralabilir (resume'da zaten öyleydi, RECONNECT §4) ve aynı adla canlı oturumu düşürebilir ("en son kazanan", ERROR 9). Üretimde ticket hook'u zorunlu |
+| Boş kimlik | anonim | Kayıtlı karakter yok (MMO: varsayılan durak taşı), resume yok |
+
+Yeni auth mekanizması eklenmedi; kimlik AUTH'ta zaten geçiyordu (wire
+değişmedi). Kilit: `gsb-core/tests/join_identity.rs` (ticket yolunda
+iddia edilen ad yönlendiriciye/kancaya ulaşmıyor),
+`gsb-server/tests/mmo_home.rs::the_ticket_player_picks_the_character_not_the_claimed_name`
+(`bob` diyen istemci ann'in biletiyle ann'in karakterini alıyor).
+
 ## 5. Test planı
 
 Tur A: TLS ile tüm guardrail e2e'leri (plaintext parametresiyle parametrik);

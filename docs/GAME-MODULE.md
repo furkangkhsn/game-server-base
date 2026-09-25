@@ -324,7 +324,8 @@ Görüş yarıçapı (15 m, 3D) oyunun sabiti; operatöre açılmadı.
 
 **MMO (`games/mmo.rs`, `game = "mmo"`).** Her oda kimliği BÜTÜN bir
 shard'lı dünya: MMO'nun dört `ShardedSpatialRoom` shard'ı tek realm'den.
-Yönlendirme (§6 karar 6): kayıtlı karakteri olan oturum kaydının
+Yönlendirme (§6 karar 6; K4'ten beri kayıt oyuncunun doğrulanmış
+kimliğiyle anahtarlı — aşağıda): kayıtlı karakteri olan oturum kaydının
 shard'ına (`world::home_shard`), olmayan **varsayılan durak taşının
 (0) shard'ına** — o shard'ın `spawn_player`'ı kaydı olmayan karakteri
 tam oraya koyuyor; birim testi ikisini birbirine sabitliyor. Politika
@@ -438,6 +439,9 @@ doğru.
   G3 için önemli: MMO botları yalnız yürüyüp `Travel` etmezse yük tek
   shard'da toplanır. Düzeltme çekirdekte (`on_join`'a hesap kimliği) ya
   da yönlendiriciye kimlik vermekte — bu işin kapsamı dışında.
+  **Çözüldü — K4 turu, `a727e2c`..`1cb1609`** (aşağıda "K4 — oyuncu
+  kimliği → ev shard'ı": yönlendirici ve join kancası doğrulanmış
+  kimliği alıyor, realm onunla anahtarlı).
 - **K5 — Örnek config oyun değiştirmeye tuzak** (test
   `example_config::switching_…`). `config.example.toml` demo'nun düz
   anahtarlarını (`visibility`, `aoi_cell_size`, `team_vision_radius`,
@@ -781,7 +785,9 @@ bu bayrakları yalnız demo koşusunda iletir. `--help` güncellendi
 - **MMO** — ilk girdi waystone `id mod 4`'e `Travel` (K4: katalogla
   barındırılan her oturum kaydısız, shard 0'da başlar; yalnız yürüyen
   bot dört shard'dan birini yükler — sonda: bu seyahat olmadan 8 botun
-  6'sı shard 0'da kaldı). Sonra waystone çevresinde 30–60 m (id'ye göre)
+  6'sı shard 0'da kaldı). *K4 turunda kaldırıldı (`1cb1609`): bot
+  `lg-{id}` loadgen'in barındırdığı realm'deki kayıtlı karakteriyle
+  waystone `id mod 4`'ün halkasında başlar — aşağıda "K4 sonucu".* Sonra waystone çevresinde 30–60 m (id'ye göre)
   halkada 0,15 rad/s dolaşma (4,5–9 m/s, karakterin 7 m/s koşusu
   civarı; halka 64 m AOI hücrelerini keser — hücre çıkışları ve
   one-shot full'lar akar); ~20 sn'de bir başka bir waystone'a `Travel`
@@ -878,6 +884,9 @@ kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
   dokunulmadı.
 - **K4 hâlâ geçerli**: yük dağılımı botun ilk `Travel`'ına dayanıyor
   (kaydısız oturum → shard 0). Kalıcı çözüm çekirdekte/yönlendiricide.
+  **Kapandı — K4 turu** (aşağıda "K4 sonucu"): çekirdek yönlendiriciye
+  ve join kancasına doğrulanmış kimliği veriyor; 200 MMO botu ilk
+  `Travel` olmadan `shard_members=53,50,50,47`.
 
 Korunan crate'lerde eksik public bir şey çıkmadı: botların ihtiyacı
 olan her şey public (`WAYSTONES`, `ATTACK_RANGE`, `client_cell`,
@@ -1012,6 +1021,63 @@ kayıtlı karakter yok).
   `&str` alıyor (`on_disconnect`, `resume_lookup`). İkinci bir alan
   (ör. ticket talepleri) doğarsa o gün.
 
+### K4 sonucu (2026-09-25)
+
+**Tamam.** Tasarım (`c1765ec`, yukarıda) + dört kod commit'i (+ bu
+belge), her biri kendi başına yeşil; önce kırılan testler,
+mutation-check'ler yedekten geri yüklenerek (diff her seferinde geri
+temiz). Wire baytları DEĞİŞMEDİ: `gsb-protocol`, `gsb-net`, `gsb-demo`,
+`gsb-demo-arena` dokunulmadı (`git diff 32a706f.. --stat` bu dördünde
+boş); kimlik zaten AUTH'ta geçiyordu. Test sayısı 664 → 670 (+2
+çekirdek, +1 kit, +2 barındırılan MMO, +2 loadgen botu, −1 yerine
+geçen dağılma testi); 1 ignored doctest aynı.
+
+| # | Commit | Değişiklik | Kanıtlayan test (önce kırıldı) | Mutation → sonuç |
+|---|---|---|---|---|
+| 1 | `a727e2c` | **Çekirdek seam**: `registry::HomeShard = Arc<dyn Fn(ConnectionId, &str) -> usize + Send + Sync>` (`BuiltRoom::Sharded::home_shard`'ın tipi); registry onu `(conn, &identity)` ile çağırır. `GameLogic::on_join_as(world, conn, identity)` — varsayılanı `on_join`; odanın `admit_fresh`'i ve shard'ın `ShardMsg::Join`'i onu çağırır. Toplam üç çağrı satırı + bir tip takma adı + bir varsayılanlı metot; mevcut hiçbir mantık değişmedi (yalnız üç test yönlendiricisi ve iki sunucu fabrikası closure'a `_identity: &str` ekledi) | `join_identity::a_sharded_room_routes_and_spawns_by_the_authenticated_identity` — GERÇEK bağlantı aktörleri + canlı registry: ticket yolunda (`Auth.name = "trinity"`, bilet `t-neo`) yönlendirici ve kanca `neo` görüyor, eski yolda `bob`, anonimde boş; her join kimliğinin shard'ına iniyor. `…a_single_room_hands_its_join_hook_the_authenticated_identity` — tek oda (resume geri düşüşü + düz join). İlk hâl: imzalar vardı ama `""` geçiyordu → ikisi de kırıldı (`neo` shard 0'a; kanca `""`) | registry `(group.home)(conn, "")` → sharded kırıldı; shard `on_join_as(…, "")` → sharded kırıldı; oda `on_join_as(…, "")` → tek oda kırıldı; oda `on_join` çağırıyor → tek oda kırıldı |
+| 2 | `a0b6bb6` | **Kit**: `Game::spawn_player_as(world, conn, identity)` — varsayılanı `spawn_player`. `OpenRoom`, `AoiRoom`, `SectorRoom` (ortak `common::join`, artık kimlik alıyor), `ShardedRoom`, `ShardedSpatialRoom` `on_join_as`'ı uygular; `on_join` onlara boş kimlikle iner. Takım odası değişmedi (`spawn_team_player` kimlik almaz). Test sarmalayıcıları kancayı iletir | `game::tests::every_game_spawning_room_hands_the_game_the_identity` (beş oda; fixture adlı girişi `Login` bileşeniyle işaretler). İlk hâl: kanca vardı, odalar çağırmıyordu → kırıldı ("open") | `common::join` → `G::spawn_player` → kırıldı (open); sharded `spawn_player` → kırıldı; spatial `inner.on_join` → kırıldı; aoi `""` → kırıldı |
+| 3 | `b05ade9` | **MMO + sunucu modülü**: `Realm::logins: Arc<HashMap<String, Pos3>>` (doğrulanmış kimlikle; shard'lar tek tabloyu paylaşır), `with_login(name, pos)`, `saved(identity)`; `MmoGame::spawn_player_as` kaydı olanı kaydına, olmayanı / anonimi shard'ın waystone'una koyar; `games::mmo::route(realm, identity)`. MMO testleri anahtar değiştirdi (iddialar aynı; anonim join'ler `cN` adını aldı) | `mmo_home::the_ticket_player_picks_the_character_not_the_claimed_name` (ticket hook'lu gerçek sunucu: `bob` diyen istemci ann'in biletiyle ann'in karakterine, shard 1'e; bob'un bileti bob'unkine, shard 2'ye; kaydısız bilet shard 0'a, waystone 0'a); `mmo_home::a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save` (kaydı shard 1'de olan ann waystone 2'ye gidip orada düşüyor: sonraki oturum park edilen karakteri shard 2'de, AYNI wire id ile, durduğu yerde resume ediyor ve oynuyor; 1 sn çıkış sayacı dolunca yeni oturum taze join — yönlendirici onu kaydına, shard 1'e gönderiyor); `game::tests::characters_spawn_at_their_saved_position` (aynı kimlik başka bağlantıdan da kaydına) | MMO spawn `""` ile arıyor → birim testi + `mmo_e2e` 2 test + `mmo_home` 2 test kırıldı; yönlendirici `""` → `mmo_e2e::joins_land…` + `mmo_home` 2 test kırıldı; çekirdekte ticket yolunda kimlik `auth.name` → ticket testi kırıldı; registry dispatcher'ı resume'u atlıyor (hep düz join) → resume testi kırıldı (yeni entity) |
+| 4 | `1cb1609` | **Loadgen**: botun ilk `Travel`'ı kaldırıldı; loadgen'in barındırdığı MMO (süreç içi ve `--serve` çocuğu, `server::start_hosted`) `Realm::standard()` + bot kadrosu (`bot/mmo/roster.rs`: `lg-{id}`, `id < 65 536`, waystone `id mod 4`'ün dolaşma halkasının başında). Bot `at = id mod 4` ile başlar; churn girdisi ev waystone'unun yanında; bot adı tek yerde (`bot::bot_name`) | `loadgen_games::loadgen_drives_the_mmo` — ilk hâl: `Travel` kaldırılmış, sunucu katalogdan → kırıldı (`shard_members=6,0,2,0`); `loadgen_orchestrates_the_mmo` artık dağılımı da istiyor; bot birim testleri `the_roster_saves_every_bot_on_its_home_ring`, `every_bot_roams_its_home_waystone_from_the_first_input` (eski `the_first_input_disperses_the_population`'ın yerine) | `--serve` katalogdan → orkestre testi kırıldı (`4,0,0,0`); süreç içi katalogdan → `loadgen_drives_the_mmo` kırıldı (`6,0,2,0`) |
+
+**Yük ölçümü** (release, `gsb-loadgen 200 --game mmo --duration 10
+--write-stall-secs 0` — G3 tabanının komutu; makine paylaşımlı, başka
+bir ajan kardeş worktree'de derliyordu, 1 dk yük ortalaması tabloda):
+
+| Koşu | Yük | `shard_members` (ilk → son, kararlı pencere) | step p50/p90 fine (µs) | step max (µs) | `out_bps_per_conn` | `snap_total` | acks / moves | peak payload (B) / `snap_overflows` | `gap_drops` | `server_hz` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| G3 tabanı (ilk `Travel`) | 7,8 | 57,44,50,49 → 55,49,50,46 | 128 / 176 | 634 | 20 739 | 56 885 | 11 375 / 11 483 | 1276 / 0 | 155 | 30,00 |
+| K4 #1 (kadro) | 5,02 | 56,43,52,49 → 53,50,50,47 | 120 / 160 | 265 | 21 422 | 57 304 | 11 500 / 11 505 | 903 / 0 | 155 | 30,00 |
+| K4 #2 (kadro) | 4,55 | 58,42,49,51 → 54,49,50,47 | 104 / 152 | 493 | 21 151 | 56 552 | 11 302 / 11 305 | 896 / 0 | 155 | 30,00 |
+
+Her koşuda `joined = left = 200`, `errors=0`, `server_closes=0`,
+`step_over_budget_pct=0.0`. Dağılım ve bütün sayılar G3 bandında:
+**ilk-`Travel` bayrağı TUTULMADI** — G3 tabanlarıyla karşılaştırma
+için gerekmiyor (kararlı pencere aynı yerleşimi görüyor; fark yalnız
+ilk saniyedeki bot başına bir göç, ölçüm penceresinin dışında).
+
+**Tasarımdan sapmalar:** (1) `Realm::logins` `Arc`'lı paylaşılan
+tablo oldu (tasarım yalnız anahtarı söylüyordu): 65 536 karakterlik
+kadro her shard'a ayrı kopyalanmasın diye; `Realm::saved(identity)`
+okuyucu. (2) Loadgen'in flood girdisi (`--flood-id`) hâlâ waystone 0'a
+yürür — flood, düşürme korumalarını ölçer, yerleşimi değil; flooder
+artık evinden oraya yürür.
+
+**Açık kalanlar / bulgular (kod değişmedi):**
+
+- **Katalog realm'inde karakter yok.** `gsb-server` ikilisi
+  (`game = "mmo"`) hâlâ herkesi varsayılan waystone'a koyar — kayıtlı
+  karakter kaynağı (karakter veritabanı / kalıcılık) sunucunun işi;
+  seam hazır, veri yok (PERSISTENCE). `--addr` ile katalog sunucusuna
+  sürülen loadgen botları bu yüzden shard 0'da başlar.
+- **Çıkışta kayıt yok.** Realm statik: çıkış yapan karakter bir sonraki
+  taze join'de kaydına döner (son konumuna değil) — `mmo_home` bunu
+  sabitliyor. Konumu çıkışta yazmak kalıcılık turunun işi.
+- **Takım odası kimliği oyuna iletmiyor** (`TeamGame::spawn_team_player`
+  kimliksiz). Tetikleyici: kayıtlı karakterli bir takım oyunu (W paketi
+  bunu isteyebilir).
+- **Eski yol güveni** (SECURITY §4b): ticket'sız sunucuda karakter
+  anahtarı istemcinin iddiası.
+
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
 1. **Config yeri:** demo'nun anahtarları eski düz yerlerinde kalır (geriye
@@ -1037,7 +1103,10 @@ kayıtlı karakter yok).
    `spawn_player`'ın bugünkü geri düşüşüyle tutarlı olarak, varsayılan
    durak taşının shard'ına gider. Çekirdeğin `on_join`'a hesap kimliği
    vermemesi (KIT-ARCHITECTURE Faz 4 gözlem 1) bilinen sınır olarak
-   kalır; bu işte çekirdeğe dokunulmaz.
+   kalır; bu işte çekirdeğe dokunulmaz. *K4 turunda kapandı:*
+   yönlendirici (`HomeShard`) ve join kancası (`on_join_as` →
+   `spawn_player_as`) doğrulanmış kimliği alıyor; geri düşüş aynı
+   (kaydısız ya da anonim → varsayılan durak taşı).
 7. **Servis yaşam döngüsü:** bugünkü gibi — servis görevi, göndericileri
    düştüğünde biter. Yeni bir durdurma protokolü bu işin kapsamı dışında;
    kayda geçirilir.
