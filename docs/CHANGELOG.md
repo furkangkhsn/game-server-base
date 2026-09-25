@@ -5,6 +5,58 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket turu (`misc/small-bundle`)
+
+Altı bağımsız madde, her biri kendi katmanında ve kendi commit'inde.
+
+- **G3-3 / A6 — oturum yükü (kit + arena):** kit'e `Game::session_private`
+  kancası (varsayılan: hiçbir şey yazılmaz — altı kit odasında diğer
+  oyunların baytları kilitli). `Private.game = 4`'ü oturum başına BİR kez
+  doldurur: join ve resume sonrası ilk private kare (resume'da istemci
+  yeni bir süreç olabilir); göçte değil (oturum sürüyor). Yük odanın
+  zaten gönderdiği karenin sonuna eklenir; yalnız başka bir şey
+  gitmiyorsa kendi karesini açar. İstemci: `ClientDecoder::session_private`
+  ve `PrivateEvent::Session`. Arena `Welcome { team, teams }` gönderiyor —
+  turun tek kasıtlı wire değişikliği, bayt bayt kilitli (takım 1/3 →
+  `22 04 08 01 10 03`); arena load botu evini `Welcome`'dan alıyor.
+  Elenen: ayrı karşılama opcode'u; JOIN_ROOM_RESULT (çekirdek karesi,
+  resume'da yok); yalnız one-shot full (takım odası hiç göndermiyor).
+- **G3-2 incelendi, kod değişmedi:** sıra çekirdeğin fan-out'undan
+  (önce grup karesi, sonra private). Private'ı öne almak MMO 200'de
+  `gap_drops` 147 → 0 veriyor ama aynı delta yine gidiyor, bu kez
+  `stale` sayılıyor — yalnız sayaç değişir, üstelik her oyunun kare
+  sırası değişir. Gerçek düzeltme (o bağlantıya grup karesini
+  göndermemek) wire + çekirdek API değişikliği → BACKLOG.
+- **Loadgen CLI:** hatalı komut satırı artık panik değil; stderr'de tek
+  satır (`gsb-loadgen: <sebep>`), çıkış kodu 2, `RUST_BACKTRACE`'te bile
+  backtrace yok; `--addr`/`--metrics-listen` baştan denetleniyor.
+- **rustdoc + CI kapısı:** 106 uyarı satırı temizlendi (bayat yollar,
+  özel öğelere bağlar, gereksiz hedefler); CI'da `doc` işi
+  (`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`),
+  CONTRIBUTING kapı listesinde. `gsb-net/src/udp`'nin uyarıları paralel
+  tur sürerken `pub mod udp`'ye geçici `allow` ile bekletildi (H turunda
+  kalkar).
+- **`max_detach_hold_secs` (sunucu config'i):** saniye (kesir olabilir;
+  `0` = uzatma yok, harfiyen), `"off"` = tavan yok, yazılmazsa 10 dk;
+  negatif/başka kelime/yanlış tip başlatmayı reddeder. Elenen: "0 = kapalı"
+  ve "negatif = kapalı" (yazım hatası sınırsız kilide döner), ayrı boolean
+  anahtar. `Config::room_config` üzerinden barındırılan her oyunun
+  odalarına (MMO'da her shard'a). Açık: admin `POST /rooms/open` oda
+  config'ini varsayılandan kuruyor.
+- **Sayaçlar (F3 dahil):** `detach_forced`,
+  `effects_{applied,forwarded,orphaned,dropped,refused}`,
+  `migrations_{out,in,failed}` — örnek → rapor → gsb-metric satırı →
+  Prometheus (`gsb_room_*_total`, OPS §3); loadgen metrik wire'ı GSM9,
+  SUM ile katlanıyor. Crystal olayları kit debug satırı olarak kaldı
+  (çekirdek örneği sabit şekilli; kit kavramı ya da her örneğe bayt
+  ekleyen genel seam gerekirdi — CROSS-SHARD §4c madde 5).
+
+Testler 687 → 704 (rebase sonrası; tur kendi tabanında 670 → 687).
+Ajanın her yeni kural için mutasyonu yakalandı; ebeveynin bağımsız
+mutasyonu (`"off"`'u 10 dk tavana eşlemek) 2 config testini kırıyor.
+Loadgen 200 (arena, MMO): errors=0, server_closes=0, 30 Hz; arena
+`gap_drops` 0.
+
 ## U turu — rUDP parçalama (`net/u-rudp-fragment`)
 
 Oyun bandında bütçeyi (1472 B) aşan kare artık atılmıyor: yazıcı FRAG

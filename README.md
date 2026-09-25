@@ -71,11 +71,11 @@ explicitly provide the embedded binary of `protoc-bin-vendored` to `prost-build`
 `PROTOC`/`PATH`. On an exotic target where the embedded binary is not found, the build script
 prints a `cargo:warning` and falls back to the old behavior (`PROTOC`, then `PATH`);
 there, system `protoc` is required. CI: `.github/workflows/ci.yml` (fmt ·
-clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
+clippy `-D warnings` · test · rustdoc `-D warnings` · the Autobahn RFC 6455 fuzzing client against the
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 687 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 704 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +

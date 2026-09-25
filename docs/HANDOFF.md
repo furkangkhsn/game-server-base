@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-687 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+704 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,16 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, takım odasında delta, team × sharded + senaryosu).
+
+**Küçük paket tamam** (CHANGELOG "Küçük paket turu"). Kendi özel yükü
+olan bir oyun `Game::session_private`'ı ezer: kit onu oturum başına bir
+kez (join ve resume sonrası ilk private karede, göçte değil) sorar, alan
+4'e ekler; istemci `ClientDecoder::session_private` ile alır, yalnız bu
+yükü taşıyan kare `PrivateEvent::Session`'dır. Yeni bir oda-seviyesi
+config anahtarı `Config::room_config`'e yazılır. Rapora yeni bir sayaç
+eklerken iki aktörün `sample()`'ı, `RoomReport`, toplayıcı, `render`,
+Prometheus tablosu, loadgen codec'i (magic'i artır) ve `fold_rooms`
+birlikte değişir. rustdoc artık CI kapısı.
 
 **U tamam** (DESIGN §6 "MTU", SECURITY §4.1, CHANGELOG "U turu"): rUDP
 oyun bandında bütçeyi aşan kare FRAG datagram'larıyla gidiyor, istemci
@@ -377,6 +387,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 687 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 704 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
