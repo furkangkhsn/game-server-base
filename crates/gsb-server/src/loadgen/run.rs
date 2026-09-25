@@ -154,6 +154,7 @@ pub(crate) async fn run(args: Args) {
                 "CLIENT id={} connected={} connect_ms={} joined={} left={} snapshots={} \
                   bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
                   budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} \
+                  frag_reassembled={} frag_dropped={} \
                   acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} private_fulls={} \
                   deltas={} gap_drops={} view_size={} hz={} \
                   churn_cycles={} resumed={} fresh_joins={}",
@@ -174,6 +175,8 @@ pub(crate) async fn run(args: Args) {
                 r.dup_in,
                 r.oob_dropped,
                 r.gave_up,
+                r.frag_reassembled,
+                r.frag_dropped,
                 r.acks,
                 r.ack_processed_max,
                 r.ack_lag_max_ms,

@@ -144,6 +144,8 @@ pub(crate) fn print_report(
     let dup_in: u64 = reports.iter().map(|r| r.dup_in).sum();
     let oob_dropped: u64 = reports.iter().map(|r| r.oob_dropped).sum();
     let gave_up: u64 = reports.iter().map(|r| r.gave_up).sum();
+    let frag_reassembled: u64 = reports.iter().map(|r| r.frag_reassembled).sum();
+    let frag_dropped: u64 = reports.iter().map(|r| r.frag_dropped).sum();
     let acks: u64 = reports.iter().map(|r| r.acks).sum();
     let ack_processed_max: u64 = reports
         .iter()
@@ -215,10 +217,13 @@ pub(crate) fn print_report(
     // The rUDP client-side reliability picture (all zero on TCP): what
     // the clients' own reliable band had to do to keep the control path
     // loss-free (retrans_out = their retransmits; dup_in = the SERVER's
-    // retransmits observed; gave_up = a control frame that never landed).
+    // retransmits observed; gave_up = a control frame that never landed),
+    // and the fragmented game band's (frag_reassembled = over-budget
+    // messages rebuilt; frag_dropped = ones lost to a missing fragment).
     if args.transport == gsb_server::TransportKind::Udp {
         println!(
-            "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up}",
+            "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up} \
+             frag_reassembled={frag_reassembled} frag_dropped={frag_dropped}",
         );
     }
     let slowest = reports
@@ -394,7 +399,8 @@ pub(crate) fn print_report(
          server_cpu_s={:.1} clients_cpu_s={:.1} \
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
            actions_dropped_top={} transport={} retrans_out={} dup_in={} oob_dropped={} \
-            gave_up={} acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} \
+            gave_up={} frag_reassembled={} frag_dropped={} acks={} ack_processed_max={} \
+            ack_lag_max_ms={} fulls={} \
             private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
             req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
@@ -492,6 +498,8 @@ pub(crate) fn print_report(
         dup_in,
         oob_dropped,
         gave_up,
+        frag_reassembled,
+        frag_dropped,
         acks,
         ack_processed_max,
         ack_lag_max_ms,

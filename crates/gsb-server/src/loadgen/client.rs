@@ -47,6 +47,10 @@ pub(crate) struct ClientReport {
     pub(crate) dup_in: u64,
     pub(crate) oob_dropped: u64,
     pub(crate) gave_up: u64,
+    /// rUDP fragmentation (all zero on TCP): game-band messages rebuilt
+    /// from FRAG datagrams, and those dropped with a fragment missing.
+    pub(crate) frag_reassembled: u64,
+    pub(crate) frag_dropped: u64,
     /// First/last snapshot sequence with its arrival instant: the server's
     /// measured tick rate is (last_seq − first_seq) / Δt, since the
     /// snapshot sequence is the global tick index.
