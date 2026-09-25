@@ -109,10 +109,12 @@ fn kit_envelope_and_arena_mirror_encode_identically() {
 /// private frame, exactly as the room actor delivered them, decode
 /// through both definitions to the same content (every kit record body
 /// IS the typed `UnitRecord` encoding) and both re-encode to the very
-/// bytes the kit wrote by hand.
+/// bytes the kit wrote by hand. The room runs the team room's default
+/// FULL mode — the arena's frames before it opted into deltas, pinned
+/// unchanged (a game that keeps the default ships them still).
 #[tokio::test]
 async fn real_room_frames_decode_identically_through_both_definitions() {
-    let mut arena = Arena::new(ArenaGame::default());
+    let mut arena = Arena::full_only(ArenaGame::default());
     let mut cs = vec![
         arena.join(1).await,
         arena.join(2).await,
@@ -151,12 +153,21 @@ async fn real_room_frames_decode_identically_through_both_definitions() {
     assert_eq!(t.payload, ack.map(typed_private::Payload::Ack));
 }
 
-/// The arena's deliberate wire change (GAME-MODULE G3-3): each joiner's
-/// first private frame is exactly its `Welcome` in the kit's field 4 —
-/// no ack yet, nothing else — pinned byte for byte; the kit's opaque
-/// `bytes game` and the mirror's typed `Welcome game` read the same
-/// bytes. Team 0 omits its default `team` (the field is still there).
-/// Nothing else changes: the next frames carry no welcome.
+/// The arena's session payload (GAME-MODULE G3-3): each joiner's first
+/// private frame carries its `Welcome` in the kit's field 4 — pinned
+/// byte for byte; the kit's opaque `bytes game` and the mirror's typed
+/// `Welcome game` read the same bytes. Team 0 omits its default `team`
+/// (the field is still there). Nothing else changes: the next frames
+/// carry no welcome.
+///
+/// The delta mode's deliberate change: a joiner into a team that is
+/// already playing (the fourth, team 0's second) has no baseline for
+/// the team's view, so its first private frame is the one-shot FULL of
+/// that view (`Private.snapshot`, tag `0x12`) with the welcome after it;
+/// the team's delta ahead of it in the same batch is dropped by that
+/// client (no baseline yet — GAME-MODULE G3-2). The first joiner of each
+/// team is baselined by its fresh team's full group frame: its first
+/// private frame is the welcome alone, as before.
 #[tokio::test]
 async fn each_joiner_is_welcomed_with_its_team_once() {
     let mut arena = Arena::new(ArenaGame::default());
@@ -177,7 +188,26 @@ async fn each_joiner_is_welcomed_with_its_team_once() {
     ];
     for (i, (c, bytes)) in cs.iter().zip(pinned).enumerate() {
         let raw = c.first_private.clone().expect("a first private frame");
-        assert_eq!(&raw[..], bytes, "joiner {i}: the welcome, byte for byte");
+        let welcome_at = if i < 3 {
+            0
+        } else {
+            // `12 <len> <full>`: the one-shot full of team 0's view —
+            // the first joiner and this one, at their base.
+            assert_eq!(raw[0], 0x12, "joiner {i}: a one-shot full first");
+            let len = usize::from(raw[1]);
+            let full = Typed::decode(&raw[2..2 + len]).expect("the one-shot full");
+            assert!(!full.delta, "joiner {i}: a full");
+            let mut ids: Vec<u64> = full.entities.iter().map(|r| r.entity).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, [cs[0].id, c.id], "joiner {i}: team 0's view");
+            assert_eq!(c.gap_drops, 1, "joiner {i}: the team's delta ahead of it");
+            2 + len
+        };
+        assert_eq!(
+            &raw[welcome_at..],
+            bytes,
+            "joiner {i}: the welcome, byte for byte"
+        );
         let team = (i % 3) as u32;
         let welcome = Welcome { team, teams: 3 };
         let k = kit::Private::decode(&raw[..]).expect("kit decode");

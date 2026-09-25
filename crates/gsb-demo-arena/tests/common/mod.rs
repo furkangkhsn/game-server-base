@@ -5,6 +5,8 @@
 
 #![allow(dead_code)] // each test binary uses its own subset
 
+mod view;
+
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,9 @@ use gsb_core::room::{Action, RoomActor, RoomConfig, RoomControl};
 use gsb_core::ticker::TickInfo;
 use gsb_demo_arena::arena::{self, Private, WorldSnapshot, private};
 use gsb_demo_arena::codec::{Cm3, to_cm};
-use gsb_demo_arena::{ArenaGame, arena_room, op};
+use gsb_demo_arena::{ArenaGame, ArenaRoom, VISION_RADIUS, arena_room, op};
+use gsb_kit::space::VisionGrid3;
+use gsb_kit::team::TeamRoom;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -36,11 +40,21 @@ pub struct Client {
     pub id: u64,
     rx: mpsc::Receiver<FrameBatch>,
     actions: Mailbox<Action>,
-    /// The latest team snapshot's content: wire id → record (a full
-    /// snapshot replaces the view).
+    /// The team view: wire id → record, under the kit's client rules
+    /// (`kit.proto`): a full replaces it, a delta applies on top.
     pub view: BTreeMap<u64, Cm3>,
+    /// The last accepted sequence (`None`: no baseline yet).
+    pub baseline: Option<u64>,
+    /// Group fulls, group deltas and one-shot private fulls applied, and
+    /// deltas dropped for lack of a baseline.
+    pub fulls: u32,
+    pub deltas: u32,
+    pub private_fulls: u32,
+    pub gap_drops: u32,
     /// Every input ack received, in order.
     pub acks: Vec<u64>,
+    /// Every group frame received, raw, in order.
+    pub snapshots: Vec<Bytes>,
     /// The raw payloads of the latest snapshot and private frames.
     pub last_snapshot: Option<Bytes>,
     pub last_private: Option<Bytes>,
@@ -84,28 +98,21 @@ impl Client {
                 match f.op {
                     op::ARENA_SNAPSHOT => {
                         let s = WorldSnapshot::decode(f.payload.as_ref()).expect("snapshot");
-                        assert!(!s.delta, "the team-fog room sends full snapshots");
-                        self.view = s
-                            .entities
-                            .iter()
-                            .map(|r| {
-                                (
-                                    r.entity,
-                                    Cm3 {
-                                        x: r.x,
-                                        y: r.y,
-                                        z: r.z,
-                                    },
-                                )
-                            })
-                            .collect();
+                        self.apply_group(&s);
+                        self.snapshots.push(f.payload.clone());
                         self.last_snapshot = Some(f.payload.clone());
                     }
                     op::ARENA_PRIVATE => {
                         privates += 1;
                         let p = Private::decode(f.payload.as_ref()).expect("private");
-                        if let Some(private::Payload::Ack(a)) = p.payload {
-                            self.acks.push(a.processed_up_to);
+                        match p.payload {
+                            Some(private::Payload::Ack(a)) => self.acks.push(a.processed_up_to),
+                            Some(private::Payload::Snapshot(s)) => {
+                                assert!(!s.delta, "a one-shot private snapshot is a full");
+                                self.replace(&s);
+                                self.private_fulls += 1;
+                            }
+                            None => {}
                         }
                         self.welcomes.extend(p.game);
                         self.first_private.get_or_insert_with(|| f.payload.clone());
@@ -129,8 +136,19 @@ pub struct Arena {
 }
 
 impl Arena {
-    /// A room running `game` (the arena's own room constructor).
+    /// A room running `game` (the arena's own room constructor: the
+    /// team room in delta mode).
     pub fn new(game: ArenaGame) -> Self {
+        Self::with_room(arena_room(game))
+    }
+
+    /// A room running `game` in the team room's default FULL mode (the
+    /// arena's room before it opted into deltas).
+    pub fn full_only(game: ArenaGame) -> Self {
+        Self::with_room(TeamRoom::with_game(game, VisionGrid3::new(VISION_RADIUS)))
+    }
+
+    fn with_room(room: ArenaRoom) -> Self {
         let config = RoomConfig {
             id: RoomId(1),
             ..Default::default()
@@ -141,7 +159,7 @@ impl Arena {
         let actor = RoomActor::new(
             config,
             World::new(),
-            Box::new(arena_room(game)),
+            Box::new(room),
             tick_rx,
             control_rx,
             1, // room rate == global rate
@@ -193,7 +211,13 @@ impl Arena {
             rx,
             actions,
             view: BTreeMap::new(),
+            baseline: None,
+            fulls: 0,
+            deltas: 0,
+            private_fulls: 0,
+            gap_drops: 0,
             acks: Vec::new(),
+            snapshots: Vec::new(),
             last_snapshot: None,
             last_private: None,
             first_private: None,
@@ -210,6 +234,17 @@ impl Arena {
             for c in clients.iter_mut() {
                 c.drain();
             }
+        }
+    }
+}
+
+impl Arena {
+    /// Let the room finish the steps already sent and every client decode
+    /// what arrived (no new tick).
+    pub async fn flush(&mut self, clients: &mut [Client]) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for c in clients.iter_mut() {
+            c.drain();
         }
     }
 }

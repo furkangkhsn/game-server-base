@@ -43,8 +43,11 @@ fn result(out: &Output) -> (String, HashMap<String, String>) {
 
 /// What every game's clean run shows: all `n` clients through the whole
 /// session, a snapshot stream, numbered inputs acked, nothing shed, the
-/// hosted game closing the line.
-fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64, game: &str) {
+/// hosted game closing the line. `late_joins`: how many clients may drop
+/// one delta at their join (a join into a group already streaming
+/// deltas: the group's delta precedes the one-shot private full in the
+/// same batch — GAME-MODULE G3-2).
+fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64, game: &str, late_joins: u64) {
     let get = |k: &str| -> u64 {
         kv.get(k)
             .unwrap_or_else(|| panic!("missing {k} in: {line}"))
@@ -57,7 +60,7 @@ fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64, game: &str) {
     }
     assert_eq!(get("errors"), 0, "{line}");
     assert_eq!(get("server_closes"), 0, "{line}");
-    assert_eq!(get("gap_drops"), 0, "{line}");
+    assert!(get("gap_drops") <= late_joins, "{line}");
     assert!(get("snap_total") >= 30 * n, "a stream per client: {line}");
     assert!(get("moves") > 0 && get("acks") > 0, "inputs acked: {line}");
     assert!(get("ack_processed_max") > 1, "numbered inputs: {line}");
@@ -65,7 +68,9 @@ fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64, game: &str) {
     assert!((20.0..=40.0).contains(&hz), "server_hz {hz}: {line}");
 }
 
-/// The arena: team fog, full snapshots only (no deltas), its own labels.
+/// The arena: team fog in the team room's delta mode (fulls for fresh
+/// teams, one-shot to late joiners and on the keep-alive), its own
+/// labels.
 #[test]
 fn loadgen_drives_the_arena() {
     let out = loadgen(&[
@@ -78,14 +83,15 @@ fn loadgen_drives_the_arena() {
         "100",
     ]);
     let (line, kv) = result(&out);
-    assert_clean(&line, &kv, 6, "arena");
+    // Three teams: every joiner after its team's first is a late one.
+    assert_clean(&line, &kv, 6, "arena", 3);
     assert_eq!(kv["mode"], "in-proc");
     assert_eq!(
         (kv["visibility"].as_str(), kv["shards"].as_str()),
         ("team", "1")
     );
     assert_eq!(kv["profile"], "base-centre");
-    assert_eq!(kv["deltas"], "0", "the team room sends fulls: {line}");
+    assert_ne!(kv["deltas"], "0", "the team room sends deltas: {line}");
     assert_ne!(kv["fulls"], "0", "{line}");
 }
 
@@ -97,7 +103,7 @@ fn loadgen_drives_the_arena() {
 fn loadgen_drives_the_mmo() {
     let out = loadgen(&["8", "--game", "mmo", "--duration", "4", "--move-ms", "100"]);
     let (line, kv) = result(&out);
-    assert_clean(&line, &kv, 8, "mmo");
+    assert_clean(&line, &kv, 8, "mmo", 0);
     assert_eq!(
         (kv["visibility"].as_str(), kv["shards"].as_str()),
         ("spatial", "4")
@@ -138,7 +144,7 @@ fn loadgen_orchestrates_the_mmo() {
         "100",
     ]);
     let (line, kv) = result(&out);
-    assert_clean(&line, &kv, 4, "mmo");
+    assert_clean(&line, &kv, 4, "mmo", 0);
     assert_eq!(kv["mode"], "sep");
     assert_eq!(kv["procs"], "2");
     // The server child hosts the bots' roster too: one bot per shard at

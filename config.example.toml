@@ -376,7 +376,7 @@ keepalive_hz = 1.0
 # key after a [table] header belongs to it.
 
 # game = "arena" — one room with 3D team fog of war (single × team ×
-# always-full; vision radius 15 m, the arena's own).
+# delta; vision radius 15 m, the arena's own).
 #[arena]
 # Teams per room (1..=255); joiners are dealt round-robin.
 #teams = 3

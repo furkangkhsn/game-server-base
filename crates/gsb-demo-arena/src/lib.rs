@@ -30,10 +30,11 @@
 //!
 //! What it takes from the kit: the team-fog room
 //! ([`TeamRoom`]) over the kit's 3D vision
-//! preset ([`VisionGrid3`]) — see [`ArenaRoom`]. Everything the room
-//! does around the hooks (wire identity, grouping by team, the per-team
-//! content and "no change" ledger, the snapshot and `Private`
-//! envelopes, the input ack, park/resume) is the kit's.
+//! preset ([`VisionGrid3`]), in the room's delta mode — see
+//! [`ArenaRoom`]. Everything the room does around the hooks (wire
+//! identity, grouping by team, the per-team content and delta ledger,
+//! the snapshot and `Private` envelopes, the input ack, park/resume) is
+//! the kit's.
 //!
 //! Hosted by `gsb-server` as `game = "arena"` and driven by
 //! `gsb-loadgen --game arena` (`docs/GAME-MODULE.md`); its own tests
@@ -69,11 +70,17 @@ pub mod arena {
 pub type ArenaRoom = TeamRoom<ArenaGame, VisionGrid3<Pos3>>;
 
 /// An arena room running `game` with the arena's vision radius
-/// ([`VISION_RADIUS`]). (A free function, not a constructor: the room
-/// type is the kit's, so an inherent impl here is E0116.)
+/// ([`VISION_RADIUS`]), shipping DELTA snapshots
+/// ([`TeamRoom::with_delta`]): a team's view is ~2× the team (its own
+/// units plus the enemies in its vision), and a full every tick re-sent
+/// every one of them — at a few hundred units more than one rUDP
+/// datagram (GAME-MODULE G3-1); a delta carries only the units that
+/// moved, entered the view or left it.
+/// (A free function, not a constructor: the room type is the kit's, so
+/// an inherent impl here is E0116.)
 #[must_use]
 pub fn arena_room(game: ArenaGame) -> ArenaRoom {
-    TeamRoom::with_game(game, VisionGrid3::new(VISION_RADIUS))
+    TeamRoom::with_game(game, VisionGrid3::new(VISION_RADIUS)).with_delta()
 }
 
 /// Register the arena's wire messages with `table` (the server builds

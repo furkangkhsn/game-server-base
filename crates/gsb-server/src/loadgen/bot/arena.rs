@@ -150,7 +150,7 @@ impl BotClient for ArenaClient {
 /// centimetres (`arena.proto`'s `UnitRecord { uint64 entity = 1; sint32
 /// x = 2; sint32 y = 3; sint32 z = 4; }`, walked by hand — pinned to the
 /// generated decoder by this module's tests). The arena runs no cell
-/// space: its team room sends full snapshots only and no frame carries a
+/// space: its team room's deltas carry `removed` ids and upserts, never a
 /// cell exit, so one is a protocol error. The session payload is the
 /// arena's `Welcome` (decoded with the generated type: once per session);
 /// the decoder keeps the base it names.

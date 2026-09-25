@@ -52,18 +52,21 @@ message UnitRecord {
 }
 
 // Typed mirror of `gsb.kit.WorldSnapshot` (op `ARENA_SNAPSHOT`). The
-// team-fog room the arena runs emits FULL snapshots only: each frame
-// is the team's complete view and replaces the client's view (a unit
-// that left the team's vision is simply absent). The client rules of
-// the kit's envelope (full/delta, sequence, duplicates) are written out
-// in gsb-kit's `kit.proto`. Field 4 (`cell_exits`)
+// arena's team-fog room runs in the kit's DELTA mode: a team's frame is
+// the change of its view since its last frame — `removed` (units that
+// left the team's vision) then `entities` (units that entered it or
+// moved at least one centimetre); a FULL frame (`delta` absent)
+// replaces the view, sent to a fresh team, on the keep-alive cadence
+// (once a second) and, one-shot in `Private.snapshot`, to a member
+// without a baseline (a joiner into a playing team, a resume). The
+// client rules (full/delta, baseline, sequence gaps, duplicates) are the
+// kit's, written out in gsb-kit's `kit.proto`. Field 4 (`cell_exits`)
 // is not mirrored: the arena runs no cell space, so no frame carries it
 // (a decoder would skip it anyway).
 message WorldSnapshot {
   uint64 sequence = 1;
   repeated UnitRecord entities = 2;
-  // Delta frames only (never sent by the team-fog room; mirrored so a
-  // client written against this file needs no change if it ever is).
+  // Delta frames only: the wire ids that left the team's view.
   repeated uint64 removed = 3;
   bool delta = 5;
 }

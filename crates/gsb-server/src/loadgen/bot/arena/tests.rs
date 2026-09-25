@@ -51,6 +51,44 @@ fn snapshot_with(entity: u64, at: [i32; 3]) -> Vec<u8> {
     .encode_to_vec()
 }
 
+/// The team room's deltas apply on the bot's view (the kit's client
+/// rules): after a full, a delta removes the unit that left the team's
+/// view and upserts the one that moved; a delta before any full (a late
+/// joiner's first batch) is dropped, not an error.
+#[test]
+fn the_view_applies_the_team_rooms_deltas() {
+    let unit = |entity, x| UnitRecord {
+        entity,
+        x,
+        y: 0,
+        z: 0,
+    };
+    let delta = WorldSnapshot {
+        sequence: 8,
+        entities: vec![unit(5, 2_700)],
+        removed: vec![9],
+        delta: true,
+    }
+    .encode_to_vec();
+    let mut c = ArenaBot.client(0);
+    c.apply_snapshot(&delta).expect("dropped, not an error");
+    assert_eq!((c.view_len(), c.counters().gap_drops), (0, 1));
+    let full = WorldSnapshot {
+        sequence: 7,
+        entities: vec![unit(5, 2_650), unit(9, 0)],
+        removed: vec![],
+        delta: false,
+    };
+    c.apply_snapshot(&full.encode_to_vec()).expect("a full");
+    c.apply_snapshot(&delta).expect("a delta");
+    let counters = c.counters();
+    assert_eq!(
+        (counters.fulls, counters.deltas, counters.errors),
+        (1, 1, 0)
+    );
+    assert_eq!(c.view_len(), 1, "unit 9 left the view");
+}
+
 /// The session's first private frame: the welcome alone.
 fn welcome(team: u32, teams: u32) -> Vec<u8> {
     Private {

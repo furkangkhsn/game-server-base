@@ -1,6 +1,8 @@
 //! The 3D team arena (`gsb-demo-arena`) as a game module: ONE strategy
 //! — a single room with team fog of war over the kit's 3D vision preset,
-//! full snapshots every tick (`TeamRoom<ArenaGame, VisionGrid3<Pos3>>`).
+//! in the team room's delta mode (`TeamRoom<ArenaGame, VisionGrid3<Pos3>>`
+//! built by `gsb_demo_arena::arena_room`: per-team deltas, fulls for a
+//! fresh team, one-shot to a late joiner and on the keep-alive).
 //!
 //! Settings come from the `[arena]` table (GAME-MODULE §4.3):
 //!
@@ -35,15 +37,15 @@ use crate::{Config, GameModule, RegistryParts, RegistryTask, ServerError};
 const FIXED: &[FixedKey] = &[
     (
         "visibility",
-        "the arena is single × team × always-full (team fog of war in one room)",
+        "the arena is single × team × delta (team fog of war in one room)",
     ),
     (
         "topology",
-        "the arena is single × team × always-full (one room, never sharded)",
+        "the arena is single × team × delta (one room, never sharded)",
     ),
     (
         "communication",
-        "the arena is single × team × always-full (its team room sends full snapshots)",
+        "the arena is single × team × delta (its team room sends per-team deltas)",
     ),
     ("shard_count", "the arena is one room, never sharded"),
     (
@@ -135,7 +137,7 @@ impl GameModule for ArenaModule {
         match &self.settings {
             None => "arena (unconfigured)".into(),
             Some(s) => format!(
-                "arena: single × team × always-full, teams={} vision={} m (3D), \
+                "arena: single × team × delta, teams={} vision={} m (3D), \
                  disconnect grace {} then the retreat bot",
                 s.teams,
                 VISION_RADIUS,
