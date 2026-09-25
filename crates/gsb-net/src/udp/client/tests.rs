@@ -230,3 +230,32 @@ async fn an_idle_client_never_gives_up() {
         "an idle session stays alive however long it has been quiet"
     );
 }
+
+/// The liveness clock starts when a control frame becomes outstanding,
+/// not at the last RTO pass that happened to run while the queue was
+/// empty.
+///
+/// A client busy on the game band never takes an RTO pass: every read
+/// returns a datagram (a fragmented snapshot stream keeps the socket
+/// full), so the pass that refreshes `ack_progress` on an empty queue
+/// never runs. Its first control frame after a long quiet spell — the
+/// LEAVE at the end of a session — then found a clock stamped at the
+/// last ACK (the JOIN, seconds ago) and the band was declared dead on
+/// the very first pass, with nothing actually overdue.
+#[tokio::test]
+async fn a_control_frame_after_a_quiet_spell_starts_a_fresh_liveness_clock() {
+    let (mut c, _sink) = detached().await;
+
+    // The last ACK progress was long ago and no pass has run since.
+    c.ack_progress -= REL_NO_ACK_FATAL * 2;
+    c.send_frame(gsb_protocol::op::base::ERROR, Bytes::from_static(&[9, 0]))
+        .await
+        .expect("send");
+    c.retransmit_pass();
+
+    assert!(
+        c.is_established(),
+        "a frame outstanding for microseconds is not a dead band"
+    );
+    assert_eq!(c.stats.gave_up, 0);
+}

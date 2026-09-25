@@ -191,6 +191,16 @@ impl UdpClient {
                     "rUDP reliable control band is dead (retransmit queue full, no ACK progress)",
                 ));
             }
+            if self.out_retransmit.is_empty() {
+                // The liveness clock measures unanswered WORK, so it
+                // starts when something becomes outstanding. The RTO pass
+                // also refreshes it on an empty queue, but a client busy
+                // on the game band never takes that pass (every read
+                // returns a datagram) — without this, its first control
+                // frame after a quiet spell inherits a clock stamped at
+                // the last ACK and the band "dies" on the next pass.
+                self.ack_progress = Instant::now();
+            }
             self.out_seq = self.out_seq.wrapping_add(1);
             let dg = Bytes::from(encode_rel(self.out_seq, &frame));
             self.out_retransmit
