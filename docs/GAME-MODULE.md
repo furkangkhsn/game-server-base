@@ -889,6 +889,35 @@ kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
   50 istemcide 0. Görünüm kuralı doğru davranıyor (baseline'sız delta
   düşer, full gelince iyileşir). Sıralamanın core/kit'te garanti edilip
   edilmeyeceği ayrı bir soru; bu turun kapsamı dışında.
+  **İncelendi — küçük paket; kod değişmedi (bilinçli).** *Sıra
+  nereden geliyor:* çekirdeğin fan-out'undan, kit'ten değil. Oda ve
+  shard aktörünün 4d adımı bağlantının batch'ine önce grubun paylaşılan
+  karesini, SONRA `GameLogic::private`'ın karesini koyar
+  (`room/actor/snapshot.rs`, `shard/actor/snapshot.rs`); kit yalnız iki
+  gövdeyi yazar, batch'i görmez. Join tick'inde yerleşik bir grubun
+  karesi delta'dır → baseline'sız istemci onu düşürür (`gap_drops`) →
+  aynı batch'teki one-shot full baseline'ı kurar. `kit.proto` bu sırayı
+  zaten sözleşme olarak yazıyor ("same batch right after the new
+  group's delta").
+  *Deney (geri alındı):* shard fan-out'unda batch'i ters çevirip private
+  kareyi öne almak, MMO 200'de (`--duration 10 --write-stall-secs 0`)
+  `gap_drops` 147 → 0 verdi — ama `deltas` da 55 168 → 54 454 düştü
+  (−714): aynı delta hâlâ gönderiliyor, yalnız artık full'ın AYNI
+  sequence'ından sonra geldiği için `stale` olarak atılıyor (loadgen
+  `stale`'i raporlamıyor; düşüş katılan + hücre geçen istemcilerin o
+  tick'teki delta'ları). Yani sıra değiştirmek bir sayaç yeniden
+  adlandırmasıdır, düzeltme değil.
+  *Neden yapılmadı:* (1) sırayı çevirmek wire değişikliğidir — ack'li
+  her tick'te HER oyunun HER bağlantısında kare sırası değişir (bu
+  paketin kapısı: arena dışında bayt değişmez); yalnız one-shot full
+  tick'lerinde çevirmek için çekirdeğin kareyi tanıması gerekir, oysa
+  private gövde çekirdeğe opak. (2) Gerçek düzeltme o bağlantıya grup
+  karesini HİÇ göndermemek olurdu (full onu kapsıyor: aynı tick, üst
+  küme) — bu hem wire değişikliği (bir kare eksik) hem çekirdek API'si
+  (`private`'ın "bu kare grup karesinin yerine geçer" sinyali) ister;
+  kazanç join/geçiş başına bir delta karesi. Tetikleyici: `gap_drops`
+  temiz bir kayıp sinyali olarak gerekirse (rUDP'de gerçek kayıpla
+  karışır) ya da bu kareler bant ölçümünde görünür hale gelirse.
 - **G3-3 — arena istemcisi takımını wire'dan öğrenemiyor.** JOIN sonucu
   yalnız wire id veriyor; takım (ve dolayısıyla üs) istemci tarafında
   ancak kendi spawn konumundan çıkarılabiliyor. Bot bunu yapıyor; gerçek
