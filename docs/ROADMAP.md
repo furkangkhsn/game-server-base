@@ -75,10 +75,14 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **586** (586/586 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **609** (609/609 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **kit düzeltme turu** (`docs/GAME-MODULE.md` §5 "Kit düzeltme
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **oyun modülü G4** (`docs/GAME-MODULE.md` §5 "G4 sonucu") —
+kit'in istemci kuralları `gsb_kit::client`'ta; altı kopya ona geçti;
+demo tarafındaki `CellExit` okuma hatası (G4-1) düzeltildi; alıcı döngü
+eskisinden hızlı. G3'ten önce koşuldu.
+Önceki tur: **kit düzeltme turu** (`docs/GAME-MODULE.md` §5 "Kit düzeltme
 turu") — G2 bulguları K1–K3 (oyuncunun girdi oturumu artık `KitMig`
 içinde göçle taşınıyor) ve K5 (örnek config'in demo anahtarları yorumda)
 kapandı; CI her oyun özelliğini tek başına derliyor. Açık bulgu: K4

@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Oyun modülü G4 turu: kit'in referans istemcisi (`srv/g4-client`)
+
+Kit zarfının istemci kuralları tek bir kit modülünde: `gsb_kit::client`
+(`docs/GAME-MODULE.md` §5 "G4 sonucu", `docs/KIT-ARCHITECTURE.md` §5.2).
+G3'ten ÖNCE koşuldu (ebeveyn kararı: kuralları önce loadgen'e, sonra
+kit'e yazmak aynı kodu iki kez yazmak olurdu; G3'ün botları bu görünümü
+kullanacak). `gsb-core` değişmedi; wire baytları aynı.
+
+- **`ClientView<D: ClientDecoder>`** (`513a419`): grup ve `Private`
+  karelerini ham bayt olarak alır, `kit.proto`'nun istemci kurallarını
+  uygular (full değiştirir; baseline'lı delta removed → cell_exits →
+  upsert; baseline'sız delta düşer; son KABUL edilmişten `<=` sequence
+  atılır — ilk kabulden önce hiçbir şey bayat değil; one-shot private
+  full koşulsuz; private delta hata) ve loadgen'in sayaçlarını verir.
+  Oyunun seam'i: kayıt → `(id, Record)`, `cell_of(&Record)`, çıkış →
+  hücre. Zarf ayırmasız iki geçişte yürünür; yürüyücü public
+  (`client::wire`).
+- **Altı kopya kit'e geçti** (`2809a87`, `e652e82`, `b4c0039`): loadgen
+  görünümü, `delta_aoi.rs`, `aoi.rs`, MMO'nun iki test istemcisi, örnek
+  istemci; her iddianın koşulu ve mesajı aynı.
+- **Hata düzeltmesi (bulgu G4-1, `d0c88d2`):** loadgen ve `delta_aoi`
+  `CellExit`'i konum sanıp hücreye çeviriyordu (`CellExit(1,0)` →
+  hücre (0,0)); indisi kendine eşlenmeyen her çıkışta yanlış hücre
+  unutuluyor, çıkan hücre keep-alive'a dek hayalet kalıyordu. Sayaçlar
+  etkilenmiyordu; tutulan görünüm karelerin %3–9'unda farklıydı. Yeni
+  test önce kırıldı.
+- **Alıcı döngü daha hızlı** (`3a77e9b`, `4667c26`, `cfd7d3e`): aynı
+  karede kit görünümü eski tipli çözümün 0,63–0,79'u (tek kayıtlı
+  karelerde başabaş).
+
+Test sayısı 586 → **609**. Loadgen A/B (üç senaryo, dönüşümlü üç tur):
+CLIENT/RESULT anahtarları, sırası ve biçimi aynı, sayaçlar gürültü
+içinde. Ebeveynin bağımsız mutasyonu (bayat kuralı `<=` → `<`) iki
+kural testini kırıyor.
+
 ## Kit düzeltme turu: K1–K3, K5, tek-oyun CI (`fix/kit-input-migration`)
 
 G2'nin gerçek sunucu altında bulduğu kit bulguları kapandı

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-586 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+609 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -139,6 +139,16 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
+
+**Oyun modülü G4 tamam** (`docs/GAME-MODULE.md` §5 "G4 sonucu"): kit
+zarfının istemci yarısı `gsb_kit::client`'ta. Bir istemci (loadgen botu,
+test istemcisi) kendi bayat/delta/private mantığını YAZMAZ:
+`ClientView::new(decoder)` + `apply_snapshot(bytes)` /
+`apply_private(bytes)`; oyun yalnız `ClientDecoder`'ı verir (kayıt →
+`(id, Record)`, `cell_of`, çıkış → hücre — `CellExit` hücrenin
+İNDİSİdir, konum değil; G4-1 buydu). Sıcak döngüde kaydı
+`client::wire::Fields` ile elle yürü; pinlemek için üretilmiş çözücüyle
+karşılaştıran test yaz (loadgen'in `view/tests.rs`'i örnek).
 
 **Kit düzeltme turu tamam** (`docs/GAME-MODULE.md` §5 "Kit düzeltme
 turu", CHANGELOG): sharded odalarda oyuncunun girdi oturumu (`InputSeq`:
@@ -305,6 +315,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 586 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 609 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
