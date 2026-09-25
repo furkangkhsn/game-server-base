@@ -22,7 +22,7 @@ pub(crate) struct SepInfo {
     /// when pinning was not possible.
     pub(crate) affinity: String,
     /// CPU seconds the server process used over the run (from
-    /// /proc/<pid>/stat) — the isolation proof: with disjoint masks,
+    /// `/proc/<pid>/stat`) — the isolation proof: with disjoint masks,
     /// server CPU cannot hide behind client decode.
     pub(crate) server_cpu_s: f64,
     pub(crate) clients_cpu_s: f64,

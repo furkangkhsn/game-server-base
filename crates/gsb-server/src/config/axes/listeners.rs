@@ -178,7 +178,7 @@ pub struct Config {
     ///   at 64 so even a tiny deployment keeps real headroom for a lobby
     ///   full of slow-but-honest handshakes;
     /// - when `max_connections` is unlimited: the same formula runs
-    ///   against the built-in default base ([`DEFAULT_MAX_CONNECTIONS`],
+    ///   against the built-in default base (`DEFAULT_MAX_CONNECTIONS`,
     ///   so the derived default is 25_000). Decision (the contract left
     ///   this open, "simplest sound choice wins"): an unlimited-total
     ///   server still needs a bounded half-open-handshake pool, and taking
@@ -351,7 +351,7 @@ pub struct Config {
     /// `disconnect_grace_secs`; RECONNECT §3): how long a dropped
     /// transport's entity STAYS in the world — visible in snapshots,
     /// holding its room-cap slot — before the hold ends toward the bot
-    /// handover ([`ExpireTo::AiHandover`]; the demo stub bot then keeps
+    /// handover ([`ExpireTo::AiHandover`](gsb_core::room::ExpireTo::AiHandover); the demo stub bot then keeps
     /// playing the hero through the ordinary input path). A human who
     /// rejoins inside the window resumes onto the live entity with the
     /// same wire id (the implicit resume, §14.3).
@@ -359,7 +359,7 @@ pub struct Config {
     /// Default 30 s; `0` restores the pre-reconnect semantics exactly
     /// (disconnect = despawn). Flows into every room the factories build
     /// (the game-level knob rides the factory closure like
-    /// `spawn_half_size`, not [`RoomConfig`] — it is policy, not core
+    /// `spawn_half_size`, not [`RoomConfig`](gsb_core::room::RoomConfig) — it is policy, not core
     /// mechanics).
     pub disconnect_grace_secs: f64,
     /// Bind address of the HTTP ops surface (`docs/OPS.md`): `/healthz`,

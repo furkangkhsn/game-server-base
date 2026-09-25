@@ -55,7 +55,7 @@ pub(crate) async fn spawn_pinned(
     cmd.spawn()
 }
 
-/// Sum of utime+stime (clock ticks) from /proc/<pid>/stat. The comm
+/// Sum of utime+stime (clock ticks) from `/proc/<pid>/stat`. The comm
 /// field may contain spaces/parens, so cut at the LAST ')': utime and
 /// stime are then fields 12 and 13 of the remainder (1-based 14/15).
 pub(crate) fn proc_ticks(pid: u32) -> Option<u64> {
