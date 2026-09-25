@@ -868,7 +868,8 @@ Shutdown'ı gönderip ticker'ı hemen iptal ediyor; registry odanın DOLU
 kontrol kanalına `send().await` ile Shutdown yazmayı beklerken oda artık
 tick almıyor ve broadcast kapanmıyor (registry bir `Ticker` tutuyor) →
 kilitlenme. Stop anında kontrol kapasitesinden (128) fazla canlı üye
-kopunca tetikleniyor (geçici logla doğrulandı: `cap=0` bekleyişi).
+kopunca tetikleniyor (geçici logla doğrulandı: `cap=0` bekleyişi). → S turunda
+kapandı (§9.1).
 
 **Elenen alternatifler:** (1) *kit seviyesinde çok parçalı snapshot*
 (kit grup karesini kendini tanımlayan parçalara böler, istemci
@@ -1369,15 +1370,19 @@ ServerHandle::stop
   → RegistryMsg::Shutdown
       → her dispatcher'a RoomOp::Close (yol açma + son leave), sonra senders düşer
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
-      → her odaya kontrol kanalından RoomControl::Shutdown (bir sonraki tick'te işlenir)
-  → ticker.abort()   (broadcast kapanır = geri sigorta: kontrol Shutdown'ını
+      → her odaya kontrol kanalından RoomControl::Shutdown — BEKLEMEden
+        (try_send; kanal doluysa spawn'lu gönderici, §9.1); bir sonraki
+        tick'te işlenir
+  → ticker.abort()   (görev göndericisi düşer; registry'ninki de düşünce
+                     broadcast kapanır = geri sigorta: kontrol Shutdown'ını
                      görememiş her oda, recv'de Closed görüp temiz çıkar)
   → connection actor'ler çıkar → in_tx/out_tx düşer
       → reader pump: send hatası → çıkar
       → writer pump: kanal kapanır → çıkar + socket close
   → accept loop: JoinHandle.abort()   (belgelenmiş tek sert abort)
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
-    için EOF'ı bekleyemezdi — artık beklemez)
+    için EOF'ı bekleyemezdi — artık beklemez); düşerken Ticker klonunu da
+    düşürür — broadcast'i kapatan son halka (§9.1)
   → metrik toplayıcı: ticker'ın broadcast'i kapanınca Closed görür,
     son raporu basıp temiz çıkar (bkz. §12)
 ```
@@ -1388,6 +1393,142 @@ görevini sonlandırır (socket klonu + endpoint göndericisi düşer;
 writer'lar aktör kaskadıyla çıkar). Accept loop'un `JoinHandle` ile
 abort edilmesi hâlâ v1'in bilinçli kısıtı (demux kapanınca accept de
 doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
+
+### 9.1 Kapanış kilitlenmesi (S turu, BACKLOG §1 satır 4a)
+
+**Belirti.** U turunda bir MMO ve üç arena-500 loadgen koşusu bitmedi:
+`stop()` asılı kaldı. Geçici logla registry'nin bir odanın kontrol
+kanalında `cap=0` ile beklediği görüldü. Hata U'dan eski; rUDP turu
+yalnızca daha çok eşzamanlı kopuş ürettiği için yüzeye çıkardı.
+
+**`stop()` yolunun tamamı, her `.await` ile** (düzeltme öncesi):
+
+1. `stop()`: `registry.send(Shutdown).await` — registry posta kutusu
+   (4096); registry onu tick'ten bağımsız boşaltır.
+2. `stop()`: `http.abort()`, `ticker.abort()` — beklemesiz. Ticker
+   görevinin göndericisi düşer, ama registry bir `Ticker` klonu tuttuğu
+   için broadcast **açık kalır**; odalar artık tick almaz, yani kontrol
+   kanallarını bir daha boşaltmaz.
+3. `stop()`: her listener `close()`, her accept `abort()` — beklemesiz.
+4. `stop()`: `metrics.await` — toplayıcı yalnız broadcast `Closed`
+   görünce biter; broadcast da ancak registry çıkıp `Ticker`'ını
+   düşürünce kapanır. `stop()`'un tamamlanması bu tek zincire bağlı.
+5. Registry, Shutdown'dan ÖNCE kuyruğundakileri işler (kopan
+   istemcilerin `ConnClosed`'ları, ops yüzeyinden bir `DestroyRoom`):
+   her `ConnClosed` dispatcher'a (ya da spawn'lu bir göreve) bir DETACH
+   yollatır; bunlar odanın kontrol kanalına `send().await` ile yazar —
+   kendi görevlerinde, registry'yi bekletmeden.
+6. Registry `on_shutdown`: (a) dispatcher'lara `try_send(Close)`; (b)
+   bağlantılara spawn'lu `ConnIn::Shutdown`; (c) **her odaya satır içi
+   `control.send(Shutdown).await`, shard'lı odada her shard'a
+   `ShardMsg::Shutdown`** — KİLİTLENME BURADA; (d) dönüş → `break` →
+   registry ve `Ticker`'ı düşer.
+7. Oda/shard: tek await'i `tick_rx.recv()`; `Closed`'da
+   `logic.on_shutdown()` + `match_result` (`try_send`) → çıkar →
+   `control_rx` düşer, kanala bekleyen her gönderici hata alıp biter.
+8. Bağlantı aktörü `ConnIn::Shutdown`'da döngüden çıkar, son metrik
+   örneğini `try_send` eder, `registry.send(ConnClosed).await` (registry
+   çıktıysa anında hata).
+
+**Kök neden.** Stop anında kontrol kapasitesinden (varsayılan 128) fazla
+üye koparsa 5. adımın DETACH'leri kanalı doldurur ve fazlası kanalda
+bekler. 6c'deki `send().await` FIFO sırasında onların arkasına girer;
+kanalı boşaltacak tek şey odanın tick'i, tick de 2. adımda durdu.
+Registry sonsuza dek bekler, `Ticker`'ı düşmez, broadcast kapanmaz, oda
+`Closed`'u hiç görmez, toplayıcı bitmez, `stop()` asılı kalır. Kapalı
+bir döngü: odanın ilerlemesi, onu bekleyen registry'nin elindeki
+`Ticker`'ın düşmesine bağlı.
+
+**Aynı sınıftan ikinci bekleme.** `on_destroy_room` aynı satır içi
+`send(Shutdown).await`'i taşıyordu. Shutdown'ın önüne kuyruklanmış bir
+`DestroyRoom` (HTTP ops ya da `close_room`, stop'la yarışan), ticker
+çoktan durmuş ve kanal doluyken registry'yi Shutdown'a varmadan
+kilitliyordu. Ticker çalışırken de, tüm kontrol düzlemini kuyruktaki
+mesaj başına kapasite kadar tick bekletiyordu. Diğer bekleme yerleri
+tek tek incelendi, **değişmedi**: dispatcher'ların ve spawn'lu
+leave/detach görevlerinin oda gönderimleri kendi görevlerinde; oda
+çıkıp alıcıyı düşürünce biterler. Spawn'lu `ConnIn::Shutdown`
+gönderimleri tick'e bağlı değil. Bağlantı aktörünün ve ölüm
+bekçisinin (`RoomDied`) registry'ye gönderimleri, registry çıkınca
+anında hata alır. Hiçbiri `stop()`'un zincirinde değil. Düzeltmeden
+sonra registry kolu içinde oda posta kutusunu bekleyen satır içi
+`.await` kalmadı: registry'nin tek beklediği kendi posta kutusu.
+
+**Düzeltme** (`registry/actor/stop.rs`): durdurma yolları (sunucu
+kapanışı ve destroy) oda posta kutusunu **hiç beklemez**. `post_stop`,
+yer varsa mesajı `try_send` ile yerinde bırakır. Kanal DOLUysa mesajı
+spawn'lu bir göndericiye devreder (leave/detach yollarının zaten
+kullandığı fire-and-forget deyimi). Alıcı yoksa (oda çoktan ölmüşse)
+hiçbir şey yapmaz. `on_shutdown` ve `on_destroy_room` artık senkron.
+Sunucu kapanışında registry hemen çıkar ve `Ticker`'ını düşürür;
+ticker da iptal edilmiş olduğundan broadcast kapanır, her oda
+`Closed`'dan çıkar ve teardown kancalarını (`on_shutdown`,
+`match_result`) işlenmiş bir Shutdown'daki gibi koşar. Bekleyen spawn'lu
+gönderici, düşen alıcıya çarpıp biter; odadan uzun yaşayan görev
+kalmaz. Ticker çalışmaya devam ediyorsa (çalışma anında destroy ya da
+registry'yi ticker'ı iptal etmeden durduran kütüphane kullanıcısı), oda
+kanalı boşaltır ve spawn'lu gönderici Shutdown'ı SIRAYLA teslim eder.
+
+**Korunan sözler.** Odalar yine durur. Sıra şu: kanalda yer varsa
+Shutdown, yoksa ve ticker durmuşsa `Closed`; iki yol da aynı
+`on_shutdown` + `match_result`'u koşar. Eski sıralama da bunu çoğunlukla
+fiilen `Closed`'a bırakıyordu, çünkü ticker registry Shutdown'ı işlemeden
+iptal ediliyordu. Park/despawn kancaları değişmedi: kapanıştan önce
+tick'te işlenen DETACH'ler kancalarını koştu. Kanalda kalanlar, eskiden
+de olduğu gibi, oda `Closed`'dan çıkınca düşer. Metrik tarafında yeni
+kayıp yok. Toplayıcının son raporu aynı mekanizmayla (broadcast
+kapanışı) basılır; §12'nin "kapanışta kümülatif sayaçlar geride
+kalabilir" sınırlılığı aynen geçerli. İstemci tel baytları değişmedi.
+Kapanışta istemciye bildirim (B12) bu turun konusu değil; bağlantılar
+yine sessizce kapanır.
+
+**Elenen alternatifler.**
+
+1. *Yalnız `try_send`, doluysa mesajı at (broadcast geri sigortasına
+   güven).* Sunucu kapanışını çözer, ama ticker'ın çalışmaya devam ettiği
+   her yolu bozar: dolu kanallı bir oda çalışma anındaki destroy'da ya
+   da registry'yi ticker'ı iptal etmeden durduran kütüphane
+   kullanıcısında hiç durmaz. Spawn'lu yedek bu yüzden var. Mutasyon
+   testi (`full_mailbox_still_gets_the_message_in_order`) tam bu
+   gerilemeyi yakalar.
+2. *`stop()`'ta ticker'ı ancak registry bitince iptal etmek* (`stop()`
+   `RegistryTask`'ı bekler). Sağlıklı odalarda kilidi açar, çünkü odalar
+   tick'lemeye devam edip kanalı boşaltır. Ama bekleme oda sağlığına ve
+   bekleyen trafiğe bağlı ve sınırsız: 1 Hz'lik bir oda, 500 kopuş /
+   128 kapasite → oda başına 4+ sn, odalar arasında seri. Zaman aşımı
+   eklense de aşımda registry yine `Ticker`'ı tutarak asılı kalır; kilit
+   gitmez, yalnız bir zaman aşımının arkasına saklanır. Düzeltmeden sonra
+   sıra değişikliği gereksiz.
+3. *Oda `Closed`'da kontrol kanalını boşaltıp çıksın.* Kilidi tek başına
+   çözmez: registry hâlâ bekler, broadcast hiç kapanmaz, oda `Closed`'u
+   hiç görmez. Ayrıca senkron boşaltma yalnız kuyruktakileri görür (en
+   çok kapasite kadar). Kanalda bekleyen göndericiler, oda yield etmediği
+   için hiç giremez. Böylece koşulan park kancaları keyfi bir alt küme
+   olur. Üstüne ölmekte olan odada Join kabulü koşar.
+4. *Registry `Ticker`'ını kapanışın başında düşürsün.* Sunucu stop'unu
+   çözer, ama doğruluğu kompozisyon kökünün iptal sırasına bağlar. Destroy
+   yolunu (Shutdown'dan önce kuyruklanmış `DestroyRoom`) çözmez, alanı
+   `Option`'a çevirir. "Registry bir odayı asla beklemez" kuralı daha
+   dar ve yerel.
+5. *Daha büyük/sınırsız kontrol kanalı.* Sınırlı-kanal kuralını (§2)
+   çiğner; eşiği yalnızca taşır.
+
+**Testler.** `gsb-core/tests/shutdown.rs` en kötü iç içe geçmeyi
+deterministik olarak kurar: ticker ÖNCE iptal edilir, 12 üye kopar
+(kapasite 2), DETACH'ler kanalı doldurup beklemeye geçer, sonra
+Shutdown/destroy gönderilir. Tek oda, shard'lı oda (2 shard) ve destroy
+için 3 test var. Her biri registry'nin bittiğini, broadcast'in
+kapandığını ve her oda/shard'ın teardown'unu koştuğunu (`match_result`)
+doğrular. `gsb-server/tests/server_stop.rs` aynı durumu gerçek TCP ile
+uçtan uca kurar (10 Hz, `room_control = 2`, 24 üye, kopuştan ~150 ms
+sonra `stop()`, tek oda + shard'lı), `stop()`'un 10 sn içinde
+bittiğini doğrular. Düzeltmesiz kodda beşi de 5/5 koşuda kilitlendi.
+`post_stop` birim testleri dolu kanalda mesajın kaybolmadığını pinler.
+Loadgen (TCP, süreç içi, 500 istemci): `--game arena
+--write-stall-secs 0` ve `--game mmo` 4'er koşu. Hepsi bitti,
+`joined = left = 500`, `errors=0`. Düzeltmesiz kod da 2+2
+karşılaştırma koşusunda bitti (kilit zamanlamaya bağlı ve varsayılan 128 kapasitede seyrek), yani
+loadgen ayırt edici test değil; ayırt eden deterministik testler.
 
 ## 10. v1 kısıtları
 
