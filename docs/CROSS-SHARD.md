@@ -1076,6 +1076,9 @@ TeamGame`.
 
 ### 8b.6 Sayaçlar: metrik yolu değil, log satırı
 
+> *W2'de terfi etti (A26): shard sayaçları kümülatif, `RoomSample`'ın
+> `team_*` alanlarında; log satırı pencereyi tutuyor — §8b.8.*
+
 Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops`,
 `export_records`, `over_cap`, `imports`, `import_records`, `expired` —
 sıfır değilse `team_exchange_summary` info satırı (§7'nin
@@ -1234,6 +1237,110 @@ hiçbir oda/oyunun istemci baytı değişmedi).
    terfisi (loadgen botu kurulunca), registry bandı (A13 tetikleyicisi —
    loadgen'le ölçülecek), `Private.game` ile takım bildirimi (arena'nın
    `Welcome` kalıbı).
+   *W2'de karara bağlandı (§8b.8): nötrler W1 kuralında (A27 kanıtla
+   açık); tempo her tick (A25 tetiksiz); sayaçlar metrik yolunda (A26
+   kapandı); registry bandı tetiksiz (A13); `Welcome { faction,
+   factions }` `Private.game`'de.*
+
+### 8b.8 W2 — röle gerçek yük altında (branch `demo/w2-war`)
+
+W2 kompozitin üstüne doğrulama oyununu ("Cephe", `gsb-demo-war`;
+KIT-ARCHITECTURE §10 "W2 sonucu"), sunucu modülünü (`game = "war"`) ve
+loadgen botunu (`--game war`; GAME-MODULE "W2 sonucu") kurdu. Kit ve
+kompozit **değişmedi**; bu bölüm rölenin gerçek yük altındaki
+sayılarıdır.
+
+**Sayaçlar artık metrik yolunda (A26 kapandı).** §8b.6'nın gerekçesi
+("tetik: W2 ölçüm isterse") gerçekleşti: ölçüm A25/A13 kararı için
+oranlara ihtiyaç duydu. Shard'ın `TeamStats`'ı artık kümülatif ve
+`RoomSample`'da yedi alan (`team_exports`, `team_export_drops`,
+`team_export_records`, `team_over_cap`, `team_imports`,
+`team_import_records`, `team_expired`) → rapor, `gsb-metric` satırı,
+Prometheus (`gsb_room_team_*_total`, OPS §3), loadgen metrik teli (magic
+`GSMA`, onuncu düzen; katlama SUM). `team_exchange_summary` satırı ~1 sn
+penceresini tutuyor (son yazdığı anlık görüntüden fark,
+`TeamStats::since`). Hub tarafı (`relays`, `relay_drops`) log satırında
+kaldı: shard'a varan her import düşmemiş bir röledir, yani `imports /
+exports` yayılımı ve kayıpları shard tarafından okunur. RESULT, isteyen
+bot için (savaş) kararlı pencerede `team_exports_s`,
+`team_export_records_s`, `team_records_per_export`, `team_imports_s`,
+`team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`,
+`team_over_cap`, `team_expired`, `migrations`, `effects_applied`) basar.
+
+**Ölçüm** (release, `gsb-loadgen N --game war --duration 10
+--write-stall-secs 0`; 1000: `--orchestrate 1000 --procs 2`; rUDP:
+`500 ... --transport udp --stagger-ms 5`; makine başka ajanlarla
+paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
+`left = N`, `errors=0`, `server_closes=0`, `server_hz` 29,95–30,01,
+`step_over_budget_pct=0.0`:
+
+| N | Yük | `team_exports_s` | kayıt/export | `team_export_records_s` | `team_imports_s` | `team_import_records_s` | yayılım | drops / over_cap / expired | göç (10 sn) | uzak etki |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 200 | 28,8 / 36,8 | 120,0 / 119,9 | 139,5 / 140,1 | 16 741 / 16 802 | 359,9 / 359,8 | 50 225 / 50 406 | 3,00 | 0 / 0 / 0 | 11 / 11 | 0 / 0 |
+| 500 | 28,4 / 37,2 | 119,9 / 119,8 | 360,8 / 358,7 | 43 252 / 42 971 | 359,6 / 359,4 | 129 852 / 128 986 | 3,00 | 0 / 0 / 0 | 76 / 69 | 5 / 6 |
+| 1000 (sep) | 34,4 / 39,1 | 120,0 / 119,9 | 780,0 / 779,5 | 93 629 / 93 462 | 360,1 / 359,7 | 280 968 / 280 456 | 3,00 | 0 / 0 / 0 | 111 / 97 | 7 / 5 |
+| 500 rUDP | 44,3 | 119,8 | 358,8 | 43 002 | 359,5 | 129 086 | 3,00 | 0 / 0 / 0 | 62 | 5 |
+
+**Bulgular.**
+
+1. **Tempo sabit, hacim N ile doğrusal.** Her shard'da her tick bir
+   export (4 × 30 = 120/sn): her bölgede her fraksiyonun kulesi var,
+   yani hiçbir shard'ın takım trafiği sıfıra inmiyor (§8b.3'ün "boşsa
+   gönderme" kuralı Cephe'de hiç devreye girmiyor). Export başına kayıt
+   ≈ 0,78·N (üç takımın bu shard'daki üyeleri + gördükleri);
+   yayılım tam 3,00 — her shard'da her fraksiyonun oyuncusu var, her
+   export diğer üç shard'a gidiyor.
+2. **Röle kayıpsız ve ucuz.** 1000'de 93,5 k kayıt/sn export, 280,7 k
+   kayıt/sn import; registry posta kutusu hiç dolmadı
+   (`team_export_drops = 0`), her export'un röleleri vardı (`imports =
+   3 × exports`), çekirdek tavanları kesmedi, TTL hiçbir yuvayı
+   düşürmedi. Gövdeler `Bytes` refcount'uyla paylaşılıyor (kopya yok):
+   1000'de röleden geçen ~16 B'lık kayıt gövdesi saniyede ~4,5 MB'lık
+   REFERANS — aynı koşuda istemcilere giden bayt ~365 MB/sn. Registry'nin
+   adımı/CPU'su doğrudan gözlenemiyor (tokio görevi, iş parçacığına
+   bağlı değil); dolaylı kanıt: sıfır düşme ve sunucunun toplam CPU'su
+   (1000: 6,0–6,1 sn, 2 süreçlik orkestre koşusunun tamamı).
+3. **Bant röleden değil senaryodan.** İstemci başına görünüm 1000'de
+   ~956 birim (333 müttefik + 4 kule + gördüğü ~620 düşman), çoğu her
+   tick yeni desimetre değeri: `out_bps_per_conn` 200'de ~65 KB/sn,
+   500'de ~175 KB/sn, 1000'de ~365 KB/sn (arena 1000 delta ~210, MMO
+   1000 ~102); en büyük kare 3,5 / 9,2 / 18,5 KB (keep-alive full'u),
+   rUDP 500'de `frag_reassembled` 129 k / 10 sn, `frag_dropped = 0`.
+   "Müttefikler harita genelinde" her istemciye O(N) kayıt/tick'tir;
+   ölçeği A10 (varlık başına yayın hızı: uzak müttefik 1–5 Hz'de
+   minimap'e yeter) ya da A22 (değer düzeyinde delta) değiştirir, export
+   temposu değiştirmez.
+4. **İlk bot sürümünde seam ötesi dövüş hiç yoktu.** Karakolların hepsi
+   bölgelerin derinindeydi: `effects_applied = 0` (200/500/1000),
+   göçler yalnız yeniden doğmalar. Orta noktanın halkası dikişleri
+   kesecek kadar genişletildi (70–95 m; `03500f4`): 500/1000'de 10 sn'de
+   5–7 uzak etki, 60–110 göç — gerçek yük altında hatasız. Küçük sayı
+   botun seyrek saldırısından (≈ 5 sn'de bir) ve dikişe yakın
+   karşılaşmaların azlığından.
+
+**Kararlar (BACKLOG).**
+
+- **A25 (export temposu `every k`)** — **gerekmedi, açık kalır.**
+  1000'de registry'de sıfır düşme; tempo düşürmek röle mesajlarını k'da
+  bire indirir ama istemci baytını değiştirmez (shard her tick kendi
+  içeriğini göndermeye devam eder, ithal kayıtlar yalnız bayatlar) ve
+  uzak kulenin gördüğü düşmanı k tick geç gösterir. Tetik sıkılaştı:
+  `team_export_drops > 0` ya da registry gecikmesi (A13 ile birlikte).
+- **A26** — **kapandı** (yukarıda).
+- **A27 (harita geneli nötrler)** — Cephe'nin kararı: W1 kuralı kabul
+  (sahipsiz ele geçirme noktası kendi shard'ında herkese, başka yerde
+  sisle); ele geçirilen nokta fraksiyonun birimi olur (sahibine harita
+  geneli). Bulgu (KIT-ARCHITECTURE W2-1): kural oyuncuya görünen bir
+  bölüm artefaktı — 640 m ötedeki shard 3 oyuncusu noktayı görür,
+  100 m'deki shard 0 oyuncusu görmez. **Açık kalır**, tetik somut: harita
+  durumunu herkese göstermek isteyen bir hedef (bayrak, üs sağlığı).
+  En küçük kit değişikliği: entity başına "harita geneli" işareti.
+- **A28 (göçte bir tick'lik boşluk)** — **ölçülmedi, kabul kalır.**
+  Loadgen görünümdeki kısa kayıp-geri gelişleri saymıyor; 1000'de 10
+  sn'de ~100 göç. Kit'in gerçek aktör testi boşluğu tam bir tick'le
+  sınırlıyor.
+- **A13 (registry striping)** — tetik yok (sıfır düşme, 1000'de 120
+  export/sn).
 
 ## 9. Uygulama durumları
 
@@ -1242,7 +1349,7 @@ hiçbir oda/oyunun istemci baytı değişmedi).
 | Delta border exchange (§6.4) | 💤 main'de ama **uykuda** — Faz C'den beri süreç-içi link'ler `AlwaysFull`; delta yalnız testlerde (`force_exchange_modes`) koşar, ilk tüketici `Ipc`/`Net` link'i (§7 "Güncel durum") |
 | sharded × spatial kompoziti | ✅ Faz B — main'de |
 | Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
-| team × sharded (§8, §8b) | ✅ W1 — kompozit + registry hub (§8b.7); ◐ doğrulama oyunu, sunucu modülü, loadgen botu W2 |
+| team × sharded (§8, §8b) | ✅ W1 — kompozit + registry hub (§8b.7); ✅ W2 — doğrulama oyunu "Cephe", sunucu modülü, loadgen botu, sayaçlar metrik yolunda (§8b.8) |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |

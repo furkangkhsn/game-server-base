@@ -101,7 +101,7 @@ kullanır; yeni bir `start_server_with(module, cfg)` giriş noktası eklenir.
 
 - `GameModule`, `RegistryParts` ve `run(module)` `gsb-server`
   kütüphanesindedir.
-- Repodaki üç oyunun adaptörleri `gsb-server/src/games/{demo,arena,mmo}.rs`
+- Repodaki oyunların adaptörleri `gsb-server/src/games/{demo,arena,mmo,war}.rs`
   içinde, her biri **isteğe bağlı bir cargo özelliğinin** arkasında
   (varsayılan: hepsi açık). Oyun çalışma zamanında seçilir.
 - Üçüncü taraf bir oyun `default-features = false` ile bağımlanır, trait'i
@@ -856,6 +856,8 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`,
 | mmo | 500 | in-proc | 7,0 | 224 / 296 | 1632 | 49 096 | 136 178 | 27 193 / 27 354 | 2610 / 4229 | 134,120,121,125 → 125,111,136,128; `gap_drops` 398 |
 | mmo | 1000 | sep (2 süreç) | 5,1 | 288 / 400 | 1540 | 102 190 | 280 645 | 55 775 / 56 155 | 9282 / 4746 | 253,254,246,247 → 245,245,255,255; `gap_drops` 991; `server_cpu_s` 2,3, `clients_cpu_s` 7,2, `dropped` 1836 |
 
+*Dördüncü oyunun (savaş, `--game war`) tabanları aşağıda "W2 sonucu"nda.*
+
 Arena yalnız full gönderir (`deltas=0`); MMO'da kareler çoğunlukla delta
 (500: 130 805 delta, 6589 full, 1614 private full). *T turundan beri
 arena delta modunda* (aşağıda G3-1'in T notu; bu tablo turdan önceki
@@ -1150,6 +1152,94 @@ artık evinden oraya yürür.
   `ShardedTeamRoom` onu `on_join_as`'tan çağırır (CROSS-SHARD §8b).
 - **Eski yol güveni** (SECURITY §4b): ticket'sız sunucuda karakter
   anahtarı istemcinin iddiası.
+
+### W2 sonucu — dördüncü oyun `game = "war"` ("Cephe", 2026-09-25)
+
+**Tamam** (`demo/w2-war`, `3e74f67..`; BACKLOG §1 satır 6b). Oyunun
+kendisi, bulguları ve testleri KIT-ARCHITECTURE §10 "W2 sonucu"nda;
+rölenin yük altındaki sayıları CROSS-SHARD §8b.8'de. Burada
+barındırma, loadgen botu ve tabanlar. Commit'ler (her biri kendi
+başına yeşil): `2ae46d6` (crate), `4b22a7a` (test mesajı), `650632d`
+(sunucu modülü + CI), `b55c04d` (takım sayaçları metrik yolunda, A26),
+`bbd018e` (loadgen botu + RESULT), `03500f4` (botun orta halkası
+dikişleri kesiyor).
+
+**Modül** (`gsb-server/src/games/war.rs`, özellik `game-war` — öbürleri
+gibi varsayılan açık; CI'ın oyunsuz işi onu TEK BAŞINA da derleyip
+lint'liyor): oda başına bir shard'lı savaş — dört shard, her biri
+`gsb_demo_war::war_shard(i, &realm)` (`ShardedTeamRoom`, delta modu).
+Katalog: `demo`, `arena`, `mmo`, `war`.
+
+- **Yönlendirme (K4):** `home_shard = route(realm, identity)` =
+  `world::home_shard(&realm.placement(identity).at)` — kayıtlı
+  karakterin konumu, kaydı olmayanın özet fraksiyonunun üssü. Spawn
+  (`TeamGame::spawn_team_player_as`) aynı tabloyu aynı kimlikle okur.
+  Katalog realm'i boş (herkes özet kuralıyla üssünde); gömen kendi
+  karakter verisini `WarModule::with_realm(realm)` ile getirir.
+- **`[war]` tablosu:** `disconnect_grace_secs` (park süresi, sonra geri
+  çekilme botu üsse yürütür; varsayılan kit'in 30 sn'si; `0` = hemen
+  ayrılır) ve `team_budget` (shard'ın fraksiyon başına tick başına
+  export ettiği en çok kayıt, önce üyeler; `1..=16384` — çekirdeğin mesaj
+  tavanı; varsayılan kit'in `DEFAULT_TEAM_BUDGET` = 1 024).
+- **Sabit anahtarlar** (açıkça yazılırsa başlatma reddedilir): üç eksen,
+  `shard_count`, `aoi_cell_size` (savaşta hücre ızgarası yok),
+  `team_vision_radius` (oyunun 60 m'si, zeminde), `spawn_half_size`,
+  demo'nun düz `disconnect_grace_secs`'i (`[war]`'ınkini gösterir).
+  `config.example.toml`'da yorumlu bir `[war]` tablosu; kopyası yalnız
+  `game` satırıyla savaşa geçer (`example_config`).
+
+**Loadgen** (`--game war`; `bot/war.rs`, `bot/war/roster.rs`): bot `id`
+`lg-{id}` olarak girer ve loadgen'in barındırdığı realm'deki kayıtlı
+karakterini bulur — fraksiyon `id mod 3`, **karakol** `(id / 3) mod 14`
+(12 kule + 2 ele geçirme noktası) halkasının başında: her karakolu üç
+fraksiyon birden tutar, nüfus dört shard'a yayılı başlar (süreç içi ve
+`--serve` çocuğu aynı kadroyu barındırır, `server::hosted_module`).
+Fraksiyonunu `Welcome`'dan öğrenir; o ve kendi birimi görünene dek
+girdi yok. Sonra: karakolunun çevresinde 20–45 m halka (orta noktada
+70–95 m — dikişleri keser), hedef ≤ 6 m/sn; ~40 sn'de bir en yakın üç
+karakoldan birine; menzilde (20 m) bir düşman oyuncu varken ~5 sn'de bir
+en yakınına `Attack`. Kayıt elle yürünüyor (`UnitRecord`, üretilmiş
+çözücüye testle sabitli). RESULT: `visibility=team shards=4
+profile=posts`, `shard_members=` ve takım değişiminin segmenti
+(`team_exports_s`, `team_export_records_s`, `team_records_per_export`,
+`team_imports_s`, `team_import_records_s`, `team_fanout`,
+`team_export_drops`, `team_over_cap`, `team_expired`, `migrations`,
+`effects_applied`) — `game=`'den hemen önce; başka oyunun satırı
+değişmedi. Takım sayaçları metrik yolunda (A26: `RoomSample::team_*`,
+loadgen teli `GSMA`) — CROSS-SHARD §8b.8.
+
+**Tabanlar** (release, 32 çekirdek, G3'ün komutu: `gsb-loadgen N --game
+war --duration 10 --write-stall-secs 0`, 1000: `--orchestrate 1000
+--procs 2`, rUDP: `500 ... --transport udp --stagger-ms 5`; makine başka
+ajanlarla paylaşımlı, koşu öncesi 1 dk yük ortalaması tabloda). Her
+koşuda `joined = left = N`, `errors=0`, `server_closes=0`, `server_hz`
+29,95–30,01, `step_over_budget_pct=0.0`:
+
+| Oyun | N | Mod | Yük | step p50/p90 fine (µs) | step max (µs) | `out_bps_per_conn` | `snap_total` | acks / moves | peak payload (B) / `snap_overflows` | Not |
+|---|---|---|---|---|---|---|---|---|---|---|
+| war | 200 | in-proc | 28,8 | 456 / 1552 | 7708 | 65 250 | 58 417 | 11 683 / 11 685 | 3465 / 3285 | records/tick 1577 (overlap 7,9); görünüm ~184/istemci; shard 45,48,46,61 → 46,47,43,64; `gap_drops` 72, `private_fulls` 83 |
+| war | 200 | in-proc | 36,8 | 480 / 1728 | 5968 | 64 735 | 56 929 | 11 330 / 11 330 | 3466 / 3459 | 44,48,47,61 → 45,47,44,64 |
+| war | 500 | in-proc | 28,4 | 1048 / 2552 | 10 753 | 172 293 | 137 094 | 27 250 / 27 312 | 9173 / 3558 | records/tick 4503 (overlap 9,0); görünüm ~432; 109,115,114,162 → 120,119,117,144; `gap_drops` 372 |
+| war | 500 | in-proc | 37,2 | 1080 / 2280 | 9646 | 177 423 | 137 859 | 27 410 / 27 410 | 9192 / 3575 | 110,114,114,162 → 124,117,117,142 |
+| war | 1000 | sep (2 süreç) | 34,4 | 1448 / 2416 | 10 058 | 369 098 | 281 654 | 40 251 / 40 717 | 18 522 / 3727 | records/tick 9576 (overlap 9,6); görünüm ~956; 214,231,230,325 → 205,294,208,293; `server_cpu_s` 6,0, `clients_cpu_s` 17,8, `dropped` 1661, `ack_lag_max_ms` 469 |
+| war | 1000 | sep (2 süreç) | 39,1 | 1736 / 3072 | 17 374 | 363 167 | 278 735 | 37 280 / 38 823 | 18 522 / 3737 | 216,230,229,325 → 211,285,208,296; `server_cpu_s` 6,1, `clients_cpu_s` 16,1, `dropped` 1908, `ack_lag_max_ms` 884 |
+| war | 500 | rUDP | 44,3 | 1200 / 3904 | 16 929 | 158 382 | 130 433 | 25 872 / 25 924 | 9137 / 3416 | `frag_reassembled` 129 204, `frag_dropped` 0, `retrans_out` 160, `gave_up` 0 |
+
+Aynı oturumda mevcut oyunlar etkilenmedi (200, aynı komut): demo
+`out_bps_per_conn` 47 481, arena 39 163, MMO 21 515 (G3/T/K4
+bantlarında), üçünde de `errors=0`, `server_hz` 30,00.
+
+**Okuma.** Savaşın istemci başına baytı arena'nınkinin ~1,75 katı
+(1000'de 365 ↔ ~210 KB/sn): her istemci kendi ordusunun TAMAMINI (N/3)
+artı ordusunun gördüğü her düşmanı alıyor ve bunların çoğu her tick
+hareket ediyor — senaryonun doğası (CROSS-SHARD §8b.8 bulgu 3). Adım
+süresi MMO'nunkinin üç-altı katı (içerik her tick her takım için yeniden
+kuruluyor ve export gövdeleri kodlanıyor) ama bütçenin %10'unun
+altında. 1000'de istemci süreçleri doygun (`clients_cpu_s` ≈ 17 sn / 10
+sn koşu, iki süreç): `moves` MMO 1000'in ~%70'i, `ack_lag_max_ms`
+469–884 — istemci tarafı, sunucu `server_hz` 30'da. `gap_drops`
+geç katılan başına bir (G3-2), `private_fulls` göçle gelenlerin
+one-shot full'larını da sayıyor.
 
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 

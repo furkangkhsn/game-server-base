@@ -2197,6 +2197,149 @@ kanalındaki adım bariyeri kesindir. Kit hâlâ hiçbir oyuna bağlı değil
 kontrolü, özellik derlemeleri, clippy, rustdoc kapısı ve dönüşümlü
 loadgen A/B'si CROSS-SHARD §8b.7'de.
 
+### W2 sonucu — dördüncü doğrulama oyunu "Cephe" (2026-09-25)
+
+**Tamamlandı** (`demo/w2-war`, `3e74f67..`; BACKLOG §1 satır 6b).
+Workspace'te yeni `crates/gsb-demo-war`: üç fraksiyonlu bir savaş,
+görünürlük modeli **shard'lı bir harita üzerinde takım sisi** — W1'in
+`team × sharded` kompozitinin ilk kullanıcısı
+(`ShardedTeamRoom<WarGame, GridPartition2<Pos3>, VisionGrid2<Pos3>>`,
+delta modu). Oyuncu kendi fraksiyonunun her birimini harita genelinde,
+bir düşmanı yalnız fraksiyonundan bir birim (oyuncu ya da gözcü
+kulesi) onu görürken görür — hangi shard'da olursa olsun. **Kabul testi
+olarak koştu: kit'e tek satır dokunulmadı** (`git diff 3e74f67.. --stat
+-- crates/gsb-kit crates/gsb-demo crates/gsb-demo-arena
+crates/gsb-demo-mmo crates/gsb-protocol crates/gsb-net` boş). Çekirdeğe
+yalnız ölçüm için dokunuldu (takım sayaçlarının metrik yoluna terfisi,
+BACKLOG A26 — oyunun çalışması için değil; CROSS-SHARD §8b.8). Savaş
+`gsb-kit` + `gsb-core` + `gsb-protocol`'e bağlı, hiçbir demoya değil;
+yalnız kit'in public yüzeyini görüyor — kanıt yapısal (§11.1).
+
+**Cephe'nin kendisi (oyunun işi, §2):**
+
+| Parça | Seçim | Gerekçe |
+|---|---|---|
+| Konum | `Pos3 { x, y, z: f32 }`, metre, **y yukarı**; `Planar` → `[x, z]` | shard'lama ve görüş zemin düzleminde (MMO gibi); kule platformu (y = 12 m) yalnız wire'da |
+| Harita | 1 600 m × 1 600 m (`WORLD_HALF = 800`), 2×2 shard (`GridPartition2::new(4, 800).with_diagonals()`, şerit 200 m), üç üs üç bölgede, dördüncü bölge üssüz (çekişmeli) | 8 000 dm: her zemin koordinatı 2 baytlık zig-zag varint; köşegen komşuluk: orta nokta dört bölgenin köşesine 85 m |
+| Birimler | oyuncular; **her fraksiyonun her bölgede bir gözcü kulesi** (12 kule, `TeamMember`'lı statik NPC — kit onu yetim olarak damgalar, görüş kaynağı); iki ele geçirme noktası (üssüz bölgede: ortada ve bölge merkezinde) | fraksiyonun oyuncusu olmayan shard'da da gözü olsun — kompozitin var olma sebebi olan senaryo (CROSS-SHARD §8b: shard 2'deki kule, shard 3'teki oyuncuya düşman gösterir) |
+| Görüş | `VisionGrid2<Pos3>`, **tek yarıçap 60 m** (kuleler dahil) | birim başına yarıçap kit'te yok (A8); gerekmedi — aşağıda bulgu W2-2 |
+| Codec | `Wire = WarWire { x, y, z: i32 dm, kind, faction, hp }`; gövde `UnitRecord { entity = 1; x, y, z = 2..4; Kind kind = 5; uint32 faction = 6; uint32 hp = 7 }`; `Dirty = Or<(Changed<Pos3>, Changed<Unit>)>` | desimetre MMO'nun gerekçesiyle; **fraksiyon kayıtta** (1 tabanlı, 0 = yok): takım karesi kimin müttefik olduğunu söylemez, kayıt söyler — istemci dost/düşmanı ayırır |
+| Fraksiyon ve yerleşim (K4) | kayıtlı karakter (fraksiyon + konum) doğrulanmış kimlikle (`Realm::logins`); kaydı olmayan: **kimliğin FNV-1a özeti mod 3**, o fraksiyonun üssünde (özetle ±10 m) — `TeamGame::spawn_team_player_as` ikisini tek adımda seçer; sunucunun yönlendiricisi aynı `Realm::placement(identity)`'yi okur | deterministik: yönlendirici (yalnız kimliği görür) ve spawn paylaşılan durum olmadan anlaşır; dönen kaydısız oyuncu aynı tarafa düşer. Elenen: katılım sırası (arena) — yönlendirici odanın katılım sayısını göremez; oturum kimliği — sunucu-geneli, yeniden bağlanan taraf değiştirir |
+| Oturum yükü | `Welcome { faction, factions }` (`Private.game`, `Game::session_private`) | arena'nın kalıbı, kompozitte değişmeden çalıştı: geç katılanın one-shot full'uyla birlikte gelir |
+| Oynanış | `MoveTo` (7 m/s, zeminde), `Attack` (20 m, 25 hasar, 4 darbede düşer); düşen oyuncu üssünde tam canla (bir ışınlanma: gerekirse göç); kuleler ve noktalar vurulamaz | küçük tutuldu — doğrulama oyunu |
+| Seam ötesi saldırı | MMO'nun kalıbı: yerel hedef `Seam::local` ile, ödünç hedef `Seam::lent` + `emit` (saldıranın shard'ı menzil ve tarafı ödünç kayıtta denetler); sahip `apply_remote_effect`'te yeniden denetler (yaş ≤ 3 tick, taraf, menzil + 2 m), hasarı tavanlar; öldürme **sahibin** shard'ının akışında bir kez (`Hit`) | kit değişmeden yeniden kullanıldı; crystallization açılmadı (isteğe bağlı; `with_crystallize` kompozitte hazır) |
+| Ele geçirme | noktada `CAPTURE_RADIUS` (15 m) içinde 90 tick boyunca YALNIZ bir fraksiyonun ayakta oyuncuları → nokta o fraksiyonun olur: `Unit::faction` + kit'in `TeamMember`'ı (çalışma anında yazılan takım) | iki nokta da dikişlerden ≥ 60 m içeride: ele geçirme tek shard'da karar verilir |
+| Ayrılma | kit'in park defteri: süre (varsayılan 30 sn) dolunca geri çekilme botu birimi üssüne yürütür (arena'nın seçimi) | savaşta çıkış sayacı yok |
+| Oda | `WarShard` takma adı; kurucu `war_shard(index, &realm)` (serbest fonksiyon — E0116) | — |
+| Wire | `proto/war.proto` (`gsb.war`): `MoveTo`, `Attack`, `Kind`, `UnitRecord`, `Welcome`, kit zarfının tipli aynaları `WorldSnapshot` (`cell_exits = 4` aynalanmadı) ve `Private` (`game = 4` → `Welcome`); `gsb.kit.InputAck` olduğu gibi | — |
+| Opcode'lar | `WAR_MOVE_TO = 1300`, `WAR_SNAPSHOT = 1301`, `WAR_PRIVATE = 1302`, `WAR_ATTACK = 1303` | demo (1000–), arena (1100–), MMO (1200–) bloklarından ayrık |
+
+**Kit'ten kullanılanlar** (tamamı public): `codec::RecordCodec`;
+`game::{Game, TeamGame, ShardGame, InputSeq}` (`spawn_team_player_as`,
+`session_private`, `ingest_seam`, `apply_remote_effect`);
+`sharded::{ShardedRoom, ShardedTeamRoom, TeamMig, Seam}`
+(`with_shard(inner, vision, lent_pos)`, `with_delta`, `game_mut`);
+`space::{Planar, GridPartition2, VisionGrid2, shard_at, Partition}`
+(`Partition` yalnız birim testinde); `team::{Team, TeamMember}` (oyun
+kulelere ve ele geçirilen noktaya kendisi yazar); `identity::WireId`;
+`proto::InputAck`; testlerde `client::{ClientView, ClientDecoder}`.
+Kullanılmayan her şey (diğer odalar, `Grid2`/`CellSpace`, `Spatial`,
+`VisionGrid3`, `Crystallize`) gerekmedi.
+
+**Testler** (26: 18 birim + 8 entegrasyon; entegrasyonların yedisi
+**canlı bir registry (takım hub'ı) + dört gerçek shard aktörü**
+üzerinden — kit'in `team_actors` düzeneği crate-içi olduğu için public
+API'den eşdeğeri kuruldu (`tests/common`: `Registry::new` + `Ticker`,
+metrik kanalı adım bariyeri, istemciler kit'in `ClientView`'ıyla):
+
+| Test | Kilitlediği | Mutation-check (savaş tarafında, yedekten geri yüklenerek) |
+|---|---|---|
+| `fog::allies_are_seen_map_wide_and_a_faction_sees_nothing_it_has_no_eyes_on` | shard 0 ve 3'teki iki müttefik birbirini, her fraksiyon kendi dört kulesini görüyor; üçüncü fraksiyonun görünümü koşu boyunca yalnız kendi kayıtları; shard 3'teki oyuncu shard 3'ün iki nötr noktasını görüyor, shard 0'daki görmüyor | kule yok → kırıldı; kulede `TeamMember` yok → kırıldı; wire `Planar` desimetre → kırıldı; kayıtta fraksiyon yok → kırıldı |
+| `fog::an_enemy_is_seen_through_a_far_tower_on_another_shard` | shard 2'de fraksiyon 0'ın kulesine yürüyen düşmanı 850 m ötede shard 3'teki fraksiyon 0 oyuncusu, kule gördüğü ilk kayıttan (≤ 60 m) son kayda kadar görüyor; öncesinde ve sonrasında görmüyor; üçüncü fraksiyon hiç görmüyor. **Gerçek saatte** (bulgu W2-4) | kule yok / `TeamMember` yok / yarıçap 30 → kırıldı |
+| `neutral::an_unclaimed_point_follows_the_shard_a_captured_one_the_faction` | W1 nötr kuralı Cephe'de: sahipsiz nokta shard 3'teki herkese (640 m ötedekine de), başka shard'da yalnız görüşle (noktadaki müttefiği aracılığıyla); ele geçirilince fraksiyonun birimi — alan oyuncu ayrıldıktan sonra da fraksiyonun uzaktaki oyuncusu görüyor, rakip fraksiyon artık görmüyor | ele geçirmede `TeamMember` yazılmıyor → kırıldı |
+| `placement::logins_appear_where_the_realm_places_them_and_learn_their_faction` | kayıtlı karakter kaydında, kaydının shard'ında; kaydısız üssünde, özet fraksiyonunda; her oturuma bir `Welcome` (geç katılana one-shot full'uyla) | kayıt yok sayılıyor → kırıldı; `Welcome` yok / 0 tabanlı → kırıldı; full mod (delta yok) → kırıldı |
+| `combat::a_kill_across_a_seam_is_credited_once_by_the_victims_shard` | x = 0 dikişinin iki yanında 10 m: dört darbe sahibin shard'ında (1) uygulanıyor, öldürme BİR kez, saldıranın wire id'siyle; düşen üssünde tam canla; artık vurulacak bir şey yok | yeniden doğma yok → kırıldı; kaynak shard da öldürmeyi sayıyor → kırıldı (çift kredi); `lent_pos = None` → kırıldı (seam ötesini göremiyor); uzak etki yok sayılıyor → kırıldı |
+| `combat::no_friendly_fire_no_reach_and_a_local_blow_lands_locally` | dikişin iki yanında müttefike ve menzil dışındaki düşmana darbe yok; menzildeki yerel düşmana darbe yerel shard'da | yerel dost ateşi / yerel menzil yok → kırıldı; seam ötesi taraf ya da menzil denetimi TEK BAŞINA kaldırılınca → **hayatta kaldı** (sahibin yeniden denetimi yakalıyor), sahibin denetimi tek başına → hayatta kaldı (saldıranınki yakalıyor); ikisi birlikte → kırıldı: iki katman birbirinin yedeği |
+| `wire::kit_envelope_and_war_mirror_encode_identically` | kurulmuş kareler (full, delta, one-shot full + `Welcome` + RPC yanıtı, ack) iki tanımda aynı bayt | — |
+| `wire::real_shard_frames_decode_identically_through_both_definitions` | gerçek shard kareleri — **başka shard'ın kodladığı ithal gövdeler dahil** — iki tanımdan aynı içeriğe, full'lar kit'in kendi baytlarına; `removed`'lı delta, one-shot full, dört `Welcome`, ack | `Welcome` yok → kırıldı; full mod → kırıldı |
+
+Birim testleri: nicemleme, 1 tabanlı fraksiyon, kayıt gövdesi = tipli
+`UnitRecord` (köşe kaydı 17 bayt), wire `Planar`'ı metre (mutasyon:
+desimetre → kırıldı), 8-komşuluk (mutasyon: 4-komşuluk → kırıldı),
+harita geometrisi (kuleler şerit dışında, üslerden > 110 m, noktaları
+görmüyor, birbirini görmüyor), yerleşim ve özet kuralı (mutasyon: sabit
+fraksiyon → kırıldı), `Welcome`, her bölgede üç kule + noktalar,
+ele geçirme (mutasyon: çekişme sayacı sıfırlamıyor → kırıldı; ilk
+hâliyle HAYATTA KALMIŞTI — test "çekişmede alınmadı" iddiasıyla
+sıkılaştırıldı), koşu, göç durumu, geri çekilme botu, opcode bloğu,
+uzak etki yükü.
+
+**Tasarım bulguları.** Kit'in public API'si Cephe'yi **engellemedi** —
+kit değişikliği yok, kit iç öğesi kopyalanmadı. Kayda geçenler:
+
+1. **W2-1 — nötr kuralı shard bölgesine bağlı (A27, kanıtlı).** W1'in
+   kuralı (nötr kendi shard'ında herkese, başka yerde sisle) oyuncuya
+   görünen bir bölüm artefaktı üretir: shard 3'ün 640 m uzağındaki
+   oyuncusu sahipsiz noktayı hiçbir göz olmadan görür, noktaya 100 m'deki
+   shard 0 oyuncusu görmez (`neutral` testi bunu sabitliyor). Tek oda
+   `TeamRoom`'da "herkese" doğruydu; haritayı bölünce "aynı bölgede
+   duranlara" oldu. Cephe kuralı kabul etti (sahipsiz nokta bir hedef,
+   harita durumu değil) ve ele geçirilen noktayı fraksiyonun birimi
+   yaptı — bu yolla sahibi onu harita genelinde görür. **Harita geneli
+   nötr** (her takımın görünümünde, her yerde) kit değişikliği ister:
+   en küçük hâli entity başına bir "harita geneli" işareti (kompozit onu
+   her görüntülenen takımın export'una üye gibi koyar). Kit'siz tek hile
+   ters yönde: hiçbir oyuncunun görmediği hayalet bir takımın üyesi
+   yapmak nötrü her yerde tutarlı sisle gösterir (export'a takım başına
+   birkaç kayıt, röle yok) — kullanılmadı.
+2. **W2-2 — birim başına görüş yarıçapı gerekmedi (A8 açık kalır).**
+   "Kule daha uzağı görür" yerine "her fraksiyonun her bölgede bir
+   kulesi" tek yarıçapla aynı oyun ihtiyacını karşıladı. Kit'siz yol
+   bilinen hile: yarıçapı konum tipine gömen kendi `Vision`'ı — ama
+   ızgara sözleşmesi hücreyi EN BÜYÜK yarıçapa göre boyutlandırmayı
+   ister, yani her oyuncunun çift testi kule yarıçapının hücresine
+   çıkar. Tetikleyici değişmedi.
+3. **W2-3 — takım bütçesi üyeleri wire sırasıyla keser.** "Önce üyeler"
+   kuralının içinde sıra wire id'si: ilk tick'te doğan kuleler her
+   zaman oyunculardan önce gelir, bütçe kestiğinde en yeni katılanlar
+   gider (`war_e2e::the_war_table_budget_reaches_the_shards` bunu
+   bütçe 1 ile gösteriyor). Varsayılan bütçede (1 024/takım/tick) 1 000
+   oyuncuda bile kesme yok (takım başına ~260 kayıt); kesme olursa da
+   kurbanı keyfi. Ayrıca kit'in `over_budget` sayacı barındırıcıya
+   ulaşmıyor (oda `Box<dyn ShardLogic>`; F9'un "kit sayaç seam'i"
+   ihtiyacının ikinci ailesi). Kayıt; kod değişmedi.
+4. **W2-4 — duraklatılmış saatte yürüyüş durur (çekirdek, test
+   ergonomisi).** `Ticker` tick'leri `std::time::Instant` ile damgalar,
+   shard'ın `dt`'si iki damga arası: tokio'nun duraklatılmış saatinde
+   tick'ler art arda gelir, `dt` mikrosaniye, 7 m/sn'lik koşu yerinde
+   sayar. Kit'in `team_actors` testleri ışınlanmayla dolaştı; Cephe'nin
+   yürüyen senaryosu gerçek saatte koşuyor (bariyer yine kesin, röle
+   bir tick gecikebilir). En küçük değişiklik: ticker'ın damgasını
+   `tokio::time::Instant`'tan almak — üretimde aynı, testte sanal. Kod
+   değişmedi.
+
+**Gözlemler (bulgu değil):** kompozit, çalışma anında `TeamMember`'ı
+değişen bir NPC'yi (ele geçirilen nokta) hiçbir şey yapmadan doğru
+gösteriyor (içerik her tick yeniden kuruluyor); `session_private`
+kompozitin one-shot full'una biniyor; ithal gövdeler istemcide yerel
+kayıtlardan ayırt edilemiyor (wire testi); `Game::SNAPSHOT_OP` /
+`PRIVATE_OP` artık varsayılansız (Faz 5) — ezmek zorunluydu.
+
+**Yük altında** (release, `--duration 10 --write-stall-secs 0`; ayrıntı
+GAME-MODULE "W2 sonucu", röle bulguları CROSS-SHARD §8b.8): 1 000
+oyuncuda (orkestre) `server_hz` 30, adım p50/p90 1,4–1,7/2,4–3,1 ms,
+`errors=0`; istemci başına görünüm ~956 birim, `out_bps_per_conn`
+~365 KB/sn — arena 1000'in (delta) ~1,75 katı. Bant röleden değil
+senaryodan: "müttefik harita geneli" her istemciye O(N) kayıt/tick
+demek (hareketli birimlerin çoğu her tick yeni desimetre değeri).
+Röle ucuz ve kayıpsız: shard başına tick başına bir export, export
+başına ~0,78·N kayıt, yayılım tam 3, düşme 0.
+
+**Doğrulama:** 776 → **818** test / 0 hata / 1 ignored; kapanış
+kontrolü `cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo -p
+gsb-demo-war` → **124 passed / 0 failed** (2D demo, arena, MMO 98 +
+savaş 26); dört oyun tek kit üzerinde, dört görünürlük modeli.
+
 ## 11. Kabul kriteri
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:
@@ -2247,6 +2390,14 @@ dokunulmadı.
    Faz 1 ve 2'nin A/B'leri yeniden düzenleme öncesine karşı.
 4. **`gsb-core` dokunulmadı:** `git diff 32118b2.. --stat --
    crates/gsb-core` boş; çekirdek Faz 0'dan beri aynı.
+
+**W2 (2026-09-25) — dördüncü doğrulama oyunu.** Kriter 1 dördüncü bir
+görünürlük modeliyle yeniden sınandı: "Cephe" (`gsb-demo-war`, §10 "W2
+sonucu") W1'in `team × sharded` kompozitini kit'e dokunmadan kullandı;
+bulguları (W2-1…W2-4) kod değişikliği olmadan kayıtlı. Kriter 2: mevcut
+oyunların bayt kilitleri dokunulmadan yeşil. Kriter 4'ün (çekirdek)
+yerini W1'den beri çekirdek seam'leri aldı; W2 çekirdeğe yalnız ölçüm
+için dokundu (takım sayaçları metrik yolunda, A26).
 
 ## 12. Kararlar (kullanıcı, 2026-09-24)
 
