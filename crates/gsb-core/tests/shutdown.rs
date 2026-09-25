@@ -17,24 +17,24 @@
 //! the registry task ends, the tick broadcast closes, and every room (or
 //! shard) still runs its teardown (observed through its match result).
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, RoomConfig, RoomLogic};
-use gsb_core::shard::ShardLogic;
+use gsb_core::registry::{MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
+use gsb_core::room::{Action, RoomConfig};
 use gsb_core::ticker::{TickInfo, Ticker};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 // Child module of this test binary (an integration-test root is its own
 // crate root, so the path is explicit).
+#[path = "shutdown/destroy.rs"]
+mod destroy;
 #[path = "shutdown/logic.rs"]
 mod logic;
-use logic::{Quiet, QuietShard};
+use logic::{sharded_room, single_room};
 
 const WAIT: Duration = Duration::from_secs(5);
 const HZ: f64 = 60.0;
@@ -97,12 +97,18 @@ async fn ask<T>(tx: &Mailbox<RegistryMsg>, msg: RegistryMsg, rx: oneshot::Receiv
         .expect("reply dropped")
 }
 
-/// Create the room, then join `MEMBERS` connections and wait until the
-/// registry's table carries all of them.
+/// Create the room at the global rate, then join `MEMBERS` connections.
 async fn populate(rig: &mut Rig) {
+    populate_at(rig, HZ).await;
+}
+
+/// Create the room stepping at `tick_hz` (must divide `HZ`), join
+/// `MEMBERS` connections concurrently (a slow room admits only `CAP` per
+/// step), and wait until the registry's table carries all of them.
+async fn populate_at(rig: &mut Rig, tick_hz: f64) {
     let config = RoomConfig {
         id: ROOM,
-        tick_hz: HZ,
+        tick_hz,
         control_capacity: CAP,
         ..Default::default()
     };
@@ -110,6 +116,7 @@ async fn populate(rig: &mut Rig) {
     ask(&rig.tx, RegistryMsg::CreateRoom { config, reply }, rx)
         .await
         .expect("create failed");
+    let mut joins = Vec::new();
     for c in 1..=MEMBERS {
         let conn = ConnectionId(c);
         let (inbox, inbox_rx) = mpsc::channel::<ConnIn>(16);
@@ -125,7 +132,13 @@ async fn populate(rig: &mut Rig) {
             identity: String::new(),
             reply,
         };
-        ask(&rig.tx, msg, rx).await.expect("join failed");
+        let tx = rig.tx.clone();
+        joins.push(tokio::spawn(async move {
+            ask(&tx, msg, rx).await.expect("join failed");
+        }));
+    }
+    for join in joins {
+        join.await.expect("join task panicked");
     }
     let deadline = Instant::now() + WAIT;
     loop {
@@ -184,29 +197,6 @@ async fn expect_stopped(mut rig: Rig, rooms: usize) {
             .expect("a room never ran its teardown")
             .expect("result sink closed early");
     }
-}
-
-fn single_room() -> RoomFactory<(), (), (), ()> {
-    Arc::new(|_id, _config| BuiltRoom::Single {
-        world: (),
-        logic: Box::new(Quiet) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
-    })
-}
-
-fn sharded_room() -> RoomFactory<(), (), (), ()> {
-    Arc::new(|_id, _config| {
-        let shard = |index| {
-            let logic = Box::new(QuietShard { index });
-            (
-                (),
-                logic as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
-            )
-        };
-        BuiltRoom::Sharded {
-            shards: vec![shard(0), shard(1)],
-            home_shard: Arc::new(|conn: ConnectionId, _identity: &str| (conn.0 % 2) as usize),
-        }
-    })
 }
 
 #[tokio::test]

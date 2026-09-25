@@ -1,8 +1,12 @@
-//! The two minimal logics the shutdown tests drive: a single room and a
-//! two-shard grid. Neither does anything per tick; both report a match
-//! result, which is how a test observes that a room ran its teardown.
+//! The two minimal logics (and their factories) the shutdown tests drive:
+//! a single room and a two-shard grid. Neither does anything per tick;
+//! both report a match result, which is how a test observes that a room
+//! ran its teardown.
+
+use std::sync::Arc;
 
 use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::registry::{BuiltRoom, RoomFactory};
 use gsb_core::room::{Action, Admission, GameLogic, RoomLogic, TickCtx};
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 
@@ -120,4 +124,29 @@ impl ShardLogic<()> for QuietShard {
     fn own_wires(&self, _w: &()) -> Vec<u64> {
         Vec::new()
     }
+}
+
+/// The single-room factory the tests install.
+pub fn single_room() -> RoomFactory<(), (), (), ()> {
+    Arc::new(|_id, _config| BuiltRoom::Single {
+        world: (),
+        logic: Box::new(Quiet) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
+    })
+}
+
+/// The two-shard factory: odd connections home to shard 1, even to 0.
+pub fn sharded_room() -> RoomFactory<(), (), (), ()> {
+    Arc::new(|_id, _config| {
+        let shard = |index| {
+            let logic = Box::new(QuietShard { index });
+            (
+                (),
+                logic as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
+            )
+        };
+        BuiltRoom::Sharded {
+            shards: vec![shard(0), shard(1)],
+            home_shard: Arc::new(|conn: ConnectionId, _identity: &str| (conn.0 % 2) as usize),
+        }
+    })
 }
