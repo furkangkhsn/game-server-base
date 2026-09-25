@@ -64,7 +64,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     /// DELTA packet (exits, then cell exits, then updates) — or nothing
     /// (returns `false`) when the whole 3×3 is silent for it. The
     /// assembly itself is the shared engine
-    /// ([`crate::common::assemble_group_packet`]); this hook only feeds
+    /// (`crate::common::assemble_group_packet`); this hook only feeds
     /// it this room's state.
     fn snapshot(
         &mut self,
@@ -358,7 +358,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     /// The game's request handlers
-    /// ([`Game::handle_request`](crate::game::Game::handle_request)), resolved
+    /// ([`Game::handle_request`]), resolved
     /// against this room's player→entity table. Every kit room forwards:
     /// whether a room answers game RPCs does not depend on its
     /// visibility strategy.

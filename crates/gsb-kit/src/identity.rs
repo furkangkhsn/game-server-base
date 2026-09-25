@@ -4,7 +4,7 @@
 //!
 //! **The invariant is structural.** [`WireId`]'s field is private to
 //! THIS module and the type has no constructor at all: the only code
-//! that can build a `WireId` is [`Minter`], defined below. A room owns
+//! that can build a `WireId` is `Minter`, defined below. A room owns
 //! exactly one minter; every identity it stamps — the joiner's entity
 //! (its value also goes to the joiner in `JOIN_ROOM_RESULT`), every
 //! orphan the broadcast set picks up — is drawn from it. Nothing else in
@@ -24,7 +24,7 @@ use bevy_ecs::prelude::Component;
 /// The field is **private and there is no `Default` and no constructor
 /// on purpose**: the identity invariant ("two different entities cannot
 /// share the same wire identity over the room's lifetime") has exactly
-/// one legitimate source — the room's [`Minter`] — and the type says so.
+/// one legitimate source — the room's `Minter` — and the type says so.
 /// Reading is open: [`WireId::get`].
 ///
 /// Outside the identity module the type cannot be built — this is the

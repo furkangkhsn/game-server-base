@@ -11,7 +11,7 @@
 //! a connection's group is a function of *who the player is* (game state —
 //! the team its entity belongs to, kept in the world as the
 //! [`TeamMember`] component), not *where the player is*. Note what this
-//! means for the seam: [`GameLogic::group_of`] here **reads the world** —
+//! means for the seam: [`GameLogic::group_of`](gsb_core::room::GameLogic::group_of) here **reads the world** —
 //! exactly like `AoiRoom`'s does — but it reads a *game-state* component
 //! instead of a position, and the core's group machinery (per-group
 //! snapshot, per-group ledger, per-tick re-evaluation) treats the two
@@ -62,7 +62,7 @@
 //! ## The cost of team vision (why the cache exists)
 //!
 //! Enemy visibility is a *distance* test (unlike the spatial and PVS
-//! rooms' set unions), so it is computed in [`Self::update`] once per tick
+//! rooms' set unions), so it is computed in `update` once per tick
 //! and cached: the world is stable during the broadcast phase, and both
 //! `snapshot` calls (one per team, unspecified order) must answer from the
 //! same tick's state (the "same tick" cheat-test guarantee — an enemy is in

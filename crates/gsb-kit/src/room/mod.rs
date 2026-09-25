@@ -4,7 +4,7 @@
 //! request/result seams on
 //! [`RoomLogic`](gsb_core::room::RoomLogic).
 //!
-//! A room owns one bevy [`World`] (exclusively — the room actor is the only
+//! A room owns one bevy [`World`](bevy_ecs::prelude::World) (exclusively — the room actor is the only
 //! borrower) plus a small amount of bookkeeping:
 //!
 //! - `player_entity`: which entity belongs to which player (keyed by the
@@ -19,7 +19,7 @@
 //! **Wire identity.** The `entity` field on the wire is *not* the bevy
 //! entity bits — it is a room-assigned serial: the `n`-th entity this
 //! room ever assigned an identity to (starting at 1), stored in the
-//! entity's [`WireId`] component. The counter is monotonic and a value is
+//! entity's [`WireId`](crate::identity::WireId) component. The counter is monotonic and a value is
 //! **never re-used within the room's lifetime**, even when the bevy
 //! allocator recycles the old entity's slot. That is what preserves the
 //! identity invariant (see `game.proto`): the client's world view is its
@@ -33,8 +33,8 @@
 //! the joiner in `JOIN_ROOM_RESULT`, so both paths share one space) and
 //! the broadcast pass (everything else that is broadcastable, see
 //! below). Both sites go through **one minting point**, the room's
-//! [`crate::identity::Minter`] — the only code that can construct a
-//! [`WireId`] at all (its field is private to the identity module, it has
+//! `crate::identity::Minter` — the only code that can construct a
+//! [`WireId`](crate::identity::WireId) at all (its field is private to the identity module, it has
 //! no constructor and no `Default`): the counter's space is closed to
 //! everything else in this crate and in every other crate.
 //! Bevy's own `(index, generation)` stays internal: its `to_bits()` low
@@ -46,13 +46,13 @@
 //! a `Position`). An entity is broadcast iff it carries the
 //! [`RecordCodec::Marker`](crate::codec::RecordCodec::Marker), and
 //! that precondition is *structural, not a discipline*: entities that
-//! have the marker but no [`WireId`] yet — anything spawned outside `on_join` (bullets,
+//! have the marker but no [`WireId`](crate::identity::WireId) yet — anything spawned outside `on_join` (bullets,
 //! NPCs, traps, …) — are stamped with the next serial **by the broadcast
 //! pass itself** and appear in the very snapshot that notices them.
 //! Nothing can be silently invisible: before the compact-identity change
 //! the broadcast set was exactly "has a `Position`", and this rule
 //! restores that contract with the new identity space. The stamp is
-//! idempotent (a stamped entity carries a [`WireId`], so it is never
+//! idempotent (a stamped entity carries a [`WireId`](crate::identity::WireId), so it is never
 //! stamped again) and costs nothing in steady state (the orphan query
 //! matches nothing once every entity is stamped).
 //!

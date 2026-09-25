@@ -19,7 +19,7 @@ mod shard;
 /// docs, "The spatial composite"): the grid topology of
 /// [`ShardedRoom`] with each shard's broadcast phase re-grouped by
 /// spatial cell and delta-encoded against last-sent content — AoiRoom's
-/// engine ([`crate::common::CellBook`] / [`crate::common::CellPieces`])
+/// engine (`crate::common::CellBook` / `crate::common::CellPieces`)
 /// driven per shard, plus THE borrowed-strip ledger that keeps a static
 /// border silent.
 ///

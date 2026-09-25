@@ -225,7 +225,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     /// The game's request handlers
-    /// ([`Game::handle_request`](crate::game::Game::handle_request)), resolved
+    /// ([`Game::handle_request`]), resolved
     /// against this room's player→entity table. Every kit room forwards:
     /// whether a room answers game RPCs does not depend on its
     /// visibility strategy.

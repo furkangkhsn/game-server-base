@@ -73,8 +73,8 @@
 //! misapplication is impossible — the worst case is a stale view (a
 //! missed exit may ghost briefly). Exact resync comes from the **full**
 //! the server ships on the keep-alive cadence (see
-//! the shared contract on `GameLogic` ([`GameLogic::keepalive`] is the
-//! recovery path) and one-shot via [`GameLogic::private`] to
+//! the shared contract on `GameLogic` ([`GameLogic::keepalive`](gsb_core::room::GameLogic::keepalive) is the
+//! recovery path) and one-shot via [`GameLogic::private`](gsb_core::room::GameLogic::private) to
 //! every fresh group member (see below); recovery is bounded by the
 //! keep-alive period. Note a sequence gap is therefore NOT proof of
 //! loss — the group's stream is event-driven (a group ships a frame
@@ -281,8 +281,8 @@ use crate::space::Cell;
 /// The AOI room: spatial group key (audience), per-cell encoding (unit),
 /// per-cell delta against the previous tick, one-shot private fulls for
 /// fresh group members, keep-alive fulls as the loss-recovery path.
-/// The cell-delta engine itself ([`crate::common::CellBook`] /
-/// [`crate::common::CellPieces`]) is shared with the sharded spatial
+/// The cell-delta engine itself (`crate::common::CellBook` /
+/// `crate::common::CellPieces`) is shared with the sharded spatial
 /// composite; this room contributes only the session surface and the
 /// single-world feeding of the bookkeeping.
 pub struct AoiRoom<G: Game, S: CellSpace<Wire<G>>> {

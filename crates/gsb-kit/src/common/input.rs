@@ -72,12 +72,12 @@ impl InputState {
     }
 }
 
-/// A room's input sequence ledger: one [`InputState`] per player (keyed
+/// A room's input sequence ledger: one `InputState` per player (keyed
 /// by the STABLE player id), strategy-independent — every room numbers
 /// and acknowledges its clients' input the same way. The game's input
 /// decoder sees only [`Self::admit`]; the session boundaries
-/// ([`Self::begin`] / [`Self::end`]) and the ack read-out
-/// ([`emit_private`]) are kit bookkeeping.
+/// (`Self::begin` / `Self::end`) and the ack read-out
+/// (`emit_private`) are kit bookkeeping.
 #[derive(Debug, Default)]
 pub struct InputSeq {
     states: HashMap<PlayerId, InputState>,
@@ -85,7 +85,7 @@ pub struct InputSeq {
 
 impl InputSeq {
     /// The input sequence rule for `player`'s input numbered `seq` (see
-    /// [`InputState::admit`]): `true` = process it. The game's `ingest`
+    /// `InputState::admit`): `true` = process it. The game's `ingest`
     /// asks this for every decoded input. A player without a session
     /// entry gets a fresh one (defensive only: a join begins the
     /// session).

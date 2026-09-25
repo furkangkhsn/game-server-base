@@ -227,7 +227,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     }
 
     /// The game's request handlers
-    /// ([`Game::handle_request`](crate::game::Game::handle_request)), resolved
+    /// ([`Game::handle_request`]), resolved
     /// against this room's player→entity table. Every kit room forwards:
     /// whether a room answers game RPCs does not depend on its
     /// visibility strategy.

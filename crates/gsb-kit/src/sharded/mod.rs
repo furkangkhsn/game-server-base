@@ -1,4 +1,4 @@
-//! [`ShardedRoom`]: the shard-level [`ShardLogic`], generic over the game
+//! [`ShardedRoom`]: the shard-level [`ShardLogic`](gsb_core::shard::ShardLogic), generic over the game
 //! (`G: ShardGame`) and the map partition (`P: Partition<Wire<G>>`,
 //! KIT-ARCHITECTURE §4.2). The sections below speak in the demo's terms
 //! (the kit's `GridPartition2` preset over the demo's `Position`).
@@ -60,7 +60,7 @@
 //! (`GroupKey = Cell`, sized like [`crate::aoi::AoiRoom`]'s from the
 //! config's `aoi_cell_size`) instead of one whole-shard group. The cell
 //! encoding/delta engine itself is NOT duplicated: the shared
-//! [`crate::common::CellBook`] / [`crate::common::CellPieces`] machinery
+//! `crate::common::CellBook` / `crate::common::CellPieces` machinery
 //! drives both rooms. What this module adds on top is exactly the part a
 //! single world cannot have — the borrowed border strip — and it is the
 //! load-bearing subtlety of the whole composite:
@@ -91,7 +91,7 @@
 //! region are not this shard's content, even where a cell's 3×3 would
 //! reach them), so leaving the frame reads as an exit and entering it
 //! as an entry.
-//! Only the diff lands in the shared [`crate::common::CellBook`] change
+//! Only the diff lands in the shared `crate::common::CellBook` change
 //! lists, so a static strip costs nothing beyond the comparison itself,
 //! and a moving boundary entity produces exactly one upsert (plus an exit
 //! when it changes cell) — the same shape an own-entity mover produces.
@@ -126,7 +126,7 @@
 //! borrowed diff can only run later — the core hands the strip to the
 //! logic at the broadcast phase, after `update`. The shared engine's
 //! appeared/exited/birth flags must reflect the FINAL content of the
-//! tick, so the composite defers [`crate::common::CellBook::roll`] until
+//! tick, so the composite defers `crate::common::CellBook::roll` until
 //! the first broadcast-phase call integrates the strip (a once-per-tick
 //! guard; every snapshot/keepalive/private call is preceded by it). With
 //! no connections there is no broadcast and no roll — and no client to
@@ -137,7 +137,7 @@
 //!
 //! A player migrating INTO a shard is dropped into a cell whose group may
 //! be long-established — a delta would carry nothing to build their view
-//! from. [`ShardLogic::on_migrate_in`] therefore clears the arrival's
+//! from. [`ShardLogic::on_migrate_in`](gsb_core::shard::ShardLogic::on_migrate_in) therefore clears the arrival's
 //! view baseline, so the arrival's next `private` frame is the one-shot
 //! FULL of their new 3×3 (skipped only when the group's own packet that
 //! batch was already a full) — the same contract a late joiner gets on
