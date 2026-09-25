@@ -17,7 +17,7 @@
 //!
 //! Usage:
 //! ```text
-//! gsb-loadgen [N] [--game demo|arena|mmo] [--duration SECS] [--move-ms MS] [--room ID]
+//! gsb-loadgen [N] [--game demo|arena|mmo|war] [--duration SECS] [--move-ms MS] [--room ID]
 //!              [--stagger-ms MS] [--visibility all|spatial|team|pvs] [--cell-size N]
 //!              [--vision-radius N]
 //!              [--max-snapshot-bytes N] [--addr HOST:PORT]
@@ -285,13 +285,16 @@ Usage:
                                                client processes, one report
 
 Game:
-  --game demo|arena|mmo     the game to drive (default demo): the clients'
+  --game demo|arena|mmo|war the game to drive (default demo): the clients'
                             bot and the in-process/served server's `game`
                             key. demo = the 2D demo (profiles below);
                             arena = the 3D team arena (units run base →
                             centre → base, climbing); mmo = the 3D sharded
-                            MMO (roam a waystone, Travel, Attack). The
-                            flags marked [demo] refuse the other games
+                            MMO (roam a waystone, Travel, Attack); war =
+                            Cephe, three factions over a sharded map with
+                            team fog (hold a tower or capture point, move
+                            on, Attack). The flags marked [demo] refuse the
+                            other games
 
 Client options:
   --addr HOST:PORT          connect to an external server (default: start

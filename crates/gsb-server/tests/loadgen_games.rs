@@ -1,5 +1,5 @@
 //! Smoke tests for the load generator's per-game bots (GAME-MODULE G3):
-//! `gsb-loadgen --game arena|mmo` drives the real server hosting that
+//! `gsb-loadgen --game arena|mmo|war` drives the real server hosting that
 //! game end to end — real TCP, the game's own inputs and frames, acks
 //! back — and `--game` reaches both sides of an orchestrated run. The
 //! demo's smoke (`loadgen_smoke.rs`) is untouched. Kept small like it: a
@@ -157,6 +157,80 @@ fn loadgen_orchestrates_the_mmo() {
     assert!(members[0] <= 2, "the server child's roster: {line}");
 }
 
+/// The per-shard members of a sharded game's RESULT line.
+fn shard_members(kv: &HashMap<String, String>) -> Vec<u32> {
+    kv["shard_members"]
+        .split(',')
+        .map(|m| m.parse().expect("a member count"))
+        .collect()
+}
+
+/// The war (W2): team fog over the sharded map in delta mode, the bots
+/// spread over the four shards from their saved characters (the loadgen
+/// hosts the war over its bots' roster), and the team exchange in the
+/// RESULT line — every shard exports every tick and the hub's relays
+/// arrive.
+#[test]
+fn loadgen_drives_the_war() {
+    // 8 s: the team rates are read over the steady window, which opens at
+    // the first report past 100 steps and closes at the last one with
+    // everyone in — a 5 s run can leave the two on the same report (rates
+    // of 0, a flaky assertion).
+    let out = loadgen(&["12", "--game", "war", "--duration", "8", "--move-ms", "100"]);
+    let (line, kv) = result(&out);
+    // Players join factions that are already playing on their shards:
+    // up to one late joiner's dropped delta each (G3-2).
+    assert_clean(&line, &kv, 12, "war", 12);
+    assert_eq!(
+        (kv["visibility"].as_str(), kv["shards"].as_str()),
+        ("team", "4")
+    );
+    assert_eq!(kv["profile"], "posts");
+    assert_ne!(kv["deltas"], "0", "the war sends team deltas: {line}");
+    let members = shard_members(&kv);
+    assert_eq!(members.len(), 4, "{line}");
+    assert_eq!(members.iter().sum::<u32>(), 12, "{line}");
+    assert!(
+        members.iter().all(|&m| m > 0),
+        "the roster spreads the bots over every shard: {line}"
+    );
+    let rate = |k: &str| -> f64 { kv[k].parse().expect("a number") };
+    // Four shards, every one with team traffic (towers everywhere):
+    // about 4 × 30 exports a second, each relayed on.
+    assert!(rate("team_exports_s") > 60.0, "{line}");
+    assert!(rate("team_imports_s") > 0.0, "{line}");
+    assert!(rate("team_records_per_export") >= 3.0, "{line}");
+    assert_eq!(kv["team_export_drops"], "0", "{line}");
+    assert_eq!(kv["team_over_cap"], "0", "{line}");
+}
+
+/// An orchestrated war: `--game war` reaches the server child and the
+/// client children, the server child hosts the bots' roster, and the
+/// team counters cross the metrics wire.
+#[test]
+fn loadgen_orchestrates_the_war() {
+    let out = loadgen(&[
+        "--orchestrate",
+        "8",
+        "--procs",
+        "2",
+        "--game",
+        "war",
+        "--duration",
+        "8", // a steady window for the rates (see above)
+        "--move-ms",
+        "100",
+    ]);
+    let (line, kv) = result(&out);
+    assert_clean(&line, &kv, 8, "war", 8);
+    assert_eq!(kv["mode"], "sep");
+    let members = shard_members(&kv);
+    assert_eq!(members.iter().sum::<u32>(), 8, "{line}");
+    assert!(members[0] < 8, "the server child's roster: {line}");
+    let exports: f64 = kv["team_exports_s"].parse().expect("a number");
+    assert!(exports > 60.0, "the team counters crossed the wire: {line}");
+}
+
 /// The command line refuses what cannot run: an unknown game (naming
 /// the compiled-in ones) and a demo flag written for another game (in
 /// either order) — the server's "explicitly written fixed key" rule. A
@@ -174,7 +248,7 @@ fn loadgen_refuses_a_wrong_game_line() {
     };
     let e = stderr(loadgen(&["1", "--game", "chess"]));
     assert!(e.contains("unknown game `chess`"), "{e}");
-    assert!(e.contains("compiled in: demo, arena, mmo"), "{e}");
+    assert!(e.contains("compiled in: demo, arena, mmo, war"), "{e}");
     let e = stderr(loadgen(&[
         "1",
         "--game",

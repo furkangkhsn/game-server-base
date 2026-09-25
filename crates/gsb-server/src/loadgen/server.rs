@@ -95,14 +95,19 @@ pub(crate) async fn start_inprocess(
 }
 
 /// The module the load generator hosts for `game` when it is not the
-/// catalog's: the MMO over the bots' roster (`bot::mmo::roster`, K4 —
-/// every bot restores its saved character on its home shard). `None`:
-/// the catalog's module (the demo, the arena).
+/// catalog's: the MMO and the war over the bots' rosters
+/// (`bot::mmo::roster`, `bot::war::roster`, K4 — every bot restores its
+/// saved character on its home shard). `None`: the catalog's module (the
+/// demo, the arena).
 fn hosted_module(game: &str) -> Option<Box<dyn gsb_server::GameModule>> {
     match game {
         #[cfg(feature = "game-mmo")]
         gsb_server::games::mmo::MmoModule::NAME => Some(Box::new(
             gsb_server::games::mmo::MmoModule::with_realm(crate::bot::mmo_realm()),
+        )),
+        #[cfg(feature = "game-war")]
+        gsb_server::games::war::WarModule::NAME => Some(Box::new(
+            gsb_server::games::war::WarModule::with_realm(crate::bot::war_realm()),
         )),
         _ => None,
     }

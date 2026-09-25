@@ -104,7 +104,7 @@ mod tests {
     fn a_demo_flag_refuses_another_game() {
         for (flag, _) in DEMO_ONLY {
             assert!(check_game_flags("demo", &[flag]).is_ok(), "{flag}");
-            for game in ["arena", "mmo"] {
+            for game in ["arena", "mmo", "war"] {
                 let e = check_game_flags(game, &["--duration", flag]).expect_err(flag);
                 assert!(e.starts_with(flag), "{e}");
                 assert!(e.contains(&format!("--game {game}")), "{e}");
@@ -122,7 +122,7 @@ mod tests {
         for (flag, _) in MMO_ONLY {
             assert!(is_game_only(flag) && !is_demo_only(flag), "{flag}");
             assert!(check_game_flags("mmo", &[flag]).is_ok(), "{flag}");
-            for game in ["demo", "arena"] {
+            for game in ["demo", "arena", "war"] {
                 let e = check_game_flags(game, &[flag]).expect_err(flag);
                 assert!(
                     e.starts_with(flag) && e.contains(&format!("--game {game}")),

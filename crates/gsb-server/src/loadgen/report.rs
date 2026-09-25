@@ -7,9 +7,11 @@ use crate::stats::*;
 mod fold;
 mod result;
 mod spread;
+mod team;
 pub(crate) use fold::*;
 pub(crate) use result::*;
 pub(crate) use spread::*;
+pub(crate) use team::*;
 
 /// Extra facts of a separate-process (orchestrated) run; `None` for the
 /// in-process and external-direct modes.

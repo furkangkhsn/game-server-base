@@ -408,7 +408,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -559,6 +559,19 @@ pub(crate) fn print_report(
         if bot.shard_spread() {
             let last = spread.as_ref().map_or("-", |(_, last)| last.as_str());
             format!(" shard_members={last}")
+        } else {
+            String::new()
+        },
+        // The team exchange over the steady window (`team.rs`) — only
+        // for a bot that asks (the war: its relay is the measurement,
+        // W2), right before `game=` like `shard_members=`.
+        if bot.team_relay() {
+            let window = base.as_ref().zip(last_steady.as_ref());
+            team_segment(
+                window.map(|(a, b)| (a.into(), b.into())),
+                last_room_agg.as_ref().map(Into::into),
+                server_hz,
+            )
         } else {
             String::new()
         },

@@ -23,6 +23,8 @@ mod demo;
 mod flags;
 #[cfg(feature = "game-mmo")]
 mod mmo;
+#[cfg(feature = "game-war")]
+mod war;
 
 pub(crate) use demo::*;
 pub(crate) use flags::*;
@@ -50,6 +52,12 @@ pub(crate) trait LoadBot: Send + Sync {
     /// Whether RESULT carries `shard_members=` (the per-shard population
     /// of a sharded game — the MMO's spread across its shards, K4).
     fn shard_spread(&self) -> bool {
+        false
+    }
+    /// Whether RESULT carries the team exchange's numbers (`team_*=`,
+    /// `report/team.rs` — a game whose shards export team views through
+    /// the registry's hub: the war).
+    fn team_relay(&self) -> bool {
         false
     }
     /// One line for the run's header (stderr): what the bot does.
@@ -84,8 +92,8 @@ pub(crate) trait BotClient: Send {
 }
 
 /// The name bot `id` logs in as (`Auth.name`, the local-auth path): the
-/// resume key its churn sessions reuse and, for the MMO, the key of its
-/// saved character (`mmo::roster`).
+/// resume key its churn sessions reuse and, for the MMO and the war, the
+/// key of its saved character (`mmo::roster`, `war::roster`).
 pub(crate) fn bot_name(id: u64) -> String {
     format!("lg-{id}")
 }
@@ -97,6 +105,13 @@ pub(crate) fn mmo_realm() -> gsb_demo_mmo::Realm {
     mmo::roster::realm()
 }
 
+/// The war realm the load generator hosts: a saved character (faction +
+/// post) for every bot (`war::roster`).
+#[cfg(feature = "game-war")]
+pub(crate) fn war_realm() -> gsb_demo_war::Realm {
+    war::roster::realm()
+}
+
 /// The games this build has a bot for, in catalog order — the server's
 /// compiled-in games (one cargo feature each).
 pub(crate) fn games() -> Vec<&'static str> {
@@ -106,6 +121,8 @@ pub(crate) fn games() -> Vec<&'static str> {
         gsb_server::games::arena::ArenaModule::NAME,
         #[cfg(feature = "game-mmo")]
         gsb_server::games::mmo::MmoModule::NAME,
+        #[cfg(feature = "game-war")]
+        gsb_server::games::war::WarModule::NAME,
     ]
 }
 
@@ -136,6 +153,10 @@ pub(crate) fn bot_for(args: &Args) -> Arc<dyn LoadBot> {
         gsb_server::games::mmo::MmoModule::NAME => Arc::new(mmo::MmoBot {
             move_ms: args.move_ms,
             duel_frac: args.mmo_duel_frac,
+        }),
+        #[cfg(feature = "game-war")]
+        gsb_server::games::war::WarModule::NAME => Arc::new(war::WarBot {
+            move_ms: args.move_ms,
         }),
         other => unreachable!("--game `{other}` is not in the catalog the parser checks"),
     }
