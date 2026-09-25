@@ -28,6 +28,7 @@ pub(crate) async fn run(args: Args) {
         }
         None => {
             let s = start_inprocess(
+                args.game,
                 args.visibility,
                 args.topology,
                 args.shard_count,
@@ -82,6 +83,9 @@ pub(crate) async fn run(args: Args) {
         }
     );
 
+    let bot = crate::bot::bot_for(&args);
+    eprintln!("bot: {}", bot.describe());
+
     // Spawn the report drain (one task, one awaited source), then the N
     // clients (ids `offset..offset+N` — the stagger and the profile's
     // per-id determinism use the global id, so a partitioned run over
@@ -100,10 +104,7 @@ pub(crate) async fn run(args: Args) {
         room: args.room,
         move_ms: args.move_ms,
         stagger_ms: args.stagger_ms,
-        profile: args.profile,
-        still_frac: args.still_frac,
-        spawn_half: args.spawn_half,
-        cell_size: args.cell_size,
+        bot,
         deadline,
         flood: false,
         kind: args.transport,

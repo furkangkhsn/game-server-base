@@ -46,12 +46,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         fresh_joins: 0,
     };
 
-    // The client-side world view (the delta protocol's client half — the
-    // kit's reference client, see `ClientView`; fulls replace, deltas
-    // apply on top, a delta without a baseline drops until the next full).
-    let mut view = ClientView::new(DemoDecoder {
-        cell_size: p.cell_size,
-    });
+    // The game's bot for this client: its world view (the delta
+    // protocol's client half — the kit's reference client, see
+    // `ClientView`; fulls replace, deltas apply on top, a delta without a
+    // baseline drops until the next full) and its input schedule.
+    let mut bot = p.bot.client(id);
+    let (snapshot_op, private_op) = (p.bot.snapshot_op(), p.bot.private_op());
 
     // Optional connect stagger (see `Args::stagger_ms`).
     if p.stagger_ms > 0.0 {
@@ -120,14 +120,6 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // per client per run.
     let mut next_seq: u64 = 1;
     let mut sent_at: Vec<Instant> = Vec::new();
-    // The still profile's deterministic per-id split (the same id-based
-    // determinism as the stagger, 1% granularity — the id's hundredths
-    // digit decides, so any client count gets the ratio): the first
-    // `still_frac` fraction of the ids is "still" — it issues ONE MOVE_TO
-    // (settling at a ring target) and then sends nothing more; the moving
-    // minority chases the ring target as in the historical profile.
-    let is_still = p.profile == Profile::Still && (id % 100) as f64 / 100.0 < p.still_frac;
-    let mut settled = false;
     loop {
         let now = Instant::now();
         if now >= p.deadline {
@@ -135,73 +127,25 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         }
         if now.duration_since(last_move) >= p.move_ms {
             last_move = now;
-            // A still client settles once: the first interval sends its
-            // only command, the rest of the run it is silent (that IS the
-            // profile — the majority of the world stands still).
-            if !(is_still && settled) {
-                settled = true;
-                let (tx, ty) = match p.profile {
-                    // The historical profile (UNCHANGED — all previous
-                    // measurements stay comparable): a circle of radius 40
-                    // around the map center at 4 rad/s, phase-shifted per
-                    // client (id-based offset so N entities do not move in
-                    // lockstep). The targets outrun the entities, so the
-                    // entities crowd the central band — the *clustered*
-                    // layout.
-                    Profile::Ring => {
-                        let angle =
-                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 4.0;
-                        (angle.cos() * 40.0, angle.sin() * 40.0)
-                    }
-                    // The *spread* profile: each client wanders a small
-                    // circle (radius 20, 0.4 rad/s — the target stays
-                    // reachable at 10 u/s, so the entity tracks it closely)
-                    // around its deterministic home, uniform over the
-                    // ±spawn_half map. The layout stays ~uniform over the
-                    // whole run (the server spawns with the same
-                    // distribution), so there is no migration artifact and
-                    // the run is statistically steady from tick 1. This is
-                    // the sparse, wide-map layout a real MOBA arena
-                    // resembles — where team fog actually hides most
-                    // enemies (the clustered profile hides none).
-                    Profile::Spread => {
-                        let (hx, hy) = spawn_home(id, p.spawn_half);
-                        let w =
-                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 0.4;
-                        (hx + w.cos() * 20.0, hy + w.sin() * 20.0)
-                    }
-                    // The still profile's moving minority chases the ring
-                    // target (the historical profile's shape).
-                    Profile::Still => {
-                        let angle =
-                            (now.duration_since(t_start).as_secs_f64() + id as f64 * 0.618) * 4.0;
-                        (angle.cos() * 40.0, angle.sin() * 40.0)
-                    }
-                };
-                let seq = next_seq;
+            // The bot decides what this interval sends (possibly nothing:
+            // a settled still client, a bot that has not seen its own
+            // entity yet); a sent input takes the next number.
+            if let Some((input_op, payload)) = bot.next_input(now.duration_since(t_start), next_seq)
+            {
                 next_seq += 1;
                 sent_at.push(now);
-                let msg = gsb_demo::game::MoveTo {
-                    x: tx as i32,
-                    y: ty as i32,
-                    seq,
-                };
-                let move_payload = msg.encode_to_vec();
                 rep.moves += 1;
                 match &mut wire {
                     Wire::Tcp { w, .. } => {
-                        let f = frame(gsb_demo::op::MOVE_TO, &move_payload);
+                        let f = frame(input_op, &payload);
                         rep.bytes_out += f.len() as u64;
                         if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
                             break; // peer gone
                         }
                     }
                     Wire::Udp(c) => {
-                        rep.bytes_out += wire_in_bytes(gsb_demo::op::MOVE_TO, move_payload.len());
-                        if c.send_frame(gsb_demo::op::MOVE_TO, move_payload)
-                            .await
-                            .is_err()
-                        {
+                        rep.bytes_out += wire_in_bytes(input_op, payload.len());
+                        if c.send_frame(input_op, payload).await.is_err() {
                             break; // session gone (the writer gave up)
                         }
                     }
@@ -242,6 +186,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 };
                 rep.joined = true;
                 rep.entity = m.entity;
+                bot.joined(m.entity);
                 if p.flood {
                     // Flood mode: leave the paced loop; the tight write
                     // loop below runs until the deadline.
@@ -249,12 +194,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     break;
                 }
             }
-            gsb_demo::op::WORLD_SNAPSHOT => {
+            o if o == snapshot_op => {
                 // The client half of the delta protocol (see
                 // `ClientView`): apply it, whatever the strategy's mode (a
                 // full-snapshot room's frames are all fulls). The view
                 // counts fulls / deltas / no-baseline drops itself.
-                match view.apply_snapshot(&payload) {
+                match bot.apply_snapshot(&payload) {
                     Ok(s) => {
                         rep.snapshots += 1;
                         let at = Instant::now();
@@ -266,7 +211,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     Err(_) => rep.errors += 1,
                 }
             }
-            gsb_demo::op::PRIVATE => match view.apply_private(&payload) {
+            o if o == private_op => match bot.apply_private(&payload) {
                 Ok(PrivateEvent::Ack(up_to)) => {
                     // Section A: the server's per-connection input
                     // high-water mark. `now` is this loop iteration's
@@ -321,15 +266,16 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
 
     // The view's counters and final size (the delta protocol's end
     // state).
-    let c = view.counters();
+    let c = bot.counters();
     rep.fulls = c.fulls;
     rep.private_fulls = c.private_fulls;
     rep.deltas = c.deltas;
     rep.gap_drops = c.gap_drops;
-    rep.view_size = view.len() as u64;
+    rep.view_size = bot.view_len() as u64;
 
     if flooded {
-        // The input flood: write MOVE_TO as fast as the socket accepts,
+        // The input flood: write the bot's flood input (the demo's
+        // MOVE_TO) as fast as the socket accepts,
         // until the deadline. The server-side chain (reader pump → conn
         // inbox → conn actor → action channel → room pull budget) bounds
         // what actually reaches the tick; the excess is dropped on the
@@ -337,10 +283,10 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // stays UNNUMBERED (seq 0, legacy): it probes the drop-attribution
         // guardrails, not the sequence rule (a numbered flood would only
         // spin the high-water mark).
-        let msg = gsb_demo::game::MoveTo { x: 0, y: 0, seq: 0 };
+        let (flood_op, payload) = p.bot.flood_input();
         match &mut wire {
             Wire::Tcp { w, .. } => {
-                let f = frame(gsb_demo::op::MOVE_TO, &msg.encode_to_vec());
+                let f = frame(flood_op, &payload);
                 while Instant::now() < p.deadline {
                     if w.write_all(&f).await.is_err() {
                         break; // peer gone
@@ -354,16 +300,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 // socket), so the flood interleaves NON-BLOCKING
                 // read-drains; the flood frames travel the lossy game
                 // band, so retransmit state never gets in the way.
-                let payload = msg.encode_to_vec();
                 while Instant::now() < p.deadline {
-                    if c.send_frame(gsb_demo::op::MOVE_TO, payload.clone())
-                        .await
-                        .is_err()
-                    {
+                    if c.send_frame(flood_op, payload.clone()).await.is_err() {
                         break;
                     }
                     rep.moves += 1;
-                    rep.bytes_out += wire_in_bytes(gsb_demo::op::MOVE_TO, payload.len());
+                    rep.bytes_out += wire_in_bytes(flood_op, payload.len());
                     while c.recv_frame(Duration::ZERO).await.ok().flatten().is_some() {}
                 }
             }

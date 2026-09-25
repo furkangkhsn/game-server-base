@@ -220,7 +220,8 @@ pub(crate) async fn orchestrate(args: Args) {
     }
 
     eprintln!(
-        "orchestrate: N={n} procs={procs} visibility={} profile={} cell_size={} vision_radius={} max_snap_bytes={} spawn_half={} duration={}s move_ms={} stagger_ms={} pin={}",
+        "orchestrate: game={} N={n} procs={procs} visibility={} profile={} cell_size={} vision_radius={} max_snap_bytes={} spawn_half={} duration={}s move_ms={} stagger_ms={} pin={}",
+        args.game,
         args.visibility,
         match args.profile {
             Profile::Ring => "ring",
@@ -249,70 +250,13 @@ pub(crate) async fn orchestrate(args: Args) {
 
     // ── server child ──────────────────────────────────────────────────
     // The server's workers are sized to its pinned core set (or the
-    // runtime default when unpinned); +3 s duration: the clean stop
-    // happens after the clients left, so the final report windows cover
-    // the leave flushes.
+    // runtime default when unpinned); its command line (`server_args`)
+    // runs it 3 s past the clients.
     let server_workers = masks
         .as_ref()
         .map(|m| m.0.len().max(1))
         .unwrap_or(args.workers.max(1));
-    let mut sargs = vec![
-        "--serve".into(),
-        "--bind".into(),
-        format!("127.0.0.1:{server_port}"),
-        "--metrics-listen".into(),
-        format!("127.0.0.1:{metrics_port}"),
-        "--visibility".into(),
-        args.visibility.to_string(),
-        "--shard-count".into(),
-        args.shard_count.to_string(),
-        "--cell-size".into(),
-        args.cell_size.to_string(),
-        "--vision-radius".into(),
-        args.vision_radius.to_string(),
-        "--max-snapshot-bytes".into(),
-        args.max_snapshot_bytes.to_string(),
-        "--spawn-half-size".into(),
-        args.server_spawn_half.to_string(),
-        "--transport".into(),
-        args.transport.to_string(),
-        "--duration".into(),
-        (args.duration + Duration::from_secs(3))
-            .as_secs()
-            .to_string(),
-        "--workers".into(),
-        server_workers.to_string(),
-    ];
-    // The explicit topology axis is forwarded ONLY when the operator set
-    // it: an explicit key wins over the legacy derivation at resolve time,
-    // so unconditionally forwarding "single" would silently flatten a
-    // legacy `--visibility sharded` run into one whole-world room.
-    if let Some(t) = args.topology {
-        sargs.push("--topology".into());
-        sargs.push(t.to_string());
-    }
-    // Capacity / lifecycle guards (forwarded only when the operator
-    // chose them; the served server keeps its config defaults otherwise).
-    if let Some(n) = args.max_players {
-        sargs.push("--max-players".into());
-        sargs.push(n.to_string());
-    }
-    if let Some(n) = args.max_connections {
-        sargs.push("--max-connections".into());
-        sargs.push(n.to_string());
-    }
-    if let Some(s) = args.idle_timeout_secs {
-        sargs.push("--idle-timeout-secs".into());
-        sargs.push(s.to_string());
-    }
-    if let Some(s) = args.write_stall_secs {
-        sargs.push("--write-stall-secs".into());
-        sargs.push(s.to_string());
-    }
-    if let Some(f) = args.disconnect_grace_secs {
-        sargs.push("--disconnect-grace-secs".into());
-        sargs.push(f.to_string());
-    }
+    let sargs = server_args(&args, server_port, metrics_port, server_workers);
     let mut server = spawn_pinned(
         &exe,
         &sargs,

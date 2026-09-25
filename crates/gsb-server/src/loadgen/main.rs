@@ -17,8 +17,9 @@
 //!
 //! Usage:
 //! ```text
-//! gsb-loadgen [N] [--duration SECS] [--move-ms MS] [--room ID] [--stagger-ms MS]
-//!              [--visibility all|spatial|team|pvs] [--cell-size N] [--vision-radius N]
+//! gsb-loadgen [N] [--game demo|arena|mmo] [--duration SECS] [--move-ms MS] [--room ID]
+//!              [--stagger-ms MS] [--visibility all|spatial|team|pvs] [--cell-size N]
+//!              [--vision-radius N]
 //!              [--max-snapshot-bytes N] [--addr HOST:PORT]
 //! ```
 //! Defaults: N=100, duration=10 s, move interval 150 ms, room 1,
@@ -27,8 +28,10 @@
 //! (same default as the server config; see `gsb_server::Visibility`).
 //!
 //! Every client: connects, authenticates, joins the room, then until the
-//! deadline sends a `MOVE_TO` around a circle (phase-shifted by client id
-//! so the entities do not move in lockstep) and counts what it receives.
+//! deadline sends one numbered input per `--move-ms` — what the input is
+//! is the game's bot (`bot/`, `--game`; the demo's: a `MOVE_TO` around a
+//! circle, phase-shifted by client id so the entities do not move in
+//! lockstep) — and applies what it receives into its view.
 //! The entities' integer positions change on most ticks, so the room
 //! re-emits its (single-group, full-world) snapshot nearly every tick —
 //! the snapshot stream is the load the server has to fan out.
@@ -41,6 +44,7 @@
 //! state is task-local and returned through the JoinHandle — nothing
 //! shared.
 
+mod bot;
 mod churn;
 mod client;
 mod codec;
@@ -61,13 +65,9 @@ use std::time::Duration;
 mod args;
 use args::*;
 
-/// The game this generator drives: the 2D demo, the only game it has a
-/// bot for until GAME-MODULE G3 (`--game`). It names the server's `game`
-/// key and closes the RESULT line (`game=<name>`).
-const GAME: &str = gsb_server::games::demo::DemoModule::NAME;
-
-/// The client movement profile (the load's *shape*, not the server's
-/// visibility strategy):
+/// The 2D demo's client movement profile (the load's *shape*, not the
+/// server's visibility strategy; the other games' bots move their own
+/// way — `bot/`):
 ///
 /// - [`Profile::Ring`] (default, the historical profile): every client
 ///   chases a point circling a radius-40 circle at 4 rad/s, phase-shifted
@@ -111,6 +111,10 @@ impl Profile {
 }
 
 struct Args {
+    /// The game to drive (`--game`, default `demo`; a catalog name — see
+    /// `bot::games`): picks the clients' bot, is the in-process / served
+    /// server's `game` key, and closes the RESULT line (`game=<name>`).
+    game: &'static str,
     clients: u64,
     /// First client id; client i is `offset + i` (the stagger and the
     /// profile's per-id determinism use the *global* id, so a partitioned
@@ -273,6 +277,15 @@ Usage:
   gsb-loadgen --orchestrate [N] [options]     one server process + P
                                                client processes, one report
 
+Game:
+  --game demo|arena|mmo     the game to drive (default demo): the clients'
+                            bot and the in-process/served server's `game`
+                            key. demo = the 2D demo (profiles below);
+                            arena = the 3D team arena (units run base →
+                            centre → base, climbing); mmo = the 3D sharded
+                            MMO (roam a waystone, Travel, Attack). The
+                            flags marked [demo] refuse the other games
+
 Client options:
   --addr HOST:PORT          connect to an external server (default: start
                             an in-process server)
@@ -285,27 +298,27 @@ Client options:
                             stateless cookie handshake, reliable control
                             band, loss-tolerant snapshot band; connect_ms
                             then measures the handshake
-  --profile ring|spread|still movement profile (default ring — the historical
+  --profile ring|spread|still [demo] movement profile (default ring — the historical
                             clustered layout; spread = uniform over the
                             ±spawn-half map, the sparse MOBA-like layout;
                             still = a configurable stillness ratio: the still
                             clients settle once, the minority moves)
-  --still-frac F            fraction of still clients for the still profile
+  --still-frac F            [demo] fraction of still clients for the still profile
                             (default 0.9; deterministic per-id split)
-  --spawn-half-size F       map half-size for the spread profile's homes
+  --spawn-half-size F       [demo] map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)
   --workers N               tokio worker threads for this process
 
 Server options (in-process server, --serve, or the orchestrator's server):
-  --visibility all|spatial|team|pvs|sharded   (default all)
-  --topology single|sharded           explicit topology axis; with
+  --visibility all|spatial|team|pvs|sharded   [demo] (default all)
+  --topology single|sharded           [demo] explicit topology axis; with
                                        --visibility spatial selects the
                                        sharded × spatial composite
-  --shard-count N                     (sharded; near-square grid of N
+  --shard-count N                     [demo] (sharded; near-square grid of N
                                        shards, 1..=256; default 4 = 2×2)
-  --cell-size F                       (spatial; default 20)
-  --vision-radius F                   (team; default 25)
+  --cell-size F                       [demo] (spatial; default 20)
+  --vision-radius F                   [demo] (team; default 25)
   --max-snapshot-bytes N              (default 1400)
   --max-players N                     per-room membership cap (0 = unlimited;
                                        default: the server config default,
@@ -320,9 +333,17 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        is ended (0 = disabled; default: the
                                        server config default, 10)
 
+  --disconnect-grace-secs F           [demo] disconnect-park grace (default:
+                                       the server config default, 30)
+
 Client behaviour:
-  --flood-id K                        client K floods MOVE_TO in a tight loop
-                                      after joining (the input-flood probe)
+  --flood-id K                        client K floods its game's move input in
+                                      a tight loop after joining (the
+                                      input-flood probe)
+  --churn-secs S                      every client drops (no leave) and
+                                      resumes every S seconds
+  --churn-cycles K                    drop→resume transitions per client
+                                      (0 = until the deadline)
 
 Orchestrator options (--orchestrate):
   --procs P             client process count (default 1)

@@ -517,6 +517,6 @@ pub(crate) fn print_report(
             .collect::<String>(),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
-        crate::GAME,
+        args.game,
     );
 }

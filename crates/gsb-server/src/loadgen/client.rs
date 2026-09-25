@@ -8,7 +8,6 @@ use gsb_protocol::op;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::*;
 use crate::wire::*;
 use gsb_net::udp::UdpClient;
 
@@ -86,19 +85,6 @@ pub(crate) struct ClientReport {
     pub(crate) fresh_joins: u64,
 }
 
-/// The `spread` profile's deterministic home for client `id`: the SAME
-/// lattice the server's `gsb_demo::room::spawn_pos` uses (same hash, same
-/// scaling), so spawn points and homes live on the same map. The
-/// *distribution* is what the profile contributes (uniform over the map,
-/// statistically steady from tick 1 — see `Profile::Spread`).
-pub(crate) fn spawn_home(id: u64, half: f32) -> (f64, f64) {
-    let h = id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let scale = half as f64 / 50.0;
-    let x = ((h % 1000) as f64 / 10.0 - 50.0) * scale;
-    let y = (((h >> 32) % 1000) as f64 / 10.0 - 50.0) * scale;
-    (x, y)
-}
-
 /// The client-side TLS material (a cloned slice of `Args`): the CA root to
 /// trust and the name to expect in the server certificate. `None` =
 /// plaintext TCP.
@@ -118,15 +104,12 @@ pub(crate) struct ClientParams {
     pub(crate) room: u64,
     pub(crate) move_ms: Duration,
     pub(crate) stagger_ms: f64,
-    pub(crate) profile: Profile,
-    pub(crate) still_frac: f64,
-    pub(crate) spawn_half: f32,
-    /// The AOI cell size (for the client view's `CellExit` handling;
-    /// ignored by the non-spatial strategies, whose snapshots are full).
-    pub(crate) cell_size: f32,
+    /// The game's bot: what this client sends and how it reads the
+    /// game's frames (`bot/`).
+    pub(crate) bot: std::sync::Arc<dyn crate::bot::LoadBot>,
     pub(crate) deadline: Instant,
-    /// Flood mode (the `--flood-id` client): after joining, write MOVE_TO
-    /// in a tight loop until the deadline — the input-flood behaviour
+    /// Flood mode (the `--flood-id` client): after joining, write the
+    /// bot's flood input in a tight loop until the deadline — the input-flood behaviour
     /// probe for the per-connection pull budget and the drop attribution.
     pub(crate) flood: bool,
     /// The client's transport (TCP or rUDP; see the `Wire` below).

@@ -10,6 +10,7 @@ impl Args {
     /// command-line builders' tests start from.
     pub(crate) fn defaults() -> Self {
         Self {
+            game: gsb_server::games::demo::DemoModule::NAME,
             clients: 100,
             offset: 0,
             duration: Duration::from_secs(10),
@@ -53,10 +54,16 @@ impl Args {
 pub(crate) fn parse_args() -> Args {
     let mut args = Args::defaults();
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // The game-specific flags written, checked against `--game` once the
+    // whole line is read (the flags may come in any order).
+    let mut game_flags: Vec<String> = Vec::new();
     let mut i = 0;
     while i < argv.len() {
         let a = argv[i].clone();
         i += 1;
+        if crate::bot::is_demo_only(&a) {
+            game_flags.push(a.clone());
+        }
         let mut v = || {
             if i < argv.len() {
                 let s = argv[i].clone();
@@ -71,6 +78,7 @@ pub(crate) fn parse_args() -> Args {
                 println!("{USAGE}");
                 std::process::exit(0);
             }
+            "--game" => args.game = crate::bot::game_named(&v()).unwrap_or_else(|e| panic!("{e}")),
             "--duration" => args.duration = Duration::from_secs_f64(v().parse().expect("number")),
             "--move-ms" => args.move_ms = Duration::from_millis(v().parse().expect("number")),
             "--room" => args.room = v().parse().expect("number"),
@@ -172,6 +180,10 @@ pub(crate) fn parse_args() -> Args {
     if args.spawn_half == 50.0 && args.profile == Profile::Spread {
         args.spawn_half = 1000.0;
         args.server_spawn_half = 1000.0;
+    }
+    let written: Vec<&str> = game_flags.iter().map(String::as_str).collect();
+    if let Err(e) = crate::bot::check_game_flags(args.game, &written) {
+        panic!("{e}");
     }
     if args.orchestrate && args.serve {
         panic!("--orchestrate and --serve are mutually exclusive (try --help)");

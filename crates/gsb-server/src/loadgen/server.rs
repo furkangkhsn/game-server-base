@@ -43,10 +43,14 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
 
 /// Start the server in-process with a channel metrics sink. The receiver
 /// moves into the report-drain task; nothing is shared across tasks
-/// beyond that mailbox. `visibility` selects the room strategy (the five:
-/// `()` / `Cell` / `Team` / `Sector` / sharded-grid).
+/// beyond that mailbox. `game` is the hosted game (the `game` key; the
+/// flat keys below are the demo's, and a code-built config writes none
+/// of them explicitly, so the other games keep their own); for the demo
+/// `visibility` selects the room strategy (the five: `()` / `Cell` /
+/// `Team` / `Sector` / sharded-grid).
 #[allow(clippy::too_many_arguments)] // loadgen helper; params are natural
 pub(crate) async fn start_inprocess(
+    game: &'static str,
     visibility: gsb_server::Visibility,
     topology: Option<gsb_server::Topology>,
     shard_count: u32,
@@ -68,7 +72,7 @@ pub(crate) async fn start_inprocess(
         max_snapshot_bytes,
         spawn_half_size: spawn_half,
         transport,
-        game: crate::GAME.into(),
+        game: game.into(),
         ..Default::default()
     };
     apply_overrides(&mut cfg, &overrides);

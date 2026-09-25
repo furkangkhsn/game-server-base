@@ -30,7 +30,7 @@ pub(crate) async fn serve(args: Args) {
         max_snapshot_bytes: args.max_snapshot_bytes,
         spawn_half_size: args.server_spawn_half,
         transport: args.transport,
-        game: crate::GAME.into(),
+        game: args.game.into(),
         ..Default::default()
     };
     // Capacity / lifecycle overrides (same semantics as in-process: an
@@ -53,8 +53,9 @@ pub(crate) async fn serve(args: Args) {
                 .await
                 .expect("server starts");
             eprintln!(
-                "serve: ready at {} (visibility={}, spawn_half={}, duration={}s; metric reports → {})",
+                "serve: ready at {} (game={}, visibility={}, spawn_half={}, duration={}s; metric reports → {})",
                 handle.addr,
+                args.game,
                 args.visibility,
                 args.server_spawn_half,
                 args.duration.as_secs(),
@@ -76,8 +77,9 @@ pub(crate) async fn serve(args: Args) {
         None => {
             let handle = gsb_server::start_server(cfg).await.expect("server starts");
             eprintln!(
-                "serve: ready at {} (visibility={}, duration={}s; metric reports → gsb-metric log, RUST_LOG=info)",
+                "serve: ready at {} (game={}, visibility={}, duration={}s; metric reports → gsb-metric log, RUST_LOG=info)",
                 handle.addr,
+                args.game,
                 args.visibility,
                 args.duration.as_secs()
             );
