@@ -1,9 +1,12 @@
 //! The arena's delta mode against its full mode, through the real room
-//! actor: two rooms — the arena's own (delta) and the team room's
-//! default (full only) — play the same inputs; at every checkpoint,
-//! while units are still moving through each other's 3D fog, every
-//! client of the delta room holds exactly the view its twin in the full
-//! room holds. The delta room's clients apply deltas (a unit entering,
+//! actor: two rooms — the arena's own (delta, 15 Hz records) and the
+//! team room's default (full only — full frames ignore the send rate)
+//! — play the same inputs; at every checkpoint, while units are still
+//! moving through each other's 3D fog, every client of the delta room
+//! holds the same units its twin in the full room holds, each where the
+//! full room showed it this tick or the one before (the arena's send
+//! rate: a unit's move goes out on every 2nd step, KIT-ARCHITECTURE §10
+//! "A10"). The delta room's clients apply deltas (a unit entering,
 //! moving in and leaving a team's view); the full room's never see one.
 //! And a real delta frame, byte for byte against both definitions.
 
@@ -45,33 +48,50 @@ async fn joined(arena: &mut Arena) -> Vec<Client> {
 }
 
 #[tokio::test]
-async fn delta_and_full_rooms_give_every_client_the_same_view() {
+async fn delta_and_full_rooms_agree_within_the_send_rate() {
     let mut delta = Arena::new(ArenaGame::default());
     let mut full = Arena::full_only(ArenaGame::default());
     let mut ds = joined(&mut delta).await;
     let mut fs = joined(&mut full).await;
-    let mut checkpoints = 0;
+    let (mut checkpoints, mut behind) = (0, 0);
     for wave in WAVES {
         for &(i, x, y, z) in wave {
             ds[i].move_to(x, y, z, 0).await;
             fs[i].move_to(x, y, z, 0).await;
         }
         // Checkpoints every 7 ticks for ~4 s: the units are mid-flight
-        // (12 m/s) for most of them.
+        // (12 m/s) for most of them. The full room's views one tick
+        // before the checkpoint are the delta room's staleness bound.
         for _ in 0..16 {
-            delta.advance(&mut ds, 7).await;
-            full.advance(&mut fs, 7).await;
+            delta.advance(&mut ds, 6).await;
+            full.advance(&mut fs, 6).await;
+            full.flush(&mut fs).await;
+            let before: Vec<_> = fs.iter().map(|f| f.view.clone()).collect();
+            delta.advance(&mut ds, 1).await;
+            full.advance(&mut fs, 1).await;
             delta.flush(&mut ds).await;
             full.flush(&mut fs).await;
             for (i, (d, f)) in ds.iter().zip(&fs).enumerate() {
                 assert_eq!(d.id, f.id, "the twins mint alike");
-                assert_eq!(d.view, f.view, "checkpoint {checkpoints}: client {i}");
+                assert!(
+                    d.view.keys().eq(f.view.keys()),
+                    "checkpoint {checkpoints}: client {i} sees the same units"
+                );
+                for (id, at) in &d.view {
+                    let now = f.view[id] == *at;
+                    assert!(
+                        now || before[i].get(id) == Some(at),
+                        "checkpoint {checkpoints}: client {i}, unit {id} at {at:?}"
+                    );
+                    behind += u32::from(!now);
+                }
             }
             checkpoints += 1;
         }
     }
     let deltas: u32 = ds.iter().map(|c| c.deltas).sum();
     assert!(deltas > 100, "the delta room shipped deltas: {deltas}");
+    assert!(behind > 20, "moves waited for their step: {behind}");
     assert!(fs.iter().all(|c| c.deltas == 0 && c.gap_drops == 0));
     for (i, c) in ds.iter().enumerate() {
         // Joins 4..6 found their team playing: one delta dropped before

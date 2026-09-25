@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gsb_demo_arena::VISION_RADIUS;
-use gsb_demo_arena::codec::{Cm3, to_cm};
+use gsb_demo_arena::codec::{ArenaCodec, Cm3, to_cm};
+use gsb_demo_arena::components::DEFAULT_SPEED;
+use gsb_kit::codec::RecordCodec;
 use hosted::arena::{ArenaView, dist_cm};
 use hosted::{Client, Door, eventually, hold};
 
@@ -23,9 +25,15 @@ type Arena = Client<ArenaView>;
 
 /// The team fog rule, from the network side: every unit in a client's
 /// view is its own (each team here has one unit — its client's) or an
-/// enemy within the vision radius of it. Quantization: centimetres.
+/// enemy within the vision radius of it. Quantization: centimetres; and
+/// the arena's send rate (15 Hz — KIT-ARCHITECTURE §10 "A10"): the
+/// server tests vision on the current positions, the client holds each
+/// of the two units up to one step behind (a step's move at full speed
+/// each).
 fn fog_holds(clients: &[&mut Arena]) {
-    let radius = f64::from(to_cm(VISION_RADIUS)) + 2.0;
+    let behind = ArenaCodec.send_every(&Cm3::default()).ticks() - 1;
+    let step_cm = f64::from(to_cm(DEFAULT_SPEED / 30.0)) * behind as f64;
+    let radius = f64::from(to_cm(VISION_RADIUS)) + 2.0 + 2.0 * step_cm;
     for c in clients {
         let Some(me) = c.me() else {
             continue; // before the first snapshot

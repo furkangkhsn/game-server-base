@@ -24,6 +24,18 @@
 //!
 //! The wire value is also the change test of the kit's per-team ledger:
 //! two positions within the same centimetre produce no new snapshot.
+//!
+//! **Send rate: 15 Hz** ([`RecordCodec::send_every`] →
+//! [`SendEvery::Ticks2`], KIT-ARCHITECTURE §10 "A10"). A unit's moves
+//! go out at most every 2nd step of the 30 Hz room — the kit spreads the
+//! units over the two steps by wire id and sends each one's CURRENT
+//! position on its step; a unit entering or leaving a team's view, and
+//! every full, still go out at once. The records stay absolute: a client
+//! that renders them as they come sees 15 Hz motion (interpolating
+//! between them is the client's choice, not the server's). One class
+//! for every unit: the arena's units are all heroes moving at the same
+//! speed — the seam takes a class per record, from its wire value, for
+//! a game that has more to tell apart.
 
 use bevy_ecs::prelude::Changed;
 use bytes::BytesMut;
@@ -31,7 +43,7 @@ use prost::Message;
 
 use crate::arena::UnitRecord;
 use crate::components::Pos3;
-use gsb_kit::codec::RecordCodec;
+use gsb_kit::codec::{RecordCodec, SendEvery};
 
 /// A position quantized to integer centimetres — the arena's wire value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -91,6 +103,12 @@ impl RecordCodec for ArenaCodec {
         }
         .encode(out)
         .expect("protobuf encode into an in-memory buffer failed");
+    }
+
+    /// Every unit at 15 Hz (module docs).
+    #[inline]
+    fn send_every(&self, _: &Cm3) -> SendEvery {
+        SendEvery::Ticks2
     }
 }
 
