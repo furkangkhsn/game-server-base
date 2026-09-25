@@ -565,6 +565,28 @@ Gerçek shard aktörleri üzerinden kilit:
 sonra savaş bitene dek bekler ve tam o tick'ten sonra çıkar; tavanı
 aşan savaş çıkışı zorlar).
 
+**Sunucu config'i: `max_detach_hold_secs`** (küçük paket). Tavan
+artık operatörün elinde: `gsb-server`'ın düz anahtarı, barındırılan
+HER oyunun odalarına gider (başlangıçta ön-kurulan odalar; sharded bir
+oyunda registry her shard'a aynı `RoomConfig`'i verir — tek eşleme
+`Config::room_config`). Yazım: saniye (`>= 0`, kesir olabilir) ya da
+`"off"` (= `None`, tavan yok); yazılmazsa çekirdeğin varsayılanı
+(10 dk). `0` literaldir (= `Some(ZERO)`, uzatma yok) — madde 6'nın
+gerekçesiyle. Negatif sayı, başka bir kelime ya da yanlış tip
+başlatmada hata (anahtarı ve alabileceğini adlandırır). *Elenen
+yazımlar:* "0 = kapalı" (`max_idle_input_secs` geleneği — burada bir
+yazım hatasını sınırsız kilide çevirirdi); negatif = kapalı (aynı
+risk); ayrı bir boolean anahtar (tek ayar için iki anahtar, çelişebilir).
+TOML'da null olmadığı için "yok" bir kelimeyle yazılır. Kilit: parse ve
+odaya ulaşma `config/axes/listeners/room/tests.rs`; uçtan uca
+`tests/mmo_logout.rs::the_server_ceiling_bounds_the_combat_hold`
+(1 sn tavanla savaştaki karakter 6 sn'lik savaş penceresini beklemeden,
+1 sn'lik çıkış sayacında çıkar). *Açık:* admin HTTP'nin
+`POST /rooms/open`'ı odayı `RoomConfig::default()` + `tick_hz` ile kurar
+— bu anahtarı (ve `max_players`, `max_idle_input_secs` gibi diğer oda
+anahtarlarını) almaz; önceden var olan bir boşluk, bu turda
+değiştirilmedi.
+
 **§16 ile ilişki.** İki tavan bağımsızdır: girdi-boşta tavanı üyeyi
 `on_disconnect`'e verir; politikanın başlattığı hold her hold gibi
 `max_detach_hold`'a tabidir (saati o detach anında başlar).

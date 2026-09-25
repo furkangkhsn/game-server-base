@@ -2,6 +2,9 @@
 
 use crate::config::*;
 
+mod detach_hold;
+mod room;
+
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
 ///
 /// WHY a separate enum from [`TransportKind`] instead of a `Tls` variant
@@ -208,6 +211,25 @@ pub struct Config {
     /// (`on_disconnect`), which decides park / AI handover / despawn.
     /// Heartbeats keep a session alive and never reset this clock.
     pub max_idle_input_secs: Option<u64>,
+    /// **Detach-hold ceiling** — every hosted room's
+    /// `RoomConfig::max_detach_hold` (`docs/RECONNECT.md` §17): the
+    /// longest a game's `may_release` veto can keep a disconnected
+    /// player's entity, measured from the disconnect. It only overrides a
+    /// VETO; it never shortens a grace.
+    ///
+    /// Spelled `max_detach_hold_secs` in the file: seconds (`>= 0`,
+    /// fractions allowed), or `"off"` for no ceiling (`None` — a veto
+    /// holds while it stands; only for a trusted game). `0` is literal:
+    /// no extension — a veto is overridden the first time it is asked
+    /// (unlike [`Self::max_idle_input_secs`]'s "0 = off": zero has a safe
+    /// meaning here, and "off" by accident would be the unbounded lock).
+    /// Omitted: the core's default, 10 min
+    /// (`gsb_core::room::DEFAULT_MAX_DETACH_HOLD`).
+    #[serde(
+        rename = "max_detach_hold_secs",
+        deserialize_with = "detach_hold::deserialize"
+    )]
+    pub max_detach_hold: Option<std::time::Duration>,
     /// The TOPOLOGY selection axis (`"single"` | `"sharded"`; see
     /// [`Topology`]): who computes the world and as how many authoritative
     /// pieces.
@@ -431,6 +453,7 @@ impl Default for Config {
             // OFF: AFK is a game decision, so the base's ceiling stays
             // invisible until an operator asks for it.
             max_idle_input_secs: None,
+            max_detach_hold: Some(gsb_core::room::DEFAULT_MAX_DETACH_HOLD),
             topology: None,
             communication: None,
             visibility: Visibility::default(),

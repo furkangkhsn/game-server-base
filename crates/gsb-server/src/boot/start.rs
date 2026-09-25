@@ -13,10 +13,8 @@ use crate::boot::accept::*;
 use crate::config::*;
 use crate::*;
 use gsb_core::channel::channel;
-use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{MatchResult, RegistryMsg};
-use gsb_core::room::RoomConfig;
 
 mod entry;
 pub use entry::*;
@@ -164,17 +162,7 @@ async fn start_inner(
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
     // configure a slower rate that divides it).
     for id in 1..=cfg.room_count {
-        let config = RoomConfig {
-            id: RoomId(id),
-            tick_hz: cfg.tick_hz,
-            control_capacity: cfg.room_control,
-            action_capacity: cfg.conn_action,
-            max_snapshot_bytes: cfg.max_snapshot_bytes,
-            keepalive_hz: cfg.keepalive_hz,
-            max_players: cfg.max_players.map(|n| n as usize),
-            max_idle_input_secs: cfg.max_idle_input_secs,
-            ..Default::default()
-        };
+        let config = cfg.room_config(id);
         {
             let tx = reg_tx.clone();
             tokio::spawn(async move {

@@ -219,6 +219,24 @@ keepalive_hz = 1.0
 # Anahtarı hiç yazmamak (varsayılan) ve 0 yazmak aynı anlama gelir: KAPALI.
 # max_idle_input_secs = 300
 
+# DETACH-HOLD CEILING (saniye) — varsayılan 600 (10 dk). docs/RECONNECT.md §17.
+#
+# Kopan bir oyuncunun karakterini oyunun `may_release` vetosu ("savaşta,
+# çıkamaz") en fazla bu kadar tutabilir; süre KOPMA anından ölçülür.
+# Tavanda hâlâ duran veto ezilir, bekletme politikanın sonuna (bot devri
+# ya da despawn) biter ve oda bir kez uyarır. Tavan yalnız VETOYU ezer:
+# oyunun grace'ini (ör. MMO'nun çıkış sayacı) asla kısaltmaz. Barındırılan
+# her oyunun odalarına (sharded oyunda her shard'a) aynen gider.
+#
+#   yazılmazsa = 600 (çekirdeğin varsayılanı)
+#   N          = N saniye (kesir olabilir: 2.5)
+#   0          = uzatma yok: veto ilk sorulduğunda ezilir (KAPALI DEĞİL —
+#                "0 = kapalı" bir yazım hatasını sınırsız kilide çevirirdi)
+#   "off"      = tavan yok: veto durdukça tutar (yalnız güvenilir oyun için)
+#
+# Negatif sayı ya da başka bir kelime başlatmada hatadır.
+# max_detach_hold_secs = 600
+
 # ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
 # "Konfigürasyon düzeltmesi" — Faz A):
 #

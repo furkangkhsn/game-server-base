@@ -27,7 +27,17 @@ async fn join(addr: std::net::SocketAddr, name: &str) -> Mmo {
 
 /// An MMO server over `realm` with the `[mmo]` table `table`.
 async fn start(realm: Realm, table: &str) -> gsb_server::ServerHandle {
+    start_with(realm, table, |_| {}).await
+}
+
+/// [`start`] with the server config adjusted by `tweak`.
+async fn start_with(
+    realm: Realm,
+    table: &str,
+    tweak: impl FnOnce(&mut gsb_server::Config),
+) -> gsb_server::ServerHandle {
     let mut cfg = Door::Tcp.config("mmo");
+    tweak(&mut cfg);
     cfg.raw = toml::from_str(table).expect("table parses");
     gsb_server::start_game_server(Box::new(MmoModule::with_realm(realm)), cfg)
         .await
@@ -111,6 +121,70 @@ async fn a_fighter_is_held_past_the_grace_and_a_peaceful_player_logs_out() {
             Instant::now() < deadline,
             "the registry kept a logged-out row"
         );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    handle.stop().await;
+}
+
+/// The server's `max_detach_hold_secs` reaches the MMO's shards: with a
+/// 1 s ceiling, a character that dropped mid-fight is NOT held for its
+/// combat window (6 s after its hit) — the veto is overridden where the
+/// ceiling falls, right at the 1 s logout timer (the ceiling never
+/// shortens the grace), and the registry releases the row.
+#[tokio::test]
+async fn the_server_ceiling_bounds_the_combat_hold() {
+    let camp = Pos3::new(-250.0, 0.0, -250.0);
+    let realm = Realm::empty().with_spawn(MobSpawn::once(Kind::Mob, camp, 1, 1_000_000, 60_000));
+    let ceiling: gsb_server::Config =
+        toml::from_str("max_detach_hold_secs = 1").expect("the key parses");
+    let handle = start_with(realm, "[mmo]\nlogout_grace_secs = 1", |cfg| {
+        cfg.max_detach_hold = ceiling.max_detach_hold;
+    })
+    .await;
+    let mut p = join(handle.addr, "fighter").await;
+    let mut o = join(handle.addr, "observer").await;
+    let ip = p.entity;
+    eventually(
+        &mut [&mut p, &mut o],
+        Duration::from_secs(5),
+        "the mob is up and the two see each other",
+        |cs| {
+            cs.iter()
+                .all(|c| c.view.players().len() == 2 && !c.view.of_kind(mmo::Kind::Mob).is_empty())
+        },
+    )
+    .await;
+    let mob = p.view.of_kind(mmo::Kind::Mob)[0];
+    p.attack(mob, 1).await;
+    eventually(
+        &mut [&mut p],
+        Duration::from_secs(5),
+        "the hit lands",
+        |cs| cs[0].view.acks.last() == Some(&1),
+    )
+    .await;
+
+    drop(p);
+    let t0 = Instant::now();
+    eventually(
+        &mut [&mut o],
+        Duration::from_secs(10),
+        "the fighter logs out",
+        |cs| cs[0].sees(ip).is_none(),
+    )
+    .await;
+    let gone = t0.elapsed();
+    assert!(
+        gone >= Duration::from_millis(900),
+        "the grace is not shortened: {gone:?}"
+    );
+    assert!(
+        gone < Duration::from_millis(3_500),
+        "held past the 1 s ceiling (the combat window is 6 s): {gone:?}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while members(&handle).await != 1 {
+        assert!(Instant::now() < deadline, "the registry kept the row");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     handle.stop().await;
