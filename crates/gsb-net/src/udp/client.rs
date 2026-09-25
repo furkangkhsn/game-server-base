@@ -214,7 +214,8 @@ impl UdpClient {
 
     /// Receive one application frame, waiting up to `wait` for it. While
     /// waiting the loop performs the outbound retransmit pass (on the RTO
-    /// ticks) — reliable delivery without any multiplexing.
+    /// ticks and after every datagram) — reliable delivery without any
+    /// multiplexing.
     ///
     /// Returns `Ok(None)` when the window elapses with no frame (NOT an
     /// error: UDP has no EOF — the caller probes liveness explicitly when
@@ -237,6 +238,13 @@ impl UdpClient {
                     // must not borrow self.buf through the same call.
                     let data = self.buf[..n].to_vec();
                     self.process_datagram(&data);
+                    // The retransmit pass runs on every datagram too, not
+                    // only on a read timeout: a busy game band (a snapshot
+                    // stream, fragmented or not) may never leave the read
+                    // idle for a whole RTO, and a lost control frame must
+                    // not wait for silence. The pass is O(1) — it looks at
+                    // the oldest outstanding frame only.
+                    self.retransmit_pass();
                     if let Some(raw) = self.raw.take() {
                         // A RAW frame (the lossy band, unordered): return
                         // it immediately, without waiting for ordered REL.

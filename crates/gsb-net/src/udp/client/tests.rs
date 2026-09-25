@@ -259,3 +259,43 @@ async fn a_control_frame_after_a_quiet_spell_starts_a_fresh_liveness_clock() {
     );
     assert_eq!(c.stats.gave_up, 0);
 }
+
+/// A busy game band must not starve the control band's retransmit.
+///
+/// The pass used to run only when a read timed out — i.e. after a full
+/// RTO of silence. A client receiving a steady snapshot stream (and a
+/// fragmented one is steadier still) never saw one, so a lost control
+/// frame (a LEAVE, say) was never re-sent while the stream lasted.
+#[tokio::test]
+async fn a_busy_game_band_does_not_starve_the_retransmit() {
+    let (mut c, sink) = detached().await;
+    c.send_frame(gsb_protocol::op::base::ERROR, Bytes::from_static(&[9, 0]))
+        .await
+        .expect("send");
+    // The peer never ACKs, but streams RAW frames every 5 ms: no read
+    // ever waits a whole RTO.
+    let me = c.local_addr().expect("bound");
+    let raw = encode_raw(&FrameBody::new(1000, Bytes::from_static(&[1])));
+    let stream = tokio::spawn(async move {
+        for _ in 0..80 {
+            sink.send_to(&raw, me).await.expect("stream");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        sink
+    });
+    let until = Instant::now() + Duration::from_millis(300);
+    let mut frames = 0;
+    while Instant::now() < until {
+        if let Ok(Some(_)) = c.recv_frame(Duration::from_millis(100)).await {
+            frames += 1;
+        }
+    }
+    let _sink = stream.await.expect("stream task");
+    assert!(frames > 10, "the stream kept the socket busy ({frames})");
+    assert!(
+        c.stats.retrans_out >= 2,
+        "the outstanding control frame must be re-sent while the game band \
+         is busy (retrans_out = {})",
+        c.stats.retrans_out
+    );
+}
