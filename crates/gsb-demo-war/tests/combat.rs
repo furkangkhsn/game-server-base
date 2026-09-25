@@ -89,7 +89,10 @@ async fn no_friendly_fire_no_reach_and_a_local_blow_lands_locally() {
     }
     war.steps(3).await;
     let stray = war.hits();
-    assert!(stray.is_empty(), "allies and targets out of reach: {stray:?}");
+    assert!(
+        stray.is_empty(),
+        "allies and targets out of reach: {stray:?}"
+    );
 
     let near = war.wire(ids[5]);
     war.clients[a].attack(near);
