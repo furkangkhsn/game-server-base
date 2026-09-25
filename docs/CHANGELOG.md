@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A10 — kayıt başına yayın hızı: oyun başına opt-in (`kit/a10-send-rate`)
+
+Kit'e yapı taşı; varsayılan değişmedi, istemci kuralı değişmedi (`kit.proto`
+aynı — kayıtlar hâlâ mutlak) (KIT-ARCHITECTURE §10 "A10").
+
+- Seam: `RecordCodec::send_every(&wire) -> SendEvery` (varsayılan `Tick`;
+  `Ticks2/4/8/16`), takvim `SendEvery::due(step, wire)` public. Sınıf
+  kaydın wire değerinden (ödünç kayıtta da hesaplanabilsin diye); sınıflar
+  2'nin kuvvetleri (iç içe vadeler — sınıf değişse de sınır tutar); faz
+  wire id'nin Fibonacci karmasından (A30'un iç içe id'leriyle `id mod`
+  aynı adıma yığardı); saat odanın adım sayacı.
+- Motor garantisi: değişen ama vadesiz kayıt tutulur ve vadesinde GÜNCEL
+  değeriyle gider — bayatlık ≤ `ticks() − 1` adım (ithal kayıtta +1
+  röle). Görünüme giriş, hücre geçişi, göç varışı, `removed`,
+  `cell_exits` ve her full (taze, keep-alive, one-shot) beklemez;
+  full-only odalar hızı yok sayar. Delta motorları (set defteri, hücre
+  defteri, ödünç şerit, sharded takım ihracı) kapsandı; encode-once
+  korunuyor; A31 koşusuyla çalışıyor.
+- Varsayılan bayt birebir: dokuz tohumlu ikiz oturumun içerik özeti
+  değişiklikten ÖNCE sabitlendi, sonra aynı.
+- Doğrulama: yalnız arena açtı (`Ticks2`, 15 Hz): istemci başına bant
+  200'de −43,1 %, 500'de −44,7 % (rUDP −43,8 %); rUDP'de kare başına
+  datagram 2,9 → 1,9; capture'dan bayatlık tam sınırda (1 tick). Arenanın
+  iki testi bilinçli çevrildi (bir tick tolerans).
+
+Testler 847 → 865. Ajanın 14 mutasyonu yakalandı (biri — görünüme girişte
+bekleyen kaydı silmemek — sağ kalıyor, etkisi fazladan bir idempotent
+upsert: F13). Ebeveynin bağımsız mutasyonu (her sınıfın periyodunu iki
+katına çıkarmak) 8 testi kırıyor.
+
 ## A31 — paketli kayıt koşusu: oyun başına opt-in (`kit/a31-packed-records`)
 
 Kit'e yapı taşı; varsayılan değişmedi (KIT-ARCHITECTURE §10 "A31").

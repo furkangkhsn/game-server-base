@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-847 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+865 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**A10 tamam** (KIT-ARCHITECTURE §10 "A10", CHANGELOG "A10"): seam
+`RecordCodec::send_every(&Wire) -> SendEvery`, takvim `SendEvery::due`.
+`SetLedger` vadesizde `held`'i ilerletmez; `CellBook` bekleyenleri
+`roll` başında salar; sharded takım ihracı delta modunda yalnız vadede
+ilerler. Kilitler: `record_run` dokuz oturum özeti (varsayılan bayt),
+`record_run::rate` oranlı ikizler (sınır tam erişilir, hiç aşılmaz).
 
 **A31 tamam** (KIT-ARCHITECTURE §10 "A31", CHANGELOG "A31"): kayıt
 çerçevesi oyunun seçimi (`RecordCodec::RUN` / `ClientDecoder::RUN` +
@@ -447,6 +454,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 847 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 865 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

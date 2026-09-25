@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **847** (847/847 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **865** (865/865 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **A31 — paketli kayıt koşusu** (KIT-ARCHITECTURE §10 "A31") —
+Son tur: **A10 — kayıt başına yayın hızı** (KIT-ARCHITECTURE §10 "A10")
+— opt-in `RecordCodec::send_every` (varsayılan her tick, bayt aynı,
+istemci kuralı aynı); arena 15 Hz ile açtı: bant −43…−45 %, bayatlık ≤ 1
+tick. A22 faz 0'ın motor tarafı kaldıraçlarının üçü de (A30, A31, A10)
+tamam; kalan bant kararları oyunların (kodek, opt-in'ler).
+Önceki tur: **A31 — paketli kayıt koşusu** (KIT-ARCHITECTURE §10 "A31") —
 oyun başına opt-in (`RecordCodec::RUN`, `kit.proto` `records = 6`),
 açmayanların baytı aynı; savaş demosu açtı: bant −54 %, 500'de rUDP
 datagramı kare başına yarıya. Sıradaki: A10 (varlık başına yayın hızı,
