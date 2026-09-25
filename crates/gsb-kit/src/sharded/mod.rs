@@ -147,6 +147,7 @@
 
 mod mig;
 mod room;
+mod seam;
 mod spatial;
 
 #[cfg(test)]
@@ -154,6 +155,7 @@ mod tests;
 
 pub use mig::{KitMig, ShardInputRecord, ShardParkRecord};
 pub use room::ShardedRoom;
+pub use seam::Seam;
 pub use spatial::ShardedSpatialRoom;
 
 // The grid helpers, in scope for the in-module tests (`use super::*`).

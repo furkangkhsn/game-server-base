@@ -100,6 +100,30 @@ pub(crate) fn ingest<G: Game>(
     guard_change_window(world, |w| game.ingest(w, ctx, actions, players, input));
 }
 
+/// [`ingest`] on the sharded path: the same bot input and sequence rule,
+/// with the game's seam hook
+/// ([`ShardGame::ingest_seam`](crate::game::ShardGame::ingest_seam)).
+#[allow(clippy::too_many_arguments)] // `ingest`'s seven plus the seam
+pub(crate) fn ingest_seam<G: crate::game::ShardGame>(
+    game: &mut G,
+    world: &mut World,
+    ctx: &TickCtx,
+    actions: &mut Vec<Action>,
+    players: &HashMap<PlayerId, Entity>,
+    park_ledger: &HashMap<String, ParkEntry>,
+    input: &mut InputSeq,
+    seam: &mut crate::sharded::Seam<'_, '_, crate::game::Wire<G>>,
+) {
+    let bots = park_ledger
+        .values()
+        .filter(|e| e.bot)
+        .map(|e| (e.player, e.entity));
+    game.bot_actions(world, ctx, bots, actions);
+    guard_change_window(world, |w| {
+        game.ingest_seam(w, ctx, actions, players, input, seam)
+    });
+}
+
 /// Run the game's systems for this tick (single-threaded, ordered — the
 /// room actor is the only owner of the world).
 pub(crate) fn systems<G: Game>(game: &mut G, world: &mut World, ctx: &TickCtx) {
@@ -119,12 +143,13 @@ pub(crate) fn close_change_window(world: &mut World) {
 /// Run a game hook and check (debug builds) that it left the change
 /// window alone: a hook calling `World::clear_trackers` would silently
 /// hide its own writes from the codec's `Dirty` filter.
-fn guard_change_window(world: &mut World, hook: impl FnOnce(&mut World)) {
+pub(crate) fn guard_change_window<R>(world: &mut World, hook: impl FnOnce(&mut World) -> R) -> R {
     let before = world.last_change_tick();
-    hook(world);
+    let answer = hook(world);
     debug_assert_eq!(
         world.last_change_tick(),
         before,
         "a Game hook called World::clear_trackers — the kit owns the change window"
     );
+    answer
 }

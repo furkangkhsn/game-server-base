@@ -18,11 +18,13 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::rpc::{RequestDecision, RpcRequest};
+use gsb_core::shard::{EffectOutcome, RemoteEffect};
 
 use crate::codec::RecordCodec;
 // Named in `Game::ingest`'s signature, so a game crate must be able to
 // name it (the `common` module itself is private).
 pub use crate::common::InputSeq;
+use crate::sharded::Seam;
 use crate::team::Team;
 
 /// A game the kit's rooms can run. Statically dispatched: every room is
@@ -241,6 +243,59 @@ pub trait ShardGame: Game {
     /// spawned entity must carry the codec's `Marker`. The kit stamps
     /// the identity the entity travelled with right after.
     fn restore(&mut self, world: &mut World, mig: Self::Mig) -> Entity;
+
+    // -- Across the seam (CROSS-SHARD §2–§4). Defaults keep a game that
+    //    never looks across exactly as it was: the sharded rooms call
+    //    these, and they fall back to the plain hooks. ------------------
+
+    /// [`Game::ingest`] on the sharded path, with the [`Seam`]: read the
+    /// neighbours' lent records and act on them through remote effects.
+    /// The sharded rooms call THIS (after [`Game::bot_actions`], under
+    /// the same sequence rule); the default is `ingest`.
+    fn ingest_seam(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        players: &HashMap<PlayerId, Entity>,
+        seq: &mut InputSeq,
+        _seam: &mut Seam<'_, '_, Wire<Self>>,
+    ) {
+        self.ingest(world, ctx, actions, players, seq);
+    }
+
+    /// [`Game::systems`] on the sharded path, with the [`Seam`]. The
+    /// default is `systems`.
+    fn systems_seam(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        _seam: &mut Seam<'_, '_, Wire<Self>>,
+    ) {
+        self.systems(world, ctx);
+    }
+
+    /// Apply a remote effect a neighbour sent to `target`, this shard's
+    /// entity (the kit resolved `effect.target` to it; the core already
+    /// dropped duplicates, stale epochs and effects past the transport
+    /// envelope, and orders one tick's effects by `(source, origin,
+    /// seq)`). `tick` is this shard's tick: `tick - effect.at_tick` is
+    /// the effect's age, the game's staleness policy. `effect.source`
+    /// is the acting entity (credit a kill to it); the seam shows its
+    /// lent record when a neighbour lends it (re-validate as policy).
+    /// Runs in CONTROL, before the tick's input. Default:
+    /// [`EffectOutcome::Rejected`] — a game that emits none has none to
+    /// apply.
+    fn apply_remote_effect(
+        &mut self,
+        _world: &mut World,
+        _target: Entity,
+        _effect: &RemoteEffect,
+        _tick: u64,
+        _seam: &mut Seam<'_, '_, Wire<Self>>,
+    ) -> EffectOutcome {
+        EffectOutcome::Rejected
+    }
 }
 
 /// The wire value of game `G`'s records.

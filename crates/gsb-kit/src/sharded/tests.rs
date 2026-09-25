@@ -26,6 +26,7 @@ mod ghosts;
 mod input_carry;
 mod lent_arrival;
 mod migration;
+mod seam;
 mod spatial;
 
 /// The spatial composite over the same instantiation, with the kit's 2D

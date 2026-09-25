@@ -3,7 +3,10 @@
 
 use bevy_ecs::prelude::{Entity, With, World};
 use gsb_core::id::PlayerId;
-use gsb_core::shard::{BorderRecord, Migrating, SHARD_SERIAL_RANGE, ShardLogic};
+use gsb_core::room::{Action, TickCtx};
+use gsb_core::shard::{
+    BorderRecord, CrossSeam, EffectOutcome, Migrating, RemoteEffect, SHARD_SERIAL_RANGE, ShardLogic,
+};
 
 use crate::common::ParkEntry;
 use crate::game::{ShardGame, Wire};
@@ -193,5 +196,55 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         // mutation; see the field docs for why it cannot be a stale
         // cache).
         self.wire_entity.keys().copied().collect()
+    }
+
+    // -- Across the seam: the core lends its view; the kit joins it with
+    //    the owned-wire table (own wins) and hands it to the game. ------
+
+    fn ingest_seam(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+    ) {
+        crate::common::ingest_seam(
+            &mut self.game,
+            world,
+            ctx,
+            actions,
+            &self.player_entity,
+            &self.park_ledger,
+            &mut self.input,
+            &mut Seam::new(seam, &self.wire_entity),
+        );
+    }
+
+    fn update_seam(&mut self, world: &mut World, ctx: &TickCtx, seam: &mut CrossSeam<'_, Wire<G>>) {
+        self.step(world, ctx, Some(seam));
+        crate::common::close_change_window(world);
+    }
+
+    fn apply_remote_effect(
+        &mut self,
+        world: &mut World,
+        tick: u64,
+        effect: &RemoteEffect,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+    ) -> EffectOutcome {
+        // The target is ours if the owned-wire table names a live entity
+        // (an entity the game despawned this tick is still named until
+        // the tick's sweep — hence the world check).
+        let Some(&target) = self.wire_entity.get(&effect.target) else {
+            return EffectOutcome::NoTarget;
+        };
+        if world.get_entity(target).is_err() {
+            return EffectOutcome::NoTarget;
+        }
+        let mut seam = Seam::new(seam, &self.wire_entity);
+        let game = &mut self.game;
+        crate::common::guard_change_window(world, |w| {
+            game.apply_remote_effect(w, target, effect, tick, &mut seam)
+        })
     }
 }

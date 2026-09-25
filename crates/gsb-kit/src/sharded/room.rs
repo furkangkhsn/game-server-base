@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{Entity, With, Without, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
-use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE};
+use gsb_core::shard::{BorderRecord, CrossSeam, SHARD_SERIAL_RANGE};
 
 use crate::codec::RecordCodec;
 use crate::common::{InputSeq, ParkEntry, ParkPolicy};
@@ -167,12 +167,25 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         PlayerId(self.minter.next_serial())
     }
 
-    /// The tick body minus the change-window close: the game's systems,
-    /// range-aware orphan stamping and the border-cache rebuild. The
-    /// spatial composite runs this and then its own dirty pass, which
-    /// must still see the tick's writes.
-    pub(in crate::sharded) fn step(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx);
+    /// The tick body minus the change-window close: the game's systems
+    /// (through its seam hook when the actor lends a seam — the sharded
+    /// path; the plain hook otherwise), range-aware orphan stamping and
+    /// the border-cache rebuild. The spatial composite runs this and then
+    /// its own dirty pass, which must still see the tick's writes.
+    pub(in crate::sharded) fn step(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: Option<&mut CrossSeam<'_, Wire<G>>>,
+    ) {
+        match seam {
+            Some(cross) => {
+                let mut seam = Seam::new(cross, &self.wire_entity);
+                let game = &mut self.game;
+                crate::common::guard_change_window(world, |w| game.systems_seam(w, ctx, &mut seam));
+            }
+            None => crate::common::systems(&mut self.game, world, ctx),
+        }
 
         // Entities despawned since the last close that no hook of ours
         // despawned (game code — an NPC dying; §8.2): forget their wire

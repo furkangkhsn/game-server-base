@@ -1,7 +1,9 @@
 //! The composite's game-logic contract: a cell group key over the
 //! shard's own region, with the borrowed border strip folded in.
 //!
-//! NOT split further: a trait impl is one block.
+//! NOT split further: a trait impl is one block. (The spatial half of
+//! its `update`, shared with the sharded path's `update_seam`, follows
+//! it as an inherent method.)
 
 use bevy_ecs::prelude::World;
 use bytes::BufMut;
@@ -220,7 +222,34 @@ where
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         // Grid half: systems, range-aware orphan stamping, border-cache
         // rebuild (positions just changed).
-        self.inner.step(world, ctx);
+        self.inner.step(world, ctx, None);
+        self.spatial_step(world, ctx);
+    }
+
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<RequestDecision> {
+        self.inner.handle_request(world, ctx, req)
+    }
+
+    fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
+        self.inner.match_result(world)
+    }
+}
+
+impl<G, P, S> ShardedSpatialRoom<G, P, S>
+where
+    G: ShardGame,
+    P: Partition<Wire<G>>,
+    S: CellSpace<Wire<G>>,
+{
+    /// The spatial half of the tick body, after the grid half
+    /// (`ShardedRoom::step`) — shared by `update` and the sharded path's
+    /// `update_seam`.
+    pub(in crate::sharded) fn spatial_step(&mut self, world: &mut World, ctx: &TickCtx) {
         // Spatial half: clear the per-tick state, run the own-entity
         // dirty pass, apply parked removals — but do NOT roll yet: the
         // borrowed strip arrives later than `update` (module docs, "why
@@ -241,19 +270,6 @@ where
         // game hook never calls it — the core has no system scheduler
         // that would; see `docs/DESIGN.md` §7).
         crate::common::close_change_window(world);
-    }
-
-    fn handle_request(
-        &mut self,
-        world: &mut World,
-        ctx: &TickCtx,
-        req: &gsb_core::rpc::RpcRequest,
-    ) -> Option<RequestDecision> {
-        self.inner.handle_request(world, ctx, req)
-    }
-
-    fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {
-        self.inner.match_result(world)
     }
 }
 

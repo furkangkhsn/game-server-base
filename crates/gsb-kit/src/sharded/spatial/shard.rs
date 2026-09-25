@@ -2,7 +2,10 @@
 
 use bevy_ecs::prelude::World;
 use gsb_core::id::PlayerId;
-use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
+use gsb_core::room::{Action, TickCtx};
+use gsb_core::shard::{
+    BorderRecord, CrossSeam, EffectOutcome, Migrating, RemoteEffect, ShardLogic,
+};
 
 use crate::game::{ShardGame, Wire};
 use crate::sharded::*;
@@ -92,5 +95,34 @@ where
 
     fn own_wires(&self, world: &World) -> Vec<u64> {
         self.inner.own_wires(world)
+    }
+
+    fn ingest_seam(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+    ) {
+        self.inner.ingest_seam(world, ctx, actions, seam);
+    }
+
+    fn update_seam(&mut self, world: &mut World, ctx: &TickCtx, seam: &mut CrossSeam<'_, Wire<G>>) {
+        // `update`'s two halves, the grid half through the seam.
+        self.inner.step(world, ctx, Some(seam));
+        self.spatial_step(world, ctx);
+    }
+
+    fn apply_remote_effect(
+        &mut self,
+        world: &mut World,
+        tick: u64,
+        effect: &RemoteEffect,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+    ) -> EffectOutcome {
+        // An effect's writes and despawns land before `update`: the dirty
+        // pass and the removed-buffer sweep of this tick pick them up
+        // like any game write.
+        self.inner.apply_remote_effect(world, tick, effect, seam)
     }
 }
