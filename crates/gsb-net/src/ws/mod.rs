@@ -6,7 +6,7 @@
 //!
 //! Every WS **binary** message carries exactly ONE length-prefixed game
 //! frame `[u32 LE len][u16 LE op][payload]` — the same envelope
-//! [`crate::framed`] puts on raw TCP. WS message boundaries already delimit
+//! `crate::framed` puts on raw TCP. WS message boundaries already delimit
 //! payloads, so the inner prefix is technically redundant for framing; it is
 //! kept deliberately for *validation symmetry* with tcp.rs: the reader
 //! checks the declared length against the actual message (a mismatched or

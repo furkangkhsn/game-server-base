@@ -13,7 +13,7 @@
 //!   [`ConnIn::ServerClosed`] and stops;
 //! - the writer's **write stall**: when the socket accepts no BYTE within
 //!   the window while there is something to write, the same notification
-//!   is sent (see [`writer`] and [`WriteProgress`]).
+//!   is sent (see `writer` and [`WriteProgress`]).
 //!
 //! The reader's timeout covers a half-open TCP connection (cable pulled,
 //! power lost, no FIN/RST) that would otherwise sit in the reader forever,
@@ -101,7 +101,7 @@ pub trait WriteProgress {
 /// - `writer` consumes outbound batches and writes them to the socket;
 ///   when the socket accepts no byte for `timeouts.write_stall`, the
 ///   connection actor is notified through the SAME mailbox (see
-///   [`writer`]).
+///   `writer`).
 pub fn spawn_pumps<Reader, Writer>(
     conn: ConnectionId,
     reader: Reader,

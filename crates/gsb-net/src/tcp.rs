@@ -3,7 +3,7 @@
 //! This is the de-facto industry-standard framing for a tokio game server
 //! stack. Frame bodies are handed to the actor layer via
 //! [`gsb_protocol::FrameBody`]; the 4-byte length prefix lives in
-//! [`crate::framed`], inside this crate, and never leaks out.
+//! `crate::framed`, inside this crate, and never leaks out.
 
 use std::sync::Arc;
 

@@ -7,11 +7,11 @@
 //! **Single bi-stream + length-prefix frames = TCP semantics over QUIC;
 //! datagram mode is out of scope for v1.** The client opens exactly ONE
 //! bidirectional stream immediately after connecting; the server accepts
-//! that stream and wraps its halves in the generic [`FrameReader`] /
-//! [`FrameWriter`] adapters. Every gsb connection therefore looks byte-for-
+//! that stream and wraps its halves in the generic `FrameReader` /
+//! `FrameWriter` adapters. Every gsb connection therefore looks byte-for-
 //! byte like a TCP connection below the pump seam: ordered, reliable,
 //! backpressured frames — the actor layer cannot tell QUIC from TCP,
-//! which is the whole point of the [`Transport`] trait seam (same argument
+//! which is the whole point of the [`Transport`](crate::Transport) trait seam (same argument
 //! as TLS). Per-frame QUIC streams (one stream per frame, native
 //! head-of-line freedom) and unreliable datagrams would change the
 //! framing contract and the pump shapes; they stay undone until the
