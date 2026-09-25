@@ -173,6 +173,19 @@ impl TeamGame for Fixture {
     fn team_of(&mut self, _world: &World, conn: ConnectionId, _entity: Entity) -> Team {
         Team((conn.0 % 2) as u8)
     }
+
+    /// A named login spawns like any player and carries its identity
+    /// ([`Login`]) — what the team rooms handed the game.
+    fn spawn_team_player_as(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> (Entity, Team) {
+        let entity = self.spawn_player_as(world, conn, identity);
+        let team = self.team_of(world, conn, entity);
+        (entity, team)
+    }
 }
 
 impl ShardGame for Fixture {

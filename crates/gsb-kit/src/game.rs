@@ -133,8 +133,8 @@ pub trait Game: Send + 'static {
     /// character (its position, its shard's region — the sharded room's
     /// router sees the same identity, so the two can agree:
     /// `docs/GAME-MODULE.md`, K4). The team room does not call it (its
-    /// spawn is [`TeamGame::spawn_team_player`]). Default: `spawn_player`
-    /// — the identity is ignored.
+    /// spawn is [`TeamGame::spawn_team_player_as`]). Default:
+    /// `spawn_player` — the identity is ignored.
     fn spawn_player_as(
         &mut self,
         world: &mut World,
@@ -247,6 +247,26 @@ pub trait TeamGame: Game {
         let entity = self.spawn_player(world, conn);
         let team = self.team_of(world, conn, entity);
         (entity, team)
+    }
+
+    /// [`Self::spawn_team_player`] for a player who authenticated as
+    /// `identity` — what the team room
+    /// ([`TeamRoom`](crate::team::TeamRoom)) calls on every fresh join:
+    /// the team counterpart of
+    /// [`Game::spawn_player_as`] (`docs/GAME-MODULE.md`, K4). Override it
+    /// to place a SAVED character — its position, its faction — by the
+    /// identity; the sharded room's join router sees the same identity,
+    /// so the two can agree on the home shard. Default:
+    /// [`Self::spawn_team_player`] — the identity is ignored, and a game
+    /// that decides its team at the spawn (an arena's bases) keeps doing
+    /// exactly that.
+    fn spawn_team_player_as(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        _identity: &str,
+    ) -> (Entity, Team) {
+        self.spawn_team_player(world, conn)
     }
 
     /// The team of the player whose entity [`Game::spawn_player`] just

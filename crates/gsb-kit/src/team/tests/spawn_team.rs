@@ -1,7 +1,9 @@
 //! The team decided AT the spawn (KIT-ARCHITECTURE §10, A1): a game
 //! whose spawn point depends on the team (an arena's team bases)
 //! overrides `TeamGame::spawn_team_player`, and the team room takes the
-//! team from it — it does not ask `team_of` afterwards.
+//! team from it — it does not ask `team_of` afterwards. And the
+//! authenticated identity reaches the spawn (K4's team half:
+//! `TeamGame::spawn_team_player_as`).
 
 use std::collections::HashMap;
 
@@ -12,7 +14,7 @@ use super::*;
 use crate::common::InputSeq;
 use crate::game::{Game, TeamGame};
 use crate::space::VisionGrid2;
-use crate::testing::Fixture;
+use crate::testing::{Fixture, Login};
 
 /// The fixture game with two team bases: joins alternate between the
 /// teams by join ORDER, and each unit spawns at its team's base.
@@ -102,4 +104,35 @@ fn the_default_spawns_then_asks_team_of() {
         let want = TeamMember(Team((conn % 2) as u8));
         assert_eq!(world.get::<TeamMember>(entity), Some(&want));
     }
+}
+
+/// K4, the team half: a join with an authenticated identity reaches
+/// `spawn_team_player_as` with it (the fixture files it as the entity's
+/// `Login`); an anonymous join passes the empty identity.
+#[test]
+fn the_team_room_spawns_by_the_authenticated_identity() {
+    let mut world = World::new();
+    let mut room =
+        super::super::TeamRoom::with_game(Fixture::default(), VisionGrid2::<Position>::new(10.0));
+    let named = room.on_join_as(&mut world, ConnectionId(1), "neo");
+    let entity = room.player_entity[&named.player];
+    assert_eq!(world.get::<Login>(entity), Some(&Login("neo".into())));
+    assert_eq!(world.get::<TeamMember>(entity), Some(&TeamMember(Team(1))));
+    let anonymous = room.on_join(&mut world, ConnectionId(2));
+    let entity = room.player_entity[&anonymous.player];
+    assert_eq!(world.get::<Login>(entity), None);
+}
+
+/// The default `spawn_team_player_as` delegates to
+/// `spawn_team_player`: a game that decides its team at the spawn keeps
+/// its spawn under a named login.
+#[test]
+fn a_named_join_keeps_a_team_deciding_spawn() {
+    let mut world = World::new();
+    let mut room =
+        super::super::TeamRoom::with_game(Bases::default(), VisionGrid2::<Position>::new(10.0));
+    let admission = room.on_join_as(&mut world, ConnectionId(2), "neo");
+    let entity = room.player_entity[&admission.player];
+    assert_eq!(world.get::<Position>(entity), Some(&base(0)));
+    assert_eq!(world.get::<TeamMember>(entity), Some(&TeamMember(Team(0))));
 }

@@ -74,11 +74,17 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         // Team assignment is game policy, decided in the spawn step
-        // (`TeamGame::spawn_team_player` — by default `spawn_player`
-        // then `team_of`; the demo hashes the TRANSPORT session id, as it
-        // always has: the load generator's team distribution pairs with
-        // it; an arena overrides it to spawn at the team's base).
+        // (`TeamGame::spawn_team_player_as`, given the authenticated
+        // identity — K4; by default `spawn_team_player`, i.e.
+        // `spawn_player` then `team_of`: the demo hashes the TRANSPORT
+        // session id, as it always has — the load generator's team
+        // distribution pairs with it; an arena overrides it to spawn at
+        // the team's base).
         let mut team = None;
         let admission = crate::common::join_with(
             &mut self.game,
@@ -89,7 +95,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
             conn,
             &mut self.input,
             |game, world, conn| {
-                let (entity, t) = game.spawn_team_player(world, conn);
+                let (entity, t) = game.spawn_team_player_as(world, conn, identity);
                 team = Some(t);
                 entity
             },
