@@ -1252,7 +1252,7 @@ fn expiring_sharded_factory(grace: Duration) -> RoomFactory<(), (), (), ()> {
         };
         BuiltRoom::Sharded {
             shards: vec![shard(0), shard(1)],
-            home_shard: std::sync::Arc::new(|_conn| 0),
+            home_shard: std::sync::Arc::new(|_conn, _identity: &str| 0),
         }
     })
 }
@@ -1394,7 +1394,7 @@ fn declining_sharded_factory() -> RoomFactory<(), (), (), ()> {
         };
         BuiltRoom::Sharded {
             shards: vec![shard(0), shard(1)],
-            home_shard: std::sync::Arc::new(|_conn| 0),
+            home_shard: std::sync::Arc::new(|_conn, _identity: &str| 0),
         }
     })
 }

@@ -22,7 +22,7 @@ where
 {
     /// Admit a connection as a FRESH member: the exact body of the
     /// pre-reconnect `Join` arm (supersede own stale state, cap check,
-    /// `on_join`, register, roster, reply) — now shared by the plain
+    /// `on_join_as`, register, roster, reply) — now shared by the plain
     /// `Join` arm and the resume fallback paths, so the fallback can
     /// never drift from an ordinary join.
     pub(super) fn admit_fresh(
@@ -63,7 +63,7 @@ where
         }
         // The LOGIC mints the stable player identity here (Faz 2) — core
         // never invents player ids.
-        let admission = self.logic.on_join(&mut self.world, conn);
+        let admission = self.logic.on_join_as(&mut self.world, conn, &identity);
         self.m.joins += 1;
         let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
         self.binding.insert(conn, admission.player);

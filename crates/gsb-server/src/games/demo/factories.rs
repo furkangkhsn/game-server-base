@@ -169,7 +169,8 @@ pub(super) fn sharded_room_factory(
             .collect();
         BuiltRoom::Sharded {
             shards,
-            home_shard: Arc::new(move |conn| {
+            // The demo spawns by transport session: the identity is unused.
+            home_shard: Arc::new(move |conn, _identity: &str| {
                 let (x, y) = gsb_demo::room::spawn_pos(conn, spawn_half);
                 gsb_demo::sharded::shard_at(x, y, spawn_half, shard_count)
             }),
@@ -231,7 +232,8 @@ pub(super) fn sharded_spatial_room_factory(
             .collect();
         BuiltRoom::Sharded {
             shards,
-            home_shard: Arc::new(move |conn| {
+            // The demo spawns by transport session: the identity is unused.
+            home_shard: Arc::new(move |conn, _identity: &str| {
                 let (x, y) = gsb_demo::room::spawn_pos(conn, spawn_half);
                 gsb_demo::sharded::shard_at(x, y, spawn_half, shard_count)
             }),

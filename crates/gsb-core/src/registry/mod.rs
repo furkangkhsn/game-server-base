@@ -93,14 +93,32 @@ pub enum BuiltRoom<W, G, St, Sp> {
     /// N shard actors (indices `0..N`, the vec order) forming one logical
     /// room. `home_shard` maps a joining connection to the shard that owns
     /// its spawn point — pure and synchronous (the registry calls it at
-    /// join dispatch and never awaits it). A misrouted join self-heals:
-    /// the entity's first boundary crossing migrates it to the right
-    /// shard (at most one tick of cross-boundary staleness).
+    /// join dispatch and never awaits it); see [`HomeShard`]. A misrouted
+    /// join self-heals: the entity's first boundary crossing migrates it
+    /// to the right shard (at most one tick of cross-boundary staleness).
     Sharded {
         shards: Vec<Shard<W, G, St, Sp>>,
-        home_shard: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
+        home_shard: HomeShard,
     },
 }
+
+/// A sharded room's join router: `(connection, identity) → shard index`.
+///
+/// `identity` is the joiner's AUTHENTICATED identity — the same string
+/// the resume path keys on and the room's
+/// [`GameLogic::on_join_as`](crate::room::GameLogic::on_join_as) hook
+/// receives: the ticket's validated `player` when a ticket hook is
+/// configured, the client-claimed `Auth.name` on the legacy local-auth
+/// path (a development path: nothing authoritative stands behind the
+/// name), empty for an anonymous session. A game that places a
+/// player's saved character routes by it (docs/GAME-MODULE.md, K4); a
+/// game whose spawn derives from the transport session ignores it.
+///
+/// Pure and synchronous: the registry calls it at join dispatch and
+/// never awaits it. It is consulted only for a FRESH join: an
+/// identified join first asks every shard's park ledger (the resume
+/// broadcast), so a parked player resumes wherever it was parked.
+pub type HomeShard = Arc<dyn Fn(ConnectionId, &str) -> usize + Send + Sync>;
 
 /// Builds a room's world + logic. Provided by the composition root; the core
 /// never names the concrete game types. `G` is the game logic's group key

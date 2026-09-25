@@ -251,7 +251,7 @@ fn mmo_factory(
         let realm = Arc::clone(&realm);
         BuiltRoom::Sharded {
             shards,
-            home_shard: Arc::new(move |conn| route(&realm, conn)),
+            home_shard: Arc::new(move |conn, _identity: &str| route(&realm, conn)),
         }
     })
 }

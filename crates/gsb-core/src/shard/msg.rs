@@ -98,7 +98,8 @@ pub enum ShardMsg<S, B> {
         /// SHARDED room through this arm whenever no ledger held it (the
         /// broadcast-resume's transparent fallback, §5), and the
         /// input-idle ceiling has to be able to hand `on_disconnect` a
-        /// real resume key.
+        /// real resume key. The logic's join hook receives it too
+        /// (`GameLogic::on_join_as`, K4).
         identity: String,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,

@@ -458,7 +458,7 @@ async fn shard_death_takes_down_the_whole_logical_room() {
         ],
         // Every join homes to shard 0 (pure router; the death comes from
         // the OTHER shard — the interesting direction).
-        home_shard: Arc::new(|_conn| 0),
+        home_shard: Arc::new(|_conn, _identity: &str| 0),
     });
     let (tx, handle) = start(factory);
     let id = RoomId(23);

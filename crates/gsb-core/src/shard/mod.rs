@@ -15,7 +15,9 @@
 //!
 //! The registry spawns the N shards for one logical `RoomId`, routes each
 //! join to the shard that owns the joiner's spawn point (a pure
-//! `home_shard` function the factory supplies), and never awaits a shard
+//! `home_shard` function the factory supplies, given the connection and
+//! its authenticated identity — `crate::registry::HomeShard`), and never
+//! awaits a shard
 //! (its only interaction is channel sends — the same discipline as rooms).
 //!
 //! ## The tick body (synchronous, with the Faz 3 RPC phases)

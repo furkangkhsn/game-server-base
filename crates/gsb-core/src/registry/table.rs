@@ -2,14 +2,13 @@
 //! group), the per-connection dispatcher's operation queue, and the
 //! two tables that answer every question without awaiting a room.
 
-use std::sync::Arc;
-
 use tokio::sync::{mpsc, oneshot};
 
 use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
-use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::id::{EntityId, RoomId};
+use crate::registry::HomeShard;
 use crate::room::{Action, RoomConfig, RoomControl};
 use crate::shard::ShardMsg;
 
@@ -107,9 +106,9 @@ pub(crate) struct ShardGroup<St, Sp> {
     /// One mailbox per shard index (the registry's own senders; the
     /// shards' neighbors hold clones of the same channels).
     pub(crate) mailboxes: Vec<Mailbox<ShardMsg<St, Sp>>>,
-    /// Maps a joining connection to its home shard (pure; see
-    /// [`BuiltRoom::Sharded`]).
-    pub(crate) home: Arc<dyn Fn(ConnectionId) -> usize + Send + Sync>,
+    /// Maps a joining connection (and its authenticated identity) to its
+    /// home shard (pure; see [`HomeShard`]).
+    pub(crate) home: HomeShard,
     /// The room's membership cap (`RoomConfig::max_players`, `None` =
     /// unlimited).
     pub(crate) cap: Option<u64>,

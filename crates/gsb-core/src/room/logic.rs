@@ -185,6 +185,21 @@ pub trait GameLogic<W>: Send {
     /// (the record rides the player state, §14.2).
     fn on_join(&mut self, world: &mut W, conn: ConnectionId) -> Admission;
 
+    /// [`Self::on_join`] with the joiner's AUTHENTICATED identity — what
+    /// the room and the shard actors call on every fresh join (a resume
+    /// that finds its park never joins). `identity` is the resume key
+    /// (see [`Self::on_disconnect`]): the ticket's validated `player`,
+    /// the client-claimed `Auth.name` on the local-auth path (development
+    /// only), empty for an anonymous session. A game that places a saved
+    /// character by its player overrides this (docs/GAME-MODULE.md, K4);
+    /// the sharded room's router sees the same identity
+    /// ([`crate::registry::HomeShard`]), so the two can agree.
+    ///
+    /// Default: [`Self::on_join`] — the identity is ignored.
+    fn on_join_as(&mut self, world: &mut W, conn: ConnectionId, _identity: &str) -> Admission {
+        self.on_join(world, conn)
+    }
+
     /// A player left the room: remove its entity (and any per-player
     /// bookkeeping). Keyed by the stable [`PlayerId`] (Faz 2): a leave of
     /// ANY session of this player lands here under the same key.

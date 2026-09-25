@@ -107,7 +107,8 @@ where
         // sees every join, so it enforces the room cap here
         // (a shard cannot count the room without shared state)
         // and routes the join to the home shard (the factory's
-        // pure `home_shard` router — never awaited).
+        // pure `home_shard` router, given the authenticated
+        // identity — never awaited; K4).
         //
         // All the reads from `entry` happen BEFORE the borrow
         // ends (the `pending += 1` below re-borrows mutably).
@@ -118,7 +119,11 @@ where
                     Some(cap) => !rejoin && group.members + group.pending >= cap,
                     None => false,
                 };
-                Some((at_cap, (group.home)(conn), group.mailboxes.clone()))
+                Some((
+                    at_cap,
+                    (group.home)(conn, &identity),
+                    group.mailboxes.clone(),
+                ))
             }
             None => None,
         };
