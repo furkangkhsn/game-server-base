@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-713 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+722 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, takım odasında delta, team × sharded + senaryosu).
+
+**S tamam** (DESIGN §9.1, CHANGELOG "S turu"): `stop()` artık her zaman
+bitiyor. Registry'nin durdurma yolları (`on_shutdown`, `on_destroy_room`)
+senkron; oda/shard'a Shutdown `registry::actor::stop::post_stop` ile
+gider (yer varsa yerinde, doluysa spawn'lu gönderici). Kural: registry
+bir odanın posta kutusunu satır içinde asla beklemez — registry'nin tek
+await'i kendi posta kutusu.
 
 **H tamam** (DESIGN §6 "El sıkışma kaybı", SECURITY §4.2, CHANGELOG
 "H turu"): rUDP `connect` sunucunun kabulünü (`ACK{1}`) bekliyor, kayıp
@@ -392,6 +399,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 713 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 722 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

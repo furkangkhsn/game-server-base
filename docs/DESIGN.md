@@ -1524,6 +1524,14 @@ uçtan uca kurar (10 Hz, `room_control = 2`, 24 üye, kopuştan ~150 ms
 sonra `stop()`, tek oda + shard'lı), `stop()`'un 10 sn içinde
 bittiğini doğrular. Düzeltmesiz kodda beşi de 5/5 koşuda kilitlendi.
 `post_stop` birim testleri dolu kanalda mesajın kaybolmadığını pinler.
+`gsb-core/tests/shutdown/destroy.rs` ticker ÇALIŞIRKEN sharded bir odanın
+çalışma zamanında yok edilmesini kilitler: her shard teardown'unu tam bir
+kez koşar — düz durumda ve posta kutuları DETACH'lerle doluyken (4 Hz,
+kapasite 2; registry hemen döner, spawn'lu gönderici shard'lar kuyruğu
+eritince Shutdown'ı teslim eder). Ebeveynin bağımsız mutasyonu (sharded
+kolu hiçbir şey göndermez) ilk hâlde hiçbir testi kırmıyordu — tam
+sunucu durdurmada zararsız, runtime destroy'da shard sızıntısı; bu iki
+test o boşluğu kapatır.
 Loadgen (TCP, süreç içi, 500 istemci): `--game arena
 --write-stall-secs 0` ve `--game mmo` 4'er koşu. Hepsi bitti,
 `joined = left = 500`, `errors=0`. Düzeltmesiz kod da 2+2

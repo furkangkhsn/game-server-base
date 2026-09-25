@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## S turu — çekirdek kapanış kilitlenmesi (`core/s-shutdown-hang`)
+
+`ServerHandle::stop` artık her zaman bitiyor (DESIGN §9.1, BACKLOG §1
+satır 4a). Kök neden: `stop()` Shutdown'ı kuyruklayıp ticker'ı hemen
+iptal ediyordu; stop anında kontrol kapasitesinden (128) fazla üye
+koparsa DETACH'ler oda kanalını dolduruyor, registry satır içi
+`send(Shutdown).await`'te sonsuza dek bekliyordu — elindeki `Ticker`
+yüzünden broadcast kapanmıyor, oda `Closed`'u, toplayıcı da sonunu hiç
+görmüyordu. Aynı sınıftan ikinci bekleme destroy yolundaydı (stop'la
+yarışan bir `DestroyRoom` kontrol düzlemini tıkıyordu).
+
+- **Düzeltme:** `registry/actor/stop.rs` — `post_stop`: yer varsa
+  `try_send`, kanal doluysa spawn'lu gönderici, oda yoksa hiçbir şey.
+  `on_shutdown`/`on_destroy_room` senkron; registry her zaman çıkıp
+  `Ticker`'ını düşürüyor, oda `Closed`'dan çıkıp `on_shutdown` +
+  `match_result`'u koşuyor. Ticker çalışıyorsa Shutdown sırayla teslim
+  edilir. Kural: registry'nin tek await'i kendi posta kutusu. Wire
+  baytları değişmedi; B12 (istemciye kapanış bildirimi) bu turda yok.
+- **Elenen:** yalnız `try_send` (dolu kanalda at — ticker çalışırken oda
+  hiç durmaz), ticker'ı registry bitince iptal etmek (sınırsız bekleme),
+  odanın `Closed`'da kanalı boşaltması (kilidi çözmez), registry'nin
+  `Ticker`'ı erken düşürmesi (destroy yolunu çözmez), büyük/sınırsız
+  kanal.
+- **Testler:** `gsb-core/tests/shutdown.rs` (tek oda, shard'lı, destroy;
+  ticker önce iptal, 12 üye / kapasite 2), `shutdown/destroy.rs` (ticker
+  çalışırken sharded destroy, düz ve dolu posta kutusu),
+  `gsb-server/tests/server_stop.rs` (gerçek TCP), `post_stop` birim
+  testleri. Düzeltmesiz kodda entegrasyon testleri 5/5 koşuda kilitlendi;
+  yeni testler 20× yeşil. Ebeveynin bağımsız mutasyonu (sharded kolda
+  hiçbir şey göndermemek) ilk teslimde hiçbir testi kırmıyordu — eskiden
+  beri var olan kapsam boşluğu; ajan `destroy.rs`'i ekledi, mutasyon
+  artık 2 testi kırıyor. Loadgen 500 (arena, MMO; TCP) her koşu bitti,
+  `errors=0`. Testler 713 → 722 (+9).
+
 ## H turu — rUDP el sıkışma kaybı (`net/h-udp-handshake`)
 
 İstemci proof'u GÖNDERİNCE kendini bağlı sayıyordu; aynı anda 200+ el
