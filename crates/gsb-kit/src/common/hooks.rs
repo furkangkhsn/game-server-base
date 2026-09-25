@@ -103,7 +103,9 @@ pub(crate) fn ingest<G: Game>(
 /// [`ingest`] on the sharded path: the same bot input and sequence rule,
 /// with the game's seam hook
 /// ([`ShardGame::ingest_seam`](crate::game::ShardGame::ingest_seam)).
-#[allow(clippy::too_many_arguments)] // `ingest`'s seven plus the seam
+/// No bot drives an entity in `handed_on` (the copies of the entities
+/// the shard handed on last tick: their new owner's bot drives them).
+#[allow(clippy::too_many_arguments)] // `ingest`'s seven plus the seam and the copies
 pub(crate) fn ingest_seam<G: crate::game::ShardGame>(
     game: &mut G,
     world: &mut World,
@@ -111,12 +113,13 @@ pub(crate) fn ingest_seam<G: crate::game::ShardGame>(
     actions: &mut Vec<Action>,
     players: &HashMap<PlayerId, Entity>,
     park_ledger: &HashMap<String, ParkEntry>,
+    handed_on: &[Entity],
     input: &mut InputSeq,
     seam: &mut crate::sharded::Seam<'_, '_, crate::game::Wire<G>>,
 ) {
     let bots = park_ledger
         .values()
-        .filter(|e| e.bot)
+        .filter(|e| e.bot && !handed_on.contains(&e.entity))
         .map(|e| (e.player, e.entity));
     game.bot_actions(world, ctx, bots, actions);
     guard_change_window(world, |w| {

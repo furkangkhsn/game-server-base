@@ -146,6 +146,7 @@
 //! component writes) so the seam cell's delta carries the exit.
 
 mod crystal;
+mod departing;
 mod mig;
 mod room;
 mod seam;

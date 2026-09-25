@@ -60,14 +60,19 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         // reported to exactly one neighbor.
         let mut crossing: Vec<(Entity, u64)> = Vec::new();
         {
-            let mut query = world.query_filtered::<(Entity, &WireId, &P::Pos), With<Marker<G>>>();
+            let mut query = world
+                .query_filtered::<(Entity, &WireId, &P::Pos, RecordQuery<G>), With<Marker<G>>>();
             let crystal = self.crystal.as_ref();
-            for (entity, wire, pos) in query.iter(world) {
+            let codec = self.game.codec();
+            for (entity, wire, pos, record) in query.iter(world) {
                 let region = crystal
                     .and_then(|c| c.anchor(wire.get()))
                     .unwrap_or_else(|| self.partition.region_of(pos));
                 if region != self.index && self.route[region] == neighbor {
                     crossing.push((entity, wire.get()));
+                    // What the neighbours will see of it until its new
+                    // owner lends it: its record as it leaves.
+                    self.departures.record(wire.get(), codec.wire(record));
                 }
             }
         }
@@ -184,6 +189,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         if let Some(crystal) = self.crystal.as_mut() {
             crystal.leave(wire);
         }
+        self.departures.forget(wire);
         if let Some(entity) = self.wire_entity.remove(&wire)
             && world.get_entity(entity).is_ok()
         {
@@ -229,6 +235,8 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         actions: &mut Vec<Action>,
         seam: &mut CrossSeam<'_, Wire<G>>,
     ) {
+        let own = &self.wire_entity;
+        self.departures.hide(world, own, seam);
         crate::common::ingest_seam(
             &mut self.game,
             world,
@@ -236,8 +244,9 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             actions,
             &self.player_entity,
             &self.park_ledger,
+            self.departures.hidden(),
             &mut self.input,
-            &mut Seam::new(seam, &self.wire_entity, self.crystal.as_mut()),
+            &mut Seam::new(seam, own, &self.departures, self.crystal.as_mut()),
         );
     }
 
@@ -262,7 +271,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         if world.get_entity(target).is_err() {
             return EffectOutcome::NoTarget;
         }
-        let mut seam = Seam::new(seam, &self.wire_entity, self.crystal.as_mut());
+        // The first hook of the tick, when effects are due: the copies
+        // handed on last tick leave the game's view from here on.
+        let own = &self.wire_entity;
+        self.departures.hide(world, own, seam);
+        let mut seam = Seam::new(seam, own, &self.departures, self.crystal.as_mut());
         let game = &mut self.game;
         let outcome = crate::common::guard_change_window(world, |w| {
             game.apply_remote_effect(w, target, effect, tick, &mut seam)

@@ -116,15 +116,16 @@ impl Crystal {
     }
 
     /// `source` acted on `target` at `tick` (either may be a wire this
-    /// shard owns — `own`). A held entity's clock restarts; a pair that
-    /// crosses the seam goes in the fight table (a local pair cannot
-    /// crystallize — there is nothing to move).
+    /// shard owns — `own` answers; an entity handed on last tick is not
+    /// owned). A held entity's clock restarts; a pair that crosses the
+    /// seam goes in the fight table (a local pair cannot crystallize —
+    /// there is nothing to move).
     pub(in crate::sharded) fn contact(
         &mut self,
         source: u64,
         target: u64,
         tick: u64,
-        own: &HashMap<u64, Entity>,
+        own: impl Fn(u64) -> bool,
     ) {
         if source == target || source == 0 || target == 0 {
             return;
@@ -134,7 +135,7 @@ impl Crystal {
                 pin.last = pin.last.max(tick);
             }
         }
-        if !(own.contains_key(&source) && own.contains_key(&target)) {
+        if !(own(source) && own(target)) {
             self.book.touch(source, target, tick, self.policy.window);
         }
     }

@@ -235,7 +235,10 @@ pub trait ShardGame: Game {
     type Mig: Debug + Send + 'static;
 
     /// Capture `entity`'s game state on the sending shard (it is
-    /// despawned there on the next tick by the core's protocol).
+    /// despawned there on the next tick by the core's protocol). Once
+    /// the move has committed, the game's hooks of that next tick no
+    /// longer find the copy — it is lent by its new owner
+    /// ([`Seam`], "the migration tick"): what they do to it lands there.
     fn capture(&self, world: &World, entity: Entity) -> Self::Mig;
 
     /// Rebuild a migrated entity on the receiving shard from its

@@ -13,6 +13,7 @@ use crate::common::{InputSeq, ParkEntry, ParkPolicy};
 use crate::game::{Game, ShardGame, Wire};
 use crate::identity::{Minter, WireId};
 use crate::sharded::crystal::Crystal;
+use crate::sharded::departing::Departures;
 use crate::sharded::*;
 use crate::space::Partition;
 
@@ -103,6 +104,10 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// [`Self::with_crystallize`]): the fight table and the pins that
     /// decouple a fighting entity's owner from its region.
     pub(in crate::sharded) crystal: Option<Crystal>,
+    /// The entities this shard hands on: their captured records, and
+    /// the doomed copies the game's hooks of the next tick do not see
+    /// (`crate::sharded::departing`).
+    pub(in crate::sharded) departures: Departures<Wire<G>>,
 }
 
 impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
@@ -129,6 +134,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             encoded: 0,
             input: InputSeq::default(),
             crystal: None,
+            departures: Departures::default(),
         }
     }
 
@@ -163,9 +169,14 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
     ) {
         match seam.as_deref_mut() {
             Some(cross) => {
-                let mut seam = Seam::new(cross, &self.wire_entity, self.crystal.as_mut());
+                let own = &self.wire_entity;
+                self.departures.hide(world, own, cross);
+                let mut seam = Seam::new(cross, own, &self.departures, self.crystal.as_mut());
                 let game = &mut self.game;
                 crate::common::guard_change_window(world, |w| game.systems_seam(w, ctx, &mut seam));
+                // The game's hooks of the tick are over: the doomed copies
+                // are back for the passes below (and the border export).
+                self.departures.show(world);
             }
             None => crate::common::systems(&mut self.game, world, ctx),
         }
@@ -179,6 +190,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             if let Some(wire) = self.entity_wire.remove(&entity) {
                 self.wire_entity.remove(&wire);
                 self.entity_player.remove(&entity);
+                self.departures.forget(wire);
             }
         }
 
