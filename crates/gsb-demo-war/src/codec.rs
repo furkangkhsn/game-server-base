@@ -1,17 +1,18 @@
 //! The war game's [`RecordCodec`] (KIT-ARCHITECTURE §4.1): every unit
 //! with a [`Pos3`] is broadcast; its record is the position QUANTIZED to
-//! integer decimetres plus its [`Unit`] — [`WarWire`], written as
-//! `war.proto`'s `UnitRecord { entity = 1; x, y, z = 2..4; kind = 5;
-//! faction = 6; hp = 7 }`. `Dirty` is position OR unit changed (a
-//! player losing hit points, a point changing hands, is news).
+//! integer decimetres plus its [`Unit`] — [`WarWire`], written in the
+//! kit's RECORD RUN (A31, [`RecordCodec::RUN`]) as a packed,
+//! self-delimiting body of tagless varints ([`write_body`], layout in
+//! `codec/run.rs`); a client keeps it as `war.proto`'s `UnitRecord`
+//! ([`read_record`]). `Dirty` is position OR unit changed (a player
+//! losing hit points, a point changing hands, is news).
 //!
 //! **Decimetres, rounded to nearest (`i32`)** — the MMO's choice for the
 //! same reasons: on the 1 600 m map every ground coordinate is at most
 //! ±8 000 dm, a 2-byte zig-zag varint; a player running 7 m/s is a new
 //! value every 30 Hz tick, a standing one costs nothing; rounding (not
 //! truncation) keeps the cell at the seams x = 0 and z = 0 as wide as
-//! any other. A unit on the ground (`y` = 0) and faction 0 are proto3
-//! defaults: not written.
+//! any other. A unit on the ground (`y` = 0) writes no height.
 //!
 //! **The faction on the wire is 1-based** (`0` = none): the team fog
 //! frame does not say which records are allies — the record does.
@@ -20,15 +21,12 @@
 //! position's unit — the kit's `Planar` unit contract, which
 //! `GridPartition2::admits` relies on).
 
+use crate::components::{Kind, Pos3, Unit};
 use bevy_ecs::prelude::{Changed, Or};
 use bytes::BytesMut;
 use gsb_kit::codec::RecordCodec;
 use gsb_kit::space::Planar;
 use gsb_kit::team::Team;
-use prost::Message;
-
-use crate::components::{Kind, Pos3, Unit};
-use crate::war::UnitRecord;
 
 /// One unit's quantized record — the game's wire value (and the border
 /// strip's payload: `Strip = Wire`).
@@ -122,21 +120,20 @@ impl RecordCodec for WarCodec {
         WarWire::of(pos, unit)
     }
 
+    /// The war rides the kit's record run (A31): its records are the
+    /// packed bodies of [`write_body`], back to back in the frame's one
+    /// run, each behind the id the kit writes.
+    const RUN: bool = true;
+
     #[inline]
-    fn encode(&self, id: u64, w: &WarWire, out: &mut BytesMut) {
-        UnitRecord {
-            entity: id,
-            x: w.x,
-            y: w.y,
-            z: w.z,
-            kind: w.kind as i32,
-            faction: u32::from(w.faction),
-            hp: u32::from(w.hp),
-        }
-        .encode(out)
-        .expect("protobuf encode into an in-memory buffer failed");
+    fn encode(&self, _id: u64, w: &WarWire, out: &mut BytesMut) {
+        write_body(w, out);
     }
 }
+
+mod run;
+
+pub use run::{read_body, read_record, write_body};
 
 #[cfg(test)]
 mod tests;

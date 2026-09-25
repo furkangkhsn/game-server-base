@@ -1,6 +1,5 @@
 use bytes::BytesMut;
 use gsb_kit::space::Partition;
-use prost::Message;
 
 use super::*;
 use crate::world::{WORLD_HALF, partition};
@@ -50,47 +49,107 @@ fn wire_factions_are_one_based() {
     assert_eq!(team_of_wire(1 << 20), None);
 }
 
-/// The codec's record body is exactly the typed `UnitRecord`; a unit on
-/// the ground of faction none writes neither field.
+/// The war rides the kit's record run; its body (`codec/run.rs`) is
+/// pinned byte for byte: a walking player of faction 2 at (-12.3, 45.6)
+/// m with 75 hp, a tower on its platform, a neutral point.
 #[test]
-fn record_body_is_the_unit_record_encoding() {
-    for id in [1u64, 127, 128, 3 << 20, u64::MAX] {
-        for (i, x) in SAMPLES.into_iter().enumerate() {
-            let (y, z) = (SAMPLES[(i + 3) % 8], SAMPLES[(i + 5) % 8]);
-            let faction = (i % 4) as u8;
-            let mut out = BytesMut::new();
-            WarCodec.encode(id, &wire(x, y, z, faction), &mut out);
-            let typed = UnitRecord {
-                entity: id,
+fn the_run_body_is_pinned() {
+    const { assert!(<WarCodec as RecordCodec>::RUN) };
+    let body = |w: &WarWire| {
+        let mut out = BytesMut::new();
+        WarCodec.encode(7, w, &mut out);
+        out.to_vec()
+    };
+    let player = WarWire {
+        x: -123,
+        y: 0,
+        z: 456,
+        kind: Kind::Player,
+        faction: 2,
+        hp: 75,
+    };
+    // head 2 | 2 << 3 = 18; x zigzag 245; z zigzag 912; hp 75.
+    assert_eq!(body(&player), [0x12, 0xF5, 0x01, 0x90, 0x07, 0x4B]);
+    let tower = WarWire {
+        kind: Kind::Tower,
+        y: 120,
+        hp: 0,
+        faction: 3,
+        ..player
+    };
+    // head 1 | 4 | 24 = 29; y zigzag 240 after z; hp 0.
+    assert_eq!(
+        body(&tower),
+        [0x1D, 0xF5, 0x01, 0x90, 0x07, 0xF0, 0x01, 0x00]
+    );
+    let point = WarWire {
+        kind: Kind::Point,
+        faction: 0,
+        hp: 0,
+        ..player
+    };
+    assert_eq!(body(&point), [0x06, 0xF5, 0x01, 0x90, 0x07, 0x00]);
+}
+
+/// Every record round-trips, back to back in one run (the body is
+/// self-delimiting: each read ends exactly where the next body starts).
+#[test]
+fn run_bodies_round_trip_back_to_back() {
+    let mut run = BytesMut::new();
+    let mut want = Vec::new();
+    for (i, x) in SAMPLES.into_iter().enumerate() {
+        let (y, z) = (SAMPLES[(i + 3) % 8], SAMPLES[(i + 5) % 8]);
+        for (kind, faction, hp) in [
+            (Kind::Player, 1, 100),
+            (Kind::Tower, 3, 0),
+            (Kind::Point, 0, 7),
+        ] {
+            let w = WarWire {
                 x,
                 y,
                 z,
-                kind: crate::war::Kind::Player as i32,
-                faction: u32::from(faction),
-                hp: 75,
+                kind,
+                faction,
+                hp,
             };
-            assert_eq!(
-                &out[..],
-                &typed.encode_to_vec()[..],
-                "({id}, {x}, {y}, {z})"
-            );
+            WarCodec.encode(9, &w, &mut run);
+            want.push(w);
         }
     }
-    let mut out = BytesMut::new();
-    WarCodec.encode(5, &wire(10, 0, 20, 0), &mut out);
-    let decoded = UnitRecord::decode(&out[..]).expect("a record");
-    assert_eq!((decoded.y, decoded.faction), (0, 0));
-    assert_eq!(out.len(), 2 + 2 + 2 + 2 + 2, "entity, x, z, kind, hp");
+    let mut rest = &run[..];
+    for w in want {
+        assert_eq!(read_body(&mut rest), Ok(w));
+    }
+    assert!(rest.is_empty());
 }
 
-/// Every ground coordinate on the map stays a 2-byte varint.
+/// A truncated body, a kind 0 and a faction past a byte are malformed.
+#[test]
+fn a_bad_run_body_is_malformed() {
+    for bad in [
+        &[0x12, 0xF5][..],
+        &[0x10, 0x00, 0x00, 0x00][..],
+        &[0x82, 0x10, 0, 0, 0][..],
+    ] {
+        assert!(read_body(&mut &bad[..]).is_err(), "{bad:?}");
+    }
+}
+
+/// On the ground, anywhere on the map, a unit's body is 6 bytes; off
+/// the ground (a platform), at a map corner, 8.
 #[test]
 fn a_map_corner_record_is_small() {
     let mut out = BytesMut::new();
     let corner = wire(-to_dm(WORLD_HALF), 120, to_dm(WORLD_HALF), 3);
     WarCodec.encode(1, &corner, &mut out);
-    // entity 2, x 3, y 3, z 3, kind 2, faction 2, hp 2.
-    assert_eq!(out.len(), 17);
+    assert_eq!(out.len(), 8, "head, x 2, z 2, y 2, hp");
+    out.clear();
+    WarCodec.encode(
+        1,
+        &wire(to_dm(WORLD_HALF), 0, -to_dm(WORLD_HALF), 1),
+        &mut out,
+    );
+    assert_eq!(out.len(), 6, "head, x 2, z 2, hp");
 }
 
 /// The wire's `Planar` is in metres (the position's unit): the shard

@@ -1,11 +1,12 @@
 //! The war client's view: the kit's reference client
 //! (`gsb_kit::client::ClientView`, the client rules of gsb-kit's
-//! `kit.proto`) over the war's decode seam — a faction full replaces the
+//! `kit.proto`) over the war's decode seam (the war's records ride the
+//! kit's record run) — a faction full replaces the
 //! view, a delta with a baseline applies `removed` then the upserts, a
 //! one-shot private full replaces it; the session's `Welcome` (the kit's
 //! `Private.game`) is kept by the decoder.
 
-use gsb_demo_war::codec::to_dm;
+use gsb_demo_war::codec::{read_record, to_dm};
 use gsb_demo_war::op;
 use gsb_demo_war::war::{self, Kind, UnitRecord, Welcome};
 use gsb_demo_war::world::VISION_RADIUS;
@@ -14,8 +15,9 @@ use prost::Message;
 
 use super::{Client, View};
 
-/// The war's decode seam: a record kept whole; no cell exits on a team
-/// frame; the welcome kept.
+/// The war's decode seam: the war rides the kit's record run — a record
+/// is read off the run and kept whole; no cell exits on a team frame;
+/// the welcome kept.
 #[derive(Default)]
 pub struct WarDecoder {
     pub welcomes: Vec<Welcome>,
@@ -25,9 +27,16 @@ impl ClientDecoder for WarDecoder {
     type Record = UnitRecord;
     type Cell = ();
 
-    fn record(&self, body: &[u8]) -> Result<(u64, UnitRecord), ClientError> {
-        let r = UnitRecord::decode(body)?;
-        Ok((r.entity, r))
+    const RUN: bool = true;
+
+    fn record(&self, _body: &[u8]) -> Result<(u64, UnitRecord), ClientError> {
+        Err(ClientError::Malformed(
+            "the war's records ride the record run",
+        ))
+    }
+
+    fn run_record(&self, id: u64, run: &mut &[u8]) -> Result<UnitRecord, ClientError> {
+        read_record(id, run)
     }
 
     fn cell_of(&self, _: &UnitRecord) {}

@@ -1,65 +1,82 @@
-//! The war bot: its hand-walked record pinned to the generated
-//! `UnitRecord` decoder, the faction read off the `Welcome`, its roster
-//! (every post held by all three factions, spread over the four shards)
-//! and its input mix (silent until welcomed and in view; then numbered,
-//! striking only an enemy player within reach).
+//! The war bot: its run records read by the war's own reader, the
+//! faction read off the `Welcome`, its roster (every post held by all
+//! three factions, spread over the four shards) and its input mix
+//! (silent until welcomed and in view; then numbered, striking only an
+//! enemy player within reach).
+
+use bytes::BytesMut;
+use prost::encoding::encode_varint;
 
 use super::*;
-use gsb_demo_war::war::{Private, UnitRecord, WorldSnapshot};
+use gsb_demo_war::codec::{WarWire, write_body};
+use gsb_demo_war::components::Kind as UnitKind;
+use gsb_demo_war::war::{Private, WorldSnapshot};
 use gsb_demo_war::world::home_shard;
 
-/// Every sample record decodes to what the generated decoder reads
-/// (unknown fields skipped); what it rejects, the walk rejects.
-#[test]
-fn the_hand_walked_record_matches_the_generated_decoder() {
-    let coords = [0, 1, -1, 640, -641, 8_000, -8_000, 120, i32::MAX, i32::MIN];
-    for entity in [0u64, 1, 128, u64::MAX] {
-        for (i, x) in coords.into_iter().enumerate() {
-            for (kind, faction) in [(0, 0), (1, 1), (2, 3), (3, 0), (-1, 7)] {
-                let (y, z) = (coords[(i + 3) % 10], coords[(i + 7) % 10]);
-                let hp = (i as u32) * 25;
-                let body = UnitRecord {
-                    entity,
-                    x,
-                    y,
-                    z,
-                    kind,
-                    faction,
-                    hp,
-                }
-                .encode_to_vec();
-                let t = UnitRecord::decode(&body[..]).expect("generated decodes");
-                let (id, r) = WarDecoder::default().record(&body).expect("hand decodes");
-                assert_eq!(
-                    (id, r.x, r.z, r.kind, r.faction, r.hp),
-                    (t.entity, t.x, t.z, t.kind, t.faction, t.hp)
-                );
-            }
-        }
-    }
-    for bad in [&[0x08][..], &[0x0A, 0x00][..], &[0x38, 0x80][..]] {
-        assert!(UnitRecord::decode(bad).is_err(), "{bad:?}");
-        assert!(WarDecoder::default().record(bad).is_err(), "{bad:?}");
+/// A war unit of the wire's `kind` (1 player, 2 tower, 3 point).
+fn unit(x: i32, z: i32, kind: Kind, faction: u32, hp: u16) -> WarWire {
+    WarWire {
+        x,
+        y: 0,
+        z,
+        kind: match kind {
+            Kind::Tower => UnitKind::Tower,
+            Kind::Point => UnitKind::Point,
+            _ => UnitKind::Player,
+        },
+        faction: faction as u8,
+        hp,
     }
 }
 
-/// Full snapshot `sequence` holding `(id, x, z, kind, faction)` records
-/// (dm).
-fn full(sequence: u64, records: &[(u64, i32, i32, Kind, u32)]) -> Vec<u8> {
-    WorldSnapshot {
-        sequence,
-        entities: records
-            .iter()
-            .map(|&(entity, x, z, kind, faction)| UnitRecord {
-                entity,
+/// Records written by the war's codec, back to back, read back through
+/// the bot's decoder (as the kit's view calls it: id, then the body off
+/// the front of the rest) — every field the bot keeps, and a truncated
+/// body is an error.
+#[test]
+fn the_bot_reads_the_wars_run_records() {
+    let coords = [0, 1, -1, 640, -641, 8_000, -8_000];
+    let mut run = BytesMut::new();
+    let mut want = Vec::new();
+    for (i, x) in coords.into_iter().enumerate() {
+        for (kind, faction, hp) in [
+            (Kind::Player, 1, 100),
+            (Kind::Tower, 3, 0),
+            (Kind::Point, 0, 5),
+        ] {
+            let z = coords[(i + 3) % coords.len()];
+            let w = unit(x, z, kind, faction, hp);
+            encode_varint(i as u64 + 1, &mut run);
+            write_body(&w, &mut run);
+            want.push(WarRecord {
                 x,
-                y: 0,
                 z,
                 kind: kind as i32,
                 faction,
-                hp: 100,
-            })
-            .collect(),
+                hp: u32::from(hp),
+            });
+        }
+    }
+    let (dec, mut rest) = (WarDecoder::default(), &run[..]);
+    for w in want {
+        let _id = gsb_kit::client::wire::varint(&mut rest).expect("an id");
+        assert_eq!(dec.run_record(0, &mut rest).expect("a record"), w);
+    }
+    assert!(rest.is_empty());
+    assert!(dec.run_record(0, &mut &[0x12, 0xF5][..]).is_err());
+}
+
+/// Full snapshot `sequence` holding `(id, x, z, kind, faction)` records
+/// (dm), in the war's record run.
+fn full(sequence: u64, records: &[(u64, i32, i32, Kind, u32)]) -> Vec<u8> {
+    let mut run = BytesMut::new();
+    for &(entity, x, z, kind, faction) in records {
+        encode_varint(entity, &mut run);
+        write_body(&unit(x, z, kind, faction, 100), &mut run);
+    }
+    WorldSnapshot {
+        sequence,
+        records: run.to_vec(),
         removed: vec![],
         delta: false,
     }

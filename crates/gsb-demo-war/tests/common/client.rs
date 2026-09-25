@@ -4,7 +4,7 @@
 //!
 //! Stream invariants are asserted on every batch: at most one snapshot
 //! and one private frame per tick, and no frame lists a wire id twice
-//! (checked on the game's typed mirror).
+//! (checked on the game's typed mirror and its record run).
 
 use std::collections::BTreeSet;
 
@@ -13,13 +13,15 @@ use gsb_core::PlayerId;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::id::ConnectionId;
 use gsb_core::room::Action;
-use gsb_demo_war::codec::to_dm;
+use gsb_demo_war::codec::{read_record, to_dm};
 use gsb_demo_war::op;
 use gsb_demo_war::war::{self, Private, UnitRecord, Welcome, WorldSnapshot, private};
+use gsb_kit::client::wire::varint;
 use gsb_kit::client::{ClientDecoder, ClientError, ClientView, PrivateEvent};
 use prost::Message;
 
-/// The game's decode seam: a record is kept whole; team frames carry no
+/// The game's decode seam: the war's records ride the kit's record run
+/// (a record is read off the run and kept whole); team frames carry no
 /// cell exits; the session payload is the `Welcome`, kept.
 #[derive(Default)]
 pub struct WarDecoder {
@@ -31,9 +33,16 @@ impl ClientDecoder for WarDecoder {
     type Record = UnitRecord;
     type Cell = ();
 
-    fn record(&self, body: &[u8]) -> Result<(u64, UnitRecord), ClientError> {
-        let r = UnitRecord::decode(body)?;
-        Ok((r.entity, r))
+    const RUN: bool = true;
+
+    fn record(&self, _body: &[u8]) -> Result<(u64, UnitRecord), ClientError> {
+        Err(ClientError::Malformed(
+            "the war's records ride the record run",
+        ))
+    }
+
+    fn run_record(&self, id: u64, run: &mut &[u8]) -> Result<UnitRecord, ClientError> {
+        read_record(id, run)
     }
 
     fn cell_of(&self, _: &UnitRecord) {}
@@ -191,10 +200,17 @@ impl Client {
 }
 
 fn assert_unique(s: &WorldSnapshot) {
-    let ids: BTreeSet<u64> = s.entities.iter().map(|r| r.entity).collect();
+    let mut run = &s.records[..];
+    let mut ids = Vec::new();
+    while !run.is_empty() {
+        let id = varint(&mut run).expect("an id");
+        read_record(id, &mut run).expect("a record");
+        ids.push(id);
+    }
+    let unique: BTreeSet<u64> = ids.iter().copied().collect();
     assert_eq!(
+        unique.len(),
         ids.len(),
-        s.entities.len(),
-        "a frame listed a unit twice: {s:?}"
+        "a frame listed a unit twice: {ids:?}"
     );
 }

@@ -42,11 +42,10 @@ use std::f64::consts::TAU;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use gsb_demo_war::codec::to_dm;
+use gsb_demo_war::codec::{read_body, to_dm};
 use gsb_demo_war::op;
 use gsb_demo_war::war::{Attack, Kind, MoveTo, Welcome};
 use gsb_demo_war::world::{ATTACK_RANGE, FACTIONS, POINTS, SHARDS, tower};
-use gsb_kit::client::wire::{Fields, Value, sint32};
 use gsb_kit::client::{ClientDecoder, ClientError, ClientView, Counters, PrivateEvent, Snapshot};
 use gsb_kit::team::Team;
 use prost::Message;
@@ -296,12 +295,12 @@ impl WarRecord {
     }
 }
 
-/// The war's decode seam: a record walked by hand (`UnitRecord { uint64
-/// entity = 1; sint32 x = 2; sint32 y = 3; sint32 z = 4; Kind kind = 5;
-/// uint32 faction = 6; uint32 hp = 7; }` — pinned to the generated
-/// decoder by this module's tests); team frames carry no cell exits; the
-/// session payload is the `Welcome` (decoded with the generated type —
-/// once per session), whose faction the decoder keeps.
+/// The war's decode seam: the war rides the kit's record run
+/// (`war.proto`, RECORDS) — a record is read off the run with the war's
+/// own reader (`gsb_demo_war::codec::read_body`: a handful of varints,
+/// no per-record setup); team frames carry no cell exits; the session
+/// payload is the `Welcome` (decoded with the generated type — once per
+/// session), whose faction the decoder keeps.
 #[derive(Default)]
 pub(crate) struct WarDecoder {
     /// The own faction, 1-based (`None` until welcomed).
@@ -312,24 +311,24 @@ impl ClientDecoder for WarDecoder {
     type Record = WarRecord;
     type Cell = ();
 
+    const RUN: bool = true;
+
+    fn record(&self, _body: &[u8]) -> Result<(u64, WarRecord), ClientError> {
+        Err(ClientError::Malformed(
+            "the war's records ride the record run",
+        ))
+    }
+
     #[inline]
-    fn record(&self, body: &[u8]) -> Result<(u64, WarRecord), ClientError> {
-        let (mut entity, mut r) = (0, WarRecord::default());
-        for field in Fields::new(body) {
-            match field? {
-                (1, Value::Varint(v)) => entity = v,
-                (2, Value::Varint(v)) => r.x = sint32(v),
-                (3, Value::Varint(_)) => {}
-                (4, Value::Varint(v)) => r.z = sint32(v),
-                // An enum is an `int32` on the wire: the low 32 bits.
-                (5, Value::Varint(v)) => r.kind = v as i32,
-                (6, Value::Varint(v)) => r.faction = v as u32,
-                (7, Value::Varint(v)) => r.hp = v as u32,
-                (1..=7, _) => return Err(ClientError::Malformed("wrong wire type")),
-                _ => {}
-            }
-        }
-        Ok((entity, r))
+    fn run_record(&self, _id: u64, run: &mut &[u8]) -> Result<WarRecord, ClientError> {
+        let w = read_body(run)?;
+        Ok(WarRecord {
+            x: w.x,
+            z: w.z,
+            kind: w.kind as i32,
+            faction: u32::from(w.faction),
+            hp: u32::from(w.hp),
+        })
     }
 
     #[inline]

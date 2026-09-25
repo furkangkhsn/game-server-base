@@ -4,16 +4,30 @@
 // Two kinds of messages live here:
 //
 // - the game's OWN messages: its inputs (`MoveTo`, `Attack`), its
-//   entity record (`UnitRecord`, the body the game's
-//   `RecordCodec::encode` writes) and its session payload (`Welcome`);
+//   unit record's content (`UnitRecord` — see RECORDS below) and its
+//   session payload (`Welcome`);
 // - its client-facing TYPED MIRRORS of the kit's envelope
 //   (`gsb.kit.WorldSnapshot`, `gsb.kit.Private` in gsb-kit's
-//   `kit.proto`). The kit writes those frames with OPAQUE record bodies
-//   (`repeated bytes entities = 2`, `bytes game = 4`); a typed message
-//   under the same number is the same bytes on the wire (both
+//   `kit.proto`). The kit writes those frames with OPAQUE game bytes
+//   (the record run `bytes records = 6`, `bytes game = 4`); a typed
+//   message under the same number is the same bytes on the wire (both
 //   length-delimited), so a war client decodes the kit's frames with the
 //   mirror unchanged. `tests/wire.rs` pins the two definitions to
 //   identical bytes. The kit's `InputAck` is used as is (imported).
+//
+// RECORDS (since A31): the war rides the kit's RECORD RUN — a frame's
+// units are back to back in `WorldSnapshot.records`, each as its wire
+// id (varint) followed by the war's packed body (tagless varints,
+// self-delimiting; the layout is in `src/codec/run.rs`):
+//
+//   head   varint   has_y | kind << 1 | faction << 3
+//   x, z   varint   zigzag, decimetres
+//   y      varint   zigzag, decimetres — only when has_y
+//   hp     varint
+//
+// A war client reads the run record by record (`gsb_demo_war::codec::
+// read_record`; any language: two varint readers). `UnitRecord` is the
+// record's CONTENT as a client keeps it — not a message on the wire.
 //
 // UNITS. Every coordinate on this wire is an integer number of
 // DECIMETRES (the world unit is the metre; see `src/codec.rs`). Axis
@@ -62,9 +76,10 @@ enum Kind {
   POINT = 3;
 }
 
-// One unit's record: the body of each `WorldSnapshot.entities` entry.
+// One unit's record, as a client keeps it after reading it off the run
+// (`entity` is the id in front of the body). Not on the wire itself.
 message UnitRecord {
-  // The kit-minted wire identity (range-partitioned per shard, kept
+  // The kit-minted wire identity (interleaved per shard, kept
   // across shard migrations; the joiner learns its own from
   // JOIN_ROOM_RESULT).
   uint64 entity = 1;
@@ -90,12 +105,15 @@ message UnitRecord {
 // to a fresh faction group, on the keep-alive cadence and, one-shot in
 // `Private.snapshot`, to a member without a baseline (a join, a resume,
 // a shard crossing). The client rules are the kit's (`kit.proto`).
-// Field 4 (`cell_exits`) is not mirrored: team frames carry none.
+// Field 4 (`cell_exits`) is not mirrored: team frames carry none; nor
+// is field 2 (`entities`): the war's records ride the run.
 message WorldSnapshot {
   uint64 sequence = 1;
-  repeated UnitRecord entities = 2;
   repeated uint64 removed = 3;
   bool delta = 5;
+  // The units, in the record run (RECORDS above). Absent when the frame
+  // carries none (a delta of removals only).
+  bytes records = 6;
 }
 
 // The game's session payload, in `Private.game` (the kit's per-game
