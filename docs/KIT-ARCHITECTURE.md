@@ -1261,7 +1261,7 @@ taban 37,4 / 40,2 µs, HEAD 40,7 / 40,5 µs verdi. Mantık birebir aynı
 
 ### Faz 2 sonucu
 
-**Tamamlandı** (`kit/phase-2`, `a75e7b7..`; CHANGELOG "gsb-kit Faz 2
+**Tamamlandı** (`kit/phase-2`, `c97270b..`; CHANGELOG "gsb-kit Faz 2
 turu"). Workspace'te artık `crates/gsb-kit` ve `crates/gsb-demo`
 (yeniden adlandırılan `gsb-game`, `git mv`) var; kit hiçbir profilde
 demo'ya bağlı değil.
@@ -1413,7 +1413,7 @@ altı `*Ext` trait'i, `gsb_demo::game::InputAck` artık kit'in tipi.
    ızgarası:** arena için kurulan ön-ayar `VisionGrid3` adını taşıyor;
    hacimsel AOI `Grid3` tetikleyici bekliyor. §10/§12 metnine not
    düşüldü.
-3. **`a75e7b7` tek başına derlenmiyor:** yeniden adlandırma commit'i
+3. **`c97270b` tek başına derlenmiyor:** yeniden adlandırma commit'i
    yalnız `git mv`'leri içeriyor (çalışma ağacındaki yol düzeltmeleri
    bir pathspec hatası yüzünden sahnelenmedi; amend yasak), içerik
    yarısı `10fec02`. İkili birlikte derleniyor ve yeşil; sonraki her
@@ -1421,7 +1421,7 @@ altı `*Ext` trait'i, `gsb_demo::game::InputAck` artık kit'in tipi.
 4. **`gsb-core`'daki iki yorum** hâlâ `gsb-game` adını anıyor (çekirdek
    dokunulmaz kuralı).
 
-**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `eafa986` ikilileri, dönüşümlü
+**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `c558949` ikilileri, dönüşümlü
 üçer çift; sonraki commit'ler yalnız doküman). Her koşuda `left=50`,
 `errors=0`, `server_closes=0`:
 

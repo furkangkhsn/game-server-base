@@ -994,7 +994,7 @@ numaraları ×2, `kit_wire` ×2, kit manifest ×1, `VisionGrid3` ×2, üç
 takımlı 3D takım sisi ×1). Taban'daki 96 `gsb-game` testinin her
 birinin yeni yeri: KIT-ARCHITECTURE §10 "Faz 2 sonucu".
 
-**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `eafa986` ikilileri, dönüşümlü
+**Loadgen** (50 istemci; `e80d2e4` ↔ HEAD `c558949` ikilileri, dönüşümlü
 üçer çift; sonraki commit'ler yalnız doküman). Her koşuda `left=50`,
 `errors=0`, `server_closes=0`:
 
@@ -1403,15 +1403,15 @@ iki kommitte A/B olarak koşacak.
 
 | Kommit | Konu | Test |
 |---|---|---|
-| `1c22c99` | Sunucu kapanışlarını sebep bazında say (+ `--write-stall-secs`) | 388 → 404 |
-| `6f3d8f5` | Stall saatini bayt-granüler yap | 404 → 408 |
-| `2ecc9e5` | WS yazıcı kuyruğunun uyandırmasını kayıtlı tut (yan bulgu) | 408 → **409** |
+| `c2b7160` | Sunucu kapanışlarını sebep bazında say (+ `--write-stall-secs`) | 388 → 404 |
+| `debdac9` | Stall saatini bayt-granüler yap | 404 → 408 |
+| `edb5baf` | WS yazıcı kuyruğunun uyandırmasını kayıtlı tut (yan bulgu) | 408 → **409** |
 
 Hiçbir test silinmedi, gevşetilmedi, `#[ignore]` eklenmedi. Wire
 protokolü değişmedi; loadgen'in iç metrik formatı GSM7 → GSM8.
 Mutex/RwLock/parking_lot/select! yok; clippy 0 uyarı.
 
-### 1. `1c22c99` — sunucu kapanışları, sebep bazında
+### 1. `c2b7160` — sunucu kapanışları, sebep bazında
 
 **Taksonomi** (`gsb_core::conn::ServerClose`; dışa açım sırası
 `ServerClose::ALL`, yeni sebep SONA eklenir):
@@ -1521,7 +1521,7 @@ sunucuya, `--serve`'e ve `--orchestrate`'in sunucu sürecine taşınır
 (orkestrasyonda sunucu komut satırında `--write-stall-secs 7.5`
 görüldü). `--help` güncellendi.
 
-### 2. `6f3d8f5` — stall saati bayt sayar
+### 2. `debdac9` — stall saati bayt sayar
 
 Saat artık taşımanın kabul ettiği HER baytta sıfırlanır:
 
@@ -1588,7 +1588,7 @@ saati çok-uyanmalı her kareyi "ilerleme yok" sayardı.
   tipinde generic, ama bekleyen `send` `&mut`'u tuttuğu sürece hiçbir
   trait metodu çağrılamaz — sorun tip değil, ödünç.
 
-### 3. `2ecc9e5` — yan bulgu: WS kuyruğu pump'ı uyandırmıyordu
+### 3. `edb5baf` — yan bulgu: WS kuyruğu pump'ı uyandırmıyordu
 
 WS için bayt testini yazarken çıktı (koddan ve testle doğrulandı).
 `WsWriter::poll_ready` her poll'da taze bir `reserve_owned` future'ı
@@ -1626,7 +1626,7 @@ KiB'lik karenin her baytını almalı; düzeltmeden önce ~75 karede takılır.
   `spawn_socket_writer`'la, dar bir soket üzerinde kuruldu; pump dolu
   kuyrukta beklerken peer ~125 KB/s okur. Gerçek kapıdan: hiç okumayan
   WS peer'ı hâlâ ölür (`a_deaf_ws_peer_still_dies`).
-- TCP ve QUIC testleri `1c22c99` üzerinde KIRMIZI (TCP: 40 KB okunmuşken
+- TCP ve QUIC testleri `c2b7160` üzerinde KIRMIZI (TCP: 40 KB okunmuşken
   374 ms'de `WriteStall`; QUIC: 29 KB'ta akış kapandı). WS testi yeni
   API'yi (`spawn_socket_writer`) kullandığı için eski kommitte derlenmez;
   onun kilidi mutasyonla doğrulandı (§5). Mevcut sağır-peer testleri
@@ -1667,7 +1667,7 @@ zamanlama testi kırılgan olurdu).
 - Negatif gösterim: `gsb-loadgen 5 --duration 2 --idle-timeout-secs
   0.05 --move-ms 500` → `errors=0 server_closes=5`, `by_reason=
   idle_timeout:5` ve WARNING satırı.
-- 10k A/B ölçümü BU TURDA KOŞULMADI (ebeveyn `1c22c99` ve `6f3d8f5`
+- 10k A/B ölçümü BU TURDA KOŞULMADI (ebeveyn `c2b7160` ve `debdac9`
   üzerinde koşacak).
 
 ### 7. Yapılmayanlar / açık kalanlar

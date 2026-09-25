@@ -63,7 +63,7 @@ sayılıyor (`ServerClose`, `gsb_net_server_closes_total{reason}`,
 loadgen `server_closes=`) ve write-stall saati kare değil BAYT ölçüyor.
 Yeni bir sunucu-kapanış yolu eklersen ona bir `ServerClose` sebebi ver
 (`ConnIn::ServerClosed { cause, .. }`) — istemci-tarafı son ve shutdown
-bilerek sayılmaz. ~~Bekleyen: 10k A/B ölçümü (`1c22c99` ↔ `6f3d8f5`).~~
+bilerek sayılmaz. ~~Bekleyen: 10k A/B ölçümü (`c2b7160` ↔ `debdac9`).~~
 *Kapandı — ölçüm alındı (CHANGELOG "Ölçüm kaydı"; ROADMAP "Oturum
 zaman aşımı" maddesi; e-posta düzeltmesinden sonra commit'ler `c2b7160`
 ↔ `d8d9030`): fark gürültü içinde.*
