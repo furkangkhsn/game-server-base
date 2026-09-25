@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-670 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+687 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,12 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, takım odasında delta, team × sharded + senaryosu).
+
+**U tamam** (DESIGN §6 "MTU", SECURITY §4.1, CHANGELOG "U turu"): rUDP
+oyun bandında bütçeyi aşan kare FRAG datagram'larıyla gidiyor, istemci
+birleştiriyor (16 parça, 4 slot, 64 KiB, 250 ms); kit/çekirdek zarfı
+değişmedi. Loadgen rUDP ölçümlerinde `--stagger-ms 5` kullanın (el
+sıkışma proof kaybı düzelene dek — BACKLOG §1).
 
 **K4 tamam** (GAME-MODULE "K4 sonucu", CHANGELOG "K4 turu"): sharded
 yönlendirici `(conn, kimlik)` alıyor (`gsb_core::registry::HomeShard`),
@@ -356,8 +362,8 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
    kuralları dahil).
 5. ~~**Cross-seam etkileşim paketi**~~ — KAPANDI (C1: borrowed-view
    erişimi, `ShardMsg::RemoteEffect`; C2: histeresizli
-   crystallization). Açık yan bulgu: kümelenmiş MMO yükünde
-   `snap_overflows` (snapshot bölme).
+   crystallization). Yan bulgu (`snap_overflows`) U turunda rUDP
+   parçalamayla kapandı.
 6. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
    ortak DeltaSnapshotCodec adoptasyonu (all/team/pvs), Ipc/NetLink,
    QUIC rehome.
@@ -371,6 +377,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 670 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 687 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

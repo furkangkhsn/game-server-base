@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **670** (670/670 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **687** (687/687 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **K4 — oyuncu kimliği → ev shard'ı** (GAME-MODULE "K4
+Son tur: **U — rUDP parçalama** (DESIGN §6 "MTU") — oyun bandında
+bütçeyi aşan kare FRAG ile bölünüp istemcide birleşiyor; G3-1 ve
+kümelenmiş MMO taşması taşımada kapandı (yazıcı düşürmeleri → 0). Yan
+bulgular BACKLOG §1'de: rUDP el sıkışma proof kaybı, çekirdek kapanış
+kilitlenmesi.
+Önceki tur: **K4 — oyuncu kimliği → ev shard'ı** (GAME-MODULE "K4
 sonucu") — çekirdek yönlendiriciye ve join kancasına doğrulanmış kimliği
 veriyor (`HomeShard`, `on_join_as`), kit `spawn_player_as`'a iletiyor,
 MMO realm'i onunla anahtarlı; gerçek istemcilerle MMO yükü dört shard'a
@@ -95,8 +100,8 @@ sahibin ödünç kaydı); kopya ikinci kez davranmıyor. Çekirdekte tek ekleme
 tek shard'a kristalleşiyor (yüksek wire alçak wire'ın shard'ına mevcut
 göçle; sahiplik dövüş sürerken bölgeden ayrışık; zaman + yarım-bant
 histerezisi); MMO açık, loadgen `--mmo-duel-frac`. **Cross-seam
-etkileşim paketi bitti.** Açık yan bulgu: kümelenmiş MMO yükünde
-`snap_overflows` (snapshot bölme).
+etkileşim paketi bitti.** Yan bulgu (kümelenmiş MMO `snap_overflows`)
+U turunda taşımada kapandı.
 Önceki tur: **cross-seam C1** (CROSS-SHARD §4b) — oynanış seam'in
 ötesini görüyor (`CrossSeam`/`Seam`) ve `ShardMsg::RemoteEffect` ile
 etkiliyor (idempotent, sıralı, yönlendirmeli); MMO saldırısı seam

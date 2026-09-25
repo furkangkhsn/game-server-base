@@ -38,7 +38,9 @@ architecture for MOBA / MMORPG projects.
   handshake: cookie rotates in 10 s slots, captured proof
   expires within 10-20 s; reliable control band `REL`: if there is no ACK
   progress for 5 s, the band is declared dead and the SESSION
-  TERMINATES, no silent surrender; loss-tolerant game band `RAW`),
+  TERMINATES, no silent surrender; loss-tolerant game band `RAW`; over-MTU game frames are split into
+  `FRAG` datagrams and reassembled by the client — at most 16 fragments,
+  bounded client memory),
   QUIC (quinn; single bi-stream + length-prefix = TCP semantics), and
   WebSocket (RFC 6455; each binary message is a game frame). A mixed door list
   serving the same rooms is configured via the `[[listeners]]` table.
@@ -73,7 +75,7 @@ clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 670 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 687 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +

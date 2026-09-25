@@ -5,6 +5,52 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## U turu — rUDP parçalama (`net/u-rudp-fragment`)
+
+Oyun bandında bütçeyi (1472 B) aşan kare artık atılmıyor: yazıcı FRAG
+datagram'larına (`4 [u16 id][u8 index][u8 count][parça]`) böler, istemci
+birleştirir (DESIGN §6 "MTU", SECURITY §4.1). G3-1 (arena full'ları) ve
+C2'nin kümelenmiş MMO yan bulgusu taşımada kapandı. Kit ve çekirdek kodu
+değişmedi (yalnız `RoomConfig::max_snapshot_bytes` doc yorumu).
+Parçalanmayan her datagram bayt-bayt aynı (pin testi).
+
+- **Ölçüm önce (adım 0):** en büyük tek kayıt 17 B. MMO düellosunun 32 k
+  taşmasının 31 k'sı DELTA karesi — kit tarafında "full'u böl" yetmezdi.
+  afe7fba'da rUDP'de yazıcı arena 200'de grup datagram'larının %80'ini,
+  500'de %93'ünü atıyordu; MMO botları full'ları düşünce kendini hiç
+  görmüyordu.
+- **Kayıp:** eksik parçalı mesaj düşer (slot'u yeni mesaja geçince ya da
+  250 ms), yeniden gönderim yok. **Sınırlar:** mesaj başına 16 parça
+  (~23 KB; aşan eski yoldan atılır+sayılır), 4 slot, oturum başına
+  64 KiB, datagram başına O(1). Kontrol bandı parçalanmaz (aşan kontrol
+  karesi seq harcamadan oturumu bitirir — eskiden akışı tıkıyordu);
+  istemci → sunucu FRAG reddedilir (`frag_refused`).
+- **Sayaçlar:** yazıcı `frag_messages`/`frag_datagrams`/
+  `dropped_oversized`; istemci `frag_reassembled`/
+  `frag_dropped_incomplete`/`frag_rejected`; loadgen RESULT
+  `frag_reassembled`/`frag_dropped`. rUDP'de `snap_overflows` artık kayıp
+  değil bant/parçalama sinyali.
+- **Parçalamanın açığa çıkardığı iki istemci hatası düzeltildi:**
+  canlılık saati kuyruk boştan doluya geçerken başlıyor; yeniden
+  gönderim turu her datagram'dan sonra da koşuyor (olmadan arena 500'de
+  `gave_up` 76–106).
+
+A/B (`--transport udp --stagger-ms 5`, dönüşümlü): yazıcı düşürmeleri
+arena 200 ~45 k → 0, arena 500 ~100–124 k → 0, demo 200 ~54,8 k → 0,
+MMO 500 düello ~10,4 k → 0; `frag_dropped=0`, `joined = left = N`,
+0 kapanış, ~30 Hz. Arena 500 rUDP step/bant TCP ile aynı bantta.
+Testler 670 → 687 (+17). Ajanın 20 mutasyonu yakalandı; ebeveynin
+bağımsız mutasyonu (bellek tavanını 4× gevşetmek) `reassembly_memory_is_
+capped`'i kırıyor.
+
+**Yan bulgular (önceden vardı, bu turda düzeltilmedi → BACKLOG §1):**
+(1) rUDP el sıkışması: 200+ eşzamanlı bağlantıda loopback'te proof
+kayboluyor, istemci kendini bağlı sayıyor (afe7fba'da 200'ün 65–101'i
+katılabiliyordu; ölçümler bu yüzden `--stagger-ms 5`); (2) çekirdek
+kapanış kilitlenmesi: `stop()` ticker'ı hemen iptal ediyor, registry
+dolu oda kontrol kanalında `send().await`'te bekliyor (stop anında 128'den
+fazla canlı üye koparsa) — bir MMO ve üç arena-500 koşusu asılı kaldı.
+
 ## K4 turu — oyuncu kimliği → ev shard'ı (`kit/k4-player-home`)
 
 Çekirdek, sharded odanın join yönlendiricisine ve oyunun join kancasına
