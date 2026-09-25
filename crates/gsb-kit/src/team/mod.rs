@@ -87,16 +87,24 @@
 //!   asserted, not just a bandwidth number.
 //! - **Broadcast set**: the broadcast set is exactly "has a `Position`"
 //!   (orphan stamping in `update`); neutral entities go to *every* team.
-//! - **Self-contained**: no delta, no history; the per-team ledger compares
-//!   exactly the wire content of that team's last emitted snapshot, so an
-//!   enemy dropping out of vision *removes its record* from the next
-//!   snapshot and the client reads "gone" from the full replacement alone.
+//! - **Full mode (the default) is self-contained**: no delta, no history;
+//!   the per-team ledger compares exactly the wire content of that team's
+//!   last emitted snapshot, so an enemy dropping out of vision *removes
+//!   its record* from the next snapshot and the client reads "gone" from
+//!   the full replacement alone.
+//! - **Delta mode ([`TeamRoom::with_delta`])**: the same content, shipped
+//!   as the change since the team's last frame (`removed` + upserts) with
+//!   fulls for a fresh team, on the keep-alive cadence and one-shot to a
+//!   member without a baseline — the AOI room's envelope and client
+//!   rules; see `frames` for the design.
 //! - **Per-group ledger**: the teams' ledgers are independent (the
 //!   `GameLogic::snapshot` per-group bookkeeping contract); one team's
 //!   emission never changes the other team's "unchanged?" answer in the
 //!   same tick.
 
+mod build;
 mod content;
+mod frames;
 mod logic;
 
 #[cfg(test)]
@@ -108,7 +116,7 @@ use bevy_ecs::prelude::{Component, Entity};
 use gsb_core::id::PlayerId;
 
 use crate::codec::RecordCodec;
-use crate::common::{InputSeq, ParkEntry, ParkPolicy};
+use crate::common::{Baselines, InputSeq, ParkEntry, ParkPolicy, SetLedger};
 use crate::game::{Game, TeamGame, Wire};
 use crate::identity::Minter;
 use crate::space::Vision;
@@ -185,11 +193,25 @@ pub struct TeamRoom<G: TeamGame, V: Vision> {
     /// grow to the highest team the world has shown (never shrink — a
     /// team slot is a few empty containers).
     ///
-    /// Per-team "no change" ledger: `team → (wire id → wire value)`, the
-    /// exact wire content of that team's last emitted snapshot. Keyed by
-    /// group (team) per the [`GameLogic::snapshot`] contract: one call
-    /// must not change another team's answer in the same tick.
-    last: Vec<HashMap<u64, Wire<G>>>,
+    /// Per-team ledger (the shared set-content delta engine,
+    /// `crate::common::SetLedger`): the exact wire content of that
+    /// team's last emitted snapshot — the "no change" test of the full
+    /// mode, the delta baseline of the delta mode. Keyed by group (team)
+    /// per the [`GameLogic::snapshot`] contract: one call must not change
+    /// another team's answer in the same tick.
+    ledgers: Vec<SetLedger<Wire<G>>>,
+    /// Delta mode ([`Self::with_delta`]); `false` = full frames only.
+    delta: bool,
+    /// Delta mode: which team's view each player's session holds a
+    /// baseline for (the one-shot private full's decision).
+    baselines: Baselines<Team>,
+    /// The room's step counter (one per `update`): the ledgers' notion of
+    /// "the previous step" (a room may step every k-th global tick, so
+    /// the tick index cannot say it).
+    step: u64,
+    /// The global tick of the current step (set in `update`): the
+    /// `private` seam has no `TickCtx`.
+    tick: u64,
     /// Per-tick cache, rebuilt in [`Self::update`] (each entity exactly
     /// once): per team, its units; plus the neutral (ownerless)
     /// entities, which go to *every* team's snapshot.
@@ -211,62 +233,6 @@ pub struct TeamRoom<G: TeamGame, V: Vision> {
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
-}
-
-impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
-    /// Build a team-fog room running `game` with the vision model
-    /// `vision`.
-    #[must_use]
-    pub fn with_game(game: G, vision: V) -> Self {
-        Self {
-            game,
-            vision,
-            player_entity: HashMap::new(),
-            next_player_id: 0,
-            park: ParkPolicy::default(),
-            park_ledger: HashMap::new(),
-            minter: Minter::sequential(),
-            last: Vec::new(),
-            team_units: Vec::new(),
-            neutral: Vec::new(),
-            cells: HashMap::new(),
-            contents: Vec::new(),
-            input: InputSeq::default(),
-            encoded: 0,
-        }
-    }
-
-    /// Set the disconnect-park grace (see
-    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
-    #[must_use]
-    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
-        self.park.grace = Some(grace);
-        self
-    }
-
-    /// Set the whole disconnect-park policy (see
-    /// [`crate::room::OpenRoom::with_disconnect_policy`]; RECONNECT
-    /// §3/§14.4).
-    #[must_use]
-    pub fn with_disconnect_policy(
-        mut self,
-        grace: Option<std::time::Duration>,
-        to: gsb_core::room::ExpireTo,
-    ) -> Self {
-        self.park.grace = grace;
-        self.park.to = to;
-        self
-    }
-
-    /// The game this room runs.
-    pub fn game(&self) -> &G {
-        &self.game
-    }
-
-    /// The game this room runs, for configuration after construction.
-    pub fn game_mut(&mut self) -> &mut G {
-        &mut self.game
-    }
 }
 
 // Faz 1 trait split: shared hooks on the `GameLogic` supertrait; no

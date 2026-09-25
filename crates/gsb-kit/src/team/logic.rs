@@ -7,7 +7,6 @@ use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
 
-use crate::common::{put_entity_records, write_full_header};
 use crate::game::TeamGame;
 use crate::space::Vision;
 use crate::team::*;
@@ -44,9 +43,10 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     /// Encode `team`'s snapshot from this tick's content cache (module
-    /// docs). Returns `false` when the team's wire content is unchanged
-    /// since that team's last emit (per-team ledger; membership and
-    /// visibility transitions change the content and flip it).
+    /// docs; the two snapshot modes: `frames`). Returns `false` when the
+    /// team's wire content is unchanged since that team's last emit
+    /// (per-team ledger; membership and visibility transitions change
+    /// the content and flip it).
     fn snapshot(
         &mut self,
         _world: &mut World,
@@ -56,24 +56,21 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         _borrowed: &[gsb_core::shard::BorderRecord<()>],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        let t = self.team_slot(*team);
-        let content = &self.contents[t];
-        if self.last[t] == *content {
-            return false;
-        }
+        self.emit_snapshot(ctx.tick, *team, out)
+    }
 
-        // The FULL envelope (header + one record per entity, in content
-        // order), byte-identical to the typed `WorldSnapshot` encoding.
-        write_full_header(out, ctx.tick);
-        put_entity_records(
-            self.game.codec(),
-            content.iter().map(|(id, wire)| (*id, wire)),
-            out,
-        );
-
-        self.encoded += content.len() as u64;
-        self.last[t] = content.clone();
-        true
+    /// Delta mode: a fresh FULL of the team's view on the keep-alive
+    /// cadence (the convergence guarantee); full mode: the core's
+    /// default re-send (`frames`).
+    fn keepalive(
+        &mut self,
+        _world: &mut World,
+        ctx: &TickCtx,
+        team: &Team,
+        _last: Option<&bytes::Bytes>,
+        out: &mut bytes::BytesMut,
+    ) -> bool {
+        self.emit_keepalive(ctx.tick, *team, out)
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
@@ -113,6 +110,8 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     fn on_leave(&mut self, world: &mut World, player: PlayerId) {
+        // A re-join is a new session: no view baseline survives it.
+        self.baselines.forget(player);
         crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input)
     }
 
@@ -164,6 +163,9 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     ) {
         // Faz 2 shrink: ledger consume + seq/ack reset only.
         crate::common::park_resume(&mut self.park_ledger, &mut self.input, identity, player);
+        // Delta mode: the resumed SESSION has no view baseline — the next
+        // private frame carries a one-shot full (as after a join).
+        self.baselines.forget(player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -178,27 +180,25 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         )
     }
 
-    /// The per-connection input acknowledgment (see `OpenRoom::private`).
+    /// The per-connection frame: the input acknowledgment (see
+    /// `OpenRoom::private`) — and, in delta mode, the one-shot full for a
+    /// member without a baseline (`frames`).
     fn private(
         &mut self,
         world: &mut World,
         player: PlayerId,
-        _group: &Team,
+        group: &Team,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private_frame(
-            &mut self.game,
-            world,
-            &self.player_entity,
-            &mut self.input,
-            player,
-            responses,
-            out,
-        )
+        self.emit_private(world, player, *group, responses, out)
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
+        // One step: the delta ledgers' "previous step" and the tick the
+        // `private` seam stamps into one-shot fulls.
+        self.step += 1;
+        self.tick = ctx.tick;
         crate::common::systems(&mut self.game, world, ctx);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities

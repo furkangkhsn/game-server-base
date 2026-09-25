@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{With, World};
 
 use crate::codec::RecordCodec;
+use crate::common::SetLedger;
 use crate::game::TeamGame;
 use crate::identity::WireId;
 use crate::space::Vision;
@@ -21,7 +22,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         let Self {
             game,
             vision,
-            last,
+            ledgers,
             team_units,
             neutral,
             cells,
@@ -67,7 +68,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         // whose members all left keeps an empty-ledger slot).
         let teams = team_units.len();
         contents.resize_with(teams, HashMap::new);
-        last.resize_with(teams, HashMap::new);
+        ledgers.resize_with(teams, SetLedger::default);
 
         // Content: own team + neutral, then enemy units in vision.
         for (t, content) in contents.iter_mut().enumerate() {
@@ -106,7 +107,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         while self.contents.len() <= t {
             let neutral = self.neutral.iter().map(|(id, wire)| (*id, wire.clone()));
             self.contents.push(neutral.collect());
-            self.last.push(HashMap::new());
+            self.ledgers.push(SetLedger::default());
             self.team_units.push(Vec::new());
         }
         t

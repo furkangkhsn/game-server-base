@@ -1,6 +1,6 @@
 //! The game's session payload (`Private.game`) through EVERY kit room:
 //! owed once per session — the first private frame after a join or a
-//! resume — riding the frame the room ships anyway (the AOI rooms'
+//! resume — riding the frame the room ships anyway (the delta rooms'
 //! one-shot full included); and a game that keeps the default hook gets
 //! exactly the frames it got before the hook existed.
 
@@ -198,6 +198,11 @@ fn every_room_tells_each_session_once() {
         TeamRoom::with_game(g(), VisionGrid2::<Position>::new(10.0)),
         false,
     );
+    check(
+        "team (delta)",
+        TeamRoom::with_game(g(), VisionGrid2::<Position>::new(10.0)).with_delta(),
+        true,
+    );
     check("pvs", SectorRoom::with_game(g(), fixture_map()), false);
     check("sharded", sharded(g()), false);
     check(
@@ -258,6 +263,11 @@ fn the_default_hook_changes_no_frame() {
         "team",
         TeamRoom::with_game(f(), VisionGrid2::<Position>::new(10.0)),
         false,
+    );
+    check_default(
+        "team (delta)",
+        TeamRoom::with_game(f(), VisionGrid2::<Position>::new(10.0)).with_delta(),
+        true,
     );
     check_default("pvs", SectorRoom::with_game(f(), fixture_map()), false);
     check_default("sharded", sharded(f()), false);

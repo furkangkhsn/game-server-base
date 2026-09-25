@@ -56,19 +56,23 @@ message InputAck {
 //
 // FULL mode (`delta` false/absent): the complete, self-contained state
 // of the group's view; it replaces the client's entire view. Packet loss
-// is healed by the next full. The open, team-fog, PVS and plain sharded
-// rooms send full frames only; the AOI and sharded × spatial rooms send
-// a full when a group is fresh and on the keep-alive cadence, deltas
-// otherwise.
+// is healed by the next full. The open, PVS and plain sharded rooms —
+// and the team-fog room by default — send full frames only; the AOI and
+// sharded × spatial rooms, and the team-fog room in its delta mode (a
+// game's opt-in: `TeamRoom::with_delta`), send a full when a group is
+// fresh and on the keep-alive cadence, deltas otherwise.
 //
 // DELTA mode (`delta` true): the change of the group's view since the
-// PREVIOUS tick (server-side: per group and cell), applied ON TOP of the
-// client's current view. The application order is fixed by the packet
-// layout: `removed` (entity exits) first, then `cell_exits`, then
-// `entities` (upserts) — so an entity that moved between two cells the
-// client sees is exited from its source before it is updated in its
-// target, and a client that sees only one of the two cells sees exactly
-// the exit or exactly the update (both correct for it).
+// group's PREVIOUS frame (server-side: per cell in the spatial rooms,
+// per team in the team-fog room), applied ON TOP of the client's current
+// view. The application order is fixed by the packet layout: `removed`
+// (entity exits) first, then `cell_exits`, then `entities` (upserts) —
+// so an entity that moved between two cells the client sees is exited
+// from its source before it is updated in its target, and a client that
+// sees only one of the two cells sees exactly the exit or exactly the
+// update (both correct for it). The team-fog room's deltas carry no
+// `cell_exits` (a vision set is not a union of cells the client could
+// compute): an entity that left the team's vision is a `removed` id.
 //
 // CLIENT RULES (delta mode):
 // - a delta WITHOUT a baseline (a fresh connection that has not applied
@@ -103,12 +107,14 @@ message WorldSnapshot {
   // upserts. Each entry is one record BODY written by the game's
   // `RecordCodec::encode` (the demo: an `EntityRecord`).
   repeated bytes entities = 2;
-  // DELTA mode only: wire ids that left the group's view this tick. The
-  // kit writes them UNPACKED (one `0x18` tag per id); a generated encoder
+  // DELTA mode only: wire ids that left the group's view since its
+  // previous frame (a despawn, a cell exit of a single entity, a unit
+  // leaving a team's vision). The kit writes them UNPACKED (one `0x18` tag per id); a generated encoder
   // writes proto3's default packed form. Every protobuf parser accepts
   // both encodings of a repeated scalar, so the two decode identically.
   repeated uint64 removed = 3;
-  // DELTA mode only: cells that left the group's view this tick (the
+  // DELTA mode only (the spatial rooms; the team-fog room never writes
+  // it): cells that left the group's view this tick (the
   // client forgets every entity it holds whose record lies in that cell
   // — it derives an entity's cell from the record's wire value the way
   // the game's cell space does; one record per cell, whatever the
@@ -131,8 +137,9 @@ message Private {
     InputAck ack = 1;
     // A one-shot FULL view for a connection that just (re)joined a group,
     // resumed, crossed into a new one or migrated to a new shard (the AOI
-    // and sharded × spatial rooms). The kit hand-encodes this arm's tag
-    // (0x12).
+    // and sharded × spatial rooms; the team-fog room in delta mode: a
+    // join into a team already playing, a resume, a runtime team
+    // change). The kit hand-encodes this arm's tag (0x12).
     //
     // CLIENT RULE: this snapshot is a per-connection baseline reset — it
     // is applied UNCONDITIONALLY (it replaces the client's entire view

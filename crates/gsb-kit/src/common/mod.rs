@@ -7,8 +7,9 @@
 //! (`GroupKey`) and what lands in each group's snapshot. Everything else
 //! — wire-identity minting, the player→entity table, the join and input
 //! paths around the game's hooks, orphan stamping, the change window,
-//! the park ledger, the snapshot and `Private` envelopes, the cell-delta
-//! engine — lives here, once.
+//! the park ledger, the snapshot and `Private` envelopes, the delta
+//! engines (per cell for the spatial rooms, per group for a set-content
+//! room — `ledger`) — lives here, once.
 //!
 //! This is deliberately a set of plain functions and engine types over
 //! the rooms' fields (not a trait, not a struct that owns the fields):
@@ -27,6 +28,7 @@ mod cells;
 mod frame;
 mod hooks;
 mod input;
+mod ledger;
 mod park;
 mod session;
 
@@ -35,6 +37,7 @@ pub(crate) use frame::*;
 pub(super) use hooks::*;
 pub use input::InputSeq;
 pub(crate) use input::{append_responses, emit_private};
+pub(crate) use ledger::*;
 pub(crate) use park::*;
 pub(crate) use session::*;
 
