@@ -90,6 +90,7 @@ pub trait RecordCodec: Send + 'static {
     const RUN: bool = false;          // kayıt çerçevesi: false = `entities`, true = kayıt koşusu (A31)
     fn wire(&self, item: ROQueryItem<'_, '_, Self::Query>) -> Self::Wire;
     fn encode(&self, id: u64, w: &Self::Wire, out: &mut BytesMut); // tek kaydın gövdesi
+    fn send_every(&self, w: &Self::Wire) -> SendEvery { SendEvery::Tick } // yayın hızı (A10)
 }
 ```
 
@@ -108,6 +109,19 @@ sabitidir: bir oyunun bütün odaları — ve shard'lı bir odanın bütün
 shard'ları — aynı çerçeveyi yazar; başka bir shard'ın kodladığı ithal
 gövde (`TeamRecord.bytes` = yalnız `encode` çıktısı, çerçevesiz ve
 id'siz) alıcıda sahibinin çerçevesiyle eklenir.
+
+**Yayın hızı da oyunundur (A10, §10 "A10").** `send_every` kaydın
+wire değerinden bir sınıf verir: `SendEvery::Tick` (varsayılan: her
+adım — A10'dan önceki bayt, birebir) ya da en çok her 2./4./8./16.
+adım (`Ticks2` … `Ticks16`). Kit'in DELTA motorları değişmiş ama vadesi
+gelmemiş bir kaydı tutar ve vade adımında o anki değerini gönderir
+(`SendEvery::due(step, wire)`: sınıflar iç içe, faz wire id'nin
+karmasından). Görünüme giren kayıt, `removed`, `cell_exits` ve her full
+beklemez; yalnız full gönderen odalar sınıfı yok sayar. Kayıtlar mutlak
+kalır, hiçbir istemci kuralı değişmez; enterpolasyon oyunun istemcisinin
+seçimi. Sınıf sorgu öğesinden değil wire değerinden: ödünç kaydı
+gösteren shard'da yalnız değer var (şerit `Strip = Wire`), değerin saf
+fonksiyonu her shard'da aynı sınıfı verir.
 
 **Kritik karar — `Wire` ilişkili tipi.** Delta motoru bugün tipli,
 nicemlenmiş `(i32, i32)` tuple'larını karşılaştırır; baytlar yalnızca
@@ -770,6 +784,16 @@ message Private {
   çözücü kareyi kayıtsız uygular (bir full görünümü boşaltır). Çerçeve
   oyunun protokolünün (sürümünün) parçasıdır, kare başına müzakere
   edilmez.
+- **Yayın hızı (A10) zarfa dokunmaz:** yeni alan, yeni kural yok. Bir
+  oyun `RecordCodec::send_every`'yi açarsa delta karelerinde değişmiş
+  bir kaydın upsert'i vadesine kadar gecikir (sınıfının periyodu − 1
+  adıma kadar); kayıt yine mutlak ve idempotent, `removed`/`cell_exits`
+  ve full'lar gecikmez, keep-alive full'u (yakınsama garantisi) ve
+  one-shot full her kaydın güncel değerini taşır. İstemci açısından bu
+  yalnız "delta her değişikliği o tick taşımaz" demek — `kit.proto`'nun
+  zaten söylediği olay güdümlü akış; kural metni değişmedi. Açmayan
+  oyunun baytı A10'dan öncekinin aynısı (kit'te dokuz tohumlu oturumun
+  içerik özeti sabitlendi, demoların bayt kilitleri dokunulmadan geçti).
 - **`removed` packed değil:** kit her kimliği ayrı bir `0x18` etiketiyle
   yazıyor, üretilmiş bir kodlayıcı proto3'ün varsayılanı olan packed
   biçimi yazar; her protobuf ayrıştırıcısı ikisini de kabul eder. Bu
@@ -2159,7 +2183,8 @@ yarısı olan tohumlu kit koşusunda delta baytları full'un %38'i: 169 109
 / 447 873 B); arenada daha fazlası kayıt değil DEĞER düzeyinde iş ister:
 (a) kodek seam'inde son gönderilen değere göre göreli kayıt (40 cm'lik
 adım 2 yerine 1 baytlık zig-zag; kit + istemci çözücüsü değişir), (b)
-varlık başına yayın hızı (BACKLOG A10), (c) takım karesini parçalara
+varlık başına yayın hızı (BACKLOG A10 — **yapıldı**, aşağıda "A10":
+arena 15 Hz'de −43 … −45 %), (c) takım karesini parçalara
 bölmek (grup başına birden çok kare — çekirdek). Hiçbiri bu turda
 yapılmadı.
 
@@ -2611,7 +2636,8 @@ Okuma:
    mutlak sıkıştırmayla birleşiyor: 15 Hz + D2 + run + kompakt id
    **−59 … −74 %**; savaş 1000'in ~365 KB/sn'si kabaca ~95 KB/sn olur
    (500'deki oranla ölçeklenmiş tahmin). Demo'da A10 bugünkü gövdeyle
-   yalnız −3 %: tamsayı konum zaten 2–3 tick'te bir değişiyor.
+   yalnız −3 %: tamsayı konum zaten 2–3 tick'te bir değişiyor. **→ A10'da
+   yapıldı** (aşağıda "A10"; arenada ölçülen −43 … −45 %, tahmin −45/−46).
 4. **(c) bant olarak da kazanmıyor:** onaylı baseline 3–6 tick geride,
    Δ'lar ve gönderilen küme büyüyor (demo'da hücre çıkışları yerine id
    başına `removed` — **+10 … +27 %**); keep-alive'ı kaldırmasına rağmen
@@ -2795,7 +2821,8 @@ Sıra (her adım ayrı karar, ayrı tur, her biri kendi başına ölçülür):
    ölçüm).
 3. **A10 varlık başına yayın hızı** — en büyük sonraki kaldıraç (15 Hz:
    arena/MMO/savaşta +17 … +26 puan; demo +1 — tamsayı konumu zaten
-   seyrek değişiyor), istemci enterpolasyonu ister (Unity tarafı).
+   seyrek değişiyor), istemci enterpolasyonu ister (Unity tarafı). **→
+   A10'da yapıldı** (aşağıda "A10": kit'te opt-in kanca, arena açtı).
 4. **A22 ancak bundan sonra ve bir MMO tipi oyun hâlâ bant sıkıntısı
    gösterirse**, (b) biçiminde: oda başına opt-in, yeniden senkron
    isteği + çekirdek düşme sinyaliyle, ithaller için `decode` seam'iyle.
@@ -2877,7 +2904,9 @@ baseline is applied on top, even across a sequence gap" cümlesi silinir.
    testler.) Id istemciye opak; göçte id korunur, bu değişmez. *(Cevap:
    evet, herkese — A30'da iç içe basımla yapıldı.)*
 4. **A10'un önceliği** — Unity tarafında enterpolasyon taahhüdü var mı?
-   Varsa sıra 1 → 2 → A10; yoksa 1 → 2 ve A10 bekler.
+   Varsa sıra 1 → 2 → A10; yoksa 1 → 2 ve A10 bekler. *(Cevap — E7: kit
+   opt-in kanca verir, varsayılan her tick; hız ve istemci
+   enterpolasyonu oyunun. A10'da yapıldı.)*
 5. **A22 BACKLOG'da nasıl kalsın?** Öneri: tetikleyicisi "(d)+A10
    sonrası hâlâ bant/MTU baskısı gösteren AOI tipi bir oyun" olarak
    yeniden yazılsın; biçim (b) + yeniden senkron + düşme sinyali.
@@ -3254,7 +3283,8 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`, `dropped=0`,
   hesaplanıyor; RESULT'a bir `frag_datagrams` alanı ayrı bir tur işi.
 - **A31-3 — 500'de kare hâlâ parçalanıyor** (ortalama ~2,3 KB): koşu
   datagram sayısını yarıya indirdi ama mesajların %78'i bütçe üstünde;
-  sonraki kaldıraç A10 (varlık başına yayın hızı).
+  sonraki kaldıraç A10 (varlık başına yayın hızı). **→ A10 kit'te
+  yapıldı** (aşağıda "A10"); savaş henüz açmadı.
 - **Sapmalar (bilinçli):** `kit.proto`'ya alan eklemek üretilmiş
   `gsb_kit::proto::WorldSnapshot`'a alan ekledi; dört demonun tel
   testlerindeki struct literal'ine `records: Vec::new()` eklendi (bayt
@@ -3269,6 +3299,273 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`, `dropped=0`,
 gövde testi kaldırıldı); `cargo clippy --workspace --all-targets -- -D
 warnings` 0; kapanış kontrolü, beş özellik derlemesi ve
 `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` temiz.
+
+### A10 — kayıt başına yayın hızı: oyun başına opt-in (2026-09-25)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`kit/a10-send-rate`;
+BACKLOG A10, E7'nin cevabı: kit opt-in kanca verir, varsayılan her tick;
+hız ve istemci enterpolasyonu oyunun). Bir oyun kodeğinde kayıt başına
+bir yayın sınıfı söylerse kit'in delta motorları değişmiş bir kaydı
+vadesine kadar tutar ve vadesinde o anki değerini gönderir. Söylemeyen
+oyunun baytı A10'dan öncekinin aynısı. Doğrulama demosu olarak arena
+açtı (her birim 15 Hz); 2D demo, MMO ve savaş dokunulmadı.
+
+**Oyunun yazdığı (seam).** Tek yöntem, varsayılanlı:
+
+```rust
+// RecordCodec
+fn send_every(&self, wire: &Self::Wire) -> SendEvery { SendEvery::Tick }
+
+pub enum SendEvery { Tick, Ticks2, Ticks4, Ticks8, Ticks16 } // 1, 2, 4, 8, 16 adım
+impl SendEvery {
+    pub const fn ticks(self) -> u64;                      // periyot
+    pub const fn due(self, step: u64, wire: u64) -> bool; // kit'in takvimi
+}
+```
+
+Arena: `fn send_every(&self, _: &Cm3) -> SendEvery { SendEvery::Ticks2 }`.
+İstemci tarafında seam yok (kurallar aynı); `due` public — oyunun
+istemcisi (enterpolasyon penceresi) ya da testleri takvimi aynen
+hesaplayabilir.
+
+**Kararlar (seçilen / elenen).**
+
+1. *Sınıf WIRE DEĞERİNDEN — sorgu öğesinden ya da kit'in okuduğu bir
+   bileşenden değil.* Kayıt, entity'sinin olmadığı yerde de gösterilir:
+   komşu shard ödünç kaydı sınır şeridinden kurar ve şerit yalnız wire
+   değerini taşır (`BorderRecord { wire, state: Wire }` — çekirdek
+   tipi). Değerin saf fonksiyonu olan sınıf, değeri bilen her shard'da
+   aynıdır: sahip ile izleyici hiçbir şey taşımadan anlaşır, göç eden
+   entity yayın durumu taşımaz. *Elenen:* sorgu öğesi (`Query` item)
+   — ödünç ve ithal kayıtta yok, sınıfı şeride/röleye koymak çekirdek
+   tipini değiştirirdi; kit'in okuduğu bir `SendRate` bileşeni — aynı
+   sorun artı tick başına her entity'ye ek sorgu. Bedeli: sınıfı kaydın
+   göstermediği bir duruma bağlamak isteyen oyun o durumu `Wire`'a
+   ekler (sınıf değişince kayıt bir kez yeniden gider).
+2. *Sınıflar 2'nin kuvvetleri — vade adımları İÇ İÇE.* Her 8. adımda
+   vadesi gelen adım her 4., 2. ve 1. için de vadelidir (kayıt başına tek
+   faz). Bekleyen bir değişiklik, kayıt arada sınıf değiştirse de,
+   aldığı en büyük periyot içinde gider — kit kaydın geçmişini
+   hatırlamadan. *Elenen:* keyfi `n` (her 3., 5. …): kümeler iç içe
+   değil, sınıf değiştiren kaydın sınırı kaybolur (kötü bir sıralamayla
+   sonsuza dek vadesiz kalabilir); "ilk vade adımını sakla" — kayıt
+   başına durum, göçte taşınması gerekirdi.
+3. *Faz: wire id'nin Fibonacci karmasının üst dört biti*
+   (`id · 0x9E37_79B9_7F4A_7C15 >> 60`); vade `(step + faz) mod
+   periyot = 0`. Bir sınıfın kayıtları periyoda eşit yayılır (test:
+   her adımda payın ±%25'i). *Elenen:* fazsız (sınıfın hepsi aynı
+   adımda — patlama); `id mod periyot` — A30'un iç içe id'leri bir
+   shard'da `N`'ye göre denk (`i + 1`, `N + i + 1`, …): 4 shard'lı odada
+   her shard'ın kayıtları tek adıma düşerdi (test bu mutasyonda
+   kırıldı); entity başına rastgele faz — saklanacak, göçte taşınacak
+   durum.
+4. *Saat: odanın ADIMI* (her `update` bir adım; `CellBook` kendi
+   sayacını tutar, takım odaları zaten `step` tutuyordu). Bir oda her
+   k'ncı global tick'te adımlayabilir ve tick kaçırabilir; sınır adım
+   cinsinden doğru kalır. Bir odanın shard'ları kilit adımda adımladığı
+   için sayaçları aynı — bir kaydın takvimi her shard'da aynı.
+5. *Ne bekler:* yalnız grubun ZATEN tuttuğu bir kaydın DEĞİŞMESİ (hücre
+   motorunda hücre içinde; set defterinde grupta kurulu kayıt). *Hemen
+   gider:* görünüme giren kayıt (gruba yeni, hücre geçişi, beliren
+   hücre, göç varışı), her `removed`, her `cell_exits`, her full (taze
+   grubun, keep-alive, one-shot private). Neden: giriş/çıkış üyeliktir
+   (geciken çıkış = hayalet, geciken giriş = görünmez birim); full kendi
+   başına eksiksiz ve güncel olmalı (yakınsama garantisi).
+6. *Yalnız full gönderen odalar (açık, PVS, düz sharded, `with_delta`'sız
+   takım odaları) sınıfı yok sayar.* Full kare zaten her kaydı yeniden
+   gönderir: bir kaydı geride tutmak bayt kazandırmaz, yalnız kareyi
+   bayatlatır. *Elenen:* "vadesiz değişiklikte kare atla" — faz
+   yayıldığı için neredeyse her adım bir kaydın vadesi, kare pek
+   atlanmazdı. Kilit: aynı tohumlu oturum oranlı kodekle bu odalarda
+   birebir aynı içeriği taşıyor.
+7. *Set defteri (`SetLedger`, takım odası + sharded takım):* değişmiş ve
+   vadesiz kayıt delta'ya girmez ve `held` İLERLEMEZ — vade adımında
+   hâlâ farklıysa o anki değeriyle gider; araya geri dönen değer hiç
+   gitmez. `resync` (keep-alive) `held`'i içeriğe eşitler: bekleyen
+   değişiklik de kapanır.
+8. *Hücre motoru (`CellBook`, AOI + sharded × spatial):* hücre içi
+   değişiklik vadesizse kova değeri alır (her full güncel gösterir),
+   kayıt `deferred`'a (`wire → (hücre, sınıf)`) girer; `roll` önce vadesi
+   gelenleri kovadaki o anki değerle değişiklik listesine bırakır. Geçiş,
+   çıkış, beliriş bekleyeni siler (değeri zaten gidiyor). **Encode-once
+   korunur:** erteleme kaydın, grubun değil — hücreyi gören her kurulu
+   grup kaydın aynı son değerini tutar (arada full alan güncelini tutar;
+   vadedeki upsert ona idempotent fazlalık), hücre parçası hâlâ tek
+   kodlamayla paylaşılır.
+9. *Ödünç (şerit) kayıtlar:* izleyen shard sınıfı ödünç değerden alır,
+   aynı takvimle uygular — sahibinin uygulayacağının aynısı.
+10. *İthal gövdeler (sharded takım):* izleyen shard opak gövdenin
+    sınıfını bilemez; bu yüzden **sahip shard ihracını tempolar**: delta
+    modunda bir kaydın ihraç gövdesi yalnız vade adımlarında ilerler
+    (önceki adımda ihraç edilmemiş kayıt taze kodlanır), izleyen
+    değişmiş gövdeyi hemen geçirir (`Shown::Encoded` hep vadeli). Full
+    modu ihracı tempolamaz (karar 6). **Biçim değişimi hemen gider:**
+    ödünç ↔ ithal geçen kayıt (şeride girip çıkan) değerini başka
+    kaynaktan alıyor; bunu da bekletmek iki gecikmeyi üst üste koyuyordu
+    (ikiz koşu bunu yakaladı: 8'lik sınıfta 9–12 adım). *Elenen:* ithali
+    izleyende tempolamak (sınıf için `decode` seam'i — A22'nin ertelenen
+    işi — ya da röleye sınıf: çekirdek tipi); ithali hiç tempolamamak
+    (savaş tipi oyunda görünümün çoğu ithal — kazancın çoğu giderdi).
+11. *Göç yayın durumu taşımaz:* göç her iki tarafta çıkış + giriştir
+    (ikisi de hemen), takvim `(adım, wire, sınıf)`'ın saf fonksiyonu.
+12. *Kayıt koşusu (A31) ve kompakt id (A30) ile:* ortogonal; oranlı
+    ikizlerin oranlı tarafı koşu çerçevesiyle (`Rated<PackedCodec>`)
+    koşuyor, faz karması A30'un id'leri için seçildi.
+
+**Motorun garantisi (bayatlık sınırı).** `s` adımında yapılan bir
+değişiklik, `s`'den sonraki, kaydın o arada aldığı en büyük sınıfın ilk
+vade adımında kablodadır: sabit sınıfta en çok `ticks() − 1` adım
+(arena: 1 adım = 33 ms). İthal kayıt buna ekip değişiminin mevcut tek
+adımlık rölesini ekler (`ticks()` adım). Her full'dan sonra istemci her
+kaydın güncel değerini tutar (ithal kayıtta: sahibin son yayımladığı —
+izleyen shard'ın bildiği en güncel değer, A10'dan önce de röle kadar
+gerideydi). Kilit: oranlı ikizlerde sınır hem hiç aşılmıyor hem TAM
+erişiliyor (8'lik sınıfta 7; sharded takımda 8).
+
+**`kit.proto`'ya dokunulmadı:** istemci kuralları aynı (mutlak,
+idempotent upsert; boşluk olsa da uygula; yakınsama garantisi). Bir
+kaydın 15 Hz gelmesi oyunun protokolünün parçası, zarfın değil.
+
+**Doğrulama demosu: arena.** Neden: A22'nin yeniden oynatımında "A10 15
+Hz, bugünkü gövde" satırında en büyük oran (−45/−46 %, MMO ile eş) ve
+en büyük mutlak bant (500'de istemci başına ~100 KB/sn, MMO'nun iki
+katı); tek odalı takım delta'sı (set defteri) — motorun en yalın yolu.
+Politika bilerek en basiti: her birim `Ticks2` (hepsi aynı hızda koşan
+kahramanlar); kayıt başına sınıf seam'i kit testlerinde sınanıyor.
+
+**Testler (önce başarısız, sonra geçen; +18 kit).**
+
+- Takvim (`codec::rate::tests`, 3): varsayılan her adım; periyot başına
+  tam bir vade ve sınıflar iç içe (2 000 id, sayaç taşması dahil);
+  yayılma — ardışık id'ler ve 2/3/4/8 shard'ın iç içe id dizileri.
+- Set defteri (`common::ledger::tests::rate`, 4): vadesiz değişiklik
+  vade adımında GÜNCEL değeriyle, `held` ilerlemeden (geri dönen değer
+  hiç gitmez); giriş ve `removed` hemen; one-shot/keep-alive full ve
+  full mod güncel; her-adım sınıfı varsayılanın karesi. İlk üçü motor
+  değişmeden yazıldı ve kırmızıydı (ikisinde ilk kırmızı test
+  yardımcısının kendi adım hatasıydı; düzeltilmiş hâlinin gücü motor
+  değişikliğini geri alan mutasyonla gösterildi — aşağıda, üçü de
+  kırılıyor).
+- Hücre motoru (`aoi::tests::rate`, 4): hücre içi hareket yalnız vade
+  adımlarında (16 tick'te tam 4 kez, o tick'in değeriyle), arada grup
+  sessiz; geçiş ve çıkış (hücre çıkışı) hemen; keep-alive ve one-shot
+  full bekleyen değeri taşıyor; geçiş bekleyeni kapatıyor. Motordan önce
+  ilk ikisi kırmızıydı; geçiş/çıkış testi korkuluk (bugün de geçen
+  kuralı kilitler), dördüncüsü sağ kalan bir mutasyon için sonradan
+  eklendi.
+- Oranlı ikizler (`record_run::rate`, 6 + ihraç 1; motordan sonra
+  yazıldı, gücü mutasyonlarla): A31'in ikiz koşusu,
+  ikinci oda `Rated<PackedCodec>` (x bandına göre 1/2/4/8; oyuncular ve
+  NPC'ler bant değiştiriyor). Full modlu beş tür birebir aynı içerik;
+  delta türlerinde (AOI, takım delta, sharded × spatial, sharded takım
+  delta) her tick: aynı kayıtlar, aynı `removed`/hücre çıkışları, aynı
+  anda full'lar, her değer varsayılan tarafın ≤ 7 (ithalde 8) tick
+  önce gösterdiği/sahip olduğu bir değer, sınır TAM erişiliyor, full
+  uygulanan her tick'te görünümler eşit (keep-alive yakınsaması —
+  varsayılan taraf kayıpsız ve mevcut testlerle full-only kâhine eşit),
+  kayıtların ≥ %20'si tasarruf; sharded × spatial'da ayrıca her
+  hücre içi değişiklik upsert'i sınıfının vade adımında (erken değil).
+  İhraç testi: sahip gövdeyi yalnız vadede ilerletiyor, full mod her
+  değişikliği ihraç ediyor.
+- Varsayılan kilit (`record_run`, 9 oturum — ayrı commit): her tohumlu
+  oturumun `entities` tarafının aldığı her karenin içerik özeti
+  (FNV-1a, çerçeveden bağımsız parçalar) A10'dan ÖNCE ölçülüp
+  sabitlendi; A10 sonrası dokuzu da aynı.
+- Arena: `tests/delta.rs`'in delta-full ikizi KASTEN çevrildi (aynı
+  birimler, her biri full odanın bu tick'te ya da bir önceki tick'te
+  gösterdiği yerde; hareketlerin beklediği iddia ediliyor —
+  `behind > 20`), barındırılan `arena_e2e`'nin sis denetimi iki birimin
+  bir adımlık bayatlığı kadar (2 × 40 cm) toleranslı. Bayt testleri
+  (`tests/wire.rs`) dokunulmadan geçiyor.
+
+**Mutasyonlar** (dosya scratchpad'e yedeklendi, bozuldu, kit testleri
+koşuldu, yedekten geri yüklendi):
+
+| Kural | Mutasyon | Kıran |
+|---|---|---|
+| defter: vadesiz değişiklik bekler | `continue` kaldırıldı | 5 (defter 3, takım ikizi, sharded takım ikizi) |
+| defter: `held` ilerlemez | vadesizde `held` güncellenir | 2 (iki takım ikizi) |
+| hücre: hücre içi değişiklik bekler | hep `record_update` | 4 (AOI 2, AOI ikizi, spatial ikizi) |
+| hücre: vadede bırakılır | `release_due` çağrılmaz | 3 |
+| hücre: kova güncel | bekleyen değer kovaya yazılmaz | 3 |
+| hücre: geçiş bekleyeni kapatır | `record_cross` silmez | 1 (`a_crossing_settles_a_pending_change`) |
+| ödünç kayıt sınıfa uyar | spatial şerit hareketi hep `Tick` | 1 (spatial ikizinin vade denetimi) |
+| sahip ihracı tempolar | ihraç tempolanmaz | 2 (ihraç, sharded takım ikizi) |
+| full mod ihracı tempolamaz | full modda da tempolu | 2 (ihraç, full-only shard ikizi) |
+| biçim değişimi hemen | ödünç→ithal geçişi de bekler | 1 (sharded takım ikizi) |
+| faz yayılması | faz 0 / faz = id | 1 / 1 (yayılma testi) |
+| varsayılan her adım | varsayılan `Ticks2` | 13 (sabit özetler 4, defter 2, takım delta 3, ikizler 4 …) |
+| arena opt-in | `ArenaCodec` → `Tick` | arena `delta` ikizi |
+
+Kalan tek sağ kalan: `record_appearance`'ın bekleyeni silmesi (şerit
+kaydının çıkıp aynı hücreye geri girmesiyle ancak görünür; etkisi en
+çok bir fazlalık idempotent upsert — hijyen, doğruluk değil).
+
+**Ölçüm** (release; `gsb-loadgen N --game arena --duration 10
+--write-stall-secs 0 --transport T --capture DIR --capture-clients 8`;
+`a4c8d3e` (önce) ile bu dal (sonra, `7062299`) dönüşümlü çiftler: önce,
+sonra, önce, sonra; 32 çekirdek, başka ajanların işleriyle yüklü makine).
+Her koşuda `joined = left = N`, `errors=0`, `server_closes=0`,
+`dropped=0`, `server_hz` 29,99–30,01, `frag_dropped=0`. "Örnek istemci"
+sütunları yakalanan sekiz istemciden (scratchpad çözümleyicisi
+`a10an.py`: kit'in istemci kurallarıyla yürür, kare + 6 B TCP başlığı).
+
+| N | taşıma | `out_bps_per_conn` önce (1 / 2) | sonra (1 / 2) | Δ | `records_per_tick` önce → sonra | örnek istemci B/sn önce → sonra | kayıt/grup karesi | 1 dk yük önce | sonra |
+|---|---|---|---|---|---|---|---|---|---|
+| 200 | TCP | 39 926 / 39 318 | 22 399 / 22 673 | **−43,1 %** | 386,5 / 378,7 → 217,5 / 217,8 (−43,1 %) | 42 182 / 39 919 → 22 735 / 23 847 (−43,3 %) | 116,9 / 112,5 → 63,3 / 65,4 | 8,5 / 7,1 | 7,6 / 6,1 |
+| 500 | TCP | 99 188 / 99 411 | 55 360 / 54 515 | **−44,7 %** | 993,8 / 1 001,5 → 553,3 / 554,5 (−44,5 %) | 106 793 / 102 651 → 60 660 / 59 585 (−42,6 %) | 287,5 / 279,1 → 161,4 / 159,5 | 6,3 / 6,6 | 5,8 / 7,6 |
+| 500 | rUDP | 102 599 / 102 071 | 59 119 / 55 913 | **−43,8 %** | 936,9 / 932,8 → 542,9 / 519,1 (−43,2 %) | 100 904 / 102 667 → 58 266 / 57 788 (−43,0 %) | 279,5 / 281,0 → 157,7 / 155,8 | 8,0 / 9,0 | 10,2 / 7,9 |
+
+- **A22'nin tahminiyle uyumlu** ("A10 15 Hz, bugünkü gövde": arena
+  −45/−46 %). Tasarruf tam yarı değil: giriş/çıkış, full'lar (taze,
+  keep-alive, one-shot) ve kayıt başı sabitler (başlık, `removed`)
+  bekletilmiyor.
+- **Bayatlık (yakalamadan):** delta'daki her değişiklik upsert'i
+  (girişler hariç) kaydın vade kalıntısında — sonra **%100,00** (tek
+  kalıntı; önce %50/%50); iki ardışık delta teslimi arası hep çift adım
+  (2, 4, 6 …; en küçük 2 — hiçbir kayıt vadesinden erken gitmiyor);
+  sürekli hareket eden birimde (her adımda ≥ 36 cm) teslimler tam 2
+  adım arayla → bir değişikliğin teslimine kadar en çok **1 tick** =
+  `ticks() − 1` (önce 0). Kit'in ikiz testi aynı sınırı deterministik
+  kanıtlıyor.
+- **rUDP parçalanması, 500:** yakalanan grup karelerinden (RAW = yük +
+  3 B, 1 472 B bütçe, parça yükü 1 467 B): bütçeyi aşan kare %94,3 /
+  %91,2 (TCP) ve %99,4 / %97,4 (rUDP) → %86,8 / %83,2 ve %82,6 / %82,0;
+  kare başına datagram 2,91 / 2,81 → 1,91 / 1,87 (rUDP 2,83 / 2,82 →
+  1,86 / 1,86); ortalama grup karesi ~3,5 KB → ~2,0 KB. İstemcinin
+  `frag_reassembled` sayacı 144 549 / 141 439 → 123 820 / 117 798
+  (−15,5 %: mesaj sayısı az düşüyor, mesaj başına datagram düşüyor).
+  200'de parçalanan kare %54,6 / %46,9 → %2,4 / %2,6 (datagram/kare 1,55
+  → 1,02).
+
+**Bulgular.**
+
+- **A10-1 — ödünç ↔ ithal geçişi bekletilemez.** Sharded takımda bir
+  kayıt şerit kenarında ödünç (tipli) ile ithal (gövde) arasında gidip
+  geliyor; ithal değer röle kadar geride geliyor, geçişte bir de
+  tipli tarafın vadesi beklenirse gecikmeler üst üste biniyordu (8'lik
+  sınıfta 9–12 adım). Karar 10: biçim değişimi hemen gider (A10'dan
+  önceki "fazlalık upsert"in aynısı).
+- **A10-2 — arena 500'de kare hâlâ parçalanıyor** (ortalama ~2 KB, %83'ü
+  bütçe üstü). Sonraki kaldıraç arenanın gövdesi: bugün protobuf
+  `UnitRecord` + kayıt başına çerçeve; A22'ye göre "A10 15 Hz + D2 +
+  run" arenada −70 % (bugünküne göre bir −45 % daha) — oyunun kodeği
+  (A31 opt-in'i), kit işi değil.
+- **A10-3 — istemci tarafı sis denetimi bayatlığa göre gevşer:** sunucu
+  görüşü güncel konumla ölçer, istemci iki birimi de bir adım geride
+  tutabilir; istemcide "düşman menzilde mi" diye doğrulayan her test
+  (ve oyun kodu) `2 × hız × (ticks() − 1)` pay bırakmalı.
+- **Sapmalar (bilinçli):** `CellBook`'a üç alan (`step`, `deferred`,
+  `released`) ve `WriteRecord`'a `due` eklendi (kit içi); `book.rs`
+  zaten 250 satırın üstündeydi, oran yarısı çocuk modülde
+  (`cells/book/rate.rs`). Arena testlerinden ikisi yukarıdaki gibi
+  kasten çevrildi; hiçbir bayt kilidi değişmedi.
+
+**Doğrulama:** 847 → **865** test / 0 hata / 1 ignored (+18 kit: takvim
+3, defter 4, AOI 4, oranlı ikiz 6, ihraç 1; mevcut dokuz ikize içerik
+kilidi eklendi); `cargo clippy --workspace --all-targets -- -D warnings`
+0; kapanış kontrolü, beş özellik derlemesi ve `RUSTDOCFLAGS="-D
+warnings" cargo doc --workspace --no-deps` temiz.
 
 ## 11. Kabul kriteri
 
