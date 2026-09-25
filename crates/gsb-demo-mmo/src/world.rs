@@ -20,6 +20,7 @@
 //!   lent nothing — `docs/KIT-ARCHITECTURE.md` §10, F2). A jump into the
 //!   diagonal shard (a waystone `Travel`) is one hop.
 
+use gsb_kit::sharded::Crystallize;
 use gsb_kit::space::{Grid2, GridPartition2, shard_at};
 
 use crate::components::Pos3;
@@ -58,6 +59,24 @@ pub const ATTACK_DAMAGE: u16 = 25;
 /// ticks: 6 s at the MMO's 30 Hz — the usual MMO "in combat" timer. A
 /// disconnected character is not logged out before it runs out.
 pub const COMBAT_TICKS: u64 = 180;
+
+/// The MMO's crystallization policy (`docs/CROSS-SHARD.md` §4 layer 4):
+/// a duel across a seam that has gone on for a second, blows both ways,
+/// moves onto one shard (the higher wire id joins the lower one's
+/// shard) and stays there until it has been quiet for three seconds —
+/// the combat cadence: a melee exchange is a blow every second or so, so
+/// two seconds of silence ([`Crystallize::window`]) end a streak. The
+/// band is one AOI cell: a held character stands less than 64 m past
+/// its region's edge, so its 3×3 view (one cell further) stays inside
+/// the 128 m border strip its holding shard is lent — it sees everything
+/// around it. A mover must be within 32 m of the seam (a melee duel at
+/// the seam always is: [`ATTACK_RANGE`] is 30 m).
+pub const CRYSTALLIZE: Crystallize = Crystallize {
+    after: 30,
+    window: 60,
+    release: 90,
+    margin: CELL_SIZE,
+};
 
 /// The waystones (`Travel` destinations) — one at the centre of every
 /// region, on the ground. Waystone `i` is in shard `i`'s region.

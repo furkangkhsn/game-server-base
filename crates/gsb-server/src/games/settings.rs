@@ -154,6 +154,24 @@ pub fn seconds(
     }
 }
 
+/// A boolean setting, or `None` when not written.
+pub fn boolean(
+    own: Option<&toml::Table>,
+    table: &'static str,
+    key: &'static str,
+) -> Result<Option<bool>, SettingsError> {
+    let Some(value) = own.and_then(|t| t.get(key)) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| SettingsError::BadValue {
+            key: format!("{table}.{key}"),
+            expected: "true or false",
+        })
+}
+
 /// One of `choices` (a string), or `None` when not written.
 pub fn choice(
     own: Option<&toml::Table>,

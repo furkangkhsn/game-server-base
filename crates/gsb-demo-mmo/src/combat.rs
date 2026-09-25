@@ -89,6 +89,12 @@ impl Combat {
             if from.dist(&at) <= ATTACK_RANGE && self.strike(world, victim, me, ATTACK_DAMAGE, tick)
             {
                 enter_combat(world, attacker, tick);
+                // A local blow is invisible to the kit: report it, so a
+                // fight that crystallized onto this shard is held here
+                // while it lasts (`world::CRYSTALLIZE`).
+                if let Some(seam) = seam {
+                    seam.contact(me, target);
+                }
             }
             return;
         }

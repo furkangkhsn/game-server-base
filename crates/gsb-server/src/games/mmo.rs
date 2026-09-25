@@ -23,7 +23,11 @@
 //!   `0` = log out at once (no park, so no combat hold either);
 //! - `logout` — `"release"` (default: the slot is released) or `"bot"`
 //!   (the MMO's logout bot walks the character to the nearest waystone
-//!   and it stays, slot held).
+//!   and it stays, slot held);
+//! - `crystallize` — `true` (default: a duel that keeps going across a
+//!   shard seam moves onto one shard, `docs/CROSS-SHARD.md` §4 layer 4,
+//!   the MMO's `world::CRYSTALLIZE`) or `false` (it stays a cross-seam
+//!   exchange of remote effects for as long as it lasts).
 //!
 //! The demo's flat `disconnect_grace_secs` written explicitly REFUSES
 //! startup instead of being mapped: its meaning (a MOBA-style hold that
@@ -41,8 +45,8 @@ use gsb_core::registry::{BuiltRoom, RoomFactory, Shard};
 use gsb_core::room::ExpireTo;
 use gsb_core::shard::ShardLogic;
 use gsb_demo_mmo::codec::MmoWire;
-use gsb_demo_mmo::world::{SHARDS, WAYSTONES, home_shard};
-use gsb_demo_mmo::{LOGOUT_GRACE, MmoMig, Pos3, Realm, mmo_shard};
+use gsb_demo_mmo::world::{CRYSTALLIZE, SHARDS, WAYSTONES, home_shard};
+use gsb_demo_mmo::{LOGOUT_GRACE, MmoMig, Pos3, Realm, mmo_shard_with};
 use gsb_kit::sharded::KitMig;
 use gsb_kit::space::Cell;
 use gsb_protocol::MessageTable;
@@ -91,13 +95,15 @@ const FIXED: &[FixedKey] = &[
 ];
 
 /// The keys the `[mmo]` table knows.
-const KNOWN: &[&str] = &["logout_grace_secs", "logout"];
+const KNOWN: &[&str] = &["logout_grace_secs", "logout", "crystallize"];
 
-/// What [`GameModule::configure`] settled: the logout policy.
+/// What [`GameModule::configure`] settled: the logout policy and whether
+/// cross-seam fights crystallize.
 #[derive(Debug, Clone, Copy)]
 struct Settings {
     grace: Duration,
     to: ExpireTo,
+    crystallize: bool,
 }
 
 /// The MMO module over a realm (the saved characters and the mob spawn
@@ -177,7 +183,12 @@ impl GameModule for MmoModule {
                 Some("bot") => ExpireTo::AiHandover,
                 _ => ExpireTo::Despawn,
             };
-            Ok(Settings { grace, to })
+            let crystallize = settings::boolean(own, Self::NAME, "crystallize")?.unwrap_or(true);
+            Ok(Settings {
+                grace,
+                to,
+                crystallize,
+            })
         };
         self.settings = Some(read().map_err(|e| e.into_server(Self::NAME))?);
         Ok(())
@@ -191,7 +202,7 @@ impl GameModule for MmoModule {
         let s = self
             .settings
             .expect("the server configures a module before using it");
-        parts.spawn(mmo_factory(Arc::clone(&self.realm), s.grace, s.to))
+        parts.spawn(mmo_factory(Arc::clone(&self.realm), s))
     }
 
     fn describe(&self) -> String {
@@ -199,11 +210,17 @@ impl GameModule for MmoModule {
             None => "mmo (unconfigured)".into(),
             Some(s) => format!(
                 "mmo: sharded × spatial × delta, {SHARDS} shards, logout after {} ({}), \
-                 held while in combat; unsaved sessions → waystone {DEFAULT_WAYSTONE} (shard {})",
+                 held while in combat; cross-seam fights {}; unsaved sessions → waystone \
+                 {DEFAULT_WAYSTONE} (shard {})",
                 secs_label(s.grace),
                 match s.to {
                     ExpireTo::Despawn => "slot released",
                     ExpireTo::AiHandover => "logout bot",
+                },
+                if s.crystallize {
+                    "crystallize"
+                } else {
+                    "stay remote"
                 },
                 default_shard(),
             ),
@@ -216,16 +233,18 @@ type MmoShardLogic =
     dyn ShardLogic<World, GroupKey = Cell, State = KitMig<MmoMig>, Strip = MmoWire>;
 
 /// One whole sharded MMO world per room id: [`SHARDS`] shards built from
-/// the same realm, each with the logout policy, and the join router.
+/// the same realm, each with the logout policy and the crystallization
+/// setting, and the join router.
 fn mmo_factory(
     realm: Arc<Realm>,
-    grace: Duration,
-    to: ExpireTo,
+    s: Settings,
 ) -> RoomFactory<World, Cell, KitMig<MmoMig>, MmoWire> {
+    let crystallize = s.crystallize.then_some(CRYSTALLIZE);
     Arc::new(move |_id, _config| {
         let shards: Vec<Shard<World, Cell, KitMig<MmoMig>, MmoWire>> = (0..SHARDS)
             .map(|i| {
-                let shard = mmo_shard(i, &realm).with_disconnect_policy(Some(grace), to);
+                let shard = mmo_shard_with(i, &realm, crystallize)
+                    .with_disconnect_policy(Some(s.grace), s.to);
                 (World::new(), Box::new(shard) as Box<MmoShardLogic>)
             })
             .collect();

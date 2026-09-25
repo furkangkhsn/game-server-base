@@ -31,6 +31,22 @@ fn no_table_means_the_mmos_own_logout() {
     let s = configure("game = \"mmo\"").expect("defaults");
     assert_eq!(s.grace, LOGOUT_GRACE);
     assert_eq!(s.to, ExpireTo::Despawn);
+    assert!(s.crystallize, "the MMO crystallizes its cross-seam fights");
+}
+
+#[test]
+fn crystallization_can_be_turned_off() {
+    let s = configure("[mmo]\ncrystallize = false").expect("valid");
+    assert!(!s.crystallize);
+    assert!(
+        configure("[mmo]\ncrystallize = true")
+            .expect("valid")
+            .crystallize
+    );
+    assert!(matches!(
+        refusal("[mmo]\ncrystallize = \"no\""),
+        SettingsError::BadValue { key, .. } if key == "mmo.crystallize"
+    ));
 }
 
 #[test]

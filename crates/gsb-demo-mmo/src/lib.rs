@@ -29,6 +29,8 @@
 //!   ACROSS a seam: a target a neighbour lends is validated here and
 //!   struck by its owner through the kit's remote effects
 //!   (`docs/CROSS-SHARD.md` §2–§4), which credits the kill ([`combat::Hit`]);
+//!   a duel that keeps going across a seam crystallizes onto one shard
+//!   (the kit's crystallization, the MMO's policy [`world::CRYSTALLIZE`]);
 //! - [`mmo`] + [`op`] — its wire (`proto/mmo.proto`) and opcodes.
 //!
 //! Everything around the hooks — wire identity, AOI grouping, the
@@ -58,7 +60,7 @@ pub use realm::{MobSpawn, Realm};
 use std::time::Duration;
 
 use gsb_core::room::ExpireTo;
-use gsb_kit::sharded::{ShardedRoom, ShardedSpatialRoom};
+use gsb_kit::sharded::{Crystallize, ShardedRoom, ShardedSpatialRoom};
 use gsb_kit::space::{Grid2, GridPartition2};
 use gsb_protocol::MessageTable;
 
@@ -82,7 +84,9 @@ pub type MmoShard = ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>;
 pub const LOGOUT_GRACE: Duration = Duration::from_secs(20);
 
 /// Shard `index` of the MMO room over `realm` (every shard of the room is
-/// built from the same realm), with the MMO's logout timer: a hold of
+/// built from the same realm), crystallizing its cross-seam fights
+/// ([`world::CRYSTALLIZE`]; [`mmo_shard_with`] builds one without), with
+/// the MMO's logout timer: a hold of
 /// [`LOGOUT_GRACE`] that ends by RELEASING the slot
 /// ([`ExpireTo::Despawn`]), and not while the character is in combat (the
 /// game's veto; the room config's `max_detach_hold` bounds how long a
@@ -93,7 +97,18 @@ pub const LOGOUT_GRACE: Duration = Duration::from_secs(20);
 /// an inherent impl here is E0116.)
 #[must_use]
 pub fn mmo_shard(index: usize, realm: &Realm) -> MmoShard {
+    mmo_shard_with(index, realm, Some(world::CRYSTALLIZE))
+}
+
+/// [`mmo_shard`] with the crystallization policy `crystallize` (`None`:
+/// cross-seam fights stay remote effects for as long as they last).
+#[must_use]
+pub fn mmo_shard_with(index: usize, realm: &Realm, crystallize: Option<Crystallize>) -> MmoShard {
     let shard = ShardedRoom::with_game(MmoGame::for_shard(index, realm), world::partition(), index);
+    let shard = match crystallize {
+        Some(policy) => shard.with_crystallize(policy),
+        None => shard,
+    };
     ShardedSpatialRoom::with_shard(shard, world::aoi_grid())
         .with_disconnect_policy(Some(LOGOUT_GRACE), ExpireTo::Despawn)
 }
