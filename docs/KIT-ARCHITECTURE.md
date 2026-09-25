@@ -799,6 +799,8 @@ Faz 1'de davranış testleriyle doğrulanıp ayrı commit'lerle kapatılır:
 - **`gsb-server`'ı şimdi oyundan bağımsız yapmak:** görünürlük ekseni ve
   loadgen demo'ya bağlıdır; sunucuyu bir "oyun modülü" üzerinden
   generic yapmak ayrı bir iştir, bu tasarımın kapsamı dışındadır.
+  *(Sonradan yapıldı — `docs/GAME-MODULE.md` G1–G4: `GameModule`
+  trait'i, sunucu ve loadgen her barındırılan oyunu sürüyor.)*
 
 ## 10. Fazlar
 
@@ -1730,8 +1732,9 @@ kompozit delege ediyor). Kanıt: `sharded/tests/input_carry.rs` (7, önce
 kırıldı) ve çevrilen `gsb-server` `mmo_findings.rs`; ayrıntı
 GAME-MODULE §5 "Kit düzeltme turu".
 
-Tetikleyicisiz gözlemler (iş yok): kit'in opcode varsayılanları
-(varsayılansız ilişkili sabit daha dürüst olurdu), `Vision::sees`
+Tetikleyicisiz gözlemler (iş yok): ~~kit'in opcode varsayılanları
+(varsayılansız ilişkili sabit daha dürüst olurdu)~~ (kapandı — A3,
+`2d39767`: `Game::SNAPSHOT_OP` / `PRIVATE_OP` artık zorunlu), `Vision::sees`
 birim başına yarıçap taşımıyor, `TeamRoom` yalnız full gönderiyor,
 `ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi —
 sonradan kapandı, "Faz 5 sonucu" gözlemleri),
@@ -1928,7 +1931,9 @@ düzlemine yansıtır (`Grid2` + `GridPartition2`). Böylece ön-ayarların 3D
 veriyle iki farklı kombinasyonu da sınanır.
 
 **Kapsam dışı (bilinçli):** `gsb-server`'ın ve loadgen'in oyundan
-bağımsız yapılması (§9). Sunucu ikilisi ve loadgen 2D demo'ya bağlı kalır;
+bağımsız yapılması (§9). *(Bu tasarımın dışında kaldı, sonradan
+`docs/GAME-MODULE.md` G1–G4 ile yapıldı: sunucu ve loadgen üç demoyu da
+barındırıp sürüyor; aşağıdaki iki cümle Faz 3/4 dönemini anlatır.)* Sunucu ikilisi ve loadgen 2D demo'ya bağlı kalır;
 3D demolar kendi crate testleriyle (oda aktörü üzerinden, gerçek
 `GameLogic` yolu) doğrulanır. Faz 4 sonunda, her demonun uçtan uca
 çalışabilmesi için gereken en küçük sunucu kancası ihtiyacı ayrıca

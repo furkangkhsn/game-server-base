@@ -4,9 +4,11 @@
 > maddenin durumu güncellendi — `max_players`/`RoomFull` fiilen kapanmış
 > (join yolu + ERROR 8 + shard guardrail + test), `Güvenlik yüzeyi`'nin
 > iki alt parçası (`TicketAuth` hook'u, `max_connections` cap'i) kapanmış
-> (yalnız post-auth aksiyon rate-limit'i açık), `Oturum zaman aşımı`
+> (yalnız post-auth aksiyon rate-limit'i açık), ~~`Oturum zaman aşımı`
 > yarı kurulmuş (reader idle-timeout var; yarı-ölü bağlantı süpürmesi
-> yok). Aşağıdaki maddeler bu doğrulamayı yansıtıyor.
+> yok)~~ *(kapandı — aşağıda "Oturum zaman aşımı" [x]: idle penceresi,
+> bayt-granüler yazma-tıkanma sınırı, AFK sinyali/tavanı)*. Aşağıdaki
+> maddeler bu doğrulamayı yansıtıyor.
 
 Durum: v1 mimari tamam; dış incelemede bulunan 5 kritik hata (#1–#5)
 kapatıldı; tick mimarisi broadcast tabanlı yeniden kuruldu (ayrı
@@ -447,9 +449,11 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   kimliğin sonraki HER resume'u bir kez haksız stale-reject yiyordu
   (ölçüm: 20 istemcide 20 red) — epoch minting registry'ye global
   taşındı, regresyon kilidi `repeated_reconnects_are_accepted_on_first_
-  attempt`. Kalan not: oda içi anahtarların uzun vadede PlayerId'ye
-  taşınması (RECONNECT §14.1); rUDP üstünde e2e varyantı (deneysel
-  statüye bağlı).
+  attempt`. Kalan not: ~~oda içi anahtarların uzun vadede PlayerId'ye
+  taşınması (RECONNECT §14.1)~~ *(kapandı — TRAIT-ARCHITECTURE §6 Faz 2,
+  `1c93477`: oda tabloları `PlayerId` anahtarlı, RebindKey tek bağlama
+  satırına küçüldü)*; rUDP üstünde e2e varyantı (deneysel statüye
+  bağlı).
   Sonraki tur: süreli bekletmede `may_release` vetosu + mutlak veto
   tavanı `max_detach_hold` (harass-lock çekirdekte sınırlı, §17). Açık:
   zorla bitirilen bekletmeler için `RoomSample` sayacı; sunucu
@@ -636,8 +640,9 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     `Communication`/legacy `visibility` girdi-kodlaması),
     `resolve_selection()` tek geçiş kapısı, desteklenmeyen kombolarda
     faz-bilgili tipli hatalar; 14 test (`config_axes.rs`). Test 265 → 279.
-  - **Faz B:** `sharded × spatial` kompoziti — her shard kendi içinde
-    hücre-gruplu yayın yapar (AoiRoom mantığının shard-içi örneklanması);
+  - **Faz B:** ✅ Kapatıldı (`76777c2`; bugün kit'te
+    `ShardedSpatialRoom<G, P, S>`) — `sharded × spatial` kompoziti —
+    her shard kendi içinde hücre-gruplu yayın yapar (AoiRoom mantığının shard-içi örneklanması);
     ödünç border şeridi delta defterine entegre edilir (borrowed set
     her tick tam geldiğinden diff'i önceki borrowed görünümüne karşı
     kurulmalı — yoksa her tick dirty olur).

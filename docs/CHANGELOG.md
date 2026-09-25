@@ -1090,7 +1090,8 @@ bir kez kırıldı (`closes=1, conns=1`), tek başına üç koşuda geçti.
 Sebep testte: registry `ConnClosed`'da `closes`'u artırıp metrik
 yayıyor, bağlı satırı ise odanın sonraki `DetachDespawned`'ına kadar
 tutuyor; test yalnız `closes >= 1`'i bekleyip `conns == 0`'ı iddia
-ediyor. Ayrı iş olarak işaretlendi.
+ediyor. Ayrı iş olarak işaretlendi. *(Kapandı: `218a46f` — test artık
+`closes >= 1 && conns == 0`'ı birlikte bekliyor.)*
 
 **Doğrulama.** fmt temiz · clippy `-D warnings` 0 uyarı · test **411**
 geçti / 0 hata / 1 ignored (409 + 2 katman testi). Loadgen (50 istemci,

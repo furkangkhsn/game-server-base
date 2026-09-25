@@ -214,7 +214,8 @@ QUIC (tercih edilen: connection-migration + 0-RTT avantajları)
   └─ düşerse → TLS-TCP (evrensel; rehome protokolü transport-
                 bağımsız olduğu için devri burada da çalışır,
                 yalnız 0-RTT hızını kaybedersin)
-     └─ (ileride) WebSocket — tarayıcı/WebGL derlemeleri için ayrı karar
+     └─ WebSocket — tarayıcı/WebGL derlemeleri için (kapı VAR:
+        `gsb-net` `ws/`, çoklu-listener'da `[[listeners]]` kapısı)
 ```
 
 Rehome protokolünün kendisi transport-bağımsız tasarlanmalıdır:

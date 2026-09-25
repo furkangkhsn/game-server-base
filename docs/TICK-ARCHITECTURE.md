@@ -115,7 +115,11 @@ loop {
    `tick - expected` eşiğiyle kendi sapma hesabını yapar. Oda arası
    koordinasyon yok — mimari ilke ile birebir.
 
-### Karar gerektiren noktalar (AÇIK)
+### Karar gerektiren noktalar (~~AÇIK~~ KAPANDI)
+
+> *Kapandı — hepsi kararlaştırıldı ve uygulandı: 1–5 → §5 karar kaydı
+> (#3–#7); 6 → `RoomConfig` varsayılanları `control_capacity: 128`,
+> `action_capacity: 256`. Aşağıdaki liste tasarım anının kaydıdır.*
 
 1. **Tek global tick hızı mı?** v1'de tüm odalar aynı hızda en basiti.
    Farklı hız ihtiyacı (60Hz arena + 15Hz lobby) *bölücü* ile çözülür:

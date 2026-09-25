@@ -1,6 +1,6 @@
 # gsb: Trait Mimarisi — Birleşim ve PlayerId Yolu
 
-> Durum: TASARIM (Faz 1 uygulama onaylandı). RECONNECT.md gibi bu
+> Durum: UYGULANDI (Faz 1 ve Faz 2 ✅ — §6). RECONNECT.md gibi bu
 > doküman da uygulamanın sözleşmesidir; §6'daki faz tablosu sırayı
 > sabitler.
 
@@ -58,7 +58,7 @@ GameLogic'e `handle_request`/`match_result` koymak shard'a *imkânı*
 verir; *çalışması* için shard actor'üne pending-set, timeout sweep ve
 result-sink makinesi de gerekir. Bu iki ayrı iştir:
 
-- **Faz 1 (bu tur):** birleşim + `keepalive` terfisi. Keepalive ucuzdur:
+- **Faz 1 (✅ uygulandı):** birleşim + `keepalive` terfisi. Keepalive ucuzdur:
   oda tarafındaki sözleşme ("değişmediyse cache'ten tam snapshot'ı
   yeniden gönder", `RoomLogic::keepalive`) shard broadcast'ının mevcut
   grup-cache yapısına doğrudan oturur; shard actor kadans sayacını
@@ -89,7 +89,7 @@ result-sink makinesi de gerekir. Bu iki ayrı iştir:
 
 | Faz | İçerik | Durum |
 |---|---|---|
-| 1 | `GameLogic` supertrait + Room/Shard uzantıları; keepalive terfisi (shard actor kadansı dahil); gsb-game impl'lerinin bölünmesi | BU TUR |
+| 1 | `GameLogic` supertrait + Room/Shard uzantıları; keepalive terfisi (shard actor kadansı dahil); gsb-game impl'lerinin bölünmesi | ~~BU TUR~~ ✅ Kapatıldı — `GameLogic` + `RoomLogic`/`ShardLogic` uzantıları (`gsb-core` `room/logic.rs`, `shard/logic.rs`); shard keepalive kilidi `shard/tests/keepalive.rs` |
 | 2 | PlayerId + bağlama tablosu; RebindKey küçültmesi | ✅ Kapatıldı — tablolar PlayerId'e geçti, resume tek bağlama satırı güncelliyor (§5 tamamlandı); `pending`/`queued` ve shard epoch/tombstone tabloları BY DESIGN conn-anahtarlı kaldı (oturum-kapsamlı; kod içi signpost'larda CHECKED) |
 | 3 | Shard-RPC + match-result makinesi | ✅ Kapatıldı — shard actor'ü odanın RPC makinesinin tam karşılığını taşıyor (pending/cap/sweep/uzlaşma + private yanıtları); `handle_request`/`match_result` GameLogic'e terfi etti; match_result shard başına bir payload üretir. Kilitler: `tests/rpc_shard.rs` (8 test) |
 
@@ -133,5 +133,7 @@ Detach/park/bot etkileşimi: `docs/RECONNECT.md` §16.
 ## 8. Bilinçli olarak yapılmayanlar
 
 - Tek unified trait (B) ve macro üretimi (C) — bkz. §3.
-- Shard RPC/match-result — Faz 3.
-- PlayerId — Faz 2 (bu turda yalnız plan).
+- ~~Shard RPC/match-result — Faz 3.~~ (kapandı — Faz 3, §6;
+  `tests/rpc_shard.rs`)
+- ~~PlayerId — Faz 2 (bu turda yalnız plan).~~ (kapandı — Faz 2, §6;
+  `1c93477`)

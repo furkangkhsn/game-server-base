@@ -51,7 +51,12 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
 ## 5. NOT-DONE (v1)
 
 - Auth/TLS (localhost sözleşmesi ile yaşar), keep-alive/chunked,
-  JSON/protobuf çıktı, /debug/pprof tarzı profillendirme, çoklu-listener
+  JSON/protobuf çıktı, /debug/pprof tarzı profillendirme, ops HTTP için
+  çoklu-listener (admin/metrics sunucusu tek `http_listen` adresinde
+  dinler). *Not: oyun taşımalarının çoklu-listener'ı (`[[listeners]]`:
+  tcp/tls/udp/quic/ws) ayrı bir iştir ve yapıldı — CHANGELOG
+  "çoklu-listener'a QUIC + WS kapıları turu", ROADMAP devam notu; bu
+  madde yalnız ops HTTP'yi kasteder.*
 
 ## 6. Kenara not: `metrics` crate fasadı (dış öneri, uygulanmadı)
 

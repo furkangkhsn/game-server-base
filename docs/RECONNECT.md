@@ -329,7 +329,9 @@ Tek nokta olmasının sebebi projenin yapısal-işaret ilkesidir: re-key'i
 dağınık bırakmak "yeni tablo ekleyen unutur" sınıfı hatadır (dirty-cell
 dersi).
 
-**Yol haritasına not:** uzun vadeli doğru şekil, oda içi anahtarı
+**Yol haritasına not** *(kapandı — TRAIT-ARCHITECTURE §6 Faz 2,
+`1c93477`: oda tabloları `PlayerId` anahtarlı; RebindKey tek bağlama
+satırının güncellenmesine küçüldü)*: uzun vadeli doğru şekil, oda içi anahtarı
 oturum-bağımsız bir `PlayerId`'ye taşımaktır (re-bind ihtiyacını kökten
 kaldırır); v1 için ağır refactor olduğundan ertelendi ve P-listeye
 işlendi. Resume mekaniği bu geçişi zorlamaz: RebindKey tek noktada
