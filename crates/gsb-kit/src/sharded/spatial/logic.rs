@@ -6,12 +6,10 @@
 //! it as an inherent method.)
 
 use bevy_ecs::prelude::World;
-use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
-use prost::encoding::varint::encode_varint;
 
 use crate::codec::RecordCodec;
 use crate::common::assemble_group_packet;
@@ -203,29 +201,26 @@ where
                 self.conn_view.insert(player, c);
             } else {
                 // The one-shot private full: pre-encoded WorldSnapshot
-                // bytes inside the Private message's snapshot oneof
-                // (field 2, length-delimited); queued RPC answers ride
-                // the SAME frame (field 3).
+                // bytes inside the Private message's snapshot oneof;
+                // queued RPC answers ride the SAME frame (the shared
+                // frame writer, `crate::common::emit_private_full`).
                 let full = self.pieces.full_view(
                     self.inner.game.codec(),
                     &self.space,
                     &self.book.buckets,
                     &c,
                 );
-                out.put_u8(0x12); // Private field 2 (snapshot), LEN
-                encode_varint(full.len() as u64, out);
-                out.extend_from_slice(&full);
-                crate::common::append_responses(responses, out);
-                crate::common::append_session_payload(
+                self.conn_view.insert(player, c);
+                return crate::common::emit_private_full(
                     &mut self.inner.game,
                     world,
                     &self.inner.player_entity,
                     &mut self.inner.input,
                     player,
+                    &full,
+                    responses,
                     out,
                 );
-                self.conn_view.insert(player, c);
-                return true;
             }
         }
         crate::common::emit_private_frame(

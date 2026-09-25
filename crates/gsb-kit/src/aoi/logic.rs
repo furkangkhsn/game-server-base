@@ -4,10 +4,8 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
-use bytes::BufMut;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
-use prost::encoding::varint::encode_varint;
 
 use crate::aoi::*;
 use crate::codec::RecordCodec;
@@ -149,31 +147,24 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
                 self.conn_view.insert(player, c);
             } else {
                 // The one-shot private full (one per join/crossing):
-                // the frame is the `Private` message (the game's
-                // `PRIVATE_OP`) — the pre-encoded WorldSnapshot bytes
-                // ride in the `snapshot` oneof (field 2,
-                // length-delimited). A queued RPC answer is appended to
-                // the SAME frame
-                // (field 3, one length-delimited `RpcResponse` each)
-                // instead of a second frame — the per-connection
-                // per-tick slot is one frame.
+                // the pre-encoded WorldSnapshot bytes in the `Private`
+                // message's `snapshot` oneof, a queued RPC answer on the
+                // SAME frame (the shared frame writer,
+                // `crate::common::emit_private_full`).
                 let full =
                     self.pieces
                         .full_view(self.game.codec(), &self.space, &self.book.buckets, &c);
-                out.put_u8(0x12); // Private field 2 (snapshot), LEN
-                encode_varint(full.len() as u64, out);
-                out.extend_from_slice(&full);
-                crate::common::append_responses(responses, out);
-                crate::common::append_session_payload(
+                self.conn_view.insert(player, c);
+                return crate::common::emit_private_full(
                     &mut self.game,
                     world,
                     &self.player_entity,
                     &mut self.input,
                     player,
+                    &full,
+                    responses,
                     out,
                 );
-                self.conn_view.insert(player, c);
-                return true;
             }
         }
         crate::common::emit_private_frame(

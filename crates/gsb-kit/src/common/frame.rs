@@ -77,8 +77,28 @@ pub(crate) fn put_entity_records<'a, R: RecordCodec>(
     out: &mut BytesMut,
 ) {
     for (id, wire) in records {
-        put_delimited(out, TAG_ENTITIES, |o| codec.encode(id, wire, o));
+        put_entity_record(codec, id, wire, out);
     }
+}
+
+/// Append one `entities` entry (field 2): the length-delimited
+/// [`RecordCodec::encode`] body of record `id`.
+#[inline]
+pub(crate) fn put_entity_record<R: RecordCodec>(
+    codec: &R,
+    id: u64,
+    wire: &R::Wire,
+    out: &mut BytesMut,
+) {
+    put_delimited(out, TAG_ENTITIES, |o| codec.encode(id, wire, o));
+}
+
+/// Append one `removed` entry (field 3, varint, unpacked — one tag per
+/// id).
+#[inline]
+pub(crate) fn put_removed(out: &mut BytesMut, wire: u64) {
+    out.put_u8(TAG_REMOVED);
+    encode_varint(wire, out);
 }
 
 /// [`put_entity_records`] as one frozen piece, shareable by reference.
@@ -96,8 +116,7 @@ pub(crate) fn encode_entity_records<'a, R: RecordCodec>(
 pub(crate) fn encode_entity_exits(exits: &[u64]) -> Bytes {
     let mut out = BytesMut::new();
     for &wire in exits {
-        out.put_u8(TAG_REMOVED);
-        encode_varint(wire, &mut out);
+        put_removed(&mut out, wire);
     }
     out.freeze()
 }
