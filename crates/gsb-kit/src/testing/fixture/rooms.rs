@@ -4,11 +4,11 @@
 use crate::aoi::AoiRoom;
 use crate::pvs::SectorRoom;
 use crate::room::OpenRoom;
-use crate::sharded::{ShardedRoom, ShardedSpatialRoom};
+use crate::sharded::{ShardedRoom, ShardedSpatialRoom, ShardedTeamRoom};
 use crate::space::{ConvexSectors2, Grid2, GridPartition2, Sector, VisionGrid2};
 use crate::team::TeamRoom;
 
-use super::{Fixture, Position};
+use super::{Fixture, Position, WirePos};
 
 // ── The PVS map: four convex sectors tiling [-50, 50]² ────────────────
 //
@@ -91,6 +91,27 @@ impl ShardedSpatialRoom<Fixture, GridPartition2<Position>, Grid2> {
         Self::with_shard(
             ShardedRoom::<Fixture, GridPartition2<Position>>::new(index, shard_count, half),
             Grid2::new(cell_size),
+        )
+    }
+}
+
+/// Where a lent fixture record stands for vision: its (truncated) wire
+/// position.
+pub(crate) fn fix_lent_pos(w: &WirePos) -> Option<Position> {
+    Some(Position {
+        x: w.x as f32,
+        y: w.y as f32,
+    })
+}
+
+impl ShardedTeamRoom<Fixture, GridPartition2<Position>, VisionGrid2<Position>> {
+    /// Shard `index` of `shard_count` over `[-half, half]²`, team vision
+    /// of `radius`.
+    pub(crate) fn new(index: usize, shard_count: usize, half: f32, radius: f32) -> Self {
+        Self::with_shard(
+            ShardedRoom::<Fixture, GridPartition2<Position>>::new(index, shard_count, half),
+            VisionGrid2::new(radius),
+            fix_lent_pos,
         )
     }
 }

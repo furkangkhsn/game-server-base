@@ -93,6 +93,31 @@ pub(crate) fn put_entity_record<R: RecordCodec>(
     put_delimited(out, TAG_ENTITIES, |o| codec.encode(id, wire, o));
 }
 
+/// Append one `entities` entry (field 2) whose body is already encoded
+/// — a record another shard encoded with the game's codec (the team
+/// exchange's imported records, `docs/CROSS-SHARD.md` §8b): the same
+/// bytes [`put_entity_record`] writes for the same record.
+#[inline]
+pub(crate) fn put_entity_body(out: &mut BytesMut, body: &[u8]) {
+    put_delimited(out, TAG_ENTITIES, |o| o.extend_from_slice(body));
+}
+
+/// How a delta engine writes one record of value `W` as an `entities`
+/// entry: through the game's codec for its own wire values (the blanket
+/// impl below — every room but one), or through a writer that also
+/// knows pre-encoded records (the sharded team composite's imports).
+pub(crate) trait WriteRecord<W> {
+    /// Append record `id` with value `wire` as one `entities` entry.
+    fn put(&self, id: u64, wire: &W, out: &mut BytesMut);
+}
+
+impl<R: RecordCodec> WriteRecord<R::Wire> for R {
+    #[inline]
+    fn put(&self, id: u64, wire: &R::Wire, out: &mut BytesMut) {
+        put_entity_record(self, id, wire, out);
+    }
+}
+
 /// Append one `removed` entry (field 3, varint, unpacked — one tag per
 /// id).
 #[inline]

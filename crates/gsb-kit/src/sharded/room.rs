@@ -17,6 +17,7 @@ use crate::sharded::departing::Departures;
 use crate::sharded::*;
 use crate::space::Partition;
 
+mod join;
 mod logic;
 mod policy;
 mod shard;

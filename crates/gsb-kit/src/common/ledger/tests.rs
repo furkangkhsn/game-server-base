@@ -10,6 +10,7 @@ use bytes::BytesMut;
 use prost::Message;
 
 use super::*;
+use crate::common::put_entity_records;
 use crate::testing::{FixCodec, WirePos, WorldSnapshot};
 
 fn content(records: &[(u64, i32, i32)]) -> HashMap<u64, WirePos> {

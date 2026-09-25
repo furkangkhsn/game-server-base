@@ -39,10 +39,7 @@ use std::hash::Hash;
 use bytes::{Bytes, BytesMut};
 use gsb_core::id::PlayerId;
 
-use crate::codec::RecordCodec;
-use crate::common::{
-    put_entity_record, put_entity_records, put_removed, write_full_header, write_snapshot_header,
-};
+use crate::common::{WriteRecord, put_removed, write_full_header, write_snapshot_header};
 
 /// What a group's delta-mode emission wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +85,7 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// when `content` equals the last emitted content (`false`), else
     /// the whole content (records in `content`'s iteration order) under
     /// the full header. `encoded` counts the records written.
-    pub(crate) fn emit_full<R: RecordCodec<Wire = W>>(
+    pub(crate) fn emit_full<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
         tick: u64,
@@ -100,7 +97,9 @@ impl<W: Clone + Eq> SetLedger<W> {
             return false;
         }
         write_full_header(out, tick);
-        put_entity_records(codec, content.iter().map(|(id, wire)| (*id, wire)), out);
+        for (id, wire) in content {
+            codec.put(*id, wire, out);
+        }
         *encoded += content.len() as u64;
         self.held = content.clone();
         true
@@ -111,7 +110,7 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// its clients hold — `removed` (ids that left) first, then the
     /// upserts (new ids and changed wire values) — or nothing when the
     /// two are equal. `encoded` counts the records written.
-    pub(crate) fn emit_delta<R: RecordCodec<Wire = W>>(
+    pub(crate) fn emit_delta<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
         step: u64,
@@ -147,7 +146,7 @@ impl<W: Clone + Eq> SetLedger<W> {
                     slot.insert(wire.clone());
                 }
             }
-            put_entity_record(codec, *id, wire, out);
+            codec.put(*id, wire, out);
             *encoded += 1;
         }
         if out.len() == body {
@@ -160,7 +159,7 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// The group's FULL frame for this step (the complete `content`
     /// under the full header — the same bytes the full mode writes for
     /// it), encoded once per step and shared.
-    pub(crate) fn full_frame<R: RecordCodec<Wire = W>>(
+    pub(crate) fn full_frame<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
         step: u64,
@@ -175,11 +174,9 @@ impl<W: Clone + Eq> SetLedger<W> {
         }
         let mut buf = BytesMut::new();
         write_full_header(&mut buf, tick);
-        put_entity_records(
-            codec,
-            content.iter().map(|(id, wire)| (*id, wire)),
-            &mut buf,
-        );
+        for (id, wire) in content {
+            codec.put(*id, wire, &mut buf);
+        }
         *encoded += content.len() as u64;
         let bytes = buf.freeze();
         self.full = Some((step, bytes.clone()));
@@ -188,7 +185,7 @@ impl<W: Clone + Eq> SetLedger<W> {
 
     /// The group's frame is a FULL this step (a fresh group, a keep-alive
     /// tick): [`Self::full_frame`], with the ledger re-synced to it.
-    pub(crate) fn resync<R: RecordCodec<Wire = W>>(
+    pub(crate) fn resync<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
         step: u64,

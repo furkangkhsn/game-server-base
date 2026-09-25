@@ -30,6 +30,7 @@ mod lent_arrival;
 mod migration;
 mod seam;
 mod spatial;
+mod team;
 
 /// The spatial composite over the same instantiation, with the kit's 2D
 /// grid AOI.

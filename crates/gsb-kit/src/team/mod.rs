@@ -125,7 +125,7 @@ use crate::space::Vision;
 /// the game's assignment policy ([`TeamGame::team_of`]); membership is
 /// *game state*, kept in the world as the entity's [`TeamMember`]
 /// component (see its docs), never a position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Team(pub u8);
 
 /// Default vision radius in world units (see module docs).

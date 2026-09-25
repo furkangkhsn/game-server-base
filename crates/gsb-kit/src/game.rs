@@ -132,7 +132,7 @@ pub trait Game: Send + 'static {
     /// empty for an anonymous session. Override it to place a SAVED
     /// character (its position, its shard's region — the sharded room's
     /// router sees the same identity, so the two can agree:
-    /// `docs/GAME-MODULE.md`, K4). The team room does not call it (its
+    /// `docs/GAME-MODULE.md`, K4). The team rooms do not call it (their
     /// spawn is [`TeamGame::spawn_team_player_as`]). Default:
     /// `spawn_player` — the identity is ignored.
     fn spawn_player_as(
@@ -250,9 +250,10 @@ pub trait TeamGame: Game {
     }
 
     /// [`Self::spawn_team_player`] for a player who authenticated as
-    /// `identity` — what the team room
-    /// ([`TeamRoom`](crate::team::TeamRoom)) calls on every fresh join:
-    /// the team counterpart of
+    /// `identity` — what the team rooms (the single-world
+    /// [`TeamRoom`](crate::team::TeamRoom) and the sharded
+    /// [`ShardedTeamRoom`](crate::sharded::ShardedTeamRoom)) call on
+    /// every fresh join: the team counterpart of
     /// [`Game::spawn_player_as`] (`docs/GAME-MODULE.md`, K4). Override it
     /// to place a SAVED character — its position, its faction — by the
     /// identity; the sharded room's join router sees the same identity,

@@ -145,12 +145,27 @@
 //! leaver's baseline and parks the despawn removal (despawns are not
 //! component writes) so the seam cell's delta carries the exit.
 
+//!
+//! ## The team composite ([`ShardedTeamRoom`] — CROSS-SHARD §8b)
+//!
+//! `team × sharded`: the same grid, with team fog over the WHOLE map —
+//! one snapshot group per team, allies seen map-wide, an enemy seen when
+//! any unit of the team sees it, on any shard. Locality (the border
+//! strip) cannot deliver that, so each shard exports its teams' visible
+//! sets every tick through the core's TEAMS phase
+//! (`ShardLogic::team_exchange`) and the registry hub relays them to
+//! the shards viewing those teams. The composite merges own + lent +
+//! imported records per team, one record per wire (own > lent >
+//! imported), and ships them in the team room's two snapshot modes over
+//! the shared set ledger. See `team` for the rules.
+
 mod crystal;
 mod departing;
 mod mig;
 mod room;
 mod seam;
 mod spatial;
+mod team;
 
 #[cfg(test)]
 mod tests;
@@ -160,6 +175,7 @@ pub use mig::{KitMig, ShardInputRecord, ShardParkRecord, ShardPin};
 pub use room::ShardedRoom;
 pub use seam::Seam;
 pub use spatial::ShardedSpatialRoom;
+pub use team::{DEFAULT_TEAM_BUDGET, ShardedTeamRoom, TeamMig};
 
 // The grid helpers, in scope for the in-module tests (`use super::*`).
 #[cfg(test)]
