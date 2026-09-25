@@ -91,13 +91,19 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         // The stable player identity and the wire identity both come from
         // this shard's range-partitioned counter (player first, as it
-        // always was); the spawn is the game's (the demo derives the
-        // spawn point from the TRANSPORT session id — the load
-        // generator's home distribution pairs with it).
+        // always was); the spawn is the game's, given the authenticated
+        // identity (the demo derives the spawn point from the TRANSPORT
+        // session id — the load generator's home distribution pairs with
+        // it; the MMO places a saved character by its player — the
+        // registry routed the join to that character's shard).
         let player = self.mint_player();
-        let entity = self.game.spawn_player(world, conn);
+        let entity = self.game.spawn_player_as(world, conn, identity);
         debug_assert!(
             world.entity(entity).contains::<Marker<G>>(),
             "Game::spawn_player must spawn the codec's Marker (the broadcast set)"

@@ -61,6 +61,10 @@ pub(crate) struct MoveTarget {
     pub y: f32,
 }
 
+/// The identity a named login authenticated as (`Game::spawn_player_as`).
+#[derive(Debug, Clone, PartialEq, Eq, Component)]
+pub(crate) struct Login(pub String);
+
 /// A player's speed (players have one, NPCs the tests spawn may not).
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub(crate) struct Speed(pub f32);
@@ -136,6 +140,16 @@ impl Game for Fixture {
         world
             .spawn((Position::default(), Speed(DEFAULT_SPEED)))
             .id()
+    }
+
+    /// A named login spawns like any player and carries its identity
+    /// ([`Login`]) — what the rooms handed the game.
+    fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
+        let entity = self.spawn_player(world, conn);
+        if !identity.is_empty() {
+            world.entity_mut(entity).insert(Login(identity.to_string()));
+        }
+        entity
     }
 
     /// The fixture decodes no input.

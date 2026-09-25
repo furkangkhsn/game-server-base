@@ -18,11 +18,12 @@ use crate::identity::Minter;
 /// The join path: a fresh stable player identity (the room's
 /// `PlayerId` counter — resume stability comes from the park ledger
 /// carrying it, not from re-minting), a fresh input session (a (re)join
-/// is a new session — see [`InputSeq`]), the GAME's spawn
-/// ([`Game::spawn_player`]), then the KIT's identity stamp from the
-/// room's single [`Minter`] and the player→entity table. The wire id
-/// also goes to the joiner in `JOIN_ROOM_RESULT`, so both paths share
-/// one space.
+/// is a new session — see [`InputSeq`]), the GAME's spawn of the player
+/// who authenticated as `identity` ([`Game::spawn_player_as`]), then the
+/// KIT's identity stamp from the room's single [`Minter`] and the
+/// player→entity table. The wire id also goes to the joiner in
+/// `JOIN_ROOM_RESULT`, so both paths share one space.
+#[allow(clippy::too_many_arguments)] // the tables, the joiner, and its identity
 pub(crate) fn join<G: Game>(
     game: &mut G,
     players: &mut HashMap<PlayerId, Entity>,
@@ -30,6 +31,7 @@ pub(crate) fn join<G: Game>(
     minter: &mut Minter,
     world: &mut World,
     conn: ConnectionId,
+    identity: &str,
     input: &mut InputSeq,
 ) -> Admission {
     join_with(
@@ -40,7 +42,7 @@ pub(crate) fn join<G: Game>(
         world,
         conn,
         input,
-        G::spawn_player,
+        |g, w, c| g.spawn_player_as(w, c, identity),
     )
 }
 

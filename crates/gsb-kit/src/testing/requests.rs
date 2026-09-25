@@ -51,6 +51,9 @@ impl Game for Recording {
     fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
         self.game.spawn_player(world, conn)
     }
+    fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
+        self.game.spawn_player_as(world, conn, identity)
+    }
     fn ingest(
         &mut self,
         world: &mut World,

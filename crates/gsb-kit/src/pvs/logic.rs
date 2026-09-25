@@ -91,6 +91,10 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         crate::common::join(
             &mut self.game,
             &mut self.player_entity,
@@ -98,6 +102,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
             &mut self.minter,
             world,
             conn,
+            identity,
             &mut self.input,
         )
     }

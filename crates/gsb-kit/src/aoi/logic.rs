@@ -172,6 +172,10 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         // Shared spawn path (input session reset included): deterministic
         // spawn point, fresh stable player + wire identity, player→entity
         // table. `conn_view` deliberately gets NO entry here: the first
@@ -186,6 +190,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
             &mut self.minter,
             world,
             conn,
+            identity,
             &mut self.input,
         );
         // Maintain the member-entity set (the dirty loop's O(1)

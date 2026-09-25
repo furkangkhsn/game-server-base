@@ -114,7 +114,11 @@ where
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
-        let admission = self.inner.on_join(world, conn);
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        let admission = self.inner.on_join_as(world, conn, identity);
         // Member bookkeeping for the birth arithmetic (the wrapped shard
         // owns the tables; the spatial layer owns membership).
         if let Some(&entity) = self.inner.player_entity.get(&admission.player) {

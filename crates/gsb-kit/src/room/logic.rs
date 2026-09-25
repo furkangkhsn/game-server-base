@@ -108,6 +108,10 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
+        self.on_join_as(world, conn, "")
+    }
+
+    fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         // Shared join path (`common::join`): the game's spawn, a fresh
         // stable player identity + wire identity through their minting
         // counters, and the player→entity table update. The entity value
@@ -123,6 +127,7 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
             &mut self.minter,
             world,
             conn,
+            identity,
             &mut self.input,
         )
     }

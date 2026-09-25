@@ -124,6 +124,26 @@ pub trait Game: Send + 'static {
     /// transport session the join arrived on.
     fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity;
 
+    /// [`Self::spawn_player`] for a player who authenticated as
+    /// `identity` — what the kit's rooms call on every fresh join (the
+    /// core's `GameLogic::on_join_as`). `identity` is the ticket's
+    /// validated player, the client-claimed `Auth.name` on the local-auth
+    /// path (a development path — anyone can claim any name there), or
+    /// empty for an anonymous session. Override it to place a SAVED
+    /// character (its position, its shard's region — the sharded room's
+    /// router sees the same identity, so the two can agree:
+    /// `docs/GAME-MODULE.md`, K4). The team room does not call it (its
+    /// spawn is [`TeamGame::spawn_team_player`]). Default: `spawn_player`
+    /// — the identity is ignored.
+    fn spawn_player_as(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        _identity: &str,
+    ) -> Entity {
+        self.spawn_player(world, conn)
+    }
+
     /// Synthesize the input of the bot-fed players (a parked player's
     /// grace ran out toward AI handover — RECONNECT §9): push frames into
     /// `out`, the tick's action list, which [`Game::ingest`] then decodes
@@ -303,3 +323,6 @@ pub trait ShardGame: Game {
 
 /// The wire value of game `G`'s records.
 pub type Wire<G> = <<G as Game>::Codec as RecordCodec>::Wire;
+
+#[cfg(test)]
+mod tests;

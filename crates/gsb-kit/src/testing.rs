@@ -34,6 +34,9 @@ impl<G: Game> Game for Culling<G> {
     fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
         self.0.spawn_player(world, conn)
     }
+    fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
+        self.0.spawn_player_as(world, conn, identity)
+    }
     fn ingest(
         &mut self,
         world: &mut World,
@@ -88,6 +91,9 @@ impl<G: Game> Game for Vetoing<G> {
     }
     fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
         self.0.spawn_player(world, conn)
+    }
+    fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
+        self.0.spawn_player_as(world, conn, identity)
     }
     fn ingest(
         &mut self,
