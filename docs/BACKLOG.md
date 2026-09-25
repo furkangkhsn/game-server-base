@@ -23,7 +23,8 @@ bağımsız mutasyon, `main`'e fast-forward. Push yok.
 | 4a | **S — çekirdek kapanış kilitlenmesi** (U'da bulundu): `stop()` ticker'ı hemen iptal ediyor; registry dolu oda kontrol kanalında `send().await`'te bekliyor, oda bir daha tick atmıyor, broadcast kapanmıyor (registry bir `Ticker` tutuyor) — stop anında >128 canlı üye koparsa sunucu asılı | `gsb-core` (registry/ticker kapanış sırası) | ✅ `0c88af0` (DESIGN §9.1) |
 | 4b | **H — rUDP el sıkışma proof kaybı** (U'da bulundu): istemci proof'u gönderince kendini bağlı sayıyor; 200+ eşzamanlı el sıkışmada loopback'te sunucu soketinin alım kuyruğu taşıyor, proof kayboluyor, istemci ölüyor | `gsb-net/udp` (kabul `ACK{1}` + proof yeniden gönderimi, sunucu idempotent) | ✅ `717aff2` (DESIGN §6 "El sıkışma kaybı") |
 | 5 | **T — takım odasında delta:** arena yalnız full gönderiyor (bağlantı başı ~234 KB/s @1000) | `gsb_kit::team` (ortak delta motoru) | ✅ `b2282df` (KIT-ARCHITECTURE §10 "T sonucu"; arena kazancı ~%10 — bulgu) |
-| 6 | **W — team × sharded kompoziti + onu gerektiren senaryo:** CROSS-SHARD §8 (registry-hub takım-export); yeni bir doğrulama oyunu (fraksiyon savaşı: takım sisi, shard'lı büyük harita); K4'ten: `TeamGame::spawn_team_player`'a kimlik | kit + registry + yeni demo crate + sunucu modülü + loadgen botu | sırada |
+| 6 | **W1 — team × sharded kompoziti** (CROSS-SHARD §8b; K4'ten `spawn_team_player_as`) | kit + çekirdek (registry hub, TEAMS fazı) | ✅ `95dd007` (CROSS-SHARD §8b.7) |
+| 6b | **W2 — doğrulama oyunu "Cephe":** üç fraksiyon, takım sisi, 2×2 shard; müttefik harita geneli, düşman herhangi bir müttefiğin görüşüyle | yeni demo crate + sunucu modülü (`game = "war"` vb.) + loadgen botu + ölçüm | sırada |
 
 ## 2. Bırakılanlar
 
@@ -44,7 +45,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu) | — (Unity tarafı işi) | ROADMAP:615 |
 | A11 Bağlantı başına tick'te yeni `Vec` | yük verisi sorun gösterirse | ROADMAP:617 |
 | A12 `QueryState`'i oda başına bir kez kurmak | — (hâlâ açık: `sharded/room.rs:220,240`, `pvs/logic.rs:193`) | ROADMAP:704 |
-| A13 Registry striping | registry tablo bandı baskısı ölçülürse | ROADMAP:700 |
+| A13 Registry striping (W1'den beri takım röleleri de registry'nin tek görevinde veri düzlemi yükü) | registry tablo/röle bandı baskısı ölçülürse | ROADMAP:700 |
 | A14 Batch üstü zstd | — | ROADMAP:706, DESIGN:890 |
 | A15 100k ölçeği (çok makine, congestion dahil) | — | ROADMAP:325, 364 |
 | A16 RPC işçi havuzu | ~10k üyeli oda ya da oda tavanı gerçekten bağlarsa | RPC-CONTROL-PLANE:469 |
@@ -55,6 +56,10 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A21 Dinamik oda bölme/birleştirme, bölgeler arası | — | DESIGN:892 |
 | A22 Değer düzeyinde delta (kaydı son gönderilene göre göreli kodlamak; kodek seam'i + istemci çözücüleri) | hareketli iş yükünde bant ya da MTU baskısı (T: arena kazancı yalnız ~%10) | KIT-ARCHITECTURE §10 "T sonucu" |
 | A23 Demo sunucusunda `team × delta` (config şu an reddediyor; kit hazır) | demo'da takım delta'sı isteyen koşu | KIT-ARCHITECTURE §10 "T sonucu" |
+| A25 Takım export'u her tick; `every k` temposu | W2 ölçümü registry bandı/CPU baskısı gösterirse | CROSS-SHARD §8b.1 |
+| A26 Takım export sayaçlarını (`team_exchange_summary`, `team_hub_summary`) metrik yoluna terfi | loadgen botu (W2) ölçüm isterse | CROSS-SHARD §8b.6 |
+| A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle | W2'nin oyun tasarımı isterse | CROSS-SHARD §8b.5 |
+| A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
 | A24 İstemci tarafında delta uygulaması maliyeti (orkestre arena 1000'de `clients_cpu_s` +%15) | yük verisi sorun gösterirse | KIT-ARCHITECTURE §10 "T sonucu" |
 
 ### B. Taşıma ve operasyon

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-740 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+776 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -144,7 +144,14 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
-küçük paket, S, H, takım odasında delta ✅; sırada team × sharded + senaryosu).
+küçük paket, S, H, takım odasında delta, W1 ✅; sırada W2 — doğrulama oyunu "Cephe").
+
+**W1 tamam** (CROSS-SHARD §8b, KIT-ARCHITECTURE §10 "W1 sonucu"): bir
+shard logic'i `ShardLogic::team_exchange` ile takım görünür kümesini
+export eder, registry hub'ı onu görüntüleyen shard'lara röle eder. Takım
+odası kimliği `TeamGame::spawn_team_player_as`'a iletir. Gerçek aktör
+testleri duraklatılmış saatte (kit dev-dep `tokio` `test-util`); kalıbı
+`sharded/tests/team_actors/rig.rs`.
 
 **T tamam** (KIT-ARCHITECTURE §10 "T sonucu", CHANGELOG "T turu"): bir
 küme-içerikli oda delta'yı ortak defterden alır (`common::SetLedger` +
@@ -405,6 +412,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 740 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 776 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

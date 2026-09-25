@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## W1 turu — team × sharded kompoziti (`kit/w1-team-sharded`)
+
+Takım sisi artık shard'lı haritada (CROSS-SHARD §8b; BACKLOG §1 satır 6'nın
+ilk yarısı). Her shard, her takım için o takımın BURADAKİ görünür kümesini
+(üyeler + kendi birimlerinin gördüğü düşman/nötr — kendi ve ödünç kayıt)
+oyunun kodlayıcısıyla bayt olarak registry'ye export eder; registry'nin oda
+girdisindeki hub, export'u o takımı görüntüleyen DİĞER shard'lara `try_send`
+ile röle eder (kayıt saklamaz). Alıcı, kaynak başına yuvayı wholesale
+değiştirir, 64 tick sessiz kalan kaynağı düşürür, takım başına birleştirir.
+§8'den en büyük sapma: yalnız üyeler değil GÖRÜNÜR KÜME — senaryo ("Cephe":
+uzak bir müttefiğin gördüğü düşmanı başka shard'daki oyuncu da görür)
+bunu gerektiriyor; bütçeli (takım başına tick'te 1024, üyeler önce).
+
+- Çekirdek: `ShardLogic::team_exchange` (varsayılan `None`; `GameLogic`
+  değişmedi — §8'in "ikinci slice"ı yerine), faz 5b TEAMS,
+  `ShardMsg::TeamImport`, `RegistryMsg::TeamExport` (monomorfik, nesil
+  denetimli), `TeamImports`; tavanlar 16 384 kayıt / 256 takım, TTL 64.
+  Sayaçlar log satırı (`team_exchange_summary`, `team_hub_summary`).
+- Kit: `ShardedTeamRoom<G, P, V>` (`with_shard(inner, vision, lent_pos)`,
+  `with_delta`, `with_team_budget`), `TeamMig`; bir wire bir kez, yük
+  önceliği yerel > ödünç > ithal. K4 kalıntısı:
+  `TeamGame::spawn_team_player_as`, `TeamRoom` kimliği iletir. Kit'e
+  dev-dependency `tokio` (`test-util`, duraklatılmış saatli aktör
+  testleri için).
+- Mevcut hiçbir oyunun istemci baytı değişmedi; MMO ve demo sharded
+  loadgen 200 dönüşümlü A/B'de gürültü içinde.
+
+Testler 740 → 776 (çekirdek 17, kit 19 — 8'i gerçek registry + dört shard
+aktörüyle; 30/30 tekrar yeşil). Önce kırılan: `team_exchange` `None` → 8
+gerçek aktör testinin 8'i. 17 çekirdek + 16 kit mutasyonu yakalandı.
+Ebeveynin bağımsız mutasyonu (hub'ın takım filtresini kaldırmak) 2
+çekirdek testini kırıyor; kit'in uçtan uca izolasyonu yine tutuyor
+(alıcı da yalnız görüntülediği takımı birleştiriyor — iki katmanlı
+izolasyon).
+
 ## T turu — takım odasında delta (`kit/t-team-delta`)
 
 - **Kit:** `TeamRoom::with_delta` — takım sisi odası AOI'nin zarfı ve
