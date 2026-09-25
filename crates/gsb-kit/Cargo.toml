@@ -28,6 +28,7 @@ gsb-protocol = { workspace = true }
 bevy_ecs = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
+tracing = { workspace = true }
 
 [build-dependencies]
 gsb-lint = { workspace = true }

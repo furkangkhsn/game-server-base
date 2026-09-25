@@ -9,6 +9,8 @@ use bevy_ecs::prelude::Entity;
 use bytes::Bytes;
 use gsb_core::shard::{CrossSeam, EffectId, EmitRefused, Lent};
 
+use crate::sharded::crystal::Crystal;
+
 /// What a sharded game's seam hooks receive
 /// ([`ShardGame::ingest_seam`](crate::game::ShardGame::ingest_seam),
 /// [`ShardGame::systems_seam`](crate::game::ShardGame::systems_seam),
@@ -32,11 +34,22 @@ use gsb_core::shard::{CrossSeam, EffectId, EmitRefused, Lent};
 pub struct Seam<'s, 'a, V> {
     cross: &'s mut CrossSeam<'a, V>,
     own: &'s HashMap<u64, Entity>,
+    /// The room's crystallization state, when it has opted in: the seam
+    /// records the contacts it sees.
+    crystal: Option<&'s mut Crystal>,
 }
 
 impl<'s, 'a, V> Seam<'s, 'a, V> {
-    pub(crate) fn new(cross: &'s mut CrossSeam<'a, V>, own: &'s HashMap<u64, Entity>) -> Self {
-        Self { cross, own }
+    pub(in crate::sharded) fn new(
+        cross: &'s mut CrossSeam<'a, V>,
+        own: &'s HashMap<u64, Entity>,
+        crystal: Option<&'s mut Crystal>,
+    ) -> Self {
+        Self {
+            cross,
+            own,
+            crystal,
+        }
     }
 
     /// This shard's entity with wire id `wire`, if it owns one. (During a
@@ -72,15 +85,39 @@ impl<'s, 'a, V> Seam<'s, 'a, V> {
     /// [`CrossSeam::emit`]): `source` is the acting entity's wire id,
     /// `payload` the game's bytes. [`EmitRefused::Local`] when `target`
     /// is this shard's own entity — write it directly.
+    ///
+    /// A sent effect — or a `Local` refusal, which the caller answers by
+    /// writing the target directly — counts as a contact
+    /// ([`Self::contact`]).
     pub fn emit(
         &mut self,
         target: u64,
         source: u64,
         payload: Bytes,
     ) -> Result<EffectId, EmitRefused> {
-        if self.own.contains_key(&target) {
-            return Err(EmitRefused::Local);
+        let sent = if self.own.contains_key(&target) {
+            Err(EmitRefused::Local)
+        } else {
+            self.cross.emit(target, source, payload)
+        };
+        if matches!(sent, Ok(_) | Err(EmitRefused::Local)) {
+            self.contact(source, target);
         }
-        self.cross.emit(target, source, payload)
+        sent
+    }
+
+    /// Report that `source` acted on `target` this tick, where the kit
+    /// cannot see it — a hit the game lands on its OWN entity directly.
+    /// Crystallization's clock (`docs/CROSS-SHARD.md` §4 layer 4): once
+    /// a fight has moved onto one shard its blows are local, and a held
+    /// fight is released when it has been quiet — so a game that opts
+    /// in reports its local hits here. A no-op for a room that has not
+    /// opted in; [`Self::emit`] and applied remote effects are counted
+    /// by the kit itself.
+    pub fn contact(&mut self, source: u64, target: u64) {
+        let tick = self.cross.tick();
+        if let Some(crystal) = self.crystal.as_deref_mut() {
+            crystal.contact(source, target, tick, self.own);
+        }
     }
 }

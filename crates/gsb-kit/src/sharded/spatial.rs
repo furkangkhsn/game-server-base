@@ -84,6 +84,14 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
         }
     }
 
+    /// Opt the wrapped shard in to crystallization (see
+    /// [`ShardedRoom::with_crystallize`]).
+    #[must_use]
+    pub fn with_crystallize(mut self, policy: Crystallize) -> Self {
+        self.inner = self.inner.with_crystallize(policy);
+        self
+    }
+
     /// Set the disconnect-park grace on the wrapped shard (builder-style,
     /// like [`ShardedRoom::with_disconnect_grace`]; every shard of a room
     /// should carry the same policy).

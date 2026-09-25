@@ -31,6 +31,7 @@ fn arriving(x: f32, y: f32, speed: Option<f32>) -> KitMig<FixMig> {
         },
         park: None,
         input: None,
+        pin: None,
     }
 }
 

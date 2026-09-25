@@ -145,6 +145,7 @@
 //! leaver's baseline and parks the despawn removal (despawns are not
 //! component writes) so the seam cell's delta carries the exit.
 
+mod crystal;
 mod mig;
 mod room;
 mod seam;
@@ -153,7 +154,8 @@ mod spatial;
 #[cfg(test)]
 mod tests;
 
-pub use mig::{KitMig, ShardInputRecord, ShardParkRecord};
+pub use crystal::Crystallize;
+pub use mig::{KitMig, ShardInputRecord, ShardParkRecord, ShardPin};
 pub use room::ShardedRoom;
 pub use seam::Seam;
 pub use spatial::ShardedSpatialRoom;

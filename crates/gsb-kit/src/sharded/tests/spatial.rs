@@ -84,6 +84,7 @@ fn migrated_player_gets_private_full_on_arrival() {
             },
             park: None,
             input: None,
+            pin: None,
         },
         Some(PlayerId(9)),
     );

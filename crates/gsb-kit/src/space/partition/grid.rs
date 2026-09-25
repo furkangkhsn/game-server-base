@@ -177,6 +177,15 @@ where
         x as f32 >= x0 - b && x as f32 <= x1 + b && y as f32 >= y0 - b && y as f32 <= y1 + b
     }
 
+    /// In the rectangle, or less than `margin` outside it on the worse
+    /// axis — `margin` clamped to the border margin (the trait docs).
+    fn holds(&self, idx: usize, pos: &P, margin: f32) -> bool {
+        let [x, y] = pos.planar();
+        let (x0, x1, y0, y1) = self.rect(idx);
+        let outside = (x0 - x).max(x - x1).max(y0 - y).max(y - y1);
+        <Self as Partition<W>>::region_of(self, pos) == idx || outside < margin.min(self.border)
+    }
+
     /// The unit contract (type docs): the wire's projection lies within
     /// one border margin of the position's on both axes — a quantization
     /// in the position's unit is off by at most a unit or so, a finer

@@ -170,3 +170,62 @@ fn vision_grid3_neighbourhood_is_27_cells_and_covers_the_radius() {
         "the lattice exercised the contract ({checked})"
     );
 }
+
+/// Crystallization's band on the grid preset (`Partition::holds`, over
+/// the (x, z) plane of 3D types): the region itself always holds; outside
+/// it, strictly less than the margin on the worse axis — the margin
+/// clamped to the border margin (128 m on this map), the one strip a
+/// holding shard is lent. A partition without geometry (the trait's
+/// default) holds everywhere.
+#[test]
+fn grid_partition2_holds_within_the_clamped_margin() {
+    let g = GridPartition2::<Pos3>::new(4, 512.0); // region 0: x < 0, z < 0
+    let holds = |x: f32, z: f32, m: f32| Partition::<Wire3>::holds(&g, 0, &pos(x, 99.0, z), m);
+    assert!(holds(-300.0, -300.0, 0.0), "inside the region, any margin");
+    assert!(
+        holds(-600.0, -300.0, 0.0),
+        "off the map, but its region's (clamped)"
+    );
+    assert!(
+        holds(63.9, -10.0, 64.0) && !holds(64.0, -10.0, 64.0),
+        "past x = 0"
+    );
+    assert!(
+        holds(-10.0, 63.9, 64.0) && !holds(-10.0, 64.0, 64.0),
+        "past z = 0"
+    );
+    assert!(
+        !holds(50.0, 50.0, 40.0) && holds(30.0, 30.0, 40.0),
+        "the corner: worse axis"
+    );
+    assert!(holds(127.0, -10.0, f32::INFINITY), "a wide margin…");
+    assert!(
+        !holds(128.0, -10.0, f32::INFINITY),
+        "…stops at the border margin"
+    );
+
+    /// A partition that only knows regions.
+    struct Halves;
+    impl Partition<Wire3> for Halves {
+        type Pos = Pos3;
+        fn shard_count(&self) -> usize {
+            2
+        }
+        fn region_of(&self, p: &Pos3) -> usize {
+            usize::from(p.x >= 0.0)
+        }
+        fn neighbors(&self, idx: usize) -> Vec<usize> {
+            vec![1 - idx]
+        }
+        fn exports(&self, _: usize, _: &Pos3) -> bool {
+            true
+        }
+        fn admits(&self, _: usize, _: &Wire3) -> bool {
+            true
+        }
+    }
+    assert!(
+        Halves.holds(0, &pos(1e6, 0.0, 0.0), 0.0),
+        "no geometry: time alone"
+    );
+}

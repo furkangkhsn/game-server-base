@@ -49,7 +49,10 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         // Every broadcast entity (the codec's marker — §8.5: whatever
         // else it carries) whose POST-step position lies in a region that
         // `neighbor` is the first hop toward (`route` — the neighbour's
-        // own region, or a region beyond it: §8.4); the crossing was
+        // own region, or a region beyond it: §8.4) — or, while a fight
+        // holds it (crystallization), whose ANCHOR is: a held entity
+        // stays on the shard of its fight whatever its region, and a
+        // mover goes to it (`Crystal::anchor`); the crossing was
         // sampled at the end of this tick; the core installs them in the
         // neighbor at the next tick and despawns them here the tick
         // after — see `gsb_core::shard`'s module docs. Each entity is in
@@ -58,8 +61,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         let mut crossing: Vec<(Entity, u64)> = Vec::new();
         {
             let mut query = world.query_filtered::<(Entity, &WireId, &P::Pos), With<Marker<G>>>();
+            let crystal = self.crystal.as_ref();
             for (entity, wire, pos) in query.iter(world) {
-                let region = self.partition.region_of(pos);
+                let region = crystal
+                    .and_then(|c| c.anchor(wire.get()))
+                    .unwrap_or_else(|| self.partition.region_of(pos));
                 if region != self.index && self.route[region] == neighbor {
                     crossing.push((entity, wire.get()));
                 }
@@ -99,6 +105,12 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
                         game: self.game.capture(world, entity),
                         park,
                         input,
+                        // A mover carries its pin: the receiving shard
+                        // holds it there (and its partner).
+                        pin: self
+                            .crystal
+                            .as_ref()
+                            .and_then(|c| c.carry(wire, self.index)),
                     },
                     player,
                 }
@@ -121,6 +133,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             game: mig,
             park,
             input,
+            pin,
         } = state;
         let entity = self.game.restore(world, mig);
         debug_assert!(
@@ -147,6 +160,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
                 None => self.input.begin(player),
             }
         }
+        // Crystallization: a mover is held here with its partner (a room
+        // that did not opt in ignores the pin — its region owns it).
+        if let (Some(pin), Some(crystal)) = (pin, self.crystal.as_mut()) {
+            crystal.arrive(wire, pin, self.index, &self.wire_entity);
+        }
         if let Some(park) = park {
             // §14.2: a detached/bot-fed player's ledger record arrives
             // WITH the entity — the receiving shard now owns the park
@@ -163,6 +181,9 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
     }
 
     fn on_migrate_out(&mut self, world: &mut World, wire: u64) {
+        if let Some(crystal) = self.crystal.as_mut() {
+            crystal.leave(wire);
+        }
         if let Some(entity) = self.wire_entity.remove(&wire)
             && world.get_entity(entity).is_ok()
         {
@@ -216,7 +237,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             &self.player_entity,
             &self.park_ledger,
             &mut self.input,
-            &mut Seam::new(seam, &self.wire_entity),
+            &mut Seam::new(seam, &self.wire_entity, self.crystal.as_mut()),
         );
     }
 
@@ -241,10 +262,16 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         if world.get_entity(target).is_err() {
             return EffectOutcome::NoTarget;
         }
-        let mut seam = Seam::new(seam, &self.wire_entity);
+        let mut seam = Seam::new(seam, &self.wire_entity, self.crystal.as_mut());
         let game = &mut self.game;
-        crate::common::guard_change_window(world, |w| {
+        let outcome = crate::common::guard_change_window(world, |w| {
             game.apply_remote_effect(w, target, effect, tick, &mut seam)
-        })
+        });
+        // A landed effect is a contact from across the seam (the other
+        // direction of what `Seam::emit` records).
+        if outcome == EffectOutcome::Applied {
+            seam.contact(effect.source, effect.target);
+        }
+        outcome
     }
 }

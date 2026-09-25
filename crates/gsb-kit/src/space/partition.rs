@@ -54,6 +54,21 @@ pub trait Partition<W>: Send + 'static {
     /// [`Planar`](crate::space::Planar): the wire's projection must be
     /// in the position's unit.
     fn debug_check_wire(&self, _pos: &Self::Pos, _wire: &W) {}
+
+    /// Crystallization's band (`docs/CROSS-SHARD.md` §4 layer 4): whether
+    /// region `idx` may keep an entity at `pos` although `pos` may lie
+    /// outside the region — `pos` is in the region, or less than
+    /// `margin` (the position's unit) outside it. The sharded rooms ask
+    /// it only for an entity a fight holds on a shard other than its
+    /// region's (`crate::sharded::Crystallize`). The default has no
+    /// geometry and always answers yes: such a partition releases a
+    /// held entity by time alone. [`GridPartition2`] measures the
+    /// distance to the region rectangle and never lets the band exceed
+    /// its border margin — beyond it the holding shard does not see the
+    /// entity's surroundings (a neighbour lends only its border strip).
+    fn holds(&self, _idx: usize, _pos: &Self::Pos, _margin: f32) -> bool {
+        true
+    }
 }
 
 /// The grid shape for `shard_count` shards: `rows` = the largest divisor

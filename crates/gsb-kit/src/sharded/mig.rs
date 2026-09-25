@@ -1,6 +1,7 @@
 //! What a migrating entity carries across a seam ([`KitMig`]): the
-//! game's captured state and the kit's player records — the park record
-//! ([`ShardParkRecord`]) and the input session ([`ShardInputRecord`]).
+//! game's captured state and the kit's records — the park record
+//! ([`ShardParkRecord`]), the input session ([`ShardInputRecord`]) and a
+//! crystallization pin ([`ShardPin`]).
 
 use std::ops::Deref;
 
@@ -37,6 +38,10 @@ pub struct KitMig<M> {
     /// The owning player's input session, if it has one (`None` for
     /// every NPC).
     pub input: Option<ShardInputRecord>,
+    /// The crystallization pin, when the entity moves BECAUSE a fight
+    /// crystallizes onto the receiving shard (`None` for every other
+    /// migration — a region crossing, a release).
+    pub pin: Option<ShardPin>,
 }
 
 impl<M> Deref for KitMig<M> {
@@ -84,4 +89,19 @@ pub struct ShardInputRecord {
     /// The highest sequence already acked to the client; `hwm > acked`
     /// is an ack the receiving shard still owes.
     pub acked: u64,
+}
+
+/// A crystallization pin in transit (CROSS-SHARD §4 layer 4, "C2
+/// sonucu"): the entity moves to the shard that owns its fight partner,
+/// and the receiving shard HOLDS it there — ownership decoupled from
+/// the partition's region — until the fight has been quiet for the
+/// policy's `release` ticks or the entity strays out of the band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardPin {
+    /// The partner's wire id: the receiving shard's own entity the fight
+    /// is with (it is held there too, for as long as the pair).
+    pub partner: u64,
+    /// The tick of the pair's latest contact: the release clock keeps
+    /// counting from it across the move.
+    pub last: u64,
 }

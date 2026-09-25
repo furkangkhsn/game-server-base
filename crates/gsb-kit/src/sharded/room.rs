@@ -12,10 +12,12 @@ use crate::codec::RecordCodec;
 use crate::common::{InputSeq, ParkEntry, ParkPolicy};
 use crate::game::{Game, ShardGame, Wire};
 use crate::identity::{Minter, WireId};
+use crate::sharded::crystal::Crystal;
 use crate::sharded::*;
 use crate::space::Partition;
 
 mod logic;
+mod policy;
 mod shard;
 
 /// The game's broadcast marker (the codec's `Marker`).
@@ -97,6 +99,10 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// ([`ShardInputRecord`]), dropped here when the move commits,
     /// continued by the receiving shard.
     pub(in crate::sharded) input: InputSeq,
+    /// Crystallization (`None` unless the room opted in —
+    /// [`Self::with_crystallize`]): the fight table and the pins that
+    /// decouple a fighting entity's owner from its region.
+    pub(in crate::sharded) crystal: Option<Crystal>,
 }
 
 impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
@@ -122,31 +128,8 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             last: HashMap::new(),
             encoded: 0,
             input: InputSeq::default(),
+            crystal: None,
         }
-    }
-
-    /// Set the disconnect-park grace (see
-    /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
-    /// Every shard of a room should carry the same policy (the factory
-    /// builds them uniformly).
-    #[must_use]
-    pub fn with_disconnect_grace(mut self, grace: std::time::Duration) -> Self {
-        self.park.grace = Some(grace);
-        self
-    }
-
-    /// Set the whole disconnect-park policy (see
-    /// [`crate::room::OpenRoom::with_disconnect_policy`]; RECONNECT
-    /// §3/§14.4).
-    #[must_use]
-    pub fn with_disconnect_policy(
-        mut self,
-        grace: Option<std::time::Duration>,
-        to: gsb_core::room::ExpireTo,
-    ) -> Self {
-        self.park.grace = grace;
-        self.park.to = to;
-        self
     }
 
     /// The game this shard runs.
@@ -176,11 +159,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         &mut self,
         world: &mut World,
         ctx: &TickCtx,
-        seam: Option<&mut CrossSeam<'_, Wire<G>>>,
+        mut seam: Option<&mut CrossSeam<'_, Wire<G>>>,
     ) {
-        match seam {
+        match seam.as_deref_mut() {
             Some(cross) => {
-                let mut seam = Seam::new(cross, &self.wire_entity);
+                let mut seam = Seam::new(cross, &self.wire_entity, self.crystal.as_mut());
                 let game = &mut self.game;
                 crate::common::guard_change_window(world, |w| game.systems_seam(w, ctx, &mut seam));
             }
@@ -213,6 +196,20 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             world.entity_mut(entity).insert(wire);
             self.wire_entity.insert(wire.get(), entity);
             self.entity_wire.insert(entity, wire.get());
+        }
+
+        // Crystallization's pass (only through the seam: it needs the
+        // lent view), with the tick's final positions and owned wires —
+        // before the migrate phase reads the pins.
+        if let (Some(crystal), Some(cross)) = (self.crystal.as_mut(), seam) {
+            crystal.evaluate(
+                world,
+                ctx.tick,
+                self.index,
+                &self.partition,
+                cross,
+                &self.wire_entity,
+            );
         }
 
         // Rebuild the border cache (positions just changed in the game's
