@@ -1,7 +1,5 @@
 //! The MMO's settings and its join router.
 
-use gsb_core::id::ConnectionId;
-
 use super::*;
 use crate::GameError;
 use crate::games::settings::SettingsError;
@@ -111,11 +109,8 @@ fn unsaved_sessions_go_to_the_default_waystones_shard() {
     for (i, [x, z]) in WAYSTONES.into_iter().enumerate() {
         assert_eq!(home_shard(&Pos3::new(x, 0.0, z)), i, "waystone {i}");
     }
-    let realm = Realm::empty().with_login(7, Pos3::new(300.0, 0.0, 300.0));
-    assert_eq!(
-        route(&realm, ConnectionId(7)),
-        3,
-        "a save routes to its shard"
-    );
-    assert_eq!(route(&realm, ConnectionId(8)), default_shard());
+    let realm = Realm::empty().with_login("ann", Pos3::new(300.0, 0.0, 300.0));
+    assert_eq!(route(&realm, "ann"), 3, "a save routes to its shard");
+    assert_eq!(route(&realm, "bob"), default_shard(), "an unknown player");
+    assert_eq!(route(&realm, ""), default_shard(), "an anonymous session");
 }

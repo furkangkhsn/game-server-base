@@ -28,7 +28,7 @@ use gsb_core::ticker::TickInfo;
 use gsb_demo_mmo::codec::MmoWire;
 use gsb_demo_mmo::combat::Hit;
 use gsb_demo_mmo::world::{SHARDS, home_shard};
-use gsb_demo_mmo::{MmoMig, MmoShard, Pos3, Realm, mmo_shard};
+use gsb_demo_mmo::{MmoMig, MmoShard, Realm, mmo_shard};
 use gsb_kit::sharded::KitMig;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -48,7 +48,7 @@ pub struct Mmo {
     pub samples: Vec<Option<RoomSample>>,
     /// Every shard's combat feed (the hits it applied).
     hits: mpsc::Receiver<Hit>,
-    logins: std::collections::HashMap<ConnectionId, Pos3>,
+    realm: Realm,
     t0: Instant,
     /// The last global tick fed.
     pub tick: u64,
@@ -142,7 +142,7 @@ impl Mmo {
             metrics,
             samples: vec![None; SHARDS],
             hits,
-            logins: realm.logins.clone(),
+            realm: realm.clone(),
             t0: Instant::now(),
             tick: 0,
         }
@@ -208,12 +208,14 @@ impl Mmo {
         self.samples[shard].as_ref().expect("a stepped shard")
     }
 
-    /// Log in on `conn` (its saved character decides the home shard, as
-    /// the server's join router would), under resume key `identity`.
-    /// Joins take effect on the next tick; `others` keep decoding.
+    /// Log in on `conn` as `identity` (the authenticated identity: its
+    /// saved character decides the home shard, as the server's join
+    /// router would, and the shard spawns that character; it is also the
+    /// resume key). Joins take effect on the next tick; `others` keep
+    /// decoding.
     pub async fn join(&mut self, conn: u64, identity: &str, others: &mut [Client]) -> Client {
         let conn = ConnectionId(conn);
-        let shard = self.logins.get(&conn).map_or(0, home_shard);
+        let shard = self.realm.saved(identity).map_or(0, |p| home_shard(&p));
         let (out, rx) = mpsc::channel::<FrameBatch>(256);
         let (reply, reply_rx) = oneshot::channel();
         self.shards[shard]

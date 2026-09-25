@@ -30,8 +30,8 @@ async fn a_mob_killed_by_game_code_vanishes_everywhere_for_good() {
     // M stands on shard 0, 30 m west of the seam; A (shard 0) is in
     // reach, B (shard 1) sees M through the border strip only.
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-50.0, 0.0, -100.0))
-        .with_login(2, Pos3::new(40.0, 0.0, -100.0))
+        .with_login("c1", Pos3::new(-50.0, 0.0, -100.0))
+        .with_login("c2", Pos3::new(40.0, 0.0, -100.0))
         .with_spawn(MobSpawn::once(
             components::Kind::Mob,
             Pos3::new(-30.0, 0.0, -100.0),
@@ -40,8 +40,8 @@ async fn a_mob_killed_by_game_code_vanishes_everywhere_for_good() {
             50,
         ));
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
-    let b = room.join(2, "", &mut cs).await;
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
+    let b = room.join(2, "c2", &mut cs).await;
     cs.push(b);
     room.steps(&mut cs, 3).await;
     let mobs = cs[1].of_kind(Kind::Mob);

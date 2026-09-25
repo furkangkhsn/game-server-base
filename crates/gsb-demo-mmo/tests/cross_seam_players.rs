@@ -16,8 +16,8 @@ use gsb_demo_mmo::{Pos3, Realm};
 /// the x = 0 seam.
 fn realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-10.0, 0.0, -300.0))
-        .with_login(2, Pos3::new(10.0, 0.0, -300.0))
+        .with_login("p", Pos3::new(-10.0, 0.0, -300.0))
+        .with_login("q", Pos3::new(10.0, 0.0, -300.0))
 }
 
 /// One applied hit, as a duel's record keeps it: `(shard, attacker, hp

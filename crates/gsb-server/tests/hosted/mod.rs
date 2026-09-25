@@ -104,6 +104,18 @@ impl<V: View> Client<V> {
     /// Connect through `door`, authenticate as `name` (the resume key)
     /// and join `room`; returns once JOIN_ROOM_RESULT arrived.
     pub async fn join(door: &Door, addr: SocketAddr, name: &str, room: u64) -> Self {
+        Self::join_with_ticket(door, addr, name, &[], room).await
+    }
+
+    /// [`Self::join`] presenting `ticket` in AUTH (a ticket-auth server
+    /// takes the identity from it; `name` is only what the client claims).
+    pub async fn join_with_ticket(
+        door: &Door,
+        addr: SocketAddr,
+        name: &str,
+        ticket: &[u8],
+        room: u64,
+    ) -> Self {
         let tcp = TcpStream::connect(addr).await.expect("connect");
         tcp.set_nodelay(true).ok();
         let io: Box<dyn Io> = match door {
@@ -138,7 +150,7 @@ impl<V: View> Client<V> {
         };
         let auth = Auth {
             name: name.into(),
-            ticket: Vec::new(),
+            ticket: ticket.to_vec(),
             protocol_version: gsb_protocol::PROTOCOL_VERSION,
         };
         c.send(op::AUTH_REQ, &auth.encode_to_vec()).await;

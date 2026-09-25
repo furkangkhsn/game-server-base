@@ -23,7 +23,7 @@ type Mmo = Client<MmoView>;
 /// A traveller (waystone 0, shard 0) and a player waiting at waystone 3
 /// (shard 3), both spawned.
 async fn traveller_and_witness() -> (gsb_server::ServerHandle, Mmo, Mmo) {
-    let realm = Realm::empty().with_login(2, Pos3::new(250.0, 0.0, 250.0));
+    let realm = Realm::empty().with_login("witness", Pos3::new(250.0, 0.0, 250.0));
     let handle = gsb_server::start_game_server(
         Box::new(MmoModule::with_realm(realm)),
         Door::Tcp.config("mmo"),

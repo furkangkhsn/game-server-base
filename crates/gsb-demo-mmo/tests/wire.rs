@@ -154,8 +154,8 @@ async fn real_shard_frames_decode_identically_through_both_definitions() {
         )
     };
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(224.0, 0.0, 224.0))
-        .with_login(2, Pos3::new(230.0, 0.0, 200.0))
+        .with_login("c1", Pos3::new(224.0, 0.0, 224.0))
+        .with_login("c2", Pos3::new(230.0, 0.0, 200.0))
         .with_spawn(walker(315.0, 230.0, [330.0, 230.0]))
         .with_spawn(MobSpawn::once(
             Kind::Mob,
@@ -166,10 +166,10 @@ async fn real_shard_frames_decode_identically_through_both_definitions() {
         ))
         .with_spawn(walker(150.0, 315.0, [150.0, 330.0]));
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
     room.steps(&mut cs, 5).await;
     cs[0].move_to(226.0, 224.0).await;
-    let q = room.join(2, "", &mut cs).await;
+    let q = room.join(2, "c2", &mut cs).await;
     cs.push(q);
     room.steps(&mut cs, 80).await;
 

@@ -24,8 +24,8 @@ use gsb_demo_mmo::{Pos3, Realm};
 
 fn realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-100.0, 0.0, -100.0))
-        .with_login(2, Pos3::new(-120.0, 0.0, -100.0))
+        .with_login("ann", Pos3::new(-100.0, 0.0, -100.0))
+        .with_login("obs", Pos3::new(-120.0, 0.0, -100.0))
 }
 
 #[tokio::test]

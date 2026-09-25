@@ -151,8 +151,8 @@ async fn the_mmo_table_sets_the_logout_timer() {
 #[tokio::test]
 async fn a_character_parked_on_another_shard_resumes_there() {
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-20.0, 0.0, -100.0)) // A, shard 0
-        .with_login(2, Pos3::new(40.0, 0.0, -100.0)); // B, shard 1
+        .with_login("wanderer", Pos3::new(-20.0, 0.0, -100.0)) // A, shard 0
+        .with_login("witness", Pos3::new(40.0, 0.0, -100.0)); // B, shard 1
     let handle = start(realm, "").await;
     let mut a = join(handle.addr, "wanderer").await;
     let mut b = join(handle.addr, "witness").await;

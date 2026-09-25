@@ -1,10 +1,9 @@
 //! The 3D MMO hosted by the REAL server (GAME-MODULE G2): the real
 //! registry wires the four shard actors, routes joins through the MMO
 //! module's router, and real TCP clients apply what they receive under
-//! the kit's client rules. Realms are scripted (saved characters keyed
-//! by session: a fresh server mints connection ids 1, 2, 3, … in accept
-//! order, and every client here connects only after the previous one
-//! joined).
+//! the kit's client rules. Realms are scripted: saved characters keyed
+//! by the player's authenticated identity — here the local-auth path's
+//! `Auth.name` (`mmo_home.rs` covers the ticket path and resume).
 
 #![cfg(feature = "game-mmo")]
 
@@ -48,9 +47,9 @@ async fn join(addr: std::net::SocketAddr, name: &str) -> Mmo {
 #[tokio::test]
 async fn joins_land_on_the_shard_of_their_character() {
     let realm = Realm::empty()
-        .with_login(2, Pos3::new(200.0, 0.0, -200.0)) // shard 1
-        .with_login(3, Pos3::new(-200.0, 0.0, 200.0)) // shard 2
-        .with_login(4, Pos3::new(200.0, 0.0, 200.0)); // shard 3
+        .with_login("east", Pos3::new(200.0, 0.0, -200.0)) // shard 1
+        .with_login("north", Pos3::new(-200.0, 0.0, 200.0)) // shard 2
+        .with_login("far", Pos3::new(200.0, 0.0, 200.0)); // shard 3
     let handle = start(realm).await;
     let mut cs = Vec::new();
     for name in ["unsaved", "east", "north", "far"] {
@@ -93,9 +92,9 @@ async fn joins_land_on_the_shard_of_their_character() {
 #[tokio::test]
 async fn a_walker_across_a_seam_keeps_itself_and_is_seen_across_it() {
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-20.0, 0.0, -100.0)) // A, shard 0
-        .with_login(2, Pos3::new(40.0, 0.0, -100.0)) // B, shard 1
-        .with_login(3, Pos3::new(-60.0, 0.0, -100.0)); // C, shard 0
+        .with_login("walker", Pos3::new(-20.0, 0.0, -100.0)) // A, shard 0
+        .with_login("east", Pos3::new(40.0, 0.0, -100.0)) // B, shard 1
+        .with_login("west", Pos3::new(-60.0, 0.0, -100.0)); // C, shard 0
     let handle = start(realm).await;
     let mut a = join(handle.addr, "walker").await;
     let mut b = join(handle.addr, "east").await;
@@ -143,7 +142,7 @@ async fn a_walker_across_a_seam_keeps_itself_and_is_seen_across_it() {
 /// arrive, and its next input is served by the destination shard.
 #[tokio::test]
 async fn a_travel_lands_on_the_destination_shard() {
-    let realm = Realm::empty().with_login(2, Pos3::new(250.0, 0.0, 250.0)); // D, shard 3
+    let realm = Realm::empty().with_login("waiting", Pos3::new(250.0, 0.0, 250.0)); // D, shard 3
     let handle = start(realm).await;
     let mut a = join(handle.addr, "traveller").await; // waystone 0, shard 0
     let mut d = join(handle.addr, "waiting").await;

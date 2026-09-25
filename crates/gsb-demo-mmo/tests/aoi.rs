@@ -60,7 +60,7 @@ async fn a_player_sees_exactly_its_ground_cell_block_whatever_the_height() {
         (Kind::Mob, Pos3::new(-100.0, 0.0, 224.0)), // shard 2, cell (-2,3)
         (Kind::Mob, Pos3::new(-300.0, 0.0, -300.0)), // far away, shard 0
     ];
-    let mut realm = Realm::empty().with_login(1, v).with_login(2, w);
+    let mut realm = Realm::empty().with_login("c1", v).with_login("c2", w);
     for (kind, at) in mobs {
         realm = realm.with_spawn(standing(kind, at.x, at.y, at.z));
     }
@@ -68,8 +68,8 @@ async fn a_player_sees_exactly_its_ground_cell_block_whatever_the_height() {
     everything.extend(mobs.iter().map(|(_, p)| *p));
 
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
-    let joined = room.join(2, "", &mut cs).await;
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
+    let joined = room.join(2, "c2", &mut cs).await;
     cs.push(joined);
     // Past two keep-alive fulls (every 15 ticks): the view stays exact
     // through fulls and deltas alike.

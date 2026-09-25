@@ -24,8 +24,8 @@ fn mob(x: f32, z: f32, hp: u16) -> MobSpawn {
 /// x = 0 seam, hp 50: two hits); observer O (conn 2) on shard 1.
 fn realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-15.0, 0.0, -300.0))
-        .with_login(2, Pos3::new(30.0, 0.0, -300.0))
+        .with_login("a", Pos3::new(-15.0, 0.0, -300.0))
+        .with_login("o", Pos3::new(30.0, 0.0, -300.0))
         .with_spawn(mob(5.0, -300.0, 50))
 }
 
@@ -153,8 +153,8 @@ async fn simultaneous_strikes_resolve_in_a_fixed_order() {
     // M on shard 1 near the map centre; X (conn 1) on shard 0, Y (conn
     // 3) on shard 3 — both 15 m from M, each seeing it lent.
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-10.0, 0.0, -5.0))
-        .with_login(3, Pos3::new(5.0, 0.0, 10.0))
+        .with_login("x", Pos3::new(-10.0, 0.0, -5.0))
+        .with_login("y", Pos3::new(5.0, 0.0, 10.0))
         .with_spawn(mob(5.0, -5.0, 25));
     for x_first in [true, false] {
         let mut room = Mmo::new(&realm);

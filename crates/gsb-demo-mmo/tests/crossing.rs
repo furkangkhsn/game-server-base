@@ -21,13 +21,13 @@ use gsb_demo_mmo::{MobSpawn, Pos3, Realm, components};
 #[tokio::test]
 async fn a_player_crossing_a_seam_keeps_its_id_state_and_stream() {
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-30.0, 0.0, -200.0))
-        .with_login(2, Pos3::new(-60.0, 0.0, -200.0))
-        .with_login(3, Pos3::new(60.0, 0.0, -200.0));
+        .with_login("c1", Pos3::new(-30.0, 0.0, -200.0))
+        .with_login("c2", Pos3::new(-60.0, 0.0, -200.0))
+        .with_login("c3", Pos3::new(60.0, 0.0, -200.0));
     let mut room = Mmo::new(&realm);
     let mut cs: Vec<Client> = Vec::new();
     for conn in 1..=3 {
-        let c = room.join(conn, "", &mut cs).await;
+        let c = room.join(conn, &format!("c{conn}"), &mut cs).await;
         cs.push(c);
     }
     room.steps(&mut cs, 3).await;
@@ -82,12 +82,12 @@ async fn a_mob_crossing_a_seam_keeps_its_id_and_its_brain() {
     )
     .walking(vec![[40.0, -300.0], [40.0, -260.0]], 8.0, false);
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-55.0, 0.0, -300.0))
-        .with_login(2, Pos3::new(60.0, 0.0, -300.0))
+        .with_login("c1", Pos3::new(-55.0, 0.0, -300.0))
+        .with_login("c2", Pos3::new(60.0, 0.0, -300.0))
         .with_spawn(spawn);
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
-    let b = room.join(2, "", &mut cs).await;
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
+    let b = room.join(2, "c2", &mut cs).await;
     cs.push(b);
     room.steps(&mut cs, 4).await; // tick 6: the flyer is up
     let flyers = cs[0].of_kind(Kind::Flyer);
@@ -141,11 +141,11 @@ async fn a_mob_crossing_a_seam_keeps_its_id_and_its_brain() {
 #[tokio::test]
 async fn a_teleport_into_the_diagonal_shard_lands_once_with_the_same_id() {
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-256.0, 0.0, -250.0))
-        .with_login(2, Pos3::new(250.0, 0.0, 250.0));
+        .with_login("c1", Pos3::new(-256.0, 0.0, -250.0))
+        .with_login("c2", Pos3::new(250.0, 0.0, 250.0));
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
-    let d = room.join(2, "", &mut cs).await;
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
+    let d = room.join(2, "c2", &mut cs).await;
     cs.push(d);
     room.steps(&mut cs, 3).await;
     assert_eq!(room.members(), [1, 0, 0, 1]);

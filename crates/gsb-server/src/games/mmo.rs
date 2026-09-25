@@ -3,15 +3,19 @@
 //! spatial` composite with the ground-plane grid AOI
 //! (`ShardedSpatialRoom<MmoGame, GridPartition2<Pos3>, Grid2>`).
 //!
-//! **Join routing** (GAME-MODULE §6 decision 6): a session with a saved
-//! character goes to the shard owning its saved position
-//! (`world::home_shard`); a session with none goes to the shard of the
-//! DEFAULT waystone ([`DEFAULT_WAYSTONE`]) — where that shard's
-//! `spawn_player` puts a character with no save, so the router and the
-//! spawn agree. The core hands the router the transport session only
-//! (no account), so the saved characters are keyed by session, exactly
-//! as `Realm::logins` is; a server with no login step (this one) has no
-//! saves and routes everyone to the default waystone.
+//! **Join routing** (GAME-MODULE §6 decision 6, K4): a player with a
+//! saved character goes to the shard owning its saved position
+//! (`world::home_shard`); a player with none (or an anonymous session)
+//! goes to the shard of the DEFAULT waystone ([`DEFAULT_WAYSTONE`]) —
+//! where that shard's spawn puts a character with no save, so the router
+//! and the spawn agree. Both read `Realm::logins` by the identity the
+//! core hands them: the ticket's validated player, or — on the local-auth
+//! development path — the client-claimed `Auth.name` (anyone can log in
+//! as any character there). The catalog's realm ([`Realm::standard`])
+//! has no saved characters: an embedder brings its character data with
+//! [`MmoModule::with_realm`]. A player parked by a disconnect resumes
+//! where it was parked (the core asks every shard's park ledger before
+//! the router is consulted).
 //!
 //! **Disconnects** (§6 decision 5): the MMO's own logout timer — the
 //! character stays parked for the logout grace, then logs out
@@ -155,12 +159,12 @@ pub fn default_shard() -> usize {
     home_shard(&Pos3::new(x, 0.0, z))
 }
 
-/// The MMO's join router over `realm`'s saved characters.
-pub fn route(realm: &Realm, conn: gsb_core::id::ConnectionId) -> usize {
+/// The MMO's join router over `realm`'s saved characters, by the
+/// player's authenticated identity.
+pub fn route(realm: &Realm, identity: &str) -> usize {
     realm
-        .logins
-        .get(&conn)
-        .map_or_else(default_shard, home_shard)
+        .saved(identity)
+        .map_or_else(default_shard, |at| home_shard(&at))
 }
 
 impl GameModule for MmoModule {
@@ -251,7 +255,7 @@ fn mmo_factory(
         let realm = Arc::clone(&realm);
         BuiltRoom::Sharded {
             shards,
-            home_shard: Arc::new(move |conn, _identity: &str| route(&realm, conn)),
+            home_shard: Arc::new(move |_conn, identity: &str| route(&realm, identity)),
         }
     })
 }

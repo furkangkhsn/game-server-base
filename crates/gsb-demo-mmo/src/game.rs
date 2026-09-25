@@ -6,8 +6,10 @@
 //!
 //! One instance per SHARD: a shard's game spawns mobs only from the
 //! camps on its own ground ([`Realm::spawns_of`]); every shard knows the
-//! saved characters (a login is routed to the shard owning its saved
-//! position — [`crate::world::home_shard`]).
+//! saved characters, keyed by the player's authenticated identity (a
+//! login is routed to the shard owning its saved position —
+//! [`crate::world::home_shard`] — by the same identity:
+//! `docs/GAME-MODULE.md`, K4).
 //!
 //! **Disconnects (the kit's park machinery).** A dropped session's
 //! character is PARKED for the room's grace (it stays in the world, keeps
@@ -25,6 +27,7 @@
 //! safe spot, where it stays.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::channel::Mailbox;
@@ -48,8 +51,9 @@ use crate::{input, op};
 pub struct MmoGame {
     /// This shard's region index.
     index: usize,
-    /// Saved character positions (the realm's), by login session.
-    logins: HashMap<ConnectionId, Pos3>,
+    /// Saved character positions (the realm's shared table), by the
+    /// player's authenticated identity.
+    logins: Arc<HashMap<String, Pos3>>,
     camps: Camps,
     systems: Systems,
     combat: Combat,
@@ -62,7 +66,7 @@ impl MmoGame {
     pub fn for_shard(index: usize, realm: &Realm) -> Self {
         Self {
             index,
-            logins: realm.logins.clone(),
+            logins: Arc::clone(&realm.logins),
             camps: Camps::new(realm.spawns_of(index).cloned()),
             systems: Systems::default(),
             combat: Combat {
@@ -95,10 +99,22 @@ impl Game for MmoGame {
         &self.codec
     }
 
-    /// Spawn the character at its saved position — or, for a session
-    /// with no saved character, at this shard's waystone.
+    /// An anonymous session has no saved character: it spawns at this
+    /// shard's waystone.
     fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
-        let at = self.logins.get(&conn).copied().unwrap_or_else(|| {
+        self.spawn_player_as(world, conn, "")
+    }
+
+    /// Spawn the character of the player who logged in as `identity` at
+    /// its saved position — or, with no saved character, at this
+    /// shard's waystone.
+    fn spawn_player_as(
+        &mut self,
+        world: &mut World,
+        _conn: ConnectionId,
+        identity: &str,
+    ) -> Entity {
+        let at = self.logins.get(identity).copied().unwrap_or_else(|| {
             let [x, z] = WAYSTONES[self.index % WAYSTONES.len()];
             Pos3::new(x, 0.0, z)
         });

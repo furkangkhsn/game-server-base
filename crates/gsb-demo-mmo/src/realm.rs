@@ -4,8 +4,7 @@
 //! mob spawn table (the camps GAME code spawns mobs from).
 
 use std::collections::HashMap;
-
-use gsb_core::id::ConnectionId;
+use std::sync::Arc;
 
 use crate::components::{Kind, Pos3};
 use crate::world::{WAYSTONES, home_shard};
@@ -66,11 +65,13 @@ impl MobSpawn {
 /// instance is built from the same realm and keeps what is its own.
 #[derive(Debug, Clone, Default)]
 pub struct Realm {
-    /// Saved character positions, keyed by the session the login
-    /// arrives on. (The kit hands `spawn_player` the transport session
-    /// only — the account identity stops at the core's `on_join`; the
-    /// server's login step would fill this table before the join.)
-    pub logins: HashMap<ConnectionId, Pos3>,
+    /// Saved character positions, keyed by the player's AUTHENTICATED
+    /// identity — what the core hands the join router and the kit's
+    /// `Game::spawn_player_as` (the ticket's validated player; the
+    /// claimed `Auth.name` on the local-auth development path, where
+    /// anyone can log in as anyone: `docs/GAME-MODULE.md`, K4). Shared:
+    /// every shard's game and the router read the one table.
+    pub logins: Arc<HashMap<String, Pos3>>,
     /// The mob spawn table.
     pub spawns: Vec<MobSpawn>,
 }
@@ -118,16 +119,24 @@ impl Realm {
             .walking(ring, 6.0, true),
         );
         Self {
-            logins: HashMap::new(),
+            logins: Arc::default(),
             spawns,
         }
     }
 
-    /// Save a character at `pos` for the login on `conn`.
+    /// Save a character at `pos` for the player who logs in as
+    /// `identity`.
     #[must_use]
-    pub fn with_login(mut self, conn: u64, pos: Pos3) -> Self {
-        self.logins.insert(ConnectionId(conn), pos);
+    pub fn with_login(mut self, identity: &str, pos: Pos3) -> Self {
+        Arc::make_mut(&mut self.logins).insert(identity.to_string(), pos);
         self
+    }
+
+    /// The saved position of the player who logged in as `identity`
+    /// (`None`: no saved character — an unknown or anonymous player).
+    #[must_use]
+    pub fn saved(&self, identity: &str) -> Option<Pos3> {
+        self.logins.get(identity).copied()
     }
 
     /// Add a spawn-table row.

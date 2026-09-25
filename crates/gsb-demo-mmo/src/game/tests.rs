@@ -26,20 +26,24 @@ fn mobs(world: &mut World) -> Vec<(Pos3, Vitals, Mob)> {
     q.iter(world).map(|(p, v, m)| (*p, *v, m.clone())).collect()
 }
 
-/// A login appears at its saved character's position; a session without
-/// one at the shard's waystone.
+/// A login appears at its saved character's position — by the identity
+/// it authenticated as, whatever connection it arrived on (K4); an
+/// unknown or anonymous player at the shard's waystone.
 #[test]
 fn characters_spawn_at_their_saved_position() {
-    let realm = Realm::empty().with_login(5, Pos3::new(10.0, 0.0, -20.0));
+    let realm = Realm::empty().with_login("ann", Pos3::new(10.0, 0.0, -20.0));
     let mut world = World::new();
     let mut game = MmoGame::for_shard(1, &realm);
-    let saved = game.spawn_player(&mut world, ConnectionId(5));
-    let fresh = game.spawn_player(&mut world, ConnectionId(6));
-    assert_eq!(world.get::<Pos3>(saved), Some(&Pos3::new(10.0, 0.0, -20.0)));
-    assert_eq!(
-        world.get::<Pos3>(fresh),
-        Some(&Pos3::new(256.0, 0.0, -256.0))
-    );
+    let saved = game.spawn_player_as(&mut world, ConnectionId(5), "ann");
+    let again = game.spawn_player_as(&mut world, ConnectionId(9), "ann");
+    let unknown = game.spawn_player_as(&mut world, ConnectionId(5), "bob");
+    let anonymous = game.spawn_player(&mut world, ConnectionId(6));
+    for e in [saved, again] {
+        assert_eq!(world.get::<Pos3>(e), Some(&Pos3::new(10.0, 0.0, -20.0)));
+    }
+    for e in [unknown, anonymous] {
+        assert_eq!(world.get::<Pos3>(e), Some(&Pos3::new(256.0, 0.0, -256.0)));
+    }
     let v = world.get::<Vitals>(saved).expect("vitals");
     assert_eq!((v.kind, v.hp), (Kind::Player, PLAYER_HP));
 }
@@ -95,7 +99,7 @@ fn camps_spawn_walk_and_despawn_mobs_on_their_own_ground() {
 fn attack_and_travel_go_through_the_input_path() {
     use gsb_core::room::GameLogic;
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-240.0, 0.0, -256.0))
+        .with_login("p", Pos3::new(-240.0, 0.0, -256.0))
         .with_spawn(MobSpawn::once(
             Kind::Mob,
             Pos3::new(-236.0, 0.0, -256.0),
@@ -105,7 +109,7 @@ fn attack_and_travel_go_through_the_input_path() {
         ));
     let mut room = crate::mmo_shard(0, &realm);
     let mut world = World::new();
-    let player = room.on_join(&mut world, ConnectionId(1)).player;
+    let player = room.on_join_as(&mut world, ConnectionId(1), "p").player;
     room.update(&mut world, &ctx(1)); // the camp spawns, the kit stamps
     let mut q = world.query_filtered::<(Entity, &WireId), bevy_ecs::prelude::With<Mob>>();
     let (victim, wire) = q

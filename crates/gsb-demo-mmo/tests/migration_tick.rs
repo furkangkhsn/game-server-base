@@ -36,8 +36,8 @@ fn hp_arithmetic(hits: &[Hit], target: u64) {
 /// metre short of the x = 0 seam.
 fn duel_realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-10.5, 0.0, -300.0))
-        .with_login(2, Pos3::new(-0.5, 0.0, -300.0))
+        .with_login("p", Pos3::new(-10.5, 0.0, -300.0))
+        .with_login("q", Pos3::new(-0.5, 0.0, -300.0))
 }
 
 /// P strikes Q twice on shard 0, then Q walks east across the seam
@@ -110,8 +110,8 @@ async fn a_blow_in_the_tick_after_a_crossing_lands_once_where_the_target_lives()
 /// the x = 0 seam (the crystallization test's duel).
 fn seam_realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-10.0, 0.0, -300.0))
-        .with_login(2, Pos3::new(10.0, 0.0, -300.0))
+        .with_login("p", Pos3::new(-10.0, 0.0, -300.0))
+        .with_login("q", Pos3::new(10.0, 0.0, -300.0))
 }
 
 /// A duel crystallizes onto shard 0 (Q, the higher wire, moves there in

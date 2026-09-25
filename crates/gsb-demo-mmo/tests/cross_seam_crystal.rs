@@ -17,8 +17,8 @@ use gsb_demo_mmo::{Pos3, Realm};
 /// the x = 0 seam (inside the band: Q stands 10 m past it).
 fn realm() -> Realm {
     Realm::empty()
-        .with_login(1, Pos3::new(-10.0, 0.0, -300.0))
-        .with_login(2, Pos3::new(10.0, 0.0, -300.0))
+        .with_login("p", Pos3::new(-10.0, 0.0, -300.0))
+        .with_login("q", Pos3::new(10.0, 0.0, -300.0))
 }
 
 async fn both(room: &mut Mmo) -> Vec<Client> {

@@ -37,12 +37,12 @@ async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard()
         false,
     );
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(100.0, 0.0, -300.0)) // O: shard 1, cell (1,-5)
-        .with_login(2, Pos3::new(-20.0, 0.0, -300.0)) // A: shard 0, cell (-1,-5)
+        .with_login("c1", Pos3::new(100.0, 0.0, -300.0)) // O: shard 1, cell (1,-5)
+        .with_login("c2", Pos3::new(-20.0, 0.0, -300.0)) // A: shard 0, cell (-1,-5)
         .with_spawn(creeper);
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
-    let a = room.join(2, "", &mut cs).await;
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
+    let a = room.join(2, "c2", &mut cs).await;
     cs.push(a);
     room.steps(&mut cs, 60).await; // M still on shard 0
     let m = cs[0].of_kind(gsb_demo_mmo::mmo::Kind::Mob);
@@ -102,12 +102,12 @@ async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard()
 async fn f2_the_diagonal_shard_lends_across_a_corner() {
     let at = |x: f32, z: f32| MobSpawn::once(Kind::Mob, Pos3::new(x, 0.0, z), 1, 100_000, 60);
     let realm = Realm::empty()
-        .with_login(1, Pos3::new(-10.0, 0.0, -10.0)) // X: shard 0, cell (-1,-1)
+        .with_login("c1", Pos3::new(-10.0, 0.0, -10.0)) // X: shard 0, cell (-1,-1)
         .with_spawn(at(10.0, -10.0)) // shard 1, cell (0,-1)
         .with_spawn(at(-10.0, 10.0)) // shard 2, cell (-1,0)
         .with_spawn(at(10.0, 10.0)); // shard 3, cell (0,0) — the diagonal
     let mut room = Mmo::new(&realm);
-    let mut cs = vec![room.join(1, "", &mut []).await];
+    let mut cs = vec![room.join(1, "c1", &mut []).await];
     room.steps(&mut cs, 40).await;
     let mut seen: Vec<(i32, i32)> = cs[0].view.values().map(|r| (r.x, r.z)).collect();
     seen.sort_unstable();
