@@ -4,8 +4,10 @@
 
 use std::collections::HashMap;
 
-use super::wire::{Fields, Value, each_varint, input_ack};
+use super::wire::{Fields, Value, input_ack};
 use super::{Apply, ClientDecoder, ClientError, Counters, PrivateEvent, Snapshot};
+
+mod passes;
 
 /// One connection's view of its snapshot group, under the kit's client
 /// rules: wire id → what the game's [`ClientDecoder`] stores.
@@ -18,16 +20,15 @@ pub struct ClientView<D: ClientDecoder> {
     scratch: Scratch<D>,
 }
 
-/// One frame, decoded before the view changes (reused across frames).
+/// A frame's removals and cell exits, decoded before the view changes
+/// (reused across frames; small — the records are not buffered).
 struct Scratch<D: ClientDecoder> {
-    records: Vec<(u64, D::Record)>,
     removed: Vec<u64>,
     cells: Vec<D::Cell>,
 }
 
 impl<D: ClientDecoder> Scratch<D> {
     fn clear(&mut self) {
-        self.records.clear();
         self.removed.clear();
         self.cells.clear();
     }
@@ -54,7 +55,6 @@ impl<D: ClientDecoder> ClientView<D> {
             last_seq: None,
             counters: Counters::default(),
             scratch: Scratch {
-                records: Vec::new(),
                 removed: Vec::new(),
                 cells: Vec::new(),
             },
@@ -63,21 +63,23 @@ impl<D: ClientDecoder> ClientView<D> {
 
     /// Apply one GROUP snapshot frame (the game's snapshot opcode): a
     /// full replaces the view, a delta with a baseline applies on top, a
-    /// delta without one is dropped, a duplicate is discarded. An
-    /// undecodable frame is an error and changes nothing.
+    /// delta without one is dropped, a duplicate is discarded. A
+    /// malformed envelope or cell exit is an error and changes nothing; a
+    /// record body the game's decoder rejects is an error that leaves the
+    /// view without a baseline (see the module docs).
     pub fn apply_snapshot(&mut self, frame: &[u8]) -> Result<Snapshot, ClientError> {
         let head = self.decode(frame)?;
         let apply = if self.last_seq.is_some_and(|last| head.sequence <= last) {
             self.counters.stale += 1;
             Apply::Stale
         } else if !head.delta {
-            self.replace(head.sequence);
+            self.replace(frame, head.sequence)?;
             Apply::Full
         } else if self.last_seq.is_none() {
             self.counters.gap_drops += 1;
             Apply::NoBaseline
         } else {
-            self.merge(head.sequence);
+            self.merge(frame, head.sequence)?;
             Apply::Delta
         };
         self.scratch.clear();
@@ -89,7 +91,8 @@ impl<D: ClientDecoder> ClientView<D> {
 
     /// Apply one `Private` frame (the game's private opcode): an ack is
     /// reported, a one-shot full is applied UNCONDITIONALLY, a snapshot
-    /// flagged `delta` is an error and changes nothing.
+    /// flagged `delta` is an error and changes nothing (errors otherwise
+    /// as in [`Self::apply_snapshot`]).
     pub fn apply_private(&mut self, frame: &[u8]) -> Result<PrivateEvent, ClientError> {
         let mut ack = None;
         let mut snapshot = None;
@@ -120,7 +123,7 @@ impl<D: ClientDecoder> ClientView<D> {
             self.counters.errors += 1;
             return Err(ClientError::PrivateDelta);
         }
-        self.replace(head.sequence);
+        self.replace(body, head.sequence)?;
         self.counters.private_fulls += 1;
         self.scratch.clear();
         Ok(PrivateEvent::Full {
@@ -181,65 +184,5 @@ impl<D: ClientDecoder> ClientView<D> {
     /// The game's decoder.
     pub fn decoder(&self) -> &D {
         &self.decoder
-    }
-
-    /// Decode a whole `WorldSnapshot` into the scratch; on error, count
-    /// it and leave the scratch empty.
-    fn decode(&mut self, frame: &[u8]) -> Result<Header, ClientError> {
-        let decoded = self.decode_into(frame);
-        if decoded.is_err() {
-            self.scratch.clear();
-            self.counters.errors += 1;
-        }
-        decoded
-    }
-
-    fn decode_into(&mut self, frame: &[u8]) -> Result<Header, ClientError> {
-        let mut head = Header {
-            sequence: 0,
-            delta: false,
-        };
-        let (decoder, s) = (&self.decoder, &mut self.scratch);
-        for field in Fields::new(frame) {
-            match field? {
-                (1, Value::Varint(v)) => head.sequence = v,
-                (2, Value::Len(body)) => {
-                    s.records.push(decoder.record(body)?);
-                }
-                (3, value) => each_varint(value, |id| s.removed.push(id))?,
-                (4, Value::Len(body)) => {
-                    s.cells.push(decoder.cell_exit(body)?);
-                }
-                (5, Value::Varint(v)) => head.delta = v != 0,
-                (1..=5, _) => return Err(ClientError::Malformed("wrong wire type")),
-                _ => {}
-            }
-        }
-        Ok(head)
-    }
-
-    /// A full: the scratch's records become the whole view.
-    fn replace(&mut self, sequence: u64) {
-        self.entities.clear();
-        self.entities.extend(self.scratch.records.drain(..));
-        self.last_seq = Some(sequence);
-        self.counters.fulls += 1;
-    }
-
-    /// A delta on top: `removed`, then `cell_exits` (one pass over the
-    /// view for all of them; a held record's cell is derived only here),
-    /// then the upserts.
-    fn merge(&mut self, sequence: u64) {
-        let (decoder, s) = (&self.decoder, &mut self.scratch);
-        for id in &s.removed {
-            self.entities.remove(id);
-        }
-        if !s.cells.is_empty() {
-            self.entities
-                .retain(|_, record| !s.cells.contains(&decoder.cell_of(record)));
-        }
-        self.entities.extend(s.records.drain(..));
-        self.last_seq = Some(sequence);
-        self.counters.deltas += 1;
     }
 }

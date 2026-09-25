@@ -25,14 +25,21 @@
 //! → `(wire id, what the view stores)`, a stored record → its cell, one
 //! cell-exit body → the cell. A record's cell is derived only when a
 //! cell exit needs it (once per held record per delta that carries
-//! exits), never per received record. The envelope is walked in place
-//! ([`wire::Fields`], no allocation): record and cell bodies reach the
-//! decoder as sub-slices of the frame, and a frame is decoded completely
-//! before the view changes — an undecodable frame is an error and leaves
-//! the view as it was. Scratch buffers are reused, so the steady state
-//! allocates nothing beyond the view's own map growth. A decoder may
-//! decode a body with the game's generated type (`decode(body)?`) or walk
-//! it with [`wire::Fields`] — the cheaper choice for a hot receive loop.
+//! exits), never per received record. A decoder may decode a body with
+//! the game's generated type (`decode(body)?`) or walk it with
+//! [`wire::Fields`] — the cheaper choice for a hot receive loop.
+//!
+//! A frame is applied in two walks over it, in place ([`wire::Fields`],
+//! no allocation): the first reads the header and decodes the (few)
+//! removals and cell exits into reused scratch buffers, validating the
+//! whole envelope; the second decodes each record body straight into the
+//! view — records are never buffered (a buffer per view, at thousands of
+//! views, is memory a receive loop keeps missing in cache). So a
+//! malformed envelope or cell exit is an error that changes nothing,
+//! and a record body the game's decoder rejects — found while the view
+//! is already changing — is an error that leaves the view EMPTY and
+//! WITHOUT a baseline (never half a frame): deltas drop until the next
+//! full restores it, as for a fresh client.
 //!
 //! RPC responses (`Private.responses`) and the game's private payload
 //! (`Private.game`) are not part of the view; they are skipped. A client

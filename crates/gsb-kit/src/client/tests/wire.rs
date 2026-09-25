@@ -41,19 +41,16 @@ fn varints_of_every_length_decode() {
     }
 }
 
-/// Every malformed frame is an error, counted, and changes nothing —
-/// including one whose envelope is fine but whose LAST record body is
-/// not (the frame is decoded completely before the view changes), and
+/// A malformed envelope or cell exit is an error, counted, and changes
+/// nothing — the whole envelope is walked before the view changes — and
 /// nothing of it leaks into the next frame.
 #[test]
-fn a_malformed_frame_is_an_error_and_changes_nothing() {
-    // What a bad frame decodes before it fails: a removal and a record.
+fn a_malformed_envelope_is_an_error_and_changes_nothing() {
+    // What a bad frame holds before it fails: a removal and a record.
     let poison = Frame::delta(2, &[(9, 9, 9)]).removing(&[1]).kit();
-    let mut bad_record = poison.clone();
-    bad_record.extend_from_slice(&[0x12, 0x01, 0x08]); // record: truncated varint
     let mut bad_exit = poison.clone();
     bad_exit.extend_from_slice(&[0x22, 0x01, 0xFF]); // cell exit: truncated
-    let cases: [(&str, Vec<u8>); 7] = [
+    let cases: [(&str, Vec<u8>); 6] = [
         ("truncated body", poison[..poison.len() - 1].to_vec()),
         ("truncated key", vec![0x08]),
         (
@@ -64,7 +61,6 @@ fn a_malformed_frame_is_an_error_and_changes_nothing() {
         ),
         ("field number 0", vec![0x00, 0x01]),
         ("sequence as bytes", vec![0x0A, 0x00]),
-        ("a record body", bad_record),
         ("a cell-exit body", bad_exit),
     ];
     let good = Frame::delta(2, &[(3, 3, 3)]).kit();
@@ -80,6 +76,52 @@ fn a_malformed_frame_is_an_error_and_changes_nothing() {
         let next = view.apply_snapshot(&good).expect("decodes");
         assert_eq!(next.apply, Apply::Delta, "{what}");
         assert_eq!(sorted(&view), [(1, 0, 0), (3, 3, 3)], "{what}: no leak");
+    }
+}
+
+/// A record body the game's decoder rejects is found while the view is
+/// already changing: the view is left EMPTY and WITHOUT a baseline —
+/// never half a frame (here: the removal and the first record applied,
+/// the last record not) — so deltas drop until the next full, whether
+/// the bad frame was a group delta, a group full or the private full.
+#[test]
+fn an_undecodable_record_leaves_the_view_without_a_baseline() {
+    let bad_record = |f: Frame| {
+        let mut bytes = f.kit();
+        bytes.extend_from_slice(&[0x12, 0x01, 0x08]); // record: truncated
+        bytes
+    };
+    // The same bad full as the one-shot private arm (`Private.snapshot`,
+    // field 2, length-delimited).
+    let snapshot = bad_record(Frame::full(2, &[(9, 9, 9)]));
+    let mut private_bad = vec![0x12];
+    prost::encoding::encode_varint(snapshot.len() as u64, &mut private_bad);
+    private_bad.extend_from_slice(&snapshot);
+    for (what, frame, private) in [
+        (
+            "delta",
+            bad_record(Frame::delta(2, &[(9, 9, 9)]).removing(&[1])),
+            false,
+        ),
+        ("full", bad_record(Frame::full(2, &[(9, 9, 9)])), false),
+        ("private full", private_bad, true),
+    ] {
+        let mut view = View::default();
+        view.apply_snapshot(&Frame::full(1, &[(1, 0, 0), (2, 0, 0)]).kit())
+            .expect("decodes");
+        let got = if private {
+            view.apply_private(&frame).map(|_| ())
+        } else {
+            view.apply_snapshot(&frame).map(|_| ())
+        };
+        assert!(matches!(got, Err(ClientError::Body(_))), "{what}: {got:?}");
+        assert!(view.is_empty() && !view.has_baseline(), "{what}");
+        assert_eq!(view.counters().errors, 1, "{what}");
+        let next = view.apply_snapshot(&Frame::delta(3, &[(4, 4, 4)]).kit());
+        assert_eq!(next.map(|s| s.apply), Ok(Apply::NoBaseline), "{what}");
+        let full = view.apply_snapshot(&Frame::full(4, &[(5, 5, 5)]).kit());
+        assert_eq!(full.map(|s| s.apply), Ok(Apply::Full), "{what}");
+        assert_eq!(sorted(&view), [(5, 5, 5)], "{what}");
     }
 }
 
