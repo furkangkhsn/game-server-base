@@ -36,9 +36,9 @@
 //! Everything around the hooks — wire identity, AOI grouping, the
 //! cell-delta engine with its border-strip ledger, migration routing,
 //! the park ledger, the snapshot and `Private` envelopes, the input ack —
-//! is the kit's. Not wired into `gsb-server` or the load generator (§12,
-//! out of scope): the MMO is verified by its own tests, through the real
-//! `gsb-core` shard actors.
+//! is the kit's. Hosted by `gsb-server` as `game = "mmo"` and driven by
+//! `gsb-loadgen --game mmo` (`docs/GAME-MODULE.md`); its own tests verify
+//! it through the real `gsb-core` shard actors.
 
 pub mod codec;
 pub mod combat;

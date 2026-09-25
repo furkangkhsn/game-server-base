@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-641 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+657 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -139,6 +139,16 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
+
+**Cross-seam C2 tamam** (CROSS-SHARD §4c, CHANGELOG "Cross-seam C2
+turu"): opt-in `with_crystallize(Crystallize)` ile seam ötesi süren
+dövüş tek shard'a taşınır ve orada TUTULUR — `collect_migrations` önce
+pin'in anchor'ına, yoksa `region_of`'a bakar. Crystallization'ı açan
+bir oyun KENDİ ENTITY'SİNE indirdiği yerel darbeyi `Seam::contact(source,
+target)` ile bildirmeli; yoksa tutulan dövüş `release` sonra sessiz
+sayılıp bırakılır. Yeni bir `Partition` önayarı yazarken `holds`'u uygula
+(varsayılan her yerde tutar — bant yok); bandı ödünç şeridin
+genişliğiyle sınırla.
 
 **Cross-seam C1 tamam** (CROSS-SHARD §4b, CHANGELOG "Cross-seam C1
 turu"): sharded bir oyun seam'in ötesini `ShardGame::{ingest_seam,
@@ -321,9 +331,10 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon
    kuralları dahil).
-5. **Cross-seam etkileşim paketi** — 1-2. parçalar KAPANDI (C1:
-   borrowed-view erişimi, `ShardMsg::RemoteEffect`); kalan:
-   histeresizli crystallization tetikleyicisi.
+5. ~~**Cross-seam etkileşim paketi**~~ — KAPANDI (C1: borrowed-view
+   erişimi, `ShardMsg::RemoteEffect`; C2: histeresizli
+   crystallization). Açık yan bulgu: kümelenmiş MMO yükünde
+   `snap_overflows` (snapshot bölme).
 6. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
    ortak DeltaSnapshotCodec adoptasyonu (all/team/pvs), Ipc/NetLink,
    QUIC rehome.
@@ -337,6 +348,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 641 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 657 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

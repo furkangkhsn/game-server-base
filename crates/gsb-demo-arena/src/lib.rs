@@ -35,9 +35,9 @@
 //! content and "no change" ledger, the snapshot and `Private`
 //! envelopes, the input ack, park/resume) is the kit's.
 //!
-//! Not wired into `gsb-server` or the load generator (§12, out of
-//! scope): the arena is verified by its own tests, through the real
-//! `gsb-core` room actor.
+//! Hosted by `gsb-server` as `game = "arena"` and driven by
+//! `gsb-loadgen --game arena` (`docs/GAME-MODULE.md`); its own tests
+//! verify it through the real `gsb-core` room actor.
 
 pub mod codec;
 pub mod components;

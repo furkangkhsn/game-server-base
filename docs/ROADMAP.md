@@ -75,10 +75,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **641** (641/641 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **657** (657/657 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **cross-seam C1** (CROSS-SHARD §4b) — oynanış seam'in
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **cross-seam C2** (CROSS-SHARD §4c) — seam ötesi süren dövüş
+tek shard'a kristalleşiyor (yüksek wire alçak wire'ın shard'ına mevcut
+göçle; sahiplik dövüş sürerken bölgeden ayrışık; zaman + yarım-bant
+histerezisi); MMO açık, loadgen `--mmo-duel-frac`. **Cross-seam
+etkileşim paketi bitti.** Açık yan bulgu: kümelenmiş MMO yükünde
+`snap_overflows` (snapshot bölme).
+Önceki tur: **cross-seam C1** (CROSS-SHARD §4b) — oynanış seam'in
 ötesini görüyor (`CrossSeam`/`Seam`) ve `ShardMsg::RemoteEffect` ile
 etkiliyor (idempotent, sıralı, yönlendirmeli); MMO saldırısı seam
 ötesinde. Sıradaki: crystallization.
@@ -322,7 +328,7 @@ kalanı çok makine dağıtımı, congestion control), **robustluk** ve
 
 
 Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
-- [ ] **Cross-seam etkileşim paketi** — in-process sharding'i "neredeyse
+- [x] **Cross-seam etkileşim paketi** — in-process sharding'i "neredeyse
   invasif olmayan" seviyeye taşıyan üç parça (dış danışma diyaloğundan;
   tasarım notu CROSS-SHARD §2–§4 + bu madde):
 
@@ -333,9 +339,10 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
      köken başına kayan dedup penceresi, sınırlı yeniden deneme,
      `(source, origin, seq)` + bir tick hizalama; MMO `Attack` seam
      ötesinde (CROSS-SHARD §4b, sekiz sapma gerekçeli).
-  3. **Crystallization tetikleyicisi (histeresizli)** — hedef komşu
-     shard'da ve K tick'tir etkileşim sürüyor → proaktif migrate;
-     dövüş tek shard'a kristalleşir. Ping-pong'u önleme bandı dahil.
+  3. ~~**Crystallization tetikleyicisi (histeresizli)**~~ — **KAPANDI
+     (C2)**: iki yönlü K-tick serisi, yüksek wire taşınır, pin'le
+     sahiplik bölgeden ayrışık, `release` sessizlik + `Partition::holds`
+     bandı (giriş yarım bant) (CROSS-SHARD §4c).
 
   Kapsam notları: AoE sorgularında `local ∪ borrowed` birleşimi logic
   tarafında manuel yapılır (bayatlık semantiği korunur); gerçek çoklu-

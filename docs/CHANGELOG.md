@@ -5,6 +5,46 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Cross-seam C2 turu — crystallization, histerezisli (`xseam/c2-crystallize`)
+
+CROSS-SHARD §4 katman 4 uygulandı (tasarım, elenen alternatifler, beş
+gerekçeli sapma: CROSS-SHARD §4c). `gsb-core` DEĞİŞMEDİ; client wire
+baytları aynı. **Cross-seam etkileşim paketi bitti.**
+
+- **Tespit kit'te:** opt-in oda (`with_crystallize(Crystallize)`) seam
+  ötesi kontakları — giden `Seam::emit`, uygulanan uzak etki, oyunun
+  `Seam::contact` ile bildirdiği yerel darbe — sırasız wire çifti başına
+  sınırlı bir dövüş tablosunda tutar (1024 çift, `window` sessizliğinde
+  düşer). Seri K tick'e yayılmış ve iki yön canlıysa çiftin YÜKSEK wire'ı
+  alçak wire'ı ödünç veren shard'a mevcut göçle (`KitMig.pin`) taşınır —
+  mesajsız, kilitsiz.
+- **Sahiplik bölgeden ayrışır** (tasarımın kilit kararı): alıcı shard
+  mover'ı ve partnerini pinler; `collect_migrations` önce pin'e bakar,
+  yoksa `region_of`'a — pin olmasa mover eski bölgesine hemen geri
+  verilirdi (ping-pong). Bırakma: `release` tick sessizlik, bant dışı
+  (`Partition::holds`) ya da partnerin gitmesi; giriş yarım bantla
+  (uzamsal histerezis). Pinli entity mover olmaz; köşe dövüşü en düşük
+  wire'ın shard'ında toplanır.
+- **MMO:** `world::CRYSTALLIZE` (K 1 sn, pencere 2 sn, bırakma 3 sn, bant
+  64 m); yerel darbeler `Seam::contact` ile bildiriliyor; sunucu
+  `[mmo] crystallize = true|false` (vars. açık). Devir tick'indeki darbe
+  C1'in yönlendirmesiyle bir kez uygulanıyor.
+- **Loadgen:** `--mmo-duel-frac F`, `--mmo-crystallize on|off`
+  (varsayılan bot girdi-girdi aynı).
+- **Ölçüm (90 sn, F = 0,2, on/off, 200 ve 500 istemci):** maliyet gürültü
+  içinde (30 Hz, adım p50/p90 ve bant aynı); uzak etki 200'de ~%25, 500'de
+  ~%9 azaldı; 0,27–0,40 crystal göçü/sn; hiçbir wire 90 sn'de iki
+  kereden fazla taşınmadı. Varsayılan yükte A/B gürültü içinde.
+
+Testler 641 → 657; 25 kit + 3 MMO/çekirdek mutasyonu yakalandı.
+Ebeveynin bağımsız mutasyonu (pin'i yok saymak): kit'te 5, MMO'da 1 test
+kırılıyor. **Yan bulgular:** kümelenmiş MMO yükünde (500, düellocular)
+`snap_overflows` ~32 k — crystallization'dan bağımsız, snapshot bölme
+ihtiyacı; göç eden entity eski dünyasında bir tick daha kalıyor ve o
+tick'teki YEREL darbe o kopyaya iniyor (her göçte var, yeni değil).
+Arena ve MMO crate belgelerindeki "sunucuya bağlı değil" cümleleri
+güncellendi (G2'den beri bayattı).
+
 ## Cross-seam C1 turu — oynanış seam'in ötesini görüyor ve etkiliyor (`xseam/c1-remote-effect`)
 
 CROSS-SHARD §2–§4'ün uzak-etki kısmı uygulandı (tasarım + sekiz gerekçeli
