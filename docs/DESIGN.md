@@ -758,8 +758,10 @@ RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
 `4` FRAG `[u16 mesaj id][u8 index][u8 count][parça]` (yalnız sunucu →
 istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU").
 Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
-= oyun (kayıp toleranslı). Yeniden gönderim: RTO 50 ms, vazgeçme
-250 ms (sayılır), out-of-order penceresi 16; çift frame ACK'lenir ama
+= oyun (kayıp toleranslı). Yeniden gönderim: RTO 50 ms; tek
+frame asla bırakılmaz, 5 sn ACK ilerlemesi olmazsa BANT ölü ilan edilir
+ve oturum biter (`udp/mod.rs` "The REL liveness bound"; eski "250 ms'de
+vazgeç" kuralı kaldırıldı), out-of-order penceresi 16; çift frame ACK'lenir ama
 yeniden iletmez. ACK'ler demux tarafından oturumun writer'ına **out
 kanalı üzerinden** (UDP_ACK frame olarak) verilir — komut kanalı yok,
 tek-beklenen-kaynak özdeşliği korunur.

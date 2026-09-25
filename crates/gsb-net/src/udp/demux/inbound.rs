@@ -168,8 +168,9 @@ impl super::Demux {
                     match s.out_tx.try_send(vec![fb]) {
                         Ok(()) => self.acks_piggybacked += 1,
                         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                            // The writer is stuck; the retransmit will
-                            // run to RETRANSIT_MAX and give up (bounded).
+                            // The writer is stuck; the peer's retransmit
+                            // re-asks, and the REL liveness bound ends a
+                            // band that stops progressing (bounded).
                             self.ack_piggyback_failed += 1;
                         }
                         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
