@@ -68,7 +68,7 @@ impl View for MmoView {
             op::MMO_PRIVATE => match self.records.apply_private(payload) {
                 Ok(PrivateEvent::Ack(up_to)) => self.acks.push(up_to),
                 Ok(PrivateEvent::Full { .. }) => self.book(),
-                Ok(PrivateEvent::Empty) => {}
+                Ok(PrivateEvent::Empty | PrivateEvent::Session) => {}
                 Err(ClientError::PrivateDelta) => panic!("the one-shot private view is a full"),
                 Err(e) => panic!("mmo private: {e}"),
             },

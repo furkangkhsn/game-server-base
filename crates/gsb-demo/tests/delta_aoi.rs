@@ -163,6 +163,7 @@ impl Conn {
                     // Input acks are not part of the view.
                     Ok(PrivateEvent::Full { .. } | PrivateEvent::Ack(_)) => {}
                     Ok(PrivateEvent::Empty) => panic!("empty private oneof"),
+                    Ok(PrivateEvent::Session) => panic!("the demo sends no session payload"),
                     Err(ClientError::PrivateDelta) => {
                         panic!("a private snapshot must be a full")
                     }

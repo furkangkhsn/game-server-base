@@ -129,7 +129,11 @@ impl<D: ClientDecoder> ClientView<D> {
             return Ok(PrivateEvent::Ack(up_to));
         }
         let Some(body) = snapshot else {
-            return Ok(PrivateEvent::Empty);
+            return Ok(if game.is_some() {
+                PrivateEvent::Session
+            } else {
+                PrivateEvent::Empty
+            });
         };
         let head = self.decode(body)?;
         if head.delta {

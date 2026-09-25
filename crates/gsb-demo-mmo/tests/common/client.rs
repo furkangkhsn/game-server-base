@@ -181,7 +181,7 @@ impl Client {
                                     assert_unique(s);
                                 }
                             }
-                            Ok(PrivateEvent::Empty) => {}
+                            Ok(PrivateEvent::Empty | PrivateEvent::Session) => {}
                             Err(ClientError::PrivateDelta) => {
                                 panic!("the one-shot private view is a full")
                             }

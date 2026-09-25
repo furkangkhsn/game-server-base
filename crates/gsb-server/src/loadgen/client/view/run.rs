@@ -233,6 +233,9 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 // or a group crossing), applied by the view (counted in
                 // its fulls and private fulls).
                 Ok(PrivateEvent::Full { .. }) => {}
+                // The game's session payload alone (the arena's welcome),
+                // handed to the bot's decoder by the view.
+                Ok(PrivateEvent::Session) => {}
                 // No payload arm: this client sends no RPCs, so an empty
                 // private frame is unexpected.
                 Ok(PrivateEvent::Empty) => rep.errors += 1,

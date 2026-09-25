@@ -144,8 +144,12 @@ pub enum PrivateEvent {
         /// The full's `sequence`.
         sequence: u64,
     },
-    /// No payload arm (a frame carrying only responses or the game's
-    /// session payload).
+    /// No payload arm, but the game's session payload — handed to the
+    /// decoder ([`ClientDecoder::session_private`]). A session payload
+    /// beside an ack or a full is reported as that arm.
+    Session,
+    /// No payload arm and no session payload (a frame carrying only RPC
+    /// responses).
     Empty,
 }
 

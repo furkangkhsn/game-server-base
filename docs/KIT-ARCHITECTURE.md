@@ -701,7 +701,10 @@ message Private {
     (varsayılan: yok say) — `ClientView::apply_private` alan 4'ü
     bulursa zarf doğrulandıktan sonra, payload kolu uygulanmadan ÖNCE
     çözücüye verir; çözücünün hatası kareyi reddeder (görünüm
-    değişmez, `errors` artar).
+    değişmez, `errors` artar). Payload kolu olmayan, yalnız oturum yükü
+    taşıyan kare `PrivateEvent::Session`'dır (`Empty` = yalnız RPC
+    yanıtı): loadgen `Empty`'yi hata sayar, çünkü RPC göndermez — yeni
+    varyant olmasa arenanın join karesi her istemcide bir hata olurdu.
 - **`removed` packed değil:** kit her kimliği ayrı bir `0x18` etiketiyle
   yazıyor, üretilmiş bir kodlayıcı proto3'ün varsayılanı olan packed
   biçimi yazar; her protobuf ayrıştırıcısı ikisini de kabul eder. Bu

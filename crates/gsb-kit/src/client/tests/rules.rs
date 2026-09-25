@@ -196,12 +196,21 @@ fn a_private_ack_or_empty_frame_leaves_the_view_alone() {
     );
     let responses_only = proto::Private {
         responses: vec![gsb_protocol::base::RpcResponse::default()],
-        game: vec![1, 2, 3],
         ..Default::default()
     };
     assert_eq!(
         view.apply_private(&responses_only.encode_to_vec()),
         Ok(PrivateEvent::Empty)
+    );
+    // A session payload the decoder ignores (the default) is still
+    // reported as one.
+    let session = proto::Private {
+        game: vec![1, 2, 3],
+        ..responses_only
+    };
+    assert_eq!(
+        view.apply_private(&session.encode_to_vec()),
+        Ok(PrivateEvent::Session)
     );
     assert!(!view.has_baseline() && view.is_empty());
     assert_eq!(*view.counters(), Counters::default());

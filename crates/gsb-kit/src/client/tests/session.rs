@@ -60,10 +60,10 @@ fn the_decoder_is_told_the_session_payload_beside_any_arm() {
     assert_eq!(view.get(1), Some(&(2, 3)));
     assert_eq!(
         view.apply_private(&with_game(None, &[3])),
-        Ok(PrivateEvent::Empty)
+        Ok(PrivateEvent::Session)
     );
     // An empty payload on the wire (tag + zero length) is still a payload.
-    assert_eq!(view.apply_private(&[0x22, 0x00]), Ok(PrivateEvent::Empty));
+    assert_eq!(view.apply_private(&[0x22, 0x00]), Ok(PrivateEvent::Session));
     // No field 4: nothing to tell.
     assert_eq!(
         view.apply_private(&with_game(None, &[])),

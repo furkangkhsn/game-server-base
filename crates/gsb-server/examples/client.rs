@@ -291,6 +291,7 @@ async fn main() {
                 Ok(PrivateEvent::Full { .. }) => {
                     println!("PRIVATE full: {} entities (baseline reset)", view.len());
                 }
+                Ok(PrivateEvent::Session) => println!("PRIVATE session payload"),
                 Ok(PrivateEvent::Empty) => {}
                 Err(e) => println!("PRIVATE rejected: {e}"),
             },
