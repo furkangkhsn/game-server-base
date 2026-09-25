@@ -1,7 +1,8 @@
 # gsb: Cross-Shard Etkileşim ve Border Paylaşım Tasarımı
 
 > Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi); §2–§4
-> UYGULANDI — uzak etki §4b (C1), crystallization §4c (C2). §2–§5 etkileşim
+> UYGULANDI — uzak etki §4b (C1), crystallization §4c (C2), göç tick'i
+> düzeltmesi §4d (D). §2–§5 etkileşim
 > desenleridir; §6–§8 border paylaşımının delta'ya evrimi ve ölçüm planıdır
 > (ölçüm turu yürütülüyor). Uygulama turları bu dokümanı sözleşme alır.
 
@@ -141,7 +142,9 @@ ShardMsg::RemoteEffect(RemoteEffect {
   iletilir (`hops` ≤ 3) — kayıt dünyasında BİR tick daha duran "ölümlü
   kopyaya" asla uygulanmaz; entity geri gelirse kayıt silinir. TTL
   sonrası gelen yetim sayılır. Elenen: düşür+say (her göç sınırında
-  darbe kaybı); broadcast + epoch guard (aşağıda sapma 3).
+  darbe kaybı); broadcast + epoch guard (aşağıda sapma 3). (Bu UZAK
+  etkiyi korur; ölümlü kopyaya o tick'te eski shard'ın kendi YEREL
+  darbesi D'ye kadar kayboluyordu — §4d.)
 - **Atıf:** `source` zarfın içinde; otorite (MMO) kill kredisini ona
   yazar.
 - **Anti-cheat yerelliği:** menzil saldıranın shard'ında ödünç kayda
@@ -322,7 +325,12 @@ ve `h + 2`'de BİR kez uygulanır — eski shard'da bir tick daha duran
 ölümlü kopyaya asla (doğrulandı: MMO testi; yönlendirmeyi kapatan
 mutasyon testi kırar). Mover'ın `h`'deki darbesi partnerin shard'ına
 `h + 1`'de varır; mover da `h + 1`'in drain'inde oraya kurulur, yani
-otorite kaynağı `local` olarak görür.
+otorite kaynağı `local` olarak görür. **Düzeltme (D, §4d):** yukarıdaki
+yalnız UZAK darbe için doğruydu. Devrin YEREL yarısı — ölümlü kopyaya
+eski shard'ın `h + 1`'deki yerel darbesi (kristal bırakma / bant / partner
+göçünde tutulan partnerin darbesi; herhangi bir göçte üçüncü bir yerel
+saldıran) — kopyaya iniyor ve kayboluyordu; D'den beri yeni sahibe
+yönlenir ve `h + 2`'de bir kez uygulanır (MMO testi `migration_tick.rs`).
 
 **§4'e göre sapmalar (gerekçeli):**
 
@@ -431,6 +439,169 @@ senaryoda da gürültü içinde; her koşuda `joined = left = 200`,
 
 MMO varsayılan botunda crystallization AÇIK (MMO'nun varsayılanı) ama
 seam ötesi dövüş yok: ölçülen, boştaki maliyettir.
+
+## 4d. D sonucu — göç tick'i (branch `fix/d-migration-tick`)
+
+C2 turunda bulunan, her göçte var olan (yeni olmayan) açık kapatıldı:
+göç eden entity'nin eski shard'da bir tick daha duran **ölümlü
+kopyası**na o tick'te inen YEREL darbe kayboluyordu. Uzak etkiler
+C1'in yönlendirmesiyle zaten güvendeydi (§4b); yerel yol değildi.
+
+**Pencere (faz sırası, eski shard A → yeni sahip B, entity e).**
+
+| Tick | A | B |
+|---|---|---|
+| `h` | 0 drain · 0d etki · 1 okuma · 2b ingest · 2c istek · 3 sistemler · 3b etki çıkışı · 4a (önceki göçlerin despawn'ı) · **4b `collect_migrations` → `capture`** (sistemlerden SONRA: `h`'nin bütün yerel darbeleri durumun içinde) → `Migrate { at_tick: h }` gönderilir; başarılıysa `pending_out (e, h + 1)` ve yönlendirme `e → (B, h + 11)` · 5 border (e dahil) · 6 yayın (e A'nın kaydı) | — |
+| `h + 1` | 0 drain · 0d: e'ye gelen uzak etki yönlendirilir (C1) · **2b ingest · 2c istek · 3 sistemler: kopya DÜNYADA** — dünya sorgusu onu bulur, `Seam::local` onu döndürür · 3b · **4a `on_migrate_out` → despawn** | 0 drain: kurulum (`at_tick h < h + 1` kapısı) — e B'nin |
+
+Pencere = **A'nın `h + 1` tick'inin gövdesi, faz 0'dan faz 4a'ya
+kadar**. İçinde kopyaya yapılan her yazım kaybolur (durumu `h`'de
+yakalandı ve gitti), kopyanın kendi sistemleri ve — park edilmiş
+oyuncuda — botu `h + 1`'i B'deki gerçek entity'nin YANINDA ikinci kez
+oynatır. Oyuncu girdisi güvende: girdi kanalı `h`'de Migrate ile taşındı,
+A `h + 1`'de kopya için girdi çekmez. Yeniden üretim (düzeltmeden önce,
+gerçek dört shard): MMO düellosunda P'nin `h + 1` darbesi
+`(shard 0, tick h + 1, hp 0, killed)` olarak kopyaya indi, Q shard 1'de
+25 hp ile yaşadı; kristal bırakma devrinde (Q `out`'ta bölgesine döner,
+P `out + 1`'de vurur) birebir aynısı.
+
+**Karar: göç tick'inde kopya oyunun kancalarından çıkar, yeni sahibinin
+ödünç kaydı olur.** A'nın `h + 1`'deki ilk seam kancasından (0d
+`apply_remote_effect`, 2b `ingest_seam` ya da 3 `step`) oyunun sistemleri
+bitene dek:
+
+- kopya **`Disabled`** (Bevy'nin varsayılan sorgu filtresi): oyunun hiçbir
+  sorgusu onu bulmaz — yerel darbe onu ıskalar, kendi sistemleri
+  (hareket, AI, otomatik saldırı) onu koşmaz; 2c'nin istek kancası da
+  içeride;
+- `Seam` onu **B'den ödünç** gösterir, `h`'de yakalanan kayıtla:
+  `local(e)` = `None`, `lent(e)` = `Lent { lender: B, state: yakalanan }`,
+  `lent_iter` onu bir kez verir (B'nin ilk export'u gelmiş olsa da
+  olmasa da AYNI cevap — zamanlama şansından bağımsız), `emit(e)` B'ye
+  gider. "Yerel, değilse ödünç" çözen bir darbe (MMO'nun melee'si: dünya
+  sorgusu → `lent` → `emit`) böylece A'da `at_tick = h + 1` damgalı
+  sıradan bir etki olur ve B'de `h + 2`'de, C1'in kimliği, pencereli
+  dedup'ı ve `(source, origin, seq)` sırasıyla **bir kez** uygulanır;
+  kopyaya hiçbir şey yazılmaz;
+- bot onu sürmez (B'nin botu sürer); ona `emit` seam ötesi kontak
+  sayılır (crystal tablosu çifti görür, yerel-yerel sanmaz);
+- sistemlerden sonra kopya geri gösterilir: kit'in kendi geçişleri
+  (orphan damgalama, crystal değerlendirmesi, border export'u) tick'i
+  eskisi gibi görür, çekirdek 4a'da eskisi gibi despawn eder.
+
+Kod: kit `sharded/departing.rs` (`Departures`: yakalanan kayıtlar +
+gizlenen kopyalar), `sharded/seam.rs`, `sharded/room{.rs,/shard.rs}`
+(capture'da kayıt, kancalarda gizle/göster, migrate-out'ta unut),
+`common/hooks.rs` (bot beslemesi), `sharded/crystal.rs` (kontak
+sahiplik yüklemi). **Oyun API'si değişmedi; MMO'nun kodu değişmedi.**
+
+**Çekirdek: tek küçük, kaçınılmaz ekleme.** Gönderimin commit'i yalnız
+çekirdekte bilinir (link `try_send`'i; reddedilen gönderim entity'yi A'da
+bırakır, satırı geri alınır, girdisi A'da çekilmeye devam eder) ve kit
+bunu 4a'dan önce öğrenemez. `CrossSeam` A'nın zaten tuttuğu yönlendirme
+tablosunu okur: `departed(wire) -> Option<usize>` (commit edilmiş göç,
+TTL içinde, geri gelmemiş) ve `emit` kimsenin ödünç vermediği hedefi
+oraya yollar (önce ödünç veren, eskisi gibi; `NotLent` yalnız ikisi de
+bilmiyorsa). Test aracı: `SeamStage::depart(wire, to)`. Mesaj, faz, göç
+protokolü değişmedi; tick gövdesi aynı boyda (`EffectBook::seam`).
+
+**Simetrik durum ve crystallization devirleri.**
+
+- *Mover'ın kendi eylemleri:* `h`'deki eylemi A'da yereldir ve yakalanan
+  duruma girer (bir kez); `h + 1`'de girdisi B'de, botu B'de, sorgu-güdümlü
+  sistemleri A'da kopyada koşmaz → ikinci uygulama yok (kit testi:
+  otomatik saldırı yalnız B'den; MMO: Q'nun `h` darbesi A'da `h`'de, `h + 1`
+  darbesi B'den uzak etki olarak `h + 2`'de).
+- *Kristalleşme göçü* (mover `h`'de partnerin shard'ına): partnerin `h`
+  darbesi C1 yönlendirmesiyle (§4c madde 7, değişmedi); eski shard'da
+  kopyaya yerel vuran üçüncü biri artık yeni sahibe gider.
+- *Bırakma / bant / partner göçü:* tutulan çiftin partneri `h + 1`'de
+  YEREL vurur — D'den önce kayıp, şimdi yeni sahipte bir kez (MMO testi).
+
+**Elenen alternatifler.**
+
+1. *Yalnız `Seam`'i yeniden etiketlemek* (kopya dünyada görünür kalır;
+   `local` = `None`, `lent` + `emit` yeni sahibe): oyunun her dünya-sorgusu
+   yolu (MMO melee, alan etkisi) kopyayı vurmaya devam eder, "dünya ∪
+   ödünç" onu iki kez gösterir, kopyanın sistemleri ikinci kez oynar —
+   her oyun her sorgusunu `seam.local` ile süzmek zorunda kalırdı.
+2. *Kopyayı erken despawn* (kit `h + 1`'in ilk kancasında `on_migrate_out`
+   çağırır, ya da çekirdek 4a'yı faz 0'a taşır): yapısal olarak güçlü ama
+   `h + 1` border export'undan e'yi düşürür (üçüncü shard onu bir tick
+   erken kaybeder), spatial kompozitin çıkış (`pending_removals`)
+   zamanlamasını kaydırır; çekirdek varyantı göç protokolünün faz
+   sırasını değiştirir — kaçınılabilir çekirdek değişikliği.
+3. *Capture'ı taşımak* (`h + 1`'in 4a'sında yakala): Migrate `h`'de gitti;
+   geç capture gönderimi bir tick geciktirmek, yani tek-tick hizalamasını
+   iki tick'e çıkaran protokol değişikliği demek.
+4. *Kopyaya yazılanı sonradan yeni sahibe aktarmak* (fark): kit oyun
+   durumunu bilmez; genel bir fark yok.
+5. *Çekirdeksiz commit tahmini* (kit 4b'de raporladığını gitti sayar):
+   reddedilen gönderimde (dolu komşu kutusu) e A'da kalır; kit onu gizleyip
+   darbeyi B'ye yollarsa (B'de yok → `NoTarget`) hem darbe hem bir tick
+   hareket kaybolur.
+6. *Çekirdek `emit`'te önce yönlendirme, sonra ödünç*: pencere dışında
+   (e B'den D'ye geçmişse) bir fazla atlama; "ödünç önce" korundu,
+   yönlendirme yalnız kimse ödünç vermiyorsa.
+
+**Bedel ve sınırlar.**
+
+- `Disabled` sorguları süzer, DOĞRUDAN erişimi değil: oyunun sakladığı bir
+  `Entity` tutamağıyla (`world.get_mut(e)`) kopyaya yazan kod onu hâlâ
+  yazar. Sözleşme: hedef wire'dan (sorgu ya da `Seam::local`) çözülür —
+  MMO böyle yapar.
+- Kopya `h + 1`'de donuk: kit geçişleri (o tick'in border export'u) onu
+  yakalanan değerle görür; eskiden kopyanın sistemleri onu bir tick daha
+  ilerletiyordu (kimsenin okumadığı hayalet değer — B sahip-kazanır ile
+  kendi kaydını kullanır; üçüncü shard bir tick için bir tick daha bayat
+  değer görür). Hareket etmeyen fikstürde `h + 1` bayt-bayt aynı (test).
+- Nadir köşe: e A'ya az önce başka bir komşu C'den geldiyse C'nin bayat
+  ödünç kaydı `h + 1`'de hâlâ durabilir; oyuna görünen kiralayan B'dir ama
+  çekirdek "ödünç önce" kuralıyla C'ye yollar → C'nin yönlendirmesi → A
+  → B (2 atlama ≤ 3): doğru, bir tick geç.
+- Maliyet: göç başına bir kayıt kopyası ve iki arketip taşıması; göç
+  yokken bir `is_empty`.
+
+**Testler.** Çekirdek (`effects/flow.rs`, 1): `h + 1`'de kimsenin ödünç
+vermediği ayrılmış hedefe `emit` yeni sahibe, sıradan damgayla gider,
+`departed` onu adlandırır; TTL sonrası `NotLent`. Kit (`sharded/tests/
+departing{.rs,/brawl.rs}`, 4; fikstür `Brawling`: can, betikli ve otomatik
+saldırı, MMO gibi dünya-sorgulu yerel darbe): (1) yerel darbe kopyaya değil
+yeni sahibe, bir kez (100 → 90 yerel, 90 → 80 B'de); 0d'deki başka bir
+etkinin kancası da kopyayı görmez; B'nin erken export'u görünümü
+değiştirmez; kopya sistemlerden sonra geri ve export'ta; kontak seam ötesi
+çift; migrate-out kaydı unutur. (2) Reddedilen gönderim: yerel kalır,
+yerel vurulur, kayıt unutulur. (3) Kopya ikinci kez davranmaz: otomatik
+saldırı yalnız B'den, bot yalnız B'de. (4) Dokunmayan oyun değişmez:
+commit'li ve commit'siz koşu aynı dünya, export, snapshot ve göç. MMO
+(gerçek dört shard, `migration_tick.rs`, 2): bölge geçişi düellosu (P ve Q
+`h` ve `h + 1`'de karşılıklı; P'nin 4. darbesi Q'yu shard 1'de `h + 2`'de
+yener, kredi P'ye; her darbe tam bir darbe hasarı, hasar toplamı = kayıp
+can) ve kristal bırakma (P'nin `out + 1` darbesi Q'yu shard 1'de
+`out + 2`'de yener).
+
+Önce-kırmızı: iki MMO testi düzeltmeden önce (darbe `(0, h + 1)`
+kopyaya); çekirdek testi `NotLent`; kit yarısı kapalıyken 2 kit + 2 MMO
+testi kırılır (kalan iki kit testi "hiçbir şey değişmez" iddiasıdır).
+Mutasyonlar (hepsi yakalandı): kit 16 — gizleme yok; gizleme commit'e
+bakmaz; sistemlerden sonra gösterme yok; `local` kopyayı döndürür; `lent`
+ayrılan kaydı vermez; `lent` erken export'u tercih eder; `lent_iter`
+ayrılanın ödünç kopyalarını tutar; `lent_iter` ayrılanı vermez; `emit`
+ayrılanı `Local` sayar; kontak kopyayı yerel sayar; bot kopyayı sürer;
+capture kayıt tutmaz; migrate-out unutmaz; 0d'de / ingest'te / step'te
+gizleme yok — çekirdek 2 — `emit` yönlendirmeye düşmez; `departed` hiçbir
+şey demez.
+
+**Yük sağlaması** (release, süreç içi, 32 çekirdek, başka bir ajanın
+derlemesiyle paylaşılan makine — koşu öncesi 1 dk yük 4,8–5,5; sayılar
+kıyas değil sağlamadır): `gsb-loadgen 200 --game mmo --duration 20
+--write-stall-secs 0` → `joined = left = 200`, `errors=0`,
+`server_closes=0`, `server_hz` 30,00, adım p50/p90 fine 128/176 µs,
+`out_bps_per_conn` 20 683. Düello kipi (`--mmo-duel-frac 0.2 --duration
+90`, C2'nin komutu) → aynı üç sıfır, 30,00 Hz, adım p50/p90 168/224 µs,
+`out_bps_per_conn` 16 143; dört shard'ın `remote_effect_summary`'si
+161 uygulanan uzak etki (~1,8/sn, C2 tablosuyla aynı düzey), 0 yetim,
+0 düşen, 2 politika reddi; 23 `crystal_move`, 46 `crystal_release`.
 
 ## 5. Ortak fizik (tutma/itme) — tasarım uyarısı
 
@@ -659,6 +830,7 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
+| Göç tick'i: ölümlü kopyaya yerel darbe | ✅ D — §4d |
 
 ## 8. NOT-DONE
 

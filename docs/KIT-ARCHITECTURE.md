@@ -577,6 +577,33 @@ impl<V> Seam<'_, '_, V> {
   `with_disconnect_grace`, `with_disconnect_policy`) `room/policy.rs`
   çocuk modülüne taşındı (imzalar aynı).
 
+**D eklemeleri** (göç tick'i, CROSS-SHARD §4d; kit'in public yüzeyi
+DEĞİŞMEDİ — `ShardGame` ve `Seam` imzaları aynı, anlamları göç tick'inde
+genişledi; çekirdeğe iki ekleme):
+
+```rust
+impl<S> CrossSeam<'_, S> {
+    pub fn departed(&self, wire: u64) -> Option<usize>; // bu shard'ın az önce devrettiği entity'nin yeni sahibi
+    // emit: kimse ödünç vermiyorsa `departed` sahibine (önce ödünç veren, eskisi gibi)
+}
+impl<S> SeamStage<S> { pub fn depart(&mut self, wire: u64, to: usize); } // commit'li göç (test aracı)
+```
+
+- **Göç tick'i:** `h`'de devredilen entity'nin `h + 1`'de eski dünyada
+  duran kopyası, o tick'in ilk seam kancasından oyunun sistemleri bitene
+  dek `Disabled`'dır (oyunun sorguları görmez) ve `Seam`'de yeni sahibin
+  ödünç kaydıdır: `local` = `None`, `lent`/`lent_iter` `h`'de yakalanan
+  kaydı yeni sahip kiralayan olarak verir, `emit` oraya gider; bot onu
+  sürmez. Kit'in kendi geçişleri (orphan, crystal, border) onu eskisi
+  gibi görür. Durum: `sharded/departing.rs` (`Departures`, bir tick'in
+  göçleriyle sınırlı).
+- **Sözleşme:** hedef wire'dan çözülür (dünya sorgusu ya da
+  `Seam::local`) — saklanmış bir `Entity` tutamağıyla doğrudan yazım
+  `Disabled`'ı atlar. `ShardGame::capture` belgesi bunu söyler.
+- Elenen: *yeni `ShardGame` kancası ya da public `Seam::departing(wire)`*
+  — oyunun yerel yolu dünya sorgusudur; her oyun her sorgusunu süzmek
+  zorunda kalırdı (CROSS-SHARD §4d elenen 1); gizleme bunu kancasız yapar.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
