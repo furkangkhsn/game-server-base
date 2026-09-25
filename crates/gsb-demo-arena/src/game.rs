@@ -24,11 +24,17 @@
 //! had to decide in `spawn_player` and keep a duplicate team component
 //! for `team_of` to read back — the kit asked for the team after the
 //! spawn (`docs/KIT-ARCHITECTURE.md` §10, finding A1).
+//!
+//! **The client learns its team from the wire**: the session's first
+//! private frame carries a `Welcome` (team, team count) in the kit's
+//! per-game slot (`Game::session_private`; GAME-MODULE G3-3 — before it
+//! a client had to infer its team from where its unit spawned).
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 
 use bevy_ecs::prelude::{Entity, World};
+use bytes::BytesMut;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_kit::game::{Game, InputSeq, TeamGame};
@@ -163,6 +169,24 @@ impl Game for ArenaGame {
 
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
         self.movement.run(world, ctx.dt.as_secs_f32());
+    }
+
+    /// The session's [`Welcome`](crate::arena::Welcome): the unit's team
+    /// (as the kit recorded it) and the number of teams — what a client
+    /// needs to know its side and find its base. A unit without a team
+    /// (none in the team room) is told nothing.
+    fn session_private(&mut self, world: &World, entity: Entity, out: &mut BytesMut) -> bool {
+        let Some(&TeamMember(Team(team))) = world.get::<TeamMember>(entity) else {
+            return false;
+        };
+        let welcome = crate::arena::Welcome {
+            team: team.into(),
+            teams: self.teams.into(),
+        };
+        welcome
+            .encode(out)
+            .expect("protobuf encode into an in-memory buffer failed");
+        true
     }
 }
 

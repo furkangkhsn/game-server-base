@@ -1469,7 +1469,7 @@ kanıt yapısal (§11.1).
 | Görüş | `VisionGrid3<Pos3>`, yarıçap **15 m** (zeminin kenarının beşte biri; tavan 30 m'ye karşı yalnız yükseklik farkı da saklayabiliyor) | üsler 25 m'lik halkada, üç takımda 43,3 m ara — taze spawn yalnız kendi takımını görür |
 | Oda | `ArenaRoom = TeamRoom<ArenaGame, VisionGrid3<Pos3>>`, kurucu `arena_room(game)` (serbest fonksiyon — kit tipinde inherent impl E0116) | — |
 | Bot | park süresi dolan birim, sıradan girdi yolundan (`seq = 0` `MoveTo`) üssüne çekilir | — |
-| Wire | `proto/arena.proto` (`gsb.arena`): `MoveTo` (cm, `seq`), `UnitRecord`, kit zarfının tipli aynaları `WorldSnapshot` (`entities = 2` tipli; `cell_exits = 4` aynalanmadı — arenada hücre uzayı yok) ve `Private` (`game = 4` aynalanmadı — arena özel yük göndermiyor); `gsb.kit.InputAck` olduğu gibi. Build demo'nun kalıbında (`DEP_GSB_KIT_PROTO_DIR`, `.gsb.kit` / `.gsb.base` için `extern_path`) | — |
+| Wire | `proto/arena.proto` (`gsb.arena`): `MoveTo` (cm, `seq`), `UnitRecord`, kit zarfının tipli aynaları `WorldSnapshot` (`entities = 2` tipli; `cell_exits = 4` aynalanmadı — arenada hücre uzayı yok) ve `Private` (`game = 4` tipli: `Welcome { team, teams }` — oturum başına bir kez, küçük paket G3-3); `gsb.kit.InputAck` olduğu gibi. Build demo'nun kalıbında (`DEP_GSB_KIT_PROTO_DIR`, `.gsb.kit` / `.gsb.base` için `extern_path`) | — |
 | Opcode'lar | `ARENA_MOVE_TO = 1100`, `ARENA_SNAPSHOT = 1101`, `ARENA_PRIVATE = 1102` (`Game::SNAPSHOT_OP` / `PRIVATE_OP` ezildi) | oyun bandı; 2D demo'nunkilerden (1000–1006) ayrık blok — iki oyunu tek `MessageTable`'da barındıran bir sunucu yeniden numaralamak zorunda kalmasın |
 
 **Kit'ten kullanılanlar** (tamamı public): `codec::RecordCodec`;

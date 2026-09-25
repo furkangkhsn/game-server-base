@@ -44,6 +44,10 @@ pub struct Client {
     /// The raw payloads of the latest snapshot and private frames.
     pub last_snapshot: Option<Bytes>,
     pub last_private: Option<Bytes>,
+    /// The raw payload of the first private frame.
+    pub first_private: Option<Bytes>,
+    /// Every session payload (`Private.game`) received, in order.
+    pub welcomes: Vec<arena::Welcome>,
 }
 
 impl Client {
@@ -103,6 +107,8 @@ impl Client {
                         if let Some(private::Payload::Ack(a)) = p.payload {
                             self.acks.push(a.processed_up_to);
                         }
+                        self.welcomes.extend(p.game);
+                        self.first_private.get_or_insert_with(|| f.payload.clone());
                         self.last_private = Some(f.payload.clone());
                     }
                     other => panic!("unexpected frame op {other}"),
@@ -190,6 +196,8 @@ impl Arena {
             acks: Vec::new(),
             last_snapshot: None,
             last_private: None,
+            first_private: None,
+            welcomes: Vec::new(),
         }
     }
 

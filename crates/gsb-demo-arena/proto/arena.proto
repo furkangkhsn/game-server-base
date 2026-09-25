@@ -68,14 +68,32 @@ message WorldSnapshot {
   bool delta = 5;
 }
 
+// The arena's session payload: what a joiner is told about itself, in
+// `Private.game` (the kit's per-game slot, field 4). Sent ONCE per
+// session — on the connection's first private frame after a join or a
+// resume (that frame may carry nothing else) — never again while the
+// session lasts. The wire id comes from JOIN_ROOM_RESULT; this is the
+// rest a client needs to play its side.
+message Welcome {
+  // The unit's team, 0-based (`team < teams`). Team 0 is the proto3
+  // default and is not written: its welcome still arrives (the field 4
+  // is present), it just omits this field.
+  uint32 team = 1;
+  // How many teams share the arena (>= 1). With `team` it places the
+  // team's base: the bases sit evenly on a 25 m ring around the centre,
+  // team `t` at angle `2π·t / teams` from +x toward +z, on the floor.
+  uint32 teams = 2;
+}
+
 // Typed mirror of `gsb.kit.Private` (op `ARENA_PRIVATE`): the
-// per-connection frame carrying the input acknowledgment and the RPC
-// responses. Field 4 (`game`, the kit's opaque per-game payload) is not
-// mirrored: the arena sends no private payload of its own.
+// per-connection frame carrying the input acknowledgment, the RPC
+// responses and, once per session, the arena's `Welcome` (the kit's
+// opaque `bytes game = 4`, typed here).
 message Private {
   oneof payload {
     gsb.kit.InputAck ack = 1;
     WorldSnapshot snapshot = 2;
   }
   repeated gsb.base.RpcResponse responses = 3;
+  Welcome game = 4;
 }

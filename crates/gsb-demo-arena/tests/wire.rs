@@ -10,7 +10,7 @@ mod common;
 
 use common::{Arena, SETTLE};
 use gsb_demo_arena::ArenaGame;
-use gsb_demo_arena::arena::{InputAck, UnitRecord};
+use gsb_demo_arena::arena::{InputAck, UnitRecord, Welcome};
 use gsb_kit::proto as kit;
 use gsb_protocol::base::RpcResponse;
 use prost::Message;
@@ -91,6 +91,7 @@ fn kit_envelope_and_arena_mirror_encode_identically() {
     let typed_ack = TypedPrivate {
         payload: ack.map(typed_private::Payload::Ack),
         responses,
+        game: None,
     };
     assert_same_wire("private ack", &kit_ack, &typed_ack);
     let kit_snap = kit::Private {
@@ -144,8 +145,47 @@ async fn real_room_frames_decode_identically_through_both_definitions() {
     let t = TypedPrivate::decode(&raw[..]).expect("typed decode");
     assert_eq!(k.encode_to_vec(), &raw[..]);
     assert_eq!(t.encode_to_vec(), &raw[..]);
-    assert!(k.game.is_empty(), "the arena ships no private game payload");
+    assert!(k.game.is_empty(), "the welcome rode the first frame only");
     let ack = Some(InputAck { processed_up_to: 1 });
     assert_eq!(k.payload, ack.map(kit::private::Payload::Ack));
     assert_eq!(t.payload, ack.map(typed_private::Payload::Ack));
+}
+
+/// The arena's deliberate wire change (GAME-MODULE G3-3): each joiner's
+/// first private frame is exactly its `Welcome` in the kit's field 4 —
+/// no ack yet, nothing else — pinned byte for byte; the kit's opaque
+/// `bytes game` and the mirror's typed `Welcome game` read the same
+/// bytes. Team 0 omits its default `team` (the field is still there).
+/// Nothing else changes: the next frames carry no welcome.
+#[tokio::test]
+async fn each_joiner_is_welcomed_with_its_team_once() {
+    let mut arena = Arena::new(ArenaGame::default());
+    let mut cs = vec![
+        arena.join(1).await,
+        arena.join(2).await,
+        arena.join(3).await,
+        arena.join(4).await,
+    ];
+    cs[0].move_to(1.0, 0.0, 0.0, 1).await;
+    arena.advance(&mut cs, 3).await;
+
+    let pinned: [&[u8]; 4] = [
+        &[0x22, 0x02, 0x10, 0x03],
+        &[0x22, 0x04, 0x08, 0x01, 0x10, 0x03],
+        &[0x22, 0x04, 0x08, 0x02, 0x10, 0x03],
+        &[0x22, 0x02, 0x10, 0x03],
+    ];
+    for (i, (c, bytes)) in cs.iter().zip(pinned).enumerate() {
+        let raw = c.first_private.clone().expect("a first private frame");
+        assert_eq!(&raw[..], bytes, "joiner {i}: the welcome, byte for byte");
+        let team = (i % 3) as u32;
+        let welcome = Welcome { team, teams: 3 };
+        let k = kit::Private::decode(&raw[..]).expect("kit decode");
+        assert_eq!(k.game, welcome.encode_to_vec(), "joiner {i}: kit view");
+        let t = TypedPrivate::decode(&raw[..]).expect("typed decode");
+        assert_eq!(t.game, Some(welcome), "joiner {i}: typed view");
+        assert_eq!(t.encode_to_vec(), &raw[..], "joiner {i}: re-encodes");
+        assert_eq!(c.welcomes, [welcome], "joiner {i}: once");
+    }
+    assert_eq!(cs[0].acks, [1], "the ack comes in its own later frame");
 }
