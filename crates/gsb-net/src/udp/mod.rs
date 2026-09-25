@@ -6,16 +6,18 @@
 //! writer pumps, each owning its socket half. UDP gives **all** sessions
 //! ONE socket. So:
 //!
-//! - [`UdpListener::accept`] does not accept a socket; it returns the
-//!   next **session** the shared demux synthesizes from the datagram
-//!   stream (a completed handshake from a new peer).
+//! - the UDP listener's [`accept`](crate::Listener::accept) does not
+//!   accept a socket; it returns the next **session** the shared demux
+//!   synthesizes from the datagram stream (a completed handshake from a
+//!   new peer).
 //! - the read path is a **single task** — the **demux** — that receives
 //!   every datagram and routes it to the right session's mailbox.
-//! - [`Endpoint::start_pump`] no longer spawns a per-connection reader:
-//!   the UDP pump returns a `None` reader handle and only the per-session
-//!   **writer** task (outbound batch → `send_to`). The demux is owned by
-//!   the listener (it outlives every connection) and is stopped via
-//!   [`Listener::close`].
+//! - [`Endpoint::start_pump`](crate::Endpoint::start_pump) no longer
+//!   spawns a per-connection reader: the UDP pump returns a `None` reader
+//!   handle and only the per-session **writer** task (outbound batch →
+//!   `send_to`). The demux is owned by the listener (it outlives every
+//!   connection) and is stopped via
+//!   [`Listener::close`](crate::Listener::close).
 //!
 //! ## Handshake (anti-amplification)
 //!
@@ -53,7 +55,7 @@
 //! **fails** (the server refuses to start): the key is the entire basis
 //! of the property, so running with a predictable key would invert it
 //! rather than weaken it, and a startup warning is not a security
-//! posture (see [`CookieKey`]).
+//! posture (see `CookieKey`).
 //!
 //! ## Cookie rotation (why a captured proof expires)
 //!
@@ -64,8 +66,8 @@
 //! handshake's whole job — "prove you own this return path, now" — loses
 //! the "now".
 //!
-//! So `F` takes a fourth term: a **time slot** ([`CookieClock`]), an
-//! integer counter of [`COOKIE_SLOT`] periods since bind. The server
+//! So `F` takes a fourth term: a **time slot** (`CookieClock`), an
+//! integer counter of `COOKIE_SLOT` periods since bind. The server
 //! mints the challenge for the current slot and accepts a proof for the
 //! current slot **or the previous one**. Nothing else changes:
 //!
@@ -79,7 +81,7 @@
 //!   task, no shared rotation state, nothing to lock. The demux keeps its
 //!   single awaited source;
 //! - **the key stays the secret** — entropy-derived, never clock-derived
-//!   (see [`CookieKey`]). The slot is a public counter and is folded WITH
+//!   (see `CookieKey`). The slot is a public counter and is folded WITH
 //!   the key precisely because it is public. Keep the two apart: the KEY
 //!   is unpredictability, the SLOT is expiry. The test names say which is
 //!   which.
@@ -247,7 +249,7 @@
 //!   JOIN result hangs the client; a lost HEARTBEAT is tolerable only
 //!   because HEARTBEAT_ACK is not state — but the *request* may be).
 //!   Each direction keeps its own sequence: the sender retransmits the
-//!   oldest un-ACKed REL frame every [`RETRANSIT_RTO`] until it is
+//!   oldest un-ACKed REL frame every `RETRANSIT_RTO` until it is
 //!   ACKed. An individual frame is **never** abandoned; the *band* is
 //!   declared dead as a whole (see "The REL liveness bound" below). The
 //!   receiver deduplicates (cumulative), buffers a small out-of-order
@@ -274,8 +276,8 @@
 //! **Decision: memory-bounded retransmit + a no-ACK-progress death
 //! threshold.** A frame is retransmitted for as long as the band is
 //! alive. The band is declared dead when the sender's cumulative ACK has
-//! not advanced *at all* for [`REL_NO_ACK_FATAL`] while something is
-//! outstanding, or when the un-ACKed queue reaches [`RETRANSIT_CAP`].
+//! not advanced *at all* for `REL_NO_ACK_FATAL` while something is
+//! outstanding, or when the un-ACKed queue reaches `RETRANSIT_CAP`.
 //! Death is **session-fatal and loud**: the writer hands
 //! `ConnIn::ServerClosed` to the connection actor over its mailbox — an
 //! in-process channel, never the socket, which is precisely what is in
@@ -333,7 +335,7 @@
 //!
 //! **The memory bound.** With no per-frame give-up the un-ACKed queue is
 //! no longer bounded by the 250 ms clock, so it is bounded explicitly:
-//! [`RETRANSIT_CAP`] frames per direction per session. Control frames
+//! `RETRANSIT_CAP` frames per direction per session. Control frames
 //! are small (tens of bytes), so the realistic ceiling is a few KB;
 //! the absolute one (every frame at the full datagram budget) is
 //! ~380 KB, and it is only reachable by a session whose ACKs have
@@ -367,17 +369,17 @@
 //! - **Loss.** A message is delivered only when every fragment arrived;
 //!   there is no retransmission. A message missing a fragment is dropped
 //!   (counted) when a newer message takes its slot or when it is older
-//!   than [`frag::FRAG_MAX_AGE`] (250 ms); its stragglers are refused,
+//!   than `frag::FRAG_MAX_AGE` (250 ms); its stragglers are refused,
 //!   never resurrected. The band is self-healing as before: the next
 //!   full (at the latest the keep-alive) replaces a lost one.
 //! - **Bounds (client, all constant, O(1) per datagram):**
-//!   [`frag::FRAG_MAX_COUNT`] = 16 fragments per message (23 472 bytes at
+//!   `frag::FRAG_MAX_COUNT` = 16 fragments per message (23 472 bytes at
 //!   the default budget — 2.3× the largest measured full, arena 1000's
 //!   10 267; a frame past it takes the old drop+count path, warned once
-//!   per session); [`frag::FRAG_SLOTS`] = 4 messages under reassembly
+//!   per session); `frag::FRAG_SLOTS` = 4 messages under reassembly
 //!   (slot = id mod 4, so a newer message evicts only its slot's older
 //!   partial; one tick ships at most two fragmented messages per session
-//!   — the group frame and the private full); [`frag::FRAG_MEM_CAP`] =
+//!   — the group frame and the private full); `frag::FRAG_MEM_CAP` =
 //!   64 KiB of held chunks per session (over it, the oldest OTHER
 //!   partial is evicted). No map, no growth.
 //! - **The control band never fragments.** Its server → client frames
@@ -465,7 +467,7 @@
 //!   network a room fan-out plus retransmissions can push a slow path
 //!   into a loss spiral it has no way to back out of. (Verified: no
 //!   token bucket, no pacer, no window anywhere under `udp/`.)
-//! - **Fixed RTO, no RTT estimation.** [`RETRANSIT_RTO`] is a compile-time
+//! - **Fixed RTO, no RTT estimation.** `RETRANSIT_RTO` is a compile-time
 //!   50 ms for every peer on earth, and it never backs off. A 200 ms path
 //!   therefore gets ~4 redundant copies of every control frame before the
 //!   first ACK can possibly arrive — wasteful in the good case and

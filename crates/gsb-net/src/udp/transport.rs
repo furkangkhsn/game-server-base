@@ -27,7 +27,7 @@ pub struct UdpTransportConfig {
     pub idle_timeout: Option<Duration>,
     /// Operator-supplied cookie key (16 bytes; the composition root
     /// parses the config's 32-hex-char string into these). `None` = draw
-    /// from the OS entropy source at bind time. See [`CookieKey`].
+    /// from the OS entropy source at bind time. See `CookieKey`.
     pub cookie_key: Option<[u8; 16]>,
 }
 
