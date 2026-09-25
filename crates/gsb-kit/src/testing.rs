@@ -1,7 +1,7 @@
 //! Test-only games for the kit's in-module tests (compiled for tests
 //! only): the fixture game (`fixture`), its record in the record run
-//! (`packed`) and wrappers around a game that add one behaviour a test
-//! needs.
+//! (`packed`), its record with a send rate (`rated`) and wrappers
+//! around a game that add one behaviour a test needs.
 
 use std::collections::HashMap;
 
@@ -133,7 +133,9 @@ impl<G: ShardGame> ShardGame for Vetoing<G> {
 
 mod fixture;
 mod packed;
+mod rated;
 mod requests;
 
 pub(crate) use fixture::*;
 pub(crate) use packed::*;
+pub(crate) use rated::*;

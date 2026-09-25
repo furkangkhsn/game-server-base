@@ -127,13 +127,20 @@ pub(crate) fn put_entity_body<R: RecordCodec>(id: u64, body: &[u8], out: &mut By
 /// game's codec for its own wire values (the blanket impl below — every
 /// room but one), or through a writer that also knows pre-encoded
 /// records (the sharded team composite's imports). `RUN` is the
-/// framing ([`RecordCodec::RUN`] of the game's codec).
+/// framing ([`RecordCodec::RUN`] of the game's codec); [`Self::due`]
+/// the record's send-rate schedule (A10).
 pub(crate) trait WriteRecord<W> {
     /// Whether the records ride the record run.
     const RUN: bool;
 
     /// Append record `id` with value `wire` (inside an open region).
     fn put(&self, id: u64, wire: &W, out: &mut BytesMut);
+
+    /// Whether record `id`, CHANGED from `held` (what its clients hold)
+    /// to `now`, is due on `step` — its class's schedule
+    /// ([`RecordCodec::send_every`],
+    /// [`SendEvery::due`](crate::codec::SendEvery::due)).
+    fn due(&self, step: u64, id: u64, held: &W, now: &W) -> bool;
 }
 
 impl<R: RecordCodec> WriteRecord<R::Wire> for R {
@@ -142,6 +149,11 @@ impl<R: RecordCodec> WriteRecord<R::Wire> for R {
     #[inline]
     fn put(&self, id: u64, wire: &R::Wire, out: &mut BytesMut) {
         put_entity_record(self, id, wire, out);
+    }
+
+    #[inline]
+    fn due(&self, step: u64, id: u64, _held: &R::Wire, now: &R::Wire) -> bool {
+        self.send_every(now).due(step, id)
     }
 }
 

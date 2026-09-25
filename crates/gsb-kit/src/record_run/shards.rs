@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use super::CELL;
-use super::compare::{Stats, add, same};
+use super::compare::{Check, Stats, add};
 use super::game::{MOVE, SWITCH, to};
 use super::layout::take;
 use super::script::Op;
@@ -45,6 +45,8 @@ pub(super) struct Shards<G, St> {
     next_conn: u64,
     tick: u64,
     pub(super) stats: (Stats, Stats),
+    /// How the pairs are held to each other.
+    pub(super) check: Check,
 }
 
 impl<G: Key, St: Mig> Shards<G, St> {
@@ -56,6 +58,7 @@ impl<G: Key, St: Mig> Shards<G, St> {
             next_conn: 1,
             tick: 0,
             stats: (Stats::default(), Stats::default()),
+            check: Check::Same,
         }
     }
 
@@ -84,17 +87,24 @@ impl<G: Key, St: Mig> Shards<G, St> {
         self.tick += 1;
         let tick = self.tick;
         let sent = [self.rooms[0].step(tick), self.rooms[1].step(tick)];
+        if let Check::Lag(lag) = &mut self.check {
+            lag.observe(tick, self.rooms[0].truth().into_iter());
+        }
         for (i, (a, b)) in self.views.iter_mut().enumerate() {
             let (mut fa, mut fb) = (Vec::new(), Vec::new());
             for (snapshot, frame) in self.rooms[0].batch(&sent[0], i) {
                 take(a, &mut fa, snapshot, &frame);
             }
+            let before: BTreeMap<u64, (i32, i32)> = b.iter().map(|(id, &v)| (id, v)).collect();
             for (snapshot, frame) in self.rooms[1].batch(&sent[1], i) {
                 take(b, &mut fb, snapshot, &frame);
             }
+            if let Check::Lag(lag) = &mut self.check {
+                lag.on_time(tick, &before, &fb, &self.rooms[1].migrated);
+            }
             self.stats.0.see(&fa);
             self.stats.1.see(&fb);
-            same(tick, (a, &fa), (b, &fb));
+            self.check.pair(tick, (a, &fa), (b, &fb));
         }
     }
 

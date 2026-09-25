@@ -24,7 +24,7 @@ use gsb_core::room::{Action, RoomConfig};
 use gsb_core::ticker::Ticker;
 use tokio::sync::oneshot;
 
-use super::compare::{Stats, add, same};
+use super::compare::{Check, Stats, add};
 use super::game::{MOVE, SWITCH, to};
 use super::layout::{Parts, take};
 use super::script::Op;
@@ -89,6 +89,9 @@ pub(super) struct Rig {
     pub(super) tick: u64,
     /// What the `entities` side and the run side saw.
     pub(super) stats: (Stats, Stats),
+    /// How the pairs are held to each other ([`Check::Same`] unless a
+    /// test sets it).
+    pub(super) check: Check,
 }
 
 impl Rig {
@@ -127,6 +130,7 @@ impl Rig {
             next_conn: 1,
             tick: 0,
             stats: (Stats::default(), Stats::default()),
+            check: Check::Same,
         }
     }
 
@@ -217,7 +221,8 @@ impl Rig {
             settle(b).await;
             a.drain(&mut self.stats.0);
             b.drain(&mut self.stats.1);
-            same(self.tick, (&a.view, &a.frames), (&b.view, &b.frames));
+            let (a, b) = ((&a.view, &a.frames[..]), (&b.view, &b.frames[..]));
+            self.check.pair(self.tick, a, b);
         }
     }
 

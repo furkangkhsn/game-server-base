@@ -63,6 +63,16 @@
 //! maintained — "Dirty cells" below), the per-tick change lists, and,
 //! per group, the fact that it was born.
 //!
+//! **With a send rate** (a game's opt-in, `RecordCodec::send_every` —
+//! KIT-ARCHITECTURE §10 "A10") the induction holds per record instead of
+//! per value: a record whose value changed inside its cell but is not
+//! due yet stays out of the change list (its clients keep its last sent
+//! value; the bucket, and so every full, has the current one) and joins
+//! the list on its due step with its current value. The deferral is the
+//! record's, never a group's, so every established group still holds the
+//! same state of the cell and the piece is still shared. Appearing,
+//! crossing and exiting never wait.
+//!
 //! The invariant is a server-side one (the per-cell delta is group-
 //! independent no matter what the clients hold). A client that is loss-
 //! free is exactly in sync with the previous tick's content at every

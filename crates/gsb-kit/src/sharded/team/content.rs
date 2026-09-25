@@ -184,10 +184,22 @@ where
 
     /// The export body of record `wire` with value `value`: the cached
     /// bytes while the value is unchanged, else a fresh encode.
+    ///
+    /// **The owner paces its exports (A10).** In delta mode a changed
+    /// value that is not due on this step keeps the cached (last
+    /// exported) body: an importing shard cannot compute the class of a
+    /// body, so the owner — which holds the typed value — advances the
+    /// body only on the record's due steps, and the importer passes a
+    /// changed body straight on (`Shown::Encoded` is always due). The
+    /// schedule is the one the importer would apply itself (same class,
+    /// same wire phase, the room's shards step in lockstep). A record
+    /// not exported on the previous step is encoded fresh (it enters an
+    /// export at its current value). The full mode ignores the rate.
     fn body(&mut self, wire: u64, value: &Wire<G>) -> Bytes {
-        let tick = self.tick;
+        let (tick, step) = (self.tick, self.step);
+        let codec = self.inner.game.codec();
         if let Some((cached, bytes, at)) = self.bodies.get_mut(&wire)
-            && cached == value
+            && (cached == value || (self.delta && !codec.send_every(value).due(step, wire)))
         {
             *at = tick;
             return bytes.clone();

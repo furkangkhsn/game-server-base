@@ -151,3 +151,5 @@ fn baselines_owe_one_full_per_new_group() {
     b.forget(p);
     assert!(b.owed(p, 0, false), "a resumed session");
 }
+
+mod rate;

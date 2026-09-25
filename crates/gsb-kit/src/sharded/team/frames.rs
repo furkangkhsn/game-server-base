@@ -44,6 +44,22 @@ impl<C: RecordCodec> WriteRecord<Shown<C::Wire>> for ShownWriter<'_, C> {
             Shown::Encoded(body) => put_entity_body::<C>(id, body, out),
         }
     }
+
+    /// A typed value that changed follows the game's class. An imported
+    /// body is always due: its OWNER paced it (in delta mode an export
+    /// advances a body only on the record's due steps, `content`), so
+    /// the viewer passes a changed body straight on. A record switching
+    /// between the two forms (lent ↔ imported as it nears or leaves the
+    /// border strip) goes out at once, as it always did: its value comes
+    /// from another source now, whose last publication may be a relay
+    /// behind — waiting for the typed side's next due step on top of
+    /// that would stack the two delays.
+    fn due(&self, step: u64, id: u64, held: &Shown<C::Wire>, now: &Shown<C::Wire>) -> bool {
+        match (held, now) {
+            (Shown::Typed(_), Shown::Typed(wire)) => self.0.send_every(wire).due(step, id),
+            _ => true,
+        }
+    }
 }
 
 impl<G, P, V> ShardedTeamRoom<G, P, V>

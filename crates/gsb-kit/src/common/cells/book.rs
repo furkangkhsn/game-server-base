@@ -8,10 +8,12 @@ use std::hash::Hash;
 
 use bevy_ecs::prelude::{Component, Entity, With, World};
 
-use crate::codec::RecordCodec;
+use crate::codec::{RecordCodec, SendEvery};
 use crate::common::*;
 use crate::identity::WireId;
 use crate::space::CellSpace;
+
+mod rate;
 
 /// The per-tick CONTENT bookkeeping of a cell-encoded delta broadcaster —
 /// the current buckets, the change lists, and the occupancy/member
@@ -67,6 +69,19 @@ pub(crate) struct CellBook<W, C> {
     /// Cells with members now but none at the last roll: their groups
     /// are fresh and must emit a FULL packet on their first tick.
     pub born_groups: HashSet<C>,
+    /// The book's step counter (one per [`Self::begin_tick`]): the clock
+    /// of the send-rate schedule ([`SendEvery::due`], A10).
+    pub step: u64,
+    /// The records whose value changed while they were not DUE (A10,
+    /// `rate`): `wire id → (its cell, its class)`. The bucket already
+    /// holds the current value (what every full shows); the clients of
+    /// the cell's groups still hold the last one sent. Released into the
+    /// change lists on a due step by the roll; dropped when the record
+    /// leaves its cell (a crossing, an exit — both carry it at once).
+    /// Bounded by the records.
+    pub deferred: HashMap<u64, (C, SendEvery)>,
+    /// The roll's scratch for the due releases (reused).
+    pub released: Vec<(u64, C)>,
 }
 
 // Not derived: a derive would demand `W: Default` and `C: Default`.
@@ -82,6 +97,9 @@ impl<W, C> Default for CellBook<W, C> {
             pending_removals: Vec::new(),
             members: HashSet::new(),
             born_groups: HashSet::new(),
+            step: 0,
+            deferred: HashMap::new(),
+            released: Vec::new(),
         }
     }
 }
@@ -89,6 +107,7 @@ impl<W, C> Default for CellBook<W, C> {
 impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// Clear the per-tick state (persistent containers, in place).
     pub(crate) fn begin_tick(&mut self) {
+        self.step += 1;
         self.cell_changes.clear();
         self.touched.clear();
         self.born_groups.clear();
@@ -113,6 +132,7 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// migration-in, a borrowed record entering the view). An upsert in
     /// the cell's change list.
     pub(crate) fn record_appearance(&mut self, wire: u64, value: W, cell: C, member: bool) {
+        self.forget_deferred(wire);
         self.cell_changes
             .entry(cell)
             .or_default()
@@ -144,6 +164,7 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// the source, an upsert in the target (the packet passes fix the
     /// wire order: `removed` before `entities`).
     pub(crate) fn record_cross(&mut self, old: C, new: C, wire: u64, value: W, member: bool) {
+        self.forget_deferred(wire);
         self.cell_changes.entry(old).or_default().exits.push(wire);
         if let Some(b) = self.buckets.get_mut(&old) {
             b.remove(&wire);
@@ -175,6 +196,7 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// Primitive: a record LEFT `cell` without a tracked position write
     /// (a parked despawn removal, a borrowed record exiting the view).
     pub(crate) fn record_exit(&mut self, cell: C, wire: u64, member: bool) {
+        self.forget_deferred(wire);
         self.cell_changes.entry(cell).or_default().exits.push(wire);
         if let Some(b) = self.buckets.get_mut(&cell) {
             b.remove(&wire);
@@ -227,14 +249,16 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
                 }
                 Some(old) if old == new_cell => {
                     // Moved inside its cell — a record only when the wire
-                    // content actually changed.
+                    // content actually changed, and only on its due step
+                    // (A10; a record entering a cell never waits).
                     let changed = self
                         .buckets
                         .get(&old)
                         .and_then(|b| b.get(&wire))
                         .is_none_or(|prev| *prev != value);
                     if changed {
-                        self.record_update(new_cell, wire, value);
+                        let every = codec.send_every(&value);
+                        self.record_change(new_cell, wire, value, every);
                     }
                 }
                 Some(old) => {
@@ -306,6 +330,9 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// borrowed-strip integration, which is why the roll cannot simply
     /// sit at the end of `update` there.
     pub(crate) fn roll(&mut self) {
+        // The pending changes due this step join the change lists first
+        // (A10): they are content changes of this tick like any other.
+        self.release_due();
         for (c, t) in self.touched.iter() {
             let occupied_now = self.buckets.contains_key(c);
             let occupied_prev = self.prev_occupied.contains(c);

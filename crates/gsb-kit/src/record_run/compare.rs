@@ -1,9 +1,11 @@
 //! What the two clients of a player are held to after every tick: the
 //! same frames (their content — the framing aside), the same view, the
-//! same counters; and what a run exercised.
+//! same counters — or, when the second side's codec has a send rate
+//! (A10), the rate's relation (`lag`); and what a run exercised.
 
 use std::collections::BTreeMap;
 
+use super::lag::Lag;
 use super::layout::Parts;
 use crate::client::{ClientView, Counters};
 use crate::testing::Dec;
@@ -62,6 +64,29 @@ impl Stats {
         }
         for b in v.to_le_bytes() {
             self.digest = (self.digest ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3);
+        }
+    }
+}
+
+/// How a twin holds its pairs to each other.
+pub(super) enum Check {
+    /// [`same`]: two framings of one content.
+    Same,
+    /// The send rate's relation (the second side is rated).
+    Lag(Lag),
+}
+
+impl Check {
+    /// A pair after tick `tick`.
+    pub(super) fn pair(
+        &mut self,
+        tick: u64,
+        a: (&ClientView<Dec<false>>, &[(bool, Parts)]),
+        b: (&ClientView<Dec<true>>, &[(bool, Parts)]),
+    ) {
+        match self {
+            Self::Same => same(tick, a, b),
+            Self::Lag(lag) => lag.check(tick, a, b),
         }
     }
 }

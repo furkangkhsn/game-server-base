@@ -7,8 +7,10 @@
 //! by ([`WireId`](crate::identity::WireId)), the envelopes it lands
 //! in (sequence, delta flag, `removed`, `cell_exits`, the fixed ordering),
 //! the framing of each record (length-delimited `entities`, or the
-//! game's opt-in record run — [`RecordCodec::RUN`]), and the full/delta
-//! decision.
+//! game's opt-in record run — [`RecordCodec::RUN`]), the full/delta
+//! decision, and the schedule a record's changes go out on (every step
+//! by default, or the game's opt-in send rate —
+//! [`RecordCodec::send_every`], [`SendEvery`]).
 
 use std::fmt::Debug;
 
@@ -17,6 +19,10 @@ use bevy_ecs::query::{
     QueryFilter, QueryItem, ReadOnlyQueryData, ReleaseStateQueryData, SingleEntityQueryData,
 };
 use bytes::BytesMut;
+
+mod rate;
+
+pub use rate::SendEvery;
 
 /// How a game's entity becomes a wire record.
 ///
@@ -95,4 +101,38 @@ pub trait RecordCodec: Send + 'static {
     /// framing around it: the `entities` field's tag and length, or —
     /// in the record run ([`Self::RUN`]) — the id in front of it.
     fn encode(&self, id: u64, wire: &Self::Wire, out: &mut BytesMut);
+
+    /// How often this record's CHANGES need to go out — its send-rate
+    /// class, from its wire value (KIT-ARCHITECTURE §4.1, §10 "A10").
+    /// The default, [`SendEvery::Tick`], is every step: the kit's bytes
+    /// before A10, byte for byte.
+    ///
+    /// A slower class is the game's opt-in (the client interpolates, or
+    /// not — the game's choice too). The kit's DELTA engines then send a
+    /// changed record only on its due steps ([`SendEvery::due`]; phases
+    /// spread by wire id) — on a due step its CURRENT value, not the one
+    /// it changed to first; the client keeps the last value it got until
+    /// then (at most `ticks() − 1` steps behind). The records stay
+    /// absolute, idempotent upserts; no client rule changes. Always
+    /// immediate, whatever the class: a record ENTERING a view (new to
+    /// a group, a cell crossing, an appeared cell), every `removed` and
+    /// `cell_exits`, and every FULL frame (a fresh group's, the
+    /// keep-alive, the one-shot private full) — each carries the current
+    /// value of every record it shows. The full-only rooms (open, PVS,
+    /// plain sharded, the team rooms without `with_delta`) ignore the
+    /// class: a full frame re-sends every record anyway.
+    ///
+    /// **Why the wire value, not the query item.** A record is shown
+    /// where its entity is not: a neighbour shard renders a lent record
+    /// from its border strip, which carries only the wire value. A class
+    /// computed from the value is the same on every shard that knows the
+    /// value, so owner and viewer agree without carrying anything (and a
+    /// migrating entity carries no rate state). A game whose class
+    /// depends on state its record does not show adds that state to its
+    /// `Wire` (a class change then re-sends the record once).
+    #[inline]
+    fn send_every(&self, wire: &Self::Wire) -> SendEvery {
+        let _ = wire;
+        SendEvery::Tick
+    }
 }

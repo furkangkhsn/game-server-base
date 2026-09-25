@@ -110,9 +110,11 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// DELTA mode: a fresh group (not asked for on the previous `step`)
     /// gets the FULL frame; an established one the DELTA against what
     /// its clients hold — `removed` (ids that left) first, then the
-    /// upserts (new ids and changed wire values, in the codec's record
-    /// framing) — or nothing when the two are equal. `encoded` counts
-    /// the records written.
+    /// upserts (new ids, and changed wire values DUE on `step` — the
+    /// record's send rate, A10: a changed record that is not due keeps
+    /// its held value and goes out, current, on a later due step) in
+    /// the codec's record framing — or nothing when nothing is to be
+    /// sent. `encoded` counts the records written.
     pub(crate) fn emit_delta<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
@@ -143,6 +145,10 @@ impl<W: Clone + Eq> SetLedger<W> {
         for (id, wire) in content {
             match self.held.entry(*id) {
                 Entry::Occupied(held) if held.get() == wire => continue,
+                // Changed, but not due (A10): the clients keep what they
+                // hold — and so does the ledger, so the change is still a
+                // difference on the record's due step.
+                Entry::Occupied(held) if !codec.due(step, *id, held.get(), wire) => continue,
                 Entry::Occupied(mut held) => {
                     held.insert(wire.clone());
                 }

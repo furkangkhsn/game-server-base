@@ -7,6 +7,7 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
+use crate::codec::RecordCodec;
 use crate::common::{CellBook, CellPieces};
 use crate::game::{ShardGame, Wire};
 use crate::sharded::*;
@@ -162,11 +163,16 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
                 Some(prev) if prev != value => {
                     // Moved: one upsert — or exit+upsert when the move
                     // crossed a cell boundary (the packet passes fix the
-                    // wire order).
+                    // wire order). Inside its cell the move waits for the
+                    // record's due step (A10): the class is the game's,
+                    // from the lent value — the same class and schedule
+                    // the owner computes, so no rate state crosses.
                     let old_c = self.space.cell_of(prev);
                     let new_c = self.space.cell_of(value);
                     if old_c == new_c {
-                        self.book.record_update(new_c, rec.wire, value.clone());
+                        let every = self.inner.game.codec().send_every(value);
+                        self.book
+                            .record_change(new_c, rec.wire, value.clone(), every);
                     } else {
                         self.book
                             .record_cross(old_c, new_c, rec.wire, value.clone(), false);

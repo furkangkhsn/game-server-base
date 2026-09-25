@@ -28,6 +28,7 @@ use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
 
 mod ghosts;
+mod rate;
 mod sharing;
 
 /// The instantiation these tests drive: the fixture game over the kit's 2D

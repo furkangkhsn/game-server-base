@@ -13,6 +13,7 @@ use gsb_core::shard::{BorderRecord, Migrating, ShardLogic, TeamExport, TeamImpor
 use super::super::game::parse;
 use super::super::partition;
 use super::{Key, Mig};
+use crate::identity::WireId;
 use crate::space::Partition;
 use crate::testing::{Position, WirePos};
 
@@ -31,6 +32,8 @@ pub(super) struct Room<G, St> {
     crossings: Vec<(usize, usize, Migrating<St>)>,
     /// Each pair's player and the shard it is on (script order).
     pub(super) players: Vec<(PlayerId, usize)>,
+    /// The wire ids that migrated between shards on the latest step.
+    pub(super) migrated: Vec<u64>,
     inputs: Vec<Vec<Action>>,
 }
 
@@ -46,6 +49,7 @@ impl<G: Key, St: Mig> Room<G, St> {
             exports: (0..n).map(|_| None).collect(),
             crossings: Vec::new(),
             players: Vec::new(),
+            migrated: Vec::new(),
             inputs: (0..n).map(|_| Vec::new()).collect(),
         }
     }
@@ -83,7 +87,9 @@ impl<G: Key, St: Mig> Room<G, St> {
             dt: Duration::from_secs_f64(1.0 / 30.0),
             idle: Default::default(),
         };
+        self.migrated.clear();
         for (from, to, m) in std::mem::take(&mut self.crossings) {
+            self.migrated.push(m.wire);
             let (world, logic) = &mut self.shards[from];
             logic.on_migrate_out(world, m.wire);
             let (world, logic) = &mut self.shards[to];
@@ -165,6 +171,20 @@ impl<G: Key, St: Mig> Room<G, St> {
             sent.push(frames);
         }
         sent
+    }
+
+    /// Every broadcast record's wire value, on every shard (the
+    /// fixture's truncation).
+    pub(super) fn truth(&mut self) -> Vec<(u64, (i32, i32))> {
+        let mut all = Vec::new();
+        for (world, _) in &mut self.shards {
+            let mut q = world.query::<(&WireId, &Position)>();
+            all.extend(
+                q.iter(world)
+                    .map(|(w, p)| (w.get(), (p.x as i32, p.y as i32))),
+            );
+        }
+        all
     }
 
     /// Player `i`'s frames this tick: its group's, then its private one.
