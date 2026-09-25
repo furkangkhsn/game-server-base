@@ -9,11 +9,11 @@ ve CHANGELOG'a geçer; yeni bir erteleme doğunca buraya eklenir.
 engelleyen, en son özellik. Her iş, sebebinin yaşadığı katmana gider
 ("her şeyi bir yere yığmadan").
 
-## 1. İş sırası (2026-09-25'te onaylandı — TAMAMLANDI 2026-09-26)
+## 1. İş sırası (2026-09-25'te onaylandı — TAMAMLANDI aynı gün)
 
 Her paket kendi turu: ayrı worktree, alt ajan, ebeveyn doğrulaması +
 bağımsız mutasyon, `main`'e fast-forward. Push yok. Bütün paketler
-kapandı (740 → 818 değil, 657 → 818 test); sıradaki iş §2'den seçilir.
+kapandı (testler 657 → 818); sıradaki iş §2'den seçilir.
 
 | # | Paket | Yeri | Durum |
 |---|---|---|---|
