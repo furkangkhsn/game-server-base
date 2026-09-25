@@ -117,7 +117,7 @@ pub(crate) async fn run_churn_client(
     };
     // ONE identity for every session of this client (the resume key):
     // this is what makes the reconnects RESUMES instead of fresh joins.
-    let name = format!("lg-{id}");
+    let name = crate::bot::bot_name(id);
     // The wire id of the previous session (0 before the first join): the
     // continuity check that classifies each join as resume / fresh.
     let mut prev_entity: u64 = 0;

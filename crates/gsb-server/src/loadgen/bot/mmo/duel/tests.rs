@@ -14,6 +14,7 @@ use prost::Message;
 use super::*;
 use crate::bot::LoadBot;
 use crate::bot::mmo::MmoBot;
+use crate::bot::mmo::roster::home_waystone;
 use crate::bot::mmo::tests::full;
 
 fn bot(duel_frac: f64) -> MmoBot {
@@ -48,14 +49,15 @@ fn duelists_are_chosen_by_pair_and_posted_across_the_seam() {
     }
 }
 
-/// A duelist travels to its side's waystone, walks to its post, and
+/// A duelist whose home waystone (where its saved character starts) is
+/// not its side's travels there first, walks to its post, and
 /// attacks only a PLAYER across the seam within reach — at the attack
 /// rate; a bot that is not a duelist sends, input for input, what it
 /// sends without the flag.
 #[test]
 fn a_duelist_fights_across_the_seam_and_the_others_are_unchanged() {
     let id = (0..)
-        .find(|&id| duel_of(id, 0.5).is_some_and(|d| d.waystone != 0))
+        .find(|&id| duel_of(id, 0.5).is_some_and(|d| d.waystone != home_waystone(id)))
         .unwrap();
     let post = duel_of(id, 0.5).expect("a duelist");
     let mut c = bot(0.5).client(id);

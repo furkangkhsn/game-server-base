@@ -89,8 +89,9 @@ fn loadgen_drives_the_arena() {
 }
 
 /// The MMO: cell deltas over the shard grid, and the bots spread over
-/// the shards (K4: without their first `Travel` every one would stand on
-/// shard 0).
+/// the shards (K4: each bot logs in as its saved character on waystone
+/// `id mod 4` — the loadgen hosts the MMO over its bots' roster; an
+/// unsaved bot would start on shard 0).
 #[test]
 fn loadgen_drives_the_mmo() {
     let out = loadgen(&["8", "--game", "mmo", "--duration", "4", "--move-ms", "100"]);
@@ -108,9 +109,8 @@ fn loadgen_drives_the_mmo() {
         .collect();
     assert_eq!(members.len(), 4, "{line}");
     assert_eq!(members.iter().sum::<u32>(), 8, "{line}");
-    // Every session starts on shard 0 (K4); the bots' first `Travel`
-    // sends three in four elsewhere (2 per shard here), and the later
-    // occasional travels move only a few. Without the dispersal shard 0
+    // Every bot starts on its home shard (2 per shard here), and the
+    // occasional travels move only a few. Unsaved (no roster), shard 0
     // keeps 6 of the 8.
     assert!(
         members[0] <= 4 && members.iter().filter(|&&m| m > 0).count() >= 3,
@@ -120,7 +120,8 @@ fn loadgen_drives_the_mmo() {
 
 /// An orchestrated MMO run: `--game` reaches the server child AND the
 /// client children (a demo server would send none of the MMO's frames
-/// and demo clients would read none of them — `snap_total` would be 0).
+/// and demo clients would read none of them — `snap_total` would be 0),
+/// and the server child hosts the bots' roster.
 #[test]
 fn loadgen_orchestrates_the_mmo() {
     let out = loadgen(&[
@@ -139,6 +140,14 @@ fn loadgen_orchestrates_the_mmo() {
     assert_clean(&line, &kv, 4, "mmo");
     assert_eq!(kv["mode"], "sep");
     assert_eq!(kv["procs"], "2");
+    // The server child hosts the bots' roster too: one bot per shard at
+    // the start (unsaved, all four would start on shard 0).
+    let members: Vec<u32> = kv["shard_members"]
+        .split(',')
+        .map(|m| m.parse().expect("a member count"))
+        .collect();
+    assert_eq!(members.iter().sum::<u32>(), 4, "{line}");
+    assert!(members[0] <= 2, "the server child's roster: {line}");
 }
 
 /// The command line refuses what cannot run: an unknown game (naming

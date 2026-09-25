@@ -1,7 +1,8 @@
 //! The MMO bot: its hand-walked record pinned to the generated
-//! `EntityRecord` decoder, and its input mix (silent until the own
-//! character is seen; the K4 travel first; then roaming, travels and
-//! attacks at their rates, all numbered).
+//! `EntityRecord` decoder, its roster (K4: every bot's saved character
+//! on its home ring), and its input mix (silent until the own character
+//! is seen; then roaming, travels and attacks at their rates, all
+//! numbered).
 
 use super::*;
 use gsb_demo_mmo::mmo::{EntityRecord, WorldSnapshot};
@@ -98,34 +99,65 @@ fn bot() -> MmoBot {
 /// A client joined as `entity`, standing on waystone 0 with `extra`
 /// records in view.
 fn standing(id: u64, extra: &[(u64, i32, i32, i32, Kind)]) -> Box<dyn BotClient> {
+    let [wx, wz] = WAYSTONES[DEFAULT_WAYSTONE];
+    standing_at(id, (to_dm(wx), to_dm(wz)), extra)
+}
+
+/// A client joined as `entity`, standing at `(x, z)` (decimetres).
+fn standing_at(
+    id: u64,
+    (x, z): (i32, i32),
+    extra: &[(u64, i32, i32, i32, Kind)],
+) -> Box<dyn BotClient> {
     let mut c = bot().client(id);
     c.joined(7);
-    let [wx, wz] = WAYSTONES[DEFAULT_WAYSTONE];
-    let mut records = vec![(7, to_dm(wx), 0, to_dm(wz), Kind::Player)];
+    let mut records = vec![(7, x, 0, z, Kind::Player)];
     records.extend_from_slice(extra);
     c.apply_snapshot(&full(&records)).expect("applies");
     c
 }
 
-/// Silent until the own character is in view; then the K4 travel to
-/// waystone `id mod 4` first — except for the quarter already there.
+/// The roster (K4) saves bot `id`'s character — under the name it logs
+/// in as — at the start of its roaming ring round waystone `id mod 4`,
+/// which lies in shard `id mod 4`'s region; a bot past the roster has no
+/// character.
 #[test]
-fn the_first_input_disperses_the_population() {
+fn the_roster_saves_every_bot_on_its_home_ring() {
+    let realm = roster::realm();
+    for id in (0..64).chain([4_097, roster::ROSTER - 1]) {
+        let saved = realm.saved(&super::super::bot_name(id)).expect("saved");
+        assert_eq!(saved, roster::home(id), "bot {id}");
+        let shard = gsb_demo_mmo::world::home_shard(&saved);
+        assert_eq!(shard, (id % 4) as usize, "bot {id} starts on its shard");
+        let [wx, wz] = WAYSTONES[shard];
+        let r = (saved.x - wx).hypot(saved.z - wz);
+        assert!((29.9..=60.1).contains(&r), "bot {id} on its ring: {r} m");
+    }
+    assert_eq!(realm.saved(&super::super::bot_name(roster::ROSTER)), None);
+    assert_eq!(realm.spawns, gsb_demo_mmo::Realm::standard().spawns);
+}
+
+/// Silent until the own character is in view; then no dispersal travel
+/// (every bot starts on its own waystone): the first input roams the ring
+/// round waystone `id mod 4`, from where the roster saved it.
+#[test]
+fn every_bot_roams_its_home_waystone_from_the_first_input() {
     let mut c = bot().client(1);
     assert!(c.next_input(Duration::ZERO, 1).is_none(), "not joined");
     c.joined(7);
     assert!(c.next_input(Duration::ZERO, 1).is_none(), "not in view");
     for id in 0..8u64 {
-        let (op, payload) = standing(id, &[])
+        let home = roster::home(id);
+        let (op, payload) = standing_at(id, (to_dm(home.x), to_dm(home.z)), &[])
             .next_input(Duration::ZERO, 1)
             .expect("an input");
-        if id % 4 == 0 {
-            assert_eq!(op, op::MMO_MOVE_TO, "id {id} stays on waystone 0");
-        } else {
-            assert_eq!(op, op::MMO_TRAVEL, "id {id}");
-            let t = Travel::decode(&payload[..]).expect("Travel");
-            assert_eq!((t.waystone, t.seq), ((id % 4) as u32, 1));
-        }
+        assert_eq!(op, op::MMO_MOVE_TO, "id {id}");
+        let m = MoveTo::decode(&payload[..]).expect("MoveTo");
+        assert_eq!(
+            (m.x, m.z, m.seq),
+            (to_dm(home.x), to_dm(home.z), 1),
+            "id {id}"
+        );
     }
 }
 

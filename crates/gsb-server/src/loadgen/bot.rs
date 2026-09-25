@@ -83,6 +83,20 @@ pub(crate) trait BotClient: Send {
     fn next_input(&mut self, elapsed: Duration, seq: u64) -> Option<(u16, Vec<u8>)>;
 }
 
+/// The name bot `id` logs in as (`Auth.name`, the local-auth path): the
+/// resume key its churn sessions reuse and, for the MMO, the key of its
+/// saved character (`mmo::roster`).
+pub(crate) fn bot_name(id: u64) -> String {
+    format!("lg-{id}")
+}
+
+/// The MMO realm the load generator hosts: the live realm with a saved
+/// character for every bot (`mmo::roster`).
+#[cfg(feature = "game-mmo")]
+pub(crate) fn mmo_realm() -> gsb_demo_mmo::Realm {
+    mmo::roster::realm()
+}
+
 /// The games this build has a bot for, in catalog order — the server's
 /// compiled-in games (one cargo feature each).
 pub(crate) fn games() -> Vec<&'static str> {

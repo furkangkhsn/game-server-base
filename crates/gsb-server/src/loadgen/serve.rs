@@ -50,9 +50,7 @@ pub(crate) async fn serve(args: Args) {
         Some(listen) => {
             let listen: SocketAddr = listen.parse().expect("valid --metrics-listen HOST:PORT");
             let (tx, rx) = mpsc::unbounded_channel::<MetricReport>();
-            let handle = gsb_server::start_server_metrics(cfg, tx)
-                .await
-                .expect("server starts");
+            let handle = start_hosted(cfg, Some(tx)).await.expect("server starts");
             eprintln!(
                 "serve: ready at {} (game={}, visibility={}, spawn_half={}, duration={}s; metric reports → {})",
                 handle.addr,
@@ -76,7 +74,7 @@ pub(crate) async fn serve(args: Args) {
             }
         }
         None => {
-            let handle = gsb_server::start_server(cfg).await.expect("server starts");
+            let handle = start_hosted(cfg, None).await.expect("server starts");
             eprintln!(
                 "serve: ready at {} (game={}, visibility={}, duration={}s; metric reports → gsb-metric log, RUST_LOG=info)",
                 handle.addr,

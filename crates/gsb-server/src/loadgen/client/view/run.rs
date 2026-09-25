@@ -76,7 +76,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // drains in order; two frames on rUDP — its reliable control band
     // orders them).
     let auth_payload = Auth {
-        name: format!("lg-{id}"),
+        name: crate::bot::bot_name(id),
         ticket: vec![],
         // A reference client states its wire version (DESIGN §5.5).
         protocol_version: gsb_protocol::PROTOCOL_VERSION,

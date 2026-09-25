@@ -90,8 +90,39 @@ pub(crate) async fn start_inprocess(
     };
     apply_overrides(&mut cfg, &overrides);
     let (rep_tx, rep_rx) = mpsc::unbounded_channel::<MetricReport>();
-    let handle = gsb_server::start_server_metrics(cfg, rep_tx).await?;
+    let handle = start_hosted(cfg, Some(rep_tx)).await?;
     Ok(InProcessServer { handle, rep_rx })
+}
+
+/// The module the load generator hosts for `game` when it is not the
+/// catalog's: the MMO over the bots' roster (`bot::mmo::roster`, K4 —
+/// every bot restores its saved character on its home shard). `None`:
+/// the catalog's module (the demo, the arena).
+fn hosted_module(game: &str) -> Option<Box<dyn gsb_server::GameModule>> {
+    match game {
+        #[cfg(feature = "game-mmo")]
+        gsb_server::games::mmo::MmoModule::NAME => Some(Box::new(
+            gsb_server::games::mmo::MmoModule::with_realm(crate::bot::mmo_realm()),
+        )),
+        _ => None,
+    }
+}
+
+/// Start the server the load generator runs against (in process, or the
+/// `--serve` child): the config's `game`, hosted as [`hosted_module`]
+/// says, reporting to `report_tx` when set (the `gsb-metric` log
+/// otherwise).
+pub(crate) async fn start_hosted(
+    cfg: gsb_server::Config,
+    report_tx: Option<mpsc::UnboundedSender<MetricReport>>,
+) -> Result<gsb_server::ServerHandle, gsb_server::ServerError> {
+    match (hosted_module(&cfg.game), report_tx) {
+        (Some(module), tx) => {
+            gsb_server::start_game_server_with(module, cfg, Default::default(), tx).await
+        }
+        (None, Some(tx)) => gsb_server::start_server_metrics(cfg, tx).await,
+        (None, None) => gsb_server::start_server(cfg).await,
+    }
 }
 
 /// Own the report receiver in a dedicated task (its only awaited source

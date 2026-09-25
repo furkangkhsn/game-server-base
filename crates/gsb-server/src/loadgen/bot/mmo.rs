@@ -2,12 +2,16 @@
 //! a waystone, now and then `Travel` to another one (another shard) and
 //! `Attack` the mobs that come within reach.
 //!
-//! **Why the first input is a `Travel`** (finding K4): every session the
-//! catalog's MMO hosts starts unsaved, on waystone 0 — shard 0. A bot
-//! that only walked would load one shard of four. So each bot's first
-//! input sends it to waystone `id mod 4` (a quarter stay), standing in
-//! for the saved position a real login would restore; afterwards the
-//! population stays spread and keeps migrating.
+//! **Where a bot starts** (K4, `docs/GAME-MODULE.md`): the MMO places a
+//! login by the identity it authenticated as, and the loadgen hosts the
+//! MMO over its bots' roster ([`roster`]): bot `id` logs in as
+//! `lg-{id}` and finds its saved character on the roaming ring of
+//! waystone `id mod 4` — the population starts spread over the four
+//! shards, no dispersal `Travel` needed (G3's bots sent one first, when
+//! every session started unsaved on shard 0). Against a server whose
+//! realm does not know the roster (`--addr` at a catalog `gsb-server`)
+//! every bot is unsaved and starts on waystone 0: that server has no
+//! characters to restore.
 //!
 //! **Rates** (per input, from `--move-ms`, so they are rates in time):
 //!
@@ -50,6 +54,7 @@ use prost::Message;
 use super::{BotClient, Labels, LoadBot};
 
 mod duel;
+pub(crate) mod roster;
 #[cfg(test)]
 mod tests;
 
@@ -88,7 +93,7 @@ impl LoadBot for MmoBot {
         Box::new(MmoClient {
             id,
             entity: None,
-            at: DEFAULT_WAYSTONE,
+            at: roster::home_waystone(id),
             dispersed: false,
             draws: id ^ 0x5EED_5EED_5EED_5EED,
             p_travel: self.per_input(TRAVEL_EVERY),
@@ -109,9 +114,10 @@ impl LoadBot for MmoBot {
     }
 
     fn churn_input(&self, id: u64, seq: u64) -> (u16, Vec<u8>) {
-        // A per-id spot by the default waystone (where an unsaved
-        // character — every churn session — stands).
-        let [x, z] = WAYSTONES[DEFAULT_WAYSTONE];
+        // A per-id spot by the churn session's home waystone (where its
+        // saved character stands — the churn client logs in as `lg-{id}`
+        // too).
+        let [x, z] = WAYSTONES[roster::home_waystone(id)];
         let msg = MoveTo {
             x: to_dm(x + (id % 40) as f32 - 20.0),
             z: to_dm(z + (id % 37) as f32 - 18.0),
@@ -148,9 +154,9 @@ impl LoadBot for MmoBot {
             String::new()
         };
         format!(
-            "mmo: first input Travel to waystone id mod {SHARDS} (K4), then roam 30–60 m round \
-             the waystone; Travel every ~{}s, Attack every ~{}s while a mob is within \
-             {ATTACK_RANGE} m{duel}",
+            "mmo: bot id logs in as its saved character (roster) on waystone id mod {SHARDS} \
+             and roams 30–60 m round it; Travel every ~{}s, Attack every ~{}s while a mob \
+             is within {ATTACK_RANGE} m{duel}",
             TRAVEL_EVERY.as_secs(),
             ATTACK_EVERY.as_secs()
         )
@@ -163,7 +169,8 @@ struct MmoClient {
     entity: Option<u64>,
     /// The waystone the character roams around (its last `Travel`).
     at: usize,
-    /// Whether the first (K4) travel was sent.
+    /// Whether a duelist's first travel (to its post's waystone) was
+    /// decided.
     dispersed: bool,
     /// SplitMix64 state.
     draws: u64,
@@ -226,14 +233,23 @@ impl MmoClient {
 
     /// The roaming ring's target at `elapsed`, decimetres.
     fn roam(&self, elapsed: Duration) -> (i32, i32) {
-        let [wx, wz] = WAYSTONES[self.at];
-        let radius = 30.0 + (self.id % 7) as f64 * 5.0;
-        let angle = elapsed.as_secs_f64() * ROAM_RAD_S + self.id as f64 * (TAU * 0.381_966);
-        (
-            to_dm(wx + (radius * angle.cos()) as f32),
-            to_dm(wz + (radius * angle.sin()) as f32),
-        )
+        let [x, z] = ring(self.at, self.id, elapsed);
+        (to_dm(x), to_dm(z))
     }
+}
+
+/// Bot `id`'s point on the roaming ring round waystone `at`, `elapsed`
+/// into its run, metres: 30–60 m out (by id), at [`ROAM_RAD_S`], starting
+/// at the golden angle times the id. The roster saves each character at
+/// its ring's start ([`roster::home`]).
+fn ring(at: usize, id: u64, elapsed: Duration) -> [f32; 2] {
+    let [wx, wz] = WAYSTONES[at];
+    let radius = 30.0 + (id % 7) as f64 * 5.0;
+    let angle = elapsed.as_secs_f64() * ROAM_RAD_S + id as f64 * (TAU * 0.381_966);
+    [
+        wx + (radius * angle.cos()) as f32,
+        wz + (radius * angle.sin()) as f32,
+    ]
 }
 
 impl BotClient for MmoClient {
@@ -263,13 +279,6 @@ impl BotClient for MmoClient {
         let me = *self.view.get(self.entity?)?;
         if let Some(post) = self.duel {
             return Some(self.duel_input(&me, post, seq));
-        }
-        if !self.dispersed {
-            self.dispersed = true;
-            let to = (self.id % SHARDS as u64) as usize;
-            if to != self.at {
-                return Some(self.travel(to, seq));
-            }
         }
         if self.draw() < self.p_travel {
             let to = (self.at + 1 + (self.draw() * 3.0) as usize % 3) % SHARDS;
