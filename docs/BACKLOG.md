@@ -43,7 +43,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A7 Bölüm presetlerinde `wire_scale` | wire'ı konum biriminden ince olan ve kabalaştıramayan oyun | KIT-ARCHITECTURE:1660, 1716 |
 | A8 `Vision::sees`'te birim başına görüş yarıçapı (ward/kahraman; W2'de gerekmedi — her bölgede fraksiyon başına bir kule) | — | KIT-ARCHITECTURE:1470, 1733 |
 | A9 Oyuncu başına aydınlık hücre (görünür hücrede bile ışık konisi) | — | ROADMAP:694, DESIGN:1046 |
-| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu; W2 kanıtı: savaş 1000'de ~365 KB/sn/istemci; A22 faz 0: 15 Hz tek başına −38…−46 %, mutlak sıkıştırmayla −59…−74 %) | — (Unity tarafı işi) | ROADMAP:615 |
+| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu; W2 kanıtı: savaş 1000'de ~365 KB/sn/istemci; A22 faz 0: 15 Hz tek başına −38…−46 %, mutlak sıkıştırmayla −59…−74 %) | **sırada**, A31'den sonra — kit'te OPT-IN kanca (varsayılan her tick), hız ve interpolasyon oyunun (E7) | ROADMAP:615 |
 | A11 Bağlantı başına tick'te yeni `Vec` | yük verisi sorun gösterirse | ROADMAP:617 |
 | A12 `QueryState`'i oda başına bir kez kurmak | — (hâlâ açık: `sharded/room.rs:220,240`, `pvs/logic.rs:193`) | ROADMAP:704 |
 | A13 Registry striping (W1'den beri takım röleleri de registry'nin tek görevinde veri düzlemi yükü) | `team_export_drops > 0` ya da registry gecikmesi ölçülürse (W2: 1000'de 120 export/sn, ~281 k kayıt/sn röle, 0 düşme) | ROADMAP:700 |
@@ -61,8 +61,8 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle; W2-1 kanıtı: bölüm artefaktı (shard 3 oyuncusu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki shard 0 oyuncusu görmüyor); en küçük değişiklik varlık başına "harita geneli" bayrağı | herkesin durumunu görmesi gereken bir hedef | CROSS-SHARD §8b.5 |
 | A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul; W2'de ölçülmedi — loadgen kısa kayıp-geri gelişleri saymıyor) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
 | A29 Takım bütçesi üyeleri wire sırasıyla kesiyor (ilk tick'te doğan kuleler kalır, en yeni oyuncular gider) | bütçe gerçekten kesmeye başlarsa | KIT-ARCHITECTURE W2-3 |
-| A30 Kompakt wire id (bugün shard aralığı `k·2^20` → 3–4 B varint; id kaydın %19–40'ı; bugünkü gövdeyle −6…−14 %) — istemci kuralı değişmez; çekirdeğin aralık guard'ı ve id'yi pinleyen testler değişir | bakımcı kararı (E7 soru 3) | KIT-ARCHITECTURE §10 "A22" |
-| A31 Paketli kayıt koşusu (`kit.proto`'ya `bytes records = 6`, `RecordCodec::RUN`, `ClientDecoder::run_record`) + oyunların sıkı (protobuf dışı) kayıt kodeği — A30 ile −43…−58 % | bakımcı kararı (E7 soru 1–2) | KIT-ARCHITECTURE §10 "A22" |
+| A30 Kompakt wire id (bugün shard aralığı `k·2^20` → 3–4 B varint; id kaydın %19–40'ı; bugünkü gövdeyle −6…−14 %) — istemci kuralı değişmez; çekirdeğin aralık guard'ı ve id'yi pinleyen testler değişir | **sırada** (E7: evet) | KIT-ARCHITECTURE §10 "A22" |
+| A31 Paketli kayıt koşusu (`kit.proto`'ya `bytes records = 6`, `RecordCodec::RUN`, `ClientDecoder::run_record`) — kit'te OPT-IN yapı taşı; gövde formatı oyunun (A30 ile −43…−58 % ölçüldü); doğrulama tek demoda | **sırada**, A30'dan sonra (E7) | KIT-ARCHITECTURE §10 "A22" |
 | A24 İstemci tarafında delta uygulaması maliyeti (orkestre arena 1000'de `clients_cpu_s` +%15) | yük verisi sorun gösterirse | KIT-ARCHITECTURE §10 "T sonucu" |
 
 ### B. Taşıma ve operasyon
@@ -134,7 +134,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | E4 Koordinat formatı (wire `sint32` ↔ simülasyon `f32`; Unity ile) | ROADMAP:602, DESIGN:1225 |
 | E5 Protokol sürüm aralığı / özellik müzakeresi (tetik: ikinci sürüm yayınlanırsa) | ROADMAP:745, DESIGN:538 |
 | E6 AFK atılan üye odadan mı sunucudan mı çıkar | RECONNECT:458 |
-| E7 A22 faz 0'ın beş sorusu: (1) oyunun kayıt gövdesi protobuf'tan çıkabilir mi; (2) zarfın yeni alanı oyun başına opt-in mi, E5 müzakeresiyle mi sürümlenir; (3) wire id basımı değişebilir mi; (4) Unity tarafında interpolasyon taahhüdü var mı (A10); (5) A22 tetikleyicisi "sıkıştırma + A10'dan sonra hâlâ baskı" diye yeniden yazılsın mı | KIT-ARCHITECTURE §10 "A22" |
+| E7 ~~A22 faz 0'ın soruları~~ **Cevaplandı (2026-09-25):** kit yalnız YAPI TAŞI verir — kayıt gövdesi formatı (protobuf, MessagePack, bit paketli…), yeni zarf alanının sürümlenmesi, entity başına gönderim hızı ve istemci interpolasyonu OYUNUN kararı; kit opt-in kanca sağlar, varsayılan bugünkü davranış. Kompakt wire id: evet (herkese; istemci kuralı değişmez) | KIT-ARCHITECTURE §10 "A22" |
 
 ### F. Diğer (test, temizlik, gözlemlenebilirlik)
 
