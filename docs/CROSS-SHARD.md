@@ -1,7 +1,7 @@
 # gsb: Cross-Shard Etkileşim ve Border Paylaşım Tasarımı
 
-> Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi); §2–§4'ün
-> uzak-etki kısmı UYGULANDI (§4b). §2–§5 etkileşim
+> Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi); §2–§4
+> UYGULANDI — uzak etki §4b (C1), crystallization §4c (C2). §2–§5 etkileşim
 > desenleridir; §6–§8 border paylaşımının delta'ya evrimi ve ölçüm planıdır
 > (ölçüm turu yürütülüyor). Uygulama turları bu dokümanı sözleşme alır.
 
@@ -64,6 +64,8 @@ Melee'nin sniper'dan farkı **sürekli ve çift yönlü** olması. Katmanlar:
    (iki oyuncu K tick'tir sınırdan ayrılmıyor), taraflardan biri
    proaktif olarak karşıya migrate edilir → dövüş tek shard'a
    "kristalleşir" ve problem, zaten çözülmüş migrasyona dönüşür.
+   **UYGULANDI (C2, §4c)** — tespit etki akışıyla, taşınan yüksek wire,
+   sahiplik dövüş sürerken bölgeden ayrıştırılır; sapmalar §4c'de.
 
 Elenen alternatif: dağıtılmış kilit/joint-authority çözümleri — aktör
 modeline aykırı; tasarım seviyesinde de kaçınılır.
@@ -179,7 +181,7 @@ ShardMsg::RemoteEffect(RemoteEffect {
    ondan türetilir.
 7. *Katman 1 "saldırı anında güncel borrow"* uygulanmadı (≤1 tick
    bayatlık kabul; MMO'nun menzil payı bunu karşılıyor).
-8. *Katman 4 (crystallization)* sonraki tur.
+8. *Katman 4 (crystallization)* sonraki tur. → C2'de uygulandı (§4c).
 
 MMO test yatağı (gerçek dört shard aktörü): seam ötesi mob'a vuruş
 sahibinde uygulanır, ikinci vuruş öldürür, kredi saldırana, mob iki
@@ -192,6 +194,243 @@ savaşta işaretler, çıkış vetosu bekletir. Yük üretecinin MMO botu
 waystone çevresinde dolaştığından (seam'lerden 256 m) yükte seam ötesi
 dövüş olmuyor; A/B yeni fazların boşta maliyetini ölçer (gürültü
 içinde).
+
+## 4c. C2 sonucu — crystallization, histeresizli (branch `xseam/c2-crystallize`)
+
+§4'ün 4. katmanı uygulandı; seam ötesi etkileşim paketinin son parçası.
+**Çekirdek değişmedi** (`gsb-core` diff'i boş). Kod: kit
+`gsb-kit/src/sharded/crystal{.rs,/book.rs,/tick.rs}` (politika, dövüş
+tablosu, tick geçişi), `sharded/room/shard.rs` (`collect_migrations`'ın
+karar kuralı, varış/ayrılış), `sharded/mig.rs` (`ShardPin`),
+`sharded/seam.rs` (`Seam::contact`), `space/partition{.rs,/grid.rs}`
+(`Partition::holds`); MMO `world::CRYSTALLIZE` + `combat.rs`; sunucu
+`[mmo] crystallize`; loadgen `--mmo-duel-frac`, `--mmo-crystallize`.
+
+**1. Tespit nerede — kit.** Kit bir dövüşün iki yönünü de zaten görüyor:
+giden etki `Seam::emit`'ten, gelen etki odanın `apply_remote_effect`'inden
+geçer; partition (bölge, bant) ve göç kararı (`collect_migrations`) da
+kit'te. Tek shard'ın kit'i yeter: yüksek wire'ın sahibi çiftin iki
+yönünü de kendi kancalarında görür. Elenen: *çekirdek* — `RemoteEffect`'i
+çekirdek de görür ama konumu, bölgeyi, partition'ı bilmez; karar
+verseydi logic'e yeni bir "şunu şuraya taşı" kancası gerekirdi, ki bu
+`collect_migrations`'ın zaten işidir; *oyun* — her oyun aynı tabloyu,
+mover kuralını ve pin taşımayı yeniden yazardı, pin de kit'in göç
+durumuna (`KitMig`) biner.
+
+**2. Sinyal.** Kontak = kit'in gördüğü bir etkileşim: başarılı
+`Seam::emit` (ya da `Local` reddi — emit-önce yazan oyun için), `Applied`
+dönen uzak etki, ve oyunun `Seam::contact(source, target)` raporu (kit'in
+göremediği YEREL darbe). Sırasız wire çifti başına
+`Fight { since, last, up, down }`: ardışık iki kontak arası ≤ `window`
+ise seri sürer, daha uzun sessizlik yeni seri açar. **Olgun:** serinin
+kendisi K tick'e yayılmış (`last − since ≥ K`) VE iki yön de son
+`window` içinde. Yerel-yerel çift tabloya girmez (taşınacak bir şey yok;
+yalnız pin saatini tazeler). **Sınırlı durum:** tablo en çok
+`FIGHT_CAP` = 1024 çift (tavanı aşan kontak `untracked` sayılır — o çift
+kristalleşmez, uzak etkiyle doğru dövüşmeye devam eder); her tick
+`window`'dan eski çift düşer, yani boyut = son `window` içinde temasta
+olan çift sayısı, geçmiş değil. Pin entity başına biri; entity giderse,
+ölürse düşer. Elenen: *tek yön* (sniper, DoT, karşılık vermeyen mob —
+§2/§3'ün uzak-etki deseni zaten doğru cevap; taşımak fayda getirmez);
+*yakınlık* ("K tick'tir sınırdan ayrılmıyor") — kit mesafe bilmez ve
+yakınlık dövüş değildir; *serinin yaşı* (`since + K ≤ tick`) — K'dan
+kısa bir alışveriş sessizlik penceresi içindeyse K'da olgunlaşırdı
+(mutasyonla doğrulandı).
+
+**3. Kim taşınır, nereye.** Çiftin **yüksek** wire'ı, alçak wire'ı ÖDÜNÇ
+VEREN shard'a (`Lent::lender` — daima komşu, tek atlama). Wire kimliği
+enkarnasyon boyunca değişmez ve iki shard ikisini de bilir: mesajsız,
+kilitsiz anlaşma; yalnız yüksek wire'ın sahibi harekete geçer, karşı
+taraf hiçbir şey yapmaz. Birden çok olgun partneri olan mover EN DÜŞÜK
+wire'ı izler (olgun çiftler sıralı işlenir), tutulan (pinli) entity asla
+mover olmaz. Elenen: *seam'e yakın olan taşınır* — iki shard birbirini
+≤ 1 tick bayat ödünç kopyadan görür; eşitlikte ya da bayatlıkta ikisi
+birden taşınıp yer değiştirir (swap → yine seam ötesi → ping-pong) ya da
+hiçbiri; *yükü az olan shard'a* — komşunun yükü bilinmez, bilmek mesaj
+ve uzlaşma ister; *rastgele* — deterministik değil.
+
+**4. Sahiplik ↔ bölge (can alıcı karar).** Yalnız sahipliği değiştirmek
+yetmez: mover konumunda duruyor, bir sonraki tick `region_of` onu eski
+shard'ına geri verir — ping-pong'un ta kendisi (mutasyon: `anchor`'ı yok
+say → dört test kırılır). **Karar: tutulan çiftin sahipliği
+`region_of`'tan ayrıştırılır.** `collect_migrations` önce pin'in
+`anchor`'ını sorar, yoksa `region_of`'u. Pin (`ShardPin { partner, last }`)
+mover'la `KitMig.pin` içinde gider — park kaydı ve girdi oturumunun
+bindiği aynı yol; yeni transfer mekanizması yok, çekirdeğin Migrate
+protokolü (exactly-once, dolu kutuda geri alma) aynen. Alıcı shard hem
+mover'ı hem partnerini kendine pinler (partner seam'i geçip karşıya
+yürürse o da göç etmesin — çift tutulur). Partner varışta yerel değilse
+(aynı tick'te başka yere gitmiş) pin kurulmaz, bölge sahibi olur — tek
+geri dönüş, nadir yarış. Elenen: *mover'ı seam'in öte yanına itmek*
+(oyunda görünür ışınlanma; oyuncu geri yürür, yine göç); *seam'i dinamik
+kaydırmak* (bütün shard'ların partition üzerinde anlaşması = dağıtılmış
+uzlaşma, aktör ilkesine aykırı); *ortak otorite* (§4 zaten eledi).
+Görünürlük: tutulan entity yabancı bölgede durur; `GridPartition2`
+bölgesi dışındaki her konumu `exports` eder, yani holding shard onu
+şeride koyar ve bölge sahibinin istemcileri görmeye devam eder.
+
+**5. Histerezis bandı.**
+
+- *Zaman:* tutma, dövüş `release` tick sessiz kalana dek sürer; her
+  kontak (uzak etki ya da `Seam::contact`'la yerel darbe) saati sıfırlar.
+  Bırakılınca bölge sahipliği döner (gerekirse TEK göç).
+- *Uzay:* `Partition::holds(idx, pos, margin)` — bölgenin içi ya da
+  dışında `margin`'den az. Tutulan entity bandın dışına çıkarsa dövüş
+  sürse de bırakılır (holding shard'ın çevresini ödünç almadığı yere
+  gitti). **Giriş yarım bantla:** mover ancak hedef shard'ın
+  `margin / 2` bandındaysa taşınır — bandın kenarından bırakılan entity
+  dövüşmeye devam etse de `margin/2` ile `margin` arasında yeniden
+  pinlenmez; kenarda salınım yok. `GridPartition2` margin'i border
+  margin'ine kırpar (ötesini holding shard görmez); varsayılan `holds`
+  her yerde evet der (geometrisi olmayan partition yalnız zamanla
+  bırakır).
+- *Partner:* holding shard'da partner kalmadıysa (öldü, çıktı, başka
+  yere gitti) hemen bırakılır.
+- *Salınımsızlık:* taşınma yalnız pinsiz yüksek wire'dan düşük wire'ın
+  shard'ına; pinli entity taşınmaz; pin dövüş bitince, bant ya da partner
+  yüzünden biter; yeniden kristalleşme yeni bir K-serisi ister, bant
+  kenarından bırakılan `margin/2`'ye dönmeden pinlenmez. Durağan bir
+  dövüş (kit testi: 300 tick, mover seam'in iki yanında gezerken)
+  tam bir gidiş ve bir dönüş üretir.
+- *Üç+ entity, köşe:* her mover olgun partnerlerinin en düşüğünü izler;
+  en düşük wire o dövüş için hiç taşınmaz → dövüş onun shard'ında
+  toplanır (köşe testi: C, A'nın shard'ına gider; orada tutulurken
+  başka seam'den Z ile uzun dövüş onu taşımaz). Kayıp entity yok: her
+  taşınma mevcut Migrate protokolüdür.
+
+**6. Politika.** Opt-in oda builder'ı: `ShardedRoom::with_crystallize(
+Crystallize)` (spatial composite'te de). `Crystallize { after, window,
+release, margin }`, `Default` = 30 / 30 / 90 tick / ∞ (partition kırpar).
+Açılmayan oda hiçbir durum tutmaz (`crystal: None`), yalnız bölgeyle
+taşır, pin taşımaz (test). MMO: `world::CRYSTALLIZE` = K 30 (1 sn),
+window 60, release 90, margin 64 m — bir AOI hücresi: tutulan karakterin
+3×3 görünümü 128 m'lik ödünç şeridin içinde kalır; giriş bandı 32 m ≥
+30 m menzil (seam'de melee düellosu hep içeride). Sunucu:
+`[mmo] crystallize = true|false` (vars. true); `mmo_shard_with(i, realm,
+None)` kapalı kurar. Elenen: *`ShardGame` kancası*
+(`fn crystallize(&self) -> Option<Crystallize>`) — parametreleri oyun
+bilir, ama aynı oyunu açık/kapalı koşturmak (A/B, sunucu config'i) oyun
+tipine bir anahtar daha eklerdi; oda builder'ı mevcut politika deseni
+(`with_disconnect_policy`), oyun kendi sabitini verir.
+
+**7. C1 ile etkileşim, devir tick'i.** Kristalleşmeden sonra çiftin
+etkileri YEREL: MMO yerel darbeyi dünya sorgusuyla indirir (`emit`
+çağırmaz) ve `Seam::contact` ile bildirir. Devir: mover `h`'nin migrate
+fazında gider. Partnerin `h`'de mover'a attığı darbe eski shard'a varır;
+C1'in yönlendirme kaydı (`h`'de yazıldı, TTL 11) onu yeni sahibe iletir
+ve `h + 2`'de BİR kez uygulanır — eski shard'da bir tick daha duran
+ölümlü kopyaya asla (doğrulandı: MMO testi; yönlendirmeyi kapatan
+mutasyon testi kırar). Mover'ın `h`'deki darbesi partnerin shard'ına
+`h + 1`'de varır; mover da `h + 1`'in drain'inde oraya kurulur, yani
+otorite kaynağı `local` olarak görür.
+
+**§4'e göre sapmalar (gerekçeli):**
+
+1. *"İki oyuncu K tick'tir sınırdan ayrılmıyor"* → konum değil ETKİ
+   akışı: K tick'e yayılmış iki yönlü kontak serisi (madde 2).
+2. *"Taraflardan biri proaktif olarak karşıya migrate edilir"* → mover
+   KONUMUNU korur; değişen sahipliktir ve pin onu bölgeden ayrıştırır.
+   "Karşıya" fiziksel değil.
+3. *"Problem, zaten çözülmüş migrasyona dönüşür"* → doğru, ama göçün
+   KARAR kuralı (`region_of`) pin'le genişledi; göç protokolü (çekirdek)
+   değişmedi.
+4. Tek yönlü sürekli etki kristalleşmez — §2/§3'ün uzak-etki deseni
+   olarak kalır.
+5. Sayaçlar metrik raporuna girmedi: kit olayları `gsb_kit::crystal`
+   hedefinde debug satırı (`crystal_move`, `crystal_release
+   why=Quiet|Band|Partner`); ölçüm bu satırları sayar (kit `tracing`
+   bağımlılığı aldı).
+
+**Testler.** Kit (fikstür oyun, `SeamStage` üzerinden, 8 + 1):
+K'dan önce değil tam `1 + K`'da tespit, yalnız yüksek wire taşınır (alçak
+wire'ın shard'ı hiç taşımaz); tek yön ve kısa alışveriş kristalleşmez;
+açılmayan oda aynı davranır (durum yok, pin yok, bölge göçü aynı);
+tablo tavanı ve süresi (3 × tavan kontak → tavan; pencereden sonra boş;
+giden entity'nin pini düşer); 300 tick'lik tutulan dövüşte mover seam'in
+iki yanında gezerken taşınma yok, dövüş bitince `release + 1` tick sonra
+yalnız mover tek kez döner, sonra hiçbir şey; bant (yarım bant dışında
+taşınmaz, margin'de bırakılır, bırakılan yeniden pinlenmez); partner
+gidince bırakma; köşede üç dövüşçü + pinli entity'nin taşınmaması;
+`GridPartition2::holds` (bölge, eksen, köşe, kırpma, varsayılan).
+Önce-kırmızı: özellik kapalıyken (tick geçişi atlanınca) 8 kit
+testinin 6'sı kırılır (kalan ikisi "hiçbir şey taşınmaz" iddiası). 21
+kit mutasyonu + 4 `holds` mutasyonu yakalandı (anchor'ı yok say, seri
+yayılımı yerine yaş, tek yön yeter, alçak wire taşınır, varış pinlemez,
+sessizlik hiç, bant bırakması yok, tam bantla giriş, pinli mover olur,
+tavan yok, süre dolması yok, gelen etki sayılmaz, giden sayılmaz, en
+yüksek partner, `contact` boş, partner bırakması yok, seri sıfırlanmaz,
+ayrılış pini silmez, pin taşınmaz, partner pinlenmez; kırpma yok,
+`<=`, bölge kontrolü yok, varsayılan hayır). MMO (gerçek dört shard
+aktörü, `cross_seam_crystal.rs`): düello x = 0'da tam `h = s + 1 + K`'da
+Q'yu P'nin shard'ına taşır (üyeler `[1,1] → [1,0] → [2,0]`), her tick
+iki oyuncu birbirini görür, her darbe bir kez uygulanır (P'nin `h`
+darbesi yönlendirilip `h + 2`'de; Q'nun tümü P'nin shard'ında), kalan
+hp 25/25; son darbeden `release + 1` tick sonra Q bölgesine tek kez
+döner ve 300 tick salınım yok; tek darbe ve kısa alışveriş kimseyi
+taşımaz. Önce-kırmızı: MMO politikası kapalıyken düello testi kırılır;
+MMO'nun yerel `contact` raporu kaldırılınca (bırakma erken gelir) ve
+çekirdeğin yönlendirmesi kapatılınca (darbe ölümlü kopyaya) kırılır.
+Sunucu: `[mmo] crystallize` okunur/reddedilir. Loadgen: düellocu
+seçimi/konumu, girdi karışımı, düellocu olmayan botun girdisi bayrakla
+bayt-bayt aynı; bayrakların oyun kısıtı; override `[mmo]` tablosuna
+yazılır.
+
+**Yük ölçümü.** Loadgen'in MMO botu seam'den uzakta dolaştığından
+`--mmo-duel-frac F` eklendi (bkz. `loadgen/bot/mmo/duel.rs`): botların
+F kesri (id çiftleri) x = 0 seam'inin iki yanında 8 m'de, 32 m arayla
+16 noktada karşılıklı saldırır; yenilen waystone'dan geri yürür. F = 0
+(varsayılan) botu değiştirmez (test). Yürüyüş ~35 sn sürdüğü için
+koşular 90 sn; sayılar koşunun tamamı üzerinden (ilk ~35 sn düellocular
+yürür).
+
+Komut: `RUST_LOG=warn,gsb_core::shard::actor::tick::effects=info,gsb_kit::crystal=debug
+gsb-loadgen N --game mmo --duration 90 --mmo-duel-frac 0.2 --mmo-crystallize on|off
+--write-stall-secs 0` (release, süreç içi, 32 çekirdek, iki tur, on/off dönüşümlü;
+koşu öncesi 1 dk yük ortalaması 3,7–6,2). Uzak etki = dört shard'ın son
+`remote_effect_summary` toplamı; crystal göçü = `crystal_move` satırı.
+Her koşuda `joined = left = N`, `errors=0`, `server_closes=0`.
+
+| N | crystallize | `server_hz` | step p50/p90 fine (µs) | `out_bps_per_conn` | uygulanan uzak etki (/sn) | crystal göçü (/sn) | bırakma quiet/band/partner | wire başına en çok göç |
+|---|---|---|---|---|---|---|---|---|
+| 200 | on | 30,00 · 30,00 | 152/208 · 144/192 | 16 159 · 16 198 | 165 · 179 (1,8–2,0) | 27 · 24 (0,27–0,30) | 32/10/11 · 24/11/11 | 2 · 2 |
+| 200 | off | 30,00 · 30,00 | 152/216 · 152/200 | 16 101 · 16 164 | 225 · 227 (2,5) | 0 · 0 | — | — |
+| 500 | on | 30,00 · 29,99 | 264/352 · 280/376 | 41 081 · 41 019 | 534 · 529 (5,9) | 36 · 25 (0,28–0,40) | 27/21/22 · 16/16/18 | 2 · 2 |
+| 500 | off | 30,00 · 30,00 | 264/376 · 280/384 | 41 205 · 41 056 | 597 · 576 (6,4–6,6) | 0 · 0 | — | — |
+
+- **Maliyet gürültü içinde:** `server_hz` 30, adım p50/p90 ve
+  `out_bps_per_conn` on/off aynı aralıkta (±%0,3). Dövüş tablosu ve pin
+  geçişi ölçülebilir iş eklemiyor.
+- **Uzak etki azalıyor ama az:** 200'de ~%25, 500'de ~%9. Bu yükün
+  dövüşleri kısa (dört darbe yenilgi, ~1 darbe/sn): kristalleşme K = 1 sn
+  ve iki yön canlı olduktan sonra geliyor, dövüşün başı her durumda
+  uzaktır; 500'de noktalar 3'e 3 kalabalık — mover EN DÜŞÜK partnerine
+  gider, aynı noktadaki başka çiftler seam ötesinde kalır (tasarım
+  gereği: bir pinli entity başka dövüşle taşınmaz).
+- **Salınım yok:** 90 sn'de hiçbir wire kristalleşmeyle ikiden fazla
+  taşınmadı (bir dövüş, bırakma, yeni dövüşte yeni seri).
+  `band` + `partner` bırakmaları çoğunlukla yenilgidir: yenilen waystone'a
+  ışınlanır (bant dışı), partneri de partnersiz kalır.
+- **Göç/sn:** çekirdek göç sayısı raporlamıyor; crystal göçleri
+  0,27–0,40/sn, bunun yanında varsayılan botların `Travel`'ı
+  (~20 sn'de bir) 200'de ~8/sn, 500'de ~20/sn göç üretir.
+- **Yan bulgu (crystallization'dan bağımsız, on/off eşit):** 500'de
+  `snap_overflows` ~32 k — düellocular 16 noktada kümelenince hücre
+  full'ları 1400 B tavanını aşıyor (G3'ün MMO 500 tabanında 4229).
+  Kümelenmiş MMO yükünde snapshot bölme ihtiyacı; bu turun kapsamı dışı.
+
+**Varsayılan yükte A/B (base `276041e` ↔ HEAD, dönüşümlü üç çift,
+200 istemci, `--duration 10 --write-stall-secs 0`, yük 4,4–7,4):** üç
+senaryoda da gürültü içinde; her koşuda `joined = left = 200`,
+`errors=0`, `server_closes=0`, `server_hz` 29,99–30,00.
+
+| Senaryo | step p50/p90 fine (µs) base | HEAD | `out_bps_per_conn` base | HEAD |
+|---|---|---|---|---|
+| demo sharded × spatial (`--topology sharded --visibility spatial --shard-count 4`) | 176/232 · 160/208 · 136/176 | 144/184 · 152/192 · 144/192 | 11 989 · 11 646 · 11 591 | 11 787 · 11 898 · 11 827 |
+| demo sharded (`--visibility sharded`) | 96/128 · 112/168 · 128/176 | 96/128 · 128/160 · 96/128 | 28 509 · 28 202 · 28 353 | 28 220 · 28 356 · 28 596 |
+| MMO varsayılan bot (`--game mmo`) | 128/168 · 128/160 · 136/184 | 128/168 · 120/160 · 128/168 | 20 732 · 20 649 · 20 732 | 20 515 · 20 554 · 20 456 |
+
+MMO varsayılan botunda crystallization AÇIK (MMO'nun varsayılanı) ama
+seam ötesi dövüş yok: ölçülen, boştaki maliyettir.
 
 ## 5. Ortak fizik (tutma/itme) — tasarım uyarısı
 
@@ -419,12 +658,12 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 | team × sharded (bu bölüm) | 🔜 Tasarım hazır — taze oturumda uygulanır |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
-| Crystallization (§4 katman 4) | 🔜 sonraki tur |
+| Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
 
 ## 8. NOT-DONE
 
 - ~~Cross-seam combat/interaction mesaj tiplerinin implementasyonu~~ —
-  C1'de uygulandı (§4b); kalan: crystallization (§4 katman 4) ve
+  C1'de uygulandı (§4b); crystallization C2'de (§4c); kalan:
   saldırı-anında güncel borrow (katman 1'in seçeneği)
 - Ortak fizik uzlaşması (§5)
 - Adaptif border genişliği (ölçüm öncesi optimizasyon)

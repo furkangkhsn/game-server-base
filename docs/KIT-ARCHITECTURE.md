@@ -543,6 +543,40 @@ impl<V> Seam<'_, '_, V> {
   `Lent`, `RemoteEffect`, `EffectId`, `EffectOutcome`, `EmitRefused`,
   test/araç için `SeamStage`.
 
+**C2 eklemeleri** (crystallization, CROSS-SHARD §4c; `ShardGame` BÜYÜMEDİ
+— politika oda builder'ı, hepsi varsayılanlı ya da eklemeli; tek kırıcı
+değişiklik `KitMig`'e alan eklenmesi, onu da yalnız kit kuruyor):
+
+```rust
+pub struct Crystallize { pub after: u64, pub window: u64,     // K, seri boşluğu
+                         pub release: u64, pub margin: f32 }  // Default: 30/30/90/∞
+impl ShardedRoom<G, P> { pub fn with_crystallize(self, policy: Crystallize) -> Self }
+impl ShardedSpatialRoom<G, P, S> { pub fn with_crystallize(self, policy: Crystallize) -> Self }
+pub trait Partition<W> {
+    // … §4.6'daki metotlar aynı …
+    fn holds(&self, _idx: usize, _pos: &Self::Pos, _margin: f32) -> bool { true } // bant
+}
+pub struct KitMig<M> { /* game, park, input */ pub pin: Option<ShardPin> }
+pub struct ShardPin { pub partner: u64, pub last: u64 }
+impl<V> Seam<'_, '_, V> {
+    pub fn contact(&mut self, source: u64, target: u64);  // yerel darbeyi bildir
+    // emit: gönderilen etki ya da `Local` reddi kontak sayılır
+}
+```
+
+- **Karar kuralı:** `collect_migrations` bir entity'nin hedefini önce
+  pin'inin `anchor`'ından, yoksa `region_of`'tan alır; tutulan çift
+  bölgeden bağımsız kalır (CROSS-SHARD §4c madde 4). Pin mover'la
+  `KitMig.pin` içinde gider; alıcı mover'ı ve partnerini pinler.
+- **Kontak kaynakları:** `Seam::emit` (giden), odanın
+  `apply_remote_effect`'i `Applied` dönünce (gelen), `Seam::contact`
+  (oyunun yerel darbesi). Açılmamış odada üçü de no-op.
+- **`GridPartition2::holds`:** bölge ya da dışarıda `margin`'den az
+  (kötü eksende), `margin` border margin'ine kırpılır.
+- Oda politikalarının builder'ları (`with_crystallize`,
+  `with_disconnect_grace`, `with_disconnect_policy`) `room/policy.rs`
+  çocuk modülüne taşındı (imzalar aynı).
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
