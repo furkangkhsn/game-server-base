@@ -5,6 +5,37 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A31 — paketli kayıt koşusu: oyun başına opt-in (`kit/a31-packed-records`)
+
+Kit'e yapı taşı; varsayılan değişmedi (KIT-ARCHITECTURE §10 "A31").
+
+- `RecordCodec::RUN` (vars. `false`): açan oyunun kayıtları tek bir
+  `bytes records = 6` alanında art arda (`id varint + oyunun kendini
+  sınırlayan gövdesi` — gövde formatı tamamen oyunun: protobuf,
+  MessagePack, bit paketli…); kayıt başına çerçeve yok. İstemci:
+  `ClientDecoder::RUN` + `run_record(id, run)`, yeni
+  `ClientError::UnexpectedRun`; `client::wire::varint` public.
+  `kit.proto`'ya alan ve istemci kuralı eklendi (additive; framing oyunun
+  protokol sürümünün parçası, müzakere yok).
+- Bütün yazıcı yolları tek bölgeden (açık/PVS/düz sharded, takım ve
+  sharded takım defteri, ödünç ve ithal kayıtlar, AOI ve sharded ×
+  spatial parçaları; full/delta/keep-alive/one-shot). Açmayan oyunun
+  baytı birebir aynı (oda türü başına ikiz testler + mevcut bayt pinleri).
+- Sınır kararı: kendini sınırlayan gövde; kit uzunluk öneki elendi
+  (savaş baytının %12,6–12,7'si — isteyen oyun kendi önekini yazar).
+- Doğrulama: yalnız savaş demosu açtı (6 B'lik gövde). `out_bps_per_conn`
+  200 / 500: −53,9 / −54,1 % (TCP), 500 rUDP −52,9 %; 500'de kare başına
+  datagram 3,9–4,0 → 2,0–2,1. Diğer demolar dokunulmadı (üç wire testine
+  yalnız yeni alan için `records: Vec::new()` eklendi; pinli baytlar aynı).
+- Bulgular: A31-1 shard'lı iki aktör odası aynı baytı göndermez (seam
+  zamanlaması) — bayt karşılaştıran testler elle adımlanır; A31-2 rUDP
+  yazıcısının parça sayaçları loadgen RESULT'ında yok; A31-3 500'de
+  kareler hâlâ parçalanıyor → A10.
+
+Testler 827 → 847. Ajanın 12 kural mutasyonu yakalandı; ebeveynin bağımsız
+mutasyonu (tam 128 baytlık koşunun uzunluğunu tek bayta yazmak) 6 ikiz
+testini kırıyor.
+
 ## A30 — kompakt wire id: iç içe basım (`core/a30-compact-ids`)
 
 Motor geneli varsayılan; zarf düzeni ve istemci kuralları aynı, yalnız

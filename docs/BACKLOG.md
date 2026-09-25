@@ -43,7 +43,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A7 Bölüm presetlerinde `wire_scale` | wire'ı konum biriminden ince olan ve kabalaştıramayan oyun | KIT-ARCHITECTURE:1660, 1716 |
 | A8 `Vision::sees`'te birim başına görüş yarıçapı (ward/kahraman; W2'de gerekmedi — her bölgede fraksiyon başına bir kule) | — | KIT-ARCHITECTURE:1470, 1733 |
 | A9 Oyuncu başına aydınlık hücre (görünür hücrede bile ışık konisi) | — | ROADMAP:694, DESIGN:1046 |
-| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu; W2 kanıtı: savaş 1000'de ~365 KB/sn/istemci; A22 faz 0: 15 Hz tek başına −38…−46 %, mutlak sıkıştırmayla −59…−74 %) | **sırada**, A31'den sonra — kit'te OPT-IN kanca (varsayılan her tick), hız ve interpolasyon oyunun (E7) | ROADMAP:615 |
+| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu; W2 kanıtı: savaş 1000'de ~365 KB/sn/istemci; A22 faz 0: 15 Hz tek başına −38…−46 %, mutlak sıkıştırmayla −59…−74 %) | **sırada** (A31 yapıldı) — kit'te OPT-IN kanca (varsayılan her tick), hız ve interpolasyon oyunun (E7) | ROADMAP:615 |
 | A11 Bağlantı başına tick'te yeni `Vec` | yük verisi sorun gösterirse | ROADMAP:617 |
 | A12 `QueryState`'i oda başına bir kez kurmak | — (hâlâ açık: `sharded/room.rs:220,240`, `pvs/logic.rs:193`) | ROADMAP:704 |
 | A13 Registry striping (W1'den beri takım röleleri de registry'nin tek görevinde veri düzlemi yükü) | `team_export_drops > 0` ya da registry gecikmesi ölçülürse (W2: 1000'de 120 export/sn, ~281 k kayıt/sn röle, 0 düşme) | ROADMAP:700 |
@@ -55,15 +55,16 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A19 Dinamik adaptif tick hızı | — | DESIGN:1213 |
 | A20 Join/leave için tick içi hızlı yol | gerekirse | DESIGN:1221, TICK-ARCHITECTURE:134 |
 | A21 Dinamik oda bölme/birleştirme, bölgeler arası | — | DESIGN:892 |
-| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11) + ithal kayıtlar için `RecordCodec::decode` | kompakt id (A30 ✅) + paketli koşu (A31) + A10'dan sonra hâlâ bant/MTU baskısı gören AOI tipi oyun | KIT-ARCHITECTURE §10 "A22" |
+| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11) + ithal kayıtlar için `RecordCodec::decode` | kompakt id (A30 ✅) + paketli koşu (A31 ✅) + A10'dan sonra hâlâ bant/MTU baskısı gören AOI tipi oyun | KIT-ARCHITECTURE §10 "A22" |
 | A23 Demo sunucusunda `team × delta` (config şu an reddediyor; kit hazır) | demo'da takım delta'sı isteyen koşu | KIT-ARCHITECTURE §10 "T sonucu" |
 | A25 Takım export'u her tick; `every k` temposu (W2 ölçtü, gerekmedi: 1000'de 0 düşme; tempo istemci baytını değiştirmez, görmeyi k tick geciktirir) | `team_export_drops > 0` ya da registry gecikmesi | CROSS-SHARD §8b.1 |
 | A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle; W2-1 kanıtı: bölüm artefaktı (shard 3 oyuncusu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki shard 0 oyuncusu görmüyor); en küçük değişiklik varlık başına "harita geneli" bayrağı | herkesin durumunu görmesi gereken bir hedef | CROSS-SHARD §8b.5 |
 | A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul; W2'de ölçülmedi — loadgen kısa kayıp-geri gelişleri saymıyor) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
 | A29 Takım bütçesi üyeleri wire sırasıyla kesiyor (ilk tick'te doğan kuleler kalır, en yeni oyuncular gider) | bütçe gerçekten kesmeye başlarsa | KIT-ARCHITECTURE W2-3 |
 | ~~A30 Kompakt wire id~~ **Yapıldı (2026-09-25, `9dfab9e`):** iç içe basım `(n − 1)·N + i + 1`; shard'lı oyunlarda −7…−15 %, id varint 2,6–3,2 → 1,7–1,9 B; istemci kuralı ve zarf aynı | ✅ | KIT-ARCHITECTURE §10 "A30" |
-| A32 Shard'da oyuncu id'si ile wire id'ye ayrı sayaç (join bugün iki çekim yapıyor; ayrılırsa shard'lı wire id'ler kabaca yarıya iner) — tükenme koruması iki sayacı birlikte saymalı | A31'den sonra bant yine sıkışırsa | KIT-ARCHITECTURE §10 "A30" |
-| A31 Paketli kayıt koşusu (`kit.proto`'ya `bytes records = 6`, `RecordCodec::RUN`, `ClientDecoder::run_record`) — kit'te OPT-IN yapı taşı; gövde formatı oyunun (A30 ile −43…−58 % ölçüldü); doğrulama tek demoda | **sırada** (A30 yapıldı; E7) | KIT-ARCHITECTURE §10 "A22" |
+| A32 Shard'da oyuncu id'si ile wire id'ye ayrı sayaç (join bugün iki çekim yapıyor; ayrılırsa shard'lı wire id'ler kabaca yarıya iner) — tükenme koruması iki sayacı birlikte saymalı | A10'dan sonra bant yine sıkışırsa | KIT-ARCHITECTURE §10 "A30" |
+| A33 rUDP yazıcısının `frag_messages`/`frag_datagrams` sayaçları loadgen RESULT'ına (bugün yalnız yazıcı oturum logunda) | parçalanma ölçümü gerektiğinde | KIT-ARCHITECTURE §10 "A31" (A31-2) |
+| ~~A31 Paketli kayıt koşusu~~ **Yapıldı (2026-09-25, `9a1de23`):** `RecordCodec::RUN` + `ClientDecoder::run_record`, `kit.proto` `records = 6`; savaş opt-in −54 % (TCP 200/500), rUDP datagram/kare yarıya | ✅ | KIT-ARCHITECTURE §10 "A31" |
 | A24 İstemci tarafında delta uygulaması maliyeti (orkestre arena 1000'de `clients_cpu_s` +%15) | yük verisi sorun gösterirse | KIT-ARCHITECTURE §10 "T sonucu" |
 
 ### B. Taşıma ve operasyon
@@ -151,6 +152,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F9 Crystal olayları için genel oyun/kit sayaç seam'i (W2-3: kit'in `ShardedTeamRoom::over_budget` sayacı da barındırıcıya ulaşmıyor) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
 | F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
 | F11 Fan-out düşmesi one-shot full içeren batch'i atınca `Baselines` oyuncuyu baseline'lı sayıyor (bugün güvenli — keep-alive iyileştirir; herhangi bir göreli şemada doğruluk hatası) — çekirdekten kit'e düşme sinyali | KIT-ARCHITECTURE §10 "A22" A22-1 |
+| F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 
 (A6 ve F3 küçük pakette, A26 W2'de kapandı.)
 
