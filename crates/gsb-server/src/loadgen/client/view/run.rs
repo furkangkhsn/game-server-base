@@ -33,6 +33,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         gave_up: 0,
         frag_reassembled: 0,
         frag_dropped: 0,
+        hs_retries: 0,
         seq_first: None,
         seq_last: None,
         acks: 0,
@@ -375,6 +376,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         rep.gave_up = c.stats.gave_up;
         rep.frag_reassembled = c.stats.frag_reassembled;
         rep.frag_dropped = c.stats.frag_dropped_incomplete;
+        rep.hs_retries = c.stats.challenge_retries + c.stats.proof_retries;
     }
     rep
 }

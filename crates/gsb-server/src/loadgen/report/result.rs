@@ -146,6 +146,7 @@ pub(crate) fn print_report(
     let gave_up: u64 = reports.iter().map(|r| r.gave_up).sum();
     let frag_reassembled: u64 = reports.iter().map(|r| r.frag_reassembled).sum();
     let frag_dropped: u64 = reports.iter().map(|r| r.frag_dropped).sum();
+    let hs_retries: u64 = reports.iter().map(|r| r.hs_retries).sum();
     let acks: u64 = reports.iter().map(|r| r.acks).sum();
     let ack_processed_max: u64 = reports
         .iter()
@@ -223,7 +224,7 @@ pub(crate) fn print_report(
     if args.transport == gsb_server::TransportKind::Udp {
         println!(
             "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up} \
-             frag_reassembled={frag_reassembled} frag_dropped={frag_dropped}",
+             frag_reassembled={frag_reassembled} frag_dropped={frag_dropped} hs_retries={hs_retries}",
         );
     }
     let slowest = reports
@@ -399,7 +400,8 @@ pub(crate) fn print_report(
          server_cpu_s={:.1} clients_cpu_s={:.1} \
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
            actions_dropped_top={} transport={} retrans_out={} dup_in={} oob_dropped={} \
-            gave_up={} frag_reassembled={} frag_dropped={} acks={} ack_processed_max={} \
+            gave_up={} frag_reassembled={} frag_dropped={} hs_retries={} acks={} \
+            ack_processed_max={} \
             ack_lag_max_ms={} fulls={} \
             private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
             req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
@@ -500,6 +502,7 @@ pub(crate) fn print_report(
         gave_up,
         frag_reassembled,
         frag_dropped,
+        hs_retries,
         acks,
         ack_processed_max,
         ack_lag_max_ms,

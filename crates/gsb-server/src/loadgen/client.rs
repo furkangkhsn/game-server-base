@@ -51,6 +51,10 @@ pub(crate) struct ClientReport {
     /// from FRAG datagrams, and those dropped with a fragment missing.
     pub(crate) frag_reassembled: u64,
     pub(crate) frag_dropped: u64,
+    /// rUDP handshake re-sends (all zero on TCP): challenge requests and
+    /// proofs sent again because the server had not answered yet — the
+    /// handshake's own loss signal.
+    pub(crate) hs_retries: u64,
     /// First/last snapshot sequence with its arrival instant: the server's
     /// measured tick rate is (last_seq − first_seq) / Δt, since the
     /// snapshot sequence is the global tick index.

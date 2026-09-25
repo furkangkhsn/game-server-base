@@ -103,6 +103,7 @@ pub(crate) async fn run_churn_client(
         gave_up: 0,
         frag_reassembled: 0,
         frag_dropped: 0,
+        hs_retries: 0,
         seq_first: None,
         seq_last: None,
         acks: 0,
