@@ -47,6 +47,7 @@ mod keepalive;
 mod metrics;
 mod migration;
 mod strip;
+mod teams;
 
 mod rigs;
 pub(in crate::shard::tests) use rigs::*;

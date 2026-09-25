@@ -175,6 +175,11 @@ pub enum ShardMsg<S, B> {
     /// the one it was emitted in, in `(source, origin, seq)` order;
     /// idempotent on its [`EffectId`].
     RemoteEffect(RemoteEffect),
+    /// Another shard's team records, relayed by the registry hub
+    /// (`docs/CROSS-SHARD.md` §8b): replaces this shard's slot for the
+    /// source wholesale, in CONTROL; the logic reads the merged view in
+    /// the TEAMS phase ([`ShardLogic::team_exchange`]).
+    TeamImport(TeamImport),
     /// Stop the shard (drops the world).
     Shutdown,
 }

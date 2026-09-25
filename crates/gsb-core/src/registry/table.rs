@@ -8,7 +8,7 @@ use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{EntityId, RoomId};
-use crate::registry::HomeShard;
+use crate::registry::{HomeShard, TeamHub};
 use crate::room::{Action, RoomConfig, RoomControl};
 use crate::shard::ShardMsg;
 
@@ -118,6 +118,11 @@ pub(crate) struct ShardGroup<St, Sp> {
     /// reserved against the cap so a concurrent join burst cannot race
     /// past it.
     pub(crate) pending: u64,
+    /// The room's team-export hub (`docs/CROSS-SHARD.md` §8b.2): the
+    /// shards' team subscriptions, relaying each export to the shards
+    /// viewing its teams. Lives with the entry — destroyed with this
+    /// incarnation of the room.
+    pub(crate) teams: TeamHub,
 }
 
 pub(crate) struct RoomEntry<St, Sp> {

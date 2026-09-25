@@ -1,5 +1,5 @@
 //! The shard mailbox's message handling: join, detach, resume, leave,
-//! migrate-in and the border exchange.
+//! migrate-in, the border exchange and the team imports.
 //!
 //! NOT split further: this is one match over `ShardMsg`, and its arms
 //! share the epoch/binding guards that make the ordering argument
@@ -462,6 +462,17 @@ where
                 // due ones in their deterministic order.
                 self.effects.stats.received += 1;
                 self.effects.pending.push(effect);
+                true
+            }
+            ShardMsg::TeamImport(import) => {
+                // Applied in place (a slot replacement — no install gate:
+                // the records are visibility, not ownership). The logic
+                // reads the merged view in the TEAMS phase.
+                let records = import.records.len() as u64;
+                let cut = self.teams.insert(import) as u64;
+                self.tstats.imports += 1;
+                self.tstats.import_records += records - cut;
+                self.tstats.over_cap += cut;
                 true
             }
             ShardMsg::Shutdown => false,

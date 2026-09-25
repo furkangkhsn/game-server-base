@@ -126,6 +126,9 @@ where
             result_sink,
             registry: None,
             despawn_reports: Vec::new(),
+            teams: TeamImports::default(),
+            team_sent: false,
+            tstats: TeamStats::default(),
         }
     }
 
@@ -288,6 +291,24 @@ where
                 );
             }
             self.log_effect_summary();
+        }
+        // The team exchange's window (§8b.6: a log line, not the metrics
+        // sample) — on the same ~1 s cadence, only when something moved.
+        if self.steps.is_multiple_of(self.border_every) && self.tstats.any() {
+            let s = std::mem::take(&mut self.tstats);
+            info!(
+                room = %self.config.id,
+                shard = self.index,
+                window_ticks = self.border_every,
+                exports = s.exports,
+                export_drops = s.export_drops,
+                export_records = s.export_records,
+                over_cap = s.over_cap,
+                imports = s.imports,
+                import_records = s.import_records,
+                expired = s.expired,
+                "team_exchange_summary"
+            );
         }
         keep
     }

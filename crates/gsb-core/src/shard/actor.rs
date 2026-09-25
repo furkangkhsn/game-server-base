@@ -199,4 +199,16 @@ pub struct ShardActor<W, G, St, Sp> {
     /// once at the end of phase 0c. See the room actor's field of the same
     /// name for why a dropped report would reopen the leak.
     pub(in crate::shard) despawn_reports: Vec<ConnectionId>,
+    // -- The team exchange (`docs/CROSS-SHARD.md` §8b). ----------------
+    /// The other shards' team records (one slot per source, replaced by
+    /// every `TeamImport`, TTL-expired, merged per team): what the TEAMS
+    /// phase hands the logic.
+    pub(in crate::shard) teams: TeamImports,
+    /// The last export the registry accepted listed something: the next
+    /// EMPTY one is still sent — once — so the receivers clear this
+    /// shard's slot now instead of at the TTL.
+    pub(in crate::shard) team_sent: bool,
+    /// Team-exchange counters of the current ~1 s window
+    /// (`team_exchange_summary`).
+    pub(in crate::shard) tstats: TeamStats,
 }

@@ -12,6 +12,7 @@ use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
 use crate::room::{Action, RoomConfig};
+use crate::shard::TeamExport;
 
 /// Messages addressed to the registry actor.
 #[derive(Debug)]
@@ -207,5 +208,25 @@ pub enum RegistryMsg {
         /// The incarnation this watcher was spawned for (the stale-watch
         /// guard; see `Registry::install_room`).
         generation: u64,
+    },
+    /// A shard's team export (`docs/CROSS-SHARD.md` §8b): its viewed
+    /// teams and each team's visible set on that shard, the records
+    /// byte-encoded by the game (the registry never decodes one). The
+    /// room's hub (`ShardGroup::teams`) relays it — `try_send`, filtered
+    /// per target to the teams the target views — to the room's OTHER
+    /// shards. Sent every tick by a shard whose logic takes part
+    /// ([`crate::shard::ShardLogic::team_exchange`]); an export of a
+    /// different incarnation (`generation`) or of an unknown room is a
+    /// silent no-op.
+    TeamExport {
+        room: RoomId,
+        /// The install generation the exporting shard belongs to.
+        generation: u64,
+        /// The exporting shard's index.
+        from: usize,
+        /// The exporting shard's tick (the hub's and the receivers' TTL
+        /// clock).
+        tick: u64,
+        export: TeamExport,
     },
 }

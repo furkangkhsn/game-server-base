@@ -1,5 +1,5 @@
-//! The shard's tick body: the room's five phases plus MIGRATE and
-//! BORDER. Each phase that carries weight is a child module.
+//! The shard's tick body: the room's five phases plus MIGRATE, BORDER
+//! and TEAMS. Each phase that carries weight is a child module.
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -22,6 +22,7 @@ mod effects;
 mod idle;
 mod migrate;
 mod requests;
+mod teams;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where
@@ -282,9 +283,16 @@ where
         self.phase_migrate(t);
 
         self.phase_border(t);
+        // The borrowed boundary set, flattened once for the two phases
+        // that read it.
+        let borrowed = self.borrowed_view();
+        // -- Phase 5b — TEAMS (`docs/CROSS-SHARD.md` §8b): the logic reads
+        //    the other shards' team records and hands back this shard's
+        //    export for the registry hub.
+        self.phase_teams(&ctx, &borrowed);
         // -- Phase 6 — BROADCAST (the room's broadcast phase with the
         //    borrowed boundary set folded into every group's snapshot).
-        self.broadcast_phase(&ctx);
+        self.broadcast_phase(&ctx, &borrowed);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
         // hand the clock back to the actor.
         self.idle = idle;

@@ -149,6 +149,30 @@ pub trait ShardLogic<W>: GameLogic<W> {
     ) -> EffectOutcome {
         EffectOutcome::NoTarget
     }
+
+    /// The team exchange (`docs/CROSS-SHARD.md` §8b), once per tick in
+    /// the TEAMS phase — after BORDER, before the broadcast's snapshot
+    /// calls. `borrowed` is the flattened, own-filtered border view the
+    /// snapshots receive; `imported` is what the OTHER shards exported
+    /// for the teams this shard views (merged per team, TTL-expired).
+    /// Return this shard's export — its viewed teams and each team's
+    /// visible set here, the records encoded by the game's codec — for
+    /// the core to send to the registry hub. The logic keeps whatever it
+    /// needs of `imported` for this tick's snapshots (the records are
+    /// `Bytes`: cloning one is a reference count).
+    ///
+    /// Default: `None` — the logic takes no part: it sends nothing and
+    /// receives nothing (the hub relays only to shards that list viewed
+    /// teams).
+    fn team_exchange(
+        &mut self,
+        _world: &mut W,
+        _ctx: &TickCtx,
+        _borrowed: &[BorderRecord<Self::Strip>],
+        _imported: &TeamImports,
+    ) -> Option<TeamExport> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------

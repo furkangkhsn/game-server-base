@@ -25,10 +25,38 @@ where
     // each neighbor's message, store in the actor's maps).
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
+    /// The borrowed boundary set (module docs, "Boundary visibility"):
+    /// the persistent per-neighbor views flattened. Built once per tick
+    /// and handed to the TEAMS phase and to every group's snapshot.
+    pub(crate) fn borrowed_view(&self) -> Vec<BorderRecord<Sp>> {
+        // Sorted by wire so the payload order is deterministic. A
+        // quarantined view (`stale_until_full` — a rejected delta means
+        // an unknown-sized hole) is EXCLUDED: rendering possibly-diverged
+        // borrowed entities would be worse than their brief absence; the
+        // healing Full restores them within a tick or two.
+        let mut borrowed: Vec<BorderRecord<Sp>> = Vec::new();
+        for recs in self.border.values() {
+            if !recs.stale_until_full {
+                borrowed.extend(recs.recs.values().cloned());
+            }
+        }
+        borrowed.sort_unstable_by_key(|r| r.wire);
+        // Own records win over the neighbor's one-tick-stale borrowed copy
+        // of an entity that just crossed into this shard (otherwise it
+        // would appear twice in one snapshot under the same wire id):
+        // filter the borrowed set against the own wires (binary search on
+        // the sorted own list — the border set is small).
+        let mut own = self.logic.own_wires(&self.world);
+        own.sort_unstable();
+        borrowed.retain(|r| own.binary_search(&r.wire).is_err());
+        borrowed
+    }
+
     /// Phase 6: the room's broadcast phase, with the borrowed boundary set
     /// (the latest exchange per neighbor, flattened and sorted by wire for
-    /// deterministic payload order) folded into every group's snapshot.
-    pub(crate) fn broadcast_phase(&mut self, ctx: &TickCtx) {
+    /// deterministic payload order — [`Self::borrowed_view`]) folded into
+    /// every group's snapshot.
+    pub(crate) fn broadcast_phase(&mut self, ctx: &TickCtx, borrowed: &[BorderRecord<Sp>]) {
         let snap_op = self.logic.snapshot_op();
         let priv_op = self.logic.private_op();
 
@@ -84,29 +112,6 @@ where
             }
         }
 
-        // The borrowed boundary set (module docs, "Boundary visibility"):
-        // the persistent per-neighbor views flattened. Sorted by wire so
-        // the payload order is deterministic. A quarantined view
-        // (`stale_until_full` — a rejected delta means an unknown-sized
-        // hole) is EXCLUDED: rendering possibly-diverged borrowed entities
-        // would be worse than their brief absence; the healing Full
-        // restores them within a tick or two.
-        let mut borrowed: Vec<BorderRecord<Sp>> = Vec::new();
-        for recs in self.border.values() {
-            if !recs.stale_until_full {
-                borrowed.extend(recs.recs.values().cloned());
-            }
-        }
-        borrowed.sort_unstable_by_key(|r| r.wire);
-        // Own records win over the neighbor's one-tick-stale borrowed copy
-        // of an entity that just crossed into this shard (otherwise it
-        // would appear twice in one snapshot under the same wire id):
-        // filter the borrowed set against the own wires (binary search on
-        // the sorted own list — the border set is small).
-        let mut own = self.logic.own_wires(&self.world);
-        own.sort_unstable();
-        borrowed.retain(|r| own.binary_search(&r.wire).is_err());
-
         // 6c. One snapshot per group: encode ONCE, freeze once, share —
         //     the room's 4c with the borrowed boundary set folded in and
         //     the scratch buffer reused across groups. The keep-alive
@@ -130,7 +135,7 @@ where
             buf.clear();
             let emitted = self
                 .logic
-                .snapshot(&mut self.world, ctx, group, &borrowed, &mut buf);
+                .snapshot(&mut self.world, ctx, group, borrowed, &mut buf);
             if emitted {
                 if buf.len() > self.config.max_snapshot_bytes && !st.size_warned {
                     st.size_warned = true;

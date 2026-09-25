@@ -48,6 +48,11 @@
 //!           │            (full state + the player's moved channels)
 //! Phase 5   │  BORDER:   export this shard's boundary entities (full
 //!           │            state, idempotent) to every neighbor
+//! Phase 5b  │  TEAMS:    hand the logic the borrowed set and the other
+//!           │            shards' team records (expired, merged); send
+//!           │            its team export to the registry hub
+//!           │            (`docs/CROSS-SHARD.md` §8b — a logic that takes
+//!           │            no part sends and receives nothing)
 //! Phase 6   │  BROADCAST: one snapshot per group, including the borrowed
 //!           │            boundary entities, plus each connection's private
 //!           │            frame carrying this tick's queued RPC answers
@@ -279,6 +284,7 @@ mod link;
 mod logic;
 mod msg;
 mod seam;
+mod team;
 
 #[cfg(test)]
 mod tests;
@@ -295,6 +301,11 @@ pub(crate) use link::*;
 pub use logic::ShardLogic;
 pub use msg::{Migrating, PlayerMigration, ResumeReply, ShardMsg};
 pub use seam::{CrossSeam, Lent, SeamStage};
+pub(crate) use team::TeamStats;
+pub use team::{
+    ImportedRecord, TEAM_EXPORT_MAX_RECORDS, TEAM_EXPORT_MAX_VIEWS, TEAM_EXPORT_TTL_TICKS,
+    TEAM_HUB_SWEEP_EVERY_TICKS, TeamExport, TeamImport, TeamImports, TeamRecord,
+};
 
 /// Identities per shard in the wire-id range partitioning (see module
 /// docs, "Wire identity"): 2^20 ≈ 100× the measured 10k single-room wall

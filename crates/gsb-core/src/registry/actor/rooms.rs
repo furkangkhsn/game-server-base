@@ -190,6 +190,7 @@ where
                             cap: config.max_players.map(|c| c as u64),
                             members: 0,
                             pending: 0,
+                            teams: TeamHub::default(),
                         }),
                         config,
                         generation,
