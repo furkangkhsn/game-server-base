@@ -18,17 +18,7 @@ async fn raw_session(
     let raw = UdpSocket::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
         .await
         .expect("bind");
-    let mut buf = vec![0u8; 2048];
-    let nonce = 0xF4A6_0000_0000_0001u64;
-    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
-        .await
-        .expect("challenge")
-        .expect("recv");
-    let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
-    raw.send_to(&encode_hello(nonce, cookie), addr)
-        .await
-        .unwrap();
+    raw_handshake(&raw, addr, 0xF4A6_0000_0000_0001u64).await;
     let mut ep = tokio::time::timeout(Duration::from_secs(3), eps.recv())
         .await
         .expect("endpoint")

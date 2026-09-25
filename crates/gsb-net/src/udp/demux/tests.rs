@@ -27,6 +27,7 @@ fn demux_bare(sock: Arc<UdpSocket>) -> (Demux, crossbeam_channel::Receiver<Endpo
         buf: vec![0u8; 65536],
         established: 0,
         challenges: 0,
+        proofs_reanswered: 0,
         bad_cookie: 0,
         endpoints_dropped: 0,
         swept_idle: 0,
@@ -63,6 +64,7 @@ fn demux_with_session(
         buf: vec![0u8; 65536],
         established: 1,
         challenges: 0,
+        proofs_reanswered: 0,
         bad_cookie: 0,
         endpoints_dropped: 0,
         swept_idle: 0,
@@ -222,3 +224,5 @@ async fn inbound_fragments_are_refused() {
         other => panic!("expected a frame, got {other:?}"),
     }
 }
+
+mod handshake;

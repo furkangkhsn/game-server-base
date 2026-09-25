@@ -28,6 +28,7 @@
 //! server → HELLO { nonce, cookie: F(nonce, peer, key, slot) }
 //! client → HELLO { nonce, cookie }           (proof)
 //! server: cookie verified → session established (channels pre-created)
+//! server → ACK { 1 }                          (accept: "send me seq 1")
 //! ```
 //!
 //! `F` is a per-process-keyed mix (splitmix64 folds of `nonce`, the peer
@@ -36,7 +37,9 @@
 //! network without the key". The challenge response is well-formed only
 //! for a well-formed challenge (same 18-byte size), so forged-traffic
 //! amplification stays at ratio ≤ 1, and a forged proof needs the
-//! cookie, which needs the key.
+//! cookie, which needs the key. The accept (5 bytes) answers only a
+//! proof that verifies, so it is owed only to an address that received
+//! its challenge: ratio 5/18, and nothing at all for a forged proof.
 //!
 //! **The key** (16 bytes) is drawn from the **OS entropy source** at
 //! bind time (the `getrandom(2)`/`BCryptGenRandom` reader — 128 bits of
@@ -67,7 +70,8 @@
 //! current slot **or the previous one**. Nothing else changes:
 //!
 //! - **the wire is untouched** — still `3 HELLO [u64 nonce][u64 cookie]`,
-//!   18 bytes each way. The slot is not sent: both sides of the server's
+//!   18 bytes each way (the accept that "Handshake loss" added later is
+//!   a separate datagram, not a change to these). The slot is not sent: both sides of the server's
 //!   own computation read it from the same clock, and the client never
 //!   needs to know it exists;
 //! - **the handshake stays stateless** — the slot is recomputed from an
@@ -89,9 +93,11 @@
 //!   RTT after the challenge is received, plus whatever the client's
 //!   scheduler adds — call it 300 ms on a bad link, a couple of seconds
 //!   for a phone whose radio was asleep. 10 s of grace is 3-30× that, so
-//!   a legitimate handshake never loses a race with the rotation (and if
-//!   one somehow did, the client's own retry mints a fresh challenge —
-//!   the server is idempotent in it);
+//!   a legitimate handshake never loses a race with the rotation: the
+//!   client re-sends a lost proof for at most `HANDSHAKE_DEADLINE`
+//!   (5 s, pinned below one slot at compile time), so even its last
+//!   re-send carries a cookie the server still accepts (see "Handshake
+//!   loss");
 //! - *above*, the exposure it leaves. 10-20 s is short enough that a
 //!   captured proof is worthless by the time any realistic capture →
 //!   replay pipeline turns it around, and long enough that the rotation
@@ -117,7 +123,92 @@
 //! for every re-draw at runtime). The slot term achieves the expiry with
 //! the key still immutable — drawn once, at bind, exactly as tested.
 //!
-//! //! `UDP_HELLO`/`UDP_ACK` opcodes live in the base band but are
+//! ## Handshake loss (why `connect` waits for the accept)
+//!
+//! Every datagram of the handshake can be lost, and before this section
+//! existed one of them could not be healed. The client re-sent its
+//! challenge request (every 500 ms, for 3 s) but counted itself
+//! connected the moment it had SENT its proof. A proof lost on the way —
+//! measured: 200+ clients handshaking at once overflow the one server
+//! socket's receive queue on loopback — left a client that believed in a
+//! session the server never created. Its AUTH found nothing, its REL
+//! band died 5 s later, and at afe7fba only 65-101 of 200 simultaneous
+//! loadgen clients ever joined. Loss points, before → after:
+//!
+//! | lost datagram | before | now |
+//! |---|---|---|
+//! | challenge request / challenge | re-requested (500 ms) | re-requested (`HANDSHAKE_RTO`) |
+//! | proof | **never healed** (client "connected", no session) | proof re-sent until the accept |
+//! | accept | — (did not exist) | proof re-sent; the server answers again |
+//! | first control frame (AUTH) | REL retransmit | REL retransmit (unchanged) |
+//!
+//! **Decision: the client is established only on the server's word.**
+//! After a proof that verifies (and whose endpoint reached the accept
+//! loop) the server sends the **accept**: an `ACK { 1 }` — the new
+//! session's cumulative ACK, "send me seq 1", an existing datagram kind
+//! that a client of any age treats as a no-op. [`UdpClient::connect`]
+//! returns only once the server has shown it holds the session: the
+//! accept, or ANY session datagram (ACK/REL/RAW/FRAG, which the server
+//! sends only to a peer in its session table — one that arrives in place
+//! of a lost accept is handed to the inbound path, not swallowed).
+//! Until then it re-sends the current step — challenge request or proof —
+//! every `HANDSHAKE_RTO` (the transport's one RTO, 50 ms), and gives up
+//! with `TimedOut` at `HANDSHAKE_DEADLINE` (the REL liveness bound,
+//! 5 s: "the server answered nothing for 5 s" means the same before a
+//! session exists as after). The re-sends are counted
+//! ([`UdpClientStats::challenge_retries`], [`UdpClientStats::proof_retries`];
+//! loadgen `hs_retries`).
+//!
+//! **The server is idempotent in the proof.** A valid proof from an
+//! address that already has a session is a RE-SEND (the first copy's
+//! accept was lost, or the proof was duplicated in flight): it is
+//! answered with the session's CURRENT cumulative ACK and nothing else —
+//! no second session, no second `ConnectionId`, the reliable state not
+//! reset. A challenge request or an unverifiable proof from that address
+//! is still answered with nothing, so an established session is not a
+//! reflector.
+//!
+//! **The rotation argument.** Every proof re-send reuses the FIRST
+//! cookie (a second challenge is ignored). That cookie was minted in
+//! some slot N after the client's first request left, and it verifies
+//! until slot N+1 ends — at least one `COOKIE_SLOT` (10 s) later. The
+//! last re-send leaves at most 5 s after the first request, so it lands
+//! inside that window on any path whose one-way delay is under the
+//! other 5 s: a proof retried across a rotation validates, and no
+//! restart path is needed. The inequality is a compile-time assertion;
+//! lengthening the deadline past a slot breaks the build, not a
+//! handshake.
+//!
+//! **The cost, pinned.** An uneventful handshake is one datagram longer:
+//! HELLO 18 B → challenge 18 B → proof 18 B → **accept 5 B**, and
+//! `connect` returns one RTT later than it used to (the client's AUTH
+//! now waits for the accept). That is the price of the handshake being
+//! self-contained — the same 2-RTT shape as QUIC's Retry path and DTLS's
+//! HelloVerifyRequest, the two stateless-cookie handshakes this one
+//! resembles. A give-up leaves no zombie: a proof that never landed
+//! allocated nothing, and a session whose every accept was lost sees no
+//! further traffic and is ended by the idle sweep.
+//!
+//! **Rejected — raising `SO_RCVBUF`** (BACKLOG B4, the "No receive-buffer
+//! tuning" item below): it moves the loss threshold, it does not remove
+//! it. A deeper queue absorbs 500 handshakes but not 5 000, and a lossy
+//! real path drops a proof regardless of the server's buffer; a
+//! handshake that cannot heal one lost datagram is wrong at any queue
+//! depth. It stays open as a throughput knob, not as this fix.
+//! **Rejected — server-side pacing of handshakes** (admit N per tick,
+//! drop or defer the rest): the server cannot pace what the kernel has
+//! already dropped before the demux saw it, and deferring means holding
+//! state for unverified peers — exactly what the stateless handshake
+//! forbids. **Rejected — confirm on the first server datagram without an
+//! accept** (no wire change): the server sends nothing until the
+//! client's first control frame, so `connect` would return an
+//! unconfirmed session, the proof's re-sends would ride the REL band's
+//! clock, and a client that stays silent could never learn whether it is
+//! connected. **Rejected — the client's frames carry the cookie** (TCP
+//! SYN-cookie style, any frame re-validates): 8 bytes on every datagram
+//! of the session to save one 5-byte datagram per session.
+//!
+//! `UDP_HELLO`/`UDP_ACK` opcodes live in the base band but are
 //! **transport markers**: they travel in their own datagram kinds and are
 //! handled below the actor layer (the connection actor never sees them;
 //! they are not message-table messages).
@@ -402,12 +493,11 @@
 //!   datagram is as forgeable as a RAW one, and the client's reassembly
 //!   bounds are what keep a forged stream from costing it more than
 //!   64 KiB.
-//! - **A lost handshake proof is not healed.** The client counts itself
-//!   connected once it has SENT its proof; if that datagram is lost
-//!   (measured: the server socket's receive queue overflows on loopback
-//!   when 200+ clients handshake at once), no session exists, its AUTH
-//!   finds nothing, and the client dies of the REL liveness bound 5 s
-//!   later. Only the challenge request is retried today.
+//! - **The handshake re-sends on the same fixed RTO.** A lost proof is
+//!   healed now (see "Handshake loss"), but on a path whose RTT exceeds
+//!   50 ms the client sends several copies of each handshake step before
+//!   the first answer can arrive — the handshake's share of the "Fixed
+//!   RTO" item above (each copy is answered at ratio ≤ 1).
 
 mod client;
 mod cookie;
@@ -458,6 +548,22 @@ const RETRANSIT_RTO: Duration = Duration::from_millis(50);
 /// bound", for why the bound is on the CHANNEL and not on a frame's age,
 /// and for the 5 s figure against real lossy-link numbers.
 const REL_NO_ACK_FATAL: Duration = Duration::from_secs(5);
+/// The client's handshake re-send interval, for the challenge request
+/// and the proof alike (see the module docs, "Handshake loss"): a step
+/// that has had no answer for this long is sent again. The transport's
+/// one RTO — measured against 250 ms at 500 simultaneous handshakes, it
+/// cut the connect p50 from ~250 ms to ~50 ms with no more re-sends.
+const HANDSHAKE_RTO: Duration = RETRANSIT_RTO;
+/// How long the client keeps re-sending before the handshake gives up
+/// with `TimedOut`: the REL liveness bound, so "the server answered
+/// nothing for 5 s" means the same thing before a session exists as it
+/// does after.
+const HANDSHAKE_DEADLINE: Duration = REL_NO_ACK_FATAL;
+// Every proof re-send reuses the first cookie, and a cookie stays valid
+// for at least one whole slot after it was minted: a give-up bound
+// shorter than one slot means no retry can meet an expired cookie
+// (module docs, "Handshake loss", the rotation argument).
+const _: () = assert!(HANDSHAKE_DEADLINE.as_millis() < COOKIE_SLOT.as_millis());
 /// Memory bound of the un-ACKed retransmit queue (per direction, per
 /// session). Reaching it means the peer has confirmed nothing while this
 /// many control frames piled up, which is the same death as

@@ -113,17 +113,8 @@ async fn server_retransmits_until_ack() {
     let raw = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
         .await
         .expect("bind");
+    raw_handshake(&raw, addr, 0x0123_4567_89AB_CDEFu64).await;
     let mut buf = vec![0u8; 2048];
-    let nonce = 0x0123_4567_89AB_CDEFu64;
-    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
-        .await
-        .expect("challenge")
-        .expect("recv");
-    let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
-    raw.send_to(&encode_hello(nonce, cookie), addr)
-        .await
-        .unwrap();
 
     // Fake actor: one control frame on the outbound channel.
     let mut ep = tokio::time::timeout(Duration::from_secs(3), eps.recv())
@@ -185,17 +176,7 @@ async fn unacked_control_band_closes_the_session_at_the_memory_bound() {
     let raw = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
         .await
         .expect("bind");
-    let mut buf = vec![0u8; 2048];
-    let nonce = 0x5EED_1234_5EED_1234u64;
-    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
-        .await
-        .expect("challenge")
-        .expect("recv");
-    let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
-    raw.send_to(&encode_hello(nonce, cookie), addr)
-        .await
-        .unwrap();
+    raw_handshake(&raw, addr, 0x5EED_1234_5EED_1234u64).await;
 
     let mut ep = tokio::time::timeout(Duration::from_secs(3), eps.recv())
         .await

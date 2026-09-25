@@ -66,6 +66,9 @@ pub(super) struct Demux {
     // lifetime counters (reported once at demux exit):
     established: u64,
     challenges: u64,
+    /// Valid proofs from an already-established peer, answered with the
+    /// accept again (the first accept or proof copy was lost).
+    proofs_reanswered: u64,
     bad_cookie: u64,
     endpoints_dropped: u64,
     swept_idle: u64,
@@ -163,6 +166,7 @@ pub(super) async fn demux(
         buf: vec![0u8; max_datagram + 64],
         established: 0,
         challenges: 0,
+        proofs_reanswered: 0,
         bad_cookie: 0,
         endpoints_dropped: 0,
         swept_idle: 0,
@@ -208,6 +212,7 @@ pub(super) async fn demux(
     info!(
         established = d.established,
         challenges = d.challenges,
+        proofs_reanswered = d.proofs_reanswered,
         bad_cookie = d.bad_cookie,
         endpoints_dropped = d.endpoints_dropped,
         swept_idle = d.swept_idle,

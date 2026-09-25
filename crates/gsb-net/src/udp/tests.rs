@@ -49,6 +49,36 @@ async fn bound_transport(
     (listener, addr, ep_rx, accept)
 }
 
+/// The handshake done by hand on a raw socket, every datagram checked
+/// byte for byte: the uneventful handshake is `HELLO` 18 B → challenge
+/// 18 B → proof 18 B → accept `ACK{1}` 5 B (`[2, 1, 0, 0, 0]`), and
+/// nothing else. Returns once the accept has been read, so the caller's
+/// next datagram is the session's first real one.
+async fn raw_handshake(raw: &UdpSocket, addr: SocketAddr, nonce: u64) {
+    let mut buf = vec![0u8; 2048];
+    raw.send_to(&encode_hello(nonce, 0), addr).await.unwrap();
+    let (n, _) = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
+        .await
+        .expect("challenge")
+        .expect("recv");
+    assert_eq!(n, 18, "the challenge is the request's size");
+    assert_eq!(buf[0], KIND_HELLO);
+    assert_eq!(
+        buf[1..9],
+        nonce.to_le_bytes(),
+        "the challenge echoes the nonce"
+    );
+    let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
+    raw.send_to(&encode_hello(nonce, cookie), addr)
+        .await
+        .unwrap();
+    let (n, _) = tokio::time::timeout(Duration::from_secs(3), raw.recv_from(&mut buf))
+        .await
+        .expect("the accept")
+        .expect("recv");
+    assert_eq!(&buf[..n], &[KIND_ACK, 1, 0, 0, 0], "the accept is ACK{{1}}");
+}
+
 /// The two-phase topology works: sequential handshakes each produce an
 /// endpoint (with the correct peer), and the per-session writer
 /// delivers a control frame to the client's reliable band.
@@ -137,6 +167,13 @@ async fn forged_proof_is_rejected() {
             .is_err(),
         "a forged proof must not produce an endpoint"
     );
+    // ...and must not be answered: no accept, nothing to reflect.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), raw.recv_from(&mut buf))
+            .await
+            .is_err(),
+        "a forged proof is answered with nothing"
+    );
 
     // The rejection is scoped to the attacker: a real client still
     // gets a session.
@@ -153,3 +190,4 @@ async fn forged_proof_is_rejected() {
 
 mod bands;
 mod frag;
+mod handshake;

@@ -130,7 +130,7 @@ impl super::Demux {
         }
     }
 
-    fn send_ack(&mut self, peer: SocketAddr, next: u32) {
+    pub(super) fn send_ack(&mut self, peer: SocketAddr, next: u32) {
         let ack = encode_ack(next);
         if let Err(e) = self.sock.try_send_to(&ack, peer) {
             debug!(%peer, %e, "rUDP: ack send failed (best-effort)");

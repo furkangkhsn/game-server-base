@@ -37,6 +37,13 @@ pub struct UdpClientStats {
     /// ceiling, a count that disagrees with the message's first
     /// fragment, or a fragment of a message the slot has moved past.
     pub frag_rejected: u64,
+    /// Challenge requests re-sent because no challenge came back within
+    /// the handshake re-send interval (see the module docs, "Handshake
+    /// loss").
+    pub challenge_retries: u64,
+    /// Proofs re-sent because the server had not yet shown it holds the
+    /// session: the proof, or the server's accept, was lost.
+    pub proof_retries: u64,
 }
 
 /// A rUDP client: the mirror image of the server's demux/writer, as one
@@ -77,10 +84,21 @@ pub struct UdpClient {
 
 impl UdpClient {
     /// Connect: bind an ephemeral local port and run the stateless
-    /// handshake (challenge → proof). Retries the challenge a few times
-    /// (a lost challenge or proof is healed by the retry; the server is
-    /// idempotent in it).
+    /// handshake (challenge → proof → the server's accept). Returns only
+    /// once the SERVER has shown it holds the session; every step is
+    /// re-sent on loss, and a handshake the server never completes ends
+    /// in `TimedOut` after `HANDSHAKE_DEADLINE`, 5 s (see the module docs,
+    /// "Handshake loss").
     pub async fn connect(addr: SocketAddr) -> std::io::Result<Self> {
+        Self::connect_within(addr, HANDSHAKE_DEADLINE).await
+    }
+
+    /// [`Self::connect`] with an explicit give-up bound (the tests' seam:
+    /// the give-up is exercised without waiting the full bound).
+    pub(super) async fn connect_within(
+        addr: SocketAddr,
+        within: Duration,
+    ) -> std::io::Result<Self> {
         let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
             .await
             .map_err(|e| std::io::Error::new(e.kind(), e.to_string()))?;
@@ -88,37 +106,11 @@ impl UdpClient {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let mut buf = vec![0u8; 2048];
-        let challenge_deadline = Instant::now() + Duration::from_secs(3);
-        let mut got_challenge = false;
-        while !got_challenge && Instant::now() < challenge_deadline {
-            let hello = encode_hello(nonce, 0);
-            sock.send_to(&hello, addr).await?;
-            match tokio::time::timeout(Duration::from_millis(500), sock.recv_from(&mut buf)).await {
-                Ok(Ok((n, from))) if from == addr && n >= 18 && buf[0] == KIND_HELLO => {
-                    let echoed = u64::from_le_bytes(buf[1..9].try_into().unwrap());
-                    if echoed == nonce {
-                        let cookie = u64::from_le_bytes(buf[9..17].try_into().unwrap());
-                        let proof = encode_hello(nonce, cookie);
-                        sock.send_to(&proof, addr).await?;
-                        got_challenge = true;
-                    }
-                }
-                Ok(Ok(_)) => {} // stray / wrong peer: ignore
-                Ok(Err(e)) => return Err(e),
-                Err(_) => continue, // no challenge yet: retry
-            }
-        }
-        if !got_challenge {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "rUDP handshake: no challenge within the deadline",
-            ));
-        }
-        Ok(Self {
+        let mut client = Self {
             sock,
             peer: addr,
-            established: true,
+            // Not until the server says so: `handshake` flips it.
+            established: false,
             in_expected: 1,
             in_oob: HashMap::new(),
             pending: VecDeque::new(),
@@ -130,10 +122,11 @@ impl UdpClient {
             buf: vec![0u8; 2048],
             raw: None,
             reasm: Reassembly::default(),
-        })
+        };
+        client.handshake(nonce, within).await?;
+        Ok(client)
     }
 
-    /// The server's address.
     /// One-shot liveness probe (the UDP readiness check a supervisor or
     /// orchestrator can use in place of a TCP connect probe — UDP has no
     /// SYN to probe with): send a challenge request on `sock` and wait up
@@ -159,6 +152,7 @@ impl UdpClient {
             })
     }
 
+    /// The server's address.
     pub fn peer(&self) -> SocketAddr {
         self.peer
     }
@@ -226,6 +220,11 @@ impl UdpClient {
         if let Some(f) = self.pending.pop_front() {
             return Ok(Some(f));
         }
+        // A game-band frame the handshake received in place of the
+        // server's accept (see `handshake`): it is not lost either.
+        if let Some(raw) = self.raw.take() {
+            return Ok(Some(raw));
+        }
         let deadline = Instant::now() + wait;
         loop {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -271,6 +270,7 @@ impl UdpClient {
     }
 }
 
+mod handshake;
 mod io;
 
 #[cfg(test)]

@@ -16,16 +16,26 @@ impl super::Demux {
     pub(super) fn handle_hello(&mut self, peer: SocketAddr) {
         let nonce = u64::from_le_bytes(self.buf[1..9].try_into().unwrap());
         let cookie = u64::from_le_bytes(self.buf[9..17].try_into().unwrap());
-        // An established peer must not re-handshake: ignore (its session
-        // is keyed by this address; NAT rebind means a NEW address).
-        if self.sessions.contains_key(&peer) {
-            return;
-        }
         // The cookie's time term, read from the clock HERE (not stored,
         // not ticked by anyone): the challenge is minted for the current
         // slot, and a proof is accepted for the current slot or the
         // previous one. That is what makes a captured proof expire.
         let slot = self.clock.slot();
+        // An established peer never re-handshakes (its session is keyed
+        // by this address; NAT rebind means a NEW address). Its valid
+        // proof again is a RE-SEND — its first accept, or the proof's
+        // first copy, was lost — so it is answered with the session's
+        // accept again and nothing else: no second session, no second
+        // `ConnectionId`. Anything else from it (a challenge request, a
+        // proof that does not verify) is ignored, as before.
+        if let Some(s) = self.sessions.get(&peer) {
+            if cookie != 0 && self.cookie.verify(nonce, peer, cookie, slot) {
+                let next = s.in_expected;
+                self.proofs_reanswered += 1;
+                self.send_ack(peer, next);
+            }
+            return;
+        }
         if cookie == 0 {
             // Challenge request: answer with the proof (stateless — no
             // state allocated before the proof; the response is the same
@@ -78,13 +88,20 @@ impl super::Demux {
                     .with_inbox(endpoint_in_tx, in_rx)
                     .with_outbox(out_tx, out_rx);
             match self.end_tx.try_send(endpoint) {
-                Ok(()) => {}
+                Ok(()) => {
+                    // The accept: the session's cumulative ACK, "send me
+                    // seq 1". It is what the client waits for before it
+                    // counts itself connected (module docs, "Handshake
+                    // loss"); 5 bytes for an 18-byte proof that only the
+                    // owner of this return path could produce.
+                    self.send_ack(peer, 1);
+                }
                 Err(crossbeam_channel::TrySendError::Full(_)) => {
                     // The accept loop is far behind (pathological burst):
                     // the session is torn down (the dropped endpoint
-                    // carries the inbox; nothing leaks). The client's AUTH
-                    // retransmits find no session; it re-handshakes after
-                    // its timeout.
+                    // carries the inbox; nothing leaks). No accept went
+                    // out, so the client re-sends its proof, and a re-send
+                    // that finds room establishes the session afresh.
                     self.endpoints_dropped += 1;
                     self.remove_session(peer);
                     warn!(%peer, "rUDP: endpoint channel full; session dropped");
