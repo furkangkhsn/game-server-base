@@ -1947,9 +1947,9 @@ gidiyor — gürültü içinde.
 ### T sonucu — takım odasında delta (2026-09-25)
 
 **Tamamlandı** (`kit/t-team-delta`, `6dcdf27..`; BACKLOG §1 satır 5).
-Üç kod commit'i, her biri kendi başına yeşil: `d55a44a` (one-shot
-private full çerçeve yazıcısı ortak), `ec1d9bd` (ortak küme defteri +
-`TeamRoom::with_delta`), `fa0a384` (arena delta modunda). `gsb-core`
+Üç kod commit'i, her biri kendi başına yeşil: `c1ae42e` (one-shot
+private full çerçeve yazıcısı ortak), `3e5054d` (ortak küme defteri +
+`TeamRoom::with_delta`), `14cb51c` (arena delta modunda). `gsb-core`
 değişmedi; `ClientView` ve hiçbir istemci değişmedi.
 
 **Ne.** `TeamRoom::with_delta()` takım sisi odasının snapshot'larını AOI

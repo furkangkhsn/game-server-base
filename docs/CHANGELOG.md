@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## T turu — takım odasında delta (`kit/t-team-delta`)
+
+- **Kit:** `TeamRoom::with_delta` — takım sisi odası AOI'nin zarfı ve
+  istemci kurallarıyla delta gönderebiliyor: takım başına `removed`
+  (görünümden çıkan wire id'ler) + upsert (giren ya da wire değeri
+  değişen kayıtlar), takım başına bir kez kodlanır; taze takıma,
+  keep-alive'da ve baseline'ı olmayan üyeye (oynayan takıma katılım,
+  resume, takım değişimi) one-shot full. `cell_exits` yok (görüş kümesi
+  hücre birleşimi değil; bir hücre takım görüşüne yarı girebilir).
+  Delta son GÖNDERİLENE göre (önceki tick'e değil). `ClientView` ve
+  istemciler değişmedi. Varsayılan full mod bayt bayt aynı (eski
+  kodlayıcıya karşı rastgele koşu + bir literal kare kilitli).
+- **Ortak motor:** `common::SetLedger` (küme içerikli delta defteri) ve
+  `common::Baselines`; üç delta odasının one-shot private full karesi
+  tek yazıcı (`common::emit_private_full` — AOI ve sharded × spatial'daki
+  kopyalar kalktı, bayt birebir). `all`/`pvs` adopsiyonu artık oda başına
+  ~30 satır (BACKLOG A1).
+- **Arena:** delta modunda (turun kasıtlı wire değişikliği).
+- **Bulgu — kazanç küçük:** A/B (dönüşümlü, yük 19–46): bağlantı başı
+  çıkış 200'de −%10, 500'de −%10, orkestre 1000'de −%9,5; rUDP 500'de
+  parçalanan mesaj −%0,7. Görünür birimlerin ~%85–90'ı her tick
+  santimetre konumunu değiştiriyor → kayıt başına delta neredeyse her
+  kaydı yeniden yolluyor (yarısı duran kit koşusunda delta baytı
+  full'un %38'i). Daha fazlası değer düzeyinde delta ister (BACKLOG
+  A22). İstemci CPU'su orkestre 1000'de +%15 (delta uygulaması).
+- Testler 722 → 740 (+18; rastgele 900 tick'lik yakınsama testi dahil).
+  Ajanın 17 mutasyonu yakalandı; ebeveynin bağımsız mutasyonu (değişen
+  kaydı hiç yeniden göndermemek) 5 kit + 2 arena testini kırıyor.
+
 ## S turu — çekirdek kapanış kilitlenmesi (`core/s-shutdown-hang`)
 
 `ServerHandle::stop` artık her zaman bitiyor (DESIGN §9.1, BACKLOG §1

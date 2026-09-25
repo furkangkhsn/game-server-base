@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **722** (722/722 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **740** (740/740 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **S — çekirdek kapanış kilitlenmesi** (DESIGN §9.1) — registry
+Son tur: **T — takım odasında delta** (KIT-ARCHITECTURE §10 "T sonucu")
+— `TeamRoom::with_delta` + ortak küme defteri `common::SetLedger`; arena
+delta modunda. Kazanç hareketli arena yükünde ~%10 (bulgu: değer
+düzeyinde delta gerekir, BACKLOG A22).
+Önceki tur: **S — çekirdek kapanış kilitlenmesi** (DESIGN §9.1) — registry
 durdurma yollarında bir odanın posta kutusunu artık hiç beklemiyor
 (`post_stop`: `try_send`, doluysa spawn'lu gönderici); `stop()` stop
 anındaki kopuş fırtınasında asılı kalmıyor; destroy yolundaki aynı
