@@ -495,6 +495,54 @@ pub fn with_disconnect_policy(self, grace: Option<Duration>, to: ExpireTo) -> Se
 - **`with_diagonals`** (F2): 8-komşuluk; kenar komşuları listede önce
   (en kısa yollar eşitse rota kenarı seçer). Varsayılan 4-komşuluk.
 
+**C1 eklemeleri** (seam ötesi okuma + uzak-etki, CROSS-SHARD §4b; hepsi
+varsayılanlı — hiçbir mevcut oyun değişmedi, sharded olmayan odalar
+hiçbirini görmez):
+
+```rust
+pub trait ShardGame: Game {
+    // … Mig / capture / restore aynı …
+    fn ingest_seam(&mut self, w: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>,
+                   players: &HashMap<PlayerId, Entity>, seq: &mut InputSeq,
+                   seam: &mut Seam<'_, '_, Wire<Self>>) { /* ingest */ }
+    fn systems_seam(&mut self, w: &mut World, ctx: &TickCtx,
+                    seam: &mut Seam<'_, '_, Wire<Self>>) { /* systems */ }
+    fn apply_remote_effect(&mut self, w: &mut World, target: Entity,
+                           effect: &RemoteEffect, tick: u64,
+                           seam: &mut Seam<'_, '_, Wire<Self>>) -> EffectOutcome
+    { EffectOutcome::Rejected }
+}
+pub struct Seam<'s, 'a, V> { /* core CrossSeam + odanın wire→Entity tablosu */ }
+impl<V> Seam<'_, '_, V> {
+    pub fn local(&self, wire: u64) -> Option<Entity>;          // bu shard'ın entity'si
+    pub fn lent(&self, wire: u64) -> Option<Lent<'_, V>>;      // komşunun ödünç kaydı (yerel değilse)
+    pub fn lent_iter(&self) -> impl Iterator<Item = Lent<'_, V>>;
+    pub fn tick(&self) -> u64;
+    pub fn emit(&mut self, target: u64, source: u64, payload: Bytes)
+        -> Result<EffectId, EmitRefused>;                      // yerel hedefe `Local`
+}
+```
+
+- **Neden `ShardGame`'de ve varsayılanlı:** yalnız sharded odalar çağırır
+  (`ShardGame`'in kendi gerekçesi, §4.6 sapma 4); varsayılanlar düz
+  kancalara düşer, yani demo/arena/fikstür aynı kaldı. Elenen:
+  `TickCtx`'e alan eklemek (tüm odaların ve bayt-sabitleme testinin —
+  `kit_wire.rs` — struct literal'lerini kırar, sharded olmayan odaya
+  anlamsız bir alan taşır); `World` kaynağı olarak koymak (ödünç görünüm
+  aktörün alanı, kopyalamadan kaynağa konamaz).
+- **Sahip kazanır:** `lent`/`lent_iter` odanın sahip-olunan wire'larını
+  atlar (snapshot'taki own-wins filtresinin aynısı); `emit` yerel hedefi
+  reddeder — yerel entity doğrudan yazılır.
+- **`apply_remote_effect`:** kit `effect.target`'ı entity'ye çözer
+  (canlı entity yoksa çekirdeğe `NoTarget`) ve kancayı değişim-penceresi
+  koruması içinde çağırır; efektin yazımları/despawn'ları `update`'ten
+  önce düşer, kirli geçiş ve silinen-tampon süpürmesi onları normal oyun
+  yazımı gibi alır.
+- Çekirdek tarafı (`gsb_core::shard`): `ShardLogic::{ingest_seam,
+  update_seam, apply_remote_effect}` (varsayılanlı), `CrossSeam`,
+  `Lent`, `RemoteEffect`, `EffectId`, `EffectOutcome`, `EmitRefused`,
+  test/araç için `SeamStage`.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):

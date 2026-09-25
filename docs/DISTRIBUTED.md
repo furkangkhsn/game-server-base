@@ -96,6 +96,20 @@ tasarlandı — §4).
   - Rota: hedef kimliği başka shard'a geçtiyse **forwarding** — eski
     sahip yeni sahibe yönlendirir (zincir derinliği migrasyon başına
     sınırlı) ya da registry ownership dizisine sorar (Faz kararı).
+  - **Uygulandı (C1, CROSS-SHARD §4b):** `ShardMsg::RemoteEffect` —
+    `ShardLink`'in taşıdığı YENİ mesaj. Rota forwarding (eski sahip,
+    Migrate'i kuyruğa soktuğu anda `wire → yeni sahip` kaydı tutar, TTL
+    11 tick, ≤ 3 atlama); registry'ye sorma elendi (sıcak yolda registry).
+    Sapma: "yalnız gördüğünden yeniyi uygula" yerine köken-shard başına
+    KAYAN PENCERE — yönlendirilen/yeniden denenen gerçek efekt daha
+    yenisinden sonra gelebilir. Tam kanalda sınırlı yeniden deneme (bir
+    sonraki tick, yaş tavanı 7 tick).
+  - **Gelecek codec:** zarf yalnız tamsayılardır (`target`, `source`,
+    `EffectId { origin, epoch, seq }`, `at_tick`, `hops`), yük opak
+    `Bytes`'tır — bu mesajın codec'i Migrate.State / BorderRecord'un
+    aksine ÇEKİRDEĞE aittir (oyun tipi yok; §4b ilkesi yükün codec'ini
+    zaten oyuna vermiş durumda). Ipc/Net link'i bunu kapsamalı; ağda
+    at-least-once teslimde dedup penceresi zaten hazır.
 
 ## 4b. Serileştirme sahipliği: tipler logic'te, codec de logic'te
 

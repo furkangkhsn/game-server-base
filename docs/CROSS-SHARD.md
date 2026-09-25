@@ -1,6 +1,7 @@
 # gsb: Cross-Shard Etkileşim ve Border Paylaşım Tasarımı
 
-> Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi). §2–§5 etkileşim
+> Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi); §2–§4'ün
+> uzak-etki kısmı UYGULANDI (§4b). §2–§5 etkileşim
 > desenleridir; §6–§8 border paylaşımının delta'ya evrimi ve ölçüm planıdır
 > (ölçüm turu yürütülüyor). Uygulama turları bu dokümanı sözleşme alır.
 
@@ -66,6 +67,131 @@ Melee'nin sniper'dan farkı **sürekli ve çift yönlü** olması. Katmanlar:
 
 Elenen alternatif: dağıtılmış kilit/joint-authority çözümleri — aktör
 modeline aykırı; tasarım seviyesinde de kaçınılır.
+
+## 4b. C1 sonucu — seam ötesi okuma ve uzak-etki (branch `xseam/c1-remote-effect`)
+
+> Buradaki "C1", seam ötesi etkileşim paketinin ilk turudur; §7'deki
+> C1/C2 ölçüm koşularıyla ilgisi yoktur.
+
+§2'nin uzak-etki primitifi ve §4'ün 1–3. katmanları uygulandı; 4. katman
+(crystallization) sonraki turdur. Kod: `gsb-core/src/shard/{effect,seam}.rs`,
+`shard/actor/tick/effects.rs`; kit: `gsb-kit/src/sharded/seam.rs`;
+MMO: `gsb-demo-mmo/src/{combat,effect}.rs`.
+
+**Parça 1 — ödünç kayıtlar oynanışa açık.** Sharded tick kancaları
+(`ShardLogic::ingest_seam` / `update_seam`, varsayılanları `ingest` /
+`update`) bir `CrossSeam<'_, Strip>` alır: aktörün komşu-başına
+görünümleri YERİNDE okunur (tick başına kopya yok), karantinadaki görünüm
+hariç — yani bu tick'in snapshot'ına katlanan kümenin aynısı. Bayatlık
+≤ 1 tick (kayıt, borç verenin önceki — ya da gövdesi önce koştuysa bu —
+tick'inin sonundaki durumu). `lent(wire)` kaydı ve BORÇ VERENİ
+(`Lent { wire, lender, state }`) döndürür; arama sırası borç veren
+indeksine göre artandır (deterministik). Kit'in `Seam`'i bunu odanın
+sahip-olunan wire tablosuyla birleştirir: `local(wire)` yerel entity,
+`lent`/`lent_iter` yerel olanı ATLAR (sahip kazanır — yeni göç etmiş
+entity bir tick boyunca eski shard'ından da ödünç görünür). "p'ye r
+mesafedeki her şey" = world sorgusu + `lent_iter().filter(..)`;
+birleşik kopya kurulmaz.
+
+**Parça 2 — `RemoteEffect`.** Katman: YENİ bir `ShardMsg` varyantı
+(`NeighborMsg` zaten `ShardMsg`'in takma adı), yani Migrate/Border'ın
+bindiği aynı `ShardLink` FIFO'su — yeni kanal yok, yeni await yok.
+
+```
+ShardMsg::RemoteEffect(RemoteEffect {
+    target: u64,            // hedefin wire kimliği
+    source: u64,            // kaynak entity'nin wire kimliği (atıf; 0 = yok)
+    id: EffectId { origin: usize, epoch: u64, seq: u64 },  // idempotency anahtarı
+    at_tick: u64,           // kaynağın tick'i (hizalama + bayatlık damgası)
+    hops: u8,               // yönlendirme sayısı
+    payload: Bytes,         // oyunun baytları, çekirdek okumaz
+})
+```
+
+- **Yayım:** `CrossSeam::emit(target, source, payload)` hedefi ÖDÜNÇ
+  VEREN komşuya yönlendirir, kimliği çekirdek basar. Ödünç verilmiyorsa
+  `NotLent`, tick bütçesi (`EFFECT_BUDGET_PER_TICK` = 128) dolduysa
+  `Budget` — reddetme eşzamanlı, arkadan düşürme yok. Kit'in `Seam`'i
+  yerel hedefe `Local` der (doğrudan yazılır). Gönderim faz 3b'de
+  (sistemlerden sonra).
+- **Uygulama:** CONTROL drain'inin SONUNDA (faz 0d — drain'deki bir
+  Migrate hedefi önce kurar; girdi ve detach sweep'inden önce, yani veto
+  bu tick'in darbesini görür), kaynağın `at_tick`'inden bir sonraki
+  tick'te (Migrate'in kurulum kapısının aynı hizalaması: erken gelen
+  bekler), `(source, origin, seq)` sırasıyla.
+- **Idempotency ve sınırlı dedup:** köken-shard başına sabit boyutlu
+  kayan pencere (`EFFECT_WINDOW` = bütçe × (yaş tavanı + 1) = 1024 seq,
+  256 B + yüksek-su işareti). Kanıt: köken tick başına ≤ bütçe kadar seq
+  basar, `EFFECT_MAX_AGE_TICKS` (7) aşan hiçbir efekt kabul edilmez —
+  kabul edilebilir her efektin seq'i penceredeki en yüksekten
+  `bütçe × (yaş + 1)` içinde kalır; gerçek bir efekt pencereden asla
+  düşmez, durum `shard_count` pencere, trafik ne olursa olsun.
+- **Tam kanal politikası: sonraki tick yeniden dene, sınırlı.** Darbe
+  oynanıştır (sessizce düşen darbe hatadır): dolu komşu kutusu efekti
+  `EFFECT_RETRY_CAP` (1024) kapasiteli tampona alır, damgası değişmeden
+  sonraki tick'te önce o gider; yaş tavanında düşer. Taşma ve kapalı
+  link düşürür ve sayar. Elenen: düşür+say (tek tick'lik geçici tıkanma
+  darbe kaybettirir); sınırsız kuyruk (yasak); bloklayan gönderim
+  (tick gövdesinde await yasak).
+- **Göç etmiş hedef: YÖNLENDİRME.** Göç eden shard, Migrate başarıyla
+  kuyruğa girdiğinde `wire → (yeni sahip, bitiş tick'i)` yazar
+  (`EFFECT_FORWARD_TTL_TICKS` = 11); bu wire'a gelen efekt yeni sahibe
+  iletilir (`hops` ≤ 3) — kayıt dünyasında BİR tick daha duran "ölümlü
+  kopyaya" asla uygulanmaz; entity geri gelirse kayıt silinir. TTL
+  sonrası gelen yetim sayılır. Elenen: düşür+say (her göç sınırında
+  darbe kaybı); broadcast + epoch guard (aşağıda sapma 3).
+- **Atıf:** `source` zarfın içinde; otorite (MMO) kill kredisini ona
+  yazar.
+- **Anti-cheat yerelliği:** menzil saldıranın shard'ında ödünç kayda
+  karşı; MMO otoritesi politika olarak yeniden denetler (bayatlık 3
+  tick, saldıranı gördüğü yerden menzil + 2 m pay, hasar tavanı).
+- **Sayaçlar:** shard başına kümülatif `EffectStats`, ~1 sn'de bir
+  değiştiyse `remote_effect_summary` info satırı (metrik raporuna
+  girmedi — `RoomReport`'un fold kuralı gerekmedi).
+
+**§2–§4'e göre sapmalar (gerekçeli):**
+
+1. *`target_epoch`* ayrı bir hedef-epoch'u değil, efekt kimliğindeki
+   ODA ENKARNASYONU epoch'udur (registry'nin kurulum nesli). Wire
+   kimlikleri bir enkarnasyon boyunca asla yeniden kullanılmaz (aralık
+   bölümleme + göçte kimlik korunur), yani hedef kimliği tam olarak
+   `(wire, epoch)`; hedef-başına bir epoch hiç bilgi taşımazdı.
+2. *Atıf "payload içinde"* değil ZARFTA: çekirdek §4.3 sıralamasını onunla
+   yapar, oyunun codec'i olmadan okunabilmeli.
+3. *Rota: "shard bilinmiyorsa broadcast + epoch-guard tek-kabul"*
+   uygulanmadı. Hedefin shard'ı hep bilinir (borç veren); göç etmişse
+   eski sahip iletir (DISTRIBUTED §4 EFFECT'in "forwarding"i). Broadcast
+   elendi: link'ler yalnız komşular arasında (komşu olmayan yeni sahibe
+   ulaşamaz), 128'lik paylaşımlı kutuya N kat baskı, ve tek-kabul yine de
+   "ölümlü kopya" bilgisini (pending-out) gerektirirdi.
+4. *§4.3 anahtarı `(attacker_id, seq)`* → `(source, origin, seq)`: seq
+   köken-başına olduğu için köken anahtarı tamamlar. Ek olarak BİR TİCK
+   HİZALAMA kapısı: shard tick gövdeleri iç içe geçtiğinden, kapı olmadan
+   aynı köken tick'inin efektleri planlama şansıyla iki tick'e bölünürdü;
+   sıralama ancak kapıyla "her koşuda aynı" olur (sağlıklı zarf içinde;
+   bir tick geride kalan shard'da Migrate'in bilinen bozulmasıyla aynı).
+5. *DISTRIBUTED §4 "yalnız gördüğünden yeniyi uygula, eskiyi at"*
+   (yüksek-su) değil, KAYAN PENCERE: yönlendirilen ya da yeniden denenen
+   gerçek bir efekt daha yeni bir efektten SONRA gelebilir; yüksek-su onu
+   düşürürdü. Hedef-başına değil köken-başına: durum sabit.
+6. *Bayatlık:* K oyunundur (MMO: 3 tick) ve damga taşınır; çekirdek
+   ayrıca bir TAŞIMA tavanı uygular (7 tick) — dedup penceresinin sınırı
+   ondan türetilir.
+7. *Katman 1 "saldırı anında güncel borrow"* uygulanmadı (≤1 tick
+   bayatlık kabul; MMO'nun menzil payı bunu karşılıyor).
+8. *Katman 4 (crystallization)* sonraki tur.
+
+MMO test yatağı (gerçek dört shard aktörü): seam ötesi mob'a vuruş
+sahibinde uygulanır, ikinci vuruş öldürür, kredi saldırana, mob iki
+taraftan da kaybolur; aynı efektin iki teslimi bir kez uygulanır; sahte
+hasar tavanlanır, bayat/çözülemez/menzil dışı reddedilir; iki farklı
+shard'dan aynı tick'teki vuruşlarda düşük wire her zaman öldürür;
+karşılıklı düelloda iki oyuncu aynı tick'te düşer ve iki oda aynı kaydı
+üretir; park edilmiş karaktere seam ötesinden vurulunca kendi shard'ı onu
+savaşta işaretler, çıkış vetosu bekletir. Yük üretecinin MMO botu
+waystone çevresinde dolaştığından (seam'lerden 256 m) yükte seam ötesi
+dövüş olmuyor; A/B yeni fazların boşta maliyetini ölçer (gürültü
+içinde).
 
 ## 5. Ortak fizik (tutma/itme) — tasarım uyarısı
 
@@ -292,11 +418,14 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 | Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
 | team × sharded (bu bölüm) | 🔜 Tasarım hazır — taze oturumda uygulanır |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
+| Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
+| Crystallization (§4 katman 4) | 🔜 sonraki tur |
 
 ## 8. NOT-DONE
 
-- Cross-seam combat/interaction mesaj tiplerinin implementasyonu (§2–§4
-  tasarım; uygulama ayrı tur)
+- ~~Cross-seam combat/interaction mesaj tiplerinin implementasyonu~~ —
+  C1'de uygulandı (§4b); kalan: crystallization (§4 katman 4) ve
+  saldırı-anında güncel borrow (katman 1'in seçeneği)
 - Ortak fizik uzlaşması (§5)
 - Adaptif border genişliği (ölçüm öncesi optimizasyon)
 - Dağıtımlı (multi-process) shard topolojisi — ufuk katmanı
