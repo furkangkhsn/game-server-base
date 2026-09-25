@@ -166,6 +166,10 @@ where
                         // plus the ShardGroup member slot the detached
                         // row holds on the grid.
                         .with_registry(self.self_mailbox.clone())
+                        // Remote effects carry this install's generation:
+                        // a wire id names one entity only within one
+                        // incarnation of the room.
+                        .with_effect_epoch(generation)
                         .run(),
                     );
                     Self::spawn_room_watcher(

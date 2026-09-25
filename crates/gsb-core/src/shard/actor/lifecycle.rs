@@ -78,6 +78,7 @@ where
         // every tick's 0b phase, so a full channel only parks a worker
         // until the next tick, never the shard.
         let (completions_tx, completions) = mpsc::channel(config.max_pending_requests.max(1));
+        let effects = EffectBook::new(index, logic.shard_count());
         Self {
             config,
             index,
@@ -101,6 +102,8 @@ where
                 .collect(),
             exchange_override: None,
             border: HashMap::new(),
+            lenders: Vec::new(),
+            effects,
             export: HashMap::new(),
             pending_out: Vec::new(),
             deferred: VecDeque::new(),
@@ -133,6 +136,16 @@ where
     /// argument limit.
     pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
         self.registry = Some(registry);
+        self
+    }
+
+    /// Stamp this shard's remote effects with the room incarnation
+    /// `epoch` (the registry's install generation — every shard of one
+    /// install gets the same). Effects of another epoch are refused on
+    /// arrival. A builder like [`Self::with_registry`]: the direct-drive
+    /// rigs keep epoch 0.
+    pub fn with_effect_epoch(mut self, epoch: u64) -> Self {
+        self.effects.out.epoch = epoch;
         self
     }
 
@@ -274,6 +287,7 @@ where
                     "border_exchange_summary"
                 );
             }
+            self.log_effect_summary();
         }
         keep
     }

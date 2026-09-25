@@ -167,6 +167,13 @@ pub enum ShardMsg<S, B> {
     /// is the natural one (the Full is generated after everything already
     /// queued was sent).
     ResyncRequest { from: usize },
+    /// An effect on an entity this shard owns — or owned until a recent
+    /// migration, in which case it is forwarded to the new owner
+    /// (`docs/CROSS-SHARD.md` §2; the delivery class EFFECT of
+    /// `docs/DISTRIBUTED.md` §4). Applied in CONTROL, at the tick after
+    /// the one it was emitted in, in `(source, origin, seq)` order;
+    /// idempotent on its [`EffectId`].
+    RemoteEffect(RemoteEffect),
     /// Stop the shard (drops the world).
     Shutdown,
 }

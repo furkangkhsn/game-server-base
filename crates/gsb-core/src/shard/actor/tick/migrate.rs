@@ -120,6 +120,14 @@ where
                             self.drop_conn_request_state(mc);
                         }
                         self.pending_out.push((mig.wire, t.tick + 1));
+                        // Remember where it went: an effect a neighbour
+                        // aims at the copy it still sees lent from here
+                        // is handed on, not lost (CROSS-SHARD §2 routing;
+                        // this is also what keeps an effect off the doomed
+                        // copy that stays in this world until next tick).
+                        self.effects
+                            .forwarded
+                            .insert(mig.wire, (b, t.tick + EFFECT_FORWARD_TTL_TICKS));
                     }
                     // The link refused and handed the message back — the
                     // same value the raw TrySendError used to carry.

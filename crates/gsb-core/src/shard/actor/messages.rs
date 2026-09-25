@@ -302,6 +302,9 @@ where
                     state,
                     player.as_ref().map(|p| p.player),
                 );
+                // Back home: this shard is the entity's authority again,
+                // so an effect for it must no longer be handed on.
+                self.effects.forwarded.remove(&wire);
                 if let Some(p) = player {
                     // The player moves here: the out channel and the
                     // action inbox were MOVED with the message (ownership
@@ -363,6 +366,12 @@ where
                 // apply" cost a wire deployment would pay on top of its
                 // deserialization. Accounted through the same helpers as
                 // the sender for comparability.
+                // First exchange from this neighbour: it joins the
+                // cross-seam view's lookup order (ascending, so the
+                // answer to "who lends this wire" is deterministic).
+                if let Err(at) = self.lenders.binary_search(&from) {
+                    self.lenders.insert(at, from);
+                }
                 let tr = Instant::now();
                 let s = &mut self.bstats;
                 match exchange {
@@ -443,6 +452,15 @@ where
                 let st = self.export.entry(from).or_default();
                 st.needs_full = true;
                 st.resync_requested = true;
+                true
+            }
+            ShardMsg::RemoteEffect(effect) => {
+                // Collected, not applied: the whole CONTROL drain lands
+                // first (a Migrate installing the target may sit behind
+                // it in the FIFO), then `phase_effects_in` applies the
+                // due ones in their deterministic order.
+                self.effects.stats.received += 1;
+                self.effects.pending.push(effect);
                 true
             }
             ShardMsg::Shutdown => false,

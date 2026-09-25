@@ -40,6 +40,7 @@ use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 mod border;
+mod effects;
 mod hold;
 mod idle;
 mod keepalive;
@@ -75,6 +76,15 @@ fn rec(wire: u64, x: i32, y: i32) -> BorderRecord<TStrip> {
 #[derive(Default, Debug, Clone)]
 struct TWorld {
     ents: HashMap<u64, (f32, f32, i8)>,
+    // -- The cross-seam probes (`tests/effects.rs`). --------------------
+    /// Effects the logic applied, in application order.
+    applied: Vec<RemoteEffect>,
+    /// `(target, source)` pairs the next `update_seam` emits.
+    script: Vec<(u64, u64)>,
+    /// What those emissions answered.
+    emits: Vec<Result<EffectId, EmitRefused>>,
+    /// What the last `update_seam` saw lent: `(wire, lender)`, sorted.
+    seen_lent: Vec<(u64, usize)>,
 }
 
 /// The migration state (the demo's shape).
@@ -296,5 +306,28 @@ impl ShardLogic<TWorld> for TLogic {
     }
     fn own_wires(&self, w: &TWorld) -> Vec<u64> {
         w.ents.keys().copied().collect()
+    }
+    fn update_seam(&mut self, w: &mut TWorld, ctx: &TickCtx, seam: &mut CrossSeam<'_, TStrip>) {
+        self.update(w, ctx);
+        let mut seen: Vec<(u64, usize)> = seam.iter().map(|l| (l.wire, l.lender)).collect();
+        seen.sort_unstable();
+        w.seen_lent = seen;
+        for (target, source) in std::mem::take(&mut w.script) {
+            let answer = seam.emit(target, source, bytes::Bytes::from_static(b"hit"));
+            w.emits.push(answer);
+        }
+    }
+    fn apply_remote_effect(
+        &mut self,
+        w: &mut TWorld,
+        _tick: u64,
+        effect: &RemoteEffect,
+        _seam: &mut CrossSeam<'_, TStrip>,
+    ) -> EffectOutcome {
+        if !w.ents.contains_key(&effect.target) {
+            return EffectOutcome::NoTarget;
+        }
+        w.applied.push(effect.clone());
+        EffectOutcome::Applied
     }
 }

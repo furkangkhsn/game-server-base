@@ -272,9 +272,11 @@
 
 mod actor;
 mod border;
+mod effect;
 mod link;
 mod logic;
 mod msg;
+mod seam;
 
 #[cfg(test)]
 mod tests;
@@ -282,9 +284,15 @@ mod tests;
 pub use actor::ShardActor;
 pub(crate) use border::*;
 pub use border::{BorderExchange, BorderRecord};
+pub(crate) use effect::*;
+pub use effect::{
+    EFFECT_BUDGET_PER_TICK, EFFECT_FORWARD_TTL_TICKS, EFFECT_MAX_AGE_TICKS, EFFECT_MAX_HOPS,
+    EFFECT_RETRY_CAP, EFFECT_WINDOW, EffectId, EffectOutcome, EmitRefused, RemoteEffect,
+};
 pub(crate) use link::*;
 pub use logic::ShardLogic;
 pub use msg::{Migrating, PlayerMigration, ResumeReply, ShardMsg};
+pub use seam::{CrossSeam, Lent, SeamStage};
 
 /// Identities per shard in the wire-id range partitioning (see module
 /// docs, "Wire identity"): 2^20 ≈ 100× the measured 10k single-room wall

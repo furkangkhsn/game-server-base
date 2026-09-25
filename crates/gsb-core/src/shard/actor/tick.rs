@@ -18,6 +18,7 @@ use crate::shard::*;
 mod border;
 mod completions;
 mod detach;
+mod effects;
 mod idle;
 mod migrate;
 mod requests;
@@ -109,6 +110,12 @@ where
                 return false;
             }
         }
+
+        // -- Phase 0d — EFFECTS IN: the remote effects the drain collected
+        //    apply now — after every Migrate of the drain installed its
+        //    entity, before this tick's input and the detach sweep (so a
+        //    cross-seam hit is in the world the combat veto reads).
+        self.phase_effects_in(t.tick);
 
         self.phase_completions();
 
@@ -252,12 +259,25 @@ where
             idle: IdleView::new(&idle, t.at),
         };
 
-        // -- Phase 2b — CONVERT.
-        self.logic.ingest(&mut self.world, &ctx, &mut actions);
+        // -- Phase 2b — CONVERT, with the cross-seam view (the borrowed
+        //    strip read in place, the effect outbox — CROSS-SHARD §2).
+        self.logic.ingest_seam(
+            &mut self.world,
+            &ctx,
+            &mut actions,
+            &mut CrossSeam::new(&self.border, &self.lenders, &mut self.effects.out),
+        );
 
         self.phase_requests(&requests, &ctx);
-        // -- Phase 3 — SYSTEMS.
-        self.logic.update(&mut self.world, &ctx);
+        // -- Phase 3 — SYSTEMS (same view).
+        self.logic.update_seam(
+            &mut self.world,
+            &ctx,
+            &mut CrossSeam::new(&self.border, &self.lenders, &mut self.effects.out),
+        );
+        // -- Phase 3b — EFFECTS OUT: what the hooks emitted (and what
+        //    phase 0d forwarded) leaves for its authority.
+        self.phase_effects_out(t.tick);
 
         self.phase_migrate(t);
 

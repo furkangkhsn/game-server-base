@@ -119,6 +119,16 @@ pub struct ShardActor<W, G, St, Sp> {
     /// delta protocol): persistent records built incrementally from
     /// Fulls/Deltas, with the expected-sequence guard per neighbor.
     pub(in crate::shard) border: HashMap<usize, NeighborView<Sp>>,
+    /// The keys of `border`, ascending — the deterministic lookup order
+    /// of the cross-seam view ([`CrossSeam`]). Grows once per neighbour
+    /// on its first exchange; never shrinks (a neighbour is a topology
+    /// fact).
+    pub(in crate::shard) lenders: Vec<usize>,
+    /// The remote-effect state (`docs/CROSS-SHARD.md` §2): the outbox
+    /// the tick hooks emit into, received effects awaiting their apply
+    /// tick, the retry buffer, the forwarding table, the per-origin
+    /// duplicate windows. Every table bounded — see [`EffectBook`].
+    pub(in crate::shard) effects: EffectBook,
     /// The SENDER side of the delta protocol: what each neighbor last
     /// accepted from us (ledger + seq + the force-Full flags). Created
     /// lazily on first export; a fresh actor starts empty, so a rebuilt

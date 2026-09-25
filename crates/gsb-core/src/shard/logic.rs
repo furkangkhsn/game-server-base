@@ -5,7 +5,7 @@
 use std::fmt::Debug;
 
 use crate::id::PlayerId;
-use crate::room::GameLogic;
+use crate::room::{Action, GameLogic, TickCtx};
 use crate::shard::*;
 
 /// Game-side behaviour of a SHARD actor: everything [`GameLogic`] (this
@@ -96,6 +96,59 @@ pub trait ShardLogic<W>: GameLogic<W> {
     /// stale borrowed copy of itself (module docs, "Boundary
     /// visibility"): when both are present, the own record wins.
     fn own_wires(&self, world: &W) -> Vec<u64>;
+
+    // -- The cross-seam surface (`docs/CROSS-SHARD.md` §2–§4). Every
+    //    method has a default, so a logic that never looks across the
+    //    seam implements nothing new; the single-room actor never calls
+    //    any of them. ----------------------------------------------------
+
+    /// Phase 2b on the sharded path: [`GameLogic::ingest`] with the
+    /// cross-seam view (read the borrowed strip, emit remote effects).
+    /// The actor calls THIS; the default forwards to `ingest`.
+    fn ingest_seam(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        _seam: &mut CrossSeam<'_, Self::Strip>,
+    ) {
+        self.ingest(world, ctx, actions);
+    }
+
+    /// Phase 3 on the sharded path: [`GameLogic::update`] with the
+    /// cross-seam view. The actor calls THIS; the default forwards to
+    /// `update`.
+    fn update_seam(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        _seam: &mut CrossSeam<'_, Self::Strip>,
+    ) {
+        self.update(world, ctx);
+    }
+
+    /// Apply one remote effect addressed to an entity of this shard
+    /// (CONTROL, after the drain, before any of this tick's input: the
+    /// core has already checked the epoch, the age envelope, the
+    /// duplicate window and the forwarding table; effects of one tick
+    /// arrive here in `(source, origin, seq)` order). `tick` is this
+    /// shard's tick — `tick - effect.at_tick` is the effect's age, for
+    /// the game's own staleness policy. The seam lets the authority
+    /// re-validate against the SOURCE's lent record (game policy) or
+    /// answer with an effect of its own.
+    ///
+    /// Answer [`EffectOutcome::NoTarget`] when `effect.target` is not an
+    /// entity of this world. Default: `NoTarget` — a logic that never
+    /// emits never receives.
+    fn apply_remote_effect(
+        &mut self,
+        _world: &mut W,
+        _tick: u64,
+        _effect: &RemoteEffect,
+        _seam: &mut CrossSeam<'_, Self::Strip>,
+    ) -> EffectOutcome {
+        EffectOutcome::NoTarget
+    }
 }
 
 // ---------------------------------------------------------------------
