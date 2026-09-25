@@ -73,7 +73,7 @@ clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 623 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 641 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -95,7 +95,9 @@ WebSocket door, `docs/SECURITY.md` §3.7).
 # grid, Planar's unit check, the disconnect policy and veto in every room, team chosen
 # at the spawn, required frame opcodes), demo record values through the kit rooms,
 # the 3D arena through the room actor (three-team fog, height, shared vision, movement,
-# input ack, arena mirror bytes), the 3D MMO through four shard actors (ground-plane AOI,
+# input ack, arena mirror bytes), the 3D MMO through four shard actors (ground-plane AOI, cross-seam
+# combat — a remote effect applied by the target's owner, once, in a fixed order,
+# with kill credit and the logout veto seeing the fight,
 # player / speed-less mob / teleport shard crossings, game-code despawn, park, logout
 # timer and logout bot, MMO mirror bytes, the kit design findings flipped to fixed).
 cargo test --workspace

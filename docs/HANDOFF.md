@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-623 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+641 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -139,6 +139,18 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
+
+**Cross-seam C1 tamam** (CROSS-SHARD §4b, CHANGELOG "Cross-seam C1
+turu"): sharded bir oyun seam'in ötesini `ShardGame::{ingest_seam,
+systems_seam}`'in `Seam`'i ile görür (`lent`/`lent_iter` ödünç kayıt,
+`local` kendi entity'si — own wins) ve yabancı entity'yi YALNIZ
+`Seam::emit` ile etkiler; otorite `apply_remote_effect`'te uygular.
+Yeni bir etki türü eklerken: doğrulamayı saldıranın shard'ında yap,
+yükü oyunun baytları olarak kodla, otoritede bayatlığı
+(`tick - effect.at_tick`) ve menzili politika olarak yeniden denetle.
+Çekirdeğin sabitleri (`EFFECT_*`) doğruluk parametresidir — dedup
+penceresinin sınırı bütçe ve yaş tavanından türetildi; birini
+değiştirirsen `EFFECT_WINDOW` kanıtını yeniden kur.
 
 **Oyun modülü G3 tamam** (`docs/GAME-MODULE.md` §5 "G3 sonucu"):
 loadgen'in oyuna özgü yarısı `loadgen/bot/`'ta — yeni bir oyun için bir
@@ -309,9 +321,9 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
    (registry-hub BYTE-ENCODED takım-export; RegistryMsg monomorfik
    kalır — generic'e çevirme ELENDİ; TTL sweep + fan-out + izolasyon
    kuralları dahil).
-5. **Cross-seam etkileşim paketi** — ROADMAP maddesindeki 3 parça:
-   borrowed-view gameplay erişimi · `ShardMsg::RemoteEffect`
-   primitifi · histeresizli crystallization tetikleyicisi.
+5. **Cross-seam etkileşim paketi** — 1-2. parçalar KAPANDI (C1:
+   borrowed-view erişimi, `ShardMsg::RemoteEffect`); kalan:
+   histeresizli crystallization tetikleyicisi.
 6. Tetikleyicili bekleyenler: NUMA ölçümü (numactl pinli/pinsiz),
    ortak DeltaSnapshotCodec adoptasyonu (all/team/pvs), Ipc/NetLink,
    QUIC rehome.
@@ -325,6 +337,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 623 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 641 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

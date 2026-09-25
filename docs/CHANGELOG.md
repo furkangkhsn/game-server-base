@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Cross-seam C1 turu — oynanış seam'in ötesini görüyor ve etkiliyor (`xseam/c1-remote-effect`)
+
+CROSS-SHARD §2–§4'ün uzak-etki kısmı uygulandı (tasarım + sekiz gerekçeli
+sapma: CROSS-SHARD §4b). `gsb-core` mesaj biçimli, minimal değişti;
+client wire baytları aynı.
+
+- **Ödünç kayıtlar oynanışa açık:** sharded tick kancaları
+  (`ShardLogic::ingest_seam`/`update_seam`, varsayılanlı) bir
+  `CrossSeam` alır — aktörün komşu görünümleri yerinde okunur (kopya
+  yok, karantina hariç, bayatlık ≤ 1 tick). Kit'in `Seam`'i sahip-olunan
+  wire'ları ayıklar (own wins); `ShardGame::{ingest_seam, systems_seam,
+  apply_remote_effect}` varsayılanlı — hiçbir mevcut oyun değişmedi.
+- **`ShardMsg::RemoteEffect`:** ödünç veren komşuya yönlenir; kaynağın
+  tick'i + 1'de, `(source, origin, seq)` sırasıyla uygulanır; köken
+  başına sabit kayan pencere ile idempotent (1024 seq; sınır bütçe ×
+  yaş tavanından türetildi); göç etmiş hedef eski sahipten yeni sahibe
+  iletilir (TTL 11 tick, ≤ 3 atlama); dolu link'te sınırlı yeniden
+  deneme (sonraki tick, tavan 1024, yaş 7 tick). Epoch = registry kurulum
+  nesli.
+- **MMO:** `Attack` seam ötesine uzanıyor — saldıranın shard'ında menzil,
+  sahibinde politika (bayatlık 3 tick, menzil yeniden denetimi, hasar
+  tavanı); oyuncular da hedef (0 hp = en yakın waystone'da yenilgi);
+  vurulan oyuncuyu kendi shard'ı savaşta işaretler (çıkış vetosu seam
+  ötesi dövüşü görür); kill kredisi otoritenin savaş akışında. Aynı
+  tick'te iki taraftan gelen darbede sonuç, istemci sırasından bağımsız
+  olarak aynı.
+- **A/B (200 istemci, 3+ çift, `--write-stall-secs 0`):** demo sharded,
+  spatial × sharded ve MMO gürültü içinde (loadgen MMO botu seam'lerden
+  uzakta dolaştığı için ölçülen yalnız boştaki maliyet).
+
+Testler 623 → 641 (çekirdek 10, kit 3, MMO 5); 21 mutasyonun hepsi
+yakalandı. Ebeveynin bağımsız mutasyonu (tekrar kontrolünü kapatmak):
+çekirdekte 2, MMO'da 1 test kırılıyor.
+
 ## Oyun modülü G3 turu — loadgen her barındırılan oyunu sürüyor (`srv/g3-loadbot`)
 
 `gsb-loadgen --game demo|arena|mmo` (varsayılan `demo`): oyun başına bir

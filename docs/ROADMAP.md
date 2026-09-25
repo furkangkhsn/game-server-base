@@ -75,10 +75,14 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **623** (623/623 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **641** (641/641 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **oyun modülü G3** (`docs/GAME-MODULE.md` §5 "G3 sonucu") —
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **cross-seam C1** (CROSS-SHARD §4b) — oynanış seam'in
+ötesini görüyor (`CrossSeam`/`Seam`) ve `ShardMsg::RemoteEffect` ile
+etkiliyor (idempotent, sıralı, yönlendirmeli); MMO saldırısı seam
+ötesinde. Sıradaki: crystallization.
+Önceki tur: **oyun modülü G3** (`docs/GAME-MODULE.md` §5 "G3 sonucu") —
 loadgen `--game demo|arena|mmo`; demo botu birebir; arena ve MMO ilk yük
 tabanları (1000 istemci orkestre, 30 Hz, adım p50 1,6 ms / 0,29 ms).
 **Oyun modülü fazları (G1–G4) bitti.** Açık: G3-1 (arena full'ları rUDP
@@ -322,15 +326,13 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   invasif olmayan" seviyeye taşıyan üç parça (dış danışma diyaloğundan;
   tasarım notu CROSS-SHARD §2–§4 + bu madde):
 
-  1. **Ödünç kayıtların gameplay'e açılması** — borrowed view zaten
-     snapshot'a akıyor; aynı veriye hedefleme/sorgu amaçlı ergonomik
-     erişim (`local ∪ borrowed` birleştirici yardımcısı). Sistemler
-     sınır dibindeki yabancıları GÖRÜR hale gelir (~1 tick bayatlık
-     kabulüyle).
-  2. **`RemoteEffect` primitifi** — yabancı hedefe etki = otoriteye
-     idempotent mesaj (`ShardMsg::RemoteEffect { target_identity,
-     epoch, seq, payload }`). Vuruş/hasar/büyü hepsi buna biner;
-     anti-cheat atıcı shard'ında.
+  1. ~~**Ödünç kayıtların gameplay'e açılması**~~ — **KAPANDI (C1)**:
+     `CrossSeam` / kit `Seam` (`lent`, `lent_iter`, `local`), yerinde
+     okuma, own wins (CROSS-SHARD §4b).
+  2. ~~**`RemoteEffect` primitifi**~~ — **KAPANDI (C1)**: yönlendirme,
+     köken başına kayan dedup penceresi, sınırlı yeniden deneme,
+     `(source, origin, seq)` + bir tick hizalama; MMO `Attack` seam
+     ötesinde (CROSS-SHARD §4b, sekiz sapma gerekçeli).
   3. **Crystallization tetikleyicisi (histeresizli)** — hedef komşu
      shard'da ve K tick'tir etkileşim sürüyor → proaktif migrate;
      dövüş tek shard'a kristalleşir. Ping-pong'u önleme bandı dahil.
