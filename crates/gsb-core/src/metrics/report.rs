@@ -96,6 +96,15 @@ pub struct RoomReport {
     pub migrations_out: u64,
     pub migrations_in: u64,
     pub migrations_failed: u64,
+    /// The team exchange (shard rows only; see
+    /// [`RoomSample::team_exports`]).
+    pub team_exports: u64,
+    pub team_export_drops: u64,
+    pub team_export_records: u64,
+    pub team_over_cap: u64,
+    pub team_imports: u64,
+    pub team_import_records: u64,
+    pub team_expired: u64,
     /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
     /// (pending) requests, rejections split by cause (see
     /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and

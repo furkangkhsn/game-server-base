@@ -1,12 +1,12 @@
 //! The orchestrator's metrics wire (`codec.rs`) carries every shard's
-//! detach-ceiling, remote-effect and migration counters: a separate-
-//! process run folds the same numbers an in-process run does.
+//! detach-ceiling, remote-effect, migration and team-exchange counters:
+//! a separate-process run folds the same numbers an in-process run does.
 
 use super::*;
 use crate::codec::{decode_report, encode_report};
 
-/// The nine counters, as one comparable tuple.
-fn counters(r: &RoomReport) -> [u64; 9] {
+/// The sixteen counters, as one comparable tuple.
+fn counters(r: &RoomReport) -> [u64; 16] {
     [
         r.detach_forced,
         r.effects_applied,
@@ -17,6 +17,13 @@ fn counters(r: &RoomReport) -> [u64; 9] {
         r.migrations_out,
         r.migrations_in,
         r.migrations_failed,
+        r.team_exports,
+        r.team_export_drops,
+        r.team_export_records,
+        r.team_over_cap,
+        r.team_imports,
+        r.team_import_records,
+        r.team_expired,
     ]
 }
 

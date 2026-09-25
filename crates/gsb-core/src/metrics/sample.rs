@@ -131,6 +131,23 @@ pub struct RoomSample {
     pub migrations_out: u64,
     pub migrations_in: u64,
     pub migrations_failed: u64,
+    /// The team exchange (`docs/CROSS-SHARD.md` §8b; shard actors whose
+    /// logic exports team views — 0 otherwise), cumulative, from the
+    /// shard's team counters: exports queued on the registry's mailbox
+    /// and the records in them; exports a full or closed registry
+    /// mailbox refused (the next tick's export carries the set again);
+    /// records (and viewed teams) the core's per-message caps cut, on
+    /// the way out and on the way in; imports applied (the hub's relays
+    /// that arrived) and their records; source slots the TTL dropped.
+    /// The same numbers, per ~1 s window, make the
+    /// `team_exchange_summary` log line.
+    pub team_exports: u64,
+    pub team_export_drops: u64,
+    pub team_export_records: u64,
+    pub team_over_cap: u64,
+    pub team_imports: u64,
+    pub team_import_records: u64,
+    pub team_expired: u64,
     /// RPC (see `crate::rpc`): requests answered room-local in the same
     /// tick, cumulative.
     pub requests_local: u64,

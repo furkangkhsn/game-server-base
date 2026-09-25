@@ -205,3 +205,35 @@ fn imports_reach_the_logic_until_the_ttl_drops_them() {
     assert!(r.seen.try_recv().expect("hook").is_empty(), "expired");
     assert_eq!(r.actor.tstats.expired, 1);
 }
+
+/// The metrics sample carries the team counters CUMULATIVE — across the
+/// ~1 s window the `team_exchange_summary` line resets (W2 promoted them
+/// from that line alone): 40 ticks of one-record exports, one import.
+#[test]
+fn the_sample_carries_the_team_counters_across_the_log_window() {
+    let script = (0..40).map(|_| Some(export(&[1], &[(1, 10)]))).collect();
+    let mut r = rig(script, 64, true);
+    let import = TeamImport {
+        from: 1,
+        tick: 1,
+        records: vec![rec(1, 70), rec(1, 71), rec(1, 72)],
+    };
+    assert!(r.actor.handle_msg(ShardMsg::TeamImport(import), 1));
+    for t in 1..=40 {
+        assert!(r.actor.step(&tinfo(t)));
+    }
+    assert_eq!(exports(&mut r.registry).len(), 40);
+    assert!(r.actor.border_every <= 40, "a log window passed");
+    assert_eq!(r.actor.tstats_logged.exports, r.actor.border_every);
+    let s = r.actor.sample();
+    let got = [
+        s.team_exports,
+        s.team_export_records,
+        s.team_export_drops,
+        s.team_over_cap,
+        s.team_imports,
+        s.team_import_records,
+        s.team_expired,
+    ];
+    assert_eq!(got, [40, 40, 0, 0, 1, 3, 0]);
+}

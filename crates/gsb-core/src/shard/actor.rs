@@ -208,7 +208,10 @@ pub struct ShardActor<W, G, St, Sp> {
     /// EMPTY one is still sent — once — so the receivers clear this
     /// shard's slot now instead of at the TTL.
     pub(in crate::shard) team_sent: bool,
-    /// Team-exchange counters of the current ~1 s window
-    /// (`team_exchange_summary`).
+    /// Team-exchange counters, cumulative (the metrics sample's
+    /// `team_*`).
     pub(in crate::shard) tstats: TeamStats,
+    /// `tstats` as the last `team_exchange_summary` line saw them: the
+    /// line's window is the difference.
+    pub(in crate::shard) tstats_logged: TeamStats,
 }

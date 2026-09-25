@@ -85,9 +85,11 @@ pub struct TeamImport {
     pub records: Vec<TeamRecord>,
 }
 
-/// Per-window team-exchange counters of ONE shard actor (the
-/// `team_exchange_summary` line, the §7 border summary's shape): reset
-/// every ~1 s of ticks, logged only when something moved.
+/// Team-exchange counters of ONE shard actor, cumulative: the metrics
+/// sample carries them as they are (`RoomSample::team_*`); the
+/// `team_exchange_summary` line (the §7 border summary's shape) logs
+/// their ~1 s window ([`Self::since`] the last logged snapshot), only
+/// when something moved.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct TeamStats {
     /// Exports queued on the registry's mailbox.
@@ -108,9 +110,23 @@ pub(crate) struct TeamStats {
 }
 
 impl TeamStats {
-    /// Whether the window saw any team traffic.
+    /// Whether the counters show any team traffic.
     pub(crate) fn any(&self) -> bool {
         *self != Self::default()
+    }
+
+    /// The traffic counted since `earlier` (a snapshot of these same
+    /// cumulative counters): the log line's window.
+    pub(crate) fn since(&self, earlier: &Self) -> Self {
+        Self {
+            exports: self.exports - earlier.exports,
+            export_drops: self.export_drops - earlier.export_drops,
+            export_records: self.export_records - earlier.export_records,
+            over_cap: self.over_cap - earlier.over_cap,
+            imports: self.imports - earlier.imports,
+            import_records: self.import_records - earlier.import_records,
+            expired: self.expired - earlier.expired,
+        }
     }
 }
 

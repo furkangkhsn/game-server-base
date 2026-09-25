@@ -67,6 +67,15 @@ where
             migrations_out: self.m.migrations_out,
             migrations_in: self.m.migrations_in,
             migrations_failed: self.m.migrations_failed,
+            // The team exchange's counters, cumulative (the log line is
+            // their ~1 s window).
+            team_exports: self.tstats.exports,
+            team_export_drops: self.tstats.export_drops,
+            team_export_records: self.tstats.export_records,
+            team_over_cap: self.tstats.over_cap,
+            team_imports: self.tstats.imports,
+            team_import_records: self.tstats.import_records,
+            team_expired: self.tstats.expired,
             // Faz 3: this shard runs the RPC machinery (the room actor's
             // counters, mirrored one-to-one) — no longer pinned to zero.
             requests_local: self.m.requests_local,

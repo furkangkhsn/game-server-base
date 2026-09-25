@@ -41,6 +41,9 @@ impl MetricReport {
                  effects_applied={} effects_forwarded={} effects_orphaned={} \
                  effects_dropped={} effects_refused={} \
                  migrations_out={} migrations_in={} migrations_failed={} \
+                 team_exports={} team_export_drops={} team_export_records={} \
+                 team_over_cap={} team_imports={} team_import_records={} \
+                 team_expired={} \
                  req_local={} req_ext={} \
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
@@ -94,6 +97,13 @@ impl MetricReport {
                 r.migrations_out,
                 r.migrations_in,
                 r.migrations_failed,
+                r.team_exports,
+                r.team_export_drops,
+                r.team_export_records,
+                r.team_over_cap,
+                r.team_imports,
+                r.team_import_records,
+                r.team_expired,
                 r.requests_local,
                 r.requests_external,
                 r.requests_rejected_malformed,

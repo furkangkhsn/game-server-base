@@ -33,7 +33,8 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
   `gsb_conn_frames_in_total` gibi `<alan>_<nesne>_<sayaç>_total`;
   histogramlar Prometheus summary/satır çiftiyle (p50/p99 hazır alanlardan)
 - Oda başına (etiket `room="r<id>"`; sharded odada her shard kendi
-  satırı, id `room << 16 | index`) küçük pakette eklenen sayaç aileleri
+  satırı, id `room << 16 | index`) küçük pakette (ve W2'de takım
+  değişimi için) eklenen sayaç aileleri
   (hepsi kümülatif `counter`; gsb-metric satırında aynı adla, `_total`
   ve `gsb_room_` öneki olmadan):
 
@@ -48,9 +49,19 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
   | `gsb_room_migrations_out_total` | Komşu shard'a devredilen entity'ler (kesinleşen gönderim) |
   | `gsb_room_migrations_in_total` | Komşudan gelip kurulan entity'ler |
   | `gsb_room_migrations_failed_total` | Dolu komşu gelen kutusunun reddettiği göç gönderimleri (sonraki tick yeniden denenir) |
+  | `gsb_room_team_exports_total` | Registry'nin takım hub'ına kuyruklanan takım export'ları (CROSS-SHARD §8b; W2) |
+  | `gsb_room_team_export_drops_total` | Dolu/kapalı registry posta kutusunun reddettiği export'lar (sonraki tick aynı kümeyi taşır) |
+  | `gsb_room_team_export_records_total` | Kuyruklanan export'lardaki kayıtlar |
+  | `gsb_room_team_over_cap_total` | Çekirdeğin mesaj başı tavanlarının (`TEAM_EXPORT_MAX_*`) kestiği kayıt/takım — çıkışta ve girişte |
+  | `gsb_room_team_imports_total` | Uygulanan takım import'ları (hub'ın buraya ulaşan röleleri) |
+  | `gsb_room_team_import_records_total` | Uygulanan import'lardaki kayıtlar |
+  | `gsb_room_team_expired_total` | TTL'in düşürdüğü kaynak yuvaları (sessizleşmiş kaynak) |
 
-  Etki ve göç aileleri yalnız shard satırlarında hareket eder (tek oda
-  aktörü 0 yazar). Crystallization olayları (kit) rapora girmedi — log
+  Etki, göç ve takım aileleri yalnız shard satırlarında hareket eder
+  (tek oda aktörü 0 yazar; takım ailesi yalnız `team_exchange`'i
+  uygulayan mantıkta — `ShardedTeamRoom`). Takım sayaçlarının ~1 sn
+  penceresi `team_exchange_summary` log satırında da; hub tarafı
+  (`relays`, `relay_drops`) `team_hub_summary` satırında kaldı. Crystallization olayları (kit) rapora girmedi — log
   satırı olarak kaldı, gerekçe CROSS-SHARD §4c madde 5.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar

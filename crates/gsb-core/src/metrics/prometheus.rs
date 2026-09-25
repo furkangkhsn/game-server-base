@@ -500,11 +500,11 @@ impl MetricReport {
             |r| r.detach_expired_ai,
         );
 
-        // The detach-hold ceiling, remote effects and migrations (the
-        // last two families: shard rows only — 0 on a single room). One
-        // table so the names and helps read side by side.
+        // The detach-hold ceiling, remote effects, migrations and the team
+        // exchange (the last three families: shard rows only — 0 on a
+        // single room). One table so the names and helps read side by side.
         type Row = (&'static str, &'static str, fn(&RoomReport) -> u64);
-        let rows: [Row; 9] = [
+        let rows: [Row; 16] = [
             (
                 "gsb_room_detach_forced_total",
                 "Detach holds forced to end by max_detach_hold over a standing veto, cumulative.",
@@ -549,6 +549,41 @@ impl MetricReport {
                 "gsb_room_migrations_failed_total",
                 "Migration sends a full neighbour inbox refused (retried next tick), cumulative.",
                 |r| r.migrations_failed,
+            ),
+            (
+                "gsb_room_team_exports_total",
+                "Team exports queued on the registry's mailbox (the team hub), cumulative.",
+                |r| r.team_exports,
+            ),
+            (
+                "gsb_room_team_export_drops_total",
+                "Team exports a full or closed registry mailbox refused, cumulative.",
+                |r| r.team_export_drops,
+            ),
+            (
+                "gsb_room_team_export_records_total",
+                "Records in the queued team exports, cumulative.",
+                |r| r.team_export_records,
+            ),
+            (
+                "gsb_room_team_over_cap_total",
+                "Team records (and viewed teams) cut by the core's per-message caps, cumulative.",
+                |r| r.team_over_cap,
+            ),
+            (
+                "gsb_room_team_imports_total",
+                "Team imports (the hub's relays) applied, cumulative.",
+                |r| r.team_imports,
+            ),
+            (
+                "gsb_room_team_import_records_total",
+                "Records in the applied team imports, cumulative.",
+                |r| r.team_import_records,
+            ),
+            (
+                "gsb_room_team_expired_total",
+                "Team import slots dropped by the TTL (a silent source), cumulative.",
+                |r| r.team_expired,
             ),
         ];
         for (name, help, get) in rows {
