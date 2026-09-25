@@ -859,6 +859,226 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 - v1 dışı: cross-seam ETKİLEŞİM (sadece görünürlük); otomatik balancer;
   kalıcılık entegrasyonu.
 
+## 8b. W1 sonucu — team × sharded kompoziti (branch `kit/w1-team-sharded`)
+
+> Durum: **tasarım** (bu alt bölüm kod yazılmadan önce yazıldı; §8
+> sözleşmedir, aşağıdaki her sapma gerekçesiyle kayıtlıdır). BACKLOG §1
+> satır 6'nın (W) ilk yarısı: W1 kompozit, W2 onun üstüne doğrulama
+> oyununu kurar.
+
+**Senaryo ("Cephe", W2'nin oyunu).** Büyük harita 2×2 shard ızgarası
+(MMO gibi zemin düzlemi bölümü), üç fraksiyon, TAKIM SİSİ: oyuncu (a)
+kendi fraksiyonunun HER birimini harita genelinde görür (minimap / parti
+çerçeveleri — hangi shard'da olursa olsun), (b) bir düşmanı YALNIZ
+fraksiyonundan bir birim onu görüyorsa görür (zemin düzleminde görüş
+yarıçapı) — gören müttefik, düşman ya da ikisi birden oyuncudan başka bir
+shard'da olsa bile (shard 0'daki bir müttefik gözcü kulesi shard 0'daki
+bir düşmanı görür; shard 3'teki fraksiyon oyuncusu o düşmanı görür).
+Border şeridi (lokalite) bunu veremez: lokalite-karşıtı ilgi.
+
+### 8b.1 Karar: üyeler DEĞİL, takımın GÖRÜNÜR KÜMESİ export edilir
+
+§8 yalnız takım ÜYELERİNİ export ediyordu; bu (a)'yı verir, (b)'yi
+vermez: shard 0'daki düşmanı gören shard 0'daki müttefiktir, shard 3
+o düşmanı hiçbir yoldan öğrenemez. **Karar: bir shard her takım T için
+T'nin BU shard'daki görünür kümesini export eder** =
+
+- T'nin bu shard'daki üyeleri (oyuncu birimleri VE `TeamMember`
+  taşıyan NPC'ler — gözcü kuleleri),
+- bu shard'ın T birimlerinin gördüğü düşmanlar: bu shard'ın KENDİ
+  entity'leri ve border şeridinden ÖDÜNÇ aldığı kayıtlar (seam'in
+  ötesinde duran düşman: gören müttefik bu shard'da, düşman komşuda).
+
+Hiçbir zaman export EDİLMEYEN: ithal edilmiş kayıtlar (yankı döngüsü
+olurdu — kayıt yalnız onu yerel olarak bilen shard'dan çıkar), nötr
+entity'ler (§8b.5).
+
+**Sınırlar (sayılan, asla sınırsız değil).**
+
+- Kit, takım başına tick başına bütçe: `with_team_budget(n)` (varsayılan
+  `DEFAULT_TEAM_BUDGET` = 1024 kayıt). Aşımda önce üyeler (wire
+  sırasıyla), sonra görülen düşmanlar; fazlası kesilir ve sayılır
+  (`over_budget`, kit sayacı + debug satırı).
+- Çekirdek, mesaj başına sert tavan: `TEAM_EXPORT_MAX_RECORDS` (16 384
+  kayıt) ve `TEAM_EXPORT_MAX_VIEWS` (256 takım); aşan kesilir, shard'ın
+  `over_cap` sayacı artar. Bir oyunun bütçesi ne olursa olsun registry
+  ve alıcılar bu tavanla sınırlı.
+- Alıcı: kaynak shard başına bir yuva, yuva ≤ `TEAM_EXPORT_MAX_RECORDS`
+  → shard başına ≤ (N − 1) × tavan.
+
+**Bedel (§8.4'e karşı).** §8.4 export'u O(kendi takım üyeleri) diye
+sınırlıyordu; görünür küme O(kendi birimleri × onları gören takım
+sayısı) — bir birim en fazla takım sayısı kadar kez export edilir (3
+fraksiyonda ≤ 3×). Kodlama birim başına önbellekli: kayıt baytları wire
+değeri değişmedikçe yeniden kodlanmaz (`Bytes` refcount'la paylaşılır).
+Yayılım: bir kayıt, takımını görüntüleyen her DİĞER shard'a gider (≤ N −
+1). 4 shard, 1000 birim, üç fraksiyon: tick başına kabaca 1000 üye
+kaydı + görülen düşmanlar, her biri ≤ 3 hedefe — `Bytes` klonu, kopya
+yok. Bu, senaryonun doğasıdır: "müttefikler harita genelinde" = her
+shard, görüntülediği takımların bütün birimlerini her tick bilir. Bu
+maliyet registry'nin TEK görevine veri düzlemi yükü bindirir (§8 bunu
+kabul etti); W2'nin ölçümü tetikleyici olursa A13 (registry striping)
+ya da export temposu (`every k ticks`) açılır — W1'de ikisi de yok.
+
+### 8b.2 Hub: registry'nin oda girdisinde, kaydı saklamayan röle
+
+- **Mesaj (monomorfik, byte-encoded).** Shard → registry:
+  `RegistryMsg::TeamExport { room, generation, from, tick, export:
+  TeamExport { views: Vec<u64>, records: Vec<TeamRecord> } }`,
+  `TeamRecord { team: u64, wire: u64, bytes: Bytes }` — `bytes` oyunun
+  `RecordCodec::encode` gövdesi, registry içeriğe hiç bakmaz.
+  `views` = bu shard'ın OYUNCULARININ takımları (görüntüleyici
+  abonelikleri). Registry → shard: `ShardMsg::TeamImport(TeamImport {
+  from, tick, records })`. `RegistryMsg` monomorfik kalır (generic'e
+  çevirmek §8.1'de ELENDİ; burada da gerek yok).
+- **Tablo.** Oda başına, registry'nin oda girdisinin içinde
+  (`ShardGroup::teams: TeamHub`): kaynak shard başına bir yuva `{ tick,
+  views, relayed: hedef başına "boş olmayan ithal tutuyor" bayrağı }`.
+  **Kayıt saklanmaz.**
+- **Röle (export başına).** `from`'un yuvası wholesale değişir; sonra
+  DİĞER her shard t için (t'nin yuvası varsa): `from`'un kayıtlarından
+  takımı t'nin `views`'ünde olanlar süzülür; boş değilse ya da t
+  `from`'dan boş olmayan bir ithal tutuyorsa (`relayed[t]` — onu
+  temizleyen tek boş mesaj) `try_send`. Başarıda `relayed[t]` güncellenir;
+  düşmede (dolu/kapalı posta kutusu) sayılır ve bayrak kalır — sonraki
+  export tekrar dener. Kendine röle yok; görüntüleyicisi olmayan (yalnız
+  gözcü kulesi barındıran) shard'a röle yok.
+- **İzolasyon.** Süzgeç = hedefin görüntülediği takımlar: A'nın kaydı
+  A'yı görüntülemeyen shard'a hiç gitmez; aynı shard'daki B
+  görüntüleyicisine sızmaz çünkü alıcı logic takım T'nin içeriğine
+  YALNIZ `imports.team(T)`'yi katar (test kilidi, iki katmanda).
+- **Süpürme.** `TEAM_EXPORT_TTL_TICKS` (= 64) boyunca export etmeyen
+  kaynağın yuvası (abonelikleri) düşer; süpürme oda başına
+  `TEAM_HUB_SWEEP_EVERY_TICKS` (= 64) tick'te bir, export'ların
+  tick'iyle (registry'nin saati yok) — O(N) retain, amortize.
+- **Nesil.** Export `generation` taşır (shard'ın kurulum nesli, uzak
+  etkilerin epoch'u); oda girdisinin nesli tutmayan export (ölmüş bir
+  enkarnasyonun geç mesajı) düşer. Oda yok edilince / ölünce hub girdiyle
+  birlikte gider — ayrı temizlik yok.
+
+### 8b.3 Alıcı taraf
+
+- CONTROL'de `TeamImport` kaynağın yuvasını **wholesale** değiştirir
+  (`TeamImports`, çekirdek). Her tick: `TEAM_EXPORT_TTL_TICKS`'ten eski
+  yuva düşer (sessizleşmiş kaynak — hayalet kalıcılaşmaz), sonra
+  takım başına birleşik görünüm kurulur: aynı wire birden çok kaynaktan
+  gelirse (göç geçişi) en yeni `tick` kazanır, eşitlikte küçük kaynak
+  indeksi; wire'a göre sıralı.
+- **Yeni faz 5b — TEAMS** (BORDER'dan sonra, BROADCAST'tan önce):
+  ödünç küme (faz 6'nın zaten kurduğu düzleştirilmiş, own-wins süzülmüş
+  dilim — artık bir kez kurulup iki faza veriliyor) ve ithal küme
+  logic'e verilir, logic bu tick'in export'unu döndürür, çekirdek onu
+  (tavan uygulanmış) registry'ye `try_send` eder. Export boşsa ve bir
+  önceki gönderilen de boşsa mesaj yok; boş olmayan bir export'tan sonra
+  bir kez boş gider (temizleme) — düşerse sonraki tick tekrar.
+- **Seam (en küçük ek).** `GameLogic` DEĞİŞMEZ. `ShardLogic` bir kanca
+  kazanır (varsayılan `None` — bugünkü her shard logic'i hiçbir şey
+  göndermez, hiçbir şey almaz):
+
+  ```
+  fn team_exchange(&mut self, world: &mut W, ctx: &TickCtx,
+                   borrowed: &[BorderRecord<Self::Strip>],
+                   imported: &TeamImports) -> Option<TeamExport>
+  ```
+
+### 8b.4 Kit: `ShardedTeamRoom<G, P, V>`
+
+`ShardedSpatialRoom` kalıbı: grid protokolü (göç, ödünç, seam, park,
+RPC) sarılan `ShardedRoom<G, P>`'de; kompozit takım yüzeyini ekler —
+`GroupKey = Team`, `V: Vision` görüşü, `with_delta` (ortak
+`common::SetLedger` + `Baselines`), takım bütçesi. `G: ShardGame +
+TeamGame`.
+
+- **Birleştirme ve öncelik.** Takım T'nin içeriği (her tick, `team_exchange`
+  içinde): kendi T üyeleri; kendi nötr entity'leri (TeamRoom kuralı —
+  bu shard'daki herkese); bir kendi T biriminin gördüğü kendi düşmanları
+  ve ödünç kayıtları; `imports.team(T)`. Aynı wire bir kez; YÜK önceliği
+  **yerel > ödünç > ithal** (ithal edilen bir wire burada kendi ya da
+  ödünç kaydıyla da biliniyorsa taze tipli değer gösterilir), GÖRÜNÜRLÜK
+  birleşim (ithal kayıt = "bu wire T'ye görünür"). Seam'e yakın, seam'in
+  ötesindeki müttefikçe görülen düşman: komşu onu ödünç kaydı olarak
+  görür ve export eder; burada kendi entity'miz → tek kayıt, yerel yük —
+  çift teslim yok.
+- **Ödünç kaydın görüş konumu.** Ödünç kayıt yalnız wire değeri taşır
+  (`Strip = Wire` — C1'in seam kancaları bu tipe bağlı, değiştirilmez);
+  görüş testi simülasyon konumu ister. Kompozit kurucusu
+  `lent_pos: fn(&Wire<G>) -> Option<V::Pos>` alır (oyun: nicemlenmiş
+  wire'dan konum; `None` = ödünç kayıt görüşe katılmaz, yalnız ithalle
+  görünür). Ödünç kaydın TAKIMI bilinmez: ödünç kayıtlar görüş KAYNAĞI
+  değil yalnız HEDEF — seam'in ötesindeki müttefiğin görüşünü onun kendi
+  shard'ı hesaplar ve export eder (simetri).
+- **Kodlama.** İçerik değeri `Shown<W> { Typed(W), Encoded(Bytes) }`:
+  kendi/ödünç kayıt tipli değer, ithal kayıt kodlanmış gövde.
+  `SetLedger` yazım sınırını `RecordCodec`'ten crate-özel bir
+  `WriteRecord<W>` trait'ine gevşetir (`RecordCodec` için blanket impl —
+  mevcut odalar bayt bayt aynı); kompozitin yazıcısı `Encoded`'ı olduğu
+  gibi `entities` zarfına koyar.
+- **Takım göçte taşınır.** `TeamMember` kit'in bileşeni, oyunun
+  `capture`'ı onu bilmez: kompozitin göç durumu `TeamMig<M> { kit:
+  KitMig<M>, team: Option<Team> }`, `on_migrate_in` bileşeni yeniden
+  yazar. Göçle gelen oyuncunun oturumu yeni shard'ın takım görünümüne
+  baseline'sızdır → delta modunda one-shot private full (spatial
+  kompozitin taze-üye kuralı).
+- **K4 kalıntısı.** `TeamGame::spawn_team_player_as(world, conn,
+  identity)` — varsayılan `spawn_team_player`'a delege (arena'nın üs
+  doğumu değişmez); `TeamRoom` ve kompozit kimlikle çağırır.
+
+### 8b.5 Kararlar ve §8'den sapmalar (gerekçeli)
+
+1. **Görünür küme, üye değil** (§8b.1) — senaryonun (b)'si.
+2. **Hub kayıt SAKLAMAZ; export başına röle.** §8.2 tabloda kayıt tutup
+   agregayı yayıyordu. Agrega her export'ta yeniden kurulacaktı ve
+   yayılım temposu export temposuna eşit; taze export'u doğrudan rölelemek
+   aynı yayılım, yarı bellek. Hub'ın geri alamadığı (gönderilmiş) kayıt
+   yüzünden alıcı TTL'i zaten şart — kaynak-başına yuvalar alıcıda.
+3. **Wholesale değişim (oda, kaynak shard) düzeyinde**, (oda, takım,
+   kaynak) değil: shard tick başına TEK export'la bütün takımlarını
+   taşır; yeni export'ta olmayan takım yok demektir → ayrılan üye bir
+   SONRAKİ export'ta kaybolur (TTL'i beklemez). TTL yalnız export etmeyi
+   bırakan kaynağın (ölen, ya da son temizleme mesajı düşen) sigortası.
+4. **Tablo registry'nin oda girdisinde** (`ShardGroup`), `(RoomId,
+   takım)` anahtarlı ayrı harita değil: odalar arası izolasyon ve
+   destroy/ölüm temizliği yapısal.
+5. **`GameLogic` ikinci dilim YOK; `ShardLogic::team_exchange`.** §8.3
+   `snapshot`'a ikinci dilim diyordu: ~40 uygulama ve ~50 çağrı yeri
+   dalgalanırdı, tek oda aktörü asla ithal görmez. Export görüş-bilinçli
+   (ödünç düşmanlar dahil) olduğundan ödünç + ithal kümeyi okumak ve
+   export'u üretmek tek çağrı; snapshot çağrıları logic'in bu tick
+   kurduğu takım içeriğinden okur (TeamRoom'un `update` önbelleği gibi).
+   `ingest_seam`/`update_seam` emsali: varsayılanlı shard-alt-trait
+   kancası.
+6. **Mesaj alanları.** Tuple yerine adlı `TeamRecord`; `views`
+   (yayılımın "kim görüntülüyor" bilgisi, §8.2 bunu "export gönderen
+   shard kümesi"nden türetiyordu — gözcü kulesi barındıran ama
+   görüntüleyicisi olmayan shard gereksiz röle alırdı), `tick` (TTL ve
+   dedup), `generation` (ölü enkarnasyon).
+7. **TTL 64 tick** (§8.2'nin örneği 256): canlı kaynak her tick tazeler;
+   TTL yalnız sessizleşmiş kaynağın hayaletinin ömrünü sınırlar — 30
+   Hz'de ~2 s.
+8. **Nötrler export edilmez:** kendi shard'ında herkese (TeamRoom
+   kuralı), komşuda yalnız görüşle (ödünç kayıt nötr/düşman ayırt
+   edilemez). Harita geneli nötr (ele geçirme noktası) W2'nin kararı.
+9. **Göç: kopya yok, en fazla bir tick boşluk.** Üye m, A → B, tick h:
+   B'nin görüntüleyicileri m'yi `h + 1`'de kendi kaydı olarak görür;
+   üçüncü shard C, A'nın `h` export'undan (`h + 1`) sonra B'nin `h + 1`
+   export'undan (`h + 2`) görür — yuvalar arası dedup wire'la, kopya
+   yok. A'nın görüntüleyicileri `h + 1`'de m'yi kaybeder (A onu despawn
+   etti, B'nin `h` export'unda henüz yok), `h + 2`'de ithalle geri alır:
+   bir tick boşluk (kabul).
+
+### 8b.6 Sayaçlar: metrik yolu değil, log satırı
+
+Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops`,
+`export_records`, `over_cap`, `imports`, `import_records`, `expired` —
+sıfır değilse `team_exchange_summary` info satırı (§7'nin
+`border_exchange_summary` emsali). Hub: `exports`, `relays`,
+`relay_drops`, `relay_records`, `expired` — oda başına 256 export
+tick'inde bir `team_hub_summary`. Gerekçe: `RoomSample` sabit şekilli
+ve loadgen'in metrik tel formatına (GSM9) ve Prometheus'a bağlı; küçük
+paket turu dokuz sayaç için 29 dosyaya dokundu. Henüz üretim kullanıcısı
+olmayan bir özellik için tel sürümü değiştirmek erken; loadgen botunu
+kuracak W2, ölçüm isterse terfi ettirir.
+
 ## 9. Uygulama durumları
 
 | Kalem | Durum |
@@ -866,7 +1086,7 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 | Delta border exchange (§6.4) | 💤 main'de ama **uykuda** — Faz C'den beri süreç-içi link'ler `AlwaysFull`; delta yalnız testlerde (`force_exchange_modes`) koşar, ilk tüketici `Ipc`/`Net` link'i (§7 "Güncel durum") |
 | sharded × spatial kompoziti | ✅ Faz B — main'de |
 | Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
-| team × sharded (bu bölüm) | 🔜 Tasarım hazır — taze oturumda uygulanır |
+| team × sharded (§8, §8b) | ◐ W1 — tasarım §8b (kompozit + hub); doğrulama oyunu W2 |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
