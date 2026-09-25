@@ -5,6 +5,58 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Oyun modülü G3 turu — loadgen her barındırılan oyunu sürüyor (`srv/g3-loadbot`)
+
+`gsb-loadgen --game demo|arena|mmo` (varsayılan `demo`): oyun başına bir
+`LoadBot` (dyn) girdiyi, flood/churn girdisini ve snapshot/private
+opcode'larını verir; istemci başına `BotClient` kit'in `ClientView<D>`'sini
+oyunun çözücüsüyle tutar (loadgen-yerel görünüm yok — G4). `--game`
+süreç içi sunucuya, `--serve`'e ve orkestratörün sunucu + istemci
+çocuklarına iletilir; bilinmeyen oyun derlenmiş oyunları listeler, başka
+oyun için yazılmış demo bayrağı (`--visibility`, `--topology`,
+`--shard-count`, `--cell-size`, `--vision-radius`, `--spawn-half-size`,
+`--disconnect-grace-secs`, `--profile`, `--still-frac`) hata verir.
+
+- **Demo botu birebir taşındı:** 576 000 aralıkta girdiler bayt-bayt aynı;
+  A/B'de RESULT/CLIENT anahtarları, sırası, biçimi aynı, sayılar gürültü
+  içinde, alıcı döngü yavaşlamadı.
+- **Arena botu:** spawn (takım üssü) → merkez → spawn, 8 sn, 0–20 m
+  yükseklik — takımlar birbirinin 3D sisine gerçekten girip çıkıyor.
+- **MMO botu:** ilk girdi waystone `id mod 4`'e `Travel` (K4: yoksa her
+  oturum shard 0'da kalır), sonra waystone çevresinde dolaşma, ~20 sn'de
+  bir `Travel`, menzilde ~1 sn'de bir `Attack`; rastgelelik istemci
+  kimliğiyle tohumlanıyor.
+- **RESULT:** arena/MMO'da `visibility`/`shards`/`profile` oyunun düzeni;
+  MMO'ya `game=`'den önce `shard_members=`; `game=` son anahtar.
+
+**İlk tabanlar** (`--write-stall-secs 0`, 10 sn; 1000'ler `--orchestrate
+--procs 2`; hepsinde 30 Hz, bütçe aşımı %0, `errors=0 server_closes=0`):
+
+| Oyun | N | step p50/p90 µs | bayt/sn/bağlantı | notlar |
+|---|---|---|---|---|
+| arena | 50 | 104/144 | 10 669 | |
+| arena | 500 | 1104/1640 | 111 508 | tepe payload 5162 B |
+| arena | 1000 | 1632/2024 | 234 120 | tepe payload 10 267 B |
+| mmo | 50 | 48/80 | 5 465 | shard'lar 14,11,13,12 |
+| mmo | 500 | 224/296 | 49 096 | 125,111,136,128 |
+| mmo | 1000 | 288/400 | 102 190 | 245,245,255,255 |
+
+Tam tablo ve komutlar: GAME-MODULE §5 "G3 sonucu". Ebeveynin bağımsız
+koşusu (200 istemci, 6 sn, üç oyun): üçü de `joined=left=200 errors=0
+server_closes=0`, 30 Hz; MMO `shard_members=55,50,49,46`.
+
+**Bulgular:** G3-1 — arena'nın full snapshot'ları ~150 birimden sonra
+rUDP'nin 1400 B sınırını aşıyor (TCP'de zararsız; rUDP için delta ya da
+bölme gerekir). G3-2 — join'de grup delta'ları tek seferlik private
+full'dan önce gelebiliyor (≥200 istemcide istemci başına ~0,8
+`gap_drops`, kayıp yok; demo'da da vardı, görünüm doğru işliyor). G3-3 —
+arena istemcisi takımını wire'dan öğrenemiyor (bot spawn konumundan
+çıkarıyor; düzeltme korunan crate'te). Küçük kusur: loadgen komut satırı
+hatalarını panikle bildiriyor (G3 öncesinden gelen alışkanlık; mesajlar
+doğru, çıkış kodu sıfır değil).
+
+Testler 609 → 623.
+
 ## Oyun modülü G4 turu: kit'in referans istemcisi (`srv/g4-client`)
 
 Kit zarfının istemci kuralları tek bir kit modülünde: `gsb_kit::client`

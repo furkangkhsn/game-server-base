@@ -35,7 +35,7 @@ client'ı (`docs/SECURITY.md` §3.7; yerelde docker imajı gerekir).
 
 Tur sonu ayrıca:
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
-→ `left=50`, `errors=0`, panik yok.
+(ve `--game arena`, `--game mmo` ile) → `left=50`, `errors=0`, panik yok.
 
 ## Yasak desenler (`gsb-lint`)
 

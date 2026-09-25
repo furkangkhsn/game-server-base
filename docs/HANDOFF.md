@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-609 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+623 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -139,6 +139,16 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
+
+**Oyun modülü G3 tamam** (`docs/GAME-MODULE.md` §5 "G3 sonucu"):
+loadgen'in oyuna özgü yarısı `loadgen/bot/`'ta — yeni bir oyun için bir
+`LoadBot` + `BotClient` yaz (görünüm = kit'in `ClientView<D>`'si; kaydı
+`client::wire::Fields` ile elle yürü ve üretilmiş çözücüye testle
+sabitle), `bot::games()`/`bot_for`'a ekle. Döngüye (`client/view/run.rs`)
+oyun kodu sokma. Oyuna özgü bir loadgen bayrağı eklersen `bot/flags.rs`'e
+yaz (başka oyunda hata) ve orkestratör çocuklarına yalnız o oyunda ilet
+(`child_args.rs`). RESULT'ta `game=` son anahtar kalır; oyun ekleri
+ondan hemen önce. MMO yükü botun ilk `Travel`'ına dayanıyor (K4).
 
 **Oyun modülü G4 tamam** (`docs/GAME-MODULE.md` §5 "G4 sonucu"): kit
 zarfının istemci yarısı `gsb_kit::client`'ta. Bir istemci (loadgen botu,
@@ -315,6 +325,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 609 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 623 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -75,10 +75,17 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **609** (609/609 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **623** (623/623 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **oyun modülü G4** (`docs/GAME-MODULE.md` §5 "G4 sonucu") —
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 için `docs/CHANGELOG.md` başlığına bakınız).
+Son tur: **oyun modülü G3** (`docs/GAME-MODULE.md` §5 "G3 sonucu") —
+loadgen `--game demo|arena|mmo`; demo botu birebir; arena ve MMO ilk yük
+tabanları (1000 istemci orkestre, 30 Hz, adım p50 1,6 ms / 0,29 ms).
+**Oyun modülü fazları (G1–G4) bitti.** Açık: G3-1 (arena full'ları rUDP
+MTU'sunu aşıyor), G3-2 (join'de delta'lar private full'dan önce), G3-3
+(arena istemcisi takımını wire'dan öğrenemiyor), K4 (kayıtlı karakter
+oturuma bağlı).
+Önceki tur: **oyun modülü G4** (`docs/GAME-MODULE.md` §5 "G4 sonucu") —
 kit'in istemci kuralları `gsb_kit::client`'ta; altı kopya ona geçti;
 demo tarafındaki `CellExit` okuma hatası (G4-1) düzeltildi; alıcı döngü
 eskisinden hızlı. G3'ten önce koşuldu.

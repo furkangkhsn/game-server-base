@@ -73,7 +73,7 @@ clippy `-D warnings` · test · the Autobahn RFC 6455 fuzzing client against the
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 609 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 623 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -122,6 +122,12 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 # --stagger-ms MS: client i connects after an i×MS delay (default 0 = all at once;
 #  a loopback burst is the worst case for the accept path, see the ROADMAP finding).
 # --addr HOST:PORT: client-only mode against an external server.
+# --game demo|arena|mmo (default demo): the clients' bot and the in-process /
+#  served server's `game` key (forwarded to both orchestrated children). The
+#  arena bot runs its units base → centre → base with height; the MMO bot
+#  roams a waystone, travels between shards and attacks nearby mobs (RESULT
+#  adds `shard_members=`). Demo-only flags (--visibility, --profile, …)
+#  refuse the other games.
 ```
 
 Output: human-readable report + single line `RESULT mode=.. clients=.. joined=..
