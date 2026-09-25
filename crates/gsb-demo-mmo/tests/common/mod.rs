@@ -26,12 +26,13 @@ use gsb_core::room::{Action, ExpireTo, RoomConfig};
 use gsb_core::shard::{ShardActor, ShardLogic, ShardMsg};
 use gsb_core::ticker::TickInfo;
 use gsb_demo_mmo::codec::MmoWire;
+use gsb_demo_mmo::combat::Hit;
 use gsb_demo_mmo::world::{SHARDS, home_shard};
 use gsb_demo_mmo::{MmoMig, MmoShard, Pos3, Realm, mmo_shard};
 use gsb_kit::sharded::KitMig;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-type Msg = ShardMsg<KitMig<MmoMig>, MmoWire>;
+pub type Msg = ShardMsg<KitMig<MmoMig>, MmoWire>;
 
 const WAIT: Duration = Duration::from_secs(5);
 pub const TICK_HZ: f64 = 30.0;
@@ -45,6 +46,8 @@ pub struct Mmo {
     metrics: Vec<mpsc::Receiver<MetricsEvent>>,
     /// Each shard's latest metrics sample (members, detached, expiries).
     pub samples: Vec<Option<RoomSample>>,
+    /// Every shard's combat feed (the hits it applied).
+    hits: mpsc::Receiver<Hit>,
     logins: std::collections::HashMap<ConnectionId, Pos3>,
     t0: Instant,
     /// The last global tick fed.
@@ -107,8 +110,10 @@ impl Mmo {
             rxs.push(rx);
         }
         let mut metrics = Vec::new();
+        let (hits_tx, hits) = mpsc::channel(4096);
         for (i, rx) in rxs.into_iter().enumerate() {
-            let logic = policy(mmo_shard(i, realm));
+            let mut logic = policy(mmo_shard(i, realm));
+            logic.game_mut().set_combat_feed(hits_tx.clone());
             let links = (0..SHARDS)
                 .map(|j| {
                     let near = logic.neighbors().contains(&j);
@@ -136,6 +141,7 @@ impl Mmo {
             shards: txs,
             metrics,
             samples: vec![None; SHARDS],
+            hits,
             logins: realm.logins.clone(),
             t0: Instant::now(),
             tick: 0,
@@ -169,6 +175,24 @@ impl Mmo {
         for _ in 0..n {
             self.step(clients).await;
         }
+    }
+
+    /// The hits applied since the last call, in feed order (per shard in
+    /// application order; shards interleave).
+    pub fn hits(&mut self) -> Vec<Hit> {
+        let mut out = Vec::new();
+        while let Ok(h) = self.hits.try_recv() {
+            out.push(h);
+        }
+        out
+    }
+
+    /// Put `msg` straight into shard `shard`'s mailbox (a neighbour's —
+    /// or a misbehaving link's — delivery).
+    pub fn deliver(&self, shard: usize, msg: Msg) {
+        self.shards[shard]
+            .try_send(msg)
+            .expect("shard mailbox has room");
     }
 
     /// Members (sessions) each shard holds right now.

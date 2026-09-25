@@ -40,9 +40,11 @@ message MoveTo {
   uint64 seq = 3;
 }
 
-// Client -> server (op `MMO_ATTACK`): "hit the mob with wire id `target`".
-// Resolved on the attacker's shard only (a mob owned by a neighbouring
-// shard — seen through the border strip — is out of reach).
+// Client -> server (op `MMO_ATTACK`): "hit the entity (mob or player)
+// with wire id `target`". Range is checked on the attacker's shard; a
+// target a neighbouring shard owns (seen through the border strip) is
+// hit there — the attacker's shard hands the blow to its owner, which
+// applies it (one tick later) and re-checks it.
 message Attack {
   uint64 target = 1;
   uint64 seq = 2;

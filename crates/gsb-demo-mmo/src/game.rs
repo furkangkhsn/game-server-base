@@ -27,12 +27,16 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, World};
+use gsb_core::channel::Mailbox;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
+use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::game::{Game, InputSeq, ShardGame};
+use gsb_kit::sharded::Seam;
 use prost::Message;
 
-use crate::codec::{MmoCodec, to_dm};
+use crate::codec::{MmoCodec, MmoWire, to_dm};
+use crate::combat::{Combat, Hit};
 use crate::components::{InCombat, Kind, MoveTarget, Pos3, RunSpeed, Vitals};
 use crate::migrate::{self, MmoMig};
 use crate::realm::Realm;
@@ -48,6 +52,7 @@ pub struct MmoGame {
     logins: HashMap<ConnectionId, Pos3>,
     camps: Camps,
     systems: Systems,
+    combat: Combat,
     codec: MmoCodec,
 }
 
@@ -60,6 +65,10 @@ impl MmoGame {
             logins: realm.logins.clone(),
             camps: Camps::new(realm.spawns_of(index).cloned()),
             systems: Systems::default(),
+            combat: Combat {
+                shard: index,
+                feed: None,
+            },
             codec: MmoCodec,
         }
     }
@@ -67,6 +76,12 @@ impl MmoGame {
     /// This shard's region index.
     pub fn index(&self) -> usize {
         self.index
+    }
+
+    /// Publish every hit this shard applies on `feed` (the kill feed —
+    /// `try_send`, a full feed drops; it is observability, not play).
+    pub fn set_combat_feed(&mut self, feed: Mailbox<Hit>) {
+        self.combat.feed = Some(feed);
     }
 }
 
@@ -141,7 +156,7 @@ impl Game for MmoGame {
         players: &HashMap<PlayerId, Entity>,
         seq: &mut InputSeq,
     ) {
-        input::ingest(players, world, actions, seq, ctx.tick);
+        input::ingest(players, world, actions, seq, ctx.tick, &self.combat, None);
     }
 
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -169,6 +184,33 @@ impl ShardGame for MmoGame {
 
     fn restore(&mut self, world: &mut World, mig: MmoMig) -> Entity {
         migrate::restore(world, mig)
+    }
+
+    /// The sharded input path: an `Attack` on an entity a neighbour
+    /// lends becomes a remote effect for its owner.
+    fn ingest_seam(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        players: &HashMap<PlayerId, Entity>,
+        seq: &mut InputSeq,
+        seam: &mut Seam<'_, '_, MmoWire>,
+    ) {
+        let combat = &self.combat;
+        input::ingest(players, world, actions, seq, ctx.tick, combat, Some(seam));
+    }
+
+    /// A neighbour's attack on one of this shard's entities.
+    fn apply_remote_effect(
+        &mut self,
+        world: &mut World,
+        target: Entity,
+        effect: &RemoteEffect,
+        tick: u64,
+        seam: &mut Seam<'_, '_, MmoWire>,
+    ) -> EffectOutcome {
+        self.combat.apply_remote(world, target, effect, tick, seam)
     }
 }
 

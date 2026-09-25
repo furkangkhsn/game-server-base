@@ -25,6 +25,10 @@
 //! - [`game`] — its `Game` and `ShardGame` hooks (spawn, input, camps,
 //!   mob routes and lifetimes, player movement, the optional logout bot,
 //!   the migrating state [`MmoMig`]);
+//! - [`combat`] + [`effect`] — attacks, on this shard's entities and
+//!   ACROSS a seam: a target a neighbour lends is validated here and
+//!   struck by its owner through the kit's remote effects
+//!   (`docs/CROSS-SHARD.md` §2–§4), which credits the kill ([`combat::Hit`]);
 //! - [`mmo`] + [`op`] — its wire (`proto/mmo.proto`) and opcodes.
 //!
 //! Everything around the hooks — wire identity, AOI grouping, the
@@ -35,7 +39,9 @@
 //! `gsb-core` shard actors.
 
 pub mod codec;
+pub mod combat;
 pub mod components;
+pub mod effect;
 pub mod game;
 mod input;
 pub mod migrate;

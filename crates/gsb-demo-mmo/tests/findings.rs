@@ -49,11 +49,17 @@ async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard()
     assert_eq!(m.len(), 1, "before the crossing O sees M through the strip");
     let m = m[0].0;
     assert!(cs[1].get(m).is_some());
-    // A's attack resolves on A's shard only: it lands while M is shard
-    // 0's (the hit shows on both sides)…
+    // A's attack lands where M lives: on shard 0 while M is shard 0's
+    // (the hit shows on both sides)…
     cs[1].attack(m).await;
     room.steps(&mut cs, 2).await;
     assert_eq!(cs[0].get(m).map(|r| r.hp), Some(35), "hit on shard 0");
+    let hits = room.hits();
+    assert_eq!(
+        hits.iter().map(|h| (h.shard, h.target)).collect::<Vec<_>>(),
+        [(0, m)],
+        "applied by shard 0, M's owner then"
+    );
 
     // Crossed at ~121, at rest from ~181.
     for _ in 0..258 {
@@ -65,10 +71,21 @@ async fn f1_an_entity_arriving_in_its_lent_cell_stays_visible_on_its_new_shard()
         );
         assert!(cs[1].get(m).is_some(), "A, across the seam, sees M");
     }
-    // …and no longer does: M did cross into shard 1.
+    // …and M did cross into shard 1: A's next attack is applied there —
+    // it reaches across the seam as a remote effect (CROSS-SHARD §2;
+    // before C1 it could not, and "no damage" was this test's proof of
+    // the crossing — the applying shard is the direct one).
     cs[1].attack(m).await;
-    room.steps(&mut cs, 2).await;
-    assert_eq!(cs[0].get(m).map(|r| r.hp), Some(35), "M is shard 1's now");
+    room.steps(&mut cs, 3).await;
+    assert_eq!(cs[0].get(m).map(|r| r.hp), Some(10), "the hit landed");
+    let hits = room.hits();
+    assert_eq!(
+        hits.iter()
+            .map(|h| (h.shard, h.target, h.attacker))
+            .collect::<Vec<_>>(),
+        [(1, m, cs[1].id)],
+        "M is shard 1's now: shard 1 applied A's hit"
+    );
 }
 
 /// F2 — `GridPartition2` knew only the 4-neighbourhood, and a border

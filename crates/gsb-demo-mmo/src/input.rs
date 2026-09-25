@@ -1,7 +1,9 @@
-//! The MMO's input path (its `Game::ingest`): `MoveTo`, `Attack` and
-//! `Travel` decoding under the kit's sequence rule
+//! The MMO's input path (its `Game::ingest`, and `ShardGame::ingest_seam`
+//! on the sharded path — the same path with the cross-seam view):
+//! `MoveTo`, `Attack` and `Travel` decoding under the kit's sequence rule
 //! ([`InputSeq::admit`]). One sequence space per session across all
-//! three messages (the client numbers every input it sends).
+//! three messages (the client numbers every input it sends). `Attack`
+//! resolves in [`crate::combat`].
 
 use std::collections::HashMap;
 
@@ -9,14 +11,15 @@ use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::Action;
 use gsb_kit::game::InputSeq;
-use gsb_kit::identity::WireId;
+use gsb_kit::sharded::Seam;
 use prost::Message;
 
-use crate::codec::from_dm;
-use crate::components::{InCombat, Mob, MoveTarget, Pos3, Vitals};
+use crate::codec::{MmoWire, from_dm};
+use crate::combat::Combat;
+use crate::components::{MoveTarget, Pos3};
 use crate::mmo::{Attack, MoveTo, Travel};
 use crate::op;
-use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, COMBAT_TICKS, WAYSTONES};
+use crate::world::WAYSTONES;
 
 /// One decoded input.
 enum Input {
@@ -50,13 +53,17 @@ fn decode(action: &Action) -> Option<(u64, Input)> {
 }
 
 /// Decode and apply the tick's actions (global tick `tick`) for the
-/// players with a live entity in this shard's world.
+/// players with a live entity in this shard's world. `seam` is the
+/// cross-seam view on the sharded path (`None`: attacks reach this
+/// shard's own entities only).
 pub(crate) fn ingest(
     players: &HashMap<PlayerId, Entity>,
     world: &mut World,
     actions: &mut Vec<Action>,
     seq: &mut InputSeq,
     tick: u64,
+    combat: &Combat,
+    mut seam: Option<&mut Seam<'_, '_, MmoWire>>,
 ) {
     for action in actions.drain(..) {
         let Some((n, input)) = decode(&action) else {
@@ -82,7 +89,9 @@ pub(crate) fn ingest(
                     .entity_mut(entity)
                     .insert(MoveTarget { x: at.x, z: at.z });
             }
-            Input::Attack { target } => attack(world, entity, target, tick),
+            Input::Attack { target } => {
+                combat.attack(world, seam.as_deref_mut(), entity, target, tick)
+            }
             Input::Travel { waystone } => travel(world, entity, waystone),
         }
     }
@@ -99,37 +108,4 @@ fn travel(world: &mut World, entity: Entity, waystone: usize) {
     let mut e = world.entity_mut(entity);
     e.insert(Pos3::new(x, 0.0, z));
     e.remove::<MoveTarget>();
-}
-
-/// Hit the mob with wire id `target` if it is in THIS shard's world and
-/// within reach; a mob brought to zero hit points is despawned — game
-/// code, not a leave (the kit's ghost sweep, §8.2, tells every client
-/// that saw it, on this shard and through the border strip). A hit that
-/// lands puts the attacker in combat for [`COMBAT_TICKS`].
-fn attack(world: &mut World, attacker: Entity, target: u64, tick: u64) {
-    let Some(&from) = world.get::<Pos3>(attacker) else {
-        return;
-    };
-    let mut q = world.query::<(Entity, &WireId, &Pos3, &Mob)>();
-    let Some((victim, at)) = q
-        .iter(world)
-        .find(|(_, w, _, _)| w.get() == target)
-        .map(|(e, _, p, _)| (e, *p))
-    else {
-        return; // not a mob of this shard (e.g. one lent by a neighbour)
-    };
-    if from.dist(&at) > ATTACK_RANGE {
-        return;
-    }
-    let Some(mut vitals) = world.get_mut::<Vitals>(victim) else {
-        return;
-    };
-    vitals.hp = vitals.hp.saturating_sub(ATTACK_DAMAGE);
-    let killed = vitals.hp == 0;
-    world.entity_mut(attacker).insert(InCombat {
-        until: tick.saturating_add(COMBAT_TICKS),
-    });
-    if killed {
-        world.despawn(victim);
-    }
 }

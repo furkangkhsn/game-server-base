@@ -139,7 +139,7 @@ impl Client {
         self.send(op::MMO_MOVE_TO, m.encode_to_vec()).await;
     }
 
-    /// Hit the mob with wire id `target`.
+    /// Hit the entity (mob or player) with wire id `target`.
     pub async fn attack(&mut self, target: u64) {
         let seq = self.seq();
         let m = mmo::Attack { target, seq };
