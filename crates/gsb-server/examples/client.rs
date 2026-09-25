@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use gsb_kit::client::{Apply, ClientDecoder, ClientView, PrivateEvent, Snapshot};
+use gsb_kit::client::{Apply, ClientDecoder, ClientError, ClientView, PrivateEvent, Snapshot};
 use gsb_protocol::base::{
     Auth, AuthResult, Error, ErrorCode, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
 };
@@ -35,16 +35,19 @@ impl ClientDecoder for DemoDecoder {
     type Record = (i32, i32);
     type Cell = (i32, i32);
 
-    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32)), ClientError> {
         let e = gsb_demo::game::EntityRecord::decode(body)?;
-        let cell = (
-            (e.x as f32 / self.cell_size).floor() as i32,
-            (e.y as f32 / self.cell_size).floor() as i32,
-        );
-        Ok((e.entity, cell, (e.x, e.y)))
+        Ok((e.entity, (e.x, e.y)))
     }
 
-    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+    fn cell_of(&self, &(x, y): &(i32, i32)) -> (i32, i32) {
+        (
+            (x as f32 / self.cell_size).floor() as i32,
+            (y as f32 / self.cell_size).floor() as i32,
+        )
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), ClientError> {
         let c = gsb_demo::game::CellExit::decode(body)?;
         Ok((c.x, c.y))
     }

@@ -16,8 +16,12 @@ use super::*;
 mod run;
 pub(crate) use run::*;
 
-use gsb_demo::game::{CellExit, EntityRecord};
-use gsb_kit::client::ClientDecoder;
+#[cfg(test)]
+mod tests;
+
+use gsb_demo::game::CellExit;
+use gsb_kit::client::wire::{Fields, Value, sint32};
+use gsb_kit::client::{ClientDecoder, ClientError};
 use prost::Message;
 
 /// The loadgen client's view: wire id → wire position.
@@ -27,6 +31,12 @@ pub(crate) type ClientView = gsb_kit::client::ClientView<DemoDecoder>;
 /// formula (floor of the WIRE coordinates / cell_size, the kit's
 /// `Grid2`), so a `CellExit` forgets exactly the entities the server
 /// considers to be in that cell; a `CellExit` carries the cell's INDEX.
+///
+/// The record — every entity of every frame, the receive loop's hot
+/// path — is walked by hand (`game.proto`'s `EntityRecord { uint64
+/// entity = 1; sint32 x = 2; sint32 y = 3; }`; pinned to the generated
+/// decoder by this module's tests); the rare cell exit uses the
+/// generated `CellExit`.
 pub(crate) struct DemoDecoder {
     pub(crate) cell_size: f32,
 }
@@ -36,17 +46,30 @@ impl ClientDecoder for DemoDecoder {
     type Cell = (i32, i32);
 
     #[inline]
-    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
-        let e = EntityRecord::decode(body)?;
-        let cell = (
-            (e.x as f32 / self.cell_size).floor() as i32,
-            (e.y as f32 / self.cell_size).floor() as i32,
-        );
-        Ok((e.entity, cell, (e.x, e.y)))
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32)), ClientError> {
+        let (mut entity, mut x, mut y) = (0, 0, 0);
+        for field in Fields::new(body) {
+            match field? {
+                (1, Value::Varint(v)) => entity = v,
+                (2, Value::Varint(v)) => x = sint32(v),
+                (3, Value::Varint(v)) => y = sint32(v),
+                (1..=3, _) => return Err(ClientError::Malformed("wrong wire type")),
+                _ => {}
+            }
+        }
+        Ok((entity, (x, y)))
     }
 
     #[inline]
-    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+    fn cell_of(&self, &(x, y): &(i32, i32)) -> (i32, i32) {
+        (
+            (x as f32 / self.cell_size).floor() as i32,
+            (y as f32 / self.cell_size).floor() as i32,
+        )
+    }
+
+    #[inline]
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), ClientError> {
         let c = CellExit::decode(body)?;
         Ok((c.x, c.y))
     }

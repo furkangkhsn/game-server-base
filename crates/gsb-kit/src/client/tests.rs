@@ -22,7 +22,7 @@ mod wire;
 const CELL: f32 = 20.0;
 
 /// The fixture game's decode seam: a record → its truncated position,
-/// in `Grid2`'s cell of it; a cell exit → `Grid2`'s cell.
+/// whose cell is `Grid2`'s; a cell exit → `Grid2`'s cell.
 #[derive(Debug, Clone, Copy)]
 struct FixDecoder(Grid2);
 
@@ -36,13 +36,16 @@ impl ClientDecoder for FixDecoder {
     type Record = (i32, i32);
     type Cell = Cell;
 
-    fn record(&self, body: &[u8]) -> Result<(u64, Cell, (i32, i32)), prost::DecodeError> {
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32)), ClientError> {
         let r = Record::decode(body)?;
-        let cell = CellSpace::<WirePos>::cell_of(&self.0, &WirePos { x: r.x, y: r.y });
-        Ok((r.entity, cell, (r.x, r.y)))
+        Ok((r.entity, (r.x, r.y)))
     }
 
-    fn cell_exit(&self, body: &[u8]) -> Result<Cell, prost::DecodeError> {
+    fn cell_of(&self, &(x, y): &(i32, i32)) -> Cell {
+        CellSpace::<WirePos>::cell_of(&self.0, &WirePos { x, y })
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<Cell, ClientError> {
         let c = CellExit::decode(body)?;
         Ok(Cell(c.x, c.y))
     }

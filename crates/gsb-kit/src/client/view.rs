@@ -8,11 +8,10 @@ use super::wire::{Fields, Value, each_varint, input_ack};
 use super::{Apply, ClientDecoder, ClientError, Counters, PrivateEvent, Snapshot};
 
 /// One connection's view of its snapshot group, under the kit's client
-/// rules: wire id → what the game's [`ClientDecoder`] stores (plus the
-/// record's cell, kept for the cell-exit rule).
+/// rules: wire id → what the game's [`ClientDecoder`] stores.
 pub struct ClientView<D: ClientDecoder> {
     decoder: D,
-    entities: HashMap<u64, (D::Cell, D::Record)>,
+    entities: HashMap<u64, D::Record>,
     /// The last ACCEPTED sequence; `None` = no baseline yet.
     last_seq: Option<u64>,
     counters: Counters,
@@ -21,7 +20,7 @@ pub struct ClientView<D: ClientDecoder> {
 
 /// One frame, decoded before the view changes (reused across frames).
 struct Scratch<D: ClientDecoder> {
-    records: Vec<(u64, D::Cell, D::Record)>,
+    records: Vec<(u64, D::Record)>,
     removed: Vec<u64>,
     cells: Vec<D::Cell>,
 }
@@ -100,7 +99,7 @@ impl<D: ClientDecoder> ClientView<D> {
                 (1, Value::Len(body)) => (ack, snapshot) = (Some(input_ack(body)?), None),
                 (2, Value::Len(body)) => (ack, snapshot) = (None, Some(body)),
                 (1..=4, Value::Len(_)) => {}
-                (1..=4, _) => return Err(ClientError::Envelope("wrong wire type")),
+                (1..=4, _) => return Err(ClientError::Malformed("wrong wire type")),
                 _ => {}
             }
             Ok(())
@@ -131,7 +130,7 @@ impl<D: ClientDecoder> ClientView<D> {
 
     /// The record of wire id `id`, if in view.
     pub fn get(&self, id: u64) -> Option<&D::Record> {
-        self.entities.get(&id).map(|(_, record)| record)
+        self.entities.get(&id)
     }
 
     /// Whether wire id `id` is in view.
@@ -151,7 +150,7 @@ impl<D: ClientDecoder> ClientView<D> {
 
     /// Every `(wire id, record)` in view, in no particular order.
     pub fn iter(&self) -> impl Iterator<Item = (u64, &D::Record)> {
-        self.entities.iter().map(|(&id, (_, record))| (id, record))
+        self.entities.iter().map(|(&id, record)| (id, record))
     }
 
     /// Every wire id in view, in no particular order.
@@ -161,7 +160,7 @@ impl<D: ClientDecoder> ClientView<D> {
 
     /// Every record in view, in no particular order.
     pub fn values(&self) -> impl Iterator<Item = &D::Record> {
-        self.entities.values().map(|(_, record)| record)
+        self.entities.values()
     }
 
     /// Whether a full has been applied (deltas apply only on one).
@@ -205,16 +204,14 @@ impl<D: ClientDecoder> ClientView<D> {
             match field? {
                 (1, Value::Varint(v)) => head.sequence = v,
                 (2, Value::Len(body)) => {
-                    s.records
-                        .push(decoder.record(body).map_err(ClientError::Body)?);
+                    s.records.push(decoder.record(body)?);
                 }
                 (3, value) => each_varint(value, |id| s.removed.push(id))?,
                 (4, Value::Len(body)) => {
-                    s.cells
-                        .push(decoder.cell_exit(body).map_err(ClientError::Body)?);
+                    s.cells.push(decoder.cell_exit(body)?);
                 }
                 (5, Value::Varint(v)) => head.delta = v != 0,
-                (1..=5, _) => return Err(ClientError::Envelope("wrong wire type")),
+                (1..=5, _) => return Err(ClientError::Malformed("wrong wire type")),
                 _ => {}
             }
         }
@@ -224,25 +221,24 @@ impl<D: ClientDecoder> ClientView<D> {
     /// A full: the scratch's records become the whole view.
     fn replace(&mut self, sequence: u64) {
         self.entities.clear();
-        for (id, cell, record) in self.scratch.records.drain(..) {
-            self.entities.insert(id, (cell, record));
-        }
+        self.entities.extend(self.scratch.records.drain(..));
         self.last_seq = Some(sequence);
         self.counters.fulls += 1;
     }
 
-    /// A delta on top: `removed`, then `cell_exits`, then the upserts.
+    /// A delta on top: `removed`, then `cell_exits` (one pass over the
+    /// view for all of them; a held record's cell is derived only here),
+    /// then the upserts.
     fn merge(&mut self, sequence: u64) {
-        let s = &mut self.scratch;
+        let (decoder, s) = (&self.decoder, &mut self.scratch);
         for id in &s.removed {
             self.entities.remove(id);
         }
         if !s.cells.is_empty() {
-            self.entities.retain(|_, (cell, _)| !s.cells.contains(cell));
+            self.entities
+                .retain(|_, record| !s.cells.contains(&decoder.cell_of(record)));
         }
-        for (id, cell, record) in s.records.drain(..) {
-            self.entities.insert(id, (cell, record));
-        }
+        self.entities.extend(s.records.drain(..));
         self.last_seq = Some(sequence);
         self.counters.deltas += 1;
     }

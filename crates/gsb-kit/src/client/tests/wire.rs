@@ -22,12 +22,23 @@ fn unknown_fields_are_skipped() {
     assert_eq!(sorted(&view), [(1, 3, 3)]);
 }
 
-/// The largest sequence a `uint64` holds decodes (a ten-byte varint).
+/// Varints of every length decode — across each 7-bit boundary, up to
+/// the largest `uint64` (a ten-byte varint).
 #[test]
-fn a_ten_byte_sequence_decodes() {
-    let mut view = View::default();
-    let got = view.apply_snapshot(&Frame::full(u64::MAX, &[(1, 0, 0)]).kit());
-    assert_eq!(got.map(|s| s.sequence), Ok(u64::MAX));
+fn varints_of_every_length_decode() {
+    let mut edges = vec![0u64, 1, u64::MAX];
+    for bits in (7..64).step_by(7) {
+        edges.extend([(1u64 << bits) - 1, 1u64 << bits]);
+    }
+    for seq in edges {
+        let mut view = View::default();
+        let frame = Frame::full(seq, &[(seq, 0, 0)]);
+        for bytes in [frame.kit(), frame.generated()] {
+            let got = view.apply_snapshot(&bytes).expect("decodes");
+            assert_eq!(got.sequence, seq);
+            assert!(view.contains(seq), "{seq}");
+        }
+    }
 }
 
 /// Every malformed frame is an error, counted, and changes nothing —
@@ -112,4 +123,48 @@ fn groups_and_malformed_private_frames_are_errors() {
     );
     assert_eq!(view.counters().errors, 3);
     assert!(!view.has_baseline());
+}
+
+/// The public walker reads every wire type's value, and `sint32` is
+/// protobuf's zigzag (checked against the generated decoder).
+#[test]
+fn the_walker_reads_every_wire_type_and_sint32_is_zigzag() {
+    use crate::client::wire::{Fields, Malformed, Value, sint32};
+    let frame = [
+        0x08, 0x96, 0x01, // 1: varint 150
+        0x11, 1, 0, 0, 0, 0, 0, 0, 0x80, // 2: fixed64
+        0x1A, 0x02, 0xAA, 0xBB, // 3: bytes
+        0x25, 4, 3, 2, 1, // 4: fixed32
+    ];
+    let fields: Result<Vec<_>, Malformed> = Fields::new(&frame).collect();
+    assert_eq!(
+        fields,
+        Ok(vec![
+            (1, Value::Varint(150)),
+            (2, Value::Fixed64(0x8000_0000_0000_0001)),
+            (3, Value::Len(&[0xAA, 0xBB][..])),
+            (4, Value::Fixed32(0x0102_0304)),
+        ])
+    );
+    for x in [0, 1, -1, 63, -64, i32::MAX, i32::MIN] {
+        let body = CellExit { x, y: 0 }.encode_to_vec();
+        let got: Vec<i32> = Fields::new(&body)
+            .map(|f| match f {
+                Ok((1, Value::Varint(v))) => sint32(v),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let want = if x == 0 { vec![] } else { vec![x] }; // proto3 omits 0
+        assert_eq!(got, want, "{x}");
+    }
+    // A `sint32` varint wider than 32 bits is truncated first, as the
+    // generated decoder does.
+    let wide = [0x08, 0x82, 0x80, 0x80, 0x80, 0x10]; // x: 0x1_0000_0002
+    assert_eq!(CellExit::decode(&wide[..]).map(|c| c.x), Ok(1));
+    assert_eq!(sint32(0x1_0000_0002), 1);
+    // A walk stops at the first malformed field (and yields nothing more).
+    let mut bad = Fields::new(&[0x08, 0x01, 0x0B, 0x08, 0x02]);
+    assert_eq!(bad.next(), Some(Ok((1, Value::Varint(1)))));
+    assert!(matches!(bad.next(), Some(Err(_))));
+    assert_eq!(bad.next(), None);
 }

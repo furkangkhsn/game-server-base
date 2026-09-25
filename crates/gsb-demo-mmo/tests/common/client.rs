@@ -31,12 +31,16 @@ impl ClientDecoder for MmoDecoder {
     type Record = EntityRecord;
     type Cell = (i32, i32);
 
-    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), EntityRecord), prost::DecodeError> {
+    fn record(&self, body: &[u8]) -> Result<(u64, EntityRecord), ClientError> {
         let r = EntityRecord::decode(body)?;
-        Ok((r.entity, client_cell(r.x, r.z), r))
+        Ok((r.entity, r))
     }
 
-    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+    fn cell_of(&self, r: &EntityRecord) -> (i32, i32) {
+        client_cell(r.x, r.z)
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), ClientError> {
         let c = CellExit::decode(body)?;
         Ok((c.x, c.z))
     }

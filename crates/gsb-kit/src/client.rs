@@ -22,13 +22,17 @@
 //!   ([`ClientError::PrivateDelta`]), never applied.
 //!
 //! The game supplies the decode seam, [`ClientDecoder`]: one record body
-//! → `(wire id, cell, what the view stores)`, one cell-exit body → the
-//! cell. The envelope itself is walked in place (no allocation): record
-//! and cell bodies reach the decoder as sub-slices of the frame, and a
-//! frame is decoded completely before the view changes — an undecodable
-//! frame is an error and leaves the view as it was. Scratch buffers are
-//! reused, so the steady state allocates nothing beyond the view's own
-//! map growth.
+//! → `(wire id, what the view stores)`, a stored record → its cell, one
+//! cell-exit body → the cell. A record's cell is derived only when a
+//! cell exit needs it (once per held record per delta that carries
+//! exits), never per received record. The envelope is walked in place
+//! ([`wire::Fields`], no allocation): record and cell bodies reach the
+//! decoder as sub-slices of the frame, and a frame is decoded completely
+//! before the view changes — an undecodable frame is an error and leaves
+//! the view as it was. Scratch buffers are reused, so the steady state
+//! allocates nothing beyond the view's own map growth. A decoder may
+//! decode a body with the game's generated type (`decode(body)?`) or walk
+//! it with [`wire::Fields`] — the cheaper choice for a hot receive loop.
 //!
 //! RPC responses (`Private.responses`) and the game's private payload
 //! (`Private.game`) are not part of the view; they are skipped. A client
@@ -37,32 +41,35 @@
 use std::fmt;
 
 mod view;
-mod wire;
+pub mod wire;
 
 pub use view::ClientView;
 
 #[cfg(test)]
 mod tests;
 
-/// The game's decode seam: what a record body and a cell-exit body mean.
-/// Bodies are exactly what the game's server-side
+/// The game's decode seam: what a record body and a cell-exit body mean
+/// (a generated type's `decode(body)?` or a hand walk with
+/// [`wire::Fields`]). Bodies are exactly what the game's server-side
 /// [`RecordCodec::encode`](crate::codec::RecordCodec::encode) and
 /// [`CellSpace::encode_cell`](crate::space::CellSpace::encode_cell)
 /// wrote (a typed mirror's `EntityRecord` / `CellExit` decode them).
 pub trait ClientDecoder {
     /// What the view keeps per entity (a position, a whole record, …).
     type Record;
-    /// A cell of the game's cell space, as a client derives it from a
-    /// record (the same formula the server's cell space uses) and as a
-    /// cell exit names it.
+    /// A cell of the game's cell space, as a cell exit names it.
     type Cell: PartialEq;
 
-    /// One entity record body → its wire id, its cell, and what the view
-    /// stores for it.
-    fn record(&self, body: &[u8]) -> Result<(u64, Self::Cell, Self::Record), prost::DecodeError>;
+    /// One entity record body → its wire id and what the view stores
+    /// for it.
+    fn record(&self, body: &[u8]) -> Result<(u64, Self::Record), ClientError>;
+
+    /// The cell a stored record lies in — the same formula the server's
+    /// cell space applies to the record's wire value.
+    fn cell_of(&self, record: &Self::Record) -> Self::Cell;
 
     /// One cell-exit body → the cell every held record in it leaves.
-    fn cell_exit(&self, body: &[u8]) -> Result<Self::Cell, prost::DecodeError>;
+    fn cell_exit(&self, body: &[u8]) -> Result<Self::Cell, ClientError>;
 }
 
 /// The view's counters (what a load generator reports).
@@ -124,10 +131,12 @@ pub enum PrivateEvent {
 /// Why a frame was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientError {
-    /// The kit envelope is malformed (truncated, an invalid varint, a
+    /// Malformed protobuf — the kit envelope, or a body a game's decoder
+    /// walked with [`wire::Fields`] (truncated, an invalid varint, a
     /// known field under the wrong wire type, a group).
-    Envelope(&'static str),
-    /// The game's decoder rejected a record or cell-exit body.
+    Malformed(&'static str),
+    /// A body a game's decoder decoded with a generated type was
+    /// rejected (`?` on a `prost::DecodeError` lands here).
     Body(prost::DecodeError),
     /// A `Private` snapshot flagged `delta` (a protocol error: the
     /// one-shot view is always a full).
@@ -137,7 +146,7 @@ pub enum ClientError {
 impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Envelope(why) => write!(f, "malformed kit envelope: {why}"),
+            Self::Malformed(why) => write!(f, "malformed protobuf: {why}"),
             Self::Body(e) => write!(f, "undecodable record or cell body: {e}"),
             Self::PrivateDelta => f.write_str("a private snapshot flagged delta"),
         }
@@ -145,3 +154,9 @@ impl fmt::Display for ClientError {
 }
 
 impl std::error::Error for ClientError {}
+
+impl From<prost::DecodeError> for ClientError {
+    fn from(e: prost::DecodeError) -> Self {
+        Self::Body(e)
+    }
+}

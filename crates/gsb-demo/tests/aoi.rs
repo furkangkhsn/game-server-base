@@ -25,7 +25,7 @@ use gsb_demo::aoi::AoiRoom;
 use gsb_demo::game::{CellExit, EntityRecord};
 use gsb_demo::op;
 use gsb_demo::prelude::*;
-use gsb_kit::client::{ClientDecoder, ClientView};
+use gsb_kit::client::{ClientDecoder, ClientError, ClientView};
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -54,16 +54,19 @@ impl ClientDecoder for DemoDecoder {
     type Record = (i32, i32);
     type Cell = (i32, i32);
 
-    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32), (i32, i32)), prost::DecodeError> {
+    fn record(&self, body: &[u8]) -> Result<(u64, (i32, i32)), ClientError> {
         let e = EntityRecord::decode(body)?;
-        let cell = (
-            (e.x as f32 / CELL_SIZE).floor() as i32,
-            (e.y as f32 / CELL_SIZE).floor() as i32,
-        );
-        Ok((e.entity, cell, (e.x, e.y)))
+        Ok((e.entity, (e.x, e.y)))
     }
 
-    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), prost::DecodeError> {
+    fn cell_of(&self, &(x, y): &(i32, i32)) -> (i32, i32) {
+        (
+            (x as f32 / CELL_SIZE).floor() as i32,
+            (y as f32 / CELL_SIZE).floor() as i32,
+        )
+    }
+
+    fn cell_exit(&self, body: &[u8]) -> Result<(i32, i32), ClientError> {
         let c = CellExit::decode(body)?;
         Ok((c.x, c.y))
     }
