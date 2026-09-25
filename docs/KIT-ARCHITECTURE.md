@@ -87,10 +87,27 @@ pub trait RecordCodec: Send + 'static {
     type Query: ReadOnlyQueryData;    // kaydı üretmek için okunan bileşenler
     type Dirty: QueryFilter;          // "bu entity değişmiş olabilir" sinyali
     type Wire: Clone + Eq + Debug + Send + 'static; // defter birimi (nicemlenmiş değer)
+    const RUN: bool = false;          // kayıt çerçevesi: false = `entities`, true = kayıt koşusu (A31)
     fn wire(&self, item: ROQueryItem<'_, '_, Self::Query>) -> Self::Wire;
     fn encode(&self, id: u64, w: &Self::Wire, out: &mut BytesMut); // tek kaydın gövdesi
 }
 ```
+
+**Kayıt çerçevesi oyunundur (A31, §10 "A31").** `RUN = false`
+(varsayılan): her kayıt bir `entities` girdisi (alan 2; kit `0x12` +
+uzunluk yazar, gövde uzunluğunu çerçeveden öğrenir — protobuf gövde,
+tipli ayna çözer); bu mod A31'den önce yazılan baytın birebir aynısı.
+`RUN = true`: karenin bütün kayıtları TEK bir `records` alanında (6)
+art arda — kayıt başına kit'in yazdığı wire id (varint) + oyunun
+gövdesi, kayıt başına çerçeve yok; gövde KENDİNİ SINIRLAMALI (istemci
+çözücüsü koşunun başından bir gövde okur ve nerede bittiğini bilir).
+Gövde biçimi tamamen oyunun (bit paketli, etiketsiz varint,
+MessagePack, kendi uzunluk önekinin ardında protobuf…); kit içine
+bakmaz, gövdenin id'yi tekrar etmesi gerekmez. Mod kodek TİPİNİN
+sabitidir: bir oyunun bütün odaları — ve shard'lı bir odanın bütün
+shard'ları — aynı çerçeveyi yazar; başka bir shard'ın kodladığı ithal
+gövde (`TeamRecord.bytes` = yalnız `encode` çıktısı, çerçevesiz ve
+id'siz) alıcıda sahibinin çerçevesiyle eklenir.
 
 **Kritik karar — `Wire` ilişkili tipi.** Delta motoru bugün tipli,
 nicemlenmiş `(i32, i32)` tuple'larını karşılaştırır; baytlar yalnızca
@@ -685,6 +702,7 @@ message WorldSnapshot {
   repeated uint64 removed = 3;    // kit PACKED olmayan biçimde yazar (bkz. aşağı)
   repeated bytes cell_exits = 4;  // CellSpace::encode_cell gövdesi
   bool delta = 5;
+  bytes records = 6;              // A31: kayıt koşusu (RUN'lı oyun): id varint + gövde, art arda
 }
 message Private {
   oneof payload { InputAck ack = 1; WorldSnapshot snapshot = 2; }
@@ -735,6 +753,23 @@ message Private {
     taşıyan kare `PrivateEvent::Session`'dır (`Empty` = yalnız RPC
     yanıtı): loadgen `Empty`'yi hata sayar, çünkü RPC göndermez — yeni
     varyant olmasa arenanın join karesi her istemcide bir hata olurdu.
+- **Kayıt koşusu — `bytes records = 6` (A31):** `RecordCodec::RUN`'ı
+  açan bir oyunun kayıtları alan 2 yerine tek bir alan 6'da, art arda
+  (`id varint + gövde`). Açmayan oyun alan 6'yı hiç görmez: baytı
+  A31'den önceki baytın aynısı (kit'te her oda türü için düzen
+  denetimli, diğer üç demonun bayt kilitleri dokunulmadan geçiyor).
+  İstemci kuralları (`kit.proto`'da): kurallardaki "`entities`" karenin
+  kayıtları demektir, hangi alan taşırsa; bir kare kayıtlarını ikisinden
+  BİRİNDE taşır, hiçbir zaman ikisinde, ve en çok bir koşu (başka türlüsü
+  bozuk kare, görünüm değişmeden reddedilir); koşu da full'da görünümün
+  tamamı, delta'da `removed` ve `cell_exits`'ten SONRA uygulanan mutlak,
+  idempotent upsert'ler, boşluk olsa da; one-shot `Private.snapshot`
+  kayıtlarını aynı biçimde taşır; kayıtsız karede alan yoktur (boş koşu
+  yazılmaz). Koşu okumayan (oyunu açmamış) istemci alan 6'lı kareyi HATA
+  saymalı ve görünümünü değiştirmemeli — bilinmeyen alanı atlayan bir
+  çözücü kareyi kayıtsız uygular (bir full görünümü boşaltır). Çerçeve
+  oyunun protokolünün (sürümünün) parçasıdır, kare başına müzakere
+  edilmez.
 - **`removed` packed değil:** kit her kimliği ayrı bir `0x18` etiketiyle
   yazıyor, üretilmiş bir kodlayıcı proto3'ün varsayılanı olan packed
   biçimi yazar; her protobuf ayrıştırıcısı ikisini de kabul eder. Bu
@@ -781,7 +816,17 @@ private dahil —, `private_fulls`, `deltas`, `gap_drops`, `stale`,
 
 Oyunun seam'i `ClientDecoder`: kayıt gövdesi → `(wire id, Record)`,
 `cell_of(&Record)` (sunucunun `CellSpace` formülü, yalnız çıkış
-servis edilirken çağrılır), çıkış gövdesi → hücre. Gövdeler `RecordCodec
+servis edilirken çağrılır), çıkış gövdesi → hücre. Kayıt koşusu (A31):
+`const RUN: bool` (varsayılan `false`) ve `run_record(&self, id, run:
+&mut &[u8]) -> Result<Record, ClientError>` — kit koşudan id'yi
+(varint) okur, çözücü kalan koşunun başından TEK gövde okuyup `run`'ı
+ilerletir (varsayılan: `ClientError::UnexpectedRun`). `RUN` açmamış bir
+çözücüye gelen alan 6'lı kare birinci yürüyüşte
+`ClientError::UnexpectedRun` (görünüm değişmez, `errors` artar);
+kayıtlar iki alanda ya da iki koşu `Malformed`. Çözücünün reddettiği
+(kısa, aralık dışı) bir koşu kaydı bozuk bir `entities` gövdesi gibi
+görünümü boş ve baseline'sız bırakır. `client::wire::varint` artık
+public (oyunun koşu çözücüsü kendi varint'lerini onunla okur). Gövdeler `RecordCodec
 ::encode` / `CellSpace::encode_cell` çıktısıdır; çözücü onları tipli
 aynayla (`decode(body)?` — `From<prost::DecodeError>`) ya da public
 yürüyücüyle (`client::wire::{Fields, Value, sint32}`) çözer. Kare iki
@@ -2716,6 +2761,8 @@ mesaj, rUDP'de oyun bandı), sunucuda bağlantı başına geçmiş tutulur; CPU
   `0x12` + uzunluk yerine tek bir `bytes` alanında art arda kendini
   sınırlayan kayıtlar; +11 … +19 puan. İstemci kuralı yalnız "kayıtlar
   alan 2'de ya da alan 6'da" diye genişler (aşağıda önerilen metin).
+  **→ Yapıldı: A31** (aşağıda "A31"; savaş demosu opt-in, ölçülen
+  −54 %).
 - *(origin)* AOI'de ek +5 … +12 puan, ama zarfa "konum alanı" bilgisini
   sokar; ertelenir.
 
@@ -2743,7 +2790,9 @@ Sıra (her adım ayrı karar, ayrı tur, her biri kendi başına ölçülür):
    (aşağıda "A30").
 2. **(d3) Paketli kayıt koşusu, oyun başına opt-in** — kit zarfı + iki
    küçük seam (aşağıda); (d1) oyunun kodeğinde (demolar için örnek
-   kodek). Birlikte −43 … −58 %, rUDP'de kare kaybı yarıya.
+   kodek). Birlikte −43 … −58 %, rUDP'de kare kaybı yarıya. **→ A31'de
+   yapıldı** (aşağıda "A31": seam, sınır kararı, savaş demosunda
+   ölçüm).
 3. **A10 varlık başına yayın hızı** — en büyük sonraki kaldıraç (15 Hz:
    arena/MMO/savaşta +17 … +26 puan; demo +1 — tamsayı konumu zaten
    seyrek değişiyor), istemci enterpolasyonu ister (Unity tarafı).
@@ -2753,7 +2802,9 @@ Sıra (her adım ayrı karar, ayrı tur, her biri kendi başına ölçülür):
    (a) tek başına (sessiz yanlış değer) ve (c) (CPU, bant) elendi.
 
 *Önerilen `kit.proto` istemci kuralı metni (adım 2; `kit.proto`'ya bu
-turda DOKUNULMADI):*
+turda DOKUNULMADI — A31'de girdi, son hali `kit.proto`'da; bu metne
+eklenenler: koşu okumayan istemcinin kuralı, "en çok bir koşu", boş koşu
+yazılmaz):*
 
 ```proto
   // Entity records: in full mode the complete view, in delta mode the
@@ -2777,7 +2828,11 @@ Kural bölümüne tek cümle: "`entities` in the rules below means the
 frame's records, whichever field carries them (`entities` = 2 or the
 `records` run = 6)." Başka hiçbir istemci kuralı değişmez.
 
-*Seam (adım 2):* `RecordCodec` — `const RUN: bool = false;` (true: kit
+*Seam (adım 2; A31'de uygulanan biçim ondan iki noktada ayrıldı:
+id'yi kit yazar ve okur — `run_record(&self, id, run) -> Record`, artı
+çözücüde `const RUN` — ve paylaşılan parçalar için ölçü önce toplanmıyor,
+uzunluk yuvası bölge kapanınca yerinde düzeltiliyor; aşağıda "A31"):*
+`RecordCodec` — `const RUN: bool = false;` (true: kit
 kayıtları alan 6'ya art arda yazar, `encode` kendini sınırlayan kayıt
 yazar; ithal gövdeler aynı biçimde olduğu için olduğu gibi eklenir);
 `ClientDecoder` — `fn run_record(&self, run: &mut &[u8]) -> Result<(u64,
@@ -2809,11 +2864,14 @@ baseline is applied on top, even across a sequence gap" cümlesi silinir.
    de anlamını yitirir (protobuf gövdesi kendini sınırlamaz, koşuda yine
    uzunluk ister) ve kalan yalnız (d2): −43 … −58 % yerine −0 … −14 %
    (ölçüldü: "P0 + kompakt id" demo −14/−10, arena 0, MMO −7/−6, savaş
-   −7/−7).
+   −7/−7). *(Cevap — E7: gövde biçimi ve sürümleme oyunun; opt-in,
+   varsayılan değişmez. A31'de yapıldı.)*
 2. **Kit zarfına yeni alan (`records = 6`) — sürüm nasıl?** Oyun başına
    opt-in (eski istemci o oyunda yeni alanı bilmezse kayıtları görmez);
    E5 (protokol sürüm müzakeresi) şimdi mi gerekli, yoksa oyun
-   opcode'u/`protocol_version` yeter mi?
+   opcode'u/`protocol_version` yeter mi? *(Cevap — E7: oyunun seçimi,
+   oyun başına opt-in; kit müzakere etmez. A31: koşu okumayan istemci
+   alan 6'yı hata sayar.)*
 3. **Wire id basımı değişebilir mi?** (iç içe geçmiş ya da dar aralık;
    çekirdeğin `SHARD_SERIAL_RANGE`/tükenme koruması, id'leri sabitleyen
    testler.) Id istemciye opak; göçte id korunur, bu değişmez. *(Cevap:
@@ -3009,6 +3067,208 @@ eski aralık testi yeni kimlik dosyasına taşındı); `cargo clippy
 --workspace --all-targets -- -D warnings` 0; kapanış kontrolü, beş özellik
 derlemesi ve `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
 temiz.
+
+### A31 — paketli kayıt koşusu: oyun başına opt-in (2026-09-25)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`kit/a31-packed-records`;
+BACKLOG A31, E7'nin cevabı: gövde biçimi ve sürümleme oyunun, opt-in).
+A22'nin (d3)'ü: bir oyun kodeğinde `RecordCodec::RUN`'ı açarsa karenin
+kayıtları kayıt başına `0x12` + uzunluk yerine TEK bir `bytes records =
+6` alanında art arda gider (kayıt başına `id varint + oyunun gövdesi`).
+Açmayan oyunun baytı A31'den öncekinin birebir aynısı. Doğrulama demosu
+olarak savaş açtı; arena, MMO ve 2D demo dokunulmadı.
+
+**Oyunun yazdığı (seam).**
+
+- Sunucu: `RecordCodec` — `const RUN: bool = false;` (§4.1). `true`
+  iken `encode(id, wire, out)` KENDİNİ SINIRLAYAN bir gövde yazar
+  (biçimi tamamen oyunun; kit id'yi önüne kendisi yazar, gövdenin
+  tekrar etmesi gerekmez). Başka bir yöntem, tip ya da kayıt yok.
+- İstemci: `ClientDecoder` — `const RUN: bool = false;` +
+  `run_record(&self, id, run: &mut &[u8]) -> Result<Record,
+  ClientError>` (kalan koşunun başından tek gövde okur, `run`'ı
+  ilerletir; varsayılan `UnexpectedRun`). `client::wire::varint` public
+  oldu (koşu çözücüsünün yapı taşı, `sint32` zaten public'ti). Yeni
+  hata: `ClientError::UnexpectedRun`.
+
+**Kayıt sınırı: kendini sınırlayan gövde (seçilen) — kit uzunluk öneki
+(elenen).** Uzunluk önekli koşu (`id + len + gövde`) oyunun her biçimini
+(protobuf dahil) olduğu gibi taşırdı, ama kayıt başına 1 B geri getirir:
+savaşın koşu karelerinde bu **baytın %12,6–12,7'si** (yakalamalarda
+kayıt sayısı / bayt, 200 ve 500'de; kazancın ~dörtte biri). Kendini
+sınırlayan gövdede o bayt yok; protobuf gövde isteyen oyun uzunluğu
+kendisi yazar — maliyeti kendi seçimi olur, kit'in değil. Aynı turda
+elenen iki biçim daha: (1) id'yi oyunun gövdesine bırakmak — istemci
+kit'i id için oyunun çözücüsüne muhtaç olurdu, ithal gövdeler de id
+taşırdı; id'yi kit yazar/okur, gövde id'siz. (2) Paylaşılan hücre
+parçası başına bir koşu alanı (`repeated bytes records`) — parça başına
+2 B, 3×3 AOI'de kare başına ~18 B; bunun yerine kare TEK koşu, uzunluk
+yuvası bölge kapanırken yerinde düzeltiliyor (≥ 128 B'lik koşu yerinde
+sağa kaydırılır — ayrı ölçüm geçişi ya da kopya yok).
+
+**Yazıcı yolları (hepsi tek bölgeden: `common/frame/records.rs`
+`Records::open/close`, `put_entity_record`, `put_entity_body`,
+`WriteRecord::RUN`).**
+
+| Yol | Nerede |
+|---|---|
+| açık oda, PVS, düz sharded full'ları; terminal `match_result` | `put_entity_records` (bölgeyi açar/kapar) |
+| takım odası (full modu, delta modu: taze full, delta, keep-alive full, one-shot private full) | `SetLedger::emit_full/emit_delta/full_frame` (bölge `removed`'dan sonra; boş bölge = sessiz delta) |
+| sharded takım kompoziti (aynı dört kare) + ödünç (lent) kayıtlar | aynı defter, `ShownWriter` (`RUN = C::RUN`) |
+| ithal kayıtlar (başka shard'ın kodladığı `TeamRecord.bytes`) | `put_entity_body::<C>(id, body)` — ihraç gövdesi `encode` çıktısı (çerçevesiz, id'siz), alıcı sahibinin çerçevesiyle ekler |
+| AOI ve sharded × spatial: taze full, delta (3. geçiş), keep-alive full, one-shot private full | `CellPieces::full_view` + `assemble_group_packet`; hücre parçaları bölgesiz kayıt dizisi, kare bölgeyi parçaların etrafında açar |
+| one-shot private full zarfı | değişmedi (`emit_private_full` hazır full'u gömer) |
+
+**Shard'lar anlaşamaz mı?** Anlaşamazlar: mod kodek TİPİNİN sabiti
+(`<G::Codec as RecordCodec>::RUN`); bir odanın bütün shard'ları aynı
+`ShardedTeamRoom<G, …>`'yi çalıştırır, ihraç eden de ithal eden de aynı
+sabiti okur. İki farklı oyun tipini tek odaya kutulayan bir fabrika zaten
+iki kayıt biçimini karıştırırdı (gövde); kit'in kurucuları bunu yapmaz.
+Kilit: `record_run::imports::the_run_is_the_codecs_not_the_rooms`
+(derleme zamanı `const` iddiası + iki çerçevede aynı kayıtlar) ve
+`lent_and_imported_records_ride_the_run_like_own_ones` (kendi, ödünç ve
+ithal kayıt aynı koşuda `id + gövde`; ihraç gövdesi yalnız gövde).
+
+**İstemci kuralı** (`kit.proto`'da, §5.1): kurallardaki "`entities`"
+karenin kayıtları — alan 2 ya da alan 6; ikisi birden ya da iki koşu
+bozuk; koşu `removed` → `cell_exits`'ten sonra uygulanır, mutlak ve
+idempotent, boşluk olsa da; boş koşu yazılmaz; koşu okumayan istemci
+alan 6'yı hata sayar ve görünümü değiştirmez. `ClientView` bunu
+birinci yürüyüşte uygular (görünüm değişmeden).
+
+**Doğrulama demosu: savaş.** Neden: A22'nin "D2 + run" satırında en
+büyük oran savaşta (−49 %; A30 sonrası beklenen −54 %), mutlak bant en
+büyük (500'de istemci başına ~180 KB/sn) ve ithal kayıtları koşuda
+sınayan tek demo; istemcileri zaten kit'in `ClientView`'ında. Gövde
+(`gsb-demo-war/src/codec/run.rs`, etiketsiz varint'ler): `head =
+has_y | kind << 1 | faction << 3`, zigzag `x`, `z`, yerde değilse `y`,
+`hp` — yürüyen oyuncu 6 B (önce protobuf `UnitRecord` 14,7–14,9 B,
+id'si dahil). `war.proto`'nun aynası `bytes records = 6` taşıyor (alan
+2 aynada yok), `UnitRecord` istemcinin tuttuğu içerik olarak kaldı;
+okuyucu `gsb_demo_war::codec::{read_body, read_record}`. İstemcileri
+(test istemcisi, hosted e2e görünümü, loadgen botu) `RUN` + `run_record`.
+
+**Testler (önce başarısız, sonra geçen).**
+
+- Kit, oda türü başına ikiz koşu (`record_run`, 7 test): aynı tohumlu
+  oturum (20'ye kadar oyuncu; katılma, ayrılma, yürüme,
+  ışınlanma, takım değiştirme; oyunun 30'a varan dolaşan NPC'si) iki
+  odada — fikstürün `entities` kodeği ve koşu ikizi (`PackedCodec`:
+  zigzag `x`, `y`) — her kare alanlarına ayrılıp çerçevesinin düzenine
+  birebir (en küçük kodlamayla yeniden kurulunca aynı bayt) denetlenir;
+  her oyuncunun iki istemcisi HER tick aynı kare içeriğini, aynı görünümü,
+  aynı sayaçları taşır. Tek odalı türler (açık, AOI, takım full + delta,
+  PVS) GERÇEK çekirdekte (registry, iki oda aktörü, bir ticker); shard'lı
+  türler (düz, × spatial, takım full + delta) dört shard mantığı
+  çekirdeğin faz sırasıyla elle adımlanarak (göç, sınır şeridi, TEAMS
+  fazı, yayın). `entities` tarafının her karesi A31 öncesi düzen
+  (alan 6 yok) — açmayan oyunların baytı değişmedi kilidi, oda türü
+  başına.
+- Kit istemci (`client::tests::run`, 5): uzun bir dizide koşu ve
+  `entities` aynı sonuç/görünüm (kit'in yazdığı ve üretilmiş kodlayıcının
+  biçimi); koşu `removed` + `cell_exits`'ten sonra; açmamış çözücüye koşu
+  `UnexpectedRun` (grup karesi ve private full, görünüm/sequence
+  değişmez); iki alan / iki koşu / varint alan 6 bozuk (her iki sırada);
+  kısa koşu görünümü baseline'sız bırakır. Yazıcı (`common::frame::
+  records::tests`, 4): `entities` çerçevesi değişmedi; koşu tek alan,
+  en küçük uzunluk (3 000 kayda kadar, çok baytlı uzunluk); boş bölge iz
+  bırakmaz; ithal gövde tipli kayıtla aynı bayt (iki çerçevede). Kit
+  ithal/ödünç (`record_run::imports`, 2). `proto::tests`: alan 6'nın
+  etiketi (`0x32`) sabitlendi.
+- Savaş: kodek testleri (gövde bayt bayt sabit, art arda yuvarlak dönüş,
+  bozuk gövde, 6/8 B), `tests/wire.rs` KASTEN yeni moda çevrildi (kurulmuş
+  kare bayt bayt; gerçek shard karelerinin — full, delta, one-shot, ithal
+  — hepsi tek koşu, her gövde kendi baytına yeniden kodlanıyor), hosted
+  e2e (`war_e2e`, 4) ve loadgen (`loadgen_drives_the_war`,
+  `loadgen_orchestrates_the_war`: `errors=0`) geçiyor. Önce başarısız:
+  kodek 3, savaş entegrasyon testlerinden 7'si (`wire`'ınki dahil),
+  `war_e2e` 4, loadgen 2.
+
+**Mutasyonlar** (dosya scratchpad'e yedeklendi, bozuldu, kit/savaş
+testleri koşuldu, yedekten geri yüklendi — hepsi kırıldı):
+
+| Kural | Mutasyon | Kıran |
+|---|---|---|
+| koşuda id + gövde | `put_entity_record` RUN'ı yok sayar | 11 (ikizlerin 7'si, yazıcı 2, ithal 2) |
+| en küçük koşu uzunluğu | uzunluk hep tek bayt | 8 (yazıcı + 7 ikiz) |
+| boş koşu yazılmaz | boş bölge kalır | 5 |
+| ithal gövde id'li | `put_entity_body` id yazmaz | 4 |
+| takım yazıcısı oyunun çerçevesi | `ShownWriter::RUN = false` | 3 |
+| açmamış çözücü | `UnexpectedRun` denetimi yok | 1 |
+| uygulama sırası | koşu `removed`/`cell_exits`'ten önce | 3 |
+| kayıtlar tek alanda | alan 2'den sonra koşu kabul | 1 |
+| `entities` çerçevesi değişmez | kapalı modda da bölge açılır | 89 (mevcut testlerin hepsi) |
+| AOI delta / full view bölgesi | bölge `entities` ile açılır | 2 / 2 |
+| defter full karesi | aynı | 4 |
+| savaş opt-in | `WarCodec::RUN = false` | savaş entegrasyon 7 (`wire` dahil) + `war_e2e` 4 |
+
+**Ölçüm** (release; `gsb-loadgen N --game war --duration 10
+--write-stall-secs 0 --capture DIR --capture-clients 8`, rUDP için
+`--transport udp`; `50f6e0b` (önce) ile bu dal (sonra) dönüşümlü
+çiftler; 32 çekirdek, başka ajanların işleriyle yüklü makine). Her
+koşuda `joined = left = N`, `errors=0`, `server_closes=0`, `dropped=0`,
+`server_hz` 29,75–30,01, `frag_dropped=0`.
+
+| N | taşıma | `out_bps_per_conn` önce (1 / 2) | sonra (1 / 2) | Δ | örnek istemci B/sn önce → sonra | Δ | 1 dk yük önce | sonra |
+|---|---|---|---|---|---|---|---|---|
+| 200 | TCP | 62 937 / 61 396 | 28 573 / 28 721 | **−53,9 %** | 64 079 → 29 716 | −53,6 % | 18,4 / 17,2 | 18,0 / 14,6 |
+| 500 | TCP | 162 646 / 166 437 | 76 580 / 74 582 | **−54,1 %** | 178 045 → 82 135 | −53,9 % | 12,6 / 16,4 | 15,8 / 17,2 |
+| 500 | rUDP | 171 703 / 176 652 / 177 830 / 182 091 | 79 468 / 83 957 / 85 170 / 85 037 | **−52,9 %** | — | — | 21,3 / 54,1 / 41,8 / 36,7 | 31,8 / 54,5 / 40,6 / 31,2 |
+
+- **Kayıt anatomisi** (yakalamalar): kayıt/kare aynı (200'de 106–108,
+  500'de 285–295 — içerik aynı); önce gövde 14,7–14,9 B + 2 B çerçeve
+  (baytın %11,8'i), sonra gövde 6,0 B + id varint'i, çerçeve karede bir
+  alan (%0,1–0,2). A22'nin tahminiyle uyumlu ("D2 + run + kompakt id"
+  −57 %, A30'un −7 %'si düşülünce −54 %).
+- **En büyük kare** 3 221 → 1 504 B (200), 8 520 → 3 999 B (500);
+  `max_snapshot_bytes` (1 400) aşan grup karesi 10 sn'de 200'de 3 308 /
+  3 368 → 72 / 72, 500'de 3 612 / 3 628 → 3 371 / 3 252 (500'ün ortalama
+  karesi hâlâ ~2,3 KB).
+- **rUDP parçalanması, 500:** istemcinin `frag_reassembled` sayacı
+  (parçadan kurulan mesaj) önce 146 370 / 147 413 / 147 435 / 147 922,
+  sonra 138 663 / 146 625 / 147 201 / 146 800 — mesajların çoğu 500'de
+  hâlâ bütçenin üstünde, SAYI neredeyse aynı; değişen mesaj başına
+  datagram. Yazıcının `frag_datagrams` sayacı loadgen koşusunda
+  görünmüyor (bulgu A31-2), bu yüzden datagram sayısı yakalanan
+  karelerden (RAW = yük + 3 B, 1 472 B bütçe, parça yükü 1 467 B)
+  hesaplandı: 500'de kare başına **3,94 / 4,02 → 2,12 / 2,04 datagram**
+  (parçalanan kare %83 → %78); 200'de 1,80 → 1,01 (parçalanan kare
+  %73,9 → %1,3). Bağımsız datagram kaybında kare kaybı (hesap): 500'de
+  %1'de %3,9 → %2,1, %5'te %18,2 → %10,1; 200'de %1'de %1,8 → %1,0.
+- Sunucu adım süreleri (`step_p50_fine_us` 256–856, önce/sonra
+  ayırt edilemez) makine yükünün gürültüsünde.
+
+**Bulgular.**
+
+- **A31-1 — shard'lı iki aktör odası aynı baytı göndermez.** İkiz testi
+  önce gerçek shard aktörleriyle kuruldu: yük altında iki oda bir
+  tick'lik farklarla ayrıştı (şerit/göç mesajlarının aynı tick'teki
+  sırası zamanlamaya bağlı — çekirdeğin kabul edilmiş "dikişte bir
+  tick'lik bayatlık"ı; 4-komşulukta çapraz ışınlanma iki atlamalı göç ve
+  gecikmeli girdi). Hata değil, ama shard'lı bir odanın karelerini bayt
+  bayt karşılaştıran her test elle adımlanmalı (`record_run/shards`).
+- **A31-2 — rUDP yazıcısının parça sayaçları loadgen'de okunmuyor:**
+  `frag_messages`/`frag_datagrams` yazıcı oturumu biterken `info` loguna
+  gidiyor; loadgen'in süreç içi sunucusunda (`RUST_LOG=gsb_net=info`
+  ile de) RESULT'a ulaşmıyor. Datagram maliyeti bugün yakalamadan
+  hesaplanıyor; RESULT'a bir `frag_datagrams` alanı ayrı bir tur işi.
+- **A31-3 — 500'de kare hâlâ parçalanıyor** (ortalama ~2,3 KB): koşu
+  datagram sayısını yarıya indirdi ama mesajların %78'i bütçe üstünde;
+  sonraki kaldıraç A10 (varlık başına yayın hızı).
+- **Sapmalar (bilinçli):** `kit.proto`'ya alan eklemek üretilmiş
+  `gsb_kit::proto::WorldSnapshot`'a alan ekledi; dört demonun tel
+  testlerindeki struct literal'ine `records: Vec::new()` eklendi (bayt
+  dizileri ve iddialar aynı — bu testler şimdi boş koşunun da baytı
+  değiştirmediğini kanıtlıyor). Kit istemcisinin iki eski testi alan
+  6'yı "bilinmeyen alan" olarak kullanıyordu; numaralar 10'a taşındı
+  (alan 6 artık bilinen alan; yanlış tel tipindeki alan 6 yeni testte
+  bozuk).
+
+**Doğrulama:** 827 → **847** test / 0 hata / 1 ignored (+18 kit: ikiz
+7, ithal 2, istemci 5, yazıcı 4; +2 savaş kodeği: 3 yeni, eski protobuf
+gövde testi kaldırıldı); `cargo clippy --workspace --all-targets -- -D
+warnings` 0; kapanış kontrolü, beş özellik derlemesi ve
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` temiz.
 
 ## 11. Kabul kriteri
 
