@@ -3,13 +3,13 @@
 //! as it goes — so the three teams' units genuinely meet (and leave)
 //! each other's fog, in 3D: height alone can hide a unit.
 //!
-//! **Home = the unit's own spawn point**, read from the first team
-//! snapshot that shows it. The arena spawns a unit at its team's base,
-//! beside its team-mates (`ArenaGame::spawn_team_player`); the wire never
-//! names the team, and the base ring's slots are clamped into the floor
-//! at large team sizes, so "nearest base" would misjudge a far slot —
-//! the observed spawn point is exact. Until it is known the bot sends
-//! nothing.
+//! **Home = the team's base, as the wire names it.** The session's first
+//! private frame carries the arena's `Welcome` (team, team count — the
+//! kit's session payload, `Private.game`); the bot places the base with
+//! the arena's own formula (`ArenaGame::base_of`). Until the welcome has
+//! arrived the bot sends nothing. (Before the welcome existed the bot
+//! read its home off the first snapshot that showed its own unit — the
+//! wire did not name the team: GAME-MODULE G3-3.)
 //!
 //! **The run** (per client, phase-shifted by id like the demo's ring so
 //! the units do not move in lockstep): along the straight line home →
@@ -24,8 +24,9 @@
 use std::f64::consts::TAU;
 use std::time::Duration;
 
-use gsb_demo_arena::arena::MoveTo;
-use gsb_demo_arena::codec::to_cm;
+use gsb_demo_arena::ArenaGame;
+use gsb_demo_arena::arena::{MoveTo, Welcome};
+use gsb_demo_arena::codec::{Cm3, to_cm};
 use gsb_demo_arena::op;
 use gsb_kit::client::wire::{Fields, Value, sint32};
 use gsb_kit::client::{ClientDecoder, ClientError, ClientView, Counters, PrivateEvent, Snapshot};
@@ -56,9 +57,7 @@ impl LoadBot for ArenaBot {
     fn client(&self, id: u64) -> Box<dyn BotClient> {
         Box::new(ArenaClient {
             id,
-            entity: None,
-            home: None,
-            view: ClientView::new(ArenaDecoder),
+            view: ClientView::new(ArenaDecoder::default()),
         })
     }
 
@@ -94,8 +93,8 @@ impl LoadBot for ArenaBot {
 
     fn describe(&self) -> String {
         format!(
-            "arena: units run spawn (team base) → centre → spawn every {ROUND_TRIP_SECS} s, \
-             height 0..{} m; one numbered MoveTo per --move-ms once the own unit is seen",
+            "arena: units run team base → centre → base every {ROUND_TRIP_SECS} s, \
+             height 0..{} m; one numbered MoveTo per --move-ms once welcomed (team from the wire)",
             2.0 * HEIGHT_SWING
         )
     }
@@ -104,9 +103,7 @@ impl LoadBot for ArenaBot {
 /// One arena client.
 struct ArenaClient {
     id: u64,
-    entity: Option<u64>,
-    /// The own unit's spawn point, centimetres (see the module docs).
-    home: Option<[i32; 3]>,
+    /// The view; its decoder keeps the session's welcome (the home).
     view: ClientView<ArenaDecoder>,
 }
 
@@ -142,15 +139,8 @@ impl BotClient for ArenaClient {
         self.view.len()
     }
 
-    fn joined(&mut self, entity: u64) {
-        self.entity = Some(entity);
-    }
-
     fn next_input(&mut self, elapsed: Duration, seq: u64) -> Option<(u16, Vec<u8>)> {
-        if self.home.is_none() {
-            self.home = self.entity.and_then(|e| self.view.get(e).copied());
-        }
-        let [x, y, z] = self.target(self.home?, elapsed);
+        let [x, y, z] = self.target(self.view.decoder().home?, elapsed);
         let msg = MoveTo { x, y, z, seq };
         Some((op::ARENA_MOVE_TO, msg.encode_to_vec()))
     }
@@ -161,8 +151,14 @@ impl BotClient for ArenaClient {
 /// x = 2; sint32 y = 3; sint32 z = 4; }`, walked by hand — pinned to the
 /// generated decoder by this module's tests). The arena runs no cell
 /// space: its team room sends full snapshots only and no frame carries a
-/// cell exit, so one is a protocol error.
-pub(crate) struct ArenaDecoder;
+/// cell exit, so one is a protocol error. The session payload is the
+/// arena's `Welcome` (decoded with the generated type: once per session);
+/// the decoder keeps the base it names.
+#[derive(Default)]
+pub(crate) struct ArenaDecoder {
+    /// The own team's base, centimetres (`None` until welcomed).
+    home: Option<[i32; 3]>,
+}
 
 impl ClientDecoder for ArenaDecoder {
     type Record = [i32; 3];
@@ -187,5 +183,18 @@ impl ClientDecoder for ArenaDecoder {
 
     fn cell_exit(&self, _: &[u8]) -> Result<(), ClientError> {
         Err(ClientError::Malformed("the arena sends no cell exits"))
+    }
+
+    fn session_private(&mut self, body: &[u8]) -> Result<(), ClientError> {
+        let Welcome { team, teams } = Welcome::decode(body)?;
+        let (Ok(team), Ok(teams)) = (u8::try_from(team), u8::try_from(teams)) else {
+            return Err(ClientError::Malformed("a team out of range"));
+        };
+        if team >= teams {
+            return Err(ClientError::Malformed("a team out of range"));
+        }
+        let Cm3 { x, y, z } = Cm3::from(ArenaGame::with_teams(teams).base_of(team));
+        self.home = Some([x, y, z]);
+        Ok(())
     }
 }

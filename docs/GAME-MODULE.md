@@ -895,6 +895,19 @@ kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
   bir arena istemcisi için arena protokolüne bir takım alanı (ör. ilk
   private karede) eklemek düşünülebilir — korunan crate, bu turda
   dokunulmadı.
+  **Kapandı — küçük paket:** kit'e oturum yükü kancası geldi
+  (`Game::session_private` → `Private.game = 4`, oturum başına bir kez:
+  join ve resume sonrası ilk private kare; istemcide
+  `ClientDecoder::session_private` — KIT-ARCHITECTURE §5.1 "Oturum
+  yükü"; BACKLOG A6'nın tetikleyicisi buydu). Arena orada
+  `Welcome { uint32 team = 1; uint32 teams = 2; }` gönderiyor
+  (`arena.proto`; takım 0 varsayılan olduğu için `team` yazılmaz, alan
+  4 yine gelir); kasıtlı ve tek wire değişikliği bu, bayt bayt kilitli
+  (`gsb-demo-arena/tests/wire.rs`: takım 1/3 → `22 04 08 01 10 03`).
+  Diğer oyunların baytları değişmedi (varsayılan kanca hiçbir şey
+  yazmaz; kit'te altı odada, demoda `kit_wire`). Arena botu artık
+  evini `Welcome`'dan (`base_of(team)`, `teams` ile) alıyor, spawn
+  konumundan tahmin etmiyor; hoş geldin gelene dek girdi göndermez.
 - **K4 hâlâ geçerli**: yük dağılımı botun ilk `Travel`'ına dayanıyor
   (kaydısız oturum → shard 0). Kalıcı çözüm çekirdekte/yönlendiricide.
   **Kapandı — K4 turu** (aşağıda "K4 sonucu"): çekirdek yönlendiriciye
