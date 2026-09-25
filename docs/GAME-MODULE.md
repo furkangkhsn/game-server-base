@@ -1159,9 +1159,9 @@ artık evinden oraya yürür.
 kendisi, bulguları ve testleri KIT-ARCHITECTURE §10 "W2 sonucu"nda;
 rölenin yük altındaki sayıları CROSS-SHARD §8b.8'de. Burada
 barındırma, loadgen botu ve tabanlar. Commit'ler (her biri kendi
-başına yeşil): `2ae46d6` (crate), `4b22a7a` (test mesajı), `650632d`
-(sunucu modülü + CI), `b55c04d` (takım sayaçları metrik yolunda, A26),
-`bbd018e` (loadgen botu + RESULT), `03500f4` (botun orta halkası
+başına yeşil): `6ab66a2` (crate), `c07cc8e` (test mesajı), `67e4a4c`
+(sunucu modülü + CI), `ae8a3d7` (takım sayaçları metrik yolunda, A26),
+`9a70646` (loadgen botu + RESULT), `12d7380` (botun orta halkası
 dikişleri kesiyor).
 
 **Modül** (`gsb-server/src/games/war.rs`, özellik `game-war` — öbürleri

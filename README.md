@@ -60,14 +60,15 @@ architecture for MOBA / MMORPG projects.
 | `gsb-demo` | **The example game**: 2D components, movement, the demo wire protocol (`game.proto`, a typed mirror of the kit envelope), input/bot/RPC/economy; implements the kit's seams and instantiates its rooms (constructors: `gsb_demo::prelude`) |
 | `gsb-demo-arena` | **Validation demo: a 3D team arena** built on `gsb-kit`'s public API only (no kit or core change): `Pos3` (`Spatial`), its own 3D movement, a centimetre-quantized record codec, round-robin teams over three sides, **3D team fog of war** (`TeamRoom` in delta mode + `VisionGrid3` — height counts), its own `arena.proto` (typed mirror of the kit envelope). Hosted by the server as `game = "arena"` (settings in `[arena]`); verified through the real room actor (`docs/KIT-ARCHITECTURE.md` §10 "Faz 3 sonucu") and end to end over TCP/TLS (`gsb-server/tests/arena_e2e.rs`) |
 | `gsb-demo-mmo` | **Validation demo: a 3D MMO world** — the closing check, built on `gsb-kit`'s public API only: `Pos3` with a ground-plane `Planar` (`[x, z]`), a decimetre-quantized record codec (position + kind + hit points), mobs spawned and despawned by game code that migrate without any speed component, flyers, a logout timer (hold, then release the slot; an optional logout bot), **a ground-plane grid AOI over a sharded world** (`ShardedSpatialRoom` + `Grid2` + `GridPartition2` with corners, 2×2 shards — height ignored), its own `mmo.proto`. Hosted by the server as `game = "mmo"` (settings in `[mmo]`; every room is a whole sharded world); verified through four real shard actors and end to end under the real registry (`gsb-server/tests/mmo_*.rs`) (`docs/KIT-ARCHITECTURE.md` §10 "Faz 4 sonucu"; the kit design findings it recorded were fixed in "Faz 5 sonucu") |
-| `gsb-server` | Composition root: config, startup, the game modules (`game = "demo" | "arena" | "mmo"`, one cargo feature each), `gsb-server` binary + client example + `gsb-loadgen` load generator |
+| `gsb-demo-war` | **Validation demo: "Cephe", a three-faction war** built on `gsb-kit`'s public API only: `Pos3` with a ground-plane `Planar`, a decimetre-quantized record carrying the unit's faction, watchtowers of every faction in every region (vision sources), capture points that become their taker's unit, saved characters by identity (a hashed faction for the rest), a `Welcome` naming the faction, melee across shard seams through remote effects, **team fog of war over a sharded map** (`ShardedTeamRoom` + `VisionGrid2` + `GridPartition2`, 2×2 shards, delta mode — allies map-wide, an enemy only while a unit of the faction sees it), its own `war.proto`. Hosted as `game = "war"` (settings in `[war]`); verified through a live registry and four shard actors and end to end over TCP (`gsb-server/tests/war_e2e.rs`) (`docs/KIT-ARCHITECTURE.md` §10 "W2 sonucu") |
+| `gsb-server` | Composition root: config, startup, the game modules (`game = "demo" | "arena" | "mmo" | "war"`, one cargo feature each), `gsb-server` binary + client example + `gsb-loadgen` load generator |
 
 ## Quick start
 
 Requirements: Rust **1.95.0** (pinned via `rust-toolchain.toml`; this is also the
 MSRV), **nothing else**. Having `protoc` installed on the system is not required:
 proto build scripts (`gsb-protocol`, `gsb-kit`, `gsb-demo`, `gsb-demo-arena`,
-`gsb-demo-mmo`)
+`gsb-demo-mmo`, `gsb-demo-war`)
 explicitly provide the embedded binary of `protoc-bin-vendored` to `prost-build`
 (`Config::protoc_executable`), which takes precedence over searching
 `PROTOC`/`PATH`. On an exotic target where the embedded binary is not found, the build script
@@ -77,7 +78,7 @@ clippy `-D warnings` · test · rustdoc `-D warnings` · the Autobahn RFC 6455 f
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 776 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 818 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
@@ -132,11 +133,13 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 #  a loopback burst is the worst case for the accept path; rUDP heals a lost
 #  handshake datagram by re-sending it, counted as `hs_retries`).
 # --addr HOST:PORT: client-only mode against an external server.
-# --game demo|arena|mmo (default demo): the clients' bot and the in-process /
+# --game demo|arena|mmo|war (default demo): the clients' bot and the in-process /
 #  served server's `game` key (forwarded to both orchestrated children). The
 #  arena bot runs its units base → centre → base with height; the MMO bot
 #  roams a waystone, travels between shards and attacks nearby mobs (RESULT
-#  adds `shard_members=`). Demo-only flags (--visibility, --profile, …)
+#  adds `shard_members=`); the war bot holds a tower or capture point, moves
+#  between posts and strikes enemies in reach (RESULT adds `shard_members=`
+#  and the team exchange's `team_*=` rates). Demo-only flags (--visibility, --profile, …)
 #  refuse the other games.
 ```
 
@@ -191,7 +194,8 @@ the `visibility` key in config (`all` / `spatial` / `team` /
 ## The next game
 
 A new game is a new crate like `gsb-demo` (2D), `gsb-demo-arena` (3D
-team fog) or `gsb-demo-mmo` (3D, ground-plane AOI over shards), on top
+team fog), `gsb-demo-mmo` (3D, ground-plane AOI over shards) or
+`gsb-demo-war` (3D, team fog over a sharded map), on top
 of `gsb-kit`:
 
 1. Write its `proto/` (`import "kit.proto"`; declare typed mirrors of the

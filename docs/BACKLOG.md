@@ -24,7 +24,7 @@ bağımsız mutasyon, `main`'e fast-forward. Push yok.
 | 4b | **H — rUDP el sıkışma proof kaybı** (U'da bulundu): istemci proof'u gönderince kendini bağlı sayıyor; 200+ eşzamanlı el sıkışmada loopback'te sunucu soketinin alım kuyruğu taşıyor, proof kayboluyor, istemci ölüyor | `gsb-net/udp` (kabul `ACK{1}` + proof yeniden gönderimi, sunucu idempotent) | ✅ `717aff2` (DESIGN §6 "El sıkışma kaybı") |
 | 5 | **T — takım odasında delta:** arena yalnız full gönderiyor (bağlantı başı ~234 KB/s @1000) | `gsb_kit::team` (ortak delta motoru) | ✅ `b2282df` (KIT-ARCHITECTURE §10 "T sonucu"; arena kazancı ~%10 — bulgu) |
 | 6 | **W1 — team × sharded kompoziti** (CROSS-SHARD §8b; K4'ten `spawn_team_player_as`) | kit + çekirdek (registry hub, TEAMS fazı) | ✅ `95dd007` (CROSS-SHARD §8b.7) |
-| 6b | **W2 — doğrulama oyunu "Cephe":** üç fraksiyon, takım sisi, 2×2 shard; müttefik harita geneli, düşman herhangi bir müttefiğin görüşüyle | yeni demo crate + sunucu modülü (`game = "war"` vb.) + loadgen botu + ölçüm | sırada |
+| 6b | **W2 — doğrulama oyunu "Cephe":** üç fraksiyon, takım sisi, 2×2 shard; müttefik harita geneli, düşman herhangi bir müttefiğin görüşüyle | yeni demo crate + sunucu modülü (`game = "war"`) + loadgen botu + ölçüm | ✅ `c2c3dc4` (KIT-ARCHITECTURE §10 "W2 sonucu", CROSS-SHARD §8b.8) |
 
 ## 2. Bırakılanlar
 
@@ -40,12 +40,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A4 NUMA ölçümü, olumluysa soket başına süreç | bir soketin çekirdekleri dolar | DISTRIBUTED:236-256 |
 | A5 `Grid3` (hacimsel AOI) ve `GridPartition3` presetleri | hacimsel AOI ya da 3B shard'lama isteyen oyun | KIT-ARCHITECTURE:360-368, 1297-1314 |
 | A7 Bölüm presetlerinde `wire_scale` | wire'ı konum biriminden ince olan ve kabalaştıramayan oyun | KIT-ARCHITECTURE:1660, 1716 |
-| A8 `Vision::sees`'te birim başına görüş yarıçapı (ward/kahraman) | — | KIT-ARCHITECTURE:1470, 1733 |
+| A8 `Vision::sees`'te birim başına görüş yarıçapı (ward/kahraman; W2'de gerekmedi — her bölgede fraksiyon başına bir kule) | — | KIT-ARCHITECTURE:1470, 1733 |
 | A9 Oyuncu başına aydınlık hücre (görünür hücrede bile ışık konisi) | — | ROADMAP:694, DESIGN:1046 |
-| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu) | — (Unity tarafı işi) | ROADMAP:615 |
+| A10 Entity başına yayın hızı (10-15 Hz + istemci interpolasyonu; W2 kanıtı: savaş 1000'de ~365 KB/sn/istemci) | — (Unity tarafı işi) | ROADMAP:615 |
 | A11 Bağlantı başına tick'te yeni `Vec` | yük verisi sorun gösterirse | ROADMAP:617 |
 | A12 `QueryState`'i oda başına bir kez kurmak | — (hâlâ açık: `sharded/room.rs:220,240`, `pvs/logic.rs:193`) | ROADMAP:704 |
-| A13 Registry striping (W1'den beri takım röleleri de registry'nin tek görevinde veri düzlemi yükü) | registry tablo/röle bandı baskısı ölçülürse | ROADMAP:700 |
+| A13 Registry striping (W1'den beri takım röleleri de registry'nin tek görevinde veri düzlemi yükü) | `team_export_drops > 0` ya da registry gecikmesi ölçülürse (W2: 1000'de 120 export/sn, ~281 k kayıt/sn röle, 0 düşme) | ROADMAP:700 |
 | A14 Batch üstü zstd | — | ROADMAP:706, DESIGN:890 |
 | A15 100k ölçeği (çok makine, congestion dahil) | — | ROADMAP:325, 364 |
 | A16 RPC işçi havuzu | ~10k üyeli oda ya da oda tavanı gerçekten bağlarsa | RPC-CONTROL-PLANE:469 |
@@ -54,12 +54,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A19 Dinamik adaptif tick hızı | — | DESIGN:1213 |
 | A20 Join/leave için tick içi hızlı yol | gerekirse | DESIGN:1221, TICK-ARCHITECTURE:134 |
 | A21 Dinamik oda bölme/birleştirme, bölgeler arası | — | DESIGN:892 |
-| A22 Değer düzeyinde delta (kaydı son gönderilene göre göreli kodlamak; kodek seam'i + istemci çözücüleri) | hareketli iş yükünde bant ya da MTU baskısı (T: arena kazancı yalnız ~%10) | KIT-ARCHITECTURE §10 "T sonucu" |
+| A22 Değer düzeyinde delta (kaydı son gönderilene göre göreli kodlamak; kodek seam'i + istemci çözücüleri) | hareketli iş yükünde bant ya da MTU baskısı (T: arena kazancı yalnız ~%10; W2: savaş 1000'de ~365 KB/sn/istemci) | KIT-ARCHITECTURE §10 "T sonucu" |
 | A23 Demo sunucusunda `team × delta` (config şu an reddediyor; kit hazır) | demo'da takım delta'sı isteyen koşu | KIT-ARCHITECTURE §10 "T sonucu" |
-| A25 Takım export'u her tick; `every k` temposu | W2 ölçümü registry bandı/CPU baskısı gösterirse | CROSS-SHARD §8b.1 |
-| A26 Takım export sayaçlarını (`team_exchange_summary`, `team_hub_summary`) metrik yoluna terfi | loadgen botu (W2) ölçüm isterse | CROSS-SHARD §8b.6 |
-| A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle | W2'nin oyun tasarımı isterse | CROSS-SHARD §8b.5 |
-| A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
+| A25 Takım export'u her tick; `every k` temposu (W2 ölçtü, gerekmedi: 1000'de 0 düşme; tempo istemci baytını değiştirmez, görmeyi k tick geciktirir) | `team_export_drops > 0` ya da registry gecikmesi | CROSS-SHARD §8b.1 |
+| A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle; W2-1 kanıtı: bölüm artefaktı (shard 3 oyuncusu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki shard 0 oyuncusu görmüyor); en küçük değişiklik varlık başına "harita geneli" bayrağı | herkesin durumunu görmesi gereken bir hedef | CROSS-SHARD §8b.5 |
+| A28 Göçte ayrılan shard'daki müttefikte bir tick'lik görünürlük boşluğu (kabul; W2'de ölçülmedi — loadgen kısa kayıp-geri gelişleri saymıyor) | bir oyunda görünür titreme raporu | CROSS-SHARD §8b.5 |
+| A29 Takım bütçesi üyeleri wire sırasıyla kesiyor (ilk tick'te doğan kuleler kalır, en yeni oyuncular gider) | bütçe gerçekten kesmeye başlarsa | KIT-ARCHITECTURE W2-3 |
 | A24 İstemci tarafında delta uygulaması maliyeti (orkestre arena 1000'de `clients_cpu_s` +%15) | yük verisi sorun gösterirse | KIT-ARCHITECTURE §10 "T sonucu" |
 
 ### B. Taşıma ve operasyon
@@ -143,9 +143,10 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F8 Admin `POST /rooms/open` oda config'ini `RoomConfig::default()` + `tick_hz`'den kuruyor, sunucu oda anahtarlarını (`max_detach_hold_secs` vb.) almıyor | RECONNECT §17 |
-| F9 Crystal olayları için genel oyun/kit sayaç seam'i — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
+| F9 Crystal olayları için genel oyun/kit sayaç seam'i (W2-3: kit'in `ShardedTeamRoom::over_budget` sayacı da barındırıcıya ulaşmıyor) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
+| F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
 
-(A6 ve F3 küçük pakette kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

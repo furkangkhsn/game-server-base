@@ -1313,7 +1313,7 @@ paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
 4. **İlk bot sürümünde seam ötesi dövüş hiç yoktu.** Karakolların hepsi
    bölgelerin derinindeydi: `effects_applied = 0` (200/500/1000),
    göçler yalnız yeniden doğmalar. Orta noktanın halkası dikişleri
-   kesecek kadar genişletildi (70–95 m; `03500f4`): 500/1000'de 10 sn'de
+   kesecek kadar genişletildi (70–95 m; `12d7380`): 500/1000'de 10 sn'de
    5–7 uzak etki, 60–110 göç — gerçek yük altında hatasız. Küçük sayı
    botun seyrek saldırısından (≈ 5 sn'de bir) ve dikişe yakın
    karşılaşmaların azlığından.

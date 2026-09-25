@@ -5,6 +5,54 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## W2 turu — doğrulama oyunu "Cephe" (`demo/w2-war`)
+
+Kit'in dördüncü doğrulama oyunu ve W1'in `team × sharded` kompozitinin ilk
+kullanıcısı (KIT-ARCHITECTURE §10 "W2 sonucu", GAME-MODULE "W2 sonucu",
+CROSS-SHARD §8b.8): üç fraksiyon, 1 600 m'lik haritada 2×2 shard, harita
+genelinde takım sisi — müttefik her yerde, düşman yalnız fraksiyonun bir
+birimi (oyuncu ya da her bölgedeki gözcü kulesi) onu görürken, başka shard'da
+bile. **Kit'e dokunulmadı.**
+
+- `gsb-demo-war`: `ShardedTeamRoom` + `VisionGrid2` (60 m) + köşegenli
+  `GridPartition2`, delta modu; 12 gözcü kulesi (fraksiyon başına bölge
+  başına bir), iki ele geçirme noktası (W1 nötr kuralı; ele geçirilen nokta
+  fraksiyonun birimi olur); kayıtlı karakter (fraksiyon + konum) doğrulanmış
+  kimlikle, kaydı olmayana kimliğin FNV-1a özetiyle fraksiyon ve üs;
+  `Welcome { faction, factions }` `Private.game`'de; seam ötesi yakın dövüş
+  MMO'nun uzak etki kalıbıyla, öldürme sahibin shard'ında bir kez;
+  `war.proto`, kayıtta 1 tabanlı fraksiyon.
+- Sunucu: `game = "war"`, özellik `game-war` (varsayılan açık; CI'ın oyunsuz
+  işi tek başına derler/lint'ler); `[war]` = `disconnect_grace_secs`,
+  `team_budget`; sabit anahtarlar reddedilir.
+- Çekirdek (A26 kapandı): takım sayaçları `RoomSample::team_*` (yedi alan)
+  → rapor, `gsb-metric`, Prometheus `gsb_room_team_*_total`; loadgen metrik
+  teli `GSMA`.
+- Loadgen `--game war`: kadro `lg-{id}` (fraksiyon `id mod 3`), fraksiyonu
+  `Welcome`'dan alır, karakollar arasında dolaşır (orta nokta seam'leri
+  keser), menzildeki düşmana saldırır; RESULT `shard_members=` + `team_*`.
+- **Ölçüm** (release, `--duration 10 --write-stall-secs 0`, yük 28–44):
+  200/500/1000 (orkestre) `errors=0`, 30 Hz; 1000'de adım p50/p90
+  1,4–1,7/2,4–3,1 ms, `out_bps_per_conn` ~365 KB/sn (istemci başına ~956
+  birim — müttefiğin harita geneli görünmesi senaryonun doğası, röle
+  değil); röle 120 export/sn, export başına ≈ 0,78·N kayıt, yayılım 3,00,
+  düşme/tavan/TTL 0. rUDP 500: `frag_reassembled` 129 k, `frag_dropped` 0.
+  A25 (export temposu) gerekmedi; A13 tetiksiz.
+- **Bulgular (kod değişmedi):** W2-1 nötr kuralı bölüm artefaktı üretiyor
+  (shard 3'teki oyuncu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki
+  shard 0 oyuncusu görmüyor); W2-2 birim başına yarıçap gerekmedi; W2-3
+  bütçe üyeleri wire sırasıyla kesiyor (kuleler kalır, en yeni oyuncular
+  gider) ve kit'in `over_budget`'ı barındırıcıya ulaşmıyor; W2-4 `Ticker`
+  std saatle damgalıyor — duraklatılmış test saatinde yürüyüş duruyor.
+
+Testler 776 → 818 (+42). Ajanın mutasyonları: savaşın 22 kural mutantının
+19'u tek başına kırıldı (seam ötesi taraf/menzil denetiminin iki katmanı
+birbirinin yedeği, birlikte kırılıyor), sunucu modülü 5/5, sayaç yolu
+5/5. Ebeveyn: iki düzeltme commit'ini (rustdoc bağı, kararsız loadgen
+penceresi) ait oldukları commit'lere katladı — her commit tek başına
+geçiyor (ilk 802, loadgen commit'i 818, doc kapısı temiz); bağımsız
+mutasyonu (kayıtlı karakteri yok saymak) 7 testi kırıyor.
+
 ## W1 turu — team × sharded kompoziti (`kit/w1-team-sharded`)
 
 Takım sisi artık shard'lı haritada (CROSS-SHARD §8b; BACKLOG §1 satır 6'nın

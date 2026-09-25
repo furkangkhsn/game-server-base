@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-776 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+818 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -144,7 +144,17 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
-küçük paket, S, H, takım odasında delta, W1 ✅; sırada W2 — doğrulama oyunu "Cephe").
+küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**W2 tamam** (KIT-ARCHITECTURE §10 "W2 sonucu", GAME-MODULE "W2 sonucu",
+CROSS-SHARD §8b.8): "Cephe" (`gsb-demo-war`) kompoziti kit'e dokunmadan
+kullanıyor; `game = "war"` (`[war]`: `disconnect_grace_secs`,
+`team_budget`), `--game war` (kadro `lg-{id}`, RESULT'ta `team_*`).
+Takım sayaçları `RoomSample::team_*` (loadgen teli `GSMA`). Aktör testleri
+public API'den canlı registry + dört shard'la (`gsb-demo-war/tests/common`);
+yürüyen senaryo gerçek saatte (duraklatılmış saat `dt`'yi dondurur — W2-4).
+Röle 1000'de kayıpsız; bant istemci tarafında (~365 KB/sn/istemci) —
+A10/A22'nin kanıtı.
 
 **W1 tamam** (CROSS-SHARD §8b, KIT-ARCHITECTURE §10 "W1 sonucu"): bir
 shard logic'i `ShardLogic::team_exchange` ile takım görünür kümesini
@@ -412,6 +422,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 776 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 818 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
