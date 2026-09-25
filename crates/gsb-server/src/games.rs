@@ -14,8 +14,10 @@ pub mod arena;
 pub mod demo;
 #[cfg(feature = "game-mmo")]
 pub mod mmo;
-#[cfg(any(feature = "game-arena", feature = "game-mmo"))]
+#[cfg(any(feature = "game-arena", feature = "game-mmo", feature = "game-war"))]
 pub mod settings;
+#[cfg(feature = "game-war")]
+pub mod war;
 
 /// The `game` config key's default: the 2D demo, the game every
 /// pre-module config and test has always run.
@@ -33,6 +35,8 @@ const GAMES: &[Entry] = &[
     (arena::ArenaModule::NAME, arena::ArenaModule::boxed),
     #[cfg(feature = "game-mmo")]
     (mmo::MmoModule::NAME, mmo::MmoModule::boxed),
+    #[cfg(feature = "game-war")]
+    (war::WarModule::NAME, war::WarModule::boxed),
 ];
 
 /// The names of the games compiled into this build.

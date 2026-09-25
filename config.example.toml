@@ -364,7 +364,8 @@ keepalive_hz = 1.0
 #http_listen = "127.0.0.1:9090"
 
 # ── Hosted games' own tables ──────────────────────────────────────────
-# game = "arena" and game = "mmo" read ONLY the table named after them (a
+# game = "arena", game = "mmo" and game = "war" read ONLY the table named
+# after them (a
 # table is ignored by every other game, so one file may carry several).
 # Inside it an unknown key refuses startup, and so does any of these flat
 # keys written above, which those games fix: visibility, topology,
@@ -397,3 +398,19 @@ keepalive_hz = 1.0
 # freed) or "bot" (the logout bot walks it to the nearest waystone,
 # where it stays, slot held).
 #logout = "release"
+
+# game = "war" ("Cephe") — one 2×2 sharded map per room with team fog of
+# war over all of it (sharded × team × delta; three factions, vision
+# 60 m on the ground, a tower of every faction in every region). A
+# player's faction and spawn come from its saved character; a player
+# with none is dealt a faction by a hash of its identity and starts at
+# that faction's base.
+#[war]
+# How long a dropped player's unit is held (resumable under the same
+# name) before the war's bot walks it home to its base. 0 = it leaves at
+# once.
+#disconnect_grace_secs = 30.0
+# The most records a shard exports to the registry's team hub per
+# faction per tick (its players and towers first, then the enemies they
+# see; the rest is cut and counted). 1..=16384.
+#team_budget = 1024

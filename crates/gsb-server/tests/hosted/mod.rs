@@ -1,4 +1,4 @@
-//! Real-socket clients for the hosted-game suites (arena, MMO,
+//! Real-socket clients for the hosted-game suites (arena, MMO, war —
 //! GAME-MODULE G2): a framed connection over plain TCP or TLS whose
 //! reader half runs in its own task and feeds every frame into a bounded
 //! channel, so a test can drain many clients without starving any
@@ -13,6 +13,8 @@
 pub mod arena;
 #[cfg(feature = "game-mmo")]
 pub mod mmo;
+#[cfg(feature = "game-war")]
+pub mod war;
 
 mod drive;
 #[allow(unused_imports)] // each suite uses its own subset

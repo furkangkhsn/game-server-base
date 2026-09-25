@@ -3,11 +3,16 @@
 //! would; a copy switched to another game by its `game` line alone
 //! starts that game (the demo's flat keys, which the other games
 //! refuse, are written commented out — finding K5); and its commented
-//! `[arena]` / `[mmo]` sections, uncommented, are accepted by their
-//! games. Configure only: nothing binds (the example's port is a real
+//! `[arena]` / `[mmo]` / `[war]` sections, uncommented, are accepted by
+//! their games. Configure only: nothing binds (the example's port is a real
 //! one).
 
-#![cfg(all(feature = "game-demo", feature = "game-arena", feature = "game-mmo"))]
+#![cfg(all(
+    feature = "game-demo",
+    feature = "game-arena",
+    feature = "game-mmo",
+    feature = "game-war"
+))]
 
 use gsb_server::{Config, ServerError};
 
@@ -101,7 +106,7 @@ fn the_example_hosts_the_demo_as_shipped() {
 /// the other games refuse.
 #[test]
 fn switching_the_example_to_another_game_needs_only_the_game_line() {
-    for game in ["demo", "arena", "mmo"] {
+    for game in ["demo", "arena", "mmo", "war"] {
         let text = EXAMPLE.replacen("game = \"demo\"", &format!("game = \"{game}\""), 1);
         let cfg = load(&text);
         assert_eq!(cfg.game, game);
@@ -111,7 +116,7 @@ fn switching_the_example_to_another_game_needs_only_the_game_line() {
     }
 }
 
-/// The commented `[arena]` / `[mmo]` examples, uncommented, are accepted
+/// The commented `[arena]` / `[mmo]` / `[war]` examples, uncommented, are accepted
 /// by their games (and ignored by the demo).
 #[test]
 fn the_commented_game_tables_are_valid() {
@@ -126,6 +131,8 @@ fn the_commented_game_tables_are_valid() {
                 "#disconnect_grace_secs",
                 "#[mmo]",
                 "#logout",
+                "#[war]",
+                "#team_budget",
             ]
             .iter()
             .any(|p| line.starts_with(p));
@@ -140,7 +147,10 @@ fn the_commented_game_tables_are_valid() {
             .is_some_and(|t| t.get("disconnect_grace_secs").is_some())
     );
     assert!(raw.get("mmo").is_some_and(|t| t.get("logout").is_some()));
-    for game in ["arena", "mmo"] {
+    let war = raw.get("war");
+    assert!(war.is_some_and(|t| t.get("team_budget").is_some()));
+    assert!(war.is_some_and(|t| t.get("disconnect_grace_secs").is_some()));
+    for game in ["arena", "mmo", "war"] {
         if let Err(e) = configure(game, &cfg) {
             panic!("{game} refused its own example table: {e}");
         }

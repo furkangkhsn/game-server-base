@@ -853,6 +853,7 @@ dependencies = [
  "gsb-demo",
  "gsb-demo-arena",
  "gsb-demo-mmo",
+ "gsb-demo-war",
  "gsb-ecs",
  "gsb-kit",
  "gsb-lint",

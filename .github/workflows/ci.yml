@@ -94,6 +94,8 @@ jobs:
       - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-arena -- -D warnings
       - run: cargo build -p gsb-server --lib --no-default-features --features game-mmo
       - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-mmo -- -D warnings
+      - run: cargo build -p gsb-server --lib --no-default-features --features game-war
+      - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-war -- -D warnings
 
   test:
     name: test

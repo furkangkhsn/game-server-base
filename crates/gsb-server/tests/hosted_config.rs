@@ -1,10 +1,15 @@
 //! Game selection and the hosted games' settings from real config FILES
-//! (GAME-MODULE §4.3, §6 decisions 2 and 3): `game` picks among all three
+//! (GAME-MODULE §4.3, §6 decisions 2 and 3): `game` picks among all four
 //! compiled-in games, an explicitly written key a game fixes refuses
 //! startup, the game's own table is read, and a demo config — no `game`
 //! key — starts the demo exactly as before.
 
-#![cfg(all(feature = "game-demo", feature = "game-arena", feature = "game-mmo"))]
+#![cfg(all(
+    feature = "game-demo",
+    feature = "game-arena",
+    feature = "game-mmo",
+    feature = "game-war"
+))]
 
 mod common;
 mod hosted;
@@ -27,16 +32,19 @@ async fn refusal(text: &str) -> (&'static str, String) {
 }
 
 #[tokio::test]
-async fn an_unknown_game_lists_all_three() {
+async fn an_unknown_game_lists_all_four() {
     let cfg = Door::Tcp.config("chess");
     let Err(e) = gsb_server::start_server(cfg).await else {
         panic!("an unknown game must not start");
     };
     let msg = e.to_string();
-    for game in ["`demo`", "`arena`", "`mmo`"] {
+    for game in ["`demo`", "`arena`", "`mmo`", "`war`"] {
         assert!(msg.contains(game), "{game} missing: {msg}");
     }
-    assert_eq!(gsb_server::games::compiled_in(), ["demo", "arena", "mmo"]);
+    assert_eq!(
+        gsb_server::games::compiled_in(),
+        ["demo", "arena", "mmo", "war"]
+    );
 }
 
 /// Every flat key a game fixes, written explicitly, refuses startup with
@@ -52,6 +60,10 @@ async fn explicitly_written_fixed_keys_refuse_startup() {
         ("mmo", "shard_count = 4"),
         ("mmo", "aoi_cell_size = 64.0"),
         ("mmo", "disconnect_grace_secs = 20.0"),
+        ("war", "visibility = \"team\""),
+        ("war", "shard_count = 4"),
+        ("war", "team_vision_radius = 60.0"),
+        ("war", "disconnect_grace_secs = 30.0"),
     ] {
         let (who, msg) = refusal(&format!("game = \"{game}\"\n{line}")).await;
         assert_eq!(who, game);
@@ -63,6 +75,10 @@ async fn explicitly_written_fixed_keys_refuse_startup() {
     assert!(msg.contains("[mmo] logout_grace_secs"), "{msg}");
     let (_, msg) = refusal("game = \"arena\"\n[arena]\nteam = 2").await;
     assert!(msg.contains("unknown key `arena.team`"), "{msg}");
+    let (_, msg) = refusal("game = \"war\"\ndisconnect_grace_secs = 5.0").await;
+    assert!(msg.contains("[war] disconnect_grace_secs"), "{msg}");
+    let (_, msg) = refusal("game = \"war\"\n[war]\nteam_budget = 0").await;
+    assert!(msg.contains("war.team_budget"), "{msg}");
 }
 
 /// `[arena] teams = 2` from a file: the third joiner is dealt onto team 0
