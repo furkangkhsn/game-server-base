@@ -670,10 +670,12 @@ yürüyücünün küçük fonksiyonları satır içine alınmıyordu →
 | Canlı loadgen istemcisinde AYNI kareye iki görünüm (sıra dönüşümlü, süreç içi) | 0,76–0,79 | 0,63–0,69 | — / 0,76–0,78 | 0,97–1,17 (±50 ns / ~500 ns) |
 
 `client_in_bps` A/B'de aynı (sunucunun gönderdiği). Orkestre modun
-`clients_cpu_s`'i (1000 istemci, 2 süreç) makine yükü düşükken ilk
-kesimlerde +%10–25 gösterdi — bu turun tetikleyicisi; son sürümde yük
-10–20 iken base 5,0–7,0 ↔ HEAD 5,0–6,7, gürültüden ayrılamıyor (süreç
-içi ölçümler yük gürültüsünden bağımsız ve yukarıda).
+`clients_cpu_s`'i (1000 istemci, 2 süreç, spatial, 8 sn; ABBA dört
+çift) makine yükü düşükken ilk kesimlerde +%10–25 gösterdi — bu
+performans turunun tetikleyicisi. Son sürümde (yük 15–20): base 5,6 /
+7,3 / 5,9 / 7,2 ↔ HEAD 5,4 / 5,8 / 5,2 / 5,8 — her çiftte HEAD daha
+düşük (yük altında gürültü büyük; süreç içi ölçümler yük gürültüsünden
+bağımsız ve yukarıda).
 
 **Mutation-check'ler** (yedekten geri yüklenerek; her biri en az bir
 testi kırdı): eski bayat kuralı (`unwrap_or(0)`); bayat hiç atılmıyor;
