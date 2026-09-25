@@ -352,7 +352,8 @@ pub struct KitMig<M> { pub game: M, pub park: Option<ShardParkRecord>,
 // (GAME-MODULE §5 "Kit düzeltme turu")
 ```
 
-Odalar: `TeamRoom<G: TeamGame, V: Vision>` (`with_game(game, vision)`),
+Odalar: `TeamRoom<G: TeamGame, V: Vision>` (`with_game(game, vision)`;
+T turundan beri isteğe bağlı `.with_delta()` — §10 "T sonucu"),
 `SectorRoom<G: Game, M: SectorMap>` (`with_game(game, map)`),
 `ShardedRoom<G: ShardGame, P: Partition<Wire<G>>>` (`with_game(game,
 partition, index)`; `State = KitMig<G::Mig>`, `Strip = Wire<G>`),
@@ -696,7 +697,10 @@ message Private {
     bağlantı başı yuva); yükü JOIN_ROOM_RESULT'a koymak (çekirdek zarfı,
     oyundan habersiz; resume'da da yok); yalnız one-shot full'a eklemek
     (takım odası ve düz odalar one-shot full göndermez — arena
-    tetikleyicinin kendisi takım odasında).
+    tetikleyicinin kendisi takım odasında). *T turu notu:* takım odası
+    delta modunda artık one-shot full gönderiyor; oturum yükü, AOI'deki
+    gibi, o karenin sonuna biniyor (arenanın takımı oynayan bir takıma
+    katılan oyuncusu `Welcome`'ını one-shot full'un ardında alıyor).
   - İstemci yarısı: `ClientDecoder::session_private(&mut self, body)`
     (varsayılan: yok say) — `ClientView::apply_private` alan 4'ü
     bulursa zarf doğrulandıktan sonra, payload kolu uygulanmadan ÖNCE
@@ -1550,7 +1554,10 @@ engelleyici değil, kayıt):
   tekdüze yarıçap seçti.
 - `TeamRoom` yalnız full gönderir; hızlı hareket eden bir arenada her
   tick her takıma bir full demek. Stratejinin tasarımı (§10 "Faz 1b"),
-  ölçülmedi, tetikleyicisiz iş yapılmaz.
+  ölçülmedi, tetikleyicisiz iş yapılmaz. → **T turunda** (BACKLOG §1
+  satır 5): `TeamRoom::with_delta`, arena onu kullanıyor — aşağıda
+  "T sonucu" (ölçüm: arena botunda kazanç ~%10, çünkü görünür
+  birimlerin ~%90'ı her tick hareket ediyor).
 
 **Doğrulama:** 439 + 15 = **454** test / 0 hata / 1 ignored; `cargo
 clippy --workspace --all-targets -- -D warnings` 0 uyarı; loadgen
@@ -1813,7 +1820,8 @@ GAME-MODULE §5 "Kit düzeltme turu".
 Tetikleyicisiz gözlemler (iş yok): ~~kit'in opcode varsayılanları
 (varsayılansız ilişkili sabit daha dürüst olurdu)~~ (kapandı — A3,
 `2d39767`: `Game::SNAPSHOT_OP` / `PRIVATE_OP` artık zorunlu), `Vision::sees`
-birim başına yarıçap taşımıyor, `TeamRoom` yalnız full gönderiyor,
+birim başına yarıçap taşımıyor, ~~`TeamRoom` yalnız full gönderiyor~~
+(T turu: `with_delta`, §10 "T sonucu"),
 `ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi —
 sonradan kapandı, "Faz 5 sonucu" gözlemleri),
 join / `spawn_player` hesap kimliğini görmüyor (çekirdek). Sıra
@@ -1935,6 +1943,185 @@ gidiyor — gürültü içinde.
 **Doğrulama:** 478 + 19 = **497** test / 0 hata / 1 ignored (F1 +4, F2
 +4, F3 +4, F4 +3, A1 +2, A3 +2 doctest); `cargo clippy --workspace
 --all-targets -- -D warnings` 0 uyarı; `cargo fmt --all --check` temiz.
+
+### T sonucu — takım odasında delta (2026-09-25)
+
+**Tamamlandı** (`kit/t-team-delta`, `6dcdf27..`; BACKLOG §1 satır 5).
+Üç kod commit'i, her biri kendi başına yeşil: `d55a44a` (one-shot
+private full çerçeve yazıcısı ortak), `ec1d9bd` (ortak küme defteri +
+`TeamRoom::with_delta`), `fa0a384` (arena delta modunda). `gsb-core`
+değişmedi; `ClientView` ve hiçbir istemci değişmedi.
+
+**Ne.** `TeamRoom::with_delta()` takım sisi odasının snapshot'larını AOI
+odasının zarfı ve istemci kurallarıyla (`kit.proto`) gönderir: takım
+başına, tick başına `removed` = takımın görünümünden çıkan wire id'ler,
+`entities` = görünüme giren ya da WIRE değeri değişen kayıtların
+upsert'leri (kodek nicemler: bir wire biriminden az hareket eden birim
+yeniden gönderilmez); takım başına bir kez kodlanır, takımın üyeleri
+paylaşır. FULL: taze takım grubuna (üyelerinin hepsini baseline'lar),
+keep-alive temposunda (etkin ya da sessiz — yakınsama garantisi) ve
+baseline'ı olmayan üyeye one-shot `Private.snapshot` olarak (oynayan
+bir takıma katılım, resume, çalışma anında takım değişimi). Oturum yükü
+(`Game::session_private`, arenanın `Welcome`'ı) değişmedi: oturumun ilk
+private karesine biner — gerekirse one-shot full'un sonuna.
+
+**Tasarım kararları ve elenenler:**
+
+1. **Ortak motor, kopya yok.** Hücre motoru (`CellBook`/`CellPieces`)
+   bir hücreyi bir kez kodlayıp görünümü tam hücrelerin birleşimi olan
+   her gruba paylaştırır; grup-bağımsız hücre deltası bunun
+   sağlamlığıdır. Görüş kümesi hücre birleşimi DEĞİL: bir düşmanın
+   takımın kümesinde olması takımın birimlerine kesin mesafe testi, yani
+   bir ızgara hücresi bir takımın görünümünde yarım olabilir. Bu yüzden
+   `common` iki parça kazandı: **`SetLedger<W>`** (küme içerikli delta
+   defteri — grup başına son gönderilen içerik, adım başına bir full
+   kodlaması; `emit_full` bugünkü full yol, `emit_delta`, `full_frame`,
+   `resync`) ve **`Baselines<K>`** (oturum başına "hangi grubun
+   görünümüne baseline'lı" tablosu — AOI'nin `conn_view`'unun genel
+   hâli). Üç delta odasının one-shot private full karesi artık tek
+   yazıcı: `common::emit_private_full` (AOI ve sharded × spatial'daki iki
+   elle yazılmış kopya kalktı — bayt birebir). *Elenen:* takıma özgü
+   defter kopyası (A1'in tam tersi); `CellBook`'u görüş hücreleriyle
+   zorlamak (yarım görünen hücre yanlış silme ya da sızıntı demek).
+2. **Delta, SON GÖNDERİLEN içeriğe karşı.** Hücre motoru "önceki
+   tick"e karşı çalışır (değişiklik listesi farkın kendisi); küme defteri
+   grubun istemcilerinin tuttuğu şeye (son karenin içeriğine) karşı: kaç
+   adım sessiz geçerse geçsin fark doğru. Maliyet: takım başına görünür
+   küme üstünde bir geçiş — bugünkü full modun "değişmedi mi?"
+   karşılaştırmasıyla aynı mertebe, ama `content.clone()` ve tam kodlama
+   yok.
+3. **`cell_exits` yok.** Hücre çıkışı istemcinin kayıttan
+   hesaplayabildiği bir hücreyi bütünüyle unutturur — AOI'de doğru, çünkü
+   görünüm tam hücrelerin birleşimi. Görüş kümesinde istemci üyeliği
+   yeniden hesaplayamaz (almadığı konumlara ihtiyaç duyar) ve bir hücrenin
+   düşmanları görünümden tek tek çıkar; görüş hücreleri yarıçap boyunda
+   olduğu için bir hücre nadiren birkaç düşmandan fazlasını aynı anda
+   bırakır — `removed` kimlik başına 2–3 bayt.
+4. **Tazelik adım sayacıyla.** Çekirdek üyesi olan her grubu her adım
+   bir kez sorar; bir önceki adımda sorulmamış grup üyesizdi → taze →
+   full. Tick indeksi kullanılamaz: oda her k'ıncı global tick'te adım
+   atabilir (`ctx.tick` global). Oda `update`'te kendi `step`'ini sayar.
+   Yanlış "taze" yalnız fazladan bir full demek (güvenli).
+5. **One-shot sırası (G3-2).** Oynayan bir takıma katılanın batch'inde
+   önce grubun deltası (baseline yok → istemci düşürür, `gap_drops`),
+   sonra one-shot full gelir — AOI'deki çekirdek sırası, GAME-MODULE
+   G3-2'deki inceleme aynen geçerli; katılan başına bir düşürülen delta.
+   Takımın bu adımki karesi zaten full'sa (taze / keep-alive) one-shot
+   atlanır. Full kare adım başına bir kez kodlanır; taze kare,
+   keep-alive ve bütün one-shot'lar aynı `Bytes`'ı paylaşır.
+6. **Opt-in, varsayılan full.** (a) Sunucunun `communication` ekseni
+   demo'nun `visibility = "team"`'ine `always-full` türetiyor ve `team ×
+   delta`'yı "takımın delta paketlemesi yok" diye reddediyor (§ROADMAP
+   "ortak DeltaSnapshotCodec"); varsayılanı çevirmek yapılandırmanın
+   söylediğini yalan yapar ve demo'nun takım baytlarını değiştirirdi.
+   (b) Küçük bir odada full kendi başına yeter ve istemcisi en basitidir.
+   (c) Arena (ölçülen tetikleyici, G3-1) `arena_room`'da açıyor. Full mod
+   bugünkü çıktının bayt bayt aynısı: tohumlu rastgele bir koşuda eski
+   kodlayıcının kopyasına karşı her kare ve bir kare literal baytlarla
+   kilitli (`team/tests/delta/full_only.rs`). *Elenen:* delta'yı
+   varsayılan yapmak (yukarıdaki a); ayrı bir `SnapshotMode` enum'u
+   (tek bayrak yetiyor; `all`/`pvs` aynı `with_delta` ile benimser).
+7. **Sınırlı durum:** takım başına son gönderilen içerik (görünüm,
+   her kaydın wire değeri kendi parmak izi) + bu adımın full'u; oyuncu
+   başına baseline'lı takım (leave ve resume'da silinir). Geçmişle
+   büyüyen hiçbir şey yok.
+
+**Testler** (önce kırılan: `with_delta` işlemsizken — turdan önceki
+oda — yeni takım testlerinin 6'sı kırıldı; arena'da `arena_room` full
+modda kalınca 3'ü): `common/ledger/tests.rs` (5: fark = tam olarak
+`removed` + upsert, tel sırası; sessizlikte bayt yok; adım boşluğu →
+taze; full adım başına bir kez; full mod = eski kare; baseline kuralı),
+`team/tests/delta*.rs` (10: görüşe giren upsert / çıkan `removed`,
+yalnız wire değeri değişince upsert, keep-alive full, taze grup,
+yeniden doğan grup, oynayan takıma katılana one-shot, takım değişimi +
+resume one-shot, leave baseline'ı siler; **900 tick'lik tohumlu
+rastgele koşu**: üç takım, katılma/ayrılma/yürüme/ışınlanma/takım
+değiştirme/nötr doğma-ölme — kayıpsız delta istemcisi `ClientView`
+üzerinden HER tick takımın gerçek içeriğini, kayıplı istemci her
+keep-alive tick'inde full-only kâhinin görünümünü tutuyor; full modun
+bayt kilidi), oturum yükü testine "team (delta)" satırı. Arena:
+`tests/delta.rs` (gerçek oda aktörü üzerinden delta ve full ikiz
+odalar, her denetim noktasında her istemcinin görünümü aynı; gerçek
+bir delta karesi iki tanımdan aynı içeriğe çözülüyor ve kit'in
+düzenini taşıyor), `wire.rs` (full modun gerçek kareleri değişmeden
+kilitli; dördüncü katılanın ilk private karesi one-shot full + `Welcome`).
+Loadgen botu zaten `ClientView` üzerinde; birim testi delta uygular.
+
+**Mutation-check** (her biri yedekten geri yüklenerek; hepsi en az bir
+testi kırdı): `removed` yazılmıyor; değişen değer yeniden
+gönderilmiyor; her kayıt her tick gönderiliyor; hiç taze grup yok;
+delta modda keep-alive full yok; one-shot hiç yok; grubun full'u
+varken de one-shot; baseline grubu yok sayıyor; resume baseline'ı
+silmiyor; leave silmiyor; full mod hiç sessiz değil; varsayılan oda
+delta yolunu koşuyor; full kare adımlar arası önbellekte; adım sayacı
+yok; full modun başlığında delta bayrağı. Arena'da: `removed` yok,
+one-shot yok → `tests/delta.rs` (+ `wire.rs`) kırıldı.
+
+**Ölçüm** (release, 32 çekirdek, `--duration 10 --write-stall-secs 0`,
+`6dcdf27` ↔ HEAD dönüşümlü çiftler; makine iki başka ajanın
+build'leriyle yüklüydü — 1 dk yük ortalaması tabloda). Her koşuda
+`left = N`, `errors=0`, `server_closes=0`, `server_hz` 29,98–30,02:
+
+| Senaryo (çift) | Yük | `out_bps_per_conn` taban / HEAD | peak payload (B) | `snap_overflows` | step p50/p90 fine (µs) taban / HEAD | records/tick | HEAD `deltas` / `fulls` / `private_fulls` |
+|---|---|---|---|---|---|---|---|
+| arena 200 (3) | 19–39 | 43 628–44 559 / 39 166–39 938 (−%10) | 1885–1937 / 1900–1967 | 677–699 / 522–526 | 552/856, 888/4096, 664/1232 / 864/2640, 640/1312, 632/1080 | 431–433 / 381–382 | 54,9–55,6 k / 1934–1953 / 51–67 |
+| arena 500 (3) | 26–33 | 108 320–109 985 / 96 424–99 122 (−%10) | 4906–5211 / 5073–5326 | 793–798 / 807–821 | 1360/2112, 1512/2608, 2568/4096 / 1512/2288, 2480/4096, 2448/4096 | 1086–1098 / 985–1004 | 130–134 k / 4570–4738 / 321–341 |
+| arena 1000 orkestre, 2 süreç (4: 2 AB + 2 BA) | 30–46 | 229 281–231 932 / 207 246–213 521 (−%9,5) | 10 152–10 426 / 10 090–10 443 | 905 / 907–924 | 2304/2960, 2440/3352, 2328/2944, 2672/3720 / 3512/4096, 2696/4096, 2664/3192, 2416/3128 | 2164–2198 / 1956–1984 | 275–280 k / 9725–10 816 / 872–997 |
+| arena 500 rUDP `--stagger-ms 5` (2) | 28–31 | 102 481–102 533 / 93 691–93 729 (−%8,6) | 5126–5138 / 5064–5078 | 753–754 / 774 | 1336/2232, 1384/2480 / 1280/2056, 1360/2040 | 1092 / 1003 | 126 k / 4587 / 480 |
+
+rUDP'de `frag_reassembled` 123 193–123 363 → 122 377–122 483 (−%0,7),
+`frag_dropped` 0 / 0, `retrans_out` 161–292 / 290–298. HEAD'de
+`gap_drops` = `private_fulls` (her geç katılan bir delta düşürüyor,
+G3-2); orkestre 1000'de fan-out `dropped` 1542–1815 → 1035–1332,
+`server_cpu_s` 3,8–4,3 / 3,8–4,9, `clients_cpu_s` 12,2–13,7 / 14,6–16,2
+(dört çiftin dördünde HEAD yüksek — istemci tarafında delta birleştirme;
+`ClientView` bu turun kapsamı dışında, kayıt).
+
+**Bulgu — kayıt başına delta arenada ~%10 kazandırıyor, parçalanmayı
+düşürmüyor.** Arena botunun her birimi hareket eden bir hedefi 12 m/s'le
+kovalıyor (GAME-MODULE G3 "Botlar"); wire santimetre, yani görünür
+birimlerin ~%85–90'ı (records/tick oranından, keep-alive full'ları düşülünce) HER tick yeni bir wire değeri
+taşıyor. Delta yalnız duran birimleri ve görünümü değişmeyen takımları
+atlıyor; bir takımın karesi 500'de hâlâ ~4,5 KB, 1000'de ~9 KB — MTU'nun
+üstünde, parçalanma aynı. Mekanizma doğru ve yerinde (duran birimlerin
+yarısı olan tohumlu kit koşusunda delta baytları full'un %38'i: 169 109
+/ 447 873 B); arenada daha fazlası kayıt değil DEĞER düzeyinde iş ister:
+(a) kodek seam'inde son gönderilen değere göre göreli kayıt (40 cm'lik
+adım 2 yerine 1 baytlık zig-zag; kit + istemci çözücüsü değişir), (b)
+varlık başına yayın hızı (BACKLOG A10), (c) takım karesini parçalara
+bölmek (grup başına birden çok kare — çekirdek). Hiçbiri bu turda
+yapılmadı.
+
+**Yan bulgu (full mod, önceden vardı):** çalışma anında, zaten birimini
+gören bir takıma geçen oyuncu için o takımın içeriği değişmez → kare
+yok → oyuncu eski takımının görünümünü bir sonraki değişikliğe ya da
+keep-alive yeniden gönderimine kadar tutar. Delta modunda bu oyuncu
+one-shot full alıyor (rastgele koşunun full-only kâhini bu yüzden yalnız
+keep-alive tick'lerinde karşılaştırılıyor).
+
+**A1 — ortak delta motorunun `all` / `pvs` adopsiyonu.** Artık neredeyse
+mekanik: iki oda da bugün tam olarak takım odasının kalıbını
+kullanıyor (grup başına içerik haritası + grup başına son içerik +
+`write_full_header`/`put_entity_records`). Gereken: (1) `last`'ı
+`SetLedger` ile değiştirmek (`emit_full` bayt birebir), (2) bir `delta`
+bayrağı ve `with_delta`, (3) `keepalive` (`resync`) ve `private`'ta
+`Baselines` + `emit_private_full` (~30 satır yapıştırıcı — oturum yüzeyi
+kural gereği oda başına), (4) oda kendi adım sayacı. Oda başına fark:
+`OpenRoom` içeriği `snapshot`'ta topluyor (tek grup, private full için
+ayrıca saklanmalı); `SectorRoom` sektör birleşimini `snapshot`'ta
+kuruyor — private full için içeriği adım başına önbelleğe almalı ya da
+yeniden kurmalı. Sunucu tarafı: `communication = "delta"`'yı `all`/
+`team`/`pvs` için kabul etmek (`SingleDelta` reddi) — sunucu işi. Kazanç
+tetikleyicisi aynı: çoğu birimi duran bir iş yükü; bu turun ölçümü
+hareketli bir iş yükünde kazancın küçük olduğunu gösteriyor.
+
+**Doğrulama:** 704 → **722** test / 0 hata / 1 ignored (+18: defter 5,
+takım 10, arena 2, loadgen botu 1); kapanış kontrolü `cargo test -p
+gsb-demo -p gsb-demo-arena -p gsb-demo-mmo` → **98 passed / 0 failed**
+(arena 15 → 17); `cargo clippy --workspace --all-targets -- -D
+warnings` 0 uyarı; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
+--no-deps` temiz; özellik derlemeleri (`--no-default-features`, tek tek
+`game-demo` / `game-arena` / `game-mmo`) temiz.
 
 ## 11. Kabul kriteri
 

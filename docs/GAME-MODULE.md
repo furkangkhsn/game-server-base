@@ -857,7 +857,9 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`,
 | mmo | 1000 | sep (2 süreç) | 5,1 | 288 / 400 | 1540 | 102 190 | 280 645 | 55 775 / 56 155 | 9282 / 4746 | 253,254,246,247 → 245,245,255,255; `gap_drops` 991; `server_cpu_s` 2,3, `clients_cpu_s` 7,2, `dropped` 1836 |
 
 Arena yalnız full gönderir (`deltas=0`); MMO'da kareler çoğunlukla delta
-(500: 130 805 delta, 6589 full, 1614 private full). `ack_lag_max_ms`
+(500: 130 805 delta, 6589 full, 1614 private full). *T turundan beri
+arena delta modunda* (aşağıda G3-1'in T notu; bu tablo turdan önceki
+tabandır): 500'de ~132 k delta, ~4,7 k full, ~330 private full. `ack_lag_max_ms`
 arena 34–48, MMO 100–115 (bir `Travel`'ın ack'i hedef shard'dan göçten
 sonra gelir — K1 düzeltmesi). Orkestre `dropped` (fan-out'ta dolu çıkış
 kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
@@ -882,6 +884,20 @@ kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
   rUDP'de adım p50/p90 aynı koşuda TCP'ninkiyle aynı aralıkta
   (968-1120/1408-1840 ↔ 1104-1136/1632-1760 µs). `snap_overflows`
   sayılmaya devam ediyor — artık rUDP'de parçalanma sinyali, kayıp değil.
+  → **T turu — takım odasında delta** (KIT-ARCHITECTURE §10 "T
+  sonucu"): arena artık `TeamRoom::with_delta` ile koşuyor (takım başına
+  `removed` + upsert; taze takıma, keep-alive'da ve geç katılana
+  one-shot full). A/B (`6dcdf27` ↔ HEAD, dönüşümlü): `out_bps_per_conn`
+  200'de 44,0 → 39,5 KB/s, 500'de 109 → 98 KB/s, 1000'de (orkestre) 230
+  → 209 KB/s (−%9–10); records/tick −%9–12; peak payload aynı (keep-alive
+  full'u), `snap_overflows` 200'de 685 → 524, 500/1000'de aynı; rUDP 500
+  `frag_reassembled` 123,3 k → 122,4 k (−%0,7). **Parçalanma keskin
+  düşmedi:** arena botunun görünür birimlerinin ~%85–90'ı her tick yeni
+  bir santimetre değeri taşıyor, kayıt başına delta yalnız duranları
+  atlıyor; takım karesi 500'de hâlâ ~4,5 KB. Daha fazlası değer
+  düzeyinde iş ister (göreli kayıt kodlaması, varlık başına yayın hızı
+  — BACKLOG A10) — yapılmadı. Bedel: geç katılan başına bir düşürülen
+  delta (G3-2 sırası; `gap_drops` = `private_fulls`).
 - **G3-2 — join'de grup delta'ları one-shot private full'dan önce
   gelebiliyor** (`gap_drops`, kayıpsız TCP'de): MMO 200/500/1000'de
   istemci başına ~0,8, demo'nun orkestre spatial 1000'inde de aynı
