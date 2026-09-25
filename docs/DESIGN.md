@@ -269,8 +269,10 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     kanal doluysa buffer `into_inner` ile geri konur — ROADMAP "ölçüm
     çözünürlüğü + taban turu").
   - Snapshot payload'u `RoomConfig::max_snapshot_bytes`'i aşarsa uyarı
-    loglanır (rUDP'de MTU hazırlığı: aşırı snapshot datagram'a sığmaz;
-    sürekli uyarı = grubu bölme/AOI zamanı, §8).
+    loglanır (~~rUDP'de MTU hazırlığı: aşırı snapshot datagram'a sığmaz~~
+    *(kapandı — U turundan beri rUDP bütçeyi aşan oyun bandı karesini
+    taşımada parçalar, §6 "MTU"; uyarı artık bant sinyali)*; sürekli
+    uyarı = grubu bölme/AOI zamanı, §8).
   - Kodlama maliyeti O(grubun entity sayısı)/grup/tick; fan-out O(üye)
     Arc klonu + `try_send`. 800 oyunculu oda, tek hareket eden entity:
     adım maliyeti ~65 ms → ~0.14 ms (release, bkz. §11 altındaki tablo).
@@ -332,8 +334,11 @@ banta gideceğine karar kriteri **boyut değil, kaybın bedelidir**:
 | ...onay gerektiren ayrık bir işlemdir | RPC deseni (`RPC_REQ`, güvenilir yolda) | satın alma, takas |
 
 Boyut kriter değil, **kısıttır**: datagram/RAW yolu ~1350 B güvenli
-yükle sınırlıdır (sığmayan atılır+sayılır; telafi sonraki tam
-snapshot'tır); stream yolu kendisi parçalar. Kural transport-bağımsızdır:
+yükle sınırlıdır (~~sığmayan atılır+sayılır~~ *(U turundan beri rUDP
+oyun bandında sığmayan kare FRAG ile parçalanır — mesaj başına en çok
+16 parça; yalnız onu aşan atılır+sayılır, kontrol bandı parçalanmaz —
+§6 "MTU")*; telafi sonraki tam snapshot'tır); stream yolu kendisi
+parçalar. Kural transport-bağımsızdır:
 opcode bandı taşımayı belirler (rUDP REL/RAW ve QUIC stream/datagram
 aynı tabloyu uygular). Oyun geliştiricinin pratik kuralı: garanti
 gerektiren oyun işlemi için yeni taşıma icat etme — RPC desenini kullan
@@ -809,7 +814,8 @@ görmesini de engelliyordu (MMO'da nüfus shard 0'da yığıldı).
 - **Sınırlar (istemci, hepsi sabit, datagram başına O(1), map yok):**
   mesaj başına en çok **16 parça** (`FRAG_MAX_COUNT`; varsayılan bütçede
   23 472 B — ölçülen en büyük full'ün, arena 1000'in 10 267 B'sinin
-  2,3 katı; aşan kare eski yoldan atılır + sayılır, oturum başına tek
+  2,3 katı *(W2'den beri en büyük ölçülen kare savaş 1000'in keep-alive
+  full'ü, ~18,5 KB — tavanın ~%80'i; CROSS-SHARD §8b.8)*; aşan kare eski yoldan atılır + sayılır, oturum başına tek
   uyarı); aynı anda en çok **4 yarım mesaj** (`FRAG_SLOTS`; slot = id
   mod 4 — yeni mesaj yalnız kendi slot'undaki eskiyi düşürür; bir tick
   oturum başına en çok iki parçalı mesaj taşır: grup karesi + private
@@ -1012,7 +1018,8 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
   kaybeden istemci kalıcı bayat kalamaz.
 - Bağlantı başına tek batch + `try_send`: yavaş istemci sunucuyu
   yavaşlatmaz; atılan batch'in maliyeti 1 snapshot bayatlık.
-- `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı).
+- `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı; U
+  turundan beri rUDP aşan kareyi parçalar — §6 "MTU").
   Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
   başına **bir kez** çıkar, her tick değil.
 - **Wire kimliği (identity) ve ölçülen wire boyutu** (wire kimliği turu
@@ -1077,6 +1084,10 @@ taban sağlar.
 3. **Kompresyon (zstd)** — frame batch'leri üzerine ek bir transport
    seçeneği (uzunluk öneki zaten transport'un malı).
 4. **Oda bölme/birleştirme (sharding)** ve cross-region.
+   *Kısmen: statik, süreç içi bölme `sharded` — §8.2 (shard'lar tek
+   süreçte). Süreçler/makineler arası dağıtım DISTRIBUTED'da tasarım
+   (`ShardLink`; bugün yalnız süreç içi link); dinamik bölme/birleştirme
+   ve cross-region yapılmadı.*
 
 **AOI (mekansal görünürlük) — v1'de tek oda içinde (bu turda):** Yukarıdaki
 adım 2'nin *tek oda* kısmı `gsb_game::aoi`'de kapatıldı; **`gsb-core`'e
@@ -1542,23 +1553,23 @@ loadgen ayırt edici test değil; ayırt eden deterministik testler.
 
 | Kısıt | Neden | Yol |
 |---|---|---|
-| Yayın = tam snapshot (grup başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
+| ~~Yayın = tam snapshot (grup başına)~~ *(kapandı — delta modu: AOI/`spatial` (§8.1 "Delta yayın"), sharded × spatial, takım sisi odası `TeamRoom::with_delta` (T) ve team × sharded `ShardedTeamRoom::with_delta` (W1); açık, PVS ve düz sharded odalar full; zarf ve istemci kuralları `crates/gsb-kit/proto/kit.proto`)* | Full kendi kendine yeter; delta modunda yakınsama keep-alive full'ıyla | değer düzeyinde delta — BACKLOG A22 |
 | Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz` (tick hızını aşamaz: oda kendi tick hızından hızlı keepalive yapamaz; yüksek değer `KeepaliveRate` ile reddedilir); 0 ile kapatılabilir |
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) + `snap_overflows` sayacı | Payload çekirdekte bölünmez; rUDP'de eşiği aşan kare **taşımada parçalanır** (§6 "MTU"), yani sayaç artık bant genişliği/parçalanma sinyali — kayıp sinyali istemcinin `frag_dropped_incomplete`'i | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | `Listener::close` rUDP turunda eklendi (demux kapatma); accept abort hâlâ kaskadın son halkası | §9 |
 | rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
-| rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
+| rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | rUDP: SO_RCVBUF ayarı yok | tokio 1.53.1 `UdpSocket`'inde buffer boyutu setter'ı yok (raw fd gerekir) | tokio setter'ı geldiğinde / raw fd wrapper |
 | rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
 | Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | sürekli (sn başına) rate-limit (tur başına bütçe zaten sınırlayıcıdır) |
-| Tek process | v1 kapsamı | §8.4 |
+| Tek process | v1 kapsamı | ~~§8.4~~ §8 "sonraki adımlar" madde 4; süreç içi bölme §8.2; süreçler/makineler arası: DISTRIBUTED (`ShardLink` tasarımı) |
 | Oturum zaman aşımı **reader pump'ta** (read deadline), registry'de değil | çünkü saati tutan yer, stream'i bekleyen yeridir — registry'ye son-görülme damgası ikinci bir beklenen kaynak/timer çıkarırdı (§3); 30 sn varsayılan, 0 = kapalı | oyun seviyesi oturum politikası (reconnect'de yeniden auth vb.) registry katmanı |
 | `sint32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
-| Güvenlik yüzeyi minimal: AUTH no-op, sn-başına rate-limit yok (cap'ler var: bağlantı cap + oda cap + tur-başına girdi bütçesi) | v1 kapsamı | `Authenticator` trait'i + rate-limit |
+| ~~Güvenlik yüzeyi minimal: AUTH no-op~~, sn-başına **geçerli girdi** hacim sınırı yok (cap'ler var: bağlantı cap + oda cap + tur-başına girdi bütçesi) *(AUTH kısmı kapandı — ticket kancası `TicketAuth` (`gsb-core/src/auth.rs`; yapılandırılmazsa `Auth.name` olduğu gibi kabul: yalnız geliştirme yolu, SECURITY §4b), AUTH deneme sınırı + pre-auth kare bütçesi + HEARTBEAT kısması + unauthed cap (SECURITY §3–§4), TLS (SECURITY §2))* | saniyede kaç aksiyonun meşru olduğu oynanış parametresi — kullanıcı kararı | ~~`Authenticator` trait'i +~~ rate-limit — BACKLOG E1 → D1 |
 
 > Not: Önceki sürümlerdeki iki kritik hata — sonradan giren oyuncunun
 > dünyayı görmemesi ve registry'nin oda cevabını beklerken tüm sunucuyu

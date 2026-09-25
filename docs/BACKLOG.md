@@ -9,10 +9,11 @@ ve CHANGELOG'a geçer; yeni bir erteleme doğunca buraya eklenir.
 engelleyen, en son özellik. Her iş, sebebinin yaşadığı katmana gider
 ("her şeyi bir yere yığmadan").
 
-## 1. Aktif iş sırası (2026-09-25'te onaylandı)
+## 1. İş sırası (2026-09-25'te onaylandı — TAMAMLANDI 2026-09-26)
 
 Her paket kendi turu: ayrı worktree, alt ajan, ebeveyn doğrulaması +
-bağımsız mutasyon, `main`'e fast-forward. Push yok.
+bağımsız mutasyon, `main`'e fast-forward. Push yok. Bütün paketler
+kapandı (740 → 818 değil, 657 → 818 test); sıradaki iş §2'den seçilir.
 
 | # | Paket | Yeri | Durum |
 |---|---|---|---|
@@ -156,12 +157,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 - [x] ROADMAP:5-9 başlık notu — oturum zaman aşımı "yarım" diyor; kapandı.
 - [x] ROADMAP:450-452 ve RECONNECT:331-335 — oda anahtarlarının `PlayerId`'ye taşınması yapıldı.
 - [x] ROADMAP:639-643 — Faz B'de ✅ eksik.
-- [ ] DESIGN §10 — "AUTH no-op / `Authenticator`" satırı ve "Yayın = tam snapshot" satırı eskidi; :1223 olmayan §8.4'e işaret ediyor. (U turundan sonra.)
-- [ ] CROSS-SHARD:3-6 "ölçüm turu yürütülüyor"; :648 "v1 dışı: cross-seam etkileşim" (C1/C2 yapıldı); §9'dan sonra ikinci "## 8." başlığı; §7 başlığındaki "delta KABUL ✅" uyku notuyla çelişiyor. (D/U turlarından sonra.)
+- [x] DESIGN §10 — "AUTH no-op / `Authenticator`" satırı ve "Yayın = tam snapshot" satırı eskidi; :1223 olmayan §8.4'e işaret ediyor. (U turundan sonra.)
+- [x] CROSS-SHARD:3-6 "ölçüm turu yürütülüyor"; :648 "v1 dışı: cross-seam etkileşim" (C1/C2 yapıldı); §9'dan sonra ikinci "## 8." başlığı; §7 başlığındaki "delta KABUL ✅" uyku notuyla çelişiyor. (D/U turlarından sonra.)
 - [x] KIT-ARCHITECTURE:801, 1930 — sunucuyu oyundan bağımsız yapmak "kapsam dışı" diyor (G1 yaptı); :1733 opcode varsayılanları açık gözlem diyor (kapandı).
 - [x] TICK-ARCHITECTURE:118 — "Karar gerektiren noktalar (AÇIK)"; hepsi kararlaştırıldı.
 - [x] TRAIT-ARCHITECTURE:92, 133-137 — Faz 1 "BU TUR", Shard RPC ve PlayerId "yapılmadı" diyor; yapıldı.
 - [x] DISTRIBUTED:217 — "(ileride) WebSocket"; WS kapısı var.
-- [ ] SECURITY:17 — "Autobahn yerelde koşulmadı"; koşuldu (:216-218). (U turundan sonra.)
+- [x] SECURITY:17 — "Autobahn yerelde koşulmadı"; koşuldu (:216-218). (U turundan sonra.)
 - [x] OPS NOT-DONE'daki "çoklu-listener" — oyun taşımaları için yapıldı; admin HTTP'yi mi kastediyor, netleştir.
 - [x] CHANGELOG:1087-1093 — `write_stall.rs` flaky yan bulgusu kodda düzeltilmiş; kapandı notu yok.

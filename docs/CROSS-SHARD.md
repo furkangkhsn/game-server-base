@@ -3,8 +3,10 @@
 > Durum: TASARIM NOTU (dış danışma diyaloğundan derlendi); §2–§4
 > UYGULANDI — uzak etki §4b (C1), crystallization §4c (C2), göç tick'i
 > düzeltmesi §4d (D). §2–§5 etkileşim
-> desenleridir; §6–§8 border paylaşımının delta'ya evrimi ve ölçüm planıdır
-> (ölçüm turu yürütülüyor). Uygulama turları bu dokümanı sözleşme alır.
+> desenleridir; ~~§6–§8~~ §6–§7 border paylaşımının delta'ya evrimi ve ölçüm planıdır
+> ~~(ölçüm turu yürütülüyor)~~ *(ölçüm tamamlandı — §7; delta border kodu
+> main'de ama uykuda, §9)*; §8–§8b team × sharded kompozitidir (W1/W2
+> uygulandı — §8b). Uygulama turları bu dokümanı sözleşme alır.
 
 ## 1. Bağlam
 
@@ -77,7 +79,7 @@ modeline aykırı; tasarım seviyesinde de kaçınılır.
 > C1/C2 ölçüm koşularıyla ilgisi yoktur.
 
 §2'nin uzak-etki primitifi ve §4'ün 1–3. katmanları uygulandı; 4. katman
-(crystallization) sonraki turdur. Kod: `gsb-core/src/shard/{effect,seam}.rs`,
+(crystallization) sonraki turdur *(C2'de uygulandı — §4c)*. Kod: `gsb-core/src/shard/{effect,seam}.rs`,
 `shard/actor/tick/effects.rs`; kit: `gsb-kit/src/sharded/seam.rs`;
 MMO: `gsb-demo-mmo/src/{combat,effect}.rs`.
 
@@ -659,7 +661,7 @@ Her tick, faz 5: sınır şeridi TAM DURUM olarak tüm komşulara
 (`border: HashMap<komşu, Vec<BorrowedRecord>>`). Tam-durum olması
 kendini-onarıcıdır: düşen/geciken exchange bir tick içinde telafi olur.
 
-### 6.2 Dış öneri (kabul: değerlendiriliyor)
+### 6.2 Dış öneri (~~kabul: değerlendiriliyor~~ değerlendirildi — §7: A/B'de kabul, bugün süreç içinde uykuda)
 
 Full yerine **delta** + ara ara full düzeltme; her shard komşusunun
 border snapshot'ını tutup gelen delta ile günceller.
@@ -747,7 +749,7 @@ SUMMARY-C2.md, c1/c2.out/.err).
    gerçek ağa çıkar. Delta'nın güçlü gerekçesi bu iki senaryodur;
    in-process demo ölçeklerinde full-exchange kabul edilebilir kalır.
 
-### Karar (A/B ölçümü sonrası güncellendi): delta KABUL EDİLDİ ✅
+### Karar (A/B ölçümü sonrası güncellendi): delta ~~KABUL EDİLDİ ✅~~ kabul edildi, bugün 💤 uykuda (süreç içi link'ler `AlwaysFull` — aşağıdaki "Güncel durum")
 
 > **Güncel durum — Faz C bu kararı süreç-içi için geçersiz kıldı.**
 > Aşağıdaki karar merge anındaki (`ddd38a6`, 2026-08-25) kayıttır ve
@@ -809,7 +811,7 @@ yaşar, loopback'te yaşmaz.
    branch main'e alınır; değilse ölçüm kaydıyla branch arşivlenir.
    (Proje ilkesi: önce veri.)
 
-## 8. team × sharded kompoziti: registry-hub takım-export (tasarım hazır)
+## 8. team × sharded kompoziti: registry-hub takım-export (~~tasarım hazır~~ tasarım — W1'de uygulandı, sapmalarıyla §8b)
 
 Problem: takım üyeleri shard'lar arasına SAÇILMIŞ durumda — border
 ödünç vermesi yalnız sınır şeridini kapsar; sağ shard'daki takım
@@ -856,8 +858,11 @@ takımı eşleşmeyen kayıtlar logic tarafından filtrelenir.
 - Tablo büyüklüğü: takım-sayısı × takım-büyüklüğü × shard-sayısı ile
   sınırlıdır (MOBA takımları ~5; guild ölçeğinde config'li üst sınır).
 - Export maliyeti: O(kendi takım üyeleri) — dünya-geneli değil.
-- v1 dışı: cross-seam ETKİLEŞİM (sadece görünürlük); otomatik balancer;
-  kalıcılık entegrasyonu.
+- v1 dışı: ~~cross-seam ETKİLEŞİM (sadece görünürlük)~~ *(kapandı —
+  seam ötesi etkileşim C1/C2'de, §4b/§4c; W2 onu team × sharded odada
+  kullanıyor, §8b.8. Takım export'unun kendisi hâlâ yalnız görünürlük
+  taşır: etki yalnız ödünç kayda gider, ithal kayda değil)*; otomatik
+  balancer; kalıcılık entegrasyonu.
 
 ## 8b. W1 sonucu — team × sharded kompoziti (branch `kit/w1-team-sharded`)
 
@@ -1348,14 +1353,14 @@ paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
 |---|---|
 | Delta border exchange (§6.4) | 💤 main'de ama **uykuda** — Faz C'den beri süreç-içi link'ler `AlwaysFull`; delta yalnız testlerde (`force_exchange_modes`) koşar, ilk tüketici `Ipc`/`Net` link'i (§7 "Güncel durum") |
 | sharded × spatial kompoziti | ✅ Faz B — main'de |
-| Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces common.rs'te; strateji adoptasyonu tetikleyicili |
+| Ortak delta motoru çıkarımı | ◐ CellBook/CellPieces ~~common.rs'te~~ `gsb-kit/src/common/cells/`'te; T'de `SetLedger`/`Baselines`/`emit_private_full` (üç delta odası ortak); `all`/`pvs` adopsiyonu tetikleyicili (BACKLOG A1) |
 | team × sharded (§8, §8b) | ✅ W1 — kompozit + registry hub (§8b.7); ✅ W2 — doğrulama oyunu "Cephe", sunucu modülü, loadgen botu, sayaçlar metrik yolunda (§8b.8) |
 | Çoklu-listener (karışık transport istemci) | ✅ ROADMAP — uygulandı |
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
 | Göç tick'i: ölümlü kopyaya yerel darbe | ✅ D — §4d |
 
-## 8. NOT-DONE
+## 10. NOT-DONE
 
 - ~~Cross-seam combat/interaction mesaj tiplerinin implementasyonu~~ —
   C1'de uygulandı (§4b); crystallization C2'de (§4c); kalan:

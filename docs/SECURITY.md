@@ -1,7 +1,8 @@
 # gsb: Güvenlik Turu Tasarımı — TLS, Rate-Limit, Pre-Auth Sınırlar
 
-> Durum: TASARIM (iki uygulama turu bu dokümanı sözleşme alır: A=TLS,
-> B=sınırlar). Dış inceleme ailesinin kalan teknik maddeleri burada
+> Durum: ~~TASARIM~~ UYGULANDI (iki uygulama turu bu dokümanı sözleşme
+> aldı: A=TLS, B=sınırlar; sonraki turların eklemeleriyle durumlar §1
+> tablosunda). Dış inceleme ailesinin kalan teknik maddeleri burada
 > kapanır: şifreleme, auth rate-limit, pre-auth tahsis sınırı.
 
 ## 1. Kapsam ve statü
@@ -14,9 +15,11 @@
 | Post-auth HEARTBEAT_ACK kısması (§3.2'nin ikinci yarısı) | Bağlantı sınırları turu | ✅ Uygulandı |
 | Tıkanmış yazmaya süre sınırı (`write_stall_secs`) | Bağlantı sınırları turu | ✅ Uygulandı (§3.5); **bayt-granüler** (stall gözlemlenebilirliği turu) |
 | Sunucu-başlatımlı kapanış sayaçları, sebep bazında | Stall gözlemlenebilirliği turu | ✅ Uygulandı (§3.6) |
-| WS kapısının RFC 6455 uyumu (parça arası veri çerçevesi, uzunluk kodlaması, kapanış kodları) + CI'da Autobahn kapısı | WS uyum kapısı turu | ✅ Uygulandı (§3.7); Autobahn işi yerelde koşulmadı |
-| rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
+| WS kapısının RFC 6455 uyumu (parça arası veri çerçevesi, uzunluk kodlaması, kapanış kodları) + CI'da Autobahn kapısı | WS uyum kapısı turu | ✅ Uygulandı (§3.7); ~~Autobahn işi yerelde koşulmadı~~ *(yerelde koşuldu — `crossbario/autobahn-testsuite:25.10.1`, 98 vaka, `check` geçti; §3.7 "Autobahn kapısı")* |
+| rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §6, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
+| rUDP parçalama: yeniden birleştirme yalnız istemcide, sabit sınırlı; sunucu istemci parçasını reddeder | rUDP parçalama turu (U) | ✅ Uygulandı (§4.1; DESIGN §6 "MTU") |
 | rUDP el sıkışma kaybı: proof yeniden gönderimi + kabul (`ACK{1}`), sunucu proof'ta idempotent | H turu | ✅ Uygulandı (§4.2; DESIGN §6 "El sıkışma kaybı") |
+| Doğrulanmış kimlik = karakter anahtarı (ticket'sız yol yalnız geliştirme) | K4 turu | ✅ Uygulandı (§4b) |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 
