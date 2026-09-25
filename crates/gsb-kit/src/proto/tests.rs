@@ -1,6 +1,7 @@
 //! The kit envelope's field numbers and wire types, frozen: the kit
 //! hand-encodes these frames (tags `0x08`, `0x12`, `0x18`, `0x22`,
-//! `0x28` in the snapshot; `0x12` and `0x1A` in the private frame), and
+//! `0x28`, `0x32` in the snapshot; `0x12` and `0x1A` in the private
+//! frame), and
 //! every game's typed mirror must keep the same numbers. A renumbering in
 //! `kit.proto` breaks these before it can desynchronise the encoders.
 
@@ -17,6 +18,7 @@ fn world_snapshot_field_numbers_are_frozen() {
         removed: vec![5, 200],
         cell_exits: vec![vec![0x08, 0x02]],
         delta: true,
+        records: vec![0x07, 0x0E, 0x02],
     };
     let expected: &[u8] = &[
         0x08, 0xAC, 0x02, // 1: sequence = 300
@@ -25,6 +27,7 @@ fn world_snapshot_field_numbers_are_frozen() {
         0x1A, 0x03, 0x05, 0xC8, 0x01, // 3: removed = [5, 200] (packed)
         0x22, 0x02, 0x08, 0x02, // 4: cell_exits[0] (an opaque cell body)
         0x28, 0x01, // 5: delta = true
+        0x32, 0x03, 0x07, 0x0E, 0x02, // 6: records (a run: opaque bytes)
     ];
     assert_eq!(snap.encode_to_vec(), expected);
 }

@@ -31,6 +31,8 @@ fn to_kit(t: &Typed) -> kit::WorldSnapshot {
         removed: t.removed.clone(),
         cell_exits: Vec::new(),
         delta: t.delta,
+        // The record run (A31): absent — this game did not opt in.
+        records: Vec::new(),
     }
 }
 

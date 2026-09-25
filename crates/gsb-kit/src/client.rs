@@ -20,14 +20,22 @@
 //!   sequence, whatever the group stream accepted last). A `Private`
 //!   snapshot flagged `delta` is a protocol error
 //!   ([`ClientError::PrivateDelta`]), never applied.
+//! - A frame's records ride the `entities` entries (field 2) or — for a
+//!   game that opted into the RECORD RUN — the one `records` run (field
+//!   6), under the same rules. A run through a decoder that did not opt
+//!   in ([`ClientDecoder::RUN`]) is [`ClientError::UnexpectedRun`];
+//!   records in both fields, or two runs, are malformed — both rejected
+//!   before the view changes.
 //!
 //! The game supplies the decode seam, [`ClientDecoder`]: one record body
-//! → `(wire id, what the view stores)`, a stored record → its cell, one
-//! cell-exit body → the cell. A record's cell is derived only when a
-//! cell exit needs it (once per held record per delta that carries
-//! exits), never per received record. A decoder may decode a body with
-//! the game's generated type (`decode(body)?`) or walk it with
-//! [`wire::Fields`] — the cheaper choice for a hot receive loop.
+//! → `(wire id, what the view stores)` (or, in the run, one record read
+//! off the front of the run — [`ClientDecoder::run_record`]), a stored
+//! record → its cell, one cell-exit body → the cell. A record's cell is
+//! derived only when a cell exit needs it (once per held record per
+//! delta that carries exits), never per received record. A decoder may
+//! decode a body with the game's generated type (`decode(body)?`) or
+//! walk it with [`wire::Fields`] — the cheaper choice for a hot receive
+//! loop.
 //!
 //! A frame is applied in two walks over it, in place ([`wire::Fields`],
 //! no allocation): the first reads the header and decodes the (few)
@@ -63,7 +71,10 @@ mod tests;
 /// [`wire::Fields`]). Bodies are exactly what the game's server-side
 /// [`RecordCodec::encode`](crate::codec::RecordCodec::encode) and
 /// [`CellSpace::encode_cell`](crate::space::CellSpace::encode_cell)
-/// wrote (a typed mirror's `EntityRecord` / `CellExit` decode them).
+/// wrote (a typed mirror's `EntityRecord` / `CellExit` decode them). A
+/// game whose codec opted into the record run sets [`Self::RUN`] and
+/// reads its records with [`Self::run_record`] ([`Self::record`] then
+/// only sees `entities` entries, which its server never writes).
 pub trait ClientDecoder {
     /// What the view keeps per entity (a position, a whole record, …).
     type Record;
@@ -80,6 +91,29 @@ pub trait ClientDecoder {
 
     /// One cell-exit body → the cell every held record in it leaves.
     fn cell_exit(&self, body: &[u8]) -> Result<Self::Cell, ClientError>;
+
+    /// Whether this game's frames carry their records in the RECORD RUN
+    /// (`kit.proto`, `WorldSnapshot.records`; the server side is the
+    /// game's [`RecordCodec::RUN`](crate::codec::RecordCodec::RUN)). A
+    /// frame with a run through a decoder that did not opt in is
+    /// rejected before the view changes ([`ClientError::UnexpectedRun`]).
+    /// Default: `false`.
+    const RUN: bool = false;
+
+    /// One record of a record run: `id` is the record's wire id (the kit
+    /// read it off the run); `run` is the rest of the run, starting at
+    /// the record's body. Read exactly one body off its front — advance
+    /// `run` past it — and return what the view stores for the record.
+    /// The body is what the server's
+    /// [`RecordCodec::encode`](crate::codec::RecordCodec::encode) wrote,
+    /// self-delimiting in the game's own format ([`wire::varint`] and
+    /// [`wire::sint32`] read varints). An error (a truncated body, a
+    /// value out of range) rejects the frame like a bad record body.
+    /// Default: [`ClientError::UnexpectedRun`] (only reached by a decoder
+    /// that sets [`Self::RUN`] without implementing this).
+    fn run_record(&self, _id: u64, _run: &mut &[u8]) -> Result<Self::Record, ClientError> {
+        Err(ClientError::UnexpectedRun)
+    }
 
     /// The game's session payload: the body of a `Private` frame's
     /// `game` field (what the server's
@@ -166,6 +200,11 @@ pub enum ClientError {
     /// A `Private` snapshot flagged `delta` (a protocol error: the
     /// one-shot view is always a full).
     PrivateDelta,
+    /// A frame carried a record run (`WorldSnapshot.records`) but the
+    /// game's decoder did not opt in ([`ClientDecoder::RUN`]): the
+    /// server and the client disagree on the game's record framing. The
+    /// frame is rejected before the view changes.
+    UnexpectedRun,
 }
 
 impl fmt::Display for ClientError {
@@ -174,6 +213,7 @@ impl fmt::Display for ClientError {
             Self::Malformed(why) => write!(f, "malformed protobuf: {why}"),
             Self::Body(e) => write!(f, "undecodable record or cell body: {e}"),
             Self::PrivateDelta => f.write_str("a private snapshot flagged delta"),
+            Self::UnexpectedRun => f.write_str("a record run to a decoder that did not opt in"),
         }
     }
 }

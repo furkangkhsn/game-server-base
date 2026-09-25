@@ -27,15 +27,21 @@ pub(crate) enum Shown<W> {
 }
 
 /// The ledger's record writer over [`Shown`]: typed values through the
-/// game's codec, encoded bodies verbatim — both inside the same
-/// `entities` envelope, so the client cannot tell them apart.
+/// game's codec, encoded bodies verbatim — both in the same record
+/// framing (`entities` entries or the run), so the client cannot tell
+/// them apart.
 pub(crate) struct ShownWriter<'a, C>(pub(crate) &'a C);
 
 impl<C: RecordCodec> WriteRecord<Shown<C::Wire>> for ShownWriter<'_, C> {
+    /// The game's framing: an import was encoded by the same codec TYPE
+    /// on its own shard (every shard of the room runs one game), so its
+    /// body is spliced in the framing its owner's frames use.
+    const RUN: bool = C::RUN;
+
     fn put(&self, id: u64, shown: &Shown<C::Wire>, out: &mut BytesMut) {
         match shown {
             Shown::Typed(wire) => put_entity_record(self.0, id, wire, out),
-            Shown::Encoded(body) => put_entity_body(out, body),
+            Shown::Encoded(body) => put_entity_body::<C>(id, body, out),
         }
     }
 }

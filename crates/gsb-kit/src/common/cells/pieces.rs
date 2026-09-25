@@ -25,8 +25,9 @@ pub(crate) use assemble::*;
 /// from the codec / the space each method is handed (the kit writes the
 /// envelope around them).
 pub(crate) struct CellPieces<C> {
-    /// Each cell's encoded FULL records (the `entities` entries, field 2)
-    /// of its current content.
+    /// Each cell's encoded FULL records of its current content, in the
+    /// codec's record framing, without the run's field (the frame opens
+    /// one region around its pieces).
     full_pieces: HashMap<C, Bytes>,
     /// Each changed cell's encoded delta: `(removed piece, entities piece)`
     /// assembled from the cell's change list.
@@ -162,7 +163,8 @@ impl<C: Copy + Eq + Hash> CellPieces<C> {
 
     /// The assembled FULL snapshot of `cell`'s view (header with
     /// `delta = false` + the full pieces of every non-empty cell of
-    /// [`CellSpace::view`]) — computed once per tick and shared.
+    /// [`CellSpace::view`], in one record region) — computed once per
+    /// tick and shared.
     pub(crate) fn full_view<R, S>(
         &mut self,
         codec: &R,
@@ -179,11 +181,13 @@ impl<C: Copy + Eq + Hash> CellPieces<C> {
         }
         self.scratch.clear();
         write_snapshot_header(&mut self.scratch, self.tick, false);
+        let records = Records::open(R::RUN, &mut self.scratch);
         for c in space.view(*cell) {
             if let Some(piece) = self.full_piece(codec, buckets, &c) {
                 self.scratch.extend_from_slice(&piece);
             }
         }
+        records.close(&mut self.scratch);
         let bytes = self.scratch.split_to(self.scratch.len()).freeze();
         self.full_view.insert(*cell, bytes.clone());
         bytes

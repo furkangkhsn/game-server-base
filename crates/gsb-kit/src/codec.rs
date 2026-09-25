@@ -6,7 +6,8 @@
 //! The kit keeps everything around the record: the identity it is keyed
 //! by ([`WireId`](crate::identity::WireId)), the envelopes it lands
 //! in (sequence, delta flag, `removed`, `cell_exits`, the fixed ordering),
-//! the length-delimited framing of each record, and the full/delta
+//! the framing of each record (length-delimited `entities`, or the
+//! game's opt-in record run — [`RecordCodec::RUN`]), and the full/delta
 //! decision.
 
 use std::fmt::Debug;
@@ -60,8 +61,38 @@ pub trait RecordCodec: Send + 'static {
     /// item.
     fn wire(&self, item: QueryItem<'_, '_, Self::Query>) -> Self::Wire;
 
+    /// The record framing this game's frames use (KIT-ARCHITECTURE §4.1,
+    /// "A31"; `kit.proto`, `WorldSnapshot.records`).
+    ///
+    /// - `false` (the default): each record is one length-delimited
+    ///   `entities` entry (field 2) — the kit writes the tag and the
+    ///   length around [`Self::encode`]'s body, so the body may be
+    ///   anything whose end the game's decoder learns from that length
+    ///   (a protobuf message: a typed mirror decodes it).
+    /// - `true` — the RECORD RUN: every record of a frame goes back to
+    ///   back into ONE `records` field (6), each as the record's wire id
+    ///   (a varint the kit writes) followed by [`Self::encode`]'s body,
+    ///   with no per-record framing. The body must then be
+    ///   SELF-DELIMITING: the game's client decoder
+    ///   ([`ClientDecoder::run_record`](crate::client::ClientDecoder::run_record))
+    ///   reads one body off the front of the rest of the run and knows
+    ///   where it ends. Its format is entirely the game's (bit-packed,
+    ///   tagless varints, MessagePack, a protobuf message behind the
+    ///   game's own length prefix, …); the kit never looks inside, and
+    ///   the body need not repeat the id.
+    ///
+    /// Every client rule is the same in both modes (the records are
+    /// absolute, idempotent upserts; the order `removed` → `cell_exits`
+    /// → records). The mode is a property of the codec TYPE, so every
+    /// room — and every shard of a sharded room — running one game
+    /// frames alike: a body a shard exports for another shard's team
+    /// frame (`docs/CROSS-SHARD.md` §8b) is spliced in exactly as that
+    /// shard's own records.
+    const RUN: bool = false;
+
     /// Append the BODY of the record of entity `id` with value `wire` to
     /// `out` (e.g. a protobuf message's fields). The kit writes the
-    /// envelope field's tag and length around it.
+    /// framing around it: the `entities` field's tag and length, or —
+    /// in the record run ([`Self::RUN`]) — the id in front of it.
     fn encode(&self, id: u64, wire: &Self::Wire, out: &mut BytesMut);
 }

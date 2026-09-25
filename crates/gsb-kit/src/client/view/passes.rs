@@ -1,9 +1,11 @@
 //! The two walks that apply one `WorldSnapshot` (see the parent
 //! modules' docs): pass 1 reads the header and decodes the removals and
 //! cell exits, validating the whole envelope before the view changes;
-//! pass 2 decodes each record body straight into the view.
+//! pass 2 decodes each record straight into the view — from the
+//! `entities` entries, or from the record run (field 6) through the
+//! decoder's [`ClientDecoder::run_record`].
 
-use super::super::wire::{Fields, Value, each_varint};
+use super::super::wire::{Fields, Value, each_varint, varint};
 use super::{ClientDecoder, ClientError, ClientView, Header};
 
 impl<D: ClientDecoder> ClientView<D> {
@@ -27,6 +29,7 @@ impl<D: ClientDecoder> ClientView<D> {
             sequence: 0,
             delta: false,
             records: 0..0,
+            run: None,
         };
         let (decoder, s) = (&self.decoder, &mut self.scratch);
         let mut fields = Fields::new(frame);
@@ -39,17 +42,33 @@ impl<D: ClientDecoder> ClientView<D> {
                 (1, Value::Varint(v)) => head.sequence = v,
                 // Located only: pass 2 decodes it into the view.
                 (2, Value::Len(_)) => {
+                    if head.run.is_some() {
+                        return Err(ClientError::Malformed("records in entities and a run"));
+                    }
                     if head.records.is_empty() {
                         head.records.start = at;
                     }
                     head.records.end = frame.len() - fields.remaining();
+                }
+                // The record run: located only, and only for a decoder
+                // that reads runs (any other rejects the frame here,
+                // before the view changes).
+                (6, Value::Len(run)) => {
+                    if !D::RUN {
+                        return Err(ClientError::UnexpectedRun);
+                    }
+                    if head.run.is_some() || !head.records.is_empty() {
+                        return Err(ClientError::Malformed("records in two places"));
+                    }
+                    let end = frame.len() - fields.remaining();
+                    head.run = Some(end - run.len()..end);
                 }
                 (3, value) => each_varint(value, |id| s.removed.push(id))?,
                 (4, Value::Len(body)) => {
                     s.cells.push(decoder.cell_exit(body)?);
                 }
                 (5, Value::Varint(v)) => head.delta = v != 0,
-                (1..=5, _) => return Err(ClientError::Malformed("wrong wire type")),
+                (1..=6, _) => return Err(ClientError::Malformed("wrong wire type")),
                 _ => {}
             }
         }
@@ -60,7 +79,7 @@ impl<D: ClientDecoder> ClientView<D> {
     #[inline]
     pub(super) fn replace(&mut self, frame: &[u8], head: &Header) -> Result<(), ClientError> {
         self.entities.clear();
-        self.upsert(&frame[head.records.clone()])?;
+        self.upsert(frame, head)?;
         self.last_seq = Some(head.sequence);
         self.counters.fulls += 1;
         Ok(())
@@ -79,25 +98,22 @@ impl<D: ClientDecoder> ClientView<D> {
             self.entities
                 .retain(|_, record| !s.cells.contains(&decoder.cell_of(record)));
         }
-        self.upsert(&frame[head.records.clone()])?;
+        self.upsert(frame, head)?;
         self.last_seq = Some(head.sequence);
         self.counters.deltas += 1;
         Ok(())
     }
 
-    /// Pass 2: every record body of `records` (the frame's record span,
-    /// whole fields), decoded straight into the view. A body the game's decoder rejects (after the view started
-    /// changing) leaves the view WITHOUT a baseline — never half a frame:
-    /// deltas drop until the next full.
+    /// Pass 2: every record of the frame — the `entities` span or the
+    /// run — decoded straight into the view. A record the game's decoder
+    /// rejects (after the view started changing) leaves the view WITHOUT
+    /// a baseline — never half a frame: deltas drop until the next full.
     #[inline]
-    fn upsert(&mut self, records: &[u8]) -> Result<(), ClientError> {
-        let decoded = Fields::new(records).try_for_each(|field| {
-            if let (2, Value::Len(body)) = field? {
-                let (id, record) = self.decoder.record(body)?;
-                self.entities.insert(id, record);
-            }
-            Ok(())
-        });
+    fn upsert(&mut self, frame: &[u8], head: &Header) -> Result<(), ClientError> {
+        let decoded = match &head.run {
+            Some(run) => self.upsert_run(&frame[run.clone()]),
+            None => self.upsert_entities(&frame[head.records.clone()]),
+        };
         if decoded.is_err() {
             self.entities.clear();
             self.last_seq = None;
@@ -105,5 +121,30 @@ impl<D: ClientDecoder> ClientView<D> {
             self.counters.errors += 1;
         }
         decoded
+    }
+
+    /// The `entities` entries of `records` (whole fields).
+    #[inline]
+    fn upsert_entities(&mut self, records: &[u8]) -> Result<(), ClientError> {
+        Fields::new(records).try_for_each(|field| {
+            if let (2, Value::Len(body)) = field? {
+                let (id, record) = self.decoder.record(body)?;
+                self.entities.insert(id, record);
+            }
+            Ok(())
+        })
+    }
+
+    /// The record run: `id varint`, then the game's body — which the
+    /// decoder reads off the front of the rest — until the run ends
+    /// (every record takes at least its id's byte: the walk ends).
+    #[inline]
+    fn upsert_run(&mut self, mut run: &[u8]) -> Result<(), ClientError> {
+        while !run.is_empty() {
+            let id = varint(&mut run)?;
+            let record = self.decoder.run_record(id, &mut run)?;
+            self.entities.insert(id, record);
+        }
+        Ok(())
     }
 }

@@ -1,9 +1,11 @@
 //! The kit's snapshot envelope, written by hand (KIT-ARCHITECTURE §5):
 //! `WorldSnapshot { uint64 sequence = 1; repeated bytes entities = 2;
 //! repeated uint64 removed = 3; repeated bytes cell_exits = 4; bool
-//! delta = 5; }`. The record and cell-exit BODIES come from the game
-//! ([`RecordCodec::encode`], [`CellSpace::encode_cell`]); the tags, the
-//! lengths, the header and the field ordering are the kit's.
+//! delta = 5; bytes records = 6; }`. The record and cell-exit BODIES
+//! come from the game ([`RecordCodec::encode`],
+//! [`CellSpace::encode_cell`]); the tags, the lengths, the header and
+//! the field ordering are the kit's — the record framing (`entities`
+//! entries or the record run) in the child module `records`.
 //!
 //! A `repeated bytes` field and a `repeated <Message>` field with the
 //! same number produce identical bytes (both length-delimited), so the
@@ -13,11 +15,12 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use prost::encoding::varint::encode_varint;
 
-use crate::codec::RecordCodec;
 use crate::space::CellSpace;
 
-/// `entities` (field 2), length-delimited.
-const TAG_ENTITIES: u8 = 0x12;
+mod records;
+
+pub(crate) use records::*;
+
 /// `removed` (field 3), varint (one entry per id).
 const TAG_REMOVED: u8 = 0x18;
 /// `cell_exits` (field 4), length-delimited.
@@ -68,72 +71,12 @@ pub(crate) fn write_full_header(buf: &mut BytesMut, sequence: u64) {
     }
 }
 
-/// Append `records` as `entities` entries (field 2): one
-/// length-delimited [`RecordCodec::encode`] body each, in iteration
-/// order.
-pub(crate) fn put_entity_records<'a, R: RecordCodec>(
-    codec: &R,
-    records: impl Iterator<Item = (u64, &'a R::Wire)>,
-    out: &mut BytesMut,
-) {
-    for (id, wire) in records {
-        put_entity_record(codec, id, wire, out);
-    }
-}
-
-/// Append one `entities` entry (field 2): the length-delimited
-/// [`RecordCodec::encode`] body of record `id`.
-#[inline]
-pub(crate) fn put_entity_record<R: RecordCodec>(
-    codec: &R,
-    id: u64,
-    wire: &R::Wire,
-    out: &mut BytesMut,
-) {
-    put_delimited(out, TAG_ENTITIES, |o| codec.encode(id, wire, o));
-}
-
-/// Append one `entities` entry (field 2) whose body is already encoded
-/// — a record another shard encoded with the game's codec (the team
-/// exchange's imported records, `docs/CROSS-SHARD.md` §8b): the same
-/// bytes [`put_entity_record`] writes for the same record.
-#[inline]
-pub(crate) fn put_entity_body(out: &mut BytesMut, body: &[u8]) {
-    put_delimited(out, TAG_ENTITIES, |o| o.extend_from_slice(body));
-}
-
-/// How a delta engine writes one record of value `W` as an `entities`
-/// entry: through the game's codec for its own wire values (the blanket
-/// impl below — every room but one), or through a writer that also
-/// knows pre-encoded records (the sharded team composite's imports).
-pub(crate) trait WriteRecord<W> {
-    /// Append record `id` with value `wire` as one `entities` entry.
-    fn put(&self, id: u64, wire: &W, out: &mut BytesMut);
-}
-
-impl<R: RecordCodec> WriteRecord<R::Wire> for R {
-    #[inline]
-    fn put(&self, id: u64, wire: &R::Wire, out: &mut BytesMut) {
-        put_entity_record(self, id, wire, out);
-    }
-}
-
 /// Append one `removed` entry (field 3, varint, unpacked — one tag per
 /// id).
 #[inline]
 pub(crate) fn put_removed(out: &mut BytesMut, wire: u64) {
     out.put_u8(TAG_REMOVED);
     encode_varint(wire, out);
-}
-
-/// [`put_entity_records`] as one frozen piece, shareable by reference.
-pub(crate) fn encode_entity_records<'a, R: RecordCodec>(
-    codec: &R,
-    records: impl Iterator<Item = (u64, &'a R::Wire)>,
-) -> Bytes {
-    let mut out = BytesMut::new();
-    put_entity_records(codec, records, &mut out);
-    out.freeze()
 }
 
 /// Encode `exits` as `removed` entries (field 3, varint) — the

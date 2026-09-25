@@ -16,6 +16,7 @@ use crate::space::{Cell, CellSpace, Grid2};
 use crate::testing::{CellExit, FixCodec, Record, WirePos};
 
 mod rules;
+mod run;
 mod session;
 mod wire;
 
@@ -133,6 +134,7 @@ impl Frame {
                 .map(|c| CellExit { x: c.0, y: c.1 }.encode_to_vec())
                 .collect(),
             delta: self.delta,
+            records: Vec::new(),
         }
     }
 

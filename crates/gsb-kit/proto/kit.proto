@@ -8,6 +8,13 @@
 // `RecordCodec::encode` wrote, a cell exit (`cell_exits`) is the body
 // the game's `CellSpace::encode_cell` wrote.
 //
+// RECORD FRAMING is the game's choice (`RecordCodec::RUN`, one per
+// game): by default each record is one length-delimited `entities`
+// entry; a game that opts in ships them back to back in ONE `records`
+// field instead (the record run — see `WorldSnapshot.records`). A game
+// that does not opt in never sees field 6: its bytes are exactly what
+// the kit wrote before the field existed.
+//
 // TYPED MIRRORS. Protobuf puts no type names on the wire, and a
 // `repeated bytes` field encodes to exactly the same bytes as a
 // `repeated <Message>` field under the same number (both are
@@ -97,6 +104,12 @@ message InputAck {
 // on the keep-alive cadence (active or silent), so any client — however
 // many deltas it missed — holds the exact group view within one
 // keep-alive period, with no out-of-band resync request.
+//
+// RECORDS: `entities` in the rules above means the frame's records,
+// whichever field carries them — the `entities` entries (field 2) or
+// the `records` run (field 6). A frame carries them in one of the two,
+// never both, and at most one run (a client rejects anything else as
+// malformed, before its view changes).
 message WorldSnapshot {
   // Monotonic snapshot sequence (the room's global tick index). A gap is
   // normal (an event-driven stream — see the message docs); a duplicate
@@ -127,6 +140,31 @@ message WorldSnapshot {
   // distinguishable on the wire so a client expecting one mode can
   // detect the other and act instead of silently misapplying it.
   bool delta = 5;
+  // RECORD RUN (a game's opt-in, `RecordCodec::RUN`): the same records
+  // as `entities`, written back to back in ONE field instead of one
+  // length-delimited entry each. Each record is its wire id (a varint)
+  // followed by the record BODY the game's `RecordCodec::encode` wrote,
+  // in the game's own SELF-DELIMITING format — the kit writes no length
+  // per record, so the game's client decoder reads one body off the
+  // front of the rest of the run and knows where it ends (the kit's
+  // reference client: `ClientDecoder::run_record`). The body format is
+  // entirely the game's (bit-packed, tagless varints, MessagePack, a
+  // protobuf message behind the game's own length prefix, ...); it need
+  // not repeat the id.
+  //
+  // The records keep every rule of `entities`: in full mode the
+  // complete view, in delta mode absolute, idempotent upserts applied
+  // after `removed` and `cell_exits`, even across a sequence gap; the
+  // one-shot `Private.snapshot` carries its records the same way. Absent
+  // when the frame has no records (an empty run is never written).
+  //
+  // CLIENT RULE: a client that does not read runs (its game did not opt
+  // in) must treat a frame carrying field 6 as an error and leave its
+  // view unchanged — a decoder that skipped the unknown field would
+  // silently apply the frame without its records (a full would empty
+  // the view). Which framing a game uses is part of the game's protocol
+  // (its protocol version), not negotiated per frame.
+  bytes records = 6;
 }
 
 // Server → client: the per-connection frame (the game's private opcode,

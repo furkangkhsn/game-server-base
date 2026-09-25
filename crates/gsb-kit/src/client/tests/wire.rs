@@ -9,11 +9,13 @@ use super::*;
 fn unknown_fields_are_skipped() {
     let base = Frame::delta(2, &[(1, 3, 3)]).removing(&[2]).kit();
     let mut frame = Vec::new();
-    frame.extend_from_slice(&[0x30, 0x96, 0x01]); // 6: varint 150
-    frame.extend_from_slice(&[0x39, 1, 2, 3, 4, 5, 6, 7, 8]); // 7: fixed64
+    // (Field 6 is the record run since A31: the unknown numbers start
+    // at 10.)
+    frame.extend_from_slice(&[0x50, 0x96, 0x01]); // 10: varint 150
+    frame.extend_from_slice(&[0x59, 1, 2, 3, 4, 5, 6, 7, 8]); // 11: fixed64
     frame.extend_from_slice(&base);
-    frame.extend_from_slice(&[0x42, 0x02, 0xAA, 0xBB]); // 8: bytes
-    frame.extend_from_slice(&[0x4D, 1, 2, 3, 4]); // 9: fixed32
+    frame.extend_from_slice(&[0x62, 0x02, 0xAA, 0xBB]); // 12: bytes
+    frame.extend_from_slice(&[0x6D, 1, 2, 3, 4]); // 13: fixed32
     let mut view = View::default();
     view.apply_snapshot(&Frame::full(1, &[(1, 0, 0), (2, 0, 0)]).kit())
         .expect("decodes");
@@ -231,7 +233,7 @@ fn records_interleaved_with_other_fields_all_apply() {
         record(2, 2, 2),
         field(0x22, CellExit { x: 9, y: 9 }.encode_to_vec()),
         record(3, 3, 3),
-        vec![0x30, 0x07], // unknown field 6 after the last record
+        vec![0x50, 0x07], // unknown field 10 after the last record
     ]
     .concat();
     let mut view = View::default();

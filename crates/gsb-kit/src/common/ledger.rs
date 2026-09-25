@@ -39,7 +39,7 @@ use std::hash::Hash;
 use bytes::{Bytes, BytesMut};
 use gsb_core::id::PlayerId;
 
-use crate::common::{WriteRecord, put_removed, write_full_header, write_snapshot_header};
+use crate::common::{Records, WriteRecord, put_removed, write_full_header, write_snapshot_header};
 
 /// What a group's delta-mode emission wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,9 +97,11 @@ impl<W: Clone + Eq> SetLedger<W> {
             return false;
         }
         write_full_header(out, tick);
+        let records = Records::open(R::RUN, out);
         for (id, wire) in content {
             codec.put(*id, wire, out);
         }
+        records.close(out);
         *encoded += content.len() as u64;
         self.held = content.clone();
         true
@@ -108,8 +110,9 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// DELTA mode: a fresh group (not asked for on the previous `step`)
     /// gets the FULL frame; an established one the DELTA against what
     /// its clients hold — `removed` (ids that left) first, then the
-    /// upserts (new ids and changed wire values) — or nothing when the
-    /// two are equal. `encoded` counts the records written.
+    /// upserts (new ids and changed wire values, in the codec's record
+    /// framing) — or nothing when the two are equal. `encoded` counts
+    /// the records written.
     pub(crate) fn emit_delta<R: WriteRecord<W>>(
         &mut self,
         codec: &R,
@@ -136,6 +139,7 @@ impl<W: Clone + Eq> SetLedger<W> {
             }
             stays
         });
+        let records = Records::open(R::RUN, out);
         for (id, wire) in content {
             match self.held.entry(*id) {
                 Entry::Occupied(held) if held.get() == wire => continue,
@@ -149,6 +153,7 @@ impl<W: Clone + Eq> SetLedger<W> {
             codec.put(*id, wire, out);
             *encoded += 1;
         }
+        records.close(out);
         if out.len() == body {
             out.truncate(start);
             return Emitted::Silent;
@@ -174,9 +179,11 @@ impl<W: Clone + Eq> SetLedger<W> {
         }
         let mut buf = BytesMut::new();
         write_full_header(&mut buf, tick);
+        let records = Records::open(R::RUN, &mut buf);
         for (id, wire) in content {
             codec.put(*id, wire, &mut buf);
         }
+        records.close(&mut buf);
         *encoded += content.len() as u64;
         let bytes = buf.freeze();
         self.full = Some((step, bytes.clone()));

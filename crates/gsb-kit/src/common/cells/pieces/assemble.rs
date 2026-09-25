@@ -69,7 +69,8 @@ where
     }
     // Pass 3: updates — delta pieces' changed records, and appeared
     // cells' full records (upserts — no baseline exists for a cell that
-    // was empty).
+    // was empty), all in the frame's one record region.
+    let records = Records::open(R::RUN, out);
     for c in space.view(*cell) {
         match pieces.classify(&book.cell_changes, &c) {
             CellFrag::Delta => {
@@ -85,5 +86,6 @@ where
             _ => {}
         }
     }
+    records.close(out);
     true
 }

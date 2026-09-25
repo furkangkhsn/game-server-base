@@ -39,9 +39,12 @@ impl<D: ClientDecoder> Scratch<D> {
 struct Header {
     sequence: u64,
     delta: bool,
-    /// The byte span of the frame from its first record field to the end
-    /// of its last (empty: no records) — all pass 2 has to walk.
+    /// The byte span of the frame from its first `entities` field to the
+    /// end of its last (empty: none) — all pass 2 has to walk.
     records: Range<usize>,
+    /// The byte span of the record run's body (`records`, field 6), if
+    /// the frame carries one (then `records` is empty).
+    run: Option<Range<usize>>,
 }
 
 impl<D: ClientDecoder + Default> Default for ClientView<D> {

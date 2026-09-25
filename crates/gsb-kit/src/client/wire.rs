@@ -121,9 +121,17 @@ pub fn sint32(varint: u64) -> i32 {
 }
 
 /// Read one base-128 varint off the front of `buf` (at most ten bytes;
-/// the tenth may only carry the top bit of a `u64`).
+/// the tenth may only carry the top bit of a `u64`) and advance `buf`
+/// past it — the building block a game's record-run decoder
+/// ([`ClientDecoder::run_record`](super::ClientDecoder::run_record))
+/// reads its own varints with.
+///
+/// # Errors
+///
+/// [`Malformed`] when `buf` ends inside the varint or it is longer than
+/// a `u64`.
 #[inline(always)]
-pub(super) fn varint(buf: &mut &[u8]) -> Result<u64, Malformed> {
+pub fn varint(buf: &mut &[u8]) -> Result<u64, Malformed> {
     // Fast path: keys, lengths and small values are one byte.
     if let Some((&byte, rest)) = buf.split_first()
         && byte < 0x80

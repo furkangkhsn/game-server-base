@@ -53,6 +53,8 @@ pub mod team;
 #[cfg(test)]
 mod manifest;
 #[cfg(test)]
+mod record_run;
+#[cfg(test)]
 mod testing;
 
 /// The kit's envelope messages (package `gsb.kit`, file `kit.proto`):
