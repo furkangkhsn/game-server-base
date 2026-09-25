@@ -45,6 +45,7 @@
 //! shared.
 
 mod bot;
+mod capture;
 mod churn;
 mod client;
 mod codec;
@@ -271,6 +272,14 @@ struct Args {
     /// The in-process / served MMO's `[mmo] crystallize`
     /// (`--mmo-crystallize on|off`; unspecified = the MMO's default, on).
     mmo_crystallize: Option<bool>,
+    /// Record the raw game-band frames of a sample of clients into this
+    /// directory, one file per client (`--capture DIR`; `capture.rs` —
+    /// an offline wire study's input). Plain in-process or `--addr` runs
+    /// only.
+    capture: Option<String>,
+    /// How many clients `--capture` records (`--capture-clients K`,
+    /// default 8), spread evenly over the run's ids.
+    capture_clients: u64,
 }
 
 /// The usage text (`--help` / `-h`).
@@ -360,6 +369,17 @@ Client behaviour:
                                       pairs) that duel across the x = 0
                                       shard seam instead of roaming
                                       (default 0)
+
+Measurement:
+  --capture DIR                       record the game-band frames (group
+                                      snapshots, private frames) and the
+                                      join result a sample of clients
+                                      received, one
+                                      `client-<id>.gsbcap` file each
+                                      (format: src/loadgen/capture.rs);
+                                      plain client runs only
+  --capture-clients K                 how many clients --capture records,
+                                      spread evenly over the ids (default 8)
 
 Orchestrator options (--orchestrate):
   --procs P             client process count (default 1)

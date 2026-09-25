@@ -30,6 +30,13 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
     }
     let written: Vec<&str> = game_flags.iter().map(String::as_str).collect();
     crate::bot::check_game_flags(args.game, &written).map_err(CliError)?;
+    // The capture records what THIS process's plain clients receive: an
+    // orchestrated run's clients live in child processes, a served run
+    // has none, and a churn client's sessions are not one stream.
+    refuse_unless(
+        args.capture.is_none() || !(args.orchestrate || args.serve || args.churn_secs.is_some()),
+        "--capture records a plain client run: not with --orchestrate, --serve or --churn-secs",
+    )?;
     refuse_unless(
         !(args.orchestrate && args.serve),
         "--orchestrate and --serve are mutually exclusive (try --help)",

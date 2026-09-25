@@ -49,6 +49,8 @@ impl Args {
             disconnect_grace_secs: None,
             mmo_duel_frac: 0.0,
             mmo_crystallize: None,
+            capture: None,
+            capture_clients: 8,
         }
     }
 }
@@ -236,6 +238,12 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                         )));
                     }
                 };
+            }
+            "--capture" => args.capture = Some(v()?),
+            "--capture-clients" => {
+                let k: u64 = number(&a, v()?)?;
+                refuse_unless(k > 0, "--capture-clients must be > 0")?;
+                args.capture_clients = k;
             }
             "--tls-ca" => args.tls_ca = Some(v()?),
             "--tls-server-name" => args.tls_server_name = v()?,

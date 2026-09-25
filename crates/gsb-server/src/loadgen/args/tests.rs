@@ -18,7 +18,7 @@ fn refused(argv: &[&str]) -> String {
 /// Each kind of refusal, with its message.
 #[test]
 fn a_bad_line_is_an_error_with_its_reason() {
-    let cases: [(&[&str], &str); 9] = [
+    let cases: [(&[&str], &str); 10] = [
         (&["--duration"], "--duration needs a value (try --help)"),
         (
             &["--duration", "x"],
@@ -40,6 +40,7 @@ fn a_bad_line_is_an_error_with_its_reason() {
             "--orchestrate and --serve are mutually exclusive (try --help)",
         ),
         (&["0"], "N must be > 0"),
+        (&["--capture-clients", "0"], "--capture-clients must be > 0"),
     ];
     for (argv, why) in cases {
         assert_eq!(refused(argv), why, "{argv:?}");

@@ -109,7 +109,16 @@ pub(crate) async fn run(args: Args) {
         deadline,
         flood: false,
         kind: args.transport,
+        capture: None,
     };
+    if let Some(dir) = &args.capture {
+        std::fs::create_dir_all(dir)
+            .unwrap_or_else(|e| panic!("--capture: cannot create `{dir}`: {e}"));
+        eprintln!(
+            "capture: {} of {n} clients' game-band frames into {dir}",
+            args.capture_clients.min(n)
+        );
+    }
     // Churn mode swaps the client BODY per task (RECONNECT §14.5); the
     // plain path below stays byte-identical to every previous measurement.
     let churn_cycle = args.churn_secs.map(Duration::from_secs_f64);
@@ -126,6 +135,14 @@ pub(crate) async fn run(args: Args) {
         // The `--flood-id` client (by GLOBAL id) runs the tight-write flood
         // after joining; every other client is paced normally.
         p.flood = args.flood_id == Some(id);
+        p.capture = args
+            .capture
+            .as_ref()
+            .filter(|_| crate::capture::captured(i, n, args.capture_clients))
+            .map(|dir| {
+                let path = std::path::Path::new(dir).join(format!("client-{id}.gsbcap"));
+                (path, args.game)
+            });
         match churn_cycle {
             Some(cycle) => clients.push(tokio::spawn(run_churn_client(
                 id,

@@ -55,6 +55,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // baseline drops until the next full) and its input schedule.
     let mut bot = p.bot.client(id);
     let (snapshot_op, private_op) = (p.bot.snapshot_op(), p.bot.private_op());
+    // `--capture`: this client's game-band frames, recorded as received
+    // (a measurement aid — nothing it records changes what is applied).
+    let mut capture = p
+        .capture
+        .clone()
+        .map(|(path, game)| crate::capture::Capture::new(path, game, id));
 
     // Optional connect stagger (see `Args::stagger_ms`).
     if p.stagger_ms > 0.0 {
@@ -181,6 +187,15 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             Wire::Tcp { .. } => (4 + 2 + payload.len()) as u64,
             Wire::Udp(_) => wire_in_bytes(op, payload.len()),
         };
+        if let Some(c) = &mut capture {
+            if op == snapshot_op {
+                c.frame(crate::capture::Kind::Snapshot, &payload);
+            } else if op == private_op {
+                c.frame(crate::capture::Kind::Private, &payload);
+            } else if op == op::base::JOIN_ROOM_RESULT {
+                c.frame(crate::capture::Kind::Joined, &payload);
+            }
+        }
         match op {
             op::base::JOIN_ROOM_RESULT => {
                 let m: JoinRoomResult = match JoinRoomResult::decode(&payload[..]) {
@@ -367,6 +382,9 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 break;
             }
         }
+    }
+    if let Some(c) = capture {
+        c.finish().await;
     }
     // The client's rUDP transport statistics (all zero on TCP).
     if let Wire::Udp(c) = &wire {

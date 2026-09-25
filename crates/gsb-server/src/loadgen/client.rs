@@ -122,6 +122,9 @@ pub(crate) struct ClientParams {
     pub(crate) flood: bool,
     /// The client's transport (TCP or rUDP; see the `Wire` below).
     pub(crate) kind: gsb_server::TransportKind,
+    /// `--capture`: this client's capture file and the game's name
+    /// (`None` = not captured — every client of a run without the flag).
+    pub(crate) capture: Option<(std::path::PathBuf, &'static str)>,
 }
 
 /// Build a rustls connector trusting ONLY the CA PEM at `ca_path` (the

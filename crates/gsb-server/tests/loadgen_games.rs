@@ -273,3 +273,127 @@ fn loadgen_refuses_a_wrong_game_line() {
     let e = stderr(loadgen(&["1", "--bogus"]));
     assert!(e.contains("unknown flag --bogus (try --help)"), "{e}");
 }
+
+/// `--capture` (KIT-ARCHITECTURE §10 "A22"): the sampled clients' files
+/// hold exactly the game-band stream each client applied — replaying a
+/// file through the kit's reference client reproduces that client's
+/// counters — and a line that cannot capture is refused.
+#[test]
+fn loadgen_captures_the_frames_its_clients_applied() {
+    use gsb_kit::client::wire::{Fields, Value};
+    use gsb_kit::client::{ClientDecoder, ClientError, ClientView, PrivateEvent};
+
+    /// Stores a record's body under its wire id (field 1 — every game's
+    /// record starts with it); no cells (the arena has none).
+    struct Bodies;
+    impl ClientDecoder for Bodies {
+        type Record = Vec<u8>;
+        type Cell = ();
+        fn record(&self, body: &[u8]) -> Result<(u64, Vec<u8>), ClientError> {
+            let mut id = 0;
+            for field in Fields::new(body) {
+                if let (1, Value::Varint(v)) = field? {
+                    id = v;
+                }
+            }
+            Ok((id, body.to_vec()))
+        }
+        fn cell_of(&self, _: &Vec<u8>) {}
+        fn cell_exit(&self, _: &[u8]) -> Result<(), ClientError> {
+            Ok(())
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("gsb-capture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir_s = dir.to_str().expect("a UTF-8 temp dir");
+    let out = Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
+        .args(["6", "--game", "arena", "--duration", "3"])
+        .args(["--capture", dir_s, "--capture-clients", "2"])
+        .env("GSB_LOADGEN_CLIENT_LINES", "1")
+        .output()
+        .expect("spawning gsb-loadgen");
+    let (line, kv) = result(&out);
+    assert_clean(&line, &kv, 6, "arena", 6);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let client = |id: u64| -> HashMap<String, u64> {
+        let prefix = format!("CLIENT id={id} ");
+        stdout
+            .lines()
+            .find(|l| l.starts_with(&prefix))
+            .expect("the client's line")
+            .split_whitespace()
+            .filter_map(|kv| kv.split_once('='))
+            .filter_map(|(k, v)| Some((k.to_string(), v.parse().ok()?)))
+            .collect()
+    };
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .expect("the capture dir")
+        .map(|e| {
+            e.expect("an entry")
+                .file_name()
+                .into_string()
+                .expect("UTF-8")
+        })
+        .collect();
+    files.sort();
+    assert_eq!(files, ["client-0.gsbcap", "client-3.gsbcap"]);
+    for id in [0u64, 3] {
+        let bytes = std::fs::read(dir.join(format!("client-{id}.gsbcap"))).expect("read");
+        assert_eq!(&bytes[..8], b"GSBCAP1\n");
+        assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), id);
+        let name_len = usize::from(u16::from_le_bytes(bytes[16..18].try_into().unwrap()));
+        assert_eq!(&bytes[18..18 + name_len], b"arena");
+        let mut rest = &bytes[18 + name_len..];
+        let mut view = ClientView::new(Bodies);
+        let (mut snapshots, mut acks, mut joins) = (0u64, 0u64, 0u64);
+        while !rest.is_empty() {
+            let kind = rest[0];
+            let len = u32::from_le_bytes(rest[5..9].try_into().unwrap()) as usize;
+            let payload = &rest[9..9 + len];
+            match kind {
+                0 => {
+                    view.apply_snapshot(payload).expect("a captured snapshot");
+                    snapshots += 1;
+                }
+                1 => {
+                    let event = view.apply_private(payload);
+                    if matches!(
+                        event.expect("a captured private frame"),
+                        PrivateEvent::Ack(_)
+                    ) {
+                        acks += 1;
+                    }
+                }
+                2 => joins += 1,
+                other => panic!("unknown frame kind {other}"),
+            }
+            rest = &rest[9 + len..];
+        }
+        let seen = client(id);
+        let c = view.counters();
+        assert_eq!(snapshots, seen["snapshots"], "client {id}");
+        assert!(snapshots > 30, "a stream: client {id}");
+        assert_eq!(acks, seen["acks"], "client {id}");
+        assert!(acks > 0, "private frames: client {id}");
+        assert_eq!(joins, 1, "the join result: client {id}");
+        assert_eq!(
+            (c.fulls, c.private_fulls, c.deltas, c.gap_drops),
+            (
+                seen["fulls"],
+                seen["private_fulls"],
+                seen["deltas"],
+                seen["gap_drops"]
+            ),
+            "client {id}"
+        );
+        assert_eq!(view.len() as u64, seen["view_size"], "client {id}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let refused = loadgen(&["--orchestrate", "4", "--capture", dir_s]);
+    let e = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(2), "{e}");
+    assert!(e.contains("--capture records a plain client run"), "{e}");
+    assert!(!dir.exists(), "a refused line creates nothing");
+}
