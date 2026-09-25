@@ -902,6 +902,116 @@ başına tek sanal çağrı; (2) "kayıt çözücü + çıkış-hücresi çözü
 `ClientDecoder`'ı oldu (ayrı bir loadgen seam'i yok); (3) raporlama
 için iki isteğe bağlı kanca (`labels`, `shard_spread`) — taslakta yoktu.
 
+### K4 — oyuncu kimliği → ev shard'ı (tasarım, 2026-09-25)
+
+**Sorun.** Bulgu K4 (yukarıda, G2) ve KIT-ARCHITECTURE Faz 4 gözlem 1:
+join yönlendiricisi (`BuiltRoom::Sharded::home_shard`) ve oyunun spawn
+kancası (`GameLogic::on_join` → kit'in `Game::spawn_player`) yalnız
+taşıma oturumunu (`ConnectionId`) görüyor. Bağlantı kimlikleri kabulde,
+kabul sırasıyla basılıyor; MMO'nun realm'i kayıtlı karakterleri bu
+kimlikle anahtarlıyor — barındırılan sunucunun asla dolduramayacağı bir
+anahtar. Sonuç: gerçek sunucuda HER MMO oturumu kaydısız → shard 0,
+waystone 0; gerçek istemcilerle sharding tek shard'a iner. Yükü yalnız
+loadgen botunun ilk `Travel`'ı (waystone `id mod 4`) yayıyor (G3 "K4
+hâlâ geçerli").
+
+**Taşıyıcı: zaten var olan doğrulanmış kimlik (`identity: String`).**
+Çekirdek, join anında oyuncunun doğrulanmış kimliğini ZATEN taşıyor —
+resume anahtarı olarak: bağlantı aktörünün `identity`'si (ticket yolunda
+`ValidatedTicket.player`, ticket'sız eski yolda `Auth.name`) →
+`RegistryMsg::SpawnPlayer.identity` → `RoomOp::Join.identity` →
+`ShardMsg::Join.identity` / `RoomControl::Resume.identity` →
+odanın `admit_fresh(identity)`'si. Yalnız son adım eksik: kimlik
+yönlendiriciye ve oyunun join kancasına verilmiyor. Yeni tip ya da yeni
+mesaj alanı gerekmiyor; boş dize = anonim (bugünkü anlamı).
+
+`PlayerId` doğru taşıyıcı DEĞİL: join'in ÇIKTISI (oyun `on_join`'de,
+oda/shard-yerel sayaçtan basar), her taze oturumda yenidir (yalnız park
+defteri onu resume boyunca sabit tutar), yönlendirme anında henüz yoktur
+ve oda dışında anlamı yoktur — bir karakter veritabanını anahtarlayamaz.
+İlişki: kimlik → (park defteri) → `PlayerId` → entity; kimlik oyuncunun
+kalıcı adı, `PlayerId` oturumunun oda içi anahtarı.
+
+**Karar (çekirdek seam'i — ince, saf, senkron):**
+
+1. `BuiltRoom::Sharded::home_shard: Arc<dyn Fn(ConnectionId, &str) ->
+   usize + Send + Sync>` — yönlendirici doğrulanmış kimliği de alır.
+   Registry onu join dispatch'inde bugünkü gibi çağırır (hiç await
+   edilmez; registry kuralı).
+2. `GameLogic::on_join_as(&mut self, world, conn, identity: &str) ->
+   Admission` — varsayılanı `on_join(world, conn)`. Oda (`admit_fresh`)
+   ve shard (`ShardMsg::Join`) artık bunu çağırır. `on_join` zorunlu
+   kalır: mevcut her mantık (çekirdek testlerinin ~25 stub'ı, demo, kit)
+   değişmeden derlenir; kimliği isteyen mantık `on_join_as`'ı ezer. Kit'in
+   zaten kullandığı desen (`ingest_seam` → `ingest`, `spawn_team_player`
+   → `spawn_player`).
+3. Kit: `Game::spawn_player_as(&mut self, world, conn, identity) ->
+   Entity` — varsayılanı `spawn_player`. Kit odaları (`OpenRoom`,
+   `AoiRoom`, `SectorRoom`, `ShardedRoom`, `ShardedSpatialRoom`)
+   `on_join_as`'ı uygular ve `spawn_player_as`'ı çağırır; `on_join`
+   onlara boş kimlikle iner. Takım odası kapsam dışı: spawn'ı
+   `TeamGame::spawn_team_player(world, conn)`, kimlik almaz (kayıtlı
+   karakterli bir takım oyunu tetikleyici; bugün yok).
+4. MMO: `Realm::logins` doğrulanmış kimlikle anahtarlanır
+   (`with_login(name, pos)`); `MmoGame::spawn_player_as` kaydı olanı
+   kaydına, olmayanı (ya da anonimi) bugünkü varsayılana (shard'ın
+   waystone'u) koyar; sunucu modülünün yönlendiricisi aynı tabloyu
+   kimlikle okur (kayıt → kaydın shard'ı, yok → `DEFAULT_WAYSTONE`'un
+   shard'ı — §6 karar 6 değişmez, yalnız anahtar değişir).
+5. Wire baytları DEĞİŞMEZ: kimlik zaten AUTH'ta geçiyor.
+
+**Resume ile etkileşim — kavga yok.** Kimlikli bir join zaten önce
+resume denemesidir: sharded odada `ShardMsg::Resume` BÜTÜN shard'lara
+yayınlanır, park kaydını tutan (tek) shard kabul eder; yönlendirici
+yalnız hepsi "burada değil" dediğinde (taze join) devreye girer. Yani
+park edilmiş bir karakter park edildiği yerde (kaydının shard'ında
+değil) devam eder; park bittiyse taze join kaydına iner. Test bunu
+kaydından başka bir shard'a seyahat edip orada düşen bir karakterle
+kilitler.
+
+**Geliştirme yolu uyarısı (güven).** Karakter anahtarı, ticket-auth
+yapılandırılmışsa ticket'ın doğrulanmış `player`'ıdır — platformun
+kimliği, istemcinin iddiası değil. Ticket'sız eski yolda anahtar
+istemcinin iddia ettiği `Auth.name`'dir: **herkes her karakter olarak
+girebilir** (ve bugün zaten olduğu gibi onun park edilmiş karakterini
+devralabilir). Bu yol yalnız geliştirme / demo / loadgen içindir;
+üretimde ticket hook'u zorunludur (SECURITY §4b). Yeni auth mekanizması
+eklenmez.
+
+**Loadgen.** Botlar `lg-{id}` adıyla girer (eski yol). Loadgen'in kendi
+barındırdığı MMO sunucusu (süreç içi ve `--serve` çocuğu) standart
+realm + bir bot kadrosuyla kurulur: `lg-{id}` karakteri waystone
+`id mod 4`'ün çevresindeki dolaşma halkasında kayıtlı. Botlar
+yayılmış başlar; ilk `Travel` kaldırılır. Katalogla başlatılan bir
+`gsb-server` (`--addr` ile hedeflenen) bu kadroyu bilmez — orada botlar
+kaydısızdır (karakter veritabanı sunucunun işi; katalog realm'inde
+kayıtlı karakter yok).
+
+**Elenen alternatifler:**
+
+- *JOIN'e karakter kimliği alanı* (`JoinRoom.character`): wire
+  değişikliği; üstelik istemcinin seçtiği karakter doğrulanmamış bir
+  iddia olurdu — hangi hesabın hangi karakteri oynayabileceği platformun
+  kararı ve ticket'a zaten kodlanabilir (`player` = hesap/karakter).
+- *Adın hash'iyle yönlendirme* (`hash(kimlik) % shard`): yükü yayar ama
+  karakteri kaydından bağımsız bir shard'a koyar; yönlendirici ile
+  oyunun spawn'ı ayrışır (kayıt A bölgesinde, join B shard'ında → ilk
+  tick'te göç) ve konum hiç yerleştirilmez. Yerleşim oyunun kararıdır,
+  çekirdeğin değil.
+- *Arama servisi* (join'de karakter veritabanına async çağrı):
+  `home_shard` saf ve senkron kalmalı (registry hiçbir şeyi await
+  etmez). Bir platformun veritabanı turu join'den ÖNCE yapılır —
+  ticket doğrulayıcısı bunun yeri; oyunun realm'i o verinin süreç
+  içi kopyası. Seam iki durumda da aynı.
+- *`PlayerId`'yi taşıyıcı yapmak*: yukarıda — join'in çıktısı,
+  yönlendirme anında yok, oda-yerel.
+- *`on_join`'in imzasını değiştirmek* (`on_join(world, conn,
+  identity)`): davranış kazancı olmadan beş crate'te ~45 uygulama ve
+  çağrı yeri; varsayılanlı ikili aynı sözleşmeyi verir.
+- *`JoinInfo` yapısı*: tek alan için (kimlik); mevcut kancalar kimliği
+  `&str` alıyor (`on_disconnect`, `resume_lookup`). İkinci bir alan
+  (ör. ticket talepleri) doğarsa o gün.
+
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
 1. **Config yeri:** demo'nun anahtarları eski düz yerlerinde kalır (geriye
