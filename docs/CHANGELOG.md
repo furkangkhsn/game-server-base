@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## D turu — göç tick'i: ölümlü kopyaya yerel darbe (`fix/d-migration-tick`)
+
+C2'nin yan bulgusu kapatıldı (CROSS-SHARD §4d). Göç eden entity eski
+shard'ın dünyasında `h + 1`'in migrate fazına dek kalıyor; o tick'te ona
+inen YEREL darbe (MMO melee'si, alan etkisi — dünya sorgusu) durumu
+zaten giden kopyaya yazılıp kayboluyordu, kopyanın sistemleri ve botu
+da `h + 1`'i yeni sahibin yanında ikinci kez oynatıyordu.
+
+- **Kit:** göç tick'inde kopya oyunun kancaları boyunca `Disabled`
+  (sorgular görmez) ve `Seam`'de yeni sahibin ödünç kaydı (`h`'de
+  yakalanan kayıtla): `local` = `None`, `lent`/`lent_iter` bir kez,
+  `emit` yeni sahibe; bot sürmez; sistemlerden sonra kopya kit'e geri
+  döner. Darbe yeni sahipte `h + 2`'de, C1'in kimliği/dedup'ı/sırasıyla
+  bir kez uygulanır. `ShardGame`/`Seam` imzaları ve MMO kodu değişmedi.
+- **Çekirdek (tek, küçük):** `CrossSeam::departed(wire)` (yönlendirme
+  tablosunu okur), `emit` kimsenin ödünç vermediği hedefi oraya yollar;
+  `SeamStage::depart`. Commit bilgisi yalnız çekirdekte olduğu için
+  kaçınılmaz; mesaj/faz/protokol değişmedi.
+- **Sınır:** saklanmış bir `Entity` tutamağıyla doğrudan yazma
+  `Disabled`'ı atlar; hedef wire'dan çözülmeli (HANDOFF'ta not).
+- Client wire baytları aynı.
+
+Testler 657 → 664 (çekirdek 1, kit 4, MMO gerçek aktörlerle 2: bölge
+geçişi düellosu ve kristal bırakma — hasar toplamı = kayıp can, kill
+kredisi doğru). Ajanın 16 kit + 2 çekirdek mutasyonu yakalandı.
+Ebeveynin bağımsız mutasyonları: kopyayı gizlememek → 3 kit + 2 MMO
+testi, çekirdekte `departed` yedeğini kaldırmak → 1 çekirdek + 2 MMO
+testi kırılıyor. Loadgen sağlaması (MMO 200, varsayılan ve düello):
+errors=0, server_closes=0, 30 Hz.
+
 ## Cross-seam C2 turu — crystallization, histerezisli (`xseam/c2-crystallize`)
 
 CROSS-SHARD §4 katman 4 uygulandı (tasarım, elenen alternatifler, beş

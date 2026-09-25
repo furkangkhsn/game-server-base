@@ -77,10 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **657** (657/657 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **664** (664/664 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 için `docs/CHANGELOG.md` başlığına bakınız).
-Son tur: **cross-seam C2** (CROSS-SHARD §4c) — seam ötesi süren dövüş
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 için `docs/CHANGELOG.md` başlığına bakınız).
+Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
+Son tur: **D — göç tick'i** (CROSS-SHARD §4d) — göç eden entity'nin eski
+shard'daki ölümlü kopyasına `h + 1`'de inen yerel darbe artık yeni sahibe
+yönleniyor ve bir kez uygulanıyor (kopya oyun kancalarından gizli, yeni
+sahibin ödünç kaydı); kopya ikinci kez davranmıyor. Çekirdekte tek ekleme
+(`CrossSeam::departed`).
+Önceki tur: **cross-seam C2** (CROSS-SHARD §4c) — seam ötesi süren dövüş
 tek shard'a kristalleşiyor (yüksek wire alçak wire'ın shard'ına mevcut
 göçle; sahiplik dövüş sürerken bölgeden ayrışık; zaman + yarım-bant
 histerezisi); MMO açık, loadgen `--mmo-duel-frac`. **Cross-seam

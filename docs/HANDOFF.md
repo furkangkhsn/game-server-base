@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-657 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+664 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -142,6 +142,17 @@ gerçek dört `ShardActor` üzerinden. Beş korunan crate'e dokunulmadı;
 üç demo aynı, Faz 2'den beri değişmemiş kit üzerinde yeşil
 (`cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo`). **Uygulama
 fazları bitti.**
+
+**Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
+küçük paket, takım odasında delta, team × sharded + senaryosu).
+
+**D tamam** (CROSS-SHARD §4d, CHANGELOG "D turu"): `h`'de devredilen
+entity'nin kopyası `h + 1`'de eski dünyada durur ama oyunun kancaları onu
+GÖRMEZ (`Disabled`) — `Seam` onu yeni sahibin ödünç kaydı olarak verir,
+`emit` oraya gider. Bir hedefi wire'dan çöz (dünya sorgusu ya da
+`Seam::local`); saklanmış bir `Entity` tutamağıyla doğrudan yazma
+`Disabled`'ı atlar ve kopyaya iner. Kit'in kendi geçişleri kopyayı
+sistemlerden sonra eskisi gibi görür.
 
 **Cross-seam C2 tamam** (CROSS-SHARD §4c, CHANGELOG "Cross-seam C2
 turu"): opt-in `with_crystallize(Crystallize)` ile seam ötesi süren
@@ -351,6 +362,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 657 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 664 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
