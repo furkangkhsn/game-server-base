@@ -21,6 +21,8 @@ pub(crate) struct ServerOverrides {
     pub(crate) write_stall_secs: Option<f64>,
     /// The demo rooms' disconnect-park grace (`None` = config default).
     pub(crate) disconnect_grace_secs: Option<f64>,
+    /// The MMO's `[mmo] crystallize` (`None` = the MMO's default, on).
+    pub(crate) mmo_crystallize: Option<bool>,
 }
 
 pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -38,6 +40,17 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);
+    }
+    if let Some(on) = o.mmo_crystallize {
+        // A game setting lives in the raw table the module reads (a
+        // code-built config has no file behind it).
+        let mmo = cfg
+            .raw
+            .entry("mmo")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let Some(t) = mmo.as_table_mut() {
+            t.insert("crystallize".into(), toml::Value::Boolean(on));
+        }
     }
 }
 
@@ -102,4 +115,35 @@ pub(crate) fn init_tracing() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--mmo-crystallize` lands in the raw `[mmo]` table the MMO module
+    /// reads; unset, the table is not touched.
+    #[test]
+    fn the_mmo_crystallize_override_writes_the_mmo_table() {
+        let none = ServerOverrides {
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            disconnect_grace_secs: None,
+            mmo_crystallize: None,
+        };
+        let mut cfg = gsb_server::Config::default();
+        apply_overrides(&mut cfg, &none);
+        assert!(cfg.raw.is_empty());
+        for on in [false, true] {
+            let o = ServerOverrides {
+                mmo_crystallize: Some(on),
+                ..none
+            };
+            apply_overrides(&mut cfg, &o);
+            let got = cfg.raw["mmo"]["crystallize"].as_bool();
+            assert_eq!(got, Some(on));
+        }
+    }
 }

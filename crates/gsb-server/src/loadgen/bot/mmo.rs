@@ -31,6 +31,9 @@
 //! The draws are a per-client SplitMix64 stream seeded by the id: a run
 //! is reproducible, and a partitioned (orchestrated) run makes the same
 //! draws as an in-process one.
+//!
+//! **Duelists** (`--mmo-duel-frac`, default none): a fraction of the bots
+//! fight across a shard seam instead of roaming — [`duel`].
 
 use std::f64::consts::TAU;
 use std::time::Duration;
@@ -46,6 +49,7 @@ use prost::Message;
 
 use super::{BotClient, Labels, LoadBot};
 
+mod duel;
 #[cfg(test)]
 mod tests;
 
@@ -60,6 +64,8 @@ const ROAM_RAD_S: f64 = 0.15;
 /// per-input probabilities.
 pub(crate) struct MmoBot {
     pub(crate) move_ms: Duration,
+    /// The fraction of duelists (`--mmo-duel-frac`, [`duel`]).
+    pub(crate) duel_frac: f64,
 }
 
 impl MmoBot {
@@ -88,6 +94,7 @@ impl LoadBot for MmoBot {
             p_travel: self.per_input(TRAVEL_EVERY),
             p_attack: self.per_input(ATTACK_EVERY),
             view: ClientView::new(MmoDecoder),
+            duel: duel::duel_of(id, self.duel_frac),
         })
     }
 
@@ -117,7 +124,11 @@ impl LoadBot for MmoBot {
         Some(Labels {
             visibility: "spatial",
             shards: SHARDS as u32,
-            profile: "roam",
+            profile: if self.duel_frac > 0.0 {
+                "roam+duel"
+            } else {
+                "roam"
+            },
         })
     }
 
@@ -126,9 +137,20 @@ impl LoadBot for MmoBot {
     }
 
     fn describe(&self) -> String {
+        let duel = if self.duel_frac > 0.0 {
+            format!(
+                "; duelists (pairs, fraction {}) post 8 m either side of the x = 0 seam and \
+                 Attack across it every ~{}s",
+                self.duel_frac,
+                ATTACK_EVERY.as_secs()
+            )
+        } else {
+            String::new()
+        };
         format!(
             "mmo: first input Travel to waystone id mod {SHARDS} (K4), then roam 30–60 m round \
-             the waystone; Travel every ~{}s, Attack every ~{}s while a mob is within {ATTACK_RANGE} m",
+             the waystone; Travel every ~{}s, Attack every ~{}s while a mob is within \
+             {ATTACK_RANGE} m{duel}",
             TRAVEL_EVERY.as_secs(),
             ATTACK_EVERY.as_secs()
         )
@@ -148,6 +170,8 @@ struct MmoClient {
     p_travel: f64,
     p_attack: f64,
     view: ClientView<MmoDecoder>,
+    /// The duelist's post (`None`: the roaming bot).
+    duel: Option<duel::Duel>,
 }
 
 impl MmoClient {
@@ -179,6 +203,25 @@ impl MmoClient {
             seq,
         };
         (op::MMO_TRAVEL, msg.encode_to_vec())
+    }
+
+    /// A duelist's input: first to its side's waystone, then an attack
+    /// across the seam when a foe is in reach (at the attack rate), else
+    /// the walk to its post.
+    fn duel_input(&mut self, me: &MmoRecord, post: duel::Duel, seq: u64) -> (u16, Vec<u8>) {
+        if !self.dispersed {
+            self.dispersed = true;
+            if post.waystone != self.at {
+                return self.travel(post.waystone, seq);
+            }
+        }
+        if let Some(target) = duel::foe_in_reach(me, self.view.iter())
+            && self.draw() < self.p_attack
+        {
+            return (op::MMO_ATTACK, Attack { target, seq }.encode_to_vec());
+        }
+        let (x, z) = (to_dm(post.x), to_dm(post.z));
+        (op::MMO_MOVE_TO, MoveTo { x, z, seq }.encode_to_vec())
     }
 
     /// The roaming ring's target at `elapsed`, decimetres.
@@ -218,6 +261,9 @@ impl BotClient for MmoClient {
         // Nothing until the own character is in view (joined, and — after
         // a travel — handed over to its new shard).
         let me = *self.view.get(self.entity?)?;
+        if let Some(post) = self.duel {
+            return Some(self.duel_input(&me, post, seq));
+        }
         if !self.dispersed {
             self.dispersed = true;
             let to = (self.id % SHARDS as u64) as usize;

@@ -121,6 +121,7 @@ pub(crate) fn bot_for(args: &Args) -> Arc<dyn LoadBot> {
         #[cfg(feature = "game-mmo")]
         gsb_server::games::mmo::MmoModule::NAME => Arc::new(mmo::MmoBot {
             move_ms: args.move_ms,
+            duel_frac: args.mmo_duel_frac,
         }),
         other => unreachable!("--game `{other}` is not in the catalog the parser checks"),
     }

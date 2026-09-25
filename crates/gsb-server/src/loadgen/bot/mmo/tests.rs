@@ -67,7 +67,7 @@ fn the_hand_walked_record_matches_the_generated_decoder() {
 }
 
 /// A full snapshot holding `records` as `(id, x, y, z, kind)`.
-fn full(records: &[(u64, i32, i32, i32, Kind)]) -> Vec<u8> {
+pub(super) fn full(records: &[(u64, i32, i32, i32, Kind)]) -> Vec<u8> {
     WorldSnapshot {
         sequence: 3,
         entities: records
@@ -91,6 +91,7 @@ fn full(records: &[(u64, i32, i32, i32, Kind)]) -> Vec<u8> {
 fn bot() -> MmoBot {
     MmoBot {
         move_ms: Duration::from_millis(150),
+        duel_frac: 0.0,
     }
 }
 

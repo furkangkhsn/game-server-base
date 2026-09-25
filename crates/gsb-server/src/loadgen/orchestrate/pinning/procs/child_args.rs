@@ -92,6 +92,10 @@ pub(super) fn server_args(
         sargs.push("--disconnect-grace-secs".into());
         sargs.push(f.to_string());
     }
+    if let Some(on) = args.mmo_crystallize {
+        sargs.push("--mmo-crystallize".into());
+        sargs.push(if on { "on" } else { "off" }.into());
+    }
     sargs
 }
 
@@ -169,6 +173,10 @@ pub(super) fn client_args(
     if let Some(f) = args.disconnect_grace_secs {
         cargs.push("--disconnect-grace-secs".into());
         cargs.push(f.to_string());
+    }
+    if args.mmo_duel_frac > 0.0 {
+        cargs.push("--mmo-duel-frac".into());
+        cargs.push(args.mmo_duel_frac.to_string());
     }
     cargs
 }

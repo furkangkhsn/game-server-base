@@ -264,6 +264,13 @@ struct Args {
     /// every reconnect lands INSIDE the hold (pure resume, no expiry),
     /// which is exactly the thundering-herd shape §14.5 measures.
     disconnect_grace_secs: Option<f64>,
+    /// The fraction of MMO bots that duel across a shard seam
+    /// (`--mmo-duel-frac F`, default 0: the default bot only — see
+    /// `bot/mmo/duel.rs`).
+    mmo_duel_frac: f64,
+    /// The in-process / served MMO's `[mmo] crystallize`
+    /// (`--mmo-crystallize on|off`; unspecified = the MMO's default, on).
+    mmo_crystallize: Option<bool>,
 }
 
 /// The usage text (`--help` / `-h`).
@@ -335,6 +342,8 @@ Server options (in-process server, --serve, or the orchestrator's server):
 
   --disconnect-grace-secs F           [demo] disconnect-park grace (default:
                                        the server config default, 30)
+  --mmo-crystallize on|off            [mmo] crystallize cross-seam fights
+                                       (default: the MMO's, on)
 
 Client behaviour:
   --flood-id K                        client K floods its game's move input in
@@ -344,6 +353,10 @@ Client behaviour:
                                       resumes every S seconds
   --churn-cycles K                    drop→resume transitions per client
                                       (0 = until the deadline)
+  --mmo-duel-frac F                   [mmo] fraction of the bots (in id
+                                      pairs) that duel across the x = 0
+                                      shard seam instead of roaming
+                                      (default 0)
 
 Orchestrator options (--orchestrate):
   --procs P             client process count (default 1)

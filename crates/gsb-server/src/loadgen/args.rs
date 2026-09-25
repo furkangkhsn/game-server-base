@@ -47,6 +47,8 @@ impl Args {
             churn_secs: None,
             churn_cycles: 0,
             disconnect_grace_secs: None,
+            mmo_duel_frac: 0.0,
+            mmo_crystallize: None,
         }
     }
 }
@@ -61,7 +63,7 @@ pub(crate) fn parse_args() -> Args {
     while i < argv.len() {
         let a = argv[i].clone();
         i += 1;
-        if crate::bot::is_demo_only(&a) {
+        if crate::bot::is_game_only(&a) {
             game_flags.push(a.clone());
         }
         let mut v = || {
@@ -156,6 +158,18 @@ pub(crate) fn parse_args() -> Args {
             }
             "--disconnect-grace-secs" => {
                 args.disconnect_grace_secs = Some(v().parse().expect("number"));
+            }
+            "--mmo-duel-frac" => {
+                let f: f64 = v().parse().expect("number");
+                assert!((0.0..=1.0).contains(&f), "--mmo-duel-frac must be in 0..=1");
+                args.mmo_duel_frac = f;
+            }
+            "--mmo-crystallize" => {
+                args.mmo_crystallize = match v().as_str() {
+                    "on" => Some(true),
+                    "off" => Some(false),
+                    other => panic!("--mmo-crystallize: expected on|off, got {other}"),
+                };
             }
             "--churn-cycles" => {
                 args.churn_cycles = v().parse().expect("number");
