@@ -99,8 +99,10 @@ impl TeamHub {
             views,
             relayed,
         };
+        // The source's own slot is out of the table (taken above) while
+        // it relays: it never relays to itself.
         for (t, mailbox) in mailboxes.iter().enumerate() {
-            let Some(target) = self.slots[t].as_ref().filter(|_| t != from) else {
+            let Some(target) = self.slots[t].as_ref() else {
                 continue;
             };
             let picked: Vec<TeamRecord> = records

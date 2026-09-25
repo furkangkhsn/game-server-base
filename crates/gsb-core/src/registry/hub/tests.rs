@@ -62,6 +62,8 @@ fn an_export_reaches_only_the_other_shards_viewing_its_teams() {
     hub.on_export(ROOM, 1, 1, export(&[2], &[]), &tx);
     hub.on_export(ROOM, 2, 1, export(&[2, 1, 2], &[]), &tx);
     hub.on_export(ROOM, 3, 1, export(&[], &[(3, 30)]), &tx);
+    // Shard 0 has exported before (it views team 1 itself).
+    hub.on_export(ROOM, 0, 1, export(&[1], &[]), &tx);
     assert_eq!(hub.views(2), Some(&[1, 2][..]), "sorted, deduplicated");
     for r in rx.iter_mut() {
         let _ = drained(r);
