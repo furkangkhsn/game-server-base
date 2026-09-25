@@ -1,0 +1,34 @@
+[package]
+name = "gsb-demo-war"
+description = "Validation demo for gsb-kit: \"Cephe\", a three-faction war over a sharded 3D map with team fog of war map-wide (ShardedTeamRoom + VisionGrid2 + GridPartition2), built on the kit's public API only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# KIT-ARCHITECTURE §11/§12: the war game sees the kit's PUBLIC surface
+# only, and never the other example games (no `gsb-demo`,
+# `gsb-demo-arena` or `gsb-demo-mmo` dependency).
+[dependencies]
+gsb-core = { workspace = true }
+gsb-protocol = { workspace = true }
+gsb-kit = { workspace = true }
+bevy_ecs = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+
+# `test-util`: the actor tests run the real registry (its team hub) and
+# four shard actors on a paused clock — the ticker fires only when every
+# task is idle, so a tick's exports are relayed before the next tick.
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"

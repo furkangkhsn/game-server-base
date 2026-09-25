@@ -1,0 +1,121 @@
+// The war game's wire — "Cephe", the kit's fourth validation demo
+// (docs/KIT-ARCHITECTURE.md §10 "W2 sonucu").
+//
+// Two kinds of messages live here:
+//
+// - the game's OWN messages: its inputs (`MoveTo`, `Attack`), its
+//   entity record (`UnitRecord`, the body the game's
+//   `RecordCodec::encode` writes) and its session payload (`Welcome`);
+// - its client-facing TYPED MIRRORS of the kit's envelope
+//   (`gsb.kit.WorldSnapshot`, `gsb.kit.Private` in gsb-kit's
+//   `kit.proto`). The kit writes those frames with OPAQUE record bodies
+//   (`repeated bytes entities = 2`, `bytes game = 4`); a typed message
+//   under the same number is the same bytes on the wire (both
+//   length-delimited), so a war client decodes the kit's frames with the
+//   mirror unchanged. `tests/wire.rs` pins the two definitions to
+//   identical bytes. The kit's `InputAck` is used as is (imported).
+//
+// UNITS. Every coordinate on this wire is an integer number of
+// DECIMETRES (the world unit is the metre; see `src/codec.rs`). Axis
+// order x, y, z with y UP (height); the ground plane is (x, z).
+//
+// FACTIONS on this wire are 1-based: 1, 2, 3 are the three factions and
+// 0 is "none" (an unclaimed capture point).
+
+syntax = "proto3";
+
+package gsb.war;
+
+import "base.proto";
+import "kit.proto";
+
+// Client -> server (op `WAR_MOVE_TO`): "walk my unit toward (x, z) on
+// the ground". Clamped into the map on the server.
+message MoveTo {
+  // Ground target, decimetres (<= 2 bytes each anywhere on the map).
+  sint32 x = 1;
+  sint32 z = 2;
+  // Client-assigned input sequence number: monotonic from 1 within one
+  // session, 0 = unnumbered (always processed, never acknowledged). The
+  // rule is the kit's (`gsb_kit::game::InputSeq`); the acknowledgment
+  // comes back as `gsb.kit.InputAck` in the `Private` frame.
+  uint64 seq = 3;
+}
+
+// Client -> server (op `WAR_ATTACK`): "hit the enemy player with wire id
+// `target`". Range and side are checked on the attacker's shard; a
+// target a neighbouring shard owns (seen through the border strip) is
+// hit there — the attacker's shard hands the blow to its owner, which
+// applies it one tick later and re-checks it.
+message Attack {
+  uint64 target = 1;
+  uint64 seq = 2;
+}
+
+// What a unit is.
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  PLAYER = 1;
+  // A faction's watchtower: static, a vision source for its faction.
+  TOWER = 2;
+  // A capture point: `faction` is its owner (0 until first captured).
+  POINT = 3;
+}
+
+// One unit's record: the body of each `WorldSnapshot.entities` entry.
+message UnitRecord {
+  // The kit-minted wire identity (range-partitioned per shard, kept
+  // across shard migrations; the joiner learns its own from
+  // JOIN_ROOM_RESULT).
+  uint64 entity = 1;
+  // Position, decimetres (rounded to nearest). y is height (a tower's
+  // platform).
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 z = 4;
+  Kind kind = 5;
+  // The unit's faction, 1-based; 0 = none.
+  uint32 faction = 6;
+  // A player's hit points (towers and points have none).
+  uint32 hp = 7;
+}
+
+// Typed mirror of `gsb.kit.WorldSnapshot` (op `WAR_SNAPSHOT`): the
+// snapshot of the connection's FACTION — the kit's team fog over the
+// whole sharded map, in the team room's delta mode. The view is every
+// unit of the faction (map-wide) and every other unit some unit of the
+// faction sees (60 m on the ground), plus the unclaimed capture points
+// on the player's own shard. A DELTA applies `removed`, then the
+// upserts, on top of the view; a FULL (`delta` false) replaces it — sent
+// to a fresh faction group, on the keep-alive cadence and, one-shot in
+// `Private.snapshot`, to a member without a baseline (a join, a resume,
+// a shard crossing). The client rules are the kit's (`kit.proto`).
+// Field 4 (`cell_exits`) is not mirrored: team frames carry none.
+message WorldSnapshot {
+  uint64 sequence = 1;
+  repeated UnitRecord entities = 2;
+  repeated uint64 removed = 3;
+  bool delta = 5;
+}
+
+// The game's session payload, in `Private.game` (the kit's per-game
+// slot): sent ONCE per session, on the connection's first private
+// frame after a join or a resume.
+message Welcome {
+  // The player's faction, 1-based (`1 <= faction <= factions`).
+  uint32 faction = 1;
+  // How many factions share the map (3).
+  uint32 factions = 2;
+}
+
+// Typed mirror of `gsb.kit.Private` (op `WAR_PRIVATE`): the
+// per-connection frame — the input acknowledgment OR a one-shot FULL
+// view, the RPC responses and, once per session, the `Welcome`.
+message Private {
+  oneof payload {
+    gsb.kit.InputAck ack = 1;
+    WorldSnapshot snapshot = 2;
+  }
+  repeated gsb.base.RpcResponse responses = 3;
+  Welcome game = 4;
+}
