@@ -93,18 +93,22 @@ impl<D: ClientDecoder> ClientView<D> {
         })
     }
 
-    /// Apply one `Private` frame (the game's private opcode): an ack is
-    /// reported, a one-shot full is applied UNCONDITIONALLY, a snapshot
-    /// flagged `delta` is an error and changes nothing (errors otherwise
-    /// as in [`Self::apply_snapshot`]).
+    /// Apply one `Private` frame (the game's private opcode): the game's
+    /// session payload, if any, goes to the decoder
+    /// ([`ClientDecoder::session_private`]) first; an ack is reported, a
+    /// one-shot full is applied UNCONDITIONALLY, a snapshot flagged
+    /// `delta` is an error and changes nothing (errors otherwise as in
+    /// [`Self::apply_snapshot`]).
     pub fn apply_private(&mut self, frame: &[u8]) -> Result<PrivateEvent, ClientError> {
         let mut ack = None;
         let mut snapshot = None;
+        let mut game = None;
         let walked = Fields::new(frame).try_for_each(|field| {
             // `payload` is a oneof: the last arm on the wire wins.
             match field? {
                 (1, Value::Len(body)) => (ack, snapshot) = (Some(input_ack(body)?), None),
                 (2, Value::Len(body)) => (ack, snapshot) = (None, Some(body)),
+                (4, Value::Len(body)) => game = Some(body),
                 (1..=4, Value::Len(_)) => {}
                 (1..=4, _) => return Err(ClientError::Malformed("wrong wire type")),
                 _ => {}
@@ -112,6 +116,12 @@ impl<D: ClientDecoder> ClientView<D> {
             Ok(())
         });
         if let Err(e) = walked {
+            self.counters.errors += 1;
+            return Err(e);
+        }
+        if let Some(body) = game
+            && let Err(e) = self.decoder.session_private(body)
+        {
             self.counters.errors += 1;
             return Err(e);
         }

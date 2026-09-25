@@ -187,6 +187,30 @@ pub trait Game: Send + 'static {
         true
     }
 
+    /// The game's own per-connection payload (`Private.game`, field 4 of
+    /// the kit's `Private` frame — KIT-ARCHITECTURE §5.1) for the player
+    /// whose entity is `entity`, at the START of its session: asked once,
+    /// on the player's first private frame after a join or a resume (a
+    /// resumed client may be a fresh process that lost what it was told),
+    /// never after a shard migration (the same session continues). Write
+    /// the body into `out` and return `true` to send it — an empty body
+    /// is sent too (a proto3 message whose fields are all zero encodes
+    /// to nothing); `false` sends nothing and discards what was written.
+    ///
+    /// The payload rides the frame the kit ships anyway — the one-shot
+    /// private full of the AOI rooms, or the ack/responses frame — and
+    /// alone makes a frame only when there is nothing else to send. The
+    /// arena tells a joiner its team here. Default: `false` — no payload,
+    /// the frame (and whether there is one) exactly as without the hook.
+    fn session_private(
+        &mut self,
+        _world: &World,
+        _entity: Entity,
+        _out: &mut bytes::BytesMut,
+    ) -> bool {
+        false
+    }
+
     /// Answer an RPC request (`None` = not a request this game handles;
     /// the core answers "no handler"). `players` resolves the requester.
     fn handle_request(

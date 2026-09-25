@@ -669,9 +669,39 @@ message Private {
 - **`Private.game = 4`:** 4 numarası `Private`'ta (ve bölündüğü
   `gsb.game.Private`'ta) hiç kullanılmadı (`git log -p` ile tarandı).
   Oneof'un dışında, `responses` gibi: bir tick hem ack hem oyun yükü
-  taşıyabilir. Hiçbir kit odası bugün yazmıyor — yuva, bir oyunun ilk
-  özel mesajı zarfı yeniden numaralamak zorunda kalmasın diye açık;
-  onu dolduran `Game` kancası ilk kullanıcısıyla (tetikleyici) gelir.
+  taşıyabilir. Yuvayı dolduran kanca küçük paketteki G3-3 ile geldi
+  (ilk kullanıcısı arena — takımı); aşağıda "Oturum yükü".
+- **Oturum yükü — `Game::session_private(world, entity, out) -> bool`**
+  (varsayılan `false`: hiçbir şey yazılmaz, kare ve karenin olup
+  olmaması kancasızla birebir aynı — altı odada test kilitli). Kit onu
+  **oturum başına bir kez** sorar: join'den ya da resume'dan sonraki
+  İLK private karede (`InputSeq`'in `greet` bayrağı: `begin` — join ve
+  artık resume — kurar, ilk kare tüketir; göç `adopt`'u kurmaz, oturum
+  sürüyor). Yük, odanın o tick zaten gönderdiği karenin sonuna eklenir:
+  AOI odalarında one-shot full'un, diğerlerinde ack/yanıt karesinin;
+  başka bir şey yoksa kareyi tek başına kurar. Alan 4 karenin son alanı
+  olduğu için elle eklemek üretilmiş kodlayıcının yazacağı baytın
+  aynısıdır (etiket `0x22`, `common/session.rs`). `true` + boş gövde de
+  gönderilir (`22 00`): sıfır değerli bir proto3 mesajı (arenada takım
+  0) boş kodlanır, "yük yok" ile karışmamalı.
+  - *Neden oturum başı, her tick değil:* ilk kullanıcının yükü (takım)
+    oturum boyunca sabit; her tick sormak her bağlantıya her tick bir
+    çağrı ve oyunda "zaten söyledim mi" defteri demekti. Resume'da
+    yeniden söylenir: dönen istemci durumunu kaybetmiş yeni bir süreç
+    olabilir. Sonradan DEĞİŞEN bir oturum yükü (takım değiştirme) ayrı
+    bir tetikleyicidir — o gün kanca kit'e "yeniden söyle" diyen bir
+    işaretle genişler; bugün RPC yanıtı ya da kayıt alanı yeter.
+  - *Elenen:* ayrı bir "join" mesajı/opcode'u (oyunun opcode bloğuna
+    yeni bir çerçeve, istemcide ikinci bir akış — `Private` zaten
+    bağlantı başı yuva); yükü JOIN_ROOM_RESULT'a koymak (çekirdek zarfı,
+    oyundan habersiz; resume'da da yok); yalnız one-shot full'a eklemek
+    (takım odası ve düz odalar one-shot full göndermez — arena
+    tetikleyicinin kendisi takım odasında).
+  - İstemci yarısı: `ClientDecoder::session_private(&mut self, body)`
+    (varsayılan: yok say) — `ClientView::apply_private` alan 4'ü
+    bulursa zarf doğrulandıktan sonra, payload kolu uygulanmadan ÖNCE
+    çözücüye verir; çözücünün hatası kareyi reddeder (görünüm
+    değişmez, `errors` artar).
 - **`removed` packed değil:** kit her kimliği ayrı bir `0x18` etiketiyle
   yazıyor, üretilmiş bir kodlayıcı proto3'ün varsayılanı olan packed
   biçimi yazar; her protobuf ayrıştırıcısı ikisini de kabul eder. Bu
@@ -728,8 +758,9 @@ zarfı doğrular; ikincisi yalnız kayıt aralığını yürüyüp her kaydı
 doğrudan görünüme yazar (görünüm başına kayıt ara belleği yok —
 binlerce görünümde önbellekte ıskalanan bellek olurdu). Bozuk zarf
 görünümü değiştirmez; oyunun reddettiği bir kayıt gövdesi görünümü boş
-ve baseline'sız bırakır (asla yarım kare). `Private.responses` ve
-`Private.game` görünümün parçası değil. `tokio` bağımlılığı yok (saf
+ve baseline'sız bırakır (asla yarım kare). `Private.responses`
+görünümün parçası değil; `Private.game` (oturum yükü, §5.1) de değil —
+çözücünün `session_private` kancasına gider. `tokio` bağımlılığı yok (saf
 durum).
 
 ## 6. Hareket bir trait değildir

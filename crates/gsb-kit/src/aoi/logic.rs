@@ -127,7 +127,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     /// advanced tick, zero otherwise).
     fn private(
         &mut self,
-        _world: &mut World,
+        world: &mut World,
         player: PlayerId,
         group: &S::Cell,
         responses: &[gsb_core::rpc::RpcReply],
@@ -164,11 +164,27 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
                 crate::common::append_responses(responses, out);
+                crate::common::append_session_payload(
+                    &mut self.game,
+                    world,
+                    &self.player_entity,
+                    &mut self.input,
+                    player,
+                    out,
+                );
                 self.conn_view.insert(player, c);
                 return true;
             }
         }
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::common::emit_private_frame(
+            &mut self.game,
+            world,
+            &self.player_entity,
+            &mut self.input,
+            player,
+            responses,
+            out,
+        )
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {

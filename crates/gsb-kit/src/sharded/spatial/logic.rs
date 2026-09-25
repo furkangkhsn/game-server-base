@@ -188,7 +188,7 @@ where
     /// ack / queued RPC answers.
     fn private(
         &mut self,
-        _world: &mut World,
+        world: &mut World,
         player: PlayerId,
         group: &S::Cell,
         responses: &[gsb_core::rpc::RpcReply],
@@ -216,11 +216,27 @@ where
                 encode_varint(full.len() as u64, out);
                 out.extend_from_slice(&full);
                 crate::common::append_responses(responses, out);
+                crate::common::append_session_payload(
+                    &mut self.inner.game,
+                    world,
+                    &self.inner.player_entity,
+                    &mut self.inner.input,
+                    player,
+                    out,
+                );
                 self.conn_view.insert(player, c);
                 return true;
             }
         }
-        crate::common::emit_private(&mut self.inner.input, player, responses, out)
+        crate::common::emit_private_frame(
+            &mut self.inner.game,
+            world,
+            &self.inner.player_entity,
+            &mut self.inner.input,
+            player,
+            responses,
+            out,
+        )
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

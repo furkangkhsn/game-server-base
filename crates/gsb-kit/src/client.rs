@@ -41,9 +41,12 @@
 //! WITHOUT a baseline (never half a frame): deltas drop until the next
 //! full restores it, as for a fresh client.
 //!
-//! RPC responses (`Private.responses`) and the game's private payload
-//! (`Private.game`) are not part of the view; they are skipped. A client
-//! that uses them decodes the frame with its typed mirror too.
+//! RPC responses (`Private.responses`) are not part of the view; they
+//! are skipped (a client that uses them decodes the frame with its typed
+//! mirror too). The game's session payload (`Private.game`) is not part
+//! of the view either: it goes to the decoder
+//! ([`ClientDecoder::session_private`]) before the frame's payload arm
+//! is applied.
 
 use std::fmt;
 
@@ -77,6 +80,16 @@ pub trait ClientDecoder {
 
     /// One cell-exit body → the cell every held record in it leaves.
     fn cell_exit(&self, body: &[u8]) -> Result<Self::Cell, ClientError>;
+
+    /// The game's session payload: the body of a `Private` frame's
+    /// `game` field (what the server's
+    /// [`Game::session_private`](crate::game::Game::session_private)
+    /// wrote — once per session, on its first private frame). Keep what
+    /// it says (the arena: the joiner's team); an error rejects the
+    /// frame. Default: ignored.
+    fn session_private(&mut self, _body: &[u8]) -> Result<(), ClientError> {
+        Ok(())
+    }
 }
 
 /// The view's counters (what a load generator reports).
@@ -131,7 +144,8 @@ pub enum PrivateEvent {
         /// The full's `sequence`.
         sequence: u64,
     },
-    /// No payload arm (a frame carrying only responses or game bytes).
+    /// No payload arm (a frame carrying only responses or the game's
+    /// session payload).
     Empty,
 }
 

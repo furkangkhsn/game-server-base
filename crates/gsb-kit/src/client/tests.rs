@@ -16,6 +16,7 @@ use crate::space::{Cell, CellSpace, Grid2};
 use crate::testing::{CellExit, FixCodec, Record, WirePos};
 
 mod rules;
+mod session;
 mod wire;
 
 /// The cell edge every test uses (wire units).

@@ -592,8 +592,11 @@ gözlenemez (canlı sequence'lar tick'tir, kesin pozitif —
    delta'lar bir sonraki full'a kadar düşer — taze istemci gibi.
    Eskiden loadgen böyle bir kareyi bütünüyle yok sayardı; canlı akış
    böyle bir gövde taşımıyor (her koşuda `errors=0`).
-4. **`Private.responses` ve `Private.game`** görünümün parçası değil,
-   atlanır; bunları kullanan istemci kareyi tipli aynasıyla da çözer.
+4. **`Private.responses`** görünümün parçası değil, atlanır; onu
+   kullanan istemci kareyi tipli aynasıyla da çözer. **`Private.game`**
+   (oyunun oturum yükü) de görünümün parçası değil: küçük paketten beri
+   (G3-3) çözücünün `ClientDecoder::session_private`'ına verilir
+   (KIT-ARCHITECTURE §5.1 "Oturum yükü").
 
 **Bulgu G4-1 — demo tarafındaki iki kopya `CellExit`'i yanlış
 okuyordu** (düzeltildi, `d0c88d2`). Kit'in `Grid2`'si çıkışı hücrenin

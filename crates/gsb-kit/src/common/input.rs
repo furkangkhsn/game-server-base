@@ -27,6 +27,12 @@ struct InputState {
     hwm: u64,
     /// Highest seq already acked (the last `InputAck` sent).
     acked: u64,
+    /// The session has started and the game's session payload
+    /// (`Game::session_private`) has not been asked for yet: set by
+    /// [`InputSeq::begin`] (a join, a resume), consumed by the first
+    /// private frame. A carried session ([`InputSeq::adopt`]) and a
+    /// defensive entry are not new sessions: never set there.
+    greet: bool,
 }
 
 impl InputState {
@@ -88,13 +94,19 @@ impl InputSeq {
         self.states.entry(player).or_default().admit(seq)
     }
 
-    /// Start `player`'s input session (a join): a fresh mark.
+    /// Start `player`'s session (a join, a resume): a fresh mark, and
+    /// the game's session payload owed on the next private frame.
     pub(crate) fn begin(&mut self, player: PlayerId) {
-        self.states.insert(player, InputState::default());
+        self.states.insert(
+            player,
+            InputState {
+                greet: true,
+                ..InputState::default()
+            },
+        );
     }
 
-    /// End `player`'s input session (a leave, a resume's seq/ack reset —
-    /// the next input starts a fresh one).
+    /// End `player`'s input session (a leave).
     pub(crate) fn end(&mut self, player: PlayerId) {
         self.states.remove(&player);
     }
@@ -111,7 +123,22 @@ impl InputSeq {
     /// migration arrival): the sequence rule resumes at `hwm`, and a mark
     /// past `acked` is reported in the next private frame.
     pub(crate) fn adopt(&mut self, player: PlayerId, hwm: u64, acked: u64) {
-        self.states.insert(player, InputState { hwm, acked });
+        self.states.insert(
+            player,
+            InputState {
+                hwm,
+                acked,
+                greet: false,
+            },
+        );
+    }
+
+    /// Whether `player`'s session payload is owed, consumed: `true` once
+    /// per [`Self::begin`].
+    pub(crate) fn take_greeting(&mut self, player: PlayerId) -> bool {
+        self.states
+            .get_mut(&player)
+            .is_some_and(|st| std::mem::take(&mut st.greet))
     }
 
     /// The pending ack for `player`, consumed: `Some(hwm)` when the mark
@@ -160,7 +187,8 @@ pub(crate) fn emit_private(
         // the reply's wire shape comes from the core's conversion — the
         // game crate never re-derives the field mapping.
         responses: responses.iter().map(Into::into).collect(),
-        // The game's own private payload slot: no kit room fills it.
+        // The game's session payload (field 4, the frame's last) is
+        // appended behind this frame by `append_session_payload`.
         game: Vec::new(),
     };
     frame

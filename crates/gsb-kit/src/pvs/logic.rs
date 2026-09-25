@@ -168,13 +168,21 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     /// The per-connection input acknowledgment (see `OpenRoom::private`).
     fn private(
         &mut self,
-        _world: &mut World,
+        world: &mut World,
         player: PlayerId,
         _group: &M::Sector,
         responses: &[gsb_core::rpc::RpcReply],
         out: &mut bytes::BytesMut,
     ) -> bool {
-        crate::common::emit_private(&mut self.input, player, responses, out)
+        crate::common::emit_private_frame(
+            &mut self.game,
+            world,
+            &self.player_entity,
+            &mut self.input,
+            player,
+            responses,
+            out,
+        )
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

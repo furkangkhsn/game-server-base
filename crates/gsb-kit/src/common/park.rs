@@ -174,8 +174,10 @@ pub(crate) fn park_lookup(
 /// left to RE-KEY here — the pre-Faz-2 `conn_entity` rename is gone (the
 /// player→entity mapping kept its key across the whole disconnect).
 /// What remains is exactly what is session-scoped: the seq/ack reset of
-/// DESIGN §14.2 (the resumed session numbers from 1; dropping the entry
-/// makes `ingest`'s `or_default` mint a fresh one). Strategy-specific
+/// DESIGN §14.2 (the resumed session numbers from 1: a fresh session
+/// entry, which also owes the resumed client the game's session payload
+/// — [`Game::session_private`](crate::game::Game::session_private)).
+/// Strategy-specific
 /// per-session tables, where a room keeps any, are dropped by the room
 /// itself before calling into here.
 pub(crate) fn park_resume(
@@ -185,5 +187,5 @@ pub(crate) fn park_resume(
     player: PlayerId,
 ) {
     ledger.remove(identity);
-    input.end(player);
+    input.begin(player);
 }

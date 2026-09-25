@@ -28,6 +28,7 @@ mod frame;
 mod hooks;
 mod input;
 mod park;
+mod session;
 
 pub(crate) use cells::*;
 pub(crate) use frame::*;
@@ -35,6 +36,7 @@ pub(super) use hooks::*;
 pub use input::InputSeq;
 pub(crate) use input::{append_responses, emit_private};
 pub(crate) use park::*;
+pub(crate) use session::*;
 
 use std::collections::HashMap;
 
