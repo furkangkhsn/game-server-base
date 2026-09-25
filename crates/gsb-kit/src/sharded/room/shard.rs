@@ -1,11 +1,12 @@
-//! The sharding half: this room's index, wire range, neighbours, and
+//! The sharding half: this room's index, wire-id counter, neighbours, and
 //! the migration/border callbacks the shard actor drives.
 
 use bevy_ecs::prelude::{Entity, With, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::shard::{
-    BorderRecord, CrossSeam, EffectOutcome, Migrating, RemoteEffect, SHARD_SERIAL_RANGE, ShardLogic,
+    BorderRecord, CrossSeam, EffectOutcome, Migrating, RemoteEffect, SHARD_SERIAL_CAPACITY,
+    ShardLogic,
 };
 
 use crate::common::ParkEntry;
@@ -25,12 +26,8 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         self.partition.shard_count()
     }
 
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SHARD_SERIAL_RANGE
-    }
-
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SERIAL_CAPACITY
     }
 
     fn serial_used(&self) -> u64 {

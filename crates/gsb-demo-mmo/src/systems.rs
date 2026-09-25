@@ -46,7 +46,7 @@ impl Camps {
 
     /// Spawn every due mob. The spawned entity carries the codec's
     /// marker ([`Pos3`]) but no wire identity: the kit stamps it from
-    /// this shard's range in the same tick (`Marker` = broadcast).
+    /// this shard's counter in the same tick (`Marker` = broadcast).
     pub(crate) fn run(&mut self, world: &mut World, tick: u64) {
         for (spawn, due) in &mut self.rows {
             if tick < *due {

@@ -27,12 +27,8 @@ where
         self.inner.shard_count()
     }
 
-    fn serial_base(&self) -> u64 {
-        self.inner.serial_base()
-    }
-
-    fn serial_range(&self) -> u64 {
-        self.inner.serial_range()
+    fn serial_capacity(&self) -> u64 {
+        self.inner.serial_capacity()
     }
 
     fn serial_used(&self) -> u64 {

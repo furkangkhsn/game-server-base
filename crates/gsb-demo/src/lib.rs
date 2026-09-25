@@ -33,7 +33,7 @@
 //! (each shard its own actor with its own `World`), implementing
 //! [`GameLogic`](gsb_core::room::GameLogic) plus the sharding seam of
 //! [`gsb_core::shard::ShardLogic`] — see `docs/DESIGN.md` for the
-//! sharding design and the wire-id range partitioning.
+//! sharding design and the interleaved wire-id minting.
 //!
 //! The rooms' constructors are extension traits over the kit's room types
 //! ([`prelude`]; `use gsb_demo::prelude::*;`).

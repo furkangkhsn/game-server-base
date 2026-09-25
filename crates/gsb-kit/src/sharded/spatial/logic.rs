@@ -235,7 +235,7 @@ where
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        // Grid half: systems, range-aware orphan stamping, border-cache
+        // Grid half: systems, shard-aware orphan stamping, border-cache
         // rebuild (positions just changed).
         self.inner.step(world, ctx, None);
         self.spatial_step(world, ctx);

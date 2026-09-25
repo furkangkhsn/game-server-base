@@ -42,6 +42,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 mod border;
 mod effects;
 mod hold;
+mod identity;
 mod idle;
 mod keepalive;
 mod metrics;
@@ -114,10 +115,13 @@ enum Obs {
 
 /// The test shard logic: two shards over one map (see `TWorld`), one
 /// snapshot group, deterministic movement (a targeted entity steps
-/// `mode` in x per tick), wire ids from the range partitioning.
+/// `mode` in x per tick), wire ids interleaved like the kit's
+/// (`interleaved_id`, one draw per join).
 struct TLogic {
     index: usize,
     next_serial: u64,
+    /// The serials this shard may draw (the exhaustion bound).
+    capacity: u64,
     player_ent: HashMap<PlayerId, u64>,
     ent_player: HashMap<u64, PlayerId>,
     last_tick: u64,
@@ -179,7 +183,7 @@ impl GameLogic<TWorld> for TLogic {
         // y = 0, no motion.
         let x = (conn.0 % 20) as f32 - 10.0;
         self.next_serial += 1;
-        let wire = self.serial_base() + self.next_serial;
+        let wire = interleaved_id(self.index, 2, self.next_serial);
         w.ents.insert(wire, (x, 0.0, 0));
         // Test identity policy: the conn id doubles as the player id.
         let player = PlayerId(conn.0);
@@ -249,11 +253,8 @@ impl ShardLogic<TWorld> for TLogic {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        self.capacity
     }
     fn serial_used(&self) -> u64 {
         self.next_serial

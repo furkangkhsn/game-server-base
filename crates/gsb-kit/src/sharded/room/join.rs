@@ -1,5 +1,5 @@
 //! The join's admission, shared by the room and the team composite: the
-//! two identities from this shard's range, the tables that learn them.
+//! two identities from this shard's counter, the tables that learn them.
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::room::Admission;
@@ -11,7 +11,7 @@ use crate::space::Partition;
 impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
     /// Admit a joining player whose entity `spawn` creates: the stable
     /// player identity and the wire identity both come from this shard's
-    /// range-partitioned counter (player first, as it always was), and
+    /// interleaved counter (player first, as it always was), and
     /// the tables learn both. Shared by this room's join and the team
     /// composite's (which spawns through `TeamGame`).
     pub(in crate::sharded) fn admit(

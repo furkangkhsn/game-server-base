@@ -158,7 +158,7 @@ fn a_corner_fight_converges_on_the_lowest_wire_and_a_held_entity_stays() {
     let mut s0 = duel(0, 4, Some(POLICY));
     let mut s3 = duel(3, 4, Some(POLICY));
     let a = spawn(&mut w0, &mut s0, 1, -2.0, -2.0);
-    let b = SHARD_SERIAL_RANGE + 1; // shard 1's range
+    let b = interleaved_id(1, 4, 2); // shard 1's first entity: a < b < c
     let c = spawn(&mut w3, &mut s3, 3, 2.0, 2.0);
     let mut moved = None;
     for t in 1..=40u64 {
@@ -187,7 +187,7 @@ fn a_corner_fight_converges_on_the_lowest_wire_and_a_held_entity_stays() {
     );
     hand_over((&mut w3, &mut s3), (&mut w0, &mut s0), c);
 
-    let z = 2 * SHARD_SERIAL_RANGE + 1; // shard 2's range: z < c
+    let z = interleaved_id(2, 4, 1); // shard 2's: z < c
     for t in 41..=200u64 {
         let mut stage = stage(0, t, &[(2, z, -2, 2)]);
         if t % 2 == 1 {

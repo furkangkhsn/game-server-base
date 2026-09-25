@@ -155,10 +155,7 @@ impl ShardLogic<()> for TimeBombShardLogic {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * 1000
-    }
-    fn serial_range(&self) -> u64 {
+    fn serial_capacity(&self) -> u64 {
         1000
     }
     fn serial_used(&self) -> u64 {

@@ -8,7 +8,7 @@
 //! The same game as the single-world rooms, but the world is
 //! partitioned: a room of `shard_count` actors, each owning one region
 //! of the map. The core machinery (`gsb_core::shard`) runs the shard
-//! protocol (migration, border exchange, range-partitioned wire ids);
+//! protocol (migration, border exchange, interleaved wire ids);
 //! this module supplies what the core leaves to the logic:
 //!
 //! - the **region** of a position and the **neighbor** topology (the
@@ -36,13 +36,14 @@
 //! encoding cost it adds to every shard's snapshot — stays bounded by the
 //! boundary, not the whole shard.
 //!
-//! ## Wire identity (range partitioning)
+//! ## Wire identity (interleaved minting)
 //!
-//! Shard `i` mints ids from `[i * SHARD_SERIAL_RANGE, (i+1) *
-//! SHARD_SERIAL_RANGE)`. A migrated entity **keeps its id** (it travels
-//! with its state), so the id is stable across migrations and the ranges
-//! being disjoint means no two shards ever mint the same id — the
-//! identity invariant holds shard-locally and across the room. See
+//! Shard `i` of `N` draws its `n`-th id as `(n − 1) · N + i + 1`
+//! (`gsb_core::shard::interleaved_id`): the shards' ids are disjoint
+//! residue classes, so no two shards ever mint the same id, and a room
+//! whose shards have drawn `n` each has used exactly the ids `1 ..= n·N`
+//! — small, cheap varints. A migrated entity **keeps its id** (it
+//! travels with its state), so the id is stable across migrations. See
 //! `gsb_core::shard`'s module docs for the full protocol.
 //!
 //! ## Group key
@@ -97,9 +98,10 @@
 //! when it changes cell) — the same shape an own-entity mover produces.
 //!
 //! Why ONE flat ledger instead of per-neighbor ledgers: the wire ids are
-//! range-partitioned PER SHARD, so a borrowed id identifies exactly one
-//! neighbor for the room's whole lifetime — the union of per-neighbor
-//! diffs is mathematically the flat diff, minus a second level of maps.
+//! unique across the room's shards (interleaved per shard), so a
+//! borrowed id identifies exactly one entity for the room's whole
+//! lifetime — the union of per-neighbor diffs is mathematically the
+//! flat diff, minus a second level of maps.
 //! (The core actor already merges the per-neighbor views into the sorted
 //! slice this room receives; it also drops a neighbor's stale copy of an
 //! entity that just migrated IN — own wins. The ledger HAS seen that id —

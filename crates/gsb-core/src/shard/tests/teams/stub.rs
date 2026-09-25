@@ -59,11 +59,8 @@ impl ShardLogic<TWorld> for TeamStub {
     fn shard_count(&self) -> usize {
         4
     }
-    fn serial_base(&self) -> u64 {
-        2 * SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SERIAL_CAPACITY
     }
     fn serial_used(&self) -> u64 {
         0

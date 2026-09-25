@@ -77,13 +77,10 @@ async fn wire_identity_stable_and_disjoint() {
     let mut h = Harness::new();
     let (w0, actions0, _o0) = h.join(0, ConnectionId(1), 1).await; // x = -9, shard 0
     let (w1, _a1, _o1) = h.join(1, ConnectionId(10), 1).await; // x = 0, shard 1
-    // Disjoint ranges: shard 0 below 2^20, shard 1 at/above it.
-    assert!(w0 < SHARD_SERIAL_RANGE, "shard 0 minted out of range: {w0}");
-    assert!(
-        (SHARD_SERIAL_RANGE..2 * SHARD_SERIAL_RANGE).contains(&w1),
-        "shard 1 minted out of range: {w1}"
-    );
-    assert_ne!(w0, w1);
+    // Interleaved: each shard's first draw, adjacent small values, each
+    // naming the shard that drew it.
+    assert_eq!((w0, w1), (1, 2), "first draws of shards 0 and 1");
+    assert_eq!((minting_shard(w0, 2), minting_shard(w1, 2)), (0, 1));
     // Walk w0 into shard 1; it must arrive under the SAME id.
     h.act(&actions0, ConnectionId(1), 1000).await;
     let mut crossed_at = None;
@@ -321,7 +318,7 @@ async fn boundary_entities_are_visible_to_both_sides() {
     }
     // Until each shard's snapshot shows BOTH w0 (shard 0's entity) and
     // w1 (shard 1's entity) — the own record under its own id and the
-    // borrowed record under the neighbor's id (disjoint ranges: no
+    // borrowed record under the neighbor's id (disjoint ids: no
     // collision in the union view).
     let mut seen0: Option<Vec<(u64, i32, i32)>> = None;
     let mut seen1: Option<Vec<(u64, i32, i32)>> = None;

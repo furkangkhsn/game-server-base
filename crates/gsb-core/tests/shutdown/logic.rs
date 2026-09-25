@@ -8,7 +8,7 @@ use std::sync::Arc;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::registry::{BuiltRoom, RoomFactory};
 use gsb_core::room::{Action, Admission, GameLogic, RoomLogic, TickCtx};
-use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
+use gsb_core::shard::{BorderRecord, Migrating, ShardLogic, interleaved_id};
 
 /// A single room: one entity per connection, a result at teardown.
 pub struct Quiet;
@@ -80,7 +80,7 @@ impl GameLogic<()> for QuietShard {
     fn on_join(&mut self, _w: &mut (), c: ConnectionId) -> Admission {
         Admission {
             player: PlayerId(c.0),
-            entity: self.serial_base() + c.0,
+            entity: interleaved_id(self.index, 2, c.0),
         }
     }
     fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
@@ -101,10 +101,7 @@ impl ShardLogic<()> for QuietShard {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * 1000
-    }
-    fn serial_range(&self) -> u64 {
+    fn serial_capacity(&self) -> u64 {
         1000
     }
     fn serial_used(&self) -> u64 {

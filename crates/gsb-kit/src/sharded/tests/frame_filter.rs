@@ -73,7 +73,7 @@ fn a_record_crossing_the_frame_edge_exits_and_reenters() {
     let mut sp0 = ShardedSpatialRoom::new(0, 16, 50.0, 20.0);
     let o = place_spatial(&mut w0, &mut sp0, ConnectionId(1), -30.0, -37.5); // Cell(-2,-2)
     let group = [Cell(-2, -2)];
-    let n = SHARD_SERIAL_RANGE + 7; // shard 1's range
+    let n = interleaved_id(1, 16, 7); // shard 1's
     let at = |x| {
         vec![BorderRecord {
             wire: n,

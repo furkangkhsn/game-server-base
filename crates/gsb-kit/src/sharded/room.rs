@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::{Entity, With, Without, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
-use gsb_core::shard::{BorderRecord, CrossSeam, SHARD_SERIAL_RANGE};
+use gsb_core::shard::{BorderRecord, CrossSeam};
 
 use crate::codec::RecordCodec;
 use crate::common::{InputSeq, ParkEntry, ParkPolicy};
@@ -75,12 +75,12 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// entity's components are gone, so this is how the sweep finds the
     /// wire id of an entity the game despawned.
     pub(in crate::sharded) entity_wire: HashMap<Entity, u64>,
-    /// This shard's identity counter over its disjoint range
-    /// (`index * SHARD_SERIAL_RANGE + n` — a range [`Minter`], the only
-    /// construction path of [`WireId`]). BOTH identity spaces draw from
-    /// this one counter — wire ids AND stable player ids — so the core's
-    /// range-exhaustion guard (`serial_used`) stays exact over
-    /// everything the range backs.
+    /// This shard's identity counter, interleaved with its siblings'
+    /// (`(n − 1) · shard_count + index + 1` — an interleaved [`Minter`],
+    /// the only construction path of [`WireId`]). BOTH identity spaces
+    /// draw from this one counter — wire ids AND stable player ids — so
+    /// the core's exhaustion guard (`serial_used`) stays exact over
+    /// everything the counter backs.
     pub(in crate::sharded) minter: Minter,
     /// This shard's boundary records (module docs, "Visibility model"),
     /// rebuilt at the end of `update` (positions change in the game's
@@ -117,6 +117,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
     pub fn with_game(game: G, partition: P, index: usize) -> Self {
         let neighbors = partition.neighbors(index);
         let route = first_hops(index, partition.shard_count(), |i| partition.neighbors(i));
+        let minter = Minter::interleaved(index, partition.shard_count());
         Self {
             game,
             partition,
@@ -129,7 +130,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             entity_player: HashMap::new(),
             wire_entity: HashMap::new(),
             entity_wire: HashMap::new(),
-            minter: Minter::range(index as u64 * SHARD_SERIAL_RANGE),
+            minter,
             border_cache: Vec::new(),
             last: HashMap::new(),
             encoded: 0,
@@ -150,16 +151,16 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         &mut self.game
     }
 
-    /// Mint the next STABLE player identity (Faz 2): range-partitioned
-    /// like the wire ids — drawn from the SAME counter (see the `minter`
-    /// field docs), so two shards never mint the same player.
+    /// Mint the next STABLE player identity (Faz 2): interleaved like
+    /// the wire ids — drawn from the SAME counter (see the `minter` field
+    /// docs), so two shards never mint the same player.
     fn mint_player(&mut self) -> PlayerId {
         PlayerId(self.minter.next_serial())
     }
 
     /// The tick body minus the change-window close: the game's systems
     /// (through its seam hook when the actor lends a seam — the sharded
-    /// path; the plain hook otherwise), range-aware orphan stamping and
+    /// path; the plain hook otherwise), shard-aware orphan stamping and
     /// the border-cache rebuild. The spatial composite runs this and then
     /// its own dirty pass, which must still see the tick's writes.
     pub(in crate::sharded) fn step(
@@ -195,11 +196,12 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             }
         }
 
-        // Orphan stamping, range-aware (the broadcast set stays
+        // Orphan stamping, shard-aware (the broadcast set stays
         // structural — "has the codec's marker" — like the other rooms):
-        // entities with the marker but no `WireId` get the next serial
-        // FROM THIS SHARD'S RANGE (a shared counter would mint ids
-        // outside the range and break the disjointness invariant).
+        // entities with the marker but no `WireId` get the next value
+        // of THIS SHARD'S COUNTER (a plain room counter would draw
+        // values a sibling also draws and break the uniqueness
+        // invariant).
         let orphans: Vec<Entity> = world
             .query_filtered::<Entity, (With<Marker<G>>, Without<WireId>)>()
             .iter(world)

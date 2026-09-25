@@ -155,7 +155,7 @@
 //! healed where a dropped full self-healed by luck of idempotence.
 //!
 //! **Wire-identity interaction:** borrowed records carry the *neighbor's*
-//! wire ids. The ranges are disjoint (below), so a client's view — own
+//! wire ids. The shards mint disjoint ids (below), so a client's view — own
 //! shard's entities plus the borrowed boundary set — can never contain
 //! the same id for two different entities, and the snapshot's "no
 //! change" ledger is a plain union map over wire ids. One subtlety the
@@ -184,32 +184,24 @@
 //! dedicated neighbor queue out would be a topology change (a second
 //! interleaving for the protocol to reason about), not a refactor.
 //!
-//! ## Wire identity (range partitioning)
+//! ## Wire identity (interleaved minting)
 //!
-//! Today a room mints wire ids from one monotonic counter; the invariant
-//! is "two different entities never share a wire id over the room's
-//! lifetime". With N shards a *shared allocator* (a round-trip message per
-//! spawn) is incompatible with the architecture: spawns happen inside the
-//! tick body, which is synchronous (no await), and an allocator actor
-//! would add a shared component to a deliberately shared-state-free design
-//! (a pre-fetched batch of ids is range partitioning with extra steps).
-//! So each shard owns a **disjoint range**: shard i mints
-//! `i * SHARD_SERIAL_RANGE + 1 … (i+1) * SHARD_SERIAL_RANGE`. No message,
-//! no shared state, no await — and the invariant holds by construction
-//! (the ranges are disjoint over the room's whole lifetime).
-//!
-//! Consequences, stated plainly:
-//!
-//! - A migrated entity **keeps its wire id** (the id is part of the
-//!   migrated state): to a client it is the same entity that crossed the
-//!   boundary, which is exactly what the id's purpose is to express.
-//! - The id space is finite per shard (`SHARD_SERIAL_RANGE` = 2^20
-//!   identities ≈ 100× the measured 10k wall in re-join churn per shard);
-//!   a shard that exhausts its range refuses new joins with `RoomFull`
-//!   (logged; structurally unreachable at the default).
-//! - The varint cost: shard i's ids start at `i * 2^20`; at N ≤ 8 every
-//!   id stays ≤ 2^23 (≤ 4-byte varint — the same as today's churn at
-//!   scale), and even at N = 16 the offset stays under 2^25.
+//! Shard `i` of `N` draws its `n`-th id as `(n − 1) · N + i + 1`
+//! ([`interleaved_id`]): the shards own disjoint residue classes mod `N`,
+//! so an id is unique across the room without a lock, a message or an
+//! await (spawns happen inside the synchronous tick body); a counter
+//! never runs backwards, so a despawned id is never drawn again in the
+//! incarnation (C1's `(wire, epoch)` target identity relies on it); a
+//! migrated entity **keeps its id** (it is part of the migrated state,
+//! not a draw of the receiving shard); and the ids stay small — while
+//! every shard has drawn `n`, the room has used exactly `1 ..= n·N`
+//! (1–2-byte varints where the earlier range partitioning from `i · 2^20`
+//! made them 3–4 bytes). A shard's draws are bounded
+//! ([`SHARD_SERIAL_CAPACITY`] = 2^20): the join that would pass
+//! [`ShardLogic::serial_capacity`] is refused with `RoomFull` (logged;
+//! structurally unreachable at the default), which keeps every id at
+//! most `2^20 · N`. The invariants in full, the bound and the rejected
+//! alternatives: the `serial` child module (`serial.rs`).
 //!
 //! ## Connection ownership
 //!
@@ -284,6 +276,7 @@ mod link;
 mod logic;
 mod msg;
 mod seam;
+mod serial;
 mod team;
 
 #[cfg(test)]
@@ -301,16 +294,12 @@ pub(crate) use link::*;
 pub use logic::ShardLogic;
 pub use msg::{Migrating, PlayerMigration, ResumeReply, ShardMsg};
 pub use seam::{CrossSeam, Lent, SeamStage};
+pub use serial::{SHARD_SERIAL_CAPACITY, interleaved_id, minting_shard};
 pub(crate) use team::TeamStats;
 pub use team::{
     ImportedRecord, TEAM_EXPORT_MAX_RECORDS, TEAM_EXPORT_MAX_VIEWS, TEAM_EXPORT_TTL_TICKS,
     TEAM_HUB_SWEEP_EVERY_TICKS, TeamExport, TeamImport, TeamImports, TeamRecord,
 };
-
-/// Identities per shard in the wire-id range partitioning (see module
-/// docs, "Wire identity"): 2^20 ≈ 100× the measured 10k single-room wall
-/// in per-shard lifetime spawn churn.
-pub const SHARD_SERIAL_RANGE: u64 = 1 << 20;
 
 /// A leave tombstone outlives the leave that wrote it by this many
 /// ticks, then becomes sweepable (see `conn_tombstone`). Hardcoded on

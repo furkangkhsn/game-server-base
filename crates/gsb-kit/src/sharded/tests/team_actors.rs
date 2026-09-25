@@ -130,7 +130,7 @@ async fn a_silent_sources_records_expire_after_the_ttl() {
     let mut rig = Rig::new(true).await;
     let far = rig.join(1, "0:50:50").await;
     rig.steps(2).await;
-    let ghost = 2 * gsb_core::shard::SHARD_SERIAL_RANGE + 77;
+    let ghost = gsb_core::shard::interleaved_id(2, rig::SHARDS, 77);
     let export = TeamExport {
         views: Vec::new(),
         records: vec![TeamRecord {
@@ -188,7 +188,7 @@ async fn an_export_of_another_incarnation_is_ignored() {
     let mut rig = Rig::new(true).await;
     let far = rig.join(1, "0:50:50").await;
     rig.steps(2).await;
-    let ghost = 2 * gsb_core::shard::SHARD_SERIAL_RANGE + 5;
+    let ghost = gsb_core::shard::interleaved_id(2, rig::SHARDS, 5);
     let export = TeamExport {
         views: Vec::new(),
         records: vec![TeamRecord {

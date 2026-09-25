@@ -18,6 +18,7 @@
 //! component and the kit stamps the identity.
 
 use bevy_ecs::prelude::Component;
+use gsb_core::shard::interleaved_id;
 
 /// The entity's wire identity (see `game.proto`, `EntityRecord.entity`).
 ///
@@ -46,17 +47,23 @@ impl WireId {
 /// A room's identity counter — the ONLY construction path of
 /// [`WireId`] (module docs). Monotonic: a value is never re-used within
 /// the room's lifetime, even when the ECS allocator recycles the old
-/// entity's slot. Both shapes share one arithmetic: the `n`-th draw
-/// (from 1) is `base + n`.
+/// entity's slot. A single world counts 1, 2, 3, …; a shard of an
+/// `N`-shard room draws the `n`-th value of its own residue class
+/// ([`interleaved_id`]: `(n − 1) · N + index + 1`) — with `N = 1` the
+/// same 1, 2, 3, ….
 #[derive(Debug, Clone)]
 pub(super) enum Minter {
-    /// A single-world room: serials 1, 2, 3, … (`base = 0`).
+    /// A single-world room: serials 1, 2, 3, ….
     Sequential { used: u64 },
-    /// One shard of a sharded room: serials `base + 1, base + 2, …` from
-    /// the shard's disjoint slice of the id space (range partitioning —
-    /// two shards never mint the same value). The core's
-    /// range-exhaustion guard reads [`Self::used`].
-    Range { base: u64, used: u64 },
+    /// Shard `index` of an `shards`-shard room: its draws interleave
+    /// with its siblings' (two shards never draw the same value, and
+    /// the room's values stay small — KIT-ARCHITECTURE §4.4). The
+    /// core's exhaustion guard reads [`Self::used`].
+    Interleaved {
+        index: usize,
+        shards: usize,
+        used: u64,
+    },
 }
 
 impl Minter {
@@ -65,9 +72,15 @@ impl Minter {
         Self::Sequential { used: 0 }
     }
 
-    /// A fresh counter over the slice that starts after `base`.
-    pub(super) const fn range(base: u64) -> Self {
-        Self::Range { base, used: 0 }
+    /// A fresh counter for shard `index` of a room of `shards` shards
+    /// (fixed for the room's incarnation: the partition's).
+    pub(super) const fn interleaved(index: usize, shards: usize) -> Self {
+        assert!(index < shards, "a shard index lies below the shard count");
+        Self::Interleaved {
+            index,
+            shards,
+            used: 0,
+        }
     }
 
     /// Mint the next wire identity.
@@ -78,10 +91,10 @@ impl Minter {
 
     /// Draw the next raw serial from the SAME counter without making it
     /// a wire identity — for an identity space that shares the counter
-    /// (a shard mints its stable player ids from its range too, so the
-    /// core's exhaustion guard stays exact over everything the range
-    /// backs). A raw serial never becomes a `WireId`: only
-    /// [`Self::mint`] and [`Self::arrival`] build one.
+    /// (a shard mints its stable player ids from it too, so the core's
+    /// exhaustion guard stays exact over everything the counter backs).
+    /// A raw serial never becomes a `WireId`: only [`Self::mint`] and
+    /// [`Self::arrival`] build one.
     #[inline]
     pub(super) fn next_serial(&mut self) -> u64 {
         match self {
@@ -89,9 +102,13 @@ impl Minter {
                 *used += 1;
                 *used
             }
-            Self::Range { base, used } => {
+            Self::Interleaved {
+                index,
+                shards,
+                used,
+            } => {
                 *used += 1;
-                *base + *used
+                interleaved_id(*index, *shards, *used)
             }
         }
     }
@@ -99,19 +116,19 @@ impl Minter {
     /// How many serials this counter has drawn.
     pub(super) const fn used(&self) -> u64 {
         match self {
-            Self::Sequential { used } | Self::Range { used, .. } => *used,
+            Self::Sequential { used } | Self::Interleaved { used, .. } => *used,
         }
     }
 
     /// Re-materialize the identity of an entity that migrated IN from a
-    /// sibling shard. Not a mint: the value was minted by the sibling's
-    /// range (the core carries it as a raw `u64` in `Migrating::wire`),
-    /// and the entity keeps it for its whole lifetime. Only a range
-    /// minter receives migrants.
+    /// sibling shard. Not a mint: the value was minted by the sibling
+    /// (the core carries it as a raw `u64` in `Migrating::wire`), and the
+    /// entity keeps it for its whole lifetime. Only a shard's counter
+    /// receives migrants.
     pub(super) fn arrival(&self, wire: u64) -> WireId {
         debug_assert!(
-            matches!(self, Self::Range { .. }),
-            "only a shard (range minter) receives migrants"
+            matches!(self, Self::Interleaved { .. }),
+            "only a shard (interleaved minter) receives migrants"
         );
         WireId(wire)
     }
@@ -133,12 +150,21 @@ mod tests {
     /// ids): interleaved draws never repeat a value, and the count
     /// covers both.
     #[test]
-    fn range_draws_share_one_counter() {
-        let mut m = Minter::range(1_000);
-        assert_eq!(m.next_serial(), 1_001);
-        assert_eq!(m.mint().get(), 1_002);
-        assert_eq!(m.next_serial(), 1_003);
+    fn shard_draws_share_one_counter() {
+        let mut m = Minter::interleaved(2, 4);
+        assert_eq!(m.next_serial(), 3);
+        assert_eq!(m.mint().get(), 7);
+        assert_eq!(m.next_serial(), 11);
         assert_eq!(m.used(), 3);
-        assert_eq!(m.arrival(7).get(), 7);
+        assert_eq!(m.arrival(5).get(), 5);
+    }
+
+    /// A one-shard room counts like a single world.
+    #[test]
+    fn a_single_shard_counts_like_a_single_world() {
+        let (mut one, mut seq) = (Minter::interleaved(0, 1), Minter::sequential());
+        for _ in 0..50 {
+            assert_eq!(one.mint(), seq.mint());
+        }
     }
 }

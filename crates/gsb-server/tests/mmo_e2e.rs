@@ -12,7 +12,7 @@ mod hosted;
 
 use std::time::Duration;
 
-use gsb_core::shard::SHARD_SERIAL_RANGE;
+use gsb_core::shard::minting_shard;
 use gsb_demo_mmo::{Pos3, Realm};
 use gsb_server::games::mmo::MmoModule;
 use hosted::mmo::{MmoView, dm, ground};
@@ -30,10 +30,10 @@ async fn start(realm: Realm) -> gsb_server::ServerHandle {
     .expect("the MMO starts")
 }
 
-/// The shard that minted a wire id (range partitioning: shard `i` mints
-/// from `[i * SHARD_SERIAL_RANGE, (i + 1) * SHARD_SERIAL_RANGE)`).
+/// The shard that minted a wire id (interleaved minting: shard `i`'s
+/// ids are the values `≡ i + 1 (mod SHARDS)`).
 fn minted_by(id: u64) -> u64 {
-    id / SHARD_SERIAL_RANGE
+    minting_shard(id, gsb_demo_mmo::world::SHARDS) as u64
 }
 
 async fn join(addr: std::net::SocketAddr, name: &str) -> Mmo {

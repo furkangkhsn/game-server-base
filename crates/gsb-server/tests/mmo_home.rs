@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gsb_core::auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
 use gsb_core::id::RoomId;
-use gsb_core::shard::SHARD_SERIAL_RANGE;
+use gsb_core::shard::minting_shard;
 use gsb_demo_mmo::{Pos3, Realm};
 use gsb_server::games::mmo::MmoModule;
 use gsb_server::{ServerHandle, ServerHooks};
@@ -26,9 +26,9 @@ use hosted::{Client, Door, eventually, hold};
 
 type Mmo = Client<MmoView>;
 
-/// The shard that minted a wire id (range partitioning).
+/// The shard that minted a wire id (interleaved minting).
 fn minted_by(id: u64) -> u64 {
-    id / SHARD_SERIAL_RANGE
+    minting_shard(id, gsb_demo_mmo::world::SHARDS) as u64
 }
 
 /// The platform's validator: ticket `t-NAME` is player `NAME`, pinned to

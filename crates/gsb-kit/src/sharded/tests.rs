@@ -16,7 +16,7 @@ use crate::space::Cell;
 use crate::testing::*;
 use gsb_core::id::PlayerId;
 use gsb_core::room::GameLogic;
-use gsb_core::shard::{BorderRecord, SHARD_SERIAL_RANGE, ShardLogic};
+use gsb_core::shard::{BorderRecord, ShardLogic, interleaved_id};
 use prost::Message;
 
 mod change_window;
@@ -25,6 +25,7 @@ mod departing;
 mod diagonals;
 mod frame_filter;
 mod ghosts;
+mod identity;
 mod input_carry;
 mod lent_arrival;
 mod migration;
@@ -106,46 +107,6 @@ fn region_partition_tiles_the_map() {
         }
         assert_eq!(owned.len(), n, "every shard has area (n={n})");
     }
-}
-
-/// Wire identity: the shards' ranges are disjoint and ids are stable
-/// under migration (migrated-in keeps its id; the two shards' mints
-/// never collide).
-#[test]
-fn wire_ranges_are_disjoint_and_stable() {
-    let mut world0 = World::new();
-    let mut world1 = World::new();
-    let mut s0 = ShardedRoom::new(0, 4, 50.0);
-    let mut s1 = ShardedRoom::new(1, 4, 50.0);
-
-    let w0 = place(&mut world0, &mut s0, ConnectionId(1), -10.0, -10.0);
-    let w1 = place(&mut world1, &mut s1, ConnectionId(2), 10.0, -10.0);
-    assert!(w0 < SHARD_SERIAL_RANGE, "shard 0 in range 0: {w0}");
-    assert!(
-        (SHARD_SERIAL_RANGE..2 * SHARD_SERIAL_RANGE).contains(&w1),
-        "shard 1 in range 1: {w1}"
-    );
-    assert_ne!(w0, w1, "disjoint ranges ⇒ no collision");
-
-    // Migrate w0 from shard 0 into shard 1: the id is preserved.
-    let entity0 = *s0.player_entity.get(&PlayerId(1)).unwrap();
-    let state = KitMig {
-        game: FixMig {
-            pos: world0.entity(entity0).get::<Position>().copied().unwrap(),
-            speed: world0.entity(entity0).get::<Speed>().map(|s| s.0),
-            target: world0.entity(entity0).get::<MoveTarget>().copied(),
-        },
-        park: None,
-        input: None,
-        pin: None,
-    };
-    s1.on_migrate_in(&mut world1, w0, state, Some(PlayerId(1)));
-    let entity1 = *s1.player_entity.get(&PlayerId(1)).unwrap();
-    assert_eq!(
-        world1.entity(entity1).get::<WireId>().unwrap().get(),
-        w0,
-        "the migrated entity keeps its wire id"
-    );
 }
 
 /// Migration: an entity crossing into a neighbor's region is reported

@@ -92,7 +92,8 @@ pub struct EffectId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteEffect {
     /// The target's wire identity (unique for the room incarnation:
-    /// ranges are disjoint and a migrating entity keeps its id).
+    /// the shards mint disjoint, never re-drawn values and a migrating
+    /// entity keeps its id).
     pub target: u64,
     /// The source entity's wire identity — attribution (kill credit,
     /// statistics) and the first ordering key. `0` = no source entity.

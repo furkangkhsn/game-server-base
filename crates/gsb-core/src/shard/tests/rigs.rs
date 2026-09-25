@@ -47,6 +47,7 @@ impl Harness {
                 Box::new(TLogic {
                     index: 0,
                     next_serial: 0,
+                    capacity: SHARD_SERIAL_CAPACITY,
                     player_ent: HashMap::new(),
                     ent_player: HashMap::new(),
                     last_tick: 0,
@@ -72,6 +73,7 @@ impl Harness {
                 Box::new(TLogic {
                     index: 1,
                     next_serial: 0,
+                    capacity: SHARD_SERIAL_CAPACITY,
                     player_ent: HashMap::new(),
                     ent_player: HashMap::new(),
                     last_tick: 0,
@@ -240,6 +242,14 @@ impl Harness {
 
 /// An unspawned shard actor for the table tests above/below.
 pub(in crate::shard::tests) fn bare_shard(index: usize) -> ShardActor<TWorld, (), TState, TStrip> {
+    bare_shard_capped(index, SHARD_SERIAL_CAPACITY)
+}
+
+/// [`bare_shard`] whose logic may draw only `capacity` serials.
+pub(in crate::shard::tests) fn bare_shard_capped(
+    index: usize,
+    capacity: u64,
+) -> ShardActor<TWorld, (), TState, TStrip> {
     let (_tick_tx, tick_rx) = broadcast::channel(64);
     let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
     // Two dummy neighbor slots (TLogic::neighbors targets 0 and 1).
@@ -259,6 +269,7 @@ pub(in crate::shard::tests) fn bare_shard(index: usize) -> ShardActor<TWorld, ()
         Box::new(TLogic {
             index,
             next_serial: 0,
+            capacity,
             player_ent: HashMap::new(),
             ent_player: HashMap::new(),
             last_tick: 0,
@@ -368,6 +379,7 @@ pub(in crate::shard::tests) fn rig_logic(index: usize) -> TLogic {
     TLogic {
         index,
         next_serial: 0,
+        capacity: SHARD_SERIAL_CAPACITY,
         player_ent: HashMap::new(),
         ent_player: HashMap::new(),
         last_tick: 0,

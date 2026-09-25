@@ -166,7 +166,7 @@ async fn simultaneous_strikes_resolve_in_a_fixed_order() {
         let m = cs[0].of_kind(Kind::Mob)[0].0;
         assert!(cs[1].get(m).is_some(), "Y sees M too");
         let (x, y) = (cs[0].id, cs[1].id);
-        assert!(x < y, "shard 0's range is below shard 3's");
+        assert!(x < y, "equal draws: shard 0's id is below shard 3's");
         let order = if x_first { [0, 1] } else { [1, 0] };
         for i in order {
             cs[i].attack(m).await;

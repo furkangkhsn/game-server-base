@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 /// One neighbor's boundary entity, as included in this shard's snapshots:
 /// the CORE-MANAGED identity envelope (`wire` — minted from the room's
-/// range-partitioned counters, deduplicated by the own-wins filter,
+/// interleaved counters, deduplicated by the own-wins filter,
 /// exited by the delta protocol) around a LOGIC-OWNED payload (`state`).
 ///
 /// Why the split lives here: the seam's identity vocabulary (wire ids)

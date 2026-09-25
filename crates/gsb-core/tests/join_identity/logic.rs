@@ -73,10 +73,7 @@ impl ShardLogic<()> for IdLogic {
     fn shard_count(&self) -> usize {
         SHARDS
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SPAN
-    }
-    fn serial_range(&self) -> u64 {
+    fn serial_capacity(&self) -> u64 {
         SPAN
     }
     fn serial_used(&self) -> u64 {

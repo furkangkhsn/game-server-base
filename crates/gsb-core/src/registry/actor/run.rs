@@ -109,7 +109,7 @@ where
                     generation,
                 } => {
                     // The room rejected the dispatched join (e.g. the
-                    // shard's wire-id range is exhausted): release the
+                    // shard's wire-id serials are exhausted): release the
                     // capacity reservation (the join never counted). Only
                     // for the SAME incarnation: a stale failure from a dead
                     // room must not touch a rebuilt room's counters.

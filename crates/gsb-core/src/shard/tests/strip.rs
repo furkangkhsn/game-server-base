@@ -47,7 +47,7 @@ impl GameLogic<TWorld> for RichLogic {
         false // no members join in these tests; nothing ever emits
     }
     fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> Admission {
-        let wire = self.index as u64 * SHARD_SERIAL_RANGE + conn.0;
+        let wire = interleaved_id(self.index, 2, conn.0);
         w.ents.insert(wire, ((conn.0 % 20) as f32 - 10.0, 0.0, 0));
         Admission {
             player: PlayerId(conn.0),
@@ -70,11 +70,8 @@ impl ShardLogic<TWorld> for RichLogic {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SERIAL_CAPACITY
     }
     fn serial_used(&self) -> u64 {
         0

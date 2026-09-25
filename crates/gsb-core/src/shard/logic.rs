@@ -14,7 +14,7 @@ use crate::shard::*;
 /// exclusive sharding seam below. The compile-time separation survives
 /// the unification DELIBERATELY (design candidate A of
 /// `docs/TRAIT-ARCHITECTURE.md` §3, not the single-trait B): forgetting
-/// `neighbors()` or the serial range still does not compile, so a silent
+/// `neighbors()` or the serial capacity still does not compile, so a silent
 /// migration break stays structurally impossible.
 ///
 /// Implemented by the game crate; the core never inspects the world `W`
@@ -33,13 +33,16 @@ pub trait ShardLogic<W>: GameLogic<W> {
     /// supplies it at construction).
     fn shard_count(&self) -> usize;
 
-    /// This shard's wire-id range base: ids are minted as
-    /// `serial_base + serial_used + 1`. Ranges of all shards of a room
-    /// must be disjoint (the identity invariant).
-    fn serial_base(&self) -> u64;
-    /// This shard's wire-id range size.
-    fn serial_range(&self) -> u64;
-    /// How many identities this shard has minted so far.
+    /// How many serials this shard may draw in one room incarnation —
+    /// the exhaustion bound (a join is refused as `RoomFull` once
+    /// `serial_used() + 1 >= serial_capacity()`). The shards of a room
+    /// mint interleaved ([`interleaved_id`]: the `n`-th draw of shard
+    /// `index` is `(n − 1) · shard_count + index + 1`), so the values of
+    /// different shards never meet whatever their counts; the bound
+    /// keeps every value at most `serial_capacity() · shard_count()`.
+    /// The kit answers [`SHARD_SERIAL_CAPACITY`].
+    fn serial_capacity(&self) -> u64;
+    /// How many serials this shard has drawn so far.
     fn serial_used(&self) -> u64;
 
     /// The neighbor shard indices this shard exchanges with (the grid

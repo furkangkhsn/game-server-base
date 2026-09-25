@@ -167,11 +167,8 @@ impl ShardLogic<()> for ShardRpcLogic {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * gsb_core::shard::SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        gsb_core::shard::SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        gsb_core::shard::SHARD_SERIAL_CAPACITY
     }
     fn serial_used(&self) -> u64 {
         0

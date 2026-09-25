@@ -121,7 +121,7 @@ pub enum RegistryMsg {
         generation: u64,
     },
     /// A dispatched join was rejected by the room (e.g. the shard's
-    /// wire-id range is exhausted): release the capacity reservation.
+    /// wire-id serials are exhausted): release the capacity reservation.
     /// The reservation is released only when `generation` still matches
     /// (a stale failure must not touch a rebuilt room's counters).
     SpawnFailed {

@@ -52,7 +52,7 @@ fn a_fight_crystallizes_after_k_ticks_and_only_the_higher_wire_moves() {
 fn one_sided_or_brief_contact_does_not_crystallize() {
     let mut w1 = World::new();
     let mut s1 = duel(1, 2, Some(POLICY));
-    let a = SHARD_SERIAL_RANGE / 2; // a wire of shard 0's range
+    let a = interleaved_id(0, 2, 1); // a wire of shard 0's: a < b
     let b = spawn(&mut w1, &mut s1, 2, 2.0, 0.0);
     for t in 1..=60 {
         let mut stage = stage(1, t, &[(0, a, -2, 0)]);
@@ -80,7 +80,7 @@ fn one_sided_or_brief_contact_does_not_crystallize() {
 fn a_room_that_did_not_opt_in_behaves_as_before() {
     let mut w1 = World::new();
     let mut s1 = duel(1, 2, None);
-    let a = SHARD_SERIAL_RANGE / 2;
+    let a = interleaved_id(0, 2, 1);
     let b = spawn(&mut w1, &mut s1, 2, 2.0, 0.0);
     for t in 1..=60 {
         assert_eq!(duel_tick(&mut w1, &mut s1, t, (b, a, 0, -2)), []);
@@ -99,10 +99,13 @@ fn the_state_stays_bounded() {
     let mut w1 = World::new();
     let mut s1 = duel(1, 2, Some(POLICY));
     let b = spawn(&mut w1, &mut s1, 2, 2.0, 0.0);
-    let foes: Vec<u64> = (1..=3 * crate::sharded::crystal::FIGHT_CAP as u64).collect();
+    // Shard 0's wires (the odd values of a 2-shard room): never B's.
+    let foes: Vec<u64> = (1..=3 * crate::sharded::crystal::FIGHT_CAP as u64)
+        .map(|n| interleaved_id(0, 2, n))
+        .collect();
     let mut stage = stage(1, 1, &[]);
-    for &foe in &foes {
-        let got = s1.apply_remote_effect(&mut w1, 1, &hit(b, foe, 0, foe), &mut stage.seam());
+    for (at, &foe) in (1..).zip(&foes) {
+        let got = s1.apply_remote_effect(&mut w1, 1, &hit(b, foe, 0, at), &mut stage.seam());
         assert_eq!(got, EffectOutcome::Applied);
     }
     let book = &s1.crystal.as_ref().expect("opted in").book;

@@ -77,11 +77,8 @@ impl ShardLogic<TWorld> for KaLogic {
     fn shard_count(&self) -> usize {
         1
     }
-    fn serial_base(&self) -> u64 {
-        0
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SERIAL_CAPACITY
     }
     fn serial_used(&self) -> u64 {
         self.next_wire

@@ -124,7 +124,7 @@ fn plain() -> Plain {
 /// lending `own` too: the one-tick double view of an entity that just
 /// migrated in.
 fn stage(own: u64, tick: u64) -> (u64, SeamStage<WirePos>) {
-    let foreign = SHARD_SERIAL_RANGE + 1;
+    let foreign = interleaved_id(1, 4, 2);
     let mut stage = SeamStage::new(0, tick);
     for wire in [foreign, own] {
         stage.lend(

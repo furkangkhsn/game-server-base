@@ -64,7 +64,7 @@ impl GameLogic<()> for VetoShard {
     }
     fn on_join(&mut self, _w: &mut (), conn: ConnectionId) -> Admission {
         let player = PlayerId(conn.0);
-        let wire = self.index as u64 * SHARD_SERIAL_RANGE + conn.0;
+        let wire = interleaved_id(self.index, 2, conn.0);
         self.wires.insert(player, wire);
         Admission {
             player,
@@ -95,11 +95,8 @@ impl ShardLogic<()> for VetoShard {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SERIAL_CAPACITY
     }
     fn serial_used(&self) -> u64 {
         self.wires.len() as u64

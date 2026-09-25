@@ -50,15 +50,15 @@ where
                     self.logic.on_leave(&mut self.world, stale);
                 }
                 // Identity-space exhaustion guard (structurally unreachable
-                // at the default range — see module docs): the shard
-                // refuses rather than mint a colliding id.
-                if self.logic.serial_used() + 1 >= self.logic.serial_range() {
+                // at the default capacity — see module docs): the shard
+                // refuses rather than draw past its bound.
+                if self.logic.serial_used() + 1 >= self.logic.serial_capacity() {
                     warn!(
                         room = %self.config.id,
                         shard = self.index,
                         %conn,
-                        "shard wire-id range exhausted; join rejected as \
-                         RoomFull (raise the range: SHARD_SERIAL_RANGE)"
+                        "shard wire-id serials exhausted; join rejected as \
+                         RoomFull (raise the bound: SHARD_SERIAL_CAPACITY)"
                     );
                     let _ = reply.send(Err(CoreError::RoomFull(self.config.id.0)));
                     return true;

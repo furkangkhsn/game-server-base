@@ -52,8 +52,10 @@ use tokio::sync::{mpsc, oneshot};
 
 const SNAPSHOT_OP: u16 = 0x7500;
 
-/// Wire ids per shard when [`ParkLogic`] is driven as a [`ShardLogic`].
-const SHARD_SERIAL_RANGE: u64 = 1000;
+/// Wire ids per shard when [`ParkLogic`] is driven as a [`ShardLogic`]
+/// (the test's own id policy — `index * SHARD_SPAN + n`, so index 0
+/// counts like a single room — bounded by the same span).
+const SHARD_SPAN: u64 = 1000;
 
 // =====================================================================
 // Shared test logic: one struct covers every room-level case via knobs.
@@ -155,9 +157,9 @@ impl GameLogic<()> for ParkLogic {
         // Test identity policy: the conn id doubles as the player id, so
         // tests can address players by the conn they joined with.
         let player = PlayerId(c.0);
-        // Wire ids live in this shard's range (index 0 = the identity
+        // Wire ids live in this shard's span (index 0 = the identity
         // offset every single-room test already relies on).
-        let entity = self.index as u64 * SHARD_SERIAL_RANGE + self.next_id;
+        let entity = self.index as u64 * SHARD_SPAN + self.next_id;
         self.player_entity.insert(player, entity);
         Admission { player, entity }
     }
@@ -275,11 +277,8 @@ impl ShardLogic<()> for ParkLogic {
     fn shard_count(&self) -> usize {
         2
     }
-    fn serial_base(&self) -> u64 {
-        self.index as u64 * SHARD_SERIAL_RANGE
-    }
-    fn serial_range(&self) -> u64 {
-        SHARD_SERIAL_RANGE
+    fn serial_capacity(&self) -> u64 {
+        SHARD_SPAN
     }
     fn serial_used(&self) -> u64 {
         self.next_id
@@ -1769,10 +1768,7 @@ mod shard_test {
         fn shard_count(&self) -> usize {
             2
         }
-        fn serial_base(&self) -> u64 {
-            self.index as u64 * 1000
-        }
-        fn serial_range(&self) -> u64 {
+        fn serial_capacity(&self) -> u64 {
             1000
         }
         fn serial_used(&self) -> u64 {

@@ -12,7 +12,7 @@ fn a_team_never_sees_another_teams_imports() {
     let mut room = shard0();
     let a = member(&mut world, &mut room, 1, 0, -80.0, -80.0);
     let b = member(&mut world, &mut room, 2, 1, -10.0, -10.0);
-    let (x, y) = (3 * SHARD_SERIAL_RANGE + 1, 3 * SHARD_SERIAL_RANGE + 2);
+    let (x, y) = (interleaved_id(3, 4, 20), interleaved_id(3, 4, 21));
     let im = imports(3, 1, &[(0, x, body(x, 50, 50)), (1, y, body(y, 60, 60))]);
     exchange(&mut world, &mut room, 1, &[], &im);
     assert_eq!(
@@ -34,11 +34,11 @@ fn a_lent_record_in_an_own_units_vision_is_seen() {
     let mut room = shard0();
     member(&mut world, &mut room, 1, 0, -5.0, -50.0);
     let near = BorderRecord {
-        wire: SHARD_SERIAL_RANGE + 1,
+        wire: interleaved_id(1, 4, 20),
         state: WirePos { x: 5, y: -50 },
     };
     let far = BorderRecord {
-        wire: SHARD_SERIAL_RANGE + 2,
+        wire: interleaved_id(1, 4, 21),
         state: WirePos { x: 40, y: -50 },
     };
     let strip = [near.clone(), far.clone()];

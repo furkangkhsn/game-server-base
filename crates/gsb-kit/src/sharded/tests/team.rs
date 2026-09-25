@@ -221,10 +221,10 @@ fn a_wire_shows_once_with_the_freshest_known_value() {
     room.update(&mut world, &ctx(1));
     let own = wire_of(&world, own);
     let lent = BorderRecord {
-        wire: SHARD_SERIAL_RANGE + 7,
+        wire: interleaved_id(1, 4, 7),
         state: WirePos { x: 10, y: -10 },
     };
-    let remote = 3 * SHARD_SERIAL_RANGE + 9;
+    let remote = interleaved_id(3, 4, 9);
     let im = imports(
         1,
         1,

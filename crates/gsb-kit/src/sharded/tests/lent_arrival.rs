@@ -82,7 +82,7 @@ fn an_npc_arriving_in_its_lent_cell_stays_in_that_cell() {
     let mut s1 = ShardedSpatialRoom::new(1, 2, 50.0, 20.0);
     let o = place_spatial(&mut w1, &mut s1, ConnectionId(1), 25.0, -10.0); // Cell(1,-1)
     let observer = [Cell(1, -1)];
-    let npc = 7_u64; // shard 0's range
+    let npc = 7_u64; // shard 0's (odd: a 2-shard room)
     tick(&mut w1, &mut s1, 1, &observer, &lent(npc, 0, -10));
     assert!(full_view(&mut w1, &mut s1, 1, Cell(1, -1)).contains(&(npc, 0)));
 
@@ -101,11 +101,9 @@ fn an_npc_arriving_in_its_lent_cell_stays_in_that_cell() {
         }
         let mut view = full_view(&mut w1, &mut s1, t, Cell(1, -1));
         view.sort_unstable();
-        assert_eq!(
-            view,
-            vec![(npc, 0), (o, 25)],
-            "tick {t}: the arrival is in its cell, once"
-        );
+        let mut want = vec![(npc, 0), (o, 25)];
+        want.sort_unstable();
+        assert_eq!(view, want, "tick {t}: the arrival is in its cell, once");
     }
 }
 
@@ -172,7 +170,9 @@ fn an_arrival_beside_its_lent_cell_leaves_no_stale_copy() {
     assert!(delta.entities.iter().any(|e| (e.entity, e.x) == (npc, 1)));
     let mut view = full_view(&mut w1, &mut s1, 2, Cell(0, -1));
     view.sort_unstable();
-    assert_eq!(view, vec![(npc, 1), (q, 5)], "once, at the new position");
+    let mut want = vec![(npc, 1), (q, 5)];
+    want.sort_unstable();
+    assert_eq!(view, want, "once, at the new position");
     assert!(
         !s1.book.buckets.contains_key(&Cell(-1, -1)),
         "no stale copy"
