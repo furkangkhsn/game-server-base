@@ -210,3 +210,34 @@ fn the_walker_reads_every_wire_type_and_sint32_is_zigzag() {
     assert!(matches!(bad.next(), Some(Err(_))));
     assert_eq!(bad.next(), None);
 }
+
+/// Records interleaved with the other fields (any order is valid
+/// protobuf): every record is applied once, after the removals and cell
+/// exits — the record span pass 2 walks runs from the first record to
+/// the end of the last, whatever lies between.
+#[test]
+fn records_interleaved_with_other_fields_all_apply() {
+    let field = |tag: u8, body: Vec<u8>| {
+        let mut out = vec![tag];
+        prost::encoding::encode_varint(body.len() as u64, &mut out);
+        out.extend(body);
+        out
+    };
+    let record = |entity, x, y| field(0x12, Record { entity, x, y }.encode_to_vec());
+    let frame = [
+        vec![0x08, 0x02, 0x28, 0x01], // sequence 2, delta
+        record(1, 1, 1),
+        vec![0x18, 0x05], // removed 5
+        record(2, 2, 2),
+        field(0x22, CellExit { x: 9, y: 9 }.encode_to_vec()),
+        record(3, 3, 3),
+        vec![0x30, 0x07], // unknown field 6 after the last record
+    ]
+    .concat();
+    let mut view = View::default();
+    view.apply_snapshot(&Frame::full(1, &[(4, 185, 185), (5, 0, 0)]).kit())
+        .expect("decodes");
+    let got = view.apply_snapshot(&frame).expect("decodes");
+    assert_eq!(got.apply, Apply::Delta);
+    assert_eq!(sorted(&view), [(1, 1, 1), (2, 2, 2), (3, 3, 3)]);
+}

@@ -3,6 +3,7 @@
 //! module's docs and in `kit.proto`).
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use super::wire::{Fields, Value, input_ack};
 use super::{Apply, ClientDecoder, ClientError, Counters, PrivateEvent, Snapshot};
@@ -38,6 +39,9 @@ impl<D: ClientDecoder> Scratch<D> {
 struct Header {
     sequence: u64,
     delta: bool,
+    /// The byte span of the frame from its first record field to the end
+    /// of its last (empty: no records) — all pass 2 has to walk.
+    records: Range<usize>,
 }
 
 impl<D: ClientDecoder + Default> Default for ClientView<D> {
@@ -73,13 +77,13 @@ impl<D: ClientDecoder> ClientView<D> {
             self.counters.stale += 1;
             Apply::Stale
         } else if !head.delta {
-            self.replace(frame, head.sequence)?;
+            self.replace(frame, &head)?;
             Apply::Full
         } else if self.last_seq.is_none() {
             self.counters.gap_drops += 1;
             Apply::NoBaseline
         } else {
-            self.merge(frame, head.sequence)?;
+            self.merge(frame, &head)?;
             Apply::Delta
         };
         self.scratch.clear();
@@ -123,7 +127,7 @@ impl<D: ClientDecoder> ClientView<D> {
             self.counters.errors += 1;
             return Err(ClientError::PrivateDelta);
         }
-        self.replace(body, head.sequence)?;
+        self.replace(body, &head)?;
         self.counters.private_fulls += 1;
         self.scratch.clear();
         Ok(PrivateEvent::Full {

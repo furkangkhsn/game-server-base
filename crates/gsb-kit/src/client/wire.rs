@@ -22,7 +22,7 @@ use super::ClientError;
 pub struct Malformed(pub &'static str);
 
 impl From<Malformed> for ClientError {
-    #[inline]
+    #[inline(always)]
     fn from(m: Malformed) -> Self {
         Self::Malformed(m.0)
     }
@@ -49,9 +49,15 @@ pub struct Fields<'a> {
 
 impl<'a> Fields<'a> {
     /// Walk `buf` (one whole message).
-    #[inline]
+    #[inline(always)]
     pub fn new(buf: &'a [u8]) -> Self {
         Self { buf }
+    }
+
+    /// How many bytes are left to walk.
+    #[inline(always)]
+    pub(super) fn remaining(&self) -> usize {
+        self.buf.len()
     }
 
     fn take<const N: usize>(&mut self) -> Result<[u8; N], Malformed> {
@@ -63,7 +69,7 @@ impl<'a> Fields<'a> {
         Ok(*head)
     }
 
-    #[inline]
+    #[inline(always)]
     fn field(&mut self) -> Result<(u32, Value<'a>), Malformed> {
         let key = varint(&mut self.buf)?;
         let number = u32::try_from(key >> 3)
@@ -92,7 +98,7 @@ impl<'a> Fields<'a> {
 impl<'a> Iterator for Fields<'a> {
     type Item = Result<(u32, Value<'a>), Malformed>;
 
-    #[inline]
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.buf.is_empty() {
             return None;
@@ -107,7 +113,7 @@ impl<'a> Iterator for Fields<'a> {
 
 /// A `sint32` field's value (zigzag) from its varint, as protobuf
 /// decodes it (the varint truncated to 32 bits first).
-#[inline]
+#[inline(always)]
 #[must_use]
 pub fn sint32(varint: u64) -> i32 {
     let v = varint as u32;
@@ -116,7 +122,7 @@ pub fn sint32(varint: u64) -> i32 {
 
 /// Read one base-128 varint off the front of `buf` (at most ten bytes;
 /// the tenth may only carry the top bit of a `u64`).
-#[inline]
+#[inline(always)]
 pub(super) fn varint(buf: &mut &[u8]) -> Result<u64, Malformed> {
     // Fast path: keys, lengths and small values are one byte.
     if let Some((&byte, rest)) = buf.split_first()
