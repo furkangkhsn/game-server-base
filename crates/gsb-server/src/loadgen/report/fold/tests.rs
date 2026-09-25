@@ -18,6 +18,7 @@ use gsb_core::metrics::{
 use super::{fine_percentiles_us, fold_rooms, folded_steps, report_members, report_steps};
 
 mod rules;
+mod wire;
 
 /// Steps per shard. Different on purpose: the shards really do step in
 /// lockstep, but only a fixture where they do not can pin `steps` to MAX
@@ -81,6 +82,15 @@ fn shard(i: usize) -> RoomReport {
         resume_rejected_stale: [4, 5, 6][i],
         detach_expired_despawn: [7, 8, 9][i],
         detach_expired_ai: [1, 1, 1][i],
+        detach_forced: [1, 0, 2][i],
+        effects_applied: [10, 20, 40][i],
+        effects_forwarded: [1, 2, 3][i],
+        effects_orphaned: [0, 1, 1][i],
+        effects_dropped: [2, 0, 1][i],
+        effects_refused: [3, 3, 3][i],
+        migrations_out: [5, 6, 7][i],
+        migrations_in: [7, 6, 5][i],
+        migrations_failed: [0, 0, 4][i],
         requests_local: [10, 20, 30][i],
         requests_external: [1, 2, 3][i],
         requests_rejected_malformed: [1, 0, 0][i],

@@ -224,10 +224,11 @@ pub(super) fn held(a: &Actor, player: PlayerId) -> bool {
 }
 
 /// `(detach_expired_despawn, detach_expired_ai, ceiling warns)` of `a`.
-pub(super) fn counts(a: &Actor) -> (u64, u64, u32) {
+pub(super) fn counts(a: &Actor) -> (u64, u64, u64, u32) {
     (
         a.m.detach_expired_despawn,
         a.m.detach_expired_ai,
+        a.sample().detach_forced,
         a.detach_ceiling_warns,
     )
 }

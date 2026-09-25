@@ -151,8 +151,16 @@ ShardMsg::RemoteEffect(RemoteEffect {
   karşı; MMO otoritesi politika olarak yeniden denetler (bayatlık 3
   tick, saldıranı gördüğü yerden menzil + 2 m pay, hasar tavanı).
 - **Sayaçlar:** shard başına kümülatif `EffectStats`, ~1 sn'de bir
-  değiştiyse `remote_effect_summary` info satırı (metrik raporuna
-  girmedi — `RoomReport`'un fold kuralı gerekmedi).
+  değiştiyse `remote_effect_summary` info satırı. *Küçük paketten beri
+  metrik raporunda da:* `RoomSample`/`RoomReport`'ta operatöre dönük beş
+  sayaç — `effects_applied`, `effects_forwarded`, `effects_orphaned`,
+  `effects_dropped` (yolda kayıp: dolu yeniden deneme tamponu + kapalı
+  link + hop sınırı + yaş sınırı), `effects_refused` (kaynakta `emit`
+  reddi: bütçe ya da ödünç verilmeyen hedef); gsb-metric satırı,
+  Prometheus `gsb_room_effects_*_total` (OPS §3), loadgen fold'unda SUM.
+  İnce döküm (`sent`, `retried`, `rejected`, `duplicates`, `foreign`…)
+  log satırında kaldı: operatör sorusu "etkiler uygulanıyor mu, kayıp
+  var mı"dır; on beş sayaç raporu şişirirdi.
 
 **§2–§4'e göre sapmalar (gerekçeli):**
 
@@ -347,7 +355,20 @@ yönlenir ve `h + 2`'de bir kez uygulanır (MMO testi `migration_tick.rs`).
 5. Sayaçlar metrik raporuna girmedi: kit olayları `gsb_kit::crystal`
    hedefinde debug satırı (`crystal_move`, `crystal_release
    why=Quiet|Band|Partner`); ölçüm bu satırları sayar (kit `tracing`
-   bağımlılığı aldı).
+   bağımlılığı aldı). *Küçük pakette yeniden değerlendirildi, log
+   satırı olarak KALDI:* çekirdeğin `RoomSample`'ı sabit biçimli bir
+   `Copy` yapıdır ve her alanı adıyla fold kuralı, render anahtarı,
+   Prometheus ailesi ve loadgen codec'i taşır; kit'e özgü bir olay için
+   ya çekirdeğe kit kavramı sızar (`crystal_moves` alanı — çekirdek
+   crystallization'ı bilmez), ya da genel bir "oyun/kit sayacı" seam'i
+   gerekir (`GameLogic`'ten adlandırılmış sabit boy bir dizi: her
+   örnekte her odaya N×8 bayt, dinamik Prometheus adları, alan başına
+   bilinmeyen fold kuralı). Crystallization opt-in ve ölçüm aracı;
+   tek tüketicisi ölçüm koşuları, onlar da debug satırını sayıyor.
+   *Tetikleyici:* canlı bir sunucuda operatörün crystal sayısına
+   ihtiyacı olması ya da ikinci bir kit-tarafı olay ailesi — o gün genel
+   seam kendini öder. Göç SAYISI ise çekirdeğin olayıdır ve rapora girdi
+   (`migrations_out/in/failed`, aşağıda §4d).
 
 **Testler.** Kit (fikstür oyun, `SeamStage` üzerinden, 8 + 1):
 K'dan önce değil tam `1 + K`'da tespit, yalnız yüksek wire taşınır (alçak
@@ -608,6 +629,19 @@ kıyas değil sağlamadır): `gsb-loadgen 200 --game mmo --duration 20
 `out_bps_per_conn` 16 143; dört shard'ın `remote_effect_summary`'si
 161 uygulanan uzak etki (~1,8/sn, C2 tablosuyla aynı düzey), 0 yetim,
 0 düşen, 2 politika reddi; 23 `crystal_move`, 46 `crystal_release`.
+
+**Göç sayısı raporu (küçük paket, BACKLOG F3).** Çekirdek artık göçü
+sayıyor — shard aktörü, `RoomCounters` üzerinden her örnekte:
+`migrations_out` (gönderimi kesinleşen `Migrate`), `migrations_in`
+(kurulum kapısından geçip kurulan) ve `migrations_failed` (dolu komşu
+gelen kutusunun reddettiği gönderim — entity kalır, satır geri alınır,
+geçiş sonraki tick yeniden denenir). Tek oda aktöründe üçü de 0.
+Katlamada SUM; bir göç kaynağında `out`, hedefinde `in` olarak bir kez
+sayılır, yani katlanmış ikili eşit çıkmalı (ikisi toplanmaz). Epoch
+kapısının düşürdüğü hayalet `Migrate` (ayrılma önce işlendi) sayılmaz —
+debug satırı olarak kalır (nadir, oturum ölümüyle yarışın izi, yük
+sinyali değil). Prometheus: `gsb_room_migrations_{out,in,failed}_total`
+(OPS §3).
 
 ## 5. Ortak fizik (tutma/itme) — tasarım uyarısı
 

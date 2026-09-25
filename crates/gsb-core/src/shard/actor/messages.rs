@@ -302,6 +302,7 @@ where
                     state,
                     player.as_ref().map(|p| p.player),
                 );
+                self.m.migrations_in += 1;
                 // Back home: this shard is the entity's authority again,
                 // so an effect for it must no longer be handed on.
                 self.effects.forwarded.remove(&wire);

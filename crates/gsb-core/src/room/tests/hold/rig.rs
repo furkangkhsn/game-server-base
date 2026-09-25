@@ -184,12 +184,14 @@ impl Rig {
         v
     }
 
-    /// `(detach_expired_despawn, detach_expired_ai, ceiling warns)`.
-    pub(super) fn counts(&self) -> (u64, u64, u32) {
+    /// `(detach_expired_despawn, detach_expired_ai, detach_forced,
+    /// ceiling warns)` — the forced count as the SAMPLE carries it.
+    pub(super) fn counts(&self) -> (u64, u64, u64, u32) {
         let m = &self.actor.m;
         (
             m.detach_expired_despawn,
             m.detach_expired_ai,
+            self.actor.sample().detach_forced,
             self.actor.detach_ceiling_warns,
         )
     }

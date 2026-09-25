@@ -42,7 +42,7 @@ fn sharded_veto_extends_a_timed_hold_until_it_lifts() {
     knobs.veto(false);
     step(&mut a, 8);
     assert!(!a.conns.contains_key(&p), "released on the next ask");
-    assert_eq!(counts(&a), (1, 0, 0));
+    assert_eq!(counts(&a), (1, 0, 0, 0));
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn sharded_standing_veto_is_overridden_at_the_ceiling_once_warned() {
         a.conns[&p].bot_fed && a.conns[&q].bot_fed,
         "forced toward their ExpireTo (the untimed hold is bounded too)"
     );
-    assert_eq!(counts(&a), (0, 2, 1), "one warning for the shard");
+    assert_eq!(counts(&a), (0, 2, 2, 1), "one warning for the shard");
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn sharded_logic_that_never_vetoes_ends_holds_where_it_did() {
     age(&mut a, p, SEC);
     step(&mut a, 3);
     assert!(!a.conns.contains_key(&p), "on the deadline's sweep");
-    assert_eq!(counts(&a), (1, 0, 0));
+    assert_eq!(counts(&a), (1, 0, 0, 0));
 
     let long = Detach::Hold {
         grace: Some(CEILING * 2),
@@ -105,7 +105,7 @@ fn sharded_zero_and_absent_ceilings_read_literally() {
     assert!(held(&a, p), "the grace itself still runs");
     age(&mut a, p, GRACE);
     step(&mut a, 3);
-    assert_eq!(counts(&a), (1, 0, 1), "zero: forced at the deadline");
+    assert_eq!(counts(&a), (1, 0, 1, 1), "zero: forced at the deadline");
 
     let mut a = lone(&knobs, timed(ExpireTo::Despawn), None);
     let p = join_and_detach(&mut a, 1);
@@ -150,5 +150,38 @@ fn a_parked_row_keeps_its_ceiling_across_a_crossing() {
     age(&mut s1, p, SEC);
     step(&mut s1, at_tick + 2);
     assert!(!s1.conns.contains_key(&p), "the new owner forced it out");
-    assert_eq!(counts(&s1), (1, 0, 1));
+    assert_eq!(counts(&s1), (1, 0, 1, 1));
+    // The crossing itself, as each side's sample counts it.
+    let (out, into) = (s0.sample(), s1.sample());
+    assert_eq!(
+        (out.migrations_out, out.migrations_in),
+        (1, 0),
+        "the source"
+    );
+    assert_eq!(
+        (into.migrations_out, into.migrations_in),
+        (0, 1),
+        "the new owner"
+    );
+}
+
+/// A crossing a full neighbour inbox refuses is counted as FAILED — not
+/// out — and rolled back (the row stays here); the one that got through
+/// counts out. What the sample carries.
+#[test]
+fn a_refused_crossing_counts_as_failed() {
+    let knobs = Knobs::default();
+    let (to_s1, _s1_inbox) = channel::<Msg>(1);
+    let mut s0 = shard(0, &knobs, timed(ExpireTo::Despawn), Some(CEILING), to_s1);
+    let (p, q) = (join_and_detach(&mut s0, 1), join_and_detach(&mut s0, 2));
+    knobs.evict(p);
+    step(&mut s0, 2); // p's crossing fills the one-deep inbox
+    knobs.evict(q);
+    step(&mut s0, 3); // q's is refused
+    assert!(!s0.conns.contains_key(&p) && s0.conns.contains_key(&q));
+    let s = s0.sample();
+    assert_eq!(
+        (s.migrations_out, s.migrations_failed, s.migrations_in),
+        (1, 1, 0)
+    );
 }

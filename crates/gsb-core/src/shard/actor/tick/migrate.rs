@@ -120,6 +120,7 @@ where
                             self.drop_conn_request_state(mc);
                         }
                         self.pending_out.push((mig.wire, t.tick + 1));
+                        self.m.migrations_out += 1;
                         // Remember where it went: an effect a neighbour
                         // aims at the copy it still sees lent from here
                         // is handed on, not lost (CROSS-SHARD §2 routing;
@@ -132,6 +133,7 @@ where
                     // The link refused and handed the message back — the
                     // same value the raw TrySendError used to carry.
                     Err(full) => {
+                        self.m.migrations_failed += 1;
                         let msg = full.into_msg();
                         // Roll back the player's move (the entity stays;
                         // the row must remain registered and pull

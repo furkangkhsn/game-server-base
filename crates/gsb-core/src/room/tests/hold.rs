@@ -47,13 +47,17 @@ fn a_veto_extends_a_timed_hold_past_its_deadline_until_it_lifts() {
     }
     assert!(r.held(p), "the veto holds it past its deadline");
     assert_eq!(r.veto.asks(), 5, "asked once per sweep past the deadline");
-    assert_eq!(r.counts(), (0, 0, 0), "nothing ended, nothing forced");
+    assert_eq!(r.counts(), (0, 0, 0, 0), "nothing ended, nothing forced");
 
     r.veto.set(false);
     r.step();
     assert!(!r.actor.conns.contains_key(&p), "released on the next ask");
     assert_eq!(r.ended(), vec![(p, ExpireTo::Despawn)]);
-    assert_eq!(r.counts(), (1, 0, 0), "an ordinary end, not a forced one");
+    assert_eq!(
+        r.counts(),
+        (1, 0, 0, 0),
+        "an ordinary end, not a forced one"
+    );
 }
 
 /// The harass-lock bound: however long the veto stands, the hold ends at
@@ -71,7 +75,7 @@ fn a_standing_veto_is_overridden_at_the_ceiling_with_one_warning() {
         r.held(a) && r.held(b),
         "past the grace, short of the ceiling"
     );
-    assert_eq!(r.counts(), (0, 0, 0));
+    assert_eq!(r.counts(), (0, 0, 0, 0));
 
     for p in [a, b] {
         r.age(p, SEC);
@@ -81,13 +85,17 @@ fn a_standing_veto_is_overridden_at_the_ceiling_with_one_warning() {
     let mut ended = r.ended();
     ended.sort_by_key(|(p, _)| p.0);
     assert_eq!(ended, vec![(a, ExpireTo::Despawn), (b, ExpireTo::Despawn)]);
-    assert_eq!(r.counts(), (2, 0, 1), "one warning for two forced ends");
+    assert_eq!(r.counts(), (2, 0, 2, 1), "one warning for two forced ends");
 
     let c = r.join_and_detach(3);
     r.age(c, CEILING);
     r.step();
     assert!(!r.held(c), "the ceiling keeps working after the warning");
-    assert_eq!(r.counts(), (3, 0, 1), "…and the room stays at one warning");
+    assert_eq!(
+        r.counts(),
+        (3, 0, 3, 1),
+        "…and the room stays at one warning"
+    );
 }
 
 /// The untimed-hold decision: a combat-held park is bounded by the same
@@ -112,7 +120,7 @@ fn an_untimed_hold_is_bounded_by_the_same_ceiling() {
         "forced toward its ExpireTo: the bot"
     );
     assert_eq!(r.ended(), vec![(p, ExpireTo::AiHandover)]);
-    assert_eq!(r.counts(), (0, 1, 1));
+    assert_eq!(r.counts(), (0, 1, 1, 1));
 
     let asks = r.veto.asks();
     r.step();
@@ -134,7 +142,7 @@ fn a_logic_that_never_vetoes_ends_every_hold_where_it_did() {
     r.step();
     assert!(!r.actor.conns.contains_key(&p), "on the deadline's sweep");
     assert_eq!(r.ended(), vec![(p, ExpireTo::Despawn)]);
-    assert_eq!(r.counts(), (1, 0, 0));
+    assert_eq!(r.counts(), (1, 0, 0, 0));
 
     let long = Duration::from_secs(3600);
     let hold = Detach::Hold {
@@ -149,13 +157,13 @@ fn a_logic_that_never_vetoes_ends_every_hold_where_it_did() {
     r.age(p, long - CEILING - SEC);
     r.step();
     assert!(r.actor.conns[&p].bot_fed, "the grace ends it, unforced");
-    assert_eq!(r.counts(), (0, 1, 0));
+    assert_eq!(r.counts(), (0, 1, 0, 0));
 
     let mut r = Rig::new(untimed(ExpireTo::Despawn), Some(CEILING));
     let p = r.join_and_detach(1);
     r.step();
     assert!(!r.actor.conns.contains_key(&p), "untimed: the first sweep");
-    assert_eq!(r.counts(), (1, 0, 0));
+    assert_eq!(r.counts(), (1, 0, 0, 0));
 }
 
 /// The ceiling's config: a finite default measured from the DETACH;
@@ -187,7 +195,7 @@ fn the_ceiling_defaults_to_ten_minutes_from_the_detach() {
         r.held(p),
         "…so a standing veto holds (the old untimed rule)"
     );
-    assert_eq!(r.counts(), (0, 0, 0));
+    assert_eq!(r.counts(), (0, 0, 0, 0));
 
     let mut r = Rig::new(timed(ExpireTo::Despawn), Some(Duration::MAX));
     let p = r.join_and_detach(1);
@@ -207,5 +215,5 @@ fn a_zero_ceiling_allows_no_extension() {
     r.age(p, GRACE);
     r.step();
     assert!(!r.actor.conns.contains_key(&p), "forced at the deadline");
-    assert_eq!(r.counts(), (1, 0, 1));
+    assert_eq!(r.counts(), (1, 0, 1, 1));
 }

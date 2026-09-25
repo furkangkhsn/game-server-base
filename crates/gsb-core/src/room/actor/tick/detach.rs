@@ -60,6 +60,7 @@ where
                     HoldEnd::Release(to) => due.push((pid, to)),
                     HoldEnd::Forced(to) => {
                         self.warn_detach_ceiling(pid, rc.conn);
+                        self.m.detach_forced += 1;
                         due.push((pid, to));
                     }
                 }

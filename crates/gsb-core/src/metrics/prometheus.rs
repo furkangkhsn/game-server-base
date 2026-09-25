@@ -500,6 +500,61 @@ impl MetricReport {
             |r| r.detach_expired_ai,
         );
 
+        // The detach-hold ceiling, remote effects and migrations (the
+        // last two families: shard rows only — 0 on a single room). One
+        // table so the names and helps read side by side.
+        type Row = (&'static str, &'static str, fn(&RoomReport) -> u64);
+        let rows: [Row; 9] = [
+            (
+                "gsb_room_detach_forced_total",
+                "Detach holds forced to end by max_detach_hold over a standing veto, cumulative.",
+                |r| r.detach_forced,
+            ),
+            (
+                "gsb_room_effects_applied_total",
+                "Remote effects this shard's game applied as their authority, cumulative.",
+                |r| r.effects_applied,
+            ),
+            (
+                "gsb_room_effects_forwarded_total",
+                "Remote effects handed on to a migrated target's new owner, cumulative.",
+                |r| r.effects_forwarded,
+            ),
+            (
+                "gsb_room_effects_orphaned_total",
+                "Remote effects whose target is gone, cumulative.",
+                |r| r.effects_orphaned,
+            ),
+            (
+                "gsb_room_effects_dropped_total",
+                "Remote effects lost to a full retry buffer, a closed link, the hop or the age bound, cumulative.",
+                |r| r.effects_dropped,
+            ),
+            (
+                "gsb_room_effects_refused_total",
+                "Remote-effect emits refused at the source (budget spent, target not lent), cumulative.",
+                |r| r.effects_refused,
+            ),
+            (
+                "gsb_room_migrations_out_total",
+                "Entities handed to a neighbour shard (committed sends), cumulative.",
+                |r| r.migrations_out,
+            ),
+            (
+                "gsb_room_migrations_in_total",
+                "Entities installed from a neighbour shard, cumulative.",
+                |r| r.migrations_in,
+            ),
+            (
+                "gsb_room_migrations_failed_total",
+                "Migration sends a full neighbour inbox refused (retried next tick), cumulative.",
+                |r| r.migrations_failed,
+            ),
+        ];
+        for (name, help, get) in rows {
+            counters(&mut out, name, help, rooms, get);
+        }
+
         // RPC.
         counters(
             &mut out,

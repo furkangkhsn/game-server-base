@@ -82,6 +82,15 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.resume_rejected_stale, 15, "resume_rejected_stale");
     assert_eq!(f.detach_expired_despawn, 24, "detach_expired_despawn");
     assert_eq!(f.detach_expired_ai, 3, "detach_expired_ai");
+    assert_eq!(f.detach_forced, 3, "detach_forced");
+    assert_eq!(f.effects_applied, 70, "effects_applied");
+    assert_eq!(f.effects_forwarded, 6, "effects_forwarded");
+    assert_eq!(f.effects_orphaned, 2, "effects_orphaned");
+    assert_eq!(f.effects_dropped, 3, "effects_dropped");
+    assert_eq!(f.effects_refused, 9, "effects_refused");
+    assert_eq!(f.migrations_out, 18, "migrations_out");
+    assert_eq!(f.migrations_in, 18, "migrations_in");
+    assert_eq!(f.migrations_failed, 4, "migrations_failed");
 
     // SUM — the RPC family, none of which was folded at all before.
     assert_eq!(f.requests_local, 60, "requests_local");

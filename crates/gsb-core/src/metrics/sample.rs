@@ -106,6 +106,31 @@ pub struct RoomSample {
     /// Holds that expired toward AI handover (`bot_fed` marker set; Tur B
     /// consumes it), cumulative.
     pub detach_expired_ai: u64,
+    /// Holds the detach-hold ceiling (`RoomConfig::max_detach_hold`)
+    /// forced to end over a standing `may_release` veto — a subset of the
+    /// two `detach_expired_*` counters, cumulative (RECONNECT §17).
+    pub detach_forced: u64,
+    /// Remote effects (CROSS-SHARD §2–§4; shard actors only — 0 for a
+    /// single room), cumulative, from the shard's effect counters: the
+    /// effects this shard's game APPLIED as their authority; handed on
+    /// to a migrated target's new owner (FORWARDED); aimed at a target
+    /// that is gone (ORPHANED); lost on the way — a full retry buffer, a
+    /// closed link, the hop bound or the age bound (DROPPED); and `emit`
+    /// calls refused at the source — budget spent or target not lent
+    /// (REFUSED). The finer split stays in the ~1 s
+    /// `remote_effect_summary` log line.
+    pub effects_applied: u64,
+    pub effects_forwarded: u64,
+    pub effects_orphaned: u64,
+    pub effects_dropped: u64,
+    pub effects_refused: u64,
+    /// Migrations (shard actors only — 0 for a single room), cumulative:
+    /// entities handed to a neighbour (committed sends), entities
+    /// installed from one, and sends a full neighbour inbox refused (the
+    /// entity stays; the crossing is retried next tick).
+    pub migrations_out: u64,
+    pub migrations_in: u64,
+    pub migrations_failed: u64,
     /// RPC (see `crate::rpc`): requests answered room-local in the same
     /// tick, cumulative.
     pub requests_local: u64,

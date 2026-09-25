@@ -63,6 +63,13 @@ fn an_effect_on_a_migrated_target_goes_on_to_its_new_owner() {
     assert!(s0.step_phases(&tinfo(lapse + 1)));
     assert!(effects_in(drain(&mut rx1)).is_empty());
     assert_eq!(s0.effects.stats.orphaned, 1);
+    // As the sample reports it: one handed on, the looping one dropped
+    // at the hop bound, the late one orphaned.
+    let s = s0.sample();
+    assert_eq!(
+        (s.effects_forwarded, s.effects_dropped, s.effects_orphaned),
+        (1, 1, 1)
+    );
 }
 
 /// The migration tick, from the old owner's own hooks: in the tick after

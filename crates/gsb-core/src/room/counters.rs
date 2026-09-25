@@ -176,6 +176,18 @@ pub(crate) struct RoomCounters {
     /// Holds that expired toward [`ExpireTo::AiHandover`] (entity kept,
     /// bot-fed marker set — Tur B's seam), cumulative.
     pub(crate) detach_expired_ai: u64,
+    /// Holds whose standing `may_release` veto the ceiling
+    /// ([`RoomConfig::max_detach_hold`]) overrode — a subset of the two
+    /// `detach_expired_*` counters, cumulative (§17: the room warns once,
+    /// this counts every one).
+    pub(crate) detach_forced: u64,
+    /// Shard actors only (a single room never migrates): entities handed
+    /// to a neighbour (a committed `Migrate` send), entities installed
+    /// from one, and sends a full neighbour inbox refused (the entity
+    /// stays and the crossing is retried next tick), cumulative.
+    pub(crate) migrations_out: u64,
+    pub(crate) migrations_in: u64,
+    pub(crate) migrations_failed: u64,
     /// RPC requests answered room-local in the same tick, cumulative.
     pub(crate) requests_local: u64,
     /// RPC requests delegated to a worker (registered pending), cumulative.
@@ -243,6 +255,10 @@ impl Default for RoomCounters {
             resume_rejected_stale: 0,
             detach_expired_despawn: 0,
             detach_expired_ai: 0,
+            detach_forced: 0,
+            migrations_out: 0,
+            migrations_in: 0,
+            migrations_failed: 0,
             requests_local: 0,
             requests_external: 0,
             requests_rejected_malformed: 0,

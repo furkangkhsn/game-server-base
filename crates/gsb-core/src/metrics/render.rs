@@ -37,7 +37,10 @@ impl MetricReport {
                  shipped_frames={} private_frames={} \
                  groups={} members={} max_group={} joins={} leaves={} \
                  detached={} resumes={} resume_rejected_stale={} \
-                 detach_expired_despawn={} detach_expired_ai={} \
+                 detach_expired_despawn={} detach_expired_ai={} detach_forced={} \
+                 effects_applied={} effects_forwarded={} effects_orphaned={} \
+                 effects_dropped={} effects_refused={} \
+                 migrations_out={} migrations_in={} migrations_failed={} \
                  req_local={} req_ext={} \
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
@@ -82,6 +85,15 @@ impl MetricReport {
                 r.resume_rejected_stale,
                 r.detach_expired_despawn,
                 r.detach_expired_ai,
+                r.detach_forced,
+                r.effects_applied,
+                r.effects_forwarded,
+                r.effects_orphaned,
+                r.effects_dropped,
+                r.effects_refused,
+                r.migrations_out,
+                r.migrations_in,
+                r.migrations_failed,
                 r.requests_local,
                 r.requests_external,
                 r.requests_rejected_malformed,

@@ -15,6 +15,7 @@ mod collector;
 mod histogram;
 mod prometheus;
 mod pruning;
+mod seams;
 
 /// The accumulator applies all three event kinds and rates are
 /// delta-over-period between two reports.
@@ -55,6 +56,15 @@ fn accumulator_applies_events_and_computes_rates() {
         resume_rejected_stale: 0,
         detach_expired_despawn: 0,
         detach_expired_ai: 0,
+        detach_forced: 0,
+        effects_applied: 0,
+        effects_forwarded: 0,
+        effects_orphaned: 0,
+        effects_dropped: 0,
+        effects_refused: 0,
+        migrations_out: 0,
+        migrations_in: 0,
+        migrations_failed: 0,
         requests_local: 0,
         requests_external: 0,
         requests_rejected_malformed: 0,
@@ -228,6 +238,15 @@ fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
         resume_rejected_stale: 0,
         detach_expired_despawn: 0,
         detach_expired_ai: 0,
+        detach_forced: 0,
+        effects_applied: 0,
+        effects_forwarded: 0,
+        effects_orphaned: 0,
+        effects_dropped: 0,
+        effects_refused: 0,
+        migrations_out: 0,
+        migrations_in: 0,
+        migrations_failed: 0,
         requests_local: 0,
         requests_external: 0,
         requests_rejected_malformed: 0,

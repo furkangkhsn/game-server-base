@@ -23,6 +23,7 @@ where
     /// see module docs, "Metrics identity") so every shard is its own
     /// report line (the collector keys by the sample id).
     pub(crate) fn sample(&self) -> RoomSample {
+        let fx = &self.effects.stats;
         RoomSample {
             room: RoomId(self.config.id.0.saturating_mul(1 << 16) + self.index as u64),
             emit_at: Instant::now(),
@@ -55,6 +56,17 @@ where
             resume_rejected_stale: self.m.resume_rejected_stale,
             detach_expired_despawn: self.m.detach_expired_despawn,
             detach_expired_ai: self.m.detach_expired_ai,
+            detach_forced: self.m.detach_forced,
+            // The effect counters' operator-facing five (RoomSample docs);
+            // the full split is the `remote_effect_summary` log line.
+            effects_applied: fx.applied,
+            effects_forwarded: fx.forwarded,
+            effects_orphaned: fx.orphaned,
+            effects_dropped: fx.dropped_full + fx.dropped_closed + fx.dropped_hops + fx.expired,
+            effects_refused: fx.refused,
+            migrations_out: self.m.migrations_out,
+            migrations_in: self.m.migrations_in,
+            migrations_failed: self.m.migrations_failed,
             // Faz 3: this shard runs the RPC machinery (the room actor's
             // counters, mirrored one-to-one) — no longer pinned to zero.
             requests_local: self.m.requests_local,

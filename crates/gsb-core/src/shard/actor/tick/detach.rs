@@ -52,6 +52,7 @@ where
                     HoldEnd::Release(to) => due.push((player, to)),
                     HoldEnd::Forced(to) => {
                         self.warn_detach_ceiling(player, rc.conn);
+                        self.m.detach_forced += 1;
                         due.push((player, to));
                     }
                 }

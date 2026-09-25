@@ -17,7 +17,7 @@ use gsb_core::metrics::{
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSM8"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSM9"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -33,6 +33,12 @@ use gsb_core::metrics::{
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u64 shipped_frames  u64 private_frames
 ///     u32 groups  u32 members  u32 max_group  u64 joins  u64 leaves
+///     u32 detached  u64 resumes  u64 resume_rejected_stale
+///     u64 detach_expired_despawn  u64 detach_expired_ai
+///     u64 detach_forced
+///     u64 effects_applied  u64 effects_forwarded  u64 effects_orphaned
+///     u64 effects_dropped  u64 effects_refused
+///     u64 migrations_out  u64 migrations_in  u64 migrations_failed
 ///     u64 req_local  u64 req_ext
 ///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
 ///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
@@ -88,7 +94,11 @@ use gsb_core::metrics::{
 /// could not see the server shedding its clients: the kills reach the
 /// clients as silence (the stalled socket cannot carry an ERROR), so no
 /// client-side counter moves.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D38;
+/// GSM9 = the GSM8 layout plus each room's `detach_forced`, the five
+/// remote-effect counters and the three migration counters, right after
+/// `detach_expired_ai` (the layout above also spells out the park
+/// fields GSM8 already carried there).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D39;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -153,6 +163,15 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.resume_rejected_stale);
         w.u64(room.detach_expired_despawn);
         w.u64(room.detach_expired_ai);
+        w.u64(room.detach_forced);
+        w.u64(room.effects_applied);
+        w.u64(room.effects_forwarded);
+        w.u64(room.effects_orphaned);
+        w.u64(room.effects_dropped);
+        w.u64(room.effects_refused);
+        w.u64(room.migrations_out);
+        w.u64(room.migrations_in);
+        w.u64(room.migrations_failed);
         w.u64(room.requests_local);
         w.u64(room.requests_external);
         w.u64(room.requests_rejected_malformed);
@@ -308,6 +327,15 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             resume_rejected_stale: r.u64()?,
             detach_expired_despawn: r.u64()?,
             detach_expired_ai: r.u64()?,
+            detach_forced: r.u64()?,
+            effects_applied: r.u64()?,
+            effects_forwarded: r.u64()?,
+            effects_orphaned: r.u64()?,
+            effects_dropped: r.u64()?,
+            effects_refused: r.u64()?,
+            migrations_out: r.u64()?,
+            migrations_in: r.u64()?,
+            migrations_failed: r.u64()?,
             requests_local: r.u64()?,
             requests_external: r.u64()?,
             requests_rejected_malformed: r.u64()?,

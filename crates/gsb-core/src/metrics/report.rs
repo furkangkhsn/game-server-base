@@ -82,6 +82,20 @@ pub struct RoomReport {
     pub resume_rejected_stale: u64,
     pub detach_expired_despawn: u64,
     pub detach_expired_ai: u64,
+    /// Holds forced to end by the detach-hold ceiling (see
+    /// [`RoomSample::detach_forced`]).
+    pub detach_forced: u64,
+    /// Remote effects and migrations (shard rows only; see
+    /// [`RoomSample::effects_applied`] and
+    /// [`RoomSample::migrations_out`]).
+    pub effects_applied: u64,
+    pub effects_forwarded: u64,
+    pub effects_orphaned: u64,
+    pub effects_dropped: u64,
+    pub effects_refused: u64,
+    pub migrations_out: u64,
+    pub migrations_in: u64,
+    pub migrations_failed: u64,
     /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
     /// (pending) requests, rejections split by cause (see
     /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and

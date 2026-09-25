@@ -603,4 +603,8 @@ değiştirilmedi.
 - *`RoomSample`'a `detach_forced` sayacı:* gözlemlenebilirlik için doğru
   yer, ama metrik şemasına ek (sample alanı, toplayıcı, raporlayıcı) bu
   turun kapsamı dışı; bir kez uyarı + aktör sayacı şimdilik yeterli,
-  açık iş olarak kalır.
+  açık iş olarak kalır. **Kapandı — küçük paket:** `detach_forced`
+  (tavanın ezdiği her veto; iki `detach_expired_*` sayacının alt
+  kümesi) iki aktörün `HoldEnd::Forced` kolundan örneğe, rapora,
+  gsb-metric satırına ve Prometheus'a (`gsb_room_detach_forced_total`,
+  OPS §3) gidiyor; loadgen fold'unda SUM. Uyarı hâlâ oda başına bir kez.

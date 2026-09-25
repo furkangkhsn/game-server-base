@@ -119,6 +119,7 @@ fn an_effect_goes_to_the_neighbour_that_lent_its_target() {
     assert_eq!(to2, [fx(22, 3, 0, 1, 5)], "the lender of 22");
     assert_eq!(to1, [fx(11, 3, 0, 2, 5)], "the lender of 11");
     assert_eq!((s0.effects.stats.emitted, s0.effects.stats.refused), (2, 1));
+    assert_eq!(s0.sample().effects_refused, 1, "the refusal, as sampled");
 }
 
 /// The per-tick budget refuses synchronously — nothing is dropped
@@ -160,6 +161,14 @@ fn a_duplicate_effect_applies_once() {
     assert!(s1.step_phases(&tinfo(3)));
     assert_eq!(s1.world.applied, [e]);
     assert_eq!(s1.effects.stats.duplicates, 2);
+    // The sample reports the one application; duplicates are none of
+    // its five counters.
+    let s = s1.sample();
+    assert_eq!(s.effects_applied, 1);
+    assert_eq!(
+        (s.effects_dropped, s.effects_orphaned, s.effects_refused),
+        (0, 0, 0)
+    );
 }
 
 /// The duplicate state is one fixed-size window per origin shard, and it
@@ -234,4 +243,41 @@ fn the_effects_of_one_tick_apply_in_a_deterministic_order() {
         "the early one applied a tick later"
     );
     assert_eq!(s1.world.applied[5], delivered[5]);
+}
+
+/// The sample's five effect counters from the shard's full split: each
+/// maps one-to-one, except `dropped`, which is every in-transit loss
+/// (full retry buffer, closed link, hop bound, age bound) — and nothing
+/// else (the game's refusals, duplicates and foreign effects are not
+/// losses on the way).
+#[test]
+fn the_sample_folds_the_effect_counters_into_five() {
+    let mut s = authority(&[]);
+    let st = &mut s.effects.stats;
+    st.emitted = 1000;
+    st.refused = 3;
+    st.sent = 1000;
+    st.retried = 1000;
+    st.dropped_full = 5;
+    st.dropped_closed = 7;
+    st.expired = 11;
+    st.received = 1000;
+    st.applied = 13;
+    st.rejected = 1000;
+    st.orphaned = 17;
+    st.duplicates = 1000;
+    st.forwarded = 19;
+    st.dropped_hops = 23;
+    st.foreign = 1000;
+    let x = s.sample();
+    assert_eq!(
+        [
+            x.effects_applied,
+            x.effects_forwarded,
+            x.effects_orphaned,
+            x.effects_dropped,
+            x.effects_refused,
+        ],
+        [13, 19, 17, 5 + 7 + 11 + 23, 3]
+    );
 }

@@ -32,6 +32,26 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
 - Metrik adlandırma: `gsb_registry_rooms`, `gsb_room_r1_steps_total`,
   `gsb_conn_frames_in_total` gibi `<alan>_<nesne>_<sayaç>_total`;
   histogramlar Prometheus summary/satır çiftiyle (p50/p99 hazır alanlardan)
+- Oda başına (etiket `room="r<id>"`; sharded odada her shard kendi
+  satırı, id `room << 16 | index`) küçük pakette eklenen sayaç aileleri
+  (hepsi kümülatif `counter`; gsb-metric satırında aynı adla, `_total`
+  ve `gsb_room_` öneki olmadan):
+
+  | Aile | Anlamı |
+  |---|---|
+  | `gsb_room_detach_forced_total` | `max_detach_hold` tavanının duran bir `may_release` vetosunu ezerek bitirdiği bekletmeler (`detach_expired_*`'ın alt kümesi; RECONNECT §17) |
+  | `gsb_room_effects_applied_total` | Bu shard'ın oyununun otorite olarak uyguladığı uzak etkiler (CROSS-SHARD §4b) |
+  | `gsb_room_effects_forwarded_total` | Göç etmiş hedefin yeni sahibine devredilen etkiler |
+  | `gsb_room_effects_orphaned_total` | Hedefi artık olmayan etkiler |
+  | `gsb_room_effects_dropped_total` | Yolda kaybolan etkiler: dolu yeniden deneme tamponu, kapalı link, hop sınırı, yaş sınırı |
+  | `gsb_room_effects_refused_total` | Kaynakta reddedilen `emit`'ler (tick bütçesi bitti ya da hedef ödünç verilmiyor) |
+  | `gsb_room_migrations_out_total` | Komşu shard'a devredilen entity'ler (kesinleşen gönderim) |
+  | `gsb_room_migrations_in_total` | Komşudan gelip kurulan entity'ler |
+  | `gsb_room_migrations_failed_total` | Dolu komşu gelen kutusunun reddettiği göç gönderimleri (sonraki tick yeniden denenir) |
+
+  Etki ve göç aileleri yalnız shard satırlarında hareket eder (tek oda
+  aktörü 0 yazar). Crystallization olayları (kit) rapora girmedi — log
+  satırı olarak kaldı, gerekçe CROSS-SHARD §4c madde 5.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü
