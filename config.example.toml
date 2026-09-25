@@ -83,10 +83,11 @@ transport = "tcp"
 
 
 # rUDP only: maximum outbound datagram size in bytes. 1472 = typical
-# Ethernet MTU minus IP/UDP headers (no fragmentation in v1: an
-# oversized datagram is dropped, counted, and warned once per
-# session — the room-side max_snapshot_bytes warning is the signal
-# to act on). Ignored when transport = "tcp".
+# Ethernet MTU minus IP/UDP headers. A game-band frame over it (a large
+# snapshot) is fragmented into up to 16 datagrams and reassembled by the
+# client; a frame past 16 fragments is dropped, counted, and warned once
+# per session. Control frames are never fragmented. Ignored when
+# transport = "tcp".
 udp_max_datagram_bytes = 1472
 
 # rUDP only: the cookie key of the handshake's anti-amplification
@@ -177,10 +178,11 @@ max_players = 10000
 max_connections = 100000
 
 # Warn (log) when a room group's snapshot payload exceeds this many bytes.
-# rUDP MTU readiness: an oversized snapshot cannot ride a datagram, so the
-# default sits just under a typical Ethernet MTU. The warning is emitted
-# once per snapshot group (not once per tick) and is the signal to split
-# the group (AOI) or lower its emission rate.
+# The default sits just under a typical Ethernet MTU: on rUDP a larger
+# payload is fragmented (a lost fragment loses the whole frame), so the
+# warning — emitted once per snapshot group, not once per tick — is a
+# bandwidth/fragmentation signal to split the group (AOI) or lower its
+# emission rate.
 max_snapshot_bytes = 1400
 
 # Keep-alive rate for unchanged snapshot groups, in Hz. When nothing

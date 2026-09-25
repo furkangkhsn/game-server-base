@@ -74,6 +74,8 @@ pub(super) struct Demux {
     ack_piggyback_failed: u64,
     oversized_in: u64,
     bad_datagrams: u64,
+    /// Inbound FRAG datagrams (client→server fragmentation is refused).
+    frag_refused: u64,
 }
 
 impl Demux {
@@ -169,6 +171,7 @@ pub(super) async fn demux(
         ack_piggyback_failed: 0,
         oversized_in: 0,
         bad_datagrams: 0,
+        frag_refused: 0,
     };
     loop {
         // Arm the read: if any session has an idle deadline pending, the
@@ -213,6 +216,7 @@ pub(super) async fn demux(
         ack_piggyback_failed = d.ack_piggyback_failed,
         oversized_in = d.oversized_in,
         bad_datagrams = d.bad_datagrams,
+        frag_refused = d.frag_refused,
         "rUDP demux stopped"
     );
 }

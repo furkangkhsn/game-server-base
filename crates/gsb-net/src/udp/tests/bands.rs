@@ -1,14 +1,16 @@
-//! The two bands under stress: the datagram budget (drop, never
-//! fragment), the reliable band's retransmit clock, and idle teardown.
-//! Child of `tests`, so `bound_transport` is shared, not duplicated.
+//! The two bands under stress: the datagram budget (fragment the game
+//! band, drop past the ceiling), the reliable band's retransmit clock,
+//! and idle teardown. Child of `tests`, so `bound_transport` is shared,
+//! not duplicated.
 
 use super::*;
 
-/// MTU policy: an outbound datagram over the budget is dropped and
-/// counted (never fragmented, v1 constraint) while smaller frames on
-/// the same session — control AND game band — are still delivered.
+/// MTU policy: a game-band frame over the budget is FRAGMENTED and
+/// arrives whole; one past the fragment ceiling is dropped and counted
+/// (nothing of it reaches the wire); smaller frames on the same session
+/// — control AND game band — are delivered exactly as before.
 #[tokio::test]
-async fn oversized_outbound_is_dropped_not_fragmented() {
+async fn oversized_game_frame_is_fragmented_and_past_the_ceiling_dropped() {
     let cfg = UdpTransportConfig {
         max_datagram_bytes: 40,
         ..Default::default()
@@ -28,6 +30,15 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         out_rx,
         crate::pump::PumpTimeouts::default(),
     );
+    let recv = async |client: &mut UdpClient, wait: u64| {
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            client.recv_frame(Duration::from_millis(wait)),
+        )
+        .await
+        .expect("window")
+        .expect("recv")
+    };
 
     // RAW band, 25-byte payload → 28-byte datagram: fits.
     out_tx
@@ -37,22 +48,34 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         )])
         .await
         .unwrap();
-    let ok = tokio::time::timeout(
-        Duration::from_secs(3),
-        client.recv_frame(Duration::from_millis(200)),
-    )
-    .await
-    .expect("window")
-    .expect("recv")
-    .expect("the in-budget frame must arrive");
-    assert_eq!(ok.payload.len(), 25);
+    let ok = recv(&mut client, 200)
+        .await
+        .expect("the in-budget frame must arrive");
+    assert_eq!(ok.payload.as_ref(), &[1u8; 25]);
+    assert_eq!(client.stats.frag_reassembled, 0, "it was not fragmented");
 
     // RAW band, 40-byte payload → 43-byte datagram: over the 40-byte
-    // budget. Dropped, not fragmented.
+    // budget, so it travels as two FRAG datagrams and arrives whole.
     out_tx
         .send(vec![FrameBody::new(
             1000,
             Bytes::copy_from_slice(&[2u8; 40]),
+        )])
+        .await
+        .unwrap();
+    let whole = recv(&mut client, 1000)
+        .await
+        .expect("the over-budget frame must arrive whole");
+    assert_eq!(whole.op, 1000);
+    assert_eq!(whole.payload.as_ref(), &[2u8; 40]);
+    assert_eq!(client.stats.frag_reassembled, 1);
+
+    // Past the ceiling: 16 chunks of 35 bytes carry 560 bytes, this one
+    // needs 602. Dropped and counted server-side; nothing is sent.
+    out_tx
+        .send(vec![FrameBody::new(
+            1000,
+            Bytes::copy_from_slice(&[3u8; 600]),
         )])
         .await
         .unwrap();
@@ -65,29 +88,18 @@ async fn oversized_outbound_is_dropped_not_fragmented() {
         )])
         .await
         .unwrap();
-    let ctl = tokio::time::timeout(
-        Duration::from_secs(3),
-        client.recv_frame(Duration::from_millis(1000)),
-    )
-    .await
-    .expect("window")
-    .expect("recv")
-    .expect("control must still be delivered");
+    let ctl = recv(&mut client, 1000)
+        .await
+        .expect("control must still be delivered");
     assert_eq!(ctl.op, gsb_protocol::op::base::HEARTBEAT_ACK);
 
-    // The oversized frame must NOT arrive (neither whole nor
-    // fragmented): the next frame is the control one.
-    let next = tokio::time::timeout(
-        Duration::from_millis(600),
-        client.recv_frame(Duration::from_millis(400)),
-    )
-    .await
-    .expect("window")
-    .expect("recv");
-    assert!(
-        next.is_none(),
-        "the oversized frame must be dropped, not delivered"
-    );
+    // The past-ceiling frame never arrives, not even in part: no
+    // fragment of it reached the client.
+    let next = recv(&mut client, 400).await;
+    assert!(next.is_none(), "the past-ceiling frame must be dropped");
+    assert_eq!(client.stats.frag_reassembled, 1);
+    assert_eq!(client.stats.frag_dropped_incomplete, 0);
+    assert_eq!(client.stats.frag_rejected, 0, "no fragment of it was sent");
 }
 
 /// Reliability, server side: a control frame the client never ACKs is

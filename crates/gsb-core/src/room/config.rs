@@ -65,9 +65,10 @@ pub struct RoomConfig {
     /// simulates at most this many periods (temporary slow-motion).
     pub max_catchup: u32,
     /// Warn (log) when a group's snapshot payload exceeds this many bytes.
-    /// rUDP MTU readiness: an oversized snapshot cannot ride a datagram, so
-    /// a sustained warning is the signal to split the group (AOI) or lower
-    /// its emission rate.
+    /// A payload over it no longer fits one rUDP datagram: the transport
+    /// fragments it (loss of any fragment loses the frame), so a sustained
+    /// warning is a bandwidth/fragmentation signal — split the group (AOI)
+    /// or lower its emission rate.
     pub max_snapshot_bytes: usize,
     /// Keep-alive rate for unchanged groups, in Hz. When a group is
     /// unchanged the room ships nothing for it — but every

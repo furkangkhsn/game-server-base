@@ -35,6 +35,7 @@ fn demux_bare(sock: Arc<UdpSocket>) -> (Demux, crossbeam_channel::Receiver<Endpo
         ack_piggyback_failed: 0,
         oversized_in: 0,
         bad_datagrams: 0,
+        frag_refused: 0,
     };
     (d, end_rx)
 }
@@ -70,6 +71,7 @@ fn demux_with_session(
         ack_piggyback_failed: 0,
         oversized_in: 0,
         bad_datagrams: 0,
+        frag_refused: 0,
     };
     d.sessions.insert(
         peer,
@@ -187,4 +189,36 @@ async fn handshake_expires_a_captured_proof_but_crosses_one_rotation() {
         end_rx.try_recv().is_ok(),
         "the session must reach the accept loop"
     );
+}
+
+/// Inbound fragments are REFUSED: the server never reassembles, so a
+/// FRAG datagram from an established session forwards nothing and holds
+/// nothing — it is counted and forgotten — and the session's next RAW
+/// frame is delivered as usual.
+#[tokio::test]
+async fn inbound_fragments_are_refused() {
+    let sock = Arc::new(
+        UdpSocket::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+            .await
+            .expect("bind"),
+    );
+    let peer = "127.0.0.1:9".parse().unwrap();
+    let (mut d, mut in_rx) = demux_with_session(sock, peer);
+
+    // A well-formed two-fragment message, both halves.
+    feed(&mut d, peer, &[KIND_FRAG, 0, 0, 0, 2, 0xE8, 0x03]);
+    feed(&mut d, peer, &[KIND_FRAG, 0, 0, 1, 2, 7, 7]);
+    assert!(
+        in_rx.is_empty(),
+        "no fragment and no reassembly reaches the actor"
+    );
+    assert_eq!(d.frag_refused, 2);
+    assert_eq!(d.bad_datagrams, 0, "refused by rule, not malformed");
+
+    let raw = encode_raw(&FrameBody::new(1000, Bytes::from_static(b"move")));
+    feed(&mut d, peer, &raw);
+    match in_rx.try_recv().expect("the RAW frame") {
+        gsb_core::conn::ConnIn::Frame(f) => assert_eq!(f.payload.as_ref(), b"move"),
+        other => panic!("expected a frame, got {other:?}"),
+    }
 }

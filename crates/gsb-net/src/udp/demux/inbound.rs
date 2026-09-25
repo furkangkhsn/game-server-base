@@ -198,6 +198,14 @@ impl super::Demux {
                     self.bad_datagrams += 1;
                 }
             }
+            KIND_FRAG => {
+                // Refused: the server never reassembles (inputs are small,
+                // and reassembly state here would be memory any session
+                // could make the server hold — `docs/SECURITY.md` §4.1).
+                // Nothing is forwarded; the session is not otherwise
+                // touched (not even its idle window).
+                self.frag_refused += 1;
+            }
             _ => self.bad_datagrams += 1,
         }
     }

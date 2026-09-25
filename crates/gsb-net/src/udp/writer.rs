@@ -13,7 +13,7 @@ use gsb_core::conn::ConnIn;
 use gsb_core::id::ConnectionId;
 use gsb_protocol::op;
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::transport::PumpSpawner;
 use crate::udp::*;
@@ -51,6 +51,9 @@ pub(super) fn udp_pump_spawner(
                     retransmit: VecDeque::new(),
                     ack_progress: Instant::now(),
                     dropped_oversized: 0,
+                    frag_id: 0,
+                    frag_messages: 0,
+                    frag_datagrams: 0,
                     retransmits: 0,
                     abandoned: 0,
                     oversized_warned: false,
@@ -64,8 +67,8 @@ pub(super) fn udp_pump_spawner(
 
 /// The per-session writer: outbound batches → datagrams, with the
 /// reliable control band (retransmit + cumulative-ack state + the
-/// liveness bound) and the MTU drop+count rule (feature 3). Local state
-/// only.
+/// liveness bound) and the game band's fragmentation (feature 3). Local
+/// state only.
 pub(super) struct UdpWriter {
     conn: ConnectionId,
     sock: Arc<UdpSocket>,
@@ -90,7 +93,14 @@ pub(super) struct UdpWriter {
     /// The liveness bound of the module docs is measured from here, NOT
     /// from an individual frame's age.
     ack_progress: Instant,
+    /// Game-band frames over the fragment ceiling (dropped and counted).
     dropped_oversized: u64,
+    /// The next FRAG message id (per session, wrapping).
+    frag_id: u16,
+    /// Game-band messages sent fragmented, and the FRAG datagrams they
+    /// took.
+    frag_messages: u64,
+    frag_datagrams: u64,
     retransmits: u64,
     /// Control frames still outstanding when the band was declared dead
     /// (reported once, with the close).
@@ -121,11 +131,17 @@ impl UdpWriter {
                 break;
             }
         }
-        if self.dropped_oversized > 0 || self.retransmits > 0 || self.abandoned > 0 {
+        if self.dropped_oversized > 0
+            || self.frag_messages > 0
+            || self.retransmits > 0
+            || self.abandoned > 0
+        {
             info!(
                 conn = %self.conn,
                 peer = %self.peer,
                 dropped_oversized = self.dropped_oversized,
+                frag_messages = self.frag_messages,
+                frag_datagrams = self.frag_datagrams,
                 retransmits = self.retransmits,
                 abandoned = self.abandoned,
                 "rUDP writer session counters"
@@ -135,7 +151,10 @@ impl UdpWriter {
     }
 
     /// Encode and send one outbound batch. Returns the fatal reason when
-    /// the reliable band's memory bound ([`RETRANSIT_CAP`]) is crossed.
+    /// the reliable band cannot carry a control frame: its memory bound
+    /// ([`RETRANSIT_CAP`]) is crossed, or the frame exceeds the datagram
+    /// budget (the control band is never fragmented — module docs,
+    /// "MTU (feature 3)").
     async fn send_batch(&mut self, batch: FrameBatch) -> Option<String> {
         for frame in batch {
             if frame.op == op::base::UDP_ACK {
@@ -143,53 +162,46 @@ impl UdpWriter {
                 self.apply_ack(&frame);
                 continue;
             }
-            let control = is_control(frame.op);
-            if control && self.retransmit.len() >= RETRANSIT_CAP {
+            if !is_control(frame.op) {
+                // The game band: RAW, or FRAG when over the budget.
+                self.send_game(&frame).await;
+                continue;
+            }
+            if self.retransmit.len() >= RETRANSIT_CAP {
                 return Some(format!(
                     "rUDP reliable control band: {RETRANSIT_CAP} frames outstanding, \
                      the peer has confirmed none of them"
                 ));
             }
-            let datagram = if control {
-                self.seq = self.seq.wrapping_add(1);
-                Bytes::from(encode_rel(self.seq, &frame))
-            } else {
-                Bytes::from(encode_raw(&frame))
-            };
-            // Feature 3: the datagram budget. Drop + count (the snapshot
-            // band is self-healing; the room-side max_snapshot_bytes
-            // warning is the standing signal).
-            if datagram.len() > self.max_datagram {
-                self.dropped_oversized += 1;
-                if !self.oversized_warned {
-                    self.oversized_warned = true;
-                    warn!(
-                        conn = %self.conn,
-                        peer = %self.peer,
-                        op = frame.op,
-                        size = datagram.len(),
-                        budget = self.max_datagram,
-                        "rUDP: frame exceeds the datagram budget; oversized \
-                         frames are dropped and counted (split the snapshot \
-                         group or lower its emission rate — the room-side \
-                         max_snapshot_bytes warning is the signal)"
-                    );
-                }
-                continue;
+            // Checked BEFORE a seq is spent: a control frame that cannot
+            // ride one datagram is undeliverable, and dropping it after
+            // taking its seq would wedge the peer's cumulative stream.
+            let size = 5 + 2 + frame.payload.len();
+            if size > self.max_datagram {
+                return Some(format!(
+                    "rUDP reliable control band: op {} needs a {size}-byte datagram, \
+                     over the {}-byte budget (control frames are never fragmented)",
+                    frame.op, self.max_datagram
+                ));
             }
-            if control {
-                self.retransmit
-                    .push_back((self.seq, datagram.clone(), Instant::now()));
-            }
-            if let Err(e) = self.sock.send_to(&datagram, self.peer).await {
-                // The socket is shut (listener close) or the peer is gone:
-                // keep draining the channel so the actor's exit cascade is
-                // not delayed; the next send keeps failing until the
-                // channel closes.
-                debug!(conn = %self.conn, peer = %self.peer, %e, "rUDP: send failed");
-            }
+            self.seq = self.seq.wrapping_add(1);
+            let datagram = Bytes::from(encode_rel(self.seq, &frame));
+            self.retransmit
+                .push_back((self.seq, datagram.clone(), Instant::now()));
+            self.send(&datagram).await;
         }
         None
+    }
+
+    /// Put one datagram on the socket.
+    async fn send(&self, datagram: &[u8]) {
+        if let Err(e) = self.sock.send_to(datagram, self.peer).await {
+            // The socket is shut (listener close) or the peer is gone:
+            // keep draining the channel so the actor's exit cascade is
+            // not delayed; the next send keeps failing until the channel
+            // closes.
+            debug!(conn = %self.conn, peer = %self.peer, %e, "rUDP: send failed");
+        }
     }
 }
 
@@ -197,3 +209,7 @@ impl UdpWriter {
 /// the liveness bound and the close it triggers). A CHILD module, so it
 /// reaches this writer's private state directly.
 mod reliable;
+
+/// The game band's half: RAW, or FRAG for a frame over the budget (and
+/// the drop+count rule past the fragment ceiling). A CHILD module too.
+mod split;

@@ -191,7 +191,8 @@ pub struct Config {
     ///   unlimited) for deployments behind an external gate.
     pub max_unauth_conns: Option<u64>,
     /// Warn when a room group's snapshot payload exceeds this many bytes
-    /// (rUDP MTU readiness; default = `max_frame_bytes`).
+    /// (on rUDP such a payload is fragmented — a bandwidth/fragmentation
+    /// signal; default = `max_frame_bytes`).
     pub max_snapshot_bytes: usize,
     /// Keep-alive rate for unchanged snapshot groups, in Hz (a client that
     /// lost its last snapshot must not stay stale forever). `<= 0` disables.
@@ -282,8 +283,9 @@ pub struct Config {
     pub transport: TransportKind,
     /// The rUDP datagram budget in bytes (transport-level guard; default
     /// 1472 = MTU 1500 − IP 20 − UDP 8). Used only when
-    /// [`Self::transport`] = `Udp`. See `gsb_net::udp` (feature 3:
-    /// oversized frames are dropped and counted, never fragmented).
+    /// [`Self::transport`] = `Udp`. See `gsb_net::udp` (feature 3: a
+    /// game-band frame over it is fragmented, up to 16 fragments; past
+    /// that, and for control frames, it cannot be sent).
     pub udp_max_datagram_bytes: usize,
     /// The rUDP cookie key as 32 hex characters (16 bytes). Used only
     /// when [`Self::transport`] = `Udp`. `None` (the default) = draw the

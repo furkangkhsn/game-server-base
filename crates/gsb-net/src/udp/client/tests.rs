@@ -43,6 +43,7 @@ async fn detached() -> (UdpClient, UdpSocket) {
         stats: UdpClientStats::default(),
         buf: vec![0u8; 2048],
         raw: None,
+        reasm: Reassembly::default(),
     };
     (client, sink)
 }

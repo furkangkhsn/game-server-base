@@ -26,6 +26,17 @@ pub struct UdpClientStats {
     /// frame is never abandoned on its own age — the whole band dies at
     /// once, and [`UdpClient::is_established`] flips to `false`.
     pub gave_up: u64,
+    /// Game-band messages rebuilt from FRAG datagrams (server → client
+    /// fragmentation; see the module docs, "MTU (feature 3)").
+    pub frag_reassembled: u64,
+    /// Messages dropped with a fragment still missing: superseded by a
+    /// newer message in their slot, aged out, or evicted by the memory
+    /// bound. The loss signal of the fragmented band.
+    pub frag_dropped_incomplete: u64,
+    /// FRAG datagrams refused: a malformed header, a count past the
+    /// ceiling, a count that disagrees with the message's first
+    /// fragment, or a fragment of a message the slot has moved past.
+    pub frag_rejected: u64,
 }
 
 /// A rUDP client: the mirror image of the server's demux/writer, as one
@@ -59,6 +70,9 @@ pub struct UdpClient {
     /// the awaiting loop (the lossy band is unordered: it does not wait
     /// for the pending REL frames).
     raw: Option<FrameBody>,
+    /// The fragmented game band's reassembly state (bounded; see
+    /// `frag`).
+    reasm: Reassembly,
 }
 
 impl UdpClient {
@@ -115,6 +129,7 @@ impl UdpClient {
             stats: UdpClientStats::default(),
             buf: vec![0u8; 2048],
             raw: None,
+            reasm: Reassembly::default(),
         })
     }
 

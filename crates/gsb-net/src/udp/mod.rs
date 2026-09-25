@@ -130,10 +130,14 @@
 //!   1 REL    [u32 LE seq][u16 LE op][payload]   control band: reliable
 //!   2 ACK    [u32 LE next expected seq]         cumulative, per direction
 //!   3 HELLO  [u64 LE nonce][u64 LE cookie]      handshake
+//!   4 FRAG   [u16 LE msg id][u8 index][u8 count][chunk]
+//!                                               game band over the budget,
+//!                                               server → client only
 //! ```
 //!
 //! The band split is by opcode: `op <= 64` (base control band) is
-//! REL, `op >= 1000` (game band) is RAW.
+//! REL, `op >= 1000` (game band) is RAW — or FRAG when one RAW datagram
+//! would exceed the budget (see "MTU").
 //!
 //! **Status: experimental (v1).** Validated on loopback and by the e2e
 //! suite; NOT hardened for lossy real-world networks. Two correctness
@@ -244,19 +248,86 @@
 //! ~380 KB, and it is only reachable by a session whose ACKs have
 //! already stopped — i.e. one already inside its dying window.
 //!
-//! ## MTU (feature 3)
+//! ## MTU (feature 3): the game band fragments
 //!
 //! The datagram budget (`max_datagram_bytes`, default 1472 =
-//! MTU 1500 − IP 20 − UDP 8) is enforced on the **outbound** path: an
-//! encoded datagram over the budget is **dropped and counted** (warned
-//! once per session), not fragmented and not refused. Rationale: a
-//! refusal mid-stream would break a live session; fragmentation means
-//! per-session reassembly state in the client (declared out of scope for
-//! v1); and the dropped frame is a *snapshot* — the self-healing band —
-//! whose staleness is bounded by the keep-alive. The room-side
-//! `max_snapshot_bytes` warning (default 1400 + 7 header bytes < 1472)
-//! is the standing signal to split the snapshot group instead.
+//! MTU 1500 − IP 20 − UDP 8) holds for every datagram. A **game-band**
+//! frame whose RAW datagram would exceed it is **fragmented** by the
+//! session's writer and reassembled by the client (`frag`); every other
+//! datagram — RAW within the budget, REL, ACK, HELLO — keeps its exact
+//! bytes. The unit is the frame, whatever it carries: a group snapshot
+//! (delta or full), a keep-alive full, the one-shot `Private` full. So
+//! the core's one-payload-per-group contract and the kit's envelope are
+//! untouched: fragmentation is invisible above the transport.
 //!
+//! **Why here.** Measured before this change (afe7fba, loopback): the
+//! arena's team-fog fulls reach 1.9 KB at 200 units and 5.1 KB at 500;
+//! the MMO's clustered load sends 1.1-2.9 KB *deltas* as well as fulls.
+//! On TCP that is one frame; here the writer used to drop every one of
+//! them (arena 500: 93 % of snapshot datagrams). The largest single
+//! entity record is 17 bytes, so a message always splits cleanly.
+//!
+//! - **Wire.** `4 FRAG [u16 msg id][u8 index][u8 count][chunk]`: the
+//!   chunks, in index order, are the RAW datagram's bytes after its kind
+//!   byte (`[u16 op][payload]`). Equal chunks of `budget − 5` bytes, the
+//!   last shorter. The id is per session, wrapping, compared in serial
+//!   order. A client that predates FRAG ignores kind 4 — for it the
+//!   frame is lost exactly as it was before.
+//! - **Loss.** A message is delivered only when every fragment arrived;
+//!   there is no retransmission. A message missing a fragment is dropped
+//!   (counted) when a newer message takes its slot or when it is older
+//!   than [`frag::FRAG_MAX_AGE`] (250 ms); its stragglers are refused,
+//!   never resurrected. The band is self-healing as before: the next
+//!   full (at the latest the keep-alive) replaces a lost one.
+//! - **Bounds (client, all constant, O(1) per datagram):**
+//!   [`frag::FRAG_MAX_COUNT`] = 16 fragments per message (23 472 bytes at
+//!   the default budget — 2.3× the largest measured full, arena 1000's
+//!   10 267; a frame past it takes the old drop+count path, warned once
+//!   per session); [`frag::FRAG_SLOTS`] = 4 messages under reassembly
+//!   (slot = id mod 4, so a newer message evicts only its slot's older
+//!   partial; one tick ships at most two fragmented messages per session
+//!   — the group frame and the private full); [`frag::FRAG_MEM_CAP`] =
+//!   64 KiB of held chunks per session (over it, the oldest OTHER
+//!   partial is evicted). No map, no growth.
+//! - **The control band never fragments.** Its server → client frames
+//!   (AUTH/JOIN/LEAVE results, HEARTBEAT_ACK, ERROR) are tens of bytes;
+//!   the only variable fields echo what the client itself sent in one
+//!   in-budget datagram. A control frame over the budget is therefore a
+//!   bug, and it is **session-fatal** (the reliable band's death path),
+//!   checked before a seq is spent — dropping it after taking a seq, as
+//!   before, wedged the peer's cumulative stream and surfaced 5 s later
+//!   as a misattributed no-ACK death.
+//! - **Client → server fragments are refused** (counted by the demux,
+//!   nothing forwarded). Inputs are tens of bytes; reassembly on the
+//!   server would be memory any session could make it hold, in the one
+//!   task every session shares.
+//!
+//! **Counters.** Writer (per session, logged at its end):
+//! `frag_messages`, `frag_datagrams`, `dropped_oversized` (past the
+//! ceiling). Client ([`UdpClientStats`]): `frag_reassembled`,
+//! `frag_dropped_incomplete`, `frag_rejected`. The room's
+//! `max_snapshot_bytes` / `snap_overflows` keep their meaning (payloads
+//! over the size) but on rUDP they are now a bandwidth/fragmentation
+//! signal, not a loss signal: the loss signal is
+//! `frag_dropped_incomplete`.
+//!
+//! **Rejected — a kit-level multi-part snapshot** (the kit splits a group
+//! frame into self-describing parts, the client reassembles): the same
+//! loss behaviour, but it changes the core seam (one payload per group
+//! becomes several), adds protocol fields to the envelope, changes every
+//! client — and covers only the frames the kit builds, not the one-shot
+//! `Private` full or a game's own large frame. **Rejected — the old
+//! advice, "split the snapshot group instead":** it remains the right
+//! bandwidth answer, but as the only answer it made rUDP unusable for
+//! the arena's team fog and the MMO's clustered crowds, where the group
+//! IS the game rule. **Rejected — relying on IP fragmentation** (send
+//! the whole datagram, let the kernel split it): an IPv4 fragment loss
+//! loses the datagram just the same, IPv6 routers never fragment, and
+//! many middleboxes drop IP fragments outright. **Rejected — reliable
+//! fragments** (ACK + retransmit per fragment): the band is
+//! self-healing; a retransmitted old snapshot is worth less than the
+//! next one.
+
 //! ## Session teardown (feature 4)
 //!
 //! UDP has no FIN. The previous turn's `idle_timeout` mechanism carries
@@ -324,15 +395,24 @@
 //!   and it is left at the system default: `tokio::net::UdpSocket`
 //!   (1.53.1) exposes no `SO_RCVBUF` setter, so raising it needs the raw
 //!   fd. (Verified: the only mention is the note in `bind`.)
-//! - **No crypto layer and no fragmentation**, both declared out of scope
-//!   for v1 rather than pending: the cookie is an anti-spoofing measure,
-//!   not a security boundary (nothing is signed or encrypted), and an
-//!   over-budget datagram is dropped and counted rather than split (see
-//!   "MTU").
+//! - **No crypto layer**, declared out of scope for v1 rather than
+//!   pending: the cookie is an anti-spoofing measure, not a security
+//!   boundary (nothing is signed or encrypted). Fragmentation, once
+//!   listed here, now exists for the game band (see "MTU"); a FRAG
+//!   datagram is as forgeable as a RAW one, and the client's reassembly
+//!   bounds are what keep a forged stream from costing it more than
+//!   64 KiB.
+//! - **A lost handshake proof is not healed.** The client counts itself
+//!   connected once it has SENT its proof; if that datagram is lost
+//!   (measured: the server socket's receive queue overflows on loopback
+//!   when 200+ clients handshake at once), no session exists, its AUTH
+//!   finds nothing, and the client dies of the REL liveness bound 5 s
+//!   later. Only the challenge request is retried today.
 
 mod client;
 mod cookie;
 mod demux;
+mod frag;
 mod transport;
 mod wire;
 mod writer;
@@ -347,6 +427,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 // and is named here so every child module reaches it by one path.
 use cookie::{CookieClock, CookieKey};
 use demux::{UdpSession, demux};
+use frag::{FRAG_MAX_COUNT, Reassembly, split};
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;
 
@@ -359,6 +440,9 @@ pub const KIND_RAW: u8 = 0;
 pub const KIND_REL: u8 = 1;
 pub const KIND_ACK: u8 = 2;
 pub const KIND_HELLO: u8 = 3;
+/// A fragment of an over-budget game-band frame (server → client only;
+/// see "MTU (feature 3)").
+pub const KIND_FRAG: u8 = 4;
 
 /// The rotation period of the handshake cookie's TIME TERM (see
 /// [`CookieClock`], and the module docs, "Cookie rotation"). A proof is

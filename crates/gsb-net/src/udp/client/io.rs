@@ -7,7 +7,8 @@ use std::time::Instant;
 
 impl UdpClient {
     /// Handle one inbound datagram (from the server). Returns `true` when
-    /// it produced a RAW frame (already in `self.raw`) so the awaiting
+    /// it produced a game-band frame (already in `self.raw`) — a RAW
+    /// datagram, or the FRAG that completed a message — so the awaiting
     /// loop can return it immediately; REL/ACK/HELLO return `false`.
     pub(super) fn process_datagram(&mut self, d: &[u8]) -> bool {
         if d.is_empty() {
@@ -22,6 +23,17 @@ impl UdpClient {
                     return true;
                 }
                 false
+            }
+            KIND_FRAG => {
+                // A fragment of an over-budget game-band frame: the
+                // message joins the lossy band once it is whole.
+                match self.reasm.accept(d, Instant::now(), &mut self.stats) {
+                    Some(fb) => {
+                        self.raw = Some(fb);
+                        true
+                    }
+                    None => false,
+                }
             }
             KIND_REL => {
                 if d.len() < 7 {
