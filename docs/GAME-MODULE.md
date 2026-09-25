@@ -144,6 +144,8 @@ ham `toml::Table`'ı alır:
   sonucu".)*
 - **Demo botu bugünkü kodun birebir taşınmasıdır** (profiller, `as i32`
   kırpma, seq numaralandırma), yani girdileri bayt-bayt aynı kalır.
+  *(G3'te uygulanan biçim — `LoadBot` + istemci başına `BotClient` —
+  ve bayt kanıtı: §5 "G3 sonucu".)*
 
 ### 4.5 Değişmemesi gerekenler (2D demo)
 
@@ -161,7 +163,7 @@ sonuna eklenen yeni bir `game=<ad>` anahtarı.
 |---|---|---|
 | G1 ✅ | Trait + `RegistryParts`; `factories.rs` + çözümleyici demo modülüne **olduğu gibi** taşınır; `Config` alanları ve `resolve_selection` uyumluluk katmanı olarak kalır; `--no-default-features` derlemesi; §6 karar 10'daki orkestratör düzeltmesi | tüm testler değişmeden yeşil; loadgen A/B gürültü içinde |
 | G2 ✅ | Arena ve MMO modülleri (config bölümleri, MMO join yönlendirici, politika eşlemesi) + ikisinin gerçek `Registry` üzerinden uçtan uca testleri | yeni e2e testleri; kit/demo/core diff'i boş |
-| G3 | Loadgen: `LoadBot` + generic görünüm, demo botu birebir, `--game` her iki çocuğa iletilir, arena ve MMO botları, ilk ölçüm tabanları | demo için RESULT/CLIENT birebir (+`game=`); arena/MMO ilk sayılar |
+| G3 ✅ | Loadgen: `LoadBot` + generic görünüm, demo botu birebir, `--game` her iki çocuğa iletilir, arena ve MMO botları, ilk ölçüm tabanları | demo için RESULT/CLIENT birebir (+`game=`); arena/MMO ilk sayılar |
 | G4 ✅ | Kit istemci kurallarının `gsb_kit::client` modülüne alınması (tetikleyici var: üç kopya) + çözücü seam'i; demo ve MMO test istemcilerinin ona geçirilmesi — **G3'ten önce koşuldu** (ebeveyn kararı) | test iddiaları değişmez |
 
 ### G1 sonucu (2026-09-25)
@@ -695,6 +697,210 @@ ile kullanır (demo: loadgen'deki `DemoDecoder`; MMO: test
 istemcilerindeki `MmoDecoder`'ın elle yürüyen sürümü; arena yalnız full
 gönderir, aynı görünüm onu da uygular). `LoadBot`'un §4.4'teki "kayıt
 çözücü + çıkış-hücresi çözücü" parçası artık bu seam.
+
+### G3 sonucu (2026-09-25)
+
+**Tamam.** İki kod commit'i (+ bu belge), her biri kendi başına yeşil:
+`e4e65a1` seam + demo botu (birebir) + `--game`; `99e786d` arena ve MMO
+botları + raporlama + smoke. `gsb-core`, `gsb-kit`, `gsb-demo`,
+`gsb-demo-arena`, `gsb-demo-mmo` **değişmedi** (`git diff 15a02c5.. --stat`
+bu beşinde boş); wire baytları değişmedi. Test sayısı 609 → 623 (+1
+bayrak kuralı, +3 arena botu, +4 MMO botu, +2 orkestratör komut satırı,
++4 `tests/loadgen_games.rs`; demo çözücüsünün iki testi `git mv` ile
+taşındı; orkestratör komut satırının iki testi `child_args/tests.rs`
+çocuğuna taşındı — ikisinin de iddiaları aynı); 1 ignored doctest aynı;
+mevcut hiçbir iddia değişmedi (`loadgen_smoke.rs` dokunulmadı).
+
+**API** (`gsb-server/src/loadgen/bot.rs`, ikiliye özel):
+
+```rust
+pub(crate) trait LoadBot: Send + Sync {          // oyun başına bir tane, dyn
+    fn snapshot_op(&self) -> u16;                  // Game::SNAPSHOT_OP
+    fn private_op(&self) -> u16;                   // Game::PRIVATE_OP
+    fn client(&self, id: u64) -> Box<dyn BotClient>;
+    fn flood_input(&self) -> (u16, Vec<u8>);       // numarasız (seq 0)
+    fn churn_input(&self, id: u64, seq: u64) -> (u16, Vec<u8>);
+    fn labels(&self) -> Option<Labels> { None }    // RESULT: visibility/shards/profile
+    fn shard_spread(&self) -> bool { false }       // RESULT: shard_members=
+    fn describe(&self) -> String;
+}
+pub(crate) trait BotClient: Send {                 // istemci başına
+    fn apply_snapshot(&mut self, frame: &[u8]) -> Result<Snapshot, ClientError>;
+    fn apply_private(&mut self, frame: &[u8]) -> Result<PrivateEvent, ClientError>;
+    fn counters(&self) -> Counters;
+    fn view_len(&self) -> usize;
+    fn joined(&mut self, entity: u64) {}
+    fn next_input(&mut self, elapsed: Duration, seq: u64) -> Option<(u16, Vec<u8>)>;
+}
+```
+
+Görünüm `BotClient`'ın içinde: kit'in `ClientView<D>`'si oyunun
+çözücüsüyle (`DemoDecoder`, `ArenaDecoder`, `MmoDecoder` — üçü de kaydı
+`client::wire::Fields` ile elle yürür, üretilmiş çözücüye testle
+sabitli). Loadgen'e özgü generic bir görünüm YAZILMADI. Alıcı döngüsü
+kare başına bir sanal çağrı yapar; bağlantı, auth/join, tempolu
+gönderim + sınırlı alım, girdi numaralandırma, ack takibi, leave ve
+rapor oyundan bağımsız kaldı. `next_input` `None` dönerse o aralıkta
+gönderim yok ve numara tüketilmez (demo'nun yerleşmiş still
+istemcisi; arena/MMO'nun kendi entity'sini henüz görmemiş botu).
+
+**`--game demo|arena|mmo`** (varsayılan `demo`): botu seçer; süreç içi
+ve `--serve` sunucusunun `game` anahtarıdır; orkestratör onu sunucu
+çocuğuna VE her istemci çocuğuna iletir (sunucu çocuğunun komut satırı
+da artık saf bir kurucu, `server_args`, istemcininkinin yanında —
+ikisi de süreç başlatmadan test ediliyor). Bilinmeyen oyun →
+derlenmiş oyunları listeleyen hata. Demo'ya özgü bayraklar
+(`--visibility`, `--topology`, `--shard-count`, `--cell-size`,
+`--vision-radius`, `--spawn-half-size`, `--disconnect-grace-secs`,
+`--profile`, `--still-frac`) başka bir oyun için yazılırsa, sıra ne
+olursa olsun, bayrağı ve nedenini adlandıran hata — sunucunun "açıkça
+yazılmış sabit anahtar reddedilir" kuralının loadgen yüzü. Orkestratör
+bu bayrakları yalnız demo koşusunda iletir. `--help` güncellendi
+(`[demo]` işaretli bayraklar; churn bayrakları da artık listede).
+
+**Botlar:**
+
+- **Demo** — bugünkü kod birebir (`bot/demo.rs`): `ring`/`spread`/`still`,
+  `--still-frac`'ın id bölmesi, `as i32` kırpma, `spawn_home` kafesi
+  (f64/f32 tuhaflığıyla), churn ve flood `MoveTo`'ları. **Bayt kanıtı:**
+  15a02c5'in döngüsündeki girdi kodunu kopyalayan geçici bir sonda, bota
+  karşı 576 000 aralıkta (üç profil × dört still oranı × iki harita × 400
+  id × 60 aralık, düzensiz zamanlarla) her girdiyi, churn ve flood
+  girdileriyle birlikte bayt-bayt AYNI buldu (commit'lenmedi).
+- **Arena** — birim, kendi spawn noktasını (takım üssü, takım
+  arkadaşlarının yanında) onu gösteren ilk takım snapshot'ından öğrenir;
+  sonra ev → merkez → ev, 8 sn'lik tur (`s = (1 − cos φ)/2`), yükseklik
+  0..20 m (`10·(1 − cos(φ + 1,3·id))`). Gerekçe: 25 m'lik üs halkasında
+  hedef birimlerin 12 m/s'sinin altında kalır (birim hedefi izler);
+  20 m'lik yükseklik salınımı 15 m görüş yarıçapını aşar, yani aynı zemin
+  noktasındaki iki birim birbirini zamanın bir kısmında görür — üç
+  takımın birimleri merkezde birbirinin 3D sisine gerçekten girip çıkar.
+  "En yakın üs" değil kendi spawn'ı: wire takımı söylemiyor ve büyük
+  takımlarda slotlar zemine kırpılıyor (500 istemcide x = 50'ye yığılır),
+  en yakın üs yanlış olurdu.
+- **MMO** — ilk girdi waystone `id mod 4`'e `Travel` (K4: katalogla
+  barındırılan her oturum kaydısız, shard 0'da başlar; yalnız yürüyen
+  bot dört shard'dan birini yükler — sonda: bu seyahat olmadan 8 botun
+  6'sı shard 0'da kaldı). Sonra waystone çevresinde 30–60 m (id'ye göre)
+  halkada 0,15 rad/s dolaşma (4,5–9 m/s, karakterin 7 m/s koşusu
+  civarı; halka 64 m AOI hücrelerini keser — hücre çıkışları ve
+  one-shot full'lar akar); ~20 sn'de bir başka bir waystone'a `Travel`
+  (500 karakterde saniyede 25 göç — MMO'da uzun yolculuk ara sıradır,
+  yükün çoğu yürüyen karakterlerin AOI akışı kalır); menzilde
+  (`ATTACK_RANGE` = 30 m, 3D) bir mob varken ~1 sn'de bir `Attack`
+  (sıradan bir yakın dövüş temposu; standart realm'de her waystone'un
+  yanında bir kamp ve devriye gezen bir sürü var, halka ikisinin de
+  menzilinden geçer). Oranlar `--move-ms`'ten girdi başına olasılığa
+  çevrilir; çekilişler id tohumlu SplitMix64 akışı (tekrarlanabilir,
+  bölümlemeden bağımsız). Üç mesaj tek sıra uzayında numaralı.
+
+**Raporlama.** RESULT her anahtarını korur. Kendi düzeni olan oyunlarda
+`visibility=`, `shards=`, `profile=` oyunun düzenini söyler (arena:
+`team`/`1`/`base-centre`, MMO: `spatial`/`4`/`roam` — komut satırının
+varsayılan `all`'ı yanıltıcı olurdu) ve `still_frac=0`. MMO
+`shard_members=a,b,c,d` ekler (kararlı pencerenin SONUNDA shard başına
+üye; shard başına örnek satırlarından, sıra = shard indisi) —
+`game=`'den hemen önce, yani önceki her anahtar yerinde ve `game=` son
+anahtar. İnsan-okunur rapor pencerenin başındaki ve sonundaki dağılımı
+basar (`server shards (members per shard, steady window): first=…
+last=…`). Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı.
+
+**Demo A/B** (15a02c5 ↔ HEAD, dönüşümlü üç tur, `GSB_LOADGEN_CLIENT_LINES=1`;
+makine yükü 19–23): RESULT anahtar kümesi, sırası ve değer biçimleri
+(tamsayı / ondalık basamak) dört senaryoda da AYNI, CLIENT anahtarları
+AYNI; her koşuda `left=N errors=0 server_closes=0`.
+
+| Senaryo | `snap_total` base / HEAD | `client_in_bps` base / HEAD | `out_bps_per_conn` | `acks` | `step_p50_fine_us` |
+|---|---|---|---|---|---|
+| `50 --duration 3` | 4150 4104 4100 / 4103 4100 4100 | 561633 561133 560466 / 562400 560533 553926 | 11005–11029 / 10989–11044 | 800 / 800–802 | 48–80 / 40–80 |
+| `50 --duration 3 --visibility spatial` | 4079–4092 / 4088–4136 | 103541–106313 / 107380–109260 | 1920–1977 / 1941–1978 | 800 / 800 | 104–152 / 104–152 |
+| `50 --topology sharded --visibility spatial --shard-count 4 --duration 8` | 11462–11524 / 11460–11505 | 155033–157658 / 155658–156857 | 2894–2940 / 2901–2941 | 2298–2299 / 2297–2298 | 56–80 / 48–80 |
+| `--orchestrate 1000 --procs 2 --visibility spatial --duration 8` | 225077–226064 / 223958–226282 | 64,2–64,6 M / 63,3–64,7 M | 65063–65444 / 64090–65432 | 44537–44815 / 44263–44780 | 992–1208 / 992–1288 |
+
+`fulls`/`private_fulls`/`deltas`/`gap_drops`/`view_size` de gürültü
+içinde (ör. spatial `deltas` 3924–3936 / 3931–3934; orkestre
+`gap_drops` 856–877 / 863–867). **Alıcı döngü yavaşlamadı:**
+`client_in_bps` aynı; orkestre `clients_cpu_s` ilk üç çiftte (b, h)
+(5,8, 5,8) (4,8, 5,0) (6,2, 6,5) — aynı koşularda kodu DEĞİŞMEYEN
+sunucunun `server_cpu_s`'i de HEAD'de 0,1–0,2 yüksekti (yük gürültüsü);
+ek dört ABBA çiftinde (yük 13–17) HEAD 5,8 / 5,5 / 5,1 / 5,5 ↔ base
+6,4 / 5,9 / 6,3 / 6,6 — her çiftte HEAD düşük ya da eşit.
+
+**İlk ölçüm tabanları** (release, 32 çekirdek, `--duration 10
+--write-stall-secs 0` — CHANGELOG "Ölçüm kaydı": aksi hâlde write-stall
+koruması doymuş loadgen istemcilerini keser ve ölçüm sunucunun kesme
+politikasını ölçer). Komutlar: `gsb-loadgen N --game G --duration 10
+--write-stall-secs 0` (N = 50, 200, 500) ve `gsb-loadgen --orchestrate
+1000 --procs 2 --game G --duration 10 --write-stall-secs 0`. Makine
+başka işlerle yüklüydü; koşu öncesi 1 dk yük ortalaması tabloda. Her
+koşuda `joined = left = N`, `errors=0`, `server_closes=0`,
+`server_hz=30.00`, `step_over_budget_pct=0.0`.
+
+| Oyun | N | Mod | Yük | step p50/p90 fine (µs) | step max (µs) | `out_bps_per_conn` | `snap_total` | acks / moves | peak payload (B) / `snap_overflows` | Not |
+|---|---|---|---|---|---|---|---|---|---|---|
+| arena | 50 | in-proc | 12,6 | 104 / 144 | 282 | 10 669 | 14 600 | 2900 / 2950 | 444 / 0 | records/tick 101,6 (overlap 2,03) |
+| arena | 200 | in-proc | 11,0 | 368 / 456 | 757 | 46 049 | 57 419 | 11 514 / 11 514 | 1954 / 715 | records/tick 447 |
+| arena | 500 | in-proc | 9,7 | 1104 / 1640 | 3363 | 111 508 | 138 091 | 27 451 / 27 561 | 5162 / 798 | records/tick 1115 |
+| arena | 1000 | sep (2 süreç) | 5,0 | 1632 / 2024 | 3551 | 234 120 | 285 809 | 56 737 / 56 737 | 10 267 / 905 | `server_cpu_s` 2,8, `clients_cpu_s` 8,1, `dropped` 1761 |
+| mmo | 50 | in-proc | 8,6 | 48 / 80 | 235 | 5 465 | 14 237 | 2863 / 2900 | 702 / 0 | shard üyeleri 14,13,11,12 → 14,11,13,12 |
+| mmo | 200 | in-proc | 7,8 | 128 / 176 | 634 | 20 739 | 56 885 | 11 375 / 11 483 | 1276 / 0 | 57,44,50,49 → 55,49,50,46; `gap_drops` 155 |
+| mmo | 500 | in-proc | 7,0 | 224 / 296 | 1632 | 49 096 | 136 178 | 27 193 / 27 354 | 2610 / 4229 | 134,120,121,125 → 125,111,136,128; `gap_drops` 398 |
+| mmo | 1000 | sep (2 süreç) | 5,1 | 288 / 400 | 1540 | 102 190 | 280 645 | 55 775 / 56 155 | 9282 / 4746 | 253,254,246,247 → 245,245,255,255; `gap_drops` 991; `server_cpu_s` 2,3, `clients_cpu_s` 7,2, `dropped` 1836 |
+
+Arena yalnız full gönderir (`deltas=0`); MMO'da kareler çoğunlukla delta
+(500: 130 805 delta, 6589 full, 1614 private full). `ack_lag_max_ms`
+arena 34–48, MMO 100–115 (bir `Travel`'ın ack'i hedef shard'dan göçten
+sonra gelir — K1 düzeltmesi). Orkestre `dropped` (fan-out'ta dolu çıkış
+kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
+1538–1943). MMO'da oyuncular dört shard'a eşit yayılıyor (±%10).
+
+**Bulgular:**
+
+- **G3-1 — arenanın full snapshot'ları ~150 birimin üstünde rUDP MTU'sunu
+  aşıyor.** Takım sisi, arena ölçeğinde (her takım nüfusun ~2,2 katı
+  kayıt görüyor: `overlap_x` 2,0–2,2) ve yalnız-full politikasıyla,
+  en büyük yük 200'de 1954 B, 500'de 5162 B, 1000'de 10 267 B
+  (`max_snapshot_bytes` 1400; `snap_overflows` sayıyor, kareler yine
+  gönderiliyor). TCP'de sorun değil; arena bir gün rUDP'de koşarsa
+  takım odasına delta ya da parçalama gerekir. Kod değişmedi (kayıt).
+- **G3-2 — join'de grup delta'ları one-shot private full'dan önce
+  gelebiliyor** (`gap_drops`, kayıpsız TCP'de): MMO 200/500/1000'de
+  istemci başına ~0,8, demo'nun orkestre spatial 1000'inde de aynı
+  (A/B base 856–877) — yani önceden vardı, bot kaynaklı değil;
+  50 istemcide 0. Görünüm kuralı doğru davranıyor (baseline'sız delta
+  düşer, full gelince iyileşir). Sıralamanın core/kit'te garanti edilip
+  edilmeyeceği ayrı bir soru; bu turun kapsamı dışında.
+- **G3-3 — arena istemcisi takımını wire'dan öğrenemiyor.** JOIN sonucu
+  yalnız wire id veriyor; takım (ve dolayısıyla üs) istemci tarafında
+  ancak kendi spawn konumundan çıkarılabiliyor. Bot bunu yapıyor; gerçek
+  bir arena istemcisi için arena protokolüne bir takım alanı (ör. ilk
+  private karede) eklemek düşünülebilir — korunan crate, bu turda
+  dokunulmadı.
+- **K4 hâlâ geçerli**: yük dağılımı botun ilk `Travel`'ına dayanıyor
+  (kaydısız oturum → shard 0). Kalıcı çözüm çekirdekte/yönlendiricide.
+
+Korunan crate'lerde eksik public bir şey çıkmadı: botların ihtiyacı
+olan her şey public (`WAYSTONES`, `ATTACK_RANGE`, `client_cell`,
+`to_dm`/`to_cm`, opcode'lar, proto tipleri; `gsb_server::games::mmo::
+DEFAULT_WAYSTONE`).
+
+**Mutation-check'ler** (yedekten geri yüklenerek, her biri bir testi
+kırdı): istemci çocuğuna `--game` iletilmiyor → `both_children_get_the_game`
++ `loadgen_orchestrates_the_mmo`; sunucu çocuğuna iletilmiyor → aynı
+ikisi; MMO'nun ilk `Travel`'ı yok → `the_first_input_disperses_the_population`
++ `loadgen_drives_the_mmo` (dağılım iddiası bu sondayla sıkılaştırıldı:
+önce "≥3 dolu shard" gevşekti, 6,1,0,1 geçiyordu; artık shard 0 ≤ 4/8);
+bayrak denetimi kapalı → `a_demo_flag_refuses_another_game` +
+`loadgen_refuses_a_wrong_game_line`; arena botu evini hiç bulmuyor →
+`inputs_run_between_home_and_centre_once_home_is_seen` +
+`loadgen_drives_the_arena`.
+
+**§4.4 taslağından sapmalar:** (1) seam iki trait: aile (`LoadBot`) ve
+istemci (`BotClient`) — görünüm istemci başına, oyunun somut
+`ClientView<D>`'si onun içinde, böylece döngü generic değil ve kare
+başına tek sanal çağrı; (2) "kayıt çözücü + çıkış-hücresi çözücü" G4'ün
+`ClientDecoder`'ı oldu (ayrı bir loadgen seam'i yok); (3) raporlama
+için iki isteğe bağlı kanca (`labels`, `shard_spread`) — taslakta yoktu.
 
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
