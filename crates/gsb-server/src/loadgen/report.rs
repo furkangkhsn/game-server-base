@@ -6,8 +6,10 @@ use crate::stats::*;
 
 mod fold;
 mod result;
+mod spread;
 pub(crate) use fold::*;
 pub(crate) use result::*;
+pub(crate) use spread::*;
 
 /// Extra facts of a separate-process (orchestrated) run; `None` for the
 /// in-process and external-direct modes.

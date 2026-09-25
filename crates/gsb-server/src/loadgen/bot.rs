@@ -17,8 +17,12 @@ use gsb_kit::client::{ClientError, Counters, PrivateEvent, Snapshot};
 
 use crate::Args;
 
+#[cfg(feature = "game-arena")]
+mod arena;
 mod demo;
 mod flags;
+#[cfg(feature = "game-mmo")]
+mod mmo;
 
 pub(crate) use demo::*;
 pub(crate) use flags::*;
@@ -37,8 +41,27 @@ pub(crate) trait LoadBot: Send + Sync {
     /// The churn client's input numbered `seq` (`--churn-secs`): a plain
     /// per-id target; the churn client keeps no view.
     fn churn_input(&self, id: u64, seq: u64) -> (u16, Vec<u8>);
+    /// What RESULT's `visibility=`, `shards=` and `profile=` say for a
+    /// game whose layout is its own; `None` = the demo, whose layout is
+    /// the command line's (`--visibility`, `--topology`, `--profile`).
+    fn labels(&self) -> Option<Labels> {
+        None
+    }
+    /// Whether RESULT carries `shard_members=` (the per-shard population
+    /// of a sharded game — the MMO's spread across its shards, K4).
+    fn shard_spread(&self) -> bool {
+        false
+    }
     /// One line for the run's header (stderr): what the bot does.
     fn describe(&self) -> String;
+}
+
+/// A game's fixed layout, as RESULT reports it (see [`LoadBot::labels`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Labels {
+    pub(crate) visibility: &'static str,
+    pub(crate) shards: u32,
+    pub(crate) profile: &'static str,
 }
 
 /// One client's game-specific state: the kit's reference client over the
@@ -63,7 +86,13 @@ pub(crate) trait BotClient: Send {
 /// The games this build has a bot for, in catalog order — the server's
 /// compiled-in games (one cargo feature each).
 pub(crate) fn games() -> Vec<&'static str> {
-    vec![gsb_server::games::demo::DemoModule::NAME]
+    vec![
+        gsb_server::games::demo::DemoModule::NAME,
+        #[cfg(feature = "game-arena")]
+        gsb_server::games::arena::ArenaModule::NAME,
+        #[cfg(feature = "game-mmo")]
+        gsb_server::games::mmo::MmoModule::NAME,
+    ]
 }
 
 /// The catalog's spelling of `name`, or the error naming every game this
@@ -86,6 +115,12 @@ pub(crate) fn bot_for(args: &Args) -> Arc<dyn LoadBot> {
             still_frac: args.still_frac,
             spawn_half: args.spawn_half,
             cell_size: args.cell_size,
+        }),
+        #[cfg(feature = "game-arena")]
+        gsb_server::games::arena::ArenaModule::NAME => Arc::new(arena::ArenaBot),
+        #[cfg(feature = "game-mmo")]
+        gsb_server::games::mmo::MmoModule::NAME => Arc::new(mmo::MmoBot {
+            move_ms: args.move_ms,
         }),
         other => unreachable!("--game `{other}` is not in the catalog the parser checks"),
     }

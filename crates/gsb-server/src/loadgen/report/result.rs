@@ -175,6 +175,17 @@ pub(crate) fn print_report(
         .max_by_key(|c| c.total())
         .unwrap_or_default();
     let server_closes_total = server_closes.total();
+    // The game's own layout (arena / MMO) or the command line's (demo).
+    let bot = crate::bot::bot_for(args);
+    let labels = bot.labels();
+    // A sharded game's spread across its shards, early and late in the
+    // steady window (per-shard members; see `spread.rs`).
+    let spread = if bot.shard_spread() {
+        steady_span(server_reports, peak_members)
+            .map(|(first, last)| (members_by_row(first), members_by_row(last)))
+    } else {
+        None
+    };
 
     println!("=== gsb loadgen raw report ===");
     println!(
@@ -332,6 +343,9 @@ pub(crate) fn print_report(
             "overlap (steady state): records_per_tick={:.1} overlap_x={:.2} (peak members {})",
             rec_per_tick, overlap, peak_members
         );
+        if let Some((first, last)) = &spread {
+            println!("server shards (members per shard, steady window): first={first} last={last}");
+        }
         if let Some(g) = &last_room.and_then(|l| l.registry) {
             println!(
                 "server registry (final): rooms={} conns={} opens={} closes={} joins={} leaves={} peak_conns={}",
@@ -386,19 +400,23 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{} game={}",
         mode,
-        args.visibility,
+        match labels {
+            Some(l) => l.visibility.to_string(),
+            None => args.visibility.to_string(),
+        },
         // Shard-aware like the legacy spelling: the EXPLICIT topology key
         // decides when present (an operator running
         // `--topology sharded --visibility spatial` IS on the grid even
         // though the legacy spelling says spatial); without it the legacy
         // derivation applies.
-        match args.topology {
-            Some(gsb_server::Topology::Sharded) => args.shard_count,
-            Some(gsb_server::Topology::Single) => 1,
-            None if args.visibility == gsb_server::Visibility::Sharded => args.shard_count,
-            None => 1,
+        match (labels, args.topology) {
+            (Some(l), _) => l.shards,
+            (None, Some(gsb_server::Topology::Sharded)) => args.shard_count,
+            (None, Some(gsb_server::Topology::Single)) => 1,
+            (None, None) if args.visibility == gsb_server::Visibility::Sharded => args.shard_count,
+            (None, None) => 1,
         },
         args.max_snapshot_bytes,
         args.clients,
@@ -436,10 +454,11 @@ pub(crate) fn print_report(
             .unwrap_or(0),
         peak_conns,
         last_room.map(|l| l.metrics_dropped).unwrap_or(0),
-        match args.profile {
-            Profile::Ring => "ring",
-            Profile::Spread => "spread",
-            Profile::Still => "still",
+        match (labels, args.profile) {
+            (Some(l), _) => l.profile,
+            (None, Profile::Ring) => "ring",
+            (None, Profile::Spread) => "spread",
+            (None, Profile::Still) => "still",
         },
         args.offset,
         sep.map(|s| s.procs).unwrap_or(1),
@@ -481,7 +500,12 @@ pub(crate) fn print_report(
         deltas,
         gap_drops,
         view_size_total,
-        args.still_frac,
+        // A game with its own bot has no still clients.
+        if labels.is_some() {
+            0.0
+        } else {
+            args.still_frac
+        },
         // The room's RPC counters (zero on the smoke scenarios: they
         // carry no RPC traffic — their presence in the line and their
         // zero values are what the smoke asserts on; a shifted metric
@@ -515,6 +539,18 @@ pub(crate) fn print_report(
             .iter()
             .map(|(r, n)| format!(" server_close_{}={n}", r.label()))
             .collect::<String>(),
+        // A sharded game's per-shard members at the end of the steady
+        // window (`shard_members=a,b,c,d`; `-` without server reports) —
+        // only for a bot that asks (the MMO: its spread across the shards
+        // is the measurement, K4). Right before `game=`, so every key
+        // before it keeps its place and `game=` stays last; the demo's
+        // line is unchanged.
+        if bot.shard_spread() {
+            let last = spread.as_ref().map_or("-", |(_, last)| last.as_str());
+            format!(" shard_members={last}")
+        } else {
+            String::new()
+        },
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
         args.game,
