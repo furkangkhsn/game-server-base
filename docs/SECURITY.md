@@ -238,6 +238,28 @@ bağlantı kapanış koduyla düşürülür, reader pump `StreamRejected` bildir
 | 2 | **Unauthed cap:** `max_connections * %25` (min 64); aşan yeni bağlantı ERROR 9 ile nazikçe reddedilir | Script'li handshake fırtınasının (çok IP'li) bellek büyütmesini sınırlar; meşru yavaş-auth akışı için bol pay |
 | 3 | Sayımlar aktör-local sayaçlarla; detach/resume bu sınıfa girmez (resume ticket'lıdır, authed sayılır) | RECONNECT semantiği korunur |
 
+### 4.1 rUDP parçalama: yeniden birleştirme sınırları (rUDP parçalama turu)
+
+rUDP oyun bandında bütçeyi aşan kare FRAG datagram'larına bölünür
+(DESIGN §6 "MTU"). Yeniden birleştirme **yalnız istemcide** yapılır ve
+her durumu sabitle sınırlıdır; sunucu parça kabul etmez.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Sunucu istemci → sunucu FRAG'ını reddeder** (demux `frag_refused` sayar, hiçbir şey iletmez, oturumun idle penceresi de tazelenmez) | Girdiler onlarca bayt — parçalamaya ihtiyaç yok. Sunucuda birleştirme durumu, handshake'i geçmiş her oturumun sunucuya tutturabileceği bellek olurdu ve bütün oturumların paylaştığı tek demux görevinde dururdu; reddetmek demux'u datagram başına durumsuz ve O(1) tutar. Tanımadığı tür zaten `bad_datagrams`'a düşüyordu; ayrı kol ve sayaç kararı görünür kılar |
+| 2 | Mesaj başına en çok **16 parça** (`FRAG_MAX_COUNT`); başlıkta `count` 2..=16, `index < count` değilse parça reddedilir (`frag_rejected`); aynı mesajın parçaları `count`'ta anlaşmazsa reddedilir | Tek mesajın tutabileceği bellek parça sayısıyla sınırlı (≤ 16 × alım tamponu). Sunucu tarafında aynı tavan: 16 parçaya sığmayan kare eski yoldan atılır + sayılır |
+| 3 | Aynı anda en çok **4 yarım mesaj** (`FRAG_SLOTS`, slot = id mod 4); slot'taki mesajdan daha yeni id eskisini düşürür (`frag_dropped_incomplete`), daha eski id'nin parçası reddedilir | Sabit dizi, map yok, büyüme yok: datagram başına O(1). Geç parça düşmüş mesajı diriltemez; id'ler seri sırayla karşılaştırıldığı için sarma (65535 → 0) yeni mesajı eski saymaz |
+| 4 | Oturum başına **64 KiB** tutulan parça (`FRAG_MEM_CAP`); aşılacaksa önce en eski BAŞKA yarım mesaj düşer | Meşru tepe ~2 mesaj (grup karesi + private full) × ~10 KB; 64 KiB 3× pay. Slot sayısı × parça tavanı zaten sınırlar, bayt tavanı en kötü durumu (4 × 16 büyük parça) yarıya indirir |
+| 5 | İlk parçasından **250 ms** sonra tamamlanmamış mesaj düşer (`FRAG_MAX_AGE`; sonraki parça geldiğinde süpürülür, 4 slot = sabit iş) | Parçalar tek yazıcıdan art arda çıkar; 250 ms her gerçekçi jitter'ın üstünde, bir keep-alive periyodunun altında |
+| 6 | **Kontrol bandı parçalanmaz**; bütçeyi aşan kontrol karesi oturumu bitirir (`rel_dead`), seq harcanmadan | Güvenilir bant parça başına ACK gerektirirdi; aşan kontrol karesi zaten bir hatadır (değişken alanları istemcinin tek bütçe-içi datagram'ını yansıtır) — sessiz atmak eskiden akışı tıkıyordu |
+
+**Saldırı yüzeyi.** FRAG, RAW kadar sahte üretilebilir (rUDP'de imza yok —
+§6 NOT-DONE "rUDP crypto"): istemcinin portunu bilen ve sunucunun
+adresini taklit eden biri parça enjekte edebilir. Sınırlar bunun
+maliyetini istemci başına 64 KiB ve datagram başına sabit işle
+tutar; meşru yarım mesajları düşürmek (snapshot bandını bozmak) sahte
+RAW snapshot enjekte etmekten daha güçlü bir saldırı değildir.
+
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
 K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının

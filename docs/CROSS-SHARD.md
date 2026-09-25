@@ -425,6 +425,12 @@ Her koşuda `joined = left = N`, `errors=0`, `server_closes=0`.
   `snap_overflows` ~32 k — düellocular 16 noktada kümelenince hücre
   full'ları 1400 B tavanını aşıyor (G3'ün MMO 500 tabanında 4229).
   Kümelenmiş MMO yükünde snapshot bölme ihtiyacı; bu turun kapsamı dışı.
+  → Taşımada çözüldü (rUDP parçalama turu, DESIGN §6 "MTU"): aşımların
+  ~%96'sı delta, gerisi keep-alive full (tepe 2566 B); rUDP'de aynı
+  koşu (`--transport udp --stagger-ms 5`) artık ~700 k mesajı 2'şer
+  parçayla, `frag_dropped=0`, `joined = left = 500`, 0 kapanışla
+  taşıyor (önce: ~10,4 k kare atılıyor, düellocuların çoğu kendini hiç
+  görmüyordu, 206 oturum idle-sweep ile kapanıyordu).
 
 **Varsayılan yükte A/B (base `276041e` ↔ HEAD, dönüşümlü üç çift,
 200 istemci, `--duration 10 --write-stall-secs 0`, yük 4,4–7,4):** üç

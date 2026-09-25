@@ -869,6 +869,16 @@ kanalı) aynı boyuttaki demo koşusuyla aynı mertebede (A/B'de base
   (`max_snapshot_bytes` 1400; `snap_overflows` sayıyor, kareler yine
   gönderiliyor). TCP'de sorun değil; arena bir gün rUDP'de koşarsa
   takım odasına delta ya da parçalama gerekir. Kod değişmedi (kayıt).
+  → **ÇÖZÜLDÜ, taşımada (rUDP parçalama turu, DESIGN §6 "MTU"):**
+  rUDP artık bütçeyi aşan oyun bandı karesini FRAG datagram'larına
+  böler, istemci birleştirir; kit ve çekirdek değişmedi. A/B
+  (`--transport udp --stagger-ms 5`): arena 200'de yazıcının attığı
+  grup datagram'ı ~45 500 → 0 (45 533 mesaj 91 066 parçayla gitti,
+  `frag_dropped=0`), arena 500'de ~100-124 k → 0; istemci başına
+  full sayısı 5×/16× arttı (botlar artık kendini görüyor). Arena 500
+  rUDP'de adım p50/p90 aynı koşuda TCP'ninkiyle aynı aralıkta
+  (968-1120/1408-1840 ↔ 1104-1136/1632-1760 µs). `snap_overflows`
+  sayılmaya devam ediyor — artık rUDP'de parçalanma sinyali, kayıp değil.
 - **G3-2 — join'de grup delta'ları one-shot private full'dan önce
   gelebiliyor** (`gap_drops`, kayıpsız TCP'de): MMO 200/500/1000'de
   istemci başına ~0,8, demo'nun orkestre spatial 1000'inde de aynı

@@ -687,7 +687,9 @@ kadar yaşar — sınır: `idle_timeout`).
 (oyun bandı: kayıp toleranslı, sırasız — snapshot'lar ve MOVE_TO);
 `1` REL `[u32 seq][u16 op][payload]` (kontrol bandı: cumulative ACK +
 RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
-`2` ACK `[u32 next_expected]`; `3` HELLO `[u64 nonce][u64 cookie]`.
+`2` ACK `[u32 next_expected]`; `3` HELLO `[u64 nonce][u64 cookie]`;
+`4` FRAG `[u16 mesaj id][u8 index][u8 count][parça]` (yalnız sunucu →
+istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU").
 Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
 = oyun (kayıp toleranslı). Yeniden gönderim: RTO 50 ms, vazgeçme
 250 ms (sayılır), out-of-order penceresi 16; çift frame ACK'lenir ama
@@ -695,11 +697,125 @@ yeniden iletmez. ACK'ler demux tarafından oturumun writer'ına **out
 kanalı üzerinden** (UDP_ACK frame olarak) verilir — komut kanalı yok,
 tek-beklenen-kaynak özdeşliği korunur.
 
-**MTU (v1):** `max_datagram_bytes` varsayılan 1472 (1500−20−8). Bütçe
-üstü **çıkan** datagram: parçalanmaz, reddedilmez — **atılır +
-sayılır + oturum başına tek uyarı** (parçalama ayrı bir protokol;
-reddetmek canlı oturumu kırardı). Oda tarafındaki
-`max_snapshot_bytes` (vars. 1400) uyarısı asıl sinyaldir.
+**MTU — oyun bandı parçalanır (rUDP parçalama turu).**
+`max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
+geçerli. Eskiden bütçe üstü çıkan datagram atılır + sayılırdı; oda
+tarafındaki `max_snapshot_bytes` uyarısı "grubu böl" sinyaliydi. İki açık
+bulgu aynı kökten geliyordu: arenanın takım sisi full'ları ~150 birimin
+üstünde 1400 B'yi aşıyor (G3-1), kümelenmiş MMO yükünde
+`snap_overflows` ~32 k (CROSS-SHARD §4c). **Karar: çözüm taşımada** —
+rUDP'de parçalama + yeniden birleştirme; böylece her oyun ve her kare
+türü (grup snapshot'ı, one-shot `Private` full, keep-alive full) tek
+yerde kapsanır, çekirdeğin "grup başına tek payload" sözleşmesi ve kitin
+zarfı değişmez (`gsb-core`/`gsb-kit` kodu değişmedi).
+
+*Önce ölçüm (afe7fba, geçici enstrümantasyon, loopback):* en büyük tek
+kayıt 17 B — her mesaj temiz bölünür. TCP'de (tam nüfus) arena 200 full
+p50/p99/max 1748/1905/1923 B, arena 500 4430/5099/5128 B; MMO 500
+varsayılan botta aşımların çoğu **delta** (p50 1834 B, 4641 deltanın
+4152'si 1472 üstü), keep-alive full p50 1870 B; MMO 500 düello
+(`--mmo-duel-frac 0.2`, 90 sn) 32 481 aşımın 31 252'si delta, 1230'u
+keep-alive full, 1'i taze full; tepe 2566 B. rUDP'de (bağlantılar
+`--stagger-ms 5` ile yayılmış) yazıcının attığı: arena 200'de grup
+datagram'larının %80'i, arena 500'de %93'ü; MMO 500'de 2424 grup full +
+319 private full, düelloda 9646 + 749. Kayıp full'lar botların kendini
+görmesini de engelliyordu (MMO'da nüfus shard 0'da yığıldı).
+
+- **Kapsam:** yalnız **oyun bandı** (op ≥ 1000), sunucu → istemci. Kare
+  birimi ne taşıdığına bakmaz: grup delta'sı, grup full'ü, keep-alive
+  full'ü, private full — hepsi aynı yoldan.
+- **Tel:** `4 FRAG [u16 LE mesaj id][u8 index][u8 count][parça]`.
+  Parçalar index sırasıyla birleşince RAW datagram'ının tür baytından
+  sonraki baytlar (`[u16 op][payload]`) çıkar. Parçalar eşit (`bütçe −
+  5` B), sonuncu kısa. Mesaj id oturum başına, sarmalı, seri sırayla
+  karşılaştırılır. **Parçalanmayan her datagram bayt-bayt aynı**
+  (bütçe içi RAW, REL, ACK, HELLO — test sabitliyor). FRAG'ı bilmeyen
+  eski istemci tür 4'ü yok sayar: onun için kare eskisi gibi kaybolur.
+- **Kayıp semantiği:** mesaj ancak bütün parçaları gelince teslim
+  edilir; yeniden gönderim yok. Parçası eksik mesaj, slot'unu daha yeni
+  bir mesaj alınca ya da ilk parçasından 250 ms sonra (`FRAG_MAX_AGE`)
+  düşer ve sayılır; geç kalan parçaları reddedilir, mesaj asla
+  diriltilmez. Bant eskisi gibi kendini iyileştirir: sonraki full (en geç
+  keep-alive) kaybı kapatır.
+- **Sınırlar (istemci, hepsi sabit, datagram başına O(1), map yok):**
+  mesaj başına en çok **16 parça** (`FRAG_MAX_COUNT`; varsayılan bütçede
+  23 472 B — ölçülen en büyük full'ün, arena 1000'in 10 267 B'sinin
+  2,3 katı; aşan kare eski yoldan atılır + sayılır, oturum başına tek
+  uyarı); aynı anda en çok **4 yarım mesaj** (`FRAG_SLOTS`; slot = id
+  mod 4 — yeni mesaj yalnız kendi slot'undaki eskiyi düşürür; bir tick
+  oturum başına en çok iki parçalı mesaj taşır: grup karesi + private
+  full); oturum başına **64 KiB** tutulan parça (`FRAG_MEM_CAP`; aşınca
+  en eski BAŞKA yarım mesaj düşer). Ayrıntı ve saldırı yüzeyi:
+  SECURITY §4.1.
+- **Kontrol bandı parçalanmaz.** Sunucu → istemci kontrol kareleri
+  (AUTH/JOIN/LEAVE sonuçları, HEARTBEAT_ACK, ERROR) onlarca bayt;
+  değişken alanları istemcinin tek bir bütçe-içi datagram'la gönderdiğini
+  yansıtır. Bütçeyi aşan kontrol karesi bu yüzden bir hata ve **oturumu
+  bitirir** (REL bandının ölüm yolu, `rel_dead`), seq harcanmadan önce
+  kontrol edilir. Eskiden seq alıp atılıyordu: karşı tarafın kümülatif
+  akışı o delikte takılır, oturum 5 sn sonra yanlış sebeple ("ACK
+  ilerlemesi yok") ölürdü.
+- **İstemci → sunucu parçaları reddedilir** (demux sayar, hiçbir şey
+  iletilmez): girdiler onlarca bayt; sunucuda birleştirme durumu, her
+  oturumun büyütebileceği ve tüm oturumların paylaştığı tek görevde
+  duran bellek olurdu. Yalnız istemci birleştirir.
+- **Sayaçlar:** yazıcı (oturum sonunda log) `frag_messages`,
+  `frag_datagrams`, `dropped_oversized` (tavan aşımı); istemci
+  (`UdpClientStats`) `frag_reassembled`, `frag_dropped_incomplete`,
+  `frag_rejected`; loadgen `RESULT` satırında `frag_reassembled`,
+  `frag_dropped`. `max_snapshot_bytes`/`snap_overflows` anlamını
+  korur (payload boyu eşiği aşan snapshot sayısı) ama rUDP'de artık bir
+  **bant genişliği/parçalanma** sinyalidir, kayıp sinyali değil — kayıp
+  sinyali `frag_dropped_incomplete`.
+
+*Sonra (A/B, afe7fba ↔ HEAD, dönüşümlü çiftler, `--write-stall-secs 0
+--transport udp --stagger-ms 5`):* yazıcının attığı datagram her
+senaryoda 0'a indi (arena 200 ~45 k, arena 500 ~100-124 k, demo 200
+~54,8 k, MMO 500 düello ~10,4 k), `frag_dropped=0`; `server_hz` 30,
+hata ve sunucu kapanışı 0, `joined = left = N`. Önce botlar full'ları
+göremediği için oyun farklı oynanıyordu (arena birimleri kıpırdamıyor,
+MMO düellocuları kendini görmüyor, 206 oturum idle-sweep), dolayısıyla
+adım süresi taban ile değil aynı yükteki TCP ile karşılaştırılır: arena
+500 rUDP 968-1120/1408-1840 µs ↔ TCP 1104-1136/1632-1760 µs; MMO düello
+rUDP 264-312/328-456 µs, `out_bps_per_conn` ~40,8 k (C2'nin TCP
+tablosu 264-280/352-384, ~41 k). Demo 200 TCP A/B gürültü içinde.
+
+*Bu turda bulunan iki istemci hatası (parçalama onları açığa çıkardı,
+ikisi de düzeltildi):* (a) istemcinin canlılık saati yalnız boş kuyruklu
+bir RTO turunda tazeleniyordu; oyun bandı hiç susmayan istemci turu
+hiç almıyor, oturum sonundaki LEAVE ilk turda "5 sn ACK yok" sayılıp
+bant ölüyordu → saat artık kuyruk boştan doluya geçerken başlar;
+(b) yeniden gönderim turu yalnız okuma zaman aşımında koşuyordu, meşgul
+istemci kayıp LEAVE'i hiç yeniden göndermiyordu (arena 500 `left`
+221-303) → tur artık her datagram'dan sonra da koşar (O(1)).
+
+*Açık kalan iki bulgu (bu turun kapsamı dışında):* (1) istemci proof'u
+GÖNDERİNCE bağlı sayılıyor; aynı anda 200+ el sıkışmada sunucu soketinin
+alım kuyruğu loopback'te taşıyor, proof kaybolan istemci 5 sn sonra
+ölüyor (afe7fba'da 200 istemciden 65-101'i katılabildi) — ölçümler bu
+yüzden `--stagger-ms 5` ile; (2) çekirdekte kapanış yarışı: `stop()`
+Shutdown'ı gönderip ticker'ı hemen iptal ediyor; registry odanın DOLU
+kontrol kanalına `send().await` ile Shutdown yazmayı beklerken oda artık
+tick almıyor ve broadcast kapanmıyor (registry bir `Ticker` tutuyor) →
+kilitlenme. Stop anında kontrol kapasitesinden (128) fazla canlı üye
+kopunca tetikleniyor (geçici logla doğrulandı: `cap=0` bekleyişi).
+
+**Elenen alternatifler:** (1) *kit seviyesinde çok parçalı snapshot*
+(kit grup karesini kendini tanımlayan parçalara böler, istemci
+birleştirir) — kayıp davranışı aynı, ama çekirdek seam'i değişir (grup
+başına tek payload → birden çok), zarfa protokol alanı girer, her
+istemci değişir ve yalnız kitin kurduğu kareler kapsanır (one-shot
+`Private` full ya da oyunun kendi büyük karesi dışarıda kalır);
+(2) *udp dokümanının eski tavsiyesi, "snapshot grubunu böl"* — bant
+genişliği için hâlâ doğru cevap, ama TEK cevap olarak rUDP'yi arenanın
+takım sisi ve MMO'nun kümelenmiş kalabalığı için kullanılamaz kılıyordu;
+orada grup oyunun kuralıdır; (3) *IP parçalamasına bırakmak* (datagram'ı
+bütün gönder, çekirdek bölsün) — IPv4 parça kaybı datagram'ı yine
+kaybettirir, IPv6 router'ları parçalamaz, birçok ara kutu IP parçalarını
+düpedüz atar; (4) *güvenilir parçalar* (parça başına ACK + yeniden
+gönderim) — bant kendini iyileştirir; yeniden gönderilen eski snapshot
+sıradakinden değersizdir; (5) *sunucuda da birleştirme* (istemci → sunucu
+parçaları) — yukarıda; ihtiyaç yok, yüzey var.
 
 **Boşta kapatma (FIN yok):** demux'un `BTreeSet<(Instant, SocketAddr)>`
 deadline heap'i (gömlekli geçersiz kılma — girdi yalnız
@@ -1209,12 +1325,12 @@ doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
 |---|---|---|
 | Yayın = tam snapshot (grup başına) | Basitlik + düşmeye tolerans | delta → AOI (§8) |
 | Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz` (tick hızını aşamaz: oda kendi tick hızından hızlı keepalive yapamaz; yüksek değer `KeepaliveRate` ile reddedilir); 0 ile kapatılabilir |
-| `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) | rUDP MTU hazırlığı; snapshot'lar bölünmüyor | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
+| `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) + `snap_overflows` sayacı | Payload çekirdekte bölünmez; rUDP'de eşiği aşan kare **taşımada parçalanır** (§6 "MTU"), yani sayaç artık bant genişliği/parçalanma sinyali — kayıp sinyali istemcinin `frag_dropped_incomplete`'i | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | Accept loop abort | `Listener::close` rUDP turunda eklendi (demux kapatma); accept abort hâlâ kaskadın son halkası | §9 |
 | rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
-| rUDP: **parçalama yok** — bütçe üstü datagram atılır + sayılır | parçalama ayrı bir protokol (assembly penceresi, timeout, çift teslim); 1400 B oda bütçesi + 1472 B MTU marjı yeterli (snapshot aşımı zaten oda tarafında sayılır) | `snap_overflows` sinyaliyle grup bölme (AOI) + gerekirse frag katmanı — §8 |
+| rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | rUDP: SO_RCVBUF ayarı yok | tokio 1.53.1 `UdpSocket`'inde buffer boyutu setter'ı yok (raw fd gerekir) | tokio setter'ı geldiğinde / raw fd wrapper |
 | rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
