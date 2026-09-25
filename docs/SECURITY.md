@@ -16,6 +16,7 @@
 | Sunucu-başlatımlı kapanış sayaçları, sebep bazında | Stall gözlemlenebilirliği turu | ✅ Uygulandı (§3.6) |
 | WS kapısının RFC 6455 uyumu (parça arası veri çerçevesi, uzunluk kodlaması, kapanış kodları) + CI'da Autobahn kapısı | WS uyum kapısı turu | ✅ Uygulandı (§3.7); Autobahn işi yerelde koşulmadı |
 | rUDP cookie rotasyonu (yakalanan proof'un son kullanma tarihi) | rUDP doğruluk turu | ✅ Uygulandı (DESIGN §5, "Cookie rotasyonu"; slot = 10 sn, pencere 10-20 sn) |
+| rUDP el sıkışma kaybı: proof yeniden gönderimi + kabul (`ACK{1}`), sunucu proof'ta idempotent | H turu | ✅ Uygulandı (§4.2; DESIGN §6 "El sıkışma kaybı") |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 
@@ -259,6 +260,27 @@ adresini taklit eden biri parça enjekte edebilir. Sınırlar bunun
 maliyetini istemci başına 64 KiB ve datagram başına sabit işle
 tutar; meşru yarım mesajları düşürmek (snapshot bandını bozmak) sahte
 RAW snapshot enjekte etmekten daha güçlü bir saldırı değildir.
+
+### 4.2 rUDP el sıkışma kabulü: amplifikasyon ve sahte proof (H turu)
+
+El sıkışma artık kayıpta kendini iyileştiriyor (DESIGN §6 "El sıkışma
+kaybı"): sunucu doğrulanan proof'a 5 baytlık bir kabul (`ACK{1}`)
+yollar, istemci onu görene dek proof'u yeniden gönderir. Stateless
+cookie'nin iki özelliği korunuyor:
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | Kabul **yalnız doğrulanan proof'a** gider; sahte ya da süresi geçmiş proof'a (ve challenge isteğine) hiçbir şey dönmez | Kabul, dönüş yolunun sahibi olduğunu kanıtlamış adrese borçlanır: oran 5/18 < 1. Sahte kaynaklı trafik hâlâ en fazla aynı boyutta challenge alır (oran ≤ 1, değişmedi) |
+| 2 | Kurulu oturumun adresinden gelen proof **yeniden doğrulanır**; geçerliyse oturumun güncel ACK'iyle cevaplanır, geçersizse ya da challenge isteğiyse cevapsız kalır | Kurulu oturum, adres taklidiyle o oturuma ACK yansıtmak için kullanılamaz. Yakalanan proof'un tekrarı en fazla 10-20 sn (cookie penceresi) boyunca yalnız o adrese 5 B'lik ACK üretir — yeni oturum değil |
+| 3 | Yeniden gönderilen proof **ikinci oturum açmaz** (aynı adres = aynı oturum, tek `ConnectionId`), güvenilir durumu sıfırlamaz | Tekrar oynatılan proof mevcut oturumu bozamaz ya da çoğaltamaz; oturum tahsisi hâlâ proof başına en fazla bir |
+| 4 | İstemcinin vazgeçme sınırı (5 sn) bir cookie diliminin (10 sn) altında — derleme zamanı `assert` | Yeniden gönderim ilk cookie'yi kullanır; son kopya da pencere içinde kalır, yeni challenge istemek (yeni cookie, yeni tahsis penceresi) gerekmez. Cookie son kullanma semantiği (yakalanan proof 10-20 sn'de ölür) değişmedi |
+
+Kilit: `udp::demux::tests::handshake` (çift proof tek oturum + güncel
+ACK; doğrulanmayan proof ve challenge isteği cevapsız; rotasyonu aşan
+yeniden gönderim kurar, iki dilim eski kopya cevapsız),
+`udp::tests::forged_proof_is_rejected` (sahte proof'a cevap yok),
+`udp::tests::handshake` (kayıp proof/challenge/kabul iyileşir; vazgeçiş
+temiz `TimedOut`, zombi yok).
 
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 

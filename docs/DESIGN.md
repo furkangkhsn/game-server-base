@@ -615,7 +615,8 @@ sinyali; §14.5).
 
 **El sıkışma (stateless cookie):** `istemci→HELLO{nonce,0}` /
 `sunucu→HELLO{nonce,F(nonce,peer,key,slot)}` /
-`istemci→HELLO{nonce,cookie}` → oturum kurulur. `F` = splitmix64
+`istemci→HELLO{nonce,cookie}` → oturum kurulur → `sunucu→ACK{1}`
+(kabul; aşağıda "El sıkışma kaybı"). `F` = splitmix64
 katlanması. **Cookie key** proses başına 16 bayttır;
 iki kaynaktan biriyle kurulur: (1) konfigürasyonda `cookie_key`
 verilmişse o (operatör denetimi — deploy'da sabit anahtar isteyenler
@@ -627,7 +628,8 @@ tahmin edilebilir bir değer asla kullanılmaz). v1'de kriptografik katman
 edilemez, dolayısıyla sahte-proof koruması key'in *gibi görünen*
 (tahmin edilemez) olmasına dayanır. Çift yönlü mesajlar
 aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
-üretilemez.
+üretilemez. Kabul (5 B) yalnız doğrulanan proof'a gider: oran 5/18,
+sahte proof'a hiçbir şey.
 
 **Cookie rotasyonu (yakalanan proof'un son kullanma tarihi):** key tek
 başına yetmiyordu. `F` yalnız (key, nonce, peer)'in fonksiyonu olduğu
@@ -678,6 +680,71 @@ ikisi de demux görevinden yazılır ve `bind`'ın "entropi ya da başlama"
 garantisi artık çalışma zamanındaki her yeni çekiliş için de geçerli
 olmak zorundadır). Slot terimi aynı son-kullanma'yı key'i değişmez
 bırakarak sağlar — bir kez, bind'da çekilir, testin kilitlediği gibi.
+
+**El sıkışma kaybı (H turu — `connect` kabulü bekler).** Eskiden
+istemci challenge isteğini yeniliyordu (500 ms, 3 sn) ama proof'u
+GÖNDERDİĞİ an kendini bağlı sayıyordu. Proof kaybolursa (ölçüldü: aynı
+anda 200+ el sıkışma loopback'te tek sunucu soketinin alım kuyruğunu
+taşırıyor) sunucuda oturum yoktu, AUTH boşa düşüyor, REL bandı 5 sn
+sonra ölüyordu: afe7fba'da kademesiz 200 istemcinin 62-101'i katılıyordu.
+Kayıp noktaları: challenge isteği/challenge → önceden de yenileniyordu;
+**proof → hiç iyileşmiyordu**; ilk kontrol karesi (AUTH) → REL
+yeniden gönderimi (değişmedi).
+
+- **Karar: istemci yalnız sunucunun sözüyle bağlı.** Doğrulanan (ve
+  endpoint'i accept loop'a ulaşan) proof'a sunucu **kabul** yollar:
+  `ACK{1}` — yeni oturumun kümülatif ACK'i, "bana seq 1'i yolla"; var
+  olan datagram türü, eski istemci için etkisiz. `UdpClient::connect`
+  ancak sunucu oturumu tuttuğunu gösterince döner: kabul ya da HERHANGİ
+  bir oturum datagram'ı (ACK/REL/RAW/FRAG — sunucu bunları yalnız oturum
+  tablosundaki peer'e yollar; kabulün yerine gelen kare kaybolmaz, normal
+  giriş yoluna verilir). O zamana kadar güncel adım (challenge isteği ya
+  da proof) her `HANDSHAKE_RTO`'da (= taşımanın tek RTO'su, 50 ms)
+  yeniden gönderilir; `HANDSHAKE_DEADLINE`'da (= REL canlılık sınırı,
+  5 sn) `TimedOut` ile vazgeçilir. Sayaçlar: istemci
+  `challenge_retries`/`proof_retries`, loadgen `hs_retries`, sunucu
+  demux `proofs_reanswered`. RTO seçimi ölçüldü: 500 eşzamanlı el
+  sıkışmada 250 ms'ye karşı 50 ms connect p50'yi ~250 ms'den ~50 ms'ye
+  indirdi, yeniden gönderim sayısı artmadı (sürü etkisi yok).
+- **Sunucu proof'ta idempotent.** Oturumu olan adresten gelen geçerli
+  proof bir YENİDEN gönderimdir (ilk kabul ya da proof'un ilk kopyası
+  kayboldu): oturumun GÜNCEL kümülatif ACK'iyle cevaplanır, başka hiçbir
+  şey olmaz — ikinci oturum yok, ikinci `ConnectionId` yok, güvenilir
+  durum sıfırlanmaz. O adresten challenge isteği ya da doğrulanmayan
+  proof yine cevapsız: kurulu oturum yansıtıcı olmaz.
+- **Rotasyon argümanı.** Her proof yeniden gönderimi İLK cookie'yi
+  kullanır (ikinci challenge yok sayılır). Cookie, istemcinin ilk
+  isteğinden sonra bir N diliminde üretildi ve N+1'in sonuna kadar —
+  en az bir `COOKIE_SLOT` (10 sn) — geçerli; son yeniden gönderim ilk
+  istekten en fazla 5 sn sonra çıkar, dolayısıyla tek yön gecikmesi
+  kalan 5 sn'nin altındaki her yolda pencereye düşer: rotasyonu aşan
+  yeniden gönderim doğrulanır, yeniden başlatma yolu gerekmez. Eşitsizlik
+  derleme zamanı `assert`'i: sınırı bir dilimin ötesine uzatmak el
+  sıkışmayı değil derlemeyi kırar.
+- **Bedel (pinlendi):** olaysız el sıkışma bir datagram uzun — HELLO
+  18 B → challenge 18 B → proof 18 B → **kabul 5 B** — ve `connect` bir
+  RTT geç döner (AUTH kabulü bekler). QUIC Retry ve DTLS
+  HelloVerifyRequest'in, benzediği iki stateless-cookie el sıkışmasının,
+  2-RTT şekli. Vazgeçiş zombi bırakmaz: inmeyen proof hiçbir şey
+  ayırmadı; bütün kabulleri kaybolan oturum bir daha trafik görmez ve
+  idle süpürmesi onu aktörün posta kutusu üzerinden bitirir.
+
+**Elenen alternatifler:** (1) *`SO_RCVBUF`'ı büyütmek* (BACKLOG B4) —
+eşiği taşır, kaldırmaz: daha derin kuyruk 500 el sıkışmayı yutar,
+5 000'i yutmaz; kayıplı gerçek yol, sunucunun tamponu ne olursa olsun
+proof düşürür. Tek kayıp datagram'ı iyileştiremeyen el sıkışma her kuyruk
+derinliğinde yanlıştır; B4 bir verim ayarı olarak açık kalır, bu
+düzeltme olarak değil. (2) *Sunucu tarafında el sıkışma hızlandırma*
+(tick başına N kabul, gerisini düşür/ertele) — çekirdeğin demux görmeden
+düşürdüğünü sunucu hızlandıramaz; ertelemek doğrulanmamış peer için
+durum tutmak demek, stateless el sıkışmanın yasakladığı tam şey.
+(3) *Kabul olmadan ilk sunucu datagram'ında onaylamak* (tel değişmez) —
+sunucu istemcinin ilk kontrol karesine kadar hiçbir şey yollamaz;
+`connect` onaysız oturum döndürür, proof'un yeniden gönderimleri REL
+bandının saatine biner, sessiz kalan istemci bağlı olup olmadığını
+hiç öğrenemez. (4) *İstemci karelerinin cookie taşıması* (TCP SYN
+cookie tarzı, her kare yeniden doğrular) — oturum başına bir 5 B
+datagram'dan kaçmak için oturumun her datagram'ına 8 B.
 
 NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
 yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
@@ -789,7 +856,8 @@ bant ölüyordu → saat artık kuyruk boştan doluya geçerken başlar;
 istemci kayıp LEAVE'i hiç yeniden göndermiyordu (arena 500 `left`
 221-303) → tur artık her datagram'dan sonra da koşar (O(1)).
 
-*Açık kalan iki bulgu (bu turun kapsamı dışında):* (1) istemci proof'u
+*Açık kalan iki bulgu (bu turun kapsamı dışında):* (1) [H turunda
+kapandı — yukarıda "El sıkışma kaybı"] istemci proof'u
 GÖNDERİNCE bağlı sayılıyor; aynı anda 200+ el sıkışmada sunucu soketinin
 alım kuyruğu loopback'te taşıyor, proof kaybolan istemci 5 sn sonra
 ölüyor (afe7fba'da 200 istemciden 65-101'i katılabildi) — ölçümler bu
