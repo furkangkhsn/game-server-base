@@ -10,7 +10,7 @@ use crate::metrics::*;
 impl MetricAccumulator {
     /// Snapshot the accumulated state as a report and advance the rate
     /// window. Per-room rates are Δ since the previous sample, over the
-    /// sample interval (see [`RoomAcc::latest_at`]); `at` (the report time)
+    /// sample interval (see `RoomAcc::latest`); `at` (the report time)
     /// is kept for the caller's bookkeeping but no longer drives the rates.
     pub fn report(&mut self, at: Instant) -> MetricReport {
         let mut rooms = Vec::with_capacity(self.rooms.len());

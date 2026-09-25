@@ -7,8 +7,8 @@
 //!   is never lost mid-session);
 //! - the relationship dispatchers: one small task per connection that has
 //!   a room relationship in flight, serializing that connection's
-//!   join/leave operations (see [`RoomOp`]);
-//! - the [`Ticker`] handle (global tick broadcast + rate), which rooms
+//!   join/leave operations (see `RoomOp`);
+//! - the [`Ticker`](crate::ticker::Ticker) handle (global tick broadcast + rate), which rooms
 //!   subscribe to at creation;
 //! - **sharded rooms** (see [`crate::shard`]): one logical room can be
 //!   backed by N shard actors (disjoint spatial regions, each its own
@@ -69,7 +69,7 @@ use crate::shard::ShardLogic;
 const RETIRED_SET_CAP: usize = 65_536;
 
 /// One shard of a sharded room: its `World` + its [`ShardLogic`]. `Sp`
-/// is the logic's strip payload ([`ShardLogic::Strip`] via
+/// is the logic's strip payload ([`GameLogic::Strip`](crate::room::GameLogic::Strip) via
 /// [`crate::room::GameLogic::Strip`]).
 pub type Shard<W, G, St, Sp> = (
     W,
@@ -145,7 +145,7 @@ pub enum RoomStatus {
 }
 
 /// The match result the room reports when it shuts down (the control
-/// plane's result seam — see [`crate::room::RoomLogic::match_result`]):
+/// plane's result seam — see [`crate::room::GameLogic::match_result`]):
 /// the room id plus the game-encoded payload (opaque to the core; the
 /// platform's adapter decodes it).
 #[derive(Debug)]

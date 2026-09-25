@@ -32,7 +32,7 @@ where
     /// Build a shard actor. `neighbors` is indexed by shard index (the
     /// unused slots may be any closed/unused mailbox — only the
     /// `ShardLogic::neighbors()` slots are sent to); each entry is
-    /// wrapped into an in-process [`ShardLink`] here, so the registry's
+    /// wrapped into an in-process `ShardLink` here, so the registry's
     /// wiring shape is unchanged. `result_sink` is the logical room's
     /// match-result sink shared by all its shards (`None` = this shard
     /// reports no result).

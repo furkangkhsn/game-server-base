@@ -157,15 +157,15 @@
 //! core enforces: an entity that just crossed INTO this shard appears as
 //! its own record AND (for one tick) as the neighbor's stale borrowed
 //! copy of itself — the actor filters the borrowed set against
-//! [`GameLogic::own_wires`] so the own (fresh) record wins and the
+//! [`ShardLogic::own_wires`] so the own (fresh) record wins and the
 //! snapshot never lists one entity twice.
 //!
 //! ## The ShardLink seam (`docs/DISTRIBUTED.md` §3)
 //!
 //! Everything this actor exchanges with a NEIGHBOR crosses the
-//! crate-private [`ShardLink`] trait: `send` (best-effort — a full or
+//! crate-private `ShardLink` trait: `send` (best-effort — a full or
 //! dead link refuses and hands the message back) and `drain` (FIFO,
-//! non-blocking). Today every link is an [`InProcLink`] around exactly
+//! non-blocking). Today every link is an `InProcLink` around exactly
 //! the bounded mpsc halves the registry already wired, which is why
 //! capacities, ordering and drop timing are bit-for-bit the pre-seam
 //! channel behavior. The seam exists so the future UDS/TCP links (§10
@@ -246,7 +246,7 @@
 //!
 //! - **Pending state is CONN-keyed** (`pending` / `queued` keyed by the
 //!   transport session), exactly like the room's. The alternative —
-//!   keying by the stable [`PlayerId`] — was rejected: it would CHANGE
+//!   keying by the stable [`PlayerId`](crate::id::PlayerId) — was rejected: it would CHANGE
 //!   the RECONNECT §11 semantics ("a resumed session never inherits its
 //!   dead session's in-flight work"). A session that dies (detach, leave,
 //!   rejoin) drops its pending budget with the binding row; a resumed

@@ -31,7 +31,7 @@ pub trait GameLogic<W>: Send {
     type GroupKey: Eq + Hash + Clone + Debug;
 
     /// What an entity carries across a SHARD boundary (the
-    /// visibility-strip payload inside [`shard::BorderRecord`]). Lives on
+    /// visibility-strip payload inside [`BorderRecord`](crate::shard::BorderRecord)). Lives on
     /// THIS supertrait because [`Self::snapshot`] is the single encode
     /// seam both actors share — the borrowed set reaches the encoder
     /// typed, so the payload type must be visible here too.
@@ -40,7 +40,7 @@ pub trait GameLogic<W>: Send {
     /// the wire identity (`wire`) is core-managed, but WHAT travels beside
     /// it — position only, or velocity/facing/hp for combat/prediction
     /// games — is the game's decision, exactly like the migration
-    /// [`shard::ShardLogic::State`]. Any logic that never runs sharded
+    /// [`ShardLogic::State`](crate::shard::ShardLogic::State). Any logic that never runs sharded
     /// picks `()` and never sees a record. Serialization at
     /// process-boundary links stays future work owned by the logic
     /// (`docs/DISTRIBUTED.md` §4b). `PartialEq` is load-bearing on the
@@ -124,7 +124,7 @@ pub trait GameLogic<W>: Send {
     /// player per tick (measured: part of the idle floor).
     ///
     /// `responses` is this tick's list of RPC answers owed to `conn`
-    /// (empty = none; see [`RoomLogic::handle_request`] and
+    /// (empty = none; see [`GameLogic::handle_request`] and
     /// `crate::rpc`):
     /// same-tick local answers and, on later ticks, the deferred answers
     /// of external requests that completed (or timed out) since the
@@ -315,9 +315,9 @@ pub trait GameLogic<W>: Send {
     /// rejects the malformed/uncorrelable cases before this call). The
     /// logic decides the request's fate:
     ///
-    /// - [`RequestDecision::Reply`] — answered in this tick;
-    /// - [`RequestDecision::Reject`] — a normal rejection, this tick;
-    /// - [`RequestDecision::External`] — delegated; the core registers
+    /// - [`RequestDecision::Reply`](crate::rpc::RequestDecision::Reply) — answered in this tick;
+    /// - [`RequestDecision::Reject`](crate::rpc::RequestDecision::Reject) — a normal rejection, this tick;
+    /// - [`RequestDecision::External`](crate::rpc::RequestDecision::External) — delegated; the core registers
     ///   the request as pending (subject to the pending caps — an
     ///   over-cap request is answered with a normal rejection even if
     ///   the logic said `External`) and hands the future to a worker;

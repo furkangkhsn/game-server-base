@@ -55,7 +55,7 @@
 //! `docs/TRAIT-ARCHITECTURE.md`.
 //!
 //! **Metrics:** the room's counters live in the room's own local state
-//! ([`RoomCounters`]) and are flushed once per step over the *bounded*
+//! (`RoomCounters`) and are flushed once per step over the *bounded*
 //! metrics channel with a synchronous `try_send` (a full channel drops
 //! the sample and counts it — harmless, the counters are cumulative);
 //! the room's only `await` stays `tick_rx.recv()` and the tick body
@@ -91,7 +91,7 @@ pub use logic::{GameLogic, RoomLogic};
 /// `conn` is the transport-session key (the wire contract — unchanged);
 /// `player` is the stable player identity the ROOM resolves for ingest.
 /// A connection actor cannot know `player` (the identity is minted inside
-/// the game logic), so it fills the placeholder [`PlayerId(0)`]; the room
+/// the game logic), so it fills the placeholder `PlayerId(0)`; the room
 /// stamps the authoritative value from its binding table at READ→CONVERT
 /// (see the phase comment). An action whose `conn` is not bound drops
 /// there — an old session's stray frame after a resume has no binding

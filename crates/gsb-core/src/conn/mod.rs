@@ -20,10 +20,10 @@
 //! actor answers — keeps a small budget in actor-local state. Each
 //! violation has a *class*:
 //!
-//! - **hard** (weight [`HARD_VIOLATION_WEIGHT`]): no legitimate client
+//! - **hard** (weight `HARD_VIOLATION_WEIGHT`): no legitimate client
 //!   path reaches it — an unknown opcode, a malformed payload, an auth
 //!   state violation (out-of-order or double AUTH);
-//! - **race** (weight [`RACE_VIOLATION_WEIGHT`]): a legitimate
+//! - **race** (weight `RACE_VIOLATION_WEIGHT`): a legitimate
 //!   ~1-RTT-wide transition can produce it — the room was destroyed and
 //!   an in-flight action arrives room-less, an action races a LEAVE, or
 //!   the leave→rejoin window strays;
@@ -31,13 +31,13 @@
 //!   gone during shutdown, message-table type mismatch) — answered as
 //!   before, never counted; the budget is for *client* violations.
 //!
-//! The first [`VIOLATION_ANSWER_LIMIT`] violations are answered with an
+//! The first `VIOLATION_ANSWER_LIMIT` violations are answered with an
 //! `ERROR` frame (diagnosis for the client developer); after that the
 //! funnel goes **silent** — every further violation is counted but
 //! unanswered, which bounds the amplification (a fire-and-forget ~10-byte
 //! client packet can no longer buy unlimited server allocation + encode +
 //! queue cost). When the weighted lifetime score reaches
-//! [`VIOLATION_BUDGET`] the connection is **closed** (an `ERROR` code 9
+//! `VIOLATION_BUDGET` the connection is **closed** (an `ERROR` code 9
 //! with the reason, then the normal teardown cascade) and the close is
 //! reported with the peer address (the actor carries it — see `peer`) so
 //! a layer outside the server (firewall, fail2ban, future auth) can act.

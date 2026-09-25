@@ -191,7 +191,7 @@ pub enum RegistryMsg {
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see
-    /// [`Self::spawn_room_watcher`]) when the watched actor task has ended
+    /// `Registry::spawn_room_watcher`) when the watched actor task has ended
     /// — by panic or by any normal exit (`DestroyRoom`, server
     /// `Shutdown`). The registry answers it with one table lookup, and the
     /// `generation` is what makes that lookup decisive: an entry of a
@@ -205,7 +205,7 @@ pub enum RegistryMsg {
         /// The dead task's shard index (sharded rooms only).
         shard: Option<usize>,
         /// The incarnation this watcher was spawned for (the stale-watch
-        /// guard; see [`Registry::install_room`]).
+        /// guard; see `Registry::install_room`).
         generation: u64,
     },
 }

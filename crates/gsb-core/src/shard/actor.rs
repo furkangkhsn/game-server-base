@@ -29,7 +29,7 @@ mod tick;
 /// pending migrate-out marks, the deferred migrations, the conn-epoch
 /// tables). `G` is the snapshot group key, `St` the migration state and
 /// `Sp` the boundary-strip payload (all three game-owned; see
-/// [`ShardLogic`] and [`GameLogic::Strip`]).
+/// [`ShardLogic`] and [`GameLogic::Strip`](crate::room::GameLogic::Strip)).
 pub struct ShardActor<W, G, St, Sp> {
     pub(in crate::shard) config: RoomConfig,
     pub(in crate::shard) index: usize,

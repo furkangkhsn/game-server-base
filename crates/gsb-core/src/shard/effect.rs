@@ -29,7 +29,7 @@ pub(crate) use window::Seen;
 
 /// How many effects one shard may EMIT per tick (all targets, all
 /// neighbours together; forwards do not count — they re-send an effect
-/// already minted). Beyond it [`CrossSeam::emit`] refuses with
+/// already minted). Beyond it [`CrossSeam::emit`](crate::shard::CrossSeam::emit) refuses with
 /// [`EmitRefused::Budget`] — the caller learns synchronously, nothing is
 /// dropped behind its back. The budget is what bounds the dedup window
 /// (see [`EFFECT_WINDOW`]).
@@ -110,7 +110,7 @@ pub struct RemoteEffect {
     pub payload: Bytes,
 }
 
-/// Why [`CrossSeam::emit`] refused an effect. Nothing was queued.
+/// Why [`CrossSeam::emit`](crate::shard::CrossSeam::emit) refused an effect. Nothing was queued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitRefused {
     /// No neighbour lends the target: there is no authority to route to
@@ -125,7 +125,7 @@ pub enum EmitRefused {
 }
 
 /// What the authority's game did with an effect (the answer of
-/// [`ShardLogic::apply_remote_effect`]; counted, never retried).
+/// [`ShardLogic::apply_remote_effect`](crate::shard::ShardLogic::apply_remote_effect); counted, never retried).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectOutcome {
     /// Applied to the target.

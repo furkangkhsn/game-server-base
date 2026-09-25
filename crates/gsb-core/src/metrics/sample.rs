@@ -194,8 +194,9 @@ pub struct ConnSample {
     pub frames_out: u64,
     /// Input actions this actor dropped on a full (bounded) action
     /// channel, delta since its last flush. The only input-loss point in
-    /// the architecture (the room's READ phase is a bounded *pull* — see
-    /// [`RoomSample::dropped_actions`]) and always self-inflicted: a
+    /// the architecture (the room's READ phase is a bounded *pull* that
+    /// drops nothing, so no room-scope drop counter exists) and always
+    /// self-inflicted: a
     /// flooding connection drops its own input. The collector sums these
     /// per connection so a report can attribute the loss to its sender.
     pub actions_dropped: u64,

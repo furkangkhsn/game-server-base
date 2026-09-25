@@ -38,22 +38,22 @@ pub struct PlayerMigration {
     //    running on it, §3.2 — and the receiving shard must re-attach the
     //    same flags or it would start broadcasting into the dead outbound
     //    half and polluting its drop counter). --------------------------
-    /// See [`crate::room::RoomConn::detached`].
+    /// See `crate::room::RoomConn::detached`.
     pub detached: bool,
-    /// See [`crate::room::RoomConn::detach_deadline`].
+    /// See `crate::room::RoomConn::detach_deadline`.
     pub detach_deadline: Option<std::time::Instant>,
-    /// See [`crate::room::RoomConn::detach_ceiling`] — measured from the
+    /// See `crate::room::RoomConn::detach_ceiling` — measured from the
     /// DETACH, so a crossing must not restart it (a parked entity walked
     /// back and forth across a seam would otherwise never reach it).
     pub detach_ceiling: Option<std::time::Instant>,
-    /// See [`crate::room::RoomConn::expire_to`].
+    /// See `crate::room::RoomConn::expire_to`.
     pub expire_to: ExpireTo,
-    /// See [`crate::room::RoomConn::bot_fed`].
+    /// See `crate::room::RoomConn::bot_fed`.
     pub bot_fed: bool,
-    /// See [`crate::room::RoomConn::session_epoch`] (the resume guard's
+    /// See `crate::room::RoomConn::session_epoch` (the resume guard's
     /// stamp survives migrations).
     pub session_epoch: u64,
-    /// See [`crate::room::RoomConn::identity`] — the resume key travels
+    /// See `crate::room::RoomConn::identity` — the resume key travels
     /// with the row, or a migrated member could not be parked under it.
     pub identity: String,
     /// The input-idle clock's stamp for this player (see
@@ -114,7 +114,7 @@ pub enum ShardMsg<S, B> {
     },
     /// The connection's transport died (the registry's `ConnClosed`
     /// broadcast, mirroring `RoomControl::Detach`): exactly the owning
-    /// shard runs the policy ([`GameLogic::on_disconnect`]); the others
+    /// shard runs the policy ([`GameLogic::on_disconnect`](crate::room::GameLogic::on_disconnect)); the others
     /// no-op on the same entity-id guard a `Leave` uses.
     Detach {
         conn: ConnectionId,
