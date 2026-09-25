@@ -139,7 +139,9 @@ ham `toml::Table`'ı alır:
   tek-seferlik private full, private delta = hata) **kit'in istemci
   kurallarıdır** ve bugün üç kopyadır (loadgen `view.rs`, demo
   `delta_aoi.rs`, MMO test istemcisi). Bu kurallar tek bir generic
-  `ClientView<Cell>`'e toplanır.
+  `ClientView<Cell>`'e toplanır. *(G4'te `gsb_kit::client::ClientView<D:
+  ClientDecoder>` olarak kuruldu — kopya sayısı altı çıktı; §5 "G4
+  sonucu".)*
 - **Demo botu bugünkü kodun birebir taşınmasıdır** (profiller, `as i32`
   kırpma, seq numaralandırma), yani girdileri bayt-bayt aynı kalır.
 
@@ -160,7 +162,7 @@ sonuna eklenen yeni bir `game=<ad>` anahtarı.
 | G1 ✅ | Trait + `RegistryParts`; `factories.rs` + çözümleyici demo modülüne **olduğu gibi** taşınır; `Config` alanları ve `resolve_selection` uyumluluk katmanı olarak kalır; `--no-default-features` derlemesi; §6 karar 10'daki orkestratör düzeltmesi | tüm testler değişmeden yeşil; loadgen A/B gürültü içinde |
 | G2 ✅ | Arena ve MMO modülleri (config bölümleri, MMO join yönlendirici, politika eşlemesi) + ikisinin gerçek `Registry` üzerinden uçtan uca testleri | yeni e2e testleri; kit/demo/core diff'i boş |
 | G3 | Loadgen: `LoadBot` + generic görünüm, demo botu birebir, `--game` her iki çocuğa iletilir, arena ve MMO botları, ilk ölçüm tabanları | demo için RESULT/CLIENT birebir (+`game=`); arena/MMO ilk sayılar |
-| G4 | Kit istemci kurallarının `gsb_kit::client` modülüne alınması (tetikleyici var: üç kopya) + çözücü seam'i; demo ve MMO test istemcilerinin ona geçirilmesi | test iddiaları değişmez |
+| G4 ✅ | Kit istemci kurallarının `gsb_kit::client` modülüne alınması (tetikleyici var: üç kopya) + çözücü seam'i; demo ve MMO test istemcilerinin ona geçirilmesi — **G3'ten önce koşuldu** (ebeveyn kararı) | test iddiaları değişmez |
 
 ### G1 sonucu (2026-09-25)
 
@@ -498,6 +500,200 @@ temiz sayaçlar, `snap_total` 11472–11494 ↔ 11488–11496,
 sayısı `acks` 2291–2296 → 2297–2298 (2298–2300 hamlede) — göçte
 kaybolan ack'ler geri geldi.
 
+### G4 sonucu (2026-09-25)
+
+**Tamam — G3'ten ÖNCE** (ebeveyn kararı; §6 karar 9'un düzeltmesi):
+G3'ün botları loadgen-yerel bir generic görünüm büyütmek yerine
+doğrudan `gsb_kit::client`'ı kullanacak. Sekiz commit (+ bu belge),
+her biri kendi başına yeşil:
+
+| Commit | Değişiklik |
+|---|---|
+| `d0c88d2` | **Bulgu G4-1'in düzeltmesi** (aşağıda): loadgen ve `delta_aoi.rs` `CellExit`'i hücre İNDİSİ olarak okur; yeni test önce kırıldı |
+| `513a419` | `gsb_kit::client` (görünüm, seam, zarf yürüyücüsü) + 17 kit testi |
+| `2809a87` | loadgen görünümü kit'e geçti (`game-demo` özelliği artık `gsb-kit`'i açar) |
+| `e652e82` | dört test istemcisi kit'e geçti (`delta_aoi.rs`, `aoi.rs`, MMO'nun `tests/common/client.rs`'i, `gsb-server/tests/hosted/mmo.rs`) |
+| `b4c0039` | `examples/client.rs` kit'e geçti |
+| `3a77e9b`, `4667c26`, `cfd7d3e` | performans (aşağıda "Alıcı döngü"): tembel hücre, `Copy` hata tipi, kayıtları ara belleğe almadan iki geçiş, satır içi yürüyücü |
+
+`gsb-core` diff'i boş; wire baytları değişmedi (bayt sabitleyen testler
+— `wire_contract.rs`, `kit_wire.rs`, kit'in `aoi/tests/sharing*`'i,
+arena/MMO wire testleri — dokunulmadan yeşil). Test sayısı 586 → 609
+(+20 kit, +2 loadgen çözücüsü, +1 `delta_aoi`); 1 ignored doctest aynı.
+
+**Public API** (`gsb_kit::client`):
+
+```rust
+pub trait ClientDecoder {
+    type Record;                 // görünümün entity başına tuttuğu
+    type Cell: PartialEq;        // oyunun hücresi (CellExit'in adlandırdığı)
+    fn record(&self, body: &[u8]) -> Result<(u64, Self::Record), ClientError>;
+    fn cell_of(&self, record: &Self::Record) -> Self::Cell;   // sunucunun formülü
+    fn cell_exit(&self, body: &[u8]) -> Result<Self::Cell, ClientError>;
+}
+pub struct ClientView<D: ClientDecoder>;   // new(decoder), Default (D: Default)
+impl<D> ClientView<D> {
+    pub fn apply_snapshot(&mut self, frame: &[u8]) -> Result<Snapshot, ClientError>;
+    pub fn apply_private(&mut self, frame: &[u8]) -> Result<PrivateEvent, ClientError>;
+    // get(id), contains(id), len(), is_empty(), iter(), ids(), values(),
+    // has_baseline(), last_sequence(), counters(), decoder()
+}
+pub struct Snapshot { pub sequence: u64, pub apply: Apply }
+pub enum Apply { Full, Delta, NoBaseline, Stale }
+pub enum PrivateEvent { Ack(u64), Full { sequence: u64 }, Empty }
+pub struct Counters { pub fulls, pub private_fulls, pub deltas,
+                      pub gap_drops, pub stale, pub errors }   // u64
+pub enum ClientError { Malformed(&'static str), Body(prost::DecodeError), PrivateDelta }
+// impl From<prost::DecodeError> for ClientError — tipli ayna `decode(body)?`
+pub mod wire { pub struct Fields; pub enum Value; pub struct Malformed; pub fn sint32 }
+```
+
+`fulls` grup full'larını VE one-shot private full'ları sayar
+(`private_fulls` alt kümesi) — loadgen'in ve `delta_aoi`'nin eskiden
+saydığı gibi. Görünüm girdiyi ham bayt olarak alır (oyunun tipli
+aynasını değil): zarf yerinde yürünür, kayıt ve hücre gövdeleri
+çerçevenin alt dilimleri olarak seam'e gider.
+
+**Seçilen bayat kuralı:** "son KABUL EDİLMİŞ sequence'tan `<=` olan
+atılır; ilk kabulden önce hiçbir şey bayat değildir" (MMO istemcisinin
+kuralı). Gerekçe `kit.proto`'nun kendi cümlesi: *"a duplicate (sequence
+<= the last accepted) is discarded"* — kabul edilmiş kare yokken
+karşılaştırılacak bir "son kabul" da yoktur; loadgen'in
+`unwrap_or(0)`'ı olmayan bir kabul (0) uyduruyordu ve taze bir
+istemcinin `sequence = 0` taşıyan full'unu (proto3 varsayılanı; kit'in
+terminal `match_result` kare biçimi) bayat sayardı. Canlı akışta fark
+gözlenemez (canlı sequence'lar tick'tir, kesin pozitif —
+`room/logic.rs`), A/B'de de gözlenmedi; kit testi
+`nothing_is_stale_before_the_first_accepted_frame` kuralı kilitliyor
+(eski kural → kırıldı).
+
+**§4.4 taslağından sapmalar:**
+
+1. **`ClientView<Cell>` değil `ClientView<D: ClientDecoder>`**; seam
+   üç metot: kayıt → `(id, Record)`, `cell_of(&Record)`, çıkış → hücre.
+   Hücre kayıt başına değil, yalnız çıkış taşıyan bir delta servis
+   edilirken, tutulan kayıt başına türetilir (ilk kesimde kayıt başına
+   iki `f32` bölme + `floor` alıcı döngüyü yavaşlatıyordu).
+2. **Zarf yürüyücüsü public** (`client::wire`): bir oyunun çözücüsü
+   küçük bir kaydı üretilmiş tipin mesaj başına kurulumunu ödemeden
+   elle yürüyebilir; loadgen'in demo çözücüsü böyle yapıyor (üretilmiş
+   `EntityRecord` çözücüsüne iki testle sabitli). Test istemcileri
+   tipli aynayla (`decode(body)?`) çözüyor.
+3. **Hata anlamı:** bozuk bir zarf ya da hücre çıkışı görünümü HİÇ
+   değiştirmez (ilk geçiş tüm zarfı doğrular); oyunun çözücüsünün
+   reddettiği bir kayıt gövdesi ikinci geçişte, görünüm değişirken
+   bulunur → görünüm BOŞ ve baseline'SIZ kalır (asla yarım kare),
+   delta'lar bir sonraki full'a kadar düşer — taze istemci gibi.
+   Eskiden loadgen böyle bir kareyi bütünüyle yok sayardı; canlı akış
+   böyle bir gövde taşımıyor (her koşuda `errors=0`).
+4. **`Private.responses` ve `Private.game`** görünümün parçası değil,
+   atlanır; bunları kullanan istemci kareyi tipli aynasıyla da çözer.
+
+**Bulgu G4-1 — demo tarafındaki iki kopya `CellExit`'i yanlış
+okuyordu** (düzeltildi, `d0c88d2`). Kit'in `Grid2`'si çıkışı hücrenin
+İNDİSİ olarak yazar (`game.proto`: "Cell index"); loadgen'in ve
+`delta_aoi.rs`'in görünümü onu KONUM→hücre formülünden geçiriyordu
+(`CellExit(1,0)` → `floor(1/20) = 0` → hücre (0,0)). Yalnız indisi
+kendine eşlenen hücrelerin — (0,0), (−1,−1) gibi — çıkışı doğru
+servis ediliyordu (`delta_aoi`'nin mevcut testi (0,0) kullandığı için
+yakalamadı); diğer her çıkış yanlış hücrenin kayıtlarını unutturup
+çıkan hücreninkileri bir sonraki keep-alive full'a kadar hayalet
+bırakıyordu. MMO'nun iki test istemcisi zaten indis karşılaştırıyordu.
+Yeni test `cell_exit_names_the_cell_index_away_from_the_origin`: beş
+hareketli (1,0)'dan çıkarken gözlemci (0,0)'da, görünüm çıkış karesinin
+KENDİ tick'inde denetleniyor (keep-alive onarmadan önce) — eski okumayla
+"O never loses itself" kırıldı. **Etki ölçüldü** (geçici fark sondası,
+her karede eski-kural görünümü ↔ kit görünümü): sayaçlar (`fulls`,
+`deltas`, `gap_drops`, `private_fulls`) hiç değişmiyor; tutulan görünüm
+50 istemci spatial'da karelerin %3–4,5'inden, sharded × spatial'da
+%8–9'undan, 1000 istemci spatial'da %7'sinden sonra farklıydı; son
+`view_size` yalnız koşu bir yanlış çıkışla sonraki keep-alive arasında
+biterse farklı (spread 200: 7 ve 3 hayalet). Yani RESULT'taki
+`view_size` base ↔ HEAD arasında, sistematik değil, bu nedenle
+kayabilir.
+
+**Taşınan kopyalar ve iddiaların değişmediğinin kanıtı:**
+
+| Kopya | Ne oldu | Kanıt |
+|---|---|---|
+| loadgen `client/view.rs` (+ `view/run.rs`) | `ClientView = gsb_kit::client::ClientView<DemoDecoder>`; döngü ham yükü verir; sayaçlar görünümden | A/B + fark sondası (aşağıda): her karede eski görünümle (düzeltmeli) 0 görünüm farkı, 0 sayaç farkı |
+| `gsb-demo/tests/delta_aoi.rs` | `View = ClientView<DemoDecoder>`; `Conn`'un sayaçları görünümden (`fulls()` …); ham çıkış karesi tek-kayıt iddiası için hâlâ tutuluyor | 29 `assert*` + önceki `assert!(!s.delta, "a private snapshot must be a full")` aynı mesajlı `panic!`; her iddia koşulu ve mesajı aynı, yalnız erişim sözdizimi (`.deltas` → `.deltas()`, `view.entities.get(&id)` → `view.get(id)`) |
+| `gsb-demo/tests/aoi.rs` | **beşinci, kısmi kopya** (G1'de sayılmamıştı): `cell_exits`'i yok sayıyor, private snapshot'ı modu ne olursa olsun uyguluyordu; artık kuralların tamamı | 13 `assert*` aynı; test yeşil |
+| `gsb-demo-mmo/tests/common/client.rs` | `pub view: ClientView<MmoDecoder>`; kimlik sıralı erişimciler sıralıyor (`sees`, `of_kind`) | yinelenen-entity denetimi görünümün uyguladığı HER karede (tipli aynayla) sürüyor; `assert!(!s.delta, …)` aynı mesajlı `panic!`; bütün MMO testleri değişmeden yeşil |
+| `gsb-server/tests/hosted/mmo.rs` | G2'nin dördüncü kopyası; `records: ClientView<MmoDecoder>` | `book()` hâlâ her uygulanan karede (grup full/delta, private full); `mmo_e2e`/`mmo_logout`/`mmo_rooms`/`mmo_findings` değişmeden yeşil |
+| `gsb-server/examples/client.rs` | **altıncı kopya** (loadgen'in `unwrap_or(0)` kuralıyla); aynı satırları sonuç başına basıyor | elle koşuldu: FULL/delta/ack/private satırları |
+
+Dokunulmayan: `gsb-demo/src/demo/rooms/tests/sharded.rs`'teki
+`ClientView` (gsb-demo `src`'sinde bir birim testi; tek akışı sıra
+kuralı olmadan yeniden kuruyor — istemci kurallarının kopyası değil,
+shard dikişinin wire denetimi).
+
+**Loadgen A/B** (`646dd41` base ↔ `d0c88d2` fix ↔ HEAD, dönüşümlü üç
+tur; `50 --duration 3`, `50 --duration 3 --visibility spatial`,
+`50 --topology sharded --visibility spatial --shard-count 4 --duration
+8`; `GSB_LOADGEN_CLIENT_LINES=1`): CLIENT ve RESULT satırlarının
+anahtar kümesi, sırası ve biçimi üç ikilide de aynı; her koşuda her
+istemci için `snapshots = fulls − private_fulls + deltas + gap_drops`
+(bayat 0) ve CLIENT toplamları = RESULT; `errors=0`.
+
+| Senaryo | `snap_total` | `fulls` | `private_fulls` | `deltas` | `gap_drops` | `view_size` |
+|---|---|---|---|---|---|---|
+| tcp (all) base / fix / HEAD | 4103–4150 / 4100 / 4101–4150 | = snap | 0 | 0 | 0 | 2500 hepsinde |
+| spatial base / fix / HEAD | 4077–4134 / 4078–4138 / 4088–4140 | 235–286 / 227–284 / 239–289 | 78–83 / 71–79 / 81–84 | 3921–3933 / 3922–3933 / 3930–3935 | 0 | 1216–1264 / 1178–1250 / 1156–1176 |
+| sharded × spatial base / fix / HEAD | 11458–11542 / 11445–11536 / 11456–11512 | 703–730 / 700–740 / 685–737 | 204–237 / 220–241 / 217–257 | 10992–11031 / 10965–11020 / 10978–11030 | 0 | 1528–1648 / 1571–1617 / 1559–1621 |
+
+Sayaçlar gürültü içinde (`fulls` sunucunun taze-grup/keep-alive
+kararından gelir; turdan tura ~50 oynar). **Belirleyici kanıt fark
+sondası:** HEAD'e geçici olarak eklenen, her kareyi hem kit görünümüne
+hem eski loadgen görünümüne (düzeltmeli ve düzeltmesiz) uygulayan bir
+sonda; yedi koşuda (tcp, spatial ×2, sharded × spatial ×2, spread 200,
+spatial 1000 — 1000 istemcide 123 921 kare) kit ↔ eski (düzeltmeli):
+**0 görünüm farkı, 0 sayaç farkı**; kit ↔ base: 0 sayaç farkı, görünüm
+farkı yalnız G4-1'den.
+
+**Alıcı döngü (performans).** İlk kesim (`513a419`) sentetik tek
+görünümde hızlıydı ama gerçek koşuda yavaştı; üç neden bulundu ve
+giderildi: (a) kayıt başına hücre hesabı → tembel `cell_of`
+(`3a77e9b`); (b) sıcak döngüdeki `Result<_, ClientError>`'ın düşürme
+yapıştırıcısı (kutulu `DecodeError`) → yürüyücüde `Copy` `Malformed`
+(`3a77e9b`); (c) görünüm başına kayıt ara belleği — binlerce görünümde
+önbellekte sürekli ıskalanan bellek; eski tipli çözüm her karede
+ayırıcıdan sıcak bellek alıyordu → kayıtlar ara belleğe alınmadan
+ikinci geçişte doğrudan görünüme (`4667c26`); ve loadgen derlemesinde
+yürüyücünün küçük fonksiyonları satır içine alınmıyordu →
+`#[inline(always)]` + ikinci geçiş yalnız kayıt aralığını yürür
+(`cfd7d3e`). Son ölçümler (kit / eski, kare başına):
+
+| Ölçüm | spatial 1000 | sharded × spatial 50 | full-only (all 50 / 500) | spread 300 (1 kayıtlık kareler) |
+|---|---|---|---|---|
+| Yakalanmış gerçek kare akışlarının tekrarı (100 dönüşümlü istemci, 7 turun medyanı) | 0,72 | 0,69 | 0,60 / 0,70 | 0,72 |
+| Canlı loadgen istemcisinde AYNI kareye iki görünüm (sıra dönüşümlü, süreç içi) | 0,76–0,79 | 0,63–0,69 | — / 0,76–0,78 | 0,97–1,17 (±50 ns / ~500 ns) |
+
+`client_in_bps` A/B'de aynı (sunucunun gönderdiği). Orkestre modun
+`clients_cpu_s`'i (1000 istemci, 2 süreç) makine yükü düşükken ilk
+kesimlerde +%10–25 gösterdi — bu turun tetikleyicisi; son sürümde yük
+10–20 iken base 5,0–7,0 ↔ HEAD 5,0–6,7, gürültüden ayrılamıyor (süreç
+içi ölçümler yük gürültüsünden bağımsız ve yukarıda).
+
+**Mutation-check'ler** (yedekten geri yüklenerek; her biri en az bir
+testi kırdı): eski bayat kuralı (`unwrap_or(0)`); bayat hiç atılmıyor;
+baseline'sız delta uygulanıyor; boşluklu delta düşüyor; upsert'ler
+çıkışlardan önce (yeniden giriş + yeniden ekleme testleri); hücre
+çıkışları yok sayılıyor; private full bayat denetiminden geçiyor;
+private delta uygulanıyor; ilk geçiş hatası scratch'i bırakıyor; kayıt
+gövdesi hatası yarım kare bırakıyor / baseline'ı koruyor; full önce
+temizlemiyor; packed `removed` reddediliyor; oneof'ta ilk kol
+kazanıyor; `sint32` 32 bite kırpmıyor; varint hızlı yolu `0x80`'i kabul
+ediyor; onuncu bayt denetlenmiyor; yürüyücü hatadan sonra sürüyor;
+kayıt aralığı son kaydın başında bitiyor / son kayıttan başlıyor. Demo
+tarafında: eski `CellExit` okuması → yeni `delta_aoi` testi kırıldı.
+
+**G3 için:** botlar `ClientView<D>`'yi oyun başına bir `ClientDecoder`
+ile kullanır (demo: loadgen'deki `DemoDecoder`; MMO: test
+istemcilerindeki `MmoDecoder`'ın elle yürüyen sürümü; arena yalnız full
+gönderir, aynı görünüm onu da uygular). `LoadBot`'un §4.4'teki "kayıt
+çözücü + çıkış-hücresi çözücü" parçası artık bu seam.
+
 ## 6. Kararlar (ebeveyn, kullanıcının "hepsini tamamla" talimatıyla)
 
 1. **Config yeri:** demo'nun anahtarları eski düz yerlerinde kalır (geriye
@@ -532,7 +728,10 @@ kaybolan ack'ler geri geldi.
    eder (sis sınırlarını gerçekten geçer). MMO profili: yürüme + ara sıra
    `Travel` (shard'lar arası) + `Attack` karışımı.
 9. **Generic istemci görünümü:** G3'te loadgen'de doğar, G4'te
-   `gsb_kit::client`'a taşınır.
+   `gsb_kit::client`'a taşınır. *G4 düzeltmesi (ebeveyn):* sıra
+   tersine döndü — G4 G3'ten önce koşuldu, görünüm doğrudan kit'te
+   doğdu; G3'ün botları loadgen-yerel bir generic görünüm büyütmeden
+   onu kullanır.
 10. **Orkestratörün `--cell-size`'ı istemci süreçlerine iletmemesi:**
     hata olarak düzeltilir (G1, ayrı commit, testle). İstemci görünümü
     varsayılan 20'yi kullanırken sunucu iletilen değeri kullanıyordu;

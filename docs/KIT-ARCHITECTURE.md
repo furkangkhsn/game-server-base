@@ -578,6 +578,37 @@ message Private {
   tanımdan da aynı içeriğe çözülüyor ve aynı baytlara yeniden
   kodlanıyor. Mutation-check: `cell_exits = 4 → 6` üç testi de kırdı.
 
+### 5.2 G4: kit'in referans istemcisi (`gsb_kit::client`)
+
+Zarfın istemci yarısı da artık kit'te (GAME-MODULE §5 "G4 sonucu";
+önce altı kopyaydı: loadgen, `delta_aoi.rs`, `aoi.rs`, MMO'nun iki test
+istemcisi, örnek istemci). `ClientView<D: ClientDecoder>` bir
+bağlantının `WorldSnapshot` ve `Private` karelerini **ham bayt olarak**
+alır ve `kit.proto`'daki istemci kurallarını tam olarak uygular: full
+görünümü değiştirir; baseline'lı delta `removed` → `cell_exits` →
+upsert sırasıyla, boşluk olsa da uygulanır; baseline'sız delta düşer;
+son KABUL EDİLMİŞ sequence'tan `<=` olan atılır (ilk kabulden önce
+hiçbir şey bayat değildir); one-shot private full koşulsuz uygulanır ve
+sequence'ını benimser; private delta hatadır. Sayaçlar (`fulls` —
+private dahil —, `private_fulls`, `deltas`, `gap_drops`, `stale`,
+`errors`) loadgen'in raporladıklarıdır.
+
+Oyunun seam'i `ClientDecoder`: kayıt gövdesi → `(wire id, Record)`,
+`cell_of(&Record)` (sunucunun `CellSpace` formülü, yalnız çıkış
+servis edilirken çağrılır), çıkış gövdesi → hücre. Gövdeler `RecordCodec
+::encode` / `CellSpace::encode_cell` çıktısıdır; çözücü onları tipli
+aynayla (`decode(body)?` — `From<prost::DecodeError>`) ya da public
+yürüyücüyle (`client::wire::{Fields, Value, sint32}`) çözer. Kare iki
+yürüyüşte uygulanır, ayırma yok: birincisi başlığı okur, (az sayıdaki)
+`removed` ve `cell_exits`'i yeniden kullanılan scratch'e çözer ve tüm
+zarfı doğrular; ikincisi yalnız kayıt aralığını yürüyüp her kaydı
+doğrudan görünüme yazar (görünüm başına kayıt ara belleği yok —
+binlerce görünümde önbellekte ıskalanan bellek olurdu). Bozuk zarf
+görünümü değiştirmez; oyunun reddettiği bir kayıt gövdesi görünümü boş
+ve baseline'sız bırakır (asla yarım kare). `Private.responses` ve
+`Private.game` görünümün parçası değil. `tokio` bağımlılığı yok (saf
+durum).
+
 ## 6. Hareket bir trait değildir
 
 Hareket oynanışın kendisidir: FPS'te fizik, zıplama, eğilme; MOBA'da
@@ -599,6 +630,7 @@ yaygın durumlar için hazır uygulamalarını taşır:
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
 | `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2) | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
+| `ClientView<D>` + `ClientDecoder` (`gsb_kit::client`) | istemci tarafı: kit zarfının referans uygulayıcısı (istemci kuralları, sayaçlar) + zarf yürüyücüsü `client::wire` (§5.2) | GAME-MODULE G4'te; kullanıcıları loadgen, demo/MMO test istemcileri, örnek istemci |
 
 Ön-ayarlar oyunun tiplerini somut bir konum tipi üzerinden değil
 **erişimci trait'ler** üzerinden okur: 2D ön-ayarlar `Planar`'ı
