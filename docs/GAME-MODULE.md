@@ -197,6 +197,31 @@ birbirine karışmaz:
   modda kullanım hatası (kapının TLS biçimi yok). WS ↔ TCP taban
   çizgisi (demo 200/500, arena 200, MMO 200) ve accept döngüsündeki seri
   el sıkışma bulgusu: DESIGN §5.7 "Loadgen WS modu (B29)".
+- **`--rpc-rate R [--rpc-burst B]`** (B23): RPC trafik modu. Her istemci
+  girdilerinin yanında demo'nun `ECONOMY` isteğini (`BuyItem "potion"`,
+  dış-I/O yolu) B'lik patlamalarla her B/R saniyede bir gönderir (join'den
+  sonra, id'ye göre faz kaydırılmış, kaçan dilim telafisiz), korelasyon
+  id'leri oturum başına 1'den; yanıtları her private karenin 3 numaralı
+  alanından (`Private.responses`) okuyup istemci başına bir defterde
+  eşler (`client/rpc.rs`, `client/rpc/ledger.rs`): ilk yanıt isteği
+  kapatır ve türüne göre sayılır (`ok` ya da `gsb_core::rpc`'nin ret
+  nedeni sabitlerinden hangisi; başka neden = oyunun reddi), ikinci
+  yanıt `dup`, gönderilmemiş id'ye yanıt `unmatched`; sunucu zaman aşımı
+  (5 sn) + 1 sn'yi geçen istek istemci tarafı zaman aşımıdır (geç gelen ya
+  da hiç gelmeyen), bitişte daha genç olan `open`. **Yalnız demo**
+  (barındırılan oyunlardan istek işleyicisi olan tek oyun; iki bayrak
+  demo bayrakları listesinde, başka oyunda nedenini söyleyen hata) ve
+  **yalnız düz istemci koşusu** (`--orchestrate`, `--serve`,
+  `--churn-secs` ile kullanım hatası — CLIENT satırı defteri taşımıyor).
+  Modda yavaş okuyucu okumazken de gönderir; yalnız yanıt taşıyan
+  private kare hata sayılmaz. **RESULT:** anahtarlar yalnız modda,
+  `game=`'den hemen önce — `rpc_rate rpc_burst rpc_sent rpc_ok rpc_to
+  rpc_rej_conn rpc_rej_room rpc_rej_dup rpc_rej_no_handler
+  rpc_rej_malformed rpc_rej_logic rpc_client_to rpc_late rpc_open
+  rpc_dup_answers rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms`
+  (odanın `req_*` sayaçları karşılarında, her satırda zaten); modsuz
+  satır ve CLIENT satırı birebir aynı. Ölçüm ve okuması:
+  RPC-CONTROL-PLANE §8.2.
 
 ### 4.5 Değişmemesi gerekenler (2D demo)
 
@@ -206,7 +231,9 @@ mesajları; `start_server*` imzaları ve `lib.rs`'deki `pub use` listesi;
 `gsb-server` paketindeki ikili adları (`gsb-server`, `gsb-loadgen`); her
 loadgen bayrağı ve varsayılanı; CLIENT satır formatı; GSM8 metrik formatı;
 mevcut her RESULT anahtarı ve değeri. **Tek RESULT değişikliği:** satırın
-sonuna eklenen yeni bir `game=<ad>` anahtarı.
+sonuna eklenen yeni bir `game=<ad>` anahtarı. *(Sonraki isteğe bağlı segmentler — `shard_members=`, `team_*=`,
+`logic_*=`, B23'ün `rpc_*=`'i — yalnız ilgili oyun ya da modda ve
+`game=`'den hemen önce eklenir; demo'nun varsayılan satırı değişmez.)*
 
 ## 5. Fazlar
 

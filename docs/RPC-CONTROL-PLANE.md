@@ -259,6 +259,13 @@ ve katlamayı sabitler. Mutasyonlar (dört artış noktasının her biri
 eski kovaya, örnek/rapor/satır/Prometheus/codec/fold eşlemeleri) her
 biri en az bir testi düşürür.
 
+**Yük altında** (B23'ün loadgen RPC modu, §8.2): 500 istemci × 10
+istek/sn, 3 sn'lik duraklamalarla 137 746 düşen batch boyunca ikinci ya
+da eşleşmeyen yanıt 0; kabul edilmiş her yanıt en geç duraklama + ~2
+tick'te geldi; fırtına sınırı 36 837 isteği yanıtsız reddetti ve
+istemcinin yanıtsız/açık sayısı tam bu retler + ayrılışta uçuşta
+kalanlar.
+
 **Hâlâ istemcinin zaman aşımına kalanlar.**
 
 - **Oturumu önce biten bağlantı:** ayrılış (leave), detach — hiç
@@ -298,7 +305,10 @@ biri en az bir testi düşürür.
   (env + yanıt kuyruğu; çıkış kanalı tıkalı bağlantıda teslim edilmemiş
   yanıtlar dahil en çok 4 + 16 — §3.1), oda başına 2000 `PendingRequest` + 2000 worker
   görevi + 2000 slot'lu `completions` kanalı (varsayılanlar; §6'daki
-  türetim). Cap aşımı = aynı tick'te normal ret (§6).
+  türetim). Cap aşımı = aynı tick'te normal ret (§6). Yük altında
+  (§8.2): 500 × 10 istek/sn'de ~250 uçuşta — oda cap'i hiç bağlamadı;
+  B=8'lik patlamada bağlantı cap'i her patlamanın tam yarısını reddetti,
+  istemci ve oda aynı sayıyı gördü.
 - **Ret sayaçları nedene göredir** (bu turda tek `requests_rejected`
   yerini altı kovaya bıraktı — `req_rej_malformed / _dup / _no_handler
   / _logic / _conn / _room`; tıkalı bağlantının yanıtsız retleri F15'ten
@@ -503,6 +513,170 @@ yol değişmedi — beklendiği gibi. Kayıtlar: `.measure/cap_before{1,2}.log`,
 `req_*` kuyruğunu da içeriyor — bu turun D maddesinin smoke
 assert'leri o alanlara dokunur).
 
+### 8.2 Yük altında RPC yolu: loadgen RPC modu (B23)
+
+Bu turdan önce loadgen hiç istek göndermiyordu: odanın istek alımı,
+bağlantı başına pending cap'i, ret kovaları, worker tamamlanmaları ve
+zaman aşımları, F14'ün düşen batch'ler üzerinden teslimi ve fırtına
+sınırı yük altında hiç koşmamıştı.
+
+**Mod.** `gsb-loadgen N --rpc-rate R [--rpc-burst B]`: her istemci
+girdilerinin yanında demo'nun `ECONOMY` isteğini (`BuyItem { kind:
+"potion" }` — desenin dış-I/O yarısı: pending slot, worker görevi,
+ekonomi servisi, sonraki tick'te completion) B'lik patlamalarla, her
+B/R saniyede bir gönderir (ortalama R istek/sn; B varsayılan 1).
+Takvim join'de başlar (join'den önceki istek oda action'ı değildir), id'ye
+göre faz kaydırılır (istemciler aynı anda patlamaz), kaçan dilim telafi
+edilmez (hız bir tavandır). Korelasyon id'leri oturum başına `1, 2, 3, …`
+(yeniden kullanılmaz — her yanıt tam bir isteği adlandırır ya da hiçbirini).
+
+- **Yalnız demo:** barındırılan oyunlardan istek işleyicisi olan tek
+  oyun; diğerleri her isteğe "no handler" der — `--rpc-rate` /
+  `--rpc-burst` başka oyun için demo bayrakları gibi reddedilir.
+- **Yalnız düz istemci koşusu** (süreç içi ya da `--addr`):
+  `--orchestrate`, `--serve`, `--churn-secs` ile kullanım hatası
+  (orkestratörün `CLIENT` satırları defteri taşımıyor; `--serve`'in
+  istemcisi yok; churn istemcisinin oturumları tek defter değil).
+  `--rpc-burst` `--rpc-rate`'siz reddedilir.
+
+**Defter** (`client/rpc/ledger.rs`, istemci başına). Yanıtlar her private
+karenin 3 numaralı alanından okunur (`Private.responses` — kit'in ve her
+oyunun private mesajında aynı numara):
+
+- bekleyen isteğe gelen **ilk** yanıt onu kapatır; türüne göre bir kez
+  sayılır: `ok`, ya da nedeninin adlandırdığı çekirdek reddi (sunucunun
+  zaman aşımı, bağlantı cap'i, oda cap'i, dup, handler yok, malformed),
+  ya da oyunun kendi reddi (başka her neden); `ok` ise gecikmesi
+  (gönderim → varış) kaydedilir;
+- kapanmış isteğe ikinci yanıt **dup** (`rpc_dup_answers`), gönderilmemiş
+  id'ye (0 — malformed yanıtı — ya da son id'nin ötesi) yanıt
+  **eşleşmeyen** (`rpc_unmatched`); ikisi başka yerde sayılmaz ve ikisi de
+  0 olmalı (§1'in "tam olarak bir yanıt"ı, §3.1'in tam-bir-kez teslimi);
+- istemcinin kendi zaman aşımı = sunucunun istek zaman aşımı
+  (`RoomConfig::request_timeout`, 5 sn; sunulan sunucu değiştirmiyor) +
+  1 sn pay. Sınırdan sonra gelen yanıt isteğini yine kapatır ama **geç**tir
+  (`rpc_late`); koşu sonunda hâlâ bekleyen istek sınırdan yaşlıysa
+  **yanıtsız**, gençse **açık** (`rpc_open` — bitişte uçuşta,
+  yargılanmaz). İstemci tarafı zaman aşımı = yanıtsız + geç
+  (`rpc_client_to`).
+
+Ret nedenlerinin metinleri artık `gsb_core::rpc` sabitleridir
+(`TIMEOUT_REASON`'ın yanında `CONN_CAP_REASON`, `ROOM_CAP_REASON`,
+`DUPLICATE_REASON`, `MALFORMED_REASON`, `NO_HANDLER_PREFIX` +
+`no_handler_reason(op)`): oda ve shard bunlarla yanıtlar, loadgen bunlarla
+sınıflar — üçüncü bir el kopyası yok. Metinler bayt bayt aynı (birim testi
+`rpc::tests::the_rejection_reasons_are_pinned` sabitler); istemci baytı
+değişmedi.
+
+Bu modda yavaş okuyucu (`--stall-ms`) okumazken de gönderir (bir sonraki
+patlama uykusunu bitirir): F14'ün fırtına sınırı ancak tıkalı bağlantı
+istek göndermeye devam ederken sınanır. Yalnız yanıt taşıyan private kare
+(`PrivateEvent::Empty` + yanıt) artık hata sayılmaz.
+
+**RESULT.** Anahtarlar yalnız modda ve `game=`'den hemen önce (diğer
+isteğe bağlı segmentler gibi; modsuz satır birebir aynı, mevcut her
+anahtar yerinde): `rpc_rate rpc_burst rpc_sent rpc_ok rpc_to rpc_rej_conn
+rpc_rej_room rpc_rej_dup rpc_rej_no_handler rpc_rej_malformed
+rpc_rej_logic rpc_client_to rpc_late rpc_open rpc_dup_answers
+rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms` (gecikmeler
+yalnız `ok` yanıtların, ham değerler üzerinden, ms). Karşılarında odanın
+kendi sayaçları her satırda zaten var (`req_ext`, `req_rej_*`,
+`req_refused`, `req_to`, `req_late`): aynı yolun iki ucu yan yana.
+İnsan-okunur rapora bir `rpc (clients): …` satırı; dup/eşleşmeyen > 0 ise
+`WARNING`.
+
+**Ölçüm** (release, süreç içi, TCP, 32 çekirdek; makine kardeş çalışma
+ağacının derlemeleriyle paylaşımlı — parantezde koşudan hemen önceki 1 dk
+yük ortalaması). Komut: `gsb-loadgen N --duration 30 --write-stall-secs 0
+--rpc-rate R [--rpc-burst B] [--stall-ms P --stall-every-ms E --conn-out 4]`.
+Her koşuda `joined = left = N`, `errors = server_closes = 0`,
+`server_hz = 30,00`, `req_to = req_rej_room = 0`,
+**`rpc_dup_answers = rpc_unmatched = 0`**.
+
+| Koşu (yük) | sent | ok | rej_conn istemci / oda | refused (oda) | client_to | open | ok p50 / p99 / max ms | step p50 / p90 µs | dropped |
+|---|---|---|---|---|---|---|---|---|---|
+| 200, R=1 (17,1) | 5 968 | 5 958 | 0 / 0 | 0 | 0 | 10 | 50,9 / 68,2 / 73,0 | 232 / 352 | 0 |
+| 200, R=10 (19,1) | 59 302 | 59 264 | 0 / 0 | 0 | 0 | 38 | 52,8 / 101,5 / 155,8 | 640 / 1368 | 0 |
+| 500, R=1 (32,9) | 14 631 | 14 594 | 0 / 0 | 0 | 0 | 37 | 50,8 / 68,2 / 85,9 | 800 / 1392 | 0 |
+| 500, R=10 (22,8) | 145 890 | 145 693 | 0 / 0 | 0 | 0 | 197 | 49,4 / 67,9 / 85,8 | 1408 / 1904 | 0 |
+| 500, R=10, B=8 (26,3) | 146 584 | 73 248 | **73 292 / 73 292** | 0 | 0 | 44 | 53,7 / 71,0 / 76,5 | 752 / 1224 | 0 |
+| 500, RPC'siz (18,6) | — | — | — | — | — | — | — | 512 / 776 | 0 |
+| 200, R=10, duraklama 1000/5000 (30,6) | 59 378 | 59 330 | 0 / 0 | 0 | 0 | 48 | 54,7 / 1004,6 / 1067,5 | 376 / 504 | 0 |
+| 500, R=10, duraklama 1000/5000 (30,3) | 146 250 | 145 970 | 0 / 0 | 0 | 0 | 280 | 53,9 / 1003,3 / 1068,1 | 1112 / 1768 | 10 913 |
+| 200, R=10, duraklama 3000/6000 (15,2) | 57 624 | 53 511 | 0 / 0 | **3 926** | 3 576 | 537 | 65,5 / 2999,9 / 3086,5 | 448 / 744 | 19 081 |
+| 500, R=10, duraklama 3000/6000 (24,3) | 142 250 | 104 714 | 0 / 0 | **36 837** | 29 504 | 8 032 | 57,1 / 3008,4 / 3068,3 | 1200 / 1456 | 137 746 |
+
+Tick maliyeti için aynı makine durumunda dönüşümlü A/B (500 istemci,
+`--duration 20`, sıra RPC'siz / R=10 / R=3, iki tur): step p50 RPC'siz
+728 · 736 µs (yük 15,3 · 10,2), R=3 992 · 1016 µs (11,2 · 7,9), R=10
+1472 · 1480 µs (14,3 · 9,6); `dup_answers` 0.
+
+**Okuma.**
+
+1. **Tam bir kez yük altında tutuyor.** 137 746 düşen batch'li koşu
+   dahil hiçbir koşuda ikinci ya da eşleşmeyen yanıt yok. İki uç her
+   kovada aynı sayıyı görüyor: patlama koşusunda istemcinin cap retleri
+   odanınkiyle birebir (73 292), ve hesap kapanıyor: `sent = req_ext +
+   req_refused` (500'lük uzun duraklama: 105 413 + 36 837 = 142 250) ve
+   istemcinin yanıtsız + açık'ı = odanın yanıtsız retleri + ayrılışta
+   uçuşta kalan kabul edilmişler (`req_ext − ok`): 29 504 + 8 032 =
+   36 837 + 699.
+   200'lük uzun duraklamada 62 istek (`sent − req_ext − req_refused`)
+   hiçbir oda sayacına düşmedi (500'lük koşuda 0): büyük olasılıkla
+   ayrılıştan hemen önce gönderilip oda ayrılışı işlerken atılan istekler
+   — oturum kapsamlı durum (§3.1), ama hiçbir yerde sayılmıyor; küçük bir
+   görünürlük boşluğu, mekanizması doğrulanmadı.
+2. **Bağlantı cap'i tasarlandığı gibi bağlıyor, oda cap'i bağlamıyor.**
+   B=8'lik patlama tek tick'te çekiliyor (bağlantı başı çekim bütçesi 16):
+   her patlamanın tam 4'ü kabul, 4'ü cap retti (146 584'ün yarısı).
+   Oda cap'i hiçbir koşuda bağlamadı (`req_rej_room = 0`): 500 × 10/sn ×
+   ~50 ms ≈ 250 uçuşta ≪ 2000 — §6.1'in Little yasası kuralı ölçüldü.
+3. **Gecikme ~1,5 tick.** `ok` p50 ≈ 50 ms, p99 ≈ 68 ms: istek bir
+   sonraki tick'in READ'ini bekler (ortalama yarım tick), ekonomi 5 ms,
+   completion bir sonraki tick'in 0b'sinde, yanıt o tick'in
+   BROADCAST'inde. Sunucu zaman aşımı hiç yok (`req_to = 0`).
+4. **İsteğin kendi tick maliyeti ilk kez ölçüldü: dış istek başına
+   ~4,5–5,5 µs** (A/B: 1500 istek/sn'de +~270 µs, 5000 istek/sn'de
+   +~745 µs; 500'lük odada tick başına 50 / 167 istek). Zarf çözme,
+   handler (`BuyItem` çözme, servis tutamacının klonu, future'ın kutusu),
+   pending kaydı, worker `tokio::spawn`'ı, completion uzlaşması ve yanıtın
+   private kareye kodlanması. 33 ms'lik bütçenin çok altında
+   (`over_budget` %0, 30 Hz). §8'in "sessiz yol dokunulmadı" sonucu
+   değişmedi — bu, trafiğin kendisinin maliyeti. §11'deki worker havuzu
+   spawn kısmını sınırlardı.
+5. **F14 teslimi ölçüldü.** Kısa duraklamada (1 sn / 5 sn) 500'de batch'ler
+   düşüyor (10 913) ama bağlantı duraklama başına yalnız ~4–6 tick tıkalı
+   kalıyor (çekirdek tamponları geri kalanını emiyor): borç hiç 4'e
+   varmıyor, ret 0. Düşen batch'lerin taşıdığı yanıtlar tam bir kez geliyor,
+   en geç duraklama + ~70 ms'de. Uzun duraklamada (3 sn / 6 sn) fırtına
+   sınırı çalışıyor: 3 926 / 36 837 yanıtsız ret, istemcide yanıtsız ya da
+   açık olarak görünüyor — başka hiçbir kovada değil. Kabul edilmiş
+   isteğin yanıtı en geç duraklama + ~2 tick'te (max 3 086 ms): "bağlantı
+   boşaldığı anda ulaşır" (§3.1) ölçüldü. Reddedilen isteği istemci
+   yalnız kendi zaman aşımıyla görür (§3.1'in tasarımı): istemcinin
+   zaman aşımı en uzun duraklamasının ötesinde olmalı.
+
+**Aynı turda B32'nin yeniden ölçümü** (`gsb-loadgen --orchestrate 500
+--procs 2 --write-stall-secs 0 --duration 20`, üç koşu, yük 16,8 / 13,4 /
+9,5): `dropped` 116 / 116 / 116 — tekrarlanıyor (önceki kayıtlar 116,
+116, 123, 116). Ama **katılma fırtınasında değil**: orkestratörün aldığı
+raporların zaman çizgisi (geçici tanı, commit'lenmedi) katılmada ve
+kararlı pencerede 0, hepsi **ayrılış** penceresinde (adım 600 → 630,
+`members` 500 → 0). Geçici bir çekirdek tanısı 116'nın hepsinin
+`try_send` → **Closed** olduğunu, bağlantı başına tam bir kez, gösterdi:
+istemci LEAVE sonucunu alır almaz soketini kapatır, yazıcı biter ve
+bağlantının çıkış kanalı kapanır; oda ayrılışı registry üzerinden bir
+sonraki tick'inde öğrenir, arada fan-out o kapalı kanala bir batch daha
+dener ve `dropped` sayar — istemcinin istediği bir kare kaybolmuyor.
+Sayı zamanlamaya bağlı: aynı topoloji elle (`--serve` + 2 × 250 `--addr`)
+varsayılan worker'larla 0, sunucu `--workers 1` → 116, istemciler
+`--workers 1` → 80, ikisi 1 → 130, sunucu 2 + istemciler 1 → 1.
+Tekrarlanabilirliğin kaynağı: pinsiz orkestratör çocuklara
+`--workers 1` veriyor (`args.workers.max(1)`; yorum "runtime default"
+diyor). Düzeltilmedi — iki ayrı karar: kapalı kanalı `dropped`'tan
+ayırmak bir metrik anlamı değişikliği, orkestratörün worker sayısını
+değiştirmek geçmiş orkestre tabanlarının koşulunu değiştirir.
+
 ## 9. Kontrol düzlemi: oda yaşam döngüsü ve maç-sonucu dikişi
 
 **API (composition root):** `ServerHandle::open_room(RoomConfig)`,
@@ -584,9 +758,12 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 - **Conn-side gate:** per-connection in-flight kümesinin conn actor'üde
   tutulması (cap + dup kaynakta enforce) — bağımsız takip adımı; oda
   tarafı cap bu turda yerinde kaldı.
-- **Loadgen'de RPC trafiği:** smoke assert'leri sıfır-trafik invariant'larını
-  doğruluyor; yük altında ret kovalarını gözlemleyecek RPC üreten bir
-  loadgen modu yok.
+- ~~**Loadgen'de RPC trafiği**~~ **Yapıldı (B23):** `--rpc-rate R
+  [--rpc-burst B]` — mod, defter, RESULT anahtarları ve ölçüm §8.2'de.
+  Kalan: mod yalnız demo'nun `ECONOMY`'sini (dış-I/O yolu) gönderiyor —
+  oda-local `ABILITY` yolu yük altında ölçülmedi (menzil kontrolü
+  istemcinin kendi konumunu bilmesini ister); orkestre / churn koşuları
+  modu reddediyor (CLIENT satırı defteri taşımıyor).
 
 ## 12. Testler: sözleşmenin kilidi
 
@@ -606,4 +783,7 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 | Kontrol düzlemi: idempotent açma (tek oda), çakışma, durum yaşam döngüsü | `control_plane.rs::*` |
 | Maç sonucu kapanışta dışarı (yeniden oluşturulabilir oda ikinci sonucu verir) | `control_plane.rs::match_result_reports_on_destroy` |
 | Bilet: geçerli/hatalı/boş/geç doğrulama; oda sabitlemesi; bütçe etkileşimi | `ticket.rs::*` |
+| Ret nedenlerinin metni sabit (oda + shard + loadgen aynı sabitleri okur; baytlar aynı) | `gsb-core/src/rpc.rs::tests::the_rejection_reasons_are_pinned` |
+| Loadgen RPC defteri: ilk yanıt kapatır; ikinci yanıt yalnız dup; gönderilmemiş id yalnız eşleşmeyen; sınır geç / yanıtsız / açık'ı ayırır; çekirdek nedenleri sınıflanır | `gsb-server/src/loadgen/client/rpc/ledger/tests.rs` (6 test) |
+| Loadgen RPC modu uçtan uca: makul hızda her istek bir kez `ok`, istemci zaman aşımı 0; cap'in üstündeki patlamada istemci ve oda aynı cap ret sayısını görür; modsuz satırda `rpc_*` yok | `gsb-server/tests/loadgen_rpc.rs` |
 | Tel üzerinden: idempotent yaşam döngüsü, runtime oda dolu (kod 8), maç sonucu, RPC sızma-yok/sonraki-tick, bilet akışı + yavaş-auth penceresinde tick canlılığı | `gsb-server/tests/e2e.rs` (son beş test) |

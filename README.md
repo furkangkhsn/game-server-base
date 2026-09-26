@@ -146,6 +146,10 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 #  between posts and strikes enemies in reach (RESULT adds `shard_members=`
 #  and the team exchange's `team_*=` rates). Demo-only flags (--visibility, --profile, …)
 #  refuse the other games.
+# --rpc-rate R [--rpc-burst B] (demo; in-process or --addr runs): every client also
+#  sends R ECONOMY requests/s, B back to back every B/R s, and matches the answers;
+#  RESULT adds the rpc_* keys (sent, ok, each rejection, client-side timeouts,
+#  duplicate/unmatched answers — both must be 0 — and the ok latency p50/p99/max).
 ```
 
 Output: human-readable report + single line `RESULT mode=.. clients=.. joined=..
