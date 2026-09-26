@@ -80,6 +80,7 @@ where
                 // the join-time value.
                 group: self.logic.group_of(&self.world, admission.player),
                 batch: Vec::new(),
+                dropping: false,
                 detached: false,
                 detach_deadline: None,
                 detach_ceiling: None,
@@ -163,6 +164,8 @@ where
                 .get_mut(&player)
                 .expect("parked row checked by caller");
             rc.out = out;
+            // A fresh transport: no run of drops to resume from (F11).
+            rc.dropping = false;
             rc.actions = act_rx;
             rc.detached = false;
             rc.bot_fed = false;

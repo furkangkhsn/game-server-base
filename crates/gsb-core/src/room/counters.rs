@@ -53,6 +53,11 @@ pub(crate) struct RoomConn<G> {
     /// capacity is retained so the 0-2-frame batch never allocates again
     /// after warm-up — see `docs/ROADMAP.md`, the floor breakdown).
     pub(crate) batch: FrameBatch,
+    /// This connection's latest non-empty batch was dropped at the
+    /// fan-out: the next one delivered is reported as the resume
+    /// ([`GameLogic::on_batch_resumed`], F11). A fresh transport (join,
+    /// resume, migration arrival) starts `false`.
+    pub(crate) dropping: bool,
     // -- Detach/resume state (§14.4: the CLOCK is core-owned; §7: the
     //    broadcast/READ skip flags are flag-guarded so a dead outbound
     //    half never pollutes the drop counter). --------------------------

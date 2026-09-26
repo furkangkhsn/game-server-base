@@ -155,6 +155,7 @@ where
                                     entity: p.entity,
                                     group: self.logic.group_of(&self.world, p.player),
                                     batch: Vec::new(),
+                                    dropping: false,
                                     detached: p.detached,
                                     detach_deadline: p.detach_deadline,
                                     detach_ceiling: p.detach_ceiling,

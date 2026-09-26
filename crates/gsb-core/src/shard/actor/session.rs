@@ -70,6 +70,8 @@ where
         let mut entity = 0;
         if let Some(rc) = self.conns.get_mut(&player) {
             rc.out = out;
+            // A fresh transport: no run of drops to resume from (F11).
+            rc.dropping = false;
             rc.actions = act_rx;
             rc.detached = false;
             rc.bot_fed = false;

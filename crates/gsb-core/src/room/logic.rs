@@ -170,6 +170,20 @@ pub trait GameLogic<W>: Send {
     /// next one; a delta stream by the next keep-alive full).
     fn on_batch_dropped(&mut self, _world: &mut W, _player: PlayerId, _snapshot: bool) {}
 
+    /// `player`'s batch went through again: the first batch the fan-out
+    /// delivered to this connection after one or more
+    /// [`Self::on_batch_dropped`] reports (a batch was accepted by its
+    /// channel — the client may be reading again). Called at the same
+    /// point of the fan-out as the drop report (right after this
+    /// player's `private`), once per run of drops; a resumed session (a
+    /// fresh transport) starts with no run. A logic that paces what it
+    /// re-arms against a connection whose channel stays full releases
+    /// the pacing here, so the owed payload rides the next frame instead
+    /// of waiting out a back-off.
+    ///
+    /// Default: no-op.
+    fn on_batch_resumed(&mut self, _world: &mut W, _player: PlayerId) {}
+
     /// Produce the payload to ship to a group on a **keep-alive tick**
     /// (the cadence is due). Called after `snapshot` for the same tick,
     /// whether it emitted a payload or the group was unchanged; on a

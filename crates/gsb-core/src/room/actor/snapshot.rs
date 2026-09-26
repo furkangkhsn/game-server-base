@@ -285,8 +285,14 @@ where
                     // (F11). The buffer goes back for the next tick.
                     dropped += 1;
                     rc.batch = e.into_inner();
+                    rc.dropping = true;
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
+                } else if rc.dropping {
+                    // The first batch through after a run of drops: the
+                    // logic may release what it paced (F11).
+                    rc.dropping = false;
+                    self.logic.on_batch_resumed(&mut self.world, player);
                 }
             }
         }
