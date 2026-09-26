@@ -648,7 +648,7 @@ bildirim YOK (bildirimi taşıyacak yol ölü — sayacın var olma sebebi).
 |---|---|---|---|---|
 | TCP | sessiz FIN | ERROR 14 → FIN | sessiz FIN | ERROR 9 → FIN |
 | TLS | sessiz close_notify/FIN | ERROR 14 → close_notify/FIN | sessiz | büyük kare: ERROR 9 → son; **bozuk kayıt: bildirim YOK** (TLS oturumu ölü, rustls fatal alert'ini göndermiş, yazma başarısız) |
-| WS | boş kapanış çerçevesi (istemcide 1005) | ERROR 14 (binary mesaj) → boş kapanış çerçevesi | kapının kendi kapanış çerçevesi (1002/1003/1007/1009) | **aynı** — kapanış çerçevesi BU kapının bildirimi; RFC 6455 §5.5.1 kapanıştan sonra veri çerçevesini yasaklar, soket yazıcı görevi arkasına düşen ERROR 9'u (ve fan-out artığını) atar |
+| WS | boş kapanış çerçevesi (istemcide 1005) | ERROR 14 (binary mesaj) → kapanış çerçevesi **1001 "Going Away"** (B24; önceden boş) | kapının kendi kapanış çerçevesi (1002/1003/1007/1009) | **aynı** — kapanış çerçevesi BU kapının bildirimi; RFC 6455 §5.5.1 kapanıştan sonra veri çerçevesini yasaklar, soket yazıcı görevi arkasına düşen ERROR 9'u (ve fan-out artığını) atar |
 | QUIC | endpoint `close(0)`: tüm bağlantılar ANINDA kapanır, akıştaki veri terk edilir | ERROR 14 → akış FIN'i (ACK beklenir) | sessiz; üstelik okuyucu bırakınca yazıcının düşüşü son tutamaçtı → anında kapanış | ERROR 9 → akış FIN'i (ACK beklenir) |
 | rUDP | sessiz (FIN yok; istemci kendi canlılık saatine kalır) | ERROR 14 REL bandında, TEK datagram (yazıcı, kanal kapanınca kuyruğu boşaltıp çıkar — yeniden gönderim fırsatı pratikte yok; kayıpta istemci eskisi gibi kendi saatine kalır); **FIN yok — bildirim tek kapanış sinyali** | yol yok (rUDP'de `StreamRejected` üretilmez; bozuk datagram demux'ta düşer) | — |
 
@@ -708,8 +708,9 @@ olarak belgelidir (elenen 6).
 4. *Yalnız taşıma-yerli bildirim* (WS 1001 "Going Away", QUIC
    CONNECTION_CLOSE uygulama kodu). TCP/TLS/rUDP'de karşılığı yok —
    en çok ihtiyaç duyan rUDP'de hiç yok — ve istemci iki bildirim biçimi
-   öğrenmek zorunda kalırdı. (WS'in durdurmadaki kapanış çerçevesi boş
-   kaldı; 1001'e çevirmek ayrı, küçük bir iş.)
+   öğrenmek zorunda kalırdı. (WS'in durdurmadaki kapanış çerçevesi
+   B24'te 1001'e çevrildi — bildirimin YERİNE değil, ARKASINDAN; aşağıda
+   "WS kapanış kodu (B24)".)
 5. *Beklemeli gönderim* (diğer kod-9 kapanışlarındaki gibi). Okumayan
    her istemci için bir park etmiş aktör; bkz. yukarı.
 6. *`stop()`'ta boşaltma süresi* (N ms bekle, ya da yazıcıları bekle).
@@ -737,6 +738,48 @@ mesajı → 1003 kapanış çerçevesi ve ARKASINDA hiçbir şey);
 kuralı olmadan düşer); `gsb-protocol` `error_code` (14 sabitlendi — 15
 mutasyonunda üç test düşer). Resume semantiği değişmedi (`reconnect.rs`
 yeşil): bildirim yalnız çıkış kuyruğuna bir kare ekler.
+
+**WS kapanış kodu (B24).** WS kapısının kendi kapanışı — bağlantı
+aktörü oturumu bitirdiğinde writer pump'ın sink'i kapatması — boş bir
+kapanış çerçevesiydi; istemci bunu 1005 ("durum yok") okur, hiçbir şey
+söylemeyen bir eşten ayırt edemez. Artık **1001 "Going Away"**, yalnız
+durum kodu (`[0x88, 0x02, 0x03, 0xE9]`; gerekçe metni yok — RFC 6455
+§5.5: kontrol yükü ≤ 125 bayt, gerekçe ≤ 123 bayt UTF-8; okuyucunun
+hata kapanışları da gerekçesiz). Okuyucunun hata kapanışları
+(1002/1003/1007/1009) ve istemcinin başlattığı kapanışın yankısı
+değişmedi.
+
+- *Kapsam:* bu kapanış yalnız `stop()`'ta değil, aktörün bitirdiği her
+  oturumda gider (idle, bütçe, cap, supersede — ERROR 9/5'ten sonra).
+  Kapı sebebi bilmez: aktörden kapıya giden tek şey kare kanalıdır.
+  1001 hepsinde doğru okunur — "sunucu ucu bu bağlantıdan ayrılıyor";
+  HÜKÜM (neden, ne yapmalı) önündeki ERROR karesinde (tek bildirim
+  biçimi, elenen 4).
+- *Yan düzeltme — ikinci kapanış yok:* sunucu önce kapattığında,
+  istemcinin cevap kapanışı okuyucuda yine yankılanıyordu (soket
+  yazıcı görevi `closing` sonrası yalnız VERİ çerçevelerini atıyordu):
+  istemci ikinci bir kapanış çerçevesi alıyordu. RFC 6455 §5.5.1 yankıyı
+  yalnız önce kapanış göndermemiş uca ister; yazıcı artık ilk kapanıştan
+  sonra her çerçeveyi atar, yalnız okuyucunun `Shutdown`'ını uygular.
+
+*Elenenler.* (a) *1000 "Normal Closure":* "bağlantının amacı yerine
+geldi" demek — `stop()` için yanlış, B24'ün adını koyduğu durum tam
+1001. (b) *Sebebe göre kod* (`stop()` → 1001, politika hükümleri →
+1008): aktörden kapıya sebep taşıyan yeni bir kanal/mesaj (çekirdek +
+pump API'si); istemci sebebi zaten ERROR kodundan okuyor. Tetikleyici:
+yalnız kapanış koduna bakabilen bir istemci (ör. ERROR karesini
+çözemeyen bir tarayıcı katmanı). (c) *Gerekçe metni* ("server
+stopping"): stop'u diğer sonlardan ayıramayan kapı için yanıltıcı
+olurdu; hata kapanışlarıyla tutarlı olarak yok.
+
+*Testler.* `gsb-net` `ws::tests::going_away` (kapı: aktörün son karesi,
+sonra bayt bayt `88 02 03 E9`, istemci cevapladıktan sonra akış sonu —
+ikinci kapanış yok; kapanış çerçevesi RFC sınırlarında);
+`gsb-server/tests/ws_going_away.rs` (uçtan uca: `stop()` → ERROR 14 →
+1001 → cevap → akış sonu; kendi ham WS istemcisiyle, çünkü sabitlenen
+şey kapanış çerçevesinin baytı). Mutasyonlar: boş kapanış → iki test
+de düşer; kapanıştan sonra kontrol çerçevesini atmamak → ikisi de
+(ikinci kapanış) düşer.
 
 **Loadgen (B14) — yapılmadı, neden.** Kapanışları istemci tarafında
 SEBEBE göre sınıflamak, kod-9 `message`'ını anahtar yapmayı gerektirir:
