@@ -2351,7 +2351,7 @@ metrik kanalı adım bariyeri, istemciler kit'in `ClientView`'ıyla):
 | Test | Kilitlediği | Mutation-check (savaş tarafında, yedekten geri yüklenerek) |
 |---|---|---|
 | `fog::allies_are_seen_map_wide_and_a_faction_sees_nothing_it_has_no_eyes_on` | shard 0 ve 3'teki iki müttefik birbirini, her fraksiyon kendi dört kulesini görüyor; üçüncü fraksiyonun görünümü koşu boyunca yalnız kendi kayıtları; shard 3'teki oyuncu shard 3'ün iki nötr noktasını görüyor, shard 0'daki görmüyor | kule yok → kırıldı; kulede `TeamMember` yok → kırıldı; wire `Planar` desimetre → kırıldı; kayıtta fraksiyon yok → kırıldı |
-| `fog::an_enemy_is_seen_through_a_far_tower_on_another_shard` | shard 2'de fraksiyon 0'ın kulesine yürüyen düşmanı 850 m ötede shard 3'teki fraksiyon 0 oyuncusu, kule gördüğü ilk kayıttan (≤ 60 m) son kayda kadar görüyor; öncesinde ve sonrasında görmüyor; üçüncü fraksiyon hiç görmüyor. **Gerçek saatte** (bulgu W2-4) | kule yok / `TeamMember` yok / yarıçap 30 → kırıldı |
+| `fog::an_enemy_is_seen_through_a_far_tower_on_another_shard` | shard 2'de fraksiyon 0'ın kulesine yürüyen düşmanı 850 m ötede shard 3'teki fraksiyon 0 oyuncusu, kule gördüğü ilk kayıttan (≤ 60 m) son kayda kadar görüyor; öncesinde ve sonrasında görmüyor; üçüncü fraksiyon hiç görmüyor. duraklatılmış saatte (F10'a dek gerçek saatteydi — bulgu W2-4) | kule yok / `TeamMember` yok / yarıçap 30 → kırıldı |
 | `neutral::an_unclaimed_point_follows_the_shard_a_captured_one_the_faction` | W1 nötr kuralı Cephe'de: sahipsiz nokta shard 3'teki herkese (640 m ötedekine de), başka shard'da yalnız görüşle (noktadaki müttefiği aracılığıyla); ele geçirilince fraksiyonun birimi — alan oyuncu ayrıldıktan sonra da fraksiyonun uzaktaki oyuncusu görüyor, rakip fraksiyon artık görmüyor | ele geçirmede `TeamMember` yazılmıyor → kırıldı |
 | `placement::logins_appear_where_the_realm_places_them_and_learn_their_faction` | kayıtlı karakter kaydında, kaydının shard'ında; kaydısız üssünde, özet fraksiyonunda; her oturuma bir `Welcome` (geç katılana one-shot full'uyla) | kayıt yok sayılıyor → kırıldı; `Welcome` yok / 0 tabanlı → kırıldı; full mod (delta yok) → kırıldı |
 | `combat::a_kill_across_a_seam_is_credited_once_by_the_victims_shard` | x = 0 dikişinin iki yanında 10 m: dört darbe sahibin shard'ında (1) uygulanıyor, öldürme BİR kez, saldıranın wire id'siyle; düşen üssünde tam canla; artık vurulacak bir şey yok | yeniden doğma yok → kırıldı; kaynak shard da öldürmeyi sayıyor → kırıldı (çift kredi); `lent_pos = None` → kırıldı (seam ötesini göremiyor); uzak etki yok sayılıyor → kırıldı |
@@ -2415,7 +2415,9 @@ kit değişikliği yok, kit iç öğesi kopyalanmadı. Kayda geçenler:
    yürüyen senaryosu gerçek saatte koşuyor (bariyer yine kesin, röle
    bir tick gecikebilir). En küçük değişiklik: ticker'ın damgasını
    `tokio::time::Instant`'tan almak — üretimde aynı, testte sanal. Kod
-   değişmedi.
+   değişmedi. **→ F10'da yapıldı (2026-09-26):** ticker runtime saatinde
+   zamanlar ve damgalar (TICK-ARCHITECTURE "Tick saati"); Cephe'nin
+   yürüyen senaryosu paused saatte (2,04 sn → ~0,05 sn, aynı tick'ler).
 
 **Gözlemler (bulgu değil):** kompozit, çalışma anında `TeamMember`'ı
 değişen bir NPC'yi (ele geçirilen nokta) hiçbir şey yapmadan doğru

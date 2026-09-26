@@ -220,3 +220,55 @@ değiştirme aynı olsun." `dt` duvar saati tabanlı olduğundan sağlanıyor;
 `gsb-game/tests/frame_independence.rs` bunu 60 Hz (run_every=1) vs 15 Hz
 (run_every=4) odalarıyla kodluyor: 5.0 s simülasyon süresi her iki odada
 aynı mesafe (±0.1 birim).
+
+### Tick saati (BACKLOG F10, 2026-09-26)
+
+**Sorun.** Ticker tick'leri `std::time::Instant` ile hem zamanlıyor
+hem damgalıyordu. Tokio'nun duraklatılmış saatinde (`start_paused`)
+ticker'ın `sleep`'i sanal saati bir periyot ilerletir ama duvar saati
+yerinde durur: damgalar mikrosaniye arayla gelir, odanın `dt`'si (iki
+damga arası) donar, yürüyen bir birim yerinde sayar (KIT-ARCHITECTURE
+W2-4). Yürüyen aktör testleri gerçek saatte koşmak zorundaydı.
+
+**Karar.** Ticker **runtime saatinde** zamanlar (`sleep_until`) ve
+damgalar (`tokio::time::Instant::now()`); `TickInfo::at`'in tipi
+değişmedi (`std::time::Instant`, `into_std()` ile) — alanı okuyan ve
+`TickInfo` kuran her kod (testlerin elle kurduğu tick'ler dahil) aynen
+derlenir. Üretimde değer aynı: tokio'nun `test-util` özelliği yokken
+`tokio::time::Instant::now()` doğrudan `std`'ninkidir; varken de hiç
+duraklatılmamış bir runtime aynı anı okur. Duraklatılmış saatte damga
+sanal saatle ilerler: `dt` periyottur (zamanlayıcının milisaniye
+çözünürlüğüyle 33/34 ms, birikimli sapmasız).
+
+**Tüketiciler — kararlar tek tek.** Damgayla KARŞILAŞTIRILAN her okuma
+aynı saatten gelmeli (`gsb_core::ticker::now()`); yalnız iş ölçen
+okumalar duvar saatinde kalır.
+
+| Tüketici | Saat | Gerekçe |
+|---|---|---|
+| `dt` (oda ve shard: `t.at − last_at`, catch-up tavanı) | damga | iki damga arası; paused'da periyot, gerçekte değişmedi |
+| Tick gecikmesi `late_us` (adım başı − damga) | `ticker::now()` | damgayla fark; std'de paused damga ileride kalır, fark doyarak 0 olurdu — anlamsız bir karışım |
+| Girdi-boşta saati: `touch`/süpürme (`t.at`) ve katılımdaki `start` damgaları (oda `join` ×2, shard `session`/`messages`) | damga / `ticker::now()` | süpürme `t.at − start`'ı ölçer: iki uç aynı saatte olmalı |
+| Adım süresi (`step_us`, histogramlar, `observe_step_us`) ve alt ölçümler (sınır/göç süreleri) | `std::time::Instant` | CPU işini ölçer; paused saat senkron işte ilerlemez → hep 0 okurdu |
+| Ayrılma bekleme süresi (park grace/tavan), RPC zaman aşımı | `std::time::Instant` (değişmedi) | damgayla hiç karşılaşmaz, kendi içinde tutarlı. Paused saatte gerçek zamanlı kalırlar — tetikleyici: bunları paused saatte sınayan bir test |
+| Metrik toplayıcı | yalnız tick olayı, damga okumaz | — |
+
+**Elenenler.** (1) *`TickInfo::at`'i `tokio::time::Instant` yapmak:*
+tipte açık, ama public alan — `IdleView`, idle saati ve `TickInfo` kuran
+her test (~15 dosya) değişirdi; `into_std()` aynı anı verir. (2) *Yalnız
+damgayı çevirmek, zamanlamayı std'de bırakmak:* paused'da da sonuç aynı
+çıkar (her uyku bir periyot), ama iki saatli ticker'ın geri-kalma
+(resync) denetimi karışık saatte kıyas yapardı. (3) *Testlere sanal
+`dt` enjekte etmek:* motorun gerçek yolunu değil bir yan yolu sınardı.
+
+**Testler.** `ticker::tests::ticks_are_stamped_on_the_runtime_clock`
+(paused: ardışık damgalar periyot ±1 ms, 30 periyot sapmasız);
+`room::tests::paused_clock::a_walker_covers_its_distance_on_the_paused_clock`
+(canlı ticker'daki oda, 7 m/sn'lik yürüyücü: 60 adımda 2 sn paused
+zaman, yol = hız × geçen süre ± bir periyot, gerçek süre < 1 sn). İkisi
+de eski damgayla düştü (damga aralığı 13 µs). Mutasyon (yalnız damga
+`std::time::Instant::now()`'a geri): ikisi ve çevrilen Cephe testi
+düşer. Cephe'nin tek gerçek saatli senaryosu
+(`fog::an_enemy_is_seen_through_a_far_tower_on_another_shard`) paused
+saate çevrildi: 2,04 sn → ~0,05 sn; görülme/kaybolma tick'i ve mesafe
+(38 / 41, 59,82 m) iki saatte de her koşuda aynı.
