@@ -95,7 +95,7 @@ const fn net(
 /// The net scope: wire traffic aggregated over all connections (the
 /// per-connection attribution lives in `actions_dropped_top` and the
 /// per-actor log lines, not in this aggregate).
-pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 8] = [
+pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 9] = [
     net(
         "gsb_net_bytes_in_total",
         "Wire bytes received over all connections (frame bodies), cumulative.",
@@ -135,5 +135,10 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 8] = [
         "gsb_net_violations_total",
         "Protocol-violation events counted by violation budgets, cumulative.",
         |n| n.violations,
+    ),
+    net(
+        "gsb_net_input_rate_limited_total",
+        "Valid game-band input refused over a room's input rate limit (dropped, not a violation), cumulative.",
+        |n| n.input_rate_limited,
     ),
 ];

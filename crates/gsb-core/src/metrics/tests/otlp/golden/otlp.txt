@@ -36,6 +36,8 @@ gsb_net_actions_dropped sum t=2 mono=true unit="" n=1 | Input actions dropped on
   [] 1000..2000 int 5
 gsb_net_violations sum t=2 mono=true unit="" n=1 | Protocol-violation events counted by violation budgets, cumulative.
   [] 1000..2000 int 1
+gsb_net_input_rate_limited sum t=2 mono=true unit="" n=1 | Valid game-band input refused over a room's input rate limit (dropped, not a violation), cumulative.
+  [] 1000..2000 int 9
 gsb_net_server_closes sum t=2 mono=true unit="" n=11 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0
