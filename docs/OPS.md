@@ -99,8 +99,40 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
   (tek oda aktörü 0 yazar; takım ailesi yalnız `team_exchange`'i
   uygulayan mantıkta — `ShardedTeamRoom`). Takım sayaçlarının ~1 sn
   penceresi `team_exchange_summary` log satırında da; hub tarafı
-  (`relays`, `relay_drops`) `team_hub_summary` satırında kaldı. Crystallization olayları (kit) rapora girmedi — log
-  satırı olarak kaldı, gerekçe CROSS-SHARD §4c madde 5.
+  (`relays`, `relay_drops`) `team_hub_summary` satırında kaldı. Crystallization olayları (kit) F9'dan beri
+  aşağıdaki mantık sayaçlarıdır (`crystal_*`); wire başına ayrıntı
+  `gsb_kit::crystal` debug satırında kaldı (CROSS-SHARD §4c madde 5).
+- **Mantığın kendi sayaçları (F9).** Çekirdeğin bilmediği, oda
+  mantığının (kit kompoziti ya da oyun) kendi adlandırdığı kümülatif
+  sayaçlar; çekirdek yeni sayaç için değişmez. Oyun/kit sayacı bir
+  `const` olarak bir kez bildirir —
+  `LogicCounter::sum("war_kills", "…")` ya da `LogicCounter::max(..)`
+  (yüksek-su işareti) — değerini kendi düz alanında tick içinde sayar ve
+  `GameLogic::logic_counters` (kit: `Game::counters`) örnek başına bir
+  kez hepsini (sıfırlar dahil) koyar. Ad kuralları: 1–32 bayt
+  `[a-z0-9_]`, harfle başlar, `_total` ile bitmez (const değerlendirmede
+  derleme hatası). Oda başına en çok **16** ad; fazlası atılır, sayılır
+  ve aktör bir kez `warn` eder. Görünüm:
+
+  | Yüzey | Biçim |
+  |---|---|
+  | `gsb-metric scope=room` satırı | çekirdek anahtarlarından SONRA, mantığın koyduğu sırayla `logic_<ad>=<değer>` |
+  | Prometheus (SUM) | `gsb_room_logic_<ad>_total{room="r<id>"}`, `counter`, HELP = bildirimin help'i |
+  | Prometheus (MAX) | `gsb_room_logic_<ad>{room="r<id>"}`, `gauge` (tepe bir oranın payı değildir) |
+  | loadgen teli | `GSMC`: odanın kaydının sonunda sayı, taşma sayısı, sayaç başına ad + kural + değer (help taşınmaz) |
+  | loadgen `RESULT` | `game=`'den hemen önce `logic_<ad>=<değer>` — koşunun son katlanmış raporundan, her sayaç kendi kuralıyla katlanmış |
+
+  Ad başına aile seçildi, `name` etiketli tek aile
+  (`gsb_room_logic_total{name="kills"}`) elendi: tek aile hem `counter`
+  hem `gauge` olamaz ve sayaç başına HELP kaybolurdu; kardinalite iki
+  yolda da aynı (adlar oyun başına statik, oda etiketi zaten her oda
+  ailesinde). Sayaç bildirmeyen bir mantığın `gsb-metric` ve Prometheus
+  metni **bayt bayt aynıdır** (çekirdek testi
+  `metrics::tests::golden` önceki kodun ürettiği metne sabit). Bugün
+  bildirenler: sharded kit odaları crystallization açıksa altı
+  `crystal_*` (`moves`, `release_quiet/band/partner`, `untracked`,
+  `fights_peak` — MAX), savaş demosu `war_kills`. `/rooms` sayaç
+  listelemez (yalnız oda id'leri), değişmedi.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

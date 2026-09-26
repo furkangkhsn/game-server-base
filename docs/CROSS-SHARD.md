@@ -377,6 +377,21 @@ yönlenir ve `h + 2`'de bir kez uygulanır (MMO testi `migration_tick.rs`).
    ihtiyacı olması ya da ikinci bir kit-tarafı olay ailesi — o gün genel
    seam kendini öder. Göç SAYISI ise çekirdeğin olayıdır ve rapora girdi
    (`migrations_out/in/failed`, aşağıda §4d).
+   *F9'da kapandı (2026-09-26):* genel seam yapıldı —
+   `GameLogic::logic_counters` + `LogicCounters` (çekirdek kit
+   kavramı öğrenmedi; sabit boy dizi 16 yuva, adlar statik `const`,
+   Prometheus'ta ad başına aile, fold kuralı sayaçla birlikte:
+   DESIGN §12, OPS §3). Crystallization'ı açan sharded oda altı sayaç
+   koyar: `crystal_moves`, `crystal_release_quiet`,
+   `crystal_release_band`, `crystal_release_partner`,
+   `crystal_untracked` (tavanın reddettiği kontak) ve
+   `crystal_fights_peak` (tablonun tepe boyu, MAX); açmayan oda hiçbirini
+   koymaz. Debug satırları wire başına ayrıntı için kaldı. MMO testi
+   (`cross_seam_crystal.rs`) onları gerçek shard aktörlerinin
+   örneklerinden okur; 200 botluk 60 sn `--mmo-duel-frac 0.2` koşusunda
+   RESULT: `logic_crystal_moves=20 logic_crystal_release_quiet=19
+   logic_crystal_release_band=10 logic_crystal_release_partner=11
+   logic_crystal_untracked=0 logic_crystal_fights_peak=9`.
 
 **Testler.** Kit (fikstür oyun, `SeamStage` üzerinden, 8 + 1):
 K'dan önce değil tam `1 + K`'da tespit, yalnız yüksek wire taşınır (alçak

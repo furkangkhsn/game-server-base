@@ -2339,6 +2339,7 @@ ailesine katılır). Tablo kodda, onu uygulayan tek döngünün yanındadır
 | SUM | `lagged_*`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_*`, `detach_forced`, `effects_*` ve `migrations_*` aileleri (küçük paket), `team_*` ailesi (W2), `requests_*` ailesinin tamamı, `metrics_dropped` | Ayrık iş üzerindeki kümülatif sayaçlar. (Bir göç kaynağında `migrations_out`, hedefinde `migrations_in` olarak bir kez sayılır: katlanmış ikili eşit çıkmalı, birbirine eklenmez.) |
 | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | Shard başına hesaplanmış bir ORAN ortalanamaz: sayaçlar aynı duvar saati üzerinde ayrıktır, odanın oranı toplamlarıdır (ortalamak 4 shard'lık odada kaybın dörtte birini raporlardı). |
 | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauge, ama **bölünmüş** gauge — shard'lar odanın bağlantılarını, gruplarını, park edilmiş oturumlarını ve uçuştaki isteklerini PAYLAŞTIRIR, yani odanın değeri toplamdır. Karşı örnek `max_group`/`snap_bytes_max`: bunlar bir popülasyon değil, popülasyon ÜZERİNDE bir uçtur. |
+| SAYAÇ BAŞINA | `logic` | Mantığın kendi sayaçları (F9, aşağıda) kurallarını yanlarında taşır: ad ad, `LogicFold::Sum` toplanır (yukarıdaki SUM satırı gibi ayrık iş), `LogicFold::Max` büyüğü alır (yüksek-su işareti, MAX satırı gibi); yalnız bazı shard'ların bildirdiği ad korunur; taşma sayıları toplanır (`LogicCounters::merge`). |
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi
@@ -2411,6 +2412,30 @@ yolu tetikle, ve testi onu en çok benzediği KOMŞUSUNDAN ayıracak
 biçimde yaz (tepe ≠ sonuncu, akış ≠ gauge, ölüm ≠ destroy, ihlal ≠
 trafik, kadans ≠ kayıp). Testi mutation-check et: artışı boz, testin
 düştüğünü gör, geri al.
+
+**Mantığın kendi sayaçları (F9).** `RoomSample` sabit biçimli bir
+yapıdır ve her yeni çekirdek sayacı ~10–29 dosyaya dokunur; çekirdeğin
+bilmediği olayların (kit'in crystallization olayları, oyunun
+öldürmeleri) hiç yolu yoktu. Seam: `GameLogic::logic_counters(&self,
+world, out: &mut LogicCounters)` (varsayılan boş). Sayaç bir `const`
+bildirimdir (`LogicCounter::sum/max(ad, help)` — ad kuralı const
+değerlendirmede denetlenir; çalışma zamanında kayıt yok), değer
+mantığın kendi alanındadır (tick içinde `self.kills += 1`: tahsis yok,
+kilit yok, mesaj yok) ve aktör onu **örnek başına bir kez** (rapor
+temposunda, adım sonrası) sabit boyutlu `LogicCounters`'a okutur; küme
+`RoomSample`/`RoomReport` içinde değerle taşınır (`Copy`, en çok
+`LOGIC_COUNTERS_MAX` = 16 yuva; ad satır içi 32 bayt, böylece telden
+çözülen sayaç da aynı `Copy` değer). Sınırı aşan ad atılır, kümede
+sayılır, aktör bir kez `warn` eder (adlar oyun başına statik: sınır ilk
+test koşusunda görülür, yük altında ortaya çıkmaz). Aynı ad bir kümede
+iki kez konursa kuralıyla katlanır — shard katlamasının aynısı. Katlama
+kuralı iki tanedir: SUM (ayrık iş, Prometheus `counter`) ve MAX
+(yüksek-su işareti, `gauge`); ortalama/min gerekmedi (kümülatif bir
+sayacın başka anlamlı katlaması yok, gerekirse yeni bir `LogicFold`
+kolu). Toplayıcı ve Prometheus/log renderer yine katlamaz; görünüm
+biçimleri ve elenen `name` etiketli aile: OPS §3. Varsayılan
+değişmedi: sayaç bildirmeyen mantığın metni önceki kodun ürettiği
+metne bayt bayt sabittir (`metrics::tests::golden`).
 
 **Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
 logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan

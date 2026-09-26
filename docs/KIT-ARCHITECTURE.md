@@ -209,6 +209,13 @@ Takım odaları (`TeamRoom`, `ShardedTeamRoom`) onun takım karşılığını
 (Entity, Team)`, varsayılanı `spawn_team_player` (W1 — K4'ün kalıntısı
 kapandı; §10 "W1 sonucu").
 
+*F9 (§10 "F9"):* `Game::counters(&self, world, out: &mut LogicCounters)`
+(varsayılan boş) oyunun kendi adlandırdığı metrik sayaçlarıdır;
+yedi kit odasının hepsi onu çekirdeğin `GameLogic::logic_counters`'ına
+iletir (sharded spatial/team kompozitleri iç grid odası üzerinden),
+sharded oda crystallization açıksa önce kendi altı `crystal_*`
+sayacını koyar.
+
 Oda tipleri bunları bir araya getirir:
 
 | Oda | `GroupKey` | `Strip` | Shard durumu |
@@ -3885,6 +3892,88 @@ değişti (`GSMA` → `GSMB`): orkestratörün sunucu çocuğu ve istemcisi ayn�
 ikiliden, karışık sürüm zaten reddediliyor (magic).
 
 **Doğrulama:** 920 → **928** test / 0 hata / 1 ignored.
+
+### F9 — oyunun ve kit'in kendi metrik sayaçları (2026-09-26)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`core/f9-counter-seam`;
+BACKLOG F9, CROSS-SHARD §4c madde 5). Çekirdeğin metrik örneği sabit
+biçimliydi: her yeni sayaç `RoomSample` → `RoomReport` → `gsb-metric`
+satırı → Prometheus → loadgen teli → `fold_rooms` zincirinde ~10–29
+dosyaya dokundu, çekirdeğin bilmediği olayların (crystallization,
+oyunun öldürmeleri) yolu yoktu. Çekirdek tarafı DESIGN §12 "Mantığın
+kendi sayaçları", görünüm biçimleri OPS §3.
+
+**Seam — mantığın uyguladığı (tek, opt-in):**
+
+```rust
+// gsb_core::metrics
+pub const LOGIC_COUNTERS_MAX: usize = 16;
+pub enum LogicFold { Sum, Max }
+impl LogicCounter {
+    pub const fn sum(name: &str, help: &'static str) -> Self; // ad kuralı const'ta
+    pub const fn max(name: &str, help: &'static str) -> Self;
+}
+impl LogicCounters { pub fn put(&mut self, c: &LogicCounter, value: u64); /* .. */ }
+// gsb_core::room::GameLogic
+fn logic_counters(&self, _world: &W, _out: &mut LogicCounters) {}
+// gsb_kit::game::Game
+fn counters(&self, _world: &World, _out: &mut LogicCounters) {}
+```
+
+Oyun sayacı `const` olarak bir kez bildirir, değeri kendi alanında
+sayar (tick yolunda tahsis/kilit/mesaj yok), `counters` örnek başına
+bir kez (rapor temposunda) hepsini koyar. Kit tarafı: yedi kit odası
+`Game::counters`'ı iletir; `ShardedRoom` crystallization açıksa önce
+`crystal_moves`, `crystal_release_quiet`, `crystal_release_band`,
+`crystal_release_partner`, `crystal_untracked` (SUM) ve
+`crystal_fights_peak` (MAX) koyar — kit 6 yuva, oyuna 10 kalır.
+Sayaçlar `Crystal`'ın yeni `stats`'ı (`crystal/counters.rs`) ve
+`FightBook`'un `peak`'i; debug satırları wire başına ayrıntı için kaldı.
+
+**Kullanan:** savaş demosu `war_kills` (öldürücü darbeyi uygulayan —
+kurbanın sahibi — shard sayar, oda genelinde öldürme başına bir kez;
+`Combat::strike` `&mut`). Diğer demolar dokunulmadı.
+
+**Kararlar ve elenenler.**
+- *Statik `const` bildirim + örnekte okuma* seçildi; elenen: çalışma
+  zamanında kayıt (id döndüren `declare`) — id'yi oyunun her yere
+  taşıması gerekirdi, ad çakışması çalışma zamanına kalırdı; sayacı
+  bevy `Resource` yapmak — çekirdek bevy bilmez, kit'e özgü olurdu.
+- *Sınır 16, taşma = at + say + bir kez warn*; elenen: panik (oda
+  fabrikasında panik registry'yi düşürür), sessiz atma.
+- *Ad satır içi 32 bayt*: loadgen'in çözdüğü sayaç da `Copy` kalır;
+  elenen: `Arc<str>` (`RoomSample`/`RoomReport` `Copy` olmaktan çıkardı),
+  çözücüde `Box::leak` ile intern.
+- *Prometheus ad başına aile* (`gsb_room_logic_<ad>_total` / MAX için
+  gauge `gsb_room_logic_<ad>`); elenen: `name` etiketli tek aile (tip ve
+  HELP kaybı). *RESULT genel `logic_<ad>=` segmenti*; elenen: oyun başına
+  segment (loadgen'in oyunun sayaçlarını bilmesi gerekirdi).
+
+**Testler** (önce kırmızı: seam'den ÖNCEKİ kodun ürettiği metin önce
+`metrics::tests::golden`'a sabitlendi ve ayrı commit'lendi; her kural
+mutasyonla kırıldı, dosyalar scratchpad'e yedeklenip geri yüklendi — 57
+mutasyon, hepsi yakalandı; ilk turda ikisi sağ kaldı — adın ORTASINDA
+büyük harf ve telde 16'yı aşan sayı — ve iki test onlar için
+güçlendirildi):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `metrics::tests::golden` | sayaç bildirmeyen sunucunun `gsb-metric` + Prometheus metni bayt bayt (önceki koddan) | boş kümede satıra/metne işaret → kırıldı |
+| `metrics::logic::tests` (8) | ad kuralı (büyük harf, rakamla başlama, boşluk, `=`, `-`, `_total`, uzunluk, ASCII dışı), help kuralı, sınır + taşma sayımı, dolu kümede bilinen ad katlanır, SUM/MAX katlama, `merge` | sınır yok, taşma sayılmıyor, ad katlanmıyor, MAX toplar, SUM max alır, merge taşmayı atar, `_total`/büyük harf/uzunluk/help serbest → kırıldı |
+| `room::tests::logic_counters` (3) | oda aktörünün örneği mantığın koyduğunu adım SONRASI taşır; bildirmeyen mantık boş küme yollar; 17. ad atılır, sayılır, bir kez warn | kopya yok, adım öncesi, warn hiç / her örnekte → kırıldı |
+| `metrics::tests::logic` (4) | rapor son örneğin kümesini taşır; satırda çekirdek anahtarlarından sonra `logic_<ad>=`; ad başına tek aile, odalar birlikte, SUM `counter` MAX `gauge`, help ya da genel help; sayaç yalnız EKLER | rapor kopyalamıyor, satır basmıyor / önek yok, aile yok, gruplama yok, MAX counter / `_total`, help yok sayılıyor → kırıldı |
+| loadgen `fold::tests::{rules, wire}` | katlama kuralı sayaç başına; `GSMC` gidiş-dönüş (ad, kural, değer, taşma); bozuk ad / kural / 17 kayıt reddi | birleştirmiyor, kodlamıyor, kural/taşma okunmuyor, ad denetlenmiyor, sayı sınırsız, magic eski → kırıldı |
+| loadgen `report::logic` (2) | RESULT segmenti; sayaçsız boş | yazılmıyor, boşta işaret → kırıldı |
+| `testing::requests::every_kit_room_forwards_counters_to_the_game` | yedi kit odası `Game::counters`'ı iletir, kendi sayacı eklemez | yedi iletimin her biri ayrı ayrı → kırıldı |
+| `sharded::tests::crystal::counters` (4) | açmayan oda hiçbirini koymaz, açan altısını sıfırdan; göç mover'ın shard'ında; quiet (çift: 2), band, partner bırakması sebebine göre; tavan reddi ve tepe (tablo boşalınca da kalır) | sayılmıyor, sebep karışık, tepe yok / anlık boy, untracked yok, oda koymuyor, kapalıyken koyuyor → kırıldı |
+| MMO `cross_seam_crystal` | gerçek dört shard aktörünün örnekleri: göç Q'nun shard'ında 1, P'nin shard'ında 2 quiet, her shard altı sayaç | göç sayılmıyor, shard aktörü kopyalamıyor → kırıldı |
+| savaş `combat` | öldürme kurbanın shard'ında bir kez, diğerleri 0 | sayılmıyor, her darbe sayılıyor, konmuyor → kırıldı |
+| sunucu `loadgen_games` | arena `logic_` basmaz; MMO altı `logic_crystal_*`; savaş `logic_war_kills` süreç içinde ve orkestrasyonda (tel üstünden) | RESULT segmenti yok, tel sayaçları düşürüyor, kit koymuyor → kırıldı |
+
+Bayt kilitleri: istemci teli dokunulmadı; sayaç bildirmeyen metrik
+metni sabit. Loadgen teli değişti (`GSMB` → `GSMC`).
+
+**Doğrulama:** 988 → **1015** test / 0 hata / 1 ignored.
 
 ## 11. Kabul kriteri
 
