@@ -240,9 +240,13 @@ max_detach_hold_secs = "off"
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
   `gsb-metric scope=net` satırında `violations=`'dan hemen sonra
-  `input_rate_limited=<n>`, Prometheus'ta
+  `input_rate_limited=<n>`; aile tablosunda
+  (`metrics/export/families/server.rs`, `NET`) `gsb_net_violations_total`'dan
+  hemen sonra tek bir girdi, yani Prometheus'ta
   `gsb_net_input_rate_limited_total` (`counter`, kümülatif, bütün
-  bağlantılar), loadgen metrik telinde `GSME` (net kapsamında
+  bağlantılar) ve OTLP'de `gsb_net_input_rate_limited` (monotonic `Sum`)
+  birlikte (iki altın dosya da sabitliyor, `otlp::cross` uyumu kilitliyor);
+  loadgen metrik telinde `GSME` (net kapsamında
   `violations`'dan sonra bir `u64`). Kaynağı `ConnSample::input_rate_limited`
   (bağlantı başına delta; toplayıcı toplar). Sınır kapalıyken (varsayılan)
   hep 0. Artış sınırın ÇALIŞTIĞINI söyler — ihlal değildir

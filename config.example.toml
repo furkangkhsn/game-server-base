@@ -247,9 +247,9 @@ keepalive_hz = 1.0
 # çok input_burst. Yalnız geçerli OYUN girdisi ölçülür (kayıtlı oyun-bandı
 # opcode'ları); HEARTBEAT/JOIN/LEAVE ve RPC istekleri ölçülmez. Aşan girdi
 # bağlantı aktöründe DÜŞER (odaya hiç girmez), input_rate_limited olarak
-# sayılır (gsb_net_input_rate_limited_total) ve ihlal DEĞİLDİR — bağlantı
-# kopmaz. Sayı oynanış parametresidir: oyunun dürüst temposunun üstünde,
-# payla seçin; hızlı ama dürüst bir istemciyi kesmesin.
+# sayılır (gsb_net_input_rate_limited_total; OTLP'de _total'sız) ve ihlal
+# DEĞİLDİR — bağlantı kopmaz. Sayı oynanış parametresidir: oyunun dürüst
+# temposunun üstünde, payla seçin; hızlı ama dürüst bir istemciyi kesmesin.
 #
 #   yazılmazsa  = oyunun varsayılanı (GameModule::input_rate; repodaki
 #                 oyunlar vermez → KAPALI)
