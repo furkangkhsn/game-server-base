@@ -3510,7 +3510,19 @@ koşuldu, yedekten geri yüklendi):
 
 Kalan tek sağ kalan: `record_appearance`'ın bekleyeni silmesi (şerit
 kaydının çıkıp aynı hücreye geri girmesiyle ancak görünür; etkisi en
-çok bir fazlalık idempotent upsert — hijyen, doğruluk değil).
+çok bir fazlalık idempotent upsert — hijyen, doğruluk değil). **→ F13'te
+kapandı (2026-09-26):** silme kodda zaten vardı, eksik olan onu kilitleyen
+testti. Gerçek yol: sharded × spatial'da bir entity kendi ödünç
+kopyasının üstüne göçle gelir — kopyanın hücre içi hareketi şeritte
+ertelenmiştir, varış kirli geçişte AYNI hücrede bir beliriş olarak
+yerleşir, kopyanın çıkışı atlanır (hücreyi artık kendi kaydı tutuyor);
+silme olmasa vade adımı belirişin zaten taşıdığı değeri yeniden gönderir.
+Test (`common::cells::book::rate::tests::a_reappearance_settles_the_pending_change`)
+defter düzeyinde: vadesiz hücre içi değişiklik → aynı hücrede yeniden
+beliriş (o anki değer hemen gider) → iki tam periyot boyunca vade adımı
+hiçbir upsert bırakmıyor. Mutasyon (`record_appearance`'tan
+`forget_deferred` kaldırıldı): test düşer — hem iç durum denetimi hem,
+o satır çıkarıldığında, teldeki fazlalık upsert (`[(7, 2)]`, adım 11).
 
 **Ölçüm** (release; `gsb-loadgen N --game arena --duration 10
 --write-stall-secs 0 --transport T --capture DIR --capture-clients 8`;
