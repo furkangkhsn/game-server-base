@@ -209,8 +209,8 @@ boşaldığı anda o bağlantıya ulaşır.**
 `RoomConn.dropping`), bir istek ancak bağlantının borcu — kuyruktaki
 (taşınanlar dahil) yanıtlar + uçuştaki (pending) istekler —
 `max_pending_requests_per_conn`'dan azsa kabul edilir. Sınırdaki istek
-**reddedilir: işlenmez, yanıtlanmaz** (per-connection cap kovasında
-sayılır, `requests_rejected_conn_cap`). Denetim, kabulün yanıt borcu
+**reddedilir: işlenmez, yanıtlanmaz** (kendi sayacında sayılır,
+`requests_refused_congested` — F15, aşağıda). Denetim, kabulün yanıt borcu
 doğuracağı her yerdedir: 2c'de her istek (dup kontrolünden önce), 2a'da
 bozuk zarf. Yanıtsız ret tek sınırlı seçenektir: her yanıt — ret dahil
 — bir teslim edilmemiş yanıt daha olurdu. İstek uygulanmadığından
@@ -228,6 +228,36 @@ bütçesi — istek de action'dır). Yani bağlantı başına:
 Oda genelinde bu, tıkalı bağlantı sayısıyla çarpılır (pending kısmı
 ayrıca oda cap'iyle sınırlı). Tıkalı olmayan bağlantı hiç reddedilmez:
 düşme yokken davranış aynıdır.
+
+**Yanıtsız retlerin sayacı (BACKLOG F15).** F14'te bu retler
+`requests_rejected_conn_cap` kovasına, istemcinin YANITINI gördüğü
+sıradan cap retleriyle birlikte düşüyordu: operatör "bir bağlantı
+kotasını dolduruyor" ile "bir bağlantı okumuyor, isteklerini yanıtsız
+reddediyoruz"u ayıramıyordu — ikincisi yavaş okuyucu, birincisi istemci
+davranışı sorusudur. Artık ayrı bir ÇEKİRDEK sayacıdır:
+`RoomSample`/`RoomReport::requests_refused_congested` (oda ve shard
+aktörü, 2a ve 2c yolları), `gsb-metric` satırında `req_refused=`
+(`req_rej_room=`'dan sonra), Prometheus'ta
+`gsb_room_requests_refused_congested_total`, loadgen metrik telinde
+`GSMD` (GSMC + `requests_rejected_room_cap`'ten hemen sonra alan; SUM
+ile katlanır), `RESULT`'ta `req_refused=`. `req_rej_conn` artık yalnız
+yanıtlanan cap retleridir. Elenenler: (1) *Kovada bırakmak* — ayrım
+yapılamıyordu (sorunun kendisi). (2) *`conn_cap` ailesine sebep etiketi*
+(`{reason="congested"}`) — var olan bir ailenin şeklini değiştirir,
+altı kovanın "kova başına aile" düzenini bozar ve yanıtlanmamış bir
+isteği bir "ret" ailesinde tutar. (3) *F9 mantık sayacı* — karar
+çekirdeğindir, mantığın değil; F9 sayaçları oyunun adlandırdıklarıdır.
+(4) *Yedinci `requests_rejected_*` kovası adı* — istemci bir ret
+görmedi; ad istemcinin gördüğünü söylemeli (`refused`: yanıt yok).
+Testler: oda ve shard fırtına testleri (`fanout::replies::bound`,
+`shard::tests::replies::bound`) yanıtsız retleri yeni sayaçta VE
+örnekte sayar, `req_rej_conn`'u 0 tutar; `tests/rpc/buckets.rs`'in her
+kova testi yanıtsız ret sayacının kıpırdamadığını da ister; metrik
+altın metni (`metrics::tests::golden`) tam bu anahtarı ve aileyi
+kazandı (değeri 3 olan bir odayla); loadgen `wire`/`rules` testleri tel
+ve katlamayı sabitler. Mutasyonlar (dört artış noktasının her biri
+eski kovaya, örnek/rapor/satır/Prometheus/codec/fold eşlemeleri) her
+biri en az bir testi düşürür.
 
 **Hâlâ istemcinin zaman aşımına kalanlar.**
 
@@ -271,7 +301,8 @@ düşme yokken davranış aynıdır.
   türetim). Cap aşımı = aynı tick'te normal ret (§6).
 - **Ret sayaçları nedene göredir** (bu turda tek `requests_rejected`
   yerini altı kovaya bıraktı — `req_rej_malformed / _dup / _no_handler
-  / _logic / _conn / _room`): her kova farklı bir operasyonel soruya
+  / _logic / _conn / _room`; tıkalı bağlantının yanıtsız retleri F15'ten
+  beri ayrı: `req_refused`, §3.1): her kova farklı bir operasyonel soruya
   cevap verir (istemci protokol hatası mı, dup fırtınası mı, tek
   bağlantı mı, oda bütçesi mi, oyun mantığının normal iş ret'i mi).
   Oda cap'inin pratikte bağlayıp bağlamadığı — yani 2000'in doğru

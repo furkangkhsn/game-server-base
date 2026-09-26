@@ -94,6 +94,7 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
   | `gsb_room_team_imports_total` | Uygulanan takım import'ları (hub'ın buraya ulaşan röleleri) |
   | `gsb_room_team_import_records_total` | Uygulanan import'lardaki kayıtlar |
   | `gsb_room_team_expired_total` | TTL'in düşürdüğü kaynak yuvaları (sessizleşmiş kaynak) |
+  | `gsb_room_requests_refused_congested_total` | Tıkalı bağlantının (son batch'i düştü) yanıt borcu per-connection cap'e ulaşmışken **işlenmeden ve yanıtlanmadan** reddedilen RPC istekleri — F14'ün fırtına sınırı; F15'ten beri `…_rejected_conn_cap_total`'dan ayrı (orada yalnız yanıtlanan cap retleri). Satırda `req_refused=`; RPC-CONTROL-PLANE §3.1 |
 
   Etki, göç ve takım aileleri yalnız shard satırlarında hareket eder
   (tek oda aktörü 0 yazar; takım ailesi yalnız `team_exchange`'i
