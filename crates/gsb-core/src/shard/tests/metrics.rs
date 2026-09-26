@@ -3,6 +3,8 @@
 use super::*;
 use crate::metrics::fine_hist_percentile_us;
 
+mod members;
+
 /// The shard's sample ships `step_fine_hist`, so the shard's step path
 /// must FILL it.
 ///
