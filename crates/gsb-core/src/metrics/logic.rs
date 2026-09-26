@@ -29,6 +29,10 @@
 //! fold the load generator applies across a sharded room's shards
 //! ([`LogicCounters::merge`]).
 
+mod check;
+
+use check::{ends_with_total, valid_help};
+
 /// The most logic counters one room (or shard) reports. The kit's
 /// crystallization uses six; the rest is the game's.
 pub const LOGIC_COUNTERS_MAX: usize = 16;
@@ -132,34 +136,6 @@ impl LogicCounter {
     pub fn fold(&self) -> LogicFold {
         self.fold
     }
-}
-
-const fn valid_help(help: &str) -> bool {
-    let b = help.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'\n' || b[i] == b'\\' {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-const fn ends_with_total(b: &[u8]) -> bool {
-    let suffix = b"_total";
-    if b.len() < suffix.len() {
-        return false;
-    }
-    let off = b.len() - suffix.len();
-    let mut i = 0;
-    while i < suffix.len() {
-        if b[off + i] != suffix[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
 }
 
 /// One counter and its current value.
