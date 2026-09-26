@@ -4,6 +4,7 @@
 use crate::metrics::*;
 
 mod closes;
+mod logic;
 
 impl MetricReport {
     /// Render as Prometheus text exposition format, version 0.0.4 (the
@@ -680,6 +681,7 @@ impl MetricReport {
             rooms,
             |r| r.metrics_dropped,
         );
+        logic::render(&mut out, rooms);
 
         out
     }

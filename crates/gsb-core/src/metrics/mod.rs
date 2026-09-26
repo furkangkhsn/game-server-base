@@ -89,6 +89,7 @@
 mod accumulator;
 mod closes;
 mod collector;
+mod logic;
 mod prometheus;
 mod render;
 mod report;
@@ -100,6 +101,9 @@ mod tests;
 pub use accumulator::MetricAccumulator;
 pub use closes::ServerCloses;
 pub use collector::{MetricSink, MetricsCollector};
+pub use logic::{
+    LOGIC_COUNTERS_MAX, LOGIC_NAME_MAX, LogicCounter, LogicCounters, LogicFold, LogicSlot,
+};
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MetricsEvent, RegistrySample, RoomSample};
 

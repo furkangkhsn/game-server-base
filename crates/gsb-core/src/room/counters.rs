@@ -10,6 +10,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 mod hold;
+mod logic;
 mod observe;
 
 pub(crate) use hold::HoldEnd;
@@ -233,6 +234,9 @@ pub(crate) struct RoomCounters {
     /// Largest snapshot group this tick (recomputed in the broadcast
     /// phase; carried in the per-step sample as a gauge).
     pub(crate) step_max_group: u32,
+    /// The logic put more distinct counter names than the sample holds,
+    /// and the actor has said so (once — see `logic.rs`).
+    pub(crate) logic_dropped_warned: bool,
 }
 
 impl Default for RoomCounters {
@@ -280,6 +284,7 @@ impl Default for RoomCounters {
             requests_timed_out: 0,
             requests_late: 0,
             step_max_group: 0,
+            logic_dropped_warned: false,
         }
     }
 }

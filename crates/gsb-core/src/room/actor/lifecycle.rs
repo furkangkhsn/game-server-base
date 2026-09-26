@@ -222,11 +222,14 @@ where
         // sample (harmless: the next sample carries everything) and counts
         // it; a closed channel just fails silently. No await either way, so
         // the tick body stays synchronous.
-        if self.steps.is_multiple_of(self.metrics_every)
-            && let Err(mpsc::error::TrySendError::Full(_)) =
-                self.metrics.try_send(MetricsEvent::Room(self.sample()))
-        {
-            self.m.metrics_dropped += 1;
+        if self.steps.is_multiple_of(self.metrics_every) {
+            let sample = self.sample();
+            self.m.note_logic(sample.room, &sample.logic);
+            if let Err(mpsc::error::TrySendError::Full(_)) =
+                self.metrics.try_send(MetricsEvent::Room(sample))
+            {
+                self.m.metrics_dropped += 1;
+            }
         }
         keep
     }

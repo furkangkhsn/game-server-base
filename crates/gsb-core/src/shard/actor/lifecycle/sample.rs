@@ -2,7 +2,7 @@
 //! accounting, snapshotted once per report period.
 
 use crate::id::RoomId;
-use crate::metrics::RoomSample;
+use crate::metrics::{LogicCounters, RoomSample};
 use crate::shard::actor::ShardActor;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -94,6 +94,15 @@ where
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
             metrics_dropped: self.m.metrics_dropped,
+            logic: self.logic_counters(),
         }
+    }
+
+    /// The logic's own counters for this sample (F9): whatever it puts
+    /// into an empty set — nothing, by default.
+    fn logic_counters(&self) -> LogicCounters {
+        let mut out = LogicCounters::new();
+        self.logic.logic_counters(&self.world, &mut out);
+        out
     }
 }

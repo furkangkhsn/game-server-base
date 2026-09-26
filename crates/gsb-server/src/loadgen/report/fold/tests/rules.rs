@@ -128,6 +128,19 @@ fn folding_shards_applies_one_rule_per_field() {
         "pending_requests (a gauge, but a partitioned one)"
     );
     assert_eq!(f.metrics_dropped, 14, "metrics_dropped");
+    // The logic's own counters, each by the rule it carries.
+    assert_eq!(f.logic.get("kills"), Some(15), "a SUM counter adds");
+    assert_eq!(
+        f.logic.get("fights_peak"),
+        Some(9),
+        "a MAX counter takes the middle shard's peak"
+    );
+    assert_eq!(
+        f.logic.get("late_name"),
+        Some(1),
+        "a one-shard name is kept"
+    );
+    assert_eq!(f.logic.dropped(), 1, "the overflow counts add");
 }
 
 /// The accumulator used to be seeded with the first element and then run
@@ -236,6 +249,7 @@ fn folding_one_room_is_the_identity() {
     assert_eq!(f.detached, only.detached);
     assert_eq!(f.pending_requests, only.pending_requests);
     assert_eq!(f.requests_local, only.requests_local);
+    assert_eq!(f.logic, only.logic);
     close(f.late_mean_us, only.late_mean_us, "late_mean_us");
     assert_eq!(
         folded_steps(&f),

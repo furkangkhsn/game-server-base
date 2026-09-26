@@ -1,6 +1,8 @@
 //! The one-line human/log rendering of a report (the Prometheus
 //! exposition is the sibling `prometheus` module).
 
+use std::fmt::Write as _;
+
 use crate::metrics::*;
 
 impl MetricReport {
@@ -24,7 +26,7 @@ impl MetricReport {
             ));
         }
         for r in &self.rooms {
-            lines.push(format!(
+            let mut line = format!(
                 "gsb-metric scope=room id={} steps={} hz={:.2} \
                  step_budget_us={} step_min_us={} step_mean_us={:.1} step_max_us={} \
                  step_hist=[{}] \
@@ -117,7 +119,14 @@ impl MetricReport {
                 r.requests_late,
                 r.pending_requests,
                 r.metrics_dropped
-            ));
+            );
+            // The logic's own counters (F9), after every core key: one
+            // `logic_<name>=<value>` each, in the order the logic put
+            // them. Nothing at all for a logic that declares none.
+            for s in r.logic.slots() {
+                let _ = write!(line, " logic_{}={}", s.counter.name(), s.value);
+            }
+            lines.push(line);
         }
         let n = &self.net;
         lines.push(format!(

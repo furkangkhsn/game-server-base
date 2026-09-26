@@ -14,6 +14,7 @@ mod closes;
 mod collector;
 mod golden;
 mod histogram;
+mod logic;
 mod prometheus;
 mod pruning;
 mod seams;
@@ -89,6 +90,7 @@ fn accumulator_applies_events_and_computes_rates() {
         members: 3,
         max_group: 3,
         metrics_dropped: 0,
+        logic: LogicCounters::new(),
     };
     acc.apply(MetricsEvent::Room(room0));
     acc.apply(MetricsEvent::Registry(RegistrySample {
@@ -279,6 +281,7 @@ fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
         members: 0,
         max_group: 0,
         metrics_dropped: 0,
+        logic: LogicCounters::new(),
     }
 }
 

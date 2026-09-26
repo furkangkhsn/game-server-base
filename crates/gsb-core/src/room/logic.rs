@@ -435,6 +435,21 @@ pub trait GameLogic<W>: Send {
     fn encoded_records(&mut self) -> u64 {
         0
     }
+
+    /// The logic's own named counters (BACKLOG F9; see
+    /// [`crate::metrics::LogicCounters`]): put each declared counter's
+    /// CUMULATIVE value into `out` — every one, zeros included, so the
+    /// set of names a room reports does not flicker. The actor calls
+    /// this once per metrics sample (the report cadence, not the tick),
+    /// after the step, with the world the logic keeps its state in; the
+    /// logic counts in its own plain fields during the tick (no
+    /// allocation, no lock, no message). The values ride the sample to
+    /// the `gsb-metric` line (`logic_<name>=`), the Prometheus
+    /// exposition (`gsb_room_logic_<name>_total`, or a gauge for a
+    /// [`crate::metrics::LogicFold::Max`] counter) and the load
+    /// generator. Default: nothing — the room's output is exactly what
+    /// it was without the seam.
+    fn logic_counters(&self, _world: &W, _out: &mut crate::metrics::LogicCounters) {}
 }
 
 /// Game-side behaviour of a SINGLE-ROOM actor. Faz 3 promoted the two

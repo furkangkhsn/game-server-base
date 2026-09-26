@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::codec::{decode_report, encode_report};
+use gsb_core::metrics::{LOGIC_COUNTERS_MAX, LogicCounter, LogicFold};
 
 /// The seventeen counters, as one comparable tuple.
 fn counters(r: &RoomReport) -> [u64; 17] {
@@ -42,4 +43,83 @@ fn the_new_counters_survive_the_wire() {
         assert_eq!(a.requests_local, b.requests_local);
         assert_eq!(a.metrics_dropped, b.metrics_dropped);
     }
+}
+
+/// The logic counters (GSMC) cross the wire name by name, with their
+/// fold rules and the overflow count; an empty set stays empty. The
+/// help line does not travel.
+#[test]
+fn the_logic_counters_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.rooms[1].logic = LogicCounters::new();
+    let frame = encode_report(&sent);
+    assert_eq!(&frame[..4], b"CMSG", "the magic, little-endian GSMC");
+    let got = decode_report(&frame[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
+            r.logic
+                .slots()
+                .iter()
+                .map(|s| (s.counter.name().to_owned(), s.counter.fold(), s.value))
+                .collect()
+        };
+        assert_eq!(names(a), names(b), "shard {:?}", a.room);
+        assert_eq!(a.logic.dropped(), b.logic.dropped());
+        assert_eq!(a.metrics_dropped, b.metrics_dropped);
+    }
+    assert!(got.rooms[1].logic.is_empty());
+    assert_eq!(got.rooms[0].logic.slots()[0].counter.help(), "");
+    assert_eq!(
+        got.net.bytes_in, sent.net.bytes_in,
+        "the tail still lines up"
+    );
+}
+
+/// A frame whose logic record the encoder cannot have written is
+/// refused, not half-read: a bad name, an unknown rule, too many.
+#[test]
+fn a_malformed_logic_record_is_refused() {
+    let sent = report(vec![shard(0)]);
+    let frame = encode_report(&sent);
+    let body = &frame[8..];
+    // shard(0)'s set: kills, fights_peak — find the first name.
+    let at = body
+        .windows(5)
+        .position(|w| w == b"kills")
+        .expect("the first name");
+    let mut bad_name = body.to_vec();
+    bad_name[at] = b'K';
+    assert!(decode_report(&bad_name).is_none(), "an invalid name");
+    let mut bad_fold = body.to_vec();
+    bad_fold[at + 5] = 7;
+    assert!(decode_report(&bad_fold).is_none(), "an unknown fold rule");
+    assert!(decode_report(body).is_some(), "the untouched frame decodes");
+}
+
+/// A record claiming one counter more than a set holds is refused even
+/// when every one of them is well formed (the decoder would otherwise
+/// fold the extra one into the set's overflow and accept the frame).
+#[test]
+fn a_logic_record_over_the_bound_is_refused() {
+    let mut room = shard(0);
+    room.logic = LogicCounters::new();
+    for i in 0..LOGIC_COUNTERS_MAX {
+        room.logic
+            .put(&LogicCounter::sum(&format!("c{i:02}"), ""), 1);
+    }
+    let frame = encode_report(&report(vec![room]));
+    let mut body = frame[8..].to_vec();
+    assert!(decode_report(&body).is_some(), "sixteen decode");
+    let first = body.windows(3).position(|w| w == b"c00").expect("c00");
+    let last = body.windows(3).position(|w| w == b"c15").expect("c15");
+    // One more well-formed record after the sixteenth, and the count
+    // (before the u32 overflow count and the first length byte) bumped.
+    let mut extra = vec![3u8];
+    extra.extend_from_slice(b"c16");
+    extra.push(0);
+    extra.extend_from_slice(&1u64.to_le_bytes());
+    let end = last + 3 + 1 + 8;
+    body.splice(end..end, extra);
+    body[first - 1 - 4 - 1] = (LOGIC_COUNTERS_MAX + 1) as u8;
+    assert!(decode_report(&body).is_none(), "seventeen are refused");
 }

@@ -31,6 +31,7 @@
 //! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, `detach_forced`, the `effects_*`, `migrations_*` and `team_*` families, the whole `requests_*` family, `metrics_dropped` | Cumulative counters over disjoint work. (A migration is counted once as `migrations_out` by its source and once as `migrations_in` by its destination, so the folded pair should agree — they are not added together.) |
 //! | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | A RATE computed per shard cannot be averaged: the shards' counters are disjoint over the same wall clock, so the room's rate is their sum. (Averaging would report a quarter of the room's loss on a 4-shard room.) |
 //! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) |
+//! | PER COUNTER | `logic` | The logic's own counters (F9) carry their rule with them: name by name, a `LogicFold::Sum` counter adds (disjoint work, like the SUM row above), a `LogicFold::Max` one takes the larger (a high-water mark, like the MAX row); a name only some shards report is kept; the overflow counts add (`LogicCounters::merge`). |
 //!
 //! This fold runs once, in the load generator's end-of-run
 //! `print_report` — never on a tick path.
@@ -189,6 +190,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             requests_late,
             pending_requests,
             metrics_dropped,
+            logic,
         } = r;
 
         // ── MAX: lockstep tick count, and the worst-case extremes ──
@@ -277,6 +279,9 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.members += members;
         acc.detached += detached;
         acc.pending_requests += pending_requests;
+
+        // ── PER COUNTER: the logic's own counters, each by its rule ──
+        acc.logic.merge(&logic);
     }
 
     acc.hz = slowest_hz.unwrap_or(0.0);

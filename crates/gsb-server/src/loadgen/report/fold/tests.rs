@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{
-    FINE_HIST_BINS, HIST_BINS, HIST_OVERFLOW_BIN, MetricReport, NetReport, RoomReport,
-    fine_hist_percentile_us,
+    FINE_HIST_BINS, HIST_BINS, HIST_OVERFLOW_BIN, LogicCounter, LogicCounters, MetricReport,
+    NetReport, RoomReport, fine_hist_percentile_us,
 };
 
 use super::{fine_percentiles_us, fold_rooms, folded_steps, report_members, report_steps};
@@ -111,8 +111,29 @@ fn shard(i: usize) -> RoomReport {
         requests_late: [1, 2, 4][i],
         pending_requests: [3, 5, 7][i],
         metrics_dropped: [2, 4, 8][i],
+        logic: logic(i),
     }
 }
+
+/// The logic counters of shard `i`: a SUM every shard reports, a MAX
+/// whose peak is on the MIDDLE shard, a name only the last shard has,
+/// and one overflowed value on shard 0.
+fn logic(i: usize) -> LogicCounters {
+    let mut set = LogicCounters::new();
+    set.put(&KILLS, [3, 5, 7][i]);
+    set.put(&PEAK, [4, 9, 2][i]);
+    if i == 2 {
+        set.put(&LATE, 1);
+    }
+    if i == 0 {
+        set.add_dropped(1);
+    }
+    set
+}
+
+const KILLS: LogicCounter = LogicCounter::sum("kills", "Players felled.");
+const PEAK: LogicCounter = LogicCounter::max("fights_peak", "Largest fight table.");
+const LATE: LogicCounter = LogicCounter::sum("late_name", "");
 
 fn report(rooms: Vec<RoomReport>) -> MetricReport {
     MetricReport {

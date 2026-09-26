@@ -189,6 +189,11 @@ pub struct RoomSample {
     /// next sample carries everything) but reported so an operator can see
     /// the channel saturating.
     pub metrics_dropped: u64,
+    /// The logic's own named counters (F9, see [`LogicCounters`]),
+    /// cumulative as the logic keeps them, read from
+    /// `GameLogic::logic_counters` when the sample is built. Empty for a
+    /// logic that declares none.
+    pub logic: LogicCounters,
 }
 
 /// The registry's table gauges + cumulative control-plane counters. The

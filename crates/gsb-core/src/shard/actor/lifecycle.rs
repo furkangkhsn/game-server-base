@@ -253,11 +253,14 @@ where
         // this one `step_us`.
         self.m.observe_step_us(self.steps, self.budget_us, step_us);
 
-        if self.steps.is_multiple_of(self.metrics_every)
-            && let Err(mpsc::error::TrySendError::Full(_)) =
-                self.metrics.try_send(MetricsEvent::Room(self.sample()))
-        {
-            self.m.metrics_dropped += 1;
+        if self.steps.is_multiple_of(self.metrics_every) {
+            let sample = self.sample();
+            self.m.note_logic(sample.room, &sample.logic);
+            if let Err(mpsc::error::TrySendError::Full(_)) =
+                self.metrics.try_send(MetricsEvent::Room(sample))
+            {
+                self.m.metrics_dropped += 1;
+            }
         }
 
         // measurement scaffolding for CROSS-SHARD §7 — remove or promote

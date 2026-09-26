@@ -124,6 +124,9 @@ pub struct RoomReport {
     pub pending_requests: u32,
     /// Metric samples dropped on a full metrics channel (cumulative).
     pub metrics_dropped: u64,
+    /// The logic's own named counters (see [`RoomSample::logic`]), as
+    /// the latest sample carried them.
+    pub logic: LogicCounters,
 }
 
 /// Registry slice of a report (latest gauges + cumulative counters).

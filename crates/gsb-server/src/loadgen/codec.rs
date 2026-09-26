@@ -9,6 +9,8 @@ use gsb_core::metrics::{
     FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, ServerCloses,
 };
 
+mod logic;
+
 /// Metric-report wire format (server process → orchestrator, one TCP
 /// connection). The *data* is exactly what the in-process mode already
 /// receives through the channel sink (`MetricReport` structs, 1 Hz) —
@@ -17,7 +19,7 @@ use gsb_core::metrics::{
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSMB"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSMC"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -48,6 +50,9 @@ use gsb_core::metrics::{
 ///     u64 req_to  u64 req_late
 ///     u32 req_pending
 ///     u64 metrics_dropped
+///     u8 n_logic  u32 logic_dropped
+///     per logic counter: u8 name_len  [u8; name_len] name
+///                        u8 fold (0 = SUM, 1 = MAX)  u64 value
 ///   u8 registry_present
 ///   [if present] u32 rooms  u32 conns  u64 rooms_created
 ///                u64 rooms_destroyed  u64 rooms_died
@@ -108,7 +113,13 @@ use gsb_core::metrics::{
 /// GSMB = the GSMA layout plus each room's `team_over_budget` (the
 /// records the game's per-team export budget cut — A29), right after
 /// `team_expired`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D42;
+/// GSMC = the GSMB layout plus each room's logic counters (F9 — the
+/// logic's own named counters, `gsb_core::metrics::LogicCounters`),
+/// right after `metrics_dropped`: their count, the set's overflow count,
+/// then name, fold rule and value per counter (the help line does not
+/// travel — the load generator prints values, not an exposition). The
+/// names are validated on the way in, like everything else here.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D43;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -202,6 +213,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.requests_late);
         w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
+        logic::encode(&mut w, &room.logic);
     }
     w.u8(match &r.registry {
         Some(_) => 1,
@@ -374,6 +386,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             requests_late: r.u64()?,
             pending_requests: r.u32()?,
             metrics_dropped: r.u64()?,
+            logic: logic::decode(&mut r)?,
         });
     }
     let registry = match r.u8()? {
