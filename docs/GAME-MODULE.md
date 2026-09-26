@@ -87,6 +87,9 @@ pub struct RegistryParts { /* inbox, self_mailbox, ticker, metrics,
 impl RegistryParts {
     /// Yöntem-düzeyi generic: bir modül kendi fabrikasıyla çağırır.
     pub fn spawn<W, G, St, Sp>(self, factory: RoomFactory<W, G, St, Sp>) -> JoinHandle<()>;
+    /// (F5'te eklendi) Oyunun bir servisini açık durdurma için kaydeder:
+    /// `stop()` onu odalardan SONRA durdurur (§6 karar 7, DESIGN §9.2).
+    pub fn service(&mut self, service: Service);
 }
 ```
 
@@ -1298,7 +1301,25 @@ one-shot full'larını da sayıyor.
    (kaydısız ya da anonim → varsayılan durak taşı).
 7. **Servis yaşam döngüsü:** bugünkü gibi — servis görevi, göndericileri
    düştüğünde biter. Yeni bir durdurma protokolü bu işin kapsamı dışında;
-   kayda geçirilir.
+   kayda geçirilir. *F5 turunda kapandı (DESIGN §9.2):* servisin sonu
+   artık açık ve sıralı olabilir — isteğe bağlı. Modül servisini
+   `spawn_registry` içinde, registry'yi başlatmadan önce
+   `RegistryParts::service(Service)` ile kaydeder
+   (`gsb_core::service::Service` = görev + senkron durdurma isteği,
+   tipik olarak `gsb_core::channel::post(&tx, Stop)`). `ServerHandle::stop`
+   önce odaların bitmesini bekler (registry + her oda/shard görevi;
+   `on_shutdown` ve `match_result` koşmuş — çekirdeğin düşme bariyeri,
+   süre sınırı 1 sn), SONRA her kayıtlı servise durdurma isteğini
+   gönderir ve hepsini tek bir 1 sn'lik son tarih altında bekler; aşanı
+   abort eder. Odaların çıkarken servise yazdıkları kuyrukta `Stop`'un
+   önündedir, yani servis önce onları işler. `StopReport`:
+   `rooms_finished`, `services_ended`, `services_aborted`. Demo'nun
+   ekonomi servisi benimsedi (`EconomyService::start` →
+   `(tutamaç, Service)`; `Stop`'ta yeni istek almaz, borçlu olduğu
+   cevapları teslim eder, biter); `EconomyService::spawn` ve kaydedilmeyen
+   her servis eski hayatını sürer (son gönderici düşünce biter). Arena,
+   MMO ve war'da servis yok (MMO/war `Realm`'i bir `Arc` veri, görev
+   değil).
 8. **`LoadBot`:** `dyn` (mesaj başına bir sanal çağrı, loadgen için
    önemsiz). Arena profili: takımlar üslerinden merkeze ve geri hareket
    eder (sis sınırlarını gerçekten geçer). MMO profili: yürüme + ara sıra

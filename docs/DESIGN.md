@@ -2232,6 +2232,12 @@ ServerHandle::stop
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
     için EOF'ı bekleyemezdi — artık beklemez); düşerken Ticker klonunu da
     düşürür — broadcast'i kapatan son halka (§9.1)
+  → stop(): odaların düşme bariyeri — registry ve her oda/shard görevi
+    bitti (on_shutdown + match_result koştu) — tek bir süre sınırı
+    (SERVICE_STOP_GRACE, 1 sn) altında beklenir (§9.2)
+  → kayıtlı her oyun servisine senkron durdurma isteği (ör. ekonomide
+    kuyruğun arkasına Stop); servisler ikinci bir 1 sn'lik tek son tarih
+    altında join edilir, aşan abort edilir ve StopReport'ta sayılır
   → metrik toplayıcı: ticker'ın broadcast'i kapanınca Closed görür,
     son raporu basıp temiz çıkar (bkz. §12)
 ```
@@ -2451,6 +2457,133 @@ Loadgen (TCP, süreç içi, 500 istemci): `--game arena
 `joined = left = 500`, `errors=0`. Düzeltmesiz kod da 2+2
 karşılaştırma koşusunda bitti (kilit zamanlamaya bağlı ve varsayılan 128 kapasitede seyrek), yani
 loadgen ayırt edici test değil; ayırt eden deterministik testler.
+
+### 9.2 Servislerin açık durdurması (BACKLOG F5)
+
+**Boşluk.** Bir oyun servisi (demo'nun ekonomi servisi: odaların
+yanında koşan, tutamaç klonuyla beslenen uzun ömürlü görev) yalnız bütün
+göndericileri düşünce biterdi. `stop()` açısından bu örtük ve sırasızdı:
+bir odanın son `on_shutdown`/`match_result`'ı servisle bir işi
+kapatmak (ör. ekonomi işlemini kesinleştirmek) isteyebilir, servisin o
+an hâlâ ayakta olacağının ya da `stop()` döndükten sonra (runtime
+düşerken) yarıda kesilmeyeceğinin hiçbir güvencesi yoktu.
+
+**Envanter** (motor, kit, sunucu ve oyunların doğurduğu, oda/bağlantı/
+dinleyici olmayan uzun ömürlü görevler):
+
+| Görev | Nasıl beslenir | Bugün nasıl biter |
+|---|---|---|
+| Ekonomi servisi (`gsb-demo`, demo modülü başına bir) | sınırlı posta kutusu (64); her demo odası ve fabrika bir tutamaç klonu tutar; `ECONOMY` isteği `External` future'ı → RPC işçisi → `buy()`; istek başına kısa cevap görevi | son gönderici düşünce (F5'ten sonra: kaydedilince açık `Stop`) |
+| Ticker | — | `stop()` abort eder |
+| Metrik toplayıcı | sınırlı metrik kanalı | broadcast `Closed` (`stop()` bekler) |
+| HTTP ops accept + oda defteri | ops bağlantıları; defter kanalı | abort; defter göndericisi düşünce |
+| Registry, ölüm bekçileri, RPC işçileri | kendi posta kutusu; oda `JoinHandle`'ı; `request_timeout` (5 sn) | `Shutdown`; oda bitince; süre sınırı |
+
+Arena'da servis yok; MMO/war'ın `Realm`'i bir `Arc` veri, görev değil;
+kit'te servis yok (`record_run` rig'i yalnız test). *Odaların kapanış
+yolunda servise gönderdikleri:* in-tree oyunların `on_shutdown`/
+`match_result`'ı servise hiçbir şey göndermez; gönderen tek yol, kapanıştan
+önceki tick'lerde `External`'a devredilmiş ve işçisi hâlâ uçuşta olan
+bir alımdır (işçi `request_timeout`'a kadar bir tutamaç klonu tutar).
+Sözleşme yine de "oda çıkarken servise yazabilir" durumunu hedefler —
+yapı taşı bunun için.
+
+**Yapı taşı** (`gsb_core::service`, `gsb-server` `RegistryParts`):
+
+1. *Düşme bariyeri* — `service::hold()` → klonlanabilir `Hold` + tek
+   `Released`. `Released::wait` son `Hold` düşünce biter (tek await: hiç
+   değer gönderilmeyen — öğe tipi `Infallible` — bir kanalın `recv`'i).
+   `Registry::with_rooms_hold(hold)` ile registry bir token tutar ve her
+   oda/shard ölüm bekçisine bir klon verir; bekçi odanın `JoinHandle`'ı
+   bitince (teardown kancaları koşmuş, dünya düşmüş) token'ı bırakır.
+   Registry'nin await kümesi değişmedi: bekleyen bekçiler zaten vardı,
+   token onlara biner; registry hiçbir oda posta kutusunu beklemez.
+2. *Servis* — `service::Service::new(ad, görev, durdur)`: `durdur`
+   senkron bir `FnOnce`; tipik gövdesi servisin kendi `Stop` mesajını
+   `gsb_core::channel::post` ile göndermek (registry'nin `post_stop`
+   deyimi, artık public: yer varsa `try_send`, doluysa spawn'lu gönderici,
+   alıcı yoksa hiçbir şey). Bant içi `Stop`, aktörlerin `Shutdown`
+   deyimiyle aynıdır: FIFO sayesinde kuyruktaki her şey ondan önce işlenir.
+3. *Kayıt* — modül `spawn_registry` içinde, registry'yi başlatmadan önce
+   `parts.service(s)`; `RegistryTask` servisleri taşır, `ServerHandle`
+   tutar. **İsteğe bağlı:** kaydedilmeyen (ya da `Service`'i düşürülen)
+   bir servis eski hayatını sürer; `ServerHandle` `stop()`'suz
+   düşürülürse `Service`'ler düşer, istek gönderilmez.
+4. *`stop()` sırası* — `Shutdown` → HTTP abort → ticker abort →
+   dinleyiciler `close` → accept döngüleri (≤ 1 sn, B16) → odaların
+   bariyeri (≤ `SERVICE_STOP_GRACE` = 1 sn) → her servise istek (hepsine
+   birden) → hepsi TEK bir son tarih (≤ 1 sn) altında join, aşan abort →
+   metrik toplayıcı. En kötü ek süre 2 sn; in-tree'de odalar bir tick
+   içinde, ekonomi gecikmesi (5 ms) içinde biter. `StopReport` üç alan
+   kazandı: `rooms_finished` (bariyer süresinde açıldı mı; `false` ise
+   servisler yine durdurulur, geç kalan odanın mesajı `Stop`'un arkasına
+   düşüp kaybolabilir — `warn`), `services_ended`, `services_aborted`
+   (ikincisi `warn`).
+
+**Ekonominin benimsemesi.** `EconomyService::start(gecikme)` →
+`(tutamaç, Service)`; posta kutusu artık `Buy | Stop` taşır (özel tip;
+`EconomyBuy` ve `buy()` aynı). `Stop`'ta işçi döngüden çıkar, alıcıyı
+düşürür (sonraki istek "economy service gone" alır), sonra borçlu
+olduğu cevapları bekler: her cevap görevi bir `Hold` tutar, işçi
+bariyeri döngüden SONRA, sıralı bekler (döngünün tek await'i yine
+`recv`). `EconomyService::spawn` = `start(..).0` — eski hayat. Demo
+modülü ekonomisini kaydeder; `accept_stop`'un beklediği rapor artık
+`services_ended = 1`.
+
+**Korunan kurallar.** `stop()` her zaman biter (üç süre sınırı, her
+biri tek bir join/wait'in sınırlı beklenişi — B16 deyimi); registry
+hiçbir oda posta kutusunu beklemez; istemciye bağlı await yok; aktörlerde
+select yok (servisin tek await'i `recv`, durdurma bant içi); kilit yok;
+istemci tel baytları değişmedi.
+
+**Elenen alternatifler.**
+
+1. *Yalnız join* (servis düşme kuralıyla biter, `stop()` sadece sınırlı
+   bekler). Sıra yalnız servis tutamaçlarını YALNIZ odalar tuttuğunda
+   doğru: uçuştaki bir RPC işçisi klonu 5 sn'ye kadar, modülün sakladığı
+   bir klon ya da servisin kendi alt görevleri sonsuza dek tutar — her
+   `stop()`'ta abort. Açık istek sahiplikten bağımsızdır.
+2. *İptal jetonu* (`run_until_cancelled(rx.recv())`). Servis döngüsüne
+   ikinci bir kaynak ekler ve kuyruğu keser: odaların son mesajları ya
+   kaybolur ya da ayrıca boşaltılmalıdır. Bant içi `Stop` aynı sırayı
+   FIFO'dan bedava alır.
+3. *Registry odaların `JoinHandle`'larını beklesin.* Registry'nin tek
+   await'i kendi posta kutusudur ve `Shutdown`'da hemen çıkar (§9.1);
+   bekçiler zaten o handle'ları bekliyor.
+4. *Token'ı oda aktörlerine vermek.* İki aktör tipine (oda, shard)
+   dokunur; bekçiler ikisi için tek yer.
+5. *Servisleri kayıt sırasıyla, biri bitmeden ötekine istek göndermeden
+   durdurmak.* Servisler arası bir sıra verir, ama tek son tarih altında
+   takılan bir servis sonrakileri hiç istek almadan abort'a iter.
+   Servisler arası bağımlılık ihtiyacı doğarsa ayrı yapı taşı.
+6. *Oda + servis için tek son tarih.* Odalar süreyi yerse servisler hiç
+   süre alamadan abort edilir; iki ayrı pencere.
+7. *`GameModule`'e `fn services()`.* Servisler `spawn_registry` içinde
+   doğuyor; kayıt da orada, generic'siz trait'e durum taşımadan.
+
+**Testler.** `gsb-core/tests/rooms_released.rs` — iki tek oda / iki
+2-shard'lı oda, `on_shutdown` 150 ms bloklar: bariyer ancak bütün
+teardown'lar düştükten ve registry bittikten sonra açılır.
+`gsb-core` `service::tests` — bariyer son token'da açılır; `Service`
+düşürülünce istek gitmez, görev yaşar. `gsb-server` `boot::stop::tests` —
+servislere istek odalar bittikten sonra gider; tek son tarih altında iki
+sağır servis abort, biri biter; süreyi aşan odalar servisleri tutmaz
+(`rooms_finished = false`). `gsb-server/tests/service_stop.rs` — uçtan
+uca: iki odalı test oyunu, her oda `on_shutdown`'da 200 ms bloklayıp
+defter servisine `Settle` yollar; `stop()` döndüğünde olay sırası
+"oda kapandı → yerleşti" (her oda için) ve en sonda "servis durdu";
+rapor `rooms_finished`, `(1, 0)`; sağır ikinci servisle `(1, 1)` ve
+`stop()` ~1 sn'de biter. `gsb-demo` `economy::tests` — `Stop`'tan önce
+kuyruğa giren alımlar cevaplanır ve görev ancak cevaplar çıktıktan sonra
+biter; `Stop`'tan sonraki alım reddedilir; `spawn` eski hayatı korur.
+Mutasyonlar (hepsi en az bir testi düşürdü): bekçinin token'ı
+`handle.await`'ten önce bırakması; `with_rooms_hold`'un token'ı
+tutmaması; tek oda ya da shard bekçisine token verilmemesi (ayrı ayrı);
+`RegistryParts::spawn`'un bariyeri registry'ye vermemesi; servislere
+isteğin oda beklemesinden önce gitmesi; `stop()`'un servisleri hiç
+durdurmaması; aşan servisin abort yerine "bitti" sayılması;
+`rooms_finished`'in hep `true` olması; ekonominin borçlu cevapları
+beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 
 ## 10. v1 kısıtları
 
