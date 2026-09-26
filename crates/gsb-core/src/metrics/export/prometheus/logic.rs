@@ -12,6 +12,8 @@
 
 use std::fmt::Write as _;
 
+use super::header;
+use crate::metrics::export::families::{LOGIC_DROPPED, LOGIC_MAX_HELP, LOGIC_SUM_HELP};
 use crate::metrics::{LogicCounter, LogicFold, RoomReport};
 
 /// One family: its metric name, the counter that named it (help,
@@ -35,15 +37,15 @@ pub(super) fn render(out: &mut String, rooms: &[RoomReport]) {
     }
     for (name, counter, samples) in families {
         let (kind, help) = match counter.fold() {
-            LogicFold::Sum => ("counter", "The logic's own counter, cumulative."),
-            LogicFold::Max => ("gauge", "The logic's own high-water mark."),
+            LogicFold::Sum => ("counter", LOGIC_SUM_HELP),
+            LogicFold::Max => ("gauge", LOGIC_MAX_HELP),
         };
         let help = if counter.help().is_empty() {
             help
         } else {
             counter.help()
         };
-        let _ = write!(out, "# HELP {name} {help}\n# TYPE {name} {kind}\n");
+        header(out, &name, kind, help);
         for (room, v) in samples {
             let _ = writeln!(out, "{name}{{room=\"r{room}\"}} {v}");
         }
@@ -57,18 +59,16 @@ pub(super) fn render(out: &mut String, rooms: &[RoomReport]) {
 /// how many names did not fit in the room's latest sample — a static
 /// declaration mistake repeats it every sample, it does not accumulate.
 fn render_dropped(out: &mut String, rooms: &[RoomReport]) {
-    let mut header = false;
+    let (name, help) = LOGIC_DROPPED;
+    let mut headed = false;
     for r in rooms.iter().filter(|r| r.logic.dropped() > 0) {
-        if !header {
-            header = true;
-            out.push_str(
-                "# HELP gsb_room_logic_counters_dropped Logic counter values the room's latest sample dropped: names beyond the per-room bound of 16.\n\
-                 # TYPE gsb_room_logic_counters_dropped gauge\n",
-            );
+        if !headed {
+            headed = true;
+            header(out, name, "gauge", help);
         }
         let _ = writeln!(
             out,
-            "gsb_room_logic_counters_dropped{{room=\"r{}\"}} {}",
+            "{name}{{room=\"r{}\"}} {}",
             r.room.0,
             r.logic.dropped()
         );

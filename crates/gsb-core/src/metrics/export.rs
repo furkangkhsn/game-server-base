@@ -25,6 +25,8 @@
 use crate::metrics::MetricReport;
 
 #[cfg(feature = "prometheus")]
+mod families;
+#[cfg(feature = "prometheus")]
 mod prometheus;
 
 /// A consumer of every report the collector folds.
