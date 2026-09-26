@@ -70,3 +70,6 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
         self.released = released;
     }
 }
+
+#[cfg(test)]
+mod tests;
