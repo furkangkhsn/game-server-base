@@ -121,6 +121,18 @@ async fn a_sustained_duel_crystallizes_onto_one_shard_and_returns_once_it_is_ove
     assert_eq!(cs[1].me().map(|r| r.hp), Some(left));
     assert_eq!(cs[0].get(q).map(|r| r.hp), Some(left));
     assert_eq!(cs[0].me().map(|r| r.hp), Some(left));
+
+    // What the operator reads of it (F9), off the shard actors' own
+    // metrics samples: the move on Q's shard, the pair's two holds
+    // ended quietly on P's — and every shard reports the six.
+    let count = |shard: usize, name: &str| room.sample(shard).logic.get(name);
+    assert_eq!(count(1, "crystal_moves"), Some(1), "Q's shard pinned Q");
+    assert_eq!(count(0, "crystal_moves"), Some(0));
+    assert_eq!(count(0, "crystal_release_quiet"), Some(2), "P and Q");
+    assert_eq!(count(0, "crystal_fights_peak"), Some(1));
+    for shard in 0..4 {
+        assert_eq!(room.sample(shard).logic.slots().len(), 6, "shard {shard}");
+    }
 }
 
 /// A single cross-seam blow, and a brief exchange that ends before it
@@ -147,4 +159,6 @@ async fn a_brief_exchange_does_not_crystallize() {
         assert_eq!(step_seeing(&mut room, &mut cs).await, [1, 1, 0, 0]);
     }
     assert_eq!(room.hits().len(), 5, "the blows landed");
+    assert_eq!(room.sample(1).logic.get("crystal_moves"), Some(0));
+    assert_eq!(room.sample(0).logic.get("crystal_moves"), Some(0));
 }

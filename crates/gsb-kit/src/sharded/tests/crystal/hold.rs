@@ -7,7 +7,7 @@ use super::*;
 
 /// B moves from shard 1 to shard 0 the way the core does it: collected
 /// on shard 1, installed on shard 0, despawned on shard 1.
-fn hand_over(from: (&mut World, &mut Duel), to: (&mut World, &mut Duel), wire: u64) {
+pub(super) fn hand_over(from: (&mut World, &mut Duel), to: (&mut World, &mut Duel), wire: u64) {
     let (wf, sf) = from;
     let (wt, st) = to;
     let target = st.index();
@@ -21,13 +21,13 @@ fn hand_over(from: (&mut World, &mut Duel), to: (&mut World, &mut Duel), wire: u
 }
 
 /// Put `wire`'s entity at `(x, y)` on `room`.
-fn walk(world: &mut World, room: &Duel, wire: u64, x: f32, y: f32) {
+pub(super) fn walk(world: &mut World, room: &Duel, wire: u64, x: f32, y: f32) {
     let entity = room.wire_entity[&wire];
     world.entity_mut(entity).insert(Position { x, y });
 }
 
 /// A quiet tick on `room`, plus `local` hits: the moves it produces.
-fn quiet(
+pub(super) fn quiet(
     world: &mut World,
     room: &mut Duel,
     t: u64,

@@ -17,6 +17,7 @@ use crate::sharded::{Crystallize, Seam, ShardPin};
 use crate::space::GridPartition2;
 use crate::testing::{FixMig, Fixture, WirePos};
 
+mod counters;
 mod hold;
 mod signal;
 

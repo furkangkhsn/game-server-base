@@ -53,6 +53,7 @@ impl Crystal {
                     None
                 };
                 if let Some(why) = why {
+                    self.stats.release(why);
                     tracing::debug!(
                         target: "gsb_kit::crystal",
                         shard = index,
@@ -100,6 +101,7 @@ impl Crystal {
                     last: tick,
                 },
             );
+            self.stats.moves += 1;
             tracing::debug!(
                 target: "gsb_kit::crystal",
                 shard = index,

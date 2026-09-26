@@ -22,6 +22,11 @@
 //! band ([`Partition::holds`] with `margin`; entering needs half the
 //! margin — the spatial hysteresis). Then the region owns it again.
 //!
+//! **Counters.** What the pass does is counted (`counters.rs`) and
+//! reported through the core's logic-counter seam as six `crystal_*`
+//! counters — moves, releases by cause, contacts the table's cap
+//! refused, the table's peak — by every room that opted in.
+//!
 //! [`Seam::emit`]: crate::sharded::Seam::emit
 //! [`Partition::holds`]: crate::space::Partition::holds
 
@@ -32,11 +37,13 @@ use bevy_ecs::prelude::Entity;
 use crate::sharded::ShardPin;
 
 mod book;
+mod counters;
 mod tick;
 
 #[cfg(test)]
 pub(in crate::sharded) use book::FIGHT_CAP;
 use book::FightBook;
+use counters::CrystalStats;
 
 /// A sharded room's crystallization policy — opt-in
 /// ([`ShardedRoom::with_crystallize`](crate::sharded::ShardedRoom::with_crystallize));
@@ -104,6 +111,9 @@ pub(in crate::sharded) struct Crystal {
     pub(in crate::sharded) policy: Crystallize,
     pub(in crate::sharded) book: FightBook,
     pub(in crate::sharded) pins: HashMap<u64, Pin>,
+    /// Movers pinned and holds ended, cumulative (the room's
+    /// `crystal_*` counters — `counters.rs`).
+    pub(in crate::sharded) stats: CrystalStats,
 }
 
 impl Crystal {
@@ -112,6 +122,7 @@ impl Crystal {
             policy,
             book: FightBook::default(),
             pins: HashMap::new(),
+            stats: CrystalStats::default(),
         }
     }
 

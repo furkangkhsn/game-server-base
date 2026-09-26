@@ -40,6 +40,8 @@ pub(in crate::sharded) struct FightBook {
     pub(in crate::sharded) fights: HashMap<(u64, u64), Fight>,
     /// Contacts refused at the cap.
     pub(in crate::sharded) untracked: u64,
+    /// The most pairs tracked at once.
+    pub(in crate::sharded) peak: usize,
 }
 
 impl FightBook {
@@ -53,6 +55,7 @@ impl FightBook {
                 return;
             }
             self.fights.insert(key, Fight::open(tick));
+            self.peak = self.peak.max(self.fights.len());
         }
         let Some(fight) = self.fights.get_mut(&key) else {
             return;

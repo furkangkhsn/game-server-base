@@ -90,9 +90,13 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         n
     }
 
-    /// The game's own counters (F9), forwarded
-    /// ([`Game::counters`](crate::game::Game::counters)).
+    /// The logic's own counters (F9): crystallization's six `crystal_*`
+    /// when the room opted in (`crate::sharded::crystal`), then the
+    /// game's ([`Game::counters`](crate::game::Game::counters)).
     fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        if let Some(crystal) = &self.crystal {
+            crystal.counters(out);
+        }
         self.game.counters(world, out);
     }
 
