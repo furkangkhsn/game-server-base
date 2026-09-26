@@ -5,6 +5,61 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F5 — servislerin açık durdurması (`server/f5-service-stop`)
+
+Bir oyun servisi (demo'nun ekonomi servisi) yalnız son göndericisi
+düşünce bitiyordu: `stop()` karşısında sonu örtük ve sırasızdı — odanın
+son `on_shutdown`/`match_result`'ı servise yazdığında servisin ayakta
+olacağının ya da `stop()`'tan sonra yarıda kesilmeyeceğinin güvencesi
+yoktu (DESIGN §9.2).
+
+- Çekirdek yapı taşı `gsb_core::service`: düşme bariyeri (`hold()` →
+  `Hold`/`Released`) ve `Service` (görev + senkron durdurma isteği).
+  `Registry::with_rooms_hold` token'ı her oda/shard ölüm bekçisine verir;
+  bekçi oda görevi bitince bırakır — registry hiçbir odayı beklemez.
+  Registry'nin `post_stop` deyimi `gsb_core::channel::post` olarak public.
+- `RegistryParts::service(Service)` (isteğe bağlı kayıt). `stop()`:
+  accept'lerden sonra odaların bariyeri (≤ 1 sn) → her servise istek
+  (bant içi — kuyruktakiler önce işlenir) → tek son tarih altında join
+  (≤ 1 sn), aşan abort. `StopReport` yeni alanlar: `rooms_finished`,
+  `services_ended`, `services_aborted`. Kaydedilmeyen servis eski
+  hayatını sürer.
+- Ekonomi benimsedi: `EconomyService::start` → `(tutamaç, Service)`;
+  `Stop` sonrası yeni istek almaz, borçlu cevapları teslim edip biter.
+- Tel baytı değişmedi, yeni bağımlılık yok; `stop()` en kötü +2 sn
+  (in-tree ~1 tick).
+
+Testler 1077 → 1091 (rebase sonrası, +14); ajanın 14 mutasyonu yakalandı.
+Ebeveynin bağımsız mutasyonu (bariyerin beklemeden açılması) 4 testi
+kırıyor.
+
+## F18 — `shard_members` N+1 kırılganlığı: loadgen yırtık raporu topluyordu (`fix/f18-shard-members`)
+
+Metrik raporu her üreticinin SON örneğidir; shard'ların örnekleri
+toplayıcıya bağımsız ulaşır ve CPU yükü altında bir rapor bazı shard'ların
+`k` turu satırlarını diğerlerinin `k − 1` satırlarıyla yan yana
+taşıyabilir. İki tur arasında göçen oyuncu iki satırda birden görünür
+(kanıt, 30 süreçlik yükte başarısız koşu: `0:s60 m3 in1 | 1:s30 m2 out0 |
+2:s60 | 3:s30` → 9; Σin > Σout, gerçek bir anda imkânsız). Loadgen tepe
+nüfusu raporların EN BÜYÜK toplamı olarak aldığından tek bir yırtık 9 hem
+`peak_members` hem kararlı pencere oluyordu.
+
+- **Çekirdek doğru:** göçen oyuncu kaynaktan kesinleşme tick'i `h`'de
+  çıkar, hedefe kurulumda (en erken `h + 1`) girer; aynı ya da bir tick
+  arayla alınmış iki örnek onu iki kez sayamaz; uçuştaki oyuncu tek tick
+  hiçbir yerde sayılmaz — sözleşme yazıldı (DESIGN §12 "tutarlı kesit",
+  CROSS-SHARD §4d) ve çekirdek testiyle kilitlendi. Prometheus'ta
+  shard'lar üzerinde `sum` aynı yırtılmaya açık (belgelendi).
+- **Düzeltme loadgen'de:** bir raporun satırları yalnız tutarlı kesitse
+  (her satır aynı `(steps, lagged_ticks)`) nüfus olarak toplanır; hiç
+  kesit olmayan koşu eski yoldan okunur ve insan-okunur blok `(torn: …)`
+  der; kalıcı bir çift sayım hâlâ görünür. RESULT anahtarları aynı.
+- 30 süreçlik yük altında `loadgen_drives_the_mmo` 20/20 yeşil (önce 3/10
+  kırmızı).
+
+Testler 1071 → 1077; ebeveynin bağımsız mutasyonu (kesit kontrolünde
+`steps`'i yok saymak) yırtık rapor testini kırıyor.
+
 ## B31 — el sıkışma accept döngüsünün dışında (`net/b31-handshake-off-accept`)
 
 WS, TLS ve QUIC kapısı el sıkışmayı `accept()`'in içinde yapıyordu;

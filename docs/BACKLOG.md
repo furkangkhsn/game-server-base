@@ -145,13 +145,13 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F1 `MovementSystem` birim testleri | ROADMAP:432 |
 | F2 Metrik test kuyrukları (`metrics_dropped` doğru yol testleri, `bytes_out` yalnız smoke) — tetik: metrik kanalı doygunluğu görülürse | ROADMAP:391-400 |
 | F4 Demo `AoiRoomExt`/`TeamRoomExt`/`SectorRoomExt`'te `with_economy` yok (sunucu `set_economy` ile dolanıyor) | GAME-MODULE:277 |
-| F5 Servis yaşam döngüsünde açık durdurma protokolü yok | GAME-MODULE:931 |
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
-| F18 **SIRADA** — `loadgen_games::loadgen_drives_the_mmo` CPU yükü altında kırılgan: RESULT `shard_members` toplamı N+1 (8 botta 3,2,2,2) — muhtemelen göç sırasında bir bot iki shard'da sayılıyor; önceki kodda da (30 süreçlik CPU yükünde 3/10). Sayaç mı yanlış, test mi — araştırılacak | B31 yan bulgusu |
+| F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
+| F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31 kendi turunda kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18 ve F5 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

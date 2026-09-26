@@ -77,11 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1071** (1071/1071 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1091** (1091/1091 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B31 — el sıkışma accept döngüsünün dışında** (DESIGN §6 "El
+Son tur: **F5 — servislerin açık durdurması** (DESIGN §9.2) — oyun
+servisi `RegistryParts::service` ile kaydedilir; `stop()` odaların
+teardown'u bittikten SONRA servise durdurma isteği gönderir, süre sınırlı
+bekler, aşanı abort edip `StopReport`'ta sayar; ekonomi benimsedi.
+Önceki tur: **F18** — `shard_members` N+1 bir loadgen yırtık-rapor
+artefaktıydı; nüfus artık yalnız tutarlı kesitten (çekirdek sözleşmesi
+DESIGN §12'de).
+Önceki tur: **B31 — el sıkışma accept döngüsünün dışında** (DESIGN §6 "El
 sıkışan kapılar", SECURITY §4.3) — WS/TLS/QUIC el sıkışması bağlantı
 başına görevde, kapı başına unauthed cap ile sınırlı; tek sessiz soketin
 kapıyı 10 sn kilitlemesi ve WS bağlanma fırtınası gecikmesi giderildi.

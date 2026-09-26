@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1071 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1091 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,19 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F5 tamam** (DESIGN §9.2, GAME-MODULE §6 karar 7): bir oyun servisi
+`spawn_registry` içinde, registry'den ÖNCE `parts.service(Service)` ile
+kaydedilir (`gsb_core::service::Service` = görev + senkron durdurma
+isteği; tipik gövde `gsb_core::channel::post(&tx, Stop)`, bant içi).
+`stop()` önce odaların düşme bariyerini bekler, sonra servisleri durdurur;
+ikisi de 1 sn sınırlı, aşan servis abort ve `StopReport.services_aborted`.
+Yeni bir servis durdurma isteğinde yeni iş almamalı, borçlu olduğunu
+teslim edip bitmeli (ekonominin `serve`'ü örnek).
+
+**F18 tamam**: `shard_members` N+1 çekirdek hatası değil, yırtık raporun
+toplanmasıydı; kural `loadgen/report/spread.rs`'te (`consistent_cut`).
+Shard başına sayıların sözleşmesi DESIGN §12 "tutarlı kesit".
 
 **B31 tamam** (DESIGN §6 "El sıkışan kapılar", SECURITY §4.3): WS/TLS/QUIC
 kapılarında el sıkışma `gsb_net::transport::intake`'te bağlantı başına
@@ -543,6 +556,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1071 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1091 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
