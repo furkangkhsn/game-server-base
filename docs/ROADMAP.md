@@ -77,15 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **928** (928/928 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **952** (952/952 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **A29 — takım bütçesinde oyunun sıralaması** (KIT-ARCHITECTURE
+Son tur: **B19 — istemci yapı taşı `gsb-client`** (DESIGN §5.7) —
+çerçeve, tek `Conn` (TCP/TLS/QUIC/rUDP), oturum adımları, tipli
+`ServerError`; loadgen/örnek/süitlerdeki kopyalar kalktı; tel baytları ve
+RESULT biçimi aynı.
+Önceki tur: **A29 — takım bütçesinde oyunun sıralaması** (KIT-ARCHITECTURE
 §10 "A29") — opt-in `with_export_rank`: kesmede kademe içinde oyunun
 sırası (önce üyeler korunur, eşitlikte küçük wire id; varsayılan bayt
-aynı); kesme `RoomSample::team_over_budget` ile barındırıcıya. B19
-(`gsb-client`) yürüyor.
+aynı); kesme `RoomSample::team_over_budget` ile barındırıcıya.
 Önceki tur: **B12 + B13 — kapanış bildirimleri** (DESIGN §5.6) — `stop()`'ta
 en-iyi-çaba ERROR 14 (`SERVER_STOPPING`, toplamalı kod), reddedilen akışta
 ERROR 9; beklemesiz, `stop()` her zaman bitiyor; QUIC ve WS kapılarındaki
@@ -798,8 +801,10 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   sonundan önce; beş kapıda testli (DESIGN §5.6).
 - [ ] **Oda bazlı config override** — factory aynı config'i kullanıyor;
   yüksek yoğunluklu odalar için farklılaşma.
-- [ ] **`gsb-client` yardımcı crate'i** — `read_frame` mantığı e2e testi
-  ile örnek istemcide birebir kopyalanmış; tek yerde yaşatmak.
+- [x] **`gsb-client` yardımcı crate'i** — **KAPANDI** (B19): çerçeve +
+  tek `Conn` + oturum adımları + tipli ERROR tek crate'te; loadgen, örnek
+  istemci ve sunucu süitleri ona geçti; kopyalardaki iptal-güvensiz okuma
+  düzeldi (DESIGN §5.7).
 - [x] **`protoc-bin-vendored` bağlı değil** — **KAPANDI** (protokol
   sertleştirme turu, `5e21a09`). `gsb-protocol` VE `gsb-game` build
   script'leri gömülü ikiliyi `Config::protoc_executable` ile veriyor;

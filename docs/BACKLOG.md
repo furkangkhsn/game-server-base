@@ -87,12 +87,15 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B16 Accept döngüsü hâlâ `abort` ile duruyor | — | DESIGN:1197-1214 |
 | B17 Admin HTTP: auth/TLS yok, keep-alive yok, makine-okur çıktı yok, profil yok | — (localhost sözleşmesi) | OPS:12-54, SECURITY:269 |
 | B18 Oda başına config override | — | ROADMAP:712 |
-| B19 `gsb-client` yardımcı crate'i (`read_frame`'in ≥6 kopyası) | — | ROADMAP:714 |
 | B20 Autobahn CI işinin ilk koşusu | repo push edilince | HANDOFF:321, SECURITY:220 |
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
 | B24 WS durdurmada kapanış çerçevesi boş (istemcide 1005); 1001 "Going Away" olabilir | — | DESIGN §5.6 |
+| B25 `gsb-client`'e WebSocket yarısı (el sıkışma, maskeleme, kapanış çerçevesi → `Recv::Closed`) | Rust'ta WS istemcisi isteyen bir tüketici (loadgen WS modu dahil) | DESIGN §5.7 |
+| B26 Loadgen churn bayt muhasebesi: AUTH sabit 8 bayt + rUDP formülü (TCP'de bile), JOIN ve yeniden denemeleri sayılmıyor, gelen bayt `2 + payload`; `run_client` TCP EOF'unda `continue` (sonraki hamle yazımına dek boş döngü) | churn baytlarına dayanan bir ölçüm (düzeltmek RESULT değerlerini oynatır) | DESIGN §5.7 |
+| B27 Loadgen `tls_connector` CA PEM'ini her bağlantıda okuyup ayrıştırıyor | TLS churn ölçümü | DESIGN §5.7 |
+| B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
@@ -153,7 +156,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13 §B'den kendi turunda.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13 ve B19 §B'den kendi turlarında.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

@@ -5,6 +5,43 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B19 — istemci yapı taşı `gsb-client` (`client/b19-gsb-client`)
+
+Sunucunun istemci yarısı bir yapı taşı değil, kopyaydı: çerçeve
+okuyucu/yazıcı ve oturum adımları loadgen'de, örnek istemcide ve on bir
+sunucu test dosyasında ayrı ayrı yazılmıştı; TLS bağlayıcı üç, QUIC
+istemci kurulumu üç kez (DESIGN §5.7).
+
+- Yeni motor crate'i `gsb-client` (oyun bilmez, politika taşımaz):
+  `frame` (`encode`; iptal-güvenli `FrameRx` — 4 MiB koruma, kare içi EOF
+  `UnexpectedEof`; `FrameTx`), tek `Conn` (TCP / TLS / QUIC bi-stream /
+  rUDP; `send`, `send_batch`, sınırlı `recv`, `into_split`), açıcılar
+  (`connect`, `tls`, `quic` — güven kökleri çağırandan), `session` (AUTH
+  ± bilet, JOIN, HEARTBEAT, LEAVE; `Credentials` = resume anahtarı;
+  bekleme sırasında gelen diğer kareler sırayla çağırana), tipli
+  `ServerError` (`ErrorCode` + ham numara + mesaj; bilinmeyen kod
+  `Unspecified`). Yeni üçüncü taraf bağımlılık yok.
+- Bulunan hata: her kopya `read_exact`'i `timeout` ile sarıyordu —
+  pencere önek ile gövde arasında dolarsa önek kayboluyor, akış
+  kayıyordu. Yeni okuyucu yarım kareyi tamponda tutar. Kopyaların
+  bazılarında boyut koruması ve AUTH sonucu denetimi de yoktu.
+- Göç: loadgen (`wire.rs` silindi), örnek istemci ve on üç sunucu test
+  dosyası. Kalanlar: WS istemcileri (`gsb-client`'te WS yarısı yok;
+  `gsb-net` döngü yüzünden kullanamaz), `udp_rel_liveness`'ın doğrudan
+  `UdpClient` sürüşü, e2e koruma akışlarının adım adım döngüleri.
+- Tel baytları değişmedi (eski kodlayıcılar donmuş kopya olarak `encode`
+  ile bayt bayt eşit; silinmeden önce HEAD'deki yardımcılarla 94 kare /
+  790 017 baytta kodlama ve okuma özdeş); loadgen RESULT biçimi aynı.
+  Loadgen'in RESULT değerlerini oynatmamak için korunan tuhaflıklar
+  BACKLOG B26/B27'de.
+
+Testler 928 → 952 (rebase sonrası; +17 `gsb-client` birim, +7
+`gsb-server/tests/client_session.rs` gerçek sunucu); her kural mutasyonla
+kırıldı. Ebeveynin bağımsız mutasyonu (uzunluk önekine opcode'un 2
+baytını katmamak) 13 testi kırıyor. Not: ajan kendi push edilmemiş,
+derlenmeyen ilk commit'ini `reset --soft` ile geri alıp doğrusunu yazdı
+(kural sapması, kayıp yok).
+
 ## A29 — takım bütçesinde oyunun sıralaması; kesme barındırıcıya (`kit/a29-team-budget-priority`)
 
 W2-3'ün iki eksiği: bütçe kestiğinde her kademede kalanlar kit'in
