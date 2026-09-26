@@ -148,12 +148,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F5 Servis yaşam döngüsünde açık durdurma protokolü yok | GAME-MODULE:931 |
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
-| F9 Crystal olayları için genel oyun/kit sayaç seam'i — W2-3 kısmı A29'da kapandı (`team_over_budget`, export'un niceliği olarak; genel seam gerekmedi) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
 | F15 RPC'nin tıkalı-bağlantı retleri (F14 fırtına sınırı) `requests_rejected_conn_cap` kovasında sayılıyor, ayrı metrik yok (RoomSample + Prometheus + loadgen codec'e dokunur) — tetik: operatörün tıkalı ret ile cap retlerini ayırması gerekirse | RPC-CONTROL-PLANE §3.1 |
 | F16 Ayrılma bekleme süresi ve RPC zaman aşımı hâlâ std saatte (paused testte gerçek zamanlı) — tetik: bunları paused saatte sınayan test | TICK-ARCHITECTURE "Tick saati" |
+| F17 Mantık sayacı taşması (16'yı aşan ad) yalnız bir kez warn + kümedeki sayı; satırda/Prometheus'ta görünmüyor — tetik: bir oyunun 16 adı zorlaması | DESIGN §12 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13 kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 kendi turunda kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
