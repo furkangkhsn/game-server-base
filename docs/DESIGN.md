@@ -1371,7 +1371,8 @@ datagram'dan kaçmak için oturumun her datagram'ına 8 B.
 
 NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
 yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
-kadar yaşar — sınır: `idle_timeout`).
+kadar yaşar — sınır: `idle_timeout`); aktörü ölmüş oturum ise artık hemen gider —
+aşağıda "Aktörü ölmüş oturum").
 
 **Datagram çerçevesi:** `[u8 kind]` — `0` RAW `[u16 op][payload]`
 (oyun bandı: kayıp toleranslı, sırasız — snapshot'lar ve MOVE_TO);
@@ -1517,6 +1518,62 @@ deadline heap'i (gömlekli geçersiz kılma — girdi yalnız
 `son_görülme + idle`'e eşkenken geçerli) + `timeout(min_deadline,
 recv_from)`. Sweep, oturuma `ConnIn::ServerClosed` yollar ve oturumu
 kaldırır — TCP'nin reader-pump clock'unun (maddeler turu) UDP karşılığı.
+
+**Aktörü ölmüş oturum (BACKLOG B6, `udp::demux::reap`).** Eskiden
+aktörü çıkmış bir oturum, o adrese bir sonraki datagram kapalı posta
+kutusuna çarpana ya da idle sweep'e kadar demux'ta kalıyordu
+(`idle_timeout = None` ise sonsuza dek): yazıcısı, kanalları ve adres
+yuvası — aynı adresten gelen yeni el sıkışma kurulu bir adrese ait
+sayılıp cevapsız kalıyordu. Şimdi oturumu **yazıcısı** bırakır: yazıcı
+zaten her RTO'da (50 ms) uyanır ve aktörün posta kutusunun bir klonunu
+tutar. Posta kutusu kapalıysa **ve** kendi güvenilir bandı hiçbir şey
+borçlu değilse (aktörün son bildirimi — ERROR 14/9 — ACK'lendi ya da REL
+canlılık sınırı ondan vazgeçti) adresi sınırlı bir süreç-içi kuyruğa
+(`Reaper`, crossbeam, `try_send`) koyar ve demux'u, demux'un beklediği
+tek şeyle uyandırır: aynı soketten demux'un **kendi adresine** bir
+baytlık datagram (belirtilmemiş bind adresi aynı ailenin loopback'ine
+çevrilir). Demux her uyanışta (datagram, uyandırma ya da idle deadline)
+datagramı işlemeden **önce** kuyruğu boşaltır ve adı geçen oturumu
+yalnız gerçekten ölüyse — aktörün posta kutusu ya da yazıcının kanalı
+kapalıysa — kaldırır (deadline girdisiyle birlikte). Kuyruk yetki
+vermez: bayat bir sinyal (adreste artık yeni bir oturum var) ya da sahte
+bir uyandırma yalnız O(1) bir denetime mal olur; uyandırma kaynağından
+tanınır, içeriği okunmaz. Sınır: aktör çıktıktan sonra ~bir RTO; son
+bildirim hiç ACK'lenmezse `REL_NO_ACK_FATAL` (5 sn) + RTO. Oturum
+bittikten sonra yazıcı kanal kapanana dek (oda DETACH'ı işleyip
+göndericisini bırakana dek) çalışır ama gelen kareleri **tele koymaz**
+(`drained`): adres o arada yeni bir oturum taşıyor olabilir, oda da
+kapalı bir kanal görüp bunu yavaş istemci düşmesi sanmaz. Yeni await,
+zamanlayıcı görevi, kilit yok; datagram başına maliyet boş bir
+`try_recv`. Sayaçlar demux çıkış logunda (`reaped`, `reap_wakes`) ve
+yazıcının oturum logunda (`drained`). Aktörün `ConnectionId`'si demux'ta
+tutulmaz: registry satırını aktörün `ConnClosed`'ı bırakır (değişmedi).
+
+Elenenler: (1) *Demux'un periyodik olarak tüm oturumların posta
+kutusuna bakması* — O(N) tarama ve sessiz sunucuda da periyodik uyanma
+(idle için aynı gerekçeyle elendi, aşağıda "100k ölçeği"). (2) *Yalnız o
+adresten datagram gelince bakmak* (ör. HELLO'da) — yuvayı istenince
+boşaltır ama yazıcı ve kanallar idle sweep'e kadar (ya da hiç) yaşar.
+(3) *Demux'a ikinci beklenen kaynak* (sokete ek bir uyandırma kanalı) —
+çoğullama; tek-await kuralı ve lint. (4) *Yazıcının aktör ölünce
+çıkması, demux'un yalnız zayıf gönderici tutması* — ACK yolu oturumla
+gider: son bildirimin yeniden gönderimi kesilir (B12'nin bildirimi
+rUDP'de "en iyi çaba"ya düşer) ve odanın gönderimleri kapalı kanala
+çarpıp yavaş istemci düşmesi sayılır. (5) *Adresi uyandırma
+datagramının içinde taşımak* (kuyruksuz) — kaybolan uyandırma bilgiyi de
+kaybeder; kuyrukla uyandırma yalnız bir ipucudur, meşgul sokette kaybı
+hiçbir şeye mal olmaz.
+
+Testler: `udp::tests::reap` (gerçek soket, idle kapalı, eşten tek
+datagram yok) — aktör çıkınca yazıcı ≤ 1 sn'de biter ve aynı adres yeni
+el sıkışma kurar; ACK'lenmemiş son bildirim oturumu tutar, ACK bitirir;
+biten oturumun geç karesi adresin yeni oturumuna ulaşmaz.
+`udp::demux::tests::reap` — sinyal yalnız ölü oturumu (aktörü ya da
+yazıcısı gitmiş) siler; uyandırma kaynağından tanınır. İlk üçü eski kodda
+düştü; mutasyonlar (boşaltmayı kaldırmak, ölüm denetimini kaldırmak,
+yazıcı-gitti kolunu kaldırmak, "band borçsuz" şartını kaldırmak,
+uyandırmayı göndermemek, `drained` yerine tele koymak) her biri en az
+bir testi düşürür.
 
 **100k ölçeği:** datagram başına maliyet = 1 `recv_from` syscall + 1
 hash lookup + 1 `BTreeSet` insert (O(log N) ≈ 17 adım) + 1 `try_send`
