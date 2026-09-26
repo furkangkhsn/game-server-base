@@ -22,10 +22,8 @@
 //! a value put beyond the bound is dropped and counted
 //! ([`LogicCounters::dropped`]; the actor warns once). The set of names
 //! is static per game, so the bound is a design limit hit in the first
-//! test run, not a load condition. The count is the core's own key on
-//! both renderings — `logic_counters_dropped=` on the line, the gauge
-//! `gsb_room_logic_counters_dropped` — present only while non-zero, so a
-//! logic within the bound renders exactly what it did before (F17).
+//! test run, not a load condition. Both renderings show the count only
+//! while non-zero (`logic_counters_dropped`, F17).
 //!
 //! **One name, one counter.** A name put twice in one set (a composite
 //! and its game both reporting it) is folded by its rule — the same
