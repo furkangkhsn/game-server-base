@@ -15,6 +15,9 @@ pub(crate) use stall::{STALL_RCVBUF, Stall};
 mod view;
 pub(crate) use view::*;
 
+#[cfg(test)]
+mod tests;
+
 /// One client's end-to-end record (task-local; returned via JoinHandle).
 pub(crate) struct ClientReport {
     pub(crate) id: u64,
@@ -94,13 +97,26 @@ pub(crate) struct ClientReport {
     pub(crate) fresh_joins: u64,
 }
 
-/// The client-side TLS material (a cloned slice of `Args`): the CA root to
-/// trust and the name to expect in the server certificate. `None` =
-/// plaintext TCP.
+/// The client-side TLS material: the connector trusting the `--tls-ca`
+/// root, and the name to expect in the server certificate. `None` =
+/// plaintext TCP. Built ONCE per run ([`TlsOpts::load`]) and cloned into
+/// every client: the CA PEM is read and parsed once, and every
+/// connection shares one rustls client config (the connector is an
+/// `Arc` inside).
 #[derive(Clone)]
 pub(crate) struct TlsOpts {
-    pub(crate) ca_path: String,
+    pub(crate) connector: tokio_rustls::TlsConnector,
     pub(crate) server_name: String,
+}
+
+impl TlsOpts {
+    /// Read and parse the CA PEM at `ca_path` into the run's connector.
+    pub(crate) fn load(ca_path: &str, server_name: String) -> Self {
+        Self {
+            connector: tls_connector(ca_path),
+            server_name,
+        }
+    }
 }
 
 /// Everything one client task needs besides its own id. (One struct
@@ -132,7 +148,7 @@ pub(crate) struct ClientParams {
 
 /// Build a rustls connector trusting ONLY the CA PEM at `ca_path` (the
 /// `--tls-ca` root; a self-signed test CA works — docs/SECURITY.md §2).
-pub(crate) fn tls_connector(ca_path: &str) -> tokio_rustls::TlsConnector {
+fn tls_connector(ca_path: &str) -> tokio_rustls::TlsConnector {
     let pem = std::fs::read_to_string(ca_path)
         .unwrap_or_else(|e| panic!("cannot read --tls-ca `{ca_path}`: {e}"));
     let certs = gsb_client::tls::certs_from_pem(&pem)
@@ -159,7 +175,6 @@ pub(crate) async fn connect_wire(
             match tls {
                 None => gsb_client::connect::tcp_stream(stream),
                 Some(opts) => {
-                    let connector = tls_connector(&opts.ca_path);
                     let dns: rustls::pki_types::ServerName<'static> =
                         opts.server_name.clone().try_into().map_err(|_| {
                             std::io::Error::new(
@@ -172,7 +187,7 @@ pub(crate) async fn connect_wire(
                         })?;
                     // The handshake happens HERE: connect_ms covers it (the
                     // same convention as the rUDP cookie handshake above).
-                    gsb_client::tls::connect(stream, &connector, dns).await?
+                    gsb_client::tls::connect(stream, &opts.connector, dns).await?
                 }
             }
         }
