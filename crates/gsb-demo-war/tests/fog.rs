@@ -90,10 +90,11 @@ async fn allies_are_seen_map_wide_and_a_faction_sees_nothing_it_has_no_eyes_on()
 /// (within 60 m of it) until the last; never before, never after. The
 /// faction-2 player, with no eyes there, never sees it.
 ///
-/// On the REAL clock: the ticker stamps its ticks with the wall clock, so
-/// under tokio's paused clock the game's `dt` — and every walk — would
-/// stand still (the other scenarios place units and never walk).
-#[tokio::test]
+/// On the paused clock like every scenario here: the ticker stamps its
+/// ticks on the runtime clock, so the game's `dt` is the paused period
+/// and the walk runs as on the real one (it ran on the real clock before
+/// BACKLOG F10 — 2 s of wall time; now ~50 ms).
+#[tokio::test(start_paused = true)]
 async fn an_enemy_is_seen_through_a_far_tower_on_another_shard() {
     let t = tower(Team(0), 2);
     let r = realm(&[

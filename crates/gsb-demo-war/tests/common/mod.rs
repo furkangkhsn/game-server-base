@@ -12,14 +12,13 @@
 //! tick are in, every frame of that tick sits in the clients' channels
 //! and every export of that tick has been relayed.
 //!
-//! **The paused clock freezes walking.** The core's ticker stamps each
-//! tick with the WALL clock (`std::time::Instant`), and the shard's `dt`
-//! is the gap between two stamps: under tokio's paused clock the ticks
-//! come back to back and `dt` is microseconds — a runner does not move.
-//! Scenarios that place units (saved characters), fight and join or
-//! leave run paused (exact and fast); a scenario that WALKS runs on the
-//! real clock (`#[tokio::test]` without `start_paused`), where the
-//! barrier still holds and a relay may take one tick more.
+//! **Walking runs on the paused clock too.** The core's ticker stamps
+//! each tick on the runtime clock (`tokio::time::Instant`), and the
+//! shard's `dt` is the gap between two stamps: under tokio's paused
+//! clock that is the tick period, so a runner covers its distance as on
+//! the real clock — in milliseconds of real time. (Before BACKLOG F10
+//! the stamps were wall-clock, `dt` froze, and the walking scenario ran
+//! on the real clock.)
 
 #![allow(dead_code)] // each test binary uses its own subset
 
