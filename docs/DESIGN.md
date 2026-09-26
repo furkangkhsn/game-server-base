@@ -800,10 +800,11 @@ yazılmıştı; TLS bağlayıcı üç, QUIC istemci yapılandırması üç kez.
   varsayılan 4 MiB koruma, `with_max`), `FrameTx` (`send` = yaz + flush,
   `send_batch` = tek yazım, `feed`/`flush`, `get_mut` sözleşme dışı
   baytlar için).
-- `Conn`: `Stream { rx, tx }` (TCP, TLS, QUIC bi-stream — aynı kareler)
-  ya da `Udp(UdpClient)`; `send`, `send_batch`, sınırlı `recv(window)` →
-  `Recv::{Frame, Closed, Quiet}`, `into_split` (okuyucu ve yazıcı iki
-  görevde — çoğullama yok). Açıcılar: `connect::{tcp, tcp_stream, udp}`,
+- `Conn`: `Stream { rx, tx }` (TCP, TLS, QUIC bi-stream, WebSocket —
+  aynı kareler) ya da `Udp(UdpClient)`; `send`, `send_batch`, sınırlı
+  `recv(window)` → `Recv::{Frame, Closed, Quiet}`, `into_split` (okuyucu
+  ve yazıcı iki görevde — çoğullama yok). Açıcılar: `connect::{tcp,
+  tcp_stream, udp, ws}`, `ws::{handshake, handshake_with_max}`,
   `tls::{certs_from_pem, client_config, connector, connect}`,
   `quic::{client_config, connect}` (güven kökleri çağırandan; sistem
   deposu yok; ALPN `gsb-net/1`).
@@ -823,17 +824,86 @@ yazılmıştı; TLS bağlayıcı üç, QUIC istemci yapılandırması üç kez.
   olarak `session/tests/pins.rs`'te `encode` ile bayt bayt karşılaştırılır,
   AUTH/JOIN/LEAVE/HEARTBEAT kareleri literal bayt olarak sabitlenir.
 
-**Kalanlar ve nedenleri.** WebSocket istemcileri (multi_listener,
-stop_notice, `gsb-net` ws süiti): `gsb-client`'in WS yarısı yok (WS
-kapısının istemcileri kendi WS yığınlı tarayıcı/motorlar; ağaçtaki WS
-istemcileri protokol test düzenekleri) ve `gsb-net` `gsb-client`'e
-bağımlı olamaz (döngü: `gsb-client` → `gsb-net`). `udp_rel_liveness`
+**Kalanlar ve nedenleri.** `gsb-net` ws süitinin sahte istemcisi
+(`ws/tests/client.rs`): `gsb-net` `gsb-client`'e bağımlı olamaz (döngü:
+`gsb-client` → `gsb-net`; dev-bağımlılık döngüsü `gsb-net`'in ikinci bir
+kopyasını derler, tipler eşleşmez — alternatif 5'teki durum) ve o
+istemci bilerek bozuk bayt yazar (maskesiz çerçeve, RSV, uzunluk
+kodlamaları) — sunucu tarafı protokol testinin aracı, yapı taşı değil.
+`udp_rel_liveness`
 `UdpClient`'ı doğrudan sürer (ACK okumasını taşıma düzeyinde denetler).
 e2e'nin koruma akışları adım adım döngülerini korur (her biri belirli bir
 sunucu tepkisini doğrular), ama bağlantı + kare kurucular artık
 `gsb-client`'in. Loadgen'in kendi alma döngüleri ve bayt muhasebesi
 ölçüm politikasıdır; bağlantı, çerçeve, kareler ve ERROR sınıflaması
 `gsb-client`'ten.
+
+**WebSocket yarısı (BACKLOG B25).** B19 WS yarısını bilerek dışarıda
+bırakmıştı; üç sunucu testi (multi_listener, stop_notice/stream_rejected)
+el yazması RFC 6455 istemcileriyle kalmıştı — her biri kendi el
+sıkışması, sabit maske anahtarı ve `timeout` altında `read_exact`'i
+(B19'un iptal-güvensizlik hatası) ile.
+
+- *Yeni `Conn` varyantı değil, aynı `Conn::Stream`.* Kapının sözleşmesi
+  her ikili mesajda tam BİR akış-teli karesi `[u32 LE uzunluk][u16 LE
+  op][payload]` — TCP kapısının baytları, mesaj başına bir kare. WS
+  bağlantısı bu yüzden altında WS konuşan yarılarıyla bir `Stream`:
+  `FrameRx` sunucu çerçevelerini ayrıştırır, `FrameTx` her kareyi tek
+  maskeli FIN ikili mesaj olarak yazar. `send`/`recv`/oturum adımları/
+  `into_split` TCP'deki gibi çalışır. `Conn` ya da `Recv`'e varyant
+  eklemek her kapsamlı `match`'i kırardı (loadgen `Conn`'u ve `Recv`'i
+  kapsamlı eşler); kapanış ayrıntısı bu yüzden bir sorgu:
+  `Conn::ws_close() -> Option<&WsClose { code: Option<u16>, reason }>`
+  (`Recv::Closed` birim varyant kalır — her kapının sonu tek bir olay).
+- *El sıkışma:* 16 baytlık OS-rastgele `Sec-WebSocket-Key`, `GET` +
+  `Upgrade`/`Connection`/`Sec-WebSocket-Version: 13`/`Host`; 101'in
+  `Upgrade`, `Connection` ve `Sec-WebSocket-Accept`'i denetlenir;
+  istenmemiş alt protokol/uzantı reddedilir (kapı ikisini de kullanmaz);
+  101'in hemen arkasındaki baytlar ilk okumaya kalır. `connect::ws(addr)`
+  düz `ws://` (yol `/`); `ws::handshake(io, host, path)` herhangi bir
+  akış üstünde — `wss://` bir `tls` akışı üstünde `handshake`'tir, ama
+  gsb kapısının TLS biçimi yok (`"ws"` dinleyicisi TLS dosyası kabul
+  etmez), bu bileşim gsb'ye karşı sınanmadı.
+- *Maskeleme:* her istemci çerçevesi, çerçeve başına taze OS-rastgele
+  anahtarla (RFC 6455 §5.3).
+- *Okuma:* maskeli sunucu çerçevesi, RSV, bilinmeyen opcode, metin
+  mesajı, parçalı/125 bayttan uzun kontrol çerçevesi, açık parçalı
+  mesajın içinde yeni veri mesajı, tam bir kare olmayan zarf →
+  `InvalidData`. Parçalı mesajlar birleştirilir (araya kontrol
+  çerçevesi girebilir). Koruma kareninkiyle aynı (`max_frame_bytes`,
+  varsayılan 4 MiB) + 4 baytlık zarf; aşan mesaj (birleşmiş toplam
+  dahil) BAŞLIKTAN reddedilir, yükü beklenmez.
+- *Kontrol:* ping'e yükünü taşıyan pong. `Conn::recv` onu pencere
+  içinde hemen yazar; `into_split` sonrası okuma yarısı sınırlı bir
+  kuyruğa (8; dolu ise düşer — §5.5.3 yalnız sonuncuya yanıtı yeterli
+  sayar) koyar, yazma yarısı bir sonraki karesinden önce gönderir.
+  Kapanış çerçevesi: `Recv::Closed` + `ws_close()`; yankı yalnız kodla
+  (boş kapanışa boş), istemcinin başlattığı kapanışın yankısına yankı
+  yok; kapanıştan sonra veri gönderimi `BrokenPipe`. Sonraki okuma
+  sunucunun TCP sonunu bekler (`Closed`; beklerken `Quiet`) ve
+  kapanıştan sonra gelen her bayt `InvalidData` — "kapanış çerçevesinden
+  sonra hiçbir şey" iddiası (stream_rejected) göçte zayıflamadı.
+  Kapanışsız TCP sonu da `Closed`, `ws_close() == None`.
+- *İptal güvenliği iki yönde:* okuma durumu tamamen yapıda (tampon, açık
+  mesaj, kapanış), tek `await` tamponlu okuma; yazma kodlanmış çerçeveyi
+  ilk `await`'ten ÖNCE bütünüyle `pending`'e koyar, kısmi yazımlarla
+  boşaltır — iptal edilen gönderim yarım çerçeve bırakmaz, kalanı
+  sonraki yazım önce gönderir.
+- *Bağımlılık:* yeni crate yok. `sha1` (kapının kendi el sıkışması),
+  `getrandom` (rUDP çerez anahtarının OS okuyucusu) çalışma alanında;
+  `base64` 0.22 `Cargo.lock`'ta zaten vardı (`pem` üzerinden) — çalışma
+  alanı bağımlılığı yapıldı, kilitte yalnız `gsb-client`'in bağımlılık
+  listesi büyüdü. Kapının el yazması base64'ü `pub(super)`; `gsb-net`'e
+  dokunmamak için yeniden kullanılmadı.
+- *Göç:* multi_listener (`FakeWsClient` ve `ws_auth_and_join` gitti; WS
+  kapısı da `session::auth_and_join`'den geçer), stop_notice/client.rs
+  (beş kapı da `Conn`; `End::WsClose` yükü `ws_close()`'tan kurulur,
+  bir kez raporlanır — sonraki son TCP sonudur), stream_rejected (metin
+  çerçevesi `FrameTx::ws_frame` ile). Hiçbir iddia değişmedi; test
+  sayıları aynı (11, 6, 4).
+- *B24 ile ilişki:* stop kapanışı bugün boş (`code: None`); paralel tur
+  1001 yapıyor. `ws_client`'in stop testi ikisini de kabul eder
+  (`None | Some(1001)`) — B24 birleşince `Some(1001)`'e sıkılaşır.
 
 **Elenen alternatifler.**
 
@@ -867,6 +937,24 @@ bilinmeyen kod 99 → `Unspecified` + ham 99, `AuthRefused`, EOF →
 `gsb-server/tests/client_session.rs` (7): TCP/TLS/rUDP/QUIC üzerinde
 tüm adımlar; kapasite reddi ERROR 9 tipli; `stop()` ERROR 14 tipli (TCP
 ve rUDP); aynı kimlik bilgileri aynı varlığı geri getirir.
+B25: `gsb-client` WS birim (23, senaryolu sunucuya karşı): RFC accept
+vektörü; istek başlıkları + 101 arkasındaki bayt; bağlantı başına taze
+anahtar; yedi kötü yanıt + yanıtsız kapanış; her kare tek maskeli ikili
+mesaj (kare başına taze anahtar); 7/16/64-bit uzunluklar; ping araya
+girmiş parçalı mesaj + pong; `recv` penceresinde pong; bölünmüş
+yarılarda pong sonraki kareden önce; `ws_frame`; kapanış kodu/nedeni +
+tek yankı + kapanış sonrası gönderim reddi + TCP sonu; kapanıştan sonra
+bayt reddi; boş kapanış; kapanışsız son; istemci kapanışının yankısı
+yankılanmaz; bozuk kapanış; koruma (sınırda kabul, başlıktan ret,
+birleşmiş toplam, varsayılan 4 MiB); on iki protokol ihlali (kalıcı
+hata); mesaj içinde EOF; yarıda iptal edilen okuma ve gönderim.
+`gsb-server/tests/ws_client.rs` (4, gerçek kapı): oturum adımları;
+kapının 1003/1002/1007/1009 kodları; istemci kapanışının 1000 yankısı;
+stop → ERROR 14 + kapanış çerçevesi. Mutasyonlar (maskesiz, anahtar
+uygulanmaz, sabit anahtar, yalnız son parça, pong yok, `recv` pong
+yazmaz, kapanış kaydedilmez, yankı yok, koruma yok, pencere altında
+`read_exact`, iptalde `pending` düşer, kapanış sonrası bayt kabul) her
+biri en az bir testi kırar.
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
