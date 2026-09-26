@@ -148,14 +148,13 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F5 Servis yaşam döngüsünde açık durdurma protokolü yok | GAME-MODULE:931 |
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
-| F8 Admin `POST /rooms/open` oda config'ini `RoomConfig::default()` + `tick_hz`'den kuruyor, sunucu oda anahtarlarını (`max_detach_hold_secs` vb.) almıyor | RECONNECT §17 |
 | F9 Crystal olayları için genel oyun/kit sayaç seam'i (W2-3: kit'in `ShardedTeamRoom::over_budget` sayacı da barındırıcıya ulaşmıyor) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
 | F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
 | F11 Fan-out düşmesi one-shot full içeren batch'i atınca `Baselines` oyuncuyu baseline'lı sayıyor (bugün güvenli — keep-alive iyileştirir; herhangi bir göreli şemada doğruluk hatası) — çekirdekten kit'e düşme sinyali | KIT-ARCHITECTURE §10 "A22" A22-1 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8 kendi turunda kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

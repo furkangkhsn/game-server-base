@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-865 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+869 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,12 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F8 tamam** (OPS §2, RECONNECT §17, CHANGELOG "F8"): oda config'inin
+tek kaynağı `Config::room_template` (`config/axes/listeners/room.rs`);
+ops yüzeyi `OpsHttp.room_template` tutuyor. Yeni bir oda anahtarı yalnız
+`room_template`'e eşlenir — iki yol da alır. Programatik yol:
+`ServerHandle::open_room(cfg.room_config(id))`.
 
 **A10 tamam** (KIT-ARCHITECTURE §10 "A10", CHANGELOG "A10"): seam
 `RecordCodec::send_every(&Wire) -> SendEvery`, takvim `SendEvery::due`.
@@ -454,6 +460,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 865 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 869 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

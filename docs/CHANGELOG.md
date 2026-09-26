@@ -5,6 +5,34 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F8 — admin `POST /rooms/open` sunucunun odasını açar (`server/f8-rooms-open-config`)
+
+Runtime'da açılan oda eskiden `RoomConfig::default()` + `tick_hz` ile
+kuruluyordu: sunucunun oda anahtarlarını (`room_control`, `conn_action`,
+`max_snapshot_bytes`, `keepalive_hz`, `max_players`, `max_idle_input_secs`,
+`max_detach_hold_secs`) almıyordu — aynı sunucunun runtime odası başka
+kapasitelerle ve hep 10 dk'lık detach-hold tavanıyla çalışıyordu; oda
+anahtarı yazılmış bir sunucuda ön-kurulan odayı yeniden açmak 409
+dönüyordu.
+
+- Tek eşleme: `Config::room_template` (`RoomTemplate`, yalnız `Config`
+  üretir; `config/axes/listeners/room.rs`). `Config::room_config` ve ops
+  yüzeyi ondan kurar; yüzey kendi varsayılanını uyduramaz. Çekirdek
+  değişmedi.
+- `tick_hz` istek başına tek geçersiz kılma (doğrulama aynı). Başka
+  geçersiz kılma eklenmedi: güvenlik tavanları operatör politikası,
+  kimliksiz v1 yüzeyi onları oda başına gevşetemesin.
+- Oyun modülü ayarları zaten doğruydu (fabrika her `CreateRoom`'da aynı).
+- Sözleşme: kodlar/gövdeler/idempotentlik aynı; sonuç olarak ön-kurulan
+  odayı aynı hızla yeniden açmak artık 200, `keepalive_hz`'ten küçük
+  `tick_hz` isteği sunucunun `keepalive_hz`'ine göre 400 (OPS §2).
+
+Testler 865 → 869 (birim: registry'ye giden istek `room_config(id)` ile
+alan alanına aynı; geçersiz hız registry'ye gitmez; HTTP; MMO uçtan uca —
+düzeltmeden önce runtime odada dövüşçü 6,03 sn tutuluyordu, tavan 1 sn).
+Ajanın 6 mutasyonu yakalandı; ebeveynin bağımsız mutasyonu (şablondan
+`max_snapshot_bytes` eşlemesini düşürmek) birim testini kırıyor.
+
 ## A10 — kayıt başına yayın hızı: oyun başına opt-in (`kit/a10-send-rate`)
 
 Kit'e yapı taşı; varsayılan değişmedi, istemci kuralı değişmedi (`kit.proto`
