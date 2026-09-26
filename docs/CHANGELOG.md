@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B25 — `gsb-client`'e WebSocket yarısı (`client/b25-ws-half`)
+
+B19 WS yarısını bilerek dışarıda bırakmıştı; sunucu testlerinin WS
+istemcileri el yazmasıydı (kendi el sıkışmaları, sabit maske anahtarı,
+`timeout` altında `read_exact` — B19'un iptal-güvensizlik hatası)
+(DESIGN §5.7).
+
+- Yeni `Conn` varyantı yok: WS bağlantısı aynı `Conn::Stream` (kapı her
+  ikili mesajda tam bir akış-teli karesi taşır); `FrameRx`/`FrameTx`
+  altında WS konuşur. Kapanış kodu/nedeni `Conn::ws_close()` →
+  `WsClose { code: Option<u16>, reason }`; `Recv::Closed` birim kalır.
+- Açıcılar `connect::ws(addr)` (düz `ws://`), `ws::handshake(io, host,
+  path)` (her akış üstünde; gsb kapısının TLS biçimi yok, `wss://` gsb'ye
+  karşı sınanmadı). El sıkışma: OS-rastgele anahtar, accept denetimi,
+  istenmemiş alt protokol/uzantı reddi.
+- Her istemci çerçevesi taze OS-rastgele anahtarla maskeli; parçalı
+  mesajlar birleşir; ping'e pong; kapanış tek yankı; sonrasında gönderim
+  `BrokenPipe`, gelen bayt `InvalidData`; koruma kareninkiyle aynı;
+  iptal güvenliği iki yönde.
+- Yeni crate yok (`sha1`, `getrandom` çalışma alanında; `base64` 0.22
+  kilitte zaten vardı, çalışma alanı bağımlılığı oldu).
+- Göç: multi_listener, stop_notice/client.rs, stream_rejected; iddialar
+  ve test sayıları aynı. Kalan: `gsb-net` ws süitinin sahte istemcisi
+  (bağımlılık döngüsü; bilerek bozuk bayt yazar). Sunucu davranışı ve
+  baytları değişmedi.
+
+Testler 952 → 979 (+23 WS birim, +4 `ws_client.rs` gerçek kapı); her kural
+mutasyonla kırıldı. Ebeveynin bağımsız mutasyonu (el sıkışmada
+`Sec-WebSocket-Accept` denetimini kapatmak) el sıkışma testini kırıyor.
+
 ## B19 — istemci yapı taşı `gsb-client` (`client/b19-gsb-client`)
 
 Sunucunun istemci yarısı bir yapı taşı değil, kopyaydı: çerçeve

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-952 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+979 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -146,13 +146,19 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**B25 tamam** (DESIGN §5.7, CHANGELOG "B25"): `gsb-client`'in WS yarısı
+aynı `Conn::Stream` — yeni varyant yok (loadgen `Conn`/`Recv`'i kapsamlı
+eşler). Kapanış `Recv::Closed` + `Conn::ws_close()`; sözleşme dışı çerçeve
+`FrameTx::ws_frame`. Yalnız `gsb-net` ws süitinin sahte istemcisi el
+yazması kalır (döngü).
+
 **B19 tamam** (DESIGN §5.7, CHANGELOG "B19"): Rust istemcisi artık
 `gsb-client` (çerçeve, `Conn`, oturum adımları, tipli `ServerError`).
 Kural: yeni bir istemci (loadgen modu, test, örnek) çerçeveyi ya da el
 sıkışmayı yeniden yazmaz — `gsb_client::{connect, tls, quic, session}`
 kullanır; `timeout` ile sarılan okuma `Conn::recv` / `FrameRx::next`
-(iptal-güvenli) olur, `read_exact` değil. WS istemcisi bilinçli olarak
-yok; `gsb-net` `gsb-client`'e bağımlı olamaz (döngü). Gerçek-sunucu
+(iptal-güvenli) olur, `read_exact` değil. WS istemcisi de `gsb-client`'te
+(B25); `gsb-net` `gsb-client`'e bağımlı olamaz (döngü). Gerçek-sunucu
 testleri `gsb-server/tests/client_session.rs`'te.
 
 **A29 tamam** (KIT-ARCHITECTURE §10 "A29", CROSS-SHARD §8b.1): takım
@@ -501,6 +507,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 952 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 979 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

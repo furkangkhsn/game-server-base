@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **952** (952/952 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **979** (979/979 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B19 — istemci yapı taşı `gsb-client`** (DESIGN §5.7) —
+Son tur: **B25 — `gsb-client`'e WebSocket yarısı** (DESIGN §5.7) — aynı
+`Conn::Stream` üstünde RFC 6455 (maskeleme, birleştirme, ping/pong,
+kapanış kodu `Conn::ws_close`, iki yönde iptal güvenliği); sunucu
+testlerinin WS istemcileri göçtü; sunucu baytları aynı.
+Önceki tur: **B19 — istemci yapı taşı `gsb-client`** (DESIGN §5.7) —
 çerçeve, tek `Conn` (TCP/TLS/QUIC/rUDP), oturum adımları, tipli
 `ServerError`; loadgen/örnek/süitlerdeki kopyalar kalktı; tel baytları ve
 RESULT biçimi aynı.
