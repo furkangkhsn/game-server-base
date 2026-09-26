@@ -92,6 +92,10 @@ pub(crate) async fn registry_room_status(
 /// Handle to a running server.
 pub struct ServerHandle {
     registry: Mailbox<RegistryMsg>,
+    /// The room template this server builds its rooms from — the config
+    /// file's room-level keys over the hosted game's defaults (see
+    /// [`Self::room_config`]).
+    rooms: crate::config::RoomTemplate,
     /// One accept task PER listener (all sharing the pipeline below and
     /// one connection-id sequence). Each ends when `stop` closes its
     /// listener (abort is only the backstop — see `stop`).
@@ -142,6 +146,16 @@ impl ServerHandle {
     /// query (the reply carries the [`RoomStatus`]).
     pub async fn open_room(&self, config: RoomConfig) -> Result<RoomStatus, CoreError> {
         registry_open_room(&self.registry, config).await
+    }
+
+    /// Room `id` as THIS server builds it: the boot rooms and the admin
+    /// surface's opens come from the same template — the config's
+    /// room-level keys and `[rooms.<id>]` over the hosted game's default
+    /// input rate limit (`GameModule::input_rate`). Reopening a boot room
+    /// with it is the idempotent no-op; `Config::room_config` is the
+    /// file's view, without the game's default.
+    pub fn room_config(&self, id: u64) -> RoomConfig {
+        self.rooms.room(id)
     }
 
     /// Close a room at runtime (feature A). **Idempotent**: closing a room

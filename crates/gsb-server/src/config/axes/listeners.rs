@@ -232,11 +232,30 @@ pub struct Config {
         deserialize_with = "detach_hold::deserialize"
     )]
     pub max_detach_hold: Option<std::time::Duration>,
+    /// **Per-connection input rate limit** (BACKLOG E1; docs/SECURITY.md
+    /// "post-auth input volume"), in actions a second — omitted (`None`,
+    /// the default) = the game's default (`GameModule::input_rate`), off
+    /// when the game has none; `0` = OFF even over a game's default.
+    ///
+    /// Every hosted room's `RoomConfig::input_rate`: a token bucket per
+    /// connection over its valid game-band input. Input over it is
+    /// dropped by the connection actor before the room sees it, counted
+    /// (`input_rate_limited`), and never scored as a violation; control
+    /// frames and RPC requests are not metered. The number is a gameplay
+    /// parameter — set it from the game's real input cadence with
+    /// headroom, never below what an honest client sends.
+    pub input_rate_hz: Option<u32>,
+    /// The bucket of [`Self::input_rate_hz`]: the most actions admitted
+    /// at once (a burst after a lag spike). Omitted = one second's worth
+    /// (`input_rate_hz`). Only with `input_rate_hz > 0` in the same table:
+    /// alone, next to `input_rate_hz = 0`, or `0` refuses startup.
+    pub input_burst: Option<u32>,
     /// **Per-room overrides** (`[rooms.<id>]`, BACKLOG B18): one room's
     /// own values for the room-level keys above (`tick_hz`,
     /// `room_control`, `conn_action`, `max_snapshot_bytes`,
     /// `keepalive_hz`, `max_players`, `max_idle_input_secs`,
-    /// `max_detach_hold_secs` — same spellings, same meanings), laid over
+    /// `max_detach_hold_secs`, `input_rate_hz`, `input_burst` — same
+    /// spellings, same meanings), laid over
     /// the server's room for that id alone: a boot room of that id, an
     /// admin `POST /rooms/open?id=` of it (the query's `tick_hz` on top),
     /// and [`Config::room_config`]. Empty (the default) = every room is
@@ -482,6 +501,9 @@ impl Default for Config {
             // invisible until an operator asks for it.
             max_idle_input_secs: None,
             max_detach_hold: Some(gsb_core::room::DEFAULT_MAX_DETACH_HOLD),
+            // OFF: the number is the game's (or the operator's).
+            input_rate_hz: None,
+            input_burst: None,
             rooms: std::collections::BTreeMap::new(),
             topology: None,
             communication: None,

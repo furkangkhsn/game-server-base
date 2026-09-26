@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use gsb_core::id::RoomId;
-use gsb_core::room::RoomConfig;
+use gsb_core::room::{InputRate, RoomConfig};
 use tracing::info;
 
 use crate::config::{Config, ServerError};
@@ -54,8 +54,19 @@ impl RoomTemplate {
 
 impl Config {
     /// The room template of this config: its room-level keys over the
-    /// core's defaults, and its per-room overrides.
+    /// core's defaults, and its per-room overrides — with no game default
+    /// under the input limit (the file's view; see
+    /// [`Self::room_template_for`]).
     pub(crate) fn room_template(&self) -> RoomTemplate {
+        self.room_template_for(None)
+    }
+
+    /// The room template of this config hosting a game whose default
+    /// input rate limit is `game` (`GameModule::input_rate`): layered
+    /// low to high — the core's default (off), the game's number, the
+    /// flat `input_rate_hz`/`input_burst`, then `[rooms.<id>]`. The
+    /// number is the game's; the operator overrides it (`0` = off).
+    pub(crate) fn room_template_for(&self, game: Option<InputRate>) -> RoomTemplate {
         let base = RoomConfig {
             tick_hz: self.tick_hz,
             control_capacity: self.room_control,
@@ -65,6 +76,7 @@ impl Config {
             max_players: self.max_players.map(|n| n as usize),
             max_idle_input_secs: self.max_idle_input_secs,
             max_detach_hold: self.max_detach_hold,
+            input_rate: self.input_rate_over(game),
             ..RoomConfig::default()
         };
         RoomTemplate {
@@ -77,7 +89,11 @@ impl Config {
     /// the core's defaults, and `[rooms.<id>]` over those — the room every
     /// creation path of the server builds, and what
     /// [`ServerHandle::open_room`] takes to open a room like the server's
-    /// own.
+    /// own. The FILE's view: a game's default input rate limit
+    /// (`GameModule::input_rate`) is not in it — a running server's room,
+    /// with it, is [`ServerHandle::room_config`].
+    ///
+    /// [`ServerHandle::room_config`]: crate::ServerHandle::room_config
     ///
     /// [`ServerHandle::open_room`]: crate::ServerHandle::open_room
     pub fn room_config(&self, id: u64) -> RoomConfig {

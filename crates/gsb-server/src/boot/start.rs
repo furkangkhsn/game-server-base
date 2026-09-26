@@ -62,6 +62,12 @@ async fn start_inner(
     module.configure(&cfg.raw, &cfg)?;
     info!(game = module.name(), selection = %module.describe(), "game module configured");
 
+    // The rooms this server builds — boot, admin open, `room_config` —
+    // from ONE template: the config's room-level keys over the game's
+    // default input rate limit (read after `configure`: it may depend on
+    // the game's settings).
+    let template = cfg.room_template_for(module.input_rate());
+
     // The wire table: the base protocol plus the game's messages.
     let table = {
         let mut table = gsb_protocol::base_table();
@@ -103,7 +109,7 @@ async fn start_inner(
             reg_tx.clone(),
             report_rx,
             REPORT_PERIOD,
-            cfg.room_template(),
+            template.clone(),
             1..=cfg.room_count,
         );
         info!(addr = %bound, "http ops surface listening");
@@ -166,7 +172,6 @@ async fn start_inner(
 
     // Pre-create rooms 1..=room_count (at the global rate, unless the
     // id's `[rooms.<id>]` sets a slower rate that divides it).
-    let template = cfg.room_template();
     for id in 1..=cfg.room_count {
         let config = template.room(id);
         {
@@ -278,6 +283,7 @@ async fn start_inner(
 
     Ok(ServerHandle {
         registry: reg_tx,
+        rooms: template,
         accepts,
         ticker: ticker_task,
         metrics,

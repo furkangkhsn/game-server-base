@@ -53,6 +53,17 @@ pub trait GameModule: Send + Sync + 'static {
 
     /// A one-line account of what was configured (the startup log).
     fn describe(&self) -> String;
+
+    /// The game's default per-connection input rate limit (BACKLOG E1;
+    /// docs/SECURITY.md "post-auth input volume"): every hosted room's
+    /// `RoomConfig::input_rate` unless the operator writes
+    /// `input_rate_hz` (flat, or in a `[rooms.<id>]`; `0` = off). The
+    /// number is the game's — it knows its honest input cadence — so the
+    /// default here is `None`: no limit, today's behaviour. Read once,
+    /// after [`Self::configure`] (it may depend on the game's settings).
+    fn input_rate(&self) -> Option<gsb_core::room::InputRate> {
+        None
+    }
 }
 
 /// Everything `Registry::new` takes except the room factory: built by the

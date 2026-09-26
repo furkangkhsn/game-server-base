@@ -3,7 +3,7 @@
 //! ([`RoomTemplate::room`](super::RoomTemplate::room)).
 //!
 //! The grammar is deliberately exactly as wide as the room template: the
-//! same eight keys, spelled and read as their flat counterparts
+//! same ten keys, spelled and read as their flat counterparts
 //! (`max_players = 0` = no cap, `max_idle_input_secs = 0` = off,
 //! `max_detach_hold_secs` in its three spellings). Any other key — a
 //! typo, a server-wide key (`bind`, `max_connections`), a game setting
@@ -50,6 +50,12 @@ pub struct RoomOverride {
         deserialize_with = "detach_hold"
     )]
     pub max_detach_hold: Option<Option<Duration>>,
+    /// The room's input rate limit, in actions a second (`0` = off, even
+    /// when the server or the game limits).
+    pub input_rate_hz: Option<u32>,
+    /// The room's input burst; only next to `input_rate_hz > 0` in this
+    /// same section (checked at startup).
+    pub input_burst: Option<u32>,
 }
 
 impl RoomOverride {
@@ -80,6 +86,11 @@ impl RoomOverride {
         }
         if let Some(hold) = self.max_detach_hold {
             room.max_detach_hold = hold;
+        }
+        // A written limit (on or off) replaces the server's; an
+        // unreadable pair is refused at startup (`check_room_keys`).
+        if let Ok(Some(limit)) = super::keys::input_limit(self.input_rate_hz, self.input_burst) {
+            room.input_rate = limit;
         }
     }
 }

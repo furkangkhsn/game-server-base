@@ -1,4 +1,4 @@
-//! `[rooms.<id>]` parses its eight room-level keys in their flat
+//! `[rooms.<id>]` parses its ten room-level keys in their flat
 //! spellings and refuses everything else: an unknown key, a key that is
 //! not room-level, a malformed id, a bad value.
 
@@ -29,6 +29,8 @@ fn a_room_section_parses_its_room_level_keys() {
          max_players = 64\n\
          max_idle_input_secs = 120\n\
          max_detach_hold_secs = \"off\"\n\
+         input_rate_hz = 30\n\
+         input_burst = 12\n\
          [rooms.2]\n\
          max_players = 2\n",
     )
@@ -45,6 +47,8 @@ fn a_room_section_parses_its_room_level_keys() {
             max_players: Some(64),
             max_idle_input_secs: Some(120),
             max_detach_hold: Some(None),
+            input_rate_hz: Some(30),
+            input_burst: Some(12),
         }
     );
     assert_eq!(
