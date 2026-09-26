@@ -64,7 +64,7 @@ where
         // never invents player ids.
         let admission = self.logic.on_join_as(&mut self.world, conn, &identity);
         self.m.joins += 1;
-        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let (act_tx, act_rx) = self.config.action_channel();
         self.binding.insert(conn, admission.player);
         self.conns.insert(
             admission.player,
@@ -156,7 +156,7 @@ where
         // contract (DESIGN §14.2) makes the NEW session start from a
         // clean numbering, so the old channel object is dropped, not
         // reused.
-        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let (act_tx, act_rx) = self.config.action_channel();
         let (entity, old_conn) = {
             let rc = self
                 .conns

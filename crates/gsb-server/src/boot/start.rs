@@ -45,8 +45,10 @@ async fn start_inner(
     // keys; see `resolve_listeners`).
     let specs = resolve_listeners(&cfg)?;
 
-    // The per-room overrides (`[rooms.<id>]`): a room the registry would
-    // refuse refuses startup instead (at boot it would only warn).
+    // The room-level keys (flat and `[rooms.<id>]`): a value no room can
+    // run with refuses startup; so does a room the registry would refuse
+    // (at boot it would only warn).
+    cfg.check_room_keys()?;
     cfg.check_room_overrides()?;
 
     // The push exporters (`[metrics]`): a table this build has no

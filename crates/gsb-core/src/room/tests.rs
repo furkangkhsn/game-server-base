@@ -30,6 +30,7 @@ mod sampling;
 mod shipping;
 mod stubs;
 mod tick;
+mod zero_capacity;
 use stubs::*;
 
 /// Synchronous peek helper for the test above (the reply was already

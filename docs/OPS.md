@@ -109,6 +109,18 @@ max_detach_hold_secs = "off"
   (`RoomConfig::step_divisor`, registry'nin create'i de onu çağırır),
   kopyası değil. Override olmasa başlangıç odası bu durumda yalnız
   uyarı loglardı (düz anahtarların bu davranışı değişmedi).
+- **`conn_action = 0` başlatmayı durdurur (F21), düz ya da
+  `[rooms.<id>]` içinde:** `ServerError::RoomKey` anahtarı ve yazıldığı
+  yeri adlandırır (`` `[rooms.7]` `conn_action` = 0: … ``). Eskiden değer
+  `mpsc::channel(0)`'a ulaşıp oda aktörünü ilk join'de panikletiyordu
+  (`room_control` `gsb_core::channel::channel`'ın `max(1)`'i ile
+  korunuyordu). Sıfır kapasiteli bir aksiyon kanalının anlamı yok:
+  çekirdek de `0`'ı artık tek yuva okur (`RoomConfig::action_channel`,
+  odanın join/resume'u ve shard'ın ikisi tek kurucudan geçer) — elle
+  kurulmuş bir config (kütüphane kullanımı) odayı panikletemez; dosyada
+  `0` yazan operatör ise başka bir şey kastetmiştir ve bunu başlatmada
+  duyar. *Elenen:* yalnız kıstırmak — `0` yazan operatörün niyeti (ör.
+  "sınırsız", başka kapların `0`'ı gibi) sessizce "1"e dönerdi.
 - **`room_count`'un ötesindeki id hata DEĞİL:** runtime odaları
   herhangi bir pozitif id ile açılır; `[rooms.9]` tam da `/rooms/open?id=9`'un
   açacağı odayı tanımlar. Hata yapmak bu kullanımı yasaklardı; uyarı

@@ -124,7 +124,8 @@ room_control = 128
 # the drop is counted in that connection's metrics sample
 # (actions_dropped / actions_dropped_top). The room itself never drops an
 # action it pulled: its READ phase is a bounded pull (per-connection
-# per-tick budget + room pull budget; DESIGN §4).
+# per-tick budget + room pull budget; DESIGN §4). Must be >= 1: 0 refuses
+# startup (a zero-capacity channel has no meaning).
 conn_action = 256
 
 # Per-connection inbound channel capacity (frames from the reader pump).

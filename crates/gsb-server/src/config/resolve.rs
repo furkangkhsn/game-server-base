@@ -228,6 +228,16 @@ pub enum ServerError {
     #[error("invalid `[metrics.otlp]`: {0}")]
     BadOtlp(String),
 
+    /// A room-level key (flat, or in `[rooms.<id>]`) whose value no room
+    /// can run with; `at` names the key and where it was written.
+    #[error("{at} {reason}")]
+    RoomKey {
+        /// The key, and its `[rooms.<id>]` when it was written there.
+        at: String,
+        /// Why the value is refused.
+        reason: &'static str,
+    },
+
     /// Game selection or a game module's own configuration failed (see
     /// [`crate::GameError`]).
     #[error(transparent)]

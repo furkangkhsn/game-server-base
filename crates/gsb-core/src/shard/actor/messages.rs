@@ -11,7 +11,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::error::CoreError;
@@ -66,7 +65,7 @@ where
                 // The LOGIC mints the stable player identity (Faz 2).
                 let admission = self.logic.on_join_as(&mut self.world, conn, &identity);
                 self.m.joins += 1;
-                let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+                let (act_tx, act_rx) = self.config.action_channel();
                 self.conn_epoch.insert(conn, epoch);
                 self.binding.insert(conn, admission.player);
                 self.conns.insert(

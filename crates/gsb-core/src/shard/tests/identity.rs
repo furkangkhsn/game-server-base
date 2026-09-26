@@ -73,3 +73,31 @@ async fn a_shard_refuses_joins_past_its_serial_capacity() {
         "a leave returns no serial to the shard"
     );
 }
+
+/// F21: a zero action capacity (`conn_action = 0`, flat or per room)
+/// reached `mpsc::channel(0)` on the shard's join and resume paths and
+/// panicked the shard at its first join. A zero-capacity action channel
+/// has no meaning; it is one slot, as the room control channel always
+/// was (`crate::channel::channel`).
+#[tokio::test]
+async fn a_zero_action_capacity_is_one_slot_not_a_panic() {
+    let mut a = bare_shard(0);
+    a.config.action_capacity = 0;
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(8);
+    assert!(a.handle_msg(
+        ShardMsg::Join {
+            conn: ConnectionId(1),
+            epoch: 1,
+            identity: String::new(),
+            out: out_tx.clone(),
+            reply: reply_tx
+        },
+        1
+    ));
+    let (_entity, actions) = reply_rx.await.expect("delivered").expect("admitted");
+    assert_eq!(actions.max_capacity(), 1, "the join's channel holds one");
+    let player = a.binding[&ConnectionId(1)];
+    let resumed = a.rebind_session(player, ConnectionId(2), 2, "", out_tx);
+    assert_eq!(resumed.max_capacity(), 1, "the resume's channel holds one");
+}

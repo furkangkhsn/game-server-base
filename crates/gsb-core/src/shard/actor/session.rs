@@ -65,7 +65,7 @@ where
         identity: &str,
         out: mpsc::Sender<FrameBatch>,
     ) -> Mailbox<Action> {
-        let (act_tx, act_rx) = mpsc::channel(self.config.action_capacity);
+        let (act_tx, act_rx) = self.config.action_channel();
         let mut old_conn = conn;
         let mut entity = 0;
         if let Some(rc) = self.conns.get_mut(&player) {

@@ -14,6 +14,7 @@ use tracing::info;
 
 use crate::config::{Config, ServerError};
 
+mod keys;
 mod overrides;
 pub use overrides::RoomOverride;
 pub(in crate::config) use overrides::deserialize as deserialize_overrides;

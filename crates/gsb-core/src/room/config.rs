@@ -5,6 +5,7 @@ use crate::id::RoomId;
 use std::fmt::Debug;
 use std::time::Duration;
 
+mod input;
 mod rates;
 
 /// Static configuration for a room.
@@ -21,7 +22,8 @@ pub struct RoomConfig {
     pub tick_hz: f64,
     /// Capacity of the control channel (join/leave/shutdown).
     pub control_capacity: usize,
-    /// Capacity of each connection's action channel.
+    /// Capacity of each connection's action channel. `0` is read as one
+    /// slot (a zero-capacity channel has no meaning — BACKLOG F21).
     pub action_capacity: usize,
     /// Per-connection per-tick pull budget (fairness cut, READ phase): a
     /// single connection's input can contribute at most this many actions

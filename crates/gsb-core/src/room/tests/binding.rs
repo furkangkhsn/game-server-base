@@ -2,10 +2,22 @@
 
 use super::*;
 
-struct RebindLogic {
+/// Parks every disconnect and resumes by identity (also the rig of the
+/// zero-capacity resume test).
+pub(in crate::room::tests) struct RebindLogic {
     held: std::collections::HashMap<String, PlayerId>,
     ents: std::collections::HashMap<PlayerId, EntityId>,
     next: u64,
+}
+
+impl RebindLogic {
+    pub(in crate::room::tests) fn new() -> Self {
+        Self {
+            held: std::collections::HashMap::new(),
+            ents: std::collections::HashMap::new(),
+            next: 0,
+        }
+    }
 }
 
 // Faz 1 trait split: the shared contract lives on `GameLogic`; this
@@ -89,11 +101,7 @@ fn resume_rekeys_only_the_binding() {
     let mut actor = RoomActor::new(
         cfg,
         (),
-        Box::new(RebindLogic {
-            held: std::collections::HashMap::new(),
-            ents: std::collections::HashMap::new(),
-            next: 0,
-        }),
+        Box::new(RebindLogic::new()),
         tick_rx,
         control_rx,
         1,

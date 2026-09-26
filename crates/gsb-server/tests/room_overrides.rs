@@ -198,3 +198,24 @@ async fn a_room_cap_of_its_own_refuses_the_third_join() {
         .expect("room 2 (the server's cap) takes the same connection");
     handle.stop().await;
 }
+
+/// F21: a zero action capacity, flat or in one room, refuses startup
+/// (it used to panic the room actor at its first join).
+#[tokio::test]
+async fn a_zero_action_capacity_refuses_startup() {
+    let flat = Config {
+        conn_action: 0,
+        ..config(1, &[])
+    };
+    let zero = RoomOverride {
+        conn_action: Some(0),
+        ..RoomOverride::default()
+    };
+    for cfg in [flat, config(2, &[(2, zero)])] {
+        let Err(e) = gsb_server::start_server(cfg).await else {
+            panic!("a zero action capacity started");
+        };
+        assert!(matches!(e, ServerError::RoomKey { .. }), "{e:?}");
+        assert!(e.to_string().contains("conn_action"), "{e}");
+    }
+}
