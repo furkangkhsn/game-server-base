@@ -64,6 +64,9 @@ anlamına gelir. Bu garantiye dayanıp müzakereyi "sadeleştirme"
 yapmayın: soğurucu kaldırılırsa ilk ayrılan bağlantının uçuşta
 istekleri istemciye ikinci yanıt olarak ulaşır.
 
+"Tam olarak bir" yanıtın **teslimi** — yanıtı taşıyan batch'in
+bağlantının dolu çıkış kanalında düşmesi — §3.1'dedir (F14).
+
 ## 2. Soru 1 (ana soru): Bekleyen (pending) durum NEREDEN?
 
 **Karar: oda actor'ünün kendi yerelinde.**
@@ -170,6 +173,77 @@ kesindir:
 Süre sonu saati: kayıt anındaki `Instant` + `RoomConfig.request_timeout`
 (demo/varsayılan 5 sn). Oda saati = istemciye görünür otorite.
 
+### 3.1 Teslim garantisi: düşen batch (F14)
+
+**Yol.** Yanıtlar bağlantının `queued` girdisinde birikir; BROADCAST'in
+bağlantı başına fan-out'u (oda faz 4d, shard faz 6d) girdiyi
+`queued`'dan **çıkarır** (`replies_buf`), mantığın `private`'ına verir,
+`private` onları bağlantının private karesine yazar, kare grup karesiyle
+tek batch olur ve tek `try_send` ile bağlantının **sınırlı** çıkış
+kanalına gider. Kanal doluysa (ya da kapalıysa) batch **bütünüyle**
+atılır (`dropped_frames`). F14'ten önce o batch'in taşıdığı yanıtlar da
+giderdi ve "istemci kabul edilmiş isteği asla beklemez" iddiası yalnız
+istemcinin kendi zaman aşımına kalırdı.
+
+**Düşmede çekirdeğin kaybettikleri** (incelendi): batch'te çekirdeğe
+ait tek yük RPC yanıtlarıdır. Grup karesi paylaşımlı ve kendi kendine
+yeter (bayatlığını keep-alive sınırlar), private karenin geri kalanı
+(ack, tek seferlik full, oyunun oturum yükü) mantığındır ve F11'in
+`on_batch_dropped`'ı ile yeniden kurulur. Hata/kontrol yanıtları
+(auth, join, sürüm, ihlal kapanışı) fan-out'a binmez: conn actor'ünün
+kendi `send().await`'i ile gider, düşmez.
+
+**Kural (şimdi garanti edilen).** Düşen batch'in taşıdığı yanıtlar
+bağlantının kuyruğunun **başına** geri konur ve sonraki tick'te
+mantığın `private`'ına, sonraki yanıtlardan **önce**, yeniden verilir —
+kanalın kabul ettiği ilk batch'e kadar. **Tam olarak bir kez, sırayla:**
+yanıt kuyruktan yalnız alınırken çıkar, yalnız düşmede geri döner;
+teslim edilen yanıt tekrar gönderilmez (sessiz bir tick'in düşmesi hiç
+yanıt taşımaz — `replies_buf` son teslim edilenleri tutsa bile). Yeni
+kanal, kilit, await yok; sessiz yol aynı (tek `is_empty` yoklaması,
+düşme yokken ayırma yok). Hiçbir şey düşmediğinde istemci baytı birebir
+aynıdır. Dolayısıyla: **kabul edilmiş bir isteğin yanıtı, bağlantı
+boşaldığı anda o bağlantıya ulaşır.**
+
+**Fırtına sınırı.** Bağlantı **tıkalıyken** (son batch'i düştü —
+`RoomConn.dropping`), bir istek ancak bağlantının borcu — kuyruktaki
+(taşınanlar dahil) yanıtlar + uçuştaki (pending) istekler —
+`max_pending_requests_per_conn`'dan azsa kabul edilir. Sınırdaki istek
+**reddedilir: işlenmez, yanıtlanmaz** (per-connection cap kovasında
+sayılır, `requests_rejected_conn_cap`). Denetim, kabulün yanıt borcu
+doğuracağı her yerdedir: 2c'de her istek (dup kontrolünden önce), 2a'da
+bozuk zarf. Yanıtsız ret tek sınırlı seçenektir: her yanıt — ret dahil
+— bir teslim edilmemiş yanıt daha olurdu. İstek uygulanmadığından
+istemcinin kendi zaman aşımından sonraki tekrarı güvenlidir.
+
+**Kesin sınır.** Tıkalıyken borç yalnız kabulle büyür ve kabul yalnız
+borç < cap iken olur; tamamlanma/süpürme pending'i `queued`'a taşır
+(toplam değişmez). Düşme dizisi başladığında borç ≤ o ana kadarki
+pending (≤ cap) + o tick'in çekilen istekleri (≤ bağlantı başı çekim
+bütçesi — istek de action'dır). Yani bağlantı başına:
+
+> teslim edilmemiş yanıt + uçuştaki istek ≤ `max_pending_requests_per_conn`
+> + `max_actions_per_conn_per_tick` (varsayılan 4 + 16 = **20**).
+
+Oda genelinde bu, tıkalı bağlantı sayısıyla çarpılır (pending kısmı
+ayrıca oda cap'iyle sınırlı). Tıkalı olmayan bağlantı hiç reddedilmez:
+düşme yokken davranış aynıdır.
+
+**Hâlâ istemcinin zaman aşımına kalanlar.**
+
+- **Oturumu önce biten bağlantı:** ayrılış (leave), detach — hiç
+  boşalmayan istemcinin yazma-tıkanması sınırıyla (write-stall)
+  kapatılması dahil — ya da başka shard'a göç, teslim edilmemiş
+  yanıtları uçuştaki istekleriyle birlikte **götürür** (oturum
+  kapsamlı RPC durumu; resume eden oturum ölü oturumun yanıtlarını
+  almaz). Sızıntı yok: `drop_conn_request_state` ve fan-out sonundaki
+  süpürme.
+- **Fırtına sınırında reddedilen istek:** hiç kabul edilmedi, yanıtı
+  yok.
+- **Yanıtları kodlamayan mantık:** `private` verilen `responses`'ı
+  yazmazsa (batch boşsa) yanıt düşmeden önce kaybolur — mantığın
+  sözleşmesi (`GameLogic::private`).
+
 ## 4. Soru 3: Korelasyon id uzayı, dup/stale, bütçe
 
 - **Uzay:** `u64`, **bağlantı başına** (o odadaki üyelik süresince),
@@ -191,7 +265,8 @@ Süre sonu saati: kayıt anındaki `Instant` + `RoomConfig.request_timeout`
   `requests_late` sayacıyla **atar**. İkisi de normal durumdur —
   istemciye "geç yanıt" asla gitmez.
 - **Bütçe (en kötü durum):** bağlantı başına 4 açık istek
-  (env + yanıt kuyruğu), oda başına 2000 `PendingRequest` + 2000 worker
+  (env + yanıt kuyruğu; çıkış kanalı tıkalı bağlantıda teslim edilmemiş
+  yanıtlar dahil en çok 4 + 16 — §3.1), oda başına 2000 `PendingRequest` + 2000 worker
   görevi + 2000 slot'lu `completions` kanalı (varsayılanlar; §6'daki
   türetim). Cap aşımı = aynı tick'te normal ret (§6).
 - **Ret sayaçları nedene göredir** (bu turda tek `requests_rejected`
@@ -234,7 +309,9 @@ action'lar) → 2c (tüm istekler) → SYSTEMS → BROADCAST
   sınırlamak. Cap ile en kötü durum bağlantı başına 4'tür.
 - Cap aşımı, normal reddir (aynı tick; nedene göre sayaç — §4) —
   istemci "dolu" olduğunu öğrenir ve kendi zamanlayıcısıyla tekrar
-  deneyebilir.
+  deneyebilir. **İstisna (F14):** çıkış kanalı tıkalı bağlantıda cap,
+  teslim edilmemiş yanıtları da sayar ve sınırdaki istek yanıtsız
+  reddedilir (§3.1 "Fırtına sınırı").
 - Ticket doğrulaması için eşdeğer sınırlama **yapısal**dır: bağlantı
   başı en fazla **bir** doğrulama çalışır (actor, oneshot'ta park
   ederken ikinci AUTH_REQ inbox'ta bekler — sayaç gerekmez; bkz. §7).
@@ -491,6 +568,10 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 | Çalışan id dup'ı reddedilir (her tür için), sonra yeniden kullanılabilir | `rpc.rs::duplicate_inflight_id_rejected_then_reusable` |
 | Bağlantı/oda cap'leri | `rpc.rs::per_conn_pending_cap`, `control_plane.rs::create_conflict_different_config` |
 | Aynı tick'te action-önce-istek sırası | `rpc.rs::actions_before_requests_same_tick` |
+| Düşen batch'in yanıtları sonraki kabul edilen batch'le, tam bir kez ve sırayla (oda + shard) | `gsb-core/src/room/tests/fanout/replies.rs::a_dropped_answer_rides_the_next_accepted_batch_once`, `shard/tests/replies.rs::a_dropped_answer_rides_the_next_accepted_batch_on_the_shard` |
+| Düşmesiz tick'te/teslim edilmiş yanıt tekrar gitmez | `fanout/replies.rs::a_delivered_answer_is_not_resent_by_a_later_drop` (+ shard) |
+| Fırtına sınırı: tıkalı bağlantı cap kadar borçlanır; sınır cap + bir tick'in çekimi; uçuştaki istek borca dahil; tıkalı olmayan bağlantı reddedilmez | `fanout/replies.rs::a_congested_connection_owes_at_most_its_in_flight_cap`, `::the_storm_bound_is_the_cap_plus_one_ticks_pull`, `::in_flight_requests_count_toward_what_is_owed`, `shard/tests/replies.rs::a_congested_connection_owes_at_most_its_cap_on_the_shard`, `::an_uncongested_connection_is_never_refused_on_the_shard` |
+| Ayrılan/resume eden oturum teslim edilmemiş yanıtları götürür (sızıntı yok) | `fanout/replies.rs::a_leaving_connection_takes_its_undelivered_answers_along`, `::a_resumed_session_does_not_inherit_undelivered_answers` (+ shard leave) |
 | Kontrol düzlemi: idempotent açma (tek oda), çakışma, durum yaşam döngüsü | `control_plane.rs::*` |
 | Maç sonucu kapanışta dışarı (yeniden oluşturulabilir oda ikinci sonucu verir) | `control_plane.rs::match_result_reports_on_destroy` |
 | Bilet: geçerli/hatalı/boş/geç doğrulama; oda sabitlemesi; bütçe etkileşimi | `ticket.rs::*` |

@@ -3597,7 +3597,7 @@ Mantık bundan hiçbir şey öğrenmiyordu.
 | Oturum yükü borcu (`Game::session_private` — arena/savaş `Welcome`) | `InputSeq` `greet` | oturum boyunca asla gelmez: keep-alive bunu iyileştirmez |
 | Ack yüksek-su işareti | `InputSeq` `acked` | bir sonraki işlenmiş girdiye kadar (istemci susarsa hiç) raporlanmaz |
 | Grup delta'sı (tek seferlik değil ama aynı yoldan) | istemcinin görünümü | delta boşluk üstünde uygulanır: kaçan `removed` hayalet, kaçan upsert bayat — keep-alive'a kadar |
-| RPC yanıtları (çekirdek `queued`) | çekirdek | yanıt kaybolur — bulgu F11-1, bu turda düzeltilmedi |
+| RPC yanıtları (çekirdek `queued`) | çekirdek | yanıt kaybolur — bulgu F11-1, bu turda düzeltilmedi *(F14'te düzeltildi: aşağıdaki F11-1 notu)* |
 
 Teslim varsaymayan (incelendi): grup düzeyi defterler (`SetLedger.held`,
 `CellBook`, A10'un bekletme defteri — üyeden bağımsız, keep-alive ile
@@ -3742,6 +3742,14 @@ yazıcıyı hiç bloklatmıyordu; `socket2`, kilitte zaten vardı) ve
   beklemez" iddiası tutmuyor (istemcinin kendi zaman aşımı kalıyor). Düzeltme
   çekirdekte ve küçük: düşmede `replies_buf`'u `queued`'a geri koymak (tam
   bir kez korunur); ama fırtınada birikim sınırı ister — ayrı iş (BACKLOG).
+  *(Kapandı — F14, `core/f14-rpc-replies-on-drop`: düşen batch'in
+  yanıtları kuyruğun başına geri konur ve kanalın kabul ettiği ilk
+  batch'le tam bir kez, sırayla gider; tıkalı bağlantı borcu — kuyruk +
+  taşınan + uçuştaki — `max_pending_requests_per_conn`'a ulaşınca yeni
+  isteği işlemeden ve yanıtlamadan reddeder, borç en çok cap + bir
+  tick'in çekim bütçesi (varsayılan 4 + 16 = 20). Kit değişmedi: kit
+  odaları verilen `responses`'ı zaten her tick kodluyor. Garanti metni ve
+  kalan istemci-zaman-aşımı durumları: RPC-CONTROL-PLANE §3.1.)*
 - **F11-2 — sessiz grupta resume yok.** Batch yoksa kanal kabulü
   gözlenemez; bekleyen full yuvasında/keep-alive'da gider. Bilinçli.
 - **F11-3 — ack yeniden gönderimi değeri aynı olabilir.** Düşen ack'in

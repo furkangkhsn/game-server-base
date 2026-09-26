@@ -281,6 +281,18 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     Detached satırlar hiç göndermediği için bildirilmez. Kapalı kanal
     (`Closed`) da `dropped_frames` gibi sayılır ve bildirilir (batch
     teslim edilmedi). Kit'in cevabı: KIT-ARCHITECTURE §10 "F11".
+    **Çekirdeğin kendi yükü — RPC yanıtları (F14):** batch'te çekirdeğe
+    ait tek içerik, `private`'a verilen `responses`'tır. Düşmede bunlar
+    bağlantının `queued` kuyruğunun başına geri konur (fan-out
+    `queued`'ı süpürdükten sonra; yerel bir `Vec`, sessiz yolda ayırma
+    yok) ve kanalın kabul ettiği ilk batch'e kadar her tick `private`'a
+    yeniden, sonraki yanıtlardan önce verilir — tam bir kez, sırayla.
+    Fırtına sınırı: tıkalı bağlantı (`dropping`) borcu — kuyruk +
+    taşınan + uçuştaki — `max_pending_requests_per_conn`'a ulaşınca yeni
+    isteği işlemeden ve yanıtlamadan reddeder; borç en çok cap + bir
+    tick'in çekim bütçesidir (varsayılan 4 + 16). Ayrılış/detach/göç
+    teslim edilmemiş yanıtları oturumla birlikte götürür. Ayrıntı:
+    RPC-CONTROL-PLANE §3.1.
     Batch buffer'u bağlantı başına kalıcıdır (`RoomConn.batch`): tick
     başına `clear()` + `mem::take` ile kanala teslim — ısınma sonrası
     tick başına bağlantı başına sıfır heap tahsisi (ölçülen taban
@@ -1043,6 +1055,8 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
   kurar: delta istemcisi keepalive yerine sonraki tick'te — uzun bir
   duraklamadan sonra, ilk batch'i geçtiği tick'in ardından
   (`on_batch_resumed`) — iyileşir (F11, KIT-ARCHITECTURE §10 "F11").
+  Batch'in RPC yanıtları çekirdeğindir ve kaybolmaz: sonraki kabul
+  edilen batch'le, tam bir kez gider (F14, RPC-CONTROL-PLANE §3.1).
 - `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı; U
   turundan beri rUDP aşan kareyi parçalar — §6 "MTU").
   Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
