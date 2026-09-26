@@ -851,7 +851,7 @@ yazılmıştı; TLS bağlayıcı üç, QUIC istemci yapılandırması üç kez.
   aynı kareler) ya da `Udp(UdpClient)`; `send`, `send_batch`, sınırlı
   `recv(window)` → `Recv::{Frame, Closed, Quiet}`, `into_split` (okuyucu
   ve yazıcı iki görevde — çoğullama yok). Açıcılar: `connect::{tcp,
-  tcp_stream, udp, ws}`, `ws::{handshake, handshake_with_max}`,
+  tcp_stream, udp, ws, ws_stream}` (`ws_stream` B29'da), `ws::{handshake, handshake_with_max}`,
   `tls::{certs_from_pem, client_config, connector, connect}`,
   `quic::{client_config, connect}` (güven kökleri çağırandan; sistem
   deposu yok; ALPN `gsb-net/1`).
@@ -1064,6 +1064,125 @@ düşürür); `client::view::run::tests::a_stream_eof_ends_the_client`
 iki hamle yazıp); `client::tests::the_ca_is_read_once_per_run` (PEM
 yüklendikten sonra silinir, iki el sıkışma yine tamamlanır — eski kod
 "cannot read --tls-ca" ile panikliyor).
+
+**Loadgen WS modu (B29 — 2026-09-26).** WS kapısı yük altında hiç
+ölçülmemişti: loadgen'in `--transport`'u `tcp|udp` alıyordu.
+
+- *Bayrak, her modda.* `--transport tcp|udp|ws`. Süreç içi ve `--serve`
+  sunucusu `ws`'de bind adresinde TEK bir `"ws"` `[[listeners]]` girdisi
+  açar (`loadgen/transport.rs`, `Transport::open_door`); `ws` eski skaler
+  `transport` anahtarının değeri değil (sunucu onu yalnız dizi yazımı
+  tutar), skaler `bind` varsayılanına döner — yoksa sunucu "skaler
+  anahtarlar yok sayılıyor" uyarısı basardı. TCP ve rUDP skaler anahtarla,
+  eskisi gibi. `--addr` istemcileri `gsb_client::connect::ws_stream` ile
+  bağlanır: yeni yapı taşı, `tcp_stream`'in WS ikizi — çağıranın açtığı
+  TCP soketi (yavaş okuyucunun 16 KiB alım tamponu ve MSS'i dahil),
+  `TCP_NODELAY`, yükseltme, sahipli yarılar (genel `ws::handshake`
+  `tokio::io::split` kullanır; ölçülen istemci TCP'ninkiyle aynı yarı
+  biçimini taşısın diye). Orkestratör `--transport`'u iki çocuğa da
+  iletir (hazırlık yoklaması TCP bağlanıp kapatma: WS kapısında bir
+  "handshake failed" uyarısı, oturum ve sunucu kapanışı yok). Churn,
+  `--stall-ms`, `--capture`, `--flood-id` WS'de çalışır; flood WS'de
+  her kareyi ayrı maskeli mesaj olarak besler (akış karesini sokete ham
+  yazmak WS sözleşmesini bozardı). **Ret:** `--tls-ca` ile `ws` her
+  modda kullanım hatası (çıkış 2, tek satır) — istemci yarısı `wss://`
+  konuşabilir ama gsb kapısının TLS biçimi yok; bu ret `--tls-ca
+  requires --addr`'dan önce denetlenir (kesin sebep o).
+- *Bayt muhasebesi (karar).* WS'de `client_in_bps`/`client_out_bps`
+  (`CLIENT` satırının `bytes_in`/`bytes_out`'u) her VERİ mesajını sokette
+  durduğu boyla sayar: RFC 6455 başlığı (gövde ≤125 B ise 2, ≤65535 ise
+  4, üstü 10 bayt) + istemcinin gönderdiğinde 4 baytlık maske anahtarı +
+  içindeki uzunluk önekli kare (`4 + 2 + yük`). Gövde sınırı zarfın
+  boyudur (kare `wire_len`'i), yükün değil. Sayılmayan: HTTP yükseltmesi,
+  ping/pong/kapanış çerçeveleri, TCP/IP başlıkları — rUDP'nin çerez el
+  sıkışmasını ve ACK datagram'larını, TCP'nin TCP/IP başlıklarını
+  saymamasıyla aynı çizgi ("veri biriminin teldeki boyu"). Tek mesaj =
+  tek kare varsayımı sözleşmedir: kapı ve `gsb-client` her kareyi tek
+  FIN mesaj olarak yollar. `frame_bytes` artık yönü alır
+  (`Dir::{In, Out}`; maske yalnız istemcinin yazdığında); TCP/rUDP
+  sayımları değişmedi. Sunucu tarafı sayaçlar (`server_*_bps`,
+  `out_bps_per_conn`) bağlantı aktöründe, kapıya verilen kare baytıyla
+  sayılır — WS çerçevelemesi (TLS kaydı, rUDP başlığı gibi) onlarda hiç
+  görünmez; ölçümde iki taşımada aynı çıktılar.
+- *Modül bölünmesi:* `client.rs` 242 → 152 satır; bağlantının doğumu
+  `client/connect.rs`, bayt muhasebesi `client/accounting.rs`.
+
+*Testler (önce kırmızı, mutasyonlu).*
+`client::accounting::tests::a_ws_message_is_its_header_the_mask_and_the_frame`
+(iki yönde 125/126/65535/65536 baytlık gövde sınırları);
+`...::ws_bytes_are_the_messages_on_the_wire` (betikli WS eşine karşı tam
+bir `run_client` oturumu — yükseltme, ping, JOIN sonucu, iki uzunluk
+sınırının iki yanında üç kare, LEAVE sonucu — düz ve flood istemci:
+istemcinin `bytes_out`'u eşin okuduğu, `bytes_in`'i eşin yazdığı veri
+mesajı baytına birebir eşit, pong sayılmaz; eski muhasebe 62 ≠ 98 ile,
+eski flood kolu maskesiz çerçeveyle düşer);
+`transport::tests::{each_transport_opens_its_door, the_spelling_round_trips}`;
+`args::tests` (`ws` dört modda ayrışır, `--tls-ca` + `ws` reddi);
+`child_args::tests::both_children_get_the_transport`;
+`gsb-client` `connect::tests::ws_stream_upgrades_the_callers_stream`;
+`gsb-server/tests/loadgen_ws.rs` (3, gerçek ikili): dört oyun süreç içi
+WS kapısı üzerinden (`transport=ws`, connected = joined = left = N,
+errors/server_closes/dropped/cap_rejected 0, akış, onaylanan numaralı
+girdiler), orkestre demo WS koşusu (`mode=sep`, iki çocuk), `--tls-ca`
+reddi iki modda. Ayrıştırıcıdan `ws` çıkarılınca üçü de düşer. Öldürülen
+mutasyonlar: maske yok, üç uzunluk sınırı, taban başlık yok, WS'nin akış
+gibi sayılması, flood baytı sayılmıyor, ret yok, kapı TCP açıyor, `bind`
+sıfırlanmıyor, yükseltmesiz bağlantı, ayrıştırıcıda `ws` yok; `ws_stream`
+için Host yok sayılıyor ve 101 arkasındaki bayt düşüyor.
+
+*Ölçüm (WS ↔ TCP taban çizgisi).* Release, 32 çekirdek, süreç içi, 20 sn,
+`--write-stall-secs 0`, bağlantı yığını birden (stagger 0); her senaryoda
+TCP, WS, TCP, WS sırasıyla (iki çift; hücreler "1. / 2. koşu"). Komut:
+`gsb-loadgen N [--game arena|mmo] --transport tcp|ws --duration 20
+--write-stall-secs 0`. Yük: her koşudan önceki 1 dk ortalaması.
+
+| Senaryo | Taşıma | Yük | `server_hz` | step p50/p90 fine (µs) | `out_bps_per_conn` | `client_in_bps` | `client_out_bps` | connect p50/p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| demo 200 | TCP | 8,1 / 6,3 | 30,00 | 200/320 · 200/304 | 46 690 / 46 408 | 9 379 162 / 9 320 358 | 14 318 / 14 274 | 0/1019 · 0/1017 |
+| demo 200 | WS | 7,3 / 6,0 | 30,00 | 216/328 · 224/336 | 46 428 / 46 452 | 9 353 883 / 9 358 702 | 21 451 / 21 459 | 14/1021 · 17/1020 |
+| demo 500 | TCP | 5,3 / 4,4 | 30,00 | 800/1536 · 696/1312 | 119 393 / 119 405 | 59 800 932 / 59 799 537 | 35 141 / 35 123 | 1004/2039 · 1003/1066 |
+| demo 500 | WS | 5,1 / 3,7 | 30,00 | 776/1400 · 672/1160 | 118 560 / 118 898 | 59 446 683 / 59 612 438 | 52 357 / 52 467 | 1011/1449 · 1061/2085 |
+| arena 200 | TCP | 3,2 / 2,1 | 30,00 | 384/488 · 400/520 | 23 588 / 23 445 | 4 743 364 / 4 727 027 | 18 648 / 18 577 | 0/1006 · 0/1007 |
+| arena 200 | WS | 2,6 / 2,1 | 30,00 | 400/520 · 376/488 | 23 426 / 23 372 | 4 739 061 / 4 726 058 | 25 777 / 25 785 | 16/1009 · 21/1010 |
+| MMO 200 | TCP | 1,8 / 2,1 | 30,00 | 112/160 · 104/176 | 20 254 / 20 264 | 4 090 867 / 4 092 497 | 16 655 / 16 703 | 0/1059 · 0/1030 |
+| MMO 200 | WS | 1,9 / 1,9 | 30,00 | 128/208 · 128/208 | 20 223 / 20 202 | 4 112 904 / 4 106 722 | 23 779 / 23 765 | 17/1046 · 20/1019 |
+
+Her koşuda `joined = left = N`, `errors = server_closes = dropped = 0`.
+Orkestre demo 500 (`--orchestrate 500 --procs 2`, aynı bayraklar; sıra
+TCP, WS, TCP, WS; yük 17,7 / 13,1 / 9,9 / 7,1 — kardeş çalışma ağacının
+derlemesi): step p50/p90 TCP 248/432 · 240/448, WS 256/416 · 272/416;
+`server_cpu_s` TCP 1,7 / 1,7, WS 1,9 / 1,8; `dropped` TCP 116 / 116, WS
+14 / 17 (katılma fırtınasında; WS kapısının bağlantı başına 64'lük kendi
+yazıcı kuyruğu fan-out'un önüne tampon ekliyor); connect p50/p99 TCP
+17/1024 · 20/1009, **WS 1065/1466 · 1062/1469**.
+
+*Okuma.* (1) Tick yolu: `server_hz` hep 30; adım süreleri gürültü
+içinde, yalnız MMO 200'de WS p90 iki çiftte de +32…48 µs (süreç içinde
+kapının bağlantı başına ek yazıcı görevi aynı çekirdekleri paylaşıyor;
+orkestre koşuda sunucu CPU'su +%6-12). (2) Bant: sunucu tarafı aynı
+(`out_bps_per_conn` farkı ≤%1; orkestre ve demo 500'de WS −%1-3 —
+geç bağlanan istemcilerin kısalan penceresi, aşağıda); `client_in_bps`'te
+WS başlığı kare başına 2-4 bayt, ~1,5 KB'lık snapshot'larda %0,3 —
+koşudan koşuya gürültünün altında (`client_in_bps`/`server_out_bps` oranı
+demo 200 TCP 1,0044 ↔ WS 1,0073, MMO 1,0099 ↔ 1,0169). `client_out_bps`
+WS'de +%38-50: küçük girdi karelerine (onlarca bayt) 2 bayt başlık + 4
+bayt maske. (3) **Bulgu — bağlanma:** WS kapısı yükseltmeyi `accept()`'in
+İÇİNDE yapıyor (`gsb_net::ws::transport`, `WsListenerHandle::accept`)
+ve sunucunun accept döngüsü onu sırayla bekliyor: el sıkışmalar seri.
+200 istemcide WS connect p50 14-21 ms (TCP 0); orkestre 500'de backlog
+taşıyor, istemcilerin çoğu 1 sn'lik SYN yeniden gönderimini yiyor (p50
+~1065 ms ↔ TCP 17-20 ms). Daha ağır hâli: yükseltme isteği göndermeyen
+TEK bir TCP bağlantısı kapıyı `WS_HANDSHAKE_TIMEOUT` (10 sn) boyunca
+kilitliyor — `--serve --transport ws` + boşta tutulan bir soket, sonra
+20 `--addr` istemcisi: connect p50 = p99 = 9610 ms (aynı deney TCP
+kapısında 0 ms). Başarısız bir el sıkışma ayrıca accept döngüsünü 100 ms
+geri çekiyor ("accept error; backing off"). TLS kapısı aynı yapıda
+(`tls.rs` `accept` içinde rustls el sıkışması) — kod okumasıyla; loadgen
+süreç içi TLS sunucusu kuramadığı için ölçülmedi. Bu turda düzeltilmedi
+(kapsam: ölçüm); BACKLOG'a yeni madde. Yük ölçümlerinde tick yolunu
+etkilemiyor (katılma pencerenin ilk saniyesinde bitiyor), ama
+connect_ms ve kısalan oturum penceresi WS koşularını TCP'ninkinden ~1 sn
+geç başlatabiliyor.
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 

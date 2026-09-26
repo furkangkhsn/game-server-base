@@ -151,11 +151,23 @@ ham `toml::Table`'ı alır:
   `client_out_bps`; `CLIENT` satırlarının `bytes_in`/`bytes_out`'u):
   istemcinin okuduğu ve yazdığı her karenin BU TELDEKİ boyu
   (`frame_bytes`): akışta (TCP/TLS) uzunluk önekli kare `4 + 2 + yük`,
-  rUDP'de datagram (REL `1 + 4 + 2 + yük`, RAW `1 + 2 + yük`); TLS
-  kaydı ve TCP/IP başlıkları hariç. Düz istemci ve churn istemcisi aynı
+  rUDP'de datagram (REL `1 + 4 + 2 + yük`, RAW `1 + 2 + yük`),
+  WebSocket'te mesaj (RFC 6455 başlığı 2/4/10 bayt + istemcinin
+  yazdığında 4 baytlık maske + `4 + 2 + yük`; B29); TLS kaydı, TCP/IP
+  başlıkları, el sıkışmalar (rUDP çerezi, WS yükseltmesi) ve yalnız
+  taşımaya ait kareler (rUDP ACK'ı, WS ping/pong/kapanış) hariç. Düz istemci ve churn istemcisi aynı
   kuralı sayar (B26'dan önce churn farklı sayıyordu — DESIGN §5.7
   "Loadgen düzeltmeleri"). Bir akış istemcisi sunucu kapattığında
   (EOF) oturumunu bitirir; ölü sokete hamle yazıp saymaz.
+- **`--transport tcp|udp|ws`** (B29): istemcilerin kapısı; süreç içi ve
+  `--serve` sunucusu aynı kapıyı açar (`ws`: bind adresinde tek `"ws"`
+  `[[listeners]]` girdisi), orkestratör iki çocuğa da iletir, `--addr`
+  modu o kapıya bağlanır. RESULT'ta `transport=ws`; başka anahtar
+  eklenmedi, TCP/rUDP satırı değişmedi. `ws`'de `connect_ms` TCP
+  bağlantısı + HTTP yükseltmesinin gidiş-dönüşü. `--tls-ca` ile `ws` her
+  modda kullanım hatası (kapının TLS biçimi yok). WS ↔ TCP taban
+  çizgisi (demo 200/500, arena 200, MMO 200) ve accept döngüsündeki seri
+  el sıkışma bulgusu: DESIGN §5.7 "Loadgen WS modu (B29)".
 
 ### 4.5 Değişmemesi gerekenler (2D demo)
 

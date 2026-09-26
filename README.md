@@ -134,6 +134,10 @@ cargo run -p gsb-server --bin gsb-loadgen -- 500 --duration 10
 #  a loopback burst is the worst case for the accept path; rUDP heals a lost
 #  handshake datagram by re-sending it, counted as `hs_retries`).
 # --addr HOST:PORT: client-only mode against an external server.
+# --transport tcp|udp|ws (default tcp): the clients' door and the in-process /
+#  served server's (forwarded to both orchestrated children). ws = WebSocket: the
+#  server gets one "ws" listener, client bytes count each WS message (header,
+#  client mask, frame); --tls-ca with ws is refused (the WS door has no TLS form).
 # --game demo|arena|mmo|war (default demo): the clients' bot and the in-process /
 #  served server's `game` key (forwarded to both orchestrated children). The
 #  arena bot runs its units base → centre → base with height; the MMO bot
