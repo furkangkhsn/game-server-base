@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-988 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1015 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F9 tamam** (CHANGELOG "F9", DESIGN §12, OPS §3, KIT-ARCHITECTURE §10
+"F9"): oyun/kit çekirdeğe dokunmadan kendi adlı kümülatif sayaçlarını
+raporluyor — `const LogicCounter` bildirimi, `GameLogic::logic_counters`
+(kit: `Game::counters`), oda başına en çok 16 ad. Görünüm: `logic_<ad>=`
+(satır ve RESULT), `gsb_room_logic_<ad>_total` / MAX için gauge, loadgen
+teli `GSMC`. ÇEKİRDEK sayaçları (ör. F15) hâlâ sabit şekilli örnekte.
 
 **Küçük paket 2 tamam** (CHANGELOG "Küçük paket 2"): WS kapısı sunucunun
 bitirdiği her oturumu 1001 ile kapatır ve ilk kapanıştan sonra hiçbir
@@ -514,6 +521,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 988 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1015 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

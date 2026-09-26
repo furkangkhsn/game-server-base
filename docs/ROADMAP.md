@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **988** (988/988 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1015** (1015/1015 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **küçük paket 2** — WS sunucu kapanışı 1001 ve çift kapanış
+Son tur: **F9 — mantığın kendi metrik sayaçları** — genel seam
+(`GameLogic::logic_counters` + `LogicCounters`, 16 yuva, `const` bildirim,
+SUM/MAX); `gsb-metric` / Prometheus / loadgen `GSMC` / RESULT `logic_*`.
+Crystallization olayları (`crystal_*`) ve savaşın `war_kills`'i bu yoldan.
+Önceki tur: **küçük paket 2** — WS sunucu kapanışı 1001 ve çift kapanış
 çerçevesi hatası (B24), loadgen churn bayt muhasebesi ve EOF döngüsü
 (B26), TLS bağlayıcı bir kez (B27), ticker runtime saatinde — paused
 testlerde oyun zamanı akıyor (F10), A10 hijyen testi (F13).

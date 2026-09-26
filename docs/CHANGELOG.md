@@ -5,6 +5,34 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F9 — oyunun/kit'in kendi metrik sayaçları (`core/f9-counter-seam`)
+
+- **Seam (gsb-core):** `GameLogic::logic_counters(&self, world, out:
+  &mut LogicCounters)` (varsayılan boş). Sayaç bir `const` bildirimdir —
+  `LogicCounter::sum/max(ad, help)`; ad kuralı (1–32 bayt `[a-z0-9_]`,
+  harfle başlar, `_total` ile bitmez) const değerlendirmede denetlenir.
+  Değer mantığın kendi alanında (tick yolunda tahsis/kilit/mesaj yok),
+  aktör örnek başına bir kez okur. Küme `RoomSample`/`RoomReport`'ta
+  değerle (`Copy`, en çok 16 ad; fazlası atılır, sayılır, bir kez warn).
+  Katlama kuralı sayaçla birlikte: SUM / MAX.
+- **Görünüm:** `gsb-metric` satırında çekirdek anahtarlarından sonra
+  `logic_<ad>=`; Prometheus'ta ad başına aile (`gsb_room_logic_<ad>_total`
+  counter, MAX için gauge; `name` etiketli tek aile elendi — bir aile hem
+  counter hem gauge olamaz); loadgen teli `GSMB` → `GSMC`; RESULT'ta
+  `game=`'den önce genel `logic_<ad>=` segmenti. Sayaç bildirmeyen
+  mantığın metni bayt bayt aynı (önceki koddan sabitlenen golden test).
+- **Yeni bir oyun sayacı artık çekirdeğe, loadgen'e ve Prometheus koduna
+  dokunmuyor:** oyunda bir `const` + bir alan + `counters`'ta bir `put`.
+- **Kit:** `Game::counters` (varsayılan boş), yedi kit odası iletir.
+  Crystallization'ı açan sharded oda altı `crystal_*` sayacı koyar
+  (`moves`, `release_quiet/band/partner`, `untracked`, `fights_peak`
+  MAX) — CROSS-SHARD §4c madde 5 kapandı. Doğrulama: savaş `war_kills`.
+- 200 botluk 60 sn MMO düello koşusu: `logic_crystal_moves=18`, release
+  quiet/band/partner 14/11/11, `fights_peak=9`.
+
+Testler 988 → 1015; ajanın 59 mutasyonu yakalandı. Ebeveynin bağımsız
+mutasyonu (MAX kuralını SUM gibi katlamak) 3 testi kırıyor.
+
 ## Küçük paket 2 — B24, B26, B27, F10, F13 (`misc/small-bundle-2`)
 
 - **B24 (gsb-net):** WS kapısı, sunucunun bitirdiği oturumu artık boş
