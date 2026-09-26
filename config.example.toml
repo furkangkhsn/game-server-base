@@ -240,6 +240,29 @@ keepalive_hz = 1.0
 # Negatif sayı ya da başka bir kelime başlatmada hatadır.
 # max_detach_hold_secs = 600
 
+# INPUT RATE LIMIT (aksiyon/sn) — varsayılan KAPALI. docs/SECURITY.md §3.4,
+# BACKLOG E1.
+#
+# Bağlantı başına token bucket: saniyede input_rate_hz aksiyon, bir anda en
+# çok input_burst. Yalnız geçerli OYUN girdisi ölçülür (kayıtlı oyun-bandı
+# opcode'ları); HEARTBEAT/JOIN/LEAVE ve RPC istekleri ölçülmez. Aşan girdi
+# bağlantı aktöründe DÜŞER (odaya hiç girmez), input_rate_limited olarak
+# sayılır (gsb_net_input_rate_limited_total) ve ihlal DEĞİLDİR — bağlantı
+# kopmaz. Sayı oynanış parametresidir: oyunun dürüst temposunun üstünde,
+# payla seçin; hızlı ama dürüst bir istemciyi kesmesin.
+#
+#   yazılmazsa  = oyunun varsayılanı (GameModule::input_rate; repodaki
+#                 oyunlar vermez → KAPALI)
+#   0           = KAPALI (oyunun varsayılanının da üstünde)
+#   N           = saniyede N aksiyon
+#
+# input_burst yazılmazsa bir saniyelik (= input_rate_hz). Yalnız aynı
+# tabloda input_rate_hz > 0 ile birlikte: tek başına, input_rate_hz = 0'ın
+# yanında ya da 0 olarak başlatmayı durdurur. Bir oda kendi değerini
+# [rooms.<id>] ile alabilir (aşağıda).
+# input_rate_hz = 60
+# input_burst = 30
+
 # ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
 # "Konfigürasyon düzeltmesi" — Faz A):
 #
@@ -370,9 +393,10 @@ keepalive_hz = 1.0
 # Bir oda (kalabalık bir oda, bir lobi) yukarıdaki ODA DÜZEYİ anahtarlardan
 # kendi değerlerini alabilir: tick_hz, room_control, conn_action,
 # max_snapshot_bytes, keepalive_hz, max_players, max_idle_input_secs,
-# max_detach_hold_secs — aynı yazım, aynı anlam (max_players = 0 sınırsız,
-# max_detach_hold_secs = "off" tavansız). Yazılmayan anahtar sunucunun
-# değerinde kalır; bölümü olmayan oda sunucunun odasıdır.
+# max_detach_hold_secs, input_rate_hz, input_burst — aynı yazım, aynı
+# anlam (max_players = 0 sınırsız, max_detach_hold_secs = "off" tavansız,
+# input_rate_hz = 0 sınırsız). Yazılmayan anahtar sunucunun değerinde
+# kalır; bölümü olmayan oda sunucunun odasıdır.
 #
 # Id, room_count'un ötesinde de olabilir: o zaman runtime'da
 # POST /rooms/open?id=<id> ile açılan oda bu değerleri alır (query'deki

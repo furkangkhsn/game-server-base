@@ -102,6 +102,43 @@ maliyeti sınırlıyor, dolayısıyla puanlamak düşman tarafında hiçbir şey
 kazandırmaz; yalnız dürüst-ama-hatalı istemciyi (gevşek bir NAT
 keepalive'ı) zorla düşürür.
 
+## 3.4. Post-auth geçerli girdinin HACMİ (BACKLOG E1)
+
+§3'ün kalan açık maddesi: auth'u geçmiş, tanımlı opcode'lu, iyi biçimli
+girdinin saniye başına hacmi. Eskiden tek sınır odanın per-tick çekme
+bütçesiydi (bağlantı başına 16/tick ≈ 30 Hz'de 480/sn): **odayı** korur,
+göndericiyi değil — fazlası göndericinin kendi bounded kanalında birikir,
+dolunca **kendi** girdisi düşer (`actions_dropped`, atfeli). Bir sayı
+seçmek oynanış kararıdır; kullanıcı kararı (2026-09-27): **opt-in yapı
+taşı** — bağlantı başına token bucket, varsayılan KAPALI, sayıyı
+oyun/config verir, aşan girdi düşer ve sayılır.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Yer: bağlantı aktörü**, protokol kontrollerinden sonra, odanın kanalına `try_send`'den ÖNCE (`gsb-core/src/conn/gate.rs`, `conn/actor/input.rs`) | Aktör her frame'i görür, tek bağlantının durumunu paylaşmadan tutar ve girdinin odaya maliyet olduğu nokta orasıdır. Reddedilen frame hiç kuyruklanmaz, çekilmez, damgalanmaz, ingest edilmez. *Elenen:* odanın READ fazında sınırlamak — girdi zaten kanalda olurdu, tick onu çekip atmak için harcanırdı; per-tick bütçe "girenler arasında adalet"tir, "ne girer" değil |
+| 2 | **Sayı ODANIN: `RoomConfig::input_rate`** (`InputRate { per_sec, burst }`, ikisi de sıfırdan büyük; `None` = kapalı). Registry join'de odanın config'inden damgalar ve yeni `Seat` cevabıyla (entity + aksiyon kanalı + hız) bağlantıya verir | Limit oynanış parametresi; bir sunucunun odaları farklı mod/hızda koşabilir (B18). Registry her odanın config'ini zaten tutar: tek damga iki oda biçimini (tek/sharded) ve iki join yolunu (taze/resume) kapsar; oda ve shard aktörleri hızı hiç görmez. *Elenen:* bağlantı/dinleyici düzeyinde sunucu geneli tek sayı — oda başına fark (lobi/maç) ifade edilemezdi |
+| 3 | **Kova bağlantınındır, oda geçişinde yeniden AYARLANIR, dolmaz.** İlk sınırlı join kovayı dolu kurar; sonraki her join önceki hızla şimdiye kadar doldurur, yeni hızı koyar (her dolum güncel burst'e kırpar); sınırsız bir oda kapıyı kapatır ama seviyeyi unutmaz | Jeton zamanla birikir, oda atlayarak değil: bir leave/join döngüsü (sınırsız bir odadan geçerek bile) taze bir burst satın alamaz. Yavaş odada geçen süre o odanın hızıyla kazanır |
+| 4 | **Aşan girdi düşer, kuyruklanmaz, sayılır — ihlal DEĞİL.** `ConnSample::input_rate_limited` → net raporu → `input_rate_limited=` satırı → `gsb_net_input_rate_limited_total` → loadgen teli (`GSME`). Bağlantı başına ilk düşürmede bir `warn` (bağlantı + eş adresi) | Aşım yapan istemci doğru bir istemcinin gönderemeyeceği hiçbir şey göndermiyor: sayı oyunun sıkı seçebileceği bir oynanış limiti; bütçeye yazmak onu bir kopmaya çevirirdi (§3.2'nin HEARTBEAT gerekçesinin aynısı: dürüst-ama-hızlı istemci, ör. 144 Hz girdi ya da lag sonrası boşalan tampon). Maliyet zaten sınırlı: reddedilen frame O(1), bounded inbox ve okuyucu pompası TCP'de göndericiyi kendi kendine yavaşlatır. Oyun kovmak isterse sayacı/uyarıyı okur |
+| 5 | **Yalnız oyun girdisi ölçülür:** kayıtlı game-band opcode'ları. AUTH/JOIN/LEAVE/HEARTBEAT kontrol bandı; **RPC_REQ ölçülmez** | Bir RPC isteğine tam bir cevap borçlu (sessiz düşürme istemciyi kendi zaman aşımına bekletirdi); hacmi zaten sınırlı — bağlantı ve oda başına bekleyen istek cap'leri (aynı tick'te cevaplanır) ve odanın çekme bütçesi. Bağlantı tarafı bir RPC kapısı ayrı madde (BACKLOG D9) |
+| 6 | **Sıra: protokol kontrolleri önce.** Tanımsız opcode hâlâ hard ihlal, odada değilken gelen girdi hâlâ race-class `NotInRoom` — kova boşken de | Kapı bir sınıflandırmayı yutmamalı: ihlal bütçesi ile hız sınırı farklı soruları cevaplar |
+| 7 | **Saat: tick saati** (`gsb_core::ticker::now()`, TICK-ARCHITECTURE "Tick saati") | Hız "odanın saniyesi başına"dır; paused saatte sanal bir saniye bir saniyelik dolum demek — duvar saatinde mikrosaniye olurdu ve dürüst istemci reddedilirdi. Üretimde ikisi aynı an. Kapalıyken hiç saat okunmaz |
+| 8 | **O(1), tahsis yok, zamanlayıcı görev yok:** seviye varışta, son varıştan geçen süreden hesaplanır; birim nano-jeton (`geçen_ns × per_sec`, `u128`, doyan aritmetik) | Kayan nokta ve yuvarlama sapması yok; aşırı değerler (u32::MAX hız, yıllarca boşta) taşmaz, burst'e doyar |
+| 9 | **Yapılandırma:** oyunun varsayılanı `GameModule::input_rate()` (sağlanan metot, varsayılan `None`) → düz `input_rate_hz`/`input_burst` → `[rooms.<id>]`; `input_rate_hz = 0` kapalı (oyunun sayısının da üstünde), `input_burst` yazılmazsa bir saniyelik; bir tablo limitin tamamını yazar (bkz. OPS §2) | Sayı oyunun (kendi dürüst temposunu bilir), operatör ezer. Varsayılan KAPALI: anahtar yoksa ve oyun sayı vermiyorsa davranış bayt bayt bugünkü — kanal dolar, `actions_dropped` sayar |
+
+**Kilitler:** `gsb-core/src/conn/gate/tests.rs` (kova aritmetiği, oda
+geçişi, yeniden ayar), `gsb-core/tests/input_rate.rs` (paused saatte
+canlı registry + oda: flooder tam olarak burst + dolum alır, odanın tick
+başı çekişi burst'ü aşmaz, tam sınır hızında dürüst istemci dokunulmaz,
+ihlal 0, bağlı kalır; sınırsız varsayılan bugünkü yolu izler),
+`gsb-core/tests/input_rate/gate.rs` (RPC/heartbeat ölçülmez, protokol
+kontrolleri maskelenmez, yeniden join doldurmaz), `gsb-server/tests/input_rate.rs`
+(TCP üstünden config anahtarı; oyunun varsayılanı başlangıç + admin
+odalarına aynı şablondan).
+
+**Kalan yüzey:** bağlantıya atıflı ilk-beş listesi yok (yalnız `warn`);
+kaynak adres başına sınır yok (bağlantı başına — D11 ile aynı eksen);
+limit ihlali kovma/kapatma politikası oyunun.
+
 ## 3.5. Oturum yaşam döngüsü: iki saat, iki yön
 
 Reader pump'un idle penceresi (`idle_timeout_secs`) yarım-açık TCP'yi
@@ -389,3 +426,6 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 - rUDP crypto — deneysel statü
 - Kaynak adres başına el sıkışma sınırı (B31'in sınırı kapı başına —
   §4.3 "Kalan yüzey")
+- Post-auth girdi hacmi için bağlantıya atıflı ilk-beş listesi ve kaynak
+  adres başına sınır (§3.4 "Kalan yüzey"; hız sınırının kendisi opt-in
+  olarak var)

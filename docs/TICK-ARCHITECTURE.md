@@ -252,6 +252,7 @@ okumalar duvar saatinde kalır.
 | Adım süresi (`step_us`, histogramlar, `observe_step_us`) ve alt ölçümler (sınır/göç süreleri) | `std::time::Instant` | CPU işini ölçer; paused saat senkron işte ilerlemez → hep 0 okurdu |
 | Ayrılma bekleme süresi (park grace/tavan: `park` ve 0c süpürmesi), RPC zaman aşımı (`due` ve 0b süpürmesi) — oda ve shard | `ticker::now()` (F16) | iki ucu da aynı saatte; paused saatte durur, paused zamanla dolar (aşağıda "F16") |
 | Bağlantı aktörünün pencereleri (auth denemeleri, HEARTBEAT_ACK kısması, metrik boşaltma), rUDP demux'ının idle heap'i ve yazıcının RTO/canlılık saati | `std::time::Instant` (değişmedi) | damgayla karşılaşmaz, tick'e bağlı değil; paused saatte sınayan test yok (tetik yok) |
+| Bağlantı aktörünün girdi hız sınırı (E1 token bucket: dolum = son varıştan geçen süre × hız) | `ticker::now()` | damgayla karşılaşmaz ama hız "odanın saniyesi başına"dır: paused saatte sanal bir saniye bir saniyelik dolum olmalı — duvar saatinde mikrosaniye olur ve tam sınır hızındaki dürüst istemci reddedilirdi (`gsb-core/tests/input_rate.rs` paused saatte koşar; duvar saatine çevirmek onu kırar). İki ucu da aynı saatte; üretimde aynı an; kapalıyken hiç okunmaz |
 | Metrik toplayıcı | yalnız tick olayı, damga okumaz | — |
 
 **F16 (2026-09-26).** Ayrılma bekleme süresi ve RPC zaman aşımı F10'da

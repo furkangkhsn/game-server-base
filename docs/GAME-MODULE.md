@@ -137,10 +137,11 @@ birbirine karışmaz:
 
 - **Oda düzeyi anahtarlar motorundur:** `tick_hz`, `room_control`,
   `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
-  `max_idle_input_secs`, `max_detach_hold_secs` çekirdeğin `RoomConfig`'ine
+  `max_idle_input_secs`, `max_detach_hold_secs`, `input_rate_hz`,
+  `input_burst` çekirdeğin `RoomConfig`'ine
   gider (`Config::room_template`, tek eşleme). Sunucunun bütün odaları
   bunları düz anahtarlardan alır; **bir oda kendi değerlerini**
-  `[rooms.<id>]` bölümünden alabilir (aynı sekiz anahtar, aynı yazım ve
+  `[rooms.<id>]` bölümünden alabilir (aynı on anahtar, aynı yazım ve
   anlam; katmanlama `RoomTemplate::room(id)`'de, tek yerde — ayrıntı
   OPS §2). Fabrika o odayı kurarken `&RoomConfig`'i zaten alıyor; oyunun
   yapması gereken bir şey yok, oyun bu bölümü görmez de.
@@ -153,6 +154,19 @@ birbirine karışmaz:
   sessizce yok sayılmaz. Oda başına OYUN ayarı (bir lobide farklı takım
   sayısı gibi) bu turun kapsamında değil: oyunun kararıdır, gerekirse
   oyun kendi tablosunda id'ye göre okur (motor politika seçmez).
+- **Tek istisna, oyunun SAYISI olan bir oda anahtarı: girdi hız sınırı
+  (BACKLOG E1, SECURITY §3.4).** Saniyede kaç girdinin meşru olduğunu
+  oyun bilir; `GameModule::input_rate()` (sağlanan metot, varsayılan
+  `None` = sınır yok, bugünkü davranış) oyunun varsayılanını verir,
+  `configure`'dan sonra bir kez okunur (oyunun ayarlarına bağlı
+  olabilir). Operatör onu düz `input_rate_hz`/`input_burst` ya da
+  `[rooms.<id>]` ile ezer (`input_rate_hz = 0` = kapalı). Bu yüzden
+  dosyanın görünümü (`Config::room_config`) oyunun sayısını taşımaz;
+  çalışan sunucunun odası `ServerHandle::room_config(id)`'dir. Repodaki
+  demolar sayı vermez (doğrulama düzenekleri; sınır onların kararı
+  değil). *Elenen:* oyunun `configure`'da `Config`'i değiştirmesi
+  (`&Config` salt okunur; imza değişikliği bütün modülleri kırardı) ve
+  oyunun ham tabloya anahtar yazması (motor anahtarı oyuna geçerdi).
 - `rooms` hiçbir oyunun sabitlediği bir anahtar değil; bir oyunun
   `own_table`'ı ona bakmaz, bu yüzden `[rooms.<id>]` her oyunla çalışır
   ve `config.example.toml` onu (yorumlu) taşırken oyun değiştirme yalnız

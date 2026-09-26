@@ -34,7 +34,8 @@ başlangıçta ön-kurulan odaların geldiği şablondur
 `Config::room_config(id)` onun üstünde). Oda düzeyindeki bütün anahtarlar
 — `tick_hz`, `room_control`, `conn_action`, `max_snapshot_bytes`,
 `keepalive_hz`, `max_players`, `max_idle_input_secs`,
-`max_detach_hold_secs` — runtime odaya da gider; oyunun `[game]`
+`max_detach_hold_secs`, `input_rate_hz`, `input_burst` — runtime odaya
+da gider; oyunun `[game]`
 tablosu zaten gidiyordu (fabrika, `spawn_registry`'de bir kez kurulur ve
 registry her `CreateRoom`'da — başlangıç ya da admin — aynı fabrikayı
 çağırır). Eskiden yüzey `RoomConfig::default()` + `tick_hz` kuruyordu:
@@ -76,7 +77,8 @@ max_detach_hold_secs = "off"
 
 - **Anahtarlar:** yalnız oda düzeyindekiler — `tick_hz`, `room_control`,
   `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
-  `max_idle_input_secs`, `max_detach_hold_secs`; yazım ve anlam düz
+  `max_idle_input_secs`, `max_detach_hold_secs`, `input_rate_hz`,
+  `input_burst`; yazım ve anlam düz
   anahtarlarınki (`max_players = 0` sınırsız, `max_idle_input_secs = 0`
   kapalı, `max_detach_hold_secs` üç yazımıyla). Yazılmayan anahtar
   sunucunun değerini korur. Nokta yazımı da aynı şey:
@@ -121,6 +123,24 @@ max_detach_hold_secs = "off"
   `0` yazan operatör ise başka bir şey kastetmiştir ve bunu başlatmada
   duyar. *Elenen:* yalnız kıstırmak — `0` yazan operatörün niyeti (ör.
   "sınırsız", başka kapların `0`'ı gibi) sessizce "1"e dönerdi.
+- **Girdi hız sınırı: `input_rate_hz` / `input_burst` (BACKLOG E1,
+  SECURITY §3.4).** Bağlantı başına token bucket — saniyede
+  `input_rate_hz` aksiyon, bir anda en çok `input_burst` (yazılmazsa bir
+  saniyelik: `input_rate_hz`). Düz yazılırsa her odanın, `[rooms.<id>]`
+  içinde yazılırsa yalnız o odanın `RoomConfig::input_rate`'i. Katmanlar
+  (düşükten yükseğe): çekirdek (KAPALI) → oyunun sayısı
+  (`GameModule::input_rate`, varsayılan yok) → düz anahtarlar →
+  `[rooms.<id>]`. `input_rate_hz = 0` KAPALI demek, oyunun sayısının da
+  üstünde. İkisi tek limit olarak okunur: bir tablo limit yazıyorsa
+  tamamını yazar — `input_burst` aynı tabloda `input_rate_hz > 0`
+  olmadan (yalnız, `input_rate_hz = 0`'ın yanında) ya da `0` ise
+  `ServerError::RoomKey` ile başlatma durur (bir katmanın hızıyla
+  diğerinin burst'ü karışmaz). Oyunun sayısı dosyada görünmediği için
+  `Config::room_config(id)` dosyanın görünümüdür; çalışan sunucunun
+  kurduğu oda — başlangıç, `/rooms/open` ve `ServerHandle::room_config(id)`
+  tek şablondan — oyunun sayısını taşır; ön-kurulan bir odayı
+  `handle.open_room(handle.room_config(id))` ile yeniden açmak
+  idempotent kalır.
 - **`room_count`'un ötesindeki id hata DEĞİL:** runtime odaları
   herhangi bir pozitif id ile açılır; `[rooms.9]` tam da `/rooms/open?id=9`'un
   açacağı odayı tanımlar. Hata yapmak bu kullanımı yasaklardı; uyarı
@@ -217,6 +237,20 @@ max_detach_hold_secs = "off"
   `crystal_*` (`moves`, `release_quiet/band/partner`, `untracked`,
   `fights_peak` — MAX), savaş demosu `war_kills`. `/rooms` sayaç
   listelemez (yalnız oda id'leri), değişmedi.
+- **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
+  bağlantı aktöründe düşürülen geçerli oyun girdisi:
+  `gsb-metric scope=net` satırında `violations=`'dan hemen sonra
+  `input_rate_limited=<n>`, Prometheus'ta
+  `gsb_net_input_rate_limited_total` (`counter`, kümülatif, bütün
+  bağlantılar), loadgen metrik telinde `GSME` (net kapsamında
+  `violations`'dan sonra bir `u64`). Kaynağı `ConnSample::input_rate_limited`
+  (bağlantı başına delta; toplayıcı toplar). Sınır kapalıyken (varsayılan)
+  hep 0. Artış sınırın ÇALIŞTIĞINI söyler — ihlal değildir
+  (`violations` ayrı), girdi kanala hiç girmediği için `actions_dropped`
+  da artmaz. Bağlantıya atıf yok (`actions_dropped_top` gibi bir ilk-beş
+  listesi eklenmedi): her bağlantı ilk düşürmede bir kez `warn` eder
+  (bağlantı id'si + eş adresi); ayrı bir bağlantı başı tablo toplayıcıda
+  bellek ve budama işi olurdu, ihtiyaç görülünce eklenir.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

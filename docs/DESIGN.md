@@ -180,6 +180,26 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   atfeli; §12). Oda belleği sınırlı kalır, hasar saldırganın kendi
   girdisiyle sınırlıdır; bağlantı ne hata alır ne kopar (koparmak
   reconnect/backoff fırtınasıyla saldırganı *amplify* ederdi).
+- **Girdi HACMİ (opt-in, BACKLOG E1; SECURITY §3.4):** per-tick çekme
+  bütçesi odayı korur, göndericinin hızını değil — sınırın ötesi
+  kanalda birikir. Bir oyun (ya da operatör) saniye başına hacmi de
+  sınırlamak isterse `RoomConfig::input_rate` (`InputRate { per_sec,
+  burst }`, varsayılan `None` = kapalı) bağlantı başına bir **token
+  bucket** açar. Uygulandığı yer oda DEĞİL, bağlantı aktörüdür: protokol
+  kontrollerinden (tanımsız opcode, odada değil) sonra, `try_send`'den
+  önce — sınırın üstündeki girdi kanala hiç girmez, oda onu ne çeker ne
+  atar; bu yüzden "oda çektiğini asla atmaz" ve "tek kayıp noktası
+  gönderici tarafında" ilkeleri aynen durur, yalnız gönderici tarafında
+  ikinci ve bilinçli bir sayaç eklenir (`input_rate_limited`, ihlal
+  değil; `actions_dropped`'tan ayrı: biri kanal doldu, öbürü oyunun
+  sayısı aşıldı). Sayı odanın: registry join'de odanın config'inden
+  damgalar, `Seat` (entity + aksiyon kanalı + hız) ile bağlantıya verir;
+  kova bağlantınındır ve oda geçişinde yeniden ayarlanır, dolmaz. RPC
+  istekleri ve kontrol bandı ölçülmez. Kova O(1), tahsissiz,
+  zamanlayıcısız: seviye varışta tick saatinden (`ticker::now()`)
+  hesaplanır. İki bütçe birbirinin yerine geçmez: çekme bütçesi girenler
+  arasında adalettir (fazlası bekler), hız sınırı ne gireceğidir (fazlası
+  düşer).
 - **BROADCAST fazı (grup başına tam snapshot):** Bağlantılar oyun
   mantığının `RoomLogic::group_of()` ile **snapshot gruplarına** ayrılır
   (`GroupKey`: `Eq + Hash + Clone + Debug`; demo'da `()` = oda başına tek
@@ -2641,11 +2661,11 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
-| Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | sürekli (sn başına) rate-limit (tur başına bütçe zaten sınırlayıcıdır) |
+| Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | ~~sürekli (sn başına) rate-limit~~ opt-in olarak var (E1, §4 "Girdi HACMİ"): aşan girdi göndericinin aktöründe düşer, `input_rate_limited` sayılır |
 | Tek process | v1 kapsamı | ~~§8.4~~ §8 "sonraki adımlar" madde 4; süreç içi bölme §8.2; süreçler/makineler arası: DISTRIBUTED (`ShardLink` tasarımı) |
 | Oturum zaman aşımı **reader pump'ta** (read deadline), registry'de değil | çünkü saati tutan yer, stream'i bekleyen yeridir — registry'ye son-görülme damgası ikinci bir beklenen kaynak/timer çıkarırdı (§3); 30 sn varsayılan, 0 = kapalı | oyun seviyesi oturum politikası (reconnect'de yeniden auth vb.) registry katmanı |
 | `sint32` (tam sayı) koordinat, `f32` simülasyon | Demo sadeliği | float veya mm cinsinden int (sabit nokta) |
-| ~~Güvenlik yüzeyi minimal: AUTH no-op~~, sn-başına **geçerli girdi** hacim sınırı yok (cap'ler var: bağlantı cap + oda cap + tur-başına girdi bütçesi) *(AUTH kısmı kapandı — ticket kancası `TicketAuth` (`gsb-core/src/auth.rs`; yapılandırılmazsa `Auth.name` olduğu gibi kabul: yalnız geliştirme yolu, SECURITY §4b), AUTH deneme sınırı + pre-auth kare bütçesi + HEARTBEAT kısması + unauthed cap (SECURITY §3–§4), TLS (SECURITY §2))* | saniyede kaç aksiyonun meşru olduğu oynanış parametresi — kullanıcı kararı | ~~`Authenticator` trait'i +~~ rate-limit — BACKLOG E1 → D1 |
+| ~~Güvenlik yüzeyi minimal: AUTH no-op~~, ~~sn-başına **geçerli girdi** hacim sınırı yok~~ *(E1: opt-in token bucket `RoomConfig::input_rate`, varsayılan kapalı, sayıyı oyun/config verir — SECURITY §3.4)* (cap'ler var: bağlantı cap + oda cap + tur-başına girdi bütçesi) *(AUTH kısmı kapandı — ticket kancası `TicketAuth` (`gsb-core/src/auth.rs`; yapılandırılmazsa `Auth.name` olduğu gibi kabul: yalnız geliştirme yolu, SECURITY §4b), AUTH deneme sınırı + pre-auth kare bütçesi + HEARTBEAT kısması + unauthed cap (SECURITY §3–§4), TLS (SECURITY §2))* | saniyede kaç aksiyonun meşru olduğu oynanış parametresi — kullanıcı kararı (2026-09-27: opt-in yapı taşı) | ~~`Authenticator` trait'i + rate-limit~~ — kapandı (E1) |
 
 > Not: Önceki sürümlerdeki iki kritik hata — sonradan giren oyuncunun
 > dünyayı görmemesi ve registry'nin oda cevabını beklerken tüm sunucuyu
@@ -2841,6 +2861,7 @@ durdurulamaz.
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
 | düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
+| net | `input_rate_limited` (kümülatif; satırda `violations`'dan sonra, Prometheus'ta `gsb_net_input_rate_limited_total`, loadgen telinde GSME) | odanın girdi hız sınırı (E1, §4 "Girdi HACMİ") ne kadar girdiyi bağlantı aktöründe kesti? Sınır kapalıyken 0; ihlal değil, `actions_dropped`'tan ayrı (kanal hiç dolmadı) |
 | net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`
