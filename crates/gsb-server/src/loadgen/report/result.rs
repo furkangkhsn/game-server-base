@@ -47,13 +47,11 @@ pub(crate) fn print_report(
         .unwrap_or(0);
     // Peak room membership (same rationale): the stable entity count for
     // the overlap ratio. For a sharded room this is the SUM over shards
-    // (the room's total population — the shards partition its connections).
-    let peak_members = server_reports
-        .iter()
-        .filter(|r| !r.rooms.is_empty())
-        .map(report_members)
-        .max()
-        .unwrap_or(0);
+    // (the room's total population — the shards partition its connections),
+    // read from consistent cuts only: a torn report's rows are different
+    // sample rounds and can count a migrating player twice (`spread.rs`,
+    // F18).
+    let peak_members = peak_population(server_reports);
     // The overlap measurement (D3): encoded entity records per tick in the
     // steady state, and per broadcastable entity (the multiplier). Both
     // endpoints are taken AFTER the join phase (base = first report with
@@ -350,7 +348,16 @@ pub(crate) fn print_report(
             rec_per_tick, overlap, peak_members
         );
         if let Some((first, last)) = &spread {
-            println!("server shards (members per shard, steady window): first={first} last={last}");
+            // A run with no consistent cut is read from torn rows (see
+            // `spread.rs`): said here rather than passed off as exact.
+            let torn = if has_consistent_cut(server_reports) {
+                ""
+            } else {
+                " (torn: no report is a consistent cut, a migrating player may count 0 or 2 times)"
+            };
+            println!(
+                "server shards (members per shard, steady window): first={first} last={last}{torn}"
+            );
         }
         if let Some(g) = &last_room.and_then(|l| l.registry) {
             println!(
@@ -552,7 +559,8 @@ pub(crate) fn print_report(
             .map(|(r, n)| format!(" server_close_{}={n}", r.label()))
             .collect::<String>(),
         // A sharded game's per-shard members at the end of the steady
-        // window (`shard_members=a,b,c,d`; `-` without server reports) —
+        // window — its last consistent cut, `spread.rs`
+        // (`shard_members=a,b,c,d`; `-` without server reports) —
         // only for a bot that asks (the MMO: its spread across the shards
         // is the measurement, K4). Right before `game=`, so every key
         // before it keeps its place and `game=` stays last; the demo's

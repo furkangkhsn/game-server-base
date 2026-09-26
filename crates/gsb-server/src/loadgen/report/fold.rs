@@ -30,7 +30,7 @@
 //! | SUM, element-wise | `step_hist`, `step_fine_hist` | The union of the shards' step distributions, so percentiles and over-budget % are room-wide. See [`folded_steps`] for the population this union covers. |
 //! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, `detach_forced`, the `effects_*`, `migrations_*` and `team_*` families, the whole `requests_*` family, `metrics_dropped` | Cumulative counters over disjoint work. (A migration is counted once as `migrations_out` by its source and once as `migrations_in` by its destination, so the folded pair should agree — they are not added together.) |
 //! | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | A RATE computed per shard cannot be averaged: the shards' counters are disjoint over the same wall clock, so the room's rate is their sum. (Averaging would report a quarter of the room's loss on a 4-shard room.) |
-//! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) |
+//! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) The total is one instant only when the rows are — a report's rows can be different sample rounds, and a migrating player then counts twice or not at all; the population is read from consistent cuts only (`spread.rs`, F18). |
 //! | PER COUNTER | `logic` | The logic's own counters (F9) carry their rule with them: name by name, a `LogicFold::Sum` counter adds (disjoint work, like the SUM row above), a `LogicFold::Max` one takes the larger (a high-water mark, like the MAX row); a name only some shards report is kept; the overflow counts add (`LogicCounters::merge`). |
 //!
 //! This fold runs once, in the load generator's end-of-run
@@ -39,7 +39,7 @@
 use gsb_core::metrics::{FINE_HIST_CAP_US, MetricReport, RoomReport, fine_hist_percentile_us};
 
 #[cfg(test)]
-mod tests;
+pub(in crate::report) mod tests;
 
 /// Total room membership in a report: the SUM over all rooms. For a
 /// single room (every non-sharded strategy) this is that room's member

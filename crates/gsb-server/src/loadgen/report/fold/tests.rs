@@ -31,7 +31,7 @@ const TOTAL_STEPS: u64 = 600;
 /// the struct literal is exhaustive: a field added to [`RoomReport`]
 /// fails to compile here until the fixture gives it a value, and in
 /// `fold_rooms` until the fold gives it a rule.
-fn shard(i: usize) -> RoomReport {
+pub(in crate::report) fn shard(i: usize) -> RoomReport {
     let steps = STEPS[i];
     // Budget overflow mass, so `over_budget_frac` over the folded
     // histogram is a real fraction and not a rounding of one shard's.
@@ -136,7 +136,7 @@ const KILLS: LogicCounter = LogicCounter::sum("kills", "Players felled.");
 const PEAK: LogicCounter = LogicCounter::max("fights_peak", "Largest fight table.");
 const LATE: LogicCounter = LogicCounter::sum("late_name", "");
 
-fn report(rooms: Vec<RoomReport>) -> MetricReport {
+pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
     MetricReport {
         metrics_dropped: 0,
         emitted_at: Instant::now(),
