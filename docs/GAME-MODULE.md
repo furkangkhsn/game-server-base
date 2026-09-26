@@ -147,6 +147,16 @@ ham `toml::Table`'ı alır:
   *(G3'te uygulanan biçim — `LoadBot` + istemci başına `BotClient` —
   ve bayt kanıtı: §5 "G3 sonucu".)*
 
+- **RESULT'un istemci bayt alanları** (`client_in_bps`,
+  `client_out_bps`; `CLIENT` satırlarının `bytes_in`/`bytes_out`'u):
+  istemcinin okuduğu ve yazdığı her karenin BU TELDEKİ boyu
+  (`frame_bytes`): akışta (TCP/TLS) uzunluk önekli kare `4 + 2 + yük`,
+  rUDP'de datagram (REL `1 + 4 + 2 + yük`, RAW `1 + 2 + yük`); TLS
+  kaydı ve TCP/IP başlıkları hariç. Düz istemci ve churn istemcisi aynı
+  kuralı sayar (B26'dan önce churn farklı sayıyordu — DESIGN §5.7
+  "Loadgen düzeltmeleri"). Bir akış istemcisi sunucu kapattığında
+  (EOF) oturumunu bitirir; ölü sokete hamle yazıp saymaz.
+
 ### 4.5 Değişmemesi gerekenler (2D demo)
 
 Wire baytları; varsayılan config'in etkisi (OpenRoom + ekonomi, spawn

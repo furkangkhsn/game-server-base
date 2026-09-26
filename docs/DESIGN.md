@@ -836,6 +836,10 @@ yazılmıştı; TLS bağlayıcı üç, QUIC istemci yapılandırması üç kez.
   rUDP formülü), JOIN baytlarını hiç saymıyor, gelen baytı `2 + payload`
   sayıyor; yorumu "TCP'de birleşik yazım" diyor ama AUTH ve JOIN ayrı
   yazımlar; `tls_connector` CA PEM'ini her bağlantıda yeniden okuyor.
+  **→ B26 ve B27'de düzeltildi** (aşağıda "Loadgen düzeltmeleri").
+  (Birleşik yazım yorumu `run_client`'a aitti ve orada doğru: AUTH +
+  JOIN `send_batch` ile tek yazım; churn istemcisi AUTH'u ve her JOIN
+  denemesini ayrı yazar — yeniden deneme için.)
 
 **Karar.** Yeni motor crate'i `gsb-client` (oyun bilmez, politika taşımaz):
 
@@ -998,6 +1002,68 @@ uygulanmaz, sabit anahtar, yalnız son parça, pong yok, `recv` pong
 yazmaz, kapanış kaydedilmez, yankı yok, koruma yok, pencere altında
 `read_exact`, iptalde `pending` düşer, kapanış sonrası bayt kabul) her
 biri en az bir testi kırar.
+
+**Loadgen düzeltmeleri (B26, B27 — 2026-09-26).** B19'un bilerek
+dokunmadığı üç ölçüm kusuru; ikisi RESULT değerlerini BİLEREK oynatır.
+
+- *Churn bayt muhasebesi (B26).* Churn istemcisi artık `run_client`'ın
+  kuralıyla sayar: yazılan her kare (AUTH, her JOIN denemesi — yeniden
+  denemeler dahil —, girdiler) ve okunan her kare (JOIN evresinin
+  cevapları — sonuç, ERROR, araya giren kareler — dahil) bu teldeki
+  gerçek boyutuyla, `frame_bytes`: akışta (TCP/TLS) uzunluk önekli kare
+  `4 + 2 + yük`, rUDP'de datagram (REL denetim bandı `1 + 4 + 2 + yük`,
+  RAW oyun bandı `1 + 2 + yük`). TLS kayıt ek yükü ve TCP/IP
+  başlıkları iki istemcide de sayılmaz (ölçüm "istemcinin yazdığı/
+  okuduğu kare baytı"dır, `server_*_bps` sunucu tarafının kendi
+  sayacı). Önce: AUTH sabit `wire_in_bytes(AUTH_REQ, 8)` = 15 bayt (TCP'de
+  bile rUDP formülü, gerçek yük uzunluğu yerine 8); girdiler de rUDP
+  formülüyle (TCP'de kare başına 3 bayt eksik); JOIN hiç; gelen kare
+  `2 + yük` (TCP'de 4, rUDP'de 1 ya da 5 bayt eksik); JOIN evresinde
+  okunan kareler yalnız yük, sonuç ve ERROR hiç.
+- *`run_client`'ın EOF döngüsü (B26).* Kare dışındaki her alım
+  `continue` ediyordu: TCP EOF'undan (ya da okuyucunun reddettiği
+  kareden) sonra her alım anında dönüyor, döngü bir sonraki girdi yazımı
+  hata verene dek (bot bir şey göndermiyorsa son tarihe dek) boş
+  dönüyor ve ölü sokete yazılan hamleleri `moves`/`bytes_out`'a
+  sayıyordu. Artık akışın ölümü oturumu bitirir (`recv_wire` → `Dead`);
+  sessiz pencere ve rUDP soket hatası (rUDP'nin bildirebildiği tek şey)
+  yine döner.
+- *TLS bağlayıcı (B27).* `--tls-ca` PEM'i koşu başında BİR kez okunup
+  ayrıştırılır; `TlsOpts` bağlayıcıyı taşır (içi `Arc`), her istemci
+  onun klonunu alır — her bağlantı (churn'ün her yeniden bağlanması
+  dahil) aynı rustls istemci yapılandırmasını paylaşır. Sunucu adı
+  dönüşümü bağlantı başına kaldı (ucuz; geçersiz ad bağlantı hatası
+  olarak raporlanmaya devam eder).
+
+**RESULT'ta oynayan alanlar.** Churn modunda `client_out_bps` ve
+`client_in_bps` (iki taşımada). Düz modda (`run_client`): yalnız
+sunucunun koşu ORTASINDA kapattığı oturumlarda (write-stall, cap,
+bütçe, `--idle-timeout-secs` …) `moves` ve `client_out_bps` — ölü
+sokete yazılan hamleler artık sayılmıyor; normal bir koşuda sunucu
+istemcilerden sonra durduğu için hiçbir alan oynamaz. Ölçüm (release,
+aynı makine, ÖNCE iki koşu / SONRA iki koşu; 32 çekirdek, yük ~8):
+
+| Senaryo | Alan | önce (1 / 2) | sonra (1 / 2) | |
+|---|---|---|---|---|
+| `200 --duration 10 --write-stall-secs 0` | — | | | yalnız koşudan koşuya gürültü (`snap_total`, `client_in_bps` ±%0,5, adım süreleri …); hiçbir alan önce/sonra ayrışmıyor |
+| `100 --duration 10 --write-stall-secs 0 --churn-secs 2 --disconnect-grace-secs 5` (TCP) | `client_out_bps` | 6 548 / 6 548 | 8 893 / 8 893 | **oynadı** (+%36: JOIN'ler, AUTH'un gerçek boyu, girdi başına +3 bayt) |
+| aynı | `client_in_bps` | 1 931 736 / 2 099 472 | 1 851 490 / 1 970 829 | beklenen kayma kare başına +4 bayt (~+%0,6) — koşudan koşuya gürültünün (±%8) altında |
+| aynı, `--transport udp` | `client_out_bps` | 6 502 / 6 416 | 7 014 / 6 861 | **oynadı** (+%7–8: JOIN'ler ve yeniden denemeleri, AUTH'un gerçek boyu); JOIN yeniden deneme sayısı koşuya bağlı |
+| aynı | `client_in_bps` | 2 484 321 / 2 439 523 | 2 497 147 / 2 437 416 | kare başına +1 bayt (RAW) — gürültü içinde |
+
+Diğer bütün alanlar önce/sonra aynı ya da yalnız iki "önce" koşusu
+arasında da oynayan gürültü (churn'ün `resumed`/`fresh_joins`/
+`resume_rejected_stale`'i, adım süreleri, `snap_total`).
+
+*Testler.* `churn::tests::churn_bytes_are_the_frames_on_the_wire`
+(betikli TCP eşi: reddedilen ilk JOIN, araya giren kare, oyun kareleri;
+istemcinin sayımı eşin okuyup yazdığı baytla birebir — eski kodda
+141 ≠ 198 ile düşer; beş kuralın her birinin tek tek mutasyonu da
+düşürür); `client::view::run::tests::a_stream_eof_ends_the_client`
+(JOIN sonrası kapanan eş: istemci EOF'ta biter — eski kod 6 sn sonra,
+iki hamle yazıp); `client::tests::the_ca_is_read_once_per_run` (PEM
+yüklendikten sonra silinir, iki el sıkışma yine tamamlanır — eski kod
+"cannot read --tls-ca" ile paniklıyor).
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
