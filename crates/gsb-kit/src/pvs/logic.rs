@@ -234,6 +234,12 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         n
     }
 
+    /// The game's own counters (F9), forwarded
+    /// ([`Game::counters`](crate::game::Game::counters)).
+    fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        self.game.counters(world, out);
+    }
+
     /// The game's request handlers
     /// ([`Game::handle_request`]), resolved
     /// against this room's player→entity table. Every kit room forwards:

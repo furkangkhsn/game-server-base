@@ -1,5 +1,6 @@
-//! Requests reach the game through every kit room: whether a room
-//! answers game RPCs does not depend on its visibility strategy.
+//! Requests and counters reach the game through every kit room: whether
+//! a room answers game RPCs, or reports the game's own counters, does
+//! not depend on its visibility strategy.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,6 +8,7 @@ use std::time::Duration;
 use bevy_ecs::prelude::{Entity, World};
 use bytes::Bytes;
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
+use gsb_core::metrics::{LogicCounter, LogicCounters};
 use gsb_core::room::{Action, GameLogic, TickCtx};
 use gsb_core::rpc::{RequestDecision, RpcRequest};
 
@@ -15,7 +17,7 @@ use crate::common::InputSeq;
 use crate::game::{Game, ShardGame, TeamGame};
 use crate::pvs::SectorRoom;
 use crate::room::OpenRoom;
-use crate::sharded::{ShardedRoom, ShardedSpatialRoom};
+use crate::sharded::{ShardedRoom, ShardedSpatialRoom, ShardedTeamRoom};
 use crate::space::{ConvexSectors2, Grid2, GridPartition2, Sector, VisionGrid2};
 use crate::team::{Team, TeamRoom};
 use crate::testing::{Fixture, Position};
@@ -78,7 +80,13 @@ impl Game for Recording {
         self.asked.push(req.op);
         Some(RequestDecision::Reply(Bytes::from_static(b"answered")))
     }
+    fn counters(&self, _world: &World, out: &mut LogicCounters) {
+        out.put(&ASKED, 40 + self.asked.len() as u64);
+    }
 }
+
+/// The test game's one counter.
+const ASKED: LogicCounter = LogicCounter::sum("asked", "Requests the game was asked.");
 
 impl TeamGame for Recording {
     fn team_of(&mut self, _world: &World, _conn: ConnectionId, _entity: Entity) -> Team {
@@ -168,5 +176,55 @@ fn every_kit_room_forwards_requests_to_the_game() {
         "sharded spatial",
         ShardedSpatialRoom::with_shard(shard(), Grid2::new(20.0)),
         |r| r.game(),
+    );
+}
+
+/// `room` reports exactly the game's counter, as the game put it.
+fn assert_counts<R: GameLogic<World>>(name: &str, room: R) {
+    let mut out = LogicCounters::new();
+    room.logic_counters(&World::new(), &mut out);
+    assert_eq!(out.get("asked"), Some(40), "{name}: the game's counter");
+    assert_eq!(out.slots().len(), 1, "{name}: and nothing of the room's");
+}
+
+/// Every kit room — open, AOI, team fog, PVS, sharded, sharded ×
+/// spatial, sharded × team — forwards `Game::counters` (F9); a sharded
+/// room without crystallization adds none of its own.
+#[test]
+fn every_kit_room_forwards_counters_to_the_game() {
+    assert_counts("open", OpenRoom::with_game(Recording::new()));
+    assert_counts(
+        "aoi",
+        AoiRoom::with_game(Recording::new(), Grid2::new(20.0)),
+    );
+    assert_counts(
+        "team",
+        TeamRoom::with_game(Recording::new(), VisionGrid2::<Position>::new(25.0)),
+    );
+    let one_sector = ConvexSectors2::<Position>::new(
+        vec![vec![
+            (-50.0, -50.0),
+            (50.0, -50.0),
+            (50.0, 50.0),
+            (-50.0, 50.0),
+        ]],
+        vec![vec![Sector(0)]],
+    );
+    assert_counts("pvs", SectorRoom::with_game(Recording::new(), one_sector));
+    let shard = || {
+        ShardedRoom::with_game(
+            Recording::new(),
+            GridPartition2::<Position>::new(1, 50.0),
+            0,
+        )
+    };
+    assert_counts("sharded", shard());
+    assert_counts(
+        "sharded spatial",
+        ShardedSpatialRoom::with_shard(shard(), Grid2::new(20.0)),
+    );
+    assert_counts(
+        "sharded team",
+        ShardedTeamRoom::with_shard(shard(), VisionGrid2::<Position>::new(25.0), |_| None),
     );
 }

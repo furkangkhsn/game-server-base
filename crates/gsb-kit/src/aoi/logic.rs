@@ -114,6 +114,12 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         self.pieces.take_encoded()
     }
 
+    /// The game's own counters (F9), forwarded
+    /// ([`Game::counters`](crate::game::Game::counters)).
+    fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        self.game.counters(world, out);
+    }
+
     /// The per-connection private frame: a one-shot FULL view for a
     /// connection that (re)joined a group or crossed into a new cell's
     /// group (it has no baseline for the new view — a delta has nothing

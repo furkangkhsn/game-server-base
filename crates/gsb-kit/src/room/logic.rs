@@ -107,6 +107,12 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
         n
     }
 
+    /// The game's own counters (F9), forwarded
+    /// ([`Game::counters`](crate::game::Game::counters)).
+    fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        self.game.counters(world, out);
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         self.on_join_as(world, conn, "")
     }

@@ -111,6 +111,12 @@ where
         self.pieces.take_encoded()
     }
 
+    /// The grid room's counters (its crystallization's and the game's —
+    /// see `ShardedRoom`'s `logic_counters`), forwarded.
+    fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        self.inner.logic_counters(world, out);
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         self.on_join_as(world, conn, "")
     }

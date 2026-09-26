@@ -16,6 +16,7 @@ use std::fmt::Debug;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::rpc::{RequestDecision, RpcRequest};
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
@@ -222,6 +223,19 @@ pub trait Game: Send + 'static {
     ) -> Option<RequestDecision> {
         None
     }
+
+    /// The game's own named counters (BACKLOG F9 — the core's
+    /// `GameLogic::logic_counters`, forwarded by every kit room): put
+    /// each counter the game declares (a `const`
+    /// [`LogicCounter`](gsb_core::metrics::LogicCounter)) at its
+    /// cumulative value — every one, zeros included. Asked once per
+    /// metrics sample, never per tick: count in plain fields (or a world
+    /// resource) during the tick. The operator sees them as
+    /// `logic_<name>=` on the room's `gsb-metric` line and
+    /// `gsb_room_logic_<name>_total` in the exposition; a kit composite
+    /// may put its own next to them (the sharded rooms' `crystal_*`).
+    /// Default: none — the room's metrics are exactly what they were.
+    fn counters(&self, _world: &World, _out: &mut LogicCounters) {}
 }
 
 /// A game the team-fog room can run: team assignment is game policy
