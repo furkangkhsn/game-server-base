@@ -2,10 +2,10 @@
 //! a timer, and report what it saw.
 
 use super::*;
+use gsb_client::session::{self, Credentials};
+use gsb_client::{Conn, Recv, ServerError};
 use gsb_kit::client::PrivateEvent;
-use gsb_protocol::base::{
-    Auth, Error, ErrorCode, JoinRoom, JoinRoomResult, LeaveRoom, LeaveRoomResult,
-};
+use gsb_protocol::base::{ErrorCode, JoinRoomResult, LeaveRoomResult};
 use gsb_protocol::op;
 use prost::Message;
 use std::time::{Duration, Instant};
@@ -83,40 +83,15 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
 
     // AUTH + JOIN (one coalesced write on TCP — the connection actor
     // drains in order; two frames on rUDP — its reliable control band
-    // orders them).
-    let auth_payload = Auth {
-        name: crate::bot::bot_name(id),
-        ticket: vec![],
-        // A reference client states its wire version (DESIGN §5.5).
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
-    let join_payload = JoinRoom { room_id: p.room }.encode_to_vec();
-    match &mut wire {
-        Wire::Tcp { w, .. } => {
-            let mut out = frame(op::base::AUTH_REQ, &auth_payload);
-            out.extend(frame(op::base::JOIN_ROOM_REQ, &join_payload));
-            rep.bytes_out += out.len() as u64;
-            if w.write_all(&out).await.is_err() || w.flush().await.is_err() {
-                return rep;
-            }
-        }
-        Wire::Udp(c) => {
-            rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, auth_payload.len());
-            if c.send_frame(op::base::AUTH_REQ, auth_payload)
-                .await
-                .is_err()
-            {
-                return rep;
-            }
-            rep.bytes_out += wire_in_bytes(op::base::JOIN_ROOM_REQ, join_payload.len());
-            if c.send_frame(op::base::JOIN_ROOM_REQ, join_payload)
-                .await
-                .is_err()
-            {
-                return rep;
-            }
-        }
+    // orders them). The AUTH states the wire version (DESIGN §5.5).
+    let (auth, join) = (
+        session::auth_req(&Credentials::named(crate::bot::bot_name(id))),
+        session::join_req(p.room),
+    );
+    rep.bytes_out += frame_bytes(&wire, auth.op, auth.payload.len());
+    rep.bytes_out += frame_bytes(&wire, join.op, join.payload.len());
+    if wire.send_batch(&[auth, join]).await.is_err() {
+        return rep;
     }
 
     let t_start = Instant::now();
@@ -144,20 +119,9 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 next_seq += 1;
                 sent_at.push(now);
                 rep.moves += 1;
-                match &mut wire {
-                    Wire::Tcp { w, .. } => {
-                        let f = frame(input_op, &payload);
-                        rep.bytes_out += f.len() as u64;
-                        if w.write_all(&f).await.is_err() || w.flush().await.is_err() {
-                            break; // peer gone
-                        }
-                    }
-                    Wire::Udp(c) => {
-                        rep.bytes_out += wire_in_bytes(input_op, payload.len());
-                        if c.send_frame(input_op, payload).await.is_err() {
-                            break; // session gone (the writer gave up)
-                        }
-                    }
+                rep.bytes_out += frame_bytes(&wire, input_op, payload.len());
+                if wire.send(input_op, &payload).await.is_err() {
+                    break; // peer gone (rUDP: the writer gave up)
                 }
             }
         }
@@ -173,28 +137,14 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             .deadline
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(250));
-        // TCP: None from read_frame = EOF (the loop breaks below); rUDP:
-        // None = "quiet window" (no EOF exists — the deadline ends the
-        // run instead).
-        let got = match &mut wire {
-            Wire::Tcp { r, .. } => tokio::time::timeout(timeout, read_frame(r.as_mut()))
-                .await
-                .ok()
-                .flatten(),
-            Wire::Udp(c) => c
-                .recv_frame(timeout)
-                .await
-                .ok()
-                .flatten()
-                .map(|f| (f.op, f.payload.to_vec())),
+        // Anything but a frame (a quiet window, TCP's EOF or refused
+        // frame, an rUDP socket error) loops: the deadline, or a failed
+        // send, ends the run.
+        let Ok(Recv::Frame(f)) = wire.recv(timeout).await else {
+            continue;
         };
-        let Some((op, payload)) = got else {
-            continue; // timeout: loop
-        };
-        rep.bytes_in += match &wire {
-            Wire::Tcp { .. } => (4 + 2 + payload.len()) as u64,
-            Wire::Udp(_) => wire_in_bytes(op, payload.len()),
-        };
+        let (op, payload) = (f.op, f.payload);
+        rep.bytes_in += frame_bytes(&wire, op, payload.len());
         if let Some(c) = &mut capture {
             if op == snapshot_op {
                 c.frame(crate::capture::Kind::Snapshot, &payload);
@@ -268,11 +218,11 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 Err(_) => rep.errors += 1,
             },
             op::base::ERROR => {
-                let e: Error = Error::decode(&payload[..]).unwrap_or_else(|_| Error::default());
-                // Classified through the GENERATED enum (prost's
-                // `code()` accessor), so this consumer and the server
-                // cannot drift apart by hand-copied numbers.
-                match e.code() {
+                // Classified through the GENERATED enum (an unknown code
+                // reads as `Unspecified`), so this consumer and the
+                // server cannot drift apart by hand-copied numbers.
+                let e = ServerError::decode_lossy(&payload);
+                match e.code {
                     // The guardrails, observed from the client side:
                     // RoomFull = gentle reject, the connection stays;
                     // ServerClosed = the server closed us — either the
@@ -314,17 +264,19 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // spin the high-water mark).
         let (flood_op, payload) = p.bot.flood_input();
         match &mut wire {
-            Wire::Tcp { w, .. } => {
-                let f = frame(flood_op, &payload);
+            // One encoded frame, written unflushed as fast as the socket
+            // takes it.
+            Conn::Stream { tx, .. } => {
+                let f = gsb_client::frame::encode(flood_op, &payload);
                 while Instant::now() < p.deadline {
-                    if w.write_all(&f).await.is_err() {
+                    if tx.get_mut().write_all(&f).await.is_err() {
                         break; // peer gone
                     }
                     rep.moves += 1;
                     rep.bytes_out += f.len() as u64;
                 }
             }
-            Wire::Udp(c) => {
+            Conn::Udp(c) => {
                 // rUDP: the client is ONE task (read and write share the
                 // socket), so the flood interleaves NON-BLOCKING
                 // read-drains; the flood frames travel the lossy game
@@ -347,45 +299,20 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // server never counts it. (rUDP: the leave is a control-band frame,
     // so it is retransmitted until the server ACKs it; there is no EOF
     // to race — the 500 ms window ends the wait.)
-    let leave_payload = LeaveRoom {}.encode_to_vec();
-    let leave_sent = match &mut wire {
-        Wire::Tcp { w, .. } => {
-            let f = frame(op::base::LEAVE_ROOM_REQ, &leave_payload);
-            rep.bytes_out += f.len() as u64;
-            w.write_all(&f).await.is_ok() && w.flush().await.is_ok()
-        }
-        Wire::Udp(c) => {
-            rep.bytes_out += wire_in_bytes(op::base::LEAVE_ROOM_REQ, leave_payload.len());
-            c.send_frame(op::base::LEAVE_ROOM_REQ, leave_payload)
-                .await
-                .is_ok()
-        }
-    };
-    if leave_sent {
+    // (Not `session::leave`: this wait counts every frame's bytes and
+    // reads past an ERROR, as the measurement always has.)
+    let leave = session::leave_req();
+    rep.bytes_out += frame_bytes(&wire, leave.op, leave.payload.len());
+    if wire.send(leave.op, &leave.payload).await.is_ok() {
         let leave_deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < leave_deadline {
             let timeout = leave_deadline.saturating_duration_since(Instant::now());
-            let got = match &mut wire {
-                Wire::Tcp { r, .. } => tokio::time::timeout(timeout, read_frame(r.as_mut()))
-                    .await
-                    .ok()
-                    .flatten(),
-                Wire::Udp(c) => c
-                    .recv_frame(timeout)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|f| (f.op, f.payload.to_vec())),
-            };
-            let Some((op, payload)) = got else {
+            let Ok(Recv::Frame(f)) = wire.recv(timeout).await else {
                 break;
             };
-            rep.bytes_in += match &wire {
-                Wire::Tcp { .. } => (4 + 2 + payload.len()) as u64,
-                Wire::Udp(_) => wire_in_bytes(op, payload.len()),
-            };
-            if op == op::base::LEAVE_ROOM_RESULT {
-                let _ = LeaveRoomResult::decode(&payload[..]);
+            rep.bytes_in += frame_bytes(&wire, f.op, f.payload.len());
+            if f.op == op::base::LEAVE_ROOM_RESULT {
+                let _ = LeaveRoomResult::decode(&f.payload[..]);
                 rep.left = true;
                 break;
             }
@@ -395,7 +322,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         c.finish().await;
     }
     // The client's rUDP transport statistics (all zero on TCP).
-    if let Wire::Udp(c) = &wire {
+    if let Some(c) = wire.udp_client() {
         rep.retrans_out = c.stats.retrans_out;
         rep.dup_in = c.stats.dup_in;
         rep.oob_dropped = c.stats.oob_dropped;

@@ -55,7 +55,6 @@ mod run;
 mod serve;
 mod server;
 mod stats;
-mod wire;
 
 use orchestrate::*;
 use run::*;

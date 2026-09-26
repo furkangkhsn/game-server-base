@@ -868,6 +868,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "bytes",
+ "gsb-client",
  "gsb-core",
  "gsb-demo",
  "gsb-demo-arena",

@@ -10,18 +10,22 @@
 //! (default `localhost`). Without `--tls-ca` the client is plaintext,
 //! exactly as before this turn.
 //!
+//! The connection, the framing and the AUTH/JOIN frames are
+//! `gsb_client`'s (the client building block); the world view is the
+//! kit's reference client (`gsb_kit::client`); what is left here is the
+//! demo's own part — its decode seam and its mover.
+//!
 //! The client stays in the spirit of the architecture: no multiplexing —
 //! the mover task owns the write half and the reader loop owns the read
 //! half, each with exactly one thing to wait on.
 
 use std::time::Duration;
 
+use gsb_client::session::{self, Credentials};
+use gsb_client::{Conn, ServerError};
 use gsb_kit::client::{Apply, ClientDecoder, ClientError, ClientView, PrivateEvent, Snapshot};
-use gsb_protocol::base::{
-    Auth, AuthResult, Error, ErrorCode, HeartbeatAck, JoinRoom, JoinRoomResult, LeaveRoomResult,
-};
+use gsb_protocol::base::{AuthResult, ErrorCode, HeartbeatAck, JoinRoomResult, LeaveRoomResult};
 use prost::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// The demo's decode seam for the kit's reference client: a record is
@@ -53,33 +57,6 @@ impl ClientDecoder for DemoDecoder {
     }
 }
 
-fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
-    let body = 2 + payload.len();
-    let mut out = Vec::with_capacity(4 + body);
-    out.extend_from_slice(&(body as u32).to_le_bytes());
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
-/// Length-prefixed frame read over ANY byte source (TCP half or rustls
-/// half — both are plain `AsyncRead` to this function).
-async fn read_frame(r: &mut (dyn AsyncRead + Unpin + Send)) -> Option<(u16, Vec<u8>)> {
-    let mut len_buf = [0u8; 4];
-    r.read_exact(&mut len_buf).await.ok()?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 || len > 4 * 1024 * 1024 {
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body).await.ok()?;
-    if body.len() < 2 {
-        return None;
-    }
-    let op = u16::from_le_bytes([body[0], body[1]]);
-    Some((op, body[2..].to_vec()))
-}
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -105,80 +82,40 @@ async fn main() {
         }
     }
 
-    // The connection's two halves behind type-erased trait objects: the
-    // framing and everything below cannot tell TCP from TLS (the same seam
-    // the server's Endpoint provides on its side).
-    let (r, w): (
-        Box<dyn AsyncRead + Unpin + Send>,
-        Box<dyn AsyncWrite + Unpin + Send>,
-    ) = if let Some(ca_path) = &tls_ca {
-        let ca_certs = load_certs(ca_path).unwrap_or_else(|e| panic!("{e}"));
-        let mut roots = rustls::RootCertStore::empty();
-        for cert in ca_certs {
-            roots.add(cert).expect("--tls-ca PEM is not a certificate");
-        }
-        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-        let config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .expect("TLS protocol versions")
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
-        let tcp = TcpStream::connect(&addr)
-            .await
-            .unwrap_or_else(|e| panic!("cannot connect to {addr}: {e} (is the server running?)"));
-        tcp.set_nodelay(true).ok();
+    // One `Conn` whatever the door: the framing and everything below
+    // cannot tell TCP from TLS (the same seam the server's Endpoint
+    // provides on its side).
+    let tcp = TcpStream::connect(&addr)
+        .await
+        .unwrap_or_else(|e| panic!("cannot connect to {addr}: {e} (is the server running?)"));
+    let mut conn: Conn = if let Some(ca_path) = &tls_ca {
+        let connector =
+            gsb_client::tls::connector(load_certs(ca_path).unwrap_or_else(|e| panic!("{e}")))
+                .unwrap_or_else(|e| panic!("--tls-ca PEM is not a certificate: {e}"));
         let dns_name: rustls::pki_types::ServerName<'static> = tls_server_name
             .clone()
             .try_into()
             .unwrap_or_else(|_| panic!("--tls-server-name `{tls_server_name}` is not a DNS name"));
-        let tls = connector
-            .connect(dns_name, tcp)
+        let conn = gsb_client::tls::connect(tcp, &connector, dns_name)
             .await
             .unwrap_or_else(|e| panic!("TLS handshake with {addr} failed: {e}"));
         println!("connected to {addr} over TLS (ca={ca_path}, server-name={tls_server_name})");
-        let (tr, tw) = tokio::io::split(tls);
-        (Box::new(tr), Box::new(tw))
+        conn
     } else {
-        let stream = TcpStream::connect(&addr).await.unwrap_or_else(|e| {
-            panic!("cannot connect to {addr}: {e} (is the server running?)");
-        });
-        stream.set_nodelay(true).ok();
         println!("connected to {addr}");
-        let (tr, tw) = stream.into_split();
-        (
-            Box::new(tr) as Box<dyn AsyncRead + Unpin + Send>,
-            Box::new(tw),
-        )
+        gsb_client::connect::tcp_stream(tcp)
     };
-    let mut r = r;
-    let mut w = w;
 
     // AUTH + JOIN in one write: the connection actor drains its mailbox in
-    // order, so the join is processed after the auth.
-    let auth = Auth {
-        name: "client-1".into(),
-        ticket: vec![],
-        // A client states the wire version it was built against; the
-        // server refuses a mismatch with ERROR_CODE_PROTOCOL_VERSION
-        // (DESIGN §5.5). Sending 0 would be accepted too, as a legacy
-        // pre-versioning client — a reference client does not.
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
+    // order, so the join is processed after the auth. The AUTH states the
+    // wire version this client was built against; the server refuses a
+    // mismatch with ERROR_CODE_PROTOCOL_VERSION (DESIGN §5.5).
+    session::hello(&mut conn, &Credentials::named("client-1"), 1)
+        .await
+        .unwrap();
+    let Ok((mut r, mut w)) = conn.into_split() else {
+        unreachable!("a stream door")
     };
-    let join = JoinRoom { room_id: 1 };
-    w.write_all(&frame(
-        gsb_protocol::op::base::AUTH_REQ,
-        &auth.encode_to_vec(),
-    ))
-    .await
-    .unwrap();
-    w.write_all(&frame(
-        gsb_protocol::op::base::JOIN_ROOM_REQ,
-        &join.encode_to_vec(),
-    ))
-    .await
-    .unwrap();
-    w.flush().await.unwrap();
 
     // The client's world view: the kit's reference client
     // (`gsb_kit::client`, the client rules of `kit.proto`) — a full
@@ -204,10 +141,9 @@ async fn main() {
                 y: (angle.sin() * 40.0) as i32,
                 seq: i as u64,
             };
-            if w.write_all(&frame(gsb_demo::op::MOVE_TO, &msg.encode_to_vec()))
+            if w.send(gsb_demo::op::MOVE_TO, &msg.encode_to_vec())
                 .await
                 .is_err()
-                || w.flush().await.is_err()
             {
                 break;
             }
@@ -220,11 +156,13 @@ async fn main() {
         if std::time::Instant::now() > deadline {
             break;
         }
-        // One wait, no multiplexing: a bounded read attempt.
-        let result = tokio::time::timeout(Duration::from_millis(200), read_frame(r.as_mut())).await;
-        let Some((op, payload)) = result.ok().flatten() else {
+        // One wait, no multiplexing: a bounded read attempt (cancel-safe:
+        // a frame half-read at the window's edge is finished next time).
+        let result = tokio::time::timeout(Duration::from_millis(200), r.next()).await;
+        let Ok(Ok(Some(frame))) = result else {
             continue;
         };
+        let (op, payload) = (frame.op, frame.payload);
         match op {
             gsb_protocol::op::base::AUTH_RESULT => {
                 let m: AuthResult = AuthResult::decode(&payload[..]).unwrap();
@@ -243,18 +181,18 @@ async fn main() {
                 println!("HEARTBEAT_ACK tick={}", m.tick);
             }
             gsb_protocol::op::base::ERROR => {
-                let m: Error = Error::decode(&payload[..]).unwrap();
+                let m = ServerError::decode(&payload).unwrap();
                 // Both halves, as base.proto's forward-compatibility rule
                 // asks of a client: the RAW number (preserved by the open
                 // proto3 enum, so a future code is still reportable) and
                 // the class this build knows it as. A code this client
                 // does not know reads back as UNSPECIFIED and must be
                 // handled like ERROR_CODE_OTHER.
-                let class = match m.code() {
+                let class = match m.code {
                     ErrorCode::Unspecified => "unknown to this client; treat as OTHER",
                     known => known.as_str_name(),
                 };
-                println!("ERROR code={} ({}) message={}", m.code, class, m.message);
+                println!("ERROR code={} ({}) message={}", m.raw, class, m.message);
             }
             gsb_demo::op::WORLD_SNAPSHOT => match view.apply_snapshot(&payload) {
                 Ok(Snapshot { sequence, apply }) => match apply {
@@ -309,7 +247,6 @@ async fn main() {
 /// RootCertStore takes them one by one).
 fn load_certs(path: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
     let pem = std::fs::read_to_string(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
-    rustls_pemfile::certs(&mut pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
+    gsb_client::tls::certs_from_pem(&pem)
         .map_err(|e| format!("malformed certificate PEM in `{path}`: {e}"))
 }

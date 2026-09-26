@@ -49,6 +49,10 @@ gsb-core = { workspace = true }
 gsb-ecs = { workspace = true }
 gsb-net = { workspace = true }
 gsb-protocol = { workspace = true }
+# The client building block: the load generator's and the example
+# client's connection, framing and session steps (the server library
+# itself never uses it).
+gsb-client = { workspace = true }
 # The 2D demo, hosted by the `game-demo` feature (docs/GAME-MODULE.md
 # §4.2). Without any game feature the library still builds: the
 # structural proof that the server core names no game.

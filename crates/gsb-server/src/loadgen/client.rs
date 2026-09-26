@@ -4,11 +4,9 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
+use gsb_client::{Conn, Recv};
 use gsb_protocol::op;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-
-use crate::wire::*;
-use gsb_net::udp::UdpClient;
 
 mod stall;
 use stall::tcp_connect;
@@ -123,7 +121,7 @@ pub(crate) struct ClientParams {
     /// bot's flood input in a tight loop until the deadline — the input-flood behaviour
     /// probe for the per-connection pull budget and the drop attribution.
     pub(crate) flood: bool,
-    /// The client's transport (TCP or rUDP; see the `Wire` below).
+    /// The client's transport (TCP or rUDP; see `connect_wire`).
     pub(crate) kind: gsb_server::TransportKind,
     /// `--capture`: this client's capture file and the game's name
     /// (`None` = not captured — every client of a run without the flag).
@@ -137,121 +135,83 @@ pub(crate) struct ClientParams {
 pub(crate) fn tls_connector(ca_path: &str) -> tokio_rustls::TlsConnector {
     let pem = std::fs::read_to_string(ca_path)
         .unwrap_or_else(|e| panic!("cannot read --tls-ca `{ca_path}`: {e}"));
-    let certs = rustls_pemfile::certs(&mut pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
+    let certs = gsb_client::tls::certs_from_pem(&pem)
         .unwrap_or_else(|e| panic!("malformed certificate PEM in `{ca_path}`: {e}"));
-    let mut roots = rustls::RootCertStore::empty();
-    for c in certs {
-        roots.add(c).expect("--tls-ca PEM is not a certificate");
-    }
-    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("TLS protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tokio_rustls::TlsConnector::from(std::sync::Arc::new(config))
+    gsb_client::tls::connector(certs)
+        .unwrap_or_else(|e| panic!("--tls-ca PEM is not a certificate: {e}"))
 }
 
 /// Connect one wire of the given kind (the transport-specific half of a
 /// client session's birth; shared by the plain and the churn client —
-/// TCP gets `nodelay` + a split into boxed halves so plaintext and TLS
-/// share one wire shape, rUDP runs its cookie handshake). With TLS
-/// material, `connect_ms` includes the rustls handshake.
+/// TCP gets `nodelay` and plaintext and TLS share one wire shape
+/// (`gsb_client::Conn::Stream`), rUDP runs its cookie handshake). With
+/// TLS material, `connect_ms` includes the rustls handshake.
 pub(crate) async fn connect_wire(
     kind: gsb_server::TransportKind,
     addr: SocketAddr,
     tls: &Option<TlsOpts>,
     rcvbuf: Option<u32>,
-) -> std::io::Result<Wire> {
+) -> std::io::Result<Conn> {
     Ok(match kind {
-        gsb_server::TransportKind::Udp => Wire::Udp(Box::new(UdpClient::connect(addr).await?)),
-        gsb_server::TransportKind::Tcp => match tls {
-            None => {
-                let stream = tcp_connect(addr, rcvbuf).await?;
-                stream.set_nodelay(true).ok();
-                let (r, w) = tokio::io::split(stream);
-                Wire::Tcp {
-                    r: Box::new(r),
-                    w: Box::new(w),
+        gsb_server::TransportKind::Udp => gsb_client::connect::udp(addr).await?,
+        gsb_server::TransportKind::Tcp => {
+            let stream = tcp_connect(addr, rcvbuf).await?;
+            match tls {
+                None => gsb_client::connect::tcp_stream(stream),
+                Some(opts) => {
+                    let connector = tls_connector(&opts.ca_path);
+                    let dns: rustls::pki_types::ServerName<'static> =
+                        opts.server_name.clone().try_into().map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                format!(
+                                    "--tls-server-name `{}` is not a DNS name",
+                                    opts.server_name
+                                ),
+                            )
+                        })?;
+                    // The handshake happens HERE: connect_ms covers it (the
+                    // same convention as the rUDP cookie handshake above).
+                    gsb_client::tls::connect(stream, &connector, dns).await?
                 }
             }
-            Some(opts) => {
-                let stream = tcp_connect(addr, rcvbuf).await?;
-                stream.set_nodelay(true).ok();
-                let connector = tls_connector(&opts.ca_path);
-                let dns: rustls::pki_types::ServerName<'static> =
-                    opts.server_name.clone().try_into().map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!("--tls-server-name `{}` is not a DNS name", opts.server_name),
-                        )
-                    })?;
-                // The handshake happens HERE: connect_ms covers it (the
-                // same convention as the rUDP cookie handshake above).
-                let tls_stream = connector.connect(dns, stream).await?;
-                let (r, w) = tokio::io::split(tls_stream);
-                Wire::Tcp {
-                    r: Box::new(r),
-                    w: Box::new(w),
-                }
-            }
-        },
+        }
     })
 }
 
 /// What one bounded receive on the wire found. TCP distinguishes death
-/// (EOF) from quiet; rUDP has no EOF, so "quiet" is all it can report —
-/// the deadline ends those runs.
+/// (EOF, or a frame the reader refuses) from quiet; rUDP has no EOF, so
+/// "quiet" is all it can report — the deadline ends those runs.
 pub(crate) enum Got {
-    Frame(u16, Vec<u8>),
+    Frame(u16, Bytes),
     Quiet,
     Dead,
 }
 
-pub(crate) async fn recv_wire(wire: &mut Wire, timeout: Duration) -> Got {
-    match wire {
-        Wire::Tcp { r, .. } => {
-            match tokio::time::timeout(timeout, read_frame(r.as_mut())).await {
-                Ok(Some((op, payload))) => Got::Frame(op, payload),
-                Ok(None) => Got::Dead, // EOF / bad frame
-                Err(_) => Got::Quiet,
-            }
-        }
-        Wire::Udp(c) => match c.recv_frame(timeout).await {
-            Ok(Some(f)) => Got::Frame(f.op, f.payload.to_vec()),
-            _ => Got::Quiet,
-        },
+pub(crate) async fn recv_wire(wire: &mut Conn, timeout: Duration) -> Got {
+    match wire.recv(timeout).await {
+        Ok(Recv::Frame(f)) => Got::Frame(f.op, f.payload),
+        Ok(Recv::Quiet) => Got::Quiet,
+        Ok(Recv::Closed) => Got::Dead,
+        // rUDP: a socket error reads as a quiet window (no EOF exists).
+        Err(_) if wire.is_udp() => Got::Quiet,
+        Err(_) => Got::Dead,
     }
 }
 
-pub(crate) async fn send_wire(wire: &mut Wire, op: u16, payload: Vec<u8>) -> std::io::Result<()> {
-    match wire {
-        Wire::Tcp { w, .. } => {
-            let f = frame(op, &payload);
-            w.write_all(&f).await?;
-            w.flush().await
-        }
-        Wire::Udp(c) => c.send_frame(op, payload).await,
-    }
+pub(crate) async fn send_wire(wire: &mut Conn, op: u16, payload: Vec<u8>) -> std::io::Result<()> {
+    wire.send(op, &payload).await
 }
 
-/// The wire to the server (the only place TCP and rUDP diverge inside
-/// the client loop — see `run_client`).
-pub(crate) enum Wire {
-    /// Length-prefixed frames over a per-connection socket, split: the
-    /// main loop owns the read half, the flood path the write half.
-    /// Type-erased halves so plaintext TCP and TLS-over-TCP share this
-    /// one variant (the framing below cannot tell them apart).
-    Tcp {
-        r: Box<dyn AsyncRead + Unpin + Send>,
-        w: Box<dyn AsyncWrite + Unpin + Send>,
-    },
-    /// One shared socket in one task: read and write interleave (UDP has
-    /// no connection to split). Boxed: `UdpClient` carries a 2 KB read
-    /// buffer + queues (keeps the enum small — clippy's
-    /// `large_enum_variant`).
-    Udp(Box<UdpClient>),
+/// The bytes one frame costs on this wire (the client-side byte
+/// accounting: the length-prefixed frame on a stream, the datagram on
+/// rUDP — see [`wire_in_bytes`]).
+pub(crate) fn frame_bytes(wire: &Conn, op: u16, payload_len: usize) -> u64 {
+    if wire.is_udp() {
+        wire_in_bytes(op, payload_len)
+    } else {
+        gsb_client::frame::wire_len(payload_len) as u64
+    }
 }
 
 /// The rUDP datagram size of one frame (client-side byte accounting

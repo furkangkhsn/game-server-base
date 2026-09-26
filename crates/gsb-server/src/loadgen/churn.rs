@@ -3,7 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, Error, ErrorCode, JoinRoom, JoinRoomResult};
+use gsb_client::session::{self, Credentials};
+use gsb_client::{Conn, ServerError};
+use gsb_protocol::base::{ErrorCode, JoinRoomResult};
 use gsb_protocol::op;
 use prost::Message;
 
@@ -18,16 +20,13 @@ use crate::client::*;
 /// failure; so do we, with a bounded budget.
 pub(crate) async fn churn_join(
     id: u64,
-    wire: &mut Wire,
+    wire: &mut Conn,
     room: u64,
     rep: &mut ClientReport,
 ) -> Option<u64> {
     for _attempt in 0..5u32 {
-        let join_payload = JoinRoom { room_id: room }.encode_to_vec();
-        if send_wire(wire, op::base::JOIN_ROOM_REQ, join_payload)
-            .await
-            .is_err()
-        {
+        let join = session::join_req(room);
+        if wire.send(join.op, &join.payload).await.is_err() {
             return None;
         }
         let mut retriable = false;
@@ -38,14 +37,13 @@ pub(crate) async fn churn_join(
                     return JoinRoomResult::decode(&payload[..]).ok().map(|m| m.entity);
                 }
                 Got::Frame(op::base::ERROR, payload) => {
-                    let e = Error::decode(&payload[..]).unwrap_or_default();
                     // Classified through the GENERATED enum, not
-                    // hand-copied numbers: `code()` is prost's accessor
-                    // for the open enum field. The `_` arm implements the
+                    // hand-copied numbers (an unknown code reads as
+                    // `Unspecified`). The `_` arm implements the
                     // forward-compatibility rule from `base.proto` — an
                     // unknown or unspecified code counts as a plain
                     // error, never as one of the known decisions.
-                    match e.code() {
+                    match ServerError::decode_lossy(&payload).code {
                         // The gentle stale-resume reject: retry with the
                         // same connection's next epoch.
                         ErrorCode::RoomOpFailed => {
@@ -120,7 +118,7 @@ pub(crate) async fn run_churn_client(
     };
     // ONE identity for every session of this client (the resume key):
     // this is what makes the reconnects RESUMES instead of fresh joins.
-    let name = crate::bot::bot_name(id);
+    let creds = Credentials::named(crate::bot::bot_name(id));
     // The wire id of the previous session (0 before the first join): the
     // continuity check that classifies each join as resume / fresh.
     let mut prev_entity: u64 = 0;
@@ -146,18 +144,10 @@ pub(crate) async fn run_churn_client(
         rep.connected = true;
         rep.connect_ms = t0.elapsed().as_millis();
 
-        // -- auth + join (coalesced write on TCP; two frames on rUDP) ──
-        let auth_payload = Auth {
-            name: name.clone(),
-            ticket: vec![],
-            // A reference client states its wire version (DESIGN §5.5).
-            protocol_version: gsb_protocol::PROTOCOL_VERSION,
-        }
-        .encode_to_vec();
-        if send_wire(&mut wire, op::base::AUTH_REQ, auth_payload)
-            .await
-            .is_err()
-        {
+        // -- auth, then the join below (its own frame, with retry) ────
+        //    The AUTH states the wire version (DESIGN §5.5).
+        let auth = session::auth_req(&creds);
+        if wire.send(auth.op, &auth.payload).await.is_err() {
             continue;
         }
         rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, 8);
