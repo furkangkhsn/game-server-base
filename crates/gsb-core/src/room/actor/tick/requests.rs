@@ -27,7 +27,7 @@ where
             // A congested connection at its cap is refused before
             // anything else (F14 — see `refuses_congested`).
             if self.refuses_congested(req.conn, req.player) {
-                self.m.requests_rejected_conn_cap += 1;
+                self.m.requests_refused_congested += 1;
                 continue;
             }
             // Duplicate id that is still in flight: reject WITHOUT

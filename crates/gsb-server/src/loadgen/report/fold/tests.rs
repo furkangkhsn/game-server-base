@@ -107,6 +107,7 @@ fn shard(i: usize) -> RoomReport {
         requests_rejected_logic: [4, 0, 0][i],
         requests_rejected_conn_cap: [0, 5, 0][i],
         requests_rejected_room_cap: [0, 0, 6][i],
+        requests_refused_congested: [2, 0, 9][i],
         requests_timed_out: [7, 8, 9][i],
         requests_late: [1, 2, 4][i],
         pending_requests: [3, 5, 7][i],

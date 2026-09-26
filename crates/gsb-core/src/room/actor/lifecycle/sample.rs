@@ -79,6 +79,7 @@ where
             requests_rejected_logic: self.m.requests_rejected_logic,
             requests_rejected_conn_cap: self.m.requests_rejected_conn_cap,
             requests_rejected_room_cap: self.m.requests_rejected_room_cap,
+            requests_refused_congested: self.m.requests_refused_congested,
             requests_timed_out: self.m.requests_timed_out,
             requests_late: self.m.requests_late,
             pending_requests: self.pending_total as u32,

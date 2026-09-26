@@ -108,7 +108,9 @@ pub struct RoomReport {
     pub team_expired: u64,
     /// RPC (see `crate::rpc`), cumulative: room-local answers, delegated
     /// (pending) requests, rejections split by cause (see
-    /// `RoomSample::requests_rejected_malformed`), timeout sweeps, and
+    /// `RoomSample::requests_rejected_malformed`), the congested
+    /// connections' unanswered refusals (see
+    /// `RoomSample::requests_refused_congested`), timeout sweeps, and
     /// late reports dropped by the reconciliation.
     pub requests_local: u64,
     pub requests_external: u64,
@@ -118,6 +120,7 @@ pub struct RoomReport {
     pub requests_rejected_logic: u64,
     pub requests_rejected_conn_cap: u64,
     pub requests_rejected_room_cap: u64,
+    pub requests_refused_congested: u64,
     pub requests_timed_out: u64,
     pub requests_late: u64,
     /// RPC: external requests currently in flight (gauge).

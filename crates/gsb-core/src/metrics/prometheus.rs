@@ -655,6 +655,13 @@ impl MetricReport {
         );
         counters(
             &mut out,
+            "gsb_room_requests_refused_congested_total",
+            "RPC requests refused unanswered on a congested connection (the storm bound), cumulative.",
+            rooms,
+            |r| r.requests_refused_congested,
+        );
+        counters(
+            &mut out,
             "gsb_room_requests_timed_out_total",
             "RPC pending requests swept as timed out, cumulative.",
             rooms,

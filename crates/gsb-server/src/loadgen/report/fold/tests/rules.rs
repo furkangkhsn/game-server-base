@@ -121,6 +121,10 @@ fn folding_shards_applies_one_rule_per_field() {
         f.requests_rejected_room_cap, 6,
         "requests_rejected_room_cap"
     );
+    assert_eq!(
+        f.requests_refused_congested, 11,
+        "requests_refused_congested"
+    );
     assert_eq!(f.requests_timed_out, 24, "requests_timed_out");
     assert_eq!(f.requests_late, 7, "requests_late");
     assert_eq!(

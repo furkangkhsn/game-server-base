@@ -19,7 +19,7 @@ mod logic;
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSMC"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSMD"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -47,6 +47,7 @@ mod logic;
 ///     u64 req_local  u64 req_ext
 ///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
 ///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
+///     u64 req_refused
 ///     u64 req_to  u64 req_late
 ///     u32 req_pending
 ///     u64 metrics_dropped
@@ -119,7 +120,10 @@ mod logic;
 /// then name, fold rule and value per counter (the help line does not
 /// travel — the load generator prints values, not an exposition). The
 /// names are validated on the way in, like everything else here.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D43;
+/// GSMD = the GSMC layout plus each room's `requests_refused_congested`
+/// (the congested connections' unanswered RPC refusals — F15, counted
+/// with `req_rej_conn` before), right after `requests_rejected_room_cap`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D44;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -209,6 +213,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.requests_rejected_logic);
         w.u64(room.requests_rejected_conn_cap);
         w.u64(room.requests_rejected_room_cap);
+        w.u64(room.requests_refused_congested);
         w.u64(room.requests_timed_out);
         w.u64(room.requests_late);
         w.u32(room.pending_requests);
@@ -382,6 +387,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             requests_rejected_logic: r.u64()?,
             requests_rejected_conn_cap: r.u64()?,
             requests_rejected_room_cap: r.u64()?,
+            requests_refused_congested: r.u64()?,
             requests_timed_out: r.u64()?,
             requests_late: r.u64()?,
             pending_requests: r.u32()?,

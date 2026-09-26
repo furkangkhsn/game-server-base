@@ -128,7 +128,7 @@ where
                 // Its answer would be owed too: a congested connection at
                 // its cap is refused here, like at 2c (F14).
                 _ if self.refuses_congested(a.conn, a.player) => {
-                    self.m.requests_rejected_conn_cap += 1;
+                    self.m.requests_refused_congested += 1;
                     false
                 }
                 _ => {

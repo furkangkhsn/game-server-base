@@ -43,8 +43,17 @@ fn a_congested_connection_owes_at_most_its_in_flight_cap() {
         step(&mut a, tick);
         assert_eq!(owed(&a, 1), 2, "step {tick}: nothing more accepted");
     }
-    assert_eq!(a.m.requests_rejected_conn_cap, 3 + 7 * 4);
+    assert_eq!(a.m.requests_refused_congested, 3 + 7 * 4);
+    assert_eq!(
+        a.sample().requests_refused_congested,
+        3 + 7 * 4,
+        "and the sample carries it (F15)"
+    );
     assert_eq!(a.m.requests_rejected_malformed, 0, "refused, not answered");
+    assert_eq!(
+        a.m.requests_rejected_conn_cap, 0,
+        "a refusal is not an answered cap rejection (F15)"
+    );
     assert_eq!(drain(&mut rx), [vec![1]]);
     step(&mut a, 11);
     assert_eq!(drain(&mut rx), [vec![2, 3]]);
@@ -93,6 +102,7 @@ async fn in_flight_requests_count_toward_what_is_owed() {
     step(&mut a, 2); // [3] dropped; 2 in flight
     request(&tx, 1, 4, OP_LOCAL);
     step(&mut a, 3);
-    assert_eq!(a.m.requests_rejected_conn_cap, 1, "4 refused");
+    assert_eq!(a.m.requests_refused_congested, 1, "4 refused");
+    assert_eq!(a.m.requests_rejected_conn_cap, 0);
     assert_eq!(a.queued.get(&ConnectionId(1)).map(Vec::len), Some(1));
 }

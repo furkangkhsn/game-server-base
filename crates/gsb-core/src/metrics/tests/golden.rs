@@ -3,7 +3,9 @@
 //! Prometheus exposition. The expected text was produced by the code
 //! BEFORE the logic-counter seam existed (F9), so this test is the
 //! proof that the seam adds nothing to the output of a logic that does
-//! not use it.
+//! not use it. A core counter added since is in it on purpose, with the
+//! one key and family it added: F15's `req_refused=` /
+//! `gsb_room_requests_refused_congested_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -61,6 +63,7 @@ pub(super) fn golden_report() -> MetricReport {
     a2.snap_bytes = 5_900;
     a2.shipped_bytes = 17_700;
     a2.dropped_frames = 2;
+    a2.requests_refused_congested = 3;
     acc.apply(MetricsEvent::Room(a2));
     let mut b = room_sample(RoomId(7), t1, 15);
     b.effects_applied = 6;

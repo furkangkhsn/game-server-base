@@ -146,6 +146,7 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "req_rej_logic",
         "req_rej_conn",
         "req_rej_room",
+        "req_refused",
         "req_to",
         "req_late",
         "req_pending",

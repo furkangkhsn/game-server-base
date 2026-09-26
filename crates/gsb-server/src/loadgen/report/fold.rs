@@ -186,6 +186,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             requests_rejected_logic,
             requests_rejected_conn_cap,
             requests_rejected_room_cap,
+            requests_refused_congested,
             requests_timed_out,
             requests_late,
             pending_requests,
@@ -265,6 +266,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.requests_rejected_logic += requests_rejected_logic;
         acc.requests_rejected_conn_cap += requests_rejected_conn_cap;
         acc.requests_rejected_room_cap += requests_rejected_room_cap;
+        acc.requests_refused_congested += requests_refused_congested;
         acc.requests_timed_out += requests_timed_out;
         acc.requests_late += requests_late;
         acc.metrics_dropped += metrics_dropped;

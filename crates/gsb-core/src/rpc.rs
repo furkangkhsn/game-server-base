@@ -105,8 +105,9 @@
 //! fewer answers — queued, carried, and in flight together — than
 //! `RoomConfig::max_pending_requests_per_conn`. A request past that is
 //! REFUSED: neither processed nor answered (any answer, a rejection
-//! included, would be one more undelivered answer), counted with the
-//! per-connection cap rejections; nothing was applied, so the client's
+//! included, would be one more undelivered answer), counted on its own
+//! (`requests_refused_congested`, apart from the answered cap
+//! rejections — F15); nothing was applied, so the client's
 //! retry after its own timeout is safe. While congested, what a
 //! connection owes never grows past the larger of the cap and what it
 //! owed when the run of drops began — and that is at most the in-flight

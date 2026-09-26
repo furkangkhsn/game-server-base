@@ -406,7 +406,7 @@ pub(crate) fn print_report(
             private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
             req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
-            req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
+            req_refused={} req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
              detach_expired_ai={} detach_expired_despawn={}{}{}{}{} game={}",
         mode,
@@ -529,6 +529,7 @@ pub(crate) fn print_report(
         room.map(|r| r.requests_rejected_logic).unwrap_or(0),
         room.map(|r| r.requests_rejected_conn_cap).unwrap_or(0),
         room.map(|r| r.requests_rejected_room_cap).unwrap_or(0),
+        room.map(|r| r.requests_refused_congested).unwrap_or(0),
         room.map(|r| r.requests_timed_out).unwrap_or(0),
         room.map(|r| r.requests_late).unwrap_or(0),
         room.map(|r| r.pending_requests).unwrap_or(0),

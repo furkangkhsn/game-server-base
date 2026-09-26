@@ -25,8 +25,17 @@ async fn a_congested_connection_owes_at_most_its_cap_on_the_shard() {
         assert_eq!(a.queued.get(&c).map(Vec::len), Some(1), "step {t}");
         assert_eq!(a.pending.get(&c).map(|d| d.len()), Some(1), "step {t}");
     }
-    assert_eq!(a.m.requests_rejected_conn_cap, 4 * 2);
+    assert_eq!(a.m.requests_refused_congested, 4 * 2);
+    assert_eq!(
+        a.sample().requests_refused_congested,
+        4 * 2,
+        "and the sample carries it (F15)"
+    );
     assert_eq!(a.m.requests_rejected_malformed, 0, "refused, not answered");
+    assert_eq!(
+        a.m.requests_rejected_conn_cap, 0,
+        "a refusal is not an answered cap rejection (F15)"
+    );
     assert_eq!(drain(&mut rx), [vec![1]]);
     assert!(a.step(&tinfo(7)));
     assert_eq!(drain(&mut rx), [vec![3]]);
@@ -44,4 +53,5 @@ async fn an_uncongested_connection_is_never_refused_on_the_shard() {
     assert!(a.step(&tinfo(1)));
     assert_eq!(drain(&mut rx), [vec![2, 3]]);
     assert_eq!(a.m.requests_rejected_conn_cap, 0);
+    assert_eq!(a.m.requests_refused_congested, 0);
 }

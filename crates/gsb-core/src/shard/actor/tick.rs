@@ -233,7 +233,7 @@ where
                 // A congested connection at its cap: refused, like at 2c
                 // (the room's rule, F14).
                 _ if self.refuses_congested(a.conn, a.player) => {
-                    self.m.requests_rejected_conn_cap += 1;
+                    self.m.requests_refused_congested += 1;
                     false
                 }
                 _ => {

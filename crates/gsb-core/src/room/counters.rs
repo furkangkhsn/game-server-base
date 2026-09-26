@@ -217,11 +217,14 @@ pub(crate) struct RoomCounters {
     /// The logic's own `Reject` decision (a business answer — normal
     /// flow, not an anomaly).
     pub(crate) requests_rejected_logic: u64,
-    /// The per-connection pending cap bound the request: answered with a
-    /// rejection — or, on a congested connection (its batches are being
-    /// dropped), refused without an answer (the storm bound of
-    /// `crate::rpc`, "Delivery").
+    /// The per-connection pending cap bound the request (answered with a
+    /// rejection).
     pub(crate) requests_rejected_conn_cap: u64,
+    /// A congested connection (its batches are being dropped) owed its
+    /// cap already: the request was refused without an answer — the
+    /// storm bound of `crate::rpc`, "Delivery" (F14; its own counter
+    /// since F15: a refusal is not a rejection the client saw).
+    pub(crate) requests_refused_congested: u64,
     /// The room-wide pending cap bound the request.
     pub(crate) requests_rejected_room_cap: u64,
     /// Pending external requests swept as timed out (the client-visible
@@ -281,6 +284,7 @@ impl Default for RoomCounters {
             requests_rejected_logic: 0,
             requests_rejected_conn_cap: 0,
             requests_rejected_room_cap: 0,
+            requests_refused_congested: 0,
             requests_timed_out: 0,
             requests_late: 0,
             step_max_group: 0,

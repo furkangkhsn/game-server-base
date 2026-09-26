@@ -170,6 +170,12 @@ pub struct RoomSample {
     pub requests_rejected_logic: u64,
     pub requests_rejected_conn_cap: u64,
     pub requests_rejected_room_cap: u64,
+    /// RPC: requests REFUSED — neither processed nor answered — because
+    /// their connection was congested (its latest batch dropped) and
+    /// already owed its per-connection cap (the storm bound, F14; its own
+    /// counter since F15, apart from the answered cap rejections),
+    /// cumulative.
+    pub requests_refused_congested: u64,
     /// RPC: pending external requests swept as timed out (the
     /// client-visible timeout), cumulative.
     pub requests_timed_out: u64,

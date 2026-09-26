@@ -23,6 +23,11 @@ struct Rejects {
     logic: u64,
     conn_cap: u64,
     room_cap: u64,
+    /// The congested connections' unanswered refusals (F15): not a
+    /// reject bucket, but a request refused there must never be counted
+    /// in one — and an answered reject never there — so it takes part
+    /// in the "only the triggered one moved" sum.
+    refused: u64,
 }
 
 impl Rejects {
@@ -34,13 +39,14 @@ impl Rejects {
             logic: s.requests_rejected_logic,
             conn_cap: s.requests_rejected_conn_cap,
             room_cap: s.requests_rejected_room_cap,
+            refused: s.requests_refused_congested,
         }
     }
 
     /// Assert that exactly the triggered bucket moved: `moved` grew by
-    /// `n` and the other five are still zero (fresh harness, cumulative
-    /// counters — the test triggered one reject path and nothing else
-    /// touches these six).
+    /// `n` and the other five — and the refusal count — are still zero
+    /// (fresh harness, cumulative counters — the test triggered one
+    /// reject path and nothing else touches these seven).
     fn assert_only(&self, name: &str, n: u64, moved: u64) {
         assert_eq!(
             moved, n,
@@ -51,7 +57,8 @@ impl Rejects {
             + self.no_handler
             + self.logic
             + self.conn_cap
-            + self.room_cap;
+            + self.room_cap
+            + self.refused;
         assert_eq!(
             total, n,
             "{name}: only the triggered bucket may move (a reject counted in \
