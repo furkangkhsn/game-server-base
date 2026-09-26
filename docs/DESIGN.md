@@ -578,7 +578,47 @@ bu alanın en ucuz olduğu gündür.
   budur.
 - Politika **tam eşitlik**, aralık değil. Tetikleyici: ikinci bir
   protokol sürümü gerçekten yayınlandığında min/max aralığı (ya da
-  özellik pazarlığı) tartışılır. Önce veri.
+  özellik pazarlığı) tartışılır. Önce veri. *(Kapandı — aşağıda "Base
+  protokol evrim kuralı", kullanıcı kararı 2026-09-27.)*
+
+**Base protokol evrim kuralı (kullanıcı kararı, 2026-09-27 — BACKLOG E5).**
+İki protokol katmanı ayrıdır:
+
+1. **Motorun base protokolü** — oyundan bağımsız, her istemcinin konuşmak
+   zorunda olduğu çerçeveler: AUTH, JOIN, HEARTBEAT, ERROR kodları, RPC
+   zarfı ve kit zarfı (`kit.proto`). `Auth.protocol_version` YALNIZ bu
+   katmanın sürümüdür. **Geriye dönük uyumluluğu motorun
+   sorumluluğudur**: motor base protokolünü kırarsa onu kullanan her
+   oyunun eski istemcileri aynı anda kırılır — oyuncular istemcisini
+   anında güncellemez, oyun geliştiricisinin motoru güncelleme sebebi
+   çoğu zaman protokolle ilgisizdir.
+2. **Oyunun protokolü** — oyunun opcode'ları, mesajları, kayıt biçimi ve
+   onların sürümü: **oyunun işi** (BACKLOG E7). Motor bu katmanın
+   sürümüne karışmaz; bir oyun kendi sürümünü kendi JOIN'inde ya da ilk
+   mesajında taşır.
+
+Motorun kuralları:
+
+- **Varsayılan: toplamalı değişiklik.** Yeni proto3 alanı, eski istemcinin
+  bilinmeyen sayıp atlayacağı yeni kod (ör. ERROR 14 → eski istemcide
+  OTHER), oyunun opt-in açtığı yeni biçim (ör. `kit.proto` `records = 6`)
+  serbesttir ve `PROTOCOL_VERSION`'ı ARTIRMAZ. Bugüne kadarki her değişiklik
+  böyleydi; sürüm hâlâ `1`.
+- **Uyumsuz değişiklik kaçınılmazsa sürüm artar** ve sunucu bir geçiş
+  dönemi boyunca yeni sürümle birlikte en az bir öncekini de konuşur
+  (N ve N−1).
+- **Uyuşmazlık temiz tespit edilir**: ERROR 13 iki sayıyı da taşır
+  (mevcut); istemci neye yükselteceğini bilir.
+- **Kabul politikası dağıtımındır**: eski sürümün ne kadar süre kabul
+  edileceğini operatör/oyun yayıncısı config'le verir
+  (`min_protocol_version`); motor N−1'i konuşabilir, ama "bütün
+  istemcilerim güncellendi, eskiyi reddet" kararını yalnız dağıtım
+  verebilir.
+
+Bugün kod değişmez: `min_protocol_version` ve N−1 desteği motorun İLK
+uyumsuz base değişikliğiyle birlikte yapılır (BACKLOG E5 tetikleyicisi).
+Bir PR base çerçevelerine dokunuyorsa önce "toplamalı mı?" sorusuna cevap
+verir; cevap hayırsa bu kural uygulanır.
 
 **Elenen alternatifler:**
 
