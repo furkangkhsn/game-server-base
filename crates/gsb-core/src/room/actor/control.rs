@@ -6,7 +6,6 @@ use crate::id::PlayerId;
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 use tracing::{debug, warn};
 
 use crate::room::actor::RoomActor;
@@ -105,7 +104,7 @@ where
                 // instants and the phase-0c sweep reads them.
                 let ceiling = self.config.max_detach_hold;
                 let rc = self.conns.get_mut(&player).expect("guarded by caller");
-                rc.park(grace, to, ceiling, Instant::now());
+                rc.park(grace, to, ceiling, crate::ticker::now());
                 // OFF the input-idle clock while parked: the row has no
                 // live input source, so counting its silence would
                 // double-count a member the detach machinery already owns

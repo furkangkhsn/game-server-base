@@ -72,7 +72,9 @@ pub(crate) struct RoomConn<G> {
     /// membership, and the member/slot accounting (§4).
     pub(crate) detached: bool,
     /// When the hold's grace runs out (`Detach::Hold.grace` mapped to an
-    /// absolute instant by the CORE — §14.4 deadline ownership): from
+    /// absolute instant by the CORE — §14.4 deadline ownership — on the
+    /// tick clock, `crate::ticker::now()`, like the sweep that reads it:
+    /// F16, so a paused runtime pauses it too): from
     /// then on [`GameLogic::may_release`] is asked every sweep;
     /// `None` = combat-held, asked from the first sweep.
     pub(crate) detach_deadline: Option<Instant>,

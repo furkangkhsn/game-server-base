@@ -3,7 +3,6 @@
 use crate::id::ConnectionId;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 
 use crate::room::actor::RoomActor;
 
@@ -62,11 +61,12 @@ where
         // see `crate::rpc`): per connection the deadlines are
         // non-decreasing (same timeout, FIFO arrivals), so only the head
         // of each deque can be due. The room's tick body stays
-        // synchronous: this is a wall-clock comparison, no await.
+        // synchronous: this is a comparison on the tick clock
+        // (`ticker::now()` — the deadline is set on it too, F16), no await.
         // Cost when quiet: one `is_empty` probe (the common case — a
         // room with no pending requests pays nothing below it).
         if !self.pending.is_empty() {
-            let now = Instant::now();
+            let now = crate::ticker::now();
             // Pop the due heads (conn + request together — the reply is
             // owed to the request's owner), then queue the timeout
             // replies outside the borrow of `self.pending`.

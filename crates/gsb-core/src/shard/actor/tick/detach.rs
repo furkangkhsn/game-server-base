@@ -2,7 +2,6 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -34,7 +33,7 @@ where
         //    bot-fed). Runs BEFORE READ so an expired row is gone before
         //    this tick's pulls.
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
-            let now = Instant::now();
+            let now = crate::ticker::now();
             let ask: Vec<PlayerId> = self
                 .conns
                 .iter()

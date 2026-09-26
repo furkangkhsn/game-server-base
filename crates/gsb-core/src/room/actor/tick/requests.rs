@@ -3,7 +3,6 @@
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 
 use crate::room::actor::RoomActor;
 
@@ -119,7 +118,7 @@ where
                         continue;
                     }
                     // Register it pending, then delegate.
-                    let due = Instant::now() + self.config.request_timeout;
+                    let due = crate::ticker::now() + self.config.request_timeout;
                     self.pending.entry(req.conn).or_default().push_back(
                         crate::rpc::PendingRequest {
                             id: req.id,

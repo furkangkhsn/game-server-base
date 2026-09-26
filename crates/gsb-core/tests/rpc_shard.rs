@@ -49,6 +49,9 @@ const OP_EXT: u16 = 0x03;
 const OP_SNAP: u16 = 0x1101;
 const OP_PRIV: u16 = 0x1102;
 
+#[path = "rpc_shard/paused.rs"]
+mod paused;
+
 /// One in-flight external request the test logic has delegated: its
 /// correlation id and the resolver (sending `Ok` completes it, `Err`
 /// rejects it; dropping it leaves the future pending until the shard's

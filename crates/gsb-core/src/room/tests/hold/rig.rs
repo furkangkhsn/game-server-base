@@ -3,7 +3,8 @@
 //! `handle_control` / `step_phases`.
 //!
 //! Wall-clock time without sleeping: the sweep compares the row's
-//! absolute hold instants with `Instant::now()`, so [`Rig::age`] moves a
+//! absolute hold instants with the tick clock (`crate::ticker::now()`,
+//! the wall clock outside a paused runtime), so [`Rig::age`] moves a
 //! parked row's deadline and ceiling into the past by exactly the
 //! simulated elapsed time — the same thing waiting would do, to the
 //! nanosecond, and deterministic.

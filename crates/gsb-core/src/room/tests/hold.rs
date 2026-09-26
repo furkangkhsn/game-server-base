@@ -14,6 +14,7 @@
 
 use super::*;
 
+mod paused;
 mod rig;
 use rig::Rig;
 

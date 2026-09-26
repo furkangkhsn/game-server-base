@@ -4,7 +4,6 @@ use crate::id::PlayerId;
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -40,7 +39,7 @@ where
         //    alive under a `bot_fed` marker (Tur B synthesizes the input;
         //    this is the documented seam).
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
-            let now = Instant::now();
+            let now = crate::ticker::now();
             // Collected first so each logic callback runs against an
             // unborrowed `self`.
             let ask: Vec<PlayerId> = self

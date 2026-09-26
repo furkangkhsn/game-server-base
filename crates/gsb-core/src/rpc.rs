@@ -222,6 +222,9 @@ impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
 pub struct PendingRequest {
     pub id: u64,
     pub op: u16,
+    /// The client-visible deadline, on the tick clock
+    /// (`crate::ticker::now()` + the room's request timeout; the sweep
+    /// reads the same clock — F16).
     pub due: Instant,
 }
 

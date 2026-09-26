@@ -6,6 +6,7 @@
 use super::*;
 use crate::room::{Detach, ExpireTo};
 
+mod paused;
 mod rig;
 use rig::*;
 

@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 
 use crate::room::TickCtx;
 use crate::rpc::{Completion, PendingRequest};
@@ -112,7 +111,7 @@ where
                         continue;
                     }
                     // Register it pending on THIS shard, then delegate.
-                    let due = Instant::now() + self.config.request_timeout;
+                    let due = crate::ticker::now() + self.config.request_timeout;
                     self.pending
                         .entry(req.conn)
                         .or_default()

@@ -2,7 +2,6 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 
 use crate::id::ConnectionId;
 use crate::rpc::{PendingRequest, RpcReply, TIMEOUT_REASON};
@@ -65,7 +64,7 @@ where
         // Cost when quiet: one `is_empty` probe (a shard with no pending
         // requests pays nothing below it).
         if !self.pending.is_empty() {
-            let now = Instant::now();
+            let now = crate::ticker::now();
             let mut due: Vec<(ConnectionId, PendingRequest)> = Vec::new();
             for (conn, deq) in self.pending.iter_mut() {
                 if let Some(front) = deq.front()

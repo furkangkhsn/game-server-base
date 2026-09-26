@@ -54,6 +54,8 @@ const OP_UNKNOWN: u16 = 0x05;
 mod buckets;
 #[path = "rpc/counters.rs"]
 mod counters;
+#[path = "rpc/paused.rs"]
+mod paused;
 
 const OP_SNAP: u16 = 0x1001;
 const OP_PRIV: u16 = 0x1002;

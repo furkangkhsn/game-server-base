@@ -48,7 +48,7 @@ where
                 // in-flight requests die with it (RECONNECT §11).
                 let ceiling = self.config.max_detach_hold;
                 let rc = self.conns.get_mut(&player).expect("guarded by caller");
-                rc.park(grace, to, ceiling, Instant::now());
+                rc.park(grace, to, ceiling, crate::ticker::now());
                 // OFF the input-idle clock while parked (the room actor's
                 // rule): the row has no live input source, so the ceiling
                 // must not fire on top of a hold. Resume restarts it.
