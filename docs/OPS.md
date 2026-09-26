@@ -210,6 +210,42 @@ max_detach_hold_secs = "off"
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü
   task (istek başına tam okuma + tek yanıt + kapanış) — aktör disiplini
   bozulmaz, select gerekmez
+- **Dışa açım yüzeyleri (E2, §6).** Aynı katlanmış rapor üç yoldan
+  çıkar: `gsb-metric` log satırı (`MetricSink::Log`), `/metrics`
+  (Prometheus, çekme; `prometheus` feature'ı, varsayılan açık) ve
+  `[metrics.otlp]` (OTLP/HTTP protobuf, itme; `otlp` feature'ı,
+  varsayılan kapalı). Prometheus ile OTLP **tek aile tablosunu** yürür
+  (`gsb_core::metrics::export::families`: ad, tür, help, okuyucu, sıra):
+  yeni bir aile iki yüzeye birden girer, biri öbüründen kopamaz. OTLP
+  eşlemesi:
+
+  | Bizdeki aile | OTLP |
+  |---|---|
+  | `counter` (kümülatif) | `Sum`, monotonic, CUMULATIVE, `as_int`; `start_time` = exporter'ın doğumu |
+  | `gauge` (registry: `rooms`, `conns`) | `Gauge`, `as_int` |
+  | `gauge` (oda: `hz`, ortalamalar, uçlar, oranlar, sayımlar) | `Gauge`, `as_double` |
+  | `gsb_room_step_hist` (log2, bütçe oranları) | `Histogram`, CUMULATIVE; sınırlar odanın bütçe kenarları (µs, `le` ile aynı), 14 kova; `sum` = ortalama × adım, `min`/`max` = `step_min_us`/`step_max_us` |
+  | `gsb_room_step_duration_us` (Prometheus'ta p50/p99 `summary`) | `Histogram`, CUMULATIVE; sınırlar 8, 16, …, 4096 µs (512), 513 kova — sonuncusu ince tavanın üstündeki adımlar (log2 nüfusunun kalanı), yani dağılım kayıpsız |
+  | `gsb_net_server_closes_total{reason}` | `Sum`, `reason` özniteliği, sıfırlar dahil |
+  | mantık sayacı SUM / MAX (F9) | `Sum` monotonic / `Gauge`, `as_int`; açıklama bildirimin help'i |
+  | `gsb_room_logic_counters_dropped` (F17) | `Gauge`, yalnız sıfırdan büyükken |
+  | — (yalnız OTLP) | `gsb_export_otlp_reports_dropped`, `gsb_export_otlp_push_failures`: exporter'ın kendi sağlığı, `Sum` |
+
+  Ad kuralı: OTLP adı Prometheus ailesinin adından `_total` düşmüş
+  hâlidir (`gsb_room_steps`); bir collector'ın Prometheus exporter'ı
+  monotonic sum'a `_total`'ı geri ekler, yani iki yol aynı seri adında
+  buluşur. Oda `room="r<id>"` özniteliğidir (etiketin değeri), resource'ta
+  `service.name` (config), scope `gsb` + crate sürümü. `unit` alanı
+  boştur: birim adın içinde (`_us`, `_bytes`) — alan doldurulsa aynı
+  exporter birimi ada ikinci kez eklerdi. Kova sınırı yaklaşıklığı
+  Prometheus `le`'siyle aynıdır (bizim binler alt-kapalı `[lo, hi)`,
+  OTLP'ninki üst-kapalı). Prometheus gibi OTLP de **katlamaz**: shard
+  başına bir nokta (DESIGN §12 "tutarlı kesit"). `actions_dropped_top`
+  ikisinde de yok (log satırında). İki yüzeyin aynı şeyi söylediğinin
+  kilidi `metrics::tests::otlp::cross` (aile kümesi, sırası, türü,
+  açıklaması, değerleri; histogramın kümülatif kovaları, kenarları,
+  `count`/`sum`'u; summary'nin p50/p99'u OTLP ince kovalarından yeniden
+  türetilir).
 
 ## 4. Test planı
 
@@ -248,21 +284,66 @@ max_detach_hold_secs = "off"
   "çoklu-listener'a QUIC + WS kapıları turu", ROADMAP devam notu; bu
   madde yalnız ops HTTP'yi kasteder.*
 
-## 6. Kenara not: `metrics` crate fasadı (dış öneri, uygulanmadı)
+## 6. Dışa açım katmanı: takılabilir exporter'lar (BACKLOG E2)
 
-Dış danışmada gelen alternatif: metrik dışa açımını elle render yerine
-**`metrics` crate fasadı + `metrics-exporter-prometheus`** üzerinden
-yapmak (Rust'ın fiili metrik standardı; tokio ekosistemi kullanır).
+**Karar (bakımcı, 2026-09-27):** içeride ucuz toplama aynı kalır
+(aktör-yerel sayaçlar → sınırlı kanal → tek toplayıcı → katlanmış
+`MetricReport`); dışa açım tek bir yerde, takılabilir exporter'lara
+devredilir — Prometheus mevcut, OTLP eklendi, gerekirse `metrics`
+fasadı — her biri feature arkasında. Bu bölüm, eski "Kenara not"un
+(`metrics` fasadı + `metrics-exporter-prometheus` dış önerisi, o gün
+uygulanmadı; "dördüncü lavabo" yönü) yerini alan tasarımdır.
 
-- **Lehine:** battle-tested exporter, ekosistem uyumu, kendi render
-  kodunun bakım yükü kalkar.
-- **Aleyhine:** yeni bağımlılık zinciri (HTTP feature'ında hyper);
-  makrolar global recorder'a yazarak aktör-kanal mimarisinin
-  "durum aktörlerde" ilkesinin dışından dolaşır; bütçe-göreli µs
-  histogram kenarları gibi özel semantikler yapılandırmaya döner;
-  çalışan 215-testlik yüzeyin göçü ~1 gün.
+| # | Karar | Gerekçe / elenen |
+|---|---|---|
+| 1 | **Dikiş: `Exporter` trait'i** (`gsb_core::metrics::Exporter`, `fn export(&mut self, &MetricReport)`). Toplayıcının `emit`'i TEK dışa açım yeridir: her rapor önce kurulu exporter'lara sırayla (salt-okunur), sonra `MetricSink`'e (raporu tüketir) gider; kapanıştaki son rapor dahil. Kurulum `MetricsCollector::with_exporters`; `FnMut(&MetricReport)` kapanışları da exporter'dır | Exporter saf tüketicidir: toplayıcıya ya da aktörlere uzanacak tutamağı yoktur, hiçbir aktör kaç exporter olduğunu bilmez — aktör kodu değişmedi. Elenen: `MetricSink`'e dördüncü varyant — sink TEK hedeftir (ops yüzeyi açıkken `Watch` onun yerini alır), OTLP ise log/kanal/watch'un hangisiyle olursa olsun yan yana yaşamalı |
+| 2 | **Exporter bloklamaz.** `export` toplayıcının görevinde, senkron çağrılır; G/Ç yapan bir exporter raporu kendi görevine **sınırlı devirle** verir | Toplayıcı tek-await'lidir ve her aktörün örneklerini boşaltır; yavaş bir exporter hepsini bekletirdi |
+| 3 | **Çekme vs itme.** Prometheus (çekme): ops yüzeyinin `watch` anlık görüntüsünden **kazıma anında** render (`MetricReport::render_prometheus`) — kimse kazımıyorsa render yok, `/metrics` baytları değişmedi (`metrics::tests::golden`). OTLP (itme): bir `Exporter` | Elenen: Prometheus metnini her raporda önceden render edip ikinci bir `watch`'a koymak — kazıyıcı yokken her saniye boşa render, `/healthz` yine rapor watch'unu isterdi |
+| 4 | **Tek aile tablosu** (`metrics::export::families`: ad, tür, help, okuyucu, sıra); Prometheus render'ı ve OTLP eşlemesi aynı tabloyu yürür | Yeni sayaç iki yüzeye birden girer; ad/tür kayması yapısal olarak imkânsız. Tablo taşınırken Prometheus metni bayt bayt aynı kaldı (altın test; help/tür/sıra mutasyonları onu kırar). Biçime özgü kalanlar: dağılımların şekli, mantık sayaçlarının (ad kümesi rapor anında belli) biçimi |
+| 5 | **Feature düzeni `gsb-core`'da:** `prometheus` (varsayılan açık) render'ı ve aile tablosunu, `otlp` (varsayılan kapalı) OTLP exporter'ını derler. Workspace bağımlılığı `gsb-core`'u **varsayılan feature'sız** alır; hangi exporter'ın var olduğuna yalnız `gsb-server` karar verir (`prometheus` varsayılan, `otlp` = `gsb-core/otlp`). `gsb-core`'un kendi test koşusu varsayılanını (Prometheus) tutar | Neden yeni bir `gsb-export` crate'i değil: OTLP **hiç yeni bağımlılık getirmiyor** (aşağıda) — "opsiyonel bağımlılıkları çekirdekten uzak tut" gerekçesi boşa düşer; render `MetricReport`'un inherent metodu ve altın test çekirdekte; ayrı crate aynı exporter ailesini iki crate'e bölerdi |
+| 6 | **Yeni bağımlılık YOK.** OTLP mesajları `opentelemetry-proto` v1'in elle yazılmış bir ALT KÜMESİ (`prost` derive, üst akış alan numaraları); istek düz tokio `TcpStream` üstünde tek bir HTTP/1.1 POST | Elenen: `opentelemetry` + `opentelemetry-otlp` (SDK ağacı, global meter provider), `opentelemetry-proto` + `prost-build` (kod üretim adımı, aynı baytlar), `tonic`/gRPC (HTTP/2 yığını), `hyper`/`reqwest` (tek istek için istemci yığını). Alan numaraları iki yoldan doğrulandı: derive'dan bağımsız bir protobuf yürüyücüsüyle (`otlp::tests::wire`) ve bir kez sistem `protoc`'u + resmî `opentelemetry-proto` dosyalarıyla (`--decode`: bilinmeyen alan yok) |
+| 7 | **OTLP/HTTP protobuf**, `POST <endpoint>` (`Content-Type: application/x-protobuf`, `Connection: close`); yol boşsa `/v1/metrics`. **Yalnız `http://`** — `https://` başlatmayı durdurur | gRPC'den hafif: aynı mesaj, HTTP/2 yok. TLS: hedef sunucunun yanındaki collector/agent'tır, TLS'i ötesine o taşır (ops HTTP'nin localhost sözleşmesiyle aynı çizgi) |
+| 8 | **Geri basınç: tek yuvalı devir + düşür-ve-say.** Vadesi gelen rapor `try_reserve` ile 1 yuvalı kanala klonlanır; yuva doluysa (itme görevi hâlâ öncekinde) rapor düşer, sayılır ve sayı bir sonraki devirle `gsb_export_otlp_reports_dropped` olarak gider. İtme hatası (bağlantı, zaman aşımı, 2xx olmayan durum) sayılır (`gsb_export_otlp_push_failures`, sonraki itmede), **yeniden denenmez**, kesinti başına bir `warn` + düzelişte bir `info` | Her değer kümülatif ya da gauge: düşen/başarısız rapor, sonrakinin taşıdığından fazlasını taşımaz (örnek kanalıyla aynı mantık). Daha derin kuyruk yalnız bir sonraki vadeli rapordan ESKİ raporları tutardı. Elenen: yeniden deneme kuyruğu, `watch` ile "en yeni kazanır" (üzerine yazılan okunmamış raporu saymanın yolu yok) |
+| 9 | **Kadans: sabit ızgara.** İlk rapor iter; sonraki vade bir öncekinin vadesine `interval` eklenerek ilerler (rapor zamanına değil) — toplayıcının titremesi aralığı uzatmaz. İtme zaman aşımı = bir aralık | Rapor anına göre vade, 1 sn'lik raporlarla 10 sn'lik aralığı ~11 sn'ye kaydırırdı |
+| 10 | **Config:** `[metrics.otlp]` `endpoint` (zorunlu), `interval_secs` (vars. 10, `0` başlatmayı durdurur), `service_name` (vars. `"gsb"`); bilinmeyen anahtar ayrıştırmayı durdurur. Tablo her derlemede AYRIŞIR: `otlp`'siz derlemede başlatma `ServerError::OtlpNotBuilt` ile adıyla durur; geçersiz hedef `ServerError::BadOtlp`. Hepsi bir şey bağlanmadan önce | Operatörün istediği itme asla sessizce atlanmaz |
+| 11 | `prometheus`'suz derlemede `/metrics` **404 + feature adı** (yol bilinir: başka fiil 405) | Boş bir 200'ü kazıyıcı "seri yok" diye yutardı |
 
-**Karar:** şimdilik uygulanmıyor; gerekirse temiz entegrasyon noktası
-**dördüncü lavabo olarak** (`MetricSink::MetricsFacade`) — mevcut
-collector hattını atmadan yan yana yaşar. Bu dokümanın konusu
-değil, ayrı turda değerlendirilir.
+**Testler.** Dikiş: `metrics::tests::export` (iki exporter + kanal
+sink'i: sink'in aldığı her rapor — kapanıştaki dahil — iki exporter'dan
+sırayla geçti). Prometheus bayt kimliği: `metrics::tests::golden`
+değişmedi; tablo mutasyonları (help, tür, sıra) onu kırar.
+`/metrics` feature'a göre: `http::tests::the_metrics_path_serves_the_exposition_only_when_compiled_in`.
+OTLP eşlemesi: `metrics::tests::otlp::golden` (altın rapor + iki mantık
+sayacının okunur dökümü, `golden/otlp.txt`'e sabit),
+`metrics::tests::otlp::cross` (yukarıda, §3), `otlp::tests::wire` (alan
+numaraları/tel türleri derive'dan bağımsız). Devir:
+`otlp::tests::handoff` (vadesi gelmeyen ne devredilir ne sayılır; dolu
+yuva düşürür + sayar, sayı sonraki devirle gider; giden görev = düşüş;
+vadeler sabit ızgarada — biraz geç gelen rapor sonraki vadeyi
+kaydırmaz).
+Uçtan uca: `metrics::tests::otlp::push` (test içi HTTP alıcısı protobuf'u
+çözer; 503 + cevapsız eş (zaman aşımı) + 200 → üçüncü itme iki hatayı
+taşır), `gsb-server` `tests/otlp_export.rs` (feature'sız: tablo
+başlatmayı durdurur; `otlp` ile: sunucunun kendi raporları alıcıya
+ulaşır, `https`/`0` aralık başlatmayı durdurur; örnek config'in yorumlu
+bloğu belgelendiği gibi ayrışır). Mutasyon denetimi: tür başına eşleme
+(counter→gauge, oda gauge'u int, monotonic/temporality, ince histogramın
+taşma kovası, log2 sınırları, `_total`, MAX→sum, taşma gauge'u, oda
+öznitelik anahtarı), düşür-ve-say (sayma yok, derin kuyruk, sayı
+taşınmıyor, her rapor vadeli, vade rapordan hesaplanıyor), itme (hata sayılmıyor, 2xx dışı kabul,
+zaman aşımı yok, https kabul), üç tel etiketi, sunucu (feature'sız tablo
+yok sayılıyor, exporter kurulmuyor, hatalı hedef yutuluyor, bilinmeyen
+anahtar kabul) — hepsini bir test yakaladı.
+
+**Sıradaki: `metrics` fasadı exporter'ı** (üçüncü exporter, kendi
+feature'ı). Tasarım yeri hazır: aynı aile tablosunu yürüyüp her raporda
+`metrics::counter!(…).absolute(v)` / `gauge!(…).set(v)` basan bir
+`Exporter` — global recorder yalnız exporter'ın içinde, aktör yolunda
+değil (eski nottaki "makrolar global recorder'a yazar" itirazı böylece
+aktörlere değmez). Bütçe-göreli histogram kenarları fasadın histogram
+modeline oturmaz (örnek başına `record`); o aile fasatta gauge'lara
+(`p50`/`p99`) ya da hiç açılmamaya düşer — karar o turun.
+
+**NOT-DONE:** OTLP'de TLS (`https`), gRPC, gzip, yeniden deneme/kuyruk,
+DELTA temporality, exemplar'lar, `actions_dropped_top`; exporter başına
+toplayıcı periyodundan (1 sn) kısa aralık.

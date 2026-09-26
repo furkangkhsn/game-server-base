@@ -2801,12 +2801,20 @@ conn actor (≤1/sn + kapanışta son)      ─┘                  │
                     rapor süresi (vars. 1 s) dolunca MetricReport üretir;
                     ticker kapalıysa → son rapor + temiz çıkış
                                                             │
-                                     ┌──────────────────────┴──────────────────┐
-                                     ▼                                         ▼
-                          MetricSink::Log                            MetricSink::Channel
-                          (tracing info: gsb-metric scope=.. k=v)    (→ uygulama/
-                          RUST_LOG=info ile görünür; yoksa sessiz)   yük üreticisi/test)
+                    dışa açım dikişi (emit, TEK yer): önce Exporter'lar
+                    sırayla (&MetricReport), sonra MetricSink (raporu tüketir)
+                                                            │
+        ┌───────────────────┬───────────────────────┬───────┴──────────────────┐
+        ▼                   ▼                       ▼                          ▼
+ MetricSink::Log     MetricSink::Channel     MetricSink::Watch         OtlpExporter (feature otlp)
+ (gsb-metric k=v;    (→ uygulama/yük         (ops yüzeyi: /healthz      try_reserve → 1 yuva →
+  RUST_LOG=info)      üreticisi/test)         + /metrics Prometheus,    OtlpPusher görevi →
+                                              kazımada render;          OTLP/HTTP protobuf POST
+                                              feature prometheus)
 ```
+
+(Sink bu üç varyanttan biridir — ops yüzeyi açıkken `Watch`; exporter'lar sink'ten
+bağımsız, yan yana. Ayrıntı: aşağıda "Dışa açım katmanı" ve OPS §6.)
 
 **Neden bounded + `try_send`:** room actor'ünün tick gövdesine **hiç await
 eklenmez** (spec'in sert şartı; tek await hâlâ `tick_rx.recv()`'tir).
@@ -3060,10 +3068,33 @@ Prometheus kolunu kaldırmak, ayırmayı kaldırmak, RESULT kolunu kaldırmak
 yeni testleri; "yalnız sıfırdan büyükken" şartını kaldırmak altın testi
 düşürür.
 
+**Dışa açım katmanı (BACKLOG E2).** Toplama yukarıdaki gibi kalır;
+raporun sunucudan çıkışı toplayıcının `emit`'indeki TEK dikiştedir:
+`Exporter` trait'i (`fn export(&mut self, &MetricReport)`), kurulu
+exporter'lar sırayla ve senkron çağrılır, sonra sink raporu tüketir.
+Exporter saf tüketicidir (aktörlere/toplayıcıya uzanan tutamak yok,
+aktör kodu değişmedi) ve bloklamaz: G/Ç yapan exporter raporu kendi
+görevine sınırlı devirle verir — OTLP'de tek yuvalı kanal +
+`try_reserve`, dolu yuvada rapor düşer ve sayılır (kümülatif değerler:
+sonraki devir düşeninkini zaten taşır; örnek kanalıyla aynı mantık).
+Çekme yönü (Prometheus) exporter değil anlık görüntüdür: ops yüzeyinin
+`watch`'ı kazıma anında render edilir. Prometheus ve OTLP **tek aile
+tablosunu** (`metrics::export::families`) yürür, iki yüzey ad/tür/değer
+olarak birbirinden kopamaz (`metrics::tests::otlp::cross`); Prometheus
+metni tablo taşınırken bayt bayt aynı kaldı (`metrics::tests::golden`).
+Her exporter bir feature: `gsb-core`'da `prometheus` (varsayılan) ve
+`otlp` (kapalı), `gsb-server` ileri taşır; `gsb-core` workspace'e
+varsayılan feature'sız bağlanır. OTLP yeni bağımlılık getirmez (elle
+`prost` derive'lı mesaj alt kümesi + tokio `TcpStream` üstünde tek
+HTTP/1.1 POST). Eşleme tablosu OPS §3'te, kararlar/elenenler OPS §6'da.
+
 **Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
 logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan
-programatik (yük üreticisi ve testler bu yoldan kullanır). Yük testi
-sayıları ve ilk doyma analizi: CHANGELOG "Kapatılanlar (metrik + yük turu)".
+programatik (yük üreticisi ve testler bu yoldan kullanır); `http_listen`
+→ `/metrics` (Prometheus); `[metrics.otlp]` (`otlp` feature'ıyla
+derlenmiş sunucuda) → her aralıkta bir OpenTelemetry collector'ına
+OTLP itmesi. Yük testi sayıları ve ilk doyma analizi: CHANGELOG
+"Kapatılanlar (metrik + yük turu)".
 
 ## 13. Derleme zamanı korumaları
 
