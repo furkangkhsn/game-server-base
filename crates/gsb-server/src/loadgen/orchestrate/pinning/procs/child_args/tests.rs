@@ -99,3 +99,42 @@ fn only_a_demo_run_forwards_the_demo_flags() {
         }
     }
 }
+
+/// `--conn-out` is a server knob: the served server gets it, the clients
+/// never do (their own outbound half is not what it sizes).
+#[test]
+fn the_outbound_capacity_goes_to_the_server_only() {
+    let mut args = Args::defaults();
+    assert_eq!(
+        value_of(&server_args(&args, 7777, 7778, 1), "--conn-out"),
+        None
+    );
+    args.conn_out = Some(2);
+    assert_eq!(
+        value_of(&server_args(&args, 7777, 7778, 1), "--conn-out"),
+        Some("2")
+    );
+    assert_eq!(
+        value_of(&client_args(&args, 10, 0, 7777, 1), "--conn-out"),
+        None
+    );
+}
+
+/// The slow reader is a client knob: every client child stalls the same
+/// way, the server never hears of it.
+#[test]
+fn the_slow_reader_goes_to_the_clients_only() {
+    let mut args = Args::defaults();
+    assert_eq!(
+        value_of(&client_args(&args, 10, 0, 7777, 1), "--stall-ms"),
+        None
+    );
+    args.stall_ms = Some(900);
+    let argv = client_args(&args, 10, 0, 7777, 1);
+    assert_eq!(value_of(&argv, "--stall-ms"), Some("900"));
+    assert_eq!(value_of(&argv, "--stall-every-ms"), Some("5000"));
+    assert_eq!(
+        value_of(&server_args(&args, 7777, 7778, 1), "--stall-ms"),
+        None
+    );
+}

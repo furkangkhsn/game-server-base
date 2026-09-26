@@ -42,6 +42,7 @@ pub(crate) async fn run(args: Args) {
                     max_connections: args.max_connections,
                     idle_timeout_secs: args.idle_timeout_secs,
                     write_stall_secs: args.write_stall_secs,
+                    conn_out: args.conn_out,
                     disconnect_grace_secs: args.disconnect_grace_secs,
                     mmo_crystallize: args.mmo_crystallize,
                 },
@@ -110,6 +111,10 @@ pub(crate) async fn run(args: Args) {
         flood: false,
         kind: args.transport,
         capture: None,
+        stall: args.stall_ms.map(|ms| Stall {
+            pause: Duration::from_millis(ms),
+            every: Duration::from_millis(args.stall_every_ms),
+        }),
     };
     if let Some(dir) = &args.capture {
         std::fs::create_dir_all(dir)

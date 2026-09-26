@@ -6,10 +6,13 @@ use std::time::{Duration, Instant};
 
 use gsb_protocol::op;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use crate::wire::*;
 use gsb_net::udp::UdpClient;
+
+mod stall;
+use stall::tcp_connect;
+pub(crate) use stall::{STALL_RCVBUF, Stall};
 
 mod view;
 pub(crate) use view::*;
@@ -125,6 +128,8 @@ pub(crate) struct ClientParams {
     /// `--capture`: this client's capture file and the game's name
     /// (`None` = not captured — every client of a run without the flag).
     pub(crate) capture: Option<(std::path::PathBuf, &'static str)>,
+    /// `--stall-ms`: the slow-reader cycle (`None` = reads as it can).
+    pub(crate) stall: Option<Stall>,
 }
 
 /// Build a rustls connector trusting ONLY the CA PEM at `ca_path` (the
@@ -157,12 +162,13 @@ pub(crate) async fn connect_wire(
     kind: gsb_server::TransportKind,
     addr: SocketAddr,
     tls: &Option<TlsOpts>,
+    rcvbuf: Option<u32>,
 ) -> std::io::Result<Wire> {
     Ok(match kind {
         gsb_server::TransportKind::Udp => Wire::Udp(Box::new(UdpClient::connect(addr).await?)),
         gsb_server::TransportKind::Tcp => match tls {
             None => {
-                let stream = TcpStream::connect(addr).await?;
+                let stream = tcp_connect(addr, rcvbuf).await?;
                 stream.set_nodelay(true).ok();
                 let (r, w) = tokio::io::split(stream);
                 Wire::Tcp {
@@ -171,7 +177,7 @@ pub(crate) async fn connect_wire(
                 }
             }
             Some(opts) => {
-                let stream = TcpStream::connect(addr).await?;
+                let stream = tcp_connect(addr, rcvbuf).await?;
                 stream.set_nodelay(true).ok();
                 let connector = tls_connector(&opts.ca_path);
                 let dns: rustls::pki_types::ServerName<'static> =

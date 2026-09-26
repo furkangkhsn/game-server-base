@@ -43,6 +43,7 @@ impl Args {
             max_connections: None,
             idle_timeout_secs: None,
             write_stall_secs: None,
+            conn_out: None,
             flood_id: None,
             churn_secs: None,
             churn_cycles: 0,
@@ -51,6 +52,8 @@ impl Args {
             mmo_crystallize: None,
             capture: None,
             capture_clients: 8,
+            stall_ms: None,
+            stall_every_ms: 5000,
         }
     }
 }
@@ -199,6 +202,11 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
             "--write-stall-secs" => {
                 args.write_stall_secs = Some(number(&a, v()?)?);
             }
+            "--conn-out" => {
+                let n: usize = number(&a, v()?)?;
+                refuse_unless(n >= 1, "--conn-out must be at least 1")?;
+                args.conn_out = Some(n);
+            }
             "--flood-id" => args.flood_id = Some(number(&a, v()?)?),
             "--churn-secs" => {
                 let f: f64 = number(&a, v()?)?;
@@ -244,6 +252,16 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                 let k: u64 = number(&a, v()?)?;
                 refuse_unless(k > 0, "--capture-clients must be > 0")?;
                 args.capture_clients = k;
+            }
+            "--stall-ms" => {
+                let ms: u64 = number(&a, v()?)?;
+                refuse_unless(ms > 0, "--stall-ms must be > 0")?;
+                args.stall_ms = Some(ms);
+            }
+            "--stall-every-ms" => {
+                let ms: u64 = number(&a, v()?)?;
+                refuse_unless(ms > 0, "--stall-every-ms must be > 0")?;
+                args.stall_every_ms = ms;
             }
             "--tls-ca" => args.tls_ca = Some(v()?),
             "--tls-server-name" => args.tls_server_name = v()?,

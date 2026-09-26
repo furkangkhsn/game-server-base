@@ -88,6 +88,10 @@ pub(super) fn server_args(
         sargs.push("--write-stall-secs".into());
         sargs.push(s.to_string());
     }
+    if let Some(n) = args.conn_out {
+        sargs.push("--conn-out".into());
+        sargs.push(n.to_string());
+    }
     if let Some(f) = args.disconnect_grace_secs {
         sargs.push("--disconnect-grace-secs".into());
         sargs.push(f.to_string());
@@ -165,6 +169,12 @@ pub(super) fn client_args(
     if let Some(c) = args.churn_secs {
         cargs.push("--churn-secs".into());
         cargs.push(c.to_string());
+    }
+    if let Some(ms) = args.stall_ms {
+        cargs.push("--stall-ms".into());
+        cargs.push(ms.to_string());
+        cargs.push("--stall-every-ms".into());
+        cargs.push(args.stall_every_ms.to_string());
     }
     if args.churn_cycles != 0 {
         cargs.push("--churn-cycles".into());

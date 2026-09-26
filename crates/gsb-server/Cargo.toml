@@ -68,6 +68,12 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 # PEM loading for the client-side --tls-ca root file.
 rustls-pemfile = { workspace = true }
+# The load generator's slow reader (`--stall-ms`): a small receive
+# buffer AND a clamped MSS on the client socket (loopback's 64 KiB MSS
+# otherwise lets the server's send buffer autotune to megabytes, and a
+# stalled reader never backs the fan-out up). Already in the lock
+# through tokio.
+socket2 = { version = "0.6", features = ["all"] }
 
 [dev-dependencies]
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):

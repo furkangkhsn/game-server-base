@@ -71,7 +71,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // transport-agnostic). On rUDP `connect` is the cookie handshake, so
     // `connect_ms` measures the handshake latency.
     let t0 = Instant::now();
-    let mut wire = match connect_wire(p.kind, p.addr, &p.tls).await {
+    let mut wire = match connect_wire(p.kind, p.addr, &p.tls, p.stall.map(|_| STALL_RCVBUF)).await {
         Ok(w) => w,
         Err(e) => {
             eprintln!("client {id}: connect failed: {e}");
@@ -160,6 +160,14 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     }
                 }
             }
+        }
+        if let Some(left) = p
+            .stall
+            .and_then(|s| s.pause_left(id, now.duration_since(t_start)))
+        {
+            // The slow reader (`--stall-ms`): away from the socket.
+            tokio::time::sleep(left.min(p.deadline.saturating_duration_since(now))).await;
+            continue;
         }
         let timeout = p
             .deadline

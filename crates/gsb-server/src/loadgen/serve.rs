@@ -42,6 +42,7 @@ pub(crate) async fn serve(args: Args) {
             max_connections: args.max_connections,
             idle_timeout_secs: args.idle_timeout_secs,
             write_stall_secs: args.write_stall_secs,
+            conn_out: args.conn_out,
             disconnect_grace_secs: args.disconnect_grace_secs,
             mmo_crystallize: args.mmo_crystallize,
         },

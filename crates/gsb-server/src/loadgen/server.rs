@@ -19,6 +19,9 @@ pub(crate) struct ServerOverrides {
     pub(crate) idle_timeout_secs: Option<f64>,
     /// The writer's stall window (`None` = config default; `0` = off).
     pub(crate) write_stall_secs: Option<f64>,
+    /// Each connection's outbound batch capacity (`None` = config
+    /// default).
+    pub(crate) conn_out: Option<usize>,
     /// The demo rooms' disconnect-park grace (`None` = config default).
     pub(crate) disconnect_grace_secs: Option<f64>,
     /// The MMO's `[mmo] crystallize` (`None` = the MMO's default, on).
@@ -37,6 +40,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(s) = o.write_stall_secs {
         cfg.write_stall_secs = s;
+    }
+    if let Some(n) = o.conn_out {
+        cfg.conn_out = n;
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);
@@ -166,6 +172,7 @@ mod tests {
             max_connections: None,
             idle_timeout_secs: None,
             write_stall_secs: None,
+            conn_out: None,
             disconnect_grace_secs: None,
             mmo_crystallize: None,
         };

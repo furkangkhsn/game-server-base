@@ -134,7 +134,7 @@ pub(crate) async fn run_churn_client(
 
         // -- connect ───────────────────────────────────────────────────
         let t0 = Instant::now();
-        let mut wire = match connect_wire(p.kind, p.addr, &p.tls).await {
+        let mut wire = match connect_wire(p.kind, p.addr, &p.tls, None).await {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("churn client {id}: connect failed: {e}");

@@ -212,6 +212,12 @@ struct Args {
     /// writer may go without writing to a socket before it ends that
     /// session.
     write_stall_secs: Option<f64>,
+    /// Capacity of each connection's outbound batch channel on the
+    /// in-process / served server (`--conn-out N`; unspecified = the
+    /// server config default, 256). The fan-out drops a connection's
+    /// batch when its channel is full: a small value makes a reader that
+    /// falls a few ticks behind lose batches (the F11 measurement).
+    conn_out: Option<usize>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -280,6 +286,13 @@ struct Args {
     /// How many clients `--capture` records (`--capture-clients K`,
     /// default 8), spread evenly over the run's ids.
     capture_clients: u64,
+    /// The slow reader (`--stall-ms MS`): every client stops reading for
+    /// MS once per `--stall-every-ms` period (phase-staggered by id), on
+    /// a small socket receive buffer — the server's writer then blocks
+    /// and the fan-out drops that client's batches (the F11 measurement).
+    stall_ms: Option<u64>,
+    /// The slow reader's period (`--stall-every-ms MS`, default 5000).
+    stall_every_ms: u64,
 }
 
 /// The usage text (`--help` / `-h`).
@@ -324,6 +337,9 @@ Client options:
                             clients settle once, the minority moves)
   --still-frac F            [demo] fraction of still clients for the still profile
                             (default 0.9; deterministic per-id split)
+  --stall-ms MS             slow readers: every client stops reading for MS
+                            once per --stall-every-ms (default 5000),
+                            staggered by id, on a 16 KiB TCP receive buffer
   --spawn-half-size F       [demo] map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)
@@ -351,6 +367,9 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        server cannot write to for F seconds
                                        is ended (0 = disabled; default: the
                                        server config default, 10)
+  --conn-out N                        per-connection outbound batch
+                                       capacity (default: the server config
+                                       default, 256); small = fan-out drops
 
   --disconnect-grace-secs F           [demo] disconnect-park grace (default:
                                        the server config default, 30)

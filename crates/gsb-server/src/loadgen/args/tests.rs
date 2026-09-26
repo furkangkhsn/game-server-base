@@ -18,7 +18,7 @@ fn refused(argv: &[&str]) -> String {
 /// Each kind of refusal, with its message.
 #[test]
 fn a_bad_line_is_an_error_with_its_reason() {
-    let cases: [(&[&str], &str); 10] = [
+    let cases: [(&[&str], &str); 12] = [
         (&["--duration"], "--duration needs a value (try --help)"),
         (
             &["--duration", "x"],
@@ -41,6 +41,8 @@ fn a_bad_line_is_an_error_with_its_reason() {
         ),
         (&["0"], "N must be > 0"),
         (&["--capture-clients", "0"], "--capture-clients must be > 0"),
+        (&["--conn-out", "0"], "--conn-out must be at least 1"),
+        (&["--stall-ms", "0"], "--stall-ms must be > 0"),
     ];
     for (argv, why) in cases {
         assert_eq!(refused(argv), why, "{argv:?}");
@@ -62,5 +64,13 @@ fn a_good_line_parses() {
     };
     assert_eq!(args.clients, 7);
     assert_eq!(args.duration, Duration::from_millis(2_500));
+    let Ok(Cli::Run(args)) = line(&["--conn-out", "2"]) else {
+        panic!("a run");
+    };
+    assert_eq!(args.conn_out, Some(2));
+    let Ok(Cli::Run(args)) = line(&["--stall-ms", "900", "--stall-every-ms", "3000"]) else {
+        panic!("a run");
+    };
+    assert_eq!((args.stall_ms, args.stall_every_ms), (Some(900), 3000));
     assert!(matches!(line(&["5", "--help"]), Ok(Cli::Help)));
 }
