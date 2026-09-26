@@ -152,6 +152,7 @@ async fn ws_bytes_are_the_messages_on_the_wire() {
             kind: crate::Transport::Ws,
             capture: None,
             stall: None,
+            rpc: None,
         };
         let rep = run_client(3, p).await;
         let (read, sent, pongs) = peer.await.expect("peer");

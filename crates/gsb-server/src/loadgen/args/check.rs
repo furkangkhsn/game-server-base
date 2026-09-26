@@ -37,6 +37,17 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
         args.capture.is_none() || !(args.orchestrate || args.serve || args.churn_secs.is_some()),
         "--capture records a plain client run: not with --orchestrate, --serve or --churn-secs",
     )?;
+    // The RPC mode's ledger lives in this process's plain clients: an
+    // orchestrated run's `CLIENT` lines do not carry it, a served run has
+    // no clients, and a churn client's sessions are not one ledger.
+    refuse_unless(
+        args.rpc_rate.is_none() || !(args.orchestrate || args.serve || args.churn_secs.is_some()),
+        "--rpc-rate drives a plain client run: not with --orchestrate, --serve or --churn-secs",
+    )?;
+    refuse_unless(
+        args.rpc_burst.is_none() || args.rpc_rate.is_some(),
+        "--rpc-burst shapes --rpc-rate: give the rate too",
+    )?;
     refuse_unless(
         !(args.orchestrate && args.serve),
         "--orchestrate and --serve are mutually exclusive (try --help)",

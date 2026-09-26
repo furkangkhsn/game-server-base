@@ -160,6 +160,10 @@ pub(crate) fn print_report(
     let churn_cycles_total: u64 = reports.iter().map(|r| r.churn_cycles).sum();
     let resumed_total: u64 = reports.iter().map(|r| r.resumed).sum();
     let fresh_joins_total: u64 = reports.iter().map(|r| r.fresh_joins).sum();
+    // The RPC mode's ledgers (`rpc.rs`; `None` = a run without it).
+    let rpc = args
+        .rpc_rate
+        .map(|rate| (rate, args.rpc_burst.unwrap_or(1), rpc_total(reports)));
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
     // Sessions the SERVER ended on its own (write stall, idle window,
@@ -271,6 +275,10 @@ pub(crate) fn print_report(
         ack_processed_max,
         ack_lag_max_ms
     );
+
+    if let Some((rate, burst, t)) = &rpc {
+        println!("{}", rpc_lines(*rate, *burst, t));
+    }
 
     let room = last_room_agg;
     let net = last_room.map(|l| &l.net);
@@ -415,7 +423,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_refused={} req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -588,6 +596,11 @@ pub(crate) fn print_report(
         // each — nothing for a game whose room declares none — right
         // before `game=` like the two segments above.
         logic_segment(last_room_agg.as_ref().map(|r| &r.logic)),
+        // The RPC mode's client-side numbers (`rpc.rs`) — only on a run
+        // in the mode, right before `game=` like the segments above.
+        rpc.as_ref()
+            .map(|(rate, burst, t)| rpc_segment(*rate, *burst, t))
+            .unwrap_or_default(),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
         args.game,

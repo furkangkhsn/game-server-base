@@ -129,6 +129,7 @@ pub(crate) async fn run_churn_client(
         churn_cycles: 0,
         resumed: 0,
         fresh_joins: 0,
+        rpc: RpcTally::default(),
     };
     // ONE identity for every session of this client (the resume key):
     // this is what makes the reconnects RESUMES instead of fresh joins.

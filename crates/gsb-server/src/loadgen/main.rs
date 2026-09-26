@@ -295,6 +295,14 @@ struct Args {
     stall_ms: Option<u64>,
     /// The slow reader's period (`--stall-every-ms MS`, default 5000).
     stall_every_ms: u64,
+    /// The RPC traffic mode (`--rpc-rate R`, BACKLOG B23): every client
+    /// sends R correlated requests per second (the demo's `ECONOMY`)
+    /// beside its inputs and matches the answers (`client/rpc.rs`).
+    rpc_rate: Option<f64>,
+    /// Requests per burst of the RPC mode (`--rpc-burst B`, default 1):
+    /// B back to back every B / R seconds — above the per-connection
+    /// pending cap (4) a burst meets the cap's rejections.
+    rpc_burst: Option<u32>,
 }
 
 /// The usage text (`--help` / `-h`).
@@ -345,6 +353,13 @@ Client options:
   --stall-ms MS             slow readers: every client stops reading for MS
                             once per --stall-every-ms (default 5000),
                             staggered by id, on a 16 KiB TCP receive buffer
+  --rpc-rate R              [demo] RPC traffic: every client sends R
+                            requests/s (the demo's ECONOMY purchase) beside
+                            its inputs and matches the answers (RESULT's
+                            rpc_* keys); plain client runs only
+  --rpc-burst B             [demo] requests per burst (default 1): B back to
+                            back every B/R s (above 4 — the per-connection
+                            pending cap — a burst meets the cap)
   --spawn-half-size F       [demo] map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)

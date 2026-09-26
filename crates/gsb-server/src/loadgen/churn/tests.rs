@@ -87,6 +87,7 @@ async fn churn_bytes_are_the_frames_on_the_wire() {
         kind: crate::Transport::Tcp,
         capture: None,
         stall: None,
+        rpc: None,
     };
     let rep = run_churn_client(3, p, Duration::from_secs(60), 0).await;
     let (read, sent, joins) = peer.await.expect("peer");

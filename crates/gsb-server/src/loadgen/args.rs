@@ -54,6 +54,8 @@ impl Args {
             capture_clients: 8,
             stall_ms: None,
             stall_every_ms: 5000,
+            rpc_rate: None,
+            rpc_burst: None,
         }
     }
 }
@@ -256,6 +258,19 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                 let ms: u64 = number(&a, v()?)?;
                 refuse_unless(ms > 0, "--stall-every-ms must be > 0")?;
                 args.stall_every_ms = ms;
+            }
+            "--rpc-rate" => {
+                let r: f64 = number(&a, v()?)?;
+                refuse_unless(
+                    r > 0.0 && r.is_finite(),
+                    "--rpc-rate must be > 0 (requests/s per client)",
+                )?;
+                args.rpc_rate = Some(r);
+            }
+            "--rpc-burst" => {
+                let b: u32 = number(&a, v()?)?;
+                refuse_unless(b >= 1, "--rpc-burst must be at least 1")?;
+                args.rpc_burst = Some(b);
             }
             "--tls-ca" => args.tls_ca = Some(v()?),
             "--tls-server-name" => args.tls_server_name = v()?,

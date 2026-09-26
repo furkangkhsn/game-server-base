@@ -116,6 +116,10 @@ pub(crate) async fn run(args: Args) {
             pause: Duration::from_millis(ms),
             every: Duration::from_millis(args.stall_every_ms),
         }),
+        rpc: args.rpc_rate.map(|rate| RpcPlan {
+            rate,
+            burst: args.rpc_burst.unwrap_or(1),
+        }),
     };
     if let Some(dir) = &args.capture {
         std::fs::create_dir_all(dir)

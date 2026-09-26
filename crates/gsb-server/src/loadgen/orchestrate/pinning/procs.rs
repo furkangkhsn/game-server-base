@@ -549,6 +549,8 @@ pub(crate) async fn orchestrate(args: Args) {
             churn_cycles: c.churn_cycles,
             resumed: c.resumed,
             fresh_joins: c.fresh_joins,
+            // The orchestrated run refuses the RPC mode (`args/check.rs`).
+            rpc: RpcTally::default(),
             seq_first: None,
             seq_last: None,
         })

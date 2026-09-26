@@ -51,6 +51,7 @@ async fn a_stream_eof_ends_the_client() {
         kind: crate::Transport::Tcp,
         capture: None,
         stall: None,
+        rpc: None,
     };
     let t0 = Instant::now();
     let rep = run_client(5, p).await;

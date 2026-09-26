@@ -47,6 +47,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         churn_cycles: 0,
         resumed: 0,
         fresh_joins: 0,
+        rpc: RpcTally::default(),
     };
 
     // The game's bot for this client: its world view (the delta
@@ -55,6 +56,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // baseline drops until the next full) and its input schedule.
     let mut bot = p.bot.client(id);
     let (snapshot_op, private_op) = (p.bot.snapshot_op(), p.bot.private_op());
+    // `--rpc-rate`: the requests beside the inputs, and their ledger.
+    let mut rpc = p.rpc.map(|plan| RpcClient::new(plan, id));
     // `--capture`: this client's game-band frames, recorded as received
     // (a measurement aid — nothing it records changes what is applied).
     let mut capture = p
@@ -125,18 +128,35 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 }
             }
         }
+        if let Some(burst) = rpc.as_mut().and_then(|r| r.due(now)) {
+            for f in &burst {
+                rep.bytes_out += frame_bytes(&wire, Dir::Out, f.op, f.payload.len());
+            }
+            if wire.send_batch(&burst).await.is_err() {
+                break; // peer gone
+            }
+        }
+        // The next burst bounds every wait below, so a quiet socket (or
+        // a slow reader's pause) does not hold the requests back.
+        let rpc_wait = rpc
+            .as_ref()
+            .and_then(|r| r.until_due(now))
+            .unwrap_or(Duration::MAX);
         if let Some(left) = p
             .stall
             .and_then(|s| s.pause_left(id, now.duration_since(t_start)))
         {
-            // The slow reader (`--stall-ms`): away from the socket.
-            tokio::time::sleep(left.min(p.deadline.saturating_duration_since(now))).await;
+            // The slow reader (`--stall-ms`): away from the socket (but
+            // still sending — the next burst ends the nap).
+            let nap = left.min(rpc_wait);
+            tokio::time::sleep(nap.min(p.deadline.saturating_duration_since(now))).await;
             continue;
         }
         let timeout = p
             .deadline
             .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(250));
+            .min(Duration::from_millis(250))
+            .min(rpc_wait);
         // A quiet window (and an rUDP socket error, which is all rUDP
         // can report) loops; a stream's EOF or a frame its reader
         // refuses ends the session — the leave below then finds the
@@ -165,6 +185,9 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 rep.joined = true;
                 rep.entity = m.entity;
                 bot.joined(m.entity);
+                if let Some(r) = &mut rpc {
+                    r.joined(Instant::now());
+                }
                 if p.flood {
                     // Flood mode: leave the paced loop; the tight write
                     // loop below runs until the deadline.
@@ -189,36 +212,44 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     Err(_) => rep.errors += 1,
                 }
             }
-            o if o == private_op => match bot.apply_private(&payload) {
-                Ok(PrivateEvent::Ack(up_to)) => {
-                    // Section A: the server's per-connection input
-                    // high-water mark. `now` is this loop iteration's
-                    // instant — the ack's lag is measured against the
-                    // send instant of the acked seq (index seq-1).
-                    rep.acks += 1;
-                    rep.ack_processed_max = rep.ack_processed_max.max(up_to);
-                    if up_to > 0 {
-                        let i = up_to as usize - 1;
-                        if i < sent_at.len() {
-                            let lag = Instant::now().duration_since(sent_at[i]);
-                            rep.ack_lag_max_ms = rep.ack_lag_max_ms.max(lag.as_millis());
+            o if o == private_op => {
+                // The RPC answers the frame carries (the view ignores
+                // them — `Private.responses` is not part of it).
+                let answers = rpc
+                    .as_mut()
+                    .map_or(0, |r| r.on_private(&payload, Instant::now()));
+                match bot.apply_private(&payload) {
+                    Ok(PrivateEvent::Ack(up_to)) => {
+                        // Section A: the server's per-connection input
+                        // high-water mark. `now` is this loop iteration's
+                        // instant — the ack's lag is measured against the
+                        // send instant of the acked seq (index seq-1).
+                        rep.acks += 1;
+                        rep.ack_processed_max = rep.ack_processed_max.max(up_to);
+                        if up_to > 0 {
+                            let i = up_to as usize - 1;
+                            if i < sent_at.len() {
+                                let lag = Instant::now().duration_since(sent_at[i]);
+                                rep.ack_lag_max_ms = rep.ack_lag_max_ms.max(lag.as_millis());
+                            }
                         }
                     }
+                    // A one-shot FULL view (a fresh group member — late join
+                    // or a group crossing), applied by the view (counted in
+                    // its fulls and private fulls).
+                    Ok(PrivateEvent::Full { .. }) => {}
+                    // The game's session payload alone (the arena's welcome),
+                    // handed to the bot's decoder by the view.
+                    Ok(PrivateEvent::Session) => {}
+                    // No payload arm: a frame of RPC answers alone — anything
+                    // else empty is unexpected.
+                    Ok(PrivateEvent::Empty) if answers > 0 => {}
+                    Ok(PrivateEvent::Empty) => rep.errors += 1,
+                    // Undecodable, or a private DELTA — a protocol error (a
+                    // wrong-mode client must not silently misapply it).
+                    Err(_) => rep.errors += 1,
                 }
-                // A one-shot FULL view (a fresh group member — late join
-                // or a group crossing), applied by the view (counted in
-                // its fulls and private fulls).
-                Ok(PrivateEvent::Full { .. }) => {}
-                // The game's session payload alone (the arena's welcome),
-                // handed to the bot's decoder by the view.
-                Ok(PrivateEvent::Session) => {}
-                // No payload arm: this client sends no RPCs, so an empty
-                // private frame is unexpected.
-                Ok(PrivateEvent::Empty) => rep.errors += 1,
-                // Undecodable, or a private DELTA — a protocol error (a
-                // wrong-mode client must not silently misapply it).
-                Err(_) => rep.errors += 1,
-            },
+            }
             op::base::ERROR => {
                 // Classified through the GENERATED enum (an unknown code
                 // reads as `Unspecified`), so this consumer and the
@@ -325,12 +356,19 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 break;
             };
             rep.bytes_in += frame_bytes(&wire, Dir::In, f.op, f.payload.len());
+            // Answers still arriving before the leave's ack count too.
+            if let Some(r) = rpc.as_mut().filter(|_| f.op == private_op) {
+                r.on_private(&f.payload, Instant::now());
+            }
             if f.op == op::base::LEAVE_ROOM_RESULT {
                 let _ = LeaveRoomResult::decode(&f.payload[..]);
                 rep.left = true;
                 break;
             }
         }
+    }
+    if let Some(r) = rpc {
+        rep.rpc = r.finish(Instant::now());
     }
     if let Some(c) = capture {
         c.finish().await;

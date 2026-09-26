@@ -9,9 +9,11 @@ use gsb_client::{Conn, Recv};
 
 mod accounting;
 mod connect;
+mod rpc;
 mod stall;
 pub(crate) use accounting::{Dir, frame_bytes, wire_in_bytes, ws_message_bytes};
 pub(crate) use connect::{TlsOpts, connect_wire};
+pub(crate) use rpc::{RpcClient, RpcPlan, RpcTally};
 pub(crate) use stall::{STALL_RCVBUF, Stall};
 
 mod view;
@@ -97,6 +99,9 @@ pub(crate) struct ClientReport {
     /// previous session (the park was already gone — expiry/supersede —
     /// and the client transparently fresh-joined, §5).
     pub(crate) fresh_joins: u64,
+    /// The RPC traffic mode's numbers (`--rpc-rate`; all zero without
+    /// it — and on a churn or orchestrated run, which refuse the mode).
+    pub(crate) rpc: RpcTally,
 }
 
 /// Everything one client task needs besides its own id. (One struct
@@ -125,6 +130,8 @@ pub(crate) struct ClientParams {
     pub(crate) capture: Option<(std::path::PathBuf, &'static str)>,
     /// `--stall-ms`: the slow-reader cycle (`None` = reads as it can).
     pub(crate) stall: Option<Stall>,
+    /// `--rpc-rate`: the RPC traffic beside the inputs (`None` = none).
+    pub(crate) rpc: Option<RpcPlan>,
 }
 
 /// What one bounded receive on the wire found. TCP distinguishes death

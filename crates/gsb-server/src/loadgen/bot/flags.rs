@@ -48,6 +48,15 @@ const DEMO_ONLY: &[(&str, &str)] = &[
         "--still-frac",
         "it tunes the demo's still profile; the other games' bots move their own way",
     ),
+    (
+        "--rpc-rate",
+        "the demo is the only hosted game with an RPC surface (its ECONOMY \
+         request); the other games answer every request \"no handler\"",
+    ),
+    (
+        "--rpc-burst",
+        "it shapes the RPC mode, which only the demo has a request for",
+    ),
 ];
 
 /// The MMO's own flags, each with why another game has no use for it.

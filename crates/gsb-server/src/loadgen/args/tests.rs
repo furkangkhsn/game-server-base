@@ -99,3 +99,48 @@ fn a_good_line_parses() {
     assert_eq!((args.stall_ms, args.stall_every_ms), (Some(900), 3000));
     assert!(matches!(line(&["5", "--help"]), Ok(Cli::Help)));
 }
+
+/// The RPC mode (B23): a rate and a burst parse; a bad value, a burst
+/// without a rate, a mode that has no ledger to keep (orchestrated,
+/// served, churn), and another game are refused with their reason.
+#[test]
+fn the_rpc_mode_parses_and_refuses() {
+    let Ok(Cli::Run(args)) = line(&["--rpc-rate", "2.5", "--rpc-burst", "8"]) else {
+        panic!("a run");
+    };
+    assert_eq!((args.rpc_rate, args.rpc_burst), (Some(2.5), Some(8)));
+    let Ok(Cli::Run(args)) = line(&["--rpc-rate", "1", "--addr", "127.0.0.1:7777"]) else {
+        panic!("a run against --addr");
+    };
+    assert_eq!((args.rpc_rate, args.rpc_burst), (Some(1.0), None));
+    let plain = "--rpc-rate drives a plain client run: not with --orchestrate, --serve or \
+                 --churn-secs";
+    for (argv, why) in [
+        (
+            &["--rpc-rate", "0"][..],
+            "--rpc-rate must be > 0 (requests/s per client)",
+        ),
+        (
+            &["--rpc-rate", "inf"],
+            "--rpc-rate must be > 0 (requests/s per client)",
+        ),
+        (
+            &["--rpc-rate", "1", "--rpc-burst", "0"],
+            "--rpc-burst must be at least 1",
+        ),
+        (
+            &["--rpc-burst", "4"],
+            "--rpc-burst shapes --rpc-rate: give the rate too",
+        ),
+        (&["--rpc-rate", "1", "--orchestrate"], plain),
+        (&["--rpc-rate", "1", "--serve"], plain),
+        (&["--rpc-rate", "1", "--churn-secs", "2"], plain),
+    ] {
+        assert_eq!(refused(argv), why, "{argv:?}");
+    }
+    #[cfg(feature = "game-arena")]
+    assert!(
+        refused(&["--game", "arena", "--rpc-rate", "1"])
+            .starts_with("--rpc-rate does not apply to --game arena")
+    );
+}
