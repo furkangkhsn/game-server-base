@@ -95,9 +95,11 @@ pub(super) fn healthz(ops: &OpsHttp) -> Response {
 }
 
 /// GET /metrics: the Prometheus text exposition (version 0.0.4) of the
-/// latest borrowed snapshot. Rendering is synchronous over the borrow — no
-/// await between `borrow()` and the last read, so the guard can never leak
-/// across a wait point.
+/// latest borrowed snapshot — the pull exporter (`gsb_core::metrics`'s
+/// export seam), rendered at scrape time. Rendering is synchronous over
+/// the borrow — no await between `borrow()` and the last read, so the
+/// guard can never leak across a wait point.
+#[cfg(feature = "prometheus")]
 pub(super) fn metrics_snapshot(ops: &OpsHttp) -> Response {
     let body = ops.reports.borrow().render_prometheus();
     Response {
@@ -107,6 +109,18 @@ pub(super) fn metrics_snapshot(ops: &OpsHttp) -> Response {
         allow: None,
         body,
     }
+}
+
+/// GET /metrics in a build without the Prometheus exporter: the path is
+/// known (405 for another verb), the exposition is not compiled in — a
+/// 404 that says why instead of an empty 200 a scraper would ingest.
+#[cfg(not(feature = "prometheus"))]
+pub(super) fn metrics_snapshot(_ops: &OpsHttp) -> Response {
+    Response::text(
+        404,
+        "Not Found",
+        "this build has no Prometheus exporter (cargo feature `prometheus`)\n",
+    )
 }
 
 /// GET /rooms: the known room ids (the configured ones plus everything

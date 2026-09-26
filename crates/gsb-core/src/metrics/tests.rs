@@ -10,14 +10,18 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+#[cfg(feature = "prometheus")]
 mod closes;
 mod collector;
 mod export;
+#[cfg(feature = "prometheus")]
 mod golden;
 mod histogram;
 mod logic;
+#[cfg(feature = "prometheus")]
 mod prometheus;
 mod pruning;
+#[cfg(feature = "prometheus")]
 mod seams;
 
 /// The accumulator applies all three event kinds and rates are

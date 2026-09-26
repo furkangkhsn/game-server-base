@@ -24,7 +24,7 @@ name = "client"
 required-features = ["game-demo"]
 
 [features]
-default = ["game-demo", "game-arena", "game-mmo", "game-war"]
+default = ["game-demo", "game-arena", "game-mmo", "game-war", "prometheus"]
 # One feature per hosted game; the `game` config key picks among the
 # compiled-in ones at startup.
 game-demo = ["dep:gsb-demo", "dep:gsb-kit"]
@@ -35,6 +35,9 @@ game-mmo = ["dep:gsb-demo-mmo", "dep:gsb-kit"]
 # "Cephe", the three-faction war over a sharded map with team fog
 # (`gsb-demo-war`, docs/GAME-MODULE.md "W2 sonucu").
 game-war = ["dep:gsb-demo-war", "dep:gsb-kit"]
+# The metrics exporters (docs/OPS.md §6). `prometheus`: the ops surface's
+# `/metrics` (without it the route answers 404 naming the feature).
+prometheus = ["gsb-core/prometheus"]
 
 [dependencies]
 tokio = { workspace = true }

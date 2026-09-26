@@ -163,3 +163,23 @@ async fn the_open_takes_the_id_override_with_the_query_rate_on_top() {
     };
     assert_eq!(asked, Some(want), "the query rate over the override's");
 }
+
+/// `/metrics` is the Prometheus pull exporter: the exposition with the
+/// `prometheus` feature, a 404 naming the feature without it (never an
+/// empty 200 a scraper would ingest as "no series").
+#[tokio::test]
+async fn the_metrics_path_serves_the_exposition_only_when_compiled_in() {
+    let (ops, _) = surface(&Config::default());
+    let response = route("GET /metrics HTTP/1.1", &ops).await;
+    if cfg!(feature = "prometheus") {
+        assert_eq!(response.status, 200);
+        assert!(
+            response
+                .body
+                .starts_with("# HELP gsb_metrics_dropped_total ")
+        );
+    } else {
+        assert_eq!(response.status, 404);
+        assert!(response.body.contains("cargo feature `prometheus`"));
+    }
+}

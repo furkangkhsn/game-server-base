@@ -28,7 +28,10 @@ rust-version = "1.95.0"
 gsb-lint = { path = "crates/gsb-lint" }
 gsb-protocol = { path = "crates/gsb-protocol" }
 gsb-ecs = { path = "crates/gsb-ecs" }
-gsb-core = { path = "crates/gsb-core" }
+# No default features here: a dependent turns on the export features it
+# serves (gsb-server's `prometheus`, `otlp`), so a build without them
+# compiles no exporter code. gsb-core's own test run keeps its default.
+gsb-core = { path = "crates/gsb-core", default-features = false }
 gsb-net = { path = "crates/gsb-net" }
 gsb-client = { path = "crates/gsb-client" }
 gsb-kit = { path = "crates/gsb-kit" }

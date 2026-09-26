@@ -24,6 +24,9 @@
 
 use crate::metrics::MetricReport;
 
+#[cfg(feature = "prometheus")]
+mod prometheus;
+
 /// A consumer of every report the collector folds.
 ///
 /// Called synchronously from the collector's task, once per report

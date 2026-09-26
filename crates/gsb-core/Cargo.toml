@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 
+# The export layer (`metrics::export`, docs/OPS.md §6): collection is
+# always compiled; each way a report leaves the server is a feature.
+[features]
+default = ["prometheus"]
+# The Prometheus text exposition (`MetricReport::render_prometheus`), the
+# body of the ops surface's `/metrics`. Pull: rendered at scrape time.
+prometheus = []
+
 [dependencies]
 tokio = { workspace = true }
 gsb-protocol = { workspace = true }

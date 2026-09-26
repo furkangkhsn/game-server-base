@@ -69,6 +69,7 @@ fn each_counter_is_one_logic_key_after_the_core_keys() {
     assert!(room("r3").ends_with(" logic_fights_peak=2 logic_captures=5 logic_kills=9"));
 }
 
+#[cfg(feature = "prometheus")]
 #[test]
 fn each_name_is_one_family_with_its_help_and_type() {
     let out = report().render_prometheus();
@@ -121,6 +122,7 @@ fn each_name_is_one_family_with_its_help_and_type() {
 /// the gauge `gsb_room_logic_counters_dropped` in the exposition — for
 /// the room that dropped values only; a room within the bound shows
 /// neither (the pinned text is untouched: `golden`).
+#[cfg(feature = "prometheus")]
 #[test]
 fn an_overflow_is_visible_on_both_renderings_only_while_non_zero() {
     let mut acc = MetricAccumulator::default();
@@ -164,6 +166,7 @@ fn an_overflow_is_visible_on_both_renderings_only_while_non_zero() {
 /// The exposition with counters is the pinned text plus the logic
 /// families appended, and the lines are the pinned ones plus the keys:
 /// the seam adds, it never moves a core line.
+#[cfg(feature = "prometheus")]
 #[test]
 fn counters_only_append_to_the_pinned_text() {
     let mut r = golden::golden_report();

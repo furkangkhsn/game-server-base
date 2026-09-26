@@ -93,7 +93,6 @@ mod closes;
 mod collector;
 mod export;
 mod logic;
-mod prometheus;
 mod render;
 mod report;
 mod sample;
