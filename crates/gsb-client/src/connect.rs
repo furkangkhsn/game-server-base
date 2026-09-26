@@ -29,9 +29,19 @@ pub fn tcp_stream(stream: TcpStream) -> Conn {
 /// Plain WebSocket (`ws://`): connect, `TCP_NODELAY` on, run the RFC
 /// 6455 upgrade (path `/`, `Host` = `addr`), split — see [`crate::ws`].
 pub async fn ws(addr: SocketAddr) -> io::Result<Conn> {
-    let mut stream = TcpStream::connect(addr).await?;
+    let stream = TcpStream::connect(addr).await?;
+    ws_stream(stream, &addr.to_string()).await
+}
+
+/// Plain WebSocket over a TCP stream the caller connected itself (its
+/// own socket options, as [`tcp_stream`]): `TCP_NODELAY` on, the RFC 6455
+/// upgrade (path `/`, `Host: host`), then the stream's OWNED halves — no
+/// shared split between the reader and the writer, as on [`tcp_stream`]
+/// (the generic [`crate::ws::handshake`] splits any stream through
+/// `tokio::io::split`).
+pub async fn ws_stream(mut stream: TcpStream, host: &str) -> io::Result<Conn> {
     stream.set_nodelay(true).ok();
-    let leftover = crate::ws::upgrade(&mut stream, &addr.to_string(), "/").await?;
+    let leftover = crate::ws::upgrade(&mut stream, host, "/").await?;
     let (r, w) = stream.into_split();
     Ok(crate::ws::conn(
         Box::new(r),
@@ -46,3 +56,6 @@ pub async fn ws(addr: SocketAddr) -> io::Result<Conn> {
 pub async fn udp(addr: SocketAddr) -> io::Result<Conn> {
     UdpClient::connect(addr).await.map(Conn::udp)
 }
+
+#[cfg(test)]
+mod tests;
