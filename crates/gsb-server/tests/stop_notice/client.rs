@@ -1,9 +1,9 @@
 //! A five-door test client for the close-notice suite: connect, write a
 //! length-prefixed frame, and read what the server sends up to the END
 //! of the session — reporting HOW it ended, which is what this suite is
-//! about. Four doors are `gsb_client` connections (TCP, TLS, QUIC, rUDP);
-//! the WebSocket door is a raw-TCP RFC 6455 client (one binary message
-//! per frame), since the client building block has no WebSocket half.
+//! about. Every door is a `gsb_client` connection (TCP, TLS, QUIC, rUDP,
+//! and the WebSocket one — one binary message per frame, the door's
+//! close frame surfaced by `Conn::ws_close`).
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use gsb_client::{Conn, Recv};
 use gsb_server::ListenerTransport;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::common::{self, TLS_SERVER_NAME};
@@ -27,13 +26,15 @@ pub enum End {
     Quiet,
 }
 
-pub enum Client {
-    Gsb(Conn),
-    Ws(TcpStream),
+pub struct Client {
+    conn: Conn,
+    /// The WebSocket close frame was reported: a later end is the TCP
+    /// end behind it, not a second close frame.
+    ws_close_reported: bool,
 }
 
 pub async fn connect(door: ListenerTransport, pki: &common::TlsPki, addr: SocketAddr) -> Client {
-    Client::Gsb(match door {
+    let conn = match door {
         ListenerTransport::Tcp => gsb_client::connect::tcp(addr).await.expect("tcp"),
         ListenerTransport::Tls => {
             let tcp = TcpStream::connect(addr).await.expect("tcp under tls");
@@ -52,26 +53,19 @@ pub async fn connect(door: ListenerTransport, pki: &common::TlsPki, addr: Socket
                 .await
                 .expect("QUIC handshake")
         }
-        ListenerTransport::Ws => return Client::Ws(connect_ws(addr).await),
-    })
+        ListenerTransport::Ws => gsb_client::connect::ws(addr)
+            .await
+            .expect("the door upgrades"),
+    };
+    Client {
+        conn,
+        ws_close_reported: false,
+    }
 }
 
 impl Client {
     pub async fn write_frame(&mut self, op: u16, payload: &[u8]) {
-        match self {
-            Client::Gsb(c) => c.send(op, payload).await.expect("write"),
-            Client::Ws(s) => {
-                // One masked FIN binary message carrying one game frame.
-                let bytes = gsb_client::frame::encode(op, payload);
-                let key = [0x5a, 0xa5, 0x3c, 0xc3];
-                let mut msg = vec![0x82];
-                assert!(bytes.len() < 126, "short frames only");
-                msg.push(0x80 | bytes.len() as u8);
-                msg.extend_from_slice(&key);
-                msg.extend(bytes.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
-                s.write_all(&msg).await.expect("write");
-            }
-        }
+        self.conn.send(op, payload).await.expect("write");
     }
 
     /// The byte sink under a stream door's frames — for bytes outside
@@ -79,70 +73,53 @@ impl Client {
     /// prefix; the close-notice suite never writes one).
     #[allow(dead_code)]
     pub fn raw(&mut self) -> &mut gsb_client::conn::BoxWrite {
-        match self {
-            Client::Gsb(Conn::Stream { tx, .. }) => tx.get_mut(),
+        match &mut self.conn {
+            Conn::Stream { tx, .. } => tx.get_mut(),
             _ => panic!("not a stream door"),
+        }
+    }
+
+    /// One WebSocket frame exactly as given (masked) — for messages
+    /// outside the wire contract (the `stream_rejected` suite's text
+    /// message; the close-notice suite never writes one).
+    #[allow(dead_code)]
+    pub async fn ws_frame(&mut self, fin: bool, opcode: u8, payload: &[u8]) {
+        match &mut self.conn {
+            Conn::Stream { tx, .. } => tx.ws_frame(fin, opcode, payload).await.expect("write"),
+            _ => panic!("not a WebSocket door"),
         }
     }
 
     /// The next frame, or how the session ended (`Err`) — `Quiet` when
     /// nothing arrives within `window`.
     pub async fn next(&mut self, window: Duration) -> Result<(u16, Vec<u8>), End> {
-        match self {
-            Client::Gsb(c) => match c.recv(window).await {
-                Ok(Recv::Frame(f)) => Ok((f.op, f.payload.to_vec())),
-                Ok(Recv::Closed) => Err(End::Eof),
-                Ok(Recv::Quiet) => Err(End::Quiet),
-                Err(_) if c.is_udp() => Err(End::Quiet),
-                // A stream ends at a frame boundary, never inside one.
-                Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::InvalidData) => {
-                    panic!("a whole frame: {e}")
+        let c = &mut self.conn;
+        match c.recv(window).await {
+            Ok(Recv::Frame(f)) => Ok((f.op, f.payload.to_vec())),
+            Ok(Recv::Closed) => match c.ws_close() {
+                // The close frame, reported once, with its payload as
+                // sent: the status code (none in an empty close), then
+                // the reason.
+                Some(close) if !self.ws_close_reported => {
+                    self.ws_close_reported = true;
+                    let mut payload = close
+                        .code
+                        .map_or_else(Vec::new, |code| code.to_be_bytes().to_vec());
+                    payload.extend_from_slice(close.reason.as_bytes());
+                    Err(End::WsClose(payload))
                 }
-                // Any other read failure at a frame boundary is the end
-                // of the stream.
-                Err(_) => Err(End::Eof),
+                _ => Err(End::Eof),
             },
-            Client::Ws(s) => tokio::time::timeout(window, ws_frame(s))
-                .await
-                .unwrap_or(Err(End::Quiet)),
+            Ok(Recv::Quiet) => Err(End::Quiet),
+            Err(_) if c.is_udp() => Err(End::Quiet),
+            // A stream ends at a frame boundary, never inside one (and a
+            // WebSocket sends nothing after its close frame).
+            Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::InvalidData) => {
+                panic!("a whole frame: {e}")
+            }
+            // Any other read failure at a frame boundary is the end of
+            // the stream.
+            Err(_) => Err(End::Eof),
         }
     }
-}
-
-/// One server WS frame: a binary message carrying one game frame, or the
-/// close frame that ends the session.
-async fn ws_frame(s: &mut TcpStream) -> Result<(u16, Vec<u8>), End> {
-    let mut head = [0u8; 2];
-    s.read_exact(&mut head).await.map_err(|_| End::Eof)?;
-    let len = match head[1] & 0x7f {
-        126 => s.read_u16().await.expect("len16") as usize,
-        127 => s.read_u64().await.expect("len64") as usize,
-        n => n as usize,
-    };
-    let mut payload = vec![0u8; len];
-    s.read_exact(&mut payload).await.expect("a whole WS frame");
-    match head[0] & 0x0f {
-        0x8 => Err(End::WsClose(payload)),
-        0x2 => Ok((
-            u16::from_le_bytes([payload[4], payload[5]]),
-            payload[6..].to_vec(),
-        )),
-        other => panic!("unexpected WS opcode {other:#x}"),
-    }
-}
-
-async fn connect_ws(addr: SocketAddr) -> TcpStream {
-    let mut s = TcpStream::connect(addr).await.expect("ws tcp");
-    let req = format!(
-        "GET /gsb HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
-         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
-         Sec-WebSocket-Version: 13\r\n\r\n"
-    );
-    s.write_all(req.as_bytes()).await.expect("upgrade request");
-    let mut head = Vec::new();
-    while !head.ends_with(b"\r\n\r\n") {
-        head.push(s.read_u8().await.expect("upgrade response"));
-    }
-    assert!(head.starts_with(b"HTTP/1.1 101"), "the door upgrades");
-    s
 }

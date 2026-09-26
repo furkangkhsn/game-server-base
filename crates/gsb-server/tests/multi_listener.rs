@@ -5,10 +5,9 @@
 //! room, with one shared connection-id sequence across all doors.
 //!
 //! Idioms are the e2e.rs ones (real server on ephemeral ports, real
-//! clients, wire-level frames). Four doors are `gsb_client` connections
-//! (TCP, TLS, rUDP, and QUIC — quinn against `gsb_net::quic`); the WS
-//! door is walked by a raw-TCP RFC 6455 client (adapted from the gsb-net
-//! ws.rs suite), since the client building block has no WebSocket half.
+//! clients, wire-level frames). Every door is a `gsb_client` connection
+//! (TCP, TLS, rUDP, QUIC — quinn against `gsb_net::quic` — and the
+//! WebSocket half, one masked binary message per frame).
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -16,7 +15,6 @@ use std::time::{Duration, Instant};
 use gsb_client::session::{self, Credentials};
 use gsb_client::{ClientError, Conn, Recv};
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod common;
@@ -37,13 +35,9 @@ fn entry(
     }
 }
 
-/// Which wire a test client sits on: a `gsb_client` connection (the
-/// TLS and QUIC arms trust ONLY the runtime-minted test CA), or the fake
-/// WebSocket client.
-enum Client {
-    Gsb(Conn),
-    Ws(FakeWsClient),
-}
+/// A test client: a `gsb_client` connection over any door (the TLS and
+/// QUIC arms trust ONLY the runtime-minted test CA).
+struct Client(Conn);
 
 /// Connect a client to the right kind of door.
 async fn connect(
@@ -51,7 +45,7 @@ async fn connect(
     pki: &common::TlsPki,
     addr: std::net::SocketAddr,
 ) -> Client {
-    Client::Gsb(match transport {
+    Client(match transport {
         gsb_server::ListenerTransport::Tcp => gsb_client::connect::tcp(addr)
             .await
             .expect("plain TCP connects"),
@@ -76,203 +70,39 @@ async fn connect(
                 .await
                 .expect("QUIC handshake")
         }
-        gsb_server::ListenerTransport::Ws => return Client::Ws(FakeWsClient::connect(addr).await),
+        // One masked binary message per frame, the door's contract.
+        gsb_server::ListenerTransport::Ws => gsb_client::connect::ws(addr)
+            .await
+            .expect("the WebSocket door upgrades"),
     })
 }
 
 impl Client {
     async fn write_frame(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
-        match self {
-            Client::Gsb(c) => c.send(op, payload).await,
-            Client::Ws(c) => c.send_game(op, payload).await,
-        }
+        self.0.send(op, payload).await
     }
 
     /// Wait up to `window` for the next frame; `None` = nothing arrived
     /// (rUDP has no EOF; the stream doors' EOF surfaces as `None` here too,
     /// which no flow in this suite relies on).
     async fn recv_frame(&mut self, window: Duration) -> std::io::Result<Option<(u16, Vec<u8>)>> {
-        match self {
-            Client::Gsb(c) => match c.recv(window).await {
-                Ok(Recv::Frame(f)) => Ok(Some((f.op, f.payload.to_vec()))),
-                Ok(Recv::Closed | Recv::Quiet) => Ok(None),
-                // An rUDP socket error is the test's failure; a stream
-                // door's read error ends the stream like EOF.
-                Err(e) if c.is_udp() => Err(e),
-                Err(_) => Ok(None),
-            },
-            Client::Ws(c) => Ok(tokio::time::timeout(window, c.recv_game())
-                .await
-                .ok()
-                .flatten()),
+        let c = &mut self.0;
+        match c.recv(window).await {
+            Ok(Recv::Frame(f)) => Ok(Some((f.op, f.payload.to_vec()))),
+            Ok(Recv::Closed | Recv::Quiet) => Ok(None),
+            // An rUDP socket error is the test's failure; a stream
+            // door's read error ends the stream like EOF.
+            Err(e) if c.is_udp() => Err(e),
+            Err(_) => Ok(None),
         }
     }
-}
-
-// ── fake WS client (raw TCP, masked frames; adapted from the gsb-net
-//    ws.rs suite, which owns this protocol's unit tests) ────────────────
-
-const RFC_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
-/// base64(SHA-1(RFC_KEY + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) — the
-/// RFC 6455 §1.3 vector, so the accept-key check needs no hashing here.
-const RFC_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
-const WS_OP_BIN: u8 = 0x2;
-
-/// Deterministic mask keys (RFC masking defeats proxy caching, not tests).
-struct MaskGen(u32);
-impl MaskGen {
-    fn next(&mut self) -> [u8; 4] {
-        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        self.0.to_be_bytes()
-    }
-}
-
-/// One masked client frame: single FIN binary message carrying `payload`.
-fn encode_client_ws_frame(payload: &[u8], key: [u8; 4]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(14 + payload.len());
-    frame.push(0x80 | WS_OP_BIN);
-    let mask_bit = 0x80;
-    let l7 = payload.len();
-    if l7 < 126 {
-        frame.push(mask_bit | l7 as u8);
-    } else if l7 <= u16::MAX as usize {
-        frame.push(mask_bit | 126);
-        frame.extend_from_slice(&(l7 as u16).to_be_bytes());
-    } else {
-        frame.push(mask_bit | 127);
-        frame.extend_from_slice(&(l7 as u64).to_be_bytes());
-    }
-    frame.extend_from_slice(&key);
-    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
-    frame
-}
-
-struct FakeWsClient {
-    stream: TcpStream,
-    masks: MaskGen,
-}
-
-impl FakeWsClient {
-    /// Real RFC 6455 opening handshake against the server door; the 101
-    /// response's Sec-WebSocket-Accept is verified against the RFC vector.
-    async fn connect(addr: std::net::SocketAddr) -> Self {
-        let mut stream = TcpStream::connect(addr).await.expect("ws tcp connect");
-        let request = format!(
-            "GET /gsb HTTP/1.1\r\n\
-             Host: {addr}\r\n\
-             Upgrade: websocket\r\n\
-             Connection: Upgrade\r\n\
-             Sec-WebSocket-Key: {RFC_KEY}\r\n\
-             Sec-WebSocket-Version: 13\r\n\
-             \r\n"
-        );
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .expect("handshake write");
-        let head = read_http_head(&mut stream).await;
-        assert!(
-            head.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
-            "want 101, got: {head}"
-        );
-        let accept = header_value(&head, "sec-websocket-accept")
-            .unwrap_or_else(|| panic!("101 must carry Sec-WebSocket-Accept, got: {head}"));
-        assert_eq!(accept, RFC_ACCEPT, "accept key must match the RFC vector");
-        Self {
-            stream,
-            masks: MaskGen(42),
-        }
-    }
-
-    /// Send one game frame inside ONE masked binary WS message (each
-    /// message carries exactly one length-prefixed game frame — the wire
-    /// contract the ws door enforces).
-    async fn send_game(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
-        let msg = gsb_client::frame::encode(op, payload);
-        let frame = encode_client_ws_frame(&msg, self.masks.next());
-        self.stream.write_all(&frame).await?;
-        self.stream.flush().await
-    }
-
-    /// Read the next binary game frame. Single-read ON PURPOSE: the ws
-    /// door never originates control frames (pongs ride the same queue
-    /// only as ping REPLIES, and these flows send no pings), so one
-    /// server message = one binary game frame; anything else is a flow
-    /// break worth panicking on, not skipping.
-    async fn recv_game(&mut self) -> Option<(u16, Vec<u8>)> {
-        let (fin, opcode, payload) = self.read_frame().await?;
-        assert_ne!(opcode, 0x8, "unexpected close mid-flow");
-        assert_eq!(
-            opcode, WS_OP_BIN,
-            "game frames ride binary messages, got {opcode:#x}"
-        );
-        assert!(fin, "server messages are single-frame in these flows");
-        let declared =
-            u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
-        assert_eq!(
-            payload.len(),
-            4 + declared,
-            "exactly one length-prefixed game frame per message"
-        );
-        let op = u16::from_le_bytes([payload[4], payload[5]]);
-        Some((op, payload[6..].to_vec()))
-    }
-
-    /// Read one unmasked server frame: `(fin, opcode, payload)`.
-    async fn read_frame(&mut self) -> Option<(bool, u8, Vec<u8>)> {
-        let mut head = [0u8; 2];
-        self.stream.read_exact(&mut head).await.ok()?;
-        let fin = head[0] & 0x80 != 0;
-        assert_eq!(head[1] & 0x80, 0, "server must never mask");
-        let l7 = (head[1] & 0x7f) as usize;
-        let len = match l7 {
-            0x7e => {
-                let mut ext = [0u8; 2];
-                self.stream.read_exact(&mut ext).await.ok()?;
-                u16::from_be_bytes(ext) as usize
-            }
-            0x7f => {
-                let mut ext = [0u8; 8];
-                self.stream.read_exact(&mut ext).await.ok()?;
-                u64::from_be_bytes(ext) as usize
-            }
-            n => n,
-        };
-        let mut payload = vec![0u8; len];
-        if len > 0 {
-            self.stream.read_exact(&mut payload).await.ok()?;
-        }
-        Some((fin, head[0] & 0x0f, payload))
-    }
-}
-
-async fn read_http_head(stream: &mut TcpStream) -> String {
-    let mut buf = Vec::with_capacity(512);
-    let mut byte = [0u8; 1];
-    while buf.windows(4).position(|w| w == b"\r\n\r\n").is_none() {
-        let n = stream.read(&mut byte).await.expect("http head read");
-        assert!(n > 0, "EOF before the HTTP response head ended");
-        buf.push(byte[0]);
-        assert!(buf.len() < 16 * 1024, "response head runaway");
-    }
-    String::from_utf8_lossy(&buf).into_owned()
-}
-
-fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
-    head.lines().find_map(|line| {
-        let (n, v) = line.split_once(':')?;
-        n.trim().eq_ignore_ascii_case(name).then(|| v.trim())
-    })
 }
 
 /// AUTH + JOIN coalesced onto the wire; resolves with the joiner's wire
 /// entity id once the JOIN_ROOM_RESULT arrives. Interleaved frames
 /// (snapshots for earlier members) are tolerated and discarded here.
 async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
-    let c = match client {
-        Client::Gsb(c) => c,
-        Client::Ws(_) => return ws_auth_and_join(client, name).await,
-    };
+    let c = &mut client.0;
     let creds = Credentials::named(name);
     match session::auth_and_join(c, &creds, 1, Duration::from_secs(10), |_| {}).await {
         Ok(j) => {
@@ -285,48 +115,6 @@ async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
         Err(ClientError::AuthRefused(_)) => panic!("{name}: auth must succeed"),
         Err(ClientError::TimedOut) => panic!("{name}: timed out waiting for the join result"),
         Err(e) => panic!("{name}: connection ended before the join result: {e}"),
-    }
-}
-
-/// [`auth_and_join`] for the fake WebSocket client (not a `gsb_client`
-/// connection, so the session steps are spelled out here: the same
-/// frames, one binary message each).
-async fn ws_auth_and_join(client: &mut Client, name: &str) -> u64 {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    for f in [
-        session::auth_req(&Credentials::named(name)),
-        session::join_req(1),
-    ] {
-        client
-            .write_frame(f.op, &f.payload)
-            .await
-            .expect("request goes out");
-    }
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .unwrap_or_else(|| panic!("{name}: timed out waiting for the join result"));
-        let (op, payload) = client
-            .recv_frame(remaining)
-            .await
-            .expect("socket works")
-            .unwrap_or_else(|| panic!("{name}: connection ended before the join result"));
-        match op {
-            gsb_protocol::op::base::AUTH_RESULT => {
-                let m = gsb_protocol::base::AuthResult::decode(&payload[..]).unwrap();
-                assert!(m.ok, "{name}: auth must succeed");
-            }
-            gsb_protocol::op::base::JOIN_ROOM_RESULT => {
-                let m = gsb_protocol::base::JoinRoomResult::decode(&payload[..]).unwrap();
-                assert_ne!(m.entity, 0, "{name}: entity id must be non-zero");
-                return m.entity;
-            }
-            gsb_protocol::op::base::ERROR => {
-                let m = gsb_client::ServerError::decode(&payload).unwrap();
-                panic!("{name}: server error code={} message={}", m.raw, m.message);
-            }
-            _ => {} // snapshots racing ahead of the join result
-        }
     }
 }
 

@@ -128,15 +128,8 @@ async fn an_oversized_quic_frame_gets_error_9_before_the_close() {
 #[tokio::test]
 async fn a_websocket_violation_gets_the_close_frame_and_nothing_after_it() {
     let (handle, mut c, _pki) = session(ListenerTransport::Ws, "rej-ws").await;
-    let Client::Ws(s) = &mut c else {
-        unreachable!()
-    };
     // One masked FIN text frame, "hi".
-    let key = [1u8, 2, 3, 4];
-    let mut frame = vec![0x81, 0x80 | 2];
-    frame.extend_from_slice(&key);
-    frame.extend(b"hi".iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
-    s.write_all(&frame).await.expect("write");
+    c.ws_frame(true, gsb_client::ws::OP_TEXT, b"hi").await;
     let (errors, end) = read_to_end(&mut c).await;
     assert!(
         errors.is_empty(),
