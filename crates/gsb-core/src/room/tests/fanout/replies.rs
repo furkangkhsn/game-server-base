@@ -10,6 +10,11 @@ use crate::room::actor::RoomActor;
 use crate::rpc::{RPC_REQ_OP, RequestDecision, RpcRequest};
 use prost::Message;
 
+// The storm bound (the congested connection's refusals).
+mod bound;
+// A session that ends takes its undelivered answers along.
+mod session;
+
 /// Answered room-locally, in the tick that processes it.
 const OP_LOCAL: u16 = 0x01;
 /// Delegated to a worker whose future never resolves (stays in flight).
@@ -153,11 +158,6 @@ fn request(tx: &Mailbox<Action>, conn: u64, id: u64, op: u16) {
     send(tx, conn, env.encode_to_vec());
 }
 
-/// Send a request-op action whose envelope does not decode.
-fn malformed(tx: &Mailbox<Action>, conn: u64) {
-    send(tx, conn, vec![0xFF, 0xFF, 0xFF]);
-}
-
 fn send(tx: &Mailbox<Action>, conn: u64, payload: Vec<u8>) {
     tx.try_send(Action {
         conn: ConnectionId(conn),
@@ -187,12 +187,6 @@ fn drain(rx: &mut mpsc::Receiver<FrameBatch>) -> Vec<Vec<u64>> {
         batches.push(ids);
     }
     batches
-}
-
-/// What `conn` owes: queued (undelivered included) + in flight.
-fn owed(actor: &RoomActor<(), (), ()>, conn: u64) -> usize {
-    let c = ConnectionId(conn);
-    actor.queued.get(&c).map_or(0, Vec::len) + actor.pending.get(&c).map_or(0, |d| d.len())
 }
 
 /// The channel holds one batch and is not read: the answers of steps 2
@@ -233,138 +227,4 @@ fn a_delivered_answer_is_not_resent_by_a_later_drop() {
     step(&mut a, 4);
     assert_eq!(drain(&mut rx), [Vec::<u64>::new()], "no duplicate");
     assert_eq!(a.m.dropped_frames, 2);
-}
-
-/// Cap 2, pull 4. Once a batch carrying an answer dropped, the
-/// connection accepts a request only while it owes fewer than 2
-/// answers: step 3 takes one more (owes 2) and refuses the rest, every
-/// later step refuses all — well-formed or not — without answering, and
-/// the two owed answers arrive once the channel drains. Delivery ends
-/// the congestion: the next request is answered as usual.
-#[test]
-fn a_congested_connection_owes_at_most_its_in_flight_cap() {
-    let (mut a, _control) = room(2, 4);
-    let (tx, mut rx) = join(&mut a, 1, 1);
-    request(&tx, 1, 1, OP_LOCAL);
-    step(&mut a, 1);
-    request(&tx, 1, 2, OP_LOCAL);
-    step(&mut a, 2);
-    for id in 3..=6 {
-        request(&tx, 1, id, OP_LOCAL);
-    }
-    step(&mut a, 3);
-    assert_eq!(owed(&a, 1), 2, "3 accepted, 4..=6 refused");
-    for tick in 4..=10 {
-        for n in 0..3 {
-            request(&tx, 1, tick * 10 + n, OP_LOCAL);
-        }
-        malformed(&tx, 1);
-        step(&mut a, tick);
-        assert_eq!(owed(&a, 1), 2, "step {tick}: nothing more accepted");
-    }
-    assert_eq!(a.m.requests_rejected_conn_cap, 3 + 7 * 4);
-    assert_eq!(a.m.requests_rejected_malformed, 0, "refused, not answered");
-    assert_eq!(drain(&mut rx), [vec![1]]);
-    step(&mut a, 11);
-    assert_eq!(drain(&mut rx), [vec![2, 3]]);
-    request(&tx, 1, 100, OP_LOCAL);
-    step(&mut a, 12);
-    assert_eq!(drain(&mut rx), [vec![100]], "flowing again");
-}
-
-/// The worst case: 2 requests in flight when a step's full pull (4)
-/// is answered into a batch that drops — the connection owes 2 + 4 and
-/// not one more while it stays congested.
-#[tokio::test]
-async fn the_storm_bound_is_the_cap_plus_one_ticks_pull() {
-    let (mut a, _control) = room(2, 4);
-    let (tx, mut rx) = join(&mut a, 1, 1);
-    request(&tx, 1, 1, OP_EXT);
-    request(&tx, 1, 2, OP_EXT);
-    request(&tx, 1, 3, OP_LOCAL);
-    step(&mut a, 1);
-    for id in 4..=7 {
-        request(&tx, 1, id, OP_LOCAL);
-    }
-    step(&mut a, 2);
-    assert_eq!(owed(&a, 1), 2 + 4);
-    for tick in 3..=8 {
-        request(&tx, 1, tick * 10, OP_EXT);
-        request(&tx, 1, tick * 10 + 1, OP_LOCAL);
-        step(&mut a, tick);
-        assert_eq!(owed(&a, 1), 2 + 4, "step {tick}");
-    }
-    assert_eq!(drain(&mut rx), [vec![3]]);
-    step(&mut a, 9);
-    assert_eq!(drain(&mut rx), [vec![4, 5, 6, 7]]);
-}
-
-/// In-flight requests count toward what a congested connection owes:
-/// one undelivered answer plus one pending request reach the cap of 2.
-#[tokio::test]
-async fn in_flight_requests_count_toward_what_is_owed() {
-    let (mut a, _control) = room(2, 4);
-    let (tx, _rx) = join(&mut a, 1, 1);
-    request(&tx, 1, 1, OP_LOCAL);
-    step(&mut a, 1);
-    request(&tx, 1, 2, OP_EXT);
-    request(&tx, 1, 3, OP_LOCAL);
-    step(&mut a, 2); // [3] dropped; 2 in flight
-    request(&tx, 1, 4, OP_LOCAL);
-    step(&mut a, 3);
-    assert_eq!(a.m.requests_rejected_conn_cap, 1, "4 refused");
-    assert_eq!(a.queued.get(&ConnectionId(1)).map(Vec::len), Some(1));
-}
-
-/// A connection that leaves with undelivered answers takes them along:
-/// nothing stays queued, and nothing more reaches its old channel.
-#[test]
-fn a_leaving_connection_takes_its_undelivered_answers_along() {
-    let (mut a, _control) = room(4, 16);
-    let (tx, mut rx) = join(&mut a, 1, 1);
-    let (_tx2, mut rx2) = join(&mut a, 2, 64);
-    request(&tx, 1, 1, OP_LOCAL);
-    step(&mut a, 1);
-    request(&tx, 1, 2, OP_LOCAL);
-    step(&mut a, 2);
-    assert!(a.queued.contains_key(&ConnectionId(1)), "2 is owed");
-    a.handle_control(RoomControl::Leave {
-        conn: ConnectionId(1),
-        entity: 1,
-    });
-    step(&mut a, 3);
-    assert!(a.queued.is_empty(), "nothing leaks");
-    assert_eq!(drain(&mut rx), [vec![1]]);
-    assert_eq!(drain(&mut rx2).len(), 3, "the other member is unaffected");
-}
-
-/// Undelivered answers are session-scoped like every RPC state: a
-/// detach drops them and the resumed session's fresh transport never
-/// receives the dead session's answers.
-#[test]
-fn a_resumed_session_does_not_inherit_undelivered_answers() {
-    let (mut a, _control) = room(4, 16);
-    let (tx, _slow) = join(&mut a, 1, 1);
-    request(&tx, 1, 1, OP_LOCAL);
-    step(&mut a, 1);
-    request(&tx, 1, 2, OP_LOCAL);
-    step(&mut a, 2);
-    a.handle_control(RoomControl::Detach {
-        conn: ConnectionId(1),
-        entity: 1,
-        identity: "one".into(),
-    });
-    let (out, mut fresh) = mpsc::channel::<FrameBatch>(64);
-    let (reply, mut replied) = oneshot::channel();
-    a.handle_control(RoomControl::Resume {
-        conn: ConnectionId(2),
-        epoch: 0,
-        identity: "one".into(),
-        out,
-        reply,
-    });
-    replied.try_recv().expect("sync reply").expect("resumed");
-    step(&mut a, 3);
-    assert_eq!(drain(&mut fresh), [Vec::<u64>::new()]);
-    assert!(a.queued.is_empty());
 }
