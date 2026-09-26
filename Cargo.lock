@@ -700,6 +700,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsb-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "gsb-lint",
+ "gsb-net",
+ "gsb-protocol",
+ "prost",
+ "quinn",
+ "rustls",
+ "rustls-pemfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+]
+
+[[package]]
 name = "gsb-core"
 version = "0.1.0"
 dependencies = [

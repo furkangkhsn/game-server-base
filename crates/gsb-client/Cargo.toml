@@ -1,0 +1,33 @@
+[package]
+name = "gsb-client"
+description = "Client building block for gsb: the framed connection over the gsb-net client transports, typed base frames, and the session steps (auth, join, heartbeat, leave) with ERROR frames as typed errors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# Every dependency below is already in the workspace lock (gsb-net pulls
+# the same tokio / tokio-util / futures / rustls / tokio-rustls / quinn;
+# gsb-server the same rustls-pemfile). No game crate, ever: a game's
+# payloads stay opaque here (`Bytes` + opcode).
+[dependencies]
+gsb-protocol = { workspace = true }
+# The rUDP client half (`gsb_net::udp::UdpClient`) and the QUIC ALPN id.
+gsb-net = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+thiserror = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+quinn = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,157 @@
+//! The stream wire: `[u32 LE body length][u16 LE opcode][payload]` — the
+//! shape every stream door (TCP, TLS, the QUIC bi-stream) speaks, and the
+//! frame each WebSocket message and each rUDP datagram carries inside.
+//!
+//! The server side of the same contract is `gsb_net`'s framing adapter;
+//! this is the client side, over any `AsyncRead` / `AsyncWrite` pair.
+//!
+//! [`FrameRx::next`] is cancel-safe: a partial frame stays buffered when
+//! the future is dropped (a `timeout` around it), so a bounded read never
+//! desyncs the stream. The hand-rolled `read_exact` readers this crate
+//! replaced were not — a window that elapsed between the length prefix
+//! and the body lost the prefix, and the next read parsed payload bytes
+//! as a length.
+
+use std::io;
+
+use bytes::BytesMut;
+use futures::StreamExt;
+use gsb_protocol::FrameBody;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio_util::codec::{Decoder, FramedRead, LengthDelimitedCodec};
+
+/// The largest frame body a [`FrameRx`] accepts by default: 4 MiB, the
+/// bound every client copy this crate replaced used. A longer declared
+/// length is refused before its body is read (`InvalidData`).
+pub const DEFAULT_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// The bytes one frame occupies on a stream door: the 4-byte length
+/// prefix, the 2-byte opcode and the payload.
+pub fn wire_len(payload_len: usize) -> usize {
+    4 + 2 + payload_len
+}
+
+/// Append one encoded frame to `out`.
+pub fn encode_into(out: &mut Vec<u8>, op: u16, payload: &[u8]) {
+    out.reserve(wire_len(payload.len()));
+    out.extend_from_slice(&((2 + payload.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&op.to_le_bytes());
+    out.extend_from_slice(payload);
+}
+
+/// One encoded frame.
+pub fn encode(op: u16, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(wire_len(payload.len()));
+    encode_into(&mut out, op, payload);
+    out
+}
+
+/// The length-delimited codec, the gsb way (little-endian prefix, the
+/// size guard), with one refinement: a stream that ends INSIDE a frame
+/// is `UnexpectedEof` — told apart from a read error, and from the clean
+/// end at a frame boundary.
+struct Codec(LengthDelimitedCodec);
+
+impl Decoder for Codec {
+    type Item = BytesMut;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<BytesMut>> {
+        self.0.decode(src)
+    }
+
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> io::Result<Option<BytesMut>> {
+        match self.decode(buf)? {
+            None if !buf.is_empty() => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the stream ended inside a frame",
+            )),
+            done => Ok(done),
+        }
+    }
+}
+
+/// The read half: decoded frames off a byte source.
+pub struct FrameRx<R> {
+    inner: FramedRead<R, Codec>,
+}
+
+impl<R: AsyncRead + Unpin> FrameRx<R> {
+    /// A reader with the [`DEFAULT_MAX_FRAME_BYTES`] guard.
+    pub fn new(source: R) -> Self {
+        Self::with_max(source, DEFAULT_MAX_FRAME_BYTES)
+    }
+
+    /// A reader refusing any frame body longer than `max_frame_bytes`.
+    pub fn with_max(source: R, max_frame_bytes: usize) -> Self {
+        let codec = LengthDelimitedCodec::builder()
+            .little_endian()
+            .max_frame_length(max_frame_bytes)
+            .new_codec();
+        Self {
+            inner: FramedRead::new(source, Codec(codec)),
+        }
+    }
+
+    /// The next frame. `Ok(None)`: the stream ended at a frame boundary
+    /// (EOF). `Err`: a read error; a stream that ended inside a frame
+    /// (`UnexpectedEof`); a length over the guard, or a body too short to
+    /// carry an opcode (`InvalidData`). Cancel-safe (see the module docs).
+    pub async fn next(&mut self) -> io::Result<Option<FrameBody>> {
+        match self.inner.next().await {
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
+            Some(Ok(body)) => FrameBody::decode(body.freeze())
+                .map(Some)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+}
+
+/// The write half: encoded frames onto a byte sink.
+pub struct FrameTx<W> {
+    inner: W,
+}
+
+impl<W: AsyncWrite + Unpin> FrameTx<W> {
+    pub fn new(sink: W) -> Self {
+        Self { inner: sink }
+    }
+
+    /// Write one frame and flush it.
+    pub async fn send(&mut self, op: u16, payload: &[u8]) -> io::Result<()> {
+        self.feed(op, payload).await?;
+        self.inner.flush().await
+    }
+
+    /// Write several frames in ONE write, then flush — e.g. AUTH and JOIN
+    /// pipelined (the connection actor processes them in order).
+    pub async fn send_batch(&mut self, frames: &[FrameBody]) -> io::Result<()> {
+        let mut out = Vec::new();
+        for f in frames {
+            encode_into(&mut out, f.op, &f.payload);
+        }
+        self.inner.write_all(&out).await?;
+        self.inner.flush().await
+    }
+
+    /// Write one frame without flushing (a tight send loop that flushes
+    /// on its own schedule, or never — a plain socket needs no flush).
+    pub async fn feed(&mut self, op: u16, payload: &[u8]) -> io::Result<()> {
+        self.inner.write_all(&encode(op, payload)).await
+    }
+
+    /// Flush what was fed.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush().await
+    }
+
+    /// The byte sink itself — for bytes outside the frame contract (a
+    /// test writing a malformed prefix on purpose).
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests;
