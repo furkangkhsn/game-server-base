@@ -1,5 +1,10 @@
 //! The reconnect-churn client: drop and resume on a cycle, so the
 //! park/resume path is measured under load.
+//!
+//! Byte accounting is `run_client`'s: every frame written (AUTH, each
+//! JOIN attempt, the inputs) and every frame read (the join phase's
+//! replies included) at its real size on this wire — [`frame_bytes`]:
+//! the length-prefixed frame on TCP/TLS, the datagram on rUDP.
 
 use std::time::{Duration, Instant};
 
@@ -26,13 +31,22 @@ pub(crate) async fn churn_join(
 ) -> Option<u64> {
     for _attempt in 0..5u32 {
         let join = session::join_req(room);
+        // Every attempt is on the wire (the same convention as
+        // `run_client`: counted when written).
+        rep.bytes_out += frame_bytes(wire, join.op, join.payload.len());
         if wire.send(join.op, &join.payload).await.is_err() {
             return None;
         }
         let mut retriable = false;
         let join_deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < join_deadline {
-            match recv_wire(wire, Duration::from_millis(250)).await {
+            let got = recv_wire(wire, Duration::from_millis(250)).await;
+            // Every frame the join phase reads is inbound wire bytes —
+            // the result and the refusals included.
+            if let Got::Frame(op, payload) = &got {
+                rep.bytes_in += frame_bytes(wire, *op, payload.len());
+            }
+            match got {
                 Got::Frame(op::base::JOIN_ROOM_RESULT, payload) => {
                     return JoinRoomResult::decode(&payload[..]).ok().map(|m| m.entity);
                 }
@@ -62,8 +76,7 @@ pub(crate) async fn churn_join(
                         _ => rep.errors += 1,
                     }
                 }
-                Got::Frame(_, payload) => rep.bytes_in += payload.len() as u64,
-                Got::Quiet => {}
+                Got::Frame(..) | Got::Quiet => {}
                 Got::Dead => return None,
             }
         }
@@ -147,10 +160,10 @@ pub(crate) async fn run_churn_client(
         // -- auth, then the join below (its own frame, with retry) ────
         //    The AUTH states the wire version (DESIGN §5.5).
         let auth = session::auth_req(&creds);
+        rep.bytes_out += frame_bytes(&wire, auth.op, auth.payload.len());
         if wire.send(auth.op, &auth.payload).await.is_err() {
             continue;
         }
-        rep.bytes_out += wire_in_bytes(op::base::AUTH_REQ, 8);
 
         // -- wait for JOIN_ROOM_RESULT (bounded, with bounded retry) ───
         let Some(entity) = churn_join(id, &mut wire, p.room, &mut rep).await else {
@@ -184,7 +197,7 @@ pub(crate) async fn run_churn_client(
                 next_move = now + p.move_ms;
                 let (input_op, payload) = p.bot.churn_input(id, seq);
                 seq += 1;
-                rep.bytes_out += wire_in_bytes(input_op, payload.len());
+                rep.bytes_out += frame_bytes(&wire, input_op, payload.len());
                 if send_wire(&mut wire, input_op, payload).await.is_err() {
                     break; // peer/session gone early
                 }
@@ -194,8 +207,8 @@ pub(crate) async fn run_churn_client(
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(250));
             match recv_wire(&mut wire, timeout).await {
-                Got::Frame(_, payload) => {
-                    rep.bytes_in += (2 + payload.len()) as u64;
+                Got::Frame(op, payload) => {
+                    rep.bytes_in += frame_bytes(&wire, op, payload.len());
                     if payload.is_empty() {
                         rep.errors += 1;
                     }
@@ -223,3 +236,6 @@ pub(crate) async fn run_churn_client(
     }
     rep
 }
+
+#[cfg(test)]
+mod tests;
