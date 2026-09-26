@@ -97,6 +97,28 @@ jobs:
       - run: cargo build -p gsb-server --lib --no-default-features --features game-war
       - run: cargo clippy -p gsb-server --lib --bins --no-default-features --features game-war -- -D warnings
 
+  # The OTLP push exporter (docs/OPS.md §6) is off by default, so no
+  # other job compiles it: build and lint the workspace with it on and
+  # run its own tests (the core's mapping/hand-off/push units, the
+  # server's config-to-push e2e), so the feature cannot rot unseen. The
+  # builds without `prometheus` are the no-game job's (it is a default
+  # feature, so every `--no-default-features` build there drops it).
+  otlp:
+    name: otlp exporter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p gsb-server --features otlp
+      - run: cargo clippy --workspace --all-targets --features gsb-server/otlp -- -D warnings
+      - run: cargo test -p gsb-core --features otlp --lib
+      - run: cargo test -p gsb-server --features otlp --test otlp_export
+
   test:
     name: test
     runs-on: ubuntu-24.04

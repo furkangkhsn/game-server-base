@@ -18,6 +18,7 @@ use gsb_core::registry::{MatchResult, RegistryMsg};
 
 mod entry;
 pub use entry::*;
+mod export;
 mod pre_auth;
 use pre_auth::{handshake_bound_of, unauth_cap_of};
 
@@ -47,6 +48,10 @@ async fn start_inner(
     // The per-room overrides (`[rooms.<id>]`): a room the registry would
     // refuse refuses startup instead (at boot it would only warn).
     cfg.check_room_overrides()?;
+
+    // The push exporters (`[metrics]`): a table this build has no
+    // exporter for, or a target the exporter refuses, refuses startup.
+    let exporters = export::exporters(&cfg)?;
 
     // The game's own settings (the demo: its three-axis selection and
     // shard-count check), validated BEFORE anything binds, so a bad game
@@ -124,7 +129,9 @@ async fn start_inner(
     // reported, never a stall.
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
     let metrics = tokio::spawn(
-        MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD).run(),
+        MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD)
+            .with_exporters(exporters)
+            .run(),
     );
 
     // The match-result sink (the control plane's result seam, feature A):

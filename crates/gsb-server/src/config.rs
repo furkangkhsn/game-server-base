@@ -8,6 +8,9 @@ mod resolve;
 mod axes;
 pub use axes::*;
 
+mod metrics;
+pub use metrics::{MetricsConfig, OtlpSection};
+
 pub(crate) use listeners::*;
 pub(crate) use resolve::ListenerSpec;
 pub use resolve::{ConfigError, ServerError};

@@ -217,6 +217,17 @@ pub enum ServerError {
         source: gsb_core::error::CoreError,
     },
 
+    #[error(
+        "`[metrics.otlp]` is set but this gsb-server was built without the \
+             OTLP exporter: rebuild with the `otlp` cargo feature, or remove \
+             the table (a push the operator asked for is never silently \
+             skipped)"
+    )]
+    OtlpNotBuilt,
+
+    #[error("invalid `[metrics.otlp]`: {0}")]
+    BadOtlp(String),
+
     /// Game selection or a game module's own configuration failed (see
     /// [`crate::GameError`]).
     #[error(transparent)]

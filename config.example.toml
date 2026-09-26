@@ -384,6 +384,20 @@ keepalive_hz = 1.0
 #max_players = 2000
 #tick_hz = 10.0
 
+# ── Metrik dışa açımı: [metrics.otlp] (docs/OPS.md §6) ─────────────────
+# Raporları her aralıkta bir OpenTelemetry collector'ına OTLP/HTTP
+# protobuf olarak iter (POST; yol boşsa /v1/metrics, port yoksa 80).
+# Yalnız düz http: https:// başlatmayı durdurur — sunucunun yanında bir
+# collector/agent çalıştırın, TLS'i o taşısın. Bu tablo yalnız `otlp`
+# cargo feature'ıyla derlenmiş sunucuda çalışır (varsayılan derlemede
+# yok); feature'sız derlemede tablo başlatmayı adıyla durdurur, sessizce
+# yok sayılmaz. Log satırları ve /metrics (Prometheus) bundan
+# etkilenmez. Tablo olduğu için düz anahtarlardan SONRA gelir.
+#[metrics.otlp]
+#endpoint = "http://127.0.0.1:4318/v1/metrics"
+#interval_secs = 10
+#service_name = "gsb"
+
 # ── Hosted games' own tables ──────────────────────────────────────────
 # game = "arena", game = "mmo" and game = "war" read ONLY the table named
 # after them (a

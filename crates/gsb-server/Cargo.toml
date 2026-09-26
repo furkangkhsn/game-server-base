@@ -38,6 +38,9 @@ game-war = ["dep:gsb-demo-war", "dep:gsb-kit"]
 # The metrics exporters (docs/OPS.md §6). `prometheus`: the ops surface's
 # `/metrics` (without it the route answers 404 naming the feature).
 prometheus = ["gsb-core/prometheus"]
+# `otlp`: the `[metrics.otlp]` push exporter (OTLP/HTTP protobuf to a
+# collector). Off by default; without it the table refuses startup.
+otlp = ["gsb-core/otlp"]
 
 [dependencies]
 tokio = { workspace = true }

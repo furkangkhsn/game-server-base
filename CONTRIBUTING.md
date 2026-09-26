@@ -30,7 +30,14 @@ cargo build -p gsb-server --lib --no-default-features    # oyunsuz sunucu çekir
 cargo build -p gsb-server --lib --no-default-features --features game-arena   # tek oyun
 cargo build -p gsb-server --lib --no-default-features --features game-mmo     # tek oyun
 cargo build -p gsb-server --lib --no-default-features --features game-war     # tek oyun
+cargo build -p gsb-server --features otlp                                      # OTLP exporter'ı (varsayılan kapalı)
+cargo clippy --workspace --all-targets --features gsb-server/otlp -- -D warnings   # 0 uyarı
+cargo test -p gsb-core --features otlp --lib && cargo test -p gsb-server --features otlp --test otlp_export
 ```
+
+Feature'sız derlemeler (`--no-default-features`) Prometheus exporter'ını
+da dışarıda bırakır (`prometheus` varsayılan feature'lardandır): yukarıdaki
+oyunsuz/tek oyun satırları onu da derler.
 
 CI ayrıca `autobahn` işini koşar: WS kapısına karşı Autobahn fuzzing
 client'ı (`docs/SECURITY.md` §3.7; yerelde docker imajı gerekir).

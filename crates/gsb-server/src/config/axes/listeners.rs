@@ -416,6 +416,13 @@ pub struct Config {
     /// as an explicit, network-guarded decision (e.g. `"127.0.0.1:9090"`,
     /// never `"0.0.0.0"`).
     pub http_listen: String,
+    /// The export layer's push exporters (`[metrics]`, docs/OPS.md §6):
+    /// `[metrics.otlp]` pushes every report interval to an OpenTelemetry
+    /// collector. Empty (the default) = no push; the log lines and the
+    /// ops surface's `/metrics` are unaffected either way. A table the
+    /// build has no exporter for refuses startup
+    /// ([`ServerError::OtlpNotBuilt`]).
+    pub metrics: MetricsConfig,
     /// The game this server hosts (docs/GAME-MODULE.md §6 decision 3): the
     /// name of one of the games compiled into the build (cargo features;
     /// see `gsb_server::games::compiled_in`). Default `"demo"`, the 2D
@@ -491,6 +498,7 @@ impl Default for Config {
             spawn_half_size: DEMO_DEFAULT_SPAWN_HALF,
             disconnect_grace_secs: DEMO_DEFAULT_DISCONNECT_GRACE_SECS,
             http_listen: String::new(),
+            metrics: MetricsConfig::default(),
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),
         }
