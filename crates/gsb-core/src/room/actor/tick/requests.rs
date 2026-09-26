@@ -24,6 +24,12 @@ where
         //    tick body only registers the request and (for the deferred
         //    ones) spawns the worker.
         for req in requests {
+            // A congested connection at its cap is refused before
+            // anything else (F14 — see `refuses_congested`).
+            if self.refuses_congested(req.conn, req.player) {
+                self.m.requests_rejected_conn_cap += 1;
+                continue;
+            }
             // Duplicate id that is still in flight: reject WITHOUT
             // re-processing — for every decision kind, not just external.
             // An in-flight id is already correlated with a pending
@@ -162,5 +168,41 @@ where
                 }
             }
         }
+    }
+
+    /// The storm bound (F14): whether a request from `conn` must be
+    /// refused — not processed, not answered — because the connection is
+    /// congested (its latest batch was dropped: `RoomConn.dropping`) and
+    /// already owes as many answers as its in-flight cap
+    /// (`max_pending_requests_per_conn`), counting undelivered answers
+    /// (`queued`, the carried ones included) and in-flight requests
+    /// (`pending`) alike. Refusing is the only bounded choice: any answer,
+    /// a rejection included, is one more undelivered answer. The client's
+    /// own timeout covers a refused request, and nothing was applied, so a
+    /// retry is safe. Checked where accepting would owe an answer (every
+    /// request, before the duplicate check; a malformed envelope in 2a),
+    /// so while congested what a connection owes never grows past the
+    /// larger of the cap and what it owed when the run began — itself at
+    /// most the cap plus one tick's pull (`max_actions_per_conn_per_tick`).
+    /// Never true for a connection whose batches go through: nothing
+    /// changes when nothing is dropped.
+    pub(super) fn refuses_congested(
+        &self,
+        conn: crate::id::ConnectionId,
+        player: crate::id::PlayerId,
+    ) -> bool {
+        let congested = self
+            .conns
+            .get(&player)
+            .is_some_and(|rc| rc.dropping && rc.conn == conn);
+        if !congested {
+            return false;
+        }
+        let owed = self.queued.get(&conn).map_or(0, Vec::len)
+            + self
+                .pending
+                .get(&conn)
+                .map_or(0, std::collections::VecDeque::len);
+        owed >= self.config.max_pending_requests_per_conn
     }
 }

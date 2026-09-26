@@ -28,6 +28,12 @@ where
         //    (every decision kind), then `handle_request`, then per-decision
         //    handling with caps enforced where the pending state lives.
         for req in requests {
+            // A congested connection at its cap is refused before
+            // anything else (the room's rule, F14).
+            if self.refuses_congested(req.conn, req.player) {
+                self.m.requests_rejected_conn_cap += 1;
+                continue;
+            }
             // Duplicate id still in flight: reject WITHOUT re-processing —
             // a second reply for one id would breach exactly-one-answer,
             // and a retrying client must not buy a double-applied side
@@ -147,5 +153,27 @@ where
                 }
             }
         }
+    }
+
+    /// The storm bound (F14; the room actor's `refuses_congested`, whose
+    /// docs carry the rationale): a request from a congested connection
+    /// (`RoomConn.dropping`) that already owes as many answers — queued,
+    /// carried, or in flight — as its in-flight cap is refused, neither
+    /// processed nor answered. Never true while batches go through.
+    pub(super) fn refuses_congested(
+        &self,
+        conn: crate::id::ConnectionId,
+        player: crate::id::PlayerId,
+    ) -> bool {
+        let congested = self
+            .conns
+            .get(&player)
+            .is_some_and(|rc| rc.dropping && rc.conn == conn);
+        if !congested {
+            return false;
+        }
+        let owed = self.queued.get(&conn).map_or(0, Vec::len)
+            + self.pending.get(&conn).map_or(0, VecDeque::len);
+        owed >= self.config.max_pending_requests_per_conn
     }
 }

@@ -230,6 +230,12 @@ where
                     });
                     false
                 }
+                // A congested connection at its cap: refused, like at 2c
+                // (the room's rule, F14).
+                _ if self.refuses_congested(a.conn, a.player) => {
+                    self.m.requests_rejected_conn_cap += 1;
+                    false
+                }
                 _ => {
                     self.m.requests_rejected_malformed += 1;
                     self.queue_reply(

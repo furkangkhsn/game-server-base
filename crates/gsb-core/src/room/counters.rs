@@ -56,7 +56,9 @@ pub(crate) struct RoomConn<G> {
     /// This connection's latest non-empty batch was dropped at the
     /// fan-out: the next one delivered is reported as the resume
     /// ([`GameLogic::on_batch_resumed`], F11). A fresh transport (join,
-    /// resume, migration arrival) starts `false`.
+    /// resume, migration arrival) starts `false`. While it is set the
+    /// connection is congested: its requests meet the storm bound
+    /// (`crate::rpc`, "Delivery").
     pub(crate) dropping: bool,
     // -- Detach/resume state (§14.4: the CLOCK is core-owned; §7: the
     //    broadcast/READ skip flags are flag-guarded so a dead outbound
@@ -214,7 +216,10 @@ pub(crate) struct RoomCounters {
     /// The logic's own `Reject` decision (a business answer — normal
     /// flow, not an anomaly).
     pub(crate) requests_rejected_logic: u64,
-    /// The per-connection pending cap bound the request.
+    /// The per-connection pending cap bound the request: answered with a
+    /// rejection — or, on a congested connection (its batches are being
+    /// dropped), refused without an answer (the storm bound of
+    /// `crate::rpc`, "Delivery").
     pub(crate) requests_rejected_conn_cap: u64,
     /// The room-wide pending cap bound the request.
     pub(crate) requests_rejected_room_cap: u64,

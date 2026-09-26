@@ -8,6 +8,7 @@ mod keepalive;
 
 mod dropped;
 mod fairness;
+mod replies;
 
 struct FairLogic {
     last_world: u64,

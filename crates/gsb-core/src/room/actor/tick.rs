@@ -125,6 +125,12 @@ where
                     });
                     false
                 }
+                // Its answer would be owed too: a congested connection at
+                // its cap is refused here, like at 2c (F14).
+                _ if self.refuses_congested(a.conn, a.player) => {
+                    self.m.requests_rejected_conn_cap += 1;
+                    false
+                }
                 _ => {
                     self.m.requests_rejected_malformed += 1;
                     self.queue_reply(

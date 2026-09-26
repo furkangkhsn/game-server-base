@@ -169,8 +169,9 @@ pub struct ShardActor<W, G, St, Sp> {
     /// cap; the config fields are shared with the room actor).
     pub(in crate::shard) pending_total: usize,
     /// This tick's queued RPC answers per transport session; drained in
-    /// the broadcast phase (handed to the logic's `private`) and emptied.
-    /// Cleared with the SESSION on leave/rejoin/detach/migrate-out.
+    /// the broadcast phase (handed to the logic's `private`) and emptied
+    /// — except a dropped batch's, which go back here for the next tick
+    /// (F14; `crate::rpc`, "Delivery"). Cleared with the SESSION on leave/rejoin/detach/migrate-out.
     pub(in crate::shard) queued: HashMap<ConnectionId, Vec<RpcReply>>,
     /// Per-tick scratch for the rare path of the broadcast's RPC-answer
     /// hand-off; a field so its capacity survives across ticks.

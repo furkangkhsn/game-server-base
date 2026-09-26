@@ -165,6 +165,13 @@ pub trait GameLogic<W>: Send {
     /// must bound how often it does so for a connection whose channel
     /// stays full. Detached rows ship nothing and are never reported.
     ///
+    /// The one exception is the core's own content: the RPC answers
+    /// `private` was handed (`responses`) are handed to it again, ahead
+    /// of any later answer, on the next tick — until a batch carrying
+    /// them is accepted (exactly once; `crate::rpc`, "Delivery"). A
+    /// logic encodes whatever `responses` it is given and keeps no
+    /// record of them.
+    ///
     /// Default: no-op — the drop costs the client what it cost before
     /// the hook existed (a self-contained full snapshot is healed by the
     /// next one; a delta stream by the next keep-alive full).

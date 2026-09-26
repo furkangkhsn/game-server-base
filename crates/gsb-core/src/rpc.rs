@@ -59,7 +59,8 @@
 //! **Timeouts.** The room's request timeout bounds the wait the client
 //! can observe: a pending request whose deadline passed is swept on the
 //! next tick's CONTROL phase and answered with a *timeout* reply (the
-//! client never hangs on a request the server accepted). The worker
+//! client never hangs on a request the server accepted — see
+//! "Delivery" for what that takes of the connection). The worker
 //! task carries the same timeout internally as a *resource* guard: a
 //! future the game logic never resolves cannot outlive
 //! `timeout + ε` (without it, a stuck external call would leak a task
@@ -84,6 +85,36 @@
 //! per-connection pull budget (a request IS an action, pulled under the
 //! same fairness cut), so a flooding connection cannot buy more
 //! pending state than its budget allows per tick.
+//!
+//! **Delivery.** An answer rides the connection's private frame in the
+//! fan-out batch, and a batch its bounded outbound channel refuses is
+//! dropped whole. The answers it carried are the core's own: they go
+//! back to the FRONT of the connection's queue and are handed to the
+//! logic's `private` again on the next tick, ahead of any later answer,
+//! until a batch carrying them is accepted — exactly once, in order
+//! (they leave the queue only when taken, return only on a drop). So an
+//! accepted request is answered on the connection as soon as the
+//! connection drains; only a session that ends first (leave, a detach
+//! — including the write-stall close of a client that never drains —
+//! or a migration to another shard) takes its undelivered answers
+//! along, like its in-flight requests, and leaves the client to its
+//! own timeout.
+//!
+//! The storm bound: while a connection is congested (its latest batch
+//! was dropped), a request is accepted only if the connection owes
+//! fewer answers — queued, carried, and in flight together — than
+//! `RoomConfig::max_pending_requests_per_conn`. A request past that is
+//! REFUSED: neither processed nor answered (any answer, a rejection
+//! included, would be one more undelivered answer), counted with the
+//! per-connection cap rejections; nothing was applied, so the client's
+//! retry after its own timeout is safe. While congested, what a
+//! connection owes never grows past the larger of the cap and what it
+//! owed when the run of drops began — and that is at most the in-flight
+//! cap plus the answers of the one tick whose batch dropped first:
+//! `max_pending_requests_per_conn + max_actions_per_conn_per_tick`
+//! (4 + 16 = 20 by default; a request is an action, pulled under the
+//! same per-connection budget). A connection whose batches go through
+//! is never refused.
 
 use std::future::Future;
 use std::pin::Pin;

@@ -219,6 +219,9 @@ where
         // 500-probe-per-tick form added tens of microseconds to the tick
         // floor; the quiet path must stay O(1), like the 0b sweep above).
         let has_replies = !self.queued.is_empty();
+        // The answers of this tick's dropped batches (F14), put back
+        // after the sweep below. Empty on the quiet path: no allocation.
+        let mut unsent: Vec<(ConnectionId, Vec<crate::rpc::RpcReply>)> = Vec::new();
         for (&player, rc) in self.conns.iter_mut() {
             // A detached (or bot-fed) row ships nothing: its outbound half
             // is dead (or has no human behind it). Skipping here — instead
@@ -286,6 +289,15 @@ where
                     dropped += 1;
                     rc.batch = e.into_inner();
                     rc.dropping = true;
+                    // The RPC answers the batch carried are the core's
+                    // own (F14): they left `queued` above, so putting
+                    // them back keeps them exactly-once, and they ride
+                    // the next accepted batch ahead of any later answer.
+                    // Only when this iteration filled the scratch — a
+                    // quiet tick leaves the last delivered answers in it.
+                    if has_replies && !self.replies_buf.is_empty() {
+                        unsent.push((rc.conn, std::mem::take(&mut self.replies_buf)));
+                    }
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
                 } else if rc.dropping {
@@ -303,6 +315,11 @@ where
         // once — it was never delivered).
         if !self.queued.is_empty() {
             self.queued.clear();
+        }
+        // The undelivered answers go back to the front of their (now
+        // empty) queue; answers queued later append behind them.
+        for (conn, replies) in unsent {
+            self.queued.insert(conn, replies);
         }
         self.m.dropped_frames += dropped;
     }

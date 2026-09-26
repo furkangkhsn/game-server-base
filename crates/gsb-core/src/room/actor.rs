@@ -135,7 +135,9 @@ pub struct RoomActor<W, G, Sp> {
     /// Total in-flight external requests (the room-wide cap).
     pub(in crate::room) pending_total: usize,
     /// This tick's queued RPC answers per transport session; drained in
-    /// the broadcast phase (handed to the logic's `private`) and emptied.
+    /// the broadcast phase (handed to the logic's `private`) and emptied
+    /// — except the answers of a dropped batch, which go back here, in
+    /// order, for the next tick (F14; `crate::rpc`, "Delivery").
     /// Cleared with the SESSION on leave/rejoin/detach (a stale answer to
     /// a gone session must not be delivered); conn-keyed for the same
     /// session-scope reason as `pending` above.

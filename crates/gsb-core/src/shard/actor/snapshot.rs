@@ -8,7 +8,7 @@ use std::hash::Hash;
 
 use tracing::warn;
 
-use crate::id::PlayerId;
+use crate::id::{ConnectionId, PlayerId};
 use crate::room::{GroupState, TickCtx};
 use crate::rpc::RpcReply;
 
@@ -223,6 +223,8 @@ where
         // the per-connection map probe runs only on ticks that actually
         // owe an answer.
         let has_replies = !self.queued.is_empty();
+        // The answers of this tick's dropped batches (the room's 4d, F14).
+        let mut unsent: Vec<(ConnectionId, Vec<RpcReply>)> = Vec::new();
         for (&player, rc) in self.conns.iter_mut() {
             // Detached/bot-fed rows ship nothing (dead or non-human
             // outbound half; §7 — the drop counter stays "slow client"
@@ -272,6 +274,12 @@ where
                     dropped += 1;
                     rc.batch = e.into_inner();
                     rc.dropping = true;
+                    // Its RPC answers go back, exactly once, to ride the
+                    // next accepted batch (the room's 4d, F14) — only
+                    // when this iteration filled the scratch.
+                    if has_replies && !self.replies_buf.is_empty() {
+                        unsent.push((rc.conn, std::mem::take(&mut self.replies_buf)));
+                    }
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
                 } else if rc.dropping {
@@ -288,6 +296,10 @@ where
         // answered exactly once, and it was never delivered.
         if !self.queued.is_empty() {
             self.queued.clear();
+        }
+        // The undelivered answers go back to the front of their queue.
+        for (conn, replies) in unsent {
+            self.queued.insert(conn, replies);
         }
         self.m.dropped_frames += dropped;
     }
