@@ -5,7 +5,6 @@ use crate::http::*;
 use gsb_core::error::CoreError;
 use gsb_core::id::RoomId;
 use gsb_core::registry::RoomStatus;
-use gsb_core::room::RoomConfig;
 use std::collections::BTreeSet;
 use tokio::sync::{mpsc, oneshot};
 
@@ -141,7 +140,10 @@ pub(super) async fn list_rooms(ops: &OpsHttp) -> Response {
 
 /// POST /rooms/open?id=&tick_hz= → the registry's idempotent create. The
 /// reply renders the resulting [`RoomStatus`] (a create round trip doubles
-/// as a status query). `tick_hz` omitted = the server's global rate.
+/// as a status query). The room is the SERVER's room (the template every
+/// pre-created room comes from — `Config::room_config`), so re-opening a
+/// pre-created room with the same rate is the idempotent no-op; `tick_hz`
+/// is the one per-request override (omitted = the server's rate).
 pub(super) async fn open_room(query: &str, ops: &OpsHttp) -> Response {
     let Some(id) = required_id(query) else {
         return Response::text(
@@ -150,15 +152,12 @@ pub(super) async fn open_room(query: &str, ops: &OpsHttp) -> Response {
             "missing or invalid `id` (expected a positive integer)\n",
         );
     };
-    let tick_hz = match optional_f64(query, "tick_hz") {
-        Ok(tick_hz) => tick_hz.unwrap_or(ops.default_tick_hz),
+    let mut config = ops.room_template.room(id);
+    match optional_f64(query, "tick_hz") {
+        Ok(Some(tick_hz)) => config.tick_hz = tick_hz,
+        Ok(None) => {}
         Err(msg) => return Response::text(400, "Bad Request", msg),
-    };
-    let config = RoomConfig {
-        id: RoomId(id),
-        tick_hz,
-        ..RoomConfig::default()
-    };
+    }
     match registry_open_room(&ops.registry, config).await {
         Ok(status) => {
             // Record for future listings. try_send on a bounded channel: a

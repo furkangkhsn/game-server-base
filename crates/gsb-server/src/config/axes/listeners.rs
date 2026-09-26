@@ -4,6 +4,7 @@ use crate::config::*;
 
 mod detach_hold;
 mod room;
+pub(crate) use room::RoomTemplate;
 
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
 ///

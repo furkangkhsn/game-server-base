@@ -107,7 +107,7 @@ async fn start_inner(
             reg_tx.clone(),
             report_rx,
             REPORT_PERIOD,
-            cfg.tick_hz,
+            cfg.room_template(),
             1..=cfg.room_count,
         );
         info!(addr = %bound, "http ops surface listening");

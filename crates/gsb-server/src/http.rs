@@ -38,8 +38,13 @@ use gsb_core::id::RoomId;
 use gsb_core::metrics::MetricReport;
 use gsb_core::registry::RegistryMsg;
 
+use crate::config::RoomTemplate;
+
 mod routes;
 use routes::*;
+
+#[cfg(test)]
+mod tests;
 
 /// `/healthz` freshness threshold, in report periods: a report older than
 /// this many collector periods means the metrics ticker (and therefore the
@@ -79,7 +84,10 @@ pub(crate) struct OpsHttp {
     registry: Mailbox<RegistryMsg>,
     rooms: mpsc::Sender<RoomsMsg>,
     period: Duration,
-    default_tick_hz: f64,
+    /// The server's room: what `POST /rooms/open` builds (the same
+    /// template the pre-created rooms come from — the surface never
+    /// invents room settings of its own).
+    room_template: RoomTemplate,
 }
 
 /// Spawn the ops surface: the bookkeeper plus the accept loop (whose join
@@ -90,7 +98,7 @@ pub(crate) fn spawn(
     registry: Mailbox<RegistryMsg>,
     reports: watch::Receiver<MetricReport>,
     period: Duration,
-    default_tick_hz: f64,
+    room_template: RoomTemplate,
     configured_rooms: impl Iterator<Item = u64>,
 ) -> JoinHandle<()> {
     let (rooms_tx, rooms_rx) = mpsc::channel::<RoomsMsg>(16);
@@ -104,7 +112,7 @@ pub(crate) fn spawn(
         registry,
         rooms: rooms_tx,
         period,
-        default_tick_hz,
+        room_template,
     };
     tokio::spawn(accept_loop(listener, ops))
 }
