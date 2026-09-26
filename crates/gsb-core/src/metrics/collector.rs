@@ -44,6 +44,9 @@ pub struct MetricsCollector {
     rx: mpsc::Receiver<MetricsEvent>,
     acc: MetricAccumulator,
     sink: MetricSink,
+    /// The push-side consumers (see `export`): each sees every report,
+    /// in this order, before the sink consumes it.
+    exporters: Vec<Box<dyn Exporter>>,
     period: Duration,
     next_report: Instant,
 }
@@ -60,9 +63,18 @@ impl MetricsCollector {
             rx,
             acc: MetricAccumulator::default(),
             sink,
+            exporters: Vec::new(),
             period,
             next_report: Instant::now() + period,
         }
+    }
+
+    /// Hand every report to `exporters` as well (in this order, before
+    /// the sink). The collector stays the one place export happens; an
+    /// exporter only ever sees the folded report (see [`Exporter`]).
+    pub fn with_exporters(mut self, exporters: Vec<Box<dyn Exporter>>) -> Self {
+        self.exporters.extend(exporters);
+        self
     }
 
     /// Run until the ticker closes (one final report is emitted).
@@ -92,6 +104,11 @@ impl MetricsCollector {
 
     fn emit(&mut self, at: Instant) {
         let report = self.acc.report(at);
+        // The export seam (see `export`): every exporter reads the
+        // report first, synchronously and in order; the sink consumes it.
+        for exporter in &mut self.exporters {
+            exporter.export(&report);
+        }
         match &self.sink {
             MetricSink::Log => {
                 for line in report.render() {

@@ -11,7 +11,9 @@
 //! why). The collector accumulates the samples into its own task-local
 //! [`MetricAccumulator`] and emits a [`MetricReport`] at a fixed cadence
 //! through a [`MetricSink`] (tracing log lines, or a channel to a
-//! programmatic consumer such as the load generator).
+//! programmatic consumer such as the load generator), after handing it
+//! to every [`Exporter`] — the export seam (`export`: the Prometheus
+//! exposition, the OTLP push).
 //!
 //! **Bounded channel, synchronous `try_send`, drops counted.** DESIGN §2
 //! makes *bounded capacity* the backpressure mechanism, so the metrics path
@@ -89,6 +91,7 @@
 mod accumulator;
 mod closes;
 mod collector;
+mod export;
 mod logic;
 mod prometheus;
 mod render;
@@ -101,6 +104,7 @@ mod tests;
 pub use accumulator::MetricAccumulator;
 pub use closes::ServerCloses;
 pub use collector::{MetricSink, MetricsCollector};
+pub use export::Exporter;
 pub use logic::{
     LOGIC_COUNTERS_MAX, LOGIC_NAME_MAX, LogicCounter, LogicCounters, LogicFold, LogicSlot,
 };
