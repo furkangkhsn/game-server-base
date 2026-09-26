@@ -87,11 +87,13 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | ~~B20 Autobahn CI işinin ilk koşusu~~ **Push edildi (2026-09-27, kullanıcı kararı):** `main` → `origin/main` (298 commit); CI ilk kez bu yapıda koşuyor | ✅ | HANDOFF, SECURITY §3.7 |
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
-| B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
 | B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
-| B32 Orkestre demo 500'de katılma fırtınasında `dropped` > 0 (TCP 116–123; WS B31'den önce 10–29, sonra 0 — iki çiftten nedensellik çıkarılmaz) | ölçümlerde tekrar görülürse | DESIGN §5.7 |
+| B32 Orkestre demo 500'de `dropped` = 116 (tekrarlanıyor) — **katılma değil ayrılış** (B23): istemci LEAVE sonucunu alınca soketini kapatıyor, oda ayrılışı bir sonraki tick'te öğrenene dek fan-out kapalı kanala bir batch dener (`try_send` → Closed, bağlantı başına 1); kare kaybı yok. Sayı zamanlamaya bağlı (varsayılan worker'larla 0) | kapalı kanalı `dropped`'tan ayırmak (metrik anlamı kararı) | RPC-CONTROL-PLANE §8.2 |
 | B33 HTTP ops accept döngüsü hâlâ `http.abort()` ile duruyor (B16'nın `Door`'u yalnız oyun kapılarında) | ops yüzeyinin kibar kapanışı gerekirse | DESIGN §9 |
 | B34 CI: `actions/checkout@v4` Node.js 20 kullanıyor (GitHub kullanımdan kaldırıyor; işler zorla Node 24'te koşuyor) — `@v5`'e yükselt | uyarı hataya dönmeden | ilk CI koşusu 2026-09-27 |
+| B35 Loadgen RPC modu orkestre/churn'de (CLIENT satırına defter + gecikme dağılımı) ve oda-local `ABILITY` yolunun yük ölçümü | çok süreçli RPC ölçümü gerektiğinde | RPC-CONTROL-PLANE §8.2, §11 |
+| B36 Ayrılıştan hemen önce gönderilen istekler hiçbir oda sayacına düşmüyor (200'lük uzun-duraklama koşusunda 62; mekanizma doğrulanmadı) | RPC hesaplaşması eksik kalırsa | RPC-CONTROL-PLANE §8.2 |
+| B37 Pinsiz orkestratör çocuklara `--workers 1` veriyor (`args.workers.max(1)`, `orchestrate/pinning/procs.rs`) ama yorumu "runtime default" diyor — bütün pinsiz orkestre tabanları tek worker'lı süreçlerde koşmuş. Düzeltmek tabanları değiştirir | orkestre ölçümü yeniden alınırken | RPC-CONTROL-PLANE §8.2 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -152,7 +154,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 | F21 **SIRADA (E1 turuyla)** — `conn_action = 0` (düz ya da oda başına) oda aktörünü join'de panikletir (`mpsc::channel(0)`, `room/actor/control/join.rs`); `room_control` `max(1)` ile korunuyor — yüklemede reddetmek ya da kıstırmak | B18 bulgusu |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5 ve B18 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18 ve B23 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

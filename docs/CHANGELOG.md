@@ -5,6 +5,42 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B23 — loadgen RPC trafik modu; RPC yolunun ilk yük ölçümü (`loadgen/b23-rpc-mode`)
+
+Loadgen hiç istek göndermiyordu: odanın istek alımı, bağlantı başına cap,
+ret kovaları, worker tamamlanmaları, F14'ün düşen batch'ler üzerinden
+teslimi ve fırtına sınırı yük altında hiç koşmamıştı.
+
+- Çekirdek: ret nedeni metinleri `gsb_core::rpc` sabitleri
+  (`CONN_CAP_REASON`, `ROOM_CAP_REASON`, `DUPLICATE_REASON`,
+  `MALFORMED_REASON`, `no_handler_reason`); baytlar aynı (birim testi
+  sabitler).
+- Loadgen `--rpc-rate R [--rpc-burst B]` (yalnız demo, yalnız düz istemci
+  koşusu): demo'nun `ECONOMY` isteği B'lik patlamalarla her B/R sn'de.
+  İstemci başına defter: ilk yanıt kapatır ve nedenine göre sayılır;
+  ikinci yanıt `dup`, gönderilmemiş id `unmatched` (ikisi de 0 olmalı);
+  istemci zaman aşımı = sunucu zaman aşımı + 1 sn. RESULT'ta `rpc_*`
+  anahtarları yalnız modda; varsayılan satır birebir aynı.
+- **Ölçüm** (RPC-CONTROL-PLANE §8.2): demo 200/500 × 1 ve 10 istek/sn, B=8
+  patlama, F11 duraklamalı koşular. Her koşuda dup = unmatched = 0 (137 746
+  düşen batch üzerinden bile — F14 yük altında tutuyor); istemci ve oda
+  cap retlerinde birebir aynı (73 292); `sent = req_ext + req_refused`;
+  ok p50 ≈ 50 ms, p99 ≈ 68 ms; istek başına tick maliyeti ~5 µs (5 000
+  istek/sn'de +~745 µs, bütçe aşımı %0); oda cap'i bağlamadı; 3 sn
+  duraklamada fırtına sınırı 36 837 isteği yanıtsız reddetti ve istemcinin
+  yanıtsız/açık sayısı tam bunu verdi.
+- **B32 açıklandı:** `dropped` = 116 tekrarlanıyor ama KATILMADA değil
+  AYRILIŞTA: istemci LEAVE sonucunu alınca soketini kapatıyor, oda
+  ayrılışı sonraki tick'te öğrenene dek fan-out kapalı kanala bir batch
+  deniyor (`try_send` → Closed, bağlantı başına 1); kare kaybı yok. Pinsiz
+  orkestratör çocuklara `--workers 1` veriyor (yorumu "runtime default"
+  diyor) — sayı zamanlamaya bağlı (varsayılan worker'larla 0). Düzeltilmedi
+  (metrik anlamı ve orkestre tabanları kararı).
+
+Testler 1107 → 1124 (rebase sonrası, +17); ajanın 13 mutasyonu yakalandı;
+ebeveynin bağımsız mutasyonu (geç yanıtı `late` saymamak) defter testini
+kırıyor.
+
 ## B18 — oda başına config override (`server/b18-room-overrides`)
 
 Sunucunun her odası aynı `RoomConfig`'i alıyordu; operatör yoğun bir odaya
