@@ -44,6 +44,10 @@ async fn start_inner(
     // keys; see `resolve_listeners`).
     let specs = resolve_listeners(&cfg)?;
 
+    // The per-room overrides (`[rooms.<id>]`): a room the registry would
+    // refuse refuses startup instead (at boot it would only warn).
+    cfg.check_room_overrides()?;
+
     // The game's own settings (the demo: its three-axis selection and
     // shard-count check), validated BEFORE anything binds, so a bad game
     // config fails cleanly at startup (the same never-half-start
@@ -151,10 +155,11 @@ async fn start_inner(
         services: Vec::new(),
     });
 
-    // Pre-create rooms 1..=room_count (all at the global rate; a room may
-    // configure a slower rate that divides it).
+    // Pre-create rooms 1..=room_count (at the global rate, unless the
+    // id's `[rooms.<id>]` sets a slower rate that divides it).
+    let template = cfg.room_template();
     for id in 1..=cfg.room_count {
-        let config = cfg.room_config(id);
+        let config = template.room(id);
         {
             let tx = reg_tx.clone();
             tokio::spawn(async move {

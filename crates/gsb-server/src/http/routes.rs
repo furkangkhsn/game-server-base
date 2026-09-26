@@ -140,10 +140,12 @@ pub(super) async fn list_rooms(ops: &OpsHttp) -> Response {
 
 /// POST /rooms/open?id=&tick_hz= → the registry's idempotent create. The
 /// reply renders the resulting [`RoomStatus`] (a create round trip doubles
-/// as a status query). The room is the SERVER's room (the template every
-/// pre-created room comes from — `Config::room_config`), so re-opening a
+/// as a status query). The room is the SERVER's room of that id (the
+/// template every pre-created room comes from, with the id's
+/// `[rooms.<id>]` laid over it — `Config::room_config`), so re-opening a
 /// pre-created room with the same rate is the idempotent no-op; `tick_hz`
-/// is the one per-request override (omitted = the server's rate).
+/// is the one per-request override, on top of the id's override
+/// (omitted = the room's rate: the override's, else the server's).
 pub(super) async fn open_room(query: &str, ops: &OpsHttp) -> Response {
     let Some(id) = required_id(query) else {
         return Response::text(

@@ -115,3 +115,51 @@ async fn an_invalid_rate_never_reaches_the_registry() {
         assert!(asked.is_none(), "tick_hz={bad} reached the registry");
     }
 }
+
+/// B18: an id with a `[rooms.<id>]` section opens as THAT room (the
+/// override laid over the server's room), other ids as the server's
+/// room; a query `tick_hz` goes on top of the override — the request is
+/// the most specific word.
+#[tokio::test]
+async fn the_open_takes_the_id_override_with_the_query_rate_on_top() {
+    let mut cfg = tuned();
+    cfg.rooms.insert(
+        5,
+        crate::RoomOverride {
+            tick_hz: Some(30.0),
+            max_players: Some(3),
+            ..Default::default()
+        },
+    );
+    let (ops, mut asked_rx) = surface(&cfg);
+
+    let (status, asked) = open(&ops, &mut asked_rx, "POST /rooms/open?id=5 HTTP/1.1").await;
+    assert_eq!(status, 200);
+    let want = RoomConfig {
+        tick_hz: 30.0,
+        max_players: Some(3),
+        ..tuned().room_config(5)
+    };
+    assert_eq!(asked, Some(want.clone()), "the id's override");
+    assert_eq!(cfg.room_config(5), want, "the same room as the boot path");
+
+    let (_, asked) = open(&ops, &mut asked_rx, "POST /rooms/open?id=6 HTTP/1.1").await;
+    assert_eq!(
+        asked,
+        Some(tuned().room_config(6)),
+        "no override: the server's room"
+    );
+
+    let (status, asked) = open(
+        &ops,
+        &mut asked_rx,
+        "POST /rooms/open?id=5&tick_hz=20 HTTP/1.1",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let want = RoomConfig {
+        tick_hz: 20.0,
+        ..want
+    };
+    assert_eq!(asked, Some(want), "the query rate over the override's");
+}

@@ -30,8 +30,8 @@ pub use boot::{
     start_server_metrics, start_server_metrics_with, start_server_with,
 };
 pub use config::{
-    Communication, Config, ConfigError, ListenerEntry, ListenerTransport, ServerError, Topology,
-    TransportKind, Visibility,
+    Communication, Config, ConfigError, ListenerEntry, ListenerTransport, RoomOverride,
+    ServerError, Topology, TransportKind, Visibility,
 };
 pub use game::{GameError, GameModule, RegistryParts, RegistryTask};
 // The 2D demo's selection types and wire table, at the paths they have

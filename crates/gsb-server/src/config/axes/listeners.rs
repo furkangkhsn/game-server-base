@@ -4,6 +4,7 @@ use crate::config::*;
 
 mod detach_hold;
 mod room;
+pub use room::RoomOverride;
 pub(crate) use room::RoomTemplate;
 
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
@@ -231,6 +232,25 @@ pub struct Config {
         deserialize_with = "detach_hold::deserialize"
     )]
     pub max_detach_hold: Option<std::time::Duration>,
+    /// **Per-room overrides** (`[rooms.<id>]`, BACKLOG B18): one room's
+    /// own values for the room-level keys above (`tick_hz`,
+    /// `room_control`, `conn_action`, `max_snapshot_bytes`,
+    /// `keepalive_hz`, `max_players`, `max_idle_input_secs`,
+    /// `max_detach_hold_secs` — same spellings, same meanings), laid over
+    /// the server's room for that id alone: a boot room of that id, an
+    /// admin `POST /rooms/open?id=` of it (the query's `tick_hz` on top),
+    /// and [`Config::room_config`]. Empty (the default) = every room is
+    /// the server's room, as before.
+    ///
+    /// Refused at startup: a key that is not room-level (server-wide
+    /// keys stay global; a game's settings live in its own table), an
+    /// id that is not a positive integer written plainly, and a room the
+    /// registry would refuse — a `tick_hz` that does not divide the
+    /// global rate, a `keepalive_hz` above the room's `tick_hz`. An id
+    /// past `room_count` is valid: it is the room an admin open of that
+    /// id builds.
+    #[serde(deserialize_with = "room::deserialize_overrides")]
+    pub rooms: std::collections::BTreeMap<u64, RoomOverride>,
     /// The TOPOLOGY selection axis (`"single"` | `"sharded"`; see
     /// [`Topology`]): who computes the world and as how many authoritative
     /// pieces.
@@ -455,6 +475,7 @@ impl Default for Config {
             // invisible until an operator asks for it.
             max_idle_input_secs: None,
             max_detach_hold: Some(gsb_core::room::DEFAULT_MAX_DETACH_HOLD),
+            rooms: std::collections::BTreeMap::new(),
             topology: None,
             communication: None,
             visibility: Visibility::default(),

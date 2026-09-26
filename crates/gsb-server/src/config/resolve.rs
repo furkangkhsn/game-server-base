@@ -204,6 +204,19 @@ pub enum ServerError {
         bind: String,
     },
 
+    #[error(
+        "`[rooms.{id}]` builds a room the registry would refuse: {source} \
+             (a room's tick_hz must divide the global tick_hz, and its \
+             keepalive_hz must not exceed its tick_hz)"
+    )]
+    RoomOverride {
+        /// The overridden room's id.
+        id: u64,
+        /// The registry's rule the resulting room breaks.
+        #[source]
+        source: gsb_core::error::CoreError,
+    },
+
     /// Game selection or a game module's own configuration failed (see
     /// [`crate::GameError`]).
     #[error(transparent)]
