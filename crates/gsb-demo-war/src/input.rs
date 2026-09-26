@@ -55,7 +55,7 @@ pub(crate) fn ingest(
     actions: &mut Vec<Action>,
     seq: &mut InputSeq,
     tick: u64,
-    combat: &Combat,
+    combat: &mut Combat,
     mut seam: Option<&mut Seam<'_, '_, WarWire>>,
 ) {
     for action in actions.drain(..) {

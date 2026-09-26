@@ -93,6 +93,10 @@ fn loadgen_drives_the_arena() {
     assert_eq!(kv["profile"], "base-centre");
     assert_ne!(kv["deltas"], "0", "the team room sends deltas: {line}");
     assert_ne!(kv["fulls"], "0", "{line}");
+    assert!(
+        !line.contains(" logic_"),
+        "the arena declares no counters of its own (F9): {line}"
+    );
 }
 
 /// The MMO: cell deltas over the shard grid, and the bots spread over
@@ -123,6 +127,18 @@ fn loadgen_drives_the_mmo() {
         members[0] <= 4 && members.iter().filter(|&&m| m > 0).count() >= 3,
         "the population spread across the shards: {line}"
     );
+    // Crystallization is on in the MMO: its six counters (F9) reach
+    // the line, folded over the shards.
+    for name in [
+        "crystal_moves",
+        "crystal_release_quiet",
+        "crystal_release_band",
+        "crystal_release_partner",
+        "crystal_untracked",
+        "crystal_fights_peak",
+    ] {
+        assert!(kv.contains_key(&format!("logic_{name}")), "{name}: {line}");
+    }
 }
 
 /// An orchestrated MMO run: `--game` reaches the server child AND the
@@ -206,6 +222,10 @@ fn loadgen_drives_the_war() {
         kv["team_over_budget"], "0",
         "the default budget holds: {line}"
     );
+    // The war's own counter (F9) — and no crystal ones: the war does
+    // not crystallize.
+    assert!(kv.contains_key("logic_war_kills"), "{line}");
+    assert!(!line.contains(" logic_crystal_"), "{line}");
 }
 
 /// An orchestrated war: `--game war` reaches the server child and the
@@ -233,6 +253,10 @@ fn loadgen_orchestrates_the_war() {
     assert!(members[0] < 8, "the server child's roster: {line}");
     let exports: f64 = kv["team_exports_s"].parse().expect("a number");
     assert!(exports > 60.0, "the team counters crossed the wire: {line}");
+    assert!(
+        kv.contains_key("logic_war_kills"),
+        "the game's own counter crossed the wire (GSMC): {line}"
+    );
 }
 
 /// The command line refuses what cannot run: an unknown game (naming

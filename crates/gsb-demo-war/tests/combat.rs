@@ -1,7 +1,8 @@
 //! Combat on the real actors: a blow across a shard seam goes to the
 //! victim's owner as a remote effect and lands there — once — and the
 //! kill is credited once, by the owner, to the attacker's wire id; a
-//! fallen player is back at its base. No friendly fire, no reach beyond
+//! fallen player is back at its base, and the shard's `war_kills`
+//! metric counter says so. No friendly fire, no reach beyond
 //! the attack range, on either side of a seam; a local blow lands
 //! locally.
 
@@ -39,6 +40,14 @@ async fn a_kill_across_a_seam_is_credited_once_by_the_victims_shard() {
         assert_eq!((h.hp, h.killed), (left, left == 0), "{h:?}");
     }
     assert_eq!(hits.iter().filter(|h| h.killed).count(), 1, "credited once");
+    // The game's own metric counter (F9), off the shard actors' samples:
+    // the kill counted once, by the victim's shard, and every shard
+    // reports the counter.
+    let kills = |shard: usize| war.samples[shard].expect("sampled").logic.get("war_kills");
+    assert_eq!(
+        [kills(0), kills(1), kills(2), kills(3)],
+        [Some(0), Some(1), Some(0), Some(0)]
+    );
 
     // The fallen player is back on its feet at its base, far from the
     // seam and out of the attacker's faction's sight.

@@ -20,6 +20,7 @@ use bevy_ecs::prelude::{Entity, World};
 use bytes::BytesMut;
 use gsb_core::channel::Mailbox;
 use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::game::{Game, InputSeq, ShardGame, TeamGame};
@@ -57,6 +58,7 @@ impl WarGame {
             combat: Combat {
                 shard: index,
                 feed: None,
+                kills: 0,
             },
             codec: WarCodec,
         }
@@ -136,7 +138,15 @@ impl Game for WarGame {
         players: &HashMap<PlayerId, Entity>,
         seq: &mut InputSeq,
     ) {
-        input::ingest(players, world, actions, seq, ctx.tick, &self.combat, None);
+        input::ingest(
+            players,
+            world,
+            actions,
+            seq,
+            ctx.tick,
+            &mut self.combat,
+            None,
+        );
     }
 
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -158,6 +168,12 @@ impl Game for WarGame {
             .encode(out)
             .expect("protobuf encode into an in-memory buffer failed");
         true
+    }
+
+    /// The war's own counter: the kills this shard's combat applied
+    /// ([`crate::combat::KILLS`]).
+    fn counters(&self, _world: &World, out: &mut LogicCounters) {
+        out.put(&crate::combat::KILLS, self.combat.kills);
     }
 }
 
@@ -219,7 +235,7 @@ impl ShardGame for WarGame {
         seq: &mut InputSeq,
         seam: &mut Seam<'_, '_, WarWire>,
     ) {
-        let combat = &self.combat;
+        let combat = &mut self.combat;
         input::ingest(players, world, actions, seq, ctx.tick, combat, Some(seam));
     }
 

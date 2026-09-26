@@ -12,11 +12,15 @@
 //!
 //! Kill credit: every landed hit is published, with the attacker's wire
 //! identity, on the optional combat feed ([`Hit`]) by the shard that
-//! applied it — the authority, once. Towers and capture points cannot be
+//! applied it — the authority, once. The same shard counts the kill
+//! ([`KILLS`], the game's own metric counter: `logic_war_kills=` on its
+//! `gsb-metric` line, `gsb_room_logic_war_kills_total` in the
+//! exposition). Towers and capture points cannot be
 //! struck (the game keeps its fight between players).
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::channel::Mailbox;
+use gsb_core::metrics::LogicCounter;
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::identity::WireId;
 use gsb_kit::sharded::Seam;
@@ -57,16 +61,27 @@ fn standing(unit: &Unit) -> bool {
     unit.kind == Kind::Player && unit.hp > 0
 }
 
-/// One shard's combat state: its index and the optional kill feed.
+/// The war's one metric counter (F9): players felled, counted by the
+/// shard that applied the killing blow (the victim's owner — once per
+/// kill across the room).
+pub const KILLS: LogicCounter = LogicCounter::sum(
+    "war_kills",
+    "Players felled, counted by the shard that applied the killing blow, cumulative.",
+);
+
+/// One shard's combat state: its index, the optional kill feed and the
+/// kill count.
 pub(crate) struct Combat {
     pub(crate) shard: usize,
     pub(crate) feed: Option<Mailbox<Hit>>,
+    /// Players this shard felled, cumulative ([`KILLS`]).
+    pub(crate) kills: u64,
 }
 
 impl Combat {
     /// `attacker` (this shard's unit) attacks wire id `target`.
     pub(crate) fn attack(
-        &self,
+        &mut self,
         world: &mut World,
         seam: Option<&mut Seam<'_, '_, WarWire>>,
         attacker: Entity,
@@ -129,7 +144,7 @@ impl Combat {
     /// (re-checked against the attacker as THIS shard sees it, when it
     /// does) is refused; the damage is capped.
     pub(crate) fn apply_remote(
-        &self,
+        &mut self,
         world: &mut World,
         target: Entity,
         effect: &RemoteEffect,
@@ -179,7 +194,7 @@ impl Combat {
     /// Land `damage` on `victim` (this shard's unit) from `attacker` (a
     /// wire id); `false` when there was no standing player to hit.
     fn strike(
-        &self,
+        &mut self,
         world: &mut World,
         victim: Entity,
         attacker: u64,
@@ -199,6 +214,7 @@ impl Combat {
         let (hp, faction) = (unit.hp, unit.faction);
         let killed = hp == 0;
         if killed {
+            self.kills += 1;
             respawn(world, victim, faction);
         }
         if let Some(feed) = &self.feed {
