@@ -115,7 +115,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     /// The game's own counters (F9), forwarded
-    /// ([`Game::counters`](crate::game::Game::counters)).
+    /// ([`Game::counters`]).
     fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
         self.game.counters(world, out);
     }
