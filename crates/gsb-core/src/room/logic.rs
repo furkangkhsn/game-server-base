@@ -145,6 +145,31 @@ pub trait GameLogic<W>: Send {
         false
     }
 
+    /// This tick's batch for `player`'s connection was NOT delivered: its
+    /// bounded outbound channel was full (a slow client) or already
+    /// closed, and the fan-out dropped the whole batch (the room's
+    /// `dropped` counter). Everything the batch carried is gone — the
+    /// group snapshot frame when `snapshot` is `true`, and the private
+    /// frame [`Self::private`] wrote for this player this tick, if any.
+    ///
+    /// Called synchronously during the fan-out, in the SAME iteration as
+    /// that player's `private` call — after it, before any other
+    /// player's — so whatever per-connection state the logic derived
+    /// from "I wrote it" in `private` is still the current one: a logic
+    /// that marked a one-shot payload as sent (a baseline, a greeting,
+    /// an acknowledgment) re-arms it here and ships it again on a later
+    /// tick. The core itself never re-sends: the fan-out stays
+    /// best-effort and non-blocking (the batch is not retried and the
+    /// channel is not waited on), so a re-armed payload rides a later
+    /// batch and is subject to the same drop — a logic that re-arms
+    /// must bound how often it does so for a connection whose channel
+    /// stays full. Detached rows ship nothing and are never reported.
+    ///
+    /// Default: no-op — the drop costs the client what it cost before
+    /// the hook existed (a self-contained full snapshot is healed by the
+    /// next one; a delta stream by the next keep-alive full).
+    fn on_batch_dropped(&mut self, _world: &mut W, _player: PlayerId, _snapshot: bool) {}
+
     /// Produce the payload to ship to a group on a **keep-alive tick**
     /// (the cadence is due). Called after `snapshot` for the same tick,
     /// whether it emitted a payload or the group was unchanged; on a

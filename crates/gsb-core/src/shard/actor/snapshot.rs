@@ -231,7 +231,11 @@ where
                 continue;
             }
             rc.batch.clear();
+            // Whether the group frame rides this batch (the drop signal's
+            // argument — the room's 4d).
+            let mut with_snapshot = false;
             if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
+                with_snapshot = true;
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
                 rc.batch
@@ -263,8 +267,12 @@ where
             if !rc.batch.is_empty() {
                 let batch = std::mem::take(&mut rc.batch);
                 if let Err(e) = rc.out.try_send(batch) {
+                    // Dropped, never retried; the logic is told in this
+                    // player's iteration (the room's 4d, F11).
                     dropped += 1;
                     rc.batch = e.into_inner();
+                    self.logic
+                        .on_batch_dropped(&mut self.world, player, with_snapshot);
                 }
             }
         }

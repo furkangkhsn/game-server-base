@@ -6,6 +6,7 @@ use super::*;
 
 mod keepalive;
 
+mod dropped;
 mod fairness;
 
 struct FairLogic {

@@ -236,7 +236,11 @@ where
             // the retained capacity is what makes the reuse free — and, if
             // the outbound channel is full, put back for the next tick.
             rc.batch.clear();
+            // Whether the group frame rides this batch: what a drop of it
+            // costs the client is the logic's to judge (F11).
+            let mut with_snapshot = false;
             if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
+                with_snapshot = true;
                 // Metrics: one shipped frame and its wire payload size.
                 self.m.shipped_frames += 1;
                 self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
@@ -271,12 +275,18 @@ where
             if !rc.batch.is_empty() {
                 let batch = std::mem::take(&mut rc.batch);
                 if let Err(e) = rc.out.try_send(batch) {
-                    // Outbound channel full: the batch is dropped. Snapshots are
-                    // self-contained, so this costs the client at most one
-                    // snapshot of staleness (keep-alive bounds it). The buffer
-                    // goes back for the next tick.
+                    // Outbound channel full: the batch is dropped, never
+                    // retried (the fan-out stays best-effort). A full
+                    // snapshot costs the client one snapshot of staleness
+                    // (keep-alive bounds it); what the batch's one-shot
+                    // content costs is the logic's, so it is told —
+                    // synchronously, in this player's iteration, while the
+                    // state its `private` just derived is still current
+                    // (F11). The buffer goes back for the next tick.
                     dropped += 1;
                     rc.batch = e.into_inner();
+                    self.logic
+                        .on_batch_dropped(&mut self.world, player, with_snapshot);
                 }
             }
         }
