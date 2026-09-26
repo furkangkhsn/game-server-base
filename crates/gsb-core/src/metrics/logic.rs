@@ -22,8 +22,7 @@
 //! a value put beyond the bound is dropped and counted
 //! ([`LogicCounters::dropped`]; the actor warns once). The set of names
 //! is static per game, so the bound is a design limit hit in the first
-//! test run, not a load condition. Both renderings show the count only
-//! while non-zero (`logic_counters_dropped`, F17).
+//! test run, not a load condition (rendered while non-zero — F17).
 //!
 //! **One name, one counter.** A name put twice in one set (a composite
 //! and its game both reporting it) is folded by its rule — the same
@@ -67,10 +66,9 @@ pub struct LogicCounter {
 impl LogicCounter {
     /// A cumulative count ([`LogicFold::Sum`]). Panics — at compile time
     /// in a `const` item — unless `name` is 1–[`LOGIC_NAME_MAX`] bytes of
-    /// `[a-z0-9_]`, starts with a letter and does not end in `_total`
-    /// (the exposition adds that suffix), is not `counters_dropped` (the
-    /// core's overflow key, [`LogicCounters::dropped`]), and `help` is one
-    /// line without backslashes.
+    /// `[a-z0-9_]`, starts with a letter, does not end in `_total` (the
+    /// exposition's suffix) and is not the reserved `counters_dropped`,
+    /// and `help` is one line without backslashes.
     pub const fn sum(name: &str, help: &'static str) -> Self {
         Self::declare(name, help, LogicFold::Sum)
     }
