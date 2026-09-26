@@ -5,10 +5,12 @@ use crate::client::*;
 use crate::stats::*;
 
 mod fold;
+mod logic;
 mod result;
 mod spread;
 mod team;
 pub(crate) use fold::*;
+pub(crate) use logic::*;
 pub(crate) use result::*;
 pub(crate) use spread::*;
 pub(crate) use team::*;

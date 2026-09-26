@@ -408,7 +408,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_to={} req_late={} req_pending={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -575,6 +575,10 @@ pub(crate) fn print_report(
         } else {
             String::new()
         },
+        // The logic's own counters (`logic.rs`), one `logic_<name>=` key
+        // each — nothing for a game whose room declares none — right
+        // before `game=` like the two segments above.
+        logic_segment(last_room_agg.as_ref().map(|r| &r.logic)),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
         args.game,
