@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1024 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1049 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,18 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**Küçük paket 3 tamam** (CHANGELOG "Küçük paket 3"): rUDP oturumunu aktör
+ölünce yazıcısı bırakır (demux'a kuyruk + kendi adresine uyandırma
+datagramı; demux'a ikinci beklenen kaynak EKLEME) (B6). Yeni bir
+`Listener` accept'inin tamamını `gsb_net::transport::Door::admit`'ten
+geçirmeli ve `close`'ta kapıyı kapatmalı; döngü `is_listener_closed`'da
+döner — kapısız listener `stop()`'a 1 sn ve bir abort ekler; `stop()`
+`StopReport` döndürür (B16). Tıkalı bağlantının yanıtsız RPC retleri
+`requests_refused_congested` (GSMD) (F15). Tick'le karşılaştırılan ya da
+paused testte durması gereken her yeni son tarihin İKİ ucu da
+`gsb_core::ticker::now()` okur (F16). `counters_dropped` mantık sayacı
+adı ayrılmış (F17).
 
 **B29 tamam** (DESIGN §5.7 "Loadgen WS modu", CHANGELOG "B29"):
 `gsb-loadgen --transport ws` her modda; WS ↔ TCP taban çizgisi DESIGN
@@ -526,6 +538,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1024 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1049 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

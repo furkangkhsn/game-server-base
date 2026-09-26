@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 3 — B6, B16, F15, F16, F17 (`core/small-bundle-3`)
+
+- **B6 — aktörü ölmüş rUDP oturumu hemen gider** (DESIGN §6 "Aktörü ölmüş
+  oturum"). Oturumu yazıcısı bırakır: aktörün posta kutusu kapalı ve
+  güvenilir bandı borçsuzken (son bildirim ACK'lendi ya da REL canlılık
+  sınırı vazgeçti) adresi sınırlı bir kuyruğa koyar ve demux'u kendi
+  adresine bir baytlık datagramla uyandırır; demux her uyanışta kuyruğu
+  boşaltır, oturumu yalnız gerçekten ölüyse siler. Sınır ~bir RTO (son
+  bildirim ACK'lenmezse 5 sn + RTO); demux'a yeni await/zamanlayıcı/kilit
+  yok.
+- **B16 — accept döngüleri abort'suz biter** (DESIGN §9). Her ağaç içi
+  listener accept'ini (el sıkışma dahil) bir `Door`'dan
+  (`CancellationToken::run_until_cancelled`) geçirir; `close` bekleyen ve
+  sonraki accept'leri `listener_closed()` ile bitirir, döngü döner.
+  `stop()` döngüleri tek 1 sn'lik son tarih altında bekler, aşanı abort
+  eder (geri sigorta) ve `StopReport { accept_loops_ended,
+  accept_loops_aborted }` döndürür. Açık: HTTP ops döngüsü hâlâ abort ile
+  (B33).
+- **F15** — tıkalı bağlantının yanıtsız RPC retleri ayrı çekirdek sayaç:
+  `requests_refused_congested` (satır `req_refused=`, Prometheus
+  `gsb_room_requests_refused_congested_total`, loadgen teli **GSMD**,
+  RESULT `req_refused=`); `req_rej_conn` artık yalnız yanıtlanan cap
+  retleri.
+- **F16** — ayrılma bekleme süresi ve RPC zaman aşımı tick saatinde
+  (`ticker::now()`); üretim davranışı aynı; paused saatte grace/tavan ve
+  zaman aşımı testleri.
+- **F17** — mantık sayacı taşması görünür: `logic_counters_dropped=` ve
+  `gsb_room_logic_counters_dropped` gauge'u yalnız sıfırdan büyükken (F9
+  altın testi değişmeden geçer); `counters_dropped` adı ayrıldı.
+
+Testler 1024 → 1049 (rebase sonrası); istemci baytı aynı. Ajanın
+mutasyonları yakalandı; ebeveynin bağımsız mutasyonu (`is_listener_closed`
+hep `false`) iki `accept_stop` testini kırıyor.
+
 ## B29 — loadgen WS modu; WS kapısının ilk yük ölçümü (`loadgen/b29-ws-mode`)
 
 - `--transport tcp|udp|ws`: süreç içi ve `--serve` sunucusu `ws`'de tek

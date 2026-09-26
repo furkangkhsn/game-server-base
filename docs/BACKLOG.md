@@ -76,7 +76,6 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B3 rUDP'de NAT yeniden bağlanması oturumu bitiriyor | E3 | udp/mod.rs:316, DESIGN:1219 |
 | B4 rUDP `SO_RCVBUF` ayarı yok (`socket2` zaten lock'ta, doğrudan bağımlılık gerekir) | E3 | udp/mod.rs:324 |
 | B5 rUDP kripto yok | — (v1 kapsam dışı) | udp/mod.rs:328, SECURITY:19 |
-| B6 Aktörü ölmüş rUDP oturumu sonraki datagrama/idle sweep'e kadar kalıyor | — | CHANGELOG:6068 |
 | B7 rUDP üstünde reconnect/resume e2e'si | E3 | ROADMAP:451, RECONNECT:282 |
 | B8 QUIC rehome (REHOME çerçevesi, relay, 0-RTT) | çok makineli dağıtım | DISTRIBUTED:167-193 |
 | B9 Süreçler arası oturum relay'i | A2 / iki makine | DISTRIBUTED:147-165 |
@@ -84,7 +83,6 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B11 NetLink hata enjeksiyonu test donanımı | NetLink ile | DISTRIBUTED:243 |
 | B14 Loadgen kapanışları sebebe göre sınıflamıyor (kod-9 mesajı sözleşmece insan-okunur; sunucu `server_closes{reason}` otorite — DESIGN §5.6 "Loadgen (B14)"); yan not: "pre-auth frame budget" kapanışı `cap_rejected`'a düşüyor | istemci-başına atıf isteyen ölçüm → `Error`'a toplamalı sebep alanı | DESIGN §5.6 |
 | B15 Write-stall artıkları (TLS kuyruğu 64 KiB, uyanma histerezisi, WS'te iki pencere) | — | SECURITY:117, ROADMAP:522 |
-| B16 Accept döngüsü hâlâ `abort` ile duruyor | — | DESIGN:1197-1214 |
 | B17 Admin HTTP: auth/TLS yok, keep-alive yok, makine-okur çıktı yok, profil yok | — (localhost sözleşmesi) | OPS:12-54, SECURITY:269 |
 | B18 Oda başına config override | — | ROADMAP:712 |
 | B20 Autobahn CI işinin ilk koşusu | repo push edilince | HANDOFF:321, SECURITY:220 |
@@ -94,6 +92,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
 | B31 **SIRADA — güvenlik/erişilebilirlik:** WS (ve TLS) kapısı el sıkışmayı `accept()` içinde yapıyor; accept döngüsü sırayla bekliyor: bağlanma fırtınasında backlog taşıyor (orkestre 500 WS connect p50 ~1065 ms ↔ TCP 17–20 ms), yükseltme göndermeyen TEK soket kapıyı `WS_HANDSHAKE_TIMEOUT` (10 sn) kilitliyor, başarısız el sıkışma döngüyü 100 ms geri çekiyor. Yön: el sıkışmayı bağlantı başına görevde, sınırlı eşzamanlılıkla (pre-auth sınırına bağlı) | — (bugün yanlış; kapı herkese açılmadan önce şart) | DESIGN §5.7 "Loadgen WS modu (B29)" |
 | B32 Orkestre demo 500'de katılma fırtınasında `dropped` > 0 (TCP 116, WS 14–17) | ölçümlerde tekrar görülürse | DESIGN §5.7 |
+| B33 HTTP ops accept döngüsü hâlâ `http.abort()` ile duruyor (B16'nın `Door`'u yalnız oyun kapılarında) | ops yüzeyinin kibar kapanışı gerekirse | DESIGN §9 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -149,12 +148,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F5 Servis yaşam döngüsünde açık durdurma protokolü yok | GAME-MODULE:931 |
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
-| F15 RPC'nin tıkalı-bağlantı retleri (F14 fırtına sınırı) `requests_rejected_conn_cap` kovasında sayılıyor, ayrı metrik yok (RoomSample + Prometheus + loadgen codec'e dokunur) — tetik: operatörün tıkalı ret ile cap retlerini ayırması gerekirse | RPC-CONTROL-PLANE §3.1 |
-| F16 Ayrılma bekleme süresi ve RPC zaman aşımı hâlâ std saatte (paused testte gerçek zamanlı) — tetik: bunları paused saatte sınayan test | TICK-ARCHITECTURE "Tick saati" |
-| F17 Mantık sayacı taşması (16'yı aşan ad) yalnız bir kez warn + kümedeki sayı; satırda/Prometheus'ta görünmüyor — tetik: bir oyunun 16 adı zorlaması | DESIGN §12 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17 kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
