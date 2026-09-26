@@ -908,9 +908,18 @@ kimsenin görmediği nötr entity'ler (§8b.5 madde 8).
 **Sınırlar (sayılan, asla sınırsız değil).**
 
 - Kit, takım başına tick başına bütçe: `with_team_budget(n)` (varsayılan
-  `DEFAULT_TEAM_BUDGET` = 1024 kayıt). Aşımda önce üyeler (wire
-  sırasıyla), sonra görülen düşmanlar; fazlası kesilir ve sayılır
-  (`over_budget`, kit sayacı + debug satırı).
+  `DEFAULT_TEAM_BUDGET` = 1024 kayıt). Aşımda önce üyeler, sonra görülen
+  düşmanlar; fazlası kesilir ve sayılır. *A29:* her kademenin İÇİNDE ne
+  kalacağını oyun seçebilir — `with_export_rank(fn(&Wire<G>) -> u32)`:
+  yüksek sıra önce, eşitlikte küçük wire id (şeridin sırasından
+  bağımsız); sıralama üyeler-önce kuralının yerine geçmez, onu inceltir
+  (üyelik yalnız kit'te bilinir; ödünç kaydın takımı yok). Sıralama
+  yoksa kademe içinde kit'in sırası (kendi entity'ler wire id'ye göre,
+  sonra şerit) — A29 öncesiyle aynı. Kesme yalnız bütçe aşılınca, kesilen
+  kademede doğrusal seçimle (takım başına O(n), sort yok, tahsis yok);
+  kalanlar export sırasında gider. Kesilen kayıt export'la çekirdeğe
+  raporlanır (`TeamExport::over_budget`, röle edilmez) →
+  `RoomSample::team_over_budget` (KIT-ARCHITECTURE §10 "A29").
 - Çekirdek, mesaj başına sert tavan: `TEAM_EXPORT_MAX_RECORDS` (16 384
   kayıt) ve `TEAM_EXPORT_MAX_VIEWS` (256 takım); aşan kesilir, shard'ın
   `over_cap` sayacı artar. Bir oyunun bütçesi ne olursa olsun registry
@@ -1088,7 +1097,8 @@ TeamGame`.
 ### 8b.6 Sayaçlar: metrik yolu değil, log satırı
 
 > *W2'de terfi etti (A26): shard sayaçları kümülatif, `RoomSample`'ın
-> `team_*` alanlarında; log satırı pencereyi tutuyor — §8b.8.*
+> `team_*` alanlarında; log satırı pencereyi tutuyor — §8b.8. A29'da
+> kit'in bütçe kesmesi de (`over_budget`) aynı yoldan.*
 
 Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops`,
 `export_records`, `over_cap`, `imports`, `import_records`, `expired` —
@@ -1277,6 +1287,11 @@ bot için (savaş) kararlı pencerede `team_exports_s`,
 `team_export_records_s`, `team_records_per_export`, `team_imports_s`,
 `team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`,
 `team_over_cap`, `team_expired`, `migrations`, `effects_applied`) basar.
+*A29:* sekizinci alan `team_over_budget` — mantığın KENDİ bütçesinin
+kestiği kayıt (export'la raporlanır, §8b.1), Prometheus
+`gsb_room_team_over_budget_total`, pencerede `over_budget`, tel magic'i
+`GSMB` (`GSMA` + `team_expired`'dan sonra bu alan), RESULT'ta
+`team_over_cap`'ten sonra `team_over_budget`.
 
 **Ölçüm** (release, `gsb-loadgen N --game war --duration 10
 --write-stall-secs 0`; 1000: `--orchestrate 1000 --procs 2`; rUDP:

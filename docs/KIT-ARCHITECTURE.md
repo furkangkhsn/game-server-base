@@ -2241,8 +2241,11 @@ ShardedTeamRoom::with_shard(inner: ShardedRoom<G, P>, vision: V,
                             lent_pos: fn(&Wire<G>) -> Option<V::Pos>)
     .with_delta()                  // takım odasının delta modu
     .with_team_budget(n)           // varsayılan DEFAULT_TEAM_BUDGET = 1024
+    .with_export_rank(rank)        // A29: kesmede ne kalır — fn(&Wire<G>) -> u32
     .with_crystallize(..) / .with_disconnect_grace(..) / .with_disconnect_policy(..)
 room.over_budget()                 // bütçenin kestiği kayıt, kümülatif
+                                   // (A29: export'la çekirdeğe de raporlanır —
+                                   //  RoomSample::team_over_budget)
 ```
 
 - **İçerik, çekirdeğin TEAMS fazında** (`ShardLogic::team_exchange`,
@@ -2400,7 +2403,10 @@ kit değişikliği yok, kit iç öğesi kopyalanmadı. Kayda geçenler:
    oyuncuda bile kesme yok (takım başına ~260 kayıt); kesme olursa da
    kurbanı keyfi. Ayrıca kit'in `over_budget` sayacı barındırıcıya
    ulaşmıyor (oda `Box<dyn ShardLogic>`; F9'un "kit sayaç seam'i"
-   ihtiyacının ikinci ailesi). Kayıt; kod değişmedi.
+   ihtiyacının ikinci ailesi). Kayıt; kod değişmedi. **→ A29'da
+   yapıldı** (aşağıda "A29": oyunun sıralaması kesmede neyin kalacağını
+   seçer — üyeler yine önce; kesme `RoomSample::team_over_budget` ile
+   barındırıcıya ulaşır).
 4. **W2-4 — duraklatılmış saatte yürüyüş durur (çekirdek, test
    ergonomisi).** `Ticker` tick'leri `std::time::Instant` ile damgalar,
    shard'ın `dt`'si iki damga arası: tokio'nun duraklatılmış saatinde
@@ -3766,6 +3772,105 @@ yazıcıyı hiç bloklatmıyordu; `socket2`, kilitte zaten vardı) ve
 kit, +3 loadgen); `cargo clippy --workspace --all-targets -- -D warnings`
 0; kapanış kontrolü, beş özellik derlemesi ve `RUSTDOCFLAGS="-D
 warnings" cargo doc --workspace --no-deps` temiz.
+
+### A29 — takım bütçesinde oyunun sıralaması; kesme barındırıcıya (2026-09-26)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`kit/a29-team-budget-priority`;
+BACKLOG A29, §10 "W2 sonucu" bulgu W2-3; F9'un W2-3 notu). İki eksik
+vardı: bütçe kestiğinde her kademenin (üyeler, sonra görülenler) içinde
+kalan kayıtlar kit'in karşılaşma sırasıydı (kendi entity'ler wire id'ye
+göre, sonra border şeridi) — hangi kaydın kaldığı basım sırasının
+kazası (Cephe'de önce doğan kuleler hep kalır, en yeni oyuncular gider);
+ve kit'in `over_budget` sayacı barındırıcıya ulaşmıyordu.
+
+**Seam — oyunun uyguladığı (tek, opt-in):**
+
+```rust
+ShardedTeamRoom::with_export_rank(rank: fn(&Wire<G>) -> u32)
+// yüksek sıra önce kalır; eşitlikte küçük wire id
+```
+
+- **Neden wire değeri, neden `fn`.** Export yolunda her kayıt için kit'in
+  elinde yalnız wire değeri var: kendi entity'nin `Wire<G>`'si
+  (`codec.wire`), ödünç kaydın da yalnız o (şeridin taşıdığı; takımı ve
+  simülasyon durumu yok). Aynı kademede kendi ve ödünç kayıt yarışır,
+  yani sıralama ikisinde de aynı girdiden hesaplanmalı. `lent_pos`'un
+  kalıbı: kompozit kurucusunda düz fonksiyon işaretçisi — `TeamGame`'e
+  (takım odası da kullanır, orada export yok) ya da `ShardGame`'e
+  dokunulmadı; durum yakalamaz (sıralama değerden türetilir).
+- **Önce üyeler korunur; sıralama kademe İÇİNDE inceltir, yerine
+  geçmez.** Üyelik yalnız kit'te bilinir (kendi entity'nin
+  `TeamMember`'ı; ödünç kaydın takımı yok) — oyunun değer üstünden
+  sıralaması "bu kayıt bu takımın üyesi mi"yi bilemez, onu yeniden
+  kuramaz. Kompozitin sözü (takımın kendi birimleri harita genelinde,
+  gördükleri düşmanlardan önce — CROSS-SHARD §8b.1) oyunun sıralamasına
+  bağlı kalmaz. Üyeler bütçeyi doldurursa görülenlerin hiçbiri gitmez,
+  sıralaması ne olursa olsun (test kilidi).
+- **Eşitlik: küçük wire id.** Bir kümede her wire bir kez (kendi ve
+  ödünç ayrık — çekirdek kendi kaydın ödünç kopyasını zaten atar), yani
+  `(sıra, wire)` tam sıra: kalan küme, kit'in kayıtlarla hangi sırada
+  karşılaştığından (şeridin sırası dahil) bağımsız.
+- **Kalanlar export'un kendi sırasında gider** (önce üyeler, kit'in
+  sırası): export'un düzeni değişmez, yalnız hangi kayıtların kaldığı.
+- **Varsayılan (sıralama yok): önek**, A29'dan önceki kesmenin birebir
+  aynısı; sıralama verilmiş ama bütçe aşılmamışsa da hiçbir şey
+  değişmez (sıra hiç çağrılmaz).
+
+**Maliyet.** Bütçe aşılmıyorsa takım başına tick başına tek karşılaştırma.
+Aşılıyor ve sıralama varsa: kayıt başına bir sıra çağrısı, kesilen
+kademede kalan son anahtarın **doğrusal zamanlı seçimi**
+(`select_nth_unstable_by` — en kötü durumda O(n)), sonra kayıt başına
+bir karşılaştırma: takım başına O(n), sıralama (sort) yok, kayıt başına
+tahsis yok (iki karalama tamponu kompozitte yeniden kullanılıyor, en
+büyük küme kadar büyür). Tam sıralama elendi: gerekmez — kalan kümenin
+sınır anahtarı yeter, çıkış zaten export sırasında. Kodlama bir kez
+kalır: gövde önbelleği (`body`) değişmedi, yalnız kalan kayıtlar
+kodlanır.
+
+**Sayaç barındırıcıya (F9'un W2-3 kısmı).** Kesme artık export'la
+çekirdeğe gider: `TeamExport::over_budget` (bu export'un kendi bütçesinin
+kestiği kayıt; röle edilmez, yalnız sayılır). Shard aktörü onu
+`TeamStats::over_budget`'a ekler — export boş olsa da (gönderilecek bir
+şey yoksa bile) — ve A26'nın yolundan geçer: `RoomSample::team_over_budget`
+→ `gsb-metric` satırı, Prometheus `gsb_room_team_over_budget_total`
+(OPS §3), `team_exchange_summary` penceresi, loadgen metrik teli
+(magic **`GSMB`**: `GSMA` + `team_expired`'dan sonra bu alan; katlama
+SUM), savaş RESULT segmentinde `team_over_budget`. Ayrı sayaç, `over_cap`
+değil: `over_cap` çekirdeğin güvenlik ağı (mesaj başı tavan — oyunun
+bütçesi yanlış boyutlanmış demek), `over_budget` oyunun politikası (yük
+altında beklenen). F9'un genel "oyun/kit sayaç seam'i" (crystal
+olayları) açık kalır: bütçe kesmesi export'un bir niceliği, çekirdek
+export'u zaten her tick alıyor — genel bir seam gerekmedi.
+
+**Doğrulama oyunu: kit'in fixture'ı yeterli, savaş demosuna dokunulmadı.**
+Seam'i çalıştırmak için oyun gerekmiyor — fixture'ın wire değeri
+(`WirePos`) üstünde "en doğudaki önce" sıralaması, üye/görülen
+kademelerini, ödünç kayıtları ve eşitlikleri kuruyor. Cephe'de kesme
+varsayılan bütçede 1 000 oyuncuda bile olmuyor (W2-3); savaş demosu
+sıralamayı açmadı (oyunun kararı: açarsa `WarWire::kind` ile oyuncular
+kulelerden önce).
+
+**Testler** (önce kırmızı: `with_export_rank` sıralamayı yok sayan bir
+taslakken üç sıralama testi kırıldı; her kural mutasyonla kırıldı,
+dosyalar scratchpad'e yedeklenip geri yüklendi):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `sharded::tests::team::budget::the_default_cut_is_pinned` | sıralamasız kesme: tohumlu kalabalık (12 oyuncu, 6 kule, 4 nötr, 5 ödünç kayıt, 30 tick) — bütçe 4 (üyelerin içinde kesme) ve 9 (görülenlerin içinde) — export'un tamamı (görünümler, takım, wire, gövde) `28be644`'te ölçülen özete sabit, kesme sayıları dahil | görülenler üyelerden önce, önek bir fazla → kırıldı |
+| `…::a_rank_changes_nothing_under_the_budget` | bütçe aşılmıyorsa sıralamalı ve sıralamasız export bayt bayt aynı | — |
+| `…::a_ranked_cut_keeps_the_highest_ranked_records` | üyelerin içinde (dört kuleden en batıdaki — ilk basılan — gider) ve görülenlerin içinde en yüksek sıralılar kalır; export sırası korunur; kesme export'ta ve toplamda sayılır | sıra ters, seçim bir kayık, sıralama üyeleri ezer, export 0 raporluyor → kırıldı |
+| `…::ties_keep_the_smaller_wire_ids_whatever_the_strip_order` | eşitlikte küçük wire (şeridin küçük id'li ödünç kaydı kendi entity'lerden önce), şeridin sırası sonucu değiştirmez; sınırda eşitlik | eşitlikte büyük wire, sınır yalnız sıraya bakıyor → kırıldı |
+| `…::members_stay_first_under_a_rank` | görülen düşman ne kadar yüksek sıralı olsa da üyeler önce; bütçe 1'de daha yüksek sıralı üye | sıralama kademeleri eziyor, sıra ters → kırıldı |
+| `sharded::team::budget::tests` (2) | seçim, her küme boyu / üye bölmesi / bütçe için kademe başına TAM SIRALAMA referansıyla aynı kümeyi tutuyor (bol eşitlikli tohumlu kümeler); sıralamasız önek | sınır yalnız sıraya bakıyor, seçim bir kayık → kırıldı |
+| `shard::tests::teams::sample` (2, çekirdek) | export'un kesmesi örnekte kümülatif (log penceresi dahil); hiçbir şey gönderilmese de sayılıyor | sayılmıyor, yalnız gönderilince sayılıyor, örnek `over_cap`'i okuyor → kırıldı |
+| `metrics::tests::seams` (17 sayaç), loadgen `wire` / `rules` / `team` | satır + Prometheus; tel gidiş-dönüş; katlama SUM; RESULT anahtarı | Prometheus `over_cap`'i okuyor, satır değeri yazmıyor, çözücü alanı atlıyor, katlama toplamıyor, RESULT `over_cap` basıyor → kırıldı |
+
+Bayt kilitleri: dokunulmadı; kayıt koşusu ikizlerinin (A31/A10) içerik
+özetleri — sharded × team dahil — değişmeden yeşil. Loadgen teli
+değişti (`GSMA` → `GSMB`): orkestratörün sunucu çocuğu ve istemcisi aynı
+ikiliden, karışık sürüm zaten reddediliyor (magic).
+
+**Doğrulama:** 920 → **928** test / 0 hata / 1 ignored.
 
 ## 11. Kabul kriteri
 

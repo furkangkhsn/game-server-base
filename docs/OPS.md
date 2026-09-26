@@ -90,6 +90,7 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
   | `gsb_room_team_export_drops_total` | Dolu/kapalı registry posta kutusunun reddettiği export'lar (sonraki tick aynı kümeyi taşır) |
   | `gsb_room_team_export_records_total` | Kuyruklanan export'lardaki kayıtlar |
   | `gsb_room_team_over_cap_total` | Çekirdeğin mesaj başı tavanlarının (`TEAM_EXPORT_MAX_*`) kestiği kayıt/takım — çıkışta ve girişte |
+  | `gsb_room_team_over_budget_total` | Oyunun takım başı export bütçesinin (kit: `with_team_budget`) kestiği kayıt — export çekirdeğe varmadan önce; oyunun politikası, yük altında beklenebilir (A29) |
   | `gsb_room_team_imports_total` | Uygulanan takım import'ları (hub'ın buraya ulaşan röleleri) |
   | `gsb_room_team_import_records_total` | Uygulanan import'lardaki kayıtlar |
   | `gsb_room_team_expired_total` | TTL'in düşürdüğü kaynak yuvaları (sessizleşmiş kaynak) |
