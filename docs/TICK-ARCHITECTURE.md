@@ -250,8 +250,38 @@ okumalar duvar saatinde kalır.
 | Tick gecikmesi `late_us` (adım başı − damga) | `ticker::now()` | damgayla fark; std'de paused damga ileride kalır, fark doyarak 0 olurdu — anlamsız bir karışım |
 | Girdi-boşta saati: `touch`/süpürme (`t.at`) ve katılımdaki `start` damgaları (oda `join` ×2, shard `session`/`messages`) | damga / `ticker::now()` | süpürme `t.at − start`'ı ölçer: iki uç aynı saatte olmalı |
 | Adım süresi (`step_us`, histogramlar, `observe_step_us`) ve alt ölçümler (sınır/göç süreleri) | `std::time::Instant` | CPU işini ölçer; paused saat senkron işte ilerlemez → hep 0 okurdu |
-| Ayrılma bekleme süresi (park grace/tavan), RPC zaman aşımı | `std::time::Instant` (değişmedi) | damgayla hiç karşılaşmaz, kendi içinde tutarlı. Paused saatte gerçek zamanlı kalırlar — tetikleyici: bunları paused saatte sınayan bir test |
+| Ayrılma bekleme süresi (park grace/tavan: `park` ve 0c süpürmesi), RPC zaman aşımı (`due` ve 0b süpürmesi) — oda ve shard | `ticker::now()` (F16) | iki ucu da aynı saatte; paused saatte durur, paused zamanla dolar (aşağıda "F16") |
+| Bağlantı aktörünün pencereleri (auth denemeleri, HEARTBEAT_ACK kısması, metrik boşaltma), rUDP demux'ının idle heap'i ve yazıcının RTO/canlılık saati | `std::time::Instant` (değişmedi) | damgayla karşılaşmaz, tick'e bağlı değil; paused saatte sınayan test yok (tetik yok) |
 | Metrik toplayıcı | yalnız tick olayı, damga okumaz | — |
+
+**F16 (2026-09-26).** Ayrılma bekleme süresi ve RPC zaman aşımı F10'da
+std saatte bırakılmıştı; paused saatte gerçek zamanlı akıyorlardı:
+paused bir testte park'ın grace'i ya da bekleyen isteğin süresi hiç
+dolmuyordu (sanal saniyeler gerçek mikrosaniyelerde geçer). Artık
+ikisinin de iki ucu `crate::ticker::now()`'dadır — oda ve shard
+aktöründe: `RoomConn::park` (DETACH yolu; shard'da `detach_player`)
+mutlak grace/tavan anlarını onunla kurar, 0c süpürmesi onunla okur;
+isteğin `due`'su (2c) ve 0b zaman aşımı süpürmesi de öyle. Worker'ın
+kaynak koruması zaten `tokio::time::timeout`'tu. Tipler değişmedi
+(`std::time::Instant`, `into_std()`), göçte taşınan mutlak anlar
+(`ShardMsg`'nin `detach_deadline`/`detach_ceiling`'i) aynı saatte
+kalır. Üretimde davranış aynı: `test-util` yokken ya da runtime
+duraklatılmamışken `ticker::now()` std'nin anıdır. CPU süresi ölçen
+okumalar (adım süreleri, sınır/göç süreleri) std'de kaldı.
+Elenenler: (1) *Tick damgasını (`t.at`) kullanmak* — park CONTROL
+fazında (`handle_control`) olur, elinde damga yoktur ve zaman aşımı
+kaydı damganın değil kaydın anını ister; `ticker::now()` damgayla aynı
+saattir ve her yerde okunur. (2) *Alanları `tokio::time::Instant`
+yapmak* — `ShardMsg`'nin public alanlarını ve testlerin elle kurduğu
+anları değiştirirdi; `into_std()` aynı anı verir (F10'un gerekçesi).
+(3) *Testlerde anları elle kaydırmak* (`Rig::age`) — sweep'i sınar ama
+canlı aktörü paused saatte koşturmaz; yeni testler ikisini de ister.
+Testler: `room::tests::hold::paused` (grace ve tavan),
+`shard::tests::hold::paused` (grace), `tests/rpc/paused.rs` ve
+`tests/rpc_shard/paused.rs` (5 sn'lik zaman aşımı sanal saatte, gerçek
+< 2 sn; kayıttan önce 300 ms gerçek bekleme, karışık saatli bir
+karşılaştırma şans eseri geçemesin). Beşi de eski kodda düştü; sekiz
+okumanın her biri tek tek std'ye geri alındığında en az biri düşer.
 
 **Elenenler.** (1) *`TickInfo::at`'i `tokio::time::Instant` yapmak:*
 tipte açık, ama public alan — `IdleView`, idle saati ve `TickInfo` kuran
