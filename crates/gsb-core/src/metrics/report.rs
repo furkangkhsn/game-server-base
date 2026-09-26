@@ -169,6 +169,12 @@ pub struct NetReport {
     /// server; the per-event signal (peer address, close reason) is the
     /// structured tracing event emitted at budget exhaustion.
     pub violations: u64,
+    /// Valid game-band input refused over a room's input rate limit
+    /// (cumulative, all connections — see
+    /// [`crate::metrics::ConnSample::input_rate_limited`]). 0 while no
+    /// room limits input (the default); a rising count is the limit
+    /// working, not a protocol problem.
+    pub input_rate_limited: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -239,6 +245,7 @@ impl MetricReport {
                 frames_out: 0,
                 actions_dropped: 0,
                 violations: 0,
+                input_rate_limited: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),

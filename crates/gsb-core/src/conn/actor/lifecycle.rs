@@ -52,6 +52,7 @@ impl super::ConnectionActor {
             m_out_frames: 0,
             m_actions_dropped: 0,
             m_actions_dropped_warned: false,
+            m_input_limited: 0,
             v_score: 0,
             v_events: 0,
             v_answered: 0,
@@ -194,6 +195,7 @@ impl super::ConnectionActor {
         let adrops = self.m_actions_dropped;
         let drops = self.m_metrics_dropped;
         let viols = self.m_violations;
+        let limited = self.m_input_limited;
         // The server-close verdict rides the FINAL sample only (one per
         // session), and forces it out even when every delta is zero — a
         // connection refused at birth has sent and received nothing, and
@@ -206,6 +208,7 @@ impl super::ConnectionActor {
             && adrops == 0
             && drops == 0
             && viols == 0
+            && limited == 0
             && server_close.is_none()
         {
             return;
@@ -220,6 +223,7 @@ impl super::ConnectionActor {
         self.m_actions_dropped = 0;
         self.m_metrics_dropped = 0;
         self.m_violations = 0;
+        self.m_input_limited = 0;
         self.m_last_flush = Instant::now();
         // A3: bounded channel + synchronous `try_send`. On a full channel the
         // sample is dropped (harmless — the counters are cumulative deltas and
@@ -235,6 +239,7 @@ impl super::ConnectionActor {
                 actions_dropped: adrops,
                 metrics_dropped: drops,
                 violations: viols,
+                input_rate_limited: limited,
                 server_close,
                 last,
             }))

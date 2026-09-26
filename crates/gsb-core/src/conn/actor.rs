@@ -64,6 +64,11 @@ pub struct ConnectionActor {
     /// samples; per-drop warnings would flood the log exactly when a
     /// flooder is doing what it does).
     m_actions_dropped_warned: bool,
+    /// Valid game-band input refused over the room's input rate limit,
+    /// delta since the last flush (docs/SECURITY.md, "post-auth input
+    /// volume"). Its own counter, NOT a violation (see
+    /// `ConnSample::input_rate_limited`).
+    m_input_limited: u64,
     /// Violation budget state (all actor-local — the counter *is* the
     /// budget; see the module docs): weighted lifetime score, raw event
     /// count (for the close signal and metrics), how many violations have

@@ -151,6 +151,7 @@ pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
             frames_out: 0,
             actions_dropped: 0,
             violations: 0,
+            input_rate_limited: 0,
             server_closes: Default::default(),
         },
         actions_dropped_top: Vec::new(),

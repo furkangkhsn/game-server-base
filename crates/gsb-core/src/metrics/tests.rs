@@ -122,6 +122,7 @@ fn accumulator_applies_events_and_computes_rates() {
         actions_dropped: 0,
         metrics_dropped: 2,
         violations: 0,
+        input_rate_limited: 2,
         server_close: None,
         last: false,
     }));
@@ -154,6 +155,7 @@ fn accumulator_applies_events_and_computes_rates() {
         actions_dropped: 7,
         metrics_dropped: 0,
         violations: 3,
+        input_rate_limited: 4,
         server_close: None,
         last: true,
     }));
@@ -206,6 +208,9 @@ fn accumulator_applies_events_and_computes_rates() {
     );
     // Violation events sum across the conn samples (0 + 3).
     assert_eq!(second.net.violations, 3);
+    // Rate-limited input sums the same way (2 + 4), on its own field:
+    // an over-rate honest client is not a violator (E1).
+    assert_eq!(second.net.input_rate_limited, 6);
 
     // The render is one line per scope and parseable key=value. No
     // attribution line: nothing was dropped by a LIVE connection.
@@ -215,6 +220,7 @@ fn accumulator_applies_events_and_computes_rates() {
     assert!(lines[1].starts_with("gsb-metric scope=room id=r1 "));
     assert!(lines[2].starts_with("gsb-metric scope=net "));
     assert!(lines[2].contains("actions_dropped=7"));
+    assert!(lines[2].contains(" violations=3 input_rate_limited=6 "));
     for line in &lines {
         for kv in line.split_whitespace().skip(2) {
             assert!(kv.contains('='), "key=value field: {kv}");

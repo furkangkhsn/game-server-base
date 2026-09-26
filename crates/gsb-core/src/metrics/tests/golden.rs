@@ -83,6 +83,7 @@ pub(super) fn golden_report() -> MetricReport {
         actions_dropped: 5,
         metrics_dropped: 0,
         violations: 1,
+        input_rate_limited: 9,
         server_close: None,
         last: false,
     }));
@@ -95,6 +96,7 @@ pub(super) fn golden_report() -> MetricReport {
         actions_dropped: 0,
         metrics_dropped: 0,
         violations: 0,
+        input_rate_limited: 0,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));

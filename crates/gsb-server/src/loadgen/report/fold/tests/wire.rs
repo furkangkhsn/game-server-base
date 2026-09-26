@@ -79,7 +79,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"DMSG", "the magic, little-endian GSMD");
+    assert_eq!(&frame[..4], b"EMSG", "the magic, little-endian GSME");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -148,4 +148,20 @@ fn a_logic_record_over_the_bound_is_refused() {
     body.splice(end..end, extra);
     body[first - 1 - 4 - 1] = (LOGIC_COUNTERS_MAX + 1) as u8;
     assert!(decode_report(&body).is_none(), "seventeen are refused");
+}
+
+/// The net-scope rate-limited input count (GSME, E1) crosses the wire as
+/// its own field, between the violations and the server closes.
+#[test]
+fn the_rate_limited_input_survives_the_wire() {
+    let mut sent = three_shards();
+    sent.net.violations = 3;
+    sent.net.input_rate_limited = 4_242;
+    sent.net
+        .server_closes
+        .add(gsb_core::conn::ServerClose::IdleTimeout);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.net.violations, 3);
+    assert_eq!(got.net.input_rate_limited, 4_242);
+    assert_eq!(got.net.server_closes.total(), 1);
 }

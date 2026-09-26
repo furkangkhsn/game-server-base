@@ -19,7 +19,7 @@ mod logic;
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSMD"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSME"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -61,7 +61,7 @@ mod logic;
 ///                u64 opens  u64 closes
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
-///   u64 actions_dropped  u64 violations
+///   u64 actions_dropped  u64 violations  u64 input_rate_limited
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 /// ```
@@ -123,7 +123,10 @@ mod logic;
 /// GSMD = the GSMC layout plus each room's `requests_refused_congested`
 /// (the congested connections' unanswered RPC refusals — F15, counted
 /// with `req_rej_conn` before), right after `requests_rejected_room_cap`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D44;
+/// GSME = the GSMD layout plus the net-scope `input_rate_limited` (valid
+/// game-band input refused over a room's input rate limit — E1), right
+/// after `violations`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D45;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -243,6 +246,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.frames_out);
     w.u64(r.net.actions_dropped);
     w.u64(r.net.violations);
+    w.u64(r.net.input_rate_limited);
     for (_, n) in r.net.server_closes.iter() {
         w.u64(n);
     }
@@ -419,6 +423,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         frames_out: r.u64()?,
         actions_dropped: r.u64()?,
         violations: r.u64()?,
+        input_rate_limited: r.u64()?,
         server_closes: {
             let mut counts = [0u64; ServerClose::COUNT];
             for n in &mut counts {

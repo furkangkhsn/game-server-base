@@ -59,6 +59,9 @@ pub struct MetricAccumulator {
     /// Summed delta of protocol-violation events across all connection
     /// actors (the violation budget's activity, cumulative).
     conn_violations: u64,
+    /// Summed delta of rate-limited game-band input across all connection
+    /// actors (E1; cumulative, never attributed — see the net report).
+    conn_input_rate_limited: u64,
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
@@ -123,6 +126,9 @@ impl MetricAccumulator {
                 self.conn_metrics_dropped =
                     self.conn_metrics_dropped.saturating_add(c.metrics_dropped);
                 self.conn_violations = self.conn_violations.saturating_add(c.violations);
+                self.conn_input_rate_limited = self
+                    .conn_input_rate_limited
+                    .saturating_add(c.input_rate_limited);
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }

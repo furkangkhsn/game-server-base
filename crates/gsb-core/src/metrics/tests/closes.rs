@@ -16,6 +16,7 @@ fn final_sample(conn: u64, server_close: Option<ServerClose>) -> ConnSample {
         actions_dropped: 0,
         metrics_dropped: 0,
         violations: 0,
+        input_rate_limited: 0,
         server_close,
         last: true,
     }

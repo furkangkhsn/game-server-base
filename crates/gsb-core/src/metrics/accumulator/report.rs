@@ -175,6 +175,7 @@ impl MetricAccumulator {
                 frames_out: self.conn_frames_out,
                 actions_dropped: actions_dropped_total,
                 violations: self.conn_violations,
+                input_rate_limited: self.conn_input_rate_limited,
                 server_closes: self.conn_server_closes,
             },
             actions_dropped_top,

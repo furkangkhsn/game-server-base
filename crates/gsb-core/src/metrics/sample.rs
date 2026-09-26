@@ -266,6 +266,14 @@ pub struct ConnSample {
     /// violating); the per-event detail (peer address, close reason) is in
     /// the tracing close signal, not here.
     pub violations: u64,
+    /// Valid game-band input this actor refused over its room's input
+    /// rate limit (`RoomConfig::input_rate`, docs/SECURITY.md "post-auth
+    /// input volume"), delta since its last flush. Dropped, never queued,
+    /// and deliberately NOT a violation: an over-rate client is not
+    /// sending anything a correct client could not — the number is the
+    /// game's gameplay limit, not evidence of hostility. Always 0 while
+    /// no room limits input (the default).
+    pub input_rate_limited: u64,
     /// Why the SERVER ended this session — set on the final sample only
     /// (`last = true`), and only when the end was a server verdict (see
     /// [`ServerClose`]); `None` for a client-side end and on every

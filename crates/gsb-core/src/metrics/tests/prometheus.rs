@@ -214,6 +214,7 @@ fn input_drops_are_exported_only_at_the_net_scope() {
             actions_dropped: dropped,
             metrics_dropped: 0,
             violations: 0,
+            input_rate_limited: 0,
             server_close: None,
             last: false,
         }));
