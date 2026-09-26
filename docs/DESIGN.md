@@ -2719,8 +2719,42 @@ ailesine katılır). Tablo kodda, onu uygulayan tek döngünün yanındadır
 | SUM, eleman bazında | `step_hist`, `step_fine_hist` | Shard dağılımlarının birleşimi; böylece percentiller ve bütçe aşım %'si oda geneli olur. |
 | SUM | `lagged_*`, `dropped`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_*`, `detach_forced`, `effects_*` ve `migrations_*` aileleri (küçük paket), `team_*` ailesi (W2), `requests_*` ailesinin tamamı, `metrics_dropped` | Ayrık iş üzerindeki kümülatif sayaçlar. (Bir göç kaynağında `migrations_out`, hedefinde `migrations_in` olarak bir kez sayılır: katlanmış ikili eşit çıkmalı, birbirine eklenmez.) |
 | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | Shard başına hesaplanmış bir ORAN ortalanamaz: sayaçlar aynı duvar saati üzerinde ayrıktır, odanın oranı toplamlarıdır (ortalamak 4 shard'lık odada kaybın dörtte birini raporlardı). |
-| SUM | `groups`, `members`, `detached`, `pending_requests` | Gauge, ama **bölünmüş** gauge — shard'lar odanın bağlantılarını, gruplarını, park edilmiş oturumlarını ve uçuştaki isteklerini PAYLAŞTIRIR, yani odanın değeri toplamdır. Karşı örnek `max_group`/`snap_bytes_max`: bunlar bir popülasyon değil, popülasyon ÜZERİNDE bir uçtur. |
+| SUM | `groups`, `members`, `detached`, `pending_requests` | Gauge, ama **bölünmüş** gauge — shard'lar odanın bağlantılarını, gruplarını, park edilmiş oturumlarını ve uçuştaki isteklerini PAYLAŞTIRIR, yani odanın değeri toplamdır. Karşı örnek `max_group`/`snap_bytes_max`: bunlar bir popülasyon değil, popülasyon ÜZERİNDE bir uçtur. Toplam, satırlar tek bir an ise bir andır — aşağıda "tutarlı kesit" (F18). |
 | SAYAÇ BAŞINA | `logic` | Mantığın kendi sayaçları (F9, aşağıda) kurallarını yanlarında taşır: ad ad, `LogicFold::Sum` toplanır (yukarıdaki SUM satırı gibi ayrık iş), `LogicFold::Max` büyüğü alır (yüksek-su işareti, MAX satırı gibi); yalnız bazı shard'ların bildirdiği ad korunur; taşma sayıları toplanır (`LogicCounters::merge`). |
+
+**Bölünmüş gauge'un toplamı yalnız TUTARLI KESİTTE bir andır (F18).**
+Bir rapor, toplayıcının her üreticiden aldığı SON örnektir; shard
+aktörleri örneklerini birbirinden bağımsız gönderir (her biri kendi
+adımının sonunda, `metrics_every` adımda bir) ve toplayıcı kendi
+tick'inde yayar. Rapor bu yüzden aynı turun örnekleri ARASINA düşebilir:
+bazı satırlar `k` turu, diğerleri hâlâ `k − 1`. Her satır kendi shard'ı
+için kendi örnek tick'inde kesindir; toplamları ise odanın HİÇBİR
+anı değildir — iki tur arasında eski-turlu bir shard'dan yeni-turlu
+birine göçen oyuncu iki satırda birden görünür (oda bir fazla okur),
+ters yönde göçen hiçbirinde görünmez. Çekirdeğin sözü tick indisi
+başınadır (CROSS-SHARD §4d): göçen oyuncu kaynağın `members`'ından
+kesinleşme tick'i `h`'de çıkar, hedefinkine kurulumda — en erken
+`h + 1` — girer; aynı tick'te (ya da bir tick arayla) alınmış iki örnek
+onu İKİ KEZ sayamaz, bedeli uçuştaki oyuncunun hiçbir satırda
+olmamasıdır (tek tick eksik sayım). İki ya da daha fazla tick arayla
+alınmış satırlar iki kez sayabilir: buna **yırtık rapor** denir.
+Kesin-bir-kez (uçuştaki dahil) shard'lar arası eşgüdüm ister ve motor
+dağıtık kilidi yasaklar; yani sözleşme budur, düzeltilecek bir sayaç
+değil. Tüketicinin kuralı: bir raporun satırları ancak **tutarlı
+kesit**se (her satır aynı `(steps, lagged_ticks)`'te — shard'lar tek
+ticker'la aynı adımda ilerler ve aynı adım katlarında örnekler, yani
+eşit çift aynı tur, aynı tick; iki shard'ın ticker aboneliğinin
+farkı olabilecek tek tick'i kurulum kapısı soğurur) tek nüfus olarak
+toplanır. Tek oda raporu tek satırdır: her zaman kesittir. Loadgen'in
+`peak_members`'ı, kararlı penceresi ve `shard_members=`'ı böyle okunur
+(`loadgen::report::spread`); hiç tutarlı kesiti olmayan bir koşu
+(eşit olmayan `Lagged` yemiş shard bir daha hizalanmaz) yırtık
+satırlardan okunur ve insan-okunur blok bunu söyler. Prometheus
+satırları katlamaz (her shard ayrı seri); PromQL'de shard'lar üzerinde
+`sum` aynı yırtılmaya açıktır — göç sürerken nüfusun ±1 oynaması
+ölçüm değil kesittir. Kilit: `shard::tests::metrics::members` (tick
+başına el değiştirme) ve `loadgen::report::spread::tests` (gerçek bir
+başarısız koşunun rapor akışı, satır satır).
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi

@@ -666,6 +666,18 @@ debug satırı olarak kalır (nadir, oturum ölümüyle yarışın izi, yük
 sinyali değil). Prometheus: `gsb_room_migrations_{out,in,failed}_total`
 (OPS §3).
 
+**Göçte üye sayısı (F18).** Oyuncu satırı (`conns`) göçün kendisiyle
+taşınır, kopyayla değil: kaynak onu `h`'nin 4b'sinde `Migrate`'e koyar
+(o tick'in örneği onu SAYMAZ — `pending_out`'taki ölümlü kopya bir
+üye değildir), hedef kurulumda ekler (`at_tick h < tick` kapısı: en
+erken `h + 1`). Yani tick indisi başına: kaynak `h − 1`'e kadar sayar,
+hedef `h + 1`'den; `h`'de oyuncu uçuştadır, hiçbiri saymaz. Aynı ya da
+bir tick arayla alınmış iki shard örneği oyuncuyu iki kez sayamaz;
+iki+ tick arayla alınmışlar sayabilir — toplayıcının bir raporunda
+satırlar farklı örnek turlarından gelebildiği için bu, CPU yükü
+altında loadgen'in `shard_members` toplamını N+1 okutuyordu (DESIGN
+§12 "tutarlı kesit"). Kilit: `shard::tests::metrics::members`.
+
 ## 5. Ortak fizik (tutma/itme) — tasarım uyarısı
 
 Tek sonucu iki otoritenin belirlediği mekanikler (grab, ortak push)

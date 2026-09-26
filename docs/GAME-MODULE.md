@@ -830,11 +830,14 @@ bu bayrakları yalnız demo koşusunda iletir. `--help` güncellendi
 `team`/`1`/`base-centre`, MMO: `spatial`/`4`/`roam` — komut satırının
 varsayılan `all`'ı yanıltıcı olurdu) ve `still_frac=0`. MMO
 `shard_members=a,b,c,d` ekler (kararlı pencerenin SONUNDA shard başına
-üye; shard başına örnek satırlarından, sıra = shard indisi) —
+üye; shard başına örnek satırlarından, sıra = shard indisi; yalnız
+**tutarlı kesit** raporlarından — satırları aynı örnek turundan olan;
+yırtık bir rapor göçen oyuncuyu iki kez sayabilir, DESIGN §12, F18) —
 `game=`'den hemen önce, yani önceki her anahtar yerinde ve `game=` son
 anahtar. İnsan-okunur rapor pencerenin başındaki ve sonundaki dağılımı
 basar (`server shards (members per shard, steady window): first=…
-last=…`). Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı.
+last=…`; koşuda hiç tutarlı kesit yoksa satır `(torn: …)` ile biter).
+Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı.
 
 **Demo A/B** (15a02c5 ↔ HEAD, dönüşümlü üç tur, `GSB_LOADGEN_CLIENT_LINES=1`;
 makine yükü 19–23): RESULT anahtar kümesi, sırası ve değer biçimleri
