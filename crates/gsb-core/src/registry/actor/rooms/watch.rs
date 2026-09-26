@@ -6,6 +6,7 @@ use crate::conn::ConnIn;
 use crate::id::{ConnectionId, RoomId};
 use crate::registry::actor::Registry;
 use crate::registry::*;
+use crate::service::Hold;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tracing::debug;
@@ -20,6 +21,19 @@ where
     // require them.
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
+    /// Give the registry the rooms' drop barrier token (BACKLOG F5, see
+    /// [`crate::service`]): the registry keeps it until it exits and hands
+    /// a clone to every room's (and shard's) death watcher, which drops it
+    /// when that task has ended — after its teardown hooks
+    /// (`on_shutdown`, `match_result`). The barrier's waiter therefore
+    /// completes once the registry is gone and every room it ever spawned
+    /// has finished, and nothing ever awaits a room to learn it. Without
+    /// it (the default) nothing changes.
+    pub fn with_rooms_hold(mut self, hold: Hold) -> Self {
+        self.rooms_hold = Some(hold);
+        self
+    }
+
     /// One watcher task per spawned room/shard task. It awaits ONLY that
     /// task's `JoinHandle` — the project's "one watcher per source, the
     /// owner awaits a single receive" idiom (see the signal handling in
@@ -40,18 +54,25 @@ where
     /// default panic hook when the task unwinds; what the base adds is the
     /// operator-facing attribution (which room, which shard, what happened
     /// to the members).
+    ///
+    /// The watcher also carries the rooms' drop barrier token, if any (see
+    /// [`Self::with_rooms_hold`]), and drops it the moment the room task
+    /// has ended — before reporting, so a registry that is already gone
+    /// cannot delay the release.
     pub(in crate::registry) fn spawn_room_watcher(
         id: RoomId,
         shard: Option<usize>,
         generation: u64,
         handle: tokio::task::JoinHandle<()>,
         registry: Mailbox<RegistryMsg>,
+        hold: Option<Hold>,
     ) {
         tokio::spawn(async move {
             // The outcome (panic vs clean return) is deliberately not
             // inspected: the registry decides whether this exit means
             // anything, based on its table state at report time.
             let _ = handle.await;
+            drop(hold);
             let _ = registry
                 .send(RegistryMsg::RoomDied {
                     id,

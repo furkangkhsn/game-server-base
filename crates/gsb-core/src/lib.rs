@@ -36,6 +36,7 @@ pub mod metrics;
 pub mod registry;
 pub mod room;
 pub mod rpc;
+pub mod service;
 pub mod shard;
 pub mod ticker;
 

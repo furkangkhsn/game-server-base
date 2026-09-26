@@ -23,3 +23,21 @@ pub type Inbox<T> = mpsc::Receiver<T>;
 pub fn channel<T>(capacity: usize) -> (Mailbox<T>, Inbox<T>) {
     mpsc::channel(capacity.max(1))
 }
+
+/// Deliver `msg` without awaiting: in place when the mailbox has room,
+/// from a spawned sender when it is full, not at all when the receiver is
+/// already gone. The stop-message idiom (DESIGN §9.1): a stop path must
+/// never park its caller on another actor's mailbox, and must not lose
+/// the message while that actor is still draining. Must be called inside
+/// a Tokio runtime (the full-mailbox fallback spawns).
+pub fn post<T: Send + 'static>(tx: &Mailbox<T>, msg: T) {
+    match tx.try_send(msg) {
+        Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+        Err(mpsc::error::TrySendError::Full(msg)) => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let _ = tx.send(msg).await;
+            });
+        }
+    }
+}

@@ -28,9 +28,6 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tokio::sync::mpsc::error::TrySendError;
-
-use crate::channel::Mailbox;
 use crate::registry::*;
 use crate::room::RoomControl;
 use crate::shard::ShardMsg;
@@ -39,18 +36,9 @@ use crate::registry::actor::Registry;
 
 /// Deliver `msg` without awaiting: in place when the mailbox has room,
 /// from a spawned sender when it is full, not at all when the actor is
-/// already gone (a dead room needs no stop).
-pub(in crate::registry) fn post_stop<T: Send + 'static>(tx: &Mailbox<T>, msg: T) {
-    match tx.try_send(msg) {
-        Ok(()) | Err(TrySendError::Closed(_)) => {}
-        Err(TrySendError::Full(msg)) => {
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(msg).await;
-            });
-        }
-    }
-}
+/// already gone (a dead room needs no stop). The idiom is public as
+/// [`crate::channel::post`] (services' stop requests use it too).
+pub(in crate::registry) use crate::channel::post as post_stop;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where

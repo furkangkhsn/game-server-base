@@ -78,7 +78,14 @@ where
                     .with_registry(self.self_mailbox.clone())
                     .run(),
                 );
-                Self::spawn_room_watcher(id, None, generation, handle, self.self_mailbox.clone());
+                Self::spawn_room_watcher(
+                    id,
+                    None,
+                    generation,
+                    handle,
+                    self.self_mailbox.clone(),
+                    self.rooms_hold.clone(),
+                );
                 self.rooms.insert(
                     id,
                     RoomEntry {
@@ -178,6 +185,7 @@ where
                         generation,
                         handle,
                         self.self_mailbox.clone(),
+                        self.rooms_hold.clone(),
                     );
                 }
                 self.rooms.insert(

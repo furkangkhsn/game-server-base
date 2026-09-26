@@ -109,6 +109,10 @@ pub struct Registry<W, G, St, Sp> {
     retired: HashMap<RoomId, ()>,
     /// FIFO order for the eviction cap above.
     retired_order: VecDeque<RoomId>,
+    /// The rooms' drop barrier (BACKLOG F5; see `with_rooms_hold`): every
+    /// death watcher keeps a clone until its room task ends, and the
+    /// registry keeps this one until it exits. `None` = nobody waits.
+    rooms_hold: Option<crate::service::Hold>,
 }
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
@@ -163,6 +167,7 @@ where
             result_sink,
             retired: HashMap::new(),
             retired_order: VecDeque::new(),
+            rooms_hold: None,
         }
     }
 
