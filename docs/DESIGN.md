@@ -1045,7 +1045,7 @@ aynı makine, ÖNCE iki koşu / SONRA iki koşu; 32 çekirdek, yük ~8):
 
 | Senaryo | Alan | önce (1 / 2) | sonra (1 / 2) | |
 |---|---|---|---|---|
-| `200 --duration 10 --write-stall-secs 0` | — | | | yalnız koşudan koşuya gürültü (`snap_total`, `client_in_bps` ±%0,5, adım süreleri …); hiçbir alan önce/sonra ayrışmıyor |
+| `200 --duration 10 --write-stall-secs 0` | — | | | yalnız koşudan koşuya gürültü (`snap_total`, `client_in_bps` ±%1, adım süreleri …); hiçbir alan önce/sonra ayrışmıyor |
 | `100 --duration 10 --write-stall-secs 0 --churn-secs 2 --disconnect-grace-secs 5` (TCP) | `client_out_bps` | 6 548 / 6 548 | 8 893 / 8 893 | **oynadı** (+%36: JOIN'ler, AUTH'un gerçek boyu, girdi başına +3 bayt) |
 | aynı | `client_in_bps` | 1 931 736 / 2 099 472 | 1 851 490 / 1 970 829 | beklenen kayma kare başına +4 bayt (~+%0,6) — koşudan koşuya gürültünün (±%8) altında |
 | aynı, `--transport udp` | `client_out_bps` | 6 502 / 6 416 | 7 014 / 6 861 | **oynadı** (+%7–8: JOIN'ler ve yeniden denemeleri, AUTH'un gerçek boyu); JOIN yeniden deneme sayısı koşuya bağlı |
@@ -1063,7 +1063,7 @@ düşürür); `client::view::run::tests::a_stream_eof_ends_the_client`
 (JOIN sonrası kapanan eş: istemci EOF'ta biter — eski kod 6 sn sonra,
 iki hamle yazıp); `client::tests::the_ca_is_read_once_per_run` (PEM
 yüklendikten sonra silinir, iki el sıkışma yine tamamlanır — eski kod
-"cannot read --tls-ca" ile paniklıyor).
+"cannot read --tls-ca" ile panikliyor).
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
