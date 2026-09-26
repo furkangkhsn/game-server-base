@@ -290,7 +290,7 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | Grace TOCTOU (doğrulama sürerken expire) | Saydam fresh-join (§5) — yarışın iki dalı da geçerli |
 | Çift oturum (spam reconnect) | En son kazanan; eski socket ERROR 9 (§5) |
 | Oda panigi park defteriyle birlikte ölmesi | Fresh-join düşüşü; v1 kabul, belgeli |
-| Sunucu restartı | Kapsam dışı; herkes fresh (§1) |
+| Sunucu restartı | Kapsam dışı; herkes fresh (§1). `stop()`'ta istemci en-iyi-çaba **ERROR 14** (`SERVER_STOPPING`) alır: park defteri süreçle ölür, bu sunucuda resume yok — geri çekil, sonra ya da başka sunucuya bağlan; yeni süreçte aynı kimlikle join saydam fresh-join'dir. Resume semantiği değişmedi (DESIGN §5.6) |
 | Park slotu cap hesabı | Detach'te düşmez, expire'de düşer (§4) |
 | Pause-abuse / scout-abuse | grace süresi ve tekrar-cezası oyun config'i; base mekanizma verir |
 | Combat-lock sonsuz uzatma (harass-lock) | Çekirdekte mutlak tavan: `RoomConfig::max_detach_hold` (varsayılan 10 dk, DETACH anından ölçülür). Tavanda hâlâ duran veto ezilir, hold `ExpireTo`'suna biter, oda bir kez uyarır; süreli ve süresiz hold'a aynı tavan (§17) |

@@ -135,7 +135,7 @@ sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
 | `rel_dead` | rUDP REL canlılık sınırı / retransmit tavanı |
 | `violation_budget` | §3 ihlal bütçesi (AUTH seli dahil — §3.1) |
 | `preauth_budget` | §3.3 pre-auth kare bütçesi |
-| `stream_rejected` | taşıma seviyesi red: `max_frame_bytes`, çözülemeyen kare, WS protokol ihlali, bozuk TLS kaydı (önceden istemci kapanışı gibi görünüyordu) |
+| `stream_rejected` | taşıma seviyesi red: `max_frame_bytes`, çözülemeyen kare, WS protokol ihlali, bozuk TLS kaydı (önceden istemci kapanışı gibi görünüyordu). İstemciye artık en-iyi-çaba, beklemesiz ERROR 9 `stream rejected: …` gider; WS'te kapının kendi kapanış çerçevesi bildirimdir, bozuk TLS kaydında oturum ölü olduğundan bildirim inmez (DESIGN §5.6) |
 | `conn_cap` / `unauth_cap` | `max_connections` / §4 unauthed cap'i, doğumda red |
 | `superseded` | aynı kimliğin yeni oturumu eskisini kapattı |
 | `room_gone` | oda oturumun altında yok edildi / öldü |
@@ -144,7 +144,8 @@ sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
 Sayılmayanlar, bilerek: istemci-tarafı son (EOF, RST, WS kapanış el
 sıkışması) — dökme değildir; sunucu kapanışı (`Shutdown`) — oturum
 hakkında hüküm değil ve toplayıcı onunla birlikte öldüğü için
-gözlenemez; ticket / protokol sürümü reddi — bağlantı açık kalır;
+gözlenemez (istemci yine de bilgilendirilir: en-iyi-çaba ERROR 14,
+DESIGN §5.6); ticket / protokol sürümü reddi — bağlantı açık kalır;
 girdi-boşta tavanı — entity'yi politikaya verir, oturumu bitirmez.
 
 ## 3.7. WebSocket kapısının RFC 6455 uyumu (WS uyum kapısı turu)
@@ -179,6 +180,7 @@ bağlantı kapanış koduyla düşürülür, reader pump `StreamRejected` bildir
 | §7.4 gönderilebilir kod (1000-1003, 1007-1014, 3000-4999) | yankı | yankı (yalnız kod) | `close_frames::every_sendable_close_code_is_echoed` |
 | §8.1 UTF-8 olmayan kapanış sebebi | kod yankılanıyordu | 1007 | `close_frames::a_close_reason_that_is_not_utf8_fails_with_1007`; 123 B çok-baytlı sebep kabul: `close_frames::a_maximal_utf8_reason_is_accepted` |
 | §7.1 kapanış el sıkışması (kod yankısı, sonra sunucu önce kapatır) | var | var | `close_frames::an_empty_close_is_echoed_empty`, `protocol::close_handshake_echoes_code_and_reports_peer_closed` |
+| §5.5.1 kapanış çerçevesinden sonra veri çerçevesi yok | fan-out'un hata kapanışı ile teardown arasındaki penceresi kapanışın ARKASINA yazılabiliyordu (B13'ün ERROR 9'u her seferinde yazılırdı) | soket yazıcı görevi — tel sırasını gören tek yer — kapanıştan sonraki veri çerçevesini atar | `after_close::no_data_frame_follows_a_close_frame`; uçtan uca `stream_rejected::a_websocket_violation_gets_the_close_frame_and_nothing_after_it` |
 
 ### Kararlar
 

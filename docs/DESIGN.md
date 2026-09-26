@@ -336,11 +336,15 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   uyuşmazlığı — istemci kararı "geçici/bilinmiyor, tekrar denenebilir"),
   `5` oda imha edildi, `6` odada değil, `7` diğer, **`8` oda dolu**
   (nazik reddi — bağlantı **yaşar**, başka odaya join edebilir; sessiz
-  kapatma reconnect fırtınası üretirdi), **`9` sunucu kapattı** (idle
-  timeout, sunucu bağlantı cap'i ya da bağlantının protokol-ihlal
-  bütçesinin tükenmesi — mesaj hangisi olduğunu söyler; hemen ardından
-  bağlantı kapatılır), `10` bilet doğrulama başarısız, `11` join bileti
-  eşleşmiyor, `12` oda emekli, `13` protokol sürümü uyuşmazlığı (§5.5).
+  kapatma reconnect fırtınası üretirdi), **`9` sunucu kapattı** — sunucunun
+  BU oturum hakkındaki hükmü (idle timeout, sunucu bağlantı cap'i,
+  protokol-ihlal ya da pre-auth kare bütçesinin tükenmesi, aynı oyuncunun
+  yeni oturumu, taşımanın bayt akışını reddetmesi — `stream rejected: …`;
+  mesaj hangisi olduğunu söyler; hemen ardından bağlantı kapatılır), `10`
+  bilet doğrulama başarısız, `11` join bileti eşleşmiyor, `12` oda emekli,
+  `13` protokol sürümü uyuşmazlığı (§5.5), **`14` sunucu duruyor**
+  (`ServerHandle::stop`; oturum hakkında hüküm DEĞİL — sonra ya da başka
+  sunucuya bağlan; ardından kapatma; §5.6).
 - **Protokol sürümü:** `Auth.protocol_version` (alan 3) — oturum başına
   tek kontrol, AUTH'ta. `0` = sürümsüz/legacy (kabul, uyarı loglanır),
   `gsb_protocol::PROTOCOL_VERSION` = kabul, başka her şey = ERROR 13,
@@ -497,8 +501,9 @@ zorunlu kılar; mevcut uzay 1'den başlıyordu):
   → `ERROR_CODE_OTHER` gibi davran. `message` her zaman dolu, onu göster;
   döngüde tekrar deneme; bilinen bir kodun kararına EŞLEME. Bağlantının
   yaşayıp yaşamadığı **koddan çıkarılmaz** — onu taşıma söyler (yalnız
-  `SERVER_CLOSED` ve `ROOM_DESTROYED` kapanışla gelir, ve sokete güvenen
-  istemci gelecekteki bir kapanış kodunu bilmeden de doğru işler).
+  `SERVER_CLOSED`, `ROOM_DESTROYED` ve `SERVER_STOPPING` kapanışla gelir,
+  ve sokete güvenen istemci gelecekteki bir kapanış kodunu bilmeden de
+  doğru işler — 14'ü tanımayan istemcinin 14'ü işleyişi tam olarak bu).
 - proto3 enum'ları AÇIK: tanınmayan numara ham `i32` alanında korunur,
   düşmez. Bu yüzden istemci gerçek numarayı loglayıp sınıfı OTHER olarak
   işleyebilir (`an_unknown_code_survives_decoding`).
@@ -596,6 +601,160 @@ bu alanın en ucuz olduğu gündür.
    cap'ler daha ucuz ve daha az yeni kural.
 6. **Sürümü config'ten okunur yapmak.** Tetikleyicisiz esneklik: bugün
    tek bir doğru değer var ve o `gsb-protocol`'ün sabiti.
+
+### 5.6 Kapanış bildirimleri: sunucu durdurma (ERROR 14) ve reddedilen akış (ERROR 9)
+
+**Sorun (BACKLOG B12, B13).** Sunucunun kendi başlattığı iki kapanış
+istemciye SESSİZ görünüyordu: `ServerHandle::stop()` (bağlantı aktörünün
+`ConnIn::Shutdown` kolu yalnızca döngüden çıkıyordu) ve taşımanın bayt
+akışını reddetmesi (`stream_rejected`: `max_frame_bytes` üstü kare,
+çözülemeyen kare gövdesi, WS protokol ihlali, bozuk TLS kaydı). İstemci
+"sunucu kapanıyor" (sonra ya da başka yere bağlan) ile "ağ koptu" (hemen
+tekrar dene) arasında seçim yapamıyordu.
+
+**Karar.**
+
+- **Durdurma → yeni kod `ERROR_CODE_SERVER_STOPPING = 14`.** Bağlantı
+  aktörü `Shutdown`'da son çerçeve olarak ERROR 14'ü kuyruğa bırakıp çıkar.
+  Kod, istemcinin KARARINI taşır: "bu oturum hakkında hüküm yok, sunucu
+  gidiyor; bu adreste resume da yok (park defteri süreçle ölür) —
+  geri çekil, sonra ya da başka sunucuya bağlan". Toplamalı değişiklik:
+  bir enum değeri + üç sabitleme testi (`error_code.rs`: numara,
+  bitişiklik, kodlama). **`PROTOCOL_VERSION` artmaz** — onun kuralı
+  (bkz. sabitin belgesi) yeni `ErrorCode` değerini açıkça hariç tutar;
+  14'ü tanımayan istemci onu `OTHER` sayar, kapanışı soketten öğrenir ve
+  doğru davranır (`base.proto`'nun ileri-uyumluluk kuralı).
+- **Reddedilen akış → mevcut `ERROR 9`**, mesaj `stream rejected: <sebep>`.
+  Bu, oturum hakkında bir sunucu hükmü; kod 9'un sınıfı tam olarak bu
+  (idle, cap, bütçeler, supersede ile aynı aile). Yeni kod gerekmez.
+- **İkisi de en-iyi-çaba ve BEKLEMESİZ.** Bildirim, çıkış kuyruğuna
+  senkron `try_send` ile girer (`conn/actor/close.rs::try_notice`); diğer
+  kod-9 kapanışlarının beklemeli `send_frame`'i DEĞİL. Kuyruk doluysa
+  (istemci okumayı bırakmış) bildirim düşer, istemci yalnız kapanışı alır
+  ve aktör yine anında çıkar. Beklemeli gönderim, okumayan her istemci
+  için bir aktörü write-stall penceresi dolana dek (pencere kapalıysa
+  sonsuza dek) park ettirirdi — duran bir sunucuda. Reddedilen akışta da
+  aynı gerekçe: reddedilen baytları gönderen eş, beklenecek eş değildir.
+  Doğrulama sayacı değişmedi: `stream_rejected` hâlâ bir kez sayılır,
+  shutdown hâlâ sayılmaz (SECURITY §3.6).
+
+**Kapanış yolları, kapı kapı (önce → sonra).** Değişmeyenler: `idle_timeout`,
+`violation_budget`, `preauth_budget`, `conn_cap`/`unauth_cap`,
+`superseded` → ERROR 9 (beklemeli gönderim, stall penceresiyle sınırlı);
+`room_gone` → ERROR 5; `write_stall`, `rel_dead`, `outbound_dead` →
+bildirim YOK (bildirimi taşıyacak yol ölü — sayacın var olma sebebi).
+
+| Kapı | `stop()` önce | `stop()` sonra | `stream_rejected` önce | `stream_rejected` sonra |
+|---|---|---|---|---|
+| TCP | sessiz FIN | ERROR 14 → FIN | sessiz FIN | ERROR 9 → FIN |
+| TLS | sessiz close_notify/FIN | ERROR 14 → close_notify/FIN | sessiz | büyük kare: ERROR 9 → son; **bozuk kayıt: bildirim YOK** (TLS oturumu ölü, rustls fatal alert'ini göndermiş, yazma başarısız) |
+| WS | boş kapanış çerçevesi (istemcide 1005) | ERROR 14 (binary mesaj) → boş kapanış çerçevesi | kapının kendi kapanış çerçevesi (1002/1003/1007/1009) | **aynı** — kapanış çerçevesi BU kapının bildirimi; RFC 6455 §5.5.1 kapanıştan sonra veri çerçevesini yasaklar, soket yazıcı görevi arkasına düşen ERROR 9'u (ve fan-out artığını) atar |
+| QUIC | endpoint `close(0)`: tüm bağlantılar ANINDA kapanır, akıştaki veri terk edilir | ERROR 14 → akış FIN'i (ACK beklenir) | sessiz; üstelik okuyucu bırakınca yazıcının düşüşü son tutamaçtı → anında kapanış | ERROR 9 → akış FIN'i (ACK beklenir) |
+| rUDP | sessiz (FIN yok; istemci kendi canlılık saatine kalır) | ERROR 14 REL bandında, TEK datagram (yazıcı, kanal kapanınca kuyruğu boşaltıp çıkar — yeniden gönderim fırsatı pratikte yok; kayıpta istemci eskisi gibi kendi saatine kalır); **FIN yok — bildirim tek kapanış sinyali** | yol yok (rUDP'de `StreamRejected` üretilmez; bozuk datagram demux'ta düşer) | — |
+
+İki kapının kapanış yolu bildirim inebilsin diye düzeltildi:
+
+- **QUIC dinleyicisinin `close`'u artık endpoint'i kapatmıyor**
+  (`set_server_config(None)`: yeni bağlantı reddedilir, canlılar aktör
+  kaskadına kalır — TCP dinleyicisinin kabul edilmiş soketlere
+  dokunmaması gibi). `stop()` dinleyicileri registry'ye `Shutdown`
+  yolladıktan hemen SONRA kapatıyor; `Endpoint::close` her bildirimin
+  önüne geçip hepsini terk ediyordu.
+- **QUIC gönderme yarısının kapanışı ACK'i bekliyor**
+  (`gsb-net/src/quic/send.rs`): bağlantı son akış tutamacı düşünce ÖRTÜK
+  ve ANINDA kapanır, uçuştaki veri terk edilir. Okuyucu çoktan çıkmışsa
+  (reddedilen akış, ya da aktör bittikten sonra hâlâ gönderen istemci)
+  yazıcının bildirimden hemen sonraki düşüşü son tutamaçtı. Şimdi
+  `finish` + `stopped()` (eşin bütün baytları onaylaması, akışı durdurması
+  ya da bağlantının ölmesi). Sınırlı: pump `close`'u write-stall
+  penceresi altında koşar (beklerken bayt kıpırdamaz, pencere keser);
+  pencere kapalıysa quinn'in idle timeout'u (30 sn) bağlantıyı bitirip
+  beklemeyi hatayla çözer. Yan kazanç: QUIC'teki diğer kod-9 bildirimleri
+  de aynı yarıştan kurtuldu.
+- **WS soket yazıcı görevi, kapanış çerçevesinden sonra veri çerçevesi
+  yazmaz** (`ws/writer.rs`). Kural tel sırasını gören TEK yerde: okuyucu
+  hatalı kapanışı önce kuyruğa bırakır, aktörün ERROR 9'u ve teardown'a
+  kadar gelen fan-out arkasına düşer. `WsWriter::start_send`'de
+  `closing` bayrağına bakmak yarışlı olurdu (kontrol-sonra-gönder ile
+  okuyucunun işaretle-sonra-kuyrukla'sı arasında pencere).
+
+**Sınırlı kapanış argümanı (S'nin kuralları korunur).** `stop()`'un
+await'leri değişmedi: `registry.send(Shutdown)` (posta kutusu kapasitesi)
+ve metrik toplayıcı (broadcast `Closed`) — `stop()` her zaman tamamlanır
+(§9.1). Registry'nin `on_shutdown`'ı değişmedi (spawn'lu `ConnIn::Shutdown`,
+odalara `post_stop`). Aktörün `Shutdown` kolu tek bir SENKRON `try_send`
+ekledi — await yok, istemciye bağlı hiçbir şey yok; aktör eskisi kadar
+hızlı çıkar. Bildirimi sokete taşıyan writer pump ve QUIC ACK beklemesi
+`stop()`'un zincirinde değil (hiç olmadılar) ve kendi pencereleriyle
+sınırlı. QUIC dinleyici kapatması senkron. Kalan bedel, açıkça: ikili
+(`main`) `stop()` döner dönmez çıkar ve runtime'ı düşürür; o ana kadar
+sokete inmemiş bir bildirim kaybolur. Tek küçük çerçeve boş bir sokete
+mikrosaniyeler içinde iner, ama garanti değildir — bildirim en-iyi-çaba
+olarak belgelidir (elenen 6).
+
+**Elenen alternatifler.**
+
+1. *Durdurmayı ERROR 9 + mesaj metniyle bildirmek.* Kod 9 "bu oturum
+   hakkında hüküm"; istemci kararı farklı (idle → hemen tekrar dene, cap
+   → sonra). Ayırmak için istemci insan-okunur `message`'ı eşlemek
+   zorunda kalırdı — enum'ın (§5.4) bitirdiği sürüklenmenin ta kendisi.
+   14'ün maliyeti bir enum değeri; eski istemci etkilenmez.
+2. *Yeni opcode / GOODBYE mesajı* (`retry_after`, yönlendirme adresi).
+   Yeni kare tipi ve tablo girdisi; taşıyacağı veri (ne zaman, nereye)
+   kontrol düzleminin/orkestrasyonun politikası, motorun değil.
+   Tetikleyici: sunucu-yönlendirmeli taşıma isteyen bir platform.
+3. *`PROTOCOL_VERSION` artırmak.* Eşitlik politikası mevcut her istemciyi
+   kilitlerdi; toplamalı bir kod için gereksiz.
+4. *Yalnız taşıma-yerli bildirim* (WS 1001 "Going Away", QUIC
+   CONNECTION_CLOSE uygulama kodu). TCP/TLS/rUDP'de karşılığı yok —
+   en çok ihtiyaç duyan rUDP'de hiç yok — ve istemci iki bildirim biçimi
+   öğrenmek zorunda kalırdı. (WS'in durdurmadaki kapanış çerçevesi boş
+   kaldı; 1001'e çevirmek ayrı, küçük bir iş.)
+5. *Beklemeli gönderim* (diğer kod-9 kapanışlarındaki gibi). Okumayan
+   her istemci için bir park etmiş aktör; bkz. yukarı.
+6. *`stop()`'ta boşaltma süresi* (N ms bekle, ya da yazıcıları bekle).
+   `stop()` ya istemcilere bağlanır ya da her durdurmaya sabit gecikme
+   ekler — S'nin "stop() her zaman, istemciden bağımsız tamamlanır"
+   kuralına aykırı.
+7. *QUIC'te `endpoint.close(14, "server stopping")`.* Anında kapanış
+   akıştaki ERROR çerçevesini yine terk eder; istemciye ikinci bir
+   bildirim biçimi.
+8. *WS'te bayrağı `WsWriter::start_send`'de denetlemek.* Yarışlı (yukarı).
+9. *QUIC'te `Connection` tutamacını yazıcıda saklayıp `stopped()`'tan
+   sonra açıkça kapatmak.* Aynı sonuç, daha çok tesisat;
+   `SendStream` sarmalayıcısı QUIC kapısının içinde kalıyor.
+
+**Testler.** `gsb-core/tests/close_notice.rs` (aktör, taşımasız: ERROR 14
+ve ERROR 9 gider; dolu kuyrukta ikisi de PARK ETMEZ — beklemeli gönderim
+mutasyonunda 5 sn zaman aşımıyla düşer); `gsb-server/tests/stop_notice.rs`
+(her kapı: TCP/TLS/WS/QUIC/rUDP istemcisi ERROR 14'ü kapının sonundan
+ÖNCE görür — bildirimsiz kodda beşi de, eski endpoint kapatmasında QUIC
+düşer; okumayan 8 istemciyle `stop()` hızla tamamlanır);
+`gsb-server/tests/stream_rejected.rs` (TCP/TLS/QUIC büyük kare → ERROR 9
+sonra son — bildirimsiz kodda üçü, ACK beklemesiz QUIC düşer; WS metin
+mesajı → 1003 kapanış çerçevesi ve ARKASINDA hiçbir şey);
+`gsb-net` `ws::tests::after_close` (kapı seviyesinde aynı kural — yazıcı
+kuralı olmadan düşer); `gsb-protocol` `error_code` (14 sabitlendi — 15
+mutasyonunda üç test düşer). Resume semantiği değişmedi (`reconnect.rs`
+yeşil): bildirim yalnız çıkış kuyruğuna bir kare ekler.
+
+**Loadgen (B14) — yapılmadı, neden.** Kapanışları istemci tarafında
+SEBEBE göre sınıflamak, kod-9 `message`'ını anahtar yapmayı gerektirir:
+sözleşmesi insan-okunur (base.proto) ve üç crate'te altı ayrı yerde
+yazılıyor — biri yeniden ifade edildiğinde sessizce kayar. Makine-okunur
+yapmak ya her mevcut kod-9 mesajının baytlarını değiştirir ya da
+`Error`'a alan ekler — ikisi de bu turun "yalnız sabitlenmiş bildirim
+kareleri" kapısının dışında, ve gereksiz: sunucu sayacı
+`server_closes{reason}` sebep başına kesin, loadgen onu istemci
+sayılarının yanında basıyor (sıfır değilse WARNING). İstemci tarafı bir
+sınıflama ancak onun gürültülü bir alt kümesi olabilir (stall'a düşen
+istemci bildirimini hiç almaz — sayacın var olma sebebi). Loadgen KODA
+göre sınıflıyor (8 → `join_rejected`, 9 → `cap_rejected`/`budget_rejected`,
+14 → ileri-uyumluluk kolundan `errors`: koşan bir istemcinin altında
+duran sunucu, başarısız bir koşudur; orkestratör sunucuyu istemcilerden
+3 sn sonra durdurduğu için normal koşuda görünmez). Tetikleyici:
+istemci-başına atıf isteyen bir ölçüm (hangi istemci döküldü) — o gün
+`Error`'a toplamalı bir sebep alanı (`ServerClose` indeksi).
 
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
@@ -1435,9 +1594,11 @@ ServerHandle::stop
   → ticker.abort()   (görev göndericisi düşer; registry'ninki de düşünce
                      broadcast kapanır = geri sigorta: kontrol Shutdown'ını
                      görememiş her oda, recv'de Closed görüp temiz çıkar)
-  → connection actor'ler çıkar → in_tx/out_tx düşer
+  → connection actor'ler son çerçeve olarak ERROR 14'ü try_send eder
+    (beklemesiz; kuyruk doluysa düşer — §5.6) → çıkar → in_tx/out_tx düşer
       → reader pump: send hatası → çıkar
-      → writer pump: kanal kapanır → çıkar + socket close
+      → writer pump: kanal kapanır → kuyruktakini (bildirim dahil) yazar
+        → socket close (write-stall penceresi altında; QUIC'te ACK beklenir)
   → accept loop: JoinHandle.abort()   (belgelenmiş tek sert abort)
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
     için EOF'ı bekleyemezdi — artık beklemez); düşerken Ticker klonunu da
@@ -1449,7 +1610,10 @@ ServerHandle::stop
 `Listener::close` kapısı rUDP turunda kullanıldı: `stop()`, registry
 Shutdown'ından sonra listener'ı kapatır — TCP'de no-op, rUDP'de demux
 görevini sonlandırır (socket klonu + endpoint göndericisi düşer;
-writer'lar aktör kaskadıyla çıkar). Accept loop'un `JoinHandle` ile
+writer'lar aktör kaskadıyla çıkar), QUIC'te yeni bağlantıları reddeder
+(`set_server_config(None)`) ama canlıları KESMEZ — `Endpoint::close`
+akıştaki durdurma bildirimini terk ediyordu (§5.6). Kural: `close` canlı
+oturumları kısa kesmez; onlar aktör kaskadıyla, bildirimleriyle biter. Accept loop'un `JoinHandle` ile
 abort edilmesi hâlâ v1'in bilinçli kısıtı (demux kapanınca accept de
 doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
 
@@ -1485,9 +1649,10 @@ yalnızca daha çok eşzamanlı kopuş ürettiği için yüzeye çıkardı.
 7. Oda/shard: tek await'i `tick_rx.recv()`; `Closed`'da
    `logic.on_shutdown()` + `match_result` (`try_send`) → çıkar →
    `control_rx` düşer, kanala bekleyen her gönderici hata alıp biter.
-8. Bağlantı aktörü `ConnIn::Shutdown`'da döngüden çıkar, son metrik
-   örneğini `try_send` eder, `registry.send(ConnClosed).await` (registry
-   çıktıysa anında hata).
+8. Bağlantı aktörü `ConnIn::Shutdown`'da döngüden çıkar (B12'den beri
+   önce ERROR 14'ü beklemesiz `try_send` eder — §5.6; bu zincire await
+   eklemez), son metrik örneğini `try_send` eder,
+   `registry.send(ConnClosed).await` (registry çıktıysa anında hata).
 
 **Kök neden.** Stop anında kontrol kapasitesinden (varsayılan 128) fazla
 üye koparsa 5. adımın DETACH'leri kanalı doldurur ve fazlası kanalda
