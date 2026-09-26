@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-920 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+928 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -146,6 +146,14 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**A29 tamam** (KIT-ARCHITECTURE §10 "A29", CROSS-SHARD §8b.1): takım
+bütçesi kestiğinde kademe içinde ne kalacağını oyun seçer —
+`ShardedTeamRoom::with_export_rank(fn(&Wire<G>) -> u32)`, önce üyeler
+korunur, eşitlikte küçük wire id; sıralamasız kesme A29 öncesiyle bayt
+bayt aynı (sabitli). Kesme `TeamExport::over_budget` →
+`RoomSample::team_over_budget` / `gsb_room_team_over_budget_total` /
+loadgen `GSMB`.
+
 **B12/B13 tamam** (DESIGN §5.6, CHANGELOG "B12 + B13"): `stop()` ERROR 14,
 `stream_rejected` ERROR 9 `stream rejected: …` gönderir — ikisi de
 beklemesiz `try_send` (`conn/actor/close.rs::try_notice`). Kural: yeni
@@ -212,7 +220,7 @@ tetikleyicisi. Uygulama turları `--capture` + `ClientView` ile ölçer.
 CROSS-SHARD §8b.8): "Cephe" (`gsb-demo-war`) kompoziti kit'e dokunmadan
 kullanıyor; `game = "war"` (`[war]`: `disconnect_grace_secs`,
 `team_budget`), `--game war` (kadro `lg-{id}`, RESULT'ta `team_*`).
-Takım sayaçları `RoomSample::team_*` (loadgen teli `GSMA`). Aktör testleri
+Takım sayaçları `RoomSample::team_*` (loadgen teli `GSMB` — A29'da `team_over_budget` eklendi). Aktör testleri
 public API'den canlı registry + dört shard'la (`gsb-demo-war/tests/common`);
 yürüyen senaryo gerçek saatte (duraklatılmış saat `dt`'yi dondurur — W2-4).
 Röle 1000'de kayıpsız; bant istemci tarafında (~365 KB/sn/istemci) —
@@ -484,6 +492,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 920 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 928 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

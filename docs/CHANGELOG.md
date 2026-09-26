@@ -5,6 +5,33 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A29 — takım bütçesinde oyunun sıralaması; kesme barındırıcıya (`kit/a29-team-budget-priority`)
+
+W2-3'ün iki eksiği: bütçe kestiğinde her kademede kalanlar kit'in
+karşılaşma sırasıydı (Cephe'de önce doğan kuleler hep kalır, en yeni
+oyuncular gider) ve kit'in `over_budget` sayacı barındırıcıya
+ulaşmıyordu.
+
+- Opt-in `ShardedTeamRoom::with_export_rank(fn(&Wire<G>) -> u32)`: yüksek
+  sıra önce, eşitlikte küçük wire id (şeridin sırasından bağımsız).
+  Sıralama "önce üyeler"in yerine geçmez, kademe içinde inceltir
+  (üyelik yalnız kit'te bilinir; ödünç kaydın takımı yok). Kalanlar
+  export'un kendi sırasında gider. Sıralama yoksa kesme A29 öncesinin
+  birebir aynısı (tohumlu kalabalıkta export özeti sabitli).
+- Maliyet: bütçe aşılmazsa hiçbir şey; aşılırsa kesilen kademede
+  doğrusal seçim (`select_nth_unstable_by`) — takım başına O(n), sort
+  yok, tahsis yok.
+- Kesme export'la çekirdeğe: `TeamExport::over_budget` (röle edilmez) →
+  `RoomSample::team_over_budget`, `gsb-metric` satırı, Prometheus
+  `gsb_room_team_over_budget_total`, loadgen teli **`GSMB`**, savaş
+  RESULT'ında `team_over_budget`.
+- Savaş demosuna dokunulmadı (varsayılan bütçede kesme yok; sıralama
+  oyunun kararı); seam'i kit'in fixture oyunu doğruladı.
+
+Testler 920 → 928; ajanın rank ve sayaç mutasyonlarının hepsi yakalandı.
+Ebeveynin bağımsız mutasyonu (ikinci kademenin payından üyeleri düşmemek
+— kesme bütçeyi aşar) 4 testi kırıyor.
+
 ## B12 + B13 — kapanış bildirimleri: sunucu durdurma ERROR 14, reddedilen akış ERROR 9 (`core/b12-b13-close-notices`)
 
 Sunucunun kendi başlattığı iki kapanış istemciye sessizdi: `stop()`

@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **920** (920/920 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **928** (928/928 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B12 + B13 — kapanış bildirimleri** (DESIGN §5.6) — `stop()`'ta
+Son tur: **A29 — takım bütçesinde oyunun sıralaması** (KIT-ARCHITECTURE
+§10 "A29") — opt-in `with_export_rank`: kesmede kademe içinde oyunun
+sırası (önce üyeler korunur, eşitlikte küçük wire id; varsayılan bayt
+aynı); kesme `RoomSample::team_over_budget` ile barındırıcıya. B19
+(`gsb-client`) yürüyor.
+Önceki tur: **B12 + B13 — kapanış bildirimleri** (DESIGN §5.6) — `stop()`'ta
 en-iyi-çaba ERROR 14 (`SERVER_STOPPING`, toplamalı kod), reddedilen akışta
 ERROR 9; beklemesiz, `stop()` her zaman bitiyor; QUIC ve WS kapılarındaki
 bildirim yutan iki kusur düzeldi.
