@@ -756,6 +756,118 @@ duran sunucu, başarısız bir koşudur; orkestratör sunucuyu istemcilerden
 istemci-başına atıf isteyen bir ölçüm (hangi istemci döküldü) — o gün
 `Error`'a toplamalı bir sebep alanı (`ServerClose` indeksi).
 
+### 5.7 İstemci yapı taşı: `gsb-client` (BACKLOG B19)
+
+**Sorun.** Sunucunun istemci yarısı bir yapı taşı değildi, kopyaydı:
+çerçeve okuyucu/yazıcı ve oturum adımları (AUTH → JOIN → HEARTBEAT →
+LEAVE, ERROR işleme) `gsb-loadgen` (`loadgen/wire.rs` + `client.rs`), örnek
+istemci ve on bir sunucu test dosyasında (e2e, multi_listener, tls_e2e,
+economy_rooms, game_module, hosted, server_stop, server_closes,
+stop_notice/stream_rejected, write_stall, udp_fragmentation) ayrı ayrı
+yazılmıştı; TLS bağlayıcı üç, QUIC istemci yapılandırması üç kez.
+`gsb-net`'te hazır tek istemci yarısı rUDP'ninkiydi (`UdpClient`).
+
+**Kopyalar arasında bulunan ayrışmalar.**
+
+- **İptal-güvensiz okuma (hata).** Her kopya `read_exact(uzunluk)` +
+  `read_exact(gövde)` okuyup onu `tokio::time::timeout` ile sarıyordu
+  (loadgen 250 ms, örnek 200 ms). Pencere önekten sonra, gövdeden önce
+  dolarsa önek kaybolur, sonraki okuma payload baytlarını uzunluk sanar —
+  akış kayar. Yeni okuyucu (`FramedRead` + `LengthDelimitedCodec`)
+  yarım kareyi tamponda tutar; test: yarıda iptal edilen okuma hiçbir
+  şey kaybetmez (eski okuyucuyla düşer).
+- **Boyut koruması tutarsız:** 4 MiB (çoğu), yok (economy_rooms,
+  game_module, server_stop, stop_notice — bozuk bir önek 4 GiB'lık
+  ayırma ister), 64 KiB (write_stall).
+- **EOF tutarsız:** kimi `None`, kimi panik; kare ortasında biten akış
+  sınır EOF'undan ayrılmıyordu. Şimdi: sınırda `Ok(None)`, kare içinde
+  `UnexpectedEof`, koruma/kısa gövde `InvalidData`.
+- **AUTH_RESULT denetimi:** kimi `ok`'u doğruluyor, kimi (game_module,
+  server_stop, udp_fragmentation) hiç bakmıyordu. `auth_and_join`
+  reddi `AuthRefused` olarak döndürür.
+- **Loadgen (davranış korunarak raporlandı, RESULT değişmesin diye
+  düzeltilmedi):** `run_client`'ta TCP EOF'u sonrası döngü yorumun
+  dediği gibi kırılmıyor, `continue` ediyor (bir sonraki hamle yazımı
+  hata verene dek boş döner); churn istemcisi AUTH'u
+  `wire_in_bytes(AUTH_REQ, 8)` ile sayıyor (sabit 8 bayt, TCP'de bile
+  rUDP formülü), JOIN baytlarını hiç saymıyor, gelen baytı `2 + payload`
+  sayıyor; yorumu "TCP'de birleşik yazım" diyor ama AUTH ve JOIN ayrı
+  yazımlar; `tls_connector` CA PEM'ini her bağlantıda yeniden okuyor.
+
+**Karar.** Yeni motor crate'i `gsb-client` (oyun bilmez, politika taşımaz):
+
+- `frame`: `encode`/`encode_into`/`wire_len`; `FrameRx` (iptal-güvenli,
+  varsayılan 4 MiB koruma, `with_max`), `FrameTx` (`send` = yaz + flush,
+  `send_batch` = tek yazım, `feed`/`flush`, `get_mut` sözleşme dışı
+  baytlar için).
+- `Conn`: `Stream { rx, tx }` (TCP, TLS, QUIC bi-stream — aynı kareler)
+  ya da `Udp(UdpClient)`; `send`, `send_batch`, sınırlı `recv(window)` →
+  `Recv::{Frame, Closed, Quiet}`, `into_split` (okuyucu ve yazıcı iki
+  görevde — çoğullama yok). Açıcılar: `connect::{tcp, tcp_stream, udp}`,
+  `tls::{certs_from_pem, client_config, connector, connect}`,
+  `quic::{client_config, connect}` (güven kökleri çağırandan; sistem
+  deposu yok; ALPN `gsb-net/1`).
+- `session`: kareler (`auth_req`, `join_req`, `leave_req`, `heartbeat`),
+  adımlar (`hello` = AUTH+JOIN boru hattı, `auth_and_join`, `auth`,
+  `join`, `heartbeat_round`, `leave`, genel `reply`). Yanıt beklenirken
+  gelen diğer kareler sırayla çağıranın `other` havuzuna gider (hiçbiri
+  atılmaz). `Credentials { name, ticket }` resume anahtarıdır: aynı
+  kimlik bilgileriyle yeni bağlantıda JOIN park edilmiş varlığı geri
+  getirir (protokolün kendi yolu; ayrı bir token yok).
+- `ServerError { code: ErrorCode, raw, message }`: ERROR karesi tipli;
+  bilinmeyen numara `Unspecified` okunur, `raw` saklanır (base.proto
+  ileri-uyumluluk kuralı). `ClientError::{Io, Closed, TimedOut, Server,
+  AuthRefused, Decode}`. Bağlantının yaşayıp yaşamadığı koddan
+  çıkarılmaz — taşıma söyler.
+- Tel baytları değişmedi: dört eski kodlayıcı yazımı donmuş kopyalar
+  olarak `session/tests/pins.rs`'te `encode` ile bayt bayt karşılaştırılır,
+  AUTH/JOIN/LEAVE/HEARTBEAT kareleri literal bayt olarak sabitlenir.
+
+**Kalanlar ve nedenleri.** WebSocket istemcileri (multi_listener,
+stop_notice, `gsb-net` ws süiti): `gsb-client`'in WS yarısı yok (WS
+kapısının istemcileri kendi WS yığınlı tarayıcı/motorlar; ağaçtaki WS
+istemcileri protokol test düzenekleri) ve `gsb-net` `gsb-client`'e
+bağımlı olamaz (döngü: `gsb-client` → `gsb-net`). `udp_rel_liveness`
+`UdpClient`'ı doğrudan sürer (ACK okumasını taşıma düzeyinde denetler).
+e2e'nin koruma akışları adım adım döngülerini korur (her biri belirli bir
+sunucu tepkisini doğrular), ama bağlantı + kare kurucular artık
+`gsb-client`'in. Loadgen'in kendi alma döngüleri ve bayt muhasebesi
+ölçüm politikasıdır; bağlantı, çerçeve, kareler ve ERROR sınıflaması
+`gsb-client`'ten.
+
+**Elenen alternatifler.**
+
+1. *`gsb-net`'e istemci modülü.* `gsb-net` sunucunun taşıma katmanı;
+   oturum adımları (kimlik bilgisi, AUTH/JOIN sırası, ERROR tiplemesi)
+   protokol düzeyi istemci bilgisidir, taşıma değil. Ayrı crate
+   `gsb-net`'in istemci yarısını (`UdpClient`) kullanır. Bedeli açıkça:
+   `UdpClient` `gsb-net`'te yaşadığı için `gsb-client` `gsb-net`
+   üzerinden `gsb-core`'u da çeker. Tetikleyici: çekirdeksiz bir
+   istemci derlemesi (ör. wasm/mobil) — o gün `UdpClient` kendi
+   crate'ine taşınır.
+2. *`FrameIo` trait'i (WS test istemcisi de dahil her taşıma adımları
+   kullanabilsin).* Tek tüketici test düzeneği; enum tek yer, trait bir
+   soyutlama katmanı. Tetikleyici: ikinci gerçek (test dışı) taşıma.
+3. *Oturum adımlarını bir istemci aktörü/durum makinesi olarak
+   (yeniden bağlanma, backoff içeren).* Politika — oyunun/çağıranın.
+4. *Görünüm eşleştirme yardımcısı (`gsb_kit::client` ile).* Tek
+   tüketici (hosted `View`); kit'in istemcisi zaten tek satırla
+   uygulanıyor. Tetikleyici: ikinci bir çağıran.
+5. *Gerçek-sunucu testlerini `gsb-client`'e koymak.* `gsb-server`
+   `gsb-client`'e bağlı; tersine dev-bağımlılık döngüsü crate'in ikinci
+   bir kopyasını derler (`gsb-kit/src/manifest.rs`'in kaçındığı durum).
+   Gerçek sunucu turu `gsb-server/tests/client_session.rs`'te.
+
+**Testler.** `gsb-client` birim (17): çerçeve gidiş-dönüş, koruma
+(sınırda kabul, üstünde önekten ret, varsayılan 4 MiB), kısa gövde reddi,
+kare içi EOF = `UnexpectedEof`, yarıda iptal edilen okuma; senaryolu eşe
+karşı adımlar (diğer kareler sırayla `other`'a, ERROR 9/14 tipli,
+bilinmeyen kod 99 → `Unspecified` + ham 99, `AuthRefused`, EOF →
+`Closed`, sessizlik → `TimedOut`); bayt sabitlemeleri.
+`gsb-server/tests/client_session.rs` (7): TCP/TLS/rUDP/QUIC üzerinde
+tüm adımlar; kapasite reddi ERROR 9 tipli; `stop()` ERROR 14 tipli (TCP
+ve rUDP); aynı kimlik bilgileri aynı varlığı geri getirir.
+
 ## 6. Taşıma soyutlaması (TCP + rUDP)
 
 ```rust
