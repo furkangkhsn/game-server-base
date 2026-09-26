@@ -17,14 +17,13 @@
 
 use std::time::Duration;
 
-use gsb_protocol::base::{Auth, JoinRoom};
+use gsb_client::session::{self, Credentials};
+use gsb_client::{ClientError, Conn};
 use gsb_server::{Config, Topology};
-use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 const MEMBERS: usize = 24;
 const STOP_WITHIN: Duration = Duration::from_secs(10);
+const JOIN_WITHIN: Duration = Duration::from_secs(10);
 
 fn cfg(topology: Option<Topology>) -> Config {
     Config {
@@ -38,39 +37,16 @@ fn cfg(topology: Option<Topology>) -> Config {
     }
 }
 
-/// One length-prefixed frame (`[u32 LE len][u16 LE op][payload]`).
-fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
-    let mut out = ((2 + payload.len()) as u32).to_le_bytes().to_vec();
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
-/// Connect, authenticate as `name`, join room 1, and return the socket
-/// once the join result arrived.
-async fn join(addr: std::net::SocketAddr, name: String) -> TcpStream {
-    let mut s = TcpStream::connect(addr).await.expect("connect");
-    let auth = Auth {
-        name,
-        ticket: Vec::new(),
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    };
-    let mut hello = frame(gsb_protocol::op::base::AUTH_REQ, &auth.encode_to_vec());
-    let join = JoinRoom { room_id: 1 }.encode_to_vec();
-    hello.extend(frame(gsb_protocol::op::base::JOIN_ROOM_REQ, &join));
-    s.write_all(&hello).await.expect("write");
-    loop {
-        let len = s
-            .read_u32_le()
-            .await
-            .expect("the server closed before the join") as usize;
-        let mut body = vec![0u8; len];
-        s.read_exact(&mut body).await.expect("frame body");
-        let op = u16::from_le_bytes([body[0], body[1]]);
-        assert_ne!(op, gsb_protocol::op::base::ERROR, "join refused");
-        if op == gsb_protocol::op::base::JOIN_ROOM_RESULT {
-            return s;
+/// Connect, authenticate as `name`, join room 1, and return the
+/// connection once the join result arrived.
+async fn join(addr: std::net::SocketAddr, name: String) -> Conn {
+    let mut c = gsb_client::connect::tcp(addr).await.expect("connect");
+    match session::auth_and_join(&mut c, &Credentials::named(name), 1, JOIN_WITHIN, |_| {}).await {
+        Ok(_) => c,
+        Err(e @ (ClientError::Server(_) | ClientError::AuthRefused(_))) => {
+            panic!("join refused: {e}")
         }
+        Err(e) => panic!("the server closed before the join: {e}"),
     }
 }
 

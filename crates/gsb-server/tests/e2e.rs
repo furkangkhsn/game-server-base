@@ -8,7 +8,8 @@
 //! pass on the new transport with the same intent" (docs/SECURITY.md §2:
 //! `TlsTransport` must pass the SAME suite as plaintext tcp; the
 //! parametrized idiom is the rUDP round's, extended by one arm). The
-//! `Client` enum is the only place the transports differ:
+//! `Client` (a `gsb_client` connection) is the only place the
+//! transports differ:
 //!
 //! - TCP: length-prefixed frames over a per-connection socket; a server
 //!   close is observable as EOF (read returns `Closed`).
@@ -24,11 +25,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{
-    Auth, AuthResult, Error, Heartbeat, HeartbeatAck, JoinRoom, JoinRoomResult,
-};
+use gsb_client::Conn;
+use gsb_client::session::{self, Credentials};
+use gsb_protocol::base::{AuthResult, Error, Heartbeat, HeartbeatAck, JoinRoom, JoinRoomResult};
 use prost::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 mod common;
@@ -44,17 +45,9 @@ enum Kind {
     Tls(Arc<common::TlsPki>),
 }
 
-/// The one place the transports differ (see the module docs).
-enum Client {
-    Tcp(TcpStream),
-    /// Boxed: `UdpClient` carries a 2 KB read buffer + queues; boxing
-    /// keeps the enum's size at the small variant's (clippy's
-    /// `large_enum_variant`).
-    Udp(Box<gsb_net::udp::UdpClient>),
-    /// The TCP framing over a rustls client stream. Boxed for the same
-    /// reason as the UDP variant.
-    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
-}
+/// The one place the transports differ (see the module docs): a
+/// `gsb_client` connection over the door `Kind` names.
+struct Client(Conn);
 
 /// What a bounded wait for the next frame found.
 enum Recv {
@@ -69,80 +62,39 @@ impl Client {
     /// Whether this wire is rUDP (the only transport without EOF — the
     /// close-detection branches below key off exactly this).
     fn is_udp(&self) -> bool {
-        matches!(self, Client::Udp(_))
+        self.0.is_udp()
     }
 
     async fn connect(kind: Kind, addr: std::net::SocketAddr) -> std::io::Result<Self> {
-        match kind {
-            Kind::Tcp => TcpStream::connect(addr).await.map(Client::Tcp),
-            Kind::Udp => gsb_net::udp::UdpClient::connect(addr)
-                .await
-                .map(|c| Client::Udp(Box::new(c))),
+        let conn = match kind {
+            Kind::Tcp => gsb_client::connect::tcp(addr).await?,
+            Kind::Udp => gsb_client::connect::udp(addr).await?,
             Kind::Tls(pki) => {
                 let tcp = TcpStream::connect(addr).await?;
-                tcp.set_nodelay(true).ok();
-                let connector = common::tls_client_connector(&pki);
                 let dns: rustls::pki_types::ServerName<'static> =
                     common::TLS_SERVER_NAME.try_into().expect("dns name");
-                connector
-                    .connect(dns, tcp)
-                    .await
-                    .map(|t| Client::Tls(Box::new(t)))
+                gsb_client::tls::connect(tcp, &common::tls_client_connector(&pki), dns).await?
             }
-        }
+        };
+        Ok(Client(conn))
     }
 
     /// Send one application frame (the wire encoding is transport-
     /// specific: length-prefixed body vs datagram kind).
     async fn write_frame(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
-        // The stream transports share the exact same byte shape: TCP and
-        // TLS differ ONLY in what carries it.
-        fn framed(op: u16, payload: &[u8]) -> Vec<u8> {
-            let body = 2 + payload.len();
-            let mut out = Vec::with_capacity(4 + body);
-            out.extend_from_slice(&(body as u32).to_le_bytes());
-            out.extend_from_slice(&op.to_le_bytes());
-            out.extend_from_slice(payload);
-            out
-        }
-        match self {
-            Client::Tcp(stream) => {
-                let out = framed(op, payload);
-                stream.write_all(&out).await?;
-                stream.flush().await
-            }
-            Client::Udp(c) => c.send_frame(op, payload.to_vec()).await,
-            Client::Tls(t) => {
-                let out = framed(op, payload);
-                t.write_all(&out).await?;
-                t.flush().await
-            }
-        }
+        self.0.send(op, payload).await
     }
 
-    /// Wait up to `window` for the next frame.
+    /// Wait up to `window` for the next frame. A stream door's read error
+    /// or refused frame ends the stream like EOF (`Closed`); an rUDP
+    /// socket error is the test's failure.
     async fn recv(&mut self, window: Duration) -> std::io::Result<Recv> {
-        match self {
-            Client::Tcp(stream) => {
-                match tokio::time::timeout(window, read_tcp_frame(stream)).await {
-                    Ok(Some(f)) => Ok(Recv::Frame(f)),
-                    Ok(None) => Ok(Recv::Closed),
-                    Err(_) => Ok(Recv::TimedOut),
-                }
-            }
-            Client::Udp(c) => match c.recv_frame(window).await? {
-                Some(f) => Ok(Recv::Frame((f.op, f.payload.to_vec()))),
-                None => Ok(Recv::TimedOut),
-            },
-            Client::Tls(t) => {
-                // Same framing over the rustls stream; EOF semantics are
-                // TCP's (a server close propagates as end-of-stream).
-                match tokio::time::timeout(window, read_tcp_frame(t.as_mut())).await {
-                    Ok(Some(f)) => Ok(Recv::Frame(f)),
-                    Ok(None) => Ok(Recv::Closed),
-                    Err(_) => Ok(Recv::TimedOut),
-                }
-            }
+        match self.0.recv(window).await {
+            Ok(gsb_client::Recv::Frame(f)) => Ok(Recv::Frame((f.op, f.payload.to_vec()))),
+            Ok(gsb_client::Recv::Closed) => Ok(Recv::Closed),
+            Ok(gsb_client::Recv::Quiet) => Ok(Recv::TimedOut),
+            Err(e) if self.is_udp() => Err(e),
+            Err(_) => Ok(Recv::Closed),
         }
     }
 
@@ -150,9 +102,8 @@ impl Client {
     /// the window. This is the rUDP notion of "the server closed" (UDP
     /// has no EOF): a session the server removed never answers.
     async fn probe(&mut self) -> std::io::Result<bool> {
-        let hb = Heartbeat { tick: 0 }.encode_to_vec();
-        self.write_frame(gsb_protocol::op::base::HEARTBEAT, &hb)
-            .await?;
+        let hb = session::heartbeat(0);
+        self.write_frame(hb.op, &hb.payload).await?;
         let deadline = Instant::now() + Duration::from_millis(1500);
         loop {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -190,23 +141,6 @@ impl Client {
             }
         }
     }
-}
-
-/// TCP wire read: 4-byte LE length prefix + body. `None` = EOF/bad frame.
-async fn read_tcp_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Option<(u16, Vec<u8>)> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await.ok()?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 || len > 4 * 1024 * 1024 {
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).await.ok()?;
-    if body.len() < 2 {
-        return None;
-    }
-    let op = u16::from_le_bytes([body[0], body[1]]);
-    Some((op, body[2..].to_vec()))
 }
 
 /// A server config with the guardrail overrides a test needs, on a given
@@ -262,12 +196,7 @@ async fn join_and_observe_movement(kind: Kind) {
         .await
         .expect("client connects");
 
-    let auth = Auth {
-        name: "e2e".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth = auth_wire("e2e", &[]).1;
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -372,12 +301,7 @@ async fn idle_connection_is_closed(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth {
-        name: "idle".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth = auth_wire("idle", &[]).1;
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -438,12 +362,7 @@ async fn active_heartbeat_survives(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth {
-        name: "active".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth = auth_wire("active", &[]).1;
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -507,12 +426,7 @@ async fn room_full_gentle_rejection(kind: Kind) {
     let mut a = Client::connect(kind.clone(), addr)
         .await
         .expect("A connects");
-    let auth_a = Auth {
-        name: "a".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth_a = auth_wire("a", &[]).1;
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
         .await
         .unwrap();
@@ -542,12 +456,7 @@ async fn room_full_gentle_rejection(kind: Kind) {
 
     // Player B is rejected (code 8)…
     let mut b = Client::connect(kind, addr).await.expect("B connects");
-    let auth_b = Auth {
-        name: "b".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth_b = auth_wire("b", &[]).1;
     b.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_b)
         .await
         .unwrap();
@@ -624,12 +533,7 @@ async fn connection_capacity_rejects(kind: Kind) {
     let mut a = Client::connect(kind.clone(), addr)
         .await
         .expect("A connects");
-    let auth_a = Auth {
-        name: "a".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth_a = auth_wire("a", &[]).1;
     a.write_frame(gsb_protocol::op::base::AUTH_REQ, &auth_a)
         .await
         .unwrap();
@@ -705,12 +609,7 @@ async fn flooder_drops_attributed(kind: Kind) {
     let mut client = Client::connect(kind, handle.addr)
         .await
         .expect("client connects");
-    let auth = Auth {
-        name: "flood".into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec();
+    let auth = auth_wire("flood", &[]).1;
     client
         .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth)
         .await
@@ -752,54 +651,25 @@ async fn flooder_drops_attributed(kind: Kind) {
     // flood frames travel the lossy game band, so retransmit state never
     // gets in the way.
     let move_payload = gsb_demo::game::MoveTo { x: 1, y: 1, seq: 0 }.encode_to_vec();
-    match client {
-        Client::Tcp(stream) => {
-            let (mut r, mut w) = stream.into_split();
-            let mf = {
-                let body = 2 + move_payload.len();
-                let mut out = Vec::with_capacity(4 + body);
-                out.extend_from_slice(&(body as u32).to_le_bytes());
-                out.extend_from_slice(&gsb_demo::op::MOVE_TO.to_le_bytes());
-                out.extend_from_slice(&move_payload);
-                out
-            };
+    match client.0.into_split() {
+        Ok((mut r, mut w)) => {
+            let mf = gsb_client::frame::encode(gsb_demo::op::MOVE_TO, &move_payload);
             let flood = tokio::spawn(async move {
                 while Instant::now() < fdeadline {
-                    if w.write_all(&mf).await.is_err() {
+                    if w.get_mut().write_all(&mf).await.is_err() {
                         break; // peer gone
                     }
                 }
             });
             while flood_start.elapsed() < Duration::from_secs(3) {
-                let _ =
-                    tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
+                let _ = tokio::time::timeout(Duration::from_millis(200), r.next()).await;
             }
             flood.await.expect("flood task exits");
         }
-        Client::Tls(t) => {
-            let (mut r, mut w) = tokio::io::split(*t);
-            let mf = {
-                let body = 2 + move_payload.len();
-                let mut out = Vec::with_capacity(4 + body);
-                out.extend_from_slice(&(body as u32).to_le_bytes());
-                out.extend_from_slice(&gsb_demo::op::MOVE_TO.to_le_bytes());
-                out.extend_from_slice(&move_payload);
-                out
+        Err(udp) => {
+            let Conn::Udp(mut c) = *udp else {
+                unreachable!("only rUDP has no halves")
             };
-            let flood = tokio::spawn(async move {
-                while Instant::now() < fdeadline {
-                    if w.write_all(&mf).await.is_err() {
-                        break; // peer gone
-                    }
-                }
-            });
-            while flood_start.elapsed() < Duration::from_secs(3) {
-                let _ =
-                    tokio::time::timeout(Duration::from_millis(200), read_tcp_frame(&mut r)).await;
-            }
-            flood.await.expect("flood task exits");
-        }
-        Client::Udp(mut c) => {
             while Instant::now() < fdeadline {
                 c.send_frame(gsb_demo::op::MOVE_TO, move_payload.clone())
                     .await
@@ -995,22 +865,13 @@ fn room_cfg(id: u64) -> gsb_core::room::RoomConfig {
 }
 
 fn auth_wire(name: &str, ticket: &[u8]) -> (u16, Vec<u8>) {
-    (
-        gsb_protocol::op::base::AUTH_REQ,
-        Auth {
-            name: name.into(),
-            ticket: ticket.to_vec(),
-            protocol_version: gsb_protocol::PROTOCOL_VERSION,
-        }
-        .encode_to_vec(),
-    )
+    let f = session::auth_req(&Credentials::named(name).with_ticket(ticket));
+    (f.op, f.payload.to_vec())
 }
 
 fn join_wire(room: u64) -> (u16, Vec<u8>) {
-    (
-        gsb_protocol::op::base::JOIN_ROOM_REQ,
-        JoinRoom { room_id: room }.encode_to_vec(),
-    )
+    let f = session::join_req(room);
+    (f.op, f.payload.to_vec())
 }
 
 /// One correlated request on the wire: the base-band envelope opcode
@@ -1036,35 +897,20 @@ async fn auth_and_join(client: &mut Client, room: u64) -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let name = format!("e2e-{}", SEQ.fetch_add(1, Ordering::SeqCst));
-    let (op, payload) = auth_wire(&name, &[]);
-    client.write_frame(op, &payload).await.unwrap();
-    let (op, payload) = join_wire(room);
-    client.write_frame(op, &payload).await.unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .unwrap_or_else(|| panic!("timed out in auth_and_join"));
-        match client.recv(remaining).await.unwrap() {
-            Recv::Frame((op, payload)) => match op {
-                gsb_protocol::op::base::AUTH_RESULT => {
-                    let m = AuthResult::decode(&payload[..]).unwrap();
-                    assert!(m.ok, "auth must succeed");
-                }
-                gsb_protocol::op::base::JOIN_ROOM_RESULT => {
-                    let m = JoinRoomResult::decode(&payload[..]).unwrap();
-                    assert!(m.entity != 0);
-                    return m.entity;
-                }
-                gsb_protocol::op::base::ERROR => {
-                    let m = Error::decode(&payload[..]).unwrap();
-                    panic!("join failed: code={} message={}", m.code, m.message);
-                }
-                _ => {} // snapshots may race the join result
-            },
-            Recv::Closed => panic!("server closed the connection"),
-            Recv::TimedOut => {}
+    let creds = Credentials::named(name);
+    // Snapshots may race the join result: skipped.
+    match session::auth_and_join(&mut client.0, &creds, room, Duration::from_secs(10), |_| {}).await
+    {
+        Ok(j) => {
+            assert!(j.entity != 0);
+            j.entity
         }
+        Err(gsb_client::ClientError::Server(m)) => {
+            panic!("join failed: code={} message={}", m.raw, m.message)
+        }
+        Err(gsb_client::ClientError::AuthRefused(_)) => panic!("auth must succeed"),
+        Err(gsb_client::ClientError::TimedOut) => panic!("timed out in auth_and_join"),
+        Err(e) => panic!("server closed the connection: {e}"),
     }
 }
 

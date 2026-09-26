@@ -11,75 +11,29 @@
 
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, AuthResult, Error, JoinRoom, JoinRoomResult, RpcRequest};
+use gsb_client::session::{self, Credentials};
+use gsb_client::{Conn, Recv};
+use gsb_protocol::base::RpcRequest;
 use gsb_server::{Config, Topology, Visibility};
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-
-/// Write one length-prefixed frame (`u32` body length, `u16` op, payload).
-async fn write_frame(s: &mut TcpStream, op: u16, payload: &[u8]) {
-    let mut out = Vec::with_capacity(6 + payload.len());
-    out.extend_from_slice(&((2 + payload.len()) as u32).to_le_bytes());
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    s.write_all(&out).await.expect("write frame");
-}
-
-/// Read one frame, or `None` when nothing arrives within `window`.
-async fn read_frame(s: &mut TcpStream, window: Duration) -> Option<(u16, Vec<u8>)> {
-    tokio::time::timeout(window, async {
-        let mut len = [0u8; 4];
-        s.read_exact(&mut len).await.expect("frame length");
-        let mut body = vec![0u8; u32::from_le_bytes(len) as usize];
-        s.read_exact(&mut body).await.expect("frame body");
-        (u16::from_le_bytes([body[0], body[1]]), body[2..].to_vec())
-    })
-    .await
-    .ok()
-}
 
 /// Auth + join room 1; frames that race the join result are skipped.
-async fn auth_and_join(s: &mut TcpStream, name: &str) {
-    let auth = Auth {
-        name: name.into(),
-        ticket: Vec::new(),
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    };
-    write_frame(s, gsb_protocol::op::base::AUTH_REQ, &auth.encode_to_vec()).await;
-    let join = JoinRoom { room_id: 1 };
-    write_frame(
+async fn auth_and_join(s: &mut Conn, name: &str) {
+    let joined = session::auth_and_join(
         s,
-        gsb_protocol::op::base::JOIN_ROOM_REQ,
-        &join.encode_to_vec(),
+        &Credentials::named(name),
+        1,
+        Duration::from_secs(10),
+        |_| {},
     )
-    .await;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        let Some((op, payload)) = read_frame(s, Duration::from_millis(200)).await else {
-            continue;
-        };
-        match op {
-            gsb_protocol::op::base::AUTH_RESULT => {
-                assert!(AuthResult::decode(&payload[..]).unwrap().ok, "auth");
-            }
-            gsb_protocol::op::base::JOIN_ROOM_RESULT => {
-                assert_ne!(JoinRoomResult::decode(&payload[..]).unwrap().entity, 0);
-                return;
-            }
-            gsb_protocol::op::base::ERROR => {
-                let e = Error::decode(&payload[..]).unwrap();
-                panic!("{name}: join failed: code={} {}", e.code, e.message);
-            }
-            _ => {}
-        }
-    }
-    panic!("{name}: timed out waiting for the join result");
+    .await
+    .unwrap_or_else(|e| panic!("{name}: join failed: {e}"));
+    assert_ne!(joined.entity, 0);
 }
 
 /// Send one `ECONOMY` purchase and return the room's answer for it:
 /// `(ok, reason, payload)` of the response carrying the request's id.
-async fn buy_potion(s: &mut TcpStream, name: &str) -> (bool, String, Vec<u8>) {
+async fn buy_potion(s: &mut Conn, name: &str) -> (bool, String, Vec<u8>) {
     const ID: u64 = 7;
     let buy = gsb_demo::game::BuyItem {
         kind: "potion".into(),
@@ -89,12 +43,15 @@ async fn buy_potion(s: &mut TcpStream, name: &str) -> (bool, String, Vec<u8>) {
         op: gsb_demo::op::ECONOMY as u32,
         payload: buy.encode_to_vec(),
     };
-    write_frame(s, gsb_protocol::op::base::RPC_REQ, &req.encode_to_vec()).await;
+    s.send(gsb_protocol::op::base::RPC_REQ, &req.encode_to_vec())
+        .await
+        .expect("write frame");
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        let Some((op, payload)) = read_frame(s, Duration::from_millis(200)).await else {
+        let Recv::Frame(f) = s.recv(Duration::from_millis(200)).await.expect("frame") else {
             continue;
         };
+        let (op, payload) = (f.op, f.payload);
         if op != gsb_demo::op::PRIVATE {
             continue;
         }
@@ -112,7 +69,9 @@ async fn economy_answers(name: &str, cfg: Config) {
     let handle = gsb_server::start_server(cfg)
         .await
         .unwrap_or_else(|e| panic!("{name}: server starts: {e}"));
-    let mut s = TcpStream::connect(handle.addr).await.expect("connect");
+    let mut s = gsb_client::connect::tcp(handle.addr)
+        .await
+        .expect("connect");
     auth_and_join(&mut s, name).await;
     let (ok, reason, payload) = buy_potion(&mut s, name).await;
     assert!(ok, "{name}: the ECONOMY request was rejected: {reason}");

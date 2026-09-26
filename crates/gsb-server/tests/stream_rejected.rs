@@ -16,8 +16,9 @@
 
 use std::time::Duration;
 
-use gsb_protocol::base::{Auth, Error, ErrorCode};
-use gsb_protocol::op::base::{AUTH_REQ, AUTH_RESULT, ERROR};
+use gsb_client::session::{self, Credentials};
+use gsb_protocol::base::{Error, ErrorCode};
+use gsb_protocol::op::base::{AUTH_RESULT, ERROR};
 use gsb_server::{ListenerEntry, ListenerTransport};
 use prost::Message;
 use tokio::io::AsyncWriteExt;
@@ -51,12 +52,8 @@ async fn session(
     };
     let handle = gsb_server::start_server(cfg).await.expect("server starts");
     let mut c = client::connect(door, &pki, handle.addrs[0]).await;
-    let auth = Auth {
-        name: tag.into(),
-        ticket: Vec::new(),
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    };
-    c.write_frame(AUTH_REQ, &auth.encode_to_vec()).await;
+    let auth = session::auth_req(&Credentials::named(tag));
+    c.write_frame(auth.op, &auth.payload).await;
     let (op, _) = c.next(READ_WINDOW).await.expect("auth answered");
     assert_eq!(op, AUTH_RESULT);
     (handle, c, pki)
@@ -93,10 +90,7 @@ fn assert_stream_rejected(door: &str, errors: &[Error]) {
 #[tokio::test]
 async fn an_oversized_tcp_frame_gets_error_9_before_the_close() {
     let (handle, mut c, _pki) = session(ListenerTransport::Tcp, "rej-tcp").await;
-    let Client::Tcp(s) = &mut c else {
-        unreachable!()
-    };
-    s.write_all(&oversized_prefix()).await.expect("write");
+    c.raw().write_all(&oversized_prefix()).await.expect("write");
     let (errors, end) = read_to_end(&mut c).await;
     assert_stream_rejected("tcp", &errors);
     assert_eq!(end, End::Eof);
@@ -110,9 +104,7 @@ async fn an_oversized_tcp_frame_gets_error_9_before_the_close() {
 #[tokio::test]
 async fn an_oversized_tls_frame_gets_error_9_before_the_close() {
     let (handle, mut c, _pki) = session(ListenerTransport::Tls, "rej-tls").await;
-    let Client::Tls(t) = &mut c else {
-        unreachable!()
-    };
+    let t = c.raw();
     t.write_all(&oversized_prefix()).await.expect("write");
     t.flush().await.expect("flush");
     let (errors, end) = read_to_end(&mut c).await;
@@ -124,10 +116,7 @@ async fn an_oversized_tls_frame_gets_error_9_before_the_close() {
 #[tokio::test]
 async fn an_oversized_quic_frame_gets_error_9_before_the_close() {
     let (handle, mut c, _pki) = session(ListenerTransport::Quic, "rej-quic").await;
-    let Client::Quic(send, _) = &mut c else {
-        unreachable!()
-    };
-    send.write_all(&oversized_prefix()).await.expect("write");
+    c.raw().write_all(&oversized_prefix()).await.expect("write");
     let (errors, end) = read_to_end(&mut c).await;
     assert_stream_rejected("quic", &errors);
     assert_eq!(end, End::Eof);

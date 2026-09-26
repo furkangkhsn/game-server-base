@@ -16,8 +16,9 @@
 
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, Error, ErrorCode, JoinRoom};
-use gsb_protocol::op::base::{AUTH_REQ, ERROR, JOIN_ROOM_REQ, JOIN_ROOM_RESULT};
+use gsb_client::session::{self, Credentials};
+use gsb_protocol::base::{Error, ErrorCode};
+use gsb_protocol::op::base::{ERROR, JOIN_ROOM_RESULT};
 use gsb_server::{ListenerEntry, ListenerTransport};
 use prost::Message;
 
@@ -50,14 +51,12 @@ async fn server(door: ListenerTransport, pki: &common::TlsPki) -> gsb_server::Se
 
 /// AUTH + JOIN; returns once the join result arrived.
 async fn join(c: &mut Client, name: &str) {
-    let auth = Auth {
-        name: name.into(),
-        ticket: Vec::new(),
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    };
-    c.write_frame(AUTH_REQ, &auth.encode_to_vec()).await;
-    c.write_frame(JOIN_ROOM_REQ, &JoinRoom { room_id: 1 }.encode_to_vec())
-        .await;
+    for f in [
+        session::auth_req(&Credentials::named(name)),
+        session::join_req(1),
+    ] {
+        c.write_frame(f.op, &f.payload).await;
+    }
     loop {
         let (op, payload) = c.next(READ_WINDOW).await.expect("joined");
         assert_ne!(op, ERROR, "join refused: {:?}", Error::decode(&payload[..]));

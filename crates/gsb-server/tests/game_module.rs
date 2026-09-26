@@ -3,18 +3,15 @@
 //! another crate — this test crate — hosted through `start_game_server`.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bevy_ecs::world::World;
+use gsb_client::session::{self, Credentials};
 use gsb_core::registry::{BuiltRoom, RoomFactory};
 use gsb_core::room::RoomLogic;
 use gsb_demo::prelude::*;
 use gsb_protocol::MessageTable;
-use gsb_protocol::base::{Auth, JoinRoom, JoinRoomResult};
 use gsb_server::{Config, GameError, GameModule, RegistryParts, RegistryTask, ServerError};
-use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 fn local_cfg() -> Config {
     Config {
@@ -63,22 +60,6 @@ impl GameModule for Tiny {
     fn describe(&self) -> String {
         "tiny: one open room".into()
     }
-}
-
-async fn write_frame(s: &mut TcpStream, op: u16, payload: &[u8]) {
-    let mut out = Vec::with_capacity(6 + payload.len());
-    out.extend_from_slice(&((2 + payload.len()) as u32).to_le_bytes());
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    s.write_all(&out).await.expect("write frame");
-}
-
-async fn read_frame(s: &mut TcpStream) -> (u16, Vec<u8>) {
-    let mut len = [0u8; 4];
-    s.read_exact(&mut len).await.expect("frame length");
-    let mut body = vec![0u8; u32::from_le_bytes(len) as usize];
-    s.read_exact(&mut body).await.expect("frame body");
-    (u16::from_le_bytes([body[0], body[1]]), body[2..].to_vec())
 }
 
 /// An unknown `game` refuses startup, naming the compiled-in games.
@@ -132,31 +113,19 @@ async fn a_module_from_another_crate_hosts_its_rooms() {
     let handle = gsb_server::start_game_server(Box::new(Tiny { refuse: false }), local_cfg())
         .await
         .expect("the tiny module starts");
-    let mut s = TcpStream::connect(handle.addr).await.expect("connect");
-    let auth = Auth {
-        name: "tiny-1".into(),
-        ticket: Vec::new(),
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    };
-    write_frame(
+    let mut s = gsb_client::connect::tcp(handle.addr)
+        .await
+        .expect("connect");
+    let entity = session::auth_and_join(
         &mut s,
-        gsb_protocol::op::base::AUTH_REQ,
-        &auth.encode_to_vec(),
+        &Credentials::named("tiny-1"),
+        1,
+        Duration::from_secs(10),
+        |_| {},
     )
-    .await;
-    let join = JoinRoom { room_id: 1 }.encode_to_vec();
-    write_frame(&mut s, gsb_protocol::op::base::JOIN_ROOM_REQ, &join).await;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let entity = loop {
-        assert!(Instant::now() < deadline, "timed out waiting for the join");
-        let (op, payload) = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s))
-            .await
-            .expect("a frame");
-        if op == gsb_protocol::op::base::JOIN_ROOM_RESULT {
-            break JoinRoomResult::decode(&payload[..]).unwrap().entity;
-        }
-        assert_ne!(op, gsb_protocol::op::base::ERROR, "join failed");
-    };
+    .await
+    .unwrap_or_else(|e| panic!("join failed: {e}"))
+    .entity;
     assert_ne!(entity, 0);
     handle.stop().await;
 }

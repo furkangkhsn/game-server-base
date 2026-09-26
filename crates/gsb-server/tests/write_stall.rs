@@ -33,9 +33,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gsb_client::conn::{BoxRead, BoxWrite};
+use gsb_client::frame::{FrameRx, FrameTx};
+use gsb_client::session::{self, Credentials};
 use gsb_core::conn::ServerClose;
 use gsb_core::metrics::{MetricReport, NetReport, RegistryReport};
-use gsb_protocol::base::{Auth, JoinRoom};
 use prost::Message;
 use tokio::sync::mpsc;
 
@@ -81,20 +83,9 @@ fn cfg(pki: &common::TlsPki) -> gsb_server::Config {
 async fn connect(
     pki: &common::TlsPki,
     addr: std::net::SocketAddr,
-) -> (quinn::SendStream, quinn::RecvStream) {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(pki.ca_der.clone()).expect("CA parses");
-    // A fresh provider instance per connector (never a global install).
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls.alpn_protocols = vec![gsb_net::quic::ALPN_PROTOCOL.to_vec()];
-    let crypto =
-        quinn::crypto::rustls::QuicClientConfig::try_from(tls).expect("QUIC client TLS setup");
-    let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
+) -> (FrameTx<BoxWrite>, FrameRx<BoxRead>) {
+    let mut client_config =
+        gsb_client::quic::client_config([pki.ca_der.clone()]).expect("QUIC client TLS setup");
     let mut transport = quinn::TransportConfig::default();
     // THE knob this test exists for: the peer's advertised window. It
     // only moves as the application reads, so an application that stops
@@ -102,42 +93,33 @@ async fn connect(
     transport.stream_receive_window(CLIENT_WINDOW.into());
     transport.receive_window((CLIENT_WINDOW * 4).into());
     client_config.transport_config(Arc::new(transport));
-    let mut endpoint =
-        quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("client endpoint");
-    endpoint.set_default_client_config(client_config);
-    // The endpoint handle is dropped on return ON PURPOSE (the idiom the
-    // multi_listener suite documents): quinn's driver keeps serving the
-    // connection until its last stream handle is gone.
-    let conn = endpoint
-        .connect(addr, TLS_SERVER_NAME)
-        .expect("connect setup")
+    let conn = gsb_client::quic::connect(addr, TLS_SERVER_NAME, client_config)
         .await
         .expect("QUIC handshake");
-    conn.open_bi().await.expect("bi-stream open")
+    let Ok((rx, tx)) = conn.into_split() else {
+        unreachable!("a QUIC bi-stream has halves")
+    };
+    (tx, rx)
 }
 
-/// Write one length-prefixed frame onto the bi-stream.
-async fn send(stream: &mut quinn::SendStream, op: u16, payload: Vec<u8>) {
-    let mut body = Vec::with_capacity(2 + payload.len());
-    body.extend_from_slice(&op.to_le_bytes());
-    body.extend_from_slice(&payload);
-    let mut out = (body.len() as u32).to_le_bytes().to_vec();
-    out.extend_from_slice(&body);
-    stream.write_all(&out).await.expect("frame written");
+/// Write one frame onto the bi-stream.
+async fn send(stream: &mut FrameTx<BoxWrite>, op: u16, payload: Vec<u8>) {
+    stream.send(op, &payload).await.expect("frame written");
 }
 
 /// Read frames until `want` arrives — the LAST reading this client ever
 /// does.
-async fn read_until(recv: &mut quinn::RecvStream, want: u16) {
+async fn read_until(recv: &mut FrameRx<BoxRead>, want: u16) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.expect("length prefix");
-        let len = u32::from_le_bytes(len_buf) as usize;
+        let f = recv
+            .next()
+            .await
+            .expect("a whole frame")
+            .expect("the stream is open");
+        let len = 2 + f.payload.len();
         assert!((2..=65536).contains(&len), "implausible frame length {len}");
-        let mut body = vec![0u8; len];
-        recv.read_exact(&mut body).await.expect("frame body");
-        if u16::from_le_bytes([body[0], body[1]]) == want {
+        if f.op == want {
             return;
         }
     }
@@ -191,23 +173,12 @@ async fn a_peer_that_stops_reading_loses_its_session() {
     // The deaf peer: joins room 1 so the room keeps producing snapshots
     // for it, then never reads another byte.
     let (mut send_a, mut recv_a) = connect(&pki, handle.addr).await;
-    send(
-        &mut send_a,
-        gsb_protocol::op::base::AUTH_REQ,
-        Auth {
-            name: "deaf".into(),
-            ticket: vec![],
-            protocol_version: gsb_protocol::PROTOCOL_VERSION,
-        }
-        .encode_to_vec(),
-    )
-    .await;
-    send(
-        &mut send_a,
-        gsb_protocol::op::base::JOIN_ROOM_REQ,
-        JoinRoom { room_id: 1 }.encode_to_vec(),
-    )
-    .await;
+    for f in [
+        session::auth_req(&Credentials::named("deaf")),
+        session::join_req(1),
+    ] {
+        send(&mut send_a, f.op, f.payload.to_vec()).await;
+    }
     read_until(&mut recv_a, gsb_protocol::op::base::JOIN_ROOM_RESULT).await;
 
     // The shape of the bug, exactly: the peer stops READING but keeps

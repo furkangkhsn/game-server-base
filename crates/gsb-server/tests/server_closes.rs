@@ -42,14 +42,6 @@ async fn server(
     (handle, rx)
 }
 
-/// One length-prefixed frame (`[u32 LE len][u16 LE op][payload]`).
-fn frame(op: u16, payload: &[u8]) -> Vec<u8> {
-    let mut out = ((2 + payload.len()) as u32).to_le_bytes().to_vec();
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
 /// Read until the server closes the socket (EOF or error), with a bound.
 async fn until_eof(stream: &mut TcpStream, within: Duration) {
     let mut buf = [0u8; 4096];
@@ -125,7 +117,10 @@ async fn a_violating_client_is_booked_as_violation_budget() {
     let (handle, mut rx) = server(0.0).await;
     let mut stream = TcpStream::connect(handle.addr).await.expect("connect");
     for op in 42..46u16 {
-        stream.write_all(&frame(op, &[])).await.expect("write");
+        stream
+            .write_all(&gsb_client::frame::encode(op, &[]))
+            .await
+            .expect("write");
     }
     until_eof(&mut stream, Duration::from_secs(10)).await;
     assert_only(

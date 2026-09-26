@@ -5,18 +5,18 @@
 //! room, with one shared connection-id sequence across all doors.
 //!
 //! Idioms are the e2e.rs ones (real server on ephemeral ports, real
-//! clients, wire-level frames); the `Client` enum is the same five-arm
-//! transport split, minus the flows this suite does not exercise. The
-//! QUIC and WS arms speak real handshakes to real doors: quinn against
-//! `gsb_net::quic`, and a raw-TCP RFC 6455 client (adapted from the
-//! gsb-net ws.rs suite) against `gsb_net::ws`.
+//! clients, wire-level frames). Four doors are `gsb_client` connections
+//! (TCP, TLS, rUDP, and QUIC — quinn against `gsb_net::quic`); the WS
+//! door is walked by a raw-TCP RFC 6455 client (adapted from the gsb-net
+//! ws.rs suite), since the client building block has no WebSocket half.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use gsb_protocol::base::{Auth, AuthResult, Error, JoinRoom, JoinRoomResult};
+use gsb_client::session::{self, Credentials};
+use gsb_client::{ClientError, Conn, Recv};
 use prost::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod common;
@@ -37,13 +37,11 @@ fn entry(
     }
 }
 
-/// Which wire a test client sits on. Same shape as e2e's `Client`; the
-/// TLS arm trusts ONLY the runtime-minted test CA (the QUIC arm too).
+/// Which wire a test client sits on: a `gsb_client` connection (the
+/// TLS and QUIC arms trust ONLY the runtime-minted test CA), or the fake
+/// WebSocket client.
 enum Client {
-    Tcp(TcpStream),
-    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
-    Udp(Box<gsb_net::udp::UdpClient>),
-    Quic(QuicClient),
+    Gsb(Conn),
     Ws(FakeWsClient),
 }
 
@@ -53,59 +51,39 @@ async fn connect(
     pki: &common::TlsPki,
     addr: std::net::SocketAddr,
 ) -> Client {
-    match transport {
-        gsb_server::ListenerTransport::Tcp => {
-            let s = TcpStream::connect(addr).await.expect("plain TCP connects");
-            Client::Tcp(s)
-        }
+    Client::Gsb(match transport {
+        gsb_server::ListenerTransport::Tcp => gsb_client::connect::tcp(addr)
+            .await
+            .expect("plain TCP connects"),
         gsb_server::ListenerTransport::Tls => {
             let tcp = TcpStream::connect(addr)
                 .await
                 .expect("TCP under TLS connects");
-            tcp.set_nodelay(true).ok();
-            let connector = tls_client_connector(pki);
             let dns: rustls::pki_types::ServerName<'static> =
                 TLS_SERVER_NAME.try_into().expect("dns name");
-            let t = connector.connect(dns, tcp).await.expect("TLS handshake");
-            Client::Tls(Box::new(t))
-        }
-        gsb_server::ListenerTransport::Udp => {
-            let c = gsb_net::udp::UdpClient::connect(addr)
+            gsb_client::tls::connect(tcp, &tls_client_connector(pki), dns)
                 .await
-                .expect("rUDP handshake");
-            Client::Udp(Box::new(c))
+                .expect("TLS handshake")
         }
-        gsb_server::ListenerTransport::Quic => Client::Quic(connect_quic(pki, addr).await),
-        gsb_server::ListenerTransport::Ws => Client::Ws(FakeWsClient::connect(addr).await),
-    }
+        gsb_server::ListenerTransport::Udp => gsb_client::connect::udp(addr)
+            .await
+            .expect("rUDP handshake"),
+        // THE v1 contract: TLS 1.3 with the gsb ALPN, one bi-stream
+        // carrying the same length-prefixed frames.
+        gsb_server::ListenerTransport::Quic => {
+            let config = gsb_client::quic::client_config([pki.ca_der.clone()]).expect("QUIC TLS");
+            gsb_client::quic::connect(addr, TLS_SERVER_NAME, config)
+                .await
+                .expect("QUIC handshake")
+        }
+        gsb_server::ListenerTransport::Ws => return Client::Ws(FakeWsClient::connect(addr).await),
+    })
 }
 
 impl Client {
     async fn write_frame(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
-        fn framed(op: u16, payload: &[u8]) -> Vec<u8> {
-            let body = 2 + payload.len();
-            let mut out = Vec::with_capacity(4 + body);
-            out.extend_from_slice(&(body as u32).to_le_bytes());
-            out.extend_from_slice(&op.to_le_bytes());
-            out.extend_from_slice(payload);
-            out
-        }
         match self {
-            Client::Tcp(s) => {
-                s.write_all(&framed(op, payload)).await?;
-                s.flush().await
-            }
-            Client::Tls(t) => {
-                t.write_all(&framed(op, payload)).await?;
-                t.flush().await
-            }
-            Client::Udp(c) => c.send_frame(op, payload.to_vec()).await,
-            // QUIC v1 contract: the same length-prefixed frame, written
-            // onto THE single bi-stream.
-            Client::Quic(c) => {
-                c.send.write_all(&framed(op, payload)).await?;
-                c.send.flush().await
-            }
+            Client::Gsb(c) => c.send(op, payload).await,
             Client::Ws(c) => c.send_game(op, payload).await,
         }
     }
@@ -115,107 +93,20 @@ impl Client {
     /// which no flow in this suite relies on).
     async fn recv_frame(&mut self, window: Duration) -> std::io::Result<Option<(u16, Vec<u8>)>> {
         match self {
-            Client::Tcp(s) => Ok(tokio::time::timeout(window, read_stream_frame(s))
-                .await
-                .ok()
-                .flatten()),
-            Client::Tls(t) => Ok(tokio::time::timeout(window, read_stream_frame(t.as_mut()))
-                .await
-                .ok()
-                .flatten()),
-            Client::Udp(c) => Ok(c
-                .recv_frame(window)
-                .await?
-                .map(|f| (f.op, f.payload.to_vec()))),
-            Client::Quic(c) => Ok(tokio::time::timeout(window, read_quic_frame(&mut c.recv))
-                .await
-                .ok()
-                .flatten()),
+            Client::Gsb(c) => match c.recv(window).await {
+                Ok(Recv::Frame(f)) => Ok(Some((f.op, f.payload.to_vec()))),
+                Ok(Recv::Closed | Recv::Quiet) => Ok(None),
+                // An rUDP socket error is the test's failure; a stream
+                // door's read error ends the stream like EOF.
+                Err(e) if c.is_udp() => Err(e),
+                Err(_) => Ok(None),
+            },
             Client::Ws(c) => Ok(tokio::time::timeout(window, c.recv_game())
                 .await
                 .ok()
                 .flatten()),
         }
     }
-}
-
-/// Length-prefixed frame read over a stream door (the TCP wire shape,
-/// which is also the TLS wire shape — that identity is part of the design).
-async fn read_stream_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Option<(u16, Vec<u8>)> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await.ok()?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 || len > 4 * 1024 * 1024 {
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).await.ok()?;
-    if body.len() < 2 {
-        return None;
-    }
-    let op = u16::from_le_bytes([body[0], body[1]]);
-    Some((op, body[2..].to_vec()))
-}
-
-// ── minimal QUIC test client ────────────────────────────────────────────
-
-/// A minimal QUIC client speaking THE v1 wire contract (`gsb_net::quic`):
-/// trust ONLY the runtime-minted CA, agree on ALPN, open exactly ONE
-/// bidirectional stream, then treat its halves as a plain length-prefixed
-/// frame pipe — byte-for-byte what the server-side pumps see.
-struct QuicClient {
-    send: quinn::SendStream,
-    recv: quinn::RecvStream,
-}
-
-async fn connect_quic(pki: &common::TlsPki, addr: std::net::SocketAddr) -> QuicClient {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(pki.ca_der.clone()).expect("CA parses");
-    // A fresh provider instance per connector (never a global install):
-    // several clients/servers are built across one test binary's run.
-    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls.alpn_protocols = vec![gsb_net::quic::ALPN_PROTOCOL.to_vec()];
-    let crypto =
-        quinn::crypto::rustls::QuicClientConfig::try_from(tls).expect("QUIC client TLS setup");
-    let client_config = quinn::ClientConfig::new(std::sync::Arc::new(crypto));
-    let mut endpoint =
-        quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("client endpoint");
-    endpoint.set_default_client_config(client_config);
-    // The endpoint handle is dropped on return ON PURPOSE (the same
-    // reasoning gsb-net's quic.rs documents for its own test connector):
-    // quinn's driver keeps serving the connection until its last stream
-    // handle is gone, so the held send/recv pair stays fully usable.
-    let conn = endpoint
-        .connect(addr, TLS_SERVER_NAME)
-        .expect("connect setup")
-        .await
-        .expect("QUIC handshake");
-    // THE v1 contract: one bi-stream, opened immediately.
-    let (send, recv) = conn.open_bi().await.expect("bi-stream open");
-    QuicClient { send, recv }
-}
-
-/// One length-prefixed frame off the QUIC bi-stream (same wire shape as
-/// [`read_stream_frame`]; quinn's native `read_exact` instead of the
-/// `AsyncRead` adapter).
-async fn read_quic_frame(recv: &mut quinn::RecvStream) -> Option<(u16, Vec<u8>)> {
-    let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await.ok()?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 || len > 4 * 1024 * 1024 {
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    recv.read_exact(&mut body).await.ok()?;
-    if body.len() < 2 {
-        return None;
-    }
-    Some((u16::from_le_bytes([body[0], body[1]]), body[2..].to_vec()))
 }
 
 // ── fake WS client (raw TCP, masked frames; adapted from the gsb-net
@@ -297,11 +188,7 @@ impl FakeWsClient {
     /// message carries exactly one length-prefixed game frame — the wire
     /// contract the ws door enforces).
     async fn send_game(&mut self, op: u16, payload: &[u8]) -> std::io::Result<()> {
-        let body = 2 + payload.len();
-        let mut msg = Vec::with_capacity(4 + body);
-        msg.extend_from_slice(&(body as u32).to_le_bytes());
-        msg.extend_from_slice(&op.to_le_bytes());
-        msg.extend_from_slice(payload);
+        let msg = gsb_client::frame::encode(op, payload);
         let frame = encode_client_ws_frame(&msg, self.masks.next());
         self.stream.write_all(&frame).await?;
         self.stream.flush().await
@@ -382,22 +269,39 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 /// entity id once the JOIN_ROOM_RESULT arrives. Interleaved frames
 /// (snapshots for earlier members) are tolerated and discarded here.
 async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let auth = Auth {
-        name: name.into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
+    let c = match client {
+        Client::Gsb(c) => c,
+        Client::Ws(_) => return ws_auth_and_join(client, name).await,
     };
-    client
-        .write_frame(gsb_protocol::op::base::AUTH_REQ, &auth.encode_to_vec())
-        .await
-        .expect("AUTH_REQ goes out");
-    let join = JoinRoom { room_id: 1 };
-    client
-        .write_frame(gsb_protocol::op::base::JOIN_ROOM_REQ, &join.encode_to_vec())
-        .await
-        .expect("JOIN_ROOM_REQ goes out");
+    let creds = Credentials::named(name);
+    match session::auth_and_join(c, &creds, 1, Duration::from_secs(10), |_| {}).await {
+        Ok(j) => {
+            assert_ne!(j.entity, 0, "{name}: entity id must be non-zero");
+            j.entity
+        }
+        Err(ClientError::Server(m)) => {
+            panic!("{name}: server error code={} message={}", m.raw, m.message)
+        }
+        Err(ClientError::AuthRefused(_)) => panic!("{name}: auth must succeed"),
+        Err(ClientError::TimedOut) => panic!("{name}: timed out waiting for the join result"),
+        Err(e) => panic!("{name}: connection ended before the join result: {e}"),
+    }
+}
 
+/// [`auth_and_join`] for the fake WebSocket client (not a `gsb_client`
+/// connection, so the session steps are spelled out here: the same
+/// frames, one binary message each).
+async fn ws_auth_and_join(client: &mut Client, name: &str) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for f in [
+        session::auth_req(&Credentials::named(name)),
+        session::join_req(1),
+    ] {
+        client
+            .write_frame(f.op, &f.payload)
+            .await
+            .expect("request goes out");
+    }
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -409,17 +313,17 @@ async fn auth_and_join(client: &mut Client, name: &str) -> u64 {
             .unwrap_or_else(|| panic!("{name}: connection ended before the join result"));
         match op {
             gsb_protocol::op::base::AUTH_RESULT => {
-                let m: AuthResult = AuthResult::decode(&payload[..]).unwrap();
+                let m = gsb_protocol::base::AuthResult::decode(&payload[..]).unwrap();
                 assert!(m.ok, "{name}: auth must succeed");
             }
             gsb_protocol::op::base::JOIN_ROOM_RESULT => {
-                let m: JoinRoomResult = JoinRoomResult::decode(&payload[..]).unwrap();
+                let m = gsb_protocol::base::JoinRoomResult::decode(&payload[..]).unwrap();
                 assert_ne!(m.entity, 0, "{name}: entity id must be non-zero");
                 return m.entity;
             }
             gsb_protocol::op::base::ERROR => {
-                let m: Error = Error::decode(&payload[..]).unwrap();
-                panic!("{name}: server error code={} message={}", m.code, m.message);
+                let m = gsb_client::ServerError::decode(&payload).unwrap();
+                panic!("{name}: server error code={} message={}", m.raw, m.message);
             }
             _ => {} // snapshots racing ahead of the join result
         }

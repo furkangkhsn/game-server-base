@@ -34,7 +34,7 @@
 use std::time::{Duration, Instant};
 
 use gsb_core::metrics::{MetricReport, RegistryReport};
-use gsb_protocol::base::{Auth, AuthResult, Error, Heartbeat, JoinRoom, JoinRoomResult};
+use gsb_protocol::base::{AuthResult, Error, Heartbeat, JoinRoom, JoinRoomResult};
 use prost::Message;
 use tokio::sync::mpsc;
 
@@ -83,12 +83,9 @@ async fn send(client: &mut gsb_net::udp::UdpClient, op: u16, payload: Vec<u8>) {
 }
 
 fn auth_of(name: &str) -> Vec<u8> {
-    Auth {
-        name: name.into(),
-        ticket: vec![],
-        protocol_version: gsb_protocol::PROTOCOL_VERSION,
-    }
-    .encode_to_vec()
+    gsb_client::session::auth_req(&gsb_client::Credentials::named(name))
+        .payload
+        .to_vec()
 }
 
 /// Read (and therefore ACK) until `want` arrives.

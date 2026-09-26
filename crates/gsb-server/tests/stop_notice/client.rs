@@ -1,16 +1,17 @@
 //! A five-door test client for the close-notice suite: connect, write a
 //! length-prefixed frame, and read what the server sends up to the END
 //! of the session — reporting HOW it ended, which is what this suite is
-//! about. Trimmed from `multi_listener.rs` (the same wire shapes: the
-//! stream doors' `[u32 LE len][u16 op][payload]`, one binary WS message
-//! per frame, one QUIC bi-stream, the rUDP client from `gsb_net`).
+//! about. Four doors are `gsb_client` connections (TCP, TLS, QUIC, rUDP);
+//! the WebSocket door is a raw-TCP RFC 6455 client (one binary message
+//! per frame), since the client building block has no WebSocket half.
 
+use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
+use gsb_client::{Conn, Recv};
 use gsb_server::ListenerTransport;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::common::{self, TLS_SERVER_NAME};
@@ -27,59 +28,41 @@ pub enum End {
 }
 
 pub enum Client {
-    Tcp(TcpStream),
-    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
-    Udp(Box<gsb_net::udp::UdpClient>),
-    Quic(quinn::SendStream, quinn::RecvStream),
+    Gsb(Conn),
     Ws(TcpStream),
 }
 
-fn framed(op: u16, payload: &[u8]) -> Vec<u8> {
-    let mut out = ((2 + payload.len()) as u32).to_le_bytes().to_vec();
-    out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
 pub async fn connect(door: ListenerTransport, pki: &common::TlsPki, addr: SocketAddr) -> Client {
-    match door {
-        ListenerTransport::Tcp => Client::Tcp(TcpStream::connect(addr).await.expect("tcp")),
+    Client::Gsb(match door {
+        ListenerTransport::Tcp => gsb_client::connect::tcp(addr).await.expect("tcp"),
         ListenerTransport::Tls => {
             let tcp = TcpStream::connect(addr).await.expect("tcp under tls");
             let dns: rustls::pki_types::ServerName<'static> =
                 TLS_SERVER_NAME.try_into().expect("dns name");
-            let tls = common::tls_client_connector(pki)
-                .connect(dns, tcp)
+            gsb_client::tls::connect(tcp, &common::tls_client_connector(pki), dns)
                 .await
-                .expect("TLS handshake");
-            Client::Tls(Box::new(tls))
+                .expect("TLS handshake")
         }
-        ListenerTransport::Udp => Client::Udp(Box::new(
-            gsb_net::udp::UdpClient::connect(addr)
-                .await
-                .expect("rUDP handshake"),
-        )),
+        ListenerTransport::Udp => gsb_client::connect::udp(addr)
+            .await
+            .expect("rUDP handshake"),
         ListenerTransport::Quic => {
-            let (send, recv) = connect_quic(pki, addr).await;
-            Client::Quic(send, recv)
+            let config = gsb_client::quic::client_config([pki.ca_der.clone()]).expect("QUIC TLS");
+            gsb_client::quic::connect(addr, TLS_SERVER_NAME, config)
+                .await
+                .expect("QUIC handshake")
         }
-        ListenerTransport::Ws => Client::Ws(connect_ws(addr).await),
-    }
+        ListenerTransport::Ws => return Client::Ws(connect_ws(addr).await),
+    })
 }
 
 impl Client {
     pub async fn write_frame(&mut self, op: u16, payload: &[u8]) {
-        let bytes = framed(op, payload);
         match self {
-            Client::Tcp(s) => s.write_all(&bytes).await.expect("write"),
-            Client::Tls(t) => {
-                t.write_all(&bytes).await.expect("write");
-                t.flush().await.expect("flush");
-            }
-            Client::Udp(c) => c.send_frame(op, payload.to_vec()).await.expect("send"),
-            Client::Quic(send, _) => send.write_all(&bytes).await.expect("write"),
+            Client::Gsb(c) => c.send(op, payload).await.expect("write"),
             Client::Ws(s) => {
                 // One masked FIN binary message carrying one game frame.
+                let bytes = gsb_client::frame::encode(op, payload);
                 let key = [0x5a, 0xa5, 0x3c, 0xc3];
                 let mut msg = vec![0x82];
                 assert!(bytes.len() < 126, "short frames only");
@@ -91,35 +74,39 @@ impl Client {
         }
     }
 
+    /// The byte sink under a stream door's frames — for bytes outside
+    /// the frame contract (the `stream_rejected` suite's malformed
+    /// prefix; the close-notice suite never writes one).
+    #[allow(dead_code)]
+    pub fn raw(&mut self) -> &mut gsb_client::conn::BoxWrite {
+        match self {
+            Client::Gsb(Conn::Stream { tx, .. }) => tx.get_mut(),
+            _ => panic!("not a stream door"),
+        }
+    }
+
     /// The next frame, or how the session ended (`Err`) — `Quiet` when
     /// nothing arrives within `window`.
     pub async fn next(&mut self, window: Duration) -> Result<(u16, Vec<u8>), End> {
-        let read = async {
-            match self {
-                Client::Tcp(s) => stream_frame(s).await,
-                Client::Tls(t) => stream_frame(t.as_mut()).await,
-                Client::Quic(_, recv) => stream_frame(recv).await,
-                Client::Ws(s) => ws_frame(s).await,
-                Client::Udp(c) => match c.recv_frame(window).await {
-                    Ok(Some(f)) => Ok((f.op, f.payload.to_vec())),
-                    _ => Err(End::Quiet),
-                },
-            }
-        };
-        tokio::time::timeout(window, read)
-            .await
-            .unwrap_or(Err(End::Quiet))
+        match self {
+            Client::Gsb(c) => match c.recv(window).await {
+                Ok(Recv::Frame(f)) => Ok((f.op, f.payload.to_vec())),
+                Ok(Recv::Closed) => Err(End::Eof),
+                Ok(Recv::Quiet) => Err(End::Quiet),
+                Err(_) if c.is_udp() => Err(End::Quiet),
+                // A stream ends at a frame boundary, never inside one.
+                Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::InvalidData) => {
+                    panic!("a whole frame: {e}")
+                }
+                // Any other read failure at a frame boundary is the end
+                // of the stream.
+                Err(_) => Err(End::Eof),
+            },
+            Client::Ws(s) => tokio::time::timeout(window, ws_frame(s))
+                .await
+                .unwrap_or(Err(End::Quiet)),
+        }
     }
-}
-
-/// One length-prefixed frame off a stream door; any read failure at a
-/// frame boundary is the end of the stream.
-async fn stream_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<(u16, Vec<u8>), End> {
-    let mut len = [0u8; 4];
-    r.read_exact(&mut len).await.map_err(|_| End::Eof)?;
-    let mut body = vec![0u8; u32::from_le_bytes(len) as usize];
-    r.read_exact(&mut body).await.expect("a whole frame");
-    Ok((u16::from_le_bytes([body[0], body[1]]), body[2..].to_vec()))
 }
 
 /// One server WS frame: a binary message carrying one game frame, or the
@@ -158,28 +145,4 @@ async fn connect_ws(addr: SocketAddr) -> TcpStream {
     }
     assert!(head.starts_with(b"HTTP/1.1 101"), "the door upgrades");
     s
-}
-
-async fn connect_quic(
-    pki: &common::TlsPki,
-    addr: SocketAddr,
-) -> (quinn::SendStream, quinn::RecvStream) {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(pki.ca_der.clone()).expect("CA parses");
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls.alpn_protocols = vec![gsb_net::quic::ALPN_PROTOCOL.to_vec()];
-    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls).expect("QUIC TLS");
-    let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("endpoint");
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(crypto)));
-    let conn = endpoint
-        .connect(addr, TLS_SERVER_NAME)
-        .expect("connect setup")
-        .await
-        .expect("QUIC handshake");
-    conn.open_bi().await.expect("bi-stream")
 }

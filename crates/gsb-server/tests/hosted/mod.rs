@@ -1,8 +1,9 @@
 //! Real-socket clients for the hosted-game suites (arena, MMO, war —
-//! GAME-MODULE G2): a framed connection over plain TCP or TLS whose
-//! reader half runs in its own task and feeds every frame into a bounded
-//! channel, so a test can drain many clients without starving any
-//! socket; plus a game `View` per client that applies the frames.
+//! GAME-MODULE G2): a `gsb_client` connection over plain TCP or TLS,
+//! joined with its session steps, whose reader half then runs in its own
+//! task and feeds every frame into a bounded channel, so a test can
+//! drain many clients without starving any socket; plus a game `View`
+//! per client that applies the frames.
 //!
 //! Included by each hosted suite as a plain module next to `common`
 //! (the runtime-minted TLS PKI). Not a test target itself.
@@ -23,12 +24,13 @@ pub use drive::{config_file, eventually, hold};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use gsb_protocol::base::{Auth, AuthResult, Error, JoinRoom, JoinRoomResult};
+use gsb_client::conn::BoxWrite;
+use gsb_client::frame::FrameTx;
+use gsb_client::session::{self, Credentials};
+use gsb_client::{ClientError, ServerError};
 use gsb_protocol::op::base as op;
-use prost::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
@@ -62,10 +64,6 @@ impl Door {
     }
 }
 
-/// A byte stream a client can run over.
-trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> Io for T {}
-
 /// How a game's client applies the frames it receives.
 pub trait View: Default {
     /// Apply one game-band frame (base frames never reach it).
@@ -74,7 +72,7 @@ pub trait View: Default {
 
 /// One connected client and its game view.
 pub struct Client<V: View> {
-    write: WriteHalf<Box<dyn Io>>,
+    write: FrameTx<BoxWrite>,
     rx: mpsc::Receiver<Frame>,
     /// The reader task, which owns the read half: aborted on drop, so
     /// dropping a client really closes its socket.
@@ -87,19 +85,6 @@ pub struct Client<V: View> {
     pub view: V,
     /// The transport ended (EOF).
     pub closed: bool,
-}
-
-/// Read one length-prefixed frame; `None` on EOF or a malformed frame.
-async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Option<Frame> {
-    let mut len = [0u8; 4];
-    r.read_exact(&mut len).await.ok()?;
-    let len = u32::from_le_bytes(len) as usize;
-    if !(2..=4 * 1024 * 1024).contains(&len) {
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body).await.ok()?;
-    Some((u16::from_le_bytes([body[0], body[1]]), body[2..].to_vec()))
 }
 
 impl<V: View> Client<V> {
@@ -119,83 +104,60 @@ impl<V: View> Client<V> {
         room: u64,
     ) -> Self {
         let tcp = TcpStream::connect(addr).await.expect("connect");
-        tcp.set_nodelay(true).ok();
-        let io: Box<dyn Io> = match door {
-            Door::Tcp => Box::new(tcp),
+        let mut conn = match door {
+            Door::Tcp => gsb_client::connect::tcp_stream(tcp),
             Door::Tls(pki) => {
                 let dns: rustls::pki_types::ServerName<'static> =
                     common::TLS_SERVER_NAME.try_into().expect("dns name");
-                let tls = common::tls_client_connector(pki)
-                    .connect(dns, tcp)
+                gsb_client::tls::connect(tcp, &common::tls_client_connector(pki), dns)
                     .await
-                    .expect("tls handshake");
-                Box::new(tls)
+                    .expect("tls handshake")
             }
         };
-        let (mut read, write) = tokio::io::split(io);
+        // The game frames that race the join result are kept, in order,
+        // and applied first.
+        let mut pending = VecDeque::new();
+        let creds = Credentials::named(name).with_ticket(ticket);
+        let joined =
+            session::auth_and_join(&mut conn, &creds, room, Duration::from_secs(10), |f| {
+                pending.push_back((f.op, f.payload.to_vec()))
+            })
+            .await;
+        let entity = match joined {
+            Ok(j) => j.entity,
+            Err(ClientError::Server(e)) => {
+                panic!("{name}: join failed: code={} {}", e.raw, e.message)
+            }
+            Err(ClientError::AuthRefused(r)) => panic!("{name}: auth: {r}"),
+            Err(ClientError::TimedOut) => panic!("{name}: timed out waiting for the join"),
+            Err(e) => panic!("{name}: closed during the handshake: {e}"),
+        };
+        assert_ne!(entity, 0, "{name}: a joined session has an entity");
+        let Ok((mut read, write)) = conn.into_split() else {
+            unreachable!("a stream door")
+        };
         let (tx, rx) = mpsc::channel::<Frame>(8192);
         let reader = tokio::spawn(async move {
-            while let Some(f) = read_frame(&mut read).await {
-                if tx.send(f).await.is_err() {
+            while let Ok(Some(f)) = read.next().await {
+                if tx.send((f.op, f.payload.to_vec())).await.is_err() {
                     return;
                 }
             }
         });
-        let mut c = Self {
+        Self {
             write,
             rx,
             reader,
-            pending: VecDeque::new(),
-            entity: 0,
+            pending,
+            entity,
             view: V::default(),
             closed: false,
-        };
-        let auth = Auth {
-            name: name.into(),
-            ticket: ticket.to_vec(),
-            protocol_version: gsb_protocol::PROTOCOL_VERSION,
-        };
-        c.send(op::AUTH_REQ, &auth.encode_to_vec()).await;
-        c.send(
-            op::JOIN_ROOM_REQ,
-            &JoinRoom { room_id: room }.encode_to_vec(),
-        )
-        .await;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let left = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or_else(|| panic!("{name}: timed out waiting for the join"));
-            let (op, payload) = tokio::time::timeout(left, c.rx.recv())
-                .await
-                .unwrap_or_else(|_| panic!("{name}: timed out waiting for the join"))
-                .unwrap_or_else(|| panic!("{name}: closed during the handshake"));
-            match op {
-                op::AUTH_RESULT => {
-                    assert!(AuthResult::decode(&payload[..]).unwrap().ok, "{name}: auth");
-                }
-                op::JOIN_ROOM_RESULT => {
-                    c.entity = JoinRoomResult::decode(&payload[..]).unwrap().entity;
-                    assert_ne!(c.entity, 0, "{name}: a joined session has an entity");
-                    return c;
-                }
-                op::ERROR => {
-                    let e = Error::decode(&payload[..]).unwrap();
-                    panic!("{name}: join failed: code={} {}", e.code, e.message);
-                }
-                _ => c.pending.push_back((op, payload)),
-            }
         }
     }
 
     /// Send one frame.
     pub async fn send(&mut self, op: u16, payload: &[u8]) {
-        let mut out = Vec::with_capacity(6 + payload.len());
-        out.extend_from_slice(&((2 + payload.len()) as u32).to_le_bytes());
-        out.extend_from_slice(&op.to_le_bytes());
-        out.extend_from_slice(payload);
-        self.write.write_all(&out).await.expect("write frame");
-        self.write.flush().await.expect("flush");
+        self.write.send(op, payload).await.expect("write frame");
     }
 
     /// Apply everything received so far to the view (never waits).
@@ -217,8 +179,8 @@ impl<V: View> Client<V> {
 
     fn apply(&mut self, op: u16, payload: &[u8]) {
         if op == op::ERROR {
-            let e = Error::decode(payload).unwrap();
-            panic!("server error: code={} {}", e.code, e.message);
+            let e = ServerError::decode(payload).unwrap();
+            panic!("server error: code={} {}", e.raw, e.message);
         }
         if op >= gsb_protocol::op::GAME_BAND_START {
             self.view.apply(op, payload);
