@@ -5,8 +5,8 @@
 use super::*;
 use crate::codec::{decode_report, encode_report};
 
-/// The sixteen counters, as one comparable tuple.
-fn counters(r: &RoomReport) -> [u64; 16] {
+/// The seventeen counters, as one comparable tuple.
+fn counters(r: &RoomReport) -> [u64; 17] {
     [
         r.detach_forced,
         r.effects_applied,
@@ -24,6 +24,7 @@ fn counters(r: &RoomReport) -> [u64; 16] {
         r.team_imports,
         r.team_import_records,
         r.team_expired,
+        r.team_over_budget,
     ]
 }
 

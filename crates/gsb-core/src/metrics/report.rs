@@ -102,6 +102,7 @@ pub struct RoomReport {
     pub team_export_drops: u64,
     pub team_export_records: u64,
     pub team_over_cap: u64,
+    pub team_over_budget: u64,
     pub team_imports: u64,
     pub team_import_records: u64,
     pub team_expired: u64,

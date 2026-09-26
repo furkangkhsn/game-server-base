@@ -176,6 +176,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             team_imports,
             team_import_records,
             team_expired,
+            team_over_budget,
             requests_local,
             requests_external,
             requests_rejected_malformed,
@@ -253,6 +254,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.team_imports += team_imports;
         acc.team_import_records += team_import_records;
         acc.team_expired += team_expired;
+        acc.team_over_budget += team_over_budget;
         acc.requests_local += requests_local;
         acc.requests_external += requests_external;
         acc.requests_rejected_malformed += requests_rejected_malformed;

@@ -139,6 +139,7 @@ async fn a_silent_sources_records_expire_after_the_ttl() {
             wire: ghost,
             bytes: body(ghost, -60, 60),
         }],
+        over_budget: 0,
     };
     let at = rig.tick;
     rig.forge(2, export).await;
@@ -173,6 +174,7 @@ async fn a_stale_set_heals_with_the_next_export() {
             wire: s,
             bytes: body(s, -1, -1),
         }],
+        over_budget: 0,
     };
     rig.forge(0, stale).await;
     rig.step().await;
@@ -197,6 +199,7 @@ async fn an_export_of_another_incarnation_is_ignored() {
             wire: ghost,
             bytes: body(ghost, -60, 60),
         }],
+        over_budget: 0,
     };
     rig.forge_as(1, 2, export.clone()).await;
     rig.steps(2).await;

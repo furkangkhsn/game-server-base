@@ -67,6 +67,7 @@ where
             team_export_drops: 0,
             team_export_records: 0,
             team_over_cap: 0,
+            team_over_budget: 0,
             team_imports: 0,
             team_import_records: 0,
             team_expired: 0,

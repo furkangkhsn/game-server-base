@@ -86,6 +86,7 @@ impl MetricAccumulator {
                 team_export_drops: latest.team_export_drops,
                 team_export_records: latest.team_export_records,
                 team_over_cap: latest.team_over_cap,
+                team_over_budget: latest.team_over_budget,
                 team_imports: latest.team_imports,
                 team_import_records: latest.team_import_records,
                 team_expired: latest.team_expired,

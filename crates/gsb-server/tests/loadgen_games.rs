@@ -202,6 +202,10 @@ fn loadgen_drives_the_war() {
     assert!(rate("team_records_per_export") >= 3.0, "{line}");
     assert_eq!(kv["team_export_drops"], "0", "{line}");
     assert_eq!(kv["team_over_cap"], "0", "{line}");
+    assert_eq!(
+        kv["team_over_budget"], "0",
+        "the default budget holds: {line}"
+    );
 }
 
 /// An orchestrated war: `--game war` reaches the server child and the

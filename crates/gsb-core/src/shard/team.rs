@@ -63,6 +63,11 @@ pub struct TeamExport {
     /// convention; the core keeps the order and cuts the tail over
     /// [`TEAM_EXPORT_MAX_RECORDS`]).
     pub records: Vec<TeamRecord>,
+    /// Records the logic's own per-team budget cut from this export
+    /// (the kit's `ShardedTeamRoom::with_team_budget`; 0 for a logic
+    /// without one). Only counted — `RoomSample::team_over_budget` —
+    /// never relayed.
+    pub over_budget: u64,
 }
 
 impl TeamExport {
@@ -101,6 +106,9 @@ pub(crate) struct TeamStats {
     pub(crate) export_records: u64,
     /// Records (and viewed teams) cut by the core's hard caps.
     pub(crate) over_cap: u64,
+    /// Records the logic's budget cut before its export reached the core
+    /// ([`TeamExport::over_budget`]).
+    pub(crate) over_budget: u64,
     /// Imports applied (slots replaced).
     pub(crate) imports: u64,
     /// Records in the applied imports.
@@ -123,6 +131,7 @@ impl TeamStats {
             export_drops: self.export_drops - earlier.export_drops,
             export_records: self.export_records - earlier.export_records,
             over_cap: self.over_cap - earlier.over_cap,
+            over_budget: self.over_budget - earlier.over_budget,
             imports: self.imports - earlier.imports,
             import_records: self.import_records - earlier.import_records,
             expired: self.expired - earlier.expired,

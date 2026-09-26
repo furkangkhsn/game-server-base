@@ -28,6 +28,7 @@ fn export(views: &[u64], records: &[(u64, u64)]) -> TeamExport {
     TeamExport {
         views: views.to_vec(),
         records: records.iter().map(|&(t, w)| rec(t, w)).collect(),
+        over_budget: 0,
     }
 }
 

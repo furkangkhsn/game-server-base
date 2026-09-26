@@ -504,7 +504,7 @@ impl MetricReport {
         // exchange (the last three families: shard rows only — 0 on a
         // single room). One table so the names and helps read side by side.
         type Row = (&'static str, &'static str, fn(&RoomReport) -> u64);
-        let rows: [Row; 16] = [
+        let rows: [Row; 17] = [
             (
                 "gsb_room_detach_forced_total",
                 "Detach holds forced to end by max_detach_hold over a standing veto, cumulative.",
@@ -569,6 +569,11 @@ impl MetricReport {
                 "gsb_room_team_over_cap_total",
                 "Team records (and viewed teams) cut by the core's per-message caps, cumulative.",
                 |r| r.team_over_cap,
+            ),
+            (
+                "gsb_room_team_over_budget_total",
+                "Team records the game's per-team export budget cut before the export reached the core, cumulative.",
+                |r| r.team_over_budget,
             ),
             (
                 "gsb_room_team_imports_total",

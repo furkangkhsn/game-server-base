@@ -15,6 +15,7 @@ pub(crate) struct TeamCounts {
     import_records: u64,
     export_drops: u64,
     over_cap: u64,
+    over_budget: u64,
     expired: u64,
     migrations: u64,
     effects_applied: u64,
@@ -30,6 +31,7 @@ impl From<&RoomReport> for TeamCounts {
             import_records: r.team_import_records,
             export_drops: r.team_export_drops,
             over_cap: r.team_over_cap,
+            over_budget: r.team_over_budget,
             expired: r.team_expired,
             migrations: r.migrations_out,
             effects_applied: r.effects_applied,
@@ -45,8 +47,8 @@ impl From<&RoomReport> for TeamCounts {
 /// imports that arrived (the hub's relays) and their records, and the
 /// relay fan-out (imports per export); then the run's totals from
 /// `total` — exports the registry mailbox refused, records the core's
-/// caps cut, source slots the TTL dropped, migrations and remote effects
-/// applied. Every key is always written (zeros without server reports).
+/// caps cut, records the game's per-team budget cut (A29), source slots
+/// the TTL dropped, migrations and remote effects applied. Every key is always written (zeros without server reports).
 pub(crate) fn team_segment(
     window: Option<(TeamCounts, TeamCounts)>,
     total: Option<TeamCounts>,
@@ -69,12 +71,14 @@ pub(crate) fn team_segment(
         " team_exports_s={exports:.1} team_export_records_s={records:.0} \
          team_records_per_export={:.1} team_imports_s={imports:.1} \
          team_import_records_s={:.0} team_fanout={:.2} team_export_drops={} \
-         team_over_cap={} team_expired={} migrations={} effects_applied={}",
+         team_over_cap={} team_over_budget={} team_expired={} migrations={} \
+         effects_applied={}",
         ratio(records, exports),
         per_s(|c| c.import_records),
         ratio(imports, exports),
         t.export_drops,
         t.over_cap,
+        t.over_budget,
         t.expired,
         t.migrations,
         t.effects_applied,
@@ -93,6 +97,7 @@ mod tests {
             imports,
             import_records: export_records * 3,
             export_drops: 2,
+            over_budget: 5,
             migrations: 9,
             ..TeamCounts::default()
         }
@@ -112,6 +117,7 @@ mod tests {
             "team_import_records_s=18000",
             "team_fanout=3.00",
             "team_export_drops=2",
+            "team_over_budget=5",
             "migrations=9",
         ] {
             assert!(

@@ -98,6 +98,7 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.team_imports, 183, "team_imports");
     assert_eq!(f.team_import_records, 2_730, "team_import_records");
     assert_eq!(f.team_expired, 1, "team_expired");
+    assert_eq!(f.team_over_budget, 4, "team_over_budget");
 
     // SUM — the RPC family, none of which was folded at all before.
     assert_eq!(f.requests_local, 60, "requests_local");

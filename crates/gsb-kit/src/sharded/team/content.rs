@@ -67,6 +67,7 @@ where
         teams.extend(views.iter().copied());
 
         let mut records: Vec<TeamRecord> = Vec::new();
+        let mut cut = 0;
         let top = teams
             .iter()
             .map(|t| usize::from(t.0) + 1)
@@ -105,7 +106,7 @@ where
                 .budget
                 .cut(visible.iter().map(|k| (k.wire, &k.value)), members);
             let keep = visible.len().min(self.budget.records);
-            self.over_budget += (visible.len() - keep) as u64;
+            cut += (visible.len() - keep) as u64;
             for (i, k) in visible.iter().enumerate() {
                 if !self.budget.keeps(kept, i) {
                     continue;
@@ -141,9 +142,11 @@ where
             }
         }
         self.bodies.retain(|_, (_, _, at)| *at == tick);
+        self.over_budget += cut;
         TeamExport {
             views: views.iter().map(|t| u64::from(t.0)).collect(),
             records,
+            over_budget: cut,
         }
     }
 

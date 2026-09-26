@@ -134,6 +134,7 @@ fn a_ranked_cut_keeps_the_highest_ranked_records() {
         [w[1], w[2], w[3]],
         "-90 is cut, a too"
     );
+    assert_eq!(export.over_budget, 4, "the export reports its cut (A29)");
     assert_eq!(room.over_budget(), 4);
 }
 

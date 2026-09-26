@@ -98,6 +98,7 @@ fn shard(i: usize) -> RoomReport {
         team_imports: [60, 61, 62][i],
         team_import_records: [900, 910, 920][i],
         team_expired: [1, 0, 0][i],
+        team_over_budget: [0, 3, 1][i],
         requests_local: [10, 20, 30][i],
         requests_external: [1, 2, 3][i],
         requests_rejected_malformed: [1, 0, 0][i],

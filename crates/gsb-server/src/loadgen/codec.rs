@@ -17,7 +17,7 @@ use gsb_core::metrics::{
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSMA"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSMB"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -41,7 +41,7 @@ use gsb_core::metrics::{
 ///     u64 migrations_out  u64 migrations_in  u64 migrations_failed
 ///     u64 team_exports  u64 team_export_drops  u64 team_export_records
 ///     u64 team_over_cap  u64 team_imports  u64 team_import_records
-///     u64 team_expired
+///     u64 team_expired  u64 team_over_budget
 ///     u64 req_local  u64 req_ext
 ///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
 ///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
@@ -105,7 +105,10 @@ use gsb_core::metrics::{
 /// team-exchange counters (`team_exports` .. `team_expired`, the shard's
 /// cumulative `TeamStats` — W2 promoted them from the
 /// `team_exchange_summary` log line), right after `migrations_failed`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D41;
+/// GSMB = the GSMA layout plus each room's `team_over_budget` (the
+/// records the game's per-team export budget cut — A29), right after
+/// `team_expired`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D42;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -186,6 +189,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.team_imports);
         w.u64(room.team_import_records);
         w.u64(room.team_expired);
+        w.u64(room.team_over_budget);
         w.u64(room.requests_local);
         w.u64(room.requests_external);
         w.u64(room.requests_rejected_malformed);
@@ -357,6 +361,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             team_imports: r.u64()?,
             team_import_records: r.u64()?,
             team_expired: r.u64()?,
+            team_over_budget: r.u64()?,
             requests_local: r.u64()?,
             requests_external: r.u64()?,
             requests_rejected_malformed: r.u64()?,

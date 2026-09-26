@@ -87,7 +87,9 @@ impl TeamHub {
         // The source's own slot is replaced below, not swept.
         self.sweep(tick, from);
         self.stats.exports += 1;
-        let TeamExport { mut views, records } = export;
+        let TeamExport {
+            mut views, records, ..
+        } = export;
         views.sort_unstable();
         views.dedup();
         let relayed = match self.slots[from].take() {

@@ -73,6 +73,7 @@ where
             team_export_drops: self.tstats.export_drops,
             team_export_records: self.tstats.export_records,
             team_over_cap: self.tstats.over_cap,
+            team_over_budget: self.tstats.over_budget,
             team_imports: self.tstats.imports,
             team_import_records: self.tstats.import_records,
             team_expired: self.tstats.expired,

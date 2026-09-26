@@ -36,6 +36,9 @@ where
         else {
             return;
         };
+        // What the logic's own budget cut (the game's policy), counted
+        // whether or not anything goes out.
+        self.tstats.over_budget += export.over_budget;
         // The hard caps (§8b.1): whatever the game's budget, one export
         // never exceeds them — they bound the hub's relays and every
         // receiver's slot.

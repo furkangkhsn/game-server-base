@@ -225,6 +225,10 @@ where
     }
 
     /// Records the per-team budget cut from this shard's exports so far.
+    /// Each export also reports its own cut to the core
+    /// (`TeamExport::over_budget`), which counts it into the metrics
+    /// sample (`RoomSample::team_over_budget`, Prometheus
+    /// `gsb_room_team_over_budget_total`).
     pub fn over_budget(&self) -> u64 {
         self.over_budget
     }
