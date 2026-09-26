@@ -92,14 +92,24 @@ where
                 })
             };
             // Members first (the budget keeps them), then what they see.
-            let members = known.iter().filter(|k| !k.lent && k.team == Some(team));
+            let mut visible: Vec<&Known<Wire<G>, V::Pos>> = known
+                .iter()
+                .filter(|k| !k.lent && k.team == Some(team))
+                .collect();
+            let members = visible.len();
             let seen = known
                 .iter()
                 .filter(|k| k.team != Some(team) && sees(&k.pos));
-            let visible: Vec<&Known<Wire<G>, V::Pos>> = members.chain(seen).collect();
-            let keep = visible.len().min(self.budget);
+            visible.extend(seen);
+            let kept = self
+                .budget
+                .cut(visible.iter().map(|k| (k.wire, &k.value)), members);
+            let keep = visible.len().min(self.budget.records);
             self.over_budget += (visible.len() - keep) as u64;
-            for k in &visible[..keep] {
+            for (i, k) in visible.iter().enumerate() {
+                if !self.budget.keeps(kept, i) {
+                    continue;
+                }
                 let bytes = self.body(k.wire, &k.value);
                 records.push(TeamRecord {
                     team: u64::from(team.0),

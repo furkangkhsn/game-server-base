@@ -45,16 +45,19 @@ use crate::sharded::*;
 use crate::space::{Partition, Vision};
 use crate::team::{Team, TeamMember};
 
+mod budget;
 mod content;
 mod frames;
 mod logic;
 mod shard;
 
+use budget::Budget;
 pub(crate) use frames::Shown;
 
 /// The default per-team, per-tick export budget of a shard (records):
 /// members first, then the enemies its units see; the rest is cut and
-/// counted ([`ShardedTeamRoom::over_budget`]).
+/// counted ([`ShardedTeamRoom::over_budget`]). Which records a cut keeps
+/// within each tier: [`ShardedTeamRoom::with_export_rank`].
 pub const DEFAULT_TEAM_BUDGET: usize = 1024;
 
 /// What a migrating entity carries in the team composite: the sharded
@@ -93,8 +96,8 @@ where
     /// vision: the strip carries only the wire value, so the game maps
     /// it (`None`: the record takes no part in vision here).
     pub(in crate::sharded) lent_pos: fn(&Wire<G>) -> Option<V::Pos>,
-    /// Records per team per tick this shard exports at most.
-    pub(in crate::sharded) budget: usize,
+    /// The per-team export budget and the game's rank (`budget`).
+    pub(in crate::sharded) budget: Budget<Wire<G>>,
     /// Records the budget cut, cumulative.
     pub(in crate::sharded) over_budget: u64,
     /// Delta mode ([`Self::with_delta`]).
@@ -139,7 +142,7 @@ where
             inner,
             vision,
             lent_pos,
-            budget: DEFAULT_TEAM_BUDGET,
+            budget: Budget::new(DEFAULT_TEAM_BUDGET),
             over_budget: 0,
             delta: false,
             contents: Vec::new(),
@@ -164,7 +167,22 @@ where
     /// first); the default is [`DEFAULT_TEAM_BUDGET`].
     #[must_use]
     pub fn with_team_budget(mut self, records: usize) -> Self {
-        self.budget = records;
+        self.budget.records = records;
+        self
+    }
+
+    /// Let the game pick what an over-budget export keeps (A29): `rank`
+    /// maps a record's wire value to its rank — the higher kept first —
+    /// WITHIN the members and within what they see (members still come
+    /// first); equal ranks fall back to the smaller wire id. The wire
+    /// value is what the kit holds of every record at export time (a
+    /// lent record has nothing else). Without a rank (the default) a cut
+    /// keeps each tier's first records in the kit's order: own by wire
+    /// id, then the border strip. Called only for a team whose set is
+    /// over the budget, once per record of it.
+    #[must_use]
+    pub fn with_export_rank(mut self, rank: fn(&Wire<G>) -> u32) -> Self {
+        self.budget.rank = Some(rank);
         self
     }
 

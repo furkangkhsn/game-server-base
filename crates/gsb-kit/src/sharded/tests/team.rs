@@ -11,6 +11,7 @@ use super::*;
 use crate::codec::RecordCodec;
 use crate::team::{Team, TeamMember};
 
+mod budget;
 mod migrate;
 mod vision;
 
