@@ -158,8 +158,9 @@ async fn a_stop_is_the_notice_then_the_close_frame() {
     }
     read_to_close(&mut c, "stop").await;
     let close = c.ws_close().expect("the door's close frame");
-    assert!(
-        matches!(close.code, None | Some(1001)),
-        "an empty close today, 1001 after B24: {close:?}"
+    assert_eq!(
+        close.code,
+        Some(1001),
+        "a server-ended session closes with 1001 Going Away (B24): {close:?}"
     );
 }
