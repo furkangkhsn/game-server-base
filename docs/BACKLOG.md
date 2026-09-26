@@ -85,7 +85,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B15 Write-stall artıkları (TLS kuyruğu 64 KiB, uyanma histerezisi, WS'te iki pencere) | — | SECURITY:117, ROADMAP:522 |
 | B17 Admin HTTP: auth/TLS yok, keep-alive yok, makine-okur çıktı yok, profil yok | — (localhost sözleşmesi) | OPS:12-54, SECURITY:269 |
 | B18 Oda başına config override | — | ROADMAP:712 |
-| B20 Autobahn CI işinin ilk koşusu | repo push edilince | HANDOFF:321, SECURITY:220 |
+| ~~B20 Autobahn CI işinin ilk koşusu~~ **Push edildi (2026-09-27, kullanıcı kararı):** `main` → `origin/main` (298 commit); CI ilk kez bu yapıda koşuyor | ✅ | HANDOFF, SECURITY §3.7 |
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
@@ -130,12 +130,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 
 | Madde | Kaynak |
 |---|---|
-| E1 Geçerli girdi hacim sınırı — saniyede kaç aksiyon meşru (oynanış parametresi) | HANDOFF:26, ROADMAP:210, 576 |
-| E2 `metrics` crate fasadı mı, elle Prometheus render'ı mı | HANDOFF:342, OPS:56 |
-| E3 rUDP'yi "deneysel"den çıkarmak (kalan: B1–B5, B7) | ROADMAP:233, SECURITY:19 |
-| E4 Koordinat formatı (wire `sint32` ↔ simülasyon `f32`; Unity ile) | ROADMAP:602, DESIGN:1225 |
+| E1 ~~Geçerli girdi hacim sınırı~~ **Karar (2026-09-27): opt-in yapı taşı** — bağlantı başına token bucket; varsayılan KAPALI, sayıyı oyun/config verir, aşan girdi düşer ve sayılır → **SIRADA** | HANDOFF:26, ROADMAP "Ürün kararı — geçerli girdinin HACMİ" |
+| E2 ~~`metrics` fasadı mı, elle render mı~~ **Karar (2026-09-27): dışa açım katmanı** — içeride ucuz toplama aynı kalır; dışa açım takılabilir exporter'lara devredilir (Prometheus mevcut, OTLP eklenir, gerekirse `metrics` fasadı), her biri feature arkasında (OPS §6'daki "dördüncü lavabo" yönü) → **SIRADA** | OPS §6 |
+| E3 ~~rUDP'yi deneysel'den çıkarmak~~ **Karar (2026-09-27):** şimdilik DENEYSEL kalır; hedef zamanla DTLS destekli, tam teşekküllü bir OYUN protokolü (QUIC'in yerini tutmaz: QUIC stream TCP yerine yazılmış, datagram'ı ek) — ileride bir **rUDP sertleştirme paketi** (B1–B5, B7) açılacak | ROADMAP, SECURITY:19 |
+| E4 ~~Koordinat formatı~~ **Karar (2026-09-27): oyunun kararı — kapandı.** Kit her formatı taşır (`RecordCodec`, A31); demoların `sint32`'si yalnız onların seçimi; motorda iş yok | ROADMAP "Koordinat formatı" |
 | E5 Protokol sürüm aralığı / özellik müzakeresi (tetik: ikinci sürüm yayınlanırsa) | ROADMAP:745, DESIGN:538 |
-| E6 AFK atılan üye odadan mı sunucudan mı çıkar | RECONNECT:458 |
+| E6 ~~AFK atılan üye odadan mı sunucudan mı~~ **Karar (2026-09-27): opt-in kapatma fiili** — oda→registry "bağlantıyı kapat" fiili; oyun/config `leave_room`/`disconnect` seçer, varsayılan bugünkü (odadan çıkar, soket açık); kapatma ERROR bildirimiyle → **SIRADA** | RECONNECT §16 |
 | E7 ~~A22 faz 0'ın soruları~~ **Cevaplandı (2026-09-25):** kit yalnız YAPI TAŞI verir — kayıt gövdesi formatı (protobuf, MessagePack, bit paketli…), yeni zarf alanının sürümlenmesi, entity başına gönderim hızı ve istemci interpolasyonu OYUNUN kararı; kit opt-in kanca sağlar, varsayılan bugünkü davranış. Kompakt wire id: evet (herkese; istemci kuralı değişmez) | KIT-ARCHITECTURE §10 "A22" |
 
 ### F. Diğer (test, temizlik, gözlemlenebilirlik)
