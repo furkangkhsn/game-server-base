@@ -48,7 +48,7 @@ where
                     req.id,
                     req.op,
                     false,
-                    "duplicate request id (the request is still in flight)".to_string(),
+                    crate::rpc::DUPLICATE_REASON.to_string(),
                     bytes::Bytes::new(),
                 );
                 continue;
@@ -65,7 +65,7 @@ where
                         req.id,
                         req.op,
                         false,
-                        format!("no request handler for op {:#04x}", req.op),
+                        crate::rpc::no_handler_reason(req.op),
                         bytes::Bytes::new(),
                     );
                 }
@@ -96,9 +96,9 @@ where
                             self.m.requests_rejected_room_cap += 1;
                         }
                         let reason = if over_conn_cap {
-                            "pending request limit reached (per connection)".to_string()
+                            crate::rpc::CONN_CAP_REASON.to_string()
                         } else {
-                            "pending request limit reached (room)".to_string()
+                            crate::rpc::ROOM_CAP_REASON.to_string()
                         };
                         self.queue_reply(
                             req.conn,

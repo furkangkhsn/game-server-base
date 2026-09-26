@@ -243,7 +243,7 @@ where
                         0,
                         a.op,
                         false,
-                        "malformed request envelope (or correlation id = 0)".to_string(),
+                        crate::rpc::MALFORMED_REASON.to_string(),
                         bytes::Bytes::new(),
                     );
                     false

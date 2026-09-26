@@ -268,3 +268,60 @@ impl Completion {
 /// The client-visible reason string for the room's timeout sweep. Kept
 /// in one place so the sweep and the tests agree on it.
 pub const TIMEOUT_REASON: &str = "request timed out";
+
+/// The client-visible reason of a request refused at the per-connection
+/// pending cap (`RoomConfig::max_pending_requests_per_conn`). The core's
+/// rejection reasons live here, next to [`TIMEOUT_REASON`], so the room,
+/// the shard and a client that tells the rejections apart (the load
+/// generator) read one spelling.
+pub const CONN_CAP_REASON: &str = "pending request limit reached (per connection)";
+
+/// The client-visible reason of a request refused at the room-wide
+/// pending cap (`RoomConfig::max_pending_requests`).
+pub const ROOM_CAP_REASON: &str = "pending request limit reached (room)";
+
+/// The client-visible reason of a request whose id is still in flight
+/// on its connection (answered without re-processing).
+pub const DUPLICATE_REASON: &str = "duplicate request id (the request is still in flight)";
+
+/// The client-visible reason of an undecodable envelope or a correlation
+/// id of 0 (answered under id 0 — it cannot correlate).
+pub const MALFORMED_REASON: &str = "malformed request envelope (or correlation id = 0)";
+
+/// The client-visible reason of a request no handler takes: this prefix,
+/// then the inner op (`{:#04x}`) — see [`no_handler_reason`].
+pub const NO_HANDLER_PREFIX: &str = "no request handler for op";
+
+/// The "no handler" reason for inner op `op`.
+pub fn no_handler_reason(op: u16) -> String {
+    format!("{NO_HANDLER_PREFIX} {op:#04x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rejection reasons are client-visible text (a client may tell
+    /// them apart — the load generator's RPC mode does): pinned byte for
+    /// byte, so naming them changed no answer and a new spelling is a
+    /// decision, not an accident.
+    #[test]
+    fn the_rejection_reasons_are_pinned() {
+        assert_eq!(TIMEOUT_REASON, "request timed out");
+        assert_eq!(
+            CONN_CAP_REASON,
+            "pending request limit reached (per connection)"
+        );
+        assert_eq!(ROOM_CAP_REASON, "pending request limit reached (room)");
+        assert_eq!(
+            DUPLICATE_REASON,
+            "duplicate request id (the request is still in flight)"
+        );
+        assert_eq!(
+            MALFORMED_REASON,
+            "malformed request envelope (or correlation id = 0)"
+        );
+        assert_eq!(no_handler_reason(0x3ee), "no request handler for op 0x3ee");
+        assert_eq!(no_handler_reason(7), "no request handler for op 0x07");
+    }
+}
