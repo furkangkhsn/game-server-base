@@ -241,6 +241,12 @@ where
         self.baselines.dropped(player, self.tick, snapshot || full);
     }
 
+    /// The channel took a batch again (F11): a re-send the storm
+    /// pacing held back goes out on the next frame.
+    fn on_batch_resumed(&mut self, _world: &mut World, player: PlayerId) {
+        self.baselines.resumed(player);
+    }
+
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         // Grid half: systems, shard-aware orphan stamping, border-cache
         // rebuild (positions just changed).

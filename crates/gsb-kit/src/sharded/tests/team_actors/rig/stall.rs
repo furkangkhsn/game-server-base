@@ -5,12 +5,20 @@
 //! over a SINGLE team room: the room actor's side of the drop signal.
 
 use gsb_core::registry::BuiltRoom;
-use gsb_core::room::RoomLogic;
+use gsb_core::room::{Action, RoomLogic};
 
 use super::*;
 use crate::team::TeamRoom;
 
 type Single = Box<dyn RoomLogic<World, GroupKey = Team, Strip = ()>>;
+
+/// A joined client whose out channel is still full (not yet reading).
+pub(in crate::sharded::tests::team_actors) struct Stalled {
+    conn: ConnectionId,
+    wire: u64,
+    out: Inbox<FrameBatch>,
+    actions: Mailbox<Action>,
+}
 
 impl Rig {
     /// The rig over one single-world [`TeamRoom`] running [`Front`] —
@@ -34,14 +42,15 @@ impl Rig {
         self.dropped.iter().sum()
     }
 
-    /// [`Rig::join`], stalled until the fan-out dropped a batch of it
-    /// (module docs); returns the client's index. Its view starts empty.
+    /// [`Rig::join`], stalled: returns once the fan-out dropped a batch
+    /// of it (module docs); the channel stays full until
+    /// [`Rig::release`].
     pub(in crate::sharded::tests::team_actors) async fn join_stalled(
         &mut self,
         conn: u64,
         identity: &str,
-    ) -> usize {
-        let (out_tx, mut out) = channel::<FrameBatch>(1);
+    ) -> Stalled {
+        let (out_tx, out) = channel::<FrameBatch>(1);
         out_tx.try_send(Vec::new()).expect("an empty channel");
         let (reply, joined) = oneshot::channel();
         self.reg
@@ -72,10 +81,28 @@ impl Rig {
             }
             self.step().await;
         }
+        Stalled {
+            conn: ConnectionId(conn),
+            wire,
+            out,
+            actions,
+        }
+    }
+
+    /// The stalled client starts reading (before the next tick): its
+    /// channel is emptied of the stall and it joins the rig's clients;
+    /// returns its index. Its view starts empty.
+    pub(in crate::sharded::tests::team_actors) fn release(&mut self, s: Stalled) -> usize {
+        let Stalled {
+            conn,
+            wire,
+            mut out,
+            actions,
+        } = s;
         assert!(out.try_recv().expect("the stall").is_empty());
         assert!(out.try_recv().is_err(), "nothing got through");
         self.clients.push(Client {
-            conn: ConnectionId(conn),
+            conn,
             wire,
             out,
             actions,

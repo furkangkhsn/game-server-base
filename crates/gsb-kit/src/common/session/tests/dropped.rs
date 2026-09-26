@@ -119,3 +119,50 @@ fn every_room_rearms_what_a_dropped_frame_carried() {
     check("sharded × team", team(false), false);
     check("sharded × team (delta)", team(true), true);
 }
+
+/// A storm on b's channel (every batch dropped), then a batch that gets
+/// through: the paced re-send (its next slot far off) goes out on the
+/// frame right after the resume — in every delta room.
+fn check_resume<R: GameLogic<World>>(name: &str, mut room: R) {
+    let mut world = World::new();
+    let a = room.on_join(&mut world, ConnectionId(1));
+    tick(&mut room, &mut world, 1, &[a.player]);
+    let b = room.on_join(&mut world, ConnectionId(3));
+    let (ap, bp) = (a.player, b.player);
+    tick(&mut room, &mut world, 2, &[ap, bp]);
+    let mut fulls = Vec::new();
+    for n in 3..=20 {
+        let frames = tick_dropping(&mut room, &mut world, n, &[ap, bp], Some((bp, true)));
+        if is_one_shot_full(&frames[1]) {
+            fulls.push(n);
+        }
+    }
+    assert_eq!(fulls, [4, 6, 10, 18], "{name}: paced");
+    let frames = tick(&mut room, &mut world, 21, &[ap, bp]);
+    assert!(!is_one_shot_full(&frames[1]), "{name}: still waiting");
+    room.on_batch_resumed(&mut world, bp); // 21's batch got through
+    let frames = tick(&mut room, &mut world, 22, &[ap, bp]);
+    assert!(is_one_shot_full(&frames[1]), "{name}: released");
+    let frames = tick(&mut room, &mut world, 23, &[ap, bp]);
+    assert!(frames[1].is_none(), "{name}: once");
+}
+
+/// Every delta room releases its paced re-send on the resume.
+#[test]
+fn every_delta_room_resends_on_the_resume() {
+    let g = Greeting::default;
+    check_resume("aoi", AoiRoom::with_game(g(), Grid2::new(20.0)));
+    check_resume(
+        "team (delta)",
+        TeamRoom::with_game(g(), VisionGrid2::<Position>::new(10.0)).with_delta(),
+    );
+    check_resume(
+        "sharded × spatial",
+        ShardedSpatialRoom::with_shard(sharded(g()), Grid2::new(20.0)),
+    );
+    check_resume(
+        "sharded × team (delta)",
+        ShardedTeamRoom::with_shard(sharded(g()), VisionGrid2::new(10.0), fix_lent_pos)
+            .with_delta(),
+    );
+}

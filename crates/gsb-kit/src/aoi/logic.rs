@@ -185,6 +185,12 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         self.baselines.dropped(player, self.tick, snapshot || full);
     }
 
+    /// The channel took a batch again (F11): a re-send the storm
+    /// pacing held back goes out on the next frame.
+    fn on_batch_resumed(&mut self, _world: &mut World, player: PlayerId) {
+        self.baselines.resumed(player);
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         self.on_join_as(world, conn, "")
     }

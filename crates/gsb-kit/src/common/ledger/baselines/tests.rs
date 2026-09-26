@@ -73,40 +73,66 @@ fn a_dropped_keepalive_during_the_wait_escalates() {
     assert!(b.owed(P, 0, 16, || false));
 }
 
-/// Every even step's batch dropped: the pacing escalates the same way
-/// (the delivered odd batches are not an all-clear; here the re-sends
-/// land on even steps from the second one on, and are dropped too) —
-/// and ends once the baseline stood `RESEND_WAIT_MAX` steps past the
-/// last slot.
+/// The core's side of a batch, as the fan-out reports it: `dropped`
+/// with view content, or delivered — the first delivered after a run of
+/// drops is the resume.
+fn fan_out(b: &mut Baselines<u8>, now: u64, dropped: bool, dropping: &mut bool) {
+    if dropped {
+        b.dropped(P, now, true);
+    } else if *dropping {
+        b.resumed(P);
+    }
+    *dropping = dropped;
+}
+
+/// A long stall, then the channel drains: the first batch that gets
+/// through releases the paced re-send — the full rides the very next
+/// frame instead of waiting out the back-off.
 #[test]
-fn alternating_drops_escalate_and_a_quiet_stretch_resets() {
+fn the_first_delivered_batch_releases_the_wait() {
     let mut b = settled();
+    let mut dropping = false;
     let mut sent = Vec::new();
-    for now in 10..=80u64 {
+    for now in 10..=110u64 {
         if b.owed(P, 0, now, || false) {
             sent.push(now);
         }
-        if now % 2 == 0 {
-            b.dropped(P, now, true);
-        }
+        fan_out(&mut b, now, now <= 100, &mut dropping);
     }
-    assert_eq!(sent, [11, 14, 18, 26, 42, 74], "{sent:?}");
+    assert_eq!(sent, [11, 13, 17, 25, 41, 73, 102], "{sent:?}");
+    assert!(b.holds(P));
+}
 
-    // Quiet from 81: the re-send dropped on 74 goes out on 106, the
-    // pacing holds until 106 + `RESEND_WAIT_MAX`, then a drop re-sends
-    // at once.
-    for now in 81..106 {
-        assert!(!b.owed(P, 0, now, || false), "step {now} waits");
+/// Every even step's batch dropped: each delivered batch releases at
+/// most one re-send (here the re-sends land on the dropped even steps
+/// from the second on) — never more than one per batch that gets
+/// through; the pacing ends once the baseline stood `RESEND_WAIT_MAX`
+/// steps past the last slot.
+#[test]
+fn alternating_drops_release_one_resend_per_delivered_batch() {
+    let mut b = settled();
+    let mut dropping = false;
+    let mut sent = Vec::new();
+    for now in 10..=30u64 {
+        if b.owed(P, 0, now, || false) {
+            sent.push(now);
+        }
+        fan_out(&mut b, now, now % 2 == 0, &mut dropping);
     }
-    assert!(b.owed(P, 0, 106, || false));
-    for now in 107..138 {
-        assert!(!b.owed(P, 0, now, || false));
+    assert_eq!(sent, [11, 14, 16, 18, 20, 22, 24, 26, 28, 30], "{sent:?}");
+
+    // Quiet from 31: the full of 30 was dropped (its slot: 62), the
+    // delivered 31 releases it for 32; the pacing ends at 62 + 32.
+    for now in 31..=100u64 {
+        if b.owed(P, 0, now, || false) {
+            sent.push(now);
+        }
+        fan_out(&mut b, now, false, &mut dropping);
+        assert_eq!(b.paced(), usize::from(now < 94), "step {now}");
     }
-    assert_eq!(b.paced(), 1, "still paced at step 137");
-    assert!(!b.owed(P, 0, 138, || false));
-    assert_eq!(b.paced(), 0, "the pacing is over");
-    b.dropped(P, 138, true);
-    assert!(b.owed(P, 0, 139, || false), "at once again");
+    assert_eq!(sent.last(), Some(&32));
+    b.dropped(P, 100, true);
+    assert!(b.owed(P, 0, 101, || false), "at once again");
 }
 
 /// A group change while the re-send waits: still paced (the bound is

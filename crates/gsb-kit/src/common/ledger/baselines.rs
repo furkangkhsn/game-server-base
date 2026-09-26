@@ -20,17 +20,20 @@
 //! otherwise be owed — and sent, and dropped — a full on every tick. So
 //! each drop that takes a baseline pushes the NEXT re-send back:
 //! `1, 2, 4, 8, 16` steps after the 1st … 5th such drop, then
-//! [`RESEND_WAIT_MAX`] steps after every later one — at most six
-//! drop-triggered fulls in the first 63 steps of a storm, then one per
-//! 32 — whatever the delivery pattern (a channel that drops every other
-//! batch escalates the same way). A drop while the player is already
-//! owed one (the re-send is waiting) takes nothing and pushes nothing.
-//! The pacing ends once the player's baseline has stood for
-//! [`RESEND_WAIT_MAX`] steps past its last re-send slot with no drop
-//! taking it: the next drop re-sends at once again. A group full (a
-//! keep-alive) still baselines a waiting player — the pacing only holds
-//! back the private one. The pending re-send is ONE missing entry per
-//! player, never a queue.
+//! [`RESEND_WAIT_MAX`] steps after every later one — while nothing gets
+//! through, at most six drop-triggered fulls in the first 63 steps, then
+//! one per 32. The first batch that DOES get through (the core's
+//! `GameLogic::on_batch_resumed`) waives the wait: the owed full rides
+//! the very next frame instead of waiting out the back-off (a reader
+//! back from a long stall heals at once, not a keep-alive later) — so a
+//! channel that lets some batches through costs at most one re-send per
+//! batch it accepted. A drop while the player is already owed one (the
+//! re-send is waiting) takes nothing and pushes nothing. The pacing ends
+//! once the player's baseline has stood for [`RESEND_WAIT_MAX`] steps
+//! past its last re-send slot with no drop taking it: the next drop
+//! re-sends at once again. A group full (a keep-alive) still baselines a
+//! waiting player — the pacing only holds back the private one. The
+//! pending re-send is ONE missing entry per player, never a queue.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -49,6 +52,8 @@ struct Lost {
     drops: u32,
     /// The first step a one-shot full may go out again.
     not_before: u64,
+    /// A batch got through since the last drop: the wait is waived.
+    released: bool,
 }
 
 /// See the module docs. Bounded by the players: an entry is dropped on
@@ -106,7 +111,11 @@ impl<K: Copy + Eq + Hash> Baselines<K> {
             self.held.insert(player, group);
             return false;
         }
-        if self.lost.get(&player).is_some_and(|l| now < l.not_before) {
+        if self
+            .lost
+            .get(&player)
+            .is_some_and(|l| now < l.not_before && !l.released)
+        {
             return false;
         }
         self.held.insert(player, group);
@@ -123,9 +132,20 @@ impl<K: Copy + Eq + Hash> Baselines<K> {
         let lost = self.lost.entry(player).or_insert(Lost {
             drops: 0,
             not_before: 0,
+            released: false,
         });
         lost.drops = lost.drops.saturating_add(1);
         lost.not_before = now.saturating_add(wait(lost.drops));
+        lost.released = false;
+    }
+
+    /// `player`'s batches go through again (`GameLogic::on_batch_resumed`):
+    /// the waiting re-send is released — it rides the next frame — while
+    /// the escalation is kept for a channel that fills again.
+    pub(crate) fn resumed(&mut self, player: PlayerId) {
+        if let Some(lost) = self.lost.get_mut(&player) {
+            lost.released = true;
+        }
     }
 
     /// `player`'s session ended or restarted: it holds no baseline, and

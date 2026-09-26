@@ -210,6 +210,12 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         self.baselines.dropped(player, self.step, snapshot || full);
     }
 
+    /// The channel took a batch again (F11): a re-send the storm
+    /// pacing held back goes out on the next frame.
+    fn on_batch_resumed(&mut self, _world: &mut World, player: PlayerId) {
+        self.baselines.resumed(player);
+    }
+
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         // One step: the delta ledgers' "previous step" and the tick the
         // `private` seam stamps into one-shot fulls.
