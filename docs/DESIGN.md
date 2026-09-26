@@ -2671,6 +2671,41 @@ biçimleri ve elenen `name` etiketli aile: OPS §3. Varsayılan
 değişmedi: sayaç bildirmeyen mantığın metni önceki kodun ürettiği
 metne bayt bayt sabittir (`metrics::tests::golden`).
 
+**Sınır taşması görünür (BACKLOG F17).** 16'yı aşan adlar düşürülüp
+yalnız kümenin içinde sayılıyor ve aktör bir kez `warn` ediyordu: satırda
+ve Prometheus'ta görünmüyordu (loadgen teli sayıyı GSMC'den beri
+taşıyordu, gösteren yoktu). Artık sayı çekirdeğin kendi anahtarıdır:
+satırda mantığın anahtarlarından sonra `logic_counters_dropped=<n>`,
+Prometheus'ta `gsb_room_logic_counters_dropped{room=…}` (`gauge`),
+loadgen `RESULT`'ında `logic_*` anahtarlarından sonra aynı anahtar.
+Üçü de **yalnız sıfırdan büyükken** basılır: sınır içindeki bir
+mantığın (yani bugünkü her mantığın) metni bayt bayt aynı kalır
+(`metrics::tests::golden` değişmeden geçer). `gauge`: değer, odanın SON
+örneğinde sığmayan ad sayısıdır — statik bir bildirim hatası her örnekte
+aynı sayıyı verir, birikmez; `counter` her raporda bir artan anlamsız
+bir oran üretirdi. Anahtar mantığın ad alanında (`logic_` öneki)
+durduğundan `counters_dropped` adı **ayrılmıştır**:
+`LogicCounter::sum/max("counters_dropped", …)` const değerlendirmede
+derleme hatası, telden çözülen ad reddedilir — bir oyunun sayacı
+çekirdeğin anahtarıyla çakışamaz. Elenenler: (1) *Sıfırken de basmak* —
+her odanın satırına ve her kazıya yeni bir anahtar/aile ekler, altın
+metni ve "sayaç bildirmeyen mantık aynı metni üretir" sözünü bozar.
+(2) *`RoomSample`'a ayrı bir alan* — sayı zaten örnekte `LogicCounters`
+içinde değerle taşınıyor (ve telde); ikinci bir kopya tutarlılık yükü
+olurdu. (3) *`logic_` önekinin dışında bir ad* (ör.
+`dropped_logic_counters=`) — ad ayırmayı gerektirmezdi, ama anahtar
+satırda ve kazıda mantık sayaçlarından kopardı; tek bir ayrılmış ad
+daha ucuz.
+Testler: `metrics::tests::logic` (18 adlı oda: satırın sonu
+`logic_c15=15 logic_counters_dropped=2`, Prometheus'un sonu tek odalı
+gauge ailesi; sınır içindeki odada ikisi de yok),
+`room::tests::logic_counters` (aktörün örneği toplayıcıdan geçip satırda
+anahtarı taşır), `metrics::logic::tests` (ayrılmış ad reddedilir),
+loadgen `report::logic::tests` (RESULT). Mutasyonlar: satır ya da
+Prometheus kolunu kaldırmak, ayırmayı kaldırmak, RESULT kolunu kaldırmak
+yeni testleri; "yalnız sıfırdan büyükken" şartını kaldırmak altın testi
+düşürür.
+
 **Kullanım:** `gsb-server` çalışırken `RUST_LOG=info` → metrik satırları
 logda; `gsb_server::start_server_metrics(cfg, tx)` → raporlar kanaldan
 programatik (yük üreticisi ve testler bu yoldan kullanır). Yük testi

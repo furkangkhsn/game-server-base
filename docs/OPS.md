@@ -112,8 +112,9 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
   `GameLogic::logic_counters` (kit: `Game::counters`) örnek başına bir
   kez hepsini (sıfırlar dahil) koyar. Ad kuralları: 1–32 bayt
   `[a-z0-9_]`, harfle başlar, `_total` ile bitmez (const değerlendirmede
-  derleme hatası). Oda başına en çok **16** ad; fazlası atılır, sayılır
-  ve aktör bir kez `warn` eder. Görünüm:
+  derleme hatası; `counters_dropped` ayrılmış). Oda başına en çok **16**
+  ad; fazlası atılır, sayılır, aktör bir kez `warn` eder ve sayı
+  aşağıdaki taşma anahtarında görünür (F17). Görünüm:
 
   | Yüzey | Biçim |
   |---|---|
@@ -122,6 +123,7 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
   | Prometheus (MAX) | `gsb_room_logic_<ad>{room="r<id>"}`, `gauge` (tepe bir oranın payı değildir) |
   | loadgen teli | `GSMC`: odanın kaydının sonunda sayı, taşma sayısı, sayaç başına ad + kural + değer (help taşınmaz) |
   | loadgen `RESULT` | `game=`'den hemen önce `logic_<ad>=<değer>` — koşunun son katlanmış raporundan, her sayaç kendi kuralıyla katlanmış |
+  | Sınır taşması (F17) — yalnız sıfırdan büyükken | satırda ve `RESULT`'ta mantığın anahtarlarından sonra `logic_counters_dropped=<n>`; Prometheus'ta `gsb_room_logic_counters_dropped{room="r<id>"}`, `gauge` (odanın son örneğinde sığmayan ad sayısı); `counters_dropped` adı mantığa kapalı |
 
   Ad başına aile seçildi, `name` etiketli tek aile
   (`gsb_room_logic_total{name="kills"}`) elendi: tek aile hem `counter`
