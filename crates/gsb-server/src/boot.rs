@@ -15,11 +15,13 @@ use gsb_core::room::RoomConfig;
 
 mod accept;
 mod start;
+mod stop;
 
 pub use start::{
     start_game_server, start_game_server_with, start_server, start_server_metrics,
     start_server_metrics_with, start_server_with,
 };
+pub use stop::StopReport;
 
 /// The composition-root's platform hooks (the base ships the wiring, the
 /// platform ships the behaviour):
@@ -91,7 +93,8 @@ pub(crate) async fn registry_room_status(
 pub struct ServerHandle {
     registry: Mailbox<RegistryMsg>,
     /// One accept task PER listener (all sharing the pipeline below and
-    /// one connection-id sequence). All are aborted on stop.
+    /// one connection-id sequence). Each ends when `stop` closes its
+    /// listener (abort is only the backstop — see `stop`).
     accepts: Vec<JoinHandle<()>>,
     ticker: JoinHandle<()>,
     /// The metrics collector (emits one final report when the ticker's
@@ -100,9 +103,10 @@ pub struct ServerHandle {
     /// The HTTP ops-surface task, when `http_listen` was configured.
     /// Aborted on stop (its listener drops with the aborted future).
     http: Option<JoinHandle<()>>,
-    /// The bound listeners, in config order. `stop` closes each *before*
-    /// aborting its accept task: for the rUDP transport this is what stops
-    /// the shared demux task (a plain drop would not reach it — see
+    /// The bound listeners, in config order. `stop` closes each, which
+    /// ends its accept task (the pending `accept` returns the
+    /// listener-closed error) and, for the rUDP transport, stops the
+    /// shared demux task (a plain drop would not reach it — see
     /// `Listener::close`).
     listeners: Vec<Arc<dyn gsb_net::transport::Listener>>,
     /// The actual bound address of the FIRST listener (useful when binding
@@ -123,33 +127,6 @@ pub struct ServerHandle {
 }
 
 impl ServerHandle {
-    /// Shut the server down: the registry tears down connections and rooms
-    /// (rooms get a control `Shutdown`, processed on their next tick; a
-    /// room with a configured result seam reports it on that shutdown); the
-    /// ticker is aborted, which closes the broadcast and stops any room that
-    /// missed its window; EVERY listener is closed (stopping any per-
-    /// listener transport shared state, e.g. each rUDP demux); every accept
-    /// loop is hard-aborted (documented v1 limitation). The HTTP ops surface
-    /// is aborted with it. The metrics collector is awaited last: it emits
-    /// one final report when the broadcast closes. The teardown ORDER is the
-    /// single-listener order applied across all listeners: doors close
-    /// first, so no new client can connect while the registry is tearing
-    /// the existing ones down.
-    pub async fn stop(self) {
-        let _ = self.registry.send(RegistryMsg::Shutdown).await;
-        if let Some(http) = self.http {
-            http.abort();
-        }
-        self.ticker.abort();
-        for l in &self.listeners {
-            l.close();
-        }
-        for accept in &self.accepts {
-            accept.abort();
-        }
-        let _ = self.metrics.await;
-    }
-
     /// Open a room at runtime (the control plane's lifecycle API, feature
     /// A). **Idempotent**: creating a room that already exists with the
     /// IDENTICAL `config` is a no-op that reports the existing room's

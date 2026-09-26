@@ -203,5 +203,14 @@ async fn handshake_then_frames_flow_both_ways_over_quic() {
     server.await.expect("server task");
 }
 
+/// The door (BACKLOG B16): `close` ends the parked accept.
+#[tokio::test]
+async fn close_ends_the_parked_accept() {
+    let pki = mint_pki("door");
+    let t = Arc::new(transport_for(&pki));
+    let listener = t.bind("127.0.0.1:0".parse().unwrap()).await.expect("bind");
+    crate::transport::door::tests::close_ends_a_parked_accept(listener).await;
+}
+
 mod certs;
 mod slow_reader;

@@ -110,4 +110,7 @@ type QuicWriter = FrameWriter<send::QuicSend>;
 struct QuicListenerHandle {
     endpoint: quinn::Endpoint,
     max_frame_bytes: usize,
+    /// Closed by [`crate::transport::Listener::close`]: ends the pending
+    /// accept, a handshake in flight included (B16).
+    door: crate::transport::Door,
 }

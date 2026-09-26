@@ -26,7 +26,7 @@ pub mod games;
 mod http;
 
 pub use boot::{
-    ServerHandle, ServerHooks, start_game_server, start_game_server_with, start_server,
+    ServerHandle, ServerHooks, StopReport, start_game_server, start_game_server_with, start_server,
     start_server_metrics, start_server_metrics_with, start_server_with,
 };
 pub use config::{

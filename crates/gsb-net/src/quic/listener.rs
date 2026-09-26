@@ -20,6 +20,7 @@ use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
 use crate::quic::*;
 use crate::transport::BoxFuture;
+use crate::transport::Door;
 use crate::transport::Endpoint;
 use crate::transport::Listener;
 use crate::transport::Transport;
@@ -38,6 +39,7 @@ impl Transport for QuicTransport {
             Ok(Arc::new(QuicListenerHandle {
                 endpoint,
                 max_frame_bytes: self.config.max_frame_bytes,
+                door: Door::new(),
             }) as Arc<dyn Listener>)
         })
     }
@@ -45,44 +47,7 @@ impl Transport for QuicTransport {
 
 impl Listener for QuicListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>> {
-        Box::pin(async move {
-            let Some(incoming) = self.endpoint.accept().await else {
-                return Err(io::Error::other("QUIC endpoint closed"));
-            };
-            let peer = incoming.remote_address();
-            // ONE awaited sequence wrapped in a single deadline: handshake
-            // THEN the client's promised bi-stream. The deadline covers
-            // both — a client that completes the handshake and then never
-            // opens a stream is equally able to pin an accept slot. The
-            // deadline fires only while the sequence stays pending (the
-            // pump-timeout idiom — no multiplexing).
-            match tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-                let conn = incoming.await?;
-                let (send, recv) = conn.accept_bi().await?;
-                Ok::<_, quinn::ConnectionError>((send, recv))
-            })
-            .await
-            {
-                Ok(Ok((send, recv))) => {
-                    debug!(%peer, "QUIC connection accepted; bi-stream open");
-                    Ok(self.make_endpoint(send, recv, peer))
-                }
-                Ok(Err(e)) => {
-                    // The client's failure (bad cert, unknown CA, no
-                    // shared ALPN, stream refused). Reported so the accept
-                    // loop can back off briefly; the connection is dropped.
-                    warn!(%peer, error = %e, "QUIC handshake failed; closing");
-                    Err(io::Error::other(format!("QUIC handshake failed: {e}")))
-                }
-                Err(_) => {
-                    warn!(%peer, timeout = ?HANDSHAKE_TIMEOUT, "QUIC handshake timed out; closing");
-                    Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("QUIC handshake exceeded {:?}", HANDSHAKE_TIMEOUT),
-                    ))
-                }
-            }
-        })
+        Box::pin(async move { self.door.admit(self.accept_one()).await })
     }
 
     fn local_addr(&self) -> Option<SocketAddr> {
@@ -90,9 +55,10 @@ impl Listener for QuicListenerHandle {
     }
 
     /// Graceful-shutdown door (see the trait doc): stop accepting — new
-    /// connection attempts are refused from here on — and leave every
-    /// LIVE connection to the actor cascade, exactly like a TCP
-    /// listener's close leaves its accepted sockets alone.
+    /// connection attempts are refused from here on, and the pending
+    /// accept ends (its [`Door`]) — and leave every LIVE connection to
+    /// the actor cascade, exactly like a TCP listener's close leaves its
+    /// accepted sockets alone.
     ///
     /// NOT `Endpoint::close`, which this used to call: it closes every
     /// connection IMMEDIATELY, and an immediate QUIC close abandons the
@@ -107,10 +73,53 @@ impl Listener for QuicListenerHandle {
     /// do (the quinn endpoint driver lives until the last one has).
     fn close(&self) {
         self.endpoint.set_server_config(None);
+        self.door.close();
     }
 }
 
 impl QuicListenerHandle {
+    /// One accept: the next incoming connection, then its handshake and
+    /// the client's bi-stream under one deadline.
+    async fn accept_one(&self) -> io::Result<Endpoint> {
+        let Some(incoming) = self.endpoint.accept().await else {
+            // The endpoint is closed: it will never accept again.
+            return Err(crate::transport::listener_closed());
+        };
+        let peer = incoming.remote_address();
+        // ONE awaited sequence wrapped in a single deadline: handshake
+        // THEN the client's promised bi-stream. The deadline covers
+        // both — a client that completes the handshake and then never
+        // opens a stream is equally able to pin an accept slot. The
+        // deadline fires only while the sequence stays pending (the
+        // pump-timeout idiom — no multiplexing).
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+            let conn = incoming.await?;
+            let (send, recv) = conn.accept_bi().await?;
+            Ok::<_, quinn::ConnectionError>((send, recv))
+        })
+        .await
+        {
+            Ok(Ok((send, recv))) => {
+                debug!(%peer, "QUIC connection accepted; bi-stream open");
+                Ok(self.make_endpoint(send, recv, peer))
+            }
+            Ok(Err(e)) => {
+                // The client's failure (bad cert, unknown CA, no
+                // shared ALPN, stream refused). Reported so the accept
+                // loop can back off briefly; the connection is dropped.
+                warn!(%peer, error = %e, "QUIC handshake failed; closing");
+                Err(io::Error::other(format!("QUIC handshake failed: {e}")))
+            }
+            Err(_) => {
+                warn!(%peer, timeout = ?HANDSHAKE_TIMEOUT, "QUIC handshake timed out; closing");
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("QUIC handshake exceeded {:?}", HANDSHAKE_TIMEOUT),
+                ))
+            }
+        }
+    }
+
     /// Same wiring as TCP/TLS `make_endpoint`: hand the stream halves to
     /// the shared generic framing + pumps. quinn's `RecvStream`/
     /// `SendStream` implement `AsyncRead`/`AsyncWrite`, so NOTHING below

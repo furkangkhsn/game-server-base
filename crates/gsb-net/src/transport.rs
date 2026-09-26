@@ -22,6 +22,9 @@ use gsb_core::id::ConnectionId;
 
 use crate::pump::PumpTimeouts;
 
+pub(crate) mod door;
+pub use door::{Door, is_listener_closed, listener_closed};
+
 /// A boxed, 'static, Send future.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -36,7 +39,12 @@ pub trait Transport: Send + 'static {
 
 /// Accepts peer [`Endpoint`]s.
 pub trait Listener: Send + Sync + 'static {
-    /// Wait for the next peer.
+    /// Wait for the next peer. Once [`Self::close`] has run, the pending
+    /// accept and every later one end with [`listener_closed`] — the
+    /// error an accept loop ends on ([`is_listener_closed`]; every
+    /// in-tree listener keeps this through its [`Door`]). A listener that
+    /// does not is stopped from outside when its loop overruns the stop
+    /// grace (the composition root's backstop).
     fn accept(self: Arc<Self>) -> BoxFuture<'static, std::io::Result<Endpoint>>;
 
     /// The local address this listener is bound to, if applicable.
@@ -45,7 +53,8 @@ pub trait Listener: Send + Sync + 'static {
     }
 
     /// Stop accepting new peers (and, for transports with shared state,
-    /// stop that state too). `&self` (not `self: Arc<Self>`): the caller
+    /// stop that state too): the pending [`Self::accept`] ends with
+    /// [`listener_closed`] (BACKLOG B16 — the accept loop ends on it). `&self` (not `self: Arc<Self>`): the caller
     /// may hold other handles and must not be forced to consume one.
     /// Default: nothing to do — the listener's own close (when its last
     /// handle is dropped) is enough for a plain TCP listener socket.

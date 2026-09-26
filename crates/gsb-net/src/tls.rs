@@ -37,7 +37,7 @@ use gsb_core::id::ConnectionId;
 use crate::framed::FrameReader;
 use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
-use crate::transport::{BoxFuture, Endpoint, Listener, Transport};
+use crate::transport::{BoxFuture, Door, Endpoint, Listener, Transport};
 
 /// How long a client may spend in the TLS handshake before the server
 /// drops the socket. A config-free constant (like the rUDP MTU): long
@@ -73,6 +73,9 @@ struct TlsListenerHandle {
     listener: TcpListener,
     acceptor: TlsAcceptor,
     max_frame_bytes: usize,
+    /// Closed by [`Listener::close`]: ends the pending accept, a
+    /// handshake in flight included (B16).
+    door: Door,
 }
 
 /// Open a PEM file with the path in the error message (a bare `NotFound`
@@ -167,6 +170,7 @@ impl Transport for TlsTransport {
                 listener,
                 acceptor: TlsAcceptor::from(Arc::new(server_config)),
                 max_frame_bytes: self.config.max_frame_bytes,
+                door: Door::new(),
             }) as Arc<dyn Listener>)
         })
     }
@@ -174,41 +178,48 @@ impl Transport for TlsTransport {
 
 impl Listener for TlsListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>> {
-        Box::pin(async move {
-            let (stream, peer) = self.listener.accept().await?;
-            stream.set_nodelay(true)?;
-            // ONE awaited source wrapped in a deadline: the deadline fires
-            // only while the handshake stays pending (the pump-timeout
-            // idiom — no multiplexing).
-            match tokio::time::timeout(HANDSHAKE_TIMEOUT, self.acceptor.accept(stream)).await {
-                Ok(Ok(tls)) => {
-                    debug!(%peer, "TLS handshake completed");
-                    Ok(self.make_endpoint(tls, peer))
-                }
-                Ok(Err(e)) => {
-                    // The client's failure (bad TLS, no shared cipher, a
-                    // plaintext probe hitting this port). Reported so the
-                    // accept loop backs off briefly; the socket is dropped.
-                    warn!(%peer, error = %e, "TLS handshake failed; closing");
-                    Err(io::Error::other(format!("TLS handshake failed: {e}")))
-                }
-                Err(_) => {
-                    warn!(%peer, timeout = ?HANDSHAKE_TIMEOUT, "TLS handshake timed out; closing");
-                    Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("TLS handshake exceeded {:?}", HANDSHAKE_TIMEOUT),
-                    ))
-                }
-            }
-        })
+        Box::pin(async move { self.door.admit(self.accept_one()).await })
     }
 
     fn local_addr(&self) -> Option<SocketAddr> {
         self.listener.local_addr().ok()
     }
+
+    fn close(&self) {
+        self.door.close();
+    }
 }
 
 impl TlsListenerHandle {
+    /// One accept: the socket, then the TLS handshake under its deadline.
+    async fn accept_one(&self) -> io::Result<Endpoint> {
+        let (stream, peer) = self.listener.accept().await?;
+        stream.set_nodelay(true)?;
+        // ONE awaited source wrapped in a deadline: the deadline fires
+        // only while the handshake stays pending (the pump-timeout
+        // idiom — no multiplexing).
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, self.acceptor.accept(stream)).await {
+            Ok(Ok(tls)) => {
+                debug!(%peer, "TLS handshake completed");
+                Ok(self.make_endpoint(tls, peer))
+            }
+            Ok(Err(e)) => {
+                // The client's failure (bad TLS, no shared cipher, a
+                // plaintext probe hitting this port). Reported so the
+                // accept loop backs off briefly; the socket is dropped.
+                warn!(%peer, error = %e, "TLS handshake failed; closing");
+                Err(io::Error::other(format!("TLS handshake failed: {e}")))
+            }
+            Err(_) => {
+                warn!(%peer, timeout = ?HANDSHAKE_TIMEOUT, "TLS handshake timed out; closing");
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("TLS handshake exceeded {:?}", HANDSHAKE_TIMEOUT),
+                ))
+            }
+        }
+    }
+
     /// Same wiring as TCP's `make_endpoint`: split the stream halves and
     /// hand them to the shared generic framing + pumps. The rustls halves
     /// implement `AsyncRead`/`AsyncWrite`, so NOTHING below this point

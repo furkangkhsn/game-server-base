@@ -20,7 +20,7 @@ use tracing::debug;
 use crate::framed::FrameReader;
 use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
-use crate::transport::{BoxFuture, Endpoint, Listener, Transport};
+use crate::transport::{BoxFuture, Door, Endpoint, Listener, Transport};
 
 #[cfg(test)]
 use futures::Sink;
@@ -51,6 +51,8 @@ impl Default for TcpTransport {
 struct TcpListenerHandle {
     listener: TcpListener,
     max_frame_bytes: usize,
+    /// Closed by [`Listener::close`]: ends the pending accept (B16).
+    door: Door,
 }
 
 impl Transport for TcpTransport {
@@ -64,6 +66,7 @@ impl Transport for TcpTransport {
             Ok(Arc::new(TcpListenerHandle {
                 listener,
                 max_frame_bytes: self.max_frame_bytes,
+                door: Door::new(),
             }) as Arc<dyn Listener>)
         })
     }
@@ -77,11 +80,17 @@ type TcpWriter = FrameWriter<OwnedWriteHalf>;
 impl Listener for TcpListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, std::io::Result<Endpoint>> {
         Box::pin(async move {
-            let (stream, peer) = self.listener.accept().await?;
+            let (stream, peer) = self.door.admit(self.listener.accept()).await?;
             stream.set_nodelay(true)?;
             debug!(%peer, "connection accepted");
             Ok(self.make_endpoint(stream, peer))
         })
+    }
+
+    fn close(&self) {
+        // The socket itself closes when the last handle goes (the accept
+        // loop's, once it has ended on this).
+        self.door.close();
     }
 
     fn local_addr(&self) -> Option<std::net::SocketAddr> {

@@ -20,6 +20,7 @@ use gsb_core::id::ConnectionId;
 
 use crate::pump::spawn_pumps;
 use crate::transport::BoxFuture;
+use crate::transport::Door;
 use crate::transport::Endpoint;
 use crate::transport::Listener;
 use crate::transport::Transport;
@@ -72,6 +73,9 @@ pub(super) struct WsListenerHandle {
     listener: TcpListener,
     max_message_bytes: usize,
     mapping: WsMessageMapping,
+    /// Closed by [`Listener::close`]: ends the pending accept, an
+    /// upgrade in flight included (B16).
+    door: Door,
 }
 
 impl Transport for WsTransport {
@@ -86,6 +90,7 @@ impl Transport for WsTransport {
                 listener,
                 max_message_bytes: self.max_message_bytes,
                 mapping: self.mapping,
+                door: Door::new(),
             }) as Arc<dyn Listener>)
         })
     }
@@ -93,38 +98,45 @@ impl Transport for WsTransport {
 
 impl Listener for WsListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>> {
-        Box::pin(async move {
-            let (stream, peer) = self.listener.accept().await?;
-            stream.set_nodelay(true)?;
-            // One awaited source wrapped in a deadline (pump-timeout idiom):
-            // the cap fires only while the handshake stays pending.
-            match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, perform_upgrade(stream)).await {
-                Ok(Ok(upgraded)) => {
-                    debug!(%peer, "WebSocket upgrade completed");
-                    let (read_half, write_half) = upgraded.into_split();
-                    Ok(self.make_endpoint(read_half, write_half, peer))
-                }
-                Ok(Err(e)) => {
-                    warn!(%peer, error = %e, "WebSocket handshake failed; closing");
-                    Err(io::Error::other(format!("WebSocket handshake failed: {e}")))
-                }
-                Err(_) => {
-                    warn!(%peer, timeout = ?WS_HANDSHAKE_TIMEOUT, "WebSocket handshake timed out; closing");
-                    Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("WebSocket handshake exceeded {:?}", WS_HANDSHAKE_TIMEOUT),
-                    ))
-                }
-            }
-        })
+        Box::pin(async move { self.door.admit(self.accept_one()).await })
     }
 
     fn local_addr(&self) -> Option<SocketAddr> {
         self.listener.local_addr().ok()
     }
+
+    fn close(&self) {
+        self.door.close();
+    }
 }
 
 impl WsListenerHandle {
+    /// One accept: the socket, then the upgrade under its deadline.
+    async fn accept_one(&self) -> io::Result<Endpoint> {
+        let (stream, peer) = self.listener.accept().await?;
+        stream.set_nodelay(true)?;
+        // One awaited source wrapped in a deadline (pump-timeout idiom):
+        // the cap fires only while the handshake stays pending.
+        match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, perform_upgrade(stream)).await {
+            Ok(Ok(upgraded)) => {
+                debug!(%peer, "WebSocket upgrade completed");
+                let (read_half, write_half) = upgraded.into_split();
+                Ok(self.make_endpoint(read_half, write_half, peer))
+            }
+            Ok(Err(e)) => {
+                warn!(%peer, error = %e, "WebSocket handshake failed; closing");
+                Err(io::Error::other(format!("WebSocket handshake failed: {e}")))
+            }
+            Err(_) => {
+                warn!(%peer, timeout = ?WS_HANDSHAKE_TIMEOUT, "WebSocket handshake timed out; closing");
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("WebSocket handshake exceeded {:?}", WS_HANDSHAKE_TIMEOUT),
+                ))
+            }
+        }
+    }
+
     /// Same shape as tcp/tls `make_endpoint`: build the pump-facing
     /// reader/writer pair plus the one extra socket-writer task the WS
     /// adapter needs (module docs). Idle-timeout support comes for free —

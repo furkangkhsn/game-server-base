@@ -218,3 +218,17 @@ async fn wrong_ca_fails_the_handshake() {
     assert!(result.is_err(), "client must reject the unknown CA");
     server.await.expect("server sees the failure");
 }
+
+/// The door (BACKLOG B16): `close` ends the parked accept, and one held
+/// in a TLS handshake by a peer that never sends its hello.
+#[tokio::test]
+async fn close_ends_a_parked_accept_and_a_stuck_handshake() {
+    use crate::transport::door::tests::{
+        close_ends_a_parked_accept, close_ends_an_accept_in_its_handshake,
+    };
+    let pki = mint_pki("door");
+    let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let t = Arc::new(transport_for(&pki));
+    close_ends_a_parked_accept(t.clone().bind(any).await.expect("bind")).await;
+    close_ends_an_accept_in_its_handshake(t.bind(any).await.expect("bind")).await;
+}

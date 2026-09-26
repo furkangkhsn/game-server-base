@@ -11,7 +11,7 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::transport::{BoxFuture, Endpoint, Listener, Transport};
+use crate::transport::{BoxFuture, Door, Endpoint, Listener, Transport, listener_closed};
 use crate::udp::*;
 
 /// rUDP transport configuration (set by the composition root from the
@@ -61,6 +61,8 @@ pub(super) struct UdpListenerHandle {
     /// lock, and locks are banned in this workspace).
     end_rx: Receiver<Endpoint>,
     demux: JoinHandle<()>,
+    /// Closed by [`Listener::close`]: ends the pending accept (B16).
+    door: Door,
 }
 
 impl Transport for UdpTransport {
@@ -109,6 +111,7 @@ impl Transport for UdpTransport {
                 sock,
                 end_rx,
                 demux,
+                door: Door::new(),
             }) as Arc<dyn Listener>)
         })
     }
@@ -123,11 +126,21 @@ impl Listener for UdpListenerHandle {
             // scales with traffic). The demux side is non-blocking
             // (`try_send`), so a slow accept loop can never stall the
             // demux (and therefore every other session).
+            // The door ends a pending accept at once; the parked blocking
+            // thread follows when the demux, stopped by the same `close`,
+            // drops the endpoint sender (an endpoint it takes on the way
+            // is dropped — its session was never adopted).
             let rx = self.end_rx.clone();
-            match tokio::task::spawn_blocking(move || rx.recv()).await {
-                Ok(Ok(endpoint)) => Ok(endpoint),
-                Ok(Err(_)) | Err(_) => Err(std::io::Error::other("rUDP demux gone")),
-            }
+            self.door
+                .admit(async move {
+                    match tokio::task::spawn_blocking(move || rx.recv()).await {
+                        Ok(Ok(endpoint)) => Ok(endpoint),
+                        // The demux is gone: this door will not open again.
+                        Ok(Err(_)) => Err(listener_closed()),
+                        Err(e) => Err(std::io::Error::other(format!("rUDP accept: {e}"))),
+                    }
+                })
+                .await
         })
     }
 
@@ -141,6 +154,7 @@ impl Listener for UdpListenerHandle {
         // ends). The per-session writers are not touched here: they exit
         // with their connections (the actor cascade) and release their
         // socket clones on the way.
+        self.door.close();
         self.demux.abort();
     }
 }

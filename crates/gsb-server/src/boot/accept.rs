@@ -91,9 +91,11 @@ pub(super) struct AcceptPipeline {
 /// One listener's accept loop: take the next endpoint, mint a globally
 /// unique connection id, then hand the endpoint to the ordinary pipeline
 /// (pumps → `ConnOpened` → connection actor) — byte-for-byte the flow the
-/// single-listener era ran, just entered from N doors. Runs until the task
-/// is aborted by `ServerHandle::stop` (after `Listener::close` made
-/// `accept` fail fast on transports with shared state).
+/// single-listener era ran, just entered from N doors. Runs until its
+/// listener is closed: `ServerHandle::stop` closes every listener, the
+/// pending `accept` ends with the listener-closed error, and the loop
+/// returns (BACKLOG B16) — `stop` aborts it only as a backstop, for a
+/// listener whose `close` does not end its accept.
 pub(super) async fn run_accept(
     pipeline: AcceptPipeline,
     listener: Arc<dyn gsb_net::transport::Listener>,
@@ -105,6 +107,10 @@ pub(super) async fn run_accept(
         let l = Arc::clone(&listener);
         let mut endpoint = match l.accept().await {
             Ok(endpoint) => endpoint,
+            Err(e) if gsb_net::transport::is_listener_closed(&e) => {
+                info!(%addr, "listener closed; accept loop ends");
+                return;
+            }
             Err(e) => {
                 warn!(%e, "accept error; backing off");
                 // Back off: a persistent error (e.g. EMFILE) must not
