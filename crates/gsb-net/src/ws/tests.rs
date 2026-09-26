@@ -31,6 +31,7 @@ use client::*;
 mod close_frames;
 mod fragmentation;
 mod framing;
+mod going_away;
 mod opaque;
 mod protocol;
 mod queue;

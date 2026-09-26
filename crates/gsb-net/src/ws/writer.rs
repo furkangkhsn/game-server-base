@@ -68,10 +68,15 @@ async fn ws_writer_task(
     // stream the reader queues its failure close first, and the actor's
     // close notice (`ERROR` 9) and any fan-out still in flight land
     // behind it. The close frame IS this door's notice; they are dropped.
+    // Nor does a second close follow the first: after the server's own
+    // teardown close (1001) the client's answering close must not be
+    // echoed (§5.5.1: an endpoint echoes a close only if it did not send
+    // one first) — the reader still queues the echo and the shutdown,
+    // and only the shutdown is acted on.
     let mut close_sent = false;
     'queue: while let Some(out) = rx.recv().await {
         let bytes = match out {
-            WsOut::Game(_) if close_sent => continue,
+            WsOut::Game(_) | WsOut::Control(..) if close_sent => continue,
             WsOut::Game(envelope) => Bytes::from(encode_server_frame(OP_BIN, &envelope)),
             WsOut::Control(op, payload) => {
                 close_sent |= op == OP_CLOSE;
@@ -184,11 +189,20 @@ impl Sink<FrameBody> for WsWriter {
         // already sent one (echo / failure close): a second close frame is
         // noise. The actual socket shutdown happens when every queue end is
         // gone (writer task then shuts the half).
+        //
+        // This close is the SERVER leaving the session (the actor ended:
+        // `stop()`, or a verdict whose `ERROR` frame went out just before),
+        // so it carries 1001 "Going Away" — the status code alone, no
+        // reason text. An empty close frame reads as 1005 ("no status")
+        // on the client, indistinguishable from a peer that said nothing.
         let this = self.get_mut();
         if !this.closing.swap(true, Ordering::SeqCst)
             && let Some(tx) = this.tx.get_ref()
         {
-            let _ = tx.try_send(WsOut::Control(OP_CLOSE, Vec::new()));
+            let _ = tx.try_send(WsOut::Control(
+                OP_CLOSE,
+                CLOSE_GOING_AWAY.to_be_bytes().to_vec(),
+            ));
         }
         Poll::Ready(Ok(()))
     }

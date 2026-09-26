@@ -97,6 +97,12 @@ const READ_CHUNK: usize = 8 * 1024;
 /// RFC 6455 §5.5: control frames carry at most 125 payload bytes.
 const MAX_CONTROL_PAYLOAD: usize = 125;
 
+/// RFC 6455 §7.4.1 status 1001 "Going Away": the close code of the
+/// server's own teardown close (the connection actor ended the session).
+/// The read path's failure closes keep their own codes (1002, 1003,
+/// 1007, 1009).
+const CLOSE_GOING_AWAY: u16 = 1001;
+
 // Frame opcodes (RFC 6455 §5.2).
 const OP_CONT: u8 = 0x0;
 const OP_TEXT: u8 = 0x1;
