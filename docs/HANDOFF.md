@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-893 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+905 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -146,6 +146,14 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**F14 tamam** (RPC-CONTROL-PLANE §3.1, CHANGELOG "F14"): düşen batch'in
+RPC yanıtları çekirdekte `queued`'ın başına dönüyor (oda 4d / shard 6d)
+ve sonraki kabul edilen batch'le tam bir kez gidiyor. Tıkalı bağlantı
+(`dropping`) borcu `max_pending_requests_per_conn`'a ulaşınca
+`refuses_congested` yeni isteği 2a/2c'de yanıtsız reddediyor; sınır cap +
+tick çekimi. Mantık için değişen yok: `private` verilen `responses`'ı her
+tick kodlamalı (zaten öyle).
+
 **F11 tamam** (KIT-ARCHITECTURE §10 "F11", CHANGELOG "F11"): `GameLogic`
 iki no-op kanca kazandı — `on_batch_dropped(world, player, snapshot)` ve
 `on_batch_resumed(world, player)`; oda/shard fan-out'unda o oyuncunun
@@ -153,7 +161,7 @@ iki no-op kanca kazandı — `on_batch_dropped(world, player, snapshot)` ve
 durum tutan yeni bir mantık onu burada yeniden kurmalı (kit: `InputSeq`
 taşınan yuvası, `Baselines::dropped/resumed`). Yavaş okuyucu ölçümü:
 `gsb-loadgen … --stall-ms 10000 --stall-every-ms 15000 --conn-out 4
---write-stall-secs 0 --capture DIR`. Açık: F14 (düşen RPC yanıtları).
+--write-stall-secs 0 --capture DIR`. (F14 kapandı.)
 
 **F8 tamam** (OPS §2, RECONNECT §17, CHANGELOG "F8"): oda config'inin
 tek kaynağı `Config::room_template` (`config/axes/listeners/room.rs`);
@@ -469,6 +477,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 893 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 905 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

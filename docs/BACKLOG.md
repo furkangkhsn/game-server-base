@@ -150,11 +150,11 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F9 Crystal olayları için genel oyun/kit sayaç seam'i (W2-3: kit'in `ShardedTeamRoom::over_budget` sayacı da barındırıcıya ulaşmıyor) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
 | F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
-| F14 **sırada** — Fan-out düşmesi o tick'in RPC yanıtlarını da götürüyor (çekirdek `queued`'ı private kareye boşaltıyor; batch düşerse yanıt kayboluyor — `rpc`'nin "istemci kabul edilmiş isteği asla beklemez" iddiası düşmede tutmuyor, yalnız istemcinin zaman aşımı kalıyor). Öneri: düşmede yanıtları `queued`'a geri koymak (tam bir kez) + fırtınada birikim sınırı | KIT-ARCHITECTURE §10 "F11" (F11-1) |
+| F15 RPC'nin tıkalı-bağlantı retleri (F14 fırtına sınırı) `requests_rejected_conn_cap` kovasında sayılıyor, ayrı metrik yok (RoomSample + Prometheus + loadgen codec'e dokunur) — tetik: operatörün tıkalı ret ile cap retlerini ayırması gerekirse | RPC-CONTROL-PLANE §3.1 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8 ve F11 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

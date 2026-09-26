@@ -5,6 +5,32 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F14 — düşen batch'in RPC yanıtları kaybolmuyor (`core/f14-rpc-replies-on-drop`)
+
+Çekirdeğin kendi yükü, F11'in çekirdek tarafı; hiçbir şey düşmediğinde
+bayt ve yol aynı (RPC-CONTROL-PLANE §3.1, KIT-ARCHITECTURE §10 "F11" F11-1).
+
+- Kural: fan-out (oda 4d / shard 6d) bir batch'i düşürünce, `private`'a
+  verilen RPC yanıtları bağlantının `queued` kuyruğunun başına geri
+  konuyor ve kanalın kabul ettiği ilk batch'le — sonraki yanıtlardan
+  önce, tam bir kez — gidiyor. Yeni kanal/kilit/await/alan yok. Batch'te
+  çekirdeğe ait başka yük yok (kontrol/hata kareleri fan-out'a binmiyor).
+- Fırtına sınırı: tıkalı bağlantı (`RoomConn.dropping`) borcu — kuyruk +
+  taşınan + uçuştaki — `max_pending_requests_per_conn`'a ulaşınca yeni
+  isteği (bozuk zarf dahil) işlemeden ve yanıtlamadan reddediyor
+  (`requests_rejected_conn_cap`; hiçbir şey uygulanmadığı için istemcinin
+  zaman aşımından sonra yeniden denemesi güvenli). Kesin sınır: bağlantı
+  başına borç ≤ cap + bağlantı başı tick çekimi (varsayılan 4 + 16 = 20).
+  Tıkalı olmayan bağlantı hiç reddedilmez.
+- Garanti artık: kabul edilmiş isteğin yanıtı bağlantı boşaldığı anda,
+  tam bir kez ve sırayla gider. İstemci zaman aşımına kalanlar: oturumu
+  önce biten bağlantı (leave, detach — write-stall kapanışı dahil —, göç);
+  fırtına sınırında reddedilen istek; `responses`'ı kodlamayan mantık.
+
+Testler 893 → 905 (+7 oda, +5 shard); önce kırmızı, ajanın 9 mutasyonu
+iki aktörde de yakalandı. Ebeveynin bağımsız mutasyonu (geri konan
+yanıtların sırasını ters çevirmek) 2 testi kırıyor.
+
 ## F11 — fan-out düşme sinyali: tek seferlik durumun yeniden kurulması (`core/f11-drop-signal`)
 
 Çekirdeğe iki kanca, kit'e cevabı; hiçbir şey düşmediğinde bayt aynı,
