@@ -1193,7 +1193,7 @@ trait Transport: Send + 'static {
 trait Listener: Send + Sync + 'static {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>>;
     fn local_addr(&self) -> Option<SocketAddr> { None }
-    fn close(&self) {}   // §9: rUDP demux'ı sonlandırır (TCP: no-op)
+    fn close(&self) {}   // §9: bekleyen accept'i bitirir (B16); rUDP demux'ı da
 }
 struct Endpoint { /* pump görevlerini başlatan tek FnOnce; mailbox'ları taşır */ }
 ```
@@ -2084,7 +2084,10 @@ ServerHandle::stop
       → reader pump: send hatası → çıkar
       → writer pump: kanal kapanır → kuyruktakini (bildirim dahil) yazar
         → socket close (write-stall penceresi altında; QUIC'te ACK beklenir)
-  → accept loop: JoinHandle.abort()   (belgelenmiş tek sert abort)
+  → her listener close(): bekleyen accept "listener kapandı" hatasıyla
+    biter → accept loop kendiliğinden döner (B16); stop() döngüleri tek
+    bir süre sınırı (ACCEPT_STOP_GRACE, 1 sn) altında bekler, aşanı
+    abort eder (geri sigorta; ağaç içi taşımalarda hiç gerekmez)
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
     için EOF'ı bekleyemezdi — artık beklemez); düşerken Ticker klonunu da
     düşürür — broadcast'i kapatan son halka (§9.1)
@@ -2098,9 +2101,63 @@ görevini sonlandırır (socket klonu + endpoint göndericisi düşer;
 writer'lar aktör kaskadıyla çıkar), QUIC'te yeni bağlantıları reddeder
 (`set_server_config(None)`) ama canlıları KESMEZ — `Endpoint::close`
 akıştaki durdurma bildirimini terk ediyordu (§5.6). Kural: `close` canlı
-oturumları kısa kesmez; onlar aktör kaskadıyla, bildirimleriyle biter. Accept loop'un `JoinHandle` ile
-abort edilmesi hâlâ v1'in bilinçli kısıtı (demux kapanınca accept de
-doğal olarak ölür; kapı, per-listener kibar kapatma için duruyor).
+oturumları kısa kesmez; onlar aktör kaskadıyla, bildirimleriyle biter.
+
+**Accept döngüsünün kibar sonu (BACKLOG B16).** Eskiden `stop()`
+listener'ları kapatıp accept görevlerini `JoinHandle::abort` ile
+kesiyordu — kaskadın son sert abort'u. Abort döngüyü herhangi bir
+await'inde keser: `accept` ile aktörün spawn'ı arasındaki
+`registry.send(ConnOpened).await`'te kesilen döngü pump'ları başlamış,
+aktörü doğmamış bir bağlantı bırakabilirdi. Şimdi her ağaç içi
+listener bir **kapı** (`gsb_net::transport::Door`,
+`CancellationToken::run_until_cancelled`) taşır ve `accept`'inin
+tamamını — soket accept'ini ve TLS/WS/QUIC el sıkışmasını — onun
+içinden çalıştırır. `close()` kapıyı kapatır: bekleyen accept ve
+sonrakilerin hepsi `listener_closed()` hatasıyla biter
+(`is_listener_closed` işaretçisinden tanır, türünden değil); accept
+loop bu hatada döner. Döngünün tek await'i yine `accept()`'tir; kapı o
+tek future'ın parçasıdır — pump deyimindeki `timeout(d, read)`'in
+deadline'ı gibi yalnız BİTİREBİLİR, döngüye ikinci bir iş akışı
+vermez. Kestiği şey henüz oturum olmamış bağlantıdır (soket accept'i ya
+da uçuştaki el sıkışma) — kapalı bir kapının zaten reddettiği şey;
+canlı oturumlar kapıyı görmez (B12 kuralı: aktör kaskadı). rUDP'de
+kapı ayrıca bloklayan havuzdaki crossbeam `recv`'ini beklemeden accept'i
+bitirir (demux abort'u endpoint göndericisini düşürünce o iplik de
+çıkar); QUIC'te `set_server_config(None)`'a ek olarak kapanır, uç nokta
+kapanmışsa (`accept` → `None`) da aynı hata döner. `stop()` döngüleri
+tek bir son tarih altında bekler (`ACCEPT_STOP_GRACE` = 1 sn, döngü
+başına değil) ve yalnız aşanı abort eder — kapısı olmayan üçüncü taraf
+bir `Listener` için geri sigorta; `stop()` her koşulda biter (S kuralı
+korunur: bekleme tek bir join'in süre sınırlı beklenişidir). Ne olduğu
+`StopReport`'ta: `accept_loops_ended` / `accept_loops_aborted` (ağaç
+içi taşımalarda 0); abort olursa `warn`.
+
+Elenenler: (1) *Döngüde select ile kapanış jetonu beklemek* — lint ve
+tek-await kuralı; döngü iki kaynağı çoğullamaya başlar. (2) *Kendine
+bağlanıp uyandırmak* (kapanışta listener'ın adresine bir TCP bağlantısı
+açmak) — belirtilmemiş adresin loopback'e eşlenmesine, güvenlik
+duvarına ve backlog'a bağlı; QUIC/UDP'de karşılığı yok. (3) *Dinleyen
+sokete `shutdown(2)`* — Linux'ta accept'i uyandırır, macOS'ta
+`ENOTCONN` döner; ayrıca `socket2` doğrudan bağımlılığı ister ve
+uçuştaki el sıkışmayı kesmez. (4) *İç kabul görevi + kanal* (listener
+kendi görevinde accept edip kanala koyar, `close` o görevi abort eder)
+— abort'u kaldırmaz, listener'ın içine taşır; accept başına bir kanal
+atlaması ekler. (5) *Yalnız soket accept'ini kapıdan geçirmek* — uçuştaki
+TLS/WS el sıkışması `stop()`'u kendi süre sınırına (saniyeler) kadar
+tutardı.
+
+Testler: `gsb-server/tests/accept_stop.rs` — beş kapılı sunucuda
+`stop()` beş döngünün beşini de "kendiliğinden bitti" sayar, 0 abort, <
+0,9 sn; TLS ve WS kapısında sessiz eşin tuttuğu el sıkışma varken de
+aynı. `gsb-net` `transport::door::tests` (+ `tls::tests`,
+`quic::tests`) — her taşımanın `close`'u park etmiş accept'i bitirir,
+sonraki accept de kapalı döner; TLS/WS'te el sıkışmada bekleyen accept
+de. `boot::stop::tests` — geri sigorta: süreyi aşan döngüler tek son
+tarihte abort edilir. Mutasyonlar: döngünün kapalı-hata kolunu
+kaldırmak, TCP/WS/QUIC kapısını kapatmamak ya da TLS/WS accept'ini
+kapıdan geçirmemek sunucu testlerinin ikisini de düşürür (TCP'ninki
+`gsb-net` testini de). rUDP'de kapı kaldırılırsa döngü yine biter (demux
+abort'u alıcıyı kapatır, o yol da `listener_closed` döner) — iki yol.
 
 ### 9.1 Kapanış kilitlenmesi (S turu, BACKLOG §1 satır 4a)
 
@@ -2117,7 +2174,8 @@ yalnızca daha çok eşzamanlı kopuş ürettiği için yüzeye çıkardı.
    görevinin göndericisi düşer, ama registry bir `Ticker` klonu tuttuğu
    için broadcast **açık kalır**; odalar artık tick almaz, yani kontrol
    kanallarını bir daha boşaltmaz.
-3. `stop()`: her listener `close()`, her accept `abort()` — beklemesiz.
+3. `stop()`: her listener `close()`, her accept `abort()` — beklemesiz
+   (B16'dan beri abort yok: `close` döngüyü bitirir, yukarıda).
 4. `stop()`: `metrics.await` — toplayıcı yalnız broadcast `Closed`
    görünce biter; broadcast da ancak registry çıkıp `Ticker`'ını
    düşürünce kapanır. `stop()`'un tamamlanması bu tek zincire bağlı.
@@ -2255,7 +2313,7 @@ loadgen ayırt edici test değil; ayırt eden deterministik testler.
 | Keepalive snapshot'ı (varsayılan 1 Hz) | Son paketi kaybeden istemci kalıcı bayat kalmasın | `keepalive_hz` (tick hızını aşamaz: oda kendi tick hızından hızlı keepalive yapamaz; yüksek değer `KeepaliveRate` ile reddedilir); 0 ile kapatılabilir |
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) + `snap_overflows` sayacı | Payload çekirdekte bölünmez; rUDP'de eşiği aşan kare **taşımada parçalanır** (§6 "MTU"), yani sayaç artık bant genişliği/parçalanma sinyali — kayıp sinyali istemcinin `frag_dropped_incomplete`'i | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
-| Accept loop abort | `Listener::close` rUDP turunda eklendi (demux kapatma); accept abort hâlâ kaskadın son halkası | §9 |
+| ~~Accept loop abort~~ *(kapandı — B16: `close` bekleyen accept'i bitirir, döngü kendiliğinden döner; abort yalnız 1 sn'yi aşan döngüye geri sigorta)* | — | §9 |
 | rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
