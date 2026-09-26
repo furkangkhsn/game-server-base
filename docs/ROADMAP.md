@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1091** (1091/1091 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1107** (1107/1107 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F5 — servislerin açık durdurması** (DESIGN §9.2) — oyun
+Son tur: **B18 — oda başına config override** (OPS §2) — `[rooms.<id>]`
+ile bir oda sunucunun oda anahtarlarından kendi değerlerini alıyor (tek
+katmanlama `RoomTemplate::room`; öncelik düz anahtar → `[rooms.<id>]` →
+admin `tick_hz`; hatalı oda başlatmada red).
+Önceki tur: **F5 — servislerin açık durdurması** (DESIGN §9.2) — oyun
 servisi `RegistryParts::service` ile kaydedilir; `stop()` odaların
 teardown'u bittikten SONRA servise durdurma isteği gönderir, süre sınırlı
 bekler, aşanı abort edip `StopReport`'ta sayar; ekonomi benimsedi.
@@ -829,8 +833,10 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
 - [x] **Kapanma bildirimi** — **KAPANDI** (B12): `stop()`'ta
   istemci en-iyi-çaba ERROR 14 (`SERVER_STOPPING`) alır, kapının
   sonundan önce; beş kapıda testli (DESIGN §5.6).
-- [ ] **Oda bazlı config override** — factory aynı config'i kullanıyor;
-  yüksek yoğunluklu odalar için farklılaşma.
+- [x] **Oda bazlı config override** — **KAPANDI** (B18): `[rooms.<id>]`
+  oda düzeyi sekiz anahtarı oda başına veriyor; tek katmanlama
+  `RoomTemplate::room(id)`'de; admin query'nin `tick_hz`'i üstte;
+  registry'nin reddedeceği oda başlatmayı durdurur (OPS §2).
 - [x] **`gsb-client` yardımcı crate'i** — **KAPANDI** (B19): çerçeve +
   tek `Conn` + oturum adımları + tipli ERROR tek crate'te; loadgen, örnek
   istemci ve sunucu süitleri ona geçti; kopyalardaki iptal-güvensiz okuma

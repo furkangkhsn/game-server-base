@@ -5,6 +5,34 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B18 — oda başına config override (`server/b18-room-overrides`)
+
+Sunucunun her odası aynı `RoomConfig`'i alıyordu; operatör yoğun bir odaya
+ya da bir lobiye farklı oda ayarı veremiyordu.
+
+- `[rooms.<id>]` (nokta yazımı `rooms.7.max_players = 64` de aynı): oda
+  düzeyindeki sekiz anahtar (`tick_hz`, `room_control`, `conn_action`,
+  `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
+  `max_idle_input_secs`, `max_detach_hold_secs`), düz anahtarlarla aynı
+  yazım ve anlam; yazılmayan anahtar sunucunun değerinde kalır. Oyunun
+  tabloları ayrı kalır (oda anahtarları motorun).
+- Tek katmanlama noktası `RoomTemplate::room(id)` — başlangıç odaları,
+  admin `/rooms/open` ve `Config::room_config` aynı odayı kuruyor.
+- Öncelik: çekirdek varsayılanı → düz anahtarlar → `[rooms.<id>]` → admin
+  `tick_hz` query'si (çatışmayı idempotent karşılaştırma 409'la yakalar).
+- Doğrulama: bilinmeyen / oda düzeyi olmayan anahtar ve düz yazılmamış
+  pozitif id ayrıştırmada hata; registry'nin reddedeceği oda başlatmada
+  `ServerError::RoomOverride` — kural çekirdekte tek (`RoomConfig::
+  step_divisor`, registry'nin create'i de onu çağırıyor). `room_count`'un
+  ötesindeki id geçerli (runtime odası), `info` satırı.
+- Varsayılan değişmedi (F8'in alan alan testiyle kilitli); tel baytı aynı.
+- Bulgu F21 (önceden vardı): `conn_action = 0` join'de `mpsc::channel(0)`
+  panik yolu.
+
+Testler 1091 → 1107 (+16); ajanın 14 mutasyonu yakalandı; ebeveynin
+bağımsız mutasyonu (override'daki `max_snapshot_bytes`'ı uygulamamak)
+katmanlama testini kırıyor.
+
 ## F5 — servislerin açık durdurması (`server/f5-service-stop`)
 
 Bir oyun servisi (demo'nun ekonomi servisi) yalnız son göndericisi

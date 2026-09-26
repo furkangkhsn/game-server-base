@@ -84,7 +84,6 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B14 Loadgen kapanışları sebebe göre sınıflamıyor (kod-9 mesajı sözleşmece insan-okunur; sunucu `server_closes{reason}` otorite — DESIGN §5.6 "Loadgen (B14)"); yan not: "pre-auth frame budget" kapanışı `cap_rejected`'a düşüyor | istemci-başına atıf isteyen ölçüm → `Error`'a toplamalı sebep alanı | DESIGN §5.6 |
 | B15 Write-stall artıkları (TLS kuyruğu 64 KiB, uyanma histerezisi, WS'te iki pencere) | — | SECURITY:117, ROADMAP:522 |
 | B17 Admin HTTP: auth/TLS yok, keep-alive yok, makine-okur çıktı yok, profil yok | — (localhost sözleşmesi) | OPS:12-54, SECURITY:269 |
-| B18 Oda başına config override | — | ROADMAP:712 |
 | ~~B20 Autobahn CI işinin ilk koşusu~~ **Push edildi (2026-09-27, kullanıcı kararı):** `main` → `origin/main` (298 commit); CI ilk kez bu yapıda koşuyor | ✅ | HANDOFF, SECURITY §3.7 |
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
@@ -151,8 +150,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
+| F21 **SIRADA (E1 turuyla)** — `conn_action = 0` (düz ya da oda başına) oda aktörünü join'de panikletir (`mpsc::channel(0)`, `room/actor/control/join.rs`); `room_control` `max(1)` ile korunuyor — yüklemede reddetmek ya da kıstırmak | B18 bulgusu |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18 ve F5 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5 ve B18 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
