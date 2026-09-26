@@ -84,7 +84,7 @@ async fn churn_bytes_are_the_frames_on_the_wire() {
         // plays until shortly before it, drops, and sleeps it out.
         deadline: Instant::now() + Duration::from_millis(1500),
         flood: false,
-        kind: gsb_server::TransportKind::Tcp,
+        kind: crate::Transport::Tcp,
         capture: None,
         stall: None,
     };

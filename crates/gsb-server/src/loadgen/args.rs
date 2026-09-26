@@ -32,7 +32,7 @@ impl Args {
             bind: "127.0.0.1:7777".into(),
             metrics_listen: None,
             orchestrate: false,
-            transport: gsb_server::TransportKind::Tcp,
+            transport: crate::Transport::Tcp,
             tls_ca: None,
             tls_server_name: "localhost".into(),
             procs: 1,
@@ -237,15 +237,9 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
             }
             "--transport" => {
                 let s = v()?;
-                args.transport = match s.as_str() {
-                    "tcp" => gsb_server::TransportKind::Tcp,
-                    "udp" => gsb_server::TransportKind::Udp,
-                    other => {
-                        return Err(CliError(format!(
-                            "--transport: expected tcp|udp, got {other}"
-                        )));
-                    }
-                };
+                args.transport = crate::Transport::parse(&s).ok_or_else(|| {
+                    CliError(format!("--transport: expected tcp|udp|ws, got {s}"))
+                })?;
             }
             "--capture" => args.capture = Some(v()?),
             "--capture-clients" => {

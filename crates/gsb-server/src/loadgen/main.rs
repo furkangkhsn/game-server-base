@@ -55,10 +55,12 @@ mod run;
 mod serve;
 mod server;
 mod stats;
+mod transport;
 
 use orchestrate::*;
 use run::*;
 use serve::*;
+use transport::Transport;
 
 use std::time::Duration;
 
@@ -223,10 +225,11 @@ struct Args {
     /// probe for the fairness / drop-attribution guards.
     flood_id: Option<u64>,
     /// The transport the clients speak (and the in-process / served
-    /// server listens on): `--transport tcp|udp` (default `tcp`). On
+    /// server listens on): `--transport tcp|udp|ws` (default `tcp`). On
     /// `udp` the client's `connect_ms` is the rUDP cookie-HANDSHAKE
-    /// latency (challenge + proof), not a TCP handshake.
-    transport: gsb_server::TransportKind,
+    /// latency (challenge + proof), not a TCP handshake; on `ws` it is
+    /// the TCP connect plus the HTTP upgrade's round trip.
+    transport: Transport,
     /// TLS client material (`--tls-ca`, docs/SECURITY.md §2 decision 4):
     /// when set, TCP clients wrap their socket in a rustls handshake that
     /// verifies the server against THIS root. External mode only — the
@@ -325,10 +328,13 @@ Client options:
   --room ID                 room id to join (default 1)
   --stagger-ms MS           client i connects i×ms later (default 0)
   --offset K                first client id (default 0; client i = K+i)
-  --transport tcp|udp       client transport (default tcp). udp = rUDP:
+  --transport tcp|udp|ws    client transport (default tcp). udp = rUDP:
                             stateless cookie handshake, reliable control
                             band, loss-tolerant snapshot band; connect_ms
-                            then measures the handshake
+                            then measures the handshake. ws = WebSocket
+                            (one frame per binary message; the server
+                            gets one ws listener); connect_ms includes
+                            the HTTP upgrade, client bytes the WS framing
   --profile ring|spread|still [demo] movement profile (default ring — the historical
                             clustered layout; spread = uniform over the
                             ±spawn-half map, the sparse MOBA-like layout;

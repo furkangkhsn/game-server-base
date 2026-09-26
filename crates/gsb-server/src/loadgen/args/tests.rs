@@ -18,7 +18,7 @@ fn refused(argv: &[&str]) -> String {
 /// Each kind of refusal, with its message.
 #[test]
 fn a_bad_line_is_an_error_with_its_reason() {
-    let cases: [(&[&str], &str); 12] = [
+    let cases: [(&[&str], &str); 13] = [
         (&["--duration"], "--duration needs a value (try --help)"),
         (
             &["--duration", "x"],
@@ -32,7 +32,7 @@ fn a_bad_line_is_an_error_with_its_reason() {
         ),
         (
             &["--transport", "carrier-pigeon"],
-            "--transport: expected tcp|udp, got carrier-pigeon",
+            "--transport: expected tcp|udp|ws, got carrier-pigeon",
         ),
         (&["--still-frac", "2"], "--still-frac must be in 0..=1"),
         (
@@ -43,6 +43,18 @@ fn a_bad_line_is_an_error_with_its_reason() {
         (&["--capture-clients", "0"], "--capture-clients must be > 0"),
         (&["--conn-out", "0"], "--conn-out must be at least 1"),
         (&["--stall-ms", "0"], "--stall-ms must be > 0"),
+        (
+            &[
+                "--transport",
+                "ws",
+                "--addr",
+                "127.0.0.1:1",
+                "--tls-ca",
+                "ca.pem",
+            ],
+            "--tls-ca with --transport ws: the gsb WebSocket door has no TLS \
+             form (a \"ws\" listener refuses TLS files)",
+        ),
     ];
     for (argv, why) in cases {
         assert_eq!(refused(argv), why, "{argv:?}");
@@ -54,6 +66,19 @@ fn a_bad_line_is_an_error_with_its_reason() {
     );
     assert!(refused(&["--serve", "--metrics-listen", "x:1"]).starts_with("--metrics-listen"));
     assert!(line(&["--addr", "127.0.0.1:7777"]).is_ok());
+    // WebSocket in every mode: in-process, against --addr, served and
+    // orchestrated (the children are told `--transport ws`).
+    for argv in [
+        &["--transport", "ws"][..],
+        &["--transport", "ws", "--addr", "127.0.0.1:7777"],
+        &["--transport", "ws", "--serve"],
+        &["--transport", "ws", "--orchestrate"],
+    ] {
+        let Ok(Cli::Run(args)) = line(argv) else {
+            panic!("{argv:?} is a run");
+        };
+        assert_eq!(args.transport, crate::Transport::Ws, "{argv:?}");
+    }
 }
 
 /// A good line is a run with its knobs; `--help` is a help request.

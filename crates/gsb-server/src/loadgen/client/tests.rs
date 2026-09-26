@@ -58,7 +58,7 @@ async fn the_ca_is_read_once_per_run() {
         }
     });
     for _ in 0..2 {
-        let conn = connect_wire(gsb_server::TransportKind::Tcp, addr, &tls, None)
+        let conn = connect_wire(crate::Transport::Tcp, addr, &tls, None)
             .await
             .expect("the handshake on the shared connector");
         drop(conn);

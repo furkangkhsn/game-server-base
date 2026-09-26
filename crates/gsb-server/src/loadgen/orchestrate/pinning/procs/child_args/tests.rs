@@ -52,6 +52,25 @@ fn both_children_get_the_game() {
     }
 }
 
+/// Both children speak the run's transport: the served server opens
+/// that door, the client children connect through it (B29: `ws` too).
+#[test]
+fn both_children_get_the_transport() {
+    for t in [
+        crate::Transport::Tcp,
+        crate::Transport::Udp,
+        crate::Transport::Ws,
+    ] {
+        let mut args = Args::defaults();
+        args.transport = t;
+        let want = Some(t.to_string());
+        let server = server_args(&args, 7777, 7778, 1);
+        let client = client_args(&args, 10, 0, 7777, 1);
+        assert_eq!(value_of(&server, "--transport").map(str::to_string), want);
+        assert_eq!(value_of(&client, "--transport").map(str::to_string), want);
+    }
+}
+
 /// The demo's own flags go to a demo run's children (the served server
 /// keeps its strategy knobs, the clients their profile and cell size) —
 /// and to no other game's: those children would refuse to start.

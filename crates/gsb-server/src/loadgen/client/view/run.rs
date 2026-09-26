@@ -88,8 +88,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         session::auth_req(&Credentials::named(crate::bot::bot_name(id))),
         session::join_req(p.room),
     );
-    rep.bytes_out += frame_bytes(&wire, auth.op, auth.payload.len());
-    rep.bytes_out += frame_bytes(&wire, join.op, join.payload.len());
+    rep.bytes_out += frame_bytes(&wire, Dir::Out, auth.op, auth.payload.len());
+    rep.bytes_out += frame_bytes(&wire, Dir::Out, join.op, join.payload.len());
     if wire.send_batch(&[auth, join]).await.is_err() {
         return rep;
     }
@@ -119,7 +119,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 next_seq += 1;
                 sent_at.push(now);
                 rep.moves += 1;
-                rep.bytes_out += frame_bytes(&wire, input_op, payload.len());
+                rep.bytes_out += frame_bytes(&wire, Dir::Out, input_op, payload.len());
                 if wire.send(input_op, &payload).await.is_err() {
                     break; // peer gone (rUDP: the writer gave up)
                 }
@@ -146,7 +146,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             Got::Quiet => continue,
             Got::Dead => break,
         };
-        rep.bytes_in += frame_bytes(&wire, op, payload.len());
+        rep.bytes_in += frame_bytes(&wire, Dir::In, op, payload.len());
         if let Some(c) = &mut capture {
             if op == snapshot_op {
                 c.frame(crate::capture::Kind::Snapshot, &payload);
@@ -266,6 +266,18 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         // spin the high-water mark).
         let (flood_op, payload) = p.bot.flood_input();
         match &mut wire {
+            // WebSocket: every frame is its own masked message (fresh
+            // key each), fed unflushed as fast as the socket takes it.
+            Conn::Stream { rx, tx } if rx.is_ws() => {
+                let n = ws_message_bytes(Dir::Out, payload.len());
+                while Instant::now() < p.deadline {
+                    if tx.feed(flood_op, &payload).await.is_err() {
+                        break; // peer gone
+                    }
+                    rep.moves += 1;
+                    rep.bytes_out += n;
+                }
+            }
             // One encoded frame, written unflushed as fast as the socket
             // takes it.
             Conn::Stream { tx, .. } => {
@@ -304,7 +316,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // (Not `session::leave`: this wait counts every frame's bytes and
     // reads past an ERROR, as the measurement always has.)
     let leave = session::leave_req();
-    rep.bytes_out += frame_bytes(&wire, leave.op, leave.payload.len());
+    rep.bytes_out += frame_bytes(&wire, Dir::Out, leave.op, leave.payload.len());
     if wire.send(leave.op, &leave.payload).await.is_ok() {
         let leave_deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < leave_deadline {
@@ -312,7 +324,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             let Ok(Recv::Frame(f)) = wire.recv(timeout).await else {
                 break;
             };
-            rep.bytes_in += frame_bytes(&wire, f.op, f.payload.len());
+            rep.bytes_in += frame_bytes(&wire, Dir::In, f.op, f.payload.len());
             if f.op == op::base::LEAVE_ROOM_RESULT {
                 let _ = LeaveRoomResult::decode(&f.payload[..]);
                 rep.left = true;

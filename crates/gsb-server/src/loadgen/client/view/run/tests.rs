@@ -48,7 +48,7 @@ async fn a_stream_eof_ends_the_client() {
         bot: crate::bot::bot_for(&args),
         deadline: Instant::now() + window,
         flood: false,
-        kind: gsb_server::TransportKind::Tcp,
+        kind: crate::Transport::Tcp,
         capture: None,
         stall: None,
     };

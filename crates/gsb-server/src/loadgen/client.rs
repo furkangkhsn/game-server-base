@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use gsb_client::{Conn, Recv};
-use gsb_protocol::op;
 
+mod accounting;
+mod connect;
 mod stall;
-use stall::tcp_connect;
+pub(crate) use accounting::{Dir, frame_bytes, wire_in_bytes, ws_message_bytes};
+pub(crate) use connect::{TlsOpts, connect_wire};
 pub(crate) use stall::{STALL_RCVBUF, Stall};
 
 mod view;
@@ -97,28 +99,6 @@ pub(crate) struct ClientReport {
     pub(crate) fresh_joins: u64,
 }
 
-/// The client-side TLS material: the connector trusting the `--tls-ca`
-/// root, and the name to expect in the server certificate. `None` =
-/// plaintext TCP. Built ONCE per run ([`TlsOpts::load`]) and cloned into
-/// every client: the CA PEM is read and parsed once, and every
-/// connection shares one rustls client config (the connector is an
-/// `Arc` inside).
-#[derive(Clone)]
-pub(crate) struct TlsOpts {
-    pub(crate) connector: tokio_rustls::TlsConnector,
-    pub(crate) server_name: String,
-}
-
-impl TlsOpts {
-    /// Read and parse the CA PEM at `ca_path` into the run's connector.
-    pub(crate) fn load(ca_path: &str, server_name: String) -> Self {
-        Self {
-            connector: tls_connector(ca_path),
-            server_name,
-        }
-    }
-}
-
 /// Everything one client task needs besides its own id. (One struct
 /// rather than eight scalars — the profile work kept adding fields.)
 #[derive(Clone)]
@@ -137,61 +117,14 @@ pub(crate) struct ClientParams {
     /// bot's flood input in a tight loop until the deadline — the input-flood behaviour
     /// probe for the per-connection pull budget and the drop attribution.
     pub(crate) flood: bool,
-    /// The client's transport (TCP or rUDP; see `connect_wire`).
-    pub(crate) kind: gsb_server::TransportKind,
+    /// The client's transport (TCP, rUDP or WebSocket; see
+    /// `connect_wire`).
+    pub(crate) kind: crate::Transport,
     /// `--capture`: this client's capture file and the game's name
     /// (`None` = not captured — every client of a run without the flag).
     pub(crate) capture: Option<(std::path::PathBuf, &'static str)>,
     /// `--stall-ms`: the slow-reader cycle (`None` = reads as it can).
     pub(crate) stall: Option<Stall>,
-}
-
-/// Build a rustls connector trusting ONLY the CA PEM at `ca_path` (the
-/// `--tls-ca` root; a self-signed test CA works — docs/SECURITY.md §2).
-fn tls_connector(ca_path: &str) -> tokio_rustls::TlsConnector {
-    let pem = std::fs::read_to_string(ca_path)
-        .unwrap_or_else(|e| panic!("cannot read --tls-ca `{ca_path}`: {e}"));
-    let certs = gsb_client::tls::certs_from_pem(&pem)
-        .unwrap_or_else(|e| panic!("malformed certificate PEM in `{ca_path}`: {e}"));
-    gsb_client::tls::connector(certs)
-        .unwrap_or_else(|e| panic!("--tls-ca PEM is not a certificate: {e}"))
-}
-
-/// Connect one wire of the given kind (the transport-specific half of a
-/// client session's birth; shared by the plain and the churn client —
-/// TCP gets `nodelay` and plaintext and TLS share one wire shape
-/// (`gsb_client::Conn::Stream`), rUDP runs its cookie handshake). With
-/// TLS material, `connect_ms` includes the rustls handshake.
-pub(crate) async fn connect_wire(
-    kind: gsb_server::TransportKind,
-    addr: SocketAddr,
-    tls: &Option<TlsOpts>,
-    rcvbuf: Option<u32>,
-) -> std::io::Result<Conn> {
-    Ok(match kind {
-        gsb_server::TransportKind::Udp => gsb_client::connect::udp(addr).await?,
-        gsb_server::TransportKind::Tcp => {
-            let stream = tcp_connect(addr, rcvbuf).await?;
-            match tls {
-                None => gsb_client::connect::tcp_stream(stream),
-                Some(opts) => {
-                    let dns: rustls::pki_types::ServerName<'static> =
-                        opts.server_name.clone().try_into().map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                format!(
-                                    "--tls-server-name `{}` is not a DNS name",
-                                    opts.server_name
-                                ),
-                            )
-                        })?;
-                    // The handshake happens HERE: connect_ms covers it (the
-                    // same convention as the rUDP cookie handshake above).
-                    gsb_client::tls::connect(stream, &opts.connector, dns).await?
-                }
-            }
-        }
-    })
 }
 
 /// What one bounded receive on the wire found. TCP distinguishes death
@@ -216,27 +149,4 @@ pub(crate) async fn recv_wire(wire: &mut Conn, timeout: Duration) -> Got {
 
 pub(crate) async fn send_wire(wire: &mut Conn, op: u16, payload: Vec<u8>) -> std::io::Result<()> {
     wire.send(op, &payload).await
-}
-
-/// The bytes one frame costs on this wire (the client-side byte
-/// accounting: the length-prefixed frame on a stream, the datagram on
-/// rUDP — see [`wire_in_bytes`]).
-pub(crate) fn frame_bytes(wire: &Conn, op: u16, payload_len: usize) -> u64 {
-    if wire.is_udp() {
-        wire_in_bytes(op, payload_len)
-    } else {
-        gsb_client::frame::wire_len(payload_len) as u64
-    }
-}
-
-/// The rUDP datagram size of one frame (client-side byte accounting
-/// mirrors the bytes actually sent: RAW = kind + op + payload; REL =
-/// kind + seq + op + payload).
-pub(crate) fn wire_in_bytes(op: u16, payload_len: usize) -> u64 {
-    let header = if (1..=64).contains(&op) && op != op::base::UDP_ACK {
-        5
-    } else {
-        1
-    };
-    (header + 2 + payload_len) as u64
 }

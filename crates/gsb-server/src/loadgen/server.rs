@@ -77,7 +77,7 @@ pub(crate) async fn start_inprocess(
     vision_radius: f32,
     max_snapshot_bytes: usize,
     spawn_half: f32,
-    transport: gsb_server::TransportKind,
+    transport: crate::Transport,
     overrides: ServerOverrides,
 ) -> Result<InProcessServer, gsb_server::ServerError> {
     let mut cfg = gsb_server::Config {
@@ -90,10 +90,10 @@ pub(crate) async fn start_inprocess(
         team_vision_radius: vision_radius,
         max_snapshot_bytes,
         spawn_half_size: spawn_half,
-        transport,
         game: game.into(),
         ..Default::default()
     };
+    transport.open_door(&mut cfg);
     apply_overrides(&mut cfg, &overrides);
     let (rep_tx, rep_rx) = mpsc::unbounded_channel::<MetricReport>();
     let handle = start_hosted(cfg, Some(rep_tx)).await?;

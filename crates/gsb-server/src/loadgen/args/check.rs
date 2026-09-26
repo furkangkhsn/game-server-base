@@ -65,6 +65,15 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
             window.as_secs_f64() / args.clients as f64 * 1000.0,
         )));
     }
+    // The client half could speak `wss://` (a WS handshake over a TLS
+    // stream), but the server's WebSocket door is plain only: a TLS run
+    // against it would fail every handshake, or measure some other door.
+    // Checked first, in every mode: it is the precise reason.
+    refuse_unless(
+        !(args.tls_ca.is_some() && args.transport == crate::Transport::Ws),
+        "--tls-ca with --transport ws: the gsb WebSocket door has no TLS \
+         form (a \"ws\" listener refuses TLS files)",
+    )?;
     // TLS is an external-client feature this round: there is no way to hand
     // the in-process/served server its cert/key here, so a CA without an
     // external target would silently test plaintext against a plaintext
@@ -76,7 +85,7 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
          TLS config this round (it stays plaintext)",
     )?;
     refuse_unless(
-        !(args.tls_ca.is_some() && args.transport == gsb_server::TransportKind::Udp),
+        !(args.tls_ca.is_some() && args.transport == crate::Transport::Udp),
         "--tls-ca with --transport udp is contradictory: rUDP takes no TLS",
     )?;
     if args.serve && args.clients != 100 && args.addr.is_none() {

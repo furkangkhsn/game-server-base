@@ -221,7 +221,7 @@ pub(crate) fn print_report(
     // retransmits observed; gave_up = a control frame that never landed),
     // and the fragmented game band's (frag_reassembled = over-budget
     // messages rebuilt; frag_dropped = ones lost to a missing fragment).
-    if args.transport == gsb_server::TransportKind::Udp {
+    if args.transport == crate::Transport::Udp {
         println!(
             "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up} \
              frag_reassembled={frag_reassembled} frag_dropped={frag_dropped} hs_retries={hs_retries}",
@@ -233,7 +233,7 @@ pub(crate) fn print_report(
         .max_by_key(|r| r.connect_ms);
     println!(
         "connect{}: p50={}ms p99={}ms slowest={}ms (client #{})",
-        if args.transport == gsb_server::TransportKind::Udp {
+        if args.transport == crate::Transport::Udp {
             " (handshake)"
         } else {
             ""

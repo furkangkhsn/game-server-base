@@ -292,7 +292,7 @@ pub(crate) async fn orchestrate(args: Args) {
         .await
         .expect("probe socket binds");
     loop {
-        let ready = if args.transport == gsb_server::TransportKind::Udp {
+        let ready = if args.transport == crate::Transport::Udp {
             UdpClient::challenge_probe(&probe_sock, server_addr, Duration::from_millis(200)).await
         } else {
             match TcpStream::connect(server_addr).await {

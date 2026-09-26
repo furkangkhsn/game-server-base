@@ -29,10 +29,10 @@ pub(crate) async fn serve(args: Args) {
         team_vision_radius: args.vision_radius,
         max_snapshot_bytes: args.max_snapshot_bytes,
         spawn_half_size: args.server_spawn_half,
-        transport: args.transport,
         game: args.game.into(),
         ..Default::default()
     };
+    args.transport.open_door(&mut cfg);
     // Capacity / lifecycle overrides (same semantics as in-process: an
     // explicit 0 means unlimited / disabled).
     apply_overrides(
