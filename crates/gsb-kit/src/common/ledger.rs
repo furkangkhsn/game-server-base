@@ -34,12 +34,14 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::hash::Hash;
 
 use bytes::{Bytes, BytesMut};
-use gsb_core::id::PlayerId;
 
 use crate::common::{Records, WriteRecord, put_removed, write_full_header, write_snapshot_header};
+
+mod baselines;
+
+pub(crate) use baselines::Baselines;
 
 /// What a group's delta-mode emission wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,49 +218,6 @@ impl<W: Clone + Eq> SetLedger<W> {
     /// the private frames in every member's batch, so it baselined them.
     pub(crate) fn full_sent(&self, step: u64) -> bool {
         self.full_sent == Some(step)
-    }
-}
-
-/// Which group's view each player's SESSION holds a baseline for — the
-/// one-shot private full's decision (the AOI rooms keep the same table
-/// as `conn_view`). Bounded by the players: an entry is dropped on
-/// leave and on resume (a resumed session has no baseline).
-pub(crate) struct Baselines<K> {
-    held: HashMap<PlayerId, K>,
-}
-
-// Not derived: a derive would demand `K: Default`.
-impl<K> Default for Baselines<K> {
-    fn default() -> Self {
-        Self {
-            held: HashMap::new(),
-        }
-    }
-}
-
-impl<K: Copy + Eq + Hash> Baselines<K> {
-    /// Whether `player`, now in `group`, is owed a one-shot private full
-    /// (it has no baseline for that group's view — a join, a resume, a
-    /// group change — and the group's own frame this step, which
-    /// precedes the private frame in the batch, was not a full:
-    /// `group_full`). Records the baseline either way.
-    pub(crate) fn owed(&mut self, player: PlayerId, group: K, group_full: bool) -> bool {
-        if self.held.get(&player) == Some(&group) {
-            return false;
-        }
-        self.held.insert(player, group);
-        !group_full
-    }
-
-    /// `player`'s session ended or restarted: it holds no baseline.
-    pub(crate) fn forget(&mut self, player: PlayerId) {
-        self.held.remove(&player);
-    }
-
-    /// How many sessions hold a baseline (the table's bound, for tests).
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.held.len()
     }
 }
 

@@ -25,6 +25,8 @@ use crate::space::{Grid2, GridPartition2, VisionGrid2};
 use crate::team::{Team, TeamRoom};
 use crate::testing::{FixCodec, FixMig, Fixture, Position, fixture_map};
 
+mod dropped;
+
 /// The fixture, telling each session `[0xA5, its wire id]` — or, with
 /// `empty`, an empty payload (a proto3 message whose fields are all
 /// zero) that must still be sent.

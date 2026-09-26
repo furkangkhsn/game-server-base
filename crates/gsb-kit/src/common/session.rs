@@ -37,6 +37,7 @@ pub(crate) fn emit_private_frame<G: Game>(
     responses: &[RpcReply],
     out: &mut BytesMut,
 ) -> bool {
+    input.frame(player);
     let framed = emit_private(input, player, responses, out);
     let greeted = append_session_payload(game, world, players, input, player, out);
     framed || greeted
@@ -65,6 +66,8 @@ pub(crate) fn emit_private_full<G: Game>(
     responses: &[RpcReply],
     out: &mut BytesMut,
 ) -> bool {
+    input.frame(player);
+    input.carries_full();
     out.put_u8(TAG_SNAPSHOT);
     encode_varint(full.len() as u64, out);
     out.extend_from_slice(full);
@@ -95,7 +98,9 @@ pub(crate) fn append_session_payload<G: Game>(
     put_delimited(out, TAG_GAME, |o| {
         wrote = game.session_private(world, entity, o);
     });
-    if !wrote {
+    if wrote {
+        input.carries_greeting();
+    } else {
         out.truncate(at);
     }
     wrote

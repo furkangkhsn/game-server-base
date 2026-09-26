@@ -278,7 +278,7 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
 
-use crate::common::{CellBook, CellPieces, InputSeq, ParkEntry, ParkPolicy};
+use crate::common::{Baselines, CellBook, CellPieces, InputSeq, ParkEntry, ParkPolicy};
 use crate::game::{Game, Wire};
 use crate::identity::Minter;
 use crate::space::CellSpace;
@@ -324,8 +324,10 @@ pub struct AoiRoom<G: Game, S: CellSpace<Wire<G>>> {
     /// missing or names another cell has no baseline for its current
     /// group's view and gets a one-shot private full (see `private`).
     /// SESSION-scoped content under a stable key: a resume clears it
-    /// (`on_resume`) so the fresh session re-baselines with a full.
-    conn_view: HashMap<PlayerId, S::Cell>,
+    /// (`on_resume`) so the fresh session re-baselines with a full; a
+    /// fan-out drop of the batch that carried view content takes it
+    /// back, paced (`Baselines` — F11).
+    baselines: Baselines<S::Cell>,
     /// The content bookkeeping (buckets, change lists, occupancy and
     /// member baselines, parked removals, born groups) — the shared
     /// engine ([`crate::common::CellBook`]); this room feeds it from the
@@ -361,7 +363,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
             park_ledger: HashMap::new(),
             minter: Minter::sequential(),
             input: InputSeq::default(),
-            conn_view: HashMap::new(),
+            baselines: Baselines::default(),
             book: CellBook::default(),
             tick: 0,
             pieces: CellPieces::default(),

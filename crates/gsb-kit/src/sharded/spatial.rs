@@ -3,12 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
 use crate::codec::RecordCodec;
-use crate::common::{CellBook, CellPieces};
+use crate::common::{Baselines, CellBook, CellPieces};
 use crate::game::{ShardGame, Wire};
 use crate::sharded::*;
 use crate::space::{CellSpace, Partition};
@@ -56,7 +55,7 @@ pub struct ShardedSpatialRoom<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<
     /// full. Cleared on join/resume/migrate-in/migrate-out — a fresh
     /// session or a fresh shard MUST re-baseline (module docs, "Migration
     /// correctness").
-    pub(in crate::sharded) conn_view: HashMap<PlayerId, S::Cell>,
+    pub(in crate::sharded) baselines: Baselines<S::Cell>,
     /// The global tick of the current step (set in `update`).
     pub(in crate::sharded) tick: u64,
     // ── Per-tick piece caches (cleared in `update`, computed lazily in
@@ -78,7 +77,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
             book: CellBook::default(),
             prev_borrowed: HashMap::new(),
             integrated_tick: 0,
-            conn_view: HashMap::new(),
+            baselines: Baselines::default(),
             tick: 0,
             pieces: CellPieces::default(),
             group_full_emitted: HashSet::new(),

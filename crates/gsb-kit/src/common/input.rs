@@ -11,6 +11,8 @@ use prost::Message;
 
 use crate::proto;
 
+mod carried;
+
 /// Per-connection input sequence state (see [`Self::admit`] and
 /// [`emit_private`]).
 ///
@@ -81,6 +83,9 @@ impl InputState {
 #[derive(Debug, Default)]
 pub struct InputSeq {
     states: HashMap<PlayerId, InputState>,
+    /// What the private frame being written carries of the session's
+    /// one-shot state — re-armed when the fan-out drops its batch (F11).
+    carried: carried::Carried,
 }
 
 impl InputSeq {
@@ -111,26 +116,25 @@ impl InputSeq {
         self.states.remove(&player);
     }
 
-    /// `player`'s session state as `(hwm, acked)` — the high-water mark
-    /// and the last reported ack — or `None` when no session is tracked.
-    /// Read, not consumed: what a sharded room carries with a migrating
-    /// player (the entry leaves only when the move commits).
-    pub(crate) fn mark(&self, player: PlayerId) -> Option<(u64, u64)> {
-        self.states.get(&player).map(|st| (st.hwm, st.acked))
+    /// `player`'s session state as `(hwm, acked, greet)` — the
+    /// high-water mark, the last reported ack and whether the game's
+    /// session payload is still owed — or `None` when no session is
+    /// tracked. Read, not consumed: what a sharded room carries with a
+    /// migrating player (the entry leaves only when the move commits).
+    pub(crate) fn mark(&self, player: PlayerId) -> Option<(u64, u64, bool)> {
+        self.states
+            .get(&player)
+            .map(|st| (st.hwm, st.acked, st.greet))
     }
 
     /// Continue `player`'s input session from a carried state (a
-    /// migration arrival): the sequence rule resumes at `hwm`, and a mark
-    /// past `acked` is reported in the next private frame.
-    pub(crate) fn adopt(&mut self, player: PlayerId, hwm: u64, acked: u64) {
-        self.states.insert(
-            player,
-            InputState {
-                hwm,
-                acked,
-                greet: false,
-            },
-        );
+    /// migration arrival): the sequence rule resumes at `hwm`, a mark
+    /// past `acked` is reported in the next private frame, and a session
+    /// payload the source still owed (`greet` — its frame's batch was
+    /// dropped, F11) goes out with it. A migration never STARTS a
+    /// session: nothing the source did not owe is sent.
+    pub(crate) fn adopt(&mut self, player: PlayerId, hwm: u64, acked: u64, greet: bool) {
+        self.states.insert(player, InputState { hwm, acked, greet });
     }
 
     /// Whether `player`'s session payload is owed, consumed: `true` once
@@ -145,10 +149,12 @@ impl InputSeq {
     /// advanced past the last reported ack (and records it as reported).
     fn take_ack(&mut self, player: PlayerId) -> Option<u64> {
         let st = self.states.get_mut(&player)?;
-        (st.hwm > st.acked).then(|| {
-            st.acked = st.hwm;
-            st.hwm
-        })
+        if st.hwm <= st.acked {
+            return None;
+        }
+        let (from, hwm) = (std::mem::replace(&mut st.acked, st.hwm), st.hwm);
+        self.carries_ack(from);
+        Some(hwm)
     }
 }
 

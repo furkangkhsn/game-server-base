@@ -144,6 +144,16 @@ where
         self.emit_private(world, player, *group, responses, out)
     }
 
+    /// A dropped batch (F11): the ack and the session payload its
+    /// private frame carried are owed again, and when it carried view
+    /// content (the group frame, or the one-shot full) the baseline is
+    /// taken back — the next frame re-sends a one-shot full, paced
+    /// against a storm (`Baselines`).
+    fn on_batch_dropped(&mut self, _world: &mut World, player: PlayerId, snapshot: bool) {
+        let full = self.inner.input.dropped(player);
+        self.baselines.dropped(player, self.step, snapshot || full);
+    }
+
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         self.step += 1;
         self.tick = ctx.tick;

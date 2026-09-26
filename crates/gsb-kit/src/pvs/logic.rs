@@ -185,6 +185,14 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         )
     }
 
+    /// A dropped batch (F11): the ack and the session payload its
+    /// private frame carried are owed again (`InputSeq::dropped`); the
+    /// room's group frames are full, self-contained snapshots, so a lost
+    /// one is healed by the next.
+    fn on_batch_dropped(&mut self, _world: &mut World, player: PlayerId, _snapshot: bool) {
+        self.input.dropped(player);
+    }
+
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         crate::common::systems(&mut self.game, world, ctx);
 

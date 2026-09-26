@@ -103,7 +103,7 @@ fn aoi_member_join_npc_cell_born_full() {
         !room.private(&mut world, PlayerId(7), &Cell(2, 0), &[], &mut pbuf),
         "the group's full already baselined the member — no private frame"
     );
-    assert!(room.conn_view.contains_key(&PlayerId(7)));
+    assert!(room.baselines.holds(PlayerId(7)));
 }
 
 /// (b) a join+leave within one tick: the entity never enters

@@ -136,36 +136,33 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         // two table lookups per connection per tick) was a measured
         // slice of the idle floor.
         let c = *group;
-        let baselined = self.conn_view.get(&player).copied() == Some(c);
-        if !baselined {
-            if self.group_full_emitted.contains(&c) {
-                // The group's own full is in this batch (ahead of
-                // this frame): the baseline is established there. The
-                // ack (and any queued RPC answers — rare: a request
-                // answered on the very tick of a join/crossing) still
-                // get their normal frame below.
-                self.conn_view.insert(player, c);
-            } else {
-                // The one-shot private full (one per join/crossing):
-                // the pre-encoded WorldSnapshot bytes in the `Private`
-                // message's `snapshot` oneof, a queued RPC answer on the
-                // SAME frame (the shared frame writer,
-                // `crate::common::emit_private_full`).
-                let full =
-                    self.pieces
-                        .full_view(self.game.codec(), &self.space, &self.book.buckets, &c);
-                self.conn_view.insert(player, c);
-                return crate::common::emit_private_full(
-                    &mut self.game,
-                    world,
-                    &self.player_entity,
-                    &mut self.input,
-                    player,
-                    &full,
-                    responses,
-                    out,
-                );
-            }
+        // A group whose own full is in this batch (ahead of this frame)
+        // establishes the baseline there: the ack (and any queued RPC
+        // answers — rare: a request answered on the very tick of a
+        // join/crossing) still get their normal frame below.
+        let group_full = &self.group_full_emitted;
+        if self
+            .baselines
+            .owed(player, c, self.tick, || group_full.contains(&c))
+        {
+            // The one-shot private full (one per join/crossing, or after
+            // a fan-out drop took the baseline — F11): the pre-encoded
+            // WorldSnapshot bytes in the `Private` message's `snapshot`
+            // oneof, a queued RPC answer on the SAME frame (the shared
+            // frame writer, `crate::common::emit_private_full`).
+            let full =
+                self.pieces
+                    .full_view(self.game.codec(), &self.space, &self.book.buckets, &c);
+            return crate::common::emit_private_full(
+                &mut self.game,
+                world,
+                &self.player_entity,
+                &mut self.input,
+                player,
+                &full,
+                responses,
+                out,
+            );
         }
         crate::common::emit_private_frame(
             &mut self.game,
@@ -178,6 +175,16 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         )
     }
 
+    /// A dropped batch (F11): the ack and the session payload its
+    /// private frame carried are owed again, and when it carried view
+    /// content (the group frame, or the one-shot full) the baseline is
+    /// taken back — the next frame re-sends a one-shot full, paced
+    /// against a storm (`Baselines`).
+    fn on_batch_dropped(&mut self, _world: &mut World, player: PlayerId, snapshot: bool) {
+        let full = self.input.dropped(player);
+        self.baselines.dropped(player, self.tick, snapshot || full);
+    }
+
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {
         self.on_join_as(world, conn, "")
     }
@@ -185,7 +192,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
         // Shared spawn path (input session reset included): deterministic
         // spawn point, fresh stable player + wire identity, player→entity
-        // table. `conn_view` deliberately gets NO entry here: the first
+        // table. `baselines` deliberately gets NO entry here: the first
         // `private` call (this tick's fan-out, or the next tick's)
         // delivers the one-shot full and records the baseline — via the
         // group's own fresh full when the group is born, or via the
@@ -231,7 +238,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
             }
         }
         crate::common::on_leave(&mut self.player_entity, world, player, &mut self.input);
-        self.conn_view.remove(&player);
+        self.baselines.forget(player);
     }
 
     // -- the disconnect policy (see `crate::room::OpenRoom`, the shared
@@ -277,7 +284,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         // under the STABLE key makes `private` deliver a fresh one-shot
         // full (a resume is a new session — same contract as a re-join).
         // This is this strategy's one genuinely session-scoped table.
-        self.conn_view.remove(&player);
+        self.baselines.forget(player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {

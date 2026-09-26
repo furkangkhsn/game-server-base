@@ -110,7 +110,11 @@ fn k2_the_sequence_rule_keeps_its_mark_across_a_migration() {
 #[test]
 fn k3_the_source_forgets_the_input_session_when_the_move_commits() {
     let (mut w0, mut s0, _, _, p, wire) = crossed_with_pending_5();
-    assert_eq!(s0.input.mark(p), Some((5, 3)), "kept until the commit");
+    assert_eq!(
+        s0.input.mark(p),
+        Some((5, 3, false)),
+        "kept until the commit"
+    );
     s0.on_migrate_out(&mut w0, wire);
     assert_eq!(s0.input.mark(p), None, "gone with the player");
 }
@@ -194,4 +198,33 @@ fn the_spatial_composite_carries_the_session_too() {
         .collect();
     assert_eq!(acks, [5], "K1 on the composite");
     assert!(!s1.inner.input.admit(p, 4), "K2 on the composite");
+}
+
+/// F11: what a dropped batch owed — the ack its frame carried, the
+/// session payload it carried — crosses the seam with the session: the
+/// destination sends both, once.
+#[test]
+fn what_a_dropped_frame_owed_is_sent_by_the_destination() {
+    let (mut w0, mut w1) = (World::new(), World::new());
+    let mut s0 = ShardedRoom::new(0, 4, 50.0);
+    let mut s1 = ShardedRoom::new(1, 4, 50.0);
+    let (p, _) = join_at(&mut w0, &mut s0, ConnectionId(1), -1.0);
+    assert!(s0.input.admit(p, 3));
+    assert_eq!(private_ack(&mut w0, &mut s0, p), Some(3));
+    // The fixture has no session payload: mark the greeting as riding
+    // the same frame, as a game's would.
+    s0.input.carries_greeting();
+    s0.on_batch_dropped(&mut w0, p, true);
+    assert_eq!(s0.input.mark(p), Some((3, 0, true)), "both owed again");
+
+    move_to(&mut w0, &s0, p, 1.0);
+    let m = s0.collect_migrations(&mut w0, 1).pop().expect("crossing");
+    s1.on_migrate_in(&mut w1, m.wire, m.state, m.player);
+    assert!(
+        s1.input.take_greeting(p),
+        "the greeting is the destination's"
+    );
+    assert_eq!(private_ack(&mut w1, &mut s1, p), Some(3), "the dropped ack");
+    assert_eq!(private_ack(&mut w1, &mut s1, p), None, "once");
+    assert!(!s1.input.take_greeting(p));
 }

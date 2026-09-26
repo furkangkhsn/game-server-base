@@ -64,7 +64,7 @@ where
         // correctness"): the arrival has no baseline for its new cell's
         // view — clear it so the next private frame is the one-shot full
         // of the local world.
-        self.conn_view.remove(&player);
+        self.baselines.forget(player);
     }
 
     fn on_migrate_out(&mut self, world: &mut World, wire: u64) {
@@ -79,7 +79,7 @@ where
                 self.book.pending_removals.push((entity, member));
             }
             if let Some(player) = self.inner.entity_player.get(&entity).copied() {
-                self.conn_view.remove(&player);
+                self.baselines.forget(player);
             }
         }
         self.inner.on_migrate_out(world, wire);

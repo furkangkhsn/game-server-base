@@ -89,6 +89,11 @@ pub struct ShardInputRecord {
     /// The highest sequence already acked to the client; `hwm > acked`
     /// is an ack the receiving shard still owes.
     pub acked: u64,
+    /// The game's session payload is still owed: the source's frame
+    /// carrying it was in a batch the fan-out dropped (F11), so the
+    /// receiving shard sends it. `false` for every session that was
+    /// told (a migration never starts a session).
+    pub greet: bool,
 }
 
 /// A crystallization pin in transit (CROSS-SHARD §4 layer 4, "C2

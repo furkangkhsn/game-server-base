@@ -106,7 +106,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         if self.delta {
             let t = self.team_slot(team);
             let group_full = self.ledgers[t].full_sent(self.step);
-            if self.baselines.owed(player, team, group_full) {
+            if self.baselines.owed(player, team, self.step, || group_full) {
                 let full = self.ledgers[t].full_frame(
                     self.game.codec(),
                     self.step,

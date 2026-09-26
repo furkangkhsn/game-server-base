@@ -137,7 +137,7 @@ where
             }
         }
         self.inner.on_leave(world, player);
-        self.conn_view.remove(&player);
+        self.baselines.forget(player);
     }
 
     fn ingest(&mut self, world: &mut World, ctx: &TickCtx, actions: &mut Vec<Action>) {
@@ -176,7 +176,7 @@ where
         self.inner.on_resume(world, identity, conn, player, entity);
         // The resumed SESSION has no view baseline: the next private frame
         // delivers a fresh one-shot full (same contract as a re-join).
-        self.conn_view.remove(&player);
+        self.baselines.forget(player);
     }
 
     /// The per-connection private frame: the one-shot FULL view for a
@@ -194,34 +194,31 @@ where
     ) -> bool {
         self.ensure_rolled();
         let c = *group;
-        if self.conn_view.get(&player).copied() != Some(c) {
-            if self.group_full_emitted.contains(&c) {
-                // The group's own full is ahead of this frame in the same
-                // batch: it already baselined the connection.
-                self.conn_view.insert(player, c);
-            } else {
-                // The one-shot private full: pre-encoded WorldSnapshot
-                // bytes inside the Private message's snapshot oneof;
-                // queued RPC answers ride the SAME frame (the shared
-                // frame writer, `crate::common::emit_private_full`).
-                let full = self.pieces.full_view(
-                    self.inner.game.codec(),
-                    &self.space,
-                    &self.book.buckets,
-                    &c,
-                );
-                self.conn_view.insert(player, c);
-                return crate::common::emit_private_full(
-                    &mut self.inner.game,
-                    world,
-                    &self.inner.player_entity,
-                    &mut self.inner.input,
-                    player,
-                    &full,
-                    responses,
-                    out,
-                );
-            }
+        // The group's own full ahead of this frame in the same batch
+        // already baselines the connection.
+        let group_full = &self.group_full_emitted;
+        if self
+            .baselines
+            .owed(player, c, self.tick, || group_full.contains(&c))
+        {
+            // The one-shot private full (or its re-send after a fan-out
+            // drop took the baseline — F11): pre-encoded WorldSnapshot
+            // bytes inside the Private message's snapshot oneof; queued
+            // RPC answers ride the SAME frame (the shared frame writer,
+            // `crate::common::emit_private_full`).
+            let full =
+                self.pieces
+                    .full_view(self.inner.game.codec(), &self.space, &self.book.buckets, &c);
+            return crate::common::emit_private_full(
+                &mut self.inner.game,
+                world,
+                &self.inner.player_entity,
+                &mut self.inner.input,
+                player,
+                &full,
+                responses,
+                out,
+            );
         }
         crate::common::emit_private_frame(
             &mut self.inner.game,
@@ -232,6 +229,16 @@ where
             responses,
             out,
         )
+    }
+
+    /// A dropped batch (F11): the ack and the session payload its
+    /// private frame carried are owed again, and when it carried view
+    /// content (the group frame, or the one-shot full) the baseline is
+    /// taken back — the next frame re-sends a one-shot full, paced
+    /// against a storm (`Baselines`).
+    fn on_batch_dropped(&mut self, _world: &mut World, player: PlayerId, snapshot: bool) {
+        let full = self.inner.input.dropped(player);
+        self.baselines.dropped(player, self.tick, snapshot || full);
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {

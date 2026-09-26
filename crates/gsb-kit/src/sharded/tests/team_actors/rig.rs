@@ -41,14 +41,18 @@ const WAIT: Duration = Duration::from_secs(30);
 type Shard = ShardedTeamRoom<Front, GridPartition2<Position>, VisionGrid2<Position>>;
 type Factory = RoomFactory<World, Team, TeamMig<FixMig>, WirePos>;
 
+mod stall;
+
 /// The room.
 pub(super) struct Rig {
     reg: Mailbox<RegistryMsg>,
     metrics: Inbox<MetricsEvent>,
-    /// Steps each shard has reported.
-    steps: [u64; SHARDS],
+    /// Steps each shard (or the single room) has reported.
+    steps: Vec<u64>,
     /// Members each shard held at its latest sample.
-    pub(super) members: [u32; SHARDS],
+    pub(super) members: Vec<u32>,
+    /// Batches each shard's fan-out dropped (cumulative, latest sample).
+    dropped: Vec<u64>,
     pub(super) clients: Vec<Client>,
     /// The global tick of the latest barrier.
     pub(super) tick: u64,
@@ -87,42 +91,49 @@ fn factory(delta: bool) -> Factory {
     })
 }
 
+/// A live registry over `factory` (keep-alive off) with the room
+/// created: its mailbox and the metrics stream (the step barrier).
+async fn boot<G, St, Sp>(
+    factory: RoomFactory<World, G, St, Sp>,
+) -> (Mailbox<RegistryMsg>, Inbox<MetricsEvent>)
+where
+    G: Eq + std::hash::Hash + Clone + std::fmt::Debug + Send + 'static,
+    St: std::fmt::Debug + Send + 'static,
+    Sp: std::fmt::Debug + Clone + PartialEq + Send + 'static,
+{
+    let (reg, rx) = channel::<RegistryMsg>(4096);
+    let (ticker, _task) = Ticker::spawn(30.0, 64).expect("rate");
+    let (m_tx, metrics) = channel::<MetricsEvent>(1 << 16);
+    tokio::spawn(Registry::new(rx, reg.clone(), factory, ticker, m_tx, None, None, None).run());
+    let (reply, created) = oneshot::channel();
+    let config = RoomConfig {
+        id: ROOM,
+        tick_hz: 30.0,
+        keepalive_hz: 0.0,
+        metrics_cadence_hz: 30.0,
+        ..Default::default()
+    };
+    reg.send(RegistryMsg::CreateRoom { config, reply })
+        .await
+        .expect("registry");
+    created.await.expect("reply").expect("created");
+    (reg, metrics)
+}
+
 impl Rig {
     /// A live registry with the room created; `delta` = the delta mode.
     pub(super) async fn new(delta: bool) -> Self {
-        let (reg, rx) = channel::<RegistryMsg>(4096);
-        let (ticker, _task) = Ticker::spawn(30.0, 64).expect("rate");
-        let (m_tx, metrics) = channel::<MetricsEvent>(1 << 16);
-        tokio::spawn(
-            Registry::new(
-                rx,
-                reg.clone(),
-                factory(delta),
-                ticker,
-                m_tx,
-                None,
-                None,
-                None,
-            )
-            .run(),
-        );
-        let (reply, created) = oneshot::channel();
-        let config = RoomConfig {
-            id: ROOM,
-            tick_hz: 30.0,
-            keepalive_hz: 0.0,
-            metrics_cadence_hz: 30.0,
-            ..Default::default()
-        };
-        reg.send(RegistryMsg::CreateRoom { config, reply })
-            .await
-            .expect("registry");
-        created.await.expect("reply").expect("created");
+        let (reg, metrics) = boot(factory(delta)).await;
+        Self::with(reg, metrics, SHARDS)
+    }
+
+    fn with(reg: Mailbox<RegistryMsg>, metrics: Inbox<MetricsEvent>, actors: usize) -> Self {
         Self {
             reg,
             metrics,
-            steps: [0; SHARDS],
-            members: [0; SHARDS],
+            steps: vec![0; actors],
+            members: vec![0; actors],
+            dropped: vec![0; actors],
             clients: Vec::new(),
             tick: 0,
         }
@@ -221,9 +232,14 @@ impl Rig {
 
     fn sample(&mut self, event: MetricsEvent) {
         if let MetricsEvent::Room(s) = event {
-            let i = (s.room.0 & 0xffff) as usize;
+            let i = if self.steps.len() == 1 {
+                0 // the single room (`stall::Rig::single`)
+            } else {
+                (s.room.0 & 0xffff) as usize
+            };
             self.steps[i] = self.steps[i].max(s.steps);
             self.members[i] = s.members;
+            self.dropped[i] = self.dropped[i].max(s.dropped_frames);
         }
     }
 

@@ -99,7 +99,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
                 // (`on_migrate_out`).
                 let input = player
                     .and_then(|p| self.input.mark(p))
-                    .map(|(hwm, acked)| ShardInputRecord { hwm, acked });
+                    .map(|(hwm, acked, greet)| ShardInputRecord { hwm, acked, greet });
                 Migrating {
                     wire,
                     // What else travels is the game's (`ShardGame::capture`).
@@ -158,7 +158,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
             // sent goes out in this shard's next private frame. Without
             // one (a sender that carried none), a fresh session.
             match input {
-                Some(rec) => self.input.adopt(player, rec.hwm, rec.acked),
+                Some(rec) => self.input.adopt(player, rec.hwm, rec.acked, rec.greet),
                 None => self.input.begin(player),
             }
         }

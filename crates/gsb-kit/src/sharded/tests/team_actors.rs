@@ -10,6 +10,7 @@ use super::*;
 use crate::codec::RecordCodec;
 
 mod client;
+mod dropped;
 mod front;
 mod migration;
 mod rig;

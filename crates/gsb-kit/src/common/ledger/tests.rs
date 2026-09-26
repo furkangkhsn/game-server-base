@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use bytes::BytesMut;
+use gsb_core::id::PlayerId;
 use prost::Message;
 
 use super::*;
@@ -143,13 +144,16 @@ fn the_full_mode_is_the_full_only_frame() {
 fn baselines_owe_one_full_per_new_group() {
     let mut b = Baselines::default();
     let p = PlayerId(7);
-    assert!(b.owed(p, 0u8, false), "a join");
-    assert!(!b.owed(p, 0, false), "baselined");
-    assert!(!b.owed(p, 1, true), "a group change into a full: covered");
-    assert!(!b.owed(p, 1, false));
-    assert!(b.owed(p, 0, false), "back to the first group");
+    assert!(b.owed(p, 0u8, 1, || false), "a join");
+    assert!(!b.owed(p, 0, 2, || false), "baselined");
+    assert!(
+        !b.owed(p, 1, 3, || true),
+        "a group change into a full: covered"
+    );
+    assert!(!b.owed(p, 1, 4, || false));
+    assert!(b.owed(p, 0, 5, || false), "back to the first group");
     b.forget(p);
-    assert!(b.owed(p, 0, false), "a resumed session");
+    assert!(b.owed(p, 0, 6, || false), "a resumed session");
 }
 
 mod rate;
