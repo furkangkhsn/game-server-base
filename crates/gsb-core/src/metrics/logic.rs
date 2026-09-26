@@ -22,7 +22,10 @@
 //! a value put beyond the bound is dropped and counted
 //! ([`LogicCounters::dropped`]; the actor warns once). The set of names
 //! is static per game, so the bound is a design limit hit in the first
-//! test run, not a load condition.
+//! test run, not a load condition. The count is the core's own key on
+//! both renderings — `logic_counters_dropped=` on the line, the gauge
+//! `gsb_room_logic_counters_dropped` — present only while non-zero, so a
+//! logic within the bound renders exactly what it did before (F17).
 //!
 //! **One name, one counter.** A name put twice in one set (a composite
 //! and its game both reporting it) is folded by its rule — the same
@@ -31,7 +34,7 @@
 
 mod check;
 
-use check::{ends_with_total, valid_help};
+use check::{ends_with_total, is_reserved, valid_help};
 
 /// The most logic counters one room (or shard) reports. The kit's
 /// crystallization uses six; the rest is the game's.
@@ -67,8 +70,9 @@ impl LogicCounter {
     /// A cumulative count ([`LogicFold::Sum`]). Panics — at compile time
     /// in a `const` item — unless `name` is 1–[`LOGIC_NAME_MAX`] bytes of
     /// `[a-z0-9_]`, starts with a letter and does not end in `_total`
-    /// (the exposition adds that suffix), and `help` is one line without
-    /// backslashes.
+    /// (the exposition adds that suffix), is not `counters_dropped` (the
+    /// core's overflow key, [`LogicCounters::dropped`]), and `help` is one
+    /// line without backslashes.
     pub const fn sum(name: &str, help: &'static str) -> Self {
         Self::declare(name, help, LogicFold::Sum)
     }
@@ -87,7 +91,7 @@ impl LogicCounter {
         match Self::parse(name, help, fold) {
             Some(c) => c,
             None => panic!(
-                "a logic counter's name is 1-32 bytes of [a-z0-9_], starts with a letter and does not end in _total"
+                "a logic counter's name is 1-32 bytes of [a-z0-9_], starts with a letter, does not end in _total and is not counters_dropped"
             ),
         }
     }
@@ -110,7 +114,7 @@ impl LogicCounter {
             out[i] = c;
             i += 1;
         }
-        if ends_with_total(b) {
+        if ends_with_total(b) || is_reserved(b) {
             return None;
         }
         Some(Self {

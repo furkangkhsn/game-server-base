@@ -153,4 +153,13 @@ async fn names_over_the_bound_are_dropped_counted_and_warned_once() {
     let w = warns.try_recv().expect("a warning");
     assert!(w.contains("more counters than a sample holds"), "{w}");
     assert!(warns.try_recv().is_err(), "once, not every sample");
+    // And the count reaches the metrics line as the core's key (F17).
+    let mut acc = crate::metrics::MetricAccumulator::default();
+    acc.apply(MetricsEvent::Room(s));
+    let lines = acc.report(s.emit_at).render();
+    assert!(
+        lines[0].ends_with(" logic_counters_dropped=1"),
+        "{}",
+        lines[0]
+    );
 }

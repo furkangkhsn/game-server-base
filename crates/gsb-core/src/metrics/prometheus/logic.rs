@@ -48,11 +48,37 @@ pub(super) fn render(out: &mut String, rooms: &[RoomReport]) {
             let _ = writeln!(out, "{name}{{room=\"r{room}\"}} {v}");
         }
     }
+    render_dropped(out, rooms);
+}
+
+/// The bound's overflow (F17): one gauge line per room whose latest
+/// sample dropped values, and no family at all while none did (a logic
+/// within the bound keeps its exposition byte for byte). A gauge: it is
+/// how many names did not fit in the room's latest sample — a static
+/// declaration mistake repeats it every sample, it does not accumulate.
+fn render_dropped(out: &mut String, rooms: &[RoomReport]) {
+    let mut header = false;
+    for r in rooms.iter().filter(|r| r.logic.dropped() > 0) {
+        if !header {
+            header = true;
+            out.push_str(
+                "# HELP gsb_room_logic_counters_dropped Logic counter values the room's latest sample dropped: names beyond the per-room bound of 16.\n\
+                 # TYPE gsb_room_logic_counters_dropped gauge\n",
+            );
+        }
+        let _ = writeln!(
+            out,
+            "gsb_room_logic_counters_dropped{{room=\"r{}\"}} {}",
+            r.room.0,
+            r.logic.dropped()
+        );
+    }
 }
 
 /// `gsb_room_logic_<name>_total` for a SUM, `gsb_room_logic_<name>` for
 /// a MAX (a gauge carries no `_total`). The name's own rules (no
-/// `_total` suffix) keep the two forms from colliding.
+/// `_total` suffix; not `counters_dropped`) keep the two forms from
+/// colliding with each other and with the overflow gauge.
 fn family_name(c: &LogicCounter) -> String {
     match c.fold() {
         LogicFold::Sum => format!("gsb_room_logic_{}_total", c.name()),

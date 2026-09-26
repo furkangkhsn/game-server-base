@@ -11,15 +11,21 @@
 use gsb_core::metrics::LogicCounters;
 
 /// ` logic_<name>=<value>` per counter, in the order the logic put
-/// them; empty without a report or without counters.
+/// them, then ` logic_counters_dropped=<n>` while the bound dropped any
+/// (F17, the server line's key); empty without a report or without
+/// counters.
 pub(crate) fn logic_segment(total: Option<&LogicCounters>) -> String {
     total
         .map(|logic| {
-            logic
+            let mut seg: String = logic
                 .slots()
                 .iter()
                 .map(|s| format!(" logic_{}={}", s.counter.name(), s.value))
-                .collect()
+                .collect();
+            if logic.dropped() > 0 {
+                seg.push_str(&format!(" logic_counters_dropped={}", logic.dropped()));
+            }
+            seg
         })
         .unwrap_or_default()
 }
@@ -37,6 +43,18 @@ mod tests {
         assert_eq!(
             logic_segment(Some(&set)),
             " logic_crystal_moves=12 logic_crystal_fights_peak=3"
+        );
+    }
+
+    /// The bound's overflow follows the counters, only while non-zero.
+    #[test]
+    fn an_overflow_is_one_more_key_after_the_counters() {
+        let mut set = LogicCounters::new();
+        set.put(&LogicCounter::sum("kills", ""), 4);
+        set.add_dropped(2);
+        assert_eq!(
+            logic_segment(Some(&set)),
+            " logic_kills=4 logic_counters_dropped=2"
         );
     }
 

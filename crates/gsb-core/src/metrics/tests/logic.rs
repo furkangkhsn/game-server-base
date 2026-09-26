@@ -116,6 +116,51 @@ fn each_name_is_one_family_with_its_help_and_type() {
     assert!(!out.contains("room=\"r2\"} 4"), "r2 reports nothing");
 }
 
+/// A logic over the bound (F17): what the bound dropped is the core's
+/// own key after the logic's — `logic_counters_dropped=` on the line,
+/// the gauge `gsb_room_logic_counters_dropped` in the exposition — for
+/// the room that dropped values only; a room within the bound shows
+/// neither (the pinned text is untouched: `golden`).
+#[test]
+fn an_overflow_is_visible_on_both_renderings_only_while_non_zero() {
+    let mut acc = MetricAccumulator::default();
+    let t = Instant::now();
+    let names: Vec<String> = (0..LOGIC_COUNTERS_MAX + 2)
+        .map(|i| format!("c{i}"))
+        .collect();
+    let mut s = room_sample(RoomId(1), t, 10);
+    for (i, n) in names.iter().enumerate() {
+        s.logic.put(
+            &LogicCounter::parse(n, "", LogicFold::Sum).unwrap(),
+            i as u64,
+        );
+    }
+    assert_eq!(s.logic.dropped(), 2);
+    acc.apply(MetricsEvent::Room(s));
+    acc.apply(MetricsEvent::Room(sample_with(2, t, &[(KILLS, 1)])));
+    let r = acc.report(t);
+
+    let lines = r.render();
+    assert!(
+        lines[0].ends_with(" logic_c15=15 logic_counters_dropped=2"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[1].ends_with(" logic_kills=1"), "{}", lines[1]);
+
+    let prom = r.render_prometheus();
+    assert!(
+        prom.ends_with(
+            "# HELP gsb_room_logic_counters_dropped Logic counter values the room's latest \
+             sample dropped: names beyond the per-room bound of 16.\n\
+             # TYPE gsb_room_logic_counters_dropped gauge\n\
+             gsb_room_logic_counters_dropped{room=\"r1\"} 2\n"
+        ),
+        "{prom}"
+    );
+    assert_eq!(prom.matches("gsb_room_logic_counters_dropped{").count(), 1);
+}
+
 /// The exposition with counters is the pinned text plus the logic
 /// families appended, and the lines are the pinned ones plus the keys:
 /// the seam adds, it never moves a core line.

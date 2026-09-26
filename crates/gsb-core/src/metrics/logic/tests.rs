@@ -36,6 +36,7 @@ fn only_lowercase_snake_names_that_fit_are_valid() {
         "kills=1",
         "kills-2",
         "kills_total",
+        "counters_dropped",
         "caf\u{e9}",
     ] {
         assert!(
@@ -45,7 +46,14 @@ fn only_lowercase_snake_names_that_fit_are_valid() {
     }
     let too_long = "a".repeat(LOGIC_NAME_MAX + 1);
     assert!(LogicCounter::parse(&too_long, "", LogicFold::Sum).is_none());
-    for good in ["k", "kills", "crystal_moves", "war_kills_2", "totals"] {
+    for good in [
+        "k",
+        "kills",
+        "crystal_moves",
+        "war_kills_2",
+        "totals",
+        "counters_dropped_2",
+    ] {
         assert!(
             LogicCounter::parse(good, "", LogicFold::Sum).is_some(),
             "{good}"

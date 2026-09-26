@@ -127,6 +127,11 @@ impl MetricReport {
             for s in r.logic.slots() {
                 let _ = write!(line, " logic_{}={}", s.counter.name(), s.value);
             }
+            // Then how many values the bound dropped (F17) — only while
+            // there are any, so a logic within the bound keeps its line.
+            if r.logic.dropped() > 0 {
+                let _ = write!(line, " logic_counters_dropped={}", r.logic.dropped());
+            }
             lines.push(line);
         }
         let n = &self.net;
