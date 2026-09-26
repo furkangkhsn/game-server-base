@@ -107,9 +107,10 @@ message HeartbeatAck {
 //   readable `message` (always populated), do not retry in a loop, and do
 //   not guess it onto a known code's decision. Whether the connection
 //   survives is NEVER inferred from the code — the transport reports
-//   that; only ERROR_CODE_SERVER_CLOSED and ERROR_CODE_ROOM_DESTROYED
-//   are followed by a close, and a client that trusts the socket handles
-//   a future closing code correctly without knowing it.
+//   that; only ERROR_CODE_SERVER_CLOSED, ERROR_CODE_ROOM_DESTROYED and
+//   ERROR_CODE_SERVER_STOPPING are followed by a close, and a client that
+//   trusts the socket handles a future closing code correctly without
+//   knowing it (which is exactly how a client older than 14 handles 14).
 //
 //   ERROR_CODE_UNSPECIFIED (0) exists only because proto3 requires a zero
 //   value. A gsb server NEVER sends it: the Rust mappings
@@ -123,7 +124,9 @@ message HeartbeatAck {
 //   ERROR_CODE_UNKNOWN_OPCODE and charged to the violation budget.
 //
 // Adding a code is additive (a new number, no field change) — see 12,
-// added for the RECONNECT round.
+// added for the RECONNECT round, and 14 — and it is NOT a protocol
+// version bump (see `PROTOCOL_VERSION`): the rule above is what makes an
+// older client compatible with it.
 enum ErrorCode {
   // Never sent. See the forward-compatibility rule above.
   ERROR_CODE_UNSPECIFIED = 0;
@@ -165,6 +168,15 @@ enum ErrorCode {
   // client must be rebuilt. The `message` names both versions. See
   // `Auth.protocol_version` and `docs/DESIGN.md` §5.5.
   ERROR_CODE_PROTOCOL_VERSION = 13;
+  // The server process is stopping (`ServerHandle::stop`): this is not a
+  // verdict on the session. The connection is closed right after this
+  // frame and nothing on this server survives the stop — a parked entity
+  // included, so a resume against this address will not find it.
+  // Reconnect later, or elsewhere; retrying immediately in a loop is
+  // pointless. Best effort: a client that is not reading, or whose
+  // outbound queue is full, may get only the close (docs/DESIGN.md
+  // §5.6).
+  ERROR_CODE_SERVER_STOPPING = 14;
 }
 
 // Server error, sent as a response to the message that caused it (or
