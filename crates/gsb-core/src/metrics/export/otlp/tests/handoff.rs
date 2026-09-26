@@ -38,6 +38,27 @@ fn only_a_due_report_is_handed_on() {
     assert_eq!(second.report.emitted_at, t0 + Duration::from_secs(10));
 }
 
+/// The push slots sit on a fixed grid from the first report: a report
+/// a hair late does not push the next slot back, so a later report a
+/// hair early for the drifted slot but on time for the grid still goes
+/// (due-from-the-report would skip it and stretch the cadence).
+#[test]
+fn the_push_slots_keep_a_fixed_grid() {
+    let (mut e, mut p) = exporter(10);
+    let t0 = Instant::now();
+    let ms = Duration::from_millis;
+    let mut pushed = Vec::new();
+    for at in [t0, t0 + ms(10_050), t0 + ms(20_010), t0 + ms(30_000)] {
+        let mut r = report_at(t0, 0);
+        r.emitted_at = at;
+        e.export(&r);
+        if let Ok(b) = p.rx.try_recv() {
+            pushed.push(b.report.emitted_at - t0);
+        }
+    }
+    assert_eq!(pushed, [ms(0), ms(10_050), ms(20_010), ms(30_000)]);
+}
+
 /// The push task is busy (nothing drains the one slot): the next due
 /// reports are dropped and counted, never queued behind it; once the
 /// slot frees, the next due report gets through carrying the count.
