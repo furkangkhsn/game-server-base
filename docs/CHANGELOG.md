@@ -5,6 +5,38 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B31 — el sıkışma accept döngüsünün dışında (`net/b31-handshake-off-accept`)
+
+WS, TLS ve QUIC kapısı el sıkışmayı `accept()`'in içinde yapıyordu;
+sunucunun accept döngüsü onları sırayla bekliyordu: yükseltme göndermeyen
+TEK bir soket kapıyı 10 sn kilitliyor (20 istemcinin connect p50'si 9612
+ms — hizmet engelleme), bağlanma fırtınasında backlog taşıyor, başarısız
+el sıkışma döngüyü 100 ms geri çekiyordu (B29'un bulgusu).
+
+- Her el sıkışan kapının kabul görevi ham bağlantıyı alır ve bağlantı
+  başına bir el sıkışma görevi başlatır (tek await: kapı ⊃ 10 sn ⊃ el
+  sıkışma); biten uç nokta kuyrukla `accept`'e gelir — `Listener::accept`'in
+  şekli değişmedi (`gsb_net::transport::intake`).
+- Uçuştaki el sıkışma kapı başına sunucunun unauthed cap'iyle sınırlı
+  (vars. 25 000; yeni config anahtarı yok — el sıkışma aşaması sonraki
+  aşamadan ucuza tüketilemesin); sınır üstündeki bağlantı hemen kapanır
+  (QUIC: `refuse`) ve sayılır, kuyruğa girmez. Yuva, accept döngüsü uç
+  noktayı alana dek tutulur.
+- `close()` uçuştaki el sıkışmaları da keser (B16 sözleşmesi korunur,
+  `StopReport` 0 abort).
+- Sayaçlar: `Listener::handshake_stats()` (`in_flight/completed/refused/
+  timed_out/failed`) + kabul görevinin kapanış özeti. Davranış değişikliği:
+  başarısız el sıkışma artık accept hatası değil — sayılır ve warn basar.
+- Ölçüm (release, önce/sonra dönüşümlü): sessiz soket + 20 WS istemcisi
+  connect p50/p99 9612/9612 → 0/0 ms; orkestre 500 WS 1057/1457 → 34/1075
+  ms (TCP değişmedi). Tel baytı değişmedi, yeni bağımlılık yok.
+- Yan bulgu: `loadgen_games::loadgen_drives_the_mmo` CPU yükü altında
+  kırılgan (`shard_members` toplamı N+1) — önceki kodda da (F18).
+
+Testler 1049 → 1071 (+22); dokuzu eski kodda kırmızıydı; ajanın 13
+mutasyonu yakalandı. Ebeveynin bağımsız mutasyonu (sınırı bir fazla
+gevşetmek) 5 testi kırıyor.
+
 ## Küçük paket 3 — B6, B16, F15, F16, F17 (`core/small-bundle-3`)
 
 - **B6 — aktörü ölmüş rUDP oturumu hemen gider** (DESIGN §6 "Aktörü ölmüş

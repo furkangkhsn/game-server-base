@@ -90,8 +90,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
 | B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
-| B31 **SIRADA — güvenlik/erişilebilirlik:** WS (ve TLS) kapısı el sıkışmayı `accept()` içinde yapıyor; accept döngüsü sırayla bekliyor: bağlanma fırtınasında backlog taşıyor (orkestre 500 WS connect p50 ~1065 ms ↔ TCP 17–20 ms), yükseltme göndermeyen TEK soket kapıyı `WS_HANDSHAKE_TIMEOUT` (10 sn) kilitliyor, başarısız el sıkışma döngüyü 100 ms geri çekiyor. Yön: el sıkışmayı bağlantı başına görevde, sınırlı eşzamanlılıkla (pre-auth sınırına bağlı) | — (bugün yanlış; kapı herkese açılmadan önce şart) | DESIGN §5.7 "Loadgen WS modu (B29)" |
-| B32 Orkestre demo 500'de katılma fırtınasında `dropped` > 0 (TCP 116, WS 14–17) | ölçümlerde tekrar görülürse | DESIGN §5.7 |
+| B32 Orkestre demo 500'de katılma fırtınasında `dropped` > 0 (TCP 116–123; WS B31'den önce 10–29, sonra 0 — iki çiftten nedensellik çıkarılmaz) | ölçümlerde tekrar görülürse | DESIGN §5.7 |
 | B33 HTTP ops accept döngüsü hâlâ `http.abort()` ile duruyor (B16'nın `Door`'u yalnız oyun kapılarında) | ops yüzeyinin kibar kapanışı gerekirse | DESIGN §9 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
@@ -125,6 +124,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | D8 Ticket odası bağlantı ömrü boyunca sabit | — | RPC-CONTROL-PLANE:467 |
 | D9 Conn tarafında RPC kapısı | — | RPC-CONTROL-PLANE:476 |
 | D10 Bağlantı başına RPC geçmişi | — | RPC-CONTROL-PLANE:465 |
+| D11 Kaynak adres başına el sıkışma sınırı (B31'in sınırı kapı başına: tek kaynak hâlâ bütün yuvaları tutabilir — ama artık yalnız cap kadar soketle) | kapı herkese açılırken ya da gözlenen saldırı | SECURITY §4.3, §6 |
 
 ### E. Kullanıcı kararı bekleyenler (tek başına verilmez)
 
@@ -149,8 +149,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
+| F18 **SIRADA** — `loadgen_games::loadgen_drives_the_mmo` CPU yükü altında kırılgan: RESULT `shard_members` toplamı N+1 (8 botta 3,2,2,2) — muhtemelen göç sırasında bir bot iki shard'da sayılıyor; önceki kodda da (30 süreçlik CPU yükünde 3/10). Sayaç mı yanlış, test mi — araştırılacak | B31 yan bulgusu |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17 kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31 kendi turunda kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
