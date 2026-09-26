@@ -137,13 +137,15 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             .deadline
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(250));
-        // Anything but a frame (a quiet window, TCP's EOF or refused
-        // frame, an rUDP socket error) loops: the deadline, or a failed
-        // send, ends the run.
-        let Ok(Recv::Frame(f)) = wire.recv(timeout).await else {
-            continue;
+        // A quiet window (and an rUDP socket error, which is all rUDP
+        // can report) loops; a stream's EOF or a frame its reader
+        // refuses ends the session — the leave below then finds the
+        // wire dead.
+        let (op, payload) = match recv_wire(&mut wire, timeout).await {
+            Got::Frame(op, payload) => (op, payload),
+            Got::Quiet => continue,
+            Got::Dead => break,
         };
-        let (op, payload) = (f.op, f.payload);
         rep.bytes_in += frame_bytes(&wire, op, payload.len());
         if let Some(c) = &mut capture {
             if op == snapshot_op {
@@ -333,3 +335,6 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     }
     rep
 }
+
+#[cfg(test)]
+mod tests;
