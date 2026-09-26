@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F11 — fan-out düşme sinyali: tek seferlik durumun yeniden kurulması (`core/f11-drop-signal`)
+
+Çekirdeğe iki kanca, kit'e cevabı; hiçbir şey düşmediğinde bayt aynı,
+istemci kuralı aynı (KIT-ARCHITECTURE §10 "F11").
+
+- Seam: `GameLogic::on_batch_dropped(world, player, snapshot)` ve
+  `GameLogic::on_batch_resumed(world, player)` — varsayılan no-op; oda ve
+  shard aktörü aynı noktada çağırıyor: fan-out yinelemesinde, o oyuncunun
+  `private`'ının hemen ardından (senkron, kanal/await yok; satırda tek
+  `bool`). `resumed` = düşme dizisinden sonra kanalın kabul ettiği ilk batch.
+- Kit: `InputSeq`'in tek "taşınan" yuvası düşen karenin ack'ini ve oturum
+  yükünü (`Welcome`) yeniden borçlandırıyor (göçte de taşınıyor —
+  `ShardInputRecord.greet`); `Baselines` görünüm içeriği (grup karesi ya da
+  one-shot full) taşıyan batch düşünce tabanı geri alıyor → sonraki tick
+  one-shot full (kaybolan `removed` hayaletini de düzeltir). AOI odaları
+  `conn_view` yerine `Baselines` kullanıyor (bayt aynı).
+- Fırtına sınırı: hiçbir şey geçmezken yeniden gönderimler 1, 2, 4, 8, 16,
+  sonra 32 adım arayla; kanal yeniden kabul edince bekleme kalkıyor (kabul
+  edilen batch başına en çok bir yeniden gönderim; oyuncu başına tek
+  bekleyen). Resume sinyalsiz ilk tasarım ölçümde düştü (tempo 32'ye
+  tırmanınca iyileşme keep-alive kadar gecikiyordu).
+- Ölçüm (spatial 200, 10 sn duraklamalar, `--conn-out 4`, dönüşümlü):
+  düşen batch'lerden sonra görünümün iyileşmesi 17,6 tick / 587 ms →
+  0,9–1,5 tick / 31–32 ms; errors=0; varsayılan arena koşusu aynı.
+- Loadgen koşum düğmeleri: `--stall-ms`/`--stall-every-ms` (yavaş okuyucu;
+  loopback'te düşme görmek için 1200 MSS kelepçesi — `socket2` artık
+  `gsb-server`'ın doğrudan bağımlılığı, lock'ta zaten vardı) ve
+  `--conn-out N`.
+- Bulgu F11-1: düşen batch'teki RPC yanıtları kayboluyor → BACKLOG F14.
+
+Testler 869 → 893 (rebase sonrası; +4 çekirdek, +17 kit, +3 loadgen);
+her kural mutasyonla kırıldı; hiçbir bayt kilidine dokunulmadı. Ebeveynin
+bağımsız mutasyonu (görünüm içeriği taşımayan düşmede de tabanı geri
+almak) `Baselines` testini kırıyor.
+
 ## F8 — admin `POST /rooms/open` sunucunun odasını açar (`server/f8-rooms-open-config`)
 
 Runtime'da açılan oda eskiden `RoomConfig::default()` + `tick_hz` ile

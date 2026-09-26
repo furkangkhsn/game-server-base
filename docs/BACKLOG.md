@@ -55,7 +55,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | A19 Dinamik adaptif tick hızı | — | DESIGN:1213 |
 | A20 Join/leave için tick içi hızlı yol | gerekirse | DESIGN:1221, TICK-ARCHITECTURE:134 |
 | A21 Dinamik oda bölme/birleştirme, bölgeler arası | — | DESIGN:892 |
-| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11) + ithal kayıtlar için `RecordCodec::decode` | motor önkoşulları tamam (A30 ✅, A31 ✅, A10 ✅); tetik: bunları açtıktan sonra hâlâ bant/MTU baskısı gören AOI tipi bir oyun | KIT-ARCHITECTURE §10 "A22" |
+| A22 Değer düzeyinde delta — faz 0 yapıldı (KIT-ARCHITECTURE §10 "A22"): mutlak sıkıştırmanın üstüne katkısı −2…+8 puan (MMO +23), göreli şema rUDP'de bayatlığı 5–10× artırıyor; biçim olursa (b) `base_seq` + resync isteği + çekirdek düşme sinyali (F11 ✅) + ithal kayıtlar için `RecordCodec::decode` | motor önkoşulları tamam (A30 ✅, A31 ✅, A10 ✅); tetik: bunları açtıktan sonra hâlâ bant/MTU baskısı gören AOI tipi bir oyun | KIT-ARCHITECTURE §10 "A22" |
 | A23 Demo sunucusunda `team × delta` (config şu an reddediyor; kit hazır) | demo'da takım delta'sı isteyen koşu | KIT-ARCHITECTURE §10 "T sonucu" |
 | A25 Takım export'u her tick; `every k` temposu (W2 ölçtü, gerekmedi: 1000'de 0 düşme; tempo istemci baytını değiştirmez, görmeyi k tick geciktirir) | `team_export_drops > 0` ya da registry gecikmesi | CROSS-SHARD §8b.1 |
 | A27 Harita geneli nötrler (ele geçirme noktası) — bugün kendi shard'ında herkese, başka yerde sisle; W2-1 kanıtı: bölüm artefaktı (shard 3 oyuncusu 640 m ötedeki sahipsiz noktayı görüyor, 100 m'deki shard 0 oyuncusu görmüyor); en küçük değişiklik varlık başına "harita geneli" bayrağı | herkesin durumunu görmesi gereken bir hedef | CROSS-SHARD §8b.5 |
@@ -150,11 +150,11 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F9 Crystal olayları için genel oyun/kit sayaç seam'i (W2-3: kit'in `ShardedTeamRoom::over_budget` sayacı da barındırıcıya ulaşmıyor) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
 | F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
-| F11 Fan-out düşmesi one-shot full içeren batch'i atınca `Baselines` oyuncuyu baseline'lı sayıyor (bugün güvenli — keep-alive iyileştirir; herhangi bir göreli şemada doğruluk hatası) — çekirdekten kit'e düşme sinyali | KIT-ARCHITECTURE §10 "A22" A22-1 |
+| F14 **sırada** — Fan-out düşmesi o tick'in RPC yanıtlarını da götürüyor (çekirdek `queued`'ı private kareye boşaltıyor; batch düşerse yanıt kayboluyor — `rpc`'nin "istemci kabul edilmiş isteği asla beklemez" iddiası düşmede tutmuyor, yalnız istemcinin zaman aşımı kalıyor). Öneri: düşmede yanıtları `queued`'a geri koymak (tam bir kez) + fırtınada birikim sınırı | KIT-ARCHITECTURE §10 "F11" (F11-1) |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8 kendi turunda kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8 ve F11 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

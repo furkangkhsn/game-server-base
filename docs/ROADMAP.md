@@ -77,13 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **869** (869/869 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **893** (893/893 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F8** — admin `/rooms/open` odası artık başlangıç odalarıyla
-aynı şablondan (`Config::room_template`) kuruluyor; `tick_hz` tek
-istek-başı geçersiz kılma. F11 (çekirdek → kit düşme sinyali) yürüyor.
+Son tur: **F11 — fan-out düşme sinyali** (KIT-ARCHITECTURE §10 "F11") —
+çekirdek düşen batch'i (`on_batch_dropped`) ve düşme dizisinin bitişini
+(`on_batch_resumed`) mantığa bildiriyor; kit tek seferlik durumu (one-shot
+full tabanı, oturum yükü, ack) yeniden kuruyor, fırtınaya karşı tempolu.
+Düşmeden sonra iyileşme keep-alive (~0,6 sn) yerine ~1 tick. Sıradaki:
+F14 (düşen RPC yanıtları).
+Önceki tur: **F8** — admin `/rooms/open` odası artık başlangıç odalarıyla
+aynı şablondan (`Config::room_template`) kuruluyor.
 Önceki tur: **A10 — kayıt başına yayın hızı** (KIT-ARCHITECTURE §10 "A10")
 — opt-in `RecordCodec::send_every` (varsayılan her tick, bayt aynı,
 istemci kuralı aynı); arena 15 Hz ile açtı: bant −43…−45 %, bayatlık ≤ 1
