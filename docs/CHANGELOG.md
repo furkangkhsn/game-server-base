@@ -5,6 +5,38 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## E2 — dışa açım katmanı: takılabilir exporter'lar (`ops/e2-exporters`)
+
+Kullanıcı kararı (BACKLOG E2): içeride ucuz toplama aynı kalır, dışa açım
+takılabilir exporter'lara devredilir, her biri feature arkasında.
+
+- Dikiş: `gsb_core::metrics::Exporter` (`fn export(&mut self,
+  &MetricReport)`); toplayıcının `emit`'i TEK dışa açım yeri — exporter'lar
+  sırayla, sonra sink. Exporter saf tüketici, bloklamaz; aktör kodu
+  değişmedi.
+- Prometheus çekme olarak kaldı (kazıma anında render), `prometheus`
+  feature'ına (varsayılan açık) alındı; feature'sız derlemede `/metrics`
+  404 + feature adı. `gsb-core` workspace'e varsayılan feature'sız
+  bağlanıyor, exporter'lara `gsb-server` karar veriyor.
+- Tek aile tablosu (`metrics::export::families`): Prometheus ve OTLP aynı
+  adı/türü/help'i/sırayı yürüyor; Prometheus metni bayt bayt aynı (altın
+  test değişmedi).
+- OTLP exporter'ı (`otlp` feature'ı, varsayılan kapalı): OTLP/HTTP
+  protobuf POST; counter → monotonic kümülatif Sum, gauge → Gauge, adım
+  histogramları → kümülatif Histogram, oda/sebep öznitelik,
+  `service.name` resource'ta. Tek yuvalı devir: dolu yuva düşürür ve
+  sayar; itme hatası sayılır, yeniden denenmez. **Yeni bağımlılık yok**
+  (elle `prost` derive'lı mesaj alt kümesi + tokio `TcpStream`; alan
+  numaraları resmî `opentelemetry-proto` + `protoc --decode` ile bir kez
+  doğrulandı).
+- Config `[metrics.otlp]` (`endpoint`, `interval_secs` = 10,
+  `service_name` = `"gsb"`); feature'sız derlemede tablo başlatmayı
+  `ServerError::OtlpNotBuilt` ile durdurur. CI'a `otlp` işi.
+
+Testler 1124 → 1131 (`otlp` ile 1149); ajanın 26 mutasyonu yakalandı;
+ebeveynin bağımsız mutasyonu (aile tablosunda bir getter'ı kaydırmak) hem
+Prometheus hem OTLP golden testini kırıyor.
+
 ## B23 — loadgen RPC trafik modu; RPC yolunun ilk yük ölçümü (`loadgen/b23-rpc-mode`)
 
 Loadgen hiç istek göndermiyordu: odanın istek alımı, bağlantı başına cap,

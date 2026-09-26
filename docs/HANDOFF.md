@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1124 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1131 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,15 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**E2 tamam** (OPS §3/§6, DESIGN §12, CHANGELOG "E2"): dışa açım
+`MetricsCollector::emit`'te — `with_exporters` ile kurulan `Exporter`'lar
+sırayla, sonra sink. **Yeni bir çekirdek sayacı artık
+`metrics/export/families/{room,session,server}.rs`'e bir satır olarak
+girer** (Prometheus ve OTLP ikisi birden alır). Prometheus metni değişirse
+`metrics::tests::golden` ile `metrics::tests::otlp::golden` birlikte
+güncellenir. Feature'lar: `gsb-core` `prometheus` (vars.) / `otlp`;
+OTLP'ye dokunan turda `--features gsb-server/otlp` ile de koş.
 
 **B23 tamam** (RPC-CONTROL-PLANE §8.2, CHANGELOG "B23"): `gsb-loadgen
 --rpc-rate R [--rpc-burst B]` (demo, düz istemci); istemci defteri
@@ -568,6 +577,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1124 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1131 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

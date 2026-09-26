@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1124** (1124/1124 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1131** (1131/1131 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B23 — loadgen RPC trafik modu** (RPC-CONTROL-PLANE §8.2) — RPC
+Son tur: **E2 — dışa açım katmanı** (OPS §6) — toplayıcının `emit`'inde
+tek dikiş (`Exporter`); Prometheus `prometheus` feature'ında (varsayılan),
+OTLP/HTTP itmesi `otlp` feature'ında (kapalı, `[metrics.otlp]`); iki
+exporter tek aile tablosunu yürüyor; yeni bağımlılık yok.
+Önceki tur: **B23 — loadgen RPC trafik modu** (RPC-CONTROL-PLANE §8.2) — RPC
 yolu ilk kez yük altında: tam-bir-kez tutuyor (düşen batch'ler dahil), iki
 uç her kovada aynı sayıyı görüyor, istek başına tick maliyeti ~5 µs,
 fırtına sınırı 3 sn duraklamada bağlıyor. B32 açıklandı (ayrılışta

@@ -79,14 +79,15 @@ clippy `-D warnings` · test · rustdoc `-D warnings` · the Autobahn RFC 6455 f
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 1124 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 1131 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
 # sharded keepalive + shard RPC), security (TLS transport, auth rate limit, pre-auth
 # caps), multi-listener (mixed transports on the same map: TCP/TLS/rUDP/QUIC/WS),
 # WebSocket RFC 6455 conformance at the reader (fragmentation, framing, close frames),
-# border-delta exchange, ops surface (/metrics, /healthz, admin API), visibility (delta
+# border-delta exchange, ops surface (/metrics, /healthz, admin API), metrics export (Prometheus +
+# OTLP push), visibility (delta
 # AOI, PVS, team fog, sharded), frame independence, identity invariant, publishability,
 # e2e, metric flow, load smoke, wire contract (RPC envelope bytes, retired opcodes),
 # ERROR code enumeration, protocol version handshake, session lifecycle (idle window +
@@ -229,7 +230,11 @@ The core/net/protocol/ecs/kit crates are untouched.
   numbers).
 - `docs/TICK-ARCHITECTURE.md`: broadcast-based tick architecture.
 - `docs/RPC-CONTROL-PLANE.md`: RPC pattern and control plane design.
-- `docs/OPS.md`: ops surface design (/metrics, /healthz, admin API).
+- `docs/OPS.md`: ops surface design (/metrics, /healthz, admin API) and metrics export:
+  counters are collected cheaply inside and leave the server at one seam through pluggable
+  exporters, each behind a cargo feature — Prometheus text at `/metrics` (`prometheus`, on by
+  default) and an OTLP/HTTP protobuf push to an OpenTelemetry collector (`otlp`, off by default;
+  `[metrics.otlp] endpoint = "http://127.0.0.1:4318"`); both walk one family table.
 - `docs/TRAIT-ARCHITECTURE.md`: GameLogic unification, PlayerId path.
 - `docs/KIT-ARCHITECTURE.md`: `gsb-kit` design (the seams a game implements,
   the kit proto and its typed mirrors, presets, the phases and their results).

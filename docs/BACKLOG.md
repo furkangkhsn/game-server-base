@@ -94,6 +94,8 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B35 Loadgen RPC modu orkestre/churn'de (CLIENT satırına defter + gecikme dağılımı) ve oda-local `ABILITY` yolunun yük ölçümü | çok süreçli RPC ölçümü gerektiğinde | RPC-CONTROL-PLANE §8.2, §11 |
 | B36 Ayrılıştan hemen önce gönderilen istekler hiçbir oda sayacına düşmüyor (200'lük uzun-duraklama koşusunda 62; mekanizma doğrulanmadı) | RPC hesaplaşması eksik kalırsa | RPC-CONTROL-PLANE §8.2 |
 | B37 Pinsiz orkestratör çocuklara `--workers 1` veriyor (`args.workers.max(1)`, `orchestrate/pinning/procs.rs`) ama yorumu "runtime default" diyor — bütün pinsiz orkestre tabanları tek worker'lı süreçlerde koşmuş. Düzeltmek tabanları değiştirir | orkestre ölçümü yeniden alınırken | RPC-CONTROL-PLANE §8.2 |
+| B38 `metrics` fasadı exporter'ı — üçüncü `Exporter`, kendi feature'ı; aile tablosunu yürüyüp fasada basar, global recorder yalnız exporter'ın içinde (yeni crate gerektirir) | bir operatör `metrics` ekosistemini isterse | OPS §6 |
+| B39 `RoomReport::shipped_frames`/`private_frames` hiçbir dışa açım yüzeyinde yok (Prometheus'ta hiç olmadı) — aile tablosuna iki satır; altın metni bilerek değiştirir | bir sonraki metrik turu | DESIGN §12 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -133,7 +135,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | Madde | Kaynak |
 |---|---|
 | E1 ~~Geçerli girdi hacim sınırı~~ **Karar (2026-09-27): opt-in yapı taşı** — bağlantı başına token bucket; varsayılan KAPALI, sayıyı oyun/config verir, aşan girdi düşer ve sayılır → **SIRADA** | HANDOFF:26, ROADMAP "Ürün kararı — geçerli girdinin HACMİ" |
-| E2 ~~`metrics` fasadı mı, elle render mı~~ **Karar (2026-09-27): dışa açım katmanı** — içeride ucuz toplama aynı kalır; dışa açım takılabilir exporter'lara devredilir (Prometheus mevcut, OTLP eklenir, gerekirse `metrics` fasadı), her biri feature arkasında (OPS §6'daki "dördüncü lavabo" yönü) → **SIRADA** | OPS §6 |
+| E2 ~~`metrics` fasadı mı, elle render mı~~ **Karar (2026-09-27): dışa açım katmanı** — içeride ucuz toplama aynı kalır; dışa açım takılabilir exporter'lara devredilir (Prometheus mevcut, OTLP eklenir, gerekirse `metrics` fasadı), her biri feature arkasında (OPS §6'daki "dördüncü lavabo" yönü) → **KAPANDI (E2 turu):** `Exporter` dikişi + tek aile tablosu; Prometheus (`prometheus`, vars.), OTLP/HTTP itme (`otlp`, kapalı); yeni bağımlılık yok | OPS §6 |
 | E3 ~~rUDP'yi deneysel'den çıkarmak~~ **Karar (2026-09-27):** şimdilik DENEYSEL kalır; hedef zamanla DTLS destekli, tam teşekküllü bir OYUN protokolü (QUIC'in yerini tutmaz: QUIC stream TCP yerine yazılmış, datagram'ı ek) — ileride bir **rUDP sertleştirme paketi** (B1–B5, B7) açılacak | ROADMAP, SECURITY:19 |
 | E4 ~~Koordinat formatı~~ **Karar (2026-09-27): oyunun kararı — kapandı.** Kit her formatı taşır (`RecordCodec`, A31); demoların `sint32`'si yalnız onların seçimi; motorda iş yok | ROADMAP "Koordinat formatı" |
 | E5 ~~Protokol sürüm aralığı~~ **Karar (2026-09-27): kapandı** — base protokolün geriye dönük uyumluluğu motorun sorumluluğu (varsayılan toplamalı değişiklik; uyumsuzlukta sürüm artar + N−1 geçiş desteği; ERROR 13 tespit), kabul aralığı dağıtımın config'i (`min_protocol_version`); oyunun protokol sürümü oyunun işi. Kod: İLK uyumsuz base değişikliğinde (`min_protocol_version` + N−1) | DESIGN §5 "Base protokol evrim kuralı" |
