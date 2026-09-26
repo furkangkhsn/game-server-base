@@ -2073,7 +2073,8 @@ private karesine biner — gerekirse one-shot full'un sonuna.
    kodlaması; `emit_full` bugünkü full yol, `emit_delta`, `full_frame`,
    `resync`) ve **`Baselines<K>`** (oturum başına "hangi grubun
    görünümüne baseline'lı" tablosu — AOI'nin `conn_view`'unun genel
-   hâli). Üç delta odasının one-shot private full karesi artık tek
+   hâli; F11'den beri iki AOI odası da `conn_view` yerine onu
+   kullanıyor). Üç delta odasının one-shot private full karesi artık tek
    yazıcı: `common::emit_private_full` (AOI ve sharded × spatial'daki iki
    elle yazılmış kopya kalktı — bayt birebir). *Elenen:* takıma özgü
    defter kopyası (A1'in tam tersi); `CellBook`'u görüş hücreleriyle
@@ -2728,6 +2729,8 @@ Grup delta kareleri üzerinde (beş turun en küçüğü; makine yüklü,
   1 000–1 800) — "güvenilir taşıma" ≠ "her kare ulaştı". (a) bu yüzden
   çekirdekten kit'e "şu oyuncunun batch'i düştü" sinyali ister (`GameLogic`
   kancası → kit `Baselines::forget` → sonraki tick one-shot full).
+  *(F11'de yapıldı: `GameLogic::on_batch_dropped` → `Baselines::dropped`,
+  fırtınaya karşı tempolu; §10 "F11".)*
 - *Seam:* `RecordCodec::encode_delta(id, old: &Wire, new: &Wire, out) ->
   bool` (varsayılan `false` = mutlak yaz), `ClientDecoder::record_delta(body,
   &mut Record)`; kit eski değeri defterden verir. İthal gövdeler için
@@ -2918,7 +2921,9 @@ baseline is applied on top, even across a sequence gap" cümlesi silinir.
   varsa `Baselines` oyuncuyu baseline'lı sayar, istemci keep-alive'a
   kadar delta'ları düşürür (bugünkü kurallarla güvenli: en çok bir
   keep-alive). Göreli her seçenekte bu bir doğruluk sorunudur → düşme
-  sinyali gerekir. Bugün kod değişmedi.
+  sinyali gerekir. Bugün kod değişmedi. *(Kapandı — F11: çekirdek
+  düşmeyi `GameLogic::on_batch_dropped` ile bildiriyor, kit tabanı geri
+  alıp sonraki tick one-shot full'u yeniden yolluyor; §10 "F11".)*
 - **A22-2 — shard id'leri kaydın ~%23–40'ı.** `k · 2^20` aralıkları shard
   1–3'ün id'lerini 3–4 baytlık varint yapıyor; tek odalı arenada yok.
 - **A22-3 — keep-alive/private full'lar değişmemiş kayıt taşıyor ama
@@ -3564,6 +3569,193 @@ sütunları yakalanan sekiz istemciden (scratchpad çözümleyicisi
 **Doğrulama:** 847 → **865** test / 0 hata / 1 ignored (+18 kit: takvim
 3, defter 4, AOI 4, oranlı ikiz 6, ihraç 1; mevcut dokuz ikize içerik
 kilidi eklendi); `cargo clippy --workspace --all-targets -- -D warnings`
+0; kapanış kontrolü, beş özellik derlemesi ve `RUSTDOCFLAGS="-D
+warnings" cargo doc --workspace --no-deps` temiz.
+
+### F11 — fan-out düşme sinyali: tek seferlik durumun yeniden kurulması (2026-09-26)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`core/f11-drop-signal`;
+BACKLOG F11, §10 "A22" bulgu A22-1). Katmanlar bölünmüştü: bir batch'in
+düştüğünü yalnız çekirdek biliyor, içinde ne olduğunu yalnız kit. Artık
+çekirdek düşmeyi (ve düşme dizisinin bitişini) mantığa bildiriyor, kit
+de "gönderdim" diye kaydettiği tek seferlik durumu yeniden kuruyor.
+Hiçbir şey düşmediğinde istemci baytı aynı; istemci kuralları aynı.
+
+**İzlenen yol.** Oda aktörü faz 4d / shard aktörü faz 6d: grup başına
+snapshot bir kez kodlanır (`GroupState.sent`, paylaşımlı `Bytes`), sonra
+bağlantı başına `rc.batch = [grup karesi?] + [GameLogic::private
+karesi?]` → tek `try_send`. `Full`/`Closed` → batch'in TAMAMI atılır,
+`dropped_frames += 1`, tampon geri konur; tekrar denenmez, beklenmez.
+Mantık bundan hiçbir şey öğrenmiyordu.
+
+**Teslim varsayan bağlantı başına durum** (hepsi `private` içinde
+"yazdım" anında kaydediliyor):
+
+| Durum | Nerede | Kaybın bedeli (önce) |
+|---|---|---|
+| Baseline (one-shot private full'u aldı) | `Baselines` — takım odası delta modu, sharded × team; AOI'nin `conn_view`'u — AOI, sharded × spatial | istemci baseline'sız delta'ları düşürür (katılım/resume/göç varışı) ya da ESKİ grubun görünümü üstüne yeni grubun delta'larını uygular (takım/hücre değişimi) — keep-alive'a kadar (varsayılan ~1 sn; keep-alive kapalıysa hiç) |
+| Oturum yükü borcu (`Game::session_private` — arena/savaş `Welcome`) | `InputSeq` `greet` | oturum boyunca asla gelmez: keep-alive bunu iyileştirmez |
+| Ack yüksek-su işareti | `InputSeq` `acked` | bir sonraki işlenmiş girdiye kadar (istemci susarsa hiç) raporlanmaz |
+| Grup delta'sı (tek seferlik değil ama aynı yoldan) | istemcinin görünümü | delta boşluk üstünde uygulanır: kaçan `removed` hayalet, kaçan upsert bayat — keep-alive'a kadar |
+| RPC yanıtları (çekirdek `queued`) | çekirdek | yanıt kaybolur — bulgu F11-1, bu turda düzeltilmedi |
+
+Teslim varsaymayan (incelendi): grup düzeyi defterler (`SetLedger.held`,
+`CellBook`, A10'un bekletme defteri — üyeden bağımsız, keep-alive ile
+senkron), park defteri, göç input kaydı (bu tur `greet` eklendi).
+
+**Seam (çekirdek, iki kanca, ikisi de varsayılan no-op):**
+
+```rust
+// GameLogic (room + shard, tek sözleşme)
+fn on_batch_dropped(&mut self, world: &mut W, player: PlayerId, snapshot: bool) {}
+fn on_batch_resumed(&mut self, world: &mut W, player: PlayerId) {}
+```
+
+- Senkron, fan-out yinelemesinin içinde: o oyuncunun `private` çağrısının
+  HEMEN ardından, başka oyuncununkinden önce — `private`'ın türettiği
+  durum hâlâ güncel (kit'in tek yuvalı `Carried`'ı bu garantiye dayanır).
+  `snapshot` = batch'te grubun karesi vardı. Yeni kanal, await, liste
+  yok; satıra tek `bool` (`RoomConn.dropping`), başarılı gönderimde tek
+  dal. `resumed` = bir düşme dizisinden sonra kanalın kabul ettiği ilk
+  batch; taze taşıma (join, resume, göç varışı) temiz başlar. Detached
+  satır göndermez, bildirilmez; `Closed` da `dropped` gibi bildirilir.
+- Sinyali okumayan mantık bugünkü gibi davranır (mevcut geri basınç
+  testi `FairLogic` bunu kilitliyor).
+
+**Kit'in cevabı.**
+
+- `InputSeq`'in tek "taşınan" yuvası (`common/input/carried.rs`): her
+  private kare başlarken sıfırlanır (hash yok — sessiz yol bedava);
+  yazıcılar ack'in önceki işaretini, oturum yükünü, one-shot full'u
+  işaretler. Düşmede ack (`acked` geri alınır → sonraki kare güncel
+  yüksek-su işaretini yeniden raporlar; istemcide zararsız) ve karşılama
+  yeniden borçlanır; yuvanın one-shot full olup olmadığı döner.
+  `ShardInputRecord.greet`: hâlâ borçlu karşılama shard sınırını geçer
+  (göç yeni oturum başlatmaz; yalnız borçlu olanı taşır).
+- `Baselines` (`common/ledger/baselines.rs`; AOI odaları artık
+  `conn_view` yerine onu kullanıyor — bayt birebir):
+  `dropped(player, now, view)` — batch GÖRÜNÜM İÇERİĞİ taşıdıysa (grup
+  karesi ya da one-shot full) taban geri alınır → sonraki tick one-shot
+  full. Yalnız ack/yanıt/oturum yükü taşıyan batch'in düşmesi tabana
+  dokunmaz. **Tanım (bilinçli):** bir grup delta'sının düşmesi de one-shot
+  full tetikler — istemci delta'yı boşluk üstünde uyguladığı için kaçan
+  kaldırmalar hayalet kalır; full bunu keep-alive yerine sonraki tick'te
+  düzeltir (ölçümde düzeltilen kayıt ortalaması ~32–37).
+- **Fırtına sınırı.** Kanalı hep dolu bir istemci için her tick bir full
+  kodlanıp kopyalanıp atılmasın: tabanı alan her düşme SONRAKİ yeniden
+  gönderimi iter — 1., …, 5. düşmeden 1, 2, 4, 8, 16 adım sonra, sonra
+  hep `RESEND_WAIT_MAX` = 32 adım: hiçbir şey geçmezken ilk 63 adımda en
+  çok 6 düşme-tetikli full, sonra 32 adımda bir. Bekleyen yeniden gönderim
+  oyuncu başına TEK eksik giriştir, kuyruk değil; bekleme sırasındaki
+  düşme hiçbir şey almaz, itmez. Grup full'u (keep-alive) bekleyeni yine
+  baseline'lar. **Kanal yeniden kabul edince** (`on_batch_resumed`)
+  bekleme kalkar: borçlu full bir sonraki kareye biner — kısmen geçiren
+  bir kanal kabul ettiği batch başına en çok bir yeniden gönderime mal
+  olur. Taban `RESEND_WAIT_MAX` adım düşmesiz ayakta kalınca tempo
+  sıfırlanır. Tablolar oyuncularla sınırlı: leave/resume ikisini de
+  siler. Sessiz grupta (batch yok) resume gelemez: bekleyen full en geç
+  sonraki yuvada ya da keep-alive'da gider — sessiz grup bu arada bir şey
+  kaçırmaz.
+
+**Elenen alternatifler.**
+
+- Fan-out'u güvenilir/bloklayan yapmak (kanalı beklemek): yasak — yavaş
+  istemci odayı yavaşlatır; tick gövdesi await'siz.
+- Düşen batch'i çekirdekte kuyruklayıp yeniden denemek: bağlantı başına
+  sınırsız bellek ya da bayat kareler; çekirdek içeriği bilmez.
+- Her N tick'te körlemesine one-shot full: düşmeyen istemciye bant;
+  keep-alive zaten bunu yapıyor.
+- İstemci tarafı yeniden senkron isteği: yeni wire mesajı + istemci kuralı
+  (yasak); üstelik istemci kaybı yalnız baseline'sızken sezebilir (delta
+  boşluk üstünde uygulanır).
+- Sinyali sonraki tick'te okunan liste (`TickCtx`'te düşenler): ek depo ve
+  bağlam API'si; yinelemedeki senkron çağrı "private'ın türettiği durum
+  güncel" garantisini bedavaya veriyor.
+- Çekirdeğin batch içeriğini etiketlemesi: payload çekirdeğe opak kalır;
+  çekirdek yalnız "grup karesi vardı" bitini verir.
+- Yalnız geri çekilme, resume sinyali olmadan: ÖLÇÜLDÜ ve düştü — 10 sn'lik
+  duraklamada bekleme 32 adıma tırmanıyor, istemci okumaya dönünce
+  iyileşme keep-alive kadar (ort. 16 tick) gecikiyordu; `on_batch_resumed`
+  bunun için eklendi (aynı koşu: ~1 tick).
+
+**Testler** (önce kırmızı: çekirdek çağrısı / kit kancası yokken; her
+kural mutasyonla kırıldı, dosya scratchpad'e yedeklenip geri yüklendi):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `room::tests::fanout::dropped::a_dropped_batch_is_reported_right_after_that_players_private`, `shard::tests::dropped::a_dropped_batch_is_reported_on_the_shard_too` | düşen iki batch (grup karesi yok/var) bildiriliyor, her biri o oyuncunun `private`'ının hemen ardından; ilk teslim resume, ikincisi değil; diğer oyuncu hiç | çağrı yok, `snapshot` sabit, resume çağrısı yok, `dropping = true` yok → kırıldı (oda ve shard ayrı ayrı) |
+| `…::a_resumed_session_starts_without_a_run` (+ `_on_the_shard`) | resume (taze taşıma) eski düşme dizisini devralmıyor | sıfırlama yok → kırıldı |
+| `common::input::carried::tests` (4) | düşen karenin ack'i ve karşılaması yeniden borçlu, yalnız o; yuva başka oyuncunun karesiyse hiçbir şey; leave sonrası hiçbir şey dirilmiyor | ack/karşılama yeniden kurulmuyor → kırıldı |
+| `common::ledger::baselines::tests` (6) | görünüm içeriği → taban geri; içeriksiz → dokunulmaz; fırtına 1,3,7,15,31,63 sonra 32'de bir; keep-alive düşmesi tırmandırıyor; ilk teslim beklemeyi kaldırıyor (10 sn'lik fırtınadan sonra 102'de, tempoyla 105'te); dönüşümlü düşmede teslim başına en çok bir; tablolar sınırlı | `dropped` hiçbir şey almıyor, kapı yok, tavan yok, sıfırlama erken, resume yok, düşme `released`'ı silmiyor → kırıldı |
+| `common::session::tests::dropped` (2) | DOKUZ oda biçiminde: düşen karşılama (ve delta odalarında one-shot full) sonraki karede, bir kez; içeriksiz düşme hiçbir şey; grup karesi kaybı delta odasında one-shot full, full odada hiçbir şey; arada ayrılan oyuncu; dört delta odasında resume bekleyeni bırakıyor | bir odanın `dropped`/`resumed` kancası, `snapshot ‖ full` yerine `full`, full işareti → kırıldı |
+| `sharded::tests::input_carry::what_a_dropped_frame_owed_is_sent_by_the_destination` | düşen ack + karşılama göçle taşınıyor, hedef bir kez gönderiyor | `greet` taşınmıyor, ack yeniden kurulmuyor → kırıldı |
+| `sharded::tests::team_actors::dropped` (4) — GERÇEK aktörler, keep-alive KAPALI | dolu kanalla katılan üyenin one-shot full'u düşüyor → sonraki tick tüm takım görünümde, `gap_drops = 0` (oda + shard); 40 tick duraklama (müttefik yürürken) → duraklama bitince 2. tick'te görünüm tam, müttefik son yerinde | çekirdek çağrısı yok (oda/shard), kit `dropped` yok, kit `resumed` yok → kırıldı |
+
+Bayt kilitleri: hiçbirine dokunulmadı; kayıt koşusu ikizlerinin içerik
+özetleri (A31/A10 digest'leri) değişmeden yeşil — düşme olmadan her kare
+aynı.
+
+**Ölçüm** (release, in-proc, `gsb-loadgen 200 --visibility spatial
+--duration 30 --stall-ms 10000 --stall-every-ms 15000 --conn-out 4
+--write-stall-secs 0 --capture DIR --capture-clients 40`; önce = `d395d93`
++ yalnız loadgen düğmeleri, sonra = bu dal; dönüşümlü B, A, B, A; 32
+çekirdek, başka ajanların yüküyle 1 dk yük 4,4–7,0). İyileşme ölçümü
+yakalamalardan (scratchpad çözümleyicisi `f11an.py`: kit'in istemci
+kurallarıyla yürür; duraklamadan sonra grup karesi sequence'ında >3
+sıçrama = düşen batch'ler; oradan sonraki ilk full'a kadar tick/ms ve o
+full'un düzelttiği kayıt sayısı).
+
+| Koşu | `dropped` | boşluk | iyileşme tick ort / p50 / p90 / max | iyileşme ms ort / p90 | düzeltilen kayıt ort | `private_fulls` | `errors` |
+|---|---|---|---|---|---|---|---|
+| önce 1 | 10 440 | 37 | 17,6 / 18 / 27 / 28 | 587 / 899 | 36,8 | 2 083 | 0 |
+| sonra 1 | 9 592 | 37 | **1,5 / 1 / 1** / 20 | **32 / 35** | 32,0 | 2 355 | 0 |
+| önce 2 | 9 930 | 36 | 17,6 / 18 / 27 / 29 | 587 / 900 | 37,7 | 2 126 | 0 |
+| sonra 2 | 8 820 | 36 | **0,9 / 1 / 1 / 1** | **31 / 34** | 32,1 | 2 279 | 0 |
+
+- Her koşuda `joined = left = 200`, `server_closes=0`, `server_hz` 30,00.
+  Keep-alive (1 Hz) beklemesi → bir tick: düşen batch'lerden sonra
+  görünüm ~0,6 sn yerine ~30 ms'de düzeliyor; o arada ortalama ~35
+  kayıt yanlıştı (hayalet/bayat/eksik). Sonra 1'deki tek 20 tick'lik
+  örnek çözümleyici artığı: oturum başında kernel tamponunda birikmiş
+  kareler içindeki bir sequence sıçraması; full aynı okumada (0 ms)
+  geldi.
+- `gap_drops` F11 sinyali DEĞİL (önce 52/130, sonra 131/133): yapısal —
+  kurulmuş gruba katılan her istemcinin ilk delta'sı aynı batch'teki
+  private full'dan önce geliyor; yakalananların hepsi katılımın ilk
+  karesi. Katılımın one-shot full'u loadgen'de düşürülemiyor (kanal
+  katılımda boş); o yol aktör testlerinde kilitli.
+- Varsayılan koşu (düğmesiz): arena 200, 10 sn — önce/sonra
+  `out_bps_per_conn` 22 364 / 22 459, `dropped=0`, `errors=0`.
+
+**Loadgen düğmeleri (koşum, varsayılan değişmedi):** `--stall-ms MS`
+(+ `--stall-every-ms`, vars. 5000; istemciler id'ye göre kaydırılmış
+biçimde periyotta MS kadar okumaz; 16 KiB alma tamponu ve 1200 MSS —
+loopback'in 64 KiB MSS'i sunucunun gönderme tamponunu MB'lara büyütüp
+yazıcıyı hiç bloklatmıyordu; `socket2`, kilitte zaten vardı) ve
+`--conn-out N` (sunucunun bağlantı başına çıkış kanalı kapasitesi).
+
+**Bulgular.**
+
+- **F11-1 — RPC yanıtları düşen batch'le kayboluyor.** Çekirdek bağlantının
+  `queued` yanıtlarını o tick'in private karesine veriyor; batch düşerse
+  yanıt gider ve `rpc` modülünün "istemci kabul edilmiş isteği asla
+  beklemez" iddiası tutmuyor (istemcinin kendi zaman aşımı kalıyor). Düzeltme
+  çekirdekte ve küçük: düşmede `replies_buf`'u `queued`'a geri koymak (tam
+  bir kez korunur); ama fırtınada birikim sınırı ister — ayrı iş (BACKLOG).
+- **F11-2 — sessiz grupta resume yok.** Batch yoksa kanal kabulü
+  gözlenemez; bekleyen full yuvasında/keep-alive'da gider. Bilinçli.
+- **F11-3 — ack yeniden gönderimi değeri aynı olabilir.** Düşen ack'in
+  yerine giden, o anki yüksek-su işaretidir (istemci aynısını tutuyor
+  olabilir) — yüksek-su anlamı gereği zararsız, bayt yalnız düşmede
+  değişir.
+- **Sapmalar (bilinçli):** `Baselines::owed` adım (`now`) ve tembel
+  `group_full` kapanışı alıyor (AOI'nin sessiz yolu `HashSet` yoklamasını
+  ödemesin); `Baselines` `ledger.rs`'den çocuk modüle taşındı; takım
+  aktör düzeneği (`team_actors/rig.rs`) tek oda + duraklatılmış katılım
+  için genelleşti (`rig/stall.rs`).
+
+**Doğrulama:** 865 → **889** test / 0 hata / 1 ignored (+4 çekirdek, +17
+kit, +3 loadgen); `cargo clippy --workspace --all-targets -- -D warnings`
 0; kapanış kontrolü, beş özellik derlemesi ve `RUSTDOCFLAGS="-D
 warnings" cargo doc --workspace --no-deps` temiz.
 

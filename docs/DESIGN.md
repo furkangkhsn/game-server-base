@@ -262,6 +262,25 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
     tek `try_send`. Kanal doluysa batch atılır ve sayılır
     (`dropped_frames`); snapshot'lar kendi kendine yettiği için bu yalnızca
     o istemciye 1 snapshot bayatlık olarak yansır (keepalive sınırlar).
+    **Düşme sinyali (F11):** atılan batch mantığa bildirilir —
+    `GameLogic::on_batch_dropped(world, player, snapshot)`, AYNI fan-out
+    yinelemesinde, o oyuncunun `private` çağrısının hemen ardından (başka
+    oyuncunun `private`'ından önce); `snapshot` = batch'te grubun karesi
+    vardı. Çekirdek batch'i yeniden denemez, kanalı beklemez (fan-out
+    best-effort ve senkron kalır, yeni kanal yok); "gönderdim" diye tek
+    seferlik durum türeten mantık (bir baseline, bir karşılama, bir ack)
+    onu burada yeniden kurar ve sonraki bir batch'le yollar — o batch de
+    aynı düşmeye tabidir, fırtına sınırı mantığındır. İkinci kanca
+    `GameLogic::on_batch_resumed(world, player)`: bir düşme dizisinden
+    sonra kanalın kabul ettiği İLK batch, aynı noktada (satırda tek
+    `bool`, `RoomConn.dropping`; başarılı gönderimde tek dal; taze
+    taşıma — join, resume, göç varışı — temiz başlar). Mantık, dolu
+    kanala karşı temposunu burada bırakır: bekleyen yeniden gönderim bir
+    sonraki kareye biner, geri çekilmenin sonunu beklemez. Varsayılan
+    no-op (ikisi de): sinyali okumayan mantık bugünkü gibi davranır.
+    Detached satırlar hiç göndermediği için bildirilmez. Kapalı kanal
+    (`Closed`) da `dropped_frames` gibi sayılır ve bildirilir (batch
+    teslim edilmedi). Kit'in cevabı: KIT-ARCHITECTURE §10 "F11".
     Batch buffer'u bağlantı başına kalıcıdır (`RoomConn.batch`): tick
     başına `clear()` + `mem::take` ile kanala teslim — ısınma sonrası
     tick başına bağlantı başına sıfır heap tahsisi (ölçülen taban
@@ -1017,7 +1036,13 @@ v1 stratejisi **grup başına tam, kendi kendine yeten snapshot**:
   grupların son önbellekli snapshot'ını yeniden gönderir — son paketini
   kaybeden istemci kalıcı bayat kalamaz.
 - Bağlantı başına tek batch + `try_send`: yavaş istemci sunucuyu
-  yavaşlatmaz; atılan batch'in maliyeti 1 snapshot bayatlık.
+  yavaşlatmaz; atılan batch'in maliyeti 1 snapshot bayatlık. Batch'in
+  tek seferlik içeriği (delta modunda one-shot private full, oyunun
+  oturum yükü, input ack'i) varsa çekirdek mantığa bildirir
+  (`on_batch_dropped`, §4 "Bağlantı başına teslim") ve kit onu yeniden
+  kurar: delta istemcisi keepalive yerine sonraki tick'te — uzun bir
+  duraklamadan sonra, ilk batch'i geçtiği tick'in ardından
+  (`on_batch_resumed`) — iyileşir (F11, KIT-ARCHITECTURE §10 "F11").
 - `max_snapshot_bytes` aşımı uyarı loglanır (rUDP MTU hazırlığı; U
   turundan beri rUDP aşan kareyi parçalar — §6 "MTU").
   Varsayılan 1400 bayt (tipik Ethernet MTU'sunun hemen altı); uyarı grup
