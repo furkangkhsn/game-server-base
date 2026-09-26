@@ -22,7 +22,7 @@
 | GET | `/healthz` | `200 ok` — süreç ayakta + ticker yaşıyor mu (son rapor yaşı eşiği aşmadıysa ok; aşıysa 503, reason body'de) |
 | GET | `/metrics` | Prometheus text — tüm RegistrySample/RoomSample/ConnSample sayaçları (`gsb_*` önekli) |
 | GET | `/rooms` | Tablodaki odalar + durumları (id, members, persistent) — kontrol düzleminin table-only cevabı |
-| POST | `/rooms/open?id=&tick_hz=` | Runtime oda açma (`ServerHandle.open_room` idempotent-create sözleşmesiyle); oda sunucunun odasıdır (aşağıda) |
+| POST | `/rooms/open?id=&tick_hz=` | Runtime oda açma (`ServerHandle.open_room` idempotent-create sözleşmesiyle); oda sunucunun o id'li odasıdır — varsa `[rooms.<id>]` dahil (aşağıda) |
 | POST | `/rooms/close?id=` | Oda kapatma (`close_room`; persistent ise emeklilik semantiği işler) |
 
 Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontrol yolu AÇILMAZ, yalnız transport eklenir.
@@ -41,18 +41,87 @@ registry her `CreateRoom`'da — başlangıç ya da admin — aynı fabrikayı
 aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
 çalışıyordu.
 
-- **İstek başına tek geçersiz kılma `tick_hz`** (verilmezse sunucunun
-  hızı; doğrulama aynı: sonlu pozitif sayı değilse 400, registry'ye
-  gitmez; global hızı bölmüyorsa registry'nin 400'ü). Başka bir
-  geçersiz kılma EKLENMEDİ: oda anahtarları operatörün sunucu çapındaki
-  politikasıdır (kapasite, `max_players`, `max_detach_hold` gibi
-  güvenlik tavanları) ve kimliksiz v1 yüzeyinin (karar 4) bir güvenlik
-  tavanını oda başına gevşetebilmesi istenmez; her ek parametre
-  idempotent karşılaştırmaya bir çatışma ekseni daha ekler; query
-  grameri bilerek küçük (karar 3). `tick_hz` farklı: odanın hız sınıfı
-  gerçek bir oda özelliği (global hızı bölen daha yavaş oda). Oda başına
-  farklı ayar isteyen oyun/platform programatik yolu kullanır:
-  `ServerHandle::open_room(RoomConfig { …, ..cfg.room_config(id) })`.
+- **İstek başına tek geçersiz kılma `tick_hz`** (verilmezse odanın
+  hızı: id'nin `[rooms.<id>]`'inde yazılıysa o, değilse sunucununki;
+  doğrulama aynı: sonlu pozitif sayı değilse 400, registry'ye gitmez;
+  global hızı bölmüyorsa registry'nin 400'ü). HTTP'ye başka bir
+  geçersiz kılma EKLENMEDİ: oda anahtarları operatörün politikasıdır
+  (kapasite, `max_players`, `max_detach_hold` gibi güvenlik tavanları)
+  ve kimliksiz v1 yüzeyinin (karar 4) bir güvenlik tavanını oda başına
+  gevşetebilmesi istenmez; her ek parametre idempotent karşılaştırmaya
+  bir çatışma ekseni daha ekler; query grameri bilerek küçük (karar 3).
+  `tick_hz` farklı: odanın hız sınıfı gerçek bir oda özelliği (global
+  hızı bölen daha yavaş oda). Oda başına farklı ayar config dosyasında
+  verilir (aşağıda, B18) — dosya operatörün, yüzey kimliksiz; programatik
+  yol da açık: `ServerHandle::open_room(RoomConfig { …,
+  ..cfg.room_config(id) })`.
+
+**Oda başına override: `[rooms.<id>]` (BACKLOG B18).** Bir oda (yüksek
+yoğunluklu bir oda, bir lobi) sunucunun oda anahtarlarından kendi
+değerlerini alabilir:
+
+```toml
+tick_hz = 30.0
+room_count = 3
+max_players = 200
+
+[rooms.2]          # lobi: kalabalık, yavaş
+max_players = 2000
+tick_hz = 10       # 30'u böler (her 3. global tick)
+
+[rooms.9]          # room_count'un ötesi: runtime'da açılınca geçerli
+max_players = 16
+max_detach_hold_secs = "off"
+```
+
+- **Anahtarlar:** yalnız oda düzeyindekiler — `tick_hz`, `room_control`,
+  `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
+  `max_idle_input_secs`, `max_detach_hold_secs`; yazım ve anlam düz
+  anahtarlarınki (`max_players = 0` sınırsız, `max_idle_input_secs = 0`
+  kapalı, `max_detach_hold_secs` üç yazımıyla). Yazılmayan anahtar
+  sunucunun değerini korur. Nokta yazımı da aynı şey:
+  `rooms.2.max_players = 2000`.
+- **Katmanlama tek yerde:** `Config::room_template` şablonu ve
+  override'ları birlikte taşır (`RoomTemplate`); `RoomTemplate::room(id)`
+  sunucunun odasını kurar ve id'nin override'ını üstüne koyar. Başlangıç
+  odaları, `/rooms/open` ve `Config::room_config(id)` hepsi oradan kurar
+  — bir yolun override'ı atlaması yapısal olarak mümkün değil.
+- **Öncelik (düşükten yükseğe):** çekirdeğin varsayılanı → düz oda
+  anahtarları → `[rooms.<id>]` → `/rooms/open`'ın `tick_hz` query'si. İstek
+  en özgül söz: operatör bir odayı bilerek başka hızda açıyorsa dosyanın
+  hızı onu ezmez; çatışma zaten idempotentlik kuralıyla yakalanır (canlı
+  oda başka hızdaysa 409). *Elenen:* override'ın query'yi ezmesi — açıkça
+  yazılmış bir istek parametresini sessizce yok saymak ya da ayrı bir
+  4xx gerektirirdi.
+- **İdempotentlik:** registry ortaya çıkan config'i karşılaştırır. Override'lı
+  bir başlangıç odasını query'siz (ya da override'ın hızıyla) yeniden
+  açmak **200**; sunucunun hızıyla açmak artık **409** (o oda o hızda
+  değil). Override'lı runtime id'yi tekrar açmak 200.
+- **Doğrulama (başlatmada, bir şey bağlanmadan):** bilinmeyen anahtar ya
+  da oda düzeyi olmayan anahtar (`bind`, `max_connections`, bir oyunun
+  `teams`'i…) ayrıştırma hatası — hata anahtarı adlandırır ve bölümün
+  aldığı anahtarları sayar; id pozitif ve düz yazılmış bir tam sayı
+  olmalı (`[rooms.0]`, `[rooms.07]`, `[rooms.lobby]` hata; TOML aynı
+  anahtarı iki kez zaten kabul etmez). Registry'nin reddedeceği oda —
+  global hızı bölmeyen `tick_hz`, odanın `tick_hz`'inden büyük
+  `keepalive_hz` — `ServerError::RoomOverride { id, source }` ile
+  başlatmayı durdurur; kural çekirdeğin kendisi
+  (`RoomConfig::step_divisor`, registry'nin create'i de onu çağırır),
+  kopyası değil. Override olmasa başlangıç odası bu durumda yalnız
+  uyarı loglardı (düz anahtarların bu davranışı değişmedi).
+- **`room_count`'un ötesindeki id hata DEĞİL:** runtime odaları
+  herhangi bir pozitif id ile açılır; `[rooms.9]` tam da `/rooms/open?id=9`'un
+  açacağı odayı tanımlar. Hata yapmak bu kullanımı yasaklardı; uyarı
+  doğru bir config'te gürültü olurdu. Bunun yerine başlatmada bir `info`
+  satırı ("boot odası değil, runtime'da açılınca geçerli") yazım hatası
+  bir id'yi görünür kılar.
+- **Varsayılan aynı:** `[rooms]` yoksa her oda bugünkü gibi sunucunun
+  odası (F8'in alan alan testiyle kilitli). İstemci teli değişmedi.
+- *Elenen şekil:* `[[rooms]]` + `id = 7` (listeners gibi dizi) — aynı id
+  iki kez yazılabilir, ayrı bir tekrar kontrolü gerekir ve `id` unutulabilir;
+  odaların doğal bir anahtarı var, TOML tablosu tekrarı yapısal olarak
+  engeller. *Elenen:* override'ı oyuna ham tablo olarak vermek — oda
+  anahtarları motorun, oyunun değil (GAME-MODULE §4.3).
 - **Sözleşme değişikliği (düzeltmenin sonucu):** durum kodları, hata
   gövdeleri ve idempotentlik kuralı aynı. Değişen yalnız istenen
   config'in kendisi, iki görünür sonucu var: (1) oda anahtarları
@@ -154,7 +223,17 @@ aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
    yüzeyin kendi birim testleri (`http/tests.rs`): registry'ye giden
    istek `Config::room_config(id)`'nin alanı alanına aynısı, `tick_hz`
    tek geçersiz kılma, geçersiz hız registry'ye hiç gitmez; uçtan uca
-   `mmo_rooms::a_runtime_room_gets_the_server_ceiling`
+   `mmo_rooms::a_runtime_room_gets_the_server_ceiling`. Oda başına
+   override (B18): `http::tests::the_open_takes_the_id_override_with_the_query_rate_on_top`
+   (id'nin override'ı, override'sız id sunucunun odası, query hızı
+   override'ın üstünde); `room_overrides::the_admin_open_builds_the_overridden_room`
+   (override'lı başlangıç odasını yeniden açmak kendi hızıyla 200,
+   sunucunun hızıyla 409; runtime id 200 + tekrar 200, registry'deki oda
+   `room_config(7)`'nin aynısı); `room_overrides::a_room_cap_of_its_own_refuses_the_third_join`
+   (`max_players = 2`'li oda üçüncü katılımı RoomFull ile reddeder, aynı
+   bağlantıyı sunucunun diğer odası kabul eder); ayrıştırma/doğrulama
+   `config/axes/listeners/room/{tests,overrides/tests}.rs` ve
+   `room_overrides::a_room_the_registry_would_refuse_refuses_startup`
 4. `disabled_by_default_and_binds_when_configured` — varsayılan kapalı,
    config'li çalışma
 5. Prometheus render fonksiyonunun unit testleri (HTTP'den bağımsız)

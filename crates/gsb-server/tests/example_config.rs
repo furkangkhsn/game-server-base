@@ -4,8 +4,8 @@
 //! starts that game (the demo's flat keys, which the other games
 //! refuse, are written commented out — finding K5); and its commented
 //! `[arena]` / `[mmo]` / `[war]` sections, uncommented, are accepted by
-//! their games. Configure only: nothing binds (the example's port is a real
-//! one).
+//! their games, and so is its commented `[rooms.2]` override (B18).
+//! Configure only: nothing binds (the example's port is a real one).
 
 #![cfg(all(
     feature = "game-demo",
@@ -156,4 +156,32 @@ fn the_commented_game_tables_are_valid() {
         }
     }
     configure("demo", &cfg).expect("the demo ignores the games' tables");
+}
+
+/// The commented `[rooms.2]` example (B18), uncommented, gives room 2 its
+/// own keys under the rate rule, leaves room 1 the server's room, and
+/// every game still takes the file; as shipped, no room is overridden.
+#[test]
+fn the_commented_room_override_is_valid() {
+    let mut text = String::new();
+    let mut block = false;
+    for line in EXAMPLE.lines() {
+        block = line == "#[rooms.2]" || (block && line.starts_with('#') && line.contains(" = "));
+        text.push_str(if block { &line[1..] } else { line });
+        text.push('\n');
+    }
+    let shipped = load(EXAMPLE);
+    assert!(shipped.rooms.is_empty(), "written commented");
+    let cfg = load(&text);
+    assert_eq!(cfg.rooms.keys().copied().collect::<Vec<_>>(), [2]);
+    let two = cfg.room_config(2);
+    assert_eq!((two.max_players, two.tick_hz), (Some(2000), 10.0));
+    assert_eq!(two.step_divisor(cfg.tick_hz).ok(), Some(3), "10 divides 30");
+    assert_eq!(cfg.room_config(1), shipped.room_config(1));
+    for game in ["demo", "arena", "mmo", "war"] {
+        let text = text.replacen("game = \"demo\"", &format!("game = \"{game}\""), 1);
+        if let Err(e) = configure(game, &load(&text)) {
+            panic!("{game} refused the room override: {e}");
+        }
+    }
 }

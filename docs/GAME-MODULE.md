@@ -132,6 +132,32 @@ ham `toml::Table`'ı alır:
   olmadığı ham tablodan anlaşılır (`Config` `#[serde(default)]` olduğu için
   struct'tan anlaşılamaz).
 
+**Oda config'i ≠ oyun tablosu (BACKLOG B18).** İki ayrı katman var ve
+birbirine karışmaz:
+
+- **Oda düzeyi anahtarlar motorundur:** `tick_hz`, `room_control`,
+  `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
+  `max_idle_input_secs`, `max_detach_hold_secs` çekirdeğin `RoomConfig`'ine
+  gider (`Config::room_template`, tek eşleme). Sunucunun bütün odaları
+  bunları düz anahtarlardan alır; **bir oda kendi değerlerini**
+  `[rooms.<id>]` bölümünden alabilir (aynı sekiz anahtar, aynı yazım ve
+  anlam; katmanlama `RoomTemplate::room(id)`'de, tek yerde — ayrıntı
+  OPS §2). Fabrika o odayı kurarken `&RoomConfig`'i zaten alıyor; oyunun
+  yapması gereken bir şey yok, oyun bu bölümü görmez de.
+- **Oyunun ayarları oyunundur:** `[arena]`, `[mmo]`, `[war]` (ya da
+  demo'nun düz anahtarları) — fabrika bir kez kurulur ve her odaya aynı
+  ayarla uygulanır. `[rooms.<id>]` içine bir oyun anahtarı (`teams`),
+  sunucu çapında bir anahtar (`bind`, `max_connections`) ya da yazım
+  hatası yazmak başlatmayı durdurur (bilinmeyen alan; hata oda bölümünün
+  aldığı anahtarları sayar) — §6 karar 2'nin ruhu: hiçbir anahtar
+  sessizce yok sayılmaz. Oda başına OYUN ayarı (bir lobide farklı takım
+  sayısı gibi) bu turun kapsamında değil: oyunun kararıdır, gerekirse
+  oyun kendi tablosunda id'ye göre okur (motor politika seçmez).
+- `rooms` hiçbir oyunun sabitlediği bir anahtar değil; bir oyunun
+  `own_table`'ı ona bakmaz, bu yüzden `[rooms.<id>]` her oyunla çalışır
+  ve `config.example.toml` onu (yorumlu) taşırken oyun değiştirme yalnız
+  `game` satırıyla kalır (K5).
+
 ### 4.4 Loadgen: `LoadBot` + ortak istemci görünümü
 
 - Oyun başına bir `LoadBot` (dyn): bir bot için bir sonraki girdiyi, flood

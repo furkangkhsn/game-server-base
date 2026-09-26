@@ -108,7 +108,8 @@ udp_max_datagram_bytes = 1472
 # one (e.g. global 60 → a room at 15 steps every 4th tick).
 tick_hz = 30.0
 
-# Rooms pre-created at startup (ids 1..=room_count), all at the global rate.
+# Rooms pre-created at startup (ids 1..=room_count), all at the global rate
+# (unless a room's own [rooms.<id>] section below says otherwise).
 room_count = 1
 
 # Maximum frame body size in bytes (length-prefix guard; 1 MiB default).
@@ -226,7 +227,8 @@ keepalive_hz = 1.0
 # Tavanda hâlâ duran veto ezilir, bekletme politikanın sonuna (bot devri
 # ya da despawn) biter ve oda bir kez uyarır. Tavan yalnız VETOYU ezer:
 # oyunun grace'ini (ör. MMO'nun çıkış sayacı) asla kısaltmaz. Barındırılan
-# her oyunun odalarına (sharded oyunda her shard'a) aynen gider.
+# her oyunun odalarına (sharded oyunda her shard'a) aynen gider; bir oda
+# kendi değerini [rooms.<id>] ile alabilir (aşağıda).
 #
 #   yazılmazsa = 600 (çekirdeğin varsayılanı)
 #   N          = N saniye (kesir olabilir: 2.5)
@@ -362,6 +364,25 @@ keepalive_hz = 1.0
 # beyond localhost is an explicit decision that needs a network-level
 # guard (firewall/ACL), not just good intentions.
 #http_listen = "127.0.0.1:9090"
+
+# ── Oda başına override'lar: [rooms.<id>] (docs/OPS.md §2, B18) ────────
+# Bir oda (kalabalık bir oda, bir lobi) yukarıdaki ODA DÜZEYİ anahtarlardan
+# kendi değerlerini alabilir: tick_hz, room_control, conn_action,
+# max_snapshot_bytes, keepalive_hz, max_players, max_idle_input_secs,
+# max_detach_hold_secs — aynı yazım, aynı anlam (max_players = 0 sınırsız,
+# max_detach_hold_secs = "off" tavansız). Yazılmayan anahtar sunucunun
+# değerinde kalır; bölümü olmayan oda sunucunun odasıdır.
+#
+# Id, room_count'un ötesinde de olabilir: o zaman runtime'da
+# POST /rooms/open?id=<id> ile açılan oda bu değerleri alır (query'deki
+# tick_hz bunun da üstündedir). Başlatmayı durdurur: başka bir anahtar
+# (bind, max_connections, bir oyunun ayarı — onlar oyunun tablosunda),
+# pozitif düz tam sayı olmayan id ([rooms.0], [rooms.07]), global
+# tick_hz'i bölmeyen tick_hz, odanın tick_hz'inden büyük keepalive_hz.
+# Tablo olduğu için düz anahtarlardan SONRA gelir.
+#[rooms.2]
+#max_players = 2000
+#tick_hz = 10.0
 
 # ── Hosted games' own tables ──────────────────────────────────────────
 # game = "arena", game = "mmo" and game = "war" read ONLY the table named
