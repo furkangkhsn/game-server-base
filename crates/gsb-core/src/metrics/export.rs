@@ -24,8 +24,10 @@
 
 use crate::metrics::MetricReport;
 
-#[cfg(feature = "prometheus")]
+#[cfg(any(feature = "prometheus", feature = "otlp"))]
 mod families;
+#[cfg(feature = "otlp")]
+pub mod otlp;
 #[cfg(feature = "prometheus")]
 mod prometheus;
 

@@ -14,6 +14,10 @@ default = ["prometheus"]
 # The Prometheus text exposition (`MetricReport::render_prometheus`), the
 # body of the ops surface's `/metrics`. Pull: rendered at scrape time.
 prometheus = []
+# The OTLP push exporter (`metrics::otlp`): OTLP/HTTP protobuf to a
+# collector, on its own task. No new dependency: the messages are
+# `prost` derives, the request a plain tokio `TcpStream`.
+otlp = []
 
 [dependencies]
 tokio = { workspace = true }

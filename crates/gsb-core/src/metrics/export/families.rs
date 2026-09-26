@@ -32,6 +32,7 @@ pub(super) enum Kind {
     Gauge,
 }
 
+#[cfg(feature = "prometheus")]
 impl Kind {
     /// The Prometheus `# TYPE` word.
     pub(super) fn word(self) -> &'static str {

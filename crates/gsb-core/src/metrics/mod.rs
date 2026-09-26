@@ -104,6 +104,8 @@ pub use accumulator::MetricAccumulator;
 pub use closes::ServerCloses;
 pub use collector::{MetricSink, MetricsCollector};
 pub use export::Exporter;
+#[cfg(feature = "otlp")]
+pub use export::otlp;
 pub use logic::{
     LOGIC_COUNTERS_MAX, LOGIC_NAME_MAX, LogicCounter, LogicCounters, LogicFold, LogicSlot,
 };

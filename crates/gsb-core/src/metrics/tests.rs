@@ -18,6 +18,8 @@ mod export;
 mod golden;
 mod histogram;
 mod logic;
+#[cfg(feature = "otlp")]
+mod otlp;
 #[cfg(feature = "prometheus")]
 mod prometheus;
 mod pruning;

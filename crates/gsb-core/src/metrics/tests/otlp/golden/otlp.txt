@@ -1,0 +1,247 @@
+resource service.name=gsb-test
+scope gsb
+gsb_metrics_dropped sum t=2 mono=true unit="" n=1 | Metric samples dropped on the bounded metrics channel across all producers.
+  [] 1000..2000 int 0
+gsb_registry_rooms gauge unit="" n=1 | Current room count.
+  [] 0..2000 int 2
+gsb_registry_conns gauge unit="" n=1 | Current registered connection count.
+  [] 0..2000 int 3
+gsb_registry_rooms_created sum t=2 mono=true unit="" n=1 | Rooms created, cumulative.
+  [] 1000..2000 int 2
+gsb_registry_rooms_destroyed sum t=2 mono=true unit="" n=1 | Rooms destroyed, cumulative.
+  [] 1000..2000 int 0
+gsb_registry_rooms_died sum t=2 mono=true unit="" n=1 | Rooms/shards died unexpectedly (panicked), cumulative.
+  [] 1000..2000 int 0
+gsb_registry_joins sum t=2 mono=true unit="" n=1 | Joins completed, cumulative.
+  [] 1000..2000 int 3
+gsb_registry_leaves sum t=2 mono=true unit="" n=1 | Leaves completed, cumulative.
+  [] 1000..2000 int 1
+gsb_registry_opens sum t=2 mono=true unit="" n=1 | Connections opened, cumulative.
+  [] 1000..2000 int 4
+gsb_registry_closes sum t=2 mono=true unit="" n=1 | Connections closed, cumulative.
+  [] 1000..2000 int 1
+gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
+  [] 1000..2000 int 410
+gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.
+  [] 1000..2000 int 17700
+gsb_net_bytes_out_control sum t=2 mono=true unit="" n=1 | Control-frame bytes sent by connection actors, cumulative.
+  [] 1000..2000 int 60
+gsb_net_bytes_out sum t=2 mono=true unit="" n=1 | Total wire bytes sent, cumulative.
+  [] 1000..2000 int 17760
+gsb_net_frames_in sum t=2 mono=true unit="" n=1 | Frames received over all connections, cumulative.
+  [] 1000..2000 int 21
+gsb_net_frames_out sum t=2 mono=true unit="" n=1 | Control frames sent by connection actors, cumulative.
+  [] 1000..2000 int 3
+gsb_net_actions_dropped sum t=2 mono=true unit="" n=1 | Input actions dropped on full per-connection action channels, cumulative.
+  [] 1000..2000 int 5
+gsb_net_violations sum t=2 mono=true unit="" n=1 | Protocol-violation events counted by violation budgets, cumulative.
+  [] 1000..2000 int 1
+gsb_net_server_closes sum t=2 mono=true unit="" n=11 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
+  [reason=idle_timeout] 1000..2000 int 1
+  [reason=write_stall] 1000..2000 int 0
+  [reason=rel_dead] 1000..2000 int 0
+  [reason=violation_budget] 1000..2000 int 0
+  [reason=preauth_budget] 1000..2000 int 0
+  [reason=stream_rejected] 1000..2000 int 0
+  [reason=conn_cap] 1000..2000 int 0
+  [reason=unauth_cap] 1000..2000 int 0
+  [reason=superseded] 1000..2000 int 0
+  [reason=room_gone] 1000..2000 int 0
+  [reason=outbound_dead] 1000..2000 int 0
+gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
+  [room=r1] 0..2000 double 30
+  [room=r7] 0..2000 double 0
+gsb_room_budget_us gauge unit="" n=2 | The room's tick budget in microseconds (one period).
+  [room=r1] 0..2000 double 33333
+  [room=r7] 0..2000 double 33333
+gsb_room_step_min_us gauge unit="" n=2 | Minimum step body duration, µs.
+  [room=r1] 0..2000 double 40
+  [room=r7] 0..2000 double 0
+gsb_room_step_mean_us gauge unit="" n=2 | Mean step body duration, µs.
+  [room=r1] 0..2000 double 100
+  [room=r7] 0..2000 double 0
+gsb_room_step_max_us gauge unit="" n=2 | Maximum step body duration, µs.
+  [room=r1] 0..2000 double 900
+  [room=r7] 0..2000 double 0
+gsb_room_late_min_us gauge unit="" n=2 | Minimum tick processing latency (step start − ticker timestamp), µs.
+  [room=r1] 0..2000 double 5
+  [room=r7] 0..2000 double 0
+gsb_room_late_mean_us gauge unit="" n=2 | Mean tick processing latency, µs.
+  [room=r1] 0..2000 double 20
+  [room=r7] 0..2000 double 0
+gsb_room_late_max_us gauge unit="" n=2 | Maximum tick processing latency, µs.
+  [room=r1] 0..2000 double 70
+  [room=r7] 0..2000 double 0
+gsb_room_step_hist histogram t=2 unit="" n=2 | Step body duration histogram; buckets are fractions of the room's tick budget (le in µs); bins at/above the budget edge are budget overflow.
+  [room=r1] 1000..2000 count=60 sum=Some(6000.0) min=Some(40.0) max=Some(900.0) bounds=[261.0, 521.0, 1042.0, 2084.0, 4167.0, 8334.0, 16667.0, 33333.0, 66666.0, 133332.0, 266664.0, 533328.0, 1066656.0] counts=14[0:60]
+  [room=r7] 1000..2000 count=0 sum=Some(0.0) min=None max=None bounds=[261.0, 521.0, 1042.0, 2084.0, 4167.0, 8334.0, 16667.0, 33333.0, 66666.0, 133332.0, 266664.0, 533328.0, 1066656.0] counts=14[]
+gsb_room_step_duration_us histogram t=2 unit="" n=2 | Step body duration, µs, in fixed 8 µs buckets; the last bucket holds the steps at/above the fine cap (4096 µs).
+  [room=r1] 1000..2000 count=60 sum=Some(6000.0) min=Some(40.0) max=Some(900.0) bounds=512x8 counts=513[12:60]
+  [room=r7] 1000..2000 count=0 sum=Some(0.0) min=None max=None bounds=512x8 counts=513[]
+gsb_room_steps sum t=2 mono=true unit="" n=2 | Steps run, cumulative.
+  [room=r1] 1000..2000 int 60
+  [room=r7] 1000..2000 int 15
+gsb_room_lagged_events sum t=2 mono=true unit="" n=2 | Broadcast Lagged occurrences, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_lagged_ticks sum t=2 mono=true unit="" n=2 | Missed tick indices caught up, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_dropped sum t=2 mono=true unit="" n=2 | Outbound batches dropped at the fan-out (slow client), cumulative.
+  [room=r1] 1000..2000 int 2
+  [room=r7] 1000..2000 int 0
+gsb_room_dropped_s gauge unit="" n=2 | Batch drop rate (Δ/s over the last sample interval).
+  [room=r1] 0..2000 double 2
+  [room=r7] 0..2000 double 0
+gsb_room_keepalive_resends sum t=2 mono=true unit="" n=2 | Keep-alive re-sends of unchanged groups, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_snapshots sum t=2 mono=true unit="" n=2 | Group snapshots encoded, cumulative.
+  [room=r1] 1000..2000 int 29
+  [room=r7] 1000..2000 int 0
+gsb_room_snap_bytes_s gauge unit="" n=2 | Encoded snapshot byte rate (Δ/s).
+  [room=r1] 0..2000 double 3000
+  [room=r7] 0..2000 double 0
+gsb_room_snap_bytes_max gauge unit="" n=2 | Largest single group payload seen, bytes.
+  [room=r1] 0..2000 double 120
+  [room=r7] 0..2000 double 0
+gsb_room_snap_overflows sum t=2 mono=true unit="" n=2 | Snapshots exceeding max_snapshot_bytes, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_snap_records sum t=2 mono=true unit="" n=2 | Entity records encoded (overlap-metric numerator), cumulative.
+  [room=r1] 1000..2000 int 58
+  [room=r7] 1000..2000 int 0
+gsb_room_shipped_bytes sum t=2 mono=true unit="" n=2 | Bytes shipped to connections (fan-out copies), cumulative.
+  [room=r1] 1000..2000 int 17700
+  [room=r7] 1000..2000 int 0
+gsb_room_shipped_s gauge unit="" n=2 | Shipped-byte rate (Δ/s).
+  [room=r1] 0..2000 double 9000
+  [room=r7] 0..2000 double 0
+gsb_room_groups gauge unit="" n=2 | Current snapshot group count.
+  [room=r1] 0..2000 double 1
+  [room=r7] 0..2000 double 0
+gsb_room_members gauge unit="" n=2 | Current member count.
+  [room=r1] 0..2000 double 2
+  [room=r7] 0..2000 double 0
+gsb_room_max_group gauge unit="" n=2 | Largest snapshot group right now.
+  [room=r1] 0..2000 double 2
+  [room=r7] 0..2000 double 0
+gsb_room_detached gauge unit="" n=2 | Detached-but-parked connections right now (their cap slots are held).
+  [room=r1] 0..2000 double 0
+  [room=r7] 0..2000 double 1
+gsb_room_joins sum t=2 mono=true unit="" n=2 | Joins processed, cumulative.
+  [room=r1] 1000..2000 int 3
+  [room=r7] 1000..2000 int 0
+gsb_room_leaves sum t=2 mono=true unit="" n=2 | Leaves processed, cumulative.
+  [room=r1] 1000..2000 int 1
+  [room=r7] 1000..2000 int 0
+gsb_room_resumes sum t=2 mono=true unit="" n=2 | Resumes accepted onto parked sessions, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_resume_rejected_stale sum t=2 mono=true unit="" n=2 | Resume attempts rejected as stale, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_detach_expired_despawn sum t=2 mono=true unit="" n=2 | Detach holds expired toward despawn, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_detach_expired_ai sum t=2 mono=true unit="" n=2 | Detach holds expired toward AI handover, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_detach_forced sum t=2 mono=true unit="" n=2 | Detach holds forced to end by max_detach_hold over a standing veto, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_effects_applied sum t=2 mono=true unit="" n=2 | Remote effects this shard's game applied as their authority, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 6
+gsb_room_effects_forwarded sum t=2 mono=true unit="" n=2 | Remote effects handed on to a migrated target's new owner, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_effects_orphaned sum t=2 mono=true unit="" n=2 | Remote effects whose target is gone, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_effects_dropped sum t=2 mono=true unit="" n=2 | Remote effects lost to a full retry buffer, a closed link, the hop or the age bound, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_effects_refused sum t=2 mono=true unit="" n=2 | Remote-effect emits refused at the source (budget spent, target not lent), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_migrations_out sum t=2 mono=true unit="" n=2 | Entities handed to a neighbour shard (committed sends), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_migrations_in sum t=2 mono=true unit="" n=2 | Entities installed from a neighbour shard, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_migrations_failed sum t=2 mono=true unit="" n=2 | Migration sends a full neighbour inbox refused (retried next tick), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_exports sum t=2 mono=true unit="" n=2 | Team exports queued on the registry's mailbox (the team hub), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 9
+gsb_room_team_export_drops sum t=2 mono=true unit="" n=2 | Team exports a full or closed registry mailbox refused, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_export_records sum t=2 mono=true unit="" n=2 | Records in the queued team exports, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_over_cap sum t=2 mono=true unit="" n=2 | Team records (and viewed teams) cut by the core's per-message caps, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_over_budget sum t=2 mono=true unit="" n=2 | Team records the game's per-team export budget cut before the export reached the core, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_team_imports sum t=2 mono=true unit="" n=2 | Team imports (the hub's relays) applied, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_import_records sum t=2 mono=true unit="" n=2 | Records in the applied team imports, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_expired sum t=2 mono=true unit="" n=2 | Team import slots dropped by the TTL (a silent source), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_local sum t=2 mono=true unit="" n=2 | RPC requests answered room-local, cumulative.
+  [room=r1] 1000..2000 int 4
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_external sum t=2 mono=true unit="" n=2 | RPC requests delegated to workers, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_malformed sum t=2 mono=true unit="" n=2 | RPC rejections: malformed envelope/id=0, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_dup sum t=2 mono=true unit="" n=2 | RPC rejections: duplicate in-flight id, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_no_handler sum t=2 mono=true unit="" n=2 | RPC rejections: no handler for the op, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_logic sum t=2 mono=true unit="" n=2 | RPC rejections: the logic's own reject decision, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_conn_cap sum t=2 mono=true unit="" n=2 | RPC rejections: per-connection pending cap, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_rejected_room_cap sum t=2 mono=true unit="" n=2 | RPC rejections: room-wide pending cap, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_refused_congested sum t=2 mono=true unit="" n=2 | RPC requests refused unanswered on a congested connection (the storm bound), cumulative.
+  [room=r1] 1000..2000 int 3
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_timed_out sum t=2 mono=true unit="" n=2 | RPC pending requests swept as timed out, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_late sum t=2 mono=true unit="" n=2 | RPC worker reports dropped as late, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_pending_requests gauge unit="" n=2 | External RPC requests currently in flight.
+  [room=r1] 0..2000 double 0
+  [room=r7] 0..2000 double 1
+gsb_room_metrics_dropped sum t=2 mono=true unit="" n=2 | Metric samples this room dropped on a full metrics channel, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_logic_kills sum t=2 mono=true unit="" n=1 | Players felled, cumulative.
+  [room=r1] 1000..2000 int 3
+gsb_room_logic_fights_peak gauge unit="" n=1 | The logic's own high-water mark.
+  [room=r7] 0..2000 int 5
+gsb_export_otlp_reports_dropped sum t=2 mono=true unit="" n=1 | Reports this exporter dropped on its full hand-off to the push task, cumulative.
+  [] 1000..2000 int 4
+gsb_export_otlp_push_failures sum t=2 mono=true unit="" n=1 | OTLP pushes that failed (connect, timeout or non-2xx status), cumulative.
+  [] 1000..2000 int 2
