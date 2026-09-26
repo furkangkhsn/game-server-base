@@ -64,7 +64,8 @@ const ALL_ENDED: StopReport = StopReport {
     accept_loops_ended: DOORS.len(),
     accept_loops_aborted: 0,
     rooms_finished: true,
-    services_ended: 0,
+    // The demo's economy service, stopped after the rooms (BACKLOG F5).
+    services_ended: 1,
     services_aborted: 0,
 };
 

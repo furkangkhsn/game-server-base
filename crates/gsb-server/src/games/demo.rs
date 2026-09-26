@@ -111,17 +111,20 @@ impl GameModule for DemoModule {
     /// `Cell`, `Team`, `Sector`) or the sharded grid topology, so each arm
     /// spawns its own `Registry<W, G, St, Sp>`. `configure` already
     /// validated the combination; every arm here is a supported one.
-    fn spawn_registry(&self, parts: RegistryParts) -> RegistryTask {
+    fn spawn_registry(&self, mut parts: RegistryParts) -> RegistryTask {
         let s = *self.settings();
         // One economy service per server (the RPC pattern's external-I/O
         // reference adapter), shared by clone with every room of EVERY
         // build: each kit room forwards requests to the game, so the
         // service is what decides whether `ECONOMY` is answered —
         // uniformly, whatever the axes resolved to (GAME-MODULE §6
-        // decision 11).
-        let economy = gsb_demo::economy::EconomyService::spawn(
+        // decision 11). Registered for the server's explicit stop
+        // (BACKLOG F5): it is asked to stop only after every room ended,
+        // so a purchase a room delegated on its way out is still answered.
+        let (economy, service) = gsb_demo::economy::EconomyService::start(
             gsb_demo::economy::EconomyService::default_latency(),
         );
+        parts.service(service);
         let grace = s.disconnect_grace;
         // The sharded builds report one match result per shard through the
         // shared sink, under the logical room id (see `gsb_core::shard`).

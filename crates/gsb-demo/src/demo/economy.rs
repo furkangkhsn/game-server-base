@@ -22,7 +22,19 @@
 //! registered the request ends) — which is exactly the client-visible
 //! contract of the pattern ("the answer comes later, and looks like the
 //! same kind of frame").
+//!
+//! **Stop (BACKLOG F5).** [`EconomyService::start`] also returns the
+//! service's [`Service`] — its task and a stop request (a `Stop` message
+//! behind whatever is already queued) — for a game module to register
+//! with the server (`RegistryParts::service`), which asks for the stop
+//! only after every room ended. On `Stop` the worker serves nothing new
+//! (a later request answers "economy service gone"), waits for the
+//! answers it already owes, and ends. [`EconomyService::spawn`] keeps the
+//! pre-F5 life: no stop request, the task ends when its last handle
+//! drops.
 
+use gsb_core::channel::post;
+use gsb_core::service::{Service, hold};
 use tokio::sync::{mpsc, oneshot};
 
 /// One purchase request to the economy service.
@@ -39,10 +51,16 @@ pub struct EconomyBuy {
 /// is the observable effect the client sees in `BuyResult.price`).
 pub const PRICES: &[(&str, u32)] = &[("potion", 100), ("sword", 500), ("shield", 300)];
 
+/// What the worker's mailbox carries: requests, then (once) its stop.
+enum EconomyMsg {
+    Buy(EconomyBuy),
+    Stop,
+}
+
 /// The in-process economy service (see the module docs for the role).
 #[derive(Debug)]
 pub struct EconomyService {
-    tx: mpsc::Sender<EconomyBuy>,
+    tx: mpsc::Sender<EconomyMsg>,
     /// The simulated I/O time per request (the "database latency").
     latency: std::time::Duration,
 }
@@ -59,28 +77,22 @@ impl Clone for EconomyService {
 impl EconomyService {
     /// Spawn the service task. `latency` is the simulated I/O time per
     /// request; `0` answers on the worker's next poll (tests). Returns
-    /// a cloneable client handle (each room gets one).
+    /// a cloneable client handle (each room gets one). The task ends when
+    /// the last handle drops; [`Self::start`] adds an explicit stop.
     pub fn spawn(latency: std::time::Duration) -> Self {
-        let (tx, mut rx) = mpsc::channel::<EconomyBuy>(64);
-        tokio::spawn(async move {
-            while let Some(buy) = rx.recv().await {
-                let kind = buy.kind.clone();
-                let reply = buy.reply;
-                // The simulated I/O: an owning sleep (no room state is
-                // held — the worker task owns this).
-                let latency = latency;
-                tokio::spawn(async move {
-                    tokio::time::sleep(latency).await;
-                    let price = PRICES.iter().find(|(k, _)| *k == kind).map(|(_, p)| *p);
-                    let result = match price {
-                        Some(p) => Ok(p),
-                        None => Err(format!("unknown item `{kind}`")),
-                    };
-                    let _ = reply.send(result);
-                });
-            }
-        });
-        Self { tx, latency }
+        Self::start(latency).0
+    }
+
+    /// Spawn the service task, returning the client handle AND the
+    /// service's [`Service`] (named `economy`) for the server's explicit
+    /// stop (see the module docs). Dropping the `Service` leaves the
+    /// [`Self::spawn`] life.
+    pub fn start(latency: std::time::Duration) -> (Self, Service) {
+        let (tx, rx) = mpsc::channel::<EconomyMsg>(64);
+        let task = tokio::spawn(serve(rx, latency));
+        let stop = tx.clone();
+        let service = Service::new("economy", task, move || post(&stop, EconomyMsg::Stop));
+        (Self { tx, latency }, service)
     }
 
     /// Default simulated I/O time (see the module docs: below one demo
@@ -98,10 +110,10 @@ impl EconomyService {
         let tx = self.tx.clone();
         async move {
             if tx
-                .send(EconomyBuy {
+                .send(EconomyMsg::Buy(EconomyBuy {
                     kind,
                     reply: reply_tx,
-                })
+                }))
                 .await
                 .is_err()
             {
@@ -114,3 +126,37 @@ impl EconomyService {
         }
     }
 }
+
+/// The worker: one receive at a time; each request is answered from its
+/// own short task (the simulated I/O), so a slow answer never holds the
+/// mailbox. After `Stop` (or the last handle dropping) it waits for the
+/// answers still in flight — they hold the drop barrier — then ends.
+async fn serve(mut rx: mpsc::Receiver<EconomyMsg>, latency: std::time::Duration) {
+    let (work, in_flight) = hold();
+    while let Some(msg) = rx.recv().await {
+        let buy = match msg {
+            EconomyMsg::Buy(buy) => buy,
+            EconomyMsg::Stop => break,
+        };
+        let work = work.clone();
+        tokio::spawn(async move {
+            // The simulated I/O: an owning sleep (no room state is held
+            // — the worker task owns this).
+            tokio::time::sleep(latency).await;
+            let price = PRICES.iter().find(|(k, _)| *k == buy.kind).map(|(_, p)| *p);
+            let result = match price {
+                Some(p) => Ok(p),
+                None => Err(format!("unknown item `{}`", buy.kind)),
+            };
+            let _ = buy.reply.send(result);
+            drop(work);
+        });
+    }
+    // Refuse what comes after the stop, then deliver what was promised.
+    drop(rx);
+    drop(work);
+    in_flight.wait().await;
+}
+
+#[cfg(test)]
+mod tests;
