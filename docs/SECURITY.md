@@ -20,6 +20,7 @@
 | rUDP parçalama: yeniden birleştirme yalnız istemcide, sabit sınırlı; sunucu istemci parçasını reddeder | rUDP parçalama turu (U) | ✅ Uygulandı (§4.1; DESIGN §6 "MTU") |
 | rUDP el sıkışma kaybı: proof yeniden gönderimi + kabul (`ACK{1}`), sunucu proof'ta idempotent | H turu | ✅ Uygulandı (§4.2; DESIGN §6 "El sıkışma kaybı") |
 | Doğrulanmış kimlik = karakter anahtarı (ticket'sız yol yalnız geliştirme) | K4 turu | ✅ Uygulandı (§4b) |
+| El sıkışma accept döngüsünün dışında, kapı başına sınırlı (WS/TLS/QUIC; sessiz tek soket kapıyı kilitliyordu) | B31 | ✅ Uygulandı (§4.3; DESIGN §6 "El sıkışan kapılar") |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 
@@ -41,7 +42,9 @@
 
 - Handshake yavaş/düşmanca istemci: TLS accept timeout (config'siz sabit,
   örn. 10 sn) aşımında bağlantı kapatılır — reader-pump idle idiom'u ile
-  aynı aile
+  aynı aile. *(B31: süre sınırı yalnız o bağlantının yuvasını tutar;
+  el sıkışma artık accept döngüsünde değil, bağlantı başına görevde ve
+  kapı başına sınırlı sayıda — §4.3.)*
 - `TlsTransport` plaintext `tcp` ile aynı e2e süitinden geçer
   (parametreli: her guardrail testi iki transportta da koşar — rUDP'de
   yapılanın TLS karşılığı)
@@ -287,6 +290,50 @@ yeniden gönderim kurar, iki dilim eski kopya cevapsız),
 `udp::tests::handshake` (kayıp proof/challenge/kabul iyileşir; vazgeçiş
 temiz `TimedOut`, zombi yok).
 
+### 4.3 El sıkışma sınırı: kapı başına, accept döngüsünün dışında (B31)
+
+B29'un WS yük ölçümü (DESIGN §5.7) el sıkışan kapıların — WS
+yükseltmesi, TLS, QUIC — el sıkışmayı `accept()`'in İÇİNDE yaptığını ve
+sunucunun accept döngüsünün her accept'i sırayla beklediğini gösterdi:
+yükseltme isteği göndermeyen TEK bir soket kapıyı el sıkışma süre
+sınırı (10 sn) boyunca kilitliyordu — arkasındaki 20 istemcinin connect
+p50'si 9610 ms; önemsiz bir hizmet reddi. Bağlanma fırtınasında backlog
+taşıyor, başarısız el sıkışma döngüyü 100 ms geri çekiyordu. TLS kapısı
+aynı yapıdaydı; QUIC'te el sıkışmayı quinn'in sürücüsü yürütse de
+`accept` onu (ve istemcinin bi-stream'ini) bekliyordu — aynı seri yapı.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **El sıkışma bağlantı başına kendi görevinde** (`gsb_net::transport::intake`): kapının kabul görevi ham bağlantıyı alır, ona bir yuva ve bir el sıkışma görevi verir; biten uç nokta bir kuyrukla `accept`'e gelir — `Listener::accept`'in şekli sunucu için değişmedi | Sessiz ya da yavaş istemci yalnız kendi yuvasını tutar, kapıyı değil; başarısız el sıkışma accept döngüsüne hiç ulaşmaz (hata yok, geri çekilme yok) |
+| 2 | **Sınır: kapı başına uçuştaki el sıkışma sayısı = unauthed cap** (`max_unauth_conns`'un çözülmüş değeri, vars. 25 000; cap `0` ile kapatılmışsa türetilmiş varsayılan — `boot/start/pre_auth.rs`). Yeni bir config anahtarı yok; `gsb-net` taşıma yapılarında alan var (`max_pending_handshakes`, doğrudan gömene vars. 1024) | Uçuştaki el sıkışma, unauthed bağlantı olma yolundaki bağlantıdır: tek pre-auth bütçesi, iki evre. El sıkışma evresi sonrakinden ucuz tüketilemez (başkalarını kapıda reddettirmek için tutulması gereken soket sayısı, cap'i sessiz oturumlarla doldurmak için gerekenle aynı) ve sunucunun cap'le zaten tutabileceğinden fazlasını tutmaz. Cap'in kapatılması (dış kapı var) kapıyı sınırsız bırakmaz — el sıkışma her dış kapının görebileceği noktadan önce |
+| 3 | **Sınırın üstünde ucuz ret, kuyruk yok:** WS/TLS'te soket el sıkışmasız kapanır; QUIC'te quinn `refuse` (CONNECTION_REFUSED, el sıkışma yok). Ret sayılır. Yuva ham accept'ten accept döngüsünün uç noktayı almasına dek tutulur; kuyruğun her girdisi bir yuva taşıdığından kuyruk uzunluğu ≤ sınır | Hiçbir yerde sınırsız bekleme yok; ret yolunda yazma (ör. HTTP 503) yok — yavaş okuyana yazmak iş olurdu |
+| 4 | Her el sıkışma kendi süre sınırı altında: WS/TLS/QUIC 10 sn (değişmedi; QUIC'te bi-stream açılışı dahil) | Sessiz istemci bir yuvayı en çok bu kadar tutar |
+| 5 | Kabul görevi, her el sıkışma görevi ve bekleyen `accept` dinleyicinin `Door`'u (B16) altında: `close()` — ya da son tutamacın düşmesi — ham accept'i, uçuştaki her el sıkışmayı (soketi düşer) ve kuyrukta bekleyeni keser | `stop()` hâlâ hemen biter, `StopReport` ağaç içi kapılarda 0 abort; kapanmış kapı yarım bağlantı tutmaz |
+| 6 | **Sayaçlar:** `Listener::handshake_stats()` → `HandshakeStats { in_flight, completed, refused, timed_out, failed }` (el sıkışmayan kapılarda `None`); kabul görevi biterken özet `info` ("handshake intake stopped"); sınıra dayanan dönemin ilk reddi tek `warn` (dönem başına bir, ret başına değil); başarısız/süresi dolan her el sıkışma eskisi gibi `warn` | Dinleyiciler için metrik yolu yok (rUDP demux'ının sayaçları da kapanış özetiyle görünür); `handshake_stats` gömene ve testlere sayaçların kendisini verir. Ret başına uyarı, ret selinde log seli olurdu |
+
+**Kalan yüzey.** Sınır kapı başınadır, kaynak adres başına değil: tek
+bir kaynak bütün yuvaları (vars. 25 000 soket, her biri ≤ 10 sn) hâlâ
+tutabilir — fark, bunun artık TEK soket değil cap kadar soket
+gerektirmesi (unauthed cap'i sessiz oturumlarla doldurmanın bedeliyle
+aynı). Adres başına el sıkışma sınırı §6 NOT-DONE.
+
+Kilit: `gsb-net` `transport::intake::tests` (takılı el sıkışma biteni
+tutmaz; sınır reddeder ve sayar; biten el sıkışma alınana dek yuvasını
+tutar; süre sınırı keser ve sayar; başarısız el sıkışma sayılır,
+sıraya girmez; `close` uçuştakileri keser ve accept'i bitirir, kuyruğu
+boşaltır; son tutamacın düşmesi kapıyı kapatır),
+`ws::tests::off_accept` (sessiz eş kapıyı tutmaz; başarısız yükseltme
+accept hatası değil; `close` uçuştaki yükseltmeyi keser; beş sessiz eş
+= beş uçuşta; sınır üstü bağlantı hemen kapanır ve sayılır, geri
+verilen yuva sonrakine hizmet eder), `tls::tests::off_accept` (aynı
+üçü, gerçek rustls istemcisiyle), `quic::tests::off_accept` (bi-stream
+açmayan eş kapıyı tutmaz; sınır üstü bağlantı `refuse` ile reddedilir),
+`tls::tests::wrong_ca_fails_the_handshake` ve QUIC eşi (başarısızlık
+accept hatası değil, sayaç), `gsb-server/tests/handshake_door.rs`
+(sunucu arkasında: sessiz eşler varken TLS el sıkışması ve WS
+yükseltme + AUTH < 2 sn; `max_unauth_conns = 1` iki kapının da
+sınırı), `boot::start::pre_auth::tests` (sınırın türetimi).
+
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
 K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının
@@ -330,6 +377,9 @@ yolu kendi sebep kovasında sayılır ve komşu kovalar kıpırdamaz
 WS uyum kapısı turu: §3.7 tablosunun her satırı okuyucu seviyesinde
 (`gsb-net` `ws::tests::{fragmentation, framing, close_frames}`), opak
 eşleme `ws::tests::opaque`'ta; CI'da Autobahn fuzzing client'ı.
+B31: el sıkışma sınırının her kuralı — eşzamanlılık, sınır + ret,
+süre sınırı, `close`'un uçuştakileri kesmesi, yavaşın hızlıyı
+tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 
 ## 6. NOT-DONE
 
@@ -337,3 +387,5 @@ eşleme `ws::tests::opaque`'ta; CI'da Autobahn fuzzing client'ı.
 - TLS 0-RTT/session resumption ayarları — varsayılanlar
 - Admin HTTP auth/TLS — OPS.md NOT-DONE devam
 - rUDP crypto — deneysel statü
+- Kaynak adres başına el sıkışma sınırı (B31'in sınırı kapı başına —
+  §4.3 "Kalan yüzey")

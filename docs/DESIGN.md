@@ -1179,7 +1179,10 @@ kapısında 0 ms). Başarısız bir el sıkışma ayrıca accept döngüsünü 1
 geri çekiyor ("accept error; backing off"). TLS kapısı aynı yapıda
 (`tls.rs` `accept` içinde rustls el sıkışması) — kod okumasıyla; loadgen
 süreç içi TLS sunucusu kuramadığı için ölçülmedi. Bu turda düzeltilmedi
-(kapsam: ölçüm); BACKLOG'a yeni madde. Yük ölçümlerinde tick yolunu
+(kapsam: ölçüm); BACKLOG'a yeni madde. **→ Düzeltildi (B31):** el
+sıkışma artık bağlantı başına görevde, kapı başına sınırlı — §6 "El
+sıkışan kapılar"; aynı deney 9612 → 0 ms, orkestre 500 WS connect p50
+~1055 → ~35 ms. Yük ölçümlerinde tick yolunu
 etkilemiyor (katılma pencerenin ilk saniyesinde bitiyor), ama
 connect_ms ve kısalan oturum penceresi WS koşularını TCP'ninkinden ~1 sn
 geç başlatabiliyor.
@@ -1194,6 +1197,7 @@ trait Listener: Send + Sync + 'static {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>>;
     fn local_addr(&self) -> Option<SocketAddr> { None }
     fn close(&self) {}   // §9: bekleyen accept'i bitirir (B16); rUDP demux'ı da
+    fn handshake_stats(&self) -> Option<HandshakeStats> { None }  // B31: WS/TLS/QUIC
 }
 struct Endpoint { /* pump görevlerini başlatan tek FnOnce; mailbox'ları taşır */ }
 ```
@@ -1204,6 +1208,143 @@ Aktör katmanı pump'ları handle'ler dışında hiç bilmez.
 
 **TCP** (`gsb_net::tcp`): klasik yol — bir socket, bir reader pump
 (idle deadline'lı, §3), bir writer pump.
+
+**El sıkışan kapılar: el sıkışma accept döngüsünün dışında (BACKLOG
+B31 — 2026-09-26).** WS, TLS ve QUIC kapısında bir bağlantı, oturum
+olmadan önce el sıkışır. Eskiden bu `accept()`'in İÇİNDEYDİ ve
+sunucunun accept döngüsü (`boot/accept.rs`) her accept'i sırayla
+bekler: el sıkışmalar seriydi (B29 bulgusu, §5.7 — sessiz tek soket
+kapıyı 10 sn kilitliyordu; SECURITY §4.3 bunun DoS yüzü).
+
+*İzlenen accept yolları.*
+
+| Kapı | Önce (`accept` = tek future) | Sonra |
+|---|---|---|
+| TCP | `Door::admit(TcpListener::accept)` → uç nokta | değişmedi (el sıkışma yok) |
+| rUDP | demux el sıkışmayı yapar, oturumu crossbeam kanalına koyar; `accept` = bloklayan havuzda `recv` | değişmedi (el sıkışma zaten tek demux görevinde, `accept`'in dışında) |
+| WS | `admit(accept + set_nodelay + timeout(10 sn, perform_upgrade))`; hata → accept hatası → döngü 100 ms geri çekilir | kabul görevi: `admit(TcpListener::accept)` → yuva → el sıkışma görevi `admit(timeout(10 sn, nodelay + upgrade))`; `accept` = `admit(kuyruk)` |
+| TLS | `admit(accept + timeout(10 sn, rustls accept))`; aynı hata yolu | aynı şekil, görev `TlsAcceptor::accept` |
+| QUIC | `admit(endpoint.accept → timeout(10 sn, incoming.await + accept_bi))` — quinn el sıkışmayı kendi sürücüsünde yürütür ama `accept` onu ve bi-stream'i BEKLİYORDU: aynı seri yapı | kabul görevi: `admit(endpoint.accept)` → yuva → görev `admit(timeout(10 sn, incoming.await + accept_bi))`; sınır üstünde `incoming.refuse()` |
+
+*Şekil* (`gsb_net::transport::intake`, üç kapının ortak parçası):
+
+```text
+kabul görevi ──ham accept──▶ yuva? ──evet──▶ el sıkışma görevi: TEK await,
+ (kapı başına)                 │               kapı ⊃ süre sınırı ⊃ el sıkışma
+                              hayır                    │ Ok
+                               ▼                       ▼
+                     ret (kapat) + sayaç       kuyruk (uç nokta + yuvası)
+                                                       │
+sunucu accept döngüsü ◀── Listener::accept ◀───────────┘ (yuva bırakılır)
+```
+
+Kurallar: (1) accept döngüsü yine TEK şey bekler (`accept`, kuyruğu);
+kabul görevi ham accept'i; her el sıkışma görevi tek bir future'ı
+(kapı ⊃ `timeout` ⊃ el sıkışma — pump deyimi). Hiçbir yerde select
+yok. (2) Yuva ham accept'ten accept döngüsünün uç noktayı almasına
+dek tutulur (`in_flight` = el sıkışan + bitip alınmayı bekleyen); sınır
+üstündeki bağlantı hemen kapatılır (QUIC: `refuse`) ve sayılır —
+bekletilmez. (3) Kuyruk crossbeam'in sınırsız türü + tokio `Notify`:
+uzunluğu yuvalarla sınırlı (her girdi bir yuva taşır); alıcı `&self`'ten
+`try_recv` eder (kilitsiz, rUDP'nin crossbeam kararı), bekleme `Notify`
+ile (`notify_one` bekleyen yokken uyanmayı saklar — kayıp uyanma yok);
+bloklayan havuzda park eden iplik yok. (4) Her görev dinleyicinin
+`Door`'u altında: `close()` ham accept'i, uçuştaki el sıkışmaları ve
+bekleyen `accept`'i keser, kuyruğu boşaltır; son dinleyici tutamacının
+düşmesi de kapatır (`IntakeHandle` — soket artık tutamaçta değil kabul
+görevinde; eskiden tutamacı düşürmek soketi kapatırdı). (5) Ham accept
+hatası (EMFILE) kabul görevinde 100 ms geri çekilmeyle karşılanır —
+el sıkışan kapılarda sunucu döngüsü artık yalnız kapanış hatasını görür
+(geri çekilme kolu TCP/rUDP'ye kaldı). Başarısız/süresi dolan el sıkışma sayılır ve `warn`
+basar; accept döngüsüne hiç ulaşmaz.
+
+*Sınır (karar).* Kapı başına uçuştaki el sıkışma = sunucunun unauthed
+cap'i (`max_unauth_conns`'un çözülmüş değeri; varsayılan 25 000; cap
+`0` ile kapalıysa türetilmiş varsayılan) — `boot/start/pre_auth.rs`
+`handshake_bound_of`, `bind_listener` onu her el sıkışan kapının
+`max_pending_handshakes`'ine verir. Gerekçe (SECURITY §4.3 #2): uçuştaki
+el sıkışma, unauthed bağlantı olmaya giden bağlantıdır; tek pre-auth
+bütçesi iki evreyi de sınırlar, el sıkışma evresi sonrakinden ucuz
+tüketilemez. Motor, oyun değil: taşıma yapılarında alan (`WsTransport`,
+`TlsTransportConfig`, `QuicTransportConfig`), doğrudan gömene
+`DEFAULT_MAX_PENDING_HANDSHAKES` = 1024; sunucu config'ine yeni anahtar
+eklenmedi.
+
+*Sayaçlar.* `Listener::handshake_stats()` (varsayılan `None`; üç kapıda
+`HandshakeStats { in_flight, completed, refused, timed_out, failed }`),
+kabul görevinin kapanış özeti (`info`, "handshake intake stopped" — rUDP
+demux'ının kapanış özetinin eşi), sınıra dayanan dönemin ilk reddinde
+tek `warn`. Dinleyiciler için metrik yolu yok (metrik toplayıcı aktör
+olaylarıyla beslenir); bir yol açmak toplayıcının dinleyicileri
+yoklaması demekti — ölçülen bir ihtiyaç yokken eklenmedi.
+
+*Elenenler.* (a) *`accept` içinde eşzamanlılık* — `accept` hem ham
+accept'i hem biten el sıkışmayı beklemek zorunda kalırdı: iki kaynak,
+select (lint). (b) *Sunucu döngüsünde ham soketi alıp el sıkışmayı
+orada spawn etmek* — `Listener`'ı iki adıma böler, her kapının el
+sıkışmasını sunucuya sızdırır. (c) *tokio mpsc kuyruk* — alıcı `&mut`
+ister, `Arc<dyn Listener>` içinden kilitsiz erişilemez. (d) *crossbeam
+`bounded(max)`* — dizi türü kapasiteyi baştan ayırır (25 000 × uç
+nokta, kapı başına); sınırsız tür + yuva sınırı aynı üst sınırı
+kullanım kadar bellekle verir. (e) *Sınır üstünde bekletmek* —
+sınırsız kuyruk ya da taşan backlog; ret ucuz ve görünür. (f) *Ret
+edilen WS bağlantısına HTTP 503* — ret yolunda yazmak (yavaş okuyana)
+iş demek; kapatmak en ucuzu. (g) *Ayrı `max_pending_handshakes` config
+anahtarı* — ikinci bir pre-auth düğmesi; cap'ten ayrı ayarlanırsa el
+sıkışma evresi ucuzlayabilir. (h) *tokio `Semaphore`* — `try_acquire`
+yeterdi, ama atomik sayaç + RAII yuva daha küçük ve `in_flight`
+sayacının kendisi.
+
+*Testler (önce kırmızı; mutasyonlu).* Eski kodda kırmızı:
+`ws::tests::off_accept::{an_idle_peer_does_not_hold_the_door,
+a_failed_upgrade_is_not_an_accept_error,
+close_cuts_the_upgrades_in_flight}`, `tls::tests::off_accept`'in aynı
+üçü (gerçek rustls istemcisi), `quic::tests::off_accept::
+a_peer_without_its_stream_does_not_hold_the_door`,
+`gsb-server/tests/handshake_door.rs` (2: sessiz eşler varken TLS el
+sıkışması ve WS yükseltme + AUTH < 2 sn; `max_unauth_conns = 1` iki
+kapının da sınırı — hemen EOF). Yeni API ile: `transport::intake::tests`
+(8), `ws::tests::off_accept::{upgrades_run_side_by_side,
+over_the_bound_a_connection_is_refused_and_counted}`,
+`quic::tests::off_accept::over_the_bound_…` (`refuse`),
+`boot::start::pre_auth::tests` (2). Değişen iki test:
+`tls::tests::wrong_ca_fails_the_handshake` ve QUIC eşi artık accept
+hatası değil `failed` sayacını bekliyor (sözleşme değişti: başarısız el
+sıkışma accept'e ulaşmaz). Öldürülen mutasyonlar: kabul görevinin
+el sıkışmayı beklemesi (seri; WS/TLS ve QUIC ayrı ayrı), sınır kontrolü
+yok, ret sayılmıyor, sunucu sınırı iletmiyor (TLS/QUIC kolu ve WS kolu
+ayrı ayrı), süre sınırı yok, el sıkışma kapı altında değil, tutamacın
+düşmesi kapatmıyor, `close` kuyruğu boşaltmıyor, yuva tamamlanınca
+bırakılıyor, QUIC `refuse` yerine `ignore`.
+
+*Ölçüm (önce = `5ffa0b3`, sonra = bu tur; release, 32 çekirdek,
+dönüşümlü önce/sonra; parantezde koşudan hemen önceki 1 dk yük
+ortalaması; connect p50/p99 ms).* Sessiz soket deneyi (B29'unki):
+`gsb-loadgen --serve --transport ws|tcp --bind 127.0.0.1:P --duration 30
+--write-stall-secs 0`, hiç bayt göndermeyen TEK bir TCP bağlantısı,
+0,5 sn sonra `gsb-loadgen 20 --addr 127.0.0.1:P --transport ws|tcp
+--duration 3`. Orkestre: `gsb-loadgen --orchestrate 500 --procs 2
+--transport ws|tcp --write-stall-secs 0 --duration 20`.
+
+| Deney | Kapı | Önce | Sonra |
+|---|---|---|---|
+| sessiz soket + 20 istemci | WS | 9612/9612 (1,00) · 9612/9612 (0,69) · 9611/9611 (0,66); joined 0 (bağlanma 3 sn'lik koşudan uzun) | **0/0** (0,67) · 0/0 (0,92) · 0/0 (0,86); joined 20 |
+| sessiz soket + 20 istemci | TCP | 0/0 (1,05) · 0/0 (1,56) | 0/0 (1,20) · 0/0 (1,41) |
+| orkestre 500 | WS | 1057/1457 (1,51) · 1052/1457 (1,37); dropped 10 · 29 | **34/1075** (1,24) · 36/1075 (1,29); dropped 0 · 0 |
+| orkestre 500 | TCP | 21/1014 (2,30) · 16/1017 (1,57); dropped 116 · 116 | 18/1054 (1,78) · 15/1053 (1,12); dropped 123 · 116 |
+
+Her orkestre koşuda connected = joined = left = 500, errors =
+server_closes = 0. *Okuma.* Sessiz soket kapıyı artık tutmuyor: WS
+TCP'nin 0 ms'sinde. Orkestre 500'de WS p50 ~1055 → ~35 ms (backlog
+taşması bitti); p99 ~1,07 sn artık TCP'ninkiyle aynı bantta (1,01-1,05
+sn — iki kapıda da birkaç istemci 1 sn'lik SYN yeniden gönderimini
+yiyor). WS p50'nin TCP'ye (15-21 ms) göre +15-20 ms'si yükseltmenin kendi
+gidiş-dönüşü. TCP gürültü içinde değişmedi. WS `dropped` 10 · 29 → 0 · 0
+(B32'nin katılma fırtınası sayacı; iki çiftle nedensellik iddia
+edilmiyor). TLS kapısı ölçülmedi — loadgen TLS sunucusu kuramıyor
+(§5.7); onun düzeltmesini `tls::tests::off_accept` ve
+`handshake_door.rs` gerçek rustls istemcisiyle kilitler.
+
 
 **rUDP** (`gsb_net::udp`, bu tur): bir UDP soketi **tüm** oturumlar için
 ortaktır, yani "bağlantı" bir socket değil, datagram akımlarından
@@ -2112,7 +2253,11 @@ aktörü doğmamış bir bağlantı bırakabilirdi. Şimdi her ağaç içi
 listener bir **kapı** (`gsb_net::transport::Door`,
 `CancellationToken::run_until_cancelled`) taşır ve `accept`'inin
 tamamını — soket accept'ini ve TLS/WS/QUIC el sıkışmasını — onun
-içinden çalıştırır. `close()` kapıyı kapatır: bekleyen accept ve
+içinden çalıştırır. *(B31'den beri el sıkışma `accept`'in dışında,
+bağlantı başına görevde — §6 "El sıkışan kapılar"; kabul görevi, her
+el sıkışma görevi ve kuyruğu bekleyen `accept` aynı kapının altında,
+`close()` hepsini keser. Sözleşme aynı; `StopReport` ağaç içi
+kapılarda yine 0 abort.)* `close()` kapıyı kapatır: bekleyen accept ve
 sonrakilerin hepsi `listener_closed()` hatasıyla biter
 (`is_listener_closed` işaretçisinden tanır, türünden değil); accept
 loop bu hatada döner. Döngünün tek await'i yine `accept()`'tir; kapı o
@@ -2142,7 +2287,9 @@ sokete `shutdown(2)`* — Linux'ta accept'i uyandırır, macOS'ta
 uçuştaki el sıkışmayı kesmez. (4) *İç kabul görevi + kanal* (listener
 kendi görevinde accept edip kanala koyar, `close` o görevi abort eder)
 — abort'u kaldırmaz, listener'ın içine taşır; accept başına bir kanal
-atlaması ekler. (5) *Yalnız soket accept'ini kapıdan geçirmek* — uçuştaki
+atlaması ekler. *(B31 bu şekli aldı, ama abort'suz: görevler kapının
+altında biter; kanal atlaması artık eşzamanlı el sıkışmanın bedeli —
+B16'nın sahip olmadığı bir gerekçe.)* (5) *Yalnız soket accept'ini kapıdan geçirmek* — uçuştaki
 TLS/WS el sıkışması `stop()`'u kendi süre sınırına (saniyeler) kadar
 tutardı.
 
