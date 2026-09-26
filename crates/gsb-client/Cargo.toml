@@ -25,6 +25,12 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 quinn = { workspace = true }
+# The WebSocket half (`ws`): the accept key (SHA-1, as the door's own
+# handshake), the key and mask entropy (the rUDP cookie's OS reader),
+# and base64 (already locked, via `pem`).
+sha1 = { workspace = true }
+getrandom = { workspace = true }
+base64 = { workspace = true }
 
 [build-dependencies]
 gsb-lint = { workspace = true }

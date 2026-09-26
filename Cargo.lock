@@ -703,8 +703,10 @@ dependencies = [
 name = "gsb-client"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "futures",
+ "getrandom 0.4.3",
  "gsb-lint",
  "gsb-net",
  "gsb-protocol",
@@ -712,6 +714,7 @@ dependencies = [
  "quinn",
  "rustls",
  "rustls-pemfile",
+ "sha1",
  "thiserror",
  "tokio",
  "tokio-rustls",

@@ -6,9 +6,10 @@
 //!   [payload]` — a cancel-safe reader with a frame-size guard and a
 //!   writer ([`frame::FrameRx`], [`frame::FrameTx`]).
 //! - [`Conn`]: one connection over any door — a byte stream (TCP, TLS,
-//!   the QUIC bi-stream) or the rUDP client half of `gsb_net` — with one
-//!   `send` / bounded `recv` for all of them ([`connect`], [`tls`],
-//!   [`quic`] open one).
+//!   the QUIC bi-stream), a WebSocket carrying the same frames one per
+//!   message, or the rUDP client half of `gsb_net` — with one `send` /
+//!   bounded `recv` for all of them ([`connect`], [`tls`], [`quic`],
+//!   [`ws`] open one).
 //! - [`session`]: the base protocol's steps — AUTH (with or without a
 //!   ticket), JOIN, HEARTBEAT, LEAVE, the resume key — as plain async
 //!   functions; an `ERROR` frame comes back as a typed [`ServerError`]
@@ -20,9 +21,9 @@
 //! reconnect, backoff and retry decisions are the caller's; this crate
 //! reports what happened.
 //!
-//! No WebSocket client: the WS door's clients are browsers and engines
-//! with their own WebSocket stacks; the in-tree WS clients are protocol
-//! test rigs (`gsb-net`'s ws suite), not a building block.
+//! The WebSocket half is RFC 6455 as the gsb door speaks it (binary
+//! messages, one frame each; see [`ws`]) — not a general WebSocket
+//! library: text messages, extensions and subprotocols are refused.
 //!
 //! A client is a task, not an actor, but the workspace rules hold: no
 //! locks, and every wait is a single bounded await (no multiplexing) —
@@ -36,7 +37,9 @@ pub mod frame;
 pub mod quic;
 pub mod session;
 pub mod tls;
+pub mod ws;
 
 pub use conn::{Conn, Recv};
 pub use error::{ClientError, ServerError};
 pub use session::{Credentials, Joined};
+pub use ws::WsClose;

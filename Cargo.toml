@@ -89,6 +89,8 @@ bytes = "1"
 quinn = "0.11"
 # WebSocket handshake accept-key (ws transport; yalnız protokol zorunluluğu)
 sha1 = "0.10"
+# gsb-client's WebSocket key (the same 0.22 `pem` already locks).
+base64 = "0.22"
 
 # OS entropy (rUDP cookie key): the getrandom(2)/BCryptGenRandom reader.
 # Not a crypto layer — 16 bytes of uniform material is all the key needs.

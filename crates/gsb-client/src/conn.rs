@@ -1,6 +1,7 @@
 //! One connection to a gsb server, whatever carries it: a stream door
-//! (TCP, TLS, a QUIC bi-stream — all the same length-prefixed frames) or
-//! the rUDP client half of `gsb_net`. The one place the transports
+//! (TCP, TLS, a QUIC bi-stream — all the same length-prefixed frames; a
+//! WebSocket — the same frames, one per message) or the rUDP client half
+//! of `gsb_net`. The one place the transports
 //! differ, so that nothing above it has to.
 
 use std::io;
@@ -12,6 +13,7 @@ use gsb_protocol::FrameBody;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::frame::{FrameRx, FrameTx};
+use crate::ws::{Event, WsClose};
 
 /// A type-erased stream read half (plaintext, TLS and QUIC alike).
 pub type BoxRead = Box<dyn AsyncRead + Unpin + Send>;
@@ -23,7 +25,9 @@ pub type BoxWrite = Box<dyn AsyncWrite + Unpin + Send>;
 pub enum Recv {
     /// The next frame.
     Frame(FrameBody),
-    /// The stream ended at a frame boundary (EOF). Never on rUDP: UDP
+    /// The stream ended at a frame boundary (EOF; on WebSocket also the
+    /// server's close frame, read back with [`Conn::ws_close`] — a unit
+    /// variant, as every door's end is one). Never on rUDP: UDP
     /// has no FIN — a session's end there is silence (and, from a gsb
     /// server that closes it, the `ERROR` frame before it).
     Closed,
@@ -33,7 +37,8 @@ pub enum Recv {
 
 /// A client connection.
 pub enum Conn {
-    /// Length-prefixed frames over a byte stream, split in halves.
+    /// Length-prefixed frames over a byte stream, split in halves (on
+    /// WebSocket the halves speak RFC 6455 underneath: [`crate::ws`]).
     Stream {
         rx: FrameRx<BoxRead>,
         tx: FrameTx<BoxWrite>,
@@ -73,6 +78,21 @@ impl Conn {
         matches!(self, Self::Udp(_))
     }
 
+    /// Whether this is a WebSocket.
+    pub fn is_ws(&self) -> bool {
+        matches!(self, Self::Stream { rx, .. } if rx.is_ws())
+    }
+
+    /// The close frame that ended a WebSocket session — its status code
+    /// and reason — once [`Recv::Closed`] reported the end; `None` before
+    /// it, for an end without a close frame, and on every other door.
+    pub fn ws_close(&self) -> Option<&WsClose> {
+        match self {
+            Self::Stream { rx, .. } => rx.ws_close(),
+            Self::Udp(_) => None,
+        }
+    }
+
     /// The rUDP client (its statistics, its liveness), when it is one.
     pub fn udp_client(&self) -> Option<&UdpClient> {
         match self {
@@ -106,11 +126,13 @@ impl Conn {
     }
 
     /// Wait up to `window` for the next frame. A stream's read error or
-    /// refused frame (over the size guard, too short) is `Err`; so is an
-    /// rUDP socket error.
+    /// refused frame (over the size guard, too short; a WebSocket
+    /// protocol violation) is `Err`; so is an rUDP socket error. On
+    /// WebSocket a ping read meanwhile is answered here, inside the
+    /// window (cancel-safe: an unfinished pong stays queued).
     pub async fn recv(&mut self, window: Duration) -> io::Result<Recv> {
         match self {
-            Self::Stream { rx, .. } => match tokio::time::timeout(window, rx.next()).await {
+            Self::Stream { rx, tx } => match tokio::time::timeout(window, next(rx, tx)).await {
                 Ok(Ok(Some(f))) => Ok(Recv::Frame(f)),
                 Ok(Ok(None)) => Ok(Recv::Closed),
                 Ok(Err(e)) => Err(e),
@@ -130,6 +152,27 @@ impl Conn {
         match self {
             Self::Stream { rx, tx } => Ok((rx, tx)),
             udp @ Self::Udp(_) => Err(Box::new(udp)),
+        }
+    }
+}
+
+/// The next frame off a stream, sending what the WebSocket read half
+/// owes on the way (a pong; the close echo at the end). A failed reply
+/// write does not fail the read — the next send reports it.
+async fn next(
+    rx: &mut FrameRx<BoxRead>,
+    tx: &mut FrameTx<BoxWrite>,
+) -> io::Result<Option<FrameBody>> {
+    loop {
+        match rx.next_event().await? {
+            Event::Frame(f) => return Ok(Some(f)),
+            Event::Control => {
+                let _ = tx.flush_control().await;
+            }
+            Event::End => {
+                let _ = tx.flush_control().await;
+                return Ok(None);
+            }
         }
     }
 }

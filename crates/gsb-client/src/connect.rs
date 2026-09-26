@@ -26,6 +26,21 @@ pub fn tcp_stream(stream: TcpStream) -> Conn {
     Conn::halves(Box::new(r), Box::new(w))
 }
 
+/// Plain WebSocket (`ws://`): connect, `TCP_NODELAY` on, run the RFC
+/// 6455 upgrade (path `/`, `Host` = `addr`), split — see [`crate::ws`].
+pub async fn ws(addr: SocketAddr) -> io::Result<Conn> {
+    let mut stream = TcpStream::connect(addr).await?;
+    stream.set_nodelay(true).ok();
+    let leftover = crate::ws::upgrade(&mut stream, &addr.to_string(), "/").await?;
+    let (r, w) = stream.into_split();
+    Ok(crate::ws::conn(
+        Box::new(r),
+        Box::new(w),
+        leftover,
+        crate::frame::DEFAULT_MAX_FRAME_BYTES,
+    ))
+}
+
 /// rUDP: bind an ephemeral port and run the cookie handshake
 /// (`UdpClient::connect` — returns once the server holds the session).
 pub async fn udp(addr: SocketAddr) -> io::Result<Conn> {

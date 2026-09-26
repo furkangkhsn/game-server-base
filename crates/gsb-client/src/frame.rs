@@ -17,8 +17,14 @@ use std::io;
 use bytes::BytesMut;
 use futures::StreamExt;
 use gsb_protocol::FrameBody;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncRead;
 use tokio_util::codec::{Decoder, FramedRead, LengthDelimitedCodec};
+
+use crate::ws::{Event, WsClose, WsRead};
+
+mod tx;
+
+pub use tx::FrameTx;
 
 /// The largest frame body a [`FrameRx`] accepts by default: 4 MiB, the
 /// bound every client copy this crate replaced used. A longer declared
@@ -71,9 +77,15 @@ impl Decoder for Codec {
     }
 }
 
-/// The read half: decoded frames off a byte source.
+/// The read half: decoded frames off a byte source — the stream wire
+/// itself, or WebSocket messages carrying it ([`crate::ws`]).
 pub struct FrameRx<R> {
-    inner: FramedRead<R, Codec>,
+    inner: Source<R>,
+}
+
+enum Source<R> {
+    Stream(FramedRead<R, Codec>),
+    Ws(Box<WsRead<R>>),
 }
 
 impl<R: AsyncRead + Unpin> FrameRx<R> {
@@ -89,67 +101,62 @@ impl<R: AsyncRead + Unpin> FrameRx<R> {
             .max_frame_length(max_frame_bytes)
             .new_codec();
         Self {
-            inner: FramedRead::new(source, Codec(codec)),
+            inner: Source::Stream(FramedRead::new(source, Codec(codec))),
+        }
+    }
+
+    /// The WebSocket reader ([`crate::ws::handshake`] builds it).
+    pub(crate) fn ws(read: WsRead<R>) -> Self {
+        Self {
+            inner: Source::Ws(Box::new(read)),
         }
     }
 
     /// The next frame. `Ok(None)`: the stream ended at a frame boundary
-    /// (EOF). `Err`: a read error; a stream that ended inside a frame
-    /// (`UnexpectedEof`); a length over the guard, or a body too short to
-    /// carry an opcode (`InvalidData`). Cancel-safe (see the module docs).
+    /// (EOF; on WebSocket also the server's close frame — see
+    /// [`FrameRx::ws_close`]). `Err`: a read error; a stream that ended
+    /// inside a frame (`UnexpectedEof`); a length over the guard, or a
+    /// body too short to carry an opcode (`InvalidData`; on WebSocket
+    /// also a protocol violation). Cancel-safe (see the module docs).
     pub async fn next(&mut self) -> io::Result<Option<FrameBody>> {
-        match self.inner.next().await {
-            None => Ok(None),
-            Some(Err(e)) => Err(e),
-            Some(Ok(body)) => FrameBody::decode(body.freeze())
-                .map(Some)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+        loop {
+            match self.next_event().await? {
+                Event::Frame(f) => return Ok(Some(f)),
+                Event::End => return Ok(None),
+                // A ping: its pong is queued for the write half.
+                Event::Control => {}
+            }
         }
     }
-}
 
-/// The write half: encoded frames onto a byte sink.
-pub struct FrameTx<W> {
-    inner: W,
-}
-
-impl<W: AsyncWrite + Unpin> FrameTx<W> {
-    pub fn new(sink: W) -> Self {
-        Self { inner: sink }
-    }
-
-    /// Write one frame and flush it.
-    pub async fn send(&mut self, op: u16, payload: &[u8]) -> io::Result<()> {
-        self.feed(op, payload).await?;
-        self.inner.flush().await
-    }
-
-    /// Write several frames in ONE write, then flush — e.g. AUTH and JOIN
-    /// pipelined (the connection actor processes them in order).
-    pub async fn send_batch(&mut self, frames: &[FrameBody]) -> io::Result<()> {
-        let mut out = Vec::new();
-        for f in frames {
-            encode_into(&mut out, f.op, &f.payload);
+    /// [`FrameRx::next`] one level down: a WebSocket ping surfaces as
+    /// [`Event::Control`], so a caller holding the write half can send
+    /// the pong at once ([`crate::Conn::recv`]). Cancel-safe.
+    pub(crate) async fn next_event(&mut self) -> io::Result<Event> {
+        match &mut self.inner {
+            Source::Ws(ws) => ws.next_event().await,
+            Source::Stream(s) => match s.next().await {
+                None => Ok(Event::End),
+                Some(Err(e)) => Err(e),
+                Some(Ok(body)) => FrameBody::decode(body.freeze())
+                    .map(Event::Frame)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+            },
         }
-        self.inner.write_all(&out).await?;
-        self.inner.flush().await
     }
 
-    /// Write one frame without flushing (a tight send loop that flushes
-    /// on its own schedule, or never — a plain socket needs no flush).
-    pub async fn feed(&mut self, op: u16, payload: &[u8]) -> io::Result<()> {
-        self.inner.write_all(&encode(op, payload)).await
+    /// Whether this reads a WebSocket.
+    pub fn is_ws(&self) -> bool {
+        matches!(self.inner, Source::Ws(_))
     }
 
-    /// Flush what was fed.
-    pub async fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush().await
-    }
-
-    /// The byte sink itself — for bytes outside the frame contract (a
-    /// test writing a malformed prefix on purpose).
-    pub fn get_mut(&mut self) -> &mut W {
-        &mut self.inner
+    /// The close frame that ended a WebSocket session (`None` before it,
+    /// after an end without one, and on every other transport).
+    pub fn ws_close(&self) -> Option<&WsClose> {
+        match &self.inner {
+            Source::Ws(ws) => ws.close(),
+            Source::Stream(_) => None,
+        }
     }
 }
 
