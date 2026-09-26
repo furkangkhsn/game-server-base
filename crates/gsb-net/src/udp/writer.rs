@@ -24,6 +24,7 @@ pub(super) fn udp_pump_spawner(
     sock: Arc<UdpSocket>,
     peer: SocketAddr,
     max_datagram: usize,
+    reaper: Reaper,
 ) -> PumpSpawner {
     Box::new(
         move |conn: ConnectionId,
@@ -57,6 +58,9 @@ pub(super) fn udp_pump_spawner(
                     retransmits: 0,
                     abandoned: 0,
                     oversized_warned: false,
+                    reaper,
+                    reap_signalled: false,
+                    drained: 0,
                 }
                 .run(),
             );
@@ -106,6 +110,13 @@ pub(super) struct UdpWriter {
     /// (reported once, with the close).
     abandoned: u64,
     oversized_warned: bool,
+    /// The demux's reap pass (BACKLOG B6): told once, when this session
+    /// is over — see [`Self::session_over`].
+    reaper: Reaper,
+    reap_signalled: bool,
+    /// Frames taken off the channel after the session was over (never
+    /// sent: see the loop).
+    drained: u64,
 }
 
 impl UdpWriter {
@@ -121,6 +132,15 @@ impl UdpWriter {
             };
             let mut fatal = None;
             if let Some(batch) = batch {
+                if self.reap_signalled {
+                    // The session is over and its address may already
+                    // carry a NEW session: what the room still sends
+                    // until it processes the detach is taken off the
+                    // channel (so the room sees no dead outbound path)
+                    // and never put on the wire.
+                    self.drained += batch.len() as u64;
+                    continue;
+                }
                 fatal = self.send_batch(batch).await;
             }
             if fatal.is_none() {
@@ -130,11 +150,18 @@ impl UdpWriter {
                 self.die(reason);
                 break;
             }
+            if self.session_over() {
+                self.signal_reap().await;
+            }
         }
+        // Whatever ended the writer (the REL band died; every sender is
+        // gone), the session has no writer any more: the demux may free it.
+        self.signal_reap().await;
         if self.dropped_oversized > 0
             || self.frag_messages > 0
             || self.retransmits > 0
             || self.abandoned > 0
+            || self.drained > 0
         {
             info!(
                 conn = %self.conn,
@@ -144,6 +171,7 @@ impl UdpWriter {
                 frag_datagrams = self.frag_datagrams,
                 retransmits = self.retransmits,
                 abandoned = self.abandoned,
+                drained = self.drained,
                 "rUDP writer session counters"
             );
         }
@@ -213,3 +241,7 @@ mod reliable;
 /// The game band's half: RAW, or FRAG for a frame over the budget (and
 /// the drop+count rule past the fragment ceiling). A CHILD module too.
 mod split;
+
+/// The session's end: when the demux may free it, and the signal
+/// (BACKLOG B6). A CHILD module too.
+mod end;

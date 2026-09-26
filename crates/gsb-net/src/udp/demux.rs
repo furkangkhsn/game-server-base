@@ -1,24 +1,27 @@
 //! The shared read path. ONE task owns the socket and every session's
 //! transport state; per-connection there is only a writer. The inbound
-//! handlers live in child modules ([`inbound`], [`handshake`]) so they
-//! still reach this struct's private fields.
+//! handlers live in child modules ([`inbound`], [`handshake`], [`reap`])
+//! so they still reach this struct's private fields.
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 use gsb_core::channel::{FrameBatch, Mailbox};
 use gsb_core::conn::ConnIn;
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::transport::Endpoint;
 use crate::udp::*;
 
 mod handshake;
 mod inbound;
+mod reap;
+mod sweep;
+pub(super) use reap::Reaper;
 #[cfg(test)]
 mod tests;
 
@@ -62,6 +65,10 @@ pub(super) struct Demux {
     /// `session.last_seen + idle`; datagrams supersede it (a new entry
     /// is pushed); the sweep discards stale tops.
     deadlines: BTreeSet<(Instant, SocketAddr)>,
+    /// The reap pass (BACKLOG B6, [`reap`]): the handle cloned into each
+    /// session's writer, and the queue of finished sessions it feeds.
+    reaper: Reaper,
+    reap_rx: Receiver<SocketAddr>,
     buf: Vec<u8>,
     // lifetime counters (reported once at demux exit):
     established: u64,
@@ -73,6 +80,9 @@ pub(super) struct Demux {
     endpoints_dropped: u64,
     swept_idle: u64,
     removed_actor_gone: u64,
+    /// Sessions removed by the reap pass, and the wakes that drove it.
+    reaped: u64,
+    reap_wakes: u64,
     acks_piggybacked: u64,
     ack_piggyback_failed: u64,
     oversized_in: u64,
@@ -82,6 +92,48 @@ pub(super) struct Demux {
 }
 
 impl Demux {
+    /// A demux with no sessions on `sock` (its reap queue included).
+    fn new(
+        sock: Arc<UdpSocket>,
+        end_tx: Sender<Endpoint>,
+        cookie: CookieKey,
+        inbox_cap: usize,
+        outbox_cap: usize,
+        max_datagram: usize,
+        idle: Option<Duration>,
+    ) -> Self {
+        let (reaper, reap_rx) = Reaper::new(sock.clone());
+        Self {
+            sock,
+            end_tx,
+            cookie,
+            clock: CookieClock::new(),
+            inbox_cap,
+            outbox_cap,
+            max_datagram,
+            idle,
+            sessions: HashMap::new(),
+            deadlines: BTreeSet::new(),
+            reaper,
+            reap_rx,
+            buf: vec![0u8; max_datagram + 64],
+            established: 0,
+            challenges: 0,
+            proofs_reanswered: 0,
+            bad_cookie: 0,
+            endpoints_dropped: 0,
+            swept_idle: 0,
+            removed_actor_gone: 0,
+            reaped: 0,
+            reap_wakes: 0,
+            acks_piggybacked: 0,
+            ack_piggyback_failed: 0,
+            oversized_in: 0,
+            bad_datagrams: 0,
+            frag_refused: 0,
+        }
+    }
+
     fn remove_session(&mut self, peer: SocketAddr) {
         // Drop the CURRENT deadline entry (exact match); stale ones are
         // lazily discarded by the sweep.
@@ -91,52 +143,6 @@ impl Demux {
             self.deadlines.remove(&(s.last_seen + idle, peer));
         }
         self.sessions.remove(&peer);
-    }
-    /// The idle sweep (feature 4): pop overdue entries; a LIVE one
-    /// (still equal to `last_seen + idle`) means the session has been
-    /// silent for the whole window: notify the actor (best-effort) and
-    /// remove it. Stale entries (superseded by a datagram) are discarded.
-    fn sweep(&mut self) {
-        let Some(idle) = self.idle else {
-            return;
-        };
-        let now = Instant::now();
-        while let Some(&(deadline, peer)) = self.deadlines.first() {
-            if deadline > now {
-                break;
-            }
-            self.deadlines.remove(&(deadline, peer));
-            let live = self
-                .sessions
-                .get(&peer)
-                .map(|s| s.last_seen + idle == deadline)
-                .unwrap_or(false);
-            if !live {
-                continue; // stale entry
-            }
-            let Some(session) = self.sessions.remove(&peer) else {
-                continue;
-            };
-            self.swept_idle += 1;
-            let reason = format!("idle timeout: no client traffic for {idle:?}");
-            match session.in_tx.try_send(ConnIn::ServerClosed {
-                cause: gsb_core::conn::ServerClose::IdleTimeout,
-                reason: reason.clone(),
-            }) {
-                Ok(()) => {
-                    // The actor will answer ERROR 9 and tear down (its
-                    // writer keeps sending until it exits; the session
-                    // is already un-routable, so stray inbound for this
-                    // peer is dropped).
-                    warn!(%peer, %reason, "rUDP: session idle-swept");
-                }
-                Err(_) => {
-                    // The actor is already gone: nothing to tell.
-                    self.removed_actor_gone += 1;
-                    debug!(%peer, "rUDP: idle sweep found an already-gone session");
-                }
-            }
-        }
     }
 }
 
@@ -152,31 +158,15 @@ pub(super) async fn demux(
     max_datagram: usize,
     idle: Option<Duration>,
 ) {
-    let mut d = Demux {
+    let mut d = Demux::new(
         sock,
         end_tx,
         cookie,
-        clock: CookieClock::new(),
         inbox_cap,
         outbox_cap,
         max_datagram,
         idle,
-        sessions: HashMap::new(),
-        deadlines: BTreeSet::new(),
-        buf: vec![0u8; max_datagram + 64],
-        established: 0,
-        challenges: 0,
-        proofs_reanswered: 0,
-        bad_cookie: 0,
-        endpoints_dropped: 0,
-        swept_idle: 0,
-        removed_actor_gone: 0,
-        acks_piggybacked: 0,
-        ack_piggyback_failed: 0,
-        oversized_in: 0,
-        bad_datagrams: 0,
-        frag_refused: 0,
-    };
+    );
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only
@@ -197,7 +187,12 @@ pub(super) async fn demux(
                 Err(e) => Some(Err(e)),
             },
         };
+        // Every wake — a datagram, a writer's reap wake, the idle
+        // deadline — first frees the sessions whose actors are gone, so a
+        // datagram from a returning peer finds its slot already free.
+        d.reap();
         match item {
+            Some(Ok((_, peer))) if d.is_wake(peer) => d.reap_wakes += 1,
             Some(Ok((n, peer))) => d.handle(n, peer),
             Some(Err(e)) => {
                 if e.kind() == std::io::ErrorKind::NotConnected {
@@ -217,6 +212,8 @@ pub(super) async fn demux(
         endpoints_dropped = d.endpoints_dropped,
         swept_idle = d.swept_idle,
         removed_actor_gone = d.removed_actor_gone,
+        reaped = d.reaped,
+        reap_wakes = d.reap_wakes,
         acks_piggybacked = d.acks_piggybacked,
         ack_piggyback_failed = d.ack_piggyback_failed,
         oversized_in = d.oversized_in,

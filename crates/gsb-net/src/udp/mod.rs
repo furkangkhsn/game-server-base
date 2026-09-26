@@ -431,11 +431,17 @@
 //! TCP reader pump uses (the deadline fires only while the read stays
 //! pending; a ready datagram always wins). When it fires, overdue
 //! sessions get `ConnIn::ServerClosed` (the actor answers `ERROR` 9 and
-//! tears down) and are removed. A second path removes a session whose
-//! actor is already gone: the next datagram for it hits a closed
-//! mailbox. No per-session timer tasks, no multiplexing, no shared
-//! state — the heap is the demux task's local state, exactly like an
-//! actor's counter.
+//! tears down) and are removed. A session whose actor is already gone
+//! is removed promptly (BACKLOG B6, `demux::reap`): its writer — which
+//! wakes every RTO anyway — sees the actor's mailbox closed and its own
+//! reliable band owing nothing (the actor's close notice is ACKed or
+//! given up on), queues the peer's address for the demux and wakes it
+//! with a one-byte datagram to the demux's own address; the demux frees
+//! the session if it is really dead, within about one RTO and without a
+//! datagram from the peer. The older net stays: a datagram for a gone
+//! session still hits its closed mailbox. No per-session timer tasks, no
+//! multiplexing, no shared state — the heap is the demux task's local
+//! state, exactly like an actor's counter.
 //!
 //! ## The scale question (single demux at 100k)
 //!
@@ -518,7 +524,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 // Re-homed internals: each lives in the module that owns its concern,
 // and is named here so every child module reaches it by one path.
 use cookie::{CookieClock, CookieKey};
-use demux::{UdpSession, demux};
+use demux::{Reaper, UdpSession, demux};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;

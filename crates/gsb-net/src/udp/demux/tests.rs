@@ -13,31 +13,16 @@ use gsb_protocol::FrameBody;
 /// arm).
 fn demux_bare(sock: Arc<UdpSocket>) -> (Demux, crossbeam_channel::Receiver<Endpoint>) {
     let (end_tx, end_rx) = crossbeam_channel::bounded(4);
-    let d = Demux {
+    let mut d = Demux::new(
         sock,
         end_tx,
-        cookie: CookieKey::generate().expect("OS entropy in test"),
-        clock: CookieClock::new(),
-        inbox_cap: 16,
-        outbox_cap: 16,
-        max_datagram: DEFAULT_MAX_DATAGRAM_BYTES,
-        idle: None,
-        sessions: HashMap::new(),
-        deadlines: BTreeSet::new(),
-        buf: vec![0u8; 65536],
-        established: 0,
-        challenges: 0,
-        proofs_reanswered: 0,
-        bad_cookie: 0,
-        endpoints_dropped: 0,
-        swept_idle: 0,
-        removed_actor_gone: 0,
-        acks_piggybacked: 0,
-        ack_piggyback_failed: 0,
-        oversized_in: 0,
-        bad_datagrams: 0,
-        frag_refused: 0,
-    };
+        CookieKey::generate().expect("OS entropy in test"),
+        16,
+        16,
+        DEFAULT_MAX_DATAGRAM_BYTES,
+        None,
+    );
+    d.buf = vec![0u8; 65536];
     (d, end_rx)
 }
 
@@ -47,34 +32,10 @@ fn demux_with_session(
     sock: Arc<UdpSocket>,
     peer: SocketAddr,
 ) -> (Demux, gsb_core::channel::Inbox<gsb_core::conn::ConnIn>) {
-    let (end_tx, _end_rx) = crossbeam_channel::bounded(4);
     let (in_tx, in_rx) = gsb_core::channel::channel(16);
     let (out_tx, _out_rx) = gsb_core::channel::channel(16);
-    let mut d = Demux {
-        sock,
-        end_tx,
-        cookie: CookieKey::generate().expect("OS entropy in test"),
-        clock: CookieClock::new(),
-        inbox_cap: 16,
-        outbox_cap: 16,
-        max_datagram: DEFAULT_MAX_DATAGRAM_BYTES,
-        idle: None,
-        sessions: HashMap::new(),
-        deadlines: BTreeSet::new(),
-        buf: vec![0u8; 65536],
-        established: 1,
-        challenges: 0,
-        proofs_reanswered: 0,
-        bad_cookie: 0,
-        endpoints_dropped: 0,
-        swept_idle: 0,
-        removed_actor_gone: 0,
-        acks_piggybacked: 0,
-        ack_piggyback_failed: 0,
-        oversized_in: 0,
-        bad_datagrams: 0,
-        frag_refused: 0,
-    };
+    let (mut d, _end_rx) = demux_bare(sock);
+    d.established = 1;
     d.sessions.insert(
         peer,
         UdpSession {
@@ -226,3 +187,4 @@ async fn inbound_fragments_are_refused() {
 }
 
 mod handshake;
+mod reap;
