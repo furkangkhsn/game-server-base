@@ -91,11 +91,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
-| B24 WS durdurmada kapanış çerçevesi boş (istemcide 1005); 1001 "Going Away" olabilir | **yürüyor** (küçük paket 2); kapanınca `ws_client` stop testi `Some(1001)`'e sıkılaşır | DESIGN §5.6 |
-| B26 Loadgen churn bayt muhasebesi: AUTH sabit 8 bayt + rUDP formülü (TCP'de bile), JOIN ve yeniden denemeleri sayılmıyor, gelen bayt `2 + payload`; `run_client` TCP EOF'unda `continue` (sonraki hamle yazımına dek boş döngü) | churn baytlarına dayanan bir ölçüm (düzeltmek RESULT değerlerini oynatır) | DESIGN §5.7 |
-| B27 Loadgen `tls_connector` CA PEM'ini her bağlantıda okuyup ayrıştırıyor | TLS churn ölçümü | DESIGN §5.7 |
 | B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
 | B29 Loadgen WS modu (`gsb_client::connect::ws` hazır) | WS kapısının yük ölçümü | DESIGN §5.7 |
+| B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
@@ -151,12 +149,11 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F9 Crystal olayları için genel oyun/kit sayaç seam'i — W2-3 kısmı A29'da kapandı (`team_over_budget`, export'un niceliği olarak; genel seam gerekmedi) — tetik: canlı sunucuda operatör ihtiyacı ya da ikinci kit olay ailesi | CROSS-SHARD §4c madde 5 |
-| F10 `Ticker` tick'i `std::time::Instant` ile damgalıyor — duraklatılmış tokio saatinde oyun `dt`'si ~0, yürüyen aktör testleri gerçek saatte; en küçük değişiklik `tokio::time::Instant` — tetik: gerçek saatli testler yavaşlar ya da kararsızlaşırsa | KIT-ARCHITECTURE W2-4 |
 | F15 RPC'nin tıkalı-bağlantı retleri (F14 fırtına sınırı) `requests_rejected_conn_cap` kovasında sayılıyor, ayrı metrik yok (RoomSample + Prometheus + loadgen codec'e dokunur) — tetik: operatörün tıkalı ret ile cap retlerini ayırması gerekirse | RPC-CONTROL-PLANE §3.1 |
+| F16 Ayrılma bekleme süresi ve RPC zaman aşımı hâlâ std saatte (paused testte gerçek zamanlı) — tetik: bunları paused saatte sınayan test | TICK-ARCHITECTURE "Tick saati" |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
-| F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13 kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-979 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+988 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -146,6 +146,13 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**Küçük paket 2 tamam** (CHANGELOG "Küçük paket 2"): WS kapısı sunucunun
+bitirdiği her oturumu 1001 ile kapatır ve ilk kapanıştan sonra hiçbir
+çerçeve yazmaz (B24). Loadgen churn baytları gerçek wire baytı (B26).
+Ticker `tokio::time::Instant` ile damgalıyor; damgayla karşılaştırılan
+yeni bir okuma `gsb_core::ticker::now()` kullanmalı, CPU süresi ölçen
+kod `std::time::Instant` (F10, TICK-ARCHITECTURE "Tick saati").
+
 **B25 tamam** (DESIGN §5.7, CHANGELOG "B25"): `gsb-client`'in WS yarısı
 aynı `Conn::Stream` — yeni varyant yok (loadgen `Conn`/`Recv`'i kapsamlı
 eşler). Kapanış `Recv::Closed` + `Conn::ws_close()`; sözleşme dışı çerçeve
@@ -237,7 +244,7 @@ kullanıyor; `game = "war"` (`[war]`: `disconnect_grace_secs`,
 `team_budget`), `--game war` (kadro `lg-{id}`, RESULT'ta `team_*`).
 Takım sayaçları `RoomSample::team_*` (loadgen teli `GSMB` — A29'da `team_over_budget` eklendi). Aktör testleri
 public API'den canlı registry + dört shard'la (`gsb-demo-war/tests/common`);
-yürüyen senaryo gerçek saatte (duraklatılmış saat `dt`'yi dondurur — W2-4).
+yürüyen senaryo da duraklatılmış saatte (F10: ticker runtime saatinde damgalıyor).
 Röle 1000'de kayıpsız; bant istemci tarafında (~365 KB/sn/istemci) —
 A10/A22'nin kanıtı.
 
@@ -507,6 +514,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 979 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 988 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

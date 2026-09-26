@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 2 — B24, B26, B27, F10, F13 (`misc/small-bundle-2`)
+
+- **B24 (gsb-net):** WS kapısı, sunucunun bitirdiği oturumu artık boş
+  kapanış çerçevesiyle (istemcide 1005) değil **1001 "Going Away"** ile
+  kapatıyor (yalnız durum kodu: `88 02 03 E9`). Kapı sebebi bilmediği
+  için bu, `stop()`'un yanında aktörün bitirdiği her oturumda (idle,
+  bütçe, cap, supersede) gider; hüküm önündeki ERROR karesinde kalır.
+  Okuyucunun hata kapanışları (1002/1003/1007/1009) ve istemci
+  kapanışının yankısı değişmedi. Yan düzeltme: sunucu önce kapattığında
+  istemcinin cevap kapanışı yine yankılanıyor, istemci İKİNCİ bir
+  kapanış çerçevesi alıyordu (RFC 6455 §5.5.1 ihlali); yazıcı artık ilk
+  kapanıştan sonra hiçbir çerçeve yazmıyor. Ebeveyn, B25'in stop testini
+  `Some(1001)`'e sıkılaştırdı.
+- **B26 (loadgen):** churn istemcisi baytları `run_client`'ın kuralıyla
+  sayıyor (akışta `4+2+yük`, rUDP'de datagram) — AUTH gerçek boyuyla, her
+  JOIN denemesi, girdiler, JOIN evresinin bütün cevapları. `run_client`
+  akışın EOF'unda oturumu bitiriyor (eskiden hamle yazımı hata verene
+  dek boş dönüyordu). RESULT'ta BİLEREK oynayan: churn modunda
+  `client_out_bps` (TCP +%36, rUDP +%7–8); `client_in_bps` kare başına
+  +4/+1 bayt (gürültü içinde); düz koşuda hiçbir alan.
+- **B27 (loadgen):** `--tls-ca` koşu başında bir kez okunuyor; bütün
+  bağlantılar tek rustls istemci yapılandırmasını paylaşıyor.
+- **F10 (gsb-core):** ticker runtime saatinde (`tokio::time::Instant`)
+  zamanlıyor ve damgalıyor; üretimde aynı an, duraklatılmış test
+  saatinde `dt` = periyot. Damgayla karşılaştırılan okumalar
+  (`late_us`, girdi-boşta saatinin katılım damgaları) `ticker::now()`'a;
+  adım süresi duvar saatinde (CPU işi). Cephe'nin yürüyen senaryosu
+  paused saatte: 2,04 sn → ~0,05 sn, aynı tick'ler.
+- **F13 (gsb-kit):** `record_appearance`'ın bekleyen değişikliği silmesi
+  kodda zaten vardı; A10'un sağ kalan mutasyonunu öldüren test eklendi.
+
+Testler 979 → 988 (rebase sonrası). Ajanın mutasyonları yakalandı;
+ebeveynin bağımsız mutasyonu (kapanış kodunu 1000 yapmak) 4 testi
+kırıyor.
+
 ## B25 — `gsb-client`'e WebSocket yarısı (`client/b25-ws-half`)
 
 B19 WS yarısını bilerek dışarıda bırakmıştı; sunucu testlerinin WS
