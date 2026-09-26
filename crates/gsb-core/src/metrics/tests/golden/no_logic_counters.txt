@@ -1,0 +1,351 @@
+gsb-metric scope=registry rooms=2 conns=3 opens=4 closes=1 joins=3 leaves=1 rooms_created=2 rooms_destroyed=0 rooms_died=0
+gsb-metric scope=room id=r1 steps=60 hz=30.00 step_budget_us=33333 step_min_us=40 step_mean_us=100.0 step_max_us=900 step_hist=[60,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=5 late_mean_us=20.0 late_max_us=70 lagged_events=0 lagged_ticks=0 dropped=2 dropped_s=2.0 keepalive_resends=0 snapshots=29 snap_bytes_s=3000 snap_bytes_max=120 snap_overflows=0 snap_records=58 shipped_bytes=17700 shipped_s=9000 shipped_frames=87 private_frames=3 groups=1 members=2 max_group=2 joins=3 leaves=1 detached=0 resumes=0 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=0 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=0 migrations_in=0 migrations_failed=0 team_exports=0 team_export_drops=0 team_export_records=0 team_over_cap=0 team_over_budget=0 team_imports=0 team_import_records=0 team_expired=0 req_local=4 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_to=0 req_late=0 req_pending=0 metrics_dropped=0
+gsb-metric scope=room id=r7 steps=15 hz=0.00 step_budget_us=33333 step_min_us=0 step_mean_us=0.0 step_max_us=0 step_hist=[0,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=0 late_mean_us=0.0 late_max_us=0 lagged_events=0 lagged_ticks=0 dropped=0 dropped_s=0.0 keepalive_resends=0 snapshots=0 snap_bytes_s=0 snap_bytes_max=0 snap_overflows=0 snap_records=0 shipped_bytes=0 shipped_s=0 shipped_frames=0 private_frames=0 groups=0 members=0 max_group=0 joins=0 leaves=0 detached=1 resumes=2 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=6 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=2 migrations_in=0 migrations_failed=0 team_exports=9 team_export_drops=0 team_export_records=0 team_over_cap=0 team_over_budget=1 team_imports=0 team_import_records=0 team_expired=0 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_to=0 req_late=0 req_pending=1 metrics_dropped=0
+gsb-metric scope=net bytes_in=410 bytes_out_room=17700 bytes_out_control=60 bytes_out_total=17760 frames_in=21 frames_out=3 actions_dropped=5 violations=1 metrics_dropped=0 server_closes=1 server_close_idle_timeout=1 server_close_write_stall=0 server_close_rel_dead=0 server_close_violation_budget=0 server_close_preauth_budget=0 server_close_stream_rejected=0 server_close_conn_cap=0 server_close_unauth_cap=0 server_close_superseded=0 server_close_room_gone=0 server_close_outbound_dead=0
+gsb-metric scope=net actions_dropped_top=c1:5
+
+# HELP gsb_metrics_dropped_total Metric samples dropped on the bounded metrics channel across all producers.
+# TYPE gsb_metrics_dropped_total counter
+gsb_metrics_dropped_total 0
+# HELP gsb_registry_rooms Current room count.
+# TYPE gsb_registry_rooms gauge
+gsb_registry_rooms 2
+# HELP gsb_registry_conns Current registered connection count.
+# TYPE gsb_registry_conns gauge
+gsb_registry_conns 3
+# HELP gsb_registry_rooms_created_total Rooms created, cumulative.
+# TYPE gsb_registry_rooms_created_total counter
+gsb_registry_rooms_created_total 2
+# HELP gsb_registry_rooms_destroyed_total Rooms destroyed, cumulative.
+# TYPE gsb_registry_rooms_destroyed_total counter
+gsb_registry_rooms_destroyed_total 0
+# HELP gsb_registry_rooms_died_total Rooms/shards died unexpectedly (panicked), cumulative.
+# TYPE gsb_registry_rooms_died_total counter
+gsb_registry_rooms_died_total 0
+# HELP gsb_registry_joins_total Joins completed, cumulative.
+# TYPE gsb_registry_joins_total counter
+gsb_registry_joins_total 3
+# HELP gsb_registry_leaves_total Leaves completed, cumulative.
+# TYPE gsb_registry_leaves_total counter
+gsb_registry_leaves_total 1
+# HELP gsb_registry_opens_total Connections opened, cumulative.
+# TYPE gsb_registry_opens_total counter
+gsb_registry_opens_total 4
+# HELP gsb_registry_closes_total Connections closed, cumulative.
+# TYPE gsb_registry_closes_total counter
+gsb_registry_closes_total 1
+# HELP gsb_net_bytes_in_total Wire bytes received over all connections (frame bodies), cumulative.
+# TYPE gsb_net_bytes_in_total counter
+gsb_net_bytes_in_total 410
+# HELP gsb_net_bytes_out_room_total Snapshot+private payload bytes shipped by rooms, cumulative.
+# TYPE gsb_net_bytes_out_room_total counter
+gsb_net_bytes_out_room_total 17700
+# HELP gsb_net_bytes_out_control_total Control-frame bytes sent by connection actors, cumulative.
+# TYPE gsb_net_bytes_out_control_total counter
+gsb_net_bytes_out_control_total 60
+# HELP gsb_net_bytes_out_total Total wire bytes sent, cumulative.
+# TYPE gsb_net_bytes_out_total counter
+gsb_net_bytes_out_total 17760
+# HELP gsb_net_frames_in_total Frames received over all connections, cumulative.
+# TYPE gsb_net_frames_in_total counter
+gsb_net_frames_in_total 21
+# HELP gsb_net_frames_out_total Control frames sent by connection actors, cumulative.
+# TYPE gsb_net_frames_out_total counter
+gsb_net_frames_out_total 3
+# HELP gsb_net_actions_dropped_total Input actions dropped on full per-connection action channels, cumulative.
+# TYPE gsb_net_actions_dropped_total counter
+gsb_net_actions_dropped_total 5
+# HELP gsb_net_violations_total Protocol-violation events counted by violation budgets, cumulative.
+# TYPE gsb_net_violations_total counter
+gsb_net_violations_total 1
+# HELP gsb_net_server_closes_total Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
+# TYPE gsb_net_server_closes_total counter
+gsb_net_server_closes_total{reason="idle_timeout"} 1
+gsb_net_server_closes_total{reason="write_stall"} 0
+gsb_net_server_closes_total{reason="rel_dead"} 0
+gsb_net_server_closes_total{reason="violation_budget"} 0
+gsb_net_server_closes_total{reason="preauth_budget"} 0
+gsb_net_server_closes_total{reason="stream_rejected"} 0
+gsb_net_server_closes_total{reason="conn_cap"} 0
+gsb_net_server_closes_total{reason="unauth_cap"} 0
+gsb_net_server_closes_total{reason="superseded"} 0
+gsb_net_server_closes_total{reason="room_gone"} 0
+gsb_net_server_closes_total{reason="outbound_dead"} 0
+# HELP gsb_room_hz Measured room step rate (Δsteps/s over the last sample interval).
+# TYPE gsb_room_hz gauge
+gsb_room_hz{room="r1"} 30
+gsb_room_hz{room="r7"} 0
+# HELP gsb_room_budget_us The room's tick budget in microseconds (one period).
+# TYPE gsb_room_budget_us gauge
+gsb_room_budget_us{room="r1"} 33333
+gsb_room_budget_us{room="r7"} 33333
+# HELP gsb_room_step_min_us Minimum step body duration, µs.
+# TYPE gsb_room_step_min_us gauge
+gsb_room_step_min_us{room="r1"} 40
+gsb_room_step_min_us{room="r7"} 0
+# HELP gsb_room_step_mean_us Mean step body duration, µs.
+# TYPE gsb_room_step_mean_us gauge
+gsb_room_step_mean_us{room="r1"} 100
+gsb_room_step_mean_us{room="r7"} 0
+# HELP gsb_room_step_max_us Maximum step body duration, µs.
+# TYPE gsb_room_step_max_us gauge
+gsb_room_step_max_us{room="r1"} 900
+gsb_room_step_max_us{room="r7"} 0
+# HELP gsb_room_late_min_us Minimum tick processing latency (step start − ticker timestamp), µs.
+# TYPE gsb_room_late_min_us gauge
+gsb_room_late_min_us{room="r1"} 5
+gsb_room_late_min_us{room="r7"} 0
+# HELP gsb_room_late_mean_us Mean tick processing latency, µs.
+# TYPE gsb_room_late_mean_us gauge
+gsb_room_late_mean_us{room="r1"} 20
+gsb_room_late_mean_us{room="r7"} 0
+# HELP gsb_room_late_max_us Maximum tick processing latency, µs.
+# TYPE gsb_room_late_max_us gauge
+gsb_room_late_max_us{room="r1"} 70
+gsb_room_late_max_us{room="r7"} 0
+# HELP gsb_room_step_hist Step body duration histogram; buckets are fractions of the room's tick budget (le in µs); bins at/above the budget edge are budget overflow.
+# TYPE gsb_room_step_hist histogram
+gsb_room_step_hist_bucket{room="r1",le="261"} 60
+gsb_room_step_hist_bucket{room="r1",le="521"} 60
+gsb_room_step_hist_bucket{room="r1",le="1042"} 60
+gsb_room_step_hist_bucket{room="r1",le="2084"} 60
+gsb_room_step_hist_bucket{room="r1",le="4167"} 60
+gsb_room_step_hist_bucket{room="r1",le="8334"} 60
+gsb_room_step_hist_bucket{room="r1",le="16667"} 60
+gsb_room_step_hist_bucket{room="r1",le="33333"} 60
+gsb_room_step_hist_bucket{room="r1",le="66666"} 60
+gsb_room_step_hist_bucket{room="r1",le="133332"} 60
+gsb_room_step_hist_bucket{room="r1",le="266664"} 60
+gsb_room_step_hist_bucket{room="r1",le="533328"} 60
+gsb_room_step_hist_bucket{room="r1",le="1066656"} 60
+gsb_room_step_hist_bucket{room="r1",le="+Inf"} 60
+gsb_room_step_hist_sum{room="r1"} 6000
+gsb_room_step_hist_count{room="r1"} 60
+gsb_room_step_hist_bucket{room="r7",le="261"} 0
+gsb_room_step_hist_bucket{room="r7",le="521"} 0
+gsb_room_step_hist_bucket{room="r7",le="1042"} 0
+gsb_room_step_hist_bucket{room="r7",le="2084"} 0
+gsb_room_step_hist_bucket{room="r7",le="4167"} 0
+gsb_room_step_hist_bucket{room="r7",le="8334"} 0
+gsb_room_step_hist_bucket{room="r7",le="16667"} 0
+gsb_room_step_hist_bucket{room="r7",le="33333"} 0
+gsb_room_step_hist_bucket{room="r7",le="66666"} 0
+gsb_room_step_hist_bucket{room="r7",le="133332"} 0
+gsb_room_step_hist_bucket{room="r7",le="266664"} 0
+gsb_room_step_hist_bucket{room="r7",le="533328"} 0
+gsb_room_step_hist_bucket{room="r7",le="1066656"} 0
+gsb_room_step_hist_bucket{room="r7",le="+Inf"} 0
+gsb_room_step_hist_sum{room="r7"} 0
+gsb_room_step_hist_count{room="r7"} 0
+# HELP gsb_room_step_duration_us Step body duration, µs (summary quantiles from the fine fixed-bin histogram; steps at/above its cap are not quantiled here).
+# TYPE gsb_room_step_duration_us summary
+gsb_room_step_duration_us{room="r1",quantile="0.5"} 96
+gsb_room_step_duration_us{room="r1",quantile="0.99"} 96
+# HELP gsb_room_steps_total Steps run, cumulative.
+# TYPE gsb_room_steps_total counter
+gsb_room_steps_total{room="r1"} 60
+gsb_room_steps_total{room="r7"} 15
+# HELP gsb_room_lagged_events_total Broadcast Lagged occurrences, cumulative.
+# TYPE gsb_room_lagged_events_total counter
+gsb_room_lagged_events_total{room="r1"} 0
+gsb_room_lagged_events_total{room="r7"} 0
+# HELP gsb_room_lagged_ticks_total Missed tick indices caught up, cumulative.
+# TYPE gsb_room_lagged_ticks_total counter
+gsb_room_lagged_ticks_total{room="r1"} 0
+gsb_room_lagged_ticks_total{room="r7"} 0
+# HELP gsb_room_dropped_total Outbound batches dropped at the fan-out (slow client), cumulative.
+# TYPE gsb_room_dropped_total counter
+gsb_room_dropped_total{room="r1"} 2
+gsb_room_dropped_total{room="r7"} 0
+# HELP gsb_room_dropped_s Batch drop rate (Δ/s over the last sample interval).
+# TYPE gsb_room_dropped_s gauge
+gsb_room_dropped_s{room="r1"} 2
+gsb_room_dropped_s{room="r7"} 0
+# HELP gsb_room_keepalive_resends_total Keep-alive re-sends of unchanged groups, cumulative.
+# TYPE gsb_room_keepalive_resends_total counter
+gsb_room_keepalive_resends_total{room="r1"} 0
+gsb_room_keepalive_resends_total{room="r7"} 0
+# HELP gsb_room_snapshots_total Group snapshots encoded, cumulative.
+# TYPE gsb_room_snapshots_total counter
+gsb_room_snapshots_total{room="r1"} 29
+gsb_room_snapshots_total{room="r7"} 0
+# HELP gsb_room_snap_bytes_s Encoded snapshot byte rate (Δ/s).
+# TYPE gsb_room_snap_bytes_s gauge
+gsb_room_snap_bytes_s{room="r1"} 3000
+gsb_room_snap_bytes_s{room="r7"} 0
+# HELP gsb_room_snap_bytes_max Largest single group payload seen, bytes.
+# TYPE gsb_room_snap_bytes_max gauge
+gsb_room_snap_bytes_max{room="r1"} 120
+gsb_room_snap_bytes_max{room="r7"} 0
+# HELP gsb_room_snap_overflows_total Snapshots exceeding max_snapshot_bytes, cumulative.
+# TYPE gsb_room_snap_overflows_total counter
+gsb_room_snap_overflows_total{room="r1"} 0
+gsb_room_snap_overflows_total{room="r7"} 0
+# HELP gsb_room_snap_records_total Entity records encoded (overlap-metric numerator), cumulative.
+# TYPE gsb_room_snap_records_total counter
+gsb_room_snap_records_total{room="r1"} 58
+gsb_room_snap_records_total{room="r7"} 0
+# HELP gsb_room_shipped_bytes_total Bytes shipped to connections (fan-out copies), cumulative.
+# TYPE gsb_room_shipped_bytes_total counter
+gsb_room_shipped_bytes_total{room="r1"} 17700
+gsb_room_shipped_bytes_total{room="r7"} 0
+# HELP gsb_room_shipped_s Shipped-byte rate (Δ/s).
+# TYPE gsb_room_shipped_s gauge
+gsb_room_shipped_s{room="r1"} 9000
+gsb_room_shipped_s{room="r7"} 0
+# HELP gsb_room_groups Current snapshot group count.
+# TYPE gsb_room_groups gauge
+gsb_room_groups{room="r1"} 1
+gsb_room_groups{room="r7"} 0
+# HELP gsb_room_members Current member count.
+# TYPE gsb_room_members gauge
+gsb_room_members{room="r1"} 2
+gsb_room_members{room="r7"} 0
+# HELP gsb_room_max_group Largest snapshot group right now.
+# TYPE gsb_room_max_group gauge
+gsb_room_max_group{room="r1"} 2
+gsb_room_max_group{room="r7"} 0
+# HELP gsb_room_detached Detached-but-parked connections right now (their cap slots are held).
+# TYPE gsb_room_detached gauge
+gsb_room_detached{room="r1"} 0
+gsb_room_detached{room="r7"} 1
+# HELP gsb_room_joins_total Joins processed, cumulative.
+# TYPE gsb_room_joins_total counter
+gsb_room_joins_total{room="r1"} 3
+gsb_room_joins_total{room="r7"} 0
+# HELP gsb_room_leaves_total Leaves processed, cumulative.
+# TYPE gsb_room_leaves_total counter
+gsb_room_leaves_total{room="r1"} 1
+gsb_room_leaves_total{room="r7"} 0
+# HELP gsb_room_resumes_total Resumes accepted onto parked sessions, cumulative.
+# TYPE gsb_room_resumes_total counter
+gsb_room_resumes_total{room="r1"} 0
+gsb_room_resumes_total{room="r7"} 2
+# HELP gsb_room_resume_rejected_stale_total Resume attempts rejected as stale, cumulative.
+# TYPE gsb_room_resume_rejected_stale_total counter
+gsb_room_resume_rejected_stale_total{room="r1"} 0
+gsb_room_resume_rejected_stale_total{room="r7"} 0
+# HELP gsb_room_detach_expired_despawn_total Detach holds expired toward despawn, cumulative.
+# TYPE gsb_room_detach_expired_despawn_total counter
+gsb_room_detach_expired_despawn_total{room="r1"} 0
+gsb_room_detach_expired_despawn_total{room="r7"} 0
+# HELP gsb_room_detach_expired_ai_total Detach holds expired toward AI handover, cumulative.
+# TYPE gsb_room_detach_expired_ai_total counter
+gsb_room_detach_expired_ai_total{room="r1"} 0
+gsb_room_detach_expired_ai_total{room="r7"} 0
+# HELP gsb_room_detach_forced_total Detach holds forced to end by max_detach_hold over a standing veto, cumulative.
+# TYPE gsb_room_detach_forced_total counter
+gsb_room_detach_forced_total{room="r1"} 0
+gsb_room_detach_forced_total{room="r7"} 0
+# HELP gsb_room_effects_applied_total Remote effects this shard's game applied as their authority, cumulative.
+# TYPE gsb_room_effects_applied_total counter
+gsb_room_effects_applied_total{room="r1"} 0
+gsb_room_effects_applied_total{room="r7"} 6
+# HELP gsb_room_effects_forwarded_total Remote effects handed on to a migrated target's new owner, cumulative.
+# TYPE gsb_room_effects_forwarded_total counter
+gsb_room_effects_forwarded_total{room="r1"} 0
+gsb_room_effects_forwarded_total{room="r7"} 0
+# HELP gsb_room_effects_orphaned_total Remote effects whose target is gone, cumulative.
+# TYPE gsb_room_effects_orphaned_total counter
+gsb_room_effects_orphaned_total{room="r1"} 0
+gsb_room_effects_orphaned_total{room="r7"} 0
+# HELP gsb_room_effects_dropped_total Remote effects lost to a full retry buffer, a closed link, the hop or the age bound, cumulative.
+# TYPE gsb_room_effects_dropped_total counter
+gsb_room_effects_dropped_total{room="r1"} 0
+gsb_room_effects_dropped_total{room="r7"} 0
+# HELP gsb_room_effects_refused_total Remote-effect emits refused at the source (budget spent, target not lent), cumulative.
+# TYPE gsb_room_effects_refused_total counter
+gsb_room_effects_refused_total{room="r1"} 0
+gsb_room_effects_refused_total{room="r7"} 0
+# HELP gsb_room_migrations_out_total Entities handed to a neighbour shard (committed sends), cumulative.
+# TYPE gsb_room_migrations_out_total counter
+gsb_room_migrations_out_total{room="r1"} 0
+gsb_room_migrations_out_total{room="r7"} 2
+# HELP gsb_room_migrations_in_total Entities installed from a neighbour shard, cumulative.
+# TYPE gsb_room_migrations_in_total counter
+gsb_room_migrations_in_total{room="r1"} 0
+gsb_room_migrations_in_total{room="r7"} 0
+# HELP gsb_room_migrations_failed_total Migration sends a full neighbour inbox refused (retried next tick), cumulative.
+# TYPE gsb_room_migrations_failed_total counter
+gsb_room_migrations_failed_total{room="r1"} 0
+gsb_room_migrations_failed_total{room="r7"} 0
+# HELP gsb_room_team_exports_total Team exports queued on the registry's mailbox (the team hub), cumulative.
+# TYPE gsb_room_team_exports_total counter
+gsb_room_team_exports_total{room="r1"} 0
+gsb_room_team_exports_total{room="r7"} 9
+# HELP gsb_room_team_export_drops_total Team exports a full or closed registry mailbox refused, cumulative.
+# TYPE gsb_room_team_export_drops_total counter
+gsb_room_team_export_drops_total{room="r1"} 0
+gsb_room_team_export_drops_total{room="r7"} 0
+# HELP gsb_room_team_export_records_total Records in the queued team exports, cumulative.
+# TYPE gsb_room_team_export_records_total counter
+gsb_room_team_export_records_total{room="r1"} 0
+gsb_room_team_export_records_total{room="r7"} 0
+# HELP gsb_room_team_over_cap_total Team records (and viewed teams) cut by the core's per-message caps, cumulative.
+# TYPE gsb_room_team_over_cap_total counter
+gsb_room_team_over_cap_total{room="r1"} 0
+gsb_room_team_over_cap_total{room="r7"} 0
+# HELP gsb_room_team_over_budget_total Team records the game's per-team export budget cut before the export reached the core, cumulative.
+# TYPE gsb_room_team_over_budget_total counter
+gsb_room_team_over_budget_total{room="r1"} 0
+gsb_room_team_over_budget_total{room="r7"} 1
+# HELP gsb_room_team_imports_total Team imports (the hub's relays) applied, cumulative.
+# TYPE gsb_room_team_imports_total counter
+gsb_room_team_imports_total{room="r1"} 0
+gsb_room_team_imports_total{room="r7"} 0
+# HELP gsb_room_team_import_records_total Records in the applied team imports, cumulative.
+# TYPE gsb_room_team_import_records_total counter
+gsb_room_team_import_records_total{room="r1"} 0
+gsb_room_team_import_records_total{room="r7"} 0
+# HELP gsb_room_team_expired_total Team import slots dropped by the TTL (a silent source), cumulative.
+# TYPE gsb_room_team_expired_total counter
+gsb_room_team_expired_total{room="r1"} 0
+gsb_room_team_expired_total{room="r7"} 0
+# HELP gsb_room_requests_local_total RPC requests answered room-local, cumulative.
+# TYPE gsb_room_requests_local_total counter
+gsb_room_requests_local_total{room="r1"} 4
+gsb_room_requests_local_total{room="r7"} 0
+# HELP gsb_room_requests_external_total RPC requests delegated to workers, cumulative.
+# TYPE gsb_room_requests_external_total counter
+gsb_room_requests_external_total{room="r1"} 0
+gsb_room_requests_external_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_malformed_total RPC rejections: malformed envelope/id=0, cumulative.
+# TYPE gsb_room_requests_rejected_malformed_total counter
+gsb_room_requests_rejected_malformed_total{room="r1"} 0
+gsb_room_requests_rejected_malformed_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_dup_total RPC rejections: duplicate in-flight id, cumulative.
+# TYPE gsb_room_requests_rejected_dup_total counter
+gsb_room_requests_rejected_dup_total{room="r1"} 0
+gsb_room_requests_rejected_dup_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_no_handler_total RPC rejections: no handler for the op, cumulative.
+# TYPE gsb_room_requests_rejected_no_handler_total counter
+gsb_room_requests_rejected_no_handler_total{room="r1"} 0
+gsb_room_requests_rejected_no_handler_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_logic_total RPC rejections: the logic's own reject decision, cumulative.
+# TYPE gsb_room_requests_rejected_logic_total counter
+gsb_room_requests_rejected_logic_total{room="r1"} 0
+gsb_room_requests_rejected_logic_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_conn_cap_total RPC rejections: per-connection pending cap, cumulative.
+# TYPE gsb_room_requests_rejected_conn_cap_total counter
+gsb_room_requests_rejected_conn_cap_total{room="r1"} 0
+gsb_room_requests_rejected_conn_cap_total{room="r7"} 0
+# HELP gsb_room_requests_rejected_room_cap_total RPC rejections: room-wide pending cap, cumulative.
+# TYPE gsb_room_requests_rejected_room_cap_total counter
+gsb_room_requests_rejected_room_cap_total{room="r1"} 0
+gsb_room_requests_rejected_room_cap_total{room="r7"} 0
+# HELP gsb_room_requests_timed_out_total RPC pending requests swept as timed out, cumulative.
+# TYPE gsb_room_requests_timed_out_total counter
+gsb_room_requests_timed_out_total{room="r1"} 0
+gsb_room_requests_timed_out_total{room="r7"} 0
+# HELP gsb_room_requests_late_total RPC worker reports dropped as late, cumulative.
+# TYPE gsb_room_requests_late_total counter
+gsb_room_requests_late_total{room="r1"} 0
+gsb_room_requests_late_total{room="r7"} 0
+# HELP gsb_room_pending_requests External RPC requests currently in flight.
+# TYPE gsb_room_pending_requests gauge
+gsb_room_pending_requests{room="r1"} 0
+gsb_room_pending_requests{room="r7"} 1
+# HELP gsb_room_metrics_dropped_total Metric samples this room dropped on a full metrics channel, cumulative.
+# TYPE gsb_room_metrics_dropped_total counter
+gsb_room_metrics_dropped_total{room="r1"} 0
+gsb_room_metrics_dropped_total{room="r7"} 0

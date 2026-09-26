@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 mod closes;
 mod collector;
+mod golden;
 mod histogram;
 mod prometheus;
 mod pruning;
