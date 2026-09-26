@@ -5,6 +5,39 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B12 + B13 — kapanış bildirimleri: sunucu durdurma ERROR 14, reddedilen akış ERROR 9 (`core/b12-b13-close-notices`)
+
+Sunucunun kendi başlattığı iki kapanış istemciye sessizdi: `stop()`
+(aktörün `Shutdown` kolu yalnız döngüden çıkıyordu) ve taşımanın bayt
+akışını reddetmesi (`stream_rejected`). İstemci "sunucu gidiyor" ile "ağ
+koptu"yu ayıramıyordu (DESIGN §5.6).
+
+- Yeni kod `ERROR_CODE_SERVER_STOPPING = 14` (toplamalı; `PROTOCOL_VERSION`
+  artmadı — tanımayan istemci OTHER sayar, kapanışı soketten öğrenir).
+  Anlamı: oturum hakkında hüküm yok, bu adreste resume yok; sonra ya da
+  başka sunucuya bağlan (ne zaman/nereye — kontrol düzlemi politikası,
+  motor değil). Reddedilen akış mevcut ERROR 9'u alır: `stream rejected:
+  <sebep>`.
+- İkisi de en-iyi-çaba ve beklemesiz: çıkış kuyruğuna senkron `try_send`
+  (`conn/actor/close.rs::try_notice`); kuyruk doluysa bildirim düşer, aktör
+  yine anında çıkar. `stop()`'un await'leri ve S'nin kuralları değişmedi.
+- QUIC: dinleyici `close`'u artık endpoint'i kapatmıyor
+  (`set_server_config(None)`; `Endpoint::close` her bildirimi terk
+  ediyordu); gönderme yarısının kapanışı eşin ACK'ini bekliyor
+  (`quic/send.rs`; stall penceresi / quinn idle ile sınırlı).
+- WS: soket yazıcı görevi kapanış çerçevesinden sonra veri çerçevesi
+  yazmıyor (RFC 6455 §5.5.1) — önceden fan-out da oraya düşebiliyordu.
+- Kapı tablosu (DESIGN §5.6): TCP/TLS/QUIC bildirim → son; WS bildirim →
+  kapanış çerçevesi; rUDP'de FIN yok, bildirim tek kapanış sinyali; bozuk
+  TLS kaydında bildirim inemez (oturum ölü).
+- B14 yapılmadı: kod-9 mesajı sözleşmece insan-okunur; sunucu
+  `server_closes{reason}` otorite ve loadgen onu basıyor.
+
+Testler 905 → 920 (rebase sonrası; +4 aktör, +6 kapı başına durdurma,
++4 reddedilen akış, +1 WS `after_close`); her kural mutasyonla kırıldı.
+Ebeveynin bağımsız mutasyonu (reddedilen akışa 9 yerine 14 göndermek) 4
+testi kırıyor. Resume semantiği değişmedi.
+
 ## F14 — düşen batch'in RPC yanıtları kaybolmuyor (`core/f14-rpc-replies-on-drop`)
 
 Çekirdeğin kendi yükü, F11'in çekirdek tarafı; hiçbir şey düşmediğinde

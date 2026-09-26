@@ -77,15 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **905** (905/905 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **920** (920/920 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F14 — düşen batch'in RPC yanıtları** (RPC-CONTROL-PLANE §3.1)
+Son tur: **B12 + B13 — kapanış bildirimleri** (DESIGN §5.6) — `stop()`'ta
+en-iyi-çaba ERROR 14 (`SERVER_STOPPING`, toplamalı kod), reddedilen akışta
+ERROR 9; beklemesiz, `stop()` her zaman bitiyor; QUIC ve WS kapılarındaki
+bildirim yutan iki kusur düzeldi.
+Önceki tur: **F14 — düşen batch'in RPC yanıtları** (RPC-CONTROL-PLANE §3.1)
 — düşen batch'in yanıtları kuyruğun başına dönüp kanalın kabul ettiği
 ilk batch'le tam bir kez gidiyor; tıkalı bağlantı borcu cap'e ulaşınca
-yeni istek yanıtsız reddediliyor (borç ≤ 4 + 16). B12+B13 (kapanış
-bildirimleri) yürüyor.
+yeni istek yanıtsız reddediliyor (borç ≤ 4 + 16).
 Önceki tur: **F11 — fan-out düşme sinyali** (KIT-ARCHITECTURE §10 "F11") —
 çekirdek düşen batch'i (`on_batch_dropped`) ve düşme dizisinin bitişini
 (`on_batch_resumed`) mantığa bildiriyor; kit tek seferlik durumu (one-shot
@@ -785,8 +788,9 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
 
 ## P3 — Doküman ve politika noktaları
 
-- [ ] **Kapanma bildirimi** — `stop()`'ta odadaki oyunculara sessiz
-  disconnect yerine ERROR/leave frame'i.
+- [x] **Kapanma bildirimi** — **KAPANDI** (B12): `stop()`'ta
+  istemci en-iyi-çaba ERROR 14 (`SERVER_STOPPING`) alır, kapının
+  sonundan önce; beş kapıda testli (DESIGN §5.6).
 - [ ] **Oda bazlı config override** — factory aynı config'i kullanıyor;
   yüksek yoğunluklu odalar için farklılaşma.
 - [ ] **`gsb-client` yardımcı crate'i** — `read_frame` mantığı e2e testi

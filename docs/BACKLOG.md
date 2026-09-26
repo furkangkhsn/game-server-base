@@ -82,9 +82,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B9 Süreçler arası oturum relay'i | A2 / iki makine | DISTRIBUTED:147-165 |
 | B10 Süreçler arası tick senkronu | çok süreç | DISTRIBUTED:231 |
 | B11 NetLink hata enjeksiyonu test donanımı | NetLink ile | DISTRIBUTED:243 |
-| B12 `stop()`'ta istemciye kapanış bildirimi yok | — | ROADMAP:710 |
-| B13 `stream_rejected` kapanışlarında ERROR 9 yok | — | CHANGELOG:1303, 1466 |
-| B14 Loadgen ERROR 9'u yalnız ihlal/diğer diye ayırıyor | — | CHANGELOG:1471 |
+| B14 Loadgen kapanışları sebebe göre sınıflamıyor (kod-9 mesajı sözleşmece insan-okunur; sunucu `server_closes{reason}` otorite — DESIGN §5.6 "Loadgen (B14)"); yan not: "pre-auth frame budget" kapanışı `cap_rejected`'a düşüyor | istemci-başına atıf isteyen ölçüm → `Error`'a toplamalı sebep alanı | DESIGN §5.6 |
 | B15 Write-stall artıkları (TLS kuyruğu 64 KiB, uyanma histerezisi, WS'te iki pencere) | — | SECURITY:117, ROADMAP:522 |
 | B16 Accept döngüsü hâlâ `abort` ile duruyor | — | DESIGN:1197-1214 |
 | B17 Admin HTTP: auth/TLS yok, keep-alive yok, makine-okur çıktı yok, profil yok | — (localhost sözleşmesi) | OPS:12-54, SECURITY:269 |
@@ -94,6 +92,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B21 Gerçek ticket doğrulayıcıları | — (platform tarafı) | RPC-CONTROL-PLANE:461 |
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
+| B24 WS durdurmada kapanış çerçevesi boş (istemcide 1005); 1001 "Going Away" olabilir | — | DESIGN §5.6 |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
@@ -154,7 +153,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F13 A10 hijyeni: görünüme girişte (`record_appearance`) bekleyen ertelenmiş kayıt silinmiyor — etkisi fazladan bir idempotent upsert (mutasyonda sağ kalıyor) | KIT-ARCHITECTURE §10 "A10" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13 §B'den kendi turunda.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
