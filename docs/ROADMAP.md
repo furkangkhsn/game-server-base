@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1015** (1015/1015 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1024** (1024/1024 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F9 — mantığın kendi metrik sayaçları** — genel seam
+Son tur: **B29 — loadgen WS modu** (DESIGN §5.7 "Loadgen WS modu") — WS
+kapısı ilk kez yük altında: tick yolu TCP ile aynı. Bulgu B31: WS (ve
+TLS) kapısının el sıkışması accept döngüsünde seri — tek boşta soket
+kapıyı 10 sn kilitliyor; sıradaki iş.
+Önceki tur: **F9 — mantığın kendi metrik sayaçları** — genel seam
 (`GameLogic::logic_counters` + `LogicCounters`, 16 yuva, `const` bildirim,
 SUM/MAX); `gsb-metric` / Prometheus / loadgen `GSMC` / RESULT `logic_*`.
 Crystallization olayları (`crystal_*`) ve savaşın `war_kills`'i bu yoldan.

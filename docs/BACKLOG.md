@@ -92,7 +92,8 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B22 NATS/Kafka/gRPC RPC adaptörleri | — | RPC-CONTROL-PLANE:463 |
 | B23 Loadgen RPC trafiği modu | — | RPC-CONTROL-PLANE:479 |
 | B28 `UdpClient`'ı `gsb-net`'ten ayırmak (`gsb-client` bugün `gsb-net` üzerinden `gsb-core`'u çekiyor) | çekirdeksiz istemci derlemesi (wasm/mobil) | DESIGN §5.7 |
-| B29 Loadgen WS modu (`gsb_client::connect::ws` hazır) | WS kapısının yük ölçümü | DESIGN §5.7 |
+| B31 **SIRADA — güvenlik/erişilebilirlik:** WS (ve TLS) kapısı el sıkışmayı `accept()` içinde yapıyor; accept döngüsü sırayla bekliyor: bağlanma fırtınasında backlog taşıyor (orkestre 500 WS connect p50 ~1065 ms ↔ TCP 17–20 ms), yükseltme göndermeyen TEK soket kapıyı `WS_HANDSHAKE_TIMEOUT` (10 sn) kilitliyor, başarısız el sıkışma döngüyü 100 ms geri çekiyor. Yön: el sıkışmayı bağlantı başına görevde, sınırlı eşzamanlılıkla (pre-auth sınırına bağlı) | — (bugün yanlış; kapı herkese açılmadan önce şart) | DESIGN §5.7 "Loadgen WS modu (B29)" |
+| B32 Orkestre demo 500'de katılma fırtınasında `dropped` > 0 (TCP 116, WS 14–17) | ölçümlerde tekrar görülürse | DESIGN §5.7 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -153,7 +154,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F17 Mantık sayacı taşması (16'yı aşan ad) yalnız bir kez warn + kümedeki sayı; satırda/Prometheus'ta görünmüyor — tetik: bir oyunun 16 adı zorlaması | DESIGN §12 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 kendi turunda kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

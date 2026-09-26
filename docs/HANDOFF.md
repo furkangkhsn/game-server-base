@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1015 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1024 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -145,6 +145,11 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**B29 tamam** (DESIGN §5.7 "Loadgen WS modu", CHANGELOG "B29"):
+`gsb-loadgen --transport ws` her modda; WS ↔ TCP taban çizgisi DESIGN
+§5.7'de. Açık ve SIRADA: B31 (WS/TLS kapısında accept döngüsünden bağımsız
+el sıkışma).
 
 **F9 tamam** (CHANGELOG "F9", DESIGN §12, OPS §3, KIT-ARCHITECTURE §10
 "F9"): oyun/kit çekirdeğe dokunmadan kendi adlı kümülatif sayaçlarını
@@ -521,6 +526,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1015 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1024 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

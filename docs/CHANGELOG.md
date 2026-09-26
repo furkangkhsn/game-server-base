@@ -5,6 +5,31 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B29 — loadgen WS modu; WS kapısının ilk yük ölçümü (`loadgen/b29-ws-mode`)
+
+- `--transport tcp|udp|ws`: süreç içi ve `--serve` sunucusu `ws`'de tek
+  `"ws"` dinleyicisi açar (TCP/rUDP değişmedi); `--addr` istemcileri yeni
+  `gsb_client::connect::ws_stream` ile (çağıranın TCP soketi üstünde
+  yükseltme); orkestratör iki çocuğa da iletir; churn, `--stall-ms`,
+  `--capture`, `--flood-id` WS'de çalışır (flood artık maskeli mesaj
+  yazıyor). `--tls-ca` + `ws` her modda kullanım hatası (kapının TLS
+  biçimi yok).
+- WS bayt muhasebesi: veri mesajı sokette durduğu boyla (başlık 2/4/10 +
+  istemci yazımında 4 bayt maske + kare); yükseltme ve kontrol kareleri
+  sayılmaz. TCP/rUDP sayımları ve RESULT satırları değişmedi.
+- Ölçüm (release, 20 sn, TCP/WS dönüşümlü): demo 200/500, arena 200, MMO
+  200 WS'de 30 Hz, hata/kapanış/düşme 0, adım süreleri gürültü içinde
+  (MMO p90 +32–48 µs), sunucu bant genişliği aynı; istemci giriş baytında
+  WS başlığı +%0,3–0,7, çıkışta +%38–50 (küçük girdi kareleri).
+- **Bulgu B31 (düzeltilmedi, sıraya alındı):** WS kapısı yükseltmeyi
+  `accept()` içinde yapıyor, el sıkışmalar SERİ — orkestre 500'de WS
+  connect p50 ~1065 ms (TCP 17–20 ms); yükseltme göndermeyen TEK boşta
+  soket kapıyı `WS_HANDSHAKE_TIMEOUT` (10 sn) kilitliyor (20 istemci p50
+  = 9610 ms; TCP'de 0). TLS kapısı kod okumasına göre aynı yapıda.
+
+Testler 1015 → 1024. Ajanın mutasyonları yakalandı; ebeveynin bağımsız
+mutasyonu (WS 126 bayt sınırını kaydırmak) 2 testi kırıyor.
+
 ## F9 — oyunun/kit'in kendi metrik sayaçları (`core/f9-counter-seam`)
 
 - **Seam (gsb-core):** `GameLogic::logic_counters(&self, world, out:
