@@ -11,9 +11,31 @@
 //! - Aborting the ticker task closes the channel: all subscribers observe
 //!   `Closed`, which doubles as the global stop signal for rooms.
 //! - No cross-room coordination: each room advances its own drift from the
-//!   wall-clock timestamps carried in [`TickInfo`].
+//!   timestamps carried in [`TickInfo`].
+//!
+//! # The tick clock
+//!
+//! The ticker schedules AND stamps on the runtime's clock
+//! (`tokio::time::Instant`, see [`now`]). In production that is the wall
+//! clock itself — without tokio's `test-util` feature `tokio::time::
+//! Instant::now()` is `std::time::Instant::now()`, and on a runtime that
+//! was never paused it reads the same instant. Under a PAUSED test
+//! runtime it is the virtual clock: the ticker's sleeps advance it by one
+//! period, the stamps advance with it, and a room's `dt` (the gap between
+//! two stamps) is the period — a game on the paused clock walks exactly
+//! as on the real one. (Stamping with `std::time::Instant` froze it:
+//! the ticks came back to back, microseconds apart.)
+//!
+//! Every reading COMPARED with a stamp must come from the same clock —
+//! [`now`]: the tick latency (step start − stamp) and the input-idle
+//! clock's join stamps (the sweep compares them with the tick's stamp).
+//! Readings that only measure work (step durations) stay on
+//! `std::time::Instant`: the paused clock does not move during
+//! synchronous work, so it would report zero CPU time.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -25,8 +47,10 @@ use crate::error::CoreError;
 pub struct TickInfo {
     /// Global tick index (monotonic, starts at 1).
     pub tick: u64,
-    /// Wall-clock instant at which the tick was emitted.
-    pub at: Instant,
+    /// The instant at which the tick was emitted, on the tick clock
+    /// ([`now`]: the wall clock in production, the virtual clock under
+    /// a paused test runtime).
+    pub at: std::time::Instant,
 }
 
 /// Handle to the global tick service: the broadcast sender plus the global
@@ -73,22 +97,22 @@ impl Ticker {
             let mut next = Instant::now() + period;
             let mut tick = 0u64;
             loop {
-                let delay = next.saturating_duration_since(Instant::now());
-                tokio::time::sleep(delay).await;
+                tokio::time::sleep_until(next).await;
                 tick += 1;
                 next += period;
-                // Fell behind (runtime starvation): resync to the wall
-                // clock instead of bursting — room actors derive dt from
-                // the timestamps, so the gap is already visible to them.
-                if next < Instant::now() {
-                    next = Instant::now() + period;
+                let now = Instant::now();
+                // Fell behind (runtime starvation): resync to the clock
+                // instead of bursting — room actors derive dt from the
+                // timestamps, so the gap is already visible to them.
+                if next < now {
+                    next = now + period;
                 }
                 // Non-blocking by construction of the broadcast channel:
                 // errors only when no subscriber exists at all. Keep
                 // running; rooms may subscribe later.
                 let _ = tx.send(TickInfo {
                     tick,
-                    at: Instant::now(),
+                    at: now.into_std(),
                 });
             }
         });
@@ -113,6 +137,12 @@ impl Ticker {
     pub fn subscribe(&self) -> broadcast::Receiver<TickInfo> {
         self.tx.subscribe()
     }
+}
+
+/// The tick clock's current instant (module docs, "The tick clock"): the
+/// reading to compare with a [`TickInfo::at`] stamp.
+pub fn now() -> std::time::Instant {
+    Instant::now().into_std()
 }
 
 #[cfg(test)]

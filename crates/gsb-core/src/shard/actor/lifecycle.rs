@@ -238,7 +238,10 @@ where
         self.steps += 1;
 
         // -- tick latency (same measurement as the room actor).
-        let late_us = Instant::now().saturating_duration_since(t.at).as_micros() as u64;
+        // On the stamp's own clock (`ticker::now`): the tick clock.
+        let late_us = crate::ticker::now()
+            .saturating_duration_since(t.at)
+            .as_micros() as u64;
         self.m.observe_late_us(self.steps, late_us);
 
         let t0 = Instant::now();

@@ -201,7 +201,10 @@ where
         // -- tick latency: how late this room processes the tick (step
         //    start minus the ticker's timestamp; covers broadcast delivery
         //    + the room's queue behind the ticker).
-        let late_us = Instant::now().saturating_duration_since(t.at).as_micros() as u64;
+        // On the stamp's own clock (`ticker::now`): the tick clock.
+        let late_us = crate::ticker::now()
+            .saturating_duration_since(t.at)
+            .as_micros() as u64;
         self.m.observe_late_us(self.steps, late_us);
 
         let t0 = Instant::now();

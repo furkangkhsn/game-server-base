@@ -15,6 +15,11 @@ bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+# `test-util`: the paused-clock tests of the ticker and of a room that
+# walks on it (a tick stamp on the runtime's clock flows with it).
+tokio = { workspace = true, features = ["test-util"] }
+
 [build-dependencies]
 gsb-lint = { workspace = true }
 

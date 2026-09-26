@@ -90,7 +90,7 @@ where
                 );
                 // The input-idle clock starts at the join (the room
                 // actor's rule, mirrored).
-                self.idle.start(admission.player, Instant::now());
+                self.idle.start(admission.player, crate::ticker::now());
                 let _ = reply.send(Ok((admission.entity, act_tx)));
                 debug!(
                     room = %self.config.id,

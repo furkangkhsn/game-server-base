@@ -84,7 +84,7 @@ where
         }
         self.m.resumes += 1;
         // The clock RESTARTS with the new session (the room actor's rule).
-        self.idle.start(player, std::time::Instant::now());
+        self.idle.start(player, crate::ticker::now());
         // THE binding move + its session-epoch companion (see the
         // enumeration above): the old session loses both rows; the new
         // session owns the player from here on.

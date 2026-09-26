@@ -8,7 +8,6 @@ use crate::room::actor::RoomActor;
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -94,7 +93,7 @@ where
         // The input-idle clock starts at the join, not at the first
         // action: a client that connects and never plays must be visible
         // as idle-of-input from the moment it takes a slot.
-        self.idle.start(admission.player, Instant::now());
+        self.idle.start(admission.player, crate::ticker::now());
         debug!(
             room = %self.config.id,
             %conn,
@@ -180,7 +179,7 @@ where
         // The clock RESTARTS with the new session: the park took the row
         // off it (a parked row has no input source), and the returning
         // human must not inherit the idleness its disconnect accumulated.
-        self.idle.start(player, Instant::now());
+        self.idle.start(player, crate::ticker::now());
         // THE binding move — the whole remaining re-key surface (see the
         // enumeration above). The old session's row is removed first so a
         // stray frame under the dead conn finds no binding from here on
