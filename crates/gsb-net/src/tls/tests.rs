@@ -77,6 +77,7 @@ fn transport_for(pki: &TestPki) -> TlsTransport {
             cert_chain_pem: pki.cert_pem_path.clone(),
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
         },
     }
 }
@@ -154,6 +155,7 @@ async fn missing_cert_file_fails_the_bind() {
             cert_chain_pem: "/nonexistent/gsb-tls/cert.pem".into(),
             key_pem: "/nonexistent/gsb-tls/key.pem".into(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
         },
     };
     let result = Arc::new(transport)
@@ -180,6 +182,7 @@ async fn malformed_cert_file_fails_the_bind() {
             cert_chain_pem: bad.display().to_string(),
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
         },
     };
     let result = Arc::new(transport)
@@ -192,7 +195,7 @@ async fn malformed_cert_file_fails_the_bind() {
 }
 
 /// A client trusting a DIFFERENT CA fails the handshake cleanly (the
-/// server reports a failed handshake; the client gets an alert).
+/// server counts a failed handshake; the client gets an alert).
 #[tokio::test]
 async fn wrong_ca_fails_the_handshake() {
     let pki = mint_pki("wrong-ca");
@@ -203,20 +206,13 @@ async fn wrong_ca_fails_the_handshake() {
         .expect("bind");
 
     let bound = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        // The server observes the failed handshake as an accept error.
-        assert!(
-            listener.accept().await.is_err(),
-            "handshake must fail server-side"
-        );
-    });
-
     let connector = client_connector(&other);
     let name: rustls::pki_types::ServerName<'static> = "localhost".try_into().expect("dns name");
     let tcp = tokio::net::TcpStream::connect(bound).await.unwrap();
     let result = connector.connect(name, tcp).await;
     assert!(result.is_err(), "client must reject the unknown CA");
-    server.await.expect("server sees the failure");
+    // The server counts the failure off its accept loop (BACKLOG B31).
+    crate::transport::intake::tests::a_failed_handshake_is_counted(&listener).await;
 }
 
 /// The door (BACKLOG B16): `close` ends the parked accept, and one held
@@ -232,3 +228,5 @@ async fn close_ends_a_parked_accept_and_a_stuck_handshake() {
     close_ends_a_parked_accept(t.clone().bind(any).await.expect("bind")).await;
     close_ends_an_accept_in_its_handshake(t.bind(any).await.expect("bind")).await;
 }
+
+mod off_accept;

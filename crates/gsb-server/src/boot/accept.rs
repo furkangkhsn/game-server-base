@@ -176,11 +176,14 @@ pub(super) async fn run_accept(
 /// instance is per-listener ON PURPOSE even for two entries of the same
 /// kind: each door owns its socket (and, for rUDP, its own demux state),
 /// so closing one listener can never disturb another's sessions.
+/// `handshake_bound`: each handshaking door's bound on handshakes in
+/// flight (the pre-auth cap — `start::pre_auth`, BACKLOG B31).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
     idle_timeout: Option<std::time::Duration>,
     cookie_key: Option<[u8; 16]>,
+    handshake_bound: usize,
 ) -> Result<(Arc<dyn gsb_net::transport::Listener>, SocketAddr), ServerError> {
     let transport: Arc<dyn Transport> = match spec {
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
@@ -193,6 +196,7 @@ pub(super) async fn bind_listener(
                 cert_chain_pem: cert_pem.clone(),
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
+                max_pending_handshakes: handshake_bound,
             },
         }),
         ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
@@ -214,6 +218,7 @@ pub(super) async fn bind_listener(
                 cert_chain_pem: cert_pem.clone(),
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
+                max_pending_handshakes: handshake_bound,
             },
         }),
         ListenerSpec::Ws { .. } => Arc::new(WsTransport {
@@ -229,6 +234,7 @@ pub(super) async fn bind_listener(
             // The wire contract; the opaque mapping is the conformance
             // harness's alone and is not reachable from configuration.
             mapping: WsMessageMapping::GameEnvelope,
+            max_pending_handshakes: handshake_bound,
         }),
     };
     let listener = transport.bind(spec.addr()).await?;

@@ -1,5 +1,7 @@
 //! Transport wiring: bind, accept, upgrade, then hand the actor layer
-//! an [`Endpoint`] that speaks the same frames as every other door.
+//! an [`Endpoint`] that speaks the same frames as every other door. The
+//! upgrade runs in its own task, off the accept loop (BACKLOG B31 —
+//! `crate::transport::intake`).
 
 use std::io;
 use std::net::SocketAddr;
@@ -10,7 +12,6 @@ use tokio::net::TcpListener;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tracing::debug;
-use tracing::warn;
 
 use gsb_core::channel::FrameBatch;
 use gsb_core::channel::Inbox;
@@ -20,10 +21,12 @@ use gsb_core::id::ConnectionId;
 
 use crate::pump::spawn_pumps;
 use crate::transport::BoxFuture;
-use crate::transport::Door;
+use crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES;
 use crate::transport::Endpoint;
+use crate::transport::HandshakeStats;
 use crate::transport::Listener;
 use crate::transport::Transport;
+use crate::transport::intake::{Intake, IntakeHandle, run_tcp_intake};
 use crate::ws::*;
 
 /// Maximum WS message (and therefore game-frame envelope) size. Mirrors
@@ -40,6 +43,9 @@ pub struct WsTransport {
     /// How a binary message maps to a frame. Every server door uses
     /// [`WsMessageMapping::GameEnvelope`] — the wire contract.
     pub mapping: WsMessageMapping,
+    /// The bound on upgrades in flight (BACKLOG B31): a connection over
+    /// it is closed unupgraded and counted.
+    pub max_pending_handshakes: usize,
 }
 
 impl Default for WsTransport {
@@ -47,6 +53,7 @@ impl Default for WsTransport {
         Self {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             mapping: WsMessageMapping::GameEnvelope,
+            max_pending_handshakes: DEFAULT_MAX_PENDING_HANDSHAKES,
         }
     }
 }
@@ -70,12 +77,11 @@ pub enum WsMessageMapping {
 }
 
 pub(super) struct WsListenerHandle {
-    listener: TcpListener,
-    max_message_bytes: usize,
-    mapping: WsMessageMapping,
-    /// Closed by [`Listener::close`]: ends the pending accept, an
-    /// upgrade in flight included (B16).
-    door: Door,
+    local_addr: Option<SocketAddr>,
+    /// The upgrades, off the accept loop: `accept` takes finished ones;
+    /// [`Listener::close`] (or the last handle's drop) closes its door —
+    /// the raw accept, every upgrade in flight, the pending accept (B16).
+    intake: IntakeHandle,
 }
 
 impl Transport for WsTransport {
@@ -86,11 +92,18 @@ impl Transport for WsTransport {
         Box::pin(async move {
             let listener = TcpListener::bind(addr).await?;
             debug!(%addr, "WebSocket listener bound");
-            Ok(Arc::new(WsListenerHandle {
+            let local_addr = listener.local_addr().ok();
+            let intake = Intake::new("WebSocket", self.max_pending_handshakes);
+            let (max_message_bytes, mapping) = (self.max_message_bytes, self.mapping);
+            tokio::spawn(run_tcp_intake(
+                Arc::clone(&intake),
                 listener,
-                max_message_bytes: self.max_message_bytes,
-                mapping: self.mapping,
-                door: Door::new(),
+                WS_HANDSHAKE_TIMEOUT,
+                move |stream, peer| upgrade(stream, peer, max_message_bytes, mapping),
+            ));
+            Ok(Arc::new(WsListenerHandle {
+                local_addr,
+                intake: IntakeHandle(intake),
             }) as Arc<dyn Listener>)
         })
     }
@@ -98,80 +111,76 @@ impl Transport for WsTransport {
 
 impl Listener for WsListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>> {
-        Box::pin(async move { self.door.admit(self.accept_one()).await })
+        // `self` rides along: the last handle's drop closes the door.
+        Box::pin(async move { Arc::clone(&self.intake.0).next().await })
     }
 
     fn local_addr(&self) -> Option<SocketAddr> {
-        self.listener.local_addr().ok()
+        self.local_addr
     }
 
     fn close(&self) {
-        self.door.close();
+        self.intake.0.close();
+    }
+
+    fn handshake_stats(&self) -> Option<HandshakeStats> {
+        Some(self.intake.0.stats())
     }
 }
 
-impl WsListenerHandle {
-    /// One accept: the socket, then the upgrade under its deadline.
-    async fn accept_one(&self) -> io::Result<Endpoint> {
-        let (stream, peer) = self.listener.accept().await?;
-        stream.set_nodelay(true)?;
-        // One awaited source wrapped in a deadline (pump-timeout idiom):
-        // the cap fires only while the handshake stays pending.
-        match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, perform_upgrade(stream)).await {
-            Ok(Ok(upgraded)) => {
-                debug!(%peer, "WebSocket upgrade completed");
-                let (read_half, write_half) = upgraded.into_split();
-                Ok(self.make_endpoint(read_half, write_half, peer))
-            }
-            Ok(Err(e)) => {
-                warn!(%peer, error = %e, "WebSocket handshake failed; closing");
-                Err(io::Error::other(format!("WebSocket handshake failed: {e}")))
-            }
-            Err(_) => {
-                warn!(%peer, timeout = ?WS_HANDSHAKE_TIMEOUT, "WebSocket handshake timed out; closing");
-                Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("WebSocket handshake exceeded {:?}", WS_HANDSHAKE_TIMEOUT),
-                ))
-            }
-        }
-    }
+/// One connection's upgrade (its own task; the intake puts the
+/// [`WS_HANDSHAKE_TIMEOUT`] deadline and the door around it).
+async fn upgrade(
+    stream: tokio::net::TcpStream,
+    peer: SocketAddr,
+    max_message_bytes: usize,
+    mapping: WsMessageMapping,
+) -> io::Result<Endpoint> {
+    stream.set_nodelay(true)?;
+    let upgraded = perform_upgrade(stream).await?;
+    let (read_half, write_half) = upgraded.into_split();
+    Ok(make_endpoint(
+        read_half,
+        write_half,
+        peer,
+        max_message_bytes,
+        mapping,
+    ))
+}
 
-    /// Same shape as tcp/tls `make_endpoint`: build the pump-facing
-    /// reader/writer pair plus the one extra socket-writer task the WS
-    /// adapter needs (module docs). Idle-timeout support comes for free —
-    /// `spawn_pumps` wraps our reader's pending reads like any other.
-    fn make_endpoint(
-        &self,
-        read_half: OwnedReadHalf,
-        write_half: OwnedWriteHalf,
-        peer: SocketAddr,
-    ) -> Endpoint {
-        let max_message_bytes = self.max_message_bytes;
-        let mapping = self.mapping;
-        Endpoint::new(
-            move |conn: ConnectionId,
-                  in_tx: Mailbox<ConnIn>,
-                  out_rx: Inbox<FrameBatch>,
-                  timeouts: crate::pump::PumpTimeouts| {
-                // The socket-writer task is detached on purpose: it is an
-                // implementation detail of the adapter, owned by nobody
-                // above the pump layer; it exits by itself when every
-                // queue end is dropped.
-                let (queue_tx, written) = spawn_socket_writer(write_half);
-                let closing = Arc::new(AtomicBool::new(false));
-                let reader = WsReader::new(
-                    read_half,
-                    max_message_bytes,
-                    mapping,
-                    queue_tx.clone(),
-                    closing.clone(),
-                );
-                let writer = WsWriter::new(queue_tx, mapping, closing, written);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
-                (Some(read), write)
-            },
-        )
-        .with_peer(peer)
-    }
+/// Same shape as tcp/tls `make_endpoint`: build the pump-facing
+/// reader/writer pair plus the one extra socket-writer task the WS
+/// adapter needs (module docs). Idle-timeout support comes for free —
+/// `spawn_pumps` wraps our reader's pending reads like any other.
+fn make_endpoint(
+    read_half: OwnedReadHalf,
+    write_half: OwnedWriteHalf,
+    peer: SocketAddr,
+    max_message_bytes: usize,
+    mapping: WsMessageMapping,
+) -> Endpoint {
+    Endpoint::new(
+        move |conn: ConnectionId,
+              in_tx: Mailbox<ConnIn>,
+              out_rx: Inbox<FrameBatch>,
+              timeouts: crate::pump::PumpTimeouts| {
+            // The socket-writer task is detached on purpose: it is an
+            // implementation detail of the adapter, owned by nobody
+            // above the pump layer; it exits by itself when every
+            // queue end is dropped.
+            let (queue_tx, written) = spawn_socket_writer(write_half);
+            let closing = Arc::new(AtomicBool::new(false));
+            let reader = WsReader::new(
+                read_half,
+                max_message_bytes,
+                mapping,
+                queue_tx.clone(),
+                closing.clone(),
+            );
+            let writer = WsWriter::new(queue_tx, mapping, closing, written);
+            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+            (Some(read), write)
+        },
+    )
+    .with_peer(peer)
 }

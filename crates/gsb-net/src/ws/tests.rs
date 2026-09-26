@@ -32,6 +32,7 @@ mod close_frames;
 mod fragmentation;
 mod framing;
 mod going_away;
+mod off_accept;
 mod opaque;
 mod protocol;
 mod queue;
@@ -72,6 +73,7 @@ async fn serve_echo_max(max_message_bytes: usize, idle_timeout: Option<Duration>
         WsTransport {
             max_message_bytes,
             mapping: WsMessageMapping::GameEnvelope,
+            ..WsTransport::default()
         },
         idle_timeout,
     )
@@ -86,8 +88,8 @@ async fn serve_echo_with(transport: WsTransport, idle_timeout: Option<Duration>)
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
         // A failed handshake (the 400 tests hit this listener too)
-        // surfaces as an accept error: fine, this helper only serves
-        // the happy path.
+        // never reaches the accept (the door counts it); an error here
+        // is the door closing.
         let Ok(endpoint) = listener.accept().await else {
             return;
         };

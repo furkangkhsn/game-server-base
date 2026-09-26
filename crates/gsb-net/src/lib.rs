@@ -10,7 +10,7 @@
 //! TCP   TcpListener ──accept──▶ Endpoint ──start_pump──▶ [reader pump] ─▶ ConnIn::Frame
 //!                                                       └────▶ [writer pump] ◀── FrameBatch
 //!
-//! TLS   TcpListener ──accept + rustls handshake (10 s cap)──▶ Endpoint ──start_pump──▶ same pumps
+//! TLS   TcpListener ──accept──▶ rustls handshake task (10 s cap, bounded count) ──▶ Endpoint ──start_pump──▶ same pumps
 //!
 //! rUDP  UdpTransport::bind ──▶ UdpListener ─accept─▶ Endpoint ─start_pump─▶ [writer pump] ◀── FrameBatch
 //!            └── one shared DEMUX task: every datagram → the right

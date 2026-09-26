@@ -58,6 +58,7 @@ async fn main() -> io::Result<()> {
     let transport = Arc::new(WsTransport {
         max_message_bytes,
         mapping: WsMessageMapping::Opaque,
+        ..WsTransport::default()
     });
     let listener = transport.bind(addr).await?;
     let bound = listener.local_addr().unwrap_or(addr);
@@ -65,13 +66,14 @@ async fn main() -> io::Result<()> {
 
     let mut next_id = 0u64;
     loop {
-        // A failed or timed-out upgrade is one bad client, not a reason
-        // to stop serving the rest of the run.
+        // A failed or timed-out upgrade is one bad client: the door
+        // counts it and never hands it here (BACKLOG B31), so an accept
+        // error is the door itself closing.
         let endpoint = match Arc::clone(&listener).accept().await {
             Ok(endpoint) => endpoint,
             Err(e) => {
                 eprintln!("ws_autobahn: accept failed: {e}");
-                continue;
+                return Err(e);
             }
         };
         next_id += 1;

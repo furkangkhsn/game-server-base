@@ -47,12 +47,15 @@
 //!
 //! # Handshake
 //!
-//! `accept` performs the HTTP/1.1 Upgrade itself (8 KiB request-head cap,
-//! bounded by [`WS_HANDSHAKE_TIMEOUT`] like tls.rs): GET + `Upgrade:
-//! websocket` + `Connection: upgrade` + non-empty `Sec-WebSocket-Key`
-//! required; `Sec-WebSocket-Version`, when present, must be 13. Anything
-//! else gets an HTTP 400 and a closed socket, mirroring the TLS listener's
-//! "failed handshake ⇒ accept error" behavior.
+//! Each connection's HTTP/1.1 Upgrade runs in its own task, off the
+//! accept loop (BACKLOG B31, `crate::transport::intake`; at most
+//! [`WsTransport::max_pending_handshakes`] at once, each bounded by
+//! [`WS_HANDSHAKE_TIMEOUT`] like tls.rs, 8 KiB request-head cap): GET +
+//! `Upgrade: websocket` + `Connection: upgrade` + non-empty
+//! `Sec-WebSocket-Key` required; `Sec-WebSocket-Version`, when present,
+//! must be 13. Anything else gets an HTTP 400 and a closed socket, and is
+//! counted as a failed handshake — like the TLS door's, it never reaches
+//! `accept`.
 
 mod frame;
 mod handshake;

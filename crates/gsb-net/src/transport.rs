@@ -24,6 +24,8 @@ use crate::pump::PumpTimeouts;
 
 pub(crate) mod door;
 pub use door::{Door, is_listener_closed, listener_closed};
+pub(crate) mod intake;
+pub use intake::{DEFAULT_MAX_PENDING_HANDSHAKES, HandshakeStats};
 
 /// A boxed, 'static, Send future.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -74,6 +76,13 @@ pub trait Listener: Send + Sync + 'static {
     /// one this rule shaped: it refuses new connections here instead of
     /// closing its endpoint (see its `close`).
     fn close(&self) {}
+
+    /// The door's handshake counters, for a door that handshakes off
+    /// its accept loop (WebSocket, TLS, QUIC — BACKLOG B31); `None` for
+    /// one with no handshake of its own (TCP) or its own counters (rUDP).
+    fn handshake_stats(&self) -> Option<HandshakeStats> {
+        None
+    }
 }
 
 /// The pump spawner closure: hands a connection's channel ends (and the

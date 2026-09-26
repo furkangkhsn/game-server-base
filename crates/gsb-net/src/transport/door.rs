@@ -8,9 +8,11 @@
 //! in the pump idiom: it can only END the pending accept (with the
 //! closed error), never hand the loop a second stream of work. What it
 //! ends is at most a connection that was not yet a session — the socket
-//! accept itself, or a TLS/WebSocket/QUIC handshake still in flight —
-//! which is exactly what a closed door refuses; the live sessions are
-//! not the door's (they end through the actor cascade, `Listener::close`).
+//! accept itself, or a TLS/WebSocket/QUIC handshake still in flight (in
+//! its own task since B31: `super::intake` runs every such task under
+//! this door) — which is exactly what a closed door refuses; the live
+//! sessions are not the door's (they end through the actor cascade,
+//! `Listener::close`).
 
 use std::future::Future;
 use std::io;

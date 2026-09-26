@@ -36,8 +36,9 @@ async fn self_signed_certs_connect_successfully() {
 }
 
 /// A client trusting a DIFFERENT CA fails the handshake cleanly (the
-/// server reports a failed handshake; the client gets a connect
-/// error) — QUIC's TLS layer rejects before any stream can open.
+/// server counts a failed handshake — off its accept loop, BACKLOG B31;
+/// the client gets a connect error) — QUIC's TLS layer rejects before
+/// any stream can open.
 #[tokio::test]
 async fn wrong_ca_fails_the_handshake() {
     let pki = mint_pki("wrong-ca");
@@ -48,17 +49,9 @@ async fn wrong_ca_fails_the_handshake() {
         .expect("bind");
 
     let bound = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        // The server observes the failed handshake as an accept error.
-        assert!(
-            listener.accept().await.is_err(),
-            "handshake must fail server-side"
-        );
-    });
-
     let result = connect(bound, "localhost", other.ca_pem.as_bytes()).await;
     assert!(result.is_err(), "client must reject the unknown CA");
-    server.await.expect("server sees the failure");
+    crate::transport::intake::tests::a_failed_handshake_is_counted(&listener).await;
 }
 
 /// A bind with a nonexistent cert file fails with the path named.
@@ -69,6 +62,7 @@ async fn missing_cert_file_fails_the_bind() {
             cert_chain_pem: "/nonexistent/gsb-quic/cert.pem".into(),
             key_pem: "/nonexistent/gsb-quic/key.pem".into(),
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
+            max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
         },
     };
     let result = Arc::new(transport)

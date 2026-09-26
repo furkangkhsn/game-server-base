@@ -39,6 +39,7 @@ async fn an_opaque_door_echoes_the_message_bytes_verbatim() {
     let transport = WsTransport {
         max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
         mapping: WsMessageMapping::Opaque,
+        ..WsTransport::default()
     };
     let mut client = FakeWsClient::connect(serve_echo_with(transport, None).await).await;
     let big: Vec<u8> = (0..70_000u32).map(|i| (i * 7) as u8).collect();

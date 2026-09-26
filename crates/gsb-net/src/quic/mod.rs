@@ -29,7 +29,14 @@
 //!
 //! # Guardrails
 //!
-//! - **Handshake timeout**: a slow/hostile client can hold an accept slot
+//! - **Handshake off the accept loop** (BACKLOG B31): quinn drives the
+//!   handshake itself, but `accept` used to AWAIT it (and the client's
+//!   bi-stream) — so accepts ran in series, as on the TLS door. Each
+//!   connection now waits in its own task (`crate::transport::intake`),
+//!   at most [`QuicTransportConfig::max_pending_handshakes`] at once; over
+//!   the bound a new connection is refused (quinn's `refuse`: a
+//!   CONNECTION_REFUSED close, no handshake) and counted.
+//! - **Handshake timeout**: a slow/hostile client can hold a handshake slot
 //!   only for [`HANDSHAKE_TIMEOUT`] — and the window covers the client's
 //!   promised bi-stream open too: a client that handshakes and then opens
 //!   nothing — or opens the stream but never writes (QUIC is lazy: an
@@ -62,7 +69,7 @@ use crate::framed::FrameWriter;
 /// accepted bi-stream before the server drops it. Same rationale as the
 /// TLS transport's constant of the same name: long enough for any
 /// legitimate WAN round-trip, short enough that a flood of hand-shy
-/// clients cannot pin accept slots forever.
+/// clients cannot pin handshake slots forever.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The QUIC `max_idle_timeout` set on both endpoints. Why it exists at
@@ -90,6 +97,9 @@ pub struct QuicTransportConfig {
     /// Maximum frame body size (same guard as TCP's `max_frame_bytes`,
     /// enforced by the shared framing codec).
     pub max_frame_bytes: usize,
+    /// The bound on handshakes in flight (BACKLOG B31; default
+    /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
+    pub max_pending_handshakes: usize,
 }
 
 /// QUIC transport: binds one UDP socket via quinn; each accepted QUIC
@@ -108,9 +118,12 @@ type QuicReader = FrameReader<quinn::RecvStream>;
 type QuicWriter = FrameWriter<send::QuicSend>;
 
 struct QuicListenerHandle {
+    /// For `close` (refuse new connections) and `local_addr`; the intake
+    /// task accepts on its own clone.
     endpoint: quinn::Endpoint,
-    max_frame_bytes: usize,
-    /// Closed by [`crate::transport::Listener::close`]: ends the pending
-    /// accept, a handshake in flight included (B16).
-    door: crate::transport::Door,
+    /// The handshakes, off the accept loop: `accept` takes finished ones;
+    /// [`crate::transport::Listener::close`] (or the last handle's drop)
+    /// closes its door — the intake, every handshake in flight, the
+    /// pending accept (B16).
+    intake: crate::transport::intake::IntakeHandle,
 }

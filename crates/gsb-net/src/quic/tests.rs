@@ -26,6 +26,26 @@ async fn connect(
     server_name: &str,
     ca_pem: &[u8],
 ) -> io::Result<(QuicReader, QuicWriter)> {
+    let conn = handshake_only(addr, server_name, ca_pem).await?;
+    // THE v1 contract: one bi-stream, opened immediately (see module docs).
+    let (send, recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| io::Error::other(format!("QUIC stream open failed: {e}")))?;
+    debug!(%addr, %server_name, "QUIC client connected; bi-stream open");
+    Ok((
+        FrameReader::new(recv, crate::tcp::DEFAULT_MAX_FRAME_BYTES),
+        FrameWriter::new(send::QuicSend::new(send)),
+    ))
+}
+
+/// A verified QUIC connection and nothing more: no stream is opened
+/// (the peer [`connect`] completes, and the one a door must not wait on).
+async fn handshake_only(
+    addr: SocketAddr,
+    server_name: &str,
+    ca_pem: &[u8],
+) -> io::Result<quinn::Connection> {
     let mut roots = rustls::RootCertStore::empty();
     for der in rustls_pemfile::certs(&mut &ca_pem[..]) {
         let der = der.map_err(|e| {
@@ -65,21 +85,11 @@ async fn connect(
     let mut endpoint = quinn::Endpoint::client(local)?;
     endpoint.set_default_client_config(client_config);
 
-    let conn = endpoint
+    endpoint
         .connect(addr, server_name)
         .map_err(|e| io::Error::other(format!("QUIC connect setup failed: {e}")))?
         .await
-        .map_err(|e| io::Error::other(format!("QUIC connect failed: {e}")))?;
-    // THE v1 contract: one bi-stream, opened immediately (see module docs).
-    let (send, recv) = conn
-        .open_bi()
-        .await
-        .map_err(|e| io::Error::other(format!("QUIC stream open failed: {e}")))?;
-    debug!(%addr, %server_name, "QUIC client connected; bi-stream open");
-    Ok((
-        FrameReader::new(recv, crate::tcp::DEFAULT_MAX_FRAME_BYTES),
-        FrameWriter::new(send::QuicSend::new(send)),
-    ))
+        .map_err(|e| io::Error::other(format!("QUIC connect failed: {e}")))
 }
 
 /// A minted mini-PKI: CA + localhost-SANed server cert, PEM in a fresh
@@ -137,6 +147,7 @@ fn transport_for(pki: &TestPki) -> QuicTransport {
             cert_chain_pem: pki.cert_pem_path.clone(),
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
+            max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
         },
     }
 }
@@ -213,4 +224,5 @@ async fn close_ends_the_parked_accept() {
 }
 
 mod certs;
+mod off_accept;
 mod slow_reader;

@@ -11,9 +11,14 @@
 //! TLS from plaintext, which is exactly the point of the trait seam.
 //!
 //! Guardrails:
-//! - **Handshake timeout**: a slow/hostile client can hold an accept slot
-//!   only for [`HANDSHAKE_TIMEOUT`]; then the socket is dropped. This is
-//!   the same family as the reader-pump idle window — a bounded wait on
+//! - **Handshake off the accept loop** (BACKLOG B31): each connection's
+//!   handshake runs in its own task (`crate::transport::intake`), at most
+//!   [`TlsTransportConfig::max_pending_handshakes`] at once; a connection
+//!   over the bound is closed unhandshaken and counted. A silent client
+//!   holds one slot, never the door.
+//! - **Handshake timeout**: a slow/hostile client can hold a handshake
+//!   slot only for [`HANDSHAKE_TIMEOUT`]; then the socket is dropped. This
+//!   is the same family as the reader-pump idle window — a bounded wait on
 //!   one awaited source, no timer task.
 //! - **No silent fallback**: malformed/missing cert or key files fail the
 //!   BIND with a clear error naming the file. A server that meant to be
@@ -28,7 +33,6 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::debug;
-use tracing::warn;
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::ConnIn;
@@ -37,12 +41,13 @@ use gsb_core::id::ConnectionId;
 use crate::framed::FrameReader;
 use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
-use crate::transport::{BoxFuture, Door, Endpoint, Listener, Transport};
+use crate::transport::intake::{Intake, IntakeHandle, run_tcp_intake};
+use crate::transport::{BoxFuture, Endpoint, HandshakeStats, Listener, Transport};
 
 /// How long a client may spend in the TLS handshake before the server
 /// drops the socket. A config-free constant (like the rUDP MTU): long
 /// enough for any legitimate round-trip over a WAN, short enough that a
-/// connection flood of hand-shy clients cannot pin accept slots forever.
+/// connection flood of hand-shy clients cannot pin handshake slots forever.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// TLS transport configuration: paths to the server's certificate chain
@@ -56,6 +61,9 @@ pub struct TlsTransportConfig {
     pub key_pem: String,
     /// Maximum frame body size (same guard as TCP's `max_frame_bytes`).
     pub max_frame_bytes: usize,
+    /// The bound on handshakes in flight (BACKLOG B31; default
+    /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
+    pub max_pending_handshakes: usize,
 }
 
 /// TLS-over-TCP transport: accepts plain TCP sockets, upgrades each to
@@ -70,12 +78,11 @@ pub struct TlsTransport {
 type TlsStreamOf = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
 
 struct TlsListenerHandle {
-    listener: TcpListener,
-    acceptor: TlsAcceptor,
-    max_frame_bytes: usize,
-    /// Closed by [`Listener::close`]: ends the pending accept, a
-    /// handshake in flight included (B16).
-    door: Door,
+    local_addr: Option<SocketAddr>,
+    /// The handshakes, off the accept loop: `accept` takes finished ones;
+    /// [`Listener::close`] (or the last handle's drop) closes its door —
+    /// the raw accept, every handshake in flight, the pending accept (B16).
+    intake: IntakeHandle,
 }
 
 /// Open a PEM file with the path in the error message (a bare `NotFound`
@@ -166,11 +173,19 @@ impl Transport for TlsTransport {
             let server_config = load_server_config(&self.config)?;
             let listener = TcpListener::bind(addr).await?;
             debug!(%addr, "TLS listener bound (rustls over TCP)");
-            Ok(Arc::new(TlsListenerHandle {
+            let local_addr = listener.local_addr().ok();
+            let intake = Intake::new("TLS", self.config.max_pending_handshakes);
+            let acceptor = TlsAcceptor::from(Arc::new(server_config));
+            let max_frame_bytes = self.config.max_frame_bytes;
+            tokio::spawn(run_tcp_intake(
+                Arc::clone(&intake),
                 listener,
-                acceptor: TlsAcceptor::from(Arc::new(server_config)),
-                max_frame_bytes: self.config.max_frame_bytes,
-                door: Door::new(),
+                HANDSHAKE_TIMEOUT,
+                move |stream, peer| handshake(acceptor.clone(), stream, peer, max_frame_bytes),
+            ));
+            Ok(Arc::new(TlsListenerHandle {
+                local_addr,
+                intake: IntakeHandle(intake),
             }) as Arc<dyn Listener>)
         })
     }
@@ -178,70 +193,57 @@ impl Transport for TlsTransport {
 
 impl Listener for TlsListenerHandle {
     fn accept(self: Arc<Self>) -> BoxFuture<'static, io::Result<Endpoint>> {
-        Box::pin(async move { self.door.admit(self.accept_one()).await })
+        // `self` rides along: the last handle's drop closes the door.
+        Box::pin(async move { Arc::clone(&self.intake.0).next().await })
     }
 
     fn local_addr(&self) -> Option<SocketAddr> {
-        self.listener.local_addr().ok()
+        self.local_addr
     }
 
     fn close(&self) {
-        self.door.close();
+        self.intake.0.close();
+    }
+
+    fn handshake_stats(&self) -> Option<HandshakeStats> {
+        Some(self.intake.0.stats())
     }
 }
 
-impl TlsListenerHandle {
-    /// One accept: the socket, then the TLS handshake under its deadline.
-    async fn accept_one(&self) -> io::Result<Endpoint> {
-        let (stream, peer) = self.listener.accept().await?;
-        stream.set_nodelay(true)?;
-        // ONE awaited source wrapped in a deadline: the deadline fires
-        // only while the handshake stays pending (the pump-timeout
-        // idiom — no multiplexing).
-        match tokio::time::timeout(HANDSHAKE_TIMEOUT, self.acceptor.accept(stream)).await {
-            Ok(Ok(tls)) => {
-                debug!(%peer, "TLS handshake completed");
-                Ok(self.make_endpoint(tls, peer))
-            }
-            Ok(Err(e)) => {
-                // The client's failure (bad TLS, no shared cipher, a
-                // plaintext probe hitting this port). Reported so the
-                // accept loop backs off briefly; the socket is dropped.
-                warn!(%peer, error = %e, "TLS handshake failed; closing");
-                Err(io::Error::other(format!("TLS handshake failed: {e}")))
-            }
-            Err(_) => {
-                warn!(%peer, timeout = ?HANDSHAKE_TIMEOUT, "TLS handshake timed out; closing");
-                Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("TLS handshake exceeded {:?}", HANDSHAKE_TIMEOUT),
-                ))
-            }
-        }
-    }
+/// One connection's TLS handshake, in its own task under the door and
+/// [`HANDSHAKE_TIMEOUT`]. A failure (bad TLS, no shared cipher, a
+/// plaintext probe) is counted and logged there; the socket dropped.
+async fn handshake(
+    acceptor: TlsAcceptor,
+    stream: tokio::net::TcpStream,
+    peer: SocketAddr,
+    max_frame_bytes: usize,
+) -> io::Result<Endpoint> {
+    stream.set_nodelay(true)?;
+    let tls = acceptor.accept(stream).await?;
+    Ok(make_endpoint(tls, peer, max_frame_bytes))
+}
 
-    /// Same wiring as TCP's `make_endpoint`: split the stream halves and
-    /// hand them to the shared generic framing + pumps. The rustls halves
-    /// implement `AsyncRead`/`AsyncWrite`, so NOTHING below this point
-    /// knows TLS is involved.
-    fn make_endpoint(&self, stream: TlsStreamOf, peer: SocketAddr) -> Endpoint {
-        let (read_half, write_half) = tokio::io::split(stream);
-        let max_frame_bytes = self.max_frame_bytes;
-        // The reader handle is `Some`: like TCP, TLS has a per-connection
-        // read half owned by this endpoint's reader pump.
-        Endpoint::new(
-            move |conn: ConnectionId,
-                  in_tx: Mailbox<ConnIn>,
-                  out_rx: Inbox<FrameBatch>,
-                  timeouts: crate::pump::PumpTimeouts| {
-                let reader = FrameReader::new(read_half, max_frame_bytes);
-                let writer = FrameWriter::new(write_half);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
-                (Some(read), write)
-            },
-        )
-        .with_peer(peer)
-    }
+/// Same wiring as TCP's `make_endpoint`: split the stream halves and
+/// hand them to the shared generic framing + pumps. The rustls halves
+/// implement `AsyncRead`/`AsyncWrite`, so NOTHING below this point
+/// knows TLS is involved.
+fn make_endpoint(stream: TlsStreamOf, peer: SocketAddr, max_frame_bytes: usize) -> Endpoint {
+    let (read_half, write_half) = tokio::io::split(stream);
+    // The reader handle is `Some`: like TCP, TLS has a per-connection
+    // read half owned by this endpoint's reader pump.
+    Endpoint::new(
+        move |conn: ConnectionId,
+              in_tx: Mailbox<ConnIn>,
+              out_rx: Inbox<FrameBatch>,
+              timeouts: crate::pump::PumpTimeouts| {
+            let reader = FrameReader::new(read_half, max_frame_bytes);
+            let writer = FrameWriter::new(write_half);
+            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+            (Some(read), write)
+        },
+    )
+    .with_peer(peer)
 }
 
 #[cfg(test)]

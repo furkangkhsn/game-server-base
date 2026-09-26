@@ -18,23 +18,8 @@ use gsb_core::registry::{MatchResult, RegistryMsg};
 
 mod entry;
 pub use entry::*;
-
-/// Resolve the effective unauthenticated-connection cap ONCE, at startup
-/// (see [`Config::max_unauth_conns`] for the semantics): an explicit
-/// positive value wins; `Some(0)` disables the cap entirely; omission
-/// derives `max(max_connections / 4, 64)` from the total cap — falling
-/// back to [`DEFAULT_MAX_CONNECTIONS`] as the formula's base when the
-/// total cap itself is unlimited (one derivation, one documented base).
-fn unauth_cap_of(cfg: &Config) -> Option<u64> {
-    match cfg.max_unauth_conns {
-        Some(0) => None,
-        Some(n) => Some(n),
-        None => {
-            let base = cfg.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
-            Some((base / 4).max(MIN_UNAUTH_CONNS))
-        }
-    }
-}
+mod pre_auth;
+use pre_auth::{handshake_bound_of, unauth_cap_of};
 
 /// The metrics report cadence. ONE constant for both sides of the
 /// freshness contract: the collector emits every period, and the HTTP
@@ -226,10 +211,11 @@ async fn start_inner(
     // already-bound listeners are closed explicitly (not just dropped): a
     // dropped `UdpListener` would leave its demux task reading the socket —
     // `Listener::close` is the only door that stops it.
+    let handshake_bound = handshake_bound_of(&cfg);
     let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> = Vec::with_capacity(specs.len());
     let mut addrs: Vec<SocketAddr> = Vec::with_capacity(specs.len());
     for spec in &specs {
-        match bind_listener(spec, &cfg, idle_timeout, cookie_key).await {
+        match bind_listener(spec, &cfg, idle_timeout, cookie_key, handshake_bound).await {
             Ok((listener, addr)) => {
                 listeners.push(listener);
                 addrs.push(addr);

@@ -4,8 +4,8 @@
 
 use super::*;
 
-/// Malformed request heads get an HTTP 400 and the accept surfaces an
-/// error (same contract as the TLS listener).
+/// Malformed request heads get an HTTP 400 and a closed socket (the
+/// door counts a failed handshake, like the TLS listener's).
 #[tokio::test]
 async fn malformed_handshake_gets_http_400() {
     let addr = serve_echo(None).await;
