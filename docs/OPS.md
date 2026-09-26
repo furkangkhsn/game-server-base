@@ -22,10 +22,47 @@
 | GET | `/healthz` | `200 ok` — süreç ayakta + ticker yaşıyor mu (son rapor yaşı eşiği aşmadıysa ok; aşıysa 503, reason body'de) |
 | GET | `/metrics` | Prometheus text — tüm RegistrySample/RoomSample/ConnSample sayaçları (`gsb_*` önekli) |
 | GET | `/rooms` | Tablodaki odalar + durumları (id, members, persistent) — kontrol düzleminin table-only cevabı |
-| POST | `/rooms/open?id=&tick_hz=` | Runtime oda açma (`ServerHandle.open_room` idempotent-create sözleşmesiyle) |
+| POST | `/rooms/open?id=&tick_hz=` | Runtime oda açma (`ServerHandle.open_room` idempotent-create sözleşmesiyle); oda sunucunun odasıdır (aşağıda) |
 | POST | `/rooms/close?id=` | Oda kapatma (`close_room`; persistent ise emeklilik semantiği işler) |
 
 Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontrol yolu AÇILMAZ, yalnız transport eklenir.
+
+**`/rooms/open`'ın açtığı oda = sunucunun odası (BACKLOG F8).** Admin
+yüzeyi kendi oda varsayılanını UYDURMAZ: açılan odanın `RoomConfig`'i,
+başlangıçta ön-kurulan odaların geldiği şablondur
+(`config/axes/listeners/room.rs`: `Config::room_template` → tek eşleme;
+`Config::room_config(id)` onun üstünde). Oda düzeyindeki bütün anahtarlar
+— `tick_hz`, `room_control`, `conn_action`, `max_snapshot_bytes`,
+`keepalive_hz`, `max_players`, `max_idle_input_secs`,
+`max_detach_hold_secs` — runtime odaya da gider; oyunun `[game]`
+tablosu zaten gidiyordu (fabrika, `spawn_registry`'de bir kez kurulur ve
+registry her `CreateRoom`'da — başlangıç ya da admin — aynı fabrikayı
+çağırır). Eskiden yüzey `RoomConfig::default()` + `tick_hz` kuruyordu:
+aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
+çalışıyordu.
+
+- **İstek başına tek geçersiz kılma `tick_hz`** (verilmezse sunucunun
+  hızı; doğrulama aynı: sonlu pozitif sayı değilse 400, registry'ye
+  gitmez; global hızı bölmüyorsa registry'nin 400'ü). Başka bir
+  geçersiz kılma EKLENMEDİ: oda anahtarları operatörün sunucu çapındaki
+  politikasıdır (kapasite, `max_players`, `max_detach_hold` gibi
+  güvenlik tavanları) ve kimliksiz v1 yüzeyinin (karar 4) bir güvenlik
+  tavanını oda başına gevşetebilmesi istenmez; her ek parametre
+  idempotent karşılaştırmaya bir çatışma ekseni daha ekler; query
+  grameri bilerek küçük (karar 3). `tick_hz` farklı: odanın hız sınıfı
+  gerçek bir oda özelliği (global hızı bölen daha yavaş oda). Oda başına
+  farklı ayar isteyen oyun/platform programatik yolu kullanır:
+  `ServerHandle::open_room(RoomConfig { …, ..cfg.room_config(id) })`.
+- **Sözleşme değişikliği (düzeltmenin sonucu):** durum kodları, hata
+  gövdeleri ve idempotentlik kuralı aynı. Değişen yalnız istenen
+  config'in kendisi, iki görünür sonucu var: (1) oda anahtarları
+  varsayılandan farklı bir sunucuda ön-kurulan bir odayı aynı hızla
+  yeniden açmak artık idempotent **200** (eskiden 409 — istek
+  `default()` idi, oda sunucunun config'iyle kurulmuştu); (2)
+  `keepalive_hz` artık sunucununki, bu yüzden ondan küçük bir `tick_hz`
+  isteği registry'nin `KeepaliveRate`'iyle **400** alır (eskiden
+  varsayılan 1 Hz'e göre karar verilirdi) — ön-kurulan odalarla aynı
+  kural.
 
 ## 3. Tel/format detayları
 
@@ -75,6 +112,13 @@ Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontro
 2. `metrics_endpoint_exposes_known_counters` — bilinen bir sayacı
    artıran senaryo + scrape'ta görünürlük
 3. `admin_open_status_close_round_trip` — runtime oda yaşam döngüsü
+   ve `http_room_config::admin_open_uses_the_server_room_config` — oda anahtarları
+   varsayılandan farklı sunucuda ön-kurulan odayı yeniden açmak 200,
+   başka hız 409, yeni oda + tekrar 200, geçersiz hız 400 (F8);
+   yüzeyin kendi birim testleri (`http/tests.rs`): registry'ye giden
+   istek `Config::room_config(id)`'nin alanı alanına aynısı, `tick_hz`
+   tek geçersiz kılma, geçersiz hız registry'ye hiç gitmez; uçtan uca
+   `mmo_rooms::a_runtime_room_gets_the_server_ceiling`
 4. `disabled_by_default_and_binds_when_configured` — varsayılan kapalı,
    config'li çalışma
 5. Prometheus render fonksiyonunun unit testleri (HTTP'den bağımsız)
