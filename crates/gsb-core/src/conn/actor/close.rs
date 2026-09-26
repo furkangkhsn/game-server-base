@@ -30,6 +30,25 @@ impl super::ConnectionActor {
         self.try_notice(base::ErrorCode::ServerStopping, SERVER_STOPPING_MESSAGE);
     }
 
+    /// The transport refused the inbound byte stream
+    /// (`ConnIn::StreamRejected`): record the verdict, then announce it
+    /// with `ERROR` code 9 like every other server verdict — best effort,
+    /// like the stop notice: the peer that sent bytes the transport
+    /// refuses is exactly the one not to wait on. The reader half is
+    /// untrustworthy past this point; the writer half usually is not (an
+    /// oversized frame breaks nothing outbound). Where it is, the notice
+    /// simply never lands: a door that has already said goodbye in its
+    /// own vocabulary (the WebSocket close frame) drops it, a TLS stream
+    /// broken by a corrupt record fails the write.
+    pub(super) fn on_stream_rejected(&mut self, reason: &str) {
+        self.server_closing(ServerClose::StreamRejected);
+        debug!(%self.conn, %reason, "inbound stream rejected by the transport");
+        self.try_notice(
+            base::ErrorCode::ServerClosed,
+            format!("stream rejected: {reason}"),
+        );
+    }
+
     /// Queue a close notice WITHOUT waiting: a synchronous `try_send`
     /// onto the outbound queue, then the caller ends the session.
     ///

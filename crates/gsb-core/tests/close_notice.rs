@@ -1,9 +1,13 @@
-//! The close notice of a server-initiated end that used to be silent
-//! (BACKLOG B12), at the connection actor, no transport: a server STOP
-//! (`ConnIn::Shutdown`) sends `ERROR` code 14 (`ServerStopping`) before
-//! the actor ends.
+//! The close notices of the two server-initiated ends that used to be
+//! silent (BACKLOG B12, B13), at the connection actor, no transport:
 //!
-//! The notice is best effort and never parks: the actor enqueues it
+//! - a server STOP (`ConnIn::Shutdown`) sends `ERROR` code 14
+//!   (`ServerStopping`) before the actor ends;
+//! - a transport REFUSING the byte stream (`ConnIn::StreamRejected`)
+//!   sends `ERROR` code 9 (`ServerClosed`) with the reason, like every
+//!   other server verdict.
+//!
+//! Both notices are best effort and never park: the actor enqueues them
 //! with a synchronous `try_send`, so a client whose outbound queue is
 //! full (it stopped reading) gets only the close — and the actor still
 //! ends at once. Without that rule a stop would leave one parked actor
@@ -116,6 +120,25 @@ async fn a_server_stop_sends_the_stopping_notice() {
     assert!(!errors[0].message.is_empty(), "the message is always set");
 }
 
+/// B13: a refused byte stream is announced as ERROR 9 carrying the
+/// transport's reason — the same class as every other server verdict.
+#[tokio::test]
+async fn a_rejected_stream_sends_the_server_closed_notice() {
+    let mut rig = Rig::start();
+    rig.end_with(ConnIn::StreamRejected {
+        reason: "frame of 9999 bytes exceeds max_frame_bytes".into(),
+    })
+    .await;
+    let errors = rig.errors();
+    assert_eq!(errors.len(), 1, "exactly one notice: {errors:?}");
+    assert_eq!(errors[0].code(), ErrorCode::ServerClosed);
+    assert!(
+        errors[0].message.contains("exceeds max_frame_bytes"),
+        "the reason reaches the client: {:?}",
+        errors[0].message
+    );
+}
+
 /// THE BOUND: a client that stopped reading cannot hold a stopping
 /// server's connection actor. The queue is full, so the notice is
 /// dropped — and the actor ends anyway, at once.
@@ -124,5 +147,19 @@ async fn a_stop_never_parks_on_a_full_outbound_queue() {
     let mut rig = Rig::start();
     rig.fill_outbound();
     rig.end_with(ConnIn::Shutdown).await;
+    assert!(rig.errors().is_empty(), "no room: the notice is dropped");
+}
+
+/// The same bound for the stream rejection: a peer that floods bytes the
+/// transport refuses while not reading what it is sent must not buy
+/// itself a parked actor either.
+#[tokio::test]
+async fn a_stream_rejection_never_parks_on_a_full_outbound_queue() {
+    let mut rig = Rig::start();
+    rig.fill_outbound();
+    rig.end_with(ConnIn::StreamRejected {
+        reason: "websocket protocol violation (1002)".into(),
+    })
+    .await;
     assert!(rig.errors().is_empty(), "no room: the notice is dropped");
 }

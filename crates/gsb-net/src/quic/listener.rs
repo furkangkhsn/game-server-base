@@ -132,7 +132,7 @@ impl QuicListenerHandle {
                   out_rx: Inbox<FrameBatch>,
                   timeouts: crate::pump::PumpTimeouts| {
                 let reader: QuicReader = FrameReader::new(recv, max_frame_bytes);
-                let writer: QuicWriter = FrameWriter::new(send);
+                let writer: QuicWriter = FrameWriter::new(send::QuicSend::new(send));
                 let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
                 (Some(read), write)
             },

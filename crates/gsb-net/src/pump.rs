@@ -170,8 +170,8 @@ where
                     // `InvalidData` is the transport REFUSING the stream
                     // (an oversized or undecodable frame, a WebSocket
                     // protocol violation, a corrupt TLS record): the
-                    // server's verdict, not the peer leaving. Same silent
-                    // teardown either way; only the attribution differs.
+                    // server's verdict, not the peer leaving — the actor
+                    // books it and answers it with an ERROR 9 notice.
                     let reason = e.to_string();
                     exit_msg = Some(if e.kind() == std::io::ErrorKind::InvalidData {
                         ConnIn::StreamRejected { reason }

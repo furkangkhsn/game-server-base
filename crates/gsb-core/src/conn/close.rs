@@ -46,8 +46,9 @@ pub enum ServerClose {
     /// The transport refused the inbound byte stream: a frame over
     /// `max_frame_bytes`, an undecodable frame body, a WebSocket
     /// protocol violation, a corrupt TLS record — the reader pump's
-    /// `InvalidData` exit. No ERROR notice goes out on this path (there
-    /// never was one; the WebSocket door sends its own close frame).
+    /// `InvalidData` exit. Answered with a best-effort `ERROR` code 9
+    /// like the other verdicts (the WebSocket door's own close frame
+    /// takes its place there: no data frame may follow a close frame).
     StreamRejected,
     /// Refused at birth: the server is at `max_connections`.
     ConnCap,

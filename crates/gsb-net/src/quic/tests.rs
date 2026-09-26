@@ -78,7 +78,7 @@ async fn connect(
     debug!(%addr, %server_name, "QUIC client connected; bi-stream open");
     Ok((
         FrameReader::new(recv, crate::tcp::DEFAULT_MAX_FRAME_BYTES),
-        FrameWriter::new(send),
+        FrameWriter::new(send::QuicSend::new(send)),
     ))
 }
 

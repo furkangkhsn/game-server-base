@@ -63,10 +63,20 @@ async fn ws_writer_task(
     mut rx: mpsc::Receiver<WsOut>,
     written: Arc<AtomicU64>,
 ) {
+    // RFC 6455 §5.5.1: no DATA frame may follow a Close frame. Enforced
+    // here, the only place that sees the real wire order: on a refused
+    // stream the reader queues its failure close first, and the actor's
+    // close notice (`ERROR` 9) and any fan-out still in flight land
+    // behind it. The close frame IS this door's notice; they are dropped.
+    let mut close_sent = false;
     'queue: while let Some(out) = rx.recv().await {
         let bytes = match out {
+            WsOut::Game(_) if close_sent => continue,
             WsOut::Game(envelope) => Bytes::from(encode_server_frame(OP_BIN, &envelope)),
-            WsOut::Control(op, payload) => Bytes::from(encode_server_frame(op, &payload)),
+            WsOut::Control(op, payload) => {
+                close_sent |= op == OP_CLOSE;
+                Bytes::from(encode_server_frame(op, &payload))
+            }
             // Both halves drop here: the peer sees a prompt TCP FIN.
             WsOut::Shutdown => break,
         };

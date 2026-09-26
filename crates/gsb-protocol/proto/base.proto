@@ -144,9 +144,12 @@ enum ErrorCode {
   // Gentle reject — the connection STAYS ALIVE; join another room or
   // retry later.
   ERROR_CODE_ROOM_FULL = 8;
-  // Idle timeout, server at connection capacity, or the connection's
-  // protocol-violation budget exhausted — see the `message` for which.
-  // The connection is closed right after this frame.
+  // The server ended THIS session on its own initiative: idle timeout,
+  // write stall, connection capacity, the protocol-violation or pre-auth
+  // frame budget exhausted, a newer session for the same player, the
+  // transport refusing the byte stream ("stream rejected: …") — see the
+  // `message` for which. The connection is closed right after this
+  // frame. (A server STOP is not a verdict on the session: that is 14.)
   ERROR_CODE_SERVER_CLOSED = 9;
   // The server's ticket validator rejected the presented ticket, or the
   // validation timed out. A NORMAL rejection — the connection STAYS
@@ -188,8 +191,8 @@ message Error {
   // log the raw value while treating it as ERROR_CODE_OTHER.
   ErrorCode code = 1;
   // Human-readable and client-actionable; always populated. It carries
-  // the specificity the code class does not (which of the three
-  // ERROR_CODE_SERVER_CLOSED reasons fired, which room, which ticket
+  // the specificity the code class does not (which
+  // ERROR_CODE_SERVER_CLOSED reason fired, which room, which ticket
   // failure).
   string message = 2;
 }

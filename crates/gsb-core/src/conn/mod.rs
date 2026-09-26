@@ -219,10 +219,12 @@ pub enum ConnIn {
     Closed { reason: String },
     /// The transport refused the inbound byte stream (the reader pump's
     /// `InvalidData` exit: an oversized or undecodable frame, a WebSocket
-    /// protocol violation, a corrupt TLS record). The actor cleans up
-    /// exactly as for [`Self::Closed`] — no notice is sent, the stream is
-    /// untrustworthy past this point — but it is the SERVER's verdict,
-    /// counted as [`ServerClose::StreamRejected`].
+    /// protocol violation, a corrupt TLS record). The SERVER's verdict,
+    /// counted as [`ServerClose::StreamRejected`]: the actor answers it
+    /// like [`Self::ServerClosed`] — an `ERROR` frame (code 9, the reason
+    /// in the message) — except that the notice is best effort and never
+    /// waits (the inbound stream is untrustworthy past this point, and
+    /// its sender is not a peer to wait on), then cleans up.
     StreamRejected { reason: String },
     /// The server is closing this connection on its own initiative (idle
     /// timeout, write stall, connection capacity, …; `cause` says which —

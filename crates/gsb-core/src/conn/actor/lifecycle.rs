@@ -127,11 +127,10 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::StreamRejected { reason } => {
-                    // The transport refused the byte stream: the same
-                    // silent teardown as a peer close, but the server's
-                    // verdict (see `ServerClose::StreamRejected`).
-                    self.server_closing(ServerClose::StreamRejected);
-                    debug!(%self.conn, %reason, "inbound stream rejected by the transport");
+                    // The transport refused the byte stream: the server's
+                    // verdict (see `ServerClose::StreamRejected`), told
+                    // to the client as a best-effort ERROR 9.
+                    self.on_stream_rejected(&reason);
                     break;
                 }
                 ConnIn::ServerClosed { cause, reason } => {

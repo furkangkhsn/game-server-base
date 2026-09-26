@@ -45,6 +45,7 @@
 
 mod config;
 mod listener;
+mod send;
 
 #[cfg(test)]
 mod tests;
@@ -102,8 +103,9 @@ pub struct QuicTransport {
 /// server's side of the client-opened bi-stream.
 type QuicReader = FrameReader<quinn::RecvStream>;
 /// The accepted connection's writer half: length-prefixed frames into the
-/// same bi-stream.
-type QuicWriter = FrameWriter<quinn::SendStream>;
+/// same bi-stream, whose shutdown waits for the peer's acknowledgement
+/// (see [`send`]).
+type QuicWriter = FrameWriter<send::QuicSend>;
 
 struct QuicListenerHandle {
     endpoint: quinn::Endpoint,

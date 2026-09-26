@@ -25,6 +25,7 @@ pub(super) const RFC_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 
 // ── fake WS client (raw TcpStream, masked frames, no new deps) ──────
 
+mod after_close;
 mod client;
 use client::*;
 mod close_frames;
