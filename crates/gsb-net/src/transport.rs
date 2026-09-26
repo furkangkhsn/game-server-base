@@ -57,6 +57,13 @@ pub trait Listener: Send + Sync + 'static {
     /// individual connection, so dropping the last `Arc` is not how it is
     /// told to stop: the listener carries a duplicate socket handle whose
     /// `shutdown` makes the demux's next read fail.
+    ///
+    /// What `close` must NOT do is cut the LIVE sessions short: they end
+    /// through the connection-actor cascade, which is what lets each of
+    /// them carry its close notice to the client first (`ERROR` code 14
+    /// on a server stop — `docs/DESIGN.md` §5.6). The QUIC door is the
+    /// one this rule shaped: it refuses new connections here instead of
+    /// closing its endpoint (see its `close`).
     fn close(&self) {}
 }
 

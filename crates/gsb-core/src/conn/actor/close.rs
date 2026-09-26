@@ -1,9 +1,18 @@
 //! Recording WHY the session ended: the server-close verdict the actor
-//! reports once, on its final metrics flush (see `ServerClose`).
+//! reports once, on its final metrics flush (see `ServerClose`) — and
+//! the best-effort close notice of the ends that must never wait on the
+//! client (see `try_notice`).
 
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::debug;
 
+use gsb_protocol::{base, op};
+
 use crate::conn::*;
+
+/// The `ERROR` code 14 message. The code carries the client's decision
+/// (reconnect later or elsewhere); the text is for a human reading a log.
+const SERVER_STOPPING_MESSAGE: &str = "server stopping: reconnect later or to another server";
 
 impl super::ConnectionActor {
     /// Record a server verdict. The FIRST one wins: a close notice that
@@ -11,6 +20,49 @@ impl super::ConnectionActor {
     /// that sent it.
     pub(super) fn server_closing(&mut self, cause: ServerClose) {
         self.server_close.get_or_insert(cause);
+    }
+
+    /// The server is stopping (`ConnIn::Shutdown`): announce it with
+    /// `ERROR` code 14 and end. Not a verdict on the session, so nothing
+    /// is recorded (see `ServerClose`, "deliberately NOT a reason").
+    pub(super) fn on_shutdown(&mut self) {
+        debug!(%self.conn, "connection shutdown (server)");
+        self.try_notice(base::ErrorCode::ServerStopping, SERVER_STOPPING_MESSAGE);
+    }
+
+    /// Queue a close notice WITHOUT waiting: a synchronous `try_send`
+    /// onto the outbound queue, then the caller ends the session.
+    ///
+    /// Why not the awaited `send_frame` the other closes use: these ends
+    /// must never depend on the client. A client that stopped reading
+    /// keeps its queue full, and an awaited send would park this actor
+    /// until the writer pump's stall window closes the queue — forever
+    /// with the window off — once per such client, on a server that is
+    /// trying to stop. A full queue means the client is behind anyway:
+    /// the notice is dropped and the client gets only the close. A
+    /// CLOSED queue means the writer is gone: nothing can carry it.
+    ///
+    /// Queued, it is the last frame this actor sends; the writer pump
+    /// drains what is queued and then closes the socket (the stream
+    /// doors) — the notice goes out ahead of the close.
+    fn try_notice(&mut self, code: base::ErrorCode, message: impl Into<String>) {
+        let Some(fb) = self
+            .table
+            .frame(op::base::ERROR, &base::Error::new(code, message))
+        else {
+            return;
+        };
+        let bytes = 2 + fb.payload.len() as u64;
+        match self.out.try_send(vec![fb]) {
+            Ok(()) => {
+                self.m_out_bytes = self.m_out_bytes.saturating_add(bytes);
+                self.m_out_frames += 1;
+            }
+            Err(TrySendError::Full(_)) => {
+                debug!(%self.conn, ?code, "close notice dropped: the outbound queue is full");
+            }
+            Err(TrySendError::Closed(_)) => {}
+        }
     }
 
     /// Attribute a dead outbound path (`w_closing`).

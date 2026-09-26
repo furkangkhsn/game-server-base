@@ -89,13 +89,24 @@ impl Listener for QuicListenerHandle {
         self.endpoint.local_addr().ok()
     }
 
-    /// Graceful-shutdown door (see the trait doc): one UDP socket serves
-    /// every connection, so the endpoint IS shared state — closing it
-    /// notifies every live connection and makes pending `accept`s yield.
-    /// Dropping the last handle alone would leave connections running
-    /// until their idle timeouts.
+    /// Graceful-shutdown door (see the trait doc): stop accepting — new
+    /// connection attempts are refused from here on — and leave every
+    /// LIVE connection to the actor cascade, exactly like a TCP
+    /// listener's close leaves its accepted sockets alone.
+    ///
+    /// NOT `Endpoint::close`, which this used to call: it closes every
+    /// connection IMMEDIATELY, and an immediate QUIC close abandons the
+    /// stream data still in flight. On a server stop that data is the
+    /// `ERROR` code 14 notice each connection actor has just queued
+    /// (docs/DESIGN.md §5.6), and `stop()` closes the listeners right
+    /// after asking the registry to stop — so the endpoint close raced
+    /// ahead of every notice and the QUIC door alone stayed silent.
+    /// Now each connection ends the way it does on every other door:
+    /// the actor ends, its writer pump writes what is queued and
+    /// finishes the stream, and the connection goes when its streams
+    /// do (the quinn endpoint driver lives until the last one has).
     fn close(&self) {
-        self.endpoint.close(quinn::VarInt::from_u32(0), b"");
+        self.endpoint.set_server_config(None);
     }
 }
 

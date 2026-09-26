@@ -163,9 +163,9 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::Shutdown => {
-                    // Not a per-session verdict: never counted (see
-                    // `ServerClose`, "deliberately NOT a reason").
-                    debug!(%self.conn, "connection shutdown (server)");
+                    // The server is stopping: a best-effort ERROR 14
+                    // that never waits on the client, then the end.
+                    self.on_shutdown();
                     break;
                 }
             }
