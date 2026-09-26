@@ -100,6 +100,12 @@ pub struct ServerHandle {
     /// The metrics collector (emits one final report when the ticker's
     /// broadcast closes).
     metrics: JoinHandle<()>,
+    /// The game's registered services (`RegistryParts::service`), stopped
+    /// by `stop` after the rooms (BACKLOG F5).
+    services: Vec<gsb_core::service::Service>,
+    /// The rooms' drop barrier: released once the registry and every room
+    /// and shard task have ended (their teardown hooks ran).
+    rooms_released: gsb_core::service::Released,
     /// The HTTP ops-surface task, when `http_listen` was configured.
     /// Aborted on stop (its listener drops with the aborted future).
     http: Option<JoinHandle<()>>,

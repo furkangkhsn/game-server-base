@@ -134,7 +134,12 @@ async fn start_inner(
     // keeps a clone of its own mailbox so dispatcher tasks can report back.
     // The game module picks the room factory (and with it the registry's
     // generic types) and spawns the registry through `RegistryParts`.
-    let _registry = module.spawn_registry(RegistryParts {
+    //
+    // The rooms' drop barrier (BACKLOG F5): the registry and every room's
+    // death watcher hold a token; `stop` waits on the other half before
+    // it stops the game's services.
+    let (rooms_hold, rooms_released) = gsb_core::service::hold();
+    let registry = module.spawn_registry(RegistryParts {
         inbox: reg_rx,
         self_mailbox: reg_tx.clone(),
         ticker: ticker.clone(),
@@ -142,6 +147,8 @@ async fn start_inner(
         max_connections: cfg.max_connections,
         max_unauth_conns: unauth_cap_of(&cfg),
         result_sink: Some(result_tx.clone()),
+        rooms_hold,
+        services: Vec::new(),
     });
 
     // Pre-create rooms 1..=room_count (all at the global rate; a room may
@@ -260,6 +267,8 @@ async fn start_inner(
         accepts,
         ticker: ticker_task,
         metrics,
+        services: registry.services,
+        rooms_released,
         http: http_task,
         listeners,
         addr: addrs[0],

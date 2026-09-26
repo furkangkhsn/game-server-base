@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use gsb_core::channel::{Inbox, Mailbox};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{MatchResult, Registry, RegistryMsg, RoomFactory};
+use gsb_core::service::{Hold, Service};
 use gsb_core::ticker::Ticker;
 use gsb_protocol::MessageTable;
 
@@ -45,7 +46,9 @@ pub trait GameModule: Send + Sync + 'static {
 
     /// Spawn the registry actor (and the game's services) through
     /// [`RegistryParts::spawn`] — the only way to obtain the returned
-    /// [`RegistryTask`], so a module cannot forget the registry.
+    /// [`RegistryTask`], so a module cannot forget the registry. A
+    /// service handed to [`RegistryParts::service`] first is stopped
+    /// explicitly by `ServerHandle::stop`, after the rooms.
     fn spawn_registry(&self, parts: RegistryParts) -> RegistryTask;
 
     /// A one-line account of what was configured (the startup log).
@@ -55,7 +58,8 @@ pub trait GameModule: Send + Sync + 'static {
 /// Everything `Registry::new` takes except the room factory: built by the
 /// server, consumed by the module's [`GameModule::spawn_registry`]. The
 /// fields stay private — a module can only hand them to
-/// [`RegistryParts::spawn`], unchanged.
+/// [`RegistryParts::spawn`], unchanged — plus the game services the
+/// module registers on the way ([`RegistryParts::service`]).
 pub struct RegistryParts {
     pub(crate) inbox: Inbox<RegistryMsg>,
     pub(crate) self_mailbox: Mailbox<RegistryMsg>,
@@ -64,9 +68,24 @@ pub struct RegistryParts {
     pub(crate) max_connections: Option<u64>,
     pub(crate) max_unauth_conns: Option<u64>,
     pub(crate) result_sink: Option<Mailbox<MatchResult>>,
+    /// The rooms' drop barrier token (the server keeps the waiter).
+    pub(crate) rooms_hold: Hold,
+    /// The services registered so far (see [`Self::service`]).
+    pub(crate) services: Vec<Service>,
 }
 
 impl RegistryParts {
+    /// Register a game service for an explicit stop (BACKLOG F5,
+    /// DESIGN §9.2): `ServerHandle::stop` asks it to stop only after every
+    /// room and shard task has ended (their `on_shutdown` and
+    /// `match_result` ran, so what a room sent it on the way out is
+    /// already queued), then waits for it up to a deadline and aborts it
+    /// past that. Opt-in: a service never registered keeps its own life
+    /// (it ends when its last sender drops).
+    pub fn service(&mut self, service: Service) {
+        self.services.push(service);
+    }
+
     /// Spawn the registry actor over `factory`. The generics live here
     /// and nowhere else; the bounds are exactly the registry's.
     pub fn spawn<W, G, St, Sp>(self, factory: RoomFactory<W, G, St, Sp>) -> RegistryTask
@@ -76,7 +95,7 @@ impl RegistryParts {
         St: Debug + Send + 'static,
         Sp: Debug + Clone + PartialEq + Send + 'static,
     {
-        RegistryTask(tokio::spawn(
+        let task = tokio::spawn(
             Registry::new(
                 self.inbox,
                 self.self_mailbox,
@@ -87,15 +106,24 @@ impl RegistryParts {
                 self.max_unauth_conns,
                 self.result_sink,
             )
+            .with_rooms_hold(self.rooms_hold)
             .run(),
-        ))
+        );
+        RegistryTask {
+            _task: task,
+            services: self.services,
+        }
     }
 }
 
-/// The running registry actor. Only [`RegistryParts::spawn`] makes one.
-/// The handle is held, never awaited: the registry runs until its
-/// `Shutdown`, and dropping the handle would merely detach it.
-pub struct RegistryTask(#[allow(dead_code)] JoinHandle<()>);
+/// The running registry actor, with the services registered before it.
+/// Only [`RegistryParts::spawn`] makes one. The handle is held, never
+/// awaited: the registry runs until its `Shutdown`, and dropping the
+/// handle would merely detach it.
+pub struct RegistryTask {
+    _task: JoinHandle<()>,
+    pub(crate) services: Vec<Service>,
+}
 
 /// Errors of game selection and of the game modules themselves
 /// (carried by [`ServerError::Game`]).
