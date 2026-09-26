@@ -8,8 +8,8 @@ use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{EntityId, RoomId};
-use crate::registry::{HomeShard, TeamHub};
-use crate::room::{Action, RoomConfig, RoomControl};
+use crate::registry::{HomeShard, Seat, TeamHub};
+use crate::room::{Action, InputRate, RoomConfig, RoomControl};
 use crate::shard::ShardMsg;
 
 /// How a connection's room-relationship ops reach the room side: the
@@ -75,7 +75,10 @@ pub(crate) enum RoomOp<St, Sp> {
         out: mpsc::Sender<FrameBatch>,
         /// The resume key; empty = anonymous plain join.
         identity: String,
-        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
+        /// The room's input rate limit, stamped by the registry from the
+        /// room's config at dispatch; handed back on the [`Seat`].
+        input_rate: Option<InputRate>,
+        reply: oneshot::Sender<Result<Seat, CoreError>>,
     },
     /// Leave `room`: send control `Leave` (with the entity this dispatcher
     /// saw the join create), then report [`RegistryMsg::LeaveDone`].

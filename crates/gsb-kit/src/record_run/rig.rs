@@ -17,9 +17,9 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::World;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox, channel};
-use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
+use gsb_core::id::{ConnectionId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
-use gsb_core::registry::{Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{Registry, RegistryMsg, RoomFactory, Seat};
 use gsb_core::room::{Action, RoomConfig};
 use gsb_core::ticker::Ticker;
 use tokio::sync::oneshot;
@@ -38,7 +38,7 @@ const WAIT: Duration = Duration::from_secs(30);
 /// Keep-alive cadence, Hz (every 10th tick at 30 Hz).
 const KEEPALIVE_HZ: f64 = 3.0;
 
-type Joined = oneshot::Receiver<Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>>;
+type Joined = oneshot::Receiver<Result<Seat, gsb_core::error::CoreError>>;
 
 /// One side of a pair: a session in one room.
 struct Side<const RUN: bool> {
@@ -245,7 +245,7 @@ impl Rig {
 /// next tick boundary — by the barrier after it).
 async fn settle<const RUN: bool>(side: &mut Side<RUN>) {
     if let Some(joined) = side.joined.take() {
-        let (_, actions) = tokio::time::timeout(WAIT, joined)
+        let Seat { actions, .. } = tokio::time::timeout(WAIT, joined)
             .await
             .expect("joined in time")
             .expect("reply")

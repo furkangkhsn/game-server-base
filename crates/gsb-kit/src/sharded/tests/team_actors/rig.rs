@@ -16,7 +16,7 @@ use bevy_ecs::prelude::World;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox, channel};
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::MetricsEvent;
-use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, Seat};
 use gsb_core::room::RoomConfig;
 use gsb_core::shard::{ShardLogic, TeamExport};
 use gsb_core::ticker::Ticker;
@@ -154,7 +154,11 @@ impl Rig {
             })
             .await
             .expect("registry");
-        let (wire, actions) = tokio::time::timeout(WAIT, joined)
+        let Seat {
+            entity: wire,
+            actions,
+            ..
+        } = tokio::time::timeout(WAIT, joined)
             .await
             .expect("joined in time")
             .expect("reply")

@@ -10,9 +10,8 @@ use tracing::{debug, warn};
 use crate::channel::{FrameBatch, Mailbox};
 use crate::conn::{ConnIn, ServerClose};
 use crate::error::CoreError;
-use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::id::{ConnectionId, RoomId};
 use crate::registry::*;
-use crate::room::Action;
 
 use crate::registry::actor::Registry;
 
@@ -34,7 +33,7 @@ where
         room: RoomId,
         out: mpsc::Sender<FrameBatch>,
         identity: String,
-        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
+        reply: oneshot::Sender<Result<Seat, CoreError>>,
     ) {
         // Double-session supersedence (§5: "en son kazanan" —
         // latest wins): a LIVE (still-connected) session with
@@ -98,6 +97,9 @@ where
         // create-on-demand like the cap check does.
         self.conns.entry(conn).or_default().identity = identity.clone();
         let sharded_room = entry.shards.is_some();
+        // The room's input rate limit rides the join to its Seat (one
+        // stamp for both room shapes and both join paths).
+        let input_rate = entry.config.input_rate;
         // The incarnation this join is dispatched against: the
         // settlement reports (SpawnDone/SpawnFailed) echo it so
         // a late settle of a since-died room cannot touch the
@@ -178,6 +180,7 @@ where
                 epoch: join_epoch,
                 out,
                 identity,
+                input_rate,
                 reply,
             })
             .is_err()

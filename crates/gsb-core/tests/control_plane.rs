@@ -19,7 +19,9 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
-use gsb_core::registry::{BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
+use gsb_core::registry::{
+    BuiltRoom, MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus, Seat,
+};
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
@@ -182,8 +184,7 @@ async fn spawn(
     room: RoomId,
     out: mpsc::Sender<FrameBatch>,
 ) -> EntityId {
-    let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<Seat, CoreError>>();
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
         room,
@@ -195,7 +196,7 @@ async fn spawn(
     })
     .await
     .expect("registry gone");
-    let (entity, _actions) = tokio::time::timeout(WAIT, reply_rx)
+    let Seat { entity, .. } = tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
         .expect("reply dropped")

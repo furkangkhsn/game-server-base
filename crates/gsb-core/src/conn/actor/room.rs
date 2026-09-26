@@ -7,12 +7,10 @@ use tracing::{debug, warn};
 use gsb_protocol::op;
 use gsb_protocol::{FrameBody, ProtoError, base};
 
-use crate::channel::Mailbox;
 use crate::conn::*;
 use crate::error::CoreError;
-use crate::id::{EntityId, RoomId};
-use crate::registry::RegistryMsg;
-use crate::room::Action;
+use crate::id::RoomId;
+use crate::registry::{RegistryMsg, Seat};
 
 impl super::ConnectionActor {
     /// The JOIN_ROOM_REQ arm of [`Self::handle_frame`]: admission into a
@@ -56,8 +54,7 @@ impl super::ConnectionActor {
                 .await;
             return;
         }
-        let (reply_tx, reply_rx) =
-            oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+        let (reply_tx, reply_rx) = oneshot::channel::<Result<Seat, CoreError>>();
         if self
             .registry
             .send(RegistryMsg::SpawnPlayer {
@@ -75,9 +72,15 @@ impl super::ConnectionActor {
             return;
         }
         match reply_rx.await {
-            Ok(Ok((entity, actions))) => {
+            Ok(Ok(Seat {
+                entity,
+                actions,
+                input_rate,
+            })) => {
                 self.state = ConnState::InRoom { room };
                 self.actions = Some(actions);
+                // The room's input limit comes with its channel.
+                self.enter_input_rate(input_rate);
                 let _ = self
                     .send_frame(op::base::JOIN_ROOM_RESULT, &base::JoinRoomResult { entity })
                     .await;

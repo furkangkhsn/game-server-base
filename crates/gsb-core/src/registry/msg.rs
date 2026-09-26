@@ -11,7 +11,7 @@ use crate::conn::ConnIn;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
-use crate::room::{Action, RoomConfig};
+use crate::room::RoomConfig;
 use crate::shard::TeamExport;
 
 /// Messages addressed to the registry actor.
@@ -81,7 +81,8 @@ pub enum RegistryMsg {
         /// of §14.3 (the room falls back to a fresh join transparently
         /// when its ledger does not hold the identity).
         identity: String,
-        reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
+        /// The [`Seat`] the join settles to, or why it was refused.
+        reply: oneshot::Sender<Result<Seat, CoreError>>,
     },
     /// Remove a player from its room (voluntary leave). The connection
     /// stays registered (it may rejoin).

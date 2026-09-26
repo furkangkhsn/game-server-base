@@ -4,7 +4,7 @@
 //! drop shows in the samples, before the next tick. And the same rig
 //! over a SINGLE team room: the room actor's side of the drop signal.
 
-use gsb_core::registry::BuiltRoom;
+use gsb_core::registry::{BuiltRoom, Seat};
 use gsb_core::room::{Action, RoomLogic};
 
 use super::*;
@@ -63,7 +63,11 @@ impl Rig {
             })
             .await
             .expect("registry");
-        let (wire, actions) = tokio::time::timeout(WAIT, joined)
+        let Seat {
+            entity: wire,
+            actions,
+            ..
+        } = tokio::time::timeout(WAIT, joined)
             .await
             .expect("joined in time")
             .expect("reply")

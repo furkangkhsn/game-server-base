@@ -1068,7 +1068,7 @@ async fn spawn_as(
     .await
     .expect("registry gone");
     match tokio::time::timeout(WAIT, reply_rx).await {
-        Ok(Ok(result)) => result.map(|(e, _)| e),
+        Ok(Ok(result)) => result.map(|s| s.entity),
         other => panic!("spawn round trip failed: {other:?}"),
     }
 }

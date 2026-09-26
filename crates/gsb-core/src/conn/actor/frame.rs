@@ -96,8 +96,14 @@ impl super::ConnectionActor {
             // here. Not in a room → the same `NotInRoom` race-class
             // answer as any other game op (a request racing a leave or a
             // destroyed room is a legitimate ~1-RTT stray).
+            //
+            // NOT metered by the input rate limit: a request is owed
+            // exactly one answer (a silent drop would leave the client
+            // waiting out its own timeout), and its volume already has
+            // its own bounds — the per-connection and room pending caps,
+            // answered in the same tick, and the room's pull budget.
             op::base::RPC_REQ => {
-                self.forward_to_room(frame).await;
+                self.forward_to_room(frame, false).await;
             }
             // Unknown *base-band* opcode: no legitimate client sends one,
             // so it is a hard protocol violation (answered + budgeted).
@@ -134,18 +140,27 @@ impl super::ConnectionActor {
             }
             // Game band: the game crate owns these opcodes (the message
             // table is built per game); the room's ingest decides.
-            _ => self.forward_to_room(frame).await,
+            // Metered by the room's input rate limit, when it has one.
+            _ => self.forward_to_room(frame, true).await,
         }
     }
 
-    pub(super) async fn forward_to_room(&mut self, frame: FrameBody) {
-        let mailbox = match &self.actions {
-            Some(mb) => mb,
-            None => {
-                // Not in a room (or the room went away): report it.
-                self.reply_err(ProtoError::NotInRoom).await;
-                return;
-            }
+    /// Forward a frame to the room's action channel; `metered` = game
+    /// input, subject to the room's input rate limit.
+    pub(super) async fn forward_to_room(&mut self, frame: FrameBody, metered: bool) {
+        if self.actions.is_none() {
+            // Not in a room (or the room went away): report it — before
+            // the gate, so the race class keeps its answer.
+            self.reply_err(ProtoError::NotInRoom).await;
+            return;
+        }
+        // The input rate limit: over it, the action is dropped HERE,
+        // before it costs the room anything (counted, not a violation).
+        if metered && self.over_input_rate(frame.op) {
+            return;
+        }
+        let Some(mailbox) = &self.actions else {
+            return;
         };
         // The payload is forwarded encoded; the game crate decodes it.
         // Non-blocking: a flooding connection drops its own input (bounded

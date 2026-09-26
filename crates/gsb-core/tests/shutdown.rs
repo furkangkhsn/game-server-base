@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox, channel};
 use gsb_core::conn::ConnIn;
-use gsb_core::id::{ConnectionId, EntityId, RoomId};
-use gsb_core::registry::{MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus};
-use gsb_core::room::{Action, RoomConfig};
+use gsb_core::id::{ConnectionId, RoomId};
+use gsb_core::registry::{MatchResult, Registry, RegistryMsg, RoomFactory, RoomStatus, Seat};
+use gsb_core::room::RoomConfig;
 use gsb_core::ticker::{TickInfo, Ticker};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -124,7 +124,7 @@ async fn populate_at(rig: &mut Rig, tick_hz: f64) {
         let msg = RegistryMsg::ConnOpened { conn, inbox };
         rig.tx.send(msg).await.expect("registry gone");
         let (out, _out_rx) = mpsc::channel::<FrameBatch>(64);
-        let (reply, rx) = oneshot::channel::<Result<(EntityId, Mailbox<Action>), _>>();
+        let (reply, rx) = oneshot::channel::<Result<Seat, _>>();
         let msg = RegistryMsg::SpawnPlayer {
             conn,
             room: ROOM,

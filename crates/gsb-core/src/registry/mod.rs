@@ -48,10 +48,12 @@
 mod actor;
 mod hub;
 mod msg;
+mod seat;
 mod table;
 
 pub use actor::Registry;
 pub use msg::RegistryMsg;
+pub use seat::Seat;
 
 // Internals shared across this module tree (never leaves the crate).
 pub(crate) use hub::TeamHub;

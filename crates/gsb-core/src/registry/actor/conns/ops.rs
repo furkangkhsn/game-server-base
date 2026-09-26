@@ -50,6 +50,7 @@ where
                         epoch,
                         out,
                         identity,
+                        input_rate,
                         reply,
                     } => {
                         // An identified join IS a resume attempt (§14.3):
@@ -81,7 +82,11 @@ where
                         match outcome {
                             OpOutcome::Joined(entity, actions) => {
                                 in_room = Some((room, entity, handle, epoch, identity));
-                                let _ = reply.send(Ok((entity, actions)));
+                                let _ = reply.send(Ok(Seat {
+                                    entity,
+                                    actions,
+                                    input_rate,
+                                }));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnDone {
                                         conn,

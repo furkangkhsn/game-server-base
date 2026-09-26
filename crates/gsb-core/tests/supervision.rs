@@ -27,7 +27,7 @@ use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
-use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus};
+use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, RoomStatus, Seat};
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
@@ -274,8 +274,7 @@ async fn spawn(
     conn: ConnectionId,
     room: RoomId,
 ) -> Result<EntityId, CoreError> {
-    let (reply_tx, reply_rx) =
-        tokio::sync::oneshot::channel::<Result<(EntityId, Mailbox<Action>), CoreError>>();
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<Seat, CoreError>>();
     let (out_tx, _out_rx) = mpsc::channel::<FrameBatch>(64);
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
@@ -289,7 +288,7 @@ async fn spawn(
     .await
     .expect("registry gone");
     match tokio::time::timeout(WAIT, reply_rx).await {
-        Ok(Ok(result)) => result.map(|(entity, _actions)| entity),
+        Ok(Ok(result)) => result.map(|s| s.entity),
         other => panic!("spawn round trip failed: {other:?}"),
     }
 }

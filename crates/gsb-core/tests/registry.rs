@@ -15,7 +15,7 @@ use std::time::Duration;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
-use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
+use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory, Seat};
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
@@ -165,9 +165,8 @@ async fn spawn(
     room: RoomId,
     out: mpsc::Sender<FrameBatch>,
 ) -> EntityId {
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
-    >();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<Seat, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::SpawnPlayer {
         conn,
         room,
@@ -177,7 +176,7 @@ async fn spawn(
     })
     .await
     .expect("registry gone");
-    let (entity, _actions) = tokio::time::timeout(WAIT, reply_rx)
+    let Seat { entity, .. } = tokio::time::timeout(WAIT, reply_rx)
         .await
         .expect("timed out")
         .expect("reply dropped")
@@ -313,9 +312,8 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
 
     // Joining a destroyed room fails cleanly.
     let (out_tx2, _out_rx2) = mpsc::channel::<FrameBatch>(64);
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
-    >();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<Seat, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::SpawnPlayer {
         conn: c1,
         room: RoomId(1),
@@ -380,9 +378,8 @@ async fn spawn_rejected_when_room_is_full() {
     // The second spawn is rejected with `RoomFull`: the reply carries the
     // error, the connection stays registered, and no room state is made.
     let (out_tx2, _out_rx2) = mpsc::channel::<FrameBatch>(64);
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<
-        Result<(EntityId, Mailbox<Action>), gsb_core::error::CoreError>,
-    >();
+    let (reply_tx, reply_rx) =
+        tokio::sync::oneshot::channel::<Result<Seat, gsb_core::error::CoreError>>();
     tx.send(RegistryMsg::SpawnPlayer {
         conn: c2,
         room: RoomId(1),

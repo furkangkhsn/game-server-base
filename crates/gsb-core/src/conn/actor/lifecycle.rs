@@ -53,6 +53,8 @@ impl super::ConnectionActor {
             m_actions_dropped: 0,
             m_actions_dropped_warned: false,
             m_input_limited: 0,
+            m_input_limited_warned: false,
+            input: Default::default(),
             v_score: 0,
             v_events: 0,
             v_answered: 0,

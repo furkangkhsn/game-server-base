@@ -74,9 +74,22 @@
 //!   immediately (`ERROR` code 9 naming the policy). Auth success retires
 //!   the counter's relevance naturally: it only gates the WaitingAuth
 //!   phase.
+//!
+//! **Input gate** (docs/SECURITY.md, "post-auth input volume"; BACKLOG
+//! E1): an opt-in per-connection token bucket over VALID game-band input,
+//! set by the room joined (`RoomConfig::input_rate`, handed over with the
+//! action channel on the `Seat`). Off by default. Over the rate, the
+//! action is dropped in this actor before the room sees it, counted
+//! (`ConnSample::input_rate_limited`) and NOT budgeted as a violation.
+//! Control frames and RPC requests pass untouched; the protocol checks
+//! (unknown opcode, not in a room) run before the gate and keep their
+//! answers. The bucket belongs to the connection and survives room hops
+//! (re-tuned, never refilled, by a join) — see the `gate` module.
 
 mod actor;
 mod close;
+mod gate;
+pub(crate) use gate::InputGate;
 
 pub use actor::ConnectionActor;
 pub use close::ServerClose;

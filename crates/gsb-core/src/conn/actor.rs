@@ -20,6 +20,7 @@ use crate::room::Action;
 mod auth;
 mod close;
 mod frame;
+mod input;
 mod lifecycle;
 mod room;
 mod violation;
@@ -69,6 +70,12 @@ pub struct ConnectionActor {
     /// volume"). Its own counter, NOT a violation (see
     /// `ConnSample::input_rate_limited`).
     m_input_limited: u64,
+    /// Warned once about rate-limited input (the count is in the samples).
+    m_input_limited_warned: bool,
+    /// The input rate limit of the room joined last, over this
+    /// connection's one token bucket (see `crate::conn` "input gate").
+    /// Off until a limited room is joined — the default path is unchanged.
+    input: crate::conn::InputGate,
     /// Violation budget state (all actor-local — the counter *is* the
     /// budget; see the module docs): weighted lifetime score, raw event
     /// count (for the close signal and metrics), how many violations have

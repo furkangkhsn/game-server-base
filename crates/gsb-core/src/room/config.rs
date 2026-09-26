@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 mod input;
+pub use input::InputRate;
 mod rates;
 
 /// Static configuration for a room.
@@ -243,6 +244,29 @@ pub struct RoomConfig {
     /// [`Self::max_idle_input_secs`]'s "0 = off": zero has a safe meaning
     /// here, and "off" would turn a typo into the unbounded lock.
     pub max_detach_hold: Option<Duration>,
+    /// **Per-connection input rate limit** — `None` (the default) = OFF.
+    ///
+    /// A token bucket per connection over its valid game-band input (the
+    /// frames the connection actor forwards to this room): `burst`
+    /// actions at once, refilled at `per_sec` a second. Input over it is
+    /// DROPPED by the connection actor before it costs the room anything
+    /// (never queued, pulled or ingested), counted in
+    /// [`crate::metrics::ConnSample::input_rate_limited`], and NOT
+    /// scored as a violation — an over-rate client is not sending
+    /// anything a correct client could not. Control frames and RPC
+    /// requests are not game input and pass untouched (an RPC request
+    /// is owed exactly one answer; its volume is bounded by the pending
+    /// caps and this room's pull budget).
+    ///
+    /// The number is the GAME's (a gameplay parameter: a fast honest
+    /// client of one game is a flooder of another), so the base forces
+    /// none. The connection actor receives it with the action channel on
+    /// every join (`crate::registry::Seat`); moving between rooms
+    /// re-tunes the connection's one bucket, never refills it (see
+    /// `crate::conn` "input gate"). Unlike
+    /// [`Self::max_actions_per_conn_per_tick`] (fairness among the input
+    /// that entered — the excess waits), this bounds what enters.
+    pub input_rate: Option<InputRate>,
 }
 
 /// The default [`RoomConfig::max_detach_hold`]: ten minutes — 30× the MMO
@@ -274,6 +298,7 @@ impl Default for RoomConfig {
             // OFF: the feature is invisible until an operator asks for it.
             max_idle_input_secs: None,
             max_detach_hold: Some(DEFAULT_MAX_DETACH_HOLD),
+            input_rate: None,
         }
     }
 }
