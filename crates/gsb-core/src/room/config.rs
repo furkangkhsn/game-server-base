@@ -5,6 +5,8 @@ use crate::id::RoomId;
 use std::fmt::Debug;
 use std::time::Duration;
 
+mod rates;
+
 /// Static configuration for a room.
 ///
 /// `PartialEq` (not just `Debug + Clone`): the control plane's

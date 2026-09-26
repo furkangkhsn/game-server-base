@@ -60,29 +60,18 @@ where
             }
             return;
         }
-        // The room rate must divide the global ticker rate: the
-        // room steps on every k-th global tick (k = run_every).
-        let global = self.ticker.hz();
-        let run_every = (global / config.tick_hz).round() as u64;
-        if run_every < 1 || (global - config.tick_hz * run_every as f64).abs() > 1e-3 {
-            let _ = reply.send(Err(CoreError::TickRate {
-                room: config.tick_hz,
-                global,
-            }));
-            return;
-        }
-        // Keep-alive cannot run faster than the room's own tick:
-        // the cadence would clamp to every step, the "silence
-        // when unchanged" gain would be lost, and clients would
-        // receive fewer keep-alives than configured. Reject the
-        // config rather than start a silently degraded room.
-        if config.keepalive_hz > 0.0 && config.keepalive_hz > config.tick_hz {
-            let _ = reply.send(Err(CoreError::KeepaliveRate {
-                keepalive: config.keepalive_hz,
-                tick: config.tick_hz,
-            }));
-            return;
-        }
+        // The room rate must divide the global ticker rate (the room
+        // steps on every k-th global tick), and keep-alive cannot run
+        // faster than the room's own tick — rather than start a silently
+        // degraded room, the create is refused (`RoomConfig::
+        // step_divisor`: the one rule, shared with startup checks).
+        let run_every = match config.step_divisor(self.ticker.hz()) {
+            Ok(k) => k,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
         let built = (self.factory)(id, &config);
         // The factory runs inside the registry loop on purpose
         // (unchanged): room construction is synchronous game
