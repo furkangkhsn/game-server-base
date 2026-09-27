@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B52 — boş odanın kesiti nüfus değil (`loadgen/b52-mmo-flake`)
+
+- **Belirti:** `loadgen_orchestrates_the_mmo` yükte (128 süreçlik CPU yükü
+  altında 30 koşuda 5 kez) `shard_members=0,0,0,0`, `records_per_tick=0.0`
+  basıyordu.
+- **Mekanizma (rapor akışıyla doğrulandı):** toplayıcı, shard'ların
+  örneklediği ticker'ın aynısında ve aynı saniyelik periyotla yayıyor;
+  yükte yayını onların turunu bölüyor. Oyuncuların içeride olduğu 2–3
+  raporun hepsi yırtık ya da eksik çıkabiliyor; tek tutarlı kesitler
+  istemciler ayrıldıktan sonra geliyor (orkestre sunucu çocuğu 3 sn fazla
+  koşar) ve kimseyi tutmuyor. `has_consistent_cut` bu boş kesitlerle doğru
+  döndüğü için nüfus yalnız onlardan okunuyordu: tepe 0, kararlı pencere
+  boş kesitler.
+- **Düzeltme loadgen'in seçiminde** (`report/spread.rs`): nüfus tutarlı
+  kesitlerden ancak içlerinden biri oyuncu tutuyorsa okunur
+  (`has_populated_cut`). Kesitleri hep boş oda olan koşu, kesitsiz koşu
+  gibi yırtık geri düşüşle okunur ve insan-okunur blok `(torn: …)` der.
+  RESULT biçimi, `/metrics` ve tel baytları değişmedi.
+- Elenenler: sunucu çocuğuna B36 tarzı son örnek beklemesi (sorun son
+  rapor değil, oyunculu raporlar), birden çok rapordan kesit kurmak (bazı
+  satırlar hiç yayılmıyor), toplayıcı yayınını kaydırmak (çekirdek
+  değişikliği — BACKLOG F29), testi uzatmak/gevşetmek.
+- Kalan risk: yırtık geri düşüş göç anında bir oyuncuyu ±1 okuyabilir
+  (tasarımda yazılı; blok söyler).
+
+Testler 1318 → 1320 (`otlp` ile 1336 → 1338): `report::spread::tests::empty`
+(B52 akışını satır satır oynatır; önce kırmızı, tepe 0) + F18 koruması;
+mutasyonlar öldü. Gerçek test yük altında önce 37/40, sonra 60/60.
+Ebeveyn doğrulaması: koşulu tersine çevirmek dört testi düşürdü.
+
 ## Sayım turu — "her şeyi saymalıyız": B32, B51 ve geride bırakılan parkın kanalı (`metrics/count-everything`)
 
 Bakımcı kararı (2026-09-27, B32 seçenek a): her kayıp, anlamı adıyla
