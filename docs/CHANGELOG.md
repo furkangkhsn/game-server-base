@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 6 — "her şeyi saymalıyız": B75, B80 (`metrics/count-everything-6`)
+
+- **B75 — duran odanın reddettiği katılmalar:** dağıtıcı `RoomGone`'un iki
+  nedenini ayırır (`OpOutcome`): kutu gönderimi REDDETTİ (`Refused` —
+  oda/shard durmuş ya da ölmüş, op'u hiç görmedi) ya da op'u alıp cevabı
+  DÜŞÜRDÜ (`Gone` — oda duruşta `joins_unprocessed`/`resumes_unprocessed`
+  sayar). Reddi dağıtıcı sayar: `MetricsEvent::JoinRefusedClosed` doğrudan
+  toplayıcıya (registry üzerinden değil — bütün sunucunun duruşunda
+  registry önce çıkar) → `joins_refused_closed=`,
+  `gsb_registry_joins_refused_closed_total`. Kimliği KENDİ parkında olan
+  duran shard kuyruktaki resume'u sayar ve `Err(RoomGone)` der ("burada
+  sayıldı"): katlama taze join'e düşmez, çift sayım yok. Parkı hiçbir
+  yerde olmayan resume taze join'e düşer ve orada bir kez sayılır.
+  Elenenler: bütün kuyruktaki resume'lara `RoomGone` (parksız resume'u
+  kimse saymazdı); sayımı `SpawnFailed` ile registry'de tutmak. Loadgen
+  teli **GSMY**.
+- **B80 — WS'nin 1001'i:** `poll_close` kapanış çerçevesini `try_send` ile
+  koyuyordu; dolu kuyrukta (son batch yavaş okuyana gidiyor) sayılmadan
+  düşüyor, istemci kapanış görmüyordu. **Karar: teslim** — kapanış oyun
+  karesi gibi slot bekler (`ws/writer/going_away.rs`), pompa kapanışı
+  yazma-tıkanma penceresi altında bekler; aynı bayt (`88 02 03 E9`),
+  yalnız kaybolmadan. Teslim edilemeyen: `ws_going_away_unsent_closed`
+  (yazıcı başarısız yazmayla durmuş) ve `ws_going_away_unsent_stalled`
+  (pencere doldu). Okuyucunun kendi kapanışı kazanır, sayılmaz. Yan
+  düzeltme: soket yazıcısının erken çıkış boşaltması `recv` ile bekler —
+  kapanıştan önce slot ayırmış göndericinin karesi de sayılır. Loadgen
+  teli **GSMZ**.
+- Altın metinler yalnız yeni aileler kadar değişti; `otlp::cross` yeşil.
+  İstemci teli değişmedi.
+- Kalan adaylar: **B82** (resume yayınının 5 sn sınırından sonraki geç
+  cevabı — geç bir KABUL bağlantıya iki akış verebilir; doğruluk sorunu
+  olabilir), B83 (WS okuyucusunun kapalı kuyruğa veremediği pong/yankı).
+
+Testler 1412 → 1425 (`otlp` ile 1430 → 1443); her madde önce düştü,
+mutasyonla doğrulandı. Ebeveyn doğrulaması: alınıp düşürülen cevabı da
+ret saymak iki testi düşürdü. Not: yük altında `loadgen_ws` bir süre düştü
+(F25'e eklendi).
+
 ## Sayım turu 5 — "her şeyi saymalıyız": B72–B74 (`metrics/count-everything-5`)
 
 - **B72 — takım hub'ının reddedilen röleleri:** hub (registry'nin içinde)
