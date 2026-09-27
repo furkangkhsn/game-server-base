@@ -1267,19 +1267,31 @@ async fn rpc_over_the_wire_local_no_leak_external_later_tick() {
 /// invalid ticket is a normal rejection (code 10, the connection
 /// survives); a valid ticket authenticates with the hook's identity and
 /// pins the join (wrong room → code 11, right room → in); and while a
-/// slow validation is in flight, the room keeps ticking at rate (the
-/// tick body never awaits the validator — the in-room player's snapshot
-/// stream stays continuous).
+/// slow validation is in flight, the room keeps ticking (the tick body
+/// never awaits the validator — the in-room player's snapshot stream
+/// stays continuous).
+///
+/// "In flight" is a condition, not a window (BACKLOG F25): the slow
+/// validation parks until the test releases it, and A's snapshots are
+/// counted between the validator's entry and that release. (A 250 ms
+/// sleep and a 350 ms wall-clock window held only while the machine
+/// kept the room at rate.)
 #[tokio::test]
 async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     // The platform's validator (the base defines the hook, the platform
-    // ships this behaviour): `slow` sleeps 250 ms (simulating a
-    // signature-service round trip), `good` resolves fast.
+    // ships this behaviour): `slow` reports its entry and parks until
+    // released (a signature-service round trip that takes as long as the
+    // test needs), `good` resolves fast.
+    let (entered_tx, mut entered) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate = std::sync::Arc::clone(&release);
     let validator: gsb_core::auth::TicketValidator = std::sync::Arc::new(move |t: bytes::Bytes| {
+        let (entered_tx, gate) = (entered_tx.clone(), std::sync::Arc::clone(&gate));
         Box::pin(async move {
             match t.as_ref() {
                 b"slow" => {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let _ = entered_tx.send(());
+                    gate.notified().await;
                     Ok(gsb_core::auth::ValidatedTicket {
                         player: "slow".into(),
                         room: gsb_core::id::RoomId(1),
@@ -1296,7 +1308,9 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     let hooks = gsb_server::ServerHooks {
         ticket: Some(gsb_core::auth::TicketAuth {
             validator,
-            timeout: Duration::from_secs(2),
+            // Far past the parked validation: the release, not the hook's
+            // deadline, ends it.
+            timeout: Duration::from_secs(60),
         }),
     };
     let handle = gsb_server::start_server_with(cfg_on(Kind::Tcp, None, None, None), hooks)
@@ -1399,41 +1413,74 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
         .await
         .unwrap();
 
-    // Now B authenticates with the SLOW ticket (250 ms of validation).
-    // While B's actor is parked on the validator, A's snapshot stream
-    // must keep running at tick rate — the room's tick body never awaits
-    // a connection's validation (the ticket is off the tick path).
+    // Now B authenticates with the SLOW ticket. While B's actor is parked
+    // on the validator, A's snapshot stream must keep running — the
+    // room's tick body never awaits a connection's validation (the
+    // ticket is off the tick path).
     let mut b = Client::connect(Kind::Tcp, handle.addr).await.expect("B");
     let (op, payload) = auth_wire("b", b"slow");
     b.write_frame(op, &payload).await.unwrap();
-    let window_start = Instant::now();
-    let mut snapshots_in_window: Vec<u64> = Vec::new();
-    let deadline = Instant::now() + Duration::from_millis(900);
-    while Instant::now() - window_start < Duration::from_millis(350) && Instant::now() < deadline {
-        match a.recv(Duration::from_millis(50)).await.unwrap() {
-            Recv::Frame((op, payload)) if op == gsb_demo::op::WORLD_SNAPSHOT => {
+    tokio::time::timeout(Duration::from_secs(10), entered.recv())
+        .await
+        .expect("B's validation started")
+        .expect("the validator is alive");
+    // Snapshots the room made AFTER the validation began. What already
+    // sits on A's socket may be older, so a fence first: A's connection
+    // answers a heartbeat sent from here on through the same outbound
+    // queue the room's snapshot batches take, so every snapshot behind
+    // that HEARTBEAT_ACK was queued after it. (A's probe above already
+    // took its ACK; the 1/s ACK throttle may skip a heartbeat, so it is
+    // re-sent until one is answered.)
+    let mut fenced = false;
+    let mut next_heartbeat = Instant::now();
+    let mut snapshots_in_flight: Vec<u64> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while snapshots_in_flight.len() < 3 {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| {
+                panic!(
+                    "A must keep receiving snapshots during B's validation \
+                 (the tick body stays synchronous; fenced: {fenced}, saw \
+                 {snapshots_in_flight:?})"
+                )
+            });
+        if !fenced && Instant::now() >= next_heartbeat {
+            let hb = session::heartbeat(1);
+            a.write_frame(hb.op, &hb.payload).await.unwrap();
+            next_heartbeat = Instant::now() + Duration::from_millis(1_100);
+        }
+        match a
+            .recv(remaining.min(Duration::from_millis(100)))
+            .await
+            .unwrap()
+        {
+            Recv::Frame((op, _)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => fenced = true,
+            Recv::Frame((op, payload)) if fenced && op == gsb_demo::op::WORLD_SNAPSHOT => {
                 let m = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
-                snapshots_in_window.push(m.sequence);
+                snapshots_in_flight.push(m.sequence);
             }
-            Recv::Frame(_) => {}
-            Recv::Closed => panic!("A closed during the slow-auth window"),
-            Recv::TimedOut => {}
+            Recv::Frame(_) | Recv::TimedOut => {}
+            Recv::Closed => panic!("A closed during the slow-auth validation"),
         }
     }
-    assert!(
-        snapshots_in_window.len() >= 3,
-        "A must keep receiving snapshots during B's 250 ms validation \
-         (the tick body stays synchronous; saw {})",
-        snapshots_in_window.len()
-    );
-    // Strictly increasing: the ticker kept its rate (no stall).
-    let increasing = snapshots_in_window.windows(2).all(|w| w[1] > w[0]);
+    // Strictly increasing: the room kept stepping (no stall).
+    let increasing = snapshots_in_flight.windows(2).all(|w| w[1] > w[0]);
     assert!(
         increasing,
-        "snapshot sequences must be strictly increasing: {snapshots_in_window:?}"
+        "snapshot sequences must be strictly increasing: {snapshots_in_flight:?}"
     );
+    // Still in flight: nothing has answered B yet.
+    assert!(
+        matches!(
+            b.recv(Duration::from_millis(1)).await.unwrap(),
+            Recv::TimedOut
+        ),
+        "B's validation was still parked while A's stream ran"
+    );
+    release.notify_one();
 
-    // B's slow validation completes (well inside the 2 s hook timeout).
+    // B's slow validation completes once released.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let remaining = deadline
