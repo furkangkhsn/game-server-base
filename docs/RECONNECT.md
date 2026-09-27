@@ -472,17 +472,135 @@ oyuncu yüküyle (`PlayerMigration.last_input`) TAŞINIR — §14.2'nin park
 meta'sı ile aynı gerekçe: saat per-aktördür, taşınmazsa hareket eden
 boşta bir varlık her sınır geçişinde affedilir.
 
-**Bilinen sınır (bilinçli).** Tavan oda ÜYELİĞİNİ sonlandırır, SOKETİ
-kapatmaz. Taşıma bağlantı/registry katmanının malıdır ve onun kendi
-tavanı (`idle_timeout_secs`) zaten vardır — heartbeat atan bir istemci
-tanımı gereği taşıma-boşta DEĞİLDİR. Idle-kick edilmiş istemci
+**Varsayılan eylem: üyelik biter, soket kalır.** Tavan (varsayılan
+`afk_action = leave_room`) oda ÜYELİĞİNİ sonlandırır, SOKETİ kapatmaz.
+Taşıma bağlantı/registry katmanının malıdır ve onun kendi tavanı
+(`idle_timeout_secs`) zaten vardır — heartbeat atan bir istemci tanımı
+gereği taşıma-boşta DEĞİLDİR. Idle-kick edilmiş istemci
 `LEAVE_ROOM_REQ` göndermiş gibi bir durumdadır: bağlantısı yaşar ve
 yeniden join edebilir (ki §14.3 gereği bu join örtük resume denemesidir,
 yani park edilmiş varlığını geri alır). Bir sonraki oyun karesi kapalı
-aksiyon kanalına çarpar ve bağlantı aktörü kendini odadan ayırır. Base'e
-oda→registry "şu bağlantıyı kapat" mesajı EKLEMEK bu turun kapsamı
-dışında bırakıldı: yeni bir kontrol-düzlemi fiili, ve operasyonel karar
-(AFK'yı odadan mı atmalı yoksa sunucudan mı) dağıtımın kararıdır.
+aksiyon kanalına çarpar ve bağlantı aktörü kendini odadan ayırır.
+
+*Düzeltme notu (E6 turunda testle görüldü, davranış DEĞİŞTİRİLMEDİ):*
+son cümle politika **despawn** ettiğinde doğrudur. Politika **park**
+ettiyse satır aksiyon kanalını (ve giden kuyruğu) tutar: istemcinin
+kareleri park edilmiş satırın kanalında birikir (READ atlar, kanal
+dolunca `actions_dropped`), bağlantı aktörü kendini `InRoom` sanmaya
+devam eder ve doğrudan `JOIN_ROOM_REQ` `ERROR 3` ("not authenticated",
+sert ihlal) alır — istemci önce `LEAVE_ROOM_REQ` göndermelidir. Ayrıca
+despawn edilen üyenin registry satırı canlı bir aidiyet olarak kalır;
+istemci ne yeniden katılır ne ayrılırsa, soketi sonra kapandığında satır
+`detached` işaretlenip bir daha bırakılmaz (slot sızıntısı; oda bitene
+dek). İkisi de varsayılan yolda; `afk_action = disconnect` ikisini de
+yaşamaz (§16.1). BACKLOG'da ayrı madde.
+
+### 16.1 Tavanın eylemi: `afk_action` ve oda→registry kapatma fiili (E6)
+
+AFK'yı odadan mı atmalı yoksa sunucudan mı — bu dağıtımın/oyunun
+kararıdır (bakımcı kararı, BACKLOG E6, 2026-09-27). Motor ikisini de
+yapı taşı olarak verir, varsayılanı bugünküdür:
+
+| `RoomConfig::afk_action` | Üyelik | Soket | Tel | Sayaç |
+|---|---|---|---|---|
+| `LeaveRoom` (**varsayılan**) | `on_disconnect` karar verir (park / AI devri / despawn) | AÇIK kalır | hiçbir şey (bayt bayt bugünkü) | — |
+| `Disconnect` | aynı yol, aynı karar | KAPANIR | en-iyi-çaba `ERROR 9` (`input idle: no game input for N s (…)`) → kapanış | `server_closes{reason="idle_input"}` |
+
+Her iki eylemde de önce §16'nın yolu çalışır — oyunun `on_disconnect`'i
+varlığın kaderini seçer; `Disconnect` yalnız TAŞIMAYI ekler. Park/bot
+satırları girdi saatinde olmadığından (yukarıdaki tablo) hiçbir eylem
+onlara ulaşmaz.
+
+**Fiil: oda → registry → bağlantı.** Oda (ya da shard) politika
+koştuktan SONRA `RegistryMsg::CloseConn(CloseRequest { conn, room,
+entity, parked, cause, reason })` ister. Tick gövdesi await etmez:
+istek odanın kuyruğuna girer ve 0d fazının sonunda `try_send` ile
+yollanır (`registry::flush_close_requests`). Registry tek tablo
+aramasıyla satırını yerleştirir ve kararı bağlantıya diğer registry
+kapanışlarının (`superseded`, doğum cap'leri) yolundan iletir: spawn
+edilmiş bir `ConnIn::ServerClosed { cause: IdleInput, reason }` —
+registry ne odayı ne bağlantıyı bekler (S kuralı). Bağlantı aktörü
+kararı kaydeder, bildirimi `try_notice` ile (senkron `try_send`,
+B12'nin kuralı) kuyruğa bırakır ve çıkar; writer pump kuyruğu boşaltıp
+soketi kapatır — bildirim kapanıştan önce iner.
+
+**Dolu posta kutusu kuralı: sonraki tick'te yeniden dene, düşürme.**
+Registry posta kutusu DOLUYSA istek odanın kuyruğunda (sırasıyla) kalır
+ve sonraki tick'te yeniden denenir; KAPALIYSA (registry gitti — süreç
+iniyor) düşer. `DetachDespawned` raporlarının kuralının aynısı.
+Gerekçe: düşen istek, dağıtımın kapatılmasını istediği soketi açık
+bırakırdı — opt-in'in tüm amacı; sayılan bir düşüş hiçbir şeyi geri
+getirmez. Kuyruk üyelikle sınırlıdır: bir üyelik bir kez biter, bir
+kez ister; doymuş registry yetiştiği an boşalır.
+
+**Registry satırı neden BURADA yerleşir.** Oda üyeliği kendi başına
+bitirdi — önünde `RoomControl::Detach` yok — yani satır hâlâ CANLI bir
+aidiyet. Bırakılsaydı bağlantının kendi kapanışı onu `detached`
+işaretler, odanın yok saydığı bir DETACH yollardı (binding gitti ya da
+satır zaten park); despawn edilmiş bir üyenin satırı `max_connections`
+slotuyla (ızgarada `ShardGroup` üye slotuyla) sonsuza dek kalırdı.
+Kural (`registry/actor/close.rs`):
+
+- `parked` → satır `detached` işaretlenir (taşıma ölümünün satırı gibi;
+  park bitişi `DetachDespawned` ya da resume serbest bırakır). İşaret
+  HEMEN konur: bağlantının kapanışı işlenmeden park biterse de satır
+  bırakılır.
+- `parked` değil → aidiyet gider (sharded üye sayısı düşer, `leaves`
+  sayılır); taşıması ZATEN ölmüş satır (önce `ConnClosed` geldiyse)
+  doğrudan silinir — onu başka hiçbir şey bırakmazdı.
+- Bayat istek (`room` VE `entity` tutmuyor: ayrıldı, başka yere ya da
+  yeni varlıkla katıldı, satır bırakıldı) sessiz no-op.
+
+Böylece istek, bağlantının `ConnClosed`'u ve odanın `DetachDespawned`'ı
+hangi sırada gelirse gelsin aynı son duruma varılır.
+
+**Park + `Disconnect`: satır kalır, kuyruk bırakılır.** Park edilen
+satır bağlantının giden kuyruğunun bir kopyasını tutar; writer pump
+soketi ancak bütün göndericiler düşünce kapatır. Bu yüzden tavan
+`Disconnect` altında park ettiği satırın giden yarısını bırakır
+(`RoomConn::release_outbound` — kapalı bir yer tutucu). Park edilmiş
+satır zaten bir şey göndermez (BROADCAST atlar) ve resume yeni
+oturumun kuyruğunu bağlar. Taşıma ölümünde gerek yok: writer zaten
+gitti. `LeaveRoom` bu satıra dokunmaz (bugünkü gibi).
+
+**Bildirim kodu: mevcut `ERROR 9`, yeni kod DEĞİL.** Kod 9 "sunucunun
+bu oturum hakkındaki hükmü" sınıfıdır (idle, cap'ler, bütçeler,
+`superseded`, reddedilen akış — DESIGN §5.6); istemci kararı o sınıfın
+içinde kalır (`message` hangi hükmün düştüğünü söyler). Yeni bir kod
+toplamalı olurdu (base protokol evrim kuralı izin verir) ama istemciye
+yeni bir KARAR taşımazdı: kapanıştan sonra tekrar bağlanmak — park
+varsa resume ile — kod 9'un zaten anlattığı davranıştır. Bildirim
+yalnız opt-in yolda gider; varsayılanda tel bayt bayt aynıdır (testle
+sabit). Diğer kod-9 kapanışlarının beklemeli `send_frame`'i yerine
+en-iyi-çaba `try_send`: AFK üye okumayı da bırakmış olması en muhtemel
+üyedir (arka plana alınmış istemci); beklemeli gönderim aktörü
+write-stall penceresine kadar (pencere kapalıysa sonsuza dek) park
+ettirir, dağıtımın kapatılmasını istediği soketi açık tutardı.
+
+**Ayar ve oyun dikişi.** `afk_action = "leave_room" | "disconnect"`
+düz ve `[rooms.<id>]` içinde (B18 katmanlaması); yazılmazsa oyunun
+varsayılanı `GameModule::afk_action()` (sağlanan metot, varsayılan
+`LeaveRoom`) — E1'in `GameModule::input_rate` deseni. Tavanın kendisi
+(`max_idle_input_secs`) operatörün anahtarı kalır; tavan yoksa eylemin
+etkisi yoktur.
+
+**Oyun mantığına açılmadı (bilinçli).** Fiil bu turda yalnız tavanın
+eylemi. Genel bir "oyuncuyu at" (ör. `TickCtx`/bir kanca üzerinden)
+`GameLogic` + `ShardLogic` + kitin `Game`'ine yeni yüzey ve yeni
+anlambilim kararları getirirdi (üyelik hangi yoldan biter — `on_leave`
+mi `on_disconnect` mi, gerekçe metni kimin, hız sınırı) — BACKLOG'a
+ayrı madde olarak yazıldı. İç fiil (`CloseRequest`, sebep + metin
+taşıyan) buna hazır: yeni bir istek kaynağı yeni bir `ServerClose`
+etiketi ve bir üretici ekler.
+
+**Elenen alternatifler.** (1) *Registry'nin bağlantı aktörüne kapanışı
+yollayıp tabloyu bağlantının kapanışına bırakması* — despawn edilmiş
+üyenin satırı sızardı (yukarıda). (2) *Dolu posta kutusunda sayılan
+düşüş* — soket açık kalırdı. (3) *Odanın bağlantıya doğrudan yazması*
+(elinde yalnız giden çerçeve kuyruğu var) — hüküm sayılmaz, satır
+yerleşmez. (4) *Yeni `ErrorCode`* — yukarıda. (5) *`idle_timeout`
+etiketini paylaşmak* — taşıma-boşta ile girdi-boşta ayrı sorulardır;
+ayrı `idle_input` etiketi.
 
 ## 17. Süreli bekletmede veto ve veto tavanı (`max_detach_hold`)
 

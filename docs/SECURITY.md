@@ -180,13 +180,15 @@ sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
 | `superseded` | aynı kimliğin yeni oturumu eskisini kapattı |
 | `room_gone` | oda oturumun altında yok edildi / öldü |
 | `outbound_dead` | giden kanal kapalı bulundu ve kayıtlı hüküm yok (çoğunlukla yazma hatasıyla gitmiş bir peer'ın kuyruğu; bekleyen bir stall hükmü ya da peer kapanışı mailbox'tan okunup ona atfedilir — stall hükmü dolu mailbox'ta da oradadır, §3.5 karar 4) |
+| `idle_input` | odanın girdi-boşta tavanı (`max_idle_input_secs`) opt-in `afk_action = disconnect` altında: heartbeat atan ama oyun girdisi göndermeyen üye politikaya verildi, oda registry'den bağlantının kapatılmasını istedi (BACKLOG E6, RECONNECT §16.1). İstemciye en-iyi-çaba, beklemesiz ERROR 9 `input idle: …` gider |
 
 Sayılmayanlar, bilerek: istemci-tarafı son (EOF, RST, WS kapanış el
 sıkışması) — dökme değildir; sunucu kapanışı (`Shutdown`) — oturum
 hakkında hüküm değil ve toplayıcı onunla birlikte öldüğü için
 gözlenemez (istemci yine de bilgilendirilir: en-iyi-çaba ERROR 14,
 DESIGN §5.6); ticket / protokol sürümü reddi — bağlantı açık kalır;
-girdi-boşta tavanı — entity'yi politikaya verir, oturumu bitirmez.
+girdi-boşta tavanı varsayılan `afk_action = leave_room` ile — entity'yi
+politikaya verir, oturumu bitirmez (`disconnect` ile bitirir: `idle_input`).
 
 ## 3.7. WebSocket kapısının RFC 6455 uyumu (WS uyum kapısı turu)
 

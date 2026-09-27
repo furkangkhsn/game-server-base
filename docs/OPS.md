@@ -33,7 +33,7 @@ başlangıçta ön-kurulan odaların geldiği şablondur
 (`config/axes/listeners/room.rs`: `Config::room_template` → tek eşleme;
 `Config::room_config(id)` onun üstünde). Oda düzeyindeki bütün anahtarlar
 — `tick_hz`, `room_control`, `conn_action`, `max_snapshot_bytes`,
-`keepalive_hz`, `max_players`, `max_idle_input_secs`,
+`keepalive_hz`, `max_players`, `max_idle_input_secs`, `afk_action`,
 `max_detach_hold_secs`, `input_rate_hz`, `input_burst` — runtime odaya
 da gider; oyunun `[game]`
 tablosu zaten gidiyordu (fabrika, `spawn_registry`'de bir kez kurulur ve
@@ -77,8 +77,8 @@ max_detach_hold_secs = "off"
 
 - **Anahtarlar:** yalnız oda düzeyindekiler — `tick_hz`, `room_control`,
   `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
-  `max_idle_input_secs`, `max_detach_hold_secs`, `input_rate_hz`,
-  `input_burst`; yazım ve anlam düz
+  `max_idle_input_secs`, `afk_action`, `max_detach_hold_secs`,
+  `input_rate_hz`, `input_burst`; yazım ve anlam düz
   anahtarlarınki (`max_players = 0` sınırsız, `max_idle_input_secs = 0`
   kapalı, `max_detach_hold_secs` üç yazımıyla). Yazılmayan anahtar
   sunucunun değerini korur. Nokta yazımı da aynı şey:
@@ -141,6 +141,24 @@ max_detach_hold_secs = "off"
   tek şablondan — oyunun sayısını taşır; ön-kurulan bir odayı
   `handle.open_room(handle.room_config(id))` ile yeniden açmak
   idempotent kalır.
+- **Girdi-boşta tavanının eylemi: `afk_action` (BACKLOG E6,
+  RECONNECT §16.1).** `"leave_room"` ya da `"disconnect"`; başka her
+  yazım (`"kick"`, büyük harf, tire, sayı) başlatmayı iki yazımı adlayarak
+  durdurur. Düz yazılırsa her odanın, `[rooms.<id>]` içinde yalnız o
+  odanın `RoomConfig::afk_action`'ı. Katmanlar (düşükten yükseğe):
+  çekirdek (`leave_room`) → oyunun varsayılanı (`GameModule::afk_action`,
+  varsayılan `LeaveRoom`) → düz anahtar → `[rooms.<id>]`. İkisi de önce
+  üyeyi oyunun `on_disconnect`'ine verir (park / AI devri / despawn):
+  `leave_room` orada durur — soket açık, tel sessiz, istemci yeniden
+  katılabilir (bugünkü davranış); `disconnect` bağlantıyı da kapatır —
+  istemciye en-iyi-çaba ERROR 9 (`input idle: no game input for N s
+  (…)`), sonra kapanış; `server_closes{reason="idle_input"}` sayılır;
+  park edilmiş varlık aynı kimlikle yeniden bağlanınca geri alınır.
+  Tavan (`max_idle_input_secs`) yoksa etkisizdir — başlatmayı DURDURMAZ:
+  düz `disconnect`, tavanı yalnız `[rooms.<id>]`'de olan bir odaya da
+  hizmet eder. Oyunun varsayılanı dosyada görünmez
+  (`Config::room_config` dosyanın görünümü, `ServerHandle::room_config`
+  çalışan sunucununki — `input_rate` gibi).
 - **`room_count`'un ötesindeki id hata DEĞİL:** runtime odaları
   herhangi bir pozitif id ile açılır; `[rooms.9]` tam da `/rooms/open?id=9`'un
   açacağı odayı tanımlar. Hata yapmak bu kullanımı yasaklardı; uyarı
@@ -237,6 +255,14 @@ max_detach_hold_secs = "off"
   `crystal_*` (`moves`, `release_quiet/band/partner`, `untracked`,
   `fights_peak` — MAX), savaş demosu `war_kills`. `/rooms` sayaç
   listelemez (yalnız oda id'leri), değişmedi.
+- **Sunucu kapanışları: `idle_input` (E6).** `server_closes` ailesine
+  (`gsb_net_server_closes_total{reason}`, OTLP'de `gsb_net_server_closes`)
+  SONA eklenen etiket: odanın girdi-boşta tavanı `afk_action = disconnect`
+  altında kapattığı oturumlar. Log satırında `server_close_idle_input=`,
+  loadgen metrik telinde `GSMF` (`server_closes` dizisinin son slotu;
+  dizi `ServerClose::COUNT` uzunlukta olduğundan yeni sebep = yeni
+  düzen). Varsayılanda hep 0. `idle_timeout`'tan ayrı: o taşıma-boşta
+  (hiç bayt yok), bu girdi-boşta (heartbeat var, oyun girdisi yok).
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
   `gsb-metric scope=net` satırında `violations=`'dan hemen sonra

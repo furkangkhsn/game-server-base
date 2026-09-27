@@ -137,11 +137,11 @@ birbirine karışmaz:
 
 - **Oda düzeyi anahtarlar motorundur:** `tick_hz`, `room_control`,
   `conn_action`, `max_snapshot_bytes`, `keepalive_hz`, `max_players`,
-  `max_idle_input_secs`, `max_detach_hold_secs`, `input_rate_hz`,
-  `input_burst` çekirdeğin `RoomConfig`'ine
+  `max_idle_input_secs`, `afk_action`, `max_detach_hold_secs`,
+  `input_rate_hz`, `input_burst` çekirdeğin `RoomConfig`'ine
   gider (`Config::room_template`, tek eşleme). Sunucunun bütün odaları
   bunları düz anahtarlardan alır; **bir oda kendi değerlerini**
-  `[rooms.<id>]` bölümünden alabilir (aynı on anahtar, aynı yazım ve
+  `[rooms.<id>]` bölümünden alabilir (aynı on bir anahtar, aynı yazım ve
   anlam; katmanlama `RoomTemplate::room(id)`'de, tek yerde — ayrıntı
   OPS §2). Fabrika o odayı kurarken `&RoomConfig`'i zaten alıyor; oyunun
   yapması gereken bir şey yok, oyun bu bölümü görmez de.
@@ -154,7 +154,23 @@ birbirine karışmaz:
   sessizce yok sayılmaz. Oda başına OYUN ayarı (bir lobide farklı takım
   sayısı gibi) bu turun kapsamında değil: oyunun kararıdır, gerekirse
   oyun kendi tablosunda id'ye göre okur (motor politika seçmez).
-- **Tek istisna, oyunun SAYISI olan bir oda anahtarı: girdi hız sınırı
+- **Oyunun varsayılanını verdiği iki oda anahtarı var.** Motor anahtarı
+  motorundur, ama iki tanesinin değeri oynanış kararıdır; oyun onların
+  VARSAYILANINI sağlanan bir `GameModule` metoduyla verir, operatör
+  anahtarla ezer. Oyunun değerleri birlikte tek şablona girer
+  (`GameDefaults`, `configure`'dan sonra bir kez okunur).
+- **Girdi-boşta tavanının eylemi (BACKLOG E6, RECONNECT §16.1).** AFK
+  oyuncu odadan mı atılır sunucudan mı — oyunun/dağıtımın kararı.
+  `GameModule::afk_action()` (varsayılan `AfkAction::LeaveRoom` = bugünkü
+  davranış: üyelik biter, soket açık) oyunun varsayılanıdır;
+  `AfkAction::Disconnect` bağlantıyı da kapatır (ERROR 9 + kapanış,
+  `idle_input` sayılır). Her iki durumda da varlığın kaderini oyunun
+  `on_disconnect`'i seçer. Operatör düz ya da `[rooms.<id>]` `afk_action`
+  ile ezer. Tavanın kendisi (`max_idle_input_secs`) operatörün anahtarı
+  kalır — oyun dikişi yok; tavan yoksa eylemin etkisi yoktur. Repodaki
+  demolar eylem seçmez. Oyun mantığından doğrudan "bu oyuncuyu at" fiili
+  bu turda AÇILMADI (BACKLOG'da ayrı madde).
+- **Girdi hız sınırı: oyunun SAYISI olan bir oda anahtarı
   (BACKLOG E1, SECURITY §3.4).** Saniyede kaç girdinin meşru olduğunu
   oyun bilir; `GameModule::input_rate()` (sağlanan metot, varsayılan
   `None` = sınır yok, bugünkü davranış) oyunun varsayılanını verir,

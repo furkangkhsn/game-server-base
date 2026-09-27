@@ -221,6 +221,24 @@ keepalive_hz = 1.0
 # Anahtarı hiç yazmamak (varsayılan) ve 0 yazmak aynı anlama gelir: KAPALI.
 # max_idle_input_secs = 300
 
+# AFK ACTION — tavan dolunca ne olur. Varsayılan "leave_room". BACKLOG E6,
+# docs/RECONNECT.md §16.1.
+#
+# İkisi de önce üyeyi oyunun on_disconnect'ine verir (park / AI devri /
+# despawn — oyunun kararı):
+#
+#   "leave_room"  = üyelik biter, SOKET AÇIK kalır; istemciye hiçbir şey
+#                   gitmez, yeniden katılabilir (bugünkü davranış)
+#   "disconnect"  = bağlantı da kapanır: istemciye en-iyi-çaba ERROR 9
+#                   ("input idle: …"), sonra kapanış; server_closes
+#                   {reason="idle_input"} sayılır. Park edilmiş varlık
+#                   aynı kimlikle yeniden bağlanınca geri alınır.
+#
+# Yazılmazsa oyunun varsayılanı (GameModule::afk_action; repodaki oyunlar
+# vermez → "leave_room"). max_idle_input_secs yoksa etkisizdir. Bir oda
+# kendi değerini [rooms.<id>] ile alabilir (aşağıda).
+# afk_action = "disconnect"
+
 # DETACH-HOLD CEILING (saniye) — varsayılan 600 (10 dk). docs/RECONNECT.md §17.
 #
 # Kopan bir oyuncunun karakterini oyunun `may_release` vetosu ("savaşta,
@@ -393,9 +411,9 @@ keepalive_hz = 1.0
 # Bir oda (kalabalık bir oda, bir lobi) yukarıdaki ODA DÜZEYİ anahtarlardan
 # kendi değerlerini alabilir: tick_hz, room_control, conn_action,
 # max_snapshot_bytes, keepalive_hz, max_players, max_idle_input_secs,
-# max_detach_hold_secs, input_rate_hz, input_burst — aynı yazım, aynı
-# anlam (max_players = 0 sınırsız, max_detach_hold_secs = "off" tavansız,
-# input_rate_hz = 0 sınırsız). Yazılmayan anahtar sunucunun değerinde
+# afk_action, max_detach_hold_secs, input_rate_hz, input_burst — aynı
+# yazım, aynı anlam (max_players = 0 sınırsız, max_detach_hold_secs =
+# "off" tavansız, input_rate_hz = 0 sınırsız). Yazılmayan anahtar sunucunun değerinde
 # kalır; bölümü olmayan oda sunucunun odasıdır.
 #
 # Id, room_count'un ötesinde de olabilir: o zaman runtime'da

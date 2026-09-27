@@ -698,10 +698,25 @@ tekrar dene) arasında seçim yapamıyordu.
   Doğrulama sayacı değişmedi: `stream_rejected` hâlâ bir kez sayılır,
   shutdown hâlâ sayılmaz (SECURITY §3.6).
 
+**Sonraki ek: odanın girdi-boşta kapanışı (BACKLOG E6).** Tavan
+(`max_idle_input_secs`) opt-in `afk_action = disconnect` altında üyeyi
+politikaya verdikten sonra oda registry'den bağlantının kapatılmasını
+ister (`RegistryMsg::CloseConn`, RECONNECT §16.1); registry kararı
+`ConnIn::ServerClosed { IdleInput }` olarak iletir. Bildirim **mevcut
+`ERROR 9`**, mesaj `input idle: no game input for N s (…)` — oturum
+hakkında bir sunucu hükmü, kod 9'un sınıfı; yeni kod gerekmez (istemcinin
+kararı değişmez: kapanış, park varsa resume). Ve **en-iyi-çaba,
+beklemesiz** (`try_notice`), stop ve reddedilen akış gibi: kapanan üye
+okumayı da bırakmış olması en muhtemel üyedir. Sayılır:
+`server_closes{reason="idle_input"}` (yeni etiket, sona eklendi).
+Varsayılan `afk_action = leave_room`'da tel değişmez (soket açık,
+bildirim yok).
+
 **Kapanış yolları, kapı kapı (önce → sonra).** Değişmeyenler: `idle_timeout`,
 `violation_budget`, `preauth_budget`, `conn_cap`/`unauth_cap`,
 `superseded` → ERROR 9 (beklemeli gönderim, stall penceresiyle sınırlı);
-`room_gone` → ERROR 5; `write_stall`, `rel_dead`, `outbound_dead` →
+`room_gone` → ERROR 5; `idle_input` (E6) → ERROR 9 en-iyi-çaba,
+beklemesiz; `write_stall`, `rel_dead`, `outbound_dead` →
 bildirim YOK (bildirimi taşıyacak yol ölü — sayacın var olma sebebi).
 
 | Kapı | `stop()` önce | `stop()` sonra | `stream_rejected` önce | `stream_rejected` sonra |
@@ -2862,7 +2877,7 @@ durdurulamaz.
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
 | düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
 | net | `input_rate_limited` (kümülatif; satırda `violations`'dan sonra, aile tablosundan Prometheus'ta `gsb_net_input_rate_limited_total`, OTLP'de `gsb_net_input_rate_limited`, loadgen telinde GSME) | odanın girdi hız sınırı (E1, §4 "Girdi HACMİ") ne kadar girdiyi bağlantı aktöründe kesti? Sınır kapalıyken 0; ihlal değil, `actions_dropped`'tan ayrı (kanal hiç dolmadı) |
-| net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
+| net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`, `idle_input` — E6, odanın girdi-boşta tavanı `afk_action = disconnect` altında; loadgen telinde GSMF); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`
 (log-2, bütçe oranları) **bütçe sorusunu** yanıtlar: bütçeye göre
