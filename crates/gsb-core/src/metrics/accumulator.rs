@@ -66,6 +66,11 @@ pub struct MetricAccumulator {
     /// closed action channel (B51; cumulative, never attributed).
     conn_actions_dropped_closed: u64,
     conn_requests_dropped_closed: u64,
+    /// Summed deltas of the RPC requests the connection actors dropped on
+    /// a full action channel / received outside any room (B55;
+    /// cumulative, never attributed).
+    conn_requests_dropped_full: u64,
+    conn_requests_no_room: u64,
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
@@ -139,6 +144,12 @@ impl MetricAccumulator {
                 self.conn_requests_dropped_closed = self
                     .conn_requests_dropped_closed
                     .saturating_add(c.requests_dropped_closed);
+                self.conn_requests_dropped_full = self
+                    .conn_requests_dropped_full
+                    .saturating_add(c.requests_dropped_full);
+                self.conn_requests_no_room = self
+                    .conn_requests_no_room
+                    .saturating_add(c.requests_no_room);
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }

@@ -18,7 +18,12 @@
 //! `gsb_room_requests_abandoned_total`, and B54's `actions_unread=` /
 //! `actions_unbound=` / `req_unbound=` with
 //! `gsb_room_actions_dropped_{unread,unbound}_total` /
-//! `gsb_room_requests_dropped_unbound_total`.
+//! `gsb_room_requests_dropped_unbound_total`, and B55's net-scope
+//! `requests_dropped_full=` / `requests_no_room=` with
+//! `gsb_net_requests_dropped_full_total` /
+//! `gsb_net_requests_no_room_total` — plus the one deliberate HELP change
+//! of the round: `gsb_net_actions_dropped_total` now says it counts
+//! game-band actions only.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -106,6 +111,8 @@ pub(super) fn golden_report() -> MetricReport {
         input_rate_limited: 9,
         actions_dropped_closed: 0,
         requests_dropped_closed: 1,
+        requests_dropped_full: 2,
+        requests_no_room: 0,
         server_close: None,
         last: false,
     }));
@@ -121,6 +128,8 @@ pub(super) fn golden_report() -> MetricReport {
         input_rate_limited: 0,
         actions_dropped_closed: 2,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 1,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));

@@ -289,14 +289,26 @@ pub struct ConnSample {
     /// Frames received / control frames sent, delta.
     pub frames_in: u64,
     pub frames_out: u64,
-    /// Input actions this actor dropped on a full (bounded) action
-    /// channel, delta since its last flush. The only input-loss point in
-    /// the architecture (the room's READ phase is a bounded *pull* that
-    /// drops nothing, so no room-scope drop counter exists) and always
-    /// self-inflicted: a
-    /// flooding connection drops its own input. The collector sums these
-    /// per connection so a report can attribute the loss to its sender.
+    /// Game-band input actions this actor dropped on a full (bounded)
+    /// action channel, delta since its last flush. The flooding loss point
+    /// (the room's READ phase is a bounded *pull* that defers) and always
+    /// self-inflicted: a flooding connection drops its own input. The
+    /// collector sums these per connection so a report can attribute the
+    /// loss to its sender. Game actions only since B55 — an RPC request
+    /// dropped the same way is [`Self::requests_dropped_full`] (before, it
+    /// was counted here too).
     pub actions_dropped: u64,
+    /// RPC requests this actor dropped on a full action channel, delta
+    /// since its last flush (B55): never processed, never answered — a
+    /// term of the RPC ledger (`docs/RPC-CONTROL-PLANE.md` §8.3).
+    pub requests_dropped_full: u64,
+    /// RPC requests that arrived while this connection was in NO room
+    /// (never joined, left, or its membership ended), delta since its last
+    /// flush (B55): not forwarded, answered `ERROR 6` while the violation
+    /// answer limit allows (silent after), and each ALSO counted as a
+    /// race-class violation in [`Self::violations`] — the violation
+    /// accounting is unchanged; this is the RPC ledger's own term.
+    pub requests_no_room: u64,
     /// Game-band actions this actor forwarded into an already CLOSED
     /// action channel, delta since its last flush (B51): the room had
     /// ended the membership itself (a kick, the input-idle ceiling, the

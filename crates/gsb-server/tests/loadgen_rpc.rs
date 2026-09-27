@@ -50,7 +50,7 @@ fn num(line: &str, kv: &HashMap<String, String>, k: &str) -> u64 {
 /// The RPC ledger (docs/RPC-CONTROL-PLANE.md §8.3): every request a
 /// client sent lands in exactly one of these terms — the room's buckets
 /// and the connection-side drops. Every term must be on the line.
-const LEDGER: [&str; 12] = [
+const LEDGER: [&str; 14] = [
     "req_local",
     "req_ext",
     "req_rej_malformed",
@@ -63,6 +63,8 @@ const LEDGER: [&str; 12] = [
     "req_unread",
     "req_unbound",
     "requests_dropped_closed",
+    "requests_dropped_full",
+    "requests_no_room",
 ];
 
 /// The ledger's sum on a RESULT line.
@@ -125,9 +127,12 @@ fn every_request_is_answered_once_at_a_sane_rate() {
         "req_rej_logic",
         "req_refused",
         "req_to",
-        // The connection-side term of the ledger (B51): 0 here — every
-        // membership is ended by its client, never by the room.
+        // The connection-side terms of the ledger (B51, B55): 0 here —
+        // every membership is ended by its client, never by the room, no
+        // action channel fills, and no request is sent outside a room.
         "requests_dropped_closed",
+        "requests_dropped_full",
+        "requests_no_room",
     ] {
         assert_eq!(get(k), 0, "{k}: {line}");
     }

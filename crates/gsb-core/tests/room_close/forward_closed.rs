@@ -129,6 +129,7 @@ impl Seated {
                     actions_dropped: t.actions_dropped + s.actions_dropped,
                     actions_dropped_closed: t.actions_dropped_closed + s.actions_dropped_closed,
                     requests_dropped_closed: t.requests_dropped_closed + s.requests_dropped_closed,
+                    requests_no_room: t.requests_no_room + s.requests_no_room,
                     ..s
                 },
             });
@@ -167,6 +168,10 @@ async fn a_request_that_overtakes_the_end_of_the_membership_is_counted() {
 
     let sum = s.ended().await;
     assert_eq!(sum.requests_dropped_closed, 1, "the one lost request");
+    assert_eq!(
+        sum.requests_no_room, 1,
+        "the second, answered ERROR 6: in the ledger once, elsewhere (B55)"
+    );
     assert_eq!(sum.actions_dropped_closed, 0, "no game action was sent");
     assert_eq!(sum.actions_dropped, 0, "not a full channel");
 }

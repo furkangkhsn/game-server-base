@@ -845,7 +845,14 @@ değişmedi.
 İkisiyle oda defteri kapanıyor:
 
 > `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
-> + req_unbound + requests_dropped_closed`
+> + req_unbound + requests_dropped_closed + requests_dropped_full
+> + requests_no_room`
+
+Her istek tam olarak BİR terimdedir: oda kovaları (işlendi, reddedildi,
+yanıtsız reddedildi, okunmadı, bağlanmamış bağlantıdan çekildi) ile
+bağlantı tarafındaki üç kenar (kapalı kanal, dolu kanal, oda yok) ayrık
+yerlerde ve ayrık koşullarda sayılır — bir istek bağlantıda düştüyse
+odaya hiç ulaşmamıştır.
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
@@ -878,11 +885,28 @@ Son terim oda sayacı değil, net kapsamının (B51, aşağıda): üyeliği ODA
 bitirdiğinde (atma, girdi-boşta tavanı, oda kapanışı/emekliliği)
 bağlantının bildirimden önce kapalı kanala ilettiği istek odaya hiç
 ulaşmaz. Loadgen'de üyeliği hep istemci bitirdiğinden 0 (testler bunu
-da iddia ediyor). Defterin dışında kalan iki kenar, ikisi de loadgen'de
-0: dolu action kanalında düşen istek `actions_dropped`'ta (oyun
-girdileriyle karışık — ayrılamaz), odası olmayan bağlantıya gelen
-istek `ERROR 6` ile yanıtlanır ve yarış sınıfı ihlal olarak
-`violations`'ta sayılır (öteki ihlallerle karışık — ayrılamaz; §11).
+da iddia ediyor).
+
+**B55: defterin ayrılamayan iki kenarı ayrıldı.** Sayım turu 2'ye dek
+iki kenar defterin DIŞINDAYDI: dolu action kanalında düşen istek
+`actions_dropped`'ta oyun girdileriyle karışıktı, odası olmayan
+bağlantıya gelen istek yalnız yarış sınıfı ihlal olarak `violations`'ta
+sayılıyordu. Artık bağlantı aktörü ikisini de kendi sayacında sayar
+(`ConnSample`/`NetReport::requests_dropped_full`, `::requests_no_room`;
+`gsb-metric scope=net`'te `requests_dropped_closed=`'dan sonra;
+Prometheus'ta `gsb_net_requests_dropped_full_total`,
+`gsb_net_requests_no_room_total`; loadgen telinde `GSMM`; `RESULT`'ta).
+`actions_dropped` bununla anlamca DARALDI: yalnız oyun-bandı girdisi
+(adının dediği; HELP'i de bunu söylüyor). İhlal muhasebesi değişmedi:
+odası olmayan istek hâlâ `violations`'ta ve bütçede; `requests_no_room`
+onun defterdeki tek sayımıdır (ilk birkaçı `ERROR 6` alır, sonrakiler
+sessiz — ikisi de sayılır). Kimlik doğrulamadan önce gelen istek de aynı
+yoldan geçer (odası yok) ve aynı terimde sayılır. Kilit:
+`gsb-core/tests/conn_counts/requests.rs` (dolu kanal: iki istek + bir
+girdi → 2 ve 1; oda yok: katılmadan önce ve ayrıldıktan sonra → 2, ihlal
+3 değişmeden), `room_close::forward_closed` (kapalı kanaldan sonraki
+`ERROR 6`'lı istek → `requests_no_room` 1), `loadgen_rpc.rs` her testte
+defterin 14 teriminin toplamını `rpc_sent`'e eşitler.
 
 **B51: üyelik bittikten sonra bağlantıda düşen istek (kapandı).**
 `forward_to_room`'un `Closed` kolu artık sayar: `RPC_REQ` ise
@@ -1036,15 +1060,12 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   kalıntısı)**~~ **Yapıldı (B51):** kapalı kanala iletilen istek
   bağlantı aktöründe `requests_dropped_closed` olarak (düz girdi
   `actions_dropped_closed` olarak) sayılıyor, defterin son terimi — §8.3.
-- **Odası olmayan bağlantının isteği:** üyelik bittikten sonra (ya da
-  hiç katılmadan) gelen `RPC_REQ` `ERROR 6` ile yanıtlanır (ilk
-  birkaçı; sonrakiler sessiz) ve yarış sınıfı ihlal olarak `violations`'ta
-  sayılır — sessiz kayıp değil, ama öteki ihlallerle karışık, defter için
-  ayrılamaz; istemci bunu korelasyonlu bir yanıt olarak görmez (defteri
-  onu açık/yanıtsız sayar). Loadgen'de yok.
-- **Dolu action kanalında düşen istek:** `actions_dropped`'ta oyun
-  girdileriyle birlikte sayılıyor; defter için ayrılamaz. Loadgen'de 0
-  (kanal kapasitesi çekim bütçesinin çok üstünde).
+- ~~**Odası olmayan bağlantının isteği**~~ **Yapıldı (B55):**
+  `ERROR 6` + `violations` aynen; ayrıca `requests_no_room`'da defterin
+  terimi (§8.3). İstemci bunu hâlâ korelasyonlu bir yanıt olarak görmez
+  (defteri onu açık/yanıtsız sayar) — tel değişmedi.
+- ~~**Dolu action kanalında düşen istek**~~ **Yapıldı (B55):**
+  `requests_dropped_full`; `actions_dropped` artık yalnız oyun girdisi.
 
 ## 12. Testler: sözleşmenin kilidi
 

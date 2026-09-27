@@ -132,6 +132,8 @@ fn accumulator_applies_events_and_computes_rates() {
         input_rate_limited: 2,
         actions_dropped_closed: 0,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 0,
         server_close: None,
         last: false,
     }));
@@ -167,6 +169,8 @@ fn accumulator_applies_events_and_computes_rates() {
         input_rate_limited: 4,
         actions_dropped_closed: 0,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 0,
         server_close: None,
         last: true,
     }));

@@ -430,7 +430,7 @@ pub(crate) fn print_report(
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
          server_cpu_s={:.1} clients_cpu_s={:.1} \
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
-           actions_dropped_top={} actions_dropped_closed={} requests_dropped_closed={} transport={} retrans_out={} dup_in={} oob_dropped={} \
+           actions_dropped_top={} actions_dropped_closed={} requests_dropped_closed={} requests_dropped_full={} requests_no_room={} transport={} retrans_out={} dup_in={} oob_dropped={} \
             gave_up={} frag_reassembled={} frag_dropped={} hs_retries={} acks={} \
             ack_processed_max={} \
             ack_lag_max_ms={} fulls={} \
@@ -518,6 +518,8 @@ pub(crate) fn print_report(
             .unwrap_or_default(),
         net.map(|n| n.actions_dropped_closed).unwrap_or(0),
         net.map(|n| n.requests_dropped_closed).unwrap_or(0),
+        net.map(|n| n.requests_dropped_full).unwrap_or(0),
+        net.map(|n| n.requests_no_room).unwrap_or(0),
         args.transport,
         retrans_out,
         dup_in,

@@ -150,7 +150,13 @@ impl super::ConnectionActor {
     pub(super) async fn forward_to_room(&mut self, frame: FrameBody, metered: bool) {
         if self.actions.is_none() {
             // Not in a room (or the room went away): report it — before
-            // the gate, so the race class keeps its answer.
+            // the gate, so the race class keeps its answer. An RPC request
+            // is also counted as one (B55): the violation count mixes it
+            // with every other violation, and the RPC ledger needs it
+            // alone. (Answered only within the violation answer limit.)
+            if frame.op == op::base::RPC_REQ {
+                self.m_requests_no_room += 1;
+            }
             self.reply_err(ProtoError::NotInRoom).await;
             return;
         }
@@ -186,7 +192,14 @@ impl super::ConnectionActor {
         }) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                self.m_actions_dropped += 1;
+                // Requests apart from game actions (B55): each counter
+                // says what it counts — `actions_dropped` the game band,
+                // `requests_dropped_full` the RPC ledger's term.
+                if frame.op == op::base::RPC_REQ {
+                    self.m_requests_dropped_full += 1;
+                } else {
+                    self.m_actions_dropped += 1;
+                }
                 if !self.m_actions_dropped_warned {
                     self.m_actions_dropped_warned = true;
                     warn!(

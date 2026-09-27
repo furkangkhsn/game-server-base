@@ -185,6 +185,8 @@ impl MetricAccumulator {
                 input_rate_limited: self.conn_input_rate_limited,
                 actions_dropped_closed: self.conn_actions_dropped_closed,
                 requests_dropped_closed: self.conn_requests_dropped_closed,
+                requests_dropped_full: self.conn_requests_dropped_full,
+                requests_no_room: self.conn_requests_no_room,
                 server_closes: self.conn_server_closes,
             },
             actions_dropped_top,

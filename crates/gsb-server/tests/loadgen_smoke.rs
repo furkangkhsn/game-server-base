@@ -162,7 +162,13 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
     // The connection-side forwards into a closed action channel (B51):
     // every smoke membership is ended by its client, never by the room,
     // so none can meet a closed channel.
-    for k in ["actions_dropped_closed", "requests_dropped_closed"] {
+    // Nor can a smoke client send an RPC request (B55's two terms).
+    for k in [
+        "actions_dropped_closed",
+        "requests_dropped_closed",
+        "requests_dropped_full",
+        "requests_no_room",
+    ] {
         let v: u64 = get(k).parse().expect("number");
         assert_eq!(v, 0, "the room ended no membership; {k} must be 0");
     }

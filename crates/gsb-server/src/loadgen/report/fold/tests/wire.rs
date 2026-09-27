@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"LMSG", "the magic, little-endian GSML");
+    assert_eq!(&frame[..4], b"MMSG", "the magic, little-endian GSMM");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -282,6 +282,26 @@ fn the_closed_channel_forwards_survive_the_wire() {
     assert_eq!(got.net.input_rate_limited, 5);
     assert_eq!(got.net.actions_dropped_closed, 7);
     assert_eq!(got.net.requests_dropped_closed, 11);
+    assert_eq!(got.net.server_closes.total(), 1);
+}
+
+/// The RPC ledger's two connection-side edges (GSMM, B55) cross the wire
+/// as their own fields, after the closed-channel forwards.
+#[test]
+fn the_full_channel_and_no_room_requests_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.net.actions_dropped = 3;
+    sent.net.requests_dropped_closed = 11;
+    sent.net.requests_dropped_full = 13;
+    sent.net.requests_no_room = 17;
+    sent.net
+        .server_closes
+        .add(gsb_core::conn::ServerClose::Kicked);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.net.actions_dropped, 3);
+    assert_eq!(got.net.requests_dropped_closed, 11);
+    assert_eq!(got.net.requests_dropped_full, 13);
+    assert_eq!(got.net.requests_no_room, 17);
     assert_eq!(got.net.server_closes.total(), 1);
 }
 

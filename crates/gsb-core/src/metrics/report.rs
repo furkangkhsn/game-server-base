@@ -178,10 +178,12 @@ pub struct NetReport {
     pub frames_in: u64,
     /// Control frames sent by connection actors.
     pub frames_out: u64,
-    /// Input actions dropped on full (bounded) per-connection action
-    /// channels (cumulative, all connections). The per-connection
+    /// Game-band input actions dropped on full (bounded) per-connection
+    /// action channels (cumulative, all connections). The per-connection
     /// attribution (who dropped what) is in
-    /// [`MetricReport::actions_dropped_top`].
+    /// [`MetricReport::actions_dropped_top`]. Game actions only since
+    /// B55: RPC requests dropped the same way are
+    /// [`Self::requests_dropped_full`].
     pub actions_dropped: u64,
     /// Protocol-violation events counted by the connection actors'
     /// violation budgets (cumulative, all connections). 0 on a healthy
@@ -202,6 +204,12 @@ pub struct NetReport {
     /// a request is counted in the second only.
     pub actions_dropped_closed: u64,
     pub requests_dropped_closed: u64,
+    /// RPC requests dropped on a full action channel, and RPC requests
+    /// received outside any room (cumulative, all connections; B55, see
+    /// [`crate::metrics::ConnSample::requests_dropped_full`]). Both are
+    /// terms of the RPC ledger; the second is also in [`Self::violations`].
+    pub requests_dropped_full: u64,
+    pub requests_no_room: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -275,6 +283,8 @@ impl MetricReport {
                 input_rate_limited: 0,
                 actions_dropped_closed: 0,
                 requests_dropped_closed: 0,
+                requests_dropped_full: 0,
+                requests_no_room: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),

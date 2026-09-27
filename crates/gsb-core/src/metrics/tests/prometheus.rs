@@ -217,6 +217,8 @@ fn input_drops_are_exported_only_at_the_net_scope() {
             input_rate_limited: 0,
             actions_dropped_closed: 0,
             requests_dropped_closed: 0,
+            requests_dropped_full: 0,
+            requests_no_room: 0,
             server_close: None,
             last: false,
         }));

@@ -315,8 +315,8 @@ max_detach_hold_secs = "off"
   `RoomGone`) öğrenir. Arada ilettiği kare kapalı kanala çarpar ve
   odaya hiç ulaşmaz — sayıldığı yer bağlantı aktörü, iki ayrık sayaç:
   RPC istekleri (`RPC_REQ`) `requests_dropped_closed`, oyun-bandı
-  girdileri `actions_dropped_closed` (`actions_dropped`'ın aksine — o dolu
-  kanalda istekleri de sayar — ayrık). `gsb-metric scope=net` satırında
+  girdileri `actions_dropped_closed` (ayrık; dolu kanalda da B55'ten beri
+  aynı ayrım: `actions_dropped` / `requests_dropped_full`). `gsb-metric scope=net` satırında
   `input_rate_limited=`'den hemen sonra `actions_dropped_closed=<n>
   requests_dropped_closed=<n>`; aile tablosunda (`NET`)
   `gsb_net_input_rate_limited_total`'dan hemen sonra
@@ -329,6 +329,29 @@ max_detach_hold_secs = "off"
   6` alır ve yarış sınıfı ihlal olarak `violations`'ta sayılır), yani
   biten üyelik başına en çok bir kare buraya düşer. RPC defterinin bağlantı tarafı terimi (RPC-CONTROL-PLANE
   §8.3); loadgen'de hep 0 (üyeliği hep istemci bitirir).
+- **Net kapsamı: RPC defterinin bağlantı tarafındaki iki kenarı (B55) ve
+  `actions_dropped`'ın DARALAN anlamı.** Bağlantının `try_send`'i DOLU
+  action kanalına çarptığında RPC isteğini (`RPC_REQ`) artık
+  `requests_dropped_full`'da sayar; **`actions_dropped`
+  (`gsb_net_actions_dropped_total`, `actions_dropped_top`) yalnız
+  oyun-bandı girdisini sayar** — sayım turu 2'ye dek istekleri de
+  sayıyordu. Adı ve HELP'i ("Game-band input actions …, RPC requests are
+  counted apart") artık aynı şeyi söylüyor; bu, ailenin tek bilinçli HELP
+  değişikliği (altın metinler). Odası olmayan bağlantıya gelen istek
+  (hiç katılmadı, ayrıldı ya da üyeliği bitti; kimlik doğrulamadan önce
+  dahil) `ERROR 6` ile yanıtlanır (ihlal yanıt sınırı içinde; sonra
+  sessiz) ve yarış sınıfı ihlal olarak `violations`'ta sayılmaya DEVAM
+  eder; ayrıca `requests_no_room`'da bir kez sayılır (ihlal sayacı
+  değişmedi, defter kendi terimini aldı). `gsb-metric scope=net`
+  satırında `requests_dropped_closed=`'dan sonra `requests_dropped_full=
+  requests_no_room=`; aile tablosunda (`NET`)
+  `gsb_net_requests_dropped_full_total`, `gsb_net_requests_no_room_total`
+  (OTLP'de `_total`'sız); loadgen telinde `GSMM`; `RESULT`'ta
+  `requests_dropped_closed=`'dan sonra, her satırda. Defter
+  (RPC-CONTROL-PLANE §8.3): `rpc_sent = req_local + req_ext + Σ req_rej_*
+  + req_refused + req_unread + req_unbound + requests_dropped_closed +
+  requests_dropped_full + requests_no_room` — her istek tam olarak bir
+  terimde.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

@@ -54,13 +54,22 @@ pub struct ConnectionActor {
     m_in_frames: u64,
     m_out_bytes: u64,
     m_out_frames: u64,
-    /// Input actions this actor dropped on a full (bounded) per-connection
-    /// action channel, delta since the last flush. This is the *only*
-    /// input-loss point in the architecture (the room's READ phase is a
-    /// bounded pull and never drops — see `room::RoomCounters`), and the
-    /// drop is attributed to the sender: a flooding connection drops its
-    /// own input, never another connection's.
+    /// Game-band input actions this actor dropped on a full (bounded)
+    /// per-connection action channel, delta since the last flush — the
+    /// flooding loss point (the room's READ phase is a bounded pull that
+    /// defers), attributed to the sender: a flooding connection drops its
+    /// own input, never another connection's. RPC requests dropped the
+    /// same way are counted apart since B55: `m_requests_dropped_full`.
     m_actions_dropped: u64,
+    /// RPC requests (`RPC_REQ`) this actor dropped on a full action
+    /// channel, delta since the last flush (B55; a term of the RPC
+    /// ledger — see `ConnSample::requests_dropped_full`).
+    m_requests_dropped_full: u64,
+    /// RPC requests that arrived while this connection was in no room
+    /// (answered `ERROR 6` within the violation answer limit, silent
+    /// after; each also a race-class violation), delta since the last
+    /// flush (B55; see `ConnSample::requests_no_room`).
+    m_requests_no_room: u64,
     /// Warned once about action drops (the drop *count* is in the metrics
     /// samples; per-drop warnings would flood the log exactly when a
     /// flooder is doing what it does).

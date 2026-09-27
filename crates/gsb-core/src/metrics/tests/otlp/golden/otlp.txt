@@ -32,7 +32,7 @@ gsb_net_frames_in sum t=2 mono=true unit="" n=1 | Frames received over all conne
   [] 1000..2000 int 21
 gsb_net_frames_out sum t=2 mono=true unit="" n=1 | Control frames sent by connection actors, cumulative.
   [] 1000..2000 int 3
-gsb_net_actions_dropped sum t=2 mono=true unit="" n=1 | Input actions dropped on full per-connection action channels, cumulative.
+gsb_net_actions_dropped sum t=2 mono=true unit="" n=1 | Game-band input actions dropped on full per-connection action channels (RPC requests are counted apart), cumulative.
   [] 1000..2000 int 5
 gsb_net_violations sum t=2 mono=true unit="" n=1 | Protocol-violation events counted by violation budgets, cumulative.
   [] 1000..2000 int 1
@@ -41,6 +41,10 @@ gsb_net_input_rate_limited sum t=2 mono=true unit="" n=1 | Valid game-band input
 gsb_net_actions_dropped_closed sum t=2 mono=true unit="" n=1 | Game-band actions a connection forwarded after the room had ended its membership (closed action channel; never seen by the room), cumulative.
   [] 1000..2000 int 2
 gsb_net_requests_dropped_closed sum t=2 mono=true unit="" n=1 | RPC requests a connection forwarded after the room had ended its membership (closed action channel; never processed, never answered), cumulative.
+  [] 1000..2000 int 1
+gsb_net_requests_dropped_full sum t=2 mono=true unit="" n=1 | RPC requests a connection dropped on its full action channel (never processed, never answered), cumulative.
+  [] 1000..2000 int 2
+gsb_net_requests_no_room sum t=2 mono=true unit="" n=1 | RPC requests received by a connection in no room (not forwarded; answered ERROR 6 within the violation answer limit; also counted as violations), cumulative.
   [] 1000..2000 int 1
 gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1

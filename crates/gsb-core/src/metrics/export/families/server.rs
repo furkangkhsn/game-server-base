@@ -95,7 +95,7 @@ const fn net(
 /// The net scope: wire traffic aggregated over all connections (the
 /// per-connection attribution lives in `actions_dropped_top` and the
 /// per-actor log lines, not in this aggregate).
-pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 11] = [
+pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 13] = [
     net(
         "gsb_net_bytes_in_total",
         "Wire bytes received over all connections (frame bodies), cumulative.",
@@ -128,7 +128,7 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 11] = [
     ),
     net(
         "gsb_net_actions_dropped_total",
-        "Input actions dropped on full per-connection action channels, cumulative.",
+        "Game-band input actions dropped on full per-connection action channels (RPC requests are counted apart), cumulative.",
         |n| n.actions_dropped,
     ),
     net(
@@ -152,5 +152,16 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 11] = [
         "gsb_net_requests_dropped_closed_total",
         "RPC requests a connection forwarded after the room had ended its membership (closed action channel; never processed, never answered), cumulative.",
         |n| n.requests_dropped_closed,
+    ),
+    // B55: the RPC ledger's two connection-side edges, alone.
+    net(
+        "gsb_net_requests_dropped_full_total",
+        "RPC requests a connection dropped on its full action channel (never processed, never answered), cumulative.",
+        |n| n.requests_dropped_full,
+    ),
+    net(
+        "gsb_net_requests_no_room_total",
+        "RPC requests received by a connection in no room (not forwarded; answered ERROR 6 within the violation answer limit; also counted as violations), cumulative.",
+        |n| n.requests_no_room,
     ),
 ];

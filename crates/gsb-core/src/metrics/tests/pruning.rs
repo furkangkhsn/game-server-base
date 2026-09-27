@@ -67,6 +67,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
             input_rate_limited: 0,
             actions_dropped_closed: 0,
             requests_dropped_closed: 0,
+            requests_dropped_full: 0,
+            requests_no_room: 0,
             server_close: None,
             last: false,
         }));
@@ -89,6 +91,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         input_rate_limited: 0,
         actions_dropped_closed: 0,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 0,
         server_close: None,
         last: true,
     }));
@@ -105,6 +109,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         input_rate_limited: 0,
         actions_dropped_closed: 0,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 0,
         server_close: None,
         last: false,
     }));
@@ -133,6 +139,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         input_rate_limited: 0,
         actions_dropped_closed: 0,
         requests_dropped_closed: 0,
+        requests_dropped_full: 0,
+        requests_no_room: 0,
         server_close: None,
         last: true,
     }));

@@ -54,6 +54,8 @@ impl super::ConnectionActor {
             m_actions_dropped_warned: false,
             m_actions_dropped_closed: 0,
             m_requests_dropped_closed: 0,
+            m_requests_dropped_full: 0,
+            m_requests_no_room: 0,
             m_input_limited: 0,
             m_input_limited_warned: false,
             input: Default::default(),
@@ -210,6 +212,8 @@ impl super::ConnectionActor {
         let adrops = self.m_actions_dropped;
         let aclosed = self.m_actions_dropped_closed;
         let rclosed = self.m_requests_dropped_closed;
+        let rfull = self.m_requests_dropped_full;
+        let rnoroom = self.m_requests_no_room;
         let drops = self.m_metrics_dropped;
         let viols = self.m_violations;
         let limited = self.m_input_limited;
@@ -225,6 +229,8 @@ impl super::ConnectionActor {
             && adrops == 0
             && aclosed == 0
             && rclosed == 0
+            && rfull == 0
+            && rnoroom == 0
             && drops == 0
             && viols == 0
             && limited == 0
@@ -242,6 +248,8 @@ impl super::ConnectionActor {
         self.m_actions_dropped = 0;
         self.m_actions_dropped_closed = 0;
         self.m_requests_dropped_closed = 0;
+        self.m_requests_dropped_full = 0;
+        self.m_requests_no_room = 0;
         self.m_metrics_dropped = 0;
         self.m_violations = 0;
         self.m_input_limited = 0;
@@ -260,6 +268,8 @@ impl super::ConnectionActor {
                 actions_dropped: adrops,
                 actions_dropped_closed: aclosed,
                 requests_dropped_closed: rclosed,
+                requests_dropped_full: rfull,
+                requests_no_room: rnoroom,
                 metrics_dropped: drops,
                 violations: viols,
                 input_rate_limited: limited,
