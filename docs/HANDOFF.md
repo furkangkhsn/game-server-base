@@ -148,6 +148,12 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**F23 tamam** (CHANGELOG "F23"): gerçek saatli testlerin kuralı
+CONTRIBUTING "Gerçek saatli testler"de — tick/motor süresi sayan test
+paused saatte; duvar saatine bağlı (toplayıcı periyodu, bağlantı
+pencereleri, loadgen son tarihleri) test koşulu bekler; sahte uç ölçülen
+kodun darboğazı olmaz. Açık: B44, B45, F24.
+
 **B41 tamam** (RECONNECT §16.1, CHANGELOG "B41"): `disconnect` altında
 dolu posta kutusunun arkasında bekleyen kapatma isteği, `parked`'ı
 gönderimde yeniden sınayarak (`reconcile_closes`) yollanır — parkı önden

@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F23 — yükte düşen gerçek saatli testler (`test/f23-flaky`)
+
+Yük altında (1 dk load 15+) ara sıra düşen testler sistematik arandı: 30
+ve 64 meşgul döngülük CPU yükü altında (32 çekirdek) tam süit, varsayılan
+ve `otlp`: önce 30 koşu (7 düşüş, 3 test), düzeltmeden sonra 64 yükte 20
+koşu 0 düşüş; ayrıca şüpheliler tek başına 64–300 kez paralel ve statik
+tarama. Yalnız testler değişti, motor değişmedi.
+
+- `client::accounting::tests::ws_bytes_are_the_messages_on_the_wire`:
+  sahte WS peer tamponsuz okuduğu için flood birikimini 500 ms'lik LEAVE
+  penceresinde eritemiyordu (~%11). Peer tamponlu okur.
+- `metrics::tests::collector::room_counters_flow_to_collector` ve
+  `metrics::tests::export::…_in_order`: toplayıcının periyodu duvar
+  saatinde; "250/80 ms'de ≥ N" pencereleri zamanlayıcıya bağlıydı. Artık
+  durumu bekler; toplayıcı testi her ardışık rapor çiftinde birikimli
+  sayaçların azalmadığını da denetler (öncekinden güçlü).
+- `loadgen_drives_the_mmo`: 4 sn'lik koşuda yükte yeterli tutarlı kesit
+  çıkmıyordu (sözleşme uçuştaki oyuncuyu bir kesitten düşürebilir); koşu 8
+  sn, iddia tam eşitlik (±1 mutasyonu düşer).
+- Kural CONTRIBUTING "Gerçek saatli testler"de: tick/motor süresi sayan
+  test paused saatte; duvar saatine bağlı test koşulu bekler, sabit
+  pencerede saymaz; sahte uç ölçülen kodun darboğazı olmaz.
+- **Yan bulgular (düzeltilmedi → BACKLOG):** B44 boot odası yarışı, B45
+  loadgen'in eksik satırlı "tutarlı kesit"i, F24 `afk_action` heartbeat
+  yoklaması.
+
+Test sayısı değişmedi (1220; `otlp` 1238). Ebeveynin bağımsız mutasyonu
+(WS istemci maskesini saymamak) düzeltilen testi hâlâ kırıyor.
+
 ## B41 — `Disconnect` + park: bekleyen kapatma isteği parkın raporunun arkasında (`fix/b41-close-ordering`)
 
 `afk_action = disconnect` altında dolu registry posta kutusunun arkasında

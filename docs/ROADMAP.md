@@ -81,7 +81,11 @@ Test sayısı: bugün itibarıyla **1220** (1220/1220 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
 388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B41 — `Disconnect` + park kapatma sırası** (RECONNECT §16.1) —
+Son tur: **F23 — yükte düşen gerçek saatli testler** — dört test
+düzeltildi (loadgen muhasebe peer'ı, toplayıcı ×2, MMO smoke), 64 meşgul
+döngü yükünde 20 tam koşu 0 düşüş; kural CONTRIBUTING'de. Yan bulgular
+B44 (boot odası yarışı), B45 (loadgen kesiti) sırada.
+Önceki tur: **B41 — `Disconnect` + park kapatma sırası** (RECONNECT §16.1) —
 bekleyen kapatma isteğinin `parked`'ı gönderimde yeniden sınanır; parkın
 raporu önden gittiyse istek despawn yerleşir, satır sızmaz.
 Önceki tur: **B40 — varsayılan idle-kick** (RECONNECT §16/§16.2) — bağlantı
