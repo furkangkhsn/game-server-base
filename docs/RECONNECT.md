@@ -569,7 +569,8 @@ Kural (`registry/actor/close.rs`):
 - `parked` → satır `detached` işaretlenir (taşıma ölümünün satırı gibi;
   park bitişi `DetachDespawned` ya da resume serbest bırakır). İşaret
   HEMEN konur: bağlantının kapanışı işlenmeden park biterse de satır
-  bırakılır.
+  bırakılır. `parked`, odanın isteği GÖNDERDİĞİ andaki durumudur (B41,
+  aşağıda): parkın raporu istekten önce varamaz.
 - `parked` değil → aidiyet gider (sharded üye sayısı düşer, `leaves`
   sayılır); taşıması ZATEN ölmüş satır (önce `ConnClosed` geldiyse)
   doğrudan silinir — onu başka hiçbir şey bırakmazdı.
@@ -578,6 +579,52 @@ Kural (`registry/actor/close.rs`):
 
 Böylece istek, bağlantının `ConnClosed`'u ve odanın `DetachDespawned`'ı
 hangi sırada gelirse gelsin aynı son duruma varılır.
+
+**Bekleyen istekte park gönderimde yeniden sınanır (B41).** Registry,
+satır henüz `detached` değilken gelen bir `DetachDespawned`'ı bayat bir
+yankı sayıp düşürür (resume'un yeniden bağladığı satırı korumak için).
+Dolu posta kutusunun arkasında `parked` diye bekleyen bir istek bu
+yüzden yanlışa düşerdi: park beklerken despawn ile biterse (kısa ya da
+sıfır grace) parkın raporu 0c fazında, bekleyen isteğin 0d gönderiminden
+ÖNCE yola çıkar; registry onu düşürür, ardından gelen `parked` istek
+satırı `detached` işaretler ve onu bırakacak hiçbir olay kalmaz
+(bağlantının kapanışının yönlendirdiği DETACH'ı oda yok sayar: binding
+gitti). Satır `max_connections` slotunu — ızgarada `ShardGroup` üye
+slotunu — aynı kimlik o odaya dönene ya da oda bitene dek tutardı ve
+`RoomStatus` onu üye sayardı. Deterministik olarak kuruldu: tek slotluk,
+dolu bir registry posta kutusu (testin elindeki alıcı adım adım
+boşaltılır), sıfır grace'li park; registry'ye varış sırası
+`DetachDespawned`, `CloseConn(parked=true)` idi
+(`room/tests/idle/afk/races.rs`, shard'da `shard/tests/idle/afk.rs`;
+registry'deki sonucu `tests/room_close/close_races.rs` sabitler).
+
+Kural (`reconcile_closes`, oda ve shard): her gönderim denemesinden önce
+bekleyen istek, oda bağlantının bir üyeliğini hâlâ tutuyorsa `parked`
+kalır — park, onu devralan bot (slot hâlâ dolu) ya da açık bağlantının
+yeniden aldığı üyelik (resume/rejoin; onu bağlantının kendi kapanışı
+taşıma-ölümü yolundan yerleştirir). Tutmuyorsa `parked = false`: istek
+despawn olarak yerleşir. İki varış sırası da aynı sona varır — rapor
+önce: no-op, istek aidiyeti bırakır; istek önce: aidiyet gider, rapor
+bayat. Bayrak yalnız `true`'dan `false`'a döner (despawn geri alınamaz).
+Shard'da beklerken komşuya göç eden park burada bitmiş görünür: istek
+despawn yerleşir ve park yaşarken registry onu saymaz — eksik sayım,
+sızıntı değil; park bitince ya da resume edilince kendini onarır (göç
+eden parkın raporunu komşu shard yollar, ayrı bir gönderici: hiçbir
+oda-içi sıra onu isteğin arkasına koyamaz).
+
+Elenenler: (1) *B40'ın "rapor önünde bekleme" kuralını kapatma isteğine
+de uygulamak* — tek başına yetmez: rapor kuyrukta beklemez, 0c'de gider
+ve 0d'deki isteğin önüne zaten geçmiştir; üstelik `Disconnect` + despawn
+kolu kendi raporunu aynı 0d'de kuyruğa koyduğundan her kapatmayı bir
+tick geciktirirdi. Gönderimde sınama ile sıra önemsizleşir. (2) *Oda
+başına tek sıralı giden kutusu* (rapor, kapatma, ayrılma tek FIFO, ilk
+DOLU'da durur) — oda-içi nedensel sırayı korur ve bu yarışı kapatır;
+ama B40'ın başka bir oturumun resume'u yarışı (`SpawnDone` başka
+göndericiden gelir) için gönderimde sınama yine gerekir, shard göçünde
+rapor komşudan geldiği için sızıntı geri gelirdi ve iki aktörde üç
+kuyruk ile testleri değişirdi. (3) *Registry'de düzeltme* (raporun canlı
+satırı da bırakması) — rapor, kapatılmayı bekleyen bağlantının satırını
+silerdi; ardından gelen istek satır bulamaz, soketi açık bırakırdı.
 
 **Park + `Disconnect`: satır kalır, kuyruk bırakılır.** Park edilen
 satır bağlantının giden kuyruğunun bir kopyasını tutar; writer pump
@@ -669,6 +716,15 @@ paylaşılır, soket kapatılmaz.
   3. **Aynı bağlantı burada yeniden katılır ya da kendi parkını resume
      ederse** bekleyen isteği düşer: yerleştireceği üyelik o bağlantının
      canlı üyeliğidir artık.
+
+E6'nın kapatma isteği bu kurallardan yalnız 2.'yi paylaşır (§16.1, B41 —
+`parked` gönderimde sınanır). 1. kurala gerek yoktur: sınanan bayrakla
+rapor ile isteğin iki varış sırası da aynı sona varır, ve rapor 0c'de
+gittiği için bekleme tek başına sırayı zaten kurtaramazdı. 3. kurala da
+gerek yoktur: bağlantının yeni üyeliğini `room` VE `entity` koruması
+korur (taze bir katılma yeni varlıkla isteği bayat bırakır — soket açık
+kalır, yeni üyelik tavanın saatine baştan girer; aynı varlığı sürdüren
+bir resume ise kapatılır — dağıtımın istediği kapanış).
 
 **Registry: `RegistryMsg::LeaveConn`.** Tek tablo araması, E6'nın bayat
 koruması (`room` VE `entity` satırın şimdiki üyeliği değilse no-op):
