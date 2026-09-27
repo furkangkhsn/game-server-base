@@ -10,13 +10,6 @@ use gsb_ecs::{System, SystemCtx, SystemRunner};
 
 use crate::demo::components::{DEFAULT_SPEED, MoveTarget, Position, Speed};
 
-/// Moves entities toward their [`MoveTarget`] on every tick in which they
-/// actually move. The broadcast phase notices the resulting position
-/// change by comparing wire content (see `gsb_demo::room`).
-///
-/// Two passes by design: first collect the writes while the query iterator
-/// holds the world borrow, then apply them. This keeps the hot path free of
-/// per-entity `World` lookups and is the idiomatic bevy pattern.
 /// Pending write computed during the read pass.
 struct Step {
     entity: Entity,
@@ -25,6 +18,13 @@ struct Step {
     arrived: bool,
 }
 
+/// Moves entities toward their [`MoveTarget`] on every tick in which they
+/// actually move. The broadcast phase notices the resulting position
+/// change by comparing wire content (see `gsb_demo::room`).
+///
+/// Two passes by design: first collect the writes while the query iterator
+/// holds the world borrow, then apply them. This keeps the hot path free of
+/// per-entity `World` lookups and is the idiomatic bevy pattern.
 pub struct MovementSystem;
 
 impl System for MovementSystem {
@@ -87,3 +87,6 @@ pub(crate) fn movement_runner() -> SystemRunner {
     runner.add(MovementSystem);
     runner
 }
+
+#[cfg(test)]
+mod tests;
