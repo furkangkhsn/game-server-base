@@ -1,7 +1,10 @@
 //! The registry's control-plane losses (BACKLOG B57): a join or a close
 //! op its bounded per-connection op queue refused. The join's client was
 //! answered `ERROR` "registry unavailable" and the close's detach was
-//! lost, and neither was counted anywhere.
+//! lost, and neither was counted anywhere. (The detach is no longer lost
+//! — the dispatcher detaches when its queue closes without the op,
+//! BACKLOG B61, `tests/room_close/close_op.rs` — but the refusal is
+//! still counted.)
 //!
 //! Filling the queue is deterministic here: the test's current-thread
 //! runtime runs the registry through its whole backlog before the

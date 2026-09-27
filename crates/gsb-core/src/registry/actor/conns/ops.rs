@@ -136,27 +136,25 @@ where
                                 .await;
                         }
                     }
-                    RoomOp::Close => {
-                        if let Some((r, entity, handle, _ep, identity)) = in_room.take() {
-                            // Transport death: DETACH, not leave — the
-                            // ROOM's policy decides despawn-vs-hold (§3).
-                            Self::send_room_detach(conn, entity, identity, handle).await;
-                            // The affiliation is KEPT (parked slot held,
-                            // §4): DetachDone marks the entry instead of
-                            // clearing it.
-                            let _ = registry
-                                .send(RegistryMsg::DetachDone { conn, room: r })
-                                .await;
-                        }
-                        let _ = registry.send(RegistryMsg::OpsClosed { conn }).await;
-                        break;
-                    }
+                    RoomOp::Close => break,
                 }
             }
-            // Normal exit: the registry dropped the op channel (shutdown or
-            // the dispatcher was never needed again). Any room-side state is
-            // either already left (the last op was a Leave) or the room is
-            // being torn down (its world is dropped) — nothing to clean.
+            // The end of this connection's room ops: its `Close`, or its
+            // queue closing without one — the registry drops the only
+            // sender when the connection closes (or at shutdown), also
+            // when the queue was too full to take the `Close` (B61). Either
+            // way every op queued ahead has run in order, so `in_room` is
+            // the membership they left: transport death DETACHes it, not
+            // leaves it — the ROOM's policy decides despawn-vs-hold (§3).
+            if let Some((r, entity, handle, _ep, identity)) = in_room.take() {
+                Self::send_room_detach(conn, entity, identity, handle).await;
+                // The affiliation is KEPT (parked slot held, §4):
+                // DetachDone marks the entry instead of clearing it.
+                let _ = registry
+                    .send(RegistryMsg::DetachDone { conn, room: r })
+                    .await;
+            }
+            let _ = registry.send(RegistryMsg::OpsClosed { conn }).await;
         });
         op_tx
     }

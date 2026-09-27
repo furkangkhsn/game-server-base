@@ -281,8 +281,9 @@ pub struct RegistrySample {
     pub join_ops_dropped: u64,
     /// Close ops (the detach of a closing connection) the registry could
     /// not hand to the connection's op dispatcher (full or gone),
-    /// cumulative (B57). The dispatcher then exits without detaching —
-    /// the room keeps the row until the room itself ends (BACKLOG).
+    /// cumulative (B57). The membership still ends (B61): a full queue's
+    /// dispatcher detaches once it has drained, a gone one's affiliation
+    /// is detached by the registry directly.
     pub close_ops_dropped: u64,
 }
 

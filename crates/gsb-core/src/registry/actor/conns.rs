@@ -5,16 +5,20 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::{debug, warn};
 
 use crate::channel::Mailbox;
 use crate::conn::{ConnIn, ServerClose};
-use crate::id::ConnectionId;
+use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
 mod ops;
+#[cfg(test)]
+mod tests;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
@@ -110,11 +114,11 @@ where
             // can still exist if the client raced a JOIN in
             // before its `ServerClosed` was processed (the room
             // may have accepted it for a tick): drain it so the
-            // slot cannot outlive the connection.
+            // slot cannot outlive the connection. (With no row, a
+            // gone dispatcher leaves nothing to detach from here.)
             if let Some(op_tx) = self.conn_ops.remove(&conn)
-                && op_tx.try_send(RoomOp::Close).is_err()
+                && self.route_close(conn, op_tx, None)
             {
-                self.close_op_dropped(conn);
                 self.emit_metrics();
             }
             debug!(%conn, "close of unregistered connection");
@@ -128,11 +132,8 @@ where
             Some(op_tx) => {
                 // The dispatcher serializes the detach behind
                 // any in-flight join and reports `DetachDone`.
-                // Refused (its queue full or the task gone), the
-                // detach is lost: counted (B57), sampled below.
-                if op_tx.try_send(RoomOp::Close).is_err() {
-                    self.close_op_dropped(conn);
-                }
+                // Refused: counted (B57), sampled below.
+                self.route_close(conn, op_tx, room.zip(entity));
             }
             None => {
                 if let (Some(room), Some(entity)) = (room, entity) {
@@ -158,13 +159,45 @@ where
         );
     }
 
-    /// A close op the dispatcher never received (B57): counted and
-    /// warned. The dispatcher drains what it has and exits without the
-    /// detach, so the room keeps the row until the room itself ends —
-    /// pathological (a 16-deep per-connection op queue), and a follow-up
-    /// in BACKLOG, not handled here.
-    fn close_op_dropped(&mut self, conn: ConnectionId) {
+    /// Hand a closing connection's dispatcher its `Close` — and, when
+    /// its queue refuses it, make sure the membership still ends (B61).
+    /// `op_tx` is the dispatcher's only sender and is dropped here in
+    /// every case, so its queue closes behind whatever it holds.
+    ///
+    /// - Full: the dispatcher is alive and will run every op queued ahead
+    ///   — a join among them may leave a membership this table has not
+    ///   seen yet. It treats its queue closing as the `Close` (see
+    ///   `spawn_conn_ops`), so the detach still comes after them, from
+    ///   the one task that knows the membership. A direct detach from
+    ///   here would target a stale membership and race those ops.
+    /// - Closed: the task is gone, and its view of the membership with
+    ///   it. Nothing else will detach, so the table's affiliation gets
+    ///   the dispatcher-less DETACH — a spawned send, never awaited here.
+    ///
+    /// Both are counted (B57): `close_ops_dropped` still means "the close
+    /// op was not queued"; the fallback is what keeps it from being a
+    /// leak. Returns whether the op was refused.
+    fn route_close(
+        &mut self,
+        conn: ConnectionId,
+        op_tx: mpsc::Sender<RoomOp<St, Sp>>,
+        affiliation: Option<(RoomId, EntityId)>,
+    ) -> bool {
+        let Err(refused) = op_tx.try_send(RoomOp::Close) else {
+            return false;
+        };
         self.reg_close_ops_dropped += 1;
-        warn!(%conn, "close op queue full or dispatcher gone; the detach is lost");
+        match refused {
+            TrySendError::Full(_) => {
+                warn!(%conn, "close op queue full; the dispatcher detaches once it drains");
+            }
+            TrySendError::Closed(_) => {
+                warn!(%conn, "close op dispatcher gone; detaching directly");
+                if let Some((room, entity)) = affiliation {
+                    self.send_detach_direct(conn, room, entity);
+                }
+            }
+        }
+        true
     }
 }

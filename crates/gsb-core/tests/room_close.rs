@@ -27,6 +27,9 @@
 //!   fresh rejoin overtakes still closes the connection (BACKLOG B43) —
 //!   for the idle ceiling and for the game's kick; the new membership
 //!   reaches the policy as a closed connection (BACKLOG F27).
+//! - `close_op.rs`: a closing connection whose dispatcher queue refused
+//!   the close op (BACKLOG B61) still ends its last membership once, as
+//!   a closed connection — no member, row or slot is left behind.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -52,6 +55,8 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "room_close/afk.rs"]
 mod afk;
+#[path = "room_close/close_op.rs"]
+mod close_op;
 #[path = "room_close/close_races.rs"]
 mod close_races;
 #[path = "room_close/forward_closed.rs"]
