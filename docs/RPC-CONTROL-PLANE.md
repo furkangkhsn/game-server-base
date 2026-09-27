@@ -581,7 +581,8 @@ rpc_rej_logic rpc_client_to rpc_late rpc_open rpc_dup_answers
 rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms` (gecikmeler
 yalnız `ok` yanıtların, ham değerler üzerinden, ms). Karşılarında odanın
 kendi sayaçları her satırda zaten var (`req_ext`, `req_rej_*`,
-`req_refused`, `req_to`, `req_late`): aynı yolun iki ucu yan yana.
+`req_refused`, `req_unread` — B36, §8.3 —, `req_to`, `req_late`): aynı
+yolun iki ucu yan yana.
 İnsan-okunur rapora bir `rpc (clients): …` satırı; dup/eşleşmeyen > 0 ise
 `WARNING`.
 
@@ -622,10 +623,10 @@ Tick maliyeti için aynı makine durumunda dönüşümlü A/B (500 istemci,
    uçuşta kalan kabul edilmişler (`req_ext − ok`): 29 504 + 8 032 =
    36 837 + 699.
    200'lük uzun duraklamada 62 istek (`sent − req_ext − req_refused`)
-   hiçbir oda sayacına düşmedi (500'lük koşuda 0): büyük olasılıkla
-   ayrılıştan hemen önce gönderilip oda ayrılışı işlerken atılan istekler
-   — oturum kapsamlı durum (§3.1), ama hiçbir yerde sayılmıyor; küçük bir
-   görünürlük boşluğu, mekanizması doğrulanmadı.
+   hiçbir oda sayacına düşmedi (500'lük koşuda 0). B36'da iki nedeni
+   doğrulandı ve kapandı — oda ayrılıştan hemen önce gelen istekleri
+   okumadan atıyordu (artık `req_unread`), loadgen odanın sayaçlarını
+   son periyodik örnekten okuyordu (artık bir periyot bekliyor): §8.3.
 2. **Bağlantı cap'i tasarlandığı gibi bağlıyor, oda cap'i bağlamıyor.**
    B=8'lik patlama tek tick'te çekiliyor (bağlantı başı çekim bütçesi 16):
    her patlamanın tam 4'ü kabul, 4'ü cap retti (146 584'ün yarısı).
@@ -718,6 +719,125 @@ Etkilenmeyenler: `--pin`'li orkestre koşuları (CROSS-SHARD "Ölçümler
 10 000'lik `--pin` koşuları — çekirdek kümesinin boyu iletiliyordu) ve
 tek süreçli (süreç içi / `--serve`) koşular.
 
+### 8.3 Ayrılışta okunmamış istekler ve oda defterinin kapanışı (B36)
+
+§8.2'nin açık kalan boşluğu: 200'lük uzun duraklama koşusunda 62 istek
+hiçbir oda sayacına düşmüyordu (`sent − req_ext − req_refused`). İki
+ayrı neden çıktı; ikisi de kapandı.
+
+**Neden 1 — oda, ayrılıştan hemen önce gelen istekleri okumadan
+atıyordu (motor).** Odanın tick'i CONTROL'ü (faz 0) READ'den (faz 1)
+önce koşar. İstemcinin `LEAVE_ROOM_REQ`'i bağlantı actor'ünde action
+kanalını bırakır ve registry → bağlantı başı dispatcher üzerinden odaya
+`RoomControl::Leave` olarak gider. Son READ'den sonra gönderilmiş
+istekler hâlâ o kanaldayken ayrılış odaya varırsa faz 0 satırı siler
+(`despawn_conn`) ve kanal içindekilerle birlikte düşer: istek ne işlenir,
+ne yanıtlanır, ne de herhangi bir kovada sayılırdı. İstemci her isteği
+gerçekten göndermiş (`errors = 0`, `left = N`); istemci tarafında bunlar
+`rpc_open`'a düşer.
+
+- *Kanıt* (`gsb-core/tests/rpc/unread.rs`): bağlantı 1 yanıtlanmış bir
+  istekten sonra aynı tick penceresinde üç istek + bir düz action
+  gönderir ve ayrılır; bağlantı 2'nin bariyer isteği örneği alır.
+  Düzeltmeden önce test kırmızıydı: kovaların toplamı 2 (yanıtlanan +
+  bariyer, ikisi de `req_local`), gönderilen 5 — üç istek hiçbir yerde.
+- *Boyut.* Bitiş (`deadline`) tüm istemciler için aynı an; kaybolanlar
+  son patlaması "son READ ile ayrılışın odaya varışı" arasındaki
+  pencereye düşen istemcilerin istekleri — beklenen ≈ N × pencere /
+  patlama aralığı (200 × ~31 ms / 100 ms ≈ 62). Pencere koşudan koşuya
+  0 ile ~1 tick arasında: düzeltmeden sonra 200 istemci, R=10 koşularında
+  `req_unread` 0, 0, 10, 2, 87 (aşağıdaki tablo) ve uzun duraklama
+  koşusunun bir tekrarında 32.
+
+**Düzeltme 1 (motor katmanı).** Yeni çekirdek sayaç
+`requests_dropped_unread`: oturumun action kanalını götüren her yerde
+kanal önce kapatılır (`close()` — geç gönderim olmaz, boşaltma kanal
+kapasitesiyle sınırlı), içindeki RPC istekleri sayılır (düz action'lar
+eskisi gibi sayılmaz) ve kanal düşer (`room::drop_unread_requests`).
+Yerler, oda ve shard aktöründe: `despawn_conn` (ayrılış, despawn eden
+kopuş, despawn'la biten hold), aynı bağlantının yeniden katılımının
+süpürdüğü bayat satır, resume (park edilmiş satırın ölü kanalı yenisiyle
+değişir — park edilmiş satır READ'de atlandığından istekleri resume'da
+ya da despawn'da sayılır; AI devrindeki `bot_fed` satır da satır bitince)
+ve shard'da ayrılıştan sonra gelip epoch kapısında düşen göçün taşıdığı
+kanal. Yüzey: `RoomSample`/`RoomReport::requests_dropped_unread`,
+`gsb-metric` satırında `req_unread=` (`req_refused=`'den sonra),
+Prometheus/OTLP'de `gsb_room_requests_dropped_unread_total`, loadgen
+metrik telinde `GSMH` (GSMG + `requests_refused_congested`'ten hemen
+sonra alan; SUM ile katlanır), `RESULT`'ta `req_unread=` (her `req_*`
+anahtarı gibi her satırda, mod olsun olmasın). İstemci teli değişmedi.
+
+**Neden 2 — loadgen odanın sayaçlarını koşunun sonundan önce okuyordu
+(ölçüm düzeneği).** Oda sayaçlarını metrik periyodu başına bir kez
+örnekler (sunulan odalarda 1 Hz) ve dururken örnek göndermez; toplayıcı
+kapanışta son raporunu elindeki örneklerden verir. Süreç içi koşu son
+istemciden sonra yalnız 150 ms bekleyip sunucuyu durduruyordu: `RESULT`'un
+`req_*`'ı odanın son PERİYODİK örneğiydi — bitişten bir periyoda kadar
+önce. O pencerede okunan istekler `req_ext`'te yoktu; boşluk bitişin son
+örneğin ne kadar ötesine düştüğüyle büyüyordu. Tam sayılı `--duration`'da
+bitiş örnek anına denk düştüğünden çoğunlukla görünmüyordu; kesirli
+sürede her seferinde: düzeltmeden önceki ikiliyle 200 istemci, R=10,
+`--duration` 8,005 / 8,012 / 8,020 / 8,028 sn → boşluk **0 / 11 / 14 /
+34**, yalnız Düzeltme 1 ile **8 / 19 / 36 / 92** (`req_unread` her birinde
+0 — ayrılışlar son örnekten sonraydı, görünmüyordu); `--duration 2,5`'lik
+4 istemcilik uçtan uca test 97 isteğin 77'sini görüyordu.
+
+**Düzeltme 2 (loadgen).** Son istemciden sonra bekleme = ayrılışların
+oturması (150 ms) + bir tam oda metrik periyodu
+(`RoomConfig::default().metrics_cadence_hz`; `run.rs::final_sample_grace`):
+her oda ayrılışlarından sonra bir kez daha örnekler. Süreç içi her koşu
+~1 sn uzar. Kilit: `loadgen_rpc.rs::the_rooms_ledger_covers_the_end_of_the_run`
+(`--duration 2.5`; önce kırmızı: 77 ≠ 97). `--serve`/orkestre yolu RPC
+modunu zaten reddediyor; oradaki sunucu çocuğunun son raporu bu turda
+değişmedi.
+
+İkisiyle oda defteri kapanıyor:
+
+> `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread`
+
+`loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
+(makul hızda `req_ext + req_unread = sent`, cap patlamasında
+`req_ext + req_rej_conn + req_unread = sent`, kesirli sürede aynı).
+
+**Elenenler.** (1) *READ'i CONTROL'den önce koşmak ya da ayrılışı kanal
+boşalana dek ertelemek:* faz sırası bir katılmanın kanalının kaydını ve
+ayrılışın tek tick'te bitişini taşıyor; ertelenen ayrılış, ayrılmış
+oyuncunun isteğini işler (ekonomi alımı gibi yan etki) ve yanıtın
+gideceği oturum yoktur. (2) *Kalan istekleri işleyip yanıtı atmak:* aynı
+yan etki; üstüne "yanıtlandı" sayılıp hiç teslim edilmeyen yanıtlar.
+(3) *Var olan bir kovaya katmak:* `req_refused` tıkalı bağlantının cap'teki
+yanıtsız retidir (F15'in ayrı tuttuğu anlam), `req_late` worker
+raporudur (istek değil), `gsb_net_actions_dropped_total` bağlantının
+kendi dolu kanalının girişte düşürdüğüdür (oda hiç görmez). (4) *Düz
+action'ları da saymak:* ateşle-unut girdinin yanıt borcu yok, hiçbir
+defter onları uzlaştırmıyor — kapsam dışı. (5) *Odanın dururken son bir
+örnek göndermesi (Neden 2 için motor düzeltmesi):* oda ile toplayıcı
+aynı ticker kapanışında biter — geç örnek toplayıcının son raporunu
+kaçırabilir, yok edilmiş odanın örneği akümülatörde odayı diriltebilir;
+ölçüm düzeneğinin kendi beklemesi daha dar ve yeterli.
+
+**Ölçüm** (release, süreç içi, TCP, 32 çekirdek; B37 sonrası; parantezde
+1 dk yük ortalaması). `sent = req_ext + req_refused + req_unread` her
+satırda birebir; hepsinde `left = N`, `errors = 0`, dup/eşleşmeyen 0.
+
+| Koşu | sent | req_ext | req_refused | req_unread | client_to | open | dropped |
+|---|---|---|---|---|---|---|---|
+| 200, R=10, `--duration 8` | 15 220 | 15 220 | 0 | 0 | 0 | 56 | 0 |
+| 200, R=10, 8,005 sn | 15 263 | 15 263 | 0 | 0 | 0 | 0 | 0 |
+| 200, R=10, 8,012 sn | 15 251 | 15 241 | 0 | 10 | 0 | 10 | 0 |
+| 200, R=10, 8,020 sn | 15 273 | 15 271 | 0 | 2 | 0 | 8 | 0 |
+| 200, R=10, 8,028 sn | 15 360 | 15 273 | 0 | 87 | 0 | 87 | 0 |
+| 200, R=10, duraklama 3000/6000, 30 sn (4,3) | 58 052 | 52 182 | 5 870 | 0 | 5 133 | 832 | 25 842 |
+| 500, R=10, duraklama 3000/6000, 30 sn (3,5) | 142 642 | 105 558 | 37 084 | 0 | 29 767 | 8 010 | 139 621 |
+
+Karşılaştırma için düzeltmeden önceki ikiliyle §8.2'nin 200'lük uzun
+duraklama koşusunun tekrarı (yük 3,8): 57 942 = 54 303 + 3 639 (boşluk
+bu koşuda 0), yalnız Düzeltme 1'li ikiliyle (yük 20,0): 57 971 = 54 022
++ 3 917 + **32**. Kesirli sürelerde `open` = `req_unread` çıktı:
+istemcinin "bitişte uçuşta" saydığı isteklerin bir kısmı oda hiç
+okumamış isteklerdi. Uzun duraklama satırları §8.2'dekilerle aynı
+şekli taşıyor (B37 sonrası; sayılar koşudan koşuya oynuyor).
+
 ## 9. Kontrol düzlemi: oda yaşam döngüsü ve maç-sonucu dikişi
 
 **API (composition root):** `ServerHandle::open_room(RoomConfig)`,
@@ -805,6 +925,14 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   oda-local `ABILITY` yolu yük altında ölçülmedi (menzil kontrolü
   istemcinin kendi konumunu bilmesini ister); orkestre / churn koşuları
   modu reddediyor (CLIENT satırı defteri taşımıyor).
+- **Oda üyeliği bitirdikten sonra bağlantı actor'ünde düşen istek (B36
+  kalıntısı):** oda üyeliği kendisi bitirdiğinde (atma, boşta tavanı,
+  oda kapanışı) bağlantı actor'ü bunu `LeftRoom` bildirimiyle öğrenene
+  dek gönderdiği istek kapalı kanala `try_send` eder ve düşer (`Closed`
+  kolu, uyarı + `detach`). İstek odaya hiç ulaşmadığından oda sayacına
+  giremez; `req_unread` yalnız odanın kanalında okunmadan kalanları
+  sayar. Loadgen RPC koşularında bu yol yok (üyeliği hep istemci
+  bitiriyor).
 
 ## 12. Testler: sözleşmenin kilidi
 
@@ -826,5 +954,6 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 | Bilet: geçerli/hatalı/boş/geç doğrulama; oda sabitlemesi; bütçe etkileşimi | `ticket.rs::*` |
 | Ret nedenlerinin metni sabit (oda + shard + loadgen aynı sabitleri okur; baytlar aynı) | `gsb-core/src/rpc.rs::tests::the_rejection_reasons_are_pinned` |
 | Loadgen RPC defteri: ilk yanıt kapatır; ikinci yanıt yalnız dup; gönderilmemiş id yalnız eşleşmeyen; sınır geç / yanıtsız / açık'ı ayırır; çekirdek nedenleri sınıflanır | `gsb-server/src/loadgen/client/rpc/ledger/tests.rs` (6 test) |
-| Loadgen RPC modu uçtan uca: makul hızda her istek bir kez `ok`, istemci zaman aşımı 0; cap'in üstündeki patlamada istemci ve oda aynı cap ret sayısını görür; modsuz satırda `rpc_*` yok | `gsb-server/tests/loadgen_rpc.rs` |
+| Ayrılışta okunmamış istekler sayılır (tam bir kez, yalnız istekler); defter kapanır (oda + shard; ayrılış, despawn eden kopuş, yeniden katılım, resume, ölü göç) | `gsb-core/tests/rpc/unread.rs::requests_unread_when_the_leave_lands_are_counted`, `rpc_shard/unread.rs::*`, `src/room/tests/unread.rs::*`, `src/shard/tests/unread.rs::*` |
+| Loadgen RPC modu uçtan uca: makul hızda her istek bir kez `ok`, istemci zaman aşımı 0; cap'in üstündeki patlamada istemci ve oda aynı cap ret sayısını görür; oda defteri kapanır (`req_unread` dahil, B36); modsuz satırda `rpc_*` yok | `gsb-server/tests/loadgen_rpc.rs` |
 | Tel üzerinden: idempotent yaşam döngüsü, runtime oda dolu (kod 8), maç sonucu, RPC sızma-yok/sonraki-tick, bilet akışı + yavaş-auth penceresinde tick canlılığı | `gsb-server/tests/e2e.rs` (son beş test) |
