@@ -2921,6 +2921,12 @@ sarkarsa sızma); `bounded send` ise `Future` → tick içinde bekler. Çözüm
 `bounded(4096)` + **senkron `try_send`** (Future değil): kanal doluyken
 örnek atılır ve üreticinin `metrics_dropped` sayacı artar — kümülatif
 sayaçlar için zararsız (bkz. ROADMAP "metrik düzeltme + AOI turu").
+Bağlantı aktörünün örneği ise DELTA'dır: B59'dan beri aktör, sayaç
+tabanını yalnız kanal örneği ALDIĞINDA ilerletir — dolu kanalda düşen
+örneğin deltaları kaybolmaz, bir sonraki (en geç son) örnek onları
+yenileriyle birlikte taşır; düşüşün kendisi yine `metrics_dropped`'ta
+(önceden taban `try_send`'den ÖNCE ilerliyordu ve düşen örnek
+deltalarını da götürüyordu; kilit `conn_counts::samples`).
 Örnekler sabit boyutlu ve oda başına adımda en fazla bir tane olduğundan
 4096 derinlik geniş bir marj bırakır; en kötü hâl örnek kaybıdır, tick
 durdurulamaz.
@@ -3096,7 +3102,9 @@ olanı alır (kapanış sonrası son rapor yalnız ekleyebilir). Kabul
 edilen bedel: son örnek de `try_send`'dir, kanal kapanış anında DOLUysa
 hüküm düşer ve düşüş hiçbir yerde sayılmaz (aktör gitmiştir) — 4096
 derinlik ve tick başına boşaltmayla bir tick içinde binlerce kapanış
-gerekir. Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
+gerekir. (B59'dan beri son örnek, daha önce dolu kanalda düşen
+örneklerin deltalarını da taşır; onun düşüşü o deltaları da götürür —
+sayım turu 3'ün açık kalemi.) Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
 loadgen `RESULT`'ı aynı anahtarları taşır, GSM8 sebep başına bir `u64`.
 
 Prometheus yüzeyi ve log renderer **katlamaz**: örnek kimliği başına

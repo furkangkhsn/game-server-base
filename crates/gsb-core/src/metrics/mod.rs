@@ -26,10 +26,13 @@
 //! existing pattern (`OutSink::flush` → `dropped_frames`; the per-connection
 //! action channel → `ConnSample::actions_dropped`).
 //!
-//! A drop here is *harmless*: every sample's counters are cumulative, so a
-//! lost sample carries nothing the next sample does not already carry —
-//! the same self-contained-snapshot logic the broadcast phase relies on.
-//! Each producer counts its own drops (cumulative for the room and
+//! A drop here loses no count. A room's and the registry's counters are
+//! cumulative, so a lost sample carries nothing the next sample does not
+//! already carry — the same self-contained-snapshot logic the broadcast
+//! phase relies on. A connection actor's sample is a DELTA, and its
+//! flushed baseline advances only when the channel took the sample
+//! (B59): a dropped one leaves its deltas for the next flush. Each
+//! producer counts its own drops (cumulative for the room and
 //! registry, delta for a connection actor) and the total is surfaced in the
 //! report (`MetricReport::metrics_dropped`); in normal operation it stays
 //! 0 because each room sends at most one sample per report period (see

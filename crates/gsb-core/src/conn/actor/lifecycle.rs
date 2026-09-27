@@ -1,5 +1,5 @@
-//! Birth, the mailbox loop, the periodic metrics flush, and the
-//! detach that ends a session without ending its entity.
+//! Birth, the mailbox loop, and the detach that ends a session without
+//! ending its entity (the metrics flush is `flush`).
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -14,7 +14,7 @@ use gsb_protocol::{MessageTable, base};
 use crate::channel::{FrameBatch, Inbox, Mailbox};
 use crate::conn::*;
 use crate::id::ConnectionId;
-use crate::metrics::{ConnSample, MetricsEvent};
+use crate::metrics::MetricsEvent;
 use crate::registry::RegistryMsg;
 
 impl super::ConnectionActor {
@@ -201,104 +201,6 @@ impl super::ConnectionActor {
             .registry
             .send(RegistryMsg::ConnClosed { conn: self.conn })
             .await;
-    }
-
-    /// Flush this connection's wire-byte counters as a delta sample when
-    /// there is new data and the flush interval has passed (or unconditionally for the
-    /// final flush). Synchronous: the only check is an `Instant`
-    /// comparison on each inbound frame, so the actor's only await stays
-    /// the inbox `recv`.
-    pub(super) fn maybe_flush_metrics(&mut self, last: bool) {
-        let in_b = self.m_in_bytes - self.m_flushed_in_bytes;
-        let in_f = self.m_in_frames - self.m_flushed_in_frames;
-        let out_b = self.m_out_bytes - self.m_flushed_out_bytes;
-        let out_f = self.m_out_frames - self.m_flushed_out_frames;
-        let adrops = self.m_actions_dropped;
-        let aclosed = self.m_actions_dropped_closed;
-        let rclosed = self.m_requests_dropped_closed;
-        let rfull = self.m_requests_dropped_full;
-        let rnoroom = self.m_requests_no_room;
-        let hb_pre = self.m_preauth_hb_extra - self.m_flushed_preauth_hb_extra;
-        let hb_authed = self.m_hb_extra - self.m_flushed_hb_extra;
-        let out_closed = self.m_frames_out_closed;
-        let notices_dropped = self.m_close_notices_dropped;
-        let drops = self.m_metrics_dropped;
-        let viols = self.m_violations;
-        let limited = self.m_input_limited;
-        // The server-close verdict rides the FINAL sample only (one per
-        // session), and forces it out even when every delta is zero — a
-        // connection refused at birth has sent and received nothing, and
-        // its refusal must still be counted.
-        let server_close = if last { self.server_close } else { None };
-        if in_b == 0
-            && in_f == 0
-            && out_b == 0
-            && out_f == 0
-            && adrops == 0
-            && aclosed == 0
-            && rclosed == 0
-            && rfull == 0
-            && rnoroom == 0
-            && hb_pre == 0
-            && hb_authed == 0
-            && out_closed == 0
-            && notices_dropped == 0
-            && drops == 0
-            && viols == 0
-            && limited == 0
-            && server_close.is_none()
-        {
-            return;
-        }
-        if !last && Instant::now().duration_since(self.m_last_flush) < METRICS_FLUSH_EVERY {
-            return;
-        }
-        self.m_flushed_in_bytes = self.m_in_bytes;
-        self.m_flushed_in_frames = self.m_in_frames;
-        self.m_flushed_out_bytes = self.m_out_bytes;
-        self.m_flushed_out_frames = self.m_out_frames;
-        self.m_actions_dropped = 0;
-        self.m_actions_dropped_closed = 0;
-        self.m_requests_dropped_closed = 0;
-        self.m_requests_dropped_full = 0;
-        self.m_requests_no_room = 0;
-        self.m_flushed_preauth_hb_extra = self.m_preauth_hb_extra;
-        self.m_flushed_hb_extra = self.m_hb_extra;
-        self.m_frames_out_closed = 0;
-        self.m_close_notices_dropped = 0;
-        self.m_metrics_dropped = 0;
-        self.m_violations = 0;
-        self.m_input_limited = 0;
-        self.m_last_flush = Instant::now();
-        // A3: bounded channel + synchronous `try_send`. On a full channel the
-        // sample is dropped (harmless — the counters are cumulative deltas and
-        // the next flush or the final flush carries the rest) and counted in
-        // the *next* sample.
-        if let Err(mpsc::error::TrySendError::Full(_)) =
-            self.metrics.try_send(MetricsEvent::Conn(ConnSample {
-                conn: self.conn,
-                bytes_in: in_b,
-                bytes_out: out_b,
-                frames_in: in_f,
-                frames_out: out_f,
-                actions_dropped: adrops,
-                actions_dropped_closed: aclosed,
-                requests_dropped_closed: rclosed,
-                requests_dropped_full: rfull,
-                requests_no_room: rnoroom,
-                heartbeats_throttled_preauth: hb_pre,
-                heartbeats_throttled_authed: hb_authed,
-                frames_out_closed: out_closed,
-                close_notices_dropped: notices_dropped,
-                metrics_dropped: drops,
-                violations: viols,
-                input_rate_limited: limited,
-                server_close,
-                last,
-            }))
-        {
-            self.m_metrics_dropped += 1;
-        }
     }
 
     pub(super) fn detach(&mut self) {

@@ -19,6 +19,7 @@ use crate::room::Action;
 
 mod auth;
 mod close;
+mod flush;
 mod frame;
 mod input;
 mod lifecycle;
@@ -183,7 +184,8 @@ pub struct ConnectionActor {
     m_flushed_out_bytes: u64,
     m_flushed_out_frames: u64,
     /// Metric samples dropped on a full (bounded) metrics channel since the
-    /// last flush (delta, like the other conn counters).
+    /// last flush (delta, like the other conn counters). A dropped sample
+    /// leaves its deltas unflushed for the next one (B59, `flush`).
     m_metrics_dropped: u64,
     m_last_flush: Instant,
     /// Outbound metrics path (bounded channel; the actor sends with the

@@ -31,10 +31,17 @@ impl Conn {
     /// A fresh connection (not authenticated) whose outbound channel
     /// holds `out_cap` batches.
     pub fn open(out_cap: usize) -> Self {
+        Self::open_with(out_cap, 64).0
+    }
+
+    /// The same, with a metrics channel of `metrics_cap` events; also a
+    /// spare sender on it, for a test that fills the channel itself.
+    pub fn open_with(out_cap: usize, metrics_cap: usize) -> (Self, mpsc::Sender<MetricsEvent>) {
         let (reg_tx, registry) = channel::<RegistryMsg>(64);
         let (inbox, inbox_rx) = channel::<ConnIn>(64);
         let (out_tx, out) = channel::<FrameBatch>(out_cap);
-        let (metrics_tx, metrics) = mpsc::channel::<MetricsEvent>(64);
+        let (metrics_tx, metrics) = mpsc::channel::<MetricsEvent>(metrics_cap);
+        let spare = metrics_tx.clone();
         let actor = ConnectionActor::new(
             ConnectionId(1),
             SocketAddr::from(([127, 0, 0, 1], 45_002)),
@@ -45,14 +52,20 @@ impl Conn {
             metrics_tx,
             None,
         );
-        Self {
+        let conn = Self {
             inbox,
             out,
             metrics,
             actor: tokio::spawn(actor.run()),
             registry,
             actions: None,
-        }
+        };
+        (conn, spare)
+    }
+
+    /// Take the next event off the metrics channel, if one is there.
+    pub fn take_metric(&mut self) -> Option<MetricsEvent> {
+        self.metrics.try_recv().ok()
     }
 
     /// Local auth, waited for.
