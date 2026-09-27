@@ -4,6 +4,49 @@
 
 use super::*;
 
+/// Receive reports until one carries room 1 in a state `ready` accepts;
+/// returns that room line and its report. Every room line on the way
+/// must keep the cumulative counters monotone against the previous one
+/// (`seen`, updated as lines arrive).
+///
+/// WHY a wait and not a fixed window: the collector reports every period
+/// of WALL time, on whichever ticks the real-time feed got in, so how
+/// many steps one report window holds is the scheduler's call — on a
+/// loaded machine the first report once held 2 (BACKLOG F23). The test
+/// waits for the state it asserts; the bound below is only a hang guard.
+async fn room_line_until(
+    rx: &mut mpsc::UnboundedReceiver<MetricReport>,
+    seen: &mut Option<RoomReport>,
+    ready: impl Fn(&RoomReport) -> bool,
+) -> (RoomReport, MetricReport) {
+    let wait = async {
+        loop {
+            let report = rx.recv().await.expect("report channel open");
+            let Some(r) = report.rooms.iter().find(|r| r.room == RoomId(1)).copied() else {
+                continue;
+            };
+            if let Some(prev) = seen.replace(r) {
+                assert!(r.steps >= prev.steps, "cumulative steps never decrease");
+                assert!(
+                    r.dropped >= prev.dropped,
+                    "cumulative dropped never decreases"
+                );
+                assert!(
+                    r.shipped_frames >= prev.shipped_frames,
+                    "cumulative shipped frames never decrease"
+                );
+            }
+            if ready(&r) {
+                return (r, report);
+            }
+        }
+    };
+    match tokio::time::timeout(Duration::from_secs(10), wait).await {
+        Ok(found) => found,
+        Err(_) => panic!("no report reached the awaited room state; last line: {seen:?}"),
+    }
+}
+
 /// The full path the spec asks for: counters live in the room actor's
 /// local state, leave it over the (bounded) metrics channel via
 /// `try_send`, and are accumulated by the collector task — asserted here
@@ -85,19 +128,21 @@ async fn room_counters_flow_to_collector() {
         .await
         .expect("control accepts");
 
-    // Wait out two report periods (100 ms each): the first report
-    // carries the room's state, the second proves the rate window
-    // (Δ over period) works.
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    let first = tokio::time::timeout(Duration::from_secs(3), rep_rx.recv())
+    // The join reply proves the room is alive and processing.
+    tokio::time::timeout(Duration::from_secs(3), reply_rx)
         .await
-        .expect("collector produced a report")
-        .expect("report channel open");
-    let r = first
-        .rooms
-        .iter()
-        .find(|r| r.room == RoomId(1))
-        .expect("report carries the room");
+        .expect("join reply")
+        .expect("join reply dropped")
+        .expect("join accepted (room not full)");
+
+    // A report that shows the join and the room's first steps past it
+    // (drops start two batches after the join): the actor's counters,
+    // read from outside the actor.
+    let mut seen = None;
+    let (r, _) = room_line_until(&mut rep_rx, &mut seen, |r| {
+        r.members == 1 && r.steps >= 4 && r.dropped > 0
+    })
+    .await;
     assert_eq!(r.members, 1, "the join reached the room AND the report");
     assert_eq!(r.joins, 1);
     assert_eq!(r.groups, 1);
@@ -119,25 +164,10 @@ async fn room_counters_flow_to_collector() {
     );
     assert!(r.step_max_us > 0, "step duration was measured");
     assert_eq!(r.step_hist.iter().sum::<u64>(), r.steps);
-    // The join reply proves the room is alive and processing.
-    tokio::time::timeout(Duration::from_secs(3), reply_rx)
-        .await
-        .expect("join reply")
-        .expect("join reply dropped")
-        .expect("join accepted (room not full)");
 
-    // One more report period: the next report's rates are over the
-    // 100 ms window since the previous report.
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let second = tokio::time::timeout(Duration::from_secs(3), rep_rx.recv())
-        .await
-        .expect("collector produced a second report")
-        .expect("report channel open");
-    let r2 = second
-        .rooms
-        .iter()
-        .find(|r| r.room == RoomId(1))
-        .expect("second report carries the room");
+    // A later report: the room kept stepping and the counters kept
+    // flowing (every line on the way was checked monotone).
+    let (r2, second) = room_line_until(&mut rep_rx, &mut seen, |x| x.steps > r.steps).await;
     assert!(
         r2.steps > r.steps,
         "more steps in the second window: {} > {}",

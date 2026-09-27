@@ -50,7 +50,18 @@ async fn every_report_reaches_every_exporter_in_order() {
     let t0 = Instant::now();
     m_tx.try_send(MetricsEvent::Room(room_sample(RoomId(3), t0, 10)))
         .expect("room sample queued");
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // Two periodic reports, waited for: the period is WALL time and the
+    // feed's ticks are the collector's only wake-ups, so a fixed window
+    // (this test once slept 80 ms and counted) holds as many reports as
+    // the scheduler let ticks in (BACKLOG F23). The bound is a hang guard.
+    let mut reports = Vec::new();
+    while reports.len() < 2 {
+        let r = tokio::time::timeout(Duration::from_secs(10), sink_rx.recv())
+            .await
+            .expect("a periodic report")
+            .expect("sink open");
+        reports.push(r);
+    }
     feeder.abort();
     drop(tick_tx);
     tokio::time::timeout(Duration::from_secs(3), task)
@@ -58,7 +69,6 @@ async fn every_report_reaches_every_exporter_in_order() {
         .expect("collector exits on a closed ticker")
         .expect("collector task panicked");
 
-    let mut reports = Vec::new();
     while let Ok(r) = sink_rx.try_recv() {
         reports.push(r);
     }
