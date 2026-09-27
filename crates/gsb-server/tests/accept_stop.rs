@@ -21,9 +21,19 @@ use tokio::net::TcpStream;
 
 mod common;
 
-/// Well below the handshake deadlines (TLS/WS: seconds) and below the
-/// stop's own grace for an overrunning loop.
-const STOP_WITHIN: Duration = Duration::from_millis(900);
+/// The bound on `stop` these tests can claim on any machine: below the
+/// handshake deadlines (TLS/WS: 10 s) — `stop` did not wait out a held
+/// handshake. That no loop overran the stop's own one-second grace is
+/// the report's `accept_loops_aborted == 0` (a loop still in its
+/// handshake at the grace is aborted and counted), and that `stop` does
+/// not sit out the grace once every loop has ended is pinned on the
+/// paused clock (`boot::stop::tests`). The old 900 ms wall-clock bound
+/// measured the machine's scheduler as well (BACKLOG F25).
+const STOP_WITHIN: Duration = gsb_net::tls::HANDSHAKE_TIMEOUT;
+const _: () = assert!(
+    gsb_net::ws::WS_HANDSHAKE_TIMEOUT.as_millis() >= STOP_WITHIN.as_millis(),
+    "the bound is below every held handshake's deadline"
+);
 
 const DOORS: [ListenerTransport; 5] = [
     ListenerTransport::Tcp,
@@ -58,7 +68,7 @@ async fn server(pki: &common::TlsPki) -> gsb_server::ServerHandle {
 /// Stop, bounded, and return the report and how long it took.
 async fn stop(handle: gsb_server::ServerHandle) -> (StopReport, Duration) {
     let started = Instant::now();
-    let report = tokio::time::timeout(Duration::from_secs(10), handle.stop())
+    let report = tokio::time::timeout(STOP_WITHIN * 3, handle.stop())
         .await
         .expect("stop() completes");
     (report, started.elapsed())
