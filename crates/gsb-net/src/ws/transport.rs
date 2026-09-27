@@ -189,7 +189,8 @@ fn make_endpoint(
                 closing.clone(),
                 metrics.clone(),
             );
-            let writer = WsWriter::new(queue_tx, mapping, closing, written);
+            let writer =
+                WsWriter::new(queue_tx, mapping, closing, written).with_metrics(metrics.clone());
             let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },

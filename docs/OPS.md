@@ -547,6 +547,30 @@ max_detach_hold_secs = "off"
   (istemci bağlı sanar, sessizlikle öğrenir). **Kalan uç:** toplayıcı
   gitmişse (süreç inerken) sayı hiçbir yere varmaz — her son örneğin
   sınırı.
+- **Taşıma kapsamı: WS'nin teslim edilemeyen kapanış çerçevesi (B80,
+  sayım turu 6).** Satırın ve tablonun sonuna iki `counter`; loadgen
+  telinde `GSMZ`, `RESULT`'ta `transport_<ad>=`. Sunucu oturumu
+  bitirince WS kapısı 1001 "Going Away" kapanış çerçevesini soket
+  yazıcısının kuyruğuna koyar. Önceden bu bir `try_send`'di: kuyruk
+  DOLUYSA (aktörün son batch'i yavaş okuyan istemciye hâlâ gidiyor)
+  çerçeve sayılmadan düşüyor, istemci hiç kapanış görmüyor, bağlantı o
+  kapatana dek asılı kalıyordu. **Karar: teslim.** Kapanış artık oyun
+  karesi gibi slot BEKLER (`poll_close` bekler; yazıcı pompası kapanışı
+  yazma-tıkanma penceresi altında bekler — öteki kapıların soketi
+  boşaltan kapanışıyla aynı sınır): soket boşaldıkça 1001 önündeki
+  karelerin ARKASINDAN gider — her zaman amaçlanan aynı bayt (`88 02 03
+  E9`), yalnız artık kaybolmuyor. Teslim edilemeyen sayılır:
+  `ws_going_away_unsent_closed` — kuyruk kapalı, soket yazıcısı başarısız
+  bir soket yazmasıyla zaten durmuş; `ws_going_away_unsent_stalled` —
+  kapanış slot beklerken bırakıldı, pompanın tıkanma penceresi bayt
+  yazılmadan doldu (pencere kapalıysa kapanış slotu sonuna dek bekler, bu
+  sayaç artmaz). Okuyucunun kendi kapanışı (istemcinin kapanışına yankı,
+  protokol hatası kapanışı) önce ya da bu arada kuyruklandıysa bağlantının
+  TEK kapanışı odur: 1001 gönderilmez, sayılmaz (kaybı okuyucunun
+  `ws_close_frames_dropped`'ı). Yan düzeltme: soket yazıcısının erken
+  çıkıştaki boşaltması `recv` ile bekler — kapanıştan önce slot ayırmış
+  bir göndericinin (uçuştaki kare, bekleyen kapanış) kapalı kuyruğa
+  koyduğu kare de sayılır (`try_recv` boş kuyrukta durup onu kaçırırdı).
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:

@@ -168,6 +168,10 @@ gsb_transport_udp_sessions_dropped_accept_gone sum t=2 mono=true unit="" n=1 | r
   [] 1000..2000 int 38
 gsb_transport_udp_sessions_unaccepted_closed sum t=2 mono=true unit="" n=1 | Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.
   [] 1000..2000 int 39
+gsb_transport_ws_going_away_unsent_closed sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (1001 Going Away) never queued because the socket writer had already stopped on a failed socket write, cumulative.
+  [] 1000..2000 int 40
+gsb_transport_ws_going_away_unsent_stalled sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.
+  [] 1000..2000 int 41
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

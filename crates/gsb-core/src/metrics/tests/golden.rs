@@ -54,7 +54,9 @@
 //! transport counters at the end of that line and table
 //! (`handshakes_cut_closed` .. `udp_sessions_unaccepted_closed`).
 //! B75's registry-scope `joins_refused_closed=` with
-//! `gsb_registry_joins_refused_closed_total`.
+//! `gsb_registry_joins_refused_closed_total`. B80's two transport
+//! counters at the end of that line and table
+//! (`ws_going_away_unsent_{closed,stalled}`).
 
 use super::*;
 use crate::conn::ServerClose;

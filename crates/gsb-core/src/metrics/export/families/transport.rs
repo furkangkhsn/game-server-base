@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 39] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 41] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -215,6 +215,17 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 39] 
         "gsb_transport_udp_sessions_unaccepted_closed_total",
         "Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.",
         |t| t.udp_sessions_unaccepted_closed,
+    ),
+    // B80: the WebSocket teardown close that could not be delivered.
+    tr(
+        "gsb_transport_ws_going_away_unsent_closed_total",
+        "WebSocket teardown closes (1001 Going Away) never queued because the socket writer had already stopped on a failed socket write, cumulative.",
+        |t| t.ws_going_away_unsent_closed,
+    ),
+    tr(
+        "gsb_transport_ws_going_away_unsent_stalled_total",
+        "WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.",
+        |t| t.ws_going_away_unsent_stalled,
     ),
 ];
 

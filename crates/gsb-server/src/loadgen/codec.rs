@@ -214,7 +214,11 @@ mod logic;
 /// GSMY = the GSMX layout plus the registry section's
 /// `joins_refused_closed` (joins a stopped or dead room refused — B75),
 /// right after `team_relays_dropped_closed`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D59;
+/// GSMZ = the GSMY layout with two more transport counters at the end of
+/// that section (the WebSocket teardown close that could not be
+/// delivered — B80: `ws_going_away_unsent_closed`,
+/// `ws_going_away_unsent_stalled`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D5A;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

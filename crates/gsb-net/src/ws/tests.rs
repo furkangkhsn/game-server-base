@@ -40,6 +40,7 @@ mod protocol;
 mod queue;
 mod rig;
 mod slow_reader;
+mod teardown;
 mod writer_lost;
 
 async fn read_http_head(stream: &mut TcpStream) -> String {

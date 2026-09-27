@@ -123,7 +123,7 @@ async fn ws_writer_task(
     // the queue goes (a failed close frame never reached the wire, so
     // nothing behind it is "after a close").
     if early {
-        lost.drain(&mut rx, close_sent && !failed);
+        lost.drain(&mut rx, close_sent && !failed).await;
     }
     lost.report(metrics);
     // Last queue end dropped, write failed, or shutdown requested: shut the
@@ -136,7 +136,8 @@ async fn ws_writer_task(
 /// Backpressure comes from the bounded queue via a capacity reservation
 /// taken in `poll_ready` and spent in `start_send`. `closing` guarantees at
 /// most ONE close frame ever leaves this connection (the read path's echo
-/// or failure-close wins; the sink's teardown close only fires otherwise).
+/// or failure-close wins; the sink's teardown close only fires otherwise,
+/// and waits for a queue slot like a game frame — [`going_away`], B80).
 ///
 /// The reservation is a [`PollSender`], which keeps its pending reserve
 /// future across polls. That is load-bearing: a reserve future that is
@@ -151,6 +152,8 @@ pub(super) struct WsWriter {
     /// Bytes the socket-writer task has written (it is the only writer;
     /// this side only reads). See [`WriteProgress`] below.
     written: Arc<AtomicU64>,
+    /// The teardown close, and where its losses are counted (B80).
+    teardown: going_away::Teardown,
 }
 
 impl WsWriter {
@@ -167,7 +170,22 @@ impl WsWriter {
             mapping,
             closing,
             written,
+            teardown: going_away::Teardown::new(None),
         }
+    }
+
+    /// Where an undeliverable teardown close is counted (B80; the
+    /// transport wires it, without one nothing is reported).
+    pub(super) fn with_metrics(mut self, metrics: crate::TransportMetrics) -> Self {
+        self.teardown = going_away::Teardown::new(metrics);
+        self
+    }
+}
+
+/// A teardown close still waiting for a slot is abandoned: counted (B80).
+impl Drop for WsWriter {
+    fn drop(&mut self) {
+        self.teardown.abandon(&self.closing);
     }
 }
 
@@ -212,27 +230,15 @@ impl Sink<FrameBody> for WsWriter {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // Best-effort WS close notice — but only if the read path has not
-        // already sent one (echo / failure close): a second close frame is
-        // noise. The actual socket shutdown happens when every queue end is
-        // gone (writer task then shuts the half).
-        //
-        // This close is the SERVER leaving the session (the actor ended:
-        // `stop()`, or a verdict whose `ERROR` frame went out just before),
-        // so it carries 1001 "Going Away" — the status code alone, no
-        // reason text. An empty close frame reads as 1005 ("no status")
-        // on the client, indistinguishable from a peer that said nothing.
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // The SERVER leaving the session (the actor ended: `stop()`, or a
+        // verdict whose `ERROR` frame went out just before): 1001 "Going
+        // Away", status only (an empty close reads as 1005, "no status") —
+        // unless the read path queued its own close. It waits for a queue
+        // slot (B80, [`going_away`]); the socket shuts down once every
+        // queue end is gone.
         let this = self.get_mut();
-        if !this.closing.swap(true, Ordering::SeqCst)
-            && let Some(tx) = this.tx.get_ref()
-        {
-            let _ = tx.try_send(WsOut::Control(
-                OP_CLOSE,
-                CLOSE_GOING_AWAY.to_be_bytes().to_vec(),
-            ));
-        }
-        Poll::Ready(Ok(()))
+        this.teardown.poll(&mut this.tx, &this.closing, cx).map(Ok)
     }
 }
 
@@ -243,3 +249,7 @@ pub(super) fn writer_gone() -> io::Error {
 /// The socket writer's losses on their way to the collector (B66). A
 /// CHILD module, so it reaches [`WsOut`] directly.
 mod lost;
+
+/// The server's teardown close into the queue, delivered or counted
+/// (B80).
+mod going_away;

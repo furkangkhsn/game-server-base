@@ -256,6 +256,9 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_handshakes_unaccepted_closed",
         "transport_udp_sessions_dropped_accept_gone",
         "transport_udp_sessions_unaccepted_closed",
+        // The WebSocket teardown close that could not be delivered (B80).
+        "transport_ws_going_away_unsent_closed",
+        "transport_ws_going_away_unsent_stalled",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

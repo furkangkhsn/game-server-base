@@ -50,9 +50,17 @@ impl Lost {
     /// shutdown request): close the queue and count what it holds.
     /// `close_sent`: a close frame is already on the wire, so the game
     /// frames behind it were never to be written.
-    pub(super) fn drain(&mut self, rx: &mut mpsc::Receiver<WsOut>, close_sent: bool) {
+    ///
+    /// `recv`, not `try_recv` (B80): a sender that reserved its slot
+    /// before the close — the pump's frame in flight, the teardown close
+    /// that waited for a slot — still sends into the closed queue, and
+    /// `try_recv` would stop at the empty queue before it lands, leaving
+    /// it uncounted. After `close`, `recv` ends only once no reserved
+    /// slot is outstanding; a reservation lives within one poll of its
+    /// sender, so this waits for nothing else.
+    pub(super) async fn drain(&mut self, rx: &mut mpsc::Receiver<WsOut>, close_sent: bool) {
         rx.close();
-        while let Ok(out) = rx.try_recv() {
+        while let Some(out) = rx.recv().await {
             match out {
                 WsOut::Game(_) if close_sent => self.after_close += 1,
                 WsOut::Game(_) => self.game_unwritten += 1,
