@@ -13,6 +13,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# JavaScript actions pin the major whose `runs.using` is node24
+# (GitHub retires the Node.js 20 runtime; the node20 majors warned and
+# were forced onto Node 24): actions/checkout@v5,
+# actions/upload-artifact@v6. dtolnay/rust-toolchain is a composite
+# action (no Node runtime); Swatinem/rust-cache has no newer major than
+# @v2, which floats with its releases.
 env:
   CARGO_TERM_COLOR: always
   # Keep in lockstep with rust-toolchain.toml and `rust-version` in
@@ -27,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -39,7 +45,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # No protoc install step: the proto build scripts (gsb-protocol,
       # gsb-kit, gsb-demo) hand prost-build the `protoc-bin-vendored` binary, so
       # the build needs neither a system protoc nor `PROTOC`.
@@ -60,7 +66,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -82,7 +88,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -108,7 +114,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -124,7 +130,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # No protoc install step — see the clippy job.
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -147,7 +153,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -173,7 +179,7 @@ jobs:
       - name: Judge the report
         run: python3 .github/autobahn/autobahn.py check autobahn/reports/index.json
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: autobahn-report
           path: autobahn/

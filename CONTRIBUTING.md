@@ -42,6 +42,15 @@ oyunsuz/tek oyun satırları onu da derler.
 CI ayrıca `autobahn` işini koşar: WS kapısına karşı Autobahn fuzzing
 client'ı (`docs/SECURITY.md` §3.7; yerelde docker imajı gerekir).
 
+CI'daki JavaScript action'ları, `runs.using`'i node24 olan ana sürüme
+sabitlenir (GitHub Node.js 20 çalışma zamanını kaldırıyor; node20
+sürümleri uyarı verip zorla Node 24'te koşuyordu — B34):
+`actions/checkout@v5`, `actions/upload-artifact@v6`.
+`dtolnay/rust-toolchain` composite action'dır (Node yok);
+`Swatinem/rust-cache`'in `@v2`'den yeni ana sürümü yoktur, `@v2`
+sürümleriyle birlikte ilerler. Yeni bir `uses:` eklenirken aynı kural
+geçerlidir.
+
 Tur sonu ayrıca:
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 (ve `--game arena`, `--game mmo`, `--game war` ile) → `left=50`, `errors=0`, panik yok.
