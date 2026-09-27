@@ -98,6 +98,13 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   asılma korumasıdır (ör. 10 sn), iddianın parçası değildir.
 - **Test düzeneğinin sahte ucu** (peer, tick beslemesi) ölçülen kodun
   gerçek-zamanlı penceresinin darboğazı olmaz.
+- **Duvar saatiyle hız sınırlanmış bir cevabı yoklayan test**
+  (bağlantı aktörünün saniyede en çok bir HEARTBEAT_ACK'i) tek atımlık
+  yoklama yapmaz: son cevaplanandan "yaklaşık bir saniye sonra" giden
+  tek yoklama yükte pencerenin içine düşer ve cevapsız kalır. Yoklama
+  cevaplanana dek yinelenir ve yalnız KENDİ numaralı isteklerinin
+  cevabını kabul eder; süre sınırı yine yalnız asılma korumasıdır
+  (F24: `afk_action.rs::still_answered`).
 - Yeni gerçek saatli bir test yük altında denenir: 32 çekirdekte
   `for i in $(seq 30); do sh -c 'while :; do :; done' & done`, sonra
   `cargo test --workspace --no-fail-fast` birkaç kez (ve

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy_ecs::world::World;
+use gsb_client::ClientError;
 use gsb_client::conn::{Conn, Recv};
 use gsb_client::session::{self, Credentials};
 use gsb_core::conn::ServerClose;
@@ -121,10 +122,33 @@ async fn the_default_keeps_a_heartbeating_idle_client_connected() {
     let mut c = player(handle.addr, "idle").await;
     let (errors, closed) = heartbeat_for(&mut c, Duration::from_secs(3)).await;
     assert!(!closed && errors.is_empty(), "{errors:?}");
-    session::heartbeat_round(&mut c, 99, W, |_| {})
-        .await
-        .expect("still connected");
+    still_answered(&mut c).await;
     handle.stop().await;
+}
+
+/// The liveness probe after the idle span: heartbeats numbered from
+/// `PROBE` until the server acknowledges one of THEM — an ACK to an
+/// earlier heartbeat is not the answer. One probe is not enough: the
+/// connection actor answers at most one heartbeat per second (wall
+/// clock, §3.2), and a probe right after the idle span lands about a
+/// second after the last answered one — under load, just inside it, so
+/// it goes unanswered (BACKLOG F24). Retrying every 300 ms reaches the
+/// next answered slot; the window is only a hang guard. An ERROR or a
+/// close is the failure the test is about.
+async fn still_answered(c: &mut Conn) {
+    const PROBE: u64 = 1000;
+    let deadline = Instant::now() + W;
+    let mut tick = PROBE;
+    loop {
+        match session::heartbeat_round(c, tick, Duration::from_millis(300), |_| {}).await {
+            Ok(acked) if acked >= PROBE => return,
+            Ok(_) | Err(ClientError::TimedOut) => {
+                assert!(Instant::now() < deadline, "no heartbeat answered in {W:?}");
+                tick += 1;
+            }
+            Err(e) => panic!("the idle client was dropped: {e}"),
+        }
+    }
 }
 
 /// A game module that kicks idle players from the server by default.
