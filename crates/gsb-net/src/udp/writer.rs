@@ -11,7 +11,6 @@ use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::ConnectionId;
-use gsb_protocol::op;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
 
@@ -39,7 +38,10 @@ pub(super) fn udp_pump_spawner(
             // deadline heap's concern, and this writer's own liveness
             // bound is the REL band's ACK-progress clock (see `reliable`),
             // which is the datagram equivalent of the stream pumps' write
-            // stall — a datagram `try_send_to` never parks.
+            // stall — a datagram `try_send_to` never parks. The band's
+            // death verdict gets a mailbox slot reserved NOW, before the
+            // task runs (B66; see `crate::pump::verdict`).
+            let verdict = Some(crate::pump::verdict::Verdict::reserve(in_tx.clone(), true));
             let writer = tokio::spawn(
                 UdpWriter {
                     conn,
@@ -62,6 +64,12 @@ pub(super) fn udp_pump_spawner(
                     reaper,
                     reap_signalled: false,
                     drained: 0,
+                    verdict,
+                    deferred_verdict: None,
+                    game_send_failed: 0,
+                    control_send_failed: 0,
+                    unsent: 0,
+                    verdicts_deferred: 0,
                     flusher: crate::metrics::Flusher::new(metrics),
                 }
                 .run(),
@@ -119,6 +127,19 @@ pub(super) struct UdpWriter {
     /// Frames taken off the channel after the session was over (never
     /// sent: see the loop).
     drained: u64,
+    /// The band's death verdict: its mailbox slot, reserved at birth
+    /// (taken by `die`), and — only when no slot could be reserved and
+    /// the mailbox was full — the notice still to deliver after the
+    /// outbound channel is closed.
+    verdict: Option<crate::pump::verdict::Verdict>,
+    deferred_verdict: Option<(Mailbox<ConnIn>, ConnIn)>,
+    /// Datagrams the socket refused, by band (B66).
+    game_send_failed: u64,
+    control_send_failed: u64,
+    /// Frames never sent because the band died (B66, `die`).
+    unsent: u64,
+    /// Death verdicts that could not use a reserved slot (B66).
+    verdicts_deferred: u64,
     /// The loss counters' path to the collector (B58).
     flusher: crate::metrics::Flusher,
 }
@@ -160,10 +181,21 @@ impl UdpWriter {
             }
             self.flush_metrics(false);
         }
+        // What the channel still holds is never sent (B66): after the
+        // band's death, the batches queued behind the fatal one; after an
+        // ordinary end, nothing. Closed first, so a later send fails at
+        // its sender (which counts it).
+        self.drain_unsent();
         // Whatever ended the writer (the REL band died; every sender is
         // gone), the session has no writer any more: the demux may free it.
         self.signal_reap().await;
         self.flush_metrics(true);
+        if let Some((in_tx, msg)) = self.deferred_verdict.take() {
+            // No slot was reserved at birth and the mailbox was full: the
+            // notice goes after the close (counted in `die`), last — it
+            // may wait for the actor to make room.
+            let _ = in_tx.send(msg).await;
+        }
         if self.dropped_oversized > 0
             || self.frag_messages > 0
             || self.retransmits > 0
@@ -184,60 +216,6 @@ impl UdpWriter {
         }
         debug!(conn = %self.conn, "rUDP writer stopped");
     }
-
-    /// Encode and send one outbound batch. Returns the fatal reason when
-    /// the reliable band cannot carry a control frame: its memory bound
-    /// ([`RETRANSIT_CAP`]) is crossed, or the frame exceeds the datagram
-    /// budget (the control band is never fragmented — module docs,
-    /// "MTU (feature 3)").
-    async fn send_batch(&mut self, batch: FrameBatch) -> Option<String> {
-        for frame in batch {
-            if frame.op == op::base::UDP_ACK {
-                // The demux's piggybacked inbound ACK (see `Demux::handle`).
-                self.apply_ack(&frame);
-                continue;
-            }
-            if !is_control(frame.op) {
-                // The game band: RAW, or FRAG when over the budget.
-                self.send_game(&frame).await;
-                continue;
-            }
-            if self.retransmit.len() >= RETRANSIT_CAP {
-                return Some(format!(
-                    "rUDP reliable control band: {RETRANSIT_CAP} frames outstanding, \
-                     the peer has confirmed none of them"
-                ));
-            }
-            // Checked BEFORE a seq is spent: a control frame that cannot
-            // ride one datagram is undeliverable, and dropping it after
-            // taking its seq would wedge the peer's cumulative stream.
-            let size = 5 + 2 + frame.payload.len();
-            if size > self.max_datagram {
-                return Some(format!(
-                    "rUDP reliable control band: op {} needs a {size}-byte datagram, \
-                     over the {}-byte budget (control frames are never fragmented)",
-                    frame.op, self.max_datagram
-                ));
-            }
-            self.seq = self.seq.wrapping_add(1);
-            let datagram = Bytes::from(encode_rel(self.seq, &frame));
-            self.retransmit
-                .push_back((self.seq, datagram.clone(), Instant::now()));
-            self.send(&datagram).await;
-        }
-        None
-    }
-
-    /// Put one datagram on the socket.
-    async fn send(&self, datagram: &[u8]) {
-        if let Err(e) = self.sock.send_to(datagram, self.peer).await {
-            // The socket is shut (listener close) or the peer is gone:
-            // keep draining the channel so the actor's exit cascade is
-            // not delayed; the next send keeps failing until the channel
-            // closes.
-            debug!(conn = %self.conn, peer = %self.peer, %e, "rUDP: send failed");
-        }
-    }
 }
 
 /// The reliable band's own half (ACK bookkeeping, the retransmit pass,
@@ -256,3 +234,7 @@ mod end;
 /// The loss counters on their way to the collector (BACKLOG B58). A
 /// CHILD module too.
 mod flush;
+
+/// The send path: a batch frame by frame, one datagram, and what is
+/// never sent (B66). A CHILD module too.
+mod send;

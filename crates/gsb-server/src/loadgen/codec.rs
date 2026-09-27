@@ -189,7 +189,11 @@ mod logic;
 /// of that section (the stream pumps' losses — B66:
 /// `stream_frames_unwritten` .. `ws_frames_dropped_after_close`); the
 /// section is `TRANSPORT_COUNT` long, so a new counter is a new layout.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D53;
+/// GSMT = the GSMS layout with ten more transport counters at the end
+/// (the rUDP writer's and demux's remaining losses and the deferred
+/// writer verdicts — B66: `udp_game_datagrams_send_failed` ..
+/// `writer_verdicts_deferred`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D54;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

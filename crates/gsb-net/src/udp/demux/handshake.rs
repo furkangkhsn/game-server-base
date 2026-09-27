@@ -43,6 +43,7 @@ impl super::Demux {
             self.challenges += 1;
             let hello = encode_hello(nonce, self.cookie.compute(nonce, peer, slot));
             if let Err(e) = self.sock.try_send_to(&hello, peer) {
+                self.challenges_send_failed += 1;
                 debug!(%peer, %e, "rUDP: challenge send failed");
             }
         } else if self.cookie.verify(nonce, peer, cookie, slot) {

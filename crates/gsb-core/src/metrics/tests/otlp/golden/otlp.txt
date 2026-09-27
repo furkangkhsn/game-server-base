@@ -132,6 +132,26 @@ gsb_transport_ws_control_frames_unwritten sum t=2 mono=true unit="" n=1 | WebSoc
   [] 1000..2000 int 24
 gsb_transport_ws_frames_dropped_after_close sum t=2 mono=true unit="" n=1 | WebSocket game frames dropped because a close frame had already gone out (no data after a close), cumulative.
   [] 1000..2000 int 25
+gsb_transport_udp_game_datagrams_send_failed sum t=2 mono=true unit="" n=1 | Game-band rUDP datagrams (a RAW frame or one fragment) the socket refused, lost (never retransmitted), cumulative.
+  [] 1000..2000 int 26
+gsb_transport_udp_control_datagrams_send_failed sum t=2 mono=true unit="" n=1 | Reliable rUDP control datagrams the socket refused, first sends and retransmissions (retransmitted until the liveness bound), cumulative.
+  [] 1000..2000 int 27
+gsb_transport_udp_acks_send_failed sum t=2 mono=true unit="" n=1 | rUDP ACKs (the handshake accept included) the socket refused; the client re-sends, cumulative.
+  [] 1000..2000 int 28
+gsb_transport_udp_challenges_send_failed sum t=2 mono=true unit="" n=1 | rUDP handshake challenges the socket refused; the client asks again, cumulative.
+  [] 1000..2000 int 29
+gsb_transport_udp_requests_dropped_closed sum t=2 mono=true unit="" n=1 | RPC requests the rUDP demux decoded for a session whose connection had already closed its inbox, never answered, cumulative.
+  [] 1000..2000 int 30
+gsb_transport_udp_actions_dropped_closed sum t=2 mono=true unit="" n=1 | Game-band frames the rUDP demux decoded for a session whose connection had already closed its inbox, cumulative.
+  [] 1000..2000 int 31
+gsb_transport_udp_control_frames_dropped_closed sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests the rUDP demux decoded for a session whose connection had already closed its inbox, cumulative.
+  [] 1000..2000 int 32
+gsb_transport_udp_datagrams_no_session sum t=2 mono=true unit="" n=1 | REL, RAW and ACK datagrams from an address with no rUDP session (over, or never established), dropped, cumulative.
+  [] 1000..2000 int 33
+gsb_transport_udp_frames_unsent sum t=2 mono=true unit="" n=1 | Frames an rUDP writer never sent because the reliable band died: the rest of its batch and everything still queued (counted as shipped/sent before), cumulative.
+  [] 1000..2000 int 34
+gsb_transport_writer_verdicts_deferred sum t=2 mono=true unit="" n=1 | Writer verdicts (write stall, dead rUDP band) that found the connection's mailbox full with no reserved slot: delivered after the outbound channel closed, the close possibly booked as outbound_dead, cumulative.
+  [] 1000..2000 int 35
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

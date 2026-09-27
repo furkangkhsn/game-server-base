@@ -16,6 +16,10 @@ impl super::UdpWriter {
             udp_frames_dropped_oversized: self.dropped_oversized,
             udp_control_frames_abandoned: self.abandoned,
             udp_frames_drained: self.drained,
+            udp_game_datagrams_send_failed: self.game_send_failed,
+            udp_control_datagrams_send_failed: self.control_send_failed,
+            udp_frames_unsent: self.unsent,
+            writer_verdicts_deferred: self.verdicts_deferred,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

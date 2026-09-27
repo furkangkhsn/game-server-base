@@ -22,7 +22,6 @@
 //! still gets one window in total, not N: only bytes restart it.
 
 mod op;
-mod verdict;
 
 use std::time::{Duration, Instant};
 
@@ -36,8 +35,8 @@ use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
 use crate::pump::lost::Unwritten;
+use crate::pump::verdict::Verdict;
 use op::Op;
-use verdict::Verdict;
 
 /// How one awaited sink operation ended.
 enum Step {
@@ -96,7 +95,7 @@ where
 /// `in_tx` is the connection actor's mailbox — an IN-PROCESS channel.
 /// That is the whole point: when this pump has a verdict to deliver, the
 /// socket is the one thing that cannot carry it. One slot of it is
-/// reserved here, before the task starts ([`verdict`]): the verdict must
+/// reserved here, before the task starts ([`crate::pump::verdict`]): the verdict must
 /// land even when the mailbox is full. The actor then runs its
 /// ORDINARY teardown (the `ServerClosed` arm: final metrics flush,
 /// `RegistryMsg::ConnClosed`, registry/room release), so the death is
@@ -117,7 +116,7 @@ where
     Writer:
         futures::Sink<FrameBody, Error = std::io::Error> + WriteProgress + Unpin + Send + 'static,
 {
-    let verdict = Verdict::reserve(in_tx, write_stall);
+    let verdict = Verdict::reserve(in_tx, write_stall.is_some());
     tokio::spawn(async move {
         let mut sink = writer;
         let mut progress = Instant::now();
@@ -181,7 +180,7 @@ where
                 // is already there to find, so the close is counted as the
                 // write stall it is rather than as a bare dead outbound
                 // path — overload included, where the mailbox is full of
-                // the client's frames (see [`verdict`]).
+                // the client's frames (see [`crate::pump::verdict`]).
                 let deferred = verdict.post(ConnIn::ServerClosed {
                     cause: ServerClose::WriteStall,
                     reason,
@@ -192,12 +191,17 @@ where
                 // What it still holds is counted (B66).
                 unwritten.drain(&mut out_rx);
                 drop(out_rx);
-                unwritten.report(metrics);
                 // NOT `sink.close()`: a graceful close flushes, and the
                 // socket is the thing that is stuck. The teardown must
                 // never need the peer to accept one more byte.
                 // Only when no slot could be reserved at birth: the
                 // pre-existing order (the verdict may miss the actor).
+                // Counted (B66): the close may be booked as
+                // `outbound_dead` if the actor looks before it lands.
+                if deferred.is_some() {
+                    unwritten.verdict_deferred();
+                }
+                unwritten.report(metrics);
                 if let Some((in_tx, msg)) = deferred {
                     let _ = in_tx.send(msg).await;
                 }

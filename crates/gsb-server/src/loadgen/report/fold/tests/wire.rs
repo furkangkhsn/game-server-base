@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"SMSG", "the magic, little-endian GSMS");
+    assert_eq!(&frame[..4], b"TMSG", "the magic, little-endian GSMT");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -397,8 +397,8 @@ fn the_unprocessed_frames_survive_the_wire() {
     assert_eq!(got.net.server_closes.total(), 1);
 }
 
-/// The transport's own losses (GSMR, B58; GSMS added the stream pumps',
-/// B66) cross the wire as a section of their own after the attribution
+/// The transport's own losses (GSMR, B58; GSMS and GSMT added the
+/// stream pumps' and the rUDP tasks' remaining ones, B66) cross the wire as a section of their own after the attribution
 /// list: every counter in its slot.
 #[test]
 fn the_transport_losses_survive_the_wire() {

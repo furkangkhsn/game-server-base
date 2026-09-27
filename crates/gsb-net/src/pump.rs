@@ -31,6 +31,7 @@
 //! needed (see `docs/DESIGN.md`, session lifecycle).
 
 mod lost;
+pub(crate) mod verdict;
 mod writer;
 
 #[cfg(test)]

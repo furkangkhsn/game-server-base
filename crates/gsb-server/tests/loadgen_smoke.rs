@@ -240,6 +240,17 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_stream_control_frames_dropped_closed",
         "transport_ws_control_frames_unwritten",
         "transport_ws_frames_dropped_after_close",
+        // The rUDP tasks' remaining losses (B66).
+        "transport_udp_game_datagrams_send_failed",
+        "transport_udp_control_datagrams_send_failed",
+        "transport_udp_acks_send_failed",
+        "transport_udp_challenges_send_failed",
+        "transport_udp_requests_dropped_closed",
+        "transport_udp_actions_dropped_closed",
+        "transport_udp_control_frames_dropped_closed",
+        "transport_udp_datagrams_no_session",
+        "transport_udp_frames_unsent",
+        "transport_writer_verdicts_deferred",
     ] {
         let _: u64 = get(k)
             .parse()

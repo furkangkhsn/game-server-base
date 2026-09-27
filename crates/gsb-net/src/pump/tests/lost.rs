@@ -191,3 +191,41 @@ async fn the_readers_frame_refused_by_a_closed_inbox_is_counted_by_kind() {
         .expect("no panic");
     write.abort();
 }
+
+/// A stall verdict with no reserved slot (the mailbox was full when the
+/// pump was born) is delivered after the close — counted as deferred.
+#[tokio::test]
+async fn a_stall_verdict_without_a_reserved_slot_is_counted_as_deferred() {
+    let (metrics_tx, mut metrics_rx) = mpsc::channel::<MetricsEvent>(8);
+    let (in_tx, mut inbox) = channel::<ConnIn>(1);
+    let hb = FrameBody::new(op::base::HEARTBEAT, Vec::new());
+    in_tx.try_send(ConnIn::Frame(hb)).expect("room");
+    let (out_tx, out_rx) = channel::<FrameBatch>(4);
+    out_tx.try_send(frames(1)).expect("room");
+    let (read, write) = spawn_pumps(
+        ConnectionId(65),
+        futures::stream::pending::<std::io::Result<FrameBody>>(),
+        Wedged,
+        in_tx,
+        out_rx,
+        PumpTimeouts {
+            idle: None,
+            write_stall: Some(Duration::from_millis(100)),
+        },
+        Some(metrics_tx),
+    );
+    let t = transport_sample(&mut metrics_rx).await;
+    assert_eq!(t.writer_verdicts_deferred, 1, "{t:?}");
+    assert_eq!(t.stream_frames_unwritten, 1);
+    // Making room lets the late verdict in.
+    let _ = inbox.recv().await;
+    match tokio::time::timeout(Duration::from_secs(5), inbox.recv()).await {
+        Ok(Some(ConnIn::ServerClosed { cause, .. })) => assert_eq!(cause, ServerClose::WriteStall),
+        other => panic!("the late verdict: {other:?}"),
+    }
+    tokio::time::timeout(Duration::from_secs(5), write)
+        .await
+        .expect("the writer ended")
+        .expect("no panic");
+    read.abort();
+}

@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 25] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 35] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -144,6 +144,56 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 25] 
         "gsb_transport_ws_frames_dropped_after_close_total",
         "WebSocket game frames dropped because a close frame had already gone out (no data after a close), cumulative.",
         |t| t.ws_frames_dropped_after_close,
+    ),
+    tr(
+        "gsb_transport_udp_game_datagrams_send_failed_total",
+        "Game-band rUDP datagrams (a RAW frame or one fragment) the socket refused, lost (never retransmitted), cumulative.",
+        |t| t.udp_game_datagrams_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_control_datagrams_send_failed_total",
+        "Reliable rUDP control datagrams the socket refused, first sends and retransmissions (retransmitted until the liveness bound), cumulative.",
+        |t| t.udp_control_datagrams_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_acks_send_failed_total",
+        "rUDP ACKs (the handshake accept included) the socket refused; the client re-sends, cumulative.",
+        |t| t.udp_acks_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_challenges_send_failed_total",
+        "rUDP handshake challenges the socket refused; the client asks again, cumulative.",
+        |t| t.udp_challenges_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_requests_dropped_closed_total",
+        "RPC requests the rUDP demux decoded for a session whose connection had already closed its inbox, never answered, cumulative.",
+        |t| t.udp_requests_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_udp_actions_dropped_closed_total",
+        "Game-band frames the rUDP demux decoded for a session whose connection had already closed its inbox, cumulative.",
+        |t| t.udp_actions_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_udp_control_frames_dropped_closed_total",
+        "Base-band frames other than RPC requests the rUDP demux decoded for a session whose connection had already closed its inbox, cumulative.",
+        |t| t.udp_control_frames_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_udp_datagrams_no_session_total",
+        "REL, RAW and ACK datagrams from an address with no rUDP session (over, or never established), dropped, cumulative.",
+        |t| t.udp_datagrams_no_session,
+    ),
+    tr(
+        "gsb_transport_udp_frames_unsent_total",
+        "Frames an rUDP writer never sent because the reliable band died: the rest of its batch and everything still queued (counted as shipped/sent before), cumulative.",
+        |t| t.udp_frames_unsent,
+    ),
+    tr(
+        "gsb_transport_writer_verdicts_deferred_total",
+        "Writer verdicts (write stall, dead rUDP band) that found the connection's mailbox full with no reserved slot: delivered after the outbound channel closed, the close possibly booked as outbound_dead, cumulative.",
+        |t| t.writer_verdicts_deferred,
     ),
 ];
 

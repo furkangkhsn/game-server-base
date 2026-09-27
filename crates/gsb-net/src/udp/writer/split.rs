@@ -16,7 +16,7 @@ impl super::UdpWriter {
     pub(super) async fn send_game(&mut self, frame: &FrameBody) {
         let datagram = encode_raw(frame);
         if datagram.len() <= self.max_datagram {
-            self.send(&datagram).await;
+            self.send(&datagram, false).await;
             return;
         }
         // The message is what the RAW datagram carries after its kind
@@ -42,7 +42,7 @@ impl super::UdpWriter {
         };
         self.frag_id = self.frag_id.wrapping_add(1);
         for d in &fragments {
-            self.send(d).await;
+            self.send(d, false).await;
         }
         self.frag_messages += 1;
         self.frag_datagrams += fragments.len() as u64;

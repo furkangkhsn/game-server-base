@@ -57,10 +57,14 @@ impl super::UdpWriter {
         }
         if let Some((_, datagram, sent)) = self.retransmit.front_mut()
             && *sent + RETRANSIT_RTO <= now
-            && self.sock.try_send_to(datagram, self.peer).is_ok()
         {
-            *sent = now;
-            self.retransmits += 1;
+            if self.sock.try_send_to(datagram, self.peer).is_ok() {
+                *sent = now;
+                self.retransmits += 1;
+            } else {
+                // Refused (B66): the next pass tries again.
+                self.control_send_failed += 1;
+            }
         }
         None
     }
@@ -83,20 +87,28 @@ impl super::UdpWriter {
             outstanding = self.abandoned,
             "rUDP: the reliable control band is dead; ending the session"
         );
-        if self
-            .in_tx
-            .try_send(ConnIn::ServerClosed {
-                cause: gsb_core::conn::ServerClose::RelDead,
-                reason,
-            })
-            .is_err()
-        {
-            // Closed: the actor is already gone — nothing to tell. Full:
-            // its mailbox is saturated, and this writer's exit still drops
-            // the outbound channel, which the actor's next send reports to
-            // itself as a dead outbound path; the demux idle sweep is the
-            // third net.
-            debug!(conn = %self.conn, "rUDP: close notice not delivered to the actor");
+        // The notice goes into the mailbox slot reserved at the writer's
+        // birth (B66, `crate::pump::verdict`): synchronous, and it lands
+        // even in a full mailbox — before, a `try_send` that a saturated
+        // mailbox refused left the actor to find its outbound channel
+        // closed with nothing explaining it, and the close was booked as
+        // `outbound_dead`. The notice is in the mailbox BEFORE the run
+        // loop closes the outbound channel. (A closed mailbox: the actor
+        // is already gone — nothing to tell.)
+        let notice = ConnIn::ServerClosed {
+            cause: gsb_core::conn::ServerClose::RelDead,
+            reason,
+        };
+        let verdict = self
+            .verdict
+            .take()
+            .unwrap_or(crate::pump::verdict::Verdict::Never);
+        if let Some(deferred) = verdict.post(notice) {
+            // No slot could be reserved at birth and the mailbox is full:
+            // delivered after the close (the run loop), counted.
+            self.verdicts_deferred += 1;
+            debug!(conn = %self.conn, "rUDP: close notice deferred past the close");
+            self.deferred_verdict = Some(deferred);
         }
     }
 }

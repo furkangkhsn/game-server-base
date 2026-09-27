@@ -40,7 +40,9 @@
 //! line and its eighteen `gsb_transport_*_total` families (the transport
 //! tasks' own dropped samples also fold into `gsb_metrics_dropped_total`).
 //! B66's seven stream-pump counters at the end of that line and table
-//! (`stream_frames_unwritten` .. `ws_frames_dropped_after_close`).
+//! (`stream_frames_unwritten` .. `ws_frames_dropped_after_close`), and
+//! its ten rUDP/verdict counters after them
+//! (`udp_game_datagrams_send_failed` .. `writer_verdicts_deferred`).
 
 use super::*;
 use crate::conn::ServerClose;

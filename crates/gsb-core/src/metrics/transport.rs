@@ -156,6 +156,47 @@ transport_counters! {
     /// (RFC 6455 §5.5.1: no data after a close) — on a refused stream,
     /// the connection's notice and the fan-out still in flight.
     ws_frames_dropped_after_close,
+    /// rUDP writer (B66): game-band datagrams (a RAW frame, or one FRAG
+    /// fragment of a large one) the socket refused — lost, the band does
+    /// not retransmit.
+    udp_game_datagrams_send_failed,
+    /// rUDP writer: reliable control datagrams the socket refused, a
+    /// first send or a retransmission (the band retransmits them until
+    /// its liveness bound).
+    udp_control_datagrams_send_failed,
+    /// rUDP demux: cumulative ACKs (the handshake's accept included) the
+    /// socket refused; the client re-sends what they would have
+    /// acknowledged.
+    udp_acks_send_failed,
+    /// rUDP demux: handshake challenges the socket refused; the client
+    /// asks again.
+    udp_challenges_send_failed,
+    /// rUDP demux: RPC requests decoded for a session whose connection
+    /// actor had already closed its inbox (the session is removed at
+    /// once) — never processed, never answered. A term of the RPC ledger.
+    /// A reliable frame here was not yet acknowledged, and the session is
+    /// gone for its re-send.
+    udp_requests_dropped_closed,
+    /// rUDP demux: game-band frames lost the same way.
+    udp_actions_dropped_closed,
+    /// rUDP demux: other base-band frames lost the same way.
+    udp_control_frames_dropped_closed,
+    /// rUDP demux: REL, RAW and ACK datagrams from an address with no
+    /// session (its session is over, or there never was one), dropped
+    /// undecoded.
+    udp_datagrams_no_session,
+    /// rUDP writer: frames never sent because the session's reliable band
+    /// died — the rest of the batch being sent (the undeliverable control
+    /// frame included) and every frame still queued in the outbound
+    /// channel. The room and the connection actor counted them as
+    /// shipped/sent.
+    udp_frames_unsent,
+    /// Writers' verdicts (a stream pump's write stall, an rUDP band's
+    /// death) that found the connection's mailbox full with no slot
+    /// reserved at the writer's birth: delivered only after the outbound
+    /// channel closed, so the session's close may be booked as
+    /// `outbound_dead` instead of the verdict.
+    writer_verdicts_deferred,
 }
 
 impl TransportCounters {

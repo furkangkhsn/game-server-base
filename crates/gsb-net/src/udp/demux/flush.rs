@@ -21,6 +21,12 @@ impl super::Demux {
             udp_bad_cookies: self.bad_cookie,
             udp_frags_refused: self.frag_refused,
             udp_sessions_dropped_accept_full: self.endpoints_dropped,
+            udp_acks_send_failed: self.acks_send_failed,
+            udp_challenges_send_failed: self.challenges_send_failed,
+            udp_requests_dropped_closed: self.closed_requests,
+            udp_actions_dropped_closed: self.closed_actions,
+            udp_control_frames_dropped_closed: self.closed_controls,
+            udp_datagrams_no_session: self.no_session,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

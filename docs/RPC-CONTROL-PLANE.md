@@ -848,7 +848,8 @@ değişmedi.
 > + req_unbound + requests_dropped_closed + requests_dropped_full
 > + requests_no_room + requests_unprocessed
 > + transport_udp_requests_dropped_full
-> + transport_stream_requests_dropped_closed`
+> + transport_stream_requests_dropped_closed
+> + transport_udp_requests_dropped_closed`
 
 Her istek tam olarak BİR terimdedir: oda kovaları (işlendi, reddedildi,
 yanıtsız reddedildi, okunmadı, bağlanmamış bağlantıdan çekildi) ile
@@ -867,7 +868,12 @@ düşürmez; ama sunucu oturumu bitirip kutuyu kapattığında (B60) okuyucunun
 o an elinde tuttuğu kare reddedilir — bağlantı başına en çok bir kare.
 İstekse `transport_stream_requests_dropped_closed` (B66, sayım turu 4),
 defterin ikinci taşıma terimi: aktör onu hiç almadığından
-`requests_unprocessed` ile çakışmaz.
+`requests_unprocessed` ile çakışmaz. rUDP'de karşılığı
+`transport_udp_requests_dropped_closed` (B66): demux'ın kapalı kutuya
+çözdüğü istek (`Closed` kolu; oturum silinir, sıradaki güvenilir kareler
+de aynı yolda). Henüz ACK'lenmemişti ama yeniden göndereceği oturum yok;
+ardından gelen datagramlar `udp_datagrams_no_session`'a düşer (datagram
+birimi, defter terimi değil).
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
@@ -1122,6 +1128,8 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 - ~~**Akış okuyucusunun kapalı kutuya veremediği istek**~~ **Yapıldı
   (B66):** `transport_stream_requests_dropped_closed`, defterin terimi —
   §8.3.
+- ~~**rUDP demux'ının kapalı kutuya çözdüğü istek**~~ **Yapıldı (B66):**
+  `transport_udp_requests_dropped_closed`, defterin terimi — §8.3.
 
 ## 12. Testler: sözleşmenin kilidi
 

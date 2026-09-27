@@ -1,6 +1,9 @@
-//! The writer pump's road to the connection actor's mailbox: ONE slot of
-//! it, reserved when the pump is born, so a stall verdict never waits for
-//! room. A child of the writer pump.
+//! A writer's road to the connection actor's mailbox: ONE slot of it,
+//! reserved when the writer is born, so its verdict never waits for
+//! room. Shared by the stream writer pump (the write stall) and the rUDP
+//! writer (the reliable band's death — B66: before, its notice was a
+//! `try_send` that a full mailbox refused, and the close was booked as
+//! `outbound_dead`).
 //!
 //! Why a reserved slot: the verdict must be IN the mailbox before the
 //! outbound channel closes — the close wakes the actor with a failed send
@@ -16,8 +19,6 @@
 //! whatever the queue looks like later: no await, nothing unbounded, and
 //! the reason still travels the one channel every other verdict uses.
 
-use std::time::Duration;
-
 use tokio::sync::mpsc::OwnedPermit;
 use tokio::sync::mpsc::error::TrySendError;
 
@@ -25,7 +26,7 @@ use gsb_core::channel::Mailbox;
 use gsb_core::conn::ConnIn;
 
 /// Where this pump's verdict goes.
-pub(super) enum Verdict {
+pub(crate) enum Verdict {
     /// The slot reserved at birth (every pump whose clock is on, in
     /// practice: its mailbox is fresh when the pumps start).
     Reserved(OwnedPermit<ConnIn>),
@@ -39,11 +40,12 @@ pub(super) enum Verdict {
 }
 
 impl Verdict {
-    /// Reserve the slot (synchronously: this runs before the pump task
-    /// is spawned). A disabled clock reserves nothing — it never judges,
-    /// so it must not cost the reader a slot.
-    pub(super) fn reserve(in_tx: Mailbox<ConnIn>, stall: Option<Duration>) -> Self {
-        if stall.is_none() {
+    /// Reserve the slot (synchronously: this runs before the writer task
+    /// is spawned). A writer that never `judges` (a stream pump with its
+    /// stall clock off) reserves nothing — it must not cost the reader a
+    /// slot.
+    pub(crate) fn reserve(in_tx: Mailbox<ConnIn>, judges: bool) -> Self {
+        if !judges {
             return Self::Never;
         }
         match in_tx.try_reserve_owned() {
@@ -56,7 +58,7 @@ impl Verdict {
     /// Post `msg` BEFORE the outbound channel is closed. Returns what is
     /// left to deliver after the close: only the unreserved fallback on a
     /// full mailbox leaves anything.
-    pub(super) fn post(self, msg: ConnIn) -> Option<(Mailbox<ConnIn>, ConnIn)> {
+    pub(crate) fn post(self, msg: ConnIn) -> Option<(Mailbox<ConnIn>, ConnIn)> {
         match self {
             Self::Reserved(slot) => {
                 slot.send(msg);

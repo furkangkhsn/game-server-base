@@ -19,6 +19,8 @@ impl super::Demux {
     /// caller must then call `remove_session`.
     fn forward(&mut self, peer: SocketAddr, fb: FrameBody) -> bool {
         let Some(s) = self.sessions.get_mut(&peer) else {
+            // A RAW datagram from an address with no session (B66).
+            self.no_session += 1;
             return false;
         };
         // The peer is alive: reset its idle window (push the new entry;
@@ -63,11 +65,24 @@ impl super::Demux {
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 // The actor exited (budget close, shutdown, …): the
                 // caller removes the session (the idle sweep would find
-                // it too, but this is immediate).
+                // it too, but this is immediate). The frame is lost —
+                // counted by kind (B66), like the `Full` arm.
                 self.removed_actor_gone += 1;
+                self.count_closed(kind);
                 true
             }
         }
+    }
+
+    /// One decoded frame lost to a closed session inbox, by kind (B66): a
+    /// request is a term of the RPC ledger.
+    fn count_closed(&mut self, kind: gsb_core::conn::FrameKind) {
+        let n = match kind {
+            gsb_core::conn::FrameKind::Request => &mut self.closed_requests,
+            gsb_core::conn::FrameKind::Action => &mut self.closed_actions,
+            gsb_core::conn::FrameKind::Control => &mut self.closed_controls,
+        };
+        *n += 1;
     }
 
     /// Inbound reliable (client→server): dedupe + order + forward + ACK.
@@ -80,7 +95,10 @@ impl super::Demux {
         // PHASE 1.
         let (to_forward, ack_to) = {
             let Some(s) = self.sessions.get_mut(&peer) else {
-                return; // no session: drop (pre-handshake or already gone)
+                // No session: drop (pre-handshake or already gone), counted
+                // (B66).
+                self.no_session += 1;
+                return;
             };
             // The peer is alive: reset its idle window.
             let now = Instant::now();
@@ -129,8 +147,14 @@ impl super::Demux {
             (to_forward, ack_to)
         };
         // PHASE 2 (the borrow above is over).
-        for fb in to_forward {
+        let mut frames = to_forward.into_iter();
+        while let Some(fb) = frames.next() {
             if self.forward(peer, fb) {
+                // The frames behind it in sequence order are lost with the
+                // session (B66); none of them was acknowledged.
+                for rest in frames {
+                    self.count_closed(gsb_core::conn::FrameKind::of(rest.op));
+                }
                 self.remove_session(peer);
                 return;
             }
@@ -143,6 +167,7 @@ impl super::Demux {
     pub(super) fn send_ack(&mut self, peer: SocketAddr, next: u32) {
         let ack = encode_ack(next);
         if let Err(e) = self.sock.try_send_to(&ack, peer) {
+            self.acks_send_failed += 1;
             debug!(%peer, %e, "rUDP: ack send failed (best-effort)");
         }
     }
@@ -172,6 +197,10 @@ impl super::Demux {
                 // round trip: it needs no command channel (the demux
                 // cannot await one — its only awaited source is the
                 // socket) and costs one bounded-channel send.
+                if !self.sessions.contains_key(&peer) {
+                    // An ACK from an address with no session (B66).
+                    self.no_session += 1;
+                }
                 if let Some(s) = self.sessions.get(&peer) {
                     let fb =
                         FrameBody::new(op::base::UDP_ACK, Bytes::from(ack.to_le_bytes().to_vec()));

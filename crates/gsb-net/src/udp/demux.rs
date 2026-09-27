@@ -96,6 +96,16 @@ pub(super) struct Demux {
     full_requests: u64,
     full_actions: u64,
     full_controls: u64,
+    /// Decoded frames for a session whose actor had closed its inbox, by
+    /// kind (B66).
+    closed_requests: u64,
+    closed_actions: u64,
+    closed_controls: u64,
+    /// REL/RAW/ACK datagrams from an address with no session (B66).
+    no_session: u64,
+    /// ACKs and challenges the socket refused (B66).
+    acks_send_failed: u64,
+    challenges_send_failed: u64,
     /// The loss counters' path to the collector (B58), and the sender
     /// each session's writer gets for its own.
     flusher: crate::metrics::Flusher,
@@ -145,6 +155,12 @@ impl Demux {
             full_requests: 0,
             full_actions: 0,
             full_controls: 0,
+            closed_requests: 0,
+            closed_actions: 0,
+            closed_controls: 0,
+            no_session: 0,
+            acks_send_failed: 0,
+            challenges_send_failed: 0,
             flusher: crate::metrics::Flusher::new(None),
             metrics: None,
         }

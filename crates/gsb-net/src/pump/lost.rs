@@ -41,6 +41,9 @@ pub(super) fn reader_frame_dropped_closed(metrics: TransportMetrics, op: u16) {
 pub(super) struct Unwritten {
     frames: u64,
     batches: u64,
+    /// The stall verdict found the mailbox full with no slot reserved
+    /// (see `crate::pump::verdict`).
+    verdicts_deferred: u64,
 }
 
 impl Unwritten {
@@ -61,12 +64,19 @@ impl Unwritten {
         }
     }
 
+    /// The stall verdict could only be posted after the close (see
+    /// `crate::pump::verdict`).
+    pub(super) fn verdict_deferred(&mut self) {
+        self.verdicts_deferred += 1;
+    }
+
     /// Send the count (nothing when nothing was lost).
     pub(super) fn report(self, metrics: TransportMetrics) {
         Flusher::new(metrics).flush(
             TransportCounters {
                 stream_frames_unwritten: self.frames,
                 stream_batches_unwritten: self.batches,
+                writer_verdicts_deferred: self.verdicts_deferred,
                 ..Default::default()
             },
             true,

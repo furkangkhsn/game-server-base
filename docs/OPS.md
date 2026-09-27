@@ -490,6 +490,37 @@ max_detach_hold_secs = "off"
   fan-out); oradaki kontrol karesi kuraldır, sayılmaz. Pompalar sayıyı
   sonlarında bir kez gönderir (kayıp varsa; son örnek kuralı: dolu kanalda
   doğurulan göndericiyle).
+- **Taşıma kapsamı: rUDP'nin kalan kayıpları ve ertelenen hükümler (B66,
+  sayım turu 4).** Akış sayaçlarının ardına on `counter` daha; loadgen
+  telinde `GSMT`. Yazıcıdan: `udp_game_datagrams_send_failed` — soketin
+  reddettiği oyun bandı datagramı (RAW ya da bir FRAG parçası; kayıp,
+  yeniden gönderilmez); `udp_control_datagrams_send_failed` — soketin
+  reddettiği güvenilir kontrol datagramı, ilk gönderim ya da yeniden
+  gönderim (bant canlılık sınırına dek yeniden dener; kayıp değil,
+  reddedilen deneme — önceden yalnız debug satırı);
+  `udp_frames_unsent` — bant ölünce (`die`) hiç gönderilmeyen kareler:
+  gönderilen batch'in kalanı (taşınamayan kontrol karesi dahil) ve çıkış
+  kanalında duran her kare (demux'ın ACK taşıması sayılmaz; oda/bağlantı
+  bunları "gönderildi" saymıştı). Demux'tan: `udp_acks_send_failed` —
+  soketin reddettiği birikimli ACK (el sıkışmanın kabulü dahil; istemci
+  yeniden gönderir), `udp_challenges_send_failed` — reddedilen el sıkışma
+  sorusu; `udp_requests_dropped_closed` / `udp_actions_dropped_closed` /
+  `udp_control_frames_dropped_closed` — bağlantı aktörü kutusunu kapatmış
+  bir oturuma çözülen kare (`Closed` kolu; oturum hemen silinir), sıradaki
+  güvenilir kareler dahil, türüne göre; istek terimi RPC defterinin
+  terimidir (henüz ACK'lenmemişti ama yeniden göndereceği oturum artık
+  yok); `udp_datagrams_no_session` — oturumu olmayan adresten gelen REL,
+  RAW ve ACK datagramları (oturumu bitmiş ya da hiç kurulmamış; çözülmeden
+  atılır). Ve `writer_verdicts_deferred` — bir yazıcının hükmü (akış
+  pompasının yazma tıkanması, rUDP bandının ölümü) doğumda ayrılmış slot
+  olmadan dolu posta kutusuna denk geldi: çıkış kanalı kapandıktan SONRA
+  teslim edilir, kapanış `outbound_dead` diye kaydedilebilir. **B66'nın
+  düzeltmesi:** rUDP'nin `die`'ı artık akış pompasının ayrılmış slotunu
+  (`pump::verdict`) kullanır — yazıcı doğarken posta kutusundan bir slot
+  ayırır; `RelDead` bildirimi dolu kutuda da oradadır (önceden `try_send`
+  düşer, kapanış `outbound_dead` sayılırdı). Bu sayaç yalnız doğumda slot
+  ayrılamayan (kutu zaten dolu) nadir yolu sayar. Bedel: rUDP oturumu
+  başına bir posta kutusu slotu (akış kapılarındaki gibi).
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:
