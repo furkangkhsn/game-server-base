@@ -242,3 +242,6 @@ fn respawn(world: &mut World, player: Entity, faction: Option<gsb_kit::team::Tea
         u.hp = PLAYER_HP;
     }
 }
+
+#[cfg(test)]
+mod tests;
