@@ -146,6 +146,24 @@ fn a_burst_past_the_cap_is_counted_alike_on_both_sides() {
     );
 }
 
+/// The room's counters on the RESULT line cover the WHOLE run, the
+/// leaves included (B36): the room samples once per metrics period, so a
+/// run whose end falls mid-period must still report the requests read
+/// after the period's last sample. A fractional duration puts the end
+/// half a period past a sample.
+#[test]
+fn the_rooms_ledger_covers_the_end_of_the_run() {
+    let out = loadgen(&["4", "--duration", "2.5", "--rpc-rate", "10"]);
+    let (line, kv) = result(&out);
+    assert_clean(&line, &kv, 4);
+    let get = |k| num(&line, &kv, k);
+    assert_eq!(
+        get("req_ext") + get("req_unread"),
+        get("rpc_sent"),
+        "every request sent is in the room's final counters: {line}"
+    );
+}
+
 /// A run without the mode carries no `rpc_*` key (its line is the one
 /// it always was).
 #[test]

@@ -167,9 +167,10 @@ pub(crate) async fn run(args: Args) {
     for h in clients {
         reports.push(h.await.expect("client task panicked"));
     }
-    // Small grace period: let the leave acks, the connection actors'
-    // final metric flushes, and the registry's leave flushes settle.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Grace period: let the leave acks, the connection actors' final
+    // metric flushes, and the registry's leave flushes settle — and let
+    // every room take one more metrics sample after its leaves.
+    tokio::time::sleep(final_sample_grace()).await;
 
     // Machine-readable per-client records for the orchestrator (item A):
     // it merges them into one final report. Gated by an env var — at load
@@ -242,4 +243,18 @@ pub(crate) async fn run(args: Args) {
     let hzs: Vec<f64> = reports.iter().filter_map(measured_hz).collect();
 
     print_report(&args, inproc, &reports, &hzs, &server_reports, None);
+}
+
+/// How long the run waits between its last client and the server's
+/// stop: the leaves settle (150 ms), then one whole room metrics period
+/// passes (`RoomConfig::metrics_cadence_hz`, the served rooms' default).
+/// A room samples once per period and sends nothing when it stops, so
+/// the final report carries its counters as of its last periodic
+/// sample: a shorter wait reported the room up to a period before the
+/// end of the run — its RPC ledger missed the requests it read in that
+/// window (B36: `sent − req_ext − req_refused` grew with how far the
+/// deadline fell past a sample).
+fn final_sample_grace() -> Duration {
+    let period = 1.0 / gsb_core::room::RoomConfig::default().metrics_cadence_hz;
+    Duration::from_millis(150) + Duration::from_secs_f64(period)
 }
