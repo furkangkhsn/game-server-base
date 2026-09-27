@@ -297,6 +297,27 @@ max_detach_hold_secs = "off"
   listesi eklenmedi): her bağlantı ilk düşürmede bir kez `warn` eder
   (bağlantı id'si + eş adresi); ayrı bir bağlantı başı tablo toplayıcıda
   bellek ve budama işi olurdu, ihtiyaç görülünce eklenir.
+- **Net kapsamı: üyelik bittikten sonraki iletim (B51).** Oda üyeliği
+  KENDİSİ bitirdiğinde (oyunun atması, girdi-boşta tavanı, oda
+  kapanışı/emekliliği) oturumun action kanalı önce kapanır; bağlantı
+  aktörü bunu registry'nin bildirimiyle (`LeftRoom`, `ServerClosed`,
+  `RoomGone`) öğrenir. Arada ilettiği kare kapalı kanala çarpar ve
+  odaya hiç ulaşmaz — sayıldığı yer bağlantı aktörü, iki ayrık sayaç:
+  RPC istekleri (`RPC_REQ`) `requests_dropped_closed`, oyun-bandı
+  girdileri `actions_dropped_closed` (`actions_dropped`'ın aksine — o dolu
+  kanalda istekleri de sayar — ayrık). `gsb-metric scope=net` satırında
+  `input_rate_limited=`'den hemen sonra `actions_dropped_closed=<n>
+  requests_dropped_closed=<n>`; aile tablosunda (`NET`)
+  `gsb_net_input_rate_limited_total`'dan hemen sonra
+  `gsb_net_actions_dropped_closed_total` ve
+  `gsb_net_requests_dropped_closed_total` (`counter`, kümülatif, bütün
+  bağlantılar; OTLP'de `_total`'sız monotonic `Sum`); loadgen metrik
+  telinde `GSMJ` (net kapsamında `input_rate_limited`'den sonra iki
+  `u64`); `RESULT`'ta `actions_dropped_top=`'tan sonra iki anahtar, her
+  satırda. Kapalı iletim bağlantıyı odadan ayırır (sonraki kare `ERROR
+  6` alır ve yarış sınıfı ihlal olarak `violations`'ta sayılır), yani
+  biten üyelik başına en çok bir kare buraya düşer. RPC defterinin bağlantı tarafı terimi (RPC-CONTROL-PLANE
+  §8.3); loadgen'de hep 0 (üyeliği hep istemci bitirir).
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

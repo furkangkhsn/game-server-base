@@ -95,7 +95,7 @@ const fn net(
 /// The net scope: wire traffic aggregated over all connections (the
 /// per-connection attribution lives in `actions_dropped_top` and the
 /// per-actor log lines, not in this aggregate).
-pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 9] = [
+pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 11] = [
     net(
         "gsb_net_bytes_in_total",
         "Wire bytes received over all connections (frame bodies), cumulative.",
@@ -140,5 +140,17 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 9] = [
         "gsb_net_input_rate_limited_total",
         "Valid game-band input refused over a room's input rate limit (dropped, not a violation), cumulative.",
         |n| n.input_rate_limited,
+    ),
+    // B51: the forwards a connection dropped into a closed action channel
+    // (the room had ended the membership; its notice was still on the way).
+    net(
+        "gsb_net_actions_dropped_closed_total",
+        "Game-band actions a connection forwarded after the room had ended its membership (closed action channel; never seen by the room), cumulative.",
+        |n| n.actions_dropped_closed,
+    ),
+    net(
+        "gsb_net_requests_dropped_closed_total",
+        "RPC requests a connection forwarded after the room had ended its membership (closed action channel; never processed, never answered), cumulative.",
+        |n| n.requests_dropped_closed,
     ),
 ];

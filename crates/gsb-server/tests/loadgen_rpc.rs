@@ -100,6 +100,9 @@ fn every_request_is_answered_once_at_a_sane_rate() {
         "req_rej_logic",
         "req_refused",
         "req_to",
+        // The connection-side term of the ledger (B51): 0 here — every
+        // membership is ended by its client, never by the room.
+        "requests_dropped_closed",
     ] {
         assert_eq!(get(k), 0, "{k}: {line}");
     }

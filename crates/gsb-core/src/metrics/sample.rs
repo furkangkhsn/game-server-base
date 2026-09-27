@@ -270,6 +270,23 @@ pub struct ConnSample {
     /// flooding connection drops its own input. The collector sums these
     /// per connection so a report can attribute the loss to its sender.
     pub actions_dropped: u64,
+    /// Game-band actions this actor forwarded into an already CLOSED
+    /// action channel, delta since its last flush (B51): the room had
+    /// ended the membership itself (a kick, the input-idle ceiling, the
+    /// room closing or retiring) and the connection forwarded before it
+    /// learned — the room never sees them. At most one forward per ended
+    /// membership lands here: the closed send detaches the connection, so
+    /// the next frame is answered `ERROR 6` (not in a room). Unlike
+    /// [`Self::actions_dropped`] (which counts RPC requests too), RPC
+    /// requests are counted apart: [`Self::requests_dropped_closed`].
+    pub actions_dropped_closed: u64,
+    /// RPC requests (`RPC_REQ`) this actor forwarded into an already
+    /// CLOSED action channel, delta since its last flush (B51) — the
+    /// same moment as [`Self::actions_dropped_closed`]. Never processed,
+    /// never answered, and never seen by the room, so no room counter can
+    /// hold them: the connection-side term of the RPC ledger
+    /// (`docs/RPC-CONTROL-PLANE.md` §8.3).
+    pub requests_dropped_closed: u64,
     /// Metric samples this actor dropped on a full (bounded) metrics
     /// channel, delta since its last flush.
     pub metrics_dropped: u64,

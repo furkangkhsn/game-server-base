@@ -62,6 +62,10 @@ pub struct MetricAccumulator {
     /// Summed delta of rate-limited game-band input across all connection
     /// actors (E1; cumulative, never attributed — see the net report).
     conn_input_rate_limited: u64,
+    /// Summed deltas of the forwards the connection actors dropped into a
+    /// closed action channel (B51; cumulative, never attributed).
+    conn_actions_dropped_closed: u64,
+    conn_requests_dropped_closed: u64,
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
@@ -129,6 +133,12 @@ impl MetricAccumulator {
                 self.conn_input_rate_limited = self
                     .conn_input_rate_limited
                     .saturating_add(c.input_rate_limited);
+                self.conn_actions_dropped_closed = self
+                    .conn_actions_dropped_closed
+                    .saturating_add(c.actions_dropped_closed);
+                self.conn_requests_dropped_closed = self
+                    .conn_requests_dropped_closed
+                    .saturating_add(c.requests_dropped_closed);
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }

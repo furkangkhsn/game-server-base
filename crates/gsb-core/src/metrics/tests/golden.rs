@@ -9,8 +9,11 @@
 //! B39 added for counters the line already carried (`shipped_frames=`,
 //! `private_frames=`): `gsb_room_shipped_frames_total`,
 //! `gsb_room_private_frames_total`. And B36's `req_unread=` /
-//! `gsb_room_requests_dropped_unread_total`, and B32's `sends_closed=` /
-//! `gsb_room_sends_closed_total`.
+//! `gsb_room_requests_dropped_unread_total`, B32's `sends_closed=` /
+//! `gsb_room_sends_closed_total`, and B51's net-scope
+//! `actions_dropped_closed=` / `requests_dropped_closed=` with
+//! `gsb_net_actions_dropped_closed_total` /
+//! `gsb_net_requests_dropped_closed_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -91,6 +94,8 @@ pub(super) fn golden_report() -> MetricReport {
         metrics_dropped: 0,
         violations: 1,
         input_rate_limited: 9,
+        actions_dropped_closed: 0,
+        requests_dropped_closed: 1,
         server_close: None,
         last: false,
     }));
@@ -104,6 +109,8 @@ pub(super) fn golden_report() -> MetricReport {
         metrics_dropped: 0,
         violations: 0,
         input_rate_limited: 0,
+        actions_dropped_closed: 2,
+        requests_dropped_closed: 0,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));

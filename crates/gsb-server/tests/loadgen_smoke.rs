@@ -156,6 +156,14 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         assert_eq!(v, 0, "smoke runs no RPC traffic; {k} must be 0");
     }
 
+    // The connection-side forwards into a closed action channel (B51):
+    // every smoke membership is ended by its client, never by the room,
+    // so none can meet a closed channel.
+    for k in ["actions_dropped_closed", "requests_dropped_closed"] {
+        let v: u64 = get(k).parse().expect("number");
+        assert_eq!(v, 0, "the room ended no membership; {k} must be 0");
+    }
+
     // Server-initiated closes: the total and one key per reason, all
     // present (a shifted net-scope queue fails the parse or the zero) and
     // all 0 — a smoke run's clients leave on their own, so any non-zero

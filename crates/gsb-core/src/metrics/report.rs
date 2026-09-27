@@ -183,6 +183,14 @@ pub struct NetReport {
     /// room limits input (the default); a rising count is the limit
     /// working, not a protocol problem.
     pub input_rate_limited: u64,
+    /// Game-band actions / RPC requests a connection forwarded into an
+    /// already closed action channel — the room had ended the membership
+    /// and the connection had not learned it yet (cumulative, all
+    /// connections; B51, see
+    /// [`crate::metrics::ConnSample::actions_dropped_closed`]). Disjoint:
+    /// a request is counted in the second only.
+    pub actions_dropped_closed: u64,
+    pub requests_dropped_closed: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -254,6 +262,8 @@ impl MetricReport {
                 actions_dropped: 0,
                 violations: 0,
                 input_rate_limited: 0,
+                actions_dropped_closed: 0,
+                requests_dropped_closed: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),

@@ -65,6 +65,13 @@ pub struct ConnectionActor {
     /// samples; per-drop warnings would flood the log exactly when a
     /// flooder is doing what it does).
     m_actions_dropped_warned: bool,
+    /// Game-band actions / RPC requests this actor forwarded into a
+    /// CLOSED action channel — the room had already ended the membership
+    /// (kick, input-idle ceiling, room close or retire) and its notice
+    /// had not arrived yet — delta since the last flush (B51; see
+    /// `ConnSample::actions_dropped_closed`).
+    m_actions_dropped_closed: u64,
+    m_requests_dropped_closed: u64,
     /// Valid game-band input refused over the room's input rate limit,
     /// delta since the last flush (docs/SECURITY.md, "post-auth input
     /// volume"). Its own counter, NOT a violation (see

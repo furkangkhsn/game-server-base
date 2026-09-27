@@ -38,6 +38,10 @@ gsb_net_violations sum t=2 mono=true unit="" n=1 | Protocol-violation events cou
   [] 1000..2000 int 1
 gsb_net_input_rate_limited sum t=2 mono=true unit="" n=1 | Valid game-band input refused over a room's input rate limit (dropped, not a violation), cumulative.
   [] 1000..2000 int 9
+gsb_net_actions_dropped_closed sum t=2 mono=true unit="" n=1 | Game-band actions a connection forwarded after the room had ended its membership (closed action channel; never seen by the room), cumulative.
+  [] 1000..2000 int 2
+gsb_net_requests_dropped_closed sum t=2 mono=true unit="" n=1 | RPC requests a connection forwarded after the room had ended its membership (closed action channel; never processed, never answered), cumulative.
+  [] 1000..2000 int 1
 gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0

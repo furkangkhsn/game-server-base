@@ -141,6 +141,7 @@ impl MetricReport {
             "gsb-metric scope=net bytes_in={} bytes_out_room={} \
              bytes_out_control={} bytes_out_total={} frames_in={} frames_out={} \
              actions_dropped={} violations={} input_rate_limited={} \
+             actions_dropped_closed={} requests_dropped_closed={} \
              metrics_dropped={} server_closes={}{}",
             n.bytes_in,
             n.bytes_out_room,
@@ -151,6 +152,8 @@ impl MetricReport {
             n.actions_dropped,
             n.violations,
             n.input_rate_limited,
+            n.actions_dropped_closed,
+            n.requests_dropped_closed,
             self.metrics_dropped,
             n.server_closes.total(),
             // One stable key per reason (`server_close_<reason>=N`, zeros

@@ -17,6 +17,9 @@
 //!   the raw `RegistryMsg::LeaveConn`; `leave_races.rs`: a join elsewhere
 //!   that overtakes a late request, and the connection's stale-notice
 //!   guard.
+//! - `forward_closed.rs`: a frame the connection forwards after the room
+//!   ended the membership and before the notice arrives is counted where
+//!   it is lost (BACKLOG B51) — requests and actions apart.
 //! - `close_races.rs`: why a close request is re-checked when it leaves
 //!   the room (BACKLOG B41) — a park's report that went ahead of it is
 //!   dropped, so only the request's `parked` flag decides the row.
@@ -51,6 +54,8 @@ use tokio::sync::{mpsc, oneshot};
 mod afk;
 #[path = "room_close/close_races.rs"]
 mod close_races;
+#[path = "room_close/forward_closed.rs"]
+mod forward_closed;
 #[path = "room_close/leave.rs"]
 mod leave;
 #[path = "room_close/leave_races.rs"]

@@ -168,8 +168,12 @@ impl super::ConnectionActor {
         // this `try_send` Full case is the architecture's only input-loss
         // point (the room's READ phase is a bounded pull that defers, not
         // drops), so the drop is counted here, attributed to this
-        // connection's metrics sample. A closed channel means the room is
-        // gone: detach.
+        // connection's metrics sample. A closed channel means the room
+        // already ended the membership (kick, idle ceiling, room close or
+        // retire) and its notice is still on the way: the frame is lost
+        // here, before any room could count it — counted here too (B51),
+        // requests apart from game actions — and the connection detaches,
+        // so the next frame gets the not-in-a-room answer.
         match mailbox.try_send(Action {
             conn: self.conn,
             // The connection actor cannot know the stable player identity
@@ -197,7 +201,17 @@ impl super::ConnectionActor {
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                warn!(%self.conn, "action channel closed while forwarding; detaching");
+                if frame.op == op::base::RPC_REQ {
+                    self.m_requests_dropped_closed += 1;
+                } else {
+                    self.m_actions_dropped_closed += 1;
+                }
+                warn!(
+                    %self.conn,
+                    op = frame.op,
+                    "action channel closed while forwarding (the room ended the \
+                     membership); the frame is dropped and counted; detaching"
+                );
                 self.detach();
             }
         }

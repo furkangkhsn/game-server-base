@@ -819,11 +819,43 @@ değişmedi.
 
 İkisiyle oda defteri kapanıyor:
 
-> `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread`
+> `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
+> + requests_dropped_closed`
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
 `req_ext + req_rej_conn + req_unread = sent`, kesirli sürede aynı).
+
+Son terim oda sayacı değil, net kapsamının (B51, aşağıda): üyeliği ODA
+bitirdiğinde (atma, girdi-boşta tavanı, oda kapanışı/emekliliği)
+bağlantının bildirimden önce kapalı kanala ilettiği istek odaya hiç
+ulaşmaz. Loadgen'de üyeliği hep istemci bitirdiğinden 0 (testler bunu
+da iddia ediyor). Defterin dışında kalan iki kenar, ikisi de loadgen'de
+0: dolu action kanalında düşen istek `actions_dropped`'ta (oyun
+girdileriyle karışık — ayrılamaz), odası olmayan bağlantıya gelen
+istek `ERROR 6` ile yanıtlanır ve yarış sınıfı ihlal olarak
+`violations`'ta sayılır (öteki ihlallerle karışık — ayrılamaz; §11).
+
+**B51: üyelik bittikten sonra bağlantıda düşen istek (kapandı).**
+`forward_to_room`'un `Closed` kolu artık sayar: `RPC_REQ` ise
+`requests_dropped_closed`, oyun-bandı girdisiyse `actions_dropped_closed`
+(`ConnSample` → `NetReport`; `gsb-metric scope=net` satırında
+`input_rate_limited=`'den sonra, Prometheus'ta
+`gsb_net_{actions,requests}_dropped_closed_total`, OTLP'de `_total`'sız,
+loadgen telinde `GSMJ`, `RESULT`'ta `actions_dropped_top=`'tan sonra).
+Düz girdiler de sayılıyor — B36'nın `req_unread` için verdiği "düz
+action'ları sayma" kararının aksine: burada aynı `try_send`'in `Full`
+kolu girdiyi zaten sayıyordu (`actions_dropped`), `Closed` kolu saymıyordu;
+aynı kaybın bir kolda sayılıp ötekinde sayılmaması "her şeyi saymalıyız"
+ilkesiyle çelişir ve maliyet kayıp yolunda bir tamsayı artışı. İki sayaç
+ayrık (istek yalnız ikincisinde), böylece defter isteği girdiden ayırır.
+Kapalı iletim bağlantıyı ayırdığından (sonraki kare `ERROR 6`, yarış
+sınıfı ihlal olarak `violations`'ta) biten üyelik başına en çok bir kare
+buraya düşer. Kilit:
+`room_close.rs::forward_closed` — test registry'yi kendisi oynar,
+bağlantıyı elindeki bir action kanalıyla oturtur, kanalı kapatır (atma /
+boşta tavanı despawn'ı gibi) ya da düşürür (oda kapanışı), bildirimi
+geç teslim eder; önce kırmızı: iki testte de sayaç 0, beklenen 1.
 
 **Elenenler.** (1) *READ'i CONTROL'den önce koşmak ya da ayrılışı kanal
 boşalana dek ertelemek:* faz sırası bir katılmanın kanalının kaydını ve
@@ -951,14 +983,19 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   oda-local `ABILITY` yolu yük altında ölçülmedi (menzil kontrolü
   istemcinin kendi konumunu bilmesini ister); orkestre / churn koşuları
   modu reddediyor (CLIENT satırı defteri taşımıyor).
-- **Oda üyeliği bitirdikten sonra bağlantı actor'ünde düşen istek (B36
-  kalıntısı):** oda üyeliği kendisi bitirdiğinde (atma, boşta tavanı,
-  oda kapanışı) bağlantı actor'ü bunu `LeftRoom` bildirimiyle öğrenene
-  dek gönderdiği istek kapalı kanala `try_send` eder ve düşer (`Closed`
-  kolu, uyarı + `detach`). İstek odaya hiç ulaşmadığından oda sayacına
-  giremez; `req_unread` yalnız odanın kanalında okunmadan kalanları
-  sayar. Loadgen RPC koşularında bu yol yok (üyeliği hep istemci
-  bitiriyor).
+- ~~**Oda üyeliği bitirdikten sonra bağlantı actor'ünde düşen istek (B36
+  kalıntısı)**~~ **Yapıldı (B51):** kapalı kanala iletilen istek
+  bağlantı aktöründe `requests_dropped_closed` olarak (düz girdi
+  `actions_dropped_closed` olarak) sayılıyor, defterin son terimi — §8.3.
+- **Odası olmayan bağlantının isteği:** üyelik bittikten sonra (ya da
+  hiç katılmadan) gelen `RPC_REQ` `ERROR 6` ile yanıtlanır (ilk
+  birkaçı; sonrakiler sessiz) ve yarış sınıfı ihlal olarak `violations`'ta
+  sayılır — sessiz kayıp değil, ama öteki ihlallerle karışık, defter için
+  ayrılamaz; istemci bunu korelasyonlu bir yanıt olarak görmez (defteri
+  onu açık/yanıtsız sayar). Loadgen'de yok.
+- **Dolu action kanalında düşen istek:** `actions_dropped`'ta oyun
+  girdileriyle birlikte sayılıyor; defter için ayrılamaz. Loadgen'de 0
+  (kanal kapasitesi çekim bütçesinin çok üstünde).
 
 ## 12. Testler: sözleşmenin kilidi
 
@@ -981,5 +1018,6 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 | Ret nedenlerinin metni sabit (oda + shard + loadgen aynı sabitleri okur; baytlar aynı) | `gsb-core/src/rpc.rs::tests::the_rejection_reasons_are_pinned` |
 | Loadgen RPC defteri: ilk yanıt kapatır; ikinci yanıt yalnız dup; gönderilmemiş id yalnız eşleşmeyen; sınır geç / yanıtsız / açık'ı ayırır; çekirdek nedenleri sınıflanır | `gsb-server/src/loadgen/client/rpc/ledger/tests.rs` (6 test) |
 | Ayrılışta okunmamış istekler sayılır (tam bir kez, yalnız istekler); defter kapanır (oda + shard; ayrılış, despawn eden kopuş, yeniden katılım, resume, ölü göç) | `gsb-core/tests/rpc/unread.rs::requests_unread_when_the_leave_lands_are_counted`, `rpc_shard/unread.rs::*`, `src/room/tests/unread.rs::*`, `src/shard/tests/unread.rs::*` |
+| Üyeliği oda bitirdikten sonra bildirimden önce iletilen istek / girdi bağlantıda sayılır (tam bir kez, ayrık; sonraki kare `ERROR 6`) — B51 | `gsb-core/tests/room_close/forward_closed.rs::*` |
 | Loadgen RPC modu uçtan uca: makul hızda her istek bir kez `ok`, istemci zaman aşımı 0; cap'in üstündeki patlamada istemci ve oda aynı cap ret sayısını görür; oda defteri kapanır (`req_unread` dahil, B36); modsuz satırda `rpc_*` yok | `gsb-server/tests/loadgen_rpc.rs` |
 | Tel üzerinden: idempotent yaşam döngüsü, runtime oda dolu (kod 8), maç sonucu, RPC sızma-yok/sonraki-tick, bilet akışı + yavaş-auth penceresinde tick canlılığı | `gsb-server/tests/e2e.rs` (son beş test) |

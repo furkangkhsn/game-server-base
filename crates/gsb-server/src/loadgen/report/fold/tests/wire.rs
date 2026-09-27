@@ -119,7 +119,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"IMSG", "the magic, little-endian GSMI");
+    assert_eq!(&frame[..4], b"JMSG", "the magic, little-endian GSMJ");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -203,6 +203,25 @@ fn the_rate_limited_input_survives_the_wire() {
     let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
     assert_eq!(got.net.violations, 3);
     assert_eq!(got.net.input_rate_limited, 4_242);
+    assert_eq!(got.net.server_closes.total(), 1);
+}
+
+/// The forwards dropped into a closed action channel (GSMJ, B51) cross
+/// the wire as their own two fields, between the rate-limited input and
+/// the server closes.
+#[test]
+fn the_closed_channel_forwards_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.net.input_rate_limited = 5;
+    sent.net.actions_dropped_closed = 7;
+    sent.net.requests_dropped_closed = 11;
+    sent.net
+        .server_closes
+        .add(gsb_core::conn::ServerClose::Kicked);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.net.input_rate_limited, 5);
+    assert_eq!(got.net.actions_dropped_closed, 7);
+    assert_eq!(got.net.requests_dropped_closed, 11);
     assert_eq!(got.net.server_closes.total(), 1);
 }
 
