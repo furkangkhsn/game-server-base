@@ -202,8 +202,9 @@ pub struct ShardActor<W, G, St, Sp> {
     /// name for why a dropped report would reopen the leak.
     pub(in crate::shard) despawn_reports: Vec<ConnectionId>,
     /// Close requests not yet accepted by the registry's mailbox (E6);
-    /// see the room actor's field of the same name. Written and flushed
-    /// in phase 0d.
+    /// see the room actor's field of the same name (same rules, the
+    /// `parked` re-check of B41 included). Written and flushed in phase
+    /// 0d.
     pub(in crate::shard) close_requests: Vec<crate::registry::CloseRequest>,
     /// Leave requests not yet accepted by the registry's mailbox (B40);
     /// see the room actor's field of the same name (same rules).

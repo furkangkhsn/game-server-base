@@ -55,9 +55,14 @@ pub struct CloseRequest {
     /// one a leave carries too: a request can never close a LATER
     /// membership of the same connection).
     pub entity: EntityId,
-    /// `true` = the disconnect policy PARKED the entity (`Detach::Hold`):
-    /// its slot stays held, so the registry keeps the row as detached;
-    /// `false` = it was despawned: the row's affiliation and slot go.
+    /// `true` = the disconnect policy PARKED the entity (`Detach::Hold`)
+    /// and the room still holds it when the request leaves: its slot
+    /// stays held, so the registry keeps the row as detached; `false` =
+    /// it was despawned: the row's affiliation and slot go. A request
+    /// that waited behind a full mailbox is re-checked when it leaves
+    /// (BACKLOG B41): a park that ended meanwhile sent its
+    /// `DetachDespawned` ahead of it, which the registry dropped (the
+    /// row was not detached yet), so the request must say `false`.
     pub parked: bool,
     /// The verdict the connection books (`server_closes{reason}`).
     pub cause: ServerClose,

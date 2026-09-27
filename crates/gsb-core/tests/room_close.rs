@@ -17,6 +17,9 @@
 //!   the raw `RegistryMsg::LeaveConn`; `leave_races.rs`: a join elsewhere
 //!   that overtakes a late request, and the connection's stale-notice
 //!   guard.
+//! - `close_races.rs`: why a close request is re-checked when it leaves
+//!   the room (BACKLOG B41) — a park's report that went ahead of it is
+//!   dropped, so only the request's `parked` flag decides the row.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -42,6 +45,8 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "room_close/afk.rs"]
 mod afk;
+#[path = "room_close/close_races.rs"]
+mod close_races;
 #[path = "room_close/leave.rs"]
 mod leave;
 #[path = "room_close/leave_races.rs"]

@@ -2,7 +2,8 @@
 //! mirrored — `Disconnect` asks the registry to close each expired
 //! member's connection after the policy ran (parked or not), the default
 //! asks for no close (its leave request is `leave.rs`'s subject, B40), and
-//! a row parked by a transport death is never closed.
+//! a row parked by a transport death is never closed; a park that ends
+//! while its request waits is closed as a despawn (B41).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -100,4 +101,40 @@ async fn sharded_parks_are_reported_or_left_alone() {
         !a.conns[&PlayerId(2)].out.is_closed(),
         "the transport death's park is not the ceiling's to touch"
     );
+}
+
+/// A park that ENDS while its close request waits behind a full registry
+/// mailbox (BACKLOG B41, the room actor's rule mirrored): the hold's
+/// report goes first (phase 0c), and the request — re-checked when it
+/// leaves — then closes a despawn, never a park that no longer exists.
+#[tokio::test]
+async fn a_sharded_park_that_ended_first_closes_as_a_despawn() {
+    let zero = Detach::Hold {
+        grace: Some(Duration::ZERO),
+        to: ExpireTo::Despawn,
+    };
+    let cfg = RoomConfig {
+        afk_action: AfkAction::Disconnect,
+        ..config(Some(5))
+    };
+    let (a, _obs, _disc) = rig_with(cfg, zero);
+    let (tx, mut reg) = channel::<RegistryMsg>(1);
+    tx.try_send(RegistryMsg::Shutdown).expect("the one slot");
+    let mut a = a.with_registry(tx);
+    let _o1 = join(&mut a, ConnectionId(1), "ana");
+    let t0 = Instant::now();
+    step(&mut a, t0, 1, 30);
+    assert!(a.close_requests[0].parked, "queued as a park");
+    assert!(matches!(reg.try_recv(), Ok(RegistryMsg::Shutdown)));
+    let mut kinds = Vec::new();
+    for k in 2..=6u64 {
+        step(&mut a, t0, k, 30 + k);
+        kinds.extend(drain(&mut reg).into_iter().map(|m| match m {
+            RegistryMsg::DetachDespawned { conn, .. } => format!("report {}", conn.0),
+            RegistryMsg::CloseConn(r) => format!("close parked={}", r.parked),
+            other => format!("{other:?}"),
+        }));
+    }
+    assert!(a.conns.is_empty(), "the zero hold ended in a despawn");
+    assert_eq!(kinds, vec!["report 1", "close parked=false"]);
 }

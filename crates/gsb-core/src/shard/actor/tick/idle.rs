@@ -81,8 +81,9 @@ where
     /// The room actor's phase, mirrored: free when unset (one `Option`
     /// test per step), a constant-cost bounded rotation when set, and on
     /// expiry the SAME disconnect path a dead transport takes.
-    /// Then the close requests go out (E6 — the room actor's rule), and
-    /// the leave requests (B40 — the room actor's rules, mirrored).
+    /// Then the close requests go out (E6, their `parked` re-checked —
+    /// B41 — the room actor's rules), and the leave requests (B40 — the
+    /// room actor's rules, mirrored).
     pub(super) fn phase_idle_sweep(&mut self, now: Instant) {
         if let Some(limit) = self.config.max_idle_input() {
             self.expire_idle(now, limit);
@@ -91,6 +92,7 @@ where
         if !hold_back {
             self.reconcile_parks();
         }
+        self.reconcile_closes();
         if let Some(registry) = &self.registry {
             crate::registry::flush_close_requests(registry, &mut self.close_requests);
             if !hold_back {
@@ -217,6 +219,21 @@ where
                 if !held {
                     req.park = None;
                 }
+            }
+        }
+    }
+
+    /// A queued close request stays `parked` only while this shard
+    /// still holds a membership of its connection (the room actor's
+    /// rule, B41; see it for why). A park that migrated away while its
+    /// request waited reads as ended here: the request closes a despawn,
+    /// and the registry stops counting a park that still lives on the
+    /// neighbour — an under-count until that park ends or is resumed,
+    /// never a row that nothing releases.
+    fn reconcile_closes(&mut self) {
+        for req in &mut self.close_requests {
+            if req.parked {
+                req.parked = self.binding.contains_key(&req.conn);
             }
         }
     }

@@ -50,7 +50,8 @@ where
     /// **Then the close requests** (BACKLOG E6): whatever this sweep — or
     /// an earlier tick's, refused by a full registry mailbox — asked the
     /// registry to close goes out here (`flush_close_requests`: `try_send`,
-    /// Full keeps, Closed drops). An empty queue costs one length test.
+    /// Full keeps, Closed drops), each with its `parked` re-checked
+    /// (`reconcile_closes`, B41). An empty queue costs one length test.
     /// The leave requests (B40) follow the same rules, after their park
     /// keys are re-checked (`reconcile_parks`) and never ahead of a
     /// queued detach-despawn report.
@@ -62,6 +63,7 @@ where
         if !hold_back {
             self.reconcile_parks();
         }
+        self.reconcile_closes();
         if let Some(registry) = &self.registry {
             crate::registry::flush_close_requests(registry, &mut self.close_requests);
             if !hold_back {
@@ -211,6 +213,28 @@ where
                 if !held {
                     req.park = None;
                 }
+            }
+        }
+    }
+
+    /// A queued close request's `parked` is re-checked every time it
+    /// tries to leave (BACKLOG B41): it stays `parked` only while this
+    /// room still holds a membership of its connection — the park, the
+    /// bot it was handed to, or one the still-open connection took up
+    /// again (a resume or a rejoin), which that connection's own close
+    /// then settles through the ordinary transport-death path.
+    ///
+    /// Why. A hold that ends in a despawn sends its `DetachDespawned` in
+    /// phase 0c, AHEAD of this phase, so a request still waiting from an
+    /// earlier tick arrives AFTER it — and the report reached a row the
+    /// registry did not yet know was detached, which it drops as a stale
+    /// echo. A `parked` close would then mark the row detached with
+    /// nothing left to release it (its slot held for the room's life);
+    /// re-checked, the request closes the despawn it now is.
+    fn reconcile_closes(&mut self) {
+        for req in &mut self.close_requests {
+            if req.parked {
+                req.parked = self.binding.contains_key(&req.conn);
             }
         }
     }

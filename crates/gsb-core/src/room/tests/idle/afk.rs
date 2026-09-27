@@ -3,7 +3,8 @@
 //! subject); `Disconnect` asks it to close the member's connection AFTER the
 //! disconnect policy ran, saying whether the policy parked the entity.
 //! Parked and bot-fed rows are off the input clock, so they are never
-//! closed. The request survives a full registry mailbox.
+//! closed. The request survives a full registry mailbox — and says
+//! `parked` only while the park it names still stands (`races.rs`, B41).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -186,3 +187,5 @@ fn a_room_without_a_registry_queues_nothing() {
     assert_eq!(r.disconnects().len(), 1);
     assert!(r.actor.close_requests.is_empty());
 }
+
+mod races;

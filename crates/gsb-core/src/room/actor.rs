@@ -188,7 +188,11 @@ pub struct RoomActor<W, G, Sp> {
     /// `afk_action = Disconnect`. Same rules as `despawn_reports` — a
     /// FULL mailbox keeps them for the next tick, a CLOSED one drops
     /// them (`crate::registry::flush_close_requests`); written and
-    /// flushed in phase 0d. Never written without a registry.
+    /// flushed in phase 0d. A waiting request's `parked` is re-checked
+    /// before every flush (B41): it is cleared once the room holds no
+    /// membership of the connection any more — a hold that ended in a
+    /// despawn reported that ahead of the request. Never written without
+    /// a registry.
     pub(in crate::room) close_requests: Vec<crate::registry::CloseRequest>,
     /// Leave requests not yet accepted by the registry's mailbox
     /// ([`crate::registry::LeaveRequest`], BACKLOG B40): the members whose

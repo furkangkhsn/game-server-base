@@ -37,7 +37,11 @@ where
     /// its `ShardGroup` member slot), since nothing ever reports the end
     /// of a park that does not exist. Settled here, every order of this
     /// request, the connection's `ConnClosed` and the room's
-    /// `DetachDespawned` converges to the same end state.
+    /// `DetachDespawned` converges to the same end state — given that
+    /// `parked` describes the room at SEND time: a report that arrives
+    /// while the row is not yet detached is dropped as a stale echo, so
+    /// a `parked` request behind its own park's report would hold the
+    /// row forever (the room re-checks the flag before each send, B41).
     pub(super) fn on_close_conn(&mut self, req: CloseRequest) {
         let CloseRequest {
             conn,
