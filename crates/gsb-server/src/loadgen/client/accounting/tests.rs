@@ -12,7 +12,7 @@ use gsb_client::ws::{OP_BIN, OP_PING, OP_PONG, accept_key};
 use gsb_protocol::base::{JoinRoomResult, LeaveRoomResult};
 use gsb_protocol::op;
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::*;
@@ -53,7 +53,7 @@ fn server_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
 
 /// The client's next frame: `(opcode, unmasked payload, bytes on the
 /// wire)`, or `None` at its EOF.
-async fn read_frame(sock: &mut TcpStream) -> Option<(u8, Vec<u8>, u64)> {
+async fn read_frame(sock: &mut BufReader<TcpStream>) -> Option<(u8, Vec<u8>, u64)> {
     let mut h = [0u8; 2];
     sock.read_exact(&mut h).await.ok()?;
     assert_ne!(h[1] & 0x80, 0, "client frames are masked");
@@ -78,6 +78,16 @@ type Tally = (u64, u64, u32);
 /// Upgrade one connection, then: a ping and the join result (plus three
 /// frames around the two extended-length boundaries) after the JOIN, the
 /// leave result after the LEAVE; read until the client drops.
+///
+/// The peer reads through a buffer. WHY: the flooding client stops at
+/// its deadline, sends its LEAVE and waits a fixed 500 ms (wall clock)
+/// for the result — and the peer only sees the LEAVE after every flood
+/// frame queued before it. Read unbuffered (three reads per frame) the
+/// peer fell behind the flood by up to ~200k frames and, under CPU
+/// load, could not drain them inside that window (the client then
+/// reports `left = false`: BACKLOG F23). Buffered, the peer keeps pace
+/// with the flood, so the LEAVE is read as soon as it is sent; every
+/// frame is still read and counted.
 async fn peer(listener: TcpListener) -> Tally {
     let (mut sock, _) = listener.accept().await.expect("accept");
     let mut head = Vec::new();
@@ -95,6 +105,7 @@ async fn peer(listener: TcpListener) -> Tally {
         accept_key(key)
     );
     sock.write_all(answer.as_bytes()).await.expect("101");
+    let mut sock = BufReader::new(sock);
     let (mut read, mut sent, mut pongs) = (0u64, 0u64, 0u32);
     while let Some((opcode, body, n)) = read_frame(&mut sock).await {
         if opcode == OP_PONG {
@@ -106,7 +117,8 @@ async fn peer(listener: TcpListener) -> Tally {
         let op = u16::from_le_bytes([body[4], body[5]]);
         let replies: Vec<(u16, Vec<u8>)> = match op {
             op::base::JOIN_ROOM_REQ => {
-                sock.write_all(&server_frame(OP_PING, b"hi"))
+                sock.get_mut()
+                    .write_all(&server_frame(OP_PING, b"hi"))
                     .await
                     .expect("ping");
                 let joined = JoinRoomResult { entity: 42 }.encode_to_vec();
@@ -125,7 +137,7 @@ async fn peer(listener: TcpListener) -> Tally {
         for (op, payload) in replies {
             let f = server_frame(OP_BIN, &encode(op, &payload));
             sent += f.len() as u64;
-            sock.write_all(&f).await.expect("peer write");
+            sock.get_mut().write_all(&f).await.expect("peer write");
         }
     }
     (read, sent, pongs)
