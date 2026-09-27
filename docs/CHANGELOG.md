@@ -5,6 +5,34 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 8 — B63, B64 (`core/small-bundle-8`)
+
+- **B63 — gitmiş dağıtıcı artık bağlantıyı kilitlemiyor.** Görevi gitmiş
+  (kuyruğu kapanmış) op dağıtıcısının ölü göndericisi `conn_ops`'ta
+  kalıyor, bağlantının sonraki her katılması `join_ops_dropped` ile
+  reddediliyordu. `Join`'in `Closed` reddinde registry artık ölü
+  göndericiyi taze bir dağıtıcıyla değiştirir (`respawn_conn_ops`) ve
+  op'u ona bir kez verir; o da reddederse (yalnız runtime kapanırken)
+  katılma eskisi gibi düşer ve sayılır. Tabloda hâlâ bir üyelik varsa
+  (eski görevin kabul edip çalıştırmadığı bir ayrılma) taze görev o
+  üyelikle başlar (`spawn_conn_ops`'un yeni `seed`'i) ve ilk op'u o
+  ayrılmadır: oda ayrılmayı yeniden denenen katılmadan önce, tek
+  görevden, sırayla görür. Elenen: `direct_leave` (spawn'lı gönderimi
+  aynı odaya katılmayla yarışır, oda eski entity'nin ayrılmasını bayat
+  diye yutar). Sınır: yalnız eski görevin bildiği (raporlanmamış) bir
+  katılma kurtarılamaz (B61 ile aynı). Bugün dağıtıcıda panik yeri yok;
+  gizli bir takılmaydı.
+- **B64 — eşleşmeyen `Leave` üyeliği unutturmuyor.** Dağıtıcının `Leave`
+  kolu önce odayı karşılaştırır; eşleşmeyen `Leave` bugünkü gibi yanıtsız
+  kalır ve `in_room`'a dokunmaz. Bağlantı aktörü üzerinden erişilemez.
+- Yan not BACKLOG B65: `OpsClosed` işleyicisi girdiyi gönderici kimliğine
+  bakmadan siliyor (bugün erişilemez).
+
+Testler 1350 → 1353 (`otlp` ile 1368 → 1371): `registry/actor/players/
+tests.rs` (2), `registry/actor/conns/ops/tests.rs` (1); önce düştüler,
+mutasyonlar öldü. Ebeveyn doğrulaması: taze dağıtıcıyı bekleyen üyelik
+olmadan başlatmak testi düşürdü. RECONNECT §3.4.
+
 ## B61 — düşen `Close` üyeliği artık sızdırmıyor (`core/b61-close-op-leak`)
 
 - **Hata:** kapanan bağlantının `RoomOp::Close`'u dağıtıcı kuyruğuna
