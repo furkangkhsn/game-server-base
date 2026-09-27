@@ -191,6 +191,20 @@ birbirine karışmaz:
   kapanır; yeni üyelik `on_disconnect` ile biter (B43, RECONNECT §16.4).
   Yasak listesi / yeniden katılmayı reddetmek oyunun politikasıdır (motor
   saklamaz).
+- **Ayrılmanın nedeni (BACKLOG F27, RECONNECT §3.3).** Varlığın kaderi
+  nedene göre değişebilir ("düşeni park et, atılanı despawn et") — bu da
+  oyunun kararı; motor yalnız nedeni söyler. Aktörler politikayı
+  `GameLogic::on_disconnect_with(world, player, identity, cause)` ile
+  sorar; `cause` motorun ayırt ettiğidir: `ConnectionClosed` (bağlantı
+  kapandı — neden kapandığı odaya gelmez; B43'te yeni üyelik de böyle
+  biter), `IdleInput` (tavan, iki `afk_action`'da da), `Kicked` (oyunun
+  atması). Sağlanan metodun varsayılanı eski `on_disconnect`'i çağırır:
+  nedenden habersiz oyun bayt bayt aynı çalışır. Enum `#[non_exhaustive]`
+  (eşleşen oyun joker kol tutar). Kit oyunu çekirdek kodu yazmaz:
+  `with_disconnect_policy_for(DisconnectCause::Kicked,
+  Some(Duration::ZERO), ExpireTo::Despawn)` oda geneli kuralı yalnız o
+  neden için ezer (KIT-ARCHITECTURE §4.3). `GameModule`'e yeni metot ve
+  config anahtarı YOK: politika oda kurucusunda, oyunun kodunda.
 - **Girdi hız sınırı: oyunun SAYISI olan bir oda anahtarı
   (BACKLOG E1, SECURITY §3.4).** Saniyede kaç girdinin meşru olduğunu
   oyun bilir; `GameModule::input_rate()` (sağlanan metot, varsayılan

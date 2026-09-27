@@ -231,11 +231,49 @@ varlık→oyuncu tablosuyla — shard aktörünün MIGRATE'inden önce, yani
 atılan üye aynı tick göçmez. Sahibi olmayan varlık (NPC) yok sayılır.
 Varlığın kaderini odanın kopma politikası seçer (varsayılan: park +
 bot; atılanı tutmayan oda `with_disconnect_policy(Some(Duration::ZERO),
-…)`). `PlayerId`'yi elinde tutan kanca (`ingest`'in `players`'ı, bir
+…)`, yalnız atılanı tutmayan oda `with_disconnect_policy_for(
+DisconnectCause::Kicked, Some(Duration::ZERO), …)` — aşağıda "F27"). `PlayerId`'yi elinde tutan kanca (`ingest`'in `players`'ı, bir
 isteğin `player`'ı) doğrudan `ctx.kick` de kullanabilir. Elenen:
 `Game`'e bir `kicks(&mut self, out)` toplama kancası (her oyun kuyruk
 tutardı, `PlayerId` yine gerekirdi); `TickCtx`'e varlık tabanlı bir
 fiil (çekirdek varlığı bilmez).
+
+*F27 (RECONNECT §3.3):* kopma politikası nedene göre. Çekirdek
+politikayı `GameLogic::on_disconnect_with(.., cause: DisconnectCause)`
+ile sorar (`ConnectionClosed` / `IdleInput` / `Kicked`; varsayılanı
+`on_disconnect`). Kit'in `ParkPolicy`'si oda geneli kuralın
+(`grace`, `to`) yanına `by_cause: Vec<(DisconnectCause, Option<Duration>,
+ExpireTo)>` taşır — boş başlar, en çok neden başına bir girdi. Her oda
+kurucusu (`OpenRoom`, `AoiRoom`, `SectorRoom`, `TeamRoom`, `ShardedRoom`;
+sharded spatial/team kompozitleri iç odaya iletir):
+
+```rust
+pub fn with_disconnect_policy_for(self, cause: DisconnectCause,
+    grace: Option<Duration>, to: ExpireTo) -> Self;              // F27
+```
+
+Ezme o nedenin kuralını BÜTÜNÜYLE değiştirir (`grace` ve `to` birlikte;
+anlamları `with_disconnect_policy`'ninkiyle aynı, `Some(0)` = park yok);
+aynı nedene ikinci çağrı birincinin yerine geçer; oda geneli kurucular
+(`with_disconnect_policy`, `with_disconnect_grace`) ezmelere dokunmaz —
+çağrı sırası önemsiz. Beş oda `on_disconnect_with`'i uygular
+(`common::park_on_disconnect`'e `Some(cause)`), iki kompozit iletir;
+nedensiz `on_disconnect` (artık çekirdek çağırmaz, doğrudan çağıran
+testler için) oda geneli kuralı verir. Bilinmeyen (ileride eklenen) bir
+neden de oda geneli kuralı alır. Varsayılan değişmedi: ezme yoksa her
+neden aynı kuralı alır. Elenen: `Game`'e nedeni alan bir politika
+kancası (`Game::disconnect_policy(world, entity, cause)`) — kuruluşta
+sabit bir tablo yeter, oyun başına kanca kendi durumunu gerektirmedikçe
+kazandırmaz (gerekirse ekleyici gelir); nedeni `with_disconnect_policy`'ye
+parametre yapmak — mevcut kurucunun imzası kırılırdı. Testler:
+`common/park/tests/cause.rs` (yedi oda: varsayılan, "atılan → despawn,
+diğerleri park" aynı odada, oda geneli kurucunun ezmeye dokunmaması,
+ikinci ezmenin yer değiştirmesi, yalnız düşeni park eden despawn odası,
+nedensiz kancanın oda geneli kuralı) ve `sharded/tests/team_actors/cause.rs`
+(gerçek aktörler, sharded ve tek dünya takım odası: atılan despawn,
+düşen park). Mutasyon: her odada nedeni düşürmek, iki kompozitte
+iletmeyi unutmak, ezmeyi yok saymak ve ikinci ezmenin eskisini
+tutması ayrı ayrı kırdı.
 
 Oda tipleri bunları bir araya getirir:
 
@@ -561,6 +599,8 @@ impl<P> GridPartition2<P> { pub fn with_diagonals(self) -> Self }          // F2
 // Her oda (OpenRoom, AoiRoom, TeamRoom, SectorRoom, ShardedRoom,
 // ShardedSpatialRoom):
 pub fn with_disconnect_policy(self, grace: Option<Duration>, to: ExpireTo) -> Self; // F4
+pub fn with_disconnect_policy_for(self, cause: DisconnectCause,
+    grace: Option<Duration>, to: ExpireTo) -> Self;                          // F27 (§4.3)
 ```
 
 - **`with_disconnect_policy(grace, to)`** (F4): `grace` —

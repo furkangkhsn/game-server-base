@@ -92,6 +92,112 @@ pasif etkiler bedava), snapshot'a normal dahildir. Tek fark: READ fazı o
 bağlantı için çekim yapmaz ve BROADCAST ona batch göndermez (giden kanal
 yarısı ölü).
 
+### 3.3 Ayrılmanın nedeni: `DisconnectCause` (BACKLOG F27)
+
+Politikaya üç uç ulaşır (§16, §16.3): taşıma öldü, girdi-boşta tavanı,
+oyunun atması. Bugüne dek üçü de aynı `on_disconnect`'e NEDENSİZ
+geliyordu; "düşeni park et, atılanı despawn et" diyen bir oyun bunu
+kendi durumunda bayrakla taklit etmek zorundaydı. **Karar: aktör nedeni
+söyler, kaderi yine oyun seçer.** Motor yalnız kendi ayırt ettiğini
+adlandırır — hangisinin "rage quit", "AFK" ya da "ban" olduğu oyunun
+okumasıdır.
+
+| Çağrı noktası (oda ve shard aktöründe aynı) | `DisconnectCause` |
+|---|---|
+| `RoomControl::Detach` / `ShardMsg::Detach` — registry'nin `ConnClosed` yolu (dispatcher'ın `Close`'u ya da doğrudan DETACH) | `ConnectionClosed` |
+| girdi-boşta tavanı (faz 0d), `afk_action` `leave_room` da `disconnect` da | `IdleInput` |
+| oyunun atması (`TickCtx::kick` — oda faz 3b / shard faz 3c ya da tick sonu) | `Kicked` |
+
+```rust
+// gsb_core::room
+#[non_exhaustive]
+pub enum DisconnectCause { ConnectionClosed, IdleInput, Kicked }
+
+// GameLogic — oda ve shard'ın ORTAK üst-trait'i (ShardLogic onu miras alır)
+fn on_disconnect_with(&mut self, world: &mut W, player: PlayerId,
+                      identity: &str, cause: DisconnectCause) -> Detach {
+    self.on_disconnect(world, player, identity) // varsayılan: neden yok sayılır
+}
+```
+
+- **Aktörler artık yalnız `on_disconnect_with`'i çağırır** (oda ve
+  shard'ın `detach_player`'ı nedeni parametre alır; çağıran söyler).
+  Varsayılanı eski kancayı çağırdığı için nedenden habersiz her mantık
+  aynen çalışır — `on_join_as` → `on_join` deseni. `Detach`'ın kolları
+  nedeni okumaz; motor her nedene aynı davranır (yalnız park'ın debug
+  satırı nedeni yazar). Tel, `/metrics`, loadgen RESULT değişmedi.
+- **`ShardLogic` için ayrı metot yok:** metot ortak üst-trait'te, iki
+  aktör aynı metodu çağırır (Faz 3'ün "tek metot, iki aktör" ilkesi).
+  Mantığı saran bir sarmalayıcı (kit'in sharded spatial/team
+  kompozitleri) `on_disconnect_with`'i de iletmelidir; iletmezse
+  varsayılan iç mantığın NEDENSİZ `on_disconnect`'ine düşer.
+- **`ConnectionClosed` neyi kapsar.** Oda bağlantının NEDEN kapandığını
+  öğrenmez — registry'nin `ConnClosed`'u neden taşımaz: eş gitti, bir
+  taşıma koruması kapattı (idle timeout, write stall, ölü rUDP bandı,
+  ihlal bütçesi, reddedilen akış), ya da bağlantıyı başka bir üyeliği
+  için yargılayan bir sunucu hükmü düştü (aşağıda B43). İki son
+  politikaya hiç ulaşmaz: aynı kimliğin yeni oturumunun eskisini
+  ezmesi (registry bir LEAVE yollar → `on_leave`) ve odanın kapanışı
+  (`on_shutdown`).
+- **B43'ün yeni üyeliği `ConnectionClosed` ile biter** (§16.4): tavanın
+  ya da atmanın hükmü, bağlantı yeniden katıldıktan sonra düşerse yeni
+  üyeliği bağlantının kapanışı bitirir. O üyeliği tutan oda onu
+  yargılamadı — hüküm önceki üyelikten (belki başka odadan) geldi —
+  yani bu oda için gerçek, bağlantının kapanmasıdır. "Atma her yerde
+  atmadır" diyen oyun yasak listesini kendisi tutar (§16.3: motor
+  saklamaz).
+- **`#[non_exhaustive]`** (DESIGN §5 ekleyici evrim): motor ileride daha
+  çok ucu ayırt edebilir (ör. `ConnectionClosed`'ın arkasındaki hüküm);
+  eşleşen mantık joker kol tutar, kırılmaz.
+
+**Kit (yapı taşı, opt-in).** Kit odalarının kopma politikası oda
+geneli kalır (`with_disconnect_policy`); `with_disconnect_policy_for(
+cause, grace, to)` bir NEDEN için onu bütünüyle ezer — "atılan →
+despawn, düşen → park" çekirdek kodu yazmadan:
+`.with_disconnect_policy_for(DisconnectCause::Kicked,
+Some(Duration::ZERO), ExpireTo::Despawn)`. Yedi kit odası da nedeni
+yönlendirir (KIT-ARCHITECTURE §4.3 "F27"). Varsayılan değişmedi: ezme
+yoksa her neden oda geneli kuralı alır.
+
+**Elenen alternatifler.**
+
+1. *`on_disconnect`'in imzasını değiştirmek* (nedeni dördüncü parametre
+   ya da bir bağlam yapısı — `DisconnectCtx { player, identity, cause }`
+   — olarak): her uygulayıcıyı kırar (çekirdek test mantıkları, yedi kit
+   odası, demolar, oyunlar); bağlam yapısı ancak başka alanlar gelince
+   kendini öder. Sağlanan metot aynı bilgiyi kırmadan verir ve trait'te
+   zaten yerleşik bir desen (`on_join_as`).
+2. *Nedeni ayrı bir bildirimle vermek* (`on_disconnect`'ten önce
+   çağrılan `note_disconnect_cause`, ya da `TickCtx`'te bir alan):
+   iki çağrı arasında mantıkta durum; `RoomControl::Detach` CONTROL
+   fazında, tick bağlamı olmadan işlenir.
+3. *Neden başına ayrı kancalar* (`on_kick`, `on_idle`): aynı karar için
+   üç kanca; her sarmalayıcı üçünü iletir.
+4. *`ConnClosed`'a bağlantının hükmünü (`ServerClose`) taşıyıp
+   `ConnectionClosed`'ı alt nedenlere bölmek:* registry mesajı,
+   dispatcher ve `RoomControl`/`ShardMsg::Detach` değişirdi; bilinen
+   tüketici yok. `#[non_exhaustive]` kapıyı açık tutar.
+5. *B43'te yeni üyeliğe `Kicked` demek:* hükmü registry üzerinden yeni
+   üyeliğin odasına taşımayı gerektirir ve o oda yargılamadığı bir
+   kararı uygulamış olur (yukarıda).
+
+**Testler.** Çekirdek: `room/cause/tests.rs` — varsayılan metot her
+nedeni eski kancaya, oyuncu + kimlik + cevap değişmeden iletir;
+`room/tests/cause.rs` ve `shard/tests/cause.rs` — kapanan bağlantı →
+`ConnectionClosed`, tavan her iki `afk_action` altında → `IdleInput`
+(ardından gelen DETACH yeniden sormaz), atma → `Kicked`;
+`tests/room_close/rejoin_races.rs` — B43'te ilk üyelik `IdleInput` /
+`Kicked`, yeni üyelik `ConnectionClosed` (tek oda ve ızgara). Önce
+yazıldı ve düştü (aktörler henüz `on_disconnect`'i çağırıyordu: hiçbir
+neden kaydedilmedi). Mutasyon: altı çağrı noktasının her birinde nedeni
+değiştirmek → kendi birim testi + B43 testi düşer; varsayılanı eski
+kancayı çağırmayacak hale getirmek → varsayılan testi düşer. Kit:
+`common/park/tests/cause.rs` — yedi oda türünde nedene göre politika
+matrisi; `sharded/tests/team_actors/cause.rs` — gerçek aktörlerde (dört
+shard aktörü + canlı registry, ve tek dünya oda aktörü) atılan
+despawn olur (müttefik görmez, slot döner, aynı kimlik yeni varlık
+alır), düşen park edilir (müttefik görür, aynı kimlik resume eder).
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-
@@ -441,7 +547,9 @@ sinyali `TickCtx::since_input(player)` ile her tick hook'unun içinden
 okur; AFK politikası yazmanın yeri burasıdır.
 
 **Tavan ne yapar.** Süresi dolan üye §3'ün AYNI yoluna verilir:
-`GameLogic::on_disconnect` çağrılır ve dönen `Detach` ne diyorsa o olur —
+`GameLogic::on_disconnect` çağrılır (F27'den beri
+`on_disconnect_with(.., DisconnectCause::IdleInput)`, varsayılanı
+`on_disconnect`; §3.3) ve dönen `Detach` ne diyorsa o olur —
 `Despawn`, `Hold { grace, to }`, `ExpireTo::AiHandover` dahil. Yani:
 
 - Base **kendiliğinden despawn etmez**; §3'ün "kopmak bir gerçektir, ne
@@ -536,7 +644,9 @@ yapı taşı olarak verir, varsayılanı bugünküdür:
 | `Disconnect` | aynı yol, aynı karar | KAPANIR | en-iyi-çaba `ERROR 9` (`input idle: no game input for N s (…)`) → kapanış | `server_closes{reason="idle_input"}` |
 
 Her iki eylemde de önce §16'nın yolu çalışır — oyunun `on_disconnect`'i
-varlığın kaderini seçer; `Disconnect` yalnız TAŞIMAYI ekler. Park/bot
+varlığın kaderini seçer; `Disconnect` yalnız TAŞIMAYI ekler. Politikanın
+gördüğü neden ikisinde de `IdleInput`'tur (§3.3): eylem bağlantının
+kaderini seçer, varlığınkini değil. Park/bot
 satırları girdi saatinde olmadığından (yukarıdaki tablo) hiçbir eylem
 onlara ulaşmaz.
 
@@ -862,7 +972,7 @@ iki noktada uygular:
 | `ingest`, `handle_request`, `update` (shard: `*_seam`) | faz 3b — SYSTEMS'tan sonra, BROADCAST'tan önce | faz 3c — EFFECTS OUT'tan sonra, **MIGRATE'ten önce** |
 | `snapshot`, `keepalive` (shard: + `team_exchange`) | tick sonu (BROADCAST'tan sonra) | tick sonu (BROADCAST'tan sonra) |
 
-`on_disconnect` bu noktada çağrılır. İstek ile uygulama arasında
+`on_disconnect` bu noktada çağrılır (neden `Kicked` — §3.3). İstek ile uygulama arasında
 CONTROL fazı koşmaz: atma, isteyen kancanın gördüğü üyeliği yargılar
 (oyuncunun aynı pencerede gönderdiği `LEAVE`, CONTROL'de SONRA işlenir
 ve üye olmayana düşer). Birinci noktada uygulanan atmada üye o tick'in
@@ -922,9 +1032,11 @@ ama bağlantının kapanışıyla `on_disconnect`'ten bir kez geçerek biter.
 kimliği olan oturumu PARK eder (`DEFAULT_DISCONNECT_GRACE`, sonra bot);
 atılan oyuncu aynı kimlikle dönerse süre içinde resume eder. Atılan
 oyuncuyu tutmaması gereken oda `with_disconnect_policy(Some(Duration::ZERO),
-…)` ile kurulur (hemen despawn). Kaderi ATMAYA özgü seçmek (düşeni park,
-atılanı despawn) bugün kit'te yok: politika oda geneli, `on_disconnect`
-nedenini bilmez — ham `GameLogic` bunu kendi durumunda bayrakla yapabilir.
+…)` ile kurulur (hemen despawn — her neden için). Kaderi ATMAYA özgü
+seçmek (düşeni park, atılanı despawn) F27'den beri bir yapı taşıdır:
+`with_disconnect_policy_for(DisconnectCause::Kicked, Some(Duration::ZERO),
+ExpireTo::Despawn)`; ham `GameLogic` aynı şeyi `on_disconnect_with`'in
+`cause`'una bakarak yapar (§3.3).
 
 **Varsayılan değişmedi.** Hiç atmayan bir oyunda davranış ve baytlar
 aynıdır: kuyruk tick başına yerel, boş ve ayırmasız; uygulama boş listede
@@ -965,7 +1077,8 @@ aynı yeniden yapılanmayı kullanır.
 8. *No-op'lar için sayaç* (`kicks_ignored`): yukarıda; `/metrics`
    kapısı.
 9. *Kit'te atmaya özgü kader* (atılan → despawn): politika kararı ve
-   yeni yüzey; açık iş olarak not edildi.
+   yeni yüzey; açık iş olarak not edildi — F27'de opt-in yapı taşı
+   olarak açıldı (§3.3).
 
 ### 16.4 Hüküm bağlantınındır, yerleşim üyeliğin (B43)
 
@@ -1025,7 +1138,8 @@ dispatcher'ın `Close`'u (ya da doğrudan DETACH) → oyunun
 `on_disconnect`'i bir kez → despawn'da `DetachDespawned` satırı ve slotu
 bırakır, park'ta §4'ün olağan satırı kalır. Kararı yine oyunun politikası
 verir (kit varsayılanı kimlikli oturumu park eder, §16.3 "Kit'in
-varsayılan kaderi").
+varsayılan kaderi"); politikanın gördüğü neden `ConnectionClosed`'dır —
+yeni üyeliği tutan oda onu yargılamadı (F27, §3.3).
 
 Oda ve shard tarafı DEĞİŞMEDİ (kuyruk, `try_send`, Full/Closed kuralı,
 B41 sınaması); tel aynı (`ERROR 9` + kapanış, E6/E8'in baytları);
