@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1347 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1350 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,11 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**B61 tamam** (RECONNECT §3.4, CHANGELOG "B61"): reddedilen `Close` op'u
+artık üyeliği sızdırmıyor — dağıtıcı kuyruğunun kapanması `Close`
+sayılır; gitmiş dağıtıcıda registry `send_detach_direct`. Açık takip:
+B63 (ölü gönderici `conn_ops`'ta), B64 (`Leave` kolunun sırası).
 
 **Sayım turu 2 tamam** (CHANGELOG "Sayım turu 2", RPC-CONTROL-PLANE
 §8.3, OPS §3): yeni sayaçlar — oda `requests_undelivered`,
@@ -699,6 +704,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1347 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1350 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

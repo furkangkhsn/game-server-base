@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B61 — düşen `Close` üyeliği artık sızdırmıyor (`core/b61-close-op-leak`)
+
+- **Hata:** kapanan bağlantının `RoomOp::Close`'u dağıtıcı kuyruğuna
+  giremeyince (16'lık kuyruk dolu ya da görev gitmiş) dağıtıcı kuyruğunu
+  boşaltıp detach'sız çıkıyordu: odadaki üye, registry satırı ve ızgaranın
+  üye yuvası oda bitene dek kalıyor, oyunun `on_disconnect`'i hiç
+  çalışmıyordu. Kuyruktaki tekrar katılmalar yüzünden kalan üyelik,
+  tablonun henüz görmediği yeni bir entity'ydi. Bağlantı aktörü her
+  katılmanın yanıtını beklediği için bugün tek bir gerçek bağlantı
+  kuyruğu dolduramıyor — gizli bir sızıntıydı (ham `RegistryMsg`, ileride
+  op'ları boru hattına dizen bir yol ya da bir panik ile erişilebilir).
+- **Düzeltme:** dağıtıcı kuyruğunun kapanmasını `Close` sayar: önündeki
+  op'lar sırayla çalıştıktan sonra elindeki üyeliği DETACH eder,
+  `DetachDone`/`OpsClosed` yollar (kuyruğa girmiş `Close` ile aynı sıra).
+  Görev gitmişse registry tablodaki üyeliği `send_detach_direct` ile
+  (spawn'lı, S kuralı) kendisi detach eder. `on_disconnect` bir kez,
+  `ConnectionClosed` ile çalışır. `close_ops_dropped` reddi saymayı
+  sürdürür ("Close op kuyruğa girmedi"); aile, tel ve goldenlar değişmedi.
+- **Elenen:** dolu kuyrukta tablodan doğrudan detach — bayat entity'yi
+  hedefler, oda onu yutar, son üyelik yine sızar (mutasyonla gösterildi).
+- Katılma yolu kontrol edildi: sızıntı yok (ızgaranın `pending` yuvası
+  retde bırakılıyor). Yan bulgular BACKLOG B63 (gitmiş dağıtıcının ölü
+  göndericisi), B64 (`Leave` kolunun sırası).
+
+Testler 1347 → 1350 (`otlp` ile 1365 → 1368): `tests/room_close/close_op.rs`
+(tek oda + ızgara) ve `registry/actor/conns/tests.rs` (gitmiş dağıtıcı);
+önce düştü, üç mutasyon düşürür. Ebeveyn doğrulaması: reddi saymamak üç
+testi düşürdü. RECONNECT §3.4.
+
 ## Sayım turu 2 — "her şeyi saymalıyız": B53–B57 (`metrics/count-everything-2`)
 
 Bakımcı ilkesi ikinci turda: her kayıp, adı anlamıyla aynı bir sayaçta;
