@@ -399,8 +399,11 @@ max_detach_hold_secs = "off"
   bağlantının op dağıtıcısına veremediği katılmalar (16'lık kuyruk dolu ya
   da görev gitmiş; istemci `ERROR` "registry unavailable" alır);
   `close_ops_dropped=` / `gsb_registry_close_ops_dropped_total` — kapanan
-  bağlantının detach'ı aynı yolda düştü (dağıtıcı detach'sız biter; oda
-  satırı oda bitene dek kalır — BACKLOG'da takip);
+  bağlantının `Close` op'u aynı yolda düştü. Üyelik yine biter (B61):
+  kuyruğu dolu dağıtıcı önündeki op'ları sırayla işleyip kuyruğu
+  kapanınca detach eder, gitmiş dağıtıcının yerine registry tablodaki
+  üyeliği doğrudan detach eder — sayaç "op kuyruğa girmedi" demektir,
+  sızıntı değil;
   `match_results_dropped_full=` / `…_closed=`
   (`gsb_registry_match_results_dropped_{full,closed}_total`) — duran
   oda/shard'ın maç sonucunu sonuç sink'i reddetti: DOLU (tüketici okumuyor)

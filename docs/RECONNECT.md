@@ -198,6 +198,78 @@ shard aktörü + canlı registry, ve tek dünya oda aktörü) atılan
 despawn olur (müttefik görmez, slot döner, aynı kimlik yeni varlık
 alır), düşen park edilir (müttefik görür, aynı kimlik resume eder).
 
+### 3.4 Transport ölümünün yolu ve düşen `Close` (BACKLOG B61)
+
+Bağlantı kapanınca (`ConnClosed`) registry kaderi kendisi seçmez, yalnız
+DETACH'ı yönlendirir. Bağlantının op dağıtıcısı (dispatcher) varsa
+registry ona `try_send(RoomOp::Close)` yapar ve tek göndericiyi bırakır;
+dağıtıcı önündeki op'ları (uçuştaki bir katılma dahil) sırayla işler, en
+son hangi üyelikte kaldıysa onu `RoomControl::Detach` / yayın
+`ShardMsg::Detach` ile odaya bildirir ve `DetachDone` raporlar. Dağıtıcı
+yoksa registry tablodaki üyeliği `send_detach_direct` ile (spawn'lu
+gönderim) bildirir. İki yolda da oyunun `on_disconnect`'i bir kez,
+`DisconnectCause::ConnectionClosed` ile çalışır (§3.3).
+
+**Sızıntı (B61).** `Close` kuyruğa girmezse (16'lık kuyruk dolu ya da
+görev gitmiş; B57'den beri `close_ops_dropped` sayar) dağıtıcı eskiden
+kuyruğunu boşaltıp detach'sız çıkıyordu: odadaki üye, registry satırı ve
+ızgaranın üye yuvası oda bitene dek kalıyor, `on_disconnect` hiç
+çalışmıyordu. Kuyruğa giremeyen op'lar aynı bağlantının tekrar
+katılmalarıysa üyelik, tablonun henüz görmediği YENİ bir entity'dir.
+
+**Karar.**
+
+- *Kuyruk dolu:* dağıtıcı canlı ve önündeki op'ları işleyecek. Kuyruğunun
+  kapanmasını (`recv` → `None`) `Close` sayar: döngüden çıkınca elindeki
+  üyeliği detach eder, `DetachDone` ve `OpsClosed` yollar — `Close`
+  kuyruğa girmiş olsaydı olacağın aynısı, aynı sırada. Önündeki bir
+  katılma ÖNCE çalışır (sıra değişmez; kuyruğa girmiş `Close`'un arkasında
+  da öyle çalışırdı), detach onun bıraktığı üyeliği bulur. Registry'nin
+  göndericiyi bıraktığı her yer (bağlantı kapanışı, kayıtsız bağlantı
+  kapanışı, shutdown) zaten "bağlantı bitti" demektir; başka bir anda
+  kuyruk kapanmaz.
+- *Görev gitmiş:* kuyruğu okuyacak kimse yok, üyelik bilgisi görevle
+  gitti. Registry tablodaki üyeliği `send_detach_direct` ile kendisi
+  bildirir (spawn'lu gönderim, S kuralı — registry oda posta kutusunu
+  beklemez). Kayıtsız (satırı olmayan) bağlantıda bildirecek üyelik
+  yoktur.
+- *Çift detach yok:* dolu kuyrukta registry doğrudan detach YAPMAZ;
+  gitmiş görevde dağıtıcı detach edemez. Yine de iki DETACH aynı odaya
+  ulaşsa odanın muhafızı (bağ + entity + zaten park edilmiş satır)
+  ikincisini sessizce yutar; politika bir kez sorulur.
+- `close_ops_dropped` anlamını korur: "`Close` op'u kuyruğa girmedi".
+  Geri düşüş onu sızıntı olmaktan çıkarır, sayılmamış yapmaz; ad
+  yanıltıcı değil, aile değişmedi.
+
+**Reddedilen:** dolu kuyrukta tablodan `send_detach_direct` (BACKLOG
+satırının ilk önerisi). Tablo, dağıtıcının kuyruktaki katılmalarının
+yaratacağı üyeliği henüz bilmez; doğrudan detach eski entity'yi hedefler,
+oda onu (üst üste katılmanın sildiği) bayat detach olarak yutar ve son
+üyelik yine sızar — mutasyonla gösterildi. Kuyruktaki katılmaları
+kapanan bağlantı için atlamak da reddedildi: kuyruğa girmiş `Close`'un
+yolundan ayrılır ve ızgaranın rezervasyonunu (`pending`) ayrıca
+kapatmayı gerektirirdi.
+
+**Erişilebilirlik.** Bağlantı aktörü her katılmanın yanıtını bekler ve
+ayrılmayı yalnız tablo bir üyelik gösterirken yollar; tel üzerinden tek
+bağlantı kuyruğu 16'ya dolduramaz, dağıtıcıda da panik yeri yok. B61 bu
+yüzden gizli bir sızıntıydı (ham `RegistryMsg` üreticisi, gelecekte op'ları
+boru hattına dizen bir yol ya da bir panik tetiklerdi); sayaç onu görünür
+yaptı, düzeltme yolu kapatır.
+
+**Testler.** `tests/room_close/close_op.rs` — oturmuş üyelikten sonra 40
+katılma ve kapanış tek solukta: kuyruk 16'sını alır, `Close` reddedilir
+(`close_ops_dropped` 1); son (17.) üyelik `on_disconnect`'i bir kez
+`ConnectionClosed` ile görür, satır ve üye gider, tavanı 1 olan oda (tek
+oda ve ızgara) yeni oyuncu alır. Önce yazıldı ve düştü (`on_disconnect`
+hiç çalışmadı; satır oda 1'i 5 sn boyunca tuttu). `registry/actor/conns/
+tests.rs` — gitmiş dağıtıcı: registry tablodan detach eder, oda
+`DetachDespawned` raporlar, eski dağıtıcının geç kapanışı ikinci bir
+`on_disconnect` doğurmaz. Mutasyonlar: kuyruk kapanınca detach'ı
+kaldırmak → iki uçtan uca test düşer; gitmiş görevde doğrudan detach'ı
+kaldırmak → birim testi düşer; dolu kuyrukta tablodan doğrudan detach
+(reddedilen) → iki uçtan uca test düşer.
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-

@@ -118,7 +118,11 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   devredilir. Dispatcher, o bağlantının oda mesajlarının **tek** göndericisi
   olduğundan join→leave→rejoin sırası garanti (stale leave, yeniden
   giren entity'yi asla öldüremez). Tek yavaş oda kontrol düzlemini asla
-  bloke edemez.
+  bloke edemez. Bağlantı kapanınca registry dağıtıcıya `Close` yollar ve
+  göndericiyi bırakır; dağıtıcı kuyruğunun kapanmasını da `Close` sayar
+  (önündeki op'lardan sonra elindeki üyeliği DETACH eder), dolu kuyruğun
+  reddettiği `Close` üyeliği sızdırmaz. Görev gitmişse registry tablodaki
+  üyeliği doğrudan (spawn'lu) DETACH eder (B61, RECONNECT §3.4).
 - **Accept loop:** `ConnectionId` üretir, pump görevlerini başlatır,
   `ConnOpened`'ı **actor'ü başlatmadan önce** registry'e gönderir (ilk
   istemci frame'ine karşı sıralama garantisi). Kalıcı hata durumunda
@@ -2321,7 +2325,8 @@ Abort'siz, kanal kapanmalarına dayalı:
 ```text
 ServerHandle::stop
   → RegistryMsg::Shutdown
-      → her dispatcher'a RoomOp::Close (yol açma + son leave), sonra senders düşer
+      → her dispatcher'a RoomOp::Close (yol açma + son detach), sonra senders düşer
+        (Close'u kuyruğa giremeyen dispatcher kuyruğu kapanınca aynısını yapar, B61)
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
       → her odaya kontrol kanalından RoomControl::Shutdown — BEKLEMEden
         (try_send; kanal doluysa spawn'lu gönderici, §9.1); bir sonraki
