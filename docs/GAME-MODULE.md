@@ -924,6 +924,9 @@ yırtık bir rapor göçen oyuncuyu iki kez sayabilir, DESIGN §12, F18) —
 anahtar. İnsan-okunur rapor pencerenin başındaki ve sonundaki dağılımı
 basar (`server shards (members per shard, steady window): first=…
 last=…`; koşuda hiç tutarlı kesit yoksa satır `(torn: …)` ile biter).
+Kararlı pencerenin sonu — `records_per_tick`/`overlap_x`'in ve savaşın
+takım segmentinin bitişi — da aynı tutarlı kesitlerden seçilir (B46;
+kesitsiz koşuda aynı yırtık geri düşüşle); RESULT biçimi değişmedi.
 Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı.
 
 **Demo A/B** (15a02c5 ↔ HEAD, dönüşümlü üç tur, `GSB_LOADGEN_CLIENT_LINES=1`;

@@ -6,7 +6,9 @@
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, RoomReport};
 
-use super::{consistent_cut, has_consistent_cut, members_by_row, peak_population, steady_span};
+use super::{
+    consistent_cut, has_consistent_cut, members_by_row, peak_population, steady_end, steady_span,
+};
 use crate::report::fold::tests::{report, shard};
 
 /// Shard `index`'s row of room 1: sampled at step `steps` (with
@@ -150,4 +152,44 @@ fn a_partial_report_does_not_stand_in_for_the_population() {
     let (first, last) = steady_span(&reports, 8, 4).expect("a steady window");
     assert_eq!(members_by_row(first), "3,2,1,2");
     assert_eq!(members_by_row(last), "2,2,2,2");
+}
+
+/// The overlap window's END is a population report too (B46). A torn
+/// report can sum to the peak (a double count and an in-flight player
+/// cancel out) and so can a partial one (the missing shard's players
+/// summed twice elsewhere); either, being LATER than every cut, used to
+/// end the window — its rows are no instant of the room, and its
+/// `snap_records` are shards at different steps. The end is the last
+/// consistent cut at the peak.
+#[test]
+fn a_torn_or_partial_report_at_the_peak_does_not_end_the_steady_window() {
+    let mut partial = cut([(120, 4), (120, 2), (120, 2), (120, 0)]);
+    partial.rooms.remove(3); // shard 3 has not sampled yet: not a cut (B45)
+    let reports = vec![
+        cut([(30, 2), (30, 2), (30, 2), (30, 2)]),
+        cut([(60, 3), (60, 1), (60, 2), (60, 2)]),
+        cut([(90, 3), (90, 1), (60, 2), (60, 2)]), // torn, sums to 8
+        partial,                                   // partial, sums to 8
+    ];
+    assert_eq!(peak_population(&reports, 4), 8);
+    let end = steady_end(&reports, 8, 4).expect("a window end");
+    assert_eq!(
+        members_by_row(end),
+        "3,1,2,2",
+        "the window ends on the last consistent cut (step 60)"
+    );
+    assert!(consistent_cut(end, 4));
+}
+
+/// A run with no consistent cut ends its window on the torn reports, the
+/// same fallback its population takes (`population_reports`).
+#[test]
+fn without_a_cut_the_window_end_falls_back_to_every_report() {
+    let reports = vec![
+        cut([(60, 3), (30, 2), (60, 1), (30, 2)]),
+        cut([(90, 2), (60, 2), (90, 2), (60, 2)]),
+    ];
+    assert!(!has_consistent_cut(&reports, 4));
+    let end = steady_end(&reports, 8, 4).expect("a window end");
+    assert_eq!(members_by_row(end), "2,2,2,2");
 }

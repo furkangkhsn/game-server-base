@@ -78,16 +78,15 @@ pub(crate) fn print_report(
     // mode the server outlives the clients by a few seconds (clean stop
     // after the leave flushes), so the final report's window contains the
     // drain and would bias the delta low. `members` is a gauge (current
-    // membership), so "members == peak_members" marks the steady reports.
-    // (Sharded: the folded reports — summed members, summed records.)
+    // membership), so "members == peak_members" marks the steady reports
+    // — read from the same population reports as the peak itself
+    // (`steady_end`, B46). (Sharded: the folded reports — summed members,
+    // summed records.)
     let base = server_reports
         .iter()
         .find(|r| !r.rooms.is_empty() && report_steps(r) >= 100)
         .and_then(fold_rooms);
-    let last_steady = server_reports
-        .iter()
-        .filter(|r| !r.rooms.is_empty() && report_members(r) == peak_members)
-        .max_by_key(|r| report_steps(r))
+    let last_steady = steady_end(server_reports, peak_members, shards)
         .or(last_room)
         .and_then(fold_rooms);
     let rec_per_tick = match (base, last_steady) {

@@ -2991,19 +2991,26 @@ odanın **her shard'ının** satırını içerir (B45): toplayıcı her shard il
 satırları `(steps, lagged_ticks)`'te anlaşsa da oda değildir — eksik
 shard'ın oyuncuları hiçbir satırda yok. Beklenen shard sayısı koşunun
 kendisidir (RESULT'un `shards=`'ı; `print_report` onu
-`peak_population`/`steady_span`/`has_consistent_cut`'a verir). Eskiden
+`peak_population`/`steady_span`/`steady_end`/`has_consistent_cut`'a
+verir). Eskiden
 kararlı penceredeki raporların hepsi yırtıksa nüfus bu eksik rapordan
 okunuyor (4 shard'lık odada 3 değerli `shard_members=`) ve yırtık
 satırlara geri düşüş devreye girmiyordu. Loadgen'in
 `peak_members`'ı, kararlı penceresi ve `shard_members=`'ı böyle okunur
-(`loadgen::report::spread`); hiç tutarlı kesiti olmayan bir koşu
+(`loadgen::report::spread`); pencerenin SONU da (`steady_end`:
+`records_per_tick`'in ve savaşın takım penceresinin bitişi, B46) —
+eskiden `members == peak_members` olan HERHANGİ bir raporun en
+yenisiydi, yani toplamı tesadüfen tepeye eşit yırtık ya da eksik bir
+rapor (çift sayım + uçuştaki oyuncu) pencereyi bitirebiliyor ve
+`snap_records` farkı farklı adımlardaki shard'lardan alınıyordu; hiç tutarlı kesiti olmayan bir koşu
 (eşit olmayan `Lagged` yemiş shard bir daha hizalanmaz) yırtık
 satırlardan okunur ve insan-okunur blok bunu söyler. Prometheus
 satırları katlamaz (her shard ayrı seri); PromQL'de shard'lar üzerinde
 `sum` aynı yırtılmaya açıktır — göç sürerken nüfusun ±1 oynaması
 ölçüm değil kesittir. Kilit: `shard::tests::metrics::members` (tick
 başına el değiştirme) ve `loadgen::report::spread::tests` (gerçek bir
-başarısız koşunun rapor akışı, satır satır; eksik satırlı rapor, B45).
+başarısız koşunun rapor akışı, satır satır; eksik satırlı rapor, B45;
+tepeye eşit yırtık/eksik raporun pencere sonu olamaması, B46).
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi

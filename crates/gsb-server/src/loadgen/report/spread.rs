@@ -108,3 +108,18 @@ pub(crate) fn steady_span(
         steady.max_by_key(|r| report_steps(r))?,
     ))
 }
+
+/// The steady window's END: the last POPULATION report that carries the
+/// run's full population ([`steady_span`]'s last) — where the overlap
+/// measurement (`records_per_tick`) and the war's team window stop.
+/// A torn or partial report that happens to sum to the peak is no
+/// instant of the room, so it cannot end the window either (B46); a run
+/// without a consistent cut takes the torn fallback, as its population
+/// does.
+pub(crate) fn steady_end(
+    reports: &[MetricReport],
+    peak_members: u32,
+    shards: u32,
+) -> Option<&MetricReport> {
+    steady_span(reports, peak_members, shards).map(|(_, last)| last)
+}
