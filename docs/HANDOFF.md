@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1275 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1286 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,6 +148,14 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**F27 tamam** (RECONNECT §3.3, CHANGELOG "F27"): politika artık nedeni
+bilir — `GameLogic::on_disconnect_with(world, player, identity, cause)`
+(`DisconnectCause::{ConnectionClosed, IdleInput, Kicked}`,
+`#[non_exhaustive]`; varsayılanı `on_disconnect`). Kit:
+`with_disconnect_policy_for(cause, grace, to)` her oda türünde; ezme yoksa
+her neden oda geneli kuralı alır. B43'te yeni üyelik `ConnectionClosed`.
+Açık: `ConnectionClosed`'ın arkasındaki hükmü politikaya taşımak (F28).
+
 **Küçük paket 6 tamam** (CHANGELOG "Küçük paket 6"): pinsiz orkestre
 çocukları artık kendi varsayılan worker sayısında — **dikkat:** yeni
 pinsiz orkestre sayıları eski tabanlarla doğrudan karşılaştırılamaz
@@ -165,8 +173,8 @@ katılmada eski üyeliğin sonu kümülatif `leaves`'te sayılmaz.
 `ctx.kick(player, reason)` ile (kit: `gsb_kit::game::kick(world, entity,
 reason)`) bir oyuncuyu sunucudan atar — `on_disconnect` yolu + E6'nın
 kapatma fiili, ERROR 9 `kicked: …`, `server_closes{reason="kicked"}`.
-E9 kararla kapandı (yeni bildirim yok). Açık: kit'te nedene göre kader
-(F27); B43 kapandı (RECONNECT §16.4).
+E9 kararla kapandı (yeni bildirim yok). F27 ve B43 kapandı
+(RECONNECT §3.3, §16.4).
 
 **Küçük paket 5 tamam** (CHANGELOG "Küçük paket 5"): CI'da action'lar
 node24 ana sürümlerinde (yeni `uses:` için kural CONTRIBUTING'de);
@@ -651,6 +659,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1275 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1286 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

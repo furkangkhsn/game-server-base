@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F27 — ayrılmanın nedeni politikaya (`kit/f27-disconnect-cause`)
+
+- **Çekirdek: `DisconnectCause`.** Oda ve shard aktörü politikayı artık
+  `GameLogic::on_disconnect_with(world, player, identity, cause)` ile
+  sorar; neden aktörün ayırt ettiğidir: `ConnectionClosed` (registry'nin
+  `ConnClosed` yolu — bağlantının neden kapandığı odaya gelmez),
+  `IdleInput` (girdi-boşta tavanı, iki `afk_action`'da da), `Kicked`
+  (`TickCtx::kick`). Sağlanan metodun varsayılanı `on_disconnect`'i
+  çağırır: nedenden habersiz mantık bayt bayt aynı. Enum
+  `#[non_exhaustive]`. B43'te yeniden katılan bağlantının yeni üyeliği
+  `ConnectionClosed` ile biter (o oda yargılamadı). Yeni `ShardLogic`
+  metodu yok (ortak üst-trait). Politikaya hiç ulaşmayan iki son: yeni
+  oturumun eskisini devirmesi (`on_leave`) ve odanın kapanışı. RECONNECT §3.3.
+- **Kit: nedene göre kopma politikası.** Her oda türünde
+  `with_disconnect_policy_for(cause, grace, to)` oda geneli kuralı o
+  neden için bütünüyle ezer — "atılan → despawn, düşen → park" çekirdek
+  kodu yazmadan. Beş oda `on_disconnect_with`'i uygular, sharded
+  spatial/team kompozitleri iletir. Ezme yoksa davranış aynı.
+- Elenenler: `on_disconnect` imzasını değiştirmek ya da bağlam yapısı
+  (her uygulayıcıyı kırar), ayrı neden bildirimi (iki çağrı arasında
+  durum), neden başına kanca, `ServerClose`'u `ConnClosed` ile taşımak
+  (tüketicisi yok — BACKLOG F28), kit'te `Game::disconnect_policy` kancası.
+- Tel, `/metrics`, loadgen RESULT değişmedi.
+
+Testler 1275 → 1286 (`otlp` ile 1293 → 1304): çekirdek oda/shard her
+çağrı yeri, B43 yeniden katılma, kit yedi oda türü + gerçek aktörlerde
+sharded ve tek dünya takım odası (atılan despawn, düşen park); mutasyonlar
+öldü. Ebeveyn doğrulaması: ezme aramasında nedeni yok saymak üç testi
+düşürdü.
+
 ## Küçük paket 6 — B37, B47 (`misc/small-bundle-6`)
 
 - **B37 — pinsiz orkestratör çocuklara artık `--workers 1` vermiyor.**
