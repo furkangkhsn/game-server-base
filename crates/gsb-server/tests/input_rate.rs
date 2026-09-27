@@ -60,16 +60,40 @@ async fn pace(c: &mut Conn, n: u64, every: Duration) {
     }
 }
 
-/// The newest report the collector has emitted so far.
-async fn latest(rx: &mut mpsc::UnboundedReceiver<MetricReport>) -> MetricReport {
-    let mut last = tokio::time::timeout(W, rx.recv())
-        .await
-        .expect("a report in time")
-        .expect("reports open");
-    while let Ok(r) = rx.try_recv() {
-        last = r;
+/// Wait for the first report that has counted every frame the test sent
+/// (`sent`, over all `conns`): the condition the old fixed 1.1 s sleeps
+/// only hoped for (BACKLOG F25). A connection actor flushes its counters
+/// on inbound traffic once its 500 ms flush interval has passed, so each
+/// round that falls short waits past that interval and nudges every
+/// connection with a heartbeat. The nudges count in `sent` too, and a
+/// count never exceeds what was sent: `frames_in == sent` means each
+/// connection's last frame — and every frame before it — was flushed.
+async fn settle(
+    rx: &mut mpsc::UnboundedReceiver<MetricReport>,
+    conns: &mut [&mut Conn],
+    sent: &mut u64,
+) -> MetricReport {
+    let deadline = Instant::now() + W;
+    loop {
+        let report = tokio::time::timeout(W, rx.recv())
+            .await
+            .expect("a report in time")
+            .expect("reports open");
+        if report.net.frames_in >= *sent {
+            return report;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{sent} frames sent, never all counted: {:?}",
+            report.net
+        );
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        for c in conns.iter_mut() {
+            let hb = session::heartbeat(*sent);
+            c.send(hb.op, &hb.payload).await.expect("nudge");
+            *sent += 1;
+        }
     }
-    last
 }
 
 /// `input_rate_hz = 20` (burst 20): an honest client at 10/s passes
@@ -84,11 +108,14 @@ async fn a_flooder_over_the_configured_rate_is_limited() {
         .expect("server starts");
     assert_eq!(handle.room_config(1).input_rate, InputRate::new(20, 20));
 
+    // Every frame this test sends (AUTH + JOIN per player), for `settle`.
+    let mut sent = 2;
     let mut honest = player(handle.addr, "honest").await;
     pace(&mut honest, 12, Duration::from_millis(100)).await;
-    // A report taken after the honest phase: nothing was limited.
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-    let calm = latest(&mut reports).await;
+    sent += 12;
+    // A report that has counted the whole honest phase: nothing was
+    // limited.
+    let calm = settle(&mut reports, &mut [&mut honest], &mut sent).await;
     assert_eq!(calm.net.input_rate_limited, 0, "the honest client passed");
 
     let mut flooder = player(handle.addr, "flooder").await;
@@ -101,13 +128,12 @@ async fn a_flooder_over_the_configured_rate_is_limited() {
     session::heartbeat_round(&mut flooder, 7, W, |_| {})
         .await
         .expect("the flooder is still connected");
+    sent += 2 + 2_000 + 1;
     pace(&mut honest, 6, Duration::from_millis(100)).await;
-    // One more frame past the actor's 500 ms flush interval pushes its
-    // sample out; the next report carries it.
-    let hb = session::heartbeat(8);
-    flooder.send(hb.op, &hb.payload).await.expect("send");
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-    let net = latest(&mut reports).await.net;
+    sent += 6;
+    let net = settle(&mut reports, &mut [&mut honest, &mut flooder], &mut sent)
+        .await
+        .net;
     handle.stop().await;
     assert!(
         net.input_rate_limited >= 2_000 - 100,
