@@ -46,10 +46,11 @@ impl MetricReport {
                  team_exports={} team_export_drops={} team_export_records={} \
                  team_over_cap={} team_over_budget={} team_imports={} \
                  team_import_records={} team_expired={} \
+                 actions_unread={} actions_unbound={} \
                  req_local={} req_ext={} \
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
-                 req_refused={} req_unread={} req_to={} req_late={} \
+                 req_refused={} req_unread={} req_unbound={} req_to={} req_late={} \
                  req_undelivered={} req_abandoned={} \
                  req_pending={} metrics_dropped={}",
                 r.room,
@@ -109,6 +110,8 @@ impl MetricReport {
                 r.team_imports,
                 r.team_import_records,
                 r.team_expired,
+                r.actions_dropped_unread,
+                r.actions_dropped_unbound,
                 r.requests_local,
                 r.requests_external,
                 r.requests_rejected_malformed,
@@ -119,6 +122,7 @@ impl MetricReport {
                 r.requests_rejected_room_cap,
                 r.requests_refused_congested,
                 r.requests_dropped_unread,
+                r.requests_dropped_unbound,
                 r.requests_timed_out,
                 r.requests_late,
                 r.requests_undelivered,

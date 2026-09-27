@@ -50,8 +50,8 @@ where
                     // The old halves drop; the old session's unread
                     // requests are counted on the way (B36).
                     if let Some(mut rc) = self.conns.remove(&stale) {
-                        self.m.requests_dropped_unread +=
-                            crate::room::drop_unread_requests(&mut rc.actions);
+                        self.m
+                            .count_unread(crate::room::drop_unread(&mut rc.actions));
                     }
                     self.drop_conn_request_state(conn);
                     self.logic.on_leave(&mut self.world, stale);
@@ -311,8 +311,8 @@ where
                     // The session's channel rode the message and dies
                     // with it: its unread requests are counted (B36).
                     if let Some(mut p) = player {
-                        self.m.requests_dropped_unread +=
-                            crate::room::drop_unread_requests(&mut p.actions);
+                        self.m
+                            .count_unread(crate::room::drop_unread(&mut p.actions));
                     }
                     return true;
                 }

@@ -215,6 +215,12 @@ gsb_room_team_import_records sum t=2 mono=true unit="" n=2 | Records in the appl
 gsb_room_team_expired sum t=2 mono=true unit="" n=2 | Team import slots dropped by the TTL (a silent source), cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_actions_dropped_unread sum t=2 mono=true unit="" n=2 | Plain game actions a session left unread in its action channel when it ended (never processed), cumulative.
+  [room=r1] 1000..2000 int 3
+  [room=r7] 1000..2000 int 0
+gsb_room_actions_dropped_unbound sum t=2 mono=true unit="" n=2 | Plain game actions pulled under a connection with no binding row (a stale session; never processed), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
 gsb_room_requests_local sum t=2 mono=true unit="" n=2 | RPC requests answered room-local, cumulative.
   [room=r1] 1000..2000 int 4
   [room=r7] 1000..2000 int 0
@@ -245,6 +251,9 @@ gsb_room_requests_refused_congested sum t=2 mono=true unit="" n=2 | RPC requests
 gsb_room_requests_dropped_unread sum t=2 mono=true unit="" n=2 | RPC requests a session left unread in its action channel when it ended (never processed, never answered), cumulative.
   [room=r1] 1000..2000 int 2
   [room=r7] 1000..2000 int 0
+gsb_room_requests_dropped_unbound sum t=2 mono=true unit="" n=2 | RPC requests pulled under a connection with no binding row (a stale session; never processed, never answered), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
 gsb_room_requests_timed_out sum t=2 mono=true unit="" n=2 | RPC pending requests swept as timed out, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0

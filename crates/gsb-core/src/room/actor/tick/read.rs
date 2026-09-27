@@ -63,15 +63,17 @@ where
         //    left is shared around, not taken by the same fixed prefix
         //    every tick.
         //
-        //    Consequence: the room never drops an action. That is why
-        //    there is NO room-scope input-drop counter: it could only ever
-        //    report 0, and an operator reading a permanently-zero
-        //    `gsb_room_dropped_actions_total` would conclude no input is
-        //    ever lost. The architecture's only input-loss point is a
-        //    connection's own full action channel — self-inflicted, counted
-        //    at the drop site (`conn::ConnectionActor`) and exported at the
-        //    net scope as `gsb_net_actions_dropped_total` with
-        //    per-connection attribution.
+        //    Consequence: the pull never drops an action for want of
+        //    budget. That is why there is NO room-scope "input over
+        //    budget" counter: it could only ever report 0. The flooding
+        //    loss point is a connection's own full action channel —
+        //    self-inflicted, counted at the drop site
+        //    (`conn::ConnectionActor`) and exported at the net scope as
+        //    `gsb_net_actions_dropped_total` with per-connection
+        //    attribution. What the room DOES drop unprocessed is counted
+        //    where it happens (B36, B54): input still unread when a
+        //    session ends (`crate::room::drop_unread`), and input from an
+        //    unbound connection (the translation below).
         let per_conn = self.config.max_actions_per_conn_per_tick;
         let mut budget = self.config.max_pending_actions;
         let mut actions: Vec<Action> = Vec::new();
@@ -150,13 +152,16 @@ where
         //    `actions_from_the_old_session_are_dropped_after_resume`).
         //    Structurally such strays are already rare — the old channel's
         //    receiver died with the rebind — this is the belt under that
-        //    suspenders.
+        //    suspenders. The drop is counted by kind (B54): an RPC request
+        //    in `requests_dropped_unbound` (a term of the RPC ledger), a
+        //    plain action in `actions_dropped_unbound`.
         actions.retain_mut(|a| match self.binding.get(&a.conn) {
             Some(&player) => {
                 a.player = player;
                 true
             }
             None => {
+                self.m.count_unbound(a.op);
                 debug!(
                     room = %self.config.id,
                     conn = %a.conn,

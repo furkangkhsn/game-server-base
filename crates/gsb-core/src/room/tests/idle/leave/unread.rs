@@ -18,6 +18,17 @@ fn request(act: &Mailbox<Action>) {
     .expect("the channel has room");
 }
 
+/// A plain game action beside it (B54: counted apart).
+fn action(act: &Mailbox<Action>) {
+    act.try_send(Action {
+        conn: ConnectionId(1),
+        player: PlayerId(0),
+        op: 0x2001,
+        payload: bytes::Bytes::new(),
+    })
+    .expect("the channel has room");
+}
+
 #[test]
 fn a_request_unread_when_a_despawn_is_left_behind_is_counted() {
     let mut r = Rig::new(leave_room(75), Detach::Despawn);
@@ -35,11 +46,16 @@ fn a_request_unread_when_a_park_is_left_behind_is_counted() {
     let _reg = registry(&mut r, 64);
     let (_entity, act) = r.join(ConnectionId(1), "ana");
     request(&act);
+    action(&act);
     r.step_at(1, 30);
     assert!(r.actor.conns[&PlayerId(1)].detached, "parked");
     assert!(act.is_closed(), "the membership ended");
     assert_eq!(
         r.actor.m.requests_dropped_unread, 1,
         "the park's released channel held one unread request"
+    );
+    assert_eq!(
+        r.actor.m.actions_dropped_unread, 1,
+        "and one plain action, counted apart (B54)"
     );
 }

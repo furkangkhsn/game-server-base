@@ -129,6 +129,12 @@ pub struct RoomReport {
     pub requests_rejected_room_cap: u64,
     pub requests_refused_congested: u64,
     pub requests_dropped_unread: u64,
+    /// Requests / plain actions the room dropped unprocessed (B54; see
+    /// `RoomSample::requests_dropped_unbound` and
+    /// `RoomSample::actions_dropped_unread`), cumulative.
+    pub requests_dropped_unbound: u64,
+    pub actions_dropped_unread: u64,
+    pub actions_dropped_unbound: u64,
     pub requests_timed_out: u64,
     pub requests_late: u64,
     /// RPC answers discarded undelivered because their session ended, and

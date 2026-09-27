@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::channel::{FrameBatch, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{Action, drop_unread_requests};
+use crate::room::{Action, drop_unread};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -78,7 +78,7 @@ where
             // A parked row is never pulled: the dead session's unread
             // requests end with its channel (B36, the room actor's rule).
             let mut old_actions = std::mem::replace(&mut rc.actions, act_rx);
-            self.m.requests_dropped_unread += drop_unread_requests(&mut old_actions);
+            self.m.count_unread(drop_unread(&mut old_actions));
             rc.detached = false;
             rc.bot_fed = false;
             rc.clear_hold_clock();
@@ -122,7 +122,7 @@ where
         };
         // Requests still unread in the session's channel go with the row,
         // counted (B36 — CONTROL runs before READ, as in the room actor).
-        self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
+        self.m.count_unread(drop_unread(&mut rc.actions));
         self.binding.remove(&rc.conn);
         self.conn_epoch.remove(&rc.conn);
         self.idle.stop(player);

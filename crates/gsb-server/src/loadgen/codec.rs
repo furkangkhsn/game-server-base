@@ -47,9 +47,10 @@ mod logic;
 ///     u64 req_local  u64 req_ext
 ///     u64 req_rej_malformed  u64 req_rej_dup  u64 req_rej_no_handler
 ///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
-///     u64 req_refused  u64 req_unread
+///     u64 req_refused  u64 req_unread  u64 req_unbound
 ///     u64 req_to  u64 req_late
 ///     u64 req_undelivered  u64 req_abandoned
+///     u64 actions_unread  u64 actions_unbound
 ///     u32 req_pending
 ///     u64 metrics_dropped
 ///     u8 n_logic  u32 logic_dropped
@@ -147,7 +148,11 @@ mod logic;
 /// GSMK = the GSMJ layout plus each room's `requests_undelivered` and
 /// `requests_abandoned` (the answers and the in-flight requests a session
 /// that ended took with it — B53), right after `requests_late`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4B;
+/// GSML = the GSMK layout plus each room's `requests_dropped_unbound`
+/// (right after `requests_dropped_unread`) and `actions_dropped_unread`
+/// / `actions_dropped_unbound` (right after `requests_abandoned`) — the
+/// input the room dropped unprocessed, B54.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4C;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -240,10 +245,13 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.requests_rejected_room_cap);
         w.u64(room.requests_refused_congested);
         w.u64(room.requests_dropped_unread);
+        w.u64(room.requests_dropped_unbound);
         w.u64(room.requests_timed_out);
         w.u64(room.requests_late);
         w.u64(room.requests_undelivered);
         w.u64(room.requests_abandoned);
+        w.u64(room.actions_dropped_unread);
+        w.u64(room.actions_dropped_unbound);
         w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
         logic::encode(&mut w, &room.logic);
@@ -421,10 +429,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             requests_rejected_room_cap: r.u64()?,
             requests_refused_congested: r.u64()?,
             requests_dropped_unread: r.u64()?,
+            requests_dropped_unbound: r.u64()?,
             requests_timed_out: r.u64()?,
             requests_late: r.u64()?,
             requests_undelivered: r.u64()?,
             requests_abandoned: r.u64()?,
+            actions_dropped_unread: r.u64()?,
+            actions_dropped_unbound: r.u64()?,
             pending_requests: r.u32()?,
             metrics_dropped: r.u64()?,
             logic: logic::decode(&mut r)?,

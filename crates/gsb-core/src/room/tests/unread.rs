@@ -10,6 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
+// READ's binding translation drops, counted by kind (B54).
+mod unbound;
+
 /// A logic that parks (or despawns) every disconnect and resumes the
 /// parked player of any identity.
 struct ParkLogic {
@@ -144,6 +147,10 @@ fn a_resume_counts_what_the_parked_session_left_unread() {
         r.m.requests_dropped_unread, 2,
         "the two requests the dead channel held, not the plain action"
     );
+    assert_eq!(
+        r.m.actions_dropped_unread, 1,
+        "the plain action, apart (B54)"
+    );
 }
 
 /// A disconnect the policy despawns ends the row, and its channel's
@@ -157,6 +164,15 @@ fn a_despawning_disconnect_counts_the_unread_requests() {
     detach(&mut r, 1);
     assert!(r.conns.is_empty(), "despawned");
     assert_eq!(r.m.requests_dropped_unread, 2);
+    assert_eq!(
+        r.m.actions_dropped_unread, 1,
+        "the plain action, apart (B54)"
+    );
+    assert_eq!(
+        r.sample().actions_dropped_unread,
+        1,
+        "the sample carries it"
+    );
 }
 
 /// A rejoin on the same connection supersedes its stale row: the old
@@ -170,5 +186,9 @@ fn a_superseding_rejoin_counts_the_old_sessions_unread_requests() {
     let _new = join(&mut r, 1, "");
     assert_eq!(r.conns.len(), 1, "one row for the connection");
     assert_eq!(r.m.requests_dropped_unread, 2);
+    assert_eq!(
+        r.m.actions_dropped_unread, 1,
+        "the plain action, apart (B54)"
+    );
     assert!(old.is_closed(), "the old channel is gone");
 }

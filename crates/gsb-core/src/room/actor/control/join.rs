@@ -45,7 +45,7 @@ where
             self.drop_conn_request_state(conn);
             self.logic.on_leave(&mut self.world, stale);
             // The old session's unread requests go with its channel (B36).
-            self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
+            self.m.count_unread(drop_unread(&mut rc.actions));
         }
         // Capacity: the room knows its own membership — this is the
         // only place a join can structurally fail. A fresh join to a
@@ -186,7 +186,7 @@ where
         self.m.resumes += 1;
         // A parked row is never pulled: whatever requests the dead
         // session left in its channel end here, unread (B36).
-        self.m.requests_dropped_unread += drop_unread_requests(&mut old_actions);
+        self.m.count_unread(drop_unread(&mut old_actions));
         // The clock RESTARTS with the new session: the park took the row
         // off it (a parked row has no input source), and the returning
         // human must not inherit the idleness its disconnect accumulated.
@@ -218,7 +218,7 @@ where
         // CONTROL runs before READ: requests the session sent right
         // before its leave may still sit in its channel, and the row
         // takes them along — counted, never processed (B36).
-        self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
+        self.m.count_unread(drop_unread(&mut rc.actions));
         // Tear the session binding down with the row (the leave/detach-
         // expiry/despawn half of the binding lifecycle).
         self.binding.remove(&rc.conn);

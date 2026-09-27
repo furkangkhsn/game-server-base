@@ -178,13 +178,14 @@ where
         //    the one authority for the conn ↔ PlayerId context. An
         //    unbound conn drops here — after a resume the old session has
         //    no binding row left, so its stray frames can never reach the
-        //    world.
+        //    world. The drop is counted by kind (B54, the room's rule).
         actions.retain_mut(|a| match self.binding.get(&a.conn) {
             Some(&player) => {
                 a.player = player;
                 true
             }
             None => {
+                self.m.count_unbound(a.op);
                 debug!(
                     room = %self.config.id,
                     shard = self.index,

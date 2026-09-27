@@ -67,12 +67,16 @@
 //! - *drops*: batches dropped at the fan-out on a full outbound channel
 //!   (`dropped_frames`, slow client); a batch tried on an already closed
 //!   one (the connection gone before the room processed its end) is
-//!   counted apart (`sends_closed`, B32). Input drops are NOT a room-scope counter: the room's READ
-//!   phase is a bounded pull that defers rather than drops, so the only
-//!   input-loss point is a connection's own full action channel — counted
-//!   at the net scope (`ConnSample::actions_dropped` →
-//!   `NetReport::actions_dropped`) and attributed to its sender by
-//!   `MetricReport::actions_dropped_top`;
+//!   counted apart (`sends_closed`, B32). The room's READ phase is a
+//!   bounded pull that defers rather than drops, so a flood's input loss
+//!   is a connection's own full action channel — counted at the net scope
+//!   (`ConnSample::actions_dropped` → `NetReport::actions_dropped`) and
+//!   attributed to its sender by `MetricReport::actions_dropped_top`.
+//!   What the room itself drops unprocessed is room-scope: input still
+//!   unread when a session ends and input from an unbound connection,
+//!   requests apart from plain actions (`requests_dropped_unread` /
+//!   `actions_dropped_unread`, `requests_dropped_unbound` /
+//!   `actions_dropped_unbound` — B36, B54);
 //! - *broadcast*: snapshots encoded, encoded bytes, largest payload seen,
 //!   keep-alive re-sends, payloads shipped to clients (bytes/frames),
 //!   private frames;

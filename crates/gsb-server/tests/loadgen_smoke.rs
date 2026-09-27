@@ -148,6 +148,7 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "req_rej_room",
         "req_refused",
         "req_unread",
+        "req_unbound",
         "req_to",
         "req_late",
         "req_undelivered",
@@ -185,7 +186,15 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
     // pinned to 0 — a client that closes its socket right after its LEAVE
     // result can meet one batch on its closed channel (`sends_closed`),
     // and that is timing, not a fault.
-    for k in ["dropped", "sends_closed"] {
+    // The plain game actions the room dropped unprocessed (B54): present
+    // and numeric. Not pinned to 0 — a move sent right before the
+    // client's LEAVE can still be unread when the leave lands.
+    for k in [
+        "dropped",
+        "sends_closed",
+        "actions_unread",
+        "actions_unbound",
+    ] {
         let _: u64 = get(k)
             .parse()
             .unwrap_or_else(|_| panic!("{k} is not a number in: {result_line}"));

@@ -794,8 +794,10 @@ gerçekten göndermiş (`errors = 0`, `left = N`); istemci tarafında bunlar
 **Düzeltme 1 (motor katmanı).** Yeni çekirdek sayaç
 `requests_dropped_unread`: oturumun action kanalını götüren her yerde
 kanal önce kapatılır (`close()` — geç gönderim olmaz, boşaltma kanal
-kapasitesiyle sınırlı), içindeki RPC istekleri sayılır (düz action'lar
-eskisi gibi sayılmaz) ve kanal düşer (`room::drop_unread_requests`).
+kapasitesiyle sınırlı), içindeki RPC istekleri sayılır ve kanal düşer
+(`room::drop_unread`; B36'da `drop_unread_requests`). Düz action'lar
+B36'da sayılmıyordu; sayım turu 2'den (B54) beri yanındaki ayrı sayaçta
+sayılıyor (`actions_dropped_unread`, aşağıda).
 Yerler, oda ve shard aktöründe: `despawn_conn` (ayrılış, despawn eden
 kopuş, despawn'la biten hold), aynı bağlantının yeniden katılımının
 süpürdüğü bayat satır, resume (park edilmiş satırın ölü kanalı yenisiyle
@@ -843,11 +845,34 @@ değişmedi.
 İkisiyle oda defteri kapanıyor:
 
 > `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
-> + requests_dropped_closed`
+> + req_unbound + requests_dropped_closed`
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
-`req_ext + req_rej_conn + req_unread = sent`, kesirli sürede aynı).
+`req_ext + req_rej_conn + req_unread = sent`, kesirli sürede aynı; sayım
+turu 2'den beri her testte defterin BÜTÜN terimlerinin toplamı da:
+`LEDGER`).
+
+**B54: odanın işlemeden düşürdüğü girdi, iki yerde, türüne göre.**
+(1) Oturum bitince kanalda okunmamış kalan DÜZ oyun girdileri
+(`drop_unread` ve parkın `release_actions`'ı — B36'nın yerleri) artık
+`actions_dropped_unread`'de sayılıyor (istekler eskisi gibi
+`requests_dropped_unread`'de; ayrık). (2) READ'in bağlama çevirisi
+(faz 1.5, oda + shard) bağlama satırı olmayan bağlantının (bayat oturum —
+yapısal olarak nadir: eski kanal yeniden bağlamada ölür) çekilen
+girdisini yalnız debug log'la atıyordu; artık türüne göre sayıyor: RPC
+isteği `requests_dropped_unbound` (defterin terimi, `req_unbound=`),
+düz girdi `actions_dropped_unbound`. Yüzey: oda satırında
+`actions_unread=` / `actions_unbound=` (`team_expired=`'den sonra) ve
+`req_unbound=` (`req_unread=`'den sonra); Prometheus/OTLP'de
+`gsb_room_actions_dropped_{unread,unbound}_total`,
+`gsb_room_requests_dropped_unbound_total`; loadgen telinde `GSML`;
+`RESULT`'ta aynı anahtarlar (her satırda). Kilit:
+`room::tests::unread` (+ `::unbound`), `shard::tests::unread` (+
+`::unbound`), `…::idle::leave::unread`. Düz girdi için "yanıt borcu yok,
+defter yok" gerekçesi (aşağıda elenen 4) sayılıp sayılmamasını değil,
+hangi defterde olduğunu belirler: kayıp kayıptır, sayılır; istek
+defterine karışmaz.
 
 Son terim oda sayacı değil, net kapsamının (B51, aşağıda): üyeliği ODA
 bitirdiğinde (atma, girdi-boşta tavanı, oda kapanışı/emekliliği)
@@ -891,7 +916,8 @@ yanıtsız retidir (F15'in ayrı tuttuğu anlam), `req_late` worker
 raporudur (istek değil), `gsb_net_actions_dropped_total` bağlantının
 kendi dolu kanalının girişte düşürdüğüdür (oda hiç görmez). (4) *Düz
 action'ları da saymak:* ateşle-unut girdinin yanıt borcu yok, hiçbir
-defter onları uzlaştırmıyor — kapsam dışı. (5) *Odanın dururken son bir
+defter onları uzlaştırmıyor — B36'da kapsam dışıydı; sayım turu 2'de
+(B54) ayrı bir sayaçta sayılıyor (yukarıda) — istek defterine karışmadan. (5) *Odanın dururken son bir
 örnek göndermesi (Neden 2 için motor düzeltmesi):* oda ile toplayıcı
 aynı ticker kapanışında biter — geç örnek toplayıcının son raporunu
 kaçırabilir, yok edilmiş odanın örneği akümülatörde odayı diriltebilir;

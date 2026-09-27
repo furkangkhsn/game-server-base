@@ -7,6 +7,9 @@
 
 use super::*;
 
+// READ's binding translation drops, counted by kind (B54).
+mod unbound;
+
 /// Two requests and one plain action into a session's channel.
 fn two_requests_and_an_action(tx: &Mailbox<Action>, conn: ConnectionId) {
     for op in [crate::rpc::RPC_REQ_OP, 0x2001, crate::rpc::RPC_REQ_OP] {
@@ -45,6 +48,7 @@ async fn a_resume_counts_the_old_channels_unread_requests() {
         a.m.requests_dropped_unread, 2,
         "the requests, not the action"
     );
+    assert_eq!(a.m.actions_dropped_unread, 1, "the action, apart (B54)");
     assert!(old.is_closed(), "the old channel is gone");
 }
 
@@ -81,4 +85,5 @@ async fn a_dead_migration_counts_the_channels_unread_requests() {
         "the dead join stays out"
     );
     assert_eq!(a.m.requests_dropped_unread - before, 2);
+    assert_eq!(a.m.actions_dropped_unread, 1, "the action, apart (B54)");
 }

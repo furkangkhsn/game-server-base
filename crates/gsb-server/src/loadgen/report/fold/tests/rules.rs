@@ -127,6 +127,9 @@ fn folding_shards_applies_one_rule_per_field() {
         "requests_refused_congested"
     );
     assert_eq!(f.requests_dropped_unread, 8, "requests_dropped_unread");
+    assert_eq!(f.requests_dropped_unbound, 2, "requests_dropped_unbound");
+    assert_eq!(f.actions_dropped_unread, 6, "actions_dropped_unread");
+    assert_eq!(f.actions_dropped_unbound, 9, "actions_dropped_unbound");
     assert_eq!(f.requests_timed_out, 24, "requests_timed_out");
     assert_eq!(f.requests_late, 7, "requests_late");
     assert_eq!(f.requests_undelivered, 7, "requests_undelivered");

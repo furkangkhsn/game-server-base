@@ -48,6 +48,14 @@ async fn a_request_unread_when_a_sharded_park_is_left_behind_is_counted() {
         payload: bytes::Bytes::from_static(&[1]),
     })
     .expect("the channel has room");
+    // A plain game action beside it (B54: counted apart).
+    act.try_send(Action {
+        conn: ConnectionId(1),
+        player: PlayerId(0),
+        op: 0x2001,
+        payload: bytes::Bytes::new(),
+    })
+    .expect("the channel has room");
     step(&mut a, Instant::now(), 1, 30);
     assert!(a.conns[&PlayerId(1)].detached, "parked");
     assert!(act.is_closed(), "the membership ended");
@@ -55,4 +63,5 @@ async fn a_request_unread_when_a_sharded_park_is_left_behind_is_counted() {
         a.m.requests_dropped_unread, 1,
         "the park's released channel held one unread request"
     );
+    assert_eq!(a.m.actions_dropped_unread, 1, "the action, apart (B54)");
 }

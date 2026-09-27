@@ -8,7 +8,7 @@ use super::{RoomFamily, counter, gauge};
 /// Session lifecycle through the room's metric drops, in exposition
 /// order. The effect, migration and team families move on shard rows
 /// only (0 on a single room).
-pub(super) const SESSION: [RoomFamily; 39] = [
+pub(super) const SESSION: [RoomFamily; 42] = [
     counter(
         "gsb_room_joins_total",
         "Joins processed, cumulative.",
@@ -124,6 +124,17 @@ pub(super) const SESSION: [RoomFamily; 39] = [
         "Team import slots dropped by the TTL (a silent source), cumulative.",
         |r| r.team_expired,
     ),
+    // B54: plain game actions the room never processed.
+    counter(
+        "gsb_room_actions_dropped_unread_total",
+        "Plain game actions a session left unread in its action channel when it ended (never processed), cumulative.",
+        |r| r.actions_dropped_unread,
+    ),
+    counter(
+        "gsb_room_actions_dropped_unbound_total",
+        "Plain game actions pulled under a connection with no binding row (a stale session; never processed), cumulative.",
+        |r| r.actions_dropped_unbound,
+    ),
     // RPC.
     counter(
         "gsb_room_requests_local_total",
@@ -174,6 +185,11 @@ pub(super) const SESSION: [RoomFamily; 39] = [
         "gsb_room_requests_dropped_unread_total",
         "RPC requests a session left unread in its action channel when it ended (never processed, never answered), cumulative.",
         |r| r.requests_dropped_unread,
+    ),
+    counter(
+        "gsb_room_requests_dropped_unbound_total",
+        "RPC requests pulled under a connection with no binding row (a stale session; never processed, never answered), cumulative.",
+        |r| r.requests_dropped_unbound,
     ),
     counter(
         "gsb_room_requests_timed_out_total",

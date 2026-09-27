@@ -243,8 +243,18 @@ pub(crate) struct RoomCounters {
     /// or resumed park, a superseding rejoin, a park the idle ceiling
     /// left behind — `RoomConn::release_actions`): neither processed nor
     /// answered, counted as the channel is dropped (B36 — see
-    /// `crate::room::drop_unread_requests`).
+    /// `crate::room::drop_unread`).
     pub(crate) requests_dropped_unread: u64,
+    /// Plain game actions (anything but an RPC request) still unread in
+    /// a session's action channel when the session ended — the same ends
+    /// as [`Self::requests_dropped_unread`], apart (B54), cumulative.
+    pub(crate) actions_dropped_unread: u64,
+    /// RPC requests / plain actions READ pulled under a connection that
+    /// no longer has a binding row (a stale session — structurally rare:
+    /// the old channel dies with the rebind) and dropped at the binding
+    /// translation (B54), cumulative. Disjoint.
+    pub(crate) requests_dropped_unbound: u64,
+    pub(crate) actions_dropped_unbound: u64,
     /// The room-wide pending cap bound the request.
     pub(crate) requests_rejected_room_cap: u64,
     /// Pending external requests swept as timed out (the client-visible
@@ -317,6 +327,9 @@ impl Default for RoomCounters {
             requests_rejected_room_cap: 0,
             requests_refused_congested: 0,
             requests_dropped_unread: 0,
+            actions_dropped_unread: 0,
+            requests_dropped_unbound: 0,
+            actions_dropped_unbound: 0,
             requests_timed_out: 0,
             requests_late: 0,
             requests_undelivered: 0,

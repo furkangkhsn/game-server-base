@@ -164,7 +164,7 @@ where
                 rc.release_outbound();
                 // The released channel's unread requests are counted
                 // like a despawn's (B36).
-                self.m.requests_dropped_unread += rc.release_actions();
+                self.m.count_unread(rc.release_actions());
                 true
             }
             _ => false,

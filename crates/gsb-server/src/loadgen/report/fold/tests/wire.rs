@@ -95,6 +95,39 @@ fn the_unread_requests_survive_the_wire() {
     }
 }
 
+/// The input the room dropped unprocessed (GSML, B54) crosses the wire
+/// in three fields of its own: the unbound requests after the unread
+/// ones, the two action counters after the abandoned requests.
+#[test]
+fn the_unprocessed_input_survives_the_wire() {
+    let sent = three_shards();
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(
+            (
+                a.requests_dropped_unread,
+                a.requests_dropped_unbound,
+                a.requests_timed_out,
+                a.requests_abandoned,
+                a.actions_dropped_unread,
+                a.actions_dropped_unbound,
+                a.pending_requests
+            ),
+            (
+                b.requests_dropped_unread,
+                b.requests_dropped_unbound,
+                b.requests_timed_out,
+                b.requests_abandoned,
+                b.actions_dropped_unread,
+                b.actions_dropped_unbound,
+                b.pending_requests
+            ),
+            "shard {:?}",
+            a.room
+        );
+    }
+}
+
 /// What a session that ended took with it (GSMK, B53) crosses the wire
 /// as two fields of its own, between the late reports and the pending
 /// gauge.
@@ -146,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"KMSG", "the magic, little-endian GSMK");
+    assert_eq!(&frame[..4], b"LMSG", "the magic, little-endian GSML");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {

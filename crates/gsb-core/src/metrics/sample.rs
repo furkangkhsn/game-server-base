@@ -191,6 +191,19 @@ pub struct RoomSample {
     /// answered + rejected + refused + accepted + this` (B36),
     /// cumulative.
     pub requests_dropped_unread: u64,
+    /// RPC: requests READ pulled under a connection that no longer has
+    /// a binding row (a stale session after a resume — structurally
+    /// rare) and dropped at the binding translation: neither processed
+    /// nor answered; a term of the RPC ledger (B54), cumulative.
+    pub requests_dropped_unbound: u64,
+    /// Plain game actions (anything but an RPC request) the room never
+    /// processed, cumulative (B54): still unread in a session's action
+    /// channel when it ended (the ends of
+    /// [`Self::requests_dropped_unread`]), and pulled under a connection
+    /// with no binding row (as [`Self::requests_dropped_unbound`]).
+    /// Disjoint from the request counters.
+    pub actions_dropped_unread: u64,
+    pub actions_dropped_unbound: u64,
     /// RPC: pending external requests swept as timed out (the
     /// client-visible timeout), cumulative.
     pub requests_timed_out: u64,

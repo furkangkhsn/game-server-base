@@ -47,6 +47,29 @@ fn num(line: &str, kv: &HashMap<String, String>, k: &str) -> u64 {
         .unwrap_or_else(|_| panic!("{k} is not a count in: {line}"))
 }
 
+/// The RPC ledger (docs/RPC-CONTROL-PLANE.md §8.3): every request a
+/// client sent lands in exactly one of these terms — the room's buckets
+/// and the connection-side drops. Every term must be on the line.
+const LEDGER: [&str; 12] = [
+    "req_local",
+    "req_ext",
+    "req_rej_malformed",
+    "req_rej_dup",
+    "req_rej_no_handler",
+    "req_rej_logic",
+    "req_rej_conn",
+    "req_rej_room",
+    "req_refused",
+    "req_unread",
+    "req_unbound",
+    "requests_dropped_closed",
+];
+
+/// The ledger's sum on a RESULT line.
+fn ledger(line: &str, kv: &HashMap<String, String>) -> u64 {
+    LEDGER.iter().map(|k| num(line, kv, k)).sum()
+}
+
 /// What must hold on any run in the mode: every client through its
 /// session with no error, the exactly-once numbers at zero, `game=`
 /// still last.
@@ -59,6 +82,8 @@ fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64) {
     assert_eq!(get("errors"), 0, "{line}");
     assert_eq!(get("rpc_dup_answers"), 0, "exactly once: {line}");
     assert_eq!(get("rpc_unmatched"), 0, "every answer is ours: {line}");
+    // The whole ledger closes: each request sent is in exactly one term.
+    assert_eq!(ledger(line, kv), get("rpc_sent"), "the RPC ledger: {line}");
     assert!(line.ends_with(" game=demo"), "{line}");
 }
 

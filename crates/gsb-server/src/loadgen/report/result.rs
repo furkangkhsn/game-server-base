@@ -437,7 +437,7 @@ pub(crate) fn print_report(
             private_fulls={} deltas={} gap_drops={} view_size={} still_frac={} \
             req_local={} req_ext={} req_rej_malformed={} req_rej_dup={} \
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
-            req_refused={} req_unread={} req_to={} req_late={} req_undelivered={} req_abandoned={} req_pending={} churn_cycles={} resumed={} \
+            req_refused={} req_unread={} req_unbound={} req_to={} req_late={} req_undelivered={} req_abandoned={} req_pending={} actions_unread={} actions_unbound={} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
              detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{} game={}",
         mode,
@@ -554,11 +554,15 @@ pub(crate) fn print_report(
         room.map(|r| r.requests_rejected_room_cap).unwrap_or(0),
         room.map(|r| r.requests_refused_congested).unwrap_or(0),
         room.map(|r| r.requests_dropped_unread).unwrap_or(0),
+        room.map(|r| r.requests_dropped_unbound).unwrap_or(0),
         room.map(|r| r.requests_timed_out).unwrap_or(0),
         room.map(|r| r.requests_late).unwrap_or(0),
         room.map(|r| r.requests_undelivered).unwrap_or(0),
         room.map(|r| r.requests_abandoned).unwrap_or(0),
         room.map(|r| r.pending_requests).unwrap_or(0),
+        // The plain game actions the room dropped unprocessed (B54).
+        room.map(|r| r.actions_dropped_unread).unwrap_or(0),
+        room.map(|r| r.actions_dropped_unbound).unwrap_or(0),
         // The churn profile's numbers (RECONNECT §14.5): client-side cycle
         // counts, and the server-side cumulative resume counters from the
         // room report (zero on a plain run — their presence is the queue
