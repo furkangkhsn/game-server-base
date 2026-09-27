@@ -661,14 +661,15 @@ varsayılanı `GameModule::afk_action()` (sağlanan metot, varsayılan
 (`max_idle_input_secs`) operatörün anahtarı kalır; tavan yoksa eylemin
 etkisi yoktur.
 
-**Oyun mantığına açılmadı (bilinçli).** Fiil bu turda yalnız tavanın
-eylemi. Genel bir "oyuncuyu at" (ör. `TickCtx`/bir kanca üzerinden)
-`GameLogic` + `ShardLogic` + kitin `Game`'ine yeni yüzey ve yeni
-anlambilim kararları getirirdi (üyelik hangi yoldan biter — `on_leave`
-mi `on_disconnect` mi, gerekçe metni kimin, hız sınırı) — BACKLOG'a
-ayrı madde olarak yazıldı. İç fiil (`CloseRequest`, sebep + metin
-taşıyan) buna hazır: yeni bir istek kaynağı yeni bir `ServerClose`
-etiketi ve bir üretici ekler.
+**Oyun mantığına açılmadı (bilinçli) — E8'de açıldı (§16.3).** Fiil
+E6 turunda yalnız tavanın eylemiydi. Genel bir "oyuncuyu at" (ör.
+`TickCtx`/bir kanca üzerinden) `GameLogic` + `ShardLogic` + kitin
+`Game`'ine yeni yüzey ve yeni anlambilim kararları getirirdi (üyelik
+hangi yoldan biter — `on_leave` mi `on_disconnect` mi, gerekçe metni
+kimin, hız sınırı) — BACKLOG'a ayrı madde (E8) olarak yazıldı. İç fiil
+(`CloseRequest`, sebep + metin taşıyan) buna hazırdı: E8 yeni bir
+`ServerClose` etiketi (`Kicked`) ve bir üretici (`TickCtx::kick`)
+ekledi.
 
 **Elenen alternatifler.** (1) *Registry'nin bağlantı aktörüne kapanışı
 yollayıp tabloyu bağlantının kapanışına bırakması* — despawn edilmiş
@@ -794,6 +795,171 @@ bağlantının join'i registry yerleşiminden ÖNCE varabilir ve resume
 edilen üyeliği yanlışlıkla kapatırdı; parkta kanal zaten hiç kapanmıyordu.
 (5) *Kick anında istemciye kare göndermek* — mevcut protokolde uygun kare
 yok (yukarıda, madde 5).
+
+### 16.3 Oyunun atma fiili: `TickCtx::kick` (E8)
+
+**Karar (bakımcı, 2026-09-27): atma = bağlantıyı kapatmak.** Oyun
+mantığı bir üyeyi SUNUCUDAN atar: üyelik §16'nın yolundan biter
+(`on_disconnect` — varlığın kaderini oyunun `Detach`'ı seçer: park / AI
+devri / despawn), sonra soket E6'nın fiiliyle (`CloseRequest` →
+registry → bağlantı) kapanır. `on_leave` yolu ve "odadan çıkarıldı ama
+bağlı" durumu YOK (E9 kapandı). Yeni tel öğesi yok, base protokol sürümü
+değişmedi. Yol, `afk_action = disconnect` altındaki tavanın yolunun
+aynısıdır; yalnız tetikleyici (oyun) ve sayaç etiketi farklıdır.
+
+**Yüzey (tek fiil, üç kapı).**
+
+```rust
+// gsb_core::room
+pub struct TickCtx<'a> { …, pub idle: IdleView<'a>, pub kicks: Kicks<'a> }
+impl TickCtx<'_> {
+    pub fn kick(&self, player: PlayerId, reason: impl Into<String>);
+}
+pub struct Kicks<'a>;               // Copy; Default = etkisiz (el yapımı bağlam)
+impl Kicks<'_> { pub fn kick(&self, player: PlayerId, reason: impl Into<String>); }
+pub struct KickQueue;               // aktörün tick başına kuyruğu; testler de kurar
+impl KickQueue { pub fn kicks(&self) -> Kicks<'_>; pub fn take(&self) -> Vec<Kick>; }
+pub struct Kick { pub player: PlayerId, pub reason: String }
+pub const KICK_REASON_MAX_BYTES: usize = 256;
+pub fn kick_message(reason: &str) -> String;   // "kicked: <reason>" | "kicked"
+
+// gsb_kit::game
+pub fn kick(world: &mut World, entity: Entity, reason: impl Into<String>);
+```
+
+- **`GameLogic` / `ShardLogic`:** yeni METOT yok — fiil her tick
+  kancasının zaten aldığı bağlamda (`ctx.kick`), `ctx.since_input`'un
+  deseni (§16). `ingest`, `handle_request`, `update`, shard'ın
+  `ingest_seam`/`update_seam`'i, ve yayın fazının kancaları
+  (`snapshot`, `keepalive`, `team_exchange`) sorabilir.
+- **Kit `Game`:** kit oyunları varlıkla düşünür; `gsb_kit::game::kick(
+  world, entity, reason)` dünyayı değiştirebilen HER kancadan (`ingest`,
+  `systems`, `handle_request`, `may_release`, shard'da
+  `apply_remote_effect` ve seam kancaları) sorulabilir. İstek bir dünya
+  kaynağında bekler (yalnız ilk atmada eklenir: hiç atmayan oyunun
+  dünyasında kaynak yoktur); yedi kit odası oyunun sistemlerinden hemen
+  sonra (`update`'in sonunda) sahibi çözüp çekirdeğin fiiline iletir —
+  tek dünya odaları oyuncu→varlık tablosuyla, sharded odalar
+  varlık→oyuncu tablosuyla (MIGRATE'ten önce). Sahibi olmayan varlık
+  (NPC, gitmiş) yok sayılır. `PlayerId`'yi elinde tutan kanca doğrudan
+  `ctx.kick` da çağırabilir.
+
+**Ne zaman uygulanır (isteyen kancanın içinde ASLA).** Fiil yalnız
+kuyruğa yazar (bağlamın ödünç verdiği bir `Cell`; await yok, kancaya
+yeniden giriş yok). Aktör kuyruğu, sorabilecek kancalar döndükten sonra
+iki noktada uygular:
+
+| Soran kanca | Oda | Shard |
+|---|---|---|
+| `ingest`, `handle_request`, `update` (shard: `*_seam`) | faz 3b — SYSTEMS'tan sonra, BROADCAST'tan önce | faz 3c — EFFECTS OUT'tan sonra, **MIGRATE'ten önce** |
+| `snapshot`, `keepalive` (shard: + `team_exchange`) | tick sonu (BROADCAST'tan sonra) | tick sonu (BROADCAST'tan sonra) |
+
+`on_disconnect` bu noktada çağrılır. İstek ile uygulama arasında
+CONTROL fazı koşmaz: atma, isteyen kancanın gördüğü üyeliği yargılar
+(oyuncunun aynı pencerede gönderdiği `LEAVE`, CONTROL'de SONRA işlenir
+ve üye olmayana düşer). Birinci noktada uygulanan atmada üye o tick'in
+yayınını almaz. Aktör input-idle saatini uygulamadan önce geri alır
+(ayrılma yolu üyeyi saatten çıkarır) ve yayın için yeniden ödünç verir.
+Kapatma isteği E6'nın kuyruğuna girer ve **sonraki tick'in 0d fazında**
+gider (`flush_close_requests`, B41'in `parked` yeniden sınaması dahil);
+registry satırı yerleştirir, bağlantıya `ConnIn::ServerClosed { Kicked }`
+iletir.
+
+**Yol, E6'nın `Disconnect` kolunun aynısı.** Canlı üye (satırı var,
+`detached` değil): `detach_player(…, report = true)` → park edildiyse
+satırın giden yarısı bırakılır (`release_outbound`; yoksa soket
+kapanamaz) → `CloseRequest { cause: Kicked, reason: "kicked: …",
+parked }`. Registry yoksa (bağımsız oda, test düzenekleri) üyelik yine
+politikayla biter, istek kuyruğa girmez.
+
+**Gerekçe metni: sınır ve önek.** Oyunun metni **256 bayta**
+(`KICK_REASON_MAX_BYTES`) `char` sınırında kesilir — sorulduğu anda,
+yani kuyruk da çerçeve de küçük kalır; çok baytlı bir karakter asla
+bölünmez. İleti `kicked: <reason>` (boş gerekçede yalnız `kicked` —
+`Error.message` her zaman doludur). Gerekçe: motorun kendi kod-9
+metinleri tek satırlık, ~100 baytlık, hükmü önekle adlandıran metinlerdir
+(`input idle: …`, `stream rejected: …`); önek istemcinin oyunun atmasını
+motorun kapanışlarından ayırmasını sağlar, 8 + 256 bayt çerçeveyi tek
+parçasız rUDP datagramında tutar.
+
+**Tel ve sayaç.** En-iyi-çaba, beklemesiz `ERROR 9` (bağlantı aktörü
+`IdleInput` ile aynı kolda: `try_notice`) — atılan istemci okumayı
+bırakmış olabilir (oyun onu çoğu zaman tam bu yüzden atar); beklemeli
+gönderim aktörü write-stall penceresine kadar park ettirirdi. Sonra
+kapanış. `server_closes{reason="kicked"}` — yeni etiket SONA eklendi
+(Prometheus ve OTLP'de tek satır; log satırında `server_close_kicked=`;
+loadgen metrik teli GSMG; RESULT'ta her sebep için bir anahtar kuralıyla
+`server_close_kicked=`).
+
+**Kenar durumları.**
+
+| Durum | Kural |
+|---|---|
+| Bilinmeyen oyuncu, zaten ayrılmış/despawn olmuş, park edilmiş (`detached`), bot beslenen | no-op: politika çağrılmaz, istek yok. **Sayılmaz** (yalnız `debug` log): canlı olmayan üyeyi atmak oyunun kendi yarışıdır, operatörün yapacağı bir şey yoktur; yeni sayaç `/metrics`'i değiştirirdi. Oyun isterse kendi sayacını (F9) tutar |
+| Aynı oyuncuyu aynı tick'te iki kez atmak | bir politika çağrısı, bir kapanış, İLK gerekçe: ilk uygulama satırı bitirir (ya da park eder), ikincisi canlı üye bulamaz |
+| Shard'da aynı tick göç edecek üye | faz 3c MIGRATE'ten önce uygulanır: despawn edilen üye göçmez; park edilen varlık PARK olarak göçer (bayrakları taşınır, §14.2) ve kapatma isteği gider — bekleyen isteğin `parked`'ı gönderimde `false`'a döner (B41'in bilinen eksik sayımı, sızıntı değil) |
+| Shard'da MIGRATE'ten SONRA soran kanca (`team_exchange`, `snapshot`, `keepalive`) bu tick göçmüş üyeyi atar | no-op: shard kanca sorduğunda üyeye artık sahip değildi (komşuya iletme yok — kit oyunlarının MIGRATE sonrası bağlam kancası yok, ham `ShardLogic` için tanımlı bir no-op) |
+| Registry posta kutusu dolu | E6'nın kuralı: istek kuyrukta kalır, sonraki tick'te yeniden denenir; despawn kolunun raporu (0c) aynı kutuyu önce kullanır |
+| Registry kapalı (süreç iniyor) | istek düşer (E6) |
+
+**B43 ile etkileşim.** B43 aynı fiilin açık yarışıdır: dolu registry
+posta kutusunun arkasında bekleyen kapatma isteği, bağlantı aynı odaya
+TAZE katılırsa (yeni varlık) `room`+`entity` korumasında bayat kalır,
+soket açık kalır. Atmada da aynen geçerli: registry doygunken atılan
+istemci, istek beklerken yeniden katılabilirse (despawn edilmiş üyenin
+aksiyon kanalı kapalıdır, bağlantı kendini ayırıp doğrudan `JOIN`
+gönderebilir) atmadan kurtulur — yeni üyelik oyunun `on_join`'ine
+yeniden düşer, oyun onu yeniden atabilir (yasak listesi oyunun
+politikasıdır). Bu turda düzeltilmedi (önemsiz biçimde düşmüyor).
+
+**Kit'in varsayılan kaderi.** Kit odalarının varsayılan politikası
+kimliği olan oturumu PARK eder (`DEFAULT_DISCONNECT_GRACE`, sonra bot);
+atılan oyuncu aynı kimlikle dönerse süre içinde resume eder. Atılan
+oyuncuyu tutmaması gereken oda `with_disconnect_policy(Some(Duration::ZERO),
+…)` ile kurulur (hemen despawn). Kaderi ATMAYA özgü seçmek (düşeni park,
+atılanı despawn) bugün kit'te yok: politika oda geneli, `on_disconnect`
+nedenini bilmez — ham `GameLogic` bunu kendi durumunda bayrakla yapabilir.
+
+**Varsayılan değişmedi.** Hiç atmayan bir oyunda davranış ve baytlar
+aynıdır: kuyruk tick başına yerel, boş ve ayırmasız; uygulama boş listede
+bir uzunluk testi; kit tarafında kaynak hiç eklenmez. `/metrics` yalnız
+`kicked` satırıyla değişti.
+
+**Tur sırasında bulunan hata (düzeltildi).** Shard tick gövdesi
+input-idle saatini oyun kancalarına ödünç verip ancak BROADCAST'tan sonra
+geri alıyordu; MIGRATE boş yer tutucu saatle koşuyordu: göçen üyenin
+damgası (`PlayerMigration.last_input`) hep `None` gidiyor, alıcı shard
+saati hiç başlatmıyordu — sınır geçişi boşta oyuncuyu tavandan kalıcı
+olarak çıkarıyordu (gönderen de bayat bir yuva tutuyordu). Gövde saati
+artık MIGRATE'ten önce geri alıyor ve TEAMS + BROADCAST için yeniden
+ödünç veriyor (`shard/tests/idle/migrate.rs`). Atma'nın faz 3c noktası
+aynı yeniden yapılanmayı kullanır.
+
+**Elenen alternatifler.**
+
+1. *`GameLogic`'e toplama metodu* (`take_kicks(&mut self, out)`, mantık
+   kendi kuyruğunu tutar, aktör tick sonunda sorar — `logic_counters`
+   deseni): her oyun bir kuyruk taşırdı, kit'te her oda ayrıca
+   iletirdi; bağlam zaten her kancanın per-tick dikişidir (`since_input`).
+2. *Anında uygulamak* (kancanın içinde `on_disconnect`): isteyen kancaya
+   yeniden giriş; `&mut self` çakışması.
+3. *Sonraki tick'in 0d fazında uygulamak* (tavanın noktası): arada
+   CONTROL koşar — oyuncunun kendi `LEAVE`'i atmayı yutar, soket açık
+   kalır; shard'da göç arada kalır, atmanın komşuya taşınması gerekirdi.
+4. *Tek nokta, tick sonu:* shard'da üye aynı tick MIGRATE'te göçer;
+   atmayı `PlayerMigration`'a ya da yeni bir `ShardMsg`'a bindirmek
+   ertelenmiş göç ve geri alma yollarıyla karmaşık. MIGRATE'ten önce
+   uygulamak yarışı yapısal olarak kaldırır.
+5. *MIGRATE sonrası sorulan atmayı komşuya iletmek:* yeni `ShardMsg`,
+   nadir bir durum için; tanımlı no-op seçildi.
+6. *`RefCell`:* çift ödünçte panik riski; `Cell` (al/koy) panik yok.
+7. *Atma için yeni `ErrorCode`:* kod 9 "sunucunun oturum hakkındaki
+   hükmü" sınıfıdır (§16.1'in gerekçesi), istemciye yeni bir karar
+   taşımaz.
+8. *No-op'lar için sayaç* (`kicks_ignored`): yukarıda; `/metrics`
+   kapısı.
+9. *Kit'te atmaya özgü kader* (atılan → despawn): politika kararı ve
+   yeni yüzey; açık iş olarak not edildi.
 
 ## 17. Süreli bekletmede veto ve veto tavanı (`max_detach_hold`)
 

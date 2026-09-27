@@ -267,6 +267,16 @@ max_detach_hold_secs = "off"
   dizi `ServerClose::COUNT` uzunlukta olduğundan yeni sebep = yeni
   düzen). Varsayılanda hep 0. `idle_timeout`'tan ayrı: o taşıma-boşta
   (hiç bayt yok), bu girdi-boşta (heartbeat var, oyun girdisi yok).
+- **Sunucu kapanışları: `kicked` (E8).** `server_closes` ailesine
+  `idle_input`'tan sonra SONA eklenen etiket: oyun mantığının attığı
+  oturumlar (`TickCtx::kick` / `gsb_kit::game::kick`; RECONNECT §16.3).
+  Log satırında `server_close_kicked=`, Prometheus'ta
+  `gsb_net_server_closes_total{reason="kicked"}`, OTLP'de
+  `gsb_net_server_closes` serisinde `reason=kicked` noktası (seri sayısı
+  13), loadgen metrik telinde `GSMG`, RESULT'ta `server_close_kicked=`
+  (her sebep için bir anahtar kuralı). Hiç atmayan oyunda hep 0. İstemci
+  aynı kapanışı `ERROR 9` + `kicked: <gerekçe>` olarak okur; gerekçe
+  oyunundur (≤ 256 bayt).
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
   `gsb-metric scope=net` satırında `violations=`'dan hemen sonra

@@ -170,7 +170,24 @@ birbirine karışmaz:
   ile ezer. Tavanın kendisi (`max_idle_input_secs`) operatörün anahtarı
   kalır — oyun dikişi yok; tavan yoksa eylemin etkisi yoktur. Repodaki
   demolar eylem seçmez. Oyun mantığından doğrudan "bu oyuncuyu at" fiili
-  bu turda AÇILMADI (BACKLOG'da ayrı madde).
+  E6 turunda AÇILMADI; E8'de açıldı (aşağıda).
+- **Oyunun atma fiili (BACKLOG E8, RECONNECT §16.3).** Bir oyuncuyu
+  sunucudan atmak oyunun kararıdır; motor fiili verir, varsayılan
+  davranış değişmez (hiç atmayan oyunda bayt bayt aynı). Ham mantık tick
+  bağlamından çağırır: `ctx.kick(player, reason)` (`TickCtx::kick`;
+  `GameLogic`/`ShardLogic`'e yeni metot yok). Kit oyunu varlıkla:
+  `gsb_kit::game::kick(world, entity, reason)` — kit sahibini çözer.
+  Fiil yalnız kuyruğa yazar; aktör onu isteyen kanca döndükten sonra
+  uygular (SYSTEMS'tan sonra — shard'da MIGRATE'ten önce — ya da yayın
+  kancalarında sorulduysa tick sonunda): üyelik `on_disconnect` ile
+  biter (varlığın kaderini oyunun `Detach`'ı seçer; kit odalarında odanın
+  kopma politikası — varsayılanı park + bot), sonra bağlantı kapanır:
+  istemci en-iyi-çaba `ERROR 9` okur, `message` = `kicked: <gerekçe>`
+  (gerekçe 256 bayta `char` sınırında kesilir; boşsa `kicked`), ardından
+  kapanış; `server_closes{reason="kicked"}` sayılır. Canlı üye olmayanı
+  (bilinmeyen, gitmiş, park, bot) atmak sayılmayan bir no-op'tur; aynı
+  tick'te iki atma tek kapanıştır. Yasak listesi / yeniden katılmayı
+  reddetmek oyunun politikasıdır (motor saklamaz).
 - **Girdi hız sınırı: oyunun SAYISI olan bir oda anahtarı
   (BACKLOG E1, SECURITY §3.4).** Saniyede kaç girdinin meşru olduğunu
   oyun bilir; `GameModule::input_rate()` (sağlanan metot, varsayılan

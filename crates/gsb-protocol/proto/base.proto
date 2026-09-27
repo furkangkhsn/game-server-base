@@ -149,9 +149,11 @@ enum ErrorCode {
   // frame budget exhausted, a newer session for the same player, the
   // transport refusing the byte stream ("stream rejected: …"), the room
   // closing a member that stopped sending game input (the input-idle
-  // ceiling under `afk_action = disconnect`, "input idle: …") — see the
-  // `message` for which. The connection is closed right after this
-  // frame. (A server STOP is not a verdict on the session: that is 14.)
+  // ceiling under `afk_action = disconnect`, "input idle: …"), the GAME
+  // kicking the member ("kicked: <the game's reason>", or "kicked" alone;
+  // the game's text is at most 256 bytes) — see the `message` for which.
+  // The connection is closed right after this frame. (A server STOP is
+  // not a verdict on the session: that is 14.)
   ERROR_CODE_SERVER_CLOSED = 9;
   // The server's ticket validator rejected the presented ticket, or the
   // validation timed out. A NORMAL rejection — the connection STAYS

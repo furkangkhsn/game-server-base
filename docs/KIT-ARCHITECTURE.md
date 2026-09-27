@@ -216,6 +216,27 @@ iletir (sharded spatial/team kompozitleri iç grid odası üzerinden),
 sharded oda crystallization açıksa önce kendi altı `crystal_*`
 sayacını koyar.
 
+*E8 (RECONNECT §16.3):* `gsb_kit::game::kick(world: &mut World, entity:
+Entity, reason: impl Into<String>)` — `Game`'e yeni kanca DEĞİL, serbest
+bir fiil: oyun oyuncuyu VARLIĞIYLA atar (kit oyunları `PlayerId`'yi
+çoğu kancada görmez; `systems` yalnız dünyayı alır). Dünyayı
+değiştirebilen her kancadan sorulabilir; istek bir dünya kaynağında
+(`KitKicks`, crate-içi; yalnız ilk atmada eklenir) bekler. Yedi kit
+odasının hepsi onu oyunun sistemlerinden hemen sonra, `update`'in
+sonunda çekirdeğin `TickCtx::kick`'ine iletir: tek dünya odaları
+(`OpenRoom`, `AoiRoom`, `SectorRoom`, `TeamRoom`) `common::systems`
+içinde oyuncu→varlık tablosuyla, sharded odalar (`ShardedRoom` ve onu
+saran spatial/team kompozitleri) `ShardedRoom::step` içinde
+varlık→oyuncu tablosuyla — shard aktörünün MIGRATE'inden önce, yani
+atılan üye aynı tick göçmez. Sahibi olmayan varlık (NPC) yok sayılır.
+Varlığın kaderini odanın kopma politikası seçer (varsayılan: park +
+bot; atılanı tutmayan oda `with_disconnect_policy(Some(Duration::ZERO),
+…)`). `PlayerId`'yi elinde tutan kanca (`ingest`'in `players`'ı, bir
+isteğin `player`'ı) doğrudan `ctx.kick` de kullanabilir. Elenen:
+`Game`'e bir `kicks(&mut self, out)` toplama kancası (her oyun kuyruk
+tutardı, `PlayerId` yine gerekirdi); `TickCtx`'e varlık tabanlı bir
+fiil (çekirdek varlığı bilmez).
+
 Oda tipleri bunları bir araya getirir:
 
 | Oda | `GroupKey` | `Strip` | Shard durumu |

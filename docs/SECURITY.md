@@ -181,6 +181,7 @@ sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
 | `room_gone` | oda oturumun altında yok edildi / öldü |
 | `outbound_dead` | giden kanal kapalı bulundu ve kayıtlı hüküm yok (çoğunlukla yazma hatasıyla gitmiş bir peer'ın kuyruğu; bekleyen bir stall hükmü ya da peer kapanışı mailbox'tan okunup ona atfedilir — stall hükmü dolu mailbox'ta da oradadır, §3.5 karar 4) |
 | `idle_input` | odanın girdi-boşta tavanı (`max_idle_input_secs`) opt-in `afk_action = disconnect` altında: heartbeat atan ama oyun girdisi göndermeyen üye politikaya verildi, oda registry'den bağlantının kapatılmasını istedi (BACKLOG E6, RECONNECT §16.1). İstemciye en-iyi-çaba, beklemesiz ERROR 9 `input idle: …` gider |
+| `kicked` | oyun mantığı üyeyi attı (`TickCtx::kick` / `gsb_kit::game::kick`, BACKLOG E8, RECONNECT §16.3): üyelik oyunun `on_disconnect` politikasıyla bitti, oda registry'den bağlantının kapatılmasını istedi. İstemciye en-iyi-çaba, beklemesiz ERROR 9 `kicked: <oyunun gerekçesi>` (≤ 256 bayt) gider |
 
 Sayılmayanlar, bilerek: istemci-tarafı son (EOF, RST, WS kapanış el
 sıkışması) — dökme değildir; sunucu kapanışı (`Shutdown`) — oturum

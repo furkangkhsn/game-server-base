@@ -735,11 +735,19 @@ bir ayrılma gibi yerleştirir ve bağlantıya `ConnIn::LeftRoom` iletir
 (B40, RECONNECT §16/§16.2): oyun kareleri `ERROR 6` alır, `JOIN` doğrudan
 geçer.
 
+**Sonraki ek: oyunun atma fiili (BACKLOG E8).** Oyun mantığı bir üyeyi
+tick bağlamından atar (`TickCtx::kick`; kit: `gsb_kit::game::kick`);
+oda üyeliği aynı politika yoluyla bitirir ve aynı `CloseRequest`'i
+`ServerClose::Kicked` ile ister (RECONNECT §16.3). Bildirim yine mevcut
+`ERROR 9`, en-iyi-çaba ve beklemesiz; mesaj `kicked: <oyunun gerekçesi>`
+(256 bayta kesilir). Sayılır: `server_closes{reason="kicked"}` (sona
+eklendi). Yeni kod, yeni kare yok; hiç atmayan oyunda tel aynı.
+
 **Kapanış yolları, kapı kapı (önce → sonra).** Değişmeyenler: `idle_timeout`,
 `violation_budget`, `preauth_budget`, `conn_cap`/`unauth_cap`,
 `superseded` → ERROR 9 (beklemeli gönderim, stall penceresiyle sınırlı);
-`room_gone` → ERROR 5; `idle_input` (E6) → ERROR 9 en-iyi-çaba,
-beklemesiz; `write_stall`, `rel_dead`, `outbound_dead` →
+`room_gone` → ERROR 5; `idle_input` (E6) ve `kicked` (E8) → ERROR 9
+en-iyi-çaba, beklemesiz; `write_stall`, `rel_dead`, `outbound_dead` →
 bildirim YOK (bildirimi taşıyacak yol ölü — sayacın var olma sebebi).
 
 | Kapı | `stop()` önce | `stop()` sonra | `stream_rejected` önce | `stream_rejected` sonra |
@@ -2924,7 +2932,7 @@ durdurulamaz.
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
 | düşen girdi **kime ait** (flooding atfesi — koruma katmanı; §4) |
 | net | `input_rate_limited` (kümülatif; satırda `violations`'dan sonra, aile tablosundan Prometheus'ta `gsb_net_input_rate_limited_total`, OTLP'de `gsb_net_input_rate_limited`, loadgen telinde GSME) | odanın girdi hız sınırı (E1, §4 "Girdi HACMİ") ne kadar girdiyi bağlantı aktöründe kesti? Sınır kapalıyken 0; ihlal değil, `actions_dropped`'tan ayrı (kanal hiç dolmadı) |
-| net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`, `idle_input` — E6, odanın girdi-boşta tavanı `afk_action = disconnect` altında; loadgen telinde GSMF); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
+| net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`, `idle_input` — E6, odanın girdi-boşta tavanı `afk_action = disconnect` altında; `kicked` — E8, oyunun atma fiili; loadgen telinde GSMG); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`
 (log-2, bütçe oranları) **bütçe sorusunu** yanıtlar: bütçeye göre
