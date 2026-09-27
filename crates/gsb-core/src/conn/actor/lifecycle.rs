@@ -137,12 +137,13 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::ServerClosed {
-                    cause: ServerClose::IdleInput,
+                    cause: cause @ (ServerClose::IdleInput | ServerClose::Kicked),
                     reason,
                 } => {
-                    // The room's input-idle ceiling closed the session
-                    // (E6): a verdict, told best effort — never waiting.
-                    self.on_idle_input_close(&reason);
+                    // A room closed the session — its input-idle ceiling
+                    // (E6) or the game's kick (E8): a verdict, told best
+                    // effort — never waiting.
+                    self.on_room_close(cause, &reason);
                     break;
                 }
                 ConnIn::ServerClosed { cause, reason } => {

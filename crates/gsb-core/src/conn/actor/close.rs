@@ -49,21 +49,22 @@ impl super::ConnectionActor {
         );
     }
 
-    /// The room's input-idle ceiling closed this session
-    /// (`ServerClose::IdleInput`, BACKLOG E6 — `afk_action = disconnect`,
-    /// relayed by the registry): record the verdict, then announce it
-    /// with `ERROR` code 9 like every other server verdict — best effort,
-    /// like the stop notice. The member this reaches is the one that
-    /// stopped playing, and very likely stopped READING too (a
-    /// backgrounded client): the awaited notice of the older code-9
-    /// closes would park this actor until the write-stall window closes
-    /// the queue, forever with the window off, keeping open the very
-    /// socket the deployment asked to close. Logged at `debug`: the room
-    /// already warned once for its ceiling, and a room shedding idle
-    /// members sheds many.
-    pub(super) fn on_idle_input_close(&mut self, reason: &str) {
-        self.server_closing(ServerClose::IdleInput);
-        debug!(%self.conn, %reason, "input-idle ceiling: the room closed this connection");
+    /// A ROOM closed this session, relayed by the registry: its
+    /// input-idle ceiling (`ServerClose::IdleInput`, BACKLOG E6 —
+    /// `afk_action = disconnect`) or the game's kick
+    /// (`ServerClose::Kicked`, E8 — `TickCtx::kick`). Record the verdict,
+    /// then announce it with `ERROR` code 9 like every other server
+    /// verdict — best effort, like the stop notice. The member this
+    /// reaches is very likely one that stopped READING too (a
+    /// backgrounded client, or the very reason the game kicks it): the
+    /// awaited notice of the older code-9 closes would park this actor
+    /// until the write-stall window closes the queue, forever with the
+    /// window off, keeping open the very socket the room asked to close.
+    /// Logged at `debug`: the room decided, and a room shedding members
+    /// sheds many.
+    pub(super) fn on_room_close(&mut self, cause: ServerClose, reason: &str) {
+        self.server_closing(cause);
+        debug!(%self.conn, ?cause, %reason, "the room closed this connection");
         self.try_notice(base::ErrorCode::ServerClosed, reason.to_owned());
     }
 

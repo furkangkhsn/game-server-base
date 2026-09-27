@@ -26,6 +26,10 @@
 //!   the opt-in `afk_action = disconnect` it IS a verdict — the room asks
 //!   the registry to close the session — and is counted as
 //!   [`ServerClose::IdleInput`].
+//! - **A game's kick** (`TickCtx::kick`, BACKLOG E8) is a verdict too —
+//!   the game ended the membership and the room asked the registry to
+//!   close the session — and is counted as [`ServerClose::Kicked`]. The
+//!   game decided WHY; the counter only says that a game did.
 
 /// One reason the server ended a session. The order of [`Self::ALL`] is
 /// the order every export uses (the loadgen wire codec, the log line,
@@ -78,11 +82,18 @@ pub enum ServerClose {
     /// inbound bytes at all — a heartbeating client reaches this one.
     /// Announced with a best-effort, never-waiting `ERROR` code 9.
     IdleInput,
+    /// The GAME kicked the member (`TickCtx::kick`, BACKLOG E8,
+    /// `docs/RECONNECT.md` §16.3): the room ended its membership through
+    /// the ordinary disconnect policy and asked the registry to close the
+    /// connection, with the game's reason. Announced like
+    /// [`Self::IdleInput`] — a best-effort, never-waiting `ERROR` code 9
+    /// whose `message` is `kicked: <the game's reason>`.
+    Kicked,
 }
 
 impl ServerClose {
     /// Number of reasons.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 13;
 
     /// Every reason, in export order.
     pub const ALL: [ServerClose; Self::COUNT] = [
@@ -98,6 +109,7 @@ impl ServerClose {
         Self::RoomGone,
         Self::OutboundDead,
         Self::IdleInput,
+        Self::Kicked,
     ];
 
     /// Position in [`Self::ALL`] (the counter array index). An exhaustive
@@ -116,6 +128,7 @@ impl ServerClose {
             Self::RoomGone => 9,
             Self::OutboundDead => 10,
             Self::IdleInput => 11,
+            Self::Kicked => 12,
         }
     }
 
@@ -135,6 +148,7 @@ impl ServerClose {
             Self::RoomGone => "room_gone",
             Self::OutboundDead => "outbound_dead",
             Self::IdleInput => "idle_input",
+            Self::Kicked => "kicked",
         }
     }
 }

@@ -12,7 +12,11 @@
 //!   room's close request as `ConnIn::ServerClosed { IdleInput }`) sends
 //!   `ERROR` code 9 with the reason, like every other server verdict.
 //!
-//! All three notices are best effort and never park: the actor enqueues them
+//! - a GAME's kick (BACKLOG E8: the room's `ctx.kick`, relayed the same
+//!   way as `ConnIn::ServerClosed { Kicked }`) sends `ERROR` code 9 with
+//!   the game's reason, under the same rule.
+//!
+//! All four notices are best effort and never park: the actor enqueues them
 //! with a synchronous `try_send`, so a client whose outbound queue is
 //! full (it stopped reading) gets only the close — and the actor still
 //! ends at once. Without that rule a stop would leave one parked actor
@@ -203,5 +207,34 @@ async fn an_idle_input_close_never_parks_on_a_full_outbound_queue() {
     let mut rig = Rig::start();
     rig.fill_outbound();
     rig.end_with(idle_input_close()).await;
+    assert!(rig.errors().is_empty(), "no room: the notice is dropped");
+}
+
+/// The kick the room asked for on the game's behalf (E8).
+fn kick_close() -> ConnIn {
+    ConnIn::ServerClosed {
+        cause: ServerClose::Kicked,
+        reason: "kicked: speed hack".into(),
+    }
+}
+
+/// E8: a kick is announced as ERROR 9 carrying the game's reason.
+#[tokio::test]
+async fn a_kick_close_sends_the_server_closed_notice() {
+    let mut rig = Rig::start();
+    rig.end_with(kick_close()).await;
+    let errors = rig.errors();
+    assert_eq!(errors.len(), 1, "exactly one notice: {errors:?}");
+    assert_eq!(errors[0].code(), ErrorCode::ServerClosed);
+    assert_eq!(errors[0].message, "kicked: speed hack");
+}
+
+/// E8's bound: the kicked client may not be reading (the game kicks it
+/// for exactly that, often) — the notice never waits on it.
+#[tokio::test]
+async fn a_kick_close_never_parks_on_a_full_outbound_queue() {
+    let mut rig = Rig::start();
+    rig.fill_outbound();
+    rig.end_with(kick_close()).await;
     assert!(rig.errors().is_empty(), "no room: the notice is dropped");
 }
