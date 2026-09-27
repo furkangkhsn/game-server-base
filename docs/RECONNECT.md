@@ -308,6 +308,23 @@ yeni entity'nin `SpawnDone`'unu üretir, mantık `Left(1)` sonra
 Mutasyonlar: yeniden deneme kaldırılınca iki test düşer; taze göreve
 ayrılma verilmeyince ikinci test düşer.
 
+**Eşleşmeyen `Leave` (B64).** Dağıtıcının `Leave` kolu üyeliği
+(`in_room.take()`) oda karşılaştırmasından ÖNCE alıyordu: başka bir oda
+için gelen `Leave` odaya bir şey yollamıyor, `LeaveDone` raporlamıyor ama
+üyeliği unutturuyordu — sonraki ayrılma ya da kapanış bitirecek üyelik
+bulamıyor, üye odada kalıyordu. Artık önce karşılaştırır; eşleşmeyen
+`Leave` bugünkü gibi hiçbir şey yanıtlamaz ve üyeliğe dokunmaz. Bağlantı
+aktörü üzerinden erişilemez: `DespawnPlayer` yalnız tablonun kaydettiği
+odaya ayrılma yollar, tablo da o odayı aynı dağıtıcının `SpawnDone`'undan,
+sırayla öğrenir; yalnız ham op'lar tetikler. Test
+(`registry/actor/conns/ops/tests.rs`, dağıtıcı ham op'larla, odayı test
+oynar): katılmadan sonra başka oda için `Leave`, ardından `Close` —
+kapanış üyeliği detach eder (`DetachDone` oda 1, odaya tek `Detach`,
+eşleşmeyen ayrılma için hiçbir şey). Önce yazıldı ve düştü (kapanış
+detach edecek üyelik bulamadı, doğrudan `OpsClosed`). Mutasyon:
+karşılaştırmayı her zaman doğru yapmak → test düşer (yanlış odanın
+ayrılması üyeliği bitirir).
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-

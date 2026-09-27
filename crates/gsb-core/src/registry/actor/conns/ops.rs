@@ -10,6 +10,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::sync::mpsc;
 
+#[cfg(test)]
+mod tests;
+
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
     W: Send + 'static,
@@ -132,8 +135,11 @@ where
                         }
                     }
                     RoomOp::Leave { room } => {
-                        if let Some((r, entity, handle, ep, _id)) = in_room.take()
-                            && r == room
+                        // Compare BEFORE taking (B64): a leave for a room
+                        // this connection is not in answers nothing, as
+                        // ever, and keeps the membership it does hold.
+                        if in_room.as_ref().is_some_and(|m| m.0 == room)
+                            && let Some((r, entity, handle, ep, _id)) = in_room.take()
                         {
                             Self::send_room_leave(conn, entity, ep, handle).await;
                             let _ = registry
