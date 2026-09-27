@@ -5,6 +5,43 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B36 — ayrılışta okunmamış istekler ve oda defterinin kapanışı (`rpc/b36-leave-accounting`)
+
+- **Neden 1 (motor):** oda CONTROL'ü READ'den önce koşar; ayrılış,
+  istemcinin son isteklerinden önce odaya varırsa `despawn_conn` satırı
+  siler ve aksiyon kanalı içindeki isteklerle düşerdi — işlenmez,
+  yanıtlanmaz, hiçbir kovada sayılmazdı. Yeni çekirdek sayaç
+  `requests_dropped_unread`: kanalı götüren her yerde (oda + shard
+  `despawn_conn`, aynı bağlantının yeniden katılımı, resume, shard'da
+  ayrılıştan sonra düşen göç) kanal kapatılır, içindeki RPC istekleri
+  sayılır (düz aksiyonlar değil). `gsb-metric` `req_unread=`,
+  Prometheus/OTLP `gsb_room_requests_dropped_unread_total` (iki altın
+  metin bilerek bu aile kadar), loadgen metrik teli **GSMH**, RESULT
+  "her anahtar her zaman" kuralıyla `req_unread=`. İstemci teli değişmedi.
+- **Neden 2 (loadgen):** oda sayaçlarını 1 Hz örnekler, dururken
+  göndermez; süreç içi koşu son istemciden 150 ms sonra sunucuyu
+  durdurduğundan RESULT'un `req_*`'ı bitişten bir periyoda kadar önceki
+  örnekti (tam sayı süreler tesadüfen örnekle hizalandığından nadiren
+  görünüyordu). Bekleme artık 150 ms + bir metrik periyodu
+  (`final_sample_grace`); her süreç içi koşu ~1 sn uzar.
+- **Defter kapanıyor:** `rpc_sent = req_local + req_ext + Σ req_rej_* +
+  req_refused + req_unread` — her ölçüm satırında birebir (200 ve 500
+  istemci, uzun duraklama ve kesirli süreler; RPC-CONTROL-PLANE §8.3).
+- Elenenler: READ'i CONTROL'den önce koşmak / ayrılışı kanal boşalana
+  dek ertelemek (ayrılmış oyuncu için yan etki), artık istekleri işleyip
+  yanıtı atmak, mevcut bir kovayı yeniden kullanmak, odanın durunca son
+  örnek göndermesi (toplayıcının kapanışıyla yarışır), düz aksiyonları da
+  saymak.
+- Kalıntı (BACKLOG B51): oda üyeliği kendisi bitirdiğinde bağlantı
+  aktörünün kapalı kanala gönderdiği istek odaya ulaşmaz, sayılmaz.
+
+Testler 1286 → 1296 (`otlp` ile 1304 → 1314; F27 ile birlikte): oda/shard
+birim (5), `tests/rpc/unread.rs`, `tests/rpc_shard/unread.rs` (2),
+loadgen tel, `loadgen_rpc.rs::the_rooms_ledger_covers_the_end_of_the_run`;
+iki mevcut `loadgen_rpc` testi artık defter eşitliğini de iddia ediyor.
+Her yeni test önce kırmızı; 12 mutasyon öldü. Ebeveyn doğrulaması:
+yardımcının yalnız bir isteği sayması beş testi düşürdü.
+
 ## F27 — ayrılmanın nedeni politikaya (`kit/f27-disconnect-cause`)
 
 - **Çekirdek: `DisconnectCause`.** Oda ve shard aktörü politikayı artık

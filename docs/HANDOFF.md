@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1286 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1296 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,14 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**B36 tamam** (RPC-CONTROL-PLANE §8.3, CHANGELOG "B36"): ayrılıştan hemen
+önce gönderilip oda tarafından okunmamış istekler
+`requests_dropped_unread` / `req_unread`'de; loadgen'in süreç içi koşusu
+sunucuyu durdurmadan önce bir oda metrik periyodu bekler (koşular ~1 sn
+uzun). Oda defteri: gönderilen = yanıtlanan + retler + `req_refused` +
+`req_unread`. Loadgen metrik teli GSMH. Açık: oda üyeliği bitirdikten
+sonra bağlantı aktöründe düşen istek (B51).
 
 **F27 tamam** (RECONNECT §3.3, CHANGELOG "F27"): politika artık nedeni
 bilir — `GameLogic::on_disconnect_with(world, player, identity, cause)`
@@ -659,6 +667,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1286 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1296 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
