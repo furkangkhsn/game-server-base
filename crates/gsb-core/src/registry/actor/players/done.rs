@@ -68,15 +68,32 @@ where
         // (The `info` borrow is scoped inside the `match` so the
         // `&mut self` `emit_metrics` call below does not conflict
         // with it.)
-        let new_affiliation = match self.conns.get_mut(&conn) {
+        let (new_affiliation, lost) = match self.conns.get_mut(&conn) {
             Some(info) => {
                 let fresh = info.room != Some(room);
+                let lost = info.room.filter(|&r| r != room);
                 info.room = Some(room);
                 info.entity = Some(entity);
-                fresh
+                (fresh, lost)
             }
-            None => false,
+            None => (false, None),
         };
+        // A join into ANOTHER room while the row is still affiliated
+        // means a membership ended without the registry being told yet:
+        // a leave always settles before the next join (one dispatcher,
+        // in order), so only a room-side end whose report is still in
+        // flight — the input-idle ceiling's `LeaveConn` behind a full
+        // mailbox (B40) — gets here. That report will find the row
+        // moved on and do nothing, so the ended membership's member slot
+        // is handed back here; left alone, the grid's cap would count it
+        // for the room's lifetime.
+        if let Some(old) = lost {
+            if let Some(e) = self.rooms.get_mut(&old).and_then(|e| e.shards.as_mut()) {
+                e.members = e.members.saturating_sub(1);
+            }
+            self.reg_leaves += 1;
+            debug!(%conn, room = %old, "join elsewhere settled an unreported end");
+        }
         // Resume re-affiliation cleanup: the NEW session's
         // ConnectionId replaced the parked one — release the OLD
         // detached entry for this identity (the room-side park is

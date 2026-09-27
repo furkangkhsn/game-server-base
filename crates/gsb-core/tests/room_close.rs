@@ -14,8 +14,9 @@
 //!   frames, a direct JOIN (resuming a park), and a registry row that
 //!   neither holds a despawned slot nor leaks.
 //! - `leave_table.rs`: the registry's side of that action, driven with
-//!   the raw `RegistryMsg::LeaveConn`; `leave_races.rs`: the connection's
-//!   stale-notice guard.
+//!   the raw `RegistryMsg::LeaveConn`; `leave_races.rs`: a join elsewhere
+//!   that overtakes a late request, and the connection's stale-notice
+//!   guard.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

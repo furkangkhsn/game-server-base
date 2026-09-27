@@ -8,7 +8,7 @@
 use super::*;
 use gsb_core::registry::LeaveRequest;
 
-fn config() -> RoomConfig {
+pub(super) fn config() -> RoomConfig {
     RoomConfig {
         id: RoomId(1),
         tick_hz: 60.0,
@@ -16,7 +16,7 @@ fn config() -> RoomConfig {
     }
 }
 
-async fn open(tx: &Mailbox<RegistryMsg>, conn: u64) -> mpsc::Receiver<ConnIn> {
+pub(super) async fn open(tx: &Mailbox<RegistryMsg>, conn: u64) -> mpsc::Receiver<ConnIn> {
     let (inbox, rx) = mpsc::channel(16);
     tx.send(RegistryMsg::ConnOpened {
         conn: ConnectionId(conn),
@@ -27,7 +27,7 @@ async fn open(tx: &Mailbox<RegistryMsg>, conn: u64) -> mpsc::Receiver<ConnIn> {
     rx
 }
 
-async fn join(tx: &Mailbox<RegistryMsg>, conn: u64, identity: &str) -> EntityId {
+pub(super) async fn join(tx: &Mailbox<RegistryMsg>, conn: u64, identity: &str) -> EntityId {
     let (reply, rx) = oneshot::channel();
     let (out, _out) = mpsc::channel(64);
     tx.send(RegistryMsg::SpawnPlayer {
@@ -43,7 +43,7 @@ async fn join(tx: &Mailbox<RegistryMsg>, conn: u64, identity: &str) -> EntityId 
     seat.expect("reply").expect("joined").entity
 }
 
-fn leave(conn: u64, entity: EntityId, park: bool) -> RegistryMsg {
+pub(super) fn leave(conn: u64, entity: EntityId, park: bool) -> RegistryMsg {
     RegistryMsg::LeaveConn(LeaveRequest {
         conn: ConnectionId(conn),
         room: RoomId(1),
@@ -75,7 +75,7 @@ async fn table_size(tx: &Mailbox<RegistryMsg>, metrics: &mut mpsc::Receiver<Metr
     last.expect("a registry sample") - 1
 }
 
-fn members(n: u32) -> RoomStatus {
+pub(super) fn members(n: u32) -> RoomStatus {
     RoomStatus::Running { members: n }
 }
 
