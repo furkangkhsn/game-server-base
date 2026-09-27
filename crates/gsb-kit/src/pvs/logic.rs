@@ -194,7 +194,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx);
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities
         // with the codec's marker but no `WireId` get the next serial, so

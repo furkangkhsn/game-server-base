@@ -130,9 +130,19 @@ pub(crate) fn ingest_seam<G: crate::game::ShardGame>(
 }
 
 /// Run the game's systems for this tick (single-threaded, ordered — the
-/// room actor is the only owner of the world).
-pub(crate) fn systems<G: Game>(game: &mut G, world: &mut World, ctx: &TickCtx) {
+/// room actor is the only owner of the world), then forward the kicks
+/// the game asked for this tick ([`crate::game::kick`], E8), resolved
+/// against the room's player→entity table.
+pub(crate) fn systems<G: Game>(
+    game: &mut G,
+    world: &mut World,
+    ctx: &TickCtx,
+    players: &HashMap<PlayerId, Entity>,
+) {
     guard_change_window(world, |w| game.systems(w, ctx));
+    crate::game::forward_kicks(world, ctx, |entity| {
+        players.iter().find(|(_, e)| **e == entity).map(|(p, _)| *p)
+    });
 }
 
 /// Close this tick's change-detection window — the ONE

@@ -9,7 +9,7 @@ use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::Action;
 use prost::Message;
 
-use super::front::{Front, MOVE, to};
+use super::front::{Front, KICK, MOVE, to};
 use crate::client::{ClientDecoder, ClientError, ClientView};
 use crate::game::Game;
 use crate::testing::{Record, WorldSnapshot};
@@ -79,6 +79,18 @@ impl Client {
                 player: PlayerId(0),
                 op: MOVE,
                 payload: to(x, y),
+            })
+            .expect("action inbox has room");
+    }
+
+    /// Ask the game to kick this player (applied on the next tick).
+    pub(super) fn ask_kick(&self) {
+        self.actions
+            .try_send(Action {
+                conn: self.conn,
+                player: PlayerId(0),
+                op: KICK,
+                payload: bytes::Bytes::new(),
             })
             .expect("action inbox has room");
     }

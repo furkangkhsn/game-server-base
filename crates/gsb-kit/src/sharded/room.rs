@@ -180,8 +180,15 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
                 // are back for the passes below (and the border export).
                 self.departures.show(world);
             }
-            None => crate::common::systems(&mut self.game, world, ctx),
+            None => {
+                let game = &mut self.game;
+                crate::common::guard_change_window(world, |w| game.systems(w, ctx));
+            }
         }
+        // The kicks the game asked for this tick (E8), to the core's verb:
+        // BEFORE the shard's MIGRATE, so a kicked member never crosses.
+        let owners = &self.entity_player;
+        crate::game::forward_kicks(world, ctx, |entity| owners.get(&entity).copied());
 
         // Entities despawned since the last close that no hook of ours
         // despawned (game code — an NPC dying; §8.2): forget their wire

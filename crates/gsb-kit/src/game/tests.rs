@@ -56,3 +56,5 @@ fn every_game_spawning_room_hands_the_game_the_identity() {
         "sharded × spatial"
     );
 }
+
+mod kick;

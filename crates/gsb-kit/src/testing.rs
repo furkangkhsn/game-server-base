@@ -131,6 +131,69 @@ impl<G: ShardGame> ShardGame for Vetoing<G> {
     }
 }
 
+/// Marks an entity the [`Kicker`] game kicks in its next systems run,
+/// with the reason it carries.
+#[derive(Debug, Clone, Component)]
+pub(crate) struct KickMe(pub &'static str);
+
+/// A game whose systems kick every [`KickMe`] entity through the kit's
+/// verb ([`crate::game::kick`], E8) — the marker is removed — before
+/// running the wrapped game's systems.
+pub(crate) struct Kicker<G>(pub G);
+
+impl<G: Game> Game for Kicker<G> {
+    type Codec = G::Codec;
+
+    const SNAPSHOT_OP: u16 = G::SNAPSHOT_OP;
+    const PRIVATE_OP: u16 = G::PRIVATE_OP;
+
+    fn codec(&self) -> &Self::Codec {
+        self.0.codec()
+    }
+    fn spawn_player(&mut self, world: &mut World, conn: ConnectionId) -> Entity {
+        self.0.spawn_player(world, conn)
+    }
+    fn ingest(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        actions: &mut Vec<Action>,
+        players: &HashMap<PlayerId, Entity>,
+        seq: &mut InputSeq,
+    ) {
+        self.0.ingest(world, ctx, actions, players, seq);
+    }
+    fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
+        let marked: Vec<(Entity, &'static str)> = world
+            .query::<(Entity, &KickMe)>()
+            .iter(world)
+            .map(|(e, k)| (e, k.0))
+            .collect();
+        for (entity, reason) in marked {
+            world.entity_mut(entity).remove::<KickMe>();
+            crate::game::kick(world, entity, reason);
+        }
+        self.0.systems(world, ctx);
+    }
+}
+
+impl<G: TeamGame> TeamGame for Kicker<G> {
+    fn team_of(&mut self, world: &World, conn: ConnectionId, entity: Entity) -> Team {
+        self.0.team_of(world, conn, entity)
+    }
+}
+
+impl<G: ShardGame> ShardGame for Kicker<G> {
+    type Mig = G::Mig;
+
+    fn capture(&self, world: &World, entity: Entity) -> G::Mig {
+        self.0.capture(world, entity)
+    }
+    fn restore(&mut self, world: &mut World, mig: G::Mig) -> Entity {
+        self.0.restore(world, mig)
+    }
+}
+
 mod fixture;
 mod packed;
 mod rated;

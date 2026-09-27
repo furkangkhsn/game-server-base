@@ -233,7 +233,7 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx);
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
         // The tick's ONE change-window close (§4.4: the kit owns it; a
         // game hook never calls it). This room reads no change filter
         // itself, but the window is world-wide: without the close the

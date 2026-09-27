@@ -12,6 +12,7 @@ use crate::codec::RecordCodec;
 mod client;
 mod dropped;
 mod front;
+mod kick;
 mod migration;
 mod rig;
 

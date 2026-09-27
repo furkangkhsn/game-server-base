@@ -312,7 +312,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx);
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
         // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with
         // the codec's marker but no `WireId` get the next serial, so the
         // broadcast set is exactly "has the marker". It runs BEFORE the

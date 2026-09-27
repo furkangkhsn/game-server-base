@@ -1,6 +1,7 @@
 //! "Cephe" in miniature — the actor tests' game: the fixture game whose
 //! players spawn where (and on the team) their identity says, and move
-//! by one input (a teleport). Nothing else moves.
+//! by one input (a teleport); another input asks the game to kick the
+//! sender (E8). Nothing else moves.
 
 use std::collections::HashMap;
 
@@ -15,6 +16,9 @@ use crate::testing::{DEFAULT_SPEED, FixCodec, FixMig, Fixture, Position, Speed};
 
 /// The teleport input: `x, y` as two little-endian `f32`s.
 pub(super) const MOVE: u16 = 1950;
+/// "Kick me": the game kicks the sender through the kit's verb
+/// ([`crate::game::kick`], E8).
+pub(super) const KICK: u16 = 1951;
 
 /// The fixture with identity spawns and the teleport input.
 #[derive(Default)]
@@ -60,6 +64,12 @@ impl Game for Front {
         _seq: &mut InputSeq,
     ) {
         for a in actions.drain(..) {
+            if a.op == KICK
+                && let Some(&e) = players.get(&a.player)
+            {
+                crate::game::kick(world, e, "asked to leave");
+                continue;
+            }
             if a.op != MOVE || a.payload.len() != 8 {
                 continue;
             }

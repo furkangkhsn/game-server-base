@@ -221,7 +221,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         // `private` seam stamps into one-shot fulls.
         self.step += 1;
         self.tick = ctx.tick;
-        crate::common::systems(&mut self.game, world, ctx);
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
 
         // Orphan stamping (idempotent, mirrors the other rooms): entities
         // with the codec's marker but no `WireId` get the next serial, so

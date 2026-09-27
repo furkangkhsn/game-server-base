@@ -10,6 +10,14 @@
 //! bot-fed players to [`Game::bot_actions`]), and the change-detection
 //! window (`World::clear_trackers` is called by the kit exactly once per
 //! tick — a hook must never call it).
+//!
+//! **Kicking a player** (BACKLOG E8): [`kick`] by the player's ENTITY,
+//! from any hook that holds the world mutably — the kit resolves the
+//! owner and hands it to the core's verb, which ends the membership
+//! through the room's disconnect policy and closes the connection with
+//! the game's reason. A hook that already holds the stable player (an
+//! action's `player`, a request's) may call the tick context's own
+//! `TickCtx::kick` instead; both reach the same verb.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -382,6 +390,10 @@ pub trait ShardGame: Game {
 
 /// The wire value of game `G`'s records.
 pub type Wire<G> = <<G as Game>::Codec as RecordCodec>::Wire;
+
+mod kick;
+pub(crate) use kick::forward_kicks;
+pub use kick::kick;
 
 #[cfg(test)]
 mod tests;
