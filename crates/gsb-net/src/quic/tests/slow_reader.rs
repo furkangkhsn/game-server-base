@@ -14,9 +14,12 @@ use std::time::{Duration, Instant};
 
 use crate::pump::PumpTimeouts;
 
-const WINDOW: Duration = Duration::from_millis(300);
-/// One frame: ~1.5 s at the client's read rate below (~5 windows).
-const FRAME: usize = 128 * 1024;
+/// A whole second: the client's pace (below) must stay far from the
+/// window even when the machine stalls the test process (BACKLOG F25).
+const WINDOW: Duration = Duration::from_secs(1);
+/// One frame: at least 384 reads of at most [`READ_CHUNK`], each after a
+/// [`READ_EVERY`] sleep — ≥ 3.8 s, i.e. several windows, on any machine.
+const FRAME: usize = 384 * 1024;
 /// The client's per-stream flow-control window: the most the server can
 /// be ahead of what the client has read.
 const CLIENT_WINDOW: u32 = 2048;
@@ -61,7 +64,7 @@ async fn slow_client(addr: SocketAddr, ca_pem: &str) -> (quinn::SendStream, quin
 
 /// THE REGRESSION LOCK on the QUIC door: the client reads 1 KiB every
 /// 10 ms — never stopping — and the server must not end the session
-/// while one 128 KiB frame takes ~5 windows to drain.
+/// while one 384 KiB frame takes several windows to drain.
 #[tokio::test]
 async fn a_slow_but_steady_quic_reader_survives_a_frame_longer_than_the_window() {
     let pki = mint_pki("slow-reader");

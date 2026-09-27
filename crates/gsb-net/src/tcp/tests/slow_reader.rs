@@ -18,10 +18,15 @@ use super::*;
 use crate::pump::PumpTimeouts;
 use tokio::net::TcpSocket;
 
-/// The stall window under test.
-const WINDOW: Duration = Duration::from_millis(300);
-/// One frame: ~2 s at the peer's read rate below, i.e. ~7 windows.
-const FRAME: usize = 256 * 1024;
+/// The stall window under test. A whole second, not the few hundred
+/// milliseconds it was: the peer's pace (below) must stay far from it
+/// even when the machine stalls the test process — a 250 ms stall
+/// against a 300 ms window cut this steady reader off every time
+/// (BACKLOG F25).
+const WINDOW: Duration = Duration::from_secs(1);
+/// One frame: at least 384 reads of at most [`READ_CHUNK`], each after a
+/// [`READ_EVERY`] sleep — ≥ 3 s, i.e. ≥ 3 windows, on any machine.
+const FRAME: usize = 384 * 1024;
 /// The peer's pace: at most this many bytes per read, one read per tick.
 const READ_CHUNK: usize = 1024;
 const READ_EVERY: Duration = Duration::from_millis(8);

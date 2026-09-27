@@ -19,9 +19,14 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::net::TcpSocket;
 
-const WINDOW: Duration = Duration::from_millis(300);
-/// Each frame takes ~0.5 s to drain at the slow reader's pace below.
-const FRAME: usize = 64 * 1024;
+/// A whole second: the reader's pace (below) must stay far from the
+/// window even when the machine stalls the test process (BACKLOG F25).
+const WINDOW: Duration = Duration::from_secs(1);
+/// Each frame takes ≥ 1 s (128 reads of at most [`READ_CHUNK`], each
+/// after a [`READ_EVERY`] sleep) — longer than the window — to drain.
+const FRAME: usize = 128 * 1024;
+/// How long the slow reader reads: a few windows.
+const READ_FOR: Duration = Duration::from_secs(4);
 /// Enough frames to fill the door's queue (64) with the socket behind it
 /// wedged, so the pump itself has to wait for a queue slot.
 const FRAMES: usize = 70;
@@ -51,7 +56,7 @@ async fn tight_pair() -> (TcpStream, TcpStream) {
 /// have its buffers shrunk from here): the door's own socket-writer task
 /// and pump-facing writer, built by the same `spawn_socket_writer` the
 /// transport uses, over a tight socket. The peer reads ~125 KB/s —
-/// never stopping — while each frame takes ~0.5 s to drain and the pump
+/// never stopping — while each frame takes over a window to drain and the pump
 /// sits waiting on a full queue.
 #[tokio::test]
 async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
@@ -92,7 +97,7 @@ async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
     let started = std::time::Instant::now();
     let mut got = 0usize;
     let mut buf = vec![0u8; READ_CHUNK];
-    while started.elapsed() < WINDOW * 8 {
+    while started.elapsed() < READ_FOR {
         tokio::time::sleep(READ_EVERY).await;
         match tokio::time::timeout(Duration::from_secs(5), peer.read(&mut buf)).await {
             Ok(Ok(0)) | Ok(Err(_)) => panic!(
@@ -109,7 +114,7 @@ async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
         got < FRAME * 6,
         "not vacuous: {got} bytes in {:?} means frames drained faster than \
          the window — the buffers were not tight",
-        WINDOW * 8
+        READ_FOR
     );
     assert!(
         in_rx.try_recv().is_err(),
