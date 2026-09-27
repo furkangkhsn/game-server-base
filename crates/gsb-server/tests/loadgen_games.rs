@@ -105,7 +105,16 @@ fn loadgen_drives_the_arena() {
 /// unsaved bot would start on shard 0).
 #[test]
 fn loadgen_drives_the_mmo() {
-    let out = loadgen(&["8", "--game", "mmo", "--duration", "4", "--move-ms", "100"]);
+    // 8 s, not 4: `shard_members` is the run's peak CONSISTENT CUT
+    // (DESIGN §12 "tutarlı kesit"), and a cut may miss a player who is
+    // in flight between two shards for a tick — so the sum is 8 only if
+    // at least one cut in the steady window caught nobody in flight. At
+    // 1 Hz reports a 4 s run has about three; under CPU load most came
+    // out torn (not a cut) and the one cut left could hold a traveller:
+    // `2,0,4,1` (BACKLOG F23). A longer run gives the window more cuts;
+    // the assertion stays exact (a lost or double-counted player fails
+    // it in every cut).
+    let out = loadgen(&["8", "--game", "mmo", "--duration", "8", "--move-ms", "100"]);
     let (line, kv) = result(&out);
     assert_clean(&line, &kv, 8, "mmo", 0);
     assert_eq!(
