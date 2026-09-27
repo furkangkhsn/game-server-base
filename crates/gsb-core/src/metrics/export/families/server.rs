@@ -21,7 +21,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 9] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 13] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -75,6 +75,31 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 9] = [
         Kind::Counter,
         "Connections closed, cumulative.",
         |r| r.closes,
+    ),
+    // B57: control-plane losses.
+    reg(
+        "gsb_registry_join_ops_dropped_total",
+        Kind::Counter,
+        "Joins the registry could not hand to the connection's op dispatcher (queue full or gone; the client got an ERROR), cumulative.",
+        |r| r.join_ops_dropped,
+    ),
+    reg(
+        "gsb_registry_close_ops_dropped_total",
+        Kind::Counter,
+        "Close ops (a closing connection's detach) the registry could not hand to its op dispatcher (queue full or gone), cumulative.",
+        |r| r.close_ops_dropped,
+    ),
+    reg(
+        "gsb_registry_match_results_dropped_full_total",
+        Kind::Counter,
+        "Match results a stopping room could not hand to the result sink because it was full (the consumer is not reading), cumulative.",
+        |r| r.match_results_dropped_full,
+    ),
+    reg(
+        "gsb_registry_match_results_dropped_closed_total",
+        Kind::Counter,
+        "Match results a stopping room could not hand to the result sink because it was closed (the consumer dropped its receiver), cumulative.",
+        |r| r.match_results_dropped_closed,
     ),
 ];
 

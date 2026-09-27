@@ -28,7 +28,10 @@
 //! `gsb_net_heartbeats_throttled_{preauth,authed}_total`. B57's
 //! `frames_out_closed=` / `close_notices_dropped=` with
 //! `gsb_net_frames_out_closed_total` /
-//! `gsb_net_close_notices_dropped_total`.
+//! `gsb_net_close_notices_dropped_total`, and the registry scope's
+//! `join_ops_dropped=` / `close_ops_dropped=` /
+//! `match_results_dropped_{full,closed}=` with their four
+//! `gsb_registry_*_total` families.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -50,7 +53,17 @@ pub(super) fn golden_report() -> MetricReport {
         opens: 4,
         closes: 1,
         metrics_dropped: 0,
+        join_ops_dropped: 1,
+        close_ops_dropped: 0,
     }));
+    // Two match results a full sink refused, one a closed sink did (B57).
+    for cause in [
+        MatchResultDrop::Full,
+        MatchResultDrop::Full,
+        MatchResultDrop::Closed,
+    ] {
+        acc.apply(MetricsEvent::MatchResultDropped(cause));
+    }
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

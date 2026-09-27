@@ -61,6 +61,9 @@ mod logic;
 ///                u64 rooms_destroyed  u64 rooms_died
 ///                u64 joins  u64 leaves
 ///                u64 opens  u64 closes
+///                u64 join_ops_dropped  u64 close_ops_dropped
+///                u64 match_results_dropped_full
+///                u64 match_results_dropped_closed
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
@@ -167,7 +170,11 @@ mod logic;
 /// GSMO = the GSMN layout plus the net-scope `frames_out_closed` and
 /// `close_notices_dropped` (the connection actors' own outbound losses —
 /// B57), right after `heartbeats_throttled_authed`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4F;
+/// GSMP = the GSMO layout plus the registry section's `join_ops_dropped`,
+/// `close_ops_dropped`, `match_results_dropped_full` and
+/// `match_results_dropped_closed` (control-plane losses — B57), right
+/// after `closes`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D50;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -285,6 +292,10 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(g.leaves);
         w.u64(g.opens);
         w.u64(g.closes);
+        w.u64(g.join_ops_dropped);
+        w.u64(g.close_ops_dropped);
+        w.u64(g.match_results_dropped_full);
+        w.u64(g.match_results_dropped_closed);
     }
     w.u64(r.net.bytes_in);
     w.u64(r.net.bytes_out_room);
@@ -473,6 +484,10 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             leaves: r.u64()?,
             opens: r.u64()?,
             closes: r.u64()?,
+            join_ops_dropped: r.u64()?,
+            close_ops_dropped: r.u64()?,
+            match_results_dropped_full: r.u64()?,
+            match_results_dropped_closed: r.u64()?,
         }),
         0 => None,
         _ => return None,

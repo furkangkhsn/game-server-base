@@ -6,7 +6,8 @@
 //!   destroyed room's id is reusable;
 //! - the match-result exit seam: a room that produces a result reports
 //!   it through the registry's result sink on destroy (best effort,
-//!   bounded).
+//!   bounded) — and a result the sink refuses is counted
+//!   (`dropped.rs`, B57).
 //!
 //! The registry is driven directly (the same `RegistryMsg` vocabulary
 //! the `ServerHandle`'s public API wraps), so these tests lock the
@@ -25,6 +26,10 @@ use gsb_core::registry::{
 use gsb_core::room::{Action, Admission, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::ticker::Ticker;
 use tokio::sync::mpsc;
+
+// A result the sink refused, counted (B57).
+#[path = "control_plane/dropped.rs"]
+mod dropped;
 
 const WAIT: Duration = Duration::from_secs(5);
 const HZ: f64 = 60.0;

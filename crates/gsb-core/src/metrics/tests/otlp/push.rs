@@ -66,6 +66,8 @@ fn report(t: Instant) -> MetricReport {
         opens: 2,
         closes: 0,
         metrics_dropped: 0,
+        join_ops_dropped: 0,
+        close_ops_dropped: 0,
     }));
     acc.report(t)
 }

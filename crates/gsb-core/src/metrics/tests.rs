@@ -119,6 +119,8 @@ fn accumulator_applies_events_and_computes_rates() {
         opens: 3,
         closes: 0,
         metrics_dropped: 1,
+        join_ops_dropped: 0,
+        close_ops_dropped: 0,
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

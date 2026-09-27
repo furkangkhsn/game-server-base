@@ -167,20 +167,21 @@ where
         // when `self` drops, below) and the room reports it to the sink
         // with the synchronous `try_send` (no await: the room's only
         // await stayed `tick_rx.recv()`). Best effort — a full or gone
-        // sink drops the result and warns (a slow result consumer must
-        // not stall the room's teardown).
+        // sink drops the result, warns and tells the collector (B57; a
+        // slow result consumer must not stall the room's teardown).
         if let Some(result) = self.logic.match_result(&mut self.world)
             && let Some(sink) = &self.result_sink
         {
-            match sink.try_send(crate::registry::MatchResult {
+            let result = crate::registry::MatchResult {
                 room: self.config.id,
                 payload: result,
-            }) {
+            };
+            match crate::registry::send_match_result(sink, result, &self.metrics) {
                 Ok(()) => debug!(room = %self.config.id, "match result reported"),
-                Err(mpsc::error::TrySendError::Full(_)) => {
+                Err(crate::metrics::MatchResultDrop::Full) => {
                     warn!(room = %self.config.id, "match result dropped: sink full");
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::metrics::MatchResultDrop::Closed) => {
                     debug!(room = %self.config.id, "match result dropped: sink gone");
                 }
             }

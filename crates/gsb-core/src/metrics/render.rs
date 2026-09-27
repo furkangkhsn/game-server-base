@@ -13,7 +13,9 @@ impl MetricReport {
         if let Some(r) = &self.registry {
             lines.push(format!(
                 "gsb-metric scope=registry rooms={} conns={} opens={} closes={} \
-                 joins={} leaves={} rooms_created={} rooms_destroyed={} rooms_died={}",
+                 joins={} leaves={} rooms_created={} rooms_destroyed={} rooms_died={} \
+                 join_ops_dropped={} close_ops_dropped={} \
+                 match_results_dropped_full={} match_results_dropped_closed={}",
                 r.rooms,
                 r.conns,
                 r.opens,
@@ -22,7 +24,11 @@ impl MetricReport {
                 r.leaves,
                 r.rooms_created,
                 r.rooms_destroyed,
-                r.rooms_died
+                r.rooms_died,
+                r.join_ops_dropped,
+                r.close_ops_dropped,
+                r.match_results_dropped_full,
+                r.match_results_dropped_closed
             ));
         }
         for r in &self.rooms {

@@ -202,6 +202,10 @@ where
             {
                 e.pending = e.pending.saturating_sub(1);
             }
+            // Counted (B57): the client's ERROR says "registry
+            // unavailable", and nothing else would record it.
+            self.reg_join_ops_dropped += 1;
+            self.emit_metrics();
             warn!(%conn, room = %room, "join op queue full; join failed");
         } else {
             debug!(%conn, room = %room, "join dispatched");

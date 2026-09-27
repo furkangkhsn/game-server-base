@@ -125,6 +125,15 @@ pub struct LeaveRequest {
 /// there is no table left and the teardown cascade closes every
 /// connection anyway. The detach-despawn reports (`despawn_reports`)
 /// follow the same two rules.
+///
+/// The CLOSED drop is deliberately not counted (BACKLOG B57): the
+/// registry's mailbox closes only when the registry has exited, and it
+/// exits through its `Shutdown` arm, which stops every room on the same
+/// pass — so the drop happens only while the process comes down, when
+/// the request's whole purpose (the socket, the row) is being torn down
+/// by the cascade anyway, and the room's remaining samples race the
+/// collector's own end. A counter there would read "a shutdown caught a
+/// pending request": no operational question it answers.
 pub(crate) fn flush_close_requests(registry: &Mailbox<RegistryMsg>, queue: &mut Vec<CloseRequest>) {
     if queue.is_empty() {
         return;

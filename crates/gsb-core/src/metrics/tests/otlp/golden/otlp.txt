@@ -20,6 +20,14 @@ gsb_registry_opens sum t=2 mono=true unit="" n=1 | Connections opened, cumulativ
   [] 1000..2000 int 4
 gsb_registry_closes sum t=2 mono=true unit="" n=1 | Connections closed, cumulative.
   [] 1000..2000 int 1
+gsb_registry_join_ops_dropped sum t=2 mono=true unit="" n=1 | Joins the registry could not hand to the connection's op dispatcher (queue full or gone; the client got an ERROR), cumulative.
+  [] 1000..2000 int 1
+gsb_registry_close_ops_dropped sum t=2 mono=true unit="" n=1 | Close ops (a closing connection's detach) the registry could not hand to its op dispatcher (queue full or gone), cumulative.
+  [] 1000..2000 int 0
+gsb_registry_match_results_dropped_full sum t=2 mono=true unit="" n=1 | Match results a stopping room could not hand to the result sink because it was full (the consumer is not reading), cumulative.
+  [] 1000..2000 int 2
+gsb_registry_match_results_dropped_closed sum t=2 mono=true unit="" n=1 | Match results a stopping room could not hand to the result sink because it was closed (the consumer dropped its receiver), cumulative.
+  [] 1000..2000 int 1
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

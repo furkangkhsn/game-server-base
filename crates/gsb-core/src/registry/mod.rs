@@ -49,6 +49,7 @@ mod actor;
 mod close;
 mod hub;
 mod msg;
+mod result;
 mod seat;
 mod table;
 
@@ -56,6 +57,7 @@ pub use actor::Registry;
 pub use close::{CloseRequest, LeaveRequest};
 pub(crate) use close::{flush_close_requests, flush_leave_requests};
 pub use msg::RegistryMsg;
+pub(crate) use result::send_match_result;
 pub use seat::Seat;
 
 // Internals shared across this module tree (never leaves the crate).

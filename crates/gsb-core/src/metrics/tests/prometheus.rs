@@ -22,6 +22,8 @@ fn prometheus_render_exposes_families_and_values() {
         opens: 5,
         closes: 0,
         metrics_dropped: 0,
+        join_ops_dropped: 0,
+        close_ops_dropped: 0,
     }));
     // Deterministic fine-histogram shape: 100 steps, p50 in bin 10
     // (lower edge 80 µs), p99 in bin 40 (lower edge 320 µs). The COARSE
@@ -112,6 +114,8 @@ fn prometheus_counter_families_all_end_in_total() {
         opens: 0,
         closes: 0,
         metrics_dropped: 0,
+        join_ops_dropped: 0,
+        close_ops_dropped: 0,
     }));
     acc.apply(MetricsEvent::Room(room_sample(RoomId(4), t, 12)));
     let out = acc.report(t).render_prometheus();

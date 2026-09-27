@@ -22,6 +22,8 @@ use super::*;
 // Child module. A `#[path]`-loaded module resolves its OWN children
 // against its file's directory, so this path is relative to
 // `tests/registry/`.
+#[path = "counters/ops.rs"]
+mod ops;
 #[path = "counters/rooms.rs"]
 mod rooms;
 

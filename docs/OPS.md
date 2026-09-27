@@ -379,6 +379,34 @@ max_detach_hold_secs = "off"
   istemci kapanışı gerekçesiz alır. Satırda `hb_throttled_authed=`'dan
   sonra `frames_out_closed= close_notices_dropped=`; loadgen telinde
   `GSMO`; `RESULT`'ta aynı anahtarlar.
+- **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
+  satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
+  (`REGISTRY`) dört `counter`:
+  `join_ops_dropped=` / `gsb_registry_join_ops_dropped_total` — registry'nin
+  bağlantının op dağıtıcısına veremediği katılmalar (16'lık kuyruk dolu ya
+  da görev gitmiş; istemci `ERROR` "registry unavailable" alır);
+  `close_ops_dropped=` / `gsb_registry_close_ops_dropped_total` — kapanan
+  bağlantının detach'ı aynı yolda düştü (dağıtıcı detach'sız biter; oda
+  satırı oda bitene dek kalır — BACKLOG'da takip);
+  `match_results_dropped_full=` / `…_closed=`
+  (`gsb_registry_match_results_dropped_{full,closed}_total`) — duran
+  oda/shard'ın maç sonucunu sonuç sink'i reddetti: DOLU (tüketici okumuyor)
+  ya da KAPALI (tüketici alıcısını bıraktı). Duran oda başka örnek
+  göndermediğinden sonuç kaybı toplayıcıya kendi olayıyla gider
+  (`MetricsEvent::MatchResultDropped`) ve registry diliminde raporlanır
+  (registry dilimi yokken — registry hiç örnek göndermeden — görünmez;
+  sunucuda oda registry'den önce var olamaz). Toplayıcı da gitmişse
+  (süreç kapanırken) sayılamaz. Loadgen telinde `GSMP` (registry
+  bölümünde `closes`'tan sonra); `RESULT`'ta yok (satır registry
+  sayaçlarını taşımıyor).
+  **Sayılmayan, bilerek:** odanın registry'ye kapatma/ayrılma isteği ve
+  detach-despawn raporu registry'nin posta kutusu KAPALIYKEN düşer —
+  kutu yalnız registry `Shutdown` koluyla çıktığında kapanır, o kol da
+  her odayı aynı geçişte durdurur; düşüş yalnız süreç inerken olur,
+  isteğin amacını (soket, satır) kapanış çağlayanı zaten yapar ve odanın
+  kalan örnekleri toplayıcının sonuyla yarışır. Sayaç orada "kapanış
+  bekleyen bir isteği yakaladı"dan başka bir şey söylemezdi
+  (`registry/close.rs`).
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

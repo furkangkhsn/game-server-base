@@ -96,6 +96,10 @@ pub struct MetricAccumulator {
     /// [`NetReport::actions_dropped`] stays monotonic even though the
     /// per-connection entries above are pruned at close.
     conn_actions_dropped_retired: u64,
+    /// Match results the stopping rooms could not hand to the result
+    /// sink, by cause (B57; cumulative — reported in the registry slice).
+    match_results_dropped_full: u64,
+    match_results_dropped_closed: u64,
 }
 
 impl MetricAccumulator {
@@ -131,6 +135,13 @@ impl MetricAccumulator {
                 }
             }
             MetricsEvent::Registry(s) => self.registry = Some(s),
+            MetricsEvent::MatchResultDropped(cause) => {
+                let n = match cause {
+                    MatchResultDrop::Full => &mut self.match_results_dropped_full,
+                    MatchResultDrop::Closed => &mut self.match_results_dropped_closed,
+                };
+                *n = n.saturating_add(1);
+            }
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);
                 self.conn_bytes_out = self.conn_bytes_out.saturating_add(c.bytes_out);

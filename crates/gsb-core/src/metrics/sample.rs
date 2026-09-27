@@ -270,6 +270,16 @@ pub struct RegistrySample {
     /// Metric samples this producer dropped on a full (bounded) metrics
     /// channel, cumulative.
     pub metrics_dropped: u64,
+    /// Joins the registry could not hand to the connection's op
+    /// dispatcher (its bounded op queue full, or the dispatcher gone),
+    /// cumulative (B57): the join's reply is dropped and the connection
+    /// answers its client `ERROR` "registry unavailable".
+    pub join_ops_dropped: u64,
+    /// Close ops (the detach of a closing connection) the registry could
+    /// not hand to the connection's op dispatcher (full or gone),
+    /// cumulative (B57). The dispatcher then exits without detaching —
+    /// the room keeps the row until the room itself ends (BACKLOG).
+    pub close_ops_dropped: u64,
 }
 
 /// One connection actor's wire-byte sample. The fields are *deltas since
@@ -413,4 +423,20 @@ pub enum MetricsEvent {
     /// arithmetic and the straggler-ordering caveat (a late `Room`
     /// sample behind the notice is normal, not a resurrection attempt).
     RoomGone(RoomId),
+    /// A room (or one shard of a sharded room) could not hand its match
+    /// result to the result sink as it stopped (B57), by cause. Its own
+    /// counters cannot carry it — a stopping room sends no further
+    /// sample — so it is an event of its own, counted into the registry
+    /// slice of the report ([`RegistryReport::match_results_dropped_full`]).
+    MatchResultDropped(MatchResultDrop),
+}
+
+/// Why a match result did not reach the result sink (see
+/// [`MetricsEvent::MatchResultDropped`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchResultDrop {
+    /// The sink was full: the consumer is not reading (fast enough).
+    Full,
+    /// The sink was closed: the consumer dropped its receiver.
+    Closed,
 }

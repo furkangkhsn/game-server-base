@@ -164,6 +164,18 @@ pub struct RegistryReport {
     pub leaves: u64,
     pub opens: u64,
     pub closes: u64,
+    /// Joins / close ops the registry could not hand to a connection's
+    /// op dispatcher (see [`RegistrySample::join_ops_dropped`]),
+    /// cumulative (B57).
+    pub join_ops_dropped: u64,
+    pub close_ops_dropped: u64,
+    /// Match results a stopping room (or shard) could not hand to the
+    /// result sink — full / closed (see
+    /// [`MetricsEvent::MatchResultDropped`]), cumulative (B57). Counted
+    /// by the collector from the rooms' events, reported with the
+    /// registry's control-plane counters.
+    pub match_results_dropped_full: u64,
+    pub match_results_dropped_closed: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

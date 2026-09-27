@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"OMSG", "the magic, little-endian GSMO");
+    assert_eq!(&frame[..4], b"PMSG", "the magic, little-endian GSMP");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -339,6 +339,42 @@ fn the_outbound_losses_survive_the_wire() {
     assert_eq!(got.net.frames_out_closed, 29);
     assert_eq!(got.net.close_notices_dropped, 31);
     assert_eq!(got.net.server_closes.total(), 1);
+}
+
+/// The registry section's control-plane losses (GSMP, B57) cross the
+/// wire after its `closes`, and the net section still decodes after them.
+#[test]
+fn the_control_plane_losses_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.registry = Some(gsb_core::metrics::RegistryReport {
+        rooms: 1,
+        conns: 2,
+        rooms_created: 3,
+        rooms_destroyed: 4,
+        rooms_died: 5,
+        joins: 6,
+        leaves: 7,
+        opens: 8,
+        closes: 9,
+        join_ops_dropped: 10,
+        close_ops_dropped: 11,
+        match_results_dropped_full: 12,
+        match_results_dropped_closed: 13,
+    });
+    sent.net.close_notices_dropped = 31;
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    let g = got.registry.expect("the registry section");
+    assert_eq!(
+        (
+            g.closes,
+            g.join_ops_dropped,
+            g.close_ops_dropped,
+            g.match_results_dropped_full,
+            g.match_results_dropped_closed
+        ),
+        (9, 10, 11, 12, 13)
+    );
+    assert_eq!(got.net.close_notices_dropped, 31);
 }
 
 /// Every server-close reason crosses the wire in its own slot (GSMF

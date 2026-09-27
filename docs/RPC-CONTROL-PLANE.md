@@ -995,7 +995,9 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   **best-effort `try_send`** ile gider: oda sink'e asla blok etmez
   (dolmuş/olmayan sink = atılan sonuç — dikişin sözleşmesi
   "oda kapanırken son durumu bir kez dışarıya iletme", garanti değil
-  kuyruk). Referans adapter composition root'un `ServerHandle
+  kuyruk). Atılan sonuç sayılır (B57): toplayıcıya
+  `MetricsEvent::MatchResultDropped` ile, registry diliminde
+  `gsb_registry_match_results_dropped_{full,closed}_total`. Referans adapter composition root'un `ServerHandle
   .match_results` alıcısını okumasıdır (in-proc, tek hop — base'de
   NATS/Kafka/gRPC **yok**).
 - **Referans adapter (dış I/O):** `gsb_game::economy::EconomyService` —

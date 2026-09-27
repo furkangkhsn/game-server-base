@@ -111,8 +111,11 @@ where
             // before its `ServerClosed` was processed (the room
             // may have accepted it for a tick): drain it so the
             // slot cannot outlive the connection.
-            if let Some(op_tx) = self.conn_ops.remove(&conn) {
-                let _ = op_tx.try_send(RoomOp::Close);
+            if let Some(op_tx) = self.conn_ops.remove(&conn)
+                && op_tx.try_send(RoomOp::Close).is_err()
+            {
+                self.close_op_dropped(conn);
+                self.emit_metrics();
             }
             debug!(%conn, "close of unregistered connection");
             return;
@@ -125,7 +128,11 @@ where
             Some(op_tx) => {
                 // The dispatcher serializes the detach behind
                 // any in-flight join and reports `DetachDone`.
-                let _ = op_tx.try_send(RoomOp::Close);
+                // Refused (its queue full or the task gone), the
+                // detach is lost: counted (B57), sampled below.
+                if op_tx.try_send(RoomOp::Close).is_err() {
+                    self.close_op_dropped(conn);
+                }
             }
             None => {
                 if let (Some(room), Some(entity)) = (room, entity) {
@@ -149,5 +156,15 @@ where
             "connection closed (detach routed; affiliation held for \
              the park)"
         );
+    }
+
+    /// A close op the dispatcher never received (B57): counted and
+    /// warned. The dispatcher drains what it has and exits without the
+    /// detach, so the room keeps the row until the room itself ends —
+    /// pathological (a 16-deep per-connection op queue), and a follow-up
+    /// in BACKLOG, not handled here.
+    fn close_op_dropped(&mut self, conn: ConnectionId) {
+        self.reg_close_ops_dropped += 1;
+        warn!(%conn, "close op queue full or dispatcher gone; the detach is lost");
     }
 }

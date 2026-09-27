@@ -61,6 +61,11 @@ pub struct Registry<W, G, St, Sp> {
     /// Metric samples dropped on a full (bounded) metrics channel,
     /// cumulative.
     reg_metrics_dropped: u64,
+    /// Joins / close ops that never reached a connection's op
+    /// dispatcher (its bounded queue full or the task gone), cumulative
+    /// (B57; see `RegistrySample::join_ops_dropped`).
+    reg_join_ops_dropped: u64,
+    reg_close_ops_dropped: u64,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -161,6 +166,8 @@ where
             reg_opens: 0,
             reg_closes: 0,
             reg_metrics_dropped: 0,
+            reg_join_ops_dropped: 0,
+            reg_close_ops_dropped: 0,
             next_join_epoch: 0,
             metrics,
             max_connections,
@@ -189,6 +196,8 @@ where
             opens: self.reg_opens,
             closes: self.reg_closes,
             metrics_dropped: self.reg_metrics_dropped,
+            join_ops_dropped: self.reg_join_ops_dropped,
+            close_ops_dropped: self.reg_close_ops_dropped,
         };
         if let Err(mpsc::error::TrySendError::Full(_)) =
             self.metrics.try_send(MetricsEvent::Registry(sample))

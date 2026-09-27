@@ -116,7 +116,7 @@ pub use logic::{
     LOGIC_COUNTERS_MAX, LOGIC_NAME_MAX, LogicCounter, LogicCounters, LogicFold, LogicSlot,
 };
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
-pub use sample::{ConnSample, MetricsEvent, RegistrySample, RoomSample};
+pub use sample::{ConnSample, MatchResultDrop, MetricsEvent, RegistrySample, RoomSample};
 
 /// Histogram bin edges for the per-step body duration, each expressed as a
 /// fraction of the room's **tick budget** (one period, in µs). Each edge is
