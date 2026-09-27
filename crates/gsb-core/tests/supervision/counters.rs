@@ -19,7 +19,7 @@ use super::*;
 use gsb_core::metrics::{MetricsEvent, RegistrySample};
 
 /// [`start`] keeping the metrics receiver.
-fn start_observed(
+pub(super) fn start_observed(
     factory: RoomFactory<(), (), (), ()>,
 ) -> (
     Mailbox<RegistryMsg>,

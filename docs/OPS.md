@@ -558,6 +558,21 @@ max_detach_hold_secs = "off"
   kalan örnekleri toplayıcının sonuyla yarışır. Sayaç orada "kapanış
   bekleyen bir isteği yakaladı"dan başka bir şey söylemezdi
   (`registry/close.rs`).
+- **Registry kapsamı: son sayımı olmadan biten görevler (B67, sayım
+  turu 4).** Registry satırının sonunda `rooms_ended_uncounted=` ve aile
+  tablosunda `gsb_registry_rooms_ended_uncounted_total` (`counter`);
+  loadgen telinde `GSMU` (registry bölümünde
+  `match_results_dropped_closed`'dan sonra); `RESULT`'ta yok. Panikleyen
+  (ya da iptal edilen) oda/shard görevi `finish`'e varmaz, son örneğini
+  (`RoomFinal`) göndermez: son penceresi ve elinde kalanlar bilinemez.
+  Görevin ölüm bekçisi bunu `MetricsEvent::RoomEndedUncounted` ile görevin
+  SATIR kimliğiyle bildirir; toplayıcı sayar ve satırın bekleme penceresini
+  başlatır (ölen shard'ın satırı artık budanıyor). **Anlam notu:**
+  `rooms_died` biçilen MANTIKSAL odaları sayar, bu sayaç son sayımsız
+  biten GÖREVLERİ — sharded odada ölen her shard bir; hayatta kalan
+  shard'lar artık biçilen odayla durur ve son sayımlarını verir (önceden
+  sunucu durana dek çalışıyorlardı). Kaybolan sayıların kendisi
+  bilinemez; sayaç kaybın VAR olduğunu söyler.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

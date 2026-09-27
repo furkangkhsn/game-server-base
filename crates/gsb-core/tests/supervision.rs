@@ -37,6 +37,8 @@ use tokio::sync::mpsc;
 // crate root, so the path is explicit).
 #[path = "supervision/counters.rs"]
 mod counters;
+#[path = "supervision/uncounted.rs"]
+mod uncounted;
 
 const WAIT: Duration = Duration::from_secs(5);
 const HZ: f64 = 60.0;

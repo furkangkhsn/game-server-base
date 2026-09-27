@@ -85,6 +85,7 @@ where
                     handle,
                     self.self_mailbox.clone(),
                     self.rooms_hold.clone(),
+                    self.metrics.clone(),
                 );
                 self.rooms.insert(
                     id,
@@ -186,6 +187,7 @@ where
                         handle,
                         self.self_mailbox.clone(),
                         self.rooms_hold.clone(),
+                        self.metrics.clone(),
                     );
                 }
                 self.rooms.insert(

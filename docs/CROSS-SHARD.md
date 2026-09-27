@@ -748,7 +748,8 @@ delta tasarımı kayıp-kurtarma olmadan tamamlanmış sayılmaz.
    taşır (AOI CellExit deseni) — yoksa hayalet kalıcılaşır.
 3. **Üç resync tetikleyicisi:** (a) seq gap; (b) komşu rebuild bildirimi
    (supervision RoomDied akışı zaten var — yeni enkarnasyon ilk tick'te
-   full gönderir); (c) sigorta olarak düşük-frekans periyodik full
+   full gönderir; B67'den beri bir shard'ın ölümü hayatta kalan
+   shard'ları da durdurur, her biri son sayımıyla); (c) sigorta olarak düşük-frekans periyodik full
    (istemci tarafındaki keepalive-full karşılığı; örn. her 256 tick).
 4. **Migrasyon etkileşimi:** varlık sınırı geçtiğinde eski tarafın
    deltasında çıkış, yenilerinde giriş doğal görünür; own-wins filtresi

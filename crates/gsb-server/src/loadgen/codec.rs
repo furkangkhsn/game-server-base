@@ -65,6 +65,7 @@ mod logic;
 ///                u64 join_ops_dropped  u64 close_ops_dropped
 ///                u64 match_results_dropped_full
 ///                u64 match_results_dropped_closed
+///                u64 rooms_ended_uncounted
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
@@ -193,7 +194,10 @@ mod logic;
 /// (the rUDP writer's and demux's remaining losses and the deferred
 /// writer verdicts — B66: `udp_game_datagrams_send_failed` ..
 /// `writer_verdicts_deferred`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D54;
+/// GSMU = the GSMT layout plus the registry section's
+/// `rooms_ended_uncounted` (room/shard tasks that ended without their
+/// final count — B67), right after `match_results_dropped_closed`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D55;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -315,6 +319,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(g.close_ops_dropped);
         w.u64(g.match_results_dropped_full);
         w.u64(g.match_results_dropped_closed);
+        w.u64(g.rooms_ended_uncounted);
     }
     w.u64(r.net.bytes_in);
     w.u64(r.net.bytes_out_room);
@@ -513,6 +518,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             close_ops_dropped: r.u64()?,
             match_results_dropped_full: r.u64()?,
             match_results_dropped_closed: r.u64()?,
+            rooms_ended_uncounted: r.u64()?,
         }),
         0 => None,
         _ => return None,

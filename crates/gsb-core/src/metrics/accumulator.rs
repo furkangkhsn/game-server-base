@@ -105,6 +105,9 @@ pub struct MetricAccumulator {
     /// sink, by cause (B57; cumulative — reported in the registry slice).
     match_results_dropped_full: u64,
     match_results_dropped_closed: u64,
+    /// Room/shard tasks that ended without their final count (B67;
+    /// cumulative — reported in the registry slice).
+    rooms_ended_uncounted: u64,
     /// The transport tasks' loss deltas, summed (B58).
     transport: TransportCounters,
 }
@@ -174,6 +177,15 @@ impl MetricAccumulator {
                     MatchResultDrop::Closed => &mut self.match_results_dropped_closed,
                 };
                 *n = n.saturating_add(1);
+            }
+            MetricsEvent::RoomEndedUncounted(id) => {
+                // The task is gone and will send nothing more: count it,
+                // and let its row linger with its last sample, exactly as
+                // a final sample would (an existing countdown is kept).
+                self.rooms_ended_uncounted = self.rooms_ended_uncounted.saturating_add(1);
+                self.rooms_gone_grace
+                    .entry(id)
+                    .or_insert(ROOM_GONE_GRACE_REPORTS);
             }
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);

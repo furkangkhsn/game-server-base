@@ -301,6 +301,14 @@ pub use team::{
     TEAM_HUB_SWEEP_EVERY_TICKS, TeamExport, TeamImport, TeamImports, TeamRecord,
 };
 
+/// A shard's metrics row id: the logical room id shifted into the shard
+/// sub-space, `room << 16 | index` (module docs, "Metrics identity").
+/// One definition for the shard's own samples and for its death
+/// watcher's report (B67).
+pub(crate) fn sample_id(room: crate::id::RoomId, index: usize) -> crate::id::RoomId {
+    crate::id::RoomId(room.0.saturating_mul(1 << 16) + index as u64)
+}
+
 /// A leave tombstone outlives the leave that wrote it by this many
 /// ticks, then becomes sweepable (see `conn_tombstone`). Hardcoded on
 /// purpose: this is a CORRECTNESS parameter of the leave/migration race

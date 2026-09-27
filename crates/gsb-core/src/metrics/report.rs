@@ -176,6 +176,13 @@ pub struct RegistryReport {
     /// registry's control-plane counters.
     pub match_results_dropped_full: u64,
     pub match_results_dropped_closed: u64,
+    /// Room/shard TASKS that ended without their final count — a panic
+    /// (see [`MetricsEvent::RoomEndedUncounted`]), cumulative (B67). A
+    /// shard counts itself, so a sharded room's panic is one per dead
+    /// shard (its surviving shards stop with their final count); compare
+    /// [`Self::rooms_died`], which counts the LOGICAL rooms the registry
+    /// reaped. Counted by the collector from the watchers' events.
+    pub rooms_ended_uncounted: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

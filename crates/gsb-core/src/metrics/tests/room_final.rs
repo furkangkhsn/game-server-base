@@ -42,3 +42,43 @@ fn a_final_sample_without_a_notice_starts_the_linger() {
     assert_eq!(acc.report(t).rooms[0].steps, 9, "stragglers refused");
     assert!(acc.report(t).rooms.is_empty(), "no ghost row");
 }
+
+/// A task that ended WITHOUT its final count (B67, a panic): counted in
+/// the registry slice, and its row keeps its last sample for the linger,
+/// refuses stragglers, and goes — never a ghost. The registry slice needs
+/// a registry sample to appear.
+#[test]
+fn a_room_ended_uncounted_is_counted_and_its_row_goes() {
+    let mut acc = MetricAccumulator::default();
+    let t = Instant::now();
+    acc.apply(MetricsEvent::Registry(RegistrySample {
+        rooms: 0,
+        conns: 0,
+        rooms_created: 1,
+        rooms_destroyed: 0,
+        rooms_died: 1,
+        joins: 0,
+        leaves: 0,
+        opens: 0,
+        closes: 0,
+        metrics_dropped: 0,
+        join_ops_dropped: 0,
+        close_ops_dropped: 0,
+    }));
+    let shard = RoomId((5 << 16) | 1);
+    acc.apply(MetricsEvent::Room(room_sample(shard, t, 40)));
+    acc.apply(MetricsEvent::RoomEndedUncounted(shard));
+    acc.apply(MetricsEvent::Room(room_sample(shard, t, 41)));
+    let r = acc.report(t);
+    assert_eq!(r.registry.expect("registry").rooms_ended_uncounted, 1);
+    assert_eq!(r.rooms.len(), 1);
+    assert_eq!(r.rooms[0].steps, 40, "the last sample, stragglers refused");
+    assert_eq!(acc.report(t).rooms.len(), 1, "the second linger window");
+    let r = acc.report(t);
+    assert!(r.rooms.is_empty(), "then the row is gone");
+    assert_eq!(
+        r.registry.expect("registry").rooms_ended_uncounted,
+        1,
+        "cumulative"
+    );
+}

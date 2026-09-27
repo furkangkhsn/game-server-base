@@ -15,7 +15,8 @@ impl MetricReport {
                 "gsb-metric scope=registry rooms={} conns={} opens={} closes={} \
                  joins={} leaves={} rooms_created={} rooms_destroyed={} rooms_died={} \
                  join_ops_dropped={} close_ops_dropped={} \
-                 match_results_dropped_full={} match_results_dropped_closed={}",
+                 match_results_dropped_full={} match_results_dropped_closed={} \
+                 rooms_ended_uncounted={}",
                 r.rooms,
                 r.conns,
                 r.opens,
@@ -28,7 +29,8 @@ impl MetricReport {
                 r.join_ops_dropped,
                 r.close_ops_dropped,
                 r.match_results_dropped_full,
-                r.match_results_dropped_closed
+                r.match_results_dropped_closed,
+                r.rooms_ended_uncounted
             ));
         }
         for r in &self.rooms {

@@ -28,6 +28,8 @@ gsb_registry_match_results_dropped_full sum t=2 mono=true unit="" n=1 | Match re
   [] 1000..2000 int 2
 gsb_registry_match_results_dropped_closed sum t=2 mono=true unit="" n=1 | Match results a stopping room could not hand to the result sink because it was closed (the consumer dropped its receiver), cumulative.
   [] 1000..2000 int 1
+gsb_registry_rooms_ended_uncounted sum t=2 mono=true unit="" n=1 | Room/shard tasks that ended without their final count (a panic): their last window and what they held at the end are counted nowhere, cumulative.
+  [] 1000..2000 int 1
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

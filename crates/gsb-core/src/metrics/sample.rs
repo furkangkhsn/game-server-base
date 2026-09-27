@@ -463,6 +463,17 @@ pub enum MetricsEvent {
     /// sample — so it is an event of its own, counted into the registry
     /// slice of the report ([`RegistryReport::match_results_dropped_full`]).
     MatchResultDropped(MatchResultDrop),
+    /// A room or shard task ended WITHOUT its final count (B67): it
+    /// panicked (or was cancelled), so its [`Self::RoomFinal`] never went
+    /// out — its last window since the previous sample and what it held
+    /// at the end (unread input, in-flight requests, owed answers, queued
+    /// ops) are counted nowhere. Sent by the task's death watcher, the one
+    /// place that sees the task end, under the task's ROW id (the room id,
+    /// or `room << 16 | index` for a shard). The collector counts it
+    /// ([`RegistryReport::rooms_ended_uncounted`]) and starts the row's
+    /// linger like a final sample would — the row keeps its last sample
+    /// for the grace windows and is then dropped, never a ghost.
+    RoomEndedUncounted(RoomId),
 }
 
 /// Why a match result did not reach the result sink (see

@@ -21,7 +21,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 13] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 14] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -100,6 +100,13 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 13] = [
         Kind::Counter,
         "Match results a stopping room could not hand to the result sink because it was closed (the consumer dropped its receiver), cumulative.",
         |r| r.match_results_dropped_closed,
+    ),
+    // B67: a panicked room/shard's lost final count.
+    reg(
+        "gsb_registry_rooms_ended_uncounted_total",
+        Kind::Counter,
+        "Room/shard tasks that ended without their final count (a panic): their last window and what they held at the end are counted nowhere, cumulative.",
+        |r| r.rooms_ended_uncounted,
     ),
 ];
 

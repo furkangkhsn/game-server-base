@@ -175,6 +175,7 @@ impl MetricAccumulator {
                 close_ops_dropped: r.close_ops_dropped,
                 match_results_dropped_full: self.match_results_dropped_full,
                 match_results_dropped_closed: self.match_results_dropped_closed,
+                rooms_ended_uncounted: self.rooms_ended_uncounted,
             }),
             // (registry report intentionally carries no metrics_dropped: the
             // registry's drop count is cumulative in its sample and is folded

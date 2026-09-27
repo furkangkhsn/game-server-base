@@ -1,7 +1,6 @@
 //! The metrics sample: the shard's counters, gauges and border
 //! accounting, snapshotted once per report period.
 
-use crate::id::RoomId;
 use crate::metrics::{LogicCounters, RoomSample};
 use crate::shard::actor::ShardActor;
 use std::fmt::Debug;
@@ -25,7 +24,7 @@ where
     pub(crate) fn sample(&self) -> RoomSample {
         let fx = &self.effects.stats;
         RoomSample {
-            room: RoomId(self.config.id.0.saturating_mul(1 << 16) + self.index as u64),
+            room: crate::shard::sample_id(self.config.id, self.index),
             emit_at: Instant::now(),
             steps: self.steps,
             budget_us: self.budget_us,

@@ -2522,6 +2522,17 @@ kapıdan geçirmemek sunucu testlerinin ikisini de düşürür (TCP'ninki
 `gsb-net` testini de). rUDP'de kapı kaldırılırsa döngü yine biter (demux
 abort'u alıcıyı kapatır, o yol da `listener_closed` döner) — iki yol.
 
+**Panikleyen oda/shard (B67).** Ölüm bekçisi (oda/shard görevi başına bir
+görev, yalnız `JoinHandle`'ı bekler) registry'ye `RoomDied` bildirir;
+registry güncel enkarnasyonu biçer (üyelere `RoomGone`, `rooms_died`).
+B67'den beri: (1) biçim kaydı `stop_room` ile durdurur — sharded odanın
+HAYATTA kalan shard'ları da `Shutdown` alır ve son sayımlarıyla biter
+(önceden sunucu durana dek çalışıyorlardı); (2) bekçi görev panikle (ya da
+iptalle) bittiyse toplayıcıya görevin satır kimliğiyle
+`MetricsEvent::RoomEndedUncounted` gönderir: son sayım yok, sayılır
+(`rooms_ended_uncounted`), satır budanır — ayrıntı §12 "Panikle ölen
+oda/shard".
+
 ### 9.1 Kapanış kilitlenmesi (S turu, BACKLOG §1 satır 4a)
 
 **Belirti.** U turunda bir MMO ve üç arena-500 loadgen koşusu bitmedi:
@@ -3020,6 +3031,7 @@ durdurulamaz.
 | oda | `requests_undelivered`, `requests_abandoned` (kümülatif; satırda `req_late=`'den sonra `req_undelivered=` / `req_abandoned=`, Prometheus'ta `gsb_room_requests_{undelivered,abandoned}_total`, OTLP'de `_total`'sız, loadgen telinde GSMK) | oturumu biten bağlantıya borçlu kalan RPC yanıtlarından kaçı hiç teslim edilmeden atıldı, kaç dış istek oturum bittiğinde hâlâ uçuştaydı? (B53; isteğin kendisi kendi kovasında — defter terimi değil, yanıtın akıbeti. Geri konan yanıt bir kez, atıldığında sayılır.) |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
 | registry | `join_ops_dropped`, `close_ops_dropped`, `match_results_dropped_full`, `match_results_dropped_closed` (kümülatif; registry satırında `rooms_died=`'den sonra, Prometheus'ta `gsb_registry_*_total`, loadgen telinde GSMP) | kontrol düzlemi neyi kaybetti? Bağlantının op dağıtıcısına verilemeyen katılma / kapanış (kuyruk dolu ya da görev gitmiş), sonuç sink'inin dolu ya da kapalı olduğu için reddettiği maç sonuçları (duran oda örnek göndermez: toplayıcıya `MetricsEvent::MatchResultDropped` ile gider). B57 |
+| registry | `rooms_ended_uncounted` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_rooms_ended_uncounted_total`, loadgen telinde GSMU) | kaç oda/shard GÖREVİ son sayımı olmadan (panikle) bitti — son penceresi ve elinde kalanlar hiçbir sayaçta yok? Ölüm bekçisinin `MetricsEvent::RoomEndedUncounted`'ı; satır da onunla budanır. B67 |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif; B55'ten beri yalnız oyun-bandı girdisi)
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
@@ -3242,10 +3254,38 @@ düşüyordu). Yan etki (turda bulundu): shard satırlarının örnek kimliği
 `room << 16 | index`, registry'nin `RoomGone`'u ise mantıksal oda
 kimliğini taşır — yok edilen sharded odanın shard satırları hiç
 budanmıyordu (hayalet); artık her shard'ın `RoomFinal`'ı kendi satırının
-beklemesini başlatır. Panikle ölen shard son örnek gönderemez, onun
-satırı hâlâ kalır (BACKLOG). Kilit: `room::tests::unread::stop`,
+beklemesini başlatır. Kilit: `room::tests::unread::stop`,
 `shard::tests::unread::stop`, `metrics::tests::room_final`,
 `registry::result::tests`.
+
+**Panikle ölen oda/shard (B67, sayım turu 4).** Panikleyen görev
+`finish`'e hiç varmaz: son örnek gitmez, son penceresi ve elinde
+kalanlar (okunmamış girdi, uçuştaki istekler, borçlu yanıtlar, kuyruktaki
+op'lar) bilinemez — durum panikle birlikte gitti. Ölen shard'ın satırı da
+hiç budanmıyordu (`RoomGone` mantıksal oda kimliğini taşır). Görevin
+bittiğini gören tek yer ölüm bekçisidir (`registry/actor/rooms/watch.rs`):
+`JoinHandle` bir hata döndürdüyse (panik ya da iptal) görevin SATIR
+kimliğiyle (oda kimliği ya da `shard::sample_id` = `room << 16 | index`)
+`MetricsEvent::RoomEndedUncounted` gönderir (durdurma-mesajı deyimi,
+`channel::post`). Toplayıcı onu sayar (registry dilimi
+`rooms_ended_uncounted`, `gsb_registry_rooms_ended_uncounted_total`) ve
+satırın beklemesini son örnek gibi başlatır: satır son periyodik örneğiyle
+iki pencere görünür, geç örnekleri reddeder, sonra düşer — hayalet yok.
+**Sayılabilen bu kadar:** görevin kendisi sayılır; kaybolan pencerenin ve
+elde kalanların SAYILARI bilinemez (panik sonrası kancadan sayım,
+`Drop` koruyucusu içinde `spawn` — ikinci panik süreci düşürür — elendi).
+Anlam notu: `rooms_died` registry'nin biçtiği MANTIKSAL odaları sayar,
+`rooms_ended_uncounted` son sayımsız biten GÖREVLERİ (her shard kendini);
+sonradan `Drop`'ta panikleyen bir görev son örneğini göndermiş olsa da
+sayılır (sayısı tam, sayaç bir fazla — kabul edilen uç). **Yan bulgu
+(düzeltildi):** bir shard paniklediğinde registry mantıksal odayı biçiyor
+ama HAYATTA kalan shard'lara `Shutdown` göndermiyordu — birbirlerinin
+link'leri gelen kutularını açık tuttuğundan sunucu durana dek tick
+atıyor, `RoomGone` almış üyelere yayın yapıyor, var olmayan bir odanın
+satırlarını raporluyorlardı. `on_room_died` artık kaydı `stop_room` ile
+durdurur (yok etme gibi); hayatta kalanlar kendi `RoomFinal`'larıyla
+biter. Kilit: `tests/supervision/uncounted.rs`,
+`metrics::tests::room_final`.
 
 **Her sayacın bir doğru-yol testi vardır.** Bu yüzeyin sayaçları
 (`RoomSample`, `RegistrySample`, `ConnSample`, `UdpClientStats` — ve

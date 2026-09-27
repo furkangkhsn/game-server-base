@@ -43,6 +43,8 @@
 //! (`stream_frames_unwritten` .. `ws_frames_dropped_after_close`), and
 //! its ten rUDP/verdict counters after them
 //! (`udp_game_datagrams_send_failed` .. `writer_verdicts_deferred`).
+//! B67's registry-scope `rooms_ended_uncounted=` /
+//! `gsb_registry_rooms_ended_uncounted_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -75,6 +77,9 @@ pub(super) fn golden_report() -> MetricReport {
     ] {
         acc.apply(MetricsEvent::MatchResultDropped(cause));
     }
+    // A room task that ended without its final count (B67); no row of
+    // its own in this report.
+    acc.apply(MetricsEvent::RoomEndedUncounted(RoomId(99)));
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

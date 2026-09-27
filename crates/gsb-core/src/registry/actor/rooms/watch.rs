@@ -4,6 +4,7 @@
 use crate::channel::Mailbox;
 use crate::conn::ConnIn;
 use crate::id::{ConnectionId, RoomId};
+use crate::metrics::MetricsEvent;
 use crate::registry::actor::Registry;
 use crate::registry::*;
 use crate::service::Hold;
@@ -59,6 +60,14 @@ where
     /// [`Self::with_rooms_hold`]), and drops it the moment the room task
     /// has ended — before reporting, so a registry that is already gone
     /// cannot delay the release.
+    ///
+    /// The one thing the watcher does read from the outcome is whether
+    /// the task ended WITHOUT its final count (B67): a task that panicked
+    /// (or was cancelled) never reached its `finish()`, so its final
+    /// sample never went out. The watcher tells the collector
+    /// ([`MetricsEvent::RoomEndedUncounted`], under the task's row id,
+    /// stop-message idiom) — the loss is counted and the row lingers and
+    /// goes like any finished room's, instead of staying a ghost.
     pub(in crate::registry) fn spawn_room_watcher(
         id: RoomId,
         shard: Option<usize>,
@@ -66,13 +75,18 @@ where
         handle: tokio::task::JoinHandle<()>,
         registry: Mailbox<RegistryMsg>,
         hold: Option<Hold>,
+        metrics: Mailbox<MetricsEvent>,
     ) {
         tokio::spawn(async move {
-            // The outcome (panic vs clean return) is deliberately not
-            // inspected: the registry decides whether this exit means
-            // anything, based on its table state at report time.
-            let _ = handle.await;
+            // Whether the exit MEANS anything is the registry's decision,
+            // from its table state at report time; the outcome only says
+            // whether a final count went out.
+            let ended = handle.await;
             drop(hold);
+            if ended.is_err() {
+                let row = shard.map_or(id, |i| crate::shard::sample_id(id, i));
+                crate::channel::post(&metrics, MetricsEvent::RoomEndedUncounted(row));
+            }
             let _ = registry
                 .send(RegistryMsg::RoomDied {
                     id,

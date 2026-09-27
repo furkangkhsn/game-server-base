@@ -213,5 +213,14 @@ where
             // over") instead of 4 ("unknown/temporary").
             self.retire_room(id);
         }
+        // The rest of the dead incarnation stops (B67): a sharded room's
+        // SURVIVING shards were left running — nobody else sends them a
+        // `Shutdown` (their inboxes stay open through each other's links)
+        // — ticking, fanning out to members already told `RoomGone`, and
+        // reporting rows of a room that no longer exists. Now they stop
+        // like a destroy's, each with its final count (`RoomFinal`). The
+        // dead task's own mailbox is closed: its stop is a no-op, as is a
+        // single room's.
+        Self::stop_room(entry);
     }
 }
