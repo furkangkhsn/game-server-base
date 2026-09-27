@@ -77,14 +77,17 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1220** (1220/1220 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1225** (1225/1225 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F23 — yükte düşen gerçek saatli testler** — dört test
+Son tur: **küçük paket 4** — başlangıç odaları accept'ten önce mailbox'ta
+(B44), tutarlı kesit her shard satırını ister (B45), AFK testi hız
+sınırlı yoklamayı yineler (F24).
+Önceki tur: **F23 — yükte düşen gerçek saatli testler** — dört test
 düzeltildi (loadgen muhasebe peer'ı, toplayıcı ×2, MMO smoke), 64 meşgul
 döngü yükünde 20 tam koşu 0 düşüş; kural CONTRIBUTING'de. Yan bulgular
-B44 (boot odası yarışı), B45 (loadgen kesiti) sırada.
+B44, B45, F24 küçük paket 4'te kapandı.
 Önceki tur: **B41 — `Disconnect` + park kapatma sırası** (RECONNECT §16.1) —
 bekleyen kapatma isteğinin `parked`'ı gönderimde yeniden sınanır; parkın
 raporu önden gittiyse istek despawn yerleşir, satır sızmaz.

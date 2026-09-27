@@ -5,6 +5,29 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 4 — B44, B45, F24 (`misc/small-bundle-4`)
+
+- **B44 — başlangıç odaları her join'in önünde.** `room_count` odalarının
+  `CreateRoom`'ları eskiden spawn'lı görevlerden gidiyor, accept döngüleri
+  beklemeden açılıyordu; hemen katılan istemci `RoomOpFailed "room 1 not
+  found"` alabiliyordu. Artık `boot/start/boot_rooms.rs` hepsini accept
+  döngüleri spawn edilmeden önce, id sırasıyla, registry mailbox'ına satır
+  içinde (`try_send`) koyar; registry FIFO boşalttığı için her join
+  onların arkasındadır. Yalnız cevaplar spawn'lı görevde beklenir
+  (başlatma bir odayı beklemez; S'nin kuralı korunur); boş kapasiteyi
+  (4096) aşanlar spawn'dan sıralı + `warn`. Kilit `tests/boot_rooms.rs`
+  (düzeltmeden önce 5/5 `Absent`).
+- **B45 — tutarlı kesit her shard'ın satırını içerir.** Eksik satırlı
+  rapor kesit sayılıyordu; kesit artık `rooms.len() == shards` ister
+  (shard sayısı RESULT'un `shards=` eşlemesinden). RESULT biçimi aynı.
+- **F24 — AFK varsayılan testinin yoklaması** kendi numaralı
+  heartbeat'lerinden biri cevaplanana dek yineler (1/sn ACK kısmasına
+  karşı; ERROR/kapanış yine başarısızlık). Hog altında 191/192 → 384/384.
+
+Testler 1220 → 1225 (`otlp` ile 1243); ajanın mutasyonları yakalandı;
+ebeveynin bağımsız mutasyonu (bir satırı eksik raporu da kesit saymak) 2
+testi kırıyor.
+
 ## F23 — yükte düşen gerçek saatli testler (`test/f23-flaky`)
 
 Yük altında (1 dk load 15+) ara sıra düşen testler sistematik arandı: 30

@@ -97,8 +97,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B38 `metrics` fasadı exporter'ı — üçüncü `Exporter`, kendi feature'ı; aile tablosunu yürüyüp fasada basar, global recorder yalnız exporter'ın içinde (yeni crate gerektirir) | bir operatör `metrics` ekosistemini isterse | OPS §6 |
 | B39 `RoomReport::shipped_frames`/`private_frames` hiçbir dışa açım yüzeyinde yok (Prometheus'ta hiç olmadı) — aile tablosuna iki satır; altın metni bilerek değiştirir | bir sonraki metrik turu | DESIGN §12 |
 | B43 `Disconnect` ile atılan bağlantı, kapatma isteği dolu posta kutusunun arkasındayken aynı odaya taze katılırsa istek yeni varlıkta bayat kalır, soket açık kalır (yeni üyelik tavanın saatine baştan girer) | registry doygunluğu + aktif istemci | RECONNECT §16.2 |
-| B44 **SIRADA — bugün yanlış (yarış):** boot odaları (`room_count`) spawn'lı görevden `CreateRoom` ile kurulur, accept döngüleri beklemeden açılır; başlangıçtan hemen sonra katılan istemci `RoomOpFailed "room 1 not found"` alabilir (yükte ~600 loadgen koşusunda 3 kez). Öneri: `CreateRoom`'u accept'ten önce satır içinde gönder (FIFO), cevabı spawn'da bekle | — | F23 turu |
-| B45 **SIRADA — bugün yanlış (ölçüm):** `loadgen::report::spread::consistent_cut` satırı eksik raporu (her shard henüz örneklemeden) kesit sayar; kararlı penceredeki raporların hepsi yırtıksa nüfus o eksik rapordan okunur ve yırtık satıra geri düşüş devreye girmez. Öneri: kesit her shard satırını içersin + `spread::tests` kilidi | — | DESIGN §12 "tutarlı kesit" |
+| B46 `loadgen::report::result`'ta `last_steady` (overlap penceresinin sonu) tutarlı kesite süzülmüyor: `members == peak_members` olan yırtık ya da eksik bir rapor pencere sonu olabilir → `population_reports` üzerinden seçilmeli | bir sonraki metrik/loadgen turu | küçük paket 4 turu |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -160,10 +159,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 | F22 `input_rate_limited` için bağlantıya atıflı ilk-beş listesi (`actions_dropped_top` gibi) — bugün yalnız bağlantı başına bir `warn`; toplayıcıda bağlantı başı tablo + E2 aile tablosu | ihtiyaç görülünce | SECURITY §3.4 "Kalan yüzey" |
-| F24 `afk_action.rs::the_default_keeps_a_heartbeating_idle_client_connected` yükte düşer (1/30): HEARTBEAT_ACK 1/sn kısması (duvar saati) ile yoklama `heartbeat_round(99)` son cevaplanandan ~1,009 sn sonra gider (~9 ms pay) → 10 sn TimedOut. Öneri (test): yoklamadan önce ≥1,1 sn sessizlik ya da her zaman cevaplanan bir yoklama | sıradaki küçük pakette | F23 turu |
 | F25 Statik taramada riskli görünen ama 60 yüklü tam koşuda düşmeyen gerçek saatli testler (rpc zaman aşımı süpürmesi 30 ms payı; `boot::stop` took<2×grace; `accept_stop` <900 ms; udp busy-band; `tests/input_rate` 1100 ms; slow_reader'lar; e2e ticket) — CONTRIBUTING kuralına göre çevrilecek | düşerse | F23 turu |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
