@@ -5,7 +5,7 @@
 use super::{RoomFamily, RoomValue, counter, gauge};
 
 /// Tick health through group state, in exposition order.
-pub(super) const TICK: [RoomFamily; 27] = [
+pub(super) const TICK: [RoomFamily; 29] = [
     gauge(
         "gsb_room_hz",
         "Measured room step rate (Δsteps/s over the last sample interval).",
@@ -123,6 +123,21 @@ pub(super) const TICK: [RoomFamily; 27] = [
     gauge("gsb_room_shipped_s", "Shipped-byte rate (Δ/s).", |r| {
         r.shipped_s
     }),
+    // The same fan-out in FRAMES (B39): a datagram transport is bounded
+    // by packets as well as bytes (`shipped_bytes / shipped_frames` is
+    // the mean frame size), and the private split separates the
+    // per-connection traffic from the broadcast half. Cumulative, like
+    // the bytes (the loadgen fold SUMs them over shards).
+    counter(
+        "gsb_room_shipped_frames_total",
+        "Frames shipped to connections (snapshot + private, fan-out copies), cumulative.",
+        |r| r.shipped_frames,
+    ),
+    counter(
+        "gsb_room_private_frames_total",
+        "Private per-connection frames shipped (RPC answers, acks, one-shot fulls; a subset of the shipped frames), cumulative.",
+        |r| r.private_frames,
+    ),
     // Group/membership state.
     gauge("gsb_room_groups", "Current snapshot group count.", |r| {
         f64::from(r.groups)

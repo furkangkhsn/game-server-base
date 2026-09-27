@@ -197,6 +197,14 @@ gsb_room_shipped_bytes_total{room="r7"} 0
 # TYPE gsb_room_shipped_s gauge
 gsb_room_shipped_s{room="r1"} 9000
 gsb_room_shipped_s{room="r7"} 0
+# HELP gsb_room_shipped_frames_total Frames shipped to connections (snapshot + private, fan-out copies), cumulative.
+# TYPE gsb_room_shipped_frames_total counter
+gsb_room_shipped_frames_total{room="r1"} 87
+gsb_room_shipped_frames_total{room="r7"} 0
+# HELP gsb_room_private_frames_total Private per-connection frames shipped (RPC answers, acks, one-shot fulls; a subset of the shipped frames), cumulative.
+# TYPE gsb_room_private_frames_total counter
+gsb_room_private_frames_total{room="r1"} 3
+gsb_room_private_frames_total{room="r7"} 0
 # HELP gsb_room_groups Current snapshot group count.
 # TYPE gsb_room_groups gauge
 gsb_room_groups{room="r1"} 1

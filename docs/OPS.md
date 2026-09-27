@@ -191,13 +191,15 @@ max_detach_hold_secs = "off"
   `gsb_conn_frames_in_total` gibi `<alan>_<nesne>_<sayaç>_total`;
   histogramlar Prometheus summary/satır çiftiyle (p50/p99 hazır alanlardan)
 - Oda başına (etiket `room="r<id>"`; sharded odada her shard kendi
-  satırı, id `room << 16 | index`) küçük pakette (ve W2'de takım
-  değişimi için) eklenen sayaç aileleri
+  satırı, id `room << 16 | index`) küçük pakette (W2'de takım
+  değişimi, B39'da yayın kareleri için) eklenen sayaç aileleri
   (hepsi kümülatif `counter`; gsb-metric satırında aynı adla, `_total`
   ve `gsb_room_` öneki olmadan):
 
   | Aile | Anlamı |
   |---|---|
+  | `gsb_room_shipped_frames_total` | Bağlantılara gönderilen kareler (snapshot + özel; fan-out kopyaları) — `gsb_room_shipped_bytes_total`'ın kare sayısı (B39; DESIGN §12): datagram taşıması bayt kadar PAKET ile de sınırlıdır, `shipped_bytes/shipped_frames` = ortalama kare boyu |
+  | `gsb_room_private_frames_total` | Bunların bağlantıya özel olanları (RPC cevapları, ack'ler, tek atımlık full'lar); `shipped_frames − private_frames` = fan-out'un yayın yarısı (B39) |
   | `gsb_room_detach_forced_total` | `max_detach_hold` tavanının duran bir `may_release` vetosunu ezerek bitirdiği bekletmeler (`detach_expired_*`'ın alt kümesi; RECONNECT §17) |
   | `gsb_room_effects_applied_total` | Bu shard'ın oyununun otorite olarak uyguladığı uzak etkiler (CROSS-SHARD §4b) |
   | `gsb_room_effects_forwarded_total` | Göç etmiş hedefin yeni sahibine devredilen etkiler |

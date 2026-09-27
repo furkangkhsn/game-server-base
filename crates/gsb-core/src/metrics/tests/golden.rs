@@ -5,7 +5,10 @@
 //! proof that the seam adds nothing to the output of a logic that does
 //! not use it. A core counter added since is in it on purpose, with the
 //! one key and family it added: F15's `req_refused=` /
-//! `gsb_room_requests_refused_congested_total`.
+//! `gsb_room_requests_refused_congested_total`. So are the two families
+//! B39 added for counters the line already carried (`shipped_frames=`,
+//! `private_frames=`): `gsb_room_shipped_frames_total`,
+//! `gsb_room_private_frames_total`.
 
 use super::*;
 use crate::conn::ServerClose;

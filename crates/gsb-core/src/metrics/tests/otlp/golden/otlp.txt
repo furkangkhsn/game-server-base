@@ -120,6 +120,12 @@ gsb_room_shipped_bytes sum t=2 mono=true unit="" n=2 | Bytes shipped to connecti
 gsb_room_shipped_s gauge unit="" n=2 | Shipped-byte rate (Δ/s).
   [room=r1] 0..2000 double 9000
   [room=r7] 0..2000 double 0
+gsb_room_shipped_frames sum t=2 mono=true unit="" n=2 | Frames shipped to connections (snapshot + private, fan-out copies), cumulative.
+  [room=r1] 1000..2000 int 87
+  [room=r7] 1000..2000 int 0
+gsb_room_private_frames sum t=2 mono=true unit="" n=2 | Private per-connection frames shipped (RPC answers, acks, one-shot fulls; a subset of the shipped frames), cumulative.
+  [room=r1] 1000..2000 int 3
+  [room=r7] 1000..2000 int 0
 gsb_room_groups gauge unit="" n=2 | Current snapshot group count.
   [room=r1] 0..2000 double 1
   [room=r7] 0..2000 double 0
