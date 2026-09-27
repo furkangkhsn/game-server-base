@@ -108,7 +108,7 @@ async fn start_inner(
             .local_addr()
             .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
         let (report_tx, report_rx) = watch::channel(MetricReport::initial_stale(REPORT_PERIOD));
-        let task = http::spawn(
+        let surface = http::spawn(
             listener,
             reg_tx.clone(),
             report_rx,
@@ -117,7 +117,7 @@ async fn start_inner(
             1..=cfg.room_count,
         );
         info!(addr = %bound, "http ops surface listening");
-        (MetricSink::Watch(report_tx), Some(task), Some(bound))
+        (MetricSink::Watch(report_tx), Some(surface), Some(bound))
     };
 
     // The global ticker: one broadcast channel + one timing task. Rooms

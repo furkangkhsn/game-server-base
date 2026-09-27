@@ -2381,6 +2381,27 @@ korunur: bekleme tek bir join'in süre sınırlı beklenişidir). Ne olduğu
 `StopReport`'ta: `accept_loops_ended` / `accept_loops_aborted` (ağaç
 içi taşımalarda 0); abort olursa `warn`.
 
+**HTTP ops yüzeyi de aynı kapıyla durur (B33).** Ops yüzeyinin accept
+döngüsü (`http.rs`) B16'dan sonra `stop()`'un abort ettiği son accept
+döngüsüydü. Artık accept'i aynı `Door`'dan geçer (`door.admit(listener
+.accept())`; tek await yine accept); `stop()` kapısını dinleyicilerle
+aynı noktada kapatır, döngü `listener_closed` hatasında döner ve
+listener'ı düşürür. Görevi oyun dinleyicilerinin döngüleriyle AYNI son
+tarih altında beklenir, aşarsa aynı geri sigortayla abort edilir.
+`StopReport`'a yeni alan eklenmedi: ops döngüsü de bir accept döngüsü
+olarak `accept_loops_ended`/`accept_loops_aborted`'a sayılır
+(`http_listen` açıkken dinleyici sayısı + 1): aynı mekanizma, aynı
+son tarih, aynı sayaç — ve açık yapının literal kullanıcıları kırılmaz;
+abort sayısının sıfırdan büyük olması hangi döngü olursa olsun aynı
+şeyi söyler (kapısı accept'ini bitirmeyen bir döngü). Önceden
+kabul edilmiş ops bağlantıları kendi kısa ömürlü görevlerinde kalır
+(tek yanıt + sınırlı boşaltma), kapı onlara dokunmaz. Test:
+`accept_stop.rs::the_ops_http_accept_loop_ends_on_its_closed_door`
+(TCP dinleyicisi + ops yüzeyi, sessiz bir scraper bağlıyken: 2 döngü
+bitti, 0 abort, < 0,9 sn, `stop()` sonrası ops portu bağlantı
+reddeder); mutasyonlar: kapalı-hata kolunu kaldırmak ya da kapıyı
+kapatmamak testi düşürür (döngü 1 sn sonra abort edilir).
+
 Elenenler: (1) *Döngüde select ile kapanış jetonu beklemek* — lint ve
 tek-await kuralı; döngü iki kaynağı çoğullamaya başlar. (2) *Kendine
 bağlanıp uyandırmak* (kapanışta listener'ın adresine bir TCP bağlantısı
@@ -2421,7 +2442,9 @@ yalnızca daha çok eşzamanlı kopuş ürettiği için yüzeye çıkardı.
 
 1. `stop()`: `registry.send(Shutdown).await` — registry posta kutusu
    (4096); registry onu tick'ten bağımsız boşaltır.
-2. `stop()`: `http.abort()`, `ticker.abort()` — beklemesiz. Ticker
+2. `stop()`: `http.abort()`, `ticker.abort()` — beklemesiz (B33'ten
+   beri ops yüzeyi abort edilmez: kapısı kapanır, döngüsü accept
+   döngüleriyle beklenir, yukarıda). Ticker
    görevinin göndericisi düşer, ama registry bir `Ticker` klonu tuttuğu
    için broadcast **açık kalır**; odalar artık tick almaz, yani kontrol
    kanallarını bir daha boşaltmaz.
@@ -2574,7 +2597,7 @@ dinleyici olmayan uzun ömürlü görevler):
 | Ekonomi servisi (`gsb-demo`, demo modülü başına bir) | sınırlı posta kutusu (64); her demo odası ve fabrika bir tutamaç klonu tutar; `ECONOMY` isteği `External` future'ı → RPC işçisi → `buy()`; istek başına kısa cevap görevi | son gönderici düşünce (F5'ten sonra: kaydedilince açık `Stop`) |
 | Ticker | — | `stop()` abort eder |
 | Metrik toplayıcı | sınırlı metrik kanalı | broadcast `Closed` (`stop()` bekler) |
-| HTTP ops accept + oda defteri | ops bağlantıları; defter kanalı | abort; defter göndericisi düşünce |
+| HTTP ops accept + oda defteri | ops bağlantıları; defter kanalı | `stop()` kapısını kapatır, döngü döner (B33; abort yalnız geri sigorta); defter göndericisi düşünce |
 | Registry, ölüm bekçileri, RPC işçileri | kendi posta kutusu; oda `JoinHandle`'ı; `request_timeout` (5 sn) | `Shutdown`; oda bitince; süre sınırı |
 
 Arena'da servis yok; MMO/war'ın `Realm`'i bir `Arc` veri, görev değil;
@@ -2607,8 +2630,9 @@ yapı taşı bunun için.
    tutar. **İsteğe bağlı:** kaydedilmeyen (ya da `Service`'i düşürülen)
    bir servis eski hayatını sürer; `ServerHandle` `stop()`'suz
    düşürülürse `Service`'ler düşer, istek gönderilmez.
-4. *`stop()` sırası* — `Shutdown` → HTTP abort → ticker abort →
-   dinleyiciler `close` → accept döngüleri (≤ 1 sn, B16) → odaların
+4. *`stop()` sırası* — `Shutdown` → HTTP ops kapısı `close` (B33) →
+   ticker abort → dinleyiciler `close` → accept döngüleri, ops'unki
+   dahil (≤ 1 sn, B16) → odaların
    bariyeri (≤ `SERVICE_STOP_GRACE` = 1 sn) → her servise istek (hepsine
    birden) → hepsi TEK bir son tarih (≤ 1 sn) altında join, aşan abort →
    metrik toplayıcı. En kötü ek süre 2 sn; in-tree'de odalar bir tick

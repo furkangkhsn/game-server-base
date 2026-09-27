@@ -290,6 +290,14 @@ max_detach_hold_secs = "off"
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü
   task (istek başına tam okuma + tek yanıt + kapanış) — aktör disiplini
   bozulmaz, select gerekmez
+- Kapanış (B33): accept, oyun dinleyicileriyle aynı `Door`'dan geçer
+  (B16). `ServerHandle::stop` kapıyı kapatır, bekleyen accept
+  `listener_closed` ile biter, döngü döner ve listener'ı düşürür (port
+  kapanır); `stop` döngüyü oyun dinleyicilerininkilerle aynı 1 sn'lik
+  son tarih altında bekler, abort yalnız geri sigortadır. `StopReport`
+  onu accept döngülerinden biri olarak sayar (`accept_loops_ended`,
+  `http_listen` açıkken +1). Kabul edilmiş bağlantılar kendi
+  görevlerinde yanıtlarını bitirir (DESIGN §9)
 - **Dışa açım yüzeyleri (E2, §6).** Aynı katlanmış rapor üç yoldan
   çıkar: `gsb-metric` log satırı (`MetricSink::Log`), `/metrics`
   (Prometheus, çekme; `prometheus` feature'ı, varsayılan açık) ve

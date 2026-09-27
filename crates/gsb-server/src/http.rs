@@ -15,6 +15,14 @@
 //! closes — so no multiplexed waits are needed anywhere and the actor
 //! discipline survives unchanged.
 //!
+//! Stop (BACKLOG B33): the accept runs through a [`Door`], the one every
+//! game listener closes (B16). `ServerHandle::stop` closes it, the
+//! pending accept ends with the listener-closed error, the loop returns
+//! and drops the listener; `stop` joins it with the game listeners'
+//! loops and aborts it only as the same backstop. Connections already
+//! accepted keep their own short-lived tasks (one response, bounded
+//! drain), as before.
+//!
 //! State discipline (no shared mutable state): the latest metrics report
 //! travels through the collector's `watch` channel (single writer;
 //! readers take a synchronous `borrow()` snapshot — latest-wins, a slow
@@ -25,6 +33,7 @@
 //! state and answers queries over its own channel.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,6 +46,7 @@ use gsb_core::channel::Mailbox;
 use gsb_core::id::RoomId;
 use gsb_core::metrics::MetricReport;
 use gsb_core::registry::RegistryMsg;
+use gsb_net::transport::{Door, is_listener_closed};
 
 use crate::config::RoomTemplate;
 
@@ -90,9 +100,17 @@ pub(crate) struct OpsHttp {
     room_template: RoomTemplate,
 }
 
-/// Spawn the ops surface: the bookkeeper plus the accept loop (whose join
-/// handle is returned; aborting it stops the surface — the listener drops
-/// with the aborted future).
+/// The running ops surface: its accept loop and the door that ends it.
+pub(crate) struct OpsSurface {
+    /// Closing it ends the accept loop (which drops the listener).
+    pub(crate) door: Arc<Door>,
+    /// The accept loop; it returns once `door` is closed.
+    pub(crate) task: JoinHandle<()>,
+}
+
+/// Spawn the ops surface: the bookkeeper plus the accept loop, which runs
+/// until the returned door is closed (the bookkeeper ends once the loop
+/// and its connection tasks have dropped their senders).
 pub(crate) fn spawn(
     listener: TcpListener,
     registry: Mailbox<RegistryMsg>,
@@ -100,7 +118,7 @@ pub(crate) fn spawn(
     period: Duration,
     room_template: RoomTemplate,
     configured_rooms: impl Iterator<Item = u64>,
-) -> JoinHandle<()> {
+) -> OpsSurface {
     let (rooms_tx, rooms_rx) = mpsc::channel::<RoomsMsg>(16);
     // Bounded (the project's backpressure discipline): the bookkeeper is a
     // trivial task, so 16 slots never fill at admin frequency; a full slot
@@ -114,18 +132,25 @@ pub(crate) fn spawn(
         period,
         room_template,
     };
-    tokio::spawn(accept_loop(listener, ops))
+    let door = Arc::new(Door::new());
+    let task = tokio::spawn(accept_loop(listener, ops, Arc::clone(&door)));
+    OpsSurface { door, task }
 }
 
-/// The accept loop. Its ONLY awaited source is `accept()` — everything else
-/// happens inside short-lived per-connection tasks.
-async fn accept_loop(listener: TcpListener, ops: OpsHttp) {
+/// The accept loop. Its ONLY awaited source is `accept()` (through the
+/// door, which can only end it) — everything else happens inside
+/// short-lived per-connection tasks. Returns on the closed door.
+async fn accept_loop(listener: TcpListener, ops: OpsHttp, door: Arc<Door>) {
     loop {
-        match listener.accept().await {
+        match door.admit(listener.accept()).await {
             Ok((stream, peer)) => {
                 debug!(%peer, "ops http connection");
                 let ops = ops.clone();
                 tokio::spawn(serve_one(stream, ops));
+            }
+            Err(e) if is_listener_closed(&e) => {
+                debug!("ops http door closed; accept loop ends");
+                return;
             }
             Err(e) => {
                 warn!(%e, "ops http accept error; backing off");

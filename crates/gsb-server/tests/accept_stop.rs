@@ -9,6 +9,10 @@
 //! an accept that is IN FLIGHT — a TLS and a WebSocket handshake a silent
 //! peer holds open — which the close ends too, so `stop` does not wait
 //! for the handshakes' own deadlines.
+//!
+//! The HTTP ops surface's accept loop has the same door (BACKLOG B33):
+//! it was the last accept loop `stop` aborted; the third test pins that
+//! it now ends on its closed door, counted with the other accept loops.
 
 use std::time::{Duration, Instant};
 
@@ -91,4 +95,44 @@ async fn an_accept_held_in_a_handshake_does_not_hold_the_stop() {
     assert_eq!(report, ALL_ENDED, "the close ended the handshakes too");
     assert!(took < STOP_WITHIN, "stop took {took:?}");
     drop((tls, ws));
+}
+
+/// The ops HTTP surface's accept loop ends on its closed door too (B33):
+/// `stop` counts it with the game listeners' loops, aborts none, and its
+/// listener is gone once `stop` returns. A silent scraper — connected,
+/// not one byte of request head — sits in its own connection task, not
+/// in the accept loop, so it does not hold the stop either.
+#[tokio::test]
+async fn the_ops_http_accept_loop_ends_on_its_closed_door() {
+    let cfg = gsb_server::Config {
+        room_count: 1,
+        listeners: Some(vec![ListenerEntry {
+            transport: ListenerTransport::Tcp,
+            bind: "127.0.0.1:0".into(),
+            tls_cert: None,
+            tls_key: None,
+        }]),
+        http_listen: "127.0.0.1:0".into(),
+        ..Default::default()
+    };
+    let handle = gsb_server::start_server(cfg).await.expect("server starts");
+    let ops = handle.http_addr.expect("the ops surface is on");
+    let scraper = TcpStream::connect(ops).await.expect("to the ops surface");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (report, took) = stop(handle).await;
+    assert_eq!(
+        report,
+        StopReport {
+            // The game listener's loop and the ops surface's.
+            accept_loops_ended: 2,
+            ..ALL_ENDED
+        },
+        "the ops accept loop ended by itself, no abort"
+    );
+    assert!(took < STOP_WITHIN, "stop took {took:?}");
+    assert!(
+        TcpStream::connect(ops).await.is_err(),
+        "the ops listener closed with its loop"
+    );
+    drop(scraper);
 }

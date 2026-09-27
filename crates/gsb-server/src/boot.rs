@@ -110,9 +110,10 @@ pub struct ServerHandle {
     /// The rooms' drop barrier: released once the registry and every room
     /// and shard task have ended (their teardown hooks ran).
     rooms_released: gsb_core::service::Released,
-    /// The HTTP ops-surface task, when `http_listen` was configured.
-    /// Aborted on stop (its listener drops with the aborted future).
-    http: Option<JoinHandle<()>>,
+    /// The HTTP ops surface, when `http_listen` was configured. `stop`
+    /// closes its door, which ends its accept loop (the listener drops
+    /// with it); abort is only the backstop, as for the listeners (B33).
+    http: Option<crate::http::OpsSurface>,
     /// The bound listeners, in config order. `stop` closes each, which
     /// ends its accept task (the pending `accept` returns the
     /// listener-closed error) and, for the rUDP transport, stops the

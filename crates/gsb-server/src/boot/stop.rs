@@ -1,6 +1,7 @@
 //! `ServerHandle::stop`: the shutdown cascade's entry point (DESIGN §9),
-//! the accept loops' graceful end (BACKLOG B16), and the game services'
-//! explicit stop after the rooms (BACKLOG F5, DESIGN §9.2).
+//! the accept loops' graceful end (BACKLOG B16; the ops HTTP surface's
+//! too since B33), and the game services' explicit stop after the rooms
+//! (BACKLOG F5, DESIGN §9.2).
 
 use std::time::Duration;
 
@@ -30,11 +31,13 @@ pub(crate) const SERVICE_STOP_GRACE: Duration = Duration::from_secs(1);
 /// services. Observability only: `stop` completes either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StopReport {
-    /// Accept loops that ended by themselves on their closed listener.
+    /// Accept loops that ended by themselves on their closed listener —
+    /// one per game listener, plus the HTTP ops surface's when
+    /// `http_listen` is set (its door closes with the listeners', B33).
     pub accept_loops_ended: usize,
     /// Accept loops still running after the one-second stop grace and
     /// aborted (a listener whose `close` does not end its accept). Zero
-    /// with the in-tree transports.
+    /// with the in-tree transports and the ops surface.
     pub accept_loops_aborted: usize,
     /// Whether every room and shard task had ended — its `on_shutdown` and
     /// `match_result` run — within the stop grace. `false` = the services
@@ -57,7 +60,8 @@ impl ServerHandle {
     /// its accept loop: the pending accept returns the listener-closed
     /// error and the loop returns (BACKLOG B16). `stop` waits for the loops
     /// up to one second in all and aborts only one that overran it.
-    /// The HTTP ops surface is aborted. Then the game's registered
+    /// The HTTP ops surface's door closes first and its accept loop is
+    /// waited for with the listeners' (BACKLOG B33). Then the game's registered
     /// services stop, AFTER the rooms (BACKLOG F5): `stop` waits (bounded)
     /// until every room and shard task has run its teardown, asks each
     /// service to stop, and waits for them under one deadline, aborting a
@@ -68,14 +72,16 @@ impl ServerHandle {
     /// the registry is tearing the existing ones down.
     pub async fn stop(self) -> StopReport {
         let _ = self.registry.send(RegistryMsg::Shutdown).await;
+        let mut accepts = self.accepts;
         if let Some(http) = self.http {
-            http.abort();
+            http.door.close();
+            accepts.push(http.task);
         }
         self.ticker.abort();
         for l in &self.listeners {
             l.close();
         }
-        let mut report = end_accepts(self.accepts, ACCEPT_STOP_GRACE).await;
+        let mut report = end_accepts(accepts, ACCEPT_STOP_GRACE).await;
         end_services(
             self.services,
             self.rooms_released,
