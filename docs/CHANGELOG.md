@@ -5,6 +5,33 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B40 — varsayılan idle-kick'in iki kusuru (`fix/b40-idle-kick`)
+
+`afk_action = leave_room` altında tavan üyeliği bitiriyordu ama: park
+edilen üyenin satırı bağlantının aksiyon kanalını tutuyordu (kareler
+parkta birikiyor, doğrudan JOIN ERROR 3 — sert ihlal); despawn edilen
+üyenin registry satırı canlı aidiyet kalıp soket kapanınca slotuyla
+sızıyordu. Sözleşme (RECONNECT §16): idle-kick'ten sonra bağlantı kendi
+`LEAVE_ROOM_REQ`'inden sonraki durumdadır — odada değil, oyun kareleri
+`ERROR 6` (race, sert ihlal değil), JOIN doğrudan (park varsa örtük
+resume, dolu ızgarada da); kick anında tel bayt bayt aynı (protokolde
+"odadan çıkarıldın, bağlantı açık" karesi yok — B42).
+
+- `ConnectionId::park_key()` (üst bit ayrılmış): canlı bağlantının geride
+  bıraktığı park bu anahtara taşınır ve iki kanal yarısı bırakılır —
+  taşıma ölümünün şekli.
+- Oda/shard → registry `RegistryMsg::LeaveConn(LeaveRequest)` (E6 kuyruk
+  kuralları + rapor önünde bekleme); registry despawn'ı E6'nın
+  `settle_ended`'ı ile, parkı kendi `detached` satırına taşıyarak
+  yerleştirir; bağlantıya `ConnIn::LeftRoom`.
+- Izgara cap'i kimliğin kendi parkını resume eden join'i reddetmez (taşıma
+  ölümünden sonra dolu ızgaraya dönüşü de düzeltir); başka odaya join,
+  bildirilmemiş bir bitişin slotunu geri verir.
+
+Testler 1192 → 1216 (`otlp` ile 1234); 7 test düzeltmeden önce kırmızı;
+~25 mutasyon yakalandı. Ebeveynin bağımsız mutasyonu (park anahtarının
+canlı kimlikle çakışması) 7'den fazla testi kırıyor.
+
 ## E6 — girdi-boşta tavanının eylemi: opt-in kapatma fiili (`core/e6-close-verb`)
 
 Tavan (`max_idle_input_secs`) oda ÜYELİĞİNİ bitiriyor, soketi açık
