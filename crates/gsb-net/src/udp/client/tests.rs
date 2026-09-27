@@ -266,36 +266,38 @@ async fn a_control_frame_after_a_quiet_spell_starts_a_fresh_liveness_clock() {
 /// RTO of silence. A client receiving a steady snapshot stream (and a
 /// fragmented one is steadier still) never saw one, so a lost control
 /// frame (a LEAVE, say) was never re-sent while the stream lasted.
+///
+/// The busy band is exact here (BACKLOG F25): the RAW frames are queued
+/// on the socket BEFORE each read, so no read waits at all — let alone a
+/// whole RTO — and the outstanding frame is made overdue by rewinding
+/// its clock, not by sleeping. (A peer streaming every 5 ms against a
+/// 300 ms wall-clock window proved the same only while the machine kept
+/// up with both.) Every read that returns a datagram must run the pass.
 #[tokio::test]
 async fn a_busy_game_band_does_not_starve_the_retransmit() {
+    const READS: u64 = 3;
     let (mut c, sink) = detached().await;
     c.send_frame(gsb_protocol::op::base::ERROR, Bytes::from_static(&[9, 0]))
         .await
         .expect("send");
-    // The peer never ACKs, but streams RAW frames every 5 ms: no read
-    // ever waits a whole RTO.
+    // The peer never ACKs, but the game band is never idle.
     let me = c.local_addr().expect("bound");
     let raw = encode_raw(&FrameBody::new(1000, Bytes::from_static(&[1])));
-    let stream = tokio::spawn(async move {
-        for _ in 0..80 {
-            sink.send_to(&raw, me).await.expect("stream");
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        sink
-    });
-    let until = Instant::now() + Duration::from_millis(300);
-    let mut frames = 0;
-    while Instant::now() < until {
-        if let Ok(Some(_)) = c.recv_frame(Duration::from_millis(100)).await {
-            frames += 1;
-        }
+    for _ in 0..READS {
+        sink.send_to(&raw, me).await.expect("queue a RAW frame");
     }
-    let _sink = stream.await.expect("stream task");
-    assert!(frames > 10, "the stream kept the socket busy ({frames})");
-    assert!(
-        c.stats.retrans_out >= 2,
-        "the outstanding control frame must be re-sent while the game band \
-         is busy (retrans_out = {})",
-        c.stats.retrans_out
-    );
+    for read in 1..=READS {
+        let outstanding = c.out_retransmit.front_mut().expect("still un-ACKed");
+        outstanding.2 -= RETRANSIT_RTO;
+        let got = c
+            .recv_frame(Duration::from_secs(5))
+            .await
+            .expect("recv")
+            .expect("a queued RAW frame, without waiting");
+        assert_eq!(got.op, 1000, "the game band's frame");
+        assert_eq!(
+            c.stats.retrans_out, read,
+            "the overdue control frame must be re-sent on every busy read"
+        );
+    }
 }
