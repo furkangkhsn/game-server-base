@@ -153,15 +153,15 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F1 `MovementSystem` birim testleri | ROADMAP:432 |
 | F2 Metrik test kuyrukları (`metrics_dropped` doğru yol testleri, `bytes_out` yalnız smoke) — tetik: metrik kanalı doygunluğu görülürse | ROADMAP:391-400 |
 | F4 Demo `AoiRoomExt`/`TeamRoomExt`/`SectorRoomExt`'te `with_economy` yok (sunucu `set_economy` ile dolanıyor) | GAME-MODULE:277 |
-| F6 Alan etkili sorgular `local ∪ borrowed`'u oyun elle birleştiriyor (kapsam notu) | ROADMAP:347 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 | F22 `input_rate_limited` için bağlantıya atıflı ilk-beş listesi (`actions_dropped_top` gibi) — bugün yalnız bağlantı başına bir `warn`; toplayıcıda bağlantı başı tablo + E2 aile tablosu | ihtiyaç görülünce | SECURITY §3.4 "Kalan yüzey" |
 | F25 Statik taramada riskli görünen ama 60 yüklü tam koşuda düşmeyen gerçek saatli testler (rpc zaman aşımı süpürmesi 30 ms payı; `boot::stop` took<2×grace; `accept_stop` <900 ms; udp busy-band; `tests/input_rate` 1100 ms; slow_reader'lar; e2e ticket) — CONTRIBUTING kuralına göre çevrilecek | düşerse | F23 turu |
+| F26 MMO'nun `Combat::attack` / `apply_remote` kaynağı "yerel, değilse ödünç"ü elle yazıyor (seam varken doğrusal dünya sorgusu) — `Seam::find`'a çevrilebilir (ihtiyaç olunca) | KIT-ARCHITECTURE §10 "F6" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; E9 kararla kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; F6 kendi turunda, E9 kararla kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

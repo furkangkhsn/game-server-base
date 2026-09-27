@@ -5,6 +5,37 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F6 — seam ötesi alan sorgusu: `local ∪ lent` kit'te (`kit/f6-area-query`)
+
+- **Kit'in yapı taşı (opt-in, varsayılan değişmedi):** `Seam::find`
+  (tek wire), `Seam::area` (oyunun yüklemi) ve `Seam::within` (disk,
+  sınır dahil) — her wire BİR kez, wire sırasıyla, oyunun tek görünüm
+  tipiyle (`SeamView<V>`: kendi entity'den ya da ödünç kayıttan) ve
+  nerede yaşadığıyla (`Holder::Local(entity)` / `Holder::Lent { lender }`).
+  Öncelik seam'inki: yerel (dünya sorgusunun bulduğu) > devreden (yeni
+  sahip, ayrıldığı kayıt — D) > ödünç (iki kiralayanlı wire'da düşük
+  indeks — `emit`'in rotası); takım ithalatı (W1) bulunmaz. Maliyet:
+  sahip tablosu + ödünç kayıtlar üzerinde doğrusal geçiş, isabetlerin
+  yerinde sıralanması; çağrı başına tahsis yok.
+- **`lent_iter` düzeltmesi:** eski sahip despawn edeceği kopyayı hâlâ
+  export ederken yeni sahip de ödünç veriyorsa (ikisine komşu üçüncü
+  shard — 8-komşuluk) wire'ı iki kez veriyordu (gerçek aktörlerde
+  gözlendi); artık yalnız düşük kiralayanınkini verir.
+- **Savaş benimsedi:** saldırı ve uzak darbenin kaynak denetimi
+  `Seam::find` + tek görünüm (`Foe`) ile tek denetim; hedefler ve retler
+  aynı (önce kilitlenen test), tel dokunulmadı. MMO olduğu gibi (BACKLOG F26).
+- Envanter: hiçbir demo seam ötesi ALAN sorgusu yapmıyordu (savaşın
+  ele geçirmesi haritayla kaçınıyor); ikisi de nokta biçimini ("yerel,
+  değilse ödünç") elle yazıyordu.
+
+Testler 1225 → 1234 (`otlp` ile 1252); gerçek dört shard aktörü testi
+dahil; kit'te 13 mutasyondan 11'i kırıldı, 1'i eşdeğer, 1'i testin
+güçlendirilmesiyle kırıldı; savaşta eski kodda 8/8, yeni kodda 9/10
+(sağ kalan gözlemlenemez: `strike` ayakta olmayanı zaten reddeder).
+Ebeveyn doğrulaması: `within`'in `dy` terimini düşüren ve ödünç
+`Foe`'nun can denetimini silen iki bağımsız mutasyon da kırıldı.
+Ayrıntı: KIT-ARCHITECTURE §4.6 "F6 eklemeleri", §10 "F6"; CROSS-SHARD §4b.
+
 ## Küçük paket 4 — B44, B45, F24 (`misc/small-bundle-4`)
 
 - **B44 — başlangıç odaları her join'in önünde.** `room_count` odalarının
