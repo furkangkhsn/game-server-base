@@ -5,6 +5,42 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 5 — "her şeyi saymalıyız": B72–B74 (`metrics/count-everything-5`)
+
+- **B72 — takım hub'ının reddedilen röleleri:** hub (registry'nin içinde)
+  hedef shard'a kuyruklayamadığı import'u yalnız `team_hub_summary` log
+  penceresinde, DOLU ve KAPALI karışık (`relay_drops`) sayıyordu. Artık
+  sebebe göre ayrı ve metrik yolunda: `on_export` export'un reddettiklerini
+  döndürür, registry kümülatif toplamı tutar (hub odayla gider) ve ret
+  olduğunda örneğini hemen gönderir (röle tablo değiştirmez). Registry
+  satırında `team_relays_dropped_{full,closed}=`,
+  `gsb_registry_team_relays_dropped_{full,closed}_total`. Loadgen teli
+  **GSMW**.
+- **B73 — `udp_frames_drained` daraldı:** `batch.len()` sayıyordu, aynı
+  kanaldan gelen demux ACK taşıması (`UDP_ACK`) da giriyordu. Artık yalnız
+  oturumun kareleri (oyun + kontrol), `udp_frames_unsent` gibi; ad korundu,
+  HELP değişti.
+- **B74 — kapanan kapı ve rUDP accept tarafı:** el sıkışan kapının
+  (WS/TLS/QUIC) `close`'unun kestiği el sıkışmalar
+  (`handshakes_cut_closed`) ve kuyrukta attığı bitmiş uç noktalar
+  (`handshakes_unaccepted_closed`) sayılır; intake'in son örneği kapının
+  oturmasını bekler (`intake/close.rs`, `settle`, 1 sn sınırlı). rUDP:
+  accept tarafı gitmişken doğrulanan oturum
+  (`udp_sessions_dropped_accept_gone`) ve kabulü gitmiş ama kuyruktayken
+  dinleyici kapanan oturum (`udp_sessions_unaccepted_closed`; kuyruk öğesi
+  `Queued` düşerken kendini sayar). Loadgen teli **GSMX**.
+- Altın metinler yalnız yeni aileler ve bir HELP kadar değişti;
+  `otlp::cross` yeşil. İstemci teli değişmedi.
+- Ajanın değerlendirmesi: B75 ve B80 ile belgelenmiş, gerçekten
+  sayılamayan uçlar (süreç inerken toplayıcı gitmiş, panikleyen görevin
+  içeriği — B70 —, 1 sn `settle` zaman aşımı) dışında motorun "her kaybı
+  say" taraması tamam. B81 yalnız demo.
+
+Testler 1405 → 1412 (`otlp` ile 1423 → 1430); her madde önce düştü,
+mutasyonla doğrulandı. Ebeveyn doğrulaması: kapalı ret sayısını dolu
+sayaca katmak testi düşürdü. Not: otlp koşusunda yük altında
+`loadgen_smoke` bir kez düştü (F25'e eklendi).
+
 ## B71 — duran sharded odada resume hemen yanıtlanıyor (`core/b71-resume-stop`)
 
 - **Hata (gecikme):** `dispatch_resume` shard cevaplarını toplama kanalına
