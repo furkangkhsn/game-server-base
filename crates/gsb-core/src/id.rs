@@ -3,8 +3,41 @@
 use std::fmt;
 
 /// Unique id of a client connection. Assigned by the accept loop.
+///
+/// The top bit is reserved: the accept loop mints densely from 1 and
+/// never reaches it, and the core uses it for a PARK KEY — the session
+/// id a parked entity is re-keyed to when its still-live session leaves
+/// it behind (see [`Self::park_key`]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ConnectionId(pub u64);
+
+/// The reserved top bit of a [`ConnectionId`]: set = a park key.
+const PARK_BIT: u64 = 1 << 63;
+
+impl ConnectionId {
+    /// The park key of this connection: the session id a room re-keys a
+    /// member's PARKED row to when the room ends the membership on its
+    /// own while the connection stays open — the input-idle ceiling
+    /// under `afk_action = leave_room` (BACKLOG B40,
+    /// `docs/RECONNECT.md` §16).
+    ///
+    /// From then on the park is exactly what a transport death leaves
+    /// behind — a parked row whose session is gone — only under this key
+    /// instead of the live connection's own id, so nothing the live
+    /// connection does next (a leave, a fresh join, its own close) can
+    /// reach the park, and the registry's row for the park and its row
+    /// for the connection are two rows. Deterministic (no shared counter
+    /// anywhere): one park per key per room is enforced where the key is
+    /// taken.
+    pub fn park_key(self) -> Self {
+        Self(self.0 | PARK_BIT)
+    }
+
+    /// Whether this id is a [`Self::park_key`] (never a live connection).
+    pub fn is_park_key(self) -> bool {
+        self.0 & PARK_BIT != 0
+    }
+}
 
 /// Stable identity of a PLAYER inside a room (Faz 2,
 /// `docs/TRAIT-ARCHITECTURE.md` §5). Minted by the GAME LOGIC at a
@@ -45,7 +78,12 @@ pub type EntityId = u64;
 
 impl fmt::Display for ConnectionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "c{}", self.0)
+        if self.is_park_key() {
+            // The session that left the park behind, readable in logs.
+            write!(f, "c{}+park", self.0 & !PARK_BIT)
+        } else {
+            write!(f, "c{}", self.0)
+        }
     }
 }
 
