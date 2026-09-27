@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1131** (1131/1131 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1161** (1161/1161 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **E2 — dışa açım katmanı** (OPS §6) — toplayıcının `emit`'inde
+Son tur: **E1 + F21 — girdi hız sınırı (opt-in)** (SECURITY §3.4) —
+bağlantı başına token bucket, varsayılan kapalı, sayı oyunun/config'in;
+aşan girdi odaya girmeden düşer, sayılır, ihlal değil. `conn_action = 0`
+paniği kapandı.
+Önceki tur: **E2 — dışa açım katmanı** (OPS §6) — toplayıcının `emit`'inde
 tek dikiş (`Exporter`); Prometheus `prometheus` feature'ında (varsayılan),
 OTLP/HTTP itmesi `otlp` feature'ında (kapalı, `[metrics.otlp]`); iki
 exporter tek aile tablosunu yürüyor; yeni bağımlılık yok.
@@ -704,17 +708,15 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
     hard ihlal — mevcut ağırlıklı ömür bütçesi, yeni mekanizma yok.
     Kilit: `violation.rs::undefined_game_band_opcode_is_a_hard_violation`
     + tersi `registered_game_band_opcode_keeps_its_race_class`.
-  - [ ] **Ürün kararı — geçerli girdinin HACMİ.** Per-tick çekme bütçesi
-    (16/bağlantı/tick ≈ 480/sn) **odayı** sınırlar, istemcinin gönderme
-    hızını değil; bütçeyi aşan girdi göndericinin kendi bounded
-    kanalında birikir ve taşarsa **kendi** girdisini düşürür — sayılıp
-    ona atfedilerek (`gsb_net_actions_dropped_total` +
-    `actions_dropped_top`). Yani hasar kendine dönüktür ve zaten
-    ölçülür. Bunun üstüne bir hız limiti koymak bir *sayı* seçmek
-    demektir (saniyede kaç aksiyon meşru?) — bu bir oynanış
-    parametresidir, ve SECURITY §3'ün pre-auth heartbeat'leri
-    bilerek bütçelememe gerekçesiyle (dürüst-ama-hatalı istemciyi
-    zorla düşürmek) aynı riski taşır.
+  - [x] **Kapandı — geçerli girdinin HACMİ (E1).** Kullanıcı kararı
+    (2026-09-27): opt-in yapı taşı. `RoomConfig::input_rate` bağlantı
+    başına token bucket açar (varsayılan KAPALI); sayıyı oyun
+    (`GameModule::input_rate`) ya da config (`input_rate_hz` /
+    `input_burst`, oda başına `[rooms.<id>]`) verir. Aşan girdi bağlantı
+    aktöründe, odaya girmeden düşer ve `input_rate_limited` sayılır;
+    ihlal DEĞİL (§3.2 HEARTBEAT gerekçesi: dürüst-ama-hızlı istemci
+    kopmamalı). Per-tick çekme bütçesi yerinde: o girenler arasında
+    adalet, bu ne gireceği. Ayrıntı SECURITY §3.4.
   - [x] **Kapandı — post-auth HEARTBEAT_ACK amplifikasyonu (bağlantı
     sınırları turu).** Kullanıcı kararı: aynı §3.2 eşiği auth sınırının
     ötesine taşındı (yeni makine yok). Semantik endişesi ölçüldü ve

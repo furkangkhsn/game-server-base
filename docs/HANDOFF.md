@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1131 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1161 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -23,9 +23,11 @@ tanımı) ve varsayılan KAPALI bir TAVAN sunuyor
 `on_disconnect`'i veriyor, base kendiliğinden despawn etmiyor. Detach /
 park / bot etkileşimi: `docs/RECONNECT.md` §16.
 
-**Bir madde hâlâ açık** — geçerli girdiye hacim limiti. Bir oynanış
-parametresi seçmeyi ister (mevcut bir mekanizmayı simetrik tamamlamayı
-değil); tek başına verme, ROADMAP'teki gerekçeleri oku.
+**Dördüncüsü de kapandı** (CHANGELOG "E1 + F21"): geçerli girdiye hacim
+limiti opt-in bir yapı taşı olarak var — bağlantı başına token bucket
+(`RoomConfig::input_rate`, varsayılan KAPALI; sayı oyunun ya da
+config'in). Aşan girdi bağlantı aktöründe düşer, `input_rate_limited`
+sayılır, ihlal değildir. SECURITY §3.4.
 
 O turun açık yan bulgusu (`step_fine_hist` shard aktöründe hiç
 yazılmıyor) **kapandı** — bkz. CHANGELOG "park sızıntısı + shard metrik
@@ -145,6 +147,14 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**E1 + F21 tamam** (SECURITY §3.4, CHANGELOG "E1 + F21"): kova bağlantı
+aktöründe (`conn/gate.rs`); sayı odanın config'inden registry join'de
+`registry::Seat` ile damgalanır (API: `SpawnPlayer` cevabı artık `Seat`).
+Oyun varsayılanı `GameModule::input_rate()`; tek şablon
+`Config::room_template_for(...)` — başlangıç, `/rooms/open`,
+`ServerHandle::room_config`. Aksiyon kanalı her yerde
+`RoomConfig::action_channel()` ile kurulur (0 → 1 yuva). Loadgen teli GSME.
 
 **E2 tamam** (OPS §3/§6, DESIGN §12, CHANGELOG "E2"): dışa açım
 `MetricsCollector::emit`'te — `with_exporters` ile kurulan `Exporter`'lar
@@ -577,6 +587,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1131 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1161 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

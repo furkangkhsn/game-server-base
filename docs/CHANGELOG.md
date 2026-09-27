@@ -5,6 +5,38 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## E1 + F21 — girdi hız sınırı (opt-in) ve sıfır aksiyon kapasitesi (`core/e1-input-rate`)
+
+Auth-sonrası GEÇERLİ girdinin saniye başına hacmi sınırsızdı; tek sınır
+odanın per-tick çekme bütçesiydi (odayı korur, göndericiyi değil).
+Kullanıcı kararı (2026-09-27): opt-in yapı taşı.
+
+- `RoomConfig::input_rate: Option<InputRate>` (`InputRate { per_sec,
+  burst }`; `None` = KAPALI, varsayılan): bağlantı başına token bucket.
+  Bağlantı aktöründe, protokol kontrollerinden sonra ve odanın kanalına
+  `try_send`'den önce uygulanır (`conn/gate.rs`): aşan girdi odaya hiç
+  girmez, DÜŞER, `input_rate_limited` sayılır, ihlal DEĞİL. Yalnız kayıtlı
+  oyun-bandı opcode'ları; kontrol bandı ve `RPC_REQ` ölçülmez.
+- Sayı odanın: registry join'de odanın config'inden damgalar (yeni
+  `registry::Seat { entity, actions, input_rate }`). Kova bağlantınındır:
+  join yeniden ayarlar, doldurmaz (leave/join döngüsü burst satın alamaz).
+- Saat `ticker::now()`; O(1), tahsissiz, zamanlayıcısız (nano-jeton, u128).
+- Sayaç yolu: `ConnSample` → `NetReport` → satır `input_rate_limited=` →
+  aile tablosu (Prometheus `gsb_net_input_rate_limited_total`, OTLP
+  `gsb_net_input_rate_limited`) → loadgen teli **GSME**.
+- Config: `input_rate_hz` / `input_burst`, düz ve `[rooms.<id>]`; katman:
+  çekirdek (kapalı) → oyunun sayısı (`GameModule::input_rate()`) → düz →
+  `[rooms.<id>]`; `input_rate_hz = 0` kapalı; burst yazılmazsa bir
+  saniyelik.
+- **F21:** `conn_action = 0` artık oda aktörünü panikletmiyor — dört kanal
+  kurulumu `RoomConfig::action_channel` üstünden `max(1)`'e kıstırılıyor;
+  sunucu `0`'ı başlatmada reddediyor (yeri adlandırarak).
+- Varsayılan davranış ve istemci tel baytı değişmedi.
+
+Testler 1131 → 1161 (`otlp` ile 1179); ajanın 46 mutasyonu yakalandı;
+rebase E2'nin aile tablosuna taşıdı (ajan). Ebeveynin bağımsız mutasyonu
+(kova boşken de kabul) 6 testi kırıyor.
+
 ## E2 — dışa açım katmanı: takılabilir exporter'lar (`ops/e2-exporters`)
 
 Kullanıcı kararı (BACKLOG E2): içeride ucuz toplama aynı kalır, dışa açım

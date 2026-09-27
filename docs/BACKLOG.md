@@ -118,7 +118,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 
 | Madde | Tetikleyici | Kaynak |
 |---|---|---|
-| D1 Geçerli auth-sonrası girdiye saniye başı hacim sınırı | kullanıcı kararı (E1) | ROADMAP:576-614, HANDOFF:26 |
+| ~~D1 Geçerli auth-sonrası girdiye saniye başı hacim sınırı~~ **KAPANDI** (E1 ile, opt-in) | ✅ | SECURITY §3.4 |
 | D2 mTLS | — (ticket auth v1 için yeterli) | SECURITY:267 |
 | D3 TLS 0-RTT / resumption ayarı | B8 ile | SECURITY:268 |
 | D4 Admin HTTP auth/TLS | = B17 | SECURITY:269 |
@@ -134,7 +134,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 
 | Madde | Kaynak |
 |---|---|
-| E1 ~~Geçerli girdi hacim sınırı~~ **Karar (2026-09-27): opt-in yapı taşı** — bağlantı başına token bucket; varsayılan KAPALI, sayıyı oyun/config verir, aşan girdi düşer ve sayılır → **SIRADA** | HANDOFF:26, ROADMAP "Ürün kararı — geçerli girdinin HACMİ" |
+| E1 ~~Geçerli girdi hacim sınırı~~ **Karar (2026-09-27): opt-in yapı taşı** — bağlantı başına token bucket; varsayılan KAPALI, sayıyı oyun/config verir, aşan girdi düşer ve sayılır → **KAPANDI (E1 turu):** `RoomConfig::input_rate` + `input_rate_hz`/`input_burst` + `GameModule::input_rate`; SECURITY §3.4 | HANDOFF:26, ROADMAP "Ürün kararı — geçerli girdinin HACMİ" |
 | E2 ~~`metrics` fasadı mı, elle render mı~~ **Karar (2026-09-27): dışa açım katmanı** — içeride ucuz toplama aynı kalır; dışa açım takılabilir exporter'lara devredilir (Prometheus mevcut, OTLP eklenir, gerekirse `metrics` fasadı), her biri feature arkasında (OPS §6'daki "dördüncü lavabo" yönü) → **KAPANDI (E2 turu):** `Exporter` dikişi + tek aile tablosu; Prometheus (`prometheus`, vars.), OTLP/HTTP itme (`otlp`, kapalı); yeni bağımlılık yok | OPS §6 |
 | E3 ~~rUDP'yi deneysel'den çıkarmak~~ **Karar (2026-09-27):** şimdilik DENEYSEL kalır; hedef zamanla DTLS destekli, tam teşekküllü bir OYUN protokolü (QUIC'in yerini tutmaz: QUIC stream TCP yerine yazılmış, datagram'ı ek) — ileride bir **rUDP sertleştirme paketi** (B1–B5, B7) açılacak | ROADMAP, SECURITY:19 |
 | E4 ~~Koordinat formatı~~ **Karar (2026-09-27): oyunun kararı — kapandı.** Kit her formatı taşır (`RecordCodec`, A31); demoların `sint32`'si yalnız onların seçimi; motorda iş yok | ROADMAP "Koordinat formatı" |
@@ -154,9 +154,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
-| F21 **SIRADA (E1 turuyla)** — `conn_action = 0` (düz ya da oda başına) oda aktörünü join'de panikletir (`mpsc::channel(0)`, `room/actor/control/join.rs`); `room_control` `max(1)` ile korunuyor — yüklemede reddetmek ya da kıstırmak | B18 bulgusu |
+| F22 `input_rate_limited` için bağlantıya atıflı ilk-beş listesi (`actions_dropped_top` gibi) — bugün yalnız bağlantı başına bir `warn`; toplayıcıda bağlantı başı tablo + E2 aile tablosu | ihtiyaç görülünce | SECURITY §3.4 "Kalan yüzey" |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18 ve B23 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2 ve E1+F21 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 
