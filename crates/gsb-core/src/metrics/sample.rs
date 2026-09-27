@@ -349,6 +349,20 @@ pub struct ConnSample {
     /// reading, and gets the close without the reason — delta since the
     /// last flush (B57).
     pub close_notices_dropped: u64,
+    /// Inbound frames this actor never processed because the SERVER ended
+    /// the session first, by kind, delta since the last flush (B60): the
+    /// frames still in its inbox when a server-decided end (a pump's or
+    /// the registry's verdict, a room's kick or idle close, a destroyed
+    /// room, the stop, the violation budget, a dead outbound path) stopped
+    /// the reading, and the frame that crossed the pre-auth budget. An RPC
+    /// request here is never answered — a term of the RPC ledger
+    /// (`docs/RPC-CONTROL-PLANE.md` §8.3); game-band frames and the other
+    /// base-band (control) frames apart (see [`crate::conn::FrameKind`]).
+    /// Inbox leftovers are NOT in [`Self::frames_in`] (the actor counts a
+    /// frame when it takes it); the crossing frame is (it was taken).
+    pub requests_unprocessed: u64,
+    pub actions_unprocessed: u64,
+    pub control_frames_unprocessed: u64,
     /// Game-band actions this actor forwarded into an already CLOSED
     /// action channel, delta since its last flush (B51): the room had
     /// ended the membership itself (a kick, the input-idle ceiling, the

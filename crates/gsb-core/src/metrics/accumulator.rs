@@ -79,6 +79,11 @@ pub struct MetricAccumulator {
     /// channel and of the close notices dropped on a full one (B57).
     conn_frames_out_closed: u64,
     conn_close_notices_dropped: u64,
+    /// Summed deltas of the inbound frames the connection actors never
+    /// processed because the server ended their sessions, by kind (B60).
+    conn_requests_unprocessed: u64,
+    conn_actions_unprocessed: u64,
+    conn_control_frames_unprocessed: u64,
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
@@ -181,6 +186,15 @@ impl MetricAccumulator {
                 self.conn_close_notices_dropped = self
                     .conn_close_notices_dropped
                     .saturating_add(c.close_notices_dropped);
+                self.conn_requests_unprocessed = self
+                    .conn_requests_unprocessed
+                    .saturating_add(c.requests_unprocessed);
+                self.conn_actions_unprocessed = self
+                    .conn_actions_unprocessed
+                    .saturating_add(c.actions_unprocessed);
+                self.conn_control_frames_unprocessed = self
+                    .conn_control_frames_unprocessed
+                    .saturating_add(c.control_frames_unprocessed);
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }

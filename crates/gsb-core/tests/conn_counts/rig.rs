@@ -37,8 +37,22 @@ impl Conn {
     /// The same, with a metrics channel of `metrics_cap` events; also a
     /// spare sender on it, for a test that fills the channel itself.
     pub fn open_with(out_cap: usize, metrics_cap: usize) -> (Self, mpsc::Sender<MetricsEvent>) {
+        Self::build(out_cap, metrics_cap, 64)
+    }
+
+    /// A fresh connection whose inbox holds `inbox_cap` messages (more
+    /// than the pre-auth frame budget fits in without the test parking).
+    pub fn open_deep(inbox_cap: usize) -> Self {
+        Self::build(64, 64, inbox_cap).0
+    }
+
+    fn build(
+        out_cap: usize,
+        metrics_cap: usize,
+        inbox_cap: usize,
+    ) -> (Self, mpsc::Sender<MetricsEvent>) {
         let (reg_tx, registry) = channel::<RegistryMsg>(64);
-        let (inbox, inbox_rx) = channel::<ConnIn>(64);
+        let (inbox, inbox_rx) = channel::<ConnIn>(inbox_cap);
         let (out_tx, out) = channel::<FrameBatch>(out_cap);
         let (metrics_tx, metrics) = mpsc::channel::<MetricsEvent>(metrics_cap);
         let spare = metrics_tx.clone();
@@ -185,6 +199,9 @@ fn add(t: ConnSample, s: ConnSample) -> ConnSample {
         heartbeats_throttled_authed: t.heartbeats_throttled_authed + s.heartbeats_throttled_authed,
         frames_out_closed: t.frames_out_closed + s.frames_out_closed,
         close_notices_dropped: t.close_notices_dropped + s.close_notices_dropped,
+        requests_unprocessed: t.requests_unprocessed + s.requests_unprocessed,
+        actions_unprocessed: t.actions_unprocessed + s.actions_unprocessed,
+        control_frames_unprocessed: t.control_frames_unprocessed + s.control_frames_unprocessed,
         ..s
     }
 }

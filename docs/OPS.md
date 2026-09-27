@@ -364,7 +364,8 @@ max_detach_hold_secs = "off"
   (RPC-CONTROL-PLANE §8.3): `rpc_sent = req_local + req_ext + Σ req_rej_*
   + req_refused + req_unread + req_unbound + requests_dropped_closed +
   requests_dropped_full + requests_no_room` — her istek tam olarak bir
-  terimde.
+  terimde (sayım turu 3'ten beri `+ requests_unprocessed`, B60, ve rUDP'de
+  taşımanın terimi, B58 — §8.3).
 - **Net kapsamı: heartbeat kısmasının fazlası (B56).** Saniyede birden
   fazla gelen heartbeat'in cevaplanmayanları (SECURITY §3.2) faza göre:
   kimlik doğrulamadan önce `heartbeats_throttled_preauth` (güvenlik
@@ -392,6 +393,31 @@ max_detach_hold_secs = "off"
   istemci kapanışı gerekçesiz alır. Satırda `hb_throttled_authed=`'dan
   sonra `frames_out_closed= close_notices_dropped=`; loadgen telinde
   `GSMO`; `RESULT`'ta aynı anahtarlar.
+- **Net kapsamı: sunucu kararlı sonun işlenmeden bıraktığı kareler
+  (B60).** Sunucu oturumu kendisi bitirdiğinde (pompanın ya da
+  registry'nin hükmü, odanın atması/boşta kapanışı, yok edilen oda,
+  sunucu durması, ihlal bütçesi, ölü çıkış yolu) aktör gelen kutusunu
+  okumayı bırakır; okuyucunun hükmün ARKASINA kuyruğa koyduğu kareler
+  hiç işlenmez. Aktör çıkarken kutuyu kapatır (`close()` — yeni gönderim
+  olmaz, boşaltma kapasiteyle sınırlı) ve kalanları türüne göre sayar;
+  ölü çıkış yolunun `adopt_pending_close` taramasında gördüğü kareler de
+  (önceden sessizce atılıyordu) ve pre-auth bütçesini AŞAN kare (sayılır
+  ama işlenmez) aynı sayaçlarda: `requests_unprocessed`
+  (`gsb_net_requests_unprocessed_total` — RPC isteği, hiç yanıtlanmaz;
+  RPC defterinin terimi), `actions_unprocessed`
+  (`gsb_net_actions_unprocessed_total` — oyun bandı, kayıtlı olsun
+  olmasın), `control_frames_unprocessed`
+  (`gsb_net_control_frames_unprocessed_total` — istek dışındaki temel
+  bant: AUTH, JOIN, LEAVE, HEARTBEAT, tanımsız temel opcode). Tür ayrımı
+  tek yerde: `gsb_core::conn::FrameKind`. **Anlam notu:** `frames_in`
+  aktörün kutudan ALDIĞI kareyi sayar; kutuda kalanlar `frames_in`'de
+  YOK, bütçeyi aşan kare ise var (alındı, işlenmedi). İstemci-tarafı son
+  (okuyucunun `Closed`'u son mesajıdır) arkasında kare bırakmaz; boşaltma
+  yine koşar (boşken tek `try_recv`). Kutu kapandıktan sonra okuyucu
+  pompasının göndermeye çalıştığı kare taşıma tarafındadır (bkz. aşağıda
+  "sayılmayan"). Satırda `close_notices_dropped=`'dan sonra
+  `requests_unprocessed= actions_unprocessed= control_frames_unprocessed=`;
+  loadgen telinde `GSMQ`; `RESULT`'ta aynı anahtarlar, her satırda.
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:

@@ -120,7 +120,7 @@ const fn net(
 /// The net scope: wire traffic aggregated over all connections (the
 /// per-connection attribution lives in `actions_dropped_top` and the
 /// per-actor log lines, not in this aggregate).
-pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 17] = [
+pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 20] = [
     net(
         "gsb_net_bytes_in_total",
         "Wire bytes received over all connections (frame bodies), cumulative.",
@@ -210,5 +210,21 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 17] = [
         "gsb_net_close_notices_dropped_total",
         "Best-effort close notices (ERROR 9/14 of the ends that never wait) dropped on a full outbound channel (the client was not reading), cumulative.",
         |n| n.close_notices_dropped,
+    ),
+    // B60: what a server-decided end left unprocessed, by kind.
+    net(
+        "gsb_net_requests_unprocessed_total",
+        "RPC requests a connection received but never processed because the server ended its session first (left in its inbox, or the frame that crossed the pre-auth budget; never answered), cumulative.",
+        |n| n.requests_unprocessed,
+    ),
+    net(
+        "gsb_net_actions_unprocessed_total",
+        "Game-band frames a connection received but never processed because the server ended its session first (left in its inbox, or the frame that crossed the pre-auth budget), cumulative.",
+        |n| n.actions_unprocessed,
+    ),
+    net(
+        "gsb_net_control_frames_unprocessed_total",
+        "Base-band frames other than RPC requests (auth, join, leave, heartbeat, undefined) a connection received but never processed because the server ended its session first, cumulative.",
+        |n| n.control_frames_unprocessed,
     ),
 ];

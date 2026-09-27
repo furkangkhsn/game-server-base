@@ -158,6 +158,8 @@ impl MetricReport {
              requests_dropped_full={} requests_no_room={} \
              hb_throttled_preauth={} hb_throttled_authed={} \
              frames_out_closed={} close_notices_dropped={} \
+             requests_unprocessed={} actions_unprocessed={} \
+             control_frames_unprocessed={} \
              metrics_dropped={} server_closes={}{}",
             n.bytes_in,
             n.bytes_out_room,
@@ -176,6 +178,9 @@ impl MetricReport {
             n.heartbeats_throttled_authed,
             n.frames_out_closed,
             n.close_notices_dropped,
+            n.requests_unprocessed,
+            n.actions_unprocessed,
+            n.control_frames_unprocessed,
             self.metrics_dropped,
             n.server_closes.total(),
             // One stable key per reason (`server_close_<reason>=N`, zeros

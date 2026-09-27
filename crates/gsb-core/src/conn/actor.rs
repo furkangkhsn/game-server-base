@@ -24,6 +24,7 @@ mod frame;
 mod input;
 mod lifecycle;
 mod room;
+mod unprocessed;
 mod violation;
 
 /// The connection actor.
@@ -80,6 +81,13 @@ pub struct ConnectionActor {
     /// after; each also a race-class violation), delta since the last
     /// flush (B55; see `ConnSample::requests_no_room`).
     m_requests_no_room: u64,
+    /// Inbound frames this actor never processed because the server
+    /// ended the session first — left in the inbox, or the frame that
+    /// crossed the pre-auth budget — by kind, delta since the last flush
+    /// (B60; see `ConnSample::requests_unprocessed`).
+    m_requests_unprocessed: u64,
+    m_actions_unprocessed: u64,
+    m_control_frames_unprocessed: u64,
     /// Warned once about action drops (the drop *count* is in the metrics
     /// samples; per-drop warnings would flood the log exactly when a
     /// flooder is doing what it does).

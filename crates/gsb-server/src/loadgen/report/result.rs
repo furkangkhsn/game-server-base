@@ -430,7 +430,7 @@ pub(crate) fn print_report(
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
          server_cpu_s={:.1} clients_cpu_s={:.1} \
           join_rejected={} cap_rejected={} budget_rejected={} actions_dropped={} \
-           actions_dropped_top={} actions_dropped_closed={} requests_dropped_closed={} requests_dropped_full={} requests_no_room={} hb_throttled_preauth={} hb_throttled_authed={} frames_out_closed={} close_notices_dropped={} transport={} retrans_out={} dup_in={} oob_dropped={} \
+           actions_dropped_top={} actions_dropped_closed={} requests_dropped_closed={} requests_dropped_full={} requests_no_room={} hb_throttled_preauth={} hb_throttled_authed={} frames_out_closed={} close_notices_dropped={} requests_unprocessed={} actions_unprocessed={} control_frames_unprocessed={} transport={} retrans_out={} dup_in={} oob_dropped={} \
             gave_up={} frag_reassembled={} frag_dropped={} hs_retries={} acks={} \
             ack_processed_max={} \
             ack_lag_max_ms={} fulls={} \
@@ -524,6 +524,9 @@ pub(crate) fn print_report(
         net.map(|n| n.heartbeats_throttled_authed).unwrap_or(0),
         net.map(|n| n.frames_out_closed).unwrap_or(0),
         net.map(|n| n.close_notices_dropped).unwrap_or(0),
+        net.map(|n| n.requests_unprocessed).unwrap_or(0),
+        net.map(|n| n.actions_unprocessed).unwrap_or(0),
+        net.map(|n| n.control_frames_unprocessed).unwrap_or(0),
         args.transport,
         retrans_out,
         dup_in,

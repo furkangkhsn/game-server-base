@@ -209,6 +209,10 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         // to a gone writer.
         "frames_out_closed",
         "close_notices_dropped",
+        // What a server-decided end left unprocessed (B60).
+        "requests_unprocessed",
+        "actions_unprocessed",
+        "control_frames_unprocessed",
     ] {
         let _: u64 = get(k)
             .parse()

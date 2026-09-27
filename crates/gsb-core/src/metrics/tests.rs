@@ -140,6 +140,9 @@ fn accumulator_applies_events_and_computes_rates() {
         heartbeats_throttled_authed: 0,
         frames_out_closed: 0,
         close_notices_dropped: 0,
+        requests_unprocessed: 0,
+        actions_unprocessed: 0,
+        control_frames_unprocessed: 0,
         server_close: None,
         last: false,
     }));
@@ -181,6 +184,9 @@ fn accumulator_applies_events_and_computes_rates() {
         heartbeats_throttled_authed: 0,
         frames_out_closed: 0,
         close_notices_dropped: 0,
+        requests_unprocessed: 0,
+        actions_unprocessed: 0,
+        control_frames_unprocessed: 0,
         server_close: None,
         last: true,
     }));

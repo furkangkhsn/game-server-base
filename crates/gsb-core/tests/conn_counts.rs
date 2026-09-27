@@ -15,6 +15,9 @@
 //! - `outbound.rs`: the actor's own outbound losses (BACKLOG B57) — a
 //!   control frame a closed outbound channel refused is not "sent", and
 //!   a best-effort close notice dropped on a full one is counted.
+//! - `unprocessed.rs`: what a server-decided end leaves in the inbox
+//!   (BACKLOG B60) — the frames behind the verdict, and the frame that
+//!   crossed the pre-auth budget, counted by kind.
 //! - `samples.rs`: the counting itself (BACKLOG B59) — a sample dropped
 //!   on a full metrics channel loses none of its deltas: the next flush
 //!   carries them.
@@ -44,5 +47,7 @@ mod requests;
 mod rig;
 #[path = "conn_counts/samples.rs"]
 mod samples;
+#[path = "conn_counts/unprocessed.rs"]
+mod unprocessed;
 
 const WAIT: Duration = Duration::from_secs(5);

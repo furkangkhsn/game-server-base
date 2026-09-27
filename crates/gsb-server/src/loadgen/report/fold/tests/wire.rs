@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"PMSG", "the magic, little-endian GSMP");
+    assert_eq!(&frame[..4], b"QMSG", "the magic, little-endian GSMQ");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -375,6 +375,26 @@ fn the_control_plane_losses_survive_the_wire() {
         (9, 10, 11, 12, 13)
     );
     assert_eq!(got.net.close_notices_dropped, 31);
+}
+
+/// What a server-decided end left unprocessed (GSMQ, B60) crosses the
+/// wire as three fields of their own, after the outbound losses.
+#[test]
+fn the_unprocessed_frames_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.net.close_notices_dropped = 31;
+    sent.net.requests_unprocessed = 37;
+    sent.net.actions_unprocessed = 41;
+    sent.net.control_frames_unprocessed = 43;
+    sent.net
+        .server_closes
+        .add(gsb_core::conn::ServerClose::RoomGone);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.net.close_notices_dropped, 31);
+    assert_eq!(got.net.requests_unprocessed, 37);
+    assert_eq!(got.net.actions_unprocessed, 41);
+    assert_eq!(got.net.control_frames_unprocessed, 43);
+    assert_eq!(got.net.server_closes.total(), 1);
 }
 
 /// Every server-close reason crosses the wire in its own slot (GSMF

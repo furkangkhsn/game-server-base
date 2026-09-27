@@ -236,6 +236,14 @@ pub struct NetReport {
     /// [`crate::metrics::ConnSample::frames_out_closed`]).
     pub frames_out_closed: u64,
     pub close_notices_dropped: u64,
+    /// Inbound frames never processed because the server ended the
+    /// session first — requests, game-band frames, other base-band frames
+    /// (cumulative, all connections; B60, see
+    /// [`crate::metrics::ConnSample::requests_unprocessed`]). The first is
+    /// a term of the RPC ledger.
+    pub requests_unprocessed: u64,
+    pub actions_unprocessed: u64,
+    pub control_frames_unprocessed: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -315,6 +323,9 @@ impl MetricReport {
                 heartbeats_throttled_authed: 0,
                 frames_out_closed: 0,
                 close_notices_dropped: 0,
+                requests_unprocessed: 0,
+                actions_unprocessed: 0,
+                control_frames_unprocessed: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),

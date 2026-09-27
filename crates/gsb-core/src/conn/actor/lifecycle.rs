@@ -58,6 +58,9 @@ impl super::ConnectionActor {
             m_requests_dropped_closed: 0,
             m_requests_dropped_full: 0,
             m_requests_no_room: 0,
+            m_requests_unprocessed: 0,
+            m_actions_unprocessed: 0,
+            m_control_frames_unprocessed: 0,
             m_input_limited: 0,
             m_input_limited_warned: false,
             input: Default::default(),
@@ -112,6 +115,8 @@ impl super::ConnectionActor {
                     if self.state == ConnState::WaitingAuth {
                         self.preauth_frames += 1;
                         if self.preauth_frames > PREAUTH_FRAME_BUDGET {
+                            // Never processed: counted by kind (B60).
+                            self.count_unprocessed(frame.op);
                             self.close_preauth_budget().await;
                             break;
                         }
@@ -191,6 +196,9 @@ impl super::ConnectionActor {
                 }
             }
         }
+
+        // What the end left in the inbox, counted (B60).
+        self.abandon_inbox();
 
         // Metrics: final flush of whatever is unflushed (marks the
         // connection's end).

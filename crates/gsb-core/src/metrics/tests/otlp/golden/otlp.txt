@@ -62,6 +62,12 @@ gsb_net_frames_out_closed sum t=2 mono=true unit="" n=1 | Control frames a conne
   [] 1000..2000 int 1
 gsb_net_close_notices_dropped sum t=2 mono=true unit="" n=1 | Best-effort close notices (ERROR 9/14 of the ends that never wait) dropped on a full outbound channel (the client was not reading), cumulative.
   [] 1000..2000 int 1
+gsb_net_requests_unprocessed sum t=2 mono=true unit="" n=1 | RPC requests a connection received but never processed because the server ended its session first (left in its inbox, or the frame that crossed the pre-auth budget; never answered), cumulative.
+  [] 1000..2000 int 1
+gsb_net_actions_unprocessed sum t=2 mono=true unit="" n=1 | Game-band frames a connection received but never processed because the server ended its session first (left in its inbox, or the frame that crossed the pre-auth budget), cumulative.
+  [] 1000..2000 int 2
+gsb_net_control_frames_unprocessed sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests (auth, join, leave, heartbeat, undefined) a connection received but never processed because the server ended its session first, cumulative.
+  [] 1000..2000 int 3
 gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0

@@ -846,13 +846,15 @@ değişmedi.
 
 > `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
 > + req_unbound + requests_dropped_closed + requests_dropped_full
-> + requests_no_room`
+> + requests_no_room + requests_unprocessed`
 
 Her istek tam olarak BİR terimdedir: oda kovaları (işlendi, reddedildi,
 yanıtsız reddedildi, okunmadı, bağlanmamış bağlantıdan çekildi) ile
-bağlantı tarafındaki üç kenar (kapalı kanal, dolu kanal, oda yok) ayrık
-yerlerde ve ayrık koşullarda sayılır — bir istek bağlantıda düştüyse
-odaya hiç ulaşmamıştır.
+bağlantı tarafındaki dört kenar (kapalı kanal, dolu kanal, oda yok,
+sunucunun bitirdiği oturumun işlenmemiş kutusu) ayrık yerlerde ve ayrık
+koşullarda sayılır — bir istek bağlantıda düştüyse odaya hiç
+ulaşmamıştır. (Taşımanın kendi terimi — rUDP demux'ının dolu kutuda
+düşürdüğü istek — aşağıda, B58.)
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
@@ -907,6 +909,29 @@ girdi → 2 ve 1; oda yok: katılmadan önce ve ayrıldıktan sonra → 2, ihlal
 3 değişmeden), `room_close::forward_closed` (kapalı kanaldan sonraki
 `ERROR 6`'lı istek → `requests_no_room` 1), `loadgen_rpc.rs` her testte
 defterin 14 teriminin toplamını `rpc_sent`'e eşitler.
+
+**B60: sunucunun bitirdiği oturumun işlenmemiş kutusu (sayım turu 3).**
+Sunucu oturumu kendisi bitirdiğinde (pompanın/registry'nin hükmü,
+odanın atması ya da boşta kapanışı, `RoomGone`, `Shutdown`, ihlal
+bütçesi, ölü çıkış yolu) bağlantı aktörü döngüden çıkar; okuyucunun
+hükmün arkasına koyduğu kareler — içlerindeki RPC istekleri dahil —
+hiç işlenmiyor, yanıtlanmıyor ve hiçbir terimde sayılmıyordu; pre-auth
+bütçesini aşan kare de (işlenmez). Artık aktör çıkarken kutuyu kapatıp
+(`close()`, boşaltma kapasiteyle sınırlı) kalanları türüne göre sayar
+(`conn::FrameKind`): RPC isteği `requests_unprocessed` (defterin
+terimi), oyun bandı `actions_unprocessed`, diğer temel bant
+`control_frames_unprocessed`; ölü çıkış yolunun hüküm taraması
+(`adopt_pending_close`) gördüğü kareleri artık atmıyor, sayıyor; bütçeyi
+aşan kare aynı sayaçlarda. Yüzey: `gsb-metric scope=net`'te
+`close_notices_dropped=`'dan sonra; Prometheus/OTLP'de
+`gsb_net_{requests,actions,control_frames}_unprocessed_total`; loadgen
+telinde `GSMQ`; `RESULT`'ta, her satırda. `loadgen_rpc`'nin `LEDGER`'ı
+artık 15 terim; loadgen'de hep 0 (oturumu hep istemci bitirir). Kilit:
+`gsb-core/tests/conn_counts/unprocessed.rs` (hüküm/atma/akış reddi/durma,
+oda yok oldu, ihlal bütçesi, pre-auth bütçesi, ölü çıkış yolu — her biri
+kutuda bir istek + bir girdi + bir heartbeat bırakır; istemci-tarafı son
+hiçbir şey bırakmaz); mutasyonlar (boşaltmayı kaldırmak, taramada atmak,
+aşan kareyi saymamak, isteği yanlış sınıflamak) testleri düşürür.
 
 **B51: üyelik bittikten sonra bağlantıda düşen istek (kapandı).**
 `forward_to_room`'un `Closed` kolu artık sayar: `RPC_REQ` ise
@@ -1068,6 +1093,9 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   (defteri onu açık/yanıtsız sayar) — tel değişmedi.
 - ~~**Dolu action kanalında düşen istek**~~ **Yapıldı (B55):**
   `requests_dropped_full`; `actions_dropped` artık yalnız oyun girdisi.
+- ~~**Sunucunun bitirdiği oturumun kutusunda kalan istek**~~ **Yapıldı
+  (B60):** `requests_unprocessed` (pre-auth bütçesini aşan kare dahil),
+  defterin terimi — §8.3.
 
 ## 12. Testler: sözleşmenin kilidi
 

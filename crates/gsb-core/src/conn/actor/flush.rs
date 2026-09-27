@@ -38,6 +38,9 @@ impl super::ConnectionActor {
             requests_dropped_closed: self.m_requests_dropped_closed,
             requests_dropped_full: self.m_requests_dropped_full,
             requests_no_room: self.m_requests_no_room,
+            requests_unprocessed: self.m_requests_unprocessed,
+            actions_unprocessed: self.m_actions_unprocessed,
+            control_frames_unprocessed: self.m_control_frames_unprocessed,
             heartbeats_throttled_preauth: self.m_preauth_hb_extra - self.m_flushed_preauth_hb_extra,
             heartbeats_throttled_authed: self.m_hb_extra - self.m_flushed_hb_extra,
             frames_out_closed: self.m_frames_out_closed,
@@ -76,6 +79,9 @@ impl super::ConnectionActor {
         self.m_requests_dropped_closed = 0;
         self.m_requests_dropped_full = 0;
         self.m_requests_no_room = 0;
+        self.m_requests_unprocessed = 0;
+        self.m_actions_unprocessed = 0;
+        self.m_control_frames_unprocessed = 0;
         self.m_flushed_preauth_hb_extra = self.m_preauth_hb_extra;
         self.m_flushed_hb_extra = self.m_hb_extra;
         self.m_frames_out_closed = 0;
@@ -97,6 +103,9 @@ fn is_empty(s: &ConnSample) -> bool {
         && s.requests_dropped_closed == 0
         && s.requests_dropped_full == 0
         && s.requests_no_room == 0
+        && s.requests_unprocessed == 0
+        && s.actions_unprocessed == 0
+        && s.control_frames_unprocessed == 0
         && s.heartbeats_throttled_preauth == 0
         && s.heartbeats_throttled_authed == 0
         && s.frames_out_closed == 0

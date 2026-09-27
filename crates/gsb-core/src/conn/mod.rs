@@ -92,6 +92,8 @@ mod actor;
 mod close;
 mod gate;
 pub(crate) use gate::InputGate;
+mod kind;
+pub use kind::FrameKind;
 
 pub use actor::ConnectionActor;
 pub use close::ServerClose;

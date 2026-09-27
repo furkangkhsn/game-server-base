@@ -71,6 +71,8 @@ mod logic;
 ///   u64 requests_dropped_full  u64 requests_no_room
 ///   u64 heartbeats_throttled_preauth  u64 heartbeats_throttled_authed
 ///   u64 frames_out_closed  u64 close_notices_dropped
+///   u64 requests_unprocessed  u64 actions_unprocessed
+///   u64 control_frames_unprocessed
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 /// ```
@@ -174,7 +176,11 @@ mod logic;
 /// `close_ops_dropped`, `match_results_dropped_full` and
 /// `match_results_dropped_closed` (control-plane losses — B57), right
 /// after `closes`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D50;
+/// GSMQ = the GSMP layout plus the net-scope `requests_unprocessed`,
+/// `actions_unprocessed` and `control_frames_unprocessed` (what a
+/// server-decided end left unprocessed — B60), right after
+/// `close_notices_dropped`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D51;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -314,6 +320,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.heartbeats_throttled_authed);
     w.u64(r.net.frames_out_closed);
     w.u64(r.net.close_notices_dropped);
+    w.u64(r.net.requests_unprocessed);
+    w.u64(r.net.actions_unprocessed);
+    w.u64(r.net.control_frames_unprocessed);
     for (_, n) in r.net.server_closes.iter() {
         w.u64(n);
     }
@@ -510,6 +519,9 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         heartbeats_throttled_authed: r.u64()?,
         frames_out_closed: r.u64()?,
         close_notices_dropped: r.u64()?,
+        requests_unprocessed: r.u64()?,
+        actions_unprocessed: r.u64()?,
+        control_frames_unprocessed: r.u64()?,
         server_closes: {
             let mut counts = [0u64; ServerClose::COUNT];
             for n in &mut counts {

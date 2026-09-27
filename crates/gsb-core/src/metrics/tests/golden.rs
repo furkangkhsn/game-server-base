@@ -31,7 +31,9 @@
 //! `gsb_net_close_notices_dropped_total`, and the registry scope's
 //! `join_ops_dropped=` / `close_ops_dropped=` /
 //! `match_results_dropped_{full,closed}=` with their four
-//! `gsb_registry_*_total` families.
+//! `gsb_registry_*_total` families. B60's `requests_unprocessed=` /
+//! `actions_unprocessed=` / `control_frames_unprocessed=` with
+//! `gsb_net_{requests,actions,control_frames}_unprocessed_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -135,6 +137,9 @@ pub(super) fn golden_report() -> MetricReport {
         heartbeats_throttled_authed: 0,
         frames_out_closed: 1,
         close_notices_dropped: 0,
+        requests_unprocessed: 1,
+        actions_unprocessed: 2,
+        control_frames_unprocessed: 0,
         server_close: None,
         last: false,
     }));
@@ -156,6 +161,9 @@ pub(super) fn golden_report() -> MetricReport {
         heartbeats_throttled_authed: 6,
         frames_out_closed: 0,
         close_notices_dropped: 1,
+        requests_unprocessed: 0,
+        actions_unprocessed: 0,
+        control_frames_unprocessed: 3,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));
