@@ -61,7 +61,7 @@ pub(crate) use result::send_match_result;
 pub use seat::Seat;
 
 // Internals shared across this module tree (never leaves the crate).
-pub(crate) use hub::TeamHub;
+pub(crate) use hub::{RelayDrops, TeamHub};
 pub(crate) use table::*;
 
 use std::fmt::Debug;

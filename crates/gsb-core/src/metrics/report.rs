@@ -186,6 +186,11 @@ pub struct RegistryReport {
     /// [`Self::rooms_died`], which counts the LOGICAL rooms the registry
     /// reaped. Counted by the collector from the watchers' events.
     pub rooms_ended_uncounted: u64,
+    /// Team imports the sharded rooms' team hubs could not queue on a
+    /// target shard — its mailbox full / closed (see
+    /// [`RegistrySample::team_relays_dropped_full`]), cumulative (B72).
+    pub team_relays_dropped_full: u64,
+    pub team_relays_dropped_closed: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

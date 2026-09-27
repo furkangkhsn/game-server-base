@@ -47,6 +47,8 @@
 //! `gsb_registry_rooms_ended_uncounted_total`. B68's nine room-scope stop
 //! counters (`joins_unprocessed=` .. `border_updates_unapplied=` after
 //! `metrics_dropped=`, `gsb_room_*_total` after the session families).
+//! B72's registry-scope `team_relays_dropped_{full,closed}=` with
+//! `gsb_registry_team_relays_dropped_{full,closed}_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -70,6 +72,8 @@ pub(super) fn golden_report() -> MetricReport {
         metrics_dropped: 0,
         join_ops_dropped: 1,
         close_ops_dropped: 0,
+        team_relays_dropped_full: 4,
+        team_relays_dropped_closed: 5,
     }));
     // Two match results a full sink refused, one a closed sink did (B57).
     for cause in [

@@ -292,6 +292,15 @@ pub struct RegistrySample {
     /// dispatcher detaches once it has drained, a gone one's affiliation
     /// is detached by the registry directly.
     pub close_ops_dropped: u64,
+    /// Team imports a sharded room's team hub (`docs/CROSS-SHARD.md`
+    /// §8b.2) could not queue on a target shard because its mailbox was
+    /// FULL (the shard is not keeping up; the source's next export
+    /// carries the whole set again), cumulative (B72).
+    pub team_relays_dropped_full: u64,
+    /// Team imports the hub could not queue because the target shard's
+    /// mailbox was CLOSED (the shard has stopped or died), cumulative
+    /// (B72).
+    pub team_relays_dropped_closed: u64,
 }
 
 /// One connection actor's wire-byte sample. The fields are *deltas since

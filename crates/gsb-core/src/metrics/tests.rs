@@ -123,6 +123,8 @@ fn accumulator_applies_events_and_computes_rates() {
         metrics_dropped: 1,
         join_ops_dropped: 0,
         close_ops_dropped: 0,
+        team_relays_dropped_full: 0,
+        team_relays_dropped_closed: 0,
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

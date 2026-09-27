@@ -37,13 +37,28 @@ pub(crate) struct HubStats {
     pub(crate) exports: u64,
     /// Imports queued on a target shard's mailbox.
     pub(crate) relays: u64,
-    /// Imports a full or closed target mailbox refused (the source's
-    /// next export carries the whole set again).
-    pub(crate) relay_drops: u64,
+    /// Imports a FULL target mailbox refused (the target shard is not
+    /// keeping up; the source's next export carries the whole set again).
+    pub(crate) relay_drops_full: u64,
+    /// Imports a CLOSED target mailbox refused (the target shard has
+    /// stopped or died; nothing will read them).
+    pub(crate) relay_drops_closed: u64,
     /// Records in the queued imports.
     pub(crate) relay_records: u64,
     /// Source slots dropped by the TTL sweep.
     pub(crate) expired: u64,
+}
+
+/// The relays one export lost, by cause (B72): what
+/// [`TeamHub::on_export`] hands back so the registry can keep the
+/// cumulative totals (the hub's own [`HubStats`] are a log window, and the
+/// hub goes with its room).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RelayDrops {
+    /// Imports a full target mailbox refused.
+    pub(crate) full: u64,
+    /// Imports a closed target mailbox refused.
+    pub(crate) closed: u64,
 }
 
 /// One sharded room's hub, kept inside the registry's room entry
@@ -67,7 +82,8 @@ impl TeamHub {
     /// shard that has exported (and not expired), the records of the
     /// teams that shard views — `try_send`, never awaited. Isolation is
     /// this filter: a team's records reach only shards that list the team
-    /// among their viewed teams.
+    /// among their viewed teams. Returns the relays the target mailboxes
+    /// refused, by cause.
     pub(crate) fn on_export<St, Sp>(
         &mut self,
         room: RoomId,
@@ -75,11 +91,12 @@ impl TeamHub {
         tick: u64,
         export: TeamExport,
         mailboxes: &[Mailbox<ShardMsg<St, Sp>>],
-    ) {
+    ) -> RelayDrops {
+        let mut drops = RelayDrops::default();
         let n = mailboxes.len();
         if from >= n {
             debug!(room = %room, from, "team export from an unknown shard index; ignored");
-            return;
+            return drops;
         }
         if self.slots.len() < n {
             self.slots.resize_with(n, || None);
@@ -127,13 +144,19 @@ impl TeamHub {
                     self.stats.relays += 1;
                     self.stats.relay_records += count as u64;
                 }
-                Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
-                    self.stats.relay_drops += 1;
+                Err(TrySendError::Full(_)) => {
+                    self.stats.relay_drops_full += 1;
+                    drops.full += 1;
+                }
+                Err(TrySendError::Closed(_)) => {
+                    self.stats.relay_drops_closed += 1;
+                    drops.closed += 1;
                 }
             }
         }
         self.slots[from] = Some(slot);
         self.summary(room, tick);
+        drops
     }
 
     /// Drop the subscriptions of sources silent for the TTL — at most
@@ -174,7 +197,8 @@ impl TeamHub {
             room = %room,
             exports = s.exports,
             relays = s.relays,
-            relay_drops = s.relay_drops,
+            relay_drops_full = s.relay_drops_full,
+            relay_drops_closed = s.relay_drops_closed,
             relay_records = s.relay_records,
             expired = s.expired,
             "team_hub_summary"

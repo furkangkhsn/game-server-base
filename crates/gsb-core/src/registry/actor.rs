@@ -23,6 +23,7 @@ mod room_ops;
 mod rooms;
 mod run;
 mod stop;
+mod teams;
 
 /// The registry actor. `W`/`G` are the room's world / group-key types;
 /// `St` is the sharded room's migration state (unused by single rooms —
@@ -72,6 +73,11 @@ pub struct Registry<W, G, St, Sp> {
     /// (B57; see `RegistrySample::join_ops_dropped`).
     reg_join_ops_dropped: u64,
     reg_close_ops_dropped: u64,
+    /// Team imports the rooms' team hubs could not queue on a target
+    /// shard, by cause, cumulative (B72; see
+    /// `RegistrySample::team_relays_dropped_full`).
+    reg_team_relays_dropped_full: u64,
+    reg_team_relays_dropped_closed: u64,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -175,6 +181,8 @@ where
             reg_metrics_dropped: 0,
             reg_join_ops_dropped: 0,
             reg_close_ops_dropped: 0,
+            reg_team_relays_dropped_full: 0,
+            reg_team_relays_dropped_closed: 0,
             next_join_epoch: 0,
             metrics,
             max_connections,
@@ -205,6 +213,8 @@ where
             metrics_dropped: self.reg_metrics_dropped,
             join_ops_dropped: self.reg_join_ops_dropped,
             close_ops_dropped: self.reg_close_ops_dropped,
+            team_relays_dropped_full: self.reg_team_relays_dropped_full,
+            team_relays_dropped_closed: self.reg_team_relays_dropped_closed,
         };
         if let Err(mpsc::error::TrySendError::Full(_)) =
             self.metrics.try_send(MetricsEvent::Registry(sample))

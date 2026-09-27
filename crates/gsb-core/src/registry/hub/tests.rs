@@ -121,7 +121,7 @@ fn a_refused_relay_is_counted_and_retried_by_the_next_export() {
     hub.on_export(ROOM, 1, 1, export(&[1], &[]), &tx);
     hub.on_export(ROOM, 0, 1, export(&[], &[(1, 10)]), &tx);
     hub.on_export(ROOM, 0, 2, export(&[], &[(1, 11)]), &tx);
-    assert_eq!(hub.stats.relay_drops, 1, "the mailbox held one");
+    assert_eq!(hub.stats.relay_drops_full, 1, "the mailbox held one");
     assert_eq!(drained(&mut rx[1]), [(0, 1, vec![(1, 10)])]);
 
     // Now empty: the clear is refused once (mailbox full again), then
@@ -130,10 +130,33 @@ fn a_refused_relay_is_counted_and_retried_by_the_next_export() {
         .try_send(ShardMsg::Shutdown)
         .expect("room for the filler");
     hub.on_export(ROOM, 0, 3, export(&[], &[]), &tx);
-    assert_eq!(hub.stats.relay_drops, 2);
+    assert_eq!(hub.stats.relay_drops_full, 2);
     let _filler = rx[1].try_recv();
     hub.on_export(ROOM, 0, 4, export(&[], &[]), &tx);
     assert_eq!(drained(&mut rx[1]), [(0, 4, vec![])]);
+}
+
+/// B72: a relay refused by a FULL target and one refused by a CLOSED
+/// target (a stopped shard) are counted apart — in the window and in
+/// what the export hands back to the registry.
+#[test]
+fn a_full_target_and_a_closed_one_are_counted_apart() {
+    let (tx, mut rx) = shards(3, 1);
+    let mut hub = TeamHub::default();
+    hub.on_export(ROOM, 1, 1, export(&[1], &[]), &tx);
+    hub.on_export(ROOM, 2, 1, export(&[1], &[]), &tx);
+    tx[1]
+        .try_send(ShardMsg::Shutdown)
+        .expect("room for the filler");
+    let closed = rx.pop().expect("shard 2's inbox");
+    drop(closed);
+    let drops = hub.on_export(ROOM, 0, 1, export(&[], &[(1, 10)]), &tx);
+    assert_eq!(drops, RelayDrops { full: 1, closed: 1 });
+    assert_eq!(
+        (hub.stats.relay_drops_full, hub.stats.relay_drops_closed),
+        (1, 1)
+    );
+    assert_eq!(hub.stats.relays, 0, "nothing was queued");
 }
 
 /// A shard silent for the TTL loses its subscription at the next sweep

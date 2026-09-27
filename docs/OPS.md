@@ -248,8 +248,10 @@ max_detach_hold_secs = "off"
   Etki, göç ve takım aileleri yalnız shard satırlarında hareket eder
   (tek oda aktörü 0 yazar; takım ailesi yalnız `team_exchange`'i
   uygulayan mantıkta — `ShardedTeamRoom`). Takım sayaçlarının ~1 sn
-  penceresi `team_exchange_summary` log satırında da; hub tarafı
-  (`relays`, `relay_drops`) `team_hub_summary` satırında kaldı. Crystallization olayları (kit) F9'dan beri
+  penceresi `team_exchange_summary` log satırında da; hub tarafının
+  penceresi (`relays`, `relay_drops_full`, `relay_drops_closed`)
+  `team_hub_summary` satırında, reddedilen röleleri B72'den beri registry
+  kapsamında da (aşağıda). Crystallization olayları (kit) F9'dan beri
   aşağıdaki mantık sayaçlarıdır (`crystal_*`); wire başına ayrıntı
   `gsb_kit::crystal` debug satırında kaldı (CROSS-SHARD §4c madde 5).
 - **Mantığın kendi sayaçları (F9).** Çekirdeğin bilmediği, oda
@@ -596,6 +598,29 @@ max_detach_hold_secs = "off"
   shard'lar artık biçilen odayla durur ve son sayımlarını verir (önceden
   sunucu durana dek çalışıyorlardı). Kaybolan sayıların kendisi
   bilinemez; sayaç kaybın VAR olduğunu söyler.
+- **Registry kapsamı: takım hub'ının reddedilen röleleri (B72, sayım
+  turu 5).** Registry satırının sonunda (`rooms_ended_uncounted=`'den
+  sonra) `team_relays_dropped_full=` / `team_relays_dropped_closed=` ve
+  aile tablosunda (`REGISTRY`) `gsb_registry_team_relays_dropped_full_total`
+  / `…_closed_total` (`counter`); loadgen telinde `GSMW` (registry
+  bölümünde `rooms_ended_uncounted`'dan sonra); `RESULT`'ta yok (satır
+  registry sayaçlarını taşımıyor). Sharded odanın takım hub'ı
+  (CROSS-SHARD §8b.2; registry'nin içinde) bir export'u hedef shard'lara
+  `try_send` ile röleler; reddedilen import önceden yalnız
+  `team_hub_summary` log satırında, DOLU ve KAPALI birlikte
+  (`relay_drops`) sayılıyordu. Artık sebebe göre ayrı: **dolu** — hedef
+  shard yetişemiyor; hedefin kaynağa bağlılığı durur, kaynağın sonraki
+  export'u bütün kümeyi yeniden taşır (gecikme; kalıcı kayıp değil);
+  **kapalı** — hedef shard durmuş ya da ölmüş, okuyan yok. Sayı sebebin
+  yaşadığı yerde tutulur: hub oda kaydıyla birlikte gider, bu yüzden
+  `on_export` o export'un reddettiklerini döndürür, registry kümülatif
+  toplamı kendisi tutar (`reg_team_relays_dropped_{full,closed}`) ve bir
+  ret olduğunda örneğini HEMEN gönderir — registry yalnız bir tablo
+  değişince örnek yollar, röle tablo değiştirmez (ret yoksa ek örnek yok;
+  maliyet ret içeren export başına bir `try_send`). Log satırının
+  penceresi de ikiye ayrıldı (`relay_drops_full`, `relay_drops_closed`).
+  Shard tarafının eşi `gsb_room_team_export_drops_total` (export'u
+  registry kutusu reddetti) değişmedi.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

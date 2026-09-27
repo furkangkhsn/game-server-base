@@ -201,19 +201,7 @@ where
                     from,
                     tick,
                     export,
-                } => {
-                    // Table-only and synchronous (the relays are
-                    // `try_send`s): the hub of THIS incarnation only.
-                    if let Some(e) = self.rooms.get_mut(&room)
-                        && e.generation == generation
-                        && let Some(group) = e.shards.as_mut()
-                    {
-                        let ShardGroup {
-                            teams, mailboxes, ..
-                        } = group;
-                        teams.on_export(room, from, tick, export, mailboxes);
-                    }
-                }
+                } => self.on_team_export(room, generation, from, tick, export),
                 RegistryMsg::Shutdown => {
                     self.on_shutdown();
                     break;

@@ -30,6 +30,10 @@ gsb_registry_match_results_dropped_closed sum t=2 mono=true unit="" n=1 | Match 
   [] 1000..2000 int 1
 gsb_registry_rooms_ended_uncounted sum t=2 mono=true unit="" n=1 | Room/shard tasks that ended without their final count (a panic): their last window and what they held at the end are counted nowhere, cumulative.
   [] 1000..2000 int 1
+gsb_registry_team_relays_dropped_full sum t=2 mono=true unit="" n=1 | Team imports a sharded room's team hub could not queue on a target shard because its mailbox was full (the shard is not keeping up; the source's next export carries the whole set again), cumulative.
+  [] 1000..2000 int 4
+gsb_registry_team_relays_dropped_closed sum t=2 mono=true unit="" n=1 | Team imports a sharded room's team hub could not queue on a target shard because its mailbox was closed (the shard has stopped or died), cumulative.
+  [] 1000..2000 int 5
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

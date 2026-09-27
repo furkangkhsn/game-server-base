@@ -1170,7 +1170,9 @@ Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops`,
 sıfır değilse `team_exchange_summary` info satırı (§7'nin
 `border_exchange_summary` emsali). Hub: `exports`, `relays`,
 `relay_drops`, `relay_records`, `expired` — oda başına 256 export
-tick'inde bir `team_hub_summary`. Gerekçe: `RoomSample` sabit şekilli
+tick'inde bir `team_hub_summary` (*B72:* `relay_drops` artık
+`relay_drops_full` / `relay_drops_closed` olarak ikiye ayrık ve reddedilen
+röleler registry kapsamında da sayılır — §8b.8 notu). Gerekçe: `RoomSample` sabit şekilli
 ve loadgen'in metrik tel formatına (GSM9) ve Prometheus'a bağlı; küçük
 paket turu dokuz sayaç için 29 dosyaya dokundu. Henüz üretim kullanıcısı
 olmayan bir özellik için tel sürümü değiştirmek erken; loadgen botunu
@@ -1347,7 +1349,15 @@ Prometheus (`gsb_room_team_*_total`, OPS §3), loadgen metrik teli (magic
 penceresini tutuyor (son yazdığı anlık görüntüden fark,
 `TeamStats::since`). Hub tarafı (`relays`, `relay_drops`) log satırında
 kaldı: shard'a varan her import düşmemiş bir röledir, yani `imports /
-exports` yayılımı ve kayıpları shard tarafından okunur. RESULT, isteyen
+exports` yayılımı ve kayıpları shard tarafından okunur. *B72 (sayım turu
+5):* reddedilen röle artık metrik yolunda — registry kapsamında sebebe
+göre iki sayaç, `gsb_registry_team_relays_dropped_full_total` (hedef
+shard'ın kutusu DOLU; kaynağın sonraki export'u kümeyi yeniden taşır) ve
+`…_closed_total` (hedef shard durmuş/ölmüş); satırda
+`team_relays_dropped_{full,closed}=`, loadgen telinde `GSMW`. Hub oda
+kaydıyla gittiğinden `on_export` reddedilenleri döndürür, kümülatif
+toplamı registry tutar ve ret olduğunda örneğini hemen gönderir (OPS §3).
+Log satırı penceresi `relay_drops_full` / `relay_drops_closed`. RESULT, isteyen
 bot için (savaş) kararlı pencerede `team_exports_s`,
 `team_export_records_s`, `team_records_per_export`, `team_imports_s`,
 `team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`,

@@ -21,7 +21,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 14] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 16] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -107,6 +107,19 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 14] = [
         Kind::Counter,
         "Room/shard tasks that ended without their final count (a panic): their last window and what they held at the end are counted nowhere, cumulative.",
         |r| r.rooms_ended_uncounted,
+    ),
+    // B72: the team hubs' refused relays, by cause.
+    reg(
+        "gsb_registry_team_relays_dropped_full_total",
+        Kind::Counter,
+        "Team imports a sharded room's team hub could not queue on a target shard because its mailbox was full (the shard is not keeping up; the source's next export carries the whole set again), cumulative.",
+        |r| r.team_relays_dropped_full,
+    ),
+    reg(
+        "gsb_registry_team_relays_dropped_closed_total",
+        Kind::Counter,
+        "Team imports a sharded room's team hub could not queue on a target shard because its mailbox was closed (the shard has stopped or died), cumulative.",
+        |r| r.team_relays_dropped_closed,
     ),
 ];
 
