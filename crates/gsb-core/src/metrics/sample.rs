@@ -309,6 +309,15 @@ pub struct ConnSample {
     /// race-class violation in [`Self::violations`] — the violation
     /// accounting is unchanged; this is the RPC ledger's own term.
     pub requests_no_room: u64,
+    /// Heartbeats over the 1/s ACK rate (SECURITY §3.2), delta since the
+    /// last flush (B56): counted and NOT answered — the session's liveness
+    /// still counts them (any inbound frame resets the idle window), and
+    /// they are deliberately not violations. Split by phase because the
+    /// two answer different questions: a surplus BEFORE authentication is
+    /// the §3.2 security signal (an unauthenticated peer probing), one
+    /// AFTER it is a known client's misconfigured heartbeat timer.
+    pub heartbeats_throttled_preauth: u64,
+    pub heartbeats_throttled_authed: u64,
     /// Game-band actions this actor forwarded into an already CLOSED
     /// action channel, delta since its last flush (B51): the room had
     /// ended the membership itself (a kick, the input-idle ceiling, the

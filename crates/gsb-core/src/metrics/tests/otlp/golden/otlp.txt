@@ -46,6 +46,10 @@ gsb_net_requests_dropped_full sum t=2 mono=true unit="" n=1 | RPC requests a con
   [] 1000..2000 int 2
 gsb_net_requests_no_room sum t=2 mono=true unit="" n=1 | RPC requests received by a connection in no room (not forwarded; answered ERROR 6 within the violation answer limit; also counted as violations), cumulative.
   [] 1000..2000 int 1
+gsb_net_heartbeats_throttled_preauth sum t=2 mono=true unit="" n=1 | Heartbeats over the 1/s ACK rate before authentication (counted, not answered, not a violation; the pre-auth probing signal), cumulative.
+  [] 1000..2000 int 4
+gsb_net_heartbeats_throttled_authed sum t=2 mono=true unit="" n=1 | Heartbeats over the 1/s ACK rate after authentication (counted, not answered, not a violation; a client's heartbeat timer set too fast), cumulative.
+  [] 1000..2000 int 6
 gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0

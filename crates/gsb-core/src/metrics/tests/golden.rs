@@ -23,7 +23,9 @@
 //! `gsb_net_requests_dropped_full_total` /
 //! `gsb_net_requests_no_room_total` — plus the one deliberate HELP change
 //! of the round: `gsb_net_actions_dropped_total` now says it counts
-//! game-band actions only.
+//! game-band actions only. B56's `hb_throttled_preauth=` /
+//! `hb_throttled_authed=` with
+//! `gsb_net_heartbeats_throttled_{preauth,authed}_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -113,6 +115,8 @@ pub(super) fn golden_report() -> MetricReport {
         requests_dropped_closed: 1,
         requests_dropped_full: 2,
         requests_no_room: 0,
+        heartbeats_throttled_preauth: 4,
+        heartbeats_throttled_authed: 0,
         server_close: None,
         last: false,
     }));
@@ -130,6 +134,8 @@ pub(super) fn golden_report() -> MetricReport {
         requests_dropped_closed: 0,
         requests_dropped_full: 0,
         requests_no_room: 1,
+        heartbeats_throttled_preauth: 0,
+        heartbeats_throttled_authed: 6,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));

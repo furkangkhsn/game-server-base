@@ -66,6 +66,7 @@ mod logic;
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
 ///   u64 actions_dropped_closed  u64 requests_dropped_closed
 ///   u64 requests_dropped_full  u64 requests_no_room
+///   u64 heartbeats_throttled_preauth  u64 heartbeats_throttled_authed
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 /// ```
@@ -158,7 +159,11 @@ mod logic;
 /// out of `actions_dropped` and `violations` — B55), right after
 /// `requests_dropped_closed`. `actions_dropped` keeps its slot and now
 /// counts game-band actions only.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4D;
+/// GSMN = the GSMM layout plus the net-scope
+/// `heartbeats_throttled_preauth` and `heartbeats_throttled_authed` (the
+/// heartbeat throttle's unanswered surplus — B56), right after
+/// `requests_no_room`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4E;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -290,6 +295,8 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     w.u64(r.net.requests_dropped_closed);
     w.u64(r.net.requests_dropped_full);
     w.u64(r.net.requests_no_room);
+    w.u64(r.net.heartbeats_throttled_preauth);
+    w.u64(r.net.heartbeats_throttled_authed);
     for (_, n) in r.net.server_closes.iter() {
         w.u64(n);
     }
@@ -478,6 +485,8 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         requests_dropped_closed: r.u64()?,
         requests_dropped_full: r.u64()?,
         requests_no_room: r.u64()?,
+        heartbeats_throttled_preauth: r.u64()?,
+        heartbeats_throttled_authed: r.u64()?,
         server_closes: {
             let mut counts = [0u64; ServerClose::COUNT];
             for n in &mut counts {

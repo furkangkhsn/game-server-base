@@ -194,12 +194,16 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
     // and that is timing, not a fault.
     // The plain game actions the room dropped unprocessed (B54): present
     // and numeric. Not pinned to 0 — a move sent right before the
-    // client's LEAVE can still be unread when the leave lands.
+    // client's LEAVE can still be unread when the leave lands. The
+    // heartbeat throttle's surplus (B56) likewise: a client's heartbeat
+    // cadence is its own business.
     for k in [
         "dropped",
         "sends_closed",
         "actions_unread",
         "actions_unbound",
+        "hb_throttled_preauth",
+        "hb_throttled_authed",
     ] {
         let _: u64 = get(k)
             .parse()

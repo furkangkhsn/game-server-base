@@ -352,6 +352,15 @@ max_detach_hold_secs = "off"
   + req_refused + req_unread + req_unbound + requests_dropped_closed +
   requests_dropped_full + requests_no_room` — her istek tam olarak bir
   terimde.
+- **Net kapsamı: heartbeat kısmasının fazlası (B56).** Saniyede birden
+  fazla gelen heartbeat'in cevaplanmayanları (SECURITY §3.2) faza göre:
+  kimlik doğrulamadan önce `heartbeats_throttled_preauth` (güvenlik
+  sinyali), sonra `heartbeats_throttled_authed` (istemcinin heartbeat
+  zamanlayıcısı hızlı). İhlal değil, oturumu canlı tutar. Satırda
+  `requests_no_room=`'dan sonra `hb_throttled_preauth= hb_throttled_authed=`;
+  aile tablosunda `gsb_net_heartbeats_throttled_preauth_total`,
+  `gsb_net_heartbeats_throttled_authed_total`; loadgen telinde `GSMN`;
+  `RESULT`'ta aynı anahtarlar. Önceden yalnız debug satırındaydı.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

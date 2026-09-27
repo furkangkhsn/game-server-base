@@ -9,6 +9,9 @@
 //!   B55) — a request dropped on a full action channel, a request
 //!   received outside any room — each counted alone, and
 //!   `actions_dropped` keeping only game actions.
+//! - `heartbeats.rs`: the heartbeat throttle's unanswered surplus
+//!   (BACKLOG B56), before and after authentication, reaching the
+//!   samples.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,6 +28,8 @@ use gsb_protocol::{FrameBody, MessageTable, base, base_table, op};
 use prost::Message;
 use tokio::sync::mpsc;
 
+#[path = "conn_counts/heartbeats.rs"]
+mod heartbeats;
 #[path = "conn_counts/requests.rs"]
 mod requests;
 #[path = "conn_counts/rig.rs"]

@@ -138,6 +138,11 @@ pub struct ConnectionActor {
     /// cost §3.2's counter the ability to answer its own question. The
     /// mechanism above them is shared; only the attribution is not.
     m_hb_extra: u64,
+    /// The two counters above at the last metrics flush: they stay
+    /// lifetime counts (the debug line prints them), and the samples
+    /// carry their deltas (B56 — `ConnSample::heartbeats_throttled_*`).
+    m_flushed_preauth_hb_extra: u64,
+    m_flushed_hb_extra: u64,
     /// Inbound frames since the connection opened, while still
     /// `WaitingAuth` (§3.3). Auth success retires its relevance: every
     /// check is gated on the WaitingAuth state, so nothing to reset.

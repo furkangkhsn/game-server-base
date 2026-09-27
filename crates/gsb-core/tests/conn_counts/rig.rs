@@ -161,6 +161,9 @@ fn add(t: ConnSample, s: ConnSample) -> ConnSample {
         metrics_dropped: t.metrics_dropped + s.metrics_dropped,
         violations: t.violations + s.violations,
         input_rate_limited: t.input_rate_limited + s.input_rate_limited,
+        heartbeats_throttled_preauth: t.heartbeats_throttled_preauth
+            + s.heartbeats_throttled_preauth,
+        heartbeats_throttled_authed: t.heartbeats_throttled_authed + s.heartbeats_throttled_authed,
         ..s
     }
 }

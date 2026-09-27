@@ -98,6 +98,21 @@ sıkmaktır), post-auth fazlalık ise BİLİNEN bir istemcinin heartbeat
 zamanlayıcısının bozuk olduğunu söyler — bir hata raporu, bir saldırı
 değil.
 
+**Sayaçlar artık metrikte (B56, sayım turu 2).** İki sayaç
+(`m_preauth_hb_extra`, `m_hb_extra`) bağlantı aktöründe sayılıyor ama
+yalnız debug satırına yazılıyordu: operatör bu sinyali göremiyordu.
+Artık örneklerde delta olarak taşınıyor
+(`ConnSample`/`NetReport::heartbeats_throttled_preauth`,
+`::heartbeats_throttled_authed`; faza göre ayrı, çünkü soruları ayrı):
+`gsb-metric scope=net` satırında `requests_no_room=`'dan sonra
+`hb_throttled_preauth= hb_throttled_authed=`, Prometheus'ta
+`gsb_net_heartbeats_throttled_{preauth,authed}_total`, OTLP'de
+`_total`'sız, loadgen telinde `GSMN`, `RESULT`'ta aynı anahtarlar. İhlal
+değiller (`violations` kıpırdamaz). Aktörün kendi ömür sayaçları debug
+satırı için kalır; örnekler son akıştan beri olan farkı taşır. Kilit:
+`gsb-core/tests/conn_counts/heartbeats.rs` (kimlik doğrulamadan önce
+dört, sonra üç heartbeat → 3 ve 2, iki ara akışla).
+
 **Bütçeye yazılmıyor** (pre-auth gerekçesinin aynısı): kısma zaten
 maliyeti sınırlıyor, dolayısıyla puanlamak düşman tarafında hiçbir şey
 kazandırmaz; yalnız dürüst-ama-hatalı istemciyi (gevşek bir NAT

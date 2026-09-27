@@ -68,6 +68,8 @@ impl super::ConnectionActor {
             last_hb_ack: None,
             m_preauth_hb_extra: 0,
             m_hb_extra: 0,
+            m_flushed_preauth_hb_extra: 0,
+            m_flushed_hb_extra: 0,
             preauth_frames: 0,
             p_closing: false,
             w_closing: false,
@@ -214,6 +216,8 @@ impl super::ConnectionActor {
         let rclosed = self.m_requests_dropped_closed;
         let rfull = self.m_requests_dropped_full;
         let rnoroom = self.m_requests_no_room;
+        let hb_pre = self.m_preauth_hb_extra - self.m_flushed_preauth_hb_extra;
+        let hb_authed = self.m_hb_extra - self.m_flushed_hb_extra;
         let drops = self.m_metrics_dropped;
         let viols = self.m_violations;
         let limited = self.m_input_limited;
@@ -231,6 +235,8 @@ impl super::ConnectionActor {
             && rclosed == 0
             && rfull == 0
             && rnoroom == 0
+            && hb_pre == 0
+            && hb_authed == 0
             && drops == 0
             && viols == 0
             && limited == 0
@@ -250,6 +256,8 @@ impl super::ConnectionActor {
         self.m_requests_dropped_closed = 0;
         self.m_requests_dropped_full = 0;
         self.m_requests_no_room = 0;
+        self.m_flushed_preauth_hb_extra = self.m_preauth_hb_extra;
+        self.m_flushed_hb_extra = self.m_hb_extra;
         self.m_metrics_dropped = 0;
         self.m_violations = 0;
         self.m_input_limited = 0;
@@ -270,6 +278,8 @@ impl super::ConnectionActor {
                 requests_dropped_closed: rclosed,
                 requests_dropped_full: rfull,
                 requests_no_room: rnoroom,
+                heartbeats_throttled_preauth: hb_pre,
+                heartbeats_throttled_authed: hb_authed,
                 metrics_dropped: drops,
                 violations: viols,
                 input_rate_limited: limited,

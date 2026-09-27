@@ -210,6 +210,12 @@ pub struct NetReport {
     /// terms of the RPC ledger; the second is also in [`Self::violations`].
     pub requests_dropped_full: u64,
     pub requests_no_room: u64,
+    /// Heartbeats over the 1/s ACK rate, counted and not answered, before
+    /// and after authentication (cumulative, all connections; B56, see
+    /// [`crate::metrics::ConnSample::heartbeats_throttled_preauth`]). Not
+    /// violations.
+    pub heartbeats_throttled_preauth: u64,
+    pub heartbeats_throttled_authed: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -285,6 +291,8 @@ impl MetricReport {
                 requests_dropped_closed: 0,
                 requests_dropped_full: 0,
                 requests_no_room: 0,
+                heartbeats_throttled_preauth: 0,
+                heartbeats_throttled_authed: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),
