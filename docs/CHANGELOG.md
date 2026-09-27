@@ -5,6 +5,30 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B65 — geç gelen `OpsClosed` taze dağıtıcıyı silmiyor (`core/b65-opsclosed`)
+
+- **Temizlik:** registry, dağıtıcının `OpsClosed`'unda bağlantının
+  `conn_ops` girdisini kimin olduğuna bakmadan siliyordu. B63'ten beri
+  girdi, gitmiş dağıtıcının yerini alan taze bir dağıtıcı olabilir; eski
+  görevin geç raporu taze dağıtıcının tek göndericisini düşürür, kuyruğu
+  kapanır ve dağıtıcı (B61 gereği) canlı bağlantının üyeliğini DETACH
+  ederdi. Bugün erişilemez (dağıtıcı, göndericisi yuvada dururken yalnız
+  panikle biter; panikleyen görev `OpsClosed` yollamaz).
+- **Düzeltme:** her dağıtıcının bir seri numarası var — `install_conn_ops`
+  registry'de basar, göndericinin yanında `conn_ops`'ta saklar, göreve
+  verir; görev `OpsClosed { conn, serial }` yollar, `on_ops_closed` girdiyi
+  yalnız numara tutarsa siler. Öteki silme/değiştirme yerleri denetlendi:
+  hepsi bilerek o anki dağıtıcıyı bırakır ya da yalnız gitmiş bir
+  göndericinin üstüne yazar.
+- **Elenenler:** `Sender::same_channel` (mesajda gönderici taşımak kuyruğu
+  açık tutar, B61'i bozar); girdiyi yalnız göndericisi kapalıysa silmek
+  (kimliği görev içindeki bırakma sırasına emanet eder).
+
+Testler 1379 → 1381 (`otlp` ile 1397 → 1399): `registry/actor/players/
+tests/late.rs` (2); önce düştü, dört mutasyon öldü. Ebeveyn doğrulaması:
+eşitlik yerine `>=` karşılaştırması testi düşürdü. Tel, `/metrics`,
+goldenlar değişmedi. RECONNECT §3.4.
+
 ## Sayım turu 3 — "her şeyi saymalıyız": B58–B60, B62 (`metrics/count-everything-3`)
 
 - **B59 — dolu kanalda düşen bağlantı örneği deltalarını kaybetmiyor:**
