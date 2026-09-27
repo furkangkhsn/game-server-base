@@ -91,7 +91,7 @@ korunur** — bu kelimeleri string'e bile yazma.
 
 `#[ignore]` ekleme, test silme ya da testi gevşetme yok.
 
-## Gerçek saatli testler (BACKLOG F23)
+## Gerçek saatli testler (BACKLOG F23, F25)
 
 Yükte düşen testlerin ortak kalıbı: gerçek saatte sabit bir pencere
 ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
@@ -114,10 +114,45 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   cevaplanana dek yinelenir ve yalnız KENDİ numaralı isteklerinin
   cevabını kabul eder; süre sınırı yine yalnız asılma korumasıdır
   (F24: `afk_action.rs::still_answered`).
+- **Duvar saatinde sabit bir pencerede ölçülen hız performans
+  iddiasıdır**, doğruluk değil: ticker takılmadan sonra patlamaz, saate
+  yeniden oturur; aç kalan süreç dürüstçe daha az adım atar. Böyle bir
+  koşu yalnız takılmanın değiştiremeyeceğini iddia eder: yapılandırmanın
+  yankısı (odanın kendi örneğindeki `budget_us`), "en az bir adım" ve
+  üst sınır (T süren bir koşuda en çok `hz × T + 2` adım); hızın kendisi
+  paused saatte sabitlenir (F25: `gsb-server/tests/loadgen_rate`).
+- **"X sürerken" bir koşuldur, pencere değil**: yavaş kancayı (ticket
+  doğrulayıcısı) test serbest bırakana dek park et, girişini bildirsin;
+  sokette bekleyen eski kareleri saymamak için aynı çıkış kuyruğundan
+  geçen bir çit kullan (F25: e2e ticket testi — girişten sonra
+  gönderilen heartbeat'in ACK'ı).
+- **Rapor bekleyen test raporun neyi saydığını bekler**: "1,1 sn uyu,
+  son raporu oku" değil, gönderilen her kareyi saymış ilk rapor
+  (`frames_in == gönderilen`; eksikse bağlantılar flush aralığından
+  sonra dürtülür — F25: `gsb-server/tests/input_rate.rs::settle`).
+- **Motorun saati `std::time::Instant` ise** (yazma-takılma saati, rUDP
+  istemcisinin RTO'su) paused saat işe yaramaz: bileşenin saat alanı
+  geri sarılır, uyunmaz (F25: busy-band testi — kareler okumadan önce
+  sokette bekler). Bu olmuyorsa pencere sahte ucun temposundan çok büyük
+  tutulur ve "birkaç pencere sürer" hızdan değil yapıdan gelir
+  (slow_reader'lar: 1 sn pencere, 8–10 ms'de ≤ 1 KiB okuma, çerçeve en
+  az 384 okuma).
+- **Sabit `sleep` yalnız ALT sınır olarak** kullanılır (flush aralığını,
+  1/sn ACK kısmasını geçmek): fazla uyumak iddiayı bozmaz. Üst sınır
+  (`took < …`) yalnız iddianın kendi sınırıdır (el sıkışma süresi;
+  paused testte sanal süre), makinenin hızı değil (F25: `accept_stop`,
+  `boot::stop` paused saatte `took == grace`).
 - Yeni gerçek saatli bir test yük altında denenir: 32 çekirdekte
   `for i in $(seq 30); do sh -c 'while :; do :; done' & done`, sonra
   `cargo test --workspace --no-fail-fast` birkaç kez (ve
-  `--features gsb-server/otlp`), bitince `kill $(jobs -p)`.
+  `--features gsb-server/otlp`), bitince `kill $(jobs -p)`. Meşgul
+  döngüler bütün bir sürecin donmasını (swap, cgroup kısması) üretmez —
+  sayım turu 5'in 1,61 Hz'i de öyleydi (128 `yes` altında loadgen 30 Hz
+  kalıyor); onu test ikilisini periyodik durdurup sürdürerek üret:
+  `while :; do pkill -STOP -f '^<ikili>'; sleep 0.25; pkill -CONT -f
+  '^<ikili>'; sleep 0.25; done` (bitince `pkill -CONT`). F25'te
+  loadgen smoke'ları, slow_reader'lar, `input_rate` ve e2e ticket testi
+  bununla her seferinde ya da çoğunlukla düştü.
 
 ## Kod düzeni
 
