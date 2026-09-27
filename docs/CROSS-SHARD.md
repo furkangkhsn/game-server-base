@@ -96,7 +96,8 @@ sahip-olunan wire tablosuyla birleştirir: `local(wire)` yerel entity,
 `lent`/`lent_iter` yerel olanı ATLAR (sahip kazanır — yeni göç etmiş
 entity bir tick boyunca eski shard'ından da ödünç görünür). "p'ye r
 mesafedeki her şey" = world sorgusu + `lent_iter().filter(..)`;
-birleşik kopya kurulmaz.
+birleşik kopya kurulmaz. *(F6'dan beri kit bunu tek çağrıda da yapar —
+aşağıda "F6: alan etkisi seam ötesinde".)*
 
 **Parça 2 — `RemoteEffect`.** Katman: YENİ bir `ShardMsg` varyantı
 (`NeighborMsg` zaten `ShardMsg`'in takma adı), yani Migrate/Border'ın
@@ -163,6 +164,26 @@ ShardMsg::RemoteEffect(RemoteEffect {
   İnce döküm (`sent`, `retried`, `rejected`, `duplicates`, `foreign`…)
   log satırında kaldı: operatör sorusu "etkiler uygulanıyor mu, kayıp
   var mı"dır; on beş sayaç raporu şişirirdi.
+
+**F6: alan etkisi seam ötesinde** (`kit/f6-area-query`, KIT-ARCHITECTURE
+§4.6 "F6 eklemeleri", §10 "F6"). Bir AoE / görüş konisi / yakınlık
+sorgusu `local ∪ lent`'tir; ELLE birleştirmenin tuzakları devir anında:
+yeni gelen entity'nin eski shard'dan ödünç kopyası, devredilen kopya
+(§4d), ve — 8-komşulukta — eski sahibin hâlâ export ettiği kopya ile
+yeni sahibin ödüncünü AYNI tick'te gören üçüncü shard (aynı wire iki
+kiralayandan; gerçek aktörlerde gözlendi, `lent_iter` bunu iki kez
+veriyordu — düzeltildi). Kit'in opt-in cevabı: `Seam::area` /
+`Seam::within` (disk, sınır dahil) ve tek wire için `Seam::find`; her
+wire BİR kez, oyunun tek görünüm tipiyle (`SeamView`: yerel entity'den
+ya da ödünç kayıttan), nerede yaşadığıyla (`Holder::Local(entity)` →
+doğrudan yaz; `Holder::Lent { lender }` → `emit`). Öncelik seam'inki:
+yerel > devreden (yeni sahip, ayrıldığı kayıt) > ödünç (düşük
+kiralayan — `emit`'in rotası). Takım ithalatı alan sorgusuna girmez:
+görünürlüktür, oynanış erişimi değil (tipli kaydı ve etki rotası yok).
+Bayatlık semantiği aynı: ödünç kayıt ≤ 1 tick; anti-cheat yerelliği
+(§2) aynı — menzili bulunan görünüm üzerinde denetleyen oyundur, otorite
+yeniden denetler. Maliyet: sahip tablosu + ödünç kayıtlar üzerinde
+doğrusal geçiş, isabetlerin sıralanması; çağrı başına tahsis yok.
 
 **§2–§4'e göre sapmalar (gerekçeli):**
 
@@ -1407,6 +1428,7 @@ paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
 | Seam ötesi okuma + `RemoteEffect` (§2, §4 katman 1–3) | ✅ C1 — §4b |
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
 | Göç tick'i: ölümlü kopyaya yerel darbe | ✅ D — §4d |
+| Alan sorgusu `local ∪ lent` (AoE, yakınlık) | ✅ F6 — kit'te opt-in `Seam::{area, within, find}` (§4b); savaş benimsedi |
 
 ## 10. NOT-DONE
 

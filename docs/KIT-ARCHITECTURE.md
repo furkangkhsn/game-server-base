@@ -683,6 +683,40 @@ impl<S> SeamStage<S> { pub fn depart(&mut self, wire: u64, to: usize); } // comm
   — oyunun yerel yolu dünya sorgusudur; her oyun her sorgusunu süzmek
   zorunda kalırdı (CROSS-SHARD §4d elenen 1); gizleme bunu kancasız yapar.
 
+**F6 eklemeleri** (birleşik alan sorgusu, §10 "F6"; eklemeli, opt-in —
+kit hiçbirini kendisi çağırmaz, `ShardGame` BÜYÜMEDİ):
+
+```rust
+pub trait SeamView<V>: Sized {                 // oyunun tek görünüm tipi
+    fn local(entity: EntityRef<'_>) -> Option<Self>;  // kendi entity'sinden
+    fn lent(record: &V) -> Option<Self>;              // ödünç kayıttan
+}
+pub enum Holder { Local(Entity), Lent { lender: usize } }
+pub struct Found<T> { pub wire: u64, pub holder: Holder, pub view: T }
+impl<V> Seam<'_, '_, V> {
+    pub fn find<T: SeamView<V>>(&self, w: &World, wire: u64) -> Option<Found<T>>;
+    pub fn area<T: SeamView<V>>(&self, w: &World, keep: impl FnMut(&T) -> bool,
+                                out: &mut Vec<Found<T>>);          // wire sırasıyla
+    pub fn within<T: SeamView<V> + Planar<Coord = f32>>(&self, w: &World,
+                  center: [f32; 2], radius: f32, out: &mut Vec<Found<T>>); // sınır dahil
+}
+```
+
+- **Bir wire, bir cevap — seam'in önceliği:** yerel (dünya sorgusunun
+  bulduğu kendi entity; devredilmiş kopya, oyunun despawn ettiği ya da
+  `Disabled` yaptığı değil; kendi entity'nin ödünç kopyası asla) >
+  devreden (geçen tick devredilen: yeni sahibin ödüncü, ayrıldığı
+  kayıtla) > ödünç (iki komşunun ödünç verdiği wire'da düşük indeksli
+  kiralayan — `lent`/`emit`'in cevabı). Takım ithalatı (W1) bulunmaz:
+  oynanış erişimi değil, görünürlük; tipli kaydı ve etki rotası yok.
+  Karantinadaki görünüm, bu kancada doğmuş (henüz wire'sız) entity
+  bulunmaz; pin bir şey değiştirmez (tutulan entity tutanın kendisidir);
+  okumak kontak sayılmaz.
+- **`lent_iter` düzeltmesi:** "her wire bir kez" diyordu ama eski sahip
+  despawn edeceği kopyayı hâlâ export ederken yeni sahip de ödünç
+  veriyorsa (ikisine komşu üçüncü shard — 8-komşuluk) wire'ı iki kez
+  veriyordu; artık yalnız düşük kiralayanınkini verir.
+
 ## 5. Wire
 
 Kit kendi proto'sunu taşır (`gsb.kit`):
@@ -3974,6 +4008,82 @@ Bayt kilitleri: istemci teli dokunulmadı; sayaç bildirmeyen metrik
 metni sabit. Loadgen teli değişti (`GSMB` → `GSMC`).
 
 **Doğrulama:** 988 → **1015** test / 0 hata / 1 ignored.
+
+### F6 — seam ötesi alan sorgusu: `local ∪ lent` kit'te (2026-09-27)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`kit/f6-area-query`;
+BACKLOG F6, ROADMAP "Kapsam notları", CROSS-SHARD §4b). Sharded odada
+bir alan etkisi / görüş konisi / yakınlık sorgusu, shard'ın dünya
+sorgusunu komşuların ödünç kayıtlarıyla ELLE birleştiriyordu; devir
+anındaki kenar durumlarını (yeni gelen entity'nin ödünç kopyası,
+devredilen kopya, iki komşunun aynı anda ödünç verdiği wire) oyun
+bilmek zorundaydı. İmza ve kurallar §4.6 "F6 eklemeleri".
+
+**Envanter (öncesi).** Hiçbir demo seam ötesi ALAN sorgusu yapmıyor:
+savaşın ele geçirme sayımı haritayla kaçınıyor (noktalar bölgenin
+yarıçaptan derininde, "karar tek shard'da" — `world/tests.rs` bunu
+kilitliyor); MMO'nun kampları/botu seam'e bakmıyor. İki demo da NOKTA
+biçimini elle yazıyor — "yerel, değilse ödünç", iki ayrı denetimle
+(bileşenler / wire alanları): savaş `Combat::attack` + `apply_remote`
+kaynağı; MMO `Combat::attack` (seam varken bile doğrusal dünya
+sorgusu) + `apply_remote` kaynağı. Kit fikstürü (`tests/departing/
+brawl.rs`) aynı deseni kullanıyor. Kit'in başka yerdeki öncelikleri:
+snapshot'ta own-wins (çekirdek `borrowed_view`), `Seam` (own wins, D:
+devredilen kopya ödünç), W1 içeriği (own > lent > imported, `HashMap`
+ile tek kayıt).
+
+**Maliyet.** Sahip-olunan wire tablosu üzerinde tek geçiş (her biri O(1)
+dünya erişimi) + ödünç kayıtlar (her biri O(kiralayan) arama, öncelik
+için) + isabetlerin yerinde sıralanması; çağrı başına tahsis yok
+(oyunun tamponu kapasitesini korur). Kancanın içinde güncel bir
+mekânsal indeks yok (spatial kompozitin hücreleri geçen tick'in wire
+değerleri) — büyük shard'lı oyun yerel yarıyı kendi indeksiyle, kalanı
+`find`/`lent_iter` ile alır.
+
+**Benimseyen: savaş** (`combat.rs`, `combat/foe.rs`): `Foe` (konum,
+taraf, ayakta mı — birimden ya da ödünç kayıttan) `SeamView`; saldırı
+ve uzak darbenin kaynak denetimi `Seam::find` + TEK denetim, `Holder`
+"burada vur / sahibine gönder"i söylüyor. Seam'siz yol (tek dünyalı
+takım odası) dünyadan aynı `Found`'u kuruyor. Hedefler ve retler aynı
+(önce kilitlenen test), tel dokunulmadı. **MMO olduğu gibi** (not: aynı
+iki noktayı `find`'a çevirmek doğrusal dünya sorgusunu da kaldırır —
+ihtiyaç olunca).
+
+**Elenenler.** *Birleşik bir kopya kurmak* (tick başına tahsis, bayatlık
+semantiğini saklar); *kapanış (closure) çifti* `lent_pos` gibi —
+`find`/`area`/`within` her çağrıda iki fonksiyon taşırdı, tip bir kez
+yazılır; *yerel yarıyı `QueryState` ile* (`&mut World`, önbellek
+durumu; sahip tablosu zaten wire'ı veriyor ve dünya sorgusunun
+`Disabled` süzgecini `visible` yansıtıyor); *yerel için de wire değeri*
+(`codec.wire`: kuantalanmış — sınırda yerel menzil davranışı değişirdi,
+codec'in sorgusu gerekirdi); *`Partition`/`Planar` üzerinden ödünç
+konumu* (`GridPartition2` sözleşmesi tam birim — savaşta 1 m kayıp);
+*`Spatial` için ayrı `within3`* (gerekince; `area` her şekli alır);
+*ithalatı dahil etmek* (tipli kayıt ve etki rotası yok).
+
+**Testler** (önce kırmızı: `area` elle birleştirmeyle — sahip tablosu +
+ham ödünç şerit, kural yok — değiştirilince yedi testin altısı kırıldı,
+yalnız yüklem testi geçti;
+her kural mutasyonla kırıldı, dosyalar scratchpad'e yedeklenip geri
+yüklendi):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `sharded::tests::area::within_counts_the_boundary_and_nothing_beyond` | tam yarıçap dahil (yerel f32, ödünç tamsayı), ötesi değil; merkez eksenleri; wire sırası; tampon temizlenir, yeniden kullanılır | `<=`→`<`, eksen takası, sıralama yok, temizleme yok → kırıldı |
+| `…::area_applies_the_predicate_to_local_and_lent` | `keep` iki yarıya da uygulanır | yerel/ödünç süzülmüyor → kırıldı |
+| `…::own_wins_over_its_lent_copy_even_out_of_range` | kendi entity dünyadan; kopya yalnız menzildeyken de yok; görünümün dışarıda bıraktığı kendi entity kopyadan bulunmaz | `lent_iter` sahip süzgeci yok, `find` ham ödünce düşüyor → kırıldı |
+| `…::a_departing_copy_is_lent_by_its_new_owner_as_it_left` | devredilen kopya bir kez, yeni sahipten, ayrıldığı kayıtla (gizlenmeden önce de); reddedilen gönderim yerel | devreden atlanmıyor, `lent_iter` devredenleri düşürüyor → kırıldı |
+| `…::a_wire_two_neighbours_lend_is_found_once_from_the_lower_lender` | iki kiralayanlı wire bir kez, düşük indeksten; düşük olan menzil dışındaysa hiç; `lent_iter` bir kez | kiralayan süzgeci yok, ödünç `keep`'siz → kırıldı |
+| `…::a_room_nobody_lends_to_answers_as_a_world_query` | komşusuz: dünya sorgusunun cevabı (despawn / `Disabled` / bileşensiz yok) | `Disabled` görülüyor → kırıldı |
+| `…::actors::a_crossing_entity_is_counted_once_on_every_shard_through_the_handover` | GERÇEK dört shard aktörü (2×2, 8-komşuluk): X merkezi 1→0 geçerken her tick her shard'da bir kez, tam bir shard'da yerel; eski shard devir tick'inde kopyayı yeni sahipten ödünç görür, yeni shard o tick'te yerel; sınırdaki Y her yerde, hemen ötesindeki Z hiçbir yerde | kiralayan süzgeci yok (gerçek aktörlerde çift ödünç OLUYOR), sınır, sıralama, temizleme, sahip süzgeci → kırıldı |
+| savaş `combat::tests::attacks_reach_the_same_targets_local_and_lent` | benimsemeden ÖNCE yazıldı: menzildeki yerel düşman vurulur, menzildeki ödünç düşman kiralayana gider; menzil dışı / müttefik / kule / düşmüş / kendisi / bilinmeyen dokunulmaz; uzak darbe kurbanın müttefikinden ve menzil dışından (yerel ya da ödünç) reddedilir | eski kodda 8/8, yeni kodda 10 mutasyondan 9'u kırıldı; sağ kalan (yerelde "düşmüş" denetimi) gözlemlenemez: `strike` ayakta olmayanı zaten reddeder |
+| savaş `combat::tests::without_a_seam_attacks_reach_the_same_local_targets` | seam'siz yol (tek dünyalı takım odası) aynı yerel hedefler | müttefik vuruluyor, menzil yok sayılıyor, dünya araması boş → kırıldı |
+
+Eşdeğer mutasyon: `find`'da önce ödünç sonra yerel — `Seam::lent`
+kendi wire'ı zaten cevaplamaz. Bayt kilitleri: istemci teli ve metrik
+metni dokunulmadı.
+
+**Doğrulama:** 1225 → **1234** test / 0 hata / 1 ignored.
 
 ## 11. Kabul kriteri
 
