@@ -96,6 +96,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B37 Pinsiz orkestratör çocuklara `--workers 1` veriyor (`args.workers.max(1)`, `orchestrate/pinning/procs.rs`) ama yorumu "runtime default" diyor — bütün pinsiz orkestre tabanları tek worker'lı süreçlerde koşmuş. Düzeltmek tabanları değiştirir | orkestre ölçümü yeniden alınırken | RPC-CONTROL-PLANE §8.2 |
 | B38 `metrics` fasadı exporter'ı — üçüncü `Exporter`, kendi feature'ı; aile tablosunu yürüyüp fasada basar, global recorder yalnız exporter'ın içinde (yeni crate gerektirir) | bir operatör `metrics` ekosistemini isterse | OPS §6 |
 | B39 `RoomReport::shipped_frames`/`private_frames` hiçbir dışa açım yüzeyinde yok (Prometheus'ta hiç olmadı) — aile tablosuna iki satır; altın metni bilerek değiştirir | bir sonraki metrik turu | DESIGN §12 |
+| B40 **SIRADA — bugün yanlış:** varsayılan `leave_room` idle-kick'in iki kusuru: (1) politika park ettiyse satır aksiyon kanalını tutar — istemci kendini InRoom sanır, doğrudan JOIN ERROR 3 (sert ihlal) alır, önce LEAVE göndermeli; (2) despawn edilen üyenin registry satırı canlı aidiyet kalır, istemci ne katılır ne ayrılırsa soketi kapanınca satır detached kalıp slotu sızdırır | — | RECONNECT §16 düzeltme notu |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -139,8 +140,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | E3 ~~rUDP'yi deneysel'den çıkarmak~~ **Karar (2026-09-27):** şimdilik DENEYSEL kalır; hedef zamanla DTLS destekli, tam teşekküllü bir OYUN protokolü (QUIC'in yerini tutmaz: QUIC stream TCP yerine yazılmış, datagram'ı ek) — ileride bir **rUDP sertleştirme paketi** (B1–B5, B7) açılacak | ROADMAP, SECURITY:19 |
 | E4 ~~Koordinat formatı~~ **Karar (2026-09-27): oyunun kararı — kapandı.** Kit her formatı taşır (`RecordCodec`, A31); demoların `sint32`'si yalnız onların seçimi; motorda iş yok | ROADMAP "Koordinat formatı" |
 | E5 ~~Protokol sürüm aralığı~~ **Karar (2026-09-27): kapandı** — base protokolün geriye dönük uyumluluğu motorun sorumluluğu (varsayılan toplamalı değişiklik; uyumsuzlukta sürüm artar + N−1 geçiş desteği; ERROR 13 tespit), kabul aralığı dağıtımın config'i (`min_protocol_version`); oyunun protokol sürümü oyunun işi. Kod: İLK uyumsuz base değişikliğinde (`min_protocol_version` + N−1) | DESIGN §5 "Base protokol evrim kuralı" |
-| E6 ~~AFK atılan üye odadan mı sunucudan mı~~ **Karar (2026-09-27): opt-in kapatma fiili** — oda→registry "bağlantıyı kapat" fiili; oyun/config `leave_room`/`disconnect` seçer, varsayılan bugünkü (odadan çıkar, soket açık); kapatma ERROR bildirimiyle → **SIRADA** | RECONNECT §16 |
+| E6 ~~AFK atılan üye odadan mı sunucudan mı~~ **Karar (2026-09-27): opt-in kapatma fiili** — oda→registry "bağlantıyı kapat" fiili; oyun/config `leave_room`/`disconnect` seçer, varsayılan bugünkü (odadan çıkar, soket açık); kapatma ERROR bildirimiyle → **KAPANDI (E6 turu):** `RoomConfig::afk_action` + oda→registry `RegistryMsg::CloseConn` + config (düz/`[rooms.<id>]`) + `GameModule::afk_action`; ERROR 9, `idle_input` | RECONNECT §16 |
 | E7 ~~A22 faz 0'ın soruları~~ **Cevaplandı (2026-09-25):** kit yalnız YAPI TAŞI verir — kayıt gövdesi formatı (protobuf, MessagePack, bit paketli…), yeni zarf alanının sürümlenmesi, entity başına gönderim hızı ve istemci interpolasyonu OYUNUN kararı; kit opt-in kanca sağlar, varsayılan bugünkü davranış. Kompakt wire id: evet (herkese; istemci kuralı değişmez) | KIT-ARCHITECTURE §10 "A22" |
+| E8 Oyun mantığına "oyuncuyu at" fiili (TickCtx/kanca → `CloseRequest`) — anlambilim kararı gerekiyor: üyelik `on_leave` mi `on_disconnect` ile mi biter, gerekçe metni kimin, sınır; `GameLogic` + `ShardLogic` + kit `Game` yüzeyi. İç fiil hazır | RECONNECT §16.1 |
 
 ### F. Diğer (test, temizlik, gözlemlenebilirlik)
 
@@ -155,8 +157,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
 | F20 Metrik örneğine global tick indisi (`RoomSample`/`RoomReport` + loadgen teli) — eşit olmayan `Lagged` sonrası da tutarlı kesit kurulabilsin; bugün yırtık satıra geri düşülüp söyleniyor | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 | F22 `input_rate_limited` için bağlantıya atıflı ilk-beş listesi (`actions_dropped_top` gibi) — bugün yalnız bağlantı başına bir `warn`; toplayıcıda bağlantı başı tablo + E2 aile tablosu | ihtiyaç görülünce | SECURITY §3.4 "Kalan yüzey" |
+| F23 Yük altında (load ~15+) ara sıra düşen gerçek saatli testler — E1'de `metrics::tests::collector::room_counters_flow_to_collector` ("2 steps"), E6 doğrulamasında `otlp` koşusunda kimliği yakalanamayan bir test; paused saate taşımak ya da eşiği sözleşmeye bağlamak | CI'da görülürse | E1/E6 turları |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2 ve E1+F21 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21 ve E6 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

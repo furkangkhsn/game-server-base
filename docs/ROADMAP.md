@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1161** (1161/1161 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1192** (1192/1192 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **E1 + F21 — girdi hız sınırı (opt-in)** (SECURITY §3.4) —
+Son tur: **E6 — girdi-boşta tavanının eylemi** (RECONNECT §16.1) —
+`afk_action = leave_room | disconnect` (varsayılan bugünkü); `disconnect`
+oda→registry kapatma fiiliyle bağlantıyı kapatır: ERROR 9 en-iyi-çaba,
+`idle_input` sayılır, park resume edilebilir kalır. Yan bulgu B40 sırada.
+Önceki tur: **E1 + F21 — girdi hız sınırı (opt-in)** (SECURITY §3.4) —
 bağlantı başına token bucket, varsayılan kapalı, sayı oyunun/config'in;
 aşan girdi odaya girmeden düşer, sayılır, ihlal değil. `conn_action = 0`
 paniği kapandı.

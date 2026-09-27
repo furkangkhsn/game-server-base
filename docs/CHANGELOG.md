@@ -5,6 +5,37 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## E6 — girdi-boşta tavanının eylemi: opt-in kapatma fiili (`core/e6-close-verb`)
+
+Tavan (`max_idle_input_secs`) oda ÜYELİĞİNİ bitiriyor, soketi açık
+bırakıyordu; odanın bir bağlantıyı kapattırma yolu yoktu. Kullanıcı kararı
+(2026-09-27): opt-in kapatma fiili, varsayılan bugünkü.
+
+- `RoomConfig::afk_action: AfkAction` — `LeaveRoom` (varsayılan, bayt bayt
+  bugünkü) / `Disconnect`. İkisinde de önce oyunun `on_disconnect`'i
+  varlığın kaderini seçer; `Disconnect` bağlantıyı da kapatır.
+- Oda→registry fiili: `RegistryMsg::CloseConn(CloseRequest { conn, room,
+  entity, parked, cause, reason })`; oda/shard 0d fazında `try_send` eder;
+  DOLU posta kutusunda istek kuyrukta kalır ve sonraki tick yeniden
+  denenir, KAPALIDA düşer. Registry satırını tek aramada yerleştirir ve
+  kararı spawn'lı `ConnIn::ServerClosed` ile iletir.
+- İstemciye en-iyi-çaba, beklemesiz ERROR 9 (`input idle: …`), sonra
+  kapanış. Yeni `server_closes{reason="idle_input"}`; iki altın dosya
+  bilerek güncellendi; loadgen teli **GSMF**.
+- Config `afk_action = "leave_room" | "disconnect"`, düz ve `[rooms.<id>]`;
+  katman: çekirdek → `GameModule::afk_action()` → düz → `[rooms.<id>]`
+  (oyun varsayılanları `GameDefaults { input_rate, afk_action }`).
+- Oyun mantığına genel "oyuncuyu at" fiili AÇILMADI (BACKLOG E8).
+- **Yan bulgu B40** (varsayılan yolda, önceden vardı): park edilmiş idle
+  üyenin istemcisi LEAVE'siz yeniden katılamıyor (JOIN ERROR 3, sert
+  ihlal); despawn edilen üyenin registry satırı soket sonra kapanırsa
+  slotuyla sızıyor. `disconnect` ikisini de yaşamaz.
+
+Testler 1161 → 1192 (`otlp` ile 1210); ajanın ~20 mutasyonu yakalandı;
+ebeveynin bağımsız mutasyonu (idle kapanışında bildirimi göndermemek) 4
+testi kırıyor. Ebeveynin bir `otlp` koşusunda bir test yük altında (load
+~15) bir kez düştü, sonraki dört koşu yeşil — kimliği yakalanamadı (F23).
+
 ## E1 + F21 — girdi hız sınırı (opt-in) ve sıfır aksiyon kapasitesi (`core/e1-input-rate`)
 
 Auth-sonrası GEÇERLİ girdinin saniye başına hacmi sınırsızdı; tek sınır

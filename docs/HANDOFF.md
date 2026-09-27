@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1161 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1192 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**E6 tamam** (RECONNECT §16.1, CHANGELOG "E6"): AFK'nın odadan mı sunucudan
+mı atılacağı oyunun/dağıtımın seçimi — `afk_action` (varsayılan
+`leave_room`; `disconnect` bağlantıyı ERROR 9 ile kapatır, `idle_input`
+sayılır). Fiil oda→registry→bağlantı (`RegistryMsg::CloseConn`); registry
+satırını kendisi yerleştirir; dolu posta kutusunda istek odanın kuyruğunda
+kalıp sonraki tick yeniden denenir. Açık: B40, E8.
 
 **E1 + F21 tamam** (SECURITY §3.4, CHANGELOG "E1 + F21"): kova bağlantı
 aktöründe (`conn/gate.rs`); sayı odanın config'inden registry join'de
@@ -587,6 +594,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1161 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1192 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
