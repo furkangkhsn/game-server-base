@@ -144,6 +144,7 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
         })),
     };
     let (join_reply, joined) = oneshot::channel();
+    let (resume_reply, resumed) = oneshot::channel();
     let msgs = vec![
         ShardMsg::Join {
             conn: ConnectionId(5),
@@ -158,7 +159,7 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
             epoch: 1,
             identity: "ghost".to_string(),
             out: out_tx,
-            reply: oneshot::channel().0,
+            reply: resume_reply,
         },
         ShardMsg::Leave {
             conn: ConnectionId(1),
@@ -223,6 +224,9 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
     assert_eq!(s.requests_dropped_unread, 1);
     assert_eq!(s.actions_dropped_unread, 1);
     assert!(joined.await.is_err(), "the join's reply was dropped");
+    // Dropped unanswered: the dispatcher's resume fan-out stops waiting
+    // for this shard the moment it is dropped (B71).
+    assert!(resumed.await.is_err(), "the resume's reply was dropped");
     assert!(
         inbox_tx.try_send(ShardMsg::Shutdown).is_err(),
         "the inbox is closed"

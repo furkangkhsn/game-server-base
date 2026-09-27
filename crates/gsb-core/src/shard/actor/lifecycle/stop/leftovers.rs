@@ -18,12 +18,15 @@ where
     St: Debug + Send + 'static,
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    /// Close the inbox (a later send fails at its sender, which counts it
-    /// — a neighbour's migration stays with the neighbour as
-    /// `migrations_failed`) and count every leftover by kind. The
-    /// broadcast ops (`Leave`, `Detach`, `Resume` reach every shard of
-    /// the room) count only where they would have acted: the owning
-    /// member's shard, the shard holding the parked identity.
+    /// Close the inbox (a later send fails at its sender: a neighbour's
+    /// migration stays with the neighbour as `migrations_failed`; a
+    /// connection's join or resume is answered `RoomGone` by its
+    /// dispatcher, not counted yet — BACKLOG B75) and count every
+    /// leftover by kind. The broadcast ops (`Leave`, `Detach`, `Resume`
+    /// reach every shard of the room) count only where they would have
+    /// acted: the owning member's shard, the shard holding the parked
+    /// identity. Every dropped reply is unanswered, which is how the
+    /// dispatcher's resume fan-out learns this shard is gone (B71).
     pub(crate) fn count_leftovers(&mut self) {
         self.inbox.close();
         let mut left: Vec<ShardMsg<St, Sp>> = self.deferred.drain(..).collect();

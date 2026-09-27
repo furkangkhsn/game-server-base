@@ -59,7 +59,8 @@ stop_counts! {
     /// single room every one; on a shard (the resume is BROADCAST to
     /// every shard) only the one whose parked row holds the identity —
     /// the shard whose answer mattered. Answered by the dispatcher like
-    /// a join.
+    /// a join. A sharded resume whose identity no shard holds parked
+    /// counts on none of them (no shard can tell; BACKLOG B75).
     resumes_unprocessed,
     /// `Leave` ops still queued at the stop that would have despawned a
     /// member here (the stale-leave guard passes; on a shard, the owning

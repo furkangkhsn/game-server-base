@@ -360,6 +360,13 @@ zaman doğru yapmak ya da seriyi artırmamak → ilk test düşer; hiç
 silmemek → ikinci test düşer; görevin yanlış seri yollaması → üç test
 düşer.
 
+**Dağıtıcının `RoomGone`'u (B71).** Dağıtıcı bir katılmayı iki yoldan
+`RoomGone` ile yanıtlar: oda/shard kutusu gönderimi reddeder (duruş
+bitmiş) ya da cevabı düşürür (duruşun kuyruk sayımı, ölen görev).
+Sharded resume'un yayın katlaması gidenleri artık beklemez (§6). İkinci
+yolu oda sayar (`joins_unprocessed`/`resumes_unprocessed`); birincisi ve
+parkı hiçbir shard'da olmayan kuyruktaki resume sayılmıyor — BACKLOG B75.
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-
@@ -476,6 +483,45 @@ edildiği shard'da devam eder; park bittiyse taze join kaydına iner.
 Kilit: `gsb-server/tests/mmo_home.rs::a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save`
 (kaydı shard 1'de, park'ı shard 2'de olan karakter shard 2'de resume
 ediyor; çıkıştan sonra shard 1'e taze join).
+
+**Duran odada resume (B71).** Dağıtıcı her shard'ın cevabını bir
+toplama kanalına (`agg_tx`) aktaran küçük görevlerle bekler; cevap başına
+5 sn sınırı var. Eskiden dağıtıcı toplama kanalının kendi göndericisini
+elinde tutuyordu: cevap vermeden giden bir shard (duranın `finish`'i
+kutuyu kapatıp kuyruktakileri cevapsız düşürür; ölen shard'ın kutusu
+göreviyle gider; kapanmış kutu gönderimi reddeder) kanalı kapatamıyor,
+her eksik cevap sınırın tamamını yiyordu — duran sharded odaya giden bir
+resume, zaten `RoomGone` olacak cevabını shard başına 5 sn geç alıyordu
+(üç shard: 15 sn). Artık dağıtıcı yayından sonra kendi göndericisini
+bırakır; her shard cevap verdiğinde ya da gittiği bilindiğinde kanal
+kapanır ve katlama hemen biter. Hepsi-ıska yolu değişmedi (ev shard'ına
+taze join; kutusu kapalıysa `RoomGone`); istemci teli aynı bayt, yalnız
+erken. Canlı ama yavaş bir shard için sınır aynen duruyor.
+
+- **Elenen:** `finish`'in kuyruktaki resume'lara `RoomGone` ile cevap
+  vermesi. Yalnız sırası gelen duruşu kapsar; panikle ölen shard'ın
+  kutusunu, `finish`'ten sonra reddedilen gönderimi ve dağıtıcının kendi
+  göndericisinin açık tuttuğu kanalı çözmez — kanal yine 5 sn bekler.
+  Cevabı "reddedildi" sınıfına da taşırdı (bugün `Gone`).
+- **Sayım (B75'e bırakıldı):** hiçbir shard'ın parkında olmayan kimliğin
+  duruşta kuyruktaki resume'u ve dağıtıcının `RoomGone` ile yanıtladığı
+  katılmalar (kapalı kutunun reddettiği gönderim) hiçbir yerde sayılmıyor.
+  Mevcut sayaçların hiçbiri bunu kesin anlamla taşıyamaz: shard'lar
+  birbirinin parkını bilmez (resume'u kimin sayacağına karar veremez),
+  `joins_unprocessed` "kuyrukta kalan"dır ve reddedilen gönderim kuyruğa
+  hiç girmemiştir, `join_ops_dropped` registry→dağıtıcı teslimidir.
+  Yeni bir registry sayacı gerekir.
+
+Test (`registry/actor/dispatch/tests.rs`, duraklatılmış saat, shard'ları
+test oynar): üç shard'ın hepsi resume kuyruktayken durur → `Gone`, 5 sn
+dolmadan; oda duruşun ortasında (biri önceden durmuş — gönderim
+reddedilir —, biri "burada değil" der, biri kuyrukla durur) → `Gone`, 5
+sn dolmadan, hiçbir shard'a join ulaşmaz. Önce yazıldı ve düştü (15 sn ve
+10 sn). Shard tarafı (`shard/tests/unread/stop.rs`): duranın kuyruktaki
+resume'u cevapsız düşürdüğü kilitli. Mutasyonlar: göndericiyi
+bırakmamak → iki dağıtıcı testi düşer; `finish`'in resume'a "burada
+değil" demesi → shard testi düşer. `Ok(None) => break` yük taşımaz (kapalı
+kanal hemen `None` döner; mutasyon yaşar, bilinçli).
 
 ## 7. Kanal swap: `ShardMsg::Resume` / `RoomControl::Resume`
 

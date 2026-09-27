@@ -15,6 +15,9 @@ use crate::shard::ShardMsg;
 
 use crate::registry::actor::Registry;
 
+#[cfg(test)]
+mod tests;
+
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
     W: Send + 'static,
@@ -139,6 +142,15 @@ where
                         });
                     }
                 }
+                // Only the forwarders hold the aggregate's sender now (B71):
+                // once every shard has answered or is known gone — a
+                // stopping shard's `finish` drains its inbox dropping each
+                // reply, a dead shard's inbox goes with its task, a closed
+                // inbox refused the send above — `recv` sees the channel
+                // close. A copy held here kept it open, so every missing
+                // answer cost the whole per-answer timeout: a resume into
+                // a stopping room waited 5 s per shard for its `RoomGone`.
+                drop(agg_tx);
                 let mut accepted: Option<(EntityId, Mailbox<Action>)> = None;
                 let mut stale: Option<CoreError> = None;
                 for _ in 0..n {
@@ -147,7 +159,10 @@ where
                     {
                         Ok(Some(Ok(Some(pair)))) => accepted = Some(pair),
                         Ok(Some(Err(e))) => stale = Some(e),
-                        _ => {}
+                        // Every shard answered or is gone.
+                        Ok(None) => break,
+                        // "Not here", or a live shard slower than the bound.
+                        Ok(Some(Ok(None))) | Err(_) => {}
                     }
                 }
                 if let Some((entity, actions)) = accepted {
