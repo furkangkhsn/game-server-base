@@ -198,6 +198,18 @@ pub struct RoomSample {
     /// out, or the connection left), dropped by the reconciliation,
     /// cumulative.
     pub requests_late: u64,
+    /// RPC: answers produced for a session that ended before any batch
+    /// carried them — a leave, a detach, a migration, a superseding
+    /// rejoin — discarded undelivered (B53), cumulative. The request is
+    /// already in its own bucket (`requests_local`, a rejection, …); this
+    /// counts what became of its answer. An answer put back after a
+    /// failed send (F14) is counted once, when it is finally discarded.
+    pub requests_undelivered: u64,
+    /// RPC: external requests still in flight when their session ended
+    /// (the same ends): no answer will reach that session (B53),
+    /// cumulative. The worker's later report, if one comes, is counted
+    /// again as a report in [`Self::requests_late`].
+    pub requests_abandoned: u64,
     /// RPC: external requests currently in flight (gauge).
     pub pending_requests: u32,
     /// Current gauges: snapshot groups, members (connections in the

@@ -129,6 +129,8 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.requests_dropped_unread, 8, "requests_dropped_unread");
     assert_eq!(f.requests_timed_out, 24, "requests_timed_out");
     assert_eq!(f.requests_late, 7, "requests_late");
+    assert_eq!(f.requests_undelivered, 7, "requests_undelivered");
+    assert_eq!(f.requests_abandoned, 5, "requests_abandoned");
     assert_eq!(
         f.pending_requests, 15,
         "pending_requests (a gauge, but a partitioned one)"

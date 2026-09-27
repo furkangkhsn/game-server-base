@@ -150,6 +150,8 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "req_unread",
         "req_to",
         "req_late",
+        "req_undelivered",
+        "req_abandoned",
         "req_pending",
     ] {
         let v: u64 = get(k).parse().expect("number");

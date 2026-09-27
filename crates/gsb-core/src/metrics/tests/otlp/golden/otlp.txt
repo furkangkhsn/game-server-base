@@ -251,6 +251,12 @@ gsb_room_requests_timed_out sum t=2 mono=true unit="" n=2 | RPC pending requests
 gsb_room_requests_late sum t=2 mono=true unit="" n=2 | RPC worker reports dropped as late, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_requests_undelivered sum t=2 mono=true unit="" n=2 | RPC answers discarded undelivered because their session ended first (left, detached, migrated or superseded; the request is counted once in its own bucket), cumulative.
+  [room=r1] 1000..2000 int 1
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_abandoned sum t=2 mono=true unit="" n=2 | External RPC requests still in flight when their session ended (no answer reaches that session; a later worker report is also counted as late), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
 gsb_room_pending_requests gauge unit="" n=2 | External RPC requests currently in flight.
   [room=r1] 0..2000 double 0
   [room=r7] 0..2000 double 1

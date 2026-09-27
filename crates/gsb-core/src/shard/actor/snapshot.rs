@@ -9,7 +9,7 @@ use std::hash::Hash;
 use tracing::warn;
 
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{GroupState, SendFailures, TickCtx};
+use crate::room::{GroupState, SendFailures, TickCtx, undelivered};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -293,8 +293,10 @@ where
         // Every connection was visited above, so anything left here
         // belongs to a connection removed from the table this same tick
         // (leave/migrate) that never got its frame: drop it — a request is
-        // answered exactly once, and it was never delivered.
+        // answered exactly once, and it was never delivered — and count it
+        // (B53; the put-back answers are not in the map yet).
         if !self.queued.is_empty() {
+            self.m.requests_undelivered += undelivered(&self.queued);
             self.queued.clear();
         }
         // The undelivered answers go back to the front of their queue.

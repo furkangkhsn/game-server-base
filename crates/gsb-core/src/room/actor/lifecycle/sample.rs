@@ -84,6 +84,8 @@ where
             requests_dropped_unread: self.m.requests_dropped_unread,
             requests_timed_out: self.m.requests_timed_out,
             requests_late: self.m.requests_late,
+            requests_undelivered: self.m.requests_undelivered,
+            requests_abandoned: self.m.requests_abandoned,
             pending_requests: self.pending_total as u32,
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,

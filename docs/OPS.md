@@ -220,6 +220,14 @@ max_detach_hold_secs = "off"
   | `gsb_room_requests_refused_congested_total` | Tıkalı bağlantının (son batch'i düştü) yanıt borcu per-connection cap'e ulaşmışken **işlenmeden ve yanıtlanmadan** reddedilen RPC istekleri — F14'ün fırtına sınırı; F15'ten beri `…_rejected_conn_cap_total`'dan ayrı (orada yalnız yanıtlanan cap retleri). Satırda `req_refused=`; RPC-CONTROL-PLANE §3.1 |
   | `gsb_room_sends_closed_total` | Fan-out'un **zaten kapalı** bir bağlantıya denediği batch'ler (`try_send` → Closed): istemci soketini kapatmış (tipik: LEAVE sonucundan hemen sonra), oda ayrılışı/kopuşu henüz işlememiş — bağlantı sonu başına en çok ~1, istemcinin istediği bir kare kaybolmaz. B32'den beri `gsb_room_dropped_total`'dan ayrı: o artık yalnız DOLU kanalı (yavaş istemci — HELP'inin dediği) sayar. Oran göstergesi yok (bağlantı sonlarıyla sınırlı; oranı ayrılış oranıdır). Satırda `sends_closed=` (`dropped_s=`'den sonra), loadgen telinde GSMI, `RESULT`'ta `sends_closed=` (`dropped=`'den sonra, her satırda); RPC-CONTROL-PLANE §8.2 |
   | `gsb_room_requests_dropped_unread_total` | Oturum bittiğinde (ayrılış, despawn eden kopuş, yeniden katılım, resume, girdi-boşta tavanının `leave_room` altında geride bıraktığı park) action kanalında **odanın henüz okumadığı** RPC istekleri — işlenmez, yanıtlanmaz (CONTROL READ'den önce koşar; ayrılıştan hemen önce gönderilenler). Oda defterini kapatan kova: gönderilen = yanıtlanan + retler + `req_refused` + bu. Satırda `req_unread=`; B36, RPC-CONTROL-PLANE §8.3 |
+  | `gsb_room_requests_undelivered_total` | Oda üretti ama oturum ÖNCE bittiği için hiçbir batch'in taşımadığı RPC **yanıtları** (ayrılış, kopuş/park, göç, yeniden katılım; oturumu aynı tick'te tablodan çıkan satır dahil) — atıldıkları yerde sayılır. İsteğin kendisi kendi kovasında zaten bir kez sayılı (`req_local`, bir ret, …); bu, yanıtına ne olduğunu sayar — defterin terimi DEĞİL. Düşen/kapalı batch'ten sonra kuyruğa geri konan yanıt (F14) yalnız sonunda atıldığında bir kez sayılır. Satırda `req_undelivered=` (`req_late=`'den sonra), loadgen telinde GSMK, `RESULT`'ta `req_undelivered=`; B53, RPC-CONTROL-PLANE §3.1 |
+  | `gsb_room_requests_abandoned_total` | Oturumu bittiğinde hâlâ **uçuşta** (worker'da) olan dış RPC istekleri: o oturuma yanıt gitmeyecek. Worker'ın sonradan gelen raporu ayrıca `gsb_room_requests_late_total`'da (rapor sayacı, istek değil) sayılır; bu sayaç oturum sonundaki kaybı söyler. Satırda `req_abandoned=`, loadgen telinde GSMK, `RESULT`'ta `req_abandoned=`; B53 |
+
+  Oda KAPANIRKEN (kapama/emeklilik/sunucu durması) kuyruktaki yanıtlar ve
+  uçuştaki istekler aktörle birlikte gider ve bu iki aileye düşmez: oda
+  dururken son örnek göndermez (RPC-CONTROL-PLANE §8.3, elenen 5 — geç
+  örnek yok edilmiş odanın akümülatörünü diriltebilirdi), yani sayılsa da
+  hiçbir rapora ulaşmazdı.
 
   Etki, göç ve takım aileleri yalnız shard satırlarında hareket eder
   (tek oda aktörü 0 yazar; takım ailesi yalnız `team_exchange`'i

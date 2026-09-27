@@ -14,7 +14,7 @@ mod hold;
 mod logic;
 mod observe;
 
-pub(crate) use fanout::SendFailures;
+pub(crate) use fanout::{SendFailures, undelivered};
 pub(crate) use hold::HoldEnd;
 
 #[cfg(test)]
@@ -254,6 +254,16 @@ pub(crate) struct RoomCounters {
     /// answered, timed out, or the connection left) and were dropped,
     /// cumulative (the exactly-one-answer reconciliation in action).
     pub(crate) requests_late: u64,
+    /// RPC answers the room produced for a session that ended before any
+    /// batch carried them (a leave, a detach, a migration, a superseding
+    /// rejoin — or a row gone the same tick), counted as they are
+    /// discarded, cumulative (B53). One per request: an answer put back
+    /// after a failed send is counted only when it is finally discarded.
+    pub(crate) requests_undelivered: u64,
+    /// External RPC requests still in flight (pending) when their
+    /// session ended: no answer will ever reach that session, cumulative
+    /// (B53). The worker's later report, if any, is `requests_late`.
+    pub(crate) requests_abandoned: u64,
     /// Largest snapshot group this tick (recomputed in the broadcast
     /// phase; carried in the per-step sample as a gauge).
     pub(crate) step_max_group: u32,
@@ -309,6 +319,8 @@ impl Default for RoomCounters {
             requests_dropped_unread: 0,
             requests_timed_out: 0,
             requests_late: 0,
+            requests_undelivered: 0,
+            requests_abandoned: 0,
             step_max_group: 0,
             logic_dropped_warned: false,
         }

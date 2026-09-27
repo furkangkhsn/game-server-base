@@ -314,8 +314,11 @@ where
         // queued entry this tick), so anything left here belongs to a
         // connection that was removed from the table this same tick and
         // never got its frame: drop it (the request is answered exactly
-        // once — it was never delivered).
+        // once — it was never delivered) and count it (B53). The answers
+        // this tick put back are not in the map yet, so none is counted
+        // here and again when its session ends.
         if !self.queued.is_empty() {
+            self.m.requests_undelivered += undelivered(&self.queued);
             self.queued.clear();
         }
         // The undelivered answers go back to the front of their (now
@@ -359,10 +362,18 @@ where
     /// exactly-one-answer reconciliation); the workers themselves exit
     /// on their own (report send against a dropped entry, or their
     /// timeout).
+    ///
+    /// What the session takes along is counted (B53): its in-flight
+    /// requests as `requests_abandoned`, its owed answers — the ones put
+    /// back after a failed send included, each exactly once, here — as
+    /// `requests_undelivered`.
     pub(super) fn drop_conn_request_state(&mut self, conn: ConnectionId) {
         if let Some(deq) = self.pending.remove(&conn) {
             self.pending_total = self.pending_total.saturating_sub(deq.len());
+            self.m.requests_abandoned += deq.len() as u64;
         }
-        self.queued.remove(&conn);
+        if let Some(owed) = self.queued.remove(&conn) {
+            self.m.requests_undelivered += owed.len() as u64;
+        }
     }
 }

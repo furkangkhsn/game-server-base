@@ -274,7 +274,23 @@ kalanlar.
   yanıtları uçuştaki istekleriyle birlikte **götürür** (oturum
   kapsamlı RPC durumu; resume eden oturum ölü oturumun yanıtlarını
   almaz). Sızıntı yok: `drop_conn_request_state` ve fan-out sonundaki
-  süpürme.
+  süpürme. **Sayılıyor (B53):** o iki yer, attığı yanıtları
+  `requests_undelivered` (`req_undelivered=`,
+  `gsb_room_requests_undelivered_total`), attığı uçuştaki istekleri
+  `requests_abandoned` (`req_abandoned=`,
+  `gsb_room_requests_abandoned_total`) olarak sayar. İkisi de defterin
+  terimi DEĞİL — istek zaten kendi kovasında bir kez sayılı; bunlar
+  yanıtın akıbetidir. Çift sayım yok: düşen ya da kapalı kanala çarpan
+  batch'ten geri konan yanıt (kural yukarıda) `queued`'a süpürmeden SONRA
+  döner, yani o tick sayılmaz; oturum bitince `drop_conn_request_state`
+  onu bir kez sayar (kilit: `room::tests::fanout::replies::undelivered`,
+  `shard::tests::replies::undelivered` — kapalı kanala üç kez çarpıp geri
+  konan tek yanıt ayrılışta 1). Uçuştaki isteğin worker'ı sonra rapor
+  ederse o rapor ayrıca `req_late`'te sayılır (rapor sayacı). Yanıt
+  defteri böylece kapanır: `req_local + Σ req_rej_* + (req_ext −
+  req_abandoned − req_pending)` yanıt kuyruğa girdi; bunlardan
+  `req_undelivered`'ı teslim edilmedi. Oda KAPANIRKEN kuyrukta/uçuşta
+  kalanlar sayılamaz: oda dururken son örnek göndermez (§8.3, elenen 5).
 - **Fırtına sınırında reddedilen istek:** hiç kabul edilmedi, yanıtı
   yok.
 - **Yanıtları kodlamayan mantık:** `private` verilen `responses`'ı

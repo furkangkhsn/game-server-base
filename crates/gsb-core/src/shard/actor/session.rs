@@ -168,10 +168,16 @@ where
     /// 0b reconciliation; the workers themselves exit on their own (their
     /// report send fails against the dropped entry, or their timeout
     /// fires first). (The room actor's helper, byte-for-byte.)
+    /// What the session takes along is counted (B53, the room's rule):
+    /// in-flight requests as `requests_abandoned`, owed answers as
+    /// `requests_undelivered`.
     pub(crate) fn drop_conn_request_state(&mut self, conn: ConnectionId) {
         if let Some(deq) = self.pending.remove(&conn) {
             self.pending_total = self.pending_total.saturating_sub(deq.len());
+            self.m.requests_abandoned += deq.len() as u64;
         }
-        self.queued.remove(&conn);
+        if let Some(owed) = self.queued.remove(&conn) {
+            self.m.requests_undelivered += owed.len() as u64;
+        }
     }
 }

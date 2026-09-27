@@ -11,10 +11,14 @@
 //! (`sends_closed`) instead of reading as a slow client. Either way the
 //! actor's handling of the batch is the same.
 
+use std::collections::HashMap;
+
 use tokio::sync::mpsc::error::TrySendError;
 
 use super::RoomCounters;
 use crate::channel::FrameBatch;
+use crate::id::ConnectionId;
+use crate::rpc::RpcReply;
 
 /// One BROADCAST phase's tally of failed per-connection sends: two
 /// integer adds on the failure path, settled once at the end of the
@@ -46,4 +50,12 @@ impl SendFailures {
         m.dropped_frames += self.full;
         m.sends_closed += self.closed;
     }
+}
+
+/// The answers still owed in `queued` (B53): what the fan-out's closing
+/// sweep discards when a connection left the table the same tick. Walks
+/// only the leftover entries — the fan-out removed every visited one —
+/// and runs only when any are left.
+pub(crate) fn undelivered(queued: &HashMap<ConnectionId, Vec<RpcReply>>) -> u64 {
+    queued.values().map(|owed| owed.len() as u64).sum()
 }

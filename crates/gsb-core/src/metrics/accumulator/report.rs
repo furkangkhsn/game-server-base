@@ -103,6 +103,8 @@ impl MetricAccumulator {
                 requests_dropped_unread: latest.requests_dropped_unread,
                 requests_timed_out: latest.requests_timed_out,
                 requests_late: latest.requests_late,
+                requests_undelivered: latest.requests_undelivered,
+                requests_abandoned: latest.requests_abandoned,
                 pending_requests: latest.pending_requests,
                 metrics_dropped: latest.metrics_dropped,
                 logic: latest.logic,

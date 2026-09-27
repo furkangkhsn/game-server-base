@@ -13,7 +13,9 @@
 //! `gsb_room_sends_closed_total`, and B51's net-scope
 //! `actions_dropped_closed=` / `requests_dropped_closed=` with
 //! `gsb_net_actions_dropped_closed_total` /
-//! `gsb_net_requests_dropped_closed_total`.
+//! `gsb_net_requests_dropped_closed_total`, and B53's `req_undelivered=` /
+//! `req_abandoned=` with `gsb_room_requests_undelivered_total` /
+//! `gsb_room_requests_abandoned_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -74,6 +76,7 @@ pub(super) fn golden_report() -> MetricReport {
     a2.sends_closed = 1;
     a2.requests_refused_congested = 3;
     a2.requests_dropped_unread = 2;
+    a2.requests_undelivered = 1;
     acc.apply(MetricsEvent::Room(a2));
     let mut b = room_sample(RoomId(7), t1, 15);
     b.effects_applied = 6;
@@ -83,6 +86,7 @@ pub(super) fn golden_report() -> MetricReport {
     b.detached = 1;
     b.resumes = 2;
     b.pending_requests = 1;
+    b.requests_abandoned = 1;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

@@ -8,7 +8,7 @@ use super::{RoomFamily, counter, gauge};
 /// Session lifecycle through the room's metric drops, in exposition
 /// order. The effect, migration and team families move on shard rows
 /// only (0 on a single room).
-pub(super) const SESSION: [RoomFamily; 37] = [
+pub(super) const SESSION: [RoomFamily; 39] = [
     counter(
         "gsb_room_joins_total",
         "Joins processed, cumulative.",
@@ -184,6 +184,17 @@ pub(super) const SESSION: [RoomFamily; 37] = [
         "gsb_room_requests_late_total",
         "RPC worker reports dropped as late, cumulative.",
         |r| r.requests_late,
+    ),
+    // B53: what became of the answers owed to a session that ended.
+    counter(
+        "gsb_room_requests_undelivered_total",
+        "RPC answers discarded undelivered because their session ended first (left, detached, migrated or superseded; the request is counted once in its own bucket), cumulative.",
+        |r| r.requests_undelivered,
+    ),
+    counter(
+        "gsb_room_requests_abandoned_total",
+        "External RPC requests still in flight when their session ended (no answer reaches that session; a later worker report is also counted as late), cumulative.",
+        |r| r.requests_abandoned,
     ),
     gauge(
         "gsb_room_pending_requests",

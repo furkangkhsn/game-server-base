@@ -191,6 +191,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             requests_dropped_unread,
             requests_timed_out,
             requests_late,
+            requests_undelivered,
+            requests_abandoned,
             pending_requests,
             metrics_dropped,
             logic,
@@ -273,6 +275,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.requests_dropped_unread += requests_dropped_unread;
         acc.requests_timed_out += requests_timed_out;
         acc.requests_late += requests_late;
+        acc.requests_undelivered += requests_undelivered;
+        acc.requests_abandoned += requests_abandoned;
         acc.metrics_dropped += metrics_dropped;
 
         // ── SUM: per-shard RATES over the same wall clock ──

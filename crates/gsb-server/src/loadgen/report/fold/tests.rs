@@ -112,6 +112,8 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
         requests_dropped_unread: [0, 3, 5][i],
         requests_timed_out: [7, 8, 9][i],
         requests_late: [1, 2, 4][i],
+        requests_undelivered: [0, 6, 1][i],
+        requests_abandoned: [2, 0, 3][i],
         pending_requests: [3, 5, 7][i],
         metrics_dropped: [2, 4, 8][i],
         logic: logic(i),

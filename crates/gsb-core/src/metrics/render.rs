@@ -50,6 +50,7 @@ impl MetricReport {
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
                  req_refused={} req_unread={} req_to={} req_late={} \
+                 req_undelivered={} req_abandoned={} \
                  req_pending={} metrics_dropped={}",
                 r.room,
                 r.steps,
@@ -120,6 +121,8 @@ impl MetricReport {
                 r.requests_dropped_unread,
                 r.requests_timed_out,
                 r.requests_late,
+                r.requests_undelivered,
+                r.requests_abandoned,
                 r.pending_requests,
                 r.metrics_dropped
             );

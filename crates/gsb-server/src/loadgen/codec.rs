@@ -49,6 +49,7 @@ mod logic;
 ///     u64 req_rej_logic  u64 req_rej_conn  u64 req_rej_room
 ///     u64 req_refused  u64 req_unread
 ///     u64 req_to  u64 req_late
+///     u64 req_undelivered  u64 req_abandoned
 ///     u32 req_pending
 ///     u64 metrics_dropped
 ///     u8 n_logic  u32 logic_dropped
@@ -143,7 +144,10 @@ mod logic;
 /// `requests_dropped_closed` (the forwards a connection dropped into an
 /// action channel the room had already closed — B51), right after
 /// `input_rate_limited`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4A;
+/// GSMK = the GSMJ layout plus each room's `requests_undelivered` and
+/// `requests_abandoned` (the answers and the in-flight requests a session
+/// that ended took with it — B53), right after `requests_late`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D4B;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -238,6 +242,8 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.requests_dropped_unread);
         w.u64(room.requests_timed_out);
         w.u64(room.requests_late);
+        w.u64(room.requests_undelivered);
+        w.u64(room.requests_abandoned);
         w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
         logic::encode(&mut w, &room.logic);
@@ -417,6 +423,8 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             requests_dropped_unread: r.u64()?,
             requests_timed_out: r.u64()?,
             requests_late: r.u64()?,
+            requests_undelivered: r.u64()?,
+            requests_abandoned: r.u64()?,
             pending_requests: r.u32()?,
             metrics_dropped: r.u64()?,
             logic: logic::decode(&mut r)?,

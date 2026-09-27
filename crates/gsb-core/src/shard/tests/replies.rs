@@ -9,6 +9,8 @@ use prost::Message;
 
 // The storm bound (the congested connection's refusals).
 mod bound;
+// What a session that ended takes along, counted (B53).
+mod undelivered;
 
 /// Answered locally, in the tick that processes it.
 const OP_LOCAL: u16 = 0x01;

@@ -131,6 +131,11 @@ pub struct RoomReport {
     pub requests_dropped_unread: u64,
     pub requests_timed_out: u64,
     pub requests_late: u64,
+    /// RPC answers discarded undelivered because their session ended, and
+    /// external requests still in flight when it did (B53; see
+    /// `RoomSample::requests_undelivered`), cumulative.
+    pub requests_undelivered: u64,
+    pub requests_abandoned: u64,
     /// RPC: external requests currently in flight (gauge).
     pub pending_requests: u32,
     /// Metric samples dropped on a full metrics channel (cumulative).

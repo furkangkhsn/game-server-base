@@ -95,6 +95,33 @@ fn the_unread_requests_survive_the_wire() {
     }
 }
 
+/// What a session that ended took with it (GSMK, B53) crosses the wire
+/// as two fields of its own, between the late reports and the pending
+/// gauge.
+#[test]
+fn the_undelivered_answers_survive_the_wire() {
+    let sent = three_shards();
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(
+            (
+                a.requests_late,
+                a.requests_undelivered,
+                a.requests_abandoned,
+                a.pending_requests
+            ),
+            (
+                b.requests_late,
+                b.requests_undelivered,
+                b.requests_abandoned,
+                b.pending_requests
+            ),
+            "shard {:?}",
+            a.room
+        );
+    }
+}
+
 /// The fan-out's closed-channel sends (GSMI, B32) cross the wire as
 /// their own field, between the drop rate and the keep-alive re-sends.
 #[test]
@@ -119,7 +146,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"JMSG", "the magic, little-endian GSMJ");
+    assert_eq!(&frame[..4], b"KMSG", "the magic, little-endian GSMK");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
