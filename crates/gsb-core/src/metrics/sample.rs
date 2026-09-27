@@ -87,7 +87,11 @@ pub struct RoomSample {
     /// decision input, see `docs/ROADMAP.md`).
     pub snap_records: u64,
     /// Snapshot + private payload bytes shipped to the room's
-    /// connections (per-connection fan-out copies), cumulative.
+    /// connections (per-connection fan-out copies), cumulative. Shipped
+    /// means the outbound channel took the batch: since B57 a batch
+    /// dropped on a full channel ([`Self::dropped_frames`]) or refused by
+    /// a closed one ([`Self::sends_closed`]) is not counted here, nor in
+    /// the two frame counters below (before, they counted what was built).
     pub shipped_bytes: u64,
     /// Frames shipped to the room's connections (snapshot + private),
     /// cumulative.

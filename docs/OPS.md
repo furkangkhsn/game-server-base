@@ -200,6 +200,19 @@ max_detach_hold_secs = "off"
   |---|---|
   | `gsb_room_shipped_frames_total` | Bağlantılara gönderilen kareler (snapshot + özel; fan-out kopyaları) — `gsb_room_shipped_bytes_total`'ın kare sayısı (B39; DESIGN §12): datagram taşıması bayt kadar PAKET ile de sınırlıdır, `shipped_bytes/shipped_frames` = ortalama kare boyu |
   | `gsb_room_private_frames_total` | Bunların bağlantıya özel olanları (RPC cevapları, ack'ler, tek atımlık full'lar); `shipped_frames − private_frames` = fan-out'un yayın yarısı (B39) |
+
+  **`shipped_*` anlamı DARALDI (B57, sayım turu 2):** `gsb_room_shipped_bytes_total`,
+  `…_shipped_frames_total`, `…_private_frames_total` (ve net kapsamının
+  `bytes_out_room`'u, bunların toplamı) önceden fan-out'un KURDUĞU
+  batch'leri sayıyordu — dolu kanalda düşen (`dropped`) ya da kapalı
+  kanalın reddettiği (`sends_closed`) batch de "gönderildi" görünürdü.
+  Artık yalnız çıkış kanalının ALDIĞI batch sayılır (`room::Shipped`,
+  başarılı `try_send`'den sonra; oda + shard). Seçenekler: (a) "kuruldu"
+  anlamını koruyup belgelemek — adı yanlış bırakırdı ("shipped" gönderildi
+  demek) ve düşen yükü iki kez gösterirdi (hem `dropped`'ta hem trafikte);
+  (b) başarıda saymak — seçildi: ad anlamla aynı, kayıplar kendi
+  sayaçlarında, maliyet yığında üç tamsayı. Düşme yokken değerler aynı.
+  HELP'ler zaten "shipped" diyordu; altın metinler değişmedi.
   | `gsb_room_detach_forced_total` | `max_detach_hold` tavanının duran bir `may_release` vetosunu ezerek bitirdiği bekletmeler (`detach_expired_*`'ın alt kümesi; RECONNECT §17) |
   | `gsb_room_effects_applied_total` | Bu shard'ın oyununun otorite olarak uyguladığı uzak etkiler (CROSS-SHARD §4b) |
   | `gsb_room_effects_forwarded_total` | Göç etmiş hedefin yeni sahibine devredilen etkiler |

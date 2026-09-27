@@ -14,7 +14,7 @@ mod hold;
 mod logic;
 mod observe;
 
-pub(crate) use fanout::{SendFailures, undelivered};
+pub(crate) use fanout::{SendFailures, Shipped, undelivered};
 pub(crate) use hold::HoldEnd;
 
 #[cfg(test)]
@@ -176,7 +176,8 @@ pub(crate) struct RoomCounters {
     /// cumulative.
     pub(crate) metrics_dropped: u64,
     /// Snapshot + private bytes/frames shipped to the room's connections,
-    /// cumulative.
+    /// cumulative — counted once the outbound channel TOOK the batch
+    /// (B57, [`Shipped`]): a dropped or refused batch is not traffic.
     pub(crate) shipped_bytes: u64,
     pub(crate) shipped_frames: u64,
     pub(crate) private_frames: u64,

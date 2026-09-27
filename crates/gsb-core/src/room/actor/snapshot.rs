@@ -244,11 +244,13 @@ where
             // Whether the group frame rides this batch: what a drop of it
             // costs the client is the logic's to judge (F11).
             let mut with_snapshot = false;
+            // What this batch ships, counted only once the channel takes
+            // it (B57: `shipped_*` means shipped — a dropped or refused
+            // batch is `dropped_frames` / `sends_closed`, not traffic).
+            let mut ship = Shipped::default();
             if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
                 with_snapshot = true;
-                // Metrics: one shipped frame and its wire payload size.
-                self.m.shipped_frames += 1;
-                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
+                ship.frame(payload.len(), false);
                 rc.batch
                     .push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
@@ -268,10 +270,7 @@ where
                 .logic
                 .private(&mut self.world, player, &rc.group, replies, &mut pbuf)
             {
-                // Metrics: one shipped private frame and its payload size.
-                self.m.private_frames += 1;
-                self.m.shipped_frames += 1;
-                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
+                ship.frame(pbuf.len(), true);
                 rc.batch.push(gsb_protocol::FrameBody::new(
                     priv_op,
                     pbuf.split_to(pbuf.len()).freeze(),
@@ -302,11 +301,14 @@ where
                     }
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
-                } else if rc.dropping {
-                    // The first batch through after a run of drops: the
-                    // logic may release what it paced (F11).
-                    rc.dropping = false;
-                    self.logic.on_batch_resumed(&mut self.world, player);
+                } else {
+                    ship.settle(&mut self.m);
+                    if rc.dropping {
+                        // The first batch through after a run of drops:
+                        // the logic may release what it paced (F11).
+                        rc.dropping = false;
+                        self.logic.on_batch_resumed(&mut self.world, player);
+                    }
                 }
             }
         }

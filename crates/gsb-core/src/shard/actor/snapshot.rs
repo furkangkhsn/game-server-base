@@ -9,7 +9,7 @@ use std::hash::Hash;
 use tracing::warn;
 
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{GroupState, SendFailures, TickCtx, undelivered};
+use crate::room::{GroupState, SendFailures, Shipped, TickCtx, undelivered};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -237,10 +237,12 @@ where
             // Whether the group frame rides this batch (the drop signal's
             // argument — the room's 4d).
             let mut with_snapshot = false;
+            // Counted once the channel takes the batch (the room's 4d,
+            // B57).
+            let mut ship = Shipped::default();
             if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
                 with_snapshot = true;
-                self.m.shipped_frames += 1;
-                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(payload.len() as u64);
+                ship.frame(payload.len(), false);
                 rc.batch
                     .push(gsb_protocol::FrameBody::new(snap_op, payload));
             }
@@ -259,9 +261,7 @@ where
                 .logic
                 .private(&mut self.world, player, &rc.group, replies, &mut pbuf)
             {
-                self.m.private_frames += 1;
-                self.m.shipped_frames += 1;
-                self.m.shipped_bytes = self.m.shipped_bytes.saturating_add(pbuf.len() as u64);
+                ship.frame(pbuf.len(), true);
                 rc.batch.push(gsb_protocol::FrameBody::new(
                     priv_op,
                     pbuf.split_to(pbuf.len()).freeze(),
@@ -282,11 +282,14 @@ where
                     }
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
-                } else if rc.dropping {
-                    // The first batch through after a run of drops: the
-                    // logic may release what it paced (F11).
-                    rc.dropping = false;
-                    self.logic.on_batch_resumed(&mut self.world, player);
+                } else {
+                    ship.settle(&mut self.m);
+                    if rc.dropping {
+                        // The first batch through after a run of drops:
+                        // the logic may release what it paced (F11).
+                        rc.dropping = false;
+                        self.logic.on_batch_resumed(&mut self.world, player);
+                    }
                 }
             }
         }

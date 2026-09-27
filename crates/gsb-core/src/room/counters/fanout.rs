@@ -59,3 +59,31 @@ impl SendFailures {
 pub(crate) fn undelivered(queued: &HashMap<ConnectionId, Vec<RpcReply>>) -> u64 {
     queued.values().map(|owed| owed.len() as u64).sum()
 }
+
+/// One batch's shipped traffic, counted only once the outbound channel
+/// takes the batch (B57): `shipped_frames` / `shipped_bytes` /
+/// `private_frames` mean frames that left for the connection — a batch
+/// the channel refused is a failed send ([`SendFailures`]), not traffic.
+/// Integer adds on the stack; settled on the success path.
+#[derive(Debug, Default)]
+pub(crate) struct Shipped {
+    frames: u64,
+    private: u64,
+    bytes: u64,
+}
+
+impl Shipped {
+    /// One frame of `len` payload bytes rides the batch.
+    pub(crate) fn frame(&mut self, len: usize, private: bool) {
+        self.frames += 1;
+        self.private += u64::from(private);
+        self.bytes = self.bytes.saturating_add(len as u64);
+    }
+
+    /// The channel took the batch: count it.
+    pub(crate) fn settle(self, m: &mut RoomCounters) {
+        m.shipped_frames += self.frames;
+        m.private_frames += self.private;
+        m.shipped_bytes = m.shipped_bytes.saturating_add(self.bytes);
+    }
+}
