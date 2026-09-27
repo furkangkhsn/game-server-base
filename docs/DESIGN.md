@@ -123,6 +123,26 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   `ConnOpened`'ı **actor'ü başlatmadan önce** registry'e gönderir (ilk
   istemci frame'ine karşı sıralama garantisi). Kalıcı hata durumunda
   (ör. `EMFILE`) 100ms backoff ile dener — CPU spin'i olmaz.
+- **Başlangıç odaları her join'in önünde (B44).** `room_count`
+  odalarının `CreateRoom`'ları, başlatma prosedüründe accept döngüleri
+  spawn edilmeden ÖNCE, id sırasıyla registry mailbox'ına satır içinde
+  (`try_send`) konur (`boot/start/boot_rooms.rs`). Registry mailbox'ını
+  FIFO boşaltır ve bir `CreateRoom` odayı tablosuna bir sonraki mesajdan
+  önce koyar (fabrika registry döngüsünde koşar); accept döngüsünden
+  gelen her `ConnOpened`/join daha sonraki bir mesajdır, yani oda
+  vardır. Yalnız CEVAPLAR spawn'lı bir görevde beklenir: başlatma hiçbir
+  odayı beklemez, bir oda başlatmayı (ve `start`'ın döndürdüğü tutamağa
+  muhtaç `stop`'u) asamaz. Eskiden her `CreateRoom` spawn'lı bir
+  görevden gidiyordu; yükte o görev accept'ten sonra koşunca hemen
+  katılan istemci `room 1 not found` alabiliyordu (~600 loadgen
+  koşusunda 3 kez). Kalan tek durum: mailbox'ın boş kapasitesini (4096)
+  aşan başlangıç odaları — onlar beklemeli gönderim ister, o yüzden
+  spawn'lı görevden (yine sıralı) gider ve başlatma bunu `warn` ile
+  söyler. *Elenen:* oluşturmaları accept'ten önce beklemek — doğruluk
+  için gereken sıra, tamamlanma değil; beklemek başlatmayı her odanın
+  fabrikasına bağlar. Kilit: `tests/boot_rooms.rs` (current-thread
+  runtime'da `start` döner dönmez `room_status` — spawn'lı görev henüz
+  koşmamışken — `Running` görmeli) ve `boot_rooms::tests` (sıra, taşma).
 - **Metrik toplayıcı:** odaların/registry'nin/bağlantıların sayacalarını
   **kanaldan** toplayan tek görev (bkz. §12). Saat kaynağı ticker'ın
   broadcast'i — odalarla aynı tek-await disipline sahiptir; ticker kapanınca

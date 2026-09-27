@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::boot::accept::*;
 use crate::config::*;
@@ -16,6 +16,7 @@ use gsb_core::channel::channel;
 use gsb_core::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use gsb_core::registry::{MatchResult, RegistryMsg};
 
+mod boot_rooms;
 mod entry;
 pub use entry::*;
 mod export;
@@ -174,31 +175,11 @@ async fn start_inner(
     });
 
     // Pre-create rooms 1..=room_count (at the global rate, unless the
-    // id's `[rooms.<id>]` sets a slower rate that divides it).
-    for id in 1..=cfg.room_count {
-        let config = template.room(id);
-        {
-            let tx = reg_tx.clone();
-            tokio::spawn(async move {
-                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                if tx
-                    .send(RegistryMsg::CreateRoom {
-                        config,
-                        reply: reply_tx,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                match reply_rx.await {
-                    Ok(Ok(status)) => info!(?status, "room created"),
-                    Ok(Err(e)) => warn!(error = %e, "room creation failed"),
-                    Err(_) => warn!("registry gone before room reply"),
-                }
-            });
-        }
-    }
+    // id's `[rooms.<id>]` sets a slower rate that divides it). Enqueued
+    // HERE, in id order, before any accept loop exists (B44): the
+    // registry drains its mailbox in order, so every join is behind
+    // them. Only the replies are awaited, from a spawned task.
+    boot_rooms::create_boot_rooms(&reg_tx, &template, cfg.room_count);
 
     // The session-lifecycle pair, one per socket direction (`0` disables
     // either): the reader pump's idle window — the demux deadline heap's
