@@ -167,14 +167,15 @@ biten istek despawn yerleşir.
 **B40 tamam** (RECONNECT §16.2, CHANGELOG "B40"): `leave_room` idle-kick'i
 bağlantıyı LEAVE sonrası duruma getirir; park `ConnectionId::park_key()`
 altında kendi satırına taşınır (`RegistryMsg::LeaveConn`,
-`ConnIn::LeftRoom`). Açık: B43, E8, E9 (B41 kapandı).
+`ConnIn::LeftRoom`). Açık: B43, E8 (B41 kapandı; E9 kararla kapandı).
 
 **E6 tamam** (RECONNECT §16.1, CHANGELOG "E6"): AFK'nın odadan mı sunucudan
 mı atılacağı oyunun/dağıtımın seçimi — `afk_action` (varsayılan
 `leave_room`; `disconnect` bağlantıyı ERROR 9 ile kapatır, `idle_input`
 sayılır). Fiil oda→registry→bağlantı (`RegistryMsg::CloseConn`); registry
 satırını kendisi yerleştirir; dolu posta kutusunda istek odanın kuyruğunda
-kalıp sonraki tick yeniden denenir. Açık: E8 (B40 kapandı).
+kalıp sonraki tick yeniden denenir. Açık: E8 — karar verildi (atma =
+bağlantıyı kapatmak, `on_disconnect` + ERROR 9), tur sırada (B40 kapandı).
 
 **E1 + F21 tamam** (SECURITY §3.4, CHANGELOG "E1 + F21"): kova bağlantı
 aktöründe (`conn/gate.rs`); sayı odanın config'inden registry join'de

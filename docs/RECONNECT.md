@@ -507,7 +507,11 @@ politika ne karar vermiş olursa olsun:
    "sunucu seni odadan çıkardı, bağlantı açık" diyen bir kare YOK:
    `LEAVE_ROOM_RESULT` bir isteğin yanıtıdır, `ERROR 5` (oda yıkıldı)
    kapanışla biter. İstemci durumu ilk oyun karesinin `ERROR 6`'sından
-   öğrenir. Ayrı bir bildirim yeni bir protokol öğesi olurdu (BACKLOG).
+   öğrenir. Ayrı bir bildirim açılmayacak (bakımcı kararı, BACKLOG E9,
+   2026-09-27): sunucunun başlattığı çıkarmanın istemciye söylenmesi
+   gereken biçimi bağlantıyı KAPATMAKTIR (`afk_action = disconnect`, E8'in
+   oyun fiili) — `ERROR 9` + kapanış. `leave_room` onu bilerek seçen
+   dağıtımın sessiz yoludur.
 
 *Düzeltme notu (E6 turunda testle görüldü, B40'ta düzeltildi):* bu
 paragrafın önceki hâli "bir sonraki oyun karesi kapalı aksiyon kanalına
