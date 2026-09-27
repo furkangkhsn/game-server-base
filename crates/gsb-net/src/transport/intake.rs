@@ -33,7 +33,9 @@
 //! - **The door.** Every await here runs under the listener's [`Door`]:
 //!   `close` ends the raw accept, cuts every handshake in flight (its
 //!   socket dropped), and drops what is queued — B16's contract, now for
-//!   the handshakes that are no longer inside `accept`.
+//!   the handshakes that are no longer inside `accept`. Both are counted
+//!   (B74: `handshakes_cut_closed`, `handshakes_unaccepted_closed`), and
+//!   the intake task's last sample waits for them (`close::settle`).
 //! - **No second source.** The accept loop still awaits one thing
 //!   (`accept`, which waits on the queue); the intake task awaits the raw
 //!   accept; each handshake task awaits exactly one future.
@@ -50,6 +52,7 @@ use tracing::{debug, warn};
 
 use crate::transport::{Door, Endpoint};
 
+mod close;
 mod stats;
 pub use stats::HandshakeStats;
 mod tcp;
@@ -75,10 +78,19 @@ pub(crate) struct Intake {
     queue_rx: Receiver<Ready>,
     /// Wakes the accept waiting on an empty queue.
     ready: Notify,
+    /// Handshake tasks still running, their counting included (B74).
+    live: AtomicUsize,
+    /// Wakes the intake task's settle wait: the last slot released, or
+    /// the last handshake task ended (B74, `close::settle`).
+    quiet: Notify,
     completed: AtomicU64,
     refused: AtomicU64,
     timed_out: AtomicU64,
     failed: AtomicU64,
+    /// What the door's close cut (handshakes in flight) and dropped
+    /// (finished handshakes still queued) — B74.
+    cut: AtomicU64,
+    unaccepted: AtomicU64,
 }
 
 /// A finished handshake waiting for the accept loop, with its slot.
@@ -92,7 +104,9 @@ pub(crate) struct Slot(Arc<Intake>);
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.held.fetch_sub(1, Ordering::AcqRel);
+        if self.0.held.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.quiet.notify_one();
+        }
     }
 }
 
@@ -109,10 +123,14 @@ impl Intake {
             queue_tx,
             queue_rx,
             ready: Notify::new(),
+            live: AtomicUsize::new(0),
+            quiet: Notify::new(),
             completed: AtomicU64::new(0),
             refused: AtomicU64::new(0),
             timed_out: AtomicU64::new(0),
             failed: AtomicU64::new(0),
+            cut: AtomicU64::new(0),
+            unaccepted: AtomicU64::new(0),
         })
     }
 
@@ -156,6 +174,7 @@ impl Intake {
         F: Future<Output = io::Result<Endpoint>> + Send + 'static,
     {
         let intake = Arc::clone(self);
+        intake.live.fetch_add(1, Ordering::AcqRel);
         tokio::spawn(async move {
             let deadlined = async { Ok(tokio::time::timeout(deadline, handshake).await) };
             // Each count is made once the slot has moved on (queued or
@@ -179,7 +198,15 @@ impl Intake {
                     intake.timed_out.fetch_add(1, Ordering::Relaxed);
                     warn!(door = intake.kind, %peer, timeout = ?deadline, "handshake timed out; closing");
                 }
-                Err(_) => debug!(door = intake.kind, %peer, "door closed; handshake cut"),
+                Err(_) => {
+                    drop(slot);
+                    intake.cut.fetch_add(1, Ordering::Relaxed);
+                    debug!(door = intake.kind, %peer, "door closed; handshake cut");
+                }
+            }
+            // Last: every count of this task is made (`close::settle`).
+            if intake.live.fetch_sub(1, Ordering::AcqRel) == 1 {
+                intake.quiet.notify_one();
             }
         });
     }
@@ -210,17 +237,6 @@ impl Intake {
             }
         };
         self.door.admit(queued).await
-    }
-
-    /// Close the door: the raw accept, every handshake in flight and the
-    /// pending accept end, and what is queued is dropped.
-    pub(crate) fn close(&self) {
-        self.door.close();
-        self.drain();
-    }
-
-    fn drain(&self) {
-        while self.queue_rx.try_recv().is_ok() {}
     }
 }
 

@@ -50,7 +50,9 @@
 //! B72's registry-scope `team_relays_dropped_{full,closed}=` with
 //! `gsb_registry_team_relays_dropped_{full,closed}_total`. B73's HELP
 //! change: `gsb_transport_udp_frames_drained_total` says it counts the
-//! session's frames, not the demux's piggybacked ACKs.
+//! session's frames, not the demux's piggybacked ACKs. B74's four
+//! transport counters at the end of that line and table
+//! (`handshakes_cut_closed` .. `udp_sessions_unaccepted_closed`).
 
 use super::*;
 use crate::conn::ServerClose;

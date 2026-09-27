@@ -52,6 +52,9 @@ pub(crate) async fn run_tcp_intake<H, F>(
         }
         intake.flush_metrics(&mut flusher, false);
     }
+    // The port goes now; the last sample waits for the close's counts.
+    drop(listener);
+    intake.settle().await;
     intake.flush_metrics(&mut flusher, true);
     intake.log_summary();
 }

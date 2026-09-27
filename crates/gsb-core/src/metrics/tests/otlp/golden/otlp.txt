@@ -158,6 +158,14 @@ gsb_transport_udp_frames_unsent sum t=2 mono=true unit="" n=1 | Frames an rUDP w
   [] 1000..2000 int 34
 gsb_transport_writer_verdicts_deferred sum t=2 mono=true unit="" n=1 | Writer verdicts (write stall, dead rUDP band) that found the connection's mailbox full with no reserved slot: delivered after the outbound channel closed, the close possibly booked as outbound_dead, cumulative.
   [] 1000..2000 int 35
+gsb_transport_handshakes_cut_closed sum t=2 mono=true unit="" n=1 | Handshakes in flight at a handshaking door (WebSocket, TLS, QUIC) when the door closed, cut unfinished, cumulative.
+  [] 1000..2000 int 36
+gsb_transport_handshakes_unaccepted_closed sum t=2 mono=true unit="" n=1 | Finished handshakes whose endpoint was still queued for the accept loop when their door closed: dropped, never a session, cumulative.
+  [] 1000..2000 int 37
+gsb_transport_udp_sessions_dropped_accept_gone sum t=2 mono=true unit="" n=1 | rUDP handshake proofs verified while the accept side was gone (the listener dropped): the session torn down, no accept sent, cumulative.
+  [] 1000..2000 int 38
+gsb_transport_udp_sessions_unaccepted_closed sum t=2 mono=true unit="" n=1 | Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.
+  [] 1000..2000 int 39
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

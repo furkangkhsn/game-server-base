@@ -93,7 +93,10 @@ impl super::Demux {
             .with_peer(peer)
             .with_inbox(endpoint_in_tx, in_rx)
             .with_outbox(out_tx, out_rx);
-            match self.end_tx.try_send(endpoint) {
+            match self
+                .end_tx
+                .try_send(Queued::new(endpoint, self.metrics.clone()))
+            {
                 Ok(()) => {
                     // The accept: the session's cumulative ACK, "send me
                     // seq 1". It is what the client waits for before it
@@ -102,19 +105,23 @@ impl super::Demux {
                     // owner of this return path could produce.
                     self.send_ack(peer, 1);
                 }
-                Err(crossbeam_channel::TrySendError::Full(_)) => {
+                Err(crossbeam_channel::TrySendError::Full(queued)) => {
                     // The accept loop is far behind (pathological burst):
                     // the session is torn down (the dropped endpoint
                     // carries the inbox; nothing leaks). No accept went
                     // out, so the client re-sends its proof, and a re-send
                     // that finds room establishes the session afresh.
                     self.endpoints_dropped += 1;
+                    drop(queued.into_endpoint());
                     self.remove_session(peer);
                     warn!(%peer, "rUDP: endpoint channel full; session dropped");
                 }
-                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                    // The accept loop is gone (shutdown in flight): this
-                    // session cannot be adopted; tear it down quietly.
+                Err(crossbeam_channel::TrySendError::Disconnected(queued)) => {
+                    // The accept side is gone (the listener dropped): this
+                    // session cannot be adopted; torn down, no accept
+                    // sent — counted (B74).
+                    self.accept_gone += 1;
+                    drop(queued.into_endpoint());
                     self.remove_session(peer);
                 }
             }

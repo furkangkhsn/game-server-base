@@ -162,7 +162,13 @@ async fn close_cuts_every_handshake_and_ends_the_accept() {
         .expect_err("the closed error");
     assert!(is_listener_closed(&e));
     until("slots released", || intake.stats().in_flight == 0).await;
-    assert_eq!(intake.stats().timed_out, 0, "cut, not timed out");
+    until("both cuts counted (B74)", || intake.stats().cut_closed == 2).await;
+    let s = intake.stats();
+    assert_eq!(
+        (s.timed_out, s.unaccepted_closed),
+        (0, 0),
+        "cut, not timed out"
+    );
 }
 
 #[tokio::test]
@@ -173,7 +179,9 @@ async fn close_drops_what_is_queued() {
     });
     until("completed", || intake.stats().completed == 1).await;
     intake.close();
-    assert_eq!(intake.stats().in_flight, 0, "the queued endpoint is gone");
+    let s = intake.stats();
+    assert_eq!(s.in_flight, 0, "the queued endpoint is gone");
+    assert_eq!((s.unaccepted_closed, s.cut_closed), (1, 0), "counted (B74)");
     let e = Arc::clone(&intake)
         .next()
         .await

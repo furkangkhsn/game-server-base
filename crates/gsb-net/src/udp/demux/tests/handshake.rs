@@ -7,7 +7,7 @@
 use super::*;
 
 /// A demux with no sessions, plus a real peer socket and its address.
-async fn demux_and_peer() -> (Demux, crossbeam_channel::Receiver<Endpoint>, UdpSocket) {
+async fn demux_and_peer() -> (Demux, crossbeam_channel::Receiver<Queued>, UdpSocket) {
     let sock = Arc::new(
         UdpSocket::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
             .await

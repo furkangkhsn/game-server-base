@@ -528,6 +528,25 @@ max_detach_hold_secs = "off"
   düşer, kapanış `outbound_dead` sayılırdı). Bu sayaç yalnız doğumda slot
   ayrılamayan (kutu zaten dolu) nadir yolu sayar. Bedel: rUDP oturumu
   başına bir posta kutusu slotu (akış kapılarındaki gibi).
+- **Taşıma kapsamı: kapanan kapının ve rUDP accept tarafının kayıpları
+  (B74, sayım turu 5).** Satırın ve tablonun sonuna dört `counter`;
+  loadgen telinde `GSMX`, `RESULT`'ta `transport_<ad>=`. El sıkışan
+  kapılardan (WS/TLS/QUIC): `handshakes_cut_closed` — kapı kapanırken
+  uçuşta olan, kesilen el sıkışmalar (bağlantı el sıkışmadan kapanır;
+  önceden yalnız debug satırı); `handshakes_unaccepted_closed` — BİTMİŞ
+  ama uç noktası accept döngüsü için kuyrukta beklerken kapı kapanan el
+  sıkışmalar: atıldı, hiç oturum olmadı (kapının `completed`'ında da
+  sayılı; önceden sessizce boşaltılıyordu). `Listener::handshake_stats`
+  ikisini `cut_closed` / `unaccepted_closed` olarak da verir; intake'in
+  son örneği kapının oturmasını bekler (en çok 1 sn; DESIGN §6). rUDP:
+  `udp_sessions_dropped_accept_gone` — kanıt doğrulandı ama accept tarafı
+  gitmiş (dinleyici kapatılmadan düşürülmüş): oturum sökülür, kabul
+  gitmez (`…_accept_full`'un eşi; önceden sayılmıyordu);
+  `udp_sessions_unaccepted_closed` — kabulü istemciye GİTMİŞ ama uç
+  noktası accept kuyruğundayken dinleyici kapanan ya da giden oturumlar
+  (istemci bağlı sanar, sessizlikle öğrenir). **Kalan uç:** toplayıcı
+  gitmişse (süreç inerken) sayı hiçbir yere varmaz — her son örneğin
+  sınırı.
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:

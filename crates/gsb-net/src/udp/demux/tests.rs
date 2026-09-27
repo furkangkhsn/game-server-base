@@ -11,7 +11,7 @@ use gsb_protocol::FrameBody;
 /// its endpoint receiver handed back (a DROPPED receiver would make every
 /// handshake tear its own session down again — the "accept loop is gone"
 /// arm).
-fn demux_bare(sock: Arc<UdpSocket>) -> (Demux, crossbeam_channel::Receiver<Endpoint>) {
+fn demux_bare(sock: Arc<UdpSocket>) -> (Demux, crossbeam_channel::Receiver<Queued>) {
     let (end_tx, end_rx) = crossbeam_channel::bounded(4);
     let mut d = Demux::new(
         sock,
@@ -188,5 +188,6 @@ async fn inbound_fragments_are_refused() {
 
 mod closed;
 mod full;
+mod gone;
 mod handshake;
 mod reap;

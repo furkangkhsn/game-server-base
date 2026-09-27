@@ -14,7 +14,6 @@ use gsb_core::conn::ConnIn;
 use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
-use crate::transport::Endpoint;
 use crate::udp::*;
 
 mod flush;
@@ -49,7 +48,7 @@ pub(super) struct UdpSession {
 #[derive(Debug)]
 pub(super) struct Demux {
     sock: Arc<UdpSocket>,
-    end_tx: Sender<Endpoint>,
+    end_tx: Sender<Queued>,
     cookie: CookieKey,
     /// The cookie's time term (see [`CookieClock`]): started at bind, read
     /// at every handshake. No timer task, no shared state — the slot is
@@ -80,6 +79,9 @@ pub(super) struct Demux {
     proofs_reanswered: u64,
     bad_cookie: u64,
     endpoints_dropped: u64,
+    /// Verified proofs whose session was torn down because the accept
+    /// side was gone (B74).
+    accept_gone: u64,
     swept_idle: u64,
     removed_actor_gone: u64,
     /// Sessions removed by the reap pass, and the wakes that drove it.
@@ -116,7 +118,7 @@ impl Demux {
     /// A demux with no sessions on `sock` (its reap queue included).
     fn new(
         sock: Arc<UdpSocket>,
-        end_tx: Sender<Endpoint>,
+        end_tx: Sender<Queued>,
         cookie: CookieKey,
         inbox_cap: usize,
         outbox_cap: usize,
@@ -143,6 +145,7 @@ impl Demux {
             proofs_reanswered: 0,
             bad_cookie: 0,
             endpoints_dropped: 0,
+            accept_gone: 0,
             swept_idle: 0,
             removed_actor_gone: 0,
             reaped: 0,
@@ -183,7 +186,7 @@ impl Demux {
 /// idiom as the TCP reader pump's idle timeout), one local state map.
 pub(super) async fn demux(
     sock: Arc<UdpSocket>,
-    end_tx: Sender<Endpoint>,
+    end_tx: Sender<Queued>,
     cookie: CookieKey,
     cfg: UdpTransportConfig,
 ) {
@@ -242,6 +245,7 @@ pub(super) async fn demux(
         proofs_reanswered = d.proofs_reanswered,
         bad_cookie = d.bad_cookie,
         endpoints_dropped = d.endpoints_dropped,
+        accept_gone = d.accept_gone,
         swept_idle = d.swept_idle,
         removed_actor_gone = d.removed_actor_gone,
         reaped = d.reaped,

@@ -527,6 +527,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 use cookie::{CookieClock, CookieKey};
 use demux::{Reaper, UdpSession, demux};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
+use transport::Queued;
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;
 

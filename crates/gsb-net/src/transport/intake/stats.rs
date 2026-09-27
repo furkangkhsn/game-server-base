@@ -26,6 +26,11 @@ pub struct HandshakeStats {
     pub timed_out: u64,
     /// Handshakes that failed (the client's fault: bad request, bad TLS).
     pub failed: u64,
+    /// Handshakes in flight when the door closed, cut (B74).
+    pub cut_closed: u64,
+    /// Finished handshakes still queued for the accept loop when the door
+    /// closed, dropped (B74; also in `completed`).
+    pub unaccepted_closed: u64,
 }
 
 impl Intake {
@@ -37,14 +42,17 @@ impl Intake {
             refused: self.refused.load(Ordering::Relaxed),
             timed_out: self.timed_out.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
+            cut_closed: self.cut.load(Ordering::Relaxed),
+            unaccepted_closed: self.unaccepted.load(Ordering::Relaxed),
         }
     }
 
     /// Send the door's refusals, timeouts and failures to the collector
-    /// (B58): from the intake task, when a flush is due after an accept,
-    /// and once more (`last`) when the door closes. A timeout or failure
-    /// after the last accept is reported at the next accept or at the
-    /// close.
+    /// (B58), and what its close cut or dropped (B74): from the intake
+    /// task, when a flush is due after an accept, and once more (`last`)
+    /// when the door closes — after the close has settled (see
+    /// `Intake::settle`, in `close`). A timeout or failure after the last accept is
+    /// reported at the next accept or at the close.
     pub(crate) fn flush_metrics(&self, flusher: &mut Flusher, last: bool) {
         if !last && !flusher.due() {
             return;
@@ -54,6 +62,8 @@ impl Intake {
             handshakes_refused: s.refused,
             handshakes_timed_out: s.timed_out,
             handshakes_failed: s.failed,
+            handshakes_cut_closed: s.cut_closed,
+            handshakes_unaccepted_closed: s.unaccepted_closed,
             ..Default::default()
         };
         flusher.flush(totals, last);
@@ -69,6 +79,8 @@ impl Intake {
             refused = s.refused,
             timed_out = s.timed_out,
             failed = s.failed,
+            cut_closed = s.cut_closed,
+            unaccepted_closed = s.unaccepted_closed,
             "handshake intake stopped"
         );
     }

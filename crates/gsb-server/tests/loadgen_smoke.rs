@@ -251,6 +251,11 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_datagrams_no_session",
         "transport_udp_frames_unsent",
         "transport_writer_verdicts_deferred",
+        // What a closing door and rUDP's accept side drop (B74).
+        "transport_handshakes_cut_closed",
+        "transport_handshakes_unaccepted_closed",
+        "transport_udp_sessions_dropped_accept_gone",
+        "transport_udp_sessions_unaccepted_closed",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

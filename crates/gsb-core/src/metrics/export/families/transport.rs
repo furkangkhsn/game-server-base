@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 35] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 39] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -194,6 +194,27 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 35] 
         "gsb_transport_writer_verdicts_deferred_total",
         "Writer verdicts (write stall, dead rUDP band) that found the connection's mailbox full with no reserved slot: delivered after the outbound channel closed, the close possibly booked as outbound_dead, cumulative.",
         |t| t.writer_verdicts_deferred,
+    ),
+    // B74: what a closing door (and rUDP's accept side) drops.
+    tr(
+        "gsb_transport_handshakes_cut_closed_total",
+        "Handshakes in flight at a handshaking door (WebSocket, TLS, QUIC) when the door closed, cut unfinished, cumulative.",
+        |t| t.handshakes_cut_closed,
+    ),
+    tr(
+        "gsb_transport_handshakes_unaccepted_closed_total",
+        "Finished handshakes whose endpoint was still queued for the accept loop when their door closed: dropped, never a session, cumulative.",
+        |t| t.handshakes_unaccepted_closed,
+    ),
+    tr(
+        "gsb_transport_udp_sessions_dropped_accept_gone_total",
+        "rUDP handshake proofs verified while the accept side was gone (the listener dropped): the session torn down, no accept sent, cumulative.",
+        |t| t.udp_sessions_dropped_accept_gone,
+    ),
+    tr(
+        "gsb_transport_udp_sessions_unaccepted_closed_total",
+        "Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.",
+        |t| t.udp_sessions_unaccepted_closed,
     ),
 ];
 

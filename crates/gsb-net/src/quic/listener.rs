@@ -120,6 +120,8 @@ async fn run_intake(
         }
         intake.flush_metrics(&mut flusher, false);
     }
+    // The last sample waits for the close's counts (B74).
+    intake.settle().await;
     intake.flush_metrics(&mut flusher, true);
     intake.log_summary();
 }

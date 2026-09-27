@@ -207,7 +207,10 @@ mod logic;
 /// `team_relays_dropped_full` and `team_relays_dropped_closed` (the team
 /// hubs' refused relays, by cause — B72), right after
 /// `rooms_ended_uncounted`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D57;
+/// GSMX = the GSMW layout with four more transport counters at the end
+/// of that section (what a closing door and rUDP's accept side drop —
+/// B74: `handshakes_cut_closed` .. `udp_sessions_unaccepted_closed`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D58;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

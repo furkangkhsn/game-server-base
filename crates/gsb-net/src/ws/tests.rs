@@ -29,6 +29,7 @@ mod after_close;
 mod client;
 use client::*;
 mod close_frames;
+mod closed_door;
 mod fragmentation;
 mod framing;
 mod going_away;

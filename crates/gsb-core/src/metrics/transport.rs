@@ -199,6 +199,22 @@ transport_counters! {
     /// channel closed, so the session's close may be booked as
     /// `outbound_dead` instead of the verdict.
     writer_verdicts_deferred,
+    /// Handshake doors (WebSocket, TLS, QUIC; B74): handshakes in flight
+    /// when their door closed, cut unfinished — the connection closed
+    /// unhandshaken.
+    handshakes_cut_closed,
+    /// Handshake doors: handshakes that FINISHED but whose endpoint was
+    /// still queued for the accept loop when the door closed — dropped,
+    /// never a session (they are also in the doors' `completed`).
+    handshakes_unaccepted_closed,
+    /// rUDP demux (B74): proofs verified while the accept side was gone
+    /// (the listener dropped) — the session torn down at once, no accept
+    /// sent.
+    udp_sessions_dropped_accept_gone,
+    /// rUDP: sessions established — their accept already sent to the
+    /// client — whose endpoint was still queued for the accept loop when
+    /// the listener closed or went away: dropped, never a connection.
+    udp_sessions_unaccepted_closed,
 }
 
 impl TransportCounters {

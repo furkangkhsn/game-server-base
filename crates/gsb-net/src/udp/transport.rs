@@ -14,6 +14,9 @@ use tracing::info;
 use crate::transport::{BoxFuture, Door, Endpoint, Listener, Transport, listener_closed};
 use crate::udp::*;
 
+mod queued;
+pub(super) use queued::Queued;
+
 /// rUDP transport configuration (set by the composition root from the
 /// server config — the channel capacities mirror `conn_inbox`/`conn_out`
 /// because the demux pre-creates them at handshake).
@@ -63,7 +66,7 @@ pub(super) struct UdpListenerHandle {
     /// inside the `Arc<Self>` behind the `Listener` trait (a tokio mpsc
     /// receiver needs `&mut` — unreachable through an `Arc` without a
     /// lock, and locks are banned in this workspace).
-    end_rx: Receiver<Endpoint>,
+    end_rx: Receiver<Queued>,
     demux: JoinHandle<()>,
     /// Closed by [`Listener::close`]: ends the pending accept (B16).
     door: Door,
@@ -125,17 +128,21 @@ impl Listener for UdpListenerHandle {
             // thread follows when the demux, stopped by the same `close`,
             // drops the endpoint sender (an endpoint it takes on the way
             // is dropped — its session was never adopted).
+            // The endpoint is adopted only once the door has let the
+            // accept through: one a closed door's parked thread takes
+            // drops un-adopted, and counts itself (B74, `Queued`).
             let rx = self.end_rx.clone();
             self.door
                 .admit(async move {
                     match tokio::task::spawn_blocking(move || rx.recv()).await {
-                        Ok(Ok(endpoint)) => Ok(endpoint),
+                        Ok(Ok(queued)) => Ok(queued),
                         // The demux is gone: this door will not open again.
                         Ok(Err(_)) => Err(listener_closed()),
                         Err(e) => Err(std::io::Error::other(format!("rUDP accept: {e}"))),
                     }
                 })
                 .await
+                .map(Queued::into_endpoint)
         })
     }
 
@@ -151,5 +158,9 @@ impl Listener for UdpListenerHandle {
         // socket clones on the way.
         self.door.close();
         self.demux.abort();
+        // What is queued now will never be accepted: dropped here, each
+        // counting itself (B74). One the demux still queues before the
+        // abort lands counts itself when the handle goes.
+        while self.end_rx.try_recv().is_ok() {}
     }
 }
