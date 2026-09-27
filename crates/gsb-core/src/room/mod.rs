@@ -77,7 +77,8 @@ mod logic;
 mod tests;
 
 pub use actor::RoomActor;
-pub use config::{DEFAULT_MAX_DETACH_HOLD, InputRate, RoomConfig};
+pub(crate) use config::idle_close;
+pub use config::{AfkAction, DEFAULT_MAX_DETACH_HOLD, InputRate, RoomConfig};
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
 pub(crate) use counters::{GroupState, HoldEnd, RoomConn, RoomCounters};
 pub(crate) use idle::IdleClock;

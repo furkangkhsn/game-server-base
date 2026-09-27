@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 use crate::room::actor::RoomActor;
+use crate::room::{AfkAction, idle_close};
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -69,10 +70,10 @@ where
             // idle-kicked player could not be parked under a ledger key,
             // and the AI-handover/reclaim story would be unreachable for
             // exactly the members this ceiling exists for.
-            let Some((conn, identity)) = self
+            let Some((conn, entity, identity)) = self
                 .conns
                 .get(&player)
-                .map(|rc| (rc.conn, rc.identity.clone()))
+                .map(|rc| (rc.conn, rc.entity, rc.identity.clone()))
             else {
                 // The clock outlived its row (it should not: every despawn
                 // funnel stops the clock). Drop the stale slot.
@@ -89,10 +90,12 @@ where
                     %player,
                     %conn,
                     idle_limit_secs = limit.as_secs(),
+                    afk_action = self.config.afk_action.label(),
                     "input-idle ceiling reached (max_idle_input_secs): the \
                      member is handed to the ordinary disconnect policy \
-                     (on_disconnect decides park/AI-handover/despawn). \
-                     This warning is emitted once per room."
+                     (on_disconnect decides park/AI-handover/despawn); \
+                     afk_action = disconnect then also closes its \
+                     connection. This warning is emitted once per room."
                 );
             }
             // No `idle.stop` here on purpose: BOTH arms of
@@ -100,6 +103,24 @@ where
             // funnel on one side, the park on the other), and duplicating
             // it here would mask a regression in either.
             self.detach_player(player, conn, &identity);
+            // The ACTION (E6): under `Disconnect` the connection goes
+            // too — asked AFTER the policy ran, so the request can say
+            // whether the entity was parked (the registry then keeps the
+            // row for the park) or despawned. Queued only when there IS
+            // a registry; flushed at the end of this phase.
+            if self.config.afk_action == AfkAction::Disconnect && self.registry.is_some() {
+                // A parked row keeps its row, not the socket's queue:
+                // the socket closes only once every sender is gone.
+                let parked = match self.conns.get_mut(&player) {
+                    Some(rc) if rc.detached => {
+                        rc.release_outbound();
+                        true
+                    }
+                    _ => false,
+                };
+                self.close_requests
+                    .push(idle_close(conn, self.config.id, entity, parked, limit));
+            }
         }
     }
 }

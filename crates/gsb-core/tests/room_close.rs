@@ -5,28 +5,41 @@
 //!   with the request's cause), the row is settled (a despawned
 //!   membership lets go of its slot, a parked one keeps it, a row whose
 //!   transport already died is released), and a stale request is a no-op.
+//! - `afk.rs`: the input-idle ceiling's action end to end — the default
+//!   (`leave_room`) keeps the socket open and sends nothing; `disconnect`
+//!   sends ERROR 9 then closes, books `idle_input`, keeps a park
+//!   resumable, and frees a sharded member slot.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gsb_core::channel::{Mailbox, channel};
-use gsb_core::conn::{ConnIn, ServerClose};
+use gsb_core::channel::{FrameBatch, Mailbox, channel};
+use gsb_core::conn::{ConnIn, ConnectionActor, ServerClose};
 use gsb_core::error::CoreError;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, CloseRequest, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{
-    Action, Admission, Detach, ExpireTo, GameLogic, ResumeFound, RoomConfig, RoomLogic, TickCtx,
+    Action, Admission, AfkAction, Detach, ExpireTo, GameLogic, ResumeFound, RoomConfig, RoomLogic,
+    TickCtx,
 };
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
+use gsb_protocol::base::Heartbeat;
+use gsb_protocol::{FrameBody, MessageTable, base, base_table, op};
+use prost::Message;
 use tokio::sync::{mpsc, oneshot};
 
+#[path = "room_close/afk.rs"]
+mod afk;
 #[path = "room_close/logic.rs"]
 mod logic;
 #[path = "room_close/registry.rs"]
 mod registry;
+#[path = "room_close/rig.rs"]
+mod rig;
 
 const WAIT: Duration = Duration::from_secs(5);
 

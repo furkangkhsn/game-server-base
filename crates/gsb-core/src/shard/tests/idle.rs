@@ -99,9 +99,32 @@ impl ShardLogic<TWorld> for IdleLogic {
     }
 }
 
+/// The rig's shard configuration: room 61 with the input-idle `ceiling`.
+fn config(ceiling: Option<u64>) -> RoomConfig {
+    RoomConfig {
+        id: RoomId(61),
+        tick_hz: 30.0,
+        metrics_cadence_hz: 0.0,
+        max_idle_input_secs: ceiling,
+        ..Default::default()
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn rig(
     ceiling: Option<u64>,
+    decision: Detach,
+) -> (
+    ShardActor<TWorld, (), TState, TStrip>,
+    mpsc::Receiver<(PlayerId, Option<Duration>)>,
+    mpsc::Receiver<(PlayerId, String)>,
+) {
+    rig_with(config(ceiling), decision)
+}
+
+#[allow(clippy::type_complexity)]
+fn rig_with(
+    cfg: RoomConfig,
     decision: Detach,
 ) -> (
     ShardActor<TWorld, (), TState, TStrip>,
@@ -113,13 +136,7 @@ fn rig(
     let (_tick_tx, tick_rx) = broadcast::channel(16);
     let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
     let a = ShardActor::new(
-        RoomConfig {
-            id: RoomId(61),
-            tick_hz: 30.0,
-            metrics_cadence_hz: 0.0,
-            max_idle_input_secs: ceiling,
-            ..Default::default()
-        },
+        cfg,
         0,
         TWorld::default(),
         Box::new(IdleLogic {
@@ -263,3 +280,5 @@ async fn sharded_ceiling_runs_the_disconnect_policy_and_warns_once() {
         "a parked member is never double-counted by the idle ceiling"
     );
 }
+
+mod afk;

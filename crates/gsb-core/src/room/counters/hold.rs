@@ -43,6 +43,19 @@ impl<G> RoomConn<G> {
         self.detach_ceiling = ceiling.and_then(|c| now.checked_add(c));
     }
 
+    /// Let go of the row's outbound half (BACKLOG E6). A member the
+    /// input-idle ceiling PARKED under `afk_action = disconnect` keeps its
+    /// row for the park, but its still-live socket is being closed — and
+    /// the writer pump ends (closing the socket) only once every sender of
+    /// its queue is gone, this row's clone included. A parked row ships
+    /// nothing (BROADCAST skips it) and a resume binds the new session's
+    /// queue, so a closed stand-in costs nothing. (A transport death needs
+    /// none of this: its writer is already gone.)
+    pub(crate) fn release_outbound(&mut self) {
+        let (closed, _) = tokio::sync::mpsc::channel(1);
+        self.out = closed;
+    }
+
     /// Stop the hold clock: a resume re-binds the row, and an AI handover
     /// ends the hold for good (the bot-fed row is never swept again).
     pub(crate) fn clear_hold_clock(&mut self) {

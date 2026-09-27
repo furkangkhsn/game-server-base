@@ -5,6 +5,9 @@ use crate::id::RoomId;
 use std::fmt::Debug;
 use std::time::Duration;
 
+mod afk;
+pub use afk::AfkAction;
+pub(crate) use afk::idle_close;
 mod input;
 pub use input::InputRate;
 mod rates;
@@ -223,6 +226,18 @@ pub struct RoomConfig {
     /// every member on its first sweep, which is never what an operator
     /// means by "0".
     pub max_idle_input_secs: Option<u64>,
+    /// **What the input-idle ceiling does** beyond the disconnect policy
+    /// (BACKLOG E6) — [`AfkAction::LeaveRoom`] (the default) ends the
+    /// membership only and keeps the socket open, as the ceiling always
+    /// did; [`AfkAction::Disconnect`] also closes the connection (ERROR
+    /// 9, then the close; `server_closes{reason="idle_input"}`). Either
+    /// way `on_disconnect` decides the entity first. Without
+    /// [`Self::max_idle_input_secs`] it has no effect.
+    ///
+    /// Whether an AFK player is kicked from the ROOM or from the SERVER is
+    /// the game's or the deployment's call, not the engine's: the engine
+    /// ships both and changes nothing until asked.
+    pub afk_action: AfkAction,
     /// **Detach-hold ceiling**: the longest a
     /// [`may_release`](crate::room::GameLogic::may_release) veto can keep
     /// a parked entity, measured from the DETACH (`docs/RECONNECT.md`
@@ -297,6 +312,7 @@ impl Default for RoomConfig {
             persistent: false,
             // OFF: the feature is invisible until an operator asks for it.
             max_idle_input_secs: None,
+            afk_action: AfkAction::LeaveRoom,
             max_detach_hold: Some(DEFAULT_MAX_DETACH_HOLD),
             input_rate: None,
         }
