@@ -13,6 +13,7 @@ use crate::room::actor::RoomActor;
 mod completions;
 mod detach;
 mod idle;
+mod kick;
 mod read;
 mod requests;
 
@@ -76,13 +77,17 @@ where
         //    forbid. The move is an O(1) pointer swap, nothing between
         //    here and the restore reads or writes the clock, and no phase
         //    below this point returns early — so the restore is
-        //    unconditional.
+        //    unconditional. The context lends the tick's kick queue
+        //    too (E8): a local, empty and allocation-free unless a hook
+        //    kicks.
+        let kicks = KickQueue::default();
         let idle = std::mem::take(&mut self.idle);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: crate::room::IdleView::new(&idle, t.at),
+            kicks: kicks.kicks(),
         };
         // -- Phase 2a — split the requests out of the pulled actions (the
         //    RPC pattern, see `crate::rpc`). A request is an action
@@ -156,14 +161,31 @@ where
         // -- Phase 3 — SYSTEMS: run the ordered game systems.
         self.logic.update(&mut self.world, &ctx);
 
+        // -- Phase 3b — KICK (E8): the kicks this tick's input and
+        //    systems hooks asked for. The clock comes back first (the
+        //    disconnect path takes a member off it), and is lent again
+        //    for the broadcast.
+        self.idle = idle;
+        self.apply_kicks(kicks.take());
+        let idle = std::mem::take(&mut self.idle);
+        let ctx = TickCtx {
+            room: self.config.id,
+            tick: t.tick,
+            dt,
+            idle: crate::room::IdleView::new(&idle, t.at),
+            kicks: kicks.kicks(),
+        };
+
         // -- Phase 4 — BROADCAST: one snapshot per group, frozen once and
         //    shared by reference; per-connection fan-out of
         //    [group snapshot] + [private?].
         //    (the step counter was bumped at the top of `step`)
         self.broadcast_phase(&ctx);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
-        // hand the clock back to the actor.
+        // hand the clock back to the actor, then apply what the
+        // broadcast-phase hooks kicked.
         self.idle = idle;
+        self.apply_kicks(kicks.take());
         true
     }
 }

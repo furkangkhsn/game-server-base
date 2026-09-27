@@ -258,6 +258,12 @@ pub trait GameLogic<W>: Send {
     /// world state, its group membership, AND the room-cap slot it
     /// occupies (§4: a parked player holds their slot).
     ///
+    /// Two more ends of a membership take this same path while the
+    /// transport is still alive: the input-idle ceiling (phase 0d, §16)
+    /// and the game's own kick ([`TickCtx::kick`], BACKLOG E8 — after
+    /// SYSTEMS or at the end of the tick, never inside the hook that
+    /// asked, §16.3). One decision point for all three.
+    ///
     /// The logic records the park entry here (identity → entity + hold
     /// metadata) in WHATEVER storage it owns; per §14.2 that storage must
     /// be part of the migrating player state for sharded rooms, so a

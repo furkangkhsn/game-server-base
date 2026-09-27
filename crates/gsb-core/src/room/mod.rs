@@ -71,6 +71,7 @@ mod config;
 mod control;
 mod counters;
 mod idle;
+mod kick;
 mod logic;
 
 #[cfg(test)]
@@ -83,6 +84,8 @@ pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
 pub(crate) use counters::{GroupState, HoldEnd, RoomConn, RoomCounters};
 pub(crate) use idle::IdleClock;
 pub use idle::IdleView;
+pub(crate) use kick::kick_close;
+pub use kick::{KICK_REASON_MAX_BYTES, Kick, KickQueue, Kicks, kick_message};
 pub use logic::{GameLogic, RoomLogic};
 
 /// A client action forwarded by the connection actor. The payload is still

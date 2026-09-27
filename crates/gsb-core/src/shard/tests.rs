@@ -46,6 +46,7 @@ mod hold;
 mod identity;
 mod idle;
 mod keepalive;
+mod kick;
 mod metrics;
 mod migration;
 mod replies;

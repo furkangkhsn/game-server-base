@@ -185,10 +185,12 @@ pub struct RoomActor<W, G, Sp> {
     /// Close requests not yet accepted by the registry's mailbox
     /// ([`crate::registry::CloseRequest`], BACKLOG E6): the members whose
     /// membership the input-idle ceiling ended under
-    /// `afk_action = Disconnect`. Same rules as `despawn_reports` — a
-    /// FULL mailbox keeps them for the next tick, a CLOSED one drops
-    /// them (`crate::registry::flush_close_requests`); written and
-    /// flushed in phase 0d. A waiting request's `parked` is re-checked
+    /// `afk_action = Disconnect`, and the members the game kicked
+    /// ([`crate::room::TickCtx::kick`], E8). Same rules as
+    /// `despawn_reports` — a FULL mailbox keeps them for the next tick, a
+    /// CLOSED one drops them (`crate::registry::flush_close_requests`);
+    /// written in phase 0d (the ceiling) or phase 3b and at the end of
+    /// the tick (the kicks), flushed in phase 0d. A waiting request's `parked` is re-checked
     /// before every flush (B41): it is cleared once the room holds no
     /// membership of the connection any more — a hold that ended in a
     /// despawn reported that ahead of the request. Never written without

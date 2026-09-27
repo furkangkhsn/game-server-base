@@ -25,6 +25,7 @@ fn ctx1() -> TickCtx<'static> {
         tick: 1,
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
+        kicks: Default::default(),
     }
 }
 

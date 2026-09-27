@@ -24,6 +24,7 @@ mod groups;
 mod guardrails;
 mod hold;
 mod idle;
+mod kick;
 mod logic_counters;
 mod paused_clock;
 mod sampling;

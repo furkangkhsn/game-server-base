@@ -19,9 +19,12 @@
 //! plane (the registry never awaits a room, and not a connection
 //! either).
 //!
-//! **Who asks, today.** Only the input-idle ceiling under the opt-in
-//! `RoomConfig::afk_action = Disconnect`. The verb is not exposed to game
-//! logic in this round (see `docs/RECONNECT.md` §16).
+//! **Who asks.** The input-idle ceiling under the opt-in
+//! `RoomConfig::afk_action = Disconnect` (`ServerClose::IdleInput`,
+//! BACKLOG E6), and the GAME through its tick context's kick verb
+//! (`TickCtx::kick`, `ServerClose::Kicked`, BACKLOG E8 —
+//! `docs/RECONNECT.md` §16.3). Both end the membership through the
+//! room's disconnect policy first; the registry side is the same.
 //!
 //! **Its keep-the-socket sibling** ([`LeaveRequest`], BACKLOG B40): under
 //! the DEFAULT `afk_action = LeaveRoom` the ceiling ends the membership

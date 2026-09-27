@@ -118,6 +118,7 @@ fn the_sharded_room_checks_every_exported_entity() {
         tick: 1,
         dt: std::time::Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
+        kicks: Default::default(),
     };
     room.update(&mut world, &ctx);
     assert_eq!(checks.load(Ordering::Relaxed), 1, "one exported entity");

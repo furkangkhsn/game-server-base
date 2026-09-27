@@ -141,10 +141,11 @@ pub enum RoomControl {
 
 /// Per-tick metadata handed to the game logic.
 ///
-/// The lifetime is the input-idle view's ([`Self::idle`]): the actor
-/// lends its clock to the tick body, so a logic hook can ask "how long
-/// since this player last acted?" without an await, without a per-player
-/// task and without a new method on the logic surface.
+/// The lifetime is the actor's two lends: its input-idle clock
+/// ([`Self::idle`]), so a logic hook can ask "how long since this player
+/// last acted?", and the tick's kick queue ([`Self::kicks`]), so it can
+/// ask that a player be kicked — both without an await, without a
+/// per-player task and without a new method on the logic surface.
 #[derive(Debug, Clone, Copy)]
 pub struct TickCtx<'a> {
     pub room: RoomId,
@@ -156,6 +157,11 @@ pub struct TickCtx<'a> {
     /// what counts as input). A hand-built context defaults to the EMPTY
     /// view, whose every answer is `None`.
     pub idle: IdleView<'a>,
+    /// The kick verb (BACKLOG E8; [`Self::kick`] is the shorthand). A
+    /// hand-built context defaults to the INERT handle, which keeps
+    /// nothing; a test that wants to read its logic's kicks lends one
+    /// from its own [`KickQueue`].
+    pub kicks: Kicks<'a>,
 }
 
 impl TickCtx<'_> {
@@ -164,5 +170,36 @@ impl TickCtx<'_> {
     /// or bot-fed. Shorthand for [`IdleView::since_input`].
     pub fn since_input(&self, player: PlayerId) -> Option<Duration> {
         self.idle.since_input(player)
+    }
+
+    /// Kick `player` from the server: its membership ends through the
+    /// ordinary disconnect path — [`GameLogic::on_disconnect`] is called
+    /// with its resume identity and the returned [`Detach`] decides the
+    /// entity's fate (park / AI handover / despawn) — and then its
+    /// connection is closed: a best-effort `ERROR` code 9 whose message
+    /// is `kicked: <reason>` (`reason` cut to
+    /// [`KICK_REASON_MAX_BYTES`] on a `char` boundary; `kicked` alone
+    /// when empty), then the close, counted as
+    /// `server_closes{reason="kicked"}` (`docs/RECONNECT.md` §16.3).
+    ///
+    /// **Only queued.** Nothing happens inside the hook that asks. The
+    /// actor applies the tick's kicks once the hooks that could ask have
+    /// returned: those asked from `ingest`, `handle_request` or `update`
+    /// (and a shard's seam hooks) right after SYSTEMS — so the kicked
+    /// member gets no snapshot of this tick and, on a shard, never
+    /// migrates this tick — and those asked from the broadcast-phase
+    /// hooks (`snapshot`, `keepalive`, a shard's `team_exchange`) at the
+    /// end of the tick. No CONTROL phase runs in between, so a kick
+    /// judges the membership the asking hook saw. The close request
+    /// leaves at the next tick's phase 0d (the input-idle close's queue
+    /// and rules: a full registry mailbox keeps it for the tick after).
+    ///
+    /// **A no-op** (not counted) for a player that is not a live member
+    /// of THIS room or shard when the kick is applied: unknown, already
+    /// gone, parked, bot-fed, or — on a shard — migrated away before the
+    /// hook asked. A second kick of the same player in one tick finds it
+    /// gone (or parked) and is a no-op too: one close, the first reason.
+    pub fn kick(&self, player: PlayerId, reason: impl Into<String>) {
+        self.kicks.kick(player, reason);
     }
 }

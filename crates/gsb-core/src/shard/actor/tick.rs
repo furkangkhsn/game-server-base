@@ -8,7 +8,7 @@ use prost::Message;
 use tracing::{debug, warn};
 
 use crate::id::PlayerId;
-use crate::room::{Action, IdleView, TickCtx};
+use crate::room::{Action, IdleView, KickQueue, TickCtx};
 use crate::rpc::{RPC_REQ_OP, RpcRequest};
 use crate::ticker::TickInfo;
 
@@ -20,6 +20,7 @@ mod completions;
 mod detach;
 mod effects;
 mod idle;
+mod kick;
 mod migrate;
 mod requests;
 mod teams;
@@ -261,13 +262,17 @@ where
         //    against the lent-out, empty clock the stamp was lost and the
         //    receiver started no clock at all), and lent again for TEAMS
         //    and BROADCAST. No phase in either lend touches the clock or
-        //    returns early, so both restores are unconditional.
+        //    returns early, so both restores are unconditional. The
+        //    context lends the tick's kick queue too (E8): a local, empty
+        //    and allocation-free unless a hook kicks.
+        let kicks = KickQueue::default();
         let idle = std::mem::take(&mut self.idle);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: IdleView::new(&idle, t.at),
+            kicks: kicks.kicks(),
         };
 
         // -- Phase 2b — CONVERT, with the cross-seam view (the borrowed
@@ -291,6 +296,11 @@ where
         self.phase_effects_out(t.tick);
         // The first lend is over; MIGRATE reads and writes the clock.
         self.idle = idle;
+        // -- Phase 3c — KICK (E8): the kicks the input and systems hooks
+        //    asked for, applied BEFORE MIGRATE — a kicked member is out
+        //    of this shard's membership before the crossings are
+        //    collected, so the kick can never race its own migration.
+        self.apply_kicks(kicks.take());
 
         self.phase_migrate(t);
 
@@ -304,6 +314,7 @@ where
             tick: t.tick,
             dt,
             idle: IdleView::new(&idle, t.at),
+            kicks: kicks.kicks(),
         };
         // -- Phase 5b — TEAMS (`docs/CROSS-SHARD.md` §8b): the logic reads
         //    the other shards' team records and hands back this shard's
@@ -313,8 +324,11 @@ where
         //    borrowed boundary set folded into every group's snapshot).
         self.broadcast_phase(&ctx, &borrowed);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
-        // hand the clock back to the actor.
+        // hand the clock back to the actor, then apply what the TEAMS
+        // and BROADCAST hooks kicked (a member that crossed in this
+        // tick's MIGRATE is no longer this shard's: its kick is a no-op).
         self.idle = idle;
+        self.apply_kicks(kicks.take());
         true
     }
 
