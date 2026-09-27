@@ -81,7 +81,9 @@ fn every_request_is_answered_once_at_a_sane_rate() {
     // The room's side: each one registered external, nothing rejected,
     // refused or timed out.
     assert!(get("req_ext") >= get("rpc_ok"), "{line}");
-    assert!(get("req_ext") <= sent, "{line}");
+    // The room's ledger closes (B36): every request the clients sent was
+    // either registered or still unread when its session left.
+    assert_eq!(get("req_ext") + get("req_unread"), sent, "{line}");
     for k in [
         "rpc_to",
         "rpc_rej_conn",
@@ -132,6 +134,13 @@ fn a_burst_past_the_cap_is_counted_alike_on_both_sides() {
     assert_eq!(get("rpc_client_to"), 0, "{line}");
     assert_eq!(
         get("rpc_ok") + cap + get("rpc_open"),
+        get("rpc_sent"),
+        "{line}"
+    );
+    // The room's ledger closes too (B36): registered, cap-rejected, or
+    // unread when its session left.
+    assert_eq!(
+        get("req_ext") + get("req_rej_conn") + get("req_unread"),
         get("rpc_sent"),
         "{line}"
     );

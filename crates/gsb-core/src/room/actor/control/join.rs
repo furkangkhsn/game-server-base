@@ -40,11 +40,12 @@ where
         // the membership it now holds again (B40): it goes.
         self.leave_requests.retain(|r| r.conn != conn);
         if let Some(&stale) = self.binding.get(&conn) {
-            let rc = self.conns.remove(&stale).expect("binding implies row");
+            let mut rc = self.conns.remove(&stale).expect("binding implies row");
             self.roster_remove(&stale);
             self.drop_conn_request_state(conn);
             self.logic.on_leave(&mut self.world, stale);
-            drop(rc);
+            // The old session's unread requests go with its channel (B36).
+            self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
         }
         // Capacity: the room knows its own membership — this is the
         // only place a join can structurally fail. A fresh join to a
@@ -164,7 +165,7 @@ where
         // clean numbering, so the old channel object is dropped, not
         // reused.
         let (act_tx, act_rx) = self.config.action_channel();
-        let (entity, old_conn) = {
+        let (entity, old_conn, mut old_actions) = {
             let rc = self
                 .conns
                 .get_mut(&player)
@@ -172,7 +173,7 @@ where
             rc.out = out;
             // A fresh transport: no run of drops to resume from (F11).
             rc.dropping = false;
-            rc.actions = act_rx;
+            let old_actions = std::mem::replace(&mut rc.actions, act_rx);
             rc.detached = false;
             rc.bot_fed = false;
             rc.clear_hold_clock();
@@ -180,9 +181,12 @@ where
             rc.identity = identity.clone();
             let old = rc.conn;
             rc.conn = conn;
-            (rc.entity, old)
+            (rc.entity, old, old_actions)
         };
         self.m.resumes += 1;
+        // A parked row is never pulled: whatever requests the dead
+        // session left in its channel end here, unread (B36).
+        self.m.requests_dropped_unread += drop_unread_requests(&mut old_actions);
         // The clock RESTARTS with the new session: the park took the row
         // off it (a parked row has no input source), and the returning
         // human must not inherit the idleness its disconnect accumulated.
@@ -208,9 +212,13 @@ where
     }
 
     pub(in crate::room) fn despawn_conn(&mut self, player: PlayerId, count_as_leave: bool) {
-        let Some(rc) = self.conns.remove(&player) else {
+        let Some(mut rc) = self.conns.remove(&player) else {
             return;
         };
+        // CONTROL runs before READ: requests the session sent right
+        // before its leave may still sit in its channel, and the row
+        // takes them along — counted, never processed (B36).
+        self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
         // Tear the session binding down with the row (the leave/detach-
         // expiry/despawn half of the binding lifecycle).
         self.binding.remove(&rc.conn);

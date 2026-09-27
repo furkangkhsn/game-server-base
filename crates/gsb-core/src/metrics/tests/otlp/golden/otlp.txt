@@ -235,6 +235,9 @@ gsb_room_requests_rejected_room_cap sum t=2 mono=true unit="" n=2 | RPC rejectio
 gsb_room_requests_refused_congested sum t=2 mono=true unit="" n=2 | RPC requests refused unanswered on a congested connection (the storm bound), cumulative.
   [room=r1] 1000..2000 int 3
   [room=r7] 1000..2000 int 0
+gsb_room_requests_dropped_unread sum t=2 mono=true unit="" n=2 | RPC requests a session left unread in its action channel when it ended (never processed, never answered), cumulative.
+  [room=r1] 1000..2000 int 2
+  [room=r7] 1000..2000 int 0
 gsb_room_requests_timed_out sum t=2 mono=true unit="" n=2 | RPC pending requests swept as timed out, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0

@@ -99,6 +99,7 @@ impl MetricAccumulator {
                 requests_rejected_conn_cap: latest.requests_rejected_conn_cap,
                 requests_rejected_room_cap: latest.requests_rejected_room_cap,
                 requests_refused_congested: latest.requests_refused_congested,
+                requests_dropped_unread: latest.requests_dropped_unread,
                 requests_timed_out: latest.requests_timed_out,
                 requests_late: latest.requests_late,
                 pending_requests: latest.pending_requests,

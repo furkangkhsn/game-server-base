@@ -227,6 +227,12 @@ pub(crate) struct RoomCounters {
     /// storm bound of `crate::rpc`, "Delivery" (F14; its own counter
     /// since F15: a refusal is not a rejection the client saw).
     pub(crate) requests_refused_congested: u64,
+    /// Requests still unread in a session's action channel when the
+    /// session ended (a leave landing before the READ pull, a despawned
+    /// or resumed park, a superseding rejoin): neither processed nor
+    /// answered, counted as the channel is dropped (B36 — see
+    /// `crate::room::drop_unread_requests`).
+    pub(crate) requests_dropped_unread: u64,
     /// The room-wide pending cap bound the request.
     pub(crate) requests_rejected_room_cap: u64,
     /// Pending external requests swept as timed out (the client-visible
@@ -287,6 +293,7 @@ impl Default for RoomCounters {
             requests_rejected_conn_cap: 0,
             requests_rejected_room_cap: 0,
             requests_refused_congested: 0,
+            requests_dropped_unread: 0,
             requests_timed_out: 0,
             requests_late: 0,
             step_max_group: 0,

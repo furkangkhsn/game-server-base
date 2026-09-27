@@ -8,7 +8,7 @@ use super::{RoomFamily, counter, gauge};
 /// Session lifecycle through the room's metric drops, in exposition
 /// order. The effect, migration and team families move on shard rows
 /// only (0 on a single room).
-pub(super) const SESSION: [RoomFamily; 36] = [
+pub(super) const SESSION: [RoomFamily; 37] = [
     counter(
         "gsb_room_joins_total",
         "Joins processed, cumulative.",
@@ -169,6 +169,11 @@ pub(super) const SESSION: [RoomFamily; 36] = [
         "gsb_room_requests_refused_congested_total",
         "RPC requests refused unanswered on a congested connection (the storm bound), cumulative.",
         |r| r.requests_refused_congested,
+    ),
+    counter(
+        "gsb_room_requests_dropped_unread_total",
+        "RPC requests a session left unread in its action channel when it ended (never processed, never answered), cumulative.",
+        |r| r.requests_dropped_unread,
     ),
     counter(
         "gsb_room_requests_timed_out_total",

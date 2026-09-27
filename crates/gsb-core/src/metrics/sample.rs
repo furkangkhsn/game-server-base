@@ -176,6 +176,13 @@ pub struct RoomSample {
     /// counter since F15, apart from the answered cap rejections),
     /// cumulative.
     pub requests_refused_congested: u64,
+    /// RPC: requests still UNREAD in a session's action channel when the
+    /// session ended (a leave that landed before the READ pull, a
+    /// despawned or resumed park, a superseding rejoin) — neither
+    /// processed nor answered; the bucket that closes the ledger `sent =
+    /// answered + rejected + refused + accepted + this` (B36),
+    /// cumulative.
+    pub requests_dropped_unread: u64,
     /// RPC: pending external requests swept as timed out (the
     /// client-visible timeout), cumulative.
     pub requests_timed_out: u64,

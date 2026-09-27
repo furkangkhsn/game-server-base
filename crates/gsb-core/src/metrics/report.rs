@@ -110,8 +110,9 @@ pub struct RoomReport {
     /// (pending) requests, rejections split by cause (see
     /// `RoomSample::requests_rejected_malformed`), the congested
     /// connections' unanswered refusals (see
-    /// `RoomSample::requests_refused_congested`), timeout sweeps, and
-    /// late reports dropped by the reconciliation.
+    /// `RoomSample::requests_refused_congested`), the requests a session
+    /// left unread (see `RoomSample::requests_dropped_unread`), timeout
+    /// sweeps, and late reports dropped by the reconciliation.
     pub requests_local: u64,
     pub requests_external: u64,
     pub requests_rejected_malformed: u64,
@@ -121,6 +122,7 @@ pub struct RoomReport {
     pub requests_rejected_conn_cap: u64,
     pub requests_rejected_room_cap: u64,
     pub requests_refused_congested: u64,
+    pub requests_dropped_unread: u64,
     pub requests_timed_out: u64,
     pub requests_late: u64,
     /// RPC: external requests currently in flight (gauge).

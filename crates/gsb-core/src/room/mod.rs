@@ -74,6 +74,7 @@ mod counters;
 mod idle;
 mod kick;
 mod logic;
+mod unread;
 
 #[cfg(test)]
 mod tests;
@@ -89,6 +90,7 @@ pub use idle::IdleView;
 pub(crate) use kick::kick_close;
 pub use kick::{KICK_REASON_MAX_BYTES, Kick, KickQueue, Kicks, kick_message};
 pub use logic::{GameLogic, RoomLogic};
+pub(crate) use unread::drop_unread_requests;
 
 /// A client action forwarded by the connection actor. The payload is still
 /// encoded; the game crate decodes it against its own message types.

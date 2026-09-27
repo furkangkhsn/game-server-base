@@ -71,6 +71,30 @@ fn the_congested_refusals_survive_the_wire() {
     }
 }
 
+/// The requests a session left unread (GSMH, B36) cross the wire as
+/// their own field, between the congested refusals and the timeouts.
+#[test]
+fn the_unread_requests_survive_the_wire() {
+    let sent = three_shards();
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(
+            (
+                a.requests_refused_congested,
+                a.requests_dropped_unread,
+                a.requests_timed_out
+            ),
+            (
+                b.requests_refused_congested,
+                b.requests_dropped_unread,
+                b.requests_timed_out
+            ),
+            "shard {:?}",
+            a.room
+        );
+    }
+}
+
 /// The logic counters (GSMC) cross the wire name by name, with their
 /// fold rules and the overflow count; an empty set stays empty. The
 /// help line does not travel.
@@ -79,7 +103,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"GMSG", "the magic, little-endian GSMG");
+    assert_eq!(&frame[..4], b"HMSG", "the magic, little-endian GSMH");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {

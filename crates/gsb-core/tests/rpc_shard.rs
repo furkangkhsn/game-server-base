@@ -51,6 +51,8 @@ const OP_PRIV: u16 = 0x1102;
 
 #[path = "rpc_shard/paused.rs"]
 mod paused;
+#[path = "rpc_shard/unread.rs"]
+mod unread;
 
 /// One in-flight external request the test logic has delegated: its
 /// correlation id and the resolver (sending `Ok` completes it, `Err`

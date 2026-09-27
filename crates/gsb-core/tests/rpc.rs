@@ -56,6 +56,8 @@ mod buckets;
 mod counters;
 #[path = "rpc/paused.rs"]
 mod paused;
+#[path = "rpc/unread.rs"]
+mod unread;
 
 const OP_SNAP: u16 = 0x1001;
 const OP_PRIV: u16 = 0x1002;

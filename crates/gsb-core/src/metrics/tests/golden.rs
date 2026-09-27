@@ -8,7 +8,8 @@
 //! `gsb_room_requests_refused_congested_total`. So are the two families
 //! B39 added for counters the line already carried (`shipped_frames=`,
 //! `private_frames=`): `gsb_room_shipped_frames_total`,
-//! `gsb_room_private_frames_total`.
+//! `gsb_room_private_frames_total`. And B36's `req_unread=` /
+//! `gsb_room_requests_dropped_unread_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -67,6 +68,7 @@ pub(super) fn golden_report() -> MetricReport {
     a2.shipped_bytes = 17_700;
     a2.dropped_frames = 2;
     a2.requests_refused_congested = 3;
+    a2.requests_dropped_unread = 2;
     acc.apply(MetricsEvent::Room(a2));
     let mut b = room_sample(RoomId(7), t1, 15);
     b.effects_applied = 6;

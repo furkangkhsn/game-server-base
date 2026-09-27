@@ -49,7 +49,7 @@ impl MetricReport {
                  req_local={} req_ext={} \
                  req_rej_malformed={} req_rej_dup={} req_rej_no_handler={} \
                  req_rej_logic={} req_rej_conn={} req_rej_room={} \
-                 req_refused={} req_to={} req_late={} \
+                 req_refused={} req_unread={} req_to={} req_late={} \
                  req_pending={} metrics_dropped={}",
                 r.room,
                 r.steps,
@@ -116,6 +116,7 @@ impl MetricReport {
                 r.requests_rejected_conn_cap,
                 r.requests_rejected_room_cap,
                 r.requests_refused_congested,
+                r.requests_dropped_unread,
                 r.requests_timed_out,
                 r.requests_late,
                 r.pending_requests,

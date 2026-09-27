@@ -53,6 +53,7 @@ mod migration;
 mod replies;
 mod strip;
 mod teams;
+mod unread;
 
 mod rigs;
 pub(in crate::shard::tests) use rigs::*;

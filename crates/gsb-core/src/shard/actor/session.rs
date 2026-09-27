@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::channel::{FrameBatch, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::Action;
+use crate::room::{Action, drop_unread_requests};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -75,7 +75,10 @@ where
             rc.out = out;
             // A fresh transport: no run of drops to resume from (F11).
             rc.dropping = false;
-            rc.actions = act_rx;
+            // A parked row is never pulled: the dead session's unread
+            // requests end with its channel (B36, the room actor's rule).
+            let mut old_actions = std::mem::replace(&mut rc.actions, act_rx);
+            self.m.requests_dropped_unread += drop_unread_requests(&mut old_actions);
             rc.detached = false;
             rc.bot_fed = false;
             rc.clear_hold_clock();
@@ -114,9 +117,12 @@ where
     /// run `on_leave`, count. (`on_leave` stays THE single despawn seam
     /// for snapshots and bookkeeping, exactly like the room actor.)
     pub(crate) fn despawn_conn(&mut self, player: PlayerId, count_as_leave: bool) {
-        let Some(rc) = self.conns.remove(&player) else {
+        let Some(mut rc) = self.conns.remove(&player) else {
             return;
         };
+        // Requests still unread in the session's channel go with the row,
+        // counted (B36 — CONTROL runs before READ, as in the room actor).
+        self.m.requests_dropped_unread += drop_unread_requests(&mut rc.actions);
         self.binding.remove(&rc.conn);
         self.conn_epoch.remove(&rc.conn);
         self.idle.stop(player);

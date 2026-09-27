@@ -38,7 +38,11 @@
 //! - a connection that leaves (or a room that shuts down) simply loses
 //!   its pending set — late reports find no entry and are dropped, the
 //!   workers exit on their own (their report send fails against the
-//!   dropped channel, or the worker's timeout fires first);
+//!   dropped channel, or the worker's timeout fires first); requests it
+//!   sent that the room had not read yet (CONTROL runs before READ, so a
+//!   leave can land in the same tick window) go with its action channel,
+//!   neither processed nor answered, and are counted
+//!   (`requests_dropped_unread`, B36);
 //! - the tick body touches this machinery only through bounded
 //!   non-blocking probes (an empty-channel `try_recv`, an
 //!   `is_empty`-guarded sweep), so a quiet room pays nothing.
