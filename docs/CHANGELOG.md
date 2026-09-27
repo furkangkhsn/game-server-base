@@ -5,6 +5,43 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 5 — B34, B39, B46, B33 (`misc/small-bundle-5`)
+
+- **B34 — CI action'ları Node 24 ana sürümlerinde.** `actions/checkout@v4`
+  → `@v5` (7 iş), `actions/upload-artifact@v4` → `@v6` (autobahn) — node20
+  çalışma zamanı kaldırılıyor, ilk CI koşusu uyarıp zorla Node 24'te
+  koşturmuştu. `dtolnay/rust-toolchain` composite (Node yok);
+  `Swatinem/rust-cache@v2` zaten node24. Ebeveyn `action.yml`'leri
+  kaynağından doğruladı (`checkout@v5`, `upload-artifact@v6`,
+  `rust-cache@v2`: `using: node24`; `upload-artifact@v5` hâlâ node20).
+  Kural CONTRIBUTING'de.
+- **B39 — kare sayaçları dışa açımda.** `RoomReport::shipped_frames` /
+  `private_frames` aile tablosuna iki kümülatif sayaç olarak girdi:
+  `gsb_room_shipped_frames_total`, `gsb_room_private_frames_total`
+  (Prometheus `counter`, OTLP monoton kümülatif `Sum`); iki altın metin
+  bilerek bu iki aile kadar değişti, `otlp::cross` yeşil. `gsb-metric`
+  satırında zaten vardı. OPS §3, DESIGN §12.
+- **B46 — kararlı pencerenin sonu tutarlı kesitten.** `last_steady`
+  (`records_per_tick`'in ve savaşın takım penceresinin sonu) eskiden
+  `members == peak_members` olan herhangi bir raporun en yenisiydi;
+  toplamı tesadüfen tepeye eşit yırtık/eksik bir rapor pencereyi
+  bitirebiliyordu. `spread::steady_end` artık `steady_span`'in sonunu
+  (nüfus raporları, kesitsiz koşuda yırtık geri düşüş) verir. RESULT
+  biçimi aynı.
+- **B33 — ops HTTP accept döngüsü kapıyla durur.** `http.abort()` yerine
+  ops yüzeyinin accept'i oyun kapılarının `Door`'undan geçer; `stop()`
+  kapıyı kapatır, döngü döner ve listener'ı düşürür, dinleyicilerin
+  döngüleriyle aynı 1 sn'lik son tarih altında beklenir (abort yalnız
+  geri sigorta). `StopReport`'a alan eklenmedi: ops döngüsü
+  `accept_loops_ended`'a +1 sayılır. DESIGN §9, OPS.
+- Yan bulgu **B47** (BACKLOG): ops HTTP `read_head`'in süre sınırı yok.
+
+Testler 1234 → 1237 (`otlp` ile 1252 → 1255); her yeni test önce
+kırmızı görüldü, düzeltme mutasyonları (B39 okuyucu, B46 kesit/geri
+düşüş, B33 kapalı-hata kolu/kapıyı kapatmamak) testleri düşürüyor.
+Ebeveyn doğrulaması: `steady_end`'in pencerenin ilk raporunu vermesi ve
+ops görevinin beklenen döngülere eklenmemesi — ikisi de kırıldı.
+
 ## F6 — seam ötesi alan sorgusu: `local ∪ lent` kit'te (`kit/f6-area-query`)
 
 - **Kit'in yapı taşı (opt-in, varsayılan değişmedi):** `Seam::find`

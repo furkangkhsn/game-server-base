@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1234 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1237 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,14 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**Küçük paket 5 tamam** (CHANGELOG "Küçük paket 5"): CI'da action'lar
+node24 ana sürümlerinde (yeni `uses:` için kural CONTRIBUTING'de);
+`/metrics` ve OTLP iki yeni oda ailesi taşır
+(`gsb_room_shipped_frames_total`, `gsb_room_private_frames_total`);
+loadgen'in `records_per_tick` penceresi tutarlı kesitte biter; `stop()`
+artık hiçbir accept döngüsünü abort etmez (ops HTTP dahil — `http_listen`
+açıkken `accept_loops_ended` dinleyici sayısı + 1).
 
 **F6 tamam** (CHANGELOG "F6", KIT-ARCHITECTURE §10 "F6"): sharded bir
 oyun alan etkisini / yakınlık sorgusunu `Seam::within` / `Seam::area`
@@ -624,6 +632,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1234 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1237 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
