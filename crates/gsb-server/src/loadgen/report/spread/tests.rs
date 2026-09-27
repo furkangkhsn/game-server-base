@@ -6,7 +6,7 @@
 use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, RoomReport};
 
-use super::{members_by_row, peak_population, steady_span};
+use super::{consistent_cut, has_consistent_cut, members_by_row, peak_population, steady_span};
 use crate::report::fold::tests::{report, shard};
 
 /// Shard `index`'s row of room 1: sampled at step `steps` (with
@@ -43,7 +43,7 @@ fn cut(rows: [(u64, u32); 4]) -> MetricReport {
 /// on its sample tick; the destination installs it one tick later).
 fn failing_run() -> Vec<MetricReport> {
     let mut first = cut([(30, 2), (30, 2), (30, 0), (30, 2)]);
-    first.rooms.remove(2); // shard 2 had not sampled yet
+    first.rooms.remove(2); // shard 2 had not sampled yet: not a cut (B45)
     vec![
         first,
         cut([(60, 3), (30, 2), (60, 2), (30, 2)]),
@@ -61,11 +61,11 @@ fn failing_run() -> Vec<MetricReport> {
 fn a_torn_report_is_neither_the_population_nor_the_spread() {
     let reports = failing_run();
     assert_eq!(
-        peak_population(&reports),
+        peak_population(&reports, 4),
         8,
         "the torn report's double count must not become the population"
     );
-    let (first, last) = steady_span(&reports, 8).expect("a steady window");
+    let (first, last) = steady_span(&reports, 8, 4).expect("a steady window");
     assert_eq!(members_by_row(first), "2,1,4,1");
     assert_eq!(members_by_row(last), "2,1,4,1");
 }
@@ -79,8 +79,8 @@ fn a_consistent_overcount_is_still_reported() {
         cut([(30, 3), (30, 2), (30, 2), (30, 2)]),
         cut([(60, 3), (60, 2), (60, 2), (60, 2)]),
     ];
-    assert_eq!(peak_population(&reports), 9);
-    let (_, last) = steady_span(&reports, 9).expect("a steady window");
+    assert_eq!(peak_population(&reports, 4), 9);
+    let (_, last) = steady_span(&reports, 9, 4).expect("a steady window");
     assert_eq!(members_by_row(last), "3,2,2,2");
 }
 
@@ -101,7 +101,7 @@ fn rows_of_unevenly_lagged_shards_are_not_one_instant() {
         row(2, 90, 5, 2),
         row(3, 90, 5, 2),
     ]);
-    assert_eq!(peak_population(&[torn, even]), 8);
+    assert_eq!(peak_population(&[torn, even], 4), 8);
 }
 
 /// A single room's report is one row: always one instant.
@@ -109,7 +109,7 @@ fn rows_of_unevenly_lagged_shards_are_not_one_instant() {
 fn a_single_room_report_is_always_a_population() {
     let mut one = shard(1);
     one.members = 13;
-    assert_eq!(peak_population(&[report(vec![one])]), 13);
+    assert_eq!(peak_population(&[report(vec![one])], 1), 13);
 }
 
 /// A run with NO consistent cut (a shard lagged unevenly and never lined
@@ -118,5 +118,36 @@ fn a_single_room_report_is_always_a_population() {
 #[test]
 fn a_run_without_a_consistent_cut_falls_back_to_every_report() {
     let torn = report(vec![row(0, 60, 5, 3), row(1, 60, 0, 2)]);
-    assert_eq!(peak_population(&[torn]), 5);
+    assert_eq!(peak_population(&[torn], 2), 5);
+}
+
+/// A cut holds EVERY shard's row (B45). A report the collector emitted
+/// before every shard had sampled lacks rows; its rows can agree on
+/// `(steps, lagged_ticks)` and still not be the room — the missing
+/// shard's players are in no row.
+#[test]
+fn a_report_missing_a_shard_row_is_not_a_cut() {
+    let partial = report(vec![row(1, 30, 0, 2), row(2, 30, 0, 2), row(3, 30, 0, 2)]);
+    assert!(!consistent_cut(&partial, 4), "shard 0 has no row");
+    let whole = cut([(30, 2), (30, 2), (30, 2), (30, 2)]);
+    assert!(consistent_cut(&whole, 4));
+}
+
+/// A run whose only equal-rowed report is PARTIAL has no consistent cut:
+/// its population and spread come from the torn fallback (and the human
+/// block says so), not from the partial report — which used to be taken
+/// as the run's only cut: population 6 for 8 players, and a three-shard
+/// `shard_members=2,2,2` for a four-shard room.
+#[test]
+fn a_partial_report_does_not_stand_in_for_the_population() {
+    let reports = vec![
+        report(vec![row(1, 30, 0, 2), row(2, 30, 0, 2), row(3, 30, 0, 2)]),
+        cut([(60, 3), (30, 2), (60, 1), (30, 2)]),
+        cut([(90, 2), (60, 2), (90, 2), (60, 2)]),
+    ];
+    assert!(!has_consistent_cut(&reports, 4), "the run is torn");
+    assert_eq!(peak_population(&reports, 4), 8);
+    let (first, last) = steady_span(&reports, 8, 4).expect("a steady window");
+    assert_eq!(members_by_row(first), "3,2,1,2");
+    assert_eq!(members_by_row(last), "2,2,2,2");
 }

@@ -45,13 +45,30 @@ pub(crate) fn print_report(
         .filter_map(|r| r.registry.map(|g| g.conns))
         .max()
         .unwrap_or(0);
-    // Peak room membership (same rationale): the stable entity count for
-    // the overlap ratio. For a sharded room this is the SUM over shards
+    // The game's own layout (arena / MMO) or the command line's (demo).
+    let bot = crate::bot::bot_for(args);
+    let labels = bot.labels();
+    // The room's shard count: its rows per report. Shard-aware like the
+    // legacy spelling: the EXPLICIT topology key decides when present (an
+    // operator running `--topology sharded --visibility spatial` IS on
+    // the grid even though the legacy spelling says spatial); without it
+    // the legacy derivation applies. RESULT's `shards=`, and what a
+    // consistent cut must hold a row of each (`spread.rs`, B45).
+    let shards = match (labels, args.topology) {
+        (Some(l), _) => l.shards,
+        (None, Some(gsb_server::Topology::Sharded)) => args.shard_count,
+        (None, Some(gsb_server::Topology::Single)) => 1,
+        (None, None) if args.visibility == gsb_server::Visibility::Sharded => args.shard_count,
+        (None, None) => 1,
+    };
+    // Peak room membership (same rationale as `peak_conns`): the stable
+    // entity count for the overlap ratio. For a sharded room this is the
+    // SUM over shards
     // (the room's total population — the shards partition its connections),
     // read from consistent cuts only: a torn report's rows are different
-    // sample rounds and can count a migrating player twice (`spread.rs`,
-    // F18).
-    let peak_members = peak_population(server_reports);
+    // sample rounds and can count a migrating player twice, a partial one
+    // misses a shard (`spread.rs`, F18, B45).
+    let peak_members = peak_population(server_reports, shards);
     // The overlap measurement (D3): encoded entity records per tick in the
     // steady state, and per broadcastable entity (the multiplier). Both
     // endpoints are taken AFTER the join phase (base = first report with
@@ -180,13 +197,10 @@ pub(crate) fn print_report(
         .max_by_key(|c| c.total())
         .unwrap_or_default();
     let server_closes_total = server_closes.total();
-    // The game's own layout (arena / MMO) or the command line's (demo).
-    let bot = crate::bot::bot_for(args);
-    let labels = bot.labels();
     // A sharded game's spread across its shards, early and late in the
     // steady window (per-shard members; see `spread.rs`).
     let spread = if bot.shard_spread() {
-        steady_span(server_reports, peak_members)
+        steady_span(server_reports, peak_members, shards)
             .map(|(first, last)| (members_by_row(first), members_by_row(last)))
     } else {
         None
@@ -358,7 +372,7 @@ pub(crate) fn print_report(
         if let Some((first, last)) = &spread {
             // A run with no consistent cut is read from torn rows (see
             // `spread.rs`): said here rather than passed off as exact.
-            let torn = if has_consistent_cut(server_reports) {
+            let torn = if has_consistent_cut(server_reports, shards) {
                 ""
             } else {
                 " (torn: no report is a consistent cut, a migrating player may count 0 or 2 times)"
@@ -429,18 +443,7 @@ pub(crate) fn print_report(
             Some(l) => l.visibility.to_string(),
             None => args.visibility.to_string(),
         },
-        // Shard-aware like the legacy spelling: the EXPLICIT topology key
-        // decides when present (an operator running
-        // `--topology sharded --visibility spatial` IS on the grid even
-        // though the legacy spelling says spatial); without it the legacy
-        // derivation applies.
-        match (labels, args.topology) {
-            (Some(l), _) => l.shards,
-            (None, Some(gsb_server::Topology::Sharded)) => args.shard_count,
-            (None, Some(gsb_server::Topology::Single)) => 1,
-            (None, None) if args.visibility == gsb_server::Visibility::Sharded => args.shard_count,
-            (None, None) => 1,
-        },
+        shards,
         args.max_snapshot_bytes,
         args.clients,
         connected,

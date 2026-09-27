@@ -2985,7 +2985,16 @@ kesit**se (her satır aynı `(steps, lagged_ticks)`'te — shard'lar tek
 ticker'la aynı adımda ilerler ve aynı adım katlarında örnekler, yani
 eşit çift aynı tur, aynı tick; iki shard'ın ticker aboneliğinin
 farkı olabilecek tek tick'i kurulum kapısı soğurur) tek nüfus olarak
-toplanır. Tek oda raporu tek satırdır: her zaman kesittir. Loadgen'in
+toplanır. Tek oda raporu tek satırdır: her zaman kesittir. Kesit
+odanın **her shard'ının** satırını içerir (B45): toplayıcı her shard ilk
+örneğini göndermeden rapor yayabilir; eksik satırlı bir raporun
+satırları `(steps, lagged_ticks)`'te anlaşsa da oda değildir — eksik
+shard'ın oyuncuları hiçbir satırda yok. Beklenen shard sayısı koşunun
+kendisidir (RESULT'un `shards=`'ı; `print_report` onu
+`peak_population`/`steady_span`/`has_consistent_cut`'a verir). Eskiden
+kararlı penceredeki raporların hepsi yırtıksa nüfus bu eksik rapordan
+okunuyor (4 shard'lık odada 3 değerli `shard_members=`) ve yırtık
+satırlara geri düşüş devreye girmiyordu. Loadgen'in
 `peak_members`'ı, kararlı penceresi ve `shard_members=`'ı böyle okunur
 (`loadgen::report::spread`); hiç tutarlı kesiti olmayan bir koşu
 (eşit olmayan `Lagged` yemiş shard bir daha hizalanmaz) yırtık
@@ -2994,7 +3003,7 @@ satırları katlamaz (her shard ayrı seri); PromQL'de shard'lar üzerinde
 `sum` aynı yırtılmaya açıktır — göç sürerken nüfusun ±1 oynaması
 ölçüm değil kesittir. Kilit: `shard::tests::metrics::members` (tick
 başına el değiştirme) ve `loadgen::report::spread::tests` (gerçek bir
-başarısız koşunun rapor akışı, satır satır).
+başarısız koşunun rapor akışı, satır satır; eksik satırlı rapor, B45).
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi

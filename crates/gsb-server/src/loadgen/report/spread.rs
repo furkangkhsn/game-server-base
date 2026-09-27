@@ -28,6 +28,12 @@
 //! are the same round, the same tick index (up to the one tick two
 //! shards' ticker subscriptions can differ by, which the install gate
 //! absorbs). A single room's report is one row: always a cut.
+//!
+//! And a cut holds EVERY shard's row (B45): a report the collector emits
+//! before each shard has sent its first sample lacks rows, and rows that
+//! agree on `(steps, lagged_ticks)` are still not the room when a
+//! shard's players are in none of them. The room's shard count is the
+//! run's (`shards=` on the RESULT line), handed in by the caller.
 
 use gsb_core::metrics::MetricReport;
 
@@ -49,34 +55,39 @@ pub(crate) fn members_by_row(report: &MetricReport) -> String {
 }
 
 /// Whether `report`'s rows are one instant of the room (see the module
-/// docs): non-empty, and every row at the same `(steps, lagged_ticks)`.
-pub(crate) fn consistent_cut(report: &MetricReport) -> bool {
+/// docs): a row for each of the room's `shards`, every one at the same
+/// `(steps, lagged_ticks)`.
+pub(crate) fn consistent_cut(report: &MetricReport, shards: u32) -> bool {
+    let whole = usize::try_from(shards).is_ok_and(|n| report.rooms.len() == n);
     let mut rows = report.rooms.iter().map(|r| (r.steps, r.lagged_ticks));
-    rows.next().is_some_and(|first| rows.all(|r| r == first))
+    whole && rows.next().is_some_and(|first| rows.all(|r| r == first))
 }
 
 /// Whether the run has any consistent cut. A run without one (a shard
 /// that lagged unevenly never lines up with the others again) is read
 /// from its torn reports, as every run was before F18 — and the human
 /// block says so.
-pub(crate) fn has_consistent_cut(reports: &[MetricReport]) -> bool {
-    reports.iter().any(consistent_cut)
+pub(crate) fn has_consistent_cut(reports: &[MetricReport], shards: u32) -> bool {
+    reports.iter().any(|r| consistent_cut(r, shards))
 }
 
 /// The reports a population is read from: the consistent cuts, or —
 /// a run with none — every non-empty report (see [`has_consistent_cut`]).
-fn population_reports(reports: &[MetricReport]) -> impl Iterator<Item = &MetricReport> + Clone {
-    let cuts_only = has_consistent_cut(reports);
+fn population_reports(
+    reports: &[MetricReport],
+    shards: u32,
+) -> impl Iterator<Item = &MetricReport> + Clone {
+    let cuts_only = has_consistent_cut(reports, shards);
     reports
         .iter()
-        .filter(move |r| !r.rooms.is_empty() && (!cuts_only || consistent_cut(r)))
+        .filter(move |r| !r.rooms.is_empty() && (!cuts_only || consistent_cut(r, shards)))
 }
 
 /// The run's full population: the largest member total over the
 /// population reports. A torn report's double count cannot win it, and
 /// a double count that persists over consistent cuts still does.
-pub(crate) fn peak_population(reports: &[MetricReport]) -> u32 {
-    population_reports(reports)
+pub(crate) fn peak_population(reports: &[MetricReport], shards: u32) -> u32 {
+    population_reports(reports, shards)
         .map(report_members)
         .max()
         .unwrap_or(0)
@@ -88,8 +99,10 @@ pub(crate) fn peak_population(reports: &[MetricReport]) -> u32 {
 pub(crate) fn steady_span(
     reports: &[MetricReport],
     peak_members: u32,
+    shards: u32,
 ) -> Option<(&MetricReport, &MetricReport)> {
-    let steady = population_reports(reports).filter(move |r| report_members(r) == peak_members);
+    let steady =
+        population_reports(reports, shards).filter(move |r| report_members(r) == peak_members);
     Some((
         steady.clone().min_by_key(|r| report_steps(r))?,
         steady.max_by_key(|r| report_steps(r))?,
