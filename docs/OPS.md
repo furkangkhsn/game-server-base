@@ -149,8 +149,10 @@ max_detach_hold_secs = "off"
   çekirdek (`leave_room`) → oyunun varsayılanı (`GameModule::afk_action`,
   varsayılan `LeaveRoom`) → düz anahtar → `[rooms.<id>]`. İkisi de önce
   üyeyi oyunun `on_disconnect`'ine verir (park / AI devri / despawn):
-  `leave_room` orada durur — soket açık, tel sessiz, istemci yeniden
-  katılabilir (bugünkü davranış); `disconnect` bağlantıyı da kapatır —
+  `leave_room` orada durur — soket açık, tel sessiz; bağlantı odada
+  değildir (kendi `LEAVE_ROOM_REQ`'inden sonraki gibi): oyun kareleri
+  `ERROR 6` alır, istemci doğrudan yeniden katılır, park edilmiş varlığını
+  geri alır (B40, RECONNECT §16); `disconnect` bağlantıyı da kapatır —
   istemciye en-iyi-çaba ERROR 9 (`input idle: no game input for N s
   (…)`), sonra kapanış; `server_closes{reason="idle_input"}` sayılır;
   park edilmiş varlık aynı kimlikle yeniden bağlanınca geri alınır.

@@ -161,8 +161,9 @@ birbirine karışmaz:
   (`GameDefaults`, `configure`'dan sonra bir kez okunur).
 - **Girdi-boşta tavanının eylemi (BACKLOG E6, RECONNECT §16.1).** AFK
   oyuncu odadan mı atılır sunucudan mı — oyunun/dağıtımın kararı.
-  `GameModule::afk_action()` (varsayılan `AfkAction::LeaveRoom` = bugünkü
-  davranış: üyelik biter, soket açık) oyunun varsayılanıdır;
+  `GameModule::afk_action()` (varsayılan `AfkAction::LeaveRoom`: üyelik
+  biter, soket açık, bağlantı odada değildir — doğrudan yeniden katılır,
+  park varsa resume eder) oyunun varsayılanıdır;
   `AfkAction::Disconnect` bağlantıyı da kapatır (ERROR 9 + kapanış,
   `idle_input` sayılır). Her iki durumda da varlığın kaderini oyunun
   `on_disconnect`'i seçer. Operatör düz ya da `[rooms.<id>]` `afk_action`

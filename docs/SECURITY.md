@@ -188,7 +188,9 @@ hakkında hüküm değil ve toplayıcı onunla birlikte öldüğü için
 gözlenemez (istemci yine de bilgilendirilir: en-iyi-çaba ERROR 14,
 DESIGN §5.6); ticket / protokol sürümü reddi — bağlantı açık kalır;
 girdi-boşta tavanı varsayılan `afk_action = leave_room` ile — entity'yi
-politikaya verir, oturumu bitirmez (`disconnect` ile bitirir: `idle_input`).
+politikaya verir, üyeliği bitirir, oturumu bitirmez (`disconnect` ile
+bitirir: `idle_input`). Ardından gelen oyun kareleri `ERROR 6` (race
+sınıfı) alır — ihlal bütçesinin mevcut kuralı.
 
 ## 3.7. WebSocket kapısının RFC 6455 uyumu (WS uyum kapısı turu)
 

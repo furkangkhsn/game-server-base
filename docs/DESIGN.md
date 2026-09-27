@@ -710,7 +710,10 @@ beklemesiz** (`try_notice`), stop ve reddedilen akış gibi: kapanan üye
 okumayı da bırakmış olması en muhtemel üyedir. Sayılır:
 `server_closes{reason="idle_input"}` (yeni etiket, sona eklendi).
 Varsayılan `afk_action = leave_room`'da tel değişmez (soket açık,
-bildirim yok).
+bildirim yok); bağlantı yine de odadan çıkmış olur — registry satırını
+bir ayrılma gibi yerleştirir ve bağlantıya `ConnIn::LeftRoom` iletir
+(B40, RECONNECT §16/§16.2): oyun kareleri `ERROR 6` alır, `JOIN` doğrudan
+geçer.
 
 **Kapanış yolları, kapı kapı (önce → sonra).** Değişmeyenler: `idle_timeout`,
 `violation_budget`, `preauth_budget`, `conn_cap`/`unauth_cap`,

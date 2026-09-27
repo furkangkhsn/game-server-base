@@ -132,6 +132,11 @@ detach'in bitebileceği her yolu kapsarlar):
    - başlamış bir hold `ExpireTo::Despawn`'a doğru dolduğunda (§14.4
      süpürmesi).
 
+Canlı bir bağlantının geride bıraktığı park (girdi-boşta tavanı,
+varsayılan eylem) aynı şekle getirilir: kendi satırında, bağlantının
+**park anahtarı** altında (§16.2) — yukarıdaki üç olay onu da aynen
+bırakır.
+
 `ExpireTo::AiHandover` kolu **bilinçli olarak bildirilmez**: o hold,
 entity bir bot altında canlı, slotunu gerçekten tutarak ve hâlâ geçerli
 bir resume hedefi olarak biter (§9) — satır işini yapmaktadır.
@@ -472,28 +477,48 @@ oyuncu yüküyle (`PlayerMigration.last_input`) TAŞINIR — §14.2'nin park
 meta'sı ile aynı gerekçe: saat per-aktördür, taşınmazsa hareket eden
 boşta bir varlık her sınır geçişinde affedilir.
 
-**Varsayılan eylem: üyelik biter, soket kalır.** Tavan (varsayılan
-`afk_action = leave_room`) oda ÜYELİĞİNİ sonlandırır, SOKETİ kapatmaz.
-Taşıma bağlantı/registry katmanının malıdır ve onun kendi tavanı
-(`idle_timeout_secs`) zaten vardır — heartbeat atan bir istemci tanımı
-gereği taşıma-boşta DEĞİLDİR. Idle-kick edilmiş istemci
-`LEAVE_ROOM_REQ` göndermiş gibi bir durumdadır: bağlantısı yaşar ve
-yeniden join edebilir (ki §14.3 gereği bu join örtük resume denemesidir,
-yani park edilmiş varlığını geri alır). Bir sonraki oyun karesi kapalı
-aksiyon kanalına çarpar ve bağlantı aktörü kendini odadan ayırır.
+**Varsayılan eylem: üyelik biter, soket kalır — sözleşme (B40).** Tavan
+(varsayılan `afk_action = leave_room`) oda ÜYELİĞİNİ sonlandırır, SOKETİ
+kapatmaz. Taşıma bağlantı/registry katmanının malıdır ve onun kendi
+tavanı (`idle_timeout_secs`) zaten vardır — heartbeat atan bir istemci
+tanımı gereği taşıma-boşta DEĞİLDİR. Idle-kick'ten sonra bağlantı,
+kendi `LEAVE_ROOM_REQ`'ini göndermiş bir bağlantıyla AYNI durumdadır —
+politika ne karar vermiş olursa olsun:
 
-*Düzeltme notu (E6 turunda testle görüldü, davranış DEĞİŞTİRİLMEDİ):*
-son cümle politika **despawn** ettiğinde doğrudur. Politika **park**
-ettiyse satır aksiyon kanalını (ve giden kuyruğu) tutar: istemcinin
-kareleri park edilmiş satırın kanalında birikir (READ atlar, kanal
-dolunca `actions_dropped`), bağlantı aktörü kendini `InRoom` sanmaya
-devam eder ve doğrudan `JOIN_ROOM_REQ` `ERROR 3` ("not authenticated",
-sert ihlal) alır — istemci önce `LEAVE_ROOM_REQ` göndermelidir. Ayrıca
-despawn edilen üyenin registry satırı canlı bir aidiyet olarak kalır;
-istemci ne yeniden katılır ne ayrılırsa, soketi sonra kapandığında satır
-`detached` işaretlenip bir daha bırakılmaz (slot sızıntısı; oda bitene
-dek). İkisi de varsayılan yolda; `afk_action = disconnect` ikisini de
-yaşamaz (§16.1). BACKLOG'da ayrı madde.
+1. **Kimliği doğrulanmış, hiçbir odada değil.** Bağlantı aktörü
+   kendini odadan ayırır (registry'nin `ConnIn::LeftRoom`'u ile).
+2. **Registry satırı tam da bunu söyler:** satırın odası/varlığı yok.
+   Despawn edilen üyenin slotu (ızgarada `ShardGroup` üye slotu) HEMEN
+   geri gelir ve `leaves` sayılır; bağlantı sonra kapanınca satır
+   sızmadan gider. Park edilen varlık slotunu tutmaya devam eder — ama
+   bağlantının satırında değil, **kendi satırında** (§16.2).
+3. **Oyun kareleri dışarıdaki her kare gibi yanıtlanır:** `ERROR 6`
+   (`NotInRoom`, *race* sınıfı — ayrılma/yeniden katılma penceresinin
+   mevcut kuralı; sert ihlal DEĞİL, bağlantı açık kalır). İstemci hiçbir
+   şeyi yanlış yapmadı: kod 6 ona "odada değilsin" der, cevabı katılmaktır.
+   Bütçe kuralı da aynıdır: kod 6'ya tepki vermeden oyun karesi yollamayı
+   sürdüren istemci (race ağırlığı 1, bütçe 16) dışarıdaki-kare
+   durumlarının hepsindeki gibi sonunda kapanır.
+4. **`JOIN_ROOM_REQ` doğrudan geçer** — önce `LEAVE_ROOM_REQ` gerekmez.
+   Park edilmiş bir varlık için bu join §14.3'ün örtük resume'udur: aynı
+   kimlik aynı varlığı geri alır; dolu bir ızgarada da (parkın kendi
+   slotu sayılır, iki kez değil).
+5. **Tel: kick anında hiçbir şey gitmez** (bayt bayt eskisi gibi). Protokolde
+   "sunucu seni odadan çıkardı, bağlantı açık" diyen bir kare YOK:
+   `LEAVE_ROOM_RESULT` bir isteğin yanıtıdır, `ERROR 5` (oda yıkıldı)
+   kapanışla biter. İstemci durumu ilk oyun karesinin `ERROR 6`'sından
+   öğrenir. Ayrı bir bildirim yeni bir protokol öğesi olurdu (BACKLOG).
+
+*Düzeltme notu (E6 turunda testle görüldü, B40'ta düzeltildi):* bu
+paragrafın önceki hâli "bir sonraki oyun karesi kapalı aksiyon kanalına
+çarpar ve bağlantı aktörü kendini odadan ayırır" diyordu; bu yalnız
+despawn'da doğruydu. Politika **park** ettiyse satır aksiyon kanalını
+tutuyordu: kareler park edilmiş satırın kanalında birikiyor, bağlantı
+kendini `InRoom` sanıyor ve doğrudan `JOIN_ROOM_REQ` `ERROR 3` (sert
+ihlal) alıyordu. **Despawn** edilen üyenin registry satırı ise canlı
+aidiyet olarak kalıyor, bağlantı sonra kapanınca `detached` işaretlenip
+slotuyla bir daha bırakılmıyordu. İkisi de `tests/room_close/leave.rs`
+ile sabitlendi.
 
 ### 16.1 Tavanın eylemi: `afk_action` ve oda→registry kapatma fiili (E6)
 
@@ -503,7 +528,7 @@ yapı taşı olarak verir, varsayılanı bugünküdür:
 
 | `RoomConfig::afk_action` | Üyelik | Soket | Tel | Sayaç |
 |---|---|---|---|---|
-| `LeaveRoom` (**varsayılan**) | `on_disconnect` karar verir (park / AI devri / despawn) | AÇIK kalır | hiçbir şey (bayt bayt bugünkü) | — |
+| `LeaveRoom` (**varsayılan**) | `on_disconnect` karar verir (park / AI devri / despawn); bağlantı odada değildir (§16, §16.2) | AÇIK kalır | kick anında hiçbir şey; sonraki oyun karesine `ERROR 6` | — |
 | `Disconnect` | aynı yol, aynı karar | KAPANIR | en-iyi-çaba `ERROR 9` (`input idle: no game input for N s (…)`) → kapanış | `server_closes{reason="idle_input"}` |
 
 Her iki eylemde de önce §16'nın yolu çalışır — oyunun `on_disconnect`'i
@@ -561,7 +586,8 @@ soketi ancak bütün göndericiler düşünce kapatır. Bu yüzden tavan
 (`RoomConn::release_outbound` — kapalı bir yer tutucu). Park edilmiş
 satır zaten bir şey göndermez (BROADCAST atlar) ve resume yeni
 oturumun kuyruğunu bağlar. Taşıma ölümünde gerek yok: writer zaten
-gitti. `LeaveRoom` bu satıra dokunmaz (bugünkü gibi).
+gitti. `LeaveRoom` da bu satırın iki yarısını bırakır ve satırı park
+anahtarına taşır (§16.2).
 
 **Bildirim kodu: mevcut `ERROR 9`, yeni kod DEĞİL.** Kod 9 "sunucunun
 bu oturum hakkındaki hükmü" sınıfıdır (idle, cap'ler, bütçeler,
@@ -601,6 +627,113 @@ düşüş* — soket açık kalırdı. (3) *Odanın bağlantıya doğrudan yazma
 yerleşmez. (4) *Yeni `ErrorCode`* — yukarıda. (5) *`idle_timeout`
 etiketini paylaşmak* — taşıma-boşta ile girdi-boşta ayrı sorulardır;
 ayrı `idle_input` etiketi.
+
+### 16.2 Varsayılan eylemin mekaniği: bırakılan park ve `LeaveConn` (B40)
+
+§16'nın sözleşmesi üç aktörde uygulanır; E6'nın `CloseConn` yerleşimi
+paylaşılır, soket kapatılmaz.
+
+**Oda (ya da shard), tavan anında.** Politika koştuktan sonra
+`afk_action = LeaveRoom` ve registry varsa:
+
+- *Despawn:* satır zaten gitti (aksiyon kanalı da onunla kapandı).
+  Despawn kolunun taşıma-ölümü raporu (`DetachDespawned`) bu yolda
+  **gönderilmez** — satırı istek yerleştirir; ikinci bir yerleşim, çok
+  seyrek bir sırada, bağlantının SONRAKİ üyeliğini bırakabilirdi.
+- *Park:* satır kalır; bağlantıyla paylaştığı iki yarı bırakılır
+  (`release_outbound` — yoksa bağlantı kapandıktan sonra writer soketi
+  açık tutar; `release_actions` — bağlantının kareleri okunmayan bir
+  kanala düşmesin, bağlantı üyeliğin bittiğini görebilsin) ve park
+  **park anahtarına** taşınır: `ConnectionId::park_key()` (üst bit
+  ayrılmış; kabul döngüsü 1'den yoğun sayar, oraya varmaz). Binding
+  satırı `conn → key` taşınır (shard'da `conn_epoch` da, resume'daki
+  gibi), satırın `conn` geri-referansı `key` olur. Bundan sonra park,
+  taşıma ölümünün bıraktığı şeyin ta kendisidir — oturumu gitmiş bir
+  park — yalnız kimliği bu anahtardır. Canlı bağlantının sonraki hiçbir
+  hareketi (bayat bir `Leave`/`Detach`, taze bir join'in "kendi eski
+  durumunu ez" adımı, kendi kapanışı) parka dokunamaz. Anahtar
+  deterministiktir (paylaşılan sayaç yok); odada aynı anahtarı tutan
+  daha eski bir park varsa (aynı oturumun ikinci parkı) taşıma yapılmaz
+  ve istek parkı bildirmez.
+- İstek kuyruğa girer: `LeaveRequest { conn, room, entity, park }` —
+  `park = Some(key)` ya da `None`. 0d fazının sonunda `try_send`
+  (`flush_leave_requests`), E6'nın kuralları: DOLU → sonraki tick, KAPALI
+  → düşer. Üç ek kural:
+  1. **Bekleyen bir `DetachDespawned` raporunun önüne geçmez** (rapor
+     kuyruğu boş değilse istekler bekler) — aynı anahtarın bir önceki
+     parkının raporu, yeni parkın isteğinden önce varmalı.
+  2. **Gönderilirken park yeniden sınanır:** istek beklerken park bittiyse
+     (hold doldu — raporu önden gitti — ya da başka bir oturum resume
+     etti), taşınacak park kalmamıştır: istek `park = None` ile, despawn
+     olarak yerleşir.
+  3. **Aynı bağlantı burada yeniden katılır ya da kendi parkını resume
+     ederse** bekleyen isteği düşer: yerleştireceği üyelik o bağlantının
+     canlı üyeliğidir artık.
+
+**Registry: `RegistryMsg::LeaveConn`.** Tek tablo araması, E6'nın bayat
+koruması (`room` VE `entity` satırın şimdiki üyeliği değilse no-op):
+
+- `park = None` → E6'nın despawn kolu (ortak `settle_ended`): aidiyet
+  gider, sharded üye sayısı düşer, `leaves` sayılır; taşıması zaten
+  ölmüş satır silinir.
+- `park = Some(key)` → üyelik **yeni bir satıra** taşınır: `key`
+  altında, `detached`, oda + varlık + kimlik kopyalı, inbox yok. Sayaç
+  değişmez (park, üyeliğin slotunu taşır). Bağlantının satırında aidiyet
+  kalmaz; taşıması zaten ölmüşse satır silinir (tek satır kalır: parkın).
+  Park satırını §4'ün üç olayı bırakır, hiçbir özel kod olmadan:
+  `DetachDespawned { conn: key }` (oda, parkın satırındaki `conn`'u
+  bildirir), aynı kimliğin resume'unun yeniden-bağlama temizliği, odanın
+  bitmesi. `key` zaten bir satırdaysa (aynı oturumun başka odadaki
+  parkı) istek despawn gibi yerleşir.
+- Sonra bağlantıya `ConnIn::LeftRoom { room }` (spawn'lu gönderim,
+  beklenmez; taşıması ölmüşse gönderilmez).
+
+**Bağlantı aktörü: `ConnIn::LeftRoom`.** Yalnız `InRoom { room }` ise VE
+o üyeliğin aksiyon kanalı kapalıysa (oda bıraktı) `detach()` — tel
+sessiz. Arada ayrılıp yeniden katılmışsa yeni üyeliğin kanalı AÇIKTIR:
+bildirim bayattır, yok sayılır. Bildirim registry yerleştirdikten SONRA
+gönderildiği için bağlantının bir sonraki `SpawnPlayer`'ı registry'ye
+yerleşimden sonra varır. Bildirimden ÖNCE kapalı kanala çarpan bir kare
+ise eskisi gibi sessizce ayırır; o zaman bağlantının join'i yerleşimden
+önce varabilir. Aynı odaya ise 3. kural kapatır; başka odaya ise
+registry'nin `SpawnDone` kuralı: hâlâ başka bir odaya bağlı bir satırın
+başka bir odaya katılması bildirilmemiş bir bitiş demektir (bir ayrılma
+her zaman bir sonraki join'den önce yerleşir — tek dispatcher, sırayla),
+eski üyeliğin ızgara slotu orada geri verilir ve geç gelen istek satırı
+taşınmış bulup hiçbir şey yapmaz.
+
+**Izgara kapısı.** Sharded odanın cap'i registry'dedir; parkın satırı
+sayılır. Aynı kimlikle `detached` bir satırın o odada tuttuğu park
+varken gelen join *yeniden katılma* sayılır (cap'e takılmaz) — resume o
+sayıyı devralır, `SpawnDone` temizliği netler. Bu, taşıma ölümünden
+sonra dolu ızgaraya dönen oyuncunun da `RoomFull` almasını düzeltir.
+
+**Kabul edilen sınırlı kesinsizlik.** İstemci tam kick anında
+`LEAVE_ROOM_REQ` gönderir ve registry onu yerleşimden önce işlerse
+(registry kuyruğu dolu, istek yeniden deneniyor), `LeaveDone` üyeliği
+kapatır ve istek bayat kalır: park, bitene ya da resume edilene dek
+registry'de sayılmaz (eksik sayım, sızıntı değil; kendini onarır).
+Aynı oturumun iki eşzamanlı parkı (anahtar dolu) ve yukarıdaki
+başka-odaya-join yarışında park edilmiş bir üyelik de böyledir. İki
+kural (rapor önünde bekleme, gönderimde park sınaması) yalnız gerçek
+eşzamanlılıkta fark eder: tek iş parçalı bir testte registry iki
+`try_send` arasında boşalmaz — biri (bekleme) bu yüzden deterministik bir
+testle mutasyona karşı sabitlenemedi.
+
+**Elenen alternatifler.** (1) *Parkı bağlantının kendi satırında
+tutmak* (`detached` işaretli canlı satır) — satır bir üyelik ve bir canlı
+bağlantı olamaz: bağlantı başka odaya katılınca parkın slotu kaybolur,
+`detached` satırlar süpersedence taramasında atlanır, `DetachDespawned`
+yaşayan bağlantının satırını silerdi. (2) *Satıra ikinci bir aidiyet
+alanı* — §4'ün her yolunu (resume temizliği, oda sonu, rapor, üye
+sayımı) ikinci alan için yeniden yazmak gerekirdi; park anahtarı bu
+yolların hiçbirine dokunmaz. (3) *Park anahtarını paylaşılan bir sayaçla
+basmak* — küresel durum; deterministik anahtar yeter. (4) *Bağlantının
+kendini kapalı kanaldan tembelce ayırması (bildirim yok)* — ayrılan
+bağlantının join'i registry yerleşiminden ÖNCE varabilir ve resume
+edilen üyeliği yanlışlıkla kapatırdı; parkta kanal zaten hiç kapanmıyordu.
+(5) *Kick anında istemciye kare göndermek* — mevcut protokolde uygun kare
+yok (yukarıda, madde 5).
 
 ## 17. Süreli bekletmede veto ve veto tavanı (`max_detach_hold`)
 
