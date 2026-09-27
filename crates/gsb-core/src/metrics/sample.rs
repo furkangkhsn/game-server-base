@@ -184,7 +184,9 @@ pub struct RoomSample {
     pub requests_refused_congested: u64,
     /// RPC: requests still UNREAD in a session's action channel when the
     /// session ended (a leave that landed before the READ pull, a
-    /// despawned or resumed park, a superseding rejoin) — neither
+    /// despawned or resumed park, a superseding rejoin, a park the
+    /// input-idle ceiling left behind under `afk_action = leave_room`) —
+    /// neither
     /// processed nor answered; the bucket that closes the ledger `sent =
     /// answered + rejected + refused + accepted + this` (B36),
     /// cumulative.

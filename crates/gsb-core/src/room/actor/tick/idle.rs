@@ -162,7 +162,9 @@ where
         let parked = match self.conns.get_mut(&player) {
             Some(rc) if rc.detached => {
                 rc.release_outbound();
-                rc.release_actions();
+                // The released channel's unread requests are counted
+                // like a despawn's (B36).
+                self.m.requests_dropped_unread += rc.release_actions();
                 true
             }
             _ => false,

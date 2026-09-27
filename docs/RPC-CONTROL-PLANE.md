@@ -784,9 +784,16 @@ Yerler, oda ve shard aktöründe: `despawn_conn` (ayrılış, despawn eden
 kopuş, despawn'la biten hold), aynı bağlantının yeniden katılımının
 süpürdüğü bayat satır, resume (park edilmiş satırın ölü kanalı yenisiyle
 değişir — park edilmiş satır READ'de atlandığından istekleri resume'da
-ya da despawn'da sayılır; AI devrindeki `bot_fed` satır da satır bitince)
-ve shard'da ayrılıştan sonra gelip epoch kapısında düşen göçün taşıdığı
-kanal. Yüzey: `RoomSample`/`RoomReport::requests_dropped_unread`,
+ya da despawn'da sayılır; AI devrindeki `bot_fed` satır da satır bitince),
+shard'da ayrılıştan sonra gelip epoch kapısında düşen göçün taşıdığı
+kanal ve — sayım turunda eklendi — girdi-boşta tavanının `afk_action =
+leave_room` altında geride bıraktığı park: B40'ın `release_actions`'ı
+parkın canlı bağlantıyla paylaştığı kanalı bırakırken içindekileri
+saymıyordu (boşta taraması READ'den önce koşar; tavandan hemen önce
+gönderilen istek oradadır). Artık `release_actions` kanalı
+`drop_unread_requests`'le bırakır ve sayıyı döndürür (oda + shard; kilit
+`room::tests::idle::leave::unread`, `shard::tests::idle::leave::unread`
+— önce kırmızı: park 0, despawn 1). Yüzey: `RoomSample`/`RoomReport::requests_dropped_unread`,
 `gsb-metric` satırında `req_unread=` (`req_refused=`'den sonra),
 Prometheus/OTLP'de `gsb_room_requests_dropped_unread_total`, loadgen
 metrik telinde `GSMH` (GSMG + `requests_refused_congested`'ten hemen

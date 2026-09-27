@@ -63,9 +63,16 @@ impl<G> RoomConn<G> {
     /// connection's forwards stop landing in a park that never reads them
     /// (READ skips a detached row) and the connection can tell its
     /// membership is over. A resume binds a fresh channel, as always.
-    pub(crate) fn release_actions(&mut self) {
+    ///
+    /// Returns the RPC requests still unread in the released channel, for
+    /// the caller's `requests_dropped_unread` (B36's ledger: the idle
+    /// sweep runs before READ, so a request sent right before the ceiling
+    /// is still there — as a despawn's `drop_unread_requests` counts it).
+    #[must_use]
+    pub(crate) fn release_actions(&mut self) -> u64 {
         let (_, closed) = tokio::sync::mpsc::channel(1);
-        self.actions = closed;
+        let mut released = std::mem::replace(&mut self.actions, closed);
+        crate::room::drop_unread_requests(&mut released)
     }
 
     /// Stop the hold clock: a resume re-binds the row, and an AI handover

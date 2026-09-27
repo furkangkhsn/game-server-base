@@ -240,7 +240,8 @@ pub(crate) struct RoomCounters {
     pub(crate) requests_refused_congested: u64,
     /// Requests still unread in a session's action channel when the
     /// session ended (a leave landing before the READ pull, a despawned
-    /// or resumed park, a superseding rejoin): neither processed nor
+    /// or resumed park, a superseding rejoin, a park the idle ceiling
+    /// left behind — `RoomConn::release_actions`): neither processed nor
     /// answered, counted as the channel is dropped (B36 — see
     /// `crate::room::drop_unread_requests`).
     pub(crate) requests_dropped_unread: u64,
