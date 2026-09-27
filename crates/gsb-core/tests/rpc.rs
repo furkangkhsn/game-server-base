@@ -643,7 +643,12 @@ async fn external_immediate_still_later_tick() {
 /// hold without any late-report window). The reconciliation drop of a
 /// stale report is locked by `conn_close_in_flight_frees_slots_and_
 /// drops_late_report` (the same `requests_late` path).
-#[tokio::test]
+///
+/// On the paused clock (the deadline and the sweep read the tick clock,
+/// F16): the 50 ms tick is 30 ms before the deadline and the 110 ms one
+/// 30 ms after it EXACTLY — on the wall clock a loaded machine could
+/// oversleep the first past the deadline (BACKLOG F25).
+#[tokio::test(start_paused = true)]
 async fn timeout_swept_exactly_one_answer() {
     let mut h = Harness::new(RoomConfig {
         id: RoomId(1),
@@ -655,7 +660,7 @@ async fn timeout_swept_exactly_one_answer() {
     h.join(ConnectionId(1)).await;
 
     h.request(ConnectionId(1), 51, OP_EXT, &[]).await;
-    h.tick(); // pending (deadline ~80 ms of wall clock from here)
+    h.tick(); // pending (deadline 80 ms of the tick clock from here)
     let _resolver = h.next_resolver().await; // worker running; never resolved
 
     // A tick BEFORE the deadline (~50 ms in): no answer (the sweep

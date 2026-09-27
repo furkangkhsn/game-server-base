@@ -98,9 +98,11 @@ async fn a_walker_covers_its_distance_on_the_paused_clock() {
         (x - expected).abs() <= SPEED / 30.0 + 1e-6,
         "walked {x} m, expected {expected} m"
     );
+    // Virtual: less real time than the walk's paused time (a wall-clock
+    // bound tighter than that would time the machine — BACKLOG F25).
     assert!(
-        real.elapsed() < Duration::from_secs(1),
-        "virtual time: two seconds of walking took {:?} of real time",
+        real.elapsed().as_secs_f64() < elapsed,
+        "virtual time: {elapsed} s of walking took {:?} of real time",
         real.elapsed()
     );
 }

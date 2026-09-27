@@ -31,8 +31,10 @@ async fn the_timeout_sweep_runs_on_the_paused_clock() {
         .private_replies(ConnectionId(1), Duration::from_secs(2))
         .await;
     assert_eq!(replies, vec![(51, false)], "swept on the paused clock");
+    // Virtual: less real time than the timeout itself (a wall-clock
+    // bound tighter than that would time the machine — BACKLOG F25).
     assert!(
-        real.elapsed() < Duration::from_secs(2),
+        real.elapsed() < timeout,
         "a {timeout:?} timeout took {:?} of real time",
         real.elapsed()
     );
