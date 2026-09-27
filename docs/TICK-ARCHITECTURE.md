@@ -253,7 +253,7 @@ okumalar duvar saatinde kalır.
 | Ayrılma bekleme süresi (park grace/tavan: `park` ve 0c süpürmesi), RPC zaman aşımı (`due` ve 0b süpürmesi) — oda ve shard | `ticker::now()` (F16) | iki ucu da aynı saatte; paused saatte durur, paused zamanla dolar (aşağıda "F16") |
 | Bağlantı aktörünün pencereleri (auth denemeleri, HEARTBEAT_ACK kısması, metrik boşaltma), rUDP demux'ının idle heap'i ve yazıcının RTO/canlılık saati | `std::time::Instant` (değişmedi) | damgayla karşılaşmaz, tick'e bağlı değil; paused saatte sınayan test yok (tetik yok) |
 | Bağlantı aktörünün girdi hız sınırı (E1 token bucket: dolum = son varıştan geçen süre × hız) | `ticker::now()` | damgayla karşılaşmaz ama hız "odanın saniyesi başına"dır: paused saatte sanal bir saniye bir saniyelik dolum olmalı — duvar saatinde mikrosaniye olur ve tam sınır hızındaki dürüst istemci reddedilirdi (`gsb-core/tests/input_rate.rs` paused saatte koşar; duvar saatine çevirmek onu kırar). İki ucu da aynı saatte; üretimde aynı an; kapalıyken hiç okunmaz |
-| Metrik toplayıcı | yalnız tick olayı, damga okumaz | — |
+| Metrik toplayıcı | tick olayıyla uyanır, damga okumaz; rapor periyodu (`next_report`) ve raporun `emitted_at`'ı `std::time::Instant` | periyot duvar saatinde bir rapor aralığıdır, damgayla karşılaşmaz; paused saatte periyot sanal saati izlemez, duvar saatinde dolar (aşağıda "F23") |
 
 **F16 (2026-09-26).** Ayrılma bekleme süresi ve RPC zaman aşımı F10'da
 std saatte bırakılmıştı; paused saatte gerçek zamanlı akıyorlardı:
@@ -303,3 +303,49 @@ düşer. Cephe'nin tek gerçek saatli senaryosu
 (`fog::an_enemy_is_seen_through_a_far_tower_on_another_shard`) paused
 saate çevrildi: 2,04 sn → ~0,05 sn; görülme/kaybolma tick'i ve mesafe
 (38 / 41, 59,82 m) iki saatte de her koşuda aynı.
+
+**Paused saatte test — ve ne zaman olmaz (BACKLOG F23, 2026-09-27).**
+Yük altında (1 dk load 15+) ara sıra düşen testlerin hepsi aynı
+kalıptaydı: gerçek saatte sabit bir pencere ve içinde, zamanlayıcının
+o pencerede kaç kez uyandığına bağlı bir sayım ya da bir sona erme.
+Yük bir uyanmayı onlarca ms geciktirir; pencerenin içindeki tick sayısı
+zamanlayıcının kararıdır, testin değil. Kural, sayılan şeyin saatine
+göredir:
+
+- *`ticker::now()`/tokio saatindeki her şey* (ticker'ın uykusu ve
+  damgası, `dt`, girdi-boşta saati, park grace'i/tavanı, RPC zaman
+  aşımı, girdi hız sınırı): tick sayan ya da bu sürelerin dolmasını
+  bekleyen test `#[tokio::test(start_paused = true)]` ile koşar. Sanal
+  saat yalnız bütün görevler boştayken ilerler, yani yük pencereye
+  düşen tick sayısını değiştiremez; koşu da hızlanır. Örnekler:
+  `ticker::tests`, `room::tests::paused_clock`, `tests/rpc/paused.rs`,
+  `tests/input_rate.rs`.
+- *Duvar saatindeki her şey* (`std::time::Instant`: yukarıdaki tabloda
+  std kalan satırlar — adım süreleri, bağlantı aktörünün pencereleri,
+  örn. HEARTBEAT_ACK'in 1/sn kısması —, metrik toplayıcının rapor
+  periyodu, loadgen'in son tarihleri): bunlar sanal saati izlemez;
+  paused bir test toplayıcının raporlarını sayamaz
+  (tick'ler sanal hızda akar, periyot duvar saatinde dolar — pencereye
+  düşen tick sayısı yine belirsiz). Bu testler gerçek saatte kalır ve
+  **durumu bekler**: "`sleep(D)`, sonra `>= N`" yerine koşul sağlanana
+  dek raporları/çerçeveleri okur; süre sınırı yalnız asılma korumasıdır
+  (10 sn), iddia edilen şey değil. `metrics::tests::collector` (ilk
+  rapordan "≥ 4 adım" bekliyordu; yükte "2 steps") ve
+  `metrics::tests::export` (80 ms'lik pencerede ≥ 2 periyodik rapor)
+  böyle çevrildi: ikisi de beslemenin uykusu 45/70 ms'ye uzatılınca eski
+  hâliyle düşer, yenisiyle 150 ms'de bile geçer.
+- *Test düzeneğinin sahte ucu* ölçülen kodun gerçek-zamanlı penceresinin
+  darboğazı olmamalı: loadgen istemcisi LEAVE'in cevabını sabit 500 ms
+  bekler; `client::accounting` testinin sahte WS peer'ı flood'u
+  tamponsuz (kare başına üç okuma) okuduğu için ~200 bin karelik
+  birikimi o pencerede eritemiyordu (`left = false`, yükte ~%11).
+  Tamponlu okuyan peer flood'a yetişir; LEAVE gönderildiği an okunur.
+- *Tek bir kesite bakan sayım* sözleşmenin izin verdiği sapmayı (DESIGN
+  §12 "tutarlı kesit": göçte uçuştaki oyuncu bir tick hiçbir satırda
+  yok) yeterli örnekle karşılar: `loadgen_drives_the_mmo`'nun
+  `shard_members` toplamı 8 kalır, koşu 4 sn'den 8 sn'ye uzar (1 Hz
+  raporla kararlı pencerede ~3 yerine ~7 kesit; yükte raporların çoğu
+  yırtık geliyordu). Kalıcı bir kayıp ya da çift sayım her kesitte
+  görünür — iddia tam eşitlik olarak kalır (mutasyonla sınandı: +1 ve
+  −1, ikisi de düşer).
+

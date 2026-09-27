@@ -82,6 +82,27 @@ korunur** — bu kelimeleri string'e bile yazma.
 
 `#[ignore]` ekleme, test silme ya da testi gevşetme yok.
 
+## Gerçek saatli testler (BACKLOG F23)
+
+Yükte düşen testlerin ortak kalıbı: gerçek saatte sabit bir pencere
+ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
+(ayrıntı: `docs/TICK-ARCHITECTURE.md` "Tick saati", F23):
+
+- **Tick/adım sayan ya da motor süresinin dolmasını bekleyen test
+  paused saatte koşar** (`#[tokio::test(start_paused = true)]`) — o
+  saat `gsb_core::ticker::now()` ise (ticker, grace/tavan, RPC zaman
+  aşımı, girdi hız sınırı, girdi-boşta saati).
+- **Duvar saatine bağlı bir şeyi** (metrik toplayıcının rapor periyodu,
+  bağlantı aktörünün pencereleri, loadgen son tarihleri) **sayan test
+  "`sleep(D)`, sonra `>= N`" yazmaz**: koşulu bekler; süre sınırı yalnız
+  asılma korumasıdır (ör. 10 sn), iddianın parçası değildir.
+- **Test düzeneğinin sahte ucu** (peer, tick beslemesi) ölçülen kodun
+  gerçek-zamanlı penceresinin darboğazı olmaz.
+- Yeni gerçek saatli bir test yük altında denenir: 32 çekirdekte
+  `for i in $(seq 30); do sh -c 'while :; do :; done' & done`, sonra
+  `cargo test --workspace --no-fail-fast` birkaç kez (ve
+  `--features gsb-server/otlp`), bitince `kill $(jobs -p)`.
+
 ## Kod düzeni
 
 - Hedef dosya boyutu 200-250 satır; dosyayı büyütmek yerine alt modüle böl.
