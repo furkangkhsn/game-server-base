@@ -19,6 +19,7 @@ use gsb_core::room::GameLogic;
 use gsb_core::shard::{BorderRecord, ShardLogic, interleaved_id};
 use prost::Message;
 
+mod area;
 mod change_window;
 mod crystal;
 mod departing;

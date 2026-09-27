@@ -175,7 +175,7 @@ mod tests;
 pub use crystal::Crystallize;
 pub use mig::{KitMig, ShardInputRecord, ShardParkRecord, ShardPin};
 pub use room::ShardedRoom;
-pub use seam::Seam;
+pub use seam::{Found, Holder, Seam, SeamView};
 pub use spatial::ShardedSpatialRoom;
 pub use team::{DEFAULT_TEAM_BUDGET, ShardedTeamRoom, TeamMig};
 

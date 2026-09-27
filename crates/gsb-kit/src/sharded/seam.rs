@@ -12,6 +12,10 @@ use gsb_core::shard::{CrossSeam, EffectId, EmitRefused, Lent};
 use crate::sharded::crystal::Crystal;
 use crate::sharded::departing::Departures;
 
+mod area;
+
+pub use area::{Found, Holder, SeamView};
+
 /// What a sharded game's seam hooks receive
 /// ([`ShardGame::ingest_seam`](crate::game::ShardGame::ingest_seam),
 /// [`ShardGame::systems_seam`](crate::game::ShardGame::systems_seam),
@@ -25,8 +29,10 @@ use crate::sharded::departing::Departures;
 /// wire id that is this shard's own (an entity that just migrated in is
 /// still lent by its old shard for a tick) is answered by
 /// [`Self::local`] only — own wins, as in the snapshot. "Everything
-/// within r of p" is therefore a world query plus
-/// `lent_iter().filter(..)` — no merged copy is built.
+/// within r of p" is a world query plus `lent_iter().filter(..)` — or,
+/// merged by the kit with the same rules, [`Self::within`] /
+/// [`Self::area`] (and [`Self::find`] for one wire id), read into one
+/// game type ([`SeamView`]).
 ///
 /// **The migration tick.** An entity this shard handed on in the last
 /// tick is still in the world (the core despawns it at the end of this
@@ -98,13 +104,19 @@ impl<'s, 'a, V> Seam<'s, 'a, V> {
     /// Every lent record that is not this shard's own entity, the
     /// entities it handed on last tick included — each once, as
     /// [`Self::lent`] answers (unspecified order — sort if a decision
-    /// depends on it).
+    /// depends on it). An entity handed between two neighbours can be
+    /// lent by both for a tick (the old owner still exports the copy it
+    /// is about to despawn): only the lower lender's record is yielded.
     pub fn lent_iter(&self) -> impl Iterator<Item = Lent<'_, V>> + '_ {
         let cross = &*self.cross;
         // A handed-on wire is still in the owned table: its lent copies
         // (the new owner's, a stale one) drop here, and its one record
-        // comes from the departures.
-        let lent = cross.iter().filter(|l| !self.own.contains_key(&l.wire));
+        // comes from the departures. A wire two neighbours lend is
+        // yielded from the lender `lent` answers with.
+        let lent = cross.iter().filter(|l| {
+            !self.own.contains_key(&l.wire)
+                && cross.lent(l.wire).is_some_and(|a| a.lender == l.lender)
+        });
         let handed_on = self
             .departing
             .iter(cross)
