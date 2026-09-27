@@ -5,6 +5,67 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 6 — B37, B47 (`misc/small-bundle-6`)
+
+- **B37 — pinsiz orkestratör çocuklara artık `--workers 1` vermiyor.**
+  `--pin`'siz `--orchestrate` sunucu ve istemci çocuklarına
+  `args.workers.max(1)` veriyordu: `--workers` yazılmadıysa her çocuk tek
+  tokio worker'ında koştu (yorum "runtime default" diyordu; orkestratör
+  yazıldığında doğruydu, düz/`--serve` varsayılanı `available_parallelism`'e
+  çekilince geride kaldı). Şimdi (`child_args.rs::child_workers`): `--pin`
+  altında çekirdek kümesinin boyu (değişmedi), pinsiz + açık `--workers N`
+  → iki çocuğa N, aksi hâlde `--workers` hiç iletilmez — çocuk kendi
+  varsayılanında. Eski pinsiz orkestre tabanları tek worker'lıdır ve bu
+  turda yeniden ölçülmedi (liste RPC-CONTROL-PLANE §8.2 "Pinsiz
+  orkestratörün worker sayısı"; BACKLOG B50). B32'nin tekrarlanan
+  `dropped` 116'sı da bu koşulun ürünüydü.
+- **B47 — ops HTTP istek başlığına süre sınırı.** Bağlanıp tek bayt
+  göndermeyen (ya da bayt bayt damlatan) eş bağlantı görevini kopana dek
+  tutuyordu. Başlığın TAMAMI `HEAD_DEADLINE` = 5 sn içinde gelmeli
+  (`http/head.rs`, okumanın etrafında tek `timeout` — okuma başına değil);
+  aşılırsa tek `408 Request Timeout` + normal kapanış (300 ms boşaltma).
+  Eşzamanlı ops bağlantı tavanı ve yanıt yazmanın süre sınırı hâlâ yok
+  (BACKLOG B49; localhost sözleşmesi). gsb-server dev-dependency'lerine
+  tokio `test-util` (paused saat).
+
+Testler 1269 → 1275 (`otlp` ile 1287 → 1293); her yeni test önce kırmızı
+görüldü, dokuz mutasyon öldü. Ebeveyn doğrulaması: açık `--workers N`'i
+yalnız sunucu çocuğuna iletmek iki testi düşürdü.
+
+## B43 — kapatma hükmü yeniden katılan bağlantıya da düşer (`core/b43-close-race`)
+
+- Oda üyeliği bitirip (`afk_action = disconnect` tavanı ya da E8 atması)
+  bağlantının kapatılmasını istediğinde istek dolu registry posta
+  kutusunun arkasında beklerken istemci kapalı aksiyon kanalını görüp
+  (`ERROR 6`) yeni varlıkla yeniden katılabiliyordu: geç gelen istek
+  `room`+`entity` korumasında bayat sayılıyor, soket açık kalıyor, atılan
+  istemci atmadan kurtuluyordu (`LEAVE` + `JOIN` ile de).
+- Düzeltme yalnız registry'de (`registry/actor/close.rs`): koruma artık
+  yalnız TABLO yerleşimini korur; isteğin üyeliği satırın şimdiki
+  üyeliği değilse tablo olduğu gibi kalır, hüküm (`ConnIn::ServerClosed`)
+  yine bağlantıya gider. `ConnectionId` süreç ömrü boyunca tekil
+  olduğundan istek yalnız kendi bağlantısını adlandırabilir. Yeni üyelik
+  bağlantının kapanışıyla taşıma-ölümü yolundan biter (`on_disconnect`
+  bir kez). `LeaveConn` (B40) değişmedi. Oda/shard kodu, tel, `/metrics`,
+  loadgen RESULT aynı.
+- Değişen mevcut test: `registry.rs`'deki "bayat istek no-op" testi tam
+  da hatayı sabitliyordu (bağlantıya hiçbir şey söylenmez); artık yeni
+  kuralı sabitler — tablo yerleşmez, bağlantı söylenir (ayrılmadan sonra
+  da); bilinmeyen bağlantı hâlâ no-op.
+- Kabul edilen: aynı odaya doğrudan yeniden katılmada eski üyeliğin sonu
+  kümülatif `leaves`'te sayılmaz (registry bunu LEAVE+JOIN'den ayıramaz;
+  mevcut anlambilim, sızıntı değil).
+- Elenenler: odanın bağlantıya doğrudan söylemesi (yeni tutamaç her yere,
+  B12 gereği yine düşebilir), isteğin bekletilen/spawn'lı gönderimi,
+  yeniden katılmayı reddetmek, biten üyelik defteri.
+
+Testler 1267 → 1269 (`otlp` ile 1285 → 1287): `tests/room_close/
+rejoin_races.rs` (+ kapatma isteklerini tutan röle `rejoin_rig.rs`) —
+tavan ve atma × tek oda ve ızgara; önce düştü, sonra ERROR 9 + kapanış,
+her üyelik bir kez biter, sızıntı yok; üç mutasyon öldü. Ebeveyn
+doğrulaması: eşleşmeyen dalda hükmü yalnız atmaya iletmek tavan testini
+düşürdü. RECONNECT §16.4.
+
 ## E8 — oyun mantığına "oyuncuyu at" fiili (`core/e8-kick-verb`)
 
 Bakımcı kararı (2026-09-27, E9 ile birlikte): atma = bağlantıyı kapatmak;

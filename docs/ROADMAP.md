@@ -77,11 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1267** (1267/1267 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1275** (1275/1275 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **E8 — oyun mantığına "oyuncuyu at" fiili** (RECONNECT §16.3) —
+Son tur: **küçük paket 6** — pinsiz orkestratör çocukları kendi
+varsayılan worker sayısında (B37; eski pinsiz orkestre tabanları tek
+worker'lı, yeniden ölçüm B50), ops HTTP başlık okumasına 5 sn süre sınırı
++ 408 (B47).
+Önceki tur: **B43 — kapatma hükmü yeniden katılan bağlantıya da düşer**
+(RECONNECT §16.4) — hüküm bağlantınındır, yerleşim üyeliğin; doymuş
+registry'de atılan istemci yeniden katılarak kapanıştan kurtulamaz.
+Önceki tur: **E8 — oyun mantığına "oyuncuyu at" fiili** (RECONNECT §16.3) —
 `TickCtx::kick` / kit `gsb_kit::game::kick`; atma = bağlantıyı kapatmak
 (`on_disconnect` + ERROR 9 `kicked: …`, `server_closes{reason="kicked"}`);
 yan bulgu B48: shard input-idle saati göçte taşınmıyordu — düzeltildi.

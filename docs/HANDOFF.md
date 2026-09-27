@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1267 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1275 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,12 +148,25 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**Küçük paket 6 tamam** (CHANGELOG "Küçük paket 6"): pinsiz orkestre
+çocukları artık kendi varsayılan worker sayısında — **dikkat:** yeni
+pinsiz orkestre sayıları eski tabanlarla doğrudan karşılaştırılamaz
+(eskiler tek worker'lı çocuklarla alındı; liste RPC-CONTROL-PLANE §8.2,
+yeniden ölçüm BACKLOG B50). Ops HTTP başlığı 5 sn içinde gelmezse tek
+`408` + kapanış; yanıt yazma sınırı ve bağlantı tavanı yok (B49).
+
+**B43 tamam** (RECONNECT §16.4, CHANGELOG "B43"): registry'nin
+`on_close_conn`'u eşleşmeyen istekte tabloya dokunmaz ama hükmü yine
+iletir; yeni üyelik bağlantının kapanışıyla (`ConnClosed` → DETACH →
+`on_disconnect`) biter. Kabul edilen: aynı odaya doğrudan yeniden
+katılmada eski üyeliğin sonu kümülatif `leaves`'te sayılmaz.
+
 **E8 tamam** (RECONNECT §16.3, CHANGELOG "E8"): oyun mantığı
 `ctx.kick(player, reason)` ile (kit: `gsb_kit::game::kick(world, entity,
 reason)`) bir oyuncuyu sunucudan atar — `on_disconnect` yolu + E6'nın
 kapatma fiili, ERROR 9 `kicked: …`, `server_closes{reason="kicked"}`.
 E9 kararla kapandı (yeni bildirim yok). Açık: kit'te nedene göre kader
-(F27), atmada da B43 yarışı.
+(F27); B43 kapandı (RECONNECT §16.4).
 
 **Küçük paket 5 tamam** (CHANGELOG "Küçük paket 5"): CI'da action'lar
 node24 ana sürümlerinde (yeni `uses:` için kural CONTRIBUTING'de);
@@ -190,7 +203,7 @@ biten istek despawn yerleşir.
 **B40 tamam** (RECONNECT §16.2, CHANGELOG "B40"): `leave_room` idle-kick'i
 bağlantıyı LEAVE sonrası duruma getirir; park `ConnectionId::park_key()`
 altında kendi satırına taşınır (`RegistryMsg::LeaveConn`,
-`ConnIn::LeftRoom`). Açık: B43 (B41 ve E8 kendi turlarında, E9 kararla kapandı).
+`ConnIn::LeftRoom`). B41, E8 ve B43 kendi turlarında, E9 kararla kapandı.
 
 **E6 tamam** (RECONNECT §16.1, CHANGELOG "E6"): AFK'nın odadan mı sunucudan
 mı atılacağı oyunun/dağıtımın seçimi — `afk_action` (varsayılan
@@ -638,6 +651,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1267 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1275 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
