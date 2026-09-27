@@ -77,6 +77,15 @@ impl Conn {
         (conn, spare)
     }
 
+    /// Wait for the actor to end without reading its samples (read them
+    /// with [`Self::take_metric`]; do not call [`Self::ended`] after).
+    pub async fn actor_done(&mut self) {
+        tokio::time::timeout(WAIT, &mut self.actor)
+            .await
+            .expect("the actor exits")
+            .expect("no panic");
+    }
+
     /// Take the next event off the metrics channel, if one is there.
     pub fn take_metric(&mut self) -> Option<MetricsEvent> {
         self.metrics.try_recv().ok()

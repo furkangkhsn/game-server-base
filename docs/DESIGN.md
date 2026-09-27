@@ -3099,13 +3099,12 @@ hükmünü yalnız SON örneğinde ve en fazla bir kez taşır
 (`ConnSample::server_close`), toplayıcı bağlantılar üzerinden **SUM**
 eder (ayrık oturumlar, her biri tek kapanış); sayaç kümülatif ve
 monotondur, bu yüzden loadgen rapor serisinden **toplamı en büyük**
-olanı alır (kapanış sonrası son rapor yalnız ekleyebilir). Kabul
-edilen bedel: son örnek de `try_send`'dir, kanal kapanış anında DOLUysa
-hüküm düşer ve düşüş hiçbir yerde sayılmaz (aktör gitmiştir) — 4096
-derinlik ve tick başına boşaltmayla bir tick içinde binlerce kapanış
-gerekir. (B59'dan beri son örnek, daha önce dolu kanalda düşen
-örneklerin deltalarını da taşır; onun düşüşü o deltaları da götürür —
-sayım turu 3'ün açık kalemi.) Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
+olanı alır (kapanış sonrası son rapor yalnız ekleyebilir). Son örnek
+kanal kapanış anında DOLUysa artık düşmez (sayım turu 3): durdurma-mesajı
+deyimiyle (`channel::post`) doğurulan bir gönderici yuvayı bekler, aktör
+beklemez. Önceden hüküm — ve B59'dan beri daha önce düşen örneklerin
+deltaları da — düşer ve düşüş hiçbir yerde sayılmazdı (aktör gitmiştir).
+Yalnız toplayıcı gitmişse (süreç inerken) kaybolur. Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
 loadgen `RESULT`'ı aynı anahtarları taşır, GSM8 sebep başına bir `u64`.
 
 Prometheus yüzeyi ve log renderer **katlamaz**: örnek kimliği başına

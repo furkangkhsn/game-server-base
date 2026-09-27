@@ -405,11 +405,10 @@ pub struct ConnSample {
     /// earlier sample. The collector counts it into
     /// [`NetReport::server_closes`].
     ///
-    /// Caveat shared with every other delta here: the final sample is a
-    /// `try_send` like the rest, so a metrics channel that is FULL at the
-    /// instant of the close loses it (the loss itself is then counted
-    /// nowhere — the actor is gone). The channel is 4096 deep and drained
-    /// every tick, so this needs thousands of closes inside one tick.
+    /// The final sample is never dropped for a FULL metrics channel: it
+    /// goes out from a spawned sender then (`channel::post`; count round
+    /// 3 — before, a full channel lost it, counted nowhere). Only a
+    /// collector that is already gone (the process stopping) loses it.
     pub server_close: Option<ServerClose>,
     /// True on the actor's final flush (connection closing).
     pub last: bool,

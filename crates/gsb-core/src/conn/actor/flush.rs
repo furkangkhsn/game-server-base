@@ -20,7 +20,8 @@ impl super::ConnectionActor {
     /// they stay unflushed and the next flush (the final one at the
     /// latest) carries them together with the newer ones, and the drop
     /// itself is counted in `metrics_dropped`. Before B59 the baseline
-    /// advanced first, so a dropped sample took its deltas with it.
+    /// advanced first, so a dropped sample took its deltas with it. The
+    /// final sample is never dropped for a full channel (see below).
     pub(super) fn maybe_flush_metrics(&mut self, last: bool) {
         // The server-close verdict rides the FINAL sample only (one per
         // session), and forces it out even when every delta is zero — a
@@ -63,6 +64,15 @@ impl super::ConnectionActor {
         // above). Closed: the collector is gone (the process is coming
         // down) and nothing will read another sample.
         match self.metrics.try_send(MetricsEvent::Conn(sample)) {
+            // The FINAL sample has no next one to carry it: it goes out
+            // with the stop-message idiom instead (`channel::post` — a
+            // spawned sender waits for the slot; the actor never does).
+            // Before, a full channel lost it and every delta it held,
+            // the server-close verdict included, counted nowhere.
+            Err(TrySendError::Full(ev)) if last => {
+                crate::channel::post(&self.metrics, ev);
+                self.mark_flushed();
+            }
             Err(TrySendError::Full(_)) => self.m_metrics_dropped += 1,
             Ok(()) | Err(TrySendError::Closed(_)) => self.mark_flushed(),
         }

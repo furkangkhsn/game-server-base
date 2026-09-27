@@ -37,3 +37,45 @@ async fn a_sample_dropped_on_a_full_channel_keeps_its_deltas() {
     assert_eq!(sum.metrics_dropped, 1, "the dropped sample, counted");
     assert!(sum.last);
 }
+
+/// The FINAL sample meets a full channel: it is not dropped — it goes
+/// out from a spawned sender once the collector reads, with the verdict
+/// it carries (before, the final sample, and every delta it held, were
+/// lost, counted nowhere: the actor was gone).
+#[tokio::test]
+async fn the_final_sample_is_not_lost_to_a_full_channel() {
+    let (mut c, spare) = Conn::open_with(64, 1);
+    c.auth().await;
+    spare
+        .try_send(MetricsEvent::RoomGone(RoomId(0)))
+        .expect("the one slot was free");
+    c.tell(ConnIn::ServerClosed {
+        cause: gsb_core::conn::ServerClose::IdleTimeout,
+        reason: "idle".into(),
+    })
+    .await;
+    // The actor has ended with the slot still taken: its final flush
+    // met a full channel.
+    c.actor_done().await;
+    let mut events = Vec::new();
+    tokio::time::timeout(WAIT, async {
+        while events.len() < 2 {
+            match c.take_metric() {
+                Some(ev) => events.push(ev),
+                None => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        }
+    })
+    .await
+    .expect("the filler and the final sample in time");
+    let Some(MetricsEvent::Conn(last)) = events.pop() else {
+        panic!("the final sample after the filler");
+    };
+    assert!(last.last);
+    assert_eq!(last.frames_in, 1, "the AUTH");
+    assert_eq!(
+        last.server_close,
+        Some(gsb_core::conn::ServerClose::IdleTimeout)
+    );
+    assert_eq!(last.metrics_dropped, 0, "nothing was dropped");
+}
