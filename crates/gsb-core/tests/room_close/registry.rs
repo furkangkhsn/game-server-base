@@ -141,6 +141,23 @@ async fn a_close_request_for_an_earlier_membership_settles_nothing_but_closes() 
         assert_eq!(cause, ServerClose::IdleInput);
     }
     assert_eq!(status(&tx, RoomId(1)).await, members(1), "nothing settled");
+
+    // The connection's own leave settled the membership first: the
+    // request finds a row in no room, and the verdict still lands.
+    tx.send(RegistryMsg::DespawnPlayer {
+        conn: ConnectionId(1),
+    })
+    .await
+    .expect("sent");
+    while status(&tx, RoomId(1)).await != members(0) {
+        tokio::task::yield_now().await;
+    }
+    tx.send(request(1, entity, false)).await.expect("sent");
+    assert!(
+        told(&mut inbox, WAIT).await.is_some(),
+        "closed after a leave"
+    );
+    assert_eq!(status(&tx, RoomId(1)).await, members(0));
 }
 
 /// A parked membership keeps its slot after the close (the park holds
