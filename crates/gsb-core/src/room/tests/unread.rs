@@ -12,6 +12,8 @@ use super::*;
 
 // READ's binding translation drops, counted by kind (B54).
 mod unbound;
+// What the room still holds when it stops, counted (B62).
+mod stop;
 
 /// A logic that parks (or despawns) every disconnect and resumes the
 /// parked player of any identity.

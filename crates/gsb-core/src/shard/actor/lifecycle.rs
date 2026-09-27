@@ -18,6 +18,7 @@ use crate::shard::actor::ShardActor;
 use crate::shard::*;
 
 mod sample;
+mod stop;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where
@@ -191,41 +192,7 @@ where
                 break;
             }
         }
-        self.logic.on_shutdown();
-        // The match-result seam (the Faz 3 promotion; see the module docs,
-        // "Shard-RPC and match-result"): THIS shard reports ITS final state
-        // through the shared sink under the LOGICAL room id. One logical
-        // room therefore yields one payload PER SHARD (the platform's
-        // adapter concatenates/filters; nothing was added to
-        // `MatchResult`). Same best-effort discipline as the room actor:
-        // a full or gone sink drops the result, warns/debugs and tells the
-        // collector (B57) — a slow consumer must not stall the shard's
-        // teardown, and the shard's only await stays `tick_rx.recv()`.
-        if let Some(result) = self.logic.match_result(&mut self.world)
-            && let Some(sink) = &self.result_sink
-        {
-            let result = crate::registry::MatchResult {
-                room: self.config.id,
-                payload: result,
-            };
-            match crate::registry::send_match_result(sink, result, &self.metrics) {
-                Ok(()) => debug!(
-                    room = %self.config.id,
-                    shard = self.index,
-                    "shard match result reported"
-                ),
-                Err(crate::metrics::MatchResultDrop::Full) => warn!(
-                    room = %self.config.id,
-                    shard = self.index,
-                    "match result dropped: sink full"
-                ),
-                Err(crate::metrics::MatchResultDrop::Closed) => debug!(
-                    room = %self.config.id,
-                    shard = self.index,
-                    "match result dropped: sink gone"
-                ),
-            }
-        }
+        self.finish();
         debug!(
             room = %self.config.id,
             shard = self.index,

@@ -189,7 +189,8 @@ pub struct RoomSample {
     /// RPC: requests still UNREAD in a session's action channel when the
     /// session ended (a leave that landed before the READ pull, a
     /// despawned or resumed park, a superseding rejoin, a park the
-    /// input-idle ceiling left behind under `afk_action = leave_room`) —
+    /// input-idle ceiling left behind under `afk_action = leave_room`,
+    /// and since B62 every row still held when the room stops) —
     /// neither
     /// processed nor answered; the bucket that closes the ledger `sent =
     /// answered + rejected + refused + accepted + this` (B36),
@@ -217,7 +218,8 @@ pub struct RoomSample {
     pub requests_late: u64,
     /// RPC: answers produced for a session that ended before any batch
     /// carried them — a leave, a detach, a migration, a superseding
-    /// rejoin — discarded undelivered (B53), cumulative. The request is
+    /// rejoin, and since B62 the room's stop — discarded undelivered
+    /// (B53), cumulative. The request is
     /// already in its own bucket (`requests_local`, a rejection, …); this
     /// counts what became of its answer. An answer put back after a
     /// failed send (F14) is counted once, when it is finally discarded.
@@ -442,6 +444,16 @@ pub enum MetricsEvent {
     /// arithmetic and the straggler-ordering caveat (a late `Room`
     /// sample behind the notice is normal, not a resurrection attempt).
     RoomGone(RoomId),
+    /// A room's (or one shard's) FINAL sample, sent once as it stops
+    /// (B62): its counters at the stop, with what the stop took along —
+    /// the sessions' unread input, owed answers and in-flight requests —
+    /// counted as a session end counts them. The collector takes it into
+    /// the room's row even inside the destroyed-room linger (where a
+    /// periodic straggler is refused), and starts the linger itself when
+    /// no [`Self::RoomGone`] did: a final sample means the room is gone,
+    /// so it cannot leave a ghost row. Delivered past a full channel
+    /// (`crate::channel::post`); lost only when the collector is gone.
+    RoomFinal(RoomSample),
     /// A room (or one shard of a sharded room) could not hand its match
     /// result to the result sink as it stopped (B57), by cause. Its own
     /// counters cannot carry it — a stopping room sends no further

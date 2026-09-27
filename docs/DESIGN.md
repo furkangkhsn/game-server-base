@@ -3137,6 +3137,41 @@ sayaçları oda sayılarının gerisinde kalabilir** (registry `Shutdown`
 işlenince break eder; oda, kontrol drenajını — kalan leave'leri — tamamlayıp
 çıkar). Kapanış anındaki kesin değerler için oda kapsamı otoritedir.
 
+**Duran odanın son sayımı (B62).** Oda (ya da shard) `Shutdown`'la
+(yok etme) ya da ticker kapanışıyla (sunucu durması) durunca, B62'ye
+dek başka örnek göndermiyordu: oturumlarının elinde kalanlar —
+action kanallarında okunmamış girdi (park edilmiş satırın ölü kanalı
+dahil), borçlu kalınan yanıtlar, worker'daki uçuştaki istekler — hiç
+sayılmıyordu; son periyodik örnekten sonra sayılan her şey de (bir
+rapor periyoduna kadar) kayboluyordu. Artık duruş (`room::stop`,
+`finish`: `on_shutdown` → maç sonucu → sayım → son örnek) her oturumu,
+SAYIM açısından bir ayrılışın bitirdiği gibi bitirir — mantık kancası
+koşmaz: `requests_dropped_unread`/`actions_dropped_unread`,
+`requests_abandoned`, `requests_undelivered` (aynı sayaçlar; anlamları
+"oturum bitti", odanın duruşu da bir oturum sonu; iki HELP bunu artık
+söylüyor) — ve toplayıcıya kendi olayıyla SON örneği verir:
+`MetricsEvent::RoomFinal(RoomSample)`. B36'nın elediği "dururken son
+örnek"in iki itirazı böyle karşılanır: (1) *diriltme* — toplayıcı
+`RoomFinal`'ı yok edilmiş odanın bekleme penceresinde de satıra alır
+(periyodik geç örneği orada reddetmeye devam eder), `RoomGone`
+gelmemişse (dolu kanalda düştüyse) bekleme penceresini KENDİSİ başlatır:
+son örnek "oda gitti" demektir, satır pencereler bitince düşer, hayalet
+kalmaz; var olan geri sayım korunur, satır en az bir rapor daha
+görünür. (2) *toplayıcının sonuyla yarış* — olay durdurma-mesajı
+deyimiyle gider (`channel::post`: yerinde, kanal doluysa doğurulan bir
+göndericiden; asla beklemez, dolu kanalda asla düşmez); yalnız toplayıcı
+GİTMİŞSE kaybolur, bu da yalnız süreç inerken olur (toplayıcı ve odalar
+aynı ticker kapanışında biter) — sayılamayan tek durum budur.
+`MatchResultDropped` da artık aynı deyimle gider (önceden dolu kanalda
+düşüyordu). Yan etki (turda bulundu): shard satırlarının örnek kimliği
+`room << 16 | index`, registry'nin `RoomGone`'u ise mantıksal oda
+kimliğini taşır — yok edilen sharded odanın shard satırları hiç
+budanmıyordu (hayalet); artık her shard'ın `RoomFinal`'ı kendi satırının
+beklemesini başlatır. Panikle ölen shard son örnek gönderemez, onun
+satırı hâlâ kalır (BACKLOG). Kilit: `room::tests::unread::stop`,
+`shard::tests::unread::stop`, `metrics::tests::room_final`,
+`registry::result::tests`.
+
 **Her sayacın bir doğru-yol testi vardır.** Bu yüzeyin sayaçları
 (`RoomSample`, `RegistrySample`, `ConnSample`, `UdpClientStats` — ve
 `RoomReport` üzerinden rapora ulaşan her alan) tek tek, gerçek üretim

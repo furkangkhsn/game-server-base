@@ -437,8 +437,14 @@ max_detach_hold_secs = "off"
   göndermediğinden sonuç kaybı toplayıcıya kendi olayıyla gider
   (`MetricsEvent::MatchResultDropped`) ve registry diliminde raporlanır
   (registry dilimi yokken — registry hiç örnek göndermeden — görünmez;
-  sunucuda oda registry'den önce var olamaz). Toplayıcı da gitmişse
-  (süreç kapanırken) sayılamaz. Loadgen telinde `GSMP` (registry
+  sunucuda oda registry'den önce var olamaz). B62'den beri olay
+  durdurma-mesajı deyimiyle gider (`channel::post`): dolu metrik
+  kanalında düşmez. Toplayıcı da gitmişse (süreç kapanırken) sayılamaz.
+  Duran odanın son örneği (`MetricsEvent::RoomFinal`, B62) yeni aile
+  getirmez: odanın satırına düşer (yok edilen odanın bekleme penceresinde
+  de); `gsb_room_requests_undelivered_total` ve
+  `gsb_room_requests_abandoned_total` HELP'leri odanın duruşunu da
+  oturum sonları arasında sayar (altın metinler bu iki HELP kadar). Loadgen telinde `GSMP` (registry
   bölümünde `closes`'tan sonra); `RESULT`'ta yok (satır registry
   sayaçlarını taşımıyor).
   **Sayılmayan, bilerek:** odanın registry'ye kapatma/ayrılma isteği ve

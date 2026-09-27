@@ -33,7 +33,10 @@
 //! `match_results_dropped_{full,closed}=` with their four
 //! `gsb_registry_*_total` families. B60's `requests_unprocessed=` /
 //! `actions_unprocessed=` / `control_frames_unprocessed=` with
-//! `gsb_net_{requests,actions,control_frames}_unprocessed_total`.
+//! `gsb_net_{requests,actions,control_frames}_unprocessed_total`. And
+//! B62's two HELP changes: `gsb_room_requests_undelivered_total` and
+//! `gsb_room_requests_abandoned_total` name the room's stop among the
+//! session ends.
 
 use super::*;
 use crate::conn::ServerClose;

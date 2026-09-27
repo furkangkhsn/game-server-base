@@ -23,6 +23,7 @@ mod otlp;
 #[cfg(feature = "prometheus")]
 mod prometheus;
 mod pruning;
+mod room_final;
 #[cfg(feature = "prometheus")]
 mod seams;
 

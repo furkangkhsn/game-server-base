@@ -204,12 +204,12 @@ pub(super) const SESSION: [RoomFamily; 42] = [
     // B53: what became of the answers owed to a session that ended.
     counter(
         "gsb_room_requests_undelivered_total",
-        "RPC answers discarded undelivered because their session ended first (left, detached, migrated or superseded; the request is counted once in its own bucket), cumulative.",
+        "RPC answers discarded undelivered because their session ended first (left, detached, migrated, superseded, or the room stopped; the request is counted once in its own bucket), cumulative.",
         |r| r.requests_undelivered,
     ),
     counter(
         "gsb_room_requests_abandoned_total",
-        "External RPC requests still in flight when their session ended (no answer reaches that session; a later worker report is also counted as late), cumulative.",
+        "External RPC requests still in flight when their session ended, the room's stop included (no answer reaches that session; a later worker report to a live room is also counted as late), cumulative.",
         |r| r.requests_abandoned,
     ),
     gauge(

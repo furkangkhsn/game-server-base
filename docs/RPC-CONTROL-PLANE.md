@@ -970,7 +970,14 @@ defter onları uzlaştırmıyor — B36'da kapsam dışıydı; sayım turu 2'de
 örnek göndermesi (Neden 2 için motor düzeltmesi):* oda ile toplayıcı
 aynı ticker kapanışında biter — geç örnek toplayıcının son raporunu
 kaçırabilir, yok edilmiş odanın örneği akümülatörde odayı diriltebilir;
-ölçüm düzeneğinin kendi beklemesi daha dar ve yeterli.
+ölçüm düzeneğinin kendi beklemesi daha dar ve yeterli. (Sayım turu 3'te,
+B62, duran oda son örneğini ayrı bir olayla — `MetricsEvent::RoomFinal`
+— veriyor: diriltmez, yok edilen odanın bekleme penceresine girer ya da
+onu başlatır; dolu kanalda düşmez, yalnız toplayıcı gitmişse kaybolur.
+Duruş, elde kalan okunmamış istekleri `req_unread`'e, borçlu yanıtları
+ve uçuştaki istekleri B53'ün iki sayacına katar. Loadgen'in beklemesi
+yerinde kalır: süreç içi koşuda sunucuyu durdurmadan önce odalar zaten
+son periyodik örneklerini vermiş olur.)
 
 **Ölçüm** (release, süreç içi, TCP, 32 çekirdek; B37 sonrası; parantezde
 1 dk yük ortalaması). `sent = req_ext + req_refused + req_unread` her

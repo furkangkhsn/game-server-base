@@ -9,6 +9,8 @@ use super::*;
 
 // READ's binding translation drops, counted by kind (B54).
 mod unbound;
+// What the shard still holds when it stops, counted (B62).
+mod stop;
 
 /// Two requests and one plain action into a session's channel.
 fn two_requests_and_an_action(tx: &Mailbox<Action>, conn: ConnectionId) {

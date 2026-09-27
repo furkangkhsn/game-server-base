@@ -139,6 +139,31 @@ impl MetricAccumulator {
                     }
                 }
             }
+            MetricsEvent::RoomFinal(s) => {
+                // The room's last word (B62): taken even inside the
+                // linger — it is the truth at the stop, not a straggler
+                // refreshing a dead row — and it starts the linger when
+                // the registry's notice has not (or was lost): the room
+                // is gone either way, so the row is dropped when the
+                // windows run down and is never a ghost. An existing
+                // countdown is kept: the row is reported at least once
+                // more whatever is left of it.
+                match self.rooms.get_mut(&s.room) {
+                    Some(acc) => acc.latest = s,
+                    None => {
+                        self.rooms.insert(
+                            s.room,
+                            RoomAcc {
+                                latest: s,
+                                prev: None,
+                            },
+                        );
+                    }
+                }
+                self.rooms_gone_grace
+                    .entry(s.room)
+                    .or_insert(ROOM_GONE_GRACE_REPORTS);
+            }
             MetricsEvent::Registry(s) => self.registry = Some(s),
             MetricsEvent::MatchResultDropped(cause) => {
                 let n = match cause {

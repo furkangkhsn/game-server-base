@@ -15,6 +15,7 @@ use tracing::{debug, warn};
 use crate::room::actor::RoomActor;
 
 mod sample;
+mod stop;
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -161,31 +162,7 @@ where
                 break;
             }
         }
-        self.logic.on_shutdown();
-        // The match-result seam (control plane): the logic computes the
-        // final result from the world (still alive — it is dropped only
-        // when `self` drops, below) and the room reports it to the sink
-        // with the synchronous `try_send` (no await: the room's only
-        // await stayed `tick_rx.recv()`). Best effort — a full or gone
-        // sink drops the result, warns and tells the collector (B57; a
-        // slow result consumer must not stall the room's teardown).
-        if let Some(result) = self.logic.match_result(&mut self.world)
-            && let Some(sink) = &self.result_sink
-        {
-            let result = crate::registry::MatchResult {
-                room: self.config.id,
-                payload: result,
-            };
-            match crate::registry::send_match_result(sink, result, &self.metrics) {
-                Ok(()) => debug!(room = %self.config.id, "match result reported"),
-                Err(crate::metrics::MatchResultDrop::Full) => {
-                    warn!(room = %self.config.id, "match result dropped: sink full");
-                }
-                Err(crate::metrics::MatchResultDrop::Closed) => {
-                    debug!(room = %self.config.id, "match result dropped: sink gone");
-                }
-            }
-        }
+        self.finish();
         debug!(
             room = %self.config.id,
             dropped_frames = self.m.dropped_frames,

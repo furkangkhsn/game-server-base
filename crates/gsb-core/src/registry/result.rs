@@ -9,12 +9,17 @@
 //! [`MetricsEvent::MatchResultDropped`], by cause: a FULL sink (the
 //! consumer is not reading fast enough — or at all) or a CLOSED one (the
 //! consumer dropped its receiver). The room's own counters cannot carry
-//! it: a stopping room sends no further sample. The event is itself a
-//! best-effort `try_send`; when the collector is gone too (the process is
-//! stopping) nothing is left to report it to.
+//! it (its final sample, B62, goes out after the result). The event is
+//! delivered with the stop-message idiom (`channel::post`, B62): in
+//! place, or from a spawned sender when the metrics channel is full —
+//! before B62 a full channel dropped it. When the collector is gone too
+//! (the process is stopping) nothing is left to report it to.
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+
+#[cfg(test)]
+mod tests;
 
 use crate::channel::Mailbox;
 use crate::metrics::{MatchResultDrop, MetricsEvent};
@@ -32,6 +37,6 @@ pub(crate) fn send_match_result(
         Err(TrySendError::Full(_)) => MatchResultDrop::Full,
         Err(TrySendError::Closed(_)) => MatchResultDrop::Closed,
     };
-    let _ = metrics.try_send(MetricsEvent::MatchResultDropped(cause));
+    crate::channel::post(metrics, MetricsEvent::MatchResultDropped(cause));
     Err(cause)
 }
