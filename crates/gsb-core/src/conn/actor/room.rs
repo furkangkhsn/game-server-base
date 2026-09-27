@@ -119,4 +119,26 @@ impl super::ConnectionActor {
             }
         }
     }
+
+    /// The registry's [`ConnIn::LeftRoom`] (BACKLOG B40): the room ended
+    /// this membership and the registry settled its row. Leave the room
+    /// state the way the client's own `LEAVE_ROOM_REQ` would — nothing on
+    /// the wire — so the next `JOIN_ROOM_REQ` is admitted (not the hard
+    /// `ERROR 3` a join from inside a room gets) and a game frame is
+    /// answered as any frame outside a room is (`ERROR 6`, race class).
+    ///
+    /// Guarded: only the membership in `room` whose action channel the
+    /// room has closed (or that a closed forward already dropped). After
+    /// a leave and a new join in between, the connection holds the new
+    /// membership's OPEN channel and the notice is stale.
+    pub(super) fn on_left_room(&mut self, room: RoomId) {
+        let ours = self.state == ConnState::InRoom { room }
+            && self.actions.as_ref().is_none_or(|a| a.is_closed());
+        if ours {
+            self.detach();
+            debug!(%self.conn, room = %room, "the room ended the membership; the connection stays");
+        } else {
+            debug!(%self.conn, room = %room, "stale left-room notice ignored");
+        }
+    }
 }

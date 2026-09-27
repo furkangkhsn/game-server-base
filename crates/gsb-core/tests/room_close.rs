@@ -9,6 +9,13 @@
 //!   (`leave_room`) keeps the socket open and sends nothing; `disconnect`
 //!   sends ERROR 9 then closes, books `idle_input`, keeps a park
 //!   resumable, and frees a sharded member slot.
+//! - `leave.rs`: the default action's contract (BACKLOG B40) — the
+//!   connection is out of the room and stays open: `ERROR 6` for game
+//!   frames, a direct JOIN (resuming a park), and a registry row that
+//!   neither holds a despawned slot nor leaks.
+//! - `leave_table.rs`: the registry's side of that action, driven with
+//!   the raw `RegistryMsg::LeaveConn`; `leave_races.rs`: the connection's
+//!   stale-notice guard.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -34,6 +41,12 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "room_close/afk.rs"]
 mod afk;
+#[path = "room_close/leave.rs"]
+mod leave;
+#[path = "room_close/leave_races.rs"]
+mod leave_races;
+#[path = "room_close/leave_table.rs"]
+mod leave_table;
 #[path = "room_close/logic.rs"]
 mod logic;
 #[path = "room_close/registry.rs"]

@@ -188,6 +188,7 @@ where
                     }
                 }
                 RegistryMsg::CloseConn(req) => self.on_close_conn(req),
+                RegistryMsg::LeaveConn(req) => self.on_leave_conn(req),
                 RegistryMsg::OpsClosed { conn } => {
                     self.conn_ops.remove(&conn);
                 }

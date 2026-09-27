@@ -34,10 +34,11 @@ fn game_frame() -> FrameBody {
     FrameBody::new(GAME_OP, Heartbeat { tick: 1 }.encode_to_vec())
 }
 
-/// **The default is today, byte for byte.** `leave_room`: the ceiling
-/// runs the policy and ends the membership, the client is sent NOTHING
-/// and its socket stays open; its next game frame finds the room gone,
-/// and it joins again. No verdict is booked.
+/// **The default sends nothing.** `leave_room`: the ceiling runs the
+/// policy and ends the membership, the client is sent NOTHING and its
+/// socket stays open; it is out of the room (the despawned slot is free,
+/// B40), its next game frame is answered `ERROR 6`, and it joins again.
+/// No verdict is booked.
 #[tokio::test(start_paused = true)]
 async fn the_default_ends_the_membership_and_keeps_the_socket() {
     let (disc, mut disconnects) = mpsc::unbounded_channel();
@@ -59,10 +60,16 @@ async fn the_default_ends_the_membership_and_keeps_the_socket() {
     assert!(!c.actor.is_finished(), "the socket stays open");
     assert_eq!(
         status(&reg, RoomId(1)).await,
-        RoomStatus::Running { members: 1 }
+        RoomStatus::Running { members: 0 }
     );
 
     c.send(game_frame()).await;
+    let answer = tokio::time::timeout(WAIT, c.out.recv())
+        .await
+        .expect("an answer")
+        .expect("out open");
+    let error = base::Error::decode(&answer[0].payload[..]).expect("an ERROR");
+    assert_eq!(error.code(), base::ErrorCode::NotInRoom);
     c.join().await;
     assert_eq!(c.verdict().await, None, "nothing was the server's verdict");
 }

@@ -43,6 +43,9 @@ where
                 // (a rejoin is a NEW session: in-flight requests and
                 // queued answers of the old one are dropped; their late
                 // worker reports are discarded by the 0b reconciliation).
+                // A queued leave request of this connection would settle
+                // the membership it now holds again (B40): it goes.
+                self.leave_requests.retain(|r| r.conn != conn);
                 if let Some(&stale) = self.binding.get(&conn) {
                     let _ = self.conns.remove(&stale); // old halves drop
                     self.drop_conn_request_state(conn);
@@ -117,7 +120,7 @@ where
                     // room actor's guard, mirrored).
                     && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    self.detach_player(player, conn, &identity);
+                    self.detach_player(player, conn, &identity, true);
                 }
                 true
             }

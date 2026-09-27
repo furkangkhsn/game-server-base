@@ -1,6 +1,6 @@
 //! The ceiling's ACTION (BACKLOG E6): `afk_action = LeaveRoom` (the
-//! default) asks nothing of the registry — today's behaviour —;
-//! `Disconnect` asks it to close the member's connection AFTER the
+//! default) asks for no close (its leave request — B40 — is `leave.rs`'s
+//! subject); `Disconnect` asks it to close the member's connection AFTER the
 //! disconnect policy ran, saying whether the policy parked the entity.
 //! Parked and bot-fed rows are off the input clock, so they are never
 //! closed. The request survives a full registry mailbox.
@@ -40,11 +40,11 @@ const PARK: Detach = Detach::Hold {
     to: ExpireTo::AiHandover,
 };
 
-/// The default action is invisible: the ceiling ends the membership
-/// (the policy ran) and asks the registry for nothing — the socket stays
-/// open, as it always did.
+/// The default action closes nothing: the ceiling ends the membership
+/// (the policy ran) and asks the registry for no close — the socket
+/// stays open (the leave it does ask for is `leave.rs`'s subject).
 #[test]
-fn leave_room_asks_the_registry_for_nothing() {
+fn leave_room_asks_for_no_close() {
     let mut r = Rig::new(afk(60, AfkAction::LeaveRoom), Detach::Despawn);
     let mut reg = registry(&mut r, 64);
     let (_e, _a) = r.join(ConnectionId(1), "ana");
@@ -114,8 +114,9 @@ fn disconnect_of_a_parked_member_says_parked() {
     );
 }
 
-/// The default parks exactly as before: the row keeps its outbound half
-/// (the socket stays open — nothing asked it to close).
+/// Without a registry (a standalone room) the default parks exactly as
+/// before: the row keeps its outbound half. (With one, the park is left
+/// behind under the park key with both halves released — `leave.rs`.)
 #[test]
 fn leave_room_parks_as_before() {
     let mut r = Rig::new(afk(66, AfkAction::LeaveRoom), PARK);

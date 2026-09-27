@@ -56,6 +56,18 @@ impl<G> RoomConn<G> {
         self.out = closed;
     }
 
+    /// Let go of the row's input half (BACKLOG B40). A member the
+    /// input-idle ceiling PARKED under `afk_action = leave_room` keeps its
+    /// connection open, and that connection still holds the sender of
+    /// this row's action channel: dropping the receiver closes it, so the
+    /// connection's forwards stop landing in a park that never reads them
+    /// (READ skips a detached row) and the connection can tell its
+    /// membership is over. A resume binds a fresh channel, as always.
+    pub(crate) fn release_actions(&mut self) {
+        let (_, closed) = tokio::sync::mpsc::channel(1);
+        self.actions = closed;
+    }
+
     /// Stop the hold clock: a resume re-binds the row, and an AI handover
     /// ends the hold for good (the bot-fed row is never swept again).
     pub(crate) fn clear_hold_clock(&mut self) {

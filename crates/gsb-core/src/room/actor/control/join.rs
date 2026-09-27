@@ -36,6 +36,9 @@ where
         // including its request state (a rejoin is a new session:
         // in-flight requests and queued answers of the old one
         // are dropped, and their late reports are discarded).
+        // A leave request still queued for this connection would settle
+        // the membership it now holds again (B40): it goes.
+        self.leave_requests.retain(|r| r.conn != conn);
         if let Some(&stale) = self.binding.get(&conn) {
             let rc = self.conns.remove(&stale).expect("binding implies row");
             self.roster_remove(&stale);
@@ -151,6 +154,10 @@ where
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     ) {
+        // A leave request still queued for this connection (it is
+        // resuming the park its own idle-kick left): the row it would move
+        // is this connection's live membership again (B40).
+        self.leave_requests.retain(|r| r.conn != conn);
         // Fresh input channel for the fresh session (the old channel's
         // senders died with the old connection actor); the seq/ack
         // contract (DESIGN §14.2) makes the NEW session start from a

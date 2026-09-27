@@ -136,7 +136,7 @@ impl super::ConnectionActor {
                     return;
                 }
                 ConnIn::Closed { .. } | ConnIn::Shutdown => return,
-                ConnIn::Frame(_) | ConnIn::RoomGone(_) => {}
+                ConnIn::Frame(_) | ConnIn::RoomGone(_) | ConnIn::LeftRoom { .. } => {}
             }
         }
         self.server_close = Some(ServerClose::OutboundDead);

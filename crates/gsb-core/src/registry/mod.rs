@@ -53,8 +53,8 @@ mod seat;
 mod table;
 
 pub use actor::Registry;
-pub use close::CloseRequest;
-pub(crate) use close::flush_close_requests;
+pub use close::{CloseRequest, LeaveRequest};
+pub(crate) use close::{flush_close_requests, flush_leave_requests};
 pub use msg::RegistryMsg;
 pub use seat::Seat;
 

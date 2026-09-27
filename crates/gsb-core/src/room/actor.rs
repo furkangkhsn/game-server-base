@@ -190,4 +190,14 @@ pub struct RoomActor<W, G, Sp> {
     /// them (`crate::registry::flush_close_requests`); written and
     /// flushed in phase 0d. Never written without a registry.
     pub(in crate::room) close_requests: Vec<crate::registry::CloseRequest>,
+    /// Leave requests not yet accepted by the registry's mailbox
+    /// ([`crate::registry::LeaveRequest`], BACKLOG B40): the members whose
+    /// membership the input-idle ceiling ended under the default
+    /// `afk_action = LeaveRoom` (the connection stays open). The
+    /// `close_requests` rules, plus two: a request never overtakes a
+    /// queued detach-despawn report (it waits while `despawn_reports` is
+    /// non-empty), and a join or resume of the same connection here drops
+    /// its queued request (the membership it would settle is the one
+    /// that connection now holds again). Never written without a registry.
+    pub(in crate::room) leave_requests: Vec<crate::registry::LeaveRequest>,
 }

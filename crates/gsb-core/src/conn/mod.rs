@@ -25,8 +25,10 @@
 //!   state violation (out-of-order or double AUTH);
 //! - **race** (weight `RACE_VIOLATION_WEIGHT`): a legitimate
 //!   ~1-RTT-wide transition can produce it — the room was destroyed and
-//!   an in-flight action arrives room-less, an action races a LEAVE, or
-//!   the leave→rejoin window strays;
+//!   an in-flight action arrives room-less, an action races a LEAVE, the
+//!   leave→rejoin window strays, or the room ended the membership on its
+//!   own (the input-idle ceiling's default action, B40: the client learns
+//!   it from this very answer);
 //! - **not a violation** (weight 0): server-side conditions (registry
 //!   gone during shutdown, message-table type mismatch) — answered as
 //!   before, never counted; the budget is for *client* violations.
@@ -247,6 +249,19 @@ pub enum ConnIn {
     ServerClosed { cause: ServerClose, reason: String },
     /// The room the connection was in got destroyed.
     RoomGone(RoomId),
+    /// The room ended this connection's membership on its own and the
+    /// connection STAYS: the input-idle ceiling under the default
+    /// `afk_action = leave_room` (BACKLOG B40, `docs/RECONNECT.md` §16).
+    /// Sent by the registry after it settled its row, so the connection
+    /// is authenticated and in no room from here on — as after its own
+    /// `LEAVE_ROOM_REQ` — and its next join goes straight through (the
+    /// implicit resume, for a parked entity). Nothing goes on the wire.
+    ///
+    /// Acted on only while the connection is still in `room` on the
+    /// action channel that membership handed it, now closed by the room:
+    /// a notice that arrives after the client left and joined again
+    /// (a new membership, a new open channel) is stale and ignored.
+    LeftRoom { room: RoomId },
     /// Server-wide shutdown.
     Shutdown,
 }

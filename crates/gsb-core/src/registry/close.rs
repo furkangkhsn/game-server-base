@@ -22,6 +22,13 @@
 //! **Who asks, today.** Only the input-idle ceiling under the opt-in
 //! `RoomConfig::afk_action = Disconnect`. The verb is not exposed to game
 //! logic in this round (see `docs/RECONNECT.md` §16).
+//!
+//! **Its keep-the-socket sibling** ([`LeaveRequest`], BACKLOG B40): under
+//! the DEFAULT `afk_action = LeaveRoom` the ceiling ends the membership
+//! and the connection stays open. The registry settles the row the same
+//! way — the membership is over as if the client had sent
+//! `LEAVE_ROOM_REQ` — and tells the connection it is out of the room
+//! (`ConnIn::LeftRoom`, nothing on the wire), so a direct join works.
 
 use tokio::sync::mpsc::error::TrySendError;
 
@@ -58,6 +65,29 @@ pub struct CloseRequest {
     pub reason: String,
 }
 
+/// A room's report that it ENDED a member's membership while the
+/// member's connection stays open: [`RegistryMsg::LeaveConn`] (the
+/// input-idle ceiling under the default `afk_action = LeaveRoom`, BACKLOG
+/// B40). The keep-the-socket sibling of [`CloseRequest`]: same settlement
+/// of the row, same stale guard, no verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaveRequest {
+    /// The connection whose membership ended (it stays open).
+    pub conn: ConnectionId,
+    /// The room whose membership ended (stale guard, first key).
+    pub room: RoomId,
+    /// The entity the membership held (stale guard, second key).
+    pub entity: EntityId,
+    /// `Some(key)` = the disconnect policy PARKED the entity and the room
+    /// re-keyed the parked row to `key` ([`ConnectionId::park_key`]): the
+    /// registry moves the membership's row there, where it is an ordinary
+    /// detached row (slot held, resumable, released by the hold's end or
+    /// a resume). `None` = despawned, or a park the room could not key
+    /// (its key was taken, or the park already ended before this request
+    /// left the room): the membership's slot goes back like a leave's.
+    pub park: Option<ConnectionId>,
+}
+
 /// Hand every queued request to the registry's mailbox with a
 /// synchronous `try_send` (a tick body never awaits).
 ///
@@ -79,6 +109,21 @@ pub(crate) fn flush_close_requests(registry: &Mailbox<RegistryMsg>, queue: &mut 
     for req in std::mem::take(queue) {
         if let Err(TrySendError::Full(RegistryMsg::CloseConn(req))) =
             registry.try_send(RegistryMsg::CloseConn(req))
+        {
+            queue.push(req);
+        }
+    }
+}
+
+/// [`flush_close_requests`] for [`LeaveRequest`]s: the same rules (Full
+/// keeps the request, in order, for the next tick; Closed drops it).
+pub(crate) fn flush_leave_requests(registry: &Mailbox<RegistryMsg>, queue: &mut Vec<LeaveRequest>) {
+    if queue.is_empty() {
+        return;
+    }
+    for req in std::mem::take(queue) {
+        if let Err(TrySendError::Full(RegistryMsg::LeaveConn(req))) =
+            registry.try_send(RegistryMsg::LeaveConn(req))
         {
             queue.push(req);
         }

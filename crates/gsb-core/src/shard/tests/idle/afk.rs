@@ -1,7 +1,8 @@
 //! The shard's half of the ceiling's ACTION (E6): the room actor's rule,
 //! mirrored — `Disconnect` asks the registry to close each expired
 //! member's connection after the policy ran (parked or not), the default
-//! asks nothing, and a row parked by a transport death is never closed.
+//! asks for no close (its leave request is `leave.rs`'s subject, B40), and
+//! a row parked by a transport death is never closed.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -26,7 +27,7 @@ fn step(a: &mut ShardActor<TWorld, (), TState, TStrip>, t0: Instant, k: u64, sec
 }
 
 /// `Disconnect` on a shard: one request per expired member, with its
-/// entity and the policy's outcome; `LeaveRoom` (the default) none.
+/// entity and the policy's outcome; `LeaveRoom` (the default) no close.
 #[tokio::test]
 async fn sharded_disconnect_asks_for_the_close_and_the_default_does_not() {
     for (action, want) in [(AfkAction::LeaveRoom, 0), (AfkAction::Disconnect, 2)] {

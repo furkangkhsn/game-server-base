@@ -173,6 +173,7 @@ impl super::ConnectionActor {
                         .await;
                     break;
                 }
+                ConnIn::LeftRoom { room } => self.on_left_room(room),
                 ConnIn::Shutdown => {
                     // The server is stopping: a best-effort ERROR 14
                     // that never waits on the client, then the end.

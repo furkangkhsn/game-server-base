@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
-use crate::id::{ConnectionId, PlayerId};
+use crate::id::{ConnectionId, EntityId, PlayerId};
+use crate::registry::LeaveRequest;
 use crate::room::{AfkAction, Detach, idle_close};
 
 use crate::shard::actor::ShardActor;
@@ -26,8 +27,16 @@ where
     /// callers, one decision point — `ShardMsg::Detach` (a dead
     /// transport) and the input-idle ceiling (a live transport that
     /// stopped playing). The room actor's `detach_player`, mirrored;
-    /// callers own the guards.
-    pub(crate) fn detach_player(&mut self, player: PlayerId, conn: ConnectionId, identity: &str) {
+    /// callers own the guards. `report` = queue the detach-despawn report
+    /// on the despawn arm (the ceiling's default action settles the row
+    /// through its leave request instead, B40).
+    pub(crate) fn detach_player(
+        &mut self,
+        player: PlayerId,
+        conn: ConnectionId,
+        identity: &str,
+        report: bool,
+    ) {
         match self.logic.on_disconnect(&mut self.world, player, identity) {
             Detach::Despawn => {
                 // Today's close semantics, plus the registry report — the
@@ -37,7 +46,7 @@ where
                 // unreported row also keeps a `ShardGroup` member slot,
                 // the only whole-room capacity view there is. Flushed in
                 // this same tick's phase 0c.
-                if self.registry.is_some() {
+                if report && self.registry.is_some() {
                     self.despawn_reports.push(conn);
                 }
                 self.despawn_conn(player, false);
@@ -72,13 +81,21 @@ where
     /// The room actor's phase, mirrored: free when unset (one `Option`
     /// test per step), a constant-cost bounded rotation when set, and on
     /// expiry the SAME disconnect path a dead transport takes.
-    /// Then the close requests go out (E6 — the room actor's rule).
+    /// Then the close requests go out (E6 — the room actor's rule), and
+    /// the leave requests (B40 — the room actor's rules, mirrored).
     pub(super) fn phase_idle_sweep(&mut self, now: Instant) {
         if let Some(limit) = self.config.max_idle_input() {
             self.expire_idle(now, limit);
         }
+        let hold_back = !self.despawn_reports.is_empty();
+        if !hold_back {
+            self.reconcile_parks();
+        }
         if let Some(registry) = &self.registry {
             crate::registry::flush_close_requests(registry, &mut self.close_requests);
+            if !hold_back {
+                crate::registry::flush_leave_requests(registry, &mut self.leave_requests);
+            }
         }
     }
 
@@ -113,8 +130,14 @@ where
                 );
             }
             // No `idle.stop` here: both arms of `detach_player` already
-            // take the row off the clock (the room actor's rule).
-            self.detach_player(player, conn, &identity);
+            // take the row off the clock (the room actor's rule). The
+            // default action settles the registry row through its leave
+            // request (B40), so the despawn arm reports nothing.
+            let leave = self.config.afk_action == AfkAction::LeaveRoom;
+            self.detach_player(player, conn, &identity, !leave);
+            if leave && self.registry.is_some() {
+                self.leave_behind(player, conn, entity);
+            }
             // The ACTION (E6): under `Disconnect` the connection goes
             // too — asked AFTER the policy ran, so the request can say
             // whether the entity was parked (the registry then keeps the
@@ -132,6 +155,68 @@ where
                 };
                 self.close_requests
                     .push(idle_close(conn, self.config.id, entity, parked, limit));
+            }
+        }
+    }
+
+    /// The default action's half of the settlement (B40) — the room
+    /// actor's `leave_behind`, mirrored: release the parked row's channel
+    /// halves, re-key the park, queue the leave request.
+    fn leave_behind(&mut self, player: PlayerId, conn: ConnectionId, entity: EntityId) {
+        let parked = match self.conns.get_mut(&player) {
+            Some(rc) if rc.detached => {
+                rc.release_outbound();
+                rc.release_actions();
+                true
+            }
+            _ => false,
+        };
+        let park = if parked {
+            self.rekey_park(player, conn)
+        } else {
+            None
+        };
+        self.leave_requests.push(LeaveRequest {
+            conn,
+            room: self.config.id,
+            entity,
+            park,
+        });
+    }
+
+    /// Re-key the parked row to `conn.park_key()` (the room actor's rule),
+    /// moving the session-epoch entry with the binding the way a resume
+    /// does: the park's migrations keep pairing with its own join, and a
+    /// later leave of the live connection tombstones only that connection.
+    fn rekey_park(&mut self, player: PlayerId, conn: ConnectionId) -> Option<ConnectionId> {
+        let key = conn.park_key();
+        if self.binding.contains_key(&key) {
+            return None;
+        }
+        self.binding.remove(&conn);
+        self.binding.insert(key, player);
+        if let Some(epoch) = self.conn_epoch.remove(&conn) {
+            self.conn_epoch.insert(key, epoch);
+        }
+        if let Some(rc) = self.conns.get_mut(&player) {
+            rc.conn = key;
+        }
+        Some(key)
+    }
+
+    /// A queued leave request whose park already ended here settles a
+    /// despawn (the room actor's rule).
+    fn reconcile_parks(&mut self) {
+        for req in &mut self.leave_requests {
+            if let Some(key) = req.park {
+                let held = self
+                    .binding
+                    .get(&key)
+                    .and_then(|p| self.conns.get(p))
+                    .is_some_and(|rc| rc.detached);
+                if !held {
+                    req.park = None;
+                }
             }
         }
     }

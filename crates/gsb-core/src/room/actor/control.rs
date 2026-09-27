@@ -68,11 +68,15 @@ where
     /// a MOBA bot-takeover-on-AFK for nothing.
     ///
     /// Callers own the guards (binding + entity + "not already parked").
+    /// `report` = queue the detach-despawn report on the despawn arm (a
+    /// caller that settles the registry row by other means — the
+    /// ceiling's leave request, B40 — passes `false`).
     pub(in crate::room) fn detach_player(
         &mut self,
         player: PlayerId,
         conn: ConnectionId,
         identity: &str,
+        report: bool,
     ) {
         match self.logic.on_disconnect(&mut self.world, player, identity) {
             Detach::Despawn => {
@@ -88,7 +92,7 @@ where
                 // standalone room has no reader, so the queue must not
                 // accumulate. The flush is phase 0c, in this same tick
                 // (CONTROL runs first).
-                if self.registry.is_some() {
+                if report && self.registry.is_some() {
                     self.despawn_reports.push(conn);
                 }
                 self.despawn_conn(player, false);
@@ -166,7 +170,7 @@ where
                     // exactly that shape) and must not re-ask the policy.
                     && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    self.detach_player(player, conn, &identity);
+                    self.detach_player(player, conn, &identity, true);
                 }
                 true
             }

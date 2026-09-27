@@ -211,6 +211,28 @@ pub enum RegistryMsg {
     /// that has since left, rejoined elsewhere, rejoined as a new entity
     /// or closed and been released is a silent no-op.
     CloseConn(CloseRequest),
+    /// A room (or shard) ENDED a member's membership while the member's
+    /// connection stays open (BACKLOG B40 — today only the input-idle
+    /// ceiling under the default `RoomConfig::afk_action = LeaveRoom`).
+    /// See [`LeaveRequest`] for the fields; the room-side mailbox rules
+    /// are [`CloseRequest`]'s.
+    ///
+    /// The registry settles its row as the member's own leave would —
+    /// the connection is authenticated and in no room afterwards — then
+    /// tells the connection ([`ConnIn::LeftRoom`], a spawned send; nothing
+    /// goes on the wire):
+    ///
+    /// - `park: Some(key)` → the membership moves to a NEW detached row
+    ///   under the park key (the slot stays held; the hold's end —
+    ///   [`Self::DetachDespawned`] for `key` — or a resume of the
+    ///   identity releases it, exactly like a transport death's row); the
+    ///   connection's own row keeps no affiliation;
+    /// - `park: None` → the affiliation goes (sharded member count and
+    ///   `leaves` as for a leave); a row whose transport is ALREADY gone
+    ///   is removed outright.
+    ///
+    /// Stale-guarded on `room` AND `entity`, like [`Self::CloseConn`].
+    LeaveConn(LeaveRequest),
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see

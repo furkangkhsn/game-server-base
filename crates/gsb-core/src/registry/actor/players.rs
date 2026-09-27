@@ -116,7 +116,14 @@ where
         // ends (the `pending += 1` below re-borrows mutably).
         let sharded_pick = match &entry.shards {
             Some(group) => {
-                let rejoin = self.conns.get(&conn).and_then(|i| i.room) == Some(room);
+                // A rejoin does not take a new slot — and neither does
+                // the resume of a park this identity holds here (B40): the
+                // park's row already counts, and the resume hands that
+                // count to this connection (the SpawnDone cleanup nets it
+                // out). Without it a full grid refused a player the
+                // return to its own parked entity.
+                let rejoin = self.conns.get(&conn).and_then(|i| i.room) == Some(room)
+                    || self.holds_park(room, &identity);
                 let at_cap = match group.cap {
                     Some(cap) => !rejoin && group.members + group.pending >= cap,
                     None => false,
@@ -199,5 +206,17 @@ where
         } else {
             debug!(%conn, room = %room, "join dispatched");
         }
+    }
+
+    /// Whether a detached row of `identity` holds a park in `room` (the
+    /// target of this identity's implicit resume). O(connections), on the
+    /// sharded join path only — a control-plane event, like the
+    /// supersedence scan above it.
+    fn holds_park(&self, room: RoomId, identity: &str) -> bool {
+        !identity.is_empty()
+            && self
+                .conns
+                .values()
+                .any(|i| i.detached && i.room == Some(room) && i.identity == identity)
     }
 }

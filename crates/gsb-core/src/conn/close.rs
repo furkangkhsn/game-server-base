@@ -21,7 +21,8 @@
 //!   is [`ServerClose::ViolationBudget`].
 //! - **The input-idle ceiling** (`max_idle_input_secs`) under its
 //!   default `afk_action = leave_room`. It hands the ENTITY to the
-//!   disconnect policy; the transport session is not ended by it. Under
+//!   disconnect policy and ends the membership (`ConnIn::LeftRoom`); the
+//!   transport session is not ended by it. Under
 //!   the opt-in `afk_action = disconnect` it IS a verdict — the room asks
 //!   the registry to close the session — and is counted as
 //!   [`ServerClose::IdleInput`].

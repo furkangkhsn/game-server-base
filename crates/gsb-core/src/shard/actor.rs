@@ -205,6 +205,9 @@ pub struct ShardActor<W, G, St, Sp> {
     /// see the room actor's field of the same name. Written and flushed
     /// in phase 0d.
     pub(in crate::shard) close_requests: Vec<crate::registry::CloseRequest>,
+    /// Leave requests not yet accepted by the registry's mailbox (B40);
+    /// see the room actor's field of the same name (same rules).
+    pub(in crate::shard) leave_requests: Vec<crate::registry::LeaveRequest>,
     // -- The team exchange (`docs/CROSS-SHARD.md` §8b). ----------------
     /// The other shards' team records (one slot per source, replaced by
     /// every `TeamImport`, TTL-expired, merged per team): what the TEAMS

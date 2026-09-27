@@ -110,6 +110,7 @@ where
             registry: None,
             despawn_reports: Vec::new(),
             close_requests: Vec::new(),
+            leave_requests: Vec::new(),
         }
     }
 

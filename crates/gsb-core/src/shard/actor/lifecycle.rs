@@ -127,6 +127,7 @@ where
             registry: None,
             despawn_reports: Vec::new(),
             close_requests: Vec::new(),
+            leave_requests: Vec::new(),
             teams: TeamImports::default(),
             team_sent: false,
             tstats: TeamStats::default(),

@@ -228,8 +228,8 @@ pub struct RoomConfig {
     pub max_idle_input_secs: Option<u64>,
     /// **What the input-idle ceiling does** beyond the disconnect policy
     /// (BACKLOG E6) — [`AfkAction::LeaveRoom`] (the default) ends the
-    /// membership only and keeps the socket open, as the ceiling always
-    /// did; [`AfkAction::Disconnect`] also closes the connection (ERROR
+    /// membership only and keeps the socket open: the connection is then
+    /// in no room, as after its own leave (B40); [`AfkAction::Disconnect`] also closes the connection (ERROR
     /// 9, then the close; `server_closes{reason="idle_input"}`). Either
     /// way `on_disconnect` decides the entity first. Without
     /// [`Self::max_idle_input_secs`] it has no effect.

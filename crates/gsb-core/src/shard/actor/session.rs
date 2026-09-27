@@ -65,6 +65,9 @@ where
         identity: &str,
         out: mpsc::Sender<FrameBatch>,
     ) -> Mailbox<Action> {
+        // The connection resumes the park its own idle-kick left: its
+        // queued leave request would settle this membership (B40).
+        self.leave_requests.retain(|r| r.conn != conn);
         let (act_tx, act_rx) = self.config.action_channel();
         let mut old_conn = conn;
         let mut entity = 0;

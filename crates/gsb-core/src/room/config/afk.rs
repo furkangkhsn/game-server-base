@@ -23,11 +23,13 @@ use crate::registry::CloseRequest;
 /// [`RoomConfig::max_idle_input_secs`]: crate::room::RoomConfig::max_idle_input_secs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AfkAction {
-    /// The default, and the behaviour before the action existed: the
-    /// membership ends, the SOCKET STAYS OPEN — the session is like one
-    /// that sent `LEAVE_ROOM_REQ`, and its next join is the implicit
-    /// resume attempt (`docs/RECONNECT.md` §14.3). Nothing new on the
-    /// wire.
+    /// The default: the membership ends, the SOCKET STAYS OPEN — the
+    /// session is like one that sent `LEAVE_ROOM_REQ`: authenticated and
+    /// in no room (the room asks the registry to settle the row that way,
+    /// [`crate::registry::RegistryMsg::LeaveConn`]), its game frames are
+    /// answered `ERROR 6` and its next join goes straight through — the
+    /// implicit resume attempt for a parked entity (`docs/RECONNECT.md`
+    /// §14.3, §16). Nothing new on the wire.
     #[default]
     LeaveRoom,
     /// The membership ends as with [`Self::LeaveRoom`], AND the room asks
