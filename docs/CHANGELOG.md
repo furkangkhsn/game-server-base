@@ -5,6 +5,59 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 3 — "her şeyi saymalıyız": B58–B60, B62 (`metrics/count-everything-3`)
+
+- **B59 — dolu kanalda düşen bağlantı örneği deltalarını kaybetmiyor:**
+  bağlantı aktörü sayaç tabanını yalnız kanal örneği ALDIĞINDA ilerletir
+  (`conn/actor/flush.rs`); düşen örneğin deltaları bir sonraki örnekte,
+  düşüş `metrics_dropped`'ta. Ayrıca **son örnek** dolu kanalda artık
+  düşmez: `channel::post` ile doğurulan gönderici bekler (aktör beklemez;
+  önceden hüküm ve deltalar sayılmadan kayboluyordu — DESIGN §12'nin
+  "kabul edilen maliyet"i kapandı).
+- **B60 — sunucu kararlı sonun işlenmemiş kutusu:** aktör çıkarken gelen
+  kutusunu kapatıp kalanları türüne göre sayar (`conn::FrameKind`); ölü
+  çıkış yolunun hüküm taraması ve pre-auth bütçesini aşan kare de. Net
+  kapsamında `requests_unprocessed` (RPC defterinin yeni terimi),
+  `actions_unprocessed`, `control_frames_unprocessed`. `frames_in` anlamı
+  değişmedi (kutuda kalanlar içinde yok, aşan kare var).
+- **B62 — duran odanın son sayımı:** oda/shard `finish()`'te elde
+  kalanları (okunmamış girdi — park dahil —, uçuştaki istekler, borçlu
+  yanıtlar) oturum sonu sayaçlarına katar ve son örneği ayrı bir olayla
+  verir (`MetricsEvent::RoomFinal`, `post` ile). B36'nın itirazlarına
+  cevap: toplayıcı onu bekleme penceresinde de satıra alır, `RoomGone`
+  yoksa pencereyi kendisi başlatır (hayalet yok); olay yalnız toplayıcı
+  gitmişse (süreç inerken) kaybolur. `MatchResultDropped` da `post` ile.
+  **Yan bulgu (düzeltildi):** yok edilen sharded odanın shard satırları
+  hiç budanmıyordu (`room << 16 | index` ≠ `RoomGone`'un kimliği); artık
+  her shard'ın `RoomFinal`'ı kendi satırını budar.
+- **B58 — taşımanın kendi kayıpları:** yeni `transport` kapsamı
+  (`TransportCounters`, 18 sayaç, `gsb_transport_*_total`,
+  `gsb-metric scope=transport`, RESULT `transport_*=`). rUDP demux'ının
+  dolu kutuda düşürdüğü kareler türüne göre (istek → RPC defterinin taşıma
+  terimi `udp_requests_dropped_full`; kare o noktada çözülmüş olduğundan
+  sınıflanabiliyor), demux'ın diğer düşüşleri, yazıcının parça
+  tavanı/terk/boşaltma kayıpları, WS okuyucusunun dolu kontrol kuyruğunda
+  düşen kapanış/pong'u, el sıkışan kapıların ret/zaman aşımı/başarısızlığı.
+  Yol: taşıma görevi `gsb_net::metrics::Flusher` ile delta
+  `MetricsEvent::Transport` gönderir (500 ms'de bir + bitişte; B59
+  kuralı); `gsb-net` zaten `gsb-core`'a bağlı, katman ters dönmüyor.
+  Elenenler: ortak atomikler, toplayıcının dinleyicileri okuması,
+  bağlantı aktörü üzerinden raporlama.
+- **RPC defteri:** `rpc_sent = req_local + req_ext + Σ req_rej_* +
+  req_refused + req_unread + req_unbound + requests_dropped_closed +
+  requests_dropped_full + requests_no_room + requests_unprocessed +
+  transport_udp_requests_dropped_full` (`loadgen_rpc` 16 terimi iddia eder).
+- Altın metinler yalnız yeni aileler, iki HELP (`requests_undelivered`,
+  `requests_abandoned` odanın duruşunu da sayar) ve taşımanın
+  `metrics_dropped` payı kadar değişti; `otlp::cross` yeşil. Loadgen metrik
+  teli **GSMR**. İstemci teli değişmedi.
+- Kalan sayılmayanlar BACKLOG B66–B69 (en büyüğü: yazıcı pompasının
+  çıkışta kanalda bıraktığı batch'ler).
+
+Testler 1353 → 1379 (`otlp` ile 1371 → 1397); her madde önce kırmızı ya da
+mutasyonla doğrulandı. Ebeveyn doğrulaması: `RoomFinal`'ın bekleme
+penceresini başlatmaması testi düşürdü.
+
 ## Küçük paket 8 — B63, B64 (`core/small-bundle-8`)
 
 - **B63 — gitmiş dağıtıcı artık bağlantıyı kilitlemiyor.** Görevi gitmiş
