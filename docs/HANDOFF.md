@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1237 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1267 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,6 +148,13 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**E8 tamam** (RECONNECT §16.3, CHANGELOG "E8"): oyun mantığı
+`ctx.kick(player, reason)` ile (kit: `gsb_kit::game::kick(world, entity,
+reason)`) bir oyuncuyu sunucudan atar — `on_disconnect` yolu + E6'nın
+kapatma fiili, ERROR 9 `kicked: …`, `server_closes{reason="kicked"}`.
+E9 kararla kapandı (yeni bildirim yok). Açık: kit'te nedene göre kader
+(F27), atmada da B43 yarışı.
+
 **Küçük paket 5 tamam** (CHANGELOG "Küçük paket 5"): CI'da action'lar
 node24 ana sürümlerinde (yeni `uses:` için kural CONTRIBUTING'de);
 `/metrics` ve OTLP iki yeni oda ailesi taşır
@@ -183,15 +190,14 @@ biten istek despawn yerleşir.
 **B40 tamam** (RECONNECT §16.2, CHANGELOG "B40"): `leave_room` idle-kick'i
 bağlantıyı LEAVE sonrası duruma getirir; park `ConnectionId::park_key()`
 altında kendi satırına taşınır (`RegistryMsg::LeaveConn`,
-`ConnIn::LeftRoom`). Açık: B43, E8 (B41 kapandı; E9 kararla kapandı).
+`ConnIn::LeftRoom`). Açık: B43 (B41 ve E8 kendi turlarında, E9 kararla kapandı).
 
 **E6 tamam** (RECONNECT §16.1, CHANGELOG "E6"): AFK'nın odadan mı sunucudan
 mı atılacağı oyunun/dağıtımın seçimi — `afk_action` (varsayılan
 `leave_room`; `disconnect` bağlantıyı ERROR 9 ile kapatır, `idle_input`
 sayılır). Fiil oda→registry→bağlantı (`RegistryMsg::CloseConn`); registry
 satırını kendisi yerleştirir; dolu posta kutusunda istek odanın kuyruğunda
-kalıp sonraki tick yeniden denenir. Açık: E8 — karar verildi (atma =
-bağlantıyı kapatmak, `on_disconnect` + ERROR 9), tur sırada (B40 kapandı).
+kalıp sonraki tick yeniden denenir. E8 kendi turunda kapandı (B40 kapandı).
 
 **E1 + F21 tamam** (SECURITY §3.4, CHANGELOG "E1 + F21"): kova bağlantı
 aktöründe (`conn/gate.rs`); sayı odanın config'inden registry join'de
@@ -632,6 +638,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1237 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1267 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

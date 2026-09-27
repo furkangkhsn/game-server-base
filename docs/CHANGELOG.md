@@ -5,6 +5,53 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## E8 — oyun mantığına "oyuncuyu at" fiili (`core/e8-kick-verb`)
+
+Bakımcı kararı (2026-09-27, E9 ile birlikte): atma = bağlantıyı kapatmak;
+istemcinin "odadan çıkarıldın, bağlantın açık" diye bilmesine gerek yok.
+Üyelik `on_disconnect` ile biter (kaderi oyunun `Detach`'ı seçer: park /
+AI devri / despawn), ardından soket E6'nın fiiliyle kapanır. Yeni tel
+öğesi yok, base protokol sürümü aynı.
+
+- **Yüzey:** `TickCtx::kick(player, reason)` (bağlamda `kicks: Kicks<'a>`
+  alanı; `KickQueue`, `Kick`, `KICK_REASON_MAX_BYTES = 256`,
+  `kick_message`). `GameLogic`/`ShardLogic`'e yeni metot yok. Kit:
+  `gsb_kit::game::kick(world, entity, reason)` — yedi kit odası sahibi
+  çözüp oyunun sistemlerinden hemen sonra çekirdeğe iletir; sahipsiz
+  entity yok sayılır.
+- **Uygulama noktası:** istenen kancanın içinde asla. Girdi/istek/sistem
+  kancalarında sorulan SYSTEMS'tan sonra (shard'da EFFECTS OUT'tan sonra,
+  MIGRATE'ten önce — atılan üye aynı tick göçmez), yayın kancalarında
+  sorulan tick sonunda; arada CONTROL koşmaz. Kapatma isteği E6 kuyruğuyla
+  sonraki tick 0d'de.
+- **Tel:** en-iyi-çaba, beklemesiz ERROR 9, `kicked: <gerekçe>` (gerekçe
+  256 bayta `char` sınırında kesilir; boşsa `kicked`), sonra kapanış.
+- **Sayaç:** `server_closes{reason="kicked"}` (sona eklendi); iki altın
+  dosya tam bu satırla (OTLP'de seri sayısı 12 → 13) güncellendi; log
+  satırında `server_close_kicked=`; loadgen metrik teli **GSMG**; RESULT
+  "her sebep için bir anahtar" kuralıyla `server_close_kicked=` kazandı
+  (E6'nın `server_close_idle_input=`'u gibi; biçim aynı).
+- **Kenar durumları:** canlı olmayan üye (bilinmeyen/gitmiş/park/bot) →
+  sayılmayan no-op; aynı tick çift atma → tek kapanış, ilk gerekçe; dolu
+  posta kutusu → E6 kuralı; shard'da MIGRATE sonrası sorulan ve göçmüş
+  üye → no-op. B43'ün yarışı atmada da geçerli (düzeltilmedi).
+- **Kit varsayılanı:** kit odaları kimliği olan oturumu park eder — atılan
+  oyuncu aynı kimlikle resume edebilir; nedene göre kader BACKLOG F27.
+- **Yan bulgu B48 (düzeltildi):** shard tick gövdesi input-idle saatini
+  MIGRATE'ten sonra geri alıyordu — göçen üyenin `last_input`'u hep
+  `None` gidiyor, alıcı saati başlatmıyordu (sınır geçişi AFK tavanını
+  kalıcı atlatıyordu). Saat artık MIGRATE'ten önce geri alınıyor.
+- `TickCtx` artık `Send`/`Sync` değil (kuyruk bir `Cell`); tick gövdesi
+  await etmediğinden hiçbir görevi etkilemez.
+
+Testler 1237 → 1267 (`otlp` ile 1255 → 1285): çekirdek oda/shard, kit
+(yedi oda + gerçek shard aktörleri ve tek takım odası aktörü), gerçek
+dinleyici üzerinde uçtan uca; her kural mutasyonla sınandı. Ebeveyn
+doğrulaması: belge bağlantısını kıran ara commit bir sonrakiyle katlandı
+(her commit doc kapısından geçer); `on_disconnect` çağrısını silmek ve
+saati MIGRATE'ten sonra geri vermek — ikisi de testleri düşürdü.
+Ayrıntı: RECONNECT §16.3, GAME-MODULE, KIT-ARCHITECTURE §4.3, OPS §3.
+
 ## Küçük paket 5 — B34, B39, B46, B33 (`misc/small-bundle-5`)
 
 - **B34 — CI action'ları Node 24 ana sürümlerinde.** `actions/checkout@v4`
