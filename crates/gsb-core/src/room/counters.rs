@@ -9,10 +9,12 @@ use std::fmt::Debug;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+mod fanout;
 mod hold;
 mod logic;
 mod observe;
 
+pub(crate) use fanout::SendFailures;
 pub(crate) use hold::HoldEnd;
 
 #[cfg(test)]
@@ -144,8 +146,17 @@ pub(crate) struct RoomCounters {
     pub(crate) late_min_us: u64,
     pub(crate) late_max_us: u64,
     pub(crate) late_sum_us: u64,
-    /// Outbound batches dropped at the fan-out (slow client), cumulative.
+    /// Outbound batches dropped at the fan-out on a FULL outbound
+    /// channel (slow client), cumulative. A closed channel is not a drop:
+    /// see [`Self::sends_closed`].
     pub(crate) dropped_frames: u64,
+    /// Outbound batches the fan-out tried on a connection whose outbound
+    /// channel was already CLOSED (the connection is gone — typically the
+    /// client closed its socket after its LEAVE result — and the room has
+    /// not processed the leave or detach yet), cumulative (B32). No frame
+    /// the client wanted is lost; kept apart so `dropped_frames` means
+    /// "slow client" and nothing else.
+    pub(crate) sends_closed: u64,
     /// Keep-alive re-sends, cumulative.
     pub(crate) keepalive_resends: u64,
     /// Group snapshots encoded, cumulative (+ encoded bytes, max payload).
@@ -264,6 +275,7 @@ impl Default for RoomCounters {
             late_max_us: 0,
             late_sum_us: 0,
             dropped_frames: 0,
+            sends_closed: 0,
             keepalive_resends: 0,
             snapshots: 0,
             snap_bytes: 0,

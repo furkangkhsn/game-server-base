@@ -41,9 +41,15 @@ pub struct RoomReport {
     /// Broadcast `Lagged` occurrences / missed ticks (cumulative).
     pub lagged_events: u64,
     pub lagged_ticks: u64,
-    /// Batches dropped (cumulative) and drop rate (Δ/s).
+    /// Batches dropped on a full outbound channel (slow client —
+    /// cumulative) and drop rate (Δ/s).
     pub dropped: u64,
     pub dropped_s: f64,
+    /// Batches tried on an already closed outbound channel (the
+    /// connection gone before the room processed its end — see
+    /// `RoomSample::sends_closed`), cumulative. No rate: it is bounded by
+    /// the connection ends, so its rate is the leave rate.
+    pub sends_closed: u64,
     pub keepalive_resends: u64,
     /// Snapshots encoded (cumulative) and encoded-byte rate (Δ/s).
     pub snapshots: u64,

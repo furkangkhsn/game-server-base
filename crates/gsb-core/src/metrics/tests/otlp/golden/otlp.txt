@@ -97,6 +97,9 @@ gsb_room_dropped sum t=2 mono=true unit="" n=2 | Outbound batches dropped at the
 gsb_room_dropped_s gauge unit="" n=2 | Batch drop rate (Δ/s over the last sample interval).
   [room=r1] 0..2000 double 2
   [room=r7] 0..2000 double 0
+gsb_room_sends_closed sum t=2 mono=true unit="" n=2 | Outbound batches the fan-out tried on an already closed connection (gone before the room processed its leave or detach; nothing the client wanted is lost), cumulative.
+  [room=r1] 1000..2000 int 1
+  [room=r7] 1000..2000 int 0
 gsb_room_keepalive_resends sum t=2 mono=true unit="" n=2 | Keep-alive re-sends of unchanged groups, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0

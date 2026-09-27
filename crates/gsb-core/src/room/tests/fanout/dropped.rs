@@ -7,6 +7,8 @@
 use super::*;
 use crate::room::actor::RoomActor;
 
+mod closed;
+
 /// What the logic saw, in call order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Seen {

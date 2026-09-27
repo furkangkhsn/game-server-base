@@ -171,6 +171,16 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         assert_eq!(v, 0, "a smoke run sheds no client; {k} must be 0");
     }
 
+    // The fan-out's two send failures (B32): present and numeric. Not
+    // pinned to 0 — a client that closes its socket right after its LEAVE
+    // result can meet one batch on its closed channel (`sends_closed`),
+    // and that is timing, not a fault.
+    for k in ["dropped", "sends_closed"] {
+        let _: u64 = get(k)
+            .parse()
+            .unwrap_or_else(|_| panic!("{k} is not a number in: {result_line}"));
+    }
+
     // The collector kept up (0 samples dropped on the metrics channel).
     let dropped: u64 = get("metrics_dropped").parse().expect("number");
     assert_eq!(dropped, 0, "metrics channel dropped samples: {dropped}");

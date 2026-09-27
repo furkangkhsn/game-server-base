@@ -7,6 +7,8 @@
 use super::*;
 use crate::room::{Detach, ExpireTo, ResumeFound};
 
+mod closed;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Seen {
     Private(u64, u64),

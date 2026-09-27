@@ -53,6 +53,7 @@ impl MetricAccumulator {
                 lagged_ticks: latest.lagged_ticks,
                 dropped: latest.dropped_frames,
                 dropped_s,
+                sends_closed: latest.sends_closed,
                 keepalive_resends: latest.keepalive_resends,
                 snapshots: latest.snapshots,
                 snap_bytes_s,

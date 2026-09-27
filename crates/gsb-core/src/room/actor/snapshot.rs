@@ -207,7 +207,9 @@ where
         // 4d. Per-connection fan-out: one batch per connection — the
         //     group's shared snapshot (Bytes refcount, never copied) plus
         //     the connection's private frame, when the logic has one.
-        let mut dropped: u64 = 0;
+        // Failed sends, by cause (B32): a full channel is a drop, a closed
+        // one a connection already gone.
+        let mut failed = SendFailures::default();
         // The private-frame scratch is reused across connections (the
         // payload is split off, the capacity retained — no per-connection
         // per-tick allocation).
@@ -278,7 +280,8 @@ where
             if !rc.batch.is_empty() {
                 let batch = std::mem::take(&mut rc.batch);
                 if let Err(e) = rc.out.try_send(batch) {
-                    // Outbound channel full: the batch is dropped, never
+                    // Outbound channel full (or closed — counted apart,
+                    // see `SendFailures`): the batch is dropped, never
                     // retried (the fan-out stays best-effort). A full
                     // snapshot costs the client one snapshot of staleness
                     // (keep-alive bounds it); what the batch's one-shot
@@ -286,8 +289,7 @@ where
                     // synchronously, in this player's iteration, while the
                     // state its `private` just derived is still current
                     // (F11). The buffer goes back for the next tick.
-                    dropped += 1;
-                    rc.batch = e.into_inner();
+                    rc.batch = failed.count(e);
                     rc.dropping = true;
                     // The RPC answers the batch carried are the core's
                     // own (F14): they left `queued` above, so putting
@@ -321,7 +323,7 @@ where
         for (conn, replies) in unsent {
             self.queued.insert(conn, replies);
         }
-        self.m.dropped_frames += dropped;
+        failed.settle(&mut self.m);
     }
 
     /// Queue one RPC answer for a connection's next (or this tick's, if

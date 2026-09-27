@@ -53,6 +53,7 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.lagged_events, 6, "lagged_events");
     assert_eq!(f.lagged_ticks, 60, "lagged_ticks");
     assert_eq!(f.dropped, 9, "dropped");
+    assert_eq!(f.sends_closed, 7, "sends_closed");
     // SUM — a per-shard rate over disjoint counters; averaging would
     // report a quarter of the room's loss.
     close(f.dropped_s, 7.0, "dropped_s");

@@ -5,7 +5,7 @@
 use super::{RoomFamily, RoomValue, counter, gauge};
 
 /// Tick health through group state, in exposition order.
-pub(super) const TICK: [RoomFamily; 29] = [
+pub(super) const TICK: [RoomFamily; 30] = [
     gauge(
         "gsb_room_hz",
         "Measured room step rate (Δsteps/s over the last sample interval).",
@@ -84,6 +84,13 @@ pub(super) const TICK: [RoomFamily; 29] = [
         "gsb_room_dropped_s",
         "Batch drop rate (Δ/s over the last sample interval).",
         |r| r.dropped_s,
+    ),
+    // B32: a closed outbound channel is not a slow client — its own
+    // counter, no rate gauge (bounded by the connection ends).
+    counter(
+        "gsb_room_sends_closed_total",
+        "Outbound batches the fan-out tried on an already closed connection (gone before the room processed its leave or detach; nothing the client wanted is lost), cumulative.",
+        |r| r.sends_closed,
     ),
     counter(
         "gsb_room_keepalive_resends_total",

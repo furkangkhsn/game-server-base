@@ -188,6 +188,7 @@ where
         debug!(
             room = %self.config.id,
             dropped_frames = self.m.dropped_frames,
+            sends_closed = self.m.sends_closed,
             "room actor stopped"
         );
     }

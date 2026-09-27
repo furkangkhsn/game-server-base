@@ -56,8 +56,14 @@ pub struct RoomSample {
     pub late_max_us: u64,
     pub late_sum_us: u64,
     /// Outbound batches dropped at the fan-out (out channel full: slow
-    /// client), cumulative.
+    /// client), cumulative. A closed out channel is not counted here:
+    /// see [`Self::sends_closed`].
     pub dropped_frames: u64,
+    /// Outbound batches the fan-out tried on an already CLOSED out
+    /// channel (the connection is gone and the room has not processed its
+    /// leave or detach yet — at most about one per connection end; no
+    /// frame the client wanted is lost), cumulative (B32).
+    pub sends_closed: u64,
     /// Keep-alive re-sends (unchanged groups re-sending their cached
     /// snapshot), cumulative.
     pub keepalive_resends: u64,

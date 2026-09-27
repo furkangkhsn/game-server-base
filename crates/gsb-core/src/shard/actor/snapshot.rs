@@ -9,7 +9,7 @@ use std::hash::Hash;
 use tracing::warn;
 
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{GroupState, TickCtx};
+use crate::room::{GroupState, SendFailures, TickCtx};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -213,8 +213,9 @@ where
             .snap_records
             .saturating_add(self.logic.encoded_records());
 
-        // 6d. Per-connection fan-out (same as the room's 4d).
-        let mut dropped: u64 = 0;
+        // 6d. Per-connection fan-out (same as the room's 4d, failed sends
+        // split by cause the same way — B32).
+        let mut failed = SendFailures::default();
         // Same batch-buffer reuse as the room's 4d (one floor slice was the
         // per-connection per-tick `Vec::with_capacity(2)`).
         let mut pbuf = bytes::BytesMut::new();
@@ -271,8 +272,7 @@ where
                 if let Err(e) = rc.out.try_send(batch) {
                     // Dropped, never retried; the logic is told in this
                     // player's iteration (the room's 4d, F11).
-                    dropped += 1;
-                    rc.batch = e.into_inner();
+                    rc.batch = failed.count(e);
                     rc.dropping = true;
                     // Its RPC answers go back, exactly once, to ride the
                     // next accepted batch (the room's 4d, F14) — only
@@ -301,6 +301,6 @@ where
         for (conn, replies) in unsent {
             self.queued.insert(conn, replies);
         }
-        self.m.dropped_frames += dropped;
+        failed.settle(&mut self.m);
     }
 }

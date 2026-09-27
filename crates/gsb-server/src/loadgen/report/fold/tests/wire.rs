@@ -95,6 +95,22 @@ fn the_unread_requests_survive_the_wire() {
     }
 }
 
+/// The fan-out's closed-channel sends (GSMI, B32) cross the wire as
+/// their own field, between the drop rate and the keep-alive re-sends.
+#[test]
+fn the_closed_sends_survive_the_wire() {
+    let sent = three_shards();
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(
+            (a.dropped, a.sends_closed, a.keepalive_resends),
+            (b.dropped, b.sends_closed, b.keepalive_resends),
+            "shard {:?}",
+            a.room
+        );
+    }
+}
+
 /// The logic counters (GSMC) cross the wire name by name, with their
 /// fold rules and the overflow count; an empty set stays empty. The
 /// help line does not travel.
@@ -103,7 +119,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"HMSG", "the magic, little-endian GSMH");
+    assert_eq!(&frame[..4], b"IMSG", "the magic, little-endian GSMI");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {

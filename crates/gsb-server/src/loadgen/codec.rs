@@ -19,7 +19,7 @@ mod logic;
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSMH"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSMI"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -30,7 +30,7 @@ mod logic;
 ///     [u32; FINE_HIST_BINS] step_fine_hist
 ///     u64 late_min_us  f64 late_mean_us  u64 late_max_us
 ///     u64 lagged_events  u64 lagged_ticks  u64 dropped  f64 dropped_s
-///     u64 keepalive_resends  u64 snapshots
+///     u64 sends_closed  u64 keepalive_resends  u64 snapshots
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u64 shipped_frames  u64 private_frames
@@ -135,7 +135,10 @@ mod logic;
 /// GSMH = the GSMG layout plus each room's `requests_dropped_unread` (the
 /// requests a session left unread in its action channel when it ended —
 /// B36), right after `requests_refused_congested`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D48;
+/// GSMI = the GSMH layout plus each room's `sends_closed` (the fan-out's
+/// batches tried on an already closed connection, split from `dropped`
+/// — B32), right after `dropped_s`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D49;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -180,6 +183,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.lagged_ticks);
         w.u64(room.dropped);
         w.f64(room.dropped_s);
+        w.u64(room.sends_closed);
         w.u64(room.keepalive_resends);
         w.u64(room.snapshots);
         w.f64(room.snap_bytes_s);
@@ -356,6 +360,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             lagged_ticks: r.u64()?,
             dropped: r.u64()?,
             dropped_s: r.f64()?,
+            sends_closed: r.u64()?,
             keepalive_resends: r.u64()?,
             snapshots: r.u64()?,
             snap_bytes_s: r.f64()?,

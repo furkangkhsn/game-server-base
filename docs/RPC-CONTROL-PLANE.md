@@ -675,7 +675,33 @@ varsayılan worker'larla 0, sunucu `--workers 1` → 116, istemciler
 Tekrarlanabilirliğin kaynağı: pinsiz orkestratör çocuklara
 `--workers 1` veriyordu (`args.workers.max(1)`; yorum "runtime default"
 diyordu) — B37'de düzeltildi, aşağıda. Kapalı kanalı `dropped`'tan
-ayırmak ayrı bir karar (metrik anlamı değişikliği, B32) — düzeltilmedi.
+ayırmak ayrı bir karardı (metrik anlamı değişikliği, B32) — **sonradan
+yapıldı** (bakımcı kararı 2026-09-27, "her şeyi saymalıyız"):
+
+**B32: kapalı kanal `dropped` değil.** Fan-out'un bağlantı başı
+`try_send`'i iki türlü düşer ve artık ikisi ayrı sayılır
+(`room::SendFailures` — oda ve shard aktörünün BROADCAST fazı aynı
+yardımcıyı kullanır, iki yol ayrışamaz): **Full** — çıkış kanalı dolu,
+yavaş istemci, canlı bağlantıya giden batch kaybı — `dropped`
+(`gsb_room_dropped_total`, HELP'inin dediği gibi); **Closed** — bağlantı
+zaten gitmiş, oda sonunu henüz işlememiş — yeni `sends_closed`
+(`RoomSample`/`RoomReport::sends_closed`, `gsb-metric` satırında
+`sends_closed=` `dropped_s=`'den sonra, Prometheus'ta
+`gsb_room_sends_closed_total`, OTLP'de `gsb_room_sends_closed`, loadgen
+metrik telinde `GSMI` (GSMH + `dropped_s`'ten hemen sonra alan; SUM ile
+katlanır), `RESULT`'ta `sends_closed=` `dropped=`'den sonra, her
+satırda). `dropped`'ın `_s` oran göstergesi var, `sends_closed`'ın yok:
+bağlantı sonu başına en çok ~1 olduğundan oranı ayrılış oranıdır, yeni
+bilgi taşımaz. Batch'in işlenişi değişmedi (tampon geri alınır,
+`on_batch_dropped` çağrılır, taşıdığı RPC yanıtları kuyruğa geri
+konur — bağlantı gitmişse bir sonraki tick satır silinince düşer).
+Kilit: `room::tests::fanout::dropped::closed` ve
+`shard::tests::dropped::closed` (önce kırmızı: kapalı kanallı bir üye +
+dolu kanallı bir üye, iki tick → `dropped` 3, beklenen 1; `sends_closed`
+2). İstemci teli değişmedi. Yukarıdaki orkestre 500'ün 116'sı ve
+aşağıdaki tabloların `dropped` sütunu B32'den önce alındı: 116'nın
+hepsi bugün `sends_closed`'a düşerdi; duraklama koşularının binlerce
+düşüşü dolu kanaldır (kapalı kanal en çok bağlantı başına ~1 ekler).
 
 **Pinsiz orkestratörün worker sayısı (B37, düzeltildi).** Orkestratör
 (`--orchestrate`, `--pin` olmadan) sunucu ve istemci çocuklarına

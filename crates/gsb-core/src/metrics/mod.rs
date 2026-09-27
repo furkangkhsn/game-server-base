@@ -64,8 +64,10 @@
 //!   processing latency (`late_*`: step start − ticker timestamp), step
 //!   body duration min/mean/max + a budget-relative log-2 histogram (the
 //!   tick budget is the overflow boundary — see [`HIST_EDGES`]);
-//! - *drops*: batches dropped at the fan-out (`dropped_frames`, slow
-//!   client). Input drops are NOT a room-scope counter: the room's READ
+//! - *drops*: batches dropped at the fan-out on a full outbound channel
+//!   (`dropped_frames`, slow client); a batch tried on an already closed
+//!   one (the connection gone before the room processed its end) is
+//!   counted apart (`sends_closed`, B32). Input drops are NOT a room-scope counter: the room's READ
 //!   phase is a bounded pull that defers rather than drops, so the only
 //!   input-loss point is a connection's own full action channel — counted
 //!   at the net scope (`ConnSample::actions_dropped` →

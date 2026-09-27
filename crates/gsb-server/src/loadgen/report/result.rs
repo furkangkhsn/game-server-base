@@ -337,11 +337,12 @@ pub(crate) fn print_report(
                 .join(",")
         );
         println!(
-            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} keepalive_resends={} snapshots={} max_payload_b={} snap_overflows={} out_bps_per_conn={:.0} shipped_frames={} private_frames={} mean_frame_b={:.0} groups={} members={} max_group={} joins={} leaves={} metrics_dropped={}",
+            "server room (final): late_max_us={} lagged_events={} lagged_ticks={} dropped={} sends_closed={} keepalive_resends={} snapshots={} max_payload_b={} snap_overflows={} out_bps_per_conn={:.0} shipped_frames={} private_frames={} mean_frame_b={:.0} groups={} members={} max_group={} joins={} leaves={} metrics_dropped={}",
             r.late_max_us,
             r.lagged_events,
             r.lagged_ticks,
             r.dropped,
+            r.sends_closed,
             r.keepalive_resends,
             r.snapshots,
             r.snap_bytes_max,
@@ -421,7 +422,7 @@ pub(crate) fn print_report(
         "RESULT mode={} visibility={} shards={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
          out_bps_per_conn={:.0} moves={} errors={} server_closes={} steps={} server_hz={:.2} \
-         step_p50_us={:.0} step_p50_fine_us={} step_p90_fine_us={} step_max_us={} step_over_budget_pct={:.1} dropped={} late_max_us={} \
+         step_p50_us={:.0} step_p50_fine_us={} step_p90_fine_us={} step_max_us={} step_over_budget_pct={:.1} dropped={} sends_closed={} late_max_us={} \
          peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
          profile={} offset={} procs={} server_pid={} client_pids={} affinity={} \
@@ -469,6 +470,7 @@ pub(crate) fn print_report(
         room.map(|r| over_budget_frac(&r.step_hist) * 100.0)
             .unwrap_or(0.0),
         room.map(|r| r.dropped).unwrap_or(0),
+        room.map(|r| r.sends_closed).unwrap_or(0),
         room.map(|r| r.late_max_us).unwrap_or(0),
         room.map(|r| r.snap_bytes_max as u64).unwrap_or(0),
         room.map(|r| r.snap_overflows).unwrap_or(0),

@@ -62,6 +62,7 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
         lagged_ticks: [10, 20, 30][i],
         dropped: [2, 3, 4][i],
         dropped_s: [1.5, 2.5, 3.0][i],
+        sends_closed: [1, 0, 6][i],
         keepalive_resends: [5, 6, 7][i],
         snapshots: [100, 200, 300][i],
         snap_bytes_s: [1_000.0, 2_000.0, 4_000.0][i],
