@@ -44,7 +44,9 @@
 //! its ten rUDP/verdict counters after them
 //! (`udp_game_datagrams_send_failed` .. `writer_verdicts_deferred`).
 //! B67's registry-scope `rooms_ended_uncounted=` /
-//! `gsb_registry_rooms_ended_uncounted_total`.
+//! `gsb_registry_rooms_ended_uncounted_total`. B68's nine room-scope stop
+//! counters (`joins_unprocessed=` .. `border_updates_unapplied=` after
+//! `metrics_dropped=`, `gsb_room_*_total` after the session families).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -132,6 +134,9 @@ pub(super) fn golden_report() -> MetricReport {
     b.requests_abandoned = 1;
     b.requests_dropped_unbound = 1;
     b.actions_dropped_unbound = 1;
+    // What a stop left (B68; a final sample's, here on a plain one).
+    b.stop.joins_unprocessed = 1;
+    b.stop.effects_unsent = 2;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

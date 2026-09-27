@@ -241,6 +241,11 @@ pub struct RoomSample {
     /// next sample carries everything) but reported so an operator can see
     /// the channel saturating.
     pub metrics_dropped: u64,
+    /// What the room/shard still held at its stop beyond its sessions:
+    /// queued ops, and on a shard the cross-shard work in flight (B68,
+    /// [`StopCounts`]). Filled on the final sample
+    /// ([`MetricsEvent::RoomFinal`]) only; zero on every periodic one.
+    pub stop: StopCounts,
     /// The logic's own named counters (F9, see [`LogicCounters`]),
     /// cumulative as the logic keeps them, read from
     /// `GameLogic::logic_counters` when the sample is built. Empty for a

@@ -164,6 +164,22 @@ ShardMsg::RemoteEffect(RemoteEffect {
   İnce döküm (`sent`, `retried`, `rejected`, `duplicates`, `foreign`…)
   log satırında kaldı: operatör sorusu "etkiler uygulanıyor mu, kayıp
   var mı"dır; on beş sayaç raporu şişirirdi.
+- **Duran shard'ın elinde kalanlar (B68, sayım turu 4):** shard durunca
+  (`finish`) gelen kutusu KAPATILIR (sonraki gönderim göndericide
+  reddedilir ve orada sayılır: komşunun göçü komşuda kalır,
+  `migrations_failed`) ve kalan her mesaj türüne göre sayılır, son
+  örnekle: `migrations_in_dropped` (göndericinin `migrations_out`'u —
+  kutuda ya da ertelenmiş kuyrukta bekleyen, hiç kurulmayan varlık; göç
+  eden OYUNCUNUN okunmamış girdisi de oturum sonu gibi
+  `requests_dropped_unread`/`actions_dropped_unread`'e), `effects_unsent`
+  (yeniden deneme tamponu + tick'in giden kuyruğu), `effects_unapplied`
+  (vadesini bekleyen + kutudaki `RemoteEffect`), `team_imports_unapplied`,
+  `border_updates_unapplied` (`Border` + `ResyncRequest` — ikisi de görünüm
+  kopyası; kaynak hâlâ tutar), ve odanınkiyle aynı dört op sayacı
+  (`joins_unprocessed` … — yayın op'ları yalnız etki edeceği shard'da:
+  üyenin sahibi, parkı tutan). CONTROL fazının `Shutdown`'dan sonra
+  işlemediği mesajlar da (önceden boşaltılan vec'le birlikte sayılmadan
+  ölüyordu) ertelenmiş kuyrukta sayıma kalır.
 
 **F6: alan etkisi seam ötesinde** (`kit/f6-area-query`, KIT-ARCHITECTURE
 §4.6 "F6 eklemeleri", §10 "F6"). Bir AoE / görüş konisi / yakınlık

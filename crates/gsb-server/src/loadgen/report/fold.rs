@@ -28,7 +28,7 @@
 //! | MIN (config) | `budget_us` | CONFIGURATION, not a measurement — the shards share one `RoomConfig` and always agree. If they ever do not, the smaller budget is the honest answer: it is the denominator of the overflow fraction and of the histogram edges, and it reads overflow *earlier*. |
 //! | MEAN, steps-weighted | `step_mean_us`, `late_mean_us` | A mean of means is not a mean. Each shard's mean is `sum / steps`, so weighting by `steps` and dividing by the total reconstructs `Σsum / Σsteps` exactly. |
 //! | SUM, element-wise | `step_hist`, `step_fine_hist` | The union of the shards' step distributions, so percentiles and over-budget % are room-wide. See [`folded_steps`] for the population this union covers. |
-//! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `sends_closed`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, `detach_forced`, the `effects_*`, `migrations_*` and `team_*` families, the whole `requests_*` family, `actions_dropped_unread`, `actions_dropped_unbound`, `metrics_dropped` | Cumulative counters over disjoint work. (A migration is counted once as `migrations_out` by its source and once as `migrations_in` by its destination, so the folded pair should agree — they are not added together.) |
+//! | SUM | `lagged_events`, `lagged_ticks`, `dropped`, `sends_closed`, `keepalive_resends`, `snapshots`, `snap_overflows`, `snap_records`, `shipped_bytes`, `shipped_frames`, `private_frames`, `joins`, `leaves`, `resumes`, `resume_rejected_stale`, `detach_expired_despawn`, `detach_expired_ai`, `detach_forced`, the `effects_*`, `migrations_*` and `team_*` families, the whole `requests_*` family, `actions_dropped_unread`, `actions_dropped_unbound`, `metrics_dropped`, every `stop` counter (B68) | Cumulative counters over disjoint work. (A migration is counted once as `migrations_out` by its source and once as `migrations_in` by its destination, so the folded pair should agree — they are not added together.) |
 //! | SUM | `dropped_s`, `snap_bytes_s`, `shipped_s` | A RATE computed per shard cannot be averaged: the shards' counters are disjoint over the same wall clock, so the room's rate is their sum. (Averaging would report a quarter of the room's loss on a 4-shard room.) |
 //! | SUM | `groups`, `members`, `detached`, `pending_requests` | Gauges, but PARTITIONED ones — the shards partition the room's connections, groups, parked sessions and in-flight requests, so the room's value is the total. (`max_group` and `snap_bytes_max` are the counter-example: an extremum over a population, not a population.) The total is one instant only when the rows are — a report's rows can be different sample rounds, and a migrating player then counts twice or not at all; the population is read from consistent cuts only (`spread.rs`, F18). |
 //! | PER COUNTER | `logic` | The logic's own counters (F9) carry their rule with them: name by name, a `LogicFold::Sum` counter adds (disjoint work, like the SUM row above), a `LogicFold::Max` one takes the larger (a high-water mark, like the MAX row); a name only some shards report is kept; the overflow counts add (`LogicCounters::merge`). |
@@ -198,6 +198,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             requests_abandoned,
             pending_requests,
             metrics_dropped,
+            stop,
             logic,
         } = r;
 
@@ -284,6 +285,7 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.requests_undelivered += requests_undelivered;
         acc.requests_abandoned += requests_abandoned;
         acc.metrics_dropped += metrics_dropped;
+        acc.stop.add(&stop);
 
         // ── SUM: per-shard RATES over the same wall clock ──
         acc.dropped_s += dropped_s;

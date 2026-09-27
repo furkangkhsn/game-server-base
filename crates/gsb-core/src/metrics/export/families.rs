@@ -19,6 +19,7 @@ use crate::metrics::{MetricReport, RoomReport};
 mod room;
 mod server;
 mod session;
+mod stop;
 mod transport;
 
 pub(super) use server::{NET, REGISTRY};
@@ -98,7 +99,10 @@ const fn gauge(name: &'static str, help: &'static str, get: fn(&RoomReport) -> f
 
 /// Every per-room family, in exposition order.
 pub(super) fn room() -> impl Iterator<Item = &'static RoomFamily> {
-    room::TICK.iter().chain(session::SESSION.iter())
+    room::TICK
+        .iter()
+        .chain(session::SESSION.iter())
+        .chain(stop::STOP.iter())
 }
 
 /// The metrics channel's health (top of every exposition).

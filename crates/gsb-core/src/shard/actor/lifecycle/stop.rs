@@ -56,6 +56,10 @@ where
                 ),
             }
         }
+        // What the shard still holds beyond its sessions (B68): the
+        // inbox's and the deferred queue's messages, the effects in
+        // flight.
+        self.count_leftovers();
         // The stop ends every session this shard holds: count what they
         // take along, as a session end does (B62), then hand the
         // collector the final sample.
@@ -69,3 +73,7 @@ where
         send_final(&self.metrics, sample);
     }
 }
+
+/// The leftovers' count (B68). A CHILD module, so it reaches the actor's
+/// state directly.
+mod leftovers;

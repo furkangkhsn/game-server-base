@@ -175,6 +175,9 @@ pub(crate) struct RoomCounters {
     /// Metric samples dropped on a full (bounded) metrics channel,
     /// cumulative.
     pub(crate) metrics_dropped: u64,
+    /// What the stop found still held beyond the sessions (B68): written
+    /// once, at `finish()`, before the final sample.
+    pub(crate) stop: crate::metrics::StopCounts,
     /// Snapshot + private bytes/frames shipped to the room's connections,
     /// cumulative — counted once the outbound channel TOOK the batch
     /// (B57, [`Shipped`]): a dropped or refused batch is not traffic.
@@ -305,6 +308,7 @@ impl Default for RoomCounters {
             snap_overflows: 0,
             snap_records: 0,
             metrics_dropped: 0,
+            stop: crate::metrics::StopCounts::default(),
             shipped_bytes: 0,
             shipped_frames: 0,
             private_frames: 0,

@@ -119,6 +119,11 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
         requests_abandoned: [2, 0, 3][i],
         pending_requests: [3, 5, 7][i],
         metrics_dropped: [2, 4, 8][i],
+        stop: gsb_core::metrics::StopCounts {
+            joins_unprocessed: [1, 2, 4][i],
+            effects_unsent: [0, 3, 5][i],
+            ..Default::default()
+        },
         logic: logic(i),
     }
 }

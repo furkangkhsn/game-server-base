@@ -146,6 +146,9 @@ pub struct RoomReport {
     pub pending_requests: u32,
     /// Metric samples dropped on a full metrics channel (cumulative).
     pub metrics_dropped: u64,
+    /// What the room/shard still held at its stop beyond its sessions
+    /// (B68, [`StopCounts`]), from its final sample.
+    pub stop: StopCounts,
     /// The logic's own named counters (see [`RoomSample::logic`]), as
     /// the latest sample carried them.
     pub logic: LogicCounters,

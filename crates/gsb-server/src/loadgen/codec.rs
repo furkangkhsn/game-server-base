@@ -6,8 +6,8 @@ use std::time::Instant;
 use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, ServerCloses,
-    TRANSPORT_COUNT, TransportCounters,
+    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, STOP_COUNT,
+    ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters,
 };
 
 mod logic;
@@ -54,6 +54,7 @@ mod logic;
 ///     u64 actions_unread  u64 actions_unbound
 ///     u32 req_pending
 ///     u64 metrics_dropped
+///     [u64; STOP_COUNT] stop (StopCounts::fields order)
 ///     u8 n_logic  u32 logic_dropped
 ///     per logic counter: u8 name_len  [u8; name_len] name
 ///                        u8 fold (0 = SUM, 1 = MAX)  u64 value
@@ -197,7 +198,10 @@ mod logic;
 /// GSMU = the GSMT layout plus the registry section's
 /// `rooms_ended_uncounted` (room/shard tasks that ended without their
 /// final count — B67), right after `match_results_dropped_closed`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D55;
+/// GSMV = the GSMU layout plus each room's stop counters (what a stopping
+/// room/shard still held beyond its sessions — B68: every `StopCounts`
+/// field, in its declaration order), right after `metrics_dropped`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D56;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -299,6 +303,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.actions_dropped_unbound);
         w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
+        for (_, n) in room.stop.fields() {
+            w.u64(n);
+        }
         logic::encode(&mut w, &room.logic);
     }
     w.u8(match &r.registry {
@@ -500,6 +507,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             actions_dropped_unbound: r.u64()?,
             pending_requests: r.u32()?,
             metrics_dropped: r.u64()?,
+            stop: {
+                let mut values = [0u64; STOP_COUNT];
+                for v in &mut values {
+                    *v = r.u64()?;
+                }
+                StopCounts::from_values(values)
+            },
             logic: logic::decode(&mut r)?,
         });
     }

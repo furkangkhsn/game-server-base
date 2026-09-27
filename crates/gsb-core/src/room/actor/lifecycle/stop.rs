@@ -43,6 +43,9 @@ where
                 }
             }
         }
+        // The ops still queued in the control channel (B68): never
+        // processed, counted by kind.
+        self.count_queued_ops();
         // The stop ends every session: count what they take along, as a
         // session end does (B62), then hand the collector the final
         // sample — the counters since the last periodic one included.
@@ -56,3 +59,7 @@ where
         send_final(&self.metrics, sample);
     }
 }
+
+/// The queued ops' count (B68). A CHILD module, so it reaches the actor's
+/// state directly.
+mod queued;

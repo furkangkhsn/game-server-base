@@ -106,6 +106,7 @@ fn accumulator_applies_events_and_computes_rates() {
         members: 3,
         max_group: 3,
         metrics_dropped: 0,
+        stop: StopCounts::default(),
         logic: LogicCounters::new(),
     };
     acc.apply(MetricsEvent::Room(room0));
@@ -263,7 +264,7 @@ fn accumulator_applies_events_and_computes_rates() {
 
 /// A minimal `RoomSample` for the pruning tests below (all counters
 /// zero except `steps`).
-fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
+pub(in crate::metrics) fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
     RoomSample {
         room,
         emit_at,
@@ -336,6 +337,7 @@ fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
         members: 0,
         max_group: 0,
         metrics_dropped: 0,
+        stop: StopCounts::default(),
         logic: LogicCounters::new(),
     }
 }

@@ -82,6 +82,11 @@ pub(crate) trait ShardLink<S, B>: Send {
     /// vec. Never blocks.
     fn drain(&mut self) -> Vec<NeighborMsg<S, B>>;
 
+    /// Refuse every later message (a sender's send fails and it counts
+    /// its own loss); what is already queued can still be drained. The
+    /// stop's first step (B68), so its count of the inbox is final.
+    fn close(&mut self);
+
     /// The border-exchange packaging this link runs (ROADMAP Faz C):
     /// derived from the link CLASS, not operator config — same-process
     /// links declare AlwaysFull (bytes free over a move, local CPU
@@ -152,6 +157,12 @@ impl<S: Send, B: Send> ShardLink<S, B> for InProcLink<S, B> {
             // No transmit half: nothing was queued and nothing ever will
             // be — the permanent refusal, not backpressure.
             None => Err(LinkFull::Closed { msg }),
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(rx) = &mut self.rx {
+            rx.close();
         }
     }
 

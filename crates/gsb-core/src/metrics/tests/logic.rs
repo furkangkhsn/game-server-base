@@ -58,12 +58,13 @@ fn each_counter_is_one_logic_key_after_the_core_keys() {
             .clone()
     };
     assert!(
-        room("r1").ends_with(" metrics_dropped=0 logic_kills=4 logic_fights_peak=7"),
+        room("r1").ends_with(" border_updates_unapplied=0 logic_kills=4 logic_fights_peak=7"),
         "{}",
         room("r1")
     );
     assert!(
-        room("r2").ends_with(" metrics_dropped=0"),
+        // The last core key (the stop counters', B68).
+        room("r2").ends_with(" border_updates_unapplied=0"),
         "no counters, no keys"
     );
     assert!(room("r3").ends_with(" logic_fights_peak=2 logic_captures=5 logic_kills=9"));

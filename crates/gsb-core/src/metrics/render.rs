@@ -138,6 +138,11 @@ impl MetricReport {
                 r.pending_requests,
                 r.metrics_dropped
             );
+            // What the stop found still held (B68): one stable key per
+            // counter, zeros included (0 on every periodic sample).
+            for (k, v) in r.stop.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
             // The logic's own counters (F9), after every core key: one
             // `logic_<name>=<value>` each, in the order the logic put
             // them. Nothing at all for a logic that declares none.

@@ -91,3 +91,87 @@ async fn the_final_sample_is_not_lost_to_a_full_channel() {
         "the final sample, delivered once the slot freed"
     );
 }
+
+/// The control channel's leftovers at the stop (B68): a join and a
+/// resume never admitted, a leave and a detach for a member here, each
+/// counted once; a stale leave (no such member) and a detach for an
+/// already parked row lose nothing and are not counted. The channel is
+/// closed: a later op is refused at its sender.
+#[tokio::test]
+async fn a_stopping_room_counts_the_ops_left_in_its_control_channel() {
+    let mut r = room(Detach::Hold {
+        grace: None,
+        to: ExpireTo::Despawn,
+    });
+    let (metrics, mut samples) = mpsc::channel(8);
+    r.metrics = metrics;
+    let _live = join(&mut r, 2, "");
+    let _parked = join(&mut r, 1, "p");
+    detach(&mut r, 1);
+    let (ctl, control_rx) = channel(16);
+    r.control_rx = control_rx;
+    let (out, _out_rx) = mpsc::channel::<FrameBatch>(8);
+    let (reply, joined) = oneshot::channel();
+    let ops = [
+        RoomControl::Join {
+            conn: ConnectionId(5),
+            out: out.clone(),
+            reply,
+        },
+        RoomControl::Resume {
+            conn: ConnectionId(6),
+            epoch: 0,
+            identity: "q".to_string(),
+            out,
+            reply: oneshot::channel().0,
+        },
+        RoomControl::Leave {
+            conn: ConnectionId(2),
+            entity: 2,
+        },
+        RoomControl::Leave {
+            conn: ConnectionId(9),
+            entity: 9,
+        },
+        RoomControl::Detach {
+            conn: ConnectionId(2),
+            entity: 2,
+            identity: String::new(),
+        },
+        RoomControl::Detach {
+            conn: ConnectionId(1),
+            entity: 1,
+            identity: "p".to_string(),
+        },
+        RoomControl::Shutdown,
+    ];
+    for op in ops {
+        ctl.try_send(op).expect("room in the channel");
+    }
+
+    r.finish();
+
+    let mut last = None;
+    while let Ok(ev) = samples.try_recv() {
+        last = Some(ev);
+    }
+    let Some(MetricsEvent::RoomFinal(s)) = last else {
+        panic!("the final sample: {last:?}");
+    };
+    assert_eq!(s.stop.joins_unprocessed, 1);
+    assert_eq!(s.stop.resumes_unprocessed, 1);
+    assert_eq!(
+        s.stop.leaves_unprocessed, 1,
+        "the stale leave is not a loss"
+    );
+    assert_eq!(
+        s.stop.detaches_unprocessed, 1,
+        "the parked row's is a duplicate"
+    );
+    assert_eq!(s.stop.migrations_in_dropped, 0, "a room has no migrations");
+    assert!(joined.await.is_err(), "the join's reply was dropped");
+    assert!(
+        ctl.try_send(RoomControl::Shutdown).is_err(),
+        "the channel is closed"
+    );
+}

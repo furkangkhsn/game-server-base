@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"UMSG", "the magic, little-endian GSMU");
+    assert_eq!(&frame[..4], b"VMSG", "the magic, little-endian GSMV");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -439,4 +439,27 @@ fn every_server_close_reason_survives_the_wire() {
     }
     assert_eq!(got.net.server_closes.get(ServerClose::IdleInput), 12);
     assert_eq!(got.net.server_closes.get(ServerClose::Kicked), 13);
+}
+
+/// What the stopping rooms still held (GSMV, B68) crosses the wire per
+/// room, every counter in its slot, and folds as a SUM.
+#[test]
+fn the_stop_counts_survive_the_wire_and_fold_as_sums() {
+    let mut sent = three_shards();
+    let mut values = [0u64; gsb_core::metrics::STOP_COUNT];
+    for (i, v) in values.iter_mut().enumerate() {
+        *v = 70 + i as u64;
+    }
+    sent.rooms[2].stop = gsb_core::metrics::StopCounts::from_values(values);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(a.stop, b.stop);
+    }
+    let folded = fold_rooms(&sent).expect("three rows");
+    assert_eq!(
+        folded.stop.joins_unprocessed,
+        1 + 2 + 70,
+        "summed over rows"
+    );
+    assert_eq!(folded.stop.effects_unsent, 3 + 75);
 }

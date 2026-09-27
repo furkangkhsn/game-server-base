@@ -95,9 +95,12 @@ where
         //    protocol — Migrate / Border). Deferred migrations (their
         //    install gate has not opened yet — see `handle_msg`) are
         //    re-offered FIRST, in send order.
-        let deferred = std::mem::take(&mut self.deferred);
-        for m in deferred {
+        let mut deferred = std::mem::take(&mut self.deferred).into_iter();
+        while let Some(m) = deferred.next() {
             if !self.handle_msg(m, t.tick) {
+                // A Shutdown: what it did not reach waits for the stop's
+                // count (B68, `finish`).
+                self.deferred.extend(deferred);
                 return false;
             }
         }
@@ -105,10 +108,13 @@ where
         // §3). Pulling everything queued NOW into a vec and then handling is
         // observably identical to the old interleaved `try_recv` loop:
         // nothing in `handle_msg` enqueues into THIS shard's own inbox
-        // synchronously (sends go to neighbors' inboxes), and on Shutdown
-        // any leftovers die with the actor's inbox either way.
-        for m in self.inbox.drain() {
+        // synchronously (sends go to neighbors' inboxes). On Shutdown the
+        // rest of the drain waits in `deferred` for the stop's count
+        // (B68, `finish`) — it used to die uncounted with the vec.
+        let mut drained = self.inbox.drain().into_iter();
+        while let Some(m) = drained.next() {
             if !self.handle_msg(m, t.tick) {
+                self.deferred.extend(drained);
                 return false;
             }
         }

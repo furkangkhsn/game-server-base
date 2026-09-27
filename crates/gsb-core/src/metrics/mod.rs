@@ -105,6 +105,7 @@ mod logic;
 mod render;
 mod report;
 mod sample;
+mod stop;
 mod transport;
 
 #[cfg(test)]
@@ -121,6 +122,7 @@ pub use logic::{
 };
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MatchResultDrop, MetricsEvent, RegistrySample, RoomSample};
+pub use stop::{STOP_COUNT, StopCounts};
 pub use transport::{TRANSPORT_COUNT, TransportCounters};
 
 /// Histogram bin edges for the per-step body duration, each expressed as a

@@ -251,6 +251,16 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_datagrams_no_session",
         "transport_udp_frames_unsent",
         "transport_writer_verdicts_deferred",
+        // What the stopping rooms/shards still held (B68).
+        "joins_unprocessed",
+        "resumes_unprocessed",
+        "leaves_unprocessed",
+        "detaches_unprocessed",
+        "migrations_in_dropped",
+        "effects_unsent",
+        "effects_unapplied",
+        "team_imports_unapplied",
+        "border_updates_unapplied",
     ] {
         let _: u64 = get(k)
             .parse()

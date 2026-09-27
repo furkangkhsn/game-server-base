@@ -558,6 +558,29 @@ max_detach_hold_secs = "off"
   kalan örnekleri toplayıcının sonuyla yarışır. Sayaç orada "kapanış
   bekleyen bir isteği yakaladı"dan başka bir şey söylemezdi
   (`registry/close.rs`).
+- **Oda kapsamı: duran odanın/shard'ın oturum dışı kalanları (B68, sayım
+  turu 4).** Oda satırında `metrics_dropped=`'den sonra (mantık
+  sayaçlarından önce) dokuz anahtar, aile tablosunda oturum ailelerinden
+  sonra dokuz `counter` (`metrics/export/families/stop.rs`,
+  `gsb_room_<ad>_total`); loadgen telinde `GSMV` (oda başına
+  `metrics_dropped`'tan sonra), `RESULT`'ta aynı adlarla (her satırda),
+  fold'da SUM. Kaynak `metrics::StopCounts`; yalnız SON örnekte dolu
+  (`RoomFinal`), periyodik örneklerde 0. Duruş kanalı kapatır ve kalanı
+  sayar: `joins_unprocessed` — kuyrukta kalan katılma (dağıtıcı
+  bağlantıya `RoomGone` yanıtlar); `resumes_unprocessed` — kuyrukta kalan
+  resume (shard'da yalnız kimliği park etmiş shard'da);
+  `leaves_unprocessed` / `detaches_unprocessed` — burada etki edecek
+  ayrılma / taşıma ölümü (bayatlar sayılmaz; `on_disconnect` hiç
+  koşmadı); yalnız shard'da: `migrations_in_dropped` (gelen göç,
+  kurulmadı; göç eden oyuncunun okunmamış girdisi
+  `requests_dropped_unread`/`actions_dropped_unread`'e),
+  `effects_unsent` (yeniden deneme tamponu + tick'in giden kuyruğu),
+  `effects_unapplied` (vadesini bekleyen + kutudaki), `team_imports_unapplied`,
+  `border_updates_unapplied` (son ikisi görünüm kopyası: kaynak hâlâ
+  tutar). **Anlam notu:** yayın op'ları shard sayısı kadar şişmez —
+  etki edeceği tek shard sayar. `migrations_out` = kurulan
+  (`migrations_in`) + `migrations_in_dropped` (+ göndericide
+  `migrations_failed` olanlar zaten `migrations_out`'ta değil).
 - **Registry kapsamı: son sayımı olmadan biten görevler (B67, sayım
   turu 4).** Registry satırının sonunda `rooms_ended_uncounted=` ve aile
   tablosunda `gsb_registry_rooms_ended_uncounted_total` (`counter`);

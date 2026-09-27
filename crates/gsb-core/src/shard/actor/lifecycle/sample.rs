@@ -101,6 +101,7 @@ where
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
             metrics_dropped: self.m.metrics_dropped,
+            stop: self.m.stop,
             logic: self.logic_counters(),
         }
     }

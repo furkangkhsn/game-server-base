@@ -370,6 +370,33 @@ gsb_room_pending_requests gauge unit="" n=2 | External RPC requests currently in
 gsb_room_metrics_dropped sum t=2 mono=true unit="" n=2 | Metric samples this room dropped on a full metrics channel, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_joins_unprocessed sum t=2 mono=true unit="" n=2 | Join ops still queued when the room/shard stopped, never admitted (the connection is answered RoomGone), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_resumes_unprocessed sum t=2 mono=true unit="" n=2 | Resume attempts still queued when the room/shard stopped (on a shard: the one holding the parked identity), never looked up, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_leaves_unprocessed sum t=2 mono=true unit="" n=2 | Leave ops for a member here still queued when the room/shard stopped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_detaches_unprocessed sum t=2 mono=true unit="" n=2 | Detach ops (a member's transport died) still queued when the room/shard stopped: the disconnect policy never ran, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_migrations_in_dropped sum t=2 mono=true unit="" n=2 | Entities migrating into a shard (its neighbour's migrations_out) still in its inbox when it stopped, never installed, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_effects_unsent sum t=2 mono=true unit="" n=2 | Remote effects a shard still held to send when it stopped (retry buffer, the tick's outbox), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_effects_unapplied sum t=2 mono=true unit="" n=2 | Remote effects a shard had received and not applied when it stopped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_imports_unapplied sum t=2 mono=true unit="" n=2 | Team imports (relayed visible sets, view copies) still in a shard's inbox when it stopped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_border_updates_unapplied sum t=2 mono=true unit="" n=2 | Border updates (a neighbour's strip exchange or resync request, view copies) still in a shard's inbox when it stopped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
 gsb_room_logic_kills sum t=2 mono=true unit="" n=1 | Players felled, cumulative.
   [room=r1] 1000..2000 int 3
 gsb_room_logic_fights_peak gauge unit="" n=1 | The logic's own high-water mark.
