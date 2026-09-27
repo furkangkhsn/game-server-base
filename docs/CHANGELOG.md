@@ -5,6 +5,57 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 2 — "her şeyi saymalıyız": B53–B57 (`metrics/count-everything-2`)
+
+Bakımcı ilkesi ikinci turda: her kayıp, adı anlamıyla aynı bir sayaçta;
+karışık anlamlı metrik yok, gerekirse yeni sayaç.
+
+- **B53 — oturumu biten bağlantıya borçlu yanıtlar:**
+  `drop_conn_request_state` (ayrılış, park, üst üste katılım, göç) ve
+  BROADCAST sonu süpürme, attığı yanıtları `requests_undelivered`
+  (`req_undelivered=`, `gsb_room_requests_undelivered_total`), attığı
+  uçuştaki dış istekleri `requests_abandoned` (`req_abandoned=`) olarak
+  sayar (oda + shard). Defter terimi değil — isteğin kendisi kendi
+  kovasında; bunlar yanıtın akıbeti. Geri konan yanıt (F14) süpürmeden
+  sonra döndüğü için bir kez sayılır.
+- **B54 — odanın işlemeden düşürdüğü girdi:** oturum sonunda kanalda
+  okunmamış DÜZ girdiler `actions_dropped_unread`; READ'in bağlanmamış
+  bağlantının girdisini düşürmesi türüne göre `requests_dropped_unbound`
+  (defter terimi) ve `actions_dropped_unbound`.
+- **B55 — defterin karışık iki kenarı ayrıldı:** dolu aksiyon kanalında
+  düşen RPC isteği `requests_dropped_full`; **`actions_dropped` artık yalnız
+  oyun-bandı girdisi** (HELP'i de öyle). Odası olmayan bağlantının isteği
+  `ERROR 6` + `violations` aynen, ayrıca `requests_no_room`. Defter:
+  `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread +
+  req_unbound + requests_dropped_closed + requests_dropped_full +
+  requests_no_room` — her istek tek terimde; `loadgen_rpc` her testte
+  terimlerin toplamını iddia eder.
+- **B56 — heartbeat kısmasının fazlası metrikte:**
+  `heartbeats_throttled_{preauth,authed}` (önceden yalnız debug satırı).
+- **B57 — kontrol düzlemi ve çıkış kayıpları:** `send_frame` kareyi
+  gönderimden SONRA sayar (**`frames_out`/`bytes_out_control`/
+  `bytes_out_total` artık yalnız kanalın aldıkları**); kapalı kanalın
+  reddettiği kare `frames_out_closed`, dolu kanalda düşen kapanış
+  bildirimi `close_notices_dropped`. Registry kapsamında
+  `join_ops_dropped`, `close_ops_dropped`,
+  `match_results_dropped_{full,closed}` (`registry::send_match_result`,
+  `MetricsEvent::MatchResultDropped`). **`shipped_*`/`private_frames`/
+  `bytes_out_room` artık yalnız kanalın aldığı batch** (düşen yük iki kez
+  görünmüyor). Kapalı registry kutusunda düşen istekler bilerek sayılmıyor
+  (yalnız süreç inerken).
+- Altın metinler yalnız yeni aileler/anahtarlar ve
+  `gsb_net_actions_dropped_total` HELP'i kadar değişti; `otlp::cross`
+  yeşil. Loadgen metrik teli **GSMP**. İstemci teli değişmedi.
+- Turun bulduğu açıklar BACKLOG B58–B62; **B61 gerçek bir sızıntı**
+  (düşen `RoomOp::Close` oda satırını ve yuvasını oda bitene dek tutuyor).
+
+Testler 1320 → 1347 (`otlp` ile 1338 → 1365): yeni
+`gsb-core/tests/conn_counts` (gerçek bağlantı aktörü, registry'yi test
+oynar), oda/shard undelivered/unbound/shipped birimleri,
+`registry::counters::ops`, `control_plane::dropped`, loadgen tel testleri;
+önce kırmızı, mutasyonlar öldü. Ebeveyn doğrulaması: kapalı kanalın
+reddettiği kareyi yine `frames_out`'a saymak testi düşürdü.
+
 ## B52 — boş odanın kesiti nüfus değil (`loadgen/b52-mmo-flake`)
 
 - **Belirti:** `loadgen_orchestrates_the_mmo` yükte (128 süreçlik CPU yükü

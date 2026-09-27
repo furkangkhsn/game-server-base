@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1320 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1347 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,18 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**Sayım turu 2 tamam** (CHANGELOG "Sayım turu 2", RPC-CONTROL-PLANE
+§8.3, OPS §3): yeni sayaçlar — oda `requests_undelivered`,
+`requests_abandoned`, `requests_dropped_unbound`, `actions_dropped_unread`,
+`actions_dropped_unbound`; net `requests_dropped_full`, `requests_no_room`,
+`heartbeats_throttled_{preauth,authed}`, `frames_out_closed`,
+`close_notices_dropped`; registry `join_ops_dropped`, `close_ops_dropped`,
+`match_results_dropped_{full,closed}`. **Anlamı daralanlar:**
+`actions_dropped` (yalnız oyun girdisi), `frames_out`/`bytes_out_*`
+(yalnız kuyruğa girenler), `shipped_*`/`private_frames` (yalnız kanalın
+aldığı batch). RPC defteri §8.3'te her isteği tek terimde kapatır.
+Loadgen teli GSMP. Açık: B58–B62 (B61 sızıntı).
 
 **B52 tamam** (DESIGN §12 "tutarlı kesit", CHANGELOG "B52"): loadgen
 nüfusu (`peak_members`, `shard_members=`, `steady_end`) yalnız oyunculu
@@ -687,6 +699,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1320 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1347 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
