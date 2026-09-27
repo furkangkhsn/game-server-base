@@ -46,12 +46,15 @@
 //! them.
 
 mod actor;
+mod close;
 mod hub;
 mod msg;
 mod seat;
 mod table;
 
 pub use actor::Registry;
+pub use close::CloseRequest;
+pub(crate) use close::flush_close_requests;
 pub use msg::RegistryMsg;
 pub use seat::Seat;
 

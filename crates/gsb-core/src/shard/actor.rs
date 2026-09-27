@@ -188,10 +188,11 @@ pub struct ShardActor<W, G, St, Sp> {
     /// synchronous `try_send` on teardown (no await, best effort). Every
     /// shard of a logical room shares the registry's sink.
     pub(in crate::shard) result_sink: Option<Mailbox<crate::registry::MatchResult>>,
-    /// The registry's mailbox, used for exactly one report: a detach that
-    /// ended in despawn
+    /// The registry's mailbox, used for two messages: the report of a
+    /// detach that ended in despawn
     /// ([`crate::registry::RegistryMsg::DetachDespawned`]) — the policy
-    /// declining to park, or a hold running out. `None` for a
+    /// declining to park, or a hold running out — and the close request
+    /// ([`crate::registry::RegistryMsg::CloseConn`], E6). `None` for a
     /// directly-driven shard (the test rigs) — no registry to tell.
     pub(in crate::shard) registry: Option<Mailbox<crate::registry::RegistryMsg>>,
     /// Detach-despawn reports not yet accepted by the registry's mailbox;
@@ -200,6 +201,10 @@ pub struct ShardActor<W, G, St, Sp> {
     /// once at the end of phase 0c. See the room actor's field of the same
     /// name for why a dropped report would reopen the leak.
     pub(in crate::shard) despawn_reports: Vec<ConnectionId>,
+    /// Close requests not yet accepted by the registry's mailbox (E6);
+    /// see the room actor's field of the same name. Written and flushed
+    /// in phase 0d.
+    pub(in crate::shard) close_requests: Vec<crate::registry::CloseRequest>,
     // -- The team exchange (`docs/CROSS-SHARD.md` §8b). ----------------
     /// The other shards' team records (one slot per source, replaced by
     /// every `TeamImport`, TTL-expired, merged per team): what the TEAMS

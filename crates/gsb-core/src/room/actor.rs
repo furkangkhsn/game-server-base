@@ -158,10 +158,12 @@ pub struct RoomActor<W, G, Sp> {
     /// [`RoomLogic::match_result`]): a bounded mailbox, sent to with the
     /// synchronous `try_send` on shutdown (no await, best effort).
     pub(in crate::room) result_sink: Option<Mailbox<crate::registry::MatchResult>>,
-    /// The registry's mailbox, used for exactly one report: a detach that
-    /// ended in despawn
+    /// The registry's mailbox, used for two messages: the report of a
+    /// detach that ended in despawn
     /// ([`crate::registry::RegistryMsg::DetachDespawned`]) — the policy
-    /// declining to park, or a hold running out.
+    /// declining to park, or a hold running out — and the request to
+    /// close a member's connection
+    /// ([`crate::registry::RegistryMsg::CloseConn`], E6).
     /// `None` for a standalone room (the direct-drive test harnesses) — it
     /// then simply has no registry to tell.
     pub(in crate::room) registry: Option<Mailbox<crate::registry::RegistryMsg>>,
@@ -180,4 +182,12 @@ pub struct RoomActor<W, G, Sp> {
     /// phase 0c. CONTROL runs first in the same tick, so a declined park
     /// is normally reported on the tick it happens.
     pub(in crate::room) despawn_reports: Vec<ConnectionId>,
+    /// Close requests not yet accepted by the registry's mailbox
+    /// ([`crate::registry::CloseRequest`], BACKLOG E6): the members whose
+    /// membership the input-idle ceiling ended under
+    /// `afk_action = Disconnect`. Same rules as `despawn_reports` — a
+    /// FULL mailbox keeps them for the next tick, a CLOSED one drops
+    /// them (`crate::registry::flush_close_requests`); written and
+    /// flushed in phase 0d. Never written without a registry.
+    pub(in crate::room) close_requests: Vec<crate::registry::CloseRequest>,
 }

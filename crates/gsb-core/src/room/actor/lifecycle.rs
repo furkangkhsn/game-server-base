@@ -109,11 +109,13 @@ where
             result_sink,
             registry: None,
             despawn_reports: Vec::new(),
+            close_requests: Vec::new(),
         }
     }
 
     /// Give the room the registry mailbox it reports detach-despawns on
-    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]). A builder
+    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]) and sends
+    /// its close requests to ([`crate::registry::RegistryMsg::CloseConn`]). A builder
     /// instead of another `new` parameter: every direct-drive harness
     /// constructs rooms without a registry, and `new` is already at the
     /// argument limit.

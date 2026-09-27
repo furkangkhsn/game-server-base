@@ -4,7 +4,7 @@
 use crate::id::PlayerId;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 use crate::room::actor::RoomActor;
@@ -44,10 +44,23 @@ where
     /// **Who is exempt:** parked and bot-fed rows, structurally — the
     /// detach path takes them OFF the idle clock, so the sweep cannot see
     /// them at all and a hold can never be double-counted.
+    ///
+    /// **Then the close requests** (BACKLOG E6): whatever this sweep — or
+    /// an earlier tick's, refused by a full registry mailbox — asked the
+    /// registry to close goes out here (`flush_close_requests`: `try_send`,
+    /// Full keeps, Closed drops). An empty queue costs one length test.
     pub(super) fn phase_idle_sweep(&mut self, now: Instant) {
-        let Some(limit) = self.config.max_idle_input() else {
-            return;
-        };
+        if let Some(limit) = self.config.max_idle_input() {
+            self.expire_idle(now, limit);
+        }
+        if let Some(registry) = &self.registry {
+            crate::registry::flush_close_requests(registry, &mut self.close_requests);
+        }
+    }
+
+    /// The ceiling itself: every member due this step goes to the
+    /// disconnect path.
+    fn expire_idle(&mut self, now: Instant, limit: Duration) {
         let mut due: Vec<PlayerId> = Vec::new();
         self.idle.sweep_due(now, limit, &mut due);
         for player in due {

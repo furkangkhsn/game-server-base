@@ -14,6 +14,7 @@ use crate::metrics::{MetricsEvent, RegistrySample};
 use crate::registry::*;
 use crate::ticker::Ticker;
 
+mod close;
 mod conns;
 mod dispatch;
 mod leave;

@@ -4,7 +4,7 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
@@ -72,10 +72,19 @@ where
     /// The room actor's phase, mirrored: free when unset (one `Option`
     /// test per step), a constant-cost bounded rotation when set, and on
     /// expiry the SAME disconnect path a dead transport takes.
+    /// Then the close requests go out (E6 — the room actor's rule).
     pub(super) fn phase_idle_sweep(&mut self, now: Instant) {
-        let Some(limit) = self.config.max_idle_input() else {
-            return;
-        };
+        if let Some(limit) = self.config.max_idle_input() {
+            self.expire_idle(now, limit);
+        }
+        if let Some(registry) = &self.registry {
+            crate::registry::flush_close_requests(registry, &mut self.close_requests);
+        }
+    }
+
+    /// The ceiling itself: every member due this step goes to the
+    /// disconnect path.
+    fn expire_idle(&mut self, now: Instant, limit: Duration) {
         let mut due: Vec<PlayerId> = Vec::new();
         self.idle.sweep_due(now, limit, &mut due);
         for player in due {

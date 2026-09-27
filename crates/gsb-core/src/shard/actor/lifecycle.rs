@@ -126,6 +126,7 @@ where
             result_sink,
             registry: None,
             despawn_reports: Vec::new(),
+            close_requests: Vec::new(),
             teams: TeamImports::default(),
             team_sent: false,
             tstats: TeamStats::default(),
@@ -134,7 +135,8 @@ where
     }
 
     /// Give this shard the registry mailbox it reports detach-despawns on
-    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]). A builder for
+    /// (see [`crate::registry::RegistryMsg::DetachDespawned`]) and sends
+    /// its close requests to ([`crate::registry::RegistryMsg::CloseConn`]). A builder for
     /// the same reason the room actor uses one: the direct-drive rigs
     /// construct shards without a registry, and `new` is already at the
     /// argument limit.

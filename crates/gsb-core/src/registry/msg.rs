@@ -190,6 +190,27 @@ pub enum RegistryMsg {
     /// resume target (`docs/RECONNECT.md` §9) — the row is doing its job
     /// there, not leaking.
     DetachDespawned { conn: ConnectionId, room: RoomId },
+    /// A room (or shard) ENDED a member's membership and asks for the
+    /// member's connection to be closed too (BACKLOG E6 — today only the
+    /// input-idle ceiling under `RoomConfig::afk_action = Disconnect`).
+    /// See [`CloseRequest`] for the fields and the room-side full-mailbox
+    /// rule.
+    ///
+    /// The registry settles its row, then tells the connection
+    /// ([`ConnIn::ServerClosed`] with the request's cause — a spawned
+    /// send, never awaited):
+    ///
+    /// - `parked` → the row is marked detached (the park holds its slot,
+    ///   exactly like a transport death's row; the hold's end or a resume
+    ///   releases it);
+    /// - not parked → the affiliation goes (sharded member count and
+    ///   `leaves` as for a leave); a row whose transport is ALREADY gone
+    ///   is removed outright — nothing else would ever release it.
+    ///
+    /// Stale-guarded on `room` AND `entity`: a request for a connection
+    /// that has since left, rejoined elsewhere, rejoined as a new entity
+    /// or closed and been released is a silent no-op.
+    CloseConn(CloseRequest),
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },
     /// Internal: reported by a room/shard death watcher (see
