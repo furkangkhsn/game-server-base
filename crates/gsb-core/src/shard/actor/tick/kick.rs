@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use tracing::debug;
 
-use crate::room::{Kick, kick_close};
+use crate::room::{DisconnectCause, Kick, kick_close};
 use crate::shard::actor::ShardActor;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
@@ -51,7 +51,7 @@ where
                 %reason,
                 "the game kicked a member"
             );
-            self.detach_player(player, conn, &identity, true);
+            self.detach_player(player, conn, &identity, true, DisconnectCause::Kicked);
             if self.registry.is_some() {
                 // A parked row keeps its row, not the socket's queue.
                 let parked = match self.conns.get_mut(&player) {

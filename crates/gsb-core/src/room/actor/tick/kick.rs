@@ -7,7 +7,7 @@ use std::hash::Hash;
 use tracing::debug;
 
 use crate::room::actor::RoomActor;
-use crate::room::{Kick, kick_close};
+use crate::room::{DisconnectCause, Kick, kick_close};
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -47,7 +47,7 @@ where
                 continue;
             };
             debug!(room = %self.config.id, %player, %conn, %reason, "the game kicked a member");
-            self.detach_player(player, conn, &identity, true);
+            self.detach_player(player, conn, &identity, true, DisconnectCause::Kicked);
             if self.registry.is_some() {
                 // A parked row keeps its row, not the socket's queue:
                 // the socket closes only once every sender is gone.

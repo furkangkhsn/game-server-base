@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 use crate::room::actor::RoomActor;
-use crate::room::{AfkAction, idle_close};
+use crate::room::{AfkAction, DisconnectCause, idle_close};
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -119,7 +119,7 @@ where
             // leave request (below), so the despawn arm's transport-death
             // report would be a second settlement of the same row.
             let leave = self.config.afk_action == AfkAction::LeaveRoom;
-            self.detach_player(player, conn, &identity, !leave);
+            self.detach_player(player, conn, &identity, !leave, DisconnectCause::IdleInput);
             if leave && self.registry.is_some() {
                 self.leave_behind(player, conn, entity);
             }

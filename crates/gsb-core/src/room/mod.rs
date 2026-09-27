@@ -67,6 +67,7 @@ use std::fmt::Debug;
 use crate::id::{ConnectionId, EntityId, PlayerId};
 
 mod actor;
+mod cause;
 mod config;
 mod control;
 mod counters;
@@ -78,6 +79,7 @@ mod logic;
 mod tests;
 
 pub use actor::RoomActor;
+pub use cause::DisconnectCause;
 pub(crate) use config::idle_close;
 pub use config::{AfkAction, DEFAULT_MAX_DETACH_HOLD, InputRate, RoomConfig};
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};

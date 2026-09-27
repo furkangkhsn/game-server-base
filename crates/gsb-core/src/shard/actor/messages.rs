@@ -14,7 +14,7 @@ use std::time::Instant;
 use tracing::{debug, warn};
 
 use crate::error::CoreError;
-use crate::room::{ExpireTo, ResumeFound, RoomConn};
+use crate::room::{DisconnectCause, ExpireTo, ResumeFound, RoomConn};
 
 use crate::shard::actor::ShardActor;
 use crate::shard::*;
@@ -120,7 +120,13 @@ where
                     // room actor's guard, mirrored).
                     && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    self.detach_player(player, conn, &identity, true);
+                    self.detach_player(
+                        player,
+                        conn,
+                        &identity,
+                        true,
+                        DisconnectCause::ConnectionClosed,
+                    );
                 }
                 true
             }

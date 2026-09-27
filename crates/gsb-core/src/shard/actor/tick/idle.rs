@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use crate::id::{ConnectionId, EntityId, PlayerId};
 use crate::registry::LeaveRequest;
-use crate::room::{AfkAction, Detach, idle_close};
+use crate::room::{AfkAction, Detach, DisconnectCause, idle_close};
 
 use crate::shard::actor::ShardActor;
 
@@ -29,15 +29,20 @@ where
     /// stopped playing). The room actor's `detach_player`, mirrored;
     /// callers own the guards. `report` = queue the detach-despawn report
     /// on the despawn arm (the ceiling's default action settles the row
-    /// through its leave request instead, B40).
+    /// through its leave request instead, B40). `cause` = which caller
+    /// this is, handed to the policy (BACKLOG F27).
     pub(crate) fn detach_player(
         &mut self,
         player: PlayerId,
         conn: ConnectionId,
         identity: &str,
         report: bool,
+        cause: DisconnectCause,
     ) {
-        match self.logic.on_disconnect(&mut self.world, player, identity) {
+        match self
+            .logic
+            .on_disconnect_with(&mut self.world, player, identity, cause)
+        {
             Detach::Despawn => {
                 // Today's close semantics, plus the registry report — the
                 // room actor's arm mirrored (see it for the full
@@ -70,6 +75,7 @@ where
                     %player,
                     ?grace,
                     ?to,
+                    ?cause,
                     "player detached on shard (entity parked)"
                 );
             }
@@ -136,7 +142,7 @@ where
             // default action settles the registry row through its leave
             // request (B40), so the despawn arm reports nothing.
             let leave = self.config.afk_action == AfkAction::LeaveRoom;
-            self.detach_player(player, conn, &identity, !leave);
+            self.detach_player(player, conn, &identity, !leave, DisconnectCause::IdleInput);
             if leave && self.registry.is_some() {
                 self.leave_behind(player, conn, entity);
             }

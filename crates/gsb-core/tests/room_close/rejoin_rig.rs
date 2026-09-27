@@ -20,6 +20,9 @@ pub enum Hook {
 
 pub type Hooks = mpsc::UnboundedSender<Hook>;
 
+/// The cause each disconnect was asked with (BACKLOG F27).
+pub type Causes = mpsc::UnboundedSender<(PlayerId, DisconnectCause)>;
+
 pub struct RejoinLogic {
     hooks: Hooks,
     index: usize,
@@ -28,6 +31,8 @@ pub struct RejoinLogic {
     /// Joins so far: the next join's serial (never reused).
     joins: u64,
     live: HashMap<PlayerId, EntityId>,
+    /// Where to log each disconnect's cause (none: not logged).
+    causes: Option<Causes>,
 }
 
 impl GameLogic<()> for RejoinLogic {
@@ -65,6 +70,18 @@ impl GameLogic<()> for RejoinLogic {
     fn on_disconnect(&mut self, _w: &mut (), player: PlayerId, _identity: &str) -> Detach {
         let _ = self.hooks.send(Hook::Disconnect(player));
         Detach::Despawn
+    }
+    fn on_disconnect_with(
+        &mut self,
+        w: &mut (),
+        player: PlayerId,
+        identity: &str,
+        cause: DisconnectCause,
+    ) -> Detach {
+        if let Some(causes) = &self.causes {
+            let _ = causes.send((player, cause));
+        }
+        self.on_disconnect(w, player, identity)
     }
     fn ingest(&mut self, _w: &mut (), ctx: &TickCtx, a: &mut Vec<Action>) {
         if self.kick_on_input {
@@ -112,6 +129,16 @@ impl ShardLogic<()> for RejoinLogic {
 /// A factory of `RejoinLogic` rooms (despawn on disconnect): one room, or
 /// two shards homing every join to shard 0.
 pub fn factory(sharded: bool, kick_on_input: bool, hooks: Hooks) -> RoomFactory<(), (), (), ()> {
+    factory_with(sharded, kick_on_input, hooks, None)
+}
+
+/// [`factory`] whose rooms also log each disconnect's cause.
+pub fn factory_with(
+    sharded: bool,
+    kick_on_input: bool,
+    hooks: Hooks,
+    causes: Option<Causes>,
+) -> RoomFactory<(), (), (), ()> {
     Arc::new(move |_id, _cfg| {
         let logic = |index: usize| RejoinLogic {
             hooks: hooks.clone(),
@@ -119,6 +146,7 @@ pub fn factory(sharded: bool, kick_on_input: bool, hooks: Hooks) -> RoomFactory<
             kick_on_input,
             joins: 0,
             live: HashMap::new(),
+            causes: causes.clone(),
         };
         if sharded {
             let shard = |i: usize| {

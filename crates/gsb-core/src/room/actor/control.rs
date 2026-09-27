@@ -70,15 +70,21 @@ where
     /// Callers own the guards (binding + entity + "not already parked").
     /// `report` = queue the detach-despawn report on the despawn arm (a
     /// caller that settles the registry row by other means — the
-    /// ceiling's leave request, B40 — passes `false`).
+    /// ceiling's leave request, B40 — passes `false`). `cause` = which
+    /// caller this is, handed to the policy (BACKLOG F27; the arms below
+    /// never read it).
     pub(in crate::room) fn detach_player(
         &mut self,
         player: PlayerId,
         conn: ConnectionId,
         identity: &str,
         report: bool,
+        cause: DisconnectCause,
     ) {
-        match self.logic.on_disconnect(&mut self.world, player, identity) {
+        match self
+            .logic
+            .on_disconnect_with(&mut self.world, player, identity, cause)
+        {
             Detach::Despawn => {
                 // Byte-for-byte the old close semantics — plus the report
                 // the registry is waiting on.
@@ -126,6 +132,7 @@ where
                     %player,
                     ?grace,
                     ?to,
+                    ?cause,
                     "player detached (entity parked)"
                 );
             }
@@ -170,7 +177,13 @@ where
                     // exactly that shape) and must not re-ask the policy.
                     && !self.conns.get(&player).is_some_and(|c| c.detached)
                 {
-                    self.detach_player(player, conn, &identity, true);
+                    self.detach_player(
+                        player,
+                        conn,
+                        &identity,
+                        true,
+                        DisconnectCause::ConnectionClosed,
+                    );
                 }
                 true
             }

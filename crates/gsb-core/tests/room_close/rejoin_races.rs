@@ -13,7 +13,7 @@
 //! nothing is left behind: no member, no row, the slot free.
 
 use super::*;
-use rejoin_rig::{Hook, factory, held_registry, table_size};
+use rejoin_rig::{Hook, factory, factory_with, held_registry, table_size};
 use rig::{CEILING, Client, GAME_OP};
 
 /// How long the verdict may take to land once the request is handed
@@ -176,5 +176,48 @@ async fn a_kick_lands_after_a_fresh_rejoin() {
         ends_with(&frames, "kicked: cheating");
         assert_eq!(c.verdict().await, Some(ServerClose::Kicked));
         nothing_left(&reg, &mut metrics, &mut log, sharded).await;
+    }
+}
+
+/// Which cause each membership's end reached the policy with (BACKLOG
+/// F27): the first the room's own verdict (`IdleInput` / `Kicked`), the
+/// NEW one the connection's close — `ConnectionClosed`, since the room
+/// holding it did not judge it (the verdict landed from the earlier
+/// membership).
+#[tokio::test(start_paused = true)]
+async fn the_rejoined_membership_ends_as_a_closed_connection() {
+    for (kick, first) in [
+        (false, DisconnectCause::IdleInput),
+        (true, DisconnectCause::Kicked),
+    ] {
+        for sharded in [false, true] {
+            let (log_tx, _log) = mpsc::unbounded_channel();
+            let (causes_tx, mut causes) = mpsc::unbounded_channel();
+            let ceiling = if kick { None } else { Some(CEILING) };
+            let (reg, mut held, _metrics) = held_registry(
+                factory_with(sharded, kick, log_tx, Some(causes_tx)),
+                config(ceiling),
+            )
+            .await;
+            let mut c = Client::login(&reg, 1, "ana").await;
+            let verdict = if kick {
+                c.send(game_frame()).await;
+                ServerClose::Kicked
+            } else {
+                tokio::time::sleep(Duration::from_secs(CEILING + 1)).await;
+                ServerClose::IdleInput
+            };
+            rejoin_then_land(&reg, &mut held, &mut c, verdict).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let got: Vec<_> = std::iter::from_fn(|| causes.try_recv().ok()).collect();
+            assert_eq!(
+                got,
+                vec![
+                    (PlayerId(1), first),
+                    (PlayerId(2), DisconnectCause::ConnectionClosed)
+                ],
+                "kick={kick} sharded={sharded}"
+            );
+        }
     }
 }

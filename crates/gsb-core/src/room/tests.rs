@@ -18,6 +18,7 @@ use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 mod binding;
+mod cause;
 mod counters;
 mod fanout;
 mod groups;

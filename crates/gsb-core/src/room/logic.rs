@@ -2,7 +2,7 @@
 //! contract every room shape shares (single or sharded), [`RoomLogic`]
 //! marks the single-world rooms.
 //!
-//! NOT split further: a trait is one item, so its 360 lines cannot be
+//! NOT split further: a trait is one item, so its ~400 lines cannot be
 //! divided across files without inventing traits the design does not
 //! have.
 
@@ -262,7 +262,9 @@ pub trait GameLogic<W>: Send {
     /// transport is still alive: the input-idle ceiling (phase 0d, §16)
     /// and the game's own kick ([`TickCtx::kick`], BACKLOG E8 — after
     /// SYSTEMS or at the end of the tick, never inside the hook that
-    /// asked, §16.3). One decision point for all three.
+    /// asked, §16.3). One decision point for all three; a logic that
+    /// wants to tell them apart overrides [`Self::on_disconnect_with`]
+    /// instead (the actors call that one, and its default calls this).
     ///
     /// The logic records the park entry here (identity → entity + hold
     /// metadata) in WHATEVER storage it owns; per §14.2 that storage must
@@ -280,6 +282,32 @@ pub trait GameLogic<W>: Send {
     /// today's behavior exactly, unchanged.
     fn on_disconnect(&mut self, _world: &mut W, _player: PlayerId, _identity: &str) -> Detach {
         Detach::Despawn
+    }
+
+    /// [`Self::on_disconnect`] told WHY the membership ended (BACKLOG
+    /// F27, `docs/RECONNECT.md` §3.3) — what the room and the shard
+    /// actors call at each of the three ends: a closed connection
+    /// ([`DisconnectCause::ConnectionClosed`]), the input-idle ceiling
+    /// ([`DisconnectCause::IdleInput`]), the game's kick
+    /// ([`DisconnectCause::Kicked`]). Same contract otherwise: once per
+    /// end, from the phase that ended it, and the answer's arm runs
+    /// exactly as it does for `on_disconnect`. The cause is a hint for
+    /// the POLICY (park a dropped player, despawn a kicked one); the
+    /// engine itself treats every cause alike.
+    ///
+    /// Default: [`Self::on_disconnect`] — the cause is ignored, so every
+    /// logic written before it existed keeps its behaviour exactly (the
+    /// [`Self::on_join_as`] → [`Self::on_join`] pattern). A wrapper that
+    /// forwards the reconnect surface to an inner logic forwards this
+    /// one too, or the inner logic never sees the cause.
+    fn on_disconnect_with(
+        &mut self,
+        world: &mut W,
+        player: PlayerId,
+        identity: &str,
+        _cause: DisconnectCause,
+    ) -> Detach {
+        self.on_disconnect(world, player, identity)
     }
 
     /// May the hold end NOW? Asked on every sweep (the tick's phase 0c)

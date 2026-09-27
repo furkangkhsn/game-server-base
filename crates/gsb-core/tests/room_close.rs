@@ -22,7 +22,8 @@
 //!   dropped, so only the request's `parked` flag decides the row.
 //! - `rejoin_races.rs` (rig: `rejoin_rig.rs`): a close request that a
 //!   fresh rejoin overtakes still closes the connection (BACKLOG B43) —
-//!   for the idle ceiling and for the game's kick.
+//!   for the idle ceiling and for the game's kick; the new membership
+//!   reaches the policy as a closed connection (BACKLOG F27).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -36,8 +37,8 @@ use gsb_core::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{BuiltRoom, CloseRequest, Registry, RegistryMsg, RoomFactory, RoomStatus};
 use gsb_core::room::{
-    Action, Admission, AfkAction, Detach, ExpireTo, GameLogic, ResumeFound, RoomConfig, RoomLogic,
-    TickCtx,
+    Action, Admission, AfkAction, Detach, DisconnectCause, ExpireTo, GameLogic, ResumeFound,
+    RoomConfig, RoomLogic, TickCtx,
 };
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
 use gsb_core::ticker::Ticker;
