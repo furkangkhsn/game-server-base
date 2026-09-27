@@ -87,6 +87,7 @@ impl super::Demux {
                 peer,
                 self.max_datagram,
                 self.reaper.clone(),
+                self.metrics.clone(),
             ))
             .with_peer(peer)
             .with_inbox(endpoint_in_tx, in_rx)

@@ -204,6 +204,13 @@ impl MetricReport {
                     .join(",")
             ));
         }
+        // The transport's own losses (B58): one stable key per counter,
+        // zeros included, on a line of their own.
+        let mut line = String::from("gsb-metric scope=transport");
+        for (k, v) in self.transport.fields() {
+            let _ = write!(line, " {k}={v}");
+        }
+        lines.push(line);
         lines
     }
 }

@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"QMSG", "the magic, little-endian GSMQ");
+    assert_eq!(&frame[..4], b"RMSG", "the magic, little-endian GSMR");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -395,6 +395,22 @@ fn the_unprocessed_frames_survive_the_wire() {
     assert_eq!(got.net.actions_unprocessed, 41);
     assert_eq!(got.net.control_frames_unprocessed, 43);
     assert_eq!(got.net.server_closes.total(), 1);
+}
+
+/// The transport's own losses (GSMR, B58) cross the wire as a section of
+/// their own after the attribution list: every counter in its slot.
+#[test]
+fn the_transport_losses_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.actions_dropped_top = vec![(gsb_core::id::ConnectionId(4), 9)];
+    let mut values = [0u64; gsb_core::metrics::TRANSPORT_COUNT];
+    for (i, v) in values.iter_mut().enumerate() {
+        *v = 50 + i as u64;
+    }
+    sent.transport = gsb_core::metrics::TransportCounters::from_values(values);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.transport, sent.transport);
+    assert_eq!(got.actions_dropped_top, sent.actions_dropped_top);
 }
 
 /// Every server-close reason crosses the wire in its own slot (GSMF

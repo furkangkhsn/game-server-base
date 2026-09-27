@@ -52,6 +52,9 @@ impl MetricReport {
             scalar(&mut out, f, &self.net);
         }
         closes::render(&mut out, &self.net.server_closes);
+        for f in &families::TRANSPORT {
+            scalar(&mut out, f, &self.transport);
+        }
 
         let rooms = &self.rooms;
         if rooms.is_empty() {

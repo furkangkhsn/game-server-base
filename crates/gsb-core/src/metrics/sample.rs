@@ -453,6 +453,10 @@ pub enum MetricsEvent {
     /// so it cannot leave a ghost row. Delivered past a full channel
     /// (`crate::channel::post`); lost only when the collector is gone.
     RoomFinal(RoomSample),
+    /// A transport task's loss counters, as deltas since its last flush
+    /// (B58, see [`TransportCounters`]): the rUDP demux and writers, the
+    /// WebSocket reader, a handshake door's intake.
+    Transport(TransportCounters),
     /// A room (or one shard of a sharded room) could not hand its match
     /// result to the result sink as it stopped (B57), by cause. Its own
     /// counters cannot carry it — a stopping room sends no further

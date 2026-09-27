@@ -397,7 +397,8 @@
 //!
 //! **Counters.** Writer (per session, logged at its end):
 //! `frag_messages`, `frag_datagrams`, `dropped_oversized` (past the
-//! ceiling). Client ([`UdpClientStats`]): `frag_reassembled`,
+//! ceiling — since B58 also in the server's metrics report as
+//! `udp_frames_dropped_oversized`, see `crate::metrics`). Client ([`UdpClientStats`]): `frag_reassembled`,
 //! `frag_dropped_incomplete`, `frag_rejected`. The room's
 //! `max_snapshot_bytes` / `snap_overflows` keep their meaning (payloads
 //! over the size) but on rUDP they are now a bandwidth/fragmentation

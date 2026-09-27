@@ -72,6 +72,15 @@ pub fn request(
     let closes = report.net.server_closes.iter();
     let points = closes.map(|(why, n)| int_point(vec![attr("reason", why.label())], n, at, true));
     m.push(sum(SERVER_CLOSES.0, SERVER_CLOSES.1, points.collect()));
+    for f in &families::TRANSPORT {
+        m.push(scalar(
+            f.name,
+            f.kind,
+            f.help,
+            (f.get)(&report.transport),
+            at,
+        ));
+    }
 
     let rooms = &report.rooms;
     if !rooms.is_empty() {

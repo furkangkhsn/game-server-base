@@ -116,13 +116,15 @@ impl MetricAccumulator {
         }
         let bytes_out_room: u64 = rooms.iter().map(|r| r.shipped_bytes).sum();
         // Total metric-channel drops: room (cumulative, latest per room) +
-        // registry (cumulative, latest) + connection actors (delta, summed).
+        // registry (cumulative, latest) + connection actors and transport
+        // tasks (delta, summed).
         let metrics_dropped = rooms
             .iter()
             .map(|r| r.metrics_dropped)
             .sum::<u64>()
             .saturating_add(self.registry.map(|r| r.metrics_dropped).unwrap_or(0))
-            .saturating_add(self.conn_metrics_dropped);
+            .saturating_add(self.conn_metrics_dropped)
+            .saturating_add(self.transport.metrics_dropped);
         // Per-connection input-drop attribution: worst offenders first
         // (count desc, connection id asc as the deterministic tie-break).
         // The cumulative total folds in the drops RETIRED with closed
@@ -201,6 +203,7 @@ impl MetricAccumulator {
                 server_closes: self.conn_server_closes,
             },
             actions_dropped_top,
+            transport: self.transport,
             rooms,
         }
     }

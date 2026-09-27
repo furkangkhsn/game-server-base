@@ -105,6 +105,8 @@ pub struct MetricAccumulator {
     /// sink, by cause (B57; cumulative — reported in the registry slice).
     match_results_dropped_full: u64,
     match_results_dropped_closed: u64,
+    /// The transport tasks' loss deltas, summed (B58).
+    transport: TransportCounters,
 }
 
 impl MetricAccumulator {
@@ -165,6 +167,7 @@ impl MetricAccumulator {
                     .or_insert(ROOM_GONE_GRACE_REPORTS);
             }
             MetricsEvent::Registry(s) => self.registry = Some(s),
+            MetricsEvent::Transport(d) => self.transport.add(&d),
             MetricsEvent::MatchResultDropped(cause) => {
                 let n = match cause {
                     MatchResultDrop::Full => &mut self.match_results_dropped_full,

@@ -100,6 +100,9 @@ pub struct QuicTransportConfig {
     /// The bound on handshakes in flight (BACKLOG B31; default
     /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
     pub max_pending_handshakes: usize,
+    /// Where the handshake intake sends its refusals, timeouts and
+    /// failures (B58; `None` = its stop log only).
+    pub metrics: crate::TransportMetrics,
 }
 
 /// QUIC transport: binds one UDP socket via quinn; each accepted QUIC

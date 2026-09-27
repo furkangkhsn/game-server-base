@@ -32,6 +32,7 @@ mod close_frames;
 mod fragmentation;
 mod framing;
 mod going_away;
+mod lost_controls;
 mod off_accept;
 mod opaque;
 mod protocol;

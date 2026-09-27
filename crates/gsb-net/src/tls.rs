@@ -64,6 +64,9 @@ pub struct TlsTransportConfig {
     /// The bound on handshakes in flight (BACKLOG B31; default
     /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
     pub max_pending_handshakes: usize,
+    /// Where the handshake intake sends its refusals, timeouts and
+    /// failures (B58; `None` = its stop log only).
+    pub metrics: crate::TransportMetrics,
 }
 
 /// TLS-over-TCP transport: accepts plain TCP sockets, upgrades each to
@@ -182,6 +185,7 @@ impl Transport for TlsTransport {
                 listener,
                 HANDSHAKE_TIMEOUT,
                 move |stream, peer| handshake(acceptor.clone(), stream, peer, max_frame_bytes),
+                self.config.metrics.clone(),
             ));
             Ok(Arc::new(TlsListenerHandle {
                 local_addr,

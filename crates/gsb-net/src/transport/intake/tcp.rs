@@ -26,10 +26,12 @@ pub(crate) async fn run_tcp_intake<H, F>(
     listener: TcpListener,
     deadline: Duration,
     handshake: H,
+    metrics: crate::TransportMetrics,
 ) where
     H: Fn(TcpStream, SocketAddr) -> F,
     F: Future<Output = io::Result<Endpoint>> + Send + 'static,
 {
+    let mut flusher = crate::metrics::Flusher::new(metrics);
     loop {
         match intake.door().admit(listener.accept()).await {
             Ok((stream, peer)) => match intake.try_slot() {
@@ -48,6 +50,8 @@ pub(crate) async fn run_tcp_intake<H, F>(
                 let _ = intake.door().admit(pause).await;
             }
         }
+        intake.flush_metrics(&mut flusher, false);
     }
+    intake.flush_metrics(&mut flusher, true);
     intake.log_summary();
 }

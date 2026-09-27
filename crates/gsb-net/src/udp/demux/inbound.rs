@@ -30,6 +30,7 @@ impl super::Demux {
         if let Some(idle) = idle {
             self.deadlines.insert((now + idle, peer));
         }
+        let kind = gsb_core::conn::FrameKind::of(fb.op);
         match s.in_tx.try_send(ConnIn::Frame(fb)) {
             Ok(()) => false,
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -39,6 +40,15 @@ impl super::Demux {
                 // the frame, stay isolated (never stall the demux, i.e.
                 // every other session), count it.
                 s.inbox_full += 1;
+                // By kind (B58): a request dropped here was already
+                // acknowledged on the reliable band, so the client never
+                // re-sends it — a term of the RPC ledger.
+                let n = match kind {
+                    gsb_core::conn::FrameKind::Request => &mut self.full_requests,
+                    gsb_core::conn::FrameKind::Action => &mut self.full_actions,
+                    gsb_core::conn::FrameKind::Control => &mut self.full_controls,
+                };
+                *n += 1;
                 if !s.inbox_full_warned {
                     s.inbox_full_warned = true;
                     warn!(

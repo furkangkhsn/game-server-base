@@ -25,6 +25,7 @@ pub(super) fn udp_pump_spawner(
     peer: SocketAddr,
     max_datagram: usize,
     reaper: Reaper,
+    metrics: crate::TransportMetrics,
 ) -> PumpSpawner {
     Box::new(
         move |conn: ConnectionId,
@@ -61,6 +62,7 @@ pub(super) fn udp_pump_spawner(
                     reaper,
                     reap_signalled: false,
                     drained: 0,
+                    flusher: crate::metrics::Flusher::new(metrics),
                 }
                 .run(),
             );
@@ -117,6 +119,8 @@ pub(super) struct UdpWriter {
     /// Frames taken off the channel after the session was over (never
     /// sent: see the loop).
     drained: u64,
+    /// The loss counters' path to the collector (B58).
+    flusher: crate::metrics::Flusher,
 }
 
 impl UdpWriter {
@@ -139,6 +143,7 @@ impl UdpWriter {
                     // channel (so the room sees no dead outbound path)
                     // and never put on the wire.
                     self.drained += batch.len() as u64;
+                    self.flush_metrics(false);
                     continue;
                 }
                 fatal = self.send_batch(batch).await;
@@ -153,10 +158,12 @@ impl UdpWriter {
             if self.session_over() {
                 self.signal_reap().await;
             }
+            self.flush_metrics(false);
         }
         // Whatever ended the writer (the REL band died; every sender is
         // gone), the session has no writer any more: the demux may free it.
         self.signal_reap().await;
+        self.flush_metrics(true);
         if self.dropped_oversized > 0
             || self.frag_messages > 0
             || self.retransmits > 0
@@ -245,3 +252,7 @@ mod split;
 /// The session's end: when the demux may free it, and the signal
 /// (BACKLOG B6). A CHILD module too.
 mod end;
+
+/// The loss counters on their way to the collector (BACKLOG B58). A
+/// CHILD module too.
+mod flush;

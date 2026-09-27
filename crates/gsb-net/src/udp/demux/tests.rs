@@ -186,5 +186,6 @@ async fn inbound_fragments_are_refused() {
     }
 }
 
+mod full;
 mod handshake;
 mod reap;

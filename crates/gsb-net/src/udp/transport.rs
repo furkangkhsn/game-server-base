@@ -29,6 +29,9 @@ pub struct UdpTransportConfig {
     /// parses the config's 32-hex-char string into these). `None` = draw
     /// from the OS entropy source at bind time. See `CookieKey`.
     pub cookie_key: Option<[u8; 16]>,
+    /// Where the demux and the writers send their loss counters (B58;
+    /// `None` = counted in their stop logs only).
+    pub metrics: crate::TransportMetrics,
 }
 
 impl Default for UdpTransportConfig {
@@ -39,6 +42,7 @@ impl Default for UdpTransportConfig {
             max_datagram_bytes: DEFAULT_MAX_DATAGRAM_BYTES,
             idle_timeout: Some(Duration::from_secs(30)),
             cookie_key: None,
+            metrics: None,
         }
     }
 }
@@ -96,16 +100,7 @@ impl Transport for UdpTransport {
                     ))
                 })?,
             };
-            let cfg = self.config.clone();
-            let demux = tokio::spawn(demux(
-                sock.clone(),
-                end_tx,
-                key,
-                cfg.inbox_capacity,
-                cfg.outbox_capacity,
-                cfg.max_datagram_bytes,
-                cfg.idle_timeout,
-            ));
+            let demux = tokio::spawn(demux(sock.clone(), end_tx, key, self.config.clone()));
             info!(%addr, %key_source, "rUDP transport bound (shared demux started)");
             Ok(Arc::new(UdpListenerHandle {
                 sock,

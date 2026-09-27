@@ -99,3 +99,52 @@ async fn the_unauth_cap_bounds_each_doors_handshakes() {
     }
     handle.stop().await;
 }
+
+/// The doors' refusals reach the server's metrics report (BACKLOG B58):
+/// the composition root gives every handshaking door the collector's
+/// channel. Two refusals per door; the second, past the intake's flush
+/// interval, flushes both.
+#[tokio::test]
+async fn the_doors_refusals_reach_the_report() {
+    let pki = common::mint_tls_pki("handshake-metrics");
+    let door = |transport, tls: bool| ListenerEntry {
+        transport,
+        bind: "127.0.0.1:0".into(),
+        tls_cert: tls.then(|| pki.cert_pem_path.clone()),
+        tls_key: tls.then(|| pki.key_pem_path.clone()),
+    };
+    let cfg = gsb_server::Config {
+        room_count: 1,
+        listeners: Some(vec![
+            door(ListenerTransport::Tls, true),
+            door(ListenerTransport::Ws, false),
+        ]),
+        max_unauth_conns: Some(1),
+        ..Default::default()
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = gsb_server::start_server_metrics(cfg, tx)
+        .await
+        .expect("server starts");
+    let mut held = Vec::new();
+    for addr in handle.addrs.clone() {
+        held.push(TcpStream::connect(addr).await.expect("the slot holder"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        held.push(TcpStream::connect(addr).await.expect("refused"));
+    }
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    for addr in handle.addrs.clone() {
+        held.push(TcpStream::connect(addr).await.expect("refused, flushing"));
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let report = tokio::time::timeout_at(deadline, rx.recv())
+            .await
+            .expect("the refusals reported in time")
+            .expect("metrics channel open");
+        if report.transport.handshakes_refused == 4 {
+            break;
+        }
+    }
+    handle.stop().await;
+}

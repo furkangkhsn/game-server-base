@@ -180,7 +180,7 @@ async fn room_counters_flow_to_collector() {
     );
     // Net/registry scopes are absent here (no registry/conn actors in
     // this test): the render still has exactly one line (the room).
-    assert_eq!(second.render().len(), 2); // room line + net line
+    assert_eq!(second.render().len(), 3); // room + net + transport lines
 
     // Shutdown: abort the feed and drop the tick sender (closes the
     // broadcast); the room exits on Closed and the collector emits

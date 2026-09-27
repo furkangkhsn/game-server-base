@@ -196,3 +196,46 @@ async fn the_control_band_is_never_fragmented() {
         assert_eq!(d, vec![1, 1, 0, 0, 0, 8, 0, 4, 2], "only seq 1 again");
     }
 }
+
+/// The writer's losses reach the collector as it ends (BACKLOG B58): a
+/// game frame past the fragmentation ceiling (dropped unsent), and the
+/// unacknowledged control frame the band's death abandons.
+#[tokio::test]
+async fn the_writers_losses_are_sent_when_it_ends() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let cfg = UdpTransportConfig {
+        max_datagram_bytes: 40,
+        metrics: Some(tx),
+        ..Default::default()
+    };
+    let (raw, _addr, out_tx, mut in_rx) = raw_session(cfg).await;
+    let ack = FrameBody::new(
+        gsb_protocol::op::base::HEARTBEAT_ACK,
+        Bytes::from_static(&[4, 2]),
+    );
+    out_tx.send(vec![ack]).await.unwrap();
+    assert!(next_datagram(&raw, 2000).await.is_some(), "REL seq 1");
+    // 16 fragments of at most 35 bytes cannot carry 2000.
+    out_tx
+        .send(vec![FrameBody::new(1000, Bytes::from(vec![7u8; 2000]))])
+        .await
+        .unwrap();
+    // A control frame over the budget kills the band (seq 1 unacked).
+    out_tx
+        .send(vec![FrameBody::new(
+            gsb_protocol::op::base::ERROR,
+            Bytes::from(vec![0xEEu8; 34]),
+        )])
+        .await
+        .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(3), in_rx.recv()).await;
+    drop(out_tx);
+    let got = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .expect("the writer's sample in time");
+    let Some(gsb_core::metrics::MetricsEvent::Transport(t)) = got else {
+        panic!("a transport sample: {got:?}");
+    };
+    assert_eq!(t.udp_frames_dropped_oversized, 1, "the 2000-byte frame");
+    assert_eq!(t.udp_control_frames_abandoned, 1, "seq 1, never acked");
+}

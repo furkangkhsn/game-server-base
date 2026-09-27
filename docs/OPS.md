@@ -418,6 +418,48 @@ max_detach_hold_secs = "off"
   "sayılmayan"). Satırda `close_notices_dropped=`'dan sonra
   `requests_unprocessed= actions_unprocessed= control_frames_unprocessed=`;
   loadgen telinde `GSMQ`; `RESULT`'ta aynı anahtarlar, her satırda.
+- **Taşıma kapsamı: ağ katmanının kendi kayıpları (B58).** Yeni bir
+  kapsam: `gsb-metric scope=transport` satırı (net satırlarından sonra,
+  her anahtar her zaman, sıfırlar dahil) ve aile tablosunda
+  (`metrics/export/families/transport.rs`, `TRANSPORT`, server-closes
+  ailesinden sonra) 18 `counter`; OTLP'de `_total`'sız, loadgen telinde
+  `GSMR` (ilişkilendirme listesinden sonra, alan sırasıyla), `RESULT`'ta
+  `transport_<ad>=` (her satırda). Bütün kapılar birlikte (kapı başı
+  ayrım görev sonu log'larında). Her ad saydığını söyler:
+  `udp_requests_dropped_full` / `udp_actions_dropped_full` /
+  `udp_control_frames_dropped_full` — rUDP demux'ının dolu oturum
+  kutusunda düşürdüğü kareler, türüne göre (`conn::FrameKind`; önceden
+  oturum başı tek sayı, yalnız uyarı ve log). Güvenilir bantta gelen
+  kare zaten ACK'lenmiştir, istemci yeniden göndermez: istek terimi RPC
+  defterinin TAŞIMA terimidir (RPC-CONTROL-PLANE §8.3);
+  `udp_acks_not_forwarded` — yazıcıya verilemeyen gelen ACK (çıkış
+  kanalı dolu; eş yeniden sorar; eski adı `ack_piggyback_failed`);
+  `udp_datagrams_oversized` (`oversized_in`), `udp_datagrams_malformed`
+  (`bad_datagrams`), `udp_bad_cookies` (`bad_cookie`),
+  `udp_frags_refused` (`frag_refused`),
+  `udp_sessions_dropped_accept_full` (`endpoints_dropped`: accept
+  kuyruğu dolu, oturum düştü; istemcinin proof'u yeniden dener);
+  yazıcıdan `udp_frames_dropped_oversized` (`dropped_oversized`: parça
+  tavanını aşan oyun karesi), `udp_control_frames_abandoned`
+  (`abandoned`: bant ölünce ACK'siz kalan kontrol kareleri),
+  `udp_frames_drained` (`drained`: oturum bittikten sonra kanaldan alınıp
+  hiç gönderilmeyen kareler); WS okuyucusundan
+  `ws_close_frames_dropped` (kapanış yankısı ya da protokol hatası
+  kapanışı) ve `ws_pongs_dropped` — dolu kontrol kuyruğunda (önceden
+  `let _ =`); el sıkışan kapılardan (WS/TLS/QUIC)
+  `handshakes_refused`, `handshakes_timed_out`, `handshakes_failed`
+  (`Listener::handshake_stats`'ın sayaçları); ve `metrics_dropped` —
+  taşıma görevlerinin dolu metrik kanalında düşen kendi örnekleri (üst
+  düzey `gsb_metrics_dropped_total`'a da katılır; deltaları sonraki
+  örnekte). **Tazelik:** görev uyandığında (datagram, kare, accept) en
+  çok 500 ms'de bir ve biterken gönderir; sessiz bir demux son sayılarını
+  bir sonraki datagramına ya da bitişine dek taşır; intake'in zaman
+  aşımı/başarısızlığı bir sonraki accept'te ya da kapı kapanınca gelir.
+  **Sayılmayan:** istemci tarafı parça sayaçları (`frag_rejected`,
+  `frag_dropped_incomplete`) sunucunun değil istemcinin kaybıdır
+  (`UdpClientStats`, loadgen `frag_dropped=`); rUDP'nin OOB penceresinde
+  düşen gelen REL karesi (`oob_dropped`) istemcinin yeniden gönderimiyle
+  geri gelir (kayıp değil, gecikme); kalanlar BACKLOG'da.
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:
@@ -591,7 +633,7 @@ uygulanmadı; "dördüncü lavabo" yönü) yerini alan tasarımdır.
 | 1 | **Dikiş: `Exporter` trait'i** (`gsb_core::metrics::Exporter`, `fn export(&mut self, &MetricReport)`). Toplayıcının `emit`'i TEK dışa açım yeridir: her rapor önce kurulu exporter'lara sırayla (salt-okunur), sonra `MetricSink`'e (raporu tüketir) gider; kapanıştaki son rapor dahil. Kurulum `MetricsCollector::with_exporters`; `FnMut(&MetricReport)` kapanışları da exporter'dır | Exporter saf tüketicidir: toplayıcıya ya da aktörlere uzanacak tutamağı yoktur, hiçbir aktör kaç exporter olduğunu bilmez — aktör kodu değişmedi. Elenen: `MetricSink`'e dördüncü varyant — sink TEK hedeftir (ops yüzeyi açıkken `Watch` onun yerini alır), OTLP ise log/kanal/watch'un hangisiyle olursa olsun yan yana yaşamalı |
 | 2 | **Exporter bloklamaz.** `export` toplayıcının görevinde, senkron çağrılır; G/Ç yapan bir exporter raporu kendi görevine **sınırlı devirle** verir | Toplayıcı tek-await'lidir ve her aktörün örneklerini boşaltır; yavaş bir exporter hepsini bekletirdi |
 | 3 | **Çekme vs itme.** Prometheus (çekme): ops yüzeyinin `watch` anlık görüntüsünden **kazıma anında** render (`MetricReport::render_prometheus`) — kimse kazımıyorsa render yok, `/metrics` baytları değişmedi (`metrics::tests::golden`). OTLP (itme): bir `Exporter` | Elenen: Prometheus metnini her raporda önceden render edip ikinci bir `watch`'a koymak — kazıyıcı yokken her saniye boşa render, `/healthz` yine rapor watch'unu isterdi |
-| 4 | **Tek aile tablosu** (`metrics::export::families`: ad, tür, help, okuyucu, sıra); Prometheus render'ı ve OTLP eşlemesi aynı tabloyu yürür | Yeni sayaç iki yüzeye birden girer; ad/tür kayması yapısal olarak imkânsız. Tablo taşınırken Prometheus metni bayt bayt aynı kaldı (altın test; help/tür/sıra mutasyonları onu kırar). Biçime özgü kalanlar: dağılımların şekli, mantık sayaçlarının (ad kümesi rapor anında belli) biçimi |
+| 4 | **Tek aile tablosu** (`metrics::export::families`: ad, tür, help, okuyucu, sıra; kapsamlar `METRICS_DROPPED`, `REGISTRY`, `NET`, server-closes, `TRANSPORT` — B58 —, oda aileleri); Prometheus render'ı ve OTLP eşlemesi aynı tabloyu yürür | Yeni sayaç iki yüzeye birden girer; ad/tür kayması yapısal olarak imkânsız. Tablo taşınırken Prometheus metni bayt bayt aynı kaldı (altın test; help/tür/sıra mutasyonları onu kırar). Biçime özgü kalanlar: dağılımların şekli, mantık sayaçlarının (ad kümesi rapor anında belli) biçimi |
 | 5 | **Feature düzeni `gsb-core`'da:** `prometheus` (varsayılan açık) render'ı ve aile tablosunu, `otlp` (varsayılan kapalı) OTLP exporter'ını derler. Workspace bağımlılığı `gsb-core`'u **varsayılan feature'sız** alır; hangi exporter'ın var olduğuna yalnız `gsb-server` karar verir (`prometheus` varsayılan, `otlp` = `gsb-core/otlp`). `gsb-core`'un kendi test koşusu varsayılanını (Prometheus) tutar | Neden yeni bir `gsb-export` crate'i değil: OTLP **hiç yeni bağımlılık getirmiyor** (aşağıda) — "opsiyonel bağımlılıkları çekirdekten uzak tut" gerekçesi boşa düşer; render `MetricReport`'un inherent metodu ve altın test çekirdekte; ayrı crate aynı exporter ailesini iki crate'e bölerdi |
 | 6 | **Yeni bağımlılık YOK.** OTLP mesajları `opentelemetry-proto` v1'in elle yazılmış bir ALT KÜMESİ (`prost` derive, üst akış alan numaraları); istek düz tokio `TcpStream` üstünde tek bir HTTP/1.1 POST | Elenen: `opentelemetry` + `opentelemetry-otlp` (SDK ağacı, global meter provider), `opentelemetry-proto` + `prost-build` (kod üretim adımı, aynı baytlar), `tonic`/gRPC (HTTP/2 yığını), `hyper`/`reqwest` (tek istek için istemci yığını). Alan numaraları iki yoldan doğrulandı: derive'dan bağımsız bir protobuf yürüyücüsüyle (`otlp::tests::wire`) ve bir kez sistem `protoc`'u + resmî `opentelemetry-proto` dosyalarıyla (`--decode`: bilinmeyen alan yok) |
 | 7 | **OTLP/HTTP protobuf**, `POST <endpoint>` (`Content-Type: application/x-protobuf`, `Connection: close`); yol boşsa `/v1/metrics`. **Yalnız `http://`** — `https://` başlatmayı durdurur | gRPC'den hafif: aynı mesaj, HTTP/2 yok. TLS: hedef sunucunun yanındaki collector/agent'tır, TLS'i ötesine o taşır (ops HTTP'nin localhost sözleşmesiyle aynı çizgi) |

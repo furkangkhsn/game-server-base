@@ -846,15 +846,22 @@ değişmedi.
 
 > `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
 > + req_unbound + requests_dropped_closed + requests_dropped_full
-> + requests_no_room + requests_unprocessed`
+> + requests_no_room + requests_unprocessed
+> + transport_udp_requests_dropped_full`
 
 Her istek tam olarak BİR terimdedir: oda kovaları (işlendi, reddedildi,
 yanıtsız reddedildi, okunmadı, bağlanmamış bağlantıdan çekildi) ile
 bağlantı tarafındaki dört kenar (kapalı kanal, dolu kanal, oda yok,
 sunucunun bitirdiği oturumun işlenmemiş kutusu) ayrık yerlerde ve ayrık
 koşullarda sayılır — bir istek bağlantıda düştüyse odaya hiç
-ulaşmamıştır. (Taşımanın kendi terimi — rUDP demux'ının dolu kutuda
-düşürdüğü istek — aşağıda, B58.)
+ulaşmamıştır. Son terim TAŞIMANINDIR (B58): rUDP demux'ı gelen kareyi
+oturumun dolu kutusuna koyamayınca düşürür; güvenilir bantta gelmişse
+onu ZATEN ACK'lemiştir, istemci yeniden göndermez ve istek hiç
+yanıtlanmaz. Kare çözülmüş olduğundan (opcode bilinir) sınıflanabilir:
+yalnız RPC istekleri bu terime girer (`conn::FrameKind`), oyun ve
+kontrol kareleri kendi taşıma sayaçlarına. Bağlantı aktörü onu hiç
+görmediğinden bağlantının hiçbir terimiyle çakışmaz. TCP/TLS/WS/QUIC'te
+0 (okuyucu kutuya bekleyerek gönderir, düşürmez).
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
@@ -1103,6 +1110,9 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 - ~~**Sunucunun bitirdiği oturumun kutusunda kalan istek**~~ **Yapıldı
   (B60):** `requests_unprocessed` (pre-auth bütçesini aşan kare dahil),
   defterin terimi — §8.3.
+- ~~**rUDP demux'ının dolu kutuda düşürdüğü istek**~~ **Yapıldı (B58):**
+  `transport_udp_requests_dropped_full` (taşıma kapsamı), defterin
+  taşıma terimi — §8.3.
 
 ## 12. Testler: sözleşmenin kilidi
 

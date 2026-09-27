@@ -46,6 +46,9 @@ pub struct WsTransport {
     /// The bound on upgrades in flight (BACKLOG B31): a connection over
     /// it is closed unupgraded and counted.
     pub max_pending_handshakes: usize,
+    /// Where the handshake intake and every connection's reader send
+    /// their losses (B58; `None` = counted nowhere but the logs).
+    pub metrics: crate::TransportMetrics,
 }
 
 impl Default for WsTransport {
@@ -54,6 +57,7 @@ impl Default for WsTransport {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: DEFAULT_MAX_PENDING_HANDSHAKES,
+            metrics: None,
         }
     }
 }
@@ -95,11 +99,15 @@ impl Transport for WsTransport {
             let local_addr = listener.local_addr().ok();
             let intake = Intake::new("WebSocket", self.max_pending_handshakes);
             let (max_message_bytes, mapping) = (self.max_message_bytes, self.mapping);
+            let metrics = self.metrics.clone();
             tokio::spawn(run_tcp_intake(
                 Arc::clone(&intake),
                 listener,
                 WS_HANDSHAKE_TIMEOUT,
-                move |stream, peer| upgrade(stream, peer, max_message_bytes, mapping),
+                move |stream, peer| {
+                    upgrade(stream, peer, max_message_bytes, mapping, metrics.clone())
+                },
+                self.metrics.clone(),
             ));
             Ok(Arc::new(WsListenerHandle {
                 local_addr,
@@ -135,6 +143,7 @@ async fn upgrade(
     peer: SocketAddr,
     max_message_bytes: usize,
     mapping: WsMessageMapping,
+    metrics: crate::TransportMetrics,
 ) -> io::Result<Endpoint> {
     stream.set_nodelay(true)?;
     let upgraded = perform_upgrade(stream).await?;
@@ -145,6 +154,7 @@ async fn upgrade(
         peer,
         max_message_bytes,
         mapping,
+        metrics,
     ))
 }
 
@@ -158,6 +168,7 @@ fn make_endpoint(
     peer: SocketAddr,
     max_message_bytes: usize,
     mapping: WsMessageMapping,
+    metrics: crate::TransportMetrics,
 ) -> Endpoint {
     Endpoint::new(
         move |conn: ConnectionId,
@@ -176,6 +187,7 @@ fn make_endpoint(
                 mapping,
                 queue_tx.clone(),
                 closing.clone(),
+                metrics,
             );
             let writer = WsWriter::new(queue_tx, mapping, closing, written);
             let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);

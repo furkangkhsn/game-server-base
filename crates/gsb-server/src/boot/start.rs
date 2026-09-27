@@ -225,7 +225,18 @@ async fn start_inner(
     let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> = Vec::with_capacity(specs.len());
     let mut addrs: Vec<SocketAddr> = Vec::with_capacity(specs.len());
     for spec in &specs {
-        match bind_listener(spec, &cfg, idle_timeout, cookie_key, handshake_bound).await {
+        // The transport's own losses go to the same collector (B58).
+        let metrics = Some(metrics_tx.clone());
+        match bind_listener(
+            spec,
+            &cfg,
+            idle_timeout,
+            cookie_key,
+            handshake_bound,
+            metrics,
+        )
+        .await
+        {
             Ok((listener, addr)) => {
                 listeners.push(listener);
                 addrs.push(addr);

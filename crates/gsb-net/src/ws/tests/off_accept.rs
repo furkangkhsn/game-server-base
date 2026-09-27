@@ -139,3 +139,32 @@ async fn over_the_bound_a_connection_is_refused_and_counted() {
     assert_eq!(peer, good.into_stream().local_addr().unwrap());
     assert_eq!(stats().failed, 1, "the hang-up counted as a failure");
 }
+
+/// The door's refusals and failures reach the collector (BACKLOG B58):
+/// with one slot, an idle peer holds it and the next connection is
+/// refused. Closing the door sends the intake's last sample.
+#[tokio::test]
+async fn the_doors_refusals_are_sent_to_the_collector() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let listener = bind(WsTransport {
+        max_pending_handshakes: 1,
+        metrics: Some(tx),
+        ..WsTransport::default()
+    })
+    .await;
+    let addr = listener.local_addr().unwrap();
+    let _idle = FakeWsClient::raw(addr).await;
+    let stats = || listener.handshake_stats().expect("a handshaking door");
+    until("the idle peer holds the slot", || stats().in_flight == 1).await;
+    let _refused = FakeWsClient::raw(addr).await;
+    until("the refusal counted", || stats().refused == 1).await;
+    listener.close();
+    let got = tokio::time::timeout(PROMPT, rx.recv())
+        .await
+        .expect("the intake's sample in time");
+    let Some(gsb_core::metrics::MetricsEvent::Transport(t)) = got else {
+        panic!("a transport sample: {got:?}");
+    };
+    assert_eq!(t.handshakes_refused, 1);
+    assert_eq!(t.handshakes_timed_out, 0);
+}

@@ -213,6 +213,25 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "requests_unprocessed",
         "actions_unprocessed",
         "control_frames_unprocessed",
+        // The transport's own losses (B58), every counter.
+        "transport_udp_requests_dropped_full",
+        "transport_udp_actions_dropped_full",
+        "transport_udp_control_frames_dropped_full",
+        "transport_udp_acks_not_forwarded",
+        "transport_udp_datagrams_oversized",
+        "transport_udp_datagrams_malformed",
+        "transport_udp_bad_cookies",
+        "transport_udp_frags_refused",
+        "transport_udp_sessions_dropped_accept_full",
+        "transport_udp_frames_dropped_oversized",
+        "transport_udp_control_frames_abandoned",
+        "transport_udp_frames_drained",
+        "transport_ws_close_frames_dropped",
+        "transport_ws_pongs_dropped",
+        "transport_handshakes_refused",
+        "transport_handshakes_timed_out",
+        "transport_handshakes_failed",
+        "transport_metrics_dropped",
     ] {
         let _: u64 = get(k)
             .parse()

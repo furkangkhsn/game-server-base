@@ -43,6 +43,7 @@ impl Transport for QuicTransport {
                 Arc::clone(&intake),
                 endpoint.clone(),
                 self.config.max_frame_bytes,
+                self.config.metrics.clone(),
             ));
             Ok(Arc::new(QuicListenerHandle {
                 endpoint,
@@ -93,7 +94,13 @@ impl Listener for QuicListenerHandle {
 /// The door's intake task: take each incoming connection and give it a
 /// slot and a handshake task — or refuse it — until the door closes or
 /// the endpoint does.
-async fn run_intake(intake: Arc<Intake>, endpoint: quinn::Endpoint, max_frame_bytes: usize) {
+async fn run_intake(
+    intake: Arc<Intake>,
+    endpoint: quinn::Endpoint,
+    max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
+) {
+    let mut flusher = crate::metrics::Flusher::new(metrics);
     loop {
         // `None`: the endpoint is closed and will never accept again.
         let next = async { endpoint.accept().await.ok_or_else(listener_closed) };
@@ -111,7 +118,9 @@ async fn run_intake(intake: Arc<Intake>, endpoint: quinn::Endpoint, max_frame_by
                 incoming.refuse();
             }
         }
+        intake.flush_metrics(&mut flusher, false);
     }
+    intake.flush_metrics(&mut flusher, true);
     intake.log_summary();
 }
 

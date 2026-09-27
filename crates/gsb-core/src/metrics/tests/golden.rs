@@ -36,7 +36,9 @@
 //! `gsb_net_{requests,actions,control_frames}_unprocessed_total`. And
 //! B62's two HELP changes: `gsb_room_requests_undelivered_total` and
 //! `gsb_room_requests_abandoned_total` name the room's stop among the
-//! session ends.
+//! session ends. B58's transport scope: the `gsb-metric scope=transport`
+//! line and its eighteen `gsb_transport_*_total` families (the transport
+//! tasks' own dropped samples also fold into `gsb_metrics_dropped_total`).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -170,6 +172,20 @@ pub(super) fn golden_report() -> MetricReport {
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
     }));
+    // Two transport deltas (B58): every counter distinct, the first one
+    // summed across both.
+    let mut values = [0u64; TRANSPORT_COUNT];
+    for (i, v) in values.iter_mut().enumerate() {
+        *v = i as u64 + 1;
+    }
+    acc.apply(TransportCounters::from_values(values).event());
+    acc.apply(
+        TransportCounters {
+            udp_requests_dropped_full: 10,
+            ..Default::default()
+        }
+        .event(),
+    );
     acc.report(t1)
 }
 

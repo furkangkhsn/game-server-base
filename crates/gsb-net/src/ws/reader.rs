@@ -22,6 +22,7 @@ use gsb_protocol::FrameBody;
 use crate::ws::*;
 
 mod dispatch;
+mod flush;
 mod parse;
 
 /// What one [`WsReader::step`] made of the buffered bytes.
@@ -53,6 +54,11 @@ pub(super) struct WsReader {
     /// Opcode of the data message being reassembled (`None` = none).
     frag_opcode: Option<u8>,
     frag_data: BytesMut,
+    /// Close frames and pongs dropped on the full control queue (B58),
+    /// and their path to the collector (see `flush`).
+    close_frames_dropped: u64,
+    pongs_dropped: u64,
+    flusher: crate::metrics::Flusher,
 }
 
 impl WsReader {
@@ -62,6 +68,7 @@ impl WsReader {
         mapping: WsMessageMapping,
         ctrl: mpsc::Sender<WsOut>,
         closing: Arc<AtomicBool>,
+        metrics: crate::TransportMetrics,
     ) -> Self {
         Self {
             sock,
@@ -73,6 +80,9 @@ impl WsReader {
             closing,
             frag_opcode: None,
             frag_data: BytesMut::new(),
+            close_frames_dropped: 0,
+            pongs_dropped: 0,
+            flusher: crate::metrics::Flusher::new(metrics),
         }
     }
 
@@ -81,9 +91,7 @@ impl WsReader {
     /// notice, teardown follows regardless), then hand the pump an error.
     pub(super) fn proto_fail(&mut self, code: u16, why: impl std::fmt::Display) -> io::Error {
         self.closing.store(true, Ordering::SeqCst);
-        let _ = self
-            .ctrl
-            .try_send(WsOut::Control(OP_CLOSE, code.to_be_bytes().to_vec()));
+        self.queue_control(OP_CLOSE, code.to_be_bytes().to_vec());
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("websocket protocol violation ({code}): {why}"),

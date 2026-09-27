@@ -38,18 +38,40 @@ impl ReaderRig {
     }
 
     pub(super) async fn with(max_message_bytes: usize, mapping: WsMessageMapping) -> Self {
+        Self::build(max_message_bytes, mapping, OUT_QUEUE_CAPACITY, None).await
+    }
+
+    /// A reader whose control queue holds `queue` items and whose losses
+    /// go to `metrics` (B58).
+    pub(super) async fn with_queue(queue: usize, metrics: crate::TransportMetrics) -> Self {
+        Self::build(
+            DEFAULT_MAX_MESSAGE_BYTES,
+            WsMessageMapping::GameEnvelope,
+            queue,
+            metrics,
+        )
+        .await
+    }
+
+    async fn build(
+        max_message_bytes: usize,
+        mapping: WsMessageMapping,
+        queue: usize,
+        metrics: crate::TransportMetrics,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let client = TcpStream::connect(addr).await.expect("connect");
         let (server, _) = listener.accept().await.expect("accept");
         let (read_half, write_half) = server.into_split();
-        let (tx, queue) = mpsc::channel(OUT_QUEUE_CAPACITY);
+        let (tx, queue) = mpsc::channel(queue);
         let reader = WsReader::new(
             read_half,
             max_message_bytes,
             mapping,
             tx,
             Arc::new(AtomicBool::new(false)),
+            metrics,
         );
         Self {
             reader,
@@ -102,6 +124,11 @@ impl ReaderRig {
             },
             other => panic!("expected exactly one queued close, got {other:?}"),
         }
+    }
+
+    /// Drop the reader (as its pump does when the connection ends).
+    pub(super) fn end(self) {
+        drop(self.reader);
     }
 
     /// Everything the reader has queued so far.

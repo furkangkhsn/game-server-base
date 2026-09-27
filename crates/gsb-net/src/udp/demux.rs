@@ -17,6 +17,7 @@ use tracing::{info, warn};
 use crate::transport::Endpoint;
 use crate::udp::*;
 
+mod flush;
 mod handshake;
 mod inbound;
 mod reap;
@@ -70,7 +71,8 @@ pub(super) struct Demux {
     reaper: Reaper,
     reap_rx: Receiver<SocketAddr>,
     buf: Vec<u8>,
-    // lifetime counters (reported once at demux exit):
+    // lifetime counters (logged once at demux exit; the losses among them
+    // also reach the collector while it runs — B58, `flush`):
     established: u64,
     challenges: u64,
     /// Valid proofs from an already-established peer, answered with the
@@ -89,6 +91,15 @@ pub(super) struct Demux {
     bad_datagrams: u64,
     /// Inbound FRAG datagrams (client→server fragmentation is refused).
     frag_refused: u64,
+    /// Inbound frames dropped on a session's full inbox, by kind (B58;
+    /// the per-session `inbox_full` keeps the total for the warning).
+    full_requests: u64,
+    full_actions: u64,
+    full_controls: u64,
+    /// The loss counters' path to the collector (B58), and the sender
+    /// each session's writer gets for its own.
+    flusher: crate::metrics::Flusher,
+    metrics: crate::TransportMetrics,
 }
 
 impl Demux {
@@ -131,6 +142,11 @@ impl Demux {
             oversized_in: 0,
             bad_datagrams: 0,
             frag_refused: 0,
+            full_requests: 0,
+            full_actions: 0,
+            full_controls: 0,
+            flusher: crate::metrics::Flusher::new(None),
+            metrics: None,
         }
     }
 
@@ -153,20 +169,19 @@ pub(super) async fn demux(
     sock: Arc<UdpSocket>,
     end_tx: Sender<Endpoint>,
     cookie: CookieKey,
-    inbox_cap: usize,
-    outbox_cap: usize,
-    max_datagram: usize,
-    idle: Option<Duration>,
+    cfg: UdpTransportConfig,
 ) {
     let mut d = Demux::new(
         sock,
         end_tx,
         cookie,
-        inbox_cap,
-        outbox_cap,
-        max_datagram,
-        idle,
+        cfg.inbox_capacity,
+        cfg.outbox_capacity,
+        cfg.max_datagram_bytes,
+        cfg.idle_timeout,
     );
+    d.flusher = crate::metrics::Flusher::new(cfg.metrics.clone());
+    d.metrics = cfg.metrics;
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only
@@ -203,6 +218,7 @@ pub(super) async fn demux(
             }
             None => d.sweep(),
         }
+        d.flush_metrics(false);
     }
     info!(
         established = d.established,

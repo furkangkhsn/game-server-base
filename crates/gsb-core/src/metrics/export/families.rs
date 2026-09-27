@@ -19,8 +19,10 @@ use crate::metrics::{MetricReport, RoomReport};
 mod room;
 mod server;
 mod session;
+mod transport;
 
 pub(super) use server::{NET, REGISTRY};
+pub(super) use transport::TRANSPORT;
 
 /// A family's type: a cumulative counter or a gauge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

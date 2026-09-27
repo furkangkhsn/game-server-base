@@ -1,7 +1,7 @@
 resource service.name=gsb-test
 scope gsb
 gsb_metrics_dropped sum t=2 mono=true unit="" n=1 | Metric samples dropped on the bounded metrics channel across all producers.
-  [] 1000..2000 int 0
+  [] 1000..2000 int 18
 gsb_registry_rooms gauge unit="" n=1 | Current room count.
   [] 0..2000 int 2
 gsb_registry_conns gauge unit="" n=1 | Current registered connection count.
@@ -82,6 +82,42 @@ gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended
   [reason=outbound_dead] 1000..2000 int 0
   [reason=idle_input] 1000..2000 int 0
   [reason=kicked] 1000..2000 int 0
+gsb_transport_udp_requests_dropped_full sum t=2 mono=true unit="" n=1 | RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.
+  [] 1000..2000 int 11
+gsb_transport_udp_actions_dropped_full sum t=2 mono=true unit="" n=1 | Game-band frames the rUDP demux dropped on a session's full inbox, cumulative.
+  [] 1000..2000 int 2
+gsb_transport_udp_control_frames_dropped_full sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests the rUDP demux dropped on a session's full inbox, cumulative.
+  [] 1000..2000 int 3
+gsb_transport_udp_acks_not_forwarded sum t=2 mono=true unit="" n=1 | Inbound rUDP ACKs the demux could not hand to a session's writer (its outbound channel full; the peer re-asks), cumulative.
+  [] 1000..2000 int 4
+gsb_transport_udp_datagrams_oversized sum t=2 mono=true unit="" n=1 | Inbound rUDP datagrams empty or over the datagram budget, dropped, cumulative.
+  [] 1000..2000 int 5
+gsb_transport_udp_datagrams_malformed sum t=2 mono=true unit="" n=1 | Inbound rUDP datagrams too short for their kind, of an unknown kind, or with an undecodable frame, dropped, cumulative.
+  [] 1000..2000 int 6
+gsb_transport_udp_bad_cookies sum t=2 mono=true unit="" n=1 | rUDP handshake proofs with a forged or expired cookie, dropped unanswered, cumulative.
+  [] 1000..2000 int 7
+gsb_transport_udp_frags_refused sum t=2 mono=true unit="" n=1 | Inbound rUDP FRAG datagrams refused (the server never reassembles), cumulative.
+  [] 1000..2000 int 8
+gsb_transport_udp_sessions_dropped_accept_full sum t=2 mono=true unit="" n=1 | Established rUDP sessions dropped because the accept loop's endpoint queue was full (the client's proof re-send retries), cumulative.
+  [] 1000..2000 int 9
+gsb_transport_udp_frames_dropped_oversized sum t=2 mono=true unit="" n=1 | Game-band frames an rUDP writer dropped unsent: over the fragmentation ceiling, cumulative.
+  [] 1000..2000 int 10
+gsb_transport_udp_control_frames_abandoned sum t=2 mono=true unit="" n=1 | Reliable control frames still unacknowledged when an rUDP session's reliable band was declared dead, cumulative.
+  [] 1000..2000 int 11
+gsb_transport_udp_frames_drained sum t=2 mono=true unit="" n=1 | Frames an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.
+  [] 1000..2000 int 12
+gsb_transport_ws_close_frames_dropped sum t=2 mono=true unit="" n=1 | WebSocket close frames (the close echo or a protocol-failure close) dropped on a connection's full control queue, cumulative.
+  [] 1000..2000 int 13
+gsb_transport_ws_pongs_dropped sum t=2 mono=true unit="" n=1 | WebSocket pongs dropped on a connection's full control queue, cumulative.
+  [] 1000..2000 int 14
+gsb_transport_handshakes_refused sum t=2 mono=true unit="" n=1 | Connections a handshaking door (WebSocket, TLS, QUIC) refused unhandshaken at its bound on handshakes in flight, cumulative.
+  [] 1000..2000 int 15
+gsb_transport_handshakes_timed_out sum t=2 mono=true unit="" n=1 | Handshakes a handshaking door cut at their deadline, cumulative.
+  [] 1000..2000 int 16
+gsb_transport_handshakes_failed sum t=2 mono=true unit="" n=1 | Handshakes that failed at a handshaking door (bad upgrade request, failed TLS handshake), cumulative.
+  [] 1000..2000 int 17
+gsb_transport_metrics_dropped sum t=2 mono=true unit="" n=1 | Samples the transport tasks dropped on the full metrics channel (their counts ride the next one; also in gsb_metrics_dropped_total), cumulative.
+  [] 1000..2000 int 18
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

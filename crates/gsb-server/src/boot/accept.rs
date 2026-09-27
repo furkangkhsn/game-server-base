@@ -178,12 +178,16 @@ pub(super) async fn run_accept(
 /// so closing one listener can never disturb another's sessions.
 /// `handshake_bound`: each handshaking door's bound on handshakes in
 /// flight (the pre-auth cap — `start::pre_auth`, BACKLOG B31).
+/// `metrics`: where the transport sends its own losses (BACKLOG B58 —
+/// the rUDP demux and writers, the WebSocket reader, the handshake
+/// intakes; plain TCP has none of its own).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
     idle_timeout: Option<std::time::Duration>,
     cookie_key: Option<[u8; 16]>,
     handshake_bound: usize,
+    metrics: gsb_net::TransportMetrics,
 ) -> Result<(Arc<dyn gsb_net::transport::Listener>, SocketAddr), ServerError> {
     let transport: Arc<dyn Transport> = match spec {
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
@@ -197,6 +201,7 @@ pub(super) async fn bind_listener(
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
+                metrics,
             },
         }),
         ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
@@ -209,6 +214,7 @@ pub(super) async fn bind_listener(
                 max_datagram_bytes: cfg.udp_max_datagram_bytes,
                 idle_timeout,
                 cookie_key,
+                metrics,
             },
         }),
         ListenerSpec::Quic {
@@ -219,6 +225,7 @@ pub(super) async fn bind_listener(
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
+                metrics,
             },
         }),
         ListenerSpec::Ws { .. } => Arc::new(WsTransport {
@@ -235,6 +242,7 @@ pub(super) async fn bind_listener(
             // harness's alone and is not reachable from configuration.
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: handshake_bound,
+            metrics,
         }),
     };
     let listener = transport.bind(spec.addr()).await?;

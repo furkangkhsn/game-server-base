@@ -1841,6 +1841,43 @@ akışını + ortak ConnectionId alanını kırar), per-due O(N) sweep (join
 churn altında heap'in 80×'i), `accept` içine gömülü demux (self-
 referential future = unsafe/mio olmadan çıkmaz).
 
+**Taşımanın kendi kayıpları metrikte (B58, sayım turu 3).** Bağlantı
+aktörlerinin ALTINDA düşen her şey — rUDP demux'ının dolu oturum
+kutusunda düşürdüğü kare, yazıcının parça tavanını aşan ya da bant
+ölünce terk ettiği kare, WS okuyucusunun dolu kontrol kuyruğunda düşen
+kapanış/pong'u, el sıkışan kapıların ret/zaman aşımı/başarısızlığı —
+yalnız görev sonu log satırlarındaydı. Artık aynı yol: taşıma görevi
+sayaçlarını kendi durumunda tutar, `gsb_net::metrics::Flusher` ile
+DELTA'larını `MetricsEvent::Transport(TransportCounters)` olarak sınırlı
+metrik kanalına `try_send` eder — meşgulken en çok 500 ms'de bir
+(bağlantı aktörünün kadansı), biterken bir kez daha (demux ve WS
+okuyucusu `Drop`'ta: dinleyicinin `close`'u demux'ı abort eder; bitiş
+örneği dolu kanalda doğurulan göndericiyle gider). Taban yalnız kanal
+örneği aldığında ilerler (B59 kuralı); düşen örnek
+`transport.metrics_dropped`'ta ve üst düzey `metrics_dropped`'ta.
+Katmanlama: `gsb-net` zaten `gsb-core`'a bağlı (posta kutuları,
+`ConnIn`); `MetricsEvent` aynı yönde — tersine bağımlılık yok, toplayıcı
+taşımayı bilmez, yalnız deltaları toplar. Kompozisyon kökü her kapının
+yapılandırmasına toplayıcının kanalını verir (`UdpTransportConfig`,
+`WsTransport`, `TlsTransportConfig`, `QuicTransportConfig`'in `metrics`
+alanı; `None` = eskisi gibi yalnız log). Düz TCP'nin kendi kaybı yok
+(okuyucu kutuya bekleyerek gönderir). **Kayıt defteri için önemli:**
+rUDP demux'ı dolu kutuda düşürdüğü güvenilir-bant karesini zaten
+ACK'lemiştir — istemci onu yeniden göndermez; RPC isteğiyse hiç
+yanıtlanmaz. Kare çözülmüştür (opcode bilinir), yani tür ayrımı burada
+da yapılır (`conn::FrameKind`): `udp_requests_dropped_full` RPC
+defterinin taşıma terimidir (RPC-CONTROL-PLANE §8.3). Elenenler: (1)
+*paylaşımlı atomik sayaçlar + sunucuda yoklayan görev* — demux/yazıcı
+sayaçları görev-yereldir, yoklama yeni paylaşımlı durum ve yeni bir
+görev isterdi (intake'in atomikleri zaten vardı; onları da intake
+görevinin kendisi deltaya çevirir); (2) *toplayıcının dinleyici
+nesnelerinden okuması* (`Listener::handshake_stats` gibi) — toplayıcı
+aktörlere/taşımaya uzanmaz (dışa açım dikişinin kuralı), demux'ın
+sayaçları mesajsız okunamaz; (3) *kayıpları bağlantı aktörüne
+`ConnIn` ile bildirmek* — kutusu dolu olan aktöre bildirim de düşer,
+demux düzeyindeki kayıpların (kötü cookie, boyut aşımı) bağlantısı
+yoktur. Yüzey: OPS §3 "Taşıma kapsamı".
+
 ## 7. ECS katmanı
 
 - `bevy_ecs` **standalone** olarak kullanılır (Bevy engine'ı değil). Oda
@@ -2955,6 +2992,7 @@ durdurulamaz.
 | net | `heartbeats_throttled_preauth`, `heartbeats_throttled_authed` (kümülatif; satırda `hb_throttled_preauth=` / `hb_throttled_authed=`, Prometheus'ta `gsb_net_heartbeats_throttled_{preauth,authed}_total`, loadgen telinde GSMN) | heartbeat kısması (SECURITY §3.2) kaç heartbeat'i cevapsız bıraktı — kimlik doğrulamadan önce (güvenlik sinyali) ve sonra (hatalı istemci zamanlayıcısı)? İhlal değil; B56'ya dek yalnız debug satırındaydı |
 | net | `frames_out_closed`, `close_notices_dropped` (kümülatif; satırda `hb_throttled_authed=`'dan sonra, Prometheus'ta `gsb_net_frames_out_closed_total` / `gsb_net_close_notices_dropped_total`, loadgen telinde GSMO) | bağlantı aktörünün kontrol karelerinden kaçını yazıcısı gitmiş (kapalı) çıkış kanalı reddetti, kaç en iyi çaba kapanış bildirimi dolu kanalda düştü? (B57; `frames_out`/`bytes_out_control` artık yalnız kanalın ALDIĞI kareleri sayar — önceden gönderimden önce sayılıyordu) |
 | net | `requests_unprocessed`, `actions_unprocessed`, `control_frames_unprocessed` (kümülatif; satırda `close_notices_dropped=`'dan sonra, Prometheus'ta `gsb_net_{requests,actions,control_frames}_unprocessed_total`, loadgen telinde GSMQ) | sunucu oturumu kendisi bitirdiğinde (hüküm, atma, oda yok oldu, durma, ihlal/pre-auth bütçesi, ölü çıkış yolu) bağlantının gelen kutusunda işlenmeden kalan — ve pre-auth bütçesini aşan — kaç kare vardı, türüne göre (`conn::FrameKind`)? İstek terimi RPC defterini kapatır (RPC-CONTROL-PLANE §8.3); kutuda kalanlar `frames_in`'de değil (B60) |
+| transport | `udp_{requests,actions,control_frames}_dropped_full`, `udp_acks_not_forwarded`, `udp_datagrams_{oversized,malformed}`, `udp_bad_cookies`, `udp_frags_refused`, `udp_sessions_dropped_accept_full`, `udp_frames_dropped_oversized`, `udp_control_frames_abandoned`, `udp_frames_drained`, `ws_close_frames_dropped`, `ws_pongs_dropped`, `handshakes_{refused,timed_out,failed}`, `metrics_dropped` (kümülatif, bütün kapılar birlikte; satırda `gsb-metric scope=transport`, Prometheus/OTLP'de `gsb_transport_<ad>_total`, loadgen telinde GSMR, `RESULT`'ta `transport_<ad>=`) | taşıma katmanı bağlantı aktörlerinin altında neyi kaybetti? (B58; §6 sonu. Önceden yalnız görev sonu log satırlarındaydı) |
 | net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`, `idle_input` — E6, odanın girdi-boşta tavanı `afk_action = disconnect` altında; `kicked` — E8, oyunun atma fiili; loadgen telinde GSMG); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`

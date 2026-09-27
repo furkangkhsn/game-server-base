@@ -128,7 +128,7 @@ impl super::WsReader {
             OP_CLOSE => {
                 let echo = self.close_echo(&frame.payload)?;
                 self.closing.store(true, Ordering::SeqCst);
-                let _ = self.ctrl.try_send(WsOut::Control(OP_CLOSE, echo));
+                self.queue_control(OP_CLOSE, echo);
                 // RFC 6455 §7.1.1: after echoing, the server closes first —
                 // tell the writer task to drop the socket now instead of
                 // waiting for the actor layer's teardown.
@@ -137,7 +137,7 @@ impl super::WsReader {
             }
             OP_PING => {
                 // §5.5.3: pong carries the ping's application data back.
-                let _ = self.ctrl.try_send(WsOut::Control(OP_PONG, frame.payload));
+                self.queue_control(OP_PONG, frame.payload);
                 Ok(Step::Continue)
             }
             OP_PONG => Ok(Step::Continue), // unsolicited pongs: ignore

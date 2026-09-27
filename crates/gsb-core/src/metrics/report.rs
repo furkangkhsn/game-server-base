@@ -282,6 +282,9 @@ pub struct MetricReport {
     /// own full action channel, so this list names the flooders still on
     /// the wire.
     pub actions_dropped_top: Vec<(ConnectionId, u64)>,
+    /// The transport's own losses, cumulative, every door together (B58,
+    /// see [`TransportCounters`]).
+    pub transport: TransportCounters,
 }
 
 impl MetricReport {
@@ -329,6 +332,7 @@ impl MetricReport {
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),
+            transport: TransportCounters::default(),
         }
     }
 }

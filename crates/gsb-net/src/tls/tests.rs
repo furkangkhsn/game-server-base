@@ -78,6 +78,7 @@ fn transport_for(pki: &TestPki) -> TlsTransport {
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            metrics: None,
         },
     }
 }
@@ -156,6 +157,7 @@ async fn missing_cert_file_fails_the_bind() {
             key_pem: "/nonexistent/gsb-tls/key.pem".into(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            metrics: None,
         },
     };
     let result = Arc::new(transport)
@@ -183,6 +185,7 @@ async fn malformed_cert_file_fails_the_bind() {
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            metrics: None,
         },
     };
     let result = Arc::new(transport)

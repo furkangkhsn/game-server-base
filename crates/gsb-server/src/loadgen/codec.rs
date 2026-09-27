@@ -7,6 +7,7 @@ use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
     FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, ServerCloses,
+    TRANSPORT_COUNT, TransportCounters,
 };
 
 mod logic;
@@ -75,6 +76,7 @@ mod logic;
 ///   u64 control_frames_unprocessed
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
+///   [u64; TRANSPORT_COUNT] transport (TransportCounters::fields order)
 /// ```
 ///
 /// Both directions live in this binary (the server's `--serve` mode and
@@ -180,7 +182,10 @@ mod logic;
 /// `actions_unprocessed` and `control_frames_unprocessed` (what a
 /// server-decided end left unprocessed — B60), right after
 /// `close_notices_dropped`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D51;
+/// GSMR = the GSMQ layout plus the transport section (the network
+/// layer's own losses — B58): every `TransportCounters` field, in its
+/// declaration order, after the `actions_dropped_top` entries.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D52;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -330,6 +335,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     for (conn, n) in &r.actions_dropped_top {
         w.u64(conn.0);
         w.u64(*n);
+    }
+    for (_, n) in r.transport.fields() {
+        w.u64(n);
     }
     let mut frame = Vec::with_capacity(8 + w.0.len());
     frame.extend_from_slice(&METRICS_MAGIC.to_le_bytes());
@@ -535,6 +543,11 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
     for _ in 0..n_top {
         actions_dropped_top.push((ConnectionId(r.u64()?), r.u64()?));
     }
+    let mut values = [0u64; TRANSPORT_COUNT];
+    for v in &mut values {
+        *v = r.u64()?;
+    }
+    let transport = TransportCounters::from_values(values);
     if !r.done() {
         return None;
     }
@@ -551,5 +564,6 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         registry,
         net,
         actions_dropped_top,
+        transport,
     })
 }
