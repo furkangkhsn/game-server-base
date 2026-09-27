@@ -5,6 +5,55 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 4 — "her şeyi saymalıyız": B66–B68 (`metrics/count-everything-4`)
+
+- **B66 — akış pompalarının kayıpları:** yazıcı pompası başarısız yazma ya
+  da yazma tıkanmasıyla bitince yazdığı batch'in kalanını ve çıkış
+  kanalında duran batch'leri sayar (`stream_frames_unwritten`,
+  `stream_batches_unwritten` — oda/bağlantı onları "gönderildi"
+  saymıştı: yeni sayaç "kanal aldı" ile "sokete ulaştı" arasındaki fark).
+  WS soket yazıcısı kuyruğunu (kontrol `ws_control_frames_unwritten`) ve
+  kapanıştan sonraki oyun karelerini (`ws_frames_dropped_after_close`)
+  sayar. Okuyucunun kapalı kutuya veremediği kare türüne göre
+  (`stream_{requests,actions,control_frames}_dropped_closed`). Düz TCP de
+  (`spawn_pumps`/`TcpTransport` `metrics` alır).
+- **B66 — rUDP:** yazıcının soketin reddettiği datagramları banda göre,
+  bant ölünce gönderilmeyen kareler (`udp_frames_unsent`), demux'ın
+  reddedilen ACK/challenge gönderimleri, kapalı kutuya çözülen kare
+  (`Closed` kolu, türüne göre) ve oturumsuz adresten gelen datagram.
+  **`die`'ın yanlış atfı düzeltildi:** `RelDead` bildirimi artık akış
+  pompasının ayrılmış slotuyla gider (`pump::verdict`; oturum başına bir
+  posta kutusu slotu) — dolu kutuda düşüp kapanış `outbound_dead` diye
+  yanlış sayılmıyor; slot ayrılamayan nadir yol `writer_verdicts_deferred`.
+  Elenen: `channel::post` (spawn'lı gönderim aktör kutusuna baktıktan sonra
+  varabilir, atıf yine yanlış kalır).
+- **B67 — panikle ölen oda/shard:** ölüm bekçisi `JoinHandle` hatasında
+  görevin satır kimliğiyle `MetricsEvent::RoomEndedUncounted` gönderir;
+  toplayıcı `rooms_ended_uncounted`'a sayar (registry dilimi; görev başına)
+  ve satırın beklemesini başlatır — ölen shard'ın satırı artık budanıyor.
+  **Yan bulgu (düzeltildi):** bir shard ölünce hayatta kalan shard'lar
+  sunucu durana dek çalışıyor, `RoomGone` almış üyelere yayın yapıyordu;
+  `on_room_died` artık `stop_room` çağırır, onlar kendi son sayımlarıyla
+  biter.
+- **B68 — duranın oturum dışı kalanları:** `finish` kanalı kapatıp
+  kalanları sayar (`metrics::StopCounts`, dokuz sayaç, son örnekte):
+  işlenmeyen join/resume/leave/detach (yayın op'ları yalnız etki edeceği
+  shard'da), kurulmayan gelen göç (oyuncunun okunmamış girdisi dahil),
+  gönderilmeyen/uygulanmayan etkiler, takım/border görünüm güncellemeleri.
+  **Yan bulgu (düzeltildi):** shard'ın CONTROL fazı `Shutdown`'a
+  rastlayınca boşaltmanın kalanını sayılmadan atıyordu.
+- **RPC defteri:** `+ transport_stream_requests_dropped_closed +
+  transport_udp_requests_dropped_closed` (13 terim).
+- Altın metinler yalnız yeni aileler (ve oda satırının dokuz anahtarı)
+  kadar değişti; `otlp::cross` yeşil. Loadgen teli **GSMV**. İstemci teli
+  değişmedi.
+- Kalan sayılmayanlar BACKLOG B70–B74; **B71 bir gecikme hatası** (duran
+  sharded odada resume shard başına 5 sn bekliyor).
+
+Testler 1381 → 1403 (`otlp` ile 1399 → 1421); her madde mutasyonla
+doğrulandı. Ebeveyn doğrulaması: ölen shard'ın hayatta kalanlarını
+durdurmamak testi düşürdü.
+
 ## B65 — geç gelen `OpsClosed` taze dağıtıcıyı silmiyor (`core/b65-opsclosed`)
 
 - **Temizlik:** registry, dağıtıcının `OpsClosed`'unda bağlantının
