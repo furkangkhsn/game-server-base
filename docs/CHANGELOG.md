@@ -5,6 +5,31 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B71 — duran sharded odada resume hemen yanıtlanıyor (`core/b71-resume-stop`)
+
+- **Hata (gecikme):** `dispatch_resume` shard cevaplarını toplama kanalına
+  aktaran görevlerle bekliyor, kanalın kendi göndericisini (`agg_tx`)
+  elinde tutuyordu. Cevapsız giden shard (duranın `finish`'i kuyruktaki
+  cevapları düşürür, ölen shard'ın kutusu göreviyle gider, kapalı kutu
+  gönderimi reddeder) kanalı kapatamıyor, her eksik cevap 5 sn'lik
+  sınırın tamamını yiyordu: duran odaya resume `RoomGone`'unu shard başına
+  5 sn geç alıyordu (üç shard: 15 sn).
+- **Düzeltme:** dağıtıcı yayından sonra göndericisini bırakır; her shard
+  cevap verdiğinde ya da gittiği bilindiğinde katlama biter. Cevap aynı
+  bayt (`RoomGone`), yalnız erken; canlı ama yavaş shard için sınır aynen.
+  Elenen: `finish`'in kuyruktaki resume'lara `RoomGone` demesi (ölen
+  shard'ı, reddedilen gönderimi ve açık tutulan kanalı çözmez).
+- **Sayım B75'e:** parkı hiçbir shard'da olmayan kuyruktaki resume ve
+  dağıtıcının `RoomGone` ile yanıtladığı katılmalar hâlâ sayılmıyor;
+  mevcut hiçbir sayaç kesin anlamla taşıyamıyor, yeni registry sayacı
+  gerekiyor.
+
+Testler 1403 → 1405 (`otlp` ile 1421 → 1423):
+`registry/actor/dispatch/tests.rs` (duraklatılmış saat; önce düştü: 15 sn,
+10 sn); mutasyonlar öldü. Ebeveyn doğrulaması: göndericiyi bırakmamak iki
+testi düşürdü. İstemci teli, altın metinler ve aileler değişmedi.
+RECONNECT §6 "Duran odada resume (B71)".
+
 ## Sayım turu 4 — "her şeyi saymalıyız": B66–B68 (`metrics/count-everything-4`)
 
 - **B66 — akış pompalarının kayıpları:** yazıcı pompası başarısız yazma ya
