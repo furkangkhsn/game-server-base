@@ -35,6 +35,7 @@ use gsb_core::id::ConnectionId;
 use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
+use crate::pump::lost::Unwritten;
 use op::Op;
 use verdict::Verdict;
 
@@ -102,13 +103,15 @@ where
 /// indistinguishable from any other end of session.
 ///
 /// `write_stall`: the progress window (`None` disables the clock: every
-/// operation is simply awaited to completion).
+/// operation is simply awaited to completion). `metrics`: where the
+/// frames it never writes are counted (B66, [`Unwritten`]).
 pub(super) fn spawn<Writer>(
     conn: ConnectionId,
     writer: Writer,
     in_tx: Mailbox<ConnIn>,
     mut out_rx: Inbox<FrameBatch>,
     write_stall: Option<Duration>,
+    metrics: crate::TransportMetrics,
 ) -> JoinHandle<()>
 where
     Writer:
@@ -119,13 +122,15 @@ where
         let mut sink = writer;
         let mut progress = Instant::now();
         let mut stalled: Option<String> = None;
+        let mut unwritten = Unwritten::default();
         'batches: while let Some(batch) = out_rx.recv().await {
             // Waiting for work is not a stall: the clock measures a write
             // that cannot finish, never an idle outbound path. (A room
             // between ticks, or a session with nothing to say, must never
             // accumulate window.)
             progress = Instant::now();
-            for frame in batch {
+            let len = batch.len();
+            for (i, frame) in batch.into_iter().enumerate() {
                 match step(
                     Op::send(&mut sink, frame, progress),
                     write_stall,
@@ -136,10 +141,12 @@ where
                     Step::Wrote => {}
                     Step::Gone => {
                         warn!(%conn, "writer pump: send failed; peer gone");
+                        unwritten.rest_of_batch(len - i);
                         break 'batches;
                     }
                     Step::Stalled => {
                         stalled = Some(stall_reason(write_stall));
+                        unwritten.rest_of_batch(len - i);
                         break 'batches;
                     }
                 }
@@ -182,7 +189,10 @@ where
                 // Closing the outbound channel makes the actor's own next
                 // send fail fast instead of parking on a channel that is
                 // full precisely because this pump stopped draining it.
+                // What it still holds is counted (B66).
+                unwritten.drain(&mut out_rx);
                 drop(out_rx);
+                unwritten.report(metrics);
                 // NOT `sink.close()`: a graceful close flushes, and the
                 // socket is the thing that is stuck. The teardown must
                 // never need the peer to accept one more byte.
@@ -196,7 +206,13 @@ where
             // goodbye on the wire — under the same window, so a socket
             // that wedges on the way out cannot pin this task forever.
             None => {
+                // After a failed write the channel may still hold batches
+                // (counted, B66); after an ordinary end it is empty.
+                unwritten.drain(&mut out_rx);
                 drop(out_rx);
+                // Counted before the goodbye: a close that wedges must
+                // not hold the count back.
+                unwritten.report(metrics);
                 let _ = step(Op::close(&mut sink, progress), write_stall, &mut progress).await;
             }
         }

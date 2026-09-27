@@ -232,6 +232,14 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_handshakes_timed_out",
         "transport_handshakes_failed",
         "transport_metrics_dropped",
+        // The stream pumps' losses (B66).
+        "transport_stream_frames_unwritten",
+        "transport_stream_batches_unwritten",
+        "transport_stream_requests_dropped_closed",
+        "transport_stream_actions_dropped_closed",
+        "transport_stream_control_frames_dropped_closed",
+        "transport_ws_control_frames_unwritten",
+        "transport_ws_frames_dropped_after_close",
     ] {
         let _: u64 = get(k)
             .parse()

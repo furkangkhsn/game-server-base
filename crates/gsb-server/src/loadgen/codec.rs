@@ -185,7 +185,11 @@ mod logic;
 /// GSMR = the GSMQ layout plus the transport section (the network
 /// layer's own losses — B58): every `TransportCounters` field, in its
 /// declaration order, after the `actions_dropped_top` entries.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D52;
+/// GSMS = the GSMR layout with seven more transport counters at the end
+/// of that section (the stream pumps' losses — B66:
+/// `stream_frames_unwritten` .. `ws_frames_dropped_after_close`); the
+/// section is `TRANSPORT_COUNT` long, so a new counter is a new layout.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D53;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

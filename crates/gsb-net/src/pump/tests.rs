@@ -96,6 +96,7 @@ async fn a_stall_verdict_into_a_full_mailbox_is_booked_as_write_stall() {
             idle: None,
             write_stall: Some(Duration::from_millis(300)),
         },
+        None,
     );
 
     // AUTH: its result is the frame the writer takes and wedges on.
@@ -150,3 +151,7 @@ async fn a_stall_verdict_into_a_full_mailbox_is_booked_as_write_stall() {
         .expect("no panic");
     read.abort();
 }
+
+/// What the pumps lose at their end, counted (B66). A CHILD module: it
+/// reuses the wedged socket above.
+mod lost;

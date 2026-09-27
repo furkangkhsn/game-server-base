@@ -39,6 +39,8 @@
 //! session ends. B58's transport scope: the `gsb-metric scope=transport`
 //! line and its eighteen `gsb_transport_*_total` families (the transport
 //! tasks' own dropped samples also fold into `gsb_metrics_dropped_total`).
+//! B66's seven stream-pump counters at the end of that line and table
+//! (`stream_frames_unwritten` .. `ws_frames_dropped_after_close`).
 
 use super::*;
 use crate::conn::ServerClose;

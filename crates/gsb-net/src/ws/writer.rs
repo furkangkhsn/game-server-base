@@ -41,11 +41,15 @@ pub(super) enum WsOut {
 /// Spawn the door's socket-writer task. Returns the queue into it and
 /// the byte count it keeps — the SAME `Arc` the task bumps, handed out
 /// from one place so the pump's writer can never be wired to a count
-/// nothing writes.
-pub(super) fn spawn_socket_writer(sock: OwnedWriteHalf) -> (mpsc::Sender<WsOut>, Arc<AtomicU64>) {
+/// nothing writes. `metrics`: where the frames it never writes are
+/// counted (B66, [`lost`]).
+pub(super) fn spawn_socket_writer(
+    sock: OwnedWriteHalf,
+    metrics: crate::TransportMetrics,
+) -> (mpsc::Sender<WsOut>, Arc<AtomicU64>) {
     let (tx, rx) = mpsc::channel::<WsOut>(OUT_QUEUE_CAPACITY);
     let written = Arc::new(AtomicU64::new(0));
-    tokio::spawn(ws_writer_task(sock, rx, Arc::clone(&written)));
+    tokio::spawn(ws_writer_task(sock, rx, Arc::clone(&written), metrics));
     (tx, written)
 }
 
@@ -62,6 +66,7 @@ async fn ws_writer_task(
     mut sock: OwnedWriteHalf,
     mut rx: mpsc::Receiver<WsOut>,
     written: Arc<AtomicU64>,
+    metrics: crate::TransportMetrics,
 ) {
     // RFC 6455 §5.5.1: no DATA frame may follow a Close frame. Enforced
     // here, the only place that sees the real wire order: on a refused
@@ -74,23 +79,39 @@ async fn ws_writer_task(
     // one first) — the reader still queues the echo and the shutdown,
     // and only the shutdown is acted on.
     let mut close_sent = false;
+    // What never reaches the wire (B66), and whether the loop left early.
+    let mut lost = lost::Lost::default();
+    let mut early = false;
+    let mut failed = false;
     'queue: while let Some(out) = rx.recv().await {
+        let game = matches!(out, WsOut::Game(_));
         let bytes = match out {
-            WsOut::Game(_) | WsOut::Control(..) if close_sent => continue,
+            WsOut::Game(_) if close_sent => {
+                lost.after_close();
+                continue;
+            }
+            WsOut::Control(..) if close_sent => continue,
             WsOut::Game(envelope) => Bytes::from(encode_server_frame(OP_BIN, &envelope)),
             WsOut::Control(op, payload) => {
                 close_sent |= op == OP_CLOSE;
                 Bytes::from(encode_server_frame(op, &payload))
             }
             // Both halves drop here: the peer sees a prompt TCP FIN.
-            WsOut::Shutdown => break,
+            WsOut::Shutdown => {
+                early = true;
+                break;
+            }
         };
         let mut off = 0;
         while off < bytes.len() {
             match sock.write(&bytes[off..]).await {
                 // `Ok(0)` is `write_all`'s WriteZero error: the socket is
                 // done taking bytes.
-                Ok(0) | Err(_) => break 'queue,
+                Ok(0) | Err(_) => {
+                    lost.failed(game);
+                    (early, failed) = (true, true);
+                    break 'queue;
+                }
                 Ok(n) => {
                     off += n;
                     written.fetch_add(n as u64, Ordering::Relaxed);
@@ -98,6 +119,13 @@ async fn ws_writer_task(
             }
         }
     }
+    // An early exit leaves the queue's contents unwritten: counted before
+    // the queue goes (a failed close frame never reached the wire, so
+    // nothing behind it is "after a close").
+    if early {
+        lost.drain(&mut rx, close_sent && !failed);
+    }
+    lost.report(metrics);
     // Last queue end dropped, write failed, or shutdown requested: shut the
     // socket down so a lingering peer observes EOF promptly.
     let _ = sock.shutdown().await;
@@ -211,3 +239,7 @@ impl Sink<FrameBody> for WsWriter {
 pub(super) fn writer_gone() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "websocket writer task is gone")
 }
+
+/// The socket writer's losses on their way to the collector (B66). A
+/// CHILD module, so it reaches [`WsOut`] directly.
+mod lost;

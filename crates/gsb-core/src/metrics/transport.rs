@@ -124,6 +124,38 @@ transport_counters! {
     /// channel (their deltas stay for the next one — the B59 rule); also
     /// in the report's top-level `metrics_dropped`.
     metrics_dropped,
+    /// Stream doors (TCP, TLS, QUIC, WebSocket; B66): outbound frames
+    /// the door took and never wrote because its writer stopped first —
+    /// the writer pump on a failed write or a write stall: the rest of
+    /// the batch it was writing (the failed or stalled frame included)
+    /// and every frame of the batches still queued in the connection's
+    /// outbound channel; the WebSocket socket writer on a failed socket
+    /// write or the peer's close handshake: the game frames still in its
+    /// queue. The room and the connection actor counted them as
+    /// shipped/sent (the channel took them).
+    stream_frames_unwritten,
+    /// Stream doors: outbound batches still queued in the connection's
+    /// outbound channel when the writer pump ended on a failed write or a
+    /// write stall (their frames are in `stream_frames_unwritten`).
+    stream_batches_unwritten,
+    /// Stream doors: RPC requests a reader pump had read when the
+    /// connection actor's inbox was already closed (the server ended the
+    /// session — B60 closes the inbox at the end), never processed, never
+    /// answered. A term of the RPC ledger.
+    stream_requests_dropped_closed,
+    /// Stream doors: game-band frames lost the same way.
+    stream_actions_dropped_closed,
+    /// Stream doors: other base-band frames lost the same way.
+    stream_control_frames_dropped_closed,
+    /// WebSocket: control frames (pongs, close frames) the socket writer
+    /// never wrote because it stopped first (a failed socket write, or
+    /// the peer's close handshake with no close of the server's sent).
+    ws_control_frames_unwritten,
+    /// WebSocket: game frames (the connection's outbound frames) the
+    /// socket writer dropped because a close frame had already gone out
+    /// (RFC 6455 §5.5.1: no data after a close) — on a refused stream,
+    /// the connection's notice and the fan-out still in flight.
+    ws_frames_dropped_after_close,
 }
 
 impl TransportCounters {

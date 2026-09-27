@@ -179,7 +179,7 @@ fn make_endpoint(
             // implementation detail of the adapter, owned by nobody
             // above the pump layer; it exits by itself when every
             // queue end is dropped.
-            let (queue_tx, written) = spawn_socket_writer(write_half);
+            let (queue_tx, written) = spawn_socket_writer(write_half, metrics.clone());
             let closing = Arc::new(AtomicBool::new(false));
             let reader = WsReader::new(
                 read_half,
@@ -187,10 +187,10 @@ fn make_endpoint(
                 mapping,
                 queue_tx.clone(),
                 closing.clone(),
-                metrics,
+                metrics.clone(),
             );
             let writer = WsWriter::new(queue_tx, mapping, closing, written);
-            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },
     )

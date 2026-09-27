@@ -414,8 +414,8 @@ max_detach_hold_secs = "off"
   YOK, bütçeyi aşan kare ise var (alındı, işlenmedi). İstemci-tarafı son
   (okuyucunun `Closed`'u son mesajıdır) arkasında kare bırakmaz; boşaltma
   yine koşar (boşken tek `try_recv`). Kutu kapandıktan sonra okuyucu
-  pompasının göndermeye çalıştığı kare taşıma tarafındadır (bkz. aşağıda
-  "sayılmayan"). Satırda `close_notices_dropped=`'dan sonra
+  pompasının göndermeye çalıştığı kare taşıma tarafındadır (B66'dan beri
+  `transport_stream_*_dropped_closed`, aşağıda). Satırda `close_notices_dropped=`'dan sonra
   `requests_unprocessed= actions_unprocessed= control_frames_unprocessed=`;
   loadgen telinde `GSMQ`; `RESULT`'ta aynı anahtarlar, her satırda.
 - **Taşıma kapsamı: ağ katmanının kendi kayıpları (B58).** Yeni bir
@@ -460,6 +460,36 @@ max_detach_hold_secs = "off"
   (`UdpClientStats`, loadgen `frag_dropped=`); rUDP'nin OOB penceresinde
   düşen gelen REL karesi (`oob_dropped`) istemcinin yeniden gönderimiyle
   geri gelir (kayıp değil, gecikme); kalanlar BACKLOG'da.
+- **Taşıma kapsamı: akış pompalarının kayıpları (B66, sayım turu 4).**
+  Satırın ve tablonun SONUNA (`metrics_dropped`'tan sonra; mevcut
+  değerler kaymasın diye) yedi `counter`; loadgen telinde `GSMS`,
+  `RESULT`'ta `transport_<ad>=`. Her akış kapısı (TCP/TLS/QUIC/WS; düz
+  TCP de: `TcpTransport::metrics`) sayar:
+  `stream_frames_unwritten` (`gsb_transport_stream_frames_unwritten_total`)
+  — kapının ALIP hiç yazmadığı çıkış kareleri, yazıcısı önce durduğu
+  için: yazıcı pompası başarısız yazma ya da yazma tıkanmasıyla bitince
+  yazdığı batch'in kalanı (düşen/tıkanan kare dahil) ve çıkış kanalında
+  hâlâ duran her batch'in kareleri; WS'nin soket yazıcısı başarısız soket
+  yazması ya da eşin kapanış el sıkışmasıyla durunca kuyruğundaki oyun
+  kareleri. **Anlam notu:** oda (`shipped_*`) ve bağlantı aktörü
+  (`frames_out`) bunları kanal aldığı için saymıştı — sayaç "kanal aldı,
+  soket hiç görmedi" farkıdır; olağan son (bütün göndericiler gitti)
+  hiçbir şey bırakmaz. `stream_batches_unwritten` — yazıcı pompası öyle
+  bittiğinde kanalda kalan batch sayısı (kareleri yukarıdakinde).
+  `stream_requests_dropped_closed` / `stream_actions_dropped_closed` /
+  `stream_control_frames_dropped_closed` — okuyucu pompasının elindeki
+  kare, sunucu kararlı son aktörün kutusunu kapattığında (B60) reddedildi;
+  bağlantı başına en çok bir kare, türüne göre (`conn::FrameKind`); istek
+  terimi RPC defterinin terimidir (RPC-CONTROL-PLANE §8.3), aktör onu hiç
+  almadığından `requests_unprocessed` ile çakışmaz.
+  `ws_control_frames_unwritten` — WS soket yazıcısının aynı durmada
+  kuyrukta bıraktığı kontrol kareleri (pong, kapanış; sunucunun kapanışı
+  henüz gitmemişken). `ws_frames_dropped_after_close` — gönderilmiş bir
+  kapanış çerçevesinin ardındaki oyun kareleri (RFC 6455 §5.5.1: kapanıştan
+  sonra veri yok; reddedilen akışta bağlantının bildirimi ve uçuştaki
+  fan-out); oradaki kontrol karesi kuraldır, sayılmaz. Pompalar sayıyı
+  sonlarında bir kez gönderir (kayıp varsa; son örnek kuralı: dolu kanalda
+  doğurulan göndericiyle).
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:

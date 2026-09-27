@@ -38,12 +38,17 @@ pub const DEFAULT_MAX_FRAME_BYTES: usize = 1024 * 1024;
 #[derive(Clone)]
 pub struct TcpTransport {
     pub max_frame_bytes: usize,
+    /// Where the pumps' own losses go (BACKLOG B66: the frames a writer
+    /// never wrote, the frame a reader could not hand over); `None`
+    /// counts nothing.
+    pub metrics: crate::TransportMetrics,
 }
 
 impl Default for TcpTransport {
     fn default() -> Self {
         Self {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            metrics: None,
         }
     }
 }
@@ -51,6 +56,7 @@ impl Default for TcpTransport {
 struct TcpListenerHandle {
     listener: TcpListener,
     max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
     /// Closed by [`Listener::close`]: ends the pending accept (B16).
     door: Door,
 }
@@ -66,6 +72,7 @@ impl Transport for TcpTransport {
             Ok(Arc::new(TcpListenerHandle {
                 listener,
                 max_frame_bytes: self.max_frame_bytes,
+                metrics: self.metrics.clone(),
                 door: Door::new(),
             }) as Arc<dyn Listener>)
         })
@@ -102,6 +109,7 @@ impl TcpListenerHandle {
     fn make_endpoint(&self, stream: TcpStream, peer: std::net::SocketAddr) -> Endpoint {
         let (read_half, write_half) = stream.into_split();
         let max_frame_bytes = self.max_frame_bytes;
+        let metrics = self.metrics.clone();
         // The reader handle is `Some` here: TCP has a per-connection read
         // half, so the reader pump is genuinely this endpoint's task.
         Endpoint::new(
@@ -111,7 +119,8 @@ impl TcpListenerHandle {
                   timeouts: crate::pump::PumpTimeouts| {
                 let reader = TcpReader::new(read_half, max_frame_bytes);
                 let writer = TcpWriter::new(write_half);
-                let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+                let (read, write) =
+                    spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
                 (Some(read), write)
             },
         )

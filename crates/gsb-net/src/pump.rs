@@ -30,6 +30,7 @@
 //! per-connection timer task, registry message, or ticker subscription is
 //! needed (see `docs/DESIGN.md`, session lifecycle).
 
+mod lost;
 mod writer;
 
 #[cfg(test)]
@@ -102,6 +103,9 @@ pub trait WriteProgress {
 ///   when the socket accepts no byte for `timeouts.write_stall`, the
 ///   connection actor is notified through the SAME mailbox (see
 ///   `writer`).
+/// - `metrics`: where the pumps' own losses go (BACKLOG B66 — the frame
+///   the reader could not hand to a closed inbox, the frames the writer
+///   never wrote; see `lost`); `None` counts nothing.
 pub fn spawn_pumps<Reader, Writer>(
     conn: ConnectionId,
     reader: Reader,
@@ -109,6 +113,7 @@ pub fn spawn_pumps<Reader, Writer>(
     in_tx: Mailbox<ConnIn>,
     out_rx: Inbox<FrameBatch>,
     timeouts: PumpTimeouts,
+    metrics: crate::TransportMetrics,
 ) -> (JoinHandle<()>, JoinHandle<()>)
 where
     Reader: futures::Stream<Item = std::io::Result<FrameBody>> + Unpin + Send + 'static,
@@ -120,7 +125,14 @@ where
     // precisely the thing that is stuck when it has a verdict to deliver.
     // It reserves one slot of the mailbox before the reader can queue a
     // frame, so the verdict lands even into a full mailbox.
-    let write = writer::spawn(conn, writer, in_tx.clone(), out_rx, timeouts.write_stall);
+    let write = writer::spawn(
+        conn,
+        writer,
+        in_tx.clone(),
+        out_rx,
+        timeouts.write_stall,
+        metrics.clone(),
+    );
     let idle_timeout = timeouts.idle;
 
     let read = tokio::spawn(async move {
@@ -161,8 +173,14 @@ where
             };
             match result {
                 Ok(frame) => {
-                    if in_tx.send(ConnIn::Frame(frame)).await.is_err() {
-                        break; // connection actor is gone: nothing to tell
+                    if let Err(refused) = in_tx.send(ConnIn::Frame(frame)).await {
+                        // The actor's inbox is closed (the server ended
+                        // the session): nothing to tell, but the frame it
+                        // never took is counted (B66).
+                        if let ConnIn::Frame(frame) = refused.0 {
+                            lost::reader_frame_dropped_closed(metrics, frame.op);
+                        }
+                        break;
                     }
                 }
                 Err(e) => {

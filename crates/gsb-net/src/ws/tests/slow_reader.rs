@@ -57,7 +57,7 @@ async fn tight_pair() -> (TcpStream, TcpStream) {
 async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
     let (ours, mut peer) = tight_pair().await;
     let (_read_half, write_half) = ours.into_split();
-    let (tx, written) = spawn_socket_writer(write_half);
+    let (tx, written) = spawn_socket_writer(write_half, None);
     let writer = WsWriter::new(
         tx,
         WsMessageMapping::GameEnvelope,
@@ -76,6 +76,7 @@ async fn a_slow_but_steady_ws_reader_survives_frames_longer_than_the_window() {
             idle: None,
             write_stall: Some(WINDOW),
         },
+        None,
     );
     let _feeder = tokio::spawn(async move {
         let frame = FrameBody::new(7, vec![0u8; FRAME]);

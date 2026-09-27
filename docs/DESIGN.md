@@ -1860,8 +1860,32 @@ Katmanlama: `gsb-net` zaten `gsb-core`'a bağlı (posta kutuları,
 taşımayı bilmez, yalnız deltaları toplar. Kompozisyon kökü her kapının
 yapılandırmasına toplayıcının kanalını verir (`UdpTransportConfig`,
 `WsTransport`, `TlsTransportConfig`, `QuicTransportConfig`'in `metrics`
-alanı; `None` = eskisi gibi yalnız log). Düz TCP'nin kendi kaybı yok
-(okuyucu kutuya bekleyerek gönderir). **Kayıt defteri için önemli:**
+alanı; `None` = eskisi gibi yalnız log). **Akış pompaları (B66, sayım
+turu 4):** düz TCP dahil her akış kapısının (TCP/TLS/QUIC/WS) okuyucu ve
+yazıcı pompası da aynı kanala sayar (`spawn_pumps`'ın `metrics`
+parametresi, `TcpTransport::metrics`; `pump/lost.rs`). Yazıcı pompası
+başarısız yazma ya da yazma tıkanmasıyla biterse yazdığı batch'in
+kalanını (düşen/tıkanan kare dahil) ve çıkış kanalında hâlâ duran her
+batch'i sayar: kanalı `close()` edip `try_recv` ile boşaltır (sonraki
+gönderim göndericide `frames_out_closed`/`sends_closed` olarak sayılır;
+çift sayım yok) → `stream_frames_unwritten` (kare) ve
+`stream_batches_unwritten` (kanalda kalan batch). **Bu en büyük kalan
+kayıptı:** oda (`shipped_*`) ve bağlantı aktörü (`frames_out`) bu
+kareleri kanal aldığı için "gönderildi" saymıştı; sayaç "gönderildi ama
+sokete hiç yazılmadı" farkıdır. WS kapısının soket yazıcı görevi bir
+kuyruk aşağıda aynı kaybı yaşar: başarısız soket yazması ya da eşin
+kapanış el sıkışması (`Shutdown`) kuyruktaki oyun karelerini
+`stream_frames_unwritten`'a, kontrol karelerini
+`ws_control_frames_unwritten`'a katar; gönderilmiş bir kapanış
+çerçevesinin arkasındaki oyun kareleri (RFC 6455 §5.5.1) ayrı:
+`ws_frames_dropped_after_close` (kapanıştan sonraki kontrol karesi
+kuraldır, sayılmaz). Okuyucu pompası kutuya bekleyerek gönderir; ama
+sunucu kararlı son kutuyu kapatınca (B60) elindeki kare reddedilir —
+bağlantı başına en çok bir kare —, türüne göre
+`stream_{requests,actions,control_frames}_dropped_closed` (istek terimi
+RPC defterinin akış-kapısı taşıma terimidir). Pompalar bir kez, sonlarında
+kayıp varsa gönderir (tek atımlık `Flusher`, son örnek kuralıyla).
+**Kayıt defteri için önemli:**
 rUDP demux'ı dolu kutuda düşürdüğü güvenilir-bant karesini zaten
 ACK'lemiştir — istemci onu yeniden göndermez; RPC isteğiyse hiç
 yanıtlanmaz. Kare çözülmüştür (opcode bilinir), yani tür ayrımı burada
@@ -2992,7 +3016,7 @@ durdurulamaz.
 | net | `heartbeats_throttled_preauth`, `heartbeats_throttled_authed` (kümülatif; satırda `hb_throttled_preauth=` / `hb_throttled_authed=`, Prometheus'ta `gsb_net_heartbeats_throttled_{preauth,authed}_total`, loadgen telinde GSMN) | heartbeat kısması (SECURITY §3.2) kaç heartbeat'i cevapsız bıraktı — kimlik doğrulamadan önce (güvenlik sinyali) ve sonra (hatalı istemci zamanlayıcısı)? İhlal değil; B56'ya dek yalnız debug satırındaydı |
 | net | `frames_out_closed`, `close_notices_dropped` (kümülatif; satırda `hb_throttled_authed=`'dan sonra, Prometheus'ta `gsb_net_frames_out_closed_total` / `gsb_net_close_notices_dropped_total`, loadgen telinde GSMO) | bağlantı aktörünün kontrol karelerinden kaçını yazıcısı gitmiş (kapalı) çıkış kanalı reddetti, kaç en iyi çaba kapanış bildirimi dolu kanalda düştü? (B57; `frames_out`/`bytes_out_control` artık yalnız kanalın ALDIĞI kareleri sayar — önceden gönderimden önce sayılıyordu) |
 | net | `requests_unprocessed`, `actions_unprocessed`, `control_frames_unprocessed` (kümülatif; satırda `close_notices_dropped=`'dan sonra, Prometheus'ta `gsb_net_{requests,actions,control_frames}_unprocessed_total`, loadgen telinde GSMQ) | sunucu oturumu kendisi bitirdiğinde (hüküm, atma, oda yok oldu, durma, ihlal/pre-auth bütçesi, ölü çıkış yolu) bağlantının gelen kutusunda işlenmeden kalan — ve pre-auth bütçesini aşan — kaç kare vardı, türüne göre (`conn::FrameKind`)? İstek terimi RPC defterini kapatır (RPC-CONTROL-PLANE §8.3); kutuda kalanlar `frames_in`'de değil (B60) |
-| transport | `udp_{requests,actions,control_frames}_dropped_full`, `udp_acks_not_forwarded`, `udp_datagrams_{oversized,malformed}`, `udp_bad_cookies`, `udp_frags_refused`, `udp_sessions_dropped_accept_full`, `udp_frames_dropped_oversized`, `udp_control_frames_abandoned`, `udp_frames_drained`, `ws_close_frames_dropped`, `ws_pongs_dropped`, `handshakes_{refused,timed_out,failed}`, `metrics_dropped` (kümülatif, bütün kapılar birlikte; satırda `gsb-metric scope=transport`, Prometheus/OTLP'de `gsb_transport_<ad>_total`, loadgen telinde GSMR, `RESULT`'ta `transport_<ad>=`) | taşıma katmanı bağlantı aktörlerinin altında neyi kaybetti? (B58; §6 sonu. Önceden yalnız görev sonu log satırlarındaydı) |
+| transport | `udp_{requests,actions,control_frames}_dropped_full`, `udp_acks_not_forwarded`, `udp_datagrams_{oversized,malformed}`, `udp_bad_cookies`, `udp_frags_refused`, `udp_sessions_dropped_accept_full`, `udp_frames_dropped_oversized`, `udp_control_frames_abandoned`, `udp_frames_drained`, `ws_close_frames_dropped`, `ws_pongs_dropped`, `handshakes_{refused,timed_out,failed}`, `metrics_dropped`; akış pompalarının (B66) `stream_frames_unwritten`, `stream_batches_unwritten`, `stream_{requests,actions,control_frames}_dropped_closed`, `ws_control_frames_unwritten`, `ws_frames_dropped_after_close` (kümülatif, bütün kapılar birlikte; satırda `gsb-metric scope=transport`, Prometheus/OTLP'de `gsb_transport_<ad>_total`, loadgen telinde GSMR, B66'dan beri GSMS, `RESULT`'ta `transport_<ad>=`) | taşıma katmanı bağlantı aktörlerinin altında neyi kaybetti? (B58; §6 sonu. Önceden yalnız görev sonu log satırlarındaydı. B66: yazıcının çıkışta yazmadığı kareler — oda/bağlantı onları "gönderildi" saymıştı — ve okuyucunun kapalı kutuya veremediği kare) |
 | net | `server_closes` — sebep başına kümülatif (`ServerClose`: `idle_timeout`, `write_stall`, `rel_dead`, `violation_budget`, `preauth_budget`, `stream_rejected`, `conn_cap`, `unauth_cap`, `superseded`, `room_gone`, `outbound_dead`, `idle_input` — E6, odanın girdi-boşta tavanı `afk_action = disconnect` altında; `kicked` — E8, oyunun atma fiili; loadgen telinde GSMG); Prometheus'ta TEK aile `gsb_net_server_closes_total{reason=…}` | sunucu hangi oturumları KENDİ kararıyla, neden bitirdi? İstemci-tarafı son ve shutdown sayılmaz (SECURITY §3.6). Tıkanmış soket ERROR taşıyamadığından istemci sayaçları bunu göremez — `errors=0` bir yük ölçümünde dökülen yarım istemciyi gizleyebiliyordu |
 
 **Adım süresinde iki histogram (ölçüm çözünürlüğü).** `step_hist`

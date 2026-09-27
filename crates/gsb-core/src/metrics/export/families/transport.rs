@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 18] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 25] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -109,6 +109,41 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 18] 
         "gsb_transport_metrics_dropped_total",
         "Samples the transport tasks dropped on the full metrics channel (their counts ride the next one; also in gsb_metrics_dropped_total), cumulative.",
         |t| t.metrics_dropped,
+    ),
+    tr(
+        "gsb_transport_stream_frames_unwritten_total",
+        "Outbound frames a stream door (TCP, TLS, QUIC, WebSocket) took and never wrote because its writer stopped first (a failed write, a write stall, a WebSocket peer's close): the rest of the batch being written and everything still queued (counted as shipped/sent before), cumulative.",
+        |t| t.stream_frames_unwritten,
+    ),
+    tr(
+        "gsb_transport_stream_batches_unwritten_total",
+        "Outbound batches still queued in a connection's outbound channel when its stream writer ended on a failed write or a write stall, cumulative.",
+        |t| t.stream_batches_unwritten,
+    ),
+    tr(
+        "gsb_transport_stream_requests_dropped_closed_total",
+        "RPC requests a stream reader had read when the connection's inbox was already closed (the server ended the session), never answered, cumulative.",
+        |t| t.stream_requests_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_stream_actions_dropped_closed_total",
+        "Game-band frames a stream reader had read when the connection's inbox was already closed, cumulative.",
+        |t| t.stream_actions_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_stream_control_frames_dropped_closed_total",
+        "Base-band frames other than RPC requests a stream reader had read when the connection's inbox was already closed, cumulative.",
+        |t| t.stream_control_frames_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_ws_control_frames_unwritten_total",
+        "WebSocket control frames (pongs, close frames) the socket writer never wrote because it stopped first (a failed write, the peer's close), cumulative.",
+        |t| t.ws_control_frames_unwritten,
+    ),
+    tr(
+        "gsb_transport_ws_frames_dropped_after_close_total",
+        "WebSocket game frames dropped because a close frame had already gone out (no data after a close), cumulative.",
+        |t| t.ws_frames_dropped_after_close,
     ),
 ];
 

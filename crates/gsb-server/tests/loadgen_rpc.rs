@@ -50,7 +50,7 @@ fn num(line: &str, kv: &HashMap<String, String>, k: &str) -> u64 {
 /// The RPC ledger (docs/RPC-CONTROL-PLANE.md §8.3): every request a
 /// client sent lands in exactly one of these terms — the room's buckets
 /// and the connection-side drops. Every term must be on the line.
-const LEDGER: [&str; 16] = [
+const LEDGER: [&str; 17] = [
     "req_local",
     "req_ext",
     "req_rej_malformed",
@@ -69,6 +69,9 @@ const LEDGER: [&str; 16] = [
     // The transport's term (B58): rUDP requests the demux dropped on a
     // full session inbox, after the reliable band acknowledged them.
     "transport_udp_requests_dropped_full",
+    // The stream doors' term (B66): a request the reader pump had read
+    // when the server's end of the session had already closed the inbox.
+    "transport_stream_requests_dropped_closed",
 ];
 
 /// The ledger's sum on a RESULT line.
@@ -141,6 +144,7 @@ fn every_request_is_answered_once_at_a_sane_rate() {
         // (B60): 0 here — every session is ended by its client.
         "requests_unprocessed",
         "transport_udp_requests_dropped_full",
+        "transport_stream_requests_dropped_closed",
     ] {
         assert_eq!(get(k), 0, "{k}: {line}");
     }

@@ -62,6 +62,7 @@ async fn deaf_peer_ends_the_session() {
             idle: None,
             write_stall: Some(Duration::from_millis(300)),
         },
+        None,
     );
 
     // Feed the pump until the socket wedges. `try_send` keeps the test
@@ -144,6 +145,7 @@ async fn a_draining_peer_is_never_stalled() {
             idle: None,
             write_stall: Some(Duration::from_millis(300)),
         },
+        None,
     );
 
     // A trickle whose GAPS are longer than the window (400 ms against
@@ -205,6 +207,7 @@ async fn the_stall_verdict_is_posted_before_the_outbound_channel_closes() {
             idle: None,
             write_stall: Some(Duration::from_millis(300)),
         },
+        None,
     );
 
     // Fill the channel until the socket wedges, then SPIN (no await, no

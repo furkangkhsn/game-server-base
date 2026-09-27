@@ -100,7 +100,7 @@ async fn run_intake(
     max_frame_bytes: usize,
     metrics: crate::TransportMetrics,
 ) {
-    let mut flusher = crate::metrics::Flusher::new(metrics);
+    let mut flusher = crate::metrics::Flusher::new(metrics.clone());
     loop {
         // `None`: the endpoint is closed and will never accept again.
         let next = async { endpoint.accept().await.ok_or_else(listener_closed) };
@@ -110,7 +110,7 @@ async fn run_intake(
         let peer = incoming.remote_address();
         match intake.try_slot() {
             Some(slot) => {
-                let handshake = handshake(incoming, peer, max_frame_bytes);
+                let handshake = handshake(incoming, peer, max_frame_bytes, metrics.clone());
                 intake.spawn(slot, peer, HANDSHAKE_TIMEOUT, handshake);
             }
             None => {
@@ -134,11 +134,12 @@ async fn handshake(
     incoming: quinn::Incoming,
     peer: SocketAddr,
     max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
 ) -> io::Result<Endpoint> {
     let conn = incoming.await.map_err(io::Error::other)?;
     let (send, recv) = conn.accept_bi().await.map_err(io::Error::other)?;
     debug!(%peer, "QUIC connection accepted; bi-stream open");
-    Ok(make_endpoint(send, recv, peer, max_frame_bytes))
+    Ok(make_endpoint(send, recv, peer, max_frame_bytes, metrics))
 }
 
 /// Same wiring as TCP/TLS `make_endpoint`: hand the stream halves to
@@ -152,6 +153,7 @@ fn make_endpoint(
     recv: quinn::RecvStream,
     peer: SocketAddr,
     max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
 ) -> Endpoint {
     // The reader handle is `Some`: like TCP, QUIC-v1 has a
     // per-connection read half owned by this endpoint's reader pump.
@@ -162,7 +164,7 @@ fn make_endpoint(
               timeouts: crate::pump::PumpTimeouts| {
             let reader: QuicReader = FrameReader::new(recv, max_frame_bytes);
             let writer: QuicWriter = FrameWriter::new(send::QuicSend::new(send));
-            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },
     )

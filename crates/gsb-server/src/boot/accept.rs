@@ -180,7 +180,7 @@ pub(super) async fn run_accept(
 /// flight (the pre-auth cap — `start::pre_auth`, BACKLOG B31).
 /// `metrics`: where the transport sends its own losses (BACKLOG B58 —
 /// the rUDP demux and writers, the WebSocket reader, the handshake
-/// intakes; plain TCP has none of its own).
+/// intakes; B66 — every stream door's pumps, plain TCP's too).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
@@ -192,6 +192,7 @@ pub(super) async fn bind_listener(
     let transport: Arc<dyn Transport> = match spec {
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
             max_frame_bytes: cfg.max_frame_bytes,
+            metrics,
         }),
         ListenerSpec::Tls {
             cert_pem, key_pem, ..

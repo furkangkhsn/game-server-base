@@ -60,6 +60,7 @@ async fn a_slow_but_steady_reader_survives_a_frame_longer_than_the_window() {
             idle: None,
             write_stall: Some(WINDOW),
         },
+        None,
     );
     out_tx
         .send(vec![FrameBody::new(7, vec![0u8; FRAME])])

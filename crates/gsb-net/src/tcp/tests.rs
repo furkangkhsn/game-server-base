@@ -164,6 +164,7 @@ async fn an_oversized_frame_is_a_stream_rejection_not_a_peer_close() {
         in_tx,
         out_rx,
         crate::pump::PumpTimeouts::default(),
+        None,
     );
     let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
         .await

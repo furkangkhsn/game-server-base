@@ -184,7 +184,18 @@ impl Transport for TlsTransport {
                 Arc::clone(&intake),
                 listener,
                 HANDSHAKE_TIMEOUT,
-                move |stream, peer| handshake(acceptor.clone(), stream, peer, max_frame_bytes),
+                {
+                    let metrics = self.config.metrics.clone();
+                    move |stream, peer| {
+                        handshake(
+                            acceptor.clone(),
+                            stream,
+                            peer,
+                            max_frame_bytes,
+                            metrics.clone(),
+                        )
+                    }
+                },
                 self.config.metrics.clone(),
             ));
             Ok(Arc::new(TlsListenerHandle {
@@ -222,17 +233,23 @@ async fn handshake(
     stream: tokio::net::TcpStream,
     peer: SocketAddr,
     max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
 ) -> io::Result<Endpoint> {
     stream.set_nodelay(true)?;
     let tls = acceptor.accept(stream).await?;
-    Ok(make_endpoint(tls, peer, max_frame_bytes))
+    Ok(make_endpoint(tls, peer, max_frame_bytes, metrics))
 }
 
 /// Same wiring as TCP's `make_endpoint`: split the stream halves and
 /// hand them to the shared generic framing + pumps. The rustls halves
 /// implement `AsyncRead`/`AsyncWrite`, so NOTHING below this point
 /// knows TLS is involved.
-fn make_endpoint(stream: TlsStreamOf, peer: SocketAddr, max_frame_bytes: usize) -> Endpoint {
+fn make_endpoint(
+    stream: TlsStreamOf,
+    peer: SocketAddr,
+    max_frame_bytes: usize,
+    metrics: crate::TransportMetrics,
+) -> Endpoint {
     let (read_half, write_half) = tokio::io::split(stream);
     // The reader handle is `Some`: like TCP, TLS has a per-connection
     // read half owned by this endpoint's reader pump.
@@ -243,7 +260,7 @@ fn make_endpoint(stream: TlsStreamOf, peer: SocketAddr, max_frame_bytes: usize) 
               timeouts: crate::pump::PumpTimeouts| {
             let reader = FrameReader::new(read_half, max_frame_bytes);
             let writer = FrameWriter::new(write_half);
-            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts);
+            let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },
     )

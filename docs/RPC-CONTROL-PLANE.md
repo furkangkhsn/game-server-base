@@ -847,7 +847,8 @@ değişmedi.
 > `rpc_sent = req_local + req_ext + Σ req_rej_* + req_refused + req_unread
 > + req_unbound + requests_dropped_closed + requests_dropped_full
 > + requests_no_room + requests_unprocessed
-> + transport_udp_requests_dropped_full`
+> + transport_udp_requests_dropped_full
+> + transport_stream_requests_dropped_closed`
 
 Her istek tam olarak BİR terimdedir: oda kovaları (işlendi, reddedildi,
 yanıtsız reddedildi, okunmadı, bağlanmamış bağlantıdan çekildi) ile
@@ -860,8 +861,13 @@ onu ZATEN ACK'lemiştir, istemci yeniden göndermez ve istek hiç
 yanıtlanmaz. Kare çözülmüş olduğundan (opcode bilinir) sınıflanabilir:
 yalnız RPC istekleri bu terime girer (`conn::FrameKind`), oyun ve
 kontrol kareleri kendi taşıma sayaçlarına. Bağlantı aktörü onu hiç
-görmediğinden bağlantının hiçbir terimiyle çakışmaz. TCP/TLS/WS/QUIC'te
-0 (okuyucu kutuya bekleyerek gönderir, düşürmez).
+görmediğinden bağlantının hiçbir terimiyle çakışmaz. Akış kapılarında
+(TCP/TLS/WS/QUIC) okuyucu kutuya bekleyerek gönderir, dolu kutuda
+düşürmez; ama sunucu oturumu bitirip kutuyu kapattığında (B60) okuyucunun
+o an elinde tuttuğu kare reddedilir — bağlantı başına en çok bir kare.
+İstekse `transport_stream_requests_dropped_closed` (B66, sayım turu 4),
+defterin ikinci taşıma terimi: aktör onu hiç almadığından
+`requests_unprocessed` ile çakışmaz.
 
 `loadgen_rpc.rs`'in uçtan uca testleri bu eşitliği doğrudan iddia ediyor
 (makul hızda `req_ext + req_unread = sent`, cap patlamasında
@@ -1113,6 +1119,9 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 - ~~**rUDP demux'ının dolu kutuda düşürdüğü istek**~~ **Yapıldı (B58):**
   `transport_udp_requests_dropped_full` (taşıma kapsamı), defterin
   taşıma terimi — §8.3.
+- ~~**Akış okuyucusunun kapalı kutuya veremediği istek**~~ **Yapıldı
+  (B66):** `transport_stream_requests_dropped_closed`, defterin terimi —
+  §8.3.
 
 ## 12. Testler: sözleşmenin kilidi
 

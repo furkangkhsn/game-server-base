@@ -26,6 +26,7 @@ async fn idle_peer_gets_server_closed() {
             idle: Some(Duration::from_millis(200)),
             write_stall: None,
         },
+        None,
     );
     let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
         .await
@@ -110,6 +111,7 @@ async fn active_peer_resets_the_idle_window() {
             idle: Some(Duration::from_millis(250)),
             write_stall: None,
         },
+        None,
     );
 
     // 100 ms cadence: the window (250 ms) can never elapse between
@@ -184,6 +186,7 @@ async fn eof_reports_peer_closed_not_idle() {
             idle: Some(Duration::from_millis(200)),
             write_stall: None,
         },
+        None,
     );
     let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
         .await

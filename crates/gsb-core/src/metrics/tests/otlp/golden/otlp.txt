@@ -118,6 +118,20 @@ gsb_transport_handshakes_failed sum t=2 mono=true unit="" n=1 | Handshakes that 
   [] 1000..2000 int 17
 gsb_transport_metrics_dropped sum t=2 mono=true unit="" n=1 | Samples the transport tasks dropped on the full metrics channel (their counts ride the next one; also in gsb_metrics_dropped_total), cumulative.
   [] 1000..2000 int 18
+gsb_transport_stream_frames_unwritten sum t=2 mono=true unit="" n=1 | Outbound frames a stream door (TCP, TLS, QUIC, WebSocket) took and never wrote because its writer stopped first (a failed write, a write stall, a WebSocket peer's close): the rest of the batch being written and everything still queued (counted as shipped/sent before), cumulative.
+  [] 1000..2000 int 19
+gsb_transport_stream_batches_unwritten sum t=2 mono=true unit="" n=1 | Outbound batches still queued in a connection's outbound channel when its stream writer ended on a failed write or a write stall, cumulative.
+  [] 1000..2000 int 20
+gsb_transport_stream_requests_dropped_closed sum t=2 mono=true unit="" n=1 | RPC requests a stream reader had read when the connection's inbox was already closed (the server ended the session), never answered, cumulative.
+  [] 1000..2000 int 21
+gsb_transport_stream_actions_dropped_closed sum t=2 mono=true unit="" n=1 | Game-band frames a stream reader had read when the connection's inbox was already closed, cumulative.
+  [] 1000..2000 int 22
+gsb_transport_stream_control_frames_dropped_closed sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests a stream reader had read when the connection's inbox was already closed, cumulative.
+  [] 1000..2000 int 23
+gsb_transport_ws_control_frames_unwritten sum t=2 mono=true unit="" n=1 | WebSocket control frames (pongs, close frames) the socket writer never wrote because it stopped first (a failed write, the peer's close), cumulative.
+  [] 1000..2000 int 24
+gsb_transport_ws_frames_dropped_after_close sum t=2 mono=true unit="" n=1 | WebSocket game frames dropped because a close frame had already gone out (no data after a close), cumulative.
+  [] 1000..2000 int 25
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0
