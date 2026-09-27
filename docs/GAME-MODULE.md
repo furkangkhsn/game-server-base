@@ -416,11 +416,19 @@ noktası).
   Öneri: `[arena]`/`[mmo]` — `game` dizesi bugünkü gibi kalır, bir
   config birden çok oyunun bölümünü taşıyabilir, modül yalnız kendi
   tablosuna bakar.
-- **Demo'nun AOI/team/PVS kurucu trait'lerinde `with_economy` yok**
+- ~~**Demo'nun AOI/team/PVS kurucu trait'lerinde `with_economy` yok**
   (`OpenRoomExt` ve iki sharded trait'te var). Karar 11'in düzeltmesi
   `gsb-demo`'ya dokunmadan kit'in public `game_mut()`'u + demo'nun
   `set_economy`'si ile yapıldı; demo'ya simetrik `with_economy`
-  eklemek küçük bir temizlik olarak kalıyor.
+  eklemek küçük bir temizlik olarak kalıyor.~~ **KAPANDI (BACKLOG
+  F4):** `AoiRoomExt`, `TeamRoomExt` ve `SectorRoomExt` artık
+  `OpenRoomExt` ile aynı biçimde `with_economy` taşıyor; `gsb-server`'ın
+  aoi/team/pvs fabrikaları `game_mut().set_economy(…)` dolanması yerine
+  builder zincirini kullanıyor (davranış ve bayt aynı). Birim test
+  `gsb-demo`'nun `demo/rooms/tests/economy.rs`'i: dört tek-dünyalı oda
+  `with_economy` ile kurulunca bir `ECONOMY` isteğini O servise devreder
+  (yanıt servisin fiyatını taşır), onsuz kurulunca "economy service not
+  configured" ile reddeder; uçtan uca ikizi `tests/economy_rooms.rs`.
 - `boot/start.rs` 296 satır (hedefin üstünde): tek sürekli başlatma
   prosedürü; giriş noktaları `start/entry.rs` çocuğuna alındı.
 

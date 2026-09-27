@@ -60,12 +60,9 @@ pub(super) fn aoi_room_factory(
     economy: gsb_demo::economy::EconomyService,
 ) -> RoomFactory<World, gsb_demo::aoi::Cell, (), ()> {
     Arc::new(move |_id, _config| {
-        let mut room = gsb_demo::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half)
-            .with_disconnect_grace(disconnect_grace);
-        // The demo's constructor trait for this room has no
-        // `with_economy`; the kit's public `game_mut` reaches the same
-        // setter the builder calls on the other rooms.
-        room.game_mut().set_economy(economy.clone());
+        let room = gsb_demo::aoi::AoiRoom::with_spawn_half(cell_size, spawn_half)
+            .with_disconnect_grace(disconnect_grace)
+            .with_economy(economy.clone());
         BuiltRoom::Single {
             world: World::new(),
             logic: Box::new(room)
@@ -84,10 +81,9 @@ pub(super) fn team_room_factory(
     economy: gsb_demo::economy::EconomyService,
 ) -> RoomFactory<World, gsb_demo::team::Team, (), ()> {
     Arc::new(move |_id, _config| {
-        let mut room = gsb_demo::team::TeamRoom::with_spawn_half(vision_radius, spawn_half)
-            .with_disconnect_grace(disconnect_grace);
-        // Same attachment as the AOI factory (no `with_economy` here).
-        room.game_mut().set_economy(economy.clone());
+        let room = gsb_demo::team::TeamRoom::with_spawn_half(vision_radius, spawn_half)
+            .with_disconnect_grace(disconnect_grace)
+            .with_economy(economy.clone());
         BuiltRoom::Single {
             world: World::new(),
             logic: Box::new(room)
@@ -105,10 +101,9 @@ pub(super) fn pvs_room_factory(
     economy: gsb_demo::economy::EconomyService,
 ) -> RoomFactory<World, gsb_demo::pvs::Sector, (), ()> {
     Arc::new(move |_id, _config| {
-        let mut room = gsb_demo::pvs::SectorRoom::with_spawn_half(spawn_half)
-            .with_disconnect_grace(disconnect_grace);
-        // Same attachment as the AOI factory (no `with_economy` here).
-        room.game_mut().set_economy(economy.clone());
+        let room = gsb_demo::pvs::SectorRoom::with_spawn_half(spawn_half)
+            .with_disconnect_grace(disconnect_grace)
+            .with_economy(economy.clone());
         BuiltRoom::Single {
             world: World::new(),
             logic: Box::new(room)

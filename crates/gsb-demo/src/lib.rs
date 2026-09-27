@@ -80,8 +80,8 @@ pub mod team {
     /// The team-fog room running the demo game over the kit's 2D vision
     /// preset: the kit's generic [`TeamRoom`](gsb_kit::team::TeamRoom)
     /// instantiated with the demo's `Game` and `VisionGrid2<Position>`
-    /// (constructors: [`TeamRoomExt`]'s `new`, `with_spawn_half`; the
-    /// kit's `with_disconnect_grace`).
+    /// (constructors: [`TeamRoomExt`]'s `new`, `with_spawn_half`,
+    /// `with_economy`; the kit's `with_disconnect_grace`).
     pub type TeamRoom = gsb_kit::team::TeamRoom<
         crate::demo::play::DemoGame,
         gsb_kit::space::VisionGrid2<crate::demo::components::Position>,
@@ -98,8 +98,8 @@ pub mod aoi {
     /// The AOI room running the demo game over the kit's 2D grid preset:
     /// the kit's generic [`AoiRoom`](gsb_kit::aoi::AoiRoom)
     /// instantiated with the demo's `Game` and `Grid2` (constructors:
-    /// [`AoiRoomExt`]'s `new`, `with_spawn_half`; the kit's
-    /// `with_disconnect_grace`).
+    /// [`AoiRoomExt`]'s `new`, `with_spawn_half`, `with_economy`; the
+    /// kit's `with_disconnect_grace`).
     pub type AoiRoom = gsb_kit::aoi::AoiRoom<crate::demo::play::DemoGame, gsb_kit::space::Grid2>;
 }
 
@@ -113,7 +113,8 @@ pub mod pvs {
 
     /// The PVS room running the demo game over its four-sector map in the
     /// kit's convex-sector preset (constructors: [`SectorRoomExt`]'s
-    /// `new`, `with_spawn_half`; the kit's `with_disconnect_grace`).
+    /// `new`, `with_spawn_half`, `with_economy`; the kit's
+    /// `with_disconnect_grace`).
     pub type SectorRoom = gsb_kit::pvs::SectorRoom<
         crate::demo::play::DemoGame,
         gsb_kit::space::ConvexSectors2<crate::demo::components::Position>,

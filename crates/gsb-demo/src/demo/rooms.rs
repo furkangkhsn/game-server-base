@@ -84,6 +84,11 @@ pub trait AoiRoomExt: Sized {
     /// [`OpenRoomExt::with_spawn_half`]).
     #[must_use]
     fn with_spawn_half(cell_size: f32, half: f32) -> Self;
+
+    /// Attach the economy service handle (see
+    /// [`OpenRoomExt::with_economy`]).
+    #[must_use]
+    fn with_economy(self, economy: EconomyService) -> Self;
 }
 
 impl AoiRoomExt for AoiRoom<DemoGame, Grid2> {
@@ -93,6 +98,11 @@ impl AoiRoomExt for AoiRoom<DemoGame, Grid2> {
 
     fn with_spawn_half(cell_size: f32, half: f32) -> Self {
         Self::with_game(DemoGame::new(half), Grid2::new(cell_size))
+    }
+
+    fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.game_mut().set_economy(economy);
+        self
     }
 }
 
@@ -110,6 +120,11 @@ pub trait TeamRoomExt: Sized {
     /// (see [`OpenRoomExt::with_spawn_half`]).
     #[must_use]
     fn with_spawn_half(vision_radius: f32, half: f32) -> Self;
+
+    /// Attach the economy service handle (see
+    /// [`OpenRoomExt::with_economy`]).
+    #[must_use]
+    fn with_economy(self, economy: EconomyService) -> Self;
 }
 
 impl TeamRoomExt for TeamRoom<DemoGame, VisionGrid2<Position>> {
@@ -119,6 +134,11 @@ impl TeamRoomExt for TeamRoom<DemoGame, VisionGrid2<Position>> {
 
     fn with_spawn_half(vision_radius: f32, half: f32) -> Self {
         Self::with_game(DemoGame::new(half), VisionGrid2::new(vision_radius))
+    }
+
+    fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.game_mut().set_economy(economy);
+        self
     }
 }
 
@@ -139,6 +159,11 @@ pub trait SectorRoomExt: Sized {
     /// promises for off-map positions).
     #[must_use]
     fn with_spawn_half(half: f32) -> Self;
+
+    /// Attach the economy service handle (see
+    /// [`OpenRoomExt::with_economy`]).
+    #[must_use]
+    fn with_economy(self, economy: EconomyService) -> Self;
 }
 
 impl SectorRoomExt for SectorRoom<DemoGame, ConvexSectors2<Position>> {
@@ -148,6 +173,11 @@ impl SectorRoomExt for SectorRoom<DemoGame, ConvexSectors2<Position>> {
 
     fn with_spawn_half(half: f32) -> Self {
         Self::with_game(DemoGame::new(half), demo_map())
+    }
+
+    fn with_economy(mut self, economy: EconomyService) -> Self {
+        self.game_mut().set_economy(economy);
+        self
     }
 }
 

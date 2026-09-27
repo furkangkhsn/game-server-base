@@ -24,6 +24,7 @@ use crate::prelude::*;
 use gsb_kit::identity::WireId;
 
 mod aoi;
+mod economy;
 mod open;
 mod pvs;
 mod sharded;
