@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1216 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1220 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,10 +148,15 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**B41 tamam** (RECONNECT §16.1, CHANGELOG "B41"): `disconnect` altında
+dolu posta kutusunun arkasında bekleyen kapatma isteği, `parked`'ı
+gönderimde yeniden sınayarak (`reconcile_closes`) yollanır — parkı önden
+biten istek despawn yerleşir.
+
 **B40 tamam** (RECONNECT §16.2, CHANGELOG "B40"): `leave_room` idle-kick'i
 bağlantıyı LEAVE sonrası duruma getirir; park `ConnectionId::park_key()`
 altında kendi satırına taşınır (`RegistryMsg::LeaveConn`,
-`ConnIn::LeftRoom`). Açık: B41, B42, E8.
+`ConnIn::LeftRoom`). Açık: B43, E8, E9 (B41 kapandı).
 
 **E6 tamam** (RECONNECT §16.1, CHANGELOG "E6"): AFK'nın odadan mı sunucudan
 mı atılacağı oyunun/dağıtımın seçimi — `afk_action` (varsayılan
@@ -599,6 +604,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1216 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1220 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

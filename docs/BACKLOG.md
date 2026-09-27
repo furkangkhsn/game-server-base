@@ -96,7 +96,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B37 Pinsiz orkestratör çocuklara `--workers 1` veriyor (`args.workers.max(1)`, `orchestrate/pinning/procs.rs`) ama yorumu "runtime default" diyor — bütün pinsiz orkestre tabanları tek worker'lı süreçlerde koşmuş. Düzeltmek tabanları değiştirir | orkestre ölçümü yeniden alınırken | RPC-CONTROL-PLANE §8.2 |
 | B38 `metrics` fasadı exporter'ı — üçüncü `Exporter`, kendi feature'ı; aile tablosunu yürüyüp fasada basar, global recorder yalnız exporter'ın içinde (yeni crate gerektirir) | bir operatör `metrics` ekosistemini isterse | OPS §6 |
 | B39 `RoomReport::shipped_frames`/`private_frames` hiçbir dışa açım yüzeyinde yok (Prometheus'ta hiç olmadı) — aile tablosuna iki satır; altın metni bilerek değiştirir | bir sonraki metrik turu | DESIGN §12 |
-| B41 E6'nın `Disconnect`+park yolunda bekleyen kapatma isteği bir `DetachDespawned` raporunun arkasında kalabilir (dolu posta kutusu + sıfır/kısa grace): rapor önce varırsa satır detached kalıp sızar — B40'ın "rapor önünde bekleme" kuralı `close_requests`'e de uygulanmalı | registry doygunluğu | RECONNECT §16.1/§16.2 |
+| B43 `Disconnect` ile atılan bağlantı, kapatma isteği dolu posta kutusunun arkasındayken aynı odaya taze katılırsa istek yeni varlıkta bayat kalır, soket açık kalır (yeni üyelik tavanın saatine baştan girer) | registry doygunluğu + aktif istemci | RECONNECT §16.2 |
 | B30 WS kapanış kodunu sebebe göre ayırmak (stop 1001, politika hükümleri 1008) — kapıya aktörden sebep yolu gerekir | yalnız kapanış koduna bakabilen bir istemci | DESIGN §5.6 "WS kapanış kodu (B24)" |
 
 ### C. Dağıtık, kalıcılık, ufuk
@@ -160,7 +160,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F22 `input_rate_limited` için bağlantıya atıflı ilk-beş listesi (`actions_dropped_top` gibi) — bugün yalnız bağlantı başına bir `warn`; toplayıcıda bağlantı başı tablo + E2 aile tablosu | ihtiyaç görülünce | SECURITY §3.4 "Kalan yüzey" |
 | F23 Yük altında (load ~15+) ara sıra düşen gerçek saatli testler — E1'de `metrics::tests::collector::room_counters_flow_to_collector` ("2 steps"), E6 doğrulamasında `otlp` koşusunda kimliği yakalanamayan bir test; paused saate taşımak ya da eşiği sözleşmeye bağlamak ; B40 doğrulamasında `ws_bytes_are_the_messages_on_the_wire` (tek başına 1/5) ve `loadgen_drives_the_mmo` (`shard_members` 7≠8) yük ~40'ta birer kez — **yürüyor** | CI'da görülürse | E1/E6 turları |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6 ve B40 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40 ve B41 kendi turlarında kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

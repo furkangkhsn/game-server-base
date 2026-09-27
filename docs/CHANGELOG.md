@@ -5,6 +5,31 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B41 — `Disconnect` + park: bekleyen kapatma isteği parkın raporunun arkasında (`fix/b41-close-ordering`)
+
+`afk_action = disconnect` altında dolu registry posta kutusunun arkasında
+`parked` diye bekleyen kapatma isteği, park beklerken despawn ile biterse
+(kısa/sıfır grace) yanlışa düşüyordu: parkın `DetachDespawned`'ı 0c'de,
+isteğin 0d gönderiminden ÖNCE gidiyor; registry satır henüz `detached`
+olmadığı için raporu bayat yankı sayıp düşürüyor, ardından gelen `parked`
+istek satırı `detached` işaretliyordu — satır slotunu aynı kimlik dönene ya
+da oda bitene dek tutuyordu (SIZINTI). Tek slotluk dolu posta kutusu + adım
+adım boşaltılan vekil registry ile deterministik kuruldu.
+
+- Oda ve shard, bekleyen isteğin `parked`'ını her gönderim denemesinden
+  önce yeniden sınar (`reconcile_closes`): oda bağlantının bir üyeliğini
+  hâlâ tutuyorsa (park, bot, yeniden alınan üyelik) `parked` kalır; yoksa
+  istek despawn olarak yerleşir — iki varış sırası da aynı sona varır.
+- Elenen: B40'ın "rapor önünde bekleme" kuralı (rapor kuyrukta beklemez,
+  0c'de gider); tek sıralı giden kutusu; registry'de raporun canlı satırı
+  bırakması (kapatılmayı bekleyen bağlantının satırını silerdi).
+- Kabul edilen sınır: shard'da beklerken göç eden park — eksik sayım,
+  sızıntı değil. Kalan kenar B43 (RECONNECT §16.2).
+
+Testler 1216 → 1220 (`otlp` ile 1238); 2 test düzeltmeden önce kırmızı;
+ajanın 4 mutasyonu yakalandı; ebeveynin bağımsız mutasyonu (koşulu ters
+çevirmek) 3 testi kırıyor.
+
 ## B40 — varsayılan idle-kick'in iki kusuru (`fix/b40-idle-kick`)
 
 `afk_action = leave_room` altında tavan üyeliği bitiriyordu ama: park
