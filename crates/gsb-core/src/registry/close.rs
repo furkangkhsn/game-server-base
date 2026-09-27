@@ -26,6 +26,17 @@
 //! `docs/RECONNECT.md` §16.3). Both end the membership through the
 //! room's disconnect policy first; the registry side is the same.
 //!
+//! **The verdict is the connection's, the settlement the membership's**
+//! (BACKLOG B43). A request that waited behind a full mailbox can find
+//! the connection already out of that membership — its client saw the
+//! closed action channel and joined again (as a new entity, or
+//! elsewhere), or left. The registry then leaves the table alone (that
+//! end was settled, or its slot passed to the new membership) and still
+//! delivers the verdict: `ConnectionId`s are never reused, so the
+//! request can only name this connection, and a client must not evade a
+//! kick by rejoining. The connection's close ends the new membership the
+//! way every close does (a DETACH; the game's `on_disconnect`).
+//!
 //! **Its keep-the-socket sibling** ([`LeaveRequest`], BACKLOG B40): under
 //! the DEFAULT `afk_action = LeaveRoom` the ceiling ends the membership
 //! and the connection stays open. The registry settles the row the same
@@ -51,12 +62,16 @@ use crate::registry::RegistryMsg;
 pub struct CloseRequest {
     /// The connection to close.
     pub conn: ConnectionId,
-    /// The room whose membership ended (the registry acts only on a row
-    /// still affiliated with it — a stale request is a no-op).
+    /// The room whose membership ended: the registry settles the row
+    /// only while it is still affiliated with it. The verdict does not
+    /// depend on it (BACKLOG B43): a connection that left the membership
+    /// or joined again meanwhile is closed all the same, its row left to
+    /// its own close.
     pub room: RoomId,
-    /// The entity the membership held (the stale guard's second key, the
-    /// one a leave carries too: a request can never close a LATER
-    /// membership of the same connection).
+    /// The entity the membership held (the settlement guard's second key,
+    /// the one a leave carries too: a request never settles a LATER
+    /// membership of the same connection — that one ends through the
+    /// connection's close).
     pub entity: EntityId,
     /// `true` = the disconnect policy PARKED the entity (`Detach::Hold`)
     /// and the room still holds it when the request leaves: its slot

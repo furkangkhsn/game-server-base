@@ -7,7 +7,8 @@ use std::hash::Hash;
 
 use tracing::debug;
 
-use crate::conn::ConnIn;
+use crate::channel::Mailbox;
+use crate::conn::{ConnIn, ServerClose};
 use crate::id::{ConnectionId, RoomId};
 use crate::registry::actor::Registry;
 use crate::registry::{CloseRequest, ConnInfo, LeaveRequest};
@@ -42,6 +43,10 @@ where
     /// while the row is not yet detached is dropped as a stale echo, so
     /// a `parked` request behind its own park's report would hold the
     /// row forever (the room re-checks the flag before each send, B41).
+    ///
+    /// Only the settlement is guarded by the membership (BACKLOG B43): a
+    /// request for an earlier membership of the connection still closes
+    /// it (see the arm below).
     pub(super) fn on_close_conn(&mut self, req: CloseRequest) {
         let CloseRequest {
             conn,
@@ -55,13 +60,23 @@ where
             debug!(%conn, room = %room, "close request for a released connection: no-op");
             return;
         };
+        let inbox = info.inbox.clone();
         if info.room != Some(room) || info.entity != Some(entity) {
             // The membership the room ended is not this row's current
-            // one (it left, rejoined elsewhere or as a new entity).
-            debug!(%conn, room = %room, entity, "stale close request: no-op");
+            // one: the connection left it, or joined again — here as a
+            // new entity or elsewhere — while the request waited behind
+            // a full mailbox (BACKLOG B43). That end was already settled
+            // (a leave, the `SpawnDone` of the join) or handed its slot to
+            // the new membership, so the table is left alone. The VERDICT
+            // still stands: it judged this connection, and a
+            // `ConnectionId` is never reused. The new membership ends the
+            // way every membership of a closing connection does — its
+            // `ConnClosed` routes a DETACH, the game's `on_disconnect`
+            // runs once.
+            debug!(%conn, room = %room, entity, ?cause, "close request for an earlier membership: the table stays, the connection closes");
+            Self::tell_closed(inbox, cause, reason);
             return;
         }
-        let inbox = info.inbox.clone();
         if parked {
             // The park holds its slot (§4): the row stays, marked the way
             // a transport death marks it, so the hold's end
@@ -71,6 +86,12 @@ where
             self.settle_ended(conn, room);
         }
         debug!(%conn, room = %room, parked, ?cause, "room asked for the connection's close");
+        Self::tell_closed(inbox, cause, reason);
+    }
+
+    /// Relay a room's verdict to the connection on a spawned send (never
+    /// awaited here). No inbox = the transport is already gone.
+    fn tell_closed(inbox: Option<Mailbox<ConnIn>>, cause: ServerClose, reason: String) {
         if let Some(inbox) = inbox {
             tokio::spawn(async move {
                 let _ = inbox.send(ConnIn::ServerClosed { cause, reason }).await;

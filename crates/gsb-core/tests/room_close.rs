@@ -20,6 +20,9 @@
 //! - `close_races.rs`: why a close request is re-checked when it leaves
 //!   the room (BACKLOG B41) — a park's report that went ahead of it is
 //!   dropped, so only the request's `parked` flag decides the row.
+//! - `rejoin_races.rs` (rig: `rejoin_rig.rs`): a close request that a
+//!   fresh rejoin overtakes still closes the connection (BACKLOG B43) —
+//!   for the idle ceiling and for the game's kick.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -57,6 +60,10 @@ mod leave_table;
 mod logic;
 #[path = "room_close/registry.rs"]
 mod registry;
+#[path = "room_close/rejoin_races.rs"]
+mod rejoin_races;
+#[path = "room_close/rejoin_rig.rs"]
+mod rejoin_rig;
 #[path = "room_close/rig.rs"]
 mod rig;
 

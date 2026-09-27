@@ -207,9 +207,14 @@ pub enum RegistryMsg {
     ///   `leaves` as for a leave); a row whose transport is ALREADY gone
     ///   is removed outright — nothing else would ever release it.
     ///
-    /// Stale-guarded on `room` AND `entity`: a request for a connection
-    /// that has since left, rejoined elsewhere, rejoined as a new entity
-    /// or closed and been released is a silent no-op.
+    /// The SETTLEMENT is guarded on `room` AND `entity`: a request for a
+    /// membership that is no longer the row's current one (the
+    /// connection left it, or joined again elsewhere or as a new entity
+    /// while the request waited) leaves the table alone. The VERDICT is
+    /// not (BACKLOG B43): the connection is told all the same — it
+    /// judged the connection, whose id is never reused — and its close
+    /// ends the newer membership through the transport-death path. A
+    /// request for a released connection is a silent no-op.
     CloseConn(CloseRequest),
     /// A room (or shard) ENDED a member's membership while the member's
     /// connection stays open (BACKLOG B40 — today only the input-idle
@@ -231,7 +236,10 @@ pub enum RegistryMsg {
     ///   `leaves` as for a leave); a row whose transport is ALREADY gone
     ///   is removed outright.
     ///
-    /// Stale-guarded on `room` AND `entity`, like [`Self::CloseConn`].
+    /// Stale-guarded on `room` AND `entity` (the settlement guard of
+    /// [`Self::CloseConn`]); a stale request is a silent no-op — there is
+    /// no verdict to deliver, and the notice must not reach a newer
+    /// membership.
     LeaveConn(LeaveRequest),
     /// A connection's dispatcher task exited; drop its slot.
     OpsClosed { conn: ConnectionId },

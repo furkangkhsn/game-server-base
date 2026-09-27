@@ -110,16 +110,22 @@ async fn a_close_request_tells_the_connection_and_ends_the_membership() {
 }
 
 /// A request for another membership than the row's current one — a
-/// different entity, a different room — closes nothing and settles
-/// nothing.
+/// different entity, a different room: the connection left it or joined
+/// again while the request waited behind a full mailbox (BACKLOG B43) —
+/// settles nothing, and still closes the connection: the verdict judged
+/// the connection, whose id is never reused. A request for a released
+/// connection is a no-op.
 #[tokio::test]
-async fn a_stale_close_request_is_a_no_op() {
+async fn a_close_request_for_an_earlier_membership_settles_nothing_but_closes() {
     let (disc, _d) = mpsc::unbounded_channel();
     let (tx, _m) = start(logic::factory(Detach::Despawn, false, disc));
     create(&tx, config(None)).await;
     let mut inbox = open(&tx, 1).await;
     let entity = join(&tx, 1, "ana").await.expect("joined");
 
+    tx.send(request(7, entity, false))
+        .await
+        .expect("sent (unknown conn)");
     tx.send(request(1, entity + 99, false)).await.expect("sent");
     tx.send(RegistryMsg::CloseConn(CloseRequest {
         room: RoomId(2),
@@ -130,10 +136,10 @@ async fn a_stale_close_request_is_a_no_op() {
     }))
     .await
     .expect("sent");
-    tx.send(request(7, entity, false))
-        .await
-        .expect("sent (unknown conn)");
-    assert_eq!(told(&mut inbox, Duration::from_millis(200)).await, None);
+    for _ in 0..2 {
+        let (cause, _) = told(&mut inbox, WAIT).await.expect("the verdict stands");
+        assert_eq!(cause, ServerClose::IdleInput);
+    }
     assert_eq!(status(&tx, RoomId(1)).await, members(1), "nothing settled");
 }
 
