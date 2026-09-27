@@ -4,7 +4,10 @@
 //! (range and side, against the lent record — the anti-cheat locality
 //! rule of `docs/CROSS-SHARD.md` §2) and sent to its owner as a remote
 //! effect, which the owner re-checks and applies
-//! (`Combat::apply_remote`) — the MMO's pattern. One function
+//! (`Combat::apply_remote`) — the MMO's pattern. Which of the two a
+//! wire id is, and the one view both are checked on, the kit's
+//! `Seam::find` answers (`foe`: the kit's precedence — own over a lent
+//! copy, a unit handed on last tick lent by its new owner). One function
 //! (`Combat::strike`) changes hit points, on whichever shard owns the
 //! victim: a player at zero FALLS and is back on its feet at its
 //! faction's base, full health (a respawn that is a teleport: across the
@@ -23,12 +26,16 @@ use gsb_core::channel::Mailbox;
 use gsb_core::metrics::LogicCounter;
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::identity::WireId;
-use gsb_kit::sharded::Seam;
+use gsb_kit::sharded::{Found, Holder, Seam};
 
-use crate::codec::{WarWire, wire_faction};
+use crate::codec::WarWire;
 use crate::components::{Kind, MoveTarget, Pos3, Unit};
 use crate::effect::WarEffect;
 use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, PLAYER_HP, base};
+
+mod foe;
+
+use foe::{Foe, local_foe};
 
 /// The owner refuses a strike older than this (ticks since the attacker
 /// swung): a melee hit that took longer to arrive is not a hit.
@@ -79,7 +86,10 @@ pub(crate) struct Combat {
 }
 
 impl Combat {
-    /// `attacker` (this shard's unit) attacks wire id `target`.
+    /// `attacker` (this shard's unit) attacks wire id `target`: found
+    /// through the seam — local or lent, the kit's precedence — or, with
+    /// no seam, in this world; checked once, on the one view
+    /// ([`Foe`]); then struck here or sent to its owner.
     pub(crate) fn attack(
         &mut self,
         world: &mut World,
@@ -98,43 +108,31 @@ impl Combat {
         if target == me || !standing(&unit) {
             return;
         }
-        let local = match seam.as_deref() {
-            Some(seam) => seam.local(target),
-            None => {
-                let mut q = world.query::<(Entity, &WireId)>();
-                q.iter(world)
-                    .find(|(_, w)| w.get() == target)
-                    .map(|(e, _)| e)
-            }
+        let found = match seam.as_deref() {
+            Some(seam) => seam.find::<Foe>(world, target),
+            None => local_foe(world, target),
         };
-        if let Some(victim) = local {
-            let enemy_in_reach = world
-                .entity(victim)
-                .get::<Unit>()
-                .is_some_and(|v| standing(v) && v.faction != unit.faction)
-                && world
-                    .get::<Pos3>(victim)
-                    .is_some_and(|at| from.ground_dist(at) <= ATTACK_RANGE);
-            if enemy_in_reach {
+        let Some(Found { holder, view, .. }) = found else {
+            return;
+        };
+        let enemy = view.standing && view.side != unit.faction;
+        if !enemy || from.ground_dist(&view.at) > ATTACK_RANGE {
+            return;
+        }
+        match (holder, seam) {
+            (Holder::Local(victim), _) => {
                 self.strike(world, victim, me, ATTACK_DAMAGE, tick);
             }
-            return;
-        }
-        // Not ours: an enemy a neighbour lends through the strip?
-        let Some(seam) = seam else { return };
-        let Some(lent) = seam.lent(target) else {
-            return;
-        };
-        let w = lent.state;
-        let enemy = w.kind == Kind::Player && w.hp > 0 && w.faction != wire_faction(unit.faction);
-        if !enemy || from.ground_dist(&w.pos()) > ATTACK_RANGE {
-            return;
-        }
-        let strike = WarEffect::Strike {
-            damage: ATTACK_DAMAGE,
-        };
-        if let Err(why) = seam.emit(target, me, strike.encode()) {
-            tracing::debug!(target, ?why, "cross-seam attack not sent");
+            // Not ours: an enemy a neighbour lends through the strip.
+            (Holder::Lent { .. }, Some(seam)) => {
+                let strike = WarEffect::Strike {
+                    damage: ATTACK_DAMAGE,
+                };
+                if let Err(why) = seam.emit(target, me, strike.encode()) {
+                    tracing::debug!(target, ?why, "cross-seam attack not sent");
+                }
+            }
+            (Holder::Lent { .. }, None) => {}
         }
     }
 
@@ -161,20 +159,9 @@ impl Combat {
         else {
             return EffectOutcome::NoTarget;
         };
-        let source = match seam.local(effect.source) {
-            Some(e) => world
-                .get::<Pos3>(e)
-                .copied()
-                .zip(world.get::<Unit>(e).map(|u| u.faction)),
-            None => seam.lent(effect.source).map(|l| {
-                (
-                    l.state.pos(),
-                    crate::codec::team_of_wire(l.state.faction.into()),
-                )
-            }),
-        };
-        if let Some((p, side)) = source
-            && (side == victim.faction || p.ground_dist(&at) > ATTACK_RANGE + RANGE_SLACK)
+        let source = seam.find::<Foe>(world, effect.source).map(|f| f.view);
+        if let Some(foe) = source
+            && (foe.side == victim.faction || foe.at.ground_dist(&at) > ATTACK_RANGE + RANGE_SLACK)
         {
             return EffectOutcome::Rejected;
         }
