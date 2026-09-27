@@ -254,10 +254,14 @@ where
         // -- The tick context is built HERE, after every phase that
         //    writes the idle clock has run, because it LENDS that clock to
         //    the logic (`ctx.since_input`). The clock is moved out of the
-        //    actor for the body: the phases below take `&mut self`, which
-        //    a borrow living inside `ctx` would forbid. O(1) pointer
-        //    swap; nothing below reads or writes the clock, and no phase
-        //    below returns early, so the restore is unconditional.
+        //    actor for the game's hooks: the phases below take
+        //    `&mut self`, which a borrow living inside `ctx` would forbid.
+        //    O(1) pointer swap. It is handed back BEFORE MIGRATE, which
+        //    moves a crossing member's stamp to its new owner (read
+        //    against the lent-out, empty clock the stamp was lost and the
+        //    receiver started no clock at all), and lent again for TEAMS
+        //    and BROADCAST. No phase in either lend touches the clock or
+        //    returns early, so both restores are unconditional.
         let idle = std::mem::take(&mut self.idle);
         let ctx = TickCtx {
             room: self.config.id,
@@ -285,6 +289,8 @@ where
         // -- Phase 3b — EFFECTS OUT: what the hooks emitted (and what
         //    phase 0d forwarded) leaves for its authority.
         self.phase_effects_out(t.tick);
+        // The first lend is over; MIGRATE reads and writes the clock.
+        self.idle = idle;
 
         self.phase_migrate(t);
 
@@ -292,6 +298,13 @@ where
         // The borrowed boundary set, flattened once for the two phases
         // that read it.
         let borrowed = self.borrowed_view();
+        let idle = std::mem::take(&mut self.idle);
+        let ctx = TickCtx {
+            room: self.config.id,
+            tick: t.tick,
+            dt,
+            idle: IdleView::new(&idle, t.at),
+        };
         // -- Phase 5b — TEAMS (`docs/CROSS-SHARD.md` §8b): the logic reads
         //    the other shards' team records and hands back this shard's
         //    export for the registry hub.
