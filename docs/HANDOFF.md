@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1296 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1309 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,11 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**Küçük paket 7 tamam** (CHANGELOG "Küçük paket 7"): demo
+`MovementSystem`'in birim testleri var (F1); demo'nun dört tek-dünyalı
+odası da `with_economy` ile kurulur (F4). Açık: B52 — orkestre MMO
+loadgen testi yükte bir kez `shard_members=0,0,0,0` verdi.
 
 **B36 tamam** (RPC-CONTROL-PLANE §8.3, CHANGELOG "B36"): ayrılıştan hemen
 önce gönderilip oda tarafından okunmamış istekler
@@ -667,6 +672,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1296 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1309 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

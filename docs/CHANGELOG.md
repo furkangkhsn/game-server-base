@@ -5,6 +5,31 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Küçük paket 7 — F1, F4 (`misc/small-bundle-7`)
+
+- **F1 — `MovementSystem` birim testleri.** Demo'nun hareket sistemi
+  (`gsb-demo/src/demo/systems.rs`) artık tek başına test ediliyor
+  (`systems/tests.rs`, 8 test): tick başına `speed·dt` doğru doğrultuda;
+  `Speed` yoksa `DEFAULT_SPEED`; bir adım içindeyse hedefe TAM iniş +
+  `MoveTarget` silinir (adım = kalan mesafe sınırı dahil); demo sistem
+  yığını üzerinden spawn → hedef → varış (25 tick, aşma yok, sonra yazma
+  yok); hedefinde duran varlık ve `dt ≤ 0` yazılmaz; varlıklar birbirinden
+  bağımsız. 12 mutasyonun hepsi en az bir testi düşürdü. `MovementSystem`'in
+  doc yorumu özel `Step` yapısına kaymıştı, yerine alındı. Arena'nın
+  `Movement`'ının zaten iki birim testi var. Not (hata değil): hedefi
+  bulunduğu konuma eşit varlık `MoveTarget`'ı hiç kaybetmez (yazma yok,
+  zararsız).
+- **F4 — Demo AOI/team/PVS odalarına `with_economy`.** `AoiRoomExt`,
+  `TeamRoomExt`, `SectorRoomExt` `OpenRoomExt` ile aynı biçimde
+  `with_economy` kazandı; `gsb-server`'ın aoi/team/pvs fabrikaları
+  `game_mut().set_economy(…)` dolanması yerine builder zincirini kullanıyor.
+  Davranış ve bayt aynı. Test `demo/rooms/tests/economy.rs` (5).
+- Yan bulgu **B52** (BACKLOG): `loadgen_orchestrates_the_mmo` yükte bir kez
+  `shard_members=0,0,0,0` ile düştü, tekrar koşuda yeşil.
+
+Testler 1296 → 1309 (`otlp` ile 1314 → 1327). Ebeveyn doğrulaması: hareketin
+`dy` işaretini çevirmek dört testi düşürdü.
+
 ## B36 — ayrılışta okunmamış istekler ve oda defterinin kapanışı (`rpc/b36-leave-accounting`)
 
 - **Neden 1 (motor):** oda CONTROL'ü READ'den önce koşar; ayrılış,

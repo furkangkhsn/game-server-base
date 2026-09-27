@@ -95,6 +95,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B49 Ops HTTP'de eşzamanlı bağlantı tavanı yok ve yanıt YAZMANIN süre sınırı yok — başlığını gönderip yanıtı okumayan eş, soket tamponlarından büyük bir yanıtta (çok odalı `/metrics`) görevini tutar (B47 yalnız başlık okumasını sınırladı) | ops portu localhost dışına açılırsa | OPS §3, SECURITY §6 |
 | B50 Pinsiz orkestre tabanlarının yeniden ölçümü: B37'ye kadar bütün pinsiz `--orchestrate` koşuları tek worker'lı çocuklarla alındı; yeni koşular eskileriyle doğrudan karşılaştırılamaz (etkilenen yerlerin listesi RPC-CONTROL-PLANE §8.2 "Pinsiz orkestratörün worker sayısı"; `--pin` ve tek süreçli koşular etkilenmedi) | orkestre ölçümü yeniden alınırken | RPC-CONTROL-PLANE §8.2 |
 | B51 Oda üyeliği kendisi bitirdikten sonra (atma, girdi-boşta tavanı, oda kapanışı) bağlantı aktörünün kapalı aksiyon kanalına gönderdiği RPC isteği sayılmadan düşüyor (`forward_to_room` `Closed` kolu; odaya hiç ulaşmaz) — loadgen bu yola girmez (üyeliği hep istemci bitirir) | bu yolda istemci-oda defteri gerektiğinde | RPC-CONTROL-PLANE §11 |
+| B52 `loadgen_games::loadgen_orchestrates_the_mmo` yükte bir kez düştü: RESULT `shard_members=0,0,0,0` (toplam 4 beklenir), tekrar koşuda yeşil (2026-09-27, iki paralel tur altında tam koşu) — orkestre sunucu çocuğunun raporları/tutarlı kesit seçimi (B45/B46/F18) ya da B36'nın son örnek beklemesiyle etkileşim adayı; mekanizma doğrulanmadı | sıradaki tur | küçük paket 7 raporu |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
@@ -146,9 +147,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 
 | Madde | Kaynak |
 |---|---|
-| F1 `MovementSystem` birim testleri | ROADMAP:432 |
 | F2 Metrik test kuyrukları (`metrics_dropped` doğru yol testleri, `bytes_out` yalnız smoke) — tetik: metrik kanalı doygunluğu görülürse | ROADMAP:391-400 |
-| F4 Demo `AoiRoomExt`/`TeamRoomExt`/`SectorRoomExt`'te `with_economy` yok (sunucu `set_economy` ile dolanıyor) | GAME-MODULE:277 |
 | F7 G3-2'nin gerçek düzeltmesi: one-shot full alan bağlantıya o tick grup karesini göndermemek (wire + çekirdek API) — tetik: `gap_drops`'un temiz kayıp sinyali olarak gerekmesi ya da bant ölçümü | GAME-MODULE G3-2 |
 | F12 Shard'lı iki aktör odası aynı baytı göndermez (şerit/göç sırası zamanlamaya bağlı — kabul edilmiş bir tick'lik bayatlık); bayt karşılaştıran testler elle adımlanır (bilgi) | KIT-ARCHITECTURE §10 "A31" (A31-1) |
 | F19 Servisler arası durdurma sırası (bir servis diğerine kapanışta yazıyorsa) — bugün hepsine istek birlikte gider | ihtiyaç doğarsa | DESIGN §9.2 elenen 5 |
@@ -158,7 +157,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F26 MMO'nun `Combat::attack` / `apply_remote` kaynağı "yerel, değilse ödünç"ü elle yazıyor (seam varken doğrusal dünya sorgusu) — `Seam::find`'a çevrilebilir (ihtiyaç olunca) | KIT-ARCHITECTURE §10 "F6" |
 | F28 `ConnectionClosed`'ın arkasındaki hükmü (idle timeout / write stall / ölü rUDP bandı / ihlal bütçesi / başka üyeliğin hükmü — B43) politikaya iletmek: `ConnClosed` + dispatcher `Close` + `RoomControl`/`ShardMsg::Detach` bir neden taşır, `DisconnectCause` alt varyant kazanır (enum `#[non_exhaustive]`, ekleyici) | bir oyun kopmanın türüne göre farklı kader isterse | RECONNECT §3.3 |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; F6 kendi turunda, E9 kararla kapandı; küçük paket 5'te B33, B34, B39, B46; E8 kendi turunda, yan bulgusu B48 (shard girdi-boşta saati göçte taşınmıyordu) aynı turda kapandı; B43 kendi turunda, küçük paket 6'da B37, B47; F27 ve B36 kendi turlarında kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; F6 kendi turunda, E9 kararla kapandı; küçük paket 5'te B33, B34, B39, B46; E8 kendi turunda, yan bulgusu B48 (shard girdi-boşta saati göçte taşınmıyordu) aynı turda kapandı; B43 kendi turunda, küçük paket 6'da B37, B47; F27 ve B36 kendi turlarında; küçük paket 7'de F1, F4 kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

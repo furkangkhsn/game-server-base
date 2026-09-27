@@ -77,11 +77,13 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1296** (1296/1296 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1309** (1309/1309 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **B36 — RPC defteri kapandı** (RPC-CONTROL-PLANE §8.3) — odanın
+Son tur: **küçük paket 7** — demo `MovementSystem` birim testleri (F1),
+demo AOI/team/PVS odalarına `with_economy` (F4).
+Önceki tur: **B36 — RPC defteri kapandı** (RPC-CONTROL-PLANE §8.3) — odanın
 ayrılışta okumadan attığı istekler `req_unread` olarak sayılıyor; loadgen
 odanın son örneğini bitişten sonra alıyor.
 Önceki tur: **F27 — ayrılmanın nedeni politikaya** (RECONNECT §3.3) —
@@ -607,8 +609,10 @@ Tamamlanan tüm turların ayrıntılı kaydı: **`docs/CHANGELOG.md`**.
   `detached` da MAX'tan SUM'a alındı: komşuları `members`/`groups` ile
   aynı cinsten bölünmüş bir gauge.
 
-- [ ] **`MovementSystem` unit testleri** — room-seviye testler dolaylı
-  kapsıyor; spawn → target → run → konum/arrive doğrulaması hâlâ yok.
+- [x] **`MovementSystem` unit testleri** — **KAPANDI (F1, küçük paket 7):**
+  `gsb-demo/src/demo/systems/tests.rs` — hız·dt adımı, `Speed`/varsayılan
+  hız, tam iniş + `MoveTarget` silinmesi, demo yığını üzerinden varışa kadar
+  koşu, yazılmayan durumlar (hedefte / `dt ≤ 0`), bağımsız varlıklar.
 
 ## P1 — Robustluk ve güvenlik
 
