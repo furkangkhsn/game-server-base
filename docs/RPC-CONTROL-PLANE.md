@@ -672,10 +672,51 @@ Sayı zamanlamaya bağlı: aynı topoloji elle (`--serve` + 2 × 250 `--addr`)
 varsayılan worker'larla 0, sunucu `--workers 1` → 116, istemciler
 `--workers 1` → 80, ikisi 1 → 130, sunucu 2 + istemciler 1 → 1.
 Tekrarlanabilirliğin kaynağı: pinsiz orkestratör çocuklara
-`--workers 1` veriyor (`args.workers.max(1)`; yorum "runtime default"
-diyor). Düzeltilmedi — iki ayrı karar: kapalı kanalı `dropped`'tan
-ayırmak bir metrik anlamı değişikliği, orkestratörün worker sayısını
-değiştirmek geçmiş orkestre tabanlarının koşulunu değiştirir.
+`--workers 1` veriyordu (`args.workers.max(1)`; yorum "runtime default"
+diyordu) — B37'de düzeltildi, aşağıda. Kapalı kanalı `dropped`'tan
+ayırmak ayrı bir karar (metrik anlamı değişikliği, B32) — düzeltilmedi.
+
+**Pinsiz orkestratörün worker sayısı (B37, düzeltildi).** Orkestratör
+(`--orchestrate`, `--pin` olmadan) sunucu ve istemci çocuklarına
+`--workers args.workers.max(1)` veriyordu: operatör `--workers`
+yazmadıysa (`0` = "sorulmadı") her çocuk **tek worker'lı** bir tokio
+çalışma zamanında koştu. Yorum "runtime default" diyordu; orkestratör
+ilk yazıldığında (`559c745`) bu doğruydu — o gün `0` her modda tek
+worker demekti — ama regresyon ölçüm turu (`227cc04`) düz ve `--serve`
+modunun varsayılanını `available_parallelism`'e çekince orkestratör
+geride kaldı. Şimdi (`child_args.rs::child_workers`): `--pin` altında
+çocuk kendi çekirdek kümesinin boyunu alır (değişmedi, `--workers`'ı
+ezer); pinsiz ve operatör sayı verdiyse `--workers N` iki çocuğa da
+iletilir; pinsiz ve sayı yoksa `--workers` **hiç iletilmez** — çocuk
+kendi varsayılanında (`available_parallelism`, `main.rs`) koşar, yani
+tek bir varsayılan var, orkestratör onu kopyalamıyor. Kilit:
+`child_args::tests::{unpinned_children_keep_their_runtime_default,
+an_explicit_worker_count_reaches_both_children,
+a_pinned_child_gets_its_core_count}` (önce kırmızı: `Some("1")`).
+
+*Etkilenen tabanlar — bu turda yeniden ölçülmedi.* `--pin`'siz ve
+`--workers`'sız her orkestre koşusu tek worker'lı süreçlerde alındı;
+sayıları olduğu gibi duruyor, "o koşul altında" okunmalı, yeniden
+ölçüm B37'nin tetikleyicisiyle (orkestre ölçümü yeniden alınırken)
+gelir. Belgelerdeki yerleri:
+
+- bu bölüm: "Aynı turda B32'nin yeniden ölçümü" (orkestre 500,
+  `dropped` 116 — tek worker'ın ürünü; elle varsayılan worker'larla 0);
+- DESIGN §5.7 (B29 WS ölçümü, "Orkestre demo 500") ve §6 "El sıkışan
+  kapılar" (B31 ölçüm tablosunun "orkestre 500" satırları);
+- GAME-MODULE "G3 sonucu": demo A/B tablosunun `--orchestrate 1000
+  --procs 2` satırı ve "İlk ölçüm tabanları"nın 1000'lik (`sep`)
+  satırları; "W2 sonucu" → "Tabanlar"ın 1000'lik satırı;
+- CROSS-SHARD §8b.8 (W2 rölesi, 1000 `sep`);
+- KIT-ARCHITECTURE "T sonucu" (arena 1000 orkestre A/B satırı ve
+  `clients_cpu_s` +%15 notu) ve "W2 sonucu" ("Yük altında", 1000);
+- CHANGELOG'un G3, T ve W2 turlarının 1000'lik kayıtları, ROADMAP'in
+  "1000 istemci orkestre" tabanı ve BACKLOG A24 (aynı sayılar).
+
+Etkilenmeyenler: `--pin`'li orkestre koşuları (CROSS-SHARD "Ölçümler
+(release, orchestrator --procs 4 --pin …)", CHANGELOG'un C1 aynası ve
+10 000'lik `--pin` koşuları — çekirdek kümesinin boyu iletiliyordu) ve
+tek süreçli (süreç içi / `--serve`) koşular.
 
 ## 9. Kontrol düzlemi: oda yaşam döngüsü ve maç-sonucu dikişi
 

@@ -255,14 +255,12 @@ pub(crate) async fn orchestrate(args: Args) {
     let exe = std::env::current_exe().expect("current exe");
 
     // ── server child ──────────────────────────────────────────────────
-    // The server's workers are sized to its pinned core set (or the
-    // runtime default when unpinned); its command line (`server_args`)
-    // runs it 3 s past the clients.
-    let server_workers = masks
-        .as_ref()
-        .map(|m| m.0.len().max(1))
-        .unwrap_or(args.workers.max(1));
-    let sargs = server_args(&args, server_port, metrics_port, server_workers);
+    // The server's workers are sized to its pinned core set; unpinned it
+    // gets the operator's `--workers` or its runtime default (B37,
+    // `child_workers`). Its command line (`server_args`) runs it 3 s past
+    // the clients.
+    let server_cores = masks.as_ref().map(|m| m.0.len().max(1));
+    let sargs = server_args(&args, server_port, metrics_port, server_cores);
     let mut server = spawn_pinned(
         &exe,
         &sargs,
@@ -327,12 +325,11 @@ pub(crate) async fn orchestrate(args: Args) {
     let mut offset = 0u64;
     for p in 0..procs as u64 {
         let count = base + (if p < rem { 1 } else { 0 });
-        let workers = masks
+        let cores = masks
             .as_ref()
             .and_then(|m| m.1.get(p as usize))
-            .map(|m| m.len().max(1))
-            .unwrap_or(args.workers.max(1));
-        let cargs = client_args(&args, count, offset, server_port, workers);
+            .map(|m| m.len().max(1));
+        let cargs = client_args(&args, count, offset, server_port, cores);
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
         let mut child = spawn_pinned(

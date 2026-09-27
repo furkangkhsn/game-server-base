@@ -363,7 +363,9 @@ Client options:
   --spawn-half-size F       [demo] map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)
-  --workers N               tokio worker threads for this process
+  --workers N               tokio worker threads for this process (default:
+                            available parallelism); the orchestrator
+                            forwards an explicit N to unpinned children
 
 Server options (in-process server, --serve, or the orchestrator's server):
   --visibility all|spatial|team|pvs|sharded   [demo] (default all)

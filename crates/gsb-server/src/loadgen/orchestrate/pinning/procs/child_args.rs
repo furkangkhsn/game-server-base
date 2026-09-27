@@ -10,16 +10,38 @@ fn is_demo(args: &Args) -> bool {
     args.game == gsb_server::games::demo::DemoModule::NAME
 }
 
+/// The `--workers` a child is told, if any (B37): under `--pin` the size
+/// of its core set; unpinned, the operator's explicit `--workers N`;
+/// otherwise none at all, so the child runs on its own runtime default
+/// (`available_parallelism`, `main.rs`) — the one default the plain and
+/// `--serve` modes have too.
+fn child_workers(args: &Args, pinned_cores: Option<usize>) -> Option<usize> {
+    // `workers = 0` is "not asked" (the child's `main` reads it the same
+    // way); forwarding `max(1)` of it pinned every unpinned child to ONE
+    // worker while this said "runtime default".
+    pinned_cores.or((args.workers > 0).then_some(args.workers))
+}
+
+/// Push `--workers N` when the child is told a worker count
+/// ([`child_workers`]); nothing otherwise.
+fn push_workers(argv: &mut Vec<String>, args: &Args, pinned_cores: Option<usize>) {
+    if let Some(n) = child_workers(args, pinned_cores) {
+        argv.push("--workers".into());
+        argv.push(n.to_string());
+    }
+}
+
 /// The argument vector for the server child: the served server on
 /// `server_port`, streaming its metric reports to `metrics_port`, with
-/// `workers` runtime workers. It outlives the clients by 3 s (the clean
-/// stop happens after the clients left, so the final report windows
-/// cover the leave flushes).
+/// the runtime workers [`child_workers`] picks (`pinned_cores`: the size
+/// of its core set under `--pin`). It outlives the clients by 3 s (the
+/// clean stop happens after the clients left, so the final report
+/// windows cover the leave flushes).
 pub(super) fn server_args(
     args: &Args,
     server_port: u16,
     metrics_port: u16,
-    workers: usize,
+    pinned_cores: Option<usize>,
 ) -> Vec<String> {
     let mut sargs: Vec<String> = vec![
         "--serve".into(),
@@ -59,9 +81,8 @@ pub(super) fn server_args(
         (args.duration + Duration::from_secs(3))
             .as_secs()
             .to_string(),
-        "--workers".into(),
-        workers.to_string(),
     ]);
+    push_workers(&mut sargs, args, pinned_cores);
     // The explicit topology axis is forwarded ONLY when the operator set
     // it: an explicit key wins over the legacy derivation at resolve time,
     // so unconditionally forwarding "single" would silently flatten a
@@ -105,7 +126,7 @@ pub(super) fn server_args(
 
 /// The argument vector for one client child: `count` clients starting at
 /// global id `offset`, aimed at the served server on `server_port`, with
-/// `workers` runtime workers. Every knob the CLIENT side reads must be
+/// the runtime workers [`child_workers`] picks. Every knob the CLIENT side reads must be
 /// forwarded here — a knob the orchestrator forwards only to the server
 /// leaves the two processes disagreeing about the run.
 pub(super) fn client_args(
@@ -113,7 +134,7 @@ pub(super) fn client_args(
     count: u64,
     offset: u64,
     server_port: u16,
-    workers: usize,
+    pinned_cores: Option<usize>,
 ) -> Vec<String> {
     let mut cargs = vec![
         count.to_string(),
@@ -151,12 +172,8 @@ pub(super) fn client_args(
             args.cell_size.to_string(),
         ]);
     }
-    cargs.extend([
-        "--transport".into(),
-        args.transport.to_string(),
-        "--workers".into(),
-        workers.to_string(),
-    ]);
+    cargs.extend(["--transport".into(), args.transport.to_string()]);
+    push_workers(&mut cargs, args, pinned_cores);
     // The flood client (by global id) belongs to exactly one child:
     // forward the flag only to the child whose id range contains it.
     if let Some(k) = args.flood_id
