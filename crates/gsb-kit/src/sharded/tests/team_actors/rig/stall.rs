@@ -12,6 +12,9 @@ use crate::team::TeamRoom;
 
 type Single = Box<dyn RoomLogic<World, GroupKey = Team, Strip = ()>>;
 
+/// The single-world room the rig runs.
+pub(in crate::sharded::tests::team_actors) type SingleRoom = TeamRoom<Front, VisionGrid2<Position>>;
+
 /// A joined client whose out channel is still full (not yet reading).
 pub(in crate::sharded::tests::team_actors) struct Stalled {
     conn: ConnectionId,
@@ -25,9 +28,17 @@ impl Rig {
     /// the same game, clients and barrier as the sharded room, on the
     /// room actor instead of four shard actors.
     pub(in crate::sharded::tests::team_actors) async fn single(delta: bool) -> Self {
+        Self::single_with(delta, |room| room).await
+    }
+
+    /// [`Self::single`], the room built through `policy`.
+    pub(in crate::sharded::tests::team_actors) async fn single_with(
+        delta: bool,
+        policy: Policy<SingleRoom>,
+    ) -> Self {
         let factory: RoomFactory<World, Team, (), ()> = Arc::new(move |_id, _cfg| {
             let room = TeamRoom::with_game(Front::default(), VisionGrid2::<Position>::new(RADIUS));
-            let room = if delta { room.with_delta() } else { room };
+            let room = policy(if delta { room.with_delta() } else { room });
             BuiltRoom::Single {
                 world: World::new(),
                 logic: Box::new(room) as Single,

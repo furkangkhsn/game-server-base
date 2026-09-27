@@ -5,7 +5,9 @@
 
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
-use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, RoomLogic, TickCtx};
+use gsb_core::room::{
+    Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
+};
 
 use crate::game::TeamGame;
 use crate::space::Vision;
@@ -138,6 +140,24 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
             player,
             identity,
             &self.park,
+            None,
+            &mut self.park_ledger,
+        )
+    }
+
+    fn on_disconnect_with(
+        &mut self,
+        _world: &mut World,
+        player: PlayerId,
+        identity: &str,
+        cause: DisconnectCause,
+    ) -> Detach {
+        crate::common::park_on_disconnect(
+            &self.player_entity,
+            player,
+            identity,
+            &self.park,
+            Some(cause),
             &mut self.park_ledger,
         )
     }

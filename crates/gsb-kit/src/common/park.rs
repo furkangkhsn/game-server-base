@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
-use gsb_core::room::{Detach, ExpireTo, ResumeFound};
+use gsb_core::room::{Detach, DisconnectCause, ExpireTo, ResumeFound};
 
 use crate::common::*;
 use crate::game::Game;
@@ -34,10 +34,16 @@ mod tests;
 /// default) or releases the slot ([`ExpireTo::Despawn`]). The default
 /// grace lives at [`crate::DEFAULT_DISCONNECT_GRACE`] (the one public
 /// constant the server config defaults from).
-#[derive(Debug, Clone, Copy)]
+///
+/// `grace`/`to` are the ROOM-WIDE rule. `by_cause` (BACKLOG F27, empty
+/// unless the game opted in with `with_disconnect_policy_for`) replaces
+/// it, whole, for the ends of a membership the core reports with that
+/// [`DisconnectCause`] — "kicked → despawn, dropped → park".
+#[derive(Debug, Clone)]
 pub(crate) struct ParkPolicy {
     pub grace: Option<Duration>,
     pub to: ExpireTo,
+    pub by_cause: Vec<(DisconnectCause, Option<Duration>, ExpireTo)>,
 }
 
 impl Default for ParkPolicy {
@@ -45,7 +51,28 @@ impl Default for ParkPolicy {
         Self {
             grace: Some(crate::DEFAULT_DISCONNECT_GRACE),
             to: ExpireTo::AiHandover,
+            by_cause: Vec::new(),
         }
+    }
+}
+
+impl ParkPolicy {
+    /// Answer `cause` with `grace`/`to` instead of the room-wide rule
+    /// (a second call for the same cause replaces the first).
+    pub fn set_for(&mut self, cause: DisconnectCause, grace: Option<Duration>, to: ExpireTo) {
+        self.by_cause.retain(|(c, ..)| *c != cause);
+        self.by_cause.push((cause, grace, to));
+    }
+
+    /// The `(grace, to)` an end with `cause` gets: its override, else the
+    /// room-wide rule (also for `None` — a caller that did not say why —
+    /// and for a cause the core learns later). At most one entry per
+    /// cause the core has, so the scan is a few comparisons, once per
+    /// end of a membership.
+    fn rule(&self, cause: Option<DisconnectCause>) -> (Option<Duration>, ExpireTo) {
+        cause
+            .and_then(|cause| self.by_cause.iter().find(|(c, ..)| *c == cause))
+            .map_or((self.grace, self.to), |&(_, grace, to)| (grace, to))
     }
 }
 
@@ -71,9 +98,10 @@ pub(crate) struct ParkEntry {
     pub bot: bool,
 }
 
-/// The policy answer to a transport death (the `on_disconnect` hook
-/// body shared by every kit room): park the entity for the configured
-/// grace toward the configured end, recording the ledger entry.
+/// The policy answer to the end of a membership (the
+/// `on_disconnect`/`on_disconnect_with` hook body shared by every kit
+/// room): park the entity for the grace the policy gives `cause` (the
+/// room-wide rule for `None`) toward its end, recording the ledger entry.
 /// A connection we do not know (stale detach) cannot park anything.
 ///
 /// Visibility note (§3.2): nothing else changes — the entity keeps its
@@ -88,9 +116,11 @@ pub(crate) fn park_on_disconnect(
     player: PlayerId,
     identity: &str,
     policy: &ParkPolicy,
+    cause: Option<DisconnectCause>,
     ledger: &mut HashMap<String, ParkEntry>,
 ) -> Detach {
-    if policy.grace.is_some_and(|g| g.is_zero()) || identity.is_empty() {
+    let (grace, to) = policy.rule(cause);
+    if grace.is_some_and(|g| g.is_zero()) || identity.is_empty() {
         // Disabled (or nothing to resume with): the old semantics.
         return Detach::Despawn;
     }
@@ -104,10 +134,7 @@ pub(crate) fn park_on_disconnect(
                     bot: false,
                 },
             );
-            Detach::Hold {
-                grace: policy.grace,
-                to: policy.to,
-            }
+            Detach::Hold { grace, to }
         }
         // Stale detach (no entity of ours): fall through to despawn,
         // which the core turns into the ordinary no-op funnel.

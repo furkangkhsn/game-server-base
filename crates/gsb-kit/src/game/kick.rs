@@ -34,8 +34,11 @@ pub(crate) struct KitKicks(Vec<(Entity, String)>);
 /// then hands it to the bot ([`Game::bot_actions`](crate::game::Game::bot_actions)),
 /// and the same identity reconnecting within the grace resumes it; a
 /// room built with `with_disconnect_policy(Some(Duration::ZERO), _)`
-/// despawns it at once. (An anonymous session — no identity to resume
-/// with — is always despawned.)
+/// despawns it at once, and one built with
+/// `with_disconnect_policy_for(DisconnectCause::Kicked, Some(Duration::ZERO), _)`
+/// despawns only the kicked while a dropped transport still parks
+/// (BACKLOG F27). (An anonymous session — no identity to resume with — is
+/// always despawned.)
 ///
 /// Queued, never applied inside the calling hook. An entity no player
 /// owns here (an NPC, an entity already gone, a player's entity that

@@ -169,6 +169,20 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
         self
     }
 
+    /// Override the disconnect policy for one cause (see
+    /// [`crate::room::OpenRoom::with_disconnect_policy_for`]; BACKLOG
+    /// F27).
+    #[must_use]
+    pub fn with_disconnect_policy_for(
+        mut self,
+        cause: gsb_core::room::DisconnectCause,
+        grace: Option<std::time::Duration>,
+        to: gsb_core::room::ExpireTo,
+    ) -> Self {
+        self.park.set_for(cause, grace, to);
+        self
+    }
+
     /// The game this room runs.
     pub fn game(&self) -> &G {
         &self.game

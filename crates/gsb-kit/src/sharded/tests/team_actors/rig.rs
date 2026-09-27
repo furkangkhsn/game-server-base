@@ -38,7 +38,7 @@ pub(super) const RADIUS: f32 = 25.0;
 pub(super) const ROOM: RoomId = RoomId(1);
 const WAIT: Duration = Duration::from_secs(30);
 
-type Shard = ShardedTeamRoom<Front, GridPartition2<Position>, VisionGrid2<Position>>;
+pub(super) type Shard = ShardedTeamRoom<Front, GridPartition2<Position>, VisionGrid2<Position>>;
 type Factory = RoomFactory<World, Team, TeamMig<FixMig>, WirePos>;
 
 mod stall;
@@ -58,14 +58,17 @@ pub(super) struct Rig {
     pub(super) tick: u64,
 }
 
-fn factory(delta: bool) -> Factory {
+/// A kit room's policy, as the rig builds it (the default: none added).
+pub(super) type Policy<R> = fn(R) -> R;
+
+fn factory(delta: bool, policy: Policy<Shard>) -> Factory {
     Arc::new(move |_id, _cfg| {
         let shards = (0..SHARDS)
             .map(|i| {
                 let inner =
                     ShardedRoom::with_game(Front::default(), GridPartition2::new(SHARDS, HALF), i);
                 let room = Shard::with_shard(inner, VisionGrid2::new(RADIUS), fix_lent_pos);
-                let room = if delta { room.with_delta() } else { room };
+                let room = policy(if delta { room.with_delta() } else { room });
                 (
                     World::new(),
                     Box::new(room)
@@ -123,7 +126,12 @@ where
 impl Rig {
     /// A live registry with the room created; `delta` = the delta mode.
     pub(super) async fn new(delta: bool) -> Self {
-        let (reg, metrics) = boot(factory(delta)).await;
+        Self::new_with(delta, |room| room).await
+    }
+
+    /// [`Self::new`], every shard built through `policy`.
+    pub(super) async fn new_with(delta: bool, policy: Policy<Shard>) -> Self {
+        let (reg, metrics) = boot(factory(delta, policy)).await;
         Self::with(reg, metrics, SHARDS)
     }
 
@@ -174,6 +182,15 @@ impl Rig {
         });
         self.step().await;
         self.clients.len() - 1
+    }
+
+    /// The client's transport dies (the registry's `ConnClosed` route).
+    pub(super) async fn close(&mut self, client: usize) {
+        let conn = self.clients[client].conn;
+        self.reg
+            .send(RegistryMsg::ConnClosed { conn })
+            .await
+            .expect("registry");
     }
 
     /// A voluntary leave (the registry's leave path).

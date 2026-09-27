@@ -9,15 +9,17 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::{Entity, With, World};
 use gsb_core::id::{ConnectionId, PlayerId};
-use gsb_core::room::{Detach, ExpireTo, GameLogic};
+use gsb_core::room::{Detach, DisconnectCause, ExpireTo, GameLogic};
 
 use crate::aoi::AoiRoom;
 use crate::pvs::SectorRoom;
 use crate::room::OpenRoom;
-use crate::sharded::{ShardedRoom, ShardedSpatialRoom};
+use crate::sharded::{ShardedRoom, ShardedSpatialRoom, ShardedTeamRoom};
 use crate::space::{ConvexSectors2, Grid2, GridPartition2, VisionGrid2};
 use crate::team::TeamRoom;
 use crate::testing::{Fixture, InCombat, Position, Vetoing, fixture_map};
+
+mod cause;
 
 type G = Vetoing<Fixture>;
 
@@ -25,10 +27,11 @@ fn game() -> G {
     Vetoing(Fixture::default())
 }
 
-/// The two policy builders every room has.
+/// The policy builders every room has.
 trait Policy: GameLogic<World> + Sized {
     fn grace(self, grace: Duration) -> Self;
     fn policy(self, grace: Option<Duration>, to: ExpireTo) -> Self;
+    fn policy_for(self, cause: DisconnectCause, grace: Option<Duration>, to: ExpireTo) -> Self;
 }
 
 macro_rules! policy {
@@ -39,6 +42,14 @@ macro_rules! policy {
             }
             fn policy(self, grace: Option<Duration>, to: ExpireTo) -> Self {
                 self.with_disconnect_policy(grace, to)
+            }
+            fn policy_for(
+                self,
+                cause: DisconnectCause,
+                grace: Option<Duration>,
+                to: ExpireTo,
+            ) -> Self {
+                self.with_disconnect_policy_for(cause, grace, to)
             }
         }
     )*};
@@ -51,6 +62,7 @@ policy!(
     SectorRoom<G, ConvexSectors2<Position>>,
     ShardedRoom<G, GridPartition2<Position>>,
     ShardedSpatialRoom<G, GridPartition2<Position>, Grid2>,
+    ShardedTeamRoom<G, GridPartition2<Position>, VisionGrid2<Position>>,
 );
 
 fn sharded() -> ShardedRoom<G, GridPartition2<Position>> {

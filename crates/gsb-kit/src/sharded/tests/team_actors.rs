@@ -9,6 +9,7 @@ use gsb_core::shard::{TEAM_EXPORT_TTL_TICKS, TeamExport, TeamRecord};
 use super::*;
 use crate::codec::RecordCodec;
 
+mod cause;
 mod client;
 mod dropped;
 mod front;

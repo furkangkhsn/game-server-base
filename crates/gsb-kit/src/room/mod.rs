@@ -94,7 +94,7 @@ use std::time::Duration;
 
 use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
-use gsb_core::room::ExpireTo;
+use gsb_core::room::{DisconnectCause, ExpireTo};
 
 use crate::common::{InputSeq, ParkEntry, ParkPolicy};
 use crate::game::{Game, Wire};
@@ -195,6 +195,28 @@ impl<G: Game> OpenRoom<G> {
     pub fn with_disconnect_policy(mut self, grace: Option<Duration>, to: ExpireTo) -> Self {
         self.park.grace = grace;
         self.park.to = to;
+        self
+    }
+
+    /// Override the disconnect policy for ONE cause (BACKLOG F27,
+    /// RECONNECT §3.3): an end of a membership the core reports with
+    /// `cause` gets `grace`/`to` — same meaning as in
+    /// [`Self::with_disconnect_policy`] — instead of the room-wide rule;
+    /// every other cause keeps the room-wide rule. "Kicked → despawn,
+    /// dropped → park" is
+    /// `.with_disconnect_policy_for(DisconnectCause::Kicked, Some(Duration::ZERO), ExpireTo::Despawn)`.
+    /// A second call for the same cause replaces the first; the
+    /// room-wide builders never touch an override (the order of the
+    /// calls does not matter). Opt-in: without it every cause gets the
+    /// room-wide rule, as before. Builder-style.
+    #[must_use]
+    pub fn with_disconnect_policy_for(
+        mut self,
+        cause: DisconnectCause,
+        grace: Option<Duration>,
+        to: ExpireTo,
+    ) -> Self {
+        self.park.set_for(cause, grace, to);
         self
     }
 

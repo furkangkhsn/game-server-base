@@ -7,7 +7,7 @@
 
 use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
-use gsb_core::room::{Action, Admission, Detach, GameLogic, ResumeFound, TickCtx};
+use gsb_core::room::{Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
 use gsb_core::shard::BorderRecord;
 
@@ -152,6 +152,17 @@ where
 
     fn on_disconnect(&mut self, world: &mut World, player: PlayerId, identity: &str) -> Detach {
         self.inner.on_disconnect(world, player, identity)
+    }
+
+    fn on_disconnect_with(
+        &mut self,
+        world: &mut World,
+        player: PlayerId,
+        identity: &str,
+        cause: DisconnectCause,
+    ) -> Detach {
+        self.inner
+            .on_disconnect_with(world, player, identity, cause)
     }
 
     fn may_release(&mut self, world: &mut World, player: PlayerId) -> bool {

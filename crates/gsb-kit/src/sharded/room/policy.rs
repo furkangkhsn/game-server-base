@@ -43,4 +43,18 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         self.park.to = to;
         self
     }
+
+    /// Override the disconnect policy for one cause (see
+    /// [`crate::room::OpenRoom::with_disconnect_policy_for`]; BACKLOG
+    /// F27). Every shard of a room should carry the same overrides.
+    #[must_use]
+    pub fn with_disconnect_policy_for(
+        mut self,
+        cause: gsb_core::room::DisconnectCause,
+        grace: Option<std::time::Duration>,
+        to: gsb_core::room::ExpireTo,
+    ) -> Self {
+        self.park.set_for(cause, grace, to);
+        self
+    }
 }

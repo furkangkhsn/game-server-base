@@ -114,6 +114,20 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
         self
     }
 
+    /// Override the disconnect policy for one cause on the wrapped shard
+    /// (see [`crate::room::OpenRoom::with_disconnect_policy_for`];
+    /// BACKLOG F27).
+    #[must_use]
+    pub fn with_disconnect_policy_for(
+        mut self,
+        cause: gsb_core::room::DisconnectCause,
+        grace: Option<std::time::Duration>,
+        to: gsb_core::room::ExpireTo,
+    ) -> Self {
+        self.inner = self.inner.with_disconnect_policy_for(cause, grace, to);
+        self
+    }
+
     /// The game this shard runs.
     pub fn game(&self) -> &G {
         self.inner.game()
