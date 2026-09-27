@@ -1,8 +1,10 @@
-//! `[rooms.<id>]` parses its ten room-level keys in their flat
+//! `[rooms.<id>]` parses its eleven room-level keys in their flat
 //! spellings and refuses everything else: an unknown key, a key that is
 //! not room-level, a malformed id, a bad value.
 
 use std::time::Duration;
+
+use gsb_core::room::AfkAction;
 
 use crate::config::{Config, RoomOverride};
 
@@ -28,6 +30,7 @@ fn a_room_section_parses_its_room_level_keys() {
          keepalive_hz = 0.5\n\
          max_players = 64\n\
          max_idle_input_secs = 120\n\
+         afk_action = \"disconnect\"\n\
          max_detach_hold_secs = \"off\"\n\
          input_rate_hz = 30\n\
          input_burst = 12\n\
@@ -46,6 +49,7 @@ fn a_room_section_parses_its_room_level_keys() {
             keepalive_hz: Some(0.5),
             max_players: Some(64),
             max_idle_input_secs: Some(120),
+            afk_action: Some(AfkAction::Disconnect),
             max_detach_hold: Some(None),
             input_rate_hz: Some(30),
             input_burst: Some(12),
@@ -119,6 +123,8 @@ fn a_bad_value_is_refused() {
         ("room_control = 1.5", "room_control"),
         ("max_detach_hold_secs = \"never\"", "or \"off\""),
         ("max_detach_hold_secs = -1", "or \"off\""),
+        ("afk_action = \"kick\"", "\"leave_room\" or \"disconnect\""),
+        ("afk_action = 1", "afk_action"),
     ] {
         let e = refused(&format!("[rooms.4]\n{line}\n"));
         assert!(e.contains(needle), "{line}: {e}");

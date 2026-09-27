@@ -25,6 +25,7 @@ fn tuned() -> Config {
         keepalive_hz: 2.0,
         max_players: Some(12),
         max_idle_input_secs: Some(40),
+        afk_action: Some(gsb_core::room::AfkAction::Disconnect),
         max_detach_hold: Some(Duration::from_secs(3)),
         ..Config::default()
     }
@@ -88,6 +89,7 @@ async fn the_open_asks_for_the_server_room() {
     assert_ne!(asked.keepalive_hz, d.keepalive_hz);
     assert_ne!(asked.max_players, d.max_players);
     assert_ne!(asked.max_idle_input_secs, d.max_idle_input_secs);
+    assert_ne!(asked.afk_action, d.afk_action);
     assert_ne!(asked.max_detach_hold, d.max_detach_hold);
 
     let (status, asked) = open(

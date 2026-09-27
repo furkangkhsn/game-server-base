@@ -3,7 +3,7 @@
 
 use gsb_core::room::InputRate;
 
-use crate::config::{Config, ServerError};
+use crate::config::{Config, GameDefaults, ServerError};
 
 fn checked(text: &str) -> Result<(), ServerError> {
     toml::from_str::<Config>(text)
@@ -42,7 +42,10 @@ fn limit(per_sec: u32, burst: u32) -> Option<InputRate> {
 fn room_rate(text: &str, id: u64, game: Option<InputRate>) -> Option<InputRate> {
     toml::from_str::<Config>(text)
         .expect("parses")
-        .room_template_for(game)
+        .room_template_for(GameDefaults {
+            input_rate: game,
+            ..GameDefaults::default()
+        })
         .room(id)
         .input_rate
 }

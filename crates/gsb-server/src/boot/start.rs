@@ -64,9 +64,12 @@ async fn start_inner(
 
     // The rooms this server builds — boot, admin open, `room_config` —
     // from ONE template: the config's room-level keys over the game's
-    // default input rate limit (read after `configure`: it may depend on
-    // the game's settings).
-    let template = cfg.room_template_for(module.input_rate());
+    // room defaults, its input rate limit and its idle ceiling's action
+    // (read after `configure`: they may depend on the game's settings).
+    let template = cfg.room_template_for(crate::config::GameDefaults {
+        input_rate: module.input_rate(),
+        afk_action: module.afk_action(),
+    });
 
     // The wire table: the base protocol plus the game's messages.
     let table = {

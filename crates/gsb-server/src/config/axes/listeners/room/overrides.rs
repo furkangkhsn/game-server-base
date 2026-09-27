@@ -3,7 +3,7 @@
 //! ([`RoomTemplate::room`](super::RoomTemplate::room)).
 //!
 //! The grammar is deliberately exactly as wide as the room template: the
-//! same ten keys, spelled and read as their flat counterparts
+//! same eleven keys, spelled and read as their flat counterparts
 //! (`max_players = 0` = no cap, `max_idle_input_secs = 0` = off,
 //! `max_detach_hold_secs` in its three spellings). Any other key — a
 //! typo, a server-wide key (`bind`, `max_connections`), a game setting
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
-use gsb_core::room::RoomConfig;
+use gsb_core::room::{AfkAction, RoomConfig};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 
 /// One room's overrides: every key omitted keeps the server's value.
@@ -42,6 +42,10 @@ pub struct RoomOverride {
     pub max_players: Option<u32>,
     /// The room's input-idle ceiling, in seconds (`0` = off).
     pub max_idle_input_secs: Option<u64>,
+    /// What the room's input-idle ceiling does (`"leave_room"` or
+    /// `"disconnect"`), over the server's and the game's.
+    #[serde(default, deserialize_with = "afk_action")]
+    pub afk_action: Option<AfkAction>,
     /// The room's detach-hold ceiling: outer `None` = not written; inner
     /// `None` = `"off"` (spelled `max_detach_hold_secs`).
     #[serde(
@@ -84,6 +88,9 @@ impl RoomOverride {
         if let Some(secs) = self.max_idle_input_secs {
             room.max_idle_input_secs = Some(secs);
         }
+        if let Some(action) = self.afk_action {
+            room.afk_action = action;
+        }
         if let Some(hold) = self.max_detach_hold {
             room.max_detach_hold = hold;
         }
@@ -93,6 +100,11 @@ impl RoomOverride {
             room.input_rate = limit;
         }
     }
+}
+
+/// `afk_action` as the flat key reads it, marked as written.
+fn afk_action<'de, D: Deserializer<'de>>(d: D) -> Result<Option<AfkAction>, D::Error> {
+    super::super::afk_action::deserialize(d)
 }
 
 /// `max_detach_hold_secs` as the flat key reads it, marked as written.

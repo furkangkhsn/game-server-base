@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gsb_core::error::CoreError;
 use gsb_core::id::RoomId;
-use gsb_core::room::{DEFAULT_MAX_DETACH_HOLD, RoomConfig};
+use gsb_core::room::{AfkAction, DEFAULT_MAX_DETACH_HOLD, RoomConfig};
 
 use crate::config::{Config, ServerError};
 
@@ -85,6 +85,7 @@ fn server_room(cfg: &Config, id: u64) -> RoomConfig {
         keepalive_hz: cfg.keepalive_hz,
         max_players: cfg.max_players.map(|n| n as usize),
         max_idle_input_secs: cfg.max_idle_input_secs,
+        afk_action: cfg.afk_action.unwrap_or_default(),
         max_detach_hold: cfg.max_detach_hold,
         ..RoomConfig::default()
     }
@@ -100,6 +101,7 @@ const TUNED: &str = "tick_hz = 60\n\
     keepalive_hz = 2.0\n\
     max_players = 12\n\
     max_idle_input_secs = 40\n\
+    afk_action = \"disconnect\"\n\
     max_detach_hold_secs = 3\n\
     [rooms.1]\n\
     tick_hz = 15\n\
@@ -109,6 +111,7 @@ const TUNED: &str = "tick_hz = 60\n\
     keepalive_hz = 0.5\n\
     max_players = 2\n\
     max_idle_input_secs = 9\n\
+    afk_action = \"leave_room\"\n\
     max_detach_hold_secs = \"off\"\n\
     [rooms.7]\n\
     max_players = 0\n";
@@ -137,6 +140,11 @@ fn a_room_without_an_override_is_the_server_room() {
 #[test]
 fn an_override_reaches_its_room_only() {
     let cfg = parse(TUNED).expect("parses");
+    assert_eq!(
+        cfg.room_config(2).afk_action,
+        AfkAction::Disconnect,
+        "the flat key reaches the server's rooms"
+    );
     let want = RoomConfig {
         tick_hz: 15.0,
         control_capacity: 32,
@@ -145,6 +153,7 @@ fn an_override_reaches_its_room_only() {
         keepalive_hz: 0.5,
         max_players: Some(2),
         max_idle_input_secs: Some(9),
+        afk_action: AfkAction::LeaveRoom,
         max_detach_hold: None,
         ..server_room(&cfg, 1)
     };

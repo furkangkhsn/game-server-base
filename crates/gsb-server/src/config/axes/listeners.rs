@@ -2,10 +2,11 @@
 
 use crate::config::*;
 
+mod afk_action;
 mod detach_hold;
 mod room;
 pub use room::RoomOverride;
-pub(crate) use room::RoomTemplate;
+pub(crate) use room::{GameDefaults, RoomTemplate};
 
 /// The per-listener transport spelling inside a `[[listeners]]` entry.
 ///
@@ -213,6 +214,21 @@ pub struct Config {
     /// (`on_disconnect`), which decides park / AI handover / despawn.
     /// Heartbeats keep a session alive and never reset this clock.
     pub max_idle_input_secs: Option<u64>,
+    /// **What the input-idle ceiling does** (BACKLOG E6) — `"leave_room"`
+    /// or `"disconnect"`; omitted (`None`, the default) = the game's
+    /// default (`GameModule::afk_action`), `"leave_room"` when the game
+    /// has none. Every hosted room's `RoomConfig::afk_action`.
+    ///
+    /// Both first hand the member to `on_disconnect` (park / AI handover
+    /// / despawn — the game's call). `"leave_room"` stops there: the
+    /// socket stays open and the client may join again (today's
+    /// behaviour). `"disconnect"` also closes the connection: the client
+    /// gets a best-effort ERROR 9 (`input idle: …`) and the close,
+    /// counted as `server_closes{reason="idle_input"}`; a parked entity
+    /// stays resumable. No effect without
+    /// [`Self::max_idle_input_secs`].
+    #[serde(deserialize_with = "afk_action::deserialize")]
+    pub afk_action: Option<gsb_core::room::AfkAction>,
     /// **Detach-hold ceiling** — every hosted room's
     /// `RoomConfig::max_detach_hold` (`docs/RECONNECT.md` §17): the
     /// longest a game's `may_release` veto can keep a disconnected
@@ -254,7 +270,8 @@ pub struct Config {
     /// own values for the room-level keys above (`tick_hz`,
     /// `room_control`, `conn_action`, `max_snapshot_bytes`,
     /// `keepalive_hz`, `max_players`, `max_idle_input_secs`,
-    /// `max_detach_hold_secs`, `input_rate_hz`, `input_burst` — same
+    /// `afk_action`, `max_detach_hold_secs`, `input_rate_hz`,
+    /// `input_burst` — same
     /// spellings, same meanings), laid over
     /// the server's room for that id alone: a boot room of that id, an
     /// admin `POST /rooms/open?id=` of it (the query's `tick_hz` on top),
@@ -500,6 +517,8 @@ impl Default for Config {
             // OFF: AFK is a game decision, so the base's ceiling stays
             // invisible until an operator asks for it.
             max_idle_input_secs: None,
+            // The game's (or `leave_room`): the ceiling keeps the socket.
+            afk_action: None,
             max_detach_hold: Some(gsb_core::room::DEFAULT_MAX_DETACH_HOLD),
             // OFF: the number is the game's (or the operator's).
             input_rate_hz: None,

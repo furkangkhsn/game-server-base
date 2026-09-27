@@ -64,6 +64,18 @@ pub trait GameModule: Send + Sync + 'static {
     fn input_rate(&self) -> Option<gsb_core::room::InputRate> {
         None
     }
+
+    /// What the input-idle ceiling does to the member it expires, by
+    /// default, in every hosted room (BACKLOG E6; `RoomConfig::afk_action`)
+    /// unless the operator writes `afk_action` (flat, or in a
+    /// `[rooms.<id>]`). Whether an AFK player is kicked from the room or
+    /// from the server is the game's (or the deployment's) call; the
+    /// default here is `LeaveRoom` — today's behaviour, the socket stays
+    /// open. It acts only where the operator sets the ceiling itself
+    /// (`max_idle_input_secs`). Read once, after [`Self::configure`].
+    fn afk_action(&self) -> gsb_core::room::AfkAction {
+        gsb_core::room::AfkAction::LeaveRoom
+    }
 }
 
 /// Everything `Registry::new` takes except the room factory: built by the

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use gsb_core::id::RoomId;
-use gsb_core::room::{InputRate, RoomConfig};
+use gsb_core::room::{AfkAction, InputRate, RoomConfig};
 use tracing::info;
 
 use crate::config::{Config, ServerError};
@@ -37,6 +37,16 @@ pub(crate) struct RoomTemplate {
     overrides: BTreeMap<u64, RoomOverride>,
 }
 
+/// What the hosted game sets as the default of its rooms, under the
+/// config file's keys: the input rate limit (`GameModule::input_rate`,
+/// E1) and the input-idle ceiling's action (`GameModule::afk_action`,
+/// E6). `Default` = no game: no limit, `leave_room`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct GameDefaults {
+    pub(crate) input_rate: Option<InputRate>,
+    pub(crate) afk_action: AfkAction,
+}
+
 impl RoomTemplate {
     /// Room `id` of this server: the server's room, with the id's
     /// overrides (if any) laid over it.
@@ -58,15 +68,16 @@ impl Config {
     /// under the input limit (the file's view; see
     /// [`Self::room_template_for`]).
     pub(crate) fn room_template(&self) -> RoomTemplate {
-        self.room_template_for(None)
+        self.room_template_for(GameDefaults::default())
     }
 
-    /// The room template of this config hosting a game whose default
-    /// input rate limit is `game` (`GameModule::input_rate`): layered
-    /// low to high — the core's default (off), the game's number, the
-    /// flat `input_rate_hz`/`input_burst`, then `[rooms.<id>]`. The
-    /// number is the game's; the operator overrides it (`0` = off).
-    pub(crate) fn room_template_for(&self, game: Option<InputRate>) -> RoomTemplate {
+    /// The room template of this config hosting a game whose room
+    /// defaults are `game`: each layered low to high — the core's
+    /// default, the game's value, the flat key, then `[rooms.<id>]`.
+    /// The input rate limit (`GameModule::input_rate`): the number is the
+    /// game's, the operator overrides it (`0` = off). The idle ceiling's
+    /// action (`GameModule::afk_action`): a written `afk_action` wins.
+    pub(crate) fn room_template_for(&self, game: GameDefaults) -> RoomTemplate {
         let base = RoomConfig {
             tick_hz: self.tick_hz,
             control_capacity: self.room_control,
@@ -76,7 +87,8 @@ impl Config {
             max_players: self.max_players.map(|n| n as usize),
             max_idle_input_secs: self.max_idle_input_secs,
             max_detach_hold: self.max_detach_hold,
-            input_rate: self.input_rate_over(game),
+            afk_action: self.afk_action.unwrap_or(game.afk_action),
+            input_rate: self.input_rate_over(game.input_rate),
             ..RoomConfig::default()
         };
         RoomTemplate {
@@ -89,9 +101,10 @@ impl Config {
     /// the core's defaults, and `[rooms.<id>]` over those — the room every
     /// creation path of the server builds, and what
     /// [`ServerHandle::open_room`] takes to open a room like the server's
-    /// own. The FILE's view: a game's default input rate limit
-    /// (`GameModule::input_rate`) is not in it — a running server's room,
-    /// with it, is [`ServerHandle::room_config`].
+    /// own. The FILE's view: a game's room defaults (its input rate
+    /// limit, `GameModule::input_rate`, and its idle ceiling's action,
+    /// `GameModule::afk_action`) are not in it — a running server's
+    /// room, with them, is [`ServerHandle::room_config`].
     ///
     /// [`ServerHandle::room_config`]: crate::ServerHandle::room_config
     ///
