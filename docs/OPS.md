@@ -300,6 +300,31 @@ max_detach_hold_secs = "off"
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü
   task (istek başına tam okuma + tek yanıt + kapanış) — aktör disiplini
   bozulmaz, select gerekmez
+- **İstek başlığının süre sınırı (B47).** Bağlantı istek başlığının
+  TAMAMINI (istek satırı + başlıklar, CRLFCRLF'e dek) `HEAD_DEADLINE` =
+  **5 sn** içinde göndermeli (`http/head.rs`; config'siz sabit, TLS
+  el sıkışma süre sınırıyla aynı aile — SECURITY §2 "Uçlar"). Aşılırsa
+  tek bir `408 Request Timeout` (`Connection: close`, kısa gövde) yazılır,
+  ardından normal kapanış yolu: `shutdown` + 300 ms'lik sınırlı boşaltma
+  (`DRAIN_WINDOW`), görev biter. Eskiden bağlanıp tek bayt göndermeyen
+  bir eş bağlantı görevini kopana dek tutuyordu (slowloris türü sızıntı;
+  `stop`'u tutmuyordu — görev accept döngüsünden ayrı, B33). Kararlar:
+  (1) süre **başlığın tamamına** — okuma başına değil: bayt bayt damlatan
+  eş de aynı anda kesilir; (2) tek `tokio::time::timeout` okumanın
+  etrafında — okuma tek beklenen şey, çoklu bekleme yok; (3) **408
+  yazılır** (sessiz kapatma değil): RFC 9110'un boşta bağlantı yanıtı,
+  küçük ve tek, tam okunmamış başlık gönderen dürüst bir istemciye neden
+  kesildiğini söyler; yazma yolu 400/431'inkiyle aynı; (4) 5 sn: bir
+  scraper ya da `curl` başlığını bağlanır bağlanmaz tek yazmada yollar —
+  yavaş bir hatta bile dürüst istemcinin çok ötesi, sessiz görevin de
+  kısa sürede ölmesine yeter.
+  *Sınır dışı kalanlar.* Eşzamanlı ops bağlantısına **tavan yok**: her
+  kabul edilen bağlantı bir görev; süre sınırıyla canlı görev sayısı
+  kabul hızı × (5 sn + yanıt yazma + 300 ms) ile sınırlı, ama sayıyla
+  değil. Yanıt **yazmanın** süre sınırı yok: başlığını gönderip yanıtı
+  hiç okumayan bir eş, soket tamponlarından büyük bir yanıtta (çok odalı
+  `/metrics`) görevini tutar. İkisi de localhost sözleşmesinde (B17)
+  kabul edilir; port dışa açılırsa ele alınır (BACKLOG).
 - Kapanış (B33): accept, oyun dinleyicileriyle aynı `Door`'dan geçer
   (B16). `ServerHandle::stop` kapıyı kapatır, bekleyen accept
   `listener_closed` ile biter, döngü döner ve listener'ı düşürür (port
@@ -371,6 +396,15 @@ max_detach_hold_secs = "off"
 4. `disabled_by_default_and_binds_when_configured` — varsayılan kapalı,
    config'li çalışma
 5. Prometheus render fonksiyonunun unit testleri (HTTP'den bağımsız)
+6. Başlık süre sınırı (B47, `http/tests/head_deadline.rs`, paused saat,
+   bellek içi boru üstünde bağlantı görevi): sessiz eş tam `HEAD_DEADLINE`'da
+   (öncesinde değil) `408` + `Connection: close` alır, görevi boşaltmadan
+   sonra biter, borunun ucu kapanır; saniyede bir bayt damlatan eş aynı
+   anda kesilir (süre başlığın tamamına); başlığı hemen ya da sınırdan
+   100 ms önce gelen `/metrics` isteği anında normal yanıtını alır. Önce
+   kırmızı (süre sınırı yokken iki test asılma korumasına takıldı);
+   öldürülen mutasyonlar: süre sınırı yok, okuma başına süre, zaman
+   aşımına 400, zaman aşımında yanıtsız kapatma, sınırın 100'de biri
 
 ## 5. NOT-DONE (v1)
 

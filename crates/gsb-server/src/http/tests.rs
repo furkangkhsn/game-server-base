@@ -185,3 +185,5 @@ async fn the_metrics_path_serves_the_exposition_only_when_compiled_in() {
         assert!(response.body.contains("cargo feature `prometheus`"));
     }
 }
+
+mod head_deadline;

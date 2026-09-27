@@ -23,6 +23,7 @@
 | El sıkışma accept döngüsünün dışında, kapı başına sınırlı (WS/TLS/QUIC; sessiz tek soket kapıyı kilitliyordu) | B31 | ✅ Uygulandı (§4.3; DESIGN §6 "El sıkışan kapılar") |
 | rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
+| Ops HTTP istek başlığına süre sınırı (sessiz / damlatan eş görevini tutmaz; 5 sn, sonra tek `408`) | B47 | ✅ Uygulandı (OPS §3 "İstek başlığının süre sınırı"); eşzamanlı ops bağlantı tavanı ve yanıt yazmanın süre sınırı yok (§6) |
 
 ## 2. TLS (Tur A)
 
@@ -428,6 +429,8 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 - mTLS (istemci sertifikası) — ticket-auth yeterli v1'de
 - TLS 0-RTT/session resumption ayarları — varsayılanlar
 - Admin HTTP auth/TLS — OPS.md NOT-DONE devam
+- Ops HTTP'de eşzamanlı bağlantı tavanı ve yanıt yazmaya süre sınırı
+  (başlık okuması B47'den beri sınırlı — OPS §3); localhost sözleşmesi
 - rUDP crypto — deneysel statü
 - Kaynak adres başına el sıkışma sınırı (B31'in sınırı kapı başına —
   §4.3 "Kalan yüzey")

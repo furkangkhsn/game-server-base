@@ -10,10 +10,14 @@
 //!
 //! Discipline: the accept loop's ONLY awaited source is `accept()`. Each
 //! connection gets a short-lived task that reads exactly one request head
-//! (request line + headers, up to the CRLFCRLF terminator), ignores any
-//! body, writes exactly one response with `Connection: close`, then
-//! closes — so no multiplexed waits are needed anywhere and the actor
-//! discipline survives unchanged.
+//! (request line + headers, up to the CRLFCRLF terminator) within
+//! `head::HEAD_DEADLINE` (else one 408, B47), ignores any body, writes
+//! exactly one response with `Connection: close`, then closes — so no
+//! multiplexed waits are needed anywhere and the actor discipline
+//! survives unchanged. There is no cap on concurrent connections; the
+//! head read and the drain are bounded in time, the one response write
+//! is not (a peer that sends a head and never reads a response larger
+//! than the socket buffers holds its task — OPS §3).
 //!
 //! Stop (BACKLOG B33): the accept runs through a [`Door`], the one every
 //! game listener closes (B16). `ServerHandle::stop` closes it, the
@@ -36,8 +40,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -50,7 +54,9 @@ use gsb_net::transport::{Door, is_listener_closed};
 
 use crate::config::RoomTemplate;
 
+mod head;
 mod routes;
+use head::*;
 use routes::*;
 
 #[cfg(test)]
@@ -60,12 +66,6 @@ mod tests;
 /// this many collector periods means the metrics ticker (and therefore the
 /// process's heartbeat) has stalled — 503 with the age in the body (OPS §2).
 const STALE_AFTER_PERIODS: u32 = 3;
-
-/// Request-head cap in bytes. A head that outgrows it is answered 431 and
-/// dropped: the surface serves operators, not uploads, and an unbounded
-/// read would be a memory-amplification bug for anyone who can reach the
-/// port.
-const MAX_HEAD_BYTES: usize = 8 * 1024;
 
 /// How long the per-connection task lingers after its response draining
 /// whatever the peer still had in flight (e.g. a POST body we ignore).
@@ -161,9 +161,10 @@ async fn accept_loop(listener: TcpListener, ops: OpsHttp, door: Arc<Door>) {
     }
 }
 
-/// One request, one response, close.
-async fn serve_one(mut stream: TcpStream, ops: OpsHttp) {
-    let response = match read_head(&mut stream).await {
+/// One request, one response, close. Generic over the stream so a test
+/// can drive it over an in-memory pipe under a paused clock.
+async fn serve_one<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, ops: OpsHttp) {
+    let response = match read_head_in_time(&mut stream).await {
         Ok(head) => route(&head, &ops).await,
         Err(HeadError::TooLarge) => Response::text(
             431,
@@ -173,6 +174,13 @@ async fn serve_one(mut stream: TcpStream, ops: OpsHttp) {
         Err(HeadError::Malformed) => {
             Response::text(400, "Bad Request", "malformed or truncated request\n")
         }
+        // The one bounded answer to a peer that never finished its head
+        // (B47); the close below then ends the task.
+        Err(HeadError::TimedOut) => Response::text(
+            408,
+            "Request Timeout",
+            "request head not received in time\n",
+        ),
     };
     if stream.write_all(&response.serialize()).await.is_err() {
         return; // the peer left before the answer; nothing to serve anymore
@@ -189,40 +197,6 @@ async fn serve_one(mut stream: TcpStream, ops: OpsHttp) {
         }
     })
     .await;
-}
-
-enum HeadError {
-    Malformed,
-    TooLarge,
-}
-
-/// Read exactly one request head: bytes up to (not including) the CRLFCRLF
-/// terminator. Any body is ignored by construction (we stop reading at the
-/// terminator and answer `Connection: close`).
-async fn read_head(stream: &mut TcpStream) -> Result<String, HeadError> {
-    let mut buf: Vec<u8> = Vec::with_capacity(512);
-    let mut chunk = [0u8; 1024];
-    loop {
-        if let Some(end) = find_head_end(&buf) {
-            return String::from_utf8(buf[..end].to_vec()).map_err(|_| HeadError::Malformed);
-        }
-        if buf.len() > MAX_HEAD_BYTES {
-            return Err(HeadError::TooLarge);
-        }
-        let n = stream
-            .read(&mut chunk)
-            .await
-            .map_err(|_| HeadError::Malformed)?;
-        if n == 0 {
-            // EOF before the head ended: not a request.
-            return Err(HeadError::Malformed);
-        }
-        buf.extend_from_slice(&chunk[..n]);
-    }
-}
-
-fn find_head_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
 /// One response: status line + the minimal header set + a text body.

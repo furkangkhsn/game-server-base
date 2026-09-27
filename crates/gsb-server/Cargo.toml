@@ -94,6 +94,9 @@ rcgen = "0.13"
 # crate the server side speaks; no client helper is exported from
 # gsb-net, mirroring how this suite hand-rolls its TLS/WS clients).
 quinn = { workspace = true }
+# `test-util`: the ops surface's head-deadline tests run on a paused
+# clock (`http/tests/head_deadline.rs`).
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 gsb-lint = { workspace = true }
