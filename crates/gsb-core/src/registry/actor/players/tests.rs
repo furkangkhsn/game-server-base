@@ -20,6 +20,8 @@ use crate::room::{
 use crate::shard::BorderRecord;
 use crate::ticker::Ticker;
 
+mod late;
+
 const WAIT: Duration = Duration::from_secs(5);
 
 /// What the room's logic saw, by player (= entity = admission order).
@@ -149,7 +151,7 @@ async fn a_gone_dispatcher_is_replaced_and_the_join_goes_through() {
     let (mut reg, mut events) = setup().await;
     // A dispatcher whose task has ended: its queue is closed.
     let (dead, _) = mpsc::channel(1);
-    reg.conn_ops.insert(CONN, dead);
+    reg.conn_ops.insert(CONN, (0, dead));
 
     let entity = join(&mut reg).await;
     assert_eq!(reg.reg_join_ops_dropped, 0, "the join was not refused");
@@ -158,7 +160,7 @@ async fn a_gone_dispatcher_is_replaced_and_the_join_goes_through() {
     let info = reg.conns.get(&CONN).expect("row");
     assert_eq!((info.room, info.entity), (Some(ROOM), Some(entity)));
     assert!(
-        !reg.conn_ops[&CONN].is_closed(),
+        !reg.conn_ops[&CONN].1.is_closed(),
         "the fresh dispatcher took the dead one's slot"
     );
 }
@@ -173,9 +175,9 @@ async fn a_membership_the_gone_dispatcher_held_is_left_before_the_retried_join()
     // The dispatcher dies holding the membership the table records (a
     // leave it accepted but never ran leaves exactly this). The live one
     // is kept open, so its own end cannot run before the assertions.
-    let live = reg.conn_ops.remove(&CONN).expect("a dispatcher");
+    let (serial, live) = reg.conn_ops.remove(&CONN).expect("a dispatcher");
     let (dead, _) = mpsc::channel(1);
-    reg.conn_ops.insert(CONN, dead);
+    reg.conn_ops.insert(CONN, (serial, dead));
 
     let second = join(&mut reg).await;
     assert_ne!(second, first);

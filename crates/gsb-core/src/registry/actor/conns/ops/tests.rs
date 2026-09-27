@@ -22,7 +22,7 @@ const ENTITY: EntityId = 5;
 async fn a_leave_for_another_room_keeps_the_membership() {
     let (registry, mut reports) = channel::<RegistryMsg>(16);
     let (control, mut room) = channel::<RoomControl>(8);
-    let ops = Reg::spawn_conn_ops(CONN, registry, None);
+    let ops = Reg::spawn_conn_ops(CONN, registry, None, 1);
     let (out, _out) = channel(8);
     let (reply, seated) = oneshot::channel();
     let join = RoomOp::Join {
@@ -63,7 +63,10 @@ async fn a_leave_for_another_room_keeps_the_membership() {
     }
     assert!(matches!(
         reports.recv().await,
-        Some(RegistryMsg::OpsClosed { conn: CONN })
+        Some(RegistryMsg::OpsClosed {
+            conn: CONN,
+            serial: 1
+        })
     ));
     match room.try_recv() {
         Ok(RoomControl::Detach { conn, entity, .. }) => assert_eq!((conn, entity), (CONN, ENTITY)),

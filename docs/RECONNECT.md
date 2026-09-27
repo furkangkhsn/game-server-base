@@ -325,6 +325,41 @@ detach edecek üyelik bulamadı, doğrudan `OpsClosed`). Mutasyon:
 karşılaştırmayı her zaman doğru yapmak → test düşer (yanlış odanın
 ayrılması üyeliği bitirir).
 
+**Geç gelen `OpsClosed` (B65).** Dağıtıcı görevi biterken registry'ye
+`OpsClosed` yollar; registry eskiden bağlantının `conn_ops` girdisini
+kimin olduğuna bakmadan silerdi. B63'ten beri girdi, görevi gitmiş
+dağıtıcının yerini alan taze bir dağıtıcı olabilir: eski görevin
+`OpsClosed`'u değiştirmeden sonra işlenirse taze dağıtıcının tek
+göndericisi düşer, kuyruğu kapanır, dağıtıcı da bunu (B61 gereği)
+`Close` sayıp canlı bağlantının üyeliğini DETACH eder — oyunun
+`on_disconnect`'i bağlantı açıkken çalışır. Artık her dağıtıcının bir
+seri numarası var: `install_conn_ops` onu registry'de basar, göndericinin
+yanında `conn_ops`'ta saklar ve göreve verir (`spawn_conn_ops`'un
+`serial`'ı); görev onu `OpsClosed { conn, serial }` ile geri yollar.
+`on_ops_closed` girdiyi yalnız numara tutarsa siler; değiştirilmiş bir
+dağıtıcının geç raporu taze olanı yerinde bırakır.
+
+- *Öteki yerler:* registry'nin girdiyi kendisinin kaldırdığı yerler
+  (bağlantı kapanışı, kayıtsız bağlantının kapanışı, shutdown) "bağlantı
+  bitti" demektir ve o anki dağıtıcıyı bilerek bırakır; B63'ün
+  değiştirmesi yalnız görevi gitmiş bir göndericinin üstüne yazar;
+  `DespawnPlayer` yalnız okur. Kimlik sorusu yalnız `OpsClosed`'da doğar.
+- *Erişilebilirlik:* dağıtıcı, göndericisi `conn_ops`'ta dururken yalnız
+  panikle biter; panikleyen görev `OpsClosed` yollamaz. Bugün erişilemez.
+- **Elenen:** girdiyi yalnız göndericisi kapalıysa silmek. Görev
+  `OpsClosed`'dan önce alıcısını bırakırsa sağlamdır, ama kimliği görevin
+  içindeki bırakma sırasına emanet eder.
+
+Testler (`registry/actor/players/tests/late.rs`): yuvası dururken biten
+dağıtıcının raporu, B63 onu değiştirdikten sonra işlenir — taze dağıtıcı
+yerinde ve canlı kalır, sonraki ayrılma ve katılma aynı dağıtıcıdan
+geçer (`Left(1)` sonra `Joined(2)`, detach yok, `join_ops_dropped` 0);
+zamanında gelen kendi raporu yuvasını boşaltır. Önce yazıldı ve düştü
+(geç rapor taze dağıtıcıyı sildi). Mutasyonlar: karşılaştırmayı her
+zaman doğru yapmak ya da seriyi artırmamak → ilk test düşer; hiç
+silmemek → ikinci test düşer; görevin yanlış seri yollaması → üç test
+düşer.
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-

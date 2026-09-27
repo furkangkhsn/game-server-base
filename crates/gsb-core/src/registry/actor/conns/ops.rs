@@ -38,11 +38,13 @@ where
     ///
     /// `seed` is the membership the task starts in: `None` for a new
     /// dispatcher, the table's affiliation for a replacement (see
-    /// [`Self::respawn_conn_ops`]).
+    /// [`Self::respawn_conn_ops`]). `serial` names the task in its
+    /// `OpsClosed` (see [`Self::on_ops_closed`]).
     pub(in crate::registry) fn spawn_conn_ops(
         conn: ConnectionId,
         registry: Mailbox<RegistryMsg>,
         seed: Option<InRoom<St, Sp>>,
+        serial: u64,
     ) -> mpsc::Sender<RoomOp<St, Sp>> {
         let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St, Sp>>(16);
         tokio::spawn(async move {
@@ -165,7 +167,7 @@ where
                     .send(RegistryMsg::DetachDone { conn, room: r })
                     .await;
             }
-            let _ = registry.send(RegistryMsg::OpsClosed { conn }).await;
+            let _ = registry.send(RegistryMsg::OpsClosed { conn, serial }).await;
         });
         op_tx
     }
@@ -196,12 +198,37 @@ where
             Some((room, entity, handle, 0, i.identity.clone()))
         });
         let room = held.as_ref().map(|h| h.0);
-        let op_tx = Self::spawn_conn_ops(conn, self.self_mailbox.clone(), held);
+        let op_tx = self.install_conn_ops(conn, held);
         if let Some(room) = room {
             // A fresh queue of 16 takes it (or the join fails with it).
             let _ = op_tx.try_send(RoomOp::Leave { room });
         }
-        self.conn_ops.insert(conn, op_tx.clone());
         op_tx
+    }
+
+    /// Spawn a dispatcher under a fresh serial and put it in the
+    /// connection's slot, replacing whatever the slot held; returns a
+    /// sender for the op at hand.
+    pub(in crate::registry) fn install_conn_ops(
+        &mut self,
+        conn: ConnectionId,
+        seed: Option<InRoom<St, Sp>>,
+    ) -> mpsc::Sender<RoomOp<St, Sp>> {
+        self.next_ops_serial += 1;
+        let serial = self.next_ops_serial;
+        let op_tx = Self::spawn_conn_ops(conn, self.self_mailbox.clone(), seed, serial);
+        self.conn_ops.insert(conn, (serial, op_tx.clone()));
+        op_tx
+    }
+
+    /// A dispatcher task exited (`OpsClosed`): its slot goes — only if the
+    /// slot is still that dispatcher's (B65). A dispatcher replaced while
+    /// gone (B63) reports after its replacement took the slot; dropping
+    /// the fresh one's sender would close its queue, and it would detach
+    /// the live membership.
+    pub(in crate::registry) fn on_ops_closed(&mut self, conn: ConnectionId, serial: u64) {
+        if self.conn_ops.get(&conn).is_some_and(|(s, _)| *s == serial) {
+            self.conn_ops.remove(&conn);
+        }
     }
 }

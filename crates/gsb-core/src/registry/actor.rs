@@ -42,7 +42,13 @@ pub struct Registry<W, G, St, Sp> {
     /// cancellation plumbing, just one integer comparison at report time.
     room_gen: HashMap<RoomId, u64>,
     conns: HashMap<ConnectionId, ConnInfo>,
-    conn_ops: HashMap<ConnectionId, mpsc::Sender<RoomOp<St, Sp>>>,
+    /// Each connection's op dispatcher (see `spawn_conn_ops`): its serial
+    /// — echoed by the task's `OpsClosed`, so only the dispatcher in the
+    /// slot ends it (B65) — and the sender the registry keeps (the only
+    /// lasting one: dropping it closes the queue).
+    conn_ops: HashMap<ConnectionId, (u64, mpsc::Sender<RoomOp<St, Sp>>)>,
+    /// The last dispatcher serial minted (`install_conn_ops`).
+    next_ops_serial: u64,
     ticker: Ticker,
     /// Local control-plane counters (flushed as a sample whenever a table
     /// changes — event-driven; no timer, no new await; see
@@ -157,6 +163,7 @@ where
             room_gen: HashMap::new(),
             conns: HashMap::new(),
             conn_ops: HashMap::new(),
+            next_ops_serial: 0,
             ticker,
             reg_created: 0,
             reg_destroyed: 0,

@@ -29,7 +29,7 @@ where
         // 1. Ask every dispatcher to drain (final leaves for
         //    in-flight joins), then drop the senders so they
         //    exit after draining.
-        for op_tx in self.conn_ops.values() {
+        for (_, op_tx) in self.conn_ops.values() {
             let _ = op_tx.try_send(RoomOp::Close);
         }
         self.conn_ops.clear();

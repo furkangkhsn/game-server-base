@@ -241,8 +241,9 @@ pub enum RegistryMsg {
     /// no verdict to deliver, and the notice must not reach a newer
     /// membership.
     LeaveConn(LeaveRequest),
-    /// A connection's dispatcher task exited; drop its slot.
-    OpsClosed { conn: ConnectionId },
+    /// A connection's dispatcher task exited; drop its slot — if the slot
+    /// is still that dispatcher's (`serial`; B65).
+    OpsClosed { conn: ConnectionId, serial: u64 },
     /// Internal: reported by a room/shard death watcher (see
     /// `Registry::spawn_room_watcher`) when the watched actor task has ended
     /// — by panic or by any normal exit (`DestroyRoom`, server

@@ -111,9 +111,9 @@ async fn a_gone_dispatcher_s_close_detaches_from_the_table() {
     // The dispatcher is gone: the registry holds a sender whose task has
     // ended. (The live one is kept open, so it never runs its own close
     // before the assertions below.)
-    let live = reg.conn_ops.remove(&conn).expect("a dispatcher");
+    let (serial, live) = reg.conn_ops.remove(&conn).expect("a dispatcher");
     let (dead, _) = mpsc::channel(1);
-    reg.conn_ops.insert(conn, dead);
+    reg.conn_ops.insert(conn, (serial, dead));
     reg.on_conn_closed(conn).await;
     assert_eq!(reg.reg_close_ops_dropped, 1, "refused, still counted");
 

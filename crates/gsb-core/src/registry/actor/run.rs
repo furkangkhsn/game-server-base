@@ -64,7 +64,7 @@ where
                             let dispatched = self
                                 .conn_ops
                                 .get(&conn)
-                                .and_then(|op_tx| op_tx.try_send(RoomOp::Leave { room }).ok());
+                                .and_then(|(_, op_tx)| op_tx.try_send(RoomOp::Leave { room }).ok());
                             if dispatched.is_some() {
                                 // The dispatcher sends LeaveDone later, in
                                 // order with any concurrent join.
@@ -189,9 +189,7 @@ where
                 }
                 RegistryMsg::CloseConn(req) => self.on_close_conn(req),
                 RegistryMsg::LeaveConn(req) => self.on_leave_conn(req),
-                RegistryMsg::OpsClosed { conn } => {
-                    self.conn_ops.remove(&conn);
-                }
+                RegistryMsg::OpsClosed { conn, serial } => self.on_ops_closed(conn, serial),
                 RegistryMsg::RoomDied {
                     id,
                     shard,

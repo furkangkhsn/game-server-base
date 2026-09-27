@@ -171,10 +171,10 @@ where
                 None,
             ),
         };
-        let op_tx = self
-            .conn_ops
-            .entry(conn)
-            .or_insert_with(|| Self::spawn_conn_ops(conn, self.self_mailbox.clone(), None));
+        let op_tx = match self.conn_ops.get(&conn) {
+            Some((_, op_tx)) => op_tx.clone(),
+            None => self.install_conn_ops(conn, None),
+        };
         // The guard epoch is minted HERE, in the single-threaded
         // registry, globally across all connections (see the
         // `RoomOp::Join::epoch` doc for why per-connection

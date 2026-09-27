@@ -116,7 +116,7 @@ where
             // may have accepted it for a tick): drain it so the
             // slot cannot outlive the connection. (With no row, a
             // gone dispatcher leaves nothing to detach from here.)
-            if let Some(op_tx) = self.conn_ops.remove(&conn)
+            if let Some((_, op_tx)) = self.conn_ops.remove(&conn)
                 && self.route_close(conn, op_tx, None)
             {
                 self.emit_metrics();
@@ -129,7 +129,7 @@ where
         info.inbox = None;
         let (room, entity) = (info.room, info.entity);
         match self.conn_ops.remove(&conn) {
-            Some(op_tx) => {
+            Some((_, op_tx)) => {
                 // The dispatcher serializes the detach behind
                 // any in-flight join and reports `DetachDone`.
                 // Refused: counted (B57), sampled below.
