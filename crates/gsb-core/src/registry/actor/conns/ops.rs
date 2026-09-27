@@ -32,14 +32,19 @@ where
     /// reset to 1 on every new session, so a reconnect of a parked
     /// identity tripped the resume staleness guard once before a retry
     /// succeeded.
+    ///
+    /// `seed` is the membership the task starts in: `None` for a new
+    /// dispatcher, the table's affiliation for a replacement (see
+    /// [`Self::respawn_conn_ops`]).
     pub(in crate::registry) fn spawn_conn_ops(
         conn: ConnectionId,
         registry: Mailbox<RegistryMsg>,
+        seed: Option<InRoom<St, Sp>>,
     ) -> mpsc::Sender<RoomOp<St, Sp>> {
         let (op_tx, mut op_rx) = mpsc::channel::<RoomOp<St, Sp>>(16);
         tokio::spawn(async move {
             // (room, entity, handle, the join's epoch, the resume key)
-            let mut in_room: Option<InRoom<St, Sp>> = None;
+            let mut in_room: Option<InRoom<St, Sp>> = seed;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
@@ -156,6 +161,41 @@ where
             }
             let _ = registry.send(RegistryMsg::OpsClosed { conn }).await;
         });
+        op_tx
+    }
+
+    /// Replace a GONE dispatcher (B63): its queue closed while the
+    /// registry still held its sender, which then refused every later
+    /// join of the connection. The fresh task takes the slot in
+    /// `conn_ops` and is returned for the op the old one refused.
+    ///
+    /// The membership the old task held went with it — but the table
+    /// still records the one it last reported. A connection joins only
+    /// from outside a room, so a membership still on the table here is a
+    /// leave the old task accepted and never ran. The fresh task starts
+    /// in it and its first op is that leave: the room sees the leave
+    /// before the retried join, from the one task, in order (a direct
+    /// leave would race the join into the same room, and the room's
+    /// entity guard would then drop it as stale). Its `LeaveDone` settles
+    /// the row as any leave does. A membership only the old task knew (a
+    /// join it never reported) is past recovery, as at close (B61).
+    pub(in crate::registry) fn respawn_conn_ops(
+        &mut self,
+        conn: ConnectionId,
+    ) -> mpsc::Sender<RoomOp<St, Sp>> {
+        let held = self.conns.get(&conn).and_then(|i| {
+            let (room, entity) = i.room.zip(i.entity)?;
+            let handle = self.room_handle(room)?;
+            // Epoch 0, as the dispatcher-less leave sends (`send_leave_direct`).
+            Some((room, entity, handle, 0, i.identity.clone()))
+        });
+        let room = held.as_ref().map(|h| h.0);
+        let op_tx = Self::spawn_conn_ops(conn, self.self_mailbox.clone(), held);
+        if let Some(room) = room {
+            // A fresh queue of 16 takes it (or the join fails with it).
+            let _ = op_tx.try_send(RoomOp::Leave { room });
+        }
+        self.conn_ops.insert(conn, op_tx.clone());
         op_tx
     }
 }

@@ -58,6 +58,18 @@ where
         }
     }
 
+    /// The room side a dispatcher-less send reaches: the single room's
+    /// control channel or every shard's mailbox; `None` for a room the
+    /// table no longer holds.
+    pub(super) fn room_handle(&self, room: RoomId) -> Option<RoomHandle<St, Sp>> {
+        let e = self.rooms.get(&room)?;
+        match (&e.control, &e.shards) {
+            (Some(control), _) => Some(RoomHandle::Single(control.clone())),
+            (None, Some(group)) => Some(RoomHandle::Sharded(group.mailboxes.clone())),
+            (None, None) => None,
+        }
+    }
+
     /// Send a leave with no dispatcher (the `ConnClosed` /
     /// [`Self::direct_leave`] paths): to the room's control channel, or —
     /// for a sharded room — to ALL of its shards (exactly one of them owns
@@ -66,13 +78,8 @@ where
     /// join itself already recorded — see `crate::shard`, "Migration
     /// protocol").
     pub(super) fn send_leave_direct(&mut self, conn: ConnectionId, room: RoomId, entity: EntityId) {
-        let handle = match self.rooms.get(&room) {
-            Some(e) => match (&e.control, &e.shards) {
-                (Some(control), _) => RoomHandle::Single(control.clone()),
-                (None, Some(group)) => RoomHandle::Sharded(group.mailboxes.clone()),
-                (None, None) => return,
-            },
-            None => return,
+        let Some(handle) = self.room_handle(room) else {
+            return;
         };
         tokio::spawn(async move {
             match handle {
@@ -109,13 +116,8 @@ where
         let Some(identity) = self.conns.get(&conn).map(|i| i.identity.clone()) else {
             return;
         };
-        let handle = match self.rooms.get(&room) {
-            Some(e) => match (&e.control, &e.shards) {
-                (Some(control), _) => RoomHandle::Single(control.clone()),
-                (None, Some(group)) => RoomHandle::Sharded(group.mailboxes.clone()),
-                (None, None) => return,
-            },
-            None => return,
+        let Some(handle) = self.room_handle(room) else {
+            return;
         };
         tokio::spawn(async move {
             match handle {

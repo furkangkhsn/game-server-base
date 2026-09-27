@@ -270,6 +270,44 @@ kaldırmak → iki uçtan uca test düşer; gitmiş görevde doğrudan detach'ı
 kaldırmak → birim testi düşer; dolu kuyrukta tablodan doğrudan detach
 (reddedilen) → iki uçtan uca test düşer.
 
+**Gitmiş dağıtıcıya katılma (B63).** Görevi gitmiş (kuyruğu kapanmış)
+dağıtıcının ölü göndericisi `conn_ops`'ta kalıyordu: bağlantının sonraki
+her katılması `join_ops_dropped` ile reddediliyor, bağlantı kapanana dek
+hiçbir odaya giremiyordu. Artık `Join`'in `Closed` reddinde registry
+ölü göndericiyi taze bir dağıtıcıyla değiştirir (`respawn_conn_ops`) ve
+op'u ona **bir kez** verir; o da reddederse (yalnız runtime kapanırken)
+katılma bugünkü gibi düşer ve sayılır. Taze görev, eskisinin yerini
+`conn_ops`'ta alır; sonraki ayrılma ve kapanış onu bulur.
+
+- *Üyelik kaybolmaz:* eski görevin elindeki üyelik onunla gitti, ama
+  tablo son raporladığını hâlâ tutar. Bağlantı aktörü yalnız oda dışından
+  katılır; öyleyse burada tabloda duran bir üyelik, eski görevin kabul
+  edip hiç çalıştırmadığı bir ayrılmadır. Taze görev o üyelikle başlar
+  (`spawn_conn_ops`'un `seed`'i; epoch 0, dağıtıcısız ayrılma gibi) ve
+  ilk op'u o ayrılmadır: oda ayrılmayı yeniden denenen katılmadan ÖNCE,
+  tek görevden, sırayla görür; `LeaveDone` satırı her ayrılma gibi
+  kapatır. Tabloda üyelik yoksa (olağan hâl: ayrılma `Closed` reddinde
+  zaten `direct_leave`'e düşmüştü) taze görev boş başlar.
+- *Üyelik çiftlenmez:* eski görev gitti, kendi kapanışını çalıştıramaz;
+  bağlantı kapanınca `route_close` taze göreve gider (§3.4, B61).
+- **Reddedilen:** tablodaki üyeliği `direct_leave` ile bitirmek. Onun
+  spawn'lu gönderimi taze görevin katılmasıyla yarışır; aynı odaya
+  katılma önce varırsa bağ yeni entity'ye geçer ve odanın entity
+  muhafızı eski entity'nin ayrılmasını bayat diye yutar — eski üye
+  odada kalır.
+- *Sınır:* yalnız eski görevin bildiği bir üyelik (hiç raporlamadığı bir
+  katılma) kurtarılamaz; kapanıştaki (B61) sınırın aynısı. Bugün
+  dağıtıcıda panik yeri yok; hata gizli bir takılmaydı.
+
+Testler (`registry/actor/players/tests.rs`, önce yazıldı ve ikisi de
+düştü — katılmanın yanıtı düşürüldü): ölü gönderici yerine katılma
+oturur, `join_ops_dropped` 0, satır üyeliği ve taze gönderici yerinde;
+tabloda üyelik varken ölü göndericiye katılma önce `LeaveDone` sonra
+yeni entity'nin `SpawnDone`'unu üretir, mantık `Left(1)` sonra
+`Joined(2)` görür, eski görevin geç sonu ikinci bir olay doğurmaz.
+Mutasyonlar: yeniden deneme kaldırılınca iki test düşer; taze göreve
+ayrılma verilmeyince ikinci test düşer.
+
 ## 4. Kimlik ve park defteri
 
 Anahtar `ValidatedTicket.player`'dir (ticket-auth zaten döndürüyor; local-

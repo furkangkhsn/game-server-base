@@ -4,6 +4,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -16,6 +17,8 @@ use crate::registry::*;
 use crate::registry::actor::Registry;
 
 mod done;
+#[cfg(test)]
+mod tests;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
 where
@@ -171,29 +174,38 @@ where
         let op_tx = self
             .conn_ops
             .entry(conn)
-            .or_insert_with(|| Self::spawn_conn_ops(conn, self.self_mailbox.clone()));
+            .or_insert_with(|| Self::spawn_conn_ops(conn, self.self_mailbox.clone(), None));
         // The guard epoch is minted HERE, in the single-threaded
         // registry, globally across all connections (see the
         // `RoomOp::Join::epoch` doc for why per-connection
         // minting broke first-attempt resumes).
         self.next_join_epoch = self.next_join_epoch.wrapping_add(1);
-        let join_epoch = self.next_join_epoch;
-        if op_tx
-            .try_send(RoomOp::Join {
-                room,
-                handle,
-                shard: shard_idx,
-                generation,
-                epoch: join_epoch,
-                out,
-                identity,
-                input_rate,
-                reply,
-            })
-            .is_err()
-        {
-            // Op queue full (pathological): the op (and its
-            // reply) is dropped; the connection actor observes
+        let join = RoomOp::Join {
+            room,
+            handle,
+            shard: shard_idx,
+            generation,
+            epoch: self.next_join_epoch,
+            out,
+            identity,
+            input_rate,
+            reply,
+        };
+        let refused = match op_tx.try_send(join) {
+            Ok(()) => false,
+            // The dispatcher is gone (B63): its dead sender would refuse
+            // every later join of this connection. A fresh one takes its
+            // slot and the op, once (see `respawn_conn_ops`).
+            Err(TrySendError::Closed(join)) => {
+                warn!(%conn, room = %room, "join op dispatcher gone; replacing it");
+                self.respawn_conn_ops(conn).try_send(join).is_err()
+            }
+            Err(TrySendError::Full(_)) => true,
+        };
+        if refused {
+            // Op queue full (pathological), or even the fresh
+            // dispatcher gone (the runtime shutting down): the
+            // op (and its reply) is dropped; the connection actor observes
             // the dropped reply and sends an ERROR frame. The
             // cap reservation never settles (the dispatcher
             // never saw the op), so release it here.
@@ -206,7 +218,7 @@ where
             // unavailable", and nothing else would record it.
             self.reg_join_ops_dropped += 1;
             self.emit_metrics();
-            warn!(%conn, room = %room, "join op queue full; join failed");
+            warn!(%conn, room = %room, "join op not queued; join failed");
         } else {
             debug!(%conn, room = %room, "join dispatched");
         }
