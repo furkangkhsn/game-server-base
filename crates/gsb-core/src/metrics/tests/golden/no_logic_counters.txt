@@ -164,7 +164,7 @@ gsb_transport_udp_frames_dropped_oversized_total 10
 # HELP gsb_transport_udp_control_frames_abandoned_total Reliable control frames still unacknowledged when an rUDP session's reliable band was declared dead, cumulative.
 # TYPE gsb_transport_udp_control_frames_abandoned_total counter
 gsb_transport_udp_control_frames_abandoned_total 11
-# HELP gsb_transport_udp_frames_drained_total Frames an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.
+# HELP gsb_transport_udp_frames_drained_total Session frames (game and control; not the demux's piggybacked ACKs) an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.
 # TYPE gsb_transport_udp_frames_drained_total counter
 gsb_transport_udp_frames_drained_total 12
 # HELP gsb_transport_ws_close_frames_dropped_total WebSocket close frames (the close echo or a protocol-failure close) dropped on a connection's full control queue, cumulative.

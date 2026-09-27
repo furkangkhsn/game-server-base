@@ -110,7 +110,7 @@ gsb_transport_udp_frames_dropped_oversized sum t=2 mono=true unit="" n=1 | Game-
   [] 1000..2000 int 10
 gsb_transport_udp_control_frames_abandoned sum t=2 mono=true unit="" n=1 | Reliable control frames still unacknowledged when an rUDP session's reliable band was declared dead, cumulative.
   [] 1000..2000 int 11
-gsb_transport_udp_frames_drained sum t=2 mono=true unit="" n=1 | Frames an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.
+gsb_transport_udp_frames_drained sum t=2 mono=true unit="" n=1 | Session frames (game and control; not the demux's piggybacked ACKs) an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.
   [] 1000..2000 int 12
 gsb_transport_ws_close_frames_dropped sum t=2 mono=true unit="" n=1 | WebSocket close frames (the close echo or a protocol-failure close) dropped on a connection's full control queue, cumulative.
   [] 1000..2000 int 13

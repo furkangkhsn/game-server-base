@@ -102,9 +102,11 @@ transport_counters! {
     /// rUDP writer: reliable control frames still unacknowledged when the
     /// band was declared dead (the session ends with them).
     udp_control_frames_abandoned,
-    /// rUDP writer: frames taken off a session's outbound channel after the
-    /// session was over (the room had not processed the end yet), never
-    /// sent.
+    /// rUDP writer: the session's frames (game and control) taken off its
+    /// outbound channel after the session was over (the room had not
+    /// processed the end yet), never sent. The demux's piggybacked ACKs
+    /// ride the same channel and are not counted (B73: not frames of the
+    /// session).
     udp_frames_drained,
     /// WebSocket: close frames (the echo of the client's close, or the
     /// server's protocol-failure close) dropped on the connection's full

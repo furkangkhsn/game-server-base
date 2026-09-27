@@ -77,7 +77,7 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 35] 
     ),
     tr(
         "gsb_transport_udp_frames_drained_total",
-        "Frames an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.",
+        "Session frames (game and control; not the demux's piggybacked ACKs) an rUDP writer took off the outbound channel after its session was over, never sent, cumulative.",
         |t| t.udp_frames_drained,
     ),
     tr(

@@ -445,7 +445,12 @@ max_detach_hold_secs = "off"
   tavanını aşan oyun karesi), `udp_control_frames_abandoned`
   (`abandoned`: bant ölünce ACK'siz kalan kontrol kareleri),
   `udp_frames_drained` (`drained`: oturum bittikten sonra kanaldan alınıp
-  hiç gönderilmeyen kareler); WS okuyucusundan
+  hiç gönderilmeyen OTURUM kareleri — oyun ve kontrol; **anlam B73'te
+  daraldı:** önceden `batch.len()` sayılıyordu, aynı kanaldan yazıcıya
+  giden demux'ın ACK taşıması (`UDP_ACK`) da giriyordu; o oturumun karesi
+  değil, biten bandın taşıma mesajıdır — `udp_frames_unsent` gibi artık
+  sayılmaz, HELP bunu söyler; ad korundu, çünkü ad "kare" diyor ve
+  sayaç artık yalnız onu sayıyor); WS okuyucusundan
   `ws_close_frames_dropped` (kapanış yankısı ya da protokol hatası
   kapanışı) ve `ws_pongs_dropped` — dolu kontrol kuyruğunda (önceden
   `let _ =`); el sıkışan kapılardan (WS/TLS/QUIC)

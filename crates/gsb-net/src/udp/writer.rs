@@ -124,8 +124,9 @@ pub(super) struct UdpWriter {
     /// is over — see [`Self::session_over`].
     reaper: Reaper,
     reap_signalled: bool,
-    /// Frames taken off the channel after the session was over (never
-    /// sent: see the loop).
+    /// The session's frames (game and control; not the demux's
+    /// piggybacked ACKs — B73) taken off the channel after the session
+    /// was over (never sent: see the loop).
     drained: u64,
     /// The band's death verdict: its mailbox slot, reserved at birth
     /// (taken by `die`), and — only when no slot could be reserved and
@@ -162,8 +163,10 @@ impl UdpWriter {
                     // carry a NEW session: what the room still sends
                     // until it processes the detach is taken off the
                     // channel (so the room sees no dead outbound path)
-                    // and never put on the wire.
-                    self.drained += batch.len() as u64;
+                    // and never put on the wire. Only the session's own
+                    // frames are counted: the demux's piggybacked ACKs
+                    // are not frames of the session (B73).
+                    self.drained += send::session_frames(&batch);
                     self.flush_metrics(false);
                     continue;
                 }

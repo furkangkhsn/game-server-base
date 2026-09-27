@@ -153,3 +153,37 @@ async fn a_notice_without_a_reserved_slot_is_counted_as_deferred() {
     }
     assert_eq!(causes, vec![ServerClose::RelDead]);
 }
+
+/// B73: after the session is over, `udp_frames_drained` counts the
+/// session's own frames the writer takes off its channel — game and
+/// control frames — and not the demux's piggybacked ACKs (a transport
+/// message for a band that is gone, not a frame of the session).
+#[tokio::test]
+async fn frames_drained_after_the_end_leave_the_piggybacked_acks_out() {
+    let (metrics_tx, mut metrics_rx) = mpsc::channel(8);
+    // The actor has exited: its mailbox is closed.
+    let (in_tx, inbox) = channel::<ConnIn>(8);
+    drop(inbox);
+    let (out_tx, out_rx) = channel::<FrameBatch>(8);
+    let raw = UdpSocket::bind("127.0.0.1:0").await.expect("bind");
+    let peer = raw.local_addr().unwrap();
+    let w = writer(bound().await, peer, 1200, in_tx, out_rx, metrics_tx);
+    let ack = || FrameBody::new(op::base::UDP_ACK, Bytes::from(1u32.to_le_bytes().to_vec()));
+    // The first batch is sent; with nothing outstanding the session is
+    // then over. The second is drained: two frames and one ACK.
+    out_tx.try_send(vec![game()]).unwrap();
+    out_tx.try_send(vec![ack(), game(), control(2)]).unwrap();
+    drop(out_tx);
+    tokio::time::timeout(Duration::from_secs(5), w)
+        .await
+        .expect("the writer ended")
+        .expect("no panic");
+    let mut total = TransportCounters::default();
+    while let Some(ev) = metrics_rx.recv().await {
+        if let MetricsEvent::Transport(t) = ev {
+            total.add(&t);
+        }
+    }
+    assert_eq!(total.udp_frames_drained, 2, "{total:?}");
+    assert_eq!(total.udp_frames_unsent, 0, "the band did not die");
+}

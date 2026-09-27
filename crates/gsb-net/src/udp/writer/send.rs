@@ -25,7 +25,7 @@ impl super::UdpWriter {
             if fatal.is_some() {
                 // The undeliverable frame and the rest of its batch are
                 // never sent (B66).
-                self.unsent += 1 + frames.filter(|f| f.op != op::base::UDP_ACK).count() as u64;
+                self.unsent += 1 + frames.filter(is_session_frame).count() as u64;
                 return fatal;
             }
         }
@@ -91,7 +91,20 @@ impl super::UdpWriter {
     pub(super) fn drain_unsent(&mut self) {
         self.out_rx.close();
         while let Ok(batch) = self.out_rx.try_recv() {
-            self.unsent += batch.iter().filter(|f| f.op != op::base::UDP_ACK).count() as u64;
+            self.unsent += session_frames(&batch);
         }
     }
+}
+
+/// Whether an outbound frame is one of the SESSION's (a game or control
+/// frame the room or the connection sent), not the demux's piggybacked
+/// inbound ACK — a transport message for this writer's band, which the
+/// loss counters leave out (B66, B73).
+pub(super) fn is_session_frame(frame: &FrameBody) -> bool {
+    frame.op != op::base::UDP_ACK
+}
+
+/// The session's frames in a batch (see [`is_session_frame`]).
+pub(super) fn session_frames(batch: &FrameBatch) -> u64 {
+    batch.iter().filter(|f| is_session_frame(f)).count() as u64
 }
