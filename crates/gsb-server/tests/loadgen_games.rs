@@ -6,19 +6,19 @@
 //! handful of clients for a few seconds.
 
 use std::collections::HashMap;
-use std::process::{Command, Output};
+
+use loadgen_rate::Run;
+
+mod loadgen_rate;
 
 /// Run the real `gsb-loadgen` with `args`.
-fn loadgen(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
-        .args(args)
-        .env("RUST_BACKTRACE", "1")
-        .output()
-        .expect("spawning gsb-loadgen")
+fn loadgen(args: &[&str]) -> Run {
+    loadgen_rate::run(args)
 }
 
-/// The RESULT line of a successful run, and its `key=value` pairs.
-fn result(out: &Output) -> (String, HashMap<String, String>) {
+/// The RESULT line of a successful run, and its `key=value` pairs; the
+/// run's tick-rate claims are checked on the way (`loadgen_rate`).
+fn result(out: &Run) -> (String, HashMap<String, String>) {
     assert!(
         out.status.success(),
         "gsb-loadgen exited with {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -38,12 +38,13 @@ fn result(out: &Output) -> (String, HashMap<String, String>) {
         .filter_map(|kv| kv.split_once('='))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    loadgen_rate::assert_tick_rate(out, &kv, &line);
     (line, kv)
 }
 
 /// What every game's clean run shows: all `n` clients through the whole
-/// session, a snapshot stream, numbered inputs acked, nothing shed, the
-/// hosted game closing the line. `late_joins`: how many clients may drop
+/// session, numbered inputs acked, nothing shed, the hosted game closing
+/// the line (the snapshot stream and the tick rate: [`result`]). `late_joins`: how many clients may drop
 /// one delta at their join (a join into a group already streaming
 /// deltas: the group's delta precedes the one-shot private full in the
 /// same batch — GAME-MODULE G3-2).
@@ -61,11 +62,8 @@ fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64, game: &str, la
     assert_eq!(get("errors"), 0, "{line}");
     assert_eq!(get("server_closes"), 0, "{line}");
     assert!(get("gap_drops") <= late_joins, "{line}");
-    assert!(get("snap_total") >= 30 * n, "a stream per client: {line}");
     assert!(get("moves") > 0 && get("acks") > 0, "inputs acked: {line}");
     assert!(get("ack_processed_max") > 1, "numbered inputs: {line}");
-    let hz: f64 = kv["server_hz"].parse().expect("number");
-    assert!((20.0..=40.0).contains(&hz), "server_hz {hz}: {line}");
 }
 
 /// The arena: team fog in the team room's delta mode (fulls for fresh
@@ -275,7 +273,7 @@ fn loadgen_orchestrates_the_war() {
 /// backtrace (even with `RUST_BACKTRACE` set).
 #[test]
 fn loadgen_refuses_a_wrong_game_line() {
-    let stderr = |out: Output| {
+    let stderr = |out: Run| {
         let e = String::from_utf8_lossy(&out.stderr).into_owned();
         assert_eq!(out.status.code(), Some(2), "a usage error: {e}");
         assert!(e.starts_with("gsb-loadgen: "), "{e}");
@@ -344,12 +342,20 @@ fn loadgen_captures_the_frames_its_clients_applied() {
     let dir = std::env::temp_dir().join(format!("gsb-capture-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let dir_s = dir.to_str().expect("a UTF-8 temp dir");
-    let out = Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
-        .args(["6", "--game", "arena", "--duration", "3"])
-        .args(["--capture", dir_s, "--capture-clients", "2"])
-        .env("GSB_LOADGEN_CLIENT_LINES", "1")
-        .output()
-        .expect("spawning gsb-loadgen");
+    let out = loadgen_rate::run_env(
+        &[
+            "6",
+            "--game",
+            "arena",
+            "--duration",
+            "3",
+            "--capture",
+            dir_s,
+            "--capture-clients",
+            "2",
+        ],
+        &[("GSB_LOADGEN_CLIENT_LINES", "1")],
+    );
     let (line, kv) = result(&out);
     assert_clean(&line, &kv, 6, "arena", 6);
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -410,7 +416,9 @@ fn loadgen_captures_the_frames_its_clients_applied() {
         let seen = client(id);
         let c = view.counters();
         assert_eq!(snapshots, seen["snapshots"], "client {id}");
-        assert!(snapshots > 30, "a stream: client {id}");
+        // A stream, not one frame — how long a stream a 3 s run yields is
+        // the machine's business (`loadgen_rate`).
+        assert!(snapshots >= 2, "a stream: client {id}");
         assert_eq!(acks, seen["acks"], "client {id}");
         assert!(acks > 0, "private frames: client {id}");
         assert_eq!(joins, 1, "the join result: client {id}");

@@ -6,14 +6,16 @@
 //! Kept small on purpose (3 clients, 3 s): it must not slow the normal
 //! suite noticeably. The heavyweight runs (100/500/1000 clients) are
 //! manual: `cargo run -p gsb-server --release --bin gsb-loadgen 1000`.
+//! They are also where "the room achieves 30 Hz" is measured: a 3 s
+//! wall-clock window proves only what a stall cannot change
+//! (`loadgen_rate`, BACKLOG F25).
+
+mod loadgen_rate;
 
 #[test]
 fn loadgen_smoke() {
-    let bin = env!("CARGO_BIN_EXE_gsb-loadgen");
-    let out = std::process::Command::new(bin)
-        .args(["3", "--duration", "3", "--move-ms", "100"])
-        .output()
-        .expect("spawning gsb-loadgen");
+    let run = loadgen_rate::run(&["3", "--duration", "3", "--move-ms", "100"]);
+    let out = &run.out;
     assert!(
         out.status.success(),
         "gsb-loadgen exited with {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -56,32 +58,10 @@ fn loadgen_smoke() {
     assert_eq!(get("left"), "3", "all clients leave cleanly");
     assert_eq!(get("errors"), "0");
 
-    // The room must actually be ticking at ~the configured 30 Hz, as seen
-    // from both sides: the client's snapshot-sequence rate and the
-    // server's own metric reports (the metrics path in action).
-    let client_hz: f64 = get("tick_hz_med").parse().expect("number");
-    assert!(
-        (20.0..=40.0).contains(&client_hz),
-        "client-measured tick rate {client_hz} Hz far from the configured 30 Hz"
-    );
-    let server_hz: f64 = get("server_hz").parse().expect("number");
-    assert!(
-        (20.0..=40.0).contains(&server_hz),
-        "server-reported step rate {server_hz} Hz far from the configured 30 Hz"
-    );
-    let steps: u64 = get("steps").parse().expect("number");
-    assert!(
-        steps >= 60,
-        "3 s at ~30 Hz should yield ~90 room steps, got {steps}"
-    );
-
-    // Every client must actually receive the snapshot stream (the world
-    // changes every tick while all clients move).
-    let snaps: u64 = get("snap_total").parse().expect("number");
-    assert!(
-        snaps >= 30,
-        "3 clients over 3 s should see well over 30 snapshots, got {snaps}"
-    );
+    // The room runs at the configured 30 Hz period, steps, never faster,
+    // and both sides' rates reach the report (the metrics path in
+    // action) — what a 3 s wall-clock run proves on any machine.
+    loadgen_rate::assert_tick_rate(&run, &kv, result_line);
 
     // The registry must have registered all 3 connections at some point.
     let peak: u32 = get("peak_conns").parse().expect("number");
@@ -99,7 +79,8 @@ fn loadgen_smoke() {
     // The metric queue (the room report fields that ride the metrics
     // wire / binary socket): presence + sanity, so a shifted queue
     // (fields reordered or dropped in the report codec) is caught here
-    // even though a fully broken codec would already fail `server_hz`.
+    // even though a fully broken codec would already fail the tick-rate
+    // claims.
     assert_metric_queue(&kv, result_line);
 }
 
@@ -287,20 +268,17 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
 /// must carry the process topology.
 #[test]
 fn loadgen_smoke_separate_processes() {
-    let bin = env!("CARGO_BIN_EXE_gsb-loadgen");
-    let out = std::process::Command::new(bin)
-        .args([
-            "--orchestrate",
-            "4",
-            "--procs",
-            "2",
-            "--duration",
-            "3",
-            "--move-ms",
-            "100",
-        ])
-        .output()
-        .expect("spawning gsb-loadgen orchestrator");
+    let run = loadgen_rate::run(&[
+        "--orchestrate",
+        "4",
+        "--procs",
+        "2",
+        "--duration",
+        "3",
+        "--move-ms",
+        "100",
+    ]);
+    let out = &run.out;
     assert!(
         out.status.success(),
         "orchestrator exited with {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -342,24 +320,10 @@ fn loadgen_smoke_separate_processes() {
         "two client processes: {client_pids}"
     );
     // The server's own metric reports must have crossed the binary socket:
-    // a sane tick rate and >0 steps (the in-process mode's numbers come
-    // from the same report series).
-    let server_hz: f64 = get("server_hz").parse().expect("number");
-    assert!(
-        (20.0..=40.0).contains(&server_hz),
-        "server-reported step rate {server_hz} Hz far from the configured 30 Hz"
-    );
-    let steps: u64 = get("steps").parse().expect("number");
-    assert!(
-        steps >= 60,
-        "3 s at ~30 Hz should yield ~90 room steps, got {steps}"
-    );
-    // The client-measured rate too (merged from the children's records).
-    let client_hz: f64 = get("tick_hz_med").parse().expect("number");
-    assert!(
-        (20.0..=40.0).contains(&client_hz),
-        "client-measured tick rate {client_hz} Hz far from the configured 30 Hz"
-    );
+    // the room's configured period, a sane rate and >0 steps (the
+    // in-process mode's numbers come from the same report series); the
+    // client-measured rate too (merged from the children's records).
+    loadgen_rate::assert_tick_rate(&run, &kv, result_line);
 
     // The metric queue crossed the BINARY socket (the report data, not
     // stdout): presence + zero-RPC-traffic invariants.

@@ -6,19 +6,19 @@
 //! loadgen smokes: a handful of clients for a few seconds.
 
 use std::collections::HashMap;
-use std::process::{Command, Output};
+
+use loadgen_rate::Run;
+
+mod loadgen_rate;
 
 /// Run the real `gsb-loadgen` with `args`.
-fn loadgen(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
-        .args(args)
-        .env("RUST_BACKTRACE", "1")
-        .output()
-        .expect("spawning gsb-loadgen")
+fn loadgen(args: &[&str]) -> Run {
+    loadgen_rate::run(args)
 }
 
-/// The RESULT line of a successful run, and its `key=value` pairs.
-fn result(out: &Output) -> (String, HashMap<String, String>) {
+/// The RESULT line of a successful run, and its `key=value` pairs; the
+/// run's tick-rate claims are checked on the way (`loadgen_rate`).
+fn result(out: &Run) -> (String, HashMap<String, String>) {
     assert!(
         out.status.success(),
         "gsb-loadgen exited with {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -38,14 +38,15 @@ fn result(out: &Output) -> (String, HashMap<String, String>) {
         .filter_map(|kv| kv.split_once('='))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    loadgen_rate::assert_tick_rate(out, &kv, &line);
     (line, kv)
 }
 
 /// A clean WebSocket run of `game` with `n` clients: every client through
-/// the whole session on the `ws` transport, a snapshot stream, numbered
-/// inputs acked, nothing refused or closed by the server, and no delta
-/// dropped beyond `late_joins` (a join into a group already streaming
-/// deltas — GAME-MODULE G3-2).
+/// the whole session on the `ws` transport, numbered inputs acked,
+/// nothing refused or closed by the server, and no delta dropped beyond
+/// `late_joins` (a join into a group already streaming deltas —
+/// GAME-MODULE G3-2); the snapshot stream and the tick rate: [`result`].
 fn assert_clean_ws(line: &str, kv: &HashMap<String, String>, n: u64, game: &str, late_joins: u64) {
     let get = |k: &str| -> u64 {
         kv.get(k)
@@ -62,15 +63,12 @@ fn assert_clean_ws(line: &str, kv: &HashMap<String, String>, n: u64, game: &str,
         assert_eq!(get(k), 0, "{k}: {line}");
     }
     assert!(get("gap_drops") <= late_joins, "{line}");
-    assert!(get("snap_total") >= 30 * n, "a stream per client: {line}");
     assert!(get("moves") > 0 && get("acks") > 0, "inputs acked: {line}");
     assert!(get("ack_processed_max") > 1, "numbered inputs: {line}");
     assert!(
         get("client_in_bps") > 0 && get("client_out_bps") > 0,
         "{line}"
     );
-    let hz: f64 = kv["server_hz"].parse().expect("number");
-    assert!((20.0..=40.0).contains(&hz), "server_hz {hz}: {line}");
 }
 
 /// Each game over the in-process server's WebSocket door.
