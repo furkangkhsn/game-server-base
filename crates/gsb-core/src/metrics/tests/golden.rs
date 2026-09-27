@@ -53,6 +53,8 @@
 //! session's frames, not the demux's piggybacked ACKs. B74's four
 //! transport counters at the end of that line and table
 //! (`handshakes_cut_closed` .. `udp_sessions_unaccepted_closed`).
+//! B75's registry-scope `joins_refused_closed=` with
+//! `gsb_registry_joins_refused_closed_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -90,6 +92,9 @@ pub(super) fn golden_report() -> MetricReport {
     // A room task that ended without its final count (B67); no row of
     // its own in this report.
     acc.apply(MetricsEvent::RoomEndedUncounted(RoomId(99)));
+    // Two joins a stopped room refused (B75).
+    acc.apply(MetricsEvent::JoinRefusedClosed);
+    acc.apply(MetricsEvent::JoinRefusedClosed);
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

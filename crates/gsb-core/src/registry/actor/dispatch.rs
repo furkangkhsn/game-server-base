@@ -30,7 +30,9 @@ where
 {
     /// The ordinary fresh join round trip (the pre-reconnect shape):
     /// single rooms get a control `Join`; sharded rooms a `ShardMsg::Join`
-    /// on the home shard. Returns the outcome class the dispatcher acts on.
+    /// on the home shard. Returns the outcome class the dispatcher acts on:
+    /// a send the room refused is [`OpOutcome::Refused`] (B75), apart
+    /// from a reply dropped after the room took the op.
     pub(super) async fn dispatch_plain_join(
         conn: ConnectionId,
         _room: RoomId,
@@ -65,10 +67,23 @@ where
                     .is_ok()
             }
         };
-        match (sent, joined_rx.await) {
-            (true, Ok(Ok((entity, actions)))) => OpOutcome::Joined(entity, actions),
-            (true, Ok(Err(e))) => OpOutcome::Rejected(e),
-            _ => OpOutcome::Gone,
+        Self::settle(sent, joined_rx).await
+    }
+
+    /// Fold one join round trip's send and reply: a refused send never
+    /// reached the room (`Refused`), a dropped reply was taken and lost
+    /// there (`Gone`, the room's stop counts it).
+    async fn settle(
+        sent: bool,
+        reply: oneshot::Receiver<Result<(EntityId, Mailbox<Action>), CoreError>>,
+    ) -> OpOutcome {
+        if !sent {
+            return OpOutcome::Refused;
+        }
+        match reply.await {
+            Ok(Ok((entity, actions))) => OpOutcome::Joined(entity, actions),
+            Ok(Err(e)) => OpOutcome::Rejected(e),
+            Err(_) => OpOutcome::Gone,
         }
     }
 
@@ -103,11 +118,7 @@ where
                     })
                     .await
                     .is_ok();
-                match (sent, joined_rx.await) {
-                    (true, Ok(Ok((entity, actions)))) => OpOutcome::Joined(entity, actions),
-                    (true, Ok(Err(e))) => OpOutcome::Rejected(e),
-                    _ => OpOutcome::Gone,
-                }
+                Self::settle(sent, joined_rx).await
             }
             RoomHandle::Sharded(mailboxes) => {
                 // One oneshot per shard; each shard answers exactly once
@@ -168,11 +179,15 @@ where
                 if let Some((entity, actions)) = accepted {
                     return OpOutcome::Joined(entity, actions);
                 }
+                // A stale epoch — or `RoomGone` from a stopping shard that
+                // holds the park: it counted the resume as unprocessed
+                // (B75), so no fallback join may count it again.
                 if let Some(e) = stale {
                     return OpOutcome::Rejected(e);
                 }
-                // All shards answered "not here": transparent fresh join
-                // (§5) through the ordinary path.
+                // All shards answered "not here" or are gone without the
+                // park: transparent fresh join (§5) through the ordinary
+                // path — the one that counts a stopped room's refusal.
                 Self::dispatch_plain_join(conn, room, handle, shard, epoch, identity, out).await
             }
         }

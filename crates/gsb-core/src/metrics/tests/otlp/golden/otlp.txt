@@ -34,6 +34,8 @@ gsb_registry_team_relays_dropped_full sum t=2 mono=true unit="" n=1 | Team impor
   [] 1000..2000 int 4
 gsb_registry_team_relays_dropped_closed sum t=2 mono=true unit="" n=1 | Team imports a sharded room's team hub could not queue on a target shard because its mailbox was closed (the shard has stopped or died), cumulative.
   [] 1000..2000 int 5
+gsb_registry_joins_refused_closed sum t=2 mono=true unit="" n=1 | Joins (resume attempts included) answered RoomGone because the room refused the send: its inbox was already closed (the room or the join's shard had stopped or died), so no room counted them, cumulative.
+  [] 1000..2000 int 2
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

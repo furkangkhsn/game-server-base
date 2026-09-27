@@ -11,6 +11,8 @@ use super::*;
 mod unbound;
 // What the shard still holds when it stops, counted (B62).
 mod stop;
+// A resume queued for the park a stopping shard holds (B75).
+mod parked;
 
 /// Two requests and one plain action into a session's channel.
 fn two_requests_and_an_action(tx: &Mailbox<Action>, conn: ConnectionId) {

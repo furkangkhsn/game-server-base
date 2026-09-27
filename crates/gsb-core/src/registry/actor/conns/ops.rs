@@ -4,6 +4,7 @@
 use crate::channel::Mailbox;
 use crate::error::CoreError;
 use crate::id::ConnectionId;
+use crate::metrics::MetricsEvent;
 use crate::registry::actor::Registry;
 use crate::registry::*;
 use std::fmt::Debug;
@@ -39,10 +40,12 @@ where
     /// `seed` is the membership the task starts in: `None` for a new
     /// dispatcher, the table's affiliation for a replacement (see
     /// [`Self::respawn_conn_ops`]). `serial` names the task in its
-    /// `OpsClosed` (see [`Self::on_ops_closed`]).
+    /// `OpsClosed` (see [`Self::on_ops_closed`]). `metrics`: where a join
+    /// the room refused is counted (B75, [`MetricsEvent::JoinRefusedClosed`]).
     pub(in crate::registry) fn spawn_conn_ops(
         conn: ConnectionId,
         registry: Mailbox<RegistryMsg>,
+        metrics: Mailbox<MetricsEvent>,
         seed: Option<InRoom<St, Sp>>,
         serial: u64,
     ) -> mpsc::Sender<RoomOp<St, Sp>> {
@@ -122,9 +125,16 @@ where
                                     })
                                     .await;
                             }
-                            OpOutcome::Gone => {
-                                // Control channel gone (room destroyed) or the
-                                // room dropped the reply.
+                            OpOutcome::Gone | OpOutcome::Refused => {
+                                // The room dropped the reply (its stop
+                                // counted the queued op), or refused the
+                                // send: its inbox was closed, the room
+                                // stopped or died, and nothing else saw the
+                                // join — counted here (B75), stop-message
+                                // idiom (the registry may already be gone).
+                                if matches!(outcome, OpOutcome::Refused) {
+                                    crate::channel::post(&metrics, MetricsEvent::JoinRefusedClosed);
+                                }
                                 let _ = reply.send(Err(CoreError::RoomGone));
                                 let _ = registry
                                     .send(RegistryMsg::SpawnFailed {
@@ -216,7 +226,13 @@ where
     ) -> mpsc::Sender<RoomOp<St, Sp>> {
         self.next_ops_serial += 1;
         let serial = self.next_ops_serial;
-        let op_tx = Self::spawn_conn_ops(conn, self.self_mailbox.clone(), seed, serial);
+        let op_tx = Self::spawn_conn_ops(
+            conn,
+            self.self_mailbox.clone(),
+            self.metrics.clone(),
+            seed,
+            serial,
+        );
         self.conn_ops.insert(conn, (serial, op_tx.clone()));
         op_tx
     }

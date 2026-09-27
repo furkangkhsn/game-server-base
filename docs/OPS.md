@@ -645,6 +645,26 @@ max_detach_hold_secs = "off"
   penceresi de ikiye ayrıldı (`relay_drops_full`, `relay_drops_closed`).
   Shard tarafının eşi `gsb_room_team_export_drops_total` (export'u
   registry kutusu reddetti) değişmedi.
+- **Registry kapsamı: duran odanın reddettiği katılmalar (B75, sayım
+  turu 6).** Registry satırının sonunda (`team_relays_dropped_closed=`'den
+  sonra) `joins_refused_closed=` ve aile tablosunda (`REGISTRY`)
+  `gsb_registry_joins_refused_closed_total` (`counter`); loadgen telinde
+  `GSMY` (registry bölümünde `team_relays_dropped_closed`'dan sonra);
+  `RESULT`'ta yok. Bağlantının dağıtıcısı bir katılmayı (anonim ya da
+  kimlikli — resume denemesi) odaya gönderir; oda/shard durmuş ya da
+  ölmüşse kutusu KAPALIDIR, gönderim reddedilir, istemci `RoomGone` alır
+  — oda op'u hiç görmedi, hiçbir oda saymaz. Artık dağıtıcı sayar:
+  `MetricsEvent::JoinRefusedClosed` (durdurma-mesajı deyimi,
+  `channel::post`) toplayıcıya DOĞRUDAN gider — registry üzerinden değil,
+  çünkü bütün sunucunun duruşunda registry dağıtıcılardan önce çıkar.
+  **Anlam notu:** oda op'u alıp duruşta kuyrukta bırakırsa o kayıp odanın
+  `joins_unprocessed`/`resumes_unprocessed`'idir, bu sayaç değil — her
+  katılma tam bir yerde. Sharded resume yayını: kimliği kendi parkında
+  olan duran shard resume'u sayar ve `RoomGone` der (katlama taze join'e
+  düşmez); parkı hiçbir shard'da olmayan resume taze join'e düşer ve orada
+  bir kez sayılır (ev shard'ı kapalıysa burada, açıksa ev shard'ının
+  `joins_unprocessed`'inde). Reddedilen yayın gönderimleri (shard başına)
+  sayılmaz — op başına bir karar (RECONNECT §3.4, §6).
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

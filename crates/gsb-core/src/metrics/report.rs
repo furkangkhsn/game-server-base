@@ -191,6 +191,13 @@ pub struct RegistryReport {
     /// [`RegistrySample::team_relays_dropped_full`]), cumulative (B72).
     pub team_relays_dropped_full: u64,
     pub team_relays_dropped_closed: u64,
+    /// Joins the connections' dispatchers answered `RoomGone` because
+    /// the room refused the send — its inbox already closed, the room
+    /// stopped or died (see [`MetricsEvent::JoinRefusedClosed`]),
+    /// cumulative (B75). Counted by the collector from the dispatchers'
+    /// events. A join the room took and then dropped is the room's
+    /// `joins_unprocessed` / `resumes_unprocessed` instead, never both.
+    pub joins_refused_closed: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

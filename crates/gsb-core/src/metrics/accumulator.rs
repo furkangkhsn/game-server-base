@@ -108,6 +108,9 @@ pub struct MetricAccumulator {
     /// Room/shard tasks that ended without their final count (B67;
     /// cumulative — reported in the registry slice).
     rooms_ended_uncounted: u64,
+    /// Joins refused by a closed room (B75; cumulative — reported in the
+    /// registry slice).
+    joins_refused_closed: u64,
     /// The transport tasks' loss deltas, summed (B58).
     transport: TransportCounters,
 }
@@ -186,6 +189,9 @@ impl MetricAccumulator {
                 self.rooms_gone_grace
                     .entry(id)
                     .or_insert(ROOM_GONE_GRACE_REPORTS);
+            }
+            MetricsEvent::JoinRefusedClosed => {
+                self.joins_refused_closed = self.joins_refused_closed.saturating_add(1);
             }
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);

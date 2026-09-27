@@ -11,6 +11,9 @@ use crate::registry::actor::Registry;
 use crate::registry::{RegistryMsg, RoomHandle, RoomOp};
 use crate::room::{Action, RoomControl};
 
+// Where the dispatcher counts a join the room refused (B75).
+mod refused;
+
 type Reg = Registry<(), (), (), ()>;
 
 const CONN: ConnectionId = ConnectionId(3);
@@ -22,7 +25,8 @@ const ENTITY: EntityId = 5;
 async fn a_leave_for_another_room_keeps_the_membership() {
     let (registry, mut reports) = channel::<RegistryMsg>(16);
     let (control, mut room) = channel::<RoomControl>(8);
-    let ops = Reg::spawn_conn_ops(CONN, registry, None, 1);
+    let (metrics, _metrics) = channel(8);
+    let ops = Reg::spawn_conn_ops(CONN, registry, metrics, None, 1);
     let (out, _out) = channel(8);
     let (reply, seated) = oneshot::channel();
     let join = RoomOp::Join {

@@ -3,6 +3,10 @@
 //! inbox and drains it, dropping every queued reply unanswered — so does
 //! [`stop`] here. The client's answer is the `RoomGone` it always was; it
 //! must not wait the per-answer timeout for shards known to be gone.
+//!
+//! B75 made the answer's cause exact: a send the room refused is
+//! `Refused` (the dispatcher counts it), a reply dropped after the room
+//! took the op is `Gone` (the room's stop counts it) — see [`refused`].
 
 use std::time::Duration;
 
@@ -14,6 +18,8 @@ use crate::id::{ConnectionId, RoomId};
 use crate::registry::actor::Registry;
 use crate::registry::{OpOutcome, RoomHandle};
 use crate::shard::ShardMsg;
+
+mod refused;
 
 type Reg = Registry<(), (), (), ()>;
 type Shard = Inbox<ShardMsg<(), ()>>;
@@ -54,7 +60,9 @@ async fn queued(inbox: &mut Shard) -> ShardMsg<(), ()> {
 
 /// Every shard stops with the resume queued (the stop's leftovers — the
 /// identity is parked on none of them): the answer is `RoomGone` at once,
-/// not after one timeout per shard (15 s here before B71).
+/// not after one timeout per shard (15 s here before B71). No shard
+/// counted it, so the fallback fresh join meets the home shard's closed
+/// inbox: `Refused`, counted once by the dispatcher (B75).
 #[tokio::test(start_paused = true)]
 async fn a_resume_queued_at_a_sharded_room_s_stop_is_answered_at_once() {
     let (handle, mut inboxes) = shards(3);
@@ -69,7 +77,10 @@ async fn a_resume_queued_at_a_sharded_room_s_stop_is_answered_at_once() {
         stop(inbox);
     }
     let outcome = task.await.expect("the dispatcher's resume");
-    assert!(matches!(outcome, OpOutcome::Gone), "answered RoomGone");
+    assert!(
+        matches!(outcome, OpOutcome::Refused),
+        "answered RoomGone, refused"
+    );
     let waited = t0.elapsed();
     assert!(waited < PER_ANSWER, "the gone shards cost {waited:?}");
 }
@@ -77,7 +88,8 @@ async fn a_resume_queued_at_a_sharded_room_s_stop_is_answered_at_once() {
 /// Mid-stop — the shards end on different ticks: one had already stopped
 /// (the send is refused), one answers "not here" on its last tick, one
 /// stops with the resume queued. The all-miss falls through to the fresh
-/// join on the home shard, whose inbox is closed: `RoomGone`, at once.
+/// join on the home shard, whose inbox is closed: `RoomGone`, at once —
+/// a refusal (B75).
 #[tokio::test(start_paused = true)]
 async fn a_resume_meeting_a_room_mid_stop_does_not_wait_for_its_gone_shards() {
     let (handle, mut inboxes) = shards(3);
@@ -93,7 +105,10 @@ async fn a_resume_meeting_a_room_mid_stop_does_not_wait_for_its_gone_shards() {
     drop(queued(&mut inboxes[1]).await);
     stop(inboxes.remove(1));
     let outcome = task.await.expect("the dispatcher's resume");
-    assert!(matches!(outcome, OpOutcome::Gone), "answered RoomGone");
+    assert!(
+        matches!(outcome, OpOutcome::Refused),
+        "answered RoomGone, refused"
+    );
     let waited = t0.elapsed();
     assert!(waited < PER_ANSWER, "the gone shards cost {waited:?}");
     assert!(inboxes[0].try_recv().is_err(), "no join reached a shard");

@@ -3061,6 +3061,7 @@ durdurulamaz.
 | room | `joins_unprocessed`, `resumes_unprocessed`, `leaves_unprocessed`, `detaches_unprocessed`, `migrations_in_dropped`, `effects_unsent`, `effects_unapplied`, `team_imports_unapplied`, `border_updates_unapplied` (`RoomReport::stop`; kümülatif, yalnız son örnekte; satırda `metrics_dropped=`'den sonra, Prometheus'ta `gsb_room_<ad>_total`, loadgen telinde GSMV, `RESULT`'ta `<ad>=`, fold'da SUM) | duran oda/shard oturumlarının dışında neyi elinde tuttu? Kanalda işlenmeyen bağlantı op'ları; shard'da kurulmayan göçler, gönderilmeyen/uygulanmayan etkiler, uygulanmayan görünüm güncellemeleri. B68 |
 | registry | `rooms_ended_uncounted` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_rooms_ended_uncounted_total`, loadgen telinde GSMU) | kaç oda/shard GÖREVİ son sayımı olmadan (panikle) bitti — son penceresi ve elinde kalanlar hiçbir sayaçta yok? Ölüm bekçisinin `MetricsEvent::RoomEndedUncounted`'ı; satır da onunla budanır. B67 |
 | registry | `team_relays_dropped_full`, `team_relays_dropped_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_team_relays_dropped_{full,closed}_total`, loadgen telinde GSMW) | sharded odanın takım hub'ı (CROSS-SHARD §8b.2) kaç import'u hedef shard'a kuyruklayamadı — kutusu DOLU (yetişemiyor; kaynağın sonraki export'u kümeyi yeniden taşır) mu, KAPALI (durmuş/ölmüş) mu? Önceden yalnız `team_hub_summary` log satırında, ikisi karışık. Registry ret olduğunda örneğini hemen gönderir (röle tablo değiştirmez). B72 |
+| registry | `joins_refused_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_refused_closed_total`, loadgen telinde GSMY) | kaç katılmayı (resume denemeleri dahil) oda kutusu KAPALI olduğu için reddetti — oda/shard durmuş ya da ölmüş, op'u hiç görmedi, istemci `RoomGone` aldı? Dağıtıcının `MetricsEvent::JoinRefusedClosed`'ı (registry'yi atlar: bütün sunucunun duruşunda registry önce çıkar). Alınıp duruşta düşürülen katılma odanın `joins_unprocessed`/`resumes_unprocessed`'idir, bu değil. B75 |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif; B55'ten beri yalnız oyun-bandı girdisi)
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)
@@ -3303,8 +3304,11 @@ korumaları; bayat op kayıp değildir; `Detach`'te `on_disconnect` hiç
 koşmadı). Shard'da yayın op'ları (`Leave`, `Detach`, `Resume` her
 shard'a gider) yalnız etki edeceği shard'da sayılır (üyenin sahibi,
 kimliği park etmiş olan) — shard sayısı kadar şişmez; kimsenin parkında
-olmayan bir resume'un yerine geçecek taze katılma hiç gönderilmez, odada
-sayılmaz (istemci `RoomGone` alır). Shard'a özgü: `migrations_in_dropped`,
+olmayan bir resume ise dağıtıcıda taze katılmaya düşer ve orada bir kez
+sayılır (B75: ev shard'ı kapalıysa dağıtıcının `joins_refused_closed`'ı,
+açıksa ev shard'ının `joins_unprocessed`'i); parkı duran shard'da olan
+resume'a o shard `RoomGone` der ki taze katılma onu ikinci kez saymasın.
+Shard'a özgü: `migrations_in_dropped`,
 `effects_unsent`, `effects_unapplied`, `team_imports_unapplied`,
 `border_updates_unapplied` (CROSS-SHARD §4b "Duran shard'ın elinde
 kalanlar"). Yan bulgu (düzeltildi): shard'ın CONTROL fazı `Shutdown`'a

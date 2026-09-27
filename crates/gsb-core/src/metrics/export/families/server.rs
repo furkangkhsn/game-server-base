@@ -21,7 +21,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 16] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 17] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -120,6 +120,13 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 16] = [
         Kind::Counter,
         "Team imports a sharded room's team hub could not queue on a target shard because its mailbox was closed (the shard has stopped or died), cumulative.",
         |r| r.team_relays_dropped_closed,
+    ),
+    // B75: joins a stopped (or dead) room refused.
+    reg(
+        "gsb_registry_joins_refused_closed_total",
+        Kind::Counter,
+        "Joins (resume attempts included) answered RoomGone because the room refused the send: its inbox was already closed (the room or the join's shard had stopped or died), so no room counted them, cumulative.",
+        |r| r.joins_refused_closed,
     ),
 ];
 

@@ -488,6 +488,15 @@ pub enum MetricsEvent {
     /// linger like a final sample would — the row keeps its last sample
     /// for the grace windows and is then dropped, never a ghost.
     RoomEndedUncounted(RoomId),
+    /// A connection's join (anonymous, or identified — a resume attempt)
+    /// that its dispatcher answered `RoomGone` because the room refused
+    /// the send (B75): the room's control channel, or the join's shard's
+    /// inbox, was already closed — the room had stopped or died. No room
+    /// saw it, so no room's stop counts it. Sent by the dispatcher (the
+    /// one place that sees the refusal, alive even after the registry
+    /// has exited at the whole-server stop), stop-message idiom; the
+    /// collector counts it ([`RegistryReport::joins_refused_closed`]).
+    JoinRefusedClosed,
 }
 
 /// Why a match result did not reach the result sink (see

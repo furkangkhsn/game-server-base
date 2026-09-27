@@ -360,12 +360,20 @@ zaman doğru yapmak ya da seriyi artırmamak → ilk test düşer; hiç
 silmemek → ikinci test düşer; görevin yanlış seri yollaması → üç test
 düşer.
 
-**Dağıtıcının `RoomGone`'u (B71).** Dağıtıcı bir katılmayı iki yoldan
-`RoomGone` ile yanıtlar: oda/shard kutusu gönderimi reddeder (duruş
-bitmiş) ya da cevabı düşürür (duruşun kuyruk sayımı, ölen görev).
-Sharded resume'un yayın katlaması gidenleri artık beklemez (§6). İkinci
-yolu oda sayar (`joins_unprocessed`/`resumes_unprocessed`); birincisi ve
-parkı hiçbir shard'da olmayan kuyruktaki resume sayılmıyor — BACKLOG B75.
+**Dağıtıcının `RoomGone`'u (B71, B75).** Dağıtıcı bir katılmayı iki
+yoldan `RoomGone` ile yanıtlar ve ikisini artık ayırır (`OpOutcome`):
+oda/shard kutusu gönderimi **reddeder** (`Refused` — oda durmuş ya da
+ölmüş, op'u hiç görmedi) ya da op'u alıp cevabı **düşürür** (`Gone` —
+duruşun kuyruk sayımı, ölen görev). İkinciyi oda sayar
+(`joins_unprocessed`/`resumes_unprocessed`); birinciyi dağıtıcı sayar:
+`MetricsEvent::JoinRefusedClosed` → toplayıcı → registry dilimi
+`joins_refused_closed` (`gsb_registry_joins_refused_closed_total`).
+Olayı dağıtıcı doğrudan toplayıcıya yollar (durdurma-mesajı deyimi),
+registry üzerinden değil: bütün sunucunun duruşunda registry dağıtıcıdan
+önce çıkar, `SpawnFailed` onu bulamaz. Anonim ve kimlikli (resume
+denemesi) katılma tek sayaçta: parkı olmayan resume taze katılmadır,
+parkı duran shard'da olanı o shard sayar (§6 "Duran odada resume").
+Sharded resume'un yayın katlaması gidenleri beklemez (§6).
 
 ## 4. Kimlik ve park defteri
 
@@ -503,14 +511,22 @@ erken. Canlı ama yavaş bir shard için sınır aynen duruyor.
   kutusunu, `finish`'ten sonra reddedilen gönderimi ve dağıtıcının kendi
   göndericisinin açık tuttuğu kanalı çözmez — kanal yine 5 sn bekler.
   Cevabı "reddedildi" sınıfına da taşırdı (bugün `Gone`).
-- **Sayım (B75'e bırakıldı):** hiçbir shard'ın parkında olmayan kimliğin
-  duruşta kuyruktaki resume'u ve dağıtıcının `RoomGone` ile yanıtladığı
-  katılmalar (kapalı kutunun reddettiği gönderim) hiçbir yerde sayılmıyor.
-  Mevcut sayaçların hiçbiri bunu kesin anlamla taşıyamaz: shard'lar
-  birbirinin parkını bilmez (resume'u kimin sayacağına karar veremez),
-  `joins_unprocessed` "kuyrukta kalan"dır ve reddedilen gönderim kuyruğa
-  hiç girmemiştir, `join_ops_dropped` registry→dağıtıcı teslimidir.
-  Yeni bir registry sayacı gerekir.
+- **Sayım (B75):** her kayıp tam bir yerde. Kimliği KENDİ parkında olan
+  duran shard kuyruktaki resume'u sayar (`resumes_unprocessed`) ve ona
+  `Err(RoomGone)` der — "burada sayıldı": katlama `stale` ile biter,
+  taze join'e düşmez. Ötekiler resume'u cevapsız düşürür (B71'in kanal
+  kapanışı aynen). Hiçbir shard'da parkı olmayan kimlik taze join'e
+  düşer ve orada TEK kez sayılır: ev shard'ının kutusu kapalıysa
+  reddedilen gönderim (`joins_refused_closed`, dağıtıcı), açıksa ve o da
+  duruşta kuyrukta kalırsa `joins_unprocessed` (ev shard'ı), kabul
+  ederse kayıp yok. Tek oda (`RoomControl::Resume`) kendi kuyruğunu
+  zaten hep sayıyordu; reddedilen gönderimi dağıtıcı sayar. **Elenen:**
+  duranın bütün kuyruktaki resume'lara `RoomGone` demesi — parkı hiçbir
+  yerde olmayan resume'u kimse saymaz (katlama taze join'e hiç düşmez);
+  registry'nin "hiçbir shard'ın saymadığı resume'u" sayması — registry
+  shard cevaplarını görmez, dağıtıcı görür; sayımın `SpawnFailed`
+  nedeniyle registry'de tutulması — bütün sunucunun duruşunda registry
+  çoktan çıkmıştır (bkz. §3.4).
 
 Test (`registry/actor/dispatch/tests.rs`, duraklatılmış saat, shard'ları
 test oynar): üç shard'ın hepsi resume kuyruktayken durur → `Gone`, 5 sn
@@ -521,7 +537,18 @@ sn dolmadan, hiçbir shard'a join ulaşmaz. Önce yazıldı ve düştü (15 sn v
 resume'u cevapsız düşürdüğü kilitli. Mutasyonlar: göndericiyi
 bırakmamak → iki dağıtıcı testi düşer; `finish`'in resume'a "burada
 değil" demesi → shard testi düşer. `Ok(None) => break` yük taşımaz (kapalı
-kanal hemen `None` döner; mutasyon yaşar, bilinçli).
+kanal hemen `None` döner; mutasyon yaşar, bilinçli). B75 bu iki testin
+cevabını `Refused`'a sıkılaştırdı (taze join kapalı ev shard'ına düşer).
+B75 testleri: `registry/actor/dispatch/tests/refused.rs` (kapalı kutu →
+`Refused`, tek oda/shard, join/resume; alınıp düşürülen → `Gone`;
+parkı duran shard'da olan resume → `Rejected(RoomGone)`, taze join yok),
+`registry/actor/conns/ops/tests/refused.rs` (dağıtıcı görevi: reddedilen
+join için tam bir `JoinRefusedClosed`, alınıp düşürülen için hiç),
+`shard/tests/unread/parked.rs` (duran shard kendi parkının resume'unu
+sayar ve `RoomGone` der, başkasınınkini cevapsız düşürür). Mutasyonlar:
+reddi `Gone` saymak → dört test; shard'ın cevap vermemesi → shard testi;
+düşürülen cevabı da saymak → dağıtıcı testi; toplayıcının olayı yok
+sayması → altın metin.
 
 ## 7. Kanal swap: `ShardMsg::Resume` / `RoomControl::Resume`
 

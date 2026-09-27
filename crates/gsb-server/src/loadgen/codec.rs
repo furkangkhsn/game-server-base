@@ -69,6 +69,7 @@ mod logic;
 ///                u64 rooms_ended_uncounted
 ///                u64 team_relays_dropped_full
 ///                u64 team_relays_dropped_closed
+///                u64 joins_refused_closed
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
@@ -210,7 +211,10 @@ mod logic;
 /// GSMX = the GSMW layout with four more transport counters at the end
 /// of that section (what a closing door and rUDP's accept side drop —
 /// B74: `handshakes_cut_closed` .. `udp_sessions_unaccepted_closed`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D58;
+/// GSMY = the GSMX layout plus the registry section's
+/// `joins_refused_closed` (joins a stopped or dead room refused — B75),
+/// right after `team_relays_dropped_closed`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D59;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -338,6 +342,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(g.rooms_ended_uncounted);
         w.u64(g.team_relays_dropped_full);
         w.u64(g.team_relays_dropped_closed);
+        w.u64(g.joins_refused_closed);
     }
     w.u64(r.net.bytes_in);
     w.u64(r.net.bytes_out_room);
@@ -546,6 +551,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             rooms_ended_uncounted: r.u64()?,
             team_relays_dropped_full: r.u64()?,
             team_relays_dropped_closed: r.u64()?,
+            joins_refused_closed: r.u64()?,
         }),
         0 => None,
         _ => return None,

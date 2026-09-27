@@ -95,8 +95,16 @@ pub(crate) enum OpOutcome {
     /// A structural rejection from the room side (full room, stale-resume
     /// epoch guard): propagated to the connection actor as-is.
     Rejected(CoreError),
-    /// The room side is unreachable or dropped the reply.
+    /// The room side took the op and dropped the reply: a stopping room
+    /// or shard counts what its inbox held (`joins_unprocessed`,
+    /// `resumes_unprocessed`), a panicked one went uncounted with its
+    /// task (B67).
     Gone,
+    /// The room side refused the send: its inbox (a single room's control
+    /// channel, the join's shard) was already closed — the room stopped
+    /// or died before the op reached it. No room counts it; the
+    /// dispatcher does (`joins_refused_closed`, B75).
+    Refused,
 }
 
 /// A sharded room's registry-side state (see `crate::shard`): the shard
