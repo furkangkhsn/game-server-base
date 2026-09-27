@@ -204,6 +204,11 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "actions_unbound",
         "hb_throttled_preauth",
         "hb_throttled_authed",
+        // The connection actors' outbound losses (B57): a client that
+        // closes right after its LEAVE result can leave a control frame
+        // to a gone writer.
+        "frames_out_closed",
+        "close_notices_dropped",
     ] {
         let _: u64 = get(k)
             .parse()

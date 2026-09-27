@@ -285,8 +285,11 @@ pub struct ConnSample {
     /// Wire bytes received (frame body: 2-byte op + payload), delta.
     pub bytes_in: u64,
     /// Wire bytes of control frames this actor sent (frame body), delta.
+    /// Since B57 counted once the outbound channel took the frame (before,
+    /// a frame a closed channel refused was counted too).
     pub bytes_out: u64,
-    /// Frames received / control frames sent, delta.
+    /// Frames received / control frames sent (queued on the outbound
+    /// channel — B57), delta.
     pub frames_in: u64,
     pub frames_out: u64,
     /// Game-band input actions this actor dropped on a full (bounded)
@@ -318,6 +321,19 @@ pub struct ConnSample {
     /// AFTER it is a known client's misconfigured heartbeat timer.
     pub heartbeats_throttled_preauth: u64,
     pub heartbeats_throttled_authed: u64,
+    /// Control frames this actor could not queue because its outbound
+    /// channel was already closed (the writer is gone: a failed socket
+    /// write or the write-stall window), delta since the last flush (B57):
+    /// never sent, and not in [`Self::frames_out`]. The awaited sends end
+    /// the session on the first one; the best-effort close notice counts
+    /// here too.
+    pub frames_out_closed: u64,
+    /// Best-effort close notices (the `ERROR` 9 / 14 of the ends that never
+    /// wait on the client: stop, stream rejected, a room's kick or idle
+    /// close) dropped on a FULL outbound channel — the client was not
+    /// reading, and gets the close without the reason — delta since the
+    /// last flush (B57).
+    pub close_notices_dropped: u64,
     /// Game-band actions this actor forwarded into an already CLOSED
     /// action channel, delta since its last flush (B51): the room had
     /// ended the membership itself (a kick, the input-idle ceiling, the

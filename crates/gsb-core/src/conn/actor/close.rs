@@ -96,10 +96,15 @@ impl super::ConnectionActor {
                 self.m_out_bytes = self.m_out_bytes.saturating_add(bytes);
                 self.m_out_frames += 1;
             }
+            // Both failures are counted (B57), apart: a full queue lost
+            // the notice to a client that was not reading
+            // (`close_notices_dropped`); a closed one had no writer left
+            // to carry any frame (`frames_out_closed`, like `send_frame`).
             Err(TrySendError::Full(_)) => {
+                self.m_close_notices_dropped += 1;
                 debug!(%self.conn, ?code, "close notice dropped: the outbound queue is full");
             }
-            Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Closed(_)) => self.m_frames_out_closed += 1,
         }
     }
 

@@ -361,6 +361,24 @@ max_detach_hold_secs = "off"
   aile tablosunda `gsb_net_heartbeats_throttled_preauth_total`,
   `gsb_net_heartbeats_throttled_authed_total`; loadgen telinde `GSMN`;
   `RESULT`'ta aynı anahtarlar. Önceden yalnız debug satırındaydı.
+- **Net kapsamı: bağlantı aktörünün kendi çıkış kayıpları (B57) ve
+  `frames_out`/`bytes_out_control`'ün DARALAN anlamı.** Aktörün kontrol
+  kareleri (AUTH/JOIN sonuçları, ACK'ler, `ERROR`'lar) odanın fan-out
+  ettiği aynı sınırlı çıkış kanalından gider. `send_frame` kareyi
+  göndermeden ÖNCE sayıyordu: kapalı kanalın (yazıcı pompası gitmiş)
+  reddettiği kare de "gönderildi" görünürdü. Artık kanal kareyi aldıktan
+  SONRA sayılır; `gsb_net_frames_out_total` / `gsb_net_bytes_out_control_total`
+  (ve `bytes_out_total`) yalnız kuyruğa girenleri söyler — adlarının
+  dediği ("sent"). Reddedilen kare `frames_out_closed`'da
+  (`gsb_net_frames_out_closed_total`): bekleyen gönderimde oturum ilk
+  reddte biter (`outbound_dead` ya da benimsenen karar), en iyi çaba
+  kapanış bildirimi (`try_notice`: sunucu durması `ERROR 14`, akış reddi,
+  odanın atma/boşta kapanışı `ERROR 9`) de kapalı kanalda buraya düşer.
+  Aynı bildirim DOLU kanalda (istemci okumuyor) düşerse
+  `close_notices_dropped`'da (`gsb_net_close_notices_dropped_total`) —
+  istemci kapanışı gerekçesiz alır. Satırda `hb_throttled_authed=`'dan
+  sonra `frames_out_closed= close_notices_dropped=`; loadgen telinde
+  `GSMO`; `RESULT`'ta aynı anahtarlar.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

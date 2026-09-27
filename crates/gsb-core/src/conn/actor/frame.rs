@@ -245,11 +245,10 @@ impl super::ConnectionActor {
 
     pub(super) async fn send_frame<M: prost::Message + std::any::Any>(&mut self, op: u16, msg: &M) {
         if let Some(fb) = self.table.frame(op, msg) {
-            // Metrics: count this control frame's wire bytes (frame body:
-            // 2-byte op + payload). Room fan-out bytes are counted by the
-            // room, not here.
-            self.m_out_bytes = self.m_out_bytes.saturating_add(2 + fb.payload.len() as u64);
-            self.m_out_frames += 1;
+            // Metrics: this control frame's wire bytes (frame body: 2-byte
+            // op + payload), counted once the channel took it (below) —
+            // room fan-out bytes are counted by the room, not here.
+            let bytes = 2 + fb.payload.len() as u64;
             // A bounded `send` resolves `Err` only when the channel is
             // CLOSED, and the sole receiver is this connection's writer
             // pump: it exits when a socket write or flush fails (the peer
@@ -271,8 +270,16 @@ impl super::ConnectionActor {
             // left a permanently unreachable session holding its slot
             // until the reader's idle window happened to notice, and
             // FOREVER when `idle_timeout_secs = 0` disables that window.
+            //
+            // Counted AFTER the send (B57): a frame the closed channel
+            // refused was never sent, so it is not in `frames_out` /
+            // `bytes_out` but in its own `frames_out_closed`.
             if self.out.send(vec![fb]).await.is_err() {
+                self.m_frames_out_closed += 1;
                 self.w_closing = true;
+            } else {
+                self.m_out_bytes = self.m_out_bytes.saturating_add(bytes);
+                self.m_out_frames += 1;
             }
         }
     }

@@ -54,6 +54,15 @@ pub struct ConnectionActor {
     m_in_frames: u64,
     m_out_bytes: u64,
     m_out_frames: u64,
+    /// Control frames this actor could not queue because the outbound
+    /// channel was already CLOSED (the writer pump is gone), delta since
+    /// the last flush (B57). Not in `m_out_frames`/`m_out_bytes`, which
+    /// count only what was queued.
+    m_frames_out_closed: u64,
+    /// Best-effort close notices (`try_notice`) dropped on a FULL
+    /// outbound channel (the client was not reading), delta since the
+    /// last flush (B57).
+    m_close_notices_dropped: u64,
     /// Game-band input actions this actor dropped on a full (bounded)
     /// per-connection action channel, delta since the last flush — the
     /// flooding loss point (the room's READ phase is a bounded pull that

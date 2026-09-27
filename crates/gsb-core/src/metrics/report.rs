@@ -176,7 +176,9 @@ pub struct NetReport {
     pub bytes_out_control: u64,
     pub bytes_out_total: u64,
     pub frames_in: u64,
-    /// Control frames sent by connection actors.
+    /// Control frames sent by connection actors (queued on their outbound
+    /// channels; a frame a closed channel refused is
+    /// [`Self::frames_out_closed`] — B57).
     pub frames_out: u64,
     /// Game-band input actions dropped on full (bounded) per-connection
     /// action channels (cumulative, all connections). The per-connection
@@ -216,6 +218,12 @@ pub struct NetReport {
     /// violations.
     pub heartbeats_throttled_preauth: u64,
     pub heartbeats_throttled_authed: u64,
+    /// Control frames refused by an already closed outbound channel, and
+    /// best-effort close notices dropped on a full one (cumulative, all
+    /// connections; B57, see
+    /// [`crate::metrics::ConnSample::frames_out_closed`]).
+    pub frames_out_closed: u64,
+    pub close_notices_dropped: u64,
     /// Sessions the SERVER ended on its own initiative, by reason
     /// (cumulative, all connections; see [`crate::conn::ServerClose`] for
     /// the taxonomy and what is deliberately not in it). A client-side
@@ -293,6 +301,8 @@ impl MetricReport {
                 requests_no_room: 0,
                 heartbeats_throttled_preauth: 0,
                 heartbeats_throttled_authed: 0,
+                frames_out_closed: 0,
+                close_notices_dropped: 0,
                 server_closes: ServerCloses::default(),
             },
             actions_dropped_top: Vec::new(),

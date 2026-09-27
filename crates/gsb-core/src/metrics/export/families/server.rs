@@ -95,7 +95,7 @@ const fn net(
 /// The net scope: wire traffic aggregated over all connections (the
 /// per-connection attribution lives in `actions_dropped_top` and the
 /// per-actor log lines, not in this aggregate).
-pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 15] = [
+pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 17] = [
     net(
         "gsb_net_bytes_in_total",
         "Wire bytes received over all connections (frame bodies), cumulative.",
@@ -174,5 +174,16 @@ pub(in crate::metrics::export) const NET: [Scalar<NetReport>; 15] = [
         "gsb_net_heartbeats_throttled_authed_total",
         "Heartbeats over the 1/s ACK rate after authentication (counted, not answered, not a violation; a client's heartbeat timer set too fast), cumulative.",
         |n| n.heartbeats_throttled_authed,
+    ),
+    // B57: the connection actors' own outbound losses.
+    net(
+        "gsb_net_frames_out_closed_total",
+        "Control frames a connection could not queue because its writer was already gone (closed outbound channel; not sent, not in frames_out), cumulative.",
+        |n| n.frames_out_closed,
+    ),
+    net(
+        "gsb_net_close_notices_dropped_total",
+        "Best-effort close notices (ERROR 9/14 of the ends that never wait) dropped on a full outbound channel (the client was not reading), cumulative.",
+        |n| n.close_notices_dropped,
     ),
 ];

@@ -50,6 +50,10 @@ gsb_net_heartbeats_throttled_preauth sum t=2 mono=true unit="" n=1 | Heartbeats 
   [] 1000..2000 int 4
 gsb_net_heartbeats_throttled_authed sum t=2 mono=true unit="" n=1 | Heartbeats over the 1/s ACK rate after authentication (counted, not answered, not a violation; a client's heartbeat timer set too fast), cumulative.
   [] 1000..2000 int 6
+gsb_net_frames_out_closed sum t=2 mono=true unit="" n=1 | Control frames a connection could not queue because its writer was already gone (closed outbound channel; not sent, not in frames_out), cumulative.
+  [] 1000..2000 int 1
+gsb_net_close_notices_dropped sum t=2 mono=true unit="" n=1 | Best-effort close notices (ERROR 9/14 of the ends that never wait) dropped on a full outbound channel (the client was not reading), cumulative.
+  [] 1000..2000 int 1
 gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0

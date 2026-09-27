@@ -117,6 +117,12 @@ impl Conn {
         }
     }
 
+    /// The writer pump is gone: the outbound channel's receiver drops.
+    pub fn writer_gone(&mut self) {
+        let (_, dead) = channel::<FrameBatch>(1);
+        drop(std::mem::replace(&mut self.out, dead));
+    }
+
     /// End the session from the client's side and sum every sample the
     /// actor flushed.
     pub async fn close(self) -> ConnSample {
@@ -164,6 +170,8 @@ fn add(t: ConnSample, s: ConnSample) -> ConnSample {
         heartbeats_throttled_preauth: t.heartbeats_throttled_preauth
             + s.heartbeats_throttled_preauth,
         heartbeats_throttled_authed: t.heartbeats_throttled_authed + s.heartbeats_throttled_authed,
+        frames_out_closed: t.frames_out_closed + s.frames_out_closed,
+        close_notices_dropped: t.close_notices_dropped + s.close_notices_dropped,
         ..s
     }
 }

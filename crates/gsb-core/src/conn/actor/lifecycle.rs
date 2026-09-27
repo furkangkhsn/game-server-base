@@ -50,6 +50,8 @@ impl super::ConnectionActor {
             m_in_frames: 0,
             m_out_bytes: 0,
             m_out_frames: 0,
+            m_frames_out_closed: 0,
+            m_close_notices_dropped: 0,
             m_actions_dropped: 0,
             m_actions_dropped_warned: false,
             m_actions_dropped_closed: 0,
@@ -218,6 +220,8 @@ impl super::ConnectionActor {
         let rnoroom = self.m_requests_no_room;
         let hb_pre = self.m_preauth_hb_extra - self.m_flushed_preauth_hb_extra;
         let hb_authed = self.m_hb_extra - self.m_flushed_hb_extra;
+        let out_closed = self.m_frames_out_closed;
+        let notices_dropped = self.m_close_notices_dropped;
         let drops = self.m_metrics_dropped;
         let viols = self.m_violations;
         let limited = self.m_input_limited;
@@ -237,6 +241,8 @@ impl super::ConnectionActor {
             && rnoroom == 0
             && hb_pre == 0
             && hb_authed == 0
+            && out_closed == 0
+            && notices_dropped == 0
             && drops == 0
             && viols == 0
             && limited == 0
@@ -258,6 +264,8 @@ impl super::ConnectionActor {
         self.m_requests_no_room = 0;
         self.m_flushed_preauth_hb_extra = self.m_preauth_hb_extra;
         self.m_flushed_hb_extra = self.m_hb_extra;
+        self.m_frames_out_closed = 0;
+        self.m_close_notices_dropped = 0;
         self.m_metrics_dropped = 0;
         self.m_violations = 0;
         self.m_input_limited = 0;
@@ -280,6 +288,8 @@ impl super::ConnectionActor {
                 requests_no_room: rnoroom,
                 heartbeats_throttled_preauth: hb_pre,
                 heartbeats_throttled_authed: hb_authed,
+                frames_out_closed: out_closed,
+                close_notices_dropped: notices_dropped,
                 metrics_dropped: drops,
                 violations: viols,
                 input_rate_limited: limited,

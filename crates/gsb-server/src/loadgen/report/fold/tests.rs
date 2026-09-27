@@ -165,6 +165,8 @@ pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
             requests_no_room: 0,
             heartbeats_throttled_preauth: 0,
             heartbeats_throttled_authed: 0,
+            frames_out_closed: 0,
+            close_notices_dropped: 0,
             server_closes: Default::default(),
         },
         actions_dropped_top: Vec::new(),

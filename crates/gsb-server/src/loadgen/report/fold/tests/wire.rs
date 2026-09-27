@@ -179,7 +179,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"NMSG", "the magic, little-endian GSMN");
+    assert_eq!(&frame[..4], b"OMSG", "the magic, little-endian GSMO");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -320,6 +320,24 @@ fn the_throttled_heartbeats_survive_the_wire() {
     assert_eq!(got.net.requests_no_room, 17);
     assert_eq!(got.net.heartbeats_throttled_preauth, 19);
     assert_eq!(got.net.heartbeats_throttled_authed, 23);
+    assert_eq!(got.net.server_closes.total(), 1);
+}
+
+/// The connection actors' outbound losses (GSMO, B57) cross the wire as
+/// two fields of their own, after the throttled heartbeats.
+#[test]
+fn the_outbound_losses_survive_the_wire() {
+    let mut sent = three_shards();
+    sent.net.heartbeats_throttled_authed = 23;
+    sent.net.frames_out_closed = 29;
+    sent.net.close_notices_dropped = 31;
+    sent.net
+        .server_closes
+        .add(gsb_core::conn::ServerClose::Kicked);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.net.heartbeats_throttled_authed, 23);
+    assert_eq!(got.net.frames_out_closed, 29);
+    assert_eq!(got.net.close_notices_dropped, 31);
     assert_eq!(got.net.server_closes.total(), 1);
 }
 

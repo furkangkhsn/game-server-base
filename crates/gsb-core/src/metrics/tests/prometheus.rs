@@ -221,6 +221,8 @@ fn input_drops_are_exported_only_at_the_net_scope() {
             requests_no_room: 0,
             heartbeats_throttled_preauth: 0,
             heartbeats_throttled_authed: 0,
+            frames_out_closed: 0,
+            close_notices_dropped: 0,
             server_close: None,
             last: false,
         }));

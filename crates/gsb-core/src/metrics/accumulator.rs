@@ -75,6 +75,10 @@ pub struct MetricAccumulator {
     /// did not answer, before / after authentication (B56; cumulative).
     conn_heartbeats_throttled_preauth: u64,
     conn_heartbeats_throttled_authed: u64,
+    /// Summed deltas of the control frames refused by a closed outbound
+    /// channel and of the close notices dropped on a full one (B57).
+    conn_frames_out_closed: u64,
+    conn_close_notices_dropped: u64,
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
@@ -160,6 +164,12 @@ impl MetricAccumulator {
                 self.conn_heartbeats_throttled_authed = self
                     .conn_heartbeats_throttled_authed
                     .saturating_add(c.heartbeats_throttled_authed);
+                self.conn_frames_out_closed = self
+                    .conn_frames_out_closed
+                    .saturating_add(c.frames_out_closed);
+                self.conn_close_notices_dropped = self
+                    .conn_close_notices_dropped
+                    .saturating_add(c.close_notices_dropped);
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }

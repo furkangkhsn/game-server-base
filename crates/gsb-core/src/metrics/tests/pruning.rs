@@ -71,6 +71,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
             requests_no_room: 0,
             heartbeats_throttled_preauth: 0,
             heartbeats_throttled_authed: 0,
+            frames_out_closed: 0,
+            close_notices_dropped: 0,
             server_close: None,
             last: false,
         }));
@@ -97,6 +99,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         requests_no_room: 0,
         heartbeats_throttled_preauth: 0,
         heartbeats_throttled_authed: 0,
+        frames_out_closed: 0,
+        close_notices_dropped: 0,
         server_close: None,
         last: true,
     }));
@@ -117,6 +121,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         requests_no_room: 0,
         heartbeats_throttled_preauth: 0,
         heartbeats_throttled_authed: 0,
+        frames_out_closed: 0,
+        close_notices_dropped: 0,
         server_close: None,
         last: false,
     }));
@@ -149,6 +155,8 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         requests_no_room: 0,
         heartbeats_throttled_preauth: 0,
         heartbeats_throttled_authed: 0,
+        frames_out_closed: 0,
+        close_notices_dropped: 0,
         server_close: None,
         last: true,
     }));
