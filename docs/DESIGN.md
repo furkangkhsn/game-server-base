@@ -3028,8 +3028,18 @@ odanın **her shard'ının** satırını içerir (B45): toplayıcı her shard il
 satırları `(steps, lagged_ticks)`'te anlaşsa da oda değildir — eksik
 shard'ın oyuncuları hiçbir satırda yok. Beklenen shard sayısı koşunun
 kendisidir (RESULT'un `shards=`'ı; `print_report` onu
-`peak_population`/`steady_span`/`steady_end`/`has_consistent_cut`'a
-verir). Eskiden
+`peak_population`/`steady_span`/`steady_end`/`has_populated_cut`'a
+verir). Ve **boş odanın kesiti nüfus değildir** (B52): ilk girişten
+önce ve son ayrılıştan sonra kimse göçmez, shard'lar kolayca hizalanır;
+oyuncular içerideyken ise her rapor yırtık olabilir — toplayıcı,
+shard'ların örneklediği ticker'ın aynısında ve aynı saniyelik periyotla
+yayar, yükte yayını onların turunu böler. Tek kesitleri kimseyi
+tutmayan bir koşunun nüfusunun kesiti yoktur: kesitsiz koşu gibi yırtık
+geri düşüşle okunur (ve insan-okunur blok `(torn: …)` der). Eskiden bu
+boş kesitler koşunun tek nüfusuydu: yükte `loadgen_orchestrates_the_mmo`
+dört botla `shard_members=0,0,0,0`, `records_per_tick=0.0`,
+`overlap_x=0.00` basıyordu (orkestre sunucu çocuğu istemcilerden 3 sn
+fazla koşar, ayrılış sonrası boş kesitleri hep vardır). Eskiden
 kararlı penceredeki raporların hepsi yırtıksa nüfus bu eksik rapordan
 okunuyor (4 shard'lık odada 3 değerli `shard_members=`) ve yırtık
 satırlara geri düşüş devreye girmiyordu. Loadgen'in
@@ -3047,7 +3057,8 @@ satırları katlamaz (her shard ayrı seri); PromQL'de shard'lar üzerinde
 ölçüm değil kesittir. Kilit: `shard::tests::metrics::members` (tick
 başına el değiştirme) ve `loadgen::report::spread::tests` (gerçek bir
 başarısız koşunun rapor akışı, satır satır; eksik satırlı rapor, B45;
-tepeye eşit yırtık/eksik raporun pencere sonu olamaması, B46).
+tepeye eşit yırtık/eksik raporun pencere sonu olamaması, B46; yalnız
+boş kesitli koşunun rapor akışı, B52).
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi

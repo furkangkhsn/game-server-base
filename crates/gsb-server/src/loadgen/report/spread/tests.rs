@@ -7,7 +7,7 @@ use gsb_core::id::RoomId;
 use gsb_core::metrics::{MetricReport, RoomReport};
 
 use super::{
-    consistent_cut, has_consistent_cut, members_by_row, peak_population, steady_end, steady_span,
+    consistent_cut, has_populated_cut, members_by_row, peak_population, steady_end, steady_span,
 };
 use crate::report::fold::tests::{report, shard};
 
@@ -147,7 +147,7 @@ fn a_partial_report_does_not_stand_in_for_the_population() {
         cut([(60, 3), (30, 2), (60, 1), (30, 2)]),
         cut([(90, 2), (60, 2), (90, 2), (60, 2)]),
     ];
-    assert!(!has_consistent_cut(&reports, 4), "the run is torn");
+    assert!(!has_populated_cut(&reports, 4), "the run is torn");
     assert_eq!(peak_population(&reports, 4), 8);
     let (first, last) = steady_span(&reports, 8, 4).expect("a steady window");
     assert_eq!(members_by_row(first), "3,2,1,2");
@@ -189,7 +189,9 @@ fn without_a_cut_the_window_end_falls_back_to_every_report() {
         cut([(60, 3), (30, 2), (60, 1), (30, 2)]),
         cut([(90, 2), (60, 2), (90, 2), (60, 2)]),
     ];
-    assert!(!has_consistent_cut(&reports, 4));
+    assert!(!has_populated_cut(&reports, 4));
     let end = steady_end(&reports, 8, 4).expect("a window end");
     assert_eq!(members_by_row(end), "2,2,2,2");
 }
+
+mod empty;

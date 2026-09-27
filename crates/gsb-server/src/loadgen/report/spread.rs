@@ -34,6 +34,14 @@
 //! agree on `(steps, lagged_ticks)` are still not the room when a
 //! shard's players are in none of them. The room's shard count is the
 //! run's (`shards=` on the RESULT line), handed in by the caller.
+//!
+//! And a cut of the EMPTY room is no population (B52). Before the first
+//! join and after the last leave nothing migrates and the shards line up
+//! easily; while the players are in, every report can be torn (the
+//! collector emits on the same ticker, at the same once-a-second period,
+//! as the shards sample, so under load its emit splits their round). A
+//! run whose only cuts hold nobody has no cut of its population: it is
+//! read from the torn fallback, like a run without any cut.
 
 use gsb_core::metrics::MetricReport;
 
@@ -63,21 +71,26 @@ pub(crate) fn consistent_cut(report: &MetricReport, shards: u32) -> bool {
     whole && rows.next().is_some_and(|first| rows.all(|r| r == first))
 }
 
-/// Whether the run has any consistent cut. A run without one (a shard
-/// that lagged unevenly never lines up with the others again) is read
-/// from its torn reports, as every run was before F18 — and the human
-/// block says so.
-pub(crate) fn has_consistent_cut(reports: &[MetricReport], shards: u32) -> bool {
-    reports.iter().any(|r| consistent_cut(r, shards))
+/// Whether the run has a consistent cut with a player in it — a cut of
+/// its population. A run without one (a shard that lagged unevenly
+/// never lines up with the others again; or every report the players
+/// are in is torn and only the empty room lines up, B52) is read from
+/// its torn reports, as every run was before F18 — and the human block
+/// says so.
+pub(crate) fn has_populated_cut(reports: &[MetricReport], shards: u32) -> bool {
+    reports
+        .iter()
+        .any(|r| consistent_cut(r, shards) && report_members(r) > 0)
 }
 
 /// The reports a population is read from: the consistent cuts, or —
-/// a run with none — every non-empty report (see [`has_consistent_cut`]).
+/// a run with no cut of its population — every non-empty report (see
+/// [`has_populated_cut`]).
 fn population_reports(
     reports: &[MetricReport],
     shards: u32,
 ) -> impl Iterator<Item = &MetricReport> + Clone {
-    let cuts_only = has_consistent_cut(reports, shards);
+    let cuts_only = has_populated_cut(reports, shards);
     reports
         .iter()
         .filter(move |r| !r.rooms.is_empty() && (!cuts_only || consistent_cut(r, shards)))
@@ -114,8 +127,8 @@ pub(crate) fn steady_span(
 /// measurement (`records_per_tick`) and the war's team window stop.
 /// A torn or partial report that happens to sum to the peak is no
 /// instant of the room, so it cannot end the window either (B46); a run
-/// without a consistent cut takes the torn fallback, as its population
-/// does.
+/// without a cut of its population takes the torn fallback, as its
+/// population does.
 pub(crate) fn steady_end(
     reports: &[MetricReport],
     peak_members: u32,

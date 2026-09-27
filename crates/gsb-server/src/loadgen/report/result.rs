@@ -370,12 +370,12 @@ pub(crate) fn print_report(
             rec_per_tick, overlap, peak_members
         );
         if let Some((first, last)) = &spread {
-            // A run with no consistent cut is read from torn rows (see
-            // `spread.rs`): said here rather than passed off as exact.
-            let torn = if has_consistent_cut(server_reports, shards) {
+            // A run with no cut of its population is read from torn rows
+            // (see `spread.rs`): said here rather than passed off as exact.
+            let torn = if has_populated_cut(server_reports, shards) {
                 ""
             } else {
-                " (torn: no report is a consistent cut, a migrating player may count 0 or 2 times)"
+                " (torn: no report with players in it is a consistent cut, a migrating player may count 0 or 2 times)"
             };
             println!(
                 "server shards (members per shard, steady window): first={first} last={last}{torn}"

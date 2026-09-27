@@ -965,7 +965,9 @@ yırtık bir rapor göçen oyuncuyu iki kez sayabilir, DESIGN §12, F18) —
 `game=`'den hemen önce, yani önceki her anahtar yerinde ve `game=` son
 anahtar. İnsan-okunur rapor pencerenin başındaki ve sonundaki dağılımı
 basar (`server shards (members per shard, steady window): first=…
-last=…`; koşuda hiç tutarlı kesit yoksa satır `(torn: …)` ile biter).
+last=…`; koşuda oyunculu hiç tutarlı kesit yoksa satır `(torn: …)` ile
+biter — boş odanın kesiti, ilk girişten önceki ya da son ayrılıştan
+sonraki, nüfus sayılmaz; B52).
 Kararlı pencerenin sonu — `records_per_tick`/`overlap_x`'in ve savaşın
 takım segmentinin bitişi — da aynı tutarlı kesitlerden seçilir (B46;
 kesitsiz koşuda aynı yırtık geri düşüşle); RESULT biçimi değişmedi.
