@@ -741,7 +741,10 @@ oda üyeliği aynı politika yoluyla bitirir ve aynı `CloseRequest`'i
 `ServerClose::Kicked` ile ister (RECONNECT §16.3). Bildirim yine mevcut
 `ERROR 9`, en-iyi-çaba ve beklemesiz; mesaj `kicked: <oyunun gerekçesi>`
 (256 bayta kesilir). Sayılır: `server_closes{reason="kicked"}` (sona
-eklendi). Yeni kod, yeni kare yok; hiç atmayan oyunda tel aynı.
+eklendi). Yeni kod, yeni kare yok; hiç atmayan oyunda tel aynı. Hüküm
+bağlantınındır (B43, RECONNECT §16.4): istek dolu registry kutusunun
+arkasında beklerken bağlantı yeniden katılmış olsa da kapanış ona düşer;
+`room`+`entity` koruması yalnız tablo yerleşimini korur.
 
 **Kapanış yolları, kapı kapı (önce → sonra).** Değişmeyenler: `idle_timeout`,
 `violation_budget`, `preauth_budget`, `conn_cap`/`unauth_cap`,

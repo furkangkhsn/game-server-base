@@ -578,8 +578,11 @@ Kural (`registry/actor/close.rs`):
 - `parked` değil → aidiyet gider (sharded üye sayısı düşer, `leaves`
   sayılır); taşıması ZATEN ölmüş satır (önce `ConnClosed` geldiyse)
   doğrudan silinir — onu başka hiçbir şey bırakmazdı.
-- Bayat istek (`room` VE `entity` tutmuyor: ayrıldı, başka yere ya da
-  yeni varlıkla katıldı, satır bırakıldı) sessiz no-op.
+- İsteğin üyeliği satırın şimdiki üyeliği değil (`room` VE `entity`
+  tutmuyor: bağlantı istek beklerken ayrıldı, başka yere ya da yeni
+  varlıkla katıldı) → tablo OLDUĞU GİBİ kalır, ama hüküm yine bağlantıya
+  gider (B43, §16.4): hüküm bağlantınındır, yerleşim üyeliğin. Satır yok
+  (bağlantı kapandı, satır bırakıldı) → sessiz no-op.
 
 Böylece istek, bağlantının `ConnClosed`'u ve odanın `DetachDespawned`'ı
 hangi sırada gelirse gelsin aynı son duruma varılır.
@@ -726,13 +729,18 @@ E6'nın kapatma isteği bu kurallardan yalnız 2.'yi paylaşır (§16.1, B41 —
 `parked` gönderimde sınanır). 1. kurala gerek yoktur: sınanan bayrakla
 rapor ile isteğin iki varış sırası da aynı sona varır, ve rapor 0c'de
 gittiği için bekleme tek başına sırayı zaten kurtaramazdı. 3. kurala da
-gerek yoktur: bağlantının yeni üyeliğini `room` VE `entity` koruması
-korur (taze bir katılma yeni varlıkla isteği bayat bırakır — soket açık
-kalır, yeni üyelik tavanın saatine baştan girer; aynı varlığı sürdüren
-bir resume ise kapatılır — dağıtımın istediği kapanış).
+gerek yoktur: bağlantının yeni üyeliğinin TABLOSUNU `room` VE `entity`
+koruması korur, hüküm ise yine de bağlantıya gider (B43, §16.4) —
+taze katılmayla yeni varlıkta da, aynı varlığı sürdüren bir resume'da
+da bağlantı kapanır (dağıtımın istediği kapanış) ve yeni üyelik
+bağlantının kapanışıyla taşıma-ölümü yolundan biter. *(Düzeltme notu:
+bu paragraf B43'ten önce "taze bir katılma isteği bayat bırakır, soket
+açık kalır" diyordu — açık yarışın tarifiydi.)*
 
-**Registry: `RegistryMsg::LeaveConn`.** Tek tablo araması, E6'nın bayat
-koruması (`room` VE `entity` satırın şimdiki üyeliği değilse no-op):
+**Registry: `RegistryMsg::LeaveConn`.** Tek tablo araması, E6'nın
+yerleşim koruması (`room` VE `entity` satırın şimdiki üyeliği değilse
+no-op — burada bütün istek no-op'tur: teslim edilecek bir hüküm yok ve
+`LeftRoom` bildirimi yeni bir üyeliğe ulaşmamalı):
 
 - `park = None` → E6'nın despawn kolu (ortak `settle_ended`): aidiyet
   gider, sharded üye sayısı düşer, `leaves` sayılır; taşıması zaten
@@ -902,15 +910,13 @@ loadgen metrik teli GSMG; RESULT'ta her sebep için bir anahtar kuralıyla
 | Registry posta kutusu dolu | E6'nın kuralı: istek kuyrukta kalır, sonraki tick'te yeniden denenir; despawn kolunun raporu (0c) aynı kutuyu önce kullanır |
 | Registry kapalı (süreç iniyor) | istek düşer (E6) |
 
-**B43 ile etkileşim.** B43 aynı fiilin açık yarışıdır: dolu registry
-posta kutusunun arkasında bekleyen kapatma isteği, bağlantı aynı odaya
-TAZE katılırsa (yeni varlık) `room`+`entity` korumasında bayat kalır,
-soket açık kalır. Atmada da aynen geçerli: registry doygunken atılan
-istemci, istek beklerken yeniden katılabilirse (despawn edilmiş üyenin
+**B43 ile etkileşim (düzeltildi, §16.4).** Registry doygunken atılan
+istemci, istek beklerken yeniden katılabiliyordu (despawn edilmiş üyenin
 aksiyon kanalı kapalıdır, bağlantı kendini ayırıp doğrudan `JOIN`
-gönderebilir) atmadan kurtulur — yeni üyelik oyunun `on_join`'ine
-yeniden düşer, oyun onu yeniden atabilir (yasak listesi oyunun
-politikasıdır). Bu turda düzeltilmedi (önemsiz biçimde düşmüyor).
+gönderebilir): istek `room`+`entity` korumasında bayat kalıyor, soket
+açık kalıyor, atılan istemci atmadan kurtuluyordu. Artık hüküm
+bağlantıya yine gider: yeni üyelik oyunun `on_join`'inden geçmiş olabilir,
+ama bağlantının kapanışıyla `on_disconnect`'ten bir kez geçerek biter.
 
 **Kit'in varsayılan kaderi.** Kit odalarının varsayılan politikası
 kimliği olan oturumu PARK eder (`DEFAULT_DISCONNECT_GRACE`, sonra bot);
@@ -960,6 +966,128 @@ aynı yeniden yapılanmayı kullanır.
    kapısı.
 9. *Kit'te atmaya özgü kader* (atılan → despawn): politika kararı ve
    yeni yüzey; açık iş olarak not edildi.
+
+### 16.4 Hüküm bağlantınındır, yerleşim üyeliğin (B43)
+
+**Yarış.** Oda üyeliği bitirdi (`afk_action = disconnect` altında tavan,
+ya da oyunun atması) ve varlığı despawn etti; kapatma isteği kuyruğa
+girdi, ama registry posta kutusu DOLU olduğu için `try_send` her tick
+reddediliyor (§16.1: düşürülmez, yeniden denenir). Bu arada istemcinin
+sonraki oyun karesi kapalı aksiyon kanalına çarpar, bağlantı kendini
+sessizce ayırır; bir sonraki kareye `ERROR 6` gelir, istemci `JOIN`
+gönderir. Bağlantının gönderimi *beklemeli*dir (`send().await`), yani
+dolu kutuda sıraya girer ve odanın `try_send`'inden önce yerleşir: yeni
+üyelik, YENİ varlık. Geç gelen istek artık satırın üyeliğini
+adlandırmaz; eskiden bayat sayılıp düşerdi — soket açık kalır, atılan
+istemci atmadan kurtulurdu. (Park kolunda bu yol yoktur — park edilen
+satır aksiyon kanalını tutar, bağlantı kendini odada sanır — ama
+`LEAVE_ROOM_REQ` + `JOIN` aynı kaçışı her iki kolda da açıyordu.)
+
+**Koruma neyi koruyordu.** Önce: `ConnectionId` süreç ömrü boyunca
+tekildir — kabul döngülerinin paylaştığı tek atomik sayaç (`ConnIdSeq`,
+1'den yoğun, geri dönmez); park anahtarları ayrılmış üst biti taşır ve
+bir kapatma isteğine konu olmaz (istek yalnız CANLI üyeye çıkar, park
+satırı canlı değildir). Yani bir istek yalnız kendi bağlantısını
+adlandırabilir. `room`+`entity` koruması iki işi birlikte yapıyordu:
+
+1. **Tablo yerleşimi** — `settle_ended` ya da `detached` işareti yalnız
+   isteğin bitirdiği üyeliğe uygulanmalı. Sonraki bir üyeliğe uygulansa
+   canlı bir aidiyeti siler ya da canlı satırı `detached` işaretler; eski
+   üyeliğin sonu ise zaten yerleşmiştir (aşağıda) — ikinci yerleşim çift
+   sayım olur (ızgarada üye sayısı iki kez düşer). **Bu iş kalır.**
+2. **Hükmün teslimi** — korunacak bir şey değildi. Gerçek bir istek her
+   zaman bağlantının SAHİP OLDUĞU bir üyeliği adlandırır: oda yalnız o an
+   tuttuğu bir üyeyi yargılar. Bağlantının "hükümden önce meşru olarak
+   ayrılıp yeniden katılması" odanın sırasında yoktur: aynı pencerede
+   gönderilen `LEAVE` odada hükümden SONRA işlenir (§16.3: atma,
+   isteyen kancanın gördüğü üyeliği yargılar). Hüküm üyeliği değil
+   bağlantıyı yargıladı; bağlantı hâlâ açıksa hüküm ona düşer.
+
+B41'in `parked` yeniden sınaması yalnız eşleşen kolda anlam taşır ve
+değişmedi; eşleşmeyen kol `parked`'ı okumaz. Park anahtarıyla anahtarlı
+satırlara (B40) eşleşmeyen kol hiç dokunmaz.
+
+**Karar.** Registry'nin `on_close_conn`'u:
+
+- Satır yok → no-op (değişmedi).
+- Satırın şimdiki üyeliği isteğinki → yerleşim + hüküm (değişmedi).
+- Değil → **tablo olduğu gibi kalır, hüküm yine iletilir**
+  (`ConnIn::ServerClosed { cause, reason }`, spawn'lu gönderim, S kuralı;
+  taşıması ölmüş satırın inbox'u yoktur → hiçbir şey).
+
+Eski üyeliğin sonu her biçimde zaten yerleşmiştir: aynı odaya taze
+katılmada `SpawnDone` satırı hâlâ bağlı bulur ve yeni üyelik eskisinin
+slotunu devralır (`fresh = false`, üye sayısı değişmez); başka odaya
+katılmada `SpawnDone`'un "bildirilmemiş bitiş" kuralı eski slotu geri
+verdi (§16.2); ayrılmada `LeaveDone`/`direct_leave` yerleştirdi. Yeni
+üyelik ise her kapanan bağlantının üyeliği gibi biter: `ConnClosed` →
+dispatcher'ın `Close`'u (ya da doğrudan DETACH) → oyunun
+`on_disconnect`'i bir kez → despawn'da `DetachDespawned` satırı ve slotu
+bırakır, park'ta §4'ün olağan satırı kalır. Kararı yine oyunun politikası
+verir (kit varsayılanı kimlikli oturumu park eder, §16.3 "Kit'in
+varsayılan kaderi").
+
+Oda ve shard tarafı DEĞİŞMEDİ (kuyruk, `try_send`, Full/Closed kuralı,
+B41 sınaması); tel aynı (`ERROR 9` + kapanış, E6/E8'in baytları);
+`/metrics` aynı, yeni sayaç yok — hüküm bağlantı kapanırken bir kez
+kaydedilir (`server_closes{reason}`). **Kabul edilen:** aynı odaya
+doğrudan yeniden katılmada eski üyeliğin sonu registry'nin kümülatif
+`leaves`'inde sayılmaz (yeniden katılma `joins`'te yeniden sayılır —
+mevcut anlambilim; B40'ın 3. kuralında da böyle). Registry bu geçmişi
+`LEAVE` + `JOIN`'den ayıramaz; saymak ikincisinde çift sayardı. Sızıntı
+değil, kümülatif bir sayaçta bir eksik.
+
+**Elenen alternatifler.**
+
+1. *Odanın bağlantıya doğrudan söylemesi* (bağlantı join kabul etmeyi
+   bıraksın, registry sonra öğrensin): oda yalnız üyenin giden çerçeve
+   kuyruğunu (writer pump) tutar, bağlantı aktörünün inbox'unu değil —
+   yeni bir tutamaç Join/Seat'e, oda ve shard satırına, göç yüküne
+   (`PlayerMigration`) ve bağlantıya yeni bir "kapanıyorum" durumu
+   gerekirdi; registry satırı yine §16.1'in yolundan yerleşmeli (iki
+   yol). Üstelik kapatmaz: bildirim B12 gereği en-iyi-çaba `try_send`'dir,
+   dolu inbox'ta düşer ve kaçış geri gelir.
+2. *Bekleyen isteği beklemeli göndermek* (spawn'lu `send().await`):
+   dolu kutunun FIFO bekleyenlerine girer, ama bağlantının `JOIN`'i daha
+   önce girmiş olabilir — sıra yine yarış; üstelik sınırsız spawn.
+3. *Odanın, bekleyen isteği olan bağlantının join'ini reddetmesi ya da
+   isteği yeni varlığa yeniden hedeflemesi:* yalnız aynı odayı kapsar;
+   başka odaya katılma ve `LEAVE` + `JOIN` kaçışı kalır; yarışta yeni bir
+   ret teli.
+4. *Registry'nin "bildirilmemiş bitişi" (bağlı satırdan gelen join)
+   görünce join'i reddetmesi/ertelemesi:* aynı işaret B40'ın meşru
+   yeniden katılmasında da görülür (3. kural); `LEAVE` + `JOIN`'de işaret
+   hiç yok.
+5. *Biten üyelikleri satırda tutup yalnız onlardan birini adlandıran
+   isteği teslim etmek* (uydurma isteği no-op tutmak için): tek yuvalı
+   biçim çok adımlı kaçışa açık (doymuş kutuda `try_send` bekleyen
+   göndericilere her tick kaybeder; istemci `JOIN`, `LEAVE`, `JOIN`
+   yapabilir), küme biçimi sınırsız. Gerçek bir istek zaten yalnız
+   bağlantının kendi üyeliğini adlandırabildiğinden hiçbir şey kazandırmaz.
+
+**Testler.** `tests/room_close/rejoin_races.rs` (düzenek:
+`rejoin_rig.rs`) — canlı registry, gerçek bağlantı aktörleri, paused
+saat. Odaların registry'ye giden yolu bir röleden geçer; röle her mesajı
+sırasıyla iletir, yalnız kapatma isteklerini TUTAR ve teste verir: oda
+için dolu kalan posta kutusunun deterministik eşdeğeri (registry'ye
+varış sırası aynıdır — önce join'in `SpawnDone`'u, sonra istek). Mantık
+her join'de yeni varlık basar. Tavan (`disconnect`) ve atma, tek oda ve
+ızgara (tek slot): istemci `ERROR 6` alır, yeni varlıkla katılır, istek
+sonra teslim edilir. Düzeltmeden önce iki test de düştü: bağlantı
+500 ms içinde (yeni üyeliğin kendi tavanından önce) kapanmadı. Sonra:
+tek `ERROR 9` (gerekçesiyle), kapanış, hüküm `idle_input`/`kicked`;
+kancalar her üyelik için bir kez (`on_join`, `on_disconnect`, despawn'ın
+`on_leave`'i); üye 0, registry tablosu boş, tek slot yeni oyuncuyu
+alır. `tests/room_close/registry.rs`'de eski kuralı (bayat istek:
+bağlantıya hiçbir şey) sabitleyen test yeni kuralı sabitler: başka
+varlık ya da başka oda adlandıran istek hiçbir şey yerleştirmez ve
+bağlantı yine söylenir; bağlantının kendi ayrılmasından (`LEAVE`) sonra
+gelen istek de kapatır. Mutasyon: eşleşmeyen kolda teslimi kaldırmak →
+üç test düşer; teslimi yalnız bir odada olan satıra kısmak → birim testi
+düşer (ayrılmadan sonra); eşleşmeyen kolda yine yerleştirmek → birim
+testi düşer (üye 1 → 0). Uçtan uca testler ikinci mutasyonu görmez (aynı odaya
+yeniden katılmada dispatcher'ın DETACH'ı sonucu aynı yere taşır); kuralın
+sahibi birim testidir.
 
 ## 17. Süreli bekletmede veto ve veto tavanı (`max_detach_hold`)
 

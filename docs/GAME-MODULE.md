@@ -186,8 +186,11 @@ birbirine karışmaz:
   (gerekçe 256 bayta `char` sınırında kesilir; boşsa `kicked`), ardından
   kapanış; `server_closes{reason="kicked"}` sayılır. Canlı üye olmayanı
   (bilinmeyen, gitmiş, park, bot) atmak sayılmayan bir no-op'tur; aynı
-  tick'te iki atma tek kapanıştır. Yasak listesi / yeniden katılmayı
-  reddetmek oyunun politikasıdır (motor saklamaz).
+  tick'te iki atma tek kapanıştır. Kapatma isteği doymuş registry
+  kutusunun arkasında beklerken atılan istemci yeniden katılsa da bağlantı
+  kapanır; yeni üyelik `on_disconnect` ile biter (B43, RECONNECT §16.4).
+  Yasak listesi / yeniden katılmayı reddetmek oyunun politikasıdır (motor
+  saklamaz).
 - **Girdi hız sınırı: oyunun SAYISI olan bir oda anahtarı
   (BACKLOG E1, SECURITY §3.4).** Saniyede kaç girdinin meşru olduğunu
   oyun bilir; `GameModule::input_rate()` (sağlanan metot, varsayılan
