@@ -19,9 +19,12 @@
 //! - **Ticket / protocol-version rejections.** Both keep the connection
 //!   open (ERROR code 10 / 13); only their FLOOD closes, and that close
 //!   is [`ServerClose::ViolationBudget`].
-//! - **The input-idle ceiling** (`max_idle_input_secs`). It hands the
-//!   ENTITY to the disconnect policy; the transport session is not ended
-//!   by it.
+//! - **The input-idle ceiling** (`max_idle_input_secs`) under its
+//!   default `afk_action = leave_room`. It hands the ENTITY to the
+//!   disconnect policy; the transport session is not ended by it. Under
+//!   the opt-in `afk_action = disconnect` it IS a verdict — the room asks
+//!   the registry to close the session — and is counted as
+//!   [`ServerClose::IdleInput`].
 
 /// One reason the server ended a session. The order of [`Self::ALL`] is
 /// the order every export uses (the loadgen wire codec, the log line,
@@ -66,11 +69,19 @@ pub enum ServerClose {
     /// is attributed to ITS reason instead (see the actor's
     /// `adopt_pending_close`).
     OutboundDead,
+    /// The room's input-idle ceiling (`max_idle_input_secs`) with the
+    /// opt-in `afk_action = disconnect`: the member stopped PLAYING (its
+    /// transport was alive), the room ended its membership and asked the
+    /// registry to close the connection (BACKLOG E6,
+    /// `docs/RECONNECT.md` §16). Unlike [`Self::IdleTimeout`] — no
+    /// inbound bytes at all — a heartbeating client reaches this one.
+    /// Announced with a best-effort, never-waiting `ERROR` code 9.
+    IdleInput,
 }
 
 impl ServerClose {
     /// Number of reasons.
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
 
     /// Every reason, in export order.
     pub const ALL: [ServerClose; Self::COUNT] = [
@@ -85,6 +96,7 @@ impl ServerClose {
         Self::Superseded,
         Self::RoomGone,
         Self::OutboundDead,
+        Self::IdleInput,
     ];
 
     /// Position in [`Self::ALL`] (the counter array index). An exhaustive
@@ -102,6 +114,7 @@ impl ServerClose {
             Self::Superseded => 8,
             Self::RoomGone => 9,
             Self::OutboundDead => 10,
+            Self::IdleInput => 11,
         }
     }
 
@@ -120,6 +133,7 @@ impl ServerClose {
             Self::Superseded => "superseded",
             Self::RoomGone => "room_gone",
             Self::OutboundDead => "outbound_dead",
+            Self::IdleInput => "idle_input",
         }
     }
 }

@@ -136,6 +136,15 @@ impl super::ConnectionActor {
                     self.on_stream_rejected(&reason);
                     break;
                 }
+                ConnIn::ServerClosed {
+                    cause: ServerClose::IdleInput,
+                    reason,
+                } => {
+                    // The room's input-idle ceiling closed the session
+                    // (E6): a verdict, told best effort — never waiting.
+                    self.on_idle_input_close(&reason);
+                    break;
+                }
                 ConnIn::ServerClosed { cause, reason } => {
                     // The server made this decision (idle timeout, write
                     // stall, connection capacity, …). Unlike a peer EOF the

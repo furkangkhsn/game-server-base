@@ -147,7 +147,9 @@ enum ErrorCode {
   // The server ended THIS session on its own initiative: idle timeout,
   // write stall, connection capacity, the protocol-violation or pre-auth
   // frame budget exhausted, a newer session for the same player, the
-  // transport refusing the byte stream ("stream rejected: …") — see the
+  // transport refusing the byte stream ("stream rejected: …"), the room
+  // closing a member that stopped sending game input (the input-idle
+  // ceiling under `afk_action = disconnect`, "input idle: …") — see the
   // `message` for which. The connection is closed right after this
   // frame. (A server STOP is not a verdict on the session: that is 14.)
   ERROR_CODE_SERVER_CLOSED = 9;

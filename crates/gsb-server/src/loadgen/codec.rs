@@ -19,7 +19,7 @@ mod logic;
 /// layout. Little-endian, no padding, one frame per report:
 ///
 /// ```text
-/// [u32 magic = METRICS_MAGIC, "GSME"][u32 body_len][body]
+/// [u32 magic = METRICS_MAGIC, "GSMF"][u32 body_len][body]
 ///
 /// body =
 ///   u64 metrics_dropped
@@ -126,7 +126,11 @@ mod logic;
 /// GSME = the GSMD layout plus the net-scope `input_rate_limited` (valid
 /// game-band input refused over a room's input rate limit — E1), right
 /// after `violations`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D45;
+/// GSMF = the GSME layout with one more server-close slot at the end of
+/// `server_closes`: `idle_input` (the room's input-idle ceiling closing
+/// a session under `afk_action = disconnect` — E6). The slot count is
+/// `ServerClose::COUNT`, so a new reason is a new layout.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D46;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

@@ -49,6 +49,24 @@ impl super::ConnectionActor {
         );
     }
 
+    /// The room's input-idle ceiling closed this session
+    /// (`ServerClose::IdleInput`, BACKLOG E6 — `afk_action = disconnect`,
+    /// relayed by the registry): record the verdict, then announce it
+    /// with `ERROR` code 9 like every other server verdict — best effort,
+    /// like the stop notice. The member this reaches is the one that
+    /// stopped playing, and very likely stopped READING too (a
+    /// backgrounded client): the awaited notice of the older code-9
+    /// closes would park this actor until the write-stall window closes
+    /// the queue, forever with the window off, keeping open the very
+    /// socket the deployment asked to close. Logged at `debug`: the room
+    /// already warned once for its ceiling, and a room shedding idle
+    /// members sheds many.
+    pub(super) fn on_idle_input_close(&mut self, reason: &str) {
+        self.server_closing(ServerClose::IdleInput);
+        debug!(%self.conn, %reason, "input-idle ceiling: the room closed this connection");
+        self.try_notice(base::ErrorCode::ServerClosed, reason.to_owned());
+    }
+
     /// Queue a close notice WITHOUT waiting: a synchronous `try_send`
     /// onto the outbound queue, then the caller ends the session.
     ///

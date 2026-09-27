@@ -7,7 +7,12 @@
 //!   sends `ERROR` code 9 (`ServerClosed`) with the reason, like every
 //!   other server verdict.
 //!
-//! Both notices are best effort and never park: the actor enqueues them
+//! - the room's input-idle ceiling under the opt-in
+//!   `afk_action = disconnect` (BACKLOG E6: the registry relays the
+//!   room's close request as `ConnIn::ServerClosed { IdleInput }`) sends
+//!   `ERROR` code 9 with the reason, like every other server verdict.
+//!
+//! All three notices are best effort and never park: the actor enqueues them
 //! with a synchronous `try_send`, so a client whose outbound queue is
 //! full (it stopped reading) gets only the close — and the actor still
 //! ends at once. Without that rule a stop would leave one parked actor
@@ -19,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gsb_core::channel::{FrameBatch, channel};
-use gsb_core::conn::{ConnIn, ConnectionActor};
+use gsb_core::conn::{ConnIn, ConnectionActor, ServerClose};
 use gsb_core::id::ConnectionId;
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::RegistryMsg;
@@ -161,5 +166,42 @@ async fn a_stream_rejection_never_parks_on_a_full_outbound_queue() {
         reason: "websocket protocol violation (1002)".into(),
     })
     .await;
+    assert!(rig.errors().is_empty(), "no room: the notice is dropped");
+}
+
+/// The idle-input close the room asked for (E6).
+fn idle_input_close() -> ConnIn {
+    ConnIn::ServerClosed {
+        cause: ServerClose::IdleInput,
+        reason: "input idle: no game input for 30 s (afk_action = disconnect)".into(),
+    }
+}
+
+/// E6: the room's idle-input close is announced as ERROR 9 carrying the
+/// reason — the server-verdict class — and it is the last frame queued.
+#[tokio::test]
+async fn an_idle_input_close_sends_the_server_closed_notice() {
+    let mut rig = Rig::start();
+    rig.end_with(idle_input_close()).await;
+    let errors = rig.errors();
+    assert_eq!(errors.len(), 1, "exactly one notice: {errors:?}");
+    assert_eq!(errors[0].code(), ErrorCode::ServerClosed);
+    assert!(
+        errors[0].message.contains("input idle"),
+        "the reason reaches the client: {:?}",
+        errors[0].message
+    );
+}
+
+/// The bound for E6: the member the ceiling closes is the one most
+/// likely to have stopped reading (a backgrounded client), so its notice
+/// must not wait on it either — dropped on a full queue, and the actor
+/// ends at once (the awaited notice of the older code-9 closes would
+/// park it until the write-stall window, forever with the window off).
+#[tokio::test]
+async fn an_idle_input_close_never_parks_on_a_full_outbound_queue() {
+    let mut rig = Rig::start();
+    rig.fill_outbound();
+    rig.end_with(idle_input_close()).await;
     assert!(rig.errors().is_empty(), "no room: the notice is dropped");
 }
