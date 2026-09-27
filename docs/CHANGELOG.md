@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu — "her şeyi saymalıyız": B32, B51 ve geride bırakılan parkın kanalı (`metrics/count-everything`)
+
+Bakımcı kararı (2026-09-27, B32 seçenek a): her kayıp, anlamı adıyla
+aynı bir sayaçta sayılır; karışık anlamlı metrik yok.
+
+- **B32 — kapalı kanal `dropped` değil:** fan-out'un bağlantı başı
+  `try_send`'i iki türlü düşer ve artık ayrı sayılır (`SendFailures`; oda
+  ve shard BROADCAST'i aynı yardımcıyı kullanır; RPC yanıtları ve private
+  kareler aynı batch'te). **Full** (yavaş istemci) `dropped`'ta kalır —
+  `gsb_room_dropped_total` HELP'inin dediği. **Closed** (bağlantı gitmiş,
+  oda sonunu henüz işlememiş; istemcinin istediği kare kaybolmaz) yeni
+  `sends_closed`'a gider: `gsb-metric` `sends_closed=`, Prometheus/OTLP
+  `gsb_room_sends_closed_total`, RESULT `sends_closed=`. Oran göstergesi
+  yok (bağlantı sonlarıyla sınırlı). Orkestre 500'ün 116'sı bugün
+  `sends_closed`'a düşer.
+- **B51 — üyelik bittikten sonra bağlantıda düşen iletim:** oda üyeliği
+  kendisi bitirdiğinde (atma, girdi-boşta tavanı, oda kapanışı) bağlantının
+  bildirimden önce kapalı kanala ilettiği kare `forward_to_room`'un
+  `Closed` kolunda sayılıyor: `RPC_REQ` → `requests_dropped_closed`,
+  oyun-bandı girdisi → `actions_dropped_closed` (aynı `try_send`'in `Full`
+  kolu düz girdiyi zaten sayıyordu). Net kapsamı: `gsb-metric scope=net`,
+  Prometheus/OTLP `gsb_net_{actions,requests}_dropped_closed_total`,
+  RESULT. RPC defteri: `rpc_sent = req_local + req_ext + Σ req_rej_* +
+  req_refused + req_unread + requests_dropped_closed`.
+- **Geride bırakılan parkın kanalı (turda bulundu):** `afk_action =
+  leave_room` altında park edilen üyenin kanalını bırakan `release_actions`
+  (B40) içindeki okunmamış istekleri saymıyordu (despawn sayıyordu). Artık
+  `drop_unread_requests`'le bırakıp `requests_dropped_unread`'e katıyor
+  (oda + shard).
+- İki altın metin bilerek yalnız yeni aileler kadar değişti; `otlp::cross`
+  yeşil. Loadgen metrik teli **GSMJ**. İstemci teli değişmedi.
+- Turun taramasıyla bulunan diğer sayılmayan kayıplar: BACKLOG B53–B57.
+
+Testler 1309 → 1318 (`otlp` ile 1327 → 1336): oda/shard kapalı-kanal
+birim (2), `tests/room_close/forward_closed.rs` (2), oda/shard geride
+bırakılan park (3), loadgen tel (2); önce kırmızı, mutasyonlar öldü.
+Ebeveyn doğrulaması: kapalı kanal sayımını silmek iki testi düşürdü.
+
 ## Küçük paket 7 — F1, F4 (`misc/small-bundle-7`)
 
 - **F1 — `MovementSystem` birim testleri.** Demo'nun hareket sistemi

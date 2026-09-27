@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1309 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1318 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,14 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**Sayım turu tamam** (CHANGELOG "Sayım turu", RPC-CONTROL-PLANE
+§8.2/§8.3): ilke "her şeyi saymalıyız" (bakımcı kararı). `dropped`
+artık yalnız dolu çıkış kanalı; kapalı kanala deneme `sends_closed`.
+Üyeliği oda bitirdikten sonra bağlantının kapalı kanala ilettiği kare
+`requests_dropped_closed` / `actions_dropped_closed`. `release_actions`
+okunmamış istekleri sayıyor. Loadgen metrik teli GSMJ. Açık: B53–B57
+(sayılmayan kalan kayıplar).
 
 **Küçük paket 7 tamam** (CHANGELOG "Küçük paket 7"): demo
 `MovementSystem`'in birim testleri var (F1); demo'nun dört tek-dünyalı
@@ -672,6 +680,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1309 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1318 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
