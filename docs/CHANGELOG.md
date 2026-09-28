@@ -5,6 +5,58 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F35 — son raporun odaları beklemesi (+F33, F40) (`metrics/f35-final-report`)
+
+- **Hata (motor):** toplayıcı son raporunu ticker kapanışında basıyordu;
+  odalar (`on_shutdown` → maç sonucu → sayım → `RoomFinal`) ve bağlantı
+  aktörleri (registry'nin `Shutdown`'ı → son flush) sonlarına ANCAK o an
+  başlıyordu. İlk periyodik örneğine (30 adım) varmamış oda rapordan
+  bütünüyle eksik kalıyor, her oda son örneğinden sonra saydıklarını
+  kaybediyordu. Kanıt: `loadgen_churn_smoke`'un komutu iş parçacığı
+  düzeyinde aç bırakmada 40 koşunun 20'sinde `steps=0 room_resumes=0`,
+  "server metrics: unavailable"; smoke'un komutu %90 donmada 8/8 oda
+  satırsız (F33, aynı kök).
+- **Düzeltme:** kapanıştan sonra toplayıcı olay kanalını bekler, her olayı
+  katlar, kanal KAPANINCA (her gönderici düştü) son raporu basar;
+  `post`'un doğurduğu gönderici kendi klonunu tuttuğundan kapanış onu
+  geçemez. Sınır `FINAL_REPORT_GRACE` = 2 sn (kapanıştan, `stop()`'un
+  kendi sınırlarıyla yan yana — `stop()`'un üst sınırı uzamadı); aşılırsa
+  rapor sınırda çıkar, `warn` + `StopReport::final_report_complete =
+  false` (`MetricsCollector::run` artık `bool` döner). Taşıma görevleri
+  ayrı bir kanala (`with_transport_events`) gönderir: katlanır ama
+  kapanışı beklenmez (sessiz eşin pump'ı duruşu aşabilir).
+- **Loadgen:** `final_sample_grace` (150 ms + bir metrik periyodu, B36) →
+  `LEAVE_SETTLE` 150 ms; odanın sayıları duruşun son raporundan.
+- Sonra: aç bırakmada 0/40 (`steps=17–39`), %90 donmada 0/8.
+- **F40 (loadgen):** `--serve --metrics-listen` çocuğu akışına kimse
+  bağlanmazsa çıkmıyordu (`metrics_export` `accept`'te). Ana görev
+  `stop()`'tan sonra dışa aktarımı `EXPORT_STOP_GRACE` = 2 sn bekler,
+  aşarsa keser (stderr satırı, çıkış 0).
+- Elenenler: ticker'ı odaların bariyerinden sonra kesmek (bağlantıları
+  kapsamaz); `stop()`'un bariyerden sonra "son" işareti göndermesi (dolu
+  kanaldaki `post`'u sıralamaz); tek kanal + sınır (sessiz eşli her duruş
+  sınırı bekler); kör beklemeyi uzatmak.
+- **API:** `StopReport::final_report_complete` alanı eklendi (struct
+  literal ile `StopReport` kuranı kırar); `metrics::FINAL_REPORT_GRACE`,
+  `MetricsCollector::{with_transport_events, with_final_grace}`.
+- RESULT, `/metrics`, istemci teli değişmedi. CONTRIBUTING: odanın
+  kendisini aç bırakmak için sürecin iş parçacıklarının HEPSİ itilir.
+- **Ebeveyn doğrulaması — test boşluğu kapatıldı:** son oturum olayından
+  sonra gelen bir taşıma sayımının kanal kapanışındaki son boşaltmayla
+  alınması hiçbir testte sınanmıyordu (boşaltmayı kaldıran mutasyon tam
+  paketten sağ çıktı); `a_transport_word_after_the_last_session_event_is_in_the_final_report`
+  eklendi — gerçek kodda geçer, mutasyonda düşer.
+- Yan bulgu **F41** (koddan): `stop()` kapıları kapatmadan registry'ye
+  `Shutdown` gönderiyor; aradaki bağlantı duruşu aşabilir.
+
+Testler 1447 → 1455 (`otlp` ile 1465 → 1473): `metrics::tests::final_report`
+(4, paused saat), `service_stop::the_final_report_carries_every_rooms_final_count`
+(eski davranışla 5/5 kırmızı), `loadgen_smoke::a_run_shorter_than_a_metrics_period_still_reports_the_room`
+(10/10 kırmızı), `accept_stop::a_silent_peer_does_not_hold_the_final_report`,
+`loadgen_serve::a_served_server_nobody_reads_still_exits` (önce 21 sn
+korumasına takıldı). DESIGN §9/§12 "Son rapor üreticileri bekler (F35)",
+RPC-CONTROL-PLANE §8.2/§8.3, GAME-MODULE "Raporlama".
+
 ## F32 — kopuşu geçen yeniden bağlanma (`reconnect/f32-churn`)
 
 `loadgen_churn_smoke` 128 `yes` altında bir kez `resumed=0` ile düşmüştü

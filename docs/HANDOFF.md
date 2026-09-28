@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1447 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1455 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,13 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F35 tamam** (CHANGELOG "F35", DESIGN §12 "Son rapor üreticileri
+bekler"): `metrics/collector/closing.rs` — kapanıştan sonra kanal
+kapanışına dek katlama, `FINAL_REPORT_GRACE` 2 sn; oturum/taşıma kanalı
+ayrımı `boot/start.rs`; `StopReport::final_report_complete`. Loadgen
+`LEAVE_SETTLE` 150 ms. F33 ve F40 (`serve.rs::EXPORT_STOP_GRACE`) aynı
+turda kapandı. Açık: F41.
 
 **F32 tamam** (CHANGELOG "F32", RECONNECT §5 "Kopuşu geçen yeniden
 bağlanma"): `room::live_session` + oda/shard Resume kolunda devralma;
@@ -762,6 +769,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1447 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1455 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
