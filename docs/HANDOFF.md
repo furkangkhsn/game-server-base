@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1425 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1431 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,12 +148,24 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**Sayım turu 7 tamam** (CHANGELOG "Sayım turu 7"): `dispatch_resume`
+shard oneshot'larını sınırsız bekler, toplama kanalı/aktarıcı yok
+(RECONNECT §6 "Yavaş shard'a resume (B82)"). `ws_{close_frames,pongs}_
+dropped_closed` (OPS §3, DESIGN §6). Loadgen teli GSNA. "Her kaybı say"
+taraması tamam; açık yalnız B81 (demo).
+
+**F25 tamam** (CHANGELOG "F25", CONTRIBUTING "Gerçek saatli testler"):
+yük yöntemi — meşgul döngüler süreç donmasını üretmez; test ikilisini
+SIGSTOP/SIGCONT ile periyodik durdur. Loadgen smoke'ları
+`tests/loadgen_rate` ile yalnız takılmaya dayanıklı hız iddialarını sınar.
+Açık: F30–F34.
+
 **Sayım turu 6 tamam** (CHANGELOG "Sayım turu 6"): `OpOutcome::Refused`,
 `MetricsEvent::JoinRefusedClosed` → `joins_refused_closed` (RECONNECT
 §3.4/§6, OPS §3, DESIGN §12); duran shard kendi parkının resume'una
 `RoomGone` der. WS kapanışı `ws/writer/going_away.rs` (`Teardown`),
-`ws_going_away_unsent_*` (DESIGN §6, OPS §3). Loadgen teli GSMZ. Açık:
-B82 (olası doğruluk hatası), B83, B81 (demo).
+`ws_going_away_unsent_*` (DESIGN §6, OPS §3). Loadgen teli GSMZ. B82/B83 sayım turu 7'de
+kapandı.
 
 **Sayım turu 5 tamam** (CHANGELOG "Sayım turu 5"): registry'de
 `team_relays_dropped_{full,closed}` (OPS §3, CROSS-SHARD §8b), 
@@ -736,6 +748,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1425 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1431 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -5,6 +5,94 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 7 — B82 (doğruluk hatası), B83 (`core/b82-late-resume`)
+
+- **B82 — yavaş shard'a resume (gerçek doğruluk hatası):** sharded resume
+  yayını cevap başına 5 sn bekliyordu; sınır dolunca katlama hepsi-ıska
+  sayıp ev shard'ına taze join yapıyordu, oysa yavaş shard'ın kutusunda
+  resume hâlâ kuyruktaydı. Park o shard'daysa sonra kabul edip park
+  satırını bağlantının `out`'una bağlıyordu; geç kabul aktarıcı görevde
+  sayılmadan düşüyordu. Kanıt (iki gerçek shard aktörü): bağlantı iki
+  shard'a bağlı, istemci iki snapshot akışı alıyor, girdisi geri bağlanan
+  satıra hiç ulaşmıyor; park shard'ındaki satır registry'nin izlemediği
+  canlı bir üye — kapanışın `Detach`'i ev varlığını taşıdığından satır oda
+  ömrünce yaşar (kapalı kanala yayın, yuva ve dünya varlığı tutulur);
+  girdi-boşta tavanı onu ikinci kez park edebilir ya da canlı üyeliği
+  bitirebilir. Duraklama gerekmiyordu: `tick_hz` 0,2'nin altındaki bir
+  sharded odada her resume tetikleyebilirdi. Ayrıca zaman aşımına uğrayan
+  tur n turdan birini yiyor, zamanında gelen bir cevap okunmadan
+  kalabiliyordu.
+- **Karar:** sınır yok — dağıtıcı her canlı shard'ın cevabını bekler (düz
+  join tek shard'ını zaten öyle bekliyordu); shard'lar paralel cevap
+  verdiği için bekleme en yavaşınınki, bir kez. Giden shard'lar yine
+  hiçbir şeye mal olmaz (B71). Toplama kanalı ve aktarıcı görevler kalktı;
+  geç cevap kalmadığından sayılacak kayıp da yok. Kabul edilen: asılı
+  (adım atmayan) bir shard o odaya resume eden bağlantıyı da bekletir —
+  düz join zaten bekletiyordu. Elenenler: geç kabulü `Detach` ile geri
+  almak (ikinci park ya da canlı üyeliği silen `DetachDespawned`),
+  resume'a son tarih/jeton koymak (yarış kalır, beklemeyi kısaltmaz),
+  sınırda istemciye hata (hayalet satır yine oluşur).
+- **B83 — WS okuyucusunun kapalı kuyruğu:** `queue_control` yalnız dolu
+  kuyruğu sayıyordu; soket yazıcısı başarısız yazmayla durduktan sonra
+  pong/kapanış yankısı sessizce düşüyordu. Artık
+  `ws_close_frames_dropped_closed` / `ws_pongs_dropped_closed`
+  (`gsb_transport_*_total`). Loadgen metrik teli **GSNA**.
+- Ajanın taraması: bunlardan sonra motorda sayılmayan kayıp kalmadı —
+  yalnız zaten gitmiş bir şeye giden (içerik taşımayan) bildirimler ve
+  belgelenmiş gerçekten sayılamayan uçlar (süreç inerken toplayıcı yok,
+  B70, 1 sn `settle`). B81 demo kodu.
+
+Testler 1427 → 1431 (`otlp` ile 1445 → 1449):
+`registry/actor/dispatch/tests/late.rs` (3; eski kodda üçü de düştü: 5.
+saniyede ev shard'ına taze join), `ws/tests/lost_controls.rs`; mutasyonlar
+öldü. Ebeveyn doğrulaması: yalnız ilk cevabı beklemek dört testi düşürdü.
+RECONNECT §6 "Yavaş shard'a resume (B82)".
+
+## F25 — yükte riskli gerçek saatli testler (`test/f25-realtime`)
+
+Sayım turu 5'in `otlp` koşusunda `loadgen_smoke` yük ortalaması 31–40
+iken 1,61 Hz / 0 Hz raporlayıp düşmüştü. Meşgul döngüler bunu üretmiyor
+(128 `yes` altında loadgen 30 Hz); üreten, bütün sürecin donması (swap
+baskısı): test ikilisini SIGSTOP/SIGCONT ile periyodik durdurmak
+(400/100 ms'de iki demo smoke'u 10/10 düştü). Listedeki testler aynı
+yöntemle (250/250 ms) önce/sonra 10'ar kez koşturuldu.
+
+- **loadgen smoke'ları** (`loadgen_smoke`, `_separate_processes`,
+  `loadgen_games`, `loadgen_ws`): 3 sn'lik duvar penceresinden "~30 Hz"
+  (20–40 Hz, ≥ 60 adım, ≥ 30 snapshot/istemci) bir makine performansı
+  iddiasıydı — ticker takılmada patlamaz, saate oturur. Yeni
+  `tests/loadgen_rate` yalnız takılmanın değiştiremeyeceğini iddia eder:
+  odanın kendi örneğindeki `budget_us` = 1/30 sn (yapılandırma odaya
+  ulaştı), `0 < steps ≤ 30 × T + 2` (T = sürecin ömrü; çift tick atan
+  oda yakalanır, 15 Hz'e daraltınca düşer), iki hız sayı, medyan istemci
+  ≥ 1 snapshot. Hızın kendisi paused saatte sabit
+  (`room::tests::paused_clock`: 2 sn'de 60 adım); gerçek makinenin 30 Hz'e
+  ulaşması elle ölçüm koşularının işi. Donma altında 0/10 → 10/10.
+- **`boot::stop`** paused saatte (`took == grace`); yeni test:
+  `end_accepts` son döngü bitince döner. **`accept_stop`** 900 ms yerine
+  el sıkışma süresiyle (10 sn) sınırlı. 9/10 → 10/10.
+- **RPC zaman aşımı süpürmesi** paused saatte: tikler süreden tam 30 ms
+  önce/sonra (79 ms sessiz, 81 ms cevaplı).
+- **udp busy-band** kesin: her okuma yeniden gönderir
+  (`retrans_out == okuma`).
+- **`tests/input_rate`**: 1,1 sn uykular yerine gönderilen her kareyi
+  saymış ilk rapor. 2/10 → 10/10.
+- **e2e ticket**: yavaş doğrulayıcı serbest bırakılana dek park eder;
+  A'nın snapshot'ları heartbeat ACK çitinin arkasında sayılır (daha güçlü:
+  eski pencere kuyruktakileri de sayıyordu). 1/10 → 10/10.
+- **slow_reader'lar** (TCP/QUIC/WS): pencere 300 ms → 1 sn, çerçeveler
+  "birkaç pencere"yi yapıdan sağlar. 0/10 → 10/10.
+- **Hata (ayrı commit): orkestratörün metrik okuyucusu** sunucu çocuğu
+  metrik akışı sunmadan ölürse sonsuza dek bağlanmayı deniyordu (yük
+  altında 51 dk asılma: çocuk `alloc_port` ile bind arasında portu
+  kaptırdı). Çocuk bittikten sonra 5 sn süre, sonra uyarı ve boş sunucu
+  sayıları. Kilit testi düzeltmeden önce 90 sn korumasına takıldı;
+  ebeveyn doğrulaması: süreyi fiilen sınırsız yapmak testi düşürdü.
+- CONTRIBUTING "Gerçek saatli testler" F25 örnekleriyle genişledi.
+- Kalanlar BACKLOG F30–F34 (port yarışı F31 dahil).
+
+Testler 1425 → 1427 (`otlp` ile 1443 → 1445).
+
 ## Sayım turu 6 — "her şeyi saymalıyız": B75, B80 (`metrics/count-everything-6`)
 
 - **B75 — duran odanın reddettiği katılmalar:** dağıtıcı `RoomGone`'un iki
