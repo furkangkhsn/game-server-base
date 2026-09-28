@@ -64,8 +64,9 @@ where
                 let reason = "a newer session for this player superseded this \
                      connection"
                     .to_string();
-                // Posted: in place when the inbox has room (F57).
-                crate::channel::post(
+                // Posted: in place when the inbox has room (F57); a
+                // refused fallback is counted at the stop (F58).
+                self.tell(
                     &inbox,
                     ConnIn::ServerClosed {
                         cause: ServerClose::Superseded,

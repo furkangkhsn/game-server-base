@@ -46,8 +46,9 @@ where
                 capacity = cap,
                 "server at connection capacity; new connection rejected"
             );
-            // Posted: in place when the inbox has room (F57).
-            crate::channel::post(
+            // Posted: in place when the inbox has room (F57); a refused
+            // fallback is counted at the stop (F58).
+            self.tell(
                 &inbox,
                 ConnIn::ServerClosed {
                     cause: ServerClose::ConnCap,
@@ -76,7 +77,7 @@ where
                 capacity = cap,
                 "server at unauthenticated capacity; new connection rejected"
             );
-            crate::channel::post(
+            self.tell(
                 &inbox,
                 ConnIn::ServerClosed {
                     cause: ServerClose::UnauthCap,

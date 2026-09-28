@@ -38,15 +38,12 @@ impl super::ConnectionActor {
         self.inbox.close();
         let mut lost = VerdictsLost::default();
         while let Ok(msg) = self.inbox.try_recv() {
-            let verdict = match msg {
-                ConnIn::Frame(frame) => {
-                    self.count_unprocessed(frame.op);
-                    continue;
-                }
-                ConnIn::ServerClosed { cause, .. } => cause,
-                ConnIn::RoomGone(_) => ServerClose::RoomGone,
-                ConnIn::StreamRejected { .. } => ServerClose::StreamRejected,
-                ConnIn::Closed { .. } | ConnIn::LeftRoom { .. } | ConnIn::Shutdown => continue,
+            if let ConnIn::Frame(frame) = &msg {
+                self.count_unprocessed(frame.op);
+                continue;
+            }
+            let Some(verdict) = msg.verdict() else {
+                continue;
             };
             if stopped && lost.closes.total() == 0 {
                 lost.close(verdict);

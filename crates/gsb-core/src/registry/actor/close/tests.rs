@@ -17,6 +17,8 @@ use crate::registry::actor::Registry;
 use crate::registry::{CloseRequest, ConnInfo, RegistryMsg, RoomFactory};
 use crate::ticker::Ticker;
 
+mod refused;
+
 type Reg = Registry<(), (), (), ()>;
 
 const CONN: ConnectionId = ConnectionId(3);

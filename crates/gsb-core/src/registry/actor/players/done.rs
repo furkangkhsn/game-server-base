@@ -51,8 +51,9 @@ where
                 None => None,
             };
             if let Some(inbox) = notify {
-                // Posted: in place when the inbox has room (F57).
-                crate::channel::post(&inbox, ConnIn::RoomGone(room));
+                // Posted: in place when the inbox has room (F57); a
+                // refused fallback is counted at the stop (F58).
+                self.tell(&inbox, ConnIn::RoomGone(room));
             }
             debug!(
                 %conn,

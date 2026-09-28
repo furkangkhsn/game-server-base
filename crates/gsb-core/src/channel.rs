@@ -31,12 +31,29 @@ pub fn channel<T>(capacity: usize) -> (Mailbox<T>, Inbox<T>) {
 /// the message while that actor is still draining. Must be called inside
 /// a Tokio runtime (the full-mailbox fallback spawns).
 pub fn post<T: Send + 'static>(tx: &Mailbox<T>, msg: T) {
+    post_or(tx, msg, drop);
+}
+
+/// [`post`], told of the one way it loses a message: `refused` gets the
+/// message back when the receiver refused it — at once when it is
+/// already gone, or from the spawned sender when it closed before a
+/// slot freed (BACKLOG F58: the registry's verdict to a connection whose
+/// inbox was full). Nothing else changes: a message the mailbox takes is
+/// never handed back.
+pub fn post_or<T, F>(tx: &Mailbox<T>, msg: T, refused: F)
+where
+    T: Send + 'static,
+    F: FnOnce(T) + Send + 'static,
+{
     match tx.try_send(msg) {
-        Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Closed(msg)) => refused(msg),
         Err(mpsc::error::TrySendError::Full(msg)) => {
             let tx = tx.clone();
             tokio::spawn(async move {
-                let _ = tx.send(msg).await;
+                if let Err(mpsc::error::SendError(msg)) = tx.send(msg).await {
+                    refused(msg);
+                }
             });
         }
     }

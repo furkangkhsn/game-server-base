@@ -2777,6 +2777,10 @@ yerlerden TAM BİRİNDE yakalanır; her yer kendi yakaladığını sayar:
    ve oturum başına yalnız İLKİ sayılır — oturum tek gerekçe yazar;
    bir hükmün ya da istemcinin kendi sonunun arkasındaki hüküm hiçbir
    şey kaybettirmez (oturum zaten bitti).
+5. **Bağlantının kapalı kutusu spawn'lu yedeği reddetti** — bağlantının
+   kutusu doluyken işlenen hüküm yedek göndericide bekliyordu, duruşun
+   bildirimi bağlantıya önce vardı: registry'nin yedeği
+   (`registry/actor/tell.rs`, F58; aşağıda).
 
 Her yer saydığını tek `MetricsEvent::VerdictsLost` ile gönderir
 (durdurma-mesajı deyimi; oda/shard son örneğinden ÖNCE, hiçbir şey
@@ -2800,14 +2804,37 @@ hükmü, `LeftRoom`, `superseded`, doğum tavanları, `RoomGone`)
 `channel::post` ile gider: kutuda yer varsa YERİNDE — registry'nin
 ondan sonra gönderdiği her şeyin, duruşun `Shutdown`'ının da önünde
 (registry hükmü `Shutdown` kolundan önce işler) —, yalnız kutu doluyken
-spawn'lu göndericiden. Kalan: bağlantının kutusu doluyken işlenen
-hüküm spawn'lu yedekle gider ve aynı yarışa girebilir (arkada varırsa
-4. ayak sayar, kutu kapandıktan sonra varırsa sayılmaz) — dolu bağlantı
-kutusu (istemcinin karelerini okumayan aktör) gerektirir, BACKLOG'da
-kalan satır. Kilit: `registry::actor::close::tests` (hüküm registry onu
-işlediği an bağlantının kutusunda, duruşun bildirimi arkasında; tavan
-reddi ve `RoomGone` da yerinde; eski spawn'lu gönderimle ikisi de
-kırmızı).
+spawn'lu göndericiden. Kilit: `registry::actor::close::tests` (hüküm
+registry onu işlediği an bağlantının kutusunda, duruşun bildirimi
+arkasında; tavan reddi ve `RoomGone` da yerinde; eski spawn'lu
+gönderimle ikisi de kırmızı).
+
+**Spawn'lu yedeğin reddi sayılıyor (F58).** Bağlantının kutusu doluyken
+işlenen hüküm spawn'lu yedekle gider ve aynı yarışa girebilir:
+duruşun bildirimi önce varır, bağlantı kutusunu kapatır, yedek
+reddedilir — hiçbir yer saymıyordu. Artık reddin olduğu yerde sayılıyor:
+registry'nin bağlantıya her HÜKMÜ (`tell_closed`'un kapatma hükmü,
+`superseded`, doğum tavanları, iki `RoomGone`) `Registry::tell` ile
+gider (`registry/actor/tell.rs`), o da `channel::post_or` ile —
+`post`'un reddi geri bildiren eşi (mesaj yerinde reddedilirse hemen,
+spawn'lu gönderici reddedilirse orada geri verilir). Red anında
+registry durmuşsa (kendi kutusu kapalı: `Shutdown` kolu kutuyu kimseye
+haber vermeden ÖNCE kapatır) hüküm gerekçesiyle tek
+`MetricsEvent::VerdictsLost` olarak sayılır (`close_verdicts_lost`);
+registry çalışırken red, kendi kendine bitmiş bir bağlantıdır — kutusundaki
+istemci sonunun arkasındaki hüküm gibi, kayıp yok. Hüküm taşımayan
+bildirim (`LeftRoom`: registry satırı zaten yerleştirdi) `post`'ta kaldı;
+eşleme bağlantının sonuyla ortak (`ConnIn::verdict`). Sınırlı
+belirsizlik: aynı oturumun kutusunda duruşun arkasında başka bir hüküm
+de bulunmuşsa (pompanınki) ikisi de sayılır; duruşta istemcisi kendi
+bitmiş oturumun bekleyen hükmü de sayılır — ikisi de dolu kutu +
+duruş penceresi gerektirir. Kilit: `registry::actor::close::tests::refused`
+(dolu kutu, hüküm spawn'lu yedekte, registry durur, bağlantı biter →
+1 `kicked`; aynı yoldan yok edilen odanın `RoomGone`'u → 1 `room_gone`;
+aynısı registry çalışırken → 0; `ConnIn::verdict` eşlemesi her kolda;
+önce kırmızı: eski `post` ile iki red testi 0 gördü; mutasyonlar —
+`is_closed` denetimi yok, yedeğin reddi bildirilmiyor, `tell` yerine
+`post`, eşleme kolları — hepsi kırıldı).
 
 Elenenler: (1) *Yer başına ayrı aile* (`…_unread`, `…_refused`,
 `…_unsent`) — aynı kayıp, F55'in şikâyet ettiği zamanlamaya bağlı

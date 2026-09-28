@@ -130,7 +130,7 @@ where
         }
         for (conn, inbox) in doomed {
             // Fire-and-forget notification (no reply needed).
-            crate::channel::post(&inbox, ConnIn::RoomGone(room));
+            self.tell(&inbox, ConnIn::RoomGone(room));
             debug!(%conn, room = %room, "notified: room gone");
         }
     }

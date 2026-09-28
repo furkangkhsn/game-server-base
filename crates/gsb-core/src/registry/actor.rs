@@ -24,6 +24,7 @@ mod rooms;
 mod run;
 mod stop;
 mod teams;
+mod tell;
 
 /// The registry actor. `W`/`G` are the room's world / group-key types;
 /// `St` is the sharded room's migration state (unused by single rooms —

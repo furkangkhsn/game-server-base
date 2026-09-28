@@ -74,7 +74,7 @@ where
             // `ConnClosed` routes a DETACH, the game's `on_disconnect`
             // runs once.
             debug!(%conn, room = %room, entity, ?cause, "close request for an earlier membership: the table stays, the connection closes");
-            Self::tell_closed(inbox, cause, reason);
+            self.tell_closed(inbox, cause, reason);
             return;
         }
         if parked {
@@ -86,7 +86,7 @@ where
             self.settle_ended(conn, room);
         }
         debug!(%conn, room = %room, parked, ?cause, "room asked for the connection's close");
-        Self::tell_closed(inbox, cause, reason);
+        self.tell_closed(inbox, cause, reason);
     }
 
     /// Relay a room's verdict to the connection, never awaited here. No
@@ -100,9 +100,13 @@ where
     /// way. A spawned-only send (the old way) could land behind the
     /// stop's notice, and after the connection had closed its inbox be
     /// refused: a verdict lost uncounted (F56 counts the one behind).
-    fn tell_closed(inbox: Option<Mailbox<ConnIn>>, cause: ServerClose, reason: String) {
+    ///
+    /// The one way the spawned send loses it — refused by a connection
+    /// that ended first, at the stop — is counted where it happens
+    /// (`Self::tell`, BACKLOG F58).
+    fn tell_closed(&self, inbox: Option<Mailbox<ConnIn>>, cause: ServerClose, reason: String) {
         if let Some(inbox) = inbox {
-            crate::channel::post(&inbox, ConnIn::ServerClosed { cause, reason });
+            self.tell(&inbox, ConnIn::ServerClosed { cause, reason });
         }
     }
 
