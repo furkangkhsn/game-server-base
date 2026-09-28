@@ -991,7 +991,7 @@ yaygın durumlar için hazır uygulamalarını taşır:
 | `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm; `Grid3`: `Spatial<Coord = i32>` wire, küp hücre, `Cell3`, `CellExit { x = 1; y = 2; z = 3 }`) | `Grid2` 1a'da; `Grid3` A5'te (§10 "A5"; isteğe bağlı — hiçbir demo kullanmıyor, MMO yer düzleminde `Grid2`) |
 | `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk; A8'den beri birim başına yarıçap: `(2k + 1)²` / `(2k + 1)³` blok, `k ≤ MAX_SIGHT_CELLS`) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi); birim başına yarıçap A8'de (§10 "A8") |
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
-| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2); `GridPartition3` oyunun verdiği `[nx, ny, nz]` kutu bölge, 6-komşuluk, `with_diagonals()` ile 26-komşuluk | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` A5'te (§10 "A5"; isteğe bağlı — MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
+| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2); `GridPartition3` oyunun verdiği `[nx, ny, nz]` kutu bölge, 6-komşuluk, `with_diagonals()` ile 26-komşuluk; ikisinde de `with_wire_scale(s)` (wire'ı konumdan ince/kaba oyun: konum birimi başına `s` wire birimi) | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` A5'te (§10 "A5"; isteğe bağlı — MMO yer düzleminde `GridPartition2`, 8-komşuluk); wire ölçeği A7'de (§10 "A7"; isteğe bağlı — hiçbir demo kullanmıyor) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
 | `ClientView<D>` + `ClientDecoder` (`gsb_kit::client`) | istemci tarafı: kit zarfının referans uygulayıcısı (istemci kuralları, sayaçlar) + zarf yürüyücüsü `client::wire` (§5.2) | GAME-MODULE G4'te; kullanıcıları loadgen, demo/MMO test istemcileri, örnek istemci |
 
@@ -1005,8 +1005,14 @@ sözleşmesi** (Faz 5, F3): hem konumu hem wire'ı okuyan ön-ayar
 (`GridPartition2`; A5'ten beri `Spatial` ile `GridPartition3`) ikisini
 tek birimde karşılaştırır — oyunun konum
 `Planar`'ı ile wire `Planar`'ı AYNI birimi raporlamalı (konumdan ince
-nicemlenen wire, konumun birimine geri izdüşürülür); debug build'de
-`Partition::debug_check_wire` denetler.
+nicemlenen wire, konumun birimine geri izdüşürülür) ya da, A7'den beri,
+oyun wire'ın birimini ön-ayara bildirir: `with_wire_scale(s)` (konum
+birimi başına `s` wire birimi — santimetre wire, metre konum: 100;
+varsayılan 1 = sözleşmenin kendisi; §10 "A7"); debug build'de
+`Partition::debug_check_wire` wire'ı bu ölçekle okuyarak denetler.
+AOI ön-ayarları (`Grid2`, `Grid3`) yalnız wire'ı okur ve hücre kenarını
+wire biriminde alır — ölçek gerekmez (santimetre wire'ın 64 m hücresi
+`Grid2::new(6400.0)`).
 
 İzometrik bir oyun kendi 2D konumuna `Planar` uygular ve `Grid2` takar;
 bir FPS `Pos3`'ünü seçer ve AOI'yi yer düzleminde (`Planar` → `[x, z]`
@@ -1952,7 +1958,8 @@ hatası**. Her biri için kanıt, gerekçe ve en küçük kit değişikliği:
    birim testi + mutasyon kilitli). Engelleyici değil. **En küçük kit
    değişikliği:** yalnız belge — `Planar` ve `GridPartition2`
    belgelerine "wire izdüşümü konumun biriminde olmalı" (ya da,
-   tetikleyici çıkarsa, ön-ayara bir `wire_scale`). Yan gözlem: MMO'nun
+   tetikleyici çıkarsa, ön-ayara bir `wire_scale` — A7'de isteğe bağlı
+   `with_wire_scale` olarak kuruldu, §10 "A7"). Yan gözlem: MMO'nun
    odası (`ShardedSpatialRoom`) `admits`'i hiç çağırmıyor — komşunun
    bütün ihracını deftere alıyor; görünürlük hücreyle sınırlı olduğu
    için doğru, ama uzak ihraç kayıtları (ör. ışınlanan bir oyuncunun
@@ -4510,6 +4517,116 @@ testleri 15 ardışık koşuda yeşil (duraklatılmış saat).
 
 **Doğrulama:** 1548 → **1566** test / 0 hata / 1 ignored (`otlp` ile
 1566 → 1584).
+
+### A7 — bölme ön-ayarlarında wire ölçeği: `with_wire_scale` (2026-09-28)
+
+**Kit yapı taşı, isteğe bağlı; varsayılan bayt bayt aynı**
+(`kit/k3-wire-scale`; BACKLOG A7). Bölme ön-ayarları (`GridPartition2`,
+A5'ten beri `GridPartition3`) iki tür değer okur: bölge, export ve bant
+için simülasyon KONUMUNU (`f32`), çerçeve filtresi ve birim denetimi için
+WIRE değerini (`i32`). Birim sözleşmesi (F3) ikisinin aynı birimi
+raporlamasını istiyordu; wire'ı konumdan ince olan oyun (santimetre wire,
+metre simülasyon) wire izdüşümünü konumun birimine kabalaştırmak
+zorundaydı — MMO ve Cephe bunu bedelsiz yapıyor (hücre kenarı tam metre),
+ama wire'ın ince çözünürlüğünü izdüşümde de kullanmak isteyen oyun
+ön-ayarları kullanamıyordu. Artık oyun oranı ön-ayara bildirir;
+bildirmeyen oyunun davranışı ve baytları değişmez.
+
+**API (`gsb_kit::space`):**
+
+```rust
+impl<P> GridPartition2<P> { pub fn with_wire_scale(self, scale: f32) -> Self }
+impl<P> GridPartition3<P> { pub fn with_wire_scale(self, scale: f32) -> Self }
+// scale = konum birimi başına wire birimi: santimetre wire / metre konum → 100,
+// desimetre → 10, 2 m adımlı wire → 0,5. Varsayılan 1. Sonlu ve > 0 olmalı
+// (0, negatif, NaN, ±∞ → panik; `with_diagonals` gibi kurulumda bir kez).
+```
+
+- **Dönüşüm noktaları (hepsi).** Ön-ayarın wire değerini konumla
+  karşılaştırılabilir niceliğe çevirdiği iki yer var, her ön-ayarda:
+  `admits` (çerçeve filtresi — komşunun şerit kaydının, yani ödünç
+  kaydın konumu) ve `debug_check_wire` (birim denetimi). İkisi de wire
+  izdüşümünü `ölçek`e BÖLER (`v as f32 / scale`), sonra bugünkü
+  karşılaştırmayı yapar — tek geometri, bölge dikdörtgenleri / kutuları
+  konumun biriminde kalır. `region_of`, `exports`, `holds` ve
+  `neighbors` yalnız konumu okur; ölçeği görmezler (testler kilitli).
+  Oda kodu değişmedi: `ShardedRoom` / `ShardedSpatialRoom` / takım
+  kompoziti `admits`'i ve `debug_check_wire`'ı zaten ön-ayar üzerinden
+  çağırıyor; şerit (`Strip = Wire`) ve göç baytları oyunun.
+- **Varsayılan = bugün.** `v as f32 / 1.0` IEEE'de `v as f32`'nin
+  kendisi: ölçek bildirmeyen oyunun her `admits` / denetim cevabı bit
+  bit aynı; hiçbir kayıt baytı değişmez (ölçek yalnız HANGİ ödünç
+  kaydın görüneceğini belirler, kaydın baytlarını değil).
+- **Çözünürlük.** Ölçekle çerçevenin kenarı wire'ın biriminde keskin:
+  2×2 / 512 m haritada 128 m'deki santimetre kaydı içeride, 128,01
+  m'deki dışarıda (test kilitli); metreye kabalaştırılmış izdüşüm bu
+  ikisini ayıramazdı. `f32` tam sayı wire'ı `2^24` birime dek kesin
+  taşır (santimetrede ±167 km) — bugünkü `x as f32` sınırı.
+- **Birim denetimi.** Debug build'de sharded odalar ihraç edilen her
+  entity için wire'ı ölçekle okuyup konumla karşılaştırır (bir border
+  margin toleransı — F3'ün kuralı). Santimetre wire ölçeksiz kurulursa
+  oda ilk ihraçta durur ve mesaj ölçeği gösterir (`… at the wire scale
+  1 …`, `with_wire_scale`'i önerir); aynı oyun ölçekle geçer (test
+  kilitli: denetimi tutarlı kılan ölçeğin kendisi).
+- **Bir odanın bütün shard'ları aynı ölçeği kullanmalı** (aynı
+  partition kuralı, `with_diagonals` gibi); karışık ölçekte çerçeve
+  filtreleri farklı süzer.
+- **AOI ön-ayarları ölçek almıyor — kararı.** `Grid2` / `Grid3` yalnız
+  wire'ı okur ve hücre kenarını zaten WIRE biriminde alır: santimetre
+  wire'ın 64 m hücresi `Grid2::new(6400.0)`. İstemcinin kuralı
+  `floor(wire / cell_size)` wire biriminde kalır; ikinci bir parametre
+  (ölçek) aynı hücreyi iki sayıya bölerdi (`cell_size · scale`) ve
+  istemci kuralını iki sayıya bağlardı — ifade gücü eklemez. Görüş ve
+  sektör ön-ayarları yalnız konumu okur. Birim sorunu yalnız İKİ değeri
+  karşılaştıran ön-ayarda var — bölme ön-ayarları.
+
+**Demo benimsemesi: yok.** MMO ve Cephe wire izdüşümünü metreye
+kabalaştırıyor ve bu onlar için bedelsiz (hücre kenarı tam metre, bölge
+kenarı metrede keskin olmak zorunda değil); ölçeğe geçmek hücre boyunu
+ve istemci kuralının yazımını değiştiren bir oyun kararı olurdu, seam'in
+en küçük düzeneği değil. Doğrulama kit fikstürleriyle: santimetre
+kodekli 2D ve 3D fikstür oyunları (`sharded/tests/wire_scale/centi.rs`,
+kayıt baytları fikstürlerinki) GERÇEK `ShardedRoom` üzerinde.
+
+**Elenenler.**
+- *Bölge sınırlarını ölçekle ÇARPMAK (dikdörtgeni wire biriminde de
+  tutmak)*: ikinci bir geometri (bant ve export konumda kaldığı için iki
+  set sınır) ve denetim mesajında iki birim; bölme tek yerde, konumun
+  biriminde, ve kayıt başına eksen başına bir bölme — ölçülemez maliyet.
+- *Ölçeği wire tipine koymak (`Planar` / `Spatial`'e `fn unit()` ya da
+  sabit)*: public trait'i değiştirir (her uygulayıcı), aynı trait'i okuyan
+  AOI ön-ayarlarını da ilgilendirir; oran iki tipin İLİŞKİSİ — ikisini
+  karşılaştıran bölme örneğine ait (`with_diagonals` gibi örnek verisi).
+- *Tam sayı ölçek (`u32`) + tam sayı bölme*: daha kaba wire'ı (0,5) ve
+  tam olmayan oranları ifade edemez, bölme tabana yuvarlayıp çerçeve
+  kenarına bir birimlik hata ekler; `f32` bölme tam katlarda kesin.
+- *Eksen başına ölçek (`[f32; 2]` / `[f32; 3]`)*: tetikleyici yok (her
+  eksende aynı nicemleme bugünkü her oyunun seçimi); BACKLOG A38.
+- *Ölçeği `debug_check_wire`'dan tahmin etmek / otomatik bulmak*: denetim
+  tutarsızlığı yakalamak için var, oranı sessizce "düzeltirse" F3'ün
+  sessiz yanlış süzmesini geri getirir.
+
+**Testler** (8; önce kırmızı: 8'i de — `with_wire_scale` ölçeği saklayıp
+hiç okumayan, doğrulamayan bir taslakken API derlendi, 8 A7 testi
+kırıldı, mevcut testler geçti):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `space::tests::scale::grid_partition2_reads_a_centimetre_wire_at_its_scale` | tam metrede santimetre kaydı metre kaydıyla aynı yerde kabul (151² nokta × 4 bölge, iki yönde, harita dışı dahil); ölçek 1 = varsayılan; 128 m içeride / 128,01 m dışarıda (iki taraf); ölçeksiz 20 m → 2 km düşer; bölge / export / bant ölçekten bağımsız | `admits` ölçeği yok sayıyor → kırıldı; yalnız x ekseni → kırıldı; bölme yerine çarpma → kırıldı; `with_wire_scale` ölçeği saklamıyor → kırıldı |
+| `space::tests::scale::grid_partition3_reads_a_centimetre_wire_at_its_scale` | aynısı üç eksende (19³ nokta × 8 bölge); yükseklik yüzü 16 m / 16,01 m; ölçeksiz 10 m → 1 km | `admits` ölçeği yok sayıyor → kırıldı; üçüncü eksen ölçeksiz → kırıldı; çarpma → kırıldı; saklamıyor → kırıldı |
+| `space::tests::scale::a_one_layer_grid_partition3_is_grid_partition2_at_the_same_scale` | `[cols, rows, 1]` ≡ `GridPartition2` aynı ölçekte (100 ve 0,5; 7 shard sayısı × 625 alt-metre nokta × her bölge), iki denetim de geçer | 2D / 3D dönüşüm mutasyonlarının hepsi (10) → kırıldı |
+| `space::tests::scale::the_scale_is_what_makes_the_unit_check_pass` | santimetre wire (yuvarlanmış / kesilmiş, harita içi / dışı) ölçekle denetimden geçer; aynı kayıt ölçeksiz yakalanır (debug; 2D ve 3D) | denetim ölçeği yok sayıyor (2D / 3D) → kırıldı; çarpma → kırıldı; üçüncü eksen → kırıldı |
+| `space::tests::scale::a_wire_scale_must_be_positive_and_finite` | 0, −0, −100, NaN, ±∞ iki ön-ayarda reddedilir; 0,5 / 1 / 10 / 100 kabul | doğrulama yok → kırıldı; sıfır kabul → kırıldı; sonsuz kabul → kırıldı |
+| `sharded::tests::wire_scale::a_centimetre_strip_is_admitted_to_the_margin_at_the_scale` | GERÇEK `ShardedRoom` (2×2, santimetre fikstür): export konumdan (seam'e 100,25 m ve 127,99 m, harita kenarı; derindeki değil); komşu seam kayıtlarını santimetre değerleriyle gösterir; ölçeksiz hiçbirini; elle kurulan 128,00 m içeride, 128,01 m dışarıda | 2D dönüşüm mutasyonlarının hepsi → kırıldı |
+| `sharded::tests::wire_scale::a_centimetre_strip_is_admitted_across_a_face_at_the_scale` | aynısı 3B `[1, 2, 1]`: üst shard alt shard'ın tabanının 10,5 m ve 15,99 m altındakini gösterir (küp duvarındaki 30 m aşağıdakini değil); 16 m / 16,01 m | 3D dönüşüm mutasyonlarının hepsi → kırıldı |
+| `sharded::tests::wire_scale::the_rooms_unit_check_passes_at_the_scale_and_stops_without` | odanın ihraç denetimi (F3 çağrısı) ölçekle geçer, ölçeksiz durur (debug; 2D ve 3D) | denetim ölçeği yok sayıyor / çarpma / üçüncü eksen / saklamıyor → kırıldı |
+
+13 mutasyonun 13'ü öldü (dört dönüşüm noktası — iki ön-ayarın `admits`'i
+ve `debug_check_wire`'ı — her biri ayrı ayrı yok sayıldı; bölme yerine
+çarpma, eksen atlama, saklamama, üç doğrulama gevşetmesi).
+
+**Doğrulama:** 1566 → **1574** test / 0 hata / 1 ignored (`otlp` ile
+1584 → 1592).
 
 ## 11. Kabul kriteri
 

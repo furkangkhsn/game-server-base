@@ -1500,6 +1500,7 @@ koşu sonundaki duruş). Aynı ağaç `--workers
 | Göç tick'i: ölümlü kopyaya yerel darbe | ✅ D — §4d |
 | Alan sorgusu `local ∪ lent` (AoE, yakınlık) | ✅ F6 — kit'te opt-in `Seam::{area, within, find}` (§4b); savaş benimsedi |
 | 3B shard bölmesi (`GridPartition3`) | ✅ A5 — kit'te opt-in (KIT-ARCHITECTURE §10 "A5"): kutu bölgeler, 6-komşuluk ya da `with_diagonals()` ile 26; şerit kutunun altı yüzünün margin kabuğu, alıcı margin'li kutusunu tutar (yüz levhası / kenar prizması / köşe küpü); göç rotası aynı BFS; `Seam::area` boyuttan bağımsız, `Seam::within` düzlemsel disk (3B küre: BACKLOG A36). 2D bölme ve baytları değişmedi |
+| Şerit kabulünde wire ölçeği (`with_wire_scale`) | ✅ A7 — iki bölme ön-ayarında opt-in (KIT-ARCHITECTURE §10 "A7"): alıcının çerçeve filtresi (`admits`) ve ihraçtaki birim denetimi şerit kaydının wire değerini ölçeğe bölerek konumun biriminde okur — santimetre wire'lı oyun izdüşümünü kabalaştırmadan margin'e santimetresine dek ödünç alır. Export, bant ve göç konumu okur, ölçekten bağımsız; varsayılan 1 = bugünkü süzme, bayt aynı |
 
 ## 10. NOT-DONE
 
