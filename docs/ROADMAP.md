@@ -980,7 +980,7 @@ delta sonra; şeritleme veri gelmedikçe dokunulmaz.
   etmediği için bu artık yalnızca tablo bant genişliği sorunu; load test
   gösterirse room bazlı parçalar. (İlk turda göstermedi: 1000
   bağlantıda opens/closes/joins akışı adıma hiç gölge düşürmedi.)
-- [ ] **`QueryState` yeniden kullanımı** — oda başına bir kez kur, tick'te
+- [x] **`QueryState` yeniden kullanımı** — **KAPANDI (A12, temizlik paketi; KIT-ARCHITECTURE §10 "A12")** — oda başına bir kez kur, tick'te
   sadece `iter`.
 - [ ] **Kompresyon (zstd)** — batch'ler üzerine transport seçeneği.
 
