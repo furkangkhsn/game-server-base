@@ -175,3 +175,47 @@ async fn a_stopping_room_counts_the_ops_left_in_its_control_channel() {
         "the channel is closed"
     );
 }
+
+/// F55, the room's side of both arrival orders for one live member's
+/// detach. Taken BEFORE the stop, it is in the control channel and
+/// counted there (`detaches_unprocessed`, B68). Arriving AFTER, the
+/// closed channel refuses it at its sender and the room counts nothing
+/// for it: the stop already ended the member — its unread input is
+/// counted either way (B62) — so the op had nothing left to act on.
+#[tokio::test]
+async fn a_live_members_detach_is_the_stops_count_only_if_it_was_taken() {
+    for taken in [true, false] {
+        let mut r = room(Detach::Despawn);
+        let (metrics, mut samples) = mpsc::channel(8);
+        r.metrics = metrics;
+        let live = join(&mut r, 2, "");
+        send_two_requests(&live, 2);
+        let (ctl, control_rx) = channel(4);
+        r.control_rx = control_rx;
+        let op = || RoomControl::Detach {
+            conn: ConnectionId(2),
+            entity: 2,
+            identity: String::new(),
+        };
+        if taken {
+            ctl.try_send(op()).expect("the room takes it");
+        }
+        r.finish();
+        if !taken {
+            assert!(ctl.try_send(op()).is_err(), "refused at its sender");
+        }
+        let mut last = None;
+        while let Ok(ev) = samples.try_recv() {
+            last = Some(ev);
+        }
+        let Some(MetricsEvent::RoomFinal(s)) = last else {
+            panic!("the final sample: {last:?}");
+        };
+        assert_eq!(
+            s.stop.detaches_unprocessed,
+            u64::from(taken),
+            "taken={taken}"
+        );
+        assert_eq!(s.requests_dropped_unread, 2, "the member's end, either way");
+    }
+}

@@ -65,7 +65,9 @@
 //! end of that line, with `gsb_registry_{joins,team_exports}_unread_total`
 //! after `gsb_registry_joins_refused_closed_total`. F54's
 //! `joins_unsent=` after them, with `gsb_registry_joins_unsent_total`
-//! after `gsb_registry_team_exports_unread_total`.
+//! after `gsb_registry_team_exports_unread_total`. And F55's two HELP
+//! changes: `gsb_room_{leaves,detaches}_unprocessed_total` say they are
+//! the stop's ledger of what it held (a refused op is counted nowhere).
 
 use super::*;
 use crate::conn::ServerClose;

@@ -3253,7 +3253,7 @@ durdurulamaz.
 | oda | `requests_undelivered`, `requests_abandoned` (kümülatif; satırda `req_late=`'den sonra `req_undelivered=` / `req_abandoned=`, Prometheus'ta `gsb_room_requests_{undelivered,abandoned}_total`, OTLP'de `_total`'sız, loadgen telinde GSMK) | oturumu biten bağlantıya borçlu kalan RPC yanıtlarından kaçı hiç teslim edilmeden atıldı, kaç dış istek oturum bittiğinde hâlâ uçuştaydı? (B53; isteğin kendisi kendi kovasında — defter terimi değil, yanıtın akıbeti. Geri konan yanıt bir kez, atıldığında sayılır.) |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
 | registry | `join_ops_dropped`, `close_ops_dropped`, `match_results_dropped_full`, `match_results_dropped_closed` (kümülatif; registry satırında `rooms_died=`'den sonra, Prometheus'ta `gsb_registry_*_total`, loadgen telinde GSMP) | kontrol düzlemi neyi kaybetti? Bağlantının op dağıtıcısına verilemeyen katılma / kapanış (kuyruk dolu ya da görev gitmiş), sonuç sink'inin dolu ya da kapalı olduğu için reddettiği maç sonuçları (duran oda örnek göndermez: toplayıcıya `MetricsEvent::MatchResultDropped` ile gider). B57 |
-| room | `joins_unprocessed`, `resumes_unprocessed`, `leaves_unprocessed`, `detaches_unprocessed`, `migrations_in_dropped`, `effects_unsent`, `effects_unapplied`, `team_imports_unapplied`, `border_updates_unapplied` (`RoomReport::stop`; kümülatif, yalnız son örnekte; satırda `metrics_dropped=`'den sonra, Prometheus'ta `gsb_room_<ad>_total`, loadgen telinde GSMV, `RESULT`'ta `<ad>=`, fold'da SUM) | duran oda/shard oturumlarının dışında neyi elinde tuttu? Kanalda işlenmeyen bağlantı op'ları; shard'da kurulmayan göçler, gönderilmeyen/uygulanmayan etkiler, uygulanmayan görünüm güncellemeleri. B68 |
+| room | `joins_unprocessed`, `resumes_unprocessed`, `leaves_unprocessed`, `detaches_unprocessed`, `migrations_in_dropped`, `effects_unsent`, `effects_unapplied`, `team_imports_unapplied`, `border_updates_unapplied` (`RoomReport::stop`; kümülatif, yalnız son örnekte; satırda `metrics_dropped=`'den sonra, Prometheus'ta `gsb_room_<ad>_total`, loadgen telinde GSMV, `RESULT`'ta `<ad>=`, fold'da SUM) | duran oda/shard oturumlarının dışında neyi elinde tuttu? Kanalda işlenmeyen bağlantı op'ları (ayrılma/taşıma ölümünde duruşun DEFTERİ: kapanıştan sonra reddedilen hiçbir yerde sayılmaz — üyeyi duruş bitirdi, F55); shard'da kurulmayan göçler, gönderilmeyen/uygulanmayan etkiler, uygulanmayan görünüm güncellemeleri. B68 |
 | registry | `rooms_ended_uncounted` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_rooms_ended_uncounted_total`, loadgen telinde GSMU) | kaç oda/shard GÖREVİ son sayımı olmadan (panikle) bitti — son penceresi ve elinde kalanlar hiçbir sayaçta yok? Ölüm bekçisinin `MetricsEvent::RoomEndedUncounted`'ı; satır da onunla budanır. B67 |
 | registry | `team_relays_dropped_full`, `team_relays_dropped_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_team_relays_dropped_{full,closed}_total`, loadgen telinde GSMW) | sharded odanın takım hub'ı (CROSS-SHARD §8b.2) kaç import'u hedef shard'a kuyruklayamadı — kutusu DOLU (yetişemiyor; kaynağın sonraki export'u kümeyi yeniden taşır) mu, KAPALI (durmuş/ölmüş) mu? Önceden yalnız `team_hub_summary` log satırında, ikisi karışık. Registry ret olduğunda örneğini hemen gönderir (röle tablo değiştirmez). B72 |
 | registry | `joins_refused_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_refused_closed_total`, loadgen telinde GSMY) | kaç katılmayı (resume denemeleri dahil) oda kutusu KAPALI olduğu için reddetti — oda/shard durmuş ya da ölmüş, op'u hiç görmedi, istemci `RoomGone` aldı? Dağıtıcının `MetricsEvent::JoinRefusedClosed`'ı (registry'yi atlar: bütün sunucunun duruşunda registry önce çıkar). Alınıp duruşta düşürülen katılma odanın `joins_unprocessed`/`resumes_unprocessed`'idir, bu değil. B75 |
@@ -3568,8 +3568,10 @@ B62 duruşta OTURUMLARIN elindekini saydı; geri kalanı sayılmıyordu:
 kontrol kanalında (shard'da gelen kutusunda) `Shutdown`'ın arkasında
 kalan — ya da ticker kapandığında orada duran — bağlantı op'ları ve
 shard'ın komşularla uçuştaki işi. Artık `finish` kanalı KAPATIR
-(sonraki gönderim göndericide başarısız olur ve orada sayılır; sayım
-kesindir) ve kalanları sayar, `metrics::StopCounts` (dokuz sayaç,
+(sonraki gönderim göndericide başarısız olur ve ret bir şey
+kaybettiriyorsa orada sayılır — katılma B75, göç `migrations_failed`;
+ayrılma/taşıma ölümü sayılmaz, F55 aşağıda; sayım kesindir) ve kalanları
+sayar, `metrics::StopCounts` (dokuz sayaç,
 `RoomSample::stop`/`RoomReport::stop`; yalnız son örnekte dolu): `Join`
 → `joins_unprocessed` (bağlantının katılmasına dağıtıcı `RoomGone`
 yanıtı verir — cevapsız kalmaz, ama oda onu hiç işlemedi), `Resume` →
@@ -3594,6 +3596,46 @@ göçte gönderici `migrations_out` sayar, alıcı durmuşsa ya
 `migrations_failed` (kutu kapanmıştı) — her göç tam bir yerde. Kilit:
 `room::tests::unread::stop`, `shard::tests::unread::stop`, loadgen
 `wire`.
+
+**Duruşun ayrılma/taşıma-ölümü defteri (F55, sayım turu 8).** Dağıtıcının
+odaya ayrılması (`send_room_leave`) ve taşıma ölümü (`send_room_detach`;
+registry'nin dağıtıcısız iki gönderimi de) oda/shard kutusunu `finish`
+kapattıktan SONRA varırsa reddedilir ve hiçbir yerde sayılmaz; ÖNCE
+varırsa `leaves_unprocessed`/`detaches_unprocessed` olur. Hangisinin
+olacağı zamanlamaya bağlı. **Karar: sayılmıyor; B68'in iki sayacının
+anlamı daraltıldı.** Gerekçe: (1) Kayıp yok. Kutu yalnız `finish`'te (ya
+da görevin ölümüyle, B67) kapanır; `finish` o an tuttuğu HER üyeyi
+bitirmiştir — `on_shutdown` ve maç sonucu koştu, oturumların elindeki
+B62 ile sayıldı (işlenmiş bir ayrılmanın oturum sonunda sayacağı
+okunmamış girdi, borçlu yanıt, uçuştaki istek aynı sayaçlarda). Sonra
+varan op'un etki edeceği üye kalmadı: B68'in kendi ölçütüyle (odanın
+canlı-üye korumaları) bayattır ve bayat op kayıp değildir. Kimse farkı
+görmez: istemci (taşıması ölü, ya da duruşun `ERROR 14`'ünü alıyor;
+LEAVE'in cevabını bağlantı zaten vermiştir), registry (dağıtıcı
+`LeaveDone`/`DetachDone`'u yine gönderir), oyun (dünyası bitti; duruşun
+bitirdiği hiçbir üyede `on_disconnect`/`on_leave` koşmaz). (2) Gönderici
+tek anlamlı sayamaz. Dağıtıcı üyeliği bağlantı kapanana dek tutar: yok
+edilen ya da ölen odanın üyesi saatler sonra kopunca aynı reddi alır,
+oda üyeliği bir hükümle (atma, idle) bitirdiyse de — sayaç "duruşun
+yuttuğu" ile "çoktan bitmiş üyelik"i karıştırırdı. Sharded odada yayın
+op'u her shard'a gider ve B68 onu yalnız sahip shard'da sayar; dağıtıcı
+reddeden shard'ın sahip olup olmadığını bilmez — "herhangi biri
+reddetti" çift sayar, "hepsi reddetti" kaçırır. Kesin sayım üyelik başına
+odanın çözdüğü bir işaret isterdi (her Join/Resume yanıtına, satıra, göç
+yüküne) — kayıp olmayan bir şey için. **Daralan anlam:**
+`leaves_unprocessed`/`detaches_unprocessed` duruşun DEFTERİdir — oda/shard
+kanalına ALDIĞI ve üye hâlâ oradayken işlemediği op'lar; duruşun
+geçersiz kıldığı her ayrılma/taşıma ölümü değil. HELP metinleri de öyle
+der. Aynı gerekçe F53'ün kararıyla tutarlı: registry kutusunda
+`Shutdown`'ın arkasında kalan `DespawnPlayer`/`ConnClosed` da sayılmıyor.
+Kilit (iki varış sırası da deterministik):
+`registry::actor::conns::ops::tests::superseded` (oda aldı → sayaç
+yok, odanın duruşu sayar; oda durmuştu → ret, dağıtıcı yine
+`DetachDone`/`LeaveDone` + `OpsClosed`, sayaç yok; bir shard açık biri
+kapalı yayın) ve
+`room::tests::unread::stop::a_live_members_detach_is_the_stops_count_only_if_it_was_taken`
+(alınmış → `detaches_unprocessed = 1`, reddedilmiş → 0; üyenin sonu iki
+sırada da B62 ile sayılır).
 
 **Panikle ölen oda/shard (B67, sayım turu 4).** Panikleyen görev
 `finish`'e hiç varmaz: son örnek gitmez, son penceresi ve elinde

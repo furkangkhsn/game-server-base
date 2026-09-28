@@ -18,7 +18,9 @@ where
     /// count what it holds, by op: a `Join`/`Resume` was never admitted
     /// (its dropped reply makes the dispatcher answer `RoomGone`); a
     /// `Leave`/`Detach` only when it would have acted here — the stale
-    /// guards of `handle_control` — since a stale one loses nothing.
+    /// guards of `handle_control` — since a stale one loses nothing. A
+    /// later `Join`/`Resume` is counted by its dispatcher (B75); a later
+    /// `Leave`/`Detach` nowhere — this stop has ended the member (F55).
     pub(in crate::room) fn count_queued_ops(&mut self) {
         self.control_rx.close();
         while let Ok(op) = self.control_rx.try_recv() {

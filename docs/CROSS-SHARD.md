@@ -177,7 +177,9 @@ ShardMsg::RemoteEffect(RemoteEffect {
   `border_updates_unapplied` (`Border` + `ResyncRequest` — ikisi de görünüm
   kopyası; kaynak hâlâ tutar), ve odanınkiyle aynı dört op sayacı
   (`joins_unprocessed` … — yayın op'ları yalnız etki edeceği shard'da:
-  üyenin sahibi, parkı tutan). CONTROL fazının `Shutdown`'dan sonra
+  üyenin sahibi, parkı tutan; kapanıştan sonra reddedilen ayrılma/taşıma
+  ölümü hiçbir yerde sayılmaz — dağıtıcı reddeden shard'ın sahip olup
+  olmadığını bilemez ve üyeyi duruş zaten bitirdi, DESIGN §12 F55). CONTROL fazının `Shutdown`'dan sonra
   işlemediği mesajlar da (önceden boşaltılan vec'le birlikte sayılmadan
   ölüyordu) ertelenmiş kuyrukta sayıma kalır.
 

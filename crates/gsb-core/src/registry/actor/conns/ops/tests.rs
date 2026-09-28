@@ -13,6 +13,8 @@ use crate::room::{Action, RoomControl};
 
 // Where the dispatcher counts a join the room refused (B75).
 mod refused;
+// Its leave and detach at a room's stop, in both arrival orders (F55).
+mod superseded;
 
 type Reg = Registry<(), (), (), ()>;
 

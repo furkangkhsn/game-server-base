@@ -7,9 +7,17 @@
 //!
 //! Counted once, at `finish()`, after the channel is closed (so nothing
 //! can join them afterwards: a later send fails at its sender, which
-//! counts it as its own), and reported with the final sample
+//! counts it where the refusal loses something — a join is the
+//! dispatcher's `joins_refused_closed` (B75), a migration the
+//! neighbour's `migrations_failed`), and reported with the final sample
 //! ([`crate::metrics::MetricsEvent::RoomFinal`]) — cumulative, like the
 //! rest of the row. Zero on every periodic sample.
+//!
+//! The leave and detach counts are the stop's LEDGER of what it held, not
+//! every leave or detach the stop superseded (BACKLOG F55): one arriving
+//! after the close is refused at its sender and counted nowhere — the
+//! stop had already ended the member, so it lost nothing, and whether an
+//! op lands before or after the close is a matter of timing.
 
 /// Declares [`StopCounts`] and its whole-set operations (so a field
 /// added to the list cannot be left out of one of them).
@@ -64,11 +72,14 @@ stop_counts! {
     resumes_unprocessed,
     /// `Leave` ops still queued at the stop that would have despawned a
     /// member here (the stale-leave guard passes; on a shard, the owning
-    /// one). No answer is owed; the stop ends the member anyway.
+    /// one). No answer is owed; the stop ends the member anyway. The
+    /// ledger of what the stop HELD: a leave refused after the close is
+    /// not in it, nor anywhere (F55, see the module docs).
     leaves_unprocessed,
     /// `Detach` ops (a member's transport died) still queued at the stop
     /// that would have asked the game's disconnect policy here: the
-    /// policy never ran.
+    /// policy never ran. The ledger of what the stop HELD: a detach
+    /// refused after the close is not in it, nor anywhere (F55).
     detaches_unprocessed,
     /// Shard: entities (players and NPCs) migrating INTO this shard —
     /// sent by a neighbour, counted there as `migrations_out` — still in

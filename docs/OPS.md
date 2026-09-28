@@ -656,7 +656,11 @@ max_detach_hold_secs = "off"
   resume (shard'da yalnız kimliği park etmiş shard'da);
   `leaves_unprocessed` / `detaches_unprocessed` — burada etki edecek
   ayrılma / taşıma ölümü (bayatlar sayılmaz; `on_disconnect` hiç
-  koşmadı); yalnız shard'da: `migrations_in_dropped` (gelen göç,
+  koşmadı). Bu ikisi duruşun DEFTERİDİR (F55): kanal kapandıktan sonra
+  varan ayrılma/taşıma ölümü dağıtıcıda reddedilir ve hiçbir yerde
+  sayılmaz — üyeyi duruş zaten bitirdi, oturumunun elindeki B62 ile
+  sayıldı; hangisinin kanala önce girdiği zamanlamaya bağlıdır, iki
+  duruşu bu sayılarla kıyaslamayın; yalnız shard'da: `migrations_in_dropped` (gelen göç,
   kurulmadı; göç eden oyuncunun okunmamış girdisi
   `requests_dropped_unread`/`actions_dropped_unread`'e),
   `effects_unsent` (yeniden deneme tamponu + tick'in giden kuyruğu),

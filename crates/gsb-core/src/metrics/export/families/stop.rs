@@ -19,12 +19,12 @@ pub(super) const STOP: [RoomFamily; 9] = [
     ),
     counter(
         "gsb_room_leaves_unprocessed_total",
-        "Leave ops for a member here still queued when the room/shard stopped, cumulative.",
+        "Leave ops for a member here that the room/shard had taken and still held when it stopped (its ledger: a leave refused after the stop closed its inbox is counted nowhere, the stop having ended the member), cumulative.",
         |r| r.stop.leaves_unprocessed,
     ),
     counter(
         "gsb_room_detaches_unprocessed_total",
-        "Detach ops (a member's transport died) still queued when the room/shard stopped: the disconnect policy never ran, cumulative.",
+        "Detach ops (a member's transport died) that the room/shard had taken and still held when it stopped: the disconnect policy never ran (its ledger: a detach refused after the stop closed its inbox is counted nowhere, the stop having ended the member), cumulative.",
         |r| r.stop.detaches_unprocessed,
     ),
     counter(

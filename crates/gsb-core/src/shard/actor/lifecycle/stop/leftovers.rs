@@ -22,7 +22,9 @@ where
     /// Close the inbox (a later send fails at its sender: a neighbour's
     /// migration stays with the neighbour as `migrations_failed`; a
     /// connection's refused join is counted by its dispatcher as
-    /// `joins_refused_closed` — B75) and count every leftover by kind.
+    /// `joins_refused_closed` — B75; a refused leave or detach nowhere,
+    /// this stop having ended the member — F55) and count every leftover
+    /// by kind.
     /// The broadcast ops (`Leave`, `Detach`, `Resume` reach every shard
     /// of the room) count only where they would have acted: the owning
     /// member's shard, the shard holding the parked identity.

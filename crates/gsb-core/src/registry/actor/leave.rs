@@ -150,6 +150,19 @@ where
     /// shards (exactly one owns the connection; the entity-id guard makes
     /// the others no-ops, and the epoch travels so a late migration of the
     /// same join is rejected — see `crate::shard`).
+    ///
+    /// A refused send is not counted, here or in [`Self::send_room_detach`]
+    /// and the two dispatcher-less sends above (BACKLOG F55): a room's
+    /// inbox closes only in its stop (`finish`) or with its task, and the
+    /// stop has already ended every member it held — counting what their
+    /// sessions took along (B62) and the leave/detach ops it had TAKEN
+    /// (B68, `leaves_unprocessed` / `detaches_unprocessed`). An op that
+    /// arrives after has nothing left to act on, and the sender could not
+    /// count it with one meaning anyway: it cannot tell a membership the
+    /// stop ended from one the room had ended long before (a destroy, a
+    /// kick — the dispatcher keeps the membership until the connection
+    /// closes), nor, on a sharded room, whether the refusing shard owned
+    /// the member.
     pub(super) async fn send_room_leave(
         conn: ConnectionId,
         entity: EntityId,

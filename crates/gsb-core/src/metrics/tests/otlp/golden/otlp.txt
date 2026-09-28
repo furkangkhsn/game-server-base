@@ -407,10 +407,10 @@ gsb_room_joins_unprocessed sum t=2 mono=true unit="" n=2 | Join ops still queued
 gsb_room_resumes_unprocessed sum t=2 mono=true unit="" n=2 | Resume attempts still queued when the room/shard stopped (on a shard: the one holding the parked identity), never looked up, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
-gsb_room_leaves_unprocessed sum t=2 mono=true unit="" n=2 | Leave ops for a member here still queued when the room/shard stopped, cumulative.
+gsb_room_leaves_unprocessed sum t=2 mono=true unit="" n=2 | Leave ops for a member here that the room/shard had taken and still held when it stopped (its ledger: a leave refused after the stop closed its inbox is counted nowhere, the stop having ended the member), cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
-gsb_room_detaches_unprocessed sum t=2 mono=true unit="" n=2 | Detach ops (a member's transport died) still queued when the room/shard stopped: the disconnect policy never ran, cumulative.
+gsb_room_detaches_unprocessed sum t=2 mono=true unit="" n=2 | Detach ops (a member's transport died) that the room/shard had taken and still held when it stopped: the disconnect policy never ran (its ledger: a detach refused after the stop closed its inbox is counted nowhere, the stop having ended the member), cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
 gsb_room_migrations_in_dropped sum t=2 mono=true unit="" n=2 | Entities migrating into a shard (its neighbour's migrations_out) still in its inbox when it stopped, never installed, cumulative.
