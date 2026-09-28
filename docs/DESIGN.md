@@ -1361,7 +1361,9 @@ uygular — tavanı aşmak hata değil. (4) *UDP kapıları kuyruksuz:* rUDP ve
 QUIC'in fırtına karşılığı soketin alma arabelleği (`SO_RCVBUF`, B4) —
 ayrı düğme, bu turda yok. Yeni bağımlılık yok (`socket2` yerine
 tokio'nun `TcpSocket`'i; `socket2` zaten `gsb-server`'ın doğrudan
-bağımlılığı, `gsb-net`'e eklenmedi).
+bağımlılığı, `gsb-net`'e eklenmedi). Ölçüm: RPC-CONTROL-PLANE §8.2
+"B84"; loadgen `--listen-backlog N` (in-process ve `--serve` sunucusu;
+orkestratör sunucu çocuğuna iletir).
 
 *Elenenler.* (a) *Kapı başına değer* (`[[listeners]]` girdisinde alan) —
 ölçülmüş bir ihtiyaç yok; kapıların hepsi aynı katılma patlamasını

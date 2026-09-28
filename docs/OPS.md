@@ -217,7 +217,8 @@ listen_backlog = 4096   # vars. 128; çekirdek somaxconn'da keser
   Linux'ta `nstat -az TcpExtListenOverflows` (ya da
   `/proc/net/netstat`'ın `ListenOverflows`'u) patlama boyunca artar,
   istemcilerin bağlanma süresi ~1 sn'ye (SYN yeniden gönderimi) sıçrar.
-  Beklenen patlamanın boyuna göre boyutlanır (SECURITY §4.4).
+  Beklenen patlamanın boyuna göre boyutlanır (SECURITY §4.4); ölçüm:
+  RPC-CONTROL-PLANE §8.2 "B84".
 
 ## 3. Tel/format detayları
 

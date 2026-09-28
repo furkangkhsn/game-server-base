@@ -109,6 +109,10 @@ pub(super) fn server_args(args: &Args, pinned_cores: Option<usize>) -> Vec<Strin
         sargs.push("--conn-out".into());
         sargs.push(n.to_string());
     }
+    if let Some(n) = args.listen_backlog {
+        sargs.push("--listen-backlog".into());
+        sargs.push(n.to_string());
+    }
     if let Some(f) = args.disconnect_grace_secs {
         sargs.push("--disconnect-grace-secs".into());
         sargs.push(f.to_string());

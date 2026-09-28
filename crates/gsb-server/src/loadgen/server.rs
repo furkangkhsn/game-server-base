@@ -26,6 +26,8 @@ pub(crate) struct ServerOverrides {
     pub(crate) disconnect_grace_secs: Option<f64>,
     /// The MMO's `[mmo] crystallize` (`None` = the MMO's default, on).
     pub(crate) mmo_crystallize: Option<bool>,
+    /// The door's accept backlog (`None` = config default, B84).
+    pub(crate) listen_backlog: Option<u32>,
 }
 
 pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -43,6 +45,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(n) = o.conn_out {
         cfg.conn_out = n;
+    }
+    if let Some(n) = o.listen_backlog {
+        cfg.listen_backlog = n;
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);
@@ -175,6 +180,7 @@ mod tests {
             conn_out: None,
             disconnect_grace_secs: None,
             mmo_crystallize: None,
+            listen_backlog: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &none);
@@ -188,5 +194,26 @@ mod tests {
             let got = cfg.raw["mmo"]["crystallize"].as_bool();
             assert_eq!(got, Some(on));
         }
+    }
+
+    /// `--listen-backlog` (B84) lands in the config's `listen_backlog`;
+    /// unset, the config default stays.
+    #[test]
+    fn the_listen_backlog_override_sets_the_config_key() {
+        let o = |listen_backlog| ServerOverrides {
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            conn_out: None,
+            disconnect_grace_secs: None,
+            mmo_crystallize: None,
+            listen_backlog,
+        };
+        let mut cfg = gsb_server::Config::default();
+        apply_overrides(&mut cfg, &o(None));
+        assert_eq!(cfg.listen_backlog, gsb_net::listen::DEFAULT_LISTEN_BACKLOG);
+        apply_overrides(&mut cfg, &o(Some(4096)));
+        assert_eq!(cfg.listen_backlog, 4096);
     }
 }

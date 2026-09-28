@@ -135,6 +135,21 @@ fn the_outbound_capacity_goes_to_the_server_only() {
     );
 }
 
+/// `--listen-backlog` is a server knob (B84): the served server's doors
+/// get it; unset, the served server keeps its config default.
+#[test]
+fn the_listen_backlog_goes_to_the_server_only() {
+    let mut args = Args::defaults();
+    let flag = "--listen-backlog";
+    assert_eq!(value_of(&server_args(&args, None), flag), None);
+    args.listen_backlog = Some(4096);
+    assert_eq!(value_of(&server_args(&args, None), flag), Some("4096"));
+    assert_eq!(
+        value_of(&client_args(&args, 10, 0, door(), None), flag),
+        None
+    );
+}
+
 /// The slow reader is a client knob: every client child stalls the same
 /// way, the server never hears of it.
 #[test]

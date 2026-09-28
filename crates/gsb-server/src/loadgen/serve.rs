@@ -61,6 +61,7 @@ pub(crate) async fn serve(args: Args) {
             conn_out: args.conn_out,
             disconnect_grace_secs: args.disconnect_grace_secs,
             mmo_crystallize: args.mmo_crystallize,
+            listen_backlog: args.listen_backlog,
         },
     );
     // Every door is bound before the SERVING line goes out (BACKLOG

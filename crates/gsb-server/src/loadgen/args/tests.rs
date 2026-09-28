@@ -18,7 +18,7 @@ fn refused(argv: &[&str]) -> String {
 /// Each kind of refusal, with its message.
 #[test]
 fn a_bad_line_is_an_error_with_its_reason() {
-    let cases: [(&[&str], &str); 13] = [
+    let cases: [(&[&str], &str); 15] = [
         (&["--duration"], "--duration needs a value (try --help)"),
         (
             &["--duration", "x"],
@@ -42,6 +42,14 @@ fn a_bad_line_is_an_error_with_its_reason() {
         (&["0"], "N must be > 0"),
         (&["--capture-clients", "0"], "--capture-clients must be > 0"),
         (&["--conn-out", "0"], "--conn-out must be at least 1"),
+        (
+            &["--listen-backlog", "0"],
+            "--listen-backlog must be 1..=2147483647 (the kernel caps it at somaxconn)",
+        ),
+        (
+            &["--listen-backlog", "2147483648"],
+            "--listen-backlog must be 1..=2147483647 (the kernel caps it at somaxconn)",
+        ),
         (&["--stall-ms", "0"], "--stall-ms must be > 0"),
         (
             &[
@@ -93,6 +101,11 @@ fn a_good_line_parses() {
         panic!("a run");
     };
     assert_eq!(args.conn_out, Some(2));
+    assert_eq!(args.listen_backlog, None);
+    let Ok(Cli::Run(args)) = line(&["--listen-backlog", "4096"]) else {
+        panic!("a run");
+    };
+    assert_eq!(args.listen_backlog, Some(4096));
     let Ok(Cli::Run(args)) = line(&["--stall-ms", "900", "--stall-every-ms", "3000"]) else {
         panic!("a run");
     };

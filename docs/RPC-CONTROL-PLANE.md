@@ -922,6 +922,54 @@ hepsinin nedeni kod değil: worker sayısı (B37), sonradan gelen kodlama
 turları (A10/A30/A31) ya da makine hâli (aynı günün A/B'sinde eski
 ağaç aynı sayıları veriyor). Ham çıktılar commit'lenmedi.
 
+**B84: dinleme kuyruğu (2026-09-28).** Okuma 4'ün katılma fırtınası
+motorun `listen_backlog` anahtarıyla (DESIGN §6, OPS §2) ve loadgen'in
+`--listen-backlog N`'iyle (in-process ve `--serve` sunucusu;
+orkestratör sunucu çocuğuna iletir, istemcilere değil) yeniden ölçüldü.
+Komut B50'ninki: `GSB_LOADGEN_CLIENT_LINES=1 gsb-loadgen 1000
+--orchestrate --procs 2 --visibility spatial --duration 8`, release,
+çocuklar varsayılan worker'larla; her koşudan önce yükün 1 dk
+ortalaması < 5 beklendi (kabul edilen koşularda 2,5–4,9; makinede başka
+bir projenin testleri koşuyordu, yük inene dek beklendi). Beş
+yapılandırma sırayla, üç tur (her turda sırayla bir koşu). Taşma sayısı
+`/proc/net/netstat`'ın `TcpExtListenOverflows`'unun koşu boyunca
+farkı (sistem geneli); etkin kuyruk koşu sırasında `ss -ltnp`'nin oyun
+kapısı için Send-Q'su.
+
+| Yapılandırma | etkin kuyruk | `ListenOverflows` | `joined` | connect p50 / p99 ms | `snap_total` |
+|---|---|---|---|---|---|
+| `main` @ `21460c5` (değişiklikten önce) | 128 | 1228 · 1080 · 1235 | 990 · 1000 · 938 | 49/2078 · 1014/2084 · 49/2059 | 216 640 · 215 045 · 206 953 |
+| bu tur, varsayılan | 128 | 1611 · 997 · 1268 | 852 · 1000 · 989 | 1028/1068 · 41/1077 · 1039/2083 | 186 460 · 220 150 · 209 702 |
+| bu tur, `--listen-backlog 1024` | 1024 | **0 · 0 · 0** | **1000 ×3** | 11/47 · 14/42 · 15/45 | 231 194 · 231 864 · 231 624 |
+| bu tur, `--listen-backlog 4096` | 4096 | **0 · 0 · 0** | **1000 ×3** | 20/49 · 16/47 · 10/29 | 231 394 · 231 608 · 231 801 |
+| bu tur, `--stagger-ms 1` (1 sn yayılma) | 128 | **0 · 0 · 0** | **1000 ×3** | 0/0 · 0/5 · 0/0 | 225 414 · 224 945 · 225 409 |
+
+Her koşuda `connected = 1000`, `errors = server_closes = dropped = 0`,
+`left = joined`. Kuyruk 128'deyken SYN kuyruğu da doluyor:
+`TCPReqQFullDoCookies` koşu başına 90–356 (SYN cookie'leri devrede —
+Linux'ta yarım açık istek kuyruğu da aynı değerle sınırlı); 1024/4096
+ve stagger'da 0.
+
+*Okuma.* (1) **Taşmanın nedeni 128'lik kuyruk** — 1000 istemcilik
+fırtına onu koşu başına ~1000–1600 kez taşırıyor; kuyruk istemci
+sayısını aşınca taşma 0, bütün istemciler katılıyor, connect p99 ~2 sn
+→ < 50 ms. `snap_total` +%7–12 (eksik katılım ve geç katılanların
+kaybettiği saniyeler bitti), `out_bps_per_conn` 44 774–62 298 → 69 019–
+69 888; adım p50/p90 fine µs stagger'sız dört satırda aynı bantta
+(1624–1880 / 2616–3608).
+(2) **Varsayılan davranış değişmedi:** bu turun varsayılanı `main` ile
+aynı bantta (etkin kuyruk ikisinde de 128; taşma 997–1611 ↔ 1080–1235,
+`joined` 852–1000 ↔ 938–1000 — B50'nin 869–997'si). (3) **Stagger ayrı
+bir soru:** 1 ms'lik yayılma fırtınayı kaldırıyor (connect ~0 ms), ama
+patlamanın kendisini de — kabul yolunun en kötü hâli artık ölçülmüyor
+ve yayılma pencereden yiyor (`snap_total` 225 k ↔ 231 k). Ölçüm
+düzeneği için karar: fırtına ölçülmek isteniyorsa `--listen-backlog`
+≥ istemci sayısı (çekirdek `somaxconn`'da keser); katılmaların zamana
+yayıldığı bir oyun modellenmek isteniyorsa `--stagger-ms`. Loadgen'in
+varsayılanı değişmedi (sunucu config'inin 128'i) — kayıttaki bütün
+tabanlar aynı koşulda kalsın diye; kuyruğu büyütülmüş koşular bundan
+sonra komut satırında `--listen-backlog` taşır.
+
 **Sunucu çocuğunun portları (F31, düzeltildi).** Orkestratör sunucu
 çocuğunun oyun ve metrik portlarını kendisi seçiyordu (`alloc_port`:
 `127.0.0.1:0`'a bağla, numarayı oku, kapat, çocuğa `--bind`/

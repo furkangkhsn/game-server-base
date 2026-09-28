@@ -131,7 +131,12 @@ struct Args {
     /// accept path in its worst case (edge-triggered wakeup per state
     /// change; see the load-test report); a stagger models the realistic
     /// trickle of players joining over time. Fractional values allowed
-    /// (10k clients × 0.5 ms = 5 s of spread).
+    /// (10k clients × 0.5 ms = 5 s of spread). The other cure for a
+    /// storm that overflows the server's accept queue (B84) is a larger
+    /// `--listen-backlog`: it keeps the storm (the admission path's worst
+    /// case) and only stops the kernel from dropping its SYNs; a stagger
+    /// removes the storm — use it when the run should model joins spread
+    /// over time, and mind that the spread comes out of `--duration`.
     stagger_ms: f64,
     addr: Option<String>,
     /// The movement profile of this process's clients (see [`Profile`]).
@@ -222,6 +227,15 @@ struct Args {
     /// batch when its channel is full: a small value makes a reader that
     /// falls a few ticks behind lose batches (the F11 measurement).
     conn_out: Option<usize>,
+    /// The accept backlog of the in-process / served server's TCP-based
+    /// door (`--listen-backlog N`, BACKLOG B84; unspecified = the server
+    /// config default, 128 — tokio's own). A join storm of N clients
+    /// with default workers overflows a 128 queue (Linux counts it as
+    /// `TcpExtListenOverflows`); the overflowed clients retry after a
+    /// second and a short run can end before they join. Give it at least
+    /// the client count (the kernel caps it at `somaxconn`), or spread
+    /// the connects with `--stagger-ms`.
+    listen_backlog: Option<u32>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -395,6 +409,13 @@ Server options (in-process server, --serve, or the orchestrator's server):
   --conn-out N                        per-connection outbound batch
                                        capacity (default: the server config
                                        default, 256); small = fan-out drops
+  --listen-backlog N                  accept backlog of the server's door
+                                       (default: the server config default,
+                                       128; the kernel caps it at
+                                       somaxconn). A join storm of more
+                                       clients than this overflows it and
+                                       the overflowed ones retry after 1 s:
+                                       give it >= N, or use --stagger-ms
 
   --disconnect-grace-secs F           [demo] disconnect-park grace (default:
                                        the server config default, 30)

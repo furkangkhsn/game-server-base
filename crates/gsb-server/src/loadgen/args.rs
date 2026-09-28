@@ -44,6 +44,7 @@ impl Args {
             idle_timeout_secs: None,
             write_stall_secs: None,
             conn_out: None,
+            listen_backlog: None,
             flood_id: None,
             churn_secs: None,
             churn_cycles: 0,
@@ -208,6 +209,14 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                 let n: usize = number(&a, v()?)?;
                 refuse_unless(n >= 1, "--conn-out must be at least 1")?;
                 args.conn_out = Some(n);
+            }
+            "--listen-backlog" => {
+                let n: u32 = number(&a, v()?)?;
+                refuse_unless(
+                    gsb_net::listen::listen_backlog_problem(n).is_none(),
+                    "--listen-backlog must be 1..=2147483647 (the kernel caps it at somaxconn)",
+                )?;
+                args.listen_backlog = Some(n);
             }
             "--flood-id" => args.flood_id = Some(number(&a, v()?)?),
             "--churn-secs" => {
