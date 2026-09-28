@@ -112,13 +112,13 @@ mod tests;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Component, Entity};
+use bevy_ecs::prelude::{Component, Entity, With};
 use gsb_core::id::PlayerId;
 
 use crate::codec::RecordCodec;
-use crate::common::{Baselines, InputSeq, ParkEntry, ParkPolicy, SetLedger};
+use crate::common::{Baselines, Cached, InputSeq, Orphans, ParkEntry, ParkPolicy, SetLedger};
 use crate::game::{Game, TeamGame, Wire};
-use crate::identity::Minter;
+use crate::identity::{Minter, WireId};
 use crate::space::Vision;
 
 /// A player's team — the team-fog group key. How many teams exist is
@@ -160,6 +160,20 @@ pub struct TeamMember(pub Team);
 type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
 /// The game's record query (the codec's `Query`).
 type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
+
+/// The team rooms' record query (this room's rebuild, the sharded team
+/// room's `known`): every broadcastable entity's wire identity, record
+/// components, vision position and team, if it has them. Kept by the
+/// room across ticks (`crate::common::Cached`, A12).
+pub(crate) type Sighted<G, P> = Cached<
+    (
+        &'static WireId,
+        RecordQuery<G>,
+        Option<&'static P>,
+        Option<&'static TeamMember>,
+    ),
+    With<Marker<G>>,
+>;
 
 /// One unit's record in the per-tick cache: wire id, wire value (what
 /// the snapshot carries), and the vision position (what the vision test
@@ -233,6 +247,10 @@ pub struct TeamRoom<G: TeamGame, V: Vision> {
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
+    /// The rebuild's query and the orphan query, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    sighted: Sighted<G, V::Pos>,
+    orphans: Orphans<Marker<G>>,
 }
 
 // Faz 1 trait split: shared hooks on the `GameLogic` supertrait; no

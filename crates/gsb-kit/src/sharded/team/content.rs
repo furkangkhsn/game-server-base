@@ -4,21 +4,15 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use bevy_ecs::prelude::{With, World};
+use bevy_ecs::prelude::World;
 use bytes::{Bytes, BytesMut};
 use gsb_core::shard::{BorderRecord, TeamExport, TeamImports, TeamRecord};
 
 use crate::codec::RecordCodec;
 use crate::common::SetLedger;
-use crate::game::{Game, ShardGame, TeamGame, Wire};
-use crate::identity::WireId;
+use crate::game::{ShardGame, TeamGame, Wire};
 use crate::sharded::team::*;
 use crate::space::{Partition, Vision};
-
-/// The game's broadcast marker (the codec's `Marker`).
-type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
-/// The game's record query (the codec's `Query`).
-type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
 /// One record this shard knows typed: its wire id, wire value, vision
 /// position (if any) and team (own entities only — a lent record's team
@@ -154,18 +148,14 @@ where
     /// then the lent records (the core already dropped a lent copy of an
     /// own entity — own wins).
     fn known(
-        &self,
+        &mut self,
         world: &mut World,
         borrowed: &[BorderRecord<Wire<G>>],
     ) -> Vec<Known<Wire<G>, V::Pos>> {
         let codec = self.inner.game.codec();
-        let mut query = world.query_filtered::<(
-            &WireId,
-            RecordQuery<G>,
-            Option<&V::Pos>,
-            Option<&TeamMember>,
-        ), With<Marker<G>>>();
-        let mut known: Vec<Known<Wire<G>, V::Pos>> = query
+        let mut known: Vec<Known<Wire<G>, V::Pos>> = self
+            .sighted
+            .state(world)
             .iter(world)
             .map(|(wire, item, pos, member)| Known {
                 wire: wire.get(),

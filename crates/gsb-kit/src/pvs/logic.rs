@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{With, World};
+use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -14,14 +14,8 @@ use gsb_core::room::{
 use crate::codec::RecordCodec;
 use crate::common::{put_entity_records, write_full_header};
 use crate::game::Game;
-use crate::identity::WireId;
 use crate::pvs::*;
 use crate::space::SectorMap;
-
-/// The game's broadcast marker (the codec's `Marker`).
-type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
-/// The game's record query (the codec's `Query`).
-type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
 impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     type GroupKey = M::Sector;
@@ -222,7 +216,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         // never silently invisible. Done here (before the bucket build)
         // so freshly-stamped entities are in the buckets the broadcast
         // phase reads.
-        crate::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
 
         // Bucket the world by sector, once per tick (each entity exactly
         // once); a sector's snapshot is the union of the buckets its
@@ -230,9 +224,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         // lands in the containment sector.
         self.buckets.clear();
         let codec = self.game.codec();
-        let mut query =
-            world.query_filtered::<(&WireId, RecordQuery<G>, Option<&M::Pos>), With<Marker<G>>>();
-        for (wire_id, item, pos) in query.iter(world) {
+        for (wire_id, item, pos) in self.placed.state(world).iter(world) {
             let s = match pos {
                 Some(pos) => self.map.sector_of(pos),
                 None => self.map.outside(),

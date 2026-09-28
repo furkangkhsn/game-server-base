@@ -1,7 +1,7 @@
 //! The sharding half: this room's index, wire-id counter, neighbours, and
 //! the migration/border callbacks the shard actor drives.
 
-use bevy_ecs::prelude::{Entity, With, World};
+use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::shard::{
@@ -11,7 +11,6 @@ use gsb_core::shard::{
 
 use crate::common::ParkEntry;
 use crate::game::{ShardGame, Wire};
-use crate::identity::WireId;
 use crate::sharded::room::*;
 use crate::space::Partition;
 
@@ -57,11 +56,9 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         // reported to exactly one neighbor.
         let mut crossing: Vec<(Entity, u64)> = Vec::new();
         {
-            let mut query = world
-                .query_filtered::<(Entity, &WireId, &P::Pos, RecordQuery<G>), With<Marker<G>>>();
             let crystal = self.crystal.as_ref();
             let codec = self.game.codec();
-            for (entity, wire, pos, record) in query.iter(world) {
+            for (entity, wire, pos, record) in self.queries.crossing.state(world).iter(world) {
                 let region = crystal
                     .and_then(|c| c.anchor(wire.get()))
                     .unwrap_or_else(|| self.partition.region_of(pos));

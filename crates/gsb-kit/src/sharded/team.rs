@@ -39,11 +39,11 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 
-use crate::common::{Baselines, SetLedger};
+use crate::common::{Baselines, Cached, SetLedger};
 use crate::game::{ShardGame, TeamGame, Wire};
 use crate::sharded::*;
 use crate::space::{Partition, Vision};
-use crate::team::{Team, TeamMember};
+use crate::team::{Sighted, Team, TeamMember};
 
 mod budget;
 mod content;
@@ -121,6 +121,9 @@ where
     pub(in crate::sharded) tick: u64,
     /// Records encoded in the latest broadcast phase.
     pub(in crate::sharded) encoded: u64,
+    /// The own-record query of `known`, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    pub(in crate::sharded) sighted: Sighted<G, V::Pos>,
 }
 
 impl<G, P, V> ShardedTeamRoom<G, P, V>
@@ -152,6 +155,7 @@ where
             step: 0,
             tick: 0,
             encoded: 0,
+            sighted: Cached::default(),
         }
     }
 

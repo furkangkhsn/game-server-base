@@ -4,7 +4,7 @@
 //!
 //! NOT split further: a trait impl is one block.
 
-use bevy_ecs::prelude::{With, World};
+use bevy_ecs::prelude::World;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -14,21 +14,15 @@ use gsb_core::rpc::RequestDecision;
 use crate::codec::RecordCodec;
 use crate::common::{put_entity_records, write_full_header};
 use crate::game::{Game, Wire};
-use crate::identity::WireId;
 use crate::room::*;
-
-/// The game's broadcast marker (the codec's `Marker`).
-type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
-/// The game's record query (the codec's `Query`).
-type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
 impl<G: Game> OpenRoom<G> {
     /// Every broadcastable entity's `(wire id, wire value)`, in query
     /// order.
-    fn collect_records(&self, world: &mut World) -> Vec<(u64, Wire<G>)> {
+    fn collect_records(&mut self, world: &mut World) -> Vec<(u64, Wire<G>)> {
         let codec = self.game.codec();
-        let mut query = world.query_filtered::<(&WireId, RecordQuery<G>), With<Marker<G>>>();
-        query
+        self.records
+            .state(world)
             .iter(world)
             .map(|(wire_id, item)| (wire_id.get(), codec.wire(item)))
             .collect()
@@ -72,7 +66,7 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
         // for the two-pass pattern and idempotence). The record query
         // below runs *after* the stamps, so it sees every broadcastable
         // entity exactly once (stamped and pre-stamped alike).
-        crate::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
         // The broadcastable state (wire id, wire value).
         let current = self.collect_records(world);
 

@@ -306,7 +306,7 @@ where
         self.group_full_emitted.clear();
         self.tick = ctx.tick;
         self.book
-            .dirty_pass(world, self.inner.game.codec(), &self.space);
+            .dirty_pass(&mut self.dirty, world, self.inner.game.codec(), &self.space);
         self.book.apply_removals();
         // Every despawn nobody parked (game code despawning an NPC —
         // §8.2), read before this tick's change-window close.

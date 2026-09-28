@@ -4,12 +4,11 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{With, World};
+use bevy_ecs::prelude::World;
 
 use crate::codec::RecordCodec;
 use crate::common::SetLedger;
 use crate::game::TeamGame;
-use crate::identity::WireId;
 use crate::space::Vision;
 use crate::team::*;
 
@@ -27,6 +26,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             neutral,
             cells,
             contents,
+            sighted,
             ..
         } = self;
         for units in team_units.iter_mut() {
@@ -42,13 +42,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         // neutral (ownerless): broadcast to ALL teams — the broadcast set
         // stays exactly the codec's marker.
         let codec = game.codec();
-        let mut query = world.query_filtered::<(
-            &WireId,
-            RecordQuery<G>,
-            Option<&V::Pos>,
-            Option<&TeamMember>,
-        ), With<Marker<G>>>();
-        for (wire_id, item, pos, member) in query.iter(world) {
+        for (wire_id, item, pos, member) in sighted.state(world).iter(world) {
             let wire = codec.wire(item);
             match member {
                 Some(&TeamMember(team)) => {

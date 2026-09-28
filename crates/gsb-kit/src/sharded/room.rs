@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Entity, With, Without, World};
+use bevy_ecs::prelude::{Entity, World};
 use gsb_core::id::PlayerId;
 use gsb_core::room::TickCtx;
 use gsb_core::shard::{BorderRecord, CrossSeam};
@@ -20,12 +20,13 @@ use crate::space::Partition;
 mod join;
 mod logic;
 mod policy;
+mod queries;
 mod shard;
+
+pub(in crate::sharded) use queries::Queries;
 
 /// The game's broadcast marker (the codec's `Marker`).
 type Marker<G> = <<G as Game>::Codec as RecordCodec>::Marker;
-/// The game's record query (the codec's `Query`).
-type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
 /// The sharded-room shard logic: one region of the partition (see
 /// module docs).
@@ -109,6 +110,10 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// the doomed copies the game's hooks of the next tick do not see
     /// (`crate::sharded::departing`).
     pub(in crate::sharded) departures: Departures<Wire<G>>,
+    /// The shard's world queries, kept across ticks
+    /// (`crate::common::Cached`, A12): the orphan stamp, the border
+    /// export, the own records and the migration scan.
+    pub(in crate::sharded) queries: Queries<G, P>,
 }
 
 impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
@@ -137,6 +142,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             input: InputSeq::default(),
             crystal: None,
             departures: Departures::default(),
+            queries: Queries::default(),
         }
     }
 
@@ -209,10 +215,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         // of THIS SHARD'S COUNTER (a plain room counter would draw
         // values a sibling also draws and break the uniqueness
         // invariant).
-        let orphans: Vec<Entity> = world
-            .query_filtered::<Entity, (With<Marker<G>>, Without<WireId>)>()
-            .iter(world)
-            .collect();
+        let orphans: Vec<Entity> = self.queries.orphans.state(world).iter(world).collect();
         for entity in orphans {
             let wire = self.minter.mint();
             world.entity_mut(entity).insert(wire);
@@ -238,9 +241,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         // systems; `collect_border` cannot query — it takes `&World`).
         self.border_cache.clear();
         let codec = self.game.codec();
-        let mut query =
-            world.query_filtered::<(&WireId, RecordQuery<G>, &P::Pos), With<Marker<G>>>();
-        for (wire, item, pos) in query.iter(world) {
+        for (wire, item, pos) in self.queries.border.state(world).iter(world) {
             if self.partition.exports(self.index, pos) {
                 let state = codec.wire(item);
                 // Debug builds: the wire must agree with the position the
@@ -257,10 +258,11 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
 
     /// Every broadcastable entity of this shard as `(wire id, wire
     /// value)`, in query order.
-    fn own_records(&self, world: &mut World) -> Vec<(u64, Wire<G>)> {
+    fn own_records(&mut self, world: &mut World) -> Vec<(u64, Wire<G>)> {
         let codec = self.game.codec();
-        let mut query = world.query_filtered::<(&WireId, RecordQuery<G>), With<Marker<G>>>();
-        query
+        self.queries
+            .own
+            .state(world)
             .iter(world)
             .map(|(wire, item)| (wire.get(), codec.wire(item)))
             .collect()

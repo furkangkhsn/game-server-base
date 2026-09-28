@@ -341,7 +341,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         // `on_join`) is already inside this tick's change window — the
         // stamp adds only a `WireId`, so the query then sees the entity
         // exactly once (as new-to-buckets).
-        crate::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
         // Clear the per-tick state (persistent containers, in place —
         // the pieces and the classification are computed lazily in the
         // broadcast phase; `tick` is current from here on).
@@ -365,7 +365,8 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         // count. (The pass itself — including its quantization no-op and
         // its member arithmetic — is the shared engine,
         // [`crate::common::CellBook::dirty_pass`].)
-        self.book.dirty_pass(world, self.game.codec(), &self.space);
+        self.book
+            .dirty_pass(&mut self.dirty, world, self.game.codec(), &self.space);
 
         // Leavers: despawns are invisible to the change query — applied
         // from the removals parked in `on_leave` …

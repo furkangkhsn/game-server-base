@@ -7,7 +7,7 @@ use gsb_core::room::TickCtx;
 use gsb_core::shard::BorderRecord;
 
 use crate::codec::RecordCodec;
-use crate::common::{Baselines, CellBook, CellPieces};
+use crate::common::{Baselines, Cached, CellBook, CellPieces, DirtyPass};
 use crate::game::{ShardGame, Wire};
 use crate::sharded::*;
 use crate::space::{CellSpace, Partition};
@@ -64,6 +64,9 @@ pub struct ShardedSpatialRoom<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<
     /// The groups that emitted a FULL this tick (fresh group /
     /// keepalive): their members' private frames skip the one-shot.
     pub(in crate::sharded) group_full_emitted: HashSet<S::Cell>,
+    /// The dirty pass's query, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    pub(in crate::sharded) dirty: DirtyPass<G::Codec>,
 }
 
 impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialRoom<G, P, S> {
@@ -81,6 +84,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>, S: CellSpace<Wire<G>>> ShardedSpatialR
             tick: 0,
             pieces: CellPieces::default(),
             group_full_emitted: HashSet::new(),
+            dirty: Cached::default(),
         }
     }
 

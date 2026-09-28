@@ -24,6 +24,7 @@
 //! path of [`WireId`] (private field, no constructor, no `Default`): the
 //! counter's space stays closed to everything else.
 
+mod cached;
 mod cells;
 mod frame;
 mod hooks;
@@ -32,6 +33,7 @@ mod ledger;
 mod park;
 mod session;
 
+pub(crate) use cached::*;
 pub(crate) use cells::*;
 pub(crate) use frame::*;
 pub(super) use hooks::*;
@@ -43,10 +45,10 @@ pub(crate) use session::*;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Component, Entity, With, Without, World};
+use bevy_ecs::prelude::{Component, Entity, World};
 use gsb_core::id::PlayerId;
 
-use crate::identity::{Minter, WireId};
+use crate::identity::Minter;
 
 /// The leave path, shared by all rooms: no remove event — the entity
 /// simply drops out of the next snapshot (membership is expressed by
@@ -84,11 +86,14 @@ pub(crate) fn on_leave(
 /// (their per-tick caches are built right after). Either call site keeps
 /// the guarantee: an orphan appears in the very snapshot that notices
 /// it.
-pub(super) fn stamp_orphans<M: Component>(minter: &mut Minter, world: &mut World) {
-    let orphans: Vec<Entity> = world
-        .query_filtered::<Entity, (With<M>, Without<WireId>)>()
-        .iter(world)
-        .collect();
+///
+/// The query is the room's own, kept across ticks (`orphans` — A12).
+pub(super) fn stamp_orphans<M: Component>(
+    orphans: &mut Orphans<M>,
+    minter: &mut Minter,
+    world: &mut World,
+) {
+    let orphans: Vec<Entity> = orphans.state(world).iter(world).collect();
     for entity in orphans {
         world.entity_mut(entity).insert(minter.mint());
     }

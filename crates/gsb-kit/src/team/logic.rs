@@ -248,7 +248,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         // the broadcast set is exactly "has the marker" — structural,
         // never silently invisible. Done before `rebuild` so
         // freshly-stamped entities are in this tick's content.
-        crate::common::stamp_orphans::<Marker<G>>(&mut self.minter, world);
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
 
         self.rebuild(world);
 

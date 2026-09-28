@@ -44,7 +44,7 @@
 //!
 //! **Broadcastable set: having the codec's marker is enough** (the demo:
 //! a `Position`). An entity is broadcast iff it carries the
-//! [`RecordCodec::Marker`](crate::codec::RecordCodec::Marker), and
+//! [`RecordCodec::Marker`], and
 //! that precondition is *structural, not a discipline*: entities that
 //! have the marker but no [`WireId`](crate::identity::WireId) yet — anything spawned outside `on_join` (bullets,
 //! NPCs, traps, …) — are stamped with the next serial **by the broadcast
@@ -96,7 +96,8 @@ use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
 use gsb_core::room::{DisconnectCause, ExpireTo};
 
-use crate::common::{InputSeq, ParkEntry, ParkPolicy};
+use crate::codec::RecordCodec;
+use crate::common::{Cached, InputSeq, Orphans, ParkEntry, ParkPolicy, RecordPass};
 use crate::game::{Game, Wire};
 use crate::identity::Minter;
 
@@ -148,6 +149,10 @@ pub struct OpenRoom<G: Game> {
     /// queries it through `resume_lookup`). Identity → parked entity +
     /// bot marker; consumed by a resume, tombstoned by an expiry.
     park_ledger: HashMap<String, ParkEntry>,
+    /// The record query and the orphan query, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    records: RecordPass<G::Codec>,
+    orphans: Orphans<<G::Codec as RecordCodec>::Marker>,
 }
 
 impl<G: Game> OpenRoom<G> {
@@ -163,6 +168,8 @@ impl<G: Game> OpenRoom<G> {
             encoded: 0,
             park: ParkPolicy::default(),
             park_ledger: HashMap::new(),
+            records: Cached::default(),
+            orphans: Cached::default(),
         }
     }
 

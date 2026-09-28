@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::common::{Baselines, InputSeq, ParkPolicy};
+use crate::common::{Baselines, Cached, InputSeq, ParkPolicy};
 use crate::game::TeamGame;
 use crate::identity::Minter;
 use crate::space::Vision;
@@ -34,6 +34,8 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             contents: Vec::new(),
             input: InputSeq::default(),
             encoded: 0,
+            sighted: Cached::default(),
+            orphans: Cached::default(),
         }
     }
 

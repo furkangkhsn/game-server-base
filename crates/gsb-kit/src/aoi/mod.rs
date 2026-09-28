@@ -278,7 +278,10 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::Entity;
 use gsb_core::id::PlayerId;
 
-use crate::common::{Baselines, CellBook, CellPieces, InputSeq, ParkEntry, ParkPolicy};
+use crate::codec::RecordCodec;
+use crate::common::{
+    Baselines, Cached, CellBook, CellPieces, DirtyPass, InputSeq, Orphans, ParkEntry, ParkPolicy,
+};
 use crate::game::{Game, Wire};
 use crate::identity::Minter;
 use crate::space::CellSpace;
@@ -348,6 +351,10 @@ pub struct AoiRoom<G: Game, S: CellSpace<Wire<G>>> {
     /// group is baselined by that frame (it precedes the private frame in
     /// the batch), so `private` skips its one-shot full.
     group_full_emitted: HashSet<S::Cell>,
+    /// The dirty pass's query and the orphan query, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    dirty: DirtyPass<G::Codec>,
+    orphans: Orphans<<G::Codec as RecordCodec>::Marker>,
 }
 
 impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
@@ -368,6 +375,8 @@ impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
             tick: 0,
             pieces: CellPieces::default(),
             group_full_emitted: HashSet::new(),
+            dirty: Cached::default(),
+            orphans: Cached::default(),
         }
     }
 

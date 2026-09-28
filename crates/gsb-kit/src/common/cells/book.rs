@@ -15,6 +15,14 @@ use crate::space::CellSpace;
 
 mod rate;
 
+/// The dirty pass's query for codec `R` (kept by the room across ticks —
+/// `crate::common::Cached`, A12): every broadcastable entity the codec's
+/// `Dirty` filter flags, with its wire identity and record components.
+pub(crate) type DirtyPass<R> = Cached<
+    (Entity, &'static WireId, <R as RecordCodec>::Query),
+    (<R as RecordCodec>::Dirty, With<<R as RecordCodec>::Marker>),
+>;
+
 /// The per-tick CONTENT bookkeeping of a cell-encoded delta broadcaster —
 /// the current buckets, the change lists, and the occupancy/member
 /// baselines the classification rolls from. Own entities enter through
@@ -228,14 +236,17 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     /// did not change records nothing (the cell can still classify
     /// `Silent`), so the stream is content-identical to a diff-based
     /// design.
-    pub(crate) fn dirty_pass<R, S>(&mut self, world: &mut World, codec: &R, space: &S)
-    where
+    pub(crate) fn dirty_pass<R, S>(
+        &mut self,
+        query: &mut DirtyPass<R>,
+        world: &mut World,
+        codec: &R,
+        space: &S,
+    ) where
         R: RecordCodec<Wire = W>,
         S: CellSpace<W, Cell = C>,
     {
-        let mut query =
-            world.query_filtered::<(Entity, &WireId, R::Query), (R::Dirty, With<R::Marker>)>();
-        for (entity, wire_id, item) in query.iter(world) {
+        for (entity, wire_id, item) in query.state(world).iter(world) {
             let wire = wire_id.get();
             let value = codec.wire(item);
             let new_cell = space.cell_of(&value);

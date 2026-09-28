@@ -4169,6 +4169,74 @@ metni dokunulmadı.
 
 **Doğrulama:** 1225 → **1234** test / 0 hata / 1 ignored.
 
+### A12 — `QueryState` oda başına bir kez (2026-09-28)
+
+**Motorun iç işi, davranış ve bayt aynı** (`misc/cleanup-a12-f2`;
+BACKLOG A12, ROADMAP P2 "`QueryState` yeniden kullanımı").
+`World::query_filtered` her çağrıda yeni bir `QueryState` kurar
+(bileşen aramaları, erişim kümeleri, en seyrek zorunlu bileşeni taşıyan
+her arketipin taranması). Kit odaları tick başına birkaç tane
+kuruyordu; hepsi artık odada/shard'da tutuluyor ve tick'te yalnız
+dolaşılıyor (`common::Cached`):
+
+| Oda | Tutulan sorgular |
+|---|---|
+| `all` (`OpenRoom`) | kayıt geçişi (`collect_records`), yetim damgası |
+| `pvs` (`SectorRoom`) | kova geçişi, yetim damgası |
+| `aoi` (`AoiRoom`) | kirli geçiş (`CellBook::dirty_pass` artık sorguyu çağırandan alıyor), yetim damgası |
+| `team` (`TeamRoom`) | içerik yeniden kurma, yetim damgası |
+| sharded (`ShardedRoom`, `sharded/room/queries.rs`) | yetim damgası, sınır ihracı, kendi kayıtlar, göç taraması (komşu başına tick'te bir kez çağrılıyordu) |
+| sharded × spatial | kirli geçiş |
+| sharded × team | `known`'un kendi-kayıt sorgusu |
+
+Oyunların kendi sistemleri (demoların `Movement`'ı gibi) zaten kendi
+`QueryState`'ini tutuyordu; test fikstürleri ve tek seferlik yollar
+(`record_run`, testler) dokunulmadı.
+
+**Bayt kimliği — tasarımın tek inceliği.** Tutulan bir `QueryState` yeni
+arketipleri artımlı öğrenir ve depolama listesinin SONUNA ekler; taze
+kurulan ise dünyadaki bütün arketipleri bileşen indeksinin sırasıyla
+(bir hash sırası, yaratılış sırası değil) listeler. İkisi aynı
+entity'leri farklı sırada dolaşabilir ve odanın kayıtları tele sorgu
+sırasıyla gider — yalnız ekleyen bir önbellek kareleri (içerik ve boyut
+aynı, kayıt sırası farklı) değiştirirdi. Bu yüzden `Cached` dünyanın
+arketip nesli (`Archetypes::generation`) değiştiğinde durumu YENİDEN
+kurar: iki kurulum arasında arketip kümesi aynıdır ve tutulan durum
+tam taze bir sorgunun sırasıyla dolaşır. Kararlı dünyada (yeni bileşen
+birleşimi yok) bu hiç olmaz; bilinen bir arketipe doğan entity yeniden
+kurmadan görülür. Dünyanın kimliği de tutuluyor: bir durum yalnız
+kurulduğu dünyada geçerli (bevy aksi halde panikler) ve odanın mantığı
+tipiyle tek dünyaya bağlı değil.
+
+**Elenenler.** *Salt artımlı önbellek* (`update_archetypes` ile) — sıra
+yukarıdaki gibi kayar; test bunu gösteriyor. *`Query` sistem
+parametresi / `SystemState`* — kit odaları sistem değil, düz fonksiyon;
+ek bir soyutlama katmanı kazanç getirmez. *Oyunun sorgularını da
+kit'te önbelleklemek* — oyunun işi (demolar zaten yapıyor).
+
+**Testler** (`common::cached::tests`; önce kırmızı değil — davranış
+değişmediği için kilit, mutasyonla kanıtlandı):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `an_entity_spawned_after_the_first_pass_is_seen` | ilk geçişten sonra doğan entity — bilinen arketipte de yeni arketipte de — sonraki geçişte görülür | (nesil denetimi kaldırılınca da geçer: `iter` arketipleri kendisi günceller — kilit sıra testinde) |
+| `the_kept_order_is_a_fresh_querys_order_after_new_archetypes` | 256 arketip dört aşamada doğarken her aşamadan sonra tutulan sıra = taze sorgunun sırası | nesil denetimi kaldırıldı (salt artımlı) → 1. aşamada kırıldı (sıra farklı) |
+| `another_world_gets_its_own_state` | başka dünyada geçiş durumu yeniden kurar, panik yok | dünya kimliği denetimi kaldırıldı → "mismatched World" paniği |
+
+Bayt kilitleri değişmeden geçti: `record_run`'ın oda türü başına
+sabitlenmiş kare özetleri, demo/istemci testleri, loadgen RESULT.
+
+**Ölçüm** (release, süreç içi, `gsb-loadgen 200 --game G --duration 10
+--write-stall-secs 0`, önce/sonra dönüşümlü 3'er koşu, yük ort. 2,8–5,1):
+MMO `step_p50_fine_us` önce 128/120/104, sonra 120/96/120; arena önce
+440/400/464, sonra 368/488/520 (son koşuda yük 5,06). Fark gürültünün
+içinde: 200 istemcide adımın maliyeti oyunun sistemleri ve kodlamada,
+sorgu kurulumu ölçülebilir bir pay değil. Kazanç yapısal (tick başına
+arketip taraması ve tahsis yok); büyük arketip sayılı dünyada büyür.
+
+**Doğrulama:** 1477 → **1480** test / 0 hata / 1 ignored (`otlp` ile
+1495 → 1498).
+
 ## 11. Kabul kriteri
 
 Tasarım, şu dört koşul sağlandığında tamamlanmış sayılır:

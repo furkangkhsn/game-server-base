@@ -76,12 +76,13 @@ mod tests;
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::Entity;
+use bevy_ecs::prelude::{Entity, With};
 use gsb_core::id::PlayerId;
 
-use crate::common::{InputSeq, ParkEntry, ParkPolicy};
+use crate::codec::RecordCodec;
+use crate::common::{Cached, InputSeq, Orphans, ParkEntry, ParkPolicy};
 use crate::game::{Game, Wire};
-use crate::identity::Minter;
+use crate::identity::{Minter, WireId};
 use crate::space::SectorMap;
 // The fixture map's out-of-map sector and the preset's sector key, in
 // scope for the in-module tests (they address sectors directly through
@@ -126,7 +127,22 @@ pub struct SectorRoom<G: Game, M: SectorMap> {
     /// Entity records encoded during the most recent broadcast phase
     /// (polled by the room via `GameLogic::encoded_records`).
     encoded: u64,
+    /// The bucket pass's query and the orphan query, kept across ticks
+    /// (`crate::common::Cached`, A12).
+    placed: Placed<G, M>,
+    orphans: Orphans<<G::Codec as RecordCodec>::Marker>,
 }
+
+/// The bucket pass's query: every broadcastable entity's wire identity,
+/// record components and (if it has one) map position.
+type Placed<G, M> = Cached<
+    (
+        &'static WireId,
+        <<G as Game>::Codec as RecordCodec>::Query,
+        Option<&'static <M as SectorMap>::Pos>,
+    ),
+    With<<<G as Game>::Codec as RecordCodec>::Marker>,
+>;
 
 impl<G: Game, M: SectorMap> SectorRoom<G, M> {
     /// Build a PVS room running `game` over the map `map`.
@@ -144,6 +160,8 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
             buckets: HashMap::new(),
             input: InputSeq::default(),
             encoded: 0,
+            placed: Cached::default(),
+            orphans: Cached::default(),
         }
     }
 
