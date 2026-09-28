@@ -1429,6 +1429,29 @@ ayrıcalık istememeli; tavan operatörün sysctl'üdür. (d) *Arabelleği
 büyütmeyi el sıkışma kaybının çözümü saymak* — H turunda elendi (eşiği
 taşır, kaldırmaz; aşağıda "El sıkışma kaybı"): bu bir verim düğmesi.
 
+*Ölçüm (2026-09-28, release).* B84'ün komutu rUDP'de:
+`gsb-loadgen 1000 --orchestrate --procs 2 --visibility spatial
+--duration 8 --transport udp`, çocuklar varsayılan worker'larla; kayıp
+`/proc/net/snmp` `Udp: RcvbufErrors`'ın koşu boyunca farkı (sistem
+geneli); iki yapılandırma sırayla, üç tur, her koşudan önce yükün 1 dk
+ortalaması < 5 beklendi (kabul edilen koşularda 1,5–3,9; makinede başka
+bir ajan derliyordu). Makinenin `rmem_max`'ı 4 MiB; ikili `09b9254`
+(B4, B2'den önce).
+
+| Yapılandırma | etkin alma arabelleği (`getsockopt`) | `RcvbufErrors` | `hs_retries` | connect p50 / p99 ms | istemci `retrans_out` |
+|---|---|---|---|---|---|
+| varsayılan (dokunulmaz) | 212 992 B | 4693 · 4195 · 3370 | 1612 · 1762 · 1298 | 70/206 · 84/256 · 61/196 | 1903 · 1795 · 1323 |
+| `--udp-recv-buffer 4194304` | 8 388 608 B (2×) | **0 · 0 · 0** | **0 · 0 · 0** | **24/54 · 33/67 · 46/87** | **0 · 0 · 0** |
+
+Her koşuda `connected = joined = left = 1000`, `server_closes = 0`,
+`snap_total` 228 898–235 392 (iki kolda aynı bant); `errors` varsayılan
+kolun 2. turunda 2, gerisinde 0. *Okuma:* 1000 istemcilik fırtına
+208 KiB'lik varsayılan kuyruğu koşu başına 3,4–4,7 bin datagram
+taşırıyor — el sıkışma adımları ve ilk kontrol kareleri (istemci
+`hs_retries`, `retrans_out`) — ve bu kaybın hiçbiri sunucunun
+sayaçlarında görünmüyor (demux onu hiç görmez; BACKLOG B85). 4 MiB'lik
+kuyrukta sıfır kayıp, sıfır yeniden gönderim, connect p99 ~3–4× kısa.
+
 **Kapı girdisinin grameri kapalı (BACKLOG F61 — 2026-09-28).** Bir
 `[[listeners]]` girdisi (`ListenerEntry`) tam dört anahtar alır —
 `transport`, `bind`, `tls_cert`, `tls_key`; başka her anahtar (yazım
@@ -1862,6 +1885,37 @@ onlarca baytlık karenin gereksiz kopyası ise neredeyse bedava ve geri
 *Oyun bandından örnek* — RAW kareler ACK'lenmez. (d) *50 ms'nin altında
 taban* — yukarıda. (e) *Yeniden deneme sayısıyla ölüm (TCP şekli)* —
 canlılık sınırı turunda elendi; geri çekilme o kararı değiştirmedi.
+
+*Ölçüm (2026-09-28, release) — bedel, dürüstçe.* Yukarıdaki B4 ölçümünün
+komutu (rUDP 1000, katılma fırtınası), yük < 5; "önce" = `09b9254`,
+"sonra" = `9308459` (boşta kalma kuralı dahil). Üç tur:
+
+| Yapılandırma | `RcvbufErrors` | `hs_retries` | connect p50 / p99 ms | `errors` | istemci `retrans_out` / sunucu `udp_control_retransmits_timeout` |
+|---|---|---|---|---|---|
+| önce, varsayılan arabellek | 4441 (önceki koşular 3370–5345) | 1488 · 1479 · 983 | 65/216 · 56/206 · 53/149 | 4 · 3 · 0 | 2228 · 2115 · 2096 / — |
+| sonra, varsayılan arabellek | 4162 (önceki koşular 3863–4502) | 1348 · 1515 · 1405 | 53/755 · 65/769 · 69/756 | 75 · 49 · 114 | 1524 · 1347 · 1618 / 1919 · 2230 · 1452 |
+| sonra, `--udp-recv-buffer 4194304` | 0 | 0 · 16 | 19/51 · 21/59 | 0 · 0 | 0 · 0 / 0 · 0 |
+
+Her koşuda `connected = joined = left = 1000`, `server_closes = 0`,
+`snap_total` 230 135–235 820. *Okuma.* (1) **Kaybolan arabellekte
+bedel var:** fırtına kuyruğu taşırınca kaybolan el sıkışma adımları artık
+50/100/200/400 ms'de yeniden gönderiliyor — dört adımı kaybeden istemci
+~750 ms bekliyor, connect p99 ~150–220 → ~760 ms. Kaybolan AUTH/JOIN de
+geri çekilmiş zamanlayıcıyla (el sıkışmanın geri çekilmesi Karn gereği
+banda taşınır) daha geç yenileniyor; loadgen JOIN sonucunu beklemeden
+girdi yolladığı için sunucu bu girdilere `NotInRoom` cevaplıyor
+(`errors` 49–114'ün hepsi — geçici enstrümantasyonla sayıldı). Kayıp bir
+tıkanıklık kaybı (tek soketin kuyruğu); geri çekilme tam da ona
+verilecek TCP cevabı, ama anlık bir patlamada gecikmeyi uzatır. (2)
+**Fırtınanın ilacı B4:** 4 MiB'de kayıp yok ve bütün kolların en iyi
+sayıları (connect p99 51–59 ms, `errors` 0). (3) **Boşta kalma kuralı
+olmadan** aynı fırtınada 1000 LEAVE'in 19'u loadgen'in 500 ms'lik
+penceresini kaçırıyordu (`left = 981`; kaçıranların zamanlayıcısı 648 ms–
+1 sn: fırtınanın geri çekilmesi ya da fırtına anında şişmiş bir RTTVAR
+örneği); kuralla altı koşuda `left = 1000`. Şişmiş RTTVAR kuralın
+kapsamı dışında: seyrek kontrol bandında sonraki örneğe dek sürer
+(BACKLOG B87). Karar bakımcının: el sıkışma geri çekilmesine tavan ya da
+bandın el sıkışmanın geri çekilmesini devralmaması (BACKLOG B86).
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
