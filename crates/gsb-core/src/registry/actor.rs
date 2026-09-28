@@ -282,3 +282,6 @@ where
             .count() as u32
     }
 }
+
+#[cfg(test)]
+mod tests;

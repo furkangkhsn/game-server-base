@@ -395,7 +395,12 @@ max_detach_hold_secs = "off"
   `close_notices_dropped`'da (`gsb_net_close_notices_dropped_total`) —
   istemci kapanışı gerekçesiz alır. Satırda `hb_throttled_authed=`'dan
   sonra `frames_out_closed= close_notices_dropped=`; loadgen telinde
-  `GSMO`; `RESULT`'ta aynı anahtarlar.
+  `GSMO`; `RESULT`'ta aynı anahtarlar. Bayt tanımı: kare GÖVDESİ
+  (2 baytlık op + payload; taşımanın çerçevesi — uzunluk öneki, WS/TLS
+  başlığı — hariç). `bytes_out_control` kanalın aldığı karelerin bu
+  gövdelerinin TAM toplamı; reddedilen kare ve düşen bildirim içinde
+  değil (F2, kilit `conn_counts::bytes`: kanalın teslim ettiği karelere
+  karşı bayt bayt).
 - **Net kapsamı: sunucu kararlı sonun işlenmeden bıraktığı kareler
   (B60).** Sunucu oturumu kendisi bitirdiğinde (pompanın ya da
   registry'nin hükmü, odanın atması/boşta kapanışı, yok edilen oda,

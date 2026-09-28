@@ -12,6 +12,9 @@
 //! - `heartbeats.rs`: the heartbeat throttle's unanswered surplus
 //!   (BACKLOG B56), before and after authentication, reaching the
 //!   samples.
+//! - `bytes.rs`: `bytes_out` exactly (BACKLOG F2) — the bytes of every
+//!   control frame the outbound channel took, and none of a refused frame
+//!   or a dropped close notice.
 //! - `outbound.rs`: the actor's own outbound losses (BACKLOG B57) — a
 //!   control frame a closed outbound channel refused is not "sent", and
 //!   a best-effort close notice dropped on a full one is counted.
@@ -39,6 +42,8 @@ use gsb_protocol::{FrameBody, MessageTable, base, base_table, op};
 use prost::Message;
 use tokio::sync::mpsc;
 
+#[path = "conn_counts/bytes.rs"]
+mod bytes;
 #[path = "conn_counts/heartbeats.rs"]
 mod heartbeats;
 #[path = "conn_counts/outbound.rs"]
