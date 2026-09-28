@@ -709,17 +709,24 @@ zaten gitmiş, oda sonunu henüz işlememiş — yeni `sends_closed`
 metrik telinde `GSMI` (GSMH + `dropped_s`'ten hemen sonra alan; SUM ile
 katlanır), `RESULT`'ta `sends_closed=` `dropped=`'den sonra, her
 satırda). `dropped`'ın `_s` oran göstergesi var, `sends_closed`'ın yok:
-bağlantı sonu başına en çok ~1 olduğundan oranı ayrılış oranıdır, yeni
-bilgi taşımaz. Batch'in işlenişi değişmedi (tampon geri alınır,
-`on_batch_dropped` çağrılır, taşıdığı RPC yanıtları kuyruğa geri
-konur — bağlantı gitmişse bir sonraki tick satır silinince düşer).
+bağlantı sonlarıyla orantılı olduğundan oranı ayrılış oranının bir
+katıdır, yeni bilgi taşımaz. Bağlantı sonu başına tek bir değil (F59
+düzeltmesi; ilk yazım "en çok ~1" diyordu): (o bağlantıya tick başına
+denenen batch) × (soketin kapanışıyla ayrılışın/kopuşun işlenmesi
+arasındaki tick) — ayrılış registry → oda (shard'lı odada registry →
+shard) yolunu dolaşırken her tick'in fan-out'u kapalı kanala bir batch
+daha dener. Ölçülen: spatial demo 1000 `--workers 1` ile 1,6–1,8,
+shard'lı MMO/savaş varsayılan worker'larla 0,9–1,9 (aşağıda "B50").
+Batch'in işlenişi değişmedi (tampon geri alınır, `on_batch_dropped`
+çağrılır, taşıdığı RPC yanıtları kuyruğa geri konur — bağlantı
+gitmişse bir sonraki tick satır silinince düşer).
 Kilit: `room::tests::fanout::dropped::closed` ve
 `shard::tests::dropped::closed` (önce kırmızı: kapalı kanallı bir üye +
 dolu kanallı bir üye, iki tick → `dropped` 3, beklenen 1; `sends_closed`
 2). İstemci teli değişmedi. Yukarıdaki orkestre 500'ün 116'sı ve
 aşağıdaki tabloların `dropped` sütunu B32'den önce alındı: 116'nın
 hepsi bugün `sends_closed`'a düşerdi; duraklama koşularının binlerce
-düşüşü dolu kanaldır (kapalı kanal en çok bağlantı başına ~1 ekler).
+düşüşü dolu kanaldır (kapalı kanal bağlantı sonu başına birkaç ekler — F59).
 
 **Pinsiz orkestratörün worker sayısı (B37, düzeltildi).** Orkestratör
 (`--orchestrate`, `--pin` olmadan) sunucu ve istemci çocuklarına

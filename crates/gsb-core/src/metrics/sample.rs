@@ -61,7 +61,8 @@ pub struct RoomSample {
     pub dropped_frames: u64,
     /// Outbound batches the fan-out tried on an already CLOSED out
     /// channel (the connection is gone and the room has not processed its
-    /// leave or detach yet — at most about one per connection end; no
+    /// leave or detach yet — one per tick until it has: per connection
+    /// end, the ticks between the socket's close and the leave, F59; no
     /// frame the client wanted is lost), cumulative (B32).
     pub sends_closed: u64,
     /// Keep-alive re-sends (unchanged groups re-sending their cached

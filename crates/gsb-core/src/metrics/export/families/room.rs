@@ -86,7 +86,8 @@ pub(super) const TICK: [RoomFamily; 30] = [
         |r| r.dropped_s,
     ),
     // B32: a closed outbound channel is not a slow client — its own
-    // counter, no rate gauge (bounded by the connection ends).
+    // counter, no rate gauge (proportional to the connection ends: per
+    // end, one batch per tick until the room processes the leave — F59).
     counter(
         "gsb_room_sends_closed_total",
         "Outbound batches the fan-out tried on an already closed connection (gone before the room processed its leave or detach; nothing the client wanted is lost), cumulative.",
