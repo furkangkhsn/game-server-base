@@ -139,9 +139,21 @@ async fn start_inner(
     // the whole channel every tick; a tick holds only ~tens of samples). A drop
     // could still happen under a pathological stall — it is counted and
     // reported, never a stall.
+    //
+    // Two channels, one collector (BACKLOG F35): the SESSION producers —
+    // the registry, its rooms, shards and dispatchers, the connection
+    // actors — send on `metrics_tx`, and the collector's final report
+    // waits (bounded) until every one of them has dropped its sender, so
+    // it carries every room's and connection's last word. The transport
+    // tasks (the doors' pumps, the rUDP demux and writers, the handshake
+    // intakes) send on `transport_tx`: folded the same way, but not
+    // waited for — a pump ends with its socket, which a silent peer can
+    // hold open past the stop. Same capacity, same drop accounting.
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
+    let (transport_tx, transport_rx) = mpsc::channel::<MetricsEvent>(4096);
     let metrics = tokio::spawn(
         MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD)
+            .with_transport_events(transport_rx)
             .with_exporters(exporters)
             .run(),
     );
@@ -225,8 +237,9 @@ async fn start_inner(
     let mut listeners: Vec<Arc<dyn gsb_net::transport::Listener>> = Vec::with_capacity(specs.len());
     let mut addrs: Vec<SocketAddr> = Vec::with_capacity(specs.len());
     for spec in &specs {
-        // The transport's own losses go to the same collector (B58).
-        let metrics = Some(metrics_tx.clone());
+        // The transport's own losses go to the same collector (B58), on
+        // the channel its final report does not wait for (F35).
+        let metrics = Some(transport_tx.clone());
         match bind_listener(
             spec,
             &cfg,

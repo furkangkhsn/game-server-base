@@ -876,7 +876,12 @@ her oda ayrılışlarından sonra bir kez daha örnekler. Süreç içi her koşu
 ~1 sn uzar. Kilit: `loadgen_rpc.rs::the_rooms_ledger_covers_the_end_of_the_run`
 (`--duration 2.5`; önce kırmızı: 77 ≠ 97). `--serve`/orkestre yolu RPC
 modunu zaten reddediyor; oradaki sunucu çocuğunun son raporu bu turda
-değişmedi.
+değişmedi. *(F35: bekleme yeniden 150 ms'lik ayrılış oturmasına indi —
+`run.rs::LEAVE_SETTLE`. Periyot beklemesi, odanın son sayısı son rapora
+yetişmediği için gerekiyordu; artık toplayıcının son raporu her odanın
+`RoomFinal`'ını — ve her bağlantının son flush'ını — bekliyor (DESIGN
+§12 "Son rapor üreticileri bekler"), defter duruşun kendi raporundan
+kapanıyor. Kilit aynı test.)*
 
 İkisiyle oda defteri kapanıyor:
 
@@ -1032,7 +1037,9 @@ onu başlatır; dolu kanalda düşmez, yalnız toplayıcı gitmişse kaybolur.
 Duruş, elde kalan okunmamış istekleri `req_unread`'e, borçlu yanıtları
 ve uçuştaki istekleri B53'ün iki sayacına katar. Loadgen'in beklemesi
 yerinde kalır: süreç içi koşuda sunucuyu durdurmadan önce odalar zaten
-son periyodik örneklerini vermiş olur.)
+son periyodik örneklerini vermiş olur. F35'te yarış kökünden kapandı:
+toplayıcının son raporu odaların son örneklerini bekliyor; loadgen'in
+periyot beklemesi kalktı.)
 
 **Ölçüm** (release, süreç içi, TCP, 32 çekirdek; B37 sonrası; parantezde
 1 dk yük ortalaması). `sent = req_ext + req_refused + req_unread` her

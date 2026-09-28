@@ -161,6 +161,12 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   `taskset -p -c 0,1 <tid>` ve `renice -n 19 -p <tid>` ile iki çekirdeğe
   it, o çekirdekleri `taskset -c 0,1 yes` ile doldur (F32: registry
   eski bağlantının kapanışını yeninin join'inden 0,6 ms önce gördü).
+  Odanın kendisini aç bırakmak (≈ 2 Hz, ilk periyodik örneğine
+  varamayan oda) için iş parçacıklarının HEPSİNİ it ve çekirdekleri
+  daha çok doldur (ör. 24 `yes`): bir kısmını itmek yetmez, tokio'nun
+  iş çalması görevi aç olmayan işçiye taşır (F35: 24 `yes` ile
+  `loadgen_churn_smoke`'un komutu 40 koşunun 20'sinde oda satırsız rapor
+  verdi, yarısını iterken 0).
   Yarışı her seferinde üretmek için sırayı bir kez elle çevir (bir
   gönderimin önüne geçici `sleep`) ve sonucu kaydet; kalıcı kilit yine
   sırayı elle kuran deterministik testtir.

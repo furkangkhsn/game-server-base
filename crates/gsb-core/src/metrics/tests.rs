@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 mod closes;
 mod collector;
 mod export;
+mod final_report;
 #[cfg(feature = "prometheus")]
 mod golden;
 mod histogram;

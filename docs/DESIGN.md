@@ -150,7 +150,8 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
 - **Metrik toplayıcı:** odaların/registry'nin/bağlantıların sayacalarını
   **kanaldan** toplayan tek görev (bkz. §12). Saat kaynağı ticker'ın
   broadcast'i — odalarla aynı tek-await disipline sahiptir; ticker kapanınca
-  son raporu basıp çıkar.
+  oturum üreticilerinin (odalar, bağlantılar) son sözlerini bekler (en çok
+  `FINAL_REPORT_GRACE`), son raporu basıp çıkar (F35, §12).
 
 ## 4. Oda tick'i: 5 faz
 
@@ -2478,7 +2479,12 @@ ServerHandle::stop
     kuyruğun arkasına Stop); servisler ikinci bir 1 sn'lik tek son tarih
     altında join edilir, aşan abort edilir ve StopReport'ta sayılır
   → metrik toplayıcı: ticker'ın broadcast'i kapanınca Closed görür,
-    son raporu basıp temiz çıkar (bkz. §12)
+    artık metrik kanalını bekler: her oturum üreticisi (registry, oda/
+    shard, dağıtıcı, bağlantı aktörü, accept hattı) göndericisini düşürene
+    dek — odaların RoomFinal'ı, bağlantıların son flush'ı — katlar, sonra
+    son raporu basıp temiz çıkar (F35; sınır FINAL_REPORT_GRACE = 2 sn,
+    kapanıştan itibaren, yukarıdaki beklemelerle yan yana koşar;
+    StopReport::final_report_complete, bkz. §12)
 ```
 
 `Listener::close` kapısı rUDP turunda kullanıldı: `stop()`, registry
@@ -2671,7 +2677,9 @@ tick'te işlenen DETACH'ler kancalarını koştu. Kanalda kalanlar, eskiden
 de olduğu gibi, oda `Closed`'dan çıkınca düşer. Metrik tarafında yeni
 kayıp yok. Toplayıcının son raporu aynı mekanizmayla (broadcast
 kapanışı) basılır; §12'nin "kapanışta kümülatif sayaçlar geride
-kalabilir" sınırlılığı aynen geçerli. İstemci tel baytları değişmedi.
+kalabilir" sınırlılığı aynen geçerli. *(F35'ten beri son rapor
+broadcast kapanışında değil, oturum üreticilerinin hepsi bittikten
+sonra basılır — §12 "Son rapor üreticileri bekler".)* İstemci tel baytları değişmedi.
 Kapanışta istemciye bildirim (B12) bu turun konusu değil; bağlantılar
 yine sessizce kapanır.
 
@@ -2748,7 +2756,7 @@ dinleyici olmayan uzun ömürlü görevler):
 |---|---|---|
 | Ekonomi servisi (`gsb-demo`, demo modülü başına bir) | sınırlı posta kutusu (64); her demo odası ve fabrika bir tutamaç klonu tutar; `ECONOMY` isteği `External` future'ı → RPC işçisi → `buy()`; istek başına kısa cevap görevi | son gönderici düşünce (F5'ten sonra: kaydedilince açık `Stop`) |
 | Ticker | — | `stop()` abort eder |
-| Metrik toplayıcı | sınırlı metrik kanalı | broadcast `Closed` (`stop()` bekler) |
+| Metrik toplayıcı | sınırlı metrik kanalı (oturum) + taşıma kanalı | broadcast `Closed`, sonra oturum kanalının kapanışı ya da `FINAL_REPORT_GRACE` (F35; `stop()` bekler) |
 | HTTP ops accept + oda defteri | ops bağlantıları; defter kanalı | `stop()` kapısını kapatır, döngü döner (B33; abort yalnız geri sigorta); defter göndericisi düşünce |
 | Registry, ölüm bekçileri, RPC işçileri | kendi posta kutusu; oda `JoinHandle`'ı; `request_timeout` (5 sn) | `Shutdown`; oda bitince; süre sınırı |
 
@@ -3033,7 +3041,9 @@ conn actor (≤1/sn + kapanışta son)      ─┘                  │
                     tek await'i: ticker broadcast aboneliği (odalarla aynı
                     saat kaynağı); her tick'te rx.try_recv() ile boşaltır;
                     rapor süresi (vars. 1 s) dolunca MetricReport üretir;
-                    ticker kapalıysa → son rapor + temiz çıkış
+                    ticker kapalıysa → metrik kanalını bekler (her
+                    üretici bitene dek, ≤ FINAL_REPORT_GRACE; F35)
+                    → son rapor + temiz çıkış
                                                             │
                     dışa açım dikişi (emit, TEK yer): önce Exporter'lar
                     sırayla (&MetricReport), sonra MetricSink (raporu tüketir)
@@ -3245,7 +3255,9 @@ kanal kapanış anında DOLUysa artık düşmez (sayım turu 3): durdurma-mesaj�
 deyimiyle (`channel::post`) doğurulan bir gönderici yuvayı bekler, aktör
 beklemez. Önceden hüküm — ve B59'dan beri daha önce düşen örneklerin
 deltaları da — düşer ve düşüş hiçbir yerde sayılmazdı (aktör gitmiştir).
-Yalnız toplayıcı gitmişse (süreç inerken) kaybolur. Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
+Yalnız toplayıcı gitmişse kaybolur — sunucunun duruşunda artık gitmiş
+değildir: son rapor her bağlantı aktörünün bitmesini bekler (F35,
+aşağıda "Son rapor üreticileri bekler"). Log satırı: `server_closes=<toplam>` + `server_close_<reason>=N`;
 loadgen `RESULT`'ı aynı anahtarları taşır, GSM8 sebep başına bir `u64`.
 
 Prometheus yüzeyi ve log renderer **katlamaz**: örnek kimliği başına
@@ -3300,8 +3312,10 @@ kalmaz; var olan geri sayım korunur, satır en az bir rapor daha
 görünür. (2) *toplayıcının sonuyla yarış* — olay durdurma-mesajı
 deyimiyle gider (`channel::post`: yerinde, kanal doluysa doğurulan bir
 göndericiden; asla beklemez, dolu kanalda asla düşmez); yalnız toplayıcı
-GİTMİŞSE kaybolur, bu da yalnız süreç inerken olur (toplayıcı ve odalar
-aynı ticker kapanışında biter) — sayılamayan tek durum budur.
+GİTMİŞSE kaybolur. *(B62'de bu "süreç inerken" oluyordu — toplayıcı ve
+odalar aynı ticker kapanışında bitiyordu ve son rapor odaların son
+örneklerinden ÖNCE çıkabiliyordu; F35'ten beri son rapor onları bekler,
+aşağıda.)*
 `MatchResultDropped` da artık aynı deyimle gider (önceden dolu kanalda
 düşüyordu). Yan etki (turda bulundu): shard satırlarının örnek kimliği
 `room << 16 | index`, registry'nin `RoomGone`'u ise mantıksal oda
@@ -3310,6 +3324,76 @@ budanmıyordu (hayalet); artık her shard'ın `RoomFinal`'ı kendi satırının
 beklemesini başlatır. Kilit: `room::tests::unread::stop`,
 `shard::tests::unread::stop`, `metrics::tests::room_final`,
 `registry::result::tests`.
+
+**Son rapor üreticileri bekler (F35).** Ticker kapanışı sunucunun duruş
+işaretidir ve odalar ile bağlantılar sonlarına ANCAK o an başlar: oda
+aynı kapanışı (ya da kontrol `Shutdown`'ını) görür, `on_shutdown` +
+maç sonucu + sayımı koşar, `RoomFinal`'ı verir; bağlantı aktörü
+registry'nin söküşünden `Shutdown` alır, son flush'ını verir. Toplayıcı
+son raporunu kapanışın kendisinde basıyordu — hepsiyle yarış: ilk
+periyodik örneğine (metrik periyodu başına bir, sunulan odalarda 30
+adımda bir) varmamış bir oda rapordan BÜTÜNÜYLE eksik kalıyordu, her oda
+son örneğinden beri saydığını kaybediyordu. Belirti: iş parçacığı
+düzeyinde aç bırakmada (≈ 2 Hz oda) süreç içi loadgen raporunda oda
+satırı yok (`room_resumes=0`, "server metrics: unavailable";
+`loadgen_churn_smoke`), %90 donmada oda satırı yok (F33). Kanıt:
+`loadgen_churn_smoke`'un komutu, sürecin bütün iş parçacıkları iki
+çekirdeğe itilip nice 19'la 24 `yes`'in arasında: eski ikiliyle 40
+koşunun 20'si `steps=0 room_resumes=0` + "server metrics: unavailable";
+düzeltmeyle 0/40 (oda satırı `steps=17–39`; 40 koşunun 39'unda oda
+ilk periyodik örneğine hiç varmadı, satır yalnız `RoomFinal`'dan).
+
+Düzeltme toplayıcıda (`metrics/collector/closing.rs`): kapanıştan sonra
+elinde kalan tek kaynağı — olay kanalını — bekler, her olayı katlar ve
+kanal KAPANINCA (her gönderici düştü = her üretici bitti) son raporu
+basar. Üreticinin son sözü bitmeden gönderilir; dolu kanalda
+doğurulan göndericiden giden (`channel::post`) kendi gönderici klonunu
+teslim edene dek tutar — kapanış ikisini de geçemez (işaret olayı ve
+bariyerle yapılan sıralamada bu yarış kalırdı). Bekleme kapanıştan
+itibaren `FINAL_REPORT_GRACE` (2 sn) ile sınırlı: duruşu aşan bir
+üretici (takılı oda, registry'nin söküşünden sonra kabul edilmiş bir
+bağlantı) son raporu tutamaz; rapor sınırda onun son sözü olmadan çıkar,
+`warn` + `run()` `false` döner → `StopReport::final_report_complete`.
+Sınır `stop()`'un kendi sınırlarını (accept 1 sn + odalar 1 sn +
+servisler 1 sn) uzatmaz: onlarla yan yana koşar; iki saniye, accept
+hattının (her yeni bağlantı aktörüne göndericisini veren) 1 sn'lik
+geri sigortasından uzundur.
+
+**İki kanal.** Oturum üreticileri (registry, oda/shard, ölüm bekçisi,
+dağıtıcı, bağlantı aktörü, accept hattı) ana kanala; taşıma görevleri
+(kapıların pump'ları, rUDP demux/yazıcı, el sıkışma kabulü — `gsb_net`
+`TransportMetrics`) ayrı bir kanala (`with_transport_events`, aynı
+4096) gönderir. İkincisi aynı şekilde katlanır (her tick'te ve bekleme
+sırasında her olaydan sonra, en sonda bir kez) ama kapanışı BEKLENMEZ:
+okuyucu pump'ı soketiyle biter ve sessiz bir eş (ERROR 14'ten sonra
+soketi kapatmayan, yarı açık) onu duruşun ötesinde tutabilir — tek
+kanalda her böyle duruş sınırı bekler, raporun gecikmesi eşe bağlı
+olurdu. Taşımanın duruştaki son flush'ları eskisinden kötü değil:
+son rapor artık oturumların hepsinden sonra çıkar (önce kapanışta).
+
+*Elenenler:* (1) `stop()`'ta ticker'ı odaların bariyerinden (F5) sonra
+kesmek — odalar kontrol `Shutdown`'ını bir sonraki tick'te işleyip
+biterdi, ama bağlantıların son flush'larını kapsamaz, dolu kanalda
+doğurulan göndericinin sırasını vermez, duruşun sırasını değiştirir;
+(2) `stop()`'un bariyerden sonra
+kanala bir "son" işareti göndermesi — dolu kanalda doğurulan bir
+göndericinin `RoomFinal`'ı işareti geçemeyebilir (sıra zamanlayıcıya
+kalır), bağlantılar için ayrı bir bariyer gerekir; kanal kapanışı ikisini
+de yapıdan verir; (3) tek kanal + sınır — sessiz eşli her duruş sınırı
+bekler; (4) loadgen'in kör beklemesini uzatmak — aç oda periyoda hiç
+varmayabilir. Loadgen'in `final_sample_grace`'i (150 ms + bir metrik
+periyodu, B36) 150 ms'lik ayrılış oturmasına (`LEAVE_SETTLE`) indi:
+odanın sayıları duruşun son raporundan gelir; ilk periyodik örneğine
+varmamış oda da raporda.
+
+Kilitler: `metrics::tests::final_report` (paused saat: kapanıştan sonra
+gelen `RoomFinal` + bağlantı son flush'ı son raporda; ölmeyen üretici
+raporu tam sınırda bırakır, `false`; taşıma kanalı beklenmez),
+`service_stop::the_final_report_carries_every_rooms_final_count` (ilk
+örneğinden önce durdurulan ve `on_shutdown`'da 200 ms bekleyen iki oda
+son raporda; eski davranışla 5/5 kırmızı),
+`loadgen_smoke::a_run_shorter_than_a_metrics_period_still_reports_the_room`,
+`accept_stop` (`final_report_complete: true`).
 
 **Duran odanın op'ları ve shard'ın uçuştaki işi (B68, sayım turu 4).**
 B62 duruşta OTURUMLARIN elindekini saydı; geri kalanı sayılmıyordu:

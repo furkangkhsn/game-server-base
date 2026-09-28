@@ -975,7 +975,12 @@ sonraki, nüfus sayılmaz; B52).
 Kararlı pencerenin sonu — `records_per_tick`/`overlap_x`'in ve savaşın
 takım segmentinin bitişi — da aynı tutarlı kesitlerden seçilir (B46;
 kesitsiz koşuda aynı yırtık geri düşüşle); RESULT biçimi değişmedi.
-Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı.
+Demo'nun satırı değişmedi; CLIENT satırı her oyunda aynı. Süreç içi
+koşunun oda satırı (ve oda anahtarları) duruşun son raporundan gelir; o
+rapor her odanın son sayısını (`RoomFinal`) bekler, ilk periyodik
+örneğine varmamış (kısa koşu ya da aç kalmış) oda da raporda (F35;
+loadgen son istemciden sonra yalnız 150 ms'lik ayrılış oturmasını
+bekler).
 
 **Demo A/B** (15a02c5 ↔ HEAD, dönüşümlü üç tur, `GSB_LOADGEN_CLIENT_LINES=1`;
 makine yükü 19–23): RESULT anahtar kümesi, sırası ve değer biçimleri

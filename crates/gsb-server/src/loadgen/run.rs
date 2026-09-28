@@ -167,10 +167,10 @@ pub(crate) async fn run(args: Args) {
     for h in clients {
         reports.push(h.await.expect("client task panicked"));
     }
-    // Grace period: let the leave acks, the connection actors' final
-    // metric flushes, and the registry's leave flushes settle — and let
-    // every room take one more metrics sample after its leaves.
-    tokio::time::sleep(final_sample_grace()).await;
+    // Let the server see the clients' own closes before it stops (see
+    // `LEAVE_SETTLE`). The final counts need no wait: the stop's final
+    // report waits for every room's and connection's last word.
+    tokio::time::sleep(LEAVE_SETTLE).await;
 
     // Machine-readable per-client records for the orchestrator (item A):
     // it merges them into one final report. Gated by an env var — at load
@@ -227,7 +227,10 @@ pub(crate) async fn run(args: Args) {
 
     // Stop the server BEFORE awaiting the drain: the drain's channel
     // closes when the collector (its sender) exits, and the collector
-    // exits when the ticker's broadcast closes — i.e. during stop().
+    // exits during stop() — after its final report, which folds every
+    // room's final count (`RoomFinal`) and every connection's final
+    // flush (BACKLOG F35). That report is what the run reads the room
+    // from: no metrics period needs to pass first.
     if let Some(handle) = server {
         handle.stop().await;
     }
@@ -246,15 +249,14 @@ pub(crate) async fn run(args: Args) {
 }
 
 /// How long the run waits between its last client and the server's
-/// stop: the leaves settle (150 ms), then one whole room metrics period
-/// passes (`RoomConfig::metrics_cadence_hz`, the served rooms' default).
-/// A room samples once per period and sends nothing when it stops, so
-/// the final report carries its counters as of its last periodic
-/// sample: a shorter wait reported the room up to a period before the
-/// end of the run — its RPC ledger missed the requests it read in that
-/// window (B36: `sent − req_ext − req_refused` grew with how far the
-/// deadline fell past a sample).
-fn final_sample_grace() -> Duration {
-    let period = 1.0 / gsb_core::room::RoomConfig::default().metrics_cadence_hz;
-    Duration::from_millis(150) + Duration::from_secs_f64(period)
-}
+/// stop: the clients have left and closed their sockets, and the server
+/// should process those ends (the leaves, the peer closes) as the
+/// CLIENTS' — the path a measured run exercises — before its own stop
+/// ends whatever is left. The pre-B36 settle. Not a metrics wait: until
+/// F35 this also waited one room metrics period so
+/// every room would sample once more after its leaves (B36), because the
+/// collector's final report went out on the ticker's close, ahead of the
+/// rooms' final counts. The final report now waits for them, so the
+/// stop itself delivers the rooms' counts at the end of the run — even
+/// for a room that never reached its first periodic sample.
+const LEAVE_SETTLE: Duration = Duration::from_millis(150);

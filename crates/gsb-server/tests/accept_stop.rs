@@ -13,6 +13,9 @@
 //! The HTTP ops surface's accept loop has the same door (BACKLOG B33):
 //! it was the last accept loop `stop` aborted; the third test pins that
 //! it now ends on its closed door, counted with the other accept loops.
+//!
+//! Every report here also says the collector's final report is complete
+//! (BACKLOG F35) — a silent session's pump does not hold it either.
 
 use std::time::{Duration, Instant};
 
@@ -81,6 +84,8 @@ const ALL_ENDED: StopReport = StopReport {
     // The demo's economy service, stopped after the rooms (BACKLOG F5).
     services_ended: 1,
     services_aborted: 0,
+    // Every session producer ended before the final report (F35).
+    final_report_complete: true,
 };
 
 #[tokio::test]
@@ -105,6 +110,28 @@ async fn an_accept_held_in_a_handshake_does_not_hold_the_stop() {
     assert_eq!(report, ALL_ENDED, "the close ended the handshakes too");
     assert!(took < STOP_WITHIN, "stop took {took:?}");
     drop((tls, ws));
+}
+
+/// A session whose peer stays silent past the stop — connected, never
+/// closing its socket, as a half-open client does — keeps its reader pump
+/// waiting on the socket until the idle window (30 s). The pump reports
+/// its losses on the transport channel, whose close the collector's final
+/// report does not wait for (BACKLOG F35): the report is complete as soon
+/// as the session side has ended, and `stop` does not sit out the
+/// collector's grace.
+#[tokio::test]
+async fn a_silent_peer_does_not_hold_the_final_report() {
+    let pki = common::mint_tls_pki("accept-stop-silent");
+    let handle = server(&pki).await;
+    let silent = TcpStream::connect(handle.addrs[0]).await.expect("to TCP");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (report, took) = stop(handle).await;
+    assert_eq!(
+        report, ALL_ENDED,
+        "the final report did not wait for the pump"
+    );
+    assert!(took < STOP_WITHIN, "stop took {took:?}");
+    drop(silent);
 }
 
 /// The ops HTTP surface's accept loop ends on its closed door too (B33):

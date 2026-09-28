@@ -18,8 +18,10 @@
 //! the stop-message idiom ([`crate::channel::post`]): in place, or from a
 //! spawned sender when the metrics channel is full — never dropped for a
 //! full channel, and never parking the stopping actor. Only a collector
-//! that is already gone (the process is coming down: the collector and
-//! the rooms end on the same ticker close) loses it.
+//! that is already gone loses it — and at the server's stop it is not:
+//! its final report waits until every room (every sender) has ended
+//! (BACKLOG F35), so only a room still running at the collector's grace
+//! (`crate::metrics::FINAL_REPORT_GRACE`) misses it.
 
 use std::collections::{HashMap, VecDeque};
 

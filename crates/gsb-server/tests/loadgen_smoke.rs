@@ -84,6 +84,46 @@ fn loadgen_smoke() {
     assert_metric_queue(&kv, result_line);
 }
 
+/// A run shorter than one room metrics period (BACKLOG F35): the room
+/// never takes a periodic sample (one a second), so it reaches the report
+/// only through its final count (`RoomFinal`) — which the stop's final
+/// report now waits for. The in-process run no longer waits a metrics
+/// period before it stops the server; the room is there all the same.
+#[test]
+fn a_run_shorter_than_a_metrics_period_still_reports_the_room() {
+    let run = loadgen_rate::run(&["2", "--duration", "0.3", "--move-ms", "100"]);
+    let out = &run.out;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "gsb-loadgen exited with {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("server room (final): steps=")),
+        "the room's final count reached the report:\n{stdout}"
+    );
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("RESULT "))
+        .expect("RESULT line in output");
+    let field = |k: &str| -> u64 {
+        line.split_whitespace()
+            .find_map(|kv| kv.strip_prefix(k)?.strip_prefix('='))
+            .unwrap_or_else(|| panic!("missing {k} in: {line}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{k} is not a number in: {line}"))
+    };
+    assert_eq!(field("joined"), 2, "{line}");
+    assert!(
+        field("steps") > 0,
+        "the room's steps, from its final count: {line}"
+    );
+}
+
 /// Assert the room-report "queue" fields on a RESULT line: the fine
 /// step-duration percentiles (the measurement spec's metric) and the
 /// RPC counters (cumulative + the in-flight gauge). The smoke scenarios

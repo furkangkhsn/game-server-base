@@ -12,10 +12,10 @@
 //! Deliberately NOT a reason:
 //!
 //! - **Server shutdown** (`ConnIn::Shutdown`). It is not a verdict on
-//!   the session, and it is unobservable anyway: the metrics collector
-//!   exits with the ticker in the same teardown, so these closes would
-//!   land (or not) depending on scheduling — and a counter whose value
-//!   depends on the race it is racing is worse than none.
+//!   the session: every session ends with the server. (Until F35 it was
+//!   also unobservable — the collector's final report went out on the
+//!   ticker's close, racing the connections' final flushes; the final
+//!   report now waits for them, but a stop is still no shedding.)
 //! - **Ticket / protocol-version rejections.** Both keep the connection
 //!   open (ERROR code 10 / 13); only their FLOOD closes, and that close
 //!   is [`ServerClose::ViolationBudget`].

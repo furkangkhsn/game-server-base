@@ -1,5 +1,6 @@
 //! The collector task: one owner of the accumulator, one awaited
-//! source (its sample mailbox), publishing on a period.
+//! source at a time (the ticker while the server runs, then its event
+//! channel while it stops — `closing`), publishing on a period.
 
 use std::time::{Duration, Instant};
 
@@ -7,6 +8,9 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::metrics::*;
 use crate::ticker::TickInfo;
+
+mod closing;
+pub use closing::FINAL_REPORT_GRACE;
 
 /// Where reports go. All sinks are message-passing: the collector never
 /// shares its accumulator.
@@ -32,16 +36,29 @@ pub enum MetricSink {
 
 /// The metrics collector task.
 ///
-/// One awaited source (a subscription to the global ticker's broadcast —
-/// the same channel the rooms use), no `select!`, no shared state: on
-/// each tick it drains the event channel with `try_recv` (synchronous)
-/// and, at most once per `period`, emits a report through its sink. When
-/// the ticker closes (shutdown), it emits one final report and exits.
+/// One awaited source at a time, no multiplexing, no shared state. While
+/// the server runs, that source is a subscription to the global ticker's
+/// broadcast (the same channel the rooms use): on each tick it drains its
+/// event channels with `try_recv` (synchronous) and, at most once per
+/// `period`, emits a report through its sink. When the ticker closes
+/// (shutdown) the rooms and connections are only starting their own ends,
+/// so the collector then awaits its event channel instead, folding every
+/// last word (a room's `RoomFinal`, a connection's final sample) until
+/// every producer has dropped its sender — or [`FINAL_REPORT_GRACE`]
+/// passed — and only then emits its final report and exits (BACKLOG F35,
+/// see `closing`).
 pub struct MetricsCollector {
     ticks: broadcast::Receiver<TickInfo>,
     /// Bounded (see module docs: bounded + `try_send` producers with a drop
-    /// counter); the collector drains it with `try_recv` on every tick.
+    /// counter); the collector drains it with `try_recv` on every tick,
+    /// and its CLOSE — every sender dropped — is what the final report
+    /// waits for (see `closing`).
     rx: mpsc::Receiver<MetricsEvent>,
+    /// The transport tasks' own channel, when they have one of their own
+    /// ([`Self::with_transport_events`]): drained like `rx`, but its close
+    /// is not waited for — a transport task can outlive the server's stop
+    /// by as long as its peer keeps the socket open.
+    transport: Option<mpsc::Receiver<MetricsEvent>>,
     acc: MetricAccumulator,
     sink: MetricSink,
     /// The push-side consumers (see `export`): each sees every report,
@@ -49,6 +66,9 @@ pub struct MetricsCollector {
     exporters: Vec<Box<dyn Exporter>>,
     period: Duration,
     next_report: Instant,
+    /// How long the final report waits for the producers after the ticker
+    /// closed (see `closing`).
+    final_grace: Duration,
 }
 
 impl MetricsCollector {
@@ -61,12 +81,34 @@ impl MetricsCollector {
         Self {
             ticks,
             rx,
+            transport: None,
             acc: MetricAccumulator::default(),
             sink,
             exporters: Vec::new(),
             period,
             next_report: Instant::now() + period,
+            final_grace: FINAL_REPORT_GRACE,
         }
+    }
+
+    /// Take the transport tasks' events (the rUDP demux and writers, the
+    /// stream pumps, the handshake intakes — `gsb_net`'s
+    /// `TransportMetrics`) from a channel of their own. They are folded
+    /// like any event, but the final report does not wait for that
+    /// channel to close: a transport task ends with its socket, which a
+    /// silent peer can hold open past the server's stop. Without it the
+    /// transports send on the main channel and the final report waits
+    /// for them too.
+    pub fn with_transport_events(mut self, rx: mpsc::Receiver<MetricsEvent>) -> Self {
+        self.transport = Some(rx);
+        self
+    }
+
+    /// Bound the final report's wait for the producers (default
+    /// [`FINAL_REPORT_GRACE`]; see `closing`).
+    pub fn with_final_grace(mut self, grace: Duration) -> Self {
+        self.final_grace = grace;
+        self
     }
 
     /// Hand every report to `exporters` as well (in this order, before
@@ -77,8 +119,12 @@ impl MetricsCollector {
         self
     }
 
-    /// Run until the ticker closes (one final report is emitted).
-    pub async fn run(mut self) {
+    /// Run until the ticker closes, then fold the producers' last words
+    /// and emit one final report (see `closing`). Returns whether that
+    /// report is complete: `true` when every producer had dropped its
+    /// sender, `false` when it went out at the grace with one still
+    /// holding it (a `warn` names the grace).
+    pub async fn run(mut self) -> bool {
         loop {
             // The collector's only awaited source: the ticker broadcast.
             // `Lagged` is irrelevant here (we do not index ticks); we just
@@ -91,6 +137,7 @@ impl MetricsCollector {
             while let Ok(ev) = self.rx.try_recv() {
                 self.acc.apply(ev);
             }
+            self.drain_transport();
             if now >= self.next_report {
                 self.emit(now);
                 self.next_report = now + self.period;
@@ -99,7 +146,18 @@ impl MetricsCollector {
                 break;
             }
         }
+        let complete = self.fold_last_words().await;
         self.emit(Instant::now());
+        complete
+    }
+
+    /// Fold whatever the transport channel holds (synchronous).
+    fn drain_transport(&mut self) {
+        if let Some(rx) = &mut self.transport {
+            while let Ok(ev) = rx.try_recv() {
+                self.acc.apply(ev);
+            }
+        }
     }
 
     fn emit(&mut self, at: Instant) {

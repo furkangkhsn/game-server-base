@@ -48,6 +48,13 @@ pub struct StopReport {
     /// Registered services still running at the stop grace and aborted
     /// (one that ignores its stop request). Zero with the in-tree games.
     pub services_aborted: usize,
+    /// Whether the metrics collector's final report is complete: every
+    /// session producer — the registry, every room, shard and dispatcher,
+    /// every connection actor — had ended, its last word folded in
+    /// (BACKLOG F35). `false` = the report went out at the collector's
+    /// grace (`gsb_core::metrics::FINAL_REPORT_GRACE`) with a producer
+    /// still running, without that producer's last word.
+    pub final_report_complete: bool,
 }
 
 impl ServerHandle {
@@ -66,7 +73,13 @@ impl ServerHandle {
     /// until every room and shard task has run its teardown, asks each
     /// service to stop, and waits for them under one deadline, aborting a
     /// straggler. The metrics collector is awaited
-    /// last: it emits one final report when the broadcast closes. The
+    /// last: once the broadcast has closed it folds every session
+    /// producer's last word — each room's final count, each connection's
+    /// final flush — and emits its final report when all of them have
+    /// ended (BACKLOG F35), or at its own grace
+    /// (`gsb_core::metrics::FINAL_REPORT_GRACE`, from the close, running
+    /// alongside the waits above) if one has not
+    /// ([`StopReport::final_report_complete`]). The
     /// teardown ORDER is the single-listener order applied across all
     /// listeners: doors close first, so no new client can connect while
     /// the registry is tearing the existing ones down.
@@ -89,7 +102,10 @@ impl ServerHandle {
             &mut report,
         )
         .await;
-        let _ = self.metrics.await;
+        // Bounded by the collector's own grace once the broadcast has
+        // closed (the registry, which holds the last `Ticker`, exits on
+        // the Shutdown above without awaiting any room — S rule).
+        report.final_report_complete = self.metrics.await.unwrap_or(false);
         report
     }
 }

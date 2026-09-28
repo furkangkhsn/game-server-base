@@ -62,6 +62,9 @@ async fn every_report_reaches_every_exporter_in_order() {
             .expect("sink open");
         reports.push(r);
     }
+    // The producer ends with the server: the final report waits for
+    // every sender to drop (F35), then goes out on the closed ticker.
+    drop(m_tx);
     feeder.abort();
     drop(tick_tx);
     tokio::time::timeout(Duration::from_secs(3), task)

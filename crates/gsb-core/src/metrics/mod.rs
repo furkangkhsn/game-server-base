@@ -57,8 +57,11 @@
 //! synchronous body, no `select!`). Reports go out at most once per
 //! report period; the ticker's cadence (30–60 Hz) is far finer than a
 //! report period, so no event is ever older than one tick before it is
-//! processed. Ticker `Closed` (shutdown) triggers one final report and a
-//! clean exit.
+//! processed. Ticker `Closed` (shutdown) ends the periodic reports; the
+//! collector then awaits its event channel until every producer has
+//! dropped its sender (bounded by [`FINAL_REPORT_GRACE`]), so the one
+//! final report carries the rooms' and connections' last words (BACKLOG
+//! F35), and exits.
 //!
 //! **What is measured** (chosen so every P0 load question is answerable
 //! from the report alone):
@@ -113,7 +116,7 @@ mod tests;
 
 pub use accumulator::MetricAccumulator;
 pub use closes::ServerCloses;
-pub use collector::{MetricSink, MetricsCollector};
+pub use collector::{FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
 pub use export::Exporter;
 #[cfg(feature = "otlp")]
 pub use export::otlp;

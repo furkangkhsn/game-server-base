@@ -101,9 +101,10 @@ pub struct ServerHandle {
     /// listener (abort is only the backstop — see `stop`).
     accepts: Vec<JoinHandle<()>>,
     ticker: JoinHandle<()>,
-    /// The metrics collector (emits one final report when the ticker's
-    /// broadcast closes).
-    metrics: JoinHandle<()>,
+    /// The metrics collector: its final report goes out once the ticker's
+    /// broadcast has closed AND every session producer has dropped its
+    /// sender (bounded, F35); `true` = that report is complete.
+    metrics: JoinHandle<bool>,
     /// The game's registered services (`RegistryParts::service`), stopped
     /// by `stop` after the rooms (BACKLOG F5).
     services: Vec<gsb_core::service::Service>,

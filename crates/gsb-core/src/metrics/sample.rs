@@ -465,7 +465,9 @@ pub enum MetricsEvent {
     /// periodic straggler is refused), and starts the linger itself when
     /// no [`Self::RoomGone`] did: a final sample means the room is gone,
     /// so it cannot leave a ghost row. Delivered past a full channel
-    /// (`crate::channel::post`); lost only when the collector is gone.
+    /// (`crate::channel::post`); lost only when the collector is gone —
+    /// which the server's stop no longer races: the final report waits
+    /// for every producer to end (F35, [`crate::metrics::FINAL_REPORT_GRACE`]).
     RoomFinal(RoomSample),
     /// A transport task's loss counters, as deltas since its last flush
     /// (B58, see [`TransportCounters`]): the rUDP demux and writers, the
