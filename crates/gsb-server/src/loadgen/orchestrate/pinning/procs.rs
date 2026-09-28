@@ -169,6 +169,10 @@ pub(crate) fn parse_client_line(line: &str) -> Option<ClientRec> {
     })
 }
 
+/// How long the metric reader may still run once the server child has
+/// exited (see its await in [`orchestrate()`]).
+const METRICS_READER_GRACE: Duration = Duration::from_secs(5);
+
 /// The orchestrator (item A). Topology (all on loopback, all spawned by
 /// this process):
 ///
@@ -360,7 +364,7 @@ pub(crate) async fn orchestrate(args: Args) {
 
     // ── metric reports from the server socket ─────────────────────────
     let metrics_addr: SocketAddr = format!("127.0.0.1:{metrics_port}").parse().expect("addr");
-    let metrics_task = tokio::spawn(async move {
+    let mut metrics_task = tokio::spawn(async move {
         // The server binds its metrics listener shortly after spawn;
         // retry until it accepts (one awaited source at a time).
         let mut stream = loop {
@@ -493,8 +497,26 @@ pub(crate) async fn orchestrate(args: Args) {
         eprintln!("orchestrate: WARNING — server child exited non-success");
     }
     // The metric stream ends when the server's export task ends (its
-    // channel closes on the clean stop), so this await is bounded.
-    let server_reports: Vec<MetricReport> = metrics_task.await.expect("metrics reader panicked");
+    // channel closes on the clean stop), so a reader that connected is
+    // done moments after the child's exit. One that never connected — a
+    // server child that died before serving (a start-up refusal, its
+    // port taken since `alloc_port`) — would retry forever: the child is
+    // gone now, so the reader gets one short grace and is then given up.
+    let server_reports: Vec<MetricReport> = match tokio::time::timeout(
+        METRICS_READER_GRACE,
+        &mut metrics_task,
+    )
+    .await
+    {
+        Ok(reports) => reports.expect("metrics reader panicked"),
+        Err(_) => {
+            metrics_task.abort();
+            eprintln!(
+                "orchestrate: WARNING — the server child served no metric stream; server-side numbers are empty"
+            );
+            Vec::new()
+        }
+    };
 
     // CPU seconds per process over the run (ticks / USER_HZ). Each side
     // uses its own t1 (sampled while that side was still alive): the

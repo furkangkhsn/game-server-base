@@ -425,3 +425,42 @@ fn loadgen_churn_smoke() {
     assert_eq!(ai + despawn, 0, "no park expired during the smoke window");
     assert_eq!(get("errors"), "0", "churn must be clean at this scale");
 }
+
+/// An orchestrated run whose server child dies at start (here: a shard
+/// count the server refuses; in the wild: its port taken between the
+/// orchestrator's allocation and the child's bind) ends, reporting the
+/// dead child — it does not wait forever for a metric stream that child
+/// never served. It used to: the reader retried its connect every 100 ms
+/// for as long as anyone let it (a 51-minute hang under load, F25).
+#[test]
+fn an_orchestrated_run_whose_server_child_dies_still_ends() {
+    use std::time::{Duration, Instant};
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
+        .args(["--orchestrate", "2", "--procs", "1", "--duration", "1"])
+        .args(["--visibility", "sharded", "--shard-count", "0"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawning gsb-loadgen orchestrator");
+    // Past the orchestrator's own bounds: the readiness probe (10 s),
+    // the children's margins, the metric reader's grace.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while child.try_wait().expect("try_wait").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the orchestrator is still waiting for its dead server child");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let out = child.wait_with_output().expect("the orchestrator's output");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("server child exited non-success"),
+        "the dead child is reported:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the server child served no metric stream"),
+        "and so is the missing metric stream:\n{stderr}"
+    );
+}
