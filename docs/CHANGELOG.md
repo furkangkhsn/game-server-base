@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F41 — duruşta önce kapılar (`core/f41-stop-order`)
+
+- **Hata (motor, gerçek):** `stop()` registry'ye `Shutdown`'ı gönderip
+  kapıları ANCAK sonra kapatıyordu. Registry `Shutdown`'da okumayı
+  bırakır: arkasına kuyruklanan `ConnOpened` posta kutusuyla düşer,
+  sonrakinin gönderimi hata alır; accept döngüsü aktörü yine doğurur. O
+  aktör `ConnIn::Shutdown` almaz, ERROR 14 göndermez, eşi kapatana ya da
+  idle penceresine (30 sn) dek yaşar ve son raporu `FINAL_REPORT_GRACE`'e
+  dek tutar (`final_report_complete=false`). İki pencere: accept ile
+  `ConnOpened` gönderimi arası (dolu registry kutusunda genişler) ve
+  kapının kapandığı yoklamada biten accept (`Door::admit` elindeki
+  bağlantıya meyillidir). Kanıt: eski sırayla yeni test deterministik
+  kırmızı — registry `[Closed(BUSY), Shutdown, Opened(c1)]` okudu.
+- **Düzeltme (`boot/stop.rs`, yalnız sıra):** kapılar (ops + her listener)
+  kapanır → `end_accepts` (1 sn tek son tarih) → registry `Shutdown` →
+  ticker abort → servisler → toplayıcı. Döngü yalnız "kapandı" hatasında
+  döner; gönderdiği her `ConnOpened` `Shutdown`'ın önündedir, her aktör
+  kayıtlı ve bildirimli (ERROR 14) biter. Abort edilen döngü aktör
+  doğurmaz. Kapıdan sonra gelen eş kabul edilmez; kapının düşürdüğü zaten
+  B74 sayaçlarında — yeni sayaç yok.
+- **Sınırlar:** `stop()`'un üst sınırı aynı (≈ 3 sn); toplayıcının sınırı
+  artık accept beklemesinden sonra başlar. S kuralı değişmedi. İstemci
+  teli değişmedi.
+- **Elenenler:** reddedilen `ConnOpened`'da aktörü doğurmamak (kuyrukta
+  düşen `ConnOpened`'ın gönderimi başarılı döner); "kapat, `Shutdown`,
+  sonra bekle" (aynı yoklamada biten accept kaçar); registry'nin
+  `Shutdown`'dan sonra boşaltmaya devam etmesi (kutunun EOF'u gelmez).
+
+Testler 1455 → 1458 (`otlp` ile 1473 → 1476): `boot::stop::tests::window`
+(3; paused saat, gerçek accept döngüsü + bağlantı aktörü + toplayıcı +
+`stop()`, sahte kapı ve dolu kutulu sahte registry); eski sırayla ikisi
+düşer, 200/200 yeşil. Ebeveyn doğrulaması: dinleyicileri kapatmamak iki
+testi düşürdü. DESIGN §9 "Önce kapılar (BACKLOG F41)", §12.
+
 ## F35 — son raporun odaları beklemesi (+F33, F40) (`metrics/f35-final-report`)
 
 - **Hata (motor):** toplayıcı son raporunu ticker kapanışında basıyordu;
