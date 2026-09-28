@@ -993,6 +993,20 @@ AYNI; her koşuda `left=N errors=0 server_closes=0`.
 | `50 --duration 3 --visibility spatial` | 4079–4092 / 4088–4136 | 103541–106313 / 107380–109260 | 1920–1977 / 1941–1978 | 800 / 800 | 104–152 / 104–152 |
 | `50 --topology sharded --visibility spatial --shard-count 4 --duration 8` | 11462–11524 / 11460–11505 | 155033–157658 / 155658–156857 | 2894–2940 / 2901–2941 | 2298–2299 / 2297–2298 | 56–80 / 48–80 |
 | `--orchestrate 1000 --procs 2 --visibility spatial --duration 8` | 225077–226064 / 223958–226282 | 64,2–64,6 M / 63,3–64,7 M | 65063–65444 / 64090–65432 | 44537–44815 / 44263–44780 | 992–1208 / 992–1288 |
+| aynı, B50 (2026-09-28, `73da266`), varsayılan worker'lar — üç koşu | — / 215869, 215545, 188351 | — / 59,8 M, 59,8 M, 45,7 M | — / 59563, 59633, 45532 | — / 43223, 43015, 37556 | — / 2048, 2088, 1776 |
+| aynı, B50, `--workers 1` — iki koşu | — / 225163, 224260 | — / 64,1 M, 63,9 M | — / 64864, 64743 | — / 44864, 44756 | — / 1032, 712 |
+
+*Orkestre satırı tek worker'lı çocuklar (B37 öncesi) koşulundadır.* B50
+satırları aynı komutun bugünkü ağaçta yeniden ölçümü (RPC-CONTROL-PLANE
+§8.2 "B50"; yük 3,1–4,9). `--workers 1` satırı eski satırla aynı bantta
+(`gap_drops` 861 · 868; `clients_cpu_s` 4,9 · 4,5): alıcı döngü o günden
+bu yana değişmedi. Varsayılan worker'larla katılım eksik — `joined` 988 ·
+997 · 869 (her koşuda `connected = 1000`, sunucunun registry'si `opens =
+joined + 1`): istemci süreçleri 1000 bağlantıyı daha sert bir fırtınayla
+açıyor, dinleme kuyruğu taşıyor (çekirdeğin `TcpExtListenOverflows`'u
+sayılan iki koşuda 1320 · 1579; `--workers 1` ile 615 · 501) ve bazı bağlantılar 8 sn'lik pencerede sunucuya hiç
+kabul edilmiyor (BACKLOG B84). Bayt ve kare sayıları bu yüzden düşük;
+adım p50/p90 2048/2944 (katılanlar için), `clients_cpu_s` 8,1, `server_cpu_s` 3,3.
 
 `fulls`/`private_fulls`/`deltas`/`gap_drops`/`view_size` de gürültü
 içinde (ör. spatial `deltas` 3924–3936 / 3931–3934; orkestre
@@ -1023,6 +1037,27 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`,
 | mmo | 200 | in-proc | 7,8 | 128 / 176 | 634 | 20 739 | 56 885 | 11 375 / 11 483 | 1276 / 0 | 57,44,50,49 → 55,49,50,46; `gap_drops` 155 |
 | mmo | 500 | in-proc | 7,0 | 224 / 296 | 1632 | 49 096 | 136 178 | 27 193 / 27 354 | 2610 / 4229 | 134,120,121,125 → 125,111,136,128; `gap_drops` 398 |
 | mmo | 1000 | sep (2 süreç) | 5,1 | 288 / 400 | 1540 | 102 190 | 280 645 | 55 775 / 56 155 | 9282 / 4746 | 253,254,246,247 → 245,245,255,255; `gap_drops` 991; `server_cpu_s` 2,3, `clients_cpu_s` 7,2, `dropped` 1836 |
+| arena | 1000 | sep, varsayılan worker'lar (B50) | 4,78 | 2184 / 3784 | 16 578 | 110 800 | 276 530 | 54 809 / 55 102 | 10 077 / 818 | records/tick 1116; `server_cpu_s` 4,2, `clients_cpu_s` 13,9, `dropped` 0, `sends_closed` 0 |
+| arena | 1000 | sep, varsayılan worker'lar (B50) | 4,48 | 1984 / 2928 | 5336 | 109 872 | 274 406 | 54 542 / 54 795 | 10 241 / 820 | records/tick 1129; 4,0 / 14,5; 0 / 0 |
+| arena | 1000 | sep, varsayılan worker'lar (B50) | 4,91 | 1936 / 2816 | 5448 | 111 471 | 277 302 | 55 104 / 55 305 | 10 126 / 815 | records/tick 1130; 3,9 / 13,5; 0 / 0 |
+| mmo | 1000 | sep, varsayılan worker'lar (B50) | 4,59 | 440 / 648 | 2369 | 94 386 | 278 956 | 55 419 / 55 477 | 4007 / 4844 | → 240,236,256,268; `gap_drops` 939; `server_cpu_s` 4,5, `clients_cpu_s` 10,4, `dropped` 0, `sends_closed` 1301 |
+| mmo | 1000 | sep, varsayılan worker'lar (B50) | 4,79 | 472 / 704 | 4772 | 95 175 | 280 071 | 55 700 / 55 841 | 3976 / 4832 | → 244,244,259,253; 951; 4,6 / 9,8; 0 / 1621 |
+| mmo | 1000 | sep, varsayılan worker'lar (B50) | 4,56 | 432 / 632 | 1780 | 95 662 | 281 489 | 55 957 / 55 975 | 3958 / 4860 | → 239,237,260,264; 915; 4,5 / 10,3; 0 / 915 |
+
+*1000'lik ilk iki satır (arena, mmo `sep`) tek worker'lı çocuklar (B37
+öncesi) koşulundadır.* "B50" satırları aynı komutun 2026-09-28'de
+(`73da266`) varsayılan worker'larla yeniden ölçümü (RPC-CONTROL-PLANE
+§8.2 "B50"; not sütununda `server_cpu_s` / `clients_cpu_s`, `dropped` /
+`sends_closed`; shard üyeleri RESULT'un son kesiti). Baytlar eski
+satırla kıyaslanmaz: arenaya A10 (`Ticks2`, −%43–45), MMO'ya A30
+(kompakt id, −%7) o günden sonra geldi. Aynı ağaç `--workers 1` ile:
+arena 1784/2168 · 1672/2072, `server_cpu_s` 2,6 · 2,4, `clients_cpu_s`
+8,3 · 7,8; MMO 280/392 · 296/408, 2,1 · 2,2, 5,2 · 5,2 — MMO'nun adımı
+eski satırla aynı (288/400); varsayılan worker'larla adım ~1,5× ve
+sunucu CPU'su ~2× (çekirdekler arası uyandırma, §8.2 okuma 2). Eski
+`dropped`'ların hepsi kapalı kanaldı (B32 bölmesi): bugün `dropped` 0,
+MMO'nun `sends_closed`'ı 915–1621 (shard'lı odada ayrılış registry →
+shard yolunu dolaşıyor), arenanınki varsayılan worker'larla 0.
 
 *Dördüncü oyunun (savaş, `--game war`) tabanları aşağıda "W2 sonucu"nda.*
 
@@ -1394,6 +1429,23 @@ koşuda `joined = left = N`, `errors=0`, `server_closes=0`, `server_hz`
 | war | 1000 | sep (2 süreç) | 34,4 | 1448 / 2416 | 10 058 | 369 098 | 281 654 | 40 251 / 40 717 | 18 522 / 3727 | records/tick 9576 (overlap 9,6); görünüm ~956; 214,231,230,325 → 205,294,208,293; `server_cpu_s` 6,0, `clients_cpu_s` 17,8, `dropped` 1661, `ack_lag_max_ms` 469 |
 | war | 1000 | sep (2 süreç) | 39,1 | 1736 / 3072 | 17 374 | 363 167 | 278 735 | 37 280 / 38 823 | 18 522 / 3737 | 216,230,229,325 → 211,285,208,296; `server_cpu_s` 6,1, `clients_cpu_s` 16,1, `dropped` 1908, `ack_lag_max_ms` 884 |
 | war | 500 | rUDP | 44,3 | 1200 / 3904 | 16 929 | 158 382 | 130 433 | 25 872 / 25 924 | 9137 / 3416 | `frag_reassembled` 129 204, `frag_dropped` 0, `retrans_out` 160, `gave_up` 0 |
+| war | 1000 | sep, varsayılan worker'lar (B50) | 4,75 | 1104 / 2216 | 5814 | 164 559 | 279 483 | 55 415 / 55 540 | 8056 / 3641 | records/tick 9999 (overlap 10,0); görünüm ~920; → 206,329,203,262; `server_cpu_s` 6,1, `clients_cpu_s` 30,5, `dropped` 0, `sends_closed` 1768, `ack_lag_max_ms` 102 |
+| war | 1000 | sep, varsayılan worker'lar (B50) | 4,51 | 1120 / 2104 | 4756 | 164 228 | 279 430 | 55 569 / 55 607 | 8051 / 3649 | → 207,308,207,278; 6,0 / 30,8; 0 / 1687; 104 |
+| war | 1000 | sep, varsayılan worker'lar (B50) | 4,80 | 1080 / 2152 | 6019 | 163 149 | 277 514 | 54 999 / 55 129 | 8049 / 3652 | → 205,302,207,286; 6,2 / 31,6; 0 / 1656; 104 |
+
+*1000'lik ilk iki satır tek worker'lı çocuklar (B37 öncesi)
+koşulundadır.* "B50" satırları aynı komutun 2026-09-28'de (`73da266`)
+varsayılan worker'larla yeniden ölçümü (RPC-CONTROL-PLANE §8.2 "B50";
+röle sayıları CROSS-SHARD §8b.8). Bayt eski satırla kıyaslanmaz: savaşa
+A31 (paketli koşu, −%54) ve A30 (kompakt id) o günden sonra geldi —
+`out_bps_per_conn` ~365 k → ~164 k, en büyük kare 18,5 → 8,1 KB. İstemci
+tarafı artık doymuyor: `moves` ~40 k → ~55,5 k, `ack_lag_max_ms` 469–884
+→ 102–104 (aynı ağaç `--workers 1` ile de `moves` ~56 k, 134–136 ms —
+doygunluğu asıl A31'in baytı kaldırdı). Adım 1448–1736 → 1104 µs p50;
+`--workers 1` ile 688/896 · 696/872, `server_cpu_s` 3,0 · 2,9 —
+varsayılan worker'ların adım/CPU bedeli diğer oyunlardaki gibi. Eski
+`dropped`'lar kapalı kanaldı: bugün `dropped` 0, `sends_closed`
+1656–1768.
 
 Aynı oturumda mevcut oyunlar etkilenmedi (200, aynı komut): demo
 `out_bps_per_conn` 47 481, arena 39 163, MMO 21 515 (G3/T/K4

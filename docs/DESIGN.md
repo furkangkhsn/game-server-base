@@ -1271,7 +1271,20 @@ derlemesi): step p50/p90 TCP 248/432 · 240/448, WS 256/416 · 272/416;
 `server_cpu_s` TCP 1,7 / 1,7, WS 1,9 / 1,8; `dropped` TCP 116 / 116, WS
 14 / 17 (katılma fırtınasında; WS kapısının bağlantı başına 64'lük kendi
 yazıcı kuyruğu fan-out'un önüne tampon ekliyor); connect p50/p99 TCP
-17/1024 · 20/1009, **WS 1065/1466 · 1062/1469**.
+17/1024 · 20/1009, **WS 1065/1466 · 1062/1469**. *Bu orkestre sayıları
+tek worker'lı çocuklar (B37 öncesi) koşulundadır.* **Varsayılan
+worker'larla (B50, 2026-09-28, `73da266`, üç koşu, yük 3,5–5,0; medyan,
+parantezde aralık):** step p50/p90 TCP 808/1216 (712–832 / 1200–1224),
+WS 816/1272 (768–896 / 1208–1336); `server_cpu_s` TCP 4,6 (4,4–4,7), WS
+4,9 (4,8–5,2); `dropped` 0 ve `sends_closed` 0 her koşuda; connect
+p50/p99 TCP 31/1066, WS 32/1064 (WS'nin ~1 sn'lik p50'si B31'de gitti).
+Aynı ağaç `--workers 1` ile TCP 352/632 · 296/528, `server_cpu_s` 2,3 ·
+1,9, `sends_closed` 116 · 116 — adım ve CPU farkı worker sayısının,
+116 tek worker zamanlamasının (RPC-CONTROL-PLANE §8.2 "B50"). Süreç
+içi satırlar (tablo) sayım turlarından sonra yeniden koşuldu, üçer koşu:
+demo 200 184/272 · `out_bps_per_conn` 46 556, demo 500 712/1256 ·
+119 053, arena 200 408/560 · 23 491, MMO 200 128/176 · 20 303 —
+tablodakilerle aynı bantta.
 
 *Okuma.* (1) Tick yolu: `server_hz` hep 30; adım süreleri gürültü
 içinde, yalnız MMO 200'de WS p90 iki çiftte de +32…48 µs (süreç içinde
@@ -1449,6 +1462,16 @@ ortalaması; connect p50/p99 ms).* Sessiz soket deneyi (B29'unki):
 | sessiz soket + 20 istemci | TCP | 0/0 (1,05) · 0/0 (1,56) | 0/0 (1,20) · 0/0 (1,41) |
 | orkestre 500 | WS | 1057/1457 (1,51) · 1052/1457 (1,37); dropped 10 · 29 | **34/1075** (1,24) · 36/1075 (1,29); dropped 0 · 0 |
 | orkestre 500 | TCP | 21/1014 (2,30) · 16/1017 (1,57); dropped 116 · 116 | 18/1054 (1,78) · 15/1053 (1,12); dropped 123 · 116 |
+| orkestre 500, varsayılan worker'lar (B50, `73da266`) | WS | — | 29/1064 (3,46) · 32/1057 (4,84) · 34/1075 (4,13); dropped 0 · 0 · 0, sends_closed 0 · 0 · 0 |
+| orkestre 500, varsayılan worker'lar (B50, `73da266`) | TCP | — | 33/1066 (3,73) · 31/1072 (4,93) · 28/1042 (4,95); dropped 0 · 0 · 0, sends_closed 0 · 0 · 0 |
+
+Yukarıdaki dört "orkestre 500" satırı tek worker'lı çocuklar (B37
+öncesi) koşulundadır; son iki satır aynı komutun varsayılan worker'lı
+yeniden ölçümü (2026-09-28). Bağlanma sayıları değişmedi (p99 ~1,05 sn:
+birkaç istemci hâlâ 1 sn'lik SYN yeniden gönderimini yiyor — varsayılan
+worker'lı istemciler fırtınayı sertleştiriyor, dinleme kuyruğu koşu
+başına 257–411 kez taşıyor; BACKLOG B84); TCP'nin 116/123'ü tek
+worker'ın zamanlamasıydı (RPC-CONTROL-PLANE §8.2 "B50").
 
 Her orkestre koşuda connected = joined = left = 500, errors =
 server_closes = 0. *Okuma.* Sessiz soket kapıyı artık tutmuyor: WS

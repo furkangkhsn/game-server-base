@@ -2266,6 +2266,7 @@ build'leriyle yüklüydü — 1 dk yük ortalaması tabloda). Her koşuda
 | arena 500 (3) | 26–33 | 108 320–109 985 / 96 424–99 122 (−%10) | 4906–5211 / 5073–5326 | 793–798 / 807–821 | 1360/2112, 1512/2608, 2568/4096 / 1512/2288, 2480/4096, 2448/4096 | 1086–1098 / 985–1004 | 130–134 k / 4570–4738 / 321–341 |
 | arena 1000 orkestre, 2 süreç (4: 2 AB + 2 BA) | 30–46 | 229 281–231 932 / 207 246–213 521 (−%9,5) | 10 152–10 426 / 10 090–10 443 | 905 / 907–924 | 2304/2960, 2440/3352, 2328/2944, 2672/3720 / 3512/4096, 2696/4096, 2664/3192, 2416/3128 | 2164–2198 / 1956–1984 | 275–280 k / 9725–10 816 / 872–997 |
 | arena 500 rUDP `--stagger-ms 5` (2) | 28–31 | 102 481–102 533 / 93 691–93 729 (−%8,6) | 5126–5138 / 5064–5078 | 753–754 / 774 | 1336/2232, 1384/2480 / 1280/2056, 1360/2040 | 1092 / 1003 | 126 k / 4587 / 480 |
+| arena 1000 orkestre, varsayılan worker'lar (B50, `73da266`, 3) | 4,5–4,9 | — / 109 872–111 471 | — / 10 077–10 241 | — / 815–820 | — / 2184/3784, 1984/2928, 1936/2816 | — / 1116–1130 | 264–267 k / 9923–10 356 / 985–997 |
 
 rUDP'de `frag_reassembled` 123 193–123 363 → 122 377–122 483 (−%0,7),
 `frag_dropped` 0 / 0, `retrans_out` 161–292 / 290–298. HEAD'de
@@ -2274,6 +2275,20 @@ G3-2); orkestre 1000'de fan-out `dropped` 1542–1815 → 1035–1332,
 `server_cpu_s` 3,8–4,3 / 3,8–4,9, `clients_cpu_s` 12,2–13,7 / 14,6–16,2
 (dört çiftin dördünde HEAD yüksek — istemci tarafında delta birleştirme;
 `ClientView` bu turun kapsamı dışında, kayıt).
+
+*"arena 1000 orkestre" A/B satırı ve bu paragrafın orkestre sayıları
+(`dropped`, `server_cpu_s`, `clients_cpu_s` +%15 — BACKLOG A24) tek
+worker'lı çocuklar (B37 öncesi) koşulundadır.* B50 satırı aynı komutun
+(`--orchestrate 1000 --procs 2 --game arena --duration 10
+--write-stall-secs 0`) 2026-09-28'de varsayılan worker'larla yeniden
+ölçümü (RPC-CONTROL-PLANE §8.2 "B50"; her koşuda `joined = left =
+1000`, `errors = server_closes = 0`, `server_hz` 29,99–30,00). Bant
+yarıya indi, ama bu A10'un (`Ticks2`, −%43–45, bu turdan sonra) işi;
+`dropped` 0 ve `sends_closed` 0 (eski `dropped`'lar kapalı kanaldı),
+`server_cpu_s` 3,9–4,2, `clients_cpu_s` 13,5–14,5. Aynı ağaç `--workers
+1` ile 1784/2168 · 1672/2072, `server_cpu_s` 2,6 · 2,4, `clients_cpu_s`
+8,3 · 7,8. A24'ün +%15'i (delta'lı ↔ delta'sız istemci) bu turda A/B
+olarak yeniden ölçülmedi — B50 yalnız bugünkü kodun tabanını verir.
 
 **Bulgu — kayıt başına delta arenada ~%10 kazandırıyor, parçalanmayı
 düşürmüyor.** Arena botunun her birimi hareket eden bir hedefi 12 m/s'le
@@ -2536,7 +2551,15 @@ oyuncuda (orkestre) `server_hz` 30, adım p50/p90 1,4–1,7/2,4–3,1 ms,
 senaryodan: "müttefik harita geneli" her istemciye O(N) kayıt/tick
 demek (hareketli birimlerin çoğu her tick yeni desimetre değeri).
 Röle ucuz ve kayıpsız: shard başına tick başına bir export, export
-başına ~0,78·N kayıt, yayılım tam 3, düşme 0.
+başına ~0,78·N kayıt, yayılım tam 3, düşme 0. *Bu orkestre 1000
+sayıları tek worker'lı çocuklar (B37 öncesi) koşulundadır.* Varsayılan
+worker'larla yeniden ölçüm (B50, 2026-09-28, `73da266`, üç koşu):
+`server_hz` 29,98–29,99, adım p50/p90 1,08–1,12/2,10–2,22 ms,
+`errors=0`, görünüm ~920, `out_bps_per_conn` ~164 KB/sn (A31 ve A30
+sonradan geldi; arena 1000 bugün ~111 KB/sn, A10 ile), export başına
+~764 kayıt, yayılım 3,00, dolu kutu düşmesi 0; istemciler artık doymuyor
+(`moves` ~40 k → ~55,5 k). Ayrıntı GAME-MODULE "W2 sonucu",
+CROSS-SHARD §8b.8, RPC-CONTROL-PLANE §8.2 "B50".
 
 **Doğrulama:** 776 → **818** test / 0 hata / 1 ignored; kapanış
 kontrolü `cargo test -p gsb-demo -p gsb-demo-arena -p gsb-demo-mmo -p

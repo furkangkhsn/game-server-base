@@ -1392,6 +1392,23 @@ paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
 | 500 | 28,4 / 37,2 | 119,9 / 119,8 | 360,8 / 358,7 | 43 252 / 42 971 | 359,6 / 359,4 | 129 852 / 128 986 | 3,00 | 0 / 0 / 0 | 76 / 69 | 5 / 6 |
 | 1000 (sep) | 34,4 / 39,1 | 120,0 / 119,9 | 780,0 / 779,5 | 93 629 / 93 462 | 360,1 / 359,7 | 280 968 / 280 456 | 3,00 | 0 / 0 / 0 | 111 / 97 | 7 / 5 |
 | 500 rUDP | 44,3 | 119,8 | 358,8 | 43 002 | 359,5 | 129 086 | 3,00 | 0 / 0 / 0 | 62 | 5 |
+| 1000 (sep), varsayılan worker'lar (B50) | 4,75 / 4,51 / 4,80 | 119,9 / 120,0 / 119,9 | 757,1 / 763,7 / 769,9 | 90 795 / 91 612 / 92 314 | 359,8 / 359,9 / 359,7 | 272 530 / 274 939 / 277 093 | 3,00 | full 0, closed 2 · 3 · 0 / 0 / 0 | 167 / 151 / 164 | 10 / 9 / 8 |
+
+*"1000 (sep)" satırı tek worker'lı çocuklar (B37 öncesi) koşulundadır.*
+B50 satırı aynı komutun 2026-09-28'de (`73da266`) varsayılan
+worker'larla yeniden ölçümü (RPC-CONTROL-PLANE §8.2 "B50"; her koşuda
+`joined = left = 1000`, `errors = server_closes = 0`, `server_hz`
+29,98–29,99, `team_over_budget` 0). Röle bulguları değişmedi: tempo
+120/sn, yayılım tam 3, dolu kutu düşmesi 0; export başına kayıt ~764
+(kayıt ~780 — göç ve görünüm oynaması içinde), göç 10 sn'de 151–167
+(111 / 97) ve uzak etki 8–10 (7 / 5): istemciler artık doymadığı için
+bot her girdisini gönderiyor (`moves` ~40 k → ~55,5 k; GAME-MODULE "W2
+sonucu"). `team_export_drops_closed` 0–3: kapalı kutuya (registry
+durmuş) reddedilen export'lar — F50'nin bölmesi, eski tek sayacın
+kayıtlarında 0'dı; kaynağı bu turda ayrıca izlenmedi (büyük olasılıkla
+koşu sonundaki duruş). Aynı ağaç `--workers
+1` ile: 756,3 · 760,3 kayıt/export, göç 163 · 162, uzak etki 7 · 11,
+`closed` 0 · 0.
 
 **Bulgular.**
 

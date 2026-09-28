@@ -690,7 +690,9 @@ varsayılan worker'larla 0, sunucu `--workers 1` → 116, istemciler
 `--workers 1` → 80, ikisi 1 → 130, sunucu 2 + istemciler 1 → 1.
 Tekrarlanabilirliğin kaynağı: pinsiz orkestratör çocuklara
 `--workers 1` veriyordu (`args.workers.max(1)`; yorum "runtime default"
-diyordu) — B37'de düzeltildi, aşağıda. Kapalı kanalı `dropped`'tan
+diyordu) — B37'de düzeltildi, aşağıda (B50, 2026-09-28: varsayılan
+worker'larla üç koşuda `dropped` 0, `sends_closed` 0; bugünkü kod
+`--workers 1` ile yine tam 116, artık `sends_closed`'ta). Kapalı kanalı `dropped`'tan
 ayırmak ayrı bir karardı (metrik anlamı değişikliği, B32) — **sonradan
 yapıldı** (bakımcı kararı 2026-09-27, "her şeyi saymalıyız"):
 
@@ -737,7 +739,9 @@ tek bir varsayılan var, orkestratör onu kopyalamıyor. Kilit:
 an_explicit_worker_count_reaches_both_children,
 a_pinned_child_gets_its_core_count}` (önce kırmızı: `Some("1")`).
 
-*Etkilenen tabanlar — bu turda yeniden ölçülmedi.* `--pin`'siz ve
+*Etkilenen tabanlar — bu turda yeniden ölçülmedi* (B50'de ölçüldü,
+aşağıda "B50: pinsiz orkestre tabanları varsayılan worker'larla").
+`--pin`'siz ve
 `--workers`'sız her orkestre koşusu tek worker'lı süreçlerde alındı;
 sayıları olduğu gibi duruyor, "o koşul altında" okunmalı, yeniden
 ölçüm B37'nin tetikleyicisiyle (orkestre ölçümü yeniden alınırken)
@@ -760,6 +764,152 @@ Etkilenmeyenler: `--pin`'li orkestre koşuları (CROSS-SHARD "Ölçümler
 (release, orchestrator --procs 4 --pin …)", CHANGELOG'un C1 aynası ve
 10 000'lik `--pin` koşuları — çekirdek kümesinin boyu iletiliyordu) ve
 tek süreçli (süreç içi / `--serve`) koşular.
+
+**B50: pinsiz orkestre tabanları varsayılan worker'larla (2026-09-28,
+`73da266`).** Yukarıdaki listenin her orkestre koşusu kayıttaki komut
+satırıyla yeniden alındı, bu kez çocuklar kendi varsayılanında
+(`available_parallelism` = 32). Makine: AMD Ryzen 9 7950X 16C/32T,
+`nproc` 32, release; bu turda makinede başka ölçüm/derleme işi yoktu
+(masaüstü taban yükü ~3; yükün 1 dk ortalaması < 5'e inene dek
+beklendi, kabul edilen koşularda 2,3–4,95; 17,1'de koşan bir demo 1000
+koşusu atıldı ve yeniden alındı). Yapılandırma başına üç koşu (medyan,
+parantezde en küçük–en büyük). Ayrıca aynı ağaçta `--workers 1` ile
+(orkestratör açık sayıyı iki çocuğa da iletir — B37 öncesi koşulun
+bugünkü koddaki karşılığı) ikişer koşu: eski sayılarla fark "worker mı,
+kod mu" sorusunu ayırır. Tabloda "tek worker'lı çocuklar (B37 öncesi)"
+sütunu kayıttaki sayılardır.
+
+| Taban (komut) | Metrik | tek worker'lı çocuklar (B37 öncesi, kayıt) | bugün `--workers 1` | **bugün varsayılan worker'lar** |
+|---|---|---|---|---|
+| demo 500 TCP (`--orchestrate 500 --procs 2 --write-stall-secs 0 --duration 20`) | step p50/p90 fine µs | 248/432 · 240/448 | 352/632 · 296/528 | **808/1216** (712–832 / 1200–1224) |
+| | `server_cpu_s` / `clients_cpu_s` | 1,7 / — | 2,3 · 1,9 / 6,5 · 5,4 | **4,6** (4,4–4,7) / **11,9** (11,4–12,1) |
+| | `dropped` / `sends_closed` | 116 (×7, B32 öncesi; hepsi kapalı kanal) | 0 / **116 · 116** | **0 / 0** (×3) |
+| | connect p50/p99 ms | 17/1024 · 20/1009 · 18/1054 · 15/1053 | 21/1056 · 19/1035 | **31/1066** (28–33 / 1042–1072) |
+| | `out_bps_per_conn` | — | 122 211 · 121 719 | **121 000** (120 741–121 212) |
+| demo 500 WS (aynı, `--transport ws`) | step p50/p90 fine µs | 256/416 · 272/416 | 320/528 · 320/512 | **816/1272** (768–896 / 1208–1336) |
+| | `server_cpu_s` / `clients_cpu_s` | 1,9 · 1,8 / — | 2,2 · 2,1 / 5,8 · 5,5 | **4,9** (4,8–5,2) / **11,7** (11,2–12,3) |
+| | `dropped` / `sends_closed` | 14 · 17 (B29), 10 · 29 → 0 · 0 (B31) | 0 / 0 | **0 / 0** |
+| | connect p50/p99 ms | 34/1075 · 36/1075 (B31 sonrası) | 33/1065 · 47/1017 | **32/1064** (29–34 / 1057–1075) |
+| demo 1000 spatial (`GSB_LOADGEN_CLIENT_LINES=1 … --orchestrate 1000 --procs 2 --visibility spatial --duration 8`) | `joined` | 1000 | 1000 · 1000 | **988 · 997 · 869** (B84) |
+| | `snap_total` | 223 958–226 282 | 225 163 · 224 260 | 215 545 (188 351–215 869) |
+| | `client_in_bps` / `out_bps_per_conn` | 63,3–64,7 M / 64 090–65 444 | 64,1 M · 63,9 M / 64 864 · 64 743 | 59,8 M (45,7–59,8 M) / 59 563 (45 532–59 633) |
+| | `acks` / `gap_drops` | 44 263–44 815 / 856–877 | 44 864 · 44 756 / 861 · 868 | 43 015 (37 556–43 223) / 663 (631–765) |
+| | step p50/p90 fine µs | 992–1288 (p50) | 1032/1552 · 712/1208 | **2048/2944** (1776–2088 / 2424–3208) |
+| | `server_cpu_s` / `clients_cpu_s` | — / 4,8–6,6 | 1,8 · 1,5 / 4,9 · 4,5 | 3,3 (3,0–3,5) / 8,1 (6,2–8,5) |
+| arena 1000 (`--orchestrate 1000 --procs 2 --game arena --duration 10 --write-stall-secs 0`) | step p50/p90 fine µs | G3: 1632/2024; T HEAD: 2304/2960 … 3512/4096 | 1784/2168 · 1672/2072 | **1984/2928** (1936–2184 / 2816–3784) |
+| | `out_bps_per_conn` | G3: 234 120; T HEAD: 207 246–213 521 | 115 152 · 113 657 | **110 800** (109 872–111 471) |
+| | `dropped` / `sends_closed` | G3: 1761; T HEAD: 1035–1332 (B32 öncesi) | 0 / 1639 · 1800 | **0 / 0** |
+| | `server_cpu_s` / `clients_cpu_s` | G3: 2,8 / 8,1; T HEAD: 3,8–4,9 / 14,6–16,2 | 2,6 · 2,4 / 8,3 · 7,8 | **4,0** (3,9–4,2) / **13,9** (13,5–14,5) |
+| mmo 1000 (aynı, `--game mmo`) | step p50/p90 fine µs (max) | 288/400 (1540) | 280/392 · 296/408 | **440/648** (432–472 / 632–704; max 1780–4772) |
+| | `out_bps_per_conn` / `snap_total` | 102 190 / 280 645 | 97 150 · 96 721 / 282 548 · 281 470 | **95 175** (94 386–95 662) / 280 071 (278 956–281 489) |
+| | `dropped` / `sends_closed` | 1836 (B32 öncesi) | 0 / 1507 · 1957 | **0 / 1301** (915–1621) |
+| | `server_cpu_s` / `clients_cpu_s` | 2,3 / 7,2 | 2,1 · 2,2 / 5,2 · 5,2 | **4,5** (4,5–4,6) / **10,3** (9,8–10,4) |
+| war 1000 (aynı, `--game war`) | step p50/p90 fine µs | 1448/2416 · 1736/3072 | 688/896 · 696/872 | **1104/2152** (1080–1120 / 2104–2216) |
+| | `out_bps_per_conn` | 369 098 · 363 167 | 163 762 · 160 449 | **164 228** (163 149–164 559) |
+| | `moves` / `ack_lag_max_ms` | 40 717 · 38 823 / 469 · 884 | 56 144 · 55 772 / 134 · 136 | **55 540** (55 129–55 607) / **104** (102–104) |
+| | `dropped` / `sends_closed` | 1661 · 1908 (B32 öncesi) | 0 / 1189 · 1911 | **0 / 1687** (1656–1768) |
+| | `server_cpu_s` / `clients_cpu_s` | 6,0 · 6,1 / 17,8 · 16,1 | 3,0 · 2,9 / 17,4 · 17,2 | **6,1** (6,0–6,2) / **30,8** (30,5–31,6) |
+
+Her koşuda `errors = server_closes = 0`, `left = joined`, `server_hz`
+29,98–30,00, `step_over_budget_pct` 0,0; war'ın röle sayıları CROSS-SHARD
+§8b.8'de. Bayt sütunları eski kayıtla doğrudan kıyaslanmaz: G3/T/W2'den
+sonra B37'den önce üç kodlama turu wire'ı küçülttü — A30 (kompakt wire
+id: demo/MMO −%7–15), A31 (savaş paketli koşu: −%54), A10 (arena
+`Ticks2`: −%43–45). `--workers 1` sütunu baytın worker sayısından
+bağımsız olduğunu gösteriyor (farklar ≤ %3; demo 1000'deki düşüş eksik
+katılımdan).
+
+*Okuma.*
+
+1. **B32'nin 116'sı tek worker'ın ürünüydü — doğrulandı.** Bugünkü kod
+   `--workers 1` ile tam 116 `sends_closed` (iki koşuda da; `dropped`
+   0) üretiyor, varsayılan worker'larla 0. Tek odalı oyunlarda
+   (demo, arena) varsayılan worker'larla kapalı kanala gönderim hiç yok:
+   ayrılış bir sonraki fan-out'tan önce odaya varıyor. Shard'lı
+   oyunlarda (MMO, savaş) varsayılan worker'larla da 915–1768 — ayrılış
+   registry → shard yolunu dolaşıyor. Hepsi kapalı kanal; `dropped`
+   (dolu kanal) bütün orkestre koşularında 0. Not: `sends_closed`
+   bağlantı sonu başına "en çok ~1" değil, bağlantı sonu başına
+   (tick başına kare) × (soket kapanışıyla ayrılışın işlenmesi
+   arasındaki tick) — spatial demo 1000'de `--workers 1` ile 1,6–1,8,
+   savaşta 1,2–1,9 (F59).
+2. **Varsayılan worker'lar adımı ~2–2,5×, sunucu CPU'sunu ~2,2× büyütüyor
+   (demo 500); `server_hz` 30'da kalıyor.** Tek worker'lı çalışma
+   zamanında fan-out'un uyandırdığı yazıcı görevleri aynı iş parçacığında
+   sırayla koşar; 32 worker'la uyandırmalar çekirdekler arası (iş çalma,
+   önbellek) ve oda görevi onlarla yarışıyor. Aynı yön süreç içi
+   koşularda zaten vardı (DESIGN §5.7: süreç içi demo 500 800/1536
+   µs ↔ orkestre tek worker 248/432). Savaş istisna görünüyor
+   (1448/2416 → 1104/2152), ama o fark A31'in yarıya inen baytı:
+   `--workers 1` bugün 688/896.
+3. **İstemci süreçleri de ~1,7–2× CPU harcıyor** (`clients_cpu_s`,
+   `--workers 1` ↔ varsayılan: savaş 1000 17,3 → 30,8 sn / 10 sn koşu,
+   arena 8 → 13,9, MMO 5,2 → 10,3). Tek worker'lı istemci süreci tek
+   çekirdekte doymaya yakındı; savaşın W2'deki doygunluğu (`moves`
+   ~40 k, `ack_lag_max_ms` 469–884) ise asıl A31'in baytıyla gitti —
+   bugün `--workers 1` ile de `moves` ~56 k, `ack_lag_max_ms` 134–136
+   (varsayılanda 104). KIT-ARCHITECTURE "T sonucu"nun `clients_cpu_s`
+   +%15'i (A24) tek worker'lı koşullarda ölçülmüştü.
+4. **Katılma fırtınası dinleme kuyruğunu taşırıyor (B84).** Varsayılan
+   worker'lı istemci süreçleri 1000 bağlantıyı neredeyse aynı anda
+   açıyor; çekirdeğin `TcpExtListenOverflows` sayacı koşu başına 1000'lik
+   koşularda 1082–1579 artıyor (`--workers 1`'de 372–844; 500'lük
+   koşularda varsayılanla 257–411, `--workers 1` ile 121–132), connect p50 bazı koşularda ~1 sn'ye çıkıyor (SYN yeniden
+   gönderimi). 8 sn'lik demo 1000 koşusunda bazı istemcilerin bağlantısı
+   pencere boyunca sunucuya hiç kabul edilmiyor: istemci `connected =
+   1000`, sunucunun registry'si `opens = joined + 1` (869–997); 10 sn'lik
+   arena/MMO/savaş koşularında hepsi katılıyor. tokio'nun
+   `TcpListener::bind` dinleme kuyruğu 1024 (`somaxconn` 4096). Sunucu
+   bir şey kaybetmiyor (hiç kabul etmediği bağlantı), ama kısa koşunun
+   `joined`'ı ve `snap_total`'ı düşüyor — demo 1000 satırının `joined <
+   N` koşuları bu yüzden.
+
+**Regresyon denetimi (sayım turlarından sonra).** B32'den bu yana ~30
+tur sıcak yollara sayaç ekledi. Üç ayrı kanıt:
+
+- *Aynı makine hâlinde A/B* — sayım turlarından hemen önceki ağaç
+  (`a73bc54`, B37 sonrası) `git archive` ile ayrı derlendi, `73da266`
+  ile ABBA sırasında üçer koşu (yük 2,3–4,9):
+
+  | Komut | `a73bc54` step p50/p90 (mean) · `server_cpu_s` | `73da266` step p50/p90 (mean) · `server_cpu_s` |
+  |---|---|---|
+  | orkestre demo 500 `--workers 1` | 336/560 (356) · 2,1 | 320/512 (310) · 1,9 |
+  | orkestre demo 500 varsayılan | 704/1152 (677) · 4,2 | 688/1112 (678) · 4,3 |
+  | süreç içi MMO 200 | 120/168 (127) | 120/168 (134) |
+  | süreç içi demo 500 | 712/1224 (746) | 704/1312 (807; 635–844) |
+
+  Bayt sayıları %1 içinde aynı; `a73bc54`'ün `dropped` 116'sı bugün
+  `sends_closed` 116. Fark her satırda koşudan koşuya yayılımın içinde.
+- *Süreç içi kayıtlar* (DESIGN §5.7 B29 tablosu, sayım turlarından
+  önce; `gsb-loadgen N [--game G] --transport tcp --duration 20
+  --write-stall-secs 0`, üçer koşu): demo 200 step 184/272 (kayıt
+  200/320 · 200/304), `out_bps_per_conn` 46 556 (46 690 / 46 408);
+  demo 500 712/1256 (800/1536 · 696/1312), 119 053 (119 393 / 119 405);
+  arena 200 408/560 (384/488 · 400/520), 23 491 (23 588 / 23 445); MMO
+  200 128/176 (112/160 · 104/176), 20 303 (20 254 / 20 264). §8.2'nin
+  500 R=10'u (`--duration 30`, iki koşu): step 1576/2120 · 1416/1984
+  (kayıt 1408/1904), `ok` p50/p99 49,3/68,0 · 49,4/68,0 (49,4/67,9),
+  `dup_answers = unmatched = 0`; RPC'siz 808/1528 · 672/1224.
+  Tek > %10 sapma MMO 200'ün p50'si (+16–24 µs, ince histogramın bir
+  kovası) — yukarıdaki A/B'de iki ağaç aynı (120/168).
+- *Pinli tabanlar* (CHANGELOG'un C1 aynası): `--orchestrate 5000
+  --procs 4 --pin --visibility spatial --cell-size 5 --profile ring
+  --stagger-ms 0.5 --duration 30`, üç koşu: step p50 (kaba) 12,5 · 12,5
+  · 25 ms (kayıt 12,5 ms), mean 13,8 · 13,8 · 16,9 ms, max 44,6–54,7 ms
+  (C1: 42,9), bütçe aşımı %0,5 · %0,6 · %2,9 (%1,0), `server_hz`
+  29,97–29,99, `server_cpu_s` 87,7–90,3 (89,7), `dropped` 0 (9 086),
+  `server_closes` 0. Aynı komut 10 000 ile iki koşu: p50 25 ms (kayıt 25
+  ms), `server_hz` 29,96–29,98 (29,37), aşım %6,3–8,0, `late_max` 88–120
+  ms (2,14 sn), `dropped` 0 (24 646), `server_cpu_s` 146,3–146,6. Tek
+  oda `all` 10 000 (`--orchestrate 10000 --procs 8 --pin --duration 30
+  --write-stall-secs 0`, iki koşu) karşılaştırılamaz — istemciler doyuyor
+  (joined 9273 · 7144, kayıt 5934–7032; `outbound_dead` 129 · 199, kayıt
+  67–172): p50 12,5 · 6,25 ms (6,25), aşım %5,3 · %1,5 (%2,6).
+
+**Hüküm: sayım turlarından regresyon yok.** Kayıtla > %10 farkların
+hepsinin nedeni kod değil: worker sayısı (B37), sonradan gelen kodlama
+turları (A10/A30/A31) ya da makine hâli (aynı günün A/B'sinde eski
+ağaç aynı sayıları veriyor). Ham çıktılar commit'lenmedi.
 
 **Sunucu çocuğunun portları (F31, düzeltildi).** Orkestratör sunucu
 çocuğunun oyun ve metrik portlarını kendisi seçiyordu (`alloc_port`:
