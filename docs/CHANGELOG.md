@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B50 — pinsiz orkestre tabanları varsayılan worker'larla + regresyon denetimi (`measure/b50-baselines`)
+
+Kod değişikliği yok; ölçüm turu (`73da266`, 2026-09-28; Ryzen 9 7950X
+16C/32T, `nproc` 32, koşu başı 1 dk yük < 5; makinede tek iş). RPC-CONTROL-PLANE
+§8.2'nin "Etkilenen tabanlar" listesindeki her pinsiz `--orchestrate`
+koşusu kayıttaki komutla yeniden alındı (üçer koşu, medyan), ayrıca aynı
+ağaçta `--workers 1` ile (B37 öncesi koşulun bugünkü karşılığı: "worker
+sayısı" ile "kod değişikliği"ni ayırır). Eski sayılar "tek worker'lı
+çocuklar (B37 öncesi)" etiketiyle yerinde; yeniler yanlarında (DESIGN
+§5.7/§6, GAME-MODULE G3/W2, CROSS-SHARD §8b.8, KIT-ARCHITECTURE T/W2).
+
+- B32'nin 116'sı doğrulandı: bugünkü kod `--workers 1` ile tam 116
+  `sends_closed`, varsayılanla 0; bütün orkestre koşularında `dropped` 0,
+  `errors` = `server_closes` = 0, `server_hz` 29,98–30,00.
+- Varsayılan worker'lar adımı ~2–2,5×, sunucu CPU'sunu ~2,2× büyütüyor
+  (demo 500: 808/1216 µs ↔ `--workers 1` ~320/560), hız 30 Hz'de kalıyor.
+- Bayt kıyası eski satırlarla yapılamaz (A10/A30/A31 sonradan): arena 1000
+  ~111 KB/sn, MMO ~95 KB/sn, savaş ~164 KB/sn; savaşın W2 doygunluğunu
+  asıl A31 kaldırmış.
+- **Regresyon denetimi — yok:** `a73bc54` (sayım turlarından hemen önce)
+  ↔ `73da266` aynı gün ABBA A/B'si (demo 500 her iki worker ayarı, süreç
+  içi MMO 200 ve demo 500 — farklar gürültü içinde, baytlar %1 içinde),
+  süreç içi B29 ve B23 RPC satırları, pinli C1 aynası (5k: p50 12,5 ms,
+  sunucu CPU 87,7–90,3 ↔ kayıt 89,7; 10k: p50 25 ms, 29,96–29,98 Hz).
+  %10'u aşan her sapma worker sayısı, codec turları ya da makine durumuyla
+  açıklandı; hiçbiri sayım turlarından değil.
+- Yeni: **B84** (katılma fırtınası dinleme kuyruğunu taşırıyor — tokio
+  backlog'u 1024; kısa demo 1000'de joined 869–997), **F59**
+  (`sends_closed` "bağlantı sonu başına en çok ~1" değil).
+
 ## Sayım turu 8 — "her şeyi saymalıyız": F54–F57 (`metrics/count-everything-8`)
 
 - **F54 — kapalı registry'ye katılma:** registry `Shutdown` kolunda

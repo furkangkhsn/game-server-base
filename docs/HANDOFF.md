@@ -148,6 +148,13 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**B50 tamam** (CHANGELOG "B50", RPC-CONTROL-PLANE §8.2 "B50"): pinsiz
+orkestre tabanları varsayılan worker'larla yeniden ölçüldü, eskiler "tek
+worker'lı çocuklar (B37 öncesi)" etiketiyle yerinde; sayım turlarından
+regresyon yok (aynı gün A/B `a73bc54` ↔ `73da266`, süreç içi ve pinli
+tabanlar). Ölçüm notu: koşu başı yük < 5 bekle; `--workers 1` eski
+koşulu bugünkü kodda yeniden üretir. Açılan: B84, F59.
+
 **Sayım turu 8 tamam** (CHANGELOG "Sayım turu 8", DESIGN §9/§12, OPS §3):
 F54 `joins_unsent` (`conn/actor/room.rs`); F55 karar — B68'in
 `leaves/detaches_unprocessed`'i duruşun defteri; F56

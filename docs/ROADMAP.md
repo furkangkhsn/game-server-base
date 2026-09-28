@@ -81,7 +81,10 @@ Test sayısı: bugün itibarıyla **1477** (1477/1477 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
 388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **sayım turu 8 — F54–F57** — kapalı registry'nin reddettiği
+Son tur: **B50 — ölçüm turu** — pinsiz orkestre tabanları varsayılan
+worker'larla yeniden ölçüldü; sayım turlarından regresyon yok (aynı gün
+A/B, süreç içi ve pinli tabanlar). Yeni: B84, F59.
+Önceki tur: **sayım turu 8 — F54–F57** — kapalı registry'nin reddettiği
 katılma sayılır (`joins_unsent`); duruşun ayrılma/taşıma ölümü reddi
 bilerek sayılmaz, B68'in iki sayacı duruşun defteri (F55); duruşun
 yuttuğu oda hükümleri dört yerden birinde sayılır
@@ -354,7 +357,10 @@ etkiliyor (idempotent, sıralı, yönlendirmeli); MMO saldırısı seam
 ötesinde. Sıradaki: crystallization.
 Önceki tur: **oyun modülü G3** (`docs/GAME-MODULE.md` §5 "G3 sonucu") —
 loadgen `--game demo|arena|mmo`; demo botu birebir; arena ve MMO ilk yük
-tabanları (1000 istemci orkestre, 30 Hz, adım p50 1,6 ms / 0,29 ms).
+tabanları (1000 istemci orkestre, 30 Hz, adım p50 1,6 ms / 0,29 ms — tek
+worker'lı çocuklar; B50 (2026-09-28) varsayılan worker'larla yeniden
+ölçtü: arena 1000 1984/2928 µs, ~111 KB/sn; MMO 440/648, ~95 KB/sn;
+savaş 1104/2152, ~164 KB/sn; `dropped` 0 — RPC-CONTROL-PLANE §8.2 "B50").
 **Oyun modülü fazları (G1–G4) bitti.** Açık: G3-1 (arena full'ları rUDP
 MTU'sunu aşıyor), G3-2 (join'de delta'lar private full'dan önce), G3-3
 (arena istemcisi takımını wire'dan öğrenemiyor), K4 (kayıtlı karakter
