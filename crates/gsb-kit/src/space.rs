@@ -1,7 +1,8 @@
 //! [`CellSpace`] — the AOI's space over WIRE values (KIT-ARCHITECTURE
-//! §4.2), and [`Grid2`], its 2D grid preset (§7); [`Planar`] and
-//! [`Spatial`] — the accessors through which the 2D and 3D presets read
-//! a game's position or wire type without knowing it.
+//! §4.2), [`Grid2`], its 2D grid preset (§7), and [`Grid3`], its
+//! volumetric one (BACKLOG A5); [`Planar`] and [`Spatial`] — the
+//! accessors through which the 2D and 3D presets read a game's position
+//! or wire type without knowing it.
 //!
 //! The AOI cell is computed from the wire value, not from the
 //! simulation state: the client holds only wire values and must derive
@@ -16,6 +17,7 @@ use bytes::BytesMut;
 mod partition;
 mod sectors;
 mod vision;
+mod volume;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +25,7 @@ mod tests;
 pub use partition::{GridPartition2, Partition, grid_shape, shard_at};
 pub use sectors::{ConvexSectors2, Sector, SectorMap};
 pub use vision::{MAX_SIGHT_CELLS, Vision, VisionGrid2, VisionGrid3};
+pub use volume::Grid3;
 
 /// Where a value lies on the ground plane — the accessor the kit's 2D
 /// presets read a game's types through (§7): [`Grid2`] reads the codec's
@@ -57,7 +60,7 @@ pub trait Planar {
 }
 
 /// Where a value lies in 3D space — the accessor the kit's 3D presets
-/// read a game's types through (§7; today [`VisionGrid3`]), the
+/// read a game's types through (§7: [`VisionGrid3`], [`Grid3`]), the
 /// three-axis sibling of [`Planar`].
 ///
 /// The axis order is the game's (the 3D presets are isotropic: a
@@ -65,16 +68,21 @@ pub trait Planar {
 /// accessors on its position: `Spatial` for true 3D presets (the arena's
 /// team vision, where height matters) and `Planar` (`[x, z]`) for the
 /// ground-plane ones (an MMO's AOI and shard grid).
+///
+/// **The unit.** [`Grid3`] reads only the wire and takes its cell size
+/// in the wire's unit.
 pub trait Spatial {
-    /// The coordinate type: `f32` for a simulation position.
+    /// The coordinate type: `i32` for a quantized wire value, `f32` for
+    /// a simulation position.
     type Coord: Copy;
 
     /// The value's three coordinates, in a fixed axis order.
     fn spatial(&self) -> [Self::Coord; 3];
 }
 
-/// A cubic cell of a 3D grid — [`VisionGrid3`]'s cell key. Cell indices
-/// are the floor of (position / cell edge) on each axis.
+/// A cubic cell of a 3D grid — [`VisionGrid3`]'s and [`Grid3`]'s cell
+/// key. Cell indices are the floor of (position / cell edge) on each
+/// axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Cell3(pub i32, pub i32, pub i32);
 

@@ -10,7 +10,7 @@
 //!
 //! - [`codec`] (`RecordCodec`, §4.1), [`space`] (the accessors `Planar`
 //!   and `Spatial`; `CellSpace`, `Vision`, `SectorMap`, `Partition` and
-//!   their presets `Grid2`, `VisionGrid2`, `VisionGrid3`,
+//!   their presets `Grid2`, `Grid3`, `VisionGrid2`, `VisionGrid3`,
 //!   `ConvexSectors2`, `GridPartition2`, §4.2/§7),
 //!   [`game`] (`Game` and its strategy extensions `TeamGame`,
 //!   `ShardGame`, §4.3) — the seams a game implements;

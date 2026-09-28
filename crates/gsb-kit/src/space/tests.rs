@@ -11,6 +11,7 @@ use super::*;
 
 mod sight;
 mod units;
+mod volume;
 
 /// A 3D game's simulation position: the kit has never seen this type.
 #[derive(Debug, Clone, Copy, Component)]
@@ -48,6 +49,14 @@ impl Planar for Wire3 {
     type Coord = i32;
     fn planar(&self) -> [i32; 2] {
         [self.x, self.z]
+    }
+}
+
+/// The same wire value in space, for the volumetric presets.
+impl Spatial for Wire3 {
+    type Coord = i32;
+    fn spatial(&self) -> [i32; 3] {
+        [self.x, self.y, self.z]
     }
 }
 
