@@ -91,7 +91,7 @@ korunur** — bu kelimeleri string'e bile yazma.
 
 `#[ignore]` ekleme, test silme ya da testi gevşetme yok.
 
-## Gerçek saatli testler (BACKLOG F23, F25)
+## Gerçek saatli testler (BACKLOG F23, F25, F30, F34)
 
 Yükte düşen testlerin ortak kalıbı: gerçek saatte sabit bir pencere
 ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
@@ -113,7 +113,8 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   tek yoklama yükte pencerenin içine düşer ve cevapsız kalır. Yoklama
   cevaplanana dek yinelenir ve yalnız KENDİ numaralı isteklerinin
   cevabını kabul eder; süre sınırı yine yalnız asılma korumasıdır
-  (F24: `afk_action.rs::still_answered`).
+  (F24: `afk_action.rs::still_answered`; F34: e2e `Client::probe`,
+  "gitti" hükmü için de yeniden gönderilen yoklama).
 - **Duvar saatinde sabit bir pencerede ölçülen hız performans
   iddiasıdır**, doğruluk değil: ticker takılmadan sonra patlamaz, saate
   yeniden oturur; aç kalan süreç dürüstçe daha az adım atar. Böyle bir
@@ -142,6 +143,44 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   (`took < …`) yalnız iddianın kendi sınırıdır (el sıkışma süresi;
   paused testte sanal süre), makinenin hızı değil (F25: `accept_stop`,
   `boot::stop` paused saatte `took == grace`).
+- **"Sınırda, geç değil" süreyle değil yapıyla sınanır**: alt sınır
+  (`took >= sınır`) takılmaya dayanıklıdır, üst sınır değil. Onun
+  yerine sınırın yapısal karşılığı sayılır: her adım en az bir aralık
+  sürüyor ve hepsi sınırdan önce gidiyorsa en çok `sınır / aralık` adım
+  atılır — takılma sayıyı yalnız azaltır, sınırı aşan istemci artırır
+  (F34: rUDP el sıkışmasının give-up'ı, rölenin yuttuğu kanıt sayısı
+  ≤ 5 sn / 50 ms).
+- **"X'te bitti" X'ten başka çıkış bırakmayarak sınanır**: öteki bitiş
+  sebepleri (girdi zamanı, son tarih) erişilmez kılınır, test yalnız
+  asılma korumasıyla bekler — bitmişse X'te bitmiştir (F34: loadgen
+  istemcisinin EOF'ta bitişi).
+- **Bir bekleyişin sınırına takılmadığı raporundan okunur**: `stop()`'un
+  her bekleyişi `StopReport`'ta izini bırakır (kapı döngüleri, odalar,
+  servisler, son rapor); "hiçbiri grace'e takılmadı" `took < 2 sn`'nin
+  takılmaya dayanıklı biçimidir, grace'in kendisi paused saatte
+  sabitlenir (F34: `service_stop.rs`).
+- **Koşunun bir PENCERESİNDEN okunan iddia kanıtı olan koşudan okunur**:
+  tutarlı kesitteki nüfus (`shard_members`) ve kararlı penceredeki
+  oranlar, sunucu oyuncular içerideyken örnek almadıysa kanıtsızdır (aç
+  kalan 3 sn'lik koşu: `0,0,0,0`; 100 adımı geçmeyen koşu: pencere yok).
+  Kanıtı olmayan koşu iki katı süreyle yinelenir, iddia kanıtı olan ilk
+  koşuda aynen sınanır, kanıtı olup iddiayı çiğneyen koşu hemen düşer;
+  süre tavanı (64 sn) yalnız asılma korumasıdır. Bu "geçene dek yinele"
+  değildir: yinelenen yalnız kanıtsız koşudur. Oranlar saniye başına
+  değil adım başına okunur (F30: `loadgen_games/window.rs`).
+- **"Henüz dolmadı" da bir üst sınırdır**: motorun bir süresinin
+  (grace, tavan, RPC son tarihi) belli bir adımda HENÜZ dolmadığını
+  iddia eden test, o adıma dek geçen duvar saatini sınırlar — paused
+  saatte koşar (F34 taraması: `rpc_shard` zaman aşımı, MMO
+  combat-logout, sharded park). "Süreden yavaş" sahte uç (doğrulayıcı)
+  hiç bitmez; belli bir anda patlayan sahte (bomba) saatle değil testin
+  kurduğu tetikle patlar; EOF'u sınayan testin boşta penceresi kapanıştan
+  çok uzak tutulur (F34 taraması: `ticket.rs`, `supervision.rs`,
+  `tcp/tests/idle.rs`).
+- **Std saatle ölçülen süre (adım süresi) bir performans değeridir**:
+  aç kalan oda dürüstçe uzun adım bildirir; smoke yalnız biçimini sınar
+  (histogramın üretebileceği bir değer: kutu alt kenarı ya da tavan) —
+  maliyeti elle ölçüm koşuları raporlar (F34: `step_p*_fine_us`).
 - Yeni gerçek saatli bir test yük altında denenir: 32 çekirdekte
   `for i in $(seq 30); do sh -c 'while :; do :; done' & done`, sonra
   `cargo test --workspace --no-fail-fast` birkaç kez (ve
