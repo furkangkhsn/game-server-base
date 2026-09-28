@@ -5,6 +5,60 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F32 — kopuşu geçen yeniden bağlanma (`reconnect/f32-churn`)
+
+`loadgen_churn_smoke` 128 `yes` altında bir kez `resumed=0` ile düşmüştü
+(dört istemcinin dördü ikinci oturumda taze varlık). Katman: **motor** —
+meşru bir resume iki sıralamada kayboluyordu:
+
+- **(A)** Registry yeni join'i eski bağlantının kapanışından önce görür
+  (yarı açık soket ya da kuyruktaki `ConnClosed`): "iki canlı oturum"
+  sayıp eskisine düz LEAVE yolluyordu → varlık `on_leave` ile gider, yeni
+  oturum taze join alır — oyuncu kopuşu sunucudan önce fark edip dönerse
+  karakterini kaybediyordu.
+- **(B)** Registry kapanışı önce görür ama eski dağıtıcının DETACH'ı yeni
+  dağıtıcının resume'undan sonra odaya varır: resume parkı bulamaz, ikinci
+  varlığı taze açar; geç DETACH ilkini kimsenin resume edemeyeceği yetim
+  bir park olarak bırakır (bir kimliğe iki varlık).
+
+Kanıt: doğal koşularda pay 0,6 ms'ye kadar indi (registry `ConnClosed`'u
+aynı kimliğin `SpawnPlayer`'ından 0,6 ms önce işledi); sıra elle
+çevrilince (300 ms gecikme) smoke'un komutu 10/10 tam olarak `resumed=0
+fresh_joins=4` verdi, düzeltmeden sonra 0/10. Süreç dondurma (F25
+yöntemi) görevler arası sırayı koruduğu için bu yarışı üretmez.
+
+- **Düzeltme (oda + shard):** kimliği başka bir bağlantıda CANLI bulan
+  resume önce o oturumun ayrılmasını (`detach_player`, `ConnectionClosed`,
+  politikaya sorularak) çalıştırır, sonra parkı alır (`room::live_session`).
+  Eski DETACH geç gelirse bağlamayı taşınmış bulur, no-op.
+- **Düzeltme (registry, `players/handover.rs`):** canlı eski oturuma
+  ERROR 9 (Superseded) aynen; LEAVE yerine üyelik DEVREDİLİR (satır odadan
+  çıkar, grid sayacı bir düşer, yeni `SpawnDone` geri sayar; `reg_leaves`
+  sayılmaz).
+- **Davranış değişikliği (sözleşme):** aynı kimlikle ikinci bir oturum
+  açıldığında eski oturum yine ERROR 9 ile kapanır, ama yeni oturum artık
+  taze varlık değil ESKİ varlığı alır (oyunun kopuş politikası park
+  ediyorsa; `grace = 0` politikasında taze join, doğru sonuç). Eski
+  davranış varlığı `on_leave` ile yok ediyordu. §12.7 ve
+  `broadcast_resume_accepted_by_exactly_one_shard` testleri yeni
+  sözleşmeye göre sıkılaştı. RECONNECT §3.3/§5 "Kopuşu geçen yeniden
+  bağlanma (F32)"/§11.
+- Elenenler: resume'u eski DETACH'a bariyerle bekletmek ((A)'yı kapatmaz;
+  B61 yolunu kilitleyebilir); loadgen'i "sunucu fark edene dek"
+  bekletmek (istemcinin göreceği işaret yok, gerçek istemci tam bu
+  sırayla döner); yeni `DisconnectCause::Superseded`.
+- CONTRIBUTING "Gerçek saatli testler"e iş parçacığı düzeyinde aç bırakma
+  ve sırayı elle çevirme yöntemi eklendi.
+- Aç bırakmada ayrı bir flake kaldı: `room_resumes=0` (odanın son örneği
+  raporda yok) → F35.
+
+Testler 1442 → 1447 (`otlp` ile 1460 → 1465): `room/tests/takeover.rs`
+(2), `shard/tests/takeover.rs`, `tests/reconnect/takeover.rs` (2); eski
+kodda altı test düştü; yedi mutasyon öldü. Ebeveyn doğrulaması: anonim
+kimlik korumasını kaldırmak eşdeğer (boş kimlik hiçbir yoldan resume
+olarak gelmiyor — dağıtıcı ve oda önce ayırıyor; koruma savunma
+derinliği).
+
 ## F31 — sunucu çocuğunun port yarışı (`loadgen/f31-port`)
 
 - **Hata:** orkestratör sunucu çocuğunun oyun ve metrik portlarını
