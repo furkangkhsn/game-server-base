@@ -68,13 +68,16 @@ async fn a_panicked_room_is_reported_as_ended_uncounted() {
 /// arrives under its own row.
 #[tokio::test]
 async fn a_panicked_shard_is_reported_and_its_survivor_stops_counted() {
-    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Sharded {
+    // Shard 1 detonates once armed, after the room was created.
+    let bomb = Arc::new(AtomicBool::new(false));
+    let fuse = Arc::clone(&bomb);
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| BuiltRoom::Sharded {
         shards: vec![
             (
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 0,
-                    detonate_at: None,
+                    armed: None,
                 })
                     as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
@@ -82,7 +85,7 @@ async fn a_panicked_shard_is_reported_and_its_survivor_stops_counted() {
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 1,
-                    detonate_at: Some(Instant::now() + Duration::from_millis(200)),
+                    armed: Some(Arc::clone(&fuse)),
                 })
                     as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
@@ -94,6 +97,7 @@ async fn a_panicked_shard_is_reported_and_its_survivor_stops_counted() {
     create_with(&tx, config(id, false))
         .await
         .expect("create failed");
+    bomb.store(true, Ordering::SeqCst);
     let (dead, survivor) = (RoomId((23 << 16) | 1), RoomId(23 << 16));
     let (mut reported, mut survivor_final) = (false, false);
     watch(&mut metrics, |ev| {

@@ -1265,7 +1265,13 @@ fn expiring_sharded_factory(grace: Duration) -> RoomFactory<(), (), (), ()> {
 /// enforces `max_players` for a sharded room, since no single actor sees
 /// the whole roster). Releasing the row must hand that count back too, or
 /// the room stays "full" forever with nobody in it.
-#[tokio::test]
+///
+/// On the paused clock (the ticker, the park's grace and the sweep all
+/// read the tick clock): "the hold is still alive" 150 ms into a 500 ms
+/// grace, and "expired" 850 ms in, are exact there; on the wall clock a
+/// starved process could spend the grace before the first status
+/// (BACKLOG F34).
+#[tokio::test(start_paused = true)]
 async fn sharded_park_expiry_releases_the_registry_row_and_the_member_slot() {
     // The grace has to outlive the settle window below (the assertion
     // that the hold is still ALIVE), so it is longer than the single-room

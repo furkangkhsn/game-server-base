@@ -20,7 +20,7 @@
 //! never before them.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
@@ -99,13 +99,15 @@ impl GameLogic<()> for PanicAfterJoinLogic {
 
 impl RoomLogic<()> for PanicAfterJoinLogic {}
 
-/// A shard logic that detonates at a wall-clock deadline it OWNS (moved in
-/// at construction — no shared state): ticks before the deadline are
-/// harmless, so the test can join its neighbor's members deterministically
-/// first, then watch the whole logical room die from this one shard.
+/// A shard logic that detonates on the first tick after the test ARMS it:
+/// ticks before that are harmless, so the test joins its neighbor's
+/// members first, then watches the whole logical room die from this one
+/// shard. (It used to detonate at a wall-clock deadline 300 ms after its
+/// construction, which a starved process could reach before the join
+/// landed — BACKLOG F34.)
 struct TimeBombShardLogic {
     index: usize,
-    detonate_at: Option<Instant>,
+    armed: Option<Arc<AtomicBool>>,
 }
 
 impl GameLogic<()> for TimeBombShardLogic {
@@ -139,8 +141,8 @@ impl GameLogic<()> for TimeBombShardLogic {
         actions.clear();
     }
     fn update(&mut self, _w: &mut (), _ctx: &TickCtx) {
-        if let Some(at) = self.detonate_at
-            && Instant::now() >= at
+        if let Some(armed) = &self.armed
+            && armed.load(Ordering::SeqCst)
         {
             panic!("shard {} detonated", self.index);
         }
@@ -431,17 +433,19 @@ async fn restarted_room_comes_back_when_policy_enabled() {
 /// the room is reaped like a single-room death and its members notified.
 #[tokio::test]
 async fn shard_death_takes_down_the_whole_logical_room() {
-    // Shard 1 detonates ~300 ms after creation; shard 0 stays healthy. The
-    // deadline lives in the shard's own logic (moved in, not shared), and
-    // the margin makes the join-before-death order deterministic without
-    // gating the panic on membership.
-    let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| BuiltRoom::Sharded {
+    // Shard 1 detonates once the test arms it, after the join; shard 0
+    // stays healthy. Arming after `spawn_ok` makes the join-before-death
+    // order hold however slowly the process runs, without gating the
+    // panic on membership.
+    let bomb = Arc::new(AtomicBool::new(false));
+    let fuse = Arc::clone(&bomb);
+    let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| BuiltRoom::Sharded {
         shards: vec![
             (
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 0,
-                    detonate_at: None,
+                    armed: None,
                 })
                     as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
@@ -449,7 +453,7 @@ async fn shard_death_takes_down_the_whole_logical_room() {
                 (),
                 Box::new(TimeBombShardLogic {
                     index: 1,
-                    detonate_at: Some(Instant::now() + Duration::from_millis(300)),
+                    armed: Some(Arc::clone(&fuse)),
                 })
                     as Box<dyn ShardLogic<(), GroupKey = (), State = (), Strip = ()>>,
             ),
@@ -467,6 +471,7 @@ async fn shard_death_takes_down_the_whole_logical_room() {
 
     let mut member_inbox = open_conn(&tx, ConnectionId(1)).await;
     spawn_ok(&tx, ConnectionId(1), id).await;
+    bomb.store(true, Ordering::SeqCst);
 
     // One dead shard → the whole logical room reports Absent...
     status_until(&tx, id, |s| matches!(s, RoomStatus::Absent)).await;

@@ -589,7 +589,14 @@ async fn shard_duplicate_inflight_id_rejected_without_reprocessing() {
 /// future is swept on the tick past its deadline and answered with the
 /// TIMEOUT reason — exactly ONE answer (the worker's resource guard has
 /// exited without reporting, so none can come afterwards).
-#[tokio::test]
+///
+/// On the paused clock, like the room's twin (`rpc.rs`
+/// `timeout_swept_exactly_one_answer`, F25): the deadline and the sweep
+/// read the tick clock, so the 50 ms tick is 30 ms before the deadline
+/// and the 110 ms one 30 ms after it EXACTLY — on the wall clock a
+/// starved process could oversleep the first past the deadline and see
+/// the answer "early" (BACKLOG F34).
+#[tokio::test(start_paused = true)]
 async fn shard_timeout_sweep_answers_timeout_reason() {
     let mut h = Harness::new(
         1,
@@ -604,7 +611,7 @@ async fn shard_timeout_sweep_answers_timeout_reason() {
     h.join(0, ConnectionId(1)).await;
 
     h.request(0, ConnectionId(1), 51, OP_EXT).await;
-    h.tick(); // pending (deadline ~80 ms of wall clock)
+    h.tick(); // pending (deadline 80 ms of the tick clock from here)
     let _resolver = h.next_resolver(0).await; // worker running; never resolved
 
     // Before the deadline: no answer (the sweep must not fire early).
@@ -613,11 +620,12 @@ async fn shard_timeout_sweep_answers_timeout_reason() {
     h.assert_no_private(0, ConnectionId(1), Duration::from_millis(40))
         .await;
 
-    // Past the deadline, the next tick sweeps it.
+    // Past the deadline, the next tick sweeps it. One read, no ticking
+    // while waiting (`wait_replies` would tick on).
     tokio::time::sleep(Duration::from_millis(60)).await; // ~110 ms total
     h.tick();
     let replies = h
-        .wait_replies(0, ConnectionId(1), Duration::from_secs(2))
+        .private_replies(0, ConnectionId(1), Duration::from_secs(2))
         .await;
     assert_eq!(replies, vec![(51, false)]);
 

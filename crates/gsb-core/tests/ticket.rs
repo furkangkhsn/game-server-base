@@ -237,18 +237,15 @@ async fn empty_ticket_on_ticket_server_rejected() {
 /// A slow validator (slower than the hook's timeout) times out
 /// (code 10, the worker's timeout is the resource guard) and the actor
 /// stays responsive: the NEXT auth attempt is processed at all.
+///
+/// The validator never answers at all, rather than sleeping past the
+/// timeout: a process starved across BOTH deadlines would find the
+/// sleep over too, and the timeout polls the finished validation first
+/// — a success, not the timeout under test (BACKLOG F34).
 #[tokio::test]
 async fn slow_validator_times_out_actor_responsive() {
-    // The validator sleeps 500 ms; the hook's timeout is 60 ms.
-    let slow: TicketValidator = Arc::new(move |_t: bytes::Bytes| {
-        Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            Ok(ValidatedTicket {
-                player: "slow".into(),
-                room: RoomId(1),
-            })
-        })
-    });
+    // The validator never finishes; the hook's timeout is 60 ms.
+    let slow: TicketValidator = Arc::new(move |_t: bytes::Bytes| Box::pin(std::future::pending()));
     let hook = TicketAuth {
         validator: slow,
         timeout: Duration::from_millis(60),
