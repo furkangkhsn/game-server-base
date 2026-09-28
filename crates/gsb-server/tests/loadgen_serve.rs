@@ -5,20 +5,23 @@
 //! bind killed the child with "Address already in use". The child now
 //! binds port 0 and says which ports it got; this is that report, seen
 //! from outside the process.
+//!
+//! And a served server nobody reads still ends (BACKLOG F40): its metric
+//! export used to wait on `accept` forever when no one connected.
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long the child may take to report — a start-up is milliseconds;
 /// the bound only turns a silent child into a failure instead of a hang.
 const REPORT_BOUND: Duration = Duration::from_secs(60);
 
 /// The child, killed and reaped however the test ends — a failed
-/// assertion must not leave a served server behind (with no one on its
-/// metric stream it would wait for a connection forever).
+/// assertion must not leave a served server behind (before F40, with no
+/// one on its metric stream it waited for a connection forever).
 struct Reaped(Child);
 
 impl Drop for Reaped {
@@ -107,4 +110,54 @@ fn a_served_server_reports_the_ports_it_bound() {
         "the served server stops cleanly: {status:?}"
     );
     reader.join().expect("the stdout reader");
+}
+
+/// How long a served server nobody reads may take to exit after its
+/// `--duration` before the test calls it hung: the export's bound after
+/// the stop (2 s, `serve.rs`) plus the stop's own bounds (3 s at most),
+/// with slack for a loaded machine. Only a hang guard — the claim is that
+/// the child exits at all.
+const EXIT_BOUND: Duration = Duration::from_secs(20);
+
+/// Nobody connects to the metric stream (a hand-run `--serve`, an
+/// orchestrator that died): the served server still exits after its
+/// duration, cleanly — its export stops waiting for a reader a bounded
+/// time after the stop (BACKLOG F40). It used to wait on `accept`
+/// forever.
+#[test]
+fn a_served_server_nobody_reads_still_exits() {
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
+            .args(["--serve", "--bind", "127.0.0.1:0"])
+            .args(["--metrics-listen", "127.0.0.1:0", "--duration", "1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawning gsb-loadgen --serve"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(1) + EXIT_BOUND;
+    let status = loop {
+        if let Some(status) = child.0.try_wait().expect("polling the child") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let Some(status) = status else {
+        let _ = child.0.kill();
+        let _ = child.0.wait();
+        let mut stderr = String::new();
+        if let Some(mut e) = child.0.stderr.take() {
+            let _ = e.read_to_string(&mut stderr);
+        }
+        panic!(
+            "the served server did not exit with nobody on its metric stream; stderr:\n{stderr}"
+        );
+    };
+    assert!(
+        status.success(),
+        "the served server stops cleanly: {status:?}"
+    );
 }

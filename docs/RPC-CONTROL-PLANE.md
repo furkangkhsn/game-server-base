@@ -797,6 +797,26 @@ kullanılır; ölen/susan çocuk açık hata), `tests/loadgen_serve.rs`
 `loadgen_smoke::an_orchestrated_run_whose_server_child_dies_still_ends`
 (artık başarısız çıkış + istemci çocuğu yok).
 
+**Kimsenin okumadığı sunucu çocuğu (F40, düzeltildi).** `--serve
+--metrics-listen` ile başlayan çocuğa metrik akışı için kimse
+bağlanmazsa (elle koşulan `--serve`, ölen bir orkestratör) çocuk
+`--duration`'dan sonra çıkmıyordu: dışa aktarım görevi (`metrics_export`)
+`accept`'te sonsuza dek bekliyordu (F31'den önce de böyleydi; orkestratör
+hep bağlandığı için yalnız elle koşuda ve düşen testte görünüyordu).
+Artık ana görev `stop()`'tan sonra dışa aktarımı tek bir süre sınırı
+altında bekler (`serve.rs::EXPORT_STOP_GRACE` = 2 sn, pump deyimi) ve
+aşarsa keser: `serve: the metric stream was not taken (or not read)
+within 2s of the stop; its reports are dropped`, çıkış 0. Akışı almış bir
+okuyucu son raporu milisaniyeler içinde alır (rapor `stop()` döndüğünde
+kanalda; birkaç KiB'lık yerel yazma); sınır yalnız kimsenin almadığı ya
+da okuyucusu okumayı bırakmış bir akışı bitirir. Elenen: dışa aktarımın
+kendi `accept`'ine `--duration`'dan türeyen bir son tarih (duruşu
+bilmez; geç bağlanan orkestratör raporların hepsini yine alabilir, çünkü
+raporlar kanalda birikir — ana görevin sınırı duruştan itibaren sayar).
+Kilit: `tests/loadgen_serve.rs::a_served_server_nobody_reads_still_exits`
+(`--duration 1`, kimse bağlanmaz; önce kırmızı: 21 sn'lik asılma
+korumasına takıldı; sınırı 3600 sn yapan mutasyon da).
+
 ### 8.3 Ayrılışta okunmamış istekler ve oda defterinin kapanışı (B36)
 
 §8.2'nin açık kalan boşluğu: 200'lük uzun duraklama koşusunda 62 istek

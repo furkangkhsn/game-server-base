@@ -2,6 +2,7 @@
 //! line — the addresses it bound (`SERVING`, [`announce`]).
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use gsb_core::metrics::MetricReport;
 use tokio::io::AsyncWriteExt;
@@ -14,6 +15,15 @@ use tokio::sync::mpsc;
 
 mod announce;
 pub(crate) use announce::*;
+
+/// How long the served server waits, once stopped, for its metric
+/// export to finish (BACKLOG F40). A reader that took the stream gets the
+/// final report within milliseconds (it is in the channel when `stop`
+/// returns; a local write of a few KiB). What the bound ends is an export
+/// nobody took — a hand-run `--serve`, an orchestrator that died — still
+/// waiting on `accept`, or one whose reader stopped reading: they held
+/// the process forever.
+const EXPORT_STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// The server process (`--serve`): the same server the in-process mode
 /// runs, as a standalone process. Without `--metrics-listen`, reports go
@@ -113,20 +123,33 @@ pub(crate) async fn serve(args: Args) {
         _ => None,
     };
     tokio::time::sleep(args.duration).await;
-    // Clean stop: the collector emits its final report when the ticker's
-    // broadcast closes, then drops the channel sender — the export task
-    // drains the final report and exits.
+    // Clean stop: the collector emits its final report once every room
+    // and connection has ended (F35), then drops the channel sender — the
+    // export task drains the final report and exits, IF someone took the
+    // stream. One awaited join under a deadline (the pump idiom), then
+    // abort: nobody on the stream must not keep this process alive (F40).
     handle.stop().await;
-    if let Some(export) = export
-        && let Err(e) = export.await
-    {
-        eprintln!("serve: metrics export task failed: {e}");
+    if let Some(mut export) = export {
+        match tokio::time::timeout(EXPORT_STOP_GRACE, &mut export).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("serve: metrics export task failed: {e}"),
+            Err(_) => {
+                export.abort();
+                eprintln!(
+                    "serve: the metric stream was not taken (or not read) within \
+                     {EXPORT_STOP_GRACE:?} of the stop; its reports are dropped"
+                );
+            }
+        }
     }
 }
 
 /// Stream the collector's reports (channel data) to the single
 /// orchestrator connection on `listener` (bound before the `SERVING`
-/// line), one framed report at a time.
+/// line), one framed report at a time. Ends when the collector drops the
+/// channel (after its final report) or the reader goes away; the caller
+/// bounds how long it waits for that after the stop (`EXPORT_STOP_GRACE`
+/// — this task alone would wait on `accept` forever if nobody came).
 pub(crate) async fn metrics_export(
     mut rx: mpsc::UnboundedReceiver<MetricReport>,
     listener: TcpListener,
