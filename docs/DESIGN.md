@@ -2574,8 +2574,21 @@ geometriye koşullu.
  dünya durumuna bağlardı); tek güvenlik düğmesi `cell_size`'tır: hücre
  büyüdükçe mahalledeki potansiyel entity sayısı artar — `cell_size` küçük =
  sıkı sis. **Oyuncu-bazlı aydınlatılmış hücre saklaması** (aynı hücrede
- bile yalnızca ışık konisi içindekileri gösterme) bu turun kapsamı dışında —
- ROADMAP'e alındı.
+ bile yalnızca ışık konisi içindekileri gösterme) bu turun kapsamı dışındaydı;
+ **A9'da (2026-09-28) kit'e isteğe bağlı yapı taşı olarak geldi:**
+ `LitAoiRoom<G: LitGame, S>` (`AoiRoom::with_game(g, s).lit()`). Kural oyunundur —
+ `LitGame::light(world, izleyici) -> Option<Light>` (tick başına izleyici
+ başına bir kez; `None` = filtre yok) ve `LitGame::lit(&light, world,
+ kayıt_entity, &wire) -> bool` (mahalledeki her kayıt için). Işığı olan
+ izleyici **kendi grubudur** (`LitGroup::Viewer(p)`): kareleri yalnız
+ aydınlık alt kümeden kurulur (takım odasının küme defteri — full / delta
+ `removed` + upsert / keep-alive full; `cell_exits` yok, yeni wire alanı
+ yok), paylaşılan hücre paketini hiç almaz; aydınlık olmayan kaydın tek
+ baytı ona gitmez. Işığı olmayan herkes hücrenin paylaşılan paketini
+ aynen alır (ışık yakmayan oyunun baytı `AoiRoom`'unkiyle bayt bayt aynı).
+ Maliyet yalnız ışık yakan oyunda: tick başına `P` `light` + `F·V` `lit`
+ çağrısı, `F` izleyici için ayrı kodlama, `O(F·V)` durum
+ (KIT-ARCHITECTURE §10 "A9").
  **Ölçülen (N=500, 30 sn, spatial, in-proc debug; `still` profili — bkz.
  yük yöntemi):** kayıtların çoğunun hareketsiz olduğu dünyada delta,
  tam-snapshot'ın ~1/67'si kadar kodlama üretir ve kazanç **hareketsizlik

@@ -281,6 +281,7 @@ Oda tipleri bunları bir araya getirir:
 |---|---|---|---|
 | `OpenRoom<G>` | `()` | `()` | — |
 | `AoiRoom<G, S: CellSpace<Wire<G>>>` | `S::Cell` | `()` | — |
+| `LitAoiRoom<G: LitGame, S: CellSpace<Wire<G>>>` (A9) | `LitGroup<S::Cell>` (`Cell(c)` \| `Viewer(p)`) | `()` | — |
 | `TeamRoom<G, V: Vision>` | `TeamId` | `()` | — |
 | `SectorRoom<G, M: SectorMap>` | `M::Sector` | `()` | — |
 | `ShardedRoom<G, P: Partition<Wire<G>>>` | `()` | `Wire<G>` | `KitMig<G::Mig>` |
@@ -4627,6 +4628,131 @@ ve `debug_check_wire`'ı — her biri ayrı ayrı yok sayıldı; bölme yerine
 
 **Doğrulama:** 1566 → **1574** test / 0 hata / 1 ignored (`otlp` ile
 1584 → 1592).
+
+### A9 — oyuncu başına aydınlık: `LitAoiRoom`, `LitGame` (2026-09-28)
+
+**Kit yapı taşı, isteğe bağlı; varsayılan bayt bayt aynı**
+(`kit/k4-lit-cells`; BACKLOG A9). AOI odasının sisi içerikten bağımsızdı:
+izleyici hücresinin 3×3'ündeki (3B'de 27) her kaydı görür, tek düğme
+`cell_size` (DESIGN "Sis güvenlik parametresi"). Işık konisi, görüş hattı,
+gizlilik kuralı gibi mahalle İÇİNDE izleyici başına süzme yazılamıyordu:
+hücrenin paketi bir kez kodlanıp hücrenin bütün üyelerine paylaşılıyor —
+süzülmüş izleyici o paketi alırsa görmemesi gerekeni de alır. Artık oyun
+kuralı verir, kit teslimi ve güvenliği üstlenir; ışık yakmayan oyunun
+görünürlüğü ve baytları değişmez.
+
+**Seam (oyunun doldurduğu, `gsb_kit::game`):**
+
+```rust
+pub trait LitGame: Game {                 // TeamGame gibi strateji uzantısı
+    type Light;                           // izleyici başına, tick başına bir kez
+    fn light(&self, world: &World, viewer: Entity) -> Option<Self::Light>;
+    fn lit(&self, light: &Self::Light, world: &World,
+           record: Entity, wire: &Wire<Self>) -> bool;
+}
+// gsb_kit::aoi
+impl<G: LitGame, S> AoiRoom<G, S> { pub fn lit(self) -> LitAoiRoom<G, S> }
+impl<G: LitGame, S> LitAoiRoom<G, S> { pub fn with_game(game: G, space: S) -> Self }
+pub enum LitGroup<C> { Cell(C), Viewer(PlayerId) }   // odanın GroupKey'i
+```
+
+- **Ne zaman sorulur.** Her tick, sistemlerden ve AOI defterinden SONRA
+  (dünya tick'in son hâli): odadaki her oyuncu için bir `light`; ışığı
+  olan (`Some`) her izleyici için mahallesindeki (`CellSpace::view` —
+  paylaşılan grubunkiyle aynı hücreler) her kayıt için bir `lit`. İkisi de
+  dünyayı yalnız okur. `Light` oyunun izleyici özeti (koni tepesi + yön +
+  açı, görüş hattı başlangıcı, algı düzeyi…), tick'ten sonra tutulmaz.
+  Kayıt hem ENTITY'siyle (bileşen okuyan kural: gizlilik) hem istemcinin
+  alacağı wire değeriyle (konum okuyan kural: koni) sorulur. İzleyicinin
+  KENDİ kaydı da sorulur — hep gösterilmesi gerekiyorsa kural öyle der.
+- **Teslim biçimi: ışığı olan izleyici kendi grubudur.** `group_of` ışığı
+  olmayan oyuncuya `Cell(c)` (AOI odasının grubu, kancaları aynen
+  iletilir), ışığı olana `Viewer(p)` (tek üyeli grup) döner. İzleyici
+  grubunun içeriği mahallesinin AYDINLIK alt kümesi (`wire id → wire`),
+  her tick yeniden kurulur; kareleri takım odasının delta kipindeki küme
+  defterinden (`common::SetLedger`): taze grup FULL, kurulu grup
+  istemcinin tuttuğuna karşı DELTA — önce `removed` (aydınlıktan çıkan,
+  mahalleden çıkan, yok olan kayıt), sonra upsert'ler (aydınlığa giren
+  kayıt BÜTÜN kayıt olarak; wire değeri değişen, A10 zamanında) — ya da
+  hiçbir şey. Keep-alive: aydınlık görünümün taze full'ü. `cell_exits`
+  yok (aydınlık görünüm istemcinin hesaplayabileceği hücre birleşimi
+  değil; takım sisinin aynı gerekçesi). **Yeni wire öğesi yok**: zarf ve
+  istemci kuralları `kit.proto`'nunki; referans istemci değişmedi.
+- **Güvenlik özelliği.** Aydınlık olmayan kaydın tek baytı o izleyiciye
+  gitmez: grup karesi yalnız aydınlık içerikten kurulur; özel karesi
+  (F11 düşmesi, resume) yalnız o içeriğin full'ünü taşır — AOI odasının
+  bütün mahalle one-shot full'ünü asla; ışığı varken hiçbir paylaşılan
+  hücre grubunun üyesi değildir. Entity'si çözülemeyen kayıt aydınlık
+  değildir (kapalı-başarısızlık).
+- **Geçişler.** `Cell → Viewer`: izleyici grubu taze → ilk karesi aydınlık
+  görünümün full'ü (istemcinin görünümünün yerine geçer). `Viewer →
+  Cell`: istemci yalnız alt kümeyi tutuyor → AOI odasının bu oyuncu için
+  baseline'ı geri alınır (aynı batch'te bütün görünümün one-shot özel
+  full'ü) ve önceki tick'te hiçbir paylaşılan üyesi olmayan hücre grubu
+  çekirdek için tazedir → doğmuş işaretlenir (çekirdeğin taze gruptan
+  beklediği ilk full; üyesini de o baseline'lar).
+- **Maliyet modeli (yalnız ışık yakan oyun öder).** Tick başına `P`
+  `light` çağrısı; ışığı olan `F` izleyicinin her biri için `V` (mahalle
+  kayıtları) `lit` çağrısı, `V` üzerinde küme farkı ve yalnız kendi
+  değişen kayıtlarının ayrı kodlaması. Işığı olmayan izleyici bir `light`
+  çağrısına mal olur; paylaşılan hücre parçaları hâlâ hücre başına bir
+  kez kodlanır. Ek iş `O(P + F·V)`, ek durum `O(F·V)` (her izleyicinin
+  tuttuğu görünüm) + kit'in `wire id → entity` dizini (`O(E)`, yalnız bu
+  oda tutar: `CellBook::entities`, diğer odalarda `None` — maliyet yok).
+  Ek bayt aydınlık görünümlerin paylaşılan paketten farkı kadardır; en
+  kötü hâl (herkesin ışığı var) bir kişilik gruplarla AOI'dir (her
+  izleyici için ayrı kodlama — takım odasının tek üyeli takımı gibi).
+- **Kapsam dışı:** shard'lı mekânsal kompozit (ödünç kayıtların izleyicinin
+  shard'ında entity'si yok) — BACKLOG A39.
+
+**Demo benimsemesi: yok.** Işık konisi bir oynanış kararı; seam kit
+fikstürüyle (`testing::Lamp`: `Facing` taşıyan izleyici x ekseninde
+önündekileri ve kendini görür, `Cloaked` kayıt hiç görünmez) doğrulandı.
+Demolar dokunulmadı.
+
+**Elenenler.** *Paylaşılan delta parçalarından çıkarma (izleyici başına
+"eksiltici" delta)* — dönen izleyicide hiçbir şey hareket etmeden
+aydınlığa girip çıkan kayıt paylaşılan delta'da yoktur; önceden
+kodlanmış parçadan kayıt ayıklamak yeniden kodlama ister; paylaşılan
+keep-alive/full yine her şeyi taşır — izleyici başına defter zaten gerekir.
+*İzleyiciyi hücre grubunda tutup süzmeyi özel karede yapmak* — grup
+karesi aydınlık olmayanı yine taşır: güvenlik özelliği bozulur.
+*`AoiRoom`'a ışık tip parametresi (`GroupKey` onunla değişen)* — her
+`AoiRoom` imzası ve 90'dan fazla test çağrısı değişirdi; sarmalayıcı AOI
+odasının kodunu hiç değiştirmiyor (varsayılan bayt yapısal olarak aynı).
+*`Game`'e varsayılanlı `lit` kancası* — her AOI odası kapı ve grup
+anahtarı değişikliğini öderdi; takım odasının `TeamGame` emsali:
+yalnız çağıran odanın uzantısı. *Kaydı yalnız wire id ile sormak* —
+bileşen okuyan kural (gizlilik) oyunun kendi dizinini isterdi; kit
+dizini yalnız bu oda için tutuyor. *Kapısız kural ("mahallesinde
+aydınlık olmayan kayıt varsa süzülmüş")* — her izleyici her tick `V`
+çağrı öder ve geçişler titrer; `Option<Light>` kapısı ışığı olmayanı bir
+çağrıya indiriyor. *İzleyicinin kendi kaydını kit'in zorla göstermesi* —
+kural oyunun (belgelendi).
+
+**Testler** (8; önce kırmızı: ilk yedisi ışık geçişi boş bir taslağa
+karşı yazıldı — 6'sı kırıldı, eşdeğerlik testi tasarım gereği geçti;
+sonradan eklenen kapalı-başarısızlık testi, NPC/dizin ve keep-alive
+denetimleri ilgili mutasyonla kırmızı görüldü):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `aoi::lit::tests::filter::an_unlit_record_in_the_viewers_own_cell_never_reaches_it` | doğuya bakan izleyicinin kendi hücresindeki arkadaki kayıt 12 tick boyunca (her tick hareket, her 5.'de keep-alive) hiçbir karesinde yok, ışığı olmayan oyuncunun karelerinde var; izleyici `Viewer(p)`, öteki `Cell(0,0)`; izleyicinin keep-alive'ı aydınlık görünümün taze full'ü; `cell_exits` yok | `group_of` hep `Cell` → kırıldı; `lit` yok sayılıyor → kırıldı; dizin yok → kırıldı; izleyici keep-alive'ı son kareyi (delta) yeniden gönderiyor → kırıldı |
+| `…::filter::the_light_brings_a_record_back_whole_and_takes_it_away` | aydınlığa giren kayıt delta'da BÜTÜN kayıt (x = 16), çıkan `removed` (kaydı yok), dönen izleyicide hareketsiz kayıtlar yer değiştirir, kaydın entity'sindeki gizlilik onu çıkarır; sessiz dünyada kare yok | `group_of` hep `Cell` / `lit` yok sayılıyor / dizin yok → kırıldı |
+| `…::filter::a_record_that_leaves_the_neighbourhood_or_the_world_is_removed` | mahalleden çıkan, ayrılan oyuncunun ve oyunun despawn ettiği NPC'nin kaydı `removed`; damgalanan NPC dizinden aydınlanır; dizin iki silme yolunda da bırakır | `apply_removals` dizini bırakmıyor → kırıldı; `sweep_removed` bırakmıyor → kırıldı |
+| `…::filter::a_record_without_a_known_entity_is_unlit` | entity'si çözülemeyen kayıt aydınlık değil (kapalı-başarısızlık) | `is_some_and` → `is_none_or` → kırıldı |
+| `…::switch::a_light_switched_on_replaces_the_view_and_off_restores_it` | açılan ışık görünümü aydınlık full'le değiştirir; kapanınca bütün görünüm one-shot özel full'le döner; izleyici tabloları ışıkla gider | AOI baseline'ı geri alınmıyor → kırıldı; izleyici baseline'ı kalıyor → kırıldı; paylaşılan küme devredilmiyor → kırıldı |
+| `…::switch::a_cell_group_a_viewer_returns_to_alone_is_fresh` | tek başına döndüğü hücre grubunun ilk paketi full (çekirdeğin taze grup sözleşmesi), one-shot gerekmez | doğum işareti yok → kırıldı; izleyici özel karesi AOI'ninki → kırıldı |
+| `…::switch::a_viewers_resend_is_its_lit_view` | düşen batch (F11) ve resume sonrası özel full aydınlık görünüm (arkadaki kayıt yok) ve kaybı iyileştirir; ayrılan izleyicinin durumu kalmaz | izleyici özel karesi AOI'ninki → kırıldı; düşme AOI'ye yönleniyor → kırıldı; resume unutmuyor → kırıldı; ayrılış izleyiciyi tutuyor → kırıldı |
+| `…::same::a_game_that_lights_nobody_ships_the_aoi_rooms_bytes` | ışık yakmayan oyun: aynı 30 tick'lik oturum (katılım, hareket, hücre geçişi, keep-alive, düşen batch, ayrılış) `AoiRoom` ile `LitAoiRoom`'da her oyuncuya her tick AYNI baytları verir | paylaşılan küme devredilmiyor (her tick fazladan full) → kırıldı |
+
+15 mutasyonun 15'i öldü (ikisi — izleyici keep-alive'ı ve
+kapalı-başarısızlık — ilk turda yaşadı; testler güçlendirildi, ikisi de
+sonra öldü).
+
+**Doğrulama:** 1609 → **1617** test / 0 hata / 1 ignored (`otlp` ile
+1627 → 1635). `record_run`'ın sabitlenmiş kare özetleri ve demoların wire
+testleri değişmeden geçti (hiçbir oyun `LitAoiRoom` kullanmıyor).
 
 ## 11. Kabul kriteri
 
