@@ -5,6 +5,45 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F53 — registry'nin duruşta okumadığı kutu (`metrics/f53-registry-leftovers`)
+
+- **Açık (motor, sayaç):** registry `Shutdown`'dan sonra hiçbir şey okumaz
+  ve kendi posta kutusunun klonunu tuttuğu için EOF'u beklemez; alıcıyı
+  `Shutdown`'ın arkasına kuyruklanmış mesajlarla birlikte düşürüyordu — her
+  göndericinin gönderimi BAŞARILI dönmüştü. Shard'ın takım export'u orada
+  "kuyruklandı" sayılıp hiçbir yere rölelenmeden gidiyordu; registry son
+  örnek de göndermiyordu. Kanıt: iki yeni test eski kodla kırmızı (hiç
+  örnek gelmez).
+- **Düzeltme (`registry/actor/run/leftovers.rs`, B68'in registry eşi):**
+  `Shutdown` kolu kutuyu önce KAPATIR (sonraki gönderim göndericide
+  reddedilir), `try_recv` ile boşaltır ve kalanları duruş anındaki
+  tablolara göre türe göre ele alır: canlı enkarnasyonun takım export'u →
+  `team_exports_unread`; katılma (`SpawnPlayer`, resume dahil; istemci
+  ERROR "registry unavailable") → `joins_unread`; arkada açılan bağlantı
+  (`ConnOpened`) kayıtlılar gibi `ConnIn::Shutdown` alır. Gerisi kayıp
+  taşımaz, duruşun kendisi yapar (kopuş/ayrılış, yankılar, `RoomDied` —
+  B67 —, `Authed`, odanın hükümleri — B57 —, kontrol düzlemi istekleri).
+  Eşleşmede joker kol yok: yeni bir mesaj türü burada karar ister.
+- **Sıra:** sayılar registry'nin SON örneğinde; teardown'dan önce
+  `channel::post` ile, registry göndericisini `run()`'dan dönerken düşürür
+  — toplayıcının son raporu (F35) örneği katlamadan çıkamaz. Yan kazanç:
+  registry'nin önceki `try_send` düşmeleri de son örnekle rapora varır.
+- **Sayaçlar:** `gsb_registry_{joins,team_exports}_unread_total` (iki
+  golden; registry aileleri kendi alt modülünde, `families/registry.rs`);
+  loadgen teli **GSNC**; RESULT ve istemci teli değişmedi.
+- **Elenenler:** kalanları işlemek; kutuyu `on_shutdown`'dan sonra
+  kapatmak (tablolar silinmiş olur); tek "okunmamış mesaj" sayacı
+  (karışık anlam); son örneği `try_send` ile göndermek.
+- Yan bulgular **F54** (kapalı registry'ye reddedilen katılma), **F55**
+  (duruşta dağıtıcının detach/leave'i kapalı oda kutusuna — zamanlamaya
+  bağlı sayım).
+
+Testler 1459 → 1461 (`otlp` ile 1477 → 1479):
+`registry::actor::run::leftovers::tests` (2; ikisi de eski kodla kırmızı);
+altı mutasyon öldü. Ebeveyn doğrulaması: katılmayı ikişer saymak iki
+testi düşürdü. DESIGN §9 "Registry'nin kutusunda kalanlar (F53)", §12;
+OPS §3; CROSS-SHARD §8b.
+
 ## F30 + F34 + F50 — pencere iddiaları, kalan gerçek saatli sınırlar, takım export reddinin sebebi (`test/f30-f34`)
 
 - **F30 (`loadgen_games`):** savaşın takım oranları ve bütün
