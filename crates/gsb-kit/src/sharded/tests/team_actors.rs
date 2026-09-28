@@ -16,6 +16,7 @@ mod front;
 mod kick;
 mod migration;
 mod rig;
+mod sight;
 
 use rig::Rig;
 

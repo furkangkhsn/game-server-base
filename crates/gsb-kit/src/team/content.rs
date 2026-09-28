@@ -24,7 +24,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             ledgers,
             team_units,
             neutral,
-            cells,
+            sight,
             contents,
             sighted,
             ..
@@ -33,7 +33,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             units.clear();
         }
         neutral.clear();
-        cells.clear();
+        sight.clear();
 
         // Membership is read from the WORLD (each entity's `TeamMember`
         // component, written at join): no reverse connection map — the
@@ -42,7 +42,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         // neutral (ownerless): broadcast to ALL teams — the broadcast set
         // stays exactly the codec's marker.
         let codec = game.codec();
-        for (wire_id, item, pos, member) in sighted.state(world).iter(world) {
+        for (wire_id, item, pos, member, radius) in sighted.state(world).iter(world) {
             let wire = codec.wire(item);
             match member {
                 Some(&TeamMember(team)) => {
@@ -51,7 +51,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
                         team_units.resize_with(t + 1, Vec::new);
                     }
                     if let Some(p) = pos {
-                        cells.entry((vision.cell(p), team)).or_default().push(*p);
+                        sight.add(vision, team, *p, radius.copied());
                     }
                     team_units[t].push((wire_id.get(), wire, pos.copied()));
                 }
@@ -79,12 +79,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             for (_, enemies) in team_units.iter().enumerate().filter(|(e, _)| *e != t) {
                 for (id, wire, pos) in enemies {
                     let Some(target) = pos else { continue };
-                    let visible = vision.neighborhood(vision.cell(target)).any(|c| {
-                        cells
-                            .get(&(c, team))
-                            .is_some_and(|units| units.iter().any(|v| vision.sees(v, target)))
-                    });
-                    if visible {
+                    if sight.sees(vision, team, target) {
                         content.insert(*id, wire.clone());
                     }
                 }

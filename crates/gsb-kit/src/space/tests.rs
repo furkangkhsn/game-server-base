@@ -9,6 +9,7 @@ use bevy_ecs::component::Component;
 
 use super::*;
 
+mod sight;
 mod units;
 
 /// A 3D game's simulation position: the kit has never seen this type.

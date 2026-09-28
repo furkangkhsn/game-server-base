@@ -2,6 +2,7 @@
 //! gets it back, and an arriving player's session is owed a full view.
 
 use super::*;
+use crate::team::SightRadius;
 
 /// A team-1 player crosses from shard 0 into shard 1's region: the
 /// crossing reports its team, and on shard 1 the rebuilt entity is a
@@ -56,6 +57,7 @@ fn an_arriving_player_gets_the_one_shot_full() {
             pin: None,
         },
         team: Some(Team(0)),
+        sight: None,
     };
     s1.on_migrate_in(&mut w1, arrival, mig, Some(PlayerId(9)));
     exchange(&mut w1, &mut s1, 2, &[], &TeamImports::default());
@@ -115,4 +117,31 @@ fn a_player_back_from_another_shard_gets_a_full_again() {
     out.clear();
     room.snapshot(&mut world, &ctx(4), &Team(0), &[], &mut out);
     assert!(owed(&mut room, &mut world), "the one-shot full again");
+}
+
+/// A unit's own sight radius (A8) crosses with it: the crossing carries
+/// it, the arrival gets the component back and sees by it on its new
+/// shard (an enemy 40 away — past the room radius).
+#[test]
+fn a_migrating_unit_carries_its_sight_radius() {
+    let mut w0 = World::new();
+    let mut s0 = shard0();
+    let wire = member(&mut w0, &mut s0, 1, 0, -5.0, -50.0);
+    let e = s0.inner.wire_entity[&wire];
+    w0.entity_mut(e)
+        .insert((Position { x: 5.0, y: -50.0 }, SightRadius(45.0)));
+    s0.update(&mut w0, &ctx(1));
+    let moves = s0.collect_migrations(&mut w0, 1);
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].state.sight, Some(SightRadius(45.0)));
+
+    let mut w1 = World::new();
+    let mut s1 = TeamShard::new(1, 4, 100.0, R);
+    let enemy = member(&mut w1, &mut s1, 2, 1, 45.0, -50.0);
+    let m = moves.into_iter().next().expect("one");
+    s1.on_migrate_in(&mut w1, m.wire, m.state, m.player);
+    let arrived = s1.inner.wire_entity[&wire];
+    assert_eq!(w1.get::<SightRadius>(arrived), Some(&SightRadius(45.0)));
+    let export = exchange(&mut w1, &mut s1, 2, &[], &TeamImports::default());
+    assert_eq!(exported(&export, 0), [wire, enemy]);
 }

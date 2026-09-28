@@ -7,7 +7,10 @@
 //! seam is two things: the exact test ([`Vision::sees`]) and a
 //! neighbourhood grid that bounds which units the test has to be run
 //! against ([`Vision::cell`] / [`Vision::neighborhood`]) — the room
-//! only ever compares units whose cells are neighbours.
+//! only ever compares units whose cells are neighbours. Per-unit sight
+//! (BACKLOG A8, opt-in) adds the test with a unit's own radius
+//! ([`Vision::sees_within`]) and the neighbourhood widened to the
+//! largest such radius ([`Vision::neighborhood_within`]).
 
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -15,6 +18,11 @@ use std::marker::PhantomData;
 use bevy_ecs::component::Component;
 
 use crate::space::{BLOCK_OFFSETS, Cell, Cell3, Planar, Spatial};
+
+mod sight;
+
+pub use sight::MAX_SIGHT_CELLS;
+use sight::{clamp_sight, rings};
 
 /// How a game's units see each other (the team room's vision source
 /// model: a unit sees what [`Self::sees`] says it sees).
@@ -40,6 +48,38 @@ pub trait Vision: Send + 'static {
 
     /// Whether a unit at `viewer` sees a unit at `target`.
     fn sees(&self, viewer: &Self::Pos, target: &Self::Pos) -> bool;
+
+    /// Whether a unit at `viewer` with its OWN sight radius `radius`
+    /// (the game's [`SightRadius`](crate::team::SightRadius), BACKLOG
+    /// A8) sees a unit at `target`. The rooms call it only for a source
+    /// that carries a radius; every other source goes through
+    /// [`Self::sees`].
+    ///
+    /// The default ignores `radius` (a model without per-unit sight:
+    /// [`Self::sees`] is its whole rule); the kit's presets override it.
+    fn sees_within(&self, viewer: &Self::Pos, radius: f32, target: &Self::Pos) -> bool {
+        let _ = radius;
+        self.sees(viewer, target)
+    }
+
+    /// The cells whose units — the model's own sources and sources with
+    /// a sight radius up to `reach` — may see into `cell`, in a fixed
+    /// order. **The widened grid contract:** it contains
+    /// [`Self::neighborhood`]`(cell)`, and whenever `sees_within(viewer,
+    /// r, target)` holds with `r ≤ reach`, the viewer's cell is in
+    /// `neighborhood_within(cell(target), reach)`. The rooms call it
+    /// only for a team with at least one such source this tick.
+    ///
+    /// The default is [`Self::neighborhood`] (consistent with the default
+    /// [`Self::sees_within`]).
+    fn neighborhood_within(
+        &self,
+        cell: Self::Cell,
+        reach: f32,
+    ) -> impl Iterator<Item = Self::Cell> {
+        let _ = reach;
+        self.neighborhood(cell)
+    }
 }
 
 /// The 2D vision preset: a uniform vision `radius` on the ground plane
@@ -47,7 +87,9 @@ pub trait Vision: Send + 'static {
 /// of `radius`-sized cells, and the 3×3 neighbourhood. A radius-sized
 /// cell makes the 3×3 block a superset of the radius disk (a corner
 /// cell can hold units up to `radius · √2` away), so the exact
-/// squared-distance test decides.
+/// squared-distance test decides. A unit's own radius (A8) uses the same
+/// inclusive test and the `(2k + 1)²` block around the target
+/// ([`MAX_SIGHT_CELLS`]).
 pub struct VisionGrid2<P> {
     radius: f32,
     /// `radius²`, computed once (the per-pair test compares against it).
@@ -103,6 +145,25 @@ impl<P: Component + Copy + Planar<Coord = f32>> Vision for VisionGrid2<P> {
         let dy = vy - ty;
         dx * dx + dy * dy <= self.radius2
     }
+
+    /// The same squared-distance test against the unit's own (clamped)
+    /// radius: the boundary is inclusive, as in [`Self::sees`].
+    #[inline]
+    fn sees_within(&self, viewer: &P, radius: f32, target: &P) -> bool {
+        let r = clamp_sight(radius, self.radius);
+        let [vx, vy] = viewer.planar();
+        let [tx, ty] = target.planar();
+        let (dx, dy) = (vx - tx, vy - ty);
+        dx * dx + dy * dy <= r * r
+    }
+
+    /// The `(2k + 1)²` block, `k = ⌈reach / radius⌉` clamped to 1 ..=
+    /// [`MAX_SIGHT_CELLS`] (the 3×3 block for a reach up to the radius).
+    #[inline]
+    fn neighborhood_within(&self, cell: Cell, reach: f32) -> impl Iterator<Item = Cell> {
+        let k = rings(reach, self.radius);
+        (-k..=k).flat_map(move |dy| (-k..=k).map(move |dx| Cell(cell.0 + dx, cell.1 + dy)))
+    }
 }
 
 /// The 3D vision preset: a uniform vision `radius` in space (any
@@ -113,7 +174,8 @@ impl<P: Component + Copy + Planar<Coord = f32>> Vision for VisionGrid2<P> {
 /// within `radius` differ by at most `radius` on every axis, so their
 /// cell indices by at most one — and the exact squared 3D distance test
 /// decides. Unlike [`VisionGrid2`], height separates: a unit directly
-/// above another, farther than `radius`, is out of sight.
+/// above another, farther than `radius`, is out of sight. A unit's own
+/// radius (A8): as [`VisionGrid2`], with the `(2k + 1)³` block.
 pub struct VisionGrid3<P> {
     radius: f32,
     /// `radius²`, computed once (the per-pair test compares against it).
@@ -170,5 +232,26 @@ impl<P: Component + Copy + Spatial<Coord = f32>> Vision for VisionGrid3<P> {
         let [tx, ty, tz] = target.spatial();
         let (dx, dy, dz) = (vx - tx, vy - ty, vz - tz);
         dx * dx + dy * dy + dz * dz <= self.radius2
+    }
+
+    /// As [`VisionGrid2::sees_within`], in 3D.
+    #[inline]
+    fn sees_within(&self, viewer: &P, radius: f32, target: &P) -> bool {
+        let r = clamp_sight(radius, self.radius);
+        let [vx, vy, vz] = viewer.spatial();
+        let [tx, ty, tz] = target.spatial();
+        let (dx, dy, dz) = (vx - tx, vy - ty, vz - tz);
+        dx * dx + dy * dy + dz * dz <= r * r
+    }
+
+    /// The `(2k + 1)³` block, `k` as in [`VisionGrid2::neighborhood_within`].
+    #[inline]
+    fn neighborhood_within(&self, cell: Cell3, reach: f32) -> impl Iterator<Item = Cell3> {
+        let k = rings(reach, self.radius);
+        (-k..=k).flat_map(move |dz| {
+            (-k..=k).flat_map(move |dy| {
+                (-k..=k).map(move |dx| Cell3(cell.0 + dx, cell.1 + dy, cell.2 + dz))
+            })
+        })
     }
 }

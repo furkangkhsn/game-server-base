@@ -8,7 +8,7 @@ use crate::common::{Baselines, Cached, InputSeq, ParkPolicy};
 use crate::game::TeamGame;
 use crate::identity::Minter;
 use crate::space::Vision;
-use crate::team::TeamRoom;
+use crate::team::{SightGrid, TeamRoom};
 
 impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
     /// Build a team-fog room running `game` with the vision model
@@ -30,7 +30,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
             tick: 0,
             team_units: Vec::new(),
             neutral: Vec::new(),
-            cells: HashMap::new(),
+            sight: SightGrid::default(),
             contents: Vec::new(),
             input: InputSeq::default(),
             encoded: 0,

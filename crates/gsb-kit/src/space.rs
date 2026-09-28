@@ -22,7 +22,7 @@ mod tests;
 
 pub use partition::{GridPartition2, Partition, grid_shape, shard_at};
 pub use sectors::{ConvexSectors2, Sector, SectorMap};
-pub use vision::{Vision, VisionGrid2, VisionGrid3};
+pub use vision::{MAX_SIGHT_CELLS, Vision, VisionGrid2, VisionGrid3};
 
 /// Where a value lies on the ground plane — the accessor the kit's 2D
 /// presets read a game's types through (§7): [`Grid2`] reads the codec's

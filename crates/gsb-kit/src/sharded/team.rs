@@ -28,12 +28,12 @@
 //!
 //! ## What travels
 //!
-//! [`TeamMember`] is the kit's component, not the game's state: a
-//! migrating entity carries its team in [`TeamMig`] and gets the
-//! component back on arrival. A player arriving on a shard has no
-//! baseline for that shard's team view: in delta mode its next private
-//! frame is the one-shot full (the spatial composite's fresh-member
-//! rule).
+//! [`TeamMember`] (and [`SightRadius`], A8) is the kit's component, not
+//! the game's state: a migrating entity carries its team (and its own
+//! sight radius) in [`TeamMig`] and gets the components back on
+//! arrival. A player arriving on a shard has no baseline for that
+//! shard's team view: in delta mode its next private frame is the
+//! one-shot full (the spatial composite's fresh-member rule).
 
 use std::collections::HashMap;
 
@@ -43,7 +43,7 @@ use crate::common::{Baselines, Cached, SetLedger};
 use crate::game::{ShardGame, TeamGame, Wire};
 use crate::sharded::*;
 use crate::space::{Partition, Vision};
-use crate::team::{Sighted, Team, TeamMember};
+use crate::team::{SightGrid, SightRadius, Sighted, Team, TeamMember};
 
 mod budget;
 mod content;
@@ -61,8 +61,8 @@ pub(crate) use frames::Shown;
 pub const DEFAULT_TEAM_BUDGET: usize = 1024;
 
 /// What a migrating entity carries in the team composite: the sharded
-/// room's state plus the entity's team ([`TeamMember`] is written back
-/// on arrival).
+/// room's state plus the entity's team and own sight radius
+/// ([`TeamMember`] and [`SightRadius`] are written back on arrival).
 #[derive(Debug, Clone)]
 pub struct TeamMig<M> {
     /// The sharded room's migration state (the game's capture and the
@@ -70,6 +70,10 @@ pub struct TeamMig<M> {
     pub kit: KitMig<M>,
     /// The entity's team (`None`: a neutral entity).
     pub team: Option<Team>,
+    /// The entity's own sight radius (A8; `None`: it has none) —
+    /// [`SightRadius`] is the kit's component, written back on arrival
+    /// like [`TeamMember`].
+    pub sight: Option<SightRadius>,
 }
 
 /// The `team × sharded` composite (module docs). `G` is the game (it
@@ -124,6 +128,9 @@ where
     /// The own-record query of `known`, kept across ticks
     /// (`crate::common::Cached`, A12).
     pub(in crate::sharded) sighted: Sighted<G, V::Pos>,
+    /// The TEAMS phase's vision sources (this shard's own units, with
+    /// their own sight radii — A8), rebuilt every exchange.
+    pub(in crate::sharded) sight: SightGrid<V>,
 }
 
 impl<G, P, V> ShardedTeamRoom<G, P, V>
@@ -156,6 +163,7 @@ where
             tick: 0,
             encoded: 0,
             sighted: Cached::default(),
+            sight: SightGrid::default(),
         }
     }
 

@@ -41,8 +41,8 @@ where
         self.inner.neighbors()
     }
 
-    /// The grid's crossings, each with the entity's team (read before the
-    /// core despawns the copy next tick).
+    /// The grid's crossings, each with the entity's team and own sight
+    /// radius (read before the core despawns the copy next tick).
     fn collect_migrations(
         &mut self,
         world: &mut World,
@@ -52,23 +52,26 @@ where
         moves
             .into_iter()
             .map(|m| {
-                let team = self
-                    .inner
-                    .wire_entity
-                    .get(&m.wire)
-                    .and_then(|&e| Self::team_of_entity(world, e));
+                let entity = self.inner.wire_entity.get(&m.wire).copied();
+                let team = entity.and_then(|e| Self::team_of_entity(world, e));
+                let sight = entity.and_then(|e| world.get::<SightRadius>(e).copied());
                 Migrating {
                     wire: m.wire,
-                    state: TeamMig { kit: m.state, team },
+                    state: TeamMig {
+                        kit: m.state,
+                        team,
+                        sight,
+                    },
                     player: m.player,
                 }
             })
             .collect()
     }
 
-    /// Install the entity through the grid half, give it its team back,
-    /// and drop an arriving player's baseline: this shard's team view is
-    /// new to its session (delta mode: the one-shot full).
+    /// Install the entity through the grid half, give it its team (and
+    /// its own sight radius) back, and drop an arriving player's
+    /// baseline: this shard's team view is new to its session (delta
+    /// mode: the one-shot full).
     fn on_migrate_in(
         &mut self,
         world: &mut World,
@@ -76,10 +79,15 @@ where
         state: Self::State,
         player: Option<PlayerId>,
     ) {
-        let TeamMig { kit, team } = state;
+        let TeamMig { kit, team, sight } = state;
         self.inner.on_migrate_in(world, wire, kit, player);
-        if let (Some(team), Some(&entity)) = (team, self.inner.wire_entity.get(&wire)) {
-            world.entity_mut(entity).insert(TeamMember(team));
+        if let Some(&entity) = self.inner.wire_entity.get(&wire) {
+            if let Some(team) = team {
+                world.entity_mut(entity).insert(TeamMember(team));
+            }
+            if let Some(sight) = sight {
+                world.entity_mut(entity).insert(sight);
+            }
         }
         if let Some(player) = player {
             self.baselines.forget(player);

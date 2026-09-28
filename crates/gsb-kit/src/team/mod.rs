@@ -55,9 +55,18 @@
 //!   package is what gets gated by vision, and gating must use *the gating
 //!   team's* sources.
 //!
-//! The radius is uniform because the component set has no per-unit vision
-//! field; it is configuration (like the AOI cell size) because the right
-//! value is a game-design knob, not an architectural constant.
+//! The radius is configuration (like the AOI cell size) because the
+//! right value is a game-design knob, not an architectural constant.
+//!
+//! **Per-unit sight (A8, opt-in).** A game that wants a hero to see
+//! farther than a minion, or a ward to see a small circle, puts a
+//! [`SightRadius`] on that source: it then sees by
+//! [`Vision::sees_within`] with its own radius, and its team's enemy
+//! test reads [`Vision::neighborhood_within`] the team's largest radius
+//! (more than the 3×3 block once it exceeds the cell). A source without
+//! it — every source of a game that never writes one — sees exactly as
+//! before, by the uniform radius. (The rejection above was about the
+//! round's fixed component set, not the model.)
 //!
 //! ## The cost of team vision (why the cache exists)
 //!
@@ -74,7 +83,9 @@
 //! an exact squared-distance filter against the candidate cells' units of
 //! the other team. Sparse layouts make the neighborhood cheap; a fully
 //! clustered layout degrades toward O(N²) (measured in the load test — see
-//! `docs/ROADMAP.md`).
+//! `docs/ROADMAP.md`). A team with a [`SightRadius`] source widens its
+//! own query to `(2k + 1)²` cells, `k = ⌈largest radius / cell⌉ ≤`
+//! [`MAX_SIGHT_CELLS`](crate::space::MAX_SIGHT_CELLS) (`sight`).
 //!
 //! ## Invariants preserved (see `tests/team.rs` and the inline tests)
 //!
@@ -106,6 +117,7 @@ mod build;
 mod content;
 mod frames;
 mod logic;
+mod sight;
 
 #[cfg(test)]
 mod tests;
@@ -120,6 +132,9 @@ use crate::common::{Baselines, Cached, InputSeq, Orphans, ParkEntry, ParkPolicy,
 use crate::game::{Game, TeamGame, Wire};
 use crate::identity::{Minter, WireId};
 use crate::space::Vision;
+
+pub(crate) use sight::SightGrid;
+pub use sight::SightRadius;
 
 /// A player's team — the team-fog group key. How many teams exist is
 /// the game's assignment policy ([`TeamGame::team_of`]); membership is
@@ -163,14 +178,15 @@ type RecordQuery<G> = <<G as Game>::Codec as RecordCodec>::Query;
 
 /// The team rooms' record query (this room's rebuild, the sharded team
 /// room's `known`): every broadcastable entity's wire identity, record
-/// components, vision position and team, if it has them. Kept by the
-/// room across ticks (`crate::common::Cached`, A12).
+/// components, vision position, team and own sight radius, if it has
+/// them. Kept by the room across ticks (`crate::common::Cached`, A12).
 pub(crate) type Sighted<G, P> = Cached<
     (
         &'static WireId,
         RecordQuery<G>,
         Option<&'static P>,
         Option<&'static TeamMember>,
+        Option<&'static SightRadius>,
     ),
     With<Marker<G>>,
 >;
@@ -232,9 +248,10 @@ pub struct TeamRoom<G: TeamGame, V: Vision> {
     team_units: Vec<Vec<UnitRec<Wire<G>, V::Pos>>>,
     neutral: Vec<(u64, Wire<G>)>,
     /// Per-tick grid cache for the enemy-vision test: `(cell, team) →
-    /// that team's unit positions in the cell`. A *cache*, not the group
-    /// key (unlike `AoiRoom`, whose cells *are* the groups).
-    cells: HashMap<(V::Cell, Team), Vec<V::Pos>>,
+    /// that team's vision sources in the cell` (with their own sight
+    /// radii — A8). A *cache*, not the group key (unlike `AoiRoom`,
+    /// whose cells *are* the groups).
+    sight: SightGrid<V>,
     /// Per-tick content, rebuilt in [`Self::update`]: `team →
     /// (wire id → wire value)` — exactly what that team's snapshot
     /// carries (own team ∪ neutral ∪ in-vision enemies). `snapshot`

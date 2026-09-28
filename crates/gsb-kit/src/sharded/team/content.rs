@@ -15,13 +15,14 @@ use crate::sharded::team::*;
 use crate::space::{Partition, Vision};
 
 /// One record this shard knows typed: its wire id, wire value, vision
-/// position (if any) and team (own entities only — a lent record's team
-/// is unknown).
+/// position (if any), team and own sight radius (own entities only — a
+/// lent record's team is unknown, and it is never a vision source).
 struct Known<W, P> {
     wire: u64,
     value: W,
     pos: Option<P>,
     team: Option<Team>,
+    sight: Option<SightRadius>,
     lent: bool,
 }
 
@@ -44,14 +45,12 @@ where
         let known = self.known(world, borrowed);
         let index: HashMap<u64, usize> =
             known.iter().enumerate().map(|(i, k)| (k.wire, i)).collect();
-        // Vision sources: this shard's OWN units, per team.
-        let mut cells: HashMap<(V::Cell, Team), Vec<V::Pos>> = HashMap::new();
+        // Vision sources: this shard's OWN units, per team (each with its
+        // own sight radius, if any — A8).
+        self.sight.clear();
         for k in known.iter().filter(|k| !k.lent) {
             if let (Some(team), Some(pos)) = (k.team, k.pos) {
-                cells
-                    .entry((self.vision.cell(&pos), team))
-                    .or_default()
-                    .push(pos);
+                self.sight.add(&self.vision, team, pos, k.sight);
             }
         }
         let views = self.viewed_teams(world);
@@ -76,15 +75,7 @@ where
         }
         for &team in &teams {
             let sees = |pos: &Option<V::Pos>| {
-                pos.is_some_and(|target| {
-                    self.vision
-                        .neighborhood(self.vision.cell(&target))
-                        .any(|c| {
-                            cells.get(&(c, team)).is_some_and(|units| {
-                                units.iter().any(|v| self.vision.sees(v, &target))
-                            })
-                        })
-                })
+                pos.is_some_and(|target| self.sight.sees(&self.vision, team, &target))
             };
             // Members first (the budget keeps them), then what they see.
             let mut visible: Vec<&Known<Wire<G>, V::Pos>> = known
@@ -157,11 +148,12 @@ where
             .sighted
             .state(world)
             .iter(world)
-            .map(|(wire, item, pos, member)| Known {
+            .map(|(wire, item, pos, member, sight)| Known {
                 wire: wire.get(),
                 value: codec.wire(item),
                 pos: pos.copied(),
                 team: member.map(|m| m.0),
+                sight: sight.copied(),
                 lent: false,
             })
             .collect();
@@ -171,6 +163,7 @@ where
             value: r.state.clone(),
             pos: (self.lent_pos)(&r.state),
             team: None,
+            sight: None,
             lent: true,
         }));
         known

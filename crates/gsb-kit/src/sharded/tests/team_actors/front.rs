@@ -11,7 +11,7 @@ use gsb_core::room::{Action, TickCtx};
 
 use crate::common::InputSeq;
 use crate::game::{Game, ShardGame, TeamGame};
-use crate::team::Team;
+use crate::team::{SightRadius, Team};
 use crate::testing::{DEFAULT_SPEED, FixCodec, FixMig, Fixture, Position, Speed};
 
 /// The teleport input: `x, y` as two little-endian `f32`s.
@@ -24,7 +24,8 @@ pub(super) const KICK: u16 = 1951;
 #[derive(Default)]
 pub(super) struct Front(Fixture);
 
-/// An identity is `team:x:y` (e.g. `1:-40:-50`).
+/// An identity is `team:x:y` (e.g. `1:-40:-50`), optionally with the
+/// unit's own sight radius (A8): `team:x:y:sight`.
 pub(super) fn parse(identity: &str) -> (u8, f32, f32) {
     let mut parts = identity.split(':');
     let mut next = || parts.next().expect("team:x:y");
@@ -32,6 +33,12 @@ pub(super) fn parse(identity: &str) -> (u8, f32, f32) {
     let x = next().parse().expect("x");
     let y = next().parse().expect("y");
     (team, x, y)
+}
+
+/// The identity's own sight radius, if it names one.
+fn sight(identity: &str) -> Option<SightRadius> {
+    let r = identity.split(':').nth(3)?;
+    Some(SightRadius(r.parse().expect("sight")))
 }
 
 /// The teleport payload.
@@ -89,7 +96,8 @@ impl TeamGame for Front {
         Team(0)
     }
 
-    /// The saved character: its team and its spot, from the identity.
+    /// The saved character: its team, its spot and its own sight radius
+    /// (if any), from the identity.
     fn spawn_team_player_as(
         &mut self,
         world: &mut World,
@@ -98,6 +106,9 @@ impl TeamGame for Front {
     ) -> (Entity, Team) {
         let (team, x, y) = parse(identity);
         let e = world.spawn((Position { x, y }, Speed(DEFAULT_SPEED))).id();
+        if let Some(sight) = sight(identity) {
+            world.entity_mut(e).insert(sight);
+        }
         (e, Team(team))
     }
 }
