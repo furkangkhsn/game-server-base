@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1609 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1617 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -157,6 +157,13 @@ küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti
 ön-ayarlarında wire ölçeği — `GridPartition2/3::with_wire_scale(s)`;
 `admits` ve `debug_check_wire` wire'ı ölçeğe bölerek okur, varsayılan 1 =
 bugün. Hiçbir demo kullanmıyor. Açık: A38. Kit hattında sıradaki: A9.
+
+**A9 tamam** (CHANGELOG "A9", KIT-ARCHITECTURE §10 "A9"): oyuncu başına
+aydınlık — `LitGame::{light, lit}` + `LitAoiRoom` (`AoiRoom::…lit()`); ışığı
+olan izleyici `LitGroup::Viewer(p)` grubunda yalnız aydınlık kayıtları
+alır, ötekiler paylaşılan hücre paketini. Hiçbir demo kullanmıyor. Açık:
+A39 (shard'lı mekânsal kompozitte ışık), A40. Kit hattı (A8 → A5 → A7 → A9)
+bitti.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -860,6 +867,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1609 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1617 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

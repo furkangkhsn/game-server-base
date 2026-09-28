@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A9 — oyuncu başına aydınlık: `LitAoiRoom`, `LitGame` (`kit/k4-lit-cells`)
+
+Kit hattının dördüncü turu.
+
+- **Kit yapı taşı, isteğe bağlı:** `LitGame: Game` (`type Light`;
+  `light(world, izleyici) -> Option<Light>` tick başına izleyici başına bir
+  kez, `None` = filtre yok; `lit(&light, world, kayıt_entity, &wire) -> bool`
+  mahalledeki her kayıt için) ve `LitAoiRoom<G: LitGame, S>`
+  (`AoiRoom::with_game(g, s).lit()`). Kural oyunun (ışık konisi, görüş hattı,
+  gizlilik); hiçbir demo kullanmıyor.
+- **Teslim:** ışığı olan izleyici kendi grubudur (`LitGroup::Viewer(p)`):
+  kareleri yalnız aydınlık alt kümeden, takım odasının küme defteriyle (full /
+  `removed` + upsert delta / keep-alive full; `cell_exits` yok, yeni wire
+  öğesi yok). Işığı olmayan herkes hücrenin paylaşılan paketini aynen alır;
+  ışık yakmayan oyunun baytı `AoiRoom`'unkiyle bayt bayt aynı.
+- **Güvenlik:** aydınlık olmayan kaydın tek baytı o izleyiciye gitmez (grup
+  karesi, F11/resume özel full'ü dahil); entity'si çözülemeyen kayıt aydınlık
+  değil. Geçişler: ışık açılınca taze full; kapanınca AOI baseline'ı geri
+  alınır, tek başına dönülen hücre grubu doğmuş işaretlenir.
+- **Maliyet (yalnız ışık yakan oyunda):** tick başına `P` `light` + `F·V`
+  `lit` çağrısı, `F` izleyici için ayrı kodlama, `O(F·V)` durum + yalnız bu
+  odanın tuttuğu `wire id → entity` dizini (`CellBook::entities`).
+- Elenenler: paylaşılan delta'dan eksiltme, süzmeyi özel karede yapmak,
+  `AoiRoom`'a tip parametresi, `Game`'e varsayılanlı kanca, yalnız wire id,
+  kapısız kural. Kapsam dışı: shard'lı mekânsal kompozit (A39).
+
+Testler 1609 → 1617 (`otlp` ile 1627 → 1635): kit fikstürüyle 8 (çekirdeğin
+yayın sırasıyla adımlanan oda + istemci görünümleri); ilk 7'nin 6'sı boş ışık
+geçişine karşı kırmızı, eşdeğerlik testi tasarım gereği yeşil; 15 mutasyonun
+15'i yakalandı. Ebeveyn doğrulaması: kapalı-güvenliği açık-güvenliğe çevirmek
+(`is_none_or`) ve tek başına dönülen hücrenin doğum işaretini silmek ikisi de
+testi düşürdü. KIT-ARCHITECTURE §4.3 tablo, §10 "A9"; DESIGN "Sis güvenlik
+parametresi".
+
 ## A7 — bölme ön-ayarlarında wire ölçeği: `with_wire_scale` (`kit/k3-wire-scale`)
 
 Kit hattının üçüncü turu.
