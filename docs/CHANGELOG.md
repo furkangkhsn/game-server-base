@@ -5,6 +5,51 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## rUDP sertleştirme 1 — B4 soket arabellekleri, B2 RTT tahmini + uyarlanan RTO (`net/r1-rcvbuf-rtt`)
+
+rUDP sertleştirme paketinin (E3) ilk turu; kit hattıyla paralel.
+
+- **B4 — UDP kapılarının soket arabellekleri:** rUDP ve QUIC kapılarının
+  tek soketi artık `gsb_net::listen::bind_udp` (socket2) ile kuruluyor;
+  `SO_RCVBUF`/`SO_SNDBUF` bind'dan ÖNCE uygulanıyor. Yeni sunucu anahtarları
+  `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`: yazılmazsa dokunulmaz
+  (sistem varsayılanı), `4096..=2147483647`, dışı `BadUdpBuffer` ile
+  başlatmayı durdurur; `[rooms.<id>]` ve `[[listeners]]` reddeder. Linux
+  isteği `rmem_max`/`wmem_max`'ta keser ve ikiye katlar; verilen boyutlar
+  bind'da log'lanır, kesinti uyarıdır. QUIC uç noktası aynı soketi
+  `Endpoint::new` ile kurar. loadgen `--udp-recv-buffer N`. socket2 0.6.5
+  `gsb-net`'in doğrudan bağımlılığı (lock'ta yeni crate yok). **Ölçüm**
+  (rUDP 1000 fırtına, 3'er koşu): varsayılanda koşu başına 3,4–4,7 bin
+  `RcvbufErrors`, 1,3–1,8 bin el sıkışma yeniden denemesi; 4 MiB'de 0 / 0,
+  connect p99 ~200 → ~55–87 ms.
+- **B2 — RTT tahmini + uyarlanan RTO:** sabit 50 ms RTO kalktı: RFC 6298
+  SRTT/RTTVAR, Karn kuralı, geri çekilme, `[50 ms, 1 sn]` (başlangıç 50 ms
+  — RFC'nin 1 sn'si kaybolan AUTH/JOIN'e 1 sn katılma gecikmesi eklerdi).
+  **Tel değişmedi:** örnek var olan kümülatif ACK'ten, serbest bırakılan en
+  yeni karenin gönderim zamanından. Yazıcı ve istemci aynı
+  `udp::rel::RelSend`'i paylaşıyor. Canlılık sınırı (5 sn) aynı; kesintide
+  100 yerine 8 yeniden gönderim. El sıkışma da geri çekiliyor, temiz adım
+  istemcinin tahminini tohumluyor. Boşta kalma kuralı: zamanlayıcıdan uzun
+  boşta kalan bant geri çekilmeyi düşürür (olmadan fırtınada 19/1000
+  LEAVE pencereyi kaçırıyordu). Yeni taşıma sayacı
+  `udp_control_retransmits_timeout` (hızlı yeniden gönderim yok — her
+  yeniden gönderim zamanlayıcıdan; neden adında). Loadgen teli **GSNF**.
+- **Bedel (karar bekliyor, B86):** varsayılan arabellekte fırtına altında
+  connect p99 ~200 → ~760 ms, loadgen'de 49–114 `NotInRoom` (JOIN sonucu
+  beklenmeden girdi — B88); 4 MiB arabellekte bedel yok.
+- Elenenler: kapı başına değer, varsayılanı büyütmek, `SO_RCVBUFFORCE`
+  (ayrıcalık ister); telde zaman damgası yankısı, RFC'nin 1 sn başlangıcı,
+  oyun bandından örnek (ACK'lenmiyor), 50 ms altı taban, deneme sayısıyla
+  ölüm.
+
+Testler 1566 → 1601 (`otlp` ile 1584 → 1619; +35); önce kırmızı (sahte
+bağlama / sabit zamanlayıcı), mutasyonların hepsi yakalandı (yalnız
+yazıcının `wait()`'i yerine sabit tick sağ çıktı: yalnız hassasiyet
+kaybeder, `wait()` birim testli). Ebeveyn doğrulaması: SRTT ağırlığını
+1/8 yerine 1/4 yapmak RFC testini düşürdü. DESIGN §6 "UDP kapılarının soket
+arabellekleri", "Yeniden gönderim zamanlayıcısı"; OPS §2; SECURITY §4.5.
+Yeni: B85–B88.
+
 ## A5 — hacimsel AOI ve 3B shard bölmesi: `Grid3`, `GridPartition3` (`kit/k2-grid3`)
 
 Kit hattının ikinci turu.

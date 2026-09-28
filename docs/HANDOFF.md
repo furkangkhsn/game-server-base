@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1566 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1601 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -152,6 +152,14 @@ küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti
 — B4+B2 → B1 → B3 → B7 → B5 (DTLS; kütüphane kararı kullanıcıda);
 (2) kit — A8 → A5 → A7 → A9. Her tur kendi worktree'sinde; birleştirmeden
 önce diğer hattın son hâline rebase + tam kapılar.
+
+**rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
+`gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
+`udp::rel::{RelSend, Rto}` (RFC 6298, `[50 ms, 1 sn]`, Karn, boşta kalma
+kuralı); `udp_control_retransmits_timeout`, loadgen teli GSNF. Bulgu:
+geri çekilme varsayılan arabellekli katılma fırtınasında connect p99'u
+~3,5× uzatıyor, ilacı B4 düğmesi — karar B86'da. B1 için: oyun bandı
+ACK'lenmiyor, geri bildirim kararı gerekiyor. Açık: B85–B88.
 
 **A5 tamam** (CHANGELOG "A5", KIT-ARCHITECTURE §10 "A5"): hacimsel AOI
 `space::Grid3` ve 3B shard bölmesi `space::GridPartition3` (`[nx, ny, nz]`,
@@ -847,6 +855,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1566 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1601 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
