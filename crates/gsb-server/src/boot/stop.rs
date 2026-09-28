@@ -58,43 +58,50 @@ pub struct StopReport {
 }
 
 impl ServerHandle {
-    /// Shut the server down: the registry tears down connections and rooms
-    /// (rooms get a control `Shutdown`, processed on their next tick; a
-    /// room with a configured result seam reports it on that shutdown); the
-    /// ticker is aborted, which closes the broadcast and stops any room that
-    /// missed its window; EVERY listener is closed (stopping any per-
-    /// listener transport shared state, e.g. each rUDP demux), which ends
-    /// its accept loop: the pending accept returns the listener-closed
-    /// error and the loop returns (BACKLOG B16). `stop` waits for the loops
-    /// up to one second in all and aborts only one that overran it.
-    /// The HTTP ops surface's door closes first and its accept loop is
-    /// waited for with the listeners' (BACKLOG B33). Then the game's registered
-    /// services stop, AFTER the rooms (BACKLOG F5): `stop` waits (bounded)
-    /// until every room and shard task has run its teardown, asks each
-    /// service to stop, and waits for them under one deadline, aborting a
-    /// straggler. The metrics collector is awaited
-    /// last: once the broadcast has closed it folds every session
-    /// producer's last word — each room's final count, each connection's
-    /// final flush — and emits its final report when all of them have
-    /// ended (BACKLOG F35), or at its own grace
+    /// Shut the server down, doors first (BACKLOG F41): EVERY listener is
+    /// closed (stopping any per-listener transport shared state, e.g. each
+    /// rUDP demux), and the HTTP ops surface's door with them (BACKLOG
+    /// B33), which ends each accept loop: the pending accept returns the
+    /// listener-closed error and the loop returns (BACKLOG B16). `stop`
+    /// waits for the loops up to one second in all and aborts only one
+    /// that overran it. Only THEN the registry gets its `Shutdown`: every
+    /// `ConnOpened` an accept loop sent is ahead of it in the registry's
+    /// mailbox, so every connection actor the loops spawned is registered
+    /// and told to stop — none is born after the registry stopped reading
+    /// (an aborted loop spawns nothing: its only awaits, the accept and
+    /// the `ConnOpened` send, both come before the actor's spawn). The
+    /// registry tears down connections and rooms (rooms get a control
+    /// `Shutdown`, processed on their next tick; a room with a configured
+    /// result seam reports it on that shutdown); the ticker is aborted,
+    /// which closes the broadcast and stops any room that missed its
+    /// window. Then the game's registered services stop, AFTER the rooms
+    /// (BACKLOG F5): `stop` waits (bounded) until every room and shard
+    /// task has run its teardown, asks each service to stop, and waits
+    /// for them under one deadline, aborting a straggler. The metrics
+    /// collector is awaited last: once the broadcast has closed it folds
+    /// every session producer's last word — each room's final count, each
+    /// connection's final flush — and emits its final report when all of
+    /// them have ended (BACKLOG F35), or at its own grace
     /// (`gsb_core::metrics::FINAL_REPORT_GRACE`, from the close, running
     /// alongside the waits above) if one has not
-    /// ([`StopReport::final_report_complete`]). The
-    /// teardown ORDER is the single-listener order applied across all
-    /// listeners: doors close first, so no new client can connect while
-    /// the registry is tearing the existing ones down.
+    /// ([`StopReport::final_report_complete`]). No new client can connect
+    /// while the registry is tearing the existing ones down.
     pub async fn stop(self) -> StopReport {
-        let _ = self.registry.send(RegistryMsg::Shutdown).await;
         let mut accepts = self.accepts;
         if let Some(http) = self.http {
             http.door.close();
             accepts.push(http.task);
         }
-        self.ticker.abort();
         for l in &self.listeners {
             l.close();
         }
         let mut report = end_accepts(accepts, ACCEPT_STOP_GRACE).await;
+        // The accept loops are over: nothing hands the registry a
+        // connection behind this Shutdown (F41). The ticker goes right
+        // after it, as before (S: the registry stops the rooms without
+        // awaiting any of them).
+        let _ = self.registry.send(RegistryMsg::Shutdown).await;
+        self.ticker.abort();
         end_services(
             self.services,
             self.rooms_released,

@@ -15,6 +15,8 @@ use gsb_core::service::Service;
 
 use super::*;
 
+mod window;
+
 #[tokio::test(start_paused = true)]
 async fn a_loop_that_overruns_the_grace_is_aborted_under_one_deadline() {
     let grace = Duration::from_millis(200);

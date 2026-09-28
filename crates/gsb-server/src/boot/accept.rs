@@ -95,7 +95,10 @@ pub(super) struct AcceptPipeline {
 /// listener is closed: `ServerHandle::stop` closes every listener, the
 /// pending `accept` ends with the listener-closed error, and the loop
 /// returns (BACKLOG B16) — `stop` aborts it only as a backstop, for a
-/// listener whose `close` does not end its accept.
+/// listener whose `close` does not end its accept. `stop` sends the
+/// registry its `Shutdown` only once every loop has ended (BACKLOG F41):
+/// each `ConnOpened` sent here is ahead of it, so no actor spawned here
+/// misses the registry's teardown.
 pub(super) async fn run_accept(
     pipeline: AcceptPipeline,
     listener: Arc<dyn gsb_net::transport::Listener>,
