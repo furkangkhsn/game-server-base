@@ -507,7 +507,8 @@ uzamsal erişimciyi okuyacak (`Spatial { type Coord; fn spatial(&self)
 için `Spatial`; MMO: yer düzlemi için `Planar`). *(Faz 2: `Spatial`
 tam bu imzayla ve yalnız arenanın gerektirdiği 3D ön-ayar —
 `VisionGrid3` — kuruldu; `Grid3` ve `GridPartition3`'ün hiçbir kontrol
-demosu kullanmıyor, tetikleyici bekliyorlar: §7.)*
+demosu kullanmıyor, tetikleyici bekliyorlar: §7.)* *(A5: ikisi de
+kuruldu, `Spatial`'i okuyorlar — §10 "A5".)*
 
 Elenen alternatifler:
 - *Ön-ayara izdüşüm tip parametresi* (`Grid2<Proj>`, `Proj:
@@ -987,28 +988,30 @@ yaygın durumlar için hazır uygulamalarını taşır:
 | Ön-ayar | İçerik | Durum |
 |---|---|---|
 | `Pos2<i32>`, `Pos2<f32>`, `Pos3<f32>` | konum bileşenleri + `RecordCodec` (farklı nicemleme seçenekleriyle) | kurulmadı (§10 "Faz 1a sonucu" 5) |
-| `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` **tetikleyici: hacimsel AOI isteyen bir oyun** (kontrol demolarından hiçbiri kullanmıyor — MMO yer düzleminde `Grid2`) |
+| `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm; `Grid3`: `Spatial<Coord = i32>` wire, küp hücre, `Cell3`, `CellExit { x = 1; y = 2; z = 3 }`) | `Grid2` 1a'da; `Grid3` A5'te (§10 "A5"; isteğe bağlı — hiçbir demo kullanmıyor, MMO yer düzleminde `Grid2`) |
 | `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk; A8'den beri birim başına yarıçap: `(2k + 1)²` / `(2k + 1)³` blok, `k ≤ MAX_SIGHT_CELLS`) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi); birim başına yarıçap A8'de (§10 "A8") |
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
-| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2) | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
+| `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2); `GridPartition3` oyunun verdiği `[nx, ny, nz]` kutu bölge, 6-komşuluk, `with_diagonals()` ile 26-komşuluk | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` A5'te (§10 "A5"; isteğe bağlı — MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
 | `ClientView<D>` + `ClientDecoder` (`gsb_kit::client`) | istemci tarafı: kit zarfının referans uygulayıcısı (istemci kuralları, sayaçlar) + zarf yürüyücüsü `client::wire` (§5.2) | GAME-MODULE G4'te; kullanıcıları loadgen, demo/MMO test istemcileri, örnek istemci |
 
 Ön-ayarlar oyunun tiplerini somut bir konum tipi üzerinden değil
 **erişimci trait'ler** üzerinden okur: 2D ön-ayarlar `Planar`'ı
 (`[Coord; 2]`; simülasyon `f32`, wire `i32`), 3D ön-ayarlar
-`Spatial`'ı (`[Coord; 3]`; Faz 2'de kuruldu, bugün tek okuyucusu
-`VisionGrid3`). Tasarım ve elenen alternatifler: §4.6. **Birim
+`Spatial`'ı (`[Coord; 3]`; Faz 2'de kuruldu; okuyucuları `VisionGrid3`
+ve A5'ten beri `Grid3` (wire, `i32`) ile `GridPartition3` (konum `f32` +
+wire `i32`)). Tasarım ve elenen alternatifler: §4.6. **Birim
 sözleşmesi** (Faz 5, F3): hem konumu hem wire'ı okuyan ön-ayar
-(`GridPartition2`) ikisini tek birimde karşılaştırır — oyunun konum
+(`GridPartition2`; A5'ten beri `Spatial` ile `GridPartition3`) ikisini
+tek birimde karşılaştırır — oyunun konum
 `Planar`'ı ile wire `Planar`'ı AYNI birimi raporlamalı (konumdan ince
 nicemlenen wire, konumun birimine geri izdüşürülür); debug build'de
 `Partition::debug_check_wire` denetler.
 
 İzometrik bir oyun kendi 2D konumuna `Planar` uygular ve `Grid2` takar;
 bir FPS `Pos3`'ünü seçer ve AOI'yi yer düzleminde (`Planar` → `[x, z]`
-+ `Grid2`) ya da hacimsel (`Spatial` + `Grid3` — tetikleyiciyle kurulur)
-yapabilir. Alışılmadık
++ `Grid2`) ya da hacimsel (`Spatial` + `Grid3`, A5) yapabilir; shard
+bölmesi de aynı seçimi taşır (`GridPartition2` ya da `GridPartition3`). Alışılmadık
 bir oyun kendi tipine seam trait'lerini doğrudan uygular.
 
 ## 8. Harita sırasında bulunan mevcut açıklar
@@ -1593,7 +1596,8 @@ manifest ×1, `VisionGrid3` ×2, üç takımlı 3D takım sisi ×1.
   fikstürden bağımsız, aynen taşındı; aynı `Pos3` artık `Spatial`'ı da
   uyguluyor — bir tip iki erişimciyi birden).
 - **Kurulmadı (tetikleyici):** `Grid3` (hacimsel AOI) ve `GridPartition3`
-  (3D sharding) — kontrol demolarının hiçbiri kullanmıyor (§7).
+  (3D sharding) — kontrol demolarının hiçbiri kullanmıyor (§7). *(A5'te
+  kuruldu — §10 "A5".)*
 
 **Public yüzeydeki değişiklikler** (derleyici buldu, ikisi de
 genişletme değil zorunluluk): `InputSeq` `Game::ingest`'in imzasında
@@ -1617,7 +1621,7 @@ altı `*Ext` trait'i, `gsb_demo::game::InputAck` artık kit'in tipi.
 2. **§12'nin "`Grid3` (27 hücre)"u bir `CellSpace` değil bir `Vision`
    ızgarası:** arena için kurulan ön-ayar `VisionGrid3` adını taşıyor;
    hacimsel AOI `Grid3` tetikleyici bekliyor. §10/§12 metnine not
-   düşüldü.
+   düşüldü. *(A5: `Grid3` artık bir `CellSpace` — §10 "A5".)*
 3. **`c97270b` tek başına derlenmiyor:** yeniden adlandırma commit'i
    yalnız `git mv`'leri içeriyor (çalışma ağacındaki yol düzeltmeleri
    bir pathspec hatası yüzünden sahnelenmedi; amend yasak), içerik
@@ -4356,6 +4360,156 @@ düzeneği.
 
 **Doğrulama:** 1537 → **1548** test / 0 hata / 1 ignored (`otlp` ile
 1555 → 1566).
+
+### A5 — hacimsel AOI ve 3B shard bölmesi: `Grid3`, `GridPartition3` (2026-09-28)
+
+**Kit yapı taşı, isteğe bağlı; varsayılan bayt bayt aynı**
+(`kit/k2-grid3`; BACKLOG A5). 3B bir oyun bugüne dek AOI'yi ve shard
+bölmesini yalnız yer düzleminde kurabiliyordu (`Planar` → `[x, z]` +
+`Grid2` / `GridPartition2`); yükseklik yalnız takım sisinde ayırıyordu
+(`VisionGrid3`). Artık `Spatial`'i okuyan iki ön-ayar daha var: uzay
+oyunu, uçuş oyunu, katları birbirini görmemesi gereken bir kule AOI'yi
+ve shard'ları hacimde kurabilir. Oda kodu değişmedi: `AoiRoom<G, S:
+CellSpace>` ve `ShardedRoom<G, P: Partition>` zaten jenerikti — iki
+ön-ayar yalnız seam'lerin yeni uygulamaları.
+
+**API (`gsb_kit::space`):**
+
+```rust
+pub struct Grid3;                                  // CellSpace<W: Spatial<Coord = i32>>, Cell = Cell3
+impl Grid3 { pub fn new(cell_size: f32) -> Self }  // min 0,5 (Grid2 ile aynı)
+
+pub struct GridPartition3<P>;                      // Partition<W>: P: Component + Spatial<Coord = f32>,
+                                                   //               W: Spatial<Coord = i32>
+impl<P> GridPartition3<P> {
+    pub fn new(shape: [usize; 3], half: f32) -> Self; // [nx, ny, nz], çarpım 1..=256
+    pub fn with_diagonals(self) -> Self;              // 26-komşuluk
+}
+```
+
+`Spatial`'in belgesi genişledi: `Coord = i32` quantize wire değeri için
+(`Grid3`, `GridPartition3::admits`), `f32` simülasyon konumu için; birim
+sözleşmesi `Planar`'ınkiyle aynı (konum ve wire aynı birim — debug
+build'de `GridPartition3::debug_check_wire` üç eksende denetler).
+
+- **`Grid3` — 2D sözleşmeye karşı.** Hücre: her eksende
+  `floor(wire / cell_size)`; ilk iki eksende `Grid2`'nin fonksiyonu
+  aynen çağrılıyor, üçüncüde aynı formül — istemci aynı hücreyi
+  hesaplar. Görünüm: 27 hücre, SABİT sıra (üçüncü eksen en dışta,
+  birinci en içte — `VisionGrid3::neighborhood`'un sırası; grup
+  paketinin montaj sırası = deterministik bayt). `CellExit` gövdesi `{
+  sint32 x = 1; sint32 y = 2; sint32 z = 3; }` (proto3: sıfır indis
+  yazılmaz) — `Grid2` gövdesinin üçüncü alanlı hâli; bir `Grid3`
+  istemcisi `Cell3` tutmalı (2D bir mirror üçüncü alanı atlar ve iki
+  katı aynı hücre sanar). Hücre anahtarı public `Cell3` (VisionGrid3'le
+  aynı anlam). Kirli izleme, delta, doğuş kuralı, hücre çıkışı,
+  paylaşılan parça önbelleği: AOI odasının aynı kodu.
+- **`Grid3` maliyeti.** Grup paketi 9 yerine 27 parça birleştirir
+  (her parça hücre başına tick'te bir kez kodlanır — değişmedi); bir
+  hareketli yükseklikte de hücre sınırı geçer. `cell_size`, 3×3×3
+  bloğu tepe yoğunlukta anlık görüntü bütçesinin altında tutacak
+  şekilde seçilir; görünürlük sızıntı bandı her eksende ≤ bir hücre
+  kenarı. Yer düzleminde yaşayan oyun için `Grid2` doğru seçim olarak
+  kalır (yükseklikle bölmek boşuna 3× parça).
+- **`GridPartition3` — bölgeler.** Küp `[-half, half]³`, oyunun verdiği
+  `shape = [nx, ny, nz]` kutu bölge (`Spatial`'in eksen sırasıyla);
+  indeks `(z · ny + y) · nx + x` — tek katmanda 2D'nin satır-sütun
+  numarası. Sınır kuralı 2D'ninki: her eksende `floor((v + half) /
+  kenar)`, yani bölge ALT yüzünü içerir, üst yüz sonraki bölgenin;
+  harita dışı kırpılır (her noktanın tek sahibi). Border margin: EN
+  KÜÇÜK bölge kenarının dörtte biri.
+- **Komşuluk.** Varsayılan 6 (yüz) — 2D'nin 4-komşuluğunun karşılığı;
+  `with_diagonals()` → 26 (6 yüz + 12 kenar + 8 köşe) — 2D'nin
+  8-komşuluğunun karşılığı. Sıra: yüzler −x, +x, −y, +y, −z, +z (2D'nin
+  batı, doğu, kuzey, güney'i + üçüncü eksen), sonra kenarlar, sonra
+  köşeler (üçüncü eksen en dışta): rota (`first_hops`, BFS) iki en kısa
+  yol arasında yüzü kenara, kenarı köşeye yeğler — 2D'nin "kenar
+  köşeden önce" kuralı. İç bölge 6 / 26; ızgara yüzünün ortası 5 / 17;
+  ızgara kenarı 4 / 11; ızgara köşesi 3 / 7.
+- **Seam/şerit kuralı 3B'de.** Gönderen (`exports`): kutunun altı
+  yüzünden herhangi birine margin'den (katı `<`) yakın — bu kabuk
+  kenarları ve köşeleri de kapsar. Alıcı (`admits`, çerçeve filtresi):
+  kendi kutusunun margin kadar genişletilmişi (dahil `≤`): yüz
+  komşusundan yüz levhası, kenar komşusundan kenar prizması, köşe
+  komşusundan köşe küpü kalır. 6-komşulukta bir kenarın/köşenin
+  ötesindeki bölge şeridi hiç almaz (2D 4-komşulukta köşe kuralının
+  aynısı); 26-komşulukta alır. Kristalleşme bandı (`holds`): bölge, ya
+  da EN KÖTÜ eksende `min(margin, border)`'dan az dışarıda. `Seam::area`
+  boyuttan bağımsız çalışır (oyun kendi küre yüklemini verir);
+  `Seam::within` yer düzleminde disk (`Planar`) olarak kalır — 3B hazır
+  küre sorgusu BACKLOG A36.
+- **Tek katman = 2D.** `[cols, rows, 1]`, `GridPartition2::new(rows ·
+  cols)` ile bölgede, iki komşulukta (sıra dahil), export'ta, çerçeve
+  filtresinde ve bantta aynı cevabı verir (test kilitli); tek fark
+  küpün alt/üst yüzüne yakın export (orada dinleyen komşu yok — 2D de
+  haritanın dış kenarında export eder).
+- **`GridPartition3` maliyeti.** Şerit takası komşu başına: 6
+  (varsayılan) / 26 (köşegenli) — 2D'nin 4 / 8'ine karşı; şerit hacmi
+  kutu yüzeyinin margin kalınlığı. Entity başına `exports` / `admits` /
+  `holds` üç eksen (2D'de iki). Bölge sayısı 2D ile aynı sınırda
+  (1..=256).
+- **Wire.** Hiçbir mevcut oyunun baytı değişmez: iki ön-ayar yeni tip;
+  `Grid2`, `GridPartition2`, `Cell`, `grid_shape`, `shard_at` ve odalar
+  dokunulmadı; hiçbir demo yeni ön-ayarları kullanmıyor (golden'lar,
+  wire testleri değişmeden geçti).
+
+**Demo benimsemesi: yok.** Arena'nın AOI'si yok (takım sisi), MMO'nun
+dünyası yer düzleminde; hacimsel AOI ya da 3B shard'lama bir oyun kararı
+olurdu, seam'in en küçük düzeneği değil. Doğrulama kit fikstürüyle
+(`testing::Fixture3` — `Position3` / `WirePos3`, üçüncü eksen yükseklik,
+göç eden şey konum) ve GERÇEK shard aktörleriyle (sekiz shard, 2×2×2).
+
+**Elenenler.**
+- *`GridPartition3::new(shard_count, half)` + otomatik şekil
+  (`grid_shape3`)*: kit hangi eksenin yükseklik olduğunu bilemez; 8
+  bölgeyi 2×2×2 mi 4×2×1 mi bölmek oyunun kararı — otomatik şekil
+  yüksekliği de bölerdi. Açık `[nx, ny, nz]` sürpriz yapmaz; oyun
+  `shard_count`'u şeklin çarpımıyla verir.
+- *Eksen başına yarı-boyut (`[hx, hy, hz]`, kutu harita)*: 2D kare
+  harita alıyor; basık bir dünya `nz = 1` ya da uygun `half` ile
+  kurulur. Tetikleyiciyle eklenebilir (BACKLOG A37).
+- *18-komşuluk ara seçeneği (yüz + kenar)*: 2D'de karşılığı yok; iki
+  seçenek (yüz / tam) 2D'nin iki seçeneğini birebir yansıtır.
+- *`Grid2`'yi boyutla genelleştirmek (`GridN<const D>`, `CellN`)*:
+  `Grid2`'nin tipini ve `Cell`'ini değiştirmeden olmaz (public yollar,
+  demo tipleri); iki küçük ön-ayar daha okunur ve 2D'ye dokunmaz.
+- *`VisionGrid3`'ü AOI olarak kullanmak*: `Vision` simülasyon konumunu
+  okur ve kesin mesafe testi yapar; AOI WIRE değerini okur (istemci aynı
+  hücreyi türetmeli) ve blok kümesidir — ayrı seam.
+- *Yeni hücre tipi*: `Cell3` zaten public ve aynı anlam (taban
+  indisleri); tek hücre kavramı.
+
+**Testler** (18; önce kırmızı: 18'i de — iki ön-ayarın gövdeleri
+`todo!()` iken API derlendi, 18 A5 testi kırıldı, mevcut 14 `space`
+testi geçti):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `space::tests::volume::grid3_cells_floor_every_axis` | üç eksende taban (negatif aşağı, sınır üst hücrenin), yükseklik hücreyi değiştirir (`Grid2` değiştirmez), 0,5 kırpması | üçüncü eksen yok → kırıldı; taban yerine kesme → kırıldı |
+| `space::tests::volume::grid3_view_is_the_27_cell_block_in_a_fixed_order` | 27 ayrı hücre, sabit sıra (birinci eksen en içte, üçüncü en dışta), iki hücre ötesi dışarıda | düzlemsel 3×3 → kırıldı; sıra değişti → kırıldı |
+| `space::tests::volume::grid3_cell_exit_body_carries_three_indices` | `CellExit` gövdesi: üç `sint32` alan, sıfır atlanır, sabit baytlar | üçüncü indis yok → kırıldı; sıfır da yazılıyor → kırıldı |
+| `aoi::tests::volume::grid3_interest_is_the_27_cell_block` | gerçek `AoiRoom<Fixture3, Grid3>`: üstteki, alttaki ve bloğun köşesindeki hücre ilgide; iki hücre yukarısı ve iki hücre yanı değil; simetrik | üçüncü eksen yok → kırıldı; düzlemsel görünüm → kırıldı |
+| `aoi::tests::volume::grid3_a_climb_exits_the_emptied_cell_by_its_three_indices` | tırmanış: yeni hücrenin deltası güncelleme (aynı wire id, kayıtta yükseklik), boşalan hücrenin deltası TEK `CellExit (0, 0, -2)` | üçüncü eksen yok / kesme / düzlemsel görünüm / üçüncü indis yazılmıyor → kırıldı |
+| `space::tests::partition3::grid_partition3_regions_own_their_lower_faces` | indeks formülü, alt yüz dahil (x, y, z sınırlarında), kırpma, her bölgenin hacmi | `ceil − 1` (alt yüz hariç) → kırıldı; kırpma yok → kırıldı; x en dışta → kırıldı |
+| `space::tests::partition3::grid_partition3_has_6_face_neighbours_or_26` | iç bölge: yüzler sıralı 6 / 26 (yüz → kenar → köşe), ızgara yüz/kenar/köşesinde 5/17, 4/11, 3/7; simetri | +x −x'ten önce → kırıldı; köşegende yalnız köşeler → kırıldı; köşeler kenarlardan önce → kırıldı; −z yüzü yok → kırıldı |
+| `space::tests::partition3::grid_partition3_lends_across_a_horizontal_face` | üst üste iki bölge: tavana katı `<` export, tabanın altına dahil `≤` kabul, her eksende | export `≤` → kırıldı; kabul `<` → kırıldı; margin en büyük kenardan → kırıldı |
+| `space::tests::partition3::grid_partition3_holds_within_the_clamped_margin` | bant: bölge ya da en kötü eksende katı `<`, üçüncü eksen dahil, border margin'e kırpılır | kırpma yok → kırıldı; `≤` → kırıldı; üçüncü eksen yok → kırıldı |
+| `space::tests::partition3::a_one_layer_grid_partition3_is_grid_partition2` | `[cols, rows, 1]` ≡ `GridPartition2` (7 shard sayısı × 2 komşuluk × 625 nokta × her bölge: bölge, komşular, export, kabul, bant) | alt yüz hariç / kırpma yok / indeks / yüz sırası / köşegen / margin / `≤` / `<` → kırıldı |
+| `space::tests::partition3::grid_partition3_checks_the_wire_unit_on_every_axis` | birim denetimi üç eksende (debug) | iki eksen → kırıldı |
+| `space::tests::partition3::grid_partition3_refuses_an_empty_shape` | boş şekil reddedilir | 0 bölge kabul → kırıldı |
+| `sharded::tests::volume::a_climb_migrates_to_the_shard_above` | 2×2×2 shard 0'ın komşuları `[1, 2, 4]`; z = 0'dan tırmanış yalnız shard 4'e raporlanır, yüksekliği taşır, aynı wire id ve oyuncuyla kurulur | alt yüz hariç → kırıldı; indeks → kırıldı; −z yüzü yok → kırıldı |
+| `sharded::tests::volume::a_corner_crossing_relays_over_faces_or_goes_straight` | merkez köşeden atlayış: 6-komşulukta ilk adım yüz (1), 26-komşulukta doğrudan 7 | `with_diagonals` yok sayılıyor → kırıldı |
+| `sharded::tests::volume::routes_are_shortest_in_both_neighbourhoods` | beş şekilde her rota en kısa: Manhattan (yüz) / Chebyshev (26) | köşegende yalnız köşeler → kırıldı; `with_diagonals` yok → kırıldı; −z yok → kırıldı |
+| `sharded::tests::volume::the_strip_lends_across_a_horizontal_face_and_an_edge` | 2×1×2: tavana yakın ve kenardaki kayıt üst shard'da görünür, duvara yakın ama derindeki görünmez; kenar komşusu (3) yalnız köşegenle dinler, yalnız kenardaki kaydı görür | export/kabul üçüncü ekseni yok sayıyor → kırıldı; köşegen yok → kırıldı |
+| `sharded::tests::volume_actors::a_climb_hands_over_to_the_shard_above_and_a_corner_jump_relays` | GERÇEK registry + sekiz shard aktörü (6-komşuluk): tırmanan 0 → 4 (önce tabandan ödünç, sonra yerel; eski shard'da ödünç 4), köşe atlayışı 0 → 1 → 3 → 7 yüz yüz röle; her tick tam bir sahip; derindeki entity hiçbir yerde ödünç değil | indeks → kırıldı; export üçüncü ekseni yok sayıyor → kırıldı |
+| `sharded::tests::volume_actors::with_the_diagonals_a_corner_jump_takes_one_hop` | 26-komşulukta aynı atlayış tek adım 0 → 7; diğer altı shard önce 0'ın sonra 7'nin ödüncü olarak görür | köşegende yalnız köşeler → kırıldı; `with_diagonals` yok → kırıldı; −z yok → kırıldı |
+
+24 mutasyonun 24'ü öldü (`holds`'un üçüncü ekseni ilk turda yaşadı —
+test üçüncü eksende bölünmüş bir şekle genişletildi, sonra öldü). Aktör
+testleri 15 ardışık koşuda yeşil (duraklatılmış saat).
+
+**Doğrulama:** 1548 → **1566** test / 0 hata / 1 ignored (`otlp` ile
+1566 → 1584).
 
 ## 11. Kabul kriteri
 

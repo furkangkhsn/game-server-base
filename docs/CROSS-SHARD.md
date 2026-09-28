@@ -339,7 +339,8 @@ bölgesi dışındaki her konumu `exports` eder, yani holding shard onu
   `margin / 2` bandındaysa taşınır — bandın kenarından bırakılan entity
   dövüşmeye devam etse de `margin/2` ile `margin` arasında yeniden
   pinlenmez; kenarda salınım yok. `GridPartition2` margin'i border
-  margin'ine kırpar (ötesini holding shard görmez); varsayılan `holds`
+  margin'ine kırpar (ötesini holding shard görmez; 3B `GridPartition3`
+  aynı kuralı üç eksende, en kötü eksene uygular — A5); varsayılan `holds`
   her yerde evet der (geometrisi olmayan partition yalnız zamanla
   bırakır).
 - *Partner:* holding shard'da partner kalmadıysa (öldü, çıktı, başka
@@ -1498,6 +1499,7 @@ koşu sonundaki duruş). Aynı ağaç `--workers
 | Crystallization (§4 katman 4) | ✅ C2 — §4c (opt-in; MMO açık) |
 | Göç tick'i: ölümlü kopyaya yerel darbe | ✅ D — §4d |
 | Alan sorgusu `local ∪ lent` (AoE, yakınlık) | ✅ F6 — kit'te opt-in `Seam::{area, within, find}` (§4b); savaş benimsedi |
+| 3B shard bölmesi (`GridPartition3`) | ✅ A5 — kit'te opt-in (KIT-ARCHITECTURE §10 "A5"): kutu bölgeler, 6-komşuluk ya da `with_diagonals()` ile 26; şerit kutunun altı yüzünün margin kabuğu, alıcı margin'li kutusunu tutar (yüz levhası / kenar prizması / köşe küpü); göç rotası aynı BFS; `Seam::area` boyuttan bağımsız, `Seam::within` düzlemsel disk (3B küre: BACKLOG A36). 2D bölme ve baytları değişmedi |
 
 ## 10. NOT-DONE
 
