@@ -1,6 +1,6 @@
 //! [`Partition`] — the sharding seam over instance data
-//! (KIT-ARCHITECTURE §4.2), and [`GridPartition2`], its 2D grid preset
-//! (§7).
+//! (KIT-ARCHITECTURE §4.2), [`GridPartition2`], its 2D grid preset
+//! (§7), and [`GridPartition3`], its volumetric one (BACKLOG A5).
 //!
 //! A partition is not a property of the position type: it carries
 //! INSTANCE data (map size, shard count, border width) and reads two
@@ -11,8 +11,10 @@
 use bevy_ecs::component::Component;
 
 mod grid;
+mod grid3;
 
 pub use grid::GridPartition2;
+pub use grid3::GridPartition3;
 
 /// How a map is split into shard regions, which shards border each
 /// other, and what crosses a border. `W` is the game's wire value (the

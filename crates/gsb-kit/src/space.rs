@@ -22,7 +22,7 @@ mod volume;
 #[cfg(test)]
 mod tests;
 
-pub use partition::{GridPartition2, Partition, grid_shape, shard_at};
+pub use partition::{GridPartition2, GridPartition3, Partition, grid_shape, shard_at};
 pub use sectors::{ConvexSectors2, Sector, SectorMap};
 pub use vision::{MAX_SIGHT_CELLS, Vision, VisionGrid2, VisionGrid3};
 pub use volume::Grid3;
@@ -60,17 +60,20 @@ pub trait Planar {
 }
 
 /// Where a value lies in 3D space — the accessor the kit's 3D presets
-/// read a game's types through (§7: [`VisionGrid3`], [`Grid3`]), the
-/// three-axis sibling of [`Planar`].
+/// read a game's types through (§7: [`VisionGrid3`], [`Grid3`],
+/// [`GridPartition3`]), the three-axis sibling of [`Planar`].
 ///
 /// The axis order is the game's (the 3D presets are isotropic: a
-/// uniform radius, cubic cells). A 3D game typically implements both
-/// accessors on its position: `Spatial` for true 3D presets (the arena's
-/// team vision, where height matters) and `Planar` (`[x, z]`) for the
+/// uniform radius, cubic cells; [`GridPartition3`] takes its region
+/// counts in this order). A 3D game typically implements both accessors
+/// on its position: `Spatial` for true 3D presets (the arena's team
+/// vision, where height matters) and `Planar` (`[x, z]`) for the
 /// ground-plane ones (an MMO's AOI and shard grid).
 ///
-/// **The unit.** [`Grid3`] reads only the wire and takes its cell size
-/// in the wire's unit.
+/// **The unit.** As [`Planar`]'s: [`GridPartition3`] reads both the
+/// position and the wire value, so the two `Spatial` projections must
+/// report the SAME unit (debug builds check it); [`Grid3`] reads only
+/// the wire and takes its cell size in the wire's unit.
 pub trait Spatial {
     /// The coordinate type: `i32` for a quantized wire value, `f32` for
     /// a simulation position.

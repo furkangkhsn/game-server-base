@@ -9,6 +9,7 @@ use bevy_ecs::component::Component;
 
 use super::*;
 
+mod partition3;
 mod sight;
 mod units;
 mod volume;
