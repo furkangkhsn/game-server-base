@@ -201,6 +201,19 @@ where
                 if identity.is_empty() {
                     return self.admit_fresh(conn, identity, out, reply);
                 }
+                // The identity still LIVE on another connection (F32): the
+                // old session's detach has not landed yet (or the registry
+                // handed that session over). Its detach runs here, first,
+                // under the policy; the lookup below then finds its park.
+                if let Some((player, old)) = live_session(&self.conns, &identity, conn) {
+                    self.detach_player(
+                        player,
+                        old,
+                        &identity,
+                        true,
+                        DisconnectCause::ConnectionClosed,
+                    );
+                }
                 match self.logic.resume_lookup(&self.world, &identity) {
                     ResumeFound::Held(player) => {
                         // The parked row, by its STABLE key: one lookup

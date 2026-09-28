@@ -8,8 +8,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
-use crate::channel::{FrameBatch, Mailbox};
-use crate::conn::{ConnIn, ServerClose};
+use crate::channel::FrameBatch;
 use crate::error::CoreError;
 use crate::id::{ConnectionId, RoomId};
 use crate::registry::*;
@@ -17,6 +16,7 @@ use crate::registry::*;
 use crate::registry::actor::Registry;
 
 mod done;
+mod handover;
 #[cfg(test)]
 mod tests;
 
@@ -38,52 +38,8 @@ where
         identity: String,
         reply: oneshot::Sender<Result<Seat, CoreError>>,
     ) {
-        // Double-session supersedence (§5: "en son kazanan" —
-        // latest wins): a LIVE (still-connected) session with
-        // the same identity in the same room is evicted here,
-        // BEFORE the new join dispatches. The old socket —
-        // still open by definition — is closed with ERROR 9
-        // (`ConnIn::ServerClosed`), its affiliation released
-        // through the ordinary leave path. A DETACHED session
-        // with the identity needs no eviction: its park IS the
-        // resume target (the re-affiliation cleanup in
-        // `SpawnDone` releases it).
-        if !identity.is_empty() {
-            let mut evicted: Vec<(ConnectionId, Option<Mailbox<ConnIn>>)> = Vec::new();
-            for (&other, info) in &self.conns {
-                if other != conn
-                    && !info.detached
-                    && info.room == Some(room)
-                    && info.identity == identity
-                {
-                    evicted.push((other, info.inbox.clone()));
-                }
-            }
-            for (old_conn, inbox) in evicted {
-                warn!(
-                    %old_conn,
-                    %conn,
-                    room = %room,
-                    %identity,
-                    "double session: a newer session supersedes the \
-                     live one (ERROR 9 to the old socket)"
-                );
-                if let Some(inbox) = inbox {
-                    let reason = "a newer session for this player superseded this \
-                         connection"
-                        .to_string();
-                    tokio::spawn(async move {
-                        let _ = inbox
-                            .send(ConnIn::ServerClosed {
-                                cause: ServerClose::Superseded,
-                                reason,
-                            })
-                            .await;
-                    });
-                }
-                self.direct_leave(old_conn);
-            }
-        }
+        // A LIVE session of this identity here is taken over (F32).
+        self.supersede_live(conn, room, &identity);
         let Some(entry) = self.rooms.get(&room) else {
             let code = if self.retired.contains_key(&room) {
                 CoreError::RoomRetired(room.0)

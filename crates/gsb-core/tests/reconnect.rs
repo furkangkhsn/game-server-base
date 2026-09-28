@@ -20,8 +20,8 @@
 //!    it clears (§14.4's logic-veto arm);
 //! 7. a double session supersedes: a parked identity resumes into the new
 //!    session (the old detached entry is released); two LIVE sessions for
-//!    one identity end with the newer one winning and the older socket
-//!    closed with ERROR 9 (§5);
+//!    one identity end with the newer one winning — it takes the entity
+//!    over — and the older socket closed with ERROR 9 (§5, F32);
 //! 8. room classes: joins to a retired id answer ERROR 12
 //!    ([`gsb_core::CoreError::RoomRetired`]), and a PERSISTENT room is
 //!    rebuilt after a panic even with `restart_on_panic = false` (§8).
@@ -1484,15 +1484,17 @@ async fn double_session_supersedes_the_parked_one() {
     );
 
     // Double-session with BOTH sockets live: the newer wins; the older
-    // socket gets ERROR 9 (`ConnIn::ServerClosed`) and loses the seat.
+    // socket gets ERROR 9 (`ConnIn::ServerClosed`) and hands the seat —
+    // the entity — over to the newer one (F32).
     let mut bob_inbox = open_conn(&tx, ConnectionId(30)).await;
-    spawn_as(&tx, ConnectionId(30), room, "bob")
+    let bob = spawn_as(&tx, ConnectionId(30), room, "bob")
         .await
         .expect("bob joins");
     let _bob2_inbox = open_conn(&tx, ConnectionId(31)).await;
-    spawn_as(&tx, ConnectionId(31), room, "bob")
+    let bob2 = spawn_as(&tx, ConnectionId(31), room, "bob")
         .await
         .expect("bob #2 supersedes");
+    assert_eq!(bob2, bob, "the newer session takes the entity over");
     match tokio::time::timeout(WAIT, bob_inbox.recv()).await {
         Ok(Some(ConnIn::ServerClosed { cause, reason })) => {
             assert_eq!(cause, gsb_core::conn::ServerClose::Superseded);
@@ -1508,6 +1510,11 @@ async fn double_session_supersedes_the_parked_one() {
 
     stop_registry(tx, handle).await;
 }
+
+// F32: the double session whose old socket is still live at the
+// registry hands its membership over.
+#[path = "reconnect/takeover.rs"]
+mod takeover;
 
 async fn close_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {
     tx.send(RegistryMsg::ConnClosed { conn })
@@ -1974,10 +1981,28 @@ async fn broadcast_resume_accepted_by_exactly_one_shard() {
         "exactly one shard accepts; the other answers 'not here'"
     );
 
-    // A second resume of the consumed park finds nothing anywhere: no
-    // resurrection, no double accept.
+    // A newer session of the identity while c9 is still live takes c9
+    // over (F32, "latest wins") — on the one shard that holds it.
     let [r0b, r1b] = p.resume_broadcast(ConnectionId(10), 3, "ana").await;
-    assert_eq!([r0b, r1b], [None, None]);
+    assert_eq!(
+        [r0b, r1b],
+        [Some(wire), None],
+        "one winner, the same wire id"
+    );
+
+    // The session leaves: the consumed park is resurrected nowhere, and
+    // nothing is accepted twice.
+    for s in &p.shards {
+        s.send(gsb_core::shard::ShardMsg::Leave {
+            conn: ConnectionId(10),
+            entity: wire,
+            epoch: 3,
+        })
+        .await
+        .expect("shard alive");
+    }
+    let [r0c, r1c] = p.resume_broadcast(ConnectionId(11), 4, "ana").await;
+    assert_eq!([r0c, r1c], [None, None]);
 
     shard_test::kill(p.handles).await;
 }

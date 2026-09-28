@@ -30,9 +30,11 @@ pub enum DisconnectCause {
     /// while it was a member of ANOTHER membership (BACKLOG B43: a
     /// kick or idle close that lands after the connection rejoined
     /// ends the NEW membership with this cause — this room did not
-    /// judge it). Two ends never reach the policy at all: a newer
-    /// session superseding a live one (a leave, `on_leave`) and the
-    /// room's shutdown.
+    /// judge it). A live session a newer one of its identity takes over
+    /// (BACKLOG F32: the reconnect outran the old close, or the old socket
+    /// is half-open and the registry closes it) reaches the policy with
+    /// this cause too, right before the newer session's resume. The
+    /// room's shutdown never reaches it.
     ConnectionClosed,
     /// The input-idle ceiling
     /// ([`RoomConfig::max_idle_input_secs`](crate::room::RoomConfig::max_idle_input_secs),

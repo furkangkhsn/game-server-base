@@ -75,6 +75,7 @@ mod idle;
 mod kick;
 mod logic;
 mod stop;
+mod takeover;
 mod unread;
 
 #[cfg(test)]
@@ -94,6 +95,7 @@ pub(crate) use kick::kick_close;
 pub use kick::{KICK_REASON_MAX_BYTES, Kick, KickQueue, Kicks, kick_message};
 pub use logic::{GameLogic, RoomLogic};
 pub(crate) use stop::{Held, send_final};
+pub(crate) use takeover::live_session;
 pub(crate) use unread::{Unread, drop_unread};
 
 /// A client action forwarded by the connection actor. The payload is still

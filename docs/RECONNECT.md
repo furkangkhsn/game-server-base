@@ -135,10 +135,12 @@ fn on_disconnect_with(&mut self, world: &mut W, player: PlayerId,
   öğrenmez — registry'nin `ConnClosed`'u neden taşımaz: eş gitti, bir
   taşıma koruması kapattı (idle timeout, write stall, ölü rUDP bandı,
   ihlal bütçesi, reddedilen akış), ya da bağlantıyı başka bir üyeliği
-  için yargılayan bir sunucu hükmü düştü (aşağıda B43). İki son
-  politikaya hiç ulaşmaz: aynı kimliğin yeni oturumunun eskisini
-  ezmesi (registry bir LEAVE yollar → `on_leave`) ve odanın kapanışı
-  (`on_shutdown`).
+  için yargılayan bir sunucu hükmü düştü (aşağıda B43). Aynı kimliğin
+  yeni oturumunun CANLI eskisini devralması da bu nedenle gelir (F32,
+  §5 "Kopuşu geçen yeniden bağlanma"): eski oturumun ayrılması resume'dan
+  hemen önce, politikaya sorularak işler — eskiden registry bir LEAVE
+  yollardı (`on_leave`), politika hiç sorulmazdı. Politikaya hiç
+  ulaşmayan tek son odanın kapanışıdır (`on_shutdown`).
 - **B43'ün yeni üyeliği `ConnectionClosed` ile biter** (§16.4): tavanın
   ya da atmanın hükmü, bağlantı yeniden katıldıktan sonra düşerse yeni
   üyeliği bağlantının kapanışı bitirir. O üyeliği tutan oda onu
@@ -459,7 +461,81 @@ Kararlar ve gerekçeleri:
   çözülür: hangi dal önce işlenirse o kazanır, ikisi de geçerlidir.
 - **Çift oturum:** aynı identity park halindeyken ikinci AUTH gelir →
   eskisinin hold'u iptal, yenisi devralır (tek otorite: en son kazanan).
-  Eski socket hâlâ açıksa ERROR 9 ile kapatılır.
+  Eski socket hâlâ açıksa ERROR 9 ile kapatılır ve üyeliği yeniye
+  DEVREDİLİR — varlık aynı kalır (F32, aşağıda).
+
+**Kopuşu geçen yeniden bağlanma (F32).** `loadgen_churn_smoke` 128 `yes`
+altında bir kez `resumed=0` ile düştü: dört istemcinin dördü de ikinci
+oturumda taze varlık aldı. Mekanizma iki sıralama yarışı; ikisinde de
+motor meşru bir resume'u kaybediyordu:
+
+- **(A) Registry yeni join'i eski bağlantının kapanışından önce görür**
+  (eski soket yarı açık ya da `ConnClosed`'u hâlâ yolda). Eski kod bunu
+  "iki canlı oturum" sayıp eskisine ERROR 9 ile birlikte düz bir LEAVE
+  yolluyordu: varlık `on_leave` ile yok ediliyor, yeni oturum taze join
+  alıyordu — oyuncunun dönmek istediği karakter gidiyordu.
+- **(B) Registry kapanışı önce görür ama eski bağlantının DETACH'ı
+  resume'dan sonra odaya varır.** İkisi iki ayrı dispatcher görevinden
+  gelir; aralarında sıra yoktur. Resume, kimliği hâlâ canlı bir satırda
+  bulur, defterde park yok → taze join (ikinci varlık); geç gelen DETACH
+  eski varlığı park eder. Registry o satırı yeni oturumun `SpawnDone`'unda
+  çoktan bırakmıştır: kimsenin resume edemeyeceği yetim bir park (grace
+  dolunca bot) ve bir kimliğe iki varlık — tek-kazanan değişmezi bozuk.
+
+Kanıt: churn istemcisinde ilk join döngü sınırından geç biterse istemci
+hemen düşürüp hemen yeniden bağlanır; iş parçacığı düzeyinde aç
+bırakmada (loadgen'in iş parçacıklarının yarısı nice 19 ile iki çekirdeğe
+iğnelenmiş, 16 `yes` ile doymuş) registry'nin `ConnClosed`'u aynı kimliğin
+yeni `SpawnPlayer`'ından yalnız 0,6 ms önce işlediği ve DETACH ile
+resume'un aynı CONTROL turuna düştüğü görüldü. Sıra çevrildiğinde (eski
+bağlantının `ConnClosed`'u ya da dispatcher'ın DETACH'ı 300 ms
+geciktirilerek) smoke'un koşusu 10/10 tam olarak `resumed=0
+fresh_joins=4` verir.
+
+**Karar: devralma, oda tarafında.** Kimliği BAŞKA bir bağlantıda CANLI
+bir satırda bulan resume, önce o oturumun ayrılmasını (`detach_player`,
+`DisconnectCause::ConnectionClosed`, politikaya sorularak) çalıştırır,
+sonra her resume gibi defteri arar ve parkı alır
+(`gsb_core::room::live_session`; oda ve shard aktörü aynı). Eski
+bağlantının kendi DETACH'ı ne zaman gelirse bağlamayı taşınmış bulur ve
+no-op'tur. Registry (A)'da artık LEAVE yollamaz, üyeliği devreder: eski
+satır odadan çıkar (grid'in üye sayacı bir düşer, yeni oturumun
+`SpawnDone`'u geri sayar — hep bir üye; `reg_leaves` sayılmaz, üyelik
+sürer), eski sokete ERROR 9 aynen gider. Eski dispatcher üyeliği hâlâ
+bilir; soket kapanınca her kapanış gibi DETACH yollar: resume'dan önce
+varırsa politikaya göre park eder (resume parkı alır), sonra varırsa
+no-op; `DetachDone`/`DetachDespawned` yankıları satırı odada bulmaz.
+Politika park etmezse (`grace = 0`) devralma taze join'e düşer — eski
+oturum kopup sonra yeni gelmiş gibi, doğru sonuç. Aynı bağlantının
+yeniden katılması devralma değildir (kendi durumunu ezer, eskisi gibi);
+park edilmiş satır zaten resume hedefidir. İstemci teli aynı bayt.
+
+- **Elenen:** yeni oturumun resume'unu eski dispatcher'ın DETACH'ını
+  gönderene dek bekletmek (bariyer). Yalnız (B)'yi kapatır; (A)'da eski
+  bağlantı yaşıyor (yarı açık soket: sunucu idle zaman aşımına dek
+  fark etmez) ve bariyer onu beklerdi. Eski dispatcher'ın kuyruğuna bir
+  gönderici tutan bariyer B61'in "kuyruk kapanışı `Close`'dur" yolunu da
+  kilitlerdi.
+- **Elenen:** loadgen'in churn istemcisini kopuştan sonra "sunucu fark
+  edene dek" bekletmek. Sunucunun kapanışı fark etmesinin istemcinin
+  göreceği bir işareti yok; gerçek istemci (ağ değişimi, yarı açık TCP)
+  tam bu sırayla döner — smoke'un yakaladığı motorun kendi hatasıydı.
+- **Elenen:** devralmada yeni bir `DisconnectCause::Superseded`. Oda
+  için olgu "eski bağlantı kapandı/kapanıyor"dur; ayrı neden oyuna
+  ayırt edecek bir şey vermeden API'yi büyütürdü.
+
+Testler: `room/tests/takeover.rs` (resume eski DETACH'tan önce → aynı
+varlık, tek üye, geç DETACH no-op, sonraki kopuş/resume normal; aynı
+bağlantının yeniden katılması devralma değil), `shard/tests/takeover.rs`
+(aynısı shard'da; politika devralmada bir kez sorulur, parklı satır
+devralınmaz), `tests/reconnect/takeover.rs` (registry: canlı eski
+oturum → aynı varlık, ERROR 9, üye 1; grid'de `max_players = 2` ile
+sayaç kesin). §12.7 testi ve `broadcast_resume_accepted_by_exactly_one_shard`
+yeni sözleşmeye göre sıkılaştı (canlı ikinci oturum aynı varlığı alır;
+ayrılmadan sonra park hiçbir yerde dirilmez). Eski kodda altı test düştü (aynı-bağlantı testi bir kilittir, eski kodda da geçer);
+mutasyonlar (oda/shard devralmasını kaldırmak, LEAVE'e dönmek, sayaç
+düşürmemek, eski satırı odada bırakmak, aynı bağlantıyı ya da parklı
+satırı devralmak) öldü.
 
 ## 6. Shard rotasyonu: broadcast-resume
 
@@ -706,7 +782,7 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | Uç | Karar |
 |---|---|
 | Grace TOCTOU (doğrulama sürerken expire) | Saydam fresh-join (§5) — yarışın iki dalı da geçerli |
-| Çift oturum (spam reconnect) | En son kazanan; eski socket ERROR 9 (§5) |
+| Çift oturum (spam reconnect) | En son kazanan; eski socket ERROR 9, üyelik (varlık) yeniye devredilir (§5, F32) |
 | Oda panigi park defteriyle birlikte ölmesi | Fresh-join düşüşü; v1 kabul, belgeli |
 | Sunucu restartı | Kapsam dışı; herkes fresh (§1). `stop()`'ta istemci en-iyi-çaba **ERROR 14** (`SERVER_STOPPING`) alır: park defteri süreçle ölür, bu sunucuda resume yok — geri çekil, sonra ya da başka sunucuya bağlan; yeni süreçte aynı kimlikle join saydam fresh-join'dir. Resume semantiği değişmedi (DESIGN §5.6) |
 | Park slotu cap hesabı | Detach'te düşmez, expire'de düşer (§4) |

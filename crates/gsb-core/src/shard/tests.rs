@@ -52,6 +52,7 @@ mod metrics;
 mod migration;
 mod replies;
 mod strip;
+mod takeover;
 mod teams;
 mod unread;
 

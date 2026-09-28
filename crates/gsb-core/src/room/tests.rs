@@ -31,6 +31,7 @@ mod paused_clock;
 mod sampling;
 mod shipping;
 mod stubs;
+mod takeover;
 mod tick;
 mod unread;
 mod zero_capacity;

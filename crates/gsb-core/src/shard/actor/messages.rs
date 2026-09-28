@@ -14,7 +14,7 @@ use std::time::Instant;
 use tracing::{debug, warn};
 
 use crate::error::CoreError;
-use crate::room::{DisconnectCause, ExpireTo, ResumeFound, RoomConn};
+use crate::room::{DisconnectCause, ExpireTo, ResumeFound, RoomConn, live_session};
 
 use crate::shard::actor::ShardActor;
 use crate::shard::*;
@@ -144,7 +144,18 @@ where
             } => {
                 // §6 broadcast-resume: this shard accepts ONLY if its
                 // ledger holds the identity — every other shard answers
-                // "not here" without touching anything.
+                // "not here" without touching anything. The identity
+                // still LIVE here on another connection (F32): that
+                // session's detach runs first (the room actor's arm).
+                if let Some((player, old)) = live_session(&self.conns, &identity, conn) {
+                    self.detach_player(
+                        player,
+                        old,
+                        &identity,
+                        true,
+                        DisconnectCause::ConnectionClosed,
+                    );
+                }
                 let outcome = match self.logic.resume_lookup(&self.world, &identity) {
                     ResumeFound::Held(player) => {
                         // The parked row, by its STABLE key (Faz 2): one
