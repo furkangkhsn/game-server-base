@@ -87,24 +87,39 @@ fn assert_settled_then_stopped(seen: &[Event]) {
     assert_eq!(seen.len() as u64, 2 * ROOMS + 1, "{seen:?}");
 }
 
+/// Every wait in `stop` ended on its event, none at its grace: the accept
+/// loops ended by themselves, the rooms finished, and the final report
+/// went out complete (all its producers ended, not its grace). With the
+/// services' own counts, that is "`stop` waited out no grace" read from
+/// what `stop` did rather than from a wall-clock window a starved
+/// machine can overrun (BACKLOG F34; it used to be `took < 2 s`). How
+/// long each grace is, and that it runs under one deadline, is pinned on
+/// the paused clock (`boot::stop::tests`).
+fn assert_no_grace_ran_out_but_the_services(report: &gsb_server::StopReport) {
+    assert_eq!(report.accept_loops_aborted, 0, "{report:?}");
+    assert!(report.rooms_finished, "{report:?}");
+    assert!(report.final_report_complete, "{report:?}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_service_serves_the_rooms_last_words_then_stops_before_stop_returns() {
-    let (report, took, seen) = run(false).await;
+    let (report, _, seen) = run(false).await;
     assert_settled_then_stopped(&seen);
-    assert!(report.rooms_finished, "{report:?}");
+    assert_no_grace_ran_out_but_the_services(&report);
     assert_eq!((report.services_ended, report.services_aborted), (1, 0));
-    assert!(took < Duration::from_secs(2), "stop took {took:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_service_that_never_ends_is_aborted_and_stop_still_completes() {
     let (report, took, seen) = run(true).await;
     assert_settled_then_stopped(&seen);
-    assert!(report.rooms_finished, "{report:?}");
+    assert_no_grace_ran_out_but_the_services(&report);
     assert_eq!((report.services_ended, report.services_aborted), (1, 1));
+    // The grace was given: a stall only lengthens `took`. "And no more"
+    // is the report above — only the services' grace ran out.
     assert!(
-        took >= Duration::from_millis(900) && took < Duration::from_secs(3),
-        "the deaf service got the grace, and no more: {took:?}"
+        took >= Duration::from_millis(900),
+        "the deaf service got the grace: {took:?}"
     );
 }
 
