@@ -1,4 +1,5 @@
-//! Server-only mode: run the server, export metrics, print nothing.
+//! Server-only mode: run the server, export metrics, and print one
+//! line — the addresses it bound (`SERVING`, [`announce`]).
 
 use std::net::SocketAddr;
 
@@ -11,12 +12,17 @@ use crate::codec::*;
 use crate::server::*;
 use tokio::sync::mpsc;
 
+mod announce;
+pub(crate) use announce::*;
+
 /// The server process (`--serve`): the same server the in-process mode
 /// runs, as a standalone process. Without `--metrics-listen`, reports go
 /// to the `gsb-metric` log (RUST_LOG=info) like `gsb-server`; with it,
 /// the collector's channel sink feeds one TCP connection — the
 /// orchestrator — in the binary format above (the channel path is
-/// preserved end-to-end; nothing is parsed from stdout).
+/// preserved end-to-end; no report is parsed from stdout). Stdout
+/// carries one line of its own, once every door is bound: the `SERVING`
+/// line with the bound addresses ([`Serving`]).
 pub(crate) async fn serve(args: Args) {
     init_tracing();
     let mut cfg = gsb_server::Config {
@@ -47,62 +53,84 @@ pub(crate) async fn serve(args: Args) {
             mmo_crystallize: args.mmo_crystallize,
         },
     );
-    match args.metrics_listen {
+    // Every door is bound before the SERVING line goes out (BACKLOG
+    // F31): the metric listener first (a refused bind ends the child
+    // before a server exists), then the server's own listeners. The line
+    // names the bound addresses — port 0 included — so whoever started
+    // this child (the orchestrator) never has to guess a free port.
+    let metrics = match &args.metrics_listen {
         Some(listen) => {
             let listen: SocketAddr = listen.parse().expect("valid --metrics-listen HOST:PORT");
-            let (tx, rx) = mpsc::unbounded_channel::<MetricReport>();
-            let handle = start_hosted(cfg, Some(tx)).await.expect("server starts");
-            eprintln!(
-                "serve: ready at {} (game={}, visibility={}, spawn_half={}, duration={}s; metric reports → {})",
-                handle.addr,
-                args.game,
-                args.visibility,
-                args.server_spawn_half,
-                args.duration.as_secs(),
-                listen
-            );
-            // The export task owns the report receiver (its only awaited
-            // sources: the accept, then the channel). The main task's
-            // awaited sources: the duration sleep, then stop().
-            let export = tokio::spawn(metrics_export(rx, listen));
-            tokio::time::sleep(args.duration).await;
-            // Clean stop: the collector emits its final report when the
-            // ticker's broadcast closes, then drops the channel sender —
-            // the export task drains the final report and exits.
-            handle.stop().await;
-            if let Err(e) = export.await {
-                eprintln!("serve: metrics export task failed: {e}");
+            match TcpListener::bind(listen).await {
+                Ok(l) => Some(l),
+                Err(e) => {
+                    eprintln!("serve: metrics listen bind {listen} failed: {e}");
+                    std::process::exit(1);
+                }
             }
         }
-        None => {
-            let handle = start_hosted(cfg, None).await.expect("server starts");
-            eprintln!(
-                "serve: ready at {} (game={}, visibility={}, duration={}s; metric reports → gsb-metric log, RUST_LOG=info)",
-                handle.addr,
-                args.game,
-                args.visibility,
-                args.duration.as_secs()
-            );
-            tokio::time::sleep(args.duration).await;
-            handle.stop().await;
+        None => None,
+    };
+    let (report_tx, report_rx) = match metrics {
+        Some(_) => {
+            let (tx, rx) = mpsc::unbounded_channel::<MetricReport>();
+            (Some(tx), Some(rx))
         }
+        None => (None, None),
+    };
+    let handle = match start_hosted(cfg, report_tx).await {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("serve: the server did not start: {e}");
+            std::process::exit(1);
+        }
+    };
+    let serving = Serving {
+        addr: handle.addr,
+        metrics: metrics
+            .as_ref()
+            .map(|l| l.local_addr().expect("a bound listener has an address")),
+    };
+    println!("{}", serving.line());
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    eprintln!(
+        "serve: ready at {} (game={}, visibility={}, spawn_half={}, duration={}s; metric reports → {})",
+        handle.addr,
+        args.game,
+        args.visibility,
+        args.server_spawn_half,
+        args.duration.as_secs(),
+        serving.metrics.map_or_else(
+            || "gsb-metric log, RUST_LOG=info".to_string(),
+            |m| m.to_string()
+        )
+    );
+    // The export task owns the report receiver and the metric listener
+    // (its only awaited sources: the accept, then the channel). The main
+    // task's awaited sources: the duration sleep, then stop().
+    let export = match (metrics, report_rx) {
+        (Some(listener), Some(rx)) => Some(tokio::spawn(metrics_export(rx, listener))),
+        _ => None,
+    };
+    tokio::time::sleep(args.duration).await;
+    // Clean stop: the collector emits its final report when the ticker's
+    // broadcast closes, then drops the channel sender — the export task
+    // drains the final report and exits.
+    handle.stop().await;
+    if let Some(export) = export
+        && let Err(e) = export.await
+    {
+        eprintln!("serve: metrics export task failed: {e}");
     }
 }
 
 /// Stream the collector's reports (channel data) to the single
-/// orchestrator connection, one framed report at a time.
+/// orchestrator connection on `listener` (bound before the `SERVING`
+/// line), one framed report at a time.
 pub(crate) async fn metrics_export(
     mut rx: mpsc::UnboundedReceiver<MetricReport>,
-    listen: SocketAddr,
+    listener: TcpListener,
 ) {
-    let listener = match TcpListener::bind(listen).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("serve: metrics listen bind failed: {e}");
-            return;
-        }
-    };
-    eprintln!("serve: metrics listening at {listen} (one connection)");
     let (mut stream, _peer) = match listener.accept().await {
         Ok(s) => s,
         Err(e) => {
@@ -116,16 +144,4 @@ pub(crate) async fn metrics_export(
             break; // orchestrator went away
         }
     }
-}
-
-/// Allocate a free loopback port (bind-port-0, take the number, close).
-/// The race window is microseconds and the consumer (the spawned server)
-/// binds immediately — fine for a load tool on loopback.
-pub(crate) async fn alloc_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind ephemeral");
-    let p = l.local_addr().expect("local addr").port();
-    drop(l);
-    p
 }

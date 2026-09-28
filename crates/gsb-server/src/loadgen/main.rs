@@ -178,9 +178,12 @@ struct Args {
     /// `--duration`. With `--metrics-listen`, the server's metric
     /// *reports* (the same channel sink the in-process mode uses) are
     /// streamed in a small binary format to the single connecting
-    /// orchestrator — no stdout parsing.
+    /// orchestrator — no report is parsed from stdout. Stdout carries one
+    /// `SERVING` line once every door is bound, naming the bound
+    /// addresses (port 0 included; BACKLOG F31, `serve::announce`).
     serve: bool,
-    /// Bind address for `--serve` (default 127.0.0.1:7777).
+    /// Bind address for `--serve` (default 127.0.0.1:7777; the
+    /// orchestrator's server child gets port 0).
     bind: String,
     /// Where `--serve` accepts the orchestrator's metrics connection.
     metrics_listen: Option<String>,
@@ -432,6 +435,8 @@ Server-only options (--serve):
   --metrics-listen HOST:PORT  stream metric reports (binary, channel data)
                               to one connecting orchestrator; without it,
                               reports go to the gsb-metric log
+  Once bound, prints `SERVING addr=HOST:PORT metrics=HOST:PORT|-` on
+  stdout (port 0 binds a free port; the line names it)
 
 Misc:
   -h, --help                this text";

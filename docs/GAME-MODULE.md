@@ -906,7 +906,11 @@ istemcisi; arena/MMO'nun kendi entity'sini henüz görmemiş botu).
 ve `--serve` sunucusunun `game` anahtarıdır; orkestratör onu sunucu
 çocuğuna VE her istemci çocuğuna iletir (sunucu çocuğunun komut satırı
 da artık saf bir kurucu, `server_args`, istemcininkinin yanında —
-ikisi de süreç başlatmadan test ediliyor). Bilinmeyen oyun →
+ikisi de süreç başlatmadan test ediliyor). Sunucu çocuğu iki kapısını
+da `127.0.0.1:0`'a bağlar ve bağladığı adresleri stdout'taki
+`SERVING addr=… metrics=…` satırıyla bildirir; istemci çocukları o
+adrese yollanır, orkestratör port seçmez (F31, RPC-CONTROL-PLANE §8.2
+"Sunucu çocuğunun portları"). Bilinmeyen oyun →
 derlenmiş oyunları listeleyen hata. Demo'ya özgü bayraklar
 (`--visibility`, `--topology`, `--shard-count`, `--cell-size`,
 `--vision-radius`, `--spawn-half-size`, `--disconnect-grace-secs`,

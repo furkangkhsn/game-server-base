@@ -2,21 +2,23 @@
 
 use super::*;
 use gsb_core::metrics::MetricReport;
-use gsb_net::udp::UdpClient;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 mod child_args;
 use child_args::*;
+mod server_child;
+use server_child::*;
 
 /// Spawn a child process, optionally pinned to `mask` (logical CPUs) via
 /// `taskset -c`. Stdout is piped only when `pipe_stdout` (the client
-/// processes' CLIENT lines); stderr is always inherited (visible).
+/// processes' CLIENT lines, the server's `SERVING` line); stderr is
+/// always inherited (visible).
 pub(crate) async fn spawn_pinned(
     exe: &std::path::Path,
     args: &[String],
@@ -178,10 +180,12 @@ const METRICS_READER_GRACE: Duration = Duration::from_secs(5);
 ///
 /// ```text
 /// orchestrator (this process)
-///   ├─ server process   gsb-loadgen --serve --bind 127.0.0.1:P
-///   │                   --metrics-listen 127.0.0.1:M
-///   │      (its MetricReports arrive over the binary socket — the same
-///   │      channel data the in-process mode drains; nothing parsed)
+///   ├─ server process   gsb-loadgen --serve --bind 127.0.0.1:0
+///   │                   --metrics-listen 127.0.0.1:0
+///   │      (binds both, prints `SERVING addr=127.0.0.1:P
+///   │      metrics=127.0.0.1:M` on stdout — the only thing read from
+///   │      it; its MetricReports arrive over the binary socket — the
+///   │      same channel data the in-process mode drains)
 ///   ├─ client process 0 gsb-loadgen N0 --addr 127.0.0.1:P --offset 0
 ///   ├─ client process 1 gsb-loadgen N1 --addr 127.0.0.1:P --offset N0
 ///   └─ client process P-1
@@ -211,9 +215,6 @@ pub(crate) async fn orchestrate(args: Args) {
     if (procs as u64) > n {
         procs = n as u32;
     }
-
-    let server_port = alloc_port().await;
-    let metrics_port = alloc_port().await;
 
     // Affinity (optional): disjoint core sets from the real topology.
     let taskset = which_taskset();
@@ -262,60 +263,35 @@ pub(crate) async fn orchestrate(args: Args) {
     // The server's workers are sized to its pinned core set; unpinned it
     // gets the operator's `--workers` or its runtime default (B37,
     // `child_workers`). Its command line (`server_args`) runs it 3 s past
-    // the clients.
+    // the clients, on port 0 for both of its doors: it reports the ports
+    // it bound, and a child that dies or stays silent first ends the run
+    // here, before any client child exists (BACKLOG F31).
     let server_cores = masks.as_ref().map(|m| m.0.len().max(1));
-    let sargs = server_args(&args, server_port, metrics_port, server_cores);
-    let mut server = spawn_pinned(
+    let sargs = server_args(&args, server_cores);
+    let server_mask = masks.as_ref().map(|m| m.0.clone());
+    let ServerChild {
+        child: mut server,
+        pid: server_pid,
+        addr: server_addr,
+        metrics: metrics_addr,
+        stdout_forward,
+    } = match start_server_child(
         &exe,
         &sargs,
-        &[],
-        &masks.as_ref().map(|m| m.0.clone()),
+        &server_mask,
         taskset.as_deref(),
-        "server",
-        false,
+        SERVER_REPORT_BOUND,
     )
     .await
-    .expect("spawn server child");
-    let server_pid = server.id().expect("freshly spawned child has a pid");
-
-    // Wait until the server's socket actually accepts, BEFORE spawning
-    // the client children. A kernel-backlog handshake counts (the SYN
-    // completes even before the accept loop wakes), so this only
-    // de-races the process start-up — the clients never retry, and
-    // their connect_ms stays a pure measurement of a ready server.
-    // The probe itself becomes one clean open/close on the server (it
-    // carries no frames and never joins a room).
-    let server_addr: SocketAddr = format!("127.0.0.1:{server_port}").parse().expect("addr");
-    let probe_deadline = Instant::now() + Duration::from_secs(10);
-    // Readiness: a TCP connect probe on tcp; on udp there is no SYN to
-    // probe with — one cookie-handshake CHALLENGE (a bare challenge
-    // request establishes nothing on the server).
-    let probe_sock = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
-        .await
-        .expect("probe socket binds");
-    loop {
-        let ready = if args.transport == crate::Transport::Udp {
-            UdpClient::challenge_probe(&probe_sock, server_addr, Duration::from_millis(200)).await
-        } else {
-            match TcpStream::connect(server_addr).await {
-                Ok(mut s) => {
-                    let _ = s.shutdown().await;
-                    true
-                }
-                Err(_) => false,
-            }
-        };
-        if ready {
-            break;
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("orchestrate: {e}; no run");
+            std::process::exit(1);
         }
-        if Instant::now() >= probe_deadline {
-            eprintln!(
-                "orchestrate: server socket not ready after 10 s; clients will report their own connect failures"
-            );
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    };
+    eprintln!("orchestrate: server child serves {server_addr} (metrics {metrics_addr})");
+    probe_door(args.transport, server_addr).await;
 
     // ── client children ───────────────────────────────────────────────
     // Partition N clients across `procs` children (first `N % procs`
@@ -333,7 +309,7 @@ pub(crate) async fn orchestrate(args: Args) {
             .as_ref()
             .and_then(|m| m.1.get(p as usize))
             .map(|m| m.len().max(1));
-        let cargs = client_args(&args, count, offset, server_port, cores);
+        let cargs = client_args(&args, count, offset, server_addr, cores);
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
         let mut child = spawn_pinned(
@@ -363,17 +339,14 @@ pub(crate) async fn orchestrate(args: Args) {
     let t0: Vec<Option<u64>> = pids.iter().map(|&p| proc_ticks(p)).collect();
 
     // ── metric reports from the server socket ─────────────────────────
-    let metrics_addr: SocketAddr = format!("127.0.0.1:{metrics_port}").parse().expect("addr");
     let mut metrics_task = tokio::spawn(async move {
-        // The server binds its metrics listener shortly after spawn;
-        // retry until it accepts (one awaited source at a time).
-        let mut stream = loop {
-            match TcpStream::connect(metrics_addr).await {
-                Ok(s) => break s,
-                Err(e) => {
-                    eprintln!("orchestrate: metrics connect {metrics_addr}: {e} (retrying)");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+        // The listener was bound before the child reported it, so one
+        // connect is enough: a refusal means the child is already gone.
+        let mut stream = match TcpStream::connect(metrics_addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("orchestrate: metrics connect {metrics_addr}: {e}");
+                return Vec::new();
             }
         };
         let mut all = Vec::new();
@@ -497,11 +470,13 @@ pub(crate) async fn orchestrate(args: Args) {
         eprintln!("orchestrate: WARNING — server child exited non-success");
     }
     // The metric stream ends when the server's export task ends (its
-    // channel closes on the clean stop), so a reader that connected is
-    // done moments after the child's exit. One that never connected — a
-    // server child that died before serving (a start-up refusal, its
-    // port taken since `alloc_port`) — would retry forever: the child is
-    // gone now, so the reader gets one short grace and is then given up.
+    // channel closes on the clean stop), so the reader is done moments
+    // after the child's exit; the grace only bounds a stream that, for
+    // whatever reason, outlives the child (F25: a reader that could never
+    // connect used to retry forever — it now connects once, to a listener
+    // the child bound before reporting it, F31).
+    // The child's last stdout lines go out before the report.
+    let _ = tokio::time::timeout(METRICS_READER_GRACE, stdout_forward).await;
     let server_reports: Vec<MetricReport> = match tokio::time::timeout(
         METRICS_READER_GRACE,
         &mut metrics_task,

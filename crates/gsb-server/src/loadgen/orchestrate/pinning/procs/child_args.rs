@@ -31,26 +31,22 @@ fn push_workers(argv: &mut Vec<String>, args: &Args, pinned_cores: Option<usize>
     }
 }
 
-/// The argument vector for the server child: the served server on
-/// `server_port`, streaming its metric reports to `metrics_port`, with
-/// the runtime workers [`child_workers`] picks (`pinned_cores`: the size
-/// of its core set under `--pin`). It outlives the clients by 3 s (the
+/// The argument vector for the server child: the served server with its
+/// game door and its metric stream both on port 0 — it binds them and
+/// reports the ports it got on its `SERVING` line (BACKLOG F31; this
+/// process picks no port) — and the runtime workers [`child_workers`]
+/// picks (`pinned_cores`: the size of its core set under `--pin`). It outlives the clients by 3 s (the
 /// clean stop happens after the clients left, so the final report
 /// windows cover the leave flushes).
-pub(super) fn server_args(
-    args: &Args,
-    server_port: u16,
-    metrics_port: u16,
-    pinned_cores: Option<usize>,
-) -> Vec<String> {
+pub(super) fn server_args(args: &Args, pinned_cores: Option<usize>) -> Vec<String> {
     let mut sargs: Vec<String> = vec![
         "--serve".into(),
         "--game".into(),
         args.game.into(),
         "--bind".into(),
-        format!("127.0.0.1:{server_port}"),
+        "127.0.0.1:0".into(),
         "--metrics-listen".into(),
-        format!("127.0.0.1:{metrics_port}"),
+        "127.0.0.1:0".into(),
     ];
     if is_demo(args) {
         sargs.extend([
@@ -125,15 +121,16 @@ pub(super) fn server_args(
 }
 
 /// The argument vector for one client child: `count` clients starting at
-/// global id `offset`, aimed at the served server on `server_port`, with
-/// the runtime workers [`child_workers`] picks. Every knob the CLIENT side reads must be
+/// global id `offset`, aimed at the served server's game door `server`
+/// (the address its `SERVING` line reported), with the runtime workers
+/// [`child_workers`] picks. Every knob the CLIENT side reads must be
 /// forwarded here — a knob the orchestrator forwards only to the server
 /// leaves the two processes disagreeing about the run.
 pub(super) fn client_args(
     args: &Args,
     count: u64,
     offset: u64,
-    server_port: u16,
+    server: SocketAddr,
     pinned_cores: Option<usize>,
 ) -> Vec<String> {
     let mut cargs = vec![
@@ -141,7 +138,7 @@ pub(super) fn client_args(
         "--game".into(),
         args.game.into(),
         "--addr".into(),
-        format!("127.0.0.1:{server_port}"),
+        server.to_string(),
         "--offset".into(),
         offset.to_string(),
         "--duration".into(),

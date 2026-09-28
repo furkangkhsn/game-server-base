@@ -430,11 +430,13 @@ fn loadgen_churn_smoke() {
 }
 
 /// An orchestrated run whose server child dies at start (here: a shard
-/// count the server refuses; in the wild: its port taken between the
-/// orchestrator's allocation and the child's bind) ends, reporting the
-/// dead child — it does not wait forever for a metric stream that child
-/// never served. It used to: the reader retried its connect every 100 ms
-/// for as long as anyone let it (a 51-minute hang under load, F25).
+/// count the server refuses) ends, reporting the dead child — it does not
+/// wait forever for a metric stream that child never served. It used to:
+/// the reader retried its connect every 100 ms for as long as anyone let
+/// it (a 51-minute hang under load, F25). Since F31 the child reports the
+/// addresses it bound before anything else happens, so a child that dies
+/// first ends the run right there: a non-success exit naming the dead
+/// child, and no client child is ever started.
 #[test]
 fn an_orchestrated_run_whose_server_child_dies_still_ends() {
     use std::time::{Duration, Instant};
@@ -445,8 +447,7 @@ fn an_orchestrated_run_whose_server_child_dies_still_ends() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawning gsb-loadgen orchestrator");
-    // Past the orchestrator's own bounds: the readiness probe (10 s),
-    // the children's margins, the metric reader's grace.
+    // Past the orchestrator's own bound for the child's report (30 s).
     let deadline = Instant::now() + Duration::from_secs(90);
     while child.try_wait().expect("try_wait").is_none() {
         if Instant::now() >= deadline {
@@ -459,11 +460,15 @@ fn an_orchestrated_run_whose_server_child_dies_still_ends() {
     let out = child.wait_with_output().expect("the orchestrator's output");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("server child exited non-success"),
+        !out.status.success(),
+        "a run without a server is a failed run:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the server child exited before reporting its addresses"),
         "the dead child is reported:\n{stderr}"
     );
     assert!(
-        stderr.contains("the server child served no metric stream"),
-        "and so is the missing metric stream:\n{stderr}"
+        !stderr.contains("mode: external server"),
+        "no client child was started against it:\n{stderr}"
     );
 }

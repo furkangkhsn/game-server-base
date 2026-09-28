@@ -761,6 +761,42 @@ Etkilenmeyenler: `--pin`'li orkestre koşuları (CROSS-SHARD "Ölçümler
 10 000'lik `--pin` koşuları — çekirdek kümesinin boyu iletiliyordu) ve
 tek süreçli (süreç içi / `--serve`) koşular.
 
+**Sunucu çocuğunun portları (F31, düzeltildi).** Orkestratör sunucu
+çocuğunun oyun ve metrik portlarını kendisi seçiyordu (`alloc_port`:
+`127.0.0.1:0`'a bağla, numarayı oku, kapat, çocuğa `--bind`/
+`--metrics-listen` ile ver). Kapatma ile çocuğun bağlanması arasında
+portu başkası alırsa çocuk "Address already in use" ile ölüyordu (128
+`yes` altında görüldü; asılma F25'te düzeltilmişti, yarış değil). Artık
+süreç düzeni:
+
+```text
+orkestratör
+  ├─ sunucu çocuğu  gsb-loadgen --serve --bind 127.0.0.1:0
+  │                 --metrics-listen 127.0.0.1:0
+  │     iki kapıyı bağlar, stdout'a tek satır basar:
+  │     SERVING addr=127.0.0.1:P metrics=127.0.0.1:M
+  ├─ istemci çocuğu 0  gsb-loadgen N0 --addr 127.0.0.1:P …
+  └─ …
+```
+
+Orkestratör çocuğun stdout'unu okur (önceki satırlar — çocuğun
+`tracing` çıktısı — kendi stdout'una aynen geçer, satırdan sonrası da),
+satırı en çok 30 sn bekler (`SERVER_REPORT_BOUND`) ve istemci
+çocuklarını satırın adresine yollar; metrik akışına bir kez bağlanır
+(dinleyici satırdan önce bağlandı, yeniden deneme döngüsü kalktı).
+Çocuk satırdan önce ölürse ya da sınırda susarsa (öldürülüp biçilir)
+koşu orada biter: çıkış durumu 1, hata çocuğun çıkışını adlandırır
+(`the server child exited before reporting its addresses (exit status:
+1); no run`), hiçbir istemci çocuğu başlatılmaz. `--serve` elle
+koşulduğunda da aynı satırı basar (`--bind 127.0.0.1:0` artık
+kullanışlı); açık port veren komut satırları aynen çalışır. RESULT
+satırı değişmedi. Kilit: `child_args::tests::no_child_is_told_a_port_picked_in_advance`,
+`server_child::tests` (sahte çocuk `/bin/sh`: bildirdiği portlar
+kullanılır; ölen/susan çocuk açık hata), `tests/loadgen_serve.rs`
+(gerçek `--serve` `:0` ile satırı basar, iki kapı o portlarda açık) ve
+`loadgen_smoke::an_orchestrated_run_whose_server_child_dies_still_ends`
+(artık başarısız çıkış + istemci çocuğu yok).
+
 ### 8.3 Ayrılışta okunmamış istekler ve oda defterinin kapanışı (B36)
 
 §8.2'nin açık kalan boşluğu: 200'lük uzun duraklama koşusunda 62 istek

@@ -2332,7 +2332,8 @@ geometriye koşullu.
  **Yük yöntemi (ayrı-proces turu):** `gsb-loadgen` üç modda: in-proc
 (varsayılan, tüm önceki ölçüm tabanı), `--serve` (sunucu process'i;
 `--metrics-listen` metrik raporlarını kanal verisinin ikili TCP akışıyla
-taşır — stdout parsing'i yok) ve `--orchestrate` (sunucu + P istemci
+taşır — rapor stdout'tan okunmaz; stdout'a yalnız bağlanan adresleri
+bildiren tek `SERVING` satırı düşer, F31) ve `--orchestrate` (sunucu + P istemci
 process'i, tek RESULT). `--pin` (taskset) SMT-farkında ayrık çekirdek
 kümeleri verir; RESULT'ta `server_cpu_s`/`clients_cpu_s`/`affinity`
 izolasyonu kanıt olarak taşır. `--profile spread` (uniform, geniş harita;
