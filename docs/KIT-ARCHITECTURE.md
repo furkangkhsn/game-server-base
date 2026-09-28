@@ -443,6 +443,10 @@ pub trait Vision: Send + 'static {                  // takım sisi — simülasy
     fn cell(&self, pos: &Self::Pos) -> Self::Cell;
     fn neighborhood(&self, cell: Self::Cell) -> impl Iterator<Item = Self::Cell>;
     fn sees(&self, viewer: &Self::Pos, target: &Self::Pos) -> bool;
+    // A8 (varsayılanlı — yarıçapı yok sayar / komşuluğu genişletmez):
+    fn sees_within(&self, viewer: &Self::Pos, radius: f32, target: &Self::Pos) -> bool;
+    fn neighborhood_within(&self, cell: Self::Cell, reach: f32)
+        -> impl Iterator<Item = Self::Cell>;
 }
 pub trait SectorMap: Send + 'static {               // PVS — statik harita verisi
     type Pos: Component;
@@ -984,7 +988,7 @@ yaygın durumlar için hazır uygulamalarını taşır:
 |---|---|---|
 | `Pos2<i32>`, `Pos2<f32>`, `Pos3<f32>` | konum bileşenleri + `RecordCodec` (farklı nicemleme seçenekleriyle) | kurulmadı (§10 "Faz 1a sonucu" 5) |
 | `Grid2`, `Grid3` | `CellSpace` (2D'de 3×3, 3D'de 27 hücre görünüm) | `Grid2` 1a'da; `Grid3` **tetikleyici: hacimsel AOI isteyen bir oyun** (kontrol demolarından hiçbiri kullanmıyor — MMO yer düzleminde `Grid2`) |
-| `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi) |
+| `VisionGrid2`, `VisionGrid3` | `Vision` (yarıçap boyutlu ızgara + kesin mesafe testi; 2D'de 3×3, 3D'de 27 hücre komşuluk; A8'den beri birim başına yarıçap: `(2k + 1)²` / `(2k + 1)³` blok, `k ≤ MAX_SIGHT_CELLS`) | `VisionGrid2` 1b'de; `VisionGrid3` Faz 2'de (arenanın takım sisi); birim başına yarıçap A8'de (§10 "A8") |
 | `ConvexSectors2` | 2D dışbükey çokgen sektörlerle `SectorMap` | 1b'de |
 | `GridPartition2`, `GridPartition3` | ızgara `Partition` (bugünkü 2D bölme bunun ilk örneği); `GridPartition2` 4-komşuluk, `with_diagonals()` ile 8-komşuluk (köşeden şerit + tek adımlık köşegen göç — Faz 5, F2) | `GridPartition2` 1b'de (8-komşuluk Faz 5'te); `GridPartition3` **tetikleyici: 3D sharding isteyen bir oyun** (MMO yer düzleminde `GridPartition2`, 8-komşuluk) |
 | `KinematicMover<P>` | isteğe bağlı "hedefe doğru ilerle" sistemi, 2D/3D | kurulmadı |
@@ -1748,7 +1752,9 @@ engelleyici değil, kayıt):
 - `Vision::sees(viewer, target)` yalnız iki konumu alıyor: birim başına
   görüş yarıçapı (MOBA'nın ward / kahraman farkı) ancak yarıçapı konum
   tipine gömen kendi `Vision`'ıyla yazılabilir. Arena bilinçli olarak
-  tekdüze yarıçap seçti.
+  tekdüze yarıçap seçti. → **A8'de yapıldı** (§10 "A8": isteğe bağlı
+  `SightRadius` bileşeni + `Vision::sees_within` /
+  `neighborhood_within`).
 - `TeamRoom` yalnız full gönderir; hızlı hareket eden bir arenada her
   tick her takıma bir full demek. Stratejinin tasarımı (§10 "Faz 1b"),
   ölçülmedi, tetikleyicisiz iş yapılmaz. → **T turunda** (BACKLOG §1
@@ -2016,8 +2022,8 @@ GAME-MODULE §5 "Kit düzeltme turu".
 
 Tetikleyicisiz gözlemler (iş yok): ~~kit'in opcode varsayılanları
 (varsayılansız ilişkili sabit daha dürüst olurdu)~~ (kapandı — A3,
-`2d39767`: `Game::SNAPSHOT_OP` / `PRIVATE_OP` artık zorunlu), `Vision::sees`
-birim başına yarıçap taşımıyor, ~~`TeamRoom` yalnız full gönderiyor~~
+`2d39767`: `Game::SNAPSHOT_OP` / `PRIVATE_OP` artık zorunlu), ~~`Vision::sees`
+birim başına yarıçap taşımıyor~~ (A8: `SightRadius`, §10 "A8"), ~~`TeamRoom` yalnız full gönderiyor~~
 (T turu: `with_delta`, §10 "T sonucu"),
 `ShardedSpatialRoom` `admits`'i uygulamıyor (F3'ün yan gözlemi —
 sonradan kapandı, "Faz 5 sonucu" gözlemleri),
@@ -2435,7 +2441,7 @@ yalnız kit'in public yüzeyini görüyor — kanıt yapısal (§11.1).
 | Konum | `Pos3 { x, y, z: f32 }`, metre, **y yukarı**; `Planar` → `[x, z]` | shard'lama ve görüş zemin düzleminde (MMO gibi); kule platformu (y = 12 m) yalnız wire'da |
 | Harita | 1 600 m × 1 600 m (`WORLD_HALF = 800`), 2×2 shard (`GridPartition2::new(4, 800).with_diagonals()`, şerit 200 m), üç üs üç bölgede, dördüncü bölge üssüz (çekişmeli) | 8 000 dm: her zemin koordinatı 2 baytlık zig-zag varint; köşegen komşuluk: orta nokta dört bölgenin köşesine 85 m |
 | Birimler | oyuncular; **her fraksiyonun her bölgede bir gözcü kulesi** (12 kule, `TeamMember`'lı statik NPC — kit onu yetim olarak damgalar, görüş kaynağı); iki ele geçirme noktası (üssüz bölgede: ortada ve bölge merkezinde) | fraksiyonun oyuncusu olmayan shard'da da gözü olsun — kompozitin var olma sebebi olan senaryo (CROSS-SHARD §8b: shard 2'deki kule, shard 3'teki oyuncuya düşman gösterir) |
-| Görüş | `VisionGrid2<Pos3>`, **tek yarıçap 60 m** (kuleler dahil) | birim başına yarıçap kit'te yok (A8); gerekmedi — aşağıda bulgu W2-2 |
+| Görüş | `VisionGrid2<Pos3>`, **tek yarıçap 60 m** (kuleler dahil) | birim başına yarıçap o gün kit'te yoktu (A8); gerekmedi — aşağıda bulgu W2-2 (A8 sonradan kuruldu, Cephe onu kullanmıyor) |
 | Codec | `Wire = WarWire { x, y, z: i32 dm, kind, faction, hp }`; gövde `UnitRecord { entity = 1; x, y, z = 2..4; Kind kind = 5; uint32 faction = 6; uint32 hp = 7 }`; `Dirty = Or<(Changed<Pos3>, Changed<Unit>)>` | desimetre MMO'nun gerekçesiyle; **fraksiyon kayıtta** (1 tabanlı, 0 = yok): takım karesi kimin müttefik olduğunu söylemez, kayıt söyler — istemci dost/düşmanı ayırır |
 | Fraksiyon ve yerleşim (K4) | kayıtlı karakter (fraksiyon + konum) doğrulanmış kimlikle (`Realm::logins`); kaydı olmayan: **kimliğin FNV-1a özeti mod 3**, o fraksiyonun üssünde (özetle ±10 m) — `TeamGame::spawn_team_player_as` ikisini tek adımda seçer; sunucunun yönlendiricisi aynı `Realm::placement(identity)`'yi okur | deterministik: yönlendirici (yalnız kimliği görür) ve spawn paylaşılan durum olmadan anlaşır; dönen kaydısız oyuncu aynı tarafa düşer. Elenen: katılım sırası (arena) — yönlendirici odanın katılım sayısını göremez; oturum kimliği — sunucu-geneli, yeniden bağlanan taraf değiştirir |
 | Oturum yükü | `Welcome { faction, factions }` (`Private.game`, `Game::session_private`) | arena'nın kalıbı, kompozitte değişmeden çalıştı: geç katılanın one-shot full'uyla birlikte gelir |
@@ -2511,7 +2517,9 @@ kit değişikliği yok, kit iç öğesi kopyalanmadı. Kayda geçenler:
    bilinen hile: yarıçapı konum tipine gömen kendi `Vision`'ı — ama
    ızgara sözleşmesi hücreyi EN BÜYÜK yarıçapa göre boyutlandırmayı
    ister, yani her oyuncunun çift testi kule yarıçapının hücresine
-   çıkar. Tetikleyici değişmedi.
+   çıkar. Tetikleyici değişmedi. → **A8'de yapıldı** (§10 "A8"): hücre
+   odanın yarıçapında kalır, yalnız yarıçaplı kaynağı olan takımın
+   sorgusu genişler; Cephe dokunulmadı (tek yarıçapla kalıyor).
 3. **W2-3 — takım bütçesi üyeleri wire sırasıyla keser.** "Önce üyeler"
    kuralının içinde sıra wire id'si: ilk tick'te doğan kuleler her
    zaman oyunculardan önce gelir, bütçe kestiğinde en yeni katılanlar
@@ -4236,6 +4244,118 @@ arketip taraması ve tahsis yok); büyük arketip sayılı dünyada büyür.
 
 **Doğrulama:** 1477 → **1480** test / 0 hata / 1 ignored (`otlp` ile
 1495 → 1498).
+
+### A8 — birim başına görüş yarıçapı (2026-09-28)
+
+**Kit yapı taşı, isteğe bağlı; varsayılan bayt bayt aynı**
+(`kit/k1-vision-radius`; BACKLOG A8). Takım sisinde her görüş
+kaynağı odanın tek yarıçapıyla görüyordu; MOBA'nın "kahraman daha
+uzağı, ward küçük bir daireyi görür" farkı ancak yarıçapı konum tipine
+gömen kendi `Vision`'ıyla yazılabiliyordu (Faz 3 gözlemi, W2-2) — o da
+ızgara hücresini EN BÜYÜK yarıçapa göre büyütmeyi, yani herkesin çift
+testini pahalılaştırmayı gerektiriyordu. Artık oyun bir kaynağa kendi
+yarıçapını verebilir; vermeyen oyunun görünürlüğü ve baytları değişmez.
+
+**Seam (oyunun doldurduğu):**
+
+```rust
+// gsb_kit::team — oyunun yazdığı bileşen (kit'in tipi)
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SightRadius(pub f32);
+
+// gsb_kit::space::Vision — iki VARSAYILANLI metot (mevcut modeller kırılmaz)
+fn sees_within(&self, viewer: &Self::Pos, radius: f32, target: &Self::Pos) -> bool
+    { self.sees(viewer, target) }                       // varsayılan: yarıçapı yok say
+fn neighborhood_within(&self, cell: Self::Cell, reach: f32)
+    -> impl Iterator<Item = Self::Cell> { self.neighborhood(cell) }
+pub const MAX_SIGHT_CELLS: u8 = 4;                     // gsb_kit::space
+```
+
+- **Kural.** `SightRadius`'u olan bir kaynak (vision konumlu
+  `TeamMember`) `sees_within(v, r, t)` ile görür; olmayan her kaynak
+  eskisi gibi `sees(v, t)` ile. Sınır bugünkü kural: `d² ≤ r²` (dahil).
+  Ön-ayarlar (`VisionGrid2`, `VisionGrid3`) yarıçapı `[1,
+  MAX_SIGHT_CELLS · radius]`'a sıkıştırır (`NaN`/sıfır/negatif → 1,
+  sonsuz → 4 hücre) — odanın kendi yarıçapının `max(1)` kuralıyla aynı
+  aile; üst sınır maliyeti sınırlar.
+- **Genişletilmiş ızgara sözleşmesi.** `neighborhood_within(c, reach)`
+  `neighborhood(c)`'yi içerir ve `r ≤ reach` iken `sees_within(v, r, t)`
+  ⇒ `cell(v) ∈ neighborhood_within(cell(t), reach)`. Ön-ayarlarda `k =
+  ⌈reach / hücre⌉` (1 ≤ k ≤ 4) halkalı `(2k + 1)²` / `(2k + 1)³` blok:
+  iki birim `r` içindeyse her eksende hücre indisleri en fazla
+  `⌈r / hücre⌉` farklıdır. Hücre boyundan büyük yarıçap SABİT 3×3 ile
+  kaçırılırdı — testler bunu tam o durumda (iki hücre ötedeki düşman)
+  kilitliyor.
+- **Maliyet.** Takım başına: hiçbir kaynağı yarıçap taşımayan takım
+  A8 öncesiyle aynı yoldan test edilir (`neighborhood` + `sees`, 3×3 /
+  27 hücre — kod yolu da aynı). Yarıçaplı kaynağı olan takım hedef
+  başına `(2k + 1)²` hücre (3D'de küp) okur, `k` o takımın bu tick'teki
+  EN BÜYÜK yarıçapından; her aday kaynak kendi yarıçapıyla (yarıçapsız
+  kaynak odanınkiyle) test edilir. Bir takımın kahramanı başka takımın
+  sorgusunu büyütmez; ward (`r < hücre`) blok büyütmez. Daha uzağı
+  gören oyun ön-ayarı daha büyük yarıçapla kurar (daha az, daha dolu
+  hücre).
+- **Tek oda ve `team × sharded`.** İki oda da aynı crate-içi ızgarayı
+  kullanıyor (`team::SightGrid`: `(hücre, takım) → kaynaklar` + takım
+  başına en büyük yarıçap; kompozitte artık tick başına ayrılmıyor,
+  shard'da tutuluyor). Kompozitte `sees` her shard'ın TEAMS fazında,
+  yalnız o shard'ın KENDİ birimleri kaynak olarak koşar (§8b.4 —
+  değişmedi); hedefler kendi entity'ler + ödünç şerit. Uzak shard'daki
+  müttefik gördüğünü export/ithal yoluyla alır (yarıçaptan bağımsız,
+  değişmedi). **Sınır:** seam'in ötesine erişim şeridin genişliğiyle
+  sınırlı — şeridin ötesindeki kayıt bu shard'da bilinmez; yarıçap
+  şeritten büyükse de öyle (odanın tek yarıçapı için de geçerli olan
+  kural). **Göç:** `SightRadius` kit'in bileşeni olduğundan
+  `TeamMember` gibi taşınır — `TeamMig { kit, team, sight }`
+  (`collect_migrations` okur, `on_migrate_in` yazar); oyunun
+  `capture`'ı onu bilmek zorunda değil.
+- **Wire.** Hiçbir bayt değişmez: yarıçap bir takımın HANGİ kayıtları
+  aldığını belirler, kayıtların baytlarını değil. Hiçbir demo `SightRadius`
+  yazmıyor → her oyunun görünürlüğü ve kareleri aynı (`record_run`'ın
+  takım odası ve shard'lı takım odası için sabitlenmiş kare özetleri,
+  savaşın/arenanın wire testleri değişmeden geçti).
+
+**Demo benimsemesi: yok.** Cephe'nin kuleleri tek yarıçapla yeterli
+(W2-2); kuleye farklı yarıçap vermek oyun kararı olurdu, seam'in en
+küçük düzeneği değil — seam kit fikstürleriyle, gerçek shard aktörleri
+dahil, doğrulandı. Demolar dokunulmadı.
+
+**Elenenler.** *Hücreyi en büyük yarıçapa göre boyutlamak* (W2-2'nin
+hilesi) — her çift testi pahalılaşır, küçük yarıçaplı çoğunluk büyük
+hücrelerin bedelini öder. *Kaynak odaklı işaretleme* (her kaynak kendi
+yarıçapındaki hücreleri tarar, hedefleri işaretler) — döngü yapısını ve
+tekilleştirmeyi değiştirir, varsayılan yol artık "aynı kod" olmaz.
+*Uzun menzilli kaynakların ayrı listesi* (her hedef onlara kaba kuvvet)
+— kahraman sayısıyla sınırsız. *`Vision::radius_of(viewer)`* — model
+entity'yi görmez (yalnız konum); yarıçap oyunun entity başına verisi,
+bileşen onun doğal yeri. *Yarıçapı `Vision::Pos`'a gömmek* — oyunun
+konum tipini ve wire'ını görüşe bağlar. *Zorunlu (varsayılansız) trait
+metotları* — her özel `Vision`'ı kırardı; varsayılanlar "yarıçapsız
+model" anlamına tutarlı.
+
+**Testler** (11; önce kırmızı: 9'u — ön-ayar geçersiz kılmaları yokken
+5 ön-ayar testi, oda yarıçapı okumazken 4 oda/kompozit testi; kalan
+ikisi tasarım gereği eşdeğerlik ve varsayılan kilidi):
+
+| Test | Kilitlediği | Mutasyon → sonuç |
+|---|---|---|
+| `space::tests::sight::vision_grid2_…_decides_inclusively` / `vision_grid3_…` | kendi yarıçapla oda yarıçapının ötesini görür, ward kısa kalır; `d = r` dahil, `r + 0,5` hariç (2D düzlem, 3D uzay) | `<=` → `<` → kırıldı (ikisi de) |
+| `space::tests::sight::a_units_own_radius_is_clamped` | 0 / negatif / NaN → 1; 1 000 / ∞ → 4 hücre | alt sınır yok → kırıldı; üst sınır yok → kırıldı |
+| `space::tests::sight::the_widened_neighbourhood_grows_by_rings` | `reach ≤ hücre` → kendi 3×3 / 27; ötesi `(2k + 1)²` / `(2k + 1)³`, en çok 4 halka | sabit 3×3 → kırıldı; sabit 27 → kırıldı |
+| `space::tests::sight::the_widened_neighbourhood_covers_every_own_radius` | genişletilmiş sözleşme, hücre sınırlarını aşan bir kafeste, hücrenin altında / eşit / 4 katına dek yarıçaplar (3×3 dışına düşen > 20 çift) | sabit 3×3 → kırıldı |
+| `space::tests::sight::a_model_without_per_unit_sight_ignores_the_radius` | varsayılan metotlar: özel model yarıçapı yok sayar, komşuluğunu genişletmez | — |
+| `team::tests::sight::a_units_own_radius_sees_past_the_room_radius_and_a_ward_short_of_it` | kahraman (60) iki hücre ötedeki (55) ve sınırdaki (60) düşmanı görür, 60,5'i görmez; ward (10) oda yarıçapının göreceğini (20) görmez; aynı takımın yarıçapsız birimi 25'te kalır; öbür takım etkilenmez; bileşen kaldırılınca oda yarıçapına döner | oda yarıçapı okumuyor → kırıldı; sabit 3×3 → kırıldı; takım erimi `min` → kırıldı; yarıçapsız kaynak takımın erimini ödünç alıyor → kırıldı |
+| `team::tests::sight::the_room_radius_as_every_units_own_changes_no_record` | her birime oda yarıçapı kadar `SightRadius` → iki takımın kayıtları aynı (genişletilmiş yol varsayılanla uyumlu) | `<=` → `<` → kırıldı |
+| `sharded::tests::team::vision::a_units_own_radius_reaches_own_enemies_and_the_strip` | shard'da kahraman (45) sınırdaki kendi düşmanını ve iki hücre ötedeki ödünç kaydı görür ve export eder; 46'daki görünmez; ward (5) 15'tekini görmez | kompozit yarıçapı okumuyor → kırıldı; sabit 3×3 → kırıldı |
+| `sharded::tests::team::migrate::a_migrating_unit_carries_its_sight_radius` | geçiş yarıçapı taşır, varış bileşeni geri yazar, yeni shard'da 40'taki düşmanı görür | `collect_migrations` okumuyor → kırıldı; `on_migrate_in` yazmıyor → kırıldı |
+| `sharded::tests::team_actors::sight::a_heros_sight_reaches_every_ally_and_crosses_the_seam` | GERÇEK registry + dört shard aktörü: kahramanın (45) 40'taki gördüğü düşman shard 3'teki müttefiğe hub üzerinden ulaşır; ward'ın kısa görüşü 15'tekini hiç göstermez; kahraman seam'i yürüyerek geçer, taşınan yarıçapla yeni shard'da 40'taki düşmanı görür (koşu boyunca çift kayıt yok) | taşıma (iki yönden biri) yok → kırıldı; kompozit yarıçapı okumuyor → kırıldı |
+
+Aktör düzeneğinin oyunu (`Front`) kimliğin isteğe bağlı dördüncü
+alanını (`takım:x:y:görüş`) `SightRadius` olarak yazıyor — yalnız test
+düzeneği.
+
+**Doğrulama:** 1537 → **1548** test / 0 hata / 1 ignored (`otlp` ile
+1555 → 1566).
 
 ## 11. Kabul kriteri
 

@@ -1095,6 +1095,17 @@ TeamGame`.
   görünür). Ödünç kaydın TAKIMI bilinmez: ödünç kayıtlar görüş KAYNAĞI
   değil yalnız HEDEF — seam'in ötesindeki müttefiğin görüşünü onun kendi
   shard'ı hesaplar ve export eder (simetri).
+- **Birim başına görüş (A8 — sonradan, KIT-ARCHITECTURE §10 "A8").**
+  Kendi birimi `SightRadius` taşıyan kaynak kendi yarıçapıyla görür
+  (`Vision::sees_within`; takımın sorgusu en büyük yarıçapa dek
+  genişler — `neighborhood_within`); tek oda `TeamRoom` ile aynı
+  crate-içi ızgara. Yukarıdaki kurallar değişmez: kaynaklar yalnız bu
+  shard'ın kendi birimleri, hedefler kendi + ödünç; uzak müttefik
+  görüleni export/ithal yoluyla alır. Seam'in ötesine erişim şeridin
+  genişliğiyle sınırlı (şeridin ötesindeki kayıt burada bilinmez) —
+  şeritten büyük bir yarıçap seam ötesinde şeridin ötesini görmez, tıpkı
+  odanın tek yarıçapı gibi. `SightRadius` kit'in bileşeni: göçte
+  `TeamMig::sight` ile taşınır, `on_migrate_in` geri yazar.
 - **Kodlama.** İçerik değeri `Shown<W> { Typed(W), Encoded(Bytes) }`:
   kendi/ödünç kayıt tipli değer, ithal kayıt kodlanmış gövde.
   `SetLedger` yazım sınırını `RecordCodec`'ten crate-özel bir
@@ -1103,7 +1114,8 @@ TeamGame`.
   gibi `entities` zarfına koyar.
 - **Takım göçte taşınır.** `TeamMember` kit'in bileşeni, oyunun
   `capture`'ı onu bilmez: kompozitin göç durumu `TeamMig<M> { kit:
-  KitMig<M>, team: Option<Team> }`, `on_migrate_in` bileşeni yeniden
+  KitMig<M>, team: Option<Team> }` (A8'den beri `sight:
+  Option<SightRadius>` da), `on_migrate_in` bileşeni yeniden
   yazar. Göçle gelen oyuncunun oturumu yeni shard'ın takım görünümüne
   baseline'sızdır → delta modunda one-shot private full (spatial
   kompozitin taze-üye kuralı).
