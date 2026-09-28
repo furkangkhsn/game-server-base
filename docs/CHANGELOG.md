@@ -5,6 +5,59 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Sayım turu 8 — "her şeyi saymalıyız": F54–F57 (`metrics/count-everything-8`)
+
+- **F54 — kapalı registry'ye katılma:** registry `Shutdown` kolunda
+  kutusunu kapatınca (F53) hâlâ yaşayan bir bağlantının JOIN'i (resume
+  dahil) bağlantı aktöründe reddediliyor, istemci ERROR "registry gone"
+  alıyor, hiçbir sayaç görmüyordu. Reddi gören tek yer sayar:
+  `MetricsEvent::JoinUnsent` (`channel::post`), registry diliminde
+  `joins_unsent` (`gsb_registry_joins_unsent_total`) — `joins_unread`'in
+  kapalı eşi; katılma hattının her durağı artık kaybını sayıyor (B57,
+  B75, B68, F53, F54). Loadgen teli **GSND**.
+- **F55 — duruşun ayrılma/taşıma ölümü (karar: sayılmıyor):** dağıtıcının
+  `send_room_leave`/`send_room_detach`'i oda/shard kutusu kapandıktan sonra
+  varırsa reddedilir; önce varırsa `leaves_unprocessed`/
+  `detaches_unprocessed` olur. Kayıp yok: kutu yalnız `finish`'te kapanır,
+  `finish` tuttuğu her üyeyi bitirmiştir (oturumların elindeki B62 ile
+  sayıldı); sonra varan op B68'in kendi ölçütüyle bayattır ve kimse farkı
+  görmez. Gönderici tek anlamla sayamazdı (yok edilen/ölen odanın ya da
+  hükümle biten üyeliğin sonraki kopuşu aynı reddi alır; sharded yayında
+  reddeden shard'ın sahip olup olmadığını bilemez). B68'in iki sayacı
+  duruşun DEFTERİ olarak daraltıldı (iki HELP değişti); davranış değişmedi.
+- **F56 — duruşun yuttuğu hükümler (B57 yeniden değerlendirildi):**
+  odanın hükümleri (`CloseConn` — atma E8, idle `disconnect` E6 —,
+  `LeaveConn`, `DetachDespawned`) duruşta kaybolunca (istemci `ERROR 9`
+  yerine `ERROR 14`, `server_closes` gerekçeyi yazmaz) sayılmıyordu. Artık
+  dört yerden TAM BİRİNDE sayılır: odanın kuyruğunda duruşa kalan
+  (`finish`), registry'nin kapalı kutusunun reddettiği (flush'ın `Closed`
+  kolu), registry kutusunda okunmayan (F53 boşaltması), bağlantının
+  kutusunda duruşun `Shutdown`'ının arkasında kalan. Tek olay
+  `MetricsEvent::VerdictsLost`, registry diliminde:
+  `gsb_registry_close_verdicts_lost_total{reason}` (`server_closes` ile
+  aynı etiketler — ikisinin toplamı kararı verilen oturum sonu),
+  `gsb_registry_{leave_verdicts,detach_despawns}_lost_total`. Loadgen teli
+  **GSNE**.
+- **F57 — registry'nin bağlantıya bildirimi yerinde:** hüküm bağlantıya
+  spawn'lı gidiyordu; duruşun bildiriminden sonra varıp kapalı kutuya
+  çarpan hüküm hiçbir yerde sayılmıyordu. Artık registry'nin bağlantıya her
+  bildirimi (kapatma hükmü, `LeftRoom`, doğum tavanları, `superseded`,
+  `RoomGone`) `channel::post` ile gider: kutuda yer varsa yerinde
+  (duruşun `Shutdown`'ının önünde), doluysa spawn'lı. S kuralı değişmedi.
+  Kalan dar durum F58.
+- Altın metinler yalnız yeni aileler, registry satırının yeni anahtarları
+  ve F55'in iki HELP'i kadar değişti; `otlp::cross` yeşil. RESULT ve
+  istemci teli değişmedi.
+
+Testler 1461 → 1477 (`otlp` ile 1479 → 1495): `conn_counts::stopped` (4),
+`registry::actor::conns::ops::tests::superseded` (3), `room::tests::idle::stop`
+(4), `shard::tests::idle::stop`, `registry::actor::close::tests` (2) ve
+diğerleri; her sayım yeri önce kırmızı ya da mutasyonla doğrulandı. Ebeveyn
+doğrulaması: `JoinUnsent`'i göndermemek testi düşürdü. DESIGN §9 "Kapalı
+registry'ye katılma (F54)", "Duruşun yuttuğu hükümler (F56)",
+"Registry'nin bağlantıya hükmü yerinde (F57)", §12 "Duruşun
+ayrılma/taşıma-ölümü defteri (F55)"; OPS §3; RECONNECT §16.1–§16.4.
+
 ## F53 — registry'nin duruşta okumadığı kutu (`metrics/f53-registry-leftovers`)
 
 - **Açık (motor, sayaç):** registry `Shutdown`'dan sonra hiçbir şey okumaz

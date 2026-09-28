@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1461 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1477 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,10 +148,19 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**Sayım turu 8 tamam** (CHANGELOG "Sayım turu 8", DESIGN §9/§12, OPS §3):
+F54 `joins_unsent` (`conn/actor/room.rs`); F55 karar — B68'in
+`leaves/detaches_unprocessed`'i duruşun defteri; F56
+`metrics::VerdictsLost` (`registry/close.rs` flush'ları, `room/stop.rs`,
+`registry/actor/run/leftovers.rs`, `conn/actor/unprocessed.rs`); F57
+registry'nin bağlantıya bildirimleri `channel::post`. Loadgen teli GSNE.
+Açık: F51, F52, F58.
+
 **F53 tamam** (CHANGELOG "F53", DESIGN §9 "Registry'nin kutusunda
 kalanlar", OPS §3): `registry/actor/run/leftovers.rs` — `Shutdown` kolu
 kutuyu kapatır, kalanları sayar, son örneği `post` eder; `joins_unread`,
-`team_exports_unread`, loadgen teli GSNC. Açık: F51, F52, F54, F55.
+`team_exports_unread`, loadgen teli GSNC. F54 ve F55 sayım turu 8'de
+kapandı.
 
 **F30 + F34 + F50 tamam** (CHANGELOG "F30 + F34 + F50", CONTRIBUTING
 "Gerçek saatli testler", OPS §3, DESIGN §9 "Duruşta takım export'u kapalı
@@ -784,6 +793,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1461 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1477 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
