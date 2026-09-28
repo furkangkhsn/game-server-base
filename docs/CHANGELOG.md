@@ -5,6 +5,33 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F61 — `[[listeners]]` bilinmeyen anahtarı reddediyor (`config/f61-strict-listeners`)
+
+- **Karar (a), bakımcı 2026-09-28:** `ListenerEntry` `deny_unknown_fields`
+  aldı. Bir girdi tam dört anahtar alır (`transport`, `bind`, `tls_cert`,
+  `tls_key`); başka her anahtar — yazım hatası (`tls_crt`) ya da kapıya
+  yazılmış sunucu anahtarı (`listen_backlog`) — başlatmayı hiçbir port
+  açılmadan durdurur; hata anahtarı, girdinin anahtarlarını ve satırı
+  adlandırır (`[rooms.<id>]` / `[metrics]` ile aynı biçim). Eskiden
+  sessizce atılıyordu. Girdi düz struct (alt tablo, `flatten`/`tag` yok):
+  serde özniteliği tamamını kapsıyor. Geriye uyumsuz, bilerek.
+- **Örnek dosyada tuzak kapandı:** iki kapılı yorumlu örnek dosyanın
+  ortasındaydı; yerinde açılınca ardından gelen bütün düz anahtarlar son
+  girdiye düşüp SESSİZCE atılıyordu (sunucu varsayılanlarla kalkıyordu —
+  `max_snapshot_bytes` 1400 yerine 1048576). Artık başlatma duruyor;
+  örneğe "girdiler dosyanın sonuna" kuralı eklendi, test iki yerleşimi de
+  kilitliyor.
+- **Tarama:** `[rooms.<id>]`, `[metrics]`, `[metrics.otlp]`, oyun
+  tabloları ve enum değerleri zaten katıydı; üst düzey (`Config`) oyunla
+  paylaşılan ad alanı olduğu için bilerek açık kaldı → **F62 (kullanıcı
+  kararı)**. Yeni: F63 (ikili config hatasını `Debug` ile basıyor).
+- Tel, loadgen RESULT, `/metrics` değişmedi.
+
+Testler 1506 → 1510 (`otlp` ile 1524 → 1528): `tests/listener_keys.rs`
+(3; önce kırmızı), `example_config.rs::the_commented_listener_example_is_valid`;
+mutasyonlar öldü. Ebeveyn doğrulaması: `bind`'e `bnd` takma adı eklemek
+testi düşürdü. OPS §2 "Kapı girdisi", DESIGN §6.
+
 ## B84 — dinleme kuyruğu `listen_backlog` (`net/b84-listen-backlog`)
 
 - **Bulgu düzeltmesi:** tokio'nun `TcpListener::bind`'i `listen(2)`'ye

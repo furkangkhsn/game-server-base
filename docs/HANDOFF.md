@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1506 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1510 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,12 +148,18 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**F61 tamam** (CHANGELOG "F61", OPS §2 "Kapı girdisi"): `[[listeners]]`
+girdisi bilinmeyen anahtarı reddediyor (serde `deny_unknown_fields`;
+hata anahtar + satır). Örnek dosyanın kapı girdileri dosyanın sonuna.
+Açılan: F62 (üst düzey — oyunla paylaşılan ad alanı, kullanıcı kararı),
+F63.
+
 **B84 tamam** (CHANGELOG "B84", RPC-CONTROL-PLANE §8.2 "B84"): tokio'nun
 bind'i 128'lik kuyruk veriyordu (1024 değil — mio ≥ 1.1). Motor:
 `gsb_net::listen::bind_tcp` + sunucu anahtarı `listen_backlog` (vars.
 128); loadgen `--listen-backlog N`. Ölçüm notu: katılma fırtınası
 ölçülecekse `--listen-backlog` ≥ istemci sayısı; kayıttaki tabanlar
-128'le alındı. Açılan: F61 (kullanıcı kararı).
+128'le alındı. F61 ayrı turda kapandı.
 
 **Temizlik paketi tamam** (A12, F2, F58, F59): kit odaları dünya
 sorgularını tutuyor (`common::Cached`, arketip nesli değişince yeniden
@@ -814,6 +820,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1506 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1510 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
