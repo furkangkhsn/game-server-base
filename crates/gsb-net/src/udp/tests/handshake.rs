@@ -145,12 +145,32 @@ async fn a_lost_accept_is_healed_without_a_second_session() {
 }
 
 /// Give-up: a path that never delivers a proof ends the handshake with
-/// a clean `TimedOut` inside the bound — not with a client that
-/// believes it is connected — and the server never allocated anything.
+/// a clean `TimedOut` at the bound — not with a client that believes it
+/// is connected — and the server never allocated anything.
+///
+/// "At the bound, not sooner or much later" without a wall-clock window
+/// (BACKLOG F34): not sooner is the elapsed time (a stall only lengthens
+/// it); not later is the proofs the relay swallowed. Each proof step
+/// lasts at least one `HANDSHAKE_RTO` and every proof leaves before the
+/// deadline, so a client that gives up at the bound sends at most
+/// `HANDSHAKE_DEADLINE / HANDSHAKE_RTO` of them — a stall can only make
+/// it fewer; a client that kept re-sending past the bound (a deadline
+/// restarted per step, a last step overrunning it) sends more. The
+/// outer timeout is the hang guard.
 #[tokio::test]
 async fn a_proof_that_never_lands_gives_up_with_a_clean_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     let (_listener, addr, mut eps, _accept) = bound_transport(UdpTransportConfig::default()).await;
-    let via = relay(addr, Box::new(is_proof), keep()).await;
+    let proofs = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&proofs);
+    let swallow: Rule = Box::new(move |d| {
+        let proof = is_proof(d);
+        if proof {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+        proof
+    });
+    let via = relay(addr, swallow, keep()).await;
 
     let t0 = std::time::Instant::now();
     let bounded = tokio::time::timeout(HANDSHAKE_DEADLINE * 2, UdpClient::connect(via));
@@ -161,10 +181,19 @@ async fn a_proof_that_never_lands_gives_up_with_a_clean_error() {
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
     let took = t0.elapsed();
     assert!(
-        took >= HANDSHAKE_DEADLINE && took < HANDSHAKE_DEADLINE + Duration::from_secs(1),
-        "the give-up is the bound, not sooner or much later: {took:?}"
+        took >= HANDSHAKE_DEADLINE,
+        "gave up before the bound: {took:?}"
     );
+    assert!(err.to_string().contains("never accepted"), "{err}");
+    // Counted as the relay reads them: read after the window below, which
+    // gives the relay's task a turn to count the last one.
     assert!(no_endpoint(&mut eps, 100).await, "no session, no zombie");
+    let sent = proofs.load(Ordering::SeqCst);
+    let most = HANDSHAKE_DEADLINE.as_millis() / HANDSHAKE_RTO.as_millis();
+    assert!(
+        sent >= 1 && sent as u128 <= most,
+        "{sent} proofs in {took:?}: at least one, at most {most} before the bound"
+    );
 }
 
 /// Give-up on the OTHER side of the table: every accept is lost, so the
