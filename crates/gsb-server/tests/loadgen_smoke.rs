@@ -138,10 +138,16 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
             .unwrap_or_else(|| panic!("missing {k} in: {result_line}"))
     };
 
-    // Fine step percentiles: present, positive, ordered, and far below
-    // a broken-tick regime (a 3–4 client room ticks in hundreds of
-    // microseconds even on a loaded machine; >20 ms means the
-    // histogram or the room itself is broken, not just slow).
+    // Fine step percentiles: present, positive, ordered, and each a
+    // value the fine histogram can produce — a bin's lower edge (a
+    // multiple of the bin width below the cap) or the cap itself ("the
+    // rank is at/above the cap"). A shifted queue reads garbage here.
+    // How LONG the steps are is not asserted: a step is timed on the
+    // std clock, so a starved room honestly reports long steps (at the
+    // cap), and the old "≤ 20 ms" could never fail anyway — no
+    // percentile exceeds the 4 096 µs cap (BACKLOG F34). Step cost is
+    // what the manual measurement runs report.
+    use gsb_core::metrics::{FINE_HIST_CAP_US, FINE_HIST_US_PER_BIN};
     let p50: u64 = get("step_p50_fine_us").parse().expect("number");
     let p90: u64 = get("step_p90_fine_us").parse().expect("number");
     assert!(
@@ -152,10 +158,12 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         p90 >= p50,
         "fine histogram invariant violated: p90 {p90} < p50 {p50}"
     );
-    assert!(
-        (p50..=20_000).contains(&p90) && p50 <= 20_000,
-        "fine percentiles p50={p50} p90={p90} outside (0, 20 000] µs"
-    );
+    for (k, p) in [("p50", p50), ("p90", p90)] {
+        assert!(
+            p == FINE_HIST_CAP_US || (p < FINE_HIST_CAP_US && p % FINE_HIST_US_PER_BIN == 0),
+            "fine {k} = {p} µs is neither a bin edge nor the {FINE_HIST_CAP_US} µs cap"
+        );
+    }
 
     // RPC queue: all present and exactly 0 (no RPC traffic in smoke).
     for k in [
