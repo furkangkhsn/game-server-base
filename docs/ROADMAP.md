@@ -77,11 +77,15 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1537** (1537/1537 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1548** (1548/1548 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **F62 — config'in üst düzeyi kapalı** — `GameModule::owned_keys()`
+Son tur: **A8 — birim başına görüş yarıçapı** (kit hattı 1) — isteğe bağlı
+`SightRadius` + `Vision::sees_within` / `neighborhood_within`; varsayılan
+bayt bayt aynı; tek oda ve team × sharded (göçte taşınır). Paralel hat:
+rUDP sertleştirme (B4 + B2 çalışıyor).
+Önceki tur: **F62 — config'in üst düzeyi kapalı** — `GameModule::owned_keys()`
 (vars. adının tablosu; demo düz anahtarları); motor `Config` alanları +
 derlenmiş oyunların anahtarları dışındaki her üst düzey anahtarı
 başlatmada reddeder (`ServerError::UnknownKey`, öneriyle). Config'in her

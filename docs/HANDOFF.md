@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1537 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1548 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,16 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**İki paralel hat (2026-09-28, kullanıcı kararı):** (1) rUDP sertleştirme
+— B4+B2 → B1 → B3 → B7 → B5 (DTLS; kütüphane kararı kullanıcıda);
+(2) kit — A8 → A5 → A7 → A9. Her tur kendi worktree'sinde; birleştirmeden
+önce diğer hattın son hâline rebase + tam kapılar.
+
+**A8 tamam** (CHANGELOG "A8", KIT-ARCHITECTURE §10 "A8"): takım sisinde
+birim başına görüş yarıçapı — `gsb_kit::team::SightRadius`, `Vision`'da iki
+varsayılanlı metot, `space::MAX_SIGHT_CELLS = 4`. Hiçbir demo kullanmıyor.
+`TeamMig`'e public `sight` alanı eklendi. Açık: A34, A35.
 
 **F62 tamam** (CHANGELOG "F62", OPS §2 "Üst düzey", GAME-MODULE §4.3):
 artık her config katmanı bilinmeyen anahtarı reddediyor — alt tablolar
@@ -832,6 +842,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1537 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1548 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -5,6 +5,42 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A8 — takım sisinde birim başına görüş yarıçapı (`kit/k1-vision-radius`)
+
+İki paralel hattın (rUDP sertleştirme ‖ kit özellikleri) kit hattındaki
+ilk tur.
+
+- **Kit yapı taşı, isteğe bağlı:** oyun bir görüş kaynağına (`TeamMember` +
+  görüş konumu) `gsb_kit::team::SightRadius(f32)` koyabilir — kahraman daha
+  uzağı, ward küçük bir daireyi görür. Koymayan kaynak (ve hiç koymayan
+  oyunun her kaynağı) eskisi gibi odanın tek yarıçapıyla görür: görünürlük
+  ve baytlar aynı (`record_run` özetleri geçti).
+- **Seam:** `Vision`'a iki varsayılanlı metot — `sees_within(viewer,
+  radius, target)` ve `neighborhood_within(cell, reach)`; varsayılanlar
+  yarıçapı yok sayar (özel modeller kırılmaz). Ön-ayarlar aynı dahil sınırı
+  (`d² ≤ r²`) kullanır, yarıçapı `[1, MAX_SIGHT_CELLS · yarıçap]`'a
+  sıkıştırır (`MAX_SIGHT_CELLS = 4`) ve komşuluğu `(2k + 1)²` / `(2k + 1)³`
+  bloğa genişletir, `k = ⌈erim / hücre⌉` — hücreden büyük yarıçap sabit
+  3×3'le kaçırılmaz.
+- **Maliyet:** yarıçaplı kaynağı olmayan takım A8 öncesiyle aynı yoldan;
+  olan takım yalnız KENDİ en büyük yarıçapının bloğunu okur (hedef başına
+  ≤ 81 hücre 2D, ≤ 729 3D).
+- **team × sharded:** kaynaklar yine shard'ın kendi birimleri, hedefler
+  kendi + ödünç şerit; yarıçap göçte taşınır (`TeamMig::sight` — public
+  alan eklendi, struct literal kuran kod `sight: None` eklemeli). Seam
+  ötesi erişim şerit genişliğiyle sınırlı (A34).
+- Hiçbir demo `SightRadius` yazmıyor (Cephe tek yarıçapla kalıyor — W2-2;
+  farklı yarıçap oyun kararı olurdu).
+- Elenenler: hücreyi en büyük yarıçapa göre boyutlamak, gözlemci güdümlü
+  işaretleme, ayrı uzun menzilli gözlemci listesi, `Vision::radius_of`,
+  yarıçapı `Pos`'a gömmek, zorunlu trait metotları.
+
+Testler 1537 → 1548 (`otlp` ile 1555 → 1566): ön-ayar (6), takım odası (2),
+shard'lı doğrudan (2), gerçek registry + dört shard aktörü (1); 9'u önce
+kırmızı, 12 mutasyonun hepsi yakalandı. Ebeveyn doğrulaması: halka
+sayısında `ceil` yerine `floor` üç testi düşürdü. KIT-ARCHITECTURE §10
+"A8", CROSS-SHARD §8b.4.
+
 ## F62 — config'in üst düzeyi: motorun ve oyunların anahtarları, gerisi reddedilir (`config/f62-owned-keys`)
 
 - **Karar (b), bakımcı 2026-09-28:** `GameModule::owned_keys()` (sağlanan
