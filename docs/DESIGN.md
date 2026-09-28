@@ -2450,7 +2450,13 @@ Abort'siz, kanal kapanmalarına dayalı:
 
 ```text
 ServerHandle::stop
-  → RegistryMsg::Shutdown
+  → önce kapılar (F41): HTTP ops kapısı ve her listener close() — bekleyen
+    accept "listener kapandı" hatasıyla biter → accept loop, elindeki son
+    bağlantıyı (ConnOpened + aktör) teslim edip kendiliğinden döner (B16);
+    stop() döngüleri tek bir süre sınırı (ACCEPT_STOP_GRACE, 1 sn) altında
+    bekler, aşanı abort eder (geri sigorta; ağaç içi taşımalarda hiç
+    gerekmez; abort aktör doğmadan önceki bir await'te keser)
+  → RegistryMsg::Shutdown   (döngülerin gönderdiği her ConnOpened onun önünde)
       → her dispatcher'a RoomOp::Close (yol açma + son detach), sonra senders düşer
         (Close'u kuyruğa giremeyen dispatcher kuyruğu kapanınca aynısını yapar, B61)
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
@@ -2465,10 +2471,6 @@ ServerHandle::stop
       → reader pump: send hatası → çıkar
       → writer pump: kanal kapanır → kuyruktakini (bildirim dahil) yazar
         → socket close (write-stall penceresi altında; QUIC'te ACK beklenir)
-  → her listener close(): bekleyen accept "listener kapandı" hatasıyla
-    biter → accept loop kendiliğinden döner (B16); stop() döngüleri tek
-    bir süre sınırı (ACCEPT_STOP_GRACE, 1 sn) altında bekler, aşanı
-    abort eder (geri sigorta; ağaç içi taşımalarda hiç gerekmez)
   → registry: Shutdown işlenince run() break eder (kendi mailbox klonunu tuttuğu
     için EOF'ı bekleyemezdi — artık beklemez); düşerken Ticker klonunu da
     düşürür — broadcast'i kapatan son halka (§9.1)
@@ -2487,8 +2489,9 @@ ServerHandle::stop
     StopReport::final_report_complete, bkz. §12)
 ```
 
-`Listener::close` kapısı rUDP turunda kullanıldı: `stop()`, registry
-Shutdown'ından sonra listener'ı kapatır — TCP'de no-op, rUDP'de demux
+`Listener::close` kapısı rUDP turunda kullanıldı: `stop()` listener'ı
+kapatır (F41'den beri registry Shutdown'ından ÖNCE, aşağıda) — TCP'de
+kapısını kapatır, rUDP'de demux
 görevini sonlandırır (socket klonu + endpoint göndericisi düşer;
 writer'lar aktör kaskadıyla çıkar), QUIC'te yeni bağlantıları reddeder
 (`set_server_config(None)`) ama canlıları KESMEZ — `Endpoint::close`
@@ -2577,6 +2580,71 @@ kaldırmak, TCP/WS/QUIC kapısını kapatmamak ya da TLS/WS accept'ini
 kapıdan geçirmemek sunucu testlerinin ikisini de düşürür (TCP'ninki
 `gsb-net` testini de). rUDP'de kapı kaldırılırsa döngü yine biter (demux
 abort'u alıcıyı kapatır, o yol da `listener_closed` döner) — iki yol.
+
+**Önce kapılar (BACKLOG F41).** Yukarıdaki sıra eskiden tersti: `stop()`
+registry'ye `Shutdown`'ı gönderip kapıları ANCAK ondan sonra kapatıyordu
+(yorumu "önce kapılar" dese de). Registry `Shutdown`'da okumayı bırakır:
+arkasına kuyruklanan `ConnOpened` posta kutusuyla birlikte düşer,
+sonrakinin gönderimi hata alır — accept döngüsü (`let _ =`) aktörü yine
+doğurur. O aktör `ConnIn::Shutdown` almaz (registry onu hiç tanımadı),
+ERROR 14 göndermez; eşi soketi kapatana ya da idle penceresine (30 sn)
+dek yaşar, duruşu aşar ve metrik göndericisini tuttuğu için son rapor
+`FINAL_REPORT_GRACE`'te onun son sözü olmadan çıkar
+(`final_report_complete = false`). Pencere: bir döngünün accept'i ile
+`ConnOpened` gönderimi arası (çok iş parçacığında gerçek paralellik; dolu
+bir registry posta kutusunda gönderimler sırayla beklediğinden
+genişler) ve kapının kapandığı yoklamada biten accept (`Door::admit`
+elindeki bağlantıya meyillidir — kapanışla aynı anda hazır olan bağlantı
+yine döner).
+
+Düzeltme `boot/stop.rs`'te yalnız sıra: kapılar kapanır, `stop()`
+döngülerin BİTMESİNİ bekler (`end_accepts`, 1 sn tek son tarih), registry
+`Shutdown`'ı ANCAK ondan sonra alır, ticker hemen ardından kesilir.
+Döngü yalnız accept'in "kapandı" hatasında döner; o ana dek aldığı her
+bağlantıyı (`ConnOpened` + aktör) teslim etmiştir, dolayısıyla her
+`ConnOpened` registry'nin kutusunda `Shutdown`'ın önündedir ve her aktör
+kayıtlı, bildirimli (ERROR 14) biter. Süre aşımında abort edilen döngü
+aktör doğurmaz: iki await'i (accept, `ConnOpened` gönderimi) ikisi de
+spawn'dan önce; abort'ta endpoint düşer, pump'lar kanalları kapanınca
+çıkar. Kapıdan sonra gelen eş hiç kabul edilmez; el sıkışan kapıda
+kesilen/kuyrukta kalan el sıkışma, rUDP'de kuyruktaki oturum zaten
+sayılıyor (`handshakes_cut_closed`, `handshakes_unaccepted_closed`,
+`udp_sessions_unaccepted_closed`, B74) — yeni sayaç gerekmedi.
+
+Sınırlar ve korunanlar: `stop()`'un üst sınırı aynı (accept 1 sn, sonra
+odalar 1 sn + servisler 1 sn ile toplayıcının 2 sn'lik sınırı yan yana:
+en çok ≈ 3 sn — eskiden de öyleydi; toplayıcının sınırı artık accept
+beklemesinden SONRA başlar, çünkü ticker ondan sonra kesilir). S kuralı
+değişmedi: registry hiçbir odayı beklemez; `stop()`'un döngü beklemesi
+canlı registry'ye karşı tek bir süre sınırlı join'dir (döngünün
+`ConnOpened` gönderimini okuyan registry henüz `Shutdown` almamıştır).
+Accept beklemesi boyunca odalar tick'lemeye devam eder; kapısı kapanan
+rUDP'nin demux'ı durur — eskiden de `Shutdown` işlenmeden duruyordu.
+İstemci teli değişmedi.
+
+Elenenler: (1) *Reddedilen `ConnOpened`'da aktörü doğurmamak* (gönderim
+hatasında soketi ERROR 14'le kapatmak) — tek başına yetmez: `Shutdown`'ın
+arkasına kuyruklanıp registry'yle düşen `ConnOpened`'ın gönderimi
+BAŞARILI döner, hata görünmez; düzeltmeden sonra `stop()` yolunda bu kol
+hiç koşmaz (yalnız ölü registry'de — o zaman sunucu zaten ayakta değil).
+(2) *Kapıları `Shutdown`'dan önce kapatıp döngüleri ondan sonra beklemek* —
+kapanışla aynı yoklamada biten accept'in `ConnOpened`'ı yine `Shutdown`'ın
+arkasına düşer (aşağıdaki üçüncü test bu mutasyonu yakalar). (3)
+*Registry'nin `Shutdown`'dan sonra kutusunu boşaltmaya devam edip geç
+gelenlere `ConnIn::Shutdown` göndermesi* — kutunun EOF'u hiç gelmez
+(registry kendi klonunu tutar, §9.1); ne kadar boşaltacağı bir süre
+sınırına kalır, geç gelen yine kaçabilir. Sıra yapıdan verilebiliyor.
+
+Testler (`boot::stop::tests::window`, paused saat, gerçek accept döngüsü,
+bağlantı aktörü, toplayıcı ve `stop()`; test kapısı + kutusu dolu, test
+"başla" diyene dek okumayan sahte registry — gönderimler sırayla bekler,
+pencere böylece deterministik): duruş sürerken gelen eş `Shutdown`'ın
+arkasına teslim edilmez, kapıda reddedilir, rapor tam; duruştan önce
+alınıp `ConnOpened`'ı dolu kutuda bekleyen eş `Shutdown`'ın önünde
+kaydedilir ve biter; kapının kapandığı yoklamada biten accept'in eşi de
+`Shutdown`'ın önünde kaydedilir. Eski sırayla ilk ve üçüncü düşer
+(`[Closed(BUSY), Shutdown, Opened(c1)]`, `final_report_complete=false`);
+"kapat, `Shutdown`, sonra bekle" mutasyonunda üçüncü düşer.
 
 **Panikleyen oda/shard (B67).** Ölüm bekçisi (oda/shard görevi başına bir
 görev, yalnız `JoinHandle`'ı bekler) registry'ye `RoomDied` bildirir;
@@ -3354,13 +3422,14 @@ doğurulan göndericiden giden (`channel::post`) kendi gönderici klonunu
 teslim edene dek tutar — kapanış ikisini de geçemez (işaret olayı ve
 bariyerle yapılan sıralamada bu yarış kalırdı). Bekleme kapanıştan
 itibaren `FINAL_REPORT_GRACE` (2 sn) ile sınırlı: duruşu aşan bir
-üretici (takılı oda, registry'nin söküşünden sonra kabul edilmiş bir
-bağlantı) son raporu tutamaz; rapor sınırda onun son sözü olmadan çıkar,
+üretici (takılı oda; F41'den önce registry'nin söküşünden sonra teslim
+edilmiş bir bağlantı da) son raporu tutamaz; rapor sınırda onun son sözü olmadan çıkar,
 `warn` + `run()` `false` döner → `StopReport::final_report_complete`.
 Sınır `stop()`'un kendi sınırlarını (accept 1 sn + odalar 1 sn +
-servisler 1 sn) uzatmaz: onlarla yan yana koşar; iki saniye, accept
-hattının (her yeni bağlantı aktörüne göndericisini veren) 1 sn'lik
-geri sigortasından uzundur.
+servisler 1 sn) uzatmaz: onlarla yan yana koşar. F41'den beri ticker
+accept döngüleri bittikten sonra kesilir, sınır da o andan başlar: accept
+hattı (her yeni bağlantı aktörüne göndericisini veren) kapanıştan önce
+bitmiştir.
 
 **İki kanal.** Oturum üreticileri (registry, oda/shard, ölüm bekçisi,
 dağıtıcı, bağlantı aktörü, accept hattı) ana kanala; taşıma görevleri
