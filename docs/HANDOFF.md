@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1521 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1537 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -148,6 +148,13 @@ fazları bitti.**
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
 
+**F62 tamam** (CHANGELOG "F62", OPS §2 "Üst düzey", GAME-MODULE §4.3):
+artık her config katmanı bilinmeyen anahtarı reddediyor — alt tablolar
+ayrıştırırken (serde), üst düzey başlatmanın ilk adımında
+(`Config::check_top_level_keys`). Üçüncü taraf modül `raw`'dan düz
+anahtar okuyorsa `owned_keys()`'i ezmeli (vars. yalnız `[<ad>]`).
+Derlenmemiş oyunun tablosu reddedilir. Açık: F64 (satır numarası).
+
 **F63 tamam** (CHANGELOG "F63", OPS §2 "Başlatma hatası"): `gsb-server`
 başlatmayı durduran hatayı `gsb-server: <hata>` olarak basıyor
 (`gsb_server::error_chain`), çıkış durumu 1; `ConfigError`'ın `Debug`'u
@@ -157,8 +164,7 @@ source }` (kırıcı); loadgen süreç-içi reddi mesaj + 1.
 **F61 tamam** (CHANGELOG "F61", OPS §2 "Kapı girdisi"): `[[listeners]]`
 girdisi bilinmeyen anahtarı reddediyor (serde `deny_unknown_fields`;
 hata anahtar + satır). Örnek dosyanın kapı girdileri dosyanın sonuna.
-Açılan: F62 (üst düzey — oyunla paylaşılan ad alanı, kullanıcı kararı),
-F63.
+F62 ve F63 ayrı turlarda kapandı.
 
 **B84 tamam** (CHANGELOG "B84", RPC-CONTROL-PLANE §8.2 "B84"): tokio'nun
 bind'i 128'lik kuyruk veriyordu (1024 değil — mio ≥ 1.1). Motor:
@@ -826,6 +832,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1521 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1537 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

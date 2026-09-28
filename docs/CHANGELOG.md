@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F62 — config'in üst düzeyi: motorun ve oyunların anahtarları, gerisi reddedilir (`config/f62-owned-keys`)
+
+- **Karar (b), bakımcı 2026-09-28:** `GameModule::owned_keys()` (sağlanan
+  metot) oyunun sahip olduğu üst düzey anahtarları bildirir; bir ad o adı
+  taşıyan üst düzey anahtarın tamamına sahiptir (düz değer de,
+  `[ad]`/`[ad.alt]`/`[[ad]]` de). Varsayılan oyunun adının tablosu
+  (arena/MMO/war: `[arena]`/`[mmo]`/`[war]`); demo sekiz düz anahtarını
+  bildirir, tablo bildirmez (`[demo]` artık reddediliyor — önceden yok
+  sayılıyordu). Soru, modül yapılandırılmadan sorulur: cevap oyunun
+  ayarlarına bağlı olamaz.
+- **Motorun denetimi:** her başlatmanın ilk adımı (bir şey bağlanmadan)
+  `Config::check_top_level_keys`: `raw`'ın her üst düzey anahtarı ya
+  motorun (`Config` alanları — liste struct'ın kendi türetilmiş
+  `Deserialize`'ından okunur, kayamaz; demo'nun düz anahtarları hariç) ya
+  da barındırılan oyunun veya bu ikiliye derlenmiş başka bir oyunun
+  olmalı. Gerisi `ServerError::UnknownKey`: anahtar dosyadaki yazımıyla
+  (`tik_hz`, `[metric.otlp]`, `[room.2]`, `[[listener]]`), 1–2 harf
+  uzaklıktaki bilinen anahtar ("did you mean `tick_hz`?") ve oyunların
+  anahtarları; ikili F63 biçiminde basar, çıkış 1. Satır numarası yok
+  (denetim ham tablo üstünde; üst düzey anahtar belgede tektir — F64).
+- **Kardeş oyun kuralı:** derlenmiş başka oyunun tablosu kabul (demo
+  sunucusu `[arena]`'yı taşıyabilir); DERLENMEMİŞ oyunun tablosu
+  reddedilir (yalnız `game-arena` ikilisi `[mmo]`'yla kalkmaz; demo'suz
+  ikili demo'nun düz anahtarlarını reddeder — yazım hatası koruması
+  kazanır). Kodla kurulan config (boş `raw`) hep geçer.
+- **Tamamlanan tablo:** artık config'in her katmanı bilinmeyen anahtarı
+  reddediyor — alt tablolar ayrıştırırken (serde, F61 ve öncesi), üst
+  düzey başlatmanın ilk adımında (F62).
+- Geriye uyumsuz, bilerek. Depodaki config'lerde reddedilen anahtar
+  yoktu. Tel, loadgen RESULT, `/metrics` değişmedi.
+
+Testler 1521 → 1537 (`otlp` ile 1539 → 1555): `config::top_keys::tests`
+(9), `tests/top_level_keys.rs` (6), `startup_errors` (+1); denetim bağlı
+değilken dört uç test kırmızıydı; 11 mutasyonun hepsi öldü. Ebeveyn
+doğrulaması: sahipliği önek eşleşmesine çevirmek entegrasyon testini
+düşürdü. OPS §2 "Üst düzey", GAME-MODULE §4.3 "Üst düzeyin sahipleri",
+DESIGN §6.
+
 ## F63 — başlatma hatası tek mesaj, çıkış durumu 1 (`server/f63-config-error`)
 
 - **`gsb-server` hatayı `Display` ile basıyor:** `main` hatayı döndürüyordu,
