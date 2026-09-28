@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1510 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1521 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,12 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F63 tamam** (CHANGELOG "F63", OPS §2 "Başlatma hatası"): `gsb-server`
+başlatmayı durduran hatayı `gsb-server: <hata>` olarak basıyor
+(`gsb_server::error_chain`), çıkış durumu 1; `ConfigError`'ın `Debug`'u
+dosyayı dökmüyor; `ServerError::Bind` → `ListenerBind { addr, transport,
+source }` (kırıcı); loadgen süreç-içi reddi mesaj + 1.
 
 **F61 tamam** (CHANGELOG "F61", OPS §2 "Kapı girdisi"): `[[listeners]]`
 girdisi bilinmeyen anahtarı reddediyor (serde `deny_unknown_fields`;
@@ -820,6 +826,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1510 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1521 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

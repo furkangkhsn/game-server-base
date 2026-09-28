@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F63 — başlatma hatası tek mesaj, çıkış durumu 1 (`server/f63-config-error`)
+
+- **`gsb-server` hatayı `Display` ile basıyor:** `main` hatayı döndürüyordu,
+  standart kütüphane `Debug` ile basıyordu — `Error: Parse { … input:
+  Some("<dosyanın tamamı>") … }` (satır numarası yok), `Error:
+  BadListenBacklog(0)`, `Error: Bind(Os { code: 98, … })`. Artık stderr'de
+  `gsb-server: <hata>` (ayrıştırma hatasında satır + işaretli alıntı,
+  dosyanın başka satırı yok), çıkış durumu yine 1. Metin yeni genel
+  `gsb_server::error_chain`: `Display` + metnin taşımadığı her `source()`
+  için `caused by:` satırı (bu depodaki hatalar nedenlerini zaten
+  mesajlarına yazar; tekrar etmez).
+- **Kapı hatası kapıyı adlandırır:** `ServerError::ListenerBind { addr,
+  transport, source }` (dolu port, reddedilen backlog, yüklenemeyen
+  TLS/QUIC dosyası) — kapıyı adlandırmayan `ServerError::Bind(io::Error)`
+  kaldırıldı (artık hiçbir yol üretmiyordu; **genel enum'da kırıcı**).
+- **`ConfigError`'ın `Debug`'u dosyasız** (elle: yol, mesaj, `span`) — bir
+  `unwrap` paniği bile dosyayı dökmez.
+- **Yük üreteci:** süreç-içi sunucu kalkmazsa `Debug`'lı panik (101)
+  yerine mesaj + çıkış durumu 1; `--serve` zinciri basıyor.
+- Tel, loadgen RESULT, `/metrics` değişmedi.
+
+Testler 1510 → 1521 (`otlp` ile 1528 → 1539): `tests/startup_errors.rs`
+(7, gerçek ikililer, bir şey bağlanmadan; önce yedisi de kırmızı),
+`error_chain::tests` (3), `config_debug::tests` (1); 8 mutasyon öldü.
+Ebeveyn doğrulaması: ikilide zinciri atlayıp düz `Display` basmak eşdeğer
+çıktı (bugünkü hataların hepsi nedenini mesajında taşıyor); zincirin eksik
+nedeni eklemesi `error_chain::tests`'te sınanıyor. OPS §2 "Başlatma
+hatası", §4 madde 7.
+
 ## F61 — `[[listeners]]` bilinmeyen anahtarı reddediyor (`config/f61-strict-listeners`)
 
 - **Karar (a), bakımcı 2026-09-28:** `ListenerEntry` `deny_unknown_fields`
