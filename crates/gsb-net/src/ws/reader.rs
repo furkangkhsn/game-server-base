@@ -55,9 +55,12 @@ pub(super) struct WsReader {
     frag_opcode: Option<u8>,
     frag_data: BytesMut,
     /// Close frames and pongs dropped on the full control queue (B58),
-    /// and their path to the collector (see `flush`).
+    /// and on the closed one (B83), and their path to the collector (see
+    /// `flush`).
     close_frames_dropped: u64,
     pongs_dropped: u64,
+    close_frames_dropped_closed: u64,
+    pongs_dropped_closed: u64,
     flusher: crate::metrics::Flusher,
 }
 
@@ -82,6 +85,8 @@ impl WsReader {
             frag_data: BytesMut::new(),
             close_frames_dropped: 0,
             pongs_dropped: 0,
+            close_frames_dropped_closed: 0,
+            pongs_dropped_closed: 0,
             flusher: crate::metrics::Flusher::new(metrics),
         }
     }

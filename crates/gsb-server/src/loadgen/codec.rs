@@ -218,7 +218,12 @@ mod logic;
 /// that section (the WebSocket teardown close that could not be
 /// delivered — B80: `ws_going_away_unsent_closed`,
 /// `ws_going_away_unsent_stalled`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4D5A;
+/// GSNA = the GSMZ layout with two more transport counters at the end of
+/// that section (the WebSocket reader's control replies a closed control
+/// queue refused — B83: `ws_close_frames_dropped_closed`,
+/// `ws_pongs_dropped_closed`). The third letter moves on: GSMZ was the
+/// last of the M run.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E41;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

@@ -223,6 +223,15 @@ transport_counters! {
     /// for a slot in the socket writer's full queue — the writer pump's
     /// write-stall window ran out with no byte written.
     ws_going_away_unsent_stalled,
+    /// WebSocket (B83): close frames (the close echo, or the server's
+    /// protocol-failure close) the reader could not queue because the
+    /// control queue was CLOSED — the socket writer had already stopped
+    /// on a failed socket write (the full queue is
+    /// `ws_close_frames_dropped`).
+    ws_close_frames_dropped_closed,
+    /// WebSocket: pongs refused by the closed control queue, the same
+    /// way (the full queue is `ws_pongs_dropped`).
+    ws_pongs_dropped_closed,
 }
 
 impl TransportCounters {

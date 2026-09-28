@@ -453,7 +453,7 @@ max_detach_hold_secs = "off"
   sayaç artık yalnız onu sayıyor); WS okuyucusundan
   `ws_close_frames_dropped` (kapanış yankısı ya da protokol hatası
   kapanışı) ve `ws_pongs_dropped` — dolu kontrol kuyruğunda (önceden
-  `let _ =`); el sıkışan kapılardan (WS/TLS/QUIC)
+  `let _ =`; kapalı kuyruğunkiler ayrı: B83, aşağıda); el sıkışan kapılardan (WS/TLS/QUIC)
   `handshakes_refused`, `handshakes_timed_out`, `handshakes_failed`
   (`Listener::handshake_stats`'ın sayaçları); ve `metrics_dropped` —
   taşıma görevlerinin dolu metrik kanalında düşen kendi örnekleri (üst
@@ -571,6 +571,22 @@ max_detach_hold_secs = "off"
   çıkıştaki boşaltması `recv` ile bekler — kapanıştan önce slot ayırmış
   bir göndericinin (uçuştaki kare, bekleyen kapanış) kapalı kuyruğa
   koyduğu kare de sayılır (`try_recv` boş kuyrukta durup onu kaçırırdı).
+- **Taşıma kapsamı: WS okuyucusunun kapalı kuyruğa veremediği kontrol
+  cevapları (B83, sayım turu 7).** Satırın ve tablonun sonuna iki
+  `counter`; loadgen telinde `GSNA` (M dizisi GSMZ'de bitti, üçüncü harf
+  ilerledi), `RESULT`'ta `transport_<ad>=`. Okuyucunun `queue_control`'ü
+  (pong, kapanış yankısı, protokol hatası kapanışı) önceden yalnız DOLU
+  kontrol kuyruğunu sayıyordu (`ws_close_frames_dropped`,
+  `ws_pongs_dropped`, B58); soket yazıcısı başarısız bir soket yazmasıyla
+  durup kuyruğunu KAPATTIKTAN sonra okuyucu hâlâ okurken gelen ping'in
+  pong'u ya da kapanışın yankısı sessizce düşüyordu. Artık ayrı sayılır:
+  `ws_close_frames_dropped_closed`
+  (`gsb_transport_ws_close_frames_dropped_closed_total`) ve
+  `ws_pongs_dropped_closed` (`gsb_transport_ws_pongs_dropped_closed_total`).
+  Değeri düşük: soket zaten ölü, hiçbir cevap bir tele varamazdı; sayaç
+  "bu oldu" der, istemcinin bir şey kaçırdığını değil. Dolu kuyruğun
+  sayaçları anlam değiştirmedi (yalnız dolu). Okuyucunun `Shutdown`
+  isteğinin reddi kare değildir, sayılmaz.
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:

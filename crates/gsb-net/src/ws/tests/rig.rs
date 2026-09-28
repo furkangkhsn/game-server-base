@@ -126,6 +126,12 @@ impl ReaderRig {
         }
     }
 
+    /// Close the control queue, as the socket writer's early exit does
+    /// (a failed socket write — B83): every later reply is refused.
+    pub(super) fn close_queue(&mut self) {
+        self.queue.close();
+    }
+
     /// Drop the reader (as its pump does when the connection ends).
     pub(super) fn end(self) {
         drop(self.reader);

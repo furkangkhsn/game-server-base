@@ -56,7 +56,8 @@
 //! B75's registry-scope `joins_refused_closed=` with
 //! `gsb_registry_joins_refused_closed_total`. B80's two transport
 //! counters at the end of that line and table
-//! (`ws_going_away_unsent_{closed,stalled}`).
+//! (`ws_going_away_unsent_{closed,stalled}`). B83's two after them
+//! (`ws_{close_frames,pongs}_dropped_closed`).
 
 use super::*;
 use crate::conn::ServerClose;

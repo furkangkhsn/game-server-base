@@ -172,6 +172,10 @@ gsb_transport_ws_going_away_unsent_closed sum t=2 mono=true unit="" n=1 | WebSoc
   [] 1000..2000 int 40
 gsb_transport_ws_going_away_unsent_stalled sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.
   [] 1000..2000 int 41
+gsb_transport_ws_close_frames_dropped_closed sum t=2 mono=true unit="" n=1 | WebSocket close frames (the close echo or a protocol-failure close) the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.
+  [] 1000..2000 int 42
+gsb_transport_ws_pongs_dropped_closed sum t=2 mono=true unit="" n=1 | WebSocket pongs the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.
+  [] 1000..2000 int 43
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

@@ -1,7 +1,8 @@
 //! The reader's control replies lost on a full control queue (BACKLOG
 //! B58): before, a pong or a close frame the queue refused was dropped
 //! with `let _ =`, counted nowhere. Now each is counted by kind and the
-//! counts reach the collector when the reader goes.
+//! counts reach the collector when the reader goes. B83: on a CLOSED
+//! queue (the socket writer stopped on a failed write) too, apart.
 
 use super::rig::ReaderRig;
 use super::*;
@@ -25,6 +26,33 @@ async fn a_pong_and_a_close_echo_dropped_on_a_full_queue_are_counted() {
     assert_eq!(t.ws_pongs_dropped, 1, "the second pong");
     assert_eq!(t.ws_close_frames_dropped, 1, "the close echo");
     assert_eq!(t.handshakes_refused, 0, "nothing else");
+    assert_eq!(
+        t.ws_pongs_dropped_closed, 0,
+        "the queue was full, not closed"
+    );
+    assert_eq!(t.ws_close_frames_dropped_closed, 0);
+    assert!(rx.try_recv().is_err(), "one sample");
+}
+
+/// The socket writer stopped on a failed write and its queue closed: the
+/// reader still reads, and its pong and close echo are refused — counted
+/// by kind on their own counters, not as a full queue's.
+#[tokio::test]
+async fn a_pong_and_a_close_echo_a_closed_queue_refuses_are_counted() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut rig = ReaderRig::with_queue(8, Some(tx)).await;
+    rig.close_queue();
+    rig.send(true, OP_PING, b"a").await;
+    rig.send(true, OP_CLOSE, &1000u16.to_be_bytes()).await;
+    assert!(rig.next().await.is_none(), "the close ends the stream");
+    rig.end();
+    let Ok(MetricsEvent::Transport(t)) = rx.try_recv() else {
+        panic!("the reader's counts, sent as it went");
+    };
+    assert_eq!(t.ws_pongs_dropped_closed, 1, "the pong");
+    assert_eq!(t.ws_close_frames_dropped_closed, 1, "the close echo");
+    assert_eq!(t.ws_pongs_dropped, 0, "not a full queue's");
+    assert_eq!(t.ws_close_frames_dropped, 0, "not a full queue's");
     assert!(rx.try_recv().is_err(), "one sample");
 }
 

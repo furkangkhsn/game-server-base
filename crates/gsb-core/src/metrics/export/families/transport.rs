@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 41] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 43] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -226,6 +226,17 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 41] 
         "gsb_transport_ws_going_away_unsent_stalled_total",
         "WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.",
         |t| t.ws_going_away_unsent_stalled,
+    ),
+    // B83: the WebSocket reader's control replies behind a stopped writer.
+    tr(
+        "gsb_transport_ws_close_frames_dropped_closed_total",
+        "WebSocket close frames (the close echo or a protocol-failure close) the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.",
+        |t| t.ws_close_frames_dropped_closed,
+    ),
+    tr(
+        "gsb_transport_ws_pongs_dropped_closed_total",
+        "WebSocket pongs the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.",
+        |t| t.ws_pongs_dropped_closed,
     ),
 ];
 
