@@ -5,6 +5,38 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## Temizlik paketi — A12, F2, F58, F59 (`misc/cleanup-a12-f2`)
+
+- **A12 — `QueryState` oda başına bir kez:** kit odalarının tick başına
+  kurduğu dünya sorguları artık odada/shard'da tutuluyor
+  (`gsb_kit::common::Cached`): kayıt geçişi, yetim damgası, kirli geçiş,
+  sınır ihracı, takım içeriği, komşu başına göç taraması. Durum yalnız
+  dünyanın kimliği ya da arketip nesli değişince yeniden kurulur — salt
+  artımlı önbellek kayıtları taze sorgudan farklı sırada dolaşırdı
+  (bileşen indeksi hash sırası) ve kareler değişirdi; böylece bayt aynı
+  (`record_run` özetleri geçti). Ölçüm (MMO/arena 200, 3'er koşu): fark
+  gürültü içinde. KIT-ARCHITECTURE §10 "A12".
+- **F2 — metrik test kuyrukları:** registry'nin dolu kanal yolu için
+  doğru-yol testleri (düşen örnek ve oda-gitti bildirimi `metrics_dropped`'ta,
+  sonraki kümülatif örnek sayımları taşır, kapalı kanal düşüş sayılmaz);
+  `bytes_out` kanalın teslim ettiği karelere karşı bayt bayt sınanıyor
+  (op + payload; reddedilen kare ve düşen kapanış bildirimi içinde değil).
+  Hata çıkmadı; 8 mutasyonun hepsi kırıldı. DESIGN §12, OPS.
+- **F58 — spawn'lı yedeğin reddi sayılıyor:** registry'nin bağlantıya
+  hükümleri `Registry::tell` → `channel::post_or` ile gider; dolu kutu
+  yüzünden spawn'lı göndericide bekleyen hüküm registry DURDUKTAN sonra
+  reddedilirse tek `VerdictsLost` sayılır (`close_verdicts_lost{reason}`).
+  Registry çalışırken red sayılmaz (bağlantı kendi bitmiş). Önce kırmızı.
+  Bilinen fazla sayım dar pencerede → F60. DESIGN §9.
+- **F59 — `sends_closed` ifadesi:** "bağlantı sonu başına en çok ~1"
+  yerine (tick başına denenen batch) × (kapanış→ayrılış tick'i); DESIGN
+  metrik tablosu, OPS, RPC-CONTROL-PLANE §8.2 düzeltildi (HELP bunu hiç
+  demiyordu, golden'lar değişmedi).
+
+Testler 1477 → 1490 (`otlp` ile 1495 → 1508). İstemci teli, RESULT ve
+golden'lar değişmedi. Ebeveyn doğrulaması: reddedilen hükmü iki kez
+saymak iki testi düşürdü.
+
 ## B50 — pinsiz orkestre tabanları varsayılan worker'larla + regresyon denetimi (`measure/b50-baselines`)
 
 Kod değişikliği yok; ölçüm turu (`73da266`, 2026-09-28; Ryzen 9 7950X
