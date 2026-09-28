@@ -153,6 +153,17 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   '^<ikili>'; sleep 0.25; done` (bitince `pkill -CONT`). F25'te
   loadgen smoke'ları, slow_reader'lar, `input_rate` ve e2e ticket testi
   bununla her seferinde ya da çoğunlukla düştü.
+- **Süreci dondurmak görevler arası sırayı korur**: iki görevin
+  yarışını (iki dispatcher'ın odaya gönderimi, bir bağlantının kapanışı
+  ile ötekinin join'i) SIGSTOP/SIGCONT üretmez, hepsi birlikte uyanır.
+  Onu iş parçacığı düzeyinde aç bırakmak üretir: sürecin
+  `/proc/<pid>/task/*` iş parçacıklarının bir kısmını
+  `taskset -p -c 0,1 <tid>` ve `renice -n 19 -p <tid>` ile iki çekirdeğe
+  it, o çekirdekleri `taskset -c 0,1 yes` ile doldur (F32: registry
+  eski bağlantının kapanışını yeninin join'inden 0,6 ms önce gördü).
+  Yarışı her seferinde üretmek için sırayı bir kez elle çevir (bir
+  gönderimin önüne geçici `sleep`) ve sonucu kaydet; kalıcı kilit yine
+  sırayı elle kuran deterministik testtir.
 
 ## Kod düzeni
 
