@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F31 — sunucu çocuğunun port yarışı (`loadgen/f31-port`)
+
+- **Hata:** orkestratör sunucu çocuğunun oyun ve metrik portlarını
+  kendisi seçiyordu (`alloc_port`: `127.0.0.1:0`'a bağla, numarayı oku,
+  kapat, çocuğa ver); aradaki boşlukta portu başkası alırsa çocuk
+  "Address already in use" ile ölüyordu. Kanıt: 128 `yes` + `:0`'a
+  sürekli bağlanan 4 port kapıcı altında eski ikili 20 koşunun 18'inde
+  temiz bitmedi.
+- **Düzeltme:** çocuk iki kapısını da `:0`'a bağlar ve bağladığı adresleri
+  stdout'a tek satırla bildirir: `SERVING addr=… metrics=…`
+  (`serve/announce.rs`; metrik dinleyicisi önce, sonra sunucunun
+  dinleyicileri). Orkestratör satırı en çok 30 sn bekler
+  (`procs/server_child.rs`), çocuğun öteki stdout satırlarını aynen
+  geçirir, istemcileri bildirilen adrese yollar, metrik akışına bir kez
+  bağlanır (yeniden deneme döngüsü kalktı). Satırdan önce ölen, susan
+  (öldürülüp biçilir) ya da bozuk satır basan çocukta koşu orada biter:
+  çıkış 1, hata çocuğun çıkışını adlandırır, istemci çocuğu başlatılmaz.
+  `alloc_port` silindi. Açık port veren komut satırları aynen çalışır.
+  RESULT ve istemci teli değişmedi.
+- Elenenler: hazır dosyası (tekil yol + temizlik), adresi metrik akışının
+  el sıkışmasında taşımak (oyun adresi o bağlantıdan önce lazım),
+  ayırıcıyı tutup bind hatasında yeniden denemek (yarış kalır). Aynı kalıp
+  başka yerde yok (testler `:0` + `handle.addr` kullanıyor).
+- Sonra: aynı yük altında 20/20 temiz, 10/10 ayrı süreçli smoke,
+  SIGSTOP/SIGCONT 250/250 ms'de 8/8. Yan bulgu **F40** (metrik akışına
+  kimse bağlanmazsa `--serve` çocuğu çıkmıyor).
+
+Testler 1431 → 1442 (`otlp` ile 1449 → 1460): `announce` (2),
+`server_child/tests.rs` (7; sahte çocuk `/bin/sh`), `child_args` (1; önce
+kırmızı), `tests/loadgen_serve.rs` (1; önce kırmızı); 7 mutasyonun hepsi
+öldü. Ebeveyn doğrulaması: bildirim satırında metrik adresini hep `-`
+basmak testi düşürdü. RPC-CONTROL-PLANE §8.2 "Sunucu çocuğunun portları
+(F31)".
+
 ## Sayım turu 7 — B82 (doğruluk hatası), B83 (`core/b82-late-resume`)
 
 - **B82 — yavaş shard'a resume (gerçek doğruluk hatası):** sharded resume

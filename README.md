@@ -79,7 +79,7 @@ clippy `-D warnings` · test · rustdoc `-D warnings` · the Autobahn RFC 6455 f
 WebSocket door, `docs/SECURITY.md` §3.7).
 
 ```sh
-# 1431 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
+# 1442 tests: framing, lint, ticker/room tick, RPC (single room + shard, the rpc_shard
 # suite), ticket/control plane, READ fairness (rotating cursor), supervision (panicking
 # room/shard), table pruning (epoch/tombstone TTL, metric retirement), reconnect
 # (detach/resume/bot handover, PlayerId continuity), trait unification (GameLogic +
