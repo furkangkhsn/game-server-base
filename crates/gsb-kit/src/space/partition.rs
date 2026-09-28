@@ -53,8 +53,9 @@ pub trait Partition<W>: Send + 'static {
     /// export when they rebuild the border strip; an implementation
     /// keeps its test inside `cfg!(debug_assertions)`, so a release build
     /// pays nothing. [`GridPartition2`] checks the unit contract of
-    /// [`Planar`](crate::space::Planar): the wire's projection must be
-    /// in the position's unit.
+    /// [`Planar`](crate::space::Planar): the wire's projection, divided
+    /// by the preset's wire scale (1 unless declared), must be in the
+    /// position's unit.
     fn debug_check_wire(&self, _pos: &Self::Pos, _wire: &W) {}
 
     /// Crystallization's band (`docs/CROSS-SHARD.md` §4 layer 4): whether
@@ -106,6 +107,18 @@ pub fn shard_at(x: f32, y: f32, half: f32, shard_count: usize) -> usize {
     let cell_w = 2.0 * half / cols as f32;
     let cell_h = 2.0 * half / rows as f32;
     region_at(x, y, half, (rows, cols), (cell_w, cell_h))
+}
+
+/// A preset's wire scale ([`GridPartition2::with_wire_scale`],
+/// [`GridPartition3::with_wire_scale`]): wire units per position unit, a
+/// positive finite number.
+fn checked_wire_scale(scale: f32) -> f32 {
+    assert!(
+        scale.is_finite() && scale > 0.0,
+        "a partition's wire scale (wire units per position unit) must be a \
+         positive finite number, got {scale}"
+    );
+    scale
 }
 
 /// The row-major region of `(x, y)` in a grid of `rows × cols` cells of

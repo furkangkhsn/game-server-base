@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use bevy_ecs::component::Component;
 
-use super::Partition;
+use super::{Partition, checked_wire_scale};
 use crate::space::Spatial;
 
 /// The six face steps, in the order [`GridPartition2`](super::GridPartition2)
@@ -32,7 +32,8 @@ const FACES: [[i32; 3]; 6] = [
 /// of a quarter of the smallest region edge inside every face. Reads any
 /// position component with an `f32` [`Spatial`] projection and any wire
 /// value with an `i32` one, in ONE unit ([`Spatial`]'s unit contract,
-/// checked in debug builds as in 2D).
+/// checked in debug builds as in 2D) — or in the wire's own unit, declared
+/// with [`Self::with_wire_scale`].
 ///
 /// The shape is the game's: the kit cannot know which axis is height,
 /// nor whether a world of 8 regions wants 2×2×2 or 4×1×2. A region owns
@@ -53,6 +54,8 @@ pub struct GridPartition3<P> {
     /// Whether the regions sharing only an edge or a corner are
     /// neighbours too ([`Self::with_diagonals`]).
     diagonals: bool,
+    /// Wire units per position unit ([`Self::with_wire_scale`]; 1).
+    wire_scale: f32,
     _pos: PhantomData<fn() -> P>,
 }
 
@@ -75,6 +78,7 @@ impl<P> GridPartition3<P> {
             edge,
             border: edge[0].min(edge[1]).min(edge[2]) / 4.0,
             diagonals: false,
+            wire_scale: 1.0,
             _pos: PhantomData,
         }
     }
@@ -92,6 +96,24 @@ impl<P> GridPartition3<P> {
     pub fn with_diagonals(mut self) -> Self {
         self.diagonals = true;
         self
+    }
+
+    /// The wire's unit: `scale` wire units per position unit — 2D's
+    /// [`with_wire_scale`](super::GridPartition2::with_wire_scale) on
+    /// three axes (the default, 1, changes nothing).
+    ///
+    /// # Panics
+    /// When `scale` is not a positive finite number.
+    #[must_use]
+    pub fn with_wire_scale(mut self, scale: f32) -> Self {
+        self.wire_scale = checked_wire_scale(scale);
+        self
+    }
+
+    /// A wire value in the position's unit.
+    #[inline]
+    fn unscale(&self, w: [i32; 3]) -> [f32; 3] {
+        w.map(|v| v as f32 / self.wire_scale)
     }
 
     /// Region `idx`'s grid slot `[x, y, z]`.
@@ -185,16 +207,15 @@ where
     }
 
     /// Within `border` of the region box, including the thin overlap
-    /// into it.
+    /// into it — the wire read at its scale.
     #[inline]
     fn admits(&self, idx: usize, wire: &W) -> bool {
-        let w = wire.spatial();
+        let w = self.unscale(wire.spatial());
         let b = self.border;
         let bounds = self.bounds(idx);
         (0..3).all(|axis| {
             let (lo, hi) = bounds[axis];
-            let v = w[axis] as f32;
-            v >= lo - b && v <= hi + b
+            w[axis] >= lo - b && w[axis] <= hi + b
         })
     }
 
@@ -209,19 +230,21 @@ where
         <Self as Partition<W>>::region_of(self, pos) == idx || outside < margin.min(self.border)
     }
 
-    /// The unit contract: the wire's projection lies within one border
-    /// margin of the position's on every axis (as in 2D).
+    /// The unit contract: the wire's projection, at the wire scale, lies
+    /// within one border margin of the position's on every axis (2D's).
     fn debug_check_wire(&self, pos: &P, wire: &W) {
         if cfg!(debug_assertions) {
             let p = pos.spatial();
             let w = wire.spatial();
-            let b = self.border;
+            let at = self.unscale(w);
+            let (b, s) = (self.border, self.wire_scale);
             assert!(
-                (0..3).all(|axis| (w[axis] as f32 - p[axis]).abs() <= b),
+                (0..3).all(|axis| (at[axis] - p[axis]).abs() <= b),
                 "GridPartition3: an entity at {p:?} has the wire projection {w:?}, \
-                 more than the border margin {b} away — the wire type's Spatial \
-                 must report the position's unit (admits compares it with the \
-                 region boxes)"
+                 {at:?} at the wire scale {s}, more than the border margin {b} \
+                 away — the wire type's Spatial must report the position's unit, \
+                 or the partition declare the wire's (with_wire_scale; admits \
+                 compares it with the region boxes)"
             );
         }
     }

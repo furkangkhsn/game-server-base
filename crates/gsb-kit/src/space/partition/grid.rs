@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use bevy_ecs::component::Component;
 
-use super::{Partition, grid_shape, region_at};
+use super::{Partition, checked_wire_scale, grid_shape, region_at};
 use crate::space::Planar;
 
 /// The 2D grid preset: a square map `[-half, half]²` on the ground plane
@@ -20,15 +20,18 @@ use crate::space::Planar;
 /// **One unit for both.** [`Partition::admits`] compares the WIRE
 /// value's projection with the region rectangles, which are in the
 /// POSITION's unit (`half` is). So the wire type's [`Planar`] must report
-/// the position's unit: a game that quantizes its wire finer than its
-/// position (centimetres, decimetres over metres) projects the wire back
-/// to the position's unit — integer division to whole units is enough,
-/// the margin being a quarter region wide. Otherwise the plain
-/// [`crate::sharded::ShardedRoom`]'s frame filter silently keeps the
-/// wrong part of every neighbour's strip (a 128 m margin reads as 12.8 m
-/// at decimetres). Debug builds catch it: [`Partition::debug_check_wire`]
-/// panics when an exported entity's wire projection lies more than one
-/// border margin from its position's.
+/// the position's unit — or the game declares its wire's unit with
+/// [`Self::with_wire_scale`]: a game that quantizes its wire finer than
+/// its position (centimetres, decimetres over metres) either projects
+/// the wire back to the position's unit (integer division to whole
+/// units is enough, the margin being a quarter region wide) or keeps
+/// its fine projection and sets the scale (100 for centimetres).
+/// Otherwise the plain [`crate::sharded::ShardedRoom`]'s frame filter
+/// silently keeps the wrong part of every neighbour's strip (a 128 m
+/// margin reads as 12.8 m at decimetres). Debug builds catch it:
+/// [`Partition::debug_check_wire`] panics when an exported entity's wire
+/// projection, divided by the scale, lies more than one border margin
+/// from its position's.
 pub struct GridPartition2<P> {
     shard_count: usize,
     rows: usize,
@@ -42,6 +45,8 @@ pub struct GridPartition2<P> {
     /// Whether the regions sharing only a corner are neighbours too (the
     /// 8-neighbourhood, [`Self::with_diagonals`]).
     diagonals: bool,
+    /// Wire units per position unit ([`Self::with_wire_scale`]; 1).
+    wire_scale: f32,
     _pos: PhantomData<fn() -> P>,
 }
 
@@ -63,6 +68,7 @@ impl<P> GridPartition2<P> {
             cell_h,
             border: cell_w.min(cell_h) / 4.0,
             diagonals: false,
+            wire_scale: 1.0,
             _pos: PhantomData,
         }
     }
@@ -82,6 +88,32 @@ impl<P> GridPartition2<P> {
     pub fn with_diagonals(mut self) -> Self {
         self.diagonals = true;
         self
+    }
+
+    /// The wire's unit: `scale` wire units per position unit — 100 for a
+    /// centimetre wire over metre positions, 10 for decimetres, 0.5 for
+    /// a wire in 2 m steps (coarser than the position). The two places
+    /// that read a wire value, [`Partition::admits`] (the frame filter)
+    /// and [`Partition::debug_check_wire`] (the unit check), divide its
+    /// projection by `scale` before comparing it with the rectangles;
+    /// regions, export and the band read the position and ignore it. The
+    /// default, 1, is the unit contract of [`Planar`] — the wire in the
+    /// position's unit — and changes nothing. Every shard of a room must
+    /// use the same scale; the wire bytes are the game's and never
+    /// change.
+    ///
+    /// # Panics
+    /// When `scale` is not a positive finite number.
+    #[must_use]
+    pub fn with_wire_scale(mut self, scale: f32) -> Self {
+        self.wire_scale = checked_wire_scale(scale);
+        self
+    }
+
+    /// A wire coordinate in the position's unit.
+    #[inline]
+    fn unscale(&self, v: i32) -> f32 {
+        v as f32 / self.wire_scale
     }
 
     /// Region `idx`'s rectangle `[x0, x1] × [y0, y1]`.
@@ -168,13 +200,13 @@ where
     }
 
     /// Within `border` of the region rectangle, including the thin
-    /// overlap into it.
+    /// overlap into it — the wire read at its scale.
     #[inline]
     fn admits(&self, idx: usize, wire: &W) -> bool {
-        let [x, y] = wire.planar();
+        let [x, y] = wire.planar().map(|v| self.unscale(v));
         let (x0, x1, y0, y1) = self.rect(idx);
         let b = self.border;
-        x as f32 >= x0 - b && x as f32 <= x1 + b && y as f32 >= y0 - b && y as f32 <= y1 + b
+        x >= x0 - b && x <= x1 + b && y >= y0 - b && y <= y1 + b
     }
 
     /// In the rectangle, or less than `margin` outside it on the worse
@@ -186,22 +218,25 @@ where
         <Self as Partition<W>>::region_of(self, pos) == idx || outside < margin.min(self.border)
     }
 
-    /// The unit contract (type docs): the wire's projection lies within
-    /// one border margin of the position's on both axes — a quantization
-    /// in the position's unit is off by at most a unit or so, a finer
-    /// unit is off by a factor, which exceeds the margin for any entity
-    /// farther than a fraction of a margin from the origin.
+    /// The unit contract (type docs): the wire's projection, at the
+    /// wire scale, lies within one border margin of the position's on
+    /// both axes — a quantization in the declared unit is off by at most
+    /// a unit or so, an undeclared finer unit is off by a factor, which
+    /// exceeds the margin for any entity farther than a fraction of a
+    /// margin from the origin.
     fn debug_check_wire(&self, pos: &P, wire: &W) {
         if cfg!(debug_assertions) {
             let [px, py] = pos.planar();
             let [wx, wy] = wire.planar();
-            let b = self.border;
+            let [x, y] = [wx, wy].map(|v| self.unscale(v));
+            let (b, s) = (self.border, self.wire_scale);
             assert!(
-                (wx as f32 - px).abs() <= b && (wy as f32 - py).abs() <= b,
+                (x - px).abs() <= b && (y - py).abs() <= b,
                 "GridPartition2: an entity at ({px}, {py}) has the wire projection \
-                 ({wx}, {wy}), more than the border margin {b} away — the wire \
-                 type's Planar must report the position's unit (admits compares \
-                 it with the region rectangles)"
+                 ({wx}, {wy}), ({x}, {y}) at the wire scale {s}, more than the \
+                 border margin {b} away — the wire type's Planar must report the \
+                 position's unit, or the partition declare the wire's \
+                 (with_wire_scale; admits compares it with the region rectangles)"
             );
         }
     }

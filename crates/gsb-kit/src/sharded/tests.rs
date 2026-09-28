@@ -36,6 +36,7 @@ mod team;
 mod team_actors;
 mod volume;
 mod volume_actors;
+mod wire_scale;
 
 /// The spatial composite over the same instantiation, with the kit's 2D
 /// grid AOI.

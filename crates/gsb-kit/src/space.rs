@@ -44,11 +44,14 @@ pub use volume::Grid3;
 /// value compares them in one unit: [`GridPartition2`] tests a
 /// neighbour's wire value against region rectangles laid out in the
 /// position's unit. So a game's position `Planar` and wire `Planar` must
-/// report the SAME unit — a wire quantized finer than the position
-/// (centimetres over metres) projects back to the position's unit (see
-/// [`GridPartition2`]; debug builds check it). A preset reading only one
-/// of the two ([`Grid2`]: the wire; the vision and sector presets: the
-/// position) takes its own parameters in that value's unit.
+/// report the SAME unit — or the partition must be told the ratio: a
+/// wire quantized finer than the position (centimetres over metres)
+/// either projects back to the position's unit or keeps its own and
+/// declares it with [`GridPartition2::with_wire_scale`] (debug builds
+/// check it). A preset reading only one of the two ([`Grid2`]: the
+/// wire; the vision and sector presets: the position) takes its own
+/// parameters in that value's unit — a centimetre wire's 64 m AOI cell
+/// is `Grid2::new(6400.0)`, so the AOI presets need no scale.
 pub trait Planar {
     /// The coordinate type: `i32` for a quantized wire value, `f32` for
     /// a simulation position.
@@ -72,8 +75,9 @@ pub trait Planar {
 ///
 /// **The unit.** As [`Planar`]'s: [`GridPartition3`] reads both the
 /// position and the wire value, so the two `Spatial` projections must
-/// report the SAME unit (debug builds check it); [`Grid3`] reads only
-/// the wire and takes its cell size in the wire's unit.
+/// report the SAME unit, or the wire's is declared with
+/// [`GridPartition3::with_wire_scale`] (debug builds check it); [`Grid3`]
+/// reads only the wire and takes its cell size in the wire's unit.
 pub trait Spatial {
     /// The coordinate type: `i32` for a quantized wire value, `f32` for
     /// a simulation position.
