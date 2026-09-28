@@ -16,7 +16,7 @@ use crate::id::{ConnectionId, RoomId};
 use crate::metrics::{MetricReport, MetricSink, MetricsCollector, MetricsEvent};
 use crate::registry::actor::Registry;
 use crate::registry::{
-    CloseRequest, RegistryMsg, RoomEntry, RoomFactory, Seat, ShardGroup, TeamHub,
+    CloseRequest, LeaveRequest, RegistryMsg, RoomEntry, RoomFactory, Seat, ShardGroup, TeamHub,
 };
 use crate::room::RoomConfig;
 use crate::shard::{ShardMsg, TeamExport};
@@ -98,11 +98,12 @@ fn queue(tx: &Mailbox<RegistryMsg>, msg: RegistryMsg) {
 /// Behind the `Shutdown`: the live incarnation's export counts, a stale
 /// or unknown room's does not (the hub drops those anyway); every join
 /// counts and its reply drops; a connection opened behind the stop is
-/// told to stop; the rest — a transport death, a leave, a dispatcher's
-/// echo, a room's close verdict and despawn report — counts nowhere
-/// (the stop's own teardown carries them out). The final sample carries
-/// the counts and is the registry's last word: its sender is dropped
-/// right after, so the channel closes behind it.
+/// told to stop; a room's verdicts — a close, a leave, a despawn report —
+/// are lost verdicts (F56), sent as one `VerdictsLost`; the rest — a
+/// transport death, a client's leave, a dispatcher's echo — counts
+/// nowhere (the stop's own teardown carries them out). The final sample
+/// carries the counts and is the registry's last word: its sender is
+/// dropped right after, so the channel closes behind it.
 #[tokio::test]
 async fn what_waits_behind_the_shutdown_is_counted_by_kind() {
     let (ticker, _task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
@@ -154,19 +155,37 @@ async fn what_waits_behind_the_shutdown_is_counted_by_kind() {
             room: RoomId(5),
         },
     );
+    queue(
+        &tx,
+        RegistryMsg::LeaveConn(LeaveRequest {
+            conn: c1,
+            room: RoomId(5),
+            entity: 1,
+            park: None,
+        }),
+    );
     tokio::time::timeout(WAIT, reg.run())
         .await
         .expect("the registry stops on its Shutdown");
 
     let mut last = None;
+    let mut lost = Vec::new();
     while let Some(ev) = tokio::time::timeout(WAIT, samples.recv())
         .await
         .expect("the channel closes once the registry is gone")
     {
-        if let MetricsEvent::Registry(s) = ev {
-            last = Some(s);
+        match ev {
+            MetricsEvent::Registry(s) => last = Some(s),
+            MetricsEvent::VerdictsLost(v) => lost.push(v),
+            _ => {}
         }
     }
+    let [v] = lost[..] else {
+        panic!("one VerdictsLost: {lost:?}");
+    };
+    assert_eq!(v.closes.get(ServerClose::IdleInput), 1, "the close verdict");
+    assert_eq!(v.closes.total(), 1);
+    assert_eq!((v.leaves, v.detach_despawns), (1, 1));
     let s = last.expect("the registry's final sample");
     assert_eq!(
         (s.joins_unread, s.team_exports_unread),

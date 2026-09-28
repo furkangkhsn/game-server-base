@@ -211,6 +211,14 @@ pub struct RegistryReport {
     /// of [`Self::joins_unread`]: a join is one or the other, never
     /// both. Counted by the collector from the connections' events.
     pub joins_unsent: u64,
+    /// Session verdicts (a room's close, leave or detach-despawn report)
+    /// the server's stop kept from being carried out, wherever each was
+    /// caught (see [`VerdictsLost`], [`MetricsEvent::VerdictsLost`]),
+    /// cumulative (F56). A close verdict here is one
+    /// [`NetReport::server_closes`] never booked, under the same reason.
+    /// Counted by the collector from the rooms', the registry's and the
+    /// connections' events.
+    pub verdicts_lost: VerdictsLost,
 }
 
 /// Network slice of a report (cumulative since startup).

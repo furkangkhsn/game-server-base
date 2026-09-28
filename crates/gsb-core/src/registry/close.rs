@@ -49,6 +49,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::channel::Mailbox;
 use crate::conn::ServerClose;
 use crate::id::{ConnectionId, EntityId, RoomId};
+use crate::metrics::VerdictsLost;
 use crate::registry::RegistryMsg;
 
 /// A room's request to close one of its (former) members' connections:
@@ -121,45 +122,75 @@ pub struct LeaveRequest {
 /// counted drop recovers nothing. The queue is bounded by membership: a
 /// member's membership ends once, so it asks once, and a saturated
 /// registry drains it as soon as it catches up. A CLOSED mailbox (the
-/// registry is gone — the process is coming down) drops the request:
-/// there is no table left and the teardown cascade closes every
-/// connection anyway. The detach-despawn reports (`despawn_reports`)
-/// follow the same two rules.
+/// registry has stopped — its `Shutdown` arm closed it, F53) drops the
+/// request: there is no table left and the teardown cascade closes every
+/// connection anyway. The detach-despawn reports (`despawn_reports`,
+/// [`flush_despawn_reports`]) follow the same two rules.
 ///
-/// The CLOSED drop is deliberately not counted (BACKLOG B57): the
-/// registry's mailbox closes only when the registry has exited, and it
-/// exits through its `Shutdown` arm, which stops every room on the same
-/// pass — so the drop happens only while the process comes down, when
-/// the request's whole purpose (the socket, the row) is being torn down
-/// by the cascade anyway, and the room's remaining samples race the
-/// collector's own end. A counter there would read "a shutdown caught a
-/// pending request": no operational question it answers.
-pub(crate) fn flush_close_requests(registry: &Mailbox<RegistryMsg>, queue: &mut Vec<CloseRequest>) {
+/// The CLOSED drop is counted into `lost` (BACKLOG F56; B57 had left it
+/// uncounted "because everything is torn down"): the verdict is lost —
+/// the client gets the stop's `ERROR` 14 instead of its `ERROR` 9, and
+/// `server_closes` never books its reason. The room sends what it
+/// counted at its stop, with what its queues still hold then
+/// (`crate::metrics::VerdictsLost`).
+pub(crate) fn flush_close_requests(
+    registry: &Mailbox<RegistryMsg>,
+    queue: &mut Vec<CloseRequest>,
+    lost: &mut VerdictsLost,
+) {
     if queue.is_empty() {
         return;
     }
     for req in std::mem::take(queue) {
-        if let Err(TrySendError::Full(RegistryMsg::CloseConn(req))) =
-            registry.try_send(RegistryMsg::CloseConn(req))
-        {
-            queue.push(req);
+        match registry.try_send(RegistryMsg::CloseConn(req)) {
+            Err(TrySendError::Full(RegistryMsg::CloseConn(req))) => queue.push(req),
+            Err(TrySendError::Closed(RegistryMsg::CloseConn(req))) => lost.close(req.cause),
+            _ => {}
         }
     }
 }
 
 /// [`flush_close_requests`] for [`LeaveRequest`]s: the same rules (Full
-/// keeps the request, in order, for the next tick; Closed drops it).
-pub(crate) fn flush_leave_requests(registry: &Mailbox<RegistryMsg>, queue: &mut Vec<LeaveRequest>) {
+/// keeps the request, in order, for the next tick; Closed drops it and
+/// counts it into `lost`).
+pub(crate) fn flush_leave_requests(
+    registry: &Mailbox<RegistryMsg>,
+    queue: &mut Vec<LeaveRequest>,
+    lost: &mut VerdictsLost,
+) {
     if queue.is_empty() {
         return;
     }
     for req in std::mem::take(queue) {
-        if let Err(TrySendError::Full(RegistryMsg::LeaveConn(req))) =
-            registry.try_send(RegistryMsg::LeaveConn(req))
-        {
-            queue.push(req);
+        match registry.try_send(RegistryMsg::LeaveConn(req)) {
+            Err(TrySendError::Full(RegistryMsg::LeaveConn(req))) => queue.push(req),
+            Err(TrySendError::Closed(_)) => lost.leaves += 1,
+            _ => {}
         }
     }
+}
+
+/// The detach-despawn reports of `room` ([`RegistryMsg::DetachDespawned`]
+/// — a detach that ended in a despawn hands its row back): the same rules
+/// as [`flush_close_requests`] (Full keeps the report, in order; Closed
+/// drops it and counts it into `lost`). One helper for the room and the
+/// shard actor.
+pub(crate) fn flush_despawn_reports(
+    registry: &Mailbox<RegistryMsg>,
+    room: RoomId,
+    queue: &mut Vec<ConnectionId>,
+    lost: &mut VerdictsLost,
+) {
+    queue.retain(
+        |&conn| match registry.try_send(RegistryMsg::DetachDespawned { conn, room }) {
+            Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Closed(_)) => {
+                lost.detach_despawns += 1;
+                false
+            }
+            Ok(()) => false,
+        },
+    );
 }
 
 #[cfg(test)]

@@ -20,7 +20,8 @@
 
 use super::proto::{self, metric::Data};
 use crate::metrics::export::families::{
-    self, Kind, LOGIC_DROPPED, LOGIC_MAX_HELP, LOGIC_SUM_HELP, RoomValue, SERVER_CLOSES,
+    self, CLOSE_VERDICTS_LOST, Kind, LOGIC_DROPPED, LOGIC_MAX_HELP, LOGIC_SUM_HELP, RoomValue,
+    SERVER_CLOSES,
 };
 use crate::metrics::*;
 
@@ -65,6 +66,10 @@ pub fn request(
         for f in &families::REGISTRY {
             m.push(scalar(f.name, f.kind, f.help, (f.get)(reg), at));
         }
+        let lost = reg.verdicts_lost.closes.iter();
+        let points = lost.map(|(why, n)| int_point(vec![attr("reason", why.label())], n, at, true));
+        let (name, help) = CLOSE_VERDICTS_LOST;
+        m.push(sum(name, help, points.collect()));
     }
     for f in &families::NET {
         m.push(scalar(f.name, f.kind, f.help, (f.get)(&report.net), at));

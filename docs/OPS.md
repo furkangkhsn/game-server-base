@@ -635,14 +635,13 @@ max_detach_hold_secs = "off"
   oturum sonları arasında sayar (altın metinler bu iki HELP kadar). Loadgen telinde `GSMP` (registry
   bölümünde `closes`'tan sonra); `RESULT`'ta yok (satır registry
   sayaçlarını taşımıyor).
-  **Sayılmayan, bilerek:** odanın registry'ye kapatma/ayrılma isteği ve
-  detach-despawn raporu registry'nin posta kutusu KAPALIYKEN düşer —
-  kutu yalnız registry `Shutdown` koluyla çıktığında kapanır, o kol da
-  her odayı aynı geçişte durdurur; düşüş yalnız süreç inerken olur,
-  isteğin amacını (soket, satır) kapanış çağlayanı zaten yapar ve odanın
-  kalan örnekleri toplayıcının sonuyla yarışır. Sayaç orada "kapanış
-  bekleyen bir isteği yakaladı"dan başka bir şey söylemezdi
-  (`registry/close.rs`).
+  **B57'nin "sayılmayan, bilerek" kararı F56'da değişti:** odanın
+  registry'ye kapatma/ayrılma isteği ve detach-despawn raporu
+  registry'nin posta kutusu KAPALIYKEN düşer — kutu yalnız registry
+  `Shutdown` kolunda kapanır. B57 bunu "çağlayan zaten yapar" diye
+  saymıyordu; ama hüküm kaybolur (istemci `ERROR 9` yerine `ERROR 14`
+  alır, `server_closes` gerekçeyi yazmaz). Artık sayılıyor: aşağıda
+  "duruşun yuttuğu hükümler (F56)".
 - **Oda kapsamı: duran odanın/shard'ın oturum dışı kalanları (B68, sayım
   turu 4).** Oda satırında `metrics_dropped=`'den sonra (mantık
   sayaçlarından önce) dokuz anahtar, aile tablosunda oturum ailelerinden
@@ -752,8 +751,8 @@ max_detach_hold_secs = "off"
   tuttuğu üyeliği detach ettirir, her oda durur; dağıtıcı yankıları,
   `RoomDied` (panik bekçide sayılır, B67), `Authed` — teardown'un
   düşürdüğü tabloları günceller; odanın hükümleri (`CloseConn`,
-  `LeaveConn`, `DetachDespawned`) — oda üyeliği zaten bitirdi, teardown
-  her bağlantıya dur der (kapalı retleri de bu yüzden sayılmıyor, B57);
+  `LeaveConn`, `DetachDespawned`) F53'te sayılmıyordu — F56'dan beri
+  kayıp hüküm olarak sayılıyor (aşağıda);
   kontrol düzlemi istekleri — düşen yanıt çağırana hatadır. Sayılar
   registry'nin SON örneğinde: `Shutdown` kolu teardown'dan önce onu
   `channel::post` ile gönderir (dolu kanalda spawn'lu gönderici kendi
@@ -762,6 +761,38 @@ max_detach_hold_secs = "off"
   Periyodik örneklerde ikisi de 0. Tablo göstergeleri (`rooms`, `conns`)
   son örnekte teardown'dan ÖNCEKİ değerlerdir (önceki örneklerle aynı
   anlam).
+- **Registry kapsamı: duruşun yuttuğu hükümler (F56; B57'nin kararı
+  yeniden).** Registry satırının sonunda (`joins_unsent=`'ten sonra)
+  `close_verdicts_lost=<toplam>`, gerekçe başına bir
+  `close_verdict_lost_<gerekçe>=` (sıfırlar dahil, net satırının
+  `server_close_<gerekçe>=` yazımı), `leave_verdicts_lost=`,
+  `detach_despawns_lost=`; aile tablosunda
+  `gsb_registry_leave_verdicts_lost_total`,
+  `gsb_registry_detach_despawns_lost_total` ve etiketli
+  `gsb_registry_close_verdicts_lost_total{reason}` (`ServerClose`
+  kümesi, `gsb_net_server_closes_total` ile aynı etiketler); loadgen
+  telinde `GSNE` (registry bölümünde `joins_unsent`'ten sonra: 13
+  gerekçe, sonra ikisi); `RESULT`'ta yok. Odanın/shard'ın registry'ye
+  verdiği hüküm — kapatma (`CloseConn`: oyunun atması, girdi-boşta
+  tavanının `disconnect`'i), ayrılma (`LeaveConn`: tavanın varsayılan
+  `leave_room`'u), detach-despawn raporu (`DetachDespawned`) — duruşta
+  şu yerlerden TAM BİRİNDE yakalanır ve orada sayılır: odanın
+  kuyruğunda (registry kutusu doluydu) duruşa kalmış → odanın/shard'ın
+  `finish`'i; registry'nin KAPALI kutusu reddetti → odanın flush'ı;
+  registry kutusunda `Shutdown`'ın arkasında okunmadı → registry'nin
+  boşaltması (F53); işlendi ama bağlantının kutusunda duruşun
+  `ConnIn::Shutdown`'ının ARKASINDA kaldı → bağlantı aktörünün sonu (bu
+  ayak her sunucu hükmü için: pompanınki, yok edilen odanınki de; oturum
+  başına yalnız ilki). Her yer saydığını tek
+  `MetricsEvent::VerdictsLost` ile (`channel::post`) gönderir, toplayıcı
+  registry diliminde toplar. Kapatma hükmü `server_closes`'un hiç
+  yazmadığı aynı gerekçeyle sayılır: `server_closes{r}` +
+  `close_verdicts_lost{r}` = kararı verilen oturum sonu. Hükmün etkisi
+  boş olacak olsa da (bağlantısı zaten gitmiş) sayılır — sayaç hükmü
+  sayar; odanın kapalı-kutu reddi tabloya bakamaz, registry de aynı
+  ölçütle sayar. **Kalan (F57):** registry işlediği hükmü bağlantıya
+  spawn'lu göndericiyle yollar; o gönderim bağlantı kutusunu kapattıktan
+  sonra varırsa reddedilir, sayılmaz.
 - **Registry kapsamı: kapalı registry'nin reddettiği katılmalar (F54).**
   Registry satırının sonunda (`team_exports_unread=`'den sonra)
   `joins_unsent=` ve aile tablosunda (`REGISTRY`)

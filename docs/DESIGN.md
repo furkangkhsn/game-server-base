@@ -2696,12 +2696,14 @@ olmayacaksa ve başka hiçbir sayaç onu görmüyorsa sayılır.
   dağıtıcıya tuttuğu üyeliği detach ettirir ve her oda durur; dağıtıcı
   yankıları (`SpawnDone`, `SpawnFailed`, `LeaveDone`, `DetachDone`,
   `OpsClosed`), `RoomDied` (panik bekçide sayılır, B67) ve `Authed`
-  yalnız teardown'un düşürdüğü tabloları günceller; odanın hükümleri
-  (`CloseConn`, `LeaveConn`, `DetachDespawned`): oda üyeliği zaten
-  bitirdi, teardown her bağlantıya dur der — kapalı retleri de aynı
-  gerekçeyle sayılmıyor (B57); kontrol düzlemi istekleri (`CreateRoom`,
+  yalnız teardown'un düşürdüğü tabloları günceller; kontrol düzlemi
+  istekleri (`CreateRoom`,
   `DestroyRoom`, `RoomStatus`): düşen yanıt çağırana hatadır. Eşleşme
   tümdür (joker kol yok): yeni bir mesaj türü burada karar ister.
+- **Odanın hükümleri** (`CloseConn`, `LeaveConn`, `DetachDespawned`):
+  F53 onları da "teardown yapar" diye saymıyordu (B57'nin gerekçesi);
+  F56'dan beri kayıp hüküm olarak sayılıyor (aşağıda "Duruşun yuttuğu
+  hükümler").
 
 Sayılar registry'nin SON örneğinde gider: `Shutdown` kolu sayımdan sonra,
 teardown'dan (`on_shutdown`) önce örneği `channel::post` ile gönderir —
@@ -2723,6 +2725,64 @@ kapatmak onları göndericide reddeder — sayılacak bir şey taşımıyorlar. 
 "okunmamış mesaj" sayacı* — karışık anlam; türlerin çoğu kayıp
 taşımıyor. (4) *Son örneği `try_send` ile göndermek* — dolu kanalda
 düşer; sayım kaybolurdu.
+
+**Duruşun yuttuğu hükümler (F56; B57'nin kararı yeniden).** Oda/shard
+üyeliği kendi başına bitirince registry'ye hüküm verir: kapatma
+(`CloseConn` — oyunun atması E8, girdi-boşta tavanının `disconnect`'i
+E6), ayrılma (`LeaveConn` — tavanın varsayılan `leave_room`'u, B40),
+detach-despawn raporu (`DetachDespawned`). B57 duruşta kapalı registry
+kutusunun reddettiği hükümleri "çağlayan zaten her şeyi söker" diye
+saymadı, F53 kutuda okunmayanları aynı gerekçeyle saymadı. Oysa hüküm
+kaybolur: istemci hükmün `ERROR 9`'u ve gerekçesi yerine duruşun
+`ERROR 14`'ünü alır, `server_closes{idle_input|kicked}` hükmü hiç
+yazmaz, satır yerleşmez. Artık sayılıyor. Bir hüküm duruşta şu
+yerlerden TAM BİRİNDE yakalanır; her yer kendi yakaladığını sayar:
+
+1. **Odanın kuyruğunda** — registry kutusu doluydu, istek sonraki
+   tick'i beklerken oda durdu: odanın/shard'ın `finish`'i
+   (`RoomCounters::count_unsent_verdicts`).
+2. **Registry'nin kapalı kutusu reddetti** — `Shutdown` kolu kutuyu
+   kapattı (F53): odanın flush'ı (`flush_close_requests`,
+   `flush_leave_requests`, `flush_despawn_reports`; `Closed` kolu artık
+   düşürür VE sayar).
+3. **Registry kutusunda `Shutdown`'ın arkasında** — boşaltma
+   (`registry/actor/run/leftovers.rs`).
+4. **Bağlantının kutusunda duruşun `ConnIn::Shutdown`'ının arkasında** —
+   registry hükmü işledi ama bağlantı önce duruşu okudu: bağlantı
+   aktörünün sonu (`abandon_inbox`). Bu ayak her sunucu hükmü için
+   geçerli (pompanın `idle_timeout`'u, yok edilen odanın `RoomGone`'u da)
+   ve oturum başına yalnız İLKİ sayılır — oturum tek gerekçe yazar;
+   bir hükmün ya da istemcinin kendi sonunun arkasındaki hüküm hiçbir
+   şey kaybettirmez (oturum zaten bitti).
+
+Her yer saydığını tek `MetricsEvent::VerdictsLost` ile gönderir
+(durdurma-mesajı deyimi; oda/shard son örneğinden ÖNCE, hiçbir şey
+kaybolmadıysa hiç), toplayıcı registry diliminde toplar
+(`RegistryReport::verdicts_lost`, `metrics::VerdictsLost`): kapatmalar
+gerekçeye göre (`close_verdicts_lost{reason}`, `server_closes` ile aynı
+etiket kümesi — ikisinin toplamı kararı verilen oturum sonu), ayrılmalar
+ve detach-despawn raporları ayrı. Registry boşaltması tabloya bakmaz:
+etkisi boş olacak hüküm (bağlantısı zaten gitmiş) de sayılır, çünkü
+odanın kapalı-kutu reddi tabloya bakamaz — sayaç HÜKMÜ sayar, etkiyi
+değil; iki yer aynı ölçütle sayar. Registry dilimi, çünkü hükmün
+taşıyıcısı registry ve sebep onun duruşu (F53/F54 ile yan yana).
+
+**Kalan (F57):** 4. ayağın bir ucu. Registry işlediği kapatma hükmünü
+bağlantıya spawn'lu gönderimle yollar; duruşun `ConnIn::Shutdown`'ı da
+spawn'lu gider. Hüküm çoğunlukla önde varır, ama arkada varıp bağlantı
+kutusunu kapattıktan SONRA gelirse reddedilir ve sayılmaz (gönderici
+oturumun duruşla mı istemciyle mi bittiğini bilemez).
+
+Elenenler: (1) *Yer başına ayrı aile* (`…_unread`, `…_refused`,
+`…_unsent`) — aynı kayıp, F55'in şikâyet ettiği zamanlamaya bağlı
+bölünme; tek aile her hükmü bir kez sayar. (2) *Yalnız
+`idle_input`/`kicked` için iki sayaç* — `CloseRequest::cause` genel bir
+`ServerClose`; 4. ayak her gerekçeyi görür. (3) *Oda sayımını odanın
+son örneğine (`StopCounts`) koymak* — kayıp registry'nin; registry
+boşaltmasının ve bağlantının saydığıyla tek ailede toplanamazdı.
+Kilit: `registry::close::tests`, `room::tests::idle::stop`,
+`shard::tests::idle::stop`, `registry::actor::run::leftovers::tests`,
+`conn_counts::stopped`.
 
 **Kapalı registry'ye katılma (F54).** `Shutdown` kolu kutuyu kapattıktan
 sonra hâlâ yaşayan bir bağlantıya gelen JOIN'in `SpawnPlayer` gönderimi
@@ -3258,6 +3318,7 @@ durdurulamaz.
 | registry | `team_relays_dropped_full`, `team_relays_dropped_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_team_relays_dropped_{full,closed}_total`, loadgen telinde GSMW) | sharded odanın takım hub'ı (CROSS-SHARD §8b.2) kaç import'u hedef shard'a kuyruklayamadı — kutusu DOLU (yetişemiyor; kaynağın sonraki export'u kümeyi yeniden taşır) mu, KAPALI (durmuş/ölmüş) mu? Önceden yalnız `team_hub_summary` log satırında, ikisi karışık. Registry ret olduğunda örneğini hemen gönderir (röle tablo değiştirmez). B72 |
 | registry | `joins_refused_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_refused_closed_total`, loadgen telinde GSMY) | kaç katılmayı (resume denemeleri dahil) oda kutusu KAPALI olduğu için reddetti — oda/shard durmuş ya da ölmüş, op'u hiç görmedi, istemci `RoomGone` aldı? Dağıtıcının `MetricsEvent::JoinRefusedClosed`'ı (registry'yi atlar: bütün sunucunun duruşunda registry önce çıkar). Alınıp duruşta düşürülen katılma odanın `joins_unprocessed`/`resumes_unprocessed`'idir, bu değil. B75 |
 | registry | `joins_unread`, `team_exports_unread` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_{joins,team_exports}_unread_total`, loadgen telinde GSNC; yalnız son örnekte) | registry duruşta kutusunda neyi OKUMADAN bıraktı? `Shutdown`'ın arkasında kalan katılmalar (yanıtı düştü, istemci ERROR aldı) ve canlı sharded odanın takım export'ları (shard `team_exports`'ta saydı, hub rölelemedi). Diğer türler kayıp taşımıyor (§9 "Registry'nin kutusunda kalanlar"). F53 |
+| registry | `close_verdicts_lost{reason}`, `leave_verdicts_lost`, `detach_despawns_lost` (kümülatif; registry satırının sonunda `close_verdicts_lost=` + gerekçe başına `close_verdict_lost_<gerekçe>=`, Prometheus'ta `gsb_registry_close_verdicts_lost_total{reason}` / `gsb_registry_{leave_verdicts,detach_despawns}_lost_total`, loadgen telinde GSNE) | odaların hangi hükümlerini (kapatma — gerekçeye göre —, ayrılma, detach-despawn raporu) sunucunun duruşu yuttu? Odanın kuyruğunda kalan, registry'nin kapalı kutusunun reddettiği, registry kutusunda okunmayan, bağlantının kutusunda duruşun arkasında kalan; her biri tam bir yerde. `server_closes{r}` + `close_verdicts_lost{r}` = kararı verilen oturum sonu. F56 |
 | registry | `joins_unsent` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_unsent_total`, loadgen telinde GSND) | kaç katılmayı (resume denemeleri dahil) registry'nin KAPALI kutusu reddetti — registry durmuştu, katılma hiç kuyruklanmadı, istemci `ERROR` "registry gone" aldı? Bağlantı aktörünün `MetricsEvent::JoinUnsent`'i. `joins_unread`'in kapalı eşi; bir katılma ikisinden yalnız birinde. F54 |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif; B55'ten beri yalnız oyun-bandı girdisi)
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |

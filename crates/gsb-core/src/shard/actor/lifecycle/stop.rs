@@ -7,7 +7,7 @@ use std::hash::Hash;
 
 use tracing::{debug, warn};
 
-use crate::room::{Held, send_final};
+use crate::room::{Held, send_final, send_verdicts_lost};
 use crate::shard::actor::ShardActor;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
@@ -60,6 +60,14 @@ where
         // inbox's and the deferred queue's messages, the effects in
         // flight.
         self.count_leftovers();
+        // The verdicts still queued for the registry (F56): lost with the
+        // ones its closed mailbox refused, sent before the final sample.
+        self.m.count_unsent_verdicts(
+            &mut self.close_requests,
+            &mut self.leave_requests,
+            &mut self.despawn_reports,
+        );
+        send_verdicts_lost(&self.metrics, &self.m.verdicts_lost);
         // The stop ends every session this shard holds: count what they
         // take along, as a session end does (B62), then hand the
         // collector the final sample.

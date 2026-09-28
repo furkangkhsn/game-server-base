@@ -20,7 +20,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 20] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 22] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -146,5 +146,19 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 20] = [
         Kind::Counter,
         "Joins (resume attempts included) a connection could not hand to the registry because its mailbox was already closed (the registry had stopped): never queued, the client got an ERROR, cumulative.",
         |r| r.joins_unsent,
+    ),
+    // F56: the session verdicts the stop kept from being carried out (the
+    // close verdicts are the labeled `CLOSE_VERDICTS_LOST` family).
+    reg(
+        "gsb_registry_leave_verdicts_lost_total",
+        Kind::Counter,
+        "Memberships a room ended of a connection that stays open (the input-idle ceiling's leave) that the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox; the row was never settled, cumulative.",
+        |r| r.verdicts_lost.leaves,
+    ),
+    reg(
+        "gsb_registry_detach_despawns_lost_total",
+        Kind::Counter,
+        "Detaches that ended in a despawn whose report (the parked row's release) the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox, cumulative.",
+        |r| r.verdicts_lost.detach_despawns,
     ),
 ];

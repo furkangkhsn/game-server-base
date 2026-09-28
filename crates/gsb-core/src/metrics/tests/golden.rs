@@ -68,6 +68,12 @@
 //! after `gsb_registry_team_exports_unread_total`. And F55's two HELP
 //! changes: `gsb_room_{leaves,detaches}_unprocessed_total` say they are
 //! the stop's ledger of what it held (a refused op is counted nowhere).
+//! F56's registry-scope `close_verdicts_lost=` with one
+//! `close_verdict_lost_<reason>=` per reason, `leave_verdicts_lost=` and
+//! `detach_despawns_lost=` after `joins_unsent=`, with
+//! `gsb_registry_{leave_verdicts,detach_despawns}_lost_total` after
+//! `gsb_registry_joins_unsent_total` and the labeled
+//! `gsb_registry_close_verdicts_lost_total{reason}` after them.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -114,6 +120,24 @@ pub(super) fn golden_report() -> MetricReport {
     for _ in 0..8 {
         acc.apply(MetricsEvent::JoinUnsent);
     }
+    // Session verdicts the stop kept from being carried out (F56), from
+    // two places: three kicks and a leave, two idle closes and five
+    // despawn reports.
+    let mut lost = VerdictsLost {
+        leaves: 1,
+        ..VerdictsLost::default()
+    };
+    for why in [ServerClose::Kicked; 3] {
+        lost.close(why);
+    }
+    acc.apply(MetricsEvent::VerdictsLost(lost));
+    let mut lost = VerdictsLost {
+        detach_despawns: 5,
+        ..VerdictsLost::default()
+    };
+    lost.close(ServerClose::IdleInput);
+    lost.close(ServerClose::IdleInput);
+    acc.apply(MetricsEvent::VerdictsLost(lost));
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

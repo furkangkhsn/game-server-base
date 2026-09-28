@@ -25,9 +25,10 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::channel::post;
+use crate::channel::{Mailbox, post};
 use crate::id::{ConnectionId, PlayerId};
-use crate::metrics::{MetricsEvent, RoomSample};
+use crate::metrics::{MetricsEvent, RoomSample, VerdictsLost};
+use crate::registry::{CloseRequest, LeaveRequest};
 use crate::room::{RoomConn, RoomCounters, drop_unread};
 use crate::rpc::RpcReply;
 
@@ -64,6 +65,36 @@ impl RoomCounters {
 
 /// Hand the collector a stopping actor's final sample (see the module
 /// docs): never dropped for a full channel, never awaited.
-pub(crate) fn send_final(metrics: &crate::channel::Mailbox<MetricsEvent>, sample: RoomSample) {
+pub(crate) fn send_final(metrics: &Mailbox<MetricsEvent>, sample: RoomSample) {
     post(metrics, MetricsEvent::RoomFinal(sample));
+}
+
+impl RoomCounters {
+    /// The session verdicts a stopping room or shard still holds for the
+    /// registry (BACKLOG F56): the close and leave requests and the
+    /// detach-despawn reports its flushes kept for a full mailbox. The
+    /// stop ends the retrying, so each is a verdict never carried out —
+    /// counted by kind, the close by its reason, with the ones the
+    /// registry's closed mailbox refused (`crate::registry::close`).
+    pub(crate) fn count_unsent_verdicts(
+        &mut self,
+        closes: &mut Vec<CloseRequest>,
+        leaves: &mut Vec<LeaveRequest>,
+        despawns: &mut Vec<ConnectionId>,
+    ) {
+        for req in closes.drain(..) {
+            self.verdicts_lost.close(req.cause);
+        }
+        self.verdicts_lost.leaves += leaves.drain(..).count() as u64;
+        self.verdicts_lost.detach_despawns += despawns.drain(..).count() as u64;
+    }
+}
+
+/// Hand the collector the session verdicts a stop found lost (F56; a
+/// room's, a shard's or the registry's), stop-message idiom like the
+/// final sample — nothing at all when there are none.
+pub(crate) fn send_verdicts_lost(metrics: &Mailbox<MetricsEvent>, lost: &VerdictsLost) {
+    if !lost.is_empty() {
+        post(metrics, MetricsEvent::VerdictsLost(*lost));
+    }
 }

@@ -27,6 +27,13 @@ impl ServerCloses {
         *slot = slot.saturating_add(1);
     }
 
+    /// Add another set, reason by reason.
+    pub fn add_all(&mut self, o: &Self) {
+        for (a, b) in self.0.iter_mut().zip(o.0) {
+            *a = a.saturating_add(b);
+        }
+    }
+
     /// The count for one reason.
     pub fn get(&self, reason: ServerClose) -> u64 {
         self.0[reason.index()]

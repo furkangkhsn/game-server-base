@@ -1049,7 +1049,14 @@ soketi kapatır — bildirim kapanıştan önce iner.
 **Dolu posta kutusu kuralı: sonraki tick'te yeniden dene, düşürme.**
 Registry posta kutusu DOLUYSA istek odanın kuyruğunda (sırasıyla) kalır
 ve sonraki tick'te yeniden denenir; KAPALIYSA (registry gitti — süreç
-iniyor) düşer. `DetachDespawned` raporlarının kuralının aynısı.
+iniyor) düşer. `DetachDespawned` raporlarının kuralının aynısı. Düşen
+hüküm F56'dan beri sayılır — istemci `ERROR 9` yerine duruşun
+`ERROR 14`'ünü alır, `server_closes{reason="idle_input"}` onu yazmaz:
+`gsb_registry_close_verdicts_lost_total{reason="idle_input"}` (ayrılma
+isteği `gsb_registry_leave_verdicts_lost_total`); duruşta odanın
+kuyruğunda kalan, registry kutusunda okunmayan ve bağlantının kutusunda
+duruşun arkasında kalan hüküm de aynı ailede, her biri bir kez (DESIGN
+§9 "Duruşun yuttuğu hükümler").
 Gerekçe: düşen istek, dağıtımın kapatılmasını istediği soketi açık
 bırakırdı — opt-in'in tüm amacı; sayılan bir düşüş hiçbir şeyi geri
 getirmez. Kuyruk üyelikle sınırlıdır: bir üyelik bir kez biter, bir
@@ -1401,7 +1408,7 @@ loadgen metrik teli GSMG; RESULT'ta her sebep için bir anahtar kuralıyla
 | Shard'da aynı tick göç edecek üye | faz 3c MIGRATE'ten önce uygulanır: despawn edilen üye göçmez; park edilen varlık PARK olarak göçer (bayrakları taşınır, §14.2) ve kapatma isteği gider — bekleyen isteğin `parked`'ı gönderimde `false`'a döner (B41'in bilinen eksik sayımı, sızıntı değil) |
 | Shard'da MIGRATE'ten SONRA soran kanca (`team_exchange`, `snapshot`, `keepalive`) bu tick göçmüş üyeyi atar | no-op: shard kanca sorduğunda üyeye artık sahip değildi (komşuya iletme yok — kit oyunlarının MIGRATE sonrası bağlam kancası yok, ham `ShardLogic` için tanımlı bir no-op) |
 | Registry posta kutusu dolu | E6'nın kuralı: istek kuyrukta kalır, sonraki tick'te yeniden denenir; despawn kolunun raporu (0c) aynı kutuyu önce kullanır |
-| Registry kapalı (süreç iniyor) | istek düşer (E6) |
+| Registry kapalı (süreç iniyor) | istek düşer (E6) ve kayıp hüküm sayılır: `close_verdicts_lost{reason="kicked"}` (F56; duruşta nerede yakalanırsa orada, bir kez) |
 
 **B43 ile etkileşim (düzeltildi, §16.4).** Registry doygunken atılan
 istemci, istek beklerken yeniden katılabiliyordu (despawn edilmiş üyenin

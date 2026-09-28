@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::codec::{decode_report, encode_report};
+use gsb_core::conn::ServerClose;
 use gsb_core::metrics::{LOGIC_COUNTERS_MAX, LogicCounter, LogicFold};
 
 /// The eighteen counters, as one comparable tuple.
@@ -180,7 +181,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"DNSG", "the magic, little-endian GSND");
+    assert_eq!(&frame[..4], b"ENSG", "the magic, little-endian GSNE");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -346,7 +347,8 @@ fn the_outbound_losses_survive_the_wire() {
 /// `rooms_ended_uncounted`, B67; GSMW the team hubs' refused relays,
 /// B72; GSMY the joins a stopped room refused, B75; GSNC what the
 /// registry left unread at its stop, F53; GSND the joins its closed
-/// mailbox refused, F54) cross the wire after its `closes`, and the net
+/// mailbox refused, F54; GSNE the session verdicts the stop kept from
+/// being carried out, F56) cross the wire after its `closes`, and the net
 /// section still decodes after them.
 #[test]
 fn the_control_plane_losses_survive_the_wire() {
@@ -372,6 +374,17 @@ fn the_control_plane_losses_survive_the_wire() {
         joins_unread: 18,
         team_exports_unread: 19,
         joins_unsent: 20,
+        verdicts_lost: {
+            let mut v = gsb_core::metrics::VerdictsLost {
+                leaves: 21,
+                detach_despawns: 22,
+                ..Default::default()
+            };
+            v.close(ServerClose::Kicked);
+            v.close(ServerClose::IdleInput);
+            v.close(ServerClose::Kicked);
+            v
+        },
     });
     sent.net.close_notices_dropped = 31;
     let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
@@ -392,6 +405,16 @@ fn the_control_plane_losses_survive_the_wire() {
             g.joins_unsent
         ),
         (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+    );
+    assert_eq!(
+        (
+            g.verdicts_lost.closes.get(ServerClose::Kicked),
+            g.verdicts_lost.closes.get(ServerClose::IdleInput),
+            g.verdicts_lost.closes.total(),
+            g.verdicts_lost.leaves,
+            g.verdicts_lost.detach_despawns
+        ),
+        (2, 1, 3, 21, 22)
     );
     assert_eq!(got.net.close_notices_dropped, 31);
 }

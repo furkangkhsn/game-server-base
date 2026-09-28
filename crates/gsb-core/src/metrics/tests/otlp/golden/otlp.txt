@@ -42,6 +42,24 @@ gsb_registry_team_exports_unread sum t=2 mono=true unit="" n=1 | Team exports of
   [] 1000..2000 int 7
 gsb_registry_joins_unsent sum t=2 mono=true unit="" n=1 | Joins (resume attempts included) a connection could not hand to the registry because its mailbox was already closed (the registry had stopped): never queued, the client got an ERROR, cumulative.
   [] 1000..2000 int 8
+gsb_registry_leave_verdicts_lost sum t=2 mono=true unit="" n=1 | Memberships a room ended of a connection that stays open (the input-idle ceiling's leave) that the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox; the row was never settled, cumulative.
+  [] 1000..2000 int 1
+gsb_registry_detach_despawns_lost sum t=2 mono=true unit="" n=1 | Detaches that ended in a despawn whose report (the parked row's release) the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox, cumulative.
+  [] 1000..2000 int 5
+gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=13 | Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
+  [reason=idle_timeout] 1000..2000 int 0
+  [reason=write_stall] 1000..2000 int 0
+  [reason=rel_dead] 1000..2000 int 0
+  [reason=violation_budget] 1000..2000 int 0
+  [reason=preauth_budget] 1000..2000 int 0
+  [reason=stream_rejected] 1000..2000 int 0
+  [reason=conn_cap] 1000..2000 int 0
+  [reason=unauth_cap] 1000..2000 int 0
+  [reason=superseded] 1000..2000 int 0
+  [reason=room_gone] 1000..2000 int 0
+  [reason=outbound_dead] 1000..2000 int 0
+  [reason=idle_input] 1000..2000 int 2
+  [reason=kicked] 1000..2000 int 3
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

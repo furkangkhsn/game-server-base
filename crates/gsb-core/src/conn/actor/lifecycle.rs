@@ -95,6 +95,9 @@ impl super::ConnectionActor {
     /// sender half of this actor's inbox) *before* spawning the actor, so
     /// ordering with the first client frame is guaranteed.
     pub async fn run(mut self) {
+        // Whether the SERVER'S STOP ended the session (`ConnIn::Shutdown`):
+        // a verdict still behind it in the inbox is then a lost one (F56).
+        let mut stopped = false;
         while let Some(msg) = self.inbox.recv().await {
             match msg {
                 ConnIn::Frame(frame) => {
@@ -192,13 +195,14 @@ impl super::ConnectionActor {
                     // The server is stopping: a best-effort ERROR 14
                     // that never waits on the client, then the end.
                     self.on_shutdown();
+                    stopped = true;
                     break;
                 }
             }
         }
 
-        // What the end left in the inbox, counted (B60).
-        self.abandon_inbox();
+        // What the end left in the inbox, counted (B60, F56).
+        self.abandon_inbox(stopped);
 
         // Metrics: final flush of whatever is unflushed (marks the
         // connection's end).

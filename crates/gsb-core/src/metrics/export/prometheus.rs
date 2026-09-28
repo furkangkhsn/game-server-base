@@ -47,11 +47,13 @@ impl MetricReport {
             for f in &families::REGISTRY {
                 scalar(&mut out, f, reg);
             }
+            let lost = &reg.verdicts_lost.closes;
+            closes::render(&mut out, families::CLOSE_VERDICTS_LOST, lost);
         }
         for f in &families::NET {
             scalar(&mut out, f, &self.net);
         }
-        closes::render(&mut out, &self.net.server_closes);
+        closes::render(&mut out, families::SERVER_CLOSES, &self.net.server_closes);
         for f in &families::TRANSPORT {
             scalar(&mut out, f, &self.transport);
         }

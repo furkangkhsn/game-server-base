@@ -3,7 +3,6 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::id::PlayerId;
@@ -105,17 +104,17 @@ where
         //    drained earlier in this same tick. Synchronous `try_send`
         //    (the tick body stays await-free); a FULL mailbox keeps the id
         //    queued for the next tick instead of dropping it, a CLOSED one
-        //    drops it (the registry is gone — no table left to leak into).
+        //    drops it (the registry has stopped — no table left to leak
+        //    into) and counts it lost (F56).
         if !self.despawn_reports.is_empty()
             && let Some(registry) = &self.registry
         {
-            let room = self.config.id;
-            self.despawn_reports.retain(|&conn| {
-                matches!(
-                    registry.try_send(crate::registry::RegistryMsg::DetachDespawned { conn, room }),
-                    Err(mpsc::error::TrySendError::Full(_))
-                )
-            });
+            crate::registry::flush_despawn_reports(
+                registry,
+                self.config.id,
+                &mut self.despawn_reports,
+                &mut self.m.verdicts_lost,
+            );
         }
     }
 

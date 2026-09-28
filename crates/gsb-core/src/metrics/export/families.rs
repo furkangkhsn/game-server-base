@@ -125,6 +125,16 @@ pub(super) const SERVER_CLOSES: (&str, &str) = (
      (client-initiated closes are not counted), cumulative.",
 );
 
+/// The close verdicts the server's stop kept from their connections
+/// (F56): ONE counter with a `reason` label/attribute per
+/// [`crate::conn::ServerClose`] — the reason the connection would have
+/// booked in [`SERVER_CLOSES`], zeros included (the same closed set).
+/// Present with the registry slice.
+pub(super) const CLOSE_VERDICTS_LOST: (&str, &str) = (
+    "gsb_registry_close_verdicts_lost_total",
+    "Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.",
+);
+
 /// The logic's own counters (F9): the default help of a SUM (a
 /// counter) and of a MAX (a gauge: a high-water mark), used when the
 /// declaration brings none.

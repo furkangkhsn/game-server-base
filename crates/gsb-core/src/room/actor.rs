@@ -188,7 +188,8 @@ pub struct RoomActor<W, G, Sp> {
     /// `afk_action = Disconnect`, and the members the game kicked
     /// ([`crate::room::TickCtx::kick`], E8). Same rules as
     /// `despawn_reports` — a FULL mailbox keeps them for the next tick, a
-    /// CLOSED one drops them (`crate::registry::flush_close_requests`);
+    /// CLOSED one drops and counts them as lost verdicts, F56
+    /// (`crate::registry::flush_close_requests`);
     /// written in phase 0d (the ceiling) or phase 3b and at the end of
     /// the tick (the kicks), flushed in phase 0d. A waiting request's `parked` is re-checked
     /// before every flush (B41): it is cleared once the room holds no

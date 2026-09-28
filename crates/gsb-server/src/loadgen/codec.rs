@@ -7,7 +7,7 @@ use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
     FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, STOP_COUNT,
-    ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters,
+    ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters, VerdictsLost,
 };
 
 mod logic;
@@ -73,6 +73,8 @@ mod logic;
 ///                u64 joins_refused_closed
 ///                u64 joins_unread  u64 team_exports_unread
 ///                u64 joins_unsent
+///                [u64; ServerClose::COUNT] close_verdicts_lost
+///                u64 leave_verdicts_lost  u64 detach_despawns_lost
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
@@ -235,7 +237,11 @@ mod logic;
 /// GSND = the GSNC layout plus the registry section's `joins_unsent`
 /// (joins the stopped registry's closed mailbox refused — F54), right
 /// after `team_exports_unread`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E44;
+/// GSNE = the GSND layout plus the registry section's lost session
+/// verdicts (F56), right after `joins_unsent`: the close verdicts by
+/// reason (`ServerClose::ALL` order), then `leave_verdicts_lost` and
+/// `detach_despawns_lost`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E45;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -368,6 +374,11 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(g.joins_unread);
         w.u64(g.team_exports_unread);
         w.u64(g.joins_unsent);
+        for (_, n) in g.verdicts_lost.closes.iter() {
+            w.u64(n);
+        }
+        w.u64(g.verdicts_lost.leaves);
+        w.u64(g.verdicts_lost.detach_despawns);
     }
     w.u64(r.net.bytes_in);
     w.u64(r.net.bytes_out_room);
@@ -581,6 +592,17 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             joins_unread: r.u64()?,
             team_exports_unread: r.u64()?,
             joins_unsent: r.u64()?,
+            verdicts_lost: VerdictsLost {
+                closes: {
+                    let mut counts = [0u64; ServerClose::COUNT];
+                    for n in &mut counts {
+                        *n = r.u64()?;
+                    }
+                    ServerCloses::from_counts(counts)
+                },
+                leaves: r.u64()?,
+                detach_despawns: r.u64()?,
+            },
         }),
         0 => None,
         _ => return None,

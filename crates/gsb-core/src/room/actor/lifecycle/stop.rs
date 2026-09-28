@@ -7,7 +7,7 @@ use std::hash::Hash;
 use tracing::{debug, warn};
 
 use crate::room::actor::RoomActor;
-use crate::room::{Held, send_final};
+use crate::room::{Held, send_final, send_verdicts_lost};
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -46,6 +46,14 @@ where
         // The ops still queued in the control channel (B68): never
         // processed, counted by kind.
         self.count_queued_ops();
+        // The verdicts still queued for the registry (F56): lost with the
+        // ones its closed mailbox refused, sent before the final sample.
+        self.m.count_unsent_verdicts(
+            &mut self.close_requests,
+            &mut self.leave_requests,
+            &mut self.despawn_reports,
+        );
+        send_verdicts_lost(&self.metrics, &self.m.verdicts_lost);
         // The stop ends every session: count what they take along, as a
         // session end does (B62), then hand the collector the final
         // sample — the counters since the last periodic one included.

@@ -114,6 +114,10 @@ pub struct MetricAccumulator {
     /// Joins the stopped registry's closed mailbox refused (F54;
     /// cumulative — reported in the registry slice).
     joins_unsent: u64,
+    /// Session verdicts the stop kept from being carried out, summed over
+    /// the places that counted them (F56; cumulative — reported in the
+    /// registry slice).
+    verdicts_lost: VerdictsLost,
     /// The transport tasks' loss deltas, summed (B58).
     transport: TransportCounters,
 }
@@ -199,6 +203,7 @@ impl MetricAccumulator {
             MetricsEvent::JoinUnsent => {
                 self.joins_unsent = self.joins_unsent.saturating_add(1);
             }
+            MetricsEvent::VerdictsLost(v) => self.verdicts_lost.add(&v),
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);
                 self.conn_bytes_out = self.conn_bytes_out.saturating_add(c.bytes_out);

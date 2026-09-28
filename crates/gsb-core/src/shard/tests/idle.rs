@@ -284,3 +284,5 @@ async fn sharded_ceiling_runs_the_disconnect_policy_and_warns_once() {
 mod afk;
 mod leave;
 mod migrate;
+// The ceiling's verdicts the server's stop kept from the registry (F56).
+mod stop;

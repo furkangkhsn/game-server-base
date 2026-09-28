@@ -19,7 +19,8 @@ impl MetricReport {
                  rooms_ended_uncounted={} \
                  team_relays_dropped_full={} team_relays_dropped_closed={} \
                  joins_refused_closed={} joins_unread={} team_exports_unread={} \
-                 joins_unsent={}",
+                 joins_unsent={} close_verdicts_lost={}{} \
+                 leave_verdicts_lost={} detach_despawns_lost={}",
                 r.rooms,
                 r.conns,
                 r.opens,
@@ -39,7 +40,17 @@ impl MetricReport {
                 r.joins_refused_closed,
                 r.joins_unread,
                 r.team_exports_unread,
-                r.joins_unsent
+                r.joins_unsent,
+                r.verdicts_lost.closes.total(),
+                // One stable key per reason, zeros included — the net
+                // line's `server_close_<reason>=` spelling (F56).
+                r.verdicts_lost
+                    .closes
+                    .iter()
+                    .map(|(why, n)| format!(" close_verdict_lost_{}={n}", why.label()))
+                    .collect::<String>(),
+                r.verdicts_lost.leaves,
+                r.verdicts_lost.detach_despawns
             ));
         }
         for r in &self.rooms {

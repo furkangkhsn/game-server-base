@@ -4,7 +4,6 @@ use crate::id::PlayerId;
 use crate::room::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::room::actor::RoomActor;
@@ -118,19 +117,18 @@ where
         //    — and whatever the mailbox refuses stays queued for the next
         //    tick rather than being dropped (a dropped report IS the leak
         //    this closes).
-        //    A CLOSED mailbox (the registry is gone — the process is
-        //    coming down) drops the report instead of retrying forever:
-        //    there is no table left to leak into.
+        //    A CLOSED mailbox (the registry has stopped) drops the report
+        //    instead of retrying forever — there is no table left to leak
+        //    into — and counts it lost (F56).
         if !self.despawn_reports.is_empty()
             && let Some(registry) = &self.registry
         {
-            let room = self.config.id;
-            self.despawn_reports.retain(|&conn| {
-                matches!(
-                    registry.try_send(crate::registry::RegistryMsg::DetachDespawned { conn, room }),
-                    Err(mpsc::error::TrySendError::Full(_))
-                )
-            });
+            crate::registry::flush_despawn_reports(
+                registry,
+                self.config.id,
+                &mut self.despawn_reports,
+                &mut self.m.verdicts_lost,
+            );
         }
     }
 

@@ -413,3 +413,5 @@ fn a_transport_death_park_is_never_re_expired_by_the_ceiling() {
 
 mod afk;
 mod leave;
+// The ceiling's verdicts the server's stop kept from the registry (F56).
+mod stop;

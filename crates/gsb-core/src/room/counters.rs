@@ -178,6 +178,11 @@ pub(crate) struct RoomCounters {
     /// What the stop found still held beyond the sessions (B68): written
     /// once, at `finish()`, before the final sample.
     pub(crate) stop: crate::metrics::StopCounts,
+    /// Session verdicts for the registry this room/shard could not hand
+    /// over at the server's stop (F56): refused by the registry's closed
+    /// mailbox, or still queued when it stopped. Sent once, at `finish()`
+    /// (`crate::room::send_verdicts_lost`), not in any sample.
+    pub(crate) verdicts_lost: crate::metrics::VerdictsLost,
     /// Snapshot + private bytes/frames shipped to the room's connections,
     /// cumulative — counted once the outbound channel TOOK the batch
     /// (B57, [`Shipped`]): a dropped or refused batch is not traffic.
@@ -309,6 +314,7 @@ impl Default for RoomCounters {
             snap_records: 0,
             metrics_dropped: 0,
             stop: crate::metrics::StopCounts::default(),
+            verdicts_lost: crate::metrics::VerdictsLost::default(),
             shipped_bytes: 0,
             shipped_frames: 0,
             private_frames: 0,

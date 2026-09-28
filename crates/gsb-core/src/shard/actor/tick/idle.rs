@@ -100,9 +100,10 @@ where
         }
         self.reconcile_closes();
         if let Some(registry) = &self.registry {
-            crate::registry::flush_close_requests(registry, &mut self.close_requests);
+            let lost = &mut self.m.verdicts_lost;
+            crate::registry::flush_close_requests(registry, &mut self.close_requests, lost);
             if !hold_back {
-                crate::registry::flush_leave_requests(registry, &mut self.leave_requests);
+                crate::registry::flush_leave_requests(registry, &mut self.leave_requests, lost);
             }
         }
     }

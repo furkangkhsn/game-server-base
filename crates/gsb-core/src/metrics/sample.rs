@@ -522,6 +522,14 @@ pub enum MetricsEvent {
     /// place that sees the refusal, stop-message idiom; the collector
     /// counts it ([`RegistryReport::joins_unsent`]).
     JoinUnsent,
+    /// Session verdicts the server's stop kept from being carried out,
+    /// counted where each was caught (BACKLOG F56, see [`VerdictsLost`]):
+    /// a room's or shard's stop (still queued, or refused by the
+    /// registry's closed mailbox), the registry's drain (unread behind its
+    /// `Shutdown`), a connection's end (left in its inbox behind the
+    /// stop's notice). Sent once per place that counted any, stop-message
+    /// idiom; the collector sums them ([`RegistryReport::verdicts_lost`]).
+    VerdictsLost(VerdictsLost),
 }
 
 /// Why a match result did not reach the result sink (see

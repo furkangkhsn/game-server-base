@@ -55,7 +55,7 @@ mod table;
 
 pub use actor::Registry;
 pub use close::{CloseRequest, LeaveRequest};
-pub(crate) use close::{flush_close_requests, flush_leave_requests};
+pub(crate) use close::{flush_close_requests, flush_despawn_reports, flush_leave_requests};
 pub use msg::RegistryMsg;
 pub(crate) use result::send_match_result;
 pub use seat::Seat;

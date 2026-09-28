@@ -31,23 +31,29 @@
 //! (`SpawnDone`, `SpawnFailed`, `LeaveDone`, `DetachDone`, `OpsClosed`),
 //! a death watcher's `RoomDied` (a panic is counted by the watcher
 //! itself, B67) and `Authed` only update tables the teardown drops. A
-//! room's verdicts (`CloseConn`, `LeaveConn`, `DetachDespawned`): the
-//! room already ended the membership, and the teardown tells every
-//! connection to stop — the same reason their closed refusal at the
-//! room is not counted (B57). A control-plane request (`CreateRoom`,
-//! `DestroyRoom`, `RoomStatus`) is answered by its dropped reply.
+//! control-plane request (`CreateRoom`, `DestroyRoom`, `RoomStatus`) is
+//! answered by its dropped reply.
+//!
+//! A room's verdicts (`CloseConn`, `LeaveConn`, `DetachDespawned`) are
+//! LOST verdicts (F56, re-deciding B57): the connection gets the stop's
+//! `ERROR` 14 instead of the verdict's `ERROR` 9, `server_closes` never
+//! books its reason, the row is never settled — counted by kind, the
+//! close by its reason, without the tables' guards (a room refusing the
+//! same verdict at the closed mailbox cannot apply them either; see
+//! `crate::metrics::VerdictsLost`).
 //!
 //! The counts ride the registry's final sample, which the `Shutdown` arm
 //! posts (`crate::channel::post`) before it tears the tables down: past
 //! a full metrics channel a spawned sender holds its own clone, so the
 //! collector's final report — which waits for every session producer's
-//! sender to drop (F35) — cannot be emitted without it.
+//! sender to drop (F35) — cannot be emitted without it. The lost
+//! verdicts go the same way, as one `MetricsEvent::VerdictsLost`.
 
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::conn::ConnIn;
-use crate::metrics::MetricsEvent;
+use crate::metrics::{MetricsEvent, VerdictsLost};
 use crate::registry::actor::Registry;
 use crate::registry::*;
 
@@ -66,6 +72,7 @@ where
     /// drain does, B68.)
     pub(super) fn count_leftovers(&mut self) {
         self.inbox.close();
+        let mut lost = VerdictsLost::default();
         while let Ok(msg) = self.inbox.try_recv() {
             match msg {
                 RegistryMsg::TeamExport {
@@ -85,6 +92,9 @@ where
                         let _ = inbox.send(ConnIn::Shutdown).await;
                     });
                 }
+                RegistryMsg::CloseConn(req) => lost.close(req.cause),
+                RegistryMsg::LeaveConn(_) => lost.leaves += 1,
+                RegistryMsg::DetachDespawned { .. } => lost.detach_despawns += 1,
                 // No match-all arm: a new message kind must be decided
                 // here.
                 RegistryMsg::CreateRoom { .. }
@@ -98,13 +108,11 @@ where
                 | RegistryMsg::SpawnFailed { .. }
                 | RegistryMsg::LeaveDone { .. }
                 | RegistryMsg::DetachDone { .. }
-                | RegistryMsg::DetachDespawned { .. }
-                | RegistryMsg::CloseConn(_)
-                | RegistryMsg::LeaveConn(_)
                 | RegistryMsg::OpsClosed { .. }
                 | RegistryMsg::RoomDied { .. } => {}
             }
         }
+        crate::room::send_verdicts_lost(&self.metrics, &lost);
     }
 
     /// The registry's last sample, carrying [`Self::count_leftovers`]'

@@ -50,7 +50,7 @@ where
     /// **Then the close requests** (BACKLOG E6): whatever this sweep — or
     /// an earlier tick's, refused by a full registry mailbox — asked the
     /// registry to close goes out here (`flush_close_requests`: `try_send`,
-    /// Full keeps, Closed drops), each with its `parked` re-checked
+    /// Full keeps, Closed drops and counts it lost — F56), each with its `parked` re-checked
     /// (`reconcile_closes`, B41). An empty queue costs one length test.
     /// The leave requests (B40) follow the same rules, after their park
     /// keys are re-checked (`reconcile_parks`) and never ahead of a
@@ -65,9 +65,10 @@ where
         }
         self.reconcile_closes();
         if let Some(registry) = &self.registry {
-            crate::registry::flush_close_requests(registry, &mut self.close_requests);
+            let lost = &mut self.m.verdicts_lost;
+            crate::registry::flush_close_requests(registry, &mut self.close_requests, lost);
             if !hold_back {
-                crate::registry::flush_leave_requests(registry, &mut self.leave_requests);
+                crate::registry::flush_leave_requests(registry, &mut self.leave_requests, lost);
             }
         }
     }
