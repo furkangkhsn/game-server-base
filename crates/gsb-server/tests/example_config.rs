@@ -6,7 +6,8 @@
 //! `[arena]` / `[mmo]` / `[war]` sections, uncommented, are accepted by
 //! their games, and so is its commented `[rooms.2]` override (B18) and
 //! its commented two-door `[[listeners]]` example (F61).
-//! Configure only: nothing binds (the example's port is a real one).
+//! Check and configure only: nothing binds (the example's port is a
+//! real one).
 
 #![cfg(all(
     feature = "game-demo",
@@ -26,9 +27,11 @@ fn load(text: &str) -> Config {
     cfg
 }
 
-/// Configure `game` under `cfg`, as the server does before binding.
+/// Check and configure `game` under `cfg`, as the server does before
+/// binding: the file's top-level keys (F62), then the game's settings.
 fn configure(game: &str, cfg: &Config) -> Result<(), ServerError> {
     let mut module = gsb_server::games::by_name(game).expect("compiled in");
+    cfg.check_top_level_keys(&*module)?;
     module.configure(&cfg.raw, cfg)
 }
 

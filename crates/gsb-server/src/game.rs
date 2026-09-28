@@ -65,6 +65,25 @@ pub trait GameModule: Send + Sync + 'static {
         None
     }
 
+    /// The top-level config keys this game owns (BACKLOG F62). A name
+    /// owns the key of that name at the top of the file, whatever it
+    /// holds: a flat value (`speed = 3`) or a table (`[<name>]`,
+    /// `[<name>.<sub>]`, `[[<name>]]`). The server refuses, before
+    /// anything binds, every top-level key that is neither the engine's
+    /// nor owned by this game or by another game compiled into the build
+    /// (a file may carry a sibling game's table); a table for a game the
+    /// build does not host is refused too.
+    ///
+    /// Default: the table named after the game (`[<name>]`, the
+    /// convention of GAME-MODULE §6 decision 1). A game that reads flat
+    /// keys from `raw` declares them here (the 2D demo declares its flat
+    /// keys and no table); one that reads nothing may return none. Read
+    /// before [`Self::configure`], on a fresh module too (the server asks
+    /// every compiled-in game), so it must not depend on the settings.
+    fn owned_keys(&self) -> Vec<&'static str> {
+        vec![self.name()]
+    }
+
     /// What the input-idle ceiling does to the member it expires, by
     /// default, in every hosted room (BACKLOG E6; `RoomConfig::afk_action`)
     /// unless the operator writes `afk_action` (flat, or in a

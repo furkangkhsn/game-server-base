@@ -38,6 +38,10 @@ async fn start_inner(
     metric_sink: MetricSink,
     hooks: ServerHooks,
 ) -> Result<ServerHandle, ServerError> {
+    // The top level of the file (BACKLOG F62): a key neither the engine
+    // nor a game compiled into this build owns refuses startup, first.
+    cfg.check_top_level_keys(&*module)?;
+
     // The listener table: reduce BOTH config grammars (the `[[listeners]]`
     // array or the derived-from-scalars single door) to validated specs —
     // parsed addresses, per-entry tls-file sanity, duplicate detection.

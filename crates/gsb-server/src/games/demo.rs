@@ -75,6 +75,13 @@ impl GameModule for DemoModule {
         Self::NAME
     }
 
+    /// The demo's settings are the flat keys every pre-module config
+    /// writes (GAME-MODULE §6 decision 1): it owns those and no `[demo]`
+    /// table (it reads none, so one is refused, never ignored).
+    fn owned_keys(&self) -> Vec<&'static str> {
+        crate::config::DEMO_KEYS.to_vec()
+    }
+
     /// The three-axis selection (topology × visibility × communication):
     /// derive the axes from the legacy spellings, honor explicit keys, and
     /// validate the combination — the server calls this BEFORE anything

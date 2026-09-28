@@ -262,10 +262,41 @@ pub enum ServerError {
         reason: &'static str,
     },
 
+    /// A top-level config key that neither the engine nor any game
+    /// compiled into this build owns (BACKLOG F62;
+    /// [`Config::check_top_level_keys`](crate::Config::check_top_level_keys)):
+    /// a typo, a misspelled table, or a table for a game this build does
+    /// not host — refused, never silently ignored.
+    #[error(
+        "unknown top-level config key {written}{}: not a key of the server, \
+         and no game compiled into this build owns it (games' keys — \
+         {owners}); a key nobody reads is refused, not ignored",
+        did_you_mean(.suggestion)
+    )]
+    UnknownKey {
+        /// The key.
+        key: String,
+        /// How the file writes it: `` `tik_hz` ``, `` `[metric.otlp]` ``,
+        /// `` `[[listener]]` ``.
+        written: String,
+        /// The known key it most resembles (one or two edits away).
+        suggestion: Option<String>,
+        /// The keys each game compiled into this build owns, as listed.
+        owners: String,
+    },
+
     /// Game selection or a game module's own configuration failed (see
     /// [`crate::GameError`]).
     #[error(transparent)]
     Game(#[from] crate::GameError),
+}
+
+/// The suggestion part of [`ServerError::UnknownKey`]'s message.
+fn did_you_mean(suggestion: &Option<String>) -> String {
+    match suggestion {
+        Some(key) => format!(" (did you mean `{key}`?)"),
+        None => String::new(),
+    }
 }
 
 /// One fully-validated listener, ready to bind: the config grammar

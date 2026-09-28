@@ -98,12 +98,16 @@ pub struct ListenerEntry {
 
 /// Server configuration (see `config.example.toml`).
 ///
-/// The one config table that does NOT refuse an unknown key: its top
-/// level is shared with the hosted game, which reads its own part of the
-/// file from [`Self::raw`] (its `[<game>]` table, or flat keys) — and a
-/// file may carry several games' tables. Every table the engine owns
-/// below it refuses one: a `[[listeners]]` entry, `[rooms.<id>]`,
-/// `[metrics]`, `[metrics.otlp]`.
+/// Its top level is shared with the hosted game, which reads its own
+/// part of the file from [`Self::raw`] (its `[<game>]` table, or flat
+/// keys) — and a file may carry several games' tables. So the struct
+/// itself takes any key; the server then refuses, before anything binds,
+/// a top-level key that is neither one of these fields nor owned by a
+/// game compiled into the build (BACKLOG F62,
+/// [`Self::check_top_level_keys`], `GameModule::owned_keys`). Every
+/// table the engine owns below it refuses an unknown key when it parses:
+/// a `[[listeners]]` entry, `[rooms.<id>]`, `[metrics]`,
+/// `[metrics.otlp]`.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {

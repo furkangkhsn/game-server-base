@@ -11,6 +11,10 @@ pub use axes::*;
 mod metrics;
 pub use metrics::{MetricsConfig, OtlpSection};
 
+mod top_keys;
+#[cfg(feature = "game-demo")]
+pub(crate) use top_keys::DEMO_KEYS;
+
 pub(crate) use listeners::*;
 pub(crate) use resolve::ListenerSpec;
 pub use resolve::{ConfigError, ServerError};

@@ -44,6 +44,16 @@ pub fn compiled_in() -> Vec<&'static str> {
     GAMES.iter().map(|(name, _)| *name).collect()
 }
 
+/// The top-level config keys each compiled-in game owns
+/// ([`GameModule::owned_keys`], BACKLOG F62): a config file may carry any
+/// of them, whichever game it hosts.
+pub fn owned_keys() -> Vec<(&'static str, Vec<&'static str>)> {
+    GAMES
+        .iter()
+        .map(|(name, make)| (*name, make().owned_keys()))
+        .collect()
+}
+
 /// A fresh, unconfigured module for the game named `name`.
 pub fn by_name(name: &str) -> Result<Box<dyn GameModule>, GameError> {
     GAMES

@@ -35,6 +35,18 @@ fn an_unknown_listener_key_names_the_key_and_the_line() {
     }
 }
 
+/// F62's refusal, as the binary prints it: a top-level key nobody reads
+/// (a typo'd engine key) names the key and the key it resembles.
+#[test]
+fn an_unknown_top_level_key_names_the_key() {
+    let run = server_with_config("top-level-key", "bind = \"127.0.0.1:0\"\ntik_hz = 60\n");
+    run.refused_with(&[
+        "gsb-server: unknown top-level config key `tik_hz`",
+        "did you mean `tick_hz`?",
+    ]);
+    run.lacks("UnknownKey");
+}
+
 /// A value the file's types hold but no socket takes: the server's own
 /// refusal, before the first bind.
 #[test]
