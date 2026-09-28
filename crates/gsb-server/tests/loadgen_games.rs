@@ -8,8 +8,11 @@
 use std::collections::HashMap;
 
 use loadgen_rate::Run;
+use window::{conclusive, population, team_window};
 
 mod loadgen_rate;
+#[path = "loadgen_games/window.rs"]
+mod window;
 
 /// Run the real `gsb-loadgen` with `args`.
 fn loadgen(args: &[&str]) -> Run {
@@ -111,9 +114,14 @@ fn loadgen_drives_the_mmo() {
     // out torn (not a cut) and the one cut left could hold a traveller:
     // `2,0,4,1` (BACKLOG F23). A longer run gives the window more cuts;
     // the assertion stays exact (a lost or double-counted player fails
-    // it in every cut).
-    let out = loadgen(&["8", "--game", "mmo", "--duration", "8", "--move-ms", "100"]);
-    let (line, kv) = result(&out);
+    // it in every cut). A run with no cut of all 8 is repeated longer
+    // (`window`, BACKLOG F30).
+    let args = ["8", "--game", "mmo", "--move-ms", "100"];
+    let (line, kv, members) = conclusive(&args, 8, |out| {
+        let (line, kv) = result(out);
+        let members = population(&String::from_utf8_lossy(&out.stdout), &kv, 8)?;
+        Ok((line, kv, members))
+    });
     assert_clean(&line, &kv, 8, "mmo", 0);
     assert_eq!(
         (kv["visibility"].as_str(), kv["shards"].as_str()),
@@ -121,12 +129,7 @@ fn loadgen_drives_the_mmo() {
     );
     assert_eq!(kv["profile"], "roam");
     assert_ne!(kv["deltas"], "0", "the MMO sends cell deltas: {line}");
-    let members: Vec<u32> = kv["shard_members"]
-        .split(',')
-        .map(|m| m.parse().expect("a member count"))
-        .collect();
     assert_eq!(members.len(), 4, "{line}");
-    assert_eq!(members.iter().sum::<u32>(), 8, "{line}");
     // Every bot starts on its home shard (2 per shard here), and the
     // occasional travels move only a few. Unsaved (no roster), shard 0
     // keeps 6 of the 8.
@@ -154,38 +157,30 @@ fn loadgen_drives_the_mmo() {
 /// and the server child hosts the bots' roster.
 #[test]
 fn loadgen_orchestrates_the_mmo() {
-    let out = loadgen(&[
+    let args = [
         "--orchestrate",
         "4",
         "--procs",
         "2",
         "--game",
         "mmo",
-        "--duration",
-        "3",
         "--move-ms",
         "100",
-    ]);
-    let (line, kv) = result(&out);
+    ];
+    // All four in one consistent cut: a 3 s run starved to a few hertz
+    // may hold none (BACKLOG F30), and is repeated longer.
+    let (line, kv, members) = conclusive(&args, 3, |out| {
+        let (line, kv) = result(out);
+        let members = population(&String::from_utf8_lossy(&out.stdout), &kv, 4)?;
+        Ok((line, kv, members))
+    });
     assert_clean(&line, &kv, 4, "mmo", 0);
     assert_eq!(kv["mode"], "sep");
     assert_eq!(kv["procs"], "2");
     // The server child hosts the bots' roster too: one bot per shard at
     // the start (unsaved, all four would start on shard 0).
-    let members: Vec<u32> = kv["shard_members"]
-        .split(',')
-        .map(|m| m.parse().expect("a member count"))
-        .collect();
-    assert_eq!(members.iter().sum::<u32>(), 4, "{line}");
+    assert_eq!(members.len(), 4, "{line}");
     assert!(members[0] <= 2, "the server child's roster: {line}");
-}
-
-/// The per-shard members of a sharded game's RESULT line.
-fn shard_members(kv: &HashMap<String, String>) -> Vec<u32> {
-    kv["shard_members"]
-        .split(',')
-        .map(|m| m.parse().expect("a member count"))
-        .collect()
 }
 
 /// The war (W2): team fog over the sharded map in delta mode, the bots
@@ -197,10 +192,16 @@ fn shard_members(kv: &HashMap<String, String>) -> Vec<u32> {
 fn loadgen_drives_the_war() {
     // 8 s: the team rates are read over the steady window, which opens at
     // the first report past 100 steps and closes at the last one with
-    // everyone in — a 5 s run can leave the two on the same report (rates
-    // of 0, a flaky assertion).
-    let out = loadgen(&["12", "--game", "war", "--duration", "8", "--move-ms", "100"]);
-    let (line, kv) = result(&out);
+    // everyone in — a 5 s run can leave the two on the same report (no
+    // window). A run without the window, or without a cut of all 12, is
+    // repeated longer (`window`, BACKLOG F30).
+    let args = ["12", "--game", "war", "--move-ms", "100"];
+    let (line, kv, members, team) = conclusive(&args, 8, |out| {
+        let (line, kv) = result(out);
+        let members = population(&String::from_utf8_lossy(&out.stdout), &kv, 12)?;
+        let team = team_window(&kv)?;
+        Ok((line, kv, members, team))
+    });
     // Players join factions that are already playing on their shards:
     // up to one late joiner's dropped delta each (G3-2).
     assert_clean(&line, &kv, 12, "war", 12);
@@ -210,20 +211,34 @@ fn loadgen_drives_the_war() {
     );
     assert_eq!(kv["profile"], "posts");
     assert_ne!(kv["deltas"], "0", "the war sends team deltas: {line}");
-    let members = shard_members(&kv);
     assert_eq!(members.len(), 4, "{line}");
-    assert_eq!(members.iter().sum::<u32>(), 12, "{line}");
     assert!(
         members.iter().all(|&m| m > 0),
         "the roster spreads the bots over every shard: {line}"
     );
-    let rate = |k: &str| -> f64 { kv[k].parse().expect("a number") };
     // Four shards, every one with team traffic (towers everywhere):
-    // about 4 × 30 exports a second, each relayed on.
-    assert!(rate("team_exports_s") > 60.0, "{line}");
-    assert!(rate("team_imports_s") > 0.0, "{line}");
+    // about 4 exports a step, each relayed on — per step, not per
+    // second, so a starved room's fewer steps do not read as fewer
+    // exports (at 30 Hz, the old `team_exports_s > 60`).
+    assert!(team.exports >= 2.0, "{team:?}: {line}");
+    assert!(team.imports > 0.0, "{team:?}: {line}");
+    let rate = |k: &str| -> f64 { kv[k].parse().expect("a number") };
     assert!(rate("team_records_per_export") >= 3.0, "{line}");
-    assert_eq!(kv["team_export_drops"], "0", "{line}");
+    // The run's total, and it includes the stop: the registry exits
+    // without awaiting the shards (DESIGN §9), so a shard in the middle
+    // of a step then exports into its closed mailbox — a refused export
+    // the counter takes too ("full or closed"). The registry's Shutdown
+    // is already in every shard's inbox, so its next step stops it: one
+    // such export per shard at most. A stalled stop meets it (1–4 in
+    // every frozen run, all right after "registry shutting down" — BACKLOG
+    // F30). The total cannot tell those from a mailbox that was full
+    // during the run; splitting the counter is BACKLOG F50, and with it
+    // the full ones go back to `== 0`.
+    let drops: u32 = kv["team_export_drops"].parse().expect("a number");
+    assert!(
+        drops <= 4,
+        "at most one export per shard, at the stop: {line}"
+    );
     assert_eq!(kv["team_over_cap"], "0", "{line}");
     assert_eq!(
         kv["team_over_budget"], "0",
@@ -240,26 +255,30 @@ fn loadgen_drives_the_war() {
 /// team counters cross the metrics wire.
 #[test]
 fn loadgen_orchestrates_the_war() {
-    let out = loadgen(&[
+    let args = [
         "--orchestrate",
         "8",
         "--procs",
         "2",
         "--game",
         "war",
-        "--duration",
-        "8", // a steady window for the rates (see above)
         "--move-ms",
         "100",
-    ]);
-    let (line, kv) = result(&out);
+    ];
+    // 8 s: a steady window for the rates (see above).
+    let (line, kv, members, team) = conclusive(&args, 8, |out| {
+        let (line, kv) = result(out);
+        let members = population(&String::from_utf8_lossy(&out.stdout), &kv, 8)?;
+        let team = team_window(&kv)?;
+        Ok((line, kv, members, team))
+    });
     assert_clean(&line, &kv, 8, "war", 8);
     assert_eq!(kv["mode"], "sep");
-    let members = shard_members(&kv);
-    assert_eq!(members.iter().sum::<u32>(), 8, "{line}");
     assert!(members[0] < 8, "the server child's roster: {line}");
-    let exports: f64 = kv["team_exports_s"].parse().expect("a number");
-    assert!(exports > 60.0, "the team counters crossed the wire: {line}");
+    assert!(
+        team.exports >= 2.0,
+        "the team counters crossed the wire: {team:?}: {line}"
+    );
     assert!(
         kv.contains_key("logic_war_kills"),
         "the game's own counter crossed the wire (GSMC): {line}"
