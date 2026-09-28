@@ -78,7 +78,12 @@ async fn a_duel_across_the_seam_resolves_the_same_way_every_time() {
 /// hitting her across the seam. Shard 0 applies the hits and marks her in
 /// combat, so her logout waits past its grace — the veto sees the fight
 /// although she never swung — and completes once it has cooled down.
-#[tokio::test]
+///
+/// On the paused clock (the grace is read off the tick clock): the hit
+/// must land within the 100 ms grace of the detach, and on the wall
+/// clock a starved process could spend that between two steps — Ann
+/// logged out before the hit (BACKLOG F34).
+#[tokio::test(start_paused = true)]
 async fn a_parked_character_hit_across_the_seam_is_held_by_the_fight() {
     let grace = Duration::from_millis(100);
     let mut room = Mmo::with(&realm(), grace, 2.0);
@@ -93,7 +98,7 @@ async fn a_parked_character_hit_across_the_seam_is_held_by_the_fight() {
     assert_eq!((hit[0].shard, hit[0].attacker), (0, cs[0].id));
     assert_eq!(cs[0].get(ann.id).map(|r| r.hp), Some(75));
 
-    tokio::time::sleep(grace * 3).await; // the grace is wall-clock
+    tokio::time::sleep(grace * 3).await; // the grace is the tick clock's
     room.steps(&mut cs, 3).await;
     let s = room.sample(0);
     assert_eq!(

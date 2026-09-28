@@ -101,7 +101,11 @@ async fn a_character_disconnected_in_combat_logs_out_when_the_fight_ends() {
     );
 }
 
-#[tokio::test]
+/// On the paused clock (the grace and the ceiling are read off the tick
+/// clock): "past the grace, short of the ceiling" is 300 ms against a
+/// 1 s ceiling from the detach, which a starved process could overrun
+/// on the wall clock (BACKLOG F34).
+#[tokio::test(start_paused = true)]
 async fn a_fight_that_outlasts_the_ceiling_is_logged_out_anyway() {
     let ceiling = Duration::from_secs(1);
     let mut room = Mmo::with_ceiling(&realm(), GRACE, ceiling);
@@ -116,7 +120,7 @@ async fn a_fight_that_outlasts_the_ceiling_is_logged_out_anyway() {
         "past the grace, short of the ceiling: the fight holds it"
     );
 
-    tokio::time::sleep(ceiling).await; // the ceiling is wall-clock too
+    tokio::time::sleep(ceiling).await; // the ceiling is the tick clock's too
     room.steps(&mut cs, 2).await;
     assert!(
         room.tick < hit + COMBAT_TICKS,

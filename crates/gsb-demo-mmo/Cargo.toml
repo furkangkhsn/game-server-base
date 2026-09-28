@@ -24,8 +24,10 @@ gsb-lint = { workspace = true }
 prost-build = { workspace = true }
 protoc-bin-vendored = { workspace = true }
 
+# `test-util`: the combat-logout tests read the grace and the ceiling
+# off the tick clock, so they run on a paused clock (BACKLOG F34).
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"
