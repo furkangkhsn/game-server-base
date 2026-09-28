@@ -5,6 +5,42 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B84 — dinleme kuyruğu `listen_backlog` (`net/b84-listen-backlog`)
+
+- **Bulgu düzeltmesi:** tokio'nun `TcpListener::bind`'i `listen(2)`'ye
+  1024 değil **128** veriyor (mio ≥ 1.1 std'nin değerini kullanıyor; 1024
+  mio 1.1 öncesiydi). B50'nin okuması ve B84 satırı düzeltildi; `ss -ltn`
+  Send-Q 128. 1000 istemcinin kuyruğu taşırabilmesinin nedeni buydu.
+- **Motor:** `gsb_net::listen::bind_tcp(addr, backlog)` (tokio `TcpSocket`,
+  aynı soket + açık `listen`); TCP/TLS/WS kapıları (`listen_backlog` alanı)
+  ve ops HTTP yüzeyi onunla bağlanıyor. Sunucu anahtarı `listen_backlog`:
+  varsayılan 128 = bugünkü kuyruk (yazılmamış config'te hiçbir şey
+  değişmez; sabit, ileride bir mio yükseltmesinin kuyruğu sessizce
+  değiştirmesini de önler); `0` ya da C `int`'i aşan değer bir şey
+  bağlanmadan `BadListenBacklog`; çekirdek `somaxconn`'da keser
+  (belgelendi). `[rooms.<id>]` reddeder. UDP kapıları kuyruksuz (karşılığı
+  `SO_RCVBUF`, B4). Yeni bağımlılık yok.
+- **Loadgen:** `--listen-backlog N` (in-process / `--serve`; orkestratör
+  yalnız sunucu çocuğuna iletir); varsayılan değişmedi — kayıttaki tabanlar
+  aynı koşulda. `--stagger-ms` ne zaman kullanılır belgelendi. RESULT,
+  `/metrics`, tel değişmedi.
+- **Ölçüm** (B50 komutu, demo 1000 orkestre 8 sn, 3'er koşu, yük < 5):
+  128'de koşu başına 997–1611 `ListenOverflows`, joined 852–1000, connect
+  p99 ~1–2 sn; 1024/4096'da taşma 0, joined 1000 ×3, p99 < 50 ms,
+  `snap_total` +%7–12; `--stagger-ms 1` de taşmayı bitiriyor (fırtınayı
+  kaldırarak).
+- Elenenler: `[[listeners]]` başına değer (ölçülmüş ihtiyaç yok, F61 varken
+  sessizce yutulurdu); `socket2` ile kurmak (yeni doğrudan bağımlılık);
+  `somaxconn`/-1 varsayılanı (her dağıtımı değiştirir); yalnız loadgen'de
+  düzeltmek (ani katılmalı oyun da aynı düğmeyi ister).
+- Yeni: **F61** (`[[listeners]]` bilinmeyen anahtarı sessizce yok sayıyor
+  — geriye uyumsuz düzeltme, kullanıcı kararı).
+
+Testler 1490 → 1506 (`otlp` ile 1508 → 1524); 9 mutasyonun hepsi öldü.
+Ebeveyn doğrulaması: `listen`'e hep 128 vermek iki testi düşürdü.
+RPC-CONTROL-PLANE §8.2 "B84", DESIGN §6 "Dinleme kuyruğu", OPS §2,
+SECURITY §4.4.
+
 ## Temizlik paketi — A12, F2, F58, F59 (`misc/cleanup-a12-f2`)
 
 - **A12 — `QueryState` oda başına bir kez:** kit odalarının tick başına
