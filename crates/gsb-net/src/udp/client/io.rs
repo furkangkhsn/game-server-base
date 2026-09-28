@@ -84,18 +84,8 @@ impl UdpClient {
                     return false;
                 }
                 let ack = u32::from_le_bytes(d[1..5].try_into().unwrap());
-                if ack > self.acked {
-                    self.acked = ack;
-                    // Real progress: the server confirmed something new.
-                    self.ack_progress = Instant::now();
-                }
-                while let Some(&(s, _, _)) = self.out_retransmit.front() {
-                    if s < self.acked {
-                        self.out_retransmit.pop_front();
-                    } else {
-                        break;
-                    }
-                }
+                // Release, liveness clock, RTT sample (Karn's rule).
+                self.rel.on_ack(ack, Instant::now());
                 false
             }
             // The server only sends HELLO during the handshake (already
@@ -104,28 +94,22 @@ impl UdpClient {
         }
     }
 
-    /// Retransmit the oldest un-ACKed outbound control frame whose RTO
-    /// has passed. The mirror of the server writer's rule: an individual
-    /// frame is NEVER abandoned (that wedges the direction silently);
-    /// the band as a whole dies when the cumulative ACK has not advanced
-    /// at all for [`REL_NO_ACK_FATAL`].
+    /// Retransmit the oldest un-ACKed outbound control frame whose timer
+    /// expired (the timer then doubles). The mirror of the server
+    /// writer's rule: an individual frame is NEVER abandoned (that wedges
+    /// the direction silently); the band as a whole dies when the
+    /// cumulative ACK has not advanced at all for [`REL_NO_ACK_FATAL`].
     pub(super) fn retransmit_pass(&mut self) {
         let now = Instant::now();
-        if self.out_retransmit.is_empty() {
-            // Nothing outstanding: the server has nothing to prove.
-            self.ack_progress = now;
-            return;
-        }
-        if now.saturating_duration_since(self.ack_progress) >= REL_NO_ACK_FATAL {
-            self.declare_rel_dead();
-            return;
-        }
-        if let Some((_, datagram, sent)) = self.out_retransmit.front_mut()
-            && *sent + RETRANSIT_RTO <= now
-            && self.sock.try_send_to(datagram, self.peer).is_ok()
-        {
-            *sent = now;
-            self.stats.retrans_out += 1;
+        match self.rel.poll(now) {
+            Due::Dead(_) => self.declare_rel_dead(),
+            Due::Resend(datagram) => {
+                if self.sock.try_send_to(&datagram, self.peer).is_ok() {
+                    self.rel.resent(now);
+                    self.stats.retrans_out += 1;
+                }
+            }
+            Due::Idle | Due::Wait => {}
         }
     }
 
@@ -134,8 +118,7 @@ impl UdpClient {
     /// tear down — the caller sees [`UdpClient::is_established`] go
     /// `false` and decides (reconnect, report, exit).
     pub(super) fn declare_rel_dead(&mut self) {
-        self.stats.gave_up += self.out_retransmit.len() as u64;
-        self.out_retransmit.clear();
+        self.stats.gave_up += self.rel.abandon();
         self.established = false;
     }
 }

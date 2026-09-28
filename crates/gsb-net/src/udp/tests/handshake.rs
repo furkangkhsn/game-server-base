@@ -150,13 +150,15 @@ async fn a_lost_accept_is_healed_without_a_second_session() {
 ///
 /// "At the bound, not sooner or much later" without a wall-clock window
 /// (BACKLOG F34): not sooner is the elapsed time (a stall only lengthens
-/// it); not later is the proofs the relay swallowed. Each proof step
-/// lasts at least one `HANDSHAKE_RTO` and every proof leaves before the
-/// deadline, so a client that gives up at the bound sends at most
-/// `HANDSHAKE_DEADLINE / HANDSHAKE_RTO` of them — a stall can only make
-/// it fewer; a client that kept re-sending past the bound (a deadline
-/// restarted per step, a last step overrunning it) sends more. The
-/// outer timeout is the hang guard.
+/// it); not later is the proofs the relay swallowed. The proof step's
+/// timer starts no lower than the floor and doubles per re-send up to
+/// the ceiling (B2, "Retransmit timer"), and every proof leaves before
+/// the deadline, so a client that gives up at the bound sends at most
+/// as many as that schedule fits in `HANDSHAKE_DEADLINE` (nine) — a
+/// stall can only make it fewer; a client that kept re-sending past the
+/// bound (a deadline restarted per step, a last step overrunning it), or
+/// on a timer that never backed off (a hundred), sends more. The outer
+/// timeout is the hang guard.
 #[tokio::test]
 async fn a_proof_that_never_lands_gives_up_with_a_clean_error() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -189,7 +191,13 @@ async fn a_proof_that_never_lands_gives_up_with_a_clean_error() {
     // gives the relay's task a turn to count the last one.
     assert!(no_endpoint(&mut eps, 100).await, "no session, no zombie");
     let sent = proofs.load(Ordering::SeqCst);
-    let most = HANDSHAKE_DEADLINE.as_millis() / HANDSHAKE_RTO.as_millis();
+    // The fastest schedule: sends at 0, then after 50, 100, 200 … ms.
+    let (mut most, mut at, mut step) = (0u128, Duration::ZERO, crate::udp::rel::MIN_RTO);
+    while at < HANDSHAKE_DEADLINE {
+        most += 1;
+        at += step;
+        step = (step * 2).min(MAX_RTO);
+    }
     assert!(
         sent >= 1 && sent as u128 <= most,
         "{sent} proofs in {took:?}: at least one, at most {most} before the bound"
@@ -234,3 +242,4 @@ async fn an_accept_that_never_lands_gives_up_and_the_server_session_is_swept() {
 }
 
 mod evidence;
+mod rtt;

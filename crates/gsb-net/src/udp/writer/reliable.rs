@@ -13,58 +13,45 @@ use tracing::{debug, warn};
 use crate::udp::*;
 
 impl super::UdpWriter {
-    /// Apply an inbound cumulative ACK: advance the state, prune the
-    /// retransmit buffer, and — only when it actually moved — restart the
-    /// liveness clock.
+    /// Apply an inbound cumulative ACK (the demux's piggyback): release
+    /// what it confirms, restart the liveness clock when it moved, and
+    /// take the RTT sample it carries, if any (`RelSend::on_ack`: Karn's
+    /// rule). The sample includes the ACK's hop through the demux and
+    /// this writer's channel — the round trip this writer really sees.
     pub(super) fn apply_ack(&mut self, frame: &FrameBody) {
         if frame.payload.len() < 4 {
             return;
         }
         let ack = u32::from_le_bytes(frame.payload[..4].try_into().unwrap());
-        if ack > self.acked {
-            self.acked = ack;
-            // Real progress: the peer confirmed something new, so the
-            // channel is demonstrably alive.
-            self.ack_progress = Instant::now();
-        }
-        while let Some(&(s, _, _)) = self.retransmit.front() {
-            if s < self.acked {
-                self.retransmit.pop_front();
-            } else {
-                break;
-            }
-        }
+        self.rel.on_ack(ack, Instant::now());
     }
 
-    /// Retransmit the oldest un-ACKed control frame whose RTO has passed,
-    /// and answer the liveness question. An individual frame is NEVER
+    /// Retransmit the oldest un-ACKed control frame whose timer expired
+    /// (the timer then doubles — module docs, "Retransmit timer"), and
+    /// answer the liveness question. An individual frame is NEVER
     /// abandoned: abandoning one wedges the whole direction (the
     /// receiver's cumulative stream never advances past the hole) while
     /// the session lives on — the silent failure this bound replaces.
     /// Returns the fatal reason when the band is dead.
     pub(super) fn retransmit_pass(&mut self) -> Option<String> {
         let now = Instant::now();
-        if self.retransmit.is_empty() {
-            // Nothing outstanding: the peer has nothing to prove.
-            self.ack_progress = now;
-            return None;
-        }
-        let stalled = now.saturating_duration_since(self.ack_progress);
-        if stalled >= REL_NO_ACK_FATAL {
-            return Some(format!(
-                "rUDP reliable control band: no ACK progress for {stalled:?}"
-            ));
-        }
-        if let Some((_, datagram, sent)) = self.retransmit.front_mut()
-            && *sent + RETRANSIT_RTO <= now
-        {
-            if self.sock.try_send_to(datagram, self.peer).is_ok() {
-                *sent = now;
-                self.retransmits += 1;
-            } else {
-                // Refused (B66): the next pass tries again.
-                self.control_send_failed += 1;
+        match self.rel.poll(now) {
+            Due::Dead(stalled) => {
+                return Some(format!(
+                    "rUDP reliable control band: no ACK progress for {stalled:?}"
+                ));
             }
+            Due::Resend(datagram) => {
+                if self.sock.try_send_to(&datagram, self.peer).is_ok() {
+                    self.rel.resent(now);
+                    self.retransmits += 1;
+                } else {
+                    // Refused (B66): the next pass (a tick later) tries
+                    // again, on the same timer.
+                    self.control_send_failed += 1;
+                }
+            }
+            Due::Idle | Due::Wait => {}
         }
         None
     }
@@ -79,7 +66,7 @@ impl super::UdpWriter {
     /// a room member, whose `on_disconnect` policy owns the entity and its
     /// slot from then on.
     pub(super) fn die(&mut self, reason: String) {
-        self.abandoned = self.retransmit.len() as u64;
+        self.abandoned = self.rel.len() as u64;
         warn!(
             conn = %self.conn,
             peer = %self.peer,

@@ -19,8 +19,12 @@ impl UdpClient {
     ///    sends those only to a peer in its session table — and one that
     ///    arrives here is handed to the ordinary inbound path, not lost.
     ///
-    /// A step is re-sent every [`HANDSHAKE_RTO`] without an answer; the
-    /// whole handshake gives up at `within` (the default is
+    /// A step is re-sent when its timer expires without an answer: the
+    /// reliable band's own timer ([`Rto`]), starting at `rel::INITIAL_RTO`
+    /// and doubling per re-send up to [`MAX_RTO`] (module docs,
+    /// "Retransmit timer"). A step answered without a re-send is an RTT
+    /// sample (Karn's rule), so the band starts with the path's estimate.
+    /// The whole handshake gives up at `within` (the default is
     /// [`HANDSHAKE_DEADLINE`], inside one cookie slot, so every proof
     /// re-send carries a cookie the server still accepts). Every re-send
     /// reuses the FIRST cookie: a second challenge (the answer to a
@@ -29,6 +33,10 @@ impl UdpClient {
         let deadline = Instant::now() + within;
         let mut cookie: Option<u64> = None;
         let mut resend = false;
+        // The step's timer, and when the step was first sent (`None` once
+        // it was re-sent: Karn's rule, its answer is no sample).
+        let mut rto = Rto::default();
+        let mut first_sent: Option<Instant>;
         loop {
             let now = Instant::now();
             if now >= deadline {
@@ -45,13 +53,17 @@ impl UdpClient {
                     None => self.stats.challenge_retries += 1,
                     Some(_) => self.stats.proof_retries += 1,
                 }
+                rto.timed_out();
+                first_sent = None;
+            } else {
+                first_sent = Some(now);
             }
             let hello = encode_hello(nonce, cookie.unwrap_or(0));
             self.sock.send_to(&hello, self.peer).await?;
             // Unless an answer moves us to the next step, the same step is
-            // sent again when this one's interval ends.
+            // sent again when this one's timer expires.
             resend = true;
-            let step_ends = (now + HANDSHAKE_RTO).min(deadline);
+            let step_ends = (now + rto.current()).min(deadline);
             while let Some(wait) = step_ends.checked_duration_since(Instant::now()) {
                 let n = match tokio::time::timeout(wait, self.sock.recv_from(&mut self.buf)).await {
                     Err(_) => break, // no answer within the interval
@@ -64,6 +76,9 @@ impl UdpClient {
                         // The challenge: the proof is the next step, sent
                         // at once (not a re-send).
                         cookie = Some(u64::from_le_bytes(self.buf[9..17].try_into().unwrap()));
+                        if let Some(sent) = first_sent {
+                            rto.sample(sent.elapsed());
+                        }
                         resend = false;
                         break;
                     }
@@ -71,10 +86,15 @@ impl UdpClient {
                     // another nonce: the first cookie stands.
                     (KIND_HELLO, _) => {}
                     (_, Some(_)) => {
+                        if let Some(sent) = first_sent {
+                            rto.sample(sent.elapsed());
+                        }
+                        // The band starts here, with the handshake's
+                        // estimate (and its backoff, if no step was clean).
+                        self.rel = RelSend::new(Instant::now(), rto);
                         let d = self.buf[..n].to_vec();
                         self.process_datagram(&d);
                         self.established = true;
-                        self.ack_progress = Instant::now();
                         return Ok(());
                     }
                     // Nothing proven yet: this cannot be our session.

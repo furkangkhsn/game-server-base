@@ -14,7 +14,8 @@ use crate::udp::*;
 #[derive(Debug, Default)]
 pub struct UdpClientStats {
     /// The client's own reliable retransmissions (its control frames
-    /// re-sent before their ACK arrived).
+    /// re-sent because their retransmit timer expired before their ACK
+    /// arrived).
     pub retrans_out: u64,
     /// Duplicated inbound REL frames (the SERVER's retransmissions, as
     /// observed by this client).
@@ -64,13 +65,12 @@ pub struct UdpClient {
     /// sequence order; RAW frames bypass it — the lossy band is
     /// unordered by design).
     pending: VecDeque<FrameBody>,
-    /// Outbound reliable state (client→server).
+    /// Outbound reliable state (client→server): the next seq, and the
+    /// band's sending half — the mirror of the server writer's (the
+    /// un-ACKed frames, the liveness clock, the retransmit timer the
+    /// handshake seeded).
     out_seq: u32,
-    acked: u32,
-    out_retransmit: VecDeque<(u32, Bytes, Instant)>,
-    /// When the cumulative ACK last advanced (or "now" while nothing is
-    /// outstanding) — the mirror of the server writer's liveness clock.
-    ack_progress: Instant,
+    rel: RelSend,
     pub stats: UdpClientStats,
     buf: Vec<u8>,
     /// A RAW frame produced by `process_datagram`, awaiting hand-back to
@@ -115,9 +115,8 @@ impl UdpClient {
             in_oob: HashMap::new(),
             pending: VecDeque::new(),
             out_seq: 0,
-            acked: 1,
-            out_retransmit: VecDeque::new(),
-            ack_progress: Instant::now(),
+            // Replaced by the handshake, with its RTT estimate.
+            rel: RelSend::new(Instant::now(), Rto::default()),
             stats: UdpClientStats::default(),
             buf: vec![0u8; 2048],
             raw: None,
@@ -171,12 +170,24 @@ impl UdpClient {
         self.established
     }
 
+    /// The smoothed round-trip time of the reliable band, once a sample
+    /// was taken (the handshake's, or a control frame's ACK — module
+    /// docs, "Retransmit timer").
+    pub fn srtt(&self) -> Option<Duration> {
+        self.rel.rto().srtt()
+    }
+
+    /// The reliable band's current retransmit timeout (backoff included).
+    pub fn rto(&self) -> Duration {
+        self.rel.rto().current()
+    }
+
     /// Send one application frame: control band (reliable, sequenced) or
     /// game band (RAW, loss-tolerant) — the same split as the server.
     pub async fn send_frame(&mut self, op: u16, payload: impl Into<Bytes>) -> std::io::Result<()> {
         let frame = FrameBody::new(op, payload.into());
         if is_control(op) {
-            if self.out_retransmit.len() >= RETRANSIT_CAP {
+            if self.rel.len() >= RETRANSIT_CAP {
                 // The memory bound of the module docs, mirrored: this many
                 // control frames outstanding with nothing confirmed is the
                 // same death as the no-ACK clock arriving early.
@@ -185,20 +196,16 @@ impl UdpClient {
                     "rUDP reliable control band is dead (retransmit queue full, no ACK progress)",
                 ));
             }
-            if self.out_retransmit.is_empty() {
-                // The liveness clock measures unanswered WORK, so it
-                // starts when something becomes outstanding. The RTO pass
-                // also refreshes it on an empty queue, but a client busy
-                // on the game band never takes that pass (every read
-                // returns a datagram) — without this, its first control
-                // frame after a quiet spell inherits a clock stamped at
-                // the last ACK and the band "dies" on the next pass.
-                self.ack_progress = Instant::now();
-            }
+            // `push` starts the liveness clock when the queue was empty:
+            // it measures unanswered WORK. The retransmit pass also
+            // refreshes it on an empty queue, but a client busy on the
+            // game band never takes that pass (every read returns a
+            // datagram) — without this, its first control frame after a
+            // quiet spell would inherit a clock stamped at the last ACK
+            // and the band would "die" on the next pass.
             self.out_seq = self.out_seq.wrapping_add(1);
             let dg = Bytes::from(encode_rel(self.out_seq, &frame));
-            self.out_retransmit
-                .push_back((self.out_seq, dg.clone(), Instant::now()));
+            self.rel.push(self.out_seq, dg.clone(), Instant::now());
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         } else {
             let dg = encode_raw(&frame);
@@ -230,7 +237,8 @@ impl UdpClient {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Ok(None);
             };
-            let w = remaining.min(RETRANSIT_RTO);
+            // Wake for the oldest control frame's timer (at most a tick).
+            let w = remaining.min(self.rel.wait(Instant::now(), RETRANSIT_TICK));
             match tokio::time::timeout(w, self.sock.recv_from(&mut self.buf)).await {
                 Ok(Ok((n, from))) if from == self.peer => {
                     // Copy out first: process_datagram takes &mut self and

@@ -45,7 +45,7 @@ impl super::UdpWriter {
             self.send_game(&frame).await;
             return None;
         }
-        if self.retransmit.len() >= RETRANSIT_CAP {
+        if self.rel.len() >= RETRANSIT_CAP {
             return Some(format!(
                 "rUDP reliable control band: {RETRANSIT_CAP} frames outstanding, \
                  the peer has confirmed none of them"
@@ -64,8 +64,7 @@ impl super::UdpWriter {
         }
         self.seq = self.seq.wrapping_add(1);
         let datagram = Bytes::from(encode_rel(self.seq, &frame));
-        self.retransmit
-            .push_back((self.seq, datagram.clone(), Instant::now()));
+        self.rel.push(self.seq, datagram.clone(), Instant::now());
         self.send(&datagram, true).await;
         None
     }

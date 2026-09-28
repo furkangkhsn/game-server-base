@@ -2,12 +2,10 @@
 //! reader is the shared demux), carrying the reliable band's
 //! retransmit state and the datagram budget.
 
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bytes::Bytes;
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::ConnIn;
 use gsb_core::id::ConnectionId;
@@ -51,9 +49,10 @@ pub(super) fn udp_pump_spawner(
                     out_rx,
                     max_datagram,
                     seq: 0,
-                    acked: 1,
-                    retransmit: VecDeque::new(),
-                    ack_progress: Instant::now(),
+                    // No sample yet: the server's handshake is
+                    // stateless, so its first sample is its first
+                    // control frame's ACK.
+                    rel: RelSend::new(Instant::now(), Rto::default()),
                     dropped_oversized: 0,
                     frag_id: 0,
                     frag_messages: 0,
@@ -97,16 +96,10 @@ pub(super) struct UdpWriter {
     /// Next outbound control seq (the client's first is 1, so the server
     /// hands out from 1 as well).
     seq: u32,
-    /// Highest cumulative ACK received (the next expected seq).
-    acked: u32,
-    /// Un-ACKed outbound control frames: (seq, encoded datagram, sent_at).
-    /// Bounded by [`RETRANSIT_CAP`].
-    retransmit: VecDeque<(u32, Bytes, Instant)>,
-    /// When the cumulative ACK last actually advanced — or, while nothing
-    /// is outstanding, simply "now" (an idle band has nothing to prove).
-    /// The liveness bound of the module docs is measured from here, NOT
-    /// from an individual frame's age.
-    ack_progress: Instant,
+    /// The reliable band's sending half: the un-ACKed frames (bounded by
+    /// [`RETRANSIT_CAP`]), the cumulative ACK, the liveness clock and the
+    /// retransmit timer (module docs, "Retransmit timer").
+    rel: RelSend,
     /// Game-band frames over the fragment ceiling (dropped and counted).
     dropped_oversized: u64,
     /// The next FRAG message id (per session, wrapping).
@@ -115,6 +108,7 @@ pub(super) struct UdpWriter {
     /// took.
     frag_messages: u64,
     frag_datagrams: u64,
+    /// Control frames re-sent because their retransmit timer expired.
     retransmits: u64,
     /// Control frames still outstanding when the band was declared dead
     /// (reported once, with the close).
@@ -148,10 +142,12 @@ pub(super) struct UdpWriter {
 impl UdpWriter {
     async fn run(mut self) {
         loop {
-            // One awaited source: the outbound channel, optionally bounded
-            // by the retransmit interval (the deadline fires only while
-            // the recv stays pending — a ready batch always wins).
-            let batch = match tokio::time::timeout(RETRANSIT_RTO, self.out_rx.recv()).await {
+            // One awaited source: the outbound channel, bounded by the
+            // oldest frame's retransmit timer (at most the housekeeping
+            // tick; the deadline fires only while the recv stays pending
+            // — a ready batch always wins).
+            let wait = self.rel.wait(Instant::now(), RETRANSIT_TICK);
+            let batch = match tokio::time::timeout(wait, self.out_rx.recv()).await {
                 Ok(Some(b)) => Some(b),
                 Ok(None) => break, // the actor (and the room) are gone
                 Err(_) => None,    // RTO: retransmit pass only
@@ -212,6 +208,8 @@ impl UdpWriter {
                 frag_messages = self.frag_messages,
                 frag_datagrams = self.frag_datagrams,
                 retransmits = self.retransmits,
+                srtt_us = self.rel.rto().srtt().map(|d| d.as_micros() as u64),
+                rto_ms = self.rel.rto().current().as_millis() as u64,
                 abandoned = self.abandoned,
                 drained = self.drained,
                 "rUDP writer session counters"

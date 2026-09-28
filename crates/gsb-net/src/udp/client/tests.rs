@@ -37,9 +37,7 @@ async fn detached() -> (UdpClient, UdpSocket) {
         in_oob: HashMap::new(),
         pending: VecDeque::new(),
         out_seq: 0,
-        acked: 1,
-        out_retransmit: VecDeque::new(),
-        ack_progress: Instant::now(),
+        rel: RelSend::new(Instant::now(), Rto::default()),
         stats: UdpClientStats::default(),
         buf: vec![0u8; 2048],
         raw: None,
@@ -143,7 +141,7 @@ async fn retrans_out_counts_re_sends_and_respects_the_rto() {
     c.send_frame(gsb_protocol::op::base::ERROR, Bytes::from_static(&[9, 0]))
         .await
         .expect("send");
-    assert_eq!(c.out_retransmit.len(), 1, "one frame outstanding");
+    assert_eq!(c.rel.len(), 1, "one frame outstanding");
 
     // The RTO has not passed: nothing is re-sent.
     c.retransmit_pass();
@@ -152,16 +150,19 @@ async fn retrans_out_counts_re_sends_and_respects_the_rto() {
         "a frame within its RTO must not be re-sent"
     );
 
-    // Rewind the frame's send stamp past the RTO (the clock is the
+    // Rewind the frame's send stamp past its timer (the clock is the
     // client's own field, so this needs no sleep).
-    c.out_retransmit[0].2 -= RETRANSIT_RTO;
+    let rto = c.rto();
+    c.rel.front_mut().expect("outstanding").sent -= rto;
     c.retransmit_pass();
     assert_eq!(c.stats.retrans_out, 1, "the expired frame was re-sent");
     assert_eq!(
-        c.out_retransmit.len(),
+        c.rel.len(),
         1,
         "and is still outstanding: a re-send is not a delivery"
     );
+
+    assert_eq!(c.rto(), rto * 2, "and its timer doubled");
 
     // The stamp was refreshed by the pass, so the next one is quiet again.
     c.retransmit_pass();
@@ -190,10 +191,10 @@ async fn gave_up_counts_everything_outstanding_when_the_band_dies() {
             .await
             .expect("send");
     }
-    assert_eq!(c.out_retransmit.len(), 3, "three frames outstanding");
+    assert_eq!(c.rel.len(), 3, "three frames outstanding");
 
     // No ACK has advanced for longer than the fatal window.
-    c.ack_progress -= REL_NO_ACK_FATAL;
+    c.rel.rewind_progress(REL_NO_ACK_FATAL);
     c.retransmit_pass();
 
     assert_eq!(
@@ -205,7 +206,7 @@ async fn gave_up_counts_everything_outstanding_when_the_band_dies() {
         !c.is_established(),
         "a counted give-up must come with the session flipping to dead"
     );
-    assert!(c.out_retransmit.is_empty(), "nothing is still owed");
+    assert!(c.rel.is_empty(), "nothing is still owed");
 }
 
 /// A client with nothing outstanding never dies of silence: the fatal
@@ -218,7 +219,7 @@ async fn gave_up_counts_everything_outstanding_when_the_band_dies() {
 async fn an_idle_client_never_gives_up() {
     let (mut c, _sink) = detached().await;
 
-    c.ack_progress -= REL_NO_ACK_FATAL * 2;
+    c.rel.rewind_progress(REL_NO_ACK_FATAL * 2);
     c.retransmit_pass();
 
     assert_eq!(
@@ -247,7 +248,7 @@ async fn a_control_frame_after_a_quiet_spell_starts_a_fresh_liveness_clock() {
     let (mut c, _sink) = detached().await;
 
     // The last ACK progress was long ago and no pass has run since.
-    c.ack_progress -= REL_NO_ACK_FATAL * 2;
+    c.rel.rewind_progress(REL_NO_ACK_FATAL * 2);
     c.send_frame(gsb_protocol::op::base::ERROR, Bytes::from_static(&[9, 0]))
         .await
         .expect("send");
@@ -287,8 +288,10 @@ async fn a_busy_game_band_does_not_starve_the_retransmit() {
         sink.send_to(&raw, me).await.expect("queue a RAW frame");
     }
     for read in 1..=READS {
-        let outstanding = c.out_retransmit.front_mut().expect("still un-ACKed");
-        outstanding.2 -= RETRANSIT_RTO;
+        // Overdue by its CURRENT timer: each re-send doubled it.
+        let rto = c.rto();
+        let outstanding = c.rel.front_mut().expect("still un-ACKed");
+        outstanding.sent -= rto;
         let got = c
             .recv_frame(Duration::from_secs(5))
             .await
@@ -301,3 +304,5 @@ async fn a_busy_game_band_does_not_starve_the_retransmit() {
         );
     }
 }
+
+mod rtt;

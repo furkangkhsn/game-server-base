@@ -188,6 +188,7 @@ async fn forged_proof_is_rejected() {
     let _ = n;
 }
 
+mod backoff;
 mod bands;
 mod buffers;
 mod frag;

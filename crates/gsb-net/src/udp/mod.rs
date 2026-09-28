@@ -139,7 +139,7 @@
 //!
 //! | lost datagram | before | now |
 //! |---|---|---|
-//! | challenge request / challenge | re-requested (500 ms) | re-requested (`HANDSHAKE_RTO`) |
+//! | challenge request / challenge | re-requested (500 ms) | re-requested (the retransmit timer) |
 //! | proof | **never healed** (client "connected", no session) | proof re-sent until the accept |
 //! | accept | — (did not exist) | proof re-sent; the server answers again |
 //! | first control frame (AUTH) | REL retransmit | REL retransmit (unchanged) |
@@ -154,7 +154,9 @@
 //! sends only to a peer in its session table — one that arrives in place
 //! of a lost accept is handed to the inbound path, not swallowed).
 //! Until then it re-sends the current step — challenge request or proof —
-//! every `HANDSHAKE_RTO` (the transport's one RTO, 50 ms), and gives up
+//! when the step's timer expires (the reliable band's timer, from 50 ms
+//! doubling per re-send — "Retransmit timer" below; a fixed 50 ms until
+//! B2), and gives up
 //! with `TimedOut` at `HANDSHAKE_DEADLINE` (the REL liveness bound,
 //! 5 s: "the server answered nothing for 5 s" means the same before a
 //! session exists as after). The re-sends are counted
@@ -249,8 +251,8 @@
 //!   JOIN result hangs the client; a lost HEARTBEAT is tolerable only
 //!   because HEARTBEAT_ACK is not state — but the *request* may be).
 //!   Each direction keeps its own sequence: the sender retransmits the
-//!   oldest un-ACKed REL frame every `RETRANSIT_RTO` until it is
-//!   ACKed. An individual frame is **never** abandoned; the *band* is
+//!   oldest un-ACKed REL frame each time its timer expires (see
+//!   "Retransmit timer") until it is ACKed. An individual frame is **never** abandoned; the *band* is
 //!   declared dead as a whole (see "The REL liveness bound" below). The
 //!   receiver deduplicates (cumulative), buffers a small out-of-order
 //!   window, and only advances when the gap fills — control frames are
@@ -300,8 +302,9 @@
 //!
 //! **The threshold: 5 s.** It clears every stutter above with headroom
 //! (5-15× a Wi-Fi roam, ~2× the worst Wi-Fi↔cellular switch), and it is
-//! ~100 retransmissions of the same frame at the 50 ms RTO: a path that
-//! delivers nothing in 100 tries over 5 s is not stuttering, it is down.
+//! eight retransmissions of the same frame on the backed-off timer (100
+//! on the fixed 50 ms one it had before B2): a path that delivers
+//! nothing for 5 s of tries is not stuttering, it is down.
 //! It also sits well below the demux's 30 s `idle_timeout`, which is the
 //! only other death signal — and that one watches INBOUND silence, so a
 //! peer that keeps sending RAW input while never ACKing (the exact
@@ -320,11 +323,10 @@
 //! **Rejected — RTO backoff + a retry count (the TCP shape).** A retry
 //! budget with exponential backoff expresses the same bound in units
 //! nobody can reason about (how many retries is 5 s? depends on the
-//! backoff curve), and backoff needs RTT estimation to be worth
-//! anything, which this transport does not have yet (see "What is still
-//! open"). The wall-clock bound is the honest statement of the policy;
-//! adding backoff later changes the retransmit *schedule* without
-//! touching the death rule.
+//! backoff curve). The wall-clock bound is the honest statement of the
+//! policy. Backoff did come later, with RTT estimation (B2, "Retransmit
+//! timer"): it changed the retransmit *schedule* and left the death rule
+//! exactly as it was.
 //!
 //! **Rejected — tell the client instead of closing.** There is no path
 //! to tell it: the ERROR frame is itself a control-band frame and would
@@ -340,6 +342,59 @@
 //! the absolute one (every frame at the full datagram budget) is
 //! ~380 KB, and it is only reachable by a session whose ACKs have
 //! already stopped — i.e. one already inside its dying window.
+//!
+//! ## Retransmit timer (BACKLOG B2)
+//!
+//! Until B2 the reliable band re-sent its oldest frame every 50 ms, for
+//! every peer, never backing off: a 200 ms path got ~4 redundant copies
+//! of every control frame, and a blackout was hammered at 20 Hz until
+//! the liveness bound. Each direction — the server's per-session writer
+//! and the client — now keeps an RFC 6298 estimate in the band's sending
+//! half (`rel::RelSend`, `rel::Rto`), with **no wire change**:
+//!
+//! - **Samples** come from the cumulative ACKs the band already has: the
+//!   sender keeps every un-ACKed frame with its send time, and an ACK
+//!   that releases frames is ONE sample — `now − sent` of the NEWEST
+//!   frame it releases (its arrival is what sent the ACK). On the server
+//!   the sample includes the ACK's hop through the demux into the
+//!   writer's channel: the round trip the writer really sees.
+//! - **Karn's rule:** no sample when any released frame was ever re-sent
+//!   (the ACK may answer either copy, and a gap filled by a re-sent frame
+//!   delays the ACK of every frame behind it); the backed-off timer is
+//!   kept until a clean frame is answered.
+//! - **The timer:** `SRTT + max(1 ms, 4·RTTVAR)`, clamped to 50 ms ..
+//!   1 s (`rel::MIN_RTO`, `rel::MAX_RTO`; the rationale is on the constants),
+//!   doubled on each expiry up to the ceiling, reset by a valid sample.
+//!   Before the first sample it is the floor (`rel::INITIAL_RTO`).
+//! - **The liveness bound is untouched:** death is still no cumulative
+//!   ACK progress for `REL_NO_ACK_FATAL`, a clock on the channel; at
+//!   the ceiling a dying band is still tried four times (a compile-time
+//!   assertion). A blackout from the first send sees re-sends at 50,
+//!   150, 350, 750, 1550, 2550, 3550, 4550 ms — eight instead of 100.
+//! - **Wake-ups:** the writer waits for its next batch at most until the
+//!   oldest frame's timer expires, and never longer than
+//!   `RETRANSIT_TICK` (50 ms, its housekeeping interval — the reap
+//!   check and the metric flush); the client's read does the same.
+//! - **The handshake** backs off the same way (each step from the floor,
+//!   doubling), and a step answered without a re-send is the client's
+//!   first sample: its band starts with the path's estimate. The server's
+//!   cannot — its challenge is stateless — so its first sample is its
+//!   first control frame's ACK.
+//!
+//! **Rejected — a timestamp echo on the wire** (each REL carries a send
+//! time, each ACK echoes it, TCP-timestamps style): exact samples even
+//! from re-sent frames, for a wire change to every REL and ACK datagram
+//! of a band that carries a handful of frames a second — Karn's rule
+//! costs nothing. **Rejected — RFC 6298's 1 s initial timeout:** the
+//! first control frame is the AUTH/JOIN answer a player waits on; a lost
+//! one would cost a second of join latency, while a spurious copy of a
+//! tens-of-bytes frame costs next to nothing and the backoff walks a
+//! long path's timer up within a few copies. **Rejected — samples from
+//! the game band:** RAW frames are never acknowledged. **Rejected — a
+//! floor under 50 ms:** the ACK comes from scheduled tasks on both sides
+//! (the demux, the writer's channel, the client's read loop), so even a
+//! sub-millisecond path sees ACKs that wait on a scheduler; a busy host
+//! would re-send frames that were never lost.
 //!
 //! ## MTU (feature 3): the game band fragments
 //!
@@ -449,11 +504,11 @@
 //! sessions get `ConnIn::ServerClosed` (the actor answers `ERROR` 9 and
 //! tears down) and are removed. A session whose actor is already gone
 //! is removed promptly (BACKLOG B6, `demux::reap`): its writer — which
-//! wakes every RTO anyway — sees the actor's mailbox closed and its own
+//! wakes at least every `RETRANSIT_TICK` anyway — sees the actor's mailbox closed and its own
 //! reliable band owing nothing (the actor's close notice is ACKed or
 //! given up on), queues the peer's address for the demux and wakes it
 //! with a one-byte datagram to the demux's own address; the demux frees
-//! the session if it is really dead, within about one RTO and without a
+//! the session if it is really dead, within about one tick and without a
 //! datagram from the peer. The older net stays: a datagram for a gone
 //! session still hits its closed mailbox. No per-session timer tasks, no
 //! multiplexing, no shared state — the heap is the demux task's local
@@ -489,14 +544,6 @@
 //!   network a room fan-out plus retransmissions can push a slow path
 //!   into a loss spiral it has no way to back out of. (Verified: no
 //!   token bucket, no pacer, no window anywhere under `udp/`.)
-//! - **Fixed RTO, no RTT estimation.** `RETRANSIT_RTO` is a compile-time
-//!   50 ms for every peer on earth, and it never backs off. A 200 ms path
-//!   therefore gets ~4 redundant copies of every control frame before the
-//!   first ACK can possibly arrive — wasteful in the good case and
-//!   actively harmful in the loss case, which is exactly why the
-//!   backoff-shaped alternative was rejected for the liveness bound until
-//!   this exists. (Verified: no RTT sample is taken; the constant is used
-//!   as-is by both the writer and the client.)
 //! - **NAT rebinding ends the session.** Sessions are keyed by the
 //!   peer's 4-tuple, so a rebind is a new address: a new handshake, a new
 //!   `ConnectionId`, and the old session lingering until the idle sweep.
@@ -512,16 +559,12 @@
 //!   datagram is as forgeable as a RAW one, and the client's reassembly
 //!   bounds are what keep a forged stream from costing it more than
 //!   64 KiB.
-//! - **The handshake re-sends on the same fixed RTO.** A lost proof is
-//!   healed now (see "Handshake loss"), but on a path whose RTT exceeds
-//!   50 ms the client sends several copies of each handshake step before
-//!   the first answer can arrive — the handshake's share of the "Fixed
-//!   RTO" item above (each copy is answered at ratio ≤ 1).
 
 mod client;
 mod cookie;
 mod demux;
 mod frag;
+mod rel;
 mod transport;
 mod wire;
 mod writer;
@@ -537,6 +580,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 use cookie::{CookieClock, CookieKey};
 use demux::{Reaper, UdpSession, demux};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
+use rel::{Due, MAX_RTO, RelSend, Rto};
 use transport::Queued;
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;
@@ -560,20 +604,18 @@ pub const KIND_FRAG: u8 = 4;
 /// a captured proof leaves open is between one and two of these.
 const COOKIE_SLOT: Duration = Duration::from_secs(10);
 
-/// The retransmit interval of the reliable control band.
-const RETRANSIT_RTO: Duration = Duration::from_millis(50);
+/// The longest a writer or a client read waits between two retransmit
+/// passes: the oldest frame's timer ([`Rto`]) usually expires sooner;
+/// this is the housekeeping interval the writer has always woken at (its
+/// reap check, its metric flush) — and the retry interval of a re-send
+/// the socket refused.
+const RETRANSIT_TICK: Duration = Duration::from_millis(50);
 /// How long the reliable band may make NO cumulative-ACK progress at all
 /// — while something is outstanding — before that direction is declared
 /// dead and the session ends. See the module docs, "The REL liveness
 /// bound", for why the bound is on the CHANNEL and not on a frame's age,
 /// and for the 5 s figure against real lossy-link numbers.
 const REL_NO_ACK_FATAL: Duration = Duration::from_secs(5);
-/// The client's handshake re-send interval, for the challenge request
-/// and the proof alike (see the module docs, "Handshake loss"): a step
-/// that has had no answer for this long is sent again. The transport's
-/// one RTO — measured against 250 ms at 500 simultaneous handshakes, it
-/// cut the connect p50 from ~250 ms to ~50 ms with no more re-sends.
-const HANDSHAKE_RTO: Duration = RETRANSIT_RTO;
 /// How long the client keeps re-sending before the handshake gives up
 /// with `TimedOut`: the REL liveness bound, so "the server answered
 /// nothing for 5 s" means the same thing before a session exists as it
@@ -584,6 +626,10 @@ const HANDSHAKE_DEADLINE: Duration = REL_NO_ACK_FATAL;
 // shorter than one slot means no retry can meet an expired cookie
 // (module docs, "Handshake loss", the rotation argument).
 const _: () = assert!(HANDSHAKE_DEADLINE.as_millis() < COOKIE_SLOT.as_millis());
+// A band whose timer sits at the ceiling is still tried at least four
+// times before the liveness bound declares it dead (module docs,
+// "Retransmit timer"): the backoff changes the schedule, never the death.
+const _: () = assert!(REL_NO_ACK_FATAL.as_millis() >= 4 * MAX_RTO.as_millis());
 /// Memory bound of the un-ACKed retransmit queue (per direction, per
 /// session). Reaching it means the peer has confirmed nothing while this
 /// many control frames piled up, which is the same death as

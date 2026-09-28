@@ -1719,7 +1719,10 @@ yeniden gönderimi (değişmedi).
   bir oturum datagram'ı (ACK/REL/RAW/FRAG — sunucu bunları yalnız oturum
   tablosundaki peer'e yollar; kabulün yerine gelen kare kaybolmaz, normal
   giriş yoluna verilir). O zamana kadar güncel adım (challenge isteği ya
-  da proof) her `HANDSHAKE_RTO`'da (= taşımanın tek RTO'su, 50 ms)
+  da proof) adımın zamanlayıcısı dolunca (B2'den beri REL bandının
+  zamanlayıcısı: 50 ms'den başlar, her yeniden gönderimde ikiye katlanır,
+  en çok 1 sn — aşağıda "Yeniden gönderim zamanlayıcısı"; B2'ye kadar
+  sabit 50 ms, `HANDSHAKE_RTO`)
   yeniden gönderilir; `HANDSHAKE_DEADLINE`'da (= REL canlılık sınırı,
   5 sn) `TimedOut` ile vazgeçilir. Sayaçlar: istemci
   `challenge_retries`/`proof_retries`, loadgen `hs_retries`, sunucu
@@ -1780,13 +1783,77 @@ RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
 `4` FRAG `[u16 mesaj id][u8 index][u8 count][parça]` (yalnız sunucu →
 istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU").
 Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
-= oyun (kayıp toleranslı). Yeniden gönderim: RTO 50 ms; tek
+= oyun (kayıp toleranslı). Yeniden gönderim: uyarlanan RTO (RFC 6298,
+50 ms–1 sn, geri çekilmeli — B2, aşağıda; önceden sabit 50 ms); tek
 frame asla bırakılmaz, 5 sn ACK ilerlemesi olmazsa BANT ölü ilan edilir
 ve oturum biter (`udp/mod.rs` "The REL liveness bound"; eski "250 ms'de
 vazgeç" kuralı kaldırıldı), out-of-order penceresi 16; çift frame ACK'lenir ama
 yeniden iletmez. ACK'ler demux tarafından oturumun writer'ına **out
 kanalı üzerinden** (UDP_ACK frame olarak) verilir — komut kanalı yok,
 tek-beklenen-kaynak özdeşliği korunur.
+
+**Yeniden gönderim zamanlayıcısı: RTT tahmini + uyarlanan RTO (BACKLOG
+B2 — 2026-09-28).** Eskiden REL bandı en eski ACK'siz karesini her
+eş için sabit 50 ms'de bir yeniden gönderiyordu, geri çekilme yoktu:
+200 ms'lik yol ilk ACK gelebilmeden her kontrol karesinin ~4 fazladan
+kopyasını alıyor, kesinti canlılık sınırına dek 20 Hz'de dövülüyordu.
+Şimdi her yön — sunucunun oturum başına yazıcısı ve istemci — bandın
+gönderen yarısında (`udp::rel::RelSend`, `rel::Rto`; yazıcı ile istemci
+artık aynı kodu paylaşıyor) RFC 6298 tahmini tutar. **Tel değişmedi.**
+
+- **Örnek nereden:** var olan kümülatif ACK'ten. Gönderen her ACK'siz
+  kareyi gönderim zamanıyla zaten tutuyordu; kare serbest bırakan bir
+  ACK TEK örnektir: serbest bıraktığı EN YENİ karenin `şimdi − gönderim`
+  süresi (ACK'i onun varışı yollattı). Sunucuda örnek ACK'in demux →
+  yazıcı kanalı yolculuğunu da içerir: yazıcının gerçekten gördüğü tur.
+- **Karn kuralı:** serbest bırakılan karelerden biri bile yeniden
+  gönderildiyse örnek yok (ACK hangi kopyaya cevap, bilinemez; yeniden
+  gönderilen karenin doldurduğu boşluk arkasındaki her karenin ACK'ini
+  geciktirir); geri çekilmiş zamanlayıcı temiz bir kare cevaplanana dek
+  korunur.
+- **Zamanlayıcı:** `SRTT + max(1 ms, 4·RTTVAR)` (α = 1/8, β = 1/4),
+  `[50 ms, 1 sn]`'ye kıstırılır; her dolmada ikiye katlanır (tavana
+  kadar), geçerli örnek geri çekilmeyi sıfırlar. İlk örnekten önce
+  taban (50 ms).
+- **Sınırlar:** *taban 50 ms* — eski sabit değer (H turunun katılma
+  fırtınası ölçümünün seçtiği); ACK'i iki tarafta da zamanlanmış
+  görevler üretir (demux, yazıcı kanalı, istemcinin okuma döngüsü),
+  milisaniyenin altındaki LAN turu bile zamanlayıcı bekleyen ACK görür —
+  60 Hz'de ~3 tick'in altı meşgul makinede hiç kaybolmamış kareleri
+  yeniden yollar. *Tavan 1 sn* — kesintiden (Wi-Fi dolaşımı, hücresel
+  geçiş) dönen yol en geç bir saniyede yeniden denenir ve canlılık
+  sınırı (5 sn) tavanda en az dört deneme görür (derleme zamanı
+  `assert`'i: `REL_NO_ACK_FATAL ≥ 4 × MAX_RTO`).
+- **Canlılık sınırı değişmedi:** ölüm hâlâ "5 sn kümülatif ACK
+  ilerlemesi yok" — kanalın saati; geri çekilme yalnız yeniden gönderim
+  TAKVİMİNİ değiştirdi. İlk gönderimden itibaren kesintide yeniden
+  gönderimler 50, 150, 350, 750, 1550, 2550, 3550, 4550 ms'de: 100 yerine
+  sekiz.
+- **Uyanma:** yazıcı sonraki partiyi en eski karenin zamanlayıcısı
+  dolana dek bekler, ama asla `RETRANSIT_TICK`'ten (50 ms — reap
+  denetimi ve metrik boşaltma aralığı, eskisi gibi) uzun değil; istemcinin
+  okuması da öyle. Soketin reddettiği yeniden gönderim bir tick sonra
+  aynı zamanlayıcıyla denenir.
+- **El sıkışma:** aynı zamanlayıcı — her adım tabandan başlar, her
+  yeniden gönderimde katlanır; yeniden gönderilmeden cevaplanan adım
+  istemcinin ilk örneğidir, REL bandı yolun tahminiyle başlar (adımlar
+  yeniden gönderildiyse örnek yok, geri çekilme bandın başlangıcıdır).
+  Sunucu tohumlayamaz: challenge'ı durumsuz; ilk örneği ilk kontrol
+  karesinin ACK'i.
+- **Görünürlük:** istemci `UdpClient::srtt()`/`rto()`; yazıcının oturum
+  sonu log'u `srtt_us`/`rto_ms`.
+
+*Elenenler.* (a) *Telde zaman damgası yankısı* (her REL gönderim zamanı
+taşır, her ACK yankılar — TCP timestamps) — yeniden gönderilen kareden
+de kesin örnek; bedeli saniyede birkaç kare taşıyan bir bant için her
+REL ve ACK datagram'ında tel değişikliği. Karn kuralı bedava. (b) *RFC
+6298'in 1 sn'lik başlangıç RTO'su* — ilk kontrol karesi oyuncunun
+beklediği AUTH/JOIN cevabı; kaybı bir saniyelik katılma gecikmesi olurdu,
+onlarca baytlık karenin gereksiz kopyası ise neredeyse bedava ve geri
+çekilme uzun yolun zamanlayıcısını birkaç kopyada yukarı taşır. (c)
+*Oyun bandından örnek* — RAW kareler ACK'lenmez. (d) *50 ms'nin altında
+taban* — yukarıda. (e) *Yeniden deneme sayısıyla ölüm (TCP şekli)* —
+canlılık sınırı turunda elendi; geri çekilme o kararı değiştirmedi.
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
@@ -1923,7 +1990,7 @@ kutusuna çarpana ya da idle sweep'e kadar demux'ta kalıyordu
 (`idle_timeout = None` ise sonsuza dek): yazıcısı, kanalları ve adres
 yuvası — aynı adresten gelen yeni el sıkışma kurulu bir adrese ait
 sayılıp cevapsız kalıyordu. Şimdi oturumu **yazıcısı** bırakır: yazıcı
-zaten her RTO'da (50 ms) uyanır ve aktörün posta kutusunun bir klonunu
+zaten en geç her `RETRANSIT_TICK`'te (50 ms) uyanır ve aktörün posta kutusunun bir klonunu
 tutar. Posta kutusu kapalıysa **ve** kendi güvenilir bandı hiçbir şey
 borçlu değilse (aktörün son bildirimi — ERROR 14/9 — ACK'lendi ya da REL
 canlılık sınırı ondan vazgeçti) adresi sınırlı bir süreç-içi kuyruğa
@@ -1936,8 +2003,8 @@ yalnız gerçekten ölüyse — aktörün posta kutusu ya da yazıcının kanal�
 kapalıysa — kaldırır (deadline girdisiyle birlikte). Kuyruk yetki
 vermez: bayat bir sinyal (adreste artık yeni bir oturum var) ya da sahte
 bir uyandırma yalnız O(1) bir denetime mal olur; uyandırma kaynağından
-tanınır, içeriği okunmaz. Sınır: aktör çıktıktan sonra ~bir RTO; son
-bildirim hiç ACK'lenmezse `REL_NO_ACK_FATAL` (5 sn) + RTO. Oturum
+tanınır, içeriği okunmaz. Sınır: aktör çıktıktan sonra ~bir tick (50 ms);
+son bildirim hiç ACK'lenmezse `REL_NO_ACK_FATAL` (5 sn) + bir tick. Oturum
 bittikten sonra yazıcı kanal kapanana dek (oda DETACH'ı işleyip
 göndericisini bırakana dek) çalışır ama gelen kareleri **tele koymaz**
 (`drained`): adres o arada yeni bir oturum taşıyor olabilir, oda da

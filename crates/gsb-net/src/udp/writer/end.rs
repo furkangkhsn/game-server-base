@@ -12,7 +12,7 @@ impl super::UdpWriter {
     /// running until its channel closes (the room still holds a sender
     /// until it has processed the detach), so nothing it is sent fails.
     pub(super) fn session_over(&self) -> bool {
-        !self.reap_signalled && self.in_tx.is_closed() && self.retransmit.is_empty()
+        !self.reap_signalled && self.in_tx.is_closed() && self.rel.is_empty()
     }
 
     /// Tell the demux, once, that this session can go (the demux's reap pass).
