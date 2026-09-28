@@ -171,3 +171,46 @@ async fn the_final_report_does_not_wait_for_the_transport_channel() {
     assert_eq!(fin.transport.udp_acks_not_forwarded, 5);
     drop(transport);
 }
+
+/// A transport's last word that lands while the collector is already
+/// folding the stop — after the session producers' last event, before
+/// their channel closes — is still in the final report: the transport
+/// channel is drained once more when the main channel closes.
+#[tokio::test(start_paused = true)]
+async fn a_transport_word_after_the_last_session_event_is_in_the_final_report() {
+    let (transport, transport_rx) = mpsc::channel::<MetricsEvent>(4);
+    let Rig {
+        ticks,
+        events,
+        mut reports,
+        collector,
+    } = rig(Some(transport_rx));
+    drop(ticks);
+    // The collector is folding the stop's last words by now.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let _ = events.try_send(MetricsEvent::RoomFinal(room_sample(
+        RoomId(3),
+        Instant::now(),
+        6,
+    )));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    // A pump's final flush, after the room's word was folded.
+    let lost = TransportCounters {
+        udp_acks_not_forwarded: 4,
+        ..TransportCounters::default()
+    };
+    transport
+        .try_send(MetricsEvent::Transport(lost))
+        .expect("queued");
+    drop(events);
+
+    assert!(collector.await.expect("collector task"));
+    let reports = all(&mut reports);
+    let fin = reports.last().expect("a final report");
+    assert_eq!(fin.rooms.len(), 1, "the room's final count");
+    assert_eq!(
+        fin.transport.udp_acks_not_forwarded, 4,
+        "the transport word that came after it"
+    );
+    drop(transport);
+}
