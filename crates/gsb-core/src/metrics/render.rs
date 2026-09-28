@@ -18,7 +18,7 @@ impl MetricReport {
                  match_results_dropped_full={} match_results_dropped_closed={} \
                  rooms_ended_uncounted={} \
                  team_relays_dropped_full={} team_relays_dropped_closed={} \
-                 joins_refused_closed={}",
+                 joins_refused_closed={} joins_unread={} team_exports_unread={}",
                 r.rooms,
                 r.conns,
                 r.opens,
@@ -35,7 +35,9 @@ impl MetricReport {
                 r.rooms_ended_uncounted,
                 r.team_relays_dropped_full,
                 r.team_relays_dropped_closed,
-                r.joins_refused_closed
+                r.joins_refused_closed,
+                r.joins_unread,
+                r.team_exports_unread
             ));
         }
         for r in &self.rooms {

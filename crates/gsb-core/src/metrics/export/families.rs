@@ -16,13 +16,15 @@
 
 use crate::metrics::{MetricReport, RoomReport};
 
+mod registry;
 mod room;
 mod server;
 mod session;
 mod stop;
 mod transport;
 
-pub(super) use server::{NET, REGISTRY};
+pub(super) use registry::REGISTRY;
+pub(super) use server::NET;
 pub(super) use transport::TRANSPORT;
 
 /// A family's type: a cumulative counter or a gauge.

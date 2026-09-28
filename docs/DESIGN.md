@@ -2457,6 +2457,8 @@ ServerHandle::stop
     bekler, aşanı abort eder (geri sigorta; ağaç içi taşımalarda hiç
     gerekmez; abort aktör doğmadan önceki bir await'te keser)
   → RegistryMsg::Shutdown   (döngülerin gönderdiği her ConnOpened onun önünde)
+      → kutu KAPANIR, arkasında kalanlar boşaltılıp türe göre sayılır,
+        registry'nin son örneği post edilir (F53, aşağıda)
       → her dispatcher'a RoomOp::Close (yol açma + son detach), sonra senders düşer
         (Close'u kuyruğa giremeyen dispatcher kuyruğu kapanınca aynısını yapar, B61)
       → her bağlantının inbox'ına ConnIn::Shutdown  (spawn'lu gönderim)
@@ -2658,11 +2660,69 @@ bulur ve shard durur: kutusuna yerinde teslim edilen `Shutdown`'la shard
 başına en çok bir kapalı ret. Garanti değil: shard'ın kutusu doluysa
 `Shutdown` spawn'lu göndericiden (`post`) sonra gelir, shard aradaki
 tamponlu tick'lerde yine adımlayıp yine reddedilebilir — bu yüzden
-kapalı sayısına test sınır koymaz. Sayılmayan eş (BACKLOG F53): registry
-`Shutdown`'ı işlerken (ya da `Shutdown` kutuda sırasını beklerken)
-arkasına BAŞARIYLA kuyruklanan export registry'yle birlikte düşer —
-shard onu `team_exports`'ta "kuyruklandı" sayar, hiçbir ret sayacı onu
-görmez.
+kapalı sayısına test sınır koymaz. Eşi — `Shutdown` kutuda sırasını
+beklerken arkasına BAŞARIYLA kuyruklanan export — F53'e dek registry'yle
+birlikte sayılmadan düşüyordu; artık `team_exports_unread` (aşağıda).
+
+**Registry'nin kutusunda kalanlar (F53).** Registry `Shutdown`'dan sonra
+hiçbir şey okumaz ve kendi posta kutusunun bir klonunu tuttuğu için
+EOF'u beklemez (§9.1). Önceden alıcıyı düşürüyordu: `Shutdown` sırasını
+beklerken arkasına kuyruklanan her mesaj — göndericisi gönderimi
+BAŞARILI görmüştü — onunla birlikte sayılmadan gidiyordu. Artık
+`Shutdown` kolu (`registry/actor/run/leftovers.rs`) önce kutuyu KAPATIR
+— sonraki gönderim göndericide reddedilir ve gönderici kapalı reddi
+sayıyorsa orada sayılır (shard'ın export'u `team_export_drops_closed`) —
+sonra `try_recv` ile boşaltır (kapalı kutu sonludur; F41'in elediği
+"boşaltmaya devam" seçeneğinin sonu gelmeyen EOF sorunu yok) ve kalanları
+duruş anındaki tablolara göre, türüne göre ele alır. B68'in oda/shard
+için yaptığının registry eşi; ölçüt: kalan, taşıdığı şey HİÇBİR yerde
+olmayacaksa ve başka hiçbir sayaç onu görmüyorsa sayılır.
+
+- **Takım export'u** (odanın canlı enkarnasyonu, sharded kayıt): shard onu
+  `team_exports`'ta "kuyruklandı" saydı, hub hiç rölelemedi →
+  `team_exports_unread`. Bayat enkarnasyonun ya da bilinmeyen odanın
+  export'u hub çalışırken de sessiz no-op'tur; burada da sayılmaz.
+- **Katılma** (`SpawnPlayer`, resume denemeleri dahil): hiç işlenmedi;
+  yanıtı düşer, bağlantı istemcisine `ERROR` "registry unavailable" der →
+  `joins_unread`. Katılma hattının diğer her durağı kaybını sayıyor
+  (B57 `join_ops_dropped`, B75 `joins_refused_closed`, B68
+  `joins_unprocessed`); bu durak eksikti.
+- **Duruşun arkasında açılan bağlantı** (`ConnOpened`): kayıtlılar gibi
+  `ConnIn::Shutdown` alır (spawn'lu gönderim) — kayıp yok, sayaç yok.
+  Sunucunun `stop()`'u kapıları önce kapattığından (F41) bu kol yalnız
+  registry'yi kendisi süren kütüphane kullanıcısında koşar.
+- **Sayılmayanlar** — duruşun kendisi onları yapar: kopuş (`ConnClosed`)
+  ve ayrılış (`DespawnPlayer`): teardown'un `RoomOp::Close`'u her
+  dağıtıcıya tuttuğu üyeliği detach ettirir ve her oda durur; dağıtıcı
+  yankıları (`SpawnDone`, `SpawnFailed`, `LeaveDone`, `DetachDone`,
+  `OpsClosed`), `RoomDied` (panik bekçide sayılır, B67) ve `Authed`
+  yalnız teardown'un düşürdüğü tabloları günceller; odanın hükümleri
+  (`CloseConn`, `LeaveConn`, `DetachDespawned`): oda üyeliği zaten
+  bitirdi, teardown her bağlantıya dur der — kapalı retleri de aynı
+  gerekçeyle sayılmıyor (B57); kontrol düzlemi istekleri (`CreateRoom`,
+  `DestroyRoom`, `RoomStatus`): düşen yanıt çağırana hatadır. Eşleşme
+  tümdür (joker kol yok): yeni bir mesaj türü burada karar ister.
+
+Sayılar registry'nin SON örneğinde gider: `Shutdown` kolu sayımdan sonra,
+teardown'dan (`on_shutdown`) önce örneği `channel::post` ile gönderir —
+dolu metrik kanalında spawn'lu gönderici kendi klonunu tutar — ve
+göndericisini ancak `run()`'dan dönerken düşürür. Toplayıcının son raporu
+her oturum üreticisinin göndericisini düşürmesini beklediğinden (F35), o
+örnek son rapordan önce katlanır. Tablo göstergeleri (`rooms`, `conns`)
+son örnekte teardown'dan önceki değerlerdir. S kuralı değişmedi: sayım
+senkron, registry hiçbir odayı beklemez. İstemci teli değişmedi.
+
+Elenenler: (1) *Kalanları işlemek* (ör. katılmayı dağıtıcıya vermek) —
+duruşta odalar durur; işlenen katılma hemen teardown'a düşer, iş
+sayımdan fazlasını getirmez ve registry'nin duruş yolunu uzatır. (2)
+*Kutuyu `on_shutdown`'dan SONRA kapatmak* (BACKLOG adayı) — teardown
+sırasında gelenleri de boşaltırdı ama tablolar o an silinmiş olur (canlı
+enkarnasyon sınaması yapılamaz) ve çok iş parçacığında teardown'un
+kendi yankıları (dağıtıcıların `DetachDone`'u) kutuya karışırdı; önce
+kapatmak onları göndericide reddeder — sayılacak bir şey taşımıyorlar. (3) *Tek bir
+"okunmamış mesaj" sayacı* — karışık anlam; türlerin çoğu kayıp
+taşımıyor. (4) *Son örneği `try_send` ile göndermek* — dolu kanalda
+düşer; sayım kaybolurdu.
 
 **Panikleyen oda/shard (B67).** Ölüm bekçisi (oda/shard görevi başına bir
 görev, yalnız `JoinHandle`'ı bekler) registry'ye `RoomDied` bildirir;
@@ -3182,6 +3242,7 @@ durdurulamaz.
 | registry | `rooms_ended_uncounted` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_rooms_ended_uncounted_total`, loadgen telinde GSMU) | kaç oda/shard GÖREVİ son sayımı olmadan (panikle) bitti — son penceresi ve elinde kalanlar hiçbir sayaçta yok? Ölüm bekçisinin `MetricsEvent::RoomEndedUncounted`'ı; satır da onunla budanır. B67 |
 | registry | `team_relays_dropped_full`, `team_relays_dropped_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_team_relays_dropped_{full,closed}_total`, loadgen telinde GSMW) | sharded odanın takım hub'ı (CROSS-SHARD §8b.2) kaç import'u hedef shard'a kuyruklayamadı — kutusu DOLU (yetişemiyor; kaynağın sonraki export'u kümeyi yeniden taşır) mu, KAPALI (durmuş/ölmüş) mu? Önceden yalnız `team_hub_summary` log satırında, ikisi karışık. Registry ret olduğunda örneğini hemen gönderir (röle tablo değiştirmez). B72 |
 | registry | `joins_refused_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_refused_closed_total`, loadgen telinde GSMY) | kaç katılmayı (resume denemeleri dahil) oda kutusu KAPALI olduğu için reddetti — oda/shard durmuş ya da ölmüş, op'u hiç görmedi, istemci `RoomGone` aldı? Dağıtıcının `MetricsEvent::JoinRefusedClosed`'ı (registry'yi atlar: bütün sunucunun duruşunda registry önce çıkar). Alınıp duruşta düşürülen katılma odanın `joins_unprocessed`/`resumes_unprocessed`'idir, bu değil. B75 |
+| registry | `joins_unread`, `team_exports_unread` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_{joins,team_exports}_unread_total`, loadgen telinde GSNC; yalnız son örnekte) | registry duruşta kutusunda neyi OKUMADAN bıraktı? `Shutdown`'ın arkasında kalan katılmalar (yanıtı düştü, istemci ERROR aldı) ve canlı sharded odanın takım export'ları (shard `team_exports`'ta saydı, hub rölelemedi). Diğer türler kayıp taşımıyor (§9 "Registry'nin kutusunda kalanlar"). F53 |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif; B55'ten beri yalnız oyun-bandı girdisi)
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)

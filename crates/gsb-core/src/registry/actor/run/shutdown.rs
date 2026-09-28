@@ -73,10 +73,12 @@ where
         }
         // 4. Stop the actor now. (It cannot wait for the mailbox
         //    to close: it holds a clone of it — `self_mailbox` —
-        //    for dispatcher reporting, so EOF would never come.)
-        //    Dispatchers already received Close and will exit on
-        //    their own; their stray reports fail against the
-        //    dropped inbox, harmlessly. The death watchers exit
+        //    for dispatcher reporting, so EOF would never come.
+        //    It needs no EOF either: the `Shutdown` arm closed the
+        //    inbox and counted what it held before calling this —
+        //    F53, the `leftovers` module.) Dispatchers already
+        //    received Close and will exit on their own; their stray
+        //    reports fail against the closed inbox, harmlessly. The death watchers exit
         //    the same way: when the ticker abort closes each
         //    room's tick channel, every watcher's report fails
         //    against our dropped mailbox and the watcher stops

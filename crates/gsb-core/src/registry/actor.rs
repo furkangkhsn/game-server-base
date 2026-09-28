@@ -78,6 +78,10 @@ pub struct Registry<W, G, St, Sp> {
     /// `RegistrySample::team_relays_dropped_full`).
     reg_team_relays_dropped_full: u64,
     reg_team_relays_dropped_closed: u64,
+    /// What the registry left unread in its mailbox when it stopped
+    /// (F53; see `run::leftovers`), counted once in its `Shutdown` arm.
+    reg_joins_unread: u64,
+    reg_team_exports_unread: u64,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -183,6 +187,8 @@ where
             reg_close_ops_dropped: 0,
             reg_team_relays_dropped_full: 0,
             reg_team_relays_dropped_closed: 0,
+            reg_joins_unread: 0,
+            reg_team_exports_unread: 0,
             next_join_epoch: 0,
             metrics,
             max_connections,
@@ -200,7 +206,16 @@ where
     /// full channel drops + counts the sample (harmless — the counters are
     /// cumulative, so the next flush carries everything).
     pub(super) fn emit_metrics(&mut self) {
-        let sample = RegistrySample {
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.metrics.try_send(MetricsEvent::Registry(self.sample()))
+        {
+            self.reg_metrics_dropped += 1;
+        }
+    }
+
+    /// The registry's tables and counters as a sample.
+    pub(super) fn sample(&self) -> RegistrySample {
+        RegistrySample {
             rooms: self.rooms.len() as u32,
             conns: self.conns.len() as u32,
             rooms_created: self.reg_created,
@@ -215,11 +230,8 @@ where
             close_ops_dropped: self.reg_close_ops_dropped,
             team_relays_dropped_full: self.reg_team_relays_dropped_full,
             team_relays_dropped_closed: self.reg_team_relays_dropped_closed,
-        };
-        if let Err(mpsc::error::TrySendError::Full(_)) =
-            self.metrics.try_send(MetricsEvent::Registry(sample))
-        {
-            self.reg_metrics_dropped += 1;
+            joins_unread: self.reg_joins_unread,
+            team_exports_unread: self.reg_team_exports_unread,
         }
     }
 

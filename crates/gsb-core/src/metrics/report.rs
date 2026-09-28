@@ -199,6 +199,12 @@ pub struct RegistryReport {
     /// events. A join the room took and then dropped is the room's
     /// `joins_unprocessed` / `resumes_unprocessed` instead, never both.
     pub joins_refused_closed: u64,
+    /// Joins and live team exports the registry left unread in its
+    /// mailbox when it stopped (see [`RegistrySample::joins_unread`],
+    /// [`RegistrySample::team_exports_unread`]), cumulative (F53). From
+    /// the registry's final sample.
+    pub joins_unread: u64,
+    pub team_exports_unread: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

@@ -61,6 +61,9 @@
 //! RENAME: `team_export_drops=` / `gsb_room_team_export_drops_total`
 //! (full and closed mixed) became `team_export_drops_{full,closed}=` /
 //! `gsb_room_team_export_drops_{full,closed}_total`, in its place.
+//! F53's registry-scope `joins_unread=` / `team_exports_unread=` at the
+//! end of that line, with `gsb_registry_{joins,team_exports}_unread_total`
+//! after `gsb_registry_joins_refused_closed_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -86,6 +89,8 @@ pub(super) fn golden_report() -> MetricReport {
         close_ops_dropped: 0,
         team_relays_dropped_full: 4,
         team_relays_dropped_closed: 5,
+        joins_unread: 6,
+        team_exports_unread: 7,
     }));
     // Two match results a full sink refused, one a closed sink did (B57).
     for cause in [

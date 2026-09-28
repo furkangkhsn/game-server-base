@@ -11,6 +11,7 @@ use crate::registry::*;
 
 use crate::registry::actor::Registry;
 
+mod leftovers;
 mod shutdown;
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
@@ -203,6 +204,11 @@ where
                     export,
                 } => self.on_team_export(room, generation, from, tick, export),
                 RegistryMsg::Shutdown => {
+                    // Nothing is read after this one: what waits behind it
+                    // is counted (F53), the counts go out in the final
+                    // sample, then the teardown.
+                    self.count_leftovers();
+                    self.post_final_sample();
                     self.on_shutdown();
                     break;
                 }

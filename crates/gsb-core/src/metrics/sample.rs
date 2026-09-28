@@ -305,6 +305,16 @@ pub struct RegistrySample {
     /// mailbox was CLOSED (the shard has stopped or died), cumulative
     /// (B72).
     pub team_relays_dropped_closed: u64,
+    /// Joins (resume attempts included) still in the registry's mailbox
+    /// behind its `Shutdown` (F53): never handled — the reply drops and
+    /// the connection answers its client `ERROR` "registry unavailable".
+    /// Counted once, as the registry stops; in its final sample.
+    pub joins_unread: u64,
+    /// Team exports of a live sharded room still in the registry's
+    /// mailbox behind its `Shutdown` (F53): the shard counted each one
+    /// queued (its `team_exports`), the hub never relayed it. Counted
+    /// once, as the registry stops; in its final sample.
+    pub team_exports_unread: u64,
 }
 
 /// One connection actor's wire-byte sample. The fields are *deltas since

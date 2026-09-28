@@ -1359,7 +1359,13 @@ shard'ın kutusu DOLU; kaynağın sonraki export'u kümeyi yeniden taşır) ve
 `team_relays_dropped_{full,closed}=`, loadgen telinde `GSMW`. Hub oda
 kaydıyla gittiğinden `on_export` reddedilenleri döndürür, kümülatif
 toplamı registry tutar ve ret olduğunda örneğini hemen gönderir (OPS §3).
-Log satırı penceresi `relay_drops_full` / `relay_drops_closed`. RESULT, isteyen
+Log satırı penceresi `relay_drops_full` / `relay_drops_closed`. *F53:*
+registry'nin duruşunda `Shutdown`'ın arkasında kalan (shard'ın
+`team_exports`'ta saydığı, hub'ın hiç rölelemediği) canlı enkarnasyon
+export'ları `gsb_registry_team_exports_unread_total`'da; böylece duruşta
+her export ya hub'a vardı, ya göndericide reddedildi
+(`team_export_drops_{full,closed}`) ya da registry'nin kutusunda
+okunmadan kaldı (DESIGN §9 "Registry'nin kutusunda kalanlar"). RESULT, isteyen
 bot için (savaş) kararlı pencerede `team_exports_s`,
 `team_export_records_s`, `team_records_per_export`, `team_imports_s`,
 `team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`

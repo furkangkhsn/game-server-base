@@ -724,6 +724,40 @@ max_detach_hold_secs = "off"
   bir kez sayılır (ev shard'ı kapalıysa burada, açıksa ev shard'ının
   `joins_unprocessed`'inde). Reddedilen yayın gönderimleri (shard başına)
   sayılmaz — op başına bir karar (RECONNECT §3.4, §6).
+- **Registry kapsamı: registry'nin duruşta okumadığı kutu (F53).**
+  Registry satırının sonunda (`joins_refused_closed=`'den sonra)
+  `joins_unread=` / `team_exports_unread=` ve aile tablosunda (`REGISTRY`)
+  `gsb_registry_joins_unread_total` /
+  `gsb_registry_team_exports_unread_total` (`counter`); loadgen telinde
+  `GSNC` (registry bölümünde `joins_refused_closed`'dan sonra);
+  `RESULT`'ta yok. Registry `Shutdown`'dan sonra hiçbir şey okumaz;
+  önceden alıcıyı arkasına kuyruklanmış mesajlarla birlikte düşürüyordu
+  (her göndericinin gönderimi BAŞARILI dönmüştü). Artık `Shutdown` kolu
+  kutuyu KAPATIR (sonraki gönderim göndericide reddedilir, sayıyorsa
+  orada sayılır: shard'ın export'u `team_export_drops_closed`),
+  `try_recv` ile boşaltır (kapalı kutu sonludur) ve türe göre karar
+  verir: canlı enkarnasyonun takım export'u — shard onu `team_exports`'ta
+  "kuyruklandı" saymıştı, hub hiç rölelemedi → `team_exports_unread`;
+  katılma (`SpawnPlayer`, resume denemeleri dahil) — hiç işlenmedi,
+  yanıtı düşer, istemci `ERROR` "registry unavailable" alır →
+  `joins_unread`; duruşun arkasında açılan bağlantı (`ConnOpened`;
+  sunucunun kendi `stop()`'u F41'den beri kapıları önce kapatır)
+  kayıtlılar gibi `ConnIn::Shutdown` alır — kayıp yok, sayaç yok. Gerisi
+  sayılmaz, çünkü duruşun kendisi onu yapar: kopuş (`ConnClosed`) ve
+  ayrılış (`DespawnPlayer`) — teardown'un `RoomOp::Close`'u her dağıtıcıya
+  tuttuğu üyeliği detach ettirir, her oda durur; dağıtıcı yankıları,
+  `RoomDied` (panik bekçide sayılır, B67), `Authed` — teardown'un
+  düşürdüğü tabloları günceller; odanın hükümleri (`CloseConn`,
+  `LeaveConn`, `DetachDespawned`) — oda üyeliği zaten bitirdi, teardown
+  her bağlantıya dur der (kapalı retleri de bu yüzden sayılmıyor, B57);
+  kontrol düzlemi istekleri — düşen yanıt çağırana hatadır. Sayılar
+  registry'nin SON örneğinde: `Shutdown` kolu teardown'dan önce onu
+  `channel::post` ile gönderir (dolu kanalda spawn'lu gönderici kendi
+  klonunu tutar); toplayıcının son raporu her oturum üreticisinin
+  göndericisini düşürmesini beklediğinden (F35) o örnek son rapordadır.
+  Periyodik örneklerde ikisi de 0. Tablo göstergeleri (`rooms`, `conns`)
+  son örnekte teardown'dan ÖNCEKİ değerlerdir (önceki örneklerle aynı
+  anlam).
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü
