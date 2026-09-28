@@ -1841,7 +1841,9 @@ artık aynı kodu paylaşıyor) RFC 6298 tahmini tutar. **Tel değişmedi.**
   Sunucu tohumlayamaz: challenge'ı durumsuz; ilk örneği ilk kontrol
   karesinin ACK'i.
 - **Görünürlük:** istemci `UdpClient::srtt()`/`rto()`; yazıcının oturum
-  sonu log'u `srtt_us`/`rto_ms`.
+  sonu log'u `srtt_us`/`rto_ms`; sunucu geneli yeniden gönderim sayacı,
+  sebebe göre: `udp_control_retransmits_timeout` (OPS §3 — bantta hızlı
+  yeniden gönderim yok, her yeniden gönderim bir zamanlayıcı dolması).
 
 *Elenenler.* (a) *Telde zaman damgası yankısı* (her REL gönderim zamanı
 taşır, her ACK yankılar — TCP timestamps) — yeniden gönderilen kareden

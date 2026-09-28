@@ -20,6 +20,7 @@ impl super::UdpWriter {
             udp_control_datagrams_send_failed: self.control_send_failed,
             udp_frames_unsent: self.unsent,
             writer_verdicts_deferred: self.verdicts_deferred,
+            udp_control_retransmits_timeout: self.retransmits,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

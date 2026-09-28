@@ -57,7 +57,8 @@
 //! `gsb_registry_joins_refused_closed_total`. B80's two transport
 //! counters at the end of that line and table
 //! (`ws_going_away_unsent_{closed,stalled}`). B83's two after them
-//! (`ws_{close_frames,pongs}_dropped_closed`). And F50's one deliberate
+//! (`ws_{close_frames,pongs}_dropped_closed`). B2's one after them
+//! (`udp_control_retransmits_timeout`). And F50's one deliberate
 //! RENAME: `team_export_drops=` / `gsb_room_team_export_drops_total`
 //! (full and closed mixed) became `team_export_drops_{full,closed}=` /
 //! `gsb_room_team_export_drops_{full,closed}_total`, in its place.

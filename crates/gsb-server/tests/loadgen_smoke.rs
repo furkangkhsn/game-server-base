@@ -291,6 +291,8 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         // The WebSocket control replies a closed queue refused (B83).
         "transport_ws_close_frames_dropped_closed",
         "transport_ws_pongs_dropped_closed",
+        // The rUDP writers' control re-sends, by cause (B2).
+        "transport_udp_control_retransmits_timeout",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

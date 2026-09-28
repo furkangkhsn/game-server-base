@@ -830,6 +830,24 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   "bu oldu" der, istemcinin bir şey kaçırdığını değil. Dolu kuyruğun
   sayaçları anlam değiştirmedi (yalnız dolu). Okuyucunun `Shutdown`
   isteğinin reddi kare değildir, sayılmaz.
+- **Taşıma kapsamı: rUDP kontrol bandının yeniden gönderimleri, sebebe
+  göre (B2).** Satırın ve tablonun sonuna bir `counter`:
+  `udp_control_retransmits_timeout`
+  (`gsb_transport_udp_control_retransmits_timeout_total`); loadgen
+  telinde `GSNF`, `RESULT`'ta `transport_udp_control_retransmits_timeout=`
+  (her satırda). rUDP yazıcılarının, zamanlayıcısı ACK gelmeden dolduğu
+  için yeniden gönderdiği güvenilir bant kareleri — önceden yalnız yazıcının
+  oturum sonu log'unda (`retransmits`). Kendi başına kayıp DEĞİL (kare
+  yine teslim edilir); ya bir kaybın (kare ya da ACK) ya da yolun
+  turundan kısa bir zamanlayıcının işareti. B2'den beri zamanlayıcı
+  uyarlanıyor (RTT tahmini, geri çekilme — DESIGN §6 "Yeniden gönderim
+  zamanlayıcısı"), dolayısıyla sağlıklı bir yolda sayaç kayıpla orantılı
+  kalmalı: kayıpsız bir yolda sürekli artıyorsa zamanlayıcı yolun turunu
+  izleyemiyor demektir. Sebep adda: bugün her yeniden gönderim bir
+  zamanlayıcı dolması (bantta hızlı yeniden gönderim yok); başka bir
+  sebep kendi sayacını alır (B1'in tıkanıklık denetimi bu sayacı kayıp
+  sinyali olarak okuyacak). İstemci tarafı karşılığı loadgen
+  `retrans_out` (değişmedi).
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

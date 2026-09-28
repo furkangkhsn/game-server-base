@@ -232,6 +232,13 @@ transport_counters! {
     /// WebSocket: pongs refused by the closed control queue, the same
     /// way (the full queue is `ws_pongs_dropped`).
     ws_pongs_dropped_closed,
+    /// rUDP writers (B2): control-band frames re-sent because their
+    /// retransmit timer expired before the ACK came. Not a loss by
+    /// itself — the frame is still delivered — but the signal of one (a
+    /// lost frame or ACK) or of a timer shorter than the path's round
+    /// trip. By cause: every re-send today is a timer expiry (the band
+    /// has no fast retransmit); another cause gets its own counter.
+    udp_control_retransmits_timeout,
 }
 
 impl TransportCounters {

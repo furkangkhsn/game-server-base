@@ -187,3 +187,35 @@ async fn frames_drained_after_the_end_leave_the_piggybacked_acks_out() {
     assert_eq!(total.udp_frames_drained, 2, "{total:?}");
     assert_eq!(total.udp_frames_unsent, 0, "the band did not die");
 }
+
+/// The writer's control re-sends reach the collector by cause (B2):
+/// every re-send the peer saw is counted as a timer expiry.
+#[tokio::test]
+async fn control_re_sends_are_counted_as_timer_expiries() {
+    let (metrics_tx, mut metrics_rx) = mpsc::channel(64);
+    let (in_tx, _inbox) = channel::<ConnIn>(8);
+    let (out_tx, out_rx) = channel::<FrameBatch>(8);
+    let sink = bound().await;
+    let peer = sink.local_addr().unwrap();
+    let w = writer(bound().await, peer, 1200, in_tx, out_rx, metrics_tx);
+    out_tx.try_send(vec![control(2)]).unwrap();
+    // The first send and two re-sends (at ~50 and ~150 ms), never ACKed.
+    let mut buf = [0u8; 64];
+    for _ in 0..3 {
+        tokio::time::timeout(Duration::from_secs(5), sink.recv_from(&mut buf))
+            .await
+            .expect("a copy")
+            .expect("recv");
+    }
+    drop(out_tx);
+    tokio::time::timeout(Duration::from_secs(5), w)
+        .await
+        .expect("the writer ended")
+        .expect("no panic");
+    let mut counted = 0;
+    while let Ok(MetricsEvent::Transport(t)) = metrics_rx.try_recv() {
+        counted += t.udp_control_retransmits_timeout;
+        assert_eq!(t.udp_control_datagrams_send_failed, 0, "{t:?}");
+    }
+    assert!(counted >= 2, "two re-sends seen, {counted} counted");
+}

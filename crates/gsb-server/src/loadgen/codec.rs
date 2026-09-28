@@ -241,7 +241,10 @@ mod logic;
 /// verdicts (F56), right after `joins_unsent`: the close verdicts by
 /// reason (`ServerClose::ALL` order), then `leave_verdicts_lost` and
 /// `detach_despawns_lost`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E45;
+/// GSNF = the GSNE layout with one more transport counter at the end of
+/// that section (the rUDP writers' control re-sends on a timer expiry —
+/// B2: `udp_control_retransmits_timeout`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E46;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

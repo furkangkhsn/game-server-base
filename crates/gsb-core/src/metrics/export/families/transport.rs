@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 43] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 44] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -237,6 +237,12 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 43] 
         "gsb_transport_ws_pongs_dropped_closed_total",
         "WebSocket pongs the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.",
         |t| t.ws_pongs_dropped_closed,
+    ),
+    // B2: the reliable band's re-sends, by cause.
+    tr(
+        "gsb_transport_udp_control_retransmits_timeout_total",
+        "Control-band (reliable) frames the rUDP writers re-sent because their retransmit timer expired before the ACK came (a lost frame, a lost ACK, or a timer shorter than the path's round trip; the band has no fast retransmit), cumulative.",
+        |t| t.udp_control_retransmits_timeout,
     ),
 ];
 

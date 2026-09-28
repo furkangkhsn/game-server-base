@@ -200,6 +200,8 @@ gsb_transport_ws_close_frames_dropped_closed sum t=2 mono=true unit="" n=1 | Web
   [] 1000..2000 int 42
 gsb_transport_ws_pongs_dropped_closed sum t=2 mono=true unit="" n=1 | WebSocket pongs the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.
   [] 1000..2000 int 43
+gsb_transport_udp_control_retransmits_timeout sum t=2 mono=true unit="" n=1 | Control-band (reliable) frames the rUDP writers re-sent because their retransmit timer expired before the ACK came (a lost frame, a lost ACK, or a timer shorter than the path's round trip; the band has no fast retransmit), cumulative.
+  [] 1000..2000 int 44
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0
