@@ -161,6 +161,13 @@ async fn active_peer_resets_the_idle_window() {
 /// A clean peer EOF is still reported as `Closed("peer closed")`, not
 /// as an idle timeout: the deadline only fires while the read stays
 /// pending, and a ready EOF always wins.
+///
+/// The idle window is far past the peer's close (10 s against 50 ms):
+/// with a 200 ms window a process frozen from before the close to past
+/// the window woke with both timers due, the FIN not yet seen by the IO
+/// driver — an idle timeout the test did not mean (BACKLOG F34). A
+/// reader that mistook the EOF for a quiet read still reports the idle
+/// timeout, only later, and fails the match.
 #[tokio::test]
 async fn eof_reports_peer_closed_not_idle() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -183,12 +190,12 @@ async fn eof_reports_peer_closed_not_idle() {
         in_tx,
         out_rx,
         PumpTimeouts {
-            idle: Some(Duration::from_millis(200)),
+            idle: Some(Duration::from_secs(10)),
             write_stall: None,
         },
         None,
     );
-    let msg = tokio::time::timeout(Duration::from_secs(5), in_rx.recv())
+    let msg = tokio::time::timeout(Duration::from_secs(30), in_rx.recv())
         .await
         .expect("inbox open")
         .expect("pump notified");
