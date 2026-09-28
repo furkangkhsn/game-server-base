@@ -3341,7 +3341,10 @@ satırı yok (`room_resumes=0`, "server metrics: unavailable";
 çekirdeğe itilip nice 19'la 24 `yes`'in arasında: eski ikiliyle 40
 koşunun 20'si `steps=0 room_resumes=0` + "server metrics: unavailable";
 düzeltmeyle 0/40 (oda satırı `steps=17–39`; 40 koşunun 39'unda oda
-ilk periyodik örneğine hiç varmadı, satır yalnız `RoomFinal`'dan).
+ilk periyodik örneğine hiç varmadı, satır yalnız `RoomFinal`'dan). Aynı
+kök F33'ü de kapatır: `loadgen_smoke`'un komutu %90 süreç dondurmada
+(900 ms SIGSTOP / 100 ms SIGCONT, F25 yöntemi) eski ikiliyle 8/8 oda
+satırsız (`steps=0`), düzeltmeyle 0/8 (`steps=12–15`).
 
 Düzeltme toplayıcıda (`metrics/collector/closing.rs`): kapanıştan sonra
 elinde kalan tek kaynağı — olay kanalını — bekler, her olayı katlar ve
