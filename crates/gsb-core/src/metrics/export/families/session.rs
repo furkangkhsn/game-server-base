@@ -8,7 +8,7 @@ use super::{RoomFamily, counter, gauge};
 /// Session lifecycle through the room's metric drops, in exposition
 /// order. The effect, migration and team families move on shard rows
 /// only (0 on a single room).
-pub(super) const SESSION: [RoomFamily; 42] = [
+pub(super) const SESSION: [RoomFamily; 43] = [
     counter(
         "gsb_room_joins_total",
         "Joins processed, cumulative.",
@@ -90,9 +90,14 @@ pub(super) const SESSION: [RoomFamily; 42] = [
         |r| r.team_exports,
     ),
     counter(
-        "gsb_room_team_export_drops_total",
-        "Team exports a full or closed registry mailbox refused, cumulative.",
-        |r| r.team_export_drops,
+        "gsb_room_team_export_drops_full_total",
+        "Team exports a full registry mailbox refused while the registry ran (the next tick's export carries the set again), cumulative.",
+        |r| r.team_export_drops_full,
+    ),
+    counter(
+        "gsb_room_team_export_drops_closed_total",
+        "Team exports a closed registry mailbox refused: the registry had already exited at the server's stop, cumulative.",
+        |r| r.team_export_drops_closed,
     ),
     counter(
         "gsb_room_team_export_records_total",

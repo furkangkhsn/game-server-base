@@ -314,7 +314,10 @@ gsb_room_migrations_failed sum t=2 mono=true unit="" n=2 | Migration sends a ful
 gsb_room_team_exports sum t=2 mono=true unit="" n=2 | Team exports queued on the registry's mailbox (the team hub), cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 9
-gsb_room_team_export_drops sum t=2 mono=true unit="" n=2 | Team exports a full or closed registry mailbox refused, cumulative.
+gsb_room_team_export_drops_full sum t=2 mono=true unit="" n=2 | Team exports a full registry mailbox refused while the registry ran (the next tick's export carries the set again), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_team_export_drops_closed sum t=2 mono=true unit="" n=2 | Team exports a closed registry mailbox refused: the registry had already exited at the server's stop, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
 gsb_room_team_export_records sum t=2 mono=true unit="" n=2 | Records in the queued team exports, cumulative.

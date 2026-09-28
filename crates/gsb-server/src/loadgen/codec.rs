@@ -42,7 +42,8 @@ mod logic;
 ///     u64 effects_applied  u64 effects_forwarded  u64 effects_orphaned
 ///     u64 effects_dropped  u64 effects_refused
 ///     u64 migrations_out  u64 migrations_in  u64 migrations_failed
-///     u64 team_exports  u64 team_export_drops  u64 team_export_records
+///     u64 team_exports  u64 team_export_drops_full
+///     u64 team_export_drops_closed  u64 team_export_records
 ///     u64 team_over_cap  u64 team_imports  u64 team_import_records
 ///     u64 team_expired  u64 team_over_budget
 ///     u64 req_local  u64 req_ext
@@ -223,7 +224,10 @@ mod logic;
 /// queue refused — B83: `ws_close_frames_dropped_closed`,
 /// `ws_pongs_dropped_closed`). The third letter moves on: GSMZ was the
 /// last of the M run.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E41;
+/// GSNB = the GSNA layout with each room's `team_export_drops` split by
+/// cause (F50): `team_export_drops_full`, then `team_export_drops_closed`,
+/// in the old field's place.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E42;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
@@ -299,7 +303,8 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.migrations_in);
         w.u64(room.migrations_failed);
         w.u64(room.team_exports);
-        w.u64(room.team_export_drops);
+        w.u64(room.team_export_drops_full);
+        w.u64(room.team_export_drops_closed);
         w.u64(room.team_export_records);
         w.u64(room.team_over_cap);
         w.u64(room.team_imports);
@@ -506,7 +511,8 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             migrations_in: r.u64()?,
             migrations_failed: r.u64()?,
             team_exports: r.u64()?,
-            team_export_drops: r.u64()?,
+            team_export_drops_full: r.u64()?,
+            team_export_drops_closed: r.u64()?,
             team_export_records: r.u64()?,
             team_over_cap: r.u64()?,
             team_imports: r.u64()?,

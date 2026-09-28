@@ -1165,7 +1165,8 @@ TeamGame`.
 > `team_*` alanlarında; log satırı pencereyi tutuyor — §8b.8. A29'da
 > kit'in bütçe kesmesi de (`over_budget`) aynı yoldan.*
 
-Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops`,
+Shard penceresi (`TeamStats`, ~1 s): `exports`, `export_drops_full`,
+`export_drops_closed` (F50),
 `export_records`, `over_cap`, `imports`, `import_records`, `expired` —
 sıfır değilse `team_exchange_summary` info satırı (§7'nin
 `border_exchange_summary` emsali). Hub: `exports`, `relays`,
@@ -1341,7 +1342,8 @@ sayılarıdır.
 **Sayaçlar artık metrik yolunda (A26 kapandı).** §8b.6'nın gerekçesi
 ("tetik: W2 ölçüm isterse") gerçekleşti: ölçüm A25/A13 kararı için
 oranlara ihtiyaç duydu. Shard'ın `TeamStats`'ı artık kümülatif ve
-`RoomSample`'da yedi alan (`team_exports`, `team_export_drops`,
+`RoomSample`'da yedi alan (`team_exports`, `team_export_drops` — F50'den
+beri `team_export_drops_{full,closed}`,
 `team_export_records`, `team_over_cap`, `team_imports`,
 `team_import_records`, `team_expired`) → rapor, `gsb-metric` satırı,
 Prometheus (`gsb_room_team_*_total`, OPS §3), loadgen metrik teli (magic
@@ -1360,7 +1362,8 @@ toplamı registry tutar ve ret olduğunda örneğini hemen gönderir (OPS §3).
 Log satırı penceresi `relay_drops_full` / `relay_drops_closed`. RESULT, isteyen
 bot için (savaş) kararlı pencerede `team_exports_s`,
 `team_export_records_s`, `team_records_per_export`, `team_imports_s`,
-`team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`,
+`team_import_records_s`, `team_fanout` ve toplamlar (`team_export_drops`
+— F50'den beri `team_export_drops_full` ve `team_export_drops_closed`,
 `team_over_cap`, `team_expired`, `migrations`, `effects_applied`) basar.
 *A29:* sekizinci alan `team_over_budget` — mantığın KENDİ bütçesinin
 kestiği kayıt (export'la raporlanır, §8b.1), Prometheus
@@ -1426,7 +1429,9 @@ paylaşımlı — 1 dk yük ortalaması tabloda, 32 çekirdek). Her koşuda
   bire indirir ama istemci baytını değiştirmez (shard her tick kendi
   içeriğini göndermeye devam eder, ithal kayıtlar yalnız bayatlar) ve
   uzak kulenin gördüğü düşmanı k tick geç gösterir. Tetik sıkılaştı:
-  `team_export_drops > 0` ya da registry gecikmesi (A13 ile birlikte).
+  `team_export_drops > 0` (F50'den beri `team_export_drops_full > 0`;
+  kapalı kutu duruşun izidir, tetik değil) ya da registry gecikmesi (A13
+  ile birlikte).
 - **A26** — **kapandı** (yukarıda).
 - **A27 (harita geneli nötrler)** — Cephe'nin kararı: W1 kuralı kabul
   (sahipsiz ele geçirme noktası kendi shard'ında herkese, başka yerde

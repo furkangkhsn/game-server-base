@@ -93,7 +93,8 @@ fn folding_shards_applies_one_rule_per_field() {
     assert_eq!(f.migrations_in, 18, "migrations_in");
     assert_eq!(f.migrations_failed, 4, "migrations_failed");
     assert_eq!(f.team_exports, 89, "team_exports");
-    assert_eq!(f.team_export_drops, 1, "team_export_drops");
+    assert_eq!(f.team_export_drops_full, 1, "team_export_drops_full");
+    assert_eq!(f.team_export_drops_closed, 5, "team_export_drops_closed");
     assert_eq!(f.team_export_records, 930, "team_export_records");
     assert_eq!(f.team_over_cap, 2, "team_over_cap");
     assert_eq!(f.team_imports, 183, "team_imports");

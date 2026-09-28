@@ -4,13 +4,13 @@
 
 use super::*;
 
-/// The seventeen counters, each with a distinct value, from sample to report
+/// The eighteen counters, each with a distinct value, from sample to report
 /// to both renderings.
 #[test]
 fn the_seam_counters_reach_the_line_and_the_exposition() {
     let t = Instant::now();
     let mut s = room_sample(RoomId(1), t, 10);
-    let values: [(&str, u64); 17] = [
+    let values: [(&str, u64); 18] = [
         ("detach_forced", 2),
         ("effects_applied", 3),
         ("effects_forwarded", 5),
@@ -21,7 +21,8 @@ fn the_seam_counters_reach_the_line_and_the_exposition() {
         ("migrations_in", 19),
         ("migrations_failed", 23),
         ("team_exports", 29),
-        ("team_export_drops", 31),
+        ("team_export_drops_full", 31),
+        ("team_export_drops_closed", 61),
         ("team_export_records", 37),
         ("team_over_cap", 41),
         ("team_over_budget", 59),
@@ -39,7 +40,8 @@ fn the_seam_counters_reach_the_line_and_the_exposition() {
     s.migrations_in = 19;
     s.migrations_failed = 23;
     s.team_exports = 29;
-    s.team_export_drops = 31;
+    s.team_export_drops_full = 31;
+    s.team_export_drops_closed = 61;
     s.team_export_records = 37;
     s.team_over_cap = 41;
     s.team_over_budget = 59;

@@ -99,9 +99,15 @@ pub struct TeamImport {
 pub(crate) struct TeamStats {
     /// Exports queued on the registry's mailbox.
     pub(crate) exports: u64,
-    /// Exports a full or closed registry mailbox refused (the next tick's
-    /// export carries the same set again).
-    pub(crate) export_drops: u64,
+    /// Exports a FULL registry mailbox refused while the registry ran —
+    /// a real loss of the exchange (the next tick's export carries the
+    /// same set again).
+    pub(crate) export_drops_full: u64,
+    /// Exports a CLOSED registry mailbox refused: the registry had
+    /// already exited (the server's stop — it stops the rooms without
+    /// awaiting them, so a shard in the middle of a step exports once
+    /// more; F50). Nothing could have relayed them.
+    pub(crate) export_drops_closed: u64,
     /// Records in the queued exports.
     pub(crate) export_records: u64,
     /// Records (and viewed teams) cut by the core's hard caps.
@@ -128,7 +134,8 @@ impl TeamStats {
     pub(crate) fn since(&self, earlier: &Self) -> Self {
         Self {
             exports: self.exports - earlier.exports,
-            export_drops: self.export_drops - earlier.export_drops,
+            export_drops_full: self.export_drops_full - earlier.export_drops_full,
+            export_drops_closed: self.export_drops_closed - earlier.export_drops_closed,
             export_records: self.export_records - earlier.export_records,
             over_cap: self.over_cap - earlier.over_cap,
             over_budget: self.over_budget - earlier.over_budget,

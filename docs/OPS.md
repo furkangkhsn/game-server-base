@@ -223,7 +223,8 @@ max_detach_hold_secs = "off"
   | `gsb_room_migrations_in_total` | Komşudan gelip kurulan entity'ler |
   | `gsb_room_migrations_failed_total` | Dolu komşu gelen kutusunun reddettiği göç gönderimleri (sonraki tick yeniden denenir) |
   | `gsb_room_team_exports_total` | Registry'nin takım hub'ına kuyruklanan takım export'ları (CROSS-SHARD §8b; W2) |
-  | `gsb_room_team_export_drops_total` | Dolu/kapalı registry posta kutusunun reddettiği export'lar (sonraki tick aynı kümeyi taşır) |
+  | `gsb_room_team_export_drops_full_total` | Registry çalışırken DOLU posta kutusunun reddettiği export'lar — gerçek kayıp (sonraki tick aynı kümeyi taşır) |
+  | `gsb_room_team_export_drops_closed_total` | KAPALI posta kutusunun reddettiği export'lar: registry duruşta çıkmıştı, adımının ortasındaki shard bir kez daha export etti (F50) |
   | `gsb_room_team_export_records_total` | Kuyruklanan export'lardaki kayıtlar |
   | `gsb_room_team_over_cap_total` | Çekirdeğin mesaj başı tavanlarının (`TEAM_EXPORT_MAX_*`) kestiği kayıt/takım — çıkışta ve girişte |
   | `gsb_room_team_over_budget_total` | Oyunun takım başı export bütçesinin (kit: `with_team_budget`) kestiği kayıt — export çekirdeğe varmadan önce; oyunun politikası, yük altında beklenebilir (A29) |
@@ -587,6 +588,24 @@ max_detach_hold_secs = "off"
   "bu oldu" der, istemcinin bir şey kaçırdığını değil. Dolu kuyruğun
   sayaçları anlam değiştirmedi (yalnız dolu). Okuyucunun `Shutdown`
   isteğinin reddi kare değildir, sayılmaz.
+- **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
+  `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
+  kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,
+  eskisinin yerinde: `team_export_drops_full=` /
+  `gsb_room_team_export_drops_full_total` — registry ÇALIŞIRKEN dolu kutu,
+  gerçek kayıp (A13/A25 tetiği bu); `team_export_drops_closed=` /
+  `gsb_room_team_export_drops_closed_total` — kutu kapalı: registry
+  duruşta odaları beklemeden çıkar (DESIGN §9), adımının ortasındaki
+  shard bir kez daha export eder; bir tele varamazdı. **Yeniden
+  adlandırma, daraltma değil:** eski ad kaldırıldı — aynı adla anlamı
+  sessizce değişen bir sayaç, onu okuyan panoyu ve tetiği yanıltırdı;
+  eski adı okuyan sorgu artık boş döner. Log satırı
+  (`team_exchange_summary`) `export_drops_full` / `export_drops_closed`;
+  loadgen telinde `GSNB`, `RESULT`'ta (savaş) iki anahtar, her zaman
+  basılır. Kapalı sayısının motorun garanti ettiği bir üst sınırı yok:
+  shard'ın `Shutdown`'ı yerinde teslim edildiyse shard başına en çok bir,
+  gelen kutusu doluysa `Shutdown` sonra gelir ve shard bir kez daha
+  adımlayabilir.
 - **Registry kapsamı: kontrol düzlemi kayıpları (B57).** Registry
   satırında `rooms_died=`'den sonra dört anahtar ve aile tablosunda
   (`REGISTRY`) dört `counter`:
@@ -683,8 +702,8 @@ max_detach_hold_secs = "off"
   değişince örnek yollar, röle tablo değiştirmez (ret yoksa ek örnek yok;
   maliyet ret içeren export başına bir `try_send`). Log satırının
   penceresi de ikiye ayrıldı (`relay_drops_full`, `relay_drops_closed`).
-  Shard tarafının eşi `gsb_room_team_export_drops_total` (export'u
-  registry kutusu reddetti) değişmedi.
+  Shard tarafının eşi (export'u registry kutusu reddetti) F50'de aynı
+  biçimde sebebe göre ayrıldı: `gsb_room_team_export_drops_{full,closed}_total`.
 - **Registry kapsamı: duran odanın reddettiği katılmalar (B75, sayım
   turu 6).** Registry satırının sonunda (`team_relays_dropped_closed=`'den
   sonra) `joins_refused_closed=` ve aile tablosunda (`REGISTRY`)

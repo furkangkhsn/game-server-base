@@ -224,21 +224,19 @@ fn loadgen_drives_the_war() {
     assert!(team.imports > 0.0, "{team:?}: {line}");
     let rate = |k: &str| -> f64 { kv[k].parse().expect("a number") };
     assert!(rate("team_records_per_export") >= 3.0, "{line}");
-    // The run's total, and it includes the stop: the registry exits
-    // without awaiting the shards (DESIGN §9), so a shard in the middle
-    // of a step then exports into its closed mailbox — a refused export
-    // the counter takes too ("full or closed"). The registry's Shutdown
-    // is already in every shard's inbox, so its next step stops it: one
-    // such export per shard at most. A stalled stop meets it (1–4 in
-    // every frozen run, all right after "registry shutting down" — BACKLOG
-    // F30). The total cannot tell those from a mailbox that was full
-    // during the run; splitting the counter is BACKLOG F50, and with it
-    // the full ones go back to `== 0`.
-    let drops: u32 = kv["team_export_drops"].parse().expect("a number");
-    assert!(
-        drops <= 4,
-        "at most one export per shard, at the stop: {line}"
-    );
+    // No export lost to a FULL registry mailbox while the registry ran
+    // (F50: the refusals are counted by cause).
+    assert_eq!(kv["team_export_drops_full"], "0", "{line}");
+    // The CLOSED ones are the stop's: the registry exits without awaiting
+    // the shards (DESIGN §9), so a shard in the middle of a step exports
+    // into its dropped mailbox (1–4 in every frozen run). Their number
+    // depends on where each shard was when the registry went, and it has
+    // no bound the engine guarantees — a shard whose inbox was full takes
+    // its Shutdown late and may step again — so only its presence is
+    // asserted.
+    let _: u64 = kv["team_export_drops_closed"]
+        .parse()
+        .unwrap_or_else(|_| panic!("team_export_drops_closed: a number in {line}"));
     assert_eq!(kv["team_over_cap"], "0", "{line}");
     assert_eq!(
         kv["team_over_budget"], "0",
@@ -279,6 +277,9 @@ fn loadgen_orchestrates_the_war() {
         team.exports >= 2.0,
         "the team counters crossed the wire: {team:?}: {line}"
     );
+    // Both refusal causes crossed the wire (GSNB, F50); none full.
+    assert_eq!(kv["team_export_drops_full"], "0", "{line}");
+    assert!(kv.contains_key("team_export_drops_closed"), "{line}");
     assert!(
         kv.contains_key("logic_war_kills"),
         "the game's own counter crossed the wire (GSMC): {line}"

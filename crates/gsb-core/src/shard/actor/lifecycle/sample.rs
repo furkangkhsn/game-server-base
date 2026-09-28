@@ -70,7 +70,8 @@ where
             // The team exchange's counters, cumulative (the log line is
             // their ~1 s window).
             team_exports: self.tstats.exports,
-            team_export_drops: self.tstats.export_drops,
+            team_export_drops_full: self.tstats.export_drops_full,
+            team_export_drops_closed: self.tstats.export_drops_closed,
             team_export_records: self.tstats.export_records,
             team_over_cap: self.tstats.over_cap,
             team_over_budget: self.tstats.over_budget,

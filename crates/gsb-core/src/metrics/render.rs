@@ -56,7 +56,8 @@ impl MetricReport {
                  effects_applied={} effects_forwarded={} effects_orphaned={} \
                  effects_dropped={} effects_refused={} \
                  migrations_out={} migrations_in={} migrations_failed={} \
-                 team_exports={} team_export_drops={} team_export_records={} \
+                 team_exports={} team_export_drops_full={} \
+                 team_export_drops_closed={} team_export_records={} \
                  team_over_cap={} team_over_budget={} team_imports={} \
                  team_import_records={} team_expired={} \
                  actions_unread={} actions_unbound={} \
@@ -116,7 +117,8 @@ impl MetricReport {
                 r.migrations_in,
                 r.migrations_failed,
                 r.team_exports,
-                r.team_export_drops,
+                r.team_export_drops_full,
+                r.team_export_drops_closed,
                 r.team_export_records,
                 r.team_over_cap,
                 r.team_over_budget,

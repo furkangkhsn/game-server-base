@@ -2646,6 +2646,24 @@ kaydedilir ve biter; kapının kapandığı yoklamada biten accept'in eşi de
 (`[Closed(BUSY), Shutdown, Opened(c1)]`, `final_report_complete=false`);
 "kapat, `Shutdown`, sonra bekle" mutasyonunda üçüncü düşer.
 
+**Duruşta takım export'u kapalı kutuya (F50).** F41'in sırası registry'nin
+odalardan ÖNCE çıkmasını değiştirmedi (S kuralı: registry hiçbir odayı
+beklemez). Registry `Shutdown`'ı işleyince her shard'a `ShardMsg::Shutdown`
+bırakır ve döner; posta kutusunun alıcısı onunla düşer. `Shutdown`'ını
+kutusunu boşalttıktan SONRA alan shard o adımını bitirir: takım fazı
+(adımın sonunda) export'unu kapalı kutuya gönderir, `try_send` `Closed`
+döner — `team_export_drops_closed` (dolu kutu `team_export_drops_full`,
+registry çalışırken gerçek kayıp). Sonraki adımın boşaltması `Shutdown`'ı
+bulur ve shard durur: kutusuna yerinde teslim edilen `Shutdown`'la shard
+başına en çok bir kapalı ret. Garanti değil: shard'ın kutusu doluysa
+`Shutdown` spawn'lu göndericiden (`post`) sonra gelir, shard aradaki
+tamponlu tick'lerde yine adımlayıp yine reddedilebilir — bu yüzden
+kapalı sayısına test sınır koymaz. Sayılmayan eş (BACKLOG F53): registry
+`Shutdown`'ı işlerken (ya da `Shutdown` kutuda sırasını beklerken)
+arkasına BAŞARIYLA kuyruklanan export registry'yle birlikte düşer —
+shard onu `team_exports`'ta "kuyruklandı" sayar, hiçbir ret sayacı onu
+görmez.
+
 **Panikleyen oda/shard (B67).** Ölüm bekçisi (oda/shard görevi başına bir
 görev, yalnız `JoinHandle`'ı bekler) registry'ye `RoomDied` bildirir;
 registry güncel enkarnasyonu biçer (üyelere `RoomGone`, `rooms_died`).
@@ -3156,6 +3174,7 @@ durdurulamaz.
 | oda | `snapshots`, `snap_bytes_s`, `snap_bytes_max`, `shipped_bytes`/`shipped_s`, `shipped_frames`, `private_frames` | yayın yükü: kaç snapshot, kaç bayt, tepe paket boyutu (MTU/hazırlık sinyali), kaç KARE ve bunların kaçı özel (datagram taşıması bayt kadar PAKET ile de sınırlı; `shipped_bytes/shipped_frames` = ortalama kare boyu, `shipped_frames − private_frames` = fan-out'un yayın yarısı; B39'dan beri iki kare sayacı Prometheus/OTLP'de de: `gsb_room_shipped_frames_total`, `gsb_room_private_frames_total`). B57'den beri `shipped_*` yalnız çıkış kanalının ALDIĞI batch'i sayar — düşen/kapalı batch `dropped`/`sends_closed`'dadır, trafikte değil |
 | oda | `groups`, `members`, `max_group`, `joins`, `leaves` | oda doluluğu ve churn |
 | oda | `actions_dropped_unread`, `actions_dropped_unbound`, `requests_dropped_unbound` (kümülatif; satırda `actions_unread=` / `actions_unbound=` `team_expired=`'den sonra, `req_unbound=` `req_unread=`'den sonra; Prometheus/OTLP'de `gsb_room_{actions,requests}_dropped_*`; loadgen telinde GSML) | oda neyi İŞLEMEDEN düşürdü? Oturum bittiğinde kanalda okunmamış düz girdiler (istekler `requests_dropped_unread`'de, B36) ve READ'in bağlama çevirisinde bağlama satırı olmayan bağlantının girdisi — istekler (defter terimi) düz girdilerden ayrı (B54). READ'in çekim bütçesi hâlâ hiçbir şey düşürmez (erteler) |
+| oda | `team_export_drops_full`, `team_export_drops_closed` (kümülatif, shard satırları; satırda `team_exports=`'den sonra, Prometheus'ta `gsb_room_team_export_drops_{full,closed}_total`, loadgen telinde GSNB, `RESULT`'ta savaş için; F50'ye dek tek `team_export_drops`) | takım export'unu registry'nin posta kutusu neden reddetti? DOLU: registry çalışırken yetişemedi (gerçek kayıp, A13/A25 tetiği); KAPALI: registry duruşta çıkmıştı (§9 "Duruşta takım export'u kapalı kutuya") |
 | oda | `requests_undelivered`, `requests_abandoned` (kümülatif; satırda `req_late=`'den sonra `req_undelivered=` / `req_abandoned=`, Prometheus'ta `gsb_room_requests_{undelivered,abandoned}_total`, OTLP'de `_total`'sız, loadgen telinde GSMK) | oturumu biten bağlantıya borçlu kalan RPC yanıtlarından kaçı hiç teslim edilmeden atıldı, kaç dış istek oturum bittiğinde hâlâ uçuştaydı? (B53; isteğin kendisi kendi kovasında — defter terimi değil, yanıtın akıbeti. Geri konan yanıt bir kez, atıldığında sayılır.) |
 | registry | `rooms`, `conns`, `opens`, `closes`, `joins`, `leaves` | bağlantı/oda sayısı ve akışı (100k hedefinin sayacı) |
 | registry | `join_ops_dropped`, `close_ops_dropped`, `match_results_dropped_full`, `match_results_dropped_closed` (kümülatif; registry satırında `rooms_died=`'den sonra, Prometheus'ta `gsb_registry_*_total`, loadgen telinde GSMP) | kontrol düzlemi neyi kaybetti? Bağlantının op dağıtıcısına verilemeyen katılma / kapanış (kuyruk dolu ya da görev gitmiş), sonuç sink'inin dolu ya da kapalı olduğu için reddettiği maç sonuçları (duran oda örnek göndermez: toplayıcıya `MetricsEvent::MatchResultDropped` ile gider). B57 |

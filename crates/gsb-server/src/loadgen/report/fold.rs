@@ -172,7 +172,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
             migrations_in,
             migrations_failed,
             team_exports,
-            team_export_drops,
+            team_export_drops_full,
+            team_export_drops_closed,
             team_export_records,
             team_over_cap,
             team_imports,
@@ -260,7 +261,8 @@ pub(crate) fn fold_rooms(report: &MetricReport) -> Option<RoomReport> {
         acc.migrations_in += migrations_in;
         acc.migrations_failed += migrations_failed;
         acc.team_exports += team_exports;
-        acc.team_export_drops += team_export_drops;
+        acc.team_export_drops_full += team_export_drops_full;
+        acc.team_export_drops_closed += team_export_drops_closed;
         acc.team_export_records += team_export_records;
         acc.team_over_cap += team_over_cap;
         acc.team_imports += team_imports;

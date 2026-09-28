@@ -153,7 +153,8 @@ fn a_refused_export_is_counted_and_the_clear_retried() {
     let mut r = rig(script, 1, true);
     assert!(r.actor.step(&tinfo(1)));
     assert!(r.actor.step(&tinfo(2)), "the mailbox is full: dropped");
-    assert_eq!(r.actor.tstats.export_drops, 1);
+    assert_eq!(r.actor.tstats.export_drops_full, 1);
+    assert_eq!(r.actor.tstats.export_drops_closed, 0);
     assert_eq!(exports(&mut r.registry).len(), 1);
     assert!(r.actor.step(&tinfo(3)));
     let got: Vec<u64> = exports(&mut r.registry)

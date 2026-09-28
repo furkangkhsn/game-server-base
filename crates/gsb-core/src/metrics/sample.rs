@@ -144,8 +144,11 @@ pub struct RoomSample {
     /// The team exchange (`docs/CROSS-SHARD.md` §8b; shard actors whose
     /// logic exports team views — 0 otherwise), cumulative, from the
     /// shard's team counters: exports queued on the registry's mailbox
-    /// and the records in them; exports a full or closed registry
-    /// mailbox refused (the next tick's export carries the set again);
+    /// and the records in them; exports a FULL registry mailbox refused
+    /// while the registry ran (a real loss; the next tick's export carries
+    /// the set again) and, apart, exports a CLOSED one refused — the
+    /// registry had already exited at the server's stop, a shard in the
+    /// middle of its last step (F50);
     /// records (and viewed teams) the core's per-message caps cut, on
     /// the way out and on the way in; records the LOGIC's own per-team
     /// budget cut before the export reached the core (the game's policy —
@@ -155,7 +158,8 @@ pub struct RoomSample {
     /// The same numbers, per ~1 s window, make the
     /// `team_exchange_summary` log line.
     pub team_exports: u64,
-    pub team_export_drops: u64,
+    pub team_export_drops_full: u64,
+    pub team_export_drops_closed: u64,
     pub team_export_records: u64,
     pub team_over_cap: u64,
     pub team_over_budget: u64,

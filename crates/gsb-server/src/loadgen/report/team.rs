@@ -13,7 +13,8 @@ pub(crate) struct TeamCounts {
     export_records: u64,
     imports: u64,
     import_records: u64,
-    export_drops: u64,
+    export_drops_full: u64,
+    export_drops_closed: u64,
     over_cap: u64,
     over_budget: u64,
     expired: u64,
@@ -29,7 +30,8 @@ impl From<&RoomReport> for TeamCounts {
             export_records: r.team_export_records,
             imports: r.team_imports,
             import_records: r.team_import_records,
-            export_drops: r.team_export_drops,
+            export_drops_full: r.team_export_drops_full,
+            export_drops_closed: r.team_export_drops_closed,
             over_cap: r.team_over_cap,
             over_budget: r.team_over_budget,
             expired: r.team_expired,
@@ -46,9 +48,11 @@ impl From<&RoomReport> for TeamCounts {
 /// their records (`team_export_records_s`) and records per export, the
 /// imports that arrived (the hub's relays) and their records, and the
 /// relay fan-out (imports per export); then the run's totals from
-/// `total` — exports the registry mailbox refused, records the core's
-/// caps cut, records the game's per-team budget cut (A29), source slots
-/// the TTL dropped, migrations and remote effects applied. Every key is always written (zeros without server reports).
+/// `total` — exports a full registry mailbox refused while the registry
+/// ran and, apart, exports a closed one refused at the stop (F50),
+/// records the core's caps cut, records the game's per-team budget cut
+/// (A29), source slots the TTL dropped, migrations and remote effects
+/// applied. Every key is always written (zeros without server reports).
 pub(crate) fn team_segment(
     window: Option<(TeamCounts, TeamCounts)>,
     total: Option<TeamCounts>,
@@ -70,13 +74,15 @@ pub(crate) fn team_segment(
     format!(
         " team_exports_s={exports:.1} team_export_records_s={records:.0} \
          team_records_per_export={:.1} team_imports_s={imports:.1} \
-         team_import_records_s={:.0} team_fanout={:.2} team_export_drops={} \
+         team_import_records_s={:.0} team_fanout={:.2} team_export_drops_full={} \
+         team_export_drops_closed={} \
          team_over_cap={} team_over_budget={} team_expired={} migrations={} \
          effects_applied={}",
         ratio(records, exports),
         per_s(|c| c.import_records),
         ratio(imports, exports),
-        t.export_drops,
+        t.export_drops_full,
+        t.export_drops_closed,
         t.over_cap,
         t.over_budget,
         t.expired,
@@ -96,7 +102,8 @@ mod tests {
             export_records,
             imports,
             import_records: export_records * 3,
-            export_drops: 2,
+            export_drops_full: 2,
+            export_drops_closed: 4,
             over_budget: 5,
             migrations: 9,
             ..TeamCounts::default()
@@ -116,7 +123,8 @@ mod tests {
             "team_imports_s=360.0",
             "team_import_records_s=18000",
             "team_fanout=3.00",
-            "team_export_drops=2",
+            "team_export_drops_full=2",
+            "team_export_drops_closed=4",
             "team_over_budget=5",
             "migrations=9",
         ] {

@@ -74,12 +74,24 @@ where
                 self.tstats.export_records += records;
                 self.team_sent = listed;
             }
-            Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
-                self.tstats.export_drops += 1;
+            // By cause (F50): a full mailbox is a lost exchange while the
+            // registry runs; a closed one is the server's stop — the
+            // registry exits without awaiting the shards, so a shard in
+            // the middle of a step exports into its dropped mailbox.
+            Err(TrySendError::Full(_)) => {
+                self.tstats.export_drops_full += 1;
                 debug!(
                     room = %self.config.id,
                     shard = self.index,
-                    "team export dropped: registry mailbox full or closed"
+                    "team export dropped: registry mailbox full"
+                );
+            }
+            Err(TrySendError::Closed(_)) => {
+                self.tstats.export_drops_closed += 1;
+                debug!(
+                    room = %self.config.id,
+                    shard = self.index,
+                    "team export dropped: registry mailbox closed"
                 );
             }
         }

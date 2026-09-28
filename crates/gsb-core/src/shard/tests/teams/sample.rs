@@ -34,14 +34,15 @@ fn the_sample_carries_the_team_counters_across_the_log_window() {
     let got = [
         s.team_exports,
         s.team_export_records,
-        s.team_export_drops,
+        s.team_export_drops_full,
+        s.team_export_drops_closed,
         s.team_over_cap,
         s.team_over_budget,
         s.team_imports,
         s.team_import_records,
         s.team_expired,
     ];
-    assert_eq!(got, [40, 40, 0, 0, 80, 1, 3, 0]);
+    assert_eq!(got, [40, 40, 0, 0, 0, 80, 1, 3, 0]);
     assert_eq!(r.actor.tstats_logged.over_budget, 2 * r.actor.border_every);
 }
 
@@ -57,4 +58,39 @@ fn a_budget_cut_counts_without_an_export() {
     assert!(r.actor.step(&tinfo(1)));
     assert!(exports(&mut r.registry).is_empty(), "nothing to send");
     assert_eq!(r.actor.sample().team_over_budget, 3);
+}
+
+/// A refused export is counted by its cause (F50): a FULL registry
+/// mailbox while the registry runs — a lost exchange, the next tick
+/// carries the set again — apart from a CLOSED one, the registry already
+/// gone (the server's stop: it exits without awaiting the shards, so a
+/// shard in the middle of a step exports once more). One of each here,
+/// each on its own counter, in the sample and in the log window.
+#[test]
+fn a_refused_export_is_counted_by_its_cause() {
+    let script = (0..3).map(|_| Some(export(&[1], &[(1, 10)]))).collect();
+    let Rig {
+        mut actor,
+        registry,
+        _inbox,
+        ..
+    } = rig(script, 1, true);
+    assert!(actor.step(&tinfo(1)), "queued: the one slot");
+    assert!(actor.step(&tinfo(2)), "the slot is taken: full");
+    drop(registry);
+    assert!(actor.step(&tinfo(3)), "the registry is gone: closed");
+    let s = actor.sample();
+    assert_eq!(
+        (
+            s.team_exports,
+            s.team_export_drops_full,
+            s.team_export_drops_closed
+        ),
+        (1, 1, 1)
+    );
+    let window = actor.tstats.since(&TeamStats::default());
+    assert_eq!(
+        (window.export_drops_full, window.export_drops_closed),
+        (1, 1)
+    );
 }

@@ -6,8 +6,8 @@ use super::*;
 use crate::codec::{decode_report, encode_report};
 use gsb_core::metrics::{LOGIC_COUNTERS_MAX, LogicCounter, LogicFold};
 
-/// The seventeen counters, as one comparable tuple.
-fn counters(r: &RoomReport) -> [u64; 17] {
+/// The eighteen counters, as one comparable tuple.
+fn counters(r: &RoomReport) -> [u64; 18] {
     [
         r.detach_forced,
         r.effects_applied,
@@ -19,7 +19,8 @@ fn counters(r: &RoomReport) -> [u64; 17] {
         r.migrations_in,
         r.migrations_failed,
         r.team_exports,
-        r.team_export_drops,
+        r.team_export_drops_full,
+        r.team_export_drops_closed,
         r.team_export_records,
         r.team_over_cap,
         r.team_imports,
@@ -179,7 +180,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"ANSG", "the magic, little-endian GSNA");
+    assert_eq!(&frame[..4], b"BNSG", "the magic, little-endian GSNB");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {

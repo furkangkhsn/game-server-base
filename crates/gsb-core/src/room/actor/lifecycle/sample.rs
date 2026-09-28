@@ -65,7 +65,8 @@ where
             migrations_failed: 0,
             // ... nor exchanges team views through the registry.
             team_exports: 0,
-            team_export_drops: 0,
+            team_export_drops_full: 0,
+            team_export_drops_closed: 0,
             team_export_records: 0,
             team_over_cap: 0,
             team_over_budget: 0,

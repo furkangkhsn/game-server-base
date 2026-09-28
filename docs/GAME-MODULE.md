@@ -1371,7 +1371,8 @@ en yakınına `Attack`. Kayıt elle yürünüyor (`UnitRecord`, üretilmiş
 profile=posts`, `shard_members=` ve takım değişiminin segmenti
 (`team_exports_s`, `team_export_records_s`, `team_records_per_export`,
 `team_imports_s`, `team_import_records_s`, `team_fanout`,
-`team_export_drops`, `team_over_cap`, `team_over_budget` (A29),
+`team_export_drops_full`, `team_export_drops_closed` (F50; önceden tek
+`team_export_drops`), `team_over_cap`, `team_over_budget` (A29),
 `team_expired`, `migrations`, `effects_applied`) — `game=`'den hemen
 önce; başka oyunun satırı değişmedi. Takım sayaçları metrik yolunda
 (A26: `RoomSample::team_*`, loadgen teli ~~`GSMA`~~ `GSMB` — A29'da

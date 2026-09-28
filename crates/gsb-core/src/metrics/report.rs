@@ -105,7 +105,8 @@ pub struct RoomReport {
     /// The team exchange (shard rows only; see
     /// [`RoomSample::team_exports`]).
     pub team_exports: u64,
-    pub team_export_drops: u64,
+    pub team_export_drops_full: u64,
+    pub team_export_drops_closed: u64,
     pub team_export_records: u64,
     pub team_over_cap: u64,
     pub team_over_budget: u64,
