@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1458 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1459 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -147,6 +147,12 @@ fazları bitti.**
 
 **Güncel iş sırası ve bırakılanlar: `docs/BACKLOG.md`** (D, K4, U,
 küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti — sıradaki iş BACKLOG §2'den).
+
+**F30 + F34 + F50 tamam** (CHANGELOG "F30 + F34 + F50", CONTRIBUTING
+"Gerçek saatli testler", OPS §3, DESIGN §9 "Duruşta takım export'u kapalı
+kutuya"): `gsb-server/tests/loadgen_games/window.rs` (kanıtlı koşu);
+`team_export_drops_{full,closed}` (metrik adı değişti), loadgen teli GSNB.
+Açık: F51, F52, F53.
 
 **F41 tamam** (CHANGELOG "F41", DESIGN §9 "Önce kapılar"): `boot/stop.rs`
 — kapılar → `end_accepts` → `Shutdown` → ticker; testler
@@ -773,6 +779,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1458 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1459 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

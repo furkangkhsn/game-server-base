@@ -5,6 +5,56 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## F30 + F34 + F50 — pencere iddiaları, kalan gerçek saatli sınırlar, takım export reddinin sebebi (`test/f30-f34`)
+
+- **F30 (`loadgen_games`):** savaşın takım oranları ve bütün
+  `shard_members` toplamları koşunun bir PENCERESİNDEN okunuyor. 400/100 ms
+  donmada oda ≈ 8 Hz: 8 sn'lik savaş 67 adımda kalır (pencere yok, oranlar
+  0), 3 sn'lik orkestralı MMO oyuncular içerideyken hiç örnek almaz. Önce:
+  savaş 0/4, orkestralı MMO 1/4, orkestralı savaş 0/4.
+  `tests/loadgen_games/window.rs`: pencere iddiası KANITI OLAN koşudan
+  okunur — kanıtsız koşu iki katı süreyle yinelenir, iddia kanıtlı ilk
+  koşuda aynen sınanır, kanıtı olup çiğneyen koşu hemen düşer, 64 sn tavanı
+  yalnız asılma korumasıdır; normal makinede süreler değişmedi. Savaşın
+  oranı adım başına: `team_exports_s / server_hz ≥ 2` (30 Hz'de eski
+  "> 60"). Sonra donmada 4/4 hepsi; aç bırakmada orkestralı MMO 4/4, savaş
+  1/4 (F51).
+- **F50 (motor, sayaç):** takım export'unun registry kutusundaki reddi tek
+  sayaçtı (`team_export_drops`: dolu YA DA kapalı); donmada savaşın her
+  koşusunda 1–4 kapalı ret (registry duruşta odaları beklemeden çıkar,
+  adımının ortasındaki shard bir kez daha export eder — F41'in sırası bunu
+  değiştirmedi, S kuralı). F30'un ajanı testi `≤ 4`'e gevşetmişti;
+  **ebeveyn reddetti**, sayaç ikiye bölündü ve YENİDEN ADLANDIRILDI (aynı
+  adla anlamı değişen sayaç panoyu ve A13/A25 tetiğini yanıltırdı; B72'nin
+  `team_relays_dropped_{full,closed}` adlandırmasıyla aynı):
+  `team_export_drops_full` (registry çalışırken dolu kutu, gerçek kayıp) ve
+  `team_export_drops_closed` (registry duruşta çıkmıştı). `TeamStats`,
+  `RoomSample`/`RoomReport`, `gsb-metric` satırı,
+  `gsb_room_team_export_drops_{full,closed}_total` (iki golden), loadgen
+  teli **GSNB**, RESULT. Savaş testleri yine `team_export_drops_full == 0`;
+  kapalıya sınır konmadı (motor "shard başına ≤ 1"i garanti etmiyor).
+  **API/metrik adı değişti:** `gsb_room_team_export_drops_total` ve
+  `team_export_drops=` kalktı. Yan bulgu **F53**: `Shutdown`'ın arkasına
+  BAŞARIYLA kuyruklanan export registry'yle düşer, hiçbir sayaç görmez.
+- **F34:** el sıkışma give-up'ı `took < sınır + 1 sn` yerine `took ≥ sınır`
+  + rölenin yuttuğu kanıt sayısı; `service_stop` `took` sınırları yerine
+  `StopReport`'tan "hiçbir bekleyiş grace'e takılmadı" (aç bırakmada önce
+  5/10 ve 0/10, sonra 10/10); loadgen EOF testi tek çıkışla; e2e
+  `Client::probe` F24 biçiminde (sıra elle çevrilince eski probe 3/3
+  düştü, yenisi 3/3 geçti); smoke'un `step_p*_fine_us ≤ 20 ms`'i hiç
+  düşemezdi (yüzdelik ya kutu kenarı ya tavan) — adım maliyeti elle ölçüm
+  koşularına, smoke biçimi sınar.
+- **Tarama:** `rpc_shard` zaman aşımı süpürmesi, `ticket` yavaş
+  doğrulayıcı, sharded park süresi, MMO `cross_seam_players` ve
+  `combat_logout`, TCP EOF testi, `supervision` bombası paused saate ya da
+  test tetiğine geçti (aç bırakmada 0–7/10 → 10/10). Kalanlar F52.
+- CONTRIBUTING "Gerçek saatli testler" yeni kalıplarla (yapısal sayım, tek
+  çıkış, rapordan grace, kanıtlı koşu, biçim sınaması).
+
+Testler 1458 → 1459 (`otlp` ile 1476 → 1477): F50'nin birim testi
+`a_refused_export_is_counted_by_its_cause`; F30/F34 var olan testleri
+çevirdi. Ebeveyn doğrulaması: kapalı ret sayımını silmek testi düşürdü.
+
 ## F41 — duruşta önce kapılar (`core/f41-stop-order`)
 
 - **Hata (motor, gerçek):** `stop()` registry'ye `Shutdown`'ı gönderip
