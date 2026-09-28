@@ -80,6 +80,10 @@ pub trait GameModule: Send + Sync + 'static {
     fn spawn_registry(&self, parts: RegistryParts) -> JoinHandle<()>;
     /// RESULT/başlangıç satırı için seçimin tek satırlık tarifi.
     fn describe(&self) -> String;
+    /// (F62'de eklendi, sağlanan) Oyunun sahip olduğu üst düzey config
+    /// anahtarları; vars. adının tablosu (`[<ad>]`). Motor gerisini
+    /// reddeder (§4.3).
+    fn owned_keys(&self) -> Vec<&'static str> { vec![self.name()] }
 }
 
 pub struct RegistryParts { /* inbox, self_mailbox, ticker, metrics,
@@ -218,6 +222,32 @@ birbirine karışmaz:
   değil). *Elenen:* oyunun `configure`'da `Config`'i değiştirmesi
   (`&Config` salt okunur; imza değişikliği bütün modülleri kırardı) ve
   oyunun ham tabloya anahtar yazması (motor anahtarı oyuna geçerdi).
+- **Üst düzeyin sahipleri (BACKLOG F62, 2026-09-28).** Üst düzey
+  motorla oyunun paylaştığı ad alanı; kimin neye sahip olduğunu oyun
+  bildirir: `GameModule::owned_keys()` (sağlanan metot, veri: ad
+  listesi). Bir ad o adı taşıyan üst düzey anahtarın tamamına sahiptir —
+  düz değer de, tablo da (`[ad]`, `[ad.alt]`, `[[ad]]`). Varsayılan
+  oyunun adının tablosu: arena `[arena]`, MMO `[mmo]`, war `[war]`
+  (üçü de varsayılanı kullanır). Demo düz anahtarlarını bildirir
+  (`visibility`, `topology`, `communication`, `shard_count`,
+  `aoi_cell_size`, `team_vision_radius`, `spawn_half_size`,
+  `disconnect_grace_secs`) ve tablo bildirmez — `[demo]` artık
+  reddedilir (önceden yok sayılıyordu). `raw`'dan düz anahtar okuyan
+  üçüncü taraf modül onları burada bildirir (adının tablosunu da
+  istiyorsa listeye kendisi ekler). Sunucu her başlatmanın ilk adımında
+  (`Config::check_top_level_keys`, public — bir çağıran başlatmadan da
+  denetleyebilir) `raw`'ın her üst düzey anahtarının motorun (`Config`
+  alanları, demo'nunkiler hariç) ya da bir oyunun olduğunu denetler;
+  "bir oyun" = barındırılan modül + bu ikiliye derlenmiş her oyun
+  (`games::owned_keys()`): bir dosya kardeş oyunun tablosunu taşıyabilir.
+  Derlenmemiş bir oyunun tablosu ve kimsenin sahip olmadığı her anahtar
+  `ServerError::UnknownKey` ile başlatmayı durdurur (yazım hatası
+  koruması kazanır). Metot `configure`'dan önce ve taze modülde de
+  sorulur (sunucu her derlenmiş oyuna sorar), ayarlara bağlı olamaz.
+  Bir oyunun SABİTLEDİĞİ düz anahtarlar (arenanın `visibility`'si gibi)
+  onun sahip olduğu anahtarlar değildir: sahibi demo'dur; demo derlenmişse
+  denetimden geçer ve oyunun `configure`'ı "sabit" hatasıyla reddeder,
+  derlenmemişse denetim reddeder. Ayrıntı: OPS §2 "Üst düzey".
 - `rooms` hiçbir oyunun sabitlediği bir anahtar değil; bir oyunun
   `own_table`'ı ona bakmaz, bu yüzden `[rooms.<id>]` her oyunla çalışır
   ve `config.example.toml` onu (yorumlu) taşırken oyun değiştirme yalnız
@@ -512,7 +542,11 @@ mesaj anahtarı ve nedenini adlandırır — `games::settings::SettingsError`,
    "sabit" hatası; tablonun kendi anahtarı bir düz anahtarla aynı adı
    taşıyabilir (arenanın `disconnect_grace_secs`'i) — bilinen önce gelir.
    Başka oyunun tablosu yok sayılır (bir dosya birkaç oyunun bölümünü
-   taşıyabilir; demo da `[arena]`/`[mmo]`'ya bakmaz).
+   taşıyabilir; demo da `[arena]`/`[mmo]`'ya bakmaz). *F62'den beri
+   (2026-09-28):* bu yalnız bu ikiliye DERLENMİŞ bir oyunun tablosu için
+   geçerli; derlenmemiş bir oyunun tablosu (yalnız `game-arena` ile
+   derlenmiş ikilide `[mmo]`) ve hiçbir oyunun sahip olmadığı her üst
+   düzey anahtar başlatmayı durdurur (§4.3 "Üst düzeyin sahipleri").
 3. **`games::settings` public** (`own_table`, `integer`, `seconds`,
    `choice`, `SettingsError`): üçüncü taraf bir modül kendi tablosunu
    aynı kurallarla okuyabilsin.

@@ -1390,8 +1390,20 @@ düzeyinde), bu yüzden serde'nin `deny_unknown_fields`'ı girdinin
 tamamını kapsar — `flatten` ile birleşince bozulan serde davranışı
 burada yok. Girdiye ileride taşımaya özgü bir alt tablo gelirse o da
 kendi `deny_unknown_fields`'lı struct'ı olur, `flatten` değil. Eskiden
-anahtar sessizce atılıyordu. Taramanın tablosu ve üst düzeyin neden
-açık kaldığı (F62): OPS §2 "Kapı girdisi".
+anahtar sessizce atılıyordu. Taramanın tablosu: OPS §2 "Kapı girdisi".
+
+**Config'in üst düzeyi de kapalı: motorun ve oyunların anahtarları
+(BACKLOG F62 — 2026-09-28).** Üst düzey barındırılan oyunla paylaşılan
+ad alanı olduğu için `Config` bilinmeyen alanı ayrıştırırken reddetmez;
+onun yerine sunucu her başlatmanın İLK adımında (`start_inner`, bir şey
+bağlanmadan) `Config::check_top_level_keys`'i koşar: `raw`'daki her üst
+düzey anahtar ya motorundur (`Config`'in alanları — liste struct'ın
+kendi türetilmiş `Deserialize`'ından okunur, kayamaz; demo'nun düz
+anahtarları hariç) ya da bir oyunun `GameModule::owned_keys`'indedir —
+barındırılan oyunun ya da bu ikiliye derlenmiş başka bir oyunun. Gerisi
+`ServerError::UnknownKey` (anahtar, dosyadaki yazımı, benzediği bilinen
+anahtar). Ayrıntı ve karar gerekçesi: OPS §2 "Üst düzey",
+GAME-MODULE §4.3.
 
 **El sıkışan kapılar: el sıkışma accept döngüsünün dışında (BACKLOG
 B31 — 2026-09-26).** WS, TLS ve QUIC kapısında bir bağlantı, oturum

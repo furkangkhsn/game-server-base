@@ -318,19 +318,71 @@ gsb-server: cannot read config file gsb.toml: Is a directory (os error 21)
 | `[metrics]` (`MetricsConfig`), `[metrics.otlp]` (`OtlpSection`) | reddediyordu | değişmedi |
 | `[arena]`, `[mmo]`, `[war]` (`games::settings::own_table`) | reddediyordu (GAME-MODULE §6 sapma 2) | değişmedi |
 | Seçim ve taşıma enum'ları (`visibility`, `topology`, `communication`, `transport`, girdinin `transport`'u), `afk_action`, `max_detach_hold_secs` | bilinmeyen DEĞER reddediliyordu | değişmedi |
-| Üst düzey (`Config`) | bilinmeyen anahtar yok sayılıyor | **bilerek değişmedi** — aşağıda, BACKLOG F62 |
+| Üst düzey (`Config`) | bilinmeyen anahtar yok sayılıyordu | **reddeder** (F62, başlatmada; aşağıda "Üst düzey") |
 
-TLS, ops HTTP (`http_listen`), `listen_backlog` ve rUDP düğmeleri üst
-düzeyin düz anahtarları — ayrı tabloları yok. Üst düzey bu turda açık
-kaldı: orası barındırılan oyunla PAYLAŞILAN ad alanı — oyun kendi
-parçasını `Config::raw`'dan okur (`[<oyun>]` tablosu; demo'nun düz
-anahtarları; üçüncü taraf bir modülün okuduğu her anahtar) ve bir dosya
-birkaç oyunun tablosunu taşıyabilir (GAME-MODULE §6 sapma 2). Motor
-hangi üst düzey anahtarın oyunun olduğunu bilmeden reddedemez; bunu
-bildirmek `GameModule` sözleşmesini değiştirir — karar bakımcının
-(F62). Sonuç bugün: düz bir motor anahtarının yazım hatası
-(`tik_hz = 60`) ya da yanlış adlı bir tablo (`[metric.otlp]`,
-`[room.2]`, `[[listener]]`) etkisiz, uyarısız.
+**Üst düzey: motorun ve oyunların anahtarları, gerisi reddedilir
+(BACKLOG F62 — 2026-09-28, bakımcı kararı (b)).** TLS, ops HTTP
+(`http_listen`), `listen_backlog` ve rUDP düğmeleri üst düzeyin düz
+anahtarları; orası barındırılan oyunla PAYLAŞILAN ad alanı — oyun kendi
+parçasını `Config::raw`'dan okur (`[<oyun>]` tablosu, demo'nun düz
+anahtarları, üçüncü taraf modülün okuduğu anahtarlar) ve bir dosya
+birkaç oyunun tablosunu taşıyabilir. Bu yüzden `Config` ayrıştırırken
+bilinmeyen anahtarı reddetmez (`deny_unknown_fields` yok); sunucu her
+başlatmanın **ilk** adımında, bir şey bağlanmadan, üst düzeyi denetler
+(`Config::check_top_level_keys`). Bir üst düzey anahtar kabul edilir
+ancak:
+
+- **motorunsa** — `Config`'in alanlarından biri, dosyadaki yazımıyla
+  (`max_detach_hold_secs`, `rooms`, `listeners`, `metrics`, `game` …).
+  Liste struct'ın kendi türetilmiş `Deserialize`'ından okunur (serde'nin
+  struct'a verdiği alan listesi): alan eklemek/adlandırmak listeyi
+  kendiliğinden günceller, kayamaz. Demo'nun `Config`'te uyumluluk için
+  duran düz anahtarları (`visibility`, `topology`, `communication`,
+  `shard_count`, `aoi_cell_size`, `team_vision_radius`,
+  `spawn_half_size`, `disconnect_grace_secs`) motorun DEĞİL, demo'nun;
+  her birinin `Config` alanı olduğunu bir test kilitler;
+- ya da **bir oyunun sahip olduğu anahtarsa** —
+  `GameModule::owned_keys()` (sağlanan metot): barındırılan oyunun ya da
+  bu ikiliye derlenmiş BAŞKA bir oyunun. Bir ad o adı taşıyan üst düzey
+  anahtarın tamamına sahiptir: düz değer (`hiz = 3`) ya da tablo
+  (`[ad]`, `[ad.alt]`, `[[ad]]`). Varsayılan oyunun adının tablosu
+  (`[arena]`, `[mmo]`, `[war]`); demo düz anahtarlarını bildirir ve
+  `[demo]` tablosuna sahip değildir.
+
+Gerisi başlatmayı durdurur (`ServerError::UnknownKey`; ikili F63
+biçiminde basar, çıkış durumu 1):
+
+```text
+gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not a key of the server, and no game compiled into this build owns it (games' keys — demo: `visibility`, `topology`, …; arena: `arena`; mmo: `mmo`; war: `war`); a key nobody reads is refused, not ignored
+```
+
+- **Hata:** anahtarı dosyadaki yazımıyla adlandırır — düz değer
+  `` `tik_hz` ``, tablo `` `[room.2]` `` / `` `[metric.otlp]` ``, tablo
+  dizisi `` `[[listener]]` `` —, bir ya da iki harf uzaklıkta bilinen bir
+  anahtar varsa onu önerir ve derlenmiş oyunların anahtarlarını sayar.
+  **Satır numarası yok:** denetim başlatmada, ham tablo üstünde koşuyor
+  (dosya metni orada yok; `Config`'e alan eklemek genel struct'ı
+  kırardı); bir TOML belgesinde üst düzey anahtar tektir, adı yerini
+  belirler. Bir seferde ilk bilinmeyen anahtar raporlanır (serde'nin
+  `deny_unknown_fields`'ı gibi).
+- **Kardeş oyun kuralı:** bir dosya bu ikiliye derlenmiş başka bir
+  oyunun tablosunu taşıyabilir (demo'yu barındıran sunucu `[arena]`'yı
+  kabul eder, demo ona bakmaz — GAME-MODULE G2 sapma 2). **Bu ikiliye
+  derlenmemiş bir oyunun tablosu reddedilir:** yalnız `game-arena` ile
+  derlenmiş bir ikili `[mmo]` taşıyan dosyayla kalkmaz; demo'suz bir
+  ikili demo'nun düz anahtarlarını reddeder. Yazım hatası koruması,
+  derlemeler arası paylaşılan dosyanın rahatlığından önce gelir; öyle
+  bir dosya o derleme için tablo çıkarılarak yazılır.
+- **Kodla kurulan config:** `raw` boş, denetim her zaman geçer (testler,
+  yük üreteci; yük üretecinin `--mmo-crystallize`'ı `[mmo]` yazar, MMO
+  derlenmişse kabul).
+- **Kapsam:** yalnız üst düzey. Alt tablolar kendi katılığını taşır
+  (yukarıdaki tablo); bir oyunun tablosunun İÇİNİ oyun denetler
+  (`games::settings::own_table`).
+- **Geriye uyumsuz, bilerek:** bugün yok sayılan bir üst düzey anahtar
+  artık başlatmayı durdurur. Depodaki config'lerde böyle bir anahtar
+  yoktu (`config.example.toml` ve bütün yorumlu bölümleri, testlerin
+  dosyaları, yük üretecinin yazdıkları).
 
 ## 3. Tel/format detayları
 
