@@ -227,7 +227,7 @@ F61 — 2026-09-28).** Bir girdi tam dört anahtar alır: `transport`,
 başlatmayı bir şey bağlanmadan durdurur:
 
 ```text
-cannot parse config file gsb.toml: TOML parse error at line 8, column 1
+gsb-server: cannot parse config file gsb.toml: TOML parse error at line 8, column 1
   |
 8 | listen_backlog = 4096
   | ^^^^^^^^^^^^^^
@@ -239,10 +239,8 @@ unknown field `listen_backlog`, expected one of `transport`, `bind`, `tls_cert`,
   yazılmaz; `[rooms.<id>]` ve `[metrics]` ile aynı biçim, serde'nin
   `deny_unknown_fields`'ı + toml'un konumu). Eskiden anahtar sessizce
   atılıyordu: sunucu kalkıyor, değer hiçbir yere gitmiyordu. Yukarıdaki
-  metin `ConfigError`'ın `Display`'i; `gsb-server` ikilisi bugün
-  `main`'den dönen hatayı `Debug` ile basıyor (`Error: Parse { … }`):
-  anahtar ve mesaj orada da var, satır numarası yok, dosyanın tamamı
-  dökülüyor — bütün config hataları için aynı, ayrı bulgu (BACKLOG F63).
+  metin `gsb-server` ikilisinin stderr'e bastığı: `ConfigError`'ın
+  `Display`'i, çıkış durumu 1 (F63'ten beri; aşağıda "Başlatma hatası").
 - **Tasarım:** girdi düz bir struct — taşımaya özgü alt tablo,
   `flatten`'lı ya da etiketli (`tag`) bir parça yok (TLS dosyaları
   girdinin kendi iki alanı, WS/QUIC/rUDP düğmeleri sunucu düzeyinde).
@@ -266,6 +264,49 @@ unknown field `listen_backlog`, expected one of `transport`, `bind`, `tls_cert`,
   başlatmayı durdurur (bakımcı kararı (a)). Depodaki config'lerde böyle
   bir anahtar yoktu (örnek dosya, testlerin ve loadgen'in kurduğu
   girdiler yalnız dört anahtarı yazıyor).
+
+**Başlatma hatası: tek mesaj, çıkış durumu 1 (BACKLOG F63 —
+2026-09-28).** `gsb-server` başlatmayı durduran her hatayı — config
+dosyası okunamadı ya da ayrışmadı, bir anahtarın değeri reddedildi
+(`ServerError`), bir kapı kalkmadı — stderr'e tek mesaj olarak basar ve
+1 ile çıkar:
+
+```text
+gsb-server: invalid `listen_backlog` 0: must be 1..=2147483647 (listen(2) takes a C int; …)
+gsb-server: listener `127.0.0.1:7777` (tcp) did not start: Address already in use (os error 98)
+gsb-server: listener `0.0.0.0:7443` (tls) did not start: cannot open `tls_cert` file `/etc/gsb/cert.pem`: No such file or directory (os error 2)
+gsb-server: cannot read config file gsb.toml: Is a directory (os error 21)
+```
+
+- **Metin:** hatanın `Display`'i; `source()` zincirinde metnin zaten
+  taşımadığı her neden ayrı bir `caused by: …` satırı
+  (`gsb_server::error_chain` — kendi oyununu `start_game_server` ile
+  barındıran bir ikili aynı biçimi kullanabilir). Bu depodaki hatalar
+  nedenlerini kendi mesajlarına yazar, bugün ek satır çıkmaz; ek satır
+  üçüncü taraf bir modülün kendi nedeni olan hatası içindir. Ayrıştırma
+  hatası satırı ve işaretli alıntıyı taşır; dosyanın başka satırı
+  basılmaz.
+- **Önceden:** `main` hatayı döndürüyordu, standart kütüphane `Debug` ile
+  basıyordu: `Error: Parse { path: …, source: Error { message: …,
+  input: Some("<dosyanın tamamı>"), … span: Some(82..96) } }` — satır
+  numarası yok, dosya dökülüyor; `Error: BadListenBacklog(0)`,
+  `Error: Bind(Os { code: 98, kind: AddrInUse, … })` (hangi kapı
+  olduğu yok). Çıkış durumu aynı: 1.
+- **Kapı hatası kapıyı adlandırır:** `ServerError::ListenerBind { addr,
+  transport, source }` — soket reddi (dolu port, soket kurucusunun
+  reddettiği backlog) de TLS/QUIC dosyası yüklenemediği de. Adres
+  config'te yazıldığı gibi (port 0 dahil). Kapıyı adlandırmayan eski
+  `ServerError::Bind(io::Error)` kaldırıldı (hiçbir yol artık onu
+  üretmiyordu).
+- **`ConfigError`'ın `Debug`'u dosyasız:** elle yazıldı — ayrıştırma
+  hatasında yol, mesaj ve bayt aralığı (`span`); `toml`'un hatasının
+  sakladığı girdi kopyası basılmaz (`Config::from_file(..).unwrap()`
+  paniği ya da `{:?}` log satırı dosyayı dökmez).
+- **Yük üreteci de aynı:** `gsb-loadgen`'in süreç-içi sunucusu
+  kalkmazsa `gsb-loadgen: the in-process server did not start: <hata>`
+  ve çıkış durumu 1 (önceden `Debug`'lı panik, 101); `--serve` çocuğu
+  zaten `Display` basıp 1 ile çıkıyordu, artık aynı zinciri basar.
+  Komut satırı reddi değişmedi (çıkış durumu 2).
 
 **Config tablolarının bilinmeyen anahtar denetimi (F61 taraması).**
 
@@ -1028,6 +1069,20 @@ bildirmek `GameModule` sözleşmesini değiştirir — karar bakımcının
    kırmızı (süre sınırı yokken iki test asılma korumasına takıldı);
    öldürülen mutasyonlar: süre sınırı yok, okuma başına süre, zaman
    aşımına 400, zaman aşımında yanıtsız kapatma, sınırın 100'de biri
+7. Başlatma hatası (F63, `tests/startup_errors.rs`): gerçek ikililer
+   (`CARGO_BIN_EXE_gsb-server`, `…gsb-loadgen`) bir şey bağlamadan
+   reddeden config'lerle koşar — girdide bilinmeyen anahtar (anahtar,
+   `line 8`, alıntılanan satır; dosyanın başka satırı yok), aralık dışı
+   ve negatif `listen_backlog`, yüklenemeyen TLS dosyası (kapı + dosya),
+   dolu port (adres), okunamayan config yolu, süreç-içi loadgen reddi;
+   hepsinde çıkış durumu 1, stderr'de `Error: ` / `Parse {` /
+   `input: Some(` yok. Birim: `error_chain::tests` (metnin taşıdığı neden
+   tekrar edilmez, taşımadığı ayrı satır; ayrıştırma hatası = `Display`,
+   sonda boş satır yok), `config_debug::tests` (`Debug`'da dosya yok).
+   Önce kırmızı (yedisi de); öldürülen mutasyonlar: `Debug` basmak,
+   çıkış durumu 2, zincirde her nedeni eklemek / hiçbirini eklememek,
+   kırpmamak, TLS kapısına `tcp` demek, `Debug`'da toml hatasının
+   kendisi, loadgen'de panik
 
 ## 5. NOT-DONE (v1)
 

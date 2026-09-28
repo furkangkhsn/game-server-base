@@ -49,7 +49,15 @@ pub(crate) async fn run(args: Args) {
                 },
             )
             .await
-            .expect("server starts");
+            .unwrap_or_else(|e| {
+                // A refused server is a message and status 1 (like
+                // `--serve`'s), not a panic printing the error's `Debug`.
+                eprintln!(
+                    "gsb-loadgen: the in-process server did not start: {}",
+                    gsb_server::error_chain(&e)
+                );
+                std::process::exit(1)
+            });
             let addr = s.handle.addr;
             eprintln!(
                 "mode: in-process server at {addr} (transport={}; clients share CPU with server)",

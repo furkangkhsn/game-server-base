@@ -18,6 +18,18 @@ impl ListenerSpec {
             | Self::Ws { addr } => *addr,
         }
     }
+
+    /// This listener's transport as the config spells it (a door's name
+    /// in a startup error).
+    pub(crate) fn transport(&self) -> &'static str {
+        match self {
+            Self::Tcp { .. } => "tcp",
+            Self::Tls { .. } => "tls",
+            Self::Udp { .. } => "udp",
+            Self::Quic { .. } => "quic",
+            Self::Ws { .. } => "ws",
+        }
+    }
 }
 
 /// Reduce the config's listener surface to validated [`ListenerSpec`]s:

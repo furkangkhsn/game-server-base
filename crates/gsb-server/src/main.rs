@@ -2,20 +2,39 @@
 //!
 //! Usage: `gsb-server [config.toml]` (falls back to built-in defaults when
 //! the file is missing; see `config.example.toml`).
+//!
+//! A refused startup — a config file that does not load, a key no
+//! server can run with, a door that does not bind — is one message on
+//! stderr (`gsb-server: <the error>`, its `Display` and causes through
+//! [`gsb_server::error_chain`]) and exit status 1 (BACKLOG F63).
 
 use std::path::Path;
+use std::process::ExitCode;
 
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    // Not `main -> Result`: the standard library prints a returned error
+    // with `Debug` (`Error: Parse { … }` — no line number, and a parse
+    // error's `Debug` carries the whole file).
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("gsb-server: {}", gsb_server::error_chain(&*e));
+            ExitCode::FAILURE
+        }
+    }
+}
 
+/// Load the config, start the server, and serve until a shutdown signal.
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "config.toml".into());

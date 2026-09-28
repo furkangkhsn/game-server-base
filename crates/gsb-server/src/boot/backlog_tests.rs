@@ -94,8 +94,14 @@ async fn every_tcp_socket_hands_its_backlog_to_the_builder() {
     ];
     for spec in &specs {
         match door(spec, &cfg).await {
-            Err(ServerError::Bind(e)) => {
-                assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{e}")
+            Err(ServerError::ListenerBind {
+                addr,
+                transport,
+                source,
+            }) => {
+                assert_eq!(addr, spec.addr());
+                assert_eq!(transport, spec.transport());
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput, "{source}")
             }
             Err(e) => panic!("refused for another reason: {e}"),
             Ok(_) => panic!("a zero backlog bound a door"),

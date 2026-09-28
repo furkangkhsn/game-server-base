@@ -92,7 +92,10 @@ pub(crate) async fn serve(args: Args) {
     let handle = match start_hosted(cfg, report_tx).await {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("serve: the server did not start: {e}");
+            eprintln!(
+                "serve: the server did not start: {}",
+                gsb_server::error_chain(&e)
+            );
             std::process::exit(1);
         }
     };

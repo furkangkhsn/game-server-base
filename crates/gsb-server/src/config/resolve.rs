@@ -3,8 +3,13 @@
 
 use std::net::SocketAddr;
 
+mod config_debug;
+
 /// Configuration errors.
-#[derive(Debug, thiserror::Error)]
+///
+/// `Debug` is written by hand (`config_debug`): the derived one would
+/// print the parse error's copy of the whole file (BACKLOG F63).
+#[derive(thiserror::Error)]
 pub enum ConfigError {
     #[error("cannot read config file {path}: {source}")]
     Io {
@@ -27,8 +32,20 @@ pub enum ServerError {
     #[error("invalid bind address `{0}`: {1}")]
     BadBind(String, String),
 
-    #[error("transport bind failed: {0}")]
-    Bind(#[from] std::io::Error),
+    /// A door that did not come up: its socket refused (a taken port, a
+    /// backlog the socket builder refuses) or its TLS/QUIC files did not
+    /// load. Names the door; the cause is the transport's. (BACKLOG F63:
+    /// it replaced `Bind(io::Error)`, whose message named no door.)
+    #[error("listener `{addr}` ({transport}) did not start: {source}")]
+    ListenerBind {
+        /// The door's address as configured (port 0 included).
+        addr: SocketAddr,
+        /// Its transport, as the config spells it (`tcp`, `tls`, …).
+        transport: &'static str,
+        /// Why the transport refused.
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("invalid `udp_cookie_key` in config: {0}")]
     BadCookieKey(String),

@@ -254,7 +254,15 @@ pub(super) async fn bind_listener(
             listen_backlog: cfg.listen_backlog,
         }),
     };
-    let listener = transport.bind(spec.addr()).await?;
+    let listener =
+        transport
+            .bind(spec.addr())
+            .await
+            .map_err(|source| ServerError::ListenerBind {
+                addr: spec.addr(),
+                transport: spec.transport(),
+                source,
+            })?;
     let addr = listener.local_addr().ok_or_else(|| {
         ServerError::BadBind(
             spec.addr().to_string(),
