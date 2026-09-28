@@ -13,6 +13,7 @@ use crate::common::*;
 use crate::identity::WireId;
 use crate::space::CellSpace;
 
+mod index;
 mod rate;
 
 /// The dirty pass's query for codec `R` (kept by the room across ticks —
@@ -90,6 +91,12 @@ pub(crate) struct CellBook<W, C> {
     pub deferred: HashMap<u64, (C, SendEvery)>,
     /// The roll's scratch for the due releases (reused).
     pub released: Vec<(u64, C)>,
+    /// `wire id → entity` of every bucketed own record — kept only when
+    /// a room asks for it ([`Self::index_entities`]: the lit AOI room,
+    /// whose rule is asked about a record's ENTITY — A9). `None` (every
+    /// other room): not kept, no cost. Written where `last_cell` gains
+    /// or loses an entity, so the two cannot drift.
+    pub entities: Option<HashMap<u64, Entity>>,
 }
 
 // Not derived: a derive would demand `W: Default` and `C: Default`.
@@ -108,6 +115,7 @@ impl<W, C> Default for CellBook<W, C> {
             step: 0,
             deferred: HashMap::new(),
             released: Vec::new(),
+            entities: None,
         }
     }
 }
@@ -257,6 +265,9 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
                     // between passes): an upsert in its cell.
                     self.record_appearance(wire, value, new_cell, is_member);
                     self.last_cell.insert(entity, (wire, new_cell));
+                    if let Some(index) = &mut self.entities {
+                        index.insert(wire, entity);
+                    }
                 }
                 Some(old) if old == new_cell => {
                     // Moved inside its cell — a record only when the wire
@@ -291,6 +302,9 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
     pub(crate) fn apply_removals(&mut self) {
         for (entity, member) in std::mem::take(&mut self.pending_removals) {
             if let Some((wire, cell)) = self.last_cell.remove(&entity) {
+                if let Some(index) = &mut self.entities {
+                    index.remove(&wire);
+                }
                 self.record_exit(cell, wire, member);
             }
         }
@@ -323,6 +337,9 @@ impl<W: Clone + Eq, C: Copy + Eq + Hash + Debug> CellBook<W, C> {
                 continue;
             }
             self.last_cell.remove(&entity);
+            if let Some(index) = &mut self.entities {
+                index.remove(&wire);
+            }
             let member = if alive.is_some() {
                 self.members.contains(&entity)
             } else {

@@ -392,8 +392,10 @@ pub trait ShardGame: Game {
 pub type Wire<G> = <<G as Game>::Codec as RecordCodec>::Wire;
 
 mod kick;
+mod lit;
 pub(crate) use kick::forward_kicks;
 pub use kick::kick;
+pub use lit::LitGame;
 
 #[cfg(test)]
 mod tests;

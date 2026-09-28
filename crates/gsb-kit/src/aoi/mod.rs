@@ -220,12 +220,14 @@
 //! group cell's boundary (≤ `cell_size` world units; worst case ~2×
 //! `cell_size` from a member at the group cell's far edge). The
 //! omnidirectional block is the price of the shared-bytes model: a finer
-//! "lit cells" notion (per-player facing/vision) would make the snapshot
-//! a function of the *player*, not the *cell*, which the group-snapshot
-//! model cannot express without per-connection payloads — that general-
-//! ization is a ROADMAP item, not part of this round. `cell_size` is
-//! the single knob that sets both the concealment resolution and the
-//! leak band (see `docs/DESIGN.md` §8).
+//! "lit cells" notion (per-player facing/vision) makes the snapshot a
+//! function of the *player*, not the *cell*, which one shared packet per
+//! cell cannot express — a game that needs it opts into
+//! [`LitAoiRoom`] (A9: a viewer with a light is its own group, its
+//! frames carry only what its game lights; everyone else keeps the
+//! shared packets). In this room `cell_size` is the single knob that
+//! sets both the concealment resolution and the leak band (see
+//! `docs/DESIGN.md` §8).
 //!
 //! **Why a block keyed on the cell, and not a per-player radius?** A
 //! per-player radius would make the snapshot a function of the *player*,
@@ -268,10 +270,13 @@
 //!   see is neither drawn nor duplicated; exits (per entity, per cell)
 //!   are delivered on the group's packet.
 
+mod lit;
 mod logic;
 
 #[cfg(test)]
 mod tests;
+
+pub use lit::{LitAoiRoom, LitGroup};
 
 use std::collections::{HashMap, HashSet};
 
