@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A5 — hacimsel AOI ve 3B shard bölmesi: `Grid3`, `GridPartition3` (`kit/k2-grid3`)
+
+Kit hattının ikinci turu.
+
+- **Kit yapı taşı, isteğe bağlı:** `gsb_kit::space::Grid3` (hacimsel AOI —
+  `CellSpace`, wire'ın `Spatial<Coord = i32>` izdüşümü, küp hücre, `Cell3`,
+  27 hücre görünüm, `CellExit { sint32 x = 1; y = 2; z = 3; }`) ve
+  `GridPartition3<P>` (3B shard bölmesi — `new([nx, ny, nz], half)`, kutu
+  bölgeler; 6-komşuluk, `with_diagonals()` ile 26). 2D ön-ayarlar, odalar ve
+  her oyunun baytları aynı; hiçbir demo kullanmıyor.
+- **Sözleşme 2D'nin aynası:** hücre her eksende `floor(wire / boyut)`; bölge
+  alt yüzünü içerir, harita dışı kırpılır; margin en küçük bölge kenarının
+  dörtte biri; export katı `<`, kabul dahil `≤`, bant en kötü eksende; birim
+  denetimi üç eksende. Tek katmanlı `GridPartition3` = `GridPartition2`
+  (test kilitli).
+- **Şerit 3B'de:** gönderen kutunun altı yüzünün margin kabuğu; alıcı yüz
+  levhası / kenar prizması / köşe küpünü tutar; 6-komşulukta kenar/köşe
+  ötesine şerit yok (2D'nin köşe kuralı).
+- **Maliyet:** AOI grup paketi 27 parça (2D 9); şerit takası 6 / 26 komşu
+  (2D 4 / 8); entity başına üç eksen testi.
+- Elenenler: otomatik şekil (yüksekliği de bölerdi), eksen başına
+  yarı-boyut (A37), 18-komşuluk, `GridN<D>`, `VisionGrid3`'ü AOI yapmak.
+
+Testler 1548 → 1566 (`otlp` ile 1566 → 1584): ön-ayar (10), AOI odası (2),
+shard'lı doğrudan (4), gerçek registry + sekiz shard aktörü (2×2×2; 15 ardışık
+koşu yeşil); 18'i de önce kırmızı, 24 mutasyonun hepsi yakalandı. Ebeveyn
+doğrulaması: bölge kırpmasında üst sınırı bir kaydırmak iki testi düşürdü.
+KIT-ARCHITECTURE §10 "A5", CROSS-SHARD §4c/§9.
+
 ## A8 — takım sisinde birim başına görüş yarıçapı (`kit/k1-vision-radius`)
 
 İki paralel hattın (rUDP sertleştirme ‖ kit özellikleri) kit hattındaki
