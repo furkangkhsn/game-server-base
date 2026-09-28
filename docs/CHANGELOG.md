@@ -5,6 +5,32 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## A7 — bölme ön-ayarlarında wire ölçeği: `with_wire_scale` (`kit/k3-wire-scale`)
+
+Kit hattının üçüncü turu.
+
+- **Kit yapı taşı, isteğe bağlı:** `GridPartition2::with_wire_scale(s)` ve
+  `GridPartition3::with_wire_scale(s)` — konum birimi başına `s` wire birimi
+  (santimetre wire / metre konum: 100; 2 m adımlı wire: 0,5). Varsayılan 1 =
+  F3'ün birim sözleşmesi (`v / 1.0` IEEE'de `v`: her cevap ve her bayt aynı);
+  sonlu ve > 0 olmayan ölçek panikler. Hiçbir demo kullanmıyor.
+- **Dönüşüm noktaları:** iki ön-ayarda da wire okuyan iki yer — `admits`
+  (çerçeve filtresi: ödünç kaydın konumu) ve `debug_check_wire` (birim
+  denetimi) — wire izdüşümünü ölçeğe böler; bölge, export, bant ve komşuluk
+  konumu okur, ölçeği görmez. Oda kodu değişmedi.
+- **AOI kararı:** `Grid2` / `Grid3` ölçek almıyor — yalnız wire'ı okurlar ve
+  hücre kenarını zaten wire biriminde alırlar (santimetre wire'ın 64 m
+  hücresi `Grid2::new(6400.0)`).
+- Elenenler: sınırları ölçekle çarpmak, ölçeği `Planar`/`Spatial`'e koymak,
+  tam sayı ölçek, eksen başına ölçek (A38), ölçeği denetimden tahmin etmek.
+
+Testler 1601 → 1609 (`otlp` ile 1619 → 1627): ön-ayar düzeyinde 5
+(çerçeve kenarı santimetresine dek — 128,00 m içeride, 128,01 m dışarıda;
+tek katman 3B = 2D aynı ölçekte), GERÇEK `ShardedRoom` üzerinde santimetre
+fikstür oyunlarıyla 3; 8'i de önce kırmızı, 13 mutasyonun hepsi yakalandı.
+Ebeveyn doğrulaması: ölçeği en az 1'e kırpmak (kaba wire'ı bozar) testi
+düşürdü. KIT-ARCHITECTURE §7, §10 "A7"; CROSS-SHARD §9.
+
 ## rUDP sertleştirme 1 — B4 soket arabellekleri, B2 RTT tahmini + uyarlanan RTO (`net/r1-rcvbuf-rtt`)
 
 rUDP sertleştirme paketinin (E3) ilk turu; kit hattıyla paralel.

@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1601 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1609 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -152,6 +152,11 @@ küçük paket, S, H, takım odasında delta, W1, W2 ✅; §1'in paketleri bitti
 — B4+B2 → B1 → B3 → B7 → B5 (DTLS; kütüphane kararı kullanıcıda);
 (2) kit — A8 → A5 → A7 → A9. Her tur kendi worktree'sinde; birleştirmeden
 önce diğer hattın son hâline rebase + tam kapılar.
+
+**A7 tamam** (CHANGELOG "A7", KIT-ARCHITECTURE §10 "A7"): bölme
+ön-ayarlarında wire ölçeği — `GridPartition2/3::with_wire_scale(s)`;
+`admits` ve `debug_check_wire` wire'ı ölçeğe bölerek okur, varsayılan 1 =
+bugün. Hiçbir demo kullanmıyor. Açık: A38. Kit hattında sıradaki: A9.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -855,6 +860,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1601 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1609 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
