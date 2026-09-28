@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! room/shard tick ──try_send──▶ registry ──ConnIn::ServerClosed──▶ connection actor
-//!  (queue, retried            (table settle,        (spawned send,      (verdict + best-effort
+//!  (queue, retried            (table settle,        (posted: in place,  (verdict + best-effort
 //!   next tick on Full)          one lookup)          never awaited)       ERROR 9, then close)
 //! ```
 //!
@@ -14,10 +14,12 @@
 //! the close must settle (the affiliation, the cap slot, the sharded
 //! member count) and the inbox the verdict travels on. It is the same
 //! path every other registry-side verdict takes (`superseded`, the
-//! birth caps): a spawned `ConnIn::ServerClosed` send, never awaited by
-//! the registry, so a full connection inbox cannot stall the control
-//! plane (the registry never awaits a room, and not a connection
-//! either).
+//! birth caps): a posted `ConnIn::ServerClosed` (`crate::channel::post`
+//! — in place when the inbox has room, so it is queued ahead of the
+//! stop's notice, F57; from a spawned sender when it is full), never
+//! awaited by the registry, so a full connection inbox cannot stall the
+//! control plane (the registry never awaits a room, and not a
+//! connection either).
 //!
 //! **Who asks.** The input-idle ceiling under the opt-in
 //! `RoomConfig::afk_action = Disconnect` (`ServerClose::IdleInput`,

@@ -51,9 +51,8 @@ where
                 None => None,
             };
             if let Some(inbox) = notify {
-                tokio::spawn(async move {
-                    let _ = inbox.send(ConnIn::RoomGone(room)).await;
-                });
+                // Posted: in place when the inbox has room (F57).
+                crate::channel::post(&inbox, ConnIn::RoomGone(room));
             }
             debug!(
                 %conn,

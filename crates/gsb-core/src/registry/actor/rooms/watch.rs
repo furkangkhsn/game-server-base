@@ -98,7 +98,8 @@ where
     }
 
     /// Notify every connection affiliated with `room` that the room is
-    /// gone ([`ConnIn::RoomGone`], fire-and-forget spawned sends) and clear
+    /// gone ([`ConnIn::RoomGone`], posted — in place when the inbox has
+    /// room, F57 — never awaited) and clear
     /// their affiliations; their inbox is kept (clone, don't take) so they
     /// can still receive `Shutdown` or later notifications.
     ///
@@ -129,10 +130,8 @@ where
         }
         for (conn, inbox) in doomed {
             // Fire-and-forget notification (no reply needed).
-            tokio::spawn(async move {
-                let _ = inbox.send(ConnIn::RoomGone(room)).await;
-                debug!(%conn, room = %room, "notified: room gone");
-            });
+            crate::channel::post(&inbox, ConnIn::RoomGone(room));
+            debug!(%conn, room = %room, "notified: room gone");
         }
     }
 }

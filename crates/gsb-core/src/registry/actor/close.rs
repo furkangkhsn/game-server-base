@@ -89,13 +89,20 @@ where
         Self::tell_closed(inbox, cause, reason);
     }
 
-    /// Relay a room's verdict to the connection on a spawned send (never
-    /// awaited here). No inbox = the transport is already gone.
+    /// Relay a room's verdict to the connection, never awaited here. No
+    /// inbox = the transport is already gone.
+    ///
+    /// Posted (`crate::channel::post`, BACKLOG F57): in place when the
+    /// inbox has room — so the verdict is queued ahead of anything the
+    /// registry sends the connection after it, the stop's
+    /// `ConnIn::Shutdown` above all — and from a spawned sender only when
+    /// the inbox is full. Every registry notice to a connection goes this
+    /// way. A spawned-only send (the old way) could land behind the
+    /// stop's notice, and after the connection had closed its inbox be
+    /// refused: a verdict lost uncounted (F56 counts the one behind).
     fn tell_closed(inbox: Option<Mailbox<ConnIn>>, cause: ServerClose, reason: String) {
         if let Some(inbox) = inbox {
-            tokio::spawn(async move {
-                let _ = inbox.send(ConnIn::ServerClosed { cause, reason }).await;
-            });
+            crate::channel::post(&inbox, ConnIn::ServerClosed { cause, reason });
         }
     }
 
@@ -146,9 +153,8 @@ where
         }
         debug!(%conn, room = %room, ?park, "room ended the membership; the connection stays");
         if let Some(inbox) = inbox {
-            tokio::spawn(async move {
-                let _ = inbox.send(ConnIn::LeftRoom { room }).await;
-            });
+            // Posted, like every registry notice (see `tell_closed`).
+            crate::channel::post(&inbox, ConnIn::LeftRoom { room });
         }
     }
 
@@ -197,3 +203,6 @@ where
         self.emit_metrics();
     }
 }
+
+#[cfg(test)]
+mod tests;

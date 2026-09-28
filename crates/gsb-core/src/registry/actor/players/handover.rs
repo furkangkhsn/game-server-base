@@ -64,14 +64,14 @@ where
                 let reason = "a newer session for this player superseded this \
                      connection"
                     .to_string();
-                tokio::spawn(async move {
-                    let _ = inbox
-                        .send(ConnIn::ServerClosed {
-                            cause: ServerClose::Superseded,
-                            reason,
-                        })
-                        .await;
-                });
+                // Posted: in place when the inbox has room (F57).
+                crate::channel::post(
+                    &inbox,
+                    ConnIn::ServerClosed {
+                        cause: ServerClose::Superseded,
+                        reason,
+                    },
+                );
             }
             self.hand_over(old_conn, room);
         }

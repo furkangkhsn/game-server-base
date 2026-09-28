@@ -46,14 +46,14 @@ where
                 capacity = cap,
                 "server at connection capacity; new connection rejected"
             );
-            tokio::spawn(async move {
-                let _ = inbox
-                    .send(ConnIn::ServerClosed {
-                        cause: ServerClose::ConnCap,
-                        reason: "server at connection capacity".into(),
-                    })
-                    .await;
-            });
+            // Posted: in place when the inbox has room (F57).
+            crate::channel::post(
+                &inbox,
+                ConnIn::ServerClosed {
+                    cause: ServerClose::ConnCap,
+                    reason: "server at connection capacity".into(),
+                },
+            );
             return;
         }
         // Unauthenticated-session cap (docs/SECURITY.md §4),
@@ -76,14 +76,13 @@ where
                 capacity = cap,
                 "server at unauthenticated capacity; new connection rejected"
             );
-            tokio::spawn(async move {
-                let _ = inbox
-                    .send(ConnIn::ServerClosed {
-                        cause: ServerClose::UnauthCap,
-                        reason: "server at unauthenticated capacity".into(),
-                    })
-                    .await;
-            });
+            crate::channel::post(
+                &inbox,
+                ConnIn::ServerClosed {
+                    cause: ServerClose::UnauthCap,
+                    reason: "server at unauthenticated capacity".into(),
+                },
+            );
             return;
         }
         let info = self.conns.entry(conn).or_default();

@@ -1254,8 +1254,9 @@ no-op — burada bütün istek no-op'tur: teslim edilecek bir hüküm yok ve
   bildirir), aynı kimliğin resume'unun yeniden-bağlama temizliği, odanın
   bitmesi. `key` zaten bir satırdaysa (aynı oturumun başka odadaki
   parkı) istek despawn gibi yerleşir.
-- Sonra bağlantıya `ConnIn::LeftRoom { room }` (spawn'lu gönderim,
-  beklenmez; taşıması ölmüşse gönderilmez).
+- Sonra bağlantıya `ConnIn::LeftRoom { room }` (`channel::post`: kutuda
+  yer varsa yerinde, doluysa spawn'lu — F57; beklenmez; taşıması ölmüşse
+  gönderilmez).
 
 **Bağlantı aktörü: `ConnIn::LeftRoom`.** Yalnız `InRoom { room }` ise VE
 o üyeliğin aksiyon kanalı kapalıysa (oda bıraktı) `detach()` — tel
@@ -1515,7 +1516,9 @@ satırlara (B40) eşleşmeyen kol hiç dokunmaz.
 - Satır yok → no-op (değişmedi).
 - Satırın şimdiki üyeliği isteğinki → yerleşim + hüküm (değişmedi).
 - Değil → **tablo olduğu gibi kalır, hüküm yine iletilir**
-  (`ConnIn::ServerClosed { cause, reason }`, spawn'lu gönderim, S kuralı;
+  (`ConnIn::ServerClosed { cause, reason }`, `channel::post` — kutuda yer
+  varsa yerinde, duruşun bildiriminin önünde (F57), doluysa spawn'lu —,
+  S kuralı;
   taşıması ölmüş satırın inbox'u yoktur → hiçbir şey).
 
 Eski üyeliğin sonu her biçimde zaten yerleşmiştir: aynı odaya taze

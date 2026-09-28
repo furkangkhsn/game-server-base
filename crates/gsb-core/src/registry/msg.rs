@@ -197,8 +197,8 @@ pub enum RegistryMsg {
     /// rule.
     ///
     /// The registry settles its row, then tells the connection
-    /// ([`ConnIn::ServerClosed`] with the request's cause — a spawned
-    /// send, never awaited):
+    /// ([`ConnIn::ServerClosed`] with the request's cause — posted, in
+    /// place when its inbox has room, never awaited):
     ///
     /// - `parked` → the row is marked detached (the park holds its slot,
     ///   exactly like a transport death's row; the hold's end or a resume
@@ -224,7 +224,7 @@ pub enum RegistryMsg {
     ///
     /// The registry settles its row as the member's own leave would —
     /// the connection is authenticated and in no room afterwards — then
-    /// tells the connection ([`ConnIn::LeftRoom`], a spawned send; nothing
+    /// tells the connection ([`ConnIn::LeftRoom`], posted; nothing
     /// goes on the wire):
     ///
     /// - `park: Some(key)` → the membership moves to a NEW detached row

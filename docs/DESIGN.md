@@ -2767,11 +2767,24 @@ odanın kapalı-kutu reddi tabloya bakamaz — sayaç HÜKMÜ sayar, etkiyi
 değil; iki yer aynı ölçütle sayar. Registry dilimi, çünkü hükmün
 taşıyıcısı registry ve sebep onun duruşu (F53/F54 ile yan yana).
 
-**Kalan (F57):** 4. ayağın bir ucu. Registry işlediği kapatma hükmünü
-bağlantıya spawn'lu gönderimle yollar; duruşun `ConnIn::Shutdown`'ı da
-spawn'lu gider. Hüküm çoğunlukla önde varır, ama arkada varıp bağlantı
-kutusunu kapattıktan SONRA gelirse reddedilir ve sayılmaz (gönderici
-oturumun duruşla mı istemciyle mi bittiğini bilemez).
+**Registry'nin bağlantıya hükmü yerinde (F57).** 4. ayağın bir ucu
+sayılamıyordu: registry işlediği hükmü bağlantıya spawn'lu gönderimle
+yolluyordu, duruşun `ConnIn::Shutdown`'ı da spawn'lu gider. Hüküm
+arkada varıp bağlantı kutusunu kapattıktan SONRA gelirse reddediliyor
+ve sayılmıyordu (gönderici oturumun duruşla mı istemciyle mi bittiğini
+bilemez). Artık registry'nin bağlantıya her bildirimi (odanın kapatma
+hükmü, `LeftRoom`, `superseded`, doğum tavanları, `RoomGone`)
+`channel::post` ile gider: kutuda yer varsa YERİNDE — registry'nin
+ondan sonra gönderdiği her şeyin, duruşun `Shutdown`'ının da önünde
+(registry hükmü `Shutdown` kolundan önce işler) —, yalnız kutu doluyken
+spawn'lu göndericiden. Kalan: bağlantının kutusu doluyken işlenen
+hüküm spawn'lu yedekle gider ve aynı yarışa girebilir (arkada varırsa
+4. ayak sayar, kutu kapandıktan sonra varırsa sayılmaz) — dolu bağlantı
+kutusu (istemcinin karelerini okumayan aktör) gerektirir, BACKLOG'da
+kalan satır. Kilit: `registry::actor::close::tests` (hüküm registry onu
+işlediği an bağlantının kutusunda, duruşun bildirimi arkasında; tavan
+reddi ve `RoomGone` da yerinde; eski spawn'lu gönderimle ikisi de
+kırmızı).
 
 Elenenler: (1) *Yer başına ayrı aile* (`…_unread`, `…_refused`,
 `…_unsent`) — aynı kayıp, F55'in şikâyet ettiği zamanlamaya bağlı

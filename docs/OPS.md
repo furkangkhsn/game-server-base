@@ -790,8 +790,10 @@ max_detach_hold_secs = "off"
   `close_verdicts_lost{r}` = kararı verilen oturum sonu. Hükmün etkisi
   boş olacak olsa da (bağlantısı zaten gitmiş) sayılır — sayaç hükmü
   sayar; odanın kapalı-kutu reddi tabloya bakamaz, registry de aynı
-  ölçütle sayar. **Kalan (F57):** registry işlediği hükmü bağlantıya
-  spawn'lu göndericiyle yollar; o gönderim bağlantı kutusunu kapattıktan
+  ölçütle sayar. Registry'nin bağlantıya her bildirimi (F57) yerinde
+  kuyruklanır (`channel::post`): kutuda yer varsa duruşun
+  `Shutdown`'ının önündedir. **Kalan:** bağlantının kutusu doluyken
+  işlenen hüküm spawn'lu yedekle gider; bağlantı kutusunu kapattıktan
   sonra varırsa reddedilir, sayılmaz.
 - **Registry kapsamı: kapalı registry'nin reddettiği katılmalar (F54).**
   Registry satırının sonunda (`team_exports_unread=`'den sonra)
