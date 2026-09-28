@@ -30,7 +30,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::debug;
 
@@ -67,6 +66,10 @@ pub struct TlsTransportConfig {
     /// Where the handshake intake sends its refusals, timeouts and
     /// failures (B58; `None` = its stop log only).
     pub metrics: crate::TransportMetrics,
+    /// The listening socket's accept backlog (BACKLOG B84;
+    /// [`crate::listen::DEFAULT_LISTEN_BACKLOG`] is the queue tokio's own
+    /// bind gives).
+    pub listen_backlog: u32,
 }
 
 /// TLS-over-TCP transport: accepts plain TCP sockets, upgrades each to
@@ -174,8 +177,12 @@ impl Transport for TlsTransport {
             // keys are broken must not half-start (the port would be taken
             // while startup fails, confusing restart logic).
             let server_config = load_server_config(&self.config)?;
-            let listener = TcpListener::bind(addr).await?;
-            debug!(%addr, "TLS listener bound (rustls over TCP)");
+            let listener = crate::listen::bind_tcp(addr, self.config.listen_backlog)?;
+            debug!(
+                %addr,
+                backlog = self.config.listen_backlog,
+                "TLS listener bound (rustls over TCP)"
+            );
             let local_addr = listener.local_addr().ok();
             let intake = Intake::new("TLS", self.config.max_pending_handshakes);
             let acceptor = TlsAcceptor::from(Arc::new(server_config));

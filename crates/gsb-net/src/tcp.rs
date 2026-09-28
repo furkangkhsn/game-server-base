@@ -42,6 +42,10 @@ pub struct TcpTransport {
     /// never wrote, the frame a reader could not hand over); `None`
     /// counts nothing.
     pub metrics: crate::TransportMetrics,
+    /// The listening socket's accept backlog (BACKLOG B84; default
+    /// [`crate::listen::DEFAULT_LISTEN_BACKLOG`], the queue tokio's own
+    /// bind gives; the kernel caps it at `somaxconn`).
+    pub listen_backlog: u32,
 }
 
 impl Default for TcpTransport {
@@ -49,6 +53,7 @@ impl Default for TcpTransport {
         Self {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             metrics: None,
+            listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         }
     }
 }
@@ -67,8 +72,8 @@ impl Transport for TcpTransport {
         addr: std::net::SocketAddr,
     ) -> BoxFuture<'static, std::io::Result<Arc<dyn Listener>>> {
         Box::pin(async move {
-            let listener = TcpListener::bind(addr).await?;
-            debug!(%addr, "TCP listener bound");
+            let listener = crate::listen::bind_tcp(addr, self.listen_backlog)?;
+            debug!(%addr, backlog = self.listen_backlog, "TCP listener bound");
             Ok(Arc::new(TcpListenerHandle {
                 listener,
                 max_frame_bytes: self.max_frame_bytes,

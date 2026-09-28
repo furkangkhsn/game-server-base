@@ -4,7 +4,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing::info;
@@ -20,6 +19,7 @@ mod boot_rooms;
 mod entry;
 pub use entry::*;
 mod export;
+pub(super) mod ops_door;
 mod pre_auth;
 use pre_auth::{handshake_bound_of, unauth_cap_of};
 
@@ -45,6 +45,9 @@ async fn start_inner(
     // half-starts (the same principle the scalar era applied to its TLS
     // keys; see `resolve_listeners`).
     let specs = resolve_listeners(&cfg)?;
+    // The accept backlog every TCP-based socket gets (B84): refused here,
+    // before the first bind, like every other listener key.
+    check_listen_backlog(&cfg)?;
 
     // The room-level keys (flat and `[rooms.<id>]`): a value no room can
     // run with refuses startup; so does a room the registry would refuse
@@ -95,18 +98,7 @@ async fn start_inner(
     let (metric_sink, http_task, http_addr) = if cfg.http_listen.is_empty() {
         (metric_sink, None, None)
     } else {
-        let listen: SocketAddr =
-            cfg.http_listen
-                .parse()
-                .map_err(|e: std::net::AddrParseError| {
-                    ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string())
-                })?;
-        let listener = TcpListener::bind(listen)
-            .await
-            .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
-        let bound = listener
-            .local_addr()
-            .map_err(|e| ServerError::BadHttpListen(cfg.http_listen.clone(), e.to_string()))?;
+        let (listener, bound) = ops_door::bind_ops(&cfg)?;
         let (report_tx, report_rx) = watch::channel(MetricReport::initial_stale(REPORT_PERIOD));
         let surface = http::spawn(
             listener,

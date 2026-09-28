@@ -205,6 +205,17 @@ pub(crate) fn resolve_listeners(cfg: &Config) -> Result<Vec<ListenerSpec>, Serve
     Ok(specs)
 }
 
+/// Refuse a `listen_backlog` the socket builder would refuse
+/// (`gsb_net::listen::listen_backlog_problem`: zero, or past a C `int`)
+/// — at startup, before any socket exists, with the key named; the
+/// kernel's own cap (`somaxconn`) is not an error.
+pub(crate) fn check_listen_backlog(cfg: &Config) -> Result<(), ServerError> {
+    match gsb_net::listen::listen_backlog_problem(cfg.listen_backlog) {
+        Some(_) => Err(ServerError::BadListenBacklog(cfg.listen_backlog)),
+        None => Ok(()),
+    }
+}
+
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
 /// cookie key is an operator-supplied alternative to the OS-entropy
 /// draw — see `gsb_net::udp::CookieKey`).

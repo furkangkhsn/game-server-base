@@ -14,6 +14,8 @@ use gsb_core::registry::{MatchResult, RegistryMsg, RoomStatus};
 use gsb_core::room::RoomConfig;
 
 mod accept;
+#[cfg(test)]
+mod backlog_tests;
 mod start;
 mod stop;
 

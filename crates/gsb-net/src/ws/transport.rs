@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use tokio::net::TcpListener;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tracing::debug;
@@ -49,6 +48,9 @@ pub struct WsTransport {
     /// Where the handshake intake and every connection's reader send
     /// their losses (B58; `None` = counted nowhere but the logs).
     pub metrics: crate::TransportMetrics,
+    /// The listening socket's accept backlog (BACKLOG B84; default
+    /// [`crate::listen::DEFAULT_LISTEN_BACKLOG`]).
+    pub listen_backlog: u32,
 }
 
 impl Default for WsTransport {
@@ -58,6 +60,7 @@ impl Default for WsTransport {
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         }
     }
 }
@@ -94,8 +97,8 @@ impl Transport for WsTransport {
         addr: SocketAddr,
     ) -> BoxFuture<'static, io::Result<Arc<dyn Listener>>> {
         Box::pin(async move {
-            let listener = TcpListener::bind(addr).await?;
-            debug!(%addr, "WebSocket listener bound");
+            let listener = crate::listen::bind_tcp(addr, self.listen_backlog)?;
+            debug!(%addr, backlog = self.listen_backlog, "WebSocket listener bound");
             let local_addr = listener.local_addr().ok();
             let intake = Intake::new("WebSocket", self.max_pending_handshakes);
             let (max_message_bytes, mapping) = (self.max_message_bytes, self.mapping);

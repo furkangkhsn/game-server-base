@@ -185,6 +185,40 @@ max_detach_hold_secs = "off"
   varsayılan 1 Hz'e göre karar verilirdi) — ön-kurulan odalarla aynı
   kural.
 
+**Sunucu düzeyi: dinleme kuyruğu `listen_backlog` (BACKLOG B84).**
+Oda değil soket anahtarı: TCP tabanlı her dinleyen soketin accept
+kuyruğu — TCP, TLS ve WS kapıları (düz anahtarlardan türeyen tek kapı
+ya da `[[listeners]]`'ın her girdisi) ve bu yüzeyin kendi soketi
+(`http_listen`). UDP kapıları (rUDP, QUIC) kuyruksuz; anahtarı görmez.
+
+```toml
+listen_backlog = 4096   # vars. 128; çekirdek somaxconn'da keser
+```
+
+- **Varsayılan 128 = bugünkü kuyruk:** tokio'nun kendi bind'i
+  (`TcpListener::bind` → mio ≥ 1.1 → std'nin değeri) `listen(2)`'ye 128
+  veriyordu; anahtar yazılmazsa her soket aynı kuyruğu alır. Değer
+  artık `gsb_net::listen::DEFAULT_LISTEN_BACKLOG`'da: bir bağımlılık
+  yükseltmesi onu sessizce değiştiremez.
+- **Çekirdek tavanı:** soketin aldığı kuyruk `min(listen_backlog,
+  somaxconn)` (Linux `net.core.somaxconn`, 5.4'ten beri vars. 4096;
+  macOS `kern.ipc.somaxconn`, vars. 128). Tavanı aşan değer hata değil,
+  kesilir; daha büyük kuyruk için önce sysctl.
+- **Doğrulama (başlatmada, bir şey bağlanmadan):** `1..=2147483647`
+  (`listen(2)` C `int` alır); `0` ya da fazlası
+  `ServerError::BadListenBacklog`. Negatif değer ayrıştırma hatası.
+- **Katman yok:** tek sunucu anahtarı. `[rooms.<id>]` onu bilinmeyen
+  anahtar olarak reddeder. Bir `[[listeners]]` girdisine yazılırsa
+  **etkisizdir**: girdi bilinmeyen anahtarı bugün sessizce yok sayıyor
+  (`ListenerEntry`'de `deny_unknown_fields` yok — ayrı bulgu, BACKLOG
+  F61). Kapı başına değer ölçülmüş bir ihtiyaç yokken eklenmedi;
+  gerekirse girdiye isteğe bağlı bir alan olarak geriye uyumlu eklenir.
+- **Ne zaman büyütülür:** katılma patlaması kuyruğu taşırdığında —
+  Linux'ta `nstat -az TcpExtListenOverflows` (ya da
+  `/proc/net/netstat`'ın `ListenOverflows`'u) patlama boyunca artar,
+  istemcilerin bağlanma süresi ~1 sn'ye (SYN yeniden gönderimi) sıçrar.
+  Beklenen patlamanın boyuna göre boyutlanır (SECURITY §4.4).
+
 ## 3. Tel/format detayları
 
 - Metrik adlandırma: `gsb_registry_rooms`, `gsb_room_r1_steps_total`,

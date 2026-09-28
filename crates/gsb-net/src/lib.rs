@@ -36,6 +36,7 @@
 //!   demux's deadline heap (no FIN in UDP).
 
 mod framed;
+pub mod listen;
 mod metrics;
 pub use metrics::TransportMetrics;
 pub mod pump;

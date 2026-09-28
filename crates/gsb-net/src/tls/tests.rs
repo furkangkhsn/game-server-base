@@ -79,6 +79,7 @@ fn transport_for(pki: &TestPki) -> TlsTransport {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
     }
 }
@@ -158,6 +159,7 @@ async fn missing_cert_file_fails_the_bind() {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
     };
     let result = Arc::new(transport)
@@ -186,6 +188,7 @@ async fn malformed_cert_file_fails_the_bind() {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
     };
     let result = Arc::new(transport)
@@ -230,6 +233,24 @@ async fn close_ends_a_parked_accept_and_a_stuck_handshake() {
     let t = Arc::new(transport_for(&pki));
     close_ends_a_parked_accept(t.clone().bind(any).await.expect("bind")).await;
     close_ends_an_accept_in_its_handshake(t.bind(any).await.expect("bind")).await;
+}
+
+/// The door's `listen_backlog` reaches the socket builder (BACKLOG B84):
+/// a zero, which the builder refuses, fails the bind after the identity
+/// loaded. (The queue itself shows to nobody: the intake accepts
+/// eagerly.) The default is the builder's.
+#[tokio::test]
+async fn the_backlog_reaches_the_socket_builder() {
+    let pki = mint_pki("backlog");
+    let mut t = transport_for(&pki);
+    assert_eq!(
+        t.config.listen_backlog,
+        crate::listen::DEFAULT_LISTEN_BACKLOG
+    );
+    t.config.listen_backlog = 0;
+    let bound = Arc::new(t).bind("127.0.0.1:0".parse().unwrap()).await;
+    let err = bound.map(|_| ()).expect_err("a zero backlog is refused");
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
 }
 
 mod off_accept;

@@ -866,7 +866,11 @@ katılımdan).
    pencere boyunca sunucuya hiç kabul edilmiyor: istemci `connected =
    1000`, sunucunun registry'si `opens = joined + 1` (869–997); 10 sn'lik
    arena/MMO/savaş koşularında hepsi katılıyor. tokio'nun
-   `TcpListener::bind` dinleme kuyruğu 1024 (`somaxconn` 4096). Sunucu
+   `TcpListener::bind` dinleme kuyruğu **128** (`somaxconn` 4096;
+   *düzeltme, B84 turu:* burada 1024 yazıyordu — o mio 1.1 öncesinin
+   değeriydi; mio ≥ 1.1 std'nin 128'ini veriyor, `ss -ltn`'in Send-Q'su
+   da 128 gösteriyor. 1000 istemcinin 1024'lük kuyruğu taşırması zaten
+   açıklanamazdı). Sunucu
    bir şey kaybetmiyor (hiç kabul etmediği bağlantı), ama kısa koşunun
    `joined`'ı ve `snap_total`'ı düşüyor — demo 1000 satırının `joined <
    N` koşuları bu yüzden.

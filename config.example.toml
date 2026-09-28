@@ -81,6 +81,19 @@ transport = "tcp"
 #   channel capacities and idle windows apply to every door alike; a WS
 #   message ceiling derives from max_frame_bytes (+ its 4-byte prefix).
 
+# Accept backlog of every TCP-based listening socket: the "tcp", "tls"
+# and "ws" doors (scalar or [[listeners]]) and the ops HTTP surface
+# (http_listen). It is the queue of connections the kernel completed and
+# the server has not accepted yet; a join storm past it loses SYNs
+# (Linux: TcpExtListenOverflows) and those clients retry a second later.
+# The default, 128, is the queue tokio's own bind gives — every door had
+# it before this key existed. The kernel caps the value at somaxconn
+# (Linux net.core.somaxconn, 4096 by default); a larger value is capped,
+# not refused. 1..=2147483647; 0 refuses startup. UDP doors (rUDP, QUIC)
+# have no accept queue and ignore it. Server-wide only: [rooms.<id>]
+# refuses it, and written inside a [[listeners]] entry it has no effect.
+#listen_backlog = 128
+
 
 # rUDP only: maximum outbound datagram size in bytes. 1472 = typical
 # Ethernet MTU minus IP/UDP headers. A game-band frame over it (a large

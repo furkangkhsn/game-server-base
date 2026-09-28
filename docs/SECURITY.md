@@ -392,6 +392,29 @@ accept hatası değil, sayaç), `gsb-server/tests/handshake_door.rs`
 yükseltme + AUTH < 2 sn; `max_unauth_conns = 1` iki kapının da
 sınırı), `boot::start::pre_auth::tests` (sınırın türetimi).
 
+### 4.4 Dinleme kuyruğu: accept'ten önceki çekirdek sınırı (B84)
+
+`listen_backlog` (OPS §2, DESIGN §6) gsb'nin hiçbir kabul kuralından
+ÖNCE gelen tek sınırdır: çekirdeğin el sıkışmasını bitirip sürecin
+henüz `accept` etmediği bağlantılar. Varsayılan 128 — tokio'nun kendi
+bind'inin verdiği, anahtardan önce her kapının sahip olduğu kuyruk;
+varsayılan yüzey değişmedi.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | Değer büyütülebilir, sessizce kıstırılmaz: `1..=2147483647`, `0` başlatmayı durdurur; çekirdek `min(değer, somaxconn)` uygular | Sıfır "kuyruk yok" değil (Linux yine bir bağlantı kuyruklar), niyet belirsiz; `somaxconn`'u aşmak hata değil, çekirdeğin kendi tavanı |
+| 2 | Büyük kuyruk yeni bir sınırsızlık açmaz | Kuyruk `somaxconn` ile (Linux vars. 4096) sınırlı; kuyruktaki bağlantı, istemci veri gönderirse alma arabelleği kadar çekirdek belleği tutabilir, ama kapılar kuyruğu hevesle boşaltır (TCP'nin accept döngüsü, WS/TLS'nin kabul görevi — §4.3) ve accept'ten sonra `max_unauth_conns` / `max_connections` / el sıkışma sınırı geçerli. Kuyruk sınırlar arasında geçici bir tampon |
+| 3 | SYN seli kuyruğun işi değil | Linux'ta yarım açık istek kuyruğu da aynı değerle sınırlı; dolunca SYN cookie'leri devreye girer (`net.ipv4.tcp_syncookies`) — büyük değer cookie'lerin başlama noktasını öteler, onları kapatmaz |
+| 4 | Operatör kuyruğu beklenen katılma patlamasına göre boyutlar, "en büyük"e göre değil | Taşan kuyruk DoS değil, bekleme: taşan istemcinin SYN'i düşer, istemci ~1 sn sonra yeniden dener (`TcpExtListenOverflows` sayar). Kuyruğu gereğinden büyük tutmak yalnız kötü niyetli bir patlamanın accept'e kadar bekleyebileceği bağlantı sayısını büyütür |
+
+Kilit: `gsb-net` `listen::tests` (değer `listen(2)`'ye ulaşıyor — 1'lik
+kuyruk birkaç bağlantı kuyruklar, varsayılan on altısını; `0` ve C
+`int`'i aşan değer soket açılmadan reddedilir), `tls::tests` (TLS
+kapısının alanı soket kurucusuna ulaşıyor), `gsb-server`
+`boot::backlog_tests` (sunucunun her TCP tabanlı kapısı ve ops soketi
+config değerini alıyor), `tests/listen_backlog.rs` (varsayılan, ayrıştırma,
+aralık dışı değer hiçbir şey bağlanmadan başlatmayı durdurur).
+
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
 K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının

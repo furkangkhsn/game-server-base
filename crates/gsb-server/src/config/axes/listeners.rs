@@ -407,6 +407,24 @@ pub struct Config {
     ///   never a valid deployment, and silently falling back to the scalar
     ///   keys would hide the mistake.
     pub listeners: Option<Vec<ListenerEntry>>,
+    /// **Accept backlog** of every TCP-based listening socket (BACKLOG
+    /// B84): the plain TCP, TLS and WebSocket doors — whichever grammar
+    /// declared them — and the ops HTTP surface ([`Self::http_listen`]).
+    /// The queue of connections the kernel has completed and the server
+    /// has not accepted yet; a join storm past it loses SYNs (counted as
+    /// `ListenOverflows` on Linux) and those clients retry a second
+    /// later. UDP doors (rUDP, QUIC) have no accept queue and ignore it.
+    ///
+    /// Default 128 (`gsb_net::listen::DEFAULT_LISTEN_BACKLOG`): what
+    /// tokio's own bind passes, i.e. the queue every door had before the
+    /// key existed. The kernel caps it: the queue a socket gets is
+    /// `min(listen_backlog, somaxconn)` (Linux `net.core.somaxconn`,
+    /// 4096 by default since 5.4) — a larger value is not an error, it
+    /// is capped. `1..=2147483647` (a C `int`); `0` or more refuses
+    /// startup ([`ServerError::BadListenBacklog`]). One knob for every
+    /// door: like the other socket-wide knobs it is not a
+    /// `[[listeners]]` key.
+    pub listen_backlog: u32,
     /// World units per AOI cell edge (used when the resolved visibility
     /// axis is `Spatial` — the single-world AoiRoom AND the sharded ×
     /// spatial composite's per-shard cells). See `gsb_demo::aoi` for the
@@ -534,6 +552,7 @@ impl Default for Config {
             tls_cert: String::new(),
             tls_key: String::new(),
             listeners: None,
+            listen_backlog: gsb_net::listen::DEFAULT_LISTEN_BACKLOG,
             aoi_cell_size: 20.0,
             team_vision_radius: DEMO_DEFAULT_VISION_RADIUS,
             spawn_half_size: DEMO_DEFAULT_SPAWN_HALF,

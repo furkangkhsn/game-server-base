@@ -184,6 +184,8 @@ pub(super) async fn run_accept(
 /// `metrics`: where the transport sends its own losses (BACKLOG B58 —
 /// the rUDP demux and writers, the WebSocket reader, the handshake
 /// intakes; B66 — every stream door's pumps, plain TCP's too).
+/// `cfg.listen_backlog`: every TCP-based door's accept backlog (B84;
+/// the UDP doors have no accept queue).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
@@ -196,6 +198,7 @@ pub(super) async fn bind_listener(
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
             max_frame_bytes: cfg.max_frame_bytes,
             metrics,
+            listen_backlog: cfg.listen_backlog,
         }),
         ListenerSpec::Tls {
             cert_pem, key_pem, ..
@@ -206,6 +209,7 @@ pub(super) async fn bind_listener(
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
                 metrics,
+                listen_backlog: cfg.listen_backlog,
             },
         }),
         ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
@@ -247,6 +251,7 @@ pub(super) async fn bind_listener(
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: handshake_bound,
             metrics,
+            listen_backlog: cfg.listen_backlog,
         }),
     };
     let listener = transport.bind(spec.addr()).await?;

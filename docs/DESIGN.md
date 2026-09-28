@@ -1339,6 +1339,44 @@ Aktör katmanı pump'ları handle'ler dışında hiç bilmez.
 **TCP** (`gsb_net::tcp`): klasik yol — bir socket, bir reader pump
 (idle deadline'lı, §3), bir writer pump.
 
+**Dinleme kuyruğu: `listen_backlog` (BACKLOG B84 — 2026-09-28).** TCP
+tabanlı her dinleyen soket — TCP, TLS, WS kapıları ve ops HTTP yüzeyi —
+`gsb_net::listen::bind_tcp(addr, backlog)` ile bağlanır: tokio'nun
+`TcpSocket`'i, `tokio::net::TcpListener::bind`'in kurduğu soketin aynısı
+(adresin ailesi, Windows dışında `SO_REUSEADDR`, `bind`, `listen`) —
+tek farkı `listen(2)`'ye giden sayı. Eskiden o sayı mio'nun sabitiydi:
+**128** (mio 1.1'den beri std'ninki; B50'nin okuması ve B84 satırı
+1024 yazıyordu — o, mio 1.1 öncesinin değeriydi). Kararlar: (1)
+*Varsayılan 128* (`DEFAULT_LISTEN_BACKLOG`) — bugünkü kuyruk birebir;
+yazılmamış bir config'in kapısı değişmez, sayı artık bir bağımlılık
+yükseltmesiyle sessizce değişemez. 1024'e çekmek gözlenir bir değişiklik
+olurdu (taşma sayısı, connect p99) — "motor, oyun değil": büyüğü
+operatör ister. (2) *Tek sunucu anahtarı* (`Config::listen_backlog`,
+OPS §2); taşıma yapılarında alan (`TcpTransport`, `WsTransport`,
+`TlsTransportConfig` → `listen_backlog`), `bind_listener` ve ops
+kapısı (`boot/start/ops_door.rs`) config'inkini verir. (3) *Aralık*
+`1..=i32::MAX` (C `int`); `0` hem başlatmada (`BadListenBacklog`) hem
+kurucuda (`InvalidInput`) reddedilir; çekirdek `min(değer, somaxconn)`
+uygular — tavanı aşmak hata değil. (4) *UDP kapıları kuyruksuz:* rUDP ve
+QUIC'in fırtına karşılığı soketin alma arabelleği (`SO_RCVBUF`, B4) —
+ayrı düğme, bu turda yok. Yeni bağımlılık yok (`socket2` yerine
+tokio'nun `TcpSocket`'i; `socket2` zaten `gsb-server`'ın doğrudan
+bağımlılığı, `gsb-net`'e eklenmedi).
+
+*Elenenler.* (a) *Kapı başına değer* (`[[listeners]]` girdisinde alan) —
+ölçülmüş bir ihtiyaç yok; kapıların hepsi aynı katılma patlamasını
+paylaşır, ve bugün girdi bilinmeyen anahtarı reddetmediği için (F61)
+yanlış yere yazılmış tek anahtar sessizce etkisiz kalırdı; gerekirse
+girdiye isteğe bağlı alan olarak geriye uyumlu eklenir. (b) *`socket2`
+ile kurmak* — `gsb-net`'e yeni doğrudan bağımlılık; tokio'nun
+`TcpSocket::listen(backlog)`'u aynı sistem çağrısını güvenli API'yle
+yapıyor. (c) *Varsayılanı `somaxconn`'a çekmek* (`listen(-1)` ya da
+`i32::MAX`) — her kurulumun kuyruğunu değiştirir ve SECURITY §4.4'ün
+"patlamaya göre boyutla" ilkesini tersine çevirir. (d) *Yalnız
+loadgen'de düzeltmek* — ölçüm düzeneği motorun bir yeteneği olmadan
+kuyruğu değiştiremez; gerçek bir oyunun ani katılma yükü de aynı düğmeyi
+ister.
+
 **El sıkışan kapılar: el sıkışma accept döngüsünün dışında (BACKLOG
 B31 — 2026-09-26).** WS, TLS ve QUIC kapısında bir bağlantı, oturum
 olmadan önce el sıkışır. Eskiden bu `accept()`'in İÇİNDEYDİ ve

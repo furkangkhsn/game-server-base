@@ -93,6 +93,13 @@ pub enum ServerError {
     BadHttpListen(String, String),
 
     #[error(
+        "invalid `listen_backlog` {0}: must be 1..=2147483647 (listen(2) \
+             takes a C int; the kernel caps the queue a socket gets at \
+             `somaxconn` anyway — Linux `net.core.somaxconn`)"
+    )]
+    BadListenBacklog(u32),
+
+    #[error(
         "`tls_cert` is set but `tls_key` is empty: TLS needs BOTH files; \
              refusing to start half-configured (a silent plaintext fallback \
              would hide the mistake) — docs/SECURITY.md §2 decision 3"
