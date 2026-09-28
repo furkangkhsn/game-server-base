@@ -2,7 +2,8 @@
 //! shards are played by the test: a stopping shard's `finish` closes its
 //! inbox and drains it, dropping every queued reply unanswered — so does
 //! [`stop`] here. The client's answer is the `RoomGone` it always was; it
-//! must not wait the per-answer timeout for shards known to be gone.
+//! must not wait for shards known to be gone (before B71 each cost the
+//! per-answer timeout; since B82 there is none — see [`late`]).
 //!
 //! B75 made the answer's cause exact: a send the room refused is
 //! `Refused` (the dispatcher counts it), a reply dropped after the room
@@ -19,6 +20,7 @@ use crate::registry::actor::Registry;
 use crate::registry::{OpOutcome, RoomHandle};
 use crate::shard::ShardMsg;
 
+mod late;
 mod refused;
 
 type Reg = Registry<(), (), (), ()>;
@@ -26,8 +28,8 @@ type Shard = Inbox<ShardMsg<(), ()>>;
 
 const CONN: ConnectionId = ConnectionId(3);
 const ROOM: RoomId = RoomId(1);
-/// The fan-out's bound on one live shard's answer; a gone shard must not
-/// cost it.
+/// The fan-out's old bound on one shard's answer (gone since B82): a gone
+/// shard must not cost it, a slow live one is waited for past it.
 const PER_ANSWER: Duration = Duration::from_secs(5);
 
 /// A sharded room of `n` test-played shards.

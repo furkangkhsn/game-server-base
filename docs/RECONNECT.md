@@ -373,7 +373,8 @@ registry üzerinden değil: bütün sunucunun duruşunda registry dağıtıcıda
 önce çıkar, `SpawnFailed` onu bulamaz. Anonim ve kimlikli (resume
 denemesi) katılma tek sayaçta: parkı olmayan resume taze katılmadır,
 parkı duran shard'da olanı o shard sayar (§6 "Duran odada resume").
-Sharded resume'un yayın katlaması gidenleri beklemez (§6).
+Sharded resume'un yayın katlaması gidenleri beklemez, canlıları ne kadar
+yavaş olursa olsun bekler (§6, B82).
 
 ## 4. Kimlik ve park defteri
 
@@ -504,7 +505,9 @@ resume, zaten `RoomGone` olacak cevabını shard başına 5 sn geç alıyordu
 bırakır; her shard cevap verdiğinde ya da gittiği bilindiğinde kanal
 kapanır ve katlama hemen biter. Hepsi-ıska yolu değişmedi (ev shard'ına
 taze join; kutusu kapalıysa `RoomGone`); istemci teli aynı bayt, yalnız
-erken. Canlı ama yavaş bir shard için sınır aynen duruyor.
+erken. Canlı ama yavaş bir shard için sınır B82'ye kadar duruyordu;
+B82 sınırı, toplama kanalını ve aktarıcı görevleri kaldırdı (aşağıda
+"Yavaş shard'a resume").
 
 - **Elenen:** `finish`'in kuyruktaki resume'lara `RoomGone` ile cevap
   vermesi. Yalnız sırası gelen duruşu kapsar; panikle ölen shard'ın
@@ -549,6 +552,75 @@ sayar ve `RoomGone` der, başkasınınkini cevapsız düşürür). Mutasyonlar:
 reddi `Gone` saymak → dört test; shard'ın cevap vermemesi → shard testi;
 düşürülen cevabı da saymak → dağıtıcı testi; toplayıcının olayı yok
 sayması → altın metin.
+
+**Yavaş shard'a resume (B82).** Katlama her CANLI shard'ın cevabını,
+ne kadar geç gelirse gelsin bekler — düz join'in tek shard'ını beklediği
+gibi. Eskiden cevap başına 5 sn sınır vardı ve sınır dolunca katlama
+hepsi-ıska sayıp ev shard'ına taze join yapıyordu; oysa yavaş shard'ın
+kutusunda resume hâlâ kuyruktaydı. Park O shard'daysa sonra kabul
+ediyor, park satırını bu bağlantının `out`'una yeniden bağlıyordu:
+bağlantı İKİ shard'a bağlı kalıyordu. Kanıt (duraklatılmış saat; eski
+dağıtıcının sırası gerçek iki shard aktörüne oynatıldı, testin kendisi
+işlenmedi): park shard'ındaki satır canlı (`detached=false`), `conn`'u
+yeni bağlantı, `out`'u yeni bağlantının kanalı, eylem kanalı kapalı (geç
+kabulün `Mailbox`'ını aktarıcı görev `let _ = value.send(answer)` ile
+sayılmadan düşürdü); ev shard'ında taze satır, aynı `out`. Registry
+taze join'in `SpawnDone`'unda kimliğin eski park satırını bıraktı, yani
+tek üye (evdeki) biliyor: park shard'ındaki satır registry'nin
+izlemediği bir üye — istemci aynı sokette iki shard'ın akışını alır,
+girdisi o satıra hiç ulaşmaz. Bağlantı kapanınca dağıtıcının `Detach`
+yayını (ve bir ayrılmanın `Leave`'i) kayıtlı varlığı, yani EV varlığını
+taşır; varlık koruması park shard'ındaki satırı eşlemez, satır canlı
+kalır: her tick kapalı `out`'a gönderim (`sends_closed`), shard yuvası ve
+dünyadaki varlık oda ömrünce. Girdi-boşta tavanı açıksa satırı
+`on_disconnect`'e verir: park ederse kimliğin ikinci parkı olur
+(tek-kazanan değişmezi bozulur), düşürürse bağlantı için registry'ye
+ayrılma/kapanma isteği gider — bağlantı hâlâ bağlıysa canlı üyeliği
+bitirir. Ev shard'ı yavaş shard'ın kendisiyse sorun farklı: FIFO'da
+resume'dan sonra gelen taze join satırı bayat sayar ve park edilmiş
+varlığı `on_leave` ile yok eder (istemcinin dönmek istediği karakter
+gider). Tetik yalnız çalışma zamanı takılması değildir: her shard kutusunu
+adımda bir boşaltır, `tick_hz` 0,2'nin altındaki (periyodu 5 sn'den uzun)
+bir sharded odada her resume sınırı aşabilir. Eski döngünün ikinci bir
+kusuru da vardı: zaman aşan her tur `n` turdan birini yiyordu, sonra
+zamanında gelen bir cevap hiç okunmayabiliyordu.
+
+- **Karar:** sınır yok. Dağıtıcı her shard'ın oneshot'ını sırayla
+  bekler; shard'lar paralel cevap verdiğinden bekleme en yavaş shard'ın
+  süresi, bir kez. Giden shard'lar yine hiçbir şeye mal olmaz (B71: duran
+  shard cevabı düşürür, ölenin kutusu gider, kapalı kutu gönderimi
+  reddeder — oneshot hemen hata döner). Toplama kanalı ve shard başına
+  aktarıcı görev gerekmez, kalktı; geç cevap diye bir şey kalmadığından
+  sayılacak kayıp da yok (sayaç eklenmedi — sayılan her şey kayıptır,
+  bekleme kayıp değil). Asılı kalmış bir shard (adım atmayan) artık bu
+  bağlantının resume'unu da bekletir; ama o oda zaten kimseye hizmet
+  etmiyor, düz join de gönderim de (`send().await`, dolu kutu) onu
+  zaten sınırsız bekliyordu. Bekleyen bağlantı kapanırsa sıra düz
+  join'deki gibidir: cevap gelince üyelik kaydedilir, kuyruk kapanınca
+  `Detach` onu park eder ya da düşürür. İstemci teli aynı bayt.
+- **Elenen:** geç kabulü geri almak (aktarıcı/dağıtıcı kabul eden shard'a
+  `Detach` yollar). Politika park ederse kimliğin ikinci parkı doğar
+  (taze üye de ayrılınca park eder — tek-kazanan bozulur) ve registry
+  o parkın yuvasını zaten bırakmıştır; düşürürse `DetachDespawned
+  {conn, room}` registry'deki CANLI ev üyeliğini siler; iptal için yeni
+  bir `ShardMsg` + "düşür" kolu gerekse istemcinin dönmek istediği
+  varlığı yok eder; üstelik geri alma gelene kadar hayalet satır sokete
+  akar. **Elenen:** resume'a son tarih/jeton koyup shard'ın geç gelen
+  resume'u reddetmesi — shard'ın cevabı da dağıtıcıya geç gelebilir
+  (zamanlayıcıyla yarış; ancak sınırsız beklemeyle güvenli olur) ve
+  bekleme süresini kısaltmaz, çünkü yavaş olan shard'ın kutuyu boşaltması.
+  **Elenen:** sınırda istemciye hata dönmek — geç kabul yine hayalet satır
+  bırakır.
+
+Test (`registry/actor/dispatch/tests/late.rs`, duraklatılmış saat, iki
+shard'ı test oynar; shard 0 hemen "burada değil", shard 1 6 sn sonra
+cevap verir): geç KABUL → `Joined` shard 1'in varlığı ve eylem kanalı
+(kanal açık, yani bağlantıya ulaştı), ev shard'ına taze join yok; geç
+`ResumeStale` → `Rejected`, taze join yok; geç "burada değil" → taze
+join yalnız o cevaptan SONRA ev shard'ına. Önce yazıldı ve üçü de düştü
+(5. saniyede ev shard'ına taze join gitti). Mutasyonlar: cevap başına 5
+sn sınırı geri koymak → üç test düşer; kabulü ıska saymak → kabul testi
+düşer.
 
 ## 7. Kanal swap: `ShardMsg::Resume` / `RoomControl::Resume`
 

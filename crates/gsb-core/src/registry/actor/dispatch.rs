@@ -11,7 +11,7 @@ use crate::error::CoreError;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
 use crate::room::{Action, RoomControl};
-use crate::shard::ShardMsg;
+use crate::shard::{ResumeReply, ShardMsg};
 
 use crate::registry::actor::Registry;
 
@@ -122,15 +122,14 @@ where
             }
             RoomHandle::Sharded(mailboxes) => {
                 // One oneshot per shard; each shard answers exactly once
-                // (its CONTROL phase drains its FIFO inbox). Awaiting them
-                // all is bounded by the shard count (≤ 16 by the grid
-                // topology).
-                let n = mailboxes.len();
-                let (agg_tx, mut agg_rx) = mpsc::channel::<
-                    Result<Option<(EntityId, Mailbox<Action>)>, CoreError>,
-                >(n.max(1));
+                // (its CONTROL phase drains its FIFO inbox), or drops the
+                // reply unanswered as it stops or dies (B71): a stopping
+                // shard's `finish` drains its inbox dropping each reply,
+                // a dead shard's inbox goes with its task, and a closed
+                // inbox refused the send here. Gone shards cost nothing.
+                let mut answers = Vec::with_capacity(mailboxes.len());
                 for tx in mailboxes {
-                    let (reply_tx, reply_rx) = oneshot::channel();
+                    let (reply_tx, reply_rx) = oneshot::channel::<ResumeReply>();
                     if tx
                         .send(ShardMsg::Resume {
                             conn,
@@ -142,38 +141,25 @@ where
                         .await
                         .is_ok()
                     {
-                        // Forward this shard's eventual answer into the
-                        // aggregate; a dropped shard dies with its oneshot
-                        // and simply contributes nothing.
-                        let value = agg_tx.clone();
-                        tokio::spawn(async move {
-                            if let Ok(answer) = reply_rx.await {
-                                let _ = value.send(answer).await;
-                            }
-                        });
+                        answers.push(reply_rx);
                     }
                 }
-                // Only the forwarders hold the aggregate's sender now (B71):
-                // once every shard has answered or is known gone — a
-                // stopping shard's `finish` drains its inbox dropping each
-                // reply, a dead shard's inbox goes with its task, a closed
-                // inbox refused the send above — `recv` sees the channel
-                // close. A copy held here kept it open, so every missing
-                // answer cost the whole per-answer timeout: a resume into
-                // a stopping room waited 5 s per shard for its `RoomGone`.
-                drop(agg_tx);
+                // Every live shard's answer, however slow (B82) — the
+                // plain join waits for its one shard alike. A fan-out that
+                // gave up on a live shard would fall back to a fresh join
+                // while that shard's resume is still queued; if it holds
+                // the park it then rebinds the parked row to this `out`:
+                // the connection bound on two shards, the second binding
+                // a member the registry does not track. The shards answer
+                // in parallel, so the wait is the slowest shard's, once.
                 let mut accepted: Option<(EntityId, Mailbox<Action>)> = None;
                 let mut stale: Option<CoreError> = None;
-                for _ in 0..n {
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), agg_rx.recv())
-                        .await
-                    {
-                        Ok(Some(Ok(Some(pair)))) => accepted = Some(pair),
-                        Ok(Some(Err(e))) => stale = Some(e),
-                        // Every shard answered or is gone.
-                        Ok(None) => break,
-                        // "Not here", or a live shard slower than the bound.
-                        Ok(Some(Ok(None))) | Err(_) => {}
+                for answer in answers {
+                    match answer.await {
+                        Ok(Ok(Some(pair))) => accepted = Some(pair),
+                        Ok(Err(e)) => stale = Some(e),
+                        // "Not here", or a shard gone with the reply.
+                        Ok(Ok(None)) | Err(_) => {}
                     }
                 }
                 if let Some((entity, actions)) = accepted {
