@@ -219,6 +219,44 @@ listen_backlog = 4096   # vars. 128; çekirdek somaxconn'da keser
   Beklenen patlamanın boyuna göre boyutlanır (SECURITY §4.4); ölçüm:
   RPC-CONTROL-PLANE §8.2 "B84".
 
+**Sunucu düzeyi: UDP kapılarının soket arabellekleri
+`udp_recv_buffer_bytes` / `udp_send_buffer_bytes` (BACKLOG B4).**
+UDP tabanlı her dinleyen soketin çekirdek arabellekleri — rUDP (`udp`)
+ve QUIC (`quic`) kapıları, düz anahtarlardan türeyen kapı ya da
+`[[listeners]]`'ın her girdisi. UDP kapısının accept kuyruğu yok: TEK
+soket kapının bütün oturumlarını taşır, patlama altında tek tampon
+alma kuyruğudur. TCP tabanlı kapılar anahtarları görmez.
+
+```toml
+udp_recv_buffer_bytes = 4194304   # vars. yok = sistem varsayılanı
+udp_send_buffer_bytes = 1048576   # vars. yok = sistem varsayılanı
+```
+
+- **Yazılmazsa dokunulmaz:** `setsockopt` çağrılmaz; soket sistem
+  varsayılanını alır (Linux `net.core.rmem_default` / `wmem_default`,
+  çoğu dağıtımda 212 992 B) — anahtarlardan önceki soketin aynısı.
+- **Çekirdek kuralı (Linux):** istek `net.core.rmem_max` /
+  `net.core.wmem_max`'ta kesilir (çoğu dağıtımda 212 992 — yani büyütmek
+  çoğunlukla önce sysctl ister: `sysctl -w net.core.rmem_max=8388608`),
+  sonra **ikiye katlanır** (ikinci yarı çekirdeğin muhasebesi):
+  `getsockopt`/`ss -uamn` (`skmem` `rb`/`tb`) istenenin iki katını
+  gösterir. Kapı bind'da verilen boyutları `info` log'lar
+  (`UDP socket buffers`, `recv_buffer`/`send_buffer`); kesilen istek
+  hata değil, sysctl'ü adlandıran bir `warn` (`capped by the kernel`).
+- **Doğrulama (başlatmada, bir şey bağlanmadan):** `4096..=2147483647`
+  (bir sayfadan C `int`'e); dışı `ServerError::BadUdpBuffer` (anahtarı
+  ve değeri adlandırır). Negatif değer ayrıştırma hatası.
+- **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` de `[[listeners]]`
+  girdisi de reddeder (`listen_backlog` gibi).
+- **Ne zaman büyütülür:** katılma patlamasında ya da girdi yelpazesinde
+  (çok oturumun aynı tick'te yolladığı girdiler) çekirdek kuyruğu
+  taşırdığında — Linux'ta `/proc/net/snmp`'nin `Udp:` satırındaki
+  `RcvbufErrors` (ya da `nstat -az UdpRcvbufErrors`) patlama boyunca
+  artar; rUDP'de el sıkışma yeniden gönderimleri (loadgen `hs_retries`)
+  ve connect p99 büyür. Bu kayıp sunucunun hiçbir sayacında görünmez
+  (demux onu hiç görmez); ölçüm: DESIGN §6 "UDP kapılarının soket
+  arabellekleri".
+
 **Kapı girdisi: `[[listeners]]` bilinmeyen anahtarı reddeder (BACKLOG
 F61 — 2026-09-28).** Bir girdi tam dört anahtar alır: `transport`,
 `bind`, `tls_cert`, `tls_key`. Başka her anahtar — yazım hatası

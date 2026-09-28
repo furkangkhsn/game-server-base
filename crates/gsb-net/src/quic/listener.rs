@@ -36,7 +36,7 @@ impl Transport for QuicTransport {
             // Load the identity BEFORE binding the socket: a server whose
             // keys are broken must not half-start (same rule as TLS).
             let server_config = load_server_config(&self.config)?;
-            let endpoint = quinn::Endpoint::server(server_config, addr)?;
+            let (endpoint, _) = bind_endpoint(server_config, addr, self.config.buffers)?;
             debug!(%addr, "QUIC listener bound (quinn over UDP)");
             let intake = Intake::new("QUIC", self.config.max_pending_handshakes);
             tokio::spawn(run_intake(
@@ -51,6 +51,29 @@ impl Transport for QuicTransport {
             }) as Arc<dyn Listener>)
         })
     }
+}
+
+/// What `quinn::Endpoint::server` builds — the default endpoint config
+/// and runtime — over a socket bound with the configured kernel buffers
+/// (B4). Returns the endpoint and the sizes the kernel reported for its
+/// socket (logged here).
+pub(super) fn bind_endpoint(
+    server_config: quinn::ServerConfig,
+    addr: SocketAddr,
+    buffers: crate::listen::UdpBuffers,
+) -> io::Result<(quinn::Endpoint, (usize, usize))> {
+    let socket = crate::listen::bind_udp(addr, buffers)?;
+    let got = crate::listen::buffer_sizes(&socket)?;
+    crate::listen::log_buffers("QUIC", socket.local_addr()?, buffers, got);
+    let runtime =
+        quinn::default_runtime().ok_or_else(|| io::Error::other("no async runtime found"))?;
+    let endpoint = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        runtime,
+    )?;
+    Ok((endpoint, got))
 }
 
 impl Listener for QuicListenerHandle {

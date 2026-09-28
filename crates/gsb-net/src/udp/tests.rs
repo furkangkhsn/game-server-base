@@ -189,6 +189,7 @@ async fn forged_proof_is_rejected() {
 }
 
 mod bands;
+mod buffers;
 mod frag;
 mod handshake;
 mod reap;

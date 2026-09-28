@@ -18,7 +18,7 @@ fn refused(argv: &[&str]) -> String {
 /// Each kind of refusal, with its message.
 #[test]
 fn a_bad_line_is_an_error_with_its_reason() {
-    let cases: [(&[&str], &str); 15] = [
+    let cases: [(&[&str], &str); 17] = [
         (&["--duration"], "--duration needs a value (try --help)"),
         (
             &["--duration", "x"],
@@ -49,6 +49,14 @@ fn a_bad_line_is_an_error_with_its_reason() {
         (
             &["--listen-backlog", "2147483648"],
             "--listen-backlog must be 1..=2147483647 (the kernel caps it at somaxconn)",
+        ),
+        (
+            &["--udp-recv-buffer", "4095"],
+            "--udp-recv-buffer must be 4096..=2147483647 (Linux caps it at net.core.rmem_max)",
+        ),
+        (
+            &["--udp-recv-buffer", "2147483648"],
+            "--udp-recv-buffer must be 4096..=2147483647 (Linux caps it at net.core.rmem_max)",
         ),
         (&["--stall-ms", "0"], "--stall-ms must be > 0"),
         (
@@ -106,6 +114,11 @@ fn a_good_line_parses() {
         panic!("a run");
     };
     assert_eq!(args.listen_backlog, Some(4096));
+    assert_eq!(args.udp_recv_buffer, None);
+    let Ok(Cli::Run(args)) = line(&["--udp-recv-buffer", "8388608"]) else {
+        panic!("a run");
+    };
+    assert_eq!(args.udp_recv_buffer, Some(8 << 20));
     let Ok(Cli::Run(args)) = line(&["--stall-ms", "900", "--stall-every-ms", "3000"]) else {
         panic!("a run");
     };

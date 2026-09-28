@@ -149,6 +149,7 @@ fn transport_for(pki: &TestPki) -> QuicTransport {
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            buffers: crate::listen::UdpBuffers::default(),
         },
     }
 }
@@ -224,6 +225,7 @@ async fn close_ends_the_parked_accept() {
     crate::transport::door::tests::close_ends_a_parked_accept(listener).await;
 }
 
+mod buffers;
 mod certs;
 mod off_accept;
 mod slow_reader;

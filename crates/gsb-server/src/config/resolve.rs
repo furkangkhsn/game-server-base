@@ -117,6 +117,14 @@ pub enum ServerError {
     BadListenBacklog(u32),
 
     #[error(
+        "invalid `{key}` {value}: must be 4096..=2147483647 (a page to a C \
+             int — setsockopt takes an int); Linux caps the buffer a socket \
+             gets at `net.core.rmem_max` / `net.core.wmem_max` and doubles \
+             it — raise the sysctl for a larger one"
+    )]
+    BadUdpBuffer { key: &'static str, value: u32 },
+
+    #[error(
         "`tls_cert` is set but `tls_key` is empty: TLS needs BOTH files; \
              refusing to start half-configured (a silent plaintext fallback \
              would hide the mistake) — docs/SECURITY.md §2 decision 3"

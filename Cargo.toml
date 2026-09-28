@@ -95,6 +95,11 @@ sha1 = "0.10"
 # gsb-client's WebSocket key (the same 0.22 `pem` already locks).
 base64 = "0.22"
 
+# UDP socket buffers (SO_RCVBUF/SO_SNDBUF) of the rUDP and QUIC doors
+# (BACKLOG B4): the version tokio already locks, now a direct dependency
+# of gsb-net.
+socket2 = "0.6"
+
 # OS entropy (rUDP cookie key): the getrandom(2)/BCryptGenRandom reader.
 # Not a crypto layer — 16 bytes of uniform material is all the key needs.
 getrandom = "0.4"

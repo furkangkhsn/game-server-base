@@ -103,6 +103,9 @@ pub struct QuicTransportConfig {
     /// Where the handshake intake sends its refusals, timeouts and
     /// failures (B58; `None` = its stop log only).
     pub metrics: crate::TransportMetrics,
+    /// The endpoint's UDP socket buffers (BACKLOG B4; unset = the system
+    /// default, untouched). See [`crate::listen::bind_udp`].
+    pub buffers: crate::listen::UdpBuffers,
 }
 
 /// QUIC transport: binds one UDP socket via quinn; each accepted QUIC

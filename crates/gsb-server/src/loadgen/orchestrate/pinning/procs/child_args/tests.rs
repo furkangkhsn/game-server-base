@@ -150,6 +150,21 @@ fn the_listen_backlog_goes_to_the_server_only() {
     );
 }
 
+/// `--udp-recv-buffer` is a server knob (B4): the served server's UDP
+/// door gets it; unset, the served server keeps its config default.
+#[test]
+fn the_udp_recv_buffer_goes_to_the_server_only() {
+    let mut args = Args::defaults();
+    let flag = "--udp-recv-buffer";
+    assert_eq!(value_of(&server_args(&args, None), flag), None);
+    args.udp_recv_buffer = Some(1 << 22);
+    assert_eq!(value_of(&server_args(&args, None), flag), Some("4194304"));
+    assert_eq!(
+        value_of(&client_args(&args, 10, 0, door(), None), flag),
+        None
+    );
+}
+
 /// The slow reader is a client knob: every client child stalls the same
 /// way, the server never hears of it.
 #[test]

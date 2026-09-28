@@ -46,6 +46,7 @@ pub(crate) async fn run(args: Args) {
                     disconnect_grace_secs: args.disconnect_grace_secs,
                     mmo_crystallize: args.mmo_crystallize,
                     listen_backlog: args.listen_backlog,
+                    udp_recv_buffer: args.udp_recv_buffer,
                 },
             )
             .await

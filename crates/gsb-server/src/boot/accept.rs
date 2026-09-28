@@ -185,7 +185,8 @@ pub(super) async fn run_accept(
 /// the rUDP demux and writers, the WebSocket reader, the handshake
 /// intakes; B66 — every stream door's pumps, plain TCP's too).
 /// `cfg.listen_backlog`: every TCP-based door's accept backlog (B84;
-/// the UDP doors have no accept queue).
+/// the UDP doors have no accept queue). `cfg.udp_{recv,send}_buffer_bytes`:
+/// every UDP-based door's socket buffers (B4).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
@@ -223,6 +224,7 @@ pub(super) async fn bind_listener(
                 idle_timeout,
                 cookie_key,
                 metrics,
+                buffers: udp_buffers(cfg),
             },
         }),
         ListenerSpec::Quic {
@@ -234,6 +236,7 @@ pub(super) async fn bind_listener(
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
                 metrics,
+                buffers: udp_buffers(cfg),
             },
         }),
         ListenerSpec::Ws { .. } => Arc::new(WsTransport {

@@ -64,6 +64,7 @@ async fn missing_cert_file_fails_the_bind() {
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
             metrics: None,
+            buffers: crate::listen::UdpBuffers::default(),
         },
     };
     let result = Arc::new(transport)

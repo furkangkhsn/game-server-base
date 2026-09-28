@@ -228,6 +228,34 @@ pub(crate) fn check_listen_backlog(cfg: &Config) -> Result<(), ServerError> {
     }
 }
 
+/// Refuse a UDP socket buffer size the socket builder would refuse
+/// (`gsb_net::listen::socket_buffer_problem`: below a page, or past a C
+/// `int`) — at startup, before any socket exists, with the key named.
+/// Unset is not checked (it means "leave the system default"); the
+/// kernel's own cap (`rmem_max`/`wmem_max`) is not an error.
+pub(crate) fn check_udp_buffers(cfg: &Config) -> Result<(), ServerError> {
+    let keys = [
+        ("udp_recv_buffer_bytes", cfg.udp_recv_buffer_bytes),
+        ("udp_send_buffer_bytes", cfg.udp_send_buffer_bytes),
+    ];
+    for (key, size) in keys {
+        if let Some(value) = size
+            && gsb_net::listen::socket_buffer_problem(value).is_some()
+        {
+            return Err(ServerError::BadUdpBuffer { key, value });
+        }
+    }
+    Ok(())
+}
+
+/// The buffer sizes every UDP-based door's socket asks for (B4).
+pub(crate) fn udp_buffers(cfg: &Config) -> gsb_net::listen::UdpBuffers {
+    gsb_net::listen::UdpBuffers {
+        recv: cfg.udp_recv_buffer_bytes,
+        send: cfg.udp_send_buffer_bytes,
+    }
+}
+
 /// Parse the config's 32-hex-char cookie key into 16 bytes (the rUDP
 /// cookie key is an operator-supplied alternative to the OS-entropy
 /// draw — see `gsb_net::udp::CookieKey`).

@@ -101,6 +101,23 @@ transport = "tcp"
 # and a [[listeners]] entry refuse it.
 #listen_backlog = 128
 
+# Kernel buffers of every UDP-based listening socket: the "udp" (rUDP)
+# and "quic" doors (scalar or [[listeners]]). ONE socket carries every
+# session of a UDP door, so its receive buffer (SO_RCVBUF) is the only
+# queue under a burst — a join storm, a room's input fan-in; a datagram
+# arriving while it is full is dropped by the kernel before the server
+# sees it (Linux: `Udp: RcvbufErrors` in /proc/net/snmp). The send
+# buffer (SO_SNDBUF) is the same queue on the way out. Unset (the
+# default), nothing is touched: the system default (Linux
+# net.core.rmem_default / wmem_default), the socket every UDP door had
+# before these keys existed. Linux caps the value at net.core.rmem_max /
+# wmem_max (often 212992) and doubles it for its own bookkeeping; a
+# capped value is a startup warning (raise the sysctl), not an error.
+# 4096..=2147483647 bytes; anything else refuses startup. TCP-based
+# doors ignore them. Server-wide only.
+#udp_recv_buffer_bytes = 4194304
+#udp_send_buffer_bytes = 1048576
+
 
 # rUDP only: maximum outbound datagram size in bytes. 1472 = typical
 # Ethernet MTU minus IP/UDP headers. A game-band frame over it (a large

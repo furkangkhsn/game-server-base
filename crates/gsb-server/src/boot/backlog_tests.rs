@@ -1,5 +1,7 @@
 //! `listen_backlog` reaches every TCP-based socket the server binds
 //! (BACKLOG B84): the doors `bind_listener` builds and the ops surface.
+//! The UDP doors' buffer sizes reach their socket builder the same way
+//! (B4, the last test).
 //! Where nobody accepts (a plain TCP door, the ops socket before its
 //! task runs) the queue itself is observed; the doors whose intake
 //! accepts eagerly (TLS, WebSocket) show the value reaching the socket
@@ -111,6 +113,54 @@ async fn every_tcp_socket_hands_its_backlog_to_the_builder() {
         Err(ServerError::BadHttpListen(_, why)) => assert!(why.contains("backlog"), "{why}"),
         Err(e) => panic!("refused for another reason: {e}"),
         Ok(_) => panic!("a zero backlog bound the ops socket"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The UDP-based doors (rUDP, QUIC) hand `udp_{recv,send}_buffer_bytes`
+/// to their socket builder (B4): a size startup would refuse, handed
+/// past it, is refused by the builder on both doors, in either
+/// direction.
+#[tokio::test]
+async fn every_udp_door_hands_its_buffers_to_the_builder() {
+    let dir = std::env::temp_dir().join(format!("gsb-b4-buffers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let key = rcgen::KeyPair::generate().expect("key");
+    let params = rcgen::CertificateParams::new(vec!["localhost".into()]).expect("params");
+    let cert = params.self_signed(&key).expect("cert");
+    let (cert_pem, key_pem) = (dir.join("cert.pem"), dir.join("key.pem"));
+    std::fs::write(&cert_pem, cert.pem()).expect("write cert");
+    std::fs::write(&key_pem, key.serialize_pem()).expect("write key");
+
+    let specs = [
+        ListenerSpec::Udp { addr: any_port() },
+        ListenerSpec::Quic {
+            addr: any_port(),
+            cert_pem: cert_pem.display().to_string(),
+            key_pem: key_pem.display().to_string(),
+        },
+    ];
+    let bad = [
+        Config {
+            udp_recv_buffer_bytes: Some(1),
+            ..Default::default()
+        },
+        Config {
+            udp_send_buffer_bytes: Some(1),
+            ..Default::default()
+        },
+    ];
+    for spec in &specs {
+        for cfg in &bad {
+            match door(spec, cfg).await {
+                Err(ServerError::ListenerBind { source, .. }) => {
+                    assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput, "{source}")
+                }
+                Err(e) => panic!("refused for another reason: {e}"),
+                Ok(_) => panic!("a one-byte buffer bound a door"),
+            }
+        }
+        door(spec, &Config::default()).await.expect("unset: binds");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

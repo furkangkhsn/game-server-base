@@ -28,6 +28,9 @@ pub(crate) struct ServerOverrides {
     pub(crate) mmo_crystallize: Option<bool>,
     /// The door's accept backlog (`None` = config default, B84).
     pub(crate) listen_backlog: Option<u32>,
+    /// The UDP door's receive buffer (`None` = config default:
+    /// untouched, B4).
+    pub(crate) udp_recv_buffer: Option<u32>,
 }
 
 pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -48,6 +51,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(n) = o.listen_backlog {
         cfg.listen_backlog = n;
+    }
+    if let Some(n) = o.udp_recv_buffer {
+        cfg.udp_recv_buffer_bytes = Some(n);
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);
@@ -181,6 +187,7 @@ mod tests {
             disconnect_grace_secs: None,
             mmo_crystallize: None,
             listen_backlog: None,
+            udp_recv_buffer: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &none);
@@ -209,11 +216,34 @@ mod tests {
             disconnect_grace_secs: None,
             mmo_crystallize: None,
             listen_backlog,
+            udp_recv_buffer: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
         assert_eq!(cfg.listen_backlog, gsb_net::listen::DEFAULT_LISTEN_BACKLOG);
         apply_overrides(&mut cfg, &o(Some(4096)));
         assert_eq!(cfg.listen_backlog, 4096);
+    }
+
+    /// `--udp-recv-buffer` (B4) lands in the config's
+    /// `udp_recv_buffer_bytes`; unset, the key stays unset (untouched).
+    #[test]
+    fn the_udp_recv_buffer_override_sets_the_config_key() {
+        let o = |udp_recv_buffer| ServerOverrides {
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            conn_out: None,
+            disconnect_grace_secs: None,
+            mmo_crystallize: None,
+            listen_backlog: None,
+            udp_recv_buffer,
+        };
+        let mut cfg = gsb_server::Config::default();
+        apply_overrides(&mut cfg, &o(None));
+        assert_eq!(cfg.udp_recv_buffer_bytes, None);
+        apply_overrides(&mut cfg, &o(Some(4 << 20)));
+        assert_eq!(cfg.udp_recv_buffer_bytes, Some(4 << 20));
     }
 }

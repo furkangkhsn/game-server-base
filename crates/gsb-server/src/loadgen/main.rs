@@ -236,6 +236,14 @@ struct Args {
     /// the client count (the kernel caps it at `somaxconn`), or spread
     /// the connects with `--stagger-ms`.
     listen_backlog: Option<u32>,
+    /// The receive buffer of the in-process / served server's UDP-based
+    /// door (`--udp-recv-buffer N`, BACKLOG B4; unspecified = the server
+    /// config default: untouched, the system's `rmem_default`). A rUDP
+    /// join storm overflows the one socket's receive queue (Linux counts
+    /// it as `Udp: RcvbufErrors`); the lost handshake datagrams are
+    /// re-sent (`hs_retries`) and connect p99 grows. Linux caps it at
+    /// `net.core.rmem_max`.
+    udp_recv_buffer: Option<u32>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -416,6 +424,12 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        clients than this overflows it and
                                        the overflowed ones retry after 1 s:
                                        give it >= N, or use --stagger-ms
+  --udp-recv-buffer N                 receive buffer (SO_RCVBUF, bytes) of
+                                       the server's UDP door (default: the
+                                       server config default, untouched;
+                                       Linux caps it at net.core.rmem_max).
+                                       A rUDP join storm past it loses
+                                       handshake datagrams (RcvbufErrors)
 
   --disconnect-grace-secs F           [demo] disconnect-park grace (default:
                                        the server config default, 30)

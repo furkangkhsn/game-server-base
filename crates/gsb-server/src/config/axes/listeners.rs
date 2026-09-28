@@ -444,6 +444,28 @@ pub struct Config {
     /// door: like the other socket-wide knobs it is not a
     /// `[[listeners]]` key.
     pub listen_backlog: u32,
+    /// **Receive buffer** (`SO_RCVBUF`, bytes) of every UDP-based door's
+    /// socket (BACKLOG B4): the rUDP doors and the QUIC doors, whichever
+    /// grammar declared them. ONE socket carries every session of a UDP
+    /// door, so its kernel receive queue is the only buffer under a
+    /// burst (a join storm); a datagram arriving while it is full is
+    /// dropped by the kernel before the server sees it (Linux
+    /// `Udp: RcvbufErrors`). The TCP-based doors ignore it.
+    ///
+    /// `None` (the default) = not touched: no `setsockopt`, the system
+    /// default (Linux `net.core.rmem_default`) — the socket every UDP
+    /// door had before the key existed. Linux caps the value at
+    /// `net.core.rmem_max` and doubles it (the second half is the
+    /// kernel's bookkeeping); a capped value is a startup warning, not an
+    /// error. `4096..=2147483647` (a page to a C `int`); anything else
+    /// refuses startup ([`ServerError::BadUdpBuffer`]). One knob for
+    /// every UDP door, like `listen_backlog` for the TCP ones.
+    pub udp_recv_buffer_bytes: Option<u32>,
+    /// **Send buffer** (`SO_SNDBUF`, bytes) of every UDP-based door's
+    /// socket — the same rules as [`Self::udp_recv_buffer_bytes`] on the
+    /// way out (Linux `net.core.wmem_max`; a full one fails or parks a
+    /// datagram send, counted by band on rUDP).
+    pub udp_send_buffer_bytes: Option<u32>,
     /// World units per AOI cell edge (used when the resolved visibility
     /// axis is `Spatial` — the single-world AoiRoom AND the sharded ×
     /// spatial composite's per-shard cells). See `gsb_demo::aoi` for the
@@ -572,6 +594,8 @@ impl Default for Config {
             tls_key: String::new(),
             listeners: None,
             listen_backlog: gsb_net::listen::DEFAULT_LISTEN_BACKLOG,
+            udp_recv_buffer_bytes: None,
+            udp_send_buffer_bytes: None,
             aoi_cell_size: 20.0,
             team_vision_radius: DEMO_DEFAULT_VISION_RADIUS,
             spawn_half_size: DEMO_DEFAULT_SPAWN_HALF,

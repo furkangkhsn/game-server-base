@@ -45,6 +45,7 @@ impl Args {
             write_stall_secs: None,
             conn_out: None,
             listen_backlog: None,
+            udp_recv_buffer: None,
             flood_id: None,
             churn_secs: None,
             churn_cycles: 0,
@@ -217,6 +218,14 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     "--listen-backlog must be 1..=2147483647 (the kernel caps it at somaxconn)",
                 )?;
                 args.listen_backlog = Some(n);
+            }
+            "--udp-recv-buffer" => {
+                let n: u32 = number(&a, v()?)?;
+                refuse_unless(
+                    gsb_net::listen::socket_buffer_problem(n).is_none(),
+                    "--udp-recv-buffer must be 4096..=2147483647 (Linux caps it at net.core.rmem_max)",
+                )?;
+                args.udp_recv_buffer = Some(n);
             }
             "--flood-id" => args.flood_id = Some(number(&a, v()?)?),
             "--churn-secs" => {

@@ -1359,7 +1359,7 @@ kapısı (`boot/start/ops_door.rs`) config'inkini verir. (3) *Aralık*
 kurucuda (`InvalidInput`) reddedilir; çekirdek `min(değer, somaxconn)`
 uygular — tavanı aşmak hata değil. (4) *UDP kapıları kuyruksuz:* rUDP ve
 QUIC'in fırtına karşılığı soketin alma arabelleği (`SO_RCVBUF`, B4) —
-ayrı düğme, bu turda yok. Yeni bağımlılık yok (`socket2` yerine
+ayrı düğme (B4'te geldi, aşağıda). Yeni bağımlılık yok (`socket2` yerine
 tokio'nun `TcpSocket`'i; `socket2` zaten `gsb-server`'ın doğrudan
 bağımlılığı, `gsb-net`'e eklenmedi). Ölçüm: RPC-CONTROL-PLANE §8.2
 "B84"; loadgen `--listen-backlog N` (in-process ve `--serve` sunucusu;
@@ -1378,6 +1378,56 @@ yapıyor. (c) *Varsayılanı `somaxconn`'a çekmek* (`listen(-1)` ya da
 loadgen'de düzeltmek* — ölçüm düzeneği motorun bir yeteneği olmadan
 kuyruğu değiştiremez; gerçek bir oyunun ani katılma yükü de aynı düğmeyi
 ister.
+
+**UDP kapılarının soket arabellekleri: `udp_recv_buffer_bytes` /
+`udp_send_buffer_bytes` (BACKLOG B4 — 2026-09-28).** UDP kapısının
+accept kuyruğu yok: rUDP'de TEK soket (demux) ve QUIC'te uç noktanın
+TEK soketi o kapının bütün oturumlarını taşır; patlama altında tek
+tampon çekirdeğin alma kuyruğudur ve dolu kuyruğa gelen datagram'ı
+çekirdek, sunucu görmeden düşürür (Linux `/proc/net/snmp`
+`Udp: RcvbufErrors`) — gsb'nin hiçbir sayacı bu kaybı göremez. İki
+kapının soketi artık `gsb_net::listen::bind_udp(addr, UdpBuffers)` ile
+kurulur (`socket2`: adresin ailesi, close-on-exec, bloklamayan; arabellek
+boyutları `bind`'dan ÖNCE uygulanır, hiçbir datagram küçük kuyrukta
+beklemez); rUDP `tokio::net::UdpSocket::from_std`, QUIC
+`quinn::Endpoint::new(EndpointConfig::default(), …, default_runtime())`
+— `Endpoint::server`'ın kurduğunun aynısı, tek farkı soket. Kararlar:
+(1) *Yazılmazsa dokunulmaz* — `setsockopt` hiç çağrılmaz, sistem
+varsayılanı (Linux `net.core.rmem_default`/`wmem_default`, çoğu dağıtımda
+212 992 B) kalır: anahtardan önce her UDP kapısının sahip olduğu soket
+(test: ayarsız soket düz `std` bind'ınkiyle aynı boyutları okur).
+(2) *İki sunucu anahtarı, her iki yön* (`Config::udp_recv_buffer_bytes`,
+`udp_send_buffer_bytes`, OPS §2); taşıma yapılarında `buffers:
+UdpBuffers` alanı (`UdpTransportConfig`, `QuicTransportConfig`),
+`bind_listener` config'inkini verir. `SO_SNDBUF` aynı yoldan, bedelsiz
+geldi: dolu gönderme kuyruğu rUDP'de bant bant sayılıyor
+(`udp_*_datagrams_send_failed`). (3) *Aralık* `4096..=i32::MAX` (bir
+sayfadan C `int`'e); dışı hem başlatmada (`BadUdpBuffer { key, value }`)
+hem kurucuda (`InvalidInput`) reddedilir. 4096'nın altı reddedilir,
+çünkü Linux onu sessizce kendi tabanına (~2,3 KiB) yükseltir — operatörün
+kastettiği asla o değildir. (4) *Çekirdeğin kuralı:* Linux isteği
+`net.core.rmem_max`/`wmem_max`'ta keser, sonra **ikiye katlar** (ikinci
+yarı çekirdeğin muhasebesi; `getsockopt` iki katını okur) — kullanılabilir
+alan tavana kadar yaklaşık istenen kadardır. Kesilen istek hata değil
+(`setsockopt` de hata vermez); kapı bind'da verilen boyutları log'lar ve
+verilen yarı istenenin altındaysa sysctl'ü adlandıran bir uyarı basar
+(`listen::log_buffers`). macOS `kern.ipc.maxsockbuf`'ta keser, katlamaz.
+(5) *Yeni doğrudan bağımlılık:* `socket2` 0.6 (lock'taki 0.6.5, tokio
+zaten çekiyor) artık `gsb-net`'in de doğrudan bağımlılığı — tokio'nun
+`UdpSocket`'i (1.53) `SO_RCVBUF` ayarlayıcısı sunmuyor, `unsafe` yasak
+ve ham fd'ye inmenin güvenli yolu bu. Ölçüm: loadgen
+`--udp-recv-buffer N` (in-process ve `--serve` sunucusu; orkestratör
+sunucu çocuğuna iletir); kanıt rUDP 1000 katılma fırtınasında
+`/proc/net/snmp` `RcvbufErrors` farkı.
+
+*Elenenler.* (a) *Kapı başına değer* — `listen_backlog` ile aynı gerekçe
+(ölçülmüş ihtiyaç yok; girdinin grameri kapalı kalır). (b) *Varsayılanı
+büyütmek* — her kurulumun soketini değiştirir ve çoğu Linux'ta
+`rmem_max` (212 992) zaten keser: sessiz bir "büyüttük" yanılgısı olurdu.
+(c) *`SO_RCVBUFFORCE`* (tavanı aşan, `CAP_NET_ADMIN` isteyen) — sunucu
+ayrıcalık istememeli; tavan operatörün sysctl'üdür. (d) *Arabelleği
+büyütmeyi el sıkışma kaybının çözümü saymak* — H turunda elendi (eşiği
+taşır, kaldırmaz; aşağıda "El sıkışma kaybı"): bu bir verim düğmesi.
 
 **Kapı girdisinin grameri kapalı (BACKLOG F61 — 2026-09-28).** Bir
 `[[listeners]]` girdisi (`ListenerEntry`) tam dört anahtar alır —
@@ -1703,8 +1753,9 @@ yeniden gönderimi (değişmedi).
 eşiği taşır, kaldırmaz: daha derin kuyruk 500 el sıkışmayı yutar,
 5 000'i yutmaz; kayıplı gerçek yol, sunucunun tamponu ne olursa olsun
 proof düşürür. Tek kayıp datagram'ı iyileştiremeyen el sıkışma her kuyruk
-derinliğinde yanlıştır; B4 bir verim ayarı olarak açık kalır, bu
-düzeltme olarak değil. (2) *Sunucu tarafında el sıkışma hızlandırma*
+derinliğinde yanlıştır; B4 bir verim ayarıdır (2026-09-28'de geldi:
+`udp_recv_buffer_bytes`, yukarıda "UDP kapılarının soket arabellekleri"),
+bu düzeltme değil. (2) *Sunucu tarafında el sıkışma hızlandırma*
 (tick başına N kabul, gerisini düşür/ertele) — çekirdeğin demux görmeden
 düşürdüğünü sunucu hızlandıramaz; ertelemek doğrulanmamış peer için
 durum tutmak demek, stateless el sıkışmanın yasakladığı tam şey.
@@ -3229,7 +3280,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
-| rUDP: SO_RCVBUF ayarı yok | tokio 1.53.1 `UdpSocket`'inde buffer boyutu setter'ı yok (raw fd gerekir) | tokio setter'ı geldiğinde / raw fd wrapper |
+| ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
 | rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |

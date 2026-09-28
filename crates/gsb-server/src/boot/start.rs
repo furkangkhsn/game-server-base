@@ -52,6 +52,8 @@ async fn start_inner(
     // The accept backlog every TCP-based socket gets (B84): refused here,
     // before the first bind, like every other listener key.
     check_listen_backlog(&cfg)?;
+    // The socket buffers every UDP-based door asks for (B4), the same way.
+    check_udp_buffers(&cfg)?;
 
     // The room-level keys (flat and `[rooms.<id>]`): a value no room can
     // run with refuses startup; so does a room the registry would refuse

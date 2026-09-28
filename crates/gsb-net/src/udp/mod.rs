@@ -191,12 +191,12 @@
 //! allocated nothing, and a session whose every accept was lost sees no
 //! further traffic and is ended by the idle sweep.
 //!
-//! **Rejected — raising `SO_RCVBUF`** (BACKLOG B4, the "No receive-buffer
-//! tuning" item below): it moves the loss threshold, it does not remove
+//! **Rejected — raising `SO_RCVBUF`** (BACKLOG B4, now the "Socket
+//! buffers" knob below): it moves the loss threshold, it does not remove
 //! it. A deeper queue absorbs 500 handshakes but not 5 000, and a lossy
 //! real path drops a proof regardless of the server's buffer; a
 //! handshake that cannot heal one lost datagram is wrong at any queue
-//! depth. It stays open as a throughput knob, not as this fix.
+//! depth. It exists as a throughput knob, not as this fix.
 //! **Rejected — server-side pacing of handshakes** (admit N per tick,
 //! drop or defer the rest): the server cannot pace what the kernel has
 //! already dropped before the demux saw it, and deferring means holding
@@ -422,6 +422,21 @@
 //! self-healing; a retransmitted old snapshot is worth less than the
 //! next one.
 
+//! ## Socket buffers (BACKLOG B4)
+//!
+//! ONE socket carries every session, so its kernel receive queue is the
+//! first and only buffer under a burst: a datagram that arrives while it
+//! is full is dropped by the kernel before the demux sees it (Linux
+//! `Udp: RcvbufErrors`), and no counter of this crate can see that loss.
+//! The door's socket is bound through [`crate::listen::bind_udp`] with
+//! the configured `SO_RCVBUF`/`SO_SNDBUF` ([`UdpTransportConfig::buffers`];
+//! the server's `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`). Unset,
+//! nothing is touched — the system default, the socket this door always
+//! had. The sizes the kernel granted are logged at bind, with a warning
+//! when it capped one below the request (Linux: at
+//! `net.core.rmem_max`/`wmem_max`, then doubled for its bookkeeping).
+//! The QUIC door binds its endpoint's socket the same way.
+//!
 //! ## Session teardown (feature 4)
 //!
 //! UDP has no FIN. The previous turn's `idle_timeout` mechanism carries
@@ -490,11 +505,6 @@
 //!   an identity to re-bind it to — a protocol change plus the auth
 //!   layer, not a patch. (Verified: `Demux::sessions` is keyed by
 //!   `SocketAddr` and `handle_hello` early-returns for a known one.)
-//! - **No receive-buffer tuning.** ONE socket carries every session, so
-//!   its kernel receive queue is the first and only buffer under a burst,
-//!   and it is left at the system default: `tokio::net::UdpSocket`
-//!   (1.53.1) exposes no `SO_RCVBUF` setter, so raising it needs the raw
-//!   fd. (Verified: the only mention is the note in `bind`.)
 //! - **No crypto layer**, declared out of scope for v1 rather than
 //!   pending: the cookie is an anti-spoofing measure, not a security
 //!   boundary (nothing is signed or encrypted). Fragmentation, once

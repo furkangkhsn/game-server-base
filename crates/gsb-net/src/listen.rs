@@ -17,7 +17,8 @@
 //!
 //! UDP doors (rUDP, QUIC) have no accept queue: their counterpart under
 //! a burst is the socket's receive buffer (`SO_RCVBUF`), a different
-//! knob (BACKLOG B4).
+//! knob (BACKLOG B4) — [`bind_udp`] and [`UdpBuffers`], in the child
+//! module that binds the UDP doors' sockets.
 
 use std::io;
 use std::net::SocketAddr;
@@ -74,6 +75,9 @@ pub fn bind_tcp(addr: SocketAddr, backlog: u32) -> io::Result<TcpListener> {
     socket.bind(addr)?;
     socket.listen(backlog)
 }
+
+mod udp;
+pub use udp::*;
 
 #[cfg(test)]
 mod tests;

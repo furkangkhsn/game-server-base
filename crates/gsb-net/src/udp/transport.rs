@@ -35,6 +35,9 @@ pub struct UdpTransportConfig {
     /// Where the demux and the writers send their loss counters (B58;
     /// `None` = counted in their stop logs only).
     pub metrics: crate::TransportMetrics,
+    /// The shared socket's kernel buffers (BACKLOG B4; unset = the
+    /// system default, untouched). See [`crate::listen::bind_udp`].
+    pub buffers: crate::listen::UdpBuffers,
 }
 
 impl Default for UdpTransportConfig {
@@ -46,6 +49,7 @@ impl Default for UdpTransportConfig {
             idle_timeout: Some(Duration::from_secs(30)),
             cookie_key: None,
             metrics: None,
+            buffers: crate::listen::UdpBuffers::default(),
         }
     }
 }
@@ -78,11 +82,10 @@ impl Transport for UdpTransport {
         addr: SocketAddr,
     ) -> BoxFuture<'static, std::io::Result<Arc<dyn Listener>>> {
         Box::pin(async move {
-            let sock = Arc::new(UdpSocket::bind(addr).await?);
-            // (The kernel receive queue is the first line of buffering
-            // for every session — there is no per-connection socket.
-            // Tuning it (SO_RCVBUF) would need the raw fd; left at the
-            // system default in v1 — see ROADMAP "v1 constraints".)
+            // The kernel receive queue is the first line of buffering for
+            // every session — there is no per-connection socket — so its
+            // size is the operator's (B4; unset = the system default).
+            let sock = Arc::new(bind_socket(addr, self.config.buffers)?);
             let (end_tx, end_rx) = crossbeam_channel::bounded(ENDPOINT_CHANNEL);
             // The cookie key: the operator's config, or the OS entropy
             // source. A failure here is deliberate (see `CookieKey`): a
@@ -113,6 +116,19 @@ impl Transport for UdpTransport {
             }) as Arc<dyn Listener>)
         })
     }
+}
+
+/// The door's one socket: bound with the configured kernel buffers, and
+/// the sizes the kernel granted logged (with a warning when it capped
+/// one below the request — B4).
+pub(super) fn bind_socket(
+    addr: SocketAddr,
+    buffers: crate::listen::UdpBuffers,
+) -> std::io::Result<UdpSocket> {
+    let sock = UdpSocket::from_std(crate::listen::bind_udp(addr, buffers)?)?;
+    let got = crate::listen::buffer_sizes(&sock)?;
+    crate::listen::log_buffers("rUDP", sock.local_addr()?, buffers, got);
+    Ok(sock)
 }
 
 impl Listener for UdpListenerHandle {

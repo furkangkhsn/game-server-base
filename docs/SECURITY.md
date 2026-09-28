@@ -415,6 +415,28 @@ kapısının alanı soket kurucusuna ulaşıyor), `gsb-server`
 config değerini alıyor), `tests/listen_backlog.rs` (varsayılan, ayrıştırma,
 aralık dışı değer hiçbir şey bağlanmadan başlatmayı durdurur).
 
+### 4.5 UDP kapılarının soket arabellekleri (B4)
+
+`udp_recv_buffer_bytes` / `udp_send_buffer_bytes` (OPS §2, DESIGN §6)
+rUDP ve QUIC kapılarının TEK soketinin çekirdek arabellekleridir.
+Varsayılan: yazılmaz, dokunulmaz — sistem varsayılanı; varsayılan yüzey
+değişmedi.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | Değer `4096..=2147483647`; dışı başlatmayı durdurur; çekirdek `rmem_max`/`wmem_max`'ta keser (hata değil, uyarı) | Kapı başına tek soket: bellek oturum sayısıyla değil kapı sayısıyla çarpılır — en fazla kapı başına `2 × rmem_max` (+ `2 × wmem_max`) çekirdek belleği. Tavan operatörün sysctl'ü; sunucu `SO_RCVBUFFORCE` (ayrıcalık) istemez |
+| 2 | Büyük arabellek sahte kaynaklı seli büyütmez | Kuyruktaki datagram yalnız sıra bekler: demux her birini aynı sınırlarla işler (cookie, oturum tablosu, datagram bütçesi — §4.1); el sıkışma durumsuz kalır. Daha derin kuyruk, demux'ın geride kaldığı bir selde datagram'ların çekirdekte değil sırada beklemesi demek — gecikme artar, iş artmaz |
+| 3 | Arabellek kaybın çözümü değil, eşiği | Dolan kuyruk yine düşürür (`RcvbufErrors`); el sıkışma ve REL bandı kaybı zaten iyileştirir (DESIGN §6 "El sıkışma kaybı"). Operatör kuyruğu beklenen patlamaya göre boyutlar |
+
+Kilit: `gsb-net` `listen::udp::tests` (istek sokete ulaşıyor — Linux'ta
+iki katı okunur, tavanda kesilir ve kesinti algılanır; ayarsız soket
+varsayılanı alır; aralık dışı soket açılmadan reddedilir),
+`udp::tests::buffers` ve `quic::tests::buffers` (iki kapının soketi
+değeri alıyor, kapı yine hizmet ediyor), `gsb-server`
+`boot::backlog_tests` (sunucunun iki UDP kapısı config değerini
+kurucuya veriyor), `tests/udp_buffers.rs` (varsayılan, ayrıştırma,
+aralık dışı değer hiçbir şey bağlanmadan başlatmayı durdurur).
+
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
 K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının
