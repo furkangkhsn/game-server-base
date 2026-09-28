@@ -4,7 +4,8 @@
 //! starts that game (the demo's flat keys, which the other games
 //! refuse, are written commented out — finding K5); and its commented
 //! `[arena]` / `[mmo]` / `[war]` sections, uncommented, are accepted by
-//! their games, and so is its commented `[rooms.2]` override (B18).
+//! their games, and so is its commented `[rooms.2]` override (B18) and
+//! its commented two-door `[[listeners]]` example (F61).
 //! Configure only: nothing binds (the example's port is a real one).
 
 #![cfg(all(
@@ -184,4 +185,62 @@ fn the_commented_room_override_is_valid() {
             panic!("{game} refused the room override: {e}");
         }
     }
+}
+
+/// The commented two-door `[[listeners]]` example's lines, uncommented,
+/// and the example with every other line as shipped.
+fn listener_example() -> (String, String) {
+    const START: &str = "# Example: an encrypted public door plus a plaintext LAN door:";
+    let (mut doors, mut rest) = (String::new(), String::new());
+    let mut block = false;
+    for line in EXAMPLE.lines() {
+        block = line == START || (block && line != "# Rules:");
+        let (out, text) = match line.strip_prefix("#   ").filter(|_| block) {
+            Some(entry) => (&mut doors, entry),
+            None => (&mut rest, line),
+        };
+        out.push_str(text);
+        out.push('\n');
+    }
+    (doors, rest)
+}
+
+/// The commented two-door `[[listeners]]` example, written where the
+/// example says (after every flat key), parses under the strict entry
+/// grammar (F61) — every key it writes is one an entry takes. Written in
+/// place instead, the flat keys after it would belong to its last entry:
+/// that now refuses startup, naming one of them, where it used to drop
+/// every one of them silently.
+#[test]
+fn the_commented_listener_example_is_valid() {
+    let (doors, rest) = listener_example();
+    let cfg = load(&format!("{rest}\n{doors}"));
+    let entries = cfg.listeners.expect("the example's doors");
+    let got: Vec<_> = entries
+        .iter()
+        .map(|e| (e.transport.to_string(), e.bind.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("tls".to_owned(), "0.0.0.0:7777"),
+            ("tcp".to_owned(), "192.168.1.10:7777")
+        ]
+    );
+    assert!(entries[0].tls_cert.is_some() && entries[0].tls_key.is_some());
+    assert_eq!(
+        cfg.tick_hz,
+        load(EXAMPLE).tick_hz,
+        "the flat keys still read"
+    );
+    assert!(load(EXAMPLE).listeners.is_none(), "written commented");
+
+    let in_place = EXAMPLE.replacen(
+        "#   [[listeners]]\n#   transport = \"tcp\"\n#   bind = \"192.168.1.10:7777\"",
+        "[[listeners]]\ntransport = \"tcp\"\nbind = \"192.168.1.10:7777\"",
+        1,
+    );
+    assert_ne!(in_place, EXAMPLE, "the example's last door, uncommented");
+    let e = toml::from_str::<Config>(&in_place).expect_err("flat keys inside an entry");
+    assert!(e.to_string().contains("unknown field `"), "{e}");
 }

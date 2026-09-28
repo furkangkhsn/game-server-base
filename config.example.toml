@@ -80,6 +80,13 @@ transport = "tcp"
 #   a socket); each udp entry owns its own socket and demux. Frame limits,
 #   channel capacities and idle windows apply to every door alike; a WS
 #   message ceiling derives from max_frame_bytes (+ its 4-byte prefix).
+# - An entry takes exactly the four keys above; any other key in it (a
+#   typo, or a server-wide key such as listen_backlog) refuses startup,
+#   naming the key and its line.
+# - Each entry is a TOML table: write the entries at the END of the file,
+#   after every flat key (like [rooms.<id>] below). A flat key written
+#   after a [[listeners]] header belongs to that entry, and refuses
+#   startup as an unknown entry key.
 
 # Accept backlog of every TCP-based listening socket: the "tcp", "tls"
 # and "ws" doors (scalar or [[listeners]]) and the ops HTTP surface
@@ -91,7 +98,7 @@ transport = "tcp"
 # (Linux net.core.somaxconn, 4096 by default); a larger value is capped,
 # not refused. 1..=2147483647; 0 refuses startup. UDP doors (rUDP, QUIC)
 # have no accept queue and ignore it. Server-wide only: [rooms.<id>]
-# refuses it, and written inside a [[listeners]] entry it has no effect.
+# and a [[listeners]] entry refuse it.
 #listen_backlog = 128
 
 

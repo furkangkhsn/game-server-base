@@ -207,11 +207,10 @@ listen_backlog = 4096   # vars. 128; çekirdek somaxconn'da keser
 - **Doğrulama (başlatmada, bir şey bağlanmadan):** `1..=2147483647`
   (`listen(2)` C `int` alır); `0` ya da fazlası
   `ServerError::BadListenBacklog`. Negatif değer ayrıştırma hatası.
-- **Katman yok:** tek sunucu anahtarı. `[rooms.<id>]` onu bilinmeyen
-  anahtar olarak reddeder. Bir `[[listeners]]` girdisine yazılırsa
-  **etkisizdir**: girdi bilinmeyen anahtarı bugün sessizce yok sayıyor
-  (`ListenerEntry`'de `deny_unknown_fields` yok — ayrı bulgu, BACKLOG
-  F61). Kapı başına değer ölçülmüş bir ihtiyaç yokken eklenmedi;
+- **Katman yok:** tek sunucu anahtarı. `[rooms.<id>]` de bir
+  `[[listeners]]` girdisi de onu bilinmeyen anahtar olarak reddeder
+  (girdininki F61'den beri; aşağıda — önceden girdide sessizce
+  etkisizdi). Kapı başına değer ölçülmüş bir ihtiyaç yokken eklenmedi;
   gerekirse girdiye isteğe bağlı bir alan olarak geriye uyumlu eklenir.
 - **Ne zaman büyütülür:** katılma patlaması kuyruğu taşırdığında —
   Linux'ta `nstat -az TcpExtListenOverflows` (ya da
@@ -219,6 +218,78 @@ listen_backlog = 4096   # vars. 128; çekirdek somaxconn'da keser
   istemcilerin bağlanma süresi ~1 sn'ye (SYN yeniden gönderimi) sıçrar.
   Beklenen patlamanın boyuna göre boyutlanır (SECURITY §4.4); ölçüm:
   RPC-CONTROL-PLANE §8.2 "B84".
+
+**Kapı girdisi: `[[listeners]]` bilinmeyen anahtarı reddeder (BACKLOG
+F61 — 2026-09-28).** Bir girdi tam dört anahtar alır: `transport`,
+`bind`, `tls_cert`, `tls_key`. Başka her anahtar — yazım hatası
+(`tls_crt`, `bnd`) ya da kapıya yazılmış sunucu anahtarı
+(`listen_backlog`, `max_connections`, `tick_hz`) — ayrıştırmayı, yani
+başlatmayı bir şey bağlanmadan durdurur:
+
+```text
+cannot parse config file gsb.toml: TOML parse error at line 8, column 1
+  |
+8 | listen_backlog = 4096
+  | ^^^^^^^^^^^^^^
+unknown field `listen_backlog`, expected one of `transport`, `bind`, `tls_cert`, `tls_key`
+```
+
+- **Hata:** anahtarı adlandırır, girdinin aldığı anahtarları sayar ve
+  satırı gösterir — girdi satırdan bulunur (girdi sırası ayrıca
+  yazılmaz; `[rooms.<id>]` ve `[metrics]` ile aynı biçim, serde'nin
+  `deny_unknown_fields`'ı + toml'un konumu). Eskiden anahtar sessizce
+  atılıyordu: sunucu kalkıyor, değer hiçbir yere gitmiyordu. Yukarıdaki
+  metin `ConfigError`'ın `Display`'i; `gsb-server` ikilisi bugün
+  `main`'den dönen hatayı `Debug` ile basıyor (`Error: Parse { … }`):
+  anahtar ve mesaj orada da var, satır numarası yok, dosyanın tamamı
+  dökülüyor — bütün config hataları için aynı, ayrı bulgu (BACKLOG F63).
+- **Tasarım:** girdi düz bir struct — taşımaya özgü alt tablo,
+  `flatten`'lı ya da etiketli (`tag`) bir parça yok (TLS dosyaları
+  girdinin kendi iki alanı, WS/QUIC/rUDP düğmeleri sunucu düzeyinde).
+  Bu yüzden serde'nin `deny_unknown_fields`'ı girdinin tamamını kapsar;
+  serde'nin `flatten`/`tag` ile bu özniteliği birlikte düzgün
+  işleyememesi burada söz konusu değil. Girdi ileride taşımaya özgü bir
+  alt tablo alırsa her alt struct kendi `deny_unknown_fields`'ını
+  taşımalı (ya da ham tablo üstünde bir doğrulama geçişi) — `flatten`
+  değil.
+- **Girdiler dosyanın SONUNA:** `[[listeners]]` bir TOML tablo dizisi;
+  başlığından sonra yazılan her anahtar o girdiye aittir.
+  `config.example.toml`'un iki kapılı örneği dosyanın ortasında, yorum
+  olarak duruyor; yerinde açılırsa ardından gelen bütün düz anahtarlar
+  (`tick_hz`, `room_count`, `max_snapshot_bytes`…) son girdiye düşerdi —
+  F61'den önce **hepsi sessizce atılır, sunucu varsayılanlarla
+  kalkardı**; şimdi başlatma bunlardan birini adlandırarak durur. Örneğe
+  "girdileri düz anahtarlardan sonra, dosyanın sonuna yaz" kuralı
+  eklendi (`example_config::the_commented_listener_example_is_valid`
+  ikisini de kilitler).
+- **Geriye uyumsuz, bilerek:** bugün girdide yutulan bir anahtar artık
+  başlatmayı durdurur (bakımcı kararı (a)). Depodaki config'lerde böyle
+  bir anahtar yoktu (örnek dosya, testlerin ve loadgen'in kurduğu
+  girdiler yalnız dört anahtarı yazıyor).
+
+**Config tablolarının bilinmeyen anahtar denetimi (F61 taraması).**
+
+| Tablo (struct) | Önce | Sonra |
+|---|---|---|
+| `[[listeners]]` girdisi (`ListenerEntry`) | bilinmeyen anahtar sessizce atılıyordu | **reddeder** (F61) |
+| `[rooms.<id>]` (`RoomOverride`) | reddediyordu (B18) | değişmedi |
+| `[rooms]` anahtarları (oda id'leri) | pozitif düz tam sayı olmayan id reddediliyordu | değişmedi |
+| `[metrics]` (`MetricsConfig`), `[metrics.otlp]` (`OtlpSection`) | reddediyordu | değişmedi |
+| `[arena]`, `[mmo]`, `[war]` (`games::settings::own_table`) | reddediyordu (GAME-MODULE §6 sapma 2) | değişmedi |
+| Seçim ve taşıma enum'ları (`visibility`, `topology`, `communication`, `transport`, girdinin `transport`'u), `afk_action`, `max_detach_hold_secs` | bilinmeyen DEĞER reddediliyordu | değişmedi |
+| Üst düzey (`Config`) | bilinmeyen anahtar yok sayılıyor | **bilerek değişmedi** — aşağıda, BACKLOG F62 |
+
+TLS, ops HTTP (`http_listen`), `listen_backlog` ve rUDP düğmeleri üst
+düzeyin düz anahtarları — ayrı tabloları yok. Üst düzey bu turda açık
+kaldı: orası barındırılan oyunla PAYLAŞILAN ad alanı — oyun kendi
+parçasını `Config::raw`'dan okur (`[<oyun>]` tablosu; demo'nun düz
+anahtarları; üçüncü taraf bir modülün okuduğu her anahtar) ve bir dosya
+birkaç oyunun tablosunu taşıyabilir (GAME-MODULE §6 sapma 2). Motor
+hangi üst düzey anahtarın oyunun olduğunu bilmeden reddedemez; bunu
+bildirmek `GameModule` sözleşmesini değiştirir — karar bakımcının
+(F62). Sonuç bugün: düz bir motor anahtarının yazım hatası
+(`tik_hz = 60`) ya da yanlış adlı bir tablo (`[metric.otlp]`,
+`[room.2]`, `[[listener]]`) etkisiz, uyarısız.
 
 ## 3. Tel/format detayları
 

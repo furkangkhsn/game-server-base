@@ -1367,9 +1367,9 @@ orkestratör sunucu çocuğuna iletir).
 
 *Elenenler.* (a) *Kapı başına değer* (`[[listeners]]` girdisinde alan) —
 ölçülmüş bir ihtiyaç yok; kapıların hepsi aynı katılma patlamasını
-paylaşır, ve bugün girdi bilinmeyen anahtarı reddetmediği için (F61)
-yanlış yere yazılmış tek anahtar sessizce etkisiz kalırdı; gerekirse
-girdiye isteğe bağlı alan olarak geriye uyumlu eklenir. (b) *`socket2`
+paylaşır (girdiye yazılmış `listen_backlog` F61'den beri başlatmayı
+durdurur — aşağıda; önceden sessizce etkisizdi); gerekirse girdiye
+isteğe bağlı alan olarak geriye uyumlu eklenir. (b) *`socket2`
 ile kurmak* — `gsb-net`'e yeni doğrudan bağımlılık; tokio'nun
 `TcpSocket::listen(backlog)`'u aynı sistem çağrısını güvenli API'yle
 yapıyor. (c) *Varsayılanı `somaxconn`'a çekmek* (`listen(-1)` ya da
@@ -1378,6 +1378,20 @@ yapıyor. (c) *Varsayılanı `somaxconn`'a çekmek* (`listen(-1)` ya da
 loadgen'de düzeltmek* — ölçüm düzeneği motorun bir yeteneği olmadan
 kuyruğu değiştiremez; gerçek bir oyunun ani katılma yükü de aynı düğmeyi
 ister.
+
+**Kapı girdisinin grameri kapalı (BACKLOG F61 — 2026-09-28).** Bir
+`[[listeners]]` girdisi (`ListenerEntry`) tam dört anahtar alır —
+`transport`, `bind`, `tls_cert`, `tls_key`; başka her anahtar (yazım
+hatası, kapıya yazılmış sunucu anahtarı) ayrıştırmayı durdurur, hata
+anahtarı, girdinin anahtarlarını ve satırı adlandırır. Girdi düz bir
+struct: taşımaya özgü alt tablo ya da `flatten`/`tag`'li parça yok
+(TLS dosyaları girdinin iki alanı; WS/QUIC/rUDP düğmeleri sunucu
+düzeyinde), bu yüzden serde'nin `deny_unknown_fields`'ı girdinin
+tamamını kapsar — `flatten` ile birleşince bozulan serde davranışı
+burada yok. Girdiye ileride taşımaya özgü bir alt tablo gelirse o da
+kendi `deny_unknown_fields`'lı struct'ı olur, `flatten` değil. Eskiden
+anahtar sessizce atılıyordu. Taramanın tablosu ve üst düzeyin neden
+açık kaldığı (F62): OPS §2 "Kapı girdisi".
 
 **El sıkışan kapılar: el sıkışma accept döngüsünün dışında (BACKLOG
 B31 — 2026-09-26).** WS, TLS ve QUIC kapısında bir bağlantı, oturum

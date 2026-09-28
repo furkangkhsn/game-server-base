@@ -70,7 +70,15 @@ impl std::fmt::Display for ListenerTransport {
 /// deployment-wide policies of ONE actor stack, not properties of a
 /// socket — per-listener overrides would fork the pipeline's semantics
 /// per door for no demonstrated need.
+///
+/// Any other key in an entry refuses to parse (BACKLOG F61), naming the
+/// key, the keys an entry takes, and the line it sits on: a typo, or a
+/// server-wide key written inside a door (`listen_backlog`), used to be
+/// silently dropped. The entry is flat — no per-transport sub-table, no
+/// flattened or tagged part — so serde's own `deny_unknown_fields`
+/// covers it whole, with the message `[rooms.<id>]` and `[metrics]` give.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListenerEntry {
     /// Which transport this listener serves (`"tcp"`, `"tls"`, `"udp"`,
     /// `"quic"`, `"ws"`).
@@ -89,6 +97,13 @@ pub struct ListenerEntry {
 }
 
 /// Server configuration (see `config.example.toml`).
+///
+/// The one config table that does NOT refuse an unknown key: its top
+/// level is shared with the hosted game, which reads its own part of the
+/// file from [`Self::raw`] (its `[<game>]` table, or flat keys) — and a
+/// file may carry several games' tables. Every table the engine owns
+/// below it refuses one: a `[[listeners]]` entry, `[rooms.<id>]`,
+/// `[metrics]`, `[metrics.otlp]`.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {
