@@ -54,6 +54,9 @@ pub(super) struct RelSend {
     /// When the cumulative ACK last advanced — or, while nothing is
     /// outstanding, simply "now" (an idle band has nothing to prove).
     ack_progress: Instant,
+    /// When the queue last became empty (an ACK released its last
+    /// frame): the start of an idle spell.
+    emptied: Instant,
     rto: Rto,
 }
 
@@ -64,6 +67,7 @@ impl RelSend {
             queue: VecDeque::new(),
             acked: 1,
             ack_progress: now,
+            emptied: now,
             rto,
         }
     }
@@ -97,10 +101,15 @@ impl RelSend {
     /// A control frame was just sent for the first time. The liveness
     /// clock measures unanswered WORK, so it starts when something
     /// becomes outstanding: a frame after a quiet spell must not inherit
-    /// a clock stamped at the last ACK.
+    /// a clock stamped at the last ACK. After an idle spell longer than
+    /// the timer, the timer also drops its backoff
+    /// ([`Rto::restart_after_idle`]).
     pub(super) fn push(&mut self, seq: u32, datagram: Bytes, now: Instant) {
         if self.queue.is_empty() {
             self.ack_progress = now;
+            if now.saturating_duration_since(self.emptied) >= self.rto.current() {
+                self.rto.restart_after_idle();
+            }
         }
         self.queue.push_back(Outstanding {
             seq,
@@ -132,6 +141,9 @@ impl RelSend {
             resent |= front.resent;
             newest = Some(front.sent);
             self.queue.pop_front();
+            if self.queue.is_empty() {
+                self.emptied = now;
+            }
         }
         if let (Some(sent), false) = (newest, resent) {
             self.rto.sample(now.saturating_duration_since(sent));

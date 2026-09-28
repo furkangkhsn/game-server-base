@@ -1810,7 +1810,13 @@ artık aynı kodu paylaşıyor) RFC 6298 tahmini tutar. **Tel değişmedi.**
   gönderildiyse örnek yok (ACK hangi kopyaya cevap, bilinemez; yeniden
   gönderilen karenin doldurduğu boşluk arkasındaki her karenin ACK'ini
   geciktirir); geri çekilmiş zamanlayıcı temiz bir kare cevaplanana dek
-  korunur.
+  korunur — ya da bant zamanlayıcıdan uzun süre boşta kalana (hiçbir şey
+  ACK beklemiyor) dek: o zaman sonraki kare tahminden başlar, geri
+  çekilme düşer. Kontrol bandı dakikada bir kare taşır; bu kural olmadan
+  katılma fırtınasının geri çekilmesi oturumun LEAVE'ini karşılıyordu
+  (ölçüldü: 1000 LEAVE'in 19'u loadgen'in 500 ms'lik penceresini
+  kaçırdı). Yakın aralıklı kareler geri çekilmeyi korur: RTT'si
+  zamanlayıcıyı aşan yol ancak böyle temiz örnek verir (Karn).
 - **Zamanlayıcı:** `SRTT + max(1 ms, 4·RTTVAR)` (α = 1/8, β = 1/4),
   `[50 ms, 1 sn]`'ye kıstırılır; her dolmada ikiye katlanır (tavana
   kadar), geçerli örnek geri çekilmeyi sıfırlar. İlk örnekten önce

@@ -361,7 +361,12 @@
 //! - **Karn's rule:** no sample when any released frame was ever re-sent
 //!   (the ACK may answer either copy, and a gap filled by a re-sent frame
 //!   delays the ACK of every frame behind it); the backed-off timer is
-//!   kept until a clean frame is answered.
+//!   kept until a clean frame is answered — or until the band has been
+//!   idle (nothing outstanding) for longer than the timer: then the next
+//!   frame starts from the estimate. A control band carries a frame a
+//!   minute, and without the idle rule a join storm's backoff greeted
+//!   the session's LEAVE (measured: 19 of 1000 LEAVEs missed the load
+//!   generator's 500 ms window).
 //! - **The timer:** `SRTT + max(1 ms, 4·RTTVAR)`, clamped to 50 ms ..
 //!   1 s (`rel::MIN_RTO`, `rel::MAX_RTO`; the rationale is on the constants),
 //!   doubled on each expiry up to the ceiling, reset by a valid sample.

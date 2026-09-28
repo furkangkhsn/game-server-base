@@ -99,6 +99,19 @@ impl Rto {
         self.backoff = 0;
     }
 
+    /// The band was idle (nothing outstanding) for longer than the
+    /// current timer: drop the backoff, keep the estimate. The backoff
+    /// says "the path is not answering right now"; after an idle spell
+    /// that ended with everything ACKed it is stale, and on a band that
+    /// carries a control frame a minute, keeping it would make the next
+    /// frame (a LEAVE after a join storm, say) wait out a storm's timer.
+    /// Frames sent close together keep it (Karn's algorithm: that is
+    /// how a path whose RTT grew past the timer still yields a clean
+    /// sample).
+    pub(in crate::udp) fn restart_after_idle(&mut self) {
+        self.backoff = 0;
+    }
+
     /// The timer expired and the frame was sent again: back off (RFC 6298
     /// §5.5), until the ceiling.
     pub(in crate::udp) fn timed_out(&mut self) {

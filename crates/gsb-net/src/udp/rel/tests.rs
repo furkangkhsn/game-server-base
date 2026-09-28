@@ -65,6 +65,40 @@ fn karns_rule_no_sample_from_a_re_sent_frame() {
     assert_eq!(b.rto().current(), MIN_RTO);
 }
 
+/// A backoff outlives the ACK of its re-sent frame only while frames
+/// keep coming: after an idle spell longer than the timer, the next
+/// frame starts from the estimate (a LEAVE must not wait out the join
+/// storm's timer); a frame sent right after the ACK keeps it (Karn).
+#[test]
+fn an_idle_spell_drops_the_backoff_but_a_close_frame_keeps_it() {
+    let t0 = Instant::now();
+    let mut b = band(t0);
+    b.push(1, dg(1), t0);
+    for at in [50, 150] {
+        assert_eq!(b.poll(t0 + ms(at)), Due::Resend(dg(1)), "re-send at {at}");
+        b.resent(t0 + ms(at));
+    }
+    b.on_ack(2, t0 + ms(160));
+    assert_eq!(b.rto().current(), ms(200), "two doublings kept");
+    b.push(2, dg(2), t0 + ms(359));
+    assert_eq!(b.rto().current(), ms(200), "199 ms after the ACK: kept");
+    b.on_ack(3, t0 + ms(361));
+    assert_eq!(b.rto().current(), MIN_RTO, "a clean sample ends it anyway");
+    // Back off again, then go quiet for as long as the timer.
+    b.push(3, dg(3), t0 + ms(700));
+    assert_eq!(b.poll(t0 + ms(750)), Due::Resend(dg(3)));
+    b.resent(t0 + ms(750));
+    b.on_ack(4, t0 + ms(760));
+    assert_eq!(b.rto().current(), ms(100));
+    b.push(4, dg(4), t0 + ms(860));
+    assert_eq!(
+        b.rto().current(),
+        MIN_RTO,
+        "idle 100 ms, the timer: dropped"
+    );
+    assert!(b.rto().srtt().is_some(), "the estimate stays");
+}
+
 /// One frame the peer never answers: re-sent at 50, 150, 350, 750 ms…
 /// (the timer doubling from each re-send), never before its time.
 #[test]
