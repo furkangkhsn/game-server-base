@@ -23,6 +23,7 @@
 //!   runtime-minted CA (`common::mint_tls_pki`); EOF semantics are TCP's.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gsb_client::Conn;
@@ -48,6 +49,20 @@ enum Kind {
 /// The one place the transports differ (see the module docs): a
 /// `gsb_client` connection over the door `Kind` names.
 struct Client(Conn);
+
+/// A probe's heartbeat interval: about three a second, so one lands in
+/// every one-second slot of the connection actor's ACK throttle.
+const PROBE_EVERY: Duration = Duration::from_millis(300);
+/// How long a probe waits for a live session's answer: the hang guard.
+const ALIVE_GUARD: Duration = Duration::from_secs(10);
+/// How long an rUDP session must stay silent to read as gone: two
+/// throttle slots of heartbeats (and short of the reliable band's 5 s
+/// no-ACK bound, past which the client itself reports the session dead).
+const GONE_WINDOW: Duration = Duration::from_secs(2);
+/// Heartbeat numbers per probe; each probe takes its own range, far above
+/// the numbers the tests send by hand.
+const PROBE_RANGE: u64 = 1000;
+static NEXT_PROBE: AtomicU64 = AtomicU64::new(1_000_000);
 
 /// What a bounded wait for the next frame found.
 enum Recv {
@@ -98,25 +113,62 @@ impl Client {
         }
     }
 
-    /// Liveness probe: a heartbeat; `true` if it gets an answer within
-    /// the window. This is the rUDP notion of "the server closed" (UDP
+    /// Liveness probe: `true` once the server answers one of THIS
+    /// probe's heartbeats; `false` on a close, or when `window` passes
+    /// unanswered. This is the rUDP notion of "the server closed" (UDP
     /// has no EOF): a session the server removed never answers.
-    async fn probe(&mut self) -> std::io::Result<bool> {
-        let hb = session::heartbeat(0);
-        self.write_frame(hb.op, &hb.payload).await?;
-        let deadline = Instant::now() + Duration::from_millis(1500);
+    ///
+    /// Not one heartbeat (BACKLOG F34, the F24 shape): the connection
+    /// actor answers at most one a second (wall clock), so a single
+    /// heartbeat landing within a second of the last answered one goes
+    /// unanswered on a live session — under load, one sent "about a
+    /// second later" does. Numbered heartbeats go out every
+    /// [`PROBE_EVERY`] until one of them is acknowledged (an ACK to an
+    /// earlier heartbeat is not the answer); `window` bounds only the
+    /// wait for a session that is gone.
+    async fn probe_within(&mut self, window: Duration) -> std::io::Result<bool> {
+        let first = NEXT_PROBE.fetch_add(PROBE_RANGE, Ordering::Relaxed);
+        let deadline = Instant::now() + window;
+        let mut next = first;
+        let mut resend = Instant::now();
         loop {
-            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            let now = Instant::now();
+            if now >= deadline {
                 return Ok(false);
-            };
-            match self.recv(remaining.min(Duration::from_millis(150))).await? {
-                Recv::Frame((op, _)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => {
-                    return Ok(true);
+            }
+            if now >= resend && next < first + PROBE_RANGE {
+                let hb = session::heartbeat(next);
+                self.write_frame(hb.op, &hb.payload).await?;
+                next += 1;
+                resend = now + PROBE_EVERY;
+            }
+            match self
+                .recv((deadline - now).min(Duration::from_millis(150)))
+                .await?
+            {
+                Recv::Frame((op, payload)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => {
+                    let tick = HeartbeatAck::decode(&payload[..]).expect("an ACK").tick;
+                    if (first..next).contains(&tick) {
+                        return Ok(true);
+                    }
                 }
                 Recv::Closed => return Ok(false),
                 Recv::TimedOut | Recv::Frame(_) => {}
             }
         }
+    }
+
+    /// The session is alive: some heartbeat of a probe is answered. The
+    /// window is only the hang guard.
+    async fn probe(&mut self) -> std::io::Result<bool> {
+        self.probe_within(ALIVE_GUARD).await
+    }
+
+    /// The rUDP session is gone: no heartbeat of a probe is answered for
+    /// [`GONE_WINDOW`] — re-sent every [`PROBE_EVERY`], so the 1/s ACK
+    /// throttle cannot make a live session read as gone.
+    async fn gone(&mut self) -> std::io::Result<bool> {
+        Ok(!self.probe_within(GONE_WINDOW).await?)
     }
 
     /// Assert (within `deadline`) that the connection is gone: EOF on
@@ -125,7 +177,7 @@ impl Client {
         if self.is_udp() {
             // Allow a beat for the close cascade to settle, then probe.
             tokio::time::sleep(Duration::from_millis(100)).await;
-            if self.probe().await? {
+            if !self.gone().await? {
                 panic!("rUDP session still answers after the close");
             }
             return Ok(());
@@ -763,7 +815,7 @@ async fn violation_budget_close(kind: Kind) {
                 }
                 // rUDP has no EOF: once the close ERROR is out (or all
                 // the answers are in), a failed probe is the close.
-                if (close_reason.is_some() || answered >= 3) && !client.probe().await.unwrap() {
+                if (close_reason.is_some() || answered >= 3) && client.gone().await.unwrap() {
                     break;
                 }
                 continue;
@@ -1430,7 +1482,9 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
     // queue the room's snapshot batches take, so every snapshot behind
     // that HEARTBEAT_ACK was queued after it. (A's probe above already
     // took its ACK; the 1/s ACK throttle may skip a heartbeat, so it is
-    // re-sent until one is answered.)
+    // re-sent until one is answered — and only the fence's own number
+    // counts: a late ACK to one of the probe's heartbeats was queued
+    // before the validation began.)
     let mut fenced = false;
     let mut next_heartbeat = Instant::now();
     let mut snapshots_in_flight: Vec<u64> = Vec::new();
@@ -1455,7 +1509,11 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
             .await
             .unwrap()
         {
-            Recv::Frame((op, _)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => fenced = true,
+            Recv::Frame((op, payload)) if op == gsb_protocol::op::base::HEARTBEAT_ACK => {
+                if HeartbeatAck::decode(&payload[..]).expect("an ACK").tick == 1 {
+                    fenced = true;
+                }
+            }
             Recv::Frame((op, payload)) if fenced && op == gsb_demo::op::WORLD_SNAPSHOT => {
                 let m = gsb_demo::game::WorldSnapshot::decode(&payload[..]).unwrap();
                 snapshots_in_flight.push(m.sequence);
