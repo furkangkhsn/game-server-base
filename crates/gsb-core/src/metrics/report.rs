@@ -205,6 +205,12 @@ pub struct RegistryReport {
     /// the registry's final sample.
     pub joins_unread: u64,
     pub team_exports_unread: u64,
+    /// Joins a connection could not hand to the registry because its
+    /// mailbox was already closed — the registry had stopped (see
+    /// [`MetricsEvent::JoinUnsent`]), cumulative (F54). The closed twin
+    /// of [`Self::joins_unread`]: a join is one or the other, never
+    /// both. Counted by the collector from the connections' events.
+    pub joins_unsent: u64,
 }
 
 /// Network slice of a report (cumulative since startup).

@@ -180,7 +180,7 @@ fn the_logic_counters_survive_the_wire() {
     let mut sent = three_shards();
     sent.rooms[1].logic = LogicCounters::new();
     let frame = encode_report(&sent);
-    assert_eq!(&frame[..4], b"CNSG", "the magic, little-endian GSNC");
+    assert_eq!(&frame[..4], b"DNSG", "the magic, little-endian GSND");
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
         let names = |r: &RoomReport| -> Vec<(String, LogicFold, u64)> {
@@ -345,8 +345,9 @@ fn the_outbound_losses_survive_the_wire() {
 /// The registry section's control-plane losses (GSMP, B57; GSMU added
 /// `rooms_ended_uncounted`, B67; GSMW the team hubs' refused relays,
 /// B72; GSMY the joins a stopped room refused, B75; GSNC what the
-/// registry left unread at its stop, F53) cross the wire after its
-/// `closes`, and the net section still decodes after them.
+/// registry left unread at its stop, F53; GSND the joins its closed
+/// mailbox refused, F54) cross the wire after its `closes`, and the net
+/// section still decodes after them.
 #[test]
 fn the_control_plane_losses_survive_the_wire() {
     let mut sent = three_shards();
@@ -370,6 +371,7 @@ fn the_control_plane_losses_survive_the_wire() {
         joins_refused_closed: 17,
         joins_unread: 18,
         team_exports_unread: 19,
+        joins_unsent: 20,
     });
     sent.net.close_notices_dropped = 31;
     let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
@@ -386,9 +388,10 @@ fn the_control_plane_losses_survive_the_wire() {
             g.team_relays_dropped_closed,
             g.joins_refused_closed,
             g.joins_unread,
-            g.team_exports_unread
+            g.team_exports_unread,
+            g.joins_unsent
         ),
-        (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+        (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
     );
     assert_eq!(got.net.close_notices_dropped, 31);
 }

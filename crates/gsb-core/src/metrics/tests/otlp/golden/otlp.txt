@@ -40,6 +40,8 @@ gsb_registry_joins_unread sum t=2 mono=true unit="" n=1 | Joins (resume attempts
   [] 1000..2000 int 6
 gsb_registry_team_exports_unread sum t=2 mono=true unit="" n=1 | Team exports of a live sharded room still in the registry's mailbox behind its stop: the shard counted them queued, the team hub never relayed them, cumulative.
   [] 1000..2000 int 7
+gsb_registry_joins_unsent sum t=2 mono=true unit="" n=1 | Joins (resume attempts included) a connection could not hand to the registry because its mailbox was already closed (the registry had stopped): never queued, the client got an ERROR, cumulative.
+  [] 1000..2000 int 8
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.

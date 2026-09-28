@@ -10,6 +10,7 @@ use gsb_protocol::{FrameBody, ProtoError, base};
 use crate::conn::*;
 use crate::error::CoreError;
 use crate::id::RoomId;
+use crate::metrics::MetricsEvent;
 use crate::registry::{RegistryMsg, Seat};
 
 impl super::ConnectionActor {
@@ -67,6 +68,11 @@ impl super::ConnectionActor {
             .await
             .is_err()
         {
+            // The registry has stopped and closed its mailbox (F53): the
+            // join was never queued, so nothing behind the registry can
+            // count it — counted here, once (F54), stop-message idiom
+            // (the collector may be draining its last events).
+            crate::channel::post(&self.metrics, MetricsEvent::JoinUnsent);
             self.reply_err(ProtoError::Other("registry gone".into()))
                 .await;
             return;

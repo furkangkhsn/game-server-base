@@ -21,6 +21,8 @@
 //! - `samples.rs`: the counting itself (BACKLOG B59) — a sample dropped
 //!   on a full metrics channel loses none of its deltas: the next flush
 //!   carries them.
+//! - `stopped.rs`: what a registry that has already stopped refuses
+//!   (BACKLOG F54) — a join its closed mailbox refused is counted once.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,6 +49,8 @@ mod requests;
 mod rig;
 #[path = "conn_counts/samples.rs"]
 mod samples;
+#[path = "conn_counts/stopped.rs"]
+mod stopped;
 #[path = "conn_counts/unprocessed.rs"]
 mod unprocessed;
 

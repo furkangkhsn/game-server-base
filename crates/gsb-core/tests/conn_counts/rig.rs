@@ -159,6 +159,30 @@ impl Conn {
         drop(std::mem::replace(&mut self.out, dead));
     }
 
+    /// The registry has stopped: its mailbox's receiver drops, so every
+    /// later send to it is refused.
+    pub fn registry_gone(&mut self) {
+        let (_, dead) = channel::<RegistryMsg>(1);
+        drop(std::mem::replace(&mut self.registry, dead));
+    }
+
+    /// End the session from the client's side; every event the actor
+    /// sent that is not one of its own samples.
+    pub async fn close_events(mut self) -> Vec<MetricsEvent> {
+        self.tell(ConnIn::Closed {
+            reason: "test over".into(),
+        })
+        .await;
+        self.actor_done().await;
+        let mut events = Vec::new();
+        while let Some(ev) = self.take_metric() {
+            if !matches!(ev, MetricsEvent::Conn(_)) {
+                events.push(ev);
+            }
+        }
+        events
+    }
+
     /// End the session from the client's side and sum every sample the
     /// actor flushed.
     pub async fn close(self) -> ConnSample {

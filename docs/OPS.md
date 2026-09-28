@@ -758,6 +758,18 @@ max_detach_hold_secs = "off"
   Periyodik örneklerde ikisi de 0. Tablo göstergeleri (`rooms`, `conns`)
   son örnekte teardown'dan ÖNCEKİ değerlerdir (önceki örneklerle aynı
   anlam).
+- **Registry kapsamı: kapalı registry'nin reddettiği katılmalar (F54).**
+  Registry satırının sonunda (`team_exports_unread=`'den sonra)
+  `joins_unsent=` ve aile tablosunda (`REGISTRY`)
+  `gsb_registry_joins_unsent_total` (`counter`); loadgen telinde `GSND`
+  (registry bölümünde `team_exports_unread`'den sonra); `RESULT`'ta yok.
+  Registry `Shutdown`'da kutusunu kapatır (F53); ondan SONRA hâlâ yaşayan
+  bir bağlantının JOIN'i (anonim ya da resume denemesi) bağlantı
+  aktöründe reddedilir, istemci `ERROR` "registry gone" alır. Bağlantı
+  aktörü `MetricsEvent::JoinUnsent`'i `channel::post` ile gönderir,
+  toplayıcı registry diliminde sayar. **Anlam notu:** `joins_unread`'in
+  kapalı eşi — kutuya girmiş ama okunmamış katılma oradadır, bu sayaçta
+  değil; her katılma tam bir yerde.
 - `/rooms` çıktısı da insan-okunur düz metin (JSON yok kararıyla tutarlı);
   makine-okunurluk için ileride gerekirse ayrı karar
 - HTTP task'inin tek await'i accept `recv`; bağlantı başına kısa ömürlü

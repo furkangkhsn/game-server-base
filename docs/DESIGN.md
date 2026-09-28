@@ -2724,6 +2724,21 @@ kapatmak onları göndericide reddeder — sayılacak bir şey taşımıyorlar. 
 taşımıyor. (4) *Son örneği `try_send` ile göndermek* — dolu kanalda
 düşer; sayım kaybolurdu.
 
+**Kapalı registry'ye katılma (F54).** `Shutdown` kolu kutuyu kapattıktan
+sonra hâlâ yaşayan bir bağlantıya gelen JOIN'in `SpawnPlayer` gönderimi
+bağlantı aktöründe reddedilir (`conn/actor/room.rs`); istemci `ERROR`
+"registry gone" alır. Katılma hiç kuyruklanmadı — registry'nin arkasında
+onu görecek kimse yok. Artık reddi gören tek yer sayar: bağlantı aktörü
+`MetricsEvent::JoinUnsent` gönderir (durdurma-mesajı deyimi,
+`channel::post`), toplayıcı registry diliminde `joins_unsent` sayar
+(`gsb_registry_joins_unsent_total`). `joins_unread`'in kapalı eşi: bir
+katılma ya kutuda kalır ya kutu onu reddeder, ikisi birden değil — katılma
+hattının her durağı artık kaybını sayıyor (B57 `join_ops_dropped`, B75
+`joins_refused_closed`, B68 `joins_unprocessed`/`resumes_unprocessed`,
+F53 `joins_unread`, F54 `joins_unsent`). Registry dilimi, çünkü sebep
+registry'nin duruşu; bağlantının net örneği değil (F53'ün sayacıyla yan
+yana okunur). Kilit: `conn_counts::stopped`.
+
 **Panikleyen oda/shard (B67).** Ölüm bekçisi (oda/shard görevi başına bir
 görev, yalnız `JoinHandle`'ı bekler) registry'ye `RoomDied` bildirir;
 registry güncel enkarnasyonu biçer (üyelere `RoomGone`, `rooms_died`).
@@ -3243,6 +3258,7 @@ durdurulamaz.
 | registry | `team_relays_dropped_full`, `team_relays_dropped_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_team_relays_dropped_{full,closed}_total`, loadgen telinde GSMW) | sharded odanın takım hub'ı (CROSS-SHARD §8b.2) kaç import'u hedef shard'a kuyruklayamadı — kutusu DOLU (yetişemiyor; kaynağın sonraki export'u kümeyi yeniden taşır) mu, KAPALI (durmuş/ölmüş) mu? Önceden yalnız `team_hub_summary` log satırında, ikisi karışık. Registry ret olduğunda örneğini hemen gönderir (röle tablo değiştirmez). B72 |
 | registry | `joins_refused_closed` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_refused_closed_total`, loadgen telinde GSMY) | kaç katılmayı (resume denemeleri dahil) oda kutusu KAPALI olduğu için reddetti — oda/shard durmuş ya da ölmüş, op'u hiç görmedi, istemci `RoomGone` aldı? Dağıtıcının `MetricsEvent::JoinRefusedClosed`'ı (registry'yi atlar: bütün sunucunun duruşunda registry önce çıkar). Alınıp duruşta düşürülen katılma odanın `joins_unprocessed`/`resumes_unprocessed`'idir, bu değil. B75 |
 | registry | `joins_unread`, `team_exports_unread` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_{joins,team_exports}_unread_total`, loadgen telinde GSNC; yalnız son örnekte) | registry duruşta kutusunda neyi OKUMADAN bıraktı? `Shutdown`'ın arkasında kalan katılmalar (yanıtı düştü, istemci ERROR aldı) ve canlı sharded odanın takım export'ları (shard `team_exports`'ta saydı, hub rölelemedi). Diğer türler kayıp taşımıyor (§9 "Registry'nin kutusunda kalanlar"). F53 |
+| registry | `joins_unsent` (kümülatif; registry satırının sonunda, Prometheus'ta `gsb_registry_joins_unsent_total`, loadgen telinde GSND) | kaç katılmayı (resume denemeleri dahil) registry'nin KAPALI kutusu reddetti — registry durmuştu, katılma hiç kuyruklanmadı, istemci `ERROR` "registry gone" aldı? Bağlantı aktörünün `MetricsEvent::JoinUnsent`'i. `joins_unread`'in kapalı eşi; bir katılma ikisinden yalnız birinde. F54 |
 | conn | `bytes_in/out`, `frames_in/out` (delta), `actions_dropped` (net toplam, kümülatif; B55'ten beri yalnız oyun-bandı girdisi)
 | istemci başına bant; net toplam = room fan-out (baskın) + kontrol |
 | conn | `actions_dropped_top` (raporda: en çok düşürmüş 5 bağlantı, `c{n}:sayı`)

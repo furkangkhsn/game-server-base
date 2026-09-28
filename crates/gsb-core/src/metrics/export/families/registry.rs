@@ -20,7 +20,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 19] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 20] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -139,5 +139,12 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 19] = [
         Kind::Counter,
         "Team exports of a live sharded room still in the registry's mailbox behind its stop: the shard counted them queued, the team hub never relayed them, cumulative.",
         |r| r.team_exports_unread,
+    ),
+    // F54: the closed twin of `joins_unread`.
+    reg(
+        "gsb_registry_joins_unsent_total",
+        Kind::Counter,
+        "Joins (resume attempts included) a connection could not hand to the registry because its mailbox was already closed (the registry had stopped): never queued, the client got an ERROR, cumulative.",
+        |r| r.joins_unsent,
     ),
 ];

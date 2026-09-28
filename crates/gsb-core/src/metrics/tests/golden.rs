@@ -63,7 +63,9 @@
 //! `gsb_room_team_export_drops_{full,closed}_total`, in its place.
 //! F53's registry-scope `joins_unread=` / `team_exports_unread=` at the
 //! end of that line, with `gsb_registry_{joins,team_exports}_unread_total`
-//! after `gsb_registry_joins_refused_closed_total`.
+//! after `gsb_registry_joins_refused_closed_total`. F54's
+//! `joins_unsent=` after them, with `gsb_registry_joins_unsent_total`
+//! after `gsb_registry_team_exports_unread_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -106,6 +108,10 @@ pub(super) fn golden_report() -> MetricReport {
     // Two joins a stopped room refused (B75).
     acc.apply(MetricsEvent::JoinRefusedClosed);
     acc.apply(MetricsEvent::JoinRefusedClosed);
+    // Eight joins the stopped registry's closed mailbox refused (F54).
+    for _ in 0..8 {
+        acc.apply(MetricsEvent::JoinUnsent);
+    }
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

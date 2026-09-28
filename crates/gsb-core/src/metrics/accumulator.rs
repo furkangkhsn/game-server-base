@@ -111,6 +111,9 @@ pub struct MetricAccumulator {
     /// Joins refused by a closed room (B75; cumulative — reported in the
     /// registry slice).
     joins_refused_closed: u64,
+    /// Joins the stopped registry's closed mailbox refused (F54;
+    /// cumulative — reported in the registry slice).
+    joins_unsent: u64,
     /// The transport tasks' loss deltas, summed (B58).
     transport: TransportCounters,
 }
@@ -192,6 +195,9 @@ impl MetricAccumulator {
             }
             MetricsEvent::JoinRefusedClosed => {
                 self.joins_refused_closed = self.joins_refused_closed.saturating_add(1);
+            }
+            MetricsEvent::JoinUnsent => {
+                self.joins_unsent = self.joins_unsent.saturating_add(1);
             }
             MetricsEvent::Conn(c) => {
                 self.conn_bytes_in = self.conn_bytes_in.saturating_add(c.bytes_in);

@@ -7,7 +7,8 @@
 //! behind the `Shutdown`, which each sender had seen succeed. Now the
 //! `Shutdown` arm first CLOSES the inbox (a later send fails at its
 //! sender, which counts a refusal where it counts one: a shard's team
-//! export is `team_export_drops_closed`), then drains it with `try_recv`
+//! export is `team_export_drops_closed`, a connection's join
+//! `joins_unsent` — F54), then drains it with `try_recv`
 //! — finite once closed — and decides by kind, against the tables as
 //! they stood at the stop:
 //!

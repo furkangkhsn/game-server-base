@@ -513,6 +513,15 @@ pub enum MetricsEvent {
     /// has exited at the whole-server stop), stop-message idiom; the
     /// collector counts it ([`RegistryReport::joins_refused_closed`]).
     JoinRefusedClosed,
+    /// A connection's join (anonymous, or identified — a resume attempt)
+    /// that the REGISTRY's mailbox refused (F54): the registry had
+    /// stopped and closed its mailbox, so the join was never queued —
+    /// the client got `ERROR` "registry gone". The closed twin of
+    /// [`RegistrySample::joins_unread`] (a join queued behind the
+    /// registry's `Shutdown`). Sent by the connection actor, the one
+    /// place that sees the refusal, stop-message idiom; the collector
+    /// counts it ([`RegistryReport::joins_unsent`]).
+    JoinUnsent,
 }
 
 /// Why a match result did not reach the result sink (see
