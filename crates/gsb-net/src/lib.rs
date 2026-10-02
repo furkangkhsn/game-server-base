@@ -41,6 +41,7 @@ mod metrics;
 pub use metrics::{Flusher, TransportMetrics};
 pub mod pump;
 pub mod quic;
+pub mod seal;
 pub mod tcp;
 pub mod tls;
 pub mod transport;

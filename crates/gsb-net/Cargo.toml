@@ -26,6 +26,26 @@ quinn.workspace = true
 socket2.workspace = true
 sha1.workspace = true
 
+# rUDP record protection core (`seal`, docs/RUDP-SECURITY.md): Noise NK
+# via snow + ChaCha20-Poly1305 + HMAC-BLAKE2s, all RustCrypto, no C and
+# no `ring`. snow's DEFAULT features pull `ring` (its `std` feature says
+# "ring/std"), so default features stay off and only the four primitives
+# NK_25519_ChaChaPoly_BLAKE2s needs are named; `risky-raw-split` hands the
+# two split keys to our own record layer.
+snow = { version = "0.10", default-features = false, features = [
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-blake2",
+    "use-getrandom",
+    "risky-raw-split",
+] }
+# The same 0.10 line snow uses, so one copy of the cipher is compiled.
+chacha20poly1305 = { version = "0.10", default-features = false }
+blake2 = { version = "0.10", default-features = false }
+hmac = "0.12"
+subtle = { version = "2.6", default-features = false }
+zeroize = { version = "1", default-features = false }
+
 [dev-dependencies]
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):
 # no certificate is ever committed to the repository.
