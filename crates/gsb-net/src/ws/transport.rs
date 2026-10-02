@@ -45,6 +45,10 @@ pub struct WsTransport {
     /// The bound on upgrades in flight (BACKLOG B31): a connection over
     /// it is closed unupgraded and counted.
     pub max_pending_handshakes: usize,
+    /// The per-source cap on upgrades in flight (BACKLOG D11: one source
+    /// address — IPv4, IPv6 /64 — holds at most this many of the slots;
+    /// `None`, the default, or `0` = none).
+    pub max_handshakes_per_source: Option<usize>,
     /// Where the handshake intake and every connection's reader send
     /// their losses (B58; `None` = counted nowhere but the logs).
     pub metrics: crate::TransportMetrics,
@@ -59,6 +63,7 @@ impl Default for WsTransport {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         }
@@ -100,7 +105,11 @@ impl Transport for WsTransport {
             let listener = crate::listen::bind_tcp(addr, self.listen_backlog)?;
             debug!(%addr, backlog = self.listen_backlog, "WebSocket listener bound");
             let local_addr = listener.local_addr().ok();
-            let intake = Intake::new("WebSocket", self.max_pending_handshakes);
+            let intake = Intake::with_source_cap(
+                "WebSocket",
+                self.max_pending_handshakes,
+                self.max_handshakes_per_source,
+            );
             let (max_message_bytes, mapping) = (self.max_message_bytes, self.mapping);
             let metrics = self.metrics.clone();
             tokio::spawn(run_tcp_intake(

@@ -4,6 +4,9 @@
 //! cuts every handshake in flight.
 
 use std::future::pending;
+use std::io;
+use std::net::SocketAddr;
+use std::time::Duration;
 
 use futures::FutureExt;
 use tokio::sync::oneshot;

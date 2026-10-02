@@ -36,23 +36,30 @@
 //!   the handshakes that are no longer inside `accept`. Both are counted
 //!   (B74: `handshakes_cut_closed`, `handshakes_unaccepted_closed`), and
 //!   the intake task's last sample waits for them (`close::settle`).
+//! - **Per source (D11, opt-in).** The bound above is the door's; with a
+//!   per-source cap one source address (IPv4 address, IPv6 /64) holds at
+//!   most that many slots, so no single source can take the door's
+//!   whole bound. The table of held slots per source lives in the intake
+//!   task alone (`source`); a released slot reaches it through a queue
+//!   it drains before each decision. Unset (the default) = no table, no
+//!   queue traffic, the door as it was.
 //! - **No second source.** The accept loop still awaits one thing
 //!   (`accept`, which waits on the queue); the intake task awaits the raw
 //!   accept; each handshake task awaits exactly one future.
 
-use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use tokio::sync::Notify;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::transport::{Door, Endpoint};
 
 mod close;
+mod handshake;
+mod source;
+pub(crate) use source::{Admit, SourceKey, SourceTable};
 mod stats;
 pub use stats::HandshakeStats;
 mod tcp;
@@ -71,6 +78,12 @@ pub(crate) struct Intake {
     door: Door,
     max: usize,
     held: AtomicUsize,
+    /// The per-source cap (D11; `None` = no per-source limit).
+    per_source: Option<usize>,
+    /// Released slots' sources, for the intake task's table (`source`):
+    /// every held slot sends at most one, so it never outgrows the slots.
+    release_tx: Sender<SourceKey>,
+    release_rx: Receiver<SourceKey>,
     /// Set by the first refusal of a saturated spell (one warning per
     /// spell, not one per refused connection); cleared by the next slot.
     saturated: AtomicBool,
@@ -91,6 +104,10 @@ pub(crate) struct Intake {
     /// (finished handshakes still queued) — B74.
     cut: AtomicU64,
     unaccepted: AtomicU64,
+    /// Connections refused at the per-source cap (D11), and QUIC
+    /// connections asked to prove their address there (a Retry).
+    refused_per_source: AtomicU64,
+    retried_per_source: AtomicU64,
 }
 
 /// A finished handshake waiting for the accept loop, with its slot.
@@ -99,26 +116,51 @@ struct Ready {
     _slot: Slot,
 }
 
-/// One of the door's `max` handshake slots; released on drop.
-pub(crate) struct Slot(Arc<Intake>);
+/// One of the door's `max` handshake slots; released on drop — and, when
+/// the door has a per-source cap, given back to its source's count.
+pub(crate) struct Slot {
+    intake: Arc<Intake>,
+    source: Option<SourceKey>,
+}
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        if self.0.held.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.0.quiet.notify_one();
+        // The source first: the intake task reclaims it at its next
+        // decision. Never fails: the intake holds the receiver.
+        if let Some(key) = self.source.take() {
+            let _ = self.intake.release_tx.send(key);
+        }
+        if self.intake.held.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.intake.quiet.notify_one();
         }
     }
 }
 
 impl Intake {
     /// A door's intake with `max` slots (at least one).
+    #[cfg(test)]
     pub(crate) fn new(kind: &'static str, max: usize) -> Arc<Self> {
+        Self::with_source_cap(kind, max, None)
+    }
+
+    /// A door's intake with `max` slots (at least one), at most
+    /// `per_source` of them held by one source (D11; `None` or `0` = no
+    /// per-source cap).
+    pub(crate) fn with_source_cap(
+        kind: &'static str,
+        max: usize,
+        per_source: Option<usize>,
+    ) -> Arc<Self> {
         let (queue_tx, queue_rx) = crossbeam_channel::unbounded();
+        let (release_tx, release_rx) = crossbeam_channel::unbounded();
         Arc::new(Self {
             kind,
             door: Door::new(),
             max: max.max(1),
             held: AtomicUsize::new(0),
+            per_source: per_source.filter(|&n| n > 0),
+            release_tx,
+            release_rx,
             saturated: AtomicBool::new(false),
             queue_tx,
             queue_rx,
@@ -131,6 +173,8 @@ impl Intake {
             failed: AtomicU64::new(0),
             cut: AtomicU64::new(0),
             unaccepted: AtomicU64::new(0),
+            refused_per_source: AtomicU64::new(0),
+            retried_per_source: AtomicU64::new(0),
         })
     }
 
@@ -149,7 +193,10 @@ impl Intake {
             .is_ok();
         if taken {
             self.saturated.store(false, Ordering::Relaxed);
-            return Some(Slot(Arc::clone(self)));
+            return Some(Slot {
+                intake: Arc::clone(self),
+                source: None,
+            });
         }
         self.refused.fetch_add(1, Ordering::Relaxed);
         if !self.saturated.swap(true, Ordering::Relaxed) {
@@ -160,83 +207,6 @@ impl Intake {
             );
         }
         None
-    }
-
-    /// Run one connection's handshake in its own task: ONE awaited
-    /// future — the handshake under its deadline, under the door.
-    pub(crate) fn spawn<F>(
-        self: &Arc<Self>,
-        slot: Slot,
-        peer: SocketAddr,
-        deadline: Duration,
-        handshake: F,
-    ) where
-        F: Future<Output = io::Result<Endpoint>> + Send + 'static,
-    {
-        let intake = Arc::clone(self);
-        intake.live.fetch_add(1, Ordering::AcqRel);
-        tokio::spawn(async move {
-            let deadlined = async { Ok(tokio::time::timeout(deadline, handshake).await) };
-            // Each count is made once the slot has moved on (queued or
-            // released), so a reader of the counters never sees it early.
-            match intake.door.admit(deadlined).await {
-                Ok(Ok(Ok(endpoint))) => {
-                    debug!(door = intake.kind, %peer, "handshake completed");
-                    intake.hand_over(Ready {
-                        endpoint,
-                        _slot: slot,
-                    });
-                    intake.completed.fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(Ok(Err(e))) => {
-                    drop(slot);
-                    intake.failed.fetch_add(1, Ordering::Relaxed);
-                    warn!(door = intake.kind, %peer, error = %e, "handshake failed; closing");
-                }
-                Ok(Err(_)) => {
-                    drop(slot);
-                    intake.timed_out.fetch_add(1, Ordering::Relaxed);
-                    warn!(door = intake.kind, %peer, timeout = ?deadline, "handshake timed out; closing");
-                }
-                Err(_) => {
-                    drop(slot);
-                    intake.cut.fetch_add(1, Ordering::Relaxed);
-                    debug!(door = intake.kind, %peer, "door closed; handshake cut");
-                }
-            }
-            // Last: every count of this task is made (`close::settle`).
-            if intake.live.fetch_sub(1, Ordering::AcqRel) == 1 {
-                intake.quiet.notify_one();
-            }
-        });
-    }
-
-    /// Queue a finished endpoint for the accept loop. Never full (the
-    /// slots bound it); a close that raced the handshake drops it again.
-    fn hand_over(&self, ready: Ready) {
-        if self.queue_tx.try_send(ready).is_ok() {
-            self.ready.notify_one();
-        }
-        if self.door.is_closed() {
-            self.drain();
-        }
-    }
-
-    /// The next finished endpoint (`Listener::accept`), or the closed
-    /// error once the door is closed.
-    pub(crate) async fn next(self: Arc<Self>) -> io::Result<Endpoint> {
-        let queued = async {
-            loop {
-                if let Ok(Ready { endpoint, .. }) = self.queue_rx.try_recv() {
-                    return Ok(endpoint);
-                }
-                // `notify_one` stores a wake-up when nobody waits yet,
-                // so an endpoint queued between the check and this wait
-                // is not missed.
-                self.ready.notified().await;
-            }
-        };
-        self.door.admit(queued).await
     }
 }
 

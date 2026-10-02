@@ -239,6 +239,14 @@ transport_counters! {
     /// trip. By cause: every re-send today is a timer expiry (the band
     /// has no fast retransmit); another cause gets its own counter.
     udp_control_retransmits_timeout,
+    /// Handshake doors (WebSocket, TLS, QUIC; D11): connections refused
+    /// unhandshaken because their source address (IPv4, IPv6 /64) held
+    /// the door's per-source cap (`max_handshakes_per_source`).
+    handshakes_refused_per_source,
+    /// QUIC (D11): connections from a source not yet proven its own, at
+    /// the per-source cap, answered with a stateless Retry (prove the
+    /// address, then come back) instead of a slot.
+    handshakes_retried_per_source,
 }
 
 impl TransportCounters {

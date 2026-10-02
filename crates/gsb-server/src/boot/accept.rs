@@ -185,7 +185,9 @@ pub(super) async fn run_accept(
 /// the rUDP demux and writers, the WebSocket reader, the handshake
 /// intakes; B66 — every stream door's pumps, plain TCP's too).
 /// `cfg.listen_backlog`: every TCP-based door's accept backlog (B84;
-/// the UDP doors have no accept queue). `cfg.udp_{recv,send}_buffer_bytes`:
+/// the UDP doors have no accept queue). `cfg.max_handshakes_per_source`:
+/// every handshaking door's per-source cap (D11).
+/// `cfg.udp_{recv,send}_buffer_bytes`:
 /// every UDP-based door's socket buffers (B4).
 pub(super) async fn bind_listener(
     spec: &ListenerSpec,
@@ -195,6 +197,8 @@ pub(super) async fn bind_listener(
     handshake_bound: usize,
     metrics: gsb_net::TransportMetrics,
 ) -> Result<(Arc<dyn gsb_net::transport::Listener>, SocketAddr), ServerError> {
+    // Every handshaking door's per-source cap (D11; unset or 0 = none).
+    let per_source = cfg.max_handshakes_per_source.map(|n| n as usize);
     let transport: Arc<dyn Transport> = match spec {
         ListenerSpec::Tcp { .. } => Arc::new(TcpTransport {
             max_frame_bytes: cfg.max_frame_bytes,
@@ -209,6 +213,7 @@ pub(super) async fn bind_listener(
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
+                max_handshakes_per_source: per_source,
                 metrics,
                 listen_backlog: cfg.listen_backlog,
             },
@@ -235,6 +240,7 @@ pub(super) async fn bind_listener(
                 key_pem: key_pem.clone(),
                 max_frame_bytes: cfg.max_frame_bytes,
                 max_pending_handshakes: handshake_bound,
+                max_handshakes_per_source: per_source,
                 metrics,
                 buffers: udp_buffers(cfg),
             },
@@ -253,6 +259,7 @@ pub(super) async fn bind_listener(
             // harness's alone and is not reachable from configuration.
             mapping: WsMessageMapping::GameEnvelope,
             max_pending_handshakes: handshake_bound,
+            max_handshakes_per_source: per_source,
             metrics,
             listen_backlog: cfg.listen_backlog,
         }),

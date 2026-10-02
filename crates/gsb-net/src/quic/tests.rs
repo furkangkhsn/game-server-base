@@ -46,6 +46,26 @@ async fn handshake_only(
     server_name: &str,
     ca_pem: &[u8],
 ) -> io::Result<quinn::Connection> {
+    // The wildcard address matching the server's family (a v6-only
+    // socket cannot reach a v4 loopback target).
+    let local = SocketAddr::new(
+        if addr.is_ipv4() {
+            std::net::Ipv4Addr::UNSPECIFIED.into()
+        } else {
+            std::net::Ipv6Addr::UNSPECIFIED.into()
+        },
+        0,
+    );
+    handshake_from(local, addr, server_name, ca_pem).await
+}
+
+/// [`handshake_only`] from a client endpoint bound on `local`.
+async fn handshake_from(
+    local: SocketAddr,
+    addr: SocketAddr,
+    server_name: &str,
+    ca_pem: &[u8],
+) -> io::Result<quinn::Connection> {
     let mut roots = rustls::RootCertStore::empty();
     for der in rustls_pemfile::certs(&mut &ca_pem[..]) {
         let der = der.map_err(|e| {
@@ -72,16 +92,6 @@ async fn handshake_only(
     transport.max_idle_timeout(Some(idle_timeout()?));
     client_config.transport_config(Arc::new(transport));
 
-    // Bind the wildcard address matching the server's family (a v6-only
-    // socket cannot reach a v4 loopback target).
-    let local = SocketAddr::new(
-        if addr.is_ipv4() {
-            std::net::Ipv4Addr::UNSPECIFIED.into()
-        } else {
-            std::net::Ipv6Addr::UNSPECIFIED.into()
-        },
-        0,
-    );
     let mut endpoint = quinn::Endpoint::client(local)?;
     endpoint.set_default_client_config(client_config);
 
@@ -148,6 +158,7 @@ fn transport_for(pki: &TestPki) -> QuicTransport {
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             buffers: crate::listen::UdpBuffers::default(),
         },
@@ -228,4 +239,5 @@ async fn close_ends_the_parked_accept() {
 mod buffers;
 mod certs;
 mod off_accept;
+mod per_source;
 mod slow_reader;

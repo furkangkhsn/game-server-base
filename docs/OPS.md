@@ -257,6 +257,37 @@ udp_send_buffer_bytes = 1048576   # vars. yok = sistem varsayılanı
   (demux onu hiç görmez); ölçüm: DESIGN §6 "UDP kapılarının soket
   arabellekleri".
 
+**Sunucu düzeyi: kaynak başına el sıkışma sınırı
+`max_handshakes_per_source` (BACKLOG D11).** El sıkışan her kapının —
+WS, TLS, QUIC; düz anahtarlardan türeyen kapı ya da `[[listeners]]`'ın
+her girdisi — bir kaynak adrese (IPv4 adresi, IPv6 /64) verdiği en çok
+uçuştaki el sıkışma yuvası. Kapının kendi sınırı (`max_unauth_conns`,
+SECURITY §4.3) değişmez; bu ondan tek kaynağın alabileceği pay. Düz TCP
+(el sıkışma evresi yok) ve rUDP (durumsuz çerez) anahtarı görmez.
+
+```toml
+max_handshakes_per_source = 16   # vars. yok = sınır yok; 0 = yok
+```
+
+- **Varsayılan kapalı:** yazılmazsa (ya da `0`) kapılar bugünkü gibi.
+  Açık varsayılan olmaz: aynı NAT adresinin arkasındaki oyuncular onu
+  paylaşır, her test ve loadgen koşusu tek loopback adresinden bağlanır.
+- **Ne sayılır:** uçuştaki el sıkışma (ham accept'ten accept döngüsünün
+  uç noktayı almasına dek), bağlantı değil — biten el sıkışma sayıdan
+  düşer. Dürüst bir el sıkışma bir-iki gidiş-dönüş sürer.
+- **Sınır üstü:** WS/TLS'te soket el sıkışmasız kapanır; QUIC'te
+  kanıtlanmış adres `refuse`, kanıtlanmamış adres durumsuz Retry alır
+  (sahte kaynaklı Initial'larla kurbanın sayısını doldurmak kurbanı
+  reddettiremez — SECURITY §4.3.1 #5). Sayaçlar §3 "Taşıma kapsamı:
+  el sıkışan kapıların kaynak başına sınırı"; kaynak başına dönem
+  başına tek `warn` kaynağı adlandırır.
+- **Boyutlama:** aynı adresin arkasından aynı saniyede bağlanabilecek
+  oyuncu sayısı + pay: ev/küçük ofis 8–16, LAN partisi ya da büyük
+  CGNAT havuzunun arkasındaki bölge 32–64. `handshakes_refused_per_source`
+  dürüst oyunculara düşüyorsa (saldırı yokken artıyorsa) büyütülür.
+- **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` de `[[listeners]]`
+  girdisi de reddeder. Negatif değer ayrıştırma hatası.
+
 **Kapı girdisi: `[[listeners]]` bilinmeyen anahtarı reddeder (BACKLOG
 F61 — 2026-09-28).** Bir girdi tam dört anahtar alır: `transport`,
 `bind`, `tls_cert`, `tls_key`. Başka her anahtar — yazım hatası
@@ -853,6 +884,22 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   sebep kendi sayacını alır (B1'in tıkanıklık denetimi bu sayacı kayıp
   sinyali olarak okuyacak). İstemci tarafı karşılığı loadgen
   `retrans_out` (değişmedi).
+- **Taşıma kapsamı: el sıkışan kapıların kaynak başına sınırı (D11).**
+  Satırın ve tablonun sonuna iki `counter`; `RESULT`'ta
+  `transport_<ad>=` (her satırda). Loadgen teli: taşıma bölümü
+  `TRANSPORT_COUNT` uzunluğunda — yeni düzen, sihirli sayıyı birleştirme
+  atar. `handshakes_refused_per_source`
+  (`gsb_transport_handshakes_refused_per_source_total`) — kaynağı (IPv4
+  adresi, IPv6 /64) `max_handshakes_per_source`'u tutan bağlantılar, el
+  sıkışmasız kapatıldı (QUIC: `refuse`); kapının kendi sınırının reddi
+  `handshakes_refused`'ta kalır, ikisi karışmaz.
+  `handshakes_retried_per_source`
+  (`gsb_transport_handshakes_retried_per_source_total`) — yalnız QUIC:
+  adresi henüz kanıtlanmamış kaynak sınırdayken reddedilmez, durumsuz
+  bir Retry alır (yuva tutmaz); ret değil, ayrı sayaç (SECURITY §4.3.1
+  #5). Sınır yazılmamışsa ikisi de hep 0. Kapı başına dökümü
+  `Listener::handshake_stats()` (`refused_per_source`,
+  `retried_per_source`) ve kabul görevinin kapanış özeti verir.
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

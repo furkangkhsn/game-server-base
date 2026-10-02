@@ -100,6 +100,11 @@ pub struct QuicTransportConfig {
     /// The bound on handshakes in flight (BACKLOG B31; default
     /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
     pub max_pending_handshakes: usize,
+    /// The per-source cap on handshakes in flight (BACKLOG D11; `None`,
+    /// the default, or `0` = none). A source at the cap that has not
+    /// proven its address is asked to (a stateless Retry) rather than
+    /// refused — see `crate::transport::intake`'s `source`.
+    pub max_handshakes_per_source: Option<usize>,
     /// Where the handshake intake sends its refusals, timeouts and
     /// failures (B58; `None` = its stop log only).
     pub metrics: crate::TransportMetrics,

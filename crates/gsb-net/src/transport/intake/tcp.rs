@@ -1,5 +1,6 @@
 //! The intake task of a door over TCP (WebSocket, TLS): accept raw
-//! sockets, and give each a slot and a handshake task — or close it.
+//! sockets, and give each a slot and a handshake task — or close it (at
+//! the door's bound, or at its source's cap — D11).
 
 use std::io;
 use std::net::SocketAddr;
@@ -9,7 +10,7 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, warn};
 
-use crate::transport::intake::Intake;
+use crate::transport::intake::{Admit, Intake, SourceTable};
 use crate::transport::{Endpoint, is_listener_closed};
 
 /// The pause after a raw accept error (e.g. EMFILE), so a persistent one
@@ -32,12 +33,15 @@ pub(crate) async fn run_tcp_intake<H, F>(
     F: Future<Output = io::Result<Endpoint>> + Send + 'static,
 {
     let mut flusher = crate::metrics::Flusher::new(metrics);
+    let mut sources = SourceTable::new(&intake);
     loop {
         match intake.door().admit(listener.accept()).await {
-            Ok((stream, peer)) => match intake.try_slot() {
-                Some(slot) => intake.spawn(slot, peer, deadline, handshake(stream, peer)),
+            // A TCP peer's address is its own (the TCP handshake is done).
+            Ok((stream, peer)) => match intake.admit(&mut sources, peer.ip(), true) {
+                Admit::Slot(slot) => intake.spawn(slot, peer, deadline, handshake(stream, peer)),
                 // Refused: the socket closes as it drops, unhandshaken.
-                None => debug!(%peer, "handshake bound reached; connection refused"),
+                Admit::Refused => debug!(%peer, "handshake bound reached; connection refused"),
+                Admit::OverSource { .. } => intake.count_source_refusal(),
             },
             Err(e) if is_listener_closed(&e) => break,
             Err(e) => {

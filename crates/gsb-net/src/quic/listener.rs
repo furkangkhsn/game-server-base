@@ -24,7 +24,7 @@ use crate::transport::Endpoint;
 use crate::transport::HandshakeStats;
 use crate::transport::Listener;
 use crate::transport::Transport;
-use crate::transport::intake::{Intake, IntakeHandle};
+use crate::transport::intake::{Admit, Intake, IntakeHandle, SourceTable};
 use crate::transport::listener_closed;
 
 impl Transport for QuicTransport {
@@ -38,7 +38,11 @@ impl Transport for QuicTransport {
             let server_config = load_server_config(&self.config)?;
             let (endpoint, _) = bind_endpoint(server_config, addr, self.config.buffers)?;
             debug!(%addr, "QUIC listener bound (quinn over UDP)");
-            let intake = Intake::new("QUIC", self.config.max_pending_handshakes);
+            let intake = Intake::with_source_cap(
+                "QUIC",
+                self.config.max_pending_handshakes,
+                self.config.max_handshakes_per_source,
+            );
             tokio::spawn(run_intake(
                 Arc::clone(&intake),
                 endpoint.clone(),
@@ -124,6 +128,7 @@ async fn run_intake(
     metrics: crate::TransportMetrics,
 ) {
     let mut flusher = crate::metrics::Flusher::new(metrics.clone());
+    let mut sources = SourceTable::new(&intake);
     loop {
         // `None`: the endpoint is closed and will never accept again.
         let next = async { endpoint.accept().await.ok_or_else(listener_closed) };
@@ -131,13 +136,30 @@ async fn run_intake(
             break;
         };
         let peer = incoming.remote_address();
-        match intake.try_slot() {
-            Some(slot) => {
+        let proven = incoming.remote_address_validated();
+        match intake.admit(&mut sources, peer.ip(), proven) {
+            Admit::Slot(slot) => {
                 let handshake = handshake(incoming, peer, max_frame_bytes, metrics.clone());
                 intake.spawn(slot, peer, HANDSHAKE_TIMEOUT, handshake);
             }
-            None => {
+            Admit::Refused => {
                 debug!(%peer, "handshake bound reached; connection refused");
+                incoming.refuse();
+            }
+            // At its source's cap (D11): an unproven address is asked to
+            // prove itself (stateless, no slot) — a spoofer cannot, the
+            // real owner comes back proven and is counted apart.
+            // Each counted before its packet goes, so a client that sees
+            // it never finds it uncounted.
+            Admit::OverSource { unproven: true } if incoming.may_retry() => {
+                intake.count_source_retry();
+                if let Err(e) = incoming.retry() {
+                    // Unreachable (`may_retry` held): still, no slot.
+                    e.into_incoming().refuse();
+                }
+            }
+            Admit::OverSource { .. } => {
+                intake.count_source_refusal();
                 incoming.refuse();
             }
         }

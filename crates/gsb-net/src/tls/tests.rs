@@ -78,6 +78,7 @@ fn transport_for(pki: &TestPki) -> TlsTransport {
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
@@ -158,6 +159,7 @@ async fn missing_cert_file_fails_the_bind() {
             key_pem: "/nonexistent/gsb-tls/key.pem".into(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
@@ -187,6 +189,7 @@ async fn malformed_cert_file_fails_the_bind() {
             key_pem: pki.key_pem_path.clone(),
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             listen_backlog: crate::listen::DEFAULT_LISTEN_BACKLOG,
         },
@@ -254,3 +257,4 @@ async fn the_backlog_reaches_the_socket_builder() {
 }
 
 mod off_accept;
+mod per_source;

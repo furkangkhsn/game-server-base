@@ -369,11 +369,11 @@ aynı yapıdaydı; QUIC'te el sıkışmayı quinn'in sürücüsü yürütse de
 | 5 | Kabul görevi, her el sıkışma görevi ve bekleyen `accept` dinleyicinin `Door`'u (B16) altında: `close()` — ya da son tutamacın düşmesi — ham accept'i, uçuştaki her el sıkışmayı (soketi düşer) ve kuyrukta bekleyeni keser | `stop()` hâlâ hemen biter, `StopReport` ağaç içi kapılarda 0 abort; kapanmış kapı yarım bağlantı tutmaz |
 | 6 | **Sayaçlar:** `Listener::handshake_stats()` → `HandshakeStats { in_flight, completed, refused, timed_out, failed }` (el sıkışmayan kapılarda `None`); kabul görevi biterken özet `info` ("handshake intake stopped"); sınıra dayanan dönemin ilk reddi tek `warn` (dönem başına bir, ret başına değil); başarısız/süresi dolan her el sıkışma eskisi gibi `warn` | Dinleyiciler için metrik yolu yok (rUDP demux'ının sayaçları da kapanış özetiyle görünür); `handshake_stats` gömene ve testlere sayaçların kendisini verir. Ret başına uyarı, ret selinde log seli olurdu |
 
-**Kalan yüzey.** Sınır kapı başınadır, kaynak adres başına değil: tek
-bir kaynak bütün yuvaları (vars. 25 000 soket, her biri ≤ 10 sn) hâlâ
-tutabilir — fark, bunun artık TEK soket değil cap kadar soket
-gerektirmesi (unauthed cap'i sessiz oturumlarla doldurmanın bedeliyle
-aynı). Adres başına el sıkışma sınırı §6 NOT-DONE.
+**Kalan yüzey.** Sınır kapı başınadır: varsayılanda tek bir kaynak
+bütün yuvaları (vars. 25 000 soket, her biri ≤ 10 sn) hâlâ tutabilir —
+fark, bunun artık TEK soket değil cap kadar soket gerektirmesi (unauthed
+cap'i sessiz oturumlarla doldurmanın bedeliyle aynı). Kaynak adres
+başına sınır opt-in olarak var (§4.3.1, D11).
 
 Kilit: `gsb-net` `transport::intake::tests` (takılı el sıkışma biteni
 tutmaz; sınır reddeder ve sayar; biten el sıkışma alınana dek yuvasını
@@ -391,6 +391,49 @@ accept hatası değil, sayaç), `gsb-server/tests/handshake_door.rs`
 (sunucu arkasında: sessiz eşler varken TLS el sıkışması ve WS
 yükseltme + AUTH < 2 sn; `max_unauth_conns = 1` iki kapının da
 sınırı), `boot::start::pre_auth::tests` (sınırın türetimi).
+
+### 4.3.1 Kaynak adres başına el sıkışma sınırı (D11)
+
+§4.3'ün sınırı kapı başınadır; tek kaynak kapının bütün yuvalarını
+tutabilir. `max_handshakes_per_source` (OPS §2) bir kaynak adresin bir
+kapıda aynı anda tutabileceği el sıkışma yuvasını sınırlar — WS, TLS ve
+QUIC kapıları (düz anahtarlardan türeyen kapı ya da `[[listeners]]`'ın
+her girdisi). **Varsayılan: yazılmaz = sınır yok** — kapılar bugünkü
+gibi; varsayılan yüzey değişmedi.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Varsayılan kapalı** (`None`; `0` da kapalı — diğer cap'ler gibi) | Doğru sayı dağıtımın: aynı NAT adresinin arkasındaki oyuncular (LAN partisi, operatör NAT'ı — CGNAT) o adresi paylaşır; her test ve loadgen koşusu tek loopback adresinden bağlanır — varsayılan bir sınır onları kırardı |
+| 2 | **Kaynak = IPv4 adresi; IPv6'da /64 öneki.** IPv4'e eşlenmiş IPv6 adresi (`::ffff:a.b.c.d`, çift yığınlı soketin IPv4 istemcisi) IPv4 adresi sayılır | /64, bir ağın tek aboneye verdiği en küçük blok; içinde ana makine adresi istediği gibi seçer (SLAAC, gizlilik adresleri) — /128 başına sayım hiç sınır olmazdı. Eşlenmiş adresler hepsi `::/64`'te: eşlenmeseydi bütün IPv4 istemcileri tek kaynak olurdu |
+| 3 | **Sayılan: uçuştaki el sıkışma**, bağlantı değil. Yuva ham accept'ten accept döngüsünün uç noktayı almasına dek (§4.3 #3); el sıkışması biten bağlantı kaynağın sayısından düşer | Dürüst el sıkışma bir-iki gidiş-dönüş sürer; sınır yalnız eşzamanlı başlayanları kısar. Oturum sayısı ayrı sınırların işi (`max_connections`, `max_unauth_conns`) |
+| 4 | **Sınır üstü ucuz ret, kuyruk yok:** WS/TLS'te soket el sıkışmasız kapanır (TLS/WS işi yok); sayaç `handshakes_refused_per_source`. Kapının kendi sınırının reddi (`handshakes_refused`) ayrı sayaçta — her ret anlamının adıyla tek yerde. Kaynak başına dönem başına tek `warn` (kaynağı adlandırır), ret başına `debug` | §4.3 #3'ün aynısı; ret seli log seli olmaz |
+| 5 | **QUIC: kanıtlanmamış adres ayrı sayılır, sınırda Retry alır.** quinn'in `Incoming`'i adresini Retry jetonuyla kanıtlayana dek sahte kaynaklı olabilir; saldırgan kurbanın adresiyle sahte Initial'lar yollayıp kurbanın sayısını doldurabilirdi. Kanıtlanmamış kaynak aynı adresin kanıtlanmışından ayrı sayılır; sınırdaki kanıtlanmamış bağlantı reddedilmez, durumsuz Retry alır (yuva yok; `handshakes_retried_per_source`); gerçek sahibi yanıtlayıp kanıtlanmış döner, sahte kaynak dönemez. Kanıtlanmış ve hâlâ sınırda olan reddedilir (`refuse`) | Hedefli ret saldırısı kapanır; gerçek bir kaynak QUIC'te sınırı en çok iki kez tutar (bir kanıtsız, bir kanıtlı). Retry yalnız sınır yazılıp aşılınca: dürüst istemci için bir gidiş-dönüş, tel değişmez |
+| 6 | **Kilitsiz:** tablo kapının kabul görevinde (yuvaları alan tek görev). Yuva başka yerde bırakılır (el sıkışma görevi, accept döngüsü, kapanışın boşaltması): `Drop`'u kaynağı kabul görevinin kuyruğuna yollar, görev her karardan önce boşaltır | B31'in yuvaları atomik; kaynak tablosu tek sahipli görev-yerel durum (`gsb_net::transport::intake` `source`) |
+| 7 | **Sınırlı bellek:** tablo girdisi yalnız kaynak yuva tuttukça yaşar (son yuvayla gider); her yuva kapının sınırından biri — tabloda en çok kapı sınırı kadar girdi, bırakma kuyruğunda en çok o kadar anahtar. Sahte kaynaklı QUIC seli de tabloyu bu sınırın ötesine büyütemez | TCP kaynağı üç yollu el sıkışmadan sonra sahte olamaz; QUIC'inki olabilir — ama her girdi bir yuva |
+| 8 | Düz TCP ve rUDP kapsam dışı | Düz TCP'nin el sıkışma evresi yok (bağlantı hemen pre-auth oturum; o evrenin kaynak başına sınırı registry'nin işi — BACKLOG). rUDP el sıkışması durumsuz çerez, yuva tutmaz; kaynak başına oturum sınırı rUDP sertleştirme turunun işi (BACKLOG) |
+
+**Boyutlama.** Sınır, aynı adresin arkasından aynı gidiş-dönüş
+penceresinde (pratikte aynı saniyede) bağlanan oyuncu sayısına payla
+konur: ev ve küçük ofis için 8–16, LAN partisi ya da büyük CGNAT
+havuzunun arkasındaki bölge için 32–64. Kötü niyetli tek kaynak en çok
+bu kadar yuvayı (her biri ≤ 10 sn) tutar; kapının sınırı B'yi tüketmek
+için B/sınır kadar adres (IPv6'da /64 öneki) gerekir. Dürüst bir
+oyuncunun reddi `handshakes_refused_per_source`'ta görünür; ret saniyede
+birkaçı aşıyorsa sınır büyütülür.
+
+Kilit: `gsb-net` `transport::intake::source::tests` (kaynak tanımı:
+IPv4, /64, eşlenmiş adres, kanıtsız ayrı; sınır yalnız kendi kaynağını
+reddeder ve sayar; kanıtsız ayrı sayılır; bırakılan, alınan, süresi
+dolan, başarısız yuva kaynağına döner; tablo kapı sınırını aşmaz ve
+son yuvayla boşalır; sınırsız varsayılan), `tls::tests::per_source`
+(gerçek kapı: sınırdaki kaynağın bağlantısı hemen kapanır ve sayılır,
+başka kaynak — 127.0.0.2 — hizmet alır, bırakılan yuva kaynağa döner,
+ret toplayıcıya ulaşır), `quic::tests::per_source` (kanıtsız sınırda
+Retry, kanıtlanmış ikinci bağlanır, üçüncü reddedilir, başka kaynak
+etkilenmez), `gsb-server/tests/handshakes_per_source.rs` (varsayılan
+yok, ayrıştırma, `[rooms.<id>]` ve `[[listeners]]` reddeder; sunucu
+arkasında TLS ve WS kapısında ret, başka kaynaktan TLS ve WS + AUTH,
+retler rapora ulaşır).
 
 ### 4.4 Dinleme kuyruğu: accept'ten önceki çekirdek sınırı (B84)
 
@@ -492,8 +535,8 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 - Ops HTTP'de eşzamanlı bağlantı tavanı ve yanıt yazmaya süre sınırı
   (başlık okuması B47'den beri sınırlı — OPS §3); localhost sözleşmesi
 - rUDP crypto — deneysel statü
-- Kaynak adres başına el sıkışma sınırı (B31'in sınırı kapı başına —
-  §4.3 "Kalan yüzey")
+- Kaynak adres başına sınırın kapsamadığı evreler (§4.3.1 #8): düz TCP
+  kapısının pre-auth evresi (registry) ve rUDP kapısı (sertleştirme turu)
 - Post-auth girdi hacmi için bağlantıya atıflı ilk-beş listesi ve kaynak
   adres başına sınır (§3.4 "Kalan yüzey"; hız sınırının kendisi opt-in
   olarak var)

@@ -63,6 +63,7 @@ async fn missing_cert_file_fails_the_bind() {
             key_pem: "/nonexistent/gsb-quic/key.pem".into(),
             max_frame_bytes: crate::tcp::DEFAULT_MAX_FRAME_BYTES,
             max_pending_handshakes: crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES,
+            max_handshakes_per_source: None,
             metrics: None,
             buffers: crate::listen::UdpBuffers::default(),
         },

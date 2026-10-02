@@ -101,6 +101,19 @@ transport = "tcp"
 # and a [[listeners]] entry refuse it.
 #listen_backlog = 128
 
+# Per-source handshake cap of every handshaking door: the "ws", "tls"
+# and "quic" doors (scalar or [[listeners]]). One source address (an
+# IPv4 address, an IPv6 /64) holds at most this many of a door's
+# handshakes in flight; its next connection is closed unhandshaken (QUIC:
+# refused, or asked to prove an unproven address with a Retry) and
+# counted. It counts handshakes in flight (an honest one lasts a round
+# trip or two), not connections. Unset (the default) or 0: no cap — the
+# doors as they were. Size it to the players behind one address (a NAT,
+# a LAN party) who may connect within the same second, with headroom:
+# 8-16 for homes, 32-64 behind a large carrier-grade NAT. Plain "tcp"
+# and "udp" doors ignore it. Server-wide only.
+#max_handshakes_per_source = 16
+
 # Kernel buffers of every UDP-based listening socket: the "udp" (rUDP)
 # and "quic" doors (scalar or [[listeners]]). ONE socket carries every
 # session of a UDP door, so its receive buffer (SO_RCVBUF) is the only

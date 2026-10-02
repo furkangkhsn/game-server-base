@@ -63,6 +63,10 @@ pub struct TlsTransportConfig {
     /// The bound on handshakes in flight (BACKLOG B31; default
     /// [`crate::transport::DEFAULT_MAX_PENDING_HANDSHAKES`]).
     pub max_pending_handshakes: usize,
+    /// The per-source cap on handshakes in flight (BACKLOG D11: one
+    /// source address — IPv4, IPv6 /64 — holds at most this many of the
+    /// slots; `None`, the default, or `0` = none).
+    pub max_handshakes_per_source: Option<usize>,
     /// Where the handshake intake sends its refusals, timeouts and
     /// failures (B58; `None` = its stop log only).
     pub metrics: crate::TransportMetrics,
@@ -184,7 +188,11 @@ impl Transport for TlsTransport {
                 "TLS listener bound (rustls over TCP)"
             );
             let local_addr = listener.local_addr().ok();
-            let intake = Intake::new("TLS", self.config.max_pending_handshakes);
+            let intake = Intake::with_source_cap(
+                "TLS",
+                self.config.max_pending_handshakes,
+                self.config.max_handshakes_per_source,
+            );
             let acceptor = TlsAcceptor::from(Arc::new(server_config));
             let max_frame_bytes = self.config.max_frame_bytes;
             tokio::spawn(run_tcp_intake(

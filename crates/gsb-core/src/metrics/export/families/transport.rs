@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 44] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 46] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -243,6 +243,17 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 44] 
         "gsb_transport_udp_control_retransmits_timeout_total",
         "Control-band (reliable) frames the rUDP writers re-sent because their retransmit timer expired before the ACK came (a lost frame, a lost ACK, or a timer shorter than the path's round trip; the band has no fast retransmit), cumulative.",
         |t| t.udp_control_retransmits_timeout,
+    ),
+    // D11: the handshake doors' per-source cap.
+    tr(
+        "gsb_transport_handshakes_refused_per_source_total",
+        "Connections a handshaking door (WebSocket, TLS, QUIC) refused unhandshaken because their source address (IPv4, IPv6 /64) held its per-source cap, cumulative.",
+        |t| t.handshakes_refused_per_source,
+    ),
+    tr(
+        "gsb_transport_handshakes_retried_per_source_total",
+        "QUIC connections from a source not yet proven its own, at the per-source cap, answered with a stateless Retry instead of a slot, cumulative.",
+        |t| t.handshakes_retried_per_source,
     ),
 ];
 

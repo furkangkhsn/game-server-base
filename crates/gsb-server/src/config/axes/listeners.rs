@@ -444,6 +444,26 @@ pub struct Config {
     /// door: like the other socket-wide knobs it is not a
     /// `[[listeners]]` key.
     pub listen_backlog: u32,
+    /// **Per-source handshake cap** of every handshaking door (BACKLOG
+    /// D11): the WebSocket, TLS and QUIC doors, whichever grammar
+    /// declared them. One source address — an IPv4 address, an IPv6 /64
+    /// — holds at most this many of a door's handshake slots (the door's
+    /// own bound is the pre-auth cap, `max_unauth_conns`); a connection
+    /// over it is closed unhandshaken (QUIC: refused, or asked to prove
+    /// an unproven address with a Retry) and counted
+    /// (`handshakes_refused_per_source`, `handshakes_retried_per_source`).
+    /// Plain TCP has no handshake stage and ignores it, as do rUDP doors
+    /// (their cookie handshake holds no slot).
+    ///
+    /// `None` (the default) or `0` = no per-source cap: the doors as they
+    /// were. Off by default because the right number is the deployment's:
+    /// players behind one NAT address (a LAN party, a carrier-grade NAT)
+    /// share it, and every client of a test or load run connects from one
+    /// loopback address. It counts handshakes IN FLIGHT (an honest one
+    /// lasts a round trip or two), not connections — size it to the
+    /// players behind one address who may connect within the same
+    /// second, with headroom (docs/SECURITY.md §4.3).
+    pub max_handshakes_per_source: Option<u32>,
     /// **Receive buffer** (`SO_RCVBUF`, bytes) of every UDP-based door's
     /// socket (BACKLOG B4): the rUDP doors and the QUIC doors, whichever
     /// grammar declared them. ONE socket carries every session of a UDP
@@ -594,6 +614,7 @@ impl Default for Config {
             tls_key: String::new(),
             listeners: None,
             listen_backlog: gsb_net::listen::DEFAULT_LISTEN_BACKLOG,
+            max_handshakes_per_source: None,
             udp_recv_buffer_bytes: None,
             udp_send_buffer_bytes: None,
             aoi_cell_size: 20.0,

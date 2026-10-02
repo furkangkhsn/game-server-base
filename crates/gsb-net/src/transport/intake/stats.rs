@@ -31,6 +31,13 @@ pub struct HandshakeStats {
     /// Finished handshakes still queued for the accept loop when the door
     /// closed, dropped (B74; also in `completed`).
     pub unaccepted_closed: u64,
+    /// Connections refused (closed unhandshaken; QUIC: `refuse`) because
+    /// their source held the per-source cap (D11).
+    pub refused_per_source: u64,
+    /// QUIC connections from an unproven source at the per-source cap,
+    /// asked to prove their address (a stateless Retry, no slot) instead
+    /// of being refused (D11).
+    pub retried_per_source: u64,
 }
 
 impl Intake {
@@ -44,6 +51,8 @@ impl Intake {
             failed: self.failed.load(Ordering::Relaxed),
             cut_closed: self.cut.load(Ordering::Relaxed),
             unaccepted_closed: self.unaccepted.load(Ordering::Relaxed),
+            refused_per_source: self.refused_per_source.load(Ordering::Relaxed),
+            retried_per_source: self.retried_per_source.load(Ordering::Relaxed),
         }
     }
 
@@ -64,6 +73,8 @@ impl Intake {
             handshakes_failed: s.failed,
             handshakes_cut_closed: s.cut_closed,
             handshakes_unaccepted_closed: s.unaccepted_closed,
+            handshakes_refused_per_source: s.refused_per_source,
+            handshakes_retried_per_source: s.retried_per_source,
             ..Default::default()
         };
         flusher.flush(totals, last);
@@ -81,6 +92,8 @@ impl Intake {
             failed = s.failed,
             cut_closed = s.cut_closed,
             unaccepted_closed = s.unaccepted_closed,
+            refused_per_source = s.refused_per_source,
+            retried_per_source = s.retried_per_source,
             "handshake intake stopped"
         );
     }
