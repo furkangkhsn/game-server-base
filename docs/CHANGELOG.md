@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B103 faz 1 — yol sinyali çekirdekte ve kit'te (`core/b103-path-signal`)
+
+Kullanıcı kararları (2026-10-02): (a) `PathState` gsb-core'da, taşımadan
+bağımsız; (b) asıl API bayt bütçesi, tam durum da okunur; (c) `ConnIn`
+varyantı, yalnız değişince, en-yenisi-kazanır; (d) `udp_congestion`
+varsayılanı `"off"` kalır.
+
+- `gsb_core::path::PathState` (evre, `Paced`'te hız, talep, kayıp, tur,
+  kuyruk; evre dışı her alan `Option`). Taşıma `ConnIn::Path`'i yalnız
+  haber olduğunda (evre değişti / hız ≥ %10) `try_send` eder; bağlantı
+  aktörü onu üyenin kendi action kanalında iç işaretçi olarak
+  (`op::base::MEMBER_PATH = 15`, telde yok; istemciden gelen 15 sert ihlal)
+  odaya taşır, en-yenisi-kazanır (dolu kanal → borçlu, sonraki mesajda
+  yeniden; katılım sıfırlar). Oda/shard READ işaretçiyi `PathTable`'a
+  ayırır (idle'a, ingest'e, okunmamış sayaçlarına girmez); shard geçişi
+  durumu taşır (`PlayerMigration::path`). Oyun `TickCtx::budget(member)` /
+  `TickCtx::path(member)` okur.
+- Çekirdek kapısı `GameLogic::ship_snapshot` (varsayılan gönderir) + oda
+  sayacı `snapshots_withheld` (`gsb_room_snapshots_withheld_total`).
+- Kit: `gsb_kit::budget::SnapshotBudget` — açık/PVS/düz sharded odada
+  `with_snapshot_budget` ile opt-in kare hızı inceltmesi (sığan her tick,
+  sığmayan kredi yetince, 16'da en az bir; bütçe üstü
+  `snapshot_budget_forced`); kodlama bir kez kalır. Kayıt düzeyinde
+  öncelikli inceltme yapılmadı (B117, kullanıcı kararı).
+- QUIC quinn istatistiklerinden doldurur (tur, pencereli taban, kayıp,
+  talep, `congestion_events` ile evre, `Paced`'te pencere/tur). TCP/TLS/WS
+  doldurmaz (B118). rUDP yayımı faz 2'de.
+- Loadgen teli **GSNO** (odanın `snapshots`'ından sonra
+  `snapshots_withheld`).
+
+Testler 1846 → 1891 (`otlp` ile 1864 → 1909): +45; ~65 mutasyon
+yakalandı. Ebeveyn doğrulaması: tam kapılarda `rustdoc` üç çözülmemiş
+`SnapshotBudget` bağlantısıyla düştü — ebeveyn düzeltti; bütçeyi iki
+katına çıkarmak yedi testi düşürdü.
+
 ## B3 — rUDP bağlantı göçü (`net/b3-migration`)
 
 Kullanıcı kuralı (2026-10-02): adresi değişen istemci (NAT yeniden

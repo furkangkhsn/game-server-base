@@ -98,7 +98,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B100 Writer pump'ın write-stall penceresi (`write_stall_secs`, vars. 10 sn) aynı duvar saati riskini taşır — takılmadan uyanınca soket henüz bayt kabul etmeden zamanlayıcı ateşlenebilir; F72 kuralı uygulanabilir | yazıcı tarafının bir turu | DESIGN §3 "Geç ateşlenen son tarih" |
 | B101 QUIC'in protokol `max_idle_timeout`'u (quinn, `IDLE_TIMEOUT` 30 sn) takılmaya karşı korunmuyor; quinn'in zamanlayıcısı motorun elinde değil (bilgi; pump penceresi kendi kuralıyla) | bir dağıtım buna takılırsa | DESIGN §3 "Geç ateşlenen son tarih" |
 | B102 Demux'ın duruş log satırı `idle_windows_restarted_late`'i taşımıyor (sayaç tek seferlik örnekle toplayıcıya gider; satıra eklemek `demux.rs`'e alan ister) | rUDP hattının bir turu | OPS §3 (F72) |
-| B103 `PathState`'i oyuna taşı: conn aktörü → oda → `TickCtx` (`ConnIn::Path`, `RoomMsg::MemberPath`, en-yenisi-kazanır birleştirme) + kit `SnapshotBudget` yapı taşı. Kararlar: (a) `PathState` taşımadan bağımsız ve gsb-core'da mı, (b) oda tam durumu mu yoksa yalnız bayt bütçesini mi görür, (c) `ConnIn` varyantı mı ayrı kanal mı, (d) varsayılan ne zaman `"pace"` — **kullanıcı kararı** | rUDP tur 4 | DESIGN §6 "Tıkanıklık tepkisi" |
+| B103 Yol sinyali oyuna — **faz 1 tamam** (`gsb_core::path`, `ConnIn::Path` + üyenin action kanalı `MEMBER_PATH = 15`, `TickCtx::{budget, path}`, `ship_snapshot` kapısı, kit `SnapshotBudget`, QUIC doldurma; kararlar (a)–(d) 2026-10-02); kalan faz 2: rUDP yazıcısının `ConnIn::Path` yayımı + uçtan uca test | rUDP tur 4 | DESIGN §6 "Tıkanıklık tepkisi", KIT-ARCHITECTURE §10 "B103" |
 | B104 `udp_congestion` varsayılanını `"pace"`'e çevirme — önce titreşimli gerçek yolda (netem/Wi-Fi/hücresel) sahte gecikme sinyali ölçümü ve B103 | ölçüm + karar | DESIGN §6 "Tıkanıklık tepkisi" |
 | B105 Sunucunun kendi çıkışı darboğazken (100k) oturumlar arası adalet ölçülmedi; soket genelinde DRR elendi | düşerse | DESIGN §6 "Tıkanıklık tepkisi" karar 6 |
 | B106 Hızlıyken REL yeniden gönderiminin kovadan düşülmesi testsiz (mutasyon sağ) | düşerse | `udp::writer::reliable` |
@@ -111,6 +111,8 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B114 Loadgen istemcisinde göç senaryosu (rebind/NAT yeniden bağlanması fırtınası) ve RESULT'ta istemci göç sayaçları (`rebinds`, `path_challenges_answered`) | ölçüm gerektiğinde | DESIGN §6 "Bağlantı göçü" |
 | B115 Yeni yolun MTU'su doğrulanmıyor (challenge dolgusuz; datagram bütçesi kapı genelinde tek) — PMTU dolgulu challenge, 3× bütçeyle | küçük MTU'lu mobil yolda parça kaybı ölçülürse | DESIGN §6 "Bağlantı göçü" |
 | B116 Bekleyen doğrulamanın zaman aşımı tembel (oturumun sonraki datagram'ında ya da sonunda sayılır) — sessiz oturumda sayaç gecikir | gerekirse | `udp::demux::migrate` |
+| B117 Kayıt düzeyinde öncelikli inceltme: (grup, bütçe kademesi) başına bir kez kodlanan indirgenmiş full (A29 tarzı sıralama) + çekirdek kapısına "kareyi değiştir" cevabı; delta odaları için üye başı inceltme — bugün yalnız kare hızı inceltilir — **kullanıcı kararı** | bir oyun dar yolda önemli kayıtları her tick isterse | KIT-ARCHITECTURE §10 "B103" |
+| B118 Akış kapılarına (TCP/TLS/WS) çekirdeğin `TCP_INFO`'su yol kaynağı olarak (bugün `PathState` yok) | akış kapısında bütçe isteyen oyun | DESIGN §6 "Tıkanıklık tepkisi" |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
