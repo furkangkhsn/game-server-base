@@ -19,6 +19,7 @@ use crate::room::Action;
 
 mod auth;
 mod close;
+mod end;
 mod flush;
 mod frame;
 mod input;
