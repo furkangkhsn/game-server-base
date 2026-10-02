@@ -13,10 +13,12 @@ use crate::channel::Mailbox;
 use crate::conn::{ConnIn, ServerClose};
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
+use crate::source::Source;
 
 use crate::registry::actor::Registry;
 
 mod ops;
+mod source;
 #[cfg(test)]
 mod tests;
 
@@ -30,7 +32,12 @@ where
     // require them.
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    pub(super) async fn on_conn_opened(&mut self, conn: ConnectionId, inbox: Mailbox<ConnIn>) {
+    pub(super) async fn on_conn_opened(
+        &mut self,
+        conn: ConnectionId,
+        inbox: Mailbox<ConnIn>,
+        source: Option<Source>,
+    ) {
         // Connection cap, enforced at birth: the count lives
         // here (the connection table is the only place that
         // sees both opens and closes), so the guardrail is
@@ -70,8 +77,16 @@ where
         // O(connections) on the open path only — a
         // control-plane-rate event, like the member-count
         // queries above.
+        //
+        // One source's share of that pool (D12, `source`) first: a
+        // source over its own cap is refused under its own reason
+        // even when the pool is full too.
+        let unauthed = self.unauthed(source);
+        if self.refused_per_source(conn, &inbox, source, &unauthed) {
+            return;
+        }
         if let Some(cap) = self.max_unauth_conns
-            && self.conns.values().filter(|i| !i.authed).count() as u64 >= cap
+            && unauthed.total >= cap
         {
             warn!(
                 %conn,
@@ -90,6 +105,8 @@ where
         }
         let info = self.conns.entry(conn).or_default();
         info.inbox = Some(inbox);
+        info.source = source;
+        self.source_cap_warned = false;
         self.reg_opens += 1;
         self.emit_metrics();
     }

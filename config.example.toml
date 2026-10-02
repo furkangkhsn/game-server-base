@@ -114,6 +114,21 @@ transport = "tcp"
 # and "udp" doors ignore it. Server-wide only.
 #max_handshakes_per_source = 16
 
+# Per-source cap on UNAUTHENTICATED connections, every door (D12). One
+# source address (the rule above: an IPv4 address, an IPv6 /64) holds at
+# most this many of the server's unauthenticated connections (the pool
+# max_unauth_conns caps); its next one is refused at birth (ERROR 9, no
+# registry entry; WebSocket close 1013) and counted
+# (gsb_net_server_closes_total{reason="unauth_source_cap"}). The plain
+# "tcp" door has no handshake stage, so this is its only per-source cap;
+# the other doors' sessions count once their handshake ended. A session
+# leaves the count when it authenticates or closes (a failed AUTH keeps
+# it). Unset (the default) or 0: no cap — for the reasons above (NAT, one
+# loopback address in tests and load runs). Size it like the handshake
+# cap, with room for an AUTH round trip (a ticket validator's). Server-
+# wide only.
+#max_unauth_conns_per_source = 16
+
 # Kernel buffers of every UDP-based listening socket: the "udp" (rUDP)
 # and "quic" doors (scalar or [[listeners]]). ONE socket carries every
 # session of a UDP door, so its receive buffer (SO_RCVBUF) is the only

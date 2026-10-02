@@ -1,13 +1,10 @@
 //! The per-source handshake cap (BACKLOG D11): one source address holds
 //! at most `per_source` of its door's handshake slots.
 //!
-//! - **The source.** An IPv4 address; an IPv6 address by its /64 — the
-//!   smallest block a network hands one subscriber, inside which a host
-//!   picks addresses at will (SLAAC, privacy addresses), so a per-/128
-//!   count would be no cap at all. An IPv4-mapped IPv6 address (a
-//!   dual-stack socket's IPv4 client) is its IPv4 address: every one of
-//!   them shares the /64 `::`, which would make all IPv4 clients one
-//!   source.
+//! - **The source.** An IPv4 address; an IPv6 address by its /64; an
+//!   IPv4-mapped IPv6 address as its IPv4 address — the one rule
+//!   [`gsb_core::source::Source`] holds, which the registry's per-source
+//!   cap on unauthenticated connections (D12) counts by too.
 //! - **Proven and unproven.** A TCP door's peer has completed the TCP
 //!   handshake: its address is its own. A QUIC `Incoming` may come from a
 //!   spoofed address until it proves it (a Retry token): an attacker
@@ -32,11 +29,12 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crossbeam_channel::Receiver;
+use gsb_core::source::Source;
 use tracing::{debug, warn};
 
 use crate::transport::intake::{Intake, Slot};
@@ -44,8 +42,8 @@ use crate::transport::intake::{Intake, Slot};
 /// A source the per-source cap counts (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct SourceKey {
-    /// The IPv4 address, or the IPv6 /64 (host bits zero).
-    net: IpAddr,
+    /// The IPv4 address, or the IPv6 /64.
+    net: Source,
     /// A QUIC peer that has not proven its address yet.
     unproven: bool,
 }
@@ -53,15 +51,8 @@ pub(crate) struct SourceKey {
 impl SourceKey {
     /// The source of a peer at `ip`; `proven`: its address is its own.
     pub(crate) fn of(ip: IpAddr, proven: bool) -> Self {
-        let net = match ip {
-            IpAddr::V4(_) => ip,
-            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-                Some(v4) => IpAddr::V4(v4),
-                None => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & (!0u128 << 64))),
-            },
-        };
         Self {
-            net,
+            net: Source::of(ip),
             unproven: !proven,
         }
     }
@@ -69,10 +60,7 @@ impl SourceKey {
 
 impl fmt::Display for SourceKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.net {
-            IpAddr::V4(v4) => write!(f, "{v4}")?,
-            IpAddr::V6(v6) => write!(f, "{v6}/64")?,
-        }
+        write!(f, "{}", self.net)?;
         if self.unproven {
             f.write_str(" (unproven)")?;
         }

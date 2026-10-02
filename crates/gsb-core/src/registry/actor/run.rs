@@ -77,7 +77,11 @@ where
                         None => debug!(%conn, "despawn of unaffiliated connection"),
                     }
                 }
-                RegistryMsg::ConnOpened { conn, inbox } => self.on_conn_opened(conn, inbox).await,
+                RegistryMsg::ConnOpened {
+                    conn,
+                    inbox,
+                    source,
+                } => self.on_conn_opened(conn, inbox, source).await,
                 RegistryMsg::Authed { conn } => {
                     // The connection finished AUTH: it leaves the
                     // unauthenticated pool (§4), freeing cap space for a

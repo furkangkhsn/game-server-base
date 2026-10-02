@@ -218,6 +218,7 @@ pub async fn table_size(
     tx.send(RegistryMsg::ConnOpened {
         conn: ConnectionId(999),
         inbox,
+        source: None,
     })
     .await
     .expect("registry alive");

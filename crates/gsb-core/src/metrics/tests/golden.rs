@@ -84,6 +84,10 @@
 //! `gsb_registry_{leave_verdicts,detach_despawns}_lost_total` after
 //! `gsb_registry_joins_unsent_total` and the labeled
 //! `gsb_registry_close_verdicts_lost_total{reason}` after them.
+//! D12's server-close reason at the end of both reason lists
+//! (`unauth_source_cap`: the net line's `server_close_<reason>=` and
+//! `gsb_net_server_closes_total{reason}`, the registry line's
+//! `close_verdict_lost_<reason>=` and its labeled family).
 
 use super::*;
 use crate::conn::ServerClose;

@@ -84,7 +84,7 @@ fn registry(
         let mut registered = Vec::new();
         while let Some(msg) = inbox.recv().await {
             let event = match msg {
-                RegistryMsg::ConnOpened { conn, inbox } => {
+                RegistryMsg::ConnOpened { conn, inbox, .. } => {
                     registered.push(inbox);
                     Seen::Opened(conn)
                 }

@@ -210,6 +210,7 @@ async fn open_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {
     tx.send(RegistryMsg::ConnOpened {
         conn,
         inbox: inbox_tx,
+        source: None,
     })
     .await
     .expect("registry gone");
@@ -299,6 +300,7 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
     tx.send(RegistryMsg::ConnOpened {
         conn: c1,
         inbox: inbox_tx,
+        source: None,
     })
     .await
     .unwrap();
@@ -449,6 +451,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
     tx.send(RegistryMsg::ConnOpened {
         conn: ConnectionId(1),
         inbox: inbox1_tx,
+        source: None,
     })
     .await
     .expect("registry gone");
@@ -460,6 +463,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
     tx.send(RegistryMsg::ConnOpened {
         conn: ConnectionId(2),
         inbox: inbox2_tx,
+        source: None,
     })
     .await
     .expect("registry gone");

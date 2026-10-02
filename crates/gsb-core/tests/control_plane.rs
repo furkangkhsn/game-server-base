@@ -178,6 +178,7 @@ async fn open_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {
     tx.send(RegistryMsg::ConnOpened {
         conn,
         inbox: inbox_tx,
+        source: None,
     })
     .await
     .expect("registry gone");

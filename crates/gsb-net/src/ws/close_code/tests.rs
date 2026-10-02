@@ -9,7 +9,7 @@ use super::*;
 fn expected(verdict: ServerClose) -> u16 {
     match verdict {
         ServerClose::RoomGone | ServerClose::OutboundDead => 1001,
-        ServerClose::ConnCap | ServerClose::UnauthCap => 1013,
+        ServerClose::ConnCap | ServerClose::UnauthCap | ServerClose::UnauthSourceCap => 1013,
         ServerClose::IdleTimeout
         | ServerClose::WriteStall
         | ServerClose::RelDead

@@ -121,7 +121,11 @@ async fn populate_at(rig: &mut Rig, tick_hz: f64) {
         let conn = ConnectionId(c);
         let (inbox, inbox_rx) = mpsc::channel::<ConnIn>(16);
         rig._inboxes.push(inbox_rx);
-        let msg = RegistryMsg::ConnOpened { conn, inbox };
+        let msg = RegistryMsg::ConnOpened {
+            conn,
+            inbox,
+            source: None,
+        };
         rig.tx.send(msg).await.expect("registry gone");
         let (out, _out_rx) = mpsc::channel::<FrameBatch>(64);
         let (reply, rx) = oneshot::channel::<Result<Seat, _>>();

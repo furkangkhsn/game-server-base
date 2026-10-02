@@ -15,6 +15,7 @@ use gsb_core::conn::ConnectionActor;
 use gsb_core::id::ConnectionId;
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::RegistryMsg;
+use gsb_core::source::Source;
 use gsb_net::quic::{QuicTransport, QuicTransportConfig};
 use gsb_net::tcp::TcpTransport;
 use gsb_net::tls::{TlsTransport, TlsTransportConfig};
@@ -127,7 +128,12 @@ pub(super) async fn run_accept(
 
         // The peer address (for the connection actor's violation-close
         // signal — see `gsb_core::conn`); a transport that does not
-        // expose one reports an unspecified address.
+        // expose one reports an unspecified address. Its source is what
+        // the registry's per-source unauthenticated cap counts by (D12):
+        // every door's address is the peer's own by now (a completed TCP
+        // or QUIC handshake, an echoed rUDP cookie); no address, no
+        // per-source count.
+        let source = endpoint.peer().map(|p| Source::of(p.ip()));
         let peer = endpoint
             .peer()
             .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
@@ -157,6 +163,7 @@ pub(super) async fn run_accept(
             .send(RegistryMsg::ConnOpened {
                 conn,
                 inbox: in_tx.clone(),
+                source,
             })
             .await;
 

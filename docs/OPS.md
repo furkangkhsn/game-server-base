@@ -288,6 +288,39 @@ max_handshakes_per_source = 16   # vars. yok = sınır yok; 0 = yok
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` de `[[listeners]]`
   girdisi de reddeder. Negatif değer ayrıştırma hatası.
 
+**Sunucu düzeyi: kaynak başına unauthed bağlantı sınırı
+`max_unauth_conns_per_source` (BACKLOG D12).** Bir kaynak adresin
+(D11'in kuralı: IPv4 adresi, IPv6 /64, eşlenmiş adres IPv4'ü) sunucunun
+unauthed havuzundan (`max_unauth_conns`, SECURITY §4) aynı anda
+tutabileceği en çok bağlantı — hangi kapıdan gelirse gelsin. Düz TCP'nin
+el sıkışma evresi yok, ilk bayttan unauthed oturum: kaynak başına tek
+sınırı bu. Diğer kapıların oturumları el sıkışmaları bitince sayılır
+(yuva, oturum kaydedilmeden önce bırakılır — aynı bağlantı iki sınırda
+aynı anda sayılmaz). SECURITY §4.3.2.
+
+```toml
+max_unauth_conns_per_source = 16   # vars. yok = sınır yok; 0 = yok
+```
+
+- **Varsayılan kapalı:** `max_handshakes_per_source`'un gerekçesiyle
+  (NAT, tek loopback adresi).
+- **Ne sayılır:** registry'nin bağlantı tablosunda hâlâ unauthed olan,
+  aynı kaynaktan satırlar. AUTH başarısı ya da kapanış yeri geri verir;
+  başarısız AUTH vermez (oturum hâlâ unauthed — ERROR 10/13'le açık
+  kalır).
+- **Sınır üstü:** doğumda ret, havuzun kendi reddi gibi — `ERROR 9`
+  (`source at its per-source unauthenticated capacity`), registry
+  satırı yok; WS'te kapanış kodu 1013. Sayaç: `server_closes`'ın kendi
+  etiketi `unauth_source_cap` (§3), havuzun `unauth_cap`'inden ayrı.
+  Kaynak sınırı havuzdan önce bakılır: hem kaynağı hem havuzu dolu
+  doğum kaynağın etiketiyle sayılır. Doymuş dönemin ilk reddi tek `warn`
+  (kaynağı adlandırır), sonrakiler `debug`.
+- **Boyutlama:** el sıkışma sınırı gibi (aynı adresin arkasından aynı
+  anda bağlanabilecek oyuncu + pay), ama bir AUTH gidiş-dönüşü (ticket
+  doğrulayıcısınınki dahil) boyunca tutulduğu için ondan küçük olmamalı.
+- **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` de `[[listeners]]`
+  girdisi de reddeder. Negatif değer ayrıştırma hatası.
+
 **Kapı girdisi: `[[listeners]]` bilinmeyen anahtarı reddeder (BACKLOG
 F61 — 2026-09-28).** Bir girdi tam dört anahtar alır: `transport`,
 `bind`, `tls_cert`, `tls_key`. Başka her anahtar — yazım hatası
@@ -585,6 +618,19 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   (her sebep için bir anahtar kuralı). Hiç atmayan oyunda hep 0. İstemci
   aynı kapanışı `ERROR 9` + `kicked: <gerekçe>` olarak okur; gerekçe
   oyunundur (≤ 256 bayt).
+- **Sunucu kapanışları: `unauth_source_cap` (D12).** `server_closes`
+  ailesine `kicked`'dan sonra SONA eklenen etiket: kaynağı
+  `max_unauth_conns_per_source`'u tutarken doğan, doğumda reddedilen
+  bağlantılar (havuzun `unauth_cap`'inden ayrı). Log satırında
+  `server_close_unauth_source_cap=`, Prometheus'ta
+  `gsb_net_server_closes_total{reason="unauth_source_cap"}`, OTLP'de
+  `gsb_net_server_closes` serisinde `reason=unauth_source_cap` noktası
+  (seri sayısı 14); registry'nin kayıp hükümlerinde de (F56)
+  `close_verdict_lost_unauth_source_cap=` /
+  `gsb_registry_close_verdicts_lost_total{reason="unauth_source_cap"}`.
+  Loadgen metrik telinin `server_closes` dizisi ve kayıp hüküm dizisi
+  birer slot büyür (yeni düzen — sihirli sayı birleştirmede atanır);
+  RESULT'ta `server_close_unauth_source_cap=`. Sınır yazılmadıkça hep 0.
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
   `gsb-metric scope=net` satırında `violations=`'dan hemen sonra

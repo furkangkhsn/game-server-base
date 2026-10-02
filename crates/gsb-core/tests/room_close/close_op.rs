@@ -48,9 +48,13 @@ async fn join(tx: &Mailbox<RegistryMsg>, conn: ConnectionId, outs: &mut Vec<Rece
 
 async fn open(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) -> mpsc::Receiver<ConnIn> {
     let (inbox, rx) = channel::<ConnIn>(64);
-    tx.send(RegistryMsg::ConnOpened { conn, inbox })
-        .await
-        .expect("registry alive");
+    tx.send(RegistryMsg::ConnOpened {
+        conn,
+        inbox,
+        source: None,
+    })
+    .await
+    .expect("registry alive");
     rx
 }
 

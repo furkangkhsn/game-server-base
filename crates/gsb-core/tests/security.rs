@@ -726,6 +726,7 @@ async fn open_conn(tx: &mpsc::Sender<RegistryMsg>, conn: ConnectionId) -> mpsc::
     tx.send(RegistryMsg::ConnOpened {
         conn,
         inbox: inbox_tx,
+        source: None,
     })
     .await
     .expect("registry gone");

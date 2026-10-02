@@ -60,6 +60,7 @@ impl Client {
         reg.send(RegistryMsg::ConnOpened {
             conn: ConnectionId(conn),
             inbox: inbox.clone(),
+            source: None,
         })
         .await
         .expect("registry alive");

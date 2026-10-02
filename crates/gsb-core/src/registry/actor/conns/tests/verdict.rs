@@ -25,7 +25,7 @@ async fn a_gone_dispatcher_s_detach_carries_the_verdict() {
     reg.on_create_room(config, reply).await;
     created.await.expect("reply").expect("created");
     let (inbox, _inbox) = channel(8);
-    reg.on_conn_opened(conn, inbox).await;
+    reg.on_conn_opened(conn, inbox, None).await;
     let (out, _out) = channel(64);
     let (reply, seated) = oneshot::channel();
     reg.on_spawn_player(conn, room, out, String::new(), reply)

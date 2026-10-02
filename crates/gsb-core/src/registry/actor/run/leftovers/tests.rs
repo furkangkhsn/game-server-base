@@ -123,6 +123,7 @@ async fn what_waits_behind_the_shutdown_is_counted_by_kind() {
         RegistryMsg::ConnOpened {
             conn: ConnectionId(9),
             inbox: late,
+            source: None,
         },
     );
     let c1 = ConnectionId(1);

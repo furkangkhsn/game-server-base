@@ -83,7 +83,7 @@ async fn a_close_verdict_is_queued_ahead_of_the_stop() {
 async fn a_cap_refusal_and_a_room_gone_are_queued_in_place() {
     let (mut reg, _tx, mut member) = registry(Some(1));
     let (late, mut refused) = channel::<ConnIn>(8);
-    reg.on_conn_opened(ConnectionId(4), late).await;
+    reg.on_conn_opened(ConnectionId(4), late, None).await;
     assert!(matches!(
         refused.try_recv(),
         Ok(ConnIn::ServerClosed {

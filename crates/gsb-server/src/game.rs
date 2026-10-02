@@ -109,6 +109,8 @@ pub struct RegistryParts {
     pub(crate) metrics: mpsc::Sender<MetricsEvent>,
     pub(crate) max_connections: Option<u64>,
     pub(crate) max_unauth_conns: Option<u64>,
+    /// One source's unauthenticated connections (D12; `None` = no cap).
+    pub(crate) max_unauth_per_source: Option<u64>,
     pub(crate) result_sink: Option<Mailbox<MatchResult>>,
     /// The rooms' drop barrier token (the server keeps the waiter).
     pub(crate) rooms_hold: Hold,
@@ -149,6 +151,7 @@ impl RegistryParts {
                 self.result_sink,
             )
             .with_rooms_hold(self.rooms_hold)
+            .with_unauth_per_source(self.max_unauth_per_source)
             .run(),
         );
         RegistryTask {

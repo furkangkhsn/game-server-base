@@ -38,7 +38,7 @@ fn registry() -> (Reg, mpsc::Receiver<MetricsEvent>) {
 /// A connection opens: the registry flushes a sample.
 async fn open(reg: &mut Reg, n: u64) {
     let (inbox, _conn) = channel::<ConnIn>(1);
-    reg.on_conn_opened(ConnectionId(n), inbox).await;
+    reg.on_conn_opened(ConnectionId(n), inbox, None).await;
 }
 
 /// The next event on the channel: the registry's sample.

@@ -25,6 +25,7 @@
 //! | `idle_input`, `kicked` | 1008 | the room's / the game's policy ended the membership and the session |
 //! | `superseded` | 1008 | the "latest session wins" policy — a client must NOT reconnect blindly (it would take the newer session over in turn) |
 //! | `conn_cap`, `unauth_cap` | 1013 Try Again Later | the server is at capacity: the session did nothing wrong, a later attempt may succeed |
+//! | `unauth_source_cap` | 1013 | the session's source holds its share of unauthenticated sessions (D12): one of them authenticating or leaving frees a place |
 //!
 //! 1011 (Internal Error) is not used: no verdict means "the server
 //! failed" — a room that died under the session is `room_gone`, which
@@ -62,7 +63,9 @@ pub(super) fn close_code(end: Option<SessionEnd>) -> u16 {
         | ServerClose::Superseded
         | ServerClose::IdleInput
         | ServerClose::Kicked => CLOSE_POLICY_VIOLATION,
-        ServerClose::ConnCap | ServerClose::UnauthCap => CLOSE_TRY_AGAIN_LATER,
+        ServerClose::ConnCap | ServerClose::UnauthCap | ServerClose::UnauthSourceCap => {
+            CLOSE_TRY_AGAIN_LATER
+        }
     }
 }
 

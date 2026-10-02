@@ -464,6 +464,29 @@ pub struct Config {
     /// players behind one address who may connect within the same
     /// second, with headroom (docs/SECURITY.md §4.3).
     pub max_handshakes_per_source: Option<u32>,
+    /// **Per-source cap on unauthenticated connections** (BACKLOG D12):
+    /// one source address — an IPv4 address, an IPv6 /64, the
+    /// [`Self::max_handshakes_per_source`] rule — holds at most this many
+    /// of the server's unauthenticated connections (the pool
+    /// [`Self::max_unauth_conns`] caps), whichever door they came
+    /// through. Plain TCP has no handshake stage: its peers are
+    /// unauthenticated from the first byte, and without this one address
+    /// could fill the whole pool. The other doors' sessions join the pool
+    /// once their handshake ends, so they count too — after the
+    /// handshake, never twice at once (the handshake slot is given back
+    /// before the session is registered). A connection over it is refused
+    /// at birth like the pool's own refusals (`ERROR` code 9, no registry
+    /// entry; WebSocket close 1013) and counted
+    /// (`server_closes{reason="unauth_source_cap"}`). A session leaves the
+    /// count when it authenticates or closes; a failed AUTH keeps it
+    /// (the session is still unauthenticated).
+    ///
+    /// `None` (the default) or `0` = no per-source cap. Off by default for
+    /// [`Self::max_handshakes_per_source`]'s reasons (NAT, one loopback
+    /// address in tests and load runs). A sibling of that key, not the
+    /// same one: it counts sessions that may wait a whole AUTH round trip
+    /// (a ticket validator's), not handshakes in flight, on every door.
+    pub max_unauth_conns_per_source: Option<u32>,
     /// **Receive buffer** (`SO_RCVBUF`, bytes) of every UDP-based door's
     /// socket (BACKLOG B4): the rUDP doors and the QUIC doors, whichever
     /// grammar declared them. ONE socket carries every session of a UDP
@@ -648,6 +671,7 @@ impl Default for Config {
             listeners: None,
             listen_backlog: gsb_net::listen::DEFAULT_LISTEN_BACKLOG,
             max_handshakes_per_source: None,
+            max_unauth_conns_per_source: None,
             udp_recv_buffer_bytes: None,
             udp_send_buffer_bytes: None,
             aoi_cell_size: 20.0,

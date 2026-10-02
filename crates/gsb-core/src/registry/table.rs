@@ -178,6 +178,11 @@ pub(crate) struct ConnInfo {
     /// parked/resumed session never consumes unauthenticated capacity —
     /// the flag just stays as the session carried it.
     pub(crate) authed: bool,
+    /// The connection's source ([`RegistryMsg::ConnOpened`]'s), which
+    /// the per-source unauthenticated cap counts by while `authed` is
+    /// false (BACKLOG D12). `None`: no peer address, or a row the open
+    /// never made (a park).
+    pub(crate) source: Option<crate::source::Source>,
     /// The transport died and the entity MAY be parked room-side: the
     /// affiliation is kept (slot held, §4) with this mark, which is set
     /// speculatively — before the room's policy has answered. Released by

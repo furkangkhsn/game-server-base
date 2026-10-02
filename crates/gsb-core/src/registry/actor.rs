@@ -109,6 +109,13 @@ pub struct Registry<W, G, St, Sp> {
     /// lives at the composition root — this actor takes the resolved cap.
     /// `None` = no unauth cap (explicitly disabled, or derived-off).
     max_unauth_conns: Option<u64>,
+    /// Cap on one SOURCE's simultaneously unauthenticated connections
+    /// (BACKLOG D12; see `conns`): counted where `max_unauth_conns` is,
+    /// over the same rows. `None` = no per-source cap (the default).
+    max_unauth_per_source: Option<u64>,
+    /// Set by the first per-source refusal of a spell (one warning, the
+    /// rest `debug`); cleared by the next connection recorded.
+    source_cap_warned: bool,
     /// The match-result sink (the control plane's result seam, see
     /// [`crate::room::RoomLogic::match_result`]): a bounded mailbox the
     /// composition root reads from (its reference adapter). Cloned to
@@ -194,6 +201,8 @@ where
             metrics,
             max_connections,
             max_unauth_conns,
+            max_unauth_per_source: None,
+            source_cap_warned: false,
             result_sink,
             retired: HashMap::new(),
             retired_order: VecDeque::new(),

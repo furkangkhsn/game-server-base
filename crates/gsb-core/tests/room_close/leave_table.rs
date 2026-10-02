@@ -21,6 +21,7 @@ pub(super) async fn open(tx: &Mailbox<RegistryMsg>, conn: u64) -> mpsc::Receiver
     tx.send(RegistryMsg::ConnOpened {
         conn: ConnectionId(conn),
         inbox,
+        source: None,
     })
     .await
     .expect("registry alive");

@@ -186,6 +186,7 @@ async fn start_inner(
         metrics: metrics_tx.clone(),
         max_connections: cfg.max_connections,
         max_unauth_conns: unauth_cap_of(&cfg),
+        max_unauth_per_source: cfg.max_unauth_conns_per_source.map(u64::from),
         result_sink: Some(result_tx.clone()),
         rooms_hold,
         services: Vec::new(),

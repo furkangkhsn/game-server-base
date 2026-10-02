@@ -20,6 +20,8 @@
 //!   defines the hook, the platform implements the validator).
 //! - [`rpc`]: the correlated-request (RPC) pattern — the common
 //!   deferred-completion machinery the room and the connection share.
+//! - [`source`]: what a per-source limit counts (an IPv4 address, an
+//!   IPv6 /64), shared by the doors and the registry.
 //!
 //! Design invariants (enforced by `gsb-lint` in every crate):
 //! - actors only ever `await` a single channel receive — no
@@ -38,6 +40,7 @@ pub mod room;
 pub mod rpc;
 pub mod service;
 pub mod shard;
+pub mod source;
 pub mod ticker;
 
 pub use auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};

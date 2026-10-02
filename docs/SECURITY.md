@@ -209,6 +209,7 @@ sebebiyle sayılır: `gsb_net_server_closes_total{reason=…}` (DESIGN §12).
 | `preauth_budget` | §3.3 pre-auth kare bütçesi |
 | `stream_rejected` | taşıma seviyesi red: `max_frame_bytes`, çözülemeyen kare, WS protokol ihlali, bozuk TLS kaydı (önceden istemci kapanışı gibi görünüyordu). İstemciye artık en-iyi-çaba, beklemesiz ERROR 9 `stream rejected: …` gider; WS'te kapının kendi kapanış çerçevesi bildirimdir, bozuk TLS kaydında oturum ölü olduğundan bildirim inmez (DESIGN §5.6) |
 | `conn_cap` / `unauth_cap` | `max_connections` / §4 unauthed cap'i, doğumda red |
+| `unauth_source_cap` | §4.3.2 kaynak başına unauthed sınırı (`max_unauth_conns_per_source`, D12), doğumda red |
 | `superseded` | aynı kimliğin yeni oturumu eskisini kapattı |
 | `room_gone` | oda oturumun altında yok edildi / öldü |
 | `outbound_dead` | giden kanal kapalı bulundu ve kayıtlı hüküm yok (çoğunlukla yazma hatasıyla gitmiş bir peer'ın kuyruğu; bekleyen bir stall hükmü ya da peer kapanışı mailbox'tan okunup ona atfedilir — stall hükmü dolu mailbox'ta da oradadır, §3.5 karar 4) |
@@ -426,7 +427,7 @@ gibi; varsayılan yüzey değişmedi.
 | 5 | **QUIC: kanıtlanmamış adres ayrı sayılır, sınırda Retry alır.** quinn'in `Incoming`'i adresini Retry jetonuyla kanıtlayana dek sahte kaynaklı olabilir; saldırgan kurbanın adresiyle sahte Initial'lar yollayıp kurbanın sayısını doldurabilirdi. Kanıtlanmamış kaynak aynı adresin kanıtlanmışından ayrı sayılır; sınırdaki kanıtlanmamış bağlantı reddedilmez, durumsuz Retry alır (yuva yok; `handshakes_retried_per_source`); gerçek sahibi yanıtlayıp kanıtlanmış döner, sahte kaynak dönemez. Kanıtlanmış ve hâlâ sınırda olan reddedilir (`refuse`) | Hedefli ret saldırısı kapanır; gerçek bir kaynak QUIC'te sınırı en çok iki kez tutar (bir kanıtsız, bir kanıtlı). Retry yalnız sınır yazılıp aşılınca: dürüst istemci için bir gidiş-dönüş, tel değişmez |
 | 6 | **Kilitsiz:** tablo kapının kabul görevinde (yuvaları alan tek görev). Yuva başka yerde bırakılır (el sıkışma görevi, accept döngüsü, kapanışın boşaltması): `Drop`'u kaynağı kabul görevinin kuyruğuna yollar, görev her karardan önce boşaltır | B31'in yuvaları atomik; kaynak tablosu tek sahipli görev-yerel durum (`gsb_net::transport::intake` `source`) |
 | 7 | **Sınırlı bellek:** tablo girdisi yalnız kaynak yuva tuttukça yaşar (son yuvayla gider); her yuva kapının sınırından biri — tabloda en çok kapı sınırı kadar girdi, bırakma kuyruğunda en çok o kadar anahtar. Sahte kaynaklı QUIC seli de tabloyu bu sınırın ötesine büyütemez | TCP kaynağı üç yollu el sıkışmadan sonra sahte olamaz; QUIC'inki olabilir — ama her girdi bir yuva |
-| 8 | Düz TCP ve rUDP kapsam dışı | Düz TCP'nin el sıkışma evresi yok (bağlantı hemen pre-auth oturum; o evrenin kaynak başına sınırı registry'nin işi — BACKLOG). rUDP el sıkışması durumsuz çerez, yuva tutmaz; kaynak başına oturum sınırı rUDP sertleştirme turunun işi (BACKLOG) |
+| 8 | Düz TCP ve rUDP kapsam dışı | Düz TCP'nin el sıkışma evresi yok (bağlantı hemen pre-auth oturum); o evrenin kaynak başına sınırı registry'de — §4.3.2 (D12). rUDP el sıkışması durumsuz çerez, yuva tutmaz; registry'ye kaydedilmiş rUDP oturumları §4.3.2'nin sınırına girer, demux'ın kayıttan önceki oturum tablosunun kaynak başına sınırı rUDP sertleştirme turunun işi (BACKLOG B89) |
 
 **Boyutlama.** Sınır, aynı adresin arkasından aynı gidiş-dönüş
 penceresinde (pratikte aynı saniyede) bağlanan oyuncu sayısına payla
@@ -450,6 +451,42 @@ etkilenmez), `gsb-server/tests/handshakes_per_source.rs` (varsayılan
 yok, ayrıştırma, `[rooms.<id>]` ve `[[listeners]]` reddeder; sunucu
 arkasında TLS ve WS kapısında ret, başka kaynaktan TLS ve WS + AUTH,
 retler rapora ulaşır).
+
+### 4.3.2 Kaynak adres başına unauthed bağlantı sınırı (D12)
+
+Düz TCP kapısının el sıkışma evresi yok: eş ilk bayttan unauthed
+oturumdur ve §4.3.1'in sınırı onu hiç görmez — tek adres §4'ün bütün
+unauthed havuzunu (vars. 25 000) doldurup başka her kaynağı
+reddettirebiliyordu. Diğer kapıların oturumları da el sıkışmaları bitince
+aynı havuza girer ve el sıkışmayı bitirmek ucuzdur.
+`max_unauth_conns_per_source` (OPS §2) bir kaynağın havuzdan aynı anda
+tutabileceği bağlantıyı sınırlar. **Varsayılan: yazılmaz = sınır yok.**
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Sınır registry'de, havuzun sayıldığı yerde; her kapının oturumu girer** (rUDP ve QUIC dahil — kayıt anında her kapının adresi kanıtlıdır: TCP/QUIC el sıkışması bitti, rUDP çerezi döndü) | Havuz tek yerde sayılıyor (§4 #1); kapıya göre ayırmak WS/TLS'i havuzu doldurmanın açık yolu bırakırdı. Adresi olmayan taşıma (`peer()` yok) kaynak başına sayılmaz |
+| 2 | **D11'in anahtarı değil, kardeş anahtar** (`max_unauth_conns_per_source`) | Başka evre, başka kaynak: D11 uçuştaki el sıkışmayı (ms, kapı yuvası, yalnız WS/TLS/QUIC) sayar; bu, AUTH gidiş-dönüşü (ticket doğrulayıcısı dahil) boyunca yaşayan oturumu, her kapıda. Değerleri farklı olabilir; ikisi birlikte yazıldığında bir bağlantı iki evrede ayrı ayrı sınırlanır |
+| 3 | **Çift sayım yok:** el sıkışma yuvası accept döngüsü uç noktayı alınca bırakılır, `ConnOpened` ondan sonra gider — bir bağlantı iki sınırda aynı anda sayılmaz. Her ret yalnız onu reddeden evrede, o evrenin adıyla sayılır (`handshakes_refused_per_source` / `server_closes{reason="unauth_source_cap"}`) | "Her kaybı say" — her ret anlamının adıyla tek sayaçta |
+| 4 | **Kaynak kuralı D11'inki, kod paylaşılır:** `gsb_core::source::Source` (IPv4; IPv6 /64; eşlenmiş adres IPv4'ü). `gsb-net`'in `SourceKey`'i onu sarar (+ QUIC'in kanıtsız bayrağı) | Tek kural, iki evre; `gsb-net` zaten `gsb-core`'a bağlı — yeni bağımlılık yok |
+| 5 | **Sayılan: registry satırlarından hâlâ unauthed ve aynı kaynaktan olanlar** — havuzun kendi taramasıyla tek geçişte. Ayrı tablo yok: geri verilecek bir şey yok, sızıntı mümkün değil (satır hangi çıkıştan giderse sayıdan da gider). Durum: satır başına bir `Source`; unauthed satırlar `max_unauth_conns` ile sınırlı | Sayaç tablosu her satır silme yolunda bırakma ister (registry'de yedi silme yeri var); kaçan biri kaynağı sonsuza dek reddettirirdi. Tarama O(bağlantı), açılış yolunda — havuzun taraması zaten öyle (kontrol düzlemi hızında olay) |
+| 6 | **AUTH başarısı ya da kapanış yeri geri verir; başarısız AUTH vermez** | Başarısız AUTH oturumu açık ve unauthed bırakır (ERROR 10/13); havuzun kuralıyla aynı. Sel ihlal bütçesiyle kapanır, kapanış yeri verir |
+| 7 | **Ret: havuzun reddiyle aynı yol** — ERROR 9 + kapanış, satır yok; yeni `ServerClose::UnauthSourceCap` (`unauth_source_cap`), WS'te 1013. Kaynak sınırı havuzdan önce bakılır | Hem kaynağı hem havuzu dolu doğum kaynağın fazlasıdır; havuz etiketini sel kirletmez. Dönem başına tek `warn` (sonraki kayıtla sıfırlanır), ret başına `debug` |
+| 8 | **Kilitsiz, tek sahip:** registry aktörü (havuzun sahibi) | Bekleme yok, yeni await yok |
+
+**Boyutlama.** El sıkışma sınırı gibi (aynı adresin arkasından aynı
+anda bağlanan oyuncu + pay), ama oturum AUTH bitene dek tutar — ondan
+küçük olmamalı. Kötü niyetli tek kaynak havuzdan en çok bu kadarını
+tutar; havuzu (`U`) doldurmak `U`/sınır adres ister.
+
+Kilit: `gsb-core` `tests/unauth_per_source.rs` (sınır üstü kendi
+etiketiyle ret, başka adres/önek etkilenmez, eşlenmiş adres ve aynı /64
+aynı kaynak, adressiz bağlantı sayılmaz; AUTH ve kapanış yer verir,
+başarısız AUTH vermez; yazılmamış/`0` sınırsız; kaynak ve havuz
+reddi ayrılır), `source::tests` (kural), `gsb-server/tests/unauth_per_source.rs`
+(varsayılan yok, `[rooms.<id>]`/`[[listeners]]` reddi; düz TCP
+kapısında 127.0.0.1 sınırda ERROR 9 + EOF, 127.0.0.2 hizmet alır, AUTH
+ve kapanış yer verir, ERROR 13'lük başarısız AUTH vermez, üç ret
+`server_closes{reason="unauth_source_cap"}`'te, başka sebep 0).
 
 ### 4.4 Dinleme kuyruğu: accept'ten önceki çekirdek sınırı (B84)
 
@@ -553,8 +590,9 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
   (B49, `http_max_connections` / `http_write_timeout_secs`, OPS §3);
   kaynak adres başına tavan yok (localhost sözleşmesi)
 - rUDP crypto — deneysel statü
-- Kaynak adres başına sınırın kapsamadığı evreler (§4.3.1 #8): düz TCP
-  kapısının pre-auth evresi (registry) ve rUDP kapısı (sertleştirme turu)
+- Kaynak adres başına sınırın kapsamadığı evre: rUDP demux'ının kayıttan
+  önceki oturum tablosu (§4.3.1 #8, BACKLOG B89; kaydedilmiş rUDP
+  oturumları §4.3.2'ye girer)
 - Post-auth girdi hacmi için bağlantıya atıflı ilk-beş listesi ve kaynak
   adres başına sınır (§3.4 "Kalan yüzey"; hız sınırının kendisi opt-in
   olarak var)

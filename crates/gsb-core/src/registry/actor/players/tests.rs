@@ -114,7 +114,7 @@ async fn setup() -> (Reg, mpsc::UnboundedReceiver<Ev>) {
     reg.on_create_room(config, reply).await;
     created.await.expect("reply").expect("created");
     let (inbox, _inbox) = channel(8);
-    reg.on_conn_opened(CONN, inbox).await;
+    reg.on_conn_opened(CONN, inbox, None).await;
     (reg, events)
 }
 

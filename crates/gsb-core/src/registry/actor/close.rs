@@ -182,6 +182,8 @@ where
             inbox: None,
             identity: info.identity.clone(),
             authed: true,
+            // Authenticated: no per-source count reads it (D12).
+            source: None,
             detached: true,
             // A park row has no transport: nothing to name at the stop.
             verdict_in_flight: None,

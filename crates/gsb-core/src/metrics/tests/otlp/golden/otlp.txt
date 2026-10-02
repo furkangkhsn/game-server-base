@@ -46,7 +46,7 @@ gsb_registry_leave_verdicts_lost sum t=2 mono=true unit="" n=1 | Memberships a r
   [] 1000..2000 int 1
 gsb_registry_detach_despawns_lost sum t=2 mono=true unit="" n=1 | Detaches that ended in a despawn whose report (the parked row's release) the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox, cumulative.
   [] 1000..2000 int 5
-gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=13 | Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
+gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=14 | Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
   [reason=idle_timeout] 1000..2000 int 0
   [reason=write_stall] 1000..2000 int 0
   [reason=rel_dead] 1000..2000 int 0
@@ -60,6 +60,7 @@ gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=13 | Session-close 
   [reason=outbound_dead] 1000..2000 int 0
   [reason=idle_input] 1000..2000 int 2
   [reason=kicked] 1000..2000 int 3
+  [reason=unauth_source_cap] 1000..2000 int 0
 gsb_net_bytes_in sum t=2 mono=true unit="" n=1 | Wire bytes received over all connections (frame bodies), cumulative.
   [] 1000..2000 int 410
 gsb_net_bytes_out_room sum t=2 mono=true unit="" n=1 | Snapshot+private payload bytes shipped by rooms, cumulative.
@@ -100,7 +101,7 @@ gsb_net_actions_unprocessed sum t=2 mono=true unit="" n=1 | Game-band frames a c
   [] 1000..2000 int 2
 gsb_net_control_frames_unprocessed sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests (auth, join, leave, heartbeat, undefined) a connection received but never processed because the server ended its session first, cumulative.
   [] 1000..2000 int 3
-gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
+gsb_net_server_closes sum t=2 mono=true unit="" n=14 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0
   [reason=rel_dead] 1000..2000 int 0
@@ -114,6 +115,7 @@ gsb_net_server_closes sum t=2 mono=true unit="" n=13 | Sessions the server ended
   [reason=outbound_dead] 1000..2000 int 0
   [reason=idle_input] 1000..2000 int 0
   [reason=kicked] 1000..2000 int 0
+  [reason=unauth_source_cap] 1000..2000 int 0
 gsb_transport_udp_requests_dropped_full sum t=2 mono=true unit="" n=1 | RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.
   [] 1000..2000 int 11
 gsb_transport_udp_actions_dropped_full sum t=2 mono=true unit="" n=1 | Game-band frames the rUDP demux dropped on a session's full inbox, cumulative.

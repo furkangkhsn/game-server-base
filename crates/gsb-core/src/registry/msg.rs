@@ -91,6 +91,11 @@ pub enum RegistryMsg {
     ConnOpened {
         conn: ConnectionId,
         inbox: Mailbox<ConnIn>,
+        /// The peer's source (its address by the D11 rule), what the
+        /// per-source cap on unauthenticated connections counts by
+        /// (BACKLOG D12). `None`: a transport with no peer address — such
+        /// a connection is never refused or counted per source.
+        source: Option<crate::source::Source>,
     },
     /// A connection went away for good; the registry removes its entry and
     /// makes sure its room-side entity is cleaned up. `verdict`: the

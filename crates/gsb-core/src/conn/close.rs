@@ -89,11 +89,17 @@ pub enum ServerClose {
     /// [`Self::IdleInput`] — a best-effort, never-waiting `ERROR` code 9
     /// whose `message` is `kicked: <the game's reason>`.
     Kicked,
+    /// Refused at birth: the connection's source address (an IPv4
+    /// address, an IPv6 /64 — [`crate::source::Source`]) already holds
+    /// `max_unauth_conns_per_source` unauthenticated connections
+    /// (BACKLOG D12, SECURITY §4.3.1). Apart from [`Self::UnauthCap`]:
+    /// one source's excess, not the server's pool, refused it.
+    UnauthSourceCap,
 }
 
 impl ServerClose {
     /// Number of reasons.
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     /// Every reason, in export order.
     pub const ALL: [ServerClose; Self::COUNT] = [
@@ -110,6 +116,7 @@ impl ServerClose {
         Self::OutboundDead,
         Self::IdleInput,
         Self::Kicked,
+        Self::UnauthSourceCap,
     ];
 
     /// Position in [`Self::ALL`] (the counter array index). An exhaustive
@@ -129,6 +136,7 @@ impl ServerClose {
             Self::OutboundDead => 10,
             Self::IdleInput => 11,
             Self::Kicked => 12,
+            Self::UnauthSourceCap => 13,
         }
     }
 
@@ -149,6 +157,7 @@ impl ServerClose {
             Self::OutboundDead => "outbound_dead",
             Self::IdleInput => "idle_input",
             Self::Kicked => "kicked",
+            Self::UnauthSourceCap => "unauth_source_cap",
         }
     }
 }
