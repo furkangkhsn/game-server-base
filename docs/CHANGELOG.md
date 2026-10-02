@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## w1 — akış kapılarının yazıcı artıkları (B15) ve adı anlamını aşan sayaç (F66) (`net/w1-stream-writers`)
+
+- **B15a — TLS kuyruğu (düzeltildi):** rustls kendi ≤64 KiB şifreli
+  metnini tutar; kare yazıcısı rustls'e verilen düz metni sayıyordu, karenin
+  kuyruğu `poll_flush` içinde sayısız boşalıyordu — o kuyruğu pencere başına
+  64 KiB'tan yavaş okuyan eş (vars. 10 sn'de 6,5 KB/sn) okurken kesiliyordu.
+  TLS kapısı artık TCP akışını el sıkışmadan önce sayan bir adaptöre sarar
+  (`gsb-net/src/wire.rs`, `Wire`/`WireCount`); saat SOKETİN aldığı baytla
+  işler. Önce kırmızı: `tls::tests::slow_reader` 64 KiB'ta "write stall" ile
+  kesildi, şimdi bütün kareyi okur; sağır TLS eşi hâlâ düşer.
+- **B15c — WS'de iki pencere (düzeltildi):** soket yazıcı görevinin
+  baytları pompayı uyandırmaz; pompa onları deadline'da görüp pencereyi
+  bakış anından başlatıyordu → hüküm son bayttan iki pencereye kadar sonra.
+  Görev artık yazmanın ANINI da kaydeder, `WriteProgress::last_write_at`
+  ile pompa pencereyi bayttan başlatır (TCP/QUIC değişmedi). Yazıcı
+  pompasının saati `tokio::time::Instant`'a geçti (üretimde aynı an;
+  duraklatılmış saat testleri için). Önce kırmızı (duraklatılmış saat):
+  son bayt 0,1 sn, pencere 10 sn → hüküm 20 sn'de; şimdi 10,1 sn'de.
+- **B15b — çekirdek uyanma histerezisi (ayar notu, kapatıldı):** ölçüldü —
+  bloklu yazıcı `sk_sndbuf`'un ~¼'ü (0,23–0,38) boşalınca uyanır; etkilenen
+  istemcinin çekirdek birikimi ≥ ~4W (vars. ≥ 40 sn) bayattır. Varsayılanı
+  değiştiren çare sağlıklı istemcinin tamponlamasını değiştirirdi; tetik
+  ve çare SECURITY §3.5 satır 6'da (BACKLOG B98).
+- **F66 — ad anlamla örtüşsün:** `ws_going_away_unsent_{closed,stalled}` →
+  `ws_teardown_closes_unsent_{closed,stalled}` (B30'dan beri teardown
+  kapanışı 1008/1013 de taşır; sayılan şey aynı). Prometheus
+  `gsb_transport_ws_teardown_closes_unsent_{closed,stalled}_total`, HELP
+  kodları adlandırır. Eski seriler bu sürümle durur (takma ad yok; geçiş
+  OPS §3). İki golden bilerek güncellendi (yalnız ad + HELP), `otlp::cross`
+  yeşil. Loadgen teli yerleşim değiştirmedi (sihirli sayı aynı, GSNK);
+  `RESULT` anahtarları `transport_ws_teardown_closes_unsent_*=`.
+
+Testler 1722 → 1728 (`otlp` ile 1740 → 1746). Mutasyonlar: B15a'da 4,
+B15c'de 4, F66'da 2 yakalandı; `max(pencere başı, an)` savunma amaçlı.
+Ebeveyn doğrulaması: tam kapılar yeşil (s2'nin sayacıyla golden çakışması
+birleştirmede çözüldü); vektörlü yazmada istenen baytı saymak sağ çıktı —
+eşdeğer (sayaç yalnız ilerleme için okunur).
+
 ## s2 — D12 + B90: pre-auth kaynak sınırı ve ops yönlendirme süresi (`sec/s2-preauth-source`)
 
 - **D12 — kaynak adres başına unauthed bağlantı sınırı (isteğe bağlı).**

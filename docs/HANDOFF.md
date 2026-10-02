@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1722 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1728 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -232,6 +232,14 @@ registry'de havuzun taramasıyla tek geçiş, ayrı tablo yok; red
 `http_route_timeout_secs` (10 sn, aşılırsa 504,
 `ops_http_routes_timed_out`). `RegistryMsg::ConnOpened`'a `source` alanı
 eklendi. Loadgen teli GSNK. Açık: A41, B97, F76.
+
+**w1 tamam** (CHANGELOG "w1"; B15, F66): write-stall saatinin üç
+kalıntısından ikisi düzeltildi — TLS'te bayt sayısı rustls'in altından, TCP
+akışını saran `gsb-net/src/wire.rs` `Wire`'dan gelir; WS'de soket yazıcı
+görevi yazmanın anını kaydeder, pompa pencereyi bayttan başlatır. Çekirdek
+uyanma histerezisi ölçülmüş ayar notu (SECURITY §3.5 satır 6, B98). Yazıcı
+pompası saati `tokio::time::Instant`. F66: `ws_going_away_unsent_*` →
+`ws_teardown_closes_unsent_*` (eski seriler durur, OPS §3).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -935,6 +943,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1722 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1728 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
