@@ -190,7 +190,7 @@ pub(crate) async fn run(args: Args) {
         for r in &reports {
             println!(
                 "CLIENT id={} connected={} connect_ms={} joined={} left={} snapshots={} \
-                  bytes_in={} bytes_out={} moves={} errors={} join_rejected={} cap_rejected={} \
+                  bytes_in={} bytes_out={} moves={} errors={}{} join_rejected={} cap_rejected={} \
                   budget_rejected={} retrans_out={} dup_in={} oob_dropped={} gave_up={} \
                   frag_reassembled={} frag_dropped={} hs_retries={} \
                   acks={} ack_processed_max={} ack_lag_max_ms={} fulls={} private_fulls={} \
@@ -205,7 +205,8 @@ pub(crate) async fn run(args: Args) {
                 r.bytes_in,
                 r.bytes_out,
                 r.moves,
-                r.errors,
+                r.errors.total(),
+                r.errors.keys(),
                 r.join_rejected,
                 r.cap_rejected,
                 r.budget_rejected,

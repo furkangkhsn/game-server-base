@@ -67,8 +67,10 @@ async fn peer(listener: TcpListener) -> Tally {
     }
 }
 
-#[tokio::test]
-async fn churn_bytes_are_the_frames_on_the_wire() {
+/// The churn client's one session, its run window `window` long: its
+/// report, and the peer's tally — `None` when the client never started a
+/// cycle (the window was spent before its first check).
+async fn session(window: Duration) -> (ClientReport, Option<Tally>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let peer = tokio::spawn(peer(listener));
@@ -82,7 +84,7 @@ async fn churn_bytes_are_the_frames_on_the_wire() {
         bot: crate::bot::bot_for(&args),
         // ONE session: the cycle outlasts the deadline, so the client
         // plays until shortly before it, drops, and sleeps it out.
-        deadline: Instant::now() + Duration::from_millis(1500),
+        deadline: Instant::now() + window,
         flood: false,
         kind: crate::Transport::Tcp,
         capture: None,
@@ -90,11 +92,38 @@ async fn churn_bytes_are_the_frames_on_the_wire() {
         rpc: None,
     };
     let rep = run_churn_client(3, p, Duration::from_secs(60), 0).await;
-    let (read, sent, joins) = peer.await.expect("peer");
-    assert_eq!(joins, 2, "the refused join was retried");
-    assert_eq!(rep.churn_cycles, 1);
-    assert_eq!(rep.fresh_joins + rep.resumed, 0, "a first session");
-    assert!(rep.moves > 0, "the session played");
-    assert_eq!(rep.bytes_out, read, "client out = what the peer read");
-    assert_eq!(rep.bytes_in, sent, "client in = what the peer wrote");
+    if rep.churn_cycles == 0 {
+        peer.abort(); // it waits for a client that never came
+        return (rep, None);
+    }
+    (rep, Some(peer.await.expect("peer")))
+}
+
+/// Every frame the session wrote and read, at its size on the wire.
+///
+/// Read from a run in which the session played (`moves > 0`): a run
+/// window (1.5 s) a starved or frozen client spent on its join holds no
+/// input — that run is repeated with twice the window, the accounting
+/// checked on every run all the same (BACKLOG F52; the F30 pattern).
+#[tokio::test]
+async fn churn_bytes_are_the_frames_on_the_wire() {
+    let mut window = Duration::from_millis(1500);
+    loop {
+        let (rep, tally) = session(window).await;
+        if let Some((read, sent, joins)) = tally {
+            assert_eq!(joins, 2, "the refused join was retried");
+            assert_eq!(rep.churn_cycles, 1);
+            assert_eq!(rep.fresh_joins + rep.resumed, 0, "a first session");
+            assert_eq!(rep.bytes_out, read, "client out = what the peer read");
+            assert_eq!(rep.bytes_in, sent, "client in = what the peer wrote");
+            if rep.moves > 0 {
+                return; // the session played: the run is evidence
+            }
+        }
+        window *= 2;
+        assert!(
+            window <= Duration::from_millis(24_000),
+            "no run held an input"
+        );
+    }
 }

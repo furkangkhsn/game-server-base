@@ -101,7 +101,7 @@ pub(crate) struct ClientRec {
     pub(crate) bytes_in: u64,
     pub(crate) bytes_out: u64,
     pub(crate) moves: u64,
-    pub(crate) errors: u64,
+    pub(crate) errors: ClientErrors,
     pub(crate) join_rejected: u64,
     pub(crate) cap_rejected: u64,
     pub(crate) budget_rejected: u64,
@@ -142,7 +142,15 @@ pub(crate) fn parse_client_line(line: &str) -> Option<ClientRec> {
         bytes_in: get("bytes_in")?.parse().ok()?,
         bytes_out: get("bytes_out")?.parse().ok()?,
         moves: get("moves")?.parse().ok()?,
-        errors: get("errors")?.parse().ok()?,
+        errors: {
+            // Every reason (B88); `errors=` is their sum, and must be.
+            let mut v = [0u64; ERROR_REASONS];
+            for (slot, (k, _)) in v.iter_mut().zip(ClientErrors::default().fields()) {
+                *slot = get(k)?.parse().ok()?;
+            }
+            let e = ClientErrors::from_values(v);
+            (get("errors")?.parse::<u64>().ok()? == e.total()).then_some(e)?
+        },
         join_rejected: get("join_rejected")?.parse().ok()?,
         cap_rejected: get("cap_rejected")?.parse().ok()?,
         budget_rejected: get("budget_rejected")?.parse().ok()?,

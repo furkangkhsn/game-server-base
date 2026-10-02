@@ -150,7 +150,12 @@ pub(crate) fn print_report(
     let in_bytes: u64 = reports.iter().map(|r| r.bytes_in).sum();
     let out_bytes: u64 = reports.iter().map(|r| r.bytes_out).sum();
     let moves: u64 = reports.iter().map(|r| r.moves).sum();
-    let errors: u64 = reports.iter().map(|r| r.errors).sum();
+    // By reason (B88), always every key; `errors` stays their sum.
+    let mut errors_by = ClientErrors::default();
+    for r in reports {
+        errors_by.add(&r.errors);
+    }
+    let errors = errors_by.total();
     let join_rejected: u64 = reports.iter().map(|r| r.join_rejected).sum();
     let cap_rejected: u64 = reports.iter().map(|r| r.cap_rejected).sum();
     let budget_rejected: u64 = reports.iter().map(|r| r.budget_rejected).sum();
@@ -423,7 +428,7 @@ pub(crate) fn print_report(
     println!(
         "RESULT mode={} visibility={} shards={} max_snap_bytes={} clients={} connected={} joined={} left={} snap_total={} \
          snap_per_client_p50={:.1} tick_hz_med={:.2} client_in_bps={} client_out_bps={} \
-         out_bps_per_conn={:.0} moves={} errors={} server_closes={} steps={} server_hz={:.2} \
+         out_bps_per_conn={:.0} moves={} errors={}{} server_closes={} steps={} server_hz={:.2} \
          step_p50_us={:.0} step_p50_fine_us={} step_p90_fine_us={} step_max_us={} step_over_budget_pct={:.1} dropped={} sends_closed={} late_max_us={} \
          peak_payload_b={} snap_overflows={} records_per_tick={:.1} overlap_x={:.2} \
          server_in_bps={} server_out_bps={} peak_conns={} metrics_dropped={} \
@@ -459,6 +464,7 @@ pub(crate) fn print_report(
         out_bps_per_conn,
         moves,
         errors,
+        errors_by.keys(),
         server_closes_total,
         room.map(|r| r.steps).unwrap_or(0),
         server_hz,

@@ -5,50 +5,13 @@ use super::*;
 use gsb_client::session::{self, Credentials};
 use gsb_client::{Conn, Recv, ServerError};
 use gsb_kit::client::PrivateEvent;
-use gsb_protocol::base::{ErrorCode, JoinRoomResult, LeaveRoomResult};
+use gsb_protocol::base::{ErrorCode, JoinRoomResult};
 use gsb_protocol::op;
 use prost::Message;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
 
 pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
-    let mut rep = ClientReport {
-        id,
-        connected: false,
-        connect_ms: 0,
-        joined: false,
-        entity: 0,
-        left: false,
-        snapshots: 0,
-        bytes_in: 0,
-        bytes_out: 0,
-        moves: 0,
-        errors: 0,
-        join_rejected: 0,
-        cap_rejected: 0,
-        budget_rejected: 0,
-        retrans_out: 0,
-        dup_in: 0,
-        oob_dropped: 0,
-        gave_up: 0,
-        frag_reassembled: 0,
-        frag_dropped: 0,
-        hs_retries: 0,
-        seq_first: None,
-        seq_last: None,
-        acks: 0,
-        ack_processed_max: 0,
-        ack_lag_max_ms: 0,
-        fulls: 0,
-        private_fulls: 0,
-        deltas: 0,
-        gap_drops: 0,
-        view_size: 0,
-        churn_cycles: 0,
-        resumed: 0,
-        fresh_joins: 0,
-        rpc: RpcTally::default(),
-    };
+    let mut rep = ClientReport::new(id);
 
     // The game's bot for this client: its world view (the delta
     // protocol's client half — the kit's reference client, see
@@ -107,12 +70,21 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // per client per run.
     let mut next_seq: u64 = 1;
     let mut sent_at: Vec<Instant> = Vec::new();
+    // Past the deadline a client still owed its JOIN's answer keeps
+    // reading for it (bounded, in its own waiting time): a starved
+    // client used to stop with the answer in its socket — `joined=0` on
+    // a run whose server had joined all twelve (BACKLOG F51).
+    let mut settle = Wait::new(PROTOCOL_WAIT);
     loop {
         let now = Instant::now();
-        if now >= p.deadline {
+        let playing = now < p.deadline;
+        if !playing && join_answered(&rep) {
             break;
         }
-        if now.duration_since(last_move) >= p.move_ms {
+        // Inputs wait for the JOIN's answer (B88): before it the session
+        // is in no room, and a game frame there is answered `NotInRoom`
+        // (on rUDP the lossy game band overtakes the reliable JOIN).
+        if playing && rep.joined && now.duration_since(last_move) >= p.move_ms {
             last_move = now;
             // The bot decides what this interval sends (possibly nothing:
             // a settled still client, a bot that has not seen its own
@@ -128,7 +100,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 }
             }
         }
-        if let Some(burst) = rpc.as_mut().and_then(|r| r.due(now)) {
+        if let Some(burst) = rpc.as_mut().filter(|_| playing).and_then(|r| r.due(now)) {
             for f in &burst {
                 rep.bytes_out += frame_bytes(&wire, Dir::Out, f.op, f.payload.len());
             }
@@ -144,6 +116,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             .unwrap_or(Duration::MAX);
         if let Some(left) = p
             .stall
+            .filter(|_| playing)
             .and_then(|s| s.pause_left(id, now.duration_since(t_start)))
         {
             // The slow reader (`--stall-ms`): away from the socket (but
@@ -152,16 +125,27 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             tokio::time::sleep(nap.min(p.deadline.saturating_duration_since(now))).await;
             continue;
         }
-        let timeout = p
-            .deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(250))
-            .min(rpc_wait);
+        let timeout = if playing {
+            p.deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(250))
+                .min(rpc_wait)
+        } else {
+            match settle.slice() {
+                Some(slice) => slice,
+                None => break, // the JOIN's answer never came
+            }
+        };
         // A quiet window (and an rUDP socket error, which is all rUDP
         // can report) loops; a stream's EOF or a frame its reader
         // refuses ends the session — the leave below then finds the
         // wire dead.
-        let (op, payload) = match recv_wire(&mut wire, timeout).await {
+        let at = Instant::now();
+        let got = recv_wire(&mut wire, timeout).await;
+        if !playing {
+            settle.charge(timeout, at);
+        }
+        let (op, payload) = match got {
             Got::Frame(op, payload) => (op, payload),
             Got::Quiet => continue,
             Got::Dead => break,
@@ -209,7 +193,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                         }
                         rep.seq_last = Some((s.sequence, at));
                     }
-                    Err(_) => rep.errors += 1,
+                    Err(_) => rep.errors.bad_snapshot += 1,
                 }
             }
             o if o == private_op => {
@@ -244,10 +228,10 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                     // No payload arm: a frame of RPC answers alone — anything
                     // else empty is unexpected.
                     Ok(PrivateEvent::Empty) if answers > 0 => {}
-                    Ok(PrivateEvent::Empty) => rep.errors += 1,
+                    Ok(PrivateEvent::Empty) => rep.errors.bad_private += 1,
                     // Undecodable, or a private DELTA — a protocol error (a
                     // wrong-mode client must not silently misapply it).
-                    Err(_) => rep.errors += 1,
+                    Err(_) => rep.errors.bad_private += 1,
                 }
             }
             op::base::ERROR => {
@@ -266,10 +250,12 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                         rep.budget_rejected += 1
                     }
                     ErrorCode::ServerClosed => rep.cap_rejected += 1,
+                    // A frame the server read outside any room (B88).
+                    ErrorCode::NotInRoom => rep.errors.not_in_room += 1,
                     // base.proto's forward-compatibility rule: an unknown
                     // or unspecified code is a plain error, never guessed
                     // onto a known decision.
-                    _ => rep.errors += 1,
+                    _ => rep.errors.other_code += 1,
                 }
             }
             _ => {}
@@ -286,86 +272,10 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     rep.view_size = bot.view_len() as u64;
 
     if flooded {
-        // The input flood: write the bot's flood input (the demo's
-        // MOVE_TO) as fast as the socket accepts,
-        // until the deadline. The server-side chain (reader pump → conn
-        // inbox → conn actor → action channel → room pull budget) bounds
-        // what actually reaches the tick; the excess is dropped on the
-        // flooder's OWN full action channel (attributed to it). The flood
-        // stays UNNUMBERED (seq 0, legacy): it probes the drop-attribution
-        // guardrails, not the sequence rule (a numbered flood would only
-        // spin the high-water mark).
-        let (flood_op, payload) = p.bot.flood_input();
-        match &mut wire {
-            // WebSocket: every frame is its own masked message (fresh
-            // key each), fed unflushed as fast as the socket takes it.
-            Conn::Stream { rx, tx } if rx.is_ws() => {
-                let n = ws_message_bytes(Dir::Out, payload.len());
-                while Instant::now() < p.deadline {
-                    if tx.feed(flood_op, &payload).await.is_err() {
-                        break; // peer gone
-                    }
-                    rep.moves += 1;
-                    rep.bytes_out += n;
-                }
-            }
-            // One encoded frame, written unflushed as fast as the socket
-            // takes it.
-            Conn::Stream { tx, .. } => {
-                let f = gsb_client::frame::encode(flood_op, &payload);
-                while Instant::now() < p.deadline {
-                    if tx.get_mut().write_all(&f).await.is_err() {
-                        break; // peer gone
-                    }
-                    rep.moves += 1;
-                    rep.bytes_out += f.len() as u64;
-                }
-            }
-            Conn::Udp(c) => {
-                // rUDP: the client is ONE task (read and write share the
-                // socket), so the flood interleaves NON-BLOCKING
-                // read-drains; the flood frames travel the lossy game
-                // band, so retransmit state never gets in the way.
-                while Instant::now() < p.deadline {
-                    if c.send_frame(flood_op, payload.clone()).await.is_err() {
-                        break;
-                    }
-                    rep.moves += 1;
-                    rep.bytes_out += wire_in_bytes(flood_op, payload.len());
-                    while c.recv_frame(Duration::ZERO).await.ok().flatten().is_some() {}
-                }
-            }
-        }
+        end::flood(&mut wire, &p, &mut rep).await;
     }
-
-    // Graceful leave (counted by the server's join/leave metrics) and
-    // wait for the ack: without it, the socket close — and any server
-    // shutdown that follows — can race ahead of the leave, and the
-    // server never counts it. (rUDP: the leave is a control-band frame,
-    // so it is retransmitted until the server ACKs it; there is no EOF
-    // to race — the 500 ms window ends the wait.)
-    // (Not `session::leave`: this wait counts every frame's bytes and
-    // reads past an ERROR, as the measurement always has.)
-    let leave = session::leave_req();
-    rep.bytes_out += frame_bytes(&wire, Dir::Out, leave.op, leave.payload.len());
-    if wire.send(leave.op, &leave.payload).await.is_ok() {
-        let leave_deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < leave_deadline {
-            let timeout = leave_deadline.saturating_duration_since(Instant::now());
-            let Ok(Recv::Frame(f)) = wire.recv(timeout).await else {
-                break;
-            };
-            rep.bytes_in += frame_bytes(&wire, Dir::In, f.op, f.payload.len());
-            // Answers still arriving before the leave's ack count too.
-            if let Some(r) = rpc.as_mut().filter(|_| f.op == private_op) {
-                r.on_private(&f.payload, Instant::now());
-            }
-            if f.op == op::base::LEAVE_ROOM_RESULT {
-                let _ = LeaveRoomResult::decode(&f.payload[..]);
-                rep.left = true;
-                break;
-            }
-        }
+    if rep.joined {
+        end::leave(&mut wire, &mut rep, rpc.as_mut(), private_op).await;
     }
     if let Some(r) = rpc {
         rep.rpc = r.finish(Instant::now());
@@ -385,6 +295,14 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     }
     rep
 }
+
+/// Whether the JOIN has been answered: seated, or turned away by a
+/// guardrail.
+fn join_answered(rep: &ClientReport) -> bool {
+    rep.joined || rep.join_rejected + rep.cap_rejected + rep.budget_rejected > 0
+}
+
+mod end;
 
 #[cfg(test)]
 mod tests;

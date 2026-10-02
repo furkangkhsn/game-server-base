@@ -9,12 +9,16 @@ use gsb_client::{Conn, Recv};
 
 mod accounting;
 mod connect;
+mod errors;
 mod rpc;
 mod stall;
+mod wait;
 pub(crate) use accounting::{Dir, frame_bytes, wire_in_bytes, ws_message_bytes};
 pub(crate) use connect::{TlsOpts, connect_wire};
+pub(crate) use errors::{ClientErrors, ERROR_REASONS};
 pub(crate) use rpc::{RpcClient, RpcPlan, RpcTally};
 pub(crate) use stall::{STALL_RCVBUF, Stall};
+pub(crate) use wait::{PROTOCOL_WAIT, Wait};
 
 mod view;
 pub(crate) use view::*;
@@ -23,6 +27,7 @@ pub(crate) use view::*;
 mod tests;
 
 /// One client's end-to-end record (task-local; returned via JoinHandle).
+#[derive(Default)]
 pub(crate) struct ClientReport {
     pub(crate) id: u64,
     pub(crate) connected: bool,
@@ -34,7 +39,9 @@ pub(crate) struct ClientReport {
     pub(crate) bytes_in: u64,
     pub(crate) bytes_out: u64,
     pub(crate) moves: u64,
-    pub(crate) errors: u64,
+    /// What the client counted as an error, by reason (B88); the
+    /// `errors=` key is their sum.
+    pub(crate) errors: ClientErrors,
     /// Join rejections observed (`ERROR` code 8, room full): the room
     /// capacity guardrail working — the connection stays alive.
     pub(crate) join_rejected: u64,
@@ -102,6 +109,16 @@ pub(crate) struct ClientReport {
     /// The RPC traffic mode's numbers (`--rpc-rate`; all zero without
     /// it — and on a churn or orchestrated run, which refuse the mode).
     pub(crate) rpc: RpcTally,
+}
+
+impl ClientReport {
+    /// Client `id`'s record before anything happened.
+    pub(crate) fn new(id: u64) -> Self {
+        Self {
+            id,
+            ..Self::default()
+        }
+    }
 }
 
 /// Everything one client task needs besides its own id. (One struct

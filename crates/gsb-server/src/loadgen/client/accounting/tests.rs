@@ -16,7 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::*;
-use crate::client::{ClientParams, run_client};
+use crate::client::{ClientParams, ClientReport, run_client};
 
 /// The header sizes at each length boundary, both ways.
 #[test]
@@ -80,9 +80,10 @@ type Tally = (u64, u64, u32);
 /// leave result after the LEAVE; read until the client drops.
 ///
 /// The peer reads through a buffer. WHY: the flooding client stops at
-/// its deadline, sends its LEAVE and waits a fixed 500 ms (wall clock)
-/// for the result — and the peer only sees the LEAVE after every flood
-/// frame queued before it. Read unbuffered (three reads per frame) the
+/// its deadline, sends its LEAVE and waits a bounded time for the result
+/// (500 ms of wall clock then; `PROTOCOL_WAIT` of its own waiting since
+/// F51) — and the peer only sees the LEAVE after every flood frame
+/// queued before it. Read unbuffered (three reads per frame) the
 /// peer fell behind the flood by up to ~200k frames and, under CPU
 /// load, could not drain them inside that window (the client then
 /// reports `left = false`: BACKLOG F23). Buffered, the peer keeps pace
@@ -143,38 +144,61 @@ async fn peer(listener: TcpListener) -> Tally {
     (read, sent, pongs)
 }
 
+/// One session against a fresh scripted peer, the client's run window
+/// `window` long: its report and the peer's tally.
+async fn session(flood: bool, window: Duration) -> (ClientReport, Tally) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let peer = tokio::spawn(peer(listener));
+    let args = crate::Args::defaults();
+    let p = ClientParams {
+        tls: None,
+        addr,
+        room: 1,
+        move_ms: Duration::from_millis(100),
+        stagger_ms: 0.0,
+        bot: crate::bot::bot_for(&args),
+        deadline: Instant::now() + window,
+        flood,
+        kind: crate::Transport::Ws,
+        capture: None,
+        stall: None,
+        rpc: None,
+    };
+    let rep = run_client(3, p).await;
+    (rep, peer.await.expect("peer"))
+}
+
 /// A plain and a flooding client: every data message on the wire is
 /// counted at its size, and nothing else is.
+///
+/// The inputs must be among them, so the claim is read from a run in
+/// which some input went out (`moves > 0`): a run window (800 ms) that a
+/// starved or frozen client spent before its JOIN's answer holds none —
+/// that run is repeated with twice the window, the accounting checked on
+/// every run all the same (BACKLOG F52; the F30 pattern, not "retry until
+/// green": a run that miscounts fails at once).
 #[tokio::test]
 async fn ws_bytes_are_the_messages_on_the_wire() {
     for flood in [false, true] {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let peer = tokio::spawn(peer(listener));
-        let args = crate::Args::defaults();
-        let p = ClientParams {
-            tls: None,
-            addr,
-            room: 1,
-            move_ms: Duration::from_millis(100),
-            stagger_ms: 0.0,
-            bot: crate::bot::bot_for(&args),
-            deadline: Instant::now() + Duration::from_millis(800),
-            flood,
-            kind: crate::Transport::Ws,
-            capture: None,
-            stall: None,
-            rpc: None,
-        };
-        let rep = run_client(3, p).await;
-        let (read, sent, pongs) = peer.await.expect("peer");
-        assert!(rep.joined && rep.left, "a whole session (flood {flood})");
-        assert!(rep.moves > 0, "inputs went out (flood {flood})");
-        assert_eq!(pongs, 1, "the ping was answered (flood {flood})");
-        assert_eq!(
-            rep.bytes_out, read,
-            "client out = peer read (flood {flood})"
-        );
-        assert_eq!(rep.bytes_in, sent, "client in = peer wrote (flood {flood})");
+        let mut window = Duration::from_millis(800);
+        loop {
+            let (rep, (read, sent, pongs)) = session(flood, window).await;
+            assert!(rep.joined && rep.left, "a whole session (flood {flood})");
+            assert_eq!(pongs, 1, "the ping was answered (flood {flood})");
+            assert_eq!(
+                rep.bytes_out, read,
+                "client out = peer read (flood {flood})"
+            );
+            assert_eq!(rep.bytes_in, sent, "client in = peer wrote (flood {flood})");
+            if rep.moves > 0 {
+                break; // inputs went out: the run is evidence
+            }
+            window *= 2;
+            assert!(
+                window <= Duration::from_millis(12_800),
+                "no run held an input (flood {flood})"
+            );
+        }
     }
 }

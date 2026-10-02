@@ -39,9 +39,13 @@ pub(crate) async fn churn_join(
             return None;
         }
         let mut retriable = false;
-        let join_deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < join_deadline {
-            let got = recv_wire(wire, Duration::from_millis(250)).await;
+        // Bounded in the client's own waiting time (`Wait`, F51): a
+        // starved client must not give up on an answer in its socket.
+        let mut wait = Wait::new(PROTOCOL_WAIT);
+        while let Some(slice) = wait.slice() {
+            let at = Instant::now();
+            let got = recv_wire(wire, slice).await;
+            wait.charge(slice, at);
             // Every frame the join phase reads is inbound wire bytes —
             // the result and the refusals included.
             if let Got::Frame(op, payload) = &got {
@@ -74,7 +78,8 @@ pub(crate) async fn churn_join(
                         }
                         ErrorCode::RoomFull => rep.join_rejected += 1,
                         ErrorCode::ServerClosed => rep.cap_rejected += 1,
-                        _ => rep.errors += 1,
+                        ErrorCode::NotInRoom => rep.errors.not_in_room += 1,
+                        _ => rep.errors.other_code += 1,
                     }
                 }
                 Got::Frame(..) | Got::Quiet => {}
@@ -94,43 +99,7 @@ pub(crate) async fn run_churn_client(
     cycle: Duration,
     max_drops: u64,
 ) -> ClientReport {
-    let mut rep = ClientReport {
-        id,
-        connected: false,
-        connect_ms: 0,
-        joined: false,
-        entity: 0,
-        left: false,
-        snapshots: 0,
-        bytes_in: 0,
-        bytes_out: 0,
-        moves: 0,
-        errors: 0,
-        join_rejected: 0,
-        cap_rejected: 0,
-        budget_rejected: 0,
-        retrans_out: 0,
-        dup_in: 0,
-        oob_dropped: 0,
-        gave_up: 0,
-        frag_reassembled: 0,
-        frag_dropped: 0,
-        hs_retries: 0,
-        seq_first: None,
-        seq_last: None,
-        acks: 0,
-        ack_processed_max: 0,
-        ack_lag_max_ms: 0,
-        fulls: 0,
-        private_fulls: 0,
-        deltas: 0,
-        gap_drops: 0,
-        view_size: 0,
-        churn_cycles: 0,
-        resumed: 0,
-        fresh_joins: 0,
-        rpc: RpcTally::default(),
-    };
+    let mut rep = ClientReport::new(id);
     // ONE identity for every session of this client (the resume key):
     // this is what makes the reconnects RESUMES instead of fresh joins.
     let creds = Credentials::named(crate::bot::bot_name(id));
@@ -151,7 +120,7 @@ pub(crate) async fn run_churn_client(
             Ok(w) => w,
             Err(e) => {
                 eprintln!("churn client {id}: connect failed: {e}");
-                rep.errors += 1;
+                rep.errors.connect_failed += 1;
                 tokio::time::sleep(cycle_end.saturating_duration_since(Instant::now())).await;
                 continue;
             }
@@ -212,7 +181,7 @@ pub(crate) async fn run_churn_client(
                 Got::Frame(op, payload) => {
                     rep.bytes_in += frame_bytes(&wire, Dir::In, op, payload.len());
                     if payload.is_empty() {
-                        rep.errors += 1;
+                        rep.errors.empty_frame += 1;
                     }
                     rep.snapshots += 1;
                 }
