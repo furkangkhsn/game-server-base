@@ -244,7 +244,12 @@ mod logic;
 /// GSNF = the GSNE layout with one more transport counter at the end of
 /// that section (the rUDP writers' control re-sends on a timer expiry —
 /// B2: `udp_control_retransmits_timeout`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E46;
+/// GSNG = the GSNF layout with four more transport counters at the end
+/// of that section: the doors' per-source handshake cap (D11:
+/// `handshakes_refused_per_source`, `handshakes_retried_per_source`),
+/// then the ops HTTP surface's limits (B49: `ops_http_conns_refused`,
+/// `ops_http_writes_timed_out`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E47;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

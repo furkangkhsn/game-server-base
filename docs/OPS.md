@@ -887,8 +887,7 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
 - **Taşıma kapsamı: ops HTTP yüzeyinin iki sınırı (B49).** Satırın ve
   tablonun sonuna (D11'in ikisinden sonra) iki `counter`; `RESULT`'ta
   `transport_<ad>=` (her satırda; loadgen sunucusunun ops yüzeyi yoksa
-  0). Loadgen teli: taşıma bölümü yine büyür — sihirli sayıyı
-  birleştirme atar. `ops_http_conns_refused`
+  0). Loadgen teli: D11'in ikisiyle birlikte **GSNG**. `ops_http_conns_refused`
   (`gsb_transport_ops_http_conns_refused_total`) — `http_max_connections`
   canlı görev varken hemen, yanıtsız kapatılan bağlantılar;
   `ops_http_writes_timed_out` (`gsb_transport_ops_http_writes_timed_out_total`)
@@ -901,8 +900,8 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
 - **Taşıma kapsamı: el sıkışan kapıların kaynak başına sınırı (D11).**
   Satırın ve tablonun sonuna iki `counter`; `RESULT`'ta
   `transport_<ad>=` (her satırda). Loadgen teli: taşıma bölümü
-  `TRANSPORT_COUNT` uzunluğunda — yeni düzen, sihirli sayıyı birleştirme
-  atar. `handshakes_refused_per_source`
+  `TRANSPORT_COUNT` uzunluğunda — yeni düzen, **GSNG** (B49'un ikisiyle
+  birlikte). `handshakes_refused_per_source`
   (`gsb_transport_handshakes_refused_per_source_total`) — kaynağı (IPv4
   adresi, IPv6 /64) `max_handshakes_per_source`'u tutan bağlantılar, el
   sıkışmasız kapatıldı (QUIC: `refuse`); kapının kendi sınırının reddi
