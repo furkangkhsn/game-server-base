@@ -121,6 +121,9 @@ pub struct MetricAccumulator {
     verdicts_lost: VerdictsLost,
     /// The transport tasks' loss deltas, summed (B58).
     transport: TransportCounters,
+    /// Periodic reports the collector emitted torn at its cut grace
+    /// (F70; cumulative — see `cut`).
+    reports_torn_at_cut_grace: u64,
 }
 
 impl MetricAccumulator {

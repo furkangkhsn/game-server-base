@@ -2,6 +2,8 @@ resource service.name=gsb-test
 scope gsb
 gsb_metrics_dropped sum t=2 mono=true unit="" n=1 | Metric samples dropped on the bounded metrics channel across all producers.
   [] 1000..2000 int 18
+gsb_metrics_reports_torn_at_cut_grace sum t=2 mono=true unit="" n=1 | Periodic metric reports the collector emitted torn at its cut grace (a sharded room's round still in flight when the grace ran out; the report went out, nothing was lost).
+  [] 1000..2000 int 2
 gsb_registry_rooms gauge unit="" n=1 | Current room count.
   [] 0..2000 int 2
 gsb_registry_conns gauge unit="" n=1 | Current registered connection count.

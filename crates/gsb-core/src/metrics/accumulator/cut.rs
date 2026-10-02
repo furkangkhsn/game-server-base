@@ -14,6 +14,9 @@
 //! `Lagged`) sample on different ticks from then on and never line up
 //! again: waiting cannot cure that, so it does not count (BACKLOG F20).
 //!
+//! A report the collector emits torn anyway — at its cut grace — is
+//! counted here (F70), so the report carries how often the bound is hit.
+//!
 //! Only live rows are asked: a destroyed room's rows linger with frozen
 //! counters (`ROOM_GONE_GRACE_REPORTS`) and each shard froze at its own
 //! last step.
@@ -50,6 +53,13 @@ impl MetricAccumulator {
             *split |= *steps != acc.latest.steps;
         }
         rounds.values().any(|&(_, split)| split)
+    }
+
+    /// The report about to be built goes out torn: the cut grace ran out
+    /// with a round still in flight (BACKLOG F70). Counted on that report
+    /// and every one after ([`crate::metrics::MetricReport::reports_torn_at_cut_grace`]).
+    pub(crate) fn count_torn_report(&mut self) {
+        self.reports_torn_at_cut_grace += 1;
     }
 }
 

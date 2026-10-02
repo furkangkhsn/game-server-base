@@ -456,6 +456,19 @@ fn the_transport_losses_survive_the_wire() {
     assert_eq!(got.actions_dropped_top, sent.actions_dropped_top);
 }
 
+/// The collector's count of reports torn at its cut grace (F70) crosses
+/// the wire in its slot after `metrics_dropped`, its neighbours intact.
+#[test]
+fn the_torn_report_count_survives_the_wire() {
+    let mut sent = three_shards();
+    sent.metrics_dropped = 3;
+    sent.reports_torn_at_cut_grace = 7;
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    assert_eq!(got.metrics_dropped, 3);
+    assert_eq!(got.reports_torn_at_cut_grace, 7);
+    assert_eq!(got.rooms.len(), sent.rooms.len());
+}
+
 /// Every server-close reason crosses the wire in its own slot (GSMF
 /// added `idle_input`, E6; GSMG `kicked`, E8): each counted once, each read back at its
 /// own reason — none merged into a neighbour, none lost at the end.

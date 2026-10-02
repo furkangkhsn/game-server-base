@@ -162,6 +162,7 @@ impl MetricAccumulator {
         }
         MetricReport {
             metrics_dropped,
+            reports_torn_at_cut_grace: self.reports_torn_at_cut_grace,
             emitted_at: at,
             registry: self.registry.map(|r| RegistryReport {
                 rooms: r.rooms,

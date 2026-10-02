@@ -24,6 +24,7 @@ mod logic;
 ///
 /// body =
 ///   u64 metrics_dropped
+///   u64 reports_torn_at_cut_grace
 ///   u32 n_rooms
 ///   per room (order as in `MetricReport::rooms`):
 ///     u64 room_id  u64 steps  f64 hz  u64 budget_us  u64 step_min_us
@@ -288,6 +289,7 @@ impl W {
 pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     let mut w = W(Vec::with_capacity(128 + r.rooms.len() * 256));
     w.u64(r.metrics_dropped);
+    w.u64(r.reports_torn_at_cut_grace);
     w.u32(r.rooms.len() as u32);
     for room in &r.rooms {
         w.u64(room.room.0);
@@ -484,6 +486,7 @@ impl<'a> R<'a> {
 pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
     let mut r = R::new(body);
     let metrics_dropped = r.u64()?;
+    let reports_torn_at_cut_grace = r.u64()?;
     let n = r.u32()?;
     let mut rooms = Vec::with_capacity(n as usize);
     for _ in 0..n {
@@ -675,6 +678,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
     }
     Some(MetricReport {
         metrics_dropped,
+        reports_torn_at_cut_grace,
         // The emission stamp (`emitted_at`) is a monotonic-clock `Instant`
         // from the SERVER process — meaningless across a process boundary
         // (the orchestrator's timeline differs), so it does not ride the

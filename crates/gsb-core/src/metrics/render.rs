@@ -189,7 +189,7 @@ impl MetricReport {
              frames_out_closed={} close_notices_dropped={} \
              requests_unprocessed={} actions_unprocessed={} \
              control_frames_unprocessed={} \
-             metrics_dropped={} server_closes={}{}",
+             metrics_dropped={} reports_torn_at_cut_grace={} server_closes={}{}",
             n.bytes_in,
             n.bytes_out_room,
             n.bytes_out_control,
@@ -211,6 +211,7 @@ impl MetricReport {
             n.actions_unprocessed,
             n.control_frames_unprocessed,
             self.metrics_dropped,
+            self.reports_torn_at_cut_grace,
             n.server_closes.total(),
             // One stable key per reason (`server_close_<reason>=N`, zeros
             // included), so a grep for one reason never depends on which

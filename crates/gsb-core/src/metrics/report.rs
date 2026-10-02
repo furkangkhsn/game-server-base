@@ -304,6 +304,14 @@ pub struct MetricReport {
     /// room send at most one sample per report period); non-zero signals the
     /// collector falling behind (or a startup/shutdown flush burst).
     pub metrics_dropped: u64,
+    /// Periodic reports the collector emitted TORN at its cut grace
+    /// (BACKLOG F70): a sharded room's round was still in flight when the
+    /// grace ran out (`metrics::CUT_GRACE`, DESIGN §12 "Toplayıcı
+    /// uçuştaki turu bekler"), cumulative — this report included when it
+    /// is one. Not a loss: the report went out, as it did before the wait
+    /// existed; how often the bound is hit is the measure of the shards
+    /// keeping their schedule.
+    pub reports_torn_at_cut_grace: u64,
     /// Wall-clock instant at which the collector emitted this report (the
     /// `at` argument of [`MetricAccumulator::report`]).
     ///
@@ -348,6 +356,7 @@ impl MetricReport {
             .unwrap_or_else(Instant::now);
         Self {
             metrics_dropped: 0,
+            reports_torn_at_cut_grace: 0,
             emitted_at,
             rooms: Vec::new(),
             registry: None,

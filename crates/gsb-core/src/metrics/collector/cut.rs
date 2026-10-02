@@ -21,7 +21,9 @@
 //! the due time (capped at half the period): a shard that died or stalls
 //! cannot hold the reports back; at the grace the report goes out torn,
 //! as it did before, and the consumer finds it torn the way it always
-//! has (`(steps, lagged_ticks)` apart). The next report is due one
+//! has (`(steps, lagged_ticks)` apart) — and counted on the report
+//! itself (`MetricReport::reports_torn_at_cut_grace`, BACKLOG F70), so
+//! how often the bound is hit is measured, not only logged. The next report is due one
 //! period after the one that went out — a wait moves the emit just past
 //! the shards' round, where the following reports land without waiting.
 //!
@@ -46,14 +48,16 @@ pub const CUT_GRACE: Duration = Duration::from_millis(250);
 impl MetricsCollector {
     /// Whether the report due since `self.next_report` goes out at `now`
     /// (on the tick clock): no sharded room's round is in flight, or the
-    /// grace from the due time has passed (then torn, with a `debug`).
-    pub(super) fn ready_to_emit(&self, now: Instant) -> bool {
+    /// grace from the due time has passed (then torn — counted on the
+    /// report, `reports_torn_at_cut_grace` (F70) — with a `debug`).
+    pub(super) fn ready_to_emit(&mut self, now: Instant) -> bool {
         if !self.acc.round_in_flight() {
             return true;
         }
         let grace = self.cut_grace.min(self.period / 2);
         let late = now.saturating_duration_since(self.next_report) >= grace;
         if late {
+            self.acc.count_torn_report();
             tracing::debug!(
                 ?grace,
                 "a sharded room's round was still in flight at the cut grace; \

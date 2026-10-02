@@ -152,6 +152,7 @@ const LATE: LogicCounter = LogicCounter::sum("late_name", "");
 pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
     MetricReport {
         metrics_dropped: 0,
+        reports_torn_at_cut_grace: 0,
         emitted_at: Instant::now(),
         rooms,
         registry: None,

@@ -43,6 +43,7 @@ impl MetricReport {
         // Top-level: metric-channel health; then the registry scope
         // (control-plane gauges + cumulative counters) and the net scope.
         scalar(&mut out, &families::METRICS_DROPPED, self);
+        scalar(&mut out, &families::REPORTS_TORN, self);
         if let Some(reg) = &self.registry {
             for f in &families::REGISTRY {
                 scalar(&mut out, f, reg);

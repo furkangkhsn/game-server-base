@@ -4314,6 +4314,25 @@ sanal saat — kilit testler `metrics::tests::cut`, paused saat). Eksik
 satır (henüz ilk örneğini göndermemiş shard, B45) beklenmez: toplayıcı
 odanın shard sayısını bilmez.
 
+**Sınırda yırtık çıkan rapor sayılır (F70).** Önceden yalnız `debug`
+satırıydı. Şimdi `CUT_GRACE` dolduğunda uçuşta tur varken çıkan her
+periyodik rapor toplayıcının kendi sayacına katılır:
+`MetricReport::reports_torn_at_cut_grace` (kümülatif; yırtık rapor kendi
+sayımını taşır). Kapsam toplayıcının kendisi — üst düzey, kanalın
+sağlığı `metrics_dropped`'ın yanında: `gsb-metric scope=net` satırında
+`metrics_dropped=`'den sonra `reports_torn_at_cut_grace=`, Prometheus'ta
+`gsb_metrics_dropped_total`'dan sonra
+`gsb_metrics_reports_torn_at_cut_grace_total`, OTLP'de aynısı; loadgen
+telinde üst düzey `metrics_dropped`'tan sonra bir `u64` (tel düzeni
+değişti; sihirli sayıyı birleştirmede ebeveyn atar). Kayıp değil — rapor
+çıktı, beklemeden önceki gibi —, sınırın ne sıklıkla aşıldığının
+ölçüsü: sıfırdan farklı ve büyüyorsa bir shard takvimini tutamıyor
+(ölü, takılmış ya da aç). `with_cut_grace(ZERO)` hiç beklemez: o
+yapılandırmada uçuşta turla çıkan her rapor sayılır. `lagged_ticks`'te
+ayrışan satırlar (F20) ve son rapor sayılmaz — beklenmezler, sınıra
+varmazlar. Kilit: `metrics::tests::cut` (paused saat; hiç göndermeyen
+shard → sınırda 1, hizalı rapor 0, sonraki raporlar 1'de kalır).
+
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi
 saymazlar. Katlanmış bir histogram üzerinde percentil, histogramın

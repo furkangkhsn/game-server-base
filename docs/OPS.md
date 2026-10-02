@@ -10,7 +10,7 @@
 | # | Karar | Gerekçe |
 |---|---|---|
 | 1 | HTTP sunucusu **elle yazılmış minimal HTTP/1.1** (tokio `TcpListener` üstünde) | Sıfır yeni dependency; Prometheus text formatı ve 3 endpoint için framework ağır gelir. Projenin kendi geleneği (rUDP, framing, lint hep elle). Elenenler: axum/hyper — bağımlılık bütçesi + yüzey alanı. Yalnız `GET` + `Connection: close`; keep-alive/chunking yok (NOT-DONE) |
-| 2 | Metrik akışı **`tokio::sync::watch`** ile | `MetricSink` enum'üne üçüncü varyant: `Watch(watch::Sender<MetricReport>)`. Collector her rapor periyodunda en son raporu watch'a iter (bir sharded odanın örnek turu uçuştaysa turun inmesini bekler: periyot sınırından genelde bir tick, en çok `metrics::CUT_GRACE` = 250 ms sonra — F29, DESIGN §12 "Toplayıcı uçuştaki turu bekler"; iki rapor arası en çok periyot + 250 ms, `/healthz`'ün üç periyotluk eşiğinin çok altında); HTTP task `borrow()` ile okur. Kilit yok (tek yazar, tek güncel değer — tam watch semantiği); lint'e takılan paylaşımlı-state deseni de girmez |
+| 2 | Metrik akışı **`tokio::sync::watch`** ile | `MetricSink` enum'üne üçüncü varyant: `Watch(watch::Sender<MetricReport>)`. Collector her rapor periyodunda en son raporu watch'a iter (bir sharded odanın örnek turu uçuştaysa turun inmesini bekler: periyot sınırından genelde bir tick, en çok `metrics::CUT_GRACE` = 250 ms sonra — F29, DESIGN §12 "Toplayıcı uçuştaki turu bekler"; iki rapor arası en çok periyot + 250 ms, `/healthz`'ün üç periyotluk eşiğinin çok altında); sınırda yırtık çıkan rapor `reports_torn_at_cut_grace`'te sayılır — F70, §3; HTTP task `borrow()` ile okur. Kilit yok (tek yazar, tek güncel değer — tam watch semantiği); lint'e takılan paylaşımlı-state deseni de girmez |
 | 3 | **JSON yok** — admin parametreleri query-string/form-encoded | Elle JSON parser'ı yazmak red; admin yüzeyi 3 operasyon, JSON gerektirmiyor. Elenen: serde_json bağımlılığı |
 | 4 | Varsayılan bağlama **127.0.0.1**, config ile açılır/kapatılır | `http_listen = ""` → devre dışı (varsayılan davranış değişmesin); adres verilirse dinler. v1'de auth yoktur (NOT-DONE): localhost dışına açmak operatörün bilinçli kararıdır ve dokümanda uyarılır |
 | 5 | Prometheus **text exposition formatı** (`# HELP/# TYPE` + örnek satırları) | Standart scrape formatı; `MetricReport` alanlarından üreten ayrı render fonksiyonu (unit-test edilebilir, HTTP'den bağımsız) |
@@ -1060,6 +1060,17 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   sayar ("REL, RAW, ACK and REPORT datagrams …"). Eski bir sunucu
   (bu turdan önceki) yeni istemcinin duyurusunu `udp_datagrams_malformed`'ta
   sayar (bilinmeyen tür; oturum başına en çok 3).
+- **Toplayıcı: sınırda yırtık çıkan raporlar (F70).** Üst düzey bir
+  `counter`: `reports_torn_at_cut_grace` (`gsb-metric scope=net`
+  satırında `metrics_dropped=`'den sonra; Prometheus/OTLP'de
+  `gsb_metrics_reports_torn_at_cut_grace_total`,
+  `gsb_metrics_dropped_total`'dan sonra; loadgen telinde üst düzey
+  `metrics_dropped`'tan sonra bir `u64` — düzen değişti, sihirli sayıyı
+  birleştirmede ebeveyn atar; `RESULT`'ta yok). Toplayıcının, bir
+  sharded odanın turu uçuştayken `metrics::CUT_GRACE` (250 ms) dolunca
+  yırtık yaydığı periyodik raporlar, kümülatif (DESIGN §12 "Sınırda
+  yırtık çıkan rapor sayılır"). Kayıp değil; artıyorsa bir shard
+  takvimini tutamıyor (ölü/takılmış/aç). Önceden yalnız `debug` satırı.
 - **Taşıma kapsamı: takılmış sürecin idle pencereleri (F72).** Satırın ve
   tablonun sonuna bir `counter`: `idle_windows_restarted_late`
   (`gsb_transport_idle_windows_restarted_late_total`; loadgen telinde

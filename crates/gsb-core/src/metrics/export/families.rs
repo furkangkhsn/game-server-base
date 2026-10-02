@@ -115,6 +115,15 @@ pub(super) const METRICS_DROPPED: Scalar<MetricReport> = Scalar {
     get: |r| r.metrics_dropped,
 };
 
+/// The collector's own measure (F70): periodic reports emitted torn at
+/// the cut grace (right after the channel's health).
+pub(super) const REPORTS_TORN: Scalar<MetricReport> = Scalar {
+    name: "gsb_metrics_reports_torn_at_cut_grace_total",
+    kind: Kind::Counter,
+    help: "Periodic metric reports the collector emitted torn at its cut grace (a sharded room's round still in flight when the grace ran out; the report went out, nothing was lost).",
+    get: |r| r.reports_torn_at_cut_grace,
+};
+
 /// The server-close family: ONE counter with a `reason` label/attribute
 /// per [`crate::conn::ServerClose`] — zeros included (the set is closed
 /// and known; a series that appears only once non-zero cannot be rated

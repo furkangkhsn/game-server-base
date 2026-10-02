@@ -93,6 +93,9 @@
 //! (`unauth_source_cap`: the net line's `server_close_<reason>=` and
 //! `gsb_net_server_closes_total{reason}`, the registry line's
 //! `close_verdict_lost_<reason>=` and its labeled family).
+//! F70's `reports_torn_at_cut_grace=` after the net line's
+//! `metrics_dropped=`, with `gsb_metrics_reports_torn_at_cut_grace_total`
+//! after `gsb_metrics_dropped_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -157,6 +160,9 @@ pub(super) fn golden_report() -> MetricReport {
     lost.close(ServerClose::IdleInput);
     lost.close(ServerClose::IdleInput);
     acc.apply(MetricsEvent::VerdictsLost(lost));
+    // Two reports the collector emitted torn at its cut grace (F70).
+    acc.count_torn_report();
+    acc.count_torn_report();
     let mut a = room_sample(RoomId(1), t0, 30);
     a.step_min_us = 40;
     a.step_max_us = 900;

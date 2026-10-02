@@ -5,7 +5,8 @@
 //! cut; a shard that never sends holds it no longer than the grace.
 //!
 //! Paused clock, a hand-fed ticker: the tick a report falls due on, and
-//! the grace, are exact.
+//! the grace, are exact. A report that goes out torn at the grace is
+//! counted (BACKLOG F70: `reports_torn_at_cut_grace`).
 
 use super::*;
 use crate::shard::sample_id;
@@ -146,6 +147,7 @@ async fn a_round_split_by_the_due_tick_goes_out_whole_on_the_next() {
     let reports = rig.reports();
     assert_eq!(reports.len(), 1, "out on the next tick");
     assert_eq!(rows(&reports[0]), vec![(60, 0); 4]);
+    assert_eq!(reports[0].reports_torn_at_cut_grace, 0, "a cut is not torn");
 }
 
 /// A shard that never sends its round (dead, or stalled) holds the
@@ -178,6 +180,36 @@ async fn a_shard_that_never_sends_holds_the_report_only_for_the_grace() {
     );
     assert_eq!(reports.len(), 1);
     assert_eq!(rows(&reports[0]), vec![(60, 0), (60, 0), (60, 0), (30, 0)]);
+    assert_eq!(
+        reports[0].reports_torn_at_cut_grace, 1,
+        "the torn report counts itself (F70)"
+    );
+}
+
+/// F70: the count is cumulative — the torn report's 1 stays on the
+/// reports after it, and a report that lines up adds nothing.
+#[tokio::test(start_paused = true)]
+async fn a_report_torn_at_the_grace_is_counted_once() {
+    let mut rig = rig();
+    for i in 0..4 {
+        rig.shard(i, 30, 0);
+    }
+    rig.tick_to(SAMPLE_EVERY - 1).await;
+    for i in 0..3 {
+        rig.shard(i, 60, 0);
+    }
+    rig.tick_to(SAMPLE_EVERY * 3 / 2).await;
+    let torn = rig.reports();
+    assert_eq!(torn.len(), 1, "out at the grace");
+    assert_eq!(torn[0].reports_torn_at_cut_grace, 1);
+    rig.shard(3, 60, 0);
+    rig.tick_to(SAMPLE_EVERY * 3).await;
+    let after = rig.reports();
+    assert!(!after.is_empty(), "the next period's report");
+    for r in &after {
+        assert!(is_cut(r), "lined up: {:?}", rows(r));
+        assert_eq!(r.reports_torn_at_cut_grace, 1, "nothing added");
+    }
 }
 
 /// Disagreements waiting cannot cure do not hold a report: rows apart on
@@ -205,6 +237,10 @@ async fn rows_waiting_cannot_line_up_do_not_hold_the_report() {
     let reports = rig.reports();
     assert_eq!(reports.len(), 1, "out on the due tick");
     assert_eq!(reports[0].rooms.len(), 8);
+    assert_eq!(
+        reports[0].reports_torn_at_cut_grace, 0,
+        "never held, never counted"
+    );
 }
 
 /// `with_cut_grace(Duration::ZERO)` never waits: the report goes out on
@@ -234,4 +270,8 @@ async fn a_zero_grace_never_waits() {
     let reports = rig.reports();
     assert_eq!(reports.len(), 1, "out on the due tick");
     assert_eq!(rows(&reports[0]), vec![(30, 0), (60, 0)]);
+    assert_eq!(
+        reports[0].reports_torn_at_cut_grace, 1,
+        "torn at a grace of zero"
+    );
 }

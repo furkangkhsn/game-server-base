@@ -60,8 +60,9 @@ pub fn request(
     health: Health,
 ) -> proto::ExportMetricsServiceRequest {
     let mut m = Vec::with_capacity(96);
-    let f = &families::METRICS_DROPPED;
-    m.push(scalar(f.name, f.kind, f.help, (f.get)(report), at));
+    for f in [&families::METRICS_DROPPED, &families::REPORTS_TORN] {
+        m.push(scalar(f.name, f.kind, f.help, (f.get)(report), at));
+    }
     if let Some(reg) = &report.registry {
         for f in &families::REGISTRY {
             m.push(scalar(f.name, f.kind, f.help, (f.get)(reg), at));
