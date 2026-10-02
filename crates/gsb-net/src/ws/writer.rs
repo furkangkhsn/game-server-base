@@ -5,8 +5,6 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 
@@ -21,6 +19,7 @@ use gsb_core::conn::SessionEnd;
 use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
+use crate::wire::WireCount;
 use crate::ws::*;
 
 /// Outbound work for the single socket-writer task.
@@ -40,17 +39,17 @@ pub(super) enum WsOut {
 }
 
 /// Spawn the door's socket-writer task. Returns the queue into it and
-/// the byte count it keeps — the SAME `Arc` the task bumps, handed out
+/// the byte count it keeps — the SAME count the task bumps, handed out
 /// from one place so the pump's writer can never be wired to a count
 /// nothing writes. `metrics`: where the frames it never writes are
 /// counted (B66, [`lost`]).
 pub(super) fn spawn_socket_writer(
     sock: OwnedWriteHalf,
     metrics: crate::TransportMetrics,
-) -> (mpsc::Sender<WsOut>, Arc<AtomicU64>) {
+) -> (mpsc::Sender<WsOut>, WireCount) {
     let (tx, rx) = mpsc::channel::<WsOut>(OUT_QUEUE_CAPACITY);
-    let written = Arc::new(AtomicU64::new(0));
-    tokio::spawn(ws_writer_task(sock, rx, Arc::clone(&written), metrics));
+    let written = WireCount::new();
+    tokio::spawn(ws_writer_task(sock, rx, written.clone(), metrics));
     (tx, written)
 }
 
@@ -62,11 +61,13 @@ pub(super) fn spawn_socket_writer(
 /// [`WsWriter`]'s [`WriteProgress`]): this task is the only writer of it,
 /// bumping it on every partial socket write — which is why a frame is
 /// written with a `write` loop rather than `write_all`, whose single
-/// future would only say "done" once the whole frame is out.
+/// future would only say "done" once the whole frame is out — and
+/// stamping WHEN: the pump sees the count only when it looks, and the
+/// window restarts at the byte, not at the look (BACKLOG B15c).
 async fn ws_writer_task(
     mut sock: OwnedWriteHalf,
     mut rx: mpsc::Receiver<WsOut>,
-    written: Arc<AtomicU64>,
+    written: WireCount,
     metrics: crate::TransportMetrics,
 ) {
     // RFC 6455 §5.5.1: no DATA frame may follow a Close frame. Enforced
@@ -115,7 +116,7 @@ async fn ws_writer_task(
                 }
                 Ok(n) => {
                     off += n;
-                    written.fetch_add(n as u64, Ordering::Relaxed);
+                    written.wrote(n);
                 }
             }
         }
@@ -150,9 +151,9 @@ pub(super) struct WsWriter {
     tx: PollSender<WsOut>,
     mapping: WsMessageMapping,
     closing: Arc<AtomicBool>,
-    /// Bytes the socket-writer task has written (it is the only writer;
-    /// this side only reads). See [`WriteProgress`] below.
-    written: Arc<AtomicU64>,
+    /// Bytes the socket-writer task has written, and when (it is the
+    /// only writer; this side only reads). See [`WriteProgress`] below.
+    written: WireCount,
     /// The teardown close, and where its losses are counted (B80).
     teardown: going_away::Teardown,
 }
@@ -164,7 +165,7 @@ impl WsWriter {
         tx: mpsc::Sender<WsOut>,
         mapping: WsMessageMapping,
         closing: Arc<AtomicBool>,
-        written: Arc<AtomicU64>,
+        written: WireCount,
     ) -> Self {
         Self {
             tx: PollSender::new(tx),
@@ -201,11 +202,18 @@ impl Drop for WsWriter {
 /// The WS door's byte signal comes from the socket-writer TASK, not from
 /// this sink: the pump's sends here complete when a QUEUE slot frees,
 /// i.e. when the task has finished an earlier frame — counting those
-/// would be the frame-granular clock again, one queue away. A relaxed
-/// load is enough: only a change is ever looked for.
+/// would be the frame-granular clock again, one queue away. The pump is
+/// not woken by these bytes (a queue slot frees only once a whole frame
+/// is out), so it first sees them at its deadline; the task's timestamp
+/// puts the window's restart at the byte, not at that look — before
+/// B15c the verdict could come up to two windows after the last byte.
 impl WriteProgress for WsWriter {
     fn bytes_written(&self) -> u64 {
-        self.written.load(Ordering::Relaxed)
+        self.written.bytes()
+    }
+
+    fn last_write_at(&self) -> Option<tokio::time::Instant> {
+        Some(self.written.last_at())
     }
 }
 

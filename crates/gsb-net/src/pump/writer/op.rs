@@ -75,13 +75,16 @@ where
         Self::new(sink, None, Kind::Close, since)
     }
 
-    /// Read the byte count; a change restarts the window NOW. Returns
-    /// when the transport last moved (or the window's start).
+    /// Read the byte count; a change restarts the window at the moment
+    /// the transport took the byte — when it can say (a socket written by
+    /// another task, seen only at a deadline), else now. Returns when the
+    /// transport last moved (or the window's start).
     pub(super) fn observe(&mut self) -> Instant {
         let n = self.sink.bytes_written();
         if n != self.seen {
             self.seen = n;
-            self.moved_at = Instant::now();
+            let at = self.sink.last_write_at().unwrap_or_else(Instant::now);
+            self.moved_at = self.moved_at.max(at);
         }
         self.moved_at
     }

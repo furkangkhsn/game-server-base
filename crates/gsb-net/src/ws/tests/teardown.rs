@@ -8,7 +8,7 @@
 
 use super::*;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::SinkExt;
 use gsb_core::metrics::{MetricsEvent, TransportCounters};
@@ -34,7 +34,7 @@ fn writer(
         tx,
         WsMessageMapping::GameEnvelope,
         Arc::clone(closing),
-        Arc::new(AtomicU64::new(0)),
+        crate::wire::WireCount::new(),
     )
     .with_metrics(Some(metrics));
     (w, samples)

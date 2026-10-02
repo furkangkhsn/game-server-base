@@ -90,15 +90,19 @@ pub struct PumpTimeouts {
 /// the writer and polls it through a `&mut` for the whole of a pending
 /// send; reading the count through that same borrow (see
 /// `writer::op::Op`) needs no lock and no cell — the one door whose
-/// socket lives in another task (WebSocket) shares a single-writer
-/// atomic, the way it already shares its `closing` flag.
+/// socket lives in another task (WebSocket) shares an atomic count
+/// (`crate::wire::WireCount`, which also says WHEN), the way it already
+/// shares its `closing` flag; the TLS door counts beneath rustls with
+/// the same type (BACKLOG B15).
 pub trait WriteProgress {
     /// Bytes the transport has accepted so far (monotonic).
     fn bytes_written(&self) -> u64;
 
     /// When the count last moved, for a transport whose socket is written
-    /// outside the pump's own polls: the pump may first see such bytes at
-    /// its deadline. `None` (the default): the look is the moment.
+    /// outside the pump's own polls (the WebSocket door's socket-writer
+    /// task): the pump first sees such bytes at its deadline, and the
+    /// window must restart at the byte, not at the look (BACKLOG B15c).
+    /// `None` (the default): the look is the moment.
     fn last_write_at(&self) -> Option<tokio::time::Instant> {
         None
     }

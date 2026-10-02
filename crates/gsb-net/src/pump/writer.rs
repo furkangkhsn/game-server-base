@@ -233,3 +233,6 @@ fn stall_reason(window: Option<Duration>) -> String {
         None => "write stall".into(),
     }
 }
+
+#[cfg(test)]
+mod tests;

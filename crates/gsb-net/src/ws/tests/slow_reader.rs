@@ -181,3 +181,43 @@ async fn a_deaf_ws_peer_still_dies() {
         other => panic!("expected the write-stall verdict, got {other:?}"),
     }
 }
+
+/// The door says WHEN its socket last took a byte (BACKLOG B15c): the
+/// pump sees the socket-writer's count only when it looks — at its
+/// deadline, while it waits on a full queue — and restarts the window at
+/// this moment, not at the look. Without it a verdict could come up to
+/// two windows after the last byte (`pump::writer::tests` locks the
+/// pump's half).
+#[tokio::test(start_paused = true)]
+async fn the_ws_writer_says_when_its_socket_last_took_a_byte() {
+    use crate::pump::WriteProgress;
+    let (ours, _peer) = tight_pair().await;
+    let (_read_half, write_half) = ours.into_split();
+    let (tx, written) = spawn_socket_writer(write_half, None);
+    let writer = WsWriter::new(
+        tx.clone(),
+        WsMessageMapping::GameEnvelope,
+        Arc::new(AtomicBool::new(false)),
+        written,
+    );
+    let at = tokio::time::Instant::now() + Duration::from_secs(3);
+    tokio::time::sleep_until(at).await;
+    tx.send(WsOut::Game(Bytes::from_static(&[0, 0, 0, 2, 7, 0])))
+        .await
+        .expect("the socket writer is running");
+    for _ in 0..1000 {
+        if writer.bytes_written() > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        writer.bytes_written() > 0,
+        "the socket writer wrote the frame"
+    );
+    let last = writer.last_write_at().expect("the WS door says when");
+    assert!(
+        last >= at && last <= at + Duration::from_millis(50),
+        "the frame went out at {at:?}; the door says {last:?}"
+    );
+}
