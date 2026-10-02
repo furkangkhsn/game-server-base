@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gsb_core::auth::{TicketAuth, TicketError, TicketValidator, ValidatedTicket};
 use gsb_core::channel::{FrameBatch, channel};
@@ -48,7 +48,7 @@ use gsb_core::room::{
 };
 use gsb_core::shard::BorderRecord;
 use gsb_core::ticker::Ticker;
-use gsb_protocol::base::{Auth, Heartbeat};
+use gsb_protocol::base::{Auth, Heartbeat, JoinRoom};
 use gsb_protocol::{base_table, op};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot};
@@ -166,13 +166,64 @@ fn has_op(batch: &FrameBatch, want: u16) -> bool {
     batch.iter().any(|f| f.op == want)
 }
 
-/// Short-window silence check: nothing arrives within 400 ms.
-async fn expect_quiet(out: &mut mpsc::Receiver<FrameBatch>) {
-    match tokio::time::timeout(Duration::from_millis(400), out.recv()).await {
-        Err(_) => {} // silence, as expected
-        Ok(None) => panic!("out channel closed unexpectedly"),
-        Ok(Some(b)) => panic!("expected silence, got batch: {b:?}"),
+/// Every frame the actor sends up to and including the first one with
+/// `fence` — or, with `None`, until the actor ends (its outbound
+/// channel closes). The fence is a frame the actor sends only after it
+/// has handled every frame queued before the one that provoked it, so
+/// what came before it is ALL the burst bought: no silence window, and
+/// nothing a slow run delivers late (BACKLOG F52).
+async fn frames_until(
+    out: &mut mpsc::Receiver<FrameBatch>,
+    fence: Option<u16>,
+) -> Vec<gsb_protocol::FrameBody> {
+    let mut frames = Vec::new();
+    loop {
+        let Some(batch) = tokio::time::timeout(WAIT, out.recv())
+            .await
+            .expect("the fence in time")
+        else {
+            assert!(fence.is_none(), "the actor ended before the fence");
+            return frames;
+        };
+        let done = fence.is_some_and(|op| has_op(&batch, op));
+        frames.extend(batch);
+        if done {
+            return frames;
+        }
     }
+}
+
+/// How many of `frames` are heartbeat ACKs.
+fn acks(frames: &[gsb_protocol::FrameBody]) -> usize {
+    frames
+        .iter()
+        .filter(|f| f.op == op::base::HEARTBEAT_ACK)
+        .count()
+}
+
+/// The codes of every `ERROR` among `frames`.
+fn error_codes(frames: &[gsb_protocol::FrameBody]) -> Vec<i32> {
+    frames
+        .iter()
+        .filter(|f| f.op == op::base::ERROR)
+        .map(|f| {
+            gsb_protocol::base::Error::decode(f.payload.as_ref())
+                .expect("Error decode")
+                .code
+        })
+        .collect()
+}
+
+/// The §3.2 throttle's bound, structurally: answered heartbeats are at
+/// least one interval (1 s) apart, so a burst whose handling fits in
+/// `span` buys at most `1 + ⌊span / 1 s⌋` answers. A burst handled in
+/// under a second (any unstalled run) buys exactly the one; only a run
+/// stalled a whole interval inside the burst may legitimately be
+/// answered again — the old "one ACK, then 400 ms of silence" read that
+/// as a broken throttle (BACKLOG F52). A throttle answering 1:1 still
+/// fails: 40 answers need a 39 s span.
+fn max_answers(span: Duration) -> usize {
+    1 + span.as_secs() as usize
 }
 
 // =====================================================================
@@ -288,19 +339,15 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
     // Five pre-auth heartbeats back-to-back: ONE ack (the first), the
     // surplus counted silently — no ERROR frames at all (they are not
     // violations; a violating flood would have been answered/closed).
+    let t0 = Instant::now();
     for _ in 0..5 {
         in_tx
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
             .await
             .expect("inbox open");
     }
-    let batch = next_batch(&mut out).await;
-    assert!(
-        has_op(&batch, op::base::HEARTBEAT_ACK),
-        "the first pre-auth heartbeat is answered"
-    );
-    expect_quiet(&mut out).await;
-    // Authenticate (local path): the §4 notice crosses to the registry…
+    // Authenticate (local path) right behind them: the AUTH result is
+    // the fence — everything the burst bought came before it.
     let auth = Auth {
         name: "ana".into(),
         ticket: vec![],
@@ -311,8 +358,20 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
         .send(ConnIn::Frame(frame(op::base::AUTH_REQ, &auth)))
         .await
         .expect("inbox open");
-    let batch = next_batch(&mut out).await;
-    assert!(has_op(&batch, op::base::AUTH_RESULT), "auth succeeds");
+    let pre = frames_until(&mut out, Some(op::base::AUTH_RESULT)).await;
+    let span = t0.elapsed();
+    assert_eq!(
+        pre.first().map(|f| f.op),
+        Some(op::base::HEARTBEAT_ACK),
+        "the first pre-auth heartbeat is answered"
+    );
+    assert!(
+        acks(&pre) <= max_answers(span),
+        "the surplus is not answered: {} ACKs for a burst handled in {span:?}",
+        acks(&pre)
+    );
+    assert_eq!(error_codes(&pre), Vec::<i32>::new(), "not violations");
+    // …and the §4 notice crosses to the registry…
     match tokio::time::timeout(WAIT, reg_rx.recv())
         .await
         .expect("timed out")
@@ -324,6 +383,7 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
     // FIRST post-auth heartbeat is answered even though a pre-auth ACK
     // went out moments ago (a client probing right after AUTH must never
     // read silence as a dead server)…
+    let t1 = Instant::now();
     in_tx
         .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
         .await
@@ -335,15 +395,28 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
     );
     // …after which the SAME throttle keeps running: a burst buys one
     // answer per interval and the rest are counted, not answered — and
-    // still not violations (no ERROR frame anywhere).
+    // still not violations (no ERROR frame anywhere). The fence is the
+    // actor's end: the stop's own notice (code 14) is its last frame.
     for _ in 0..3 {
         in_tx
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
             .await
             .expect("inbox open");
     }
-    expect_quiet(&mut out).await;
     in_tx.send(ConnIn::Shutdown).await.expect("inbox open");
+    let post = frames_until(&mut out, None).await;
+    let span = t1.elapsed();
+    assert!(
+        // The first post-auth answer came before these.
+        acks(&post) < max_answers(span),
+        "the post-auth surplus is not answered: {} more ACKs in {span:?}",
+        acks(&post)
+    );
+    assert_eq!(
+        error_codes(&post),
+        vec![gsb_protocol::base::ErrorCode::ServerStopping as i32],
+        "no violation, only the stop's notice"
+    );
     handle.await.expect("actor exits cleanly on Shutdown");
 }
 
@@ -375,21 +448,44 @@ async fn postauth_heartbeat_flood_is_answered_once_counted_and_never_scored() {
     // violations close a connection): if any of these were scored, the
     // session would be gone long before the burst ended.
     let hb = Heartbeat { tick: 1 }.encode_to_vec();
+    let t0 = Instant::now();
     for _ in 0..40 {
         in_tx
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
             .await
             .expect("inbox open");
     }
-    let batch = next_batch(&mut out).await;
-    assert!(
-        has_op(&batch, op::base::HEARTBEAT_ACK),
+    // The fence: a join this actor's (stopped) registry cannot take is
+    // answered with an unscored `ERROR` (a server-side condition, weight
+    // 0) — after every heartbeat queued before it.
+    in_tx
+        .send(ConnIn::Frame(frame(
+            op::base::JOIN_ROOM_REQ,
+            &JoinRoom { room_id: 1 }.encode_to_vec(),
+        )))
+        .await
+        .expect("inbox open");
+    let burst = frames_until(&mut out, Some(op::base::ERROR)).await;
+    let span = t0.elapsed();
+    assert_eq!(
+        burst.first().map(|f| f.op),
+        Some(op::base::HEARTBEAT_ACK),
         "the first post-auth heartbeat is answered (a client that keeps \
          the normal cadence sees no change at all)"
     );
-    // …and the other thirty-nine buy exactly nothing: no ACK, and no
-    // ERROR either — they are counted, not violations.
-    expect_quiet(&mut out).await;
+    // …and the other thirty-nine buy nothing: no ACK past the
+    // throttle's bound, and no ERROR either — they are counted, not
+    // violations (the one ERROR is the fence's).
+    assert!(
+        acks(&burst) <= max_answers(span),
+        "the surplus is not answered: {} ACKs for a burst handled in {span:?}",
+        acks(&burst)
+    );
+    assert_eq!(
+        error_codes(&burst),
+        vec![gsb_protocol::base::ErrorCode::Other as i32],
+        "only the fence's answer"
+    );
 
     // The session is alive and unscored: after the interval the next
     // heartbeat is answered again, on the same connection.
@@ -434,6 +530,7 @@ async fn preauth_frame_budget_closes_at_64() {
     // the §3.3 close. Frame 65 crosses the budget: immediate close, the
     // frame itself never processed.
     let hb = Heartbeat { tick: 7 }.encode_to_vec();
+    let t0 = Instant::now();
     for i in 0..65 {
         in_tx
             .send(ConnIn::Frame(frame(op::base::HEARTBEAT, &hb)))
@@ -444,8 +541,19 @@ async fn preauth_frame_budget_closes_at_64() {
             assert!(has_op(&batch, op::base::HEARTBEAT_ACK));
         }
     }
-    let batch = next_batch(&mut out).await;
-    let (code, msg) = error_in(&batch).unwrap_or_else(|| panic!("batch without ERROR: {batch:?}"));
+    // The close notice is the fence: the heartbeats before it buy no
+    // more than the throttle's bound (one per interval of a stalled run).
+    let frames = frames_until(&mut out, Some(op::base::ERROR)).await;
+    let span = t0.elapsed();
+    assert!(
+        // The first heartbeat's answer came before these.
+        acks(&frames) < max_answers(span),
+        "frames 2..=64 stay under the throttle: {} more ACKs in {span:?}",
+        acks(&frames)
+    );
+    let notice = frames.last().expect("the close notice");
+    let e = gsb_protocol::base::Error::decode(notice.payload.as_ref()).expect("Error decode");
+    let (code, msg) = (e.code, e.message);
     assert_eq!(code, 9, "a policy close uses the server-decision code");
     assert!(
         msg.contains("pre-auth frame budget"),

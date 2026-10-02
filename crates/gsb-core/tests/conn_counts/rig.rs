@@ -91,15 +91,33 @@ impl Conn {
         self.metrics.try_recv().ok()
     }
 
+    /// Every event on the metrics channel right now — connection
+    /// samples only (anything else panics), in order.
+    pub fn take_samples(&mut self) -> Vec<ConnSample> {
+        let mut samples = Vec::new();
+        while let Ok(ev) = self.metrics.try_recv() {
+            match ev {
+                MetricsEvent::Conn(s) => samples.push(s),
+                other => panic!("a sample expected, got {other:?}"),
+            }
+        }
+        samples
+    }
+
     /// Local auth, waited for.
     pub async fn auth(&mut self) {
+        self.send_auth().await;
+        self.until(op::base::AUTH_RESULT).await;
+    }
+
+    /// Local auth, sent (its result left on the outbound channel).
+    pub async fn send_auth(&self) {
         let auth = base::Auth {
             name: String::new(),
             ticket: Vec::new(),
             protocol_version: 0,
         };
         self.send(op::base::AUTH_REQ, auth.encode_to_vec()).await;
-        self.until(op::base::AUTH_RESULT).await;
     }
 
     /// Join room 1; the test's registry seats the session on an action
@@ -142,13 +160,24 @@ impl Conn {
 
     /// Skip frames until one with `op`; return it.
     pub async fn until(&mut self, op: u16) -> FrameBody {
+        self.frames_until(op).await.pop().expect("the frame itself")
+    }
+
+    /// Every frame up to and including the first one with `op` (frames
+    /// batched behind it are dropped).
+    pub async fn frames_until(&mut self, op: u16) -> Vec<FrameBody> {
+        let mut frames = Vec::new();
         loop {
             let batch = tokio::time::timeout(WAIT, self.out.recv())
                 .await
                 .expect("a frame in time")
                 .expect("out open");
-            if let Some(f) = batch.into_iter().find(|f| f.op == op) {
-                return f;
+            for f in batch {
+                let found = f.op == op;
+                frames.push(f);
+                if found {
+                    return frames;
+                }
             }
         }
     }
@@ -193,6 +222,23 @@ impl Conn {
         self.ended().await
     }
 
+    /// [`Self::close`], also returning every frame the actor sent that
+    /// the test had not read.
+    pub async fn close_with_frames(mut self) -> (ConnSample, Vec<FrameBody>) {
+        self.tell(ConnIn::Closed {
+            reason: "test over".into(),
+        })
+        .await;
+        self.actor_done().await;
+        let mut frames = Vec::new();
+        while let Ok(batch) = self.out.try_recv() {
+            frames.extend(batch);
+        }
+        let mut samples = self.take_samples().into_iter();
+        let first = samples.next().expect("at least the final sample");
+        (samples.fold(first, add), frames)
+    }
+
     /// Wait for the actor to end; its samples, summed.
     pub async fn ended(self) -> ConnSample {
         tokio::time::timeout(WAIT, self.actor)
@@ -213,7 +259,7 @@ impl Conn {
 }
 
 /// Two samples' deltas, added (the later one's flags win).
-fn add(t: ConnSample, s: ConnSample) -> ConnSample {
+pub fn add(t: ConnSample, s: ConnSample) -> ConnSample {
     ConnSample {
         bytes_in: t.bytes_in + s.bytes_in,
         bytes_out: t.bytes_out + s.bytes_out,

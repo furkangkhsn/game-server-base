@@ -1201,7 +1201,14 @@ async fn latest_registry_sample(
 ///
 /// Read through `RegistrySample::conns` — the leaked table itself, not a
 /// proxy for it.
-#[tokio::test]
+///
+/// On the paused clock (the ticker, the park's grace and the sweep read
+/// the tick clock, and a paused sleep ends only once every task is idle,
+/// the registry's flush included): "400 ms past an 80 ms grace" and
+/// "50 ms after the second connection" are exact there; on the wall
+/// clock a starved room could still hold the park, or the registry not
+/// have flushed, when the sample was read (BACKLOG F52).
+#[tokio::test(start_paused = true)]
 async fn park_expiry_releases_the_registry_row() {
     let (tx, mut metrics, handle) =
         start_registry_observed(expiring_factory(Duration::from_millis(80)));
@@ -1347,7 +1354,11 @@ fn declining_factory() -> RoomFactory<(), (), (), ()> {
 ///
 /// This is the DEFAULT-OFF configuration's path: with
 /// `disconnect_grace_secs = 0` every single disconnect leaked.
-#[tokio::test]
+///
+/// On the paused clock, as [`park_expiry_releases_the_registry_row`]:
+/// the despawn's control phase runs on a tick, and the 300 ms and 50 ms
+/// settles are exact there (BACKLOG F52).
+#[tokio::test(start_paused = true)]
 async fn declined_park_releases_the_registry_row() {
     let (tx, mut metrics, handle) = start_registry_observed(declining_factory());
     let room = RoomId(75);
@@ -1414,7 +1425,9 @@ fn declining_sharded_factory() -> RoomFactory<(), (), (), ()> {
 /// sharded room (no single shard sees the whole roster). A declined park
 /// that reports nothing leaves the room permanently "full" with nobody
 /// in it.
-#[tokio::test]
+///
+/// On the paused clock, as its single-room twin (BACKLOG F52).
+#[tokio::test(start_paused = true)]
 async fn sharded_declined_park_releases_the_registry_row_and_the_member_slot() {
     let (tx, mut metrics, handle) = start_registry_observed(declining_sharded_factory());
     let room = RoomId(76);
