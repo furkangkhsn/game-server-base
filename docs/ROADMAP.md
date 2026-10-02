@@ -77,11 +77,17 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1728** (1728/1728 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1746** (1746/1746 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 → 1728 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **w1 — B15 + F66** (akış kapılarının yazıcıları) — TLS'te saat
+Son tur: **c2 — F72 + F65 + F70** (çekirdek paketi) — geç ateşlenen idle
+son tarihi (`IDLE_STALL_GRACE` 250 ms) sürecin takılması sayılır, pencere
+bir kez yeniden başlar ve `idle_windows_restarted_late` sayılır (akış
+kapıları + rUDP); hükümden önce pump soketi bir kez daha okur (F34).
+`gsb_core::channel::try_send` / `SendLosses`; toplayıcının sınırda yırtık
+raporları `reports_torn_at_cut_grace`'te.
+Önceki tur: **w1 — B15 + F66** (akış kapılarının yazıcıları) — TLS'te saat
 soketin baytıyla (rustls'in 64 KiB'ı okuyan yavaş eşi kesmiyor), WS'de
 pencere son bayttan (iki değil bir pencere); histerezis ayar notu;
 `ws_going_away_unsent_*` → `ws_teardown_closes_unsent_*`.

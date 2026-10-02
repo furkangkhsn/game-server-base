@@ -5,6 +5,46 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## c2 — F72 takılan sürecin idle penceresi, F65 sayan `try_send`, F70 sınırda yırtık rapor (`core/c2-stall-idle`)
+
+- **F72 — geç ateşlenen idle son tarihi sürecin takılmasıdır (kullanıcı
+  kararı 2026-10-02).** Akış kapılarının reader pump'ı ve rUDP demux'ının
+  idle süpürmesi, son tarihi `gsb_net::pump::IDLE_STALL_GRACE` (250 ms)
+  üstü GEÇ ateşlenen pencereyi kapatmak yerine yeniden başlatır ve sayar:
+  `idle_windows_restarted_late` (`gsb_transport_idle_windows_restarted_late_total`,
+  taşıma kapsamının sonunda). Sessizlik başına bir kez: yeniden başlayan
+  pencere de sessiz biterse oturum ne kadar geç ateşlenirse ateşlensin
+  `idle_timeout` kapanır (sınır iki pencere + takılmalar); kare/datagram
+  hakkı yeniler. Eşik sabit, pencerenin kesri değil: ölçüm (500 tokio
+  zamanlayıcısı) sessizde en geç 18 ms, `taskset -c 0,1` + 24 `yes`
+  yanında 12 ms, aynı yükte nice 19 (aç kalmış) p50 17 ms / p99 1,3 sn.
+  **F34 durumu:** hükümden önce pump bir kez `yield` eder ve akışı
+  beklemeden bir kez daha okur — sokette bekleyen kare kazanır. Ölçüm
+  (süreç içi loadgen, 4 istemci, 2 sn pencere, 3 sn SIGSTOP): rUDP önce
+  3/3 `left=0 server_close_idle_timeout=4`, sonra 3/3 `left=4`, 0
+  kapanış; TCP önce 3/3 4 kapanış, sonra 3/3 0 kapanış. DESIGN §3 "Geç
+  ateşlenen son tarih", SECURITY §3.5, OPS §3.
+- **F65 — `gsb_core::channel::try_send` / `SendLosses`.** Sayan,
+  tokio'suz gönderim: sonuç `TrySend::{Sent, Full, Closed}`, alınmayan
+  mesaj atılır; `SendLosses` sebebine göre `full`/`closed` sayar. Spawn
+  yok, await yok, runtime gerekmez. İki demonun vuruş beslemesi buna
+  geçti; normal `tokio` bağımlılıkları kalktı (dev-bağımlılık olarak
+  duruyor), `Cargo.lock` değişmedi. KIT-ARCHITECTURE §10 "F9".
+- **F70 — toplayıcının sınırda yırtık çıkardığı raporlar sayılıyor.**
+  `MetricReport::reports_torn_at_cut_grace` (kümülatif): satırda
+  `metrics_dropped=`'den sonra, Prometheus/OTLP'de
+  `gsb_metrics_reports_torn_at_cut_grace_total`. Kayıp değil; sınırın ne
+  sıklıkla aşıldığının ölçüsü. DESIGN §12, OPS §3.
+- İki golden bilerek güncellendi, `otlp::cross` yeşil. Loadgen teli
+  **GSNL** (ebeveyn atadı: taşıma bölümü bir sayaç + üst düzeyde
+  `metrics_dropped`'tan sonra bir `u64`); `RESULT`'ta
+  `transport_idle_windows_restarted_late=`.
+
+Testler 1728 → 1746 (`otlp` ile 1746 → 1764). Mutasyonlar: F72 13/13, F65
+8/8, F70 8/8 yakalandı. Ebeveyn doğrulaması: tam kapılar yeşil (s2'nin
+sayacıyla tablo/golden çakışması birleştirmede çözüldü, c2'nin sayacı 65.
+sırada); takılma eşiğini 8 katına çıkarmak 8 testi düşürdü.
+
 ## w1 — akış kapılarının yazıcı artıkları (B15) ve adı anlamını aşan sayaç (F66) (`net/w1-stream-writers`)
 
 - **B15a — TLS kuyruğu (düzeltildi):** rustls kendi ≤64 KiB şifreli
