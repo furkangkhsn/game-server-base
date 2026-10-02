@@ -38,6 +38,8 @@ mod flows;
 mod grace;
 #[path = "rudp_resume/player.rs"]
 mod player;
+#[path = "rudp_resume/restart.rs"]
+mod restart;
 #[path = "rudp_resume/rig.rs"]
 mod rig;
 
@@ -130,4 +132,12 @@ async fn plaintext_a_migrating_rudp_session_survives_its_address_change() {
 #[tokio::test]
 async fn plaintext_with_migration_on_a_vanished_rudp_client_still_resumes() {
     flows::vanish_then_resume(Door::PlainMigrating, Shape::Single).await;
+}
+
+// B5b: a restarted server resets the lost session at once (stateless
+// reset under the configured reset key), and the client comes back.
+
+#[tokio::test]
+async fn a_restarted_server_resets_the_rudp_client_which_rejoins() {
+    restart::restart_resets_then_rejoins().await;
 }

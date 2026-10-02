@@ -354,6 +354,12 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_path_candidates_not_newest",
         "transport_udp_acks_not_queued",
         "transport_udp_path_challenges_not_queued",
+        // Key phases and stateless reset (B5b).
+        "transport_udp_rekeys",
+        "transport_udp_rekeys_unconfirmed",
+        "transport_udp_stateless_resets_sent",
+        "transport_udp_stateless_resets_rate_limited",
+        "transport_udp_stateless_resets_send_failed",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

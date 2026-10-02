@@ -169,6 +169,24 @@ impl Player {
         }
     }
 
+    /// Heartbeat (draining what arrives) until the rUDP session is over
+    /// — B5b: a restarted server's stateless reset; returns how long it
+    /// took from the first heartbeat.
+    pub async fn until_ended(&mut self) -> Duration {
+        let t0 = Instant::now();
+        while self.conn.udp_client().expect("rUDP").is_established() {
+            assert!(t0.elapsed() < GUARD, "the rUDP session never ended");
+            self.warm().await;
+            let _ = self.conn.recv(Duration::from_millis(20)).await;
+        }
+        t0.elapsed()
+    }
+
+    /// The rUDP client's statistics.
+    pub fn udp_stats(&self) -> &gsb_net::udp::UdpClientStats {
+        &self.conn.udp_client().expect("rUDP").stats
+    }
+
     /// Wait (without sending: a superseded session is being closed) for
     /// the server's `ERROR` frame; returns it.
     pub async fn closed_by_server(&mut self) -> ServerError {

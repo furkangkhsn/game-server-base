@@ -128,6 +128,8 @@ pub struct Seen {
     pub closes: ServerCloses,
     /// rUDP sessions moved to a new client address (B3).
     pub migrations: u64,
+    /// Stateless resets the door sent (B5b).
+    pub resets_sent: u64,
     /// Reports folded so far (a settle reads a few more).
     pub reports: u64,
 }
@@ -159,16 +161,20 @@ pub struct Rig {
 
 impl Rig {
     pub async fn start(cfg: gsb_server::Config) -> Self {
+        Self::try_start(cfg).await.expect("server starts")
+    }
+
+    /// [`Self::start`], the error kept (B5b's restart retries a bind the
+    /// old server's socket still holds).
+    pub async fn try_start(cfg: gsb_server::Config) -> Result<Self, gsb_server::ServerError> {
         let (tx, reports) = mpsc::unbounded_channel();
-        let handle = gsb_server::start_server_metrics(cfg, tx)
-            .await
-            .expect("server starts");
-        Self {
+        let handle = gsb_server::start_server_metrics(cfg, tx).await?;
+        Ok(Self {
             handle,
             reports,
             rooms: HashMap::new(),
             seen: Seen::default(),
-        }
+        })
     }
 
     pub fn addr(&self) -> std::net::SocketAddr {
@@ -217,6 +223,7 @@ impl Rig {
         }
         self.seen.closes = r.net.server_closes;
         self.seen.migrations = r.transport.udp_migrations;
+        self.seen.resets_sent = r.transport.udp_stateless_resets_sent;
         self.seen.reports += 1;
     }
 
