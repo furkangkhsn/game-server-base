@@ -273,7 +273,10 @@ mod logic;
 /// GSNM = the GSNL layout with five more transport counters at the end
 /// of that section (rUDP hardening round 3's congestion response:
 /// `udp_game_frames_queued_paced` .. `udp_game_paced_rate_cuts`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4D;
+/// GSNN = the GSNM layout with fifteen more transport counters at the
+/// end of that section (B3's connection migration: `udp_cids_assigned`
+/// .. `udp_migrations_port_only`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4E;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

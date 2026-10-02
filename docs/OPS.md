@@ -1173,8 +1173,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `udp_game_datagrams_reported_lost`'ta.
 - **Taşıma kapsamı: rUDP bağlantı göçü (B3).** Satırın ve tablonun
   sonuna 15 `counter` (tıkanıklık tepkisininkilerden sonra); loadgen
-  telinin transport bölümü 15 sayaç uzar — düzen değişti, sihirli değer
-  bu turda çevrilmedi (bir sonraki **GSNN**) —, `RESULT`'ta
+  telinin transport bölümü 15 sayaç uzar — **GSNN** —, `RESULT`'ta
   `transport_<ad>=`. Yalnız `udp_migration = true` iken artar (§2):
   `udp_cids_assigned` (CID verilen oturum — isteyen istemci; kayıp
   değil), `udp_entropy_draws_failed` (OS entropisinin veremediği CID ya

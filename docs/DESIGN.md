@@ -4826,7 +4826,7 @@ sağlığı `metrics_dropped`'ın yanında: `gsb-metric scope=net` satırında
 `gsb_metrics_dropped_total`'dan sonra
 `gsb_metrics_reports_torn_at_cut_grace_total`, OTLP'de aynısı; loadgen
 telinde üst düzey `metrics_dropped`'tan sonra bir `u64` (tel düzeni
-değişti; sihirli sayıyı birleştirmede ebeveyn atar). Kayıp değil — rapor
+değişti: **GSNL**). Kayıp değil — rapor
 çıktı, beklemeden önceki gibi —, sınırın ne sıklıkla aşıldığının
 ölçüsü: sıfırdan farklı ve büyüyorsa bir shard takvimini tutamıyor
 (ölü, takılmış ya da aç). `with_cut_grace(ZERO)` hiç beklemez: o
