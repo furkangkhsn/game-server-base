@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B5b — rUDP anahtar fazı politikası ve stateless reset; kripto hattı tamam (`net/b5b-rekey-reset`)
+
+- **Rekey politikası:** her mühürlü gönderme yarısı (yazıcı s→c, istemci
+  c→s; bağımsız) fazı 2 dk ya da 2^20 kayıt sonra bitirir, hangisi önce
+  (`RekeyPolicy`; config anahtarı yok — motor politikası). Çekirdeğin iki
+  kuralı kapı: fazda ≥ 1024 kayıt (sayılmaz) ve eşin onayı. Onay: REL
+  çerçevesinin İLK gönderiminin sayacı, birikimli ACK onu kapsayınca
+  `note_peer_ack` (sınırlı, `RETRANSIT_CAP`). Onaylamayan eş oturumu
+  durdurmaz; erteleme 10 sn'de bir sayılır.
+- **Stateless reset:** bilinmeyen CID'li SEALED kayda
+  `[0x40|faz][sayaç<2^62][dolgu][jeton 16]` reset — tetikleyenden kesin
+  kısa, ≤ 41 B, yalnız kaynağa, kapı başına oranlı
+  (`udp_stateless_resets_per_sec`, vars. 10 000/sn, 0 = yok). Reset
+  anahtarı `udp_reset_key[_file]` (opsiyonel; yoksa statik anahtardan
+  HMAC ile türetilir), her durumda kapının adresine bağlı — **yeniden
+  başlayan sunucu aynı `bind`'e bağlanmalı**. İstemci jetonu sabit zamanlı
+  karşılaştırır, oturumu hemen bitirir (5 sn REL beklemez), tek ad
+  `stateless_resets_received`; yanlış jeton kendi `seal_*` adıyla +
+  `stateless_resets_invalid`.
+- **CID rotasyonu:** yapılmadı (ucuz/güvenli değil, sayaç gizlemesiz
+  yarım); tasarım RUDP-SECURITY §10.1 (B125).
+- 5 yeni taşıma sayacı (`udp_rekeys`, `udp_rekeys_unconfirmed`,
+  `udp_stateless_resets_{sent,rate_limited,send_failed}`); iki golden +
+  OTLP bilerek güncellendi. Loadgen teli **GSNR** (ebeveyn atadı).
+- `rudp_resume`: iki sunucu örneğiyle yeniden başlatma — reset < 1 sn,
+  aynı adla yeniden katılma.
+- `docs/RUDP-SECURITY.md` hattın son başvuru dokümanı; §11 dış incelemeye
+  (D13) devir kapsamı.
+
+**rUDP hattı DTLS sınıfında tamam:** sertleştirme 1–3 (arabellek, RTO,
+alıcı raporu, tıkanıklık tepkisi), B3 (göç), B89 (kaynak sınırı), x1 +
+B5a + B5b (Noise NK + kendi kayıt katmanı, mühürlü varsayılan, rekey,
+stateless reset), B7 (şifreli resume e2e), B103 (yol sinyali oyuna).
+
+Testler 1958 → 1980 (`otlp` ile 1976 → 1998). 14 mutasyonun 14'ü
+yakalandı. Ebeveyn doğrulaması: tam kapılar yeşil; istemcinin geçerli
+resette oturumu bitirmemesi iki testi düşürdü.
+
 ## B5a — Noise kayıt katmanı rUDP'ye bağlandı; mühürlü kip varsayılan (`net/b5a-seal-wire`)
 
 - **El sıkışma (0 ek RTT):** NK msg1 proof'ta caps baytından sonra (67 B),

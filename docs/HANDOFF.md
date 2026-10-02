@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1958 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1980 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -306,6 +306,18 @@ olmadan BAŞLAMAZ** — testler `tests/common::rudp_key` /
 `handle.udp_public_key`'i sabitler. `UDP_SEND` = op 16. DH bütçesi vars.
 1000/sn (kullanıcı kararı). Loadgen teli GSNQ. Kapandı: B7, B107, B112,
 B119. Açık: B5b (B108), B120, B121, B123, B124; sıradaki B5b.
+
+**B5b tamam — rUDP hattı DTLS sınıfında bitti** (CHANGELOG "B5b", DESIGN
+§6 "Anahtar fazları ve stateless reset", RUDP-SECURITY §6, §8, §16):
+`udp::sealed::{rekey, door}`, `udp::demux::reset`, `seal::reset::{derived_from,
+for_door, reset_datagram, reset_tail}`, gsb-server
+`config::udp_key::udp_reset_key`. Rekey: `SendHalf`, 2 dk / 2^20 kayıt,
+onay = REL ilk-gönderim sayacını kapsayan ACK. Reset: bilinmeyen CID →
+kısa, oranlı reset; anahtar opsiyonel (yoksa statik anahtardan), kapının
+adresine bağlı — **yeniden başlayan sunucu aynı `bind` ile bağlanmalı.**
+İstemci bitişi `is_established()` ile görür (`Conn::recv` hâlâ `Closed`
+döndürmez — B128). Loadgen teli GSNR. Kapandı: B5, B108. Açık: D13
+(sıradaki), B120, B121, B123, B124, B125–B130.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -1009,6 +1021,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1958 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1980 passed, 4 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
