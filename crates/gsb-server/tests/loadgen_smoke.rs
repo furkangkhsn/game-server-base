@@ -293,6 +293,23 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_ws_pongs_dropped_closed",
         // The rUDP writers' control re-sends, by cause (B2).
         "transport_udp_control_retransmits_timeout",
+        // The kernel's drops on the rUDP door's socket (B85).
+        "transport_udp_datagrams_dropped_kernel",
+        // The rUDP game band's probes and receiver reports (round 2).
+        "transport_udp_game_announces_received",
+        "transport_udp_game_probes_sent",
+        "transport_udp_game_probes_send_failed",
+        "transport_udp_game_probes_unanswered",
+        "transport_udp_game_reports_received",
+        "transport_udp_game_reports_late",
+        "transport_udp_game_reports_invalid",
+        "transport_udp_game_reports_clamped",
+        "transport_udp_game_reports_not_forwarded",
+        "transport_udp_game_datagrams_reported_sent",
+        "transport_udp_game_datagrams_reported_lost",
+        "transport_udp_game_rtt_samples",
+        "transport_udp_game_rtt_sum_us",
+        "transport_udp_game_probes_open_at_end",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",
