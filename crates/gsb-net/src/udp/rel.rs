@@ -13,9 +13,9 @@ use bytes::Bytes;
 use crate::udp::REL_NO_ACK_FATAL;
 
 mod rto;
+pub(super) use rto::{HANDSHAKE_MAX_RTO, MAX_RTO, Rto};
 #[cfg(test)]
 pub(super) use rto::{INITIAL_RTO, MIN_RTO};
-pub(super) use rto::{MAX_RTO, Rto};
 
 /// One un-ACKed control frame.
 #[derive(Debug)]

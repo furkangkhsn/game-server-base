@@ -33,6 +33,25 @@ pub(in crate::udp) const MAX_RTO: Duration = Duration::from_secs(1);
 /// copies.
 pub(in crate::udp) const INITIAL_RTO: Duration = MIN_RTO;
 
+/// The ceiling of a handshake step's re-send interval (BACKLOG B86):
+/// the step's timer backs off like the band's, but never past this. A
+/// handshake datagram is 18 bytes, so a spurious copy costs next to
+/// nothing, while a late one costs the player a join delay: with the
+/// band's 1 s ceiling a client that lost four steps in a join storm
+/// waited ~750 ms (connect p99 ~200 → ~760 ms on default buffers). 200 ms
+/// is the third step of the doubling (50, 100, 200), above the RTT of
+/// any path a player can play on, and its worst case — a client re-sending
+/// every 200 ms until `HANDSHAKE_DEADLINE` — is five 46-byte datagrams a
+/// second: less than one established session's game band.
+pub(in crate::udp) const HANDSHAKE_MAX_RTO: Duration = Duration::from_millis(200);
+
+// The cap sits inside the band's bounds: a step is never re-sent faster
+// than the band's floor, and the cap is a cap (below the band's ceiling).
+const _: () = assert!(
+    HANDSHAKE_MAX_RTO.as_millis() >= MIN_RTO.as_millis()
+        && HANDSHAKE_MAX_RTO.as_millis() < MAX_RTO.as_millis()
+);
+
 /// RFC 6298's clock granularity `G`: the timer's resolution (tokio's
 /// timer wheel runs in milliseconds).
 const GRANULARITY: Duration = Duration::from_millis(1);
@@ -97,6 +116,19 @@ impl Rto {
             }
         }
         self.backoff = 0;
+    }
+
+    /// The estimate alone, without the backoff: what a band seeded from
+    /// this timer starts with (BACKLOG B86). The handshake's backoff says
+    /// "a handshake step was lost", not "this path is slow" — a step
+    /// answered cleanly already put its sample into the estimate, and
+    /// the band then backs off on its own frames, by RFC 6298, as the
+    /// server's band always has.
+    pub(in crate::udp) fn seed(&self) -> Self {
+        Self {
+            backoff: 0,
+            ..self.clone()
+        }
     }
 
     /// The band was idle (nothing outstanding) for longer than the

@@ -30,8 +30,9 @@ sha1.workspace = true
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):
 # no certificate is ever committed to the repository.
 rcgen = "0.13"
-# `test-util`: the reader pump's idle window is a tokio timer, so the
-# window-reset test runs on a paused clock (BACKLOG F52).
+# `test-util`: paused-clock tests — the reader pump's idle window (a
+# tokio timer, BACKLOG F52) and the rUDP handshake's re-send schedule
+# (B86).
 tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]

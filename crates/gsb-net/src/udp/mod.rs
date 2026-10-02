@@ -155,8 +155,8 @@
 //! of a lost accept is handed to the inbound path, not swallowed).
 //! Until then it re-sends the current step — challenge request or proof —
 //! when the step's timer expires (the reliable band's timer, from 50 ms
-//! doubling per re-send — "Retransmit timer" below; a fixed 50 ms until
-//! B2), and gives up
+//! doubling per re-send but capped at 200 ms — "Retransmit timer" below;
+//! a fixed 50 ms until B2, uncapped until B86), and gives up
 //! with `TimedOut` at `HANDSHAKE_DEADLINE` (the REL liveness bound,
 //! 5 s: "the server answered nothing for 5 s" means the same before a
 //! session exists as after). The re-sends are counted
@@ -381,10 +381,15 @@
 //!   `RETRANSIT_TICK` (50 ms, its housekeeping interval — the reap
 //!   check and the metric flush); the client's read does the same.
 //! - **The handshake** backs off the same way (each step from the floor,
-//!   doubling), and a step answered without a re-send is the client's
-//!   first sample: its band starts with the path's estimate. The server's
-//!   cannot — its challenge is stateless — so its first sample is its
-//!   first control frame's ACK.
+//!   doubling) but only up to `rel::HANDSHAKE_MAX_RTO`, 200 ms (BACKLOG
+//!   B86: an 18-byte step is cheap to repeat and expensive to wait for —
+//!   uncapped, a client that lost four steps in a join storm waited
+//!   ~750 ms). A step answered without a re-send is the client's first
+//!   sample: its band starts with the path's estimate — the estimate
+//!   ONLY, never the steps' backoff (`Rto::seed`), so a lost handshake
+//!   step does not make the AUTH/JOIN behind it late. The server's band
+//!   cannot be seeded — its challenge is stateless — so its first sample
+//!   is its first control frame's ACK.
 //!
 //! **Rejected — a timestamp echo on the wire** (each REL carries a send
 //! time, each ACK echoes it, TCP-timestamps style): exact samples even
@@ -585,7 +590,7 @@ pub use transport::{UdpTransport, UdpTransportConfig};
 use cookie::{CookieClock, CookieKey};
 use demux::{Reaper, UdpSession, demux};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
-use rel::{Due, MAX_RTO, RelSend, Rto};
+use rel::{Due, HANDSHAKE_MAX_RTO, MAX_RTO, RelSend, Rto};
 use transport::Queued;
 use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
 use writer::udp_pump_spawner;

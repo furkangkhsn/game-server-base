@@ -282,4 +282,7 @@ mod handshake;
 mod io;
 
 #[cfg(test)]
+pub(in crate::udp) use handshake::step_interval;
+
+#[cfg(test)]
 mod tests;

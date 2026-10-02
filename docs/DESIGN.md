@@ -1833,8 +1833,9 @@ yeniden gönderimi (değişmedi).
   tablosundaki peer'e yollar; kabulün yerine gelen kare kaybolmaz, normal
   giriş yoluna verilir). O zamana kadar güncel adım (challenge isteği ya
   da proof) adımın zamanlayıcısı dolunca (B2'den beri REL bandının
-  zamanlayıcısı: 50 ms'den başlar, her yeniden gönderimde ikiye katlanır,
-  en çok 1 sn — aşağıda "Yeniden gönderim zamanlayıcısı"; B2'ye kadar
+  zamanlayıcısı: 50 ms'den başlar, her yeniden gönderimde ikiye katlanır;
+  B86'dan beri el sıkışmada en çok **200 ms** — aşağıda "Yeniden gönderim
+  zamanlayıcısı" ve "El sıkışma geri çekilmesinin tavanı"; B2'ye kadar
   sabit 50 ms, `HANDSHAKE_RTO`)
   yeniden gönderilir; `HANDSHAKE_DEADLINE`'da (= REL canlılık sınırı,
   5 sn) `TimedOut` ile vazgeçilir. Sayaçlar: istemci
@@ -1954,11 +1955,13 @@ artık aynı kodu paylaşıyor) RFC 6298 tahmini tutar. **Tel değişmedi.**
   okuması da öyle. Soketin reddettiği yeniden gönderim bir tick sonra
   aynı zamanlayıcıyla denenir.
 - **El sıkışma:** aynı zamanlayıcı — her adım tabandan başlar, her
-  yeniden gönderimde katlanır; yeniden gönderilmeden cevaplanan adım
-  istemcinin ilk örneğidir, REL bandı yolun tahminiyle başlar (adımlar
-  yeniden gönderildiyse örnek yok, geri çekilme bandın başlangıcıdır).
-  Sunucu tohumlayamaz: challenge'ı durumsuz; ilk örneği ilk kontrol
-  karesinin ACK'i.
+  yeniden gönderimde katlanır (B86'dan beri 200 ms'de durur — aşağıda
+  "El sıkışma geri çekilmesinin tavanı"); yeniden gönderilmeden
+  cevaplanan adım istemcinin ilk örneğidir, REL bandı yolun tahminiyle
+  başlar (adımlar yeniden gönderildiyse örnek yok; ~~geri çekilme bandın
+  başlangıcıdır~~ *B86'dan beri band geri çekilmeyi devralmaz, başlangıç
+  zamanlayıcısından başlar*). Sunucu tohumlayamaz: challenge'ı durumsuz;
+  ilk örneği ilk kontrol karesinin ACK'i.
 - **Görünürlük:** istemci `UdpClient::srtt()`/`rto()`; yazıcının oturum
   sonu log'u `srtt_us`/`rto_ms`; sunucu geneli yeniden gönderim sayacı,
   sebebe göre: `udp_control_retransmits_timeout` (OPS §3 — bantta hızlı
@@ -2006,6 +2009,57 @@ penceresini kaçırıyordu (`left = 981`; kaçıranların zamanlayıcısı 648 m
 kapsamı dışında: seyrek kontrol bandında sonraki örneğe dek sürer
 (BACKLOG B87). Karar bakımcının: el sıkışma geri çekilmesine tavan ya da
 bandın el sıkışmanın geri çekilmesini devralmaması (BACKLOG B86).
+
+**El sıkışma geri çekilmesinin tavanı (BACKLOG B86 — 2026-10-02, bakımcı
+kararı: seçenek (a)).** B2'nin ölçümü (yukarıda) iki bedel gösterdi:
+kaybolan bir el sıkışma adımı 50/100/200/400 ms'de yeniden gönderiliyor,
+dört adımı kaybeden istemci ~750 ms bekliyordu (varsayılan arabellekte
+connect p99 ~200 → ~760 ms); ve el sıkışmanın geri çekilmesi Karn gereği
+REL bandına taşınıyordu — kaybolan AUTH/JOIN de geç yenileniyordu.
+Kararlar:
+
+- **Tavan 200 ms** (`rel::HANDSHAKE_MAX_RTO`, `client::step_interval`):
+  adımın zamanlayıcısı bandınki gibi katlanır ama 200 ms'de durur — 50,
+  100, 200, 200, … ms. Gerekçe: adım 18 B; gereksiz bir kopya neredeyse
+  bedava (46 B telde), geç kalan bir kopya oyuncuya katılma gecikmesi.
+  200 ms katlamanın üçüncü adımı (B2 öncesi sabit 50 ms'nin fırtına p99'u
+  ~150–220 ms'ydi), oynanabilir her yolun RTT'sinin üstünde; en kötü
+  hâli — `HANDSHAKE_DEADLINE`'a (5 sn) dek her 200 ms'de bir kopya —
+  saniyede beş 46 B datagram: kurulmuş tek bir oturumun oyun bandından
+  az. Yolu 200 ms'den uzun bir istemci adım başına bir-iki fazladan kopya
+  yollar ve o adımın cevabı örnek vermez (Karn) — bant tahminini kendi
+  karelerinden kurar, sunucunun bandının hep yaptığı gibi. Tavan
+  `[MIN_RTO, MAX_RTO)` içinde (derleme zamanı `assert`'i).
+- **Bant geri çekilmeyi devralmaz** (`Rto::seed`): bant el sıkışmanın
+  TAHMİNİYLE başlar (temiz bir adımın örneği varsa — bugünkü gibi
+  SRTT'yi tohumlar), geri çekilme çarpanıyla DEĞİL. El sıkışmanın geri
+  çekilmesi "bir adım kayboldu" der, "yol yavaş" demez; bant kendi
+  karelerinde RFC 6298'le (Karn, katlama, boşta kalma kuralı) yine geri
+  çekilir — bant içindeki davranış değişmedi.
+- **Tel değişmedi;** sunucu tarafı değişmedi (challenge durumsuz, ilk
+  örneği ilk kontrol karesinin ACK'i).
+
+*Elenenler.* (b) *Olduğu gibi + `udp_recv_buffer_bytes` önerisi* —
+kuyruk derinliği eşiği taşır, kaldırmaz (H turu); kayıplı gerçek yolda da
+adım kaybolur. (c) *Config'e açmak* — operatörün bilemeyeceği bir sayı;
+"motor, oyun değil" ilkesi bir yapı taşını açar, bir taşıma sabitini
+değil. (d) *Tavanı bandın tavanına (1 sn) bırakıp yalnız devralmayı
+kaldırmak* — AUTH/JOIN düzelir ama connect p99'un ~760 ms'si kalır.
+(e) *Adımlarda geri çekilme yok (sabit 50 ms)* — B2 öncesi; uzun yolda her
+adım RTT/50 kopya yollar, gerçek bir tıkanıklıkta 20 Hz'de döver.
+
+*Testler (önce kırmızı; mutasyonlu).* `rel::rto::tests::
+{a_seed_keeps_the_estimate_and_drops_the_backoff,
+a_handshake_step_backs_off_to_the_cap_not_the_ceiling}`;
+`tests::handshake::cap::an_unanswered_step_is_re_sent_at_the_cap`
+(duraklatılmış saat, sessiz eş: 1 sn'de tam yedi kopya — tavansız beş);
+`tests::handshake::rtt::{a_handshake_whose_every_step_was_re_sent_takes_
+no_sample (artık bant başlangıç zamanlayıcısında — eskiden geri çekilmiş
+zamanlayıcıyı bekliyordu; sözleşme değişti), a_clean_challenge_seeds_the_
+band_without_the_proofs_backoff}`; `a_proof_that_never_lands_…`'in üst
+sınırı tavanlı takvime göre (27). Öldürülen mutasyonlar: tavanı kaldırmak
+(2 test), bandı `seed` yerine `rto` ile kurmak (2), `seed`'in geri
+çekilmeyi tutması (3).
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
