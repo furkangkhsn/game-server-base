@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1710 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1722 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -215,6 +215,23 @@ riskli testleri).
 `GameEstimate`, 14 `udp_game_*` sayacı, `op::base::UDP_REPORT = 13`,
 loadgen teli GSNJ. B85, B86, B87 kapandı; B1 tur 3'e daraldı. Açık: B91,
 B93, B94, B96. Altı paralel turun hepsi birleşti (2026-10-02).
+
+**Kullanıcı kararları (2026-10-02):** F72 — geç ateşlenen idle son tarihi
+sürecin takılması sayılır; rUDP tur 3 — taşıma hızı ayarlar, gönderemediği
+en eski oyun karesini sayarak düşürür, kit/oyuna sinyal (isteğe bağlı);
+rUDP güvenliği — DTLS değil, **Noise NK + kendi kayıt katmanı** (ring'siz,
+unsafe'siz; araştırma ve 10 karar `docs/RUDP-SECURITY.md`'de), IP
+değişince oturum göçer (B3 = göç). Sıra: B3 → B89 → B5a → B5b → B7.
+İkinci paralel dalga: r3, c2, w1, s2, x1 (şifreleme çekirdeği), e1 (B7
+düz metin e2e).
+
+**s2 tamam** (CHANGELOG "s2"): `max_unauth_conns_per_source` (vars.
+kapalı; D11'in kaynak kuralı `gsb_core::source::Source`'ta paylaşıldı;
+registry'de havuzun taramasıyla tek geçiş, ayrı tablo yok; red
+`server_closes{reason="unauth_source_cap"}`), ops HTTP
+`http_route_timeout_secs` (10 sn, aşılırsa 504,
+`ops_http_routes_timed_out`). `RegistryMsg::ConnOpened`'a `source` alanı
+eklendi. Loadgen teli GSNK. Açık: A41, B97, F76.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -918,6 +935,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1710 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1722 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

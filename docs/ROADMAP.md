@@ -77,11 +77,16 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1710** (1710/1710 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1722** (1722/1722 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **rUDP sertleştirme 2** (rUDP hattı 2) — B86 el sıkışma tavanı
+Son tur: **s2 — D12 + B90** (pre-auth kaynak sınırı, ops yönlendirme
+süresi) — registry'de kaynak başına unauthed bağlantı sınırı
+(`max_unauth_conns_per_source`, vars. kapalı; düz TCP'nin tek kaynak
+sınırı, her kapının oturumu girer), ops HTTP yönlendirmesine 10 sn süre
+(aşılırsa 504).
+Önceki tur: **rUDP sertleştirme 2** (rUDP hattı 2) — B86 el sıkışma tavanı
 200 ms + bant devralmıyor; B85 `udp_datagrams_dropped_kernel`; oyun bandı
 geri bildirimi — eklemeli PROBE/REPORT (5/6), duyuruyla katılım, kayıp +
 RTT oturum başına (`GameEstimate`), RTT REL bandını besler (B87 kapandı).

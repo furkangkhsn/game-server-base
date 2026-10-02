@@ -5,6 +5,41 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## s2 — D12 + B90: pre-auth kaynak sınırı ve ops yönlendirme süresi (`sec/s2-preauth-source`)
+
+- **D12 — kaynak adres başına unauthed bağlantı sınırı (isteğe bağlı).**
+  Yeni sunucu anahtarı `max_unauth_conns_per_source` (vars. yok = sınır
+  yok; `0` da yok): bir kaynak (D11'in kuralı — IPv4 adresi, IPv6 /64,
+  eşlenmiş adres IPv4'ü; kural artık `gsb_core::source::Source`'ta, D11'in
+  `SourceKey`'i onu sarar) registry'nin unauthed havuzundan en çok bu
+  kadar bağlantı tutar — hangi kapıdan gelirse gelsin. Düz TCP'nin el
+  sıkışma evresi yok, kaynak başına tek sınırı bu; diğer kapıların
+  oturumları el sıkışmaları bitince sayılır (yuva `ConnOpened`'dan önce
+  bırakılır — çift sayım yok). Sınır üstü bağlantı doğumda reddedilir
+  (ERROR 9, satır yok; WS 1013) ve yeni sebeple sayılır:
+  `server_closes{reason="unauth_source_cap"}` (havuzun `unauth_cap`'inden
+  ayrı; kaynak sınırı havuzdan önce bakılır). Sayım ayrı tablo değil,
+  havuzun taramasıyla tek geçiş: AUTH başarısı ya da satırın her çıkışı
+  yeri verir, sızıntı yok; başarısız AUTH vermez (oturum hâlâ unauthed).
+  D11'in anahtarının kardeşi, kendisi değil: el sıkışma değil, AUTH
+  gidiş-dönüşü boyunca yaşayan oturumu, her kapıda sayar. SECURITY
+  §4.3.2, OPS §2/§3.
+- **B90 — ops HTTP yönlendirmesine süre sınırı.** `http_route_timeout_secs`
+  (vars. 10 sn; `0` = yok): `/rooms` ve oda açma/kapamanın defter ve
+  registry cevabını beklemesi (dolu posta kutusunda yer beklemek dahil)
+  tek süre altında; aşılırsa `504 Gateway Timeout` (sonuç bilinmez —
+  açma/kapama yine uygulanabilir, ikisi de idempotent; `503` "yapılmadı"
+  derdi) ve `ops_http_routes_timed_out` sayılır. Bağlantı görevi en çok
+  5 + 10 + 10 sn + 300 ms yaşar. OPS §2/§3/§4, SECURITY §6.
+- Yeni `ServerClose::UnauthSourceCap` ve bir taşıma sayacı sonlarda; iki
+  golden bilerek güncellendi. Loadgen teli **GSNK** (ebeveyn atadı:
+  `server_closes` ve kayıp hüküm dizileri birer, taşıma bölümü bir
+  büyüdü). İstemci teli değişmedi.
+
+Testler 1710 → 1722 (`otlp` ile 1728 → 1740). Önce kırmızı; D12'nin 12,
+B90'ın 7 mutasyonu yakalandı. Ebeveyn doğrulaması: tam kapılar yeşil;
+kaynak eşleşmesini yok saymak iki testi düşürdü.
+
 ## rUDP sertleştirme 2 — B86 el sıkışma tavanı, B85 çekirdek kayıpları, oyun bandı geri bildirimi (B1 sinyalleri, B87) (`net/r2-feedback`)
 
 rUDP sertleştirme paketinin (E3) ikinci turu: tıkanıklık denetiminin (B1,
