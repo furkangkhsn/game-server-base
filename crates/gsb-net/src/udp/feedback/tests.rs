@@ -231,3 +231,45 @@ fn every_probe_is_answered_unanswered_or_open_at_the_end() {
         c.reports + c.probes_unanswered + c.probes_open_at_end
     );
 }
+
+/// An id the session never sent is invalid, never late — the next id
+/// (the one a client could guess first) and every one above it, up to
+/// the wrap — so a forged id cannot hide among the reordered ones.
+#[test]
+fn ids_not_yet_sent_are_invalid() {
+    let t0 = Instant::now();
+    let mut f = announced(t0);
+    f.probe_sent(t0 + PROBE_INTERVAL); // probes 1 and 2 are out
+    f.on_report(2, 0, t0 + PROBE_INTERVAL); // 1 superseded, 2 answered
+    assert_eq!(f.next_probe().0, 3);
+    for id in [3, 4, 1_000, u32::MAX / 2, u32::MAX] {
+        assert_eq!(f.on_report(id, 0, t0), Report::Invalid, "id {id}");
+    }
+    assert_eq!((f.counts.invalid, f.counts.late), (5, 0));
+    for id in [1, 2] {
+        assert_eq!(f.on_report(id, 0, t0), Report::Late, "id {id}");
+    }
+}
+
+/// Across the id wrap (u32::MAX, then 1 — 0 is the announcement): the
+/// ids sent just before it stay late, down to the very first one sent,
+/// and the ones never sent — the one before that, the next ones — stay
+/// invalid.
+#[test]
+fn the_id_wrap_keeps_late_and_invalid_apart() {
+    let t0 = Instant::now();
+    let mut f = Feedback::new(t0);
+    f.on_report(0, 0, t0);
+    f.next_id = u32::MAX - 1;
+    for k in 0..4u32 {
+        f.probe_sent(t0 + PROBE_INTERVAL * k); // MAX-1, MAX, 1, 2
+    }
+    assert_eq!(f.next_probe().0, 3, "past the wrap, 0 skipped");
+    f.on_report(2, 0, t0 + PROBE_INTERVAL * 3); // the newest answered
+    for id in [u32::MAX - 1, u32::MAX, 1, 2] {
+        assert_eq!(f.on_report(id, 0, t0), Report::Late, "id {id}");
+    }
+    for id in [u32::MAX - 2, 3, 4] {
+        assert_eq!(f.on_report(id, 0, t0), Report::Invalid, "id {id}");
+    }
+}

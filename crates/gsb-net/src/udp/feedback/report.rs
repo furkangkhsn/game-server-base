@@ -16,9 +16,10 @@ impl Feedback {
             return Report::Announce;
         }
         let Some(p) = self.ring.iter().position(|q| q.id == id) else {
-            // Ids run up from 1 (wrapping past 0 after 2^32 probes, some
-            // 136 years at the interval): one below the next was sent.
-            return if self.probing && id < self.next_id {
+            // Not awaited: late if this session sent it (answered or
+            // superseded since), invalid if it never did — the next id
+            // and every one above it included.
+            return if self.probing && self.was_sent(id) {
                 self.counts.late += 1;
                 Report::Late
             } else {
@@ -43,6 +44,18 @@ impl Feedback {
         self.counts.probes_unanswered += p as u64;
         self.ring.drain(..=p);
         self.apply(probe, received, delta, now)
+    }
+
+    /// Whether probe `id` went out: it is one of the last `probes_sent`
+    /// ids before the next one. Ids run up from 1 and wrap past `u32::MAX`
+    /// to 1 (0 is the announcement, never a probe), so the distance back
+    /// from the next id skips 0 when it crosses the wrap.
+    fn was_sent(&self, id: u32) -> bool {
+        let mut back = u64::from(self.next_id.wrapping_sub(id));
+        if id > self.next_id {
+            back -= 1; // the skipped 0
+        }
+        (1..=self.counts.probes_sent).contains(&back)
     }
 
     fn apply(&mut self, probe: Probe, received: u32, delta: u64, now: Instant) -> Report {

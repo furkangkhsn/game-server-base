@@ -2190,7 +2190,10 @@ eskileri "cevapsız" sayar.
 
 *Doğrulama — bir istemcinin iddiası durumu zehirleyemez* (her şey kendi
 oturumunda, saf durum, `udp::feedback::tests`): duyurmamış oturumdan ya da
-hiç gönderilmemiş id'li rapor → `invalid` (hiçbir şey uygulanmaz); geriye
+hiç gönderilmemiş id'li rapor → `invalid` (hiçbir şey uygulanmaz; "gönderildi"
+= sonraki id'den geriye doğru son `probes_sent` id'den biri — sıradaki id ve
+üstü geçersiz, sahte id `late`'e saklanamaz; id `u32::MAX`'tan 1'e sararken
+0'ı atlar, kural sarmayı da kapsar); geriye
 giden sayaç (sarmalı fark > 2³¹) → `invalid`; cevaplanmış ya da geride
 kalmış sondanın raporu (yeniden sıralanmış/çiftlenmiş) → `late`, yok
 sayılır; rapor geldiği ana dek sunucunun GÖNDERDİĞİNDEN fazlasını
@@ -2313,7 +2316,11 @@ beslememek, kontrol datagram'ını oyun saymak, demux'ın raporu
 düşürmesi, raporu oturum karesi saymak, FRAG'ı saymamak, istemcinin
 sayaç tutmaması, duyuru tavanı yok, kapalıyken cevaplamak, sınırsız
 yankı, ilk sondayı hemen göndermemek, kapalı yazıcıda oturumu tutmak.
-Sağ çıkan: bağlanırken duyuruyu kaldırmak — ilk yeniden gönderim
+Bakımcının sonradan bulduğu sağ kalan (`id < next_id` → `id <= next_id`:
+sıradaki, hiç gönderilmemiş id `late` sayılıyordu) kuralı kesinleştirdi
+(`Feedback::was_sent`) ve iki testle kapandı
+(`ids_not_yet_sent_are_invalid`, `the_id_wrap_keeps_late_and_invalid_apart`;
+sarmada 0'ı atlamayan hesap da öldü). Sağ çıkan: bağlanırken duyuruyu kaldırmak — ilk yeniden gönderim
 geçişi (en geç bir okuma) duyuruyu zaten yollar; eşdeğer davranış.
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
