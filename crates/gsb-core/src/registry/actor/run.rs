@@ -101,6 +101,9 @@ where
                         }
                     }
                 }
+                RegistryMsg::ConnPeerChanged { conn, source } => {
+                    self.on_conn_peer_changed(conn, source)
+                }
                 RegistryMsg::ConnClosed { conn, verdict } => {
                     self.on_conn_closed(conn, verdict).await
                 }

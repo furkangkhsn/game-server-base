@@ -72,6 +72,7 @@ fn report(t: Instant) -> MetricReport {
         team_relays_dropped_closed: 0,
         joins_unread: 0,
         team_exports_unread: 0,
+        unauth_source_moves_kept: 0,
     }));
     acc.report(t)
 }

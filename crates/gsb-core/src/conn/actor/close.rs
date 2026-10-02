@@ -145,7 +145,7 @@ impl super::ConnectionActor {
                 // A frame looked through is never processed: counted
                 // (B60), like the ones `abandon_inbox` finds after it.
                 ConnIn::Frame(frame) => self.count_unprocessed(frame.op),
-                ConnIn::RoomGone(_) | ConnIn::LeftRoom { .. } | ConnIn::Path(_) => {}
+                ConnIn::RoomGone(_) | ConnIn::LeftRoom { .. } | ConnIn::Path(_) | ConnIn::PeerChanged { .. } => {}
             }
         }
         self.server_close = Some(ServerClose::OutboundDead);

@@ -83,6 +83,9 @@ pub struct Registry<W, G, St, Sp> {
     /// (F53; see `run::leftovers`), counted once in its `Shutdown` arm.
     reg_joins_unread: u64,
     reg_team_exports_unread: u64,
+    /// Unauthenticated rows moved to a source at its per-source cap,
+    /// their count kept at the old source (B113, `conns::source`).
+    reg_unauth_source_moves_kept: u64,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -197,6 +200,7 @@ where
             reg_team_relays_dropped_closed: 0,
             reg_joins_unread: 0,
             reg_team_exports_unread: 0,
+            reg_unauth_source_moves_kept: 0,
             next_join_epoch: 0,
             metrics,
             max_connections,
@@ -242,6 +246,7 @@ where
             team_relays_dropped_closed: self.reg_team_relays_dropped_closed,
             joins_unread: self.reg_joins_unread,
             team_exports_unread: self.reg_team_exports_unread,
+            unauth_source_moves_kept: self.reg_unauth_source_moves_kept,
         }
     }
 

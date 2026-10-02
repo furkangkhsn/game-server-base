@@ -131,6 +131,7 @@ fn accumulator_applies_events_and_computes_rates() {
         team_relays_dropped_closed: 0,
         joins_unread: 0,
         team_exports_unread: 0,
+        unauth_source_moves_kept: 0,
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

@@ -322,6 +322,11 @@ pub struct RegistrySample {
     /// queued (its `team_exports`), the hub never relayed it. Counted
     /// once, as the registry stops; in its final sample.
     pub team_exports_unread: u64,
+    /// Unauthenticated connections moved to a new source (an rUDP
+    /// migration, BACKLOG B113) while that source held its
+    /// `max_unauth_conns_per_source`: the row's per-source count stayed
+    /// at the old source. The move itself happened. Cumulative.
+    pub unauth_source_moves_kept: u64,
 }
 
 /// One connection actor's wire-byte sample. The fields are *deltas since

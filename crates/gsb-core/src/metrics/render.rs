@@ -20,7 +20,8 @@ impl MetricReport {
                  team_relays_dropped_full={} team_relays_dropped_closed={} \
                  joins_refused_closed={} joins_unread={} team_exports_unread={} \
                  joins_unsent={} close_verdicts_lost={}{} \
-                 leave_verdicts_lost={} detach_despawns_lost={}",
+                 leave_verdicts_lost={} detach_despawns_lost={} \
+                 unauth_source_moves_kept={}",
                 r.rooms,
                 r.conns,
                 r.opens,
@@ -50,7 +51,8 @@ impl MetricReport {
                     .map(|(why, n)| format!(" close_verdict_lost_{}={n}", why.label()))
                     .collect::<String>(),
                 r.verdicts_lost.leaves,
-                r.verdicts_lost.detach_despawns
+                r.verdicts_lost.detach_despawns,
+                r.unauth_source_moves_kept
             ));
         }
         for r in &self.rooms {

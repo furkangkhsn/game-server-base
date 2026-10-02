@@ -200,6 +200,7 @@ impl super::ConnectionActor {
                 }
                 ConnIn::LeftRoom { room } => self.on_left_room(room),
                 ConnIn::Path(state) => self.on_path(state),
+                ConnIn::PeerChanged { peer } => self.on_peer_changed(peer).await,
                 ConnIn::Shutdown => {
                     // The server is stopping: a best-effort ERROR 14
                     // that never waits on the client, then the end.

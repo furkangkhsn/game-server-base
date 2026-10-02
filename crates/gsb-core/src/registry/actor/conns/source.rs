@@ -21,6 +21,12 @@
 //!   leaves the connection table, by whichever of its exits, leaves the
 //!   count with it. The only state is one `Source` per row — bounded by
 //!   the rows, the unauthenticated ones by `max_unauth_conns`.
+//! - **Migration** (B113). A row's source follows its connection's
+//!   address change (`ConnPeerChanged`, from the actor): an
+//!   unauthenticated row's count moves with it when the new source has
+//!   room, and stays at the old source otherwise (counted,
+//!   `unauth_source_moves_kept`) — no source ever counts more than the
+//!   cap, and the move itself (the transport's) is never undone.
 //! - **No lock.** The registry actor owns the rows; it is the one task
 //!   that decides a birth.
 
@@ -93,6 +99,41 @@ where
             },
         );
         true
+    }
+
+    /// `conn`'s transport moved it to `source` (an rUDP migration,
+    /// BACKLOG B113): the row's source follows. An unauthenticated row
+    /// moving into a source that already holds its cap keeps counting
+    /// against the old one (counted, `unauth_source_moves_kept`): the
+    /// move happened and is never undone here — nobody is stranded — but
+    /// it frees no place the new source cannot take, so no source ever
+    /// counts more than the cap and the pool still takes `U`/cap proven
+    /// sources to fill. An authenticated row is in no count and simply
+    /// follows; a row the registry does not hold is ignored.
+    pub(in crate::registry::actor) fn on_conn_peer_changed(
+        &mut self,
+        conn: ConnectionId,
+        source: Source,
+    ) {
+        let Some(info) = self.conns.get(&conn) else {
+            debug!(%conn, "peer change of an unregistered connection");
+            return;
+        };
+        if info.source == Some(source) {
+            return;
+        }
+        if !info.authed
+            && let Some(cap) = self.max_unauth_per_source
+            && self.unauthed(Some(source)).from_source >= cap
+        {
+            self.reg_unauth_source_moves_kept += 1;
+            debug!(%conn, %source, "moved into a source at its unauthenticated cap; its count stays");
+            self.emit_metrics();
+            return;
+        }
+        if let Some(info) = self.conns.get_mut(&conn) {
+            info.source = Some(source);
+        }
     }
 
     /// Count the unauthenticated rows, all and `source`'s, in one pass —

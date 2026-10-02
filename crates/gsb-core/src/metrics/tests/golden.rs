@@ -101,6 +101,9 @@
 //! after `gsb_metrics_dropped_total`.
 //! B103's room-scope `snapshots_withheld=` after `snapshots=`, with
 //! `gsb_room_snapshots_withheld_total` after `gsb_room_snapshots_total`.
+//! B113's registry-scope `unauth_source_moves_kept=` at the end of that
+//! line, with `gsb_registry_unauth_source_moves_kept_total` after
+//! `gsb_registry_detach_despawns_lost_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -128,6 +131,7 @@ pub(super) fn golden_report() -> MetricReport {
         team_relays_dropped_closed: 5,
         joins_unread: 6,
         team_exports_unread: 7,
+        unauth_source_moves_kept: 9,
     }));
     // Two match results a full sink refused, one a closed sink did (B57).
     for cause in [

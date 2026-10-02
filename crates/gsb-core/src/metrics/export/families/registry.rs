@@ -20,7 +20,7 @@ const fn reg(
 }
 
 /// The registry scope: control-plane gauges and cumulative counters.
-pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 22] = [
+pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 23] = [
     reg(
         "gsb_registry_rooms",
         Kind::Gauge,
@@ -160,5 +160,12 @@ pub(in crate::metrics::export) const REGISTRY: [Scalar<RegistryReport>; 22] = [
         Kind::Counter,
         "Detaches that ended in a despawn whose report (the parked row's release) the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox, cumulative.",
         |r| r.verdicts_lost.detach_despawns,
+    ),
+    // B113: a migration into a source at its unauthenticated cap.
+    reg(
+        "gsb_registry_unauth_source_moves_kept_total",
+        Kind::Counter,
+        "Unauthenticated connections whose transport moved them to a new source (an rUDP migration) while that source held its max_unauth_conns_per_source: the per-source count stayed at the old source, cumulative.",
+        |r| r.unauth_source_moves_kept,
     ),
 ];

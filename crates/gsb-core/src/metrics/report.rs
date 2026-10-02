@@ -208,6 +208,10 @@ pub struct RegistryReport {
     /// the registry's final sample.
     pub joins_unread: u64,
     pub team_exports_unread: u64,
+    /// Unauthenticated connections whose migration left their per-source
+    /// count at the old source (see
+    /// [`RegistrySample::unauth_source_moves_kept`]), cumulative (B113).
+    pub unauth_source_moves_kept: u64,
     /// Joins a connection could not hand to the registry because its
     /// mailbox was already closed — the registry had stopped (see
     /// [`MetricsEvent::JoinUnsent`]), cumulative (F54). The closed twin

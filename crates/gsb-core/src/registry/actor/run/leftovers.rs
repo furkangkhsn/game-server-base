@@ -103,6 +103,7 @@ where
                 | RegistryMsg::DespawnPlayer { .. }
                 | RegistryMsg::ConnClosed { .. }
                 | RegistryMsg::Authed { .. }
+                | RegistryMsg::ConnPeerChanged { .. }
                 | RegistryMsg::Shutdown
                 | RegistryMsg::SpawnDone { .. }
                 | RegistryMsg::SpawnFailed { .. }

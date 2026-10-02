@@ -68,6 +68,7 @@ fn a_room_ended_uncounted_is_counted_and_its_row_goes() {
         team_relays_dropped_closed: 0,
         joins_unread: 0,
         team_exports_unread: 0,
+        unauth_source_moves_kept: 0,
     }));
     let shard = RoomId((5 << 16) | 1);
     acc.apply(MetricsEvent::Room(room_sample(shard, t, 40)));

@@ -401,6 +401,7 @@ fn the_control_plane_losses_survive_the_wire() {
             v.close(ServerClose::Kicked);
             v
         },
+        unauth_source_moves_kept: 23,
     });
     sent.net.close_notices_dropped = 31;
     let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
@@ -432,6 +433,7 @@ fn the_control_plane_losses_survive_the_wire() {
         ),
         (2, 1, 3, 21, 22)
     );
+    assert_eq!(g.unauth_source_moves_kept, 23);
     assert_eq!(got.net.close_notices_dropped, 31);
 }
 

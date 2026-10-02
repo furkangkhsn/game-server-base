@@ -25,6 +25,7 @@ mod frame;
 mod input;
 mod lifecycle;
 mod path;
+mod peer;
 mod room;
 mod unprocessed;
 mod violation;

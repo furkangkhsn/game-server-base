@@ -48,6 +48,8 @@ gsb_registry_leave_verdicts_lost sum t=2 mono=true unit="" n=1 | Memberships a r
   [] 1000..2000 int 1
 gsb_registry_detach_despawns_lost sum t=2 mono=true unit="" n=1 | Detaches that ended in a despawn whose report (the parked row's release) the server's stop kept from the registry: still queued in the room, refused by the stopped registry or unread in its mailbox, cumulative.
   [] 1000..2000 int 5
+gsb_registry_unauth_source_moves_kept sum t=2 mono=true unit="" n=1 | Unauthenticated connections whose transport moved them to a new source (an rUDP migration) while that source held its max_unauth_conns_per_source: the per-source count stayed at the old source, cumulative.
+  [] 1000..2000 int 9
 gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=14 | Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
   [reason=idle_timeout] 1000..2000 int 0
   [reason=write_stall] 1000..2000 int 0

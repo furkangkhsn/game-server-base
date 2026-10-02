@@ -90,6 +90,9 @@ async fn stop(tx: Mailbox<RegistryMsg>, task: JoinHandle<()>) {
 
 const OVER: Option<ServerClose> = Some(ServerClose::UnauthSourceCap);
 
+#[path = "unauth_per_source/moved.rs"]
+mod moved;
+
 #[tokio::test]
 async fn over_the_cap_its_source_is_refused_others_are_not() {
     let (tx, task) = start(None, Some(2));

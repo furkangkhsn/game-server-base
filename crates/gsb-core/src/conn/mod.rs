@@ -287,6 +287,12 @@ pub enum ConnIn {
     /// behind the verdict, it is never read at all: the verdict ended
     /// the session.
     ShutdownOvertaking(ServerClose),
+    /// The transport moved the session to a new client address (an rUDP
+    /// connection migration after path validation, BACKLOG B3/B113): the
+    /// actor's `peer` follows, and the registry hears the new source
+    /// (its per-source unauthenticated count, D12). Nothing goes on the
+    /// wire; no verdict.
+    PeerChanged { peer: std::net::SocketAddr },
 }
 
 impl ConnIn {
@@ -306,7 +312,8 @@ impl ConnIn {
             | Self::LeftRoom { .. }
             | Self::Path(_)
             | Self::Shutdown
-            | Self::ShutdownOvertaking(_) => None,
+            | Self::ShutdownOvertaking(_)
+            | Self::PeerChanged { .. } => None,
         }
     }
 }

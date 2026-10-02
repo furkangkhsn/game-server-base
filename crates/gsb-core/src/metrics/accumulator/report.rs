@@ -187,6 +187,7 @@ impl MetricAccumulator {
                 team_exports_unread: r.team_exports_unread,
                 joins_unsent: self.joins_unsent,
                 verdicts_lost: self.verdicts_lost,
+                unauth_source_moves_kept: r.unauth_source_moves_kept,
             }),
             // (registry report intentionally carries no metrics_dropped: the
             // registry's drop count is cumulative in its sample and is folded

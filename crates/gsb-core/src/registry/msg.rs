@@ -295,4 +295,14 @@ pub enum RegistryMsg {
         tick: u64,
         export: TeamExport,
     },
+    /// A connection's transport moved it to a new client address (an
+    /// rUDP connection migration, BACKLOG B113): its row's source follows
+    /// — the per-source unauthenticated count (D12) moves with it when
+    /// the new source has room; otherwise the count stays at the old one
+    /// (counted). Sent by the connection actor itself; a notice for a
+    /// row the registry does not hold is ignored.
+    ConnPeerChanged {
+        conn: ConnectionId,
+        source: crate::source::Source,
+    },
 }
