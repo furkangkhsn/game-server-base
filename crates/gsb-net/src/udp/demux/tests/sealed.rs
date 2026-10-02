@@ -280,5 +280,6 @@ async fn a_client_pinning_another_key_fails_the_handshake() {
 }
 
 mod budget;
+mod cost;
 mod records;
 mod rule;
