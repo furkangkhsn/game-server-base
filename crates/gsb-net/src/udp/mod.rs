@@ -584,17 +584,16 @@
 //! was written; none of them is a one-line fix, and each is the kind of
 //! thing a hardened transport ships with.
 //!
-//! - **The congestion response is opt-in, and the game is not told.**
+//! - **The congestion response is opt-in, and off by default.**
 //!   Since round 3 a writer can pace a reporting session's game band to
 //!   its path's estimated rate and drop the oldest frames it cannot
 //!   carry, each counted (module `congestion`; the server's
 //!   `udp_congestion = "pace"`). The default is off (not yet measured on
-//!   a jittery real path), a client that does not report is never paced,
-//!   and the session's [`PathState`] does not reach the room yet. The
-//!   core and the kit carry a path to the game since B103
-//!   (`gsb_core::path`: `ConnIn::Path` → connection actor → room →
-//!   `TickCtx::budget`, the kit's opt-in `SnapshotBudget`; QUIC fills it
-//!   from quinn's statistics); this writer's emission is B103's phase 2.
+//!   a jittery real path), and a client that does not report is never
+//!   paced. With it on, the game IS told (B103): every decision's news
+//!   reaches the connection actor as `ConnIn::Path` (the core's
+//!   [`PathState`]), the room as `TickCtx::budget`, and a kit room that
+//!   opted in thins with `SnapshotBudget`; with it off nothing is told.
 //! - **Connection migration is opt-in and unauthenticated.** Since B3
 //!   a session can carry a server-assigned connection id (CID) and move
 //!   to a new client address after path validation (module `path`), so

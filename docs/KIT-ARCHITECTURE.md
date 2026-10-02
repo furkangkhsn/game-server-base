@@ -4891,8 +4891,10 @@ harcar; üyeler bağımsız, sorulmayan süpürülür), `budget::rooms` (açık,
 PVS, sharded: açmayan oda her kareyi gönderir ve sayaç koymaz, açan oda
 inceltir ve `snapshot_budget_forced` koyar). Çekirdek kapısı:
 `room::tests::withhold` (3), `shard::tests::path` (fan-out). Uçtan uca
-(hızlanan rUDP oturumunun bütçesi `TickCtx`'e varır ve kit inceltir) faz
-2'de.
+(B103 faz 2): `gsb-server/tests/path_budget.rs` — policer'ın arkasında
+hızlanan rUDP oturumunun bütçesi oyunun `TickCtx`'ine varır (196–406
+B/tick) ve `SnapshotBudget`'lı `OpenRoom` ~1,4 KB'lık kareleri tutar
+(`snapshots_withheld` 31); yanıt kapalıyken bütçe yok, tutulan 0.
 
 ## 11. Kabul kriteri
 

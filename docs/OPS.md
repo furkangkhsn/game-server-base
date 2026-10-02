@@ -284,7 +284,11 @@ udp_congestion = "pace"   # vars. "off"
   oturum da anında gönderir; tek fark sinyalden sonra sondaların 250
   ms'ye sıklaşması. İçeriği inceltmek (daha az varlık, düşük hız) oyunun
   kararıdır; taşıma yalnız ölçer ve hızlar (DESIGN §6 "Tıkanıklık
-  tepkisi").
+  tepkisi"). B103'ten beri yazıcı yolun durumunu odaya da söyler
+  (yalnız `"pace"`'te, yalnız haber olduğunda: `TickCtx::budget`); kit
+  odası `with_snapshot_budget` ile inceltirse tutulan kareler
+  `gsb_room_snapshots_withheld_total`'da görünür. `"off"`'ta odaya
+  hiçbir şey söylenmez.
 - **Ne zaman açılır:** istemcilerin bir kısmı darboğazlı yoldaysa (mobil,
   zayıf ev bağlantısı) ve `udp_game_datagrams_reported_lost` /
   `reported_sent` oranı ya da sonda turu (`udp_game_rtt_sum_us ÷

@@ -175,7 +175,9 @@ udp_max_datagram_bytes = 1472
 # game-band frames it cannot send within 50 ms are dropped and counted
 # (gsb_transport_udp_game_frames_dropped_paced_total). The control band
 # is never paced or dropped; a client that does not report is never
-# paced. Thinning the content itself is the game's decision. Server-wide.
+# paced. Thinning the content itself is the game's decision: with "pace"
+# the room is told each session's path (TickCtx::budget; a kit room opts
+# in with with_snapshot_budget). Server-wide.
 #udp_congestion = "pace"
 
 # rUDP only: connection migration. false (the default): an rUDP session

@@ -2550,13 +2550,13 @@ taşıma ──ConnIn::Path──▶ bağlantı aktörü ──(üyenin action k
 (`PathPhase::{Open, Suspect, Paced}`), `rate: Option<u32>` (B/sn, yalnız
 taşıma yolu sınırlarken — `Paced`), `demand`, `loss_permille`, `rtt`,
 `queue_delay` — evre dışındaki her alan `Option`: her taşıma ölçtüğünü
-doldurur. rUDP hepsini (faz 2, aşağıda), QUIC quinn'in kendi
+doldurur. rUDP hepsini (aşağıda, "Faz 2"), QUIC quinn'in kendi
 istatistiklerinden (aşağıda), TCP/TLS/WS hiçbirini — yol durumu
 göndermeyen taşımanın üyesinin yolu bilinmez (`None`: oyun bugünkü gibi
 gönderir). Akış kapılarına çekirdeğin `TCP_INFO`'su ileride bir kaynak
-olabilir; bu turun işi değil. `udp::PathState` faz 1'de dokunulmadı
-(B3 aynı anda `udp/**`'yi değiştiriyordu); faz 2'de çekirdek tipine
-dönüşür.
+olabilir; bu turun işi değil. Faz 2'den beri rUDP bu tipin kendisini
+kullanır (`gsb_net::udp::{PathPhase, PathState}` onun yeniden
+ihracı).
 
 *(b) Odanın birincil sorusu bayt bütçesi.* `TickCtx::budget(member) ->
 Option<usize>`: üyenin yolunun bu tick'te taşıyacağı bayt (`rate` ×
@@ -2637,15 +2637,57 @@ yarısında), posta kutusu beklenmez.
 *(d) Varsayılan.* `udp_congestion = "off"` kaldı; B104 (titreşim ölçümü
 ve bu tur) çevirir.
 
-*Faz 2 (B3 birleştikten sonra): rUDP yazıcısı yayımlar.* `udp::PathState`
-çekirdek tipi olur (ya da `From` ile ona dönüşür: `rate`/`demand`/
-`loss_permille`/`queue_delay` → `Some`, `rtt` → tahminin son turu);
-yazıcı her kararından sonra (`pace_follow`, `pace_silence`) çekirdek
-`PathSignal`'ine sunar ve borçlu durumu `ConnIn::Path` olarak oturumun
-gelen kutusuna `try_send` eder (B3'ün göçünde yeni IP'de denetleyici
-sıfırlanır — RFC 9000 §9.4 — taze `Open` durumu da haber olarak gider);
-uçtan uca test: hızlanan bir rUDP oturumunun bütçesi `TickCtx`'e varır
-ve kit odası inceltir.
+*Faz 2: rUDP yazıcısı yayımlar (B3'ten sonra, 2026-10-02).*
+
+- **Tip: dönüşüm değil, çekirdeğin kendisi.** `udp::congestion`
+  `gsb_core::path::{PathPhase, PathState}`'i yeniden ihraç eder; ayrı
+  rUDP tipi silindi. Gerekçe: tek tip — dönüşümün alan alan kayması
+  yok, `budget` tek yerde; eski tipin rUDP dışında kullanıcısı yoktu.
+  *Elenen:* `From<udp::PathState>` — iki tip, iki `budget`, aynı
+  alanların iki adı. `Control::state()`: evre ve (yalnız `Paced`'te)
+  hız; bu yolda bir rapor uygulandıktan sonra ölçümler de — odanın
+  talebi, düzleştirilmiş kayıp, en yeni tur (`rtt`), pencereli tabana
+  göre kuyruk. Rapordan önce ve yeni yolda yalnız evre (varsayılan
+  durum).
+- **Yayım, yalnız `"pace"`'te.** Yazıcının her kararı — uygulanan rapor
+  (`pace_report`), cevapsız halka (`pace_silence`) — `pace_follow`'dan
+  `pace_tell`'e gider: durum `PathSignal`'e sunulur, haber ise
+  `ConnIn::Path` olarak bağlantı aktörüne `try_send` edilir (asla
+  beklenmez). Dolu gelen kutusu en yeni durumu borçlu tutar; bir sonraki
+  kararda (sonda kadansı: açıkken en çok 1 sn, şüphe/hızlamada 250 ms)
+  yeniden denenir. Kapalı kutuda söylenecek kimse yok. Not: yazıcı
+  doğumda ölüm kararı için kutuda bir yuva ayırır (B66); haber kalan
+  kapasiteyi kullanır.
+- **Yeni IP (B3, RFC 9000 §9.4).** Denetleyici sıfırlanınca
+  (`Control::new_path`) yazıcı sinyali de sıfırlar (`pace_new_path`):
+  odanın bildiği eski yolundu, taze ve ölçümsüz `Open` durumu — eskisi
+  de açık olsa — söylenir. Yalnız port değişimi aynı yoldur: hiçbir şey
+  söylenmez.
+- **`"off"` mesajı mesajına bugünkü gibi.** Yanıt kapalı yazıcı aktöre
+  hiçbir şey göndermez — raporlar, cevapsız halka ve yol değişimi de
+  dahil (birim testi `with_the_response_off_the_actor_hears_nothing`,
+  gerçek soket `with_the_response_off_the_actor_is_told_nothing`).
+  Raporlamayan istemci `"pace"`'te de hiç ölçülmez ve hiç söylenmez.
+- **Sayaç yok:** yayım kayıpsızdır (en-yenisi-kazanır; durum olay
+  değildir).
+- **Testler (önce kırmızı; her kural mutasyonla).** `udp::congestion::
+  tests::the_state_carries_the_measurements_once_reported`;
+  `udp::writer::tests::signal` (4 — her haber bir kez, ölçüm tek başına
+  haber değil, hız yarılanması haber; dolu kutuda en yenisi borçlu ve
+  sonraki kararda gider; yeni IP taze `Open`, yeni port hiçbir şey;
+  `"off"` hiçbir şey); `udp::tests::pace::signal` (gerçek soket, 2:
+  `Open` → `Suspect` → `Paced`, hız tabanda 4 800 B/sn, 30 Hz'de 159 B;
+  `"off"` boş); **uçtan uca** `gsb-server/tests/path_budget.rs` (2:
+  `udp_congestion = "pace"` rUDP kapısı, kullanıcı alanı policer'ının
+  — 8 KB/sn, 3 KB — arkasında raporlayan istemci, her tick hareket eden
+  noktaların ~1,4 KB'lık tam snapshot'ı ile `SnapshotBudget`'lı kit
+  `OpenRoom`'u: oyun `TickCtx::budget = Some` okur — üç koşuda 196–406
+  B/tick, 47–48 tick —, oda `snapshots_withheld > 0` raporlar — 31;
+  `"off"`'ta bütçe hiç yok, tutulan 0). Öldürülen mutasyonlar:
+  `pace_follow` söylemiyor (4 test, uçtan uca dahil), kapalıyken
+  söylüyor, dolu kutuda unutuyor, yeni yolda sıfırlamıyor, `apply_path`
+  sessiz, durumda `rtt`/ölçümler/talep yanlış; uçtan uca ayrıca kit
+  kapısının kaldırılmasını yakalar.
 
 *Varsayılan: şimdilik `"off"`.* Ölçümlerde `pace` hiçbir senaryoda
 kaybetmedi: darboğazda 2× mesaj, ~5× düşük gecikme, kontrol bandı ~10×
@@ -2654,8 +2696,8 @@ varsayılan çevrilmedi: (1) ölçümler yerel (loopback + kullanıcı alanı
 darboğazı); gerçek bir ağda (netem/WAN) titreşimli yolda (Wi-Fi,
 hücresel: 30 ms üstü titreşim) sahte gecikme sinyali ölçülmedi — o yolda
 tepki gereksiz düşürmeye dönebilir; (2) oyunun sinyali yokken düşürme
-oyuncunun göremediği bir şeydir (B103 sinyali çekirdeğe ve kite taşıdı;
-rUDP'nin yayımı faz 2). **Öneri:** titreşim
+oyuncunun göremediği bir şeydir (B103 sinyali çekirdeğe, kite ve rUDP
+yazıcısına taşıdı). **Öneri:** titreşim
 ölçümü temiz çıkarsa ve sinyal çekirdeğe taşındıktan sonra varsayılan
 `"pace"` olsun (yeni satır).
 
