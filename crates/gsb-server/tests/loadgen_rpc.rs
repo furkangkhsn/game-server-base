@@ -115,58 +115,100 @@ fn assert_clean(line: &str, kv: &HashMap<String, String>, n: u64) {
 /// through the external (worker) path well inside the client's limit,
 /// once; the room registered each as an external request and rejected
 /// none.
+///
+/// "Sane" is the run's own evidence, not the machine's promise: a
+/// request every 200 ms is sane while the answers come back inside that
+/// interval. A starved server (12 Hz on two loaded cores, four loadgens
+/// at once) answered in up to 800 ms — two requests in flight per
+/// client, and over the pending cap a rejection, both correct. The
+/// ledger is checked exactly on every run; the sane-rate claims (one in
+/// flight each, nothing rejected, the request count) on the first run
+/// whose slowest answer came inside the interval — an insane run is
+/// repeated, and three of them fail with the latency that made them so
+/// (BACKLOG F52; the F30 pattern, not "retry until green").
 #[test]
 fn every_request_is_answered_once_at_a_sane_rate() {
-    let out = loadgen(&["6", "--duration", "4", "--rpc-rate", "5"]);
-    let (line, kv) = result(&out);
-    assert_clean(&line, &kv, 6);
-    let get = |k| num(&line, &kv, k);
-    let sent = get("rpc_sent");
-    assert!(sent >= 6 * 10, "6 clients × 5/s × ~3 s joined: {line}");
-    assert_eq!(get("rpc_client_to"), 0, "{line}");
-    // Answered ok, or still in flight when the session ended.
-    assert_eq!(get("rpc_ok") + get("rpc_open"), sent, "{line}");
-    assert!(get("rpc_open") <= 6, "at most one in flight each: {line}");
-    // The room's side: each one registered external, nothing rejected,
-    // refused or timed out.
-    assert!(get("req_ext") >= get("rpc_ok"), "{line}");
-    // The room's ledger closes (B36): every request the clients sent was
-    // either registered or still unread when its session left.
-    assert_eq!(get("req_ext") + get("req_unread"), sent, "{line}");
-    for k in [
-        "rpc_to",
-        "rpc_rej_conn",
-        "rpc_rej_room",
-        "rpc_rej_dup",
-        "rpc_rej_no_handler",
-        "rpc_rej_malformed",
-        "rpc_rej_logic",
-        "req_rej_conn",
-        "req_rej_room",
-        "req_rej_dup",
-        "req_rej_malformed",
-        "req_rej_no_handler",
-        "req_rej_logic",
-        "req_refused",
-        "req_to",
-        // The connection-side terms of the ledger (B51, B55): 0 here —
-        // every membership is ended by its client, never by the room, no
-        // action channel fills, and no request is sent outside a room.
-        "requests_dropped_closed",
-        "requests_dropped_full",
-        "requests_no_room",
-        // A request the server's end of the session left unprocessed
-        // (B60): 0 here — every session is ended by its client.
-        "requests_unprocessed",
-        "transport_udp_requests_dropped_full",
-        "transport_stream_requests_dropped_closed",
-        "transport_udp_requests_dropped_closed",
-    ] {
-        assert_eq!(get(k), 0, "{k}: {line}");
+    const INTERVAL_MS: f64 = 1_000.0 / 5.0;
+    let mut slowest = Vec::new();
+    for _ in 0..3 {
+        let out = loadgen(&["6", "--duration", "4", "--rpc-rate", "5"]);
+        let (line, kv) = result(&out);
+        assert_clean(&line, &kv, 6);
+        let get = |k| num(&line, &kv, k);
+        let sent = get("rpc_sent");
+        assert_eq!(get("rpc_client_to"), 0, "{line}");
+        // The clients' ledger closes too: each request answered (ok, a
+        // rejection, the room's timeout) or still in flight when its
+        // session ended; the cap's rejections the same on both sides.
+        let answered: u64 = [
+            "rpc_ok",
+            "rpc_to",
+            "rpc_rej_conn",
+            "rpc_rej_room",
+            "rpc_rej_dup",
+            "rpc_rej_no_handler",
+            "rpc_rej_malformed",
+            "rpc_rej_logic",
+        ]
+        .iter()
+        .map(|k| get(k))
+        .sum();
+        assert_eq!(answered + get("rpc_open"), sent, "{line}");
+        assert_eq!(get("rpc_rej_conn"), get("req_rej_conn"), "{line}");
+        let max_ms: f64 = kv["rpc_ok_max_ms"].parse().expect("max");
+        if max_ms >= INTERVAL_MS {
+            slowest.push(max_ms);
+            continue; // not a sane rate on this run: no evidence
+        }
+        assert!(sent >= 6 * 10, "6 clients × 5/s × ~3 s joined: {line}");
+        assert_eq!(get("rpc_ok") + get("rpc_open"), sent, "{line}");
+        // The room's ledger closes (B36) on its first terms alone: every
+        // request registered or still unread when its session left.
+        assert_eq!(get("req_ext") + get("req_unread"), sent, "{line}");
+        assert!(get("rpc_open") <= 6, "at most one in flight each: {line}");
+        // The room's side: each one registered external, nothing rejected,
+        // refused or timed out.
+        assert!(get("req_ext") >= get("rpc_ok"), "{line}");
+        for k in [
+            "rpc_to",
+            "rpc_rej_conn",
+            "rpc_rej_room",
+            "rpc_rej_dup",
+            "rpc_rej_no_handler",
+            "rpc_rej_malformed",
+            "rpc_rej_logic",
+            "req_rej_conn",
+            "req_rej_room",
+            "req_rej_dup",
+            "req_rej_malformed",
+            "req_rej_no_handler",
+            "req_rej_logic",
+            "req_refused",
+            "req_to",
+            // The connection-side terms of the ledger (B51, B55): 0 here —
+            // every membership is ended by its client, never by the room, no
+            // action channel fills, and no request is sent outside a room.
+            "requests_dropped_closed",
+            "requests_dropped_full",
+            "requests_no_room",
+            // A request the server's end of the session left unprocessed
+            // (B60): 0 here — every session is ended by its client.
+            "requests_unprocessed",
+            "transport_udp_requests_dropped_full",
+            "transport_stream_requests_dropped_closed",
+            "transport_udp_requests_dropped_closed",
+        ] {
+            assert_eq!(get(k), 0, "{k}: {line}");
+        }
+        let p50: f64 = kv["rpc_ok_p50_ms"].parse().expect("p50");
+        let p99: f64 = kv["rpc_ok_p99_ms"].parse().expect("p99");
+        assert!(0.0 < p50 && p50 <= p99 && p99 < 5_000.0, "{line}");
+        return;
     }
-    let p50: f64 = kv["rpc_ok_p50_ms"].parse().expect("p50");
-    let p99: f64 = kv["rpc_ok_p99_ms"].parse().expect("p99");
-    assert!(0.0 < p50 && p50 <= p99 && p99 < 5_000.0, "{line}");
+    panic!(
+        "no run at a sane rate: the slowest answer took {slowest:?} ms against \
+         a {INTERVAL_MS} ms request interval"
+    );
 }
 
 /// A burst above the per-connection pending cap (4): the requests past
@@ -218,8 +260,11 @@ fn the_rooms_ledger_covers_the_end_of_the_run() {
     let (line, kv) = result(&out);
     assert_clean(&line, &kv, 4);
     let get = |k| num(&line, &kv, k);
+    // Registered, cap-rejected (a slow server holds more than the cap of
+    // four pending at 10/s — F52), or unread when its session left.
+    assert_eq!(get("rpc_rej_conn"), get("req_rej_conn"), "{line}");
     assert_eq!(
-        get("req_ext") + get("req_unread"),
+        get("req_ext") + get("req_rej_conn") + get("req_unread"),
         get("rpc_sent"),
         "every request sent is in the room's final counters: {line}"
     );

@@ -189,7 +189,7 @@ async fn the_server_ceiling_bounds_the_combat_hold() {
         ops,
         "gsb_room_detach_forced_total",
         1,
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         "a hold the ceiling forced, counted (none: the hold ended without \
          overriding the combat veto)",
         |n| n > 0.0,

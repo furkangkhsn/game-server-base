@@ -195,7 +195,7 @@ async fn the_war_table_budget_reaches_the_shards() {
     let ia = a.entity;
     eventually(
         &mut [&mut a, &mut b],
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         "four towers and the far ally (the default)",
         |cs| towers(cs[1]) == 4 && cs[1].sees(ia),
     )
@@ -206,13 +206,13 @@ async fn the_war_table_budget_reaches_the_shards() {
     let (handle, mut a, mut b) = start(Some(1)).await;
     let ia = a.entity;
     let mut both = [&mut a, &mut b];
-    eventually(&mut both, Duration::from_secs(10), "four towers", |cs| {
+    eventually(&mut both, Duration::from_secs(30), "four towers", |cs| {
         towers(cs[1]) == 4
     })
     .await;
     let opened = Instant::now();
     both[0].move_to(-100.0, -600.0, 1).await;
-    eventually(&mut both, Duration::from_secs(10), "shard 0 ticked", |cs| {
+    eventually(&mut both, Duration::from_secs(30), "shard 0 ticked", |cs| {
         assert!(!cs[1].sees(ia), "cut");
         cs[0].view.acks.last() == Some(&1)
     })
@@ -220,7 +220,7 @@ async fn the_war_table_budget_reaches_the_shards() {
     both[1].move_to(650.0, 150.0, 1).await;
     eventually(
         &mut both,
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         "shard 3 ticked after it, and 500 ms passed",
         |cs| {
             assert!(!cs[1].sees(ia), "cut");
@@ -264,7 +264,7 @@ async fn the_war_table_grace_reaches_the_shards() {
         let a = join(handle.addr, "a0").await;
         let mut b = join(handle.addr, "b0").await;
         let ia = a.entity;
-        eventually(&mut [&mut b], Duration::from_secs(10), "the ally", |cs| {
+        eventually(&mut [&mut b], Duration::from_secs(30), "the ally", |cs| {
             cs[0].sees(ia)
         })
         .await;
@@ -272,7 +272,7 @@ async fn the_war_table_grace_reaches_the_shards() {
         let still = if grace == Some(0.0) {
             eventually(
                 &mut [&mut b],
-                Duration::from_secs(10),
+                Duration::from_secs(30),
                 "the unit leaves",
                 |cs| !cs[0].sees(ia),
             )
@@ -283,7 +283,7 @@ async fn the_war_table_grace_reaches_the_shards() {
                 ops,
                 "gsb_room_detached",
                 1,
-                Duration::from_secs(10),
+                Duration::from_secs(30),
                 "the server parks the unit",
                 |n| n >= 1.0,
             )

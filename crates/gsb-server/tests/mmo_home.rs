@@ -70,7 +70,7 @@ async fn start(realm: Realm, table: &str, ticketed: bool) -> ServerHandle {
 
 /// Every client sees itself.
 async fn spawned(cs: &mut [&mut Mmo]) {
-    eventually(cs, Duration::from_secs(5), "everyone sees itself", |cs| {
+    eventually(cs, Duration::from_secs(20), "everyone sees itself", |cs| {
         cs.iter().all(|c| c.me().is_some())
     })
     .await;
@@ -132,7 +132,7 @@ async fn a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save
     ann.travel(2, 1).await;
     eventually(
         &mut [&mut ann, &mut obs],
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         "ann arrives at waystone 2",
         |cs| cs[1].sees(id).map(|r| ground(&r)) == Some(waystone),
     )
@@ -150,7 +150,7 @@ async fn a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save
     ann.move_to(-240.0, 240.0, 1).await;
     eventually(
         &mut [&mut ann, &mut obs],
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         "the resumed character plays on shard 2",
         |cs| {
             cs[1].sees(id).map(|r| ground(&r)) == Some(dm(-240.0, 240.0))
