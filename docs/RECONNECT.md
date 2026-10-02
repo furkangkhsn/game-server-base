@@ -600,6 +600,40 @@ mutasyonlar (oda/shard devralmasını kaldırmak, LEAVE'e dönmek, sayaç
 düşürmemek, eski satırı odada bırakmak, aynı bağlantıyı ya da parklı
 satırı devralmak) öldü.
 
+**rUDP üstünde resume (B7, düz metin).** Bugün rUDP demux'ı oturumu eş
+adresine göre anahtarlar: adresi değişen (NAT yeniden bağlaması, mobil
+devir) ya da soketi ölen istemci YENİ bir oturum olarak döner — yeni
+soket, yeni cookie el sıkışması, aynı kimlik bilgisiyle resume. UDP'de
+FIN olmadığından sunucu sessizce kaybolan istemciyi yalnız demux'ın
+boşta süpürmesiyle öğrenir (`idle_timeout`, `ServerClose::IdleTimeout`).
+Bu geri düşüş yolu gerçek sunucu üzerinden
+`gsb-server/tests/rudp_resume.rs` ile kilitlidir (yedi test; her sayı
+sunucunun kendi raporundan, tam):
+`a_vanished_rudp_client_resumes_from_a_new_port` (eski soket LEAVE'siz
+düşer, portu tutulur ki yeni istemci başka porttan gelsin; süpürme →
+park: `closes = 1`, `detached = 1`, üye 1; yeni el sıkışma + aynı ad →
+AYNI varlık, girdisi onu yürütür; oda `joins 1 / resumes 1`, registry
+`opens 2 / closes 1 / conns 1 / leaves 0`, kapanış ailesinde yalnız
+`idle_timeout:1`), `…_on_the_sharded_grid` (aynısı ızgarada:
+broadcast-resume, dört shard satırı),
+`a_live_rudp_session_is_taken_over_by_the_newer_one` (F32: eski oturum
+hâlâ canlıyken yenisi gelir → eskiye ERROR 9 "superseded", kapanış
+ailesinde yalnız `superseded:1`, aynı varlık, park yok, `leaves 0`),
+`past_the_grace_…_reclaims_its_entity_from_the_bot` (grace dolmuş:
+`detach_expired_ai = 1`, bot tutar, dönen oyuncu aynı varlığı geri
+alır) ve `without_a_grace_the_rudp_client_joins_fresh` (`grace = 0`:
+park yok, saydam taze join, yeni varlık, `resumes 0`, registry
+`leaves 1`). Kaybolma ve devralma akışları TCP'de de yan yana koşar
+(kapıya göre beklenti: TCP'de kapanış EOF'tur, sunucu kapanışı değil).
+Mutasyonlar (registry'nin kimliği yok sayması, oda/shard defter
+aramasını atlamak, grace'i yüzde birine indirmek, `grace = 0`'ı park
+saymak, süre dolumunu despawn'a çevirmek, oda devralmasını kaldırmak,
+ERROR 9'u göndermemek) öldü. **B3 (bağlantı göçü) ve B5 (Noise) bu
+yedisini yeşil tutmak zorundadır:** göç eden oturum için "el sıkışmasız,
+resume gerekmez" beklentisi kapı-başı beklentinin yanına EKLENİR; yeni
+port + yeni el sıkışma + aynı kimlik yolu (ve F32 devralması) geri
+düşüş olarak kalır. Şifreli e2e B5'ten sonra.
+
 ## 6. Shard rotasyonu: broadcast-resume
 
 `home_shard` spawn noktasına göre rota seçer; oyuncu arada migrate
@@ -856,7 +890,7 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | Combat-lock sonsuz uzatma (harass-lock) | Çekirdekte mutlak tavan: `RoomConfig::max_detach_hold` (varsayılan 10 dk, DETACH anından ölçülür). Tavanda hâlâ duran veto ezilir, hold `ExpireTo`'suna biter, oda bir kez uyarır; süreli ve süresiz hold'a aynı tavan (§17) |
 | Ölüyken düşme | Politika detayı — respawn sayacı world'te yaşar, otomatik doğru |
 | RPC pending detach anında | Bugünkü leave semantiği: pending düşer, late raporlar sessizce atılır (zaten yapısal) |
-| rUDP üstünde resume | Transport-agnostic: resume bağlantı katmanındadır; rUDP deneysel statüsünü değiştirmez |
+| rUDP üstünde resume | Transport-agnostic: resume bağlantı katmanındadır; rUDP deneysel statüsünü değiştirmez. Yeni adres → yeni el sıkışma → resume yolu uçtan uca kilitli (§5 sonu, B7) |
 
 ## 12. Test planı (uygulama turunun kilidi)
 
