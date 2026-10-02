@@ -762,7 +762,7 @@ bildirim YOK (bildirimi taşıyacak yol ölü — sayacın var olma sebebi).
 |---|---|---|---|---|
 | TCP | sessiz FIN | ERROR 14 → FIN | sessiz FIN | ERROR 9 → FIN |
 | TLS | sessiz close_notify/FIN | ERROR 14 → close_notify/FIN | sessiz | büyük kare: ERROR 9 → son; **bozuk kayıt: bildirim YOK** (TLS oturumu ölü, rustls fatal alert'ini göndermiş, yazma başarısız) |
-| WS | boş kapanış çerçevesi (istemcide 1005) | ERROR 14 (binary mesaj) → kapanış çerçevesi **1001 "Going Away"** (B24; önceden boş) | kapının kendi kapanış çerçevesi (1002/1003/1007/1009) | **aynı** — kapanış çerçevesi BU kapının bildirimi; RFC 6455 §5.5.1 kapanıştan sonra veri çerçevesini yasaklar, soket yazıcı görevi arkasına düşen ERROR 9'u (ve fan-out artığını) atar |
+| WS | boş kapanış çerçevesi (istemcide 1005) | ERROR 14 (binary mesaj) → kapanış çerçevesi **1001 "Going Away"** (B24; önceden boş; hükümlerde B30'dan beri 1008/1013 — aşağıda "WS kapanış kodu (B24, B30)") | kapının kendi kapanış çerçevesi (1002/1003/1007/1009) | **aynı** — kapanış çerçevesi BU kapının bildirimi; RFC 6455 §5.5.1 kapanıştan sonra veri çerçevesini yasaklar, soket yazıcı görevi arkasına düşen ERROR 9'u (ve fan-out artığını) atar |
 | QUIC | endpoint `close(0)`: tüm bağlantılar ANINDA kapanır, akıştaki veri terk edilir | ERROR 14 → akış FIN'i (ACK beklenir) | sessiz; üstelik okuyucu bırakınca yazıcının düşüşü son tutamaçtı → anında kapanış | ERROR 9 → akış FIN'i (ACK beklenir) |
 | rUDP | sessiz (FIN yok; istemci kendi canlılık saatine kalır) | ERROR 14 REL bandında, TEK datagram (yazıcı, kanal kapanınca kuyruğu boşaltıp çıkar — yeniden gönderim fırsatı pratikte yok; kayıpta istemci eskisi gibi kendi saatine kalır); **FIN yok — bildirim tek kapanış sinyali** | yol yok (rUDP'de `StreamRejected` üretilmez; bozuk datagram demux'ta düşer) | — |
 
@@ -824,7 +824,7 @@ olarak belgelidir (elenen 6).
    en çok ihtiyaç duyan rUDP'de hiç yok — ve istemci iki bildirim biçimi
    öğrenmek zorunda kalırdı. (WS'in durdurmadaki kapanış çerçevesi
    B24'te 1001'e çevrildi — bildirimin YERİNE değil, ARKASINDAN; aşağıda
-   "WS kapanış kodu (B24)".)
+   "WS kapanış kodu (B24, B30)".)
 5. *Beklemeli gönderim* (diğer kod-9 kapanışlarındaki gibi). Okumayan
    her istemci için bir park etmiş aktör; bkz. yukarı.
 6. *`stop()`'ta boşaltma süresi* (N ms bekle, ya da yazıcıları bekle).
@@ -853,7 +853,7 @@ kuralı olmadan düşer); `gsb-protocol` `error_code` (14 sabitlendi — 15
 mutasyonunda üç test düşer). Resume semantiği değişmedi (`reconnect.rs`
 yeşil): bildirim yalnız çıkış kuyruğuna bir kare ekler.
 
-**WS kapanış kodu (B24).** WS kapısının kendi kapanışı — bağlantı
+**WS kapanış kodu (B24, B30).** WS kapısının kendi kapanışı — bağlantı
 aktörü oturumu bitirdiğinde writer pump'ın sink'i kapatması — boş bir
 kapanış çerçevesiydi; istemci bunu 1005 ("durum yok") okur, hiçbir şey
 söylemeyen bir eşten ayırt edemez. Artık **1001 "Going Away"**, yalnız
@@ -865,10 +865,10 @@ değişmedi.
 
 - *Kapsam:* bu kapanış yalnız `stop()`'ta değil, aktörün bitirdiği her
   oturumda gider (idle, bütçe, cap, supersede — ERROR 9/5'ten sonra).
-  Kapı sebebi bilmez: aktörden kapıya giden tek şey kare kanalıdır.
-  1001 hepsinde doğru okunur — "sunucu ucu bu bağlantıdan ayrılıyor";
-  HÜKÜM (neden, ne yapmalı) önündeki ERROR karesinde (tek bildirim
-  biçimi, elenen 4).
+  B24'te kapı sebebi bilmiyordu (aktörden kapıya giden tek şey kare
+  kanalıydı) ve hepsi 1001'di; B30'dan beri kod sebebe göre (aşağıda).
+  HÜKÜM (neden, ne yapmalı) yine önündeki ERROR karesinde (tek bildirim
+  biçimi, elenen 4); kod yalnız kaba sınıfı söyler.
 - *Yan düzeltme — ikinci kapanış yok:* sunucu önce kapattığında,
   istemcinin cevap kapanışı okuyucuda yine yankılanıyordu (soket
   yazıcı görevi `closing` sonrası yalnız VERİ çerçevelerini atıyordu):
@@ -878,13 +878,79 @@ değişmedi.
 
 *Elenenler.* (a) *1000 "Normal Closure":* "bağlantının amacı yerine
 geldi" demek — `stop()` için yanlış, B24'ün adını koyduğu durum tam
-1001. (b) *Sebebe göre kod* (`stop()` → 1001, politika hükümleri →
-1008): aktörden kapıya sebep taşıyan yeni bir kanal/mesaj (çekirdek +
-pump API'si); istemci sebebi zaten ERROR kodundan okuyor. Tetikleyici:
-yalnız kapanış koduna bakabilen bir istemci (ör. ERROR karesini
-çözemeyen bir tarayıcı katmanı). (c) *Gerekçe metni* ("server
+1001. (b) *Sebebe göre kod* — B24'te ertelendi (aktörden kapıya sebep
+yolu yoktu), B30'da yapıldı (aşağıda). (c) *Gerekçe metni* ("server
 stopping"): stop'u diğer sonlardan ayıramayan kapı için yanıltıcı
 olurdu; hata kapanışlarıyla tutarlı olarak yok.
+
+**Sebebe göre kapanış kodu (B30) — sözleşme değişikliği.** Yalnız
+kapanış koduna bakabilen bir istemci (tarayıcının `CloseEvent`'i, bir
+vekil günlüğü) "sunucu gitti — yeniden bağlan"ı "yaptığın yüzünden
+kapatıldın — körce yeniden bağlanma"dan ve "sunucu dolu — sonra dene"den
+ayıramıyordu. Artık WS kapısının kendi kapanışının kodu oturumun nasıl
+bittiğine göre (`gsb-net/src/ws/close_code.rs`; RFC 6455 §7.4.1, 1013
+için IANA WebSocket kapanış kodu kaydı):
+
+| Oturumun sonu | Kod | Neden bu kod |
+|---|---|---|
+| sunucunun duruşu (`stop()`) | 1001 Going Away | RFC'nin kendi örneği ("sunucu kapanıyor"); ERROR 14 de aynısını söyler |
+| hüküm yok (istemci bitirdi) ya da kapıya söylenmedi | 1001 | değişmedi; kapatan istemci okumaz (kendi kapanışının yankısı kazanır) |
+| `room_gone` | 1001 | oturumun yaşadığı uç gitti — istemci hemen başka yere katılabilir |
+| `outbound_dead` | 1001 | oturuma hüküm değil, ölü çıkış yolu (kapanış nadiren iner) |
+| `idle_timeout`, `write_stall`, `rel_dead` | 1008 Policy Violation | sunucunun canlılık politikası BU oturumu bitirdi |
+| `violation_budget`, `preauth_budget`, `stream_rejected` | 1008 | eş protokol politikasını çiğnedi (reddedilen akışta okuyucunun kendi 1002/1003/1007/1009'u önce kuyruklanır, o kazanır) |
+| `idle_input`, `kicked` | 1008 | odanın / oyunun politikası üyeliği ve oturumu bitirdi |
+| `superseded` | 1008 | "son oturum kazanır" politikası — istemci körce yeniden bağlanmamalı (yenisini devralırdı) |
+| `conn_cap`, `unauth_cap` | 1013 Try Again Later | sunucu kapasitede: oturum bir şey yapmadı, sonraki deneme tutabilir |
+
+1011 (Internal Error) kullanılmıyor: "sunucu çöktü" diyen bir hüküm yok
+(ölen oda `room_gone`'dur ve paniği yok etmeden ayırmaz). 1000 (Normal
+Closure) da yok: buradaki her kapanış istemcinin istemediği bir sondur.
+
+*Sebep yolu.* Bağlantı aktörü sebebi bilen tek yer; kapı yalnız çıkış
+kanalının kapandığını görür. Kapı isterse uç noktaya (`Endpoint::
+with_end_notice`) bir oneshot'un gönderen yarısını koyar; kabul döngüsü
+onu `take_end_notice` ile alıp aktöre verir (`ConnectionActor::
+with_end_notice`); aktör `run`'ın sonunda, çıkış göndericisini düşürmeden
+ÖNCE `SessionEnd` (`Client` / `Stopped` / `Verdict(ServerClose)`) yollar
+— kapı çıkış kanalının kapanışını gördüğünde sebep oradadır. WS kapısı
+alıcıyı yazıcının `Teardown`'ında tutar ve kapanış slotu alındığında
+`try_recv` ile okur; söylenmemişse 1001. Diğer kapılar uç noktaya bir şey
+koymaz (TCP/TLS/QUIC/rUDP'nin kendi kapanış kodu yok). Kilit yok, yeni
+await yok: tek bir oneshot gönderimi, tek bir `try_recv`.
+
+*Uyumluluk.* İstemci teli yalnız WS kapanış çerçevesinin iki durum
+baytında değişir (hükümle biten oturumda `03 E9` yerine `03 F0` ya da
+`03 F5`); ERROR karesi (9/14), içeriği ve sırası aynı; duruşun ve
+istemci sonunun 1001'i aynı. 1001 bekleyen bir istemci hükümle kapanan
+oturumda 1008/1013 görür — kodu "sunucu gitti" diye okuyan istemci için
+amaçlanan değişiklik budur. `gsb-client` kodu olduğu gibi gösterir
+(`ws_close`), yorumlamaz.
+
+*Elenenler.* (1) *Sebebi kare kanalında taşımak* (özel bir opcode'lu
+son kare): her kapı onu ayıklamak zorunda kalırdı, unutulursa tele
+çıkar; odalar aktörden sonra da kanala yazar, "son kare" yoktur.
+(2) *Kapının ERROR karesini çözmesi* (son ERROR'un kodundan seçmek):
+katman ihlali, opak eşlemede imkânsız, dolu kuyrukta düşen bildirim
+(`close_notices_dropped`) kodu sessizce 1001'e çevirirdi. (3) *Paylaşılan
+atomik* (aktör yazar, kapı okur): oneshot aynı işi kanal deyimiyle yapar.
+(4) *Kod eşlemesini çekirdekte tutmak:* kod WS'e özgü, kapının kararı;
+çekirdek yalnız sebebi söyler.
+
+*Testler (B30).* `gsb-net` `ws::close_code::tests` (eşlemenin tamamı,
+her kodun gönderilebilir oluşu); `ws::tests::verdict_close` (kapı:
+aktörün son karesi bayt bayt aynı, sonra politika hükümlerinde
+`88 02 03 F0`, tavanda `88 02 03 F5`, duruşta ve söylenmeyen sonda
+`88 02 03 E9`); `gsb-core/tests/end_notice.rs` (aktör duruşu `Stopped`,
+hükmü `Verdict`, istemci sonunu `Client` olarak söyler);
+`gsb-server/tests/ws_close_code.rs` (uçtan uca: dört tanımsız opcode →
+ihlal bütçesi → ERROR 9 → 1008; kabul döngüsünün tesisatı olmadan
+düşer). Önce kırmızı: kodu sebepten bağımsız 1001 yapmak (= B30 öncesi)
+kapı testlerini, tesisatı çıkarmak uçtan uca testi düşürür. Mutasyonlar:
+tavanı 1008'e, duruşu 1008'e eşlemek, aktörün hükmü `Client` diye ya da
+duruşu `Client` diye söylemesi, WS uç noktasının bildirim istememesi —
+hepsi öldü. `ws_going_away.rs` ve `ws_client.rs`'in duruş testleri
+(1001) değişmeden yeşil.
 
 *Testler.* `gsb-net` `ws::tests::going_away` (kapı: aktörün son karesi,
 sonra bayt bayt `88 02 03 E9`, istemci cevapladıktan sonra akış sonu —

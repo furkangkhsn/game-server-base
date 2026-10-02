@@ -139,6 +139,9 @@ pub(super) async fn run_accept(
         // used to create directly).
         let (in_tx, in_rx) = endpoint.take_inbox(pipeline.conn_inbox);
         let (out_tx, out_rx) = endpoint.take_outbox(pipeline.conn_out);
+        // A door that speaks its own goodbye learns how the session
+        // ended (B30: the WebSocket close code).
+        let end_notice = endpoint.take_end_notice();
 
         // Reader + writer pumps (they finish on their own when the
         // peer or the actor goes away; the idle window, if enabled,
@@ -159,19 +162,20 @@ pub(super) async fn run_accept(
 
         // One cheap sender clone per connection (unbounded sender is
         // an Arc).
-        tokio::spawn(
-            ConnectionActor::new(
-                conn,
-                peer,
-                Arc::clone(&pipeline.table),
-                pipeline.registry.clone(),
-                in_rx,
-                out_tx,
-                pipeline.metrics.clone(),
-                pipeline.ticket_auth.clone(),
-            )
-            .run(),
+        let mut actor = ConnectionActor::new(
+            conn,
+            peer,
+            Arc::clone(&pipeline.table),
+            pipeline.registry.clone(),
+            in_rx,
+            out_tx,
+            pipeline.metrics.clone(),
+            pipeline.ticket_auth.clone(),
         );
+        if let Some(notice) = end_notice {
+            actor = actor.with_end_notice(notice);
+        }
+        tokio::spawn(actor.run());
     }
 }
 

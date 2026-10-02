@@ -17,6 +17,7 @@ use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::mpsc;
 use tokio_util::sync::PollSender;
 
+use gsb_core::conn::SessionEnd;
 use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
@@ -180,6 +181,14 @@ impl WsWriter {
         self.teardown = going_away::Teardown::new(metrics);
         self
     }
+
+    /// Where the connection actor tells how the session ended (B30): the
+    /// teardown close's status code ([`super::close_code`]). Without it
+    /// the close is 1001, as before.
+    pub(super) fn with_end(mut self, end: tokio::sync::oneshot::Receiver<SessionEnd>) -> Self {
+        self.teardown.end = Some(end);
+        self
+    }
 }
 
 /// A teardown close still waiting for a slot is abandoned: counted (B80).
@@ -232,11 +241,13 @@ impl Sink<FrameBody> for WsWriter {
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // The SERVER leaving the session (the actor ended: `stop()`, or a
-        // verdict whose `ERROR` frame went out just before): 1001 "Going
-        // Away", status only (an empty close reads as 1005, "no status") —
-        // unless the read path queued its own close. It waits for a queue
-        // slot (B80, [`going_away`]); the socket shuts down once every
-        // queue end is gone.
+        // verdict whose `ERROR` frame went out just before): a status-only
+        // close (an empty close reads as 1005, "no status") whose code
+        // says why — 1001 "Going Away" for the stop, 1008 / 1013 for a
+        // verdict (B30, [`super::close_code`]) — unless the read path
+        // queued its own close. It waits for a queue slot (B80,
+        // [`going_away`]); the socket shuts down once every queue end is
+        // gone.
         let this = self.get_mut();
         this.teardown.poll(&mut this.tx, &this.closing, cx).map(Ok)
     }

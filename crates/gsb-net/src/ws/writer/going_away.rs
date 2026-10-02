@@ -1,5 +1,7 @@
-//! The server's teardown close (1001 "Going Away", B24) on its way into
-//! the socket writer's queue (BACKLOG B80). A child of [`super`].
+//! The server's teardown close (1001 "Going Away", B24 — or, since B30,
+//! the code of the verdict that ended the session: `crate::ws::close_code`)
+//! on its way into the socket writer's queue (BACKLOG B80). A child of
+//! [`super`].
 //!
 //! The queue is shared by the pump's game frames and the reader's control
 //! replies, and at the teardown it may well be FULL: the actor's last
@@ -36,10 +38,13 @@ use std::task::{Context, Poll, ready};
 use gsb_core::metrics::TransportCounters;
 use tokio_util::sync::PollSender;
 
+use gsb_core::conn::SessionEnd;
+use tokio::sync::oneshot;
+
 use super::WsOut;
 use crate::TransportMetrics;
 use crate::metrics::Flusher;
-use crate::ws::{CLOSE_GOING_AWAY, OP_CLOSE};
+use crate::ws::{OP_CLOSE, close_code};
 
 /// Where the teardown close stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +63,9 @@ enum State {
 pub(super) struct Teardown {
     state: State,
     metrics: TransportMetrics,
+    /// How the session ended, from the connection actor (B30): read once
+    /// the close is due, for its status code. `None`: not wired (1001).
+    pub(super) end: Option<oneshot::Receiver<SessionEnd>>,
 }
 
 impl Teardown {
@@ -65,7 +73,16 @@ impl Teardown {
         Self {
             state: State::Idle,
             metrics,
+            end: None,
         }
+    }
+
+    /// The close's status code: by how the session ended, when the actor
+    /// has told (it tells before the outbound channel can close, so by
+    /// now it has, unless it was never wired or never ran to its end).
+    fn code(&mut self) -> u16 {
+        let end = self.end.as_mut().and_then(|rx| rx.try_recv().ok());
+        close_code(end)
     }
 
     /// Drive the close: pending while the queue is full, ready once the
@@ -95,7 +112,7 @@ impl Teardown {
             Ok(()) => {
                 // A reserved slot: the send cannot be refused. The frame
                 // is then the socket writer's to write or count.
-                let close = CLOSE_GOING_AWAY.to_be_bytes().to_vec();
+                let close = self.code().to_be_bytes().to_vec();
                 let _ = tx.send_item(WsOut::Control(OP_CLOSE, close));
             }
             Err(_) if closing.load(Ordering::SeqCst) => {}

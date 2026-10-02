@@ -838,7 +838,10 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   yazma-tıkanma penceresi altında bekler — öteki kapıların soketi
   boşaltan kapanışıyla aynı sınır): soket boşaldıkça 1001 önündeki
   karelerin ARKASINDAN gider — her zaman amaçlanan aynı bayt (`88 02 03
-  E9`), yalnız artık kaybolmuyor. Teslim edilemeyen sayılır:
+  E9`), yalnız artık kaybolmuyor. (B30'dan beri hükümle biten oturumda
+  aynı kapanış 1008 ya da 1013 taşır — DESIGN §5.6 "WS kapanış kodu";
+  iki sayaç kodu ne olursa olsun sunucunun bu kapanışını sayar, adlarındaki
+  "going_away" B24'ten kalma.) Teslim edilemeyen sayılır:
   `ws_going_away_unsent_closed` — kuyruk kapalı, soket yazıcısı başarısız
   bir soket yazmasıyla zaten durmuş; `ws_going_away_unsent_stalled` —
   kapanış slot beklerken bırakıldı, pompanın tıkanma penceresi bayt

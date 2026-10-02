@@ -182,6 +182,9 @@ fn make_endpoint(
     mapping: WsMessageMapping,
     metrics: crate::TransportMetrics,
 ) -> Endpoint {
+    // How the session ended, from the connection actor (B30): the
+    // teardown close's status code.
+    let (end_tx, end_rx) = tokio::sync::oneshot::channel();
     Endpoint::new(
         move |conn: ConnectionId,
               in_tx: Mailbox<ConnIn>,
@@ -201,11 +204,13 @@ fn make_endpoint(
                 closing.clone(),
                 metrics.clone(),
             );
-            let writer =
-                WsWriter::new(queue_tx, mapping, closing, written).with_metrics(metrics.clone());
+            let writer = WsWriter::new(queue_tx, mapping, closing, written)
+                .with_metrics(metrics.clone())
+                .with_end(end_rx);
             let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },
     )
     .with_peer(peer)
+    .with_end_notice(end_tx)
 }

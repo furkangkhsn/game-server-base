@@ -46,6 +46,7 @@ impl super::ConnectionActor {
             auth,
             ticket: None,
             identity: String::new(),
+            end_notice: None,
             m_in_bytes: 0,
             m_in_frames: 0,
             m_out_bytes: 0,
@@ -87,6 +88,15 @@ impl super::ConnectionActor {
             m_last_flush: Instant::now(),
             metrics,
         }
+    }
+
+    /// Tell `notice` how the session ended, once, at the end of
+    /// [`Self::run`] — before the outbound sender drops, so a door that
+    /// waits for the outbound channel to close finds the reason there
+    /// (BACKLOG B30: the WebSocket door's close code).
+    pub fn with_end_notice(mut self, notice: crate::conn::EndNotice) -> Self {
+        self.end_notice = Some(notice);
+        self
     }
 
     /// Run until the peer is gone or the server shuts down.
@@ -208,6 +218,17 @@ impl super::ConnectionActor {
                     break;
                 }
             }
+        }
+
+        // The door learns how the session ended (B30) while this actor
+        // still holds its outbound sender.
+        if let Some(notice) = self.end_notice.take() {
+            let end = match (stopped, self.server_close) {
+                (true, _) => crate::conn::SessionEnd::Stopped,
+                (false, Some(verdict)) => crate::conn::SessionEnd::Verdict(verdict),
+                (false, None) => crate::conn::SessionEnd::Client,
+            };
+            let _ = notice.send(end);
         }
 
         // What the end left in the inbox, counted (B60, F56, F60).

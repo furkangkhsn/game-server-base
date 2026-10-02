@@ -57,6 +57,7 @@
 //! counted as a failed handshake — like the TLS door's, it never reaches
 //! `accept`.
 
+mod close_code;
 mod frame;
 mod handshake;
 mod reader;
@@ -69,6 +70,10 @@ mod tests;
 pub use transport::{DEFAULT_MAX_MESSAGE_BYTES, WsMessageMapping, WsTransport};
 
 // Re-homed internals, named here so every child reaches them by one path.
+use close_code::close_code;
+// The stop's code, named by the B24 tests.
+#[cfg(test)]
+use close_code::CLOSE_GOING_AWAY;
 use frame::{RawFrame, apply_mask, encode_game_envelope, encode_server_frame};
 use handshake::perform_upgrade;
 use reader::WsReader;
@@ -99,12 +104,6 @@ const READ_CHUNK: usize = 8 * 1024;
 
 /// RFC 6455 §5.5: control frames carry at most 125 payload bytes.
 const MAX_CONTROL_PAYLOAD: usize = 125;
-
-/// RFC 6455 §7.4.1 status 1001 "Going Away": the close code of the
-/// server's own teardown close (the connection actor ended the session).
-/// The read path's failure closes keep their own codes (1002, 1003,
-/// 1007, 1009).
-const CLOSE_GOING_AWAY: u16 = 1001;
 
 // Frame opcodes (RFC 6455 §5.2).
 const OP_CONT: u8 = 0x0;

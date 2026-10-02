@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
-use gsb_core::conn::ConnIn;
+use gsb_core::conn::{ConnIn, EndNotice};
 use gsb_core::id::ConnectionId;
 
 use crate::pump::PumpTimeouts;
@@ -124,6 +124,7 @@ pub struct Endpoint {
     peer: Option<SocketAddr>,
     in_box: Option<(Mailbox<ConnIn>, Inbox<ConnIn>)>,
     out_box: Option<(Mailbox<FrameBatch>, Inbox<FrameBatch>)>,
+    end_notice: Option<EndNotice>,
 }
 
 impl Endpoint {
@@ -143,7 +144,24 @@ impl Endpoint {
             peer: None,
             in_box: None,
             out_box: None,
+            end_notice: None,
         }
+    }
+
+    /// Ask to be told how the session ended (BACKLOG B30): a door that
+    /// speaks its own goodbye — the WebSocket close code — carries the
+    /// sending half of its oneshot here.
+    pub fn with_end_notice(mut self, notice: EndNotice) -> Self {
+        self.end_notice = Some(notice);
+        self
+    }
+
+    /// The door's [`EndNotice`], if it asked for one: the composition
+    /// root hands it to the connection actor
+    /// (`ConnectionActor::with_end_notice`). `None` for a door that does
+    /// not need the reason (every door but the WebSocket one).
+    pub fn take_end_notice(&mut self) -> Option<EndNotice> {
+        self.end_notice.take()
     }
 
     /// Record the peer address (set by the transport at accept/handshake).

@@ -215,4 +215,8 @@ pub struct ConnectionActor {
     /// noted at the ledger site too). Empty until a successful AUTH.
     /// Rides every `SpawnPlayer` as the implicit-resume key of §14.3.
     identity: String,
+    /// Where the session's end is told to the door, when the door asked
+    /// for it (BACKLOG B30, [`crate::conn::SessionEnd`]); sent once, at
+    /// the end of `run`.
+    end_notice: Option<crate::conn::EndNotice>,
 }
